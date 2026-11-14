@@ -1,14 +1,18 @@
-// playtest — /bin/play, end to end, with the tap listening: a WAV written
+// playtest — /bin/play, end to end, with the tap listening: a file written
 // here goes in, and what the sink was given is checked against it.
 //
 //   1. a quarter second of a 1 kHz sine at 44.1 kHz, MONO, played: the tap
-//      hears a quarter second at 48 kHz (and the resampler's latency ahead
-//      of it), both channels the same, and the same sine: fitted by least
-//      squares, under two counts in 12,000 left over (resampletest's bar);
+//      hears exactly a quarter second at 48 kHz (libmedia removes the
+//      resampler's delay), both channels the same, and the same sine:
+//      fitted by least squares, under two counts in 12,000 left over
+//      (resampletest's bar);
 //   2. the same at 48 kHz stereo, which needs no resampler: the tap hears
 //      the file's samples exactly;
-//   3. a file that is not a WAV, one that is not 16-bit, and one that is
-//      not there, are refused with exit 2 and nothing reaches the device.
+//   3. a file that is not sound, and one that is not there, are refused
+//      with exit 2 and nothing reaches the device;
+//   4. an MP3 (avtest's one second of 440 Hz) is heard whole: 48,000
+//      frames, both sides the same, at the level the host's FFmpeg decodes
+//      it to.
 //
 // It takes no arguments. The file it plays is its own, written under a name
 // no person would pick (/home/playtest-<task>.tmp.wav) and removed at the
@@ -21,6 +25,7 @@
 #include "os64/os64.h"
 #include "os64/audio.h"
 #include "../resampletest/checks.h"
+#include "../avtest/sine_mp3.h"
 
 #define PLAYTEST_OK 0x91A10000
 #define STEP(n)     (0x91A10000 | (n))
@@ -175,9 +180,9 @@ int main(int argc, char **argv)
         return die(1, "play did not exit 0", code);
     if (gTapDropped)
         return die(1, "the tap dropped records: this test was held off for too long to judge", 0);
-    // 11,025 frames and the 40 the resampler holds, at 48,000 for 44,100.
-    if (gHeard < 12043 - 4 || gHeard > 12043 + 4)
-        return die(1, "the tap did not hear a quarter second and the latency", gHeard);
+    // 11,025 frames at 48,000 for 44,100.
+    if (gHeard < 12000 - 2 || gHeard > 12000 + 2)
+        return die(1, "the tap did not hear a quarter second", gHeard);
     for (uint32_t i = 0; i < gHeard; i++)
         if (rc_out[i * 2] != rc_out[i * 2 + 1])
             return die(1, "a mono file's two channels differ", i);
@@ -209,15 +214,33 @@ int main(int argc, char **argv)
     os64_close((int32_t)h);
     code = play(wav);
     if (code != 2 || gHeard != 0)
-        return die(3, "a file that is not a WAV was not refused with exit 2", code);
-    if (!write_wav(wav, 2, 48000, 8, 100))
-        return die(3, "could not write the test file", 0);
-    code = play(wav);
-    if (code != 2 || gHeard != 0)
-        return die(3, "an 8-bit file was not refused with exit 2", code);
+        return die(3, "a file that is not sound was not refused with exit 2", code);
     code = play(missing);
     if (code != 2)
         return die(3, "a missing file was not refused with exit 2", code);
+
+    // 4. An MP3, heard whole.
+    h = os64_open(wav, "w");
+    bool written = h >= 0 && os64_write((int32_t)h, kSineMp3, sizeof(kSineMp3)) == (int64_t)sizeof(kSineMp3);
+    if (h >= 0)
+        os64_close((int32_t)h);
+    if (!written)
+        return die(4, "could not write the MP3", 0);
+    code = play(wav);
+    if (gTapDropped)
+        return die(4, "the tap dropped records: this test was held off for too long to judge", 0);
+    if (code != 0 || gHeard < 48000 - 2 || gHeard > 48000 + 2)
+        return die(4, "play did not play the MP3 whole", code != 0 ? code : (int)gHeard);
+    double squares = 0;
+    for (uint32_t i = 0; i < gHeard; i++)
+    {
+        if (rc_out[i * 2] != rc_out[i * 2 + 1])
+            return die(4, "a mono MP3's two channels differ", i);
+        squares += (double)rc_out[i * 2] * rc_out[i * 2];
+    }
+    double ppm = sqrt(squares / gHeard) / 32768.0 * 1e6;
+    if (ppm < SINE_MP3_RMS_PPM * 0.99 || ppm > SINE_MP3_RMS_PPM * 1.01)
+        return die(4, "the MP3 was not heard at its level (per million)", lrint(ppm));
 
     os64_unlink(wav);
     os64_close(gTap);

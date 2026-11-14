@@ -161,34 +161,27 @@ names is still well inside the slot.
 
 ## The pipeline (libmedia)
 
-```c
-// os64/media.h (sketch; names will settle in the code)
-typedef struct media_source {
-    void *ctx;
-    // Read up to `cap` bytes at the current position. Blocks (it runs on
-    // the decoder thread). Returns bytes, 0 at the end, negative on error.
-    int64_t (*read)(void *ctx, uint8_t *out, size_t cap);
-    // Move to `offset`; false when the source cannot (no Range support).
-    bool (*seek)(void *ctx, uint64_t offset);
-    int64_t size;            // -1 when unknown
-} media_source_t;
-
-media_decoder_t *media_open(const media_source_t *src, media_info_t *info);  // probe: format, duration, rate, channels
-int media_decode(media_decoder_t *d, int16_t *out, uint32_t frames);        // 48 kHz s16 stereo, resampled
-bool media_seek(media_decoder_t *d, uint64_t frame);                         // to a frame of the media's own timeline
-void media_close(media_decoder_t *d);
-```
+`userland/libmedia/include/os64/media.h` is the interface: open a
+source, decode, seek, the position, close, and a source over a file
+handle. A source is a `read` that may block, a `seek` (NULL when the
+source cannot), and the byte length when known.
 
 **Everything leaves libmedia in the stream's format** (s16le, two
-channels, 48 kHz) and is counted in the MEDIA's frames converted to 48
-kHz, so the element's clock and the audio thread speak one unit. Mono is
-doubled, more than two channels (a multichannel WAV) are folded to two
-in libmedia with the ITU downmix weights, and a rate that is not 48 kHz goes through `libsound`'s
-resampler (the same one `play` uses).
+channels, 48 kHz) and on the OUTPUT's timeline: every count and position
+is in 48 kHz frames from the start of the media, so the element's clock
+and the audio thread speak one unit. The resampler's start-up delay is
+counted off and its tail drawn out, so a seek to a frame returns that
+frame first and a whole decode is the media's length. Mono is doubled;
+more than two channels are folded to two with BS.775's weights,
+normalised so the fold cannot clip (a file that names no layout is read
+as the usual one for its count, 5.1 for six); a rate that is not 48 kHz
+goes through `libsound`'s resampler.
 
 **The decoder thread** (one per element that is loading or playing):
 reads the source, decodes, resamples, and pushes into the element's PCM
-queue, which holds two seconds and makes the thread wait when full. It
+queue, which holds two seconds and makes the thread wait when full. The
+queue is Y.2.1's, with its first consumer: `play` needs none, since its
+loop decodes and writes in one thread. It
 can block on the network as long as it likes: it is not the window, and
 it is not the audio thread. A seek, a new `src`, or the element going
 away tells it to stop and is answered at its next turn. Video will add a
@@ -502,6 +495,37 @@ above:
   first draft (the sine's own) was 5% high, because LAME's encode does
   not land there.
 
+## As built (Y.1.2, libmedia and `play`)
+
+- **The interface** is `os64/media.h`, described above. Results are named
+  (`OS64_MEDIA_NOT_MEDIA`, `_UNSUPPORTED`, `_NO_SOUND`, `_DECODE`, `_IO`,
+  `_NO_MEMORY`, `_CANNOT_SEEK`) and `os64_media_error_text` gives libav's
+  last error line for the media.
+- **The lock is narrower than libav's general rule**, so a slow network
+  probe does not hold up another element's open: in this configuration
+  FFmpeg's one-time setups are the decoders' tables (made when a decoder
+  opens) and libavutil's CRC tables (which a demuxer can first ask for
+  while probing). libmedia makes every CRC table at its first open and
+  opens decoders under its lock; `tools/test_av_audit.py` pins the set of
+  one-time setups, so a configuration that adds one fails until it is
+  looked at.
+- **The size is given to FFmpeg even when the source cannot seek**: an
+  MP3's end padding is trimmed only by a demuxer that knows where the file
+  ends (`mediatest` found it: 48,952 frames for one second, until then).
+- **Only libmedia loads libav.so** (beside libav's own fixture): the audit
+  fails on any other caller, so a player cannot tie itself to the decoder
+  libmedia hides, and the decoder can change behind os64/media.h.
+- **The host test is of the pure core** (`media_pcm.c`: every sample
+  format, planar or not, one to eight channels, against a model), not
+  libmedia against the host's FFmpeg as the proof section first said: the
+  host has no FFmpeg development files, and the glue is proven in ring 3
+  instead (`/tests/mediatest`). The host test found that a NaN on one
+  side of a fold silenced the other side.
+- **`play` is libmedia's first caller**: anything libmedia reads, its
+  messages the result's name. A 44.1 kHz file now plays without the
+  resampler's few frames of leading silence, and an 8-bit WAV plays where
+  it was refused (`playtest` changed with it, and gained an MP3).
+
 ## Slices
 
 `YAUDIO_TRACKER.csv` beside this file is the state of each one
@@ -511,9 +535,9 @@ request is one row; a slice of several has a task row per pull request.
 1. **Y.1 — FFmpeg, libmedia, and `play` learns MP3.** Two pull requests:
    - **Y.1.1** the port: `libav.so` in the audio-only configuration
      above, its shims, manifest and audit, proven by `/tests/avtest`.
-   - **Y.1.2** libmedia (source, decoder, resampling, queue) and `play`
-     reading MP3 through it (ruled 2026-11-14: Chris wants `play` to play
-     his MP3s). No yonder change.
+   - **Y.1.2** libmedia (source, decoder, resampling, the output
+     timeline) and `play` reading MP3 through it (ruled 2026-11-14: Chris
+     wants `play` to play his MP3s). No yonder change.
 2. **Y.2 — the element.** Two pull requests:
    - **Y.2.1** libdom's interfaces, the provider and events, the audio
      thread, `play()`/`pause()`/seeking from script. One element sounds

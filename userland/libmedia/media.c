@@ -352,7 +352,10 @@ int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_med
     int result = OS64_MEDIA_NO_MEMORY;
     uint8_t *buffer = av_malloc(IO_BUFFER);
     if (buffer == NULL) goto fail;
-    m->io = avio_alloc_context(buffer, IO_BUFFER, 0, m, io_read, NULL, src->seek ? io_seek : NULL);
+    // io_seek goes in even for a source that cannot seek: it still answers
+    // FFmpeg's size question, and an MP3's end padding is trimmed only by a
+    // demuxer that knows where the file ends.
+    m->io = avio_alloc_context(buffer, IO_BUFFER, 0, m, io_read, NULL, io_seek);
     if (m->io == NULL) { av_free(buffer); goto fail; }
     m->io->seekable = src->seek ? AVIO_SEEKABLE_NORMAL : 0;
     m->format = avformat_alloc_context();
@@ -391,8 +394,13 @@ int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_med
         goto fail;
     }
     m->rate = (uint32_t)m->codec->sample_rate;
+    // A file that does not name its channels (a plain PCM WAV of six) is
+    // read as the usual layout for that count, 5.1 for six, as FFmpeg's
+    // own resampler reads it.
+    AVChannelLayout layout = m->codec->ch_layout;
+    if (layout.order == AV_CHANNEL_ORDER_UNSPEC) av_channel_layout_default(&layout, channels);
     for (int c = 0; c < channels; c++)
-        m->roles[c] = role_of(av_channel_layout_channel_from_index(&m->codec->ch_layout, (unsigned)c));
+        m->roles[c] = role_of(av_channel_layout_channel_from_index(&layout, (unsigned)c));
     if ((result = resampler_start(m)) < 0) goto fail;
 
     if (info != NULL) {

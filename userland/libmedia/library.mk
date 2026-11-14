@@ -13,10 +13,11 @@ LIBMEDIA_BASE  = $(patsubst libmedia.so=%,%,$(filter libmedia.so=%,$(LIB_BASE_PA
 # FFmpeg's headers come with LIBAV_CONSUMER_CFLAGS (libav/shared.mk).
 LIBMEDIA_CFLAGS = $(LIBOS64_CFLAGS) -O2 -fvisibility=hidden $(LIBAV_CONSUMER_CFLAGS)
 
-$(LIBMEDIA_SO): $(LIBMEDIA_OBJS) $(LIBAV_SO) $(LIBSOUND_SO) $(LIBOS64_SO) link/lib.ld tools/app_bases.py libmedia/library.mk
+$(LIBMEDIA_SO): $(LIBMEDIA_OBJS) $(LIBAV_SO) $(LIBSOUND_SO) $(LIBOS64_SO) libmedia/exports.map link/lib.ld tools/app_bases.py libmedia/library.mk
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBMEDIA_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
 	    $(SHARED_LIB_LDFLAGS) -soname libmedia.so --no-undefined --no-as-needed \
+	    --version-script=libmedia/exports.map \
 	    -o $@ $(LIBMEDIA_OBJS) $(LIBAV_SO) $(LIBSOUND_SO) $(LIBOS64_SO)
 
 $(OBJ)/pic/libmedia/%.c.o: libmedia/%.c libmedia/library.mk GNUmakefile

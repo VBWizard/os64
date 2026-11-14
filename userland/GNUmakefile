@@ -547,7 +547,7 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),yonder),$(LIBSVG_SO) $(LIBDRAW2D_SO)) 
                        $(if $(filter $(1),webptest),$(LIBWEBP_SO)) \
                        $(if $(filter $(1),fonttest texttest flowdump yonder pulse pulsedialtest pulsebench),$(LIBFREETYPE_SO)) \
                        $(if $(filter $(1),js),$(LIBJS_SO)) \
-                       $(if $(filter $(1),mathtest yonder resampletest playtest),$(LIBMATH_SO)) \
+                       $(if $(filter $(1),mathtest yonder resampletest playtest mediatest),$(LIBMATH_SO)) \
                        $(if $(filter $(1),resampletest playtest),$(LIBSOUND_SO)) \
                        $(if $(filter $(1),$(LIBAV_PROGRAMS)),$(LIBAV_SO) $(LIBMATH_SO)) \
                        $(if $(filter $(1),$(LIBMEDIA_PROGRAMS)),$(LIBMEDIA_SO)) \

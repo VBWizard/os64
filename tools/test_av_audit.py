@@ -129,10 +129,36 @@ root_make = (ROOT / 'GNUmakefile').read_text()
 check(root_make.count('/etc/licenses/ffmpeg.txt') == 2, 'the notice is not installed on both images')
 check('userland/bin/libav.so' in root_make, 'libav.so is not in the images')
 
-# The programs that use it load it.
-for program in ('tests/avtest',):
-    needs = set(re.findall(r'\(NEEDED\).*\[(.*?)\]', run('x86_64-elf-readelf', '-dW', USERLAND / 'bin' / program)))
-    check('libav.so' in needs, f'{program} does not load libav.so: {needs}')
+# ONE DOOR TO FFMPEG: libmedia.so is the library programs play sound
+# through (os64/media.h), and the only one that may load libav.so, beside
+# libav's own fixture. A player that called FFmpeg directly would tie
+# itself to the decoder libmedia exists to hide.
+def needed(path):
+    return set(re.findall(r'\(NEEDED\).*\[(.*?)\]', run('x86_64-elf-readelf', '-dW', path)))
+
+callers = set()
+for path in sorted((USERLAND / 'bin').rglob('*')):
+    if path.is_file() and path != SO and path.read_bytes()[:4] == b'\x7fELF' and 'libav.so' in needed(path):
+        callers.add(str(path.relative_to(USERLAND / 'bin')))
+check(callers == {'libmedia.so', 'tests/avtest'}, f'libav.so is loaded by {sorted(callers)}, not only libmedia.so and avtest')
+MEDIA = USERLAND / 'bin/libmedia.so'
+check(needed(MEDIA) == {'libav.so', 'libsound.so', 'libos64.so'}, f'libmedia.so needs {sorted(needed(MEDIA))}')
+media_exports = {l.split()[-1] for l in run('x86_64-elf-nm', '-D', '--defined-only', MEDIA).splitlines()}
+check(media_exports and all(e.startswith('os64_media_') for e in media_exports),
+      f'libmedia.so exports {sorted(e for e in media_exports if not e.startswith("os64_media_"))}')
+for program in ('play', 'tests/mediatest'):
+    check('libmedia.so' in needed(USERLAND / 'bin' / program), f'{program} does not load libmedia.so')
+
+# FFmpeg's ONE-TIME SETUPS, which a build without threads leaves unlocked
+# (README.md § Switched off). libmedia makes the CRC tables at its first
+# open and opens decoders under its lock (libmedia/media.c § THREADS); a
+# configuration that adds a setup anywhere else must be looked at there
+# first, so the set is pinned here and a new member fails the audit.
+known_once = {'libavcodec/mpegaudiodec_common.c', 'libavcodec/mpegaudiodsp.c', 'libavcodec/pcm.c',
+              'libavutil/aes.c', 'libavutil/crc.c'}
+once_sites = {c for c in built if re.search(r'\bff_thread_once\b|\bAVOnce\b', (upstream / c).read_text())}
+check(once_sites == known_once, f'one-time setups changed: new {sorted(once_sites - known_once)}, '
+      f'gone {sorted(known_once - once_sites)}; decide whether libmedia/media.c covers them, then update this set')
 
 print(f'PASS av audit: FFmpeg {manifest["release"]}, {len(manifest["files"])} pinned files, LGPL configuration, '
       f'{len(dynamic)} exports, {len(undefined)} imports')

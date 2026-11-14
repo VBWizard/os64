@@ -122,8 +122,10 @@ bool media_pcm_to_stereo(const media_pcm_in_t *in, int16_t *out)
         for (uint32_t c = 0; c < in->channels; c++) {
             if (wl[c] == 0 && wr[c] == 0) continue;
             double v = sample(in, c, f);
-            l += v * wl[c];
-            r += v * wr[c];
+            // Added only where it weighs: 0 times a NaN is a NaN, and one
+            // bad sample on the right must not silence the left.
+            if (wl[c] != 0) l += v * wl[c];
+            if (wr[c] != 0) r += v * wr[c];
         }
         out[2 * f] = to_s16(l / sum_l);
         out[2 * f + 1] = to_s16(r / sum_r);

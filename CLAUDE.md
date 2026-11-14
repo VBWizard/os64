@@ -635,8 +635,15 @@ virtio because its drain waits for the tick.
   fell behind from a pump that was held off). Fixture: `/tests/audiotest`.
   `micros()`'s clock is `micros_now()` (micros.c), which the position
   stamps with so a player can compare
-  **`play file.wav`** is the first player (16-bit PCM, mono or stereo, 4
-  to 384 kHz). Sound at another rate goes through **`libsound.so`**
+  **`play file`** is the first player: anything **`libmedia.so`** reads
+  (`os64/media.h`: MP3, and WAV of any width, rate and channel count),
+  which hands back the stream's own format on the output's timeline
+  (48 kHz frames from the start, the resampler's delay counted off, so a
+  seek lands on the frame asked for). libmedia is the ONE caller of
+  FFmpeg (`tools/test_av_audit.py` holds that), so the decoder behind it
+  can change without a player changing; its pure core `media_pcm.c` is
+  host-tested (`tools/test_media_pcm_host.sh`), its glue by
+  `/tests/mediatest`. Sound at another rate goes through **`libsound.so`**
   (`os64/resample.h`): speexdsp's resampler, one file, unpatched, pinned by
   `userland/libsound/manifest.json`; its README is the inventory and the
   record of what was checked upstream. `tools/test_resample_host.sh`,
@@ -656,7 +663,7 @@ virtio because its drain waits for the tick.
   are libav's alone, so a caller of FFmpeg's headers sees only names
   libos64 exports). Built WITHOUT threads, so a program using it
   from several threads does every open and close under one lock of its
-  own. A program that calls it is named in `LIBAV_PROGRAMS` and compiles
+  own (libmedia keeps a narrower form the audit pins: media.c § THREADS). A program that calls it is named in `LIBAV_PROGRAMS` and compiles
   with `LIBAV_CONSUMER_CFLAGS`. Fixture: `/tests/avtest`
   **The SBC encoder is built and linked with the kernel**
   (`kernel/ports/sbc/`, the first third-party code in ring 0), and the A2DP

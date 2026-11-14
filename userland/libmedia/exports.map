@@ -1,0 +1,7 @@
+# What leaves libmedia.so: os64/media.h, and nothing of FFmpeg's or of its
+# own insides (media_pcm.c's names stay local).
+{
+  global:
+    os64_media_*;
+  local: *;
+};

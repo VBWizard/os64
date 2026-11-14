@@ -139,8 +139,10 @@ they stay off.
   when a format is probed or a decoder opened) and its default log
   callback, which keeps state. So a program that uses libav from more than
   one thread does every open and close under one lock of its own and
-  installs a log callback that is safe from any thread. That is libmedia's
-  rule. Turning threads on means a pthread shim (mutex, condition, once)
+  installs a log callback that is safe from any thread. libmedia keeps a
+  narrower form, so that a slow network probe does not hold up another
+  open; `libmedia/media.c` § THREADS says why it is enough, and
+  `tools/test_av_audit.py` pins the one-time setups it rests on. Turning threads on means a pthread shim (mutex, condition, once)
   over `os64_thread`, the lock and bells.
 - **Assembly** (`--disable-asm`, `--disable-x86asm`): FFmpeg's hand-written
   x86 needs `nasm`, and much of its fast path assumes AVX, which os64

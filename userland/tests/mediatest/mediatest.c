@@ -12,8 +12,10 @@
 //   5  a seek in it returns the target frame first, and the position says so
 //   6  a seek in the MP3 lands on the frame asked for, by the position and
 //      by the count of frames left
-//   7  a 5.1 WAV folds to stereo by BS.775's weights, normalised
-//   8  a source that cannot seek still plays, and a seek is refused by name
+//   7  a six-channel WAV, which names no layout, is read as 5.1 and folds
+//      to stereo by BS.775's weights, normalised
+//   8  a source that cannot seek but knows its length plays whole, and a
+//      seek is refused by name
 //   9  bytes that are no media are refused by name
 //  10  two threads open and decode the MP3 at once, and both get it whole
 //
@@ -60,7 +62,9 @@ static int64_t memory_seek(void *ctx, uint64_t offset)
 static os64_media_source_t source_of(Memory *m, const uint8_t *data, size_t size, bool seekable)
 {
     *m = (Memory){ data, size, 0 };
-    os64_media_source_t s = { m, memory_read, seekable ? memory_seek : NULL, seekable ? (int64_t)size : -1 };
+    // The size is given either way, as a download that cannot seek still
+    // knows its length.
+    os64_media_source_t s = { m, memory_read, seekable ? memory_seek : NULL, (int64_t)size };
     return s;
 }
 

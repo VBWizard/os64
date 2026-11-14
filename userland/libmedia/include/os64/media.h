@@ -28,8 +28,8 @@
 // frame first and a whole decode returns the media's length.
 //
 // One media object is used by one thread at a time; several objects may be
-// used by several threads at once (libmedia keeps libav's rule for that:
-// libav/README.md § Switched off).
+// used by several threads at once (libmedia/media.c § THREADS says how,
+// over a libav built without threads).
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -43,7 +43,8 @@ typedef struct os64_media os64_media_t;
 // many, 0 at the end, negative on an error; it may block. `seek` moves to a
 // byte offset from the start and answers it, or negative; NULL when the
 // source cannot seek (the media then cannot either). `size` is the byte
-// length, or -1 when not known.
+// length, or -1 when not known; give it when it is known, seekable or not,
+// because a lossy file's end padding is trimmed only when its end is known.
 typedef struct {
     void *ctx;
     int64_t (*read)(void *ctx, uint8_t *out, size_t cap);
