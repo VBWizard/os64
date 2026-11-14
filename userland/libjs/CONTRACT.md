@@ -261,6 +261,12 @@ active phases retain their existing BUSY/retirement checks. See
 [the DOM policy](../../docs/design/pending/IFRAME_F16_DOM_RECOVERY.md). Source audit,
 proofs and reproducible commands: [F16 child recovery](../../docs/design/pending/IFRAME_F16_CHILD_RECOVERY.md).
 
+The DOM host adapter preserves the original terminal task outcome and returns
+a separate generation-bound ROOT_REQUIRED/WAIT/READY decision. The shared
+host/guest consumer verifies native unwind, independent sibling scheduling and
+global fallback; Yonder's primary-only constructor remains terminal. See
+[F16 host acceptance](../../docs/design/pending/IFRAME_F16_HOST_ACCEPTANCE.md).
+
 ## Realms
 
 One runtime owns one engine and up to `OS64_JS_MAX_REALMS` (65) contexts:

@@ -408,7 +408,9 @@ os64_dom_cluster_t *os64_dom_cluster_create(os64_js_runtime_t *,
 os64_dom_cluster_t *os64_dom_cluster_create_with_recovery(const os64_js_config_t *,
     os64_js_teardown_policy_t, const char *caller_abi,
     const os64_dom_cluster_limits_t *, os64_js_runtime_t **, os64_js_outcome_t *);
-/* Close the failed task before calling. Preparation pauses cluster activity,
+/* Requires the paired DOM recovery policy; a custom libjs policy cannot
+ * certify DOM provider cleanup. Close the failed task before calling.
+ * Preparation pauses cluster activity,
  * contains affected bindings and waits for native/provider/layout borrowers.
  * BUSY grants no permission to release provider opaque storage; retry after
  * the borrowers release. OK commits the generation and permits independent
@@ -419,6 +421,34 @@ os64_dom_cluster_t *os64_dom_cluster_create_with_recovery(const os64_js_config_t
  * DOM activity after preparation, including separately prepared generations. */
 os64_js_status_t os64_dom_cluster_recover(os64_dom_cluster_t *, const char *caller_abi,
     os64_js_outcome_t *);
+
+typedef enum {
+    OS64_DOM_RECOVERY_ROOT_REQUIRED,
+    OS64_DOM_RECOVERY_WAIT,
+    OS64_DOM_RECOVERY_READY
+} os64_dom_recovery_action_t;
+typedef struct {
+    os64_dom_recovery_action_t action;
+    os64_js_status_t status; /* recovery admission, separate from the failed task */
+    os64_js_limit_t limit;
+    int64_t host_error;
+    uint64_t generation; /* requested failure episode */
+} os64_dom_recovery_result_t;
+/* Host routing for LIMIT/CANCELLED/HOST_FAILURE/FAILED_RUNTIME task results.
+ * Requires the paired DOM recovery policy to return WAIT or READY.
+ * The original result remains unchanged. Observe
+ * its generation with os64_js_recovery_inspect and retain that generation
+ * through WAIT/retry. Close/unwind the failed task before recovery can finish.
+ * WAIT parks cluster dispatch until native unwind/loan release; do not drain
+ * queued engine jobs to manufacture admission. ROOT_REQUIRED needs root
+ * cleanup after borrowers unwind. READY certifies affected DOM provider release
+ * and permits independent tasks through normal admission, never continuation
+ * of the failed task. Stale generations and nonterminal task results refuse.
+ * Observed global health overrides the execution candidate, including after
+ * a new failure episode.
+ * The result is returned by value; input diagnostics are not modified or retained. */
+os64_dom_recovery_result_t os64_dom_cluster_resolve_failure(os64_dom_cluster_t *,
+    const char *caller_abi, uint64_t generation, const os64_js_outcome_t *failed_task);
 
 /* Native opt-in timer callback settings, configured before runtime execution.
  * Enables host root scopes and conversion-time timer capture. Promise jobs and

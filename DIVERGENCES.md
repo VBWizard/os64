@@ -283,12 +283,16 @@ page's script can see them.
   function calls remain usable under the live caller's budget. F.15 tracks
   independent reclamation; F.11 requires that proof or accepted session-churn
   measurements. `IFRAME_F3_RETIREMENT.md`; libdom `LIBDOM.md`.
-- **A script overrun ends the shared iframe runtime.** F.3 preserves sticky
-  memory, deadline/job/stack, clock and cancellation failures instead of
-  resuming an interrupted heap. Healthy siblings survive ordinary departure
-  and local native child-installation failure. Child-local recovery requires
-  F.16's attribution and unwind proof; F.11 requires it or explicit fallback
-  acceptance. These foundations do not enable frame browsing by themselves.
+- **Child overrun recovery is explicit and limited.** F.16 can contain a
+  completely attributed plain child EXECUTION episode after engine/native
+  unwind and preserve independent sibling work in an opted-in DOM cluster.
+  Checked settings, Streams use, job-cap exhaustion, pending engine work and
+  other unsupported scopes retain global fallback, as do memory, clock,
+  cancellation and host failure. Yonder's primary-only policy remains terminal.
+  F.11 must evaluate the supported subset for its actual host or explicitly
+  accept fallback; it cannot infer checked-settings recovery from F.16's
+  completion. `IFRAME_F16_HOST_ACCEPTANCE.md` records the proof and exclusions.
+  These foundations do not enable frame browsing or reclaim realm slots.
 
 - **A history state is at most 2 MiB of JSON** (`OS64_DOM_STATE_MAX`): a
   `pushState` or `replaceState` with more is a QuotaExceededError. The

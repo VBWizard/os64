@@ -180,6 +180,7 @@ SKIPPED = {
     'test_libpage_refresh_server.py': 'a manual QEMU/wend fixture server',
     # Suites that drive a guest, not the host.
     'test_early_exceptions.py': 'boots QEMU instances',
+    'test_dom_recovery_guest.py': 'needs matching TESTRUN boot ISO/disk inputs and a fresh output directory',
     'test_telnetd_limits.py': 'needs an idle guest',
     'test_telnetd_storage.py': 'needs an idle guest',
     # Suites that need an input this script cannot supply.

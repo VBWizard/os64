@@ -98,6 +98,15 @@ entering author code. This is separate from browser adoption and reclamation;
 [the DOM audit](../../docs/design/pending/IFRAME_F16_DOM_RECOVERY.md) states the
 Streams exclusion and strict storage-settlement failure rules.
 
+The DOM host decision adapter returns admission state separately from the
+read-only failed task outcome. WAIT retains the native/root ownership rules;
+READY certifies the matching completed generation, without changing the old
+task's diagnostics. Root-required decisions retain provider storage until root
+cleanup. The shared guest consumer checks live heap blocks/bytes return to
+baseline after each case, both teardown policies and the target allocator
+identity; its parent checks the exact process exit. See
+[host acceptance](../../docs/design/pending/IFRAME_F16_HOST_ACCEPTANCE.md).
+
 ## Detection and reclamation
 
 Manifest patch `0006-reporting-runtime-teardown.patch` preserves the original

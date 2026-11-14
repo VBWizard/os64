@@ -116,6 +116,17 @@ commit permits affected provider release and independent healthy tasks.
 [The native audit and proofs](../../docs/design/pending/IFRAME_F16_DOM_RECOVERY.md)
 record this subset; no browser recovery adoption or slot reuse is implied.
 
+The host decision adapter `os64_dom_cluster_resolve_failure` takes the failed
+task outcome read-only and its observed generation. It returns ROOT_REQUIRED,
+WAIT or READY by value, with native admission codes separate from the original
+diagnostics. WAIT parks dispatch until native unwind/loan release; READY
+certifies the matching commit and permits independent tasks through normal
+admission. Stale requests cannot prepare another episode; observed global
+health overrides an EXECUTION candidate. Ordinary exception/rejection handling
+remains the host's existing path. [Host and guest acceptance](../../docs/design/pending/IFRAME_F16_HOST_ACCEPTANCE.md)
+records the shared consumer, native wait/fallback cases and retained browser
+policy. This does not certify checked settings or Streams recovery.
+
 For root teardown, stop host deliveries, drain the cluster, destroy its runtime once, release
 layout borrowers, then free the cluster. Native records and allocation-owner
 descriptors survive finalizers and all native sweeps. Document records remain
