@@ -3,9 +3,9 @@
 // request byte for byte and answers with a realistic Audio Sink record,
 // whole and cut every way the continuation rules allow; the responder is
 // asked everything a headphone might ask, and its answers are compared with
-// a copy of the record written out here by hand. Then the client's parser
-// reads the responder's record (the cross check), and both ends and the
-// parser are fuzzed.
+// copies of its three records written out here by hand, alone and across
+// records. Then the client's parser reads the responder's records (the
+// cross check), and both ends and the parser are fuzzed.
 //
 //   tools/test_bt_sdp_host.sh [fuzz rounds, default 3000]
 
@@ -725,8 +725,9 @@ static void test_responder_attributes(void)
     ask(0x04, 3, BYTES(0x00, 0x01, 0x00, 0x01, BE(500), 0x35, 0x05, 0x0a, 0x00, 0x05, 0x03, 0x11, 0x00));
     wn = expected_list(want, 0x0005, 0x0311);
     CHECK(resp_n == 7 + wn + 1 && !memcmp(resp + 7, want, wn));
-    // A bad handle, and the errors of syntax.
-    ask(0x04, 4, BYTES(0x00, 0x01, 0x00, 0x02, BE(500), 0x35, 0x03, 0x09, 0x00, 0x01, 0x00));
+    // A handle that is none of ours (0x00010002 and 0x00010003 are the
+    // AVRCP records: test_responder_records), and the errors of syntax.
+    ask(0x04, 4, BYTES(0x00, 0x01, 0x00, 0x04, BE(500), 0x35, 0x03, 0x09, 0x00, 0x01, 0x00));
     expect_error(4, 0x0002);
     ask(0x04, 5, BYTES(0x00, 0x01, 0x00, 0x01, BE(6), 0x35, 0x03, 0x09, 0x00, 0x01, 0x00));
     expect_error(5, 0x0003);
@@ -769,7 +770,7 @@ static size_t follow(uint8_t pdu, const uint8_t *head, size_t head_n, uint16_t m
 {
     uint8_t q[256], r[2048], cont[17] = { 0 };
     size_t total = 0;
-    for (int round = 0; round < 200; round++) {
+    for (int round = 0; round < 400; round++) {      // a byte a part, across all three records
         uint8_t params[128];
         size_t k = 0;
         memcpy(params, head, head_n); k = head_n;
@@ -873,6 +874,310 @@ static void test_responder_continuation(void)
     memcpy(p + k, long_state, 18);
     ask(0x06, 10, p, k + 18);
     expect_error(10, 0x0003);
+}
+
+// ── The table of records ────────────────────────────────────────────────────
+
+// The two AVRCP records (AUDIO_REMOTE.md § What we say we are), written out
+// by hand as Android's AVRC_AddRecord writes them for AVRCP 1.4: L2CAP PSM
+// 0x0017, AVCTP (0x0017) 1.3, profile AV Remote Control (0x110E) 1.4.
+static const uint8_t tg_handle[] = { 0x09, 0x00, 0x00, 0x0a, 0x00, 0x01, 0x00, 0x02 };
+static const uint8_t tg_classes[] = { 0x09, 0x00, 0x01, 0x35, 0x03, 0x19, 0x11, 0x0c };
+static const uint8_t ct_handle[] = { 0x09, 0x00, 0x00, 0x0a, 0x00, 0x01, 0x00, 0x03 };
+static const uint8_t ct_classes[] = { 0x09, 0x00, 0x01, 0x35, 0x06, 0x19, 0x11, 0x0e, 0x19, 0x11, 0x0f };
+static const uint8_t avctp_protocols[] = { 0x09, 0x00, 0x04, 0x35, 0x10, 0x35, 0x06, 0x19, 0x01, 0x00, 0x09, 0x00, 0x17,
+                                           0x35, 0x06, 0x19, 0x00, 0x17, 0x09, 0x01, 0x03 };
+static const uint8_t avrcp_profiles[] = { 0x09, 0x00, 0x09, 0x35, 0x08, 0x35, 0x06, 0x19, 0x11, 0x0e, 0x09, 0x01, 0x04 };
+static const uint8_t tg_features[] = { 0x09, 0x03, 0x11, 0x09, 0x00, 0x03 };
+static const uint8_t ct_features[] = { 0x09, 0x03, 0x11, 0x09, 0x00, 0x02 };
+typedef struct { const uint8_t *b; size_t n; uint16_t id; } part_t;
+static const part_t records[3][6] = {
+    { { rec_handle, sizeof(rec_handle), 0x0000 }, { rec_classes, sizeof(rec_classes), 0x0001 },
+      { rec_protocols, sizeof(rec_protocols), 0x0004 }, { rec_browse, sizeof(rec_browse), 0x0005 },
+      { rec_profiles, sizeof(rec_profiles), 0x0009 }, { rec_features, sizeof(rec_features), 0x0311 } },
+    { { tg_handle, sizeof(tg_handle), 0x0000 }, { tg_classes, sizeof(tg_classes), 0x0001 },
+      { avctp_protocols, sizeof(avctp_protocols), 0x0004 }, { rec_browse, sizeof(rec_browse), 0x0005 },
+      { avrcp_profiles, sizeof(avrcp_profiles), 0x0009 }, { tg_features, sizeof(tg_features), 0x0311 } },
+    { { ct_handle, sizeof(ct_handle), 0x0000 }, { ct_classes, sizeof(ct_classes), 0x0001 },
+      { avctp_protocols, sizeof(avctp_protocols), 0x0004 }, { rec_browse, sizeof(rec_browse), 0x0005 },
+      { avrcp_profiles, sizeof(avrcp_profiles), 0x0009 }, { ct_features, sizeof(ct_features), 0x0311 } },
+};
+static const uint32_t handles[3] = { 0x00010001, 0x00010002, 0x00010003 };
+
+static size_t seq_header(uint8_t *out, size_t n)
+{
+    if (n < 256) { out[0] = 0x35; out[1] = (uint8_t)n; return 2; }
+    out[0] = 0x36; out[1] = (uint8_t)(n >> 8); out[2] = (uint8_t)n; return 3;
+}
+// Record r's attribute list for the IDs in [lo, hi].
+static size_t record_list(uint8_t *out, int r, uint16_t lo, uint16_t hi)
+{
+    uint8_t body[256];
+    size_t n = 0;
+    for (int i = 0; i < 6; i++)
+        if (records[r][i].id >= lo && records[r][i].id <= hi) { memcpy(body + n, records[r][i].b, records[r][i].n); n += records[r][i].n; }
+    size_t h = seq_header(out, n);
+    memcpy(out + h, body, n);
+    return h + n;
+}
+// The list of lists for the records in `mask` (bit r: record r).
+static size_t record_lists(uint8_t *out, unsigned mask, uint16_t lo, uint16_t hi)
+{
+    uint8_t body[1024];
+    size_t n = 0;
+    for (int r = 0; r < 3; r++) if (mask >> r & 1) n += record_list(body + n, r, lo, hi);
+    size_t h = seq_header(out, n);
+    memcpy(out + h, body, n);
+    return h + n;
+}
+
+// A Service Search for one 16-bit UUID: the handles of the records in
+// `mask`, the first `max` of them.
+static void expect_search(uint16_t uuid, uint16_t max, unsigned mask)
+{
+    static uint16_t tid = 0x4000;
+    tid++;
+    ask(0x02, tid, BYTES(0x35, 0x03, 0x19, BE(uuid), BE(max), 0x00));
+    uint8_t want[64];
+    size_t k = 9, count = 0;
+    for (int r = 0; r < 3; r++) if ((mask >> r & 1) && count < max) {
+        want[k++] = (uint8_t)(handles[r] >> 24); want[k++] = (uint8_t)(handles[r] >> 16);
+        want[k++] = (uint8_t)(handles[r] >> 8); want[k++] = (uint8_t)handles[r];
+        count++;
+    }
+    want[k++] = 0;
+    want[0] = 0x03; want[1] = (uint8_t)(tid >> 8); want[2] = (uint8_t)tid; want[3] = 0; want[4] = (uint8_t)(k - 5);
+    want[5] = 0; want[6] = (uint8_t)count; want[7] = 0; want[8] = (uint8_t)count;
+    if (resp_n != k || memcmp(resp, want, k)) {
+        failures++; printf("FAIL search for %04x max %u\n", uuid, max); dump("want", want, k); dump("got ", resp, resp_n);
+    }
+}
+
+// A Service Search Attribute for one 16-bit UUID, every attribute: the
+// lists of the records in `mask`.
+static void expect_search_attributes(uint16_t uuid, unsigned mask)
+{
+    ask(0x06, 0x0707, BYTES(0x35, 0x03, 0x19, BE(uuid), BE(1000), 0x35, 0x05, 0x0a, 0x00, 0x00, 0xff, 0xff, 0x00));
+    uint8_t want[1024];
+    size_t wn = record_lists(want, mask, 0x0000, 0xffff);
+    if (resp_n != 7 + wn + 1 || resp[0] != 0x07 || (size_t)(resp[5] << 8 | resp[6]) != wn || memcmp(resp + 7, want, wn) ||
+        resp[resp_n - 1] != 0) {
+        failures++; printf("FAIL search attributes for %04x\n", uuid); dump("want", want, wn); dump("got ", resp, resp_n);
+    }
+}
+
+// A Service Search followed to its end at capacity `cap`: the handles
+// joined, the total each part gave, and each part within its bounds.
+static size_t follow_search(uint16_t uuid, uint16_t max, size_t cap, uint32_t *joined, unsigned *parts)
+{
+    uint8_t q[64], r[256], cont[17] = { 0 };
+    size_t total = 0, got = 0;
+    *parts = 0;
+    for (int round = 0; round < 20; round++) {
+        uint8_t params[40];
+        size_t k = 0;
+        params[k++] = 0x35; params[k++] = 3; params[k++] = 0x19; params[k++] = (uint8_t)(uuid >> 8); params[k++] = (uint8_t)uuid;
+        params[k++] = (uint8_t)(max >> 8); params[k++] = (uint8_t)max;
+        memcpy(params + k, cont, 1 + cont[0]); k += 1 + cont[0];
+        size_t rn = bt_sdp_respond(q, request(q, 0x02, (uint16_t)round, params, k), r, cap);
+        if (rn < 10 || r[0] != 0x03 || rn > cap) { failures++; printf("FAIL follow search: no answer at cap %zu\n", cap); dump("got", r, rn); return 0; }
+        size_t t = (size_t)(r[5] << 8 | r[6]), c = (size_t)(r[7] << 8 | r[8]);
+        if (round == 0) total = t;
+        if (t != total || t > max || 9 + 4 * c + 1 + r[9 + 4 * c] != rn || (size_t)(r[3] << 8 | r[4]) != rn - 5) {
+            failures++; printf("FAIL follow search: a part over its bounds at cap %zu\n", cap); dump("got", r, rn); return 0;
+        }
+        for (size_t i = 0; i < c; i++)
+            joined[got++] = (uint32_t)r[9 + 4 * i] << 24 | (uint32_t)r[10 + 4 * i] << 16 | (uint32_t)r[11 + 4 * i] << 8 | r[12 + 4 * i];
+        (*parts)++;
+        uint8_t s = r[9 + 4 * c];
+        if (!s) { if (got != total) { failures++; printf("FAIL follow search: %zu of %zu handles\n", got, total); } return got; }
+        if (s > 16) { failures++; printf("FAIL follow search: a state of %u\n", s); return 0; }
+        cont[0] = s; memcpy(cont + 1, r + 10 + 4 * c, s);
+    }
+    failures++; printf("FAIL follow search: never ended\n");
+    return 0;
+}
+
+static void test_responder_records(void)
+{
+    // Each record by its class; AV Remote Control is the Target's profile
+    // as well as the Controller record's class, so it finds both.
+    expect_search(0x110A, 10, 1);
+    expect_search(0x110C, 10, 2);
+    expect_search(0x110F, 10, 4);
+    expect_search(0x110E, 10, 6);
+    expect_search(0x110B, 10, 0);
+    // All three by the public browse root and by L2CAP's UUID; AVCTP's
+    // finds the two AVRCP records, AVDTP's the Audio Source.
+    expect_search(0x1002, 10, 7);
+    expect_search(0x0100, 10, 7);
+    expect_search(0x0017, 10, 6);
+    expect_search(0x0019, 10, 1);
+    expect_search(0x110D, 10, 1);
+    // The requester's maximum is the most handles given.
+    for (uint16_t max = 1; max <= 3; max++) expect_search(0x0100, max, 7);
+    expect_search(0x0017, 1, 6);
+    // Two UUIDs, both held: one record each way.
+    ask(0x02, 0x51, BYTES(0x35, 0x06, 0x19, 0x00, 0x17, 0x19, 0x11, 0x0f, BE(10), 0x00));
+    CHECK(resp_n == 14 && resp[6] == 1 && resp[8] == 1 && resp[12] == 0x03);
+    ask(0x02, 0x52, BYTES(0x35, 0x06, 0x19, 0x11, 0x0a, 0x19, 0x00, 0x17, BE(10), 0x00));
+    CHECK(resp_n == 10 && resp[6] == 0 && resp[8] == 0);
+
+    // Each record's attributes, by Service Search Attribute...
+    expect_search_attributes(0x110A, 1);
+    expect_search_attributes(0x110C, 2);
+    expect_search_attributes(0x110F, 4);
+    expect_search_attributes(0x110E, 6);
+    expect_search_attributes(0x1002, 7);
+    expect_search_attributes(0x0017, 6);
+    // ... and by Service Attribute under each handle, whole and in a range.
+    uint8_t want[1024], params[32];
+    for (int r = 0; r < 3; r++) {
+        static const uint16_t ranges[][2] = { { 0x0000, 0xffff }, { 0x0001, 0x0001 }, { 0x0005, 0x0311 }, { 0x0002, 0x0003 } };
+        for (int g = 0; g < 4; g++) {
+            size_t k = 0;
+            params[k++] = (uint8_t)(handles[r] >> 24); params[k++] = (uint8_t)(handles[r] >> 16);
+            params[k++] = (uint8_t)(handles[r] >> 8); params[k++] = (uint8_t)handles[r];
+            params[k++] = 0x01; params[k++] = 0xf4;
+            params[k++] = 0x35; params[k++] = 5; params[k++] = 0x0a;
+            params[k++] = (uint8_t)(ranges[g][0] >> 8); params[k++] = (uint8_t)ranges[g][0];
+            params[k++] = (uint8_t)(ranges[g][1] >> 8); params[k++] = (uint8_t)ranges[g][1];
+            params[k++] = 0;
+            ask(0x04, (uint16_t)(0x60 + r * 4 + g), params, k);
+            size_t wn = record_list(want, r, ranges[g][0], ranges[g][1]);
+            if (resp_n != 7 + wn + 1 || resp[0] != 0x05 || memcmp(resp + 7, want, wn)) {
+                failures++; printf("FAIL attributes of record %d range %d\n", r, g); dump("want", want, wn); dump("got ", resp, resp_n);
+            }
+        }
+    }
+    // Handles that are none of ours.
+    static const uint32_t not_ours[] = { 0x00010000, 0x00010004, 0x00000002, 0x01010002, 0xffffffff, 0x00020001 };
+    for (size_t i = 0; i < sizeof(not_ours) / sizeof(not_ours[0]); i++) {
+        size_t k = 0;
+        params[k++] = (uint8_t)(not_ours[i] >> 24); params[k++] = (uint8_t)(not_ours[i] >> 16);
+        params[k++] = (uint8_t)(not_ours[i] >> 8); params[k++] = (uint8_t)not_ours[i];
+        params[k++] = 0x01; params[k++] = 0xf4; params[k++] = 0x35; params[k++] = 3; params[k++] = 0x09;
+        params[k++] = 0x00; params[k++] = 0x01; params[k++] = 0;
+        ask(0x04, (uint16_t)(0x90 + i), params, k);
+        expect_error(0x90 + i, 0x0002);
+    }
+
+    // Continuation across records: every maximum and every capacity, the
+    // parts joined byte for byte the whole.
+    static const uint8_t ssa_all[] = { 0x35, 0x03, 0x19, 0x01, 0x00, 0x35, 0x05, 0x0a, 0x00, 0x00, 0xff, 0xff };
+    uint8_t whole[1024], joined[1024];
+    size_t wn = follow(0x06, ssa_all, sizeof(ssa_all), 1000, 2048, whole);
+    size_t xn = record_lists(want, 7, 0x0000, 0xffff);
+    CHECK(wn == xn && !memcmp(whole, want, wn));
+    CHECK(wn > 200);
+    for (uint16_t max = 7; max <= wn; max++) {
+        size_t jn = follow(0x06, ssa_all, sizeof(ssa_all), max, 2048, joined);
+        if (jn != wn || memcmp(joined, whole, wn)) { failures++; printf("FAIL all records joined at max %u\n", max); }
+    }
+    for (size_t cap = 15; cap < wn + 20; cap++) {
+        size_t jn = follow(0x06, ssa_all, sizeof(ssa_all), 1000, cap, joined);
+        if (jn != wn || memcmp(joined, whole, wn)) { failures++; printf("FAIL all records joined at capacity %zu\n", cap); }
+    }
+    // The same across the two AVRCP records alone, and under each handle.
+    static const uint8_t ssa_avctp[] = { 0x35, 0x03, 0x19, 0x00, 0x17, 0x35, 0x05, 0x0a, 0x00, 0x00, 0xff, 0xff };
+    wn = follow(0x06, ssa_avctp, sizeof(ssa_avctp), 1000, 2048, whole);
+    xn = record_lists(want, 6, 0x0000, 0xffff);
+    CHECK(wn == xn && !memcmp(whole, want, wn));
+    for (uint16_t max = 7; max <= wn; max++) {
+        size_t jn = follow(0x06, ssa_avctp, sizeof(ssa_avctp), max, 2048, joined);
+        if (jn != wn || memcmp(joined, whole, wn)) { failures++; printf("FAIL avctp records joined at max %u\n", max); }
+    }
+    for (int r = 1; r < 3; r++) {
+        uint8_t sa[11] = { (uint8_t)(handles[r] >> 24), (uint8_t)(handles[r] >> 16), (uint8_t)(handles[r] >> 8), (uint8_t)handles[r],
+                           0x35, 0x05, 0x0a, 0x00, 0x00, 0xff, 0xff };
+        wn = follow(0x04, sa, sizeof(sa), 1000, 2048, whole);
+        xn = record_list(want, r, 0x0000, 0xffff);
+        CHECK(wn == xn && !memcmp(whole, want, wn));
+        for (uint16_t max = 7; max <= wn; max++) {
+            size_t jn = follow(0x04, sa, sizeof(sa), max, 2048, joined);
+            if (jn != wn || memcmp(joined, whole, wn)) { failures++; printf("FAIL record %d joined at max %u\n", r, max); }
+        }
+    }
+
+    // A Service Search too long for the room continues, a handle's place
+    // at a time, at every capacity: the handles joined are the whole list.
+    // All of them in one response when they fit with no state; else as many
+    // as fit beside a state (20 bytes is one), the last part without one.
+    for (uint16_t max = 1; max <= 4; max++) for (size_t cap = 10; cap <= 40; cap++) {
+        uint32_t got[8];
+        unsigned parts;
+        size_t want_n = max < 3 ? max : 3;
+        if (cap < 10 + 4 * want_n && cap < 20) {
+            uint8_t q[64], r[64];
+            size_t qn = request(q, 0x02, 1, BYTES(0x35, 0x03, 0x19, 0x01, 0x00, BE(max), 0x00));
+            CHECK_EQ(bt_sdp_respond(q, qn, r, cap), 0);
+            continue;
+        }
+        size_t gn = follow_search(0x0100, max, cap, got, &parts);
+        if (gn != want_n) { failures++; printf("FAIL search joined at max %u cap %zu: %zu handles\n", max, cap, gn); continue; }
+        for (size_t i = 0; i < gn; i++) if (got[i] != handles[i]) { failures++; printf("FAIL search joined at max %u cap %zu: handle %zu\n", max, cap, i); }
+        unsigned want_parts = 0;
+        for (size_t left = want_n; left; want_parts++) left = cap >= 10 + 4 * left ? 0 : left - (cap - 16) / 4;
+        if (parts != want_parts) { failures++; printf("FAIL search at max %u cap %zu: %u parts, want %u\n", max, cap, parts, want_parts); }
+    }
+    // A search state of ours, altered, carried to another pattern or
+    // another maximum that leaves its place past the end, or forged.
+    uint8_t q[64], r[64];
+    size_t qn = request(q, 0x02, 1, BYTES(0x35, 0x03, 0x19, 0x01, 0x00, BE(3), 0x00));
+    size_t rn = bt_sdp_respond(q, qn, r, 20);
+    CHECK(rn == 20 && r[6] == 3 && r[8] == 1 && r[13] == 6);
+    uint8_t state[7];
+    memcpy(state, r + 13, 7);
+    CHECK(state[1] == 0 && state[2] == 1);
+    uint8_t sp[32];
+    static const uint8_t shead[] = { 0x35, 0x03, 0x19, 0x01, 0x00, 0x00, 0x03 };
+    memcpy(sp, shead, sizeof(shead)); memcpy(sp + sizeof(shead), state, 7);
+    ask(0x02, 2, sp, sizeof(shead) + 7);
+    CHECK(resp_n == 18 && resp[6] == 3 && resp[8] == 2 && resp[12] == 0x02 && resp[16] == 0x03 && resp[17] == 0);
+    for (int i = 1; i < 7; i++) {
+        memcpy(sp + sizeof(shead), state, 7);
+        sp[sizeof(shead) + i] ^= 0x01;
+        ask(0x02, 3, sp, sizeof(shead) + 7);
+        expect_error(3, 0x0005);
+    }
+    memcpy(sp + sizeof(shead), state, 7);
+    sp[4] = 0x17;                                   // AVCTP's UUID: another pattern
+    ask(0x02, 4, sp, sizeof(shead) + 7);
+    expect_error(4, 0x0005);
+    sp[4] = 0x00; sp[6] = 0x01;                     // a maximum of one: its place is past the end
+    ask(0x02, 5, sp, sizeof(shead) + 7);
+    expect_error(5, 0x0005);
+    // A state an attribute request issued is not a search's.
+    ask(0x06, 6, BYTES(0x35, 0x03, 0x19, 0x01, 0x00, BE(10), 0x35, 0x05, 0x0a, 0x00, 0x00, 0xff, 0xff, 0x00));
+    CHECK(resp_n == 7 + 10 + 7);
+    memcpy(sp, shead, sizeof(shead)); memcpy(sp + sizeof(shead), resp + 17, 7);
+    sp[sizeof(shead) + 1] = 0; sp[sizeof(shead) + 2] = 1;
+    ask(0x02, 7, sp, sizeof(shead) + 7);
+    expect_error(7, 0x0005);
+
+    // The client's walker reads the answer for all three: the Audio Source
+    // as the client would find it, and the two AVRCP records by their classes.
+    ask(0x06, 8, BYTES(0x35, 0x03, 0x19, 0x01, 0x00, BE(1000), 0x35, 0x05, 0x0a, 0x00, 0x00, 0xff, 0xff, 0x00));
+    size_t count = (size_t)(resp[5] << 8 | resp[6]);
+    bt_sdp_sink_t out;
+    CHECK_EQ(bt_sdp_parse_attribute_lists(resp + 7, count, BT_SDP_UUID_AUDIO_SOURCE, true, &out), BT_SDP_PARSED);
+    CHECK(out.found);
+    CHECK_EQ(out.avdtp_version, 0x0103);
+    CHECK_EQ(out.a2dp_version, 0x0103);
+    CHECK_EQ(out.features, 0x0001);
+    CHECK_EQ(out.l2cap_psm, 0x0019);
+    CHECK_EQ(bt_sdp_parse_attribute_lists(resp + 7, count, 0x110C, true, &out), BT_SDP_PARSED);
+    CHECK(out.found);
+    CHECK_EQ(out.l2cap_psm, 0x0017);
+    CHECK_EQ(out.avdtp_version, 0);
+    CHECK_EQ(out.a2dp_version, 0);
+    CHECK_EQ(out.features, 0x0003);
+    CHECK_EQ(bt_sdp_parse_attribute_lists(resp + 7, count, 0x110F, true, &out), BT_SDP_PARSED);
+    CHECK(out.found);
+    CHECK_EQ(out.l2cap_psm, 0x0017);
+    CHECK_EQ(out.features, 0x0002);
+    CHECK_EQ(bt_sdp_parse_attribute_lists(resp + 7, count, BT_SDP_UUID_AUDIO_SINK, true, &out), BT_SDP_PARSED);
+    CHECK(!out.found);
 }
 
 static void test_responder_sizes(void)
@@ -1040,12 +1345,16 @@ static void fuzz_responder(int rounds)
         { 20, 0x06, 0, 1, 0, 15, 0x35, 0x03, 0x19, 0x11, 0x0a, 0x00, 0x20, 0x35, 0x05, 0x0a, 0x00, 0x00, 0xff, 0xff, 0x00 },
         { 17, 0x04, 0, 1, 0, 12, 0x00, 0x01, 0x00, 0x01, 0x00, 0x20, 0x35, 0x03, 0x09, 0x00, 0x04, 0x00 },
         { 13, 0x02, 0, 1, 0, 8, 0x35, 0x03, 0x19, 0x01, 0x00, 0x00, 0x05, 0x00 },
+        // All three records' lists, and the Controller record's attributes.
+        { 20, 0x06, 0, 1, 0, 15, 0x35, 0x03, 0x19, 0x01, 0x00, 0x00, 0x30, 0x35, 0x05, 0x0a, 0x00, 0x00, 0xff, 0xff, 0x00 },
+        { 19, 0x04, 0, 1, 0, 14, 0x00, 0x01, 0x00, 0x03, 0x00, 0x10, 0x35, 0x05, 0x0a, 0x00, 0x00, 0xff, 0xff, 0x00 },
     };
+    const int kinds = (int)(sizeof(seeds) / sizeof(seeds[0]));
     int answered = 0;
     for (int round = 0; round < rounds; round++) {
         uint8_t q[128];
-        memcpy(q, seeds[round % 3] + 1, seeds[round % 3][0]);
-        size_t n = seeds[round % 3][0];
+        memcpy(q, seeds[round % kinds] + 1, seeds[round % kinds][0]);
+        size_t n = seeds[round % kinds][0];
         int flips = (int)(rnd() % 4);
         for (int i = 0; i < flips; i++) q[rnd() % n] = (uint8_t)rnd();
         if (rnd() % 4 == 0) n = rnd() % (n + 1);
@@ -1085,6 +1394,7 @@ int main(int argc, char **argv)
     test_responder_search();
     test_responder_attributes();
     test_responder_continuation();
+    test_responder_records();
     test_responder_sizes();
     test_cross_check();
     fuzz_client(rounds);
