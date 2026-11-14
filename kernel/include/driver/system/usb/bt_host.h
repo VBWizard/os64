@@ -29,6 +29,12 @@ enum {
 };
 // Slot 2's sniff policy (bt_host.c § Slot 2's sniff).
 enum { BT_HOST_SNIFF_AWAKE, BT_HOST_SNIFF_ALLOWING, BT_HOST_SNIFF_DOZING, BT_HOST_SNIFF_WAKING };
+// One press or release of the headphones' buttons, as slot 2 keeps it for a
+// consumer: the AVRCP pass-through operation (bt_avrcp.h BT_AVRCP_OP_*),
+// press or release, and when (AVRCP's clock, milliseconds: bt_host_tick's
+// now_us / 1000).
+#define BT_HOST_BUTTONS 16
+typedef struct { uint8_t operation; bool pressed; uint64_t at_ms; } bt_host_button_t;
 // Controller commands and ACL credits are shared; pairing, encryption, ATT,
 // bond policy and input state belong to a peer. USB's serializing flag
 // (xhci.c) orders access.
@@ -184,6 +190,19 @@ typedef struct {
     uint8_t vol_raw;
     uint32_t vol_serial;
     uint32_t vol_ownerships, vol_sets, vol_taken, vol_presses;
+    // Their buttons (bt_host.c § Slot 2's buttons), since start-up: every
+    // press and release AVRCP reports, drained from it each tick, numbered
+    // from 0 (`buttons_seen` is the next number), and the last
+    // BT_HOST_BUTTONS of them held for a consumer, oldest first, the
+    // oldest overwritten when the ring is full and counted in
+    // `buttons_lost`. Presses (not releases) by operation, in AVRCP's
+    // order (bt_avrcp_operation_index), the last slot for any other; and
+    // the last event (`button_last`, valid once `buttons_seen`).
+    bt_host_button_t buttons[BT_HOST_BUTTONS];
+    uint8_t buttons_head, buttons_count;
+    uint32_t buttons_seen, buttons_lost;
+    uint32_t button_presses[BT_AVRCP_OPERATIONS+1];
+    bt_host_button_t button_last;
     // Slot 2's sniff policy (AUDIO_REMOTE.md § Part Z), kept with an audio
     // sink while the link is READY and started over when it is not;
     // bt_host.c § Slot 2's sniff has the lifecycle table. `sniff_state` is
@@ -302,6 +321,13 @@ void bt_host_policy(bt_host_t *, uint64_t);
 // bt_host_init (which clears it). Until it is given, neither AVDTP nor
 // AVCTP is admitted or opened.
 void bt_host_audio(bt_host_t *, const bt_a2dp_ops_t *, void *);
+// Their buttons, as slot 2 holds them (bt_host_t buttons). A press does
+// nothing yet: these are where a consumer will be handed them. _take
+// gives the oldest held and removes it (false when none). bt_host_button
+// gives the event numbered `number` (0 is the first since start-up)
+// without removing it, false once the ring no longer holds it.
+bool bt_host_button_take(bt_host_t *, bt_host_button_t *);
+bool bt_host_button(const bt_host_t *, uint32_t number, bt_host_button_t *);
 // The largest payload the host sends on the media channel (the MTU it
 // hands bt_a2dp_packet); 0 when there is no open media channel.
 size_t bt_host_media_room(const bt_host_t *);

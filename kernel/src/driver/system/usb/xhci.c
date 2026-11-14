@@ -264,6 +264,9 @@ typedef struct {
 		uint32_t a2dp_sessions;
 		uint8_t avdtp_wrongs, avdtp_state;
 		bool a2dp_failed, a2dp_gave_up;
+		// The number of the next button event of slot 2's to say
+		// (bt_host_t buttons_seen).
+		uint32_t buttons;
 	} logged;
 } xhci_bt_probe_t;
 
@@ -1631,6 +1634,17 @@ static void xhci_bt_log_audio(xhci_bt_probe_t *p)
 		printd(DEBUG_USB, "bluetooth: slot %u a2dp: stream %s\n", BT_HOST_CLASSIC_SLOT,
 		       st == BT_AVDTP_OPEN ? "suspended" : bt_avdtp_state_name(st));
 	p->logged.avdtp_state = (uint8_t)st;
+	// Their buttons, each press and release once, from slot 2's ring by
+	// number. Events the ring no longer holds (overwritten, which its
+	// status counts as lost, or taken by a consumer) are skipped.
+	if (h->buttons_seen - p->logged.buttons > BT_HOST_BUTTONS)
+		p->logged.buttons = h->buttons_seen - BT_HOST_BUTTONS;
+	for (; p->logged.buttons != h->buttons_seen; p->logged.buttons++) {
+		bt_host_button_t b;
+		if (bt_host_button(h, p->logged.buttons, &b))
+			printd(DEBUG_USB, "bluetooth: slot %u avrcp: %s %s\n", BT_HOST_CLASSIC_SLOT,
+			       bt_avrcp_operation_name(b.operation), b.pressed ? "pressed" : "released");
+	}
 }
 
 static void xhci_bt_log_trouble(xhci_bt_probe_t *p)

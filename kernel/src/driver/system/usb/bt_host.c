@@ -368,11 +368,18 @@ static uint16_t host_avdtp_version(const bt_host_t *h)
 // The link came up or went: the pump lets the seam go if it held it (a
 // link that comes up under a new handle may not have been seen going),
 // and the pump, AVDTP and AVRCP start over.
+static void host_buttons_drain(bt_host_t *h);
 static void host_audio_link(bt_host_t *h,bool up)
 {
+    // The presses not yet read are the last connection's, drained while
+    // AVRCP still says what state they came in; its reset then releases a
+    // press still held, and that release is drained too.
+    host_buttons_drain(h);
+    bt_avrcp_reset(&h->avrcp);
+    host_buttons_drain(h);
     if(h->a2dp_ops) bt_a2dp_reset(&h->a2dp,h->a2dp_ops,h->a2dp_ctx);
     if(up) { bt_a2dp_init(&h->a2dp); bt_avdtp_init(&h->avdtp); bt_avrcp_init(&h->avrcp); }
-    else { bt_avdtp_reset(&h->avdtp); bt_avrcp_reset(&h->avrcp); }
+    else bt_avdtp_reset(&h->avdtp);
     h->avdtp_sig=h->avdtp_media=h->avdtp_asking=0;
     h->avdtp_sig_cid=h->avdtp_media_cid=h->avdtp_asking_cid=0;
     h->avdtp_asking_media=false;
@@ -907,6 +914,67 @@ static void host_volume_tick(bt_host_t *h)
         if(now!=number && o->volume_set(h->a2dp_ctx,now)) h->vol_taken++;
     }
 }
+// ── Slot 2's buttons (AUDIO_REMOTE.md § Their buttons) ─────────────────────
+//
+// Every press and release AVRCP answered (bt_avrcp_press) is drained each
+// tick, and before AVRCP starts over with the link: counted by name, kept
+// as the last, and held in a ring of its own for a consumer, with loss
+// counted (bt_host.h). The transport logs each from the ring by its number.
+// A PRESS DOES NOTHING, with one exception the design makes: headphones
+// without absolute volume (AVRCP not READY) that send volume up or down
+// move the seam's number by BT_HOST_VOLUME_STEP, clamped to 0..100, through
+// volume_set, which the seam takes from its sink whether or not the sink
+// owns the volume. While AVRCP is READY their volume presses are ignored:
+// their CHANGED is the truth.
+#define BT_HOST_VOLUME_STEP 5
+static void host_button_keep(bt_host_t *h,const bt_host_button_t *b)
+{
+    if(h->buttons_count==BT_HOST_BUTTONS) {
+        h->buttons_head=(uint8_t)((h->buttons_head+1)%BT_HOST_BUTTONS);
+        h->buttons_count--; h->buttons_lost++;
+    }
+    h->buttons[(h->buttons_head+h->buttons_count)%BT_HOST_BUTTONS]=*b;
+    h->buttons_count++;
+    h->buttons_seen++;
+    h->button_last=*b;
+}
+static void host_volume_press(bt_host_t *h,uint8_t operation)
+{
+    if(bt_avrcp_state(&h->avrcp)==BT_AVRCP_READY || !host_volume_ops(h) || !h->a2dp.attached) return;
+    int number=h->a2dp_ops->volume_now(h->a2dp_ctx);
+    number+=operation==BT_AVRCP_OP_VOLUME_UP?BT_HOST_VOLUME_STEP:-BT_HOST_VOLUME_STEP;
+    number=number<0?0:number>100?100:number;
+    if(h->a2dp_ops->volume_set(h->a2dp_ctx,(uint8_t)number)) h->vol_presses++;
+}
+static void host_buttons_drain(bt_host_t *h)
+{
+    bt_avrcp_press_t p;
+    // AVRCP's ring is bounded, so this is too.
+    for(unsigned i=0;i<BT_AVRCP_PRESSES && bt_avrcp_press(&h->avrcp,&p);i++) {
+        bt_host_button_t b={.operation=p.operation,.pressed=p.pressed,.at_ms=host_avdtp_now(h)};
+        host_button_keep(h,&b);
+        if(!p.pressed) continue;
+        int at=bt_avrcp_operation_index(p.operation);
+        h->button_presses[at<0?BT_AVRCP_OPERATIONS:(unsigned)at]++;
+        if(p.operation==BT_AVRCP_OP_VOLUME_UP || p.operation==BT_AVRCP_OP_VOLUME_DOWN) host_volume_press(h,p.operation);
+    }
+}
+bool bt_host_button_take(bt_host_t *h,bt_host_button_t *out)
+{
+    if(!h->buttons_count) return false;
+    *out=h->buttons[h->buttons_head];
+    h->buttons_head=(uint8_t)((h->buttons_head+1)%BT_HOST_BUTTONS);
+    h->buttons_count--;
+    return true;
+}
+bool bt_host_button(const bt_host_t *h,uint32_t number,bt_host_button_t *out)
+{
+    // The ring holds the numbers buttons_seen - buttons_count .. buttons_seen - 1.
+    uint32_t back=h->buttons_seen-number;
+    if(number>=h->buttons_seen || back>h->buttons_count) return false;
+    *out=h->buttons[(h->buttons_head+h->buttons_count-back)%BT_HOST_BUTTONS];
+    return true;
+}
 
 // Slot 2's audio, each tick, after SDP: the roles and the AVCTP channel,
 // the channels AVDTP and AVCTP want opened and closed, their timers, the
@@ -952,6 +1020,7 @@ static void host_audio_tick(bt_host_t *h,uint64_t now,host_call_t *call)
     // awake (§ Slot 2's sniff), so our Start waits for the link.
     bt_a2dp_step(&h->a2dp,a,h->now_us,&host_pump_ops,h);
     bt_avrcp_playback(&h->avrcp,host_avrcp_playback(h),host_avdtp_now(h));
+    host_buttons_drain(h);
     host_volume_tick(h);         // after the pump's policy, so an attach this tick is seen
     host_avdtp_feed(h);          // what the pump asked of AVDTP, if the slot is still free
     host_avctp_feed(h);          // after AVDTP's, and before the media loop's packet

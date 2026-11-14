@@ -224,6 +224,13 @@ bool bt_avrcp_press(bt_avrcp_t *a, bt_avrcp_press_t *out);   // the oldest press
 // back their volume registration's answer until something plays.
 void bt_avrcp_playback(bt_avrcp_t *a, uint8_t status, uint64_t now);
 
+// The pass-through operations taken, as bt_avrcp_press reports them: each
+// one's place among BT_AVRCP_OPERATIONS (-1 for one not taken), and its
+// name ("?" for one not taken).
+#define BT_AVRCP_OPERATIONS 7
+int bt_avrcp_operation_index(uint8_t operation);
+const char *bt_avrcp_operation_name(uint8_t operation);
+
 const char *bt_avrcp_state_name(bt_avrcp_state_t s);
 size_t bt_avrcp_status(const bt_avrcp_t *a, char *out, size_t capacity);
 

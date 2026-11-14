@@ -736,6 +736,15 @@ void bt_avrcp_playback(bt_avrcp_t *a, uint8_t status, uint64_t now)
     m->id=ar_id(a);
 }
 
+_Static_assert(sizeof(ar_ops)==BT_AVRCP_OPERATIONS && sizeof(ar_op_names)/sizeof(ar_op_names[0])==BT_AVRCP_OPERATIONS,
+               "one name for each operation taken");
+int bt_avrcp_operation_index(uint8_t operation) { return ar_op_index(operation); }
+const char *bt_avrcp_operation_name(uint8_t operation)
+{
+    int i=ar_op_index(operation);
+    return i<0 ? "?" : ar_op_names[i];
+}
+
 const char *bt_avrcp_state_name(bt_avrcp_state_t s)
 {
     static const char *const names[]={"idle","asking","registering","ready","plain","failed"};
