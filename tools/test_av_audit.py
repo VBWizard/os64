@@ -129,10 +129,52 @@ root_make = (ROOT / 'GNUmakefile').read_text()
 check(root_make.count('/etc/licenses/ffmpeg.txt') == 2, 'the notice is not installed on both images')
 check('userland/bin/libav.so' in root_make, 'libav.so is not in the images')
 
-# The programs that use it load it.
-for program in ('tests/avtest',):
-    needs = set(re.findall(r'\(NEEDED\).*\[(.*?)\]', run('x86_64-elf-readelf', '-dW', USERLAND / 'bin' / program)))
-    check('libav.so' in needs, f'{program} does not load libav.so: {needs}')
+# ONE DOOR TO FFMPEG: libmedia.so is the library programs play sound
+# through (os64/media.h), and the only one that may load libav.so, beside
+# libav's own fixture. A player that called FFmpeg directly would tie
+# itself to the decoder libmedia exists to hide.
+def needed(path):
+    return set(re.findall(r'\(NEEDED\).*\[(.*?)\]', run('x86_64-elf-readelf', '-dW', path)))
+
+callers = set()
+for path in sorted((USERLAND / 'bin').rglob('*')):
+    if path.is_file() and path != SO and path.read_bytes()[:4] == b'\x7fELF' and 'libav.so' in needed(path):
+        callers.add(str(path.relative_to(USERLAND / 'bin')))
+check(callers == {'libmedia.so', 'tests/avtest'}, f'libav.so is loaded by {sorted(callers)}, not only libmedia.so and avtest')
+MEDIA = USERLAND / 'bin/libmedia.so'
+check(needed(MEDIA) == {'libav.so', 'libsound.so', 'libos64.so'}, f'libmedia.so needs {sorted(needed(MEDIA))}')
+media_exports = {l.split()[-1] for l in run('x86_64-elf-nm', '-D', '--defined-only', MEDIA).splitlines()}
+check(media_exports and all(e.startswith('os64_media_') for e in media_exports),
+      f'libmedia.so exports {sorted(e for e in media_exports if not e.startswith("os64_media_"))}')
+for program in ('play', 'tests/mediatest'):
+    check('libmedia.so' in needed(USERLAND / 'bin' / program), f'{program} does not load libmedia.so')
+
+# FFmpeg's ONE-TIME SETUPS, which a build without threads leaves unlocked
+# (README.md § Switched off). Every ff_thread_once in every vendored file,
+# templates and headers included (a decoder's setup can live in a template
+# its .c file includes), with its count, so a new one anywhere fails here.
+# Where each is reached in this build, which is why libmedia/media.c
+# § THREADS is enough:
+#   mpegaudiodec_*, mpegaudiodsp*, pcm.c   a decoder's open: libmedia's,
+#                                          and avformat_find_stream_info's,
+#                                          both under libmedia's lock
+#   crc.c                                  libmedia makes every table at its
+#                                          first open
+#   tx_template.c, aes.c                   nothing in this build's codecs or
+#                                          demuxers; only a program calling
+#                                          av_tx_* or av_aes_* itself
+known_once = {'libavcodec/mpegaudiodec_common.c': 1, 'libavcodec/mpegaudiodec_template.c': 1,
+              'libavcodec/mpegaudiodsp.c': 1, 'libavcodec/mpegaudiodsp_template.c': 1,
+              'libavcodec/pcm.c': 3, 'libavutil/aes.c': 1, 'libavutil/crc.c': 1,
+              'libavutil/tx_template.c': 2}
+once_sites = {}
+for name in manifest['files']:
+    if name.endswith(('.c', '.h')) and name != 'libavutil/thread.h':   # thread.h defines it
+        n = len(re.findall(r'\bff_thread_once\s*\(', (upstream / name).read_text(errors='replace')))
+        if n:
+            once_sites[name] = n
+check(once_sites == known_once, f'one-time setups changed: {sorted(set(once_sites.items()) ^ set(known_once.items()))}; '
+      'decide whether libmedia/media.c § THREADS still covers them, then update this table')
 
 print(f'PASS av audit: FFmpeg {manifest["release"]}, {len(manifest["files"])} pinned files, LGPL configuration, '
       f'{len(dynamic)} exports, {len(undefined)} imports')

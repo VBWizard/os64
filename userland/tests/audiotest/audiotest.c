@@ -35,8 +35,10 @@
 // `audiotest` runs it; `audiotest feed` and `audiotest poke <task>` are the
 // helpers it spawns.
 //
-// Exit codes: 0xA0D10000 success, 0xA0D100NN the step that failed.
+// Exit codes: 0xA0D10000 success, 0xA0D100NN the step that failed,
+// 0xA0D100FE skipped because something can be heard (sound_guard.h).
 
+#include "sound_guard.h"
 #include "os64/os64.h"
 #include "os64/audio.h"
 #include "os64/signal.h"
@@ -269,7 +271,7 @@ static bool handles_list_audio(void)
     return false;
 }
 
-int main(int argc, char **argv)
+static int steps(int argc, char **argv)
 {
     if (argc == 2 && os64_streq(argv[1], "feed"))
         return feed_main();
@@ -581,4 +583,22 @@ int main(int argc, char **argv)
     os64_close(gPos);
     os64_printf("audiotest: all steps passed\n");
     return (int)AUDIOTEST_OK;
+}
+
+// Only where nothing can be heard (sound_guard.h), and the volume put back
+// as it was found.
+int main(int argc, char **argv)
+{
+    char sink[32];
+    if (sound_guard_audible(sink, sizeof(sink)))
+    {
+        os64_printf("audiotest: SKIP: the sink is %s, and this test plays a ramp and sets the volume;\n"
+                    "          it runs only when nothing can be heard (slot 2 disconnect first)\n", sink);
+        return (int)0xA0D100FE;
+    }
+    int volume = sound_guard_volume_get();
+    int code = steps(argc, argv);
+    if (volume >= 0)
+        sound_guard_volume_set(volume);
+    return code;
 }
