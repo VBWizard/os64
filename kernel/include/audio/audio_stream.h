@@ -120,6 +120,9 @@ void audio_stream_position(const audio_stream_t *s, os64_audio_position_t *out);
 bool audio_stream_writer_should_wake(const audio_stream_t *s);
 // Has the null sink's clock anything to run for.
 bool audio_stream_has_work(const audio_stream_t *s);
+// Has `sink` sound to take: it is the sink, the ring holds frames, and the
+// stream is not paused. An open with nothing written is not sound.
+bool audio_stream_has_sound(const audio_stream_t *s, const void *sink);
 
 // The null sink's clock: frames due at `now_us` for a sink anchored at
 // `anchor_us` that has taken `taken` since. More than `capacity` due is a

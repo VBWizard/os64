@@ -413,6 +413,13 @@ bool audio_stream_has_work(const audio_stream_t *s)
 	return !s->failed && !s->paused && (s->open || s->fill > 0);
 }
 
+// A failed sink's ring is emptied and takes no writes, so "frames in the
+// ring" already answers no for it.
+bool audio_stream_has_sound(const audio_stream_t *s, const void *sink)
+{
+	return s->sink == sink && !s->paused && s->fill > 0;
+}
+
 uint32_t audio_clock_due(uint64_t anchor_us, uint64_t now_us, uint64_t taken,
                          uint32_t rate, uint32_t capacity, bool *slip)
 {

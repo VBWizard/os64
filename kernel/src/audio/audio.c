@@ -472,6 +472,14 @@ void audio_sink_delay(const audio_sink_t *sink, uint32_t delay_us)
 	spinlock_release_irqrestore(&s_lock, flags);
 }
 
+bool audio_sink_has_sound(const audio_sink_t *sink)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
+	bool sound = audio_stream_has_sound(&s_stream, sink);
+	spinlock_release_irqrestore(&s_lock, flags);
+	return sound;
+}
+
 // The null sink's buffer. kaudio's alone, and filled under s_lock.
 static int16_t s_null_frames[AUDIO_RING_FRAMES * OS64_AUDIO_CHANNELS];
 

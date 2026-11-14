@@ -102,6 +102,10 @@ void audio_sink_attach(const audio_sink_t *sink);
 void audio_sink_detach(const audio_sink_t *sink);
 void audio_sink_failed(const audio_sink_t *sink, const char *why);   // `why` and the sink's name must last until it detaches
 void audio_sink_delay(const audio_sink_t *sink, uint32_t delay_us);
+// Has `sink` sound to take now: it is the sink, the ring holds frames and
+// the stream is not paused (audio_stream_has_sound). Any thread; never
+// sleeps; takes the stream's lock, so never from inside a nudge.
+bool audio_sink_has_sound(const audio_sink_t *sink);
 // Fill `out` with `frames` frames (audio_stream_pull) and wake whoever was
 // waiting on what it changed. Any thread; never sleeps.
 audio_pulled_t audio_pull(const audio_sink_t *self, int16_t *out, uint32_t frames);
