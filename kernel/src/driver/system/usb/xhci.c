@@ -258,6 +258,12 @@ typedef struct {
 		const char *classic_error;
 		bool classic_refused;
 		uint32_t sdp_ended, l2cap_refusals;
+		// Slot 2's audio: the pump's sessions said, AVDTP's sessions gone
+		// wrong, the sink's failure and the pump giving up, and AVDTP's
+		// state as the start/suspend lines last saw it.
+		uint32_t a2dp_sessions;
+		uint8_t avdtp_wrongs, avdtp_state;
+		bool a2dp_failed, a2dp_gave_up;
 	} logged;
 } xhci_bt_probe_t;
 
@@ -1562,6 +1568,73 @@ static void xhci_bt_log_usb_state(const xhci_bt_probe_t *p)
 	       e[(o+3)%4][0], e[(o+3)%4][1], e[(o+3)%4][2], e[(o+3)%4][3], e[(o+3)%4][4], e[(o+3)%4][5]);
 }
 
+// Slot 2's audio in the log (AUDIO_A2DP.md § What is seen): a line when a
+// session is made, once its media channel is up so the packet is known
+// (the settings, frames a packet, the delay and where it came from); one
+// when a session goes wrong, the sink fails or the pump gives up, with
+// why; each once per occurrence. Starts and suspends are DEBUG_USB's.
+// Nothing per packet.
+static void xhci_bt_log_audio(xhci_bt_probe_t *p)
+{
+	const bt_host_t *h = &p->host;
+	if (!h->a2dp_ops)
+		return;
+	const bt_a2dp_t *a = &h->a2dp;
+	bt_avdtp_state_t st = bt_avdtp_state(&h->avdtp);
+	// The pump's count starts again with each connection, so the one said
+	// is forgotten between sessions.
+	if (!a->session)
+		p->logged.a2dp_sessions = 0;
+	else if (h->avdtp_media && st >= BT_AVDTP_OPEN && st <= BT_AVDTP_SUSPENDING &&
+	    a->sessions_begun != p->logged.a2dp_sessions) {
+		p->logged.a2dp_sessions = a->sessions_begun;
+		// The packet as the pump will make it: as many whole frames as the
+		// media channel's room holds after the headers, at most 15.
+		size_t room = bt_l2cap_peer_mtu(&h->l2cap, h->avdtp_media - 1u);
+		size_t packet = bt_acl_packet_size(&h->acl, false);
+		if (room > BT_L2CAP_MTU) room = BT_L2CAP_MTU;
+		if (packet < 4) room = 0;
+		else if (room > packet - 4) room = packet - 4;
+		unsigned frames = a->frame_bytes && room > BT_A2DP_HEADER_BYTES ?
+			(unsigned)((room - BT_A2DP_HEADER_BYTES) / a->frame_bytes) : 0;
+		if (frames > BT_A2DP_FRAMES_MAX) frames = BT_A2DP_FRAMES_MAX;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: session made: sbc %u Hz %s bitpool %u, %u-byte frames, %u frames a packet, delay %u.%u ms (%s)\n",
+		       BT_HOST_CLASSIC_SLOT, (unsigned)a->settings.rate, a->settings.joint ? "joint stereo" : "stereo",
+		       (unsigned)a->settings.bitpool, (unsigned)a->frame_bytes, frames,
+		       (unsigned)(a->delay_us / 1000), (unsigned)(a->delay_us % 1000 / 100),
+		       a->delay_reported ? "their report" : "default");
+	}
+	// AVDTP's count starts again with each connection: a fall is a new
+	// connection, not news.
+	if (h->avdtp.wrongs > p->logged.avdtp_wrongs)
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: the session went wrong: %s%s\n", BT_HOST_CLASSIC_SLOT,
+		       h->avdtp.why ? h->avdtp.why : "no reason recorded",
+		       st == BT_AVDTP_FAILED ? "; no more sessions on this connection" : "");
+	p->logged.avdtp_wrongs = h->avdtp.wrongs;
+	if (a->failed != p->logged.a2dp_failed) {
+		p->logged.a2dp_failed = a->failed;
+		if (a->failed)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: the sink failed: %s; writes answer failed until the session is made again\n",
+			       BT_HOST_CLASSIC_SLOT, a->why ? a->why : "no reason recorded");
+	}
+	if (a->gave_up != p->logged.a2dp_gave_up) {
+		p->logged.a2dp_gave_up = a->gave_up;
+		if (a->gave_up)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: the headphones refused every start; the null sink plays until the session is made again\n",
+			       BT_HOST_CLASSIC_SLOT);
+	}
+	// A stream is under way from STREAMING until it leaves STREAMING and
+	// SUSPENDING (a Suspend refused leaves it streaming).
+	bool was = p->logged.avdtp_state == BT_AVDTP_STREAMING || p->logged.avdtp_state == BT_AVDTP_SUSPENDING;
+	bool is = st == BT_AVDTP_STREAMING || st == BT_AVDTP_SUSPENDING;
+	if (is && !was)
+		printd(DEBUG_USB, "bluetooth: slot %u a2dp: streaming\n", BT_HOST_CLASSIC_SLOT);
+	else if (was && !is)
+		printd(DEBUG_USB, "bluetooth: slot %u a2dp: stream %s\n", BT_HOST_CLASSIC_SLOT,
+		       st == BT_AVDTP_OPEN ? "suspended" : bt_avdtp_state_name(st));
+	p->logged.avdtp_state = (uint8_t)st;
+}
+
 static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
 {
 	const bt_host_t *h = &p->host;
@@ -1659,6 +1732,7 @@ static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
 		p->logged.sdp_ended = h->sdp_ended;
 		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u %s", BT_HOST_CLASSIC_SLOT, h->sdp_line);
 	}
+	xhci_bt_log_audio(p);
 }
 
 static void xhci_bt_runtime_poll(void)

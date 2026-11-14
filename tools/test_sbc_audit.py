@@ -236,6 +236,14 @@ for name in manifest['files']:
 check(holders, 'no copyright line found in upstream')
 for holder in holders:
     check(holder.strip() in notice_text, f'{LICENCE.name} does not name {holder.strip()}')
+# The kernel binary carries the encoder (the A2DP sink calls it), so the
+# notice travels with it: installed on the ext2 root and on the FAT lifeboat.
+root_make = (ROOT / 'GNUmakefile').read_text()
+check(root_make.count('write license/android-sbc-LICENSE /etc/licenses/android-sbc.txt') == 1 and
+      root_make.count('license/android-sbc-LICENSE ::/etc/licenses/android-sbc.txt') == 1,
+      'the encoder\'s notice is not installed on both images')
+check(any(l.split()[-1] == 'sbc_port_encode' for l in run('x86_64-elf-nm', KERNEL / 'bin/os64_kernel').splitlines()),
+      'bin/os64_kernel does not carry the encoder, so there is nothing for the notice to travel with')
 
 print(f'PASS sbc audit: {len(manifest["files"])} pinned files at {manifest["commit"][:12]}, '
       f'{len(paths)} objects integer-only, undefined {sorted(undefined - defined)}, '

@@ -269,7 +269,8 @@ give the licence, keep the files' notices, and carry the NOTICE:
 - **In source**: `license/android-sbc-LICENSE` holds the module's `NOTICE`
   as fetched (pinned in `manifest.json`) and the notice at the head of every
   vendored file; the files themselves are untouched.
-- **In a binary**: the kernel links the objects, but nothing calls the
-  encoder yet, so `--gc-sections` leaves all of it out of
-  `bin/os64_kernel`. When the A2DP sink calls it, the notice must go on both
-  images as speexdsp's does (`/etc/licenses/`): a DEBTS row says so.
+- **In a binary**: the A2DP sink calls the encoder, so `bin/os64_kernel`
+  carries it, and the notice is installed on both images as speexdsp's is,
+  `/etc/licenses/android-sbc.txt` on the ext2 root and on the FAT
+  lifeboat. `tools/test_sbc_audit.py` checks both install lines and that
+  the binary holds the encoder.
