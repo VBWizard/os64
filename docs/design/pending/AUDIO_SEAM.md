@@ -134,6 +134,8 @@ void audio_sink_attach(const audio_sink_t *sink);   // becomes the sink; one at 
 void audio_sink_detach(const audio_sink_t *sink);   // the null sink takes over
 void audio_sink_failed(const audio_sink_t *sink, const char *why);   // fail closed
 void audio_sink_delay(const audio_sink_t *sink, uint32_t delay_us);  // how far behind the pull the ear is
+bool audio_sink_has_sound(const audio_sink_t *sink);  // it is the sink, the ring holds frames, not paused
+                                                      // (A.3: the A2DP pump asks before it starts a stream)
 
 // What a pull tells the sink, read under the same lock as the frames.
 typedef struct audio_pulled

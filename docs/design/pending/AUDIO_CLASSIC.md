@@ -312,7 +312,7 @@ Only silence fails the round, as it does for every command.
 | Write Simple Pairing Mode (0x0c56) | on | SSP, § 7.3.59 |
 | Write Local Name (0x0c13) | `os64` | headphones show it, and some refuse a nameless host |
 | Write Class Of Device (0x0c24) | 0x200104 | service class Audio, major class Computer, minor class Desktop: a computer that is a source of sound |
-| Write Default Link Policy Settings (0x080f) | role switch and sniff allowed | a sink that asks to be master is let |
+| Write Default Link Policy Settings (0x080f) | role switch allowed, sniff refused | a sink that asks to be master is let. Sniff was allowed until the first sound on the P5 (2026-11-13): the headphones put the idle link into sniff at 500 ms and left it there through the stream, so audio left twice a second. It is refused until A.4 manages it (AUDIO_A2DP.md § P, as built) |
 | Write Page Timeout (0x0c18) | 5.12 s (the default) | stated, not left to the controller's last host |
 | Write Connection Accept Timeout (0x0c16) | 5.06 s (the default) | how long the controller holds a caller while we find a turn to answer: the bound § L3's latching is built against |
 

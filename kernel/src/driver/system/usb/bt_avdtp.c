@@ -126,8 +126,18 @@ static void av_reject(bt_avdtp_msg_t *m, uint8_t label, uint8_t signal, uint8_t 
     av_put(m,code);
 }
 
+// A message's id: never 0, never one given before on this machine's life
+// of the struct (it wraps after four billion messages).
+static uint32_t av_id(bt_avdtp_t *a)
+{
+    if(++a->next_id==0) a->next_id=1;
+    return a->next_id;
+}
+
 // Our one command, built here; its label is the next of sixteen, its timer
-// runs from now.
+// runs from now (from queueing, not sending: a command the carrier holds
+// back counts its wait against the same six seconds, which a held gate
+// spends in milliseconds).
 static bt_avdtp_msg_t *av_command(bt_avdtp_t *a, uint8_t signal, uint64_t wait_ms)
 {
     a->command_live=true; a->command_sent=false;
@@ -135,6 +145,7 @@ static bt_avdtp_msg_t *av_command(bt_avdtp_t *a, uint8_t signal, uint64_t wait_m
     a->next_label=(uint8_t)((a->next_label+1)&15);
     a->command_deadline=a->now+wait_ms;
     av_start(&a->command,a->command_label,MSG_COMMAND,signal);
+    a->command.id=av_id(a);
     return &a->command;
 }
 
@@ -165,10 +176,12 @@ static void av_drop_stream(bt_avdtp_t *a)
 }
 
 // They changed the stream's state with a command of theirs we accepted.
-// A command of ours still QUEUED is retired: it describes a stream that
-// has since changed, and handed out now it would act on the new one (a
-// stale Start, once they had suspended again, would start a stream we
-// think open). A command already SENT is on their side to answer and
+// A command of ours still QUEUED (not yet handed to the controller, even if
+// the carrier has parked it: bt_avdtp_sent says when it leaves) is
+// retired: it describes a stream that has since changed, and sent now it
+// would act on the new one (a stale Start, once they had suspended again,
+// would start a stream we think open; a stale Abort would end the stream
+// they just configured). A command already SENT is on their side to answer and
 // keeps its tracking: its timer runs, and its answer is taken without
 // changing a state it no longer applies to.
 static void av_retire_queued(bt_avdtp_t *a)
@@ -250,7 +263,10 @@ static void av_ask(bt_avdtp_t *a, unsigned from)
         if(!av_audio_sink(e) || e->in_use) continue;
         a->endpoint_at=(uint8_t)i;
         a->remote_seid=e->seid;
-        bool all=a->peer_version>=0x0103 && !a->no_get_all;
+        // A version not known (0) is asked Get All Capabilities too: the
+        // answer is the one that offers delay reporting, and a reject of it
+        // falls back to Get Capabilities (no_get_all).
+        bool all=(a->peer_version==0 || a->peer_version>=0x0103) && !a->no_get_all;
         a->state=BT_AVDTP_ASKING;
         av_command_seid(a,all ? SIG_GET_ALL_CAPABILITIES : SIG_GET_CAPABILITIES,BT_AVDTP_REPLY_MS);
         return;
@@ -357,8 +373,8 @@ static void av_their_setconf(bt_avdtp_t *a, bt_avdtp_msg_t *m, uint8_t label, co
     if(n<2) { av_reject(m,label,SIG_SET_CONFIGURATION,0,ERR_BAD_LENGTH); return; }
     uint8_t acp=p[0]>>2, intr=p[1]>>2;
     if(acp!=BT_AVDTP_SEID || !intr || intr>SEID_LAST) { av_reject(m,label,SIG_SET_CONFIGURATION,0,ERR_BAD_ACP_SEID); return; }
-    // Ours is not on the wire while it is queued or waiting to be sent
-    // again, so theirs may still be taken.
+    // Ours is not on the wire while it is queued (parked by the carrier
+    // included) or waiting to be sent again, so theirs may still be taken.
     bool ours_out=a->state==BT_AVDTP_CONFIGURING && a->command_live && a->command_sent;
     bool open=a->state==BT_AVDTP_CONNECTED || a->state==BT_AVDTP_DISCOVERING || a->state==BT_AVDTP_ASKING
            || (a->state==BT_AVDTP_CONFIGURING && !ours_out);
@@ -503,6 +519,9 @@ static void av_command_in(bt_avdtp_t *a, uint8_t label, uint8_t signal, const ui
         if(m.bytes) { a->answer[1]=m; a->overrun++; }
     }
     else a->overrun++;
+    // A new answer, or one put in another's place, has no id yet (an emptied
+    // slot keeps none): it gets a serial of its own.
+    for(unsigned i=0;i<2;i++) if(a->answer[i].bytes && !a->answer[i].id) a->answer[i].id=av_id(a);
 }
 
 // ── Answers to our commands ─────────────────────────────────────────────────
@@ -736,24 +755,50 @@ void bt_avdtp_tick(bt_avdtp_t *a, uint64_t now)
     }
 }
 
-size_t bt_avdtp_next(bt_avdtp_t *a, uint8_t *out, size_t cap, uint16_t mtu, uint64_t now)
+// The message to send now: the oldest answer owed, else our command if it
+// is not sent; NULL when there is none. `command` says which it is.
+static bt_avdtp_msg_t *av_head(bt_avdtp_t *a, bool *command)
+{
+    *command=false;
+    if(a->answer[0].bytes) return &a->answer[0];
+    if(a->command_live && !a->command_sent) { *command=true; return &a->command; }
+    return 0;
+}
+
+// The head is gone to the controller (or dropped as too long for the
+// channel): an answer leaves the owed list, the emptied slot keeping no
+// id; our command is sent.
+static void av_commit(bt_avdtp_t *a, bool command)
+{
+    if(command) a->command_sent=true;
+    else { a->answer[0]=a->answer[1]; a->answer[1].bytes=0; a->answer[1].id=0; }
+}
+
+size_t bt_avdtp_next(bt_avdtp_t *a, uint8_t *out, size_t cap, uint16_t mtu, uint64_t now, uint32_t *serial)
 {
     a->now=now;
+    *serial=0;
     for(;;) {
-        bt_avdtp_msg_t *m;
-        bool command=false;
-        if(a->answer[0].bytes) m=&a->answer[0];
-        else if(a->command_live && !a->command_sent) { m=&a->command; command=true; }
-        else return 0;
+        bool command;
+        bt_avdtp_msg_t *m=av_head(a,&command);
+        if(!m) return 0;
         size_t n=m->bytes;
-        bool fits=n<=mtu;
-        if(fits && cap<n) return 0;
-        if(fits) av_copy(out,m->pdu,n);
-        else a->unsendable++;
-        if(command) a->command_sent=true;
-        else { a->answer[0]=a->answer[1]; a->answer[1].bytes=0; }
-        if(fits) return n;
+        if(n>mtu) { a->unsendable++; av_commit(a,command); continue; }
+        if(cap<n) return 0;
+        av_copy(out,m->pdu,n);
+        *serial=m->id;
+        return n;
     }
+}
+
+bool bt_avdtp_sent(bt_avdtp_t *a, uint32_t serial, uint64_t now)
+{
+    a->now=now;
+    bool command;
+    bt_avdtp_msg_t *m=av_head(a,&command);
+    if(!m || !serial || m->id!=serial) { a->stale_sends++; return false; }
+    av_commit(a,command);
+    return true;
 }
 
 bool bt_avdtp_may_begin(const bt_avdtp_t *a, uint64_t now)
@@ -861,9 +906,9 @@ size_t bt_avdtp_status(const bt_avdtp_t *a, char *out, size_t cap)
         if(w>0) n+=(size_t)w;
     }
     if(n<cap) {
-        w=snprintf(out+n,cap-n,"avdtp: strays %u, malformed %u, fragments dropped %u, unsendable %u, overrun %u, ignored %u, media refused %u\n",
+        w=snprintf(out+n,cap-n,"avdtp: strays %u, malformed %u, fragments dropped %u, unsendable %u, stale sends %u, overrun %u, ignored %u, media refused %u\n",
                    (unsigned)a->strays,(unsigned)a->malformed,(unsigned)a->fragments_dropped,(unsigned)a->unsendable,
-                   (unsigned)a->overrun,(unsigned)a->ignored,(unsigned)a->media_refused);
+                   (unsigned)a->stale_sends,(unsigned)a->overrun,(unsigned)a->ignored,(unsigned)a->media_refused);
         if(w>0) n+=(size_t)w;
     }
     return n<cap ? n : cap-1;

@@ -157,6 +157,9 @@ static void compare(void)
 	CHECK_EQ(p.underruns, M.underruns);
 	CHECK(p.taken <= p.accepted);
 	CHECK_EQ(audio_stream_has_work(&S), !M.failed && !M.paused && (M.open || M.n > 0));
+	// Sound for the sink that is the sink, and for nobody else.
+	CHECK_EQ(audio_stream_has_sound(&S, S.sink), !M.failed && !M.paused && M.n > 0);
+	CHECK(!audio_stream_has_sound(&S, S.sink == (const void *)&other_sink ? (const void *)&some_sink : (const void *)&other_sink));
 	CHECK_EQ(audio_stream_writer_should_wake(&S), MCAP - M.n >= MCAP / 4);
 }
 
@@ -675,6 +678,19 @@ static void test_sinks(void)
 	CHECK_EQ(p.delay_us, 0);
 	CHECK(!audio_stream_pull(&T, NULL, out, 2, 78).yours);       // the null sink's pump, now a stranger
 	CHECK(audio_stream_pull(&T, &some_sink, out, 2, 79).yours);
+	// Sound is frames in the ring, unpaused, asked by the sink: an open with
+	// nothing written is none, and a stranger is never told there is some.
+	CHECK(!audio_stream_has_sound(&T, &some_sink));
+	t_write_ramp(gen + 1, 0, 2);
+	CHECK(audio_stream_has_sound(&T, &some_sink));
+	CHECK(!audio_stream_has_sound(&T, NULL));
+	CHECK(!audio_stream_has_sound(&T, &other_sink));
+	CHECK(audio_stream_pause(&T));
+	CHECK(!audio_stream_has_sound(&T, &some_sink));
+	CHECK(audio_stream_resume(&T));
+	CHECK(audio_stream_has_sound(&T, &some_sink));
+	CHECK_EQ(audio_stream_pull(&T, &some_sink, out, 2, 79).frames, 2);
+	CHECK(!audio_stream_has_sound(&T, &some_sink));
 	audio_stream_sink_detach(&T, &other_sink);                    // not the sink: ignored
 	CHECK_EQ(T.generation, gen + 1);
 	audio_stream_sink_failed(&T, &other_sink);

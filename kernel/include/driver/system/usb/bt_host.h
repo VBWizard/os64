@@ -5,6 +5,8 @@
 #include "driver/system/usb/bt_classic.h"
 #include "driver/system/usb/bt_l2cap.h"
 #include "driver/system/usb/bt_sdp.h"
+#include "driver/system/usb/bt_avdtp.h"
+#include "driver/system/usb/bt_a2dp.h"
 
 #define BT_HOST_PEERS BT_BOND_SLOTS
 // The transport's ACL send slots (xhci.c): each holds one packet until its
@@ -54,8 +56,9 @@ typedef struct {
     // acl_link[].
     uint16_t acl_classic;
     // The Classic link's services (AUDIO_CLASSIC.md part S). `l2cap` is
-    // brought up when the link connects, admitting SDP alone, and reset
-    // when it goes; every ACL packet on the link's handle is its.
+    // brought up when the link connects, admitting SDP and, with an audio
+    // sink, AVDTP, and reset when it goes; every ACL packet on the link's
+    // handle is its.
     // `l2cap_encrypted` is what it was last told of the link's encryption.
     bt_l2cap_t l2cap;
     bool l2cap_encrypted;
@@ -87,16 +90,62 @@ typedef struct {
     uint8_t sdp_answer_channel;
     uint16_t sdp_answer_cid;
     uint32_t sdp_answered, sdp_dropped;
-    // What the last query found, kept across a disconnection for A.3 and
-    // the status file, and whether it is from the connection that is up;
+    // What the last query found, kept across a disconnection for the
+    // status file, and whether it is from the connection that is up (AVDTP
+    // takes the version from it only then);
     // with its status line. `sdp_line` is the line the last query ENDED
     // with, whatever the end, and `sdp_ended` counts the ends, so the
     // transport can log each once. `l2cap_refusals` counts the channels we
-    // asked for that the peer refused or never answered.
+    // asked for that the peer refused or never answered, and the last of
+    // them is described by its L2CAP result and the PSM it asked for.
     bt_sdp_sink_t sdp_result;
     bool sdp_result_valid, sdp_result_current;
     char sdp_result_line[128], sdp_line[128];
     uint32_t sdp_ended, l2cap_refusals;
+    uint16_t l2cap_refused_result, l2cap_refused_psm;
+    // The SDP channel a query that ended left open, PLUS ONE, and its CID:
+    // closed once AVDTP's signalling channel is open (bt_host.c § Slot 2's
+    // audio), and forgotten with the connection.
+    uint8_t sdp_kept;
+    uint16_t sdp_kept_cid;
+    // Slot 2's audio (AUDIO_A2DP.md part P): AVDTP's signalling and the
+    // A2DP pump, the Classic link's as `l2cap` and `sdp` are, started over
+    // when the link comes up and when it goes. The pump reaches the seam,
+    // the encoder and the clock through `a2dp_ops`, which the transport
+    // supplies (bt_host_audio); with none, AVDTP is neither admitted nor
+    // opened and slot 2 is what part S made it. bt_host.c § Slot 2's audio
+    // has the channels' lifecycle table; the fields below are its state.
+    const bt_a2dp_ops_t *a2dp_ops;
+    void *a2dp_ctx;
+    bt_avdtp_t avdtp;
+    bt_a2dp_t a2dp;
+    // The microsecond clock of the last tick: the pump's, and AVDTP's in
+    // milliseconds (every AVDTP call is handed now_us / 1000, so its timers
+    // and the pump's calls into it share one clock).
+    uint64_t now_us;
+    // The 0x0019 channels: signalling, media, and the one we are asking
+    // for (connecting or configuring, not yet given a role), each its index
+    // PLUS ONE (0: none) and its CID, as sdp_channel is.
+    uint8_t avdtp_sig, avdtp_media, avdtp_asking;
+    uint16_t avdtp_sig_cid, avdtp_media_cid, avdtp_asking_cid;
+    bool avdtp_asking_media;
+    // The serial (bt_avdtp_next) of the AVDTP message parked in the
+    // signalling channel's payload slot, 0 when the slot holds none of
+    // AVDTP's: it is AVDTP's to retire until L2CAP hands it over.
+    uint32_t avdtp_sig_parked;
+    // Signalling channels we asked for on this connection, and signalling
+    // channels (anyone's) that ended or attempts of ours that failed: we
+    // ask for at most one more after the first ends, not before
+    // avdtp_sig_again_at.
+    uint8_t avdtp_sig_asked, avdtp_sig_ends;
+    uint64_t avdtp_sig_again_at;
+    // PDUs that arrived on the media channel (we are a source) or on a
+    // 0x0019 channel with no role, dropped. Since start-up. (Media packets
+    // that never reach the controller are the pump's to count:
+    // bt_a2dp_lost.)
+    uint32_t avdtp_media_dropped;
+    // The media packet the pump writes and L2CAP copies.
+    uint8_t a2dp_packet[BT_L2CAP_MTU];
     // Reconnection (AUDIO_CLASSIC.md § L6): with a bond and `classic_auto`,
     // page the headphones once when the bond is loaded, and again after a
     // drop they may come back from or a page they did not answer, at
@@ -172,18 +221,29 @@ void bt_host_event(bt_host_t *, const uint8_t *, size_t);
 // the host failed.
 void bt_host_receive(bt_host_t *, const uint8_t *, size_t, size_t max_packet,
                      bt_host_report_t, void *);
-// One step. `usb_done`: no command's control transfer is in flight.
-// `tx_in_flight`: how many of the transport's BT_HOST_TX_SLOTS send slots
-// hold a packet whose USB transfer has not completed. `failed`: the
-// transport is gone. ACL packets leave through the `bt_le_acl_send_t`
-// callback, whole, never more than one slot's worth, and only into a free
-// slot: the LE peers first, then the Classic link's L2CAP, which leaves
-// a slot free for them and waits while one of them holds a packet. An LE
-// packet is therefore never kept waiting for a slot or a buffer; it does
-// queue behind Classic packets already on the one transmit ring.
-void bt_host_tick(bt_host_t *, uint64_t now, bool usb_done, unsigned tx_in_flight, bool failed,
+// One step. `now` is milliseconds, the clock of everything but slot 2's
+// audio; `now_us` is the monotonic microsecond clock the pump paces by
+// (and AVDTP's, in milliseconds). `usb_done`: no command's control
+// transfer is in flight. `tx_in_flight`: how many of the transport's
+// BT_HOST_TX_SLOTS send slots hold a packet whose USB transfer has not
+// completed. `failed`: the transport is gone. ACL packets leave through
+// the `bt_le_acl_send_t` callback, whole, never more than one slot's
+// worth, and only into a free slot: the LE peers first, then the Classic
+// link's L2CAP, which leaves a slot free for them and waits while one of
+// them holds a packet. An LE packet is therefore never kept waiting for a
+// slot or a buffer; it does queue behind Classic packets already on the
+// one transmit ring.
+void bt_host_tick(bt_host_t *, uint64_t now, uint64_t now_us, bool usb_done, unsigned tx_in_flight, bool failed,
                   bt_scan_send_t, bt_le_acl_send_t, bt_host_report_t, void *);
 void bt_host_policy(bt_host_t *, uint64_t);
+// Slot 2's audio sink: the seam, the encoder and the clock as the pump
+// reaches them, and the context handed back to each. Given once, after
+// bt_host_init (which clears it). Until it is given, AVDTP is neither
+// admitted nor opened.
+void bt_host_audio(bt_host_t *, const bt_a2dp_ops_t *, void *);
+// The largest payload the host sends on the media channel (the MTU it
+// hands bt_a2dp_packet); 0 when there is no open media channel.
+size_t bt_host_media_room(const bt_host_t *);
 bool bt_host_scan(bt_host_t *, uint64_t);
 // `scan classic`: a Classic inquiry, then the LE scan. Refused as
 // bt_host_scan is, and while the Classic link is neither quiescent nor

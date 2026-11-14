@@ -344,17 +344,20 @@ A routine peer disconnect does not reset the controller. DMA stays allocated.
 ## Headphones (Classic, slot 2)
 
 Slot 2 of `/sys/bluetooth/connection` is one Classic (BR/EDR) link, for
-headphones. It carries no sound: it pairs, encrypts, keeps the bond, comes back
-without being asked, and learns what the headphones are. The audio connection
-is docs/design/pending/AUDIO_TRACKER.csv's A.3, and headphones announce
-"connected" only when that opens. docs/design/pending/AUDIO_CLASSIC.md is the
-design.
+headphones: it pairs, encrypts, keeps the bond, comes back without being
+asked, learns what the headphones are, and carries the sound. Once the link
+is `ready` the audio connection opens by itself (AVDTP, then the stream's
+channel), and the headphones announce "connected" when it does; from then on
+`play file.wav` comes out of them. docs/design/pending/AUDIO_CLASSIC.md is the
+link's design, AUDIO_A2DP.md the sound's.
 
 ```sh
 echo "scan classic" > /sys/bluetooth/scan      # headphones in pairing mode
 cat /sys/bluetooth/devices                      # the line that begins "Classic"
 echo "slot 2 bond 4c:87:5d:6d:9a:37" > /sys/bluetooth/connection
-cat /sys/bluetooth/connection                   # slot 2: state: ready
+cat /sys/bluetooth/connection                   # slot 2: state: ready, then avdtp: open
+play song.wav                                   # in the headphones
+cat /sys/audio                                  # sink: a2dp
 ```
 
 - **Use the `Classic` line's address.** Dual-mode headphones also appear as an
@@ -373,16 +376,35 @@ cat /sys/bluetooth/connection                   # slot 2: state: ready
   line says what is owed.
 - At `ready` the host asks the headphones what they are and shows the answer:
   `sdp: audio sink, avdtp 1.3, a2dp 1.3, features 0x0001, psm 0019 (complete)`.
-  The channel it asked on stays open, shown as `channel 0: open psm 0001`.
+  The channel it asked on stays open until the audio connection's own is, so
+  the link always has a channel on it.
+- **The sound.** With the stream open, slot 2's `avdtp:` lines say `open` (or
+  `streaming` while something plays), with the settings agreed (SBC, 48 kHz,
+  joint stereo, bitpool 51 unless the headphones take less), and the `a2dp:`
+  lines say what the pump is doing: `attached`, `streaming`, `quiet`, `held`
+  or `failed: why`, the packets and frames sent, slips, and the delay.
+  `/sys/audio` names the sink `a2dp`. Three seconds of silence or a pause
+  suspends the stream and the next sound starts it again. Headphones switched
+  off mid-song: the song carries on unheard (the null sink plays), and sound
+  returns when they reconnect. A failed encoder fails the stream instead:
+  `play` is told, and the session is made again at the next connection or
+  `slot 2 reconnect`.
 - `/sys/usb`'s timeline has slot 2's steps (`slot 2 classic paging ->
-  authenticating`), and the log a `bluetooth: slot 2 ...` line for each end and
-  each query.
+  authenticating`), and the log a `bluetooth: slot 2 ...` line for each end,
+  each query, each audio session made or gone wrong, and a failed sink.
 
 Measured on the P5 with a Bose SoundLink around-ear II (2026-11-13): bonded in
 under four seconds; reconnected with the saved key in about 140 ms once a page
-was answered; back with no typing after a power cycle and after a reboot. These
-headphones never called the P5 themselves, and hung up two seconds after their
-last L2CAP channel was closed, which is why the SDP channel is left open.
+was answered; back with no typing after a power cycle and after a reboot.
+Before the P5 could carry sound these headphones never called it themselves,
+and they hung up two seconds after their last L2CAP channel was closed, which
+is why the SDP channel stays open until the audio connection's has opened.
+With sound (2026-11-13 and 14): they announce "Connected to Os64"; songs play
+whole, through scans, typing and mousing (14,918 packets, no slip, no
+underrun); and switched off and on mid-song, they call the P5 back and the
+sound returns. The first sound was two clicks a second, because the link was
+in sniff mode at 500 ms; sniff is refused until something leaves it when a
+stream starts.
 
 ## Controller and transport
 

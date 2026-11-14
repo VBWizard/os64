@@ -100,11 +100,15 @@ typedef struct bt_l2cap {
     uint8_t rx[BT_L2CAP_MTU + 4];
     size_t rx_have, rx_total;
     bool rx_active, rx_oversize;
-    // Why the last channel we asked for was not opened: the Connection
-    // Response's result, or 0xffff for no answer, 0xfffe for a Command
-    // Reject, 0xfffd for a success naming a CID outside the dynamic range;
-    // and its PSM.
-    uint16_t refused, refused_psm;
+    // For each channel index, how the last channel WE asked for there
+    // ended if it was not opened: the Connection Response's result, or
+    // 0xffff for no answer, 0xfffe for a Command Reject, 0xfffd for a
+    // success naming a CID outside the dynamic range; 0 while it has not
+    // been refused (connecting, opened, or never asked). bt_l2cap_connect
+    // starts the index's record over with the PSM asked for. A channel the
+    // peer opens at that index leaves it alone, so the host reads the
+    // refusal of an attempt by the index bt_l2cap_connect returned.
+    uint16_t refused[BT_L2CAP_CHANNELS], refused_psm[BT_L2CAP_CHANNELS];
     // Counted for the status file.
     uint32_t malformed;         // an ACL packet or signalling command that is not well formed
     uint32_t oversized;         // a PDU longer than the buffer
@@ -153,6 +157,9 @@ void bt_l2cap_close(bt_l2cap_t *l, unsigned channel, uint64_t now);
 bool bt_l2cap_is_open(const bt_l2cap_t *l, unsigned channel);          // both directions configured
 bool bt_l2cap_is_free(const bt_l2cap_t *l, unsigned channel);
 uint16_t bt_l2cap_peer_mtu(const bt_l2cap_t *l, unsigned channel);     // the largest payload the peer takes; 0 when not open
+// How the last channel we asked for at this index was refused (`refused`
+// above; 0: it was not), and with `psm` non-NULL, the PSM it asked for.
+uint16_t bt_l2cap_refusal(const bt_l2cap_t *l, unsigned channel, uint16_t *psm);
 // Queue ONE payload on an open channel (copied; at most the peer's MTU and
 // BT_L2CAP_MTU). False when the channel is not open, its queue slot is
 // taken, or it is too long. The payload leaves only while the channel is
@@ -160,6 +167,10 @@ uint16_t bt_l2cap_peer_mtu(const bt_l2cap_t *l, unsigned channel);     // the la
 // with an MTU the payload no longer fits, it is dropped (`outgrown`). A
 // channel that closes drops it.
 bool bt_l2cap_send(bt_l2cap_t *l, unsigned channel, const uint8_t *data, size_t bytes);
+// Take back the payload queued on a channel and not yet handed to `send`
+// (bt_l2cap_tick clears the slot before it calls `send`, so a payload being
+// or already handed over cannot be taken back). True when one was removed.
+bool bt_l2cap_unqueue(bt_l2cap_t *l, unsigned channel);
 
 // One step: runs the timers (a request unanswered for 10 s, or 60 s after
 // "pending"; security awaited for 30 s; configuration unfinished after

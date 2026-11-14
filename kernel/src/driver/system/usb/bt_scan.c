@@ -44,8 +44,12 @@ bool bt_scan_start(bt_scan_t *s, uint64_t now)
     uint8_t address[6],features[8];
     scan_copy(address,s->address,sizeof(address));
     scan_copy(features,s->features,sizeof(features));
-    *s=(bt_scan_t){.phase=shared?BT_SCAN_LE_PARAMS:BT_SCAN_RESET,
-        .shared_controller=shared,.le_only=shared,.credits=1,.total_deadline=now+40000};
+    // Wiped in place: a compound literal would build a second scan, devices
+    // and all, on the kernel stack.
+    uint8_t *wipe=(uint8_t *)s;
+    for(size_t i=0;i<sizeof(*s);i++) wipe[i]=0;
+    s->phase=shared?BT_SCAN_LE_PARAMS:BT_SCAN_RESET;
+    s->shared_controller=shared; s->le_only=shared; s->credits=1; s->total_deadline=now+40000;
     // Shared scans skip controller discovery, so retain its public metadata.
     if(shared) {
         scan_copy(s->address,address,sizeof(address));
@@ -339,7 +343,11 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         // 0x200104: service class Audio, major class Computer, minor Desktop.
         op=0x0c24; length=3; p[0]=0x04; p[1]=0x01; p[2]=0x20;
         break;
-    case BT_SCAN_POLICY: op=0x080f; length=2; p[0]=0x05; break;   // role switch and sniff allowed
+    // Role switch allowed; sniff NOT. A link in sniff carries data only at
+    // its anchor points (the P5's headphones asked for one every 500 ms
+    // and kept it through a stream), so until something takes the link
+    // out of sniff when sound starts, sniff is refused.
+    case BT_SCAN_POLICY: op=0x080f; length=2; p[0]=0x01; break;
     case BT_SCAN_PAGE_TIMEOUT: op=0x0c18; length=2; p[1]=0x20; break;   // 0x2000 slots: 5.12 s
     case BT_SCAN_ACCEPT_TIMEOUT: op=0x0c16; length=2; p[0]=0xa0; p[1]=0x1f; break;   // 0x1fa0 slots: 5.06 s
     case BT_SCAN_LE_PARAMS:

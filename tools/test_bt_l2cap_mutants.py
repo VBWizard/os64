@@ -158,7 +158,8 @@ mutants = [
      '        if(result==0x0000 && dcid>=L2_CID_DYNAMIC) {'),
     ('the-late-disconnection-cids-are-swapped', '            l2_put(q,dcid); l2_put(q+2,scid);', '            l2_put(q,scid); l2_put(q+2,dcid);'),
     ('a-success-without-a-cid-reads-as-none', '{ l->malformed++; result=0xfffd; }', '{ l->malformed++; }'),
-    ('the-refusal-is-not-kept', '    l->refused=result; l->refused_psm=c->psm;\n    l2_free', '    l->refused_psm=c->psm;\n    l2_free'),
+    ('the-refusal-is-not-kept', '    l->refused[i]=result; l->refused_psm[i]=c->psm;\n    l2_free', '    l->refused_psm[i]=c->psm;\n    l2_free'),
+    ('a-refusal-is-the-links', '    l->refused[i]=result; l->refused_psm[i]=c->psm;\n    l2_free', '    l->refused[0]=result; l->refused_psm[0]=c->psm;\n    l2_free'),
     # The peer's Configuration Request.
     ('a-short-configuration-request-is-read', '    if(n<4) { l2_not_understood(l,ident); return; }\n    uint16_t dcid=l2_u16(d), flags',
      '    if(n<2) { l2_not_understood(l,ident); return; }\n    uint16_t dcid=l2_u16(d), flags'),
@@ -253,7 +254,7 @@ mutants = [
     ('a-one-byte-reject-is-read', '    if(n<2) { l->malformed++; return; }\n    for', '    if(n<1) { l->malformed++; return; }\n    for'),
     ('a-rejected-configuration-frees', '        if(c->state==BT_L2CAP_CONFIG) l2_close(l,i);\n        else l2_free(l,i);\n        return;',
      '        l2_free(l,i);\n        return;'),
-    ('a-rejected-connection-is-not-said', '        if(c->state==BT_L2CAP_CONNECTING) { l->refused=0xfffe;', '        if(0) { l->refused=0xfffe;'),
+    ('a-rejected-connection-is-not-said', '        if(c->state==BT_L2CAP_CONNECTING) { l->refused[i]=0xfffe;', '        if(0) { l->refused[i]=0xfffe;'),
     ('a-reject-of-identifier-0-matches', '        if(!ident || c->state==BT_L2CAP_FREE || c->ident!=ident) continue;',
      '        if(c->state==BT_L2CAP_FREE || c->ident!=ident) continue;'),
     ('a-stray-reject-is-not-counted', '        return;\n    }\n    l->strays++;\n}', '        return;\n    }\n}'),
@@ -318,7 +319,7 @@ mutants = [
      '        if(c->state==BT_L2CAP_CONFIG) { l2_close(l,i); if(unanswered && unfinished) l2_close(l,i); }\n        else l2_free(l,i);\n    }'),
     ('a-reconfiguration-keeps-the-old-deadline', '    if(l2_open(c)) c->config_deadline=l->now+L2_CONFIG_MS;', '    if(0 && l2_open(c)) c->config_deadline=l->now+L2_CONFIG_MS;'),
     ('configuration-is-timed-from-nothing', '    c->config_deadline=l->now+L2_CONFIG_MS;\n    l2_send_config(l,i);', '    c->config_deadline=L2_CONFIG_MS;\n    l2_send_config(l,i);'),
-    ('no-answer-is-not-said', '        if(c->state==BT_L2CAP_CONNECTING) { l->refused=0xffff;', '        if(0) { l->refused=0xffff;'),
+    ('no-answer-is-not-said', '        if(c->state==BT_L2CAP_CONNECTING) { l->refused[i]=0xffff;', '        if(0) { l->refused[i]=0xffff;'),
     ('an-unanswered-configuration-frees', '        if(c->state==BT_L2CAP_CONFIG) l2_close(l,i);\n        else l2_free(l,i);\n    }',
      '        l2_free(l,i);\n    }'),
     ('sending-without-may-send', '    if(!may_send || !send) return;', '    if((0 && !may_send) || !send) return;'),
@@ -344,6 +345,24 @@ mutants = [
     ('a-held-payload-blocks-the-rest',
      '        if(l2_sendable(&l->ch[i]) && (oldest<0 || (int32_t)(l->ch[i].queued_seq-l->ch[oldest].queued_seq)<0)) oldest=(int)i;\n    if(oldest<0) return;',
      '        if(l->ch[i].queued && (oldest<0 || (int32_t)(l->ch[i].queued_seq-l->ch[oldest].queued_seq)<0)) oldest=(int)i;\n    if(oldest<0 || !l2_sendable(&l->ch[oldest])) return;'),
+    # Taking back a queued payload, never one handed over.
+    ('unqueue-takes-nothing', '    l->ch[channel].queued=false;\n    return true;', '    return true;'),
+    ('unqueue-says-no', '    l->ch[channel].queued=false;\n    return true;', '    l->ch[channel].queued=false;\n    return false;'),
+    ('unqueue-from-an-empty-slot', '    if(channel>=BT_L2CAP_CHANNELS || !l->ch[channel].queued) return false;',
+     '    if(channel>=BT_L2CAP_CHANNELS) return false;'),
+    ('unqueue-past-the-table', '    if(channel>=BT_L2CAP_CHANNELS || !l->ch[channel].queued) return false;',
+     '    if(!l->ch[channel].queued) return false;'),
+    ('the-slot-is-emptied-after-the-hand-over', '    c->queued=false;\n    send(context,c->out,c->queued_bytes);',
+     '    send(context,c->out,c->queued_bytes);\n    c->queued=false;'),
+    # A refusal is the channel index's, as its last attempt ended.
+    ('a-new-attempt-keeps-the-old-refusal', '    l->refused[i]=0; l->refused_psm[i]=psm;', '    l->refused_psm[i]=psm;'),
+    ('an-attempt-records-no-psm', '    l->refused[i]=0; l->refused_psm[i]=psm;', '    l->refused[i]=0;'),
+    ('the-refusal-is-read-at-index-0', '    if(psm) *psm=l->refused_psm[channel];\n    return l->refused[channel];',
+     '    if(psm) *psm=l->refused_psm[0];\n    return l->refused[0];'),
+    ('an-index-past-the-table-is-read', '    if(channel>=BT_L2CAP_CHANNELS) { if(psm) *psm=0; return 0; }\n', ''),
+    ('a-refusal-line-says-none-as-well', '        refusals=true;\n', ''),
+    ('only-the-first-index-is-shown', '    for(unsigned i=0;i<BT_L2CAP_CHANNELS && at<cap;i++) {\n        if(!l->refused[i]) continue;',
+     '    for(unsigned i=0;i<1 && at<cap;i++) {\n        if(!l->refused[i]) continue;'),
 ]
 
 caught, missed, unbuilt = [], [], []

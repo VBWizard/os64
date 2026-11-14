@@ -6,8 +6,12 @@
 #include "../kernel/src/driver/system/usb/bt_classic.c"
 #include "../kernel/src/driver/system/usb/bt_l2cap.c"
 #include "../kernel/src/driver/system/usb/bt_sdp.c"
+#include "../kernel/src/driver/system/usb/bt_avdtp.c"
+#include "../kernel/src/audio/sbc_frame.c"
+#include "../kernel/src/driver/system/usb/bt_a2dp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "hid_mouse_fixtures.h"
+#include "sbc_port.h"
 
 static bt_host_t host;
 static unsigned input_count[BT_HOST_PEERS], release_count[BT_HOST_PEERS], reset_count;
@@ -203,7 +207,7 @@ static void headphones_deliver(void);
 static void step(void)
 {
     ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
-    bt_host_tick(&host,now,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
+    bt_host_tick(&host,now,now*1000,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
 }
 static void notify_keyboard(void)
 {
@@ -218,6 +222,7 @@ static void notify_keyboard(void)
 static bool classic_on;
 static const uint8_t CM_LOCAL[6]={0x11,0x22,0x33,0x44,0x55,0x66};
 static void classic_slot(const bt_classic_bond_t *bond,bool boot_page);
+static void ha_reset(void);
 static void setup(void)
 {
     begin(REPORT_PROTOCOL); cmd_n=tx_n=0;
@@ -233,6 +238,7 @@ static void setup(void)
     reset_count=0;
     memset(&CM,0,sizeof(CM)); CM.present=true;
     memset(&HP,0,sizeof(HP)); HP.mtu=48; HP.ident=0x80; HP.follow=true;
+    ha_reset();
     memset(&TX,0,sizeof(TX));
     if(classic_on) {
         bt_classic_bond_t none={0};
@@ -335,7 +341,7 @@ static void credits_and_faults(void)
     step(); assert(host.owner==3 && cmd_n);
     const uint8_t ok[]={0x0e,10,1,9,0x10,0,1,2,3,4,5,6};
     cmd_n=0; multi_event(ok,sizeof(ok));
-    bt_host_tick(&host,++now,false,0,false,multi_command,multi_acl,multi_report,NULL);
+    ++now; bt_host_tick(&host,now,now*1000,false,0,false,multi_command,multi_acl,multi_report,NULL);
     assert(!cmd_n && host.owner==3 && host.peers[1].le.pending);
     step(); assert(cmd_n && le_u16(cmd)==0x2002);
     // A truncated mouse report must release that source without inventing motion.
@@ -508,7 +514,7 @@ static void start_up_rounds(void)
     // A failed transport is not a round to repeat.
     setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}};
     step(); now=host.init_retry_at; cmd_n=0; step();
-    bt_host_tick(&host,++now,true,0,true,multi_command,multi_acl,multi_report,NULL);
+    ++now; bt_host_tick(&host,now,now*1000,true,0,true,multi_command,multi_acl,multi_report,NULL);
     assert(host.failed && host.init_failed_rounds==0);
     puts("PASS: an unanswered start-up round is run again with its credit restored, three failures fail the host, a failed transport is not retried");
 }
@@ -628,7 +634,7 @@ static void mouse_interval(void)
         if(failure!=1 && failure!=3) multi_event(updated,sizeof(updated));
         // Command status can precede USB completion and an inspect request.
         assert(bt_host_command(&host,"slot 1 inspect",14,now));
-        bt_host_tick(&host,++now,false,0,false,multi_command,multi_acl,multi_report,NULL);
+        ++now; bt_host_tick(&host,now,now*1000,false,0,false,multi_command,multi_acl,multi_report,NULL);
         assert(s->pending && host.owner==3 && !cmd_n);
         s->phase=BT_LE_READY; step();
         assert(!s->pending && !host.owner && !cmd_n && !s->error && !host.failed);
@@ -760,7 +766,8 @@ static const uint8_t HP_RECORD[]={
 _Static_assert(sizeof(HP_RECORD)==68,"the record's lengths are right");
 static uint16_t be16(const uint8_t *p) { return (uint16_t)(p[0]<<8 | p[1]); }
 // One L2CAP PDU from the headphones, as one ACL packet, delivered at the
-// next step's start (the drain precedes the tick).
+// next step's start (the drain precedes the tick), or `hp_delay` ms after.
+static unsigned hp_delay;
 static void hp_pdu(uint16_t cid,const uint8_t *d,size_t n)
 {
     assert(HP.qn<32 && 8+n<=sizeof(HP.q[0].b));
@@ -768,7 +775,7 @@ static void hp_pdu(uint16_t cid,const uint8_t *d,size_t n)
     uint16_t h=CM.handle|0x2000;
     q->b[0]=(uint8_t)h; q->b[1]=(uint8_t)(h>>8); q->b[2]=(uint8_t)(n+4); q->b[3]=(uint8_t)((n+4)>>8);
     q->b[4]=(uint8_t)n; q->b[5]=(uint8_t)(n>>8); q->b[6]=(uint8_t)cid; q->b[7]=(uint8_t)(cid>>8);
-    memcpy(q->b+8,d,n); q->n=8+n; q->at=now+1;
+    memcpy(q->b+8,d,n); q->n=8+n; q->at=now+1+hp_delay;
 }
 static void hp_cmd(uint8_t code,uint8_t ident,const uint8_t *d,size_t n)
 {
@@ -852,6 +859,227 @@ static void hp_answered(const uint8_t *r,size_t n)
     uint8_t cont=r[7+count];
     if(cont && HP.follow) hp_ask((uint16_t)(be16(r+1)+1),be16(HP.asked[a]+8),be16(HP.asked[a]+10),r+8+count,cont);
 }
+// ── The headphones' AVDTP: a sink, and a media channel that records ────────
+//
+// Written here from AVDTP 1.3 and A2DP 1.3 (the builders are
+// tools/test_bt_avdtp_host.c's, copied with an AV_ prefix): one audio sink
+// endpoint (SEID 2) offering 48 kHz, joint stereo or stereo, 16 blocks, 8
+// subbands, loudness, bitpool 2 to 53, with delay reporting in Get All
+// Capabilities. Like a real sink they take the first 0x0019 channel as
+// signalling and the next one, once Open is agreed, as media; a command
+// on another open channel makes that one their signalling (a crossing is
+// settled by whichever channel we talk on). They can refuse PSM 0x0019,
+// sit on our Open, hang up two seconds after their last channel closes
+// (the P5's Bose pair), meet our signalling request with one of their
+// own, and begin the session themselves. Every media packet is parsed:
+// RTP header, sequence, timestamp, SSRC, payload header, each frame's
+// length and syncword; its frames are kept for comparison with what the
+// encoder made.
+#define AVH(label,type) (uint8_t)((((label)&15)<<4)|(type))
+#define AV_CMD(l) AVH(l,0)
+#define AV_ACC(l) AVH(l,2)
+enum { AV_DISCOVER=1, AV_GETCAP, AV_SETCONF, AV_GETCONF, AV_RECONF, AV_OPEN, AV_START, AV_CLOSE, AV_SUSPEND, AV_ABORT, AV_SECCTL, AV_GETALL, AV_DELAY };
+#define AV_S(seid) (uint8_t)((seid)<<2)
+#define AV_EP(seid,in_use,media,sink) (uint8_t)(((seid)<<2)|((in_use)<<1)),(uint8_t)(((media)<<4)|((sink)<<3))
+#define AV_F48 0x10
+#define AV_STEREO 0x02
+#define AV_JOINT 0x01
+#define AV_B16 0x10
+#define AV_SB8 0x04
+#define AV_LOUD 0x01
+#define AV_TRANSPORT 0x01,0x00
+#define AV_DELAYREP 0x08,0x00
+#define AV_SBC(b0,b1,lo,hi) 0x07,0x06,0x00,0x00,(b0),(b1),(lo),(hi)
+#define HA_SEID 2
+#define HA_PACKETS 4096
+#define HA_FRAMES 8192
+typedef struct {
+    bool live, theirs;
+    uint16_t host_cid, cid;          // ours (0 until we answer theirs), theirs
+    bool out_done, in_done;          // our request answered by them; theirs answered by us
+    bool by_us;                      // we sent its Disconnection Request
+} ha_ch_t;
+enum { HA_IDLE, HA_CONFIGURED, HA_OPENED, HA_STREAMING };
+static struct {
+    bool on, hang_up, answer_open, cross, they_begin, they_open_sig, reject_getall;
+    uint16_t mtu;
+    unsigned delay_ours, delay_theirs;   // ms before they configure a channel we, or they, asked for
+    ha_ch_t ch[8]; unsigned chn;
+    int sig, media;
+    int st;
+    uint8_t label;
+    bool hanging;
+    unsigned discovers, getalls, getcaps, setconfs, opens, starts, suspends, closes, aborts;
+    unsigned avdtp_conn_reqs, their_conn_reqs, closed_by_us, accepted, rejected_got;
+    unsigned sdp_closed, sdp_closed_with_sig_open, hangups, delay_answers;
+    uint16_t next_cid;
+    uint32_t fb;
+    // The media channel as received.
+    unsigned packets; uint64_t frames;
+    uint16_t seq; uint32_t ts; bool seq_known;
+    unsigned gaps; uint16_t gap_packets; uint32_t gap_samples;   // the last gap in the sequence
+    uint64_t at[HA_PACKETS]; uint8_t nframes[HA_PACKETS];
+    uint8_t kept[HA_FRAMES][SBC_FRAME_BYTES_MAX]; size_t kept_n;
+    // What arrived this step, in order: 's' signalling, 'm' media.
+    char order[16]; unsigned order_n;
+} HA;
+static void ha_reset(void)
+{
+    memset(&HA,0,sizeof(HA));
+    HA.sig=HA.media=-1; HA.next_cid=0x00a0; HA.mtu=672; HA.answer_open=true;
+}
+static int ha_find(uint16_t cid)
+{
+    for(unsigned i=0;i<HA.chn;i++) if(HA.ch[i].live && HA.ch[i].cid==cid) return (int)i;
+    return -1;
+}
+static bool ha_open(int k) { return k>=0 && HA.ch[k].live && HA.ch[k].out_done && HA.ch[k].in_done && HA.ch[k].host_cid; }
+static int ha_new(bool theirs,uint16_t host_cid)
+{
+    assert(HA.chn<8);
+    ha_ch_t *c=&HA.ch[HA.chn]; *c=(ha_ch_t){.live=true,.theirs=theirs,.host_cid=host_cid,.cid=HA.next_cid++};
+    return (int)HA.chn++;
+}
+static void ha_config(int k,unsigned delay)
+{
+    hp_delay=delay;
+    HP_CMD(4,HP.ident++,W16(HA.ch[k].host_cid),0,0,1,2,W16(HA.mtu));
+    hp_delay=0;
+}
+static void ha_say(int k,const uint8_t *b,size_t n) { assert(k>=0); hp_pdu(HA.ch[k].host_cid,b,n); }
+#define HA_SAY(k,...) do { const uint8_t b_[]={__VA_ARGS__}; ha_say((k),b_,sizeof b_); } while(0)
+#define HA_CMD(...) do { const uint8_t b_[]={AV_CMD(HA.label),__VA_ARGS__}; HA.label++; ha_say(HA.sig,b_,sizeof b_); } while(0)
+// They open a 0x0019 channel to us.
+static void ha_connect(void)
+{
+    int k=ha_new(true,0);
+    HA.their_conn_reqs++;
+    hp_connect(BT_L2CAP_PSM_AVDTP,HA.ch[k].cid);
+}
+static void ha_link_down(void)
+{
+    for(unsigned i=0;i<HA.chn;i++) HA.ch[i].live=false;
+    HA.sig=HA.media=-1; HA.st=HA_IDLE; HA.hanging=false; HA.seq_known=false;
+}
+// The headphones' channels: their SDP server's, their client's, and the
+// 0x0019 ones. With none left, the Bose pair hangs up two seconds later.
+static unsigned ha_channels(void)
+{
+    unsigned k=(HP.out_open && !HP.out_closed)+(HP.host_in!=0);
+    for(unsigned i=0;i<HA.chn;i++) k+=HA.ch[i].live;
+    return k;
+}
+static void ha_hang_up_check(void)
+{
+    if(!HA.hang_up || HA.hanging || !CM.live || ha_channels()) return;
+    HA.hanging=true; HA.hangups++;
+    cm_disconn(2000,0x13); CM.live=false;
+}
+static void ha_opened(int k)
+{
+    if(!ha_open(k) || k==HA.sig || k==HA.media) return;
+    if(HA.sig<0) {
+        HA.sig=k;
+        // They begin the session themselves: their Set Configuration first.
+        if(HA.they_begin) HA_CMD(AV_SETCONF,AV_S(1),AV_S(HA_SEID),AV_TRANSPORT,AV_SBC(AV_F48|AV_JOINT,AV_B16|AV_SB8|AV_LOUD,2,51),AV_DELAYREP);
+    } else if(HA.st==HA_OPENED && HA.media<0) {
+        HA.media=k;
+        if(HA.they_begin) HA_CMD(AV_START,AV_S(1));
+    }
+}
+static void ha_closed(int k)
+{
+    HA.ch[k].live=false;
+    if(k==HA.media) { HA.media=-1; if(HA.st>=HA_OPENED) HA.st=HA_IDLE; }
+    if(k==HA.sig) {
+        HA.sig=-1; HA.st=HA_IDLE;
+        // A crossing's other channel, if it is open, is the one left.
+        for(unsigned i=0;i<HA.chn;i++) if(ha_open((int)i) && (int)i!=HA.media) { HA.sig=(int)i; break; }
+    }
+    ha_hang_up_check();
+}
+// Our Connection Request to PSM 0x0019 (only a host with a sink makes one).
+static void ha_conn_req(uint8_t ident,uint16_t host_cid)
+{
+    assert(host.a2dp_ops);
+    HA.avdtp_conn_reqs++;
+    if(!HA.on) { HP_CMD(3,ident,0,0,W16(host_cid),W16(0x0002),0,0); return; }
+    int k=ha_new(false,host_cid);
+    HP_CMD(3,ident,W16(HA.ch[k].cid),W16(host_cid),0,0,0,0);
+    ha_config(k,HA.delay_ours);
+    if(HA.cross) { HA.cross=false; ha_connect(); }
+}
+// What arrives on their signalling channel.
+static void ha_signal(int k,const uint8_t *p,size_t n)
+{
+    assert(n>=2 && ((p[0]>>2)&3)==0);      // we never fragment
+    if(HA.order_n<sizeof(HA.order)) HA.order[HA.order_n++]='s';
+    unsigned l=p[0]>>4, type=p[0]&3;
+    uint8_t s=p[1]&0x3f;
+    if(type) {
+        // An answer to a command of theirs: they go on with the session.
+        if(type==2) HA.accepted++; else HA.rejected_got++;
+        if(type!=2 || !HA.they_begin) return;
+        if(s==AV_SETCONF) { HA.st=HA_CONFIGURED; HA.fb=115; HA.seq_known=false; HA_CMD(AV_OPEN,AV_S(1)); }
+        else if(s==AV_OPEN) { HA.st=HA_OPENED; ha_connect(); }
+        else if(s==AV_START) HA.st=HA_STREAMING;
+        else if(s==AV_DELAY) HA.delay_answers++;
+        return;
+    }
+    if(HA.sig!=k && HA.media!=k) HA.sig=k;      // they use the channel we talk on
+    switch(s) {
+    case AV_DISCOVER: HA.discovers++; HA_SAY(k,AV_ACC(l),AV_DISCOVER,AV_EP(HA_SEID,0,0,1)); break;
+    case AV_GETALL: HA.getalls++;
+        if(HA.reject_getall) { HA_SAY(k,AVH(l,1),AV_GETALL); break; }      // a 1.2 sink: not understood
+        HA_SAY(k,AV_ACC(l),AV_GETALL,AV_TRANSPORT,AV_SBC(AV_F48|AV_STEREO|AV_JOINT,AV_B16|AV_SB8|AV_LOUD,2,53),AV_DELAYREP); break;
+    case AV_GETCAP: HA.getcaps++;
+        HA_SAY(k,AV_ACC(l),AV_GETCAP,AV_TRANSPORT,AV_SBC(AV_F48|AV_STEREO|AV_JOINT,AV_B16|AV_SB8|AV_LOUD,2,53)); break;
+    case AV_SETCONF: {
+        HA.setconfs++;
+        assert(n>=4 && p[2]==AV_S(HA_SEID) && p[3]==AV_S(1));
+        // The codec element: one setting in each field, the bitpool range.
+        sbc_settings_t set={.rate=48000,.channels=2,.blocks=16,.subbands=8};
+        bool codec=false;
+        for(size_t at=4;at+2<=n;at+=2u+p[at+1]) {
+            assert(at+2u+p[at+1]<=n);
+            if(p[at]==7) { assert(p[at+1]==6 && p[at+4]==(AV_F48|AV_JOINT) && p[at+5]==(AV_B16|AV_SB8|AV_LOUD)); set.joint=true; set.bitpool=p[at+7]; codec=true; }
+        }
+        assert(codec);
+        HA.fb=sbc_frame_bytes(&set); HA.seq_known=false;
+        HA.st=HA_CONFIGURED;
+        HA_SAY(k,AV_ACC(l),AV_SETCONF);
+        break;
+    }
+    case AV_OPEN: HA.opens++; if(HA.answer_open) { HA.st=HA_OPENED; HA_SAY(k,AV_ACC(l),AV_OPEN); } break;
+    case AV_START: HA.starts++; HA.st=HA_STREAMING; HA_SAY(k,AV_ACC(l),AV_START); break;
+    case AV_SUSPEND: HA.suspends++; HA.st=HA_OPENED; HA_SAY(k,AV_ACC(l),AV_SUSPEND); break;
+    case AV_CLOSE: HA.closes++; HA.st=HA_CONFIGURED; HA_SAY(k,AV_ACC(l),AV_CLOSE); break;
+    case AV_ABORT: HA.aborts++; HA.st=HA_IDLE; HA_SAY(k,AV_ACC(l),AV_ABORT); break;
+    default: HA_SAY(k,AVH(l,1),s); break;
+    }
+}
+static uint32_t ha_be32(const uint8_t *p) { return (uint32_t)p[0]<<24|(uint32_t)p[1]<<16|(uint32_t)p[2]<<8|p[3]; }
+static void ha_media(const uint8_t *p,size_t n)
+{
+    if(HA.order_n<sizeof(HA.order)) HA.order[HA.order_n++]='m';
+    assert(n>=13 && p[0]==0x80 && p[1]==96 && ha_be32(p+8)==1 && (p[12]>>4)==0);
+    unsigned frames=p[12]&15;
+    assert(frames>=1 && HA.fb && n==13u+frames*HA.fb);
+    uint16_t seq=be16(p+2); uint32_t ts=ha_be32(p+4);
+    // A gap is a packet made and never sent (bt_a2dp_lost): its sequence
+    // number and its samples are missing, nothing else.
+    if(HA.seq_known && seq!=HA.seq) {
+        HA.gaps++; HA.gap_packets=(uint16_t)(seq-HA.seq); HA.gap_samples=ts-HA.ts;
+    } else if(HA.seq_known) assert(ts==HA.ts);
+    HA.seq=(uint16_t)(seq+1); HA.ts=ts+frames*128u; HA.seq_known=true;
+    for(unsigned i=0;i<frames;i++) {
+        assert(p[13+i*HA.fb]==0x9c);           // the SBC syncword
+        if(HA.kept_n<HA_FRAMES) memcpy(HA.kept[HA.kept_n++],p+13+i*HA.fb,HA.fb);
+    }
+    if(HA.packets<HA_PACKETS) { HA.at[HA.packets]=now; HA.nframes[HA.packets]=(uint8_t)frames; }
+    HA.packets++; HA.frames+=frames*128u;
+}
+
 // What the host sends them on the Classic link.
 static void headphones_acl(const uint8_t *p,size_t n)
 {
@@ -864,6 +1092,14 @@ static void headphones_acl(const uint8_t *p,size_t n)
     size_t len=n-8;
     if(cid==HP_SERVER_CID) { hp_serve(d,len); return; }
     if(cid==HP_CLIENT_CID) { hp_answered(d,len); return; }
+    int av=ha_find(cid);
+    if(av>=0) {
+        // AVDTP: on their media channel, a media packet; on any other open
+        // one, signalling.
+        assert(ha_open(av));
+        if(av==HA.media) ha_media(d,len); else ha_signal(av,d,len);
+        return;
+    }
     assert(cid==1);
     while(len) {
         assert(len>=4 && le_u16(d+2)<=len-4);
@@ -871,8 +1107,9 @@ static void headphones_acl(const uint8_t *p,size_t n)
         uint16_t m=le_u16(d+2);
         const uint8_t *x=d+4;
         switch(code) {
-        case 2:     // our Connection Request: to their SDP, the one PSM this part asks for
-            assert(m==4 && le_u16(x)==BT_L2CAP_PSM_SDP);
+        case 2:     // our Connection Request: to their SDP, or (a host with a sink) to AVDTP
+            assert(m==4 && (le_u16(x)==BT_L2CAP_PSM_SDP || le_u16(x)==BT_L2CAP_PSM_AVDTP));
+            if(le_u16(x)==BT_L2CAP_PSM_AVDTP) { ha_conn_req(ident,le_u16(x+2)); break; }
             HP.conn_reqs++; HP.host_out=le_u16(x+2); HP.served=0; HP.out_open=HP.out_closed=false;
             if(HP.refuse) { HP_CMD(3,ident,0,0,W16(HP.host_out),W16(HP.refuse),0,0); break; }
             HP_CMD(3,ident,W16(HP_SERVER_CID),W16(HP.host_out),0,0,0,0);
@@ -881,6 +1118,12 @@ static void headphones_acl(const uint8_t *p,size_t n)
         case 3:     // the answer to their Connection Request
             assert(m==8);
             HP.conn_rsps++; HP.last_conn_result=le_u16(x+4);
+            if(ha_find(le_u16(x+2))>=0) {
+                int k=ha_find(le_u16(x+2));
+                if(le_u16(x+4)==0) { HA.ch[k].host_cid=le_u16(x); ha_config(k,HA.delay_theirs); }
+                else if(le_u16(x+4)!=1) HA.ch[k].live=false;       // refused; 1 is "pending"
+                break;
+            }
             if(le_u16(x+2)==HP_CLIENT_CID) {
                 HP.in_result=le_u16(x+4); HP.in_answered=true;
                 if(!HP.in_result) { HP.host_in=le_u16(x); hp_config(HP.host_in); }
@@ -889,20 +1132,37 @@ static void headphones_acl(const uint8_t *p,size_t n)
         case 4: {   // our Configuration Request: our MTU, accepted
             assert(m==8 && x[4]==1 && x[5]==2 && le_u16(x+6)==BT_L2CAP_MTU);
             uint16_t theirs=le_u16(x);
-            uint16_t ours=theirs==HP_SERVER_CID?HP.host_out:HP.host_in;
+            int k=ha_find(theirs);
+            uint16_t ours=k>=0?HA.ch[k].host_cid:theirs==HP_SERVER_CID?HP.host_out:HP.host_in;
             HP_CMD(5,ident,W16(ours),0,0,0,0);
+            if(k>=0) { HA.ch[k].out_done=true; ha_opened(k); }
             break;
         }
-        case 5:     // the answer to theirs
+        case 5: {   // the answer to theirs
             assert(m>=6 && !le_u16(x+4));
-            if(le_u16(x)==HP_SERVER_CID) HP.out_open=true; else HP.in_conf_rsps++;
+            int k=ha_find(le_u16(x));
+            if(k>=0) { HA.ch[k].in_done=true; ha_opened(k); }
+            else if(le_u16(x)==HP_SERVER_CID) HP.out_open=true; else HP.in_conf_rsps++;
             break;
-        case 6:     // our Disconnection Request
+        }
+        case 6: {   // our Disconnection Request
             assert(m==4);
             HP.disc_reqs++;
-            if(le_u16(x)==HP_SERVER_CID) HP.out_closed=true;
+            int k=ha_find(le_u16(x));
             hp_cmd(7,ident,x,4);
+            if(le_u16(x)==HP_SERVER_CID) {
+                HP.out_closed=true; HA.sdp_closed++;
+                if(ha_open(HA.sig)) HA.sdp_closed_with_sig_open++;
+                ha_hang_up_check();
+            }
+            if(k>=0) { HA.ch[k].by_us=true; HA.closed_by_us++; ha_closed(k); }
             break;
+        }
+        case 7: {   // the answer to their Disconnection Request
+            int k=m==4?ha_find(le_u16(x+2)):-1;
+            if(k>=0) ha_closed(k); else HP.other++;
+            break;
+        }
         case 9: HP.echo_rsps++; break;
         default: HP.other++; break;
         }
@@ -961,7 +1221,7 @@ static void step_watched(void)
     w_free=!host.owner || (host.command_done && !host_owner_pending(&host));
     w_urgent=bt_classic_urgent(&host.classic);
     w_before=CM.n;
-    bt_host_tick(&host,now,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
+    bt_host_tick(&host,now,now*1000,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
 }
 static bt_classic_bond_t ph_bond(void)
 {
@@ -1262,13 +1522,13 @@ static void classic_owner_bounds(void)
     uint64_t sent_at=now;
     for(unsigned i=0;i<4900;i++) {
         ++now; classic_deliver();   // the model's reply arrives; the transfer never completes
-        bt_host_tick(&host,now,false,0,false,multi_command,multi_acl,multi_report,NULL);
+        bt_host_tick(&host,now,now*1000,false,0,false,multi_command,multi_acl,multi_report,NULL);
         assert(!host.failed && host.owner==BT_HOST_OWNER_CLASSIC);
         if(i==100) assert(host.command_done);
     }
     for(unsigned i=0;i<300 && !host.failed;i++) {
         ++now; classic_deliver();
-        bt_host_tick(&host,now,false,0,false,multi_command,multi_acl,multi_report,NULL);
+        bt_host_tick(&host,now,now*1000,false,0,false,multi_command,multi_acl,multi_report,NULL);
     }
     assert(host.failed && now>=sent_at+5000 && now<sent_at+5200);
     puts("PASS: every command-slot owner is bounded in routing and retirement; a Classic command unanswered, or answered with its transfer never done, fails the controller; a late reply frees the slot");
@@ -1652,7 +1912,7 @@ static void classic_le_first(void)
         ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
         const bt_le_t *k=&host.peers[0].le;
         bool eligible=k->queue_count && !k->outstanding && !tx_holding(12);
-        bt_host_tick(&host,now,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
+        bt_host_tick(&host,now,now*1000,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
         int le_at=-1, classic_at=-1;
         for(unsigned s=0;s<TX.sent_n;s++) {
             if(TX.sent[s]==12 && le_at<0) le_at=(int)s;
@@ -1806,6 +2066,9 @@ static void classic_sdp_refused(void)
     assert(HP.conn_reqs==1 && host.sdp_ended==1 && host.sdp_refused==0x0002 && host.l2cap_refusals==1);
     assert(status_has("sdp: not made: the headphones refused the SDP channel\n"));
     assert(status_has("last refusal: PSM not supported (0002) psm 0001\n"));
+    // The refusal is the SDP channel's, at the index its attempt was given.
+    assert(status_has("channel 0, ours: last refusal: PSM not supported (0002) psm 0001\n"));
+    assert(host.l2cap_refused_result==0x0002 && host.l2cap_refused_psm==BT_L2CAP_PSM_SDP);
     assert(!strcmp(host.sdp_line,"sdp: not made: the headphones refused the SDP channel\n"));
     for(unsigned i=0;i<20000;i++) { notify_keyboard(); step(); }
     assert(HP.conn_reqs==1 && host.sdp_ended==1 && host.classic.phase==BT_CLASSIC_READY && !host.failed);
@@ -1892,9 +2155,717 @@ static void classic_cleanup_in_flight(void)
     puts("PASS: an LE peer's cleanup waits for its own packets in the send slots, not the Classic link's, in both orders");
 }
 
+// ── Slot 2's audio: AVDTP and the A2DP pump (AUDIO_A2DP.md part P) ─────────
+//
+// The host is given an audio sink: a model seam (a ring of numbered samples
+// the test fills, pause, flush, has_sound, and every call checked), the
+// REAL SBC encoder through its boundary, and a clock in microseconds that
+// advances with `now`. Every step checks that the frames the pump counts
+// as sent are exactly those the headphones received (bt_a2dp_sent is
+// called when, and only when, the media PDU is handed to the controller),
+// and records the most L2CAP channels in use.
+
+#define SEAM_FRAMES (BT_A2DP_FRAMES_MAX*BT_A2DP_SAMPLES)
+static int16_t seam_sample(uint64_t frame,int channel)
+{
+    return (int16_t)((int64_t)((frame*37u+(uint64_t)channel*1009u)%20000u)-10000);
+}
+static struct {
+    bool attached, failed, paused, endless, delay_told;
+    const char *why;
+    uint32_t available, generation, delay;
+    uint64_t next_frame, pulls;
+    int attaches, detaches;
+    int16_t last[SEAM_FRAMES*2]; uint32_t last_asked;
+} SEAM;
+static struct {
+    bool fail_encode;
+    int begins;
+    sbc_settings_t settings;
+    uint32_t fb;
+    uint64_t clock;
+    // Every frame encoded this session, in order: its PCM and its bytes.
+    size_t n;
+    int16_t pcm[HA_FRAMES][BT_A2DP_SAMPLES*2];
+    uint8_t out[HA_FRAMES][SBC_FRAME_BYTES_MAX];
+} ENC;
+static bt_a2dp_pulled_t seam_pull(void *ctx,int16_t *out,uint32_t frames)
+{
+    (void)ctx;
+    SEAM.pulls++;
+    assert(frames>0 && frames<=SEAM_FRAMES);
+    SEAM.last_asked=frames;
+    if(!SEAM.attached) return (bt_a2dp_pulled_t){0,SEAM.generation,false,false};
+    if(SEAM.paused) return (bt_a2dp_pulled_t){0,SEAM.generation,true,true};
+    uint32_t k=SEAM.endless?frames:SEAM.available<frames?SEAM.available:frames;
+    for(uint32_t i=0;i<frames;i++) {
+        out[2*i]=i<k?seam_sample(SEAM.next_frame+i,0):0;
+        out[2*i+1]=i<k?seam_sample(SEAM.next_frame+i,1):0;
+    }
+    SEAM.next_frame+=k;
+    if(!SEAM.endless) SEAM.available-=k;
+    memcpy(SEAM.last,out,(size_t)frames*4);
+    return (bt_a2dp_pulled_t){k,SEAM.generation,false,true};
+}
+static bool seam_has_sound(void *ctx) { (void)ctx; return SEAM.attached && !SEAM.paused && (SEAM.endless || SEAM.available>0); }
+static void seam_attach(void *ctx) { (void)ctx; assert(!SEAM.attached); SEAM.attached=true; SEAM.attaches++; SEAM.failed=false; SEAM.delay_told=false; SEAM.generation++; }
+static void seam_detach(void *ctx) { (void)ctx; assert(SEAM.attached); SEAM.attached=false; SEAM.detaches++; SEAM.failed=false; SEAM.generation++; }
+static void seam_failed(void *ctx,const char *why) { (void)ctx; assert(SEAM.attached && why); SEAM.failed=true; SEAM.why=why; SEAM.available=0; SEAM.endless=false; }
+static void seam_delay(void *ctx,uint32_t us) { (void)ctx; assert(SEAM.attached); SEAM.delay=us; SEAM.delay_told=true; }
+static bool enc_begin(void *ctx,const sbc_settings_t *s)
+{
+    (void)ctx;
+    ENC.begins++; ENC.n=0; ENC.settings=*s; ENC.fb=sbc_frame_bytes(s);
+    return sbc_port_begin(s);
+}
+static bool enc_encode(void *ctx,const int16_t *pcm,uint8_t *out,size_t cap)
+{
+    (void)ctx;
+    // The PCM is the pump's own, and exactly what the seam's last pull wrote there.
+    ptrdiff_t at=pcm-host.a2dp.pcm;
+    assert(at>=0 && (size_t)at+BT_A2DP_SAMPLES*2<=(size_t)SEAM.last_asked*2);
+    assert(!memcmp(pcm,SEAM.last+at,BT_A2DP_SAMPLES*4));
+    if(ENC.fail_encode) return false;
+    bool ok=sbc_port_encode(pcm,out,cap);
+    assert(ok);
+    if(ENC.n<HA_FRAMES) { memcpy(ENC.pcm[ENC.n],pcm,BT_A2DP_SAMPLES*4); memcpy(ENC.out[ENC.n],out,ENC.fb); ENC.n++; }
+    return ok;
+}
+static uint64_t enc_clock(void *ctx) { (void)ctx; if(ENC.clock<now*1000) ENC.clock=now*1000; return ++ENC.clock; }
+static const bt_a2dp_ops_t A2_OPS={seam_pull,seam_has_sound,seam_attach,seam_detach,seam_failed,seam_delay,enc_begin,enc_encode,enc_clock};
+
+// Per step: the pump's sent packets against the headphones' received ones
+// (a pump started over begins its count again), the packets lost and the
+// gaps in the headphones' sequence against what the case expects (none,
+// unless it says), the controller alive unless the case fails it, and the
+// most channels in use.
+static unsigned a2_peak, a2_base, a2_seen_sent, a2_expect_lost;
+static bool a2_expect_failed;
+static void a2_checks(void)
+{
+    unsigned used=0;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) used+=!bt_l2cap_is_free(&host.l2cap,i);
+    if(used>a2_peak) a2_peak=used;
+    if(host.a2dp.packets_sent<a2_seen_sent) a2_base=HA.packets-(unsigned)host.a2dp.packets_sent;
+    a2_seen_sent=(unsigned)host.a2dp.packets_sent;
+    assert(host.a2dp.packets_sent+a2_base==HA.packets);
+    assert(host.a2dp.packets_lost==a2_expect_lost && HA.gaps<=a2_expect_lost);
+    assert(host.failed==a2_expect_failed);
+}
+static void a2_step(void) { HA.order_n=0; step(); a2_checks(); }
+// The host with its Classic slot and an audio sink, bonded to the
+// headphones with `slot 2 bond` and stepped to READY, nobody typing.
+static void a2_bonded_refusing(uint16_t refuse)
+{
+    setup(); bt_classic_bond_t none={0}; classic_slot(&none,false);
+    HP.refuse=refuse;
+    bt_host_audio(&host,&A2_OPS,NULL);
+    memset(&SEAM,0,sizeof(SEAM)); memset(&ENC,0,sizeof(ENC));
+    a2_peak=a2_base=a2_seen_sent=a2_expect_lost=0; a2_expect_failed=false;
+    HA.on=true;
+    host.scan.count=1; host.scan.devices[0]=(bt_scan_device_t){.le=false};
+    memcpy(host.scan.devices[0].address,PH,6);
+    char text[64]; snprintf(text,sizeof text,"slot 2 bond %s",PH_TEXT);
+    assert(classic_cmd(text));
+    for(unsigned i=0;i<3000 && host.classic.phase!=BT_CLASSIC_READY;i++) a2_step();
+    assert(host.classic.phase==BT_CLASSIC_READY && host.l2cap.up && host.l2cap.encrypted);
+}
+static void a2_bonded(void) { a2_bonded_refusing(0); }
+// Steps until `done` holds, at most `most` of them; a failure names the
+// condition and the line.
+#define a2_until(done,most) do { \
+    for(unsigned i_=0;i_<(most) && !(done)();i_++) a2_step(); \
+    if(!(done)()) { printf("a2_until(%s) not reached by line %d\n",#done,__LINE__); assert(0); } \
+} while(0)
+static bool a2_is_open(void) { return bt_avdtp_state(&host.avdtp)==BT_AVDTP_OPEN && host.a2dp.attached; }
+static bool a2_is_streaming(void) { return bt_avdtp_state(&host.avdtp)==BT_AVDTP_STREAMING && HA.packets>0; }
+static bool a2_link_down(void) { return host.classic.phase!=BT_CLASSIC_READY; }
+static bool a2_ready(void) { return host.classic.phase==BT_CLASSIC_READY; }
+static unsigned a2_avdtp_index(uint8_t role) { assert(role); return role-1u; }
+
+// `slot 2 bond` to READY, then with nobody typing: the SDP query ends, our
+// signalling channel opens, and only then is the SDP channel closed; Get
+// All Capabilities (their record says AVDTP 1.3) through Open, the media
+// channel, and the pump attaches. Never more than four channels.
+static void a2dp_session_from_bond(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    assert(host.sdp_ended==1 && host.sdp_result_current && host.sdp_result.avdtp_version==0x0103);
+    assert(HA.avdtp_conn_reqs==2 && HA.their_conn_reqs==0);       // signalling, then media
+    assert(HA.sdp_closed==1 && HA.sdp_closed_with_sig_open==1 && !host.sdp_kept);
+    assert(HA.discovers==1 && HA.getalls==1 && !HA.getcaps && HA.setconfs==1 && HA.opens==1);
+    assert(HA.sig>=0 && HA.media>=0 && host.avdtp_sig && host.avdtp_media && !host.avdtp_asking);
+    assert(SEAM.attached && SEAM.attaches==1 && SEAM.delay_told && SEAM.delay==BT_A2DP_DEFAULT_DELAY_US);
+    assert(ENC.begins==1 && ENC.settings.bitpool==51 && ENC.settings.joint && ENC.fb==115);
+    assert(bt_host_media_room(&host)==672);         // their MTU: 672 < ours and a controller packet's room
+    assert(bt_avdtp_edges(&host.avdtp)->sessions==1 && host.a2dp.sessions_begun==1);
+    // Nothing to play: no Start, no packet.
+    for(unsigned i=0;i<2000;i++) a2_step();
+    assert(!HA.starts && !HA.packets && !SEAM.pulls && bt_avdtp_state(&host.avdtp)==BT_AVDTP_OPEN);
+    assert(status_has("avdtp: open, sessions made 1, gone wrong 0\n"));
+    assert(status_has("a2dp: attached\n"));
+    assert(status_has("a2dp: sbc 48000 Hz joint stereo bitpool 51, 115-byte frames"));
+    char want[96]; snprintf(want,sizeof want,"avdtp channels: signalling %u media %u\n",
+                            a2_avdtp_index(host.avdtp_sig),a2_avdtp_index(host.avdtp_media));
+    assert(status_has(want));
+    assert(status_has("avdtp pdus received off the signalling channel (media, or a channel being closed), dropped: 0\n"));
+    assert(a2_peak==2 && a2_peak<=BT_L2CAP_CHANNELS);
+    // The whole text fits the file's buffer.
+    static char text[BT_SCAN_TEXT_BYTES];
+    assert(bt_host_status(&host,text,sizeof text)<sizeof(text)-512);
+    puts("PASS: slot 2 bond to READY, then SDP, signalling, the SDP channel closed after it, Get All Capabilities to Open, media, the pump attached");
+}
+
+// The headphones refuse the SDP channel (the query is not made): AVDTP is
+// tried all the same, with no version known: Get All Capabilities, and Get
+// Capabilities after headphones that general-reject it.
+static void a2dp_session_without_sdp(void)
+{
+    for(unsigned older=0;older<2;older++) {
+        a2_bonded_refusing(0x0002);
+        HA.reject_getall=older;
+        a2_until(a2_is_open,5000);
+        assert(host.sdp_not_made && host.sdp_refused==0x0002 && !host.sdp_result_current);
+        assert(host.avdtp.peer_version==0 && HA.getalls==1 && HA.getcaps==older && HA.setconfs==1 && SEAM.attached);
+        assert(host.avdtp.delay_reporting==!older);
+        assert(HA.sdp_closed==0);       // there was no SDP channel to close
+    }
+    puts("PASS: with the SDP query not made, AVDTP is tried all the same: Get All Capabilities, Get Capabilities after a reject of it");
+}
+
+// Sound: the seam is given PCM, Start goes out, and packets reach the
+// headphones at the sample clock's pace: over ten seconds exactly the
+// frames due, within a packet. Every packet's RTP header, sequence and
+// timestamp are checked as it arrives (ha_media); every frame is the one
+// the encoder made from the seam's samples, in order, and encoding them
+// again from a fresh begin gives the same bytes.
+static void a2dp_sound(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    assert(HA.starts==1);
+    uint64_t t0=HA.at[0];
+    while(now<t0+10000+50) a2_step();
+    uint64_t frames=0;
+    for(unsigned i=0;i<HA.packets && i<HA_PACKETS;i++) if(HA.at[i]<t0+10000) frames+=HA.nframes[i]*128u;
+    assert(frames+640>=480000 && frames<=480000+640);
+    assert(host.a2dp.frames_a_packet==5 && !host.a2dp.slips && !host.a2dp.dry_packets && !host.a2dp.slow);
+    // The frames: those encoded, in order, from consecutive samples.
+    assert(HA.kept_n==ENC.n && HA.kept_n>3700);
+    for(size_t f=0;f<HA.kept_n;f++) {
+        assert(!memcmp(HA.kept[f],ENC.out[f],ENC.fb));
+        for(unsigned i=0;i<BT_A2DP_SAMPLES;i++)
+            assert(ENC.pcm[f][2*i]==seam_sample(f*BT_A2DP_SAMPLES+i,0) && ENC.pcm[f][2*i+1]==seam_sample(f*BT_A2DP_SAMPLES+i,1));
+    }
+    assert(sbc_port_begin(&ENC.settings));
+    for(size_t f=0;f<HA.kept_n;f++) {
+        uint8_t again[SBC_FRAME_BYTES_MAX];
+        assert(sbc_port_encode(ENC.pcm[f],again,sizeof again) && !memcmp(again,HA.kept[f],ENC.fb));
+    }
+    assert(status_has("a2dp: streaming\n") && status_has("avdtp: streaming,"));
+    puts("PASS: sound: Start, packets at the sample clock's pace over ten seconds, RTP checked, every frame the encoder's from the seam's samples");
+}
+
+// The LE peers beside a stream, every tick: the keyboard types and sends,
+// the mouse moves and sends, on a transport whose transfers take 5 ms. An
+// LE packet that may go goes in that very tick and ahead of any Classic
+// packet: it would fail if the loop ran before LE's turn, or took the slot
+// LE needed. The accountant agrees at every step (step's acl_agrees).
+static void le_completes(void)
+{
+    if(!tx_n) return;
+    uint16_t h=(uint16_t)((tx[0]|tx[1]<<8)&0xfff);
+    tx_n=0; CM_PUSH(1,0x13,5,1,(uint8_t)h,(uint8_t)(h>>8),1,0);
+}
+static void a2dp_beside_le(void)
+{
+    a2_bonded();
+    bt_le_t *m=&host.peers[1].le;
+    *m=(bt_le_t){.shared_controller=true,.phase=BT_LE_READY,.connected=true,.encrypted=true,
+        .handle=11,.input_value=10,.mouse=true};
+    assert(hid_mouse_parse(packed,sizeof(packed),&m->mouse_layout));
+    a2_until(a2_is_open,5000);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    const uint8_t ack[]={0x1e};
+    const uint8_t motion[]={0x1b,10,0,1,2,0,3,0,0,0,0};
+    unsigned eligible_ticks=0, both=0, typed=input_count[0], moved=input_count[1];
+    unsigned packets=HA.packets;
+    for(unsigned i=0;i<6000;i++) {
+        TX.delay=5;
+        notify_keyboard(); incoming(4,motion,sizeof motion);
+        bt_le_t *k=&host.peers[0].le;
+        if(i%7==0 && !k->queue_count && !k->outstanding) assert(le_queue(k,4,ack,1));
+        if(i%11==0 && !m->queue_count && !m->outstanding) assert(le_queue(m,4,ack,1));
+        HA.order_n=0;
+        ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
+        bool eligible=(k->queue_count || m->queue_count) && !k->outstanding && !m->outstanding &&
+                      !tx_holding(12) && !tx_holding(11);
+        bt_host_tick(&host,now,now*1000,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
+        a2_checks();
+        int le_at=-1, classic_at=-1;
+        for(unsigned s=0;s<TX.sent_n;s++) {
+            if((TX.sent[s]==12 || TX.sent[s]==11) && le_at<0) le_at=(int)s;
+            if(TX.sent[s]==CM.handle && classic_at<0) classic_at=(int)s;
+        }
+        if(eligible) { assert(le_at>=0); eligible_ticks++; }
+        if(le_at>=0 && classic_at>=0) { assert(le_at<classic_at); both++; }
+        // At most three Classic packets with the transport, a slot left for LE.
+        assert(tx_holding(CM.handle)<=BT_HOST_TX_SLOTS-1 && TX.n<=BT_HOST_TX_SLOTS);
+        assert(k->phase==BT_LE_READY && m->phase==BT_LE_READY && !release_count[0] && !release_count[1]);
+        le_completes();
+    }
+    assert(input_count[0]==typed+6000 && input_count[1]==moved+6000);
+    assert(eligible_ticks>500 && both>100 && HA.packets>packets+400);
+    puts("PASS: beside a typing keyboard and a moving mouse, every LE packet that may go leaves in its tick ahead of Classic; the count agrees at every step");
+}
+
+// The controller withholds the Classic link's completions mid-stream: the
+// pump stops at the pool, pulls nothing (the ring fills), LE carries on;
+// the completions come back after 300 ms and the stream goes on, with one
+// slip.
+static void a2dp_pool_exhausted(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    for(unsigned i=0;i<200;i++) a2_step();
+    CM.withhold=true;
+    for(unsigned i=0;i<100 && bt_acl_outstanding(&host.acl,CM.handle)<4;i++) { notify_keyboard(); keyboard_sends(); a2_step(); keyboard_completes(); }
+    assert(bt_acl_outstanding(&host.acl,CM.handle)==4);
+    uint64_t pulls=SEAM.pulls, sent=host.a2dp.packets_sent;
+    unsigned le=packets, typed=input_count[0];
+    for(unsigned i=0;i<300;i++) {
+        notify_keyboard(); keyboard_sends(); a2_step(); keyboard_completes();
+        assert(SEAM.pulls==pulls && host.a2dp.packets_sent==sent);
+    }
+    assert(packets>le+30 && input_count[0]==typed+300 && !release_count[0]);
+    CM.withhold=false;
+    CM_PUSH(0,0x13,5,1,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),(uint8_t)CM.withheld,0); CM.withheld=0;
+    for(unsigned i=0;i<200;i++) a2_step();
+    assert(SEAM.pulls>pulls+10 && host.a2dp.packets_sent>sent+10 && host.a2dp.slips==1);
+    puts("PASS: the Classic pool exhausted mid-stream: the pump stops at the pool and pulls nothing, LE carries on, the stream resumes with one slip");
+}
+
+// A packet queued on the media channel while the gate closes for several
+// ticks: bt_a2dp_sent is called once, in the tick it leaves, and no second
+// packet is made meanwhile. The transport holds its slots, and an Echo
+// from the headphones lands in the tick the packet is due, so L2CAP's
+// signalling goes first and takes the last slot the Classic link may use.
+// A stream, and a media packet left queued with the gate closed: the
+// transport holds its slots (TX.hold, left set) and the packet sits in the
+// media channel's payload slot, pending.
+static void a2_hold_a_packet(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    for(unsigned i=0;i<100;i++) a2_step();
+    // Two media packets into slots that do not complete.
+    uint64_t sent=host.a2dp.packets_sent;
+    while(host.a2dp.packets_sent==sent) a2_step();
+    TX.hold=true; sent=host.a2dp.packets_sent;
+    while(host.a2dp.packets_sent==sent) a2_step();
+    assert(TX.n==2 && tx_holding(CM.handle)==2);
+    // Their Echo Request lands in the step the next packet is due.
+    const bt_a2dp_t *p=&host.a2dp;
+    uint64_t due_us=p->anchor+p->frames_since_anchor*1000000u/48000u;
+    while((now+1)*1000<due_us) a2_step();
+    HP_CMD(8,HP.ident++,0x55);
+    unsigned echoes=HP.echo_rsps;
+    sent=p->packets_sent;
+    uint64_t pulls=SEAM.pulls;
+    a2_step();
+    assert(HP.echo_rsps==echoes+1 && p->pending && p->packets_sent==sent);
+    assert(host.l2cap.ch[host.avdtp_media-1].queued && TX.n==3 && SEAM.pulls==pulls+1);
+}
+static void a2dp_gate_closed_with_a_packet(void)
+{
+    a2_hold_a_packet();
+    const bt_a2dp_t *p=&host.a2dp;
+    uint64_t sent=p->packets_sent, pulls=SEAM.pulls;
+    unsigned packets=HA.packets;
+    for(unsigned i=0;i<30;i++) {
+        a2_step();
+        assert(p->pending && p->packets_sent==sent && HA.packets==packets && SEAM.pulls==pulls);
+    }
+    // The transport lets its slots go: the packet leaves, and is counted, once.
+    TX.hold=false;
+    a2_step();
+    assert(HA.packets>=packets+1 && p->packets_sent>=sent+1);
+    for(unsigned i=0;i<100;i++) a2_step();
+    puts("PASS: a packet queued while the gate stays closed is counted sent once, in the tick it leaves; nothing else is made meanwhile");
+}
+
+// The packet let go: one is queued with the gate closed, and the
+// headphones reconfigure the media channel to an MTU it no longer fits.
+// L2CAP drops it (outgrown); the pump's pending is released and the packet
+// counted lost, not sent; the stream goes on in smaller packets, and the
+// headphones' sequence has exactly the one gap, of that packet's samples.
+static void a2dp_packet_let_go(void)
+{
+    a2_hold_a_packet();
+    const bt_a2dp_t *p=&host.a2dp;
+    uint32_t held_samples=p->pending_frames;
+    uint64_t sent=p->packets_sent;
+    uint32_t outgrown=host.l2cap.outgrown;
+    int k=HA.media;
+    assert(k>=0 && held_samples==640);
+    a2_expect_lost=1;
+    HP_CMD(4,HP.ident++,W16(HA.ch[k].host_cid),0,0,1,2,W16(200));     // their new MTU: 200
+    for(unsigned i=0;i<3 && !p->packets_lost;i++) a2_step();
+    assert(p->packets_lost==1 && !p->pending && p->packets_sent==sent && host.l2cap.outgrown==outgrown+1);
+    assert(bt_host_media_room(&host)==200);
+    TX.hold=false;
+    unsigned packets=HA.packets;
+    for(unsigned i=0;i<500;i++) a2_step();
+    assert(HA.packets>packets+100 && p->frames_a_packet==1 && !p->slips && !p->failed);
+    assert(HA.gaps==1 && HA.gap_packets==1 && HA.gap_samples==held_samples);
+    assert(status_has("lost before the controller 1,"));
+    puts("PASS: a packet the peer's new MTU no longer fits is let go as lost: pending released, the stream goes on, one gap in the sequence");
+}
+
+// The transport fails mid-stream: the pump lets the seam go (the null sink
+// would take over), nothing more is pulled, and the status keeps what the
+// pump had done and says the controller failed.
+static void a2dp_controller_fails(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    for(unsigned i=0;i<300;i++) a2_step();
+    uint64_t sent=host.a2dp.packets_sent;
+    assert(sent>10 && SEAM.attached);
+    a2_expect_failed=true;
+    ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
+    bt_host_tick(&host,now,now*1000,true,TX.n,true,multi_command,multi_acl,multi_report,NULL);
+    a2_checks();
+    assert(host.failed && !SEAM.attached && SEAM.detaches==1 && !host.a2dp.attached);
+    uint64_t pulls=SEAM.pulls;
+    unsigned packets=HA.packets;
+    for(unsigned i=0;i<500;i++) a2_step();
+    assert(SEAM.pulls==pulls && HA.packets==packets && SEAM.detaches==1);
+    // The evidence stays.
+    assert(host.a2dp.packets_sent==sent && host.a2dp.sessions_begun==1);
+    char want[96]; snprintf(want,sizeof want,"a2dp: packets sent %lu,",(unsigned long)sent);
+    assert(status_has(want) && status_has("a2dp: stopped: the Bluetooth controller failed; reboot required\n"));
+    puts("PASS: the controller failing mid-stream detaches the pump, pulls nothing more, and the status keeps the evidence");
+}
+
+static bool a2_they_streaming(void);
+// The send gate held shut: the controller withholds the Classic link's
+// completions while four Echo answers fill its pool.
+static void a2_close_the_gate(void)
+{
+    CM.withhold=true;
+    for(unsigned i=0;i<4;i++) HP_CMD(8,HP.ident++,0x66);
+    for(unsigned i=0;i<50 && bt_acl_outstanding(&host.acl,CM.handle)<4;i++) a2_step();
+    assert(bt_acl_outstanding(&host.acl,CM.handle)==4 && !host_l2cap_may_send(&host));
+}
+static void a2_open_the_gate(void)
+{
+    CM.withhold=false;
+    CM_PUSH(0,0x13,5,1,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),(uint8_t)CM.withheld,0); CM.withheld=0;
+}
+// The review's sequence: with the gate shut, they close the media channel
+// (AVDTP queues an Abort, which the host parks in the signalling slot) and
+// then configure a new session, which AVDTP accepts and which retires the
+// Abort. When the gate opens the Abort is never transmitted: their accept
+// goes instead, and the new session stands and streams.
+static void a2dp_parked_abort_retired(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    a2_close_the_gate();
+    int k=HA.media;
+    HP_CMD(6,HP.ident++,W16(HA.ch[k].host_cid),W16(HA.ch[k].cid));      // they close media
+    for(unsigned i=0;i<5;i++) a2_step();
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_CONNECTED && host.avdtp.command_live &&
+           host.avdtp.command_signal==0x0a && !host.avdtp.command_sent);
+    assert(host.avdtp_sig_parked==host.avdtp.command.id && host.l2cap.ch[host.avdtp_sig-1].queued);
+    // Their new session, over the same signalling channel.
+    HA.they_begin=true;
+    HA_CMD(AV_SETCONF,AV_S(1),AV_S(HA_SEID),AV_TRANSPORT,AV_SBC(AV_F48|AV_JOINT,AV_B16|AV_SB8|AV_LOUD,2,51),AV_DELAYREP);
+    for(unsigned i=0;i<5;i++) a2_step();
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_CONFIGURED && !host.avdtp.command_live);
+    assert(host.avdtp_sig_parked==host.avdtp.answer[0].id && host.l2cap.ch[host.avdtp_sig-1].queued);
+    unsigned accepted=HA.accepted;
+    for(unsigned i=0;i<20;i++) { a2_step(); assert(HA.accepted==accepted && !HA.aborts); }
+    a2_open_the_gate();
+    SEAM.endless=true;
+    a2_until(a2_they_streaming,2000);
+    assert(!HA.aborts && HA.accepted>=accepted+3 && bt_avdtp_edges(&host.avdtp)->sessions==2);
+    assert(!host.avdtp.stale_sends);
+    puts("PASS: an Abort parked behind a shut gate and retired by their new configuration is never transmitted; the new session streams");
+}
+// A parked answer goes once, exactly, when the gate opens.
+static void a2dp_parked_answer_once(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    a2_close_the_gate();
+    unsigned accepted=HA.accepted;
+    HA_CMD(AV_DELAY,AV_S(1),0x07,0xd0);
+    for(unsigned i=0;i<50;i++) a2_step();
+    assert(HA.accepted==accepted && host.avdtp.answer[0].bytes && host.avdtp_sig_parked==host.avdtp.answer[0].id);
+    a2_open_the_gate();
+    for(unsigned i=0;i<10 && HA.accepted==accepted;i++) a2_step();
+    assert(HA.accepted==accepted+1 && !host.avdtp.answer[0].bytes && !host.avdtp_sig_parked);
+    for(unsigned i=0;i<500;i++) a2_step();
+    assert(HA.accepted==accepted+1 && !host.avdtp.stale_sends);
+    puts("PASS: an AVDTP answer parked behind a shut gate is transmitted once, when it opens");
+}
+
+// L2CAP sends something older first: an AVDTP answer (to their Delay
+// Report) queued in the same tick as a media packet. Both leave, the
+// answer first, and the counts stay right; the delay reaches the seam.
+static void a2dp_older_first(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    for(unsigned i=0;i<100;i++) a2_step();
+    const bt_a2dp_t *p=&host.a2dp;
+    uint64_t due_us=p->anchor+p->frames_since_anchor*1000000u/48000u;
+    while((now+1)*1000<due_us) a2_step();
+    HA_CMD(AV_DELAY,AV_S(1),0x07,0xd0);         // 2000 tenths of a millisecond: 200 ms
+    unsigned packets=HA.packets, accepted=HA.accepted;
+    a2_step();
+    // In that one step: their answer, then the packet.
+    assert(HA.order_n==2 && HA.order[0]=='s' && HA.order[1]=='m');
+    assert(HA.accepted==accepted+1 && HA.packets==packets+1);
+    for(unsigned i=0;i<20;i++) a2_step();
+    assert(SEAM.delay==200000 && p->delay_reported && status_has("a2dp: delay 200.0 ms (their report)\n"));
+    puts("PASS: an AVDTP answer queued with a media packet leaves first, in L2CAP's order, both in one tick; the pump's counts are right");
+}
+
+// The headphones open signalling first; and they begin one at the moment
+// we do, their channel or ours opening first. One signalling channel
+// survives (the other is closed by us), the session is made once, and
+// with their SDP channel to us held as well, the table is full.
+static void a2dp_signalling_crossings(void)
+{
+    // They open it first, before our SDP query ends: we ask for media alone.
+    a2_bonded();
+    ha_connect();
+    a2_until(a2_is_open,5000);
+    assert(HA.their_conn_reqs==1 && HA.avdtp_conn_reqs==1 && HA.closed_by_us==0);
+    assert(bt_avdtp_edges(&host.avdtp)->sessions==1 && HA.setconfs==1);
+    assert(HA.sdp_closed==1 && HA.sdp_closed_with_sig_open==1);
+    for(unsigned theirs_first=0;theirs_first<2;theirs_first++) {
+        a2_bonded();
+        // Their SDP client holds a channel to us all along.
+        hp_connect(BT_L2CAP_PSM_SDP,HP_CLIENT_CID);
+        HA.cross=true;
+        if(theirs_first) HA.delay_ours=5; else HA.delay_theirs=5;
+        a2_until(a2_is_open,5000);
+        assert(HA.avdtp_conn_reqs==2 && HA.their_conn_reqs==1 && HA.closed_by_us==1);
+        // The one closed is the one that opened second.
+        int closed=-1;
+        for(unsigned i=0;i<HA.chn;i++) if(HA.ch[i].by_us) closed=(int)i;
+        assert(closed>=0 && HA.ch[closed].theirs==!theirs_first);
+        assert(bt_avdtp_edges(&host.avdtp)->sessions==1 && HA.setconfs==1 && HA.discovers==1);
+        assert(a2_peak==BT_L2CAP_CHANNELS);
+        SEAM.endless=true;
+        a2_until(a2_is_streaming,100);
+    }
+    puts("PASS: their signalling first, and both at once in either order: one channel survives, the other we close, one session; the table full");
+}
+
+// The headphones go and come back by calling us (the P5's pair did, switched
+// off and on mid-song), and open signalling before our SDP query has ended:
+// AVDTP is told no version, asks Get All Capabilities all the same, and the
+// session has delay reporting, which they offer.
+static void a2dp_they_call_and_open_first(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    assert(host.avdtp.peer_version==0x0103 && host.avdtp.delay_reporting && HA.getalls==1);
+    cm_disconn(0,0x13); CM.live=false; a2_step();
+    ha_link_down();
+    assert(host.classic.phase==BT_CLASSIC_STOPPED && !host.l2cap.up);
+    // They call, and open signalling the moment the link is theirs.
+    CM.they_secure=true;
+    cm_request(0,PH);
+    bool opened=false;
+    for(unsigned i=0;i<3000 && !opened;i++) {
+        a2_step();
+        if(host.classic.phase==BT_CLASSIC_READY) { ha_connect(); opened=true; }
+    }
+    assert(opened && host.classic.session==BT_CLASSIC_SESSION_INBOUND);
+    a2_until(a2_is_open,5000);
+    // Signalling was open before the SDP answer: no version, yet Get All.
+    assert(host.avdtp.peer_version==0 && host.sdp_result_current && host.sdp_result.avdtp_version==0x0103);
+    assert(HA.getalls==2 && !HA.getcaps && host.avdtp.delay_reporting);
+    assert(status_has("delay reporting on"));
+    puts("PASS: they call us and open signalling before our SDP query ends: Get All Capabilities all the same, delay reporting on");
+}
+
+// They begin the session themselves: their Set Configuration, Open, the
+// media channel and Start. We stream, without a Start of ours.
+static bool a2_they_streaming(void) { return HA.st==HA_STREAMING && HA.packets>10; }
+static void a2dp_they_begin(void)
+{
+    a2_bonded();
+    HA.they_begin=true;
+    a2_until(a2_they_streaming,5000);
+    assert(!HA.starts && !HA.setconfs && bt_avdtp_state(&host.avdtp)==BT_AVDTP_STREAMING);
+    assert(SEAM.attached && host.a2dp.dry_packets>0);        // nothing written: silence
+    SEAM.endless=true;
+    unsigned packets=HA.packets;
+    for(unsigned i=0;i<500;i++) a2_step();
+    assert(HA.packets>packets+30 && !HA.starts);
+    puts("PASS: they begin the session (Set Configuration, Open, media, Start) and we stream without a Start of ours");
+}
+
+// A session gone wrong: they never answer Open. Our Abort, then both
+// channels closed. The Bose pair hangs up two seconds after its last
+// channel goes and the ladder brings a fresh connection, which streams;
+// headphones that keep the link get signalling once more 10 s later, and
+// a second failure is FAILED with nothing retried.
+static void a2dp_gone_wrong(void)
+{
+    a2_bonded();
+    HA.hang_up=true; HA.answer_open=false;
+    a2_until(a2_link_down,20000);
+    assert(HA.opens==1 && HA.aborts==1 && HA.closed_by_us==1 && HA.hangups==1);
+    assert(host.classic.phase==BT_CLASSIC_STOPPED && host.classic.retryable && !SEAM.attached);
+    ha_link_down(); HA.answer_open=true;
+    a2_until(a2_ready,20000);
+    a2_until(a2_is_open,5000);
+    assert(bt_avdtp_edges(&host.avdtp)->sessions==1 && !host.avdtp.wrongs && HA.setconfs==2);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    // Headphones that keep the link.
+    a2_bonded();
+    HA.answer_open=false;
+    for(unsigned i=0;i<9000 && host.avdtp.wrongs<1;i++) a2_step();
+    assert(host.avdtp.wrongs==1 && HA.aborts==1);
+    unsigned asked=HA.avdtp_conn_reqs;
+    uint64_t gone=now;
+    for(unsigned i=0;i<12000 && HA.avdtp_conn_reqs==asked;i++) a2_step();
+    assert(HA.avdtp_conn_reqs==asked+1 && now>=gone+10000 && now<gone+10100);
+    for(unsigned i=0;i<20000 && bt_avdtp_state(&host.avdtp)!=BT_AVDTP_FAILED;i++) a2_step();
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_FAILED && host.avdtp.wrongs==2 && HA.opens==2);
+    asked=HA.avdtp_conn_reqs;
+    for(unsigned i=0;i<60000;i++) a2_step();
+    assert(HA.avdtp_conn_reqs==asked && host.classic.phase==BT_CLASSIC_READY && !host.avdtp_sig);
+    assert(status_has("avdtp: failed, sessions made 2, gone wrong 2, last: a command went unanswered\n"));
+    puts("PASS: a session gone wrong closes both channels; the Bose pair hangs up and the ladder reconnects; a kept link is retried once after 10 s, then FAILED");
+}
+
+// The link drops mid-stream: the pump lets the seam go, everything starts
+// over, and the next connection makes a session and streams again.
+static unsigned a2_packets_mark;
+static bool a2_streaming_again(void)
+{ return bt_avdtp_state(&host.avdtp)==BT_AVDTP_STREAMING && HA.packets>a2_packets_mark; }
+static void a2dp_link_drop(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    for(unsigned i=0;i<500;i++) a2_step();
+    cm_disconn(0,0x08); CM.live=false; a2_step();
+    ha_link_down();
+    assert(!SEAM.attached && SEAM.detaches==1 && !host.l2cap.up && !host.avdtp_sig && !host.avdtp_media);
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_IDLE && !host.a2dp.attached && !host.a2dp.packets_sent);
+    unsigned packets=HA.packets;
+    a2_until(a2_ready,20000);
+    // The ring still has sound: the stream starts as soon as it is open.
+    a2_packets_mark=packets;
+    a2_until(a2_streaming_again,5000);
+    for(unsigned i=0;i<500;i++) a2_step();
+    assert(SEAM.attaches==2 && HA.packets>packets+30 && HA.setconfs==2);
+    puts("PASS: the link dropping mid-stream detaches the pump and resets everything; the next connection streams again");
+}
+
+// Pause and resume, a flush, three seconds of silence and then sound, end
+// to end: the stream suspends and starts as the pump's own suite expects.
+static void a2dp_pause_flush_silence(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    for(unsigned i=0;i<500;i++) a2_step();
+    SEAM.paused=true;
+    uint64_t paused_at=now;
+    for(unsigned i=0;i<3500 && !HA.suspends;i++) a2_step();
+    assert(HA.suspends==1 && now>=paused_at+3000 && now<paused_at+3100);
+    for(unsigned i=0;i<5;i++) a2_step();      // their accept comes back
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_OPEN);
+    unsigned packets=HA.packets;
+    for(unsigned i=0;i<1000;i++) a2_step();
+    assert(HA.packets==packets && HA.starts==1);
+    SEAM.paused=false;
+    for(unsigned i=0;i<200 && HA.packets==packets;i++) a2_step();
+    assert(HA.starts==2 && HA.packets>packets);
+    // A flush: a new generation, the stream goes on.
+    uint32_t flushes=host.a2dp.generations;
+    SEAM.generation++;
+    for(unsigned i=0;i<500;i++) a2_step();
+    assert(host.a2dp.generations==flushes+1 && HA.suspends==1 && bt_avdtp_state(&host.avdtp)==BT_AVDTP_STREAMING);
+    // Silence: the pulls run dry, silence is sent for three seconds, then a Suspend.
+    SEAM.endless=false; SEAM.available=0;
+    uint32_t dry=host.a2dp.dry_packets;
+    for(unsigned i=0;i<3500 && HA.suspends<2;i++) a2_step();
+    assert(HA.suspends==2 && host.a2dp.dry_packets>dry+200);
+    SEAM.available=48000*2;
+    packets=HA.packets;
+    for(unsigned i=0;i<200 && HA.packets==packets;i++) a2_step();
+    assert(HA.starts==3 && HA.packets>packets);
+    puts("PASS: pause, resume, flush and silence end to end: Suspend after three quiet seconds, Start when sound comes back");
+}
+
+// The encoder failing: the seam is failed, the stream closed, and the
+// status says why.
+static void a2dp_encoder_fails(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    for(unsigned i=0;i<100;i++) a2_step();
+    ENC.fail_encode=true;
+    for(unsigned i=0;i<500 && !HA.closes;i++) a2_step();
+    assert(SEAM.failed && !strcmp(SEAM.why,"the encoder refused a frame") && HA.closes==1);
+    for(unsigned i=0;i<100;i++) a2_step();
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_CONNECTED && !host.avdtp_media && host.avdtp_sig);
+    assert(SEAM.attached && host.a2dp.failed);   // attached and failed until the session is made again
+    assert(status_has("a2dp: failed: the encoder refused a frame\n"));
+    puts("PASS: the encoder failing fails the seam, closes the stream, and the status says why");
+}
+
+// No Classic bond: ten thousand ticks of keyboard traffic with the sink
+// given. No L2CAP byte, and neither the pump nor AVDTP does anything.
+static void a2dp_quiet_without_a_bond(void)
+{
+    setup(); bt_classic_bond_t none={0}; classic_slot(&none,false);
+    bt_host_audio(&host,&A2_OPS,NULL);
+    memset(&SEAM,0,sizeof(SEAM)); memset(&ENC,0,sizeof(ENC));
+    SEAM.endless=true;
+    for(unsigned i=0;i<10000;i++) {
+        notify_keyboard(); step();
+        if(tx_n) { tx_n=0; const uint8_t complete[]={0x13,5,1,12,0,1,0}; multi_event(complete,sizeof(complete)); }
+    }
+    assert(!CM.acl_packets && !host.l2cap.up && !SEAM.pulls && !SEAM.attaches && !ENC.begins);
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_IDLE && !host.a2dp.sessions_begun && !host.a2dp.packets_sent);
+    assert(input_count[0]==10000 && !release_count[0] && !HA.avdtp_conn_reqs);
+    puts("PASS: with the sink given and no Classic bond, ten thousand ticks of keyboard traffic: no L2CAP byte, the pump and AVDTP idle");
+}
+
 int main(void)
 {
     (void)basic;
+    setvbuf(stdout,NULL,_IOLBF,0);     // each PASS line out before a failing assert's
     mouse_interval();
     peer_att_requests();
     pairing_and_reconnect(); cancel_races(); credits_and_faults();
@@ -1920,5 +2891,24 @@ int main(void)
     classic_sdp_refused();
     classic_full_packet();
     classic_cleanup_in_flight();
+    a2dp_quiet_without_a_bond();
+    a2dp_session_from_bond();
+    a2dp_session_without_sdp();
+    a2dp_sound();
+    a2dp_beside_le();
+    a2dp_pool_exhausted();
+    a2dp_gate_closed_with_a_packet();
+    a2dp_packet_let_go();
+    a2dp_controller_fails();
+    a2dp_parked_abort_retired();
+    a2dp_parked_answer_once();
+    a2dp_older_first();
+    a2dp_signalling_crossings();
+    a2dp_they_call_and_open_first();
+    a2dp_they_begin();
+    a2dp_gone_wrong();
+    a2dp_link_drop();
+    a2dp_pause_flush_silence();
+    a2dp_encoder_fails();
     puts("Bluetooth multi-peer host tests passed");
 }

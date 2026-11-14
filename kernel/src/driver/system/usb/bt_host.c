@@ -21,7 +21,10 @@ static bool host_setup(const bt_host_t *h)
 }
 void bt_host_init(bt_host_t *h,uint64_t now)
 {
-    *h=(bt_host_t){.credits=1};
+    // Wiped in place: the host is tens of kilobytes, and assigning it from
+    // a compound literal builds a whole second one on the kernel stack.
+    host_wipe(h,sizeof(*h));
+    h->credits=1;
     bt_acl_init(&h->acl);
     for(unsigned i=0;i<BT_HOST_PEERS;i++) h->peers[i].le.shared_controller=true;
     bt_scan_start_le(&h->scan,now);
@@ -162,15 +165,18 @@ static void host_sdp_answer_offer(bt_host_t *h)
         h->sdp_answered++; host_sdp_answer_drop(h);
     }
 }
-// A whole PDU on an open SDP channel (the only PSM admitted or asked for).
-// On the channel we opened, it is the answer to our query. On one the
+// A whole PDU on an open channel: AVDTP's go to slot 2's audio (below). On
+// an SDP channel we opened, it is the answer to our query. On one the
 // headphones opened, it is their question, answered from our record into
 // the host's buffer and queued; with L2CAP's one payload slot still taken
 // the answer is held (one at most) and offered every tick.
+static void host_avdtp_deliver(bt_host_t *h,unsigned channel,const uint8_t *data,size_t bytes);
 static void host_l2cap_deliver(void *context,unsigned channel,uint16_t psm,const uint8_t *data,size_t bytes)
 {
     bt_host_t *h=context;
-    if(psm!=BT_L2CAP_PSM_SDP || channel>=BT_L2CAP_CHANNELS) return;
+    if(channel>=BT_L2CAP_CHANNELS) return;
+    if(psm==BT_L2CAP_PSM_AVDTP) { host_avdtp_deliver(h,channel,data,bytes); return; }
+    if(psm!=BT_L2CAP_PSM_SDP) return;
     const bt_l2cap_channel_t *c=&h->l2cap.ch[channel];
     if(c->outgoing) {
         if(h->sdp_channel==channel+1 && c->cid==h->sdp_cid) bt_sdp_client_receive(&h->sdp,data,bytes);
@@ -188,22 +194,27 @@ static void host_l2cap_deliver(void *context,unsigned channel,uint16_t psm,const
 static void host_sdp_clear(bt_host_t *h)
 {
     h->sdp_asked=false; h->sdp_channel=0; h->sdp_cid=0;
+    h->sdp_kept=0; h->sdp_kept_cid=0;
     h->sdp_not_made=NULL; h->sdp_refused=0;
     host_wipe(h->sdp_request,sizeof(h->sdp_request)); h->sdp_request_bytes=0;
     host_sdp_answer_drop(h);
     host_wipe(&h->sdp,sizeof(h->sdp));          // BT_SDP_IDLE
     h->sdp_result_current=false;
 }
+static void host_audio_link(bt_host_t *h,bool up);
 // The Classic link connected (up) or went: L2CAP starts over, admitting SDP
-// alone (AVDTP is A.3's), and so does everything the last connection held.
+// and, with an audio sink, AVDTP; and so does everything the last
+// connection held.
 static void host_services_link(bt_host_t *h,bool up)
 {
     if(up) {
         bt_l2cap_init(&h->l2cap);
         bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_SDP,true);
+        if(h->a2dp_ops) bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVDTP,true);
     } else bt_l2cap_reset(&h->l2cap);
     h->l2cap_encrypted=false;
     host_sdp_clear(h);
+    host_audio_link(h,up);
 }
 // The query is over, one way or another: its line is kept and the
 // transport says it once (sdp_ended).
@@ -221,6 +232,12 @@ static void host_sdp_ended(bt_host_t *h,const char *not_made)
             bt_sdp_client_status(&h->sdp,h->sdp_result_line,sizeof(h->sdp_result_line));
         }
     }
+    // A query that ended on its channel leaves the channel open, and kept:
+    // it is closed once AVDTP's signalling channel is open.
+    const bt_l2cap_channel_t *c=h->sdp_channel?&h->l2cap.ch[h->sdp_channel-1u]:NULL;
+    if(!not_made && c && c->state!=BT_L2CAP_FREE && c->state!=BT_L2CAP_DISCONNECTING && c->cid==h->sdp_cid) {
+        h->sdp_kept=h->sdp_channel; h->sdp_kept_cid=h->sdp_cid;
+    }
     h->sdp_channel=0;
     host_wipe(h->sdp_request,sizeof(h->sdp_request)); h->sdp_request_bytes=0;
     h->sdp_ended++;
@@ -230,7 +247,8 @@ static void host_sdp_ended(bt_host_t *h,const char *not_made)
 // MTUs; its requests queued as the channel's payload slot frees. When it is
 // DONE or FAILED the channel is LEFT OPEN, and whatever arrives on it after
 // that is ignored: headphones hang up a link whose last channel has just
-// closed, and until an audio channel exists this one is all there is. A
+// closed, so it is kept until AVDTP's signalling channel is open, and with
+// no audio sink, for the connection. A
 // channel refused, unanswered or closed before the answer is whole ends the
 // query as not made, and it is not asked again on this connection. The
 // client's own five seconds start only when the channel is open, so
@@ -241,8 +259,9 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
     if(h->classic.phase==BT_CLASSIC_READY && !h->sdp_asked) {
         h->sdp_asked=true;
         // SDP may precede encryption. A channel to any other PSM must wait
-        // for the link to be encrypted, and that guard is the host's to
-        // keep when it opens one (A.3): L2CAP does not refuse it.
+        // for the link to be encrypted, and L2CAP does not refuse it: the
+        // host's guard is host_avdtp_connect, which every 0x0019 request
+        // goes through.
         int ch=bt_l2cap_connect(l,BT_L2CAP_PSM_SDP,now);
         if(ch<0) { host_sdp_ended(h,"no L2CAP channel was free"); return; }
         h->sdp_channel=(uint8_t)(ch+1); h->sdp_cid=l->ch[ch].cid;
@@ -256,11 +275,13 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
     // the same pass.
     if(state==BT_SDP_DONE || state==BT_SDP_FAILED) { host_sdp_ended(h,NULL); return; }
     if(gone) {
-        // Refused or unanswered while connecting (L2CAP records why; ours
-        // is the only channel this part asks for), or closed later.
-        if(state==BT_SDP_IDLE && l->refused) {
-            h->sdp_refused=l->refused; h->l2cap_refusals++;
-            host_sdp_ended(h,l->refused==0xffff?"the headphones did not answer the SDP channel's request":
+        // Refused or unanswered while connecting (L2CAP records why against
+        // the index this attempt was given), or closed later.
+        uint16_t psm, refused=bt_l2cap_refusal(l,ch,&psm);
+        if(state==BT_SDP_IDLE && refused) {
+            h->sdp_refused=refused; h->l2cap_refusals++;
+            h->l2cap_refused_result=refused; h->l2cap_refused_psm=psm;
+            host_sdp_ended(h,refused==0xffff?"the headphones did not answer the SDP channel's request":
                              "the headphones refused the SDP channel");
         } else host_sdp_ended(h,state==BT_SDP_IDLE?"the SDP channel closed before it opened":
                                  "the SDP channel closed before the answer was whole");
@@ -279,6 +300,263 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
     }
     state=bt_sdp_client_state(&h->sdp);
     if(state==BT_SDP_DONE || state==BT_SDP_FAILED) host_sdp_ended(h,NULL);     // the client's own limit, this tick
+}
+// ── Slot 2's audio: AVDTP's channels (AUDIO_A2DP.md part P) ────────────────
+//
+// Only with an audio sink (bt_host_audio). Every channel to or from PSM
+// 0x0019 has one role, and the roles are decided from STATE (AVDTP's,
+// L2CAP's channels', the records below) each time the host looks: after
+// every ACL packet L2CAP takes, which is when a channel can open, and at
+// every tick. Nothing is remembered as an event. A role is held by index
+// AND CID, since an index is reused. A role's channel is LIVE while L2CAP
+// holds it connected under that CID (configuring again counts: a peer that
+// reconfigures an open channel does not end it); being let go, freed, or
+// reused under another CID ends it.
+//
+//   role        | begins                                  | ends, and what follows
+//   ------------+-----------------------------------------+------------------------------------
+//   asking      | we connect: signalling once the link is | it opens: given one of the roles
+//   (ours, not  | READY and encrypted, the SDP query has  | below. It ends unopened: a refusal
+//   yet open)   | ended, AVDTP is IDLE, no 0x0019 channel | (L2CAP's, read by its index) is
+//               | exists and we may ask (below); media    | counted; media is told AVDTP
+//               | when bt_avdtp_wants_media and there is  | (media_closed, refused or not) if
+//               | no media channel                        | no media channel took its place;
+//               |                                         | signalling counts as an end if no
+//               |                                         | signalling channel took its place
+//   signalling  | a 0x0019 channel OPENS, anyone's, while | AVDTP wants both closed (media is
+//               | none is signalling and AVDTP is IDLE:   | closed first), or either side or
+//               | signalling_open (with the SDP record's  | L2CAP's timers close it:
+//               | AVDTP version, or 0). The SDP channel   | signalling_closed. An end
+//               | the query left open is closed now       |
+//   media       | a 0x0019 channel OPENS while AVDTP is   | AVDTP no longer wants one, or wants
+//               | AWAITING_MEDIA and there is none:       | both closed, or it closes:
+//               | media_open                              | media_closed
+//   (closed)    | a 0x0019 channel opens and is none of   | L2CAP finishes the disconnection
+//               | these: a second signalling channel      |
+//               | (the one that opened second), a second  |
+//               | media channel, or one in FAILED         |
+//
+// We ask for signalling at most twice a connection: once, and once more
+// BT_HOST_AVDTP_AGAIN_MS after one ended (ours or theirs, opened or
+// refused); AVDTP's own count makes a second session gone wrong FAILED.
+// PDUs on the signalling channel go to AVDTP; on any other 0x0019 channel
+// they are dropped and counted, since we are a source.
+#define BT_HOST_AVDTP_AGAIN_MS 10000
+// AVDTP's clock: the pump's microseconds, as of the last tick, in
+// milliseconds (bt_host.h now_us). L2CAP keeps the transport's `now`.
+static uint64_t host_avdtp_now(const bt_host_t *h) { return h->now_us/1000; }
+static bool host_role_live(const bt_host_t *h,uint8_t role,uint16_t cid)
+{
+    if(!role) return false;
+    const bt_l2cap_channel_t *c=&h->l2cap.ch[role-1u];
+    return c->state!=BT_L2CAP_FREE && c->state!=BT_L2CAP_DISCONNECTING && c->cid==cid;
+}
+static bool host_role_is(uint8_t role,uint16_t role_cid,unsigned channel,uint16_t cid)
+{ return role==channel+1u && role_cid==cid; }
+static uint16_t host_avdtp_version(const bt_host_t *h)
+{
+    return h->sdp_result_valid && h->sdp_result_current && h->sdp_result.found ? h->sdp_result.avdtp_version : 0;
+}
+// The link came up or went: the pump lets the seam go if it held it (a
+// link that comes up under a new handle may not have been seen going),
+// and the pump and AVDTP start over.
+static void host_audio_link(bt_host_t *h,bool up)
+{
+    if(h->a2dp_ops) bt_a2dp_reset(&h->a2dp,h->a2dp_ops,h->a2dp_ctx);
+    if(up) { bt_a2dp_init(&h->a2dp); bt_avdtp_init(&h->avdtp); }
+    else bt_avdtp_reset(&h->avdtp);
+    h->avdtp_sig=h->avdtp_media=h->avdtp_asking=0;
+    h->avdtp_sig_cid=h->avdtp_media_cid=h->avdtp_asking_cid=0;
+    h->avdtp_asking_media=false;
+    h->avdtp_sig_parked=0;
+    h->avdtp_sig_asked=h->avdtp_sig_ends=0;
+    h->avdtp_sig_again_at=0;
+}
+// The roles, settled and claimed (the table above). `lnow` is L2CAP's
+// clock, for the channels this closes.
+static void host_avdtp_channels(bt_host_t *h,uint64_t lnow)
+{
+    if(!h->a2dp_ops || !h->l2cap.up) return;
+    bt_l2cap_t *l=&h->l2cap;
+    bt_avdtp_t *a=&h->avdtp;
+    uint64_t at=host_avdtp_now(h);
+    if(h->avdtp_sig && !host_role_live(h,h->avdtp_sig,h->avdtp_sig_cid)) {
+        h->avdtp_sig=0; h->avdtp_sig_cid=0; h->avdtp_sig_parked=0;
+        bt_avdtp_signalling_closed(a,at);
+        h->avdtp_sig_ends++; h->avdtp_sig_again_at=at+BT_HOST_AVDTP_AGAIN_MS;
+    }
+    if(h->avdtp_media && !host_role_live(h,h->avdtp_media,h->avdtp_media_cid)) {
+        h->avdtp_media=0; h->avdtp_media_cid=0;
+        bt_avdtp_media_closed(a,at,false);
+    }
+    if(h->avdtp_asking && !host_role_live(h,h->avdtp_asking,h->avdtp_asking_cid)) {
+        uint16_t psm, refused=bt_l2cap_refusal(l,h->avdtp_asking-1u,&psm);
+        bool media=h->avdtp_asking_media;
+        h->avdtp_asking=0; h->avdtp_asking_cid=0; h->avdtp_asking_media=false;
+        if(refused) { h->l2cap_refusals++; h->l2cap_refused_result=refused; h->l2cap_refused_psm=psm; }
+        if(media && !h->avdtp_media) bt_avdtp_media_closed(a,at,refused!=0);
+        else if(!media && !h->avdtp_sig) { h->avdtp_sig_ends++; h->avdtp_sig_again_at=at+BT_HOST_AVDTP_AGAIN_MS; }
+    }
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) {
+        const bt_l2cap_channel_t *c=&l->ch[i];
+        if(c->psm!=BT_L2CAP_PSM_AVDTP || !bt_l2cap_is_open(l,i)) continue;
+        if(host_role_is(h->avdtp_sig,h->avdtp_sig_cid,i,c->cid) || host_role_is(h->avdtp_media,h->avdtp_media_cid,i,c->cid))
+            continue;
+        if(host_role_is(h->avdtp_asking,h->avdtp_asking_cid,i,c->cid)) {
+            h->avdtp_asking=0; h->avdtp_asking_cid=0; h->avdtp_asking_media=false;
+        }
+        bt_avdtp_state_t st=bt_avdtp_state(a);
+        if(st==BT_AVDTP_AWAITING_MEDIA && !h->avdtp_media) {
+            h->avdtp_media=(uint8_t)(i+1); h->avdtp_media_cid=c->cid;
+            bt_avdtp_media_open(a,at);
+        } else if(!h->avdtp_sig && st==BT_AVDTP_IDLE) {
+            h->avdtp_sig=(uint8_t)(i+1); h->avdtp_sig_cid=c->cid;
+            bt_avdtp_signalling_open(a,at,host_avdtp_version(h));
+        } else bt_l2cap_close(l,i,lnow);
+    }
+}
+static void host_avdtp_deliver(bt_host_t *h,unsigned channel,const uint8_t *data,size_t bytes)
+{
+    host_avdtp_channels(h,h->classic.now);
+    if(host_role_is(h->avdtp_sig,h->avdtp_sig_cid,channel,h->l2cap.ch[channel].cid))
+        bt_avdtp_receive(&h->avdtp,data,bytes,host_avdtp_now(h));
+    else h->avdtp_media_dropped++;
+}
+// Whether we may ask for a signalling channel now (the table above).
+static bool host_avdtp_may_ask(const bt_host_t *h)
+{
+    if(h->classic.phase!=BT_CLASSIC_READY || !h->classic.encrypted || !h->l2cap.encrypted) return false;
+    if(!h->sdp_asked || h->sdp_channel) return false;          // the query has not ended
+    if(bt_avdtp_state(&h->avdtp)!=BT_AVDTP_IDLE || h->avdtp_sig || h->avdtp_asking) return false;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++)
+        if(h->l2cap.ch[i].state!=BT_L2CAP_FREE && h->l2cap.ch[i].psm==BT_L2CAP_PSM_AVDTP) return false;
+    return h->avdtp_sig_ends<=1 && h->avdtp_sig_asked<=h->avdtp_sig_ends &&
+           host_avdtp_now(h)>=h->avdtp_sig_again_at;
+}
+// AVDTP's message onto the signalling channel. What AVDTP wants sent now
+// (the answers owed first, in its own order; a message longer than the
+// channel's room is AVDTP's to drop) is asked each time; the message parked
+// in the channel's payload slot follows it: one AVDTP has retired or put
+// behind another (its serial no longer the head's) is taken back, and the
+// head is queued in a free slot. A message is SENT, for AVDTP, only when
+// host_l2cap_send hands it to the controller (bt_avdtp_sent).
+static void host_avdtp_feed(bt_host_t *h)
+{
+    if(!h->avdtp_sig) return;
+    unsigned ch=h->avdtp_sig-1u;
+    bt_l2cap_t *l=&h->l2cap;
+    if(!bt_l2cap_is_open(l,ch)) return;          // reconfiguring: the slot is held as it is
+    uint8_t msg[BT_AVDTP_LONGEST];
+    uint32_t serial;
+    size_t n=bt_avdtp_next(&h->avdtp,msg,sizeof(msg),(uint16_t)host_l2cap_room(h,ch),host_avdtp_now(h),&serial);
+    if(l->ch[ch].queued) {
+        if(h->avdtp_sig_parked && serial==h->avdtp_sig_parked) return;
+        (void)bt_l2cap_unqueue(l,ch);
+    }
+    h->avdtp_sig_parked=0;
+    if(n && bt_l2cap_send(l,ch,msg,n)) h->avdtp_sig_parked=serial;
+}
+static void host_l2cap_send(void *context,const uint8_t *pdu,size_t n);
+static bool host_l2cap_may_send(const bt_host_t *h);
+// ── Slot 2's audio: the pump (AUDIO_A2DP.md § The sample clock) ───────────
+//
+// The pump makes at most one packet, which the host queues on the media
+// channel; its frames count as sent when L2CAP hands that PDU to the
+// controller, which host_l2cap_send sees by its CID, in whichever tick it
+// leaves (the gate may hold it for several). A packet that leaves a live
+// media channel's slot any other way (the peer's new MTU dropped it, or a
+// controller packet could not carry it) is let go here as lost
+// (bt_a2dp_lost), so the stream goes on. One queued when the media channel
+// closes is not let go here: the pump keeps it pending until the next
+// session or a reset clears it, which is harmless because a media channel
+// closing ends the session in AVDTP.
+static void host_a2dp_settle(bt_host_t *h)
+{
+    if(!h->a2dp.pending || !host_role_live(h,h->avdtp_media,h->avdtp_media_cid)) return;
+    if(h->l2cap.ch[h->avdtp_media-1u].queued) return;
+    bt_a2dp_lost(&h->a2dp);
+}
+// The one loop, after LE's turn and SDP's and AVDTP's, at most three times
+// round: while the media channel is open and the send gate allows, a packet
+// is made if the channel's slot is empty (the pump makes one only when one
+// is due, and none while one is pending), and L2CAP is given a turn, which
+// sends the oldest PDU waiting: the packet, or something older first, in
+// which case the packet goes on a later round or tick. Nothing is pulled
+// from the seam that cannot be queued now.
+#define BT_HOST_A2DP_ROUNDS 3
+static void host_a2dp_send(bt_host_t *h,uint64_t now,host_call_t *call)
+{
+    bt_l2cap_t *l=&h->l2cap;
+    for(unsigned round=0;round<BT_HOST_A2DP_ROUNDS;round++) {
+        if(!h->avdtp_media) return;
+        unsigned ch=h->avdtp_media-1u;
+        if(!bt_l2cap_is_open(l,ch) || !host_l2cap_may_send(h)) return;
+        if(!l->ch[ch].queued) {
+            size_t n=bt_a2dp_packet(&h->a2dp,h->now_us,(uint16_t)host_l2cap_room(h,ch),h->a2dp_packet,
+                                    sizeof(h->a2dp_packet),h->a2dp_ops,h->a2dp_ctx);
+            if(!n) return;
+            (void)bt_l2cap_send(l,ch,h->a2dp_packet,n);
+        }
+        bt_l2cap_tick(l,now,true,host_l2cap_send,call);
+        host_a2dp_settle(h);
+    }
+}
+// Our 0x0019 Connection Request, signalling or media, recorded as the one
+// being asked for. L2CAP does not refuse a non-SDP connect on a link that
+// is not encrypted; the host does, here, for both.
+static bool host_avdtp_connect(bt_host_t *h,bool media,uint64_t now)
+{
+    if(!h->l2cap.encrypted || !h->classic.encrypted) return false;
+    int ch=bt_l2cap_connect(&h->l2cap,BT_L2CAP_PSM_AVDTP,now);
+    if(ch<0) return false;
+    h->avdtp_asking=(uint8_t)(ch+1); h->avdtp_asking_cid=h->l2cap.ch[ch].cid; h->avdtp_asking_media=media;
+    return true;
+}
+// Slot 2's audio, each tick, after SDP: the roles, the channels AVDTP wants
+// opened and closed, its timers and its messages, then the pump's policy
+// and its packets.
+static void host_audio_tick(bt_host_t *h,uint64_t now,host_call_t *call)
+{
+    if(!h->a2dp_ops || !h->l2cap.up) return;
+    bt_l2cap_t *l=&h->l2cap;
+    bt_avdtp_t *a=&h->avdtp;
+    host_avdtp_channels(h,now);
+    // The SDP channel the query left open goes once signalling is open:
+    // the headphones keep a link with a channel on it.
+    if(h->sdp_kept && h->avdtp_sig) {
+        if(host_role_live(h,h->sdp_kept,h->sdp_kept_cid)) bt_l2cap_close(l,h->sdp_kept-1u,now);
+        h->sdp_kept=0; h->sdp_kept_cid=0;
+    }
+    bt_avdtp_tick(a,host_avdtp_now(h));
+    if(bt_avdtp_wants_closed(a)) {
+        // A session gone wrong: media, then signalling, and whatever of
+        // ours is still being asked for.
+        if(h->avdtp_media) bt_l2cap_close(l,h->avdtp_media-1u,now);
+        if(h->avdtp_sig) bt_l2cap_close(l,h->avdtp_sig-1u,now);
+        if(h->avdtp_asking) bt_l2cap_close(l,h->avdtp_asking-1u,now);
+    } else if(!bt_avdtp_media_wanted(a)) {
+        if(h->avdtp_media) bt_l2cap_close(l,h->avdtp_media-1u,now);
+        if(h->avdtp_asking && h->avdtp_asking_media) bt_l2cap_close(l,h->avdtp_asking-1u,now);
+    } else if(bt_avdtp_wants_media(a) && !h->avdtp_media && !h->avdtp_asking) {
+        (void)host_avdtp_connect(h,true,now);
+    }
+    if(host_avdtp_may_ask(h) && host_avdtp_connect(h,false,now)) h->avdtp_sig_asked++;
+    // What was let go above is AVDTP's news now, not at the next look.
+    host_avdtp_channels(h,now);
+    host_avdtp_feed(h);
+    host_a2dp_settle(h);
+    bt_a2dp_step(&h->a2dp,a,h->now_us,h->a2dp_ops,h->a2dp_ctx);
+    host_avdtp_feed(h);          // what the pump asked of AVDTP, if the slot is still free
+    host_a2dp_send(h,now,call);
+}
+size_t bt_host_media_room(const bt_host_t *h)
+{
+    return h->avdtp_media && bt_l2cap_is_open(&h->l2cap,h->avdtp_media-1u)?host_l2cap_room(h,h->avdtp_media-1u):0;
+}
+void bt_host_audio(bt_host_t *h,const bt_a2dp_ops_t *ops,void *ctx)
+{
+    h->a2dp_ops=ops; h->a2dp_ctx=ctx;
+    if(ops && h->l2cap.up) bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVDTP,true);
 }
 void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
                      bt_host_report_t report,void *ctx)
@@ -319,9 +597,14 @@ void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
         }
         // The Classic link's packets are its L2CAP's. This function has no
         // clock of its own: the time is the Classic link's, that of its
-        // last tick. A packet for a handle nobody holds is dropped.
-        if(!routed && h->classic.connected && h->classic.handle==handle)
+        // last tick. A packet for a handle nobody holds is dropped. A
+        // channel opens only inside L2CAP's receive, so the AVDTP roles are
+        // settled after each packet: the one that opened first is the one
+        // seen first.
+        if(!routed && h->classic.connected && h->classic.handle==handle) {
             bt_l2cap_receive(&h->l2cap,h->wire,h->wire_need,h->classic.now,host_l2cap_deliver,h);
+            host_avdtp_channels(h,h->classic.now);
+        }
         host_wire_empty(h);
     }
     // The transfer is over and the packet is not: what is held was never
@@ -400,6 +683,17 @@ static void host_l2cap_send(void *context,const uint8_t *pdu,size_t n)
     host_tx_sent(h,BT_HOST_PEERS);
     c->acl(c->context,packet,4+n);
     host_wipe(packet,4+n);
+    // The media channel's PDU (its peer's CID heads it) is the pump's one
+    // packet, handed to the controller now: its frames are sent. The
+    // signalling channel's is AVDTP's parked message: sent now, not before.
+    if(n>=4 && host_role_live(h,h->avdtp_media,h->avdtp_media_cid) &&
+       host_u16(pdu+2)==h->l2cap.ch[h->avdtp_media-1u].dcid)
+        bt_a2dp_sent(&h->a2dp);
+    if(n>=4 && host_role_live(h,h->avdtp_sig,h->avdtp_sig_cid) &&
+       host_u16(pdu+2)==h->l2cap.ch[h->avdtp_sig-1u].dcid && h->avdtp_sig_parked) {
+        (void)bt_avdtp_sent(&h->avdtp,h->avdtp_sig_parked,host_avdtp_now(h));
+        h->avdtp_sig_parked=0;
+    }
 }
 // L2CAP may hand over a packet only when it costs the LE peers nothing:
 // the count gives the Classic link a buffer of the controller's (it is the
@@ -437,7 +731,9 @@ static void host_services_tick(bt_host_t *h,uint64_t now,host_call_t *call)
     }
     host_sdp_step(h,now);
     host_sdp_answer_offer(h);
+    host_audio_tick(h,now,call);
     bt_l2cap_tick(&h->l2cap,now,host_l2cap_may_send(h),host_l2cap_send,call);
+    host_a2dp_settle(h);
 }
 static bool host_control(const bt_host_t *h,unsigned owner,bool usb_done)
 { return usb_done && (h->owner==owner || (!h->owner && h->credits)); }
@@ -548,10 +844,11 @@ static void host_classic_begin(bt_host_t *h)
 // peers starved in silence; the controller is failed instead, as it is
 // when an LE command goes unanswered.
 #define BT_HOST_CLASSIC_REPLY_GRACE_MS 3000
-void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,unsigned tx_in_flight,bool failed,
+void bt_host_tick(bt_host_t *h,uint64_t now,uint64_t now_us,bool usb_done,unsigned tx_in_flight,bool failed,
                   bt_scan_send_t command,bt_le_acl_send_t acl,bt_host_report_t report,void *ctx)
 {
     h->failed|=failed;
+    h->now_us=now_us;
     host_retire(h,usb_done);
     host_acl_links(h);   // before any peer below may send
     // The LE peers send one packet at a time between them: none while an
@@ -637,6 +934,10 @@ void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,unsigned tx_in_flight,
         bt_le_tick(&h->peers[i].le,now,false,false,true,host_command,host_acl,host_report,&call);
     }
     if(h->failed && classic) host_classic_tick(h,now,usb_done,&call);
+    // A failed controller runs no services: the pump lets the seam go, so
+    // the null sink plays and a player's writes are not held for ever. Its
+    // counters and reasons stay, for the status file to show.
+    if(h->failed && h->a2dp_ops && h->a2dp.attached) bt_a2dp_detach(&h->a2dp,h->a2dp_ops,h->a2dp_ctx);
     bt_host_policy(h,now);
     host_classic_policy(h,now);
 }
@@ -829,6 +1130,31 @@ static size_t host_services_status(const bt_host_t *h,char *out,size_t used,size
         if(n<0) return used;
         used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
     }
+    // Slot 2's audio, with a sink: AVDTP's text and the pump's, which
+    // channel holds each role (an index, as L2CAP's lines above name them),
+    // and what arrived where nothing listens.
+    if(!h->a2dp_ops || used>=cap-1) return used;
+    used+=bt_avdtp_status(&h->avdtp,out+used,cap-used);
+    if(used>=cap-1) return used;
+    // A failed controller stopped the pump where it stood: what it says
+    // below is how things were then.
+    if(h->failed) {
+        n=snprintf(out+used,cap-used,"a2dp: stopped: the Bluetooth controller failed; reboot required\n");
+        if(n<0) return used;
+        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+        if(used>=cap-1) return used;
+    }
+    used+=bt_a2dp_status(&h->a2dp,out+used,cap-used);
+    if(used>=cap-1) return used;
+    char sig[8]="none", media[8]="none";
+    if(h->avdtp_sig) snprintf(sig,sizeof sig,"%u",h->avdtp_sig-1u);
+    if(h->avdtp_media) snprintf(media,sizeof media,"%u",h->avdtp_media-1u);
+    n=snprintf(out+used,cap-used,"avdtp channels: signalling %s media %s%s\n"
+               "avdtp pdus received off the signalling channel (media, or a channel being closed), dropped: %u\n",
+               sig,media,h->avdtp_asking?(h->avdtp_asking_media?", asking for media":", asking for signalling"):"",
+               (unsigned)h->avdtp_media_dropped);
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
     return used;
 }
 size_t bt_host_status(const bt_host_t *h,char *out,size_t cap)

@@ -112,8 +112,8 @@ through it, memory the resampler indexes with lengths it is given. Its
 inputs from os64 are a channel count (1 to 8, checked in the wrapper), two
 rates (non-zero, checked), and buffer lengths the caller owns.
 
-**For `THIRD_PARTY.md`** (the registry lives on the `fable/modern-web`
-branch and has not reached `userland`; this is its row when it does):
+**Its row in `THIRD_PARTY.md`** (the monthly scan reads that file; this
+copy is where the row was drafted):
 
 | Component | Pinned at | Where in the tree | What it is for | What a bug there reaches | Upstream, and where fixes are announced |
 |---|---|---|---|---|---|

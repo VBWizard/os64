@@ -33,6 +33,8 @@
 #include "driver/system/usb/bt_le.h"
 #include "driver/system/usb/bt_manager.h"
 #include "driver/system/usb/bt_host.h"
+#include "driver/system/usb/bt_a2dp_seam.h"   // slot 2's audio sink, given to the host at bring-up
+#include "micros.h"                            // the pump's clock, handed to each host tick
 #include "crypto/wipe.h"
 #include "strings/sprintf.h"
 #include "driver/system/hid_mouse.h"
@@ -198,7 +200,7 @@ typedef struct {
 	uint64_t deadline;   // the tick by which that transfer must have completed
 } xhci_bt_tx_slot_t;
 
-// Intel transport state. Bring-up uses a stack instance, then transfers a
+// Intel transport state. Bring-up fills an allocated instance, then copies a
 // successful device into controller-owned storage for discovery and LE input.
 typedef struct {
 	xhci_device_t *device;
@@ -256,6 +258,12 @@ typedef struct {
 		const char *classic_error;
 		bool classic_refused;
 		uint32_t sdp_ended, l2cap_refusals;
+		// Slot 2's audio: the pump's sessions said, AVDTP's sessions gone
+		// wrong, the sink's failure and the pump giving up, and AVDTP's
+		// state as the start/suspend lines last saw it.
+		uint32_t a2dp_sessions;
+		uint8_t avdtp_wrongs, avdtp_state;
+		bool a2dp_failed, a2dp_gave_up;
 	} logged;
 } xhci_bt_probe_t;
 
@@ -1299,9 +1307,22 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 		xhci_release_probe(dev);
 		return;
 	}
+	// The probe is too large for a kernel stack (the host inside it is most
+	// of it), so it is allocated, zeroed, filled in place, copied into the
+	// controller's storage when bring-up succeeds, and freed on every way
+	// out of this function. The host is then started where it lies
+	// (bt_host_init wipes it in place, for the same reason).
+	xhci_bt_probe_t *probe = kmalloc_try(sizeof(*probe));
+	if (!probe) {
+		printd(DEBUG_USB, "xhci: AX210 probe not started: no memory for its %u bytes\n", (unsigned)sizeof(*probe));
+		printf("USB Bluetooth: Intel AX210 probe stopped at its allocation\n");
+		xhci_release_probe(dev);
+		return;
+	}
+	probe->device = dev;
+	probe->tx_done = true;
+	probe->deadline = kTicksSinceStart + 120u * TICKS_PER_SECOND;
 	bt_intel_usb_t usb;
-	xhci_bt_probe_t probe = {.device = dev, .tx_done = true,
-	    .deadline = kTicksSinceStart + 120u * TICKS_PER_SECOND};
 	bool queried = false, attempted = false;
 	const char *stage = "USB layout";
 	// The P5's AX210 is full-speed. Reject other layouts before configuring
@@ -1310,12 +1331,12 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 		printd(DEBUG_USB, "xhci: AX210 Read Version skipped: unsupported USB layout/speed\n");
 		goto cleanup;
 	}
-	probe.rx[0].endpoint = usb.interrupt_in;
-	probe.rx[1].endpoint = usb.bulk_in;
-	probe.tx.endpoint = usb.bulk_out;
+	probe->rx[0].endpoint = usb.interrupt_in;
+	probe->rx[1].endpoint = usb.bulk_in;
+	probe->tx.endpoint = usb.bulk_out;
 	stage = "endpoint buffer allocation";
 	for (unsigned i = 0; i < 3; i++) {
-		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe.rx[i] : &probe.tx;
+		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe->rx[i] : &probe->tx;
 		if (!ring_init(&endpoint->ring)) goto cleanup;
 		// The transmit endpoint's page is followed by its send slots.
 		endpoint->buffer = kmalloc_aligned(i < 2 ? PAGE_SIZE : BT_TX_BYTES);
@@ -1329,7 +1350,7 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 	memset(dev->input_ctx, 0, PAGE_SIZE);
 	uint32_t additions = 1, last_dci = 1;
 	for (unsigned i = 0; i < 3; i++) {
-		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe.rx[i] : &probe.tx;
+		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe->rx[i] : &probe->tx;
 		uint32_t dci = (endpoint->endpoint.address & 15) * 2 + (i < 2);
 		additions |= 1u << dci;
 		if (dci > last_dci) last_dci = dci;
@@ -1356,22 +1377,22 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 	        TRB_TYPE(TRB_CONFIG_ENDPOINT) | (dev->slot << 24)) != TRB_CC_SUCCESS)
 		goto cleanup;
 
-	s_hc->bt_probe = &probe;
-	probe.listening = true;
-	for (unsigned i = 0; i < 2; i++) xhci_bt_arm(&probe, &probe.rx[i]);
+	s_hc->bt_probe = probe;
+	probe->listening = true;
+	for (unsigned i = 0; i < 2; i++) xhci_bt_arm(probe, &probe->rx[i]);
 	// USB carries the HCI command header directly, without a UART packet-type
 	// byte. Intel's ff parameter requests the TLV form of Read Version.
 	uint8_t tlv = 0xff;
 	printd(DEBUG_USB, "xhci: AX210 Read Version sending fc05(ff), interrupt %02x / bulk %02x\n",
 	       usb.interrupt_in.address, usb.bulk_in.address);
 	attempted = true;
-	queried = xhci_bt_command(&probe, BT_INTEL_READ_VERSION, &tlv, 1, false);
-	if (queried && !probe.failed && probe.events.version.result == BT_INTEL_VERSION) {
-		const bt_intel_reply_t *v = &probe.events.version;
+	queried = xhci_bt_command(probe, BT_INTEL_READ_VERSION, &tlv, 1, false);
+	if (queried && !probe->failed && probe->events.version.result == BT_INTEL_VERSION) {
+		const bt_intel_reply_t *v = &probe->events.version;
 		const char *state = v->image == 1 ? "bootloader (firmware required)" :
 		                    v->image == 3 ? "operational firmware" : "unknown image type";
 		printd(DEBUG_USB, "xhci: AX210 Read Version: %s, image=%02x, USB packets=%u\n",
-		       state, v->image, probe.packets);
+		       state, v->image, probe->packets);
 		printf("USB Bluetooth: Intel AX210 %s\n", state);
 		// In the log as well as on the glass: whether the firmware was found
 		// already running (a warm boot) is the first fact a start-up
@@ -1388,25 +1409,29 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 			printd(DEBUG_USB, "xhci: AX210 firmware build %u\n", v->build);
 		if (v->fields & BT_INTEL_SHA1)
 			printd(DEBUG_USB, "xhci: AX210 firmware SHA1 %08x\n", v->sha1);
-		if (v->image == 1 && !xhci_ax210_load(&probe)) {
+		if (v->image == 1 && !xhci_ax210_load(probe)) {
 			printd(DEBUG_USB, "xhci: AX210 firmware load failed (no retry this boot)\n");
 			printf("USB Bluetooth: Intel AX210 firmware load failed (see USB log)\n");
 			goto cleanup;
 		}
-		if (probe.events.version.image == 3 && !probe.failed) {
+		if (probe->events.version.image == 3 && !probe->failed) {
 			s_hc->bluetooth_device = *dev;
-			s_hc->bluetooth = probe;
+			s_hc->bluetooth = *probe;
+			// The event handler reaches the probe through bt_probe: it names
+			// the controller's copy before the allocation goes.
+			s_hc->bt_probe = &s_hc->bluetooth;
+			kfree(probe);
 			s_hc->bluetooth.device = &s_hc->bluetooth_device;
 			s_hc->bluetooth.runtime = true;
 			// From here a change on the adapter's port is news: clear what
 			// enumeration left standing so the next one raises an event.
 			xhci_port_ack_changes(s_hc->bluetooth.device->port);
 			bt_host_init(&s_hc->bluetooth.host, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
+			bt_host_audio(&s_hc->bluetooth.host, &kBtA2dpSeamOps, NULL);
 			for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
 				s_hc->bluetooth.keyboards[i].name = "bluetooth";
 				s_hc->bluetooth.keyboards[i].debug = DEBUG_USB;
 			}
-			s_hc->bt_probe = &s_hc->bluetooth;
 			s_bluetooth_hc = s_hc;
 			printd(DEBUG_USB, "xhci: AX210 slot %u retained for runtime discovery\n", dev->slot);
 			printf("USB Bluetooth: discovery ready at /sys/bluetooth/scan\n");
@@ -1414,8 +1439,8 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 		}
 	} else {
 		printd(DEBUG_USB, "xhci: AX210 Read Version incomplete: query_ok=%u receive_error=%u result=%u status=%02x packets=%u partial=%u/%u\n",
-		       queried, probe.failed, probe.events.version.result, probe.events.version.status,
-		       probe.packets, probe.rx[0].stream.used, probe.rx[1].stream.used);
+		       queried, probe->failed, probe->events.version.result, probe->events.version.status,
+		       probe->packets, probe->rx[0].stream.used, probe->rx[1].stream.used);
 		printf("USB Bluetooth: Intel AX210 Read Version incomplete (see USB log)\n");
 	}
 cleanup:
@@ -1423,20 +1448,23 @@ cleanup:
 		printd(DEBUG_USB, "xhci: AX210 Read Version setup failed at %s\n", stage);
 		printf("USB Bluetooth: Intel AX210 probe stopped at %s\n", stage);
 	}
-	probe.listening = false;
+	probe->listening = false;
 	// An idle receive is still owned by the HC. Disable the slot before freeing
-	// its buffers, and remove the stack pointer even when disabling times out.
+	// its buffers, and remove the pointer to the probe even when disabling
+	// times out. Disabling drains events, which reach the probe through that
+	// pointer, so the probe itself is freed last.
 	bool released = xhci_release_probe(dev);
 	s_hc->bt_probe = NULL;
 	printd(DEBUG_USB, "xhci: AX210 probe slot %u %s\n", dev->slot,
 	       released ? "released" : "retained after Disable Slot failure");
 	if (released) {
 		for (unsigned i = 0; i < 3; i++) {
-			xhci_bt_endpoint_t *endpoint = i < 2 ? &probe.rx[i] : &probe.tx;
+			xhci_bt_endpoint_t *endpoint = i < 2 ? &probe->rx[i] : &probe->tx;
 			if (endpoint->buffer) kfree(endpoint->buffer);
 			if (endpoint->ring.trb) kfree(endpoint->ring.trb);
 		}
 	}
+	kfree(probe);
 }
 
 // The runtime command's bytes are at offset 512 of the transmit storage's
@@ -1541,6 +1569,70 @@ static void xhci_bt_log_usb_state(const xhci_bt_probe_t *p)
 	       e[(o+3)%4][0], e[(o+3)%4][1], e[(o+3)%4][2], e[(o+3)%4][3], e[(o+3)%4][4], e[(o+3)%4][5]);
 }
 
+// Slot 2's audio in the log (AUDIO_A2DP.md § What is seen): a line when a
+// session is made, once its media channel is up so the packet is known
+// (the settings, frames a packet, the delay and where it came from); one
+// when a session goes wrong, the sink fails or the pump gives up, with
+// why; each once per occurrence. Starts and suspends are DEBUG_USB's.
+// Nothing per packet.
+static void xhci_bt_log_audio(xhci_bt_probe_t *p)
+{
+	const bt_host_t *h = &p->host;
+	if (!h->a2dp_ops)
+		return;
+	const bt_a2dp_t *a = &h->a2dp;
+	bt_avdtp_state_t st = bt_avdtp_state(&h->avdtp);
+	// The pump's count starts again with each connection, so the one said
+	// is forgotten between sessions.
+	if (!a->session)
+		p->logged.a2dp_sessions = 0;
+	else if (h->avdtp_media && st >= BT_AVDTP_OPEN && st <= BT_AVDTP_SUSPENDING &&
+	    a->sessions_begun != p->logged.a2dp_sessions) {
+		p->logged.a2dp_sessions = a->sessions_begun;
+		// The packet as the pump will make it (bt_a2dp_packet): as many
+		// whole frames as the media channel's room holds after the
+		// headers, at most 15.
+		size_t room = bt_host_media_room(h);
+		unsigned frames = a->frame_bytes && room > BT_A2DP_HEADER_BYTES ?
+			(unsigned)((room - BT_A2DP_HEADER_BYTES) / a->frame_bytes) : 0;
+		if (frames > BT_A2DP_FRAMES_MAX) frames = BT_A2DP_FRAMES_MAX;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: session made: sbc %u Hz %s bitpool %u, %u-byte frames, %u frames a packet, delay %u.%u ms (%s)\n",
+		       BT_HOST_CLASSIC_SLOT, (unsigned)a->settings.rate, a->settings.joint ? "joint stereo" : "stereo",
+		       (unsigned)a->settings.bitpool, (unsigned)a->frame_bytes, frames,
+		       (unsigned)(a->delay_us / 1000), (unsigned)(a->delay_us % 1000 / 100),
+		       a->delay_reported ? "their report" : "default");
+	}
+	// AVDTP's count starts again with each connection: a fall is a new
+	// connection, not news.
+	if (h->avdtp.wrongs > p->logged.avdtp_wrongs)
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: the session went wrong: %s%s\n", BT_HOST_CLASSIC_SLOT,
+		       h->avdtp.why ? h->avdtp.why : "no reason recorded",
+		       st == BT_AVDTP_FAILED ? "; no more sessions on this connection" : "");
+	p->logged.avdtp_wrongs = h->avdtp.wrongs;
+	if (a->failed != p->logged.a2dp_failed) {
+		p->logged.a2dp_failed = a->failed;
+		if (a->failed)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: the sink failed: %s; writes answer failed until the session is made again\n",
+			       BT_HOST_CLASSIC_SLOT, a->why ? a->why : "no reason recorded");
+	}
+	if (a->gave_up != p->logged.a2dp_gave_up) {
+		p->logged.a2dp_gave_up = a->gave_up;
+		if (a->gave_up)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: the headphones refused every start; the null sink plays until the session is made again\n",
+			       BT_HOST_CLASSIC_SLOT);
+	}
+	// A stream is under way from STREAMING until it leaves STREAMING and
+	// SUSPENDING (a Suspend refused leaves it streaming).
+	bool was = p->logged.avdtp_state == BT_AVDTP_STREAMING || p->logged.avdtp_state == BT_AVDTP_SUSPENDING;
+	bool is = st == BT_AVDTP_STREAMING || st == BT_AVDTP_SUSPENDING;
+	if (is && !was)
+		printd(DEBUG_USB, "bluetooth: slot %u a2dp: streaming\n", BT_HOST_CLASSIC_SLOT);
+	else if (was && !is)
+		printd(DEBUG_USB, "bluetooth: slot %u a2dp: stream %s\n", BT_HOST_CLASSIC_SLOT,
+		       st == BT_AVDTP_OPEN ? "suspended" : bt_avdtp_state_name(st));
+	p->logged.avdtp_state = (uint8_t)st;
+}
+
 static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
 {
 	const bt_host_t *h = &p->host;
@@ -1631,13 +1723,14 @@ static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
 	if (h->l2cap_refusals != p->logged.l2cap_refusals) {
 		p->logged.l2cap_refusals = h->l2cap_refusals;
 		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u l2cap: the headphones %s the channel we asked for (psm %04x, result %04x)\n",
-		       BT_HOST_CLASSIC_SLOT, h->sdp_refused == 0xffff ? "did not answer" : "refused",
-		       h->l2cap.refused_psm, h->sdp_refused);
+		       BT_HOST_CLASSIC_SLOT, h->l2cap_refused_result == 0xffff ? "did not answer" : "refused",
+		       h->l2cap_refused_psm, h->l2cap_refused_result);
 	}
 	if (h->sdp_ended != p->logged.sdp_ended) {
 		p->logged.sdp_ended = h->sdp_ended;
 		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u %s", BT_HOST_CLASSIC_SLOT, h->sdp_line);
 	}
+	xhci_bt_log_audio(p);
 }
 
 static void xhci_bt_runtime_poll(void)
@@ -1679,7 +1772,7 @@ static void xhci_bt_runtime_poll(void)
     }
     bt_le_phase_t before[BT_HOST_PEERS];
     for (unsigned i = 0; i < BT_HOST_PEERS; i++) before[i] = p->host.peers[i].le.phase;
-    bt_host_tick(&p->host, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
+    bt_host_tick(&p->host, kTicksSinceStart * 1000 / TICKS_PER_SECOND, micros_now(),
                  usb_done, p->tx_slots, usb_failed, xhci_bt_runtime_send,
                  xhci_bt_acl_send, xhci_bt_input_report, p);
     if (p->scan_history.valid && !p->scan_history.finished &&

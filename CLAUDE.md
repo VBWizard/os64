@@ -530,21 +530,40 @@ virtio because its drain waits for the tick.
   answer is waiting. The start-up round's Classic setup commands may be
   REFUSED without costing the round: the slot then says why it is
   unavailable and LE is untouched. Its data packets are its L2CAP's
-  (`bt_l2cap.c`, pure, Basic mode, admitting SDP alone for now), and at
-  `READY` the host asks the headphones one SDP question a connection, what
-  Audio Sink they are (`bt_sdp.c`, pure, which also answers for os64's
-  Audio Source record), and LEAVES THAT CHANNEL OPEN: the P5's pair hangs
-  up a link whose last channel has closed; L2CAP sends only after the LE peers have had their
-  turn, while the count gives it a buffer and a send slot is left for LE.
-  Slot 2's status shows L2CAP's channels and counters, the `sdp:` line
-  (versions, features and AVDTP's PSM, or why the query was not made) and
-  the questions answered. §§ L and S, as built are the record
+  (`bt_l2cap.c`, pure, Basic mode, admitting SDP and, with an audio sink,
+  AVDTP), and at `READY` the host asks the headphones one SDP question a
+  connection, what Audio Sink they are (`bt_sdp.c`, pure, which also
+  answers for os64's Audio Source record), and KEEPS THAT CHANNEL OPEN
+  until AVDTP's signalling channel is: the P5's pair hangs up a link whose
+  last channel has closed; L2CAP sends only after the LE peers have had
+  their turn, while the count gives it a buffer and a send slot is left
+  for LE. Slot 2's status shows L2CAP's channels and counters (a refusal
+  is the channel index's), the `sdp:` line (versions, features and
+  AVDTP's PSM, or why the query was not made) and the questions answered.
+  §§ L and S, as built are the record
   **AVDTP's signalling** is `bt_avdtp.c` (pure, both roles;
-  `tools/test_bt_avdtp_host.sh` plays the sink, 324 mutants): find the
+  `tools/test_bt_avdtp_host.sh` plays the sink, 332 mutants): find the
   headphones' SBC endpoint, configure it, open, start, suspend, close, and
-  answer when they do the same to us. Nothing calls it until the A2DP
-  pump is wired (docs/design/pending/AUDIO_A2DP.md part P; its § V, as
-  built is the record)
+  answer when they do the same to us. The host opens its signalling
+  channel once the SDP query has ended, found or not, and gives each
+  0x0019 channel its role from AVDTP's state (`bt_host.c` § Slot 2's audio
+  has the lifecycle table; AUDIO_A2DP.md § V, as built is AVDTP's record)
+  **The A2DP sink** is the pump, `bt_a2dp.c` (pure;
+  `tools/test_bt_a2dp_host.sh`), run by the host inside `kusb`'s pass
+  after the LE peers: it is the audio seam's sink, named `a2dp` in
+  `/sys/audio`, from the stream's `open` until the session ends, and turns
+  the PCM it pulls into SBC media packets at the sample clock's pace
+  (`bt_host_tick`'s `now_us`), one loop of at most three packets a pass
+  under the same send gate as L2CAP. Its way to the seam, the encoder and
+  the clock is `bt_a2dp_seam.c`, which the transport hands the host
+  (`bt_host_audio`). Slot 2's status gains AVDTP's lines, the pump's
+  (`a2dp:` state, settings, packets, slips, dry packets, rejects, the
+  delay) and the channels' roles; `tools/test_bt_multi_host.sh` plays the
+  headphones end to end. When sound stutters read `/sys/audio` FIRST
+  (`underruns_since_read`: the player fell behind), then slot 2's `a2dp:`
+  slips and slow encodes (the pump was held off, or the encoder was slow),
+  then `acl pools:` and `/sys/usb` for a link or a pass held off.
+  AUDIO_A2DP.md § P, as built is the record
 - **Sound** (`audio/audio.c`, `audio/audio_stream.c`, `audio/kaudio.c`) —
   docs/design/pending/AUDIO_SEAM.md is the design. One stream in the
   machine: a program writes PCM (signed 16-bit, two channels, 48 kHz) to
@@ -587,9 +606,8 @@ virtio because its drain waits for the tick.
   `/tests/resampletest` and `/tests/playtest` prove it; run
   `tools/test_sound_audit.py` after a build that touches it
   **The SBC encoder is built and linked with the kernel**
-  (`kernel/ports/sbc/`, the first third-party code in ring 0), but
-  `--gc-sections` leaves all of it out of the binary until something calls
-  the boundary (the A2DP sink, AUDIO_A2DP.md part P). Android's, unpatched
+  (`kernel/ports/sbc/`, the first third-party code in ring 0), and the A2DP
+  sink calls it (AUDIO_A2DP.md part P). Android's, unpatched
   in `upstream/`, pinned by `manifest.json`, built by `sbc.mk` with flags of
   its own (the kernel's code generation, `-O2`, warnings not fatal) and the
   switches in `port/sbc_switches.h`. The kernel may call `sbc_port.h`'s two functions
@@ -600,8 +618,8 @@ virtio because its drain waits for the tick.
   `tools/test_sbc_host.sh` proves it against FFmpeg's decoder and encoder
   and FAILS without ffmpeg; `tools/test_sbc_audit.py` reads the objects
   (integer-only, `memset` the one import, and no caller of the boundary
-  but those named in its `BOUNDARY_CALLERS`, which the pump's commit
-  joins). Its README is the record
+  but those named in its `BOUNDARY_CALLERS`: the pump's ops,
+  `bt_a2dp_seam.c`). Its README is the record
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer

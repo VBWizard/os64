@@ -37,6 +37,7 @@ is not mistaken for an oversight.
 | **libjpeg-turbo** | 3.2.0 | `userland/libjpeg/upstream/`, `manifest.json` | JPEG pictures | a picture running code | https://github.com/libjpeg-turbo/libjpeg-turbo/releases, its SECURITY.md; CVE search "libjpeg-turbo" |
 | **BearSSL** | commit 7bea48e5 (2026-04-06), 39 commits after v0.6 | `userland/libtls/upstream/`, `UPSTREAM_REVIEW.md` | TLS for every https page and for sshd | a bad certificate accepted; a hostile server reaching into the handshake or the record layer | https://bearssl.org/ (the changelog and the git log; releases are rare, the git log is the scan) |
 | **speexdsp** (resampler) | 1.2.1 (tag SpeexDSP-1.2.1, commit 1b28a0f6), one file, unpatched | `userland/libsound/upstream/`, `manifest.json`, `README.md` | changing the sample rate of sound on its way to `/dev/audio` (`play`; a web page's sound later) | the player's own process: its input is PCM and two rates the player chose, and a page will choose them once yonder plays sound | https://gitlab.xiph.org/xiph/speexdsp (the git log; releases are rare, and `libsound/README.md` records what was checked on its fix branches) |
+| **Android SBC encoder** (`system/embdrv/sbc/encoder`) | commit `6b3bed84` (2025-01-09, `main`), unpatched | `kernel/ports/sbc/upstream/`, `manifest.json` | SBC frames for the A2DP sink, in the kernel | wrong sound or a rejected frame; a write past the frame beyond the 16 guard bytes would reach kernel memory | https://android.googlesource.com/platform/packages/modules/Bluetooth (`main`); Android Security Bulletins, CVE search "system/embdrv/sbc" |
 | **musl** (maths) | 1.2.5 | `userland/libmath/upstream/`, `manifest.json` | libm | wrong numbers, not code execution; scanned for correctness fixes | https://musl.libc.org/releases.html |
 | **musl** (decimal conversion) | commit 5e9972ea | `userland/libpage/upstream/musl/` | HTML's number parsing (`floatscan`) | a malformed number read wrong; hostile input, so a bounds fix upstream matters | same as above |
 | **ryu** | commit 4c0618b0 | `userland/libpage/upstream/ryu/` | shortest float printing | wrong digits; not hostile input | https://github.com/ulfjack/ryu |
@@ -76,5 +77,6 @@ harness whether or not our code shares the bug.
 
 | Date | By | Result |
 |---|---|---|
+| 2026-11-13 | Fable | Android's SBC encoder added: the first third-party code in the kernel, with the A2DP sink (audio arc, A.3). No scan of upstreams this day. |
 | 2026-11-13 | Fable | The file brought to `userland` (it had lived on a design branch). speexdsp's resampler added: it arrived with `play` (#569). No scan of upstreams this day; the first is still due by 2026-11-23. |
 | 2026-10-23 | Fable | The list written from each `manifest.json` and `UPSTREAM_REVIEW.md`; no scan of upstreams this day. First scan due by 2026-11-23. Limine noted as a floating branch rather than a pin. |

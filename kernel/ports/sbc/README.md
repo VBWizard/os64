@@ -11,8 +11,9 @@ what the proof found. AUDIO_A2DP.md § Part E is the design; its "E, as
 built" says where this differs from it.
 
 The kernel may call two functions, `sbc_port.h`'s, and only from an object
-named in `tools/test_sbc_audit.py`'s `BOUNDARY_CALLERS` (empty today; the
-A2DP pump is added there by name in the commit that adds its call). The
+named in `tools/test_sbc_audit.py`'s `BOUNDARY_CALLERS`: the A2DP pump's
+ops, `kernel/src/driver/system/usb/bt_a2dp_seam.c`, through which the
+pump (`bt_a2dp.c`) reaches the encoder from kusb's pass. The
 audit reads every kernel object's symbols and fails if one outside
 `ports/sbc` reaches any symbol the upstream objects define, calls the
 boundary without being named, or a kernel source includes an upstream
@@ -222,8 +223,8 @@ decode's frame count and FFmpeg's error output, and proves that check can
 fail: one flipped scale-factor bit in a good stream must be caught.
 
 The host proof exercises the HOST compiler's build of the same sources
-with the same switches. The kernel's objects are audited, not executed,
-until part P runs them.
+with the same switches. The kernel's objects are audited on the host, and
+executed only in the kernel, by the A2DP sink on the real machine.
 
 `tools/test_sbc_audit.py` builds the kernel and reads it: the import is the
 pinned commit; every name upstream tests in a preprocessor condition is
@@ -254,7 +255,7 @@ encoder wrote past its frame by more than the guard, kernel memory beside
 the boundary's buffer. Its inputs are our PCM and settings
 `sbc_settings_valid` admitted; it parses nothing from outside.
 
-**For `THIRD_PARTY.md`** (not in this tree; this is its row when it is):
+**Its row in `THIRD_PARTY.md`** (the monthly scan reads that file; this copy is where the row was drafted):
 
 | Component | Pinned at | Where in the tree | What it is for | What a bug there reaches | Upstream, and where fixes are announced |
 |---|---|---|---|---|---|
@@ -268,7 +269,8 @@ give the licence, keep the files' notices, and carry the NOTICE:
 - **In source**: `license/android-sbc-LICENSE` holds the module's `NOTICE`
   as fetched (pinned in `manifest.json`) and the notice at the head of every
   vendored file; the files themselves are untouched.
-- **In a binary**: the kernel links the objects, but nothing calls the
-  encoder yet, so `--gc-sections` leaves all of it out of
-  `bin/os64_kernel`. When the A2DP sink calls it, the notice must go on both
-  images as speexdsp's does (`/etc/licenses/`): a DEBTS row says so.
+- **In a binary**: the A2DP sink calls the encoder, so `bin/os64_kernel`
+  carries it, and the notice is installed on both images as speexdsp's is,
+  `/etc/licenses/android-sbc.txt` on the ext2 root and on the FAT
+  lifeboat. `tools/test_sbc_audit.py` checks both install lines and that
+  the binary holds the encoder.

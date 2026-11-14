@@ -327,7 +327,7 @@ PSM.
 | `IDLE` | No signalling channel | the host says sig is open: `CONNECTED` |
 | `CONNECTED` | Sig up, no stream, nothing outstanding | we begin: `DISCOVERING`. Their Set Configuration, accepted: `CONFIGURED` |
 | `DISCOVERING` | Our Discover is out | its answer: the first audio SINK endpoint not in use is chosen; none is a walk that ended (below). Their Set Configuration, accepted: `CONFIGURED`, and ours is abandoned |
-| `ASKING` | Get All Capabilities (when their SDP record says AVDTP 1.3 or later) or Get Capabilities is out | its answer: SBC offering 48 kHz, 16 blocks, 8 subbands, joint stereo or stereo, loudness, and a bitpool range that meets ours; else the next sink endpoint; none left is a walk that ended (below). Get All Capabilities REJECTED: Get Capabilities is asked instead. Their Set Configuration, accepted: `CONFIGURED` |
+| `ASKING` | Get All Capabilities (when their SDP record says AVDTP 1.3 or later, or no record was read) or Get Capabilities is out | its answer: SBC offering 48 kHz, 16 blocks, 8 subbands, joint stereo or stereo, loudness, and a bitpool range that meets ours; else the next sink endpoint; none left is a walk that ended (below). Get All Capabilities REJECTED: Get Capabilities is asked instead. Their Set Configuration, accepted: `CONFIGURED` |
 | `CONFIGURING` | Our Set Configuration is out: media transport, one SBC setting in each field, the bitpool range from their least (or 2, if higher) to the one chosen, and delay reporting if they offered it | accepted: `OPENING`. Rejected "in use" or "bad state" while we have just rejected theirs: once, after 1 s, sent again. Any other reject: § When a session goes wrong |
 | `CONFIGURED` | We accepted THEIR Set Configuration; they are to open the stream | their Open, accepted: `AWAITING_MEDIA`. 10 s without it: Abort, then `CONNECTED` |
 | `OPENING` | Our Open is out | accepted: the host opens media, `AWAITING_MEDIA` |
@@ -368,10 +368,14 @@ command at a time.
 **Answers owed and one command may wait.** An L2CAP channel holds one
 payload. While our command waits its turn, they may send something that
 must be answered. `bt_avdtp.c` keeps up to two answers owed and one
-command to send, and hands the host the answers first each time the
-channel can take a payload. A peer sends one command at a time, so a
-third message while two answers are owed is dropped and counted; except
-an Abort, which is always obeyed and takes the newer answer's place.
+command to send, and offers the host the answers first. A peer sends one
+command at a time, so a third message while two answers are owed is
+dropped and counted; except an Abort, which is always obeyed and takes
+the newer answer's place. **A message is SENT only when L2CAP hands it to
+the controller** (`bt_avdtp_sent`); until then it is QUEUED, even parked
+in the channel's payload slot behind a shut send gate, and AVDTP may
+retire it or put an answer ahead of it, and what sits in the slot follows
+(§ V, as built).
 
 ### When they do it to us
 
@@ -433,10 +437,23 @@ the sanitizers; a mutant harness.
   refusal. Their Set Configuration is taken while ours is queued and not
   yet sent, or waiting for its one retry. Both sending Open is not
   resolved: theirs is rejected (bad state).
+- **Taken is not sent.** `bt_avdtp_next` copies out the message AVDTP
+  wants sent now with its serial (the message's id: a new, retired or
+  replaced head has another) and consumes nothing; `bt_avdtp_sent(serial)`
+  is the carrier saying it left, and only then is an answer off the owed
+  list or our command out, its answer awaited. A send for a serial that is
+  no longer the head's is refused and counted (`stale sends`). The
+  command's timer still runs from when it was queued: a carrier holds a
+  message back for milliseconds (a shut gate), which the six seconds
+  absorb, and a timer from the send would need a second bound for a
+  message parked for ever.
 - **A command of ours still queued is retired when we accept a command
   of theirs that changes the stream** (their Set Configuration, Open,
   Start, Suspend, Close, Abort): it describes a stream that has since
-  changed. One already SENT is theirs to answer, and its answer is taken
+  changed. Queued means not yet SENT in the sense above, parked included:
+  a host that parked an Abort behind a shut gate takes it back when their
+  new Set Configuration retires it, so it can never reach the stream they
+  just configured. One already SENT is theirs to answer, and its answer is taken
   without changing a state it no longer applies to. What that leaves: our
   Start sent, their Start and then their Suspend accepted, and only then
   their accept of ours. Whether they are streaming depends on the order
@@ -461,13 +478,17 @@ the sanitizers; a mutant harness.
   or drops. `bt_avdtp_may_begin` says whether a walk may start.
 - **Nothing we send is ever fragmented**: every message is built in 16
   bytes, asserted under the least MTU of 48.
+- **A version not known (0) is asked Get All Capabilities**, falling back
+  to Get Capabilities on a reject, as for a 1.3 peer that refuses it; only
+  a version known to be below 1.3 is asked Get Capabilities first. The host
+  may open signalling before its SDP query has ended (§ P, as built).
 - **What it does not handle**: headphones that configure us first with a
   codec we lack and do not fall back to SBC; content protection in their
   configuration (refused); both sides sending Open.
 - Proof: `tools/test_bt_avdtp_host.sh`, every message compared with one
   built from the specification, messages fed in storage of exactly their
   length so a read past the end is a sanitizer report, a responsive
-  random peer that must reach `OPEN` and `STREAMING`; 324 mutants.
+  random peer that must reach `OPEN` and `STREAMING`; 332 mutants.
 
 ## Part P: the pump (`bt_a2dp.c`) and the wiring
 
@@ -478,33 +499,36 @@ the sanitizers; a mutant harness.
 - **Which 0x0019 channel is which is decided by the session's state**, not
   by order (BlueZ does the same): a channel is MEDIA only while the
   session is `AWAITING_MEDIA`; otherwise it is signalling. A second
-  signalling channel while one is open is refused. If we and they each
-  begin a signalling channel at once, the one that opens first is used and
-  ours, if it is the other, is closed.
+  signalling channel is closed once it opens. If we and they each begin a
+  signalling channel at once, the one that opens first is used and the
+  other, ours or theirs, is closed.
 - **The channel table is exactly enough**: their SDP, sig, media, and for
   a moment our SDP or a crossing sig. It stays four, and the multi-host
   suite fills it.
 - **The SDP channel is closed once sig is open**, not before.
 - **AVDTP is tried even when the SDP query was not made.** The PSM is
-  fixed by assigned numbers; without their record we ask Get Capabilities,
-  as for a 1.2 sink.
-- **A refusal for each channel.** L2CAP keeps one "last refusal" for the
-  link, enough while SDP was the only channel we opened. It becomes the
-  channel's.
-- **The Bluetooth probe leaves the stack.** `xhci_bt_probe_t` is 25 KB,
-  built as a local at bring-up (DEBTS). The pump adds about 9 KB: PCM for
-  the most frames a packet may hold (15 frames of 128 stereo samples) and
-  a packet. Bring-up allocates the probe before it fills it. This is the
-  first commit of part P, alone, because the keyboard depends on bring-up.
+  fixed by assigned numbers; without their record (or before it has come)
+  we ask Get All Capabilities, and Get Capabilities if they reject it.
+- **A refusal for each channel.** L2CAP keeps the last refusal of each
+  channel index, what the last channel we asked for there ended with, so
+  the SDP attempt's and each AVDTP attempt's are read apart.
+- **The Bluetooth host stays off the stack.** `xhci_bt_probe_t` is too
+  large for a kernel stack, and the pump adds about 9 KB: PCM for the most
+  frames a packet may hold (15 frames of 128 stereo samples) and a packet.
+  Bring-up allocates the probe before it fills it, and the host and the
+  scan are started by wiping them in place, never by assigning a compound
+  literal (a whole second copy on the stack at `-O0`). This is the first
+  commit of part P, alone, because the keyboard depends on bring-up.
 
 ### The seam: what changes
 
 - `audio_sink_has_sound(sink)`: true when the ring holds frames and the
   stream is not paused. Opening `/dev/audio` with nothing written is not
   sound.
-- The pump's `nudge` sets a flag and rings `kusb`'s doorbell, and does
-  nothing else: it runs under the stream's lock with interrupts off, and
-  asking the seam anything from inside it would take that lock twice.
+- The pump's `nudge` rings `kusb`'s doorbell (whose rung bit is the flag),
+  and does nothing else: it runs under the stream's lock with interrupts
+  off, and asking the seam anything from inside it would take that lock
+  twice.
 
 ### The stream's policy
 
@@ -529,16 +553,18 @@ would otherwise be lost, and a full ring never nudges again.)
 | the encoder's boundary said false, or eight packets in a row cost more than their budget | `audio_sink_failed`; Close. The sink stays attached and failed, so writes answer `OS64_AUDIO_FAILED`, until the session is made again (a reconnection, or `slot 2 reconnect`) |
 
 **Holding a Start back.** A Start that was rejected is asked again after
-1 s, then 2 s, then 4 s; after the third reject the pump detaches (the
-null sink plays) until the session is made again. After THEY suspend a
-stream, we do not Start it for 2 s: headphones with a second host suspend
-us to take its call, and starting again at once would fight them.
+1 s, then 2 s, then 4 s: four Starts in all. A fourth reject gives the
+session up, and the pump detaches (the null sink plays) until the session
+is made again. After THEY suspend a stream, we do not Start it for 2 s:
+headphones with a second host suspend us to take its call, and starting
+again at once would fight them.
 
 **A rejected Suspend** leaves the session `STREAMING`. The pump sends
 nothing while there is nothing to send and carries on when there is.
 
 **The clock is anchored again** whenever sending begins after a stop: a
-Start accepted, sound after a quiet spell without a Suspend, or a slip.
+Start accepted, ours or theirs, sound after a quiet spell without a
+Suspend, or a slip. Their Start also begins a new quiet spell.
 
 ### The settings
 
@@ -650,6 +676,159 @@ P5, by Chris (rows A.3.5 and A.3.6):
    and what the pair does is recorded.
 7. **The delay**: a click track and a stopwatch on the glass, to put a
    number on what "150 ms" really is for this pair.
+
+### P, as built
+
+The pump's pure core (`bt_a2dp.c`) and its wiring were built by Opus
+builders from written briefs (`~/os64-opus-kit/BRIEF_BT_A2DP_WIRING.md` is
+the wiring's). Where the code departs from Part P above, or settles what
+it left open:
+
+- **On the P5** (2026-11-13 and 14, the Bose SoundLink around-ear II):
+  the headphones announce "Connected to Os64"; a song plays whole; six in
+  a row from a script, through an LE scan, a Classic scan, typing and
+  mousing: 14,918 packets, no slip, no underrun, none lost, the longest
+  USB event gap 34.6 ms as without sound. Their media MTU is 672: five
+  frames a packet, 75 packets a second. Their Delay Report is 150.0 ms.
+  Switched off mid-song and on again, the song carries on in the null
+  sink, THEY call us (the first time these headphones ever have), and
+  sound returns. `play` and `kusb` each take about 2% of a core.
+- **The flush question (Q7) is answered**: a flush mid-song is heard as a
+  click and the song carries on; no tail of old sound plays from the
+  headphones' own buffer. Nothing is done around a flush.
+- **Sniff is refused, link-wide** (the start-up round's default link
+  policy, `bt_scan.c`). The first sound on the P5 came out as clicks: the
+  headphones had put the idle link into sniff with a 500 ms interval and
+  left it so through the stream, and a link in sniff carries data only at
+  its anchor points. 207 packets left where 750 were due, with 116 slips
+  and the Classic pool full. Sniff with a stream that leaves it is A.4's.
+  The headphones also took the central's role; we send when they poll us,
+  and whether their polling is enough is what the next run shows.
+- **Four Starts in all.** Each rejected Start holds the next for 1, 2 and
+  then 4 s; a fourth reject gives the session up, and the pump detaches
+  until a new one is made. Their Suspend holds our next Start 2 s.
+- **Made and sent are separate.** `bt_a2dp_packet` makes at most one
+  packet and makes none while it is pending; its frames count toward the
+  clock when `bt_a2dp_sent` says it reached the controller, and only under
+  the anchor it was made under. The host calls `bt_a2dp_sent` from its
+  L2CAP send callback, when the media channel's PDU (found by the peer's
+  CID that heads it) is handed over, in whichever tick that is. A packet
+  that leaves a live media channel's payload slot any other way (the
+  peer's new MTU no longer takes it, or one controller packet cannot carry
+  it) is let go as LOST (`bt_a2dp_lost`): its time passes so the clock
+  keeps pace, it is not counted as sent, and the headphones see one gap in
+  the sequence (`a2dp: ... lost before the controller N`). One queued when
+  the media channel closes stays pending until the next session or a
+  reset, which is harmless: a media channel closing ends the session.
+- **Their Start re-anchors the clock and begins a new quiet spell**: it
+  may follow our accepted Suspend between two passes, so the state alone
+  never shows the stream stop.
+- **A pull that says another sink is the sink** leaves the pump displaced:
+  it does not attach again until the session leaves the sink states.
+- **The pump holds 7.7 KB of PCM** (15 frames of 128 stereo samples); the
+  packet (up to 1,017 bytes) is the host's, and L2CAP copies it into the
+  channel's one payload slot.
+- **Only with a sink.** The host runs AVDTP and the pump once the
+  transport has given it the ops (`bt_host_audio`); without them PSM
+  0x0019 is neither admitted nor opened and slot 2 is what part S made it,
+  which is how every earlier case of the host suites still runs. The ops
+  live in `kernel/src/driver/system/usb/bt_a2dp_seam.c` (the seam's one
+  `audio_sink_t`, `a2dp`; `sbc_port_begin` and `sbc_port_encode`;
+  `micros_now`), the object `tools/test_sbc_audit.py` names as the
+  boundary's caller, so `bt_host.c` still builds in every host suite with
+  no kernel header.
+- **Two clocks, kept apart.** `bt_host_tick` takes `now_us`
+  (`micros_now`) beside the millisecond `now` (`kTicksSinceStart`). The
+  pump paces by `now_us`, and AVDTP is handed `now_us / 1000` in every
+  call, from the tick and from the receive path alike, so its timers and
+  the pump's calls into it share one clock: the tick count loses ticks
+  under load, and mixing the two would stretch AVDTP's timeouts by the
+  drift. L2CAP keeps the millisecond clock.
+- **Roles from state, settled after every ACL packet.** A channel opens
+  only inside L2CAP's receive, so the host settles the 0x0019 roles after
+  each packet L2CAP takes as well as at each tick: the channel that opened
+  first is the one seen first. A role is held by index and CID while L2CAP
+  holds the channel connected under that CID, so a peer reconfiguring an
+  open channel does not end it. `bt_host.c` § Slot 2's audio has the
+  lifecycle table.
+- **Signalling at most twice a connection.** We ask once the link is
+  `READY` and encrypted, the SDP query has ended and no 0x0019 channel
+  exists (one of theirs still being made counts, which makes a crossing
+  rarer); and once more 10 s after a signalling channel ended or an attempt
+  of ours failed. AVDTP's own count makes a second session gone wrong
+  `FAILED`.
+- **A refused media request ends nothing it was not needed for**: when
+  their media channel opened first, ours is closed when it opens, and a
+  refusal of it is not passed to AVDTP.
+- **A refusal is the channel index's** (`bt_l2cap_refusal`): what the last
+  channel we asked for at that index ended with, started over by the next
+  attempt there.
+- **The loop** goes round at most three times while the media channel is
+  open and the gate allows: a packet is made only when the media slot is
+  empty (and one is due), and L2CAP has a turn either way, so a packet the
+  gate held goes on the first turn it allows, before another is made.
+  AVDTP's messages are queued before the pump's step and again after it,
+  so a command the pump asks for leaves in the same tick when the
+  signalling slot is free.
+- **The signalling slot follows AVDTP's head.** The host keeps the serial
+  of the AVDTP message parked in the signalling channel's payload slot;
+  each time it feeds AVDTP it asks for the head, takes the parked message
+  back (`bt_l2cap_unqueue`) when its serial is no longer the head's, and
+  queues the head in a free slot. It calls `bt_avdtp_sent` from its L2CAP
+  send callback when the signalling channel's PDU is handed over, as it
+  calls `bt_a2dp_sent` for media, and forgets the parked serial when
+  signalling closes or the link drops. The SDP answer and the media packet
+  were checked for the same fault: an SDP answer is stateless (our record
+  is fixed) and right whenever it leaves, and a media packet parked across
+  a Suspend was queued before the Suspend's accept and so leaves before it,
+  while a session replaced ends with its media channel, which takes the
+  packet with it.
+- **The probe is allocated** (`kmalloc_try`), filled in place, copied into
+  the controller's storage and freed on every way out of bring-up; no
+  memory for it releases the slot. `bt_host_init` and `bt_scan_start` wipe
+  in place; DEBTS has the stack frames measured before and after.
+- **A failed controller detaches the pump** (`bt_a2dp_detach`), so the
+  null sink plays and a player's writes are not held, and keeps its
+  counters and reasons: slot 2's status says `a2dp: stopped: the Bluetooth
+  controller failed` above what the pump had done. A dropped link still
+  starts everything over (`bt_a2dp_reset`).
+- **Every 0x0019 request goes through one guard**
+  (`host_avdtp_connect`): none is made on a link that is not encrypted.
+- **No version means Get All Capabilities.** Signalling may open before
+  our SDP query ends (headphones that call us and open it at once, as the
+  P5's pair did when switched off and on), so AVDTP is told version 0. It
+  asks Get All Capabilities then too, and falls back to Get Capabilities
+  on a reject of either shape, so the order of the SDP answer and the
+  signalling channel cannot cost delay reporting; a version known to be
+  below 1.3 is asked Get Capabilities at once.
+- **The nudge rings `kusb`'s doorbell** and sets no flag of its own: the
+  doorbell's rung bit is the flag, and the pump decides from state at the
+  pass the ring brings.
+- **The log's session line** is said once the media channel is up, so the
+  frames a packet are known, not at Set Configuration.
+- **Locks.** `audio_pull` and every other seam call is made from `kusb`'s
+  pass, which holds USB's serializing flag (a test-and-set word nobody
+  spins on) and no spinlock: `xhci.c` takes none, and the host is pure.
+  The nudge, called under the stream's lock, only rings the doorbell,
+  which takes no lock.
+- Proof: `test_bt_multi_host` (the model headphones' AVDTP and media
+  channel, a model seam, the real encoder: the session from a bond, the
+  SDP query not made, ten seconds of sound at the sample clock's pace
+  with every frame compared, LE beside a stream, the pool exhausted, a
+  packet held by the gate, an AVDTP answer ahead of a packet, crossings
+  with the table full, their session, a session gone wrong both ways, a
+  drop mid-stream, pause, flush and silence, the encoder failing, no
+  bond); `test_bt_l2cap_host` (refusals by channel) and its mutants;
+  `test_audio_stream_host` (`has_sound`) and its mutants;
+  `test_bt_loader_host` (the probe allocated and freed once in every
+  scenario, a refused allocation, the host given the seam's ops);
+  `test_sbc_audit` (the caller named, the notice on both images, the
+  encoder in the binary).
+
+**What only the P5 can show**: every step of § Proof's P5 list. No host
+test runs `bt_a2dp_seam.c` against the real `audio.c` and its lock, `kusb`
+on its core with `micros_now` beside the tick, the AX210 carrying media
+beside the keyboard, or the Bose pair's own AVDTP.
 
 ## What A.3 leaves out, on purpose
 
