@@ -45,7 +45,7 @@ A.3.3,"AVDTP: discover, capabilities, configure, open, start, suspend, close, fr
 A.3.4,"The A2DP sink behind the audio seam: the pump paced by the controller credits, RTP sequence and timestamp checked apart from the encoder, underruns counted",A.3.2 A.3.3,done,#587,"Part P: the pump's pure core (bt_a2dp.c), then its wiring into the host and the seam (bt_a2dp_seam.c; AUDIO_A2DP.md § P, as built)"
 A.3.5,"P5: pair, play a WAV; take the battery out mid-song and put it back; a scan during playback; the keyboard typing during playback; /sys/audio read after each",A.3.4,done,#587,"P5 pass 2026-11-13/14 (Chris, Bose SoundLink around-ear II): 'Connected to Os64'; WAVs played whole; headphones off and on mid-song (the song carried on, they called us back, sound returned); an LE scan and a Classic scan during playback; typing and mousing during playback. 14,918 packets with 0 slips, 0 underruns; USB event gap max 34.6 ms. The first sound was two clicks a second: the link was in sniff at 500 ms, now refused"
 A.3.6,P5: the flush proof (Q7) and the latency constant measured,A.3.5,done,#587,"Flush answered on the P5: a flush mid-song is a click and the song carries on, no tail from the headphones (21 flushes, 0 slips). The delay is the headphones' own report, 150.0 ms; measuring it by ear and clock is left for the first video player (Chris, 2026-11-14; DEBTS)"
-A.4,"Volume from the headphones, sniff mode, and scanning while streaming",A.3,todo,,
-A.4.1,"AVRCP absolute volume, both ways",A.3,todo,,
-A.4.2,Sniff mode when nothing is playing,A.3,todo,,
-A.4.3,"The scan-while-streaming measurement, and what the manager does about it",A.3,todo,,
+A.4,"Volume from the headphones, sniff mode, and scanning while streaming",A.3,todo,,"Design: AUDIO_REMOTE.md. Three stacked pull requests: Z the link dozes (A.4.2, A.4.3), R AVCTP and AVRCP with their SDP records, W the volume wired (A.4.1). What a play or pause press DOES is decided after, with Chris"
+A.4.1,"AVRCP absolute volume, both ways",A.3,doing,,
+A.4.2,Sniff mode when nothing is playing,A.3,doing,,
+A.4.3,"The scan-while-streaming measurement, and what the manager does about it",A.3,doing,,"Measured on the P5 2026-11-14: an LE scan and a 20 s Classic scan during six songs, 0 slips, 0 underruns. The manager does nothing about a scan during a stream"
