@@ -4,10 +4,15 @@ Implementation brief and proposed PR cuts, 2026-11-13. Source audit baseline:
 `6e25f3232aa1238b7a4f1570cfa0f79f8b229dde`, merged F.3b (#553), embedding
 ABI 5, prepared engine identity
 `73ef22d5921da4ccb6d9482de6edfc6d9787dbccd17cc09de8205f2cfd70c280`.
-**Implementation status:** the opt-in libjs/native chapter is described in
-[IFRAME_F16_CHILD_RECOVERY.md](IFRAME_F16_CHILD_RECOVERY.md). Default/diagnostic
-constructors and browser consumers retain runtime-wide failure. DOM/native
-certification and host acceptance remain open. This brief owns F.16;
+**Implementation status:** the opt-in protocol, native policy and final host
+acceptance are described in [IFRAME_F16_CHILD_RECOVERY.md](IFRAME_F16_CHILD_RECOVERY.md),
+[IFRAME_F16_DOM_RECOVERY.md](IFRAME_F16_DOM_RECOVERY.md) and
+[IFRAME_F16_HOST_ACCEPTANCE.md](IFRAME_F16_HOST_ACCEPTANCE.md).
+Default/diagnostic constructors and browser consumers retain runtime-wide
+failure. Completion covers the explicit plain-child EXECUTION subset; checked
+settings, Streams use, JOBS and other unsupported paths retain global fallback.
+F.11 must evaluate those limits for its actual host rather than infer broader
+recovery from the F.16 completion. This brief owns F.16;
 WindowProxy/security is F.4, reclamation is F.15, and frame loading remains
 in the integration slices. No visible frames or slot reuse are enabled here.
 

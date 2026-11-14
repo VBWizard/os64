@@ -69,6 +69,13 @@ os64_js_status_t os64_dom_cluster_recover(os64_dom_cluster_t *cluster, const cha
     os64_js_outcome_t *outcome)
 {
     os64_js_runtime_t *runtime = cluster ? cluster->runtime : NULL;
+    if (cluster && !cluster->recovery_enabled) {
+        /* A custom libjs policy does not certify DOM provider ownership. The
+         * public query protects active outcome storage before any refusal. */
+        os64_js_status_t selected = os64_js_quiescent(runtime, caller_abi, outcome);
+        if (selected != OS64_JS_OK) return selected;
+        return outcome->status = OS64_JS_ADMISSION_REFUSED;
+    }
     os64_js_recovery_token_t token = {0};
     /* Libjs checks borrowed outcome storage and active guards before writing it. */
     os64_js_status_t status = os64_js_recovery_prepare(runtime, caller_abi, &token, outcome);
@@ -99,4 +106,67 @@ os64_js_status_t os64_dom_cluster_recover(os64_dom_cluster_t *cluster, const cha
         cluster->recovery_generation == token.generation)
         cluster->recovering = false;
     return status;
+}
+
+os64_dom_recovery_result_t os64_dom_cluster_resolve_failure(os64_dom_cluster_t *cluster,
+    const char *caller_abi, uint64_t generation, const os64_js_outcome_t *failed_task)
+{
+    os64_dom_recovery_result_t result = {.action=OS64_DOM_RECOVERY_ROOT_REQUIRED,
+        .status=OS64_JS_BAD_ARGUMENT, .generation=generation};
+    if (!cluster || !failed_task || !caller_abi) return result;
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0) {
+        result.status = OS64_JS_ABI_MISMATCH;
+        return result;
+    }
+    if (failed_task->status != OS64_JS_LIMIT && failed_task->status != OS64_JS_CANCELLED &&
+        failed_task->status != OS64_JS_HOST_FAILURE && failed_task->status != OS64_JS_FAILED_RUNTIME)
+        return result;
+    result.status = failed_task->status;
+    result.limit = failed_task->limit;
+    result.host_error = failed_task->host_error;
+    if (failed_task->status != OS64_JS_LIMIT || failed_task->limit != OS64_JS_LIMIT_EXECUTION)
+        return result;
+    if (!cluster->recovery_enabled) {
+        result.status = OS64_JS_ADMISSION_REFUSED;
+        return result;
+    }
+    result.limit = OS64_JS_LIMIT_NONE;
+    result.host_error = 0;
+    os64_js_recovery_info_t info;
+    result.status = os64_js_recovery_inspect(cluster->runtime, caller_abi, &info);
+    if (result.status != OS64_JS_OK) return result;
+    /* A new global episode can supersede a completed local generation. */
+    if (info.failure.global.status != OS64_JS_OK) {
+        result.status = info.failure.global.status;
+        result.limit = info.failure.global.limit;
+        result.host_error = info.failure.global.host_error;
+        return result;
+    }
+    if (!generation || info.generation != generation ||
+        info.failure.original.status != failed_task->status ||
+        info.failure.original.limit != failed_task->limit ||
+        info.failure.original.host_error != failed_task->host_error) {
+        result.status = OS64_JS_ADMISSION_REFUSED;
+        return result;
+    }
+    os64_js_outcome_t admission;
+    result.status = os64_dom_cluster_recover(cluster, caller_abi, &admission);
+    result.limit = admission.limit;
+    result.host_error = admission.host_error;
+    if (result.status == OS64_JS_BUSY) result.action = OS64_DOM_RECOVERY_WAIT;
+    else if (result.status == OS64_JS_OK) {
+        /* A late global signal still wins after native publication. Normal
+         * task admission repeats the health check for a later cancellation. */
+        result.status = os64_js_recovery_inspect(cluster->runtime, caller_abi, &info);
+        if (result.status == OS64_JS_OK && info.generation == generation &&
+            info.state == OS64_JS_RECOVERY_COMMITTED && info.failure.global.status == OS64_JS_OK)
+            result.action = OS64_DOM_RECOVERY_READY;
+        else if (result.status == OS64_JS_OK) {
+            result.status = info.failure.global.status == OS64_JS_OK
+                ? OS64_JS_ADMISSION_REFUSED : info.failure.global.status;
+            result.limit = info.failure.global.limit;
+            result.host_error = info.failure.global.host_error;
+        }
+    }
+    return result;
 }

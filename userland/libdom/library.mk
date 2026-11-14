@@ -125,3 +125,24 @@ $(LIBDOM_REALMS_TEST_ELF): $(LIBDOM_REALMS_TEST_OBJ) $(LAUNCH_OBJS) $(LIBDOM_SO)
 	    $(LDFLAGS) $(BIG_STACK_LDFLAGS) -o $@ $^
 .PHONY: dom-realms-test
 dom-realms-test: $(LIBDOM_REALMS_TEST_ELF)
+
+# Recovery host/guest consumer shares its decision oracle with the host suite.
+LIBDOM_RECOVERY_TEST_OBJ := $(OBJ)/dom/recovery-test.o
+LIBDOM_RECOVERY_TEST_ELF := $(OBJ)/dom/recovery-test
+$(LIBDOM_RECOVERY_TEST_OBJ): libdom/tests/recovery.c libdom/tests/recovery_cases.h \
+    libdom/include/dom/dom.h $(LIBJS_GENERATED)/.prepared libdom/library.mk
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBDOM_CFLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(LIBDOM_RECOVERY_TEST_ELF): $(LIBDOM_RECOVERY_TEST_OBJ) $(LAUNCH_OBJS) $(LIBDOM_SO) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_jsembedtest) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) $(BIG_STACK_LDFLAGS) -o $@ $^
+.PHONY: dom-recovery-test
+dom-recovery-test: $(LIBDOM_RECOVERY_TEST_ELF) $(OBJ)/dom/recovery-parent
+-include $(LIBDOM_RECOVERY_TEST_OBJ:.o=.d)
+$(OBJ)/dom/recovery-parent.o: libdom/tests/recovery_parent.c libdom/library.mk
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBDOM_CFLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(OBJ)/dom/recovery-parent: $(OBJ)/dom/recovery-parent.o $(LAUNCH_OBJS) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_testrun) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) -o $@ $^
+-include $(OBJ)/dom/recovery-parent.d
