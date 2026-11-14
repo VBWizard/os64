@@ -674,8 +674,8 @@ static void test_outgoing_refused_and_pending(void)
     CHECK_EQ(L.ch[0].state, BT_L2CAP_CONNECTING);
     peer_cmd(CONN_RSP, 1, BYTES(W(0), W(0x0040), W(3), W(0)));
     CHECK(bt_l2cap_is_free(&L, 0));
-    CHECK_EQ(L.refused, 3);
-    CHECK_EQ(L.refused_psm, 0x0019);
+    CHECK_EQ(L.refused[0],3);
+    CHECK_EQ(L.refused_psm[0], 0x0019);
 
     // Pending, then success: ERTX holds the channel well past RTX.
     fresh();
@@ -701,7 +701,7 @@ static void test_outgoing_refused_and_pending(void)
     CHECK(!bt_l2cap_is_free(&L, 0));
     T = at + 60000; tick(true);
     CHECK(bt_l2cap_is_free(&L, 0));
-    CHECK_EQ(L.refused, 0xffff);
+    CHECK_EQ(L.refused[0],0xffff);
     CHECK(L.up);
 
     // A success naming a CID outside the dynamic range is not a channel.
@@ -711,7 +711,7 @@ static void test_outgoing_refused_and_pending(void)
     peer_cmd(CONN_RSP, 1, BYTES(W(0x0001), W(0x0040), W(0), W(0)));
     CHECK(bt_l2cap_is_free(&L, 0));
     CHECK_EQ(L.malformed, 1);
-    CHECK_EQ(L.refused, 0xfffd);
+    CHECK_EQ(L.refused[0],0xfffd);
     char text[512];
     bt_l2cap_status(&L, text, sizeof(text));
     CHECK(strstr(text, "accepted without a valid CID (fffd)") != NULL);
@@ -725,13 +725,66 @@ static void test_outgoing_refused_and_pending(void)
     expect_cmd(CONN_REQ, 3, BYTES(W(0x0001), W(0x0042)));
     peer_cmd(REJ, 3, BYTES(W(0)));
     CHECK(bt_l2cap_is_free(&L, 0));
-    CHECK_EQ(L.refused, 0xfffe);
+    CHECK_EQ(L.refused[0],0xfffe);
     // A reject of nothing is a stray; a reject too short is malformed and unanswered.
     peer_cmd(REJ, 3, BYTES(W(0)));
     CHECK_EQ(L.strays, 1);
     peer_cmd(REJ, 4, BYTES(0));
     CHECK_EQ(L.malformed, 2);
     expect_nothing();
+}
+
+// A refusal belongs to the channel index of the attempt it ended: two
+// attempts at once keep theirs apart, a new attempt at an index starts that
+// index's record over, and a channel the peer opens there leaves it alone.
+static void test_refusal_per_channel(void)
+{
+    fresh();
+    char text[1024];
+    bt_l2cap_status(&L, text, sizeof(text));
+    CHECK(strstr(text, "last refusal: none\n") != NULL);
+    CHECK_EQ(bt_l2cap_connect(&L, BT_L2CAP_PSM_SDP, T), 0);
+    CHECK_EQ(bt_l2cap_connect(&L, BT_L2CAP_PSM_AVDTP, T), 1);
+    expect_cmd(CONN_REQ, 1, BYTES(W(0x0001), W(0x0040)));
+    expect_cmd(CONN_REQ, 2, BYTES(W(0x0019), W(0x0041)));
+    uint16_t psm = 0xbeef;
+    CHECK_EQ(bt_l2cap_refusal(&L, 0, &psm), 0);
+    CHECK_EQ(psm, 0x0001);
+    // The second is refused; the first's record is untouched.
+    peer_cmd(CONN_RSP, 2, BYTES(W(0), W(0x0041), W(2), W(0)));
+    CHECK(bt_l2cap_is_free(&L, 1));
+    CHECK_EQ(bt_l2cap_refusal(&L, 1, &psm), 2);
+    CHECK_EQ(psm, 0x0019);
+    CHECK_EQ(bt_l2cap_refusal(&L, 0, NULL), 0);
+    // The first goes unanswered; the second's record is untouched.
+    T += 10000; tick(true);
+    CHECK(bt_l2cap_is_free(&L, 0));
+    CHECK_EQ(bt_l2cap_refusal(&L, 0, &psm), 0xffff);
+    CHECK_EQ(psm, 0x0001);
+    CHECK_EQ(bt_l2cap_refusal(&L, 1, NULL), 2);
+    bt_l2cap_status(&L, text, sizeof(text));
+    CHECK(strstr(text, "channel 0, ours: last refusal: no answer (ffff) psm 0001\n") != NULL);
+    CHECK(strstr(text, "channel 1, ours: last refusal: PSM not supported (0002) psm 0019\n") != NULL);
+    CHECK(strstr(text, "last refusal: none") == NULL);
+    // The peer opens a channel, which takes index 0: index 0's record and
+    // index 1's stay as they were.
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_SDP, true);
+    peer_cmd(CONN_REQ, 9, BYTES(W(0x0001), W(0x0060)));
+    expect_cmd(CONN_RSP, 9, BYTES(W(0x0042), W(0x0060), W(0), W(0)));
+    CHECK(!bt_l2cap_is_free(&L, 0));
+    CHECK_EQ(bt_l2cap_refusal(&L, 0, NULL), 0xffff);
+    CHECK_EQ(bt_l2cap_refusal(&L, 1, NULL), 2);
+    // A new attempt at index 1 starts its record over: not refused, its PSM.
+    CHECK_EQ(bt_l2cap_connect(&L, BT_L2CAP_PSM_SDP, T), 1);
+    CHECK_EQ(bt_l2cap_refusal(&L, 1, &psm), 0);
+    CHECK_EQ(psm, 0x0001);
+    bt_l2cap_status(&L, text, sizeof(text));
+    CHECK(strstr(text, "channel 1, ours: last refusal") == NULL);
+    CHECK(strstr(text, "channel 0, ours: last refusal: no answer (ffff) psm 0001\n") != NULL);
+    // An index past the table has no record.
+    psm = 0xbeef;
+    CHECK_EQ(bt_l2cap_refusal(&L, BT_L2CAP_CHANNELS, &psm), 0);
+    CHECK_EQ(psm, 0);
 }
 
 static void test_rtx(void)
@@ -747,7 +800,7 @@ static void test_rtx(void)
     CHECK(!bt_l2cap_is_free(&L, 0));
     T = at + 10000; tick(true);
     CHECK(bt_l2cap_is_free(&L, 0));
-    CHECK_EQ(L.refused, 0xffff);
+    CHECK_EQ(L.refused[0],0xffff);
     CHECK(L.up);
     // The link is still there: a new channel opens.
     CHECK_EQ(bt_l2cap_connect(&L, 1, T), 0);
@@ -1724,6 +1777,7 @@ int main(int argc, char **argv)
     test_held_payload();
     test_connection_refusals();
     test_outgoing_refused_and_pending();
+    test_refusal_per_channel();
     test_rtx();
     test_identifiers();
     test_config_options();

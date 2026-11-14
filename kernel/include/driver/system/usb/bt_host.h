@@ -92,11 +92,13 @@ typedef struct {
     // with its status line. `sdp_line` is the line the last query ENDED
     // with, whatever the end, and `sdp_ended` counts the ends, so the
     // transport can log each once. `l2cap_refusals` counts the channels we
-    // asked for that the peer refused or never answered.
+    // asked for that the peer refused or never answered, and the last of
+    // them is described by its L2CAP result and the PSM it asked for.
     bt_sdp_sink_t sdp_result;
     bool sdp_result_valid, sdp_result_current;
     char sdp_result_line[128], sdp_line[128];
     uint32_t sdp_ended, l2cap_refusals;
+    uint16_t l2cap_refused_result, l2cap_refused_psm;
     // Reconnection (AUDIO_CLASSIC.md § L6): with a bond and `classic_auto`,
     // page the headphones once when the bond is loaded, and again after a
     // drop they may come back from or a page they did not answer, at

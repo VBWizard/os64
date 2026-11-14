@@ -260,7 +260,7 @@ static void l2_conn_rsp(bt_l2cap_t *l, uint8_t ident, const uint8_t *d, size_t n
         return;
     }
     if(result==0x0000) { l->malformed++; result=0xfffd; }     // success naming a CID no channel may have
-    l->refused=result; l->refused_psm=c->psm;
+    l->refused[i]=result; l->refused_psm[i]=c->psm;
     l2_free(l,(unsigned)i);
 }
 
@@ -419,7 +419,7 @@ static void l2_rejected(bt_l2cap_t *l, uint8_t ident, size_t n)
     for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) {
         bt_l2cap_channel_t *c=&l->ch[i];
         if(!ident || c->state==BT_L2CAP_FREE || c->ident!=ident) continue;
-        if(c->state==BT_L2CAP_CONNECTING) { l->refused=0xfffe; l->refused_psm=c->psm; }
+        if(c->state==BT_L2CAP_CONNECTING) { l->refused[i]=0xfffe; l->refused_psm[i]=c->psm; }
         if(c->state==BT_L2CAP_CONFIG) l2_close(l,i);
         else l2_free(l,i);
         return;
@@ -587,6 +587,7 @@ int bt_l2cap_connect(bt_l2cap_t *l, uint16_t psm, uint64_t now)
     l2_wipe(c,sizeof(*c));
     c->state=BT_L2CAP_CONNECTING; c->outgoing=true; c->psm=psm; c->cid=l2_new_cid(l);
     c->our_mtu=BT_L2CAP_MTU;
+    l->refused[i]=0; l->refused_psm[i]=psm;      // this attempt's record, until it ends
     uint8_t d[4];
     l2_put(d,psm); l2_put(d+2,c->cid);
     l2_request(l,(unsigned)i,L2_CONN_REQ,d,sizeof(d));
@@ -609,6 +610,13 @@ bool bt_l2cap_is_free(const bt_l2cap_t *l, unsigned channel)
 
 uint16_t bt_l2cap_peer_mtu(const bt_l2cap_t *l, unsigned channel)
 { return bt_l2cap_is_open(l,channel) ? l->ch[channel].peer_mtu : 0; }
+
+uint16_t bt_l2cap_refusal(const bt_l2cap_t *l, unsigned channel, uint16_t *psm)
+{
+    if(channel>=BT_L2CAP_CHANNELS) { if(psm) *psm=0; return 0; }
+    if(psm) *psm=l->refused_psm[channel];
+    return l->refused[channel];
+}
 
 bool bt_l2cap_send(bt_l2cap_t *l, unsigned channel, const uint8_t *data, size_t bytes)
 {
@@ -637,7 +645,7 @@ void bt_l2cap_tick(bt_l2cap_t *l, uint64_t now, bool may_send, bt_l2cap_send_t s
         bool unanswered=c->timer && now>=c->deadline;
         bool unfinished=c->state==BT_L2CAP_CONFIG && !l2_open(c) && now>=c->config_deadline;
         if(c->state==BT_L2CAP_FREE || (!unanswered && !unfinished)) continue;
-        if(c->state==BT_L2CAP_CONNECTING) { l->refused=0xffff; l->refused_psm=c->psm; }
+        if(c->state==BT_L2CAP_CONNECTING) { l->refused[i]=0xffff; l->refused_psm[i]=c->psm; }
         if(c->state==BT_L2CAP_CONFIG) l2_close(l,i);
         else l2_free(l,i);
     }
@@ -708,10 +716,23 @@ size_t bt_l2cap_status(const bt_l2cap_t *l, char *out, size_t cap)
                    c->ours_done ? "" : " (ours unconfigured)",c->peer_done ? "" : " (peer's unconfigured)");
         if(n>0) at+=(size_t)n;
     }
+    // A refusal is the last attempt's at its index: a line for each index
+    // whose last channel we asked for was refused, else one saying none.
+    bool refusals=false;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS && at<cap;i++) {
+        if(!l->refused[i]) continue;
+        refusals=true;
+        n=snprintf(out+at,cap-at,"channel %u, ours: last refusal: %s (%04x) psm %04x\n",
+                   i,l2_refusal_text(l->refused[i]),l->refused[i],l->refused_psm[i]);
+        if(n>0) at+=(size_t)n;
+    }
+    if(!refusals && at<cap) {
+        n=snprintf(out+at,cap-at,"last refusal: none\n");
+        if(n>0) at+=(size_t)n;
+    }
     if(at<cap) {
-        n=snprintf(out+at,cap-at,"last refusal: %s (%04x) psm %04x\n"
+        n=snprintf(out+at,cap-at,
                    "malformed %u oversized %u orphans %u unfinished %u closed cid %u fixed cid %u strays %u queue full %u outgrown %u\n",
-                   l2_refusal_text(l->refused),l->refused,l->refused_psm,
                    (unsigned)l->malformed,(unsigned)l->oversized,(unsigned)l->orphans,(unsigned)l->unfinished,
                    (unsigned)l->closed_cid,(unsigned)l->fixed_cid,(unsigned)l->strays,(unsigned)l->queue_full,
                    (unsigned)l->outgrown);

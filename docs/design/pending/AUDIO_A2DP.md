@@ -488,14 +488,14 @@ the sanitizers; a mutant harness.
 - **AVDTP is tried even when the SDP query was not made.** The PSM is
   fixed by assigned numbers; without their record we ask Get Capabilities,
   as for a 1.2 sink.
-- **A refusal for each channel.** L2CAP keeps one "last refusal" for the
-  link, enough while SDP was the only channel we opened. It becomes the
-  channel's.
-- **The Bluetooth probe leaves the stack.** `xhci_bt_probe_t` is 25 KB,
-  built as a local at bring-up (DEBTS). The pump adds about 9 KB: PCM for
-  the most frames a packet may hold (15 frames of 128 stereo samples) and
-  a packet. Bring-up allocates the probe before it fills it. This is the
-  first commit of part P, alone, because the keyboard depends on bring-up.
+- **A refusal for each channel.** L2CAP keeps the last refusal of each
+  channel index, what the last channel we asked for there ended with, so
+  the SDP attempt's and each AVDTP attempt's are read apart.
+- **The Bluetooth probe is allocated.** `xhci_bt_probe_t` is too large for
+  a kernel stack, and the pump adds about 9 KB: PCM for the most frames a
+  packet may hold (15 frames of 128 stereo samples) and a packet.
+  Bring-up allocates the probe before it fills it. This is the first
+  commit of part P, alone, because the keyboard depends on bring-up.
 
 ### The seam: what changes
 

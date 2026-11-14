@@ -1806,6 +1806,9 @@ static void classic_sdp_refused(void)
     assert(HP.conn_reqs==1 && host.sdp_ended==1 && host.sdp_refused==0x0002 && host.l2cap_refusals==1);
     assert(status_has("sdp: not made: the headphones refused the SDP channel\n"));
     assert(status_has("last refusal: PSM not supported (0002) psm 0001\n"));
+    // The refusal is the SDP channel's, at the index its attempt was given.
+    assert(status_has("channel 0, ours: last refusal: PSM not supported (0002) psm 0001\n"));
+    assert(host.l2cap_refused_result==0x0002 && host.l2cap_refused_psm==BT_L2CAP_PSM_SDP);
     assert(!strcmp(host.sdp_line,"sdp: not made: the headphones refused the SDP channel\n"));
     for(unsigned i=0;i<20000;i++) { notify_keyboard(); step(); }
     assert(HP.conn_reqs==1 && host.sdp_ended==1 && host.classic.phase==BT_CLASSIC_READY && !host.failed);

@@ -1649,8 +1649,8 @@ static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
 	if (h->l2cap_refusals != p->logged.l2cap_refusals) {
 		p->logged.l2cap_refusals = h->l2cap_refusals;
 		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u l2cap: the headphones %s the channel we asked for (psm %04x, result %04x)\n",
-		       BT_HOST_CLASSIC_SLOT, h->sdp_refused == 0xffff ? "did not answer" : "refused",
-		       h->l2cap.refused_psm, h->sdp_refused);
+		       BT_HOST_CLASSIC_SLOT, h->l2cap_refused_result == 0xffff ? "did not answer" : "refused",
+		       h->l2cap_refused_psm, h->l2cap_refused_result);
 	}
 	if (h->sdp_ended != p->logged.sdp_ended) {
 		p->logged.sdp_ended = h->sdp_ended;

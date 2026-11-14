@@ -256,11 +256,13 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
     // the same pass.
     if(state==BT_SDP_DONE || state==BT_SDP_FAILED) { host_sdp_ended(h,NULL); return; }
     if(gone) {
-        // Refused or unanswered while connecting (L2CAP records why; ours
-        // is the only channel this part asks for), or closed later.
-        if(state==BT_SDP_IDLE && l->refused) {
-            h->sdp_refused=l->refused; h->l2cap_refusals++;
-            host_sdp_ended(h,l->refused==0xffff?"the headphones did not answer the SDP channel's request":
+        // Refused or unanswered while connecting (L2CAP records why against
+        // the index this attempt was given), or closed later.
+        uint16_t psm, refused=bt_l2cap_refusal(l,ch,&psm);
+        if(state==BT_SDP_IDLE && refused) {
+            h->sdp_refused=refused; h->l2cap_refusals++;
+            h->l2cap_refused_result=refused; h->l2cap_refused_psm=psm;
+            host_sdp_ended(h,refused==0xffff?"the headphones did not answer the SDP channel's request":
                              "the headphones refused the SDP channel");
         } else host_sdp_ended(h,state==BT_SDP_IDLE?"the SDP channel closed before it opened":
                                  "the SDP channel closed before the answer was whole");
