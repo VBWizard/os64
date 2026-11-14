@@ -182,9 +182,12 @@ typedef struct {
     uint8_t avctp_asked, avctp_ends;
     uint32_t avctp_dropped;
     // Who owns the volume (bt_host.c § Slot 2's volume), decided each tick
-    // from state. `vol_owned`: the seam has taken the host's word that the
-    // sink owns it, and has not taken the volume back since (it does at
-    // every attach and detach, so those clear this too). `vol_raw`: the last
+    // from state. `vol_owned`: the seam took the host's word that the sink
+    // owns it, and the host has not seen it take the volume back. The seam
+    // takes it back at every attach and detach: the pump's own (through the
+    // host) clear this at once, but another sink taking the seam is seen
+    // only at the pump's next pull (displaced), and this stays true until
+    // the next volume tick finds the pump detached. `vol_raw`: the last
     // 0..127 level both ends are known to share. `vol_serial`: AVRCP's
     // volume serial as last taken. Counted since start-up: ownerships
     // begun, Sets sent, levels of theirs that changed the seam's number,
