@@ -70,7 +70,7 @@ typedef struct {
 #define OS64_MEDIA_DECODE       (-5)   // the sound is damaged past decoding
 #define OS64_MEDIA_IO           (-6)   // the source failed
 #define OS64_MEDIA_NO_MEMORY    (-7)
-#define OS64_MEDIA_CANNOT_SEEK  (-8)   // the source cannot seek, or the frame is past the end
+#define OS64_MEDIA_CANNOT_SEEK  (-8)   // the source cannot seek, or refused the place asked for
 
 // Probe the source, find its sound, and get ready to decode it. On success
 // *out is the media and *info (if not NULL) describes it.
@@ -82,7 +82,10 @@ int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_med
 int64_t os64_media_decode(os64_media_t *m, int16_t *out, uint32_t frames);
 
 // The next os64_media_decode starts at output frame `frame`. 0, or a
-// negative result above.
+// negative result above. A frame past the end is not refused (a file's
+// length is not always known exactly): the position says that frame, and
+// the next decode answers 0, the end. A player clamps to the length it
+// shows.
 int os64_media_seek(os64_media_t *m, int64_t frame);
 
 // The output frame the next os64_media_decode starts at.
@@ -96,8 +99,10 @@ void os64_media_close(os64_media_t *m);
 // A result's name, for messages: "not a sound file this can read", ...
 const char *os64_media_strerror(int result);
 
-// A source over an open file handle (os64_open's): read and seek on it.
-// The handle stays the caller's, to close after the media.
+// A source over an open file handle (os64_open's): the whole file, read
+// and seeked on that handle, which is moved to the file's start. It stays
+// the caller's, to close after the media. A handle with no position (a
+// pipe) is read from where it is and cannot seek.
 void os64_media_file_source(int32_t handle, os64_media_source_t *out);
 
 #pragma GCC visibility pop

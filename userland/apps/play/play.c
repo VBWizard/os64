@@ -3,8 +3,9 @@
 //     play song.mp3            play it; Ctrl+C stops it at once
 //     play -v song.wav         and say what the file is
 //
-// The file: anything libmedia reads (os64/media.h): MP3, and WAV of any
-// sample width, at any rate and channel count. libmedia hands back the
+// The file: anything libmedia reads (os64/media.h): MP3, and WAV of 8,
+// 16, 24 or 32 bits or 32-bit floating point, a-law or mu-law, at any rate
+// and channel count. libmedia hands back the
 // device's own format (16-bit stereo at 48 kHz), so this program only
 // moves sound. The ordinary blocking write is the clock: it returns when
 // the device has taken the sound, so this program runs for the length of

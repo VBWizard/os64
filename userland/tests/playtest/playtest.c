@@ -2,8 +2,9 @@
 // here goes in, and what the sink was given is checked against it.
 //
 //   1. a quarter second of a 1 kHz sine at 44.1 kHz, MONO, played: the tap
-//      hears exactly a quarter second at 48 kHz (libmedia removes the
-//      resampler's delay), both channels the same, and the same sine:
+//      hears a quarter second at 48 kHz, to within two frames of rounding
+//      (libmedia removes the resampler's delay), both channels the same,
+//      and the same sine:
 //      fitted by least squares, under two counts in 12,000 left over
 //      (resampletest's bar);
 //   2. the same at 48 kHz stereo, which needs no resampler: the tap hears

@@ -636,7 +636,8 @@ virtio because its drain waits for the tick.
   `micros()`'s clock is `micros_now()` (micros.c), which the position
   stamps with so a player can compare
   **`play file`** is the first player: anything **`libmedia.so`** reads
-  (`os64/media.h`: MP3, and WAV of any width, rate and channel count),
+  (`os64/media.h`: MP3, and the WAV forms libav's `configure_args` name,
+  at any rate and channel count),
   which hands back the stream's own format on the output's timeline
   (48 kHz frames from the start, the resampler's delay counted off, so a
   seek lands on the frame asked for). libmedia is the ONE caller of

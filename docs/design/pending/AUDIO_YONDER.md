@@ -501,14 +501,18 @@ above:
   (`OS64_MEDIA_NOT_MEDIA`, `_UNSUPPORTED`, `_NO_SOUND`, `_DECODE`, `_IO`,
   `_NO_MEMORY`, `_CANNOT_SEEK`) and `os64_media_error_text` gives libav's
   last error line for the media.
-- **The lock is narrower than libav's general rule**, so a slow network
-  probe does not hold up another element's open: in this configuration
-  FFmpeg's one-time setups are the decoders' tables (made when a decoder
-  opens) and libavutil's CRC tables (which a demuxer can first ask for
-  while probing). libmedia makes every CRC table at its first open and
-  opens decoders under its lock; `tools/test_av_audit.py` pins the set of
-  one-time setups, so a configuration that adds one fails until it is
-  looked at.
+- **The lock covers less than libav's general rule** (every open and
+  close): in this configuration FFmpeg's one-time setups are libavutil's
+  CRC tables (which a demuxer can first ask for while reading a header)
+  and the decoders' tables (made when a decoder opens, by libmedia and by
+  `avformat_find_stream_info`, which opens decoders of its own). libmedia
+  makes every CRC table at its first open and holds its lock across
+  `find_stream_info` and its decoder's open. Opening the input, reading
+  and decoding take none; two media probing at once take turns at
+  `find_stream_info`. `tools/test_av_audit.py` pins every one-time setup
+  in the build, templates included, so a configuration that adds one fails
+  until it is looked at. (The cold read caught the first draft locking only
+  the decoder's open, which missed `find_stream_info`'s.)
 - **The size is given to FFmpeg even when the source cannot seek**: an
   MP3's end padding is trimmed only by a demuxer that knows where the file
   ends (`mediatest` found it: 48,952 frames for one second, until then).
@@ -521,8 +525,9 @@ above:
   host has no FFmpeg development files, and the glue is proven in ring 3
   instead (`/tests/mediatest`). The host test found that a NaN on one
   side of a fold silenced the other side.
-- **`play` is libmedia's first caller**: anything libmedia reads, its
-  messages the result's name. A 44.1 kHz file now plays without the
+- **`play` is libmedia's first caller**: anything libmedia reads (MP3,
+  and the WAV forms `configure_args` name), its messages the result's
+  name. A 44.1 kHz file now plays without the
   resampler's few frames of leading silence, and an 8-bit WAV plays where
   it was refused (`playtest` changed with it, and gained an MP3).
 

@@ -95,7 +95,13 @@ static void test_one_layout(media_sample_t f, int planar, uint32_t channels, int
     for (uint32_t c = 0; c < channels; c++) planes[c] = planar ? storage + w * FRAMES * c : storage;
     media_role_t roles[8] = { MEDIA_ROLE_LEFT, MEDIA_ROLE_RIGHT, MEDIA_ROLE_CENTRE, MEDIA_ROLE_LFE,
                               MEDIA_ROLE_LEFT_REAR, MEDIA_ROLE_RIGHT_REAR, MEDIA_ROLE_OTHER, MEDIA_ROLE_OTHER };
-    if (!named) for (int c = 0; c < 8; c++) roles[c] = MEDIA_ROLE_OTHER;
+    if (named == 0) for (int c = 0; c < 8; c++) roles[c] = MEDIA_ROLE_OTHER;
+    if (named == 2) {      // no front left or right: a centre, rears and the LFE
+        media_role_t no_fronts[8] = { MEDIA_ROLE_CENTRE, MEDIA_ROLE_LFE, MEDIA_ROLE_LEFT_REAR,
+                                      MEDIA_ROLE_RIGHT_REAR, MEDIA_ROLE_OTHER, MEDIA_ROLE_LFE,
+                                      MEDIA_ROLE_CENTRE, MEDIA_ROLE_OTHER };
+        memcpy(roles, no_fronts, sizeof(roles));
+    }
     media_pcm_in_t in = { f, planar, channels, planes, FRAMES, roles };
     int16_t out[FRAMES * 2 + 2];
     out[FRAMES * 2] = 0x5A5A;
@@ -118,7 +124,7 @@ static void test_one_layout(media_sample_t f, int planar, uint32_t channels, int
                 if (roles[c] == MEDIA_ROLE_LEFT_REAR) wl[c] = h;
                 if (roles[c] == MEDIA_ROLE_RIGHT_REAR) wr[c] = h;
             }
-            if (!fronts) for (uint32_t c = 0; c < channels; c++) wl[c] = wr[c] = 1;
+            if (!fronts) for (uint32_t c = 0; c < channels; c++) wl[c] = wr[c] = roles[c] == MEDIA_ROLE_LFE ? 0 : 1;
             double l = 0, r = 0, sl = 0, sr = 0;
             for (uint32_t c = 0; c < channels; c++) {
                 double v = model_value(f, AT(c));
@@ -185,7 +191,7 @@ int main(void)
     for (int f = MEDIA_SAMPLE_U8; f <= MEDIA_SAMPLE_F64; f++)
         for (int planar = 0; planar < 2; planar++)
             for (uint32_t ch = 1; ch <= 8; ch++)
-                for (int named = 0; named < 2; named++)
+                for (int named = 0; named < 3; named++)
                     test_one_layout((media_sample_t)f, planar, ch, named);
     test_edges();
     if (s_failures) {

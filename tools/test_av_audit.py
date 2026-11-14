@@ -150,15 +150,31 @@ for program in ('play', 'tests/mediatest'):
     check('libmedia.so' in needed(USERLAND / 'bin' / program), f'{program} does not load libmedia.so')
 
 # FFmpeg's ONE-TIME SETUPS, which a build without threads leaves unlocked
-# (README.md § Switched off). libmedia makes the CRC tables at its first
-# open and opens decoders under its lock (libmedia/media.c § THREADS); a
-# configuration that adds a setup anywhere else must be looked at there
-# first, so the set is pinned here and a new member fails the audit.
-known_once = {'libavcodec/mpegaudiodec_common.c', 'libavcodec/mpegaudiodsp.c', 'libavcodec/pcm.c',
-              'libavutil/aes.c', 'libavutil/crc.c'}
-once_sites = {c for c in built if re.search(r'\bff_thread_once\b|\bAVOnce\b', (upstream / c).read_text())}
-check(once_sites == known_once, f'one-time setups changed: new {sorted(once_sites - known_once)}, '
-      f'gone {sorted(known_once - once_sites)}; decide whether libmedia/media.c covers them, then update this set')
+# (README.md § Switched off). Every ff_thread_once in every vendored file,
+# templates and headers included (a decoder's setup can live in a template
+# its .c file includes), with its count, so a new one anywhere fails here.
+# Where each is reached in this build, which is why libmedia/media.c
+# § THREADS is enough:
+#   mpegaudiodec_*, mpegaudiodsp*, pcm.c   a decoder's open: libmedia's,
+#                                          and avformat_find_stream_info's,
+#                                          both under libmedia's lock
+#   crc.c                                  libmedia makes every table at its
+#                                          first open
+#   tx_template.c, aes.c                   nothing in this build's codecs or
+#                                          demuxers; only a program calling
+#                                          av_tx_* or av_aes_* itself
+known_once = {'libavcodec/mpegaudiodec_common.c': 1, 'libavcodec/mpegaudiodec_template.c': 1,
+              'libavcodec/mpegaudiodsp.c': 1, 'libavcodec/mpegaudiodsp_template.c': 1,
+              'libavcodec/pcm.c': 3, 'libavutil/aes.c': 1, 'libavutil/crc.c': 1,
+              'libavutil/tx_template.c': 2}
+once_sites = {}
+for name in manifest['files']:
+    if name.endswith(('.c', '.h')) and name != 'libavutil/thread.h':   # thread.h defines it
+        n = len(re.findall(r'\bff_thread_once\s*\(', (upstream / name).read_text(errors='replace')))
+        if n:
+            once_sites[name] = n
+check(once_sites == known_once, f'one-time setups changed: {sorted(set(once_sites.items()) ^ set(known_once.items()))}; '
+      'decide whether libmedia/media.c § THREADS still covers them, then update this table')
 
 print(f'PASS av audit: FFmpeg {manifest["release"]}, {len(manifest["files"])} pinned files, LGPL configuration, '
       f'{len(dynamic)} exports, {len(undefined)} imports')

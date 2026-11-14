@@ -9,8 +9,8 @@
 //   low-frequency channel is left out, as a stereo downmix does. Each side
 //   is then divided by the sum of the weights it used, so the fold can never
 //   clip, whatever the channels hold. A layout with no front left or right
-//   at all (only unnamed channels) becomes the average of every channel, on
-//   both sides.
+//   at all (unnamed channels, or a centre with rears) becomes the average
+//   of every channel but the low-frequency one, on both sides.
 // - Integer samples are taken as they are: 16-bit unchanged, 8-bit moved to
 //   signed and widened, 32-bit narrowed by rounding off the low half.
 //   Floating point is clamped to full scale and rounded to the nearest
@@ -111,7 +111,8 @@ bool media_pcm_to_stereo(const media_pcm_in_t *in, int16_t *out)
         }
     }
     if (!fronts)
-        for (uint32_t c = 0; c < in->channels; c++) wl[c] = wr[c] = 1.0;
+        for (uint32_t c = 0; c < in->channels; c++)
+            wl[c] = wr[c] = in->roles[c] == MEDIA_ROLE_LFE ? 0.0 : 1.0;
     double sum_l = 0, sum_r = 0;
     for (uint32_t c = 0; c < in->channels; c++) { sum_l += wl[c]; sum_r += wr[c]; }
     if (sum_l == 0) sum_l = 1;
