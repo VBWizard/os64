@@ -195,7 +195,7 @@ static void classic_setup(void)
             for(unsigned b=4;b<248;b++) assert(!name_params[b]);
             break;
         case 2: assert(sent_length==3 && sent_params[0]==0x04 && sent_params[1]==0x01 && sent_params[2]==0x20); break;
-        case 3: assert(sent_length==2 && sent_params[0]==0x05 && sent_params[1]==0x00); break;
+        case 3: assert(sent_length==2 && sent_params[0]==0x01 && sent_params[1]==0x00); break;   // role switch, no sniff
         case 4: assert(sent_length==2 && sent_params[0]==0x00 && sent_params[1]==0x20); break;
         case 5: assert(sent_length==2 && sent_params[0]==0xa0 && sent_params[1]==0x1f); break;
         }

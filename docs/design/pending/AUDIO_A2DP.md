@@ -661,6 +661,14 @@ builders from written briefs (`~/os64-opus-kit/BRIEF_BT_A2DP_WIRING.md` is
 the wiring's). Where the code departs from Part P above, or settles what
 it left open:
 
+- **Sniff is refused, link-wide** (the start-up round's default link
+  policy, `bt_scan.c`). The first sound on the P5 came out as clicks: the
+  headphones had put the idle link into sniff with a 500 ms interval and
+  left it so through the stream, and a link in sniff carries data only at
+  its anchor points. 207 packets left where 750 were due, with 116 slips
+  and the Classic pool full. Sniff with a stream that leaves it is A.4's.
+  The headphones also took the central's role; we send when they poll us,
+  and whether their polling is enough is what the next run shows.
 - **Four Starts in all.** Each rejected Start holds the next for 1, 2 and
   then 4 s; a fourth reject gives the session up, and the pump detaches
   until a new one is made. Their Suspend holds our next Start 2 s.
