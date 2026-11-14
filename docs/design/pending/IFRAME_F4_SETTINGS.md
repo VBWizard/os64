@@ -3,7 +3,8 @@
 F.4b supplies raw native call facts (#571) and explicit engine entry/incumbent
 scopes. The wrapper adds lifecycle-checked queries and scopes, with native
 callback ownership and current/pre-native-entry attribution. The opt-in
-[timer consumer](IFRAME_F4_TIMER_SETTINGS.md) integrates conversion,
+[timer consumer](IFRAME_F4_TIMER_SETTINGS.md) and
+[EventTarget listeners](IFRAME_F4_LISTENER_SETTINGS.md) integrate conversion,
 delivery and lifecycle. Other browser callbacks, jobs and operation-specific
 security checks remain acceptance gates; F.4 remains in progress.
 
@@ -168,7 +169,7 @@ before the body result transfers to the caller, including abrupt returns.
 `os64_js_settings_realm` exposes ENTRY and INCUMBENT as checked borrowed realm
 handles only inside such a scope. It refuses missing/unregistered settings,
 retired/staged realms and raw-only entry, without sampling time or touching
-the pending exception. The opt-in timer cluster consumes these interfaces.
+the pending exception. The opt-in timer and listener clusters consume these interfaces.
 Full signatures, ownership and status rules are in
 [libjs CONTRACT.md](../../../userland/libjs/CONTRACT.md).
 
@@ -200,8 +201,9 @@ separate conversion-time incumbent capture from invocation-time preparation.
 Associated object realm is a separate requirement
 ([§3.1](https://webidl.spec.whatwg.org/#js-environment)); a callable-target query
 is not a general proof for bound functions, proxies or callback objects.
-The timer adapter now supplies a callable-associated query; arbitrary callback
-objects still require their own proof.
+The timer adapter supplies a callable-associated query. The listener adapter
+adds immutable live creation identity for noncallable callback objects; its
+ownership and lifecycle policy is in the listener chapter.
 Evidence: [IFRAME_F4_CALLBACK_CAPTURE_VALIDATION.md](IFRAME_F4_CALLBACK_CAPTURE_VALIDATION.md).
 
 ## Current execution and native entry
@@ -252,7 +254,7 @@ Before publishing browser settings queries, implement and prove:
 
 - DOM integration of checked entry/lifecycle scopes and role-specific
   attribution, including relevant settings from the target binding.
-- Extend the timer integration to other WebIDL conversion and invocation sites,
+- Extend timer/listener integration to the remaining WebIDL conversion and invocation sites,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.
 - Promise reaction and thenable capture/invocation, including bound foreign

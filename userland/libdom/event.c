@@ -265,15 +265,31 @@ static void count(os64_dom_t *dom, const DListener *listener, int delta)
     if (listener->kind >= 0 && !listener->engine) dom->listen_counts[listener->kind] += (uint32_t)delta;
 }
 
-static void set_callback(os64_dom_t *dom, DListener *listener, JSValue value)
+static void set_callback_record(os64_dom_t *dom, DListener *listener, JSValue value,
+                                os64_js_callback_t *captured, os64_js_realm_t *entry)
 {
     dom = listener->owner;
-    if (!JS_IsUndefined(listener->callback)) {
-        JS_FreeValueRT(dom->engine, listener->callback);
-        if (!listener->engine) dom->listeners_held--;
-    }
+    JSValue previous = listener->callback;
+    os64_js_callback_t old = listener->captured;
+    /* Transfer the old hold out and publish the replacement before releasing
+     * it: native finalizers must not observe a stale callback alias. */
     listener->callback = value;
-    if (!JS_IsUndefined(value) && !listener->engine) dom->listeners_held++;
+    listener->callback_entry = entry;
+    listener->captured = captured ? *captured : (os64_js_callback_t)OS64_JS_CALLBACK_INIT;
+    if (captured) *captured = (os64_js_callback_t)OS64_JS_CALLBACK_INIT;
+    if (!listener->engine) {
+        if (!JS_IsUndefined(previous)) dom->listeners_held--;
+        if (!JS_IsUndefined(value)) dom->listeners_held++;
+    }
+    if (old.runtime) {
+        os64_js_outcome_t out;
+        os64_js_callback_clear(dom->runtime, OS64_JS_ABI_ID, &old, &out);
+    } else JS_FreeValueRT(dom->engine, previous);
+}
+
+static void set_callback(os64_dom_t *dom, DListener *listener, JSValue value)
+{
+    set_callback_record(dom, listener, value, NULL, NULL);
 }
 
 static void slot_state(os64_dom_t *dom, DListener *slot, uint8_t state)
@@ -359,6 +375,7 @@ static DListener *listener_new(os64_dom_t *dom, JSContext *ctx, DValue *entry, c
     listener->type = copy;
     listener->kind = d_event_kind(type);
     listener->callback = JS_UNDEFINED;
+    listener->captured = (os64_js_callback_t)OS64_JS_CALLBACK_INIT;
     listener->engine = entry->engine_held;
     if (at_head || entry->listeners == NULL) {
         listener->next = entry->listeners;
@@ -655,6 +672,44 @@ static JSValue call_callback(os64_dom_t *dom, JSContext *ctx, DValue *entry,
     return result;
 }
 
+typedef struct {
+    os64_dom_t *dom, *counter;
+    DValue *target;
+    JSValueConst event;
+    const os64_js_callback_t *captured;
+    os64_js_realm_t *entry;
+} ListenerCall;
+
+static bool listener_settings_live(const os64_js_callback_t *captured, os64_js_realm_t *entry)
+{
+    return !os64_js_realm_is_retired(captured->incumbent) && !os64_js_realm_is_retired(entry);
+}
+
+static JSValue prepared_listener(JSContext *ctx, JSValueConst callback, void *opaque)
+{
+    ListenerCall *call = opaque;
+    if (!d_delivery_active(listener_activity(call->dom, call->target))) return JS_UNDEFINED;
+    if (JS_IsFunction(ctx, callback))
+        return call_callback(call->dom, ctx, call->target, callback, call->event, call->counter);
+    JSValue method = JS_GetPropertyStr(ctx, callback, "handleEvent");
+    if (JS_IsException(method)) return method;
+    JSValue result = JS_UNDEFINED;
+    /* A getter may retire settings or move the target to an inactive owner.
+     * Recheck before entering the method it returned. */
+    if (listener_settings_live(call->captured, call->entry) &&
+        d_delivery_active(listener_activity(call->dom, call->target))) {
+        if (!JS_IsFunction(ctx, method)) result = JS_ThrowTypeError(ctx, "Listener has no handleEvent method");
+        else {
+            int eligible = d_delivery_eligible(listener_activity(call->dom, call->target), ctx, method);
+            if (eligible > 0 && call->counter) call->counter->listener_calls++;
+            result = eligible < 0 ? JS_EXCEPTION : eligible == 0 ? JS_UNDEFINED
+                : JS_Call(ctx, method, callback, 1, &call->event);
+        }
+    }
+    JS_FreeValue(ctx, method);
+    return result;
+}
+
 /* HTML's special error event handling: window's onerror, given an ErrorEvent
  * named error, is called with the event's message, filename, lineno, colno
  * and error rather than with the event. */
@@ -667,13 +722,20 @@ static JSValue call_error_handler(JSContext *ctx, JSValueConst callback, JSValue
     return JS_Call(ctx, callback, self, 5, args);
 }
 
+static bool sticky(os64_js_status_t status)
+{
+    return status == OS64_JS_LIMIT || status == OS64_JS_CANCELLED ||
+        status == OS64_JS_HOST_FAILURE || status == OS64_JS_FAILED_RUNTIME;
+}
+
 /* Run one record against an event. The callback is taken before a `once`
  * listener is removed, so the record's own reference may go first. HTML's
  * event handler processing: a handler that returns false cancels, except
  * window's onerror called for an error event, which cancels by returning
  * true. */
 static JSValue run_record(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListener *listener,
-                          JSValueConst callback, JSValueConst event, bool host)
+                          JSValueConst callback, JSValueConst event, bool host,
+                          const os64_js_callback_t *captured, os64_js_realm_t *callback_entry)
 {
     if (!d_delivery_active(listener_activity(dom, entry))) return JS_UNDEFINED;
     JSValue held = JS_UNDEFINED;
@@ -693,6 +755,22 @@ static JSValue run_record(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListe
         if (eligible > 0 && counter) counter->listener_calls++;
         result = eligible < 0 ? JS_EXCEPTION : eligible == 0 ? JS_UNDEFINED
             : call_error_handler(ctx, callback, entry->value, state);
+    } else if (captured && captured->runtime) {
+        ListenerCall call = {dom, counter, entry, event, captured, callback_entry};
+        os64_js_outcome_t out;
+        result = JS_UNDEFINED;
+        os64_js_status_t status = os64_js_callback_with_settings(callback_entry, OS64_JS_ABI_ID,
+            captured, prepared_listener, &call, &result, &out);
+        if (status != OS64_JS_OK && status != OS64_JS_EXCEPTION) {
+            /* Budget failure can accompany the body's pending exception.
+             * Preserve it; terminal failure must not enter a script catch. */
+            if (!JS_IsException(result)) {
+                JS_FreeValue(ctx, result);
+                result = status == OS64_JS_REALM_RETIRED || status == OS64_JS_REALM_FAILED ? JS_UNDEFINED
+                    : JS_ThrowInternalError(ctx, "Listener settings refused: %s", out.message);
+            }
+            if (sticky(status)) JS_SetUncatchableException(ctx, true);
+        }
     } else result = call_callback(dom, ctx, entry, callback, event, counter);
     if (listener->handler != D_LISTENER && state != NULL && JS_VALUE_GET_TAG(result) == JS_TAG_BOOL &&
         JS_VALUE_GET_BOOL(result) == special)
@@ -714,9 +792,13 @@ static JSValue invoke(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
     if (dom == NULL) return JS_EXCEPTION;
     DListener *listener = dom->invoking;
     DValue *entry = dom->invoking_entry;
+    const os64_js_callback_t *captured = dom->invoking_capture;
+    os64_js_realm_t *callback_entry = dom->invoking_realm;
     dom->invoking = NULL;
+    dom->invoking_capture = NULL;
+    dom->invoking_realm = NULL;
     if (listener == NULL || entry == NULL || argc < 2) return JS_ThrowTypeError(ctx, "Nothing to invoke");
-    JSValue result = run_record(dom, ctx, entry, listener, argv[1], argv[0], true);
+    JSValue result = run_record(dom, ctx, entry, listener, argv[1], argv[0], true, captured, callback_entry);
     if (JS_IsException(result)) return result;
     JS_FreeValue(ctx, result);
     return JS_UNDEFINED;
@@ -727,12 +809,6 @@ static void report_pending(os64_dom_t *dom, JSContext *ctx)
     JSValue error = JS_GetException(ctx);
     d_report(dom, ctx, error);
     JS_FreeValue(ctx, error);
-}
-
-static bool sticky(os64_js_status_t status)
-{
-    return status == OS64_JS_LIMIT || status == OS64_JS_CANCELLED ||
-        status == OS64_JS_HOST_FAILURE || status == OS64_JS_FAILED_RUNTIME;
 }
 
 void d_outcome_fold(os64_js_outcome_t *into, const os64_js_outcome_t *from)
@@ -805,6 +881,10 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
         if (runs && slot) runs = listener->handler == D_SLOT_FUNCTION || listener->handler == D_SLOT_UNCOMPILED;
         if (runs) {
             JSValue callback = slot ? JS_UNDEFINED : JS_DupValue(d->ctx, listener->callback);
+            os64_js_callback_t captured = OS64_JS_CALLBACK_INIT;
+            os64_js_realm_t *callback_entry = listener->callback_entry;
+            if (!slot && listener->captured.runtime)
+                captured = (os64_js_callback_t){callback, listener->captured.runtime, listener->captured.incumbent};
             if (listener->once) {
                 remove_listener(dom, entry, listener);
                 listeners_changed(dom, entry);
@@ -823,17 +903,21 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
             if (d->host != NULL) {
                 JSValue args[2] = {d->object, callback};
                 os64_js_outcome_t call, point;
-                /* A retained object listener can yield a live method after
-                 * its registration realm retires. Enter through the active
-                 * target in that case, then gate the resolved method inside
-                 * the guarded call. */
+                /* Legacy object listeners can yield a live method after
+                 * their registration realm retires. The active target can
+                 * drive that call; captured settings additionally gate
+                 * entry/incumbent before looking up the method. */
                 os64_dom_t *driver = d_delivery_active(callback_dom) ? callback_dom : listener_activity(dom, entry);
                 driver->invoking = listener;
                 driver->invoking_entry = entry;
+                driver->invoking_capture = &captured;
+                driver->invoking_realm = callback_entry;
                 os64_js_realm_call(driver->realm, OS64_JS_ABI_ID, driver->invoke->value, entry->value, 2, args,
                              NULL, &call);
                 driver->invoking = NULL;
                 driver->invoking_entry = NULL;
+                driver->invoking_capture = NULL;
+                driver->invoking_realm = NULL;
                 d_script_leave(callback_dom, &before, true);
                 callback_dom->current_event = callback_active.previous;
                 JS_FreeValueRT(dom->engine, callback);
@@ -848,7 +932,7 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                 } else { result = -1; break; }
             } else {
                 uint32_t script = listener->script;
-                JSValue value = run_record(callback_dom, callback_ctx, entry, listener, callback, d->object, false);
+                JSValue value = run_record(callback_dom, callback_ctx, entry, listener, callback, d->object, false, &captured, callback_entry);
                 d_script_leave(callback_dom, &before, false);
                 callback_dom->current_event = callback_active.previous;
                 JS_FreeValue(d->ctx, callback);
@@ -1635,12 +1719,42 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
         return result < 0 ? JS_EXCEPTION : JS_NewBool(ctx, result != 0);
     }
     if (argc < 2) return JS_ThrowTypeError(ctx, "Listener methods need a type and a callback");
-    if (JS_IsNull(argv[1]) || JS_IsUndefined(argv[1])) return JS_UNDEFINED;
-    if (!JS_IsObject(argv[1])) return JS_ThrowTypeError(ctx, "A listener must be an object");
+    bool tracked = registration->cluster && registration->cluster->listener_settings;
     bool capture, once;
-    if (listener_options(ctx, argc, argv, &capture, &once) < 0) return JS_EXCEPTION;
     DString type = {0};
-    if (!d_string(dom, ctx, argv[0], &type)) return JS_EXCEPTION;
+    os64_js_callback_t captured = OS64_JS_CALLBACK_INIT;
+    os64_js_realm_t *callback_entry = NULL;
+    JSValue result = JS_UNDEFINED;
+    if (tracked) {
+        /* WebIDL argument order: type, nullable callback, then options. The
+         * captured incumbent precedes getters on the options dictionary. */
+        if (!d_string(dom, ctx, argv[0], &type)) return JS_EXCEPTION;
+        bool present = !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1]);
+        if (present && !JS_IsObject(argv[1])) {
+            result = JS_ThrowTypeError(ctx, "A listener must be an object");
+            goto done;
+        }
+        if (present && magic == M_ADD) {
+            os64_js_outcome_t out;
+            JSContext *associated = JS_GetObjectRealm(ctx, argv[1]);
+            callback_entry = associated ? os64_js_realm_from_context(dom->runtime, associated, OS64_JS_ABI_ID, &out) : NULL;
+            if (!callback_entry || os64_js_callback_capture(dom->runtime, OS64_JS_ABI_ID, argv[1], &captured, &out) != OS64_JS_OK) {
+                result = d_error(ctx, "InvalidStateError", "Listener callback settings are unavailable");
+                goto done;
+            }
+        }
+        if (listener_options(ctx, argc, argv, &capture, &once) < 0) { result = JS_EXCEPTION; goto done; }
+        if (!present) goto done;
+        if (captured.runtime && !listener_settings_live(&captured, callback_entry)) {
+            result = d_error(ctx, "InvalidStateError", "Listener callback settings have retired");
+            goto done;
+        }
+    } else {
+        if (JS_IsNull(argv[1]) || JS_IsUndefined(argv[1])) return JS_UNDEFINED;
+        if (!JS_IsObject(argv[1])) return JS_ThrowTypeError(ctx, "A listener must be an object");
+        if (listener_options(ctx, argc, argv, &capture, &once) < 0) return JS_EXCEPTION;
+        if (!d_string(dom, ctx, argv[0], &type)) return JS_EXCEPTION;
+    }
     /* Listener option getters and type conversion can adopt the target. */
     if (entry != NULL) dom = entry->node ? d_owner(dom, entry->node) : entry->dom;
     DListener *found = NULL;
@@ -1648,14 +1762,13 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
         if (listener->handler == D_LISTENER && !listener->removed && listener->capture == capture &&
             JS_VALUE_GET_PTR(listener->callback) == JS_VALUE_GET_PTR(argv[1]) &&
             os64_strcmp(listener->type, type.data) == 0) found = listener;
-    JSValue result = JS_UNDEFINED;
     if (magic == M_REMOVE) {
         if (found != NULL) remove_listener(dom, entry, found);
     } else if (found == NULL) {
         for (int kind = 0; entry == dom->window && kind < D_EVENT_COUNT; kind++)
             if (window_reflecting(kind) && slot_attribute_pending(dom, ctx, entry, kind) < 0) {
-                d_string_free(dom, &type);
-                return JS_EXCEPTION;
+                result = JS_EXCEPTION;
+                goto done;
             }
         os64_dom_t *owner = d_callback_owner(registration, ctx, argv[1]);
         uint32_t script = owner ? d_callback_script(owner, ctx, argv[1]) : D_SCRIPT_FAILED;
@@ -1664,14 +1777,21 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
         else {
             listener->capture = capture;
             listener->once = once;
-            set_callback(dom, listener, JS_DupValue(ctx, argv[1]));
+            if (captured.runtime) {
+                set_callback_record(dom, listener, captured.value, &captured, callback_entry);
+            } else set_callback(dom, listener, JS_DupValue(ctx, argv[1]));
             listener->script = script;
             listener->callback_owner = owner;
             count(dom, listener, 1);
         }
     }
-    d_string_free(dom, &type);
     listeners_changed(dom, entry);
+done:
+    if (captured.runtime) {
+        os64_js_outcome_t out;
+        os64_js_callback_clear(dom->runtime, OS64_JS_ABI_ID, &captured, &out);
+    }
+    d_string_free(dom, &type);
     return result;
 }
 
@@ -2328,7 +2448,10 @@ void d_event_target_finalize(JSRuntime *rt, DValue *entry)
 {
     if (entry->dom == NULL) return;
     for (DListener *listener = entry->listeners; listener != NULL; listener = listener->next) {
-        JS_FreeValueRT(rt, listener->callback);
+        if (listener->captured.runtime) {
+            os64_js_outcome_t out;
+            os64_js_callback_clear(entry->dom->runtime, OS64_JS_ABI_ID, &listener->captured, &out);
+        } else JS_FreeValueRT(rt, listener->callback);
         listener->callback = JS_UNDEFINED;
     }
     d_event_free(entry->dom, entry);
