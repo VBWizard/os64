@@ -102,6 +102,16 @@ void audio_sink_attach(const audio_sink_t *sink);
 void audio_sink_detach(const audio_sink_t *sink);
 void audio_sink_failed(const audio_sink_t *sink, const char *why);   // `why` and the sink's name must last until it detaches
 void audio_sink_delay(const audio_sink_t *sink, uint32_t delay_us);
+// The volume, as the sink sees it (audio_stream.h has the rules). Owning:
+// while true the pull applies no gain and /dev/volume is the sink's to
+// carry out at its end. Setting: the volume is this at the sink's end,
+// 0..100. Each is refused (false) from a sink that is not the sink, and
+// the seam takes the volume back by itself whenever a sink attaches or
+// detaches. The number is whatever /dev/volume reads. Any thread; never
+// sleep; take the stream's lock, so never from inside a nudge.
+bool audio_sink_owns_volume(const audio_sink_t *sink, bool owned);
+bool audio_sink_volume_set(const audio_sink_t *sink, uint32_t volume);
+uint32_t audio_sink_volume_now(const audio_sink_t *sink);
 // Has `sink` sound to take now: it is the sink, the ring holds frames and
 // the stream is not paused (audio_stream_has_sound). Any thread; never
 // sleeps; takes the stream's lock, so never from inside a nudge.

@@ -6,6 +6,13 @@
 
 #define GAIN_UNITY 32768
 
+// The gain from the number, or unity while the sink owns the volume.
+static void set_gain(audio_stream_t *s)
+{
+	s->gain_q15 = s->volume_owned ? GAIN_UNITY
+	                              : (int32_t)(s->volume * s->volume * (uint32_t)GAIN_UNITY / 10000u);
+}
+
 void audio_stream_init(audio_stream_t *s, int16_t *ring, uint32_t capacity_frames, uint32_t rate)
 {
 	uint8_t *raw = (uint8_t *)s;
@@ -15,7 +22,7 @@ void audio_stream_init(audio_stream_t *s, int16_t *ring, uint32_t capacity_frame
 	s->capacity = capacity_frames;
 	s->rate = rate;
 	s->volume = 100;
-	s->gain_q15 = GAIN_UNITY;
+	set_gain(s);
 }
 
 uint32_t audio_stream_state(const audio_stream_t *s)
@@ -351,8 +358,30 @@ bool audio_stream_set_volume(audio_stream_t *s, uint32_t volume)
 	if (volume > 100)
 		return false;
 	s->volume = volume;
-	s->gain_q15 = (int32_t)(volume * volume * (uint32_t)GAIN_UNITY / 10000u);
+	set_gain(s);
 	return true;
+}
+
+// The null sink has no end to carry a volume out at.
+static bool is_the_sink(const audio_stream_t *s, const void *sink)
+{
+	return sink != NULL && sink == s->sink;
+}
+
+bool audio_stream_sink_owns_volume(audio_stream_t *s, const void *sink, bool owned)
+{
+	if (!is_the_sink(s, sink))
+		return false;
+	s->volume_owned = owned;
+	set_gain(s);
+	return true;
+}
+
+bool audio_stream_sink_volume_set(audio_stream_t *s, const void *sink, uint32_t volume)
+{
+	if (!is_the_sink(s, sink))
+		return false;
+	return audio_stream_set_volume(s, volume);
 }
 
 void audio_stream_sink_attach(audio_stream_t *s, const void *sink)
@@ -360,6 +389,8 @@ void audio_stream_sink_attach(audio_stream_t *s, const void *sink)
 	s->sink = sink;
 	s->failed = false;
 	s->delay_us = 0;
+	s->volume_owned = false;
+	set_gain(s);
 	retire_everything(s);
 }
 

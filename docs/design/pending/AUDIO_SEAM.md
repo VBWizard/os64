@@ -211,7 +211,11 @@ that makes the slider's middle sound like half), multiplied per sample and
 rounded toward zero (a gain of at most one cannot overflow). 100 is exactly
 unity and copies without arithmetic. The value
 is the kernel's until reboot; keeping it across boots is a conf question
-for whoever builds the slider.
+for whoever builds the slider. A sink that can set the loudness at its end
+(headphones with absolute volume) may OWN the volume
+(AUDIO_REMOTE.md § Part W): the number is then its to carry out and the
+pull applies no gain; the seam takes it back whenever a sink attaches or
+detaches.
 
 **The tap** is the same pull seen from the side. While `/dev/audiotap` is
 open, each pull also appends a record to a capture ring (one second,
