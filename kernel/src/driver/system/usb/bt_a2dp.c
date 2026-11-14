@@ -184,14 +184,17 @@ void bt_a2dp_step(bt_a2dp_t *p, bt_avdtp_t *a, uint64_t now, const bt_a2dp_ops_t
         if(!p->streaming || their_start) {
             p->streaming=true;
             p->anchor=now; p->frames_since_anchor=0; p->anchors++;
-            p->stopped=false; p->quiet_since=0;
+            p->stopped=false;
         }
     } else p->streaming=false;
 
     // Quiet: silence or a pause, seen by the pulls, or nothing that can be
     // sent at all. Three seconds of it suspends, unless our last Suspend
     // was refused and sound has not come since. Leaving STREAMING ends both
-    // the spell and the refusal, which belonged to that stream.
+    // the spell and the refusal, which belonged to that stream; their Start
+    // begins a new spell, since it may have come between two passes after
+    // a Suspend no pass saw accepted.
+    if(their_start) p->quiet_since=0;
     if(st==BT_AVDTP_STREAMING) {
         if(!p->streaming && !p->quiet_since) p->quiet_since=now;
         if(p->quiet_since && now-p->quiet_since>=BT_A2DP_QUIET_US && !p->suspend_refused)

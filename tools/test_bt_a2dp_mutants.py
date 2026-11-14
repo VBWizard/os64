@@ -52,7 +52,7 @@ mutants = [
     # Frames a packet.
     ('the-mtu-forgets-the-header', '    uint32_t n=(mtu-BT_A2DP_HEADER_BYTES)/fb;', '    uint32_t n=mtu/fb;'),
     ('frames-are-not-capped', '    if(n>BT_A2DP_FRAMES_MAX) n=BT_A2DP_FRAMES_MAX;\n', ''),
-    ('the-buffer-is-not-a-limit', '    if(n>room) n=room;\n', ''),
+    ('the-buffer-is-not-a-limit', '    if(n>room) n=room;', '    if(n>room+1) n=room;'),
     ('a-small-buffer-is-not-refused', '    if(cap<BT_A2DP_HEADER_BYTES+fb) return 0;\n', ''),
     ('a-small-mtu-is-not-a-failure', '{ a2_fail(p,"the media channel\'s MTU is smaller than a frame",ops,ctx); return 0; }', '{ return 0; }'),
     # The clock.
@@ -72,7 +72,7 @@ mutants = [
      '    if(p->stopped) { p->stopped=false; }'),
     ('streaming-is-not-anchored', '            p->anchor=now; p->frames_since_anchor=0; p->anchors++;\n            p->stopped=false;',
      '            p->frames_since_anchor=0; p->anchors++;\n            p->stopped=false;'),
-    ('their-start-is-not-anchored', '        if(!p->streaming || their_start) {', '        if(!p->streaming) {'),
+    ('their-start-is-not-anchored', '        if(!p->streaming || their_start) {', '        if(!p->streaming || (their_start && 0)) {'),
     # The pulls.
     ('a-paused-pull-sends', '    if(got.paused) { a2_quiet(p,now); return 0; }', '    if(got.paused) { a2_quiet(p,now); }'),
     ('a-pull-not-ours-sends', '    if(!got.yours) { p->attached=false; p->displaced=true; p->streaming=false; return 0; }', ''),
@@ -101,7 +101,7 @@ mutants = [
      '{ p->suspend_rejects_seen+=suspend_rejects; }'),
     ('leaving-streaming-keeps-the-quiet', '    } else {\n        p->quiet_since=0;\n        p->suspend_refused=false;\n    }\n}',
      '    } else {\n        p->suspend_refused=false;\n    }\n}'),
-    ('streaming-starts-quiet', '            p->stopped=false; p->quiet_since=0;\n', '            p->stopped=false;\n'),
+    ('their-start-keeps-the-quiet', '    if(their_start) p->quiet_since=0;\n', ''),
     # Holding a Start back.
     ('their-suspend-holds-nothing', '        p->hold_until=now+BT_A2DP_THEIRS_US;\n', ''),
     ('their-suspend-holds-1s', '#define BT_A2DP_THEIRS_US      2000000u', '#define BT_A2DP_THEIRS_US      1000000u', HEADER),
@@ -116,7 +116,7 @@ mutants = [
     ('no-walk-is-begun', '    if(st==BT_AVDTP_CONNECTED && bt_avdtp_may_begin(a,ms)) bt_avdtp_begin(a,ms);\n', ''),
     # The session.
     ('the-edges-are-not-read-afresh', '        a2_wipe(&p->seen,sizeof(p->seen));\n', '        (void)0;\n'),
-    ('a-new-session-is-not-begun', '    else if(new_session) a2_session(p,s,delay,ops,ctx);\n', ''),
+    ('a-new-session-is-not-begun', '    else if(new_session) a2_session(p,s,delay,ops,ctx);', '    else if(new_session && 0) a2_session(p,s,delay,ops,ctx);'),
     ('a-session-keeps-the-sequence', '    p->pending=false; p->sequence=0; p->timestamp=0; p->slow_run=0;',
      '    p->pending=false; p->timestamp=0; p->slow_run=0;'),
     ('a-session-keeps-the-timestamp', '    p->pending=false; p->sequence=0; p->timestamp=0; p->slow_run=0;',
@@ -127,7 +127,7 @@ mutants = [
      '    p->hold_until=0; p->start_rejects=0; p->displaced=false;'),
     ('settings-of-no-frame-are-begun', '    p->encoder_ok=p->frame_bytes && ops->encoder_begin(ctx,&p->settings);',
      '    p->encoder_ok=ops->encoder_begin(ctx,&p->settings);'),
-    ('a-failed-begin-is-not-attached', '    if(!p->attached) a2_attach(p,delay_us,ops,ctx);\n    a2_fail(', '    a2_fail('),
+    ('a-failed-begin-is-not-attached', '    if(!p->attached) a2_attach(p,delay_us,ops,ctx);\n    a2_fail(', '    if(0) a2_attach(p,delay_us,ops,ctx);\n    a2_fail('),
     ('a-good-begin-does-not-clear-the-seam', '            if(p->attached) a2_detach(p,ops,ctx);\n', ''),
     ('a-good-begin-keeps-the-failure', '            p->failed=false; p->why=0;\n', '            p->why=0;\n'),
     # Attachment and the delay.
@@ -143,7 +143,7 @@ mutants = [
     ('the-default-is-100ms', '#define BT_A2DP_DEFAULT_DELAY_US 150000u', '#define BT_A2DP_DEFAULT_DELAY_US 100000u', HEADER),
     ('a-failed-sink-is-not-closed', '    if(p->failed && (st==BT_AVDTP_OPEN || st==BT_AVDTP_STREAMING) && bt_avdtp_close(a,ms)) {',
      '    if(0 && bt_avdtp_close(a,ms)) {'),
-    ('the-link-drop-does-not-detach', '    if(p->attached) ops->detach(ctx);\n    a2_wipe(p,sizeof(*p));', '    a2_wipe(p,sizeof(*p));'),
+    ('the-link-drop-does-not-detach', '    if(p->attached) ops->detach(ctx);\n    a2_wipe(p,sizeof(*p));', '    if(0) ops->detach(ctx);\n    a2_wipe(p,sizeof(*p));'),
 ]
 
 caught, missed, unbuilt = [], [], []

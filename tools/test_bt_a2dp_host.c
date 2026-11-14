@@ -244,6 +244,7 @@ static struct {
     uint8_t max_bitpool;
     int reject_starts, reject_suspends;
     bool sit_on_suspend;      // keep the answer to our Suspend until released
+    bool sit_on_start;        // never answer our Start
     bool sitting;
     unsigned sat_label;
     int starts, suspends, closes, aborts;
@@ -276,6 +277,7 @@ static void peer_take(const uint8_t *m, size_t n)
     case START:
         if (peer.starts < TIMES) peer.start_at[peer.starts] = now;
         peer.starts++;
+        if (peer.sit_on_start) break;
         if (peer.reject_starts > 0) { peer.reject_starts--; FEED(REJ(l), START, S(3), E_BAD_STATE); }
         else FEED(ACC(l), START);
         break;
@@ -386,7 +388,7 @@ static size_t make(void)
     CHECK_EQ(pkt[1], 96);
     CHECK_EQ(be16(pkt + 2), E.seq);
     CHECK_EQ(be32(pkt + 4), E.ts);
-    CHECK_EQ(be32(pkt + 8), BT_A2DP_SSRC);
+    CHECK_EQ(be32(pkt + 8), 1);                 // the SSRC chosen
     uint32_t frames = pkt[12] & 0x0f;
     CHECK_EQ(pkt[12] >> 4, 0);
     CHECK(frames >= 1);
@@ -518,7 +520,7 @@ static void test_connect_to_streaming(void)
     pass(10 * MS);
     CHECK_EQ(M.attaches, 1);
     CHECK(M.delay_told);
-    CHECK_EQ(M.delay, BT_A2DP_DEFAULT_DELAY_US);
+    CHECK_EQ(M.delay, 150000);
     CHECK_EQ(E.begins, 1);
     CHECK_EQ(E.settings.rate, 48000); CHECK(E.settings.joint); CHECK_EQ(E.settings.bitpool, 51);
     CHECK_EQ(E.fb, 115);
@@ -573,7 +575,7 @@ static void test_hour(void)
     while (now < end) {
         pass(1 * MS + (uint64_t)(rand() % 30) * MS);
         // Every packet due by now is made: the count is the frames due.
-        CHECK_EQ(W.anchor, anchor);
+        if (!P.streaming || W.anchor != anchor) { CHECK(P.streaming); CHECK_EQ(W.anchor, anchor); break; }
         while (W.anchor + (due_count * 640) * SEC / 48000 <= now) due_count++;
         if (due_count * 640 != W.made_since_anchor) { CHECK_EQ(W.made_since_anchor, due_count * 640); break; }
     }
@@ -586,7 +588,7 @@ static void test_hour(void)
 }
 
 // A pass 150 ms late is a slip: one packet, the clock anchored at it. One
-// 90 ms late is caught up, three packets a pass, with no slip.
+// 99 ms late is caught up, three packets a pass, with no slip.
 static void test_late(void)
 {
     to_streaming();
@@ -598,7 +600,7 @@ static void test_late(void)
     run(200 * MS, 10 * MS);
     CHECK_EQ(P.slips, 1);
     uint64_t a = W.anchor, made = W.made_since_anchor;
-    pass(90 * MS);
+    pass(99 * MS);
     CHECK_EQ(P.slips, 1);
     CHECK_EQ(W.pass_packets, 3);
     CHECK_EQ(W.anchor, a);
@@ -710,6 +712,21 @@ static void test_pause(void)
     CHECK_EQ(peer.starts, 2);
     pass(10 * MS);
     CHECK(W.packets > packets);
+
+    // A pause of a second, under the Suspend's three: the resume anchors
+    // the clock afresh, which is not a slip, and no Start is needed.
+    run(100 * MS, 10 * MS);
+    uint32_t slips = P.slips;
+    M.paused = true;
+    run(1 * SEC, 10 * MS);
+    M.paused = false;
+    packets = W.packets;
+    pass(10 * MS);
+    CHECK(W.packets > packets);
+    CHECK_EQ(P.anchor, now);
+    CHECK_EQ(P.slips, slips);
+    CHECK_EQ(peer.starts, 2);
+    CHECK_EQ(peer.suspends, 1);
 }
 
 // Pause, then resume, at each point of a Suspend: before it leaves, while
@@ -757,6 +774,21 @@ static void test_start_rejects(void)
     run(5 * SEC, 10 * MS);
     CHECK_EQ(peer.starts, 4);
     CHECK_EQ(M.sink, SINK_NONE);
+    // Given up, their Start streams to nobody: quiet, and three seconds of
+    // it suspends, counted from the pass that sees it. The next spell is
+    // measured afresh.
+    for (int spell = 0; spell < 2; spell++) {
+        their_start();
+        uint64_t from = now + 10 * MS;
+        int suspends = peer.suspends;
+        run(3000 * MS, 10 * MS);
+        CHECK_EQ(peer.suspends, suspends);
+        pass(10 * MS);
+        CHECK_EQ(peer.suspends, suspends + 1);
+        CHECK_EQ(peer.suspend_at[suspends], from + 3 * SEC);
+        CHECK_EQ(M.sink, SINK_NONE);
+        CHECK_EQ(peer.starts, 4);
+    }
     peer.reject_starts = 0;
     their_close();
     their_session(true, 53);
@@ -802,10 +834,12 @@ static void test_suspend_refused(void)
     CHECK_EQ(W.packets, packets);
     CHECK_EQ(peer.suspends, 1);
     int starts = peer.starts;
+    uint32_t slips = P.slips;
     M.available = 9600;
     pass(10 * MS);
     CHECK(W.packets > packets);
-    CHECK_EQ(P.anchor, now - 0);
+    CHECK_EQ(P.anchor, now);
+    CHECK_EQ(P.slips, slips);           // anchored for the stop, not counted as a slip
     CHECK_EQ(peer.starts, starts);
     // Sound came and went: a Suspend may be asked again.
     run(6 * SEC, 10 * MS);
@@ -831,6 +865,50 @@ static void test_their_start(void)
     CHECK_EQ(peer.suspends, 1);
     CHECK(peer.suspend_at[0] >= from + 3 * SEC);
     CHECK_EQ(W.sound, 0);
+
+    // Their Suspend and Start between two passes, two seconds into a quiet
+    // spell: they asked for the stream again, so the spell starts again.
+    their_start();
+    pass(10 * MS);
+    run(2 * SEC, 10 * MS);
+    int suspends = peer.suspends;
+    their_suspend();
+    their_start();
+    pass(10 * MS);
+    uint64_t again = now;
+    run(2990 * MS, 10 * MS);
+    CHECK_EQ(peer.suspends, suspends);
+    run(20 * MS, 10 * MS);
+    CHECK_EQ(peer.suspends, suspends + 1);
+    CHECK(peer.suspend_at[suspends] >= again + 3 * SEC);
+}
+
+// Our Start and theirs cross: theirs is taken, the stream is STREAMING with
+// ours still unanswered, and a Close cannot be asked while it is. A sink
+// that fails then makes nothing, though AVDTP still says streaming.
+static void test_failed_while_a_start_crosses(void)
+{
+    to_open();
+    peer.sit_on_start = true;
+    M.endless = true;
+    pass(10 * MS);
+    CHECK_EQ(peer.starts, 1);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_STARTING);
+    their_start();
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_STREAMING);
+    run(50 * MS, 10 * MS);
+    CHECK(W.sound > 0);
+    W.mtu = 48;
+    run(30 * MS, 10 * MS);
+    CHECK_EQ(M.fails, 1);
+    uint64_t packets = W.packets;
+    W.mtu = 672;
+    run(1 * SEC, 10 * MS);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_STREAMING);
+    CHECK_EQ(peer.closes, 0);
+    CHECK_EQ(W.packets, packets);
+    CHECK(!P.streaming);
+    peer.sit_on_start = false;
 }
 
 // A session ends and a new one is agreed between two passes, with other
@@ -958,11 +1036,13 @@ static void test_failures(void)
     to_streaming();
     packets = W.packets;
     E.clock_step = 6000;
-    while (P.slow < 7) pass(10 * MS);
+    for (int k = 0; k < 100 && P.slow < 7; k++) pass(10 * MS);
+    CHECK_EQ(P.slow, 7);
     E.clock_step = 0;
     pass(20 * MS);
     E.clock_step = 6000;
-    while (P.slow < 14 && !P.failed) pass(10 * MS);
+    for (int k = 0; k < 100 && P.slow < 14 && !P.failed; k++) pass(10 * MS);
+    CHECK_EQ(P.slow, 14);
     CHECK_EQ(M.fails, 0);
     CHECK(!P.failed);
     E.clock_step = 0;
@@ -1224,6 +1304,7 @@ int main(int argc, char **argv)
     test_their_suspend();
     test_suspend_refused();
     test_their_start();
+    test_failed_while_a_start_crosses();
     test_new_session_between_passes();
     test_mtu();
     test_failures();
