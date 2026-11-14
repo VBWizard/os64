@@ -1273,3 +1273,31 @@ choose the incoming context. Production DOM/Yonder do not use the query; the
 remaining browser attribution obligations are in
 [the F.4b interface note](../../docs/design/pending/IFRAME_F4_SETTINGS.md).
 Wrapper ABI 5 is unchanged; use matching rebuilt engine objects and headers.
+
+### Opt-in host scopes and reporting callbacks
+
+`os64_js_enable_host_settings(runtime, abi, out)` configures an idle runtime
+before a task or realm evaluation. It refuses active/queued work, private setup,
+late configuration and failed health. The opt-in is irreversible. Classic roots
+(including file and cached bytecode), module roots and `os64_js_realm_call`
+prepare checked ordinary entries under their existing guard and task budget.
+No implicit incumbent is supplied. Jobs do not inherit a completed root scope;
+Promise callback capture/preparation is a separate embedding obligation.
+Existing constructors and callers do not opt in implicitly.
+
+`os64_js_callback_call(report, entry, abi, record, this, argc, argv, out)` requires
+an open task. `report` selects exception/script-host reporting; `entry` is the
+binding's independently proven associated realm. The owned record supplies the
+captured incumbent. These realms must be live published members of the runtime.
+The call separately checks executable-target eligibility, holds the callback
+through reentry and uses realm_call's exception reporting. It does not consume
+the record or retain the argument array after return. Retirement can suppress a
+call with REALM_RETIRED. There is no checkpoint or budget renewal. The enclosing
+host owns activity, arguments, callback type conversion and security policy.
+
+Raw `JS_GetCallbackRealm(ctx, value)` returns a borrowed associated context for
+supported callable classes, or NULL without changing the exception. Defining
+contexts supply ordinary/native functions; bound functions inherit their target
+object's associated context; proxies retain their constructor context even when
+revoked. No property lookup or trap occurs. This is distinct from executable
+`JS_GetFunctionRealm`, and is not an arbitrary object's birth-realm API.

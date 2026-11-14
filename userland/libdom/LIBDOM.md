@@ -522,6 +522,16 @@ together fire in the order they were set. An interval is re-armed before its
 callback runs, so a callback that clears its own interval wins; a callback
 that clears the timer that is running finishes running.
 
+Native hosts can opt into checked timer settings by creating the cluster with
+`os64_dom_cluster_create_with_timer_settings` before runtime execution. Callable
+conversion captures its incumbent before delay conversion; delivery separately
+uses the callable's associated entry, executable-target eligibility and script
+report owner. Captures survive self-removal and are released on cancellation,
+refusal and drain. Unprepared Promise jobs cannot register callable timers in
+this mode. Other callback families and origin checks remain separate work;
+ordinary cluster construction and Yonder do not enable this mode. See
+[the timer settings contract](../../docs/design/pending/IFRAME_F4_TIMER_SETTINGS.md).
+
 ## Asks
 
 A script's task must not reach widgets or the model, so what a script asks

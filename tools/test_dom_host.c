@@ -293,6 +293,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_visitor_retirement.inc"
 #include "test_dom_report_retirement.inc"
 #include "test_dom_callback_reports.inc"
+#include "test_dom_timer_settings.inc"
 #include "test_dom_animation_retirement.inc"
 #include "test_dom_animation_routing.inc"
 #include "test_dom_departure.inc"
@@ -663,6 +664,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--importmap")){dom_import_map_cases();dom_import_map_sweep_cases();printf("DOM import maps: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--animation-routing")){dom_animation_routing_cases();printf("DOM animation routing: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--animation-retirement")){dom_animation_retirement_cases();printf("DOM animation retirement: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--timer-settings")){dom_timer_settings_cases();printf("DOM timer settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--callback-reports")){dom_callback_report_cases();printf("DOM callback reports: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--report-retirement")){dom_report_retirement_cases();printf("DOM report retirement: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--departure")){dom_departure_cases();printf("DOM departure: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -678,6 +680,7 @@ int main(int argc, char **argv)
     dom_visitor_retirement_cases();
     dom_report_retirement_cases();
     dom_callback_report_cases();
+    dom_timer_settings_cases();
     dom_animation_retirement_cases();
     dom_animation_routing_cases();
     dom_departure_cases();

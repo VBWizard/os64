@@ -223,6 +223,11 @@
     {
       "path": "patches/0028-current-realm.patch",
       "sha256": "6a57b9475aa8dbc6620d7cb6fbcdb24502dfeccf93c865a225b1fc9e1e57e60b"
+    },
+    {
+      "path": "patches/0030-callback-associated-realm.patch",
+      "sha256": "b9c228c5f1cb11ab3b8fb2476e45d0745919b8fbd1839d87708ab580cbb06efe",
+      "reason": "Preserve proxy creation realm for callable callback entry, independently of executable target and captured incumbent."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
