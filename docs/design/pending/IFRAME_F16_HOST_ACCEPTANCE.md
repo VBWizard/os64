@@ -1,8 +1,9 @@
 # F.16e — host routing and acceptance
 
-Acceptance base: merged userland `48d5ccb2`, including native recovery #593.
-Prepared engine identity:
-`3be09416c3df09ee3c4d85b8fe54af3d8f90d24ed32678042f8a7ca67ac4aa39`.
+Initial implementation: `43498f3b` on merged userland `48d5ccb2`, including
+native recovery #593. Composed with handler settings #596 (`42c70818`).
+Current prepared engine identity:
+`39063a8f7f5747a9737b4f15b67dddb87f6344021bfba9fe3ae79a12ef020fbf`.
 Embedding ABI 5 and existing config/outcome layouts are unchanged.
 
 This chapter completes acceptance of the initial opt-in F.16 subset: a
@@ -100,11 +101,12 @@ the original failed outcome.
   policies and zero engine/native allocations left. Native recovery, F4
   scheduled/listener/timer settings and affected lifecycle selectors pass on
   both profiles with ASan/UBSan and LeakSanitizer enabled outside the sandbox.
-- Final shipping DOM: **333,305 checks, zero failures, 12,949 native allocation
-  sweeps**, including the final paired-policy guard and shared consumer.
-- The unchanged runtime retains its composed full-runtime receipt of
+- Pre-composition shipping DOM: **333,305 checks, zero failures, 12,949 native
+  allocation sweeps**, including the final paired-policy guard and shared
+  consumer, on engine `3be09416`. The #596 composition is qualified below.
+- The unchanged runtime source retains #596's full-runtime receipt of
   **22,014 / 69,404 checks**, zero live allocations, parser-failure and invariant
-  checks. This chapter changes no engine/runtime source or layout.
+  checks on the current engine. This chapter adds no engine/runtime change.
 - Yonder's explicit opt-out/overrun/teardown regression: **18 checks, zero
   failures** with leak detection enabled.
 - Four isolated defects are caught on both engine profiles by named host
@@ -132,7 +134,7 @@ is outside the userland consumer verdict, not a passing kernel-suite claim.
 ### Named web results
 
 WPT pin: `a699fb16767be39ba3e61a8e8b6bef60383f08ee`. Yonder's real headless
-runner self-tests pass. The merged baseline `48d5ccb2` and candidate are
+runner self-tests pass. The merged baseline `42c70818` and candidate are
 compared across 17 families: DOM nodes/ranges/events; custom elements;
 intersection/resize observers; performance timeline; web/CSS animations;
 animation frames; pointer events; and six Streams families (readable streams,
@@ -146,6 +148,27 @@ objects, with baseline core/recovery/public/internal headers compiled from the
 merged base and candidate core compiled from the final implementation.
 These are shipping-engine web regressions with ASan/UBSan on native/wrapper
 code and leak checks enabled; they are not browser iframe recovery tests.
+
+### Composition with #596
+
+The shared test-file conflict preserves both recovery-host and handler-settings
+selectors and both default-matrix calls. The paired recovery constructor keeps
+the handler/scheduled/listener/timer settings policies disabled. Their separate
+constructors and the new handler flag retain #596's behavior.
+
+The composed native objects use the final #596 cluster layout and engine;
+F16's core/test/runtime units were rebuilt before linking. Both profiles pass
+674 host checks, 2,532 / 6,672 native recovery checks and 5,526 handler-settings
+checks, plus scheduled/listener/timer/reporting and affected lifecycle,
+dispatch, installation and animation selectors. All four mutants are detected
+again. The shared target guest, heap baseline and exact parent exit pass with
+rebuilt matching libraries. Yonder's 18 policy checks and all 17 paired web
+families are rechecked against #596, rather than reusing the earlier engine's
+web receipt. Header/preparer/teardown/link audits pass with 218 engine and 78
+runtime exports. Leak detection remains enabled.
+
+These composition runs qualify the earlier broad DOM receipt; they do not
+claim a new full DOM or full runtime campaign on the composed branch.
 
 ## Reproduction
 

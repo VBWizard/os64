@@ -290,3 +290,9 @@ and restoration, not browser Promise integration.
 Full runtime regressions, focused tests, and fault-injected variants run on
 host engines with leak checks. Guest compilation is not guest execution.
 No WindowProxy security, WPT, QEMU or P5 acceptance is claimed for this cut.
+
+## HTML handler integration
+
+The handler-settings opt-in covers property/named slots and inline attributes.
+See [handler contract and evidence](IFRAME_F4_HANDLER_SETTINGS.md). Promise
+preparation and other callback families remain separate completion gates.
