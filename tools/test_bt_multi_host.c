@@ -9,6 +9,7 @@
 #include "../kernel/src/driver/system/usb/bt_avdtp.c"
 #include "../kernel/src/audio/sbc_frame.c"
 #include "../kernel/src/driver/system/usb/bt_a2dp.c"
+#include "../kernel/src/driver/system/usb/bt_avrcp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "hid_mouse_fixtures.h"
 #include "sbc_port.h"
@@ -259,6 +260,7 @@ static bool classic_on;
 static const uint8_t CM_LOCAL[6]={0x11,0x22,0x33,0x44,0x55,0x66};
 static void classic_slot(const bt_classic_bond_t *bond,bool boot_page);
 static void ha_reset(void);
+static void rc_reset(void);
 static void setup(void)
 {
     begin(REPORT_PROTOCOL); cmd_n=tx_n=0;
@@ -274,7 +276,7 @@ static void setup(void)
     reset_count=0;
     memset(&CM,0,sizeof(CM)); CM.present=true; cm_held_n=0;
     memset(&HP,0,sizeof(HP)); HP.mtu=48; HP.ident=0x80; HP.follow=true;
-    ha_reset();
+    ha_reset(); rc_reset();
     memset(&TX,0,sizeof(TX));
     if(classic_on) {
         bt_classic_bond_t none={0};
@@ -1151,6 +1153,22 @@ static void ha_media(const uint8_t *p,size_t n)
     HA.packets++; HA.frames+=frames*128u;
 }
 
+// ── The headphones' AVCTP (AUDIO_REMOTE.md § Part W) ───────────────────────
+//
+// Headphones without a remote control refuse PSM 0x0017, as these do
+// unless a case says otherwise.
+static struct {
+    bool on;
+    unsigned conn_reqs;
+} RC;
+static void rc_reset(void) { memset(&RC,0,sizeof(RC)); }
+static void rc_conn_req(uint8_t ident,uint16_t host_cid)
+{
+    assert(host.a2dp_ops);
+    RC.conn_reqs++;
+    if(!RC.on) { HP_CMD(3,ident,0,0,W16(host_cid),W16(0x0002),0,0); return; }
+}
+
 // What the host sends them on the Classic link.
 static void headphones_acl(const uint8_t *p,size_t n)
 {
@@ -1178,9 +1196,10 @@ static void headphones_acl(const uint8_t *p,size_t n)
         uint16_t m=le_u16(d+2);
         const uint8_t *x=d+4;
         switch(code) {
-        case 2:     // our Connection Request: to their SDP, or (a host with a sink) to AVDTP
-            assert(m==4 && (le_u16(x)==BT_L2CAP_PSM_SDP || le_u16(x)==BT_L2CAP_PSM_AVDTP));
+        case 2:     // our Connection Request: to their SDP, or (a host with a sink) to AVDTP or AVCTP
+            assert(m==4 && (le_u16(x)==BT_L2CAP_PSM_SDP || le_u16(x)==BT_L2CAP_PSM_AVDTP || le_u16(x)==BT_L2CAP_PSM_AVCTP));
             if(le_u16(x)==BT_L2CAP_PSM_AVDTP) { ha_conn_req(ident,le_u16(x+2)); break; }
+            if(le_u16(x)==BT_L2CAP_PSM_AVCTP) { rc_conn_req(ident,le_u16(x+2)); break; }
             HP.conn_reqs++; HP.host_out=le_u16(x+2); HP.served=0; HP.out_open=HP.out_closed=false;
             if(HP.refuse) { HP_CMD(3,ident,0,0,W16(HP.host_out),W16(HP.refuse),0,0); break; }
             HP_CMD(3,ident,W16(HP_SERVER_CID),W16(HP.host_out),0,0,0,0);
@@ -2350,7 +2369,11 @@ static bool enc_encode(void *ctx,const int16_t *pcm,uint8_t *out,size_t cap)
     return ok;
 }
 static uint64_t enc_clock(void *ctx) { (void)ctx; if(ENC.clock<now*1000) ENC.clock=now*1000; return ++ENC.clock; }
-static const bt_a2dp_ops_t A2_OPS={seam_pull,seam_has_sound,seam_attach,seam_detach,seam_failed,seam_delay,enc_begin,enc_encode,enc_clock};
+// The host's one reading: has_sound's answer, counted as a call of it, and
+// whether the stream is paused, whoever the sink is.
+static bool seam_sound(void *ctx,bool *paused) { *paused=SEAM.paused; return seam_has_sound(ctx); }
+static const bt_a2dp_ops_t A2_OPS={seam_pull,seam_has_sound,seam_attach,seam_detach,seam_failed,seam_delay,enc_begin,enc_encode,enc_clock,
+                                   seam_sound};
 
 // Per step: the pump's sent packets against the headphones' received ones
 // (a pump started over begins its count again), the packets lost and the
@@ -2404,7 +2427,10 @@ static unsigned a2_avdtp_index(uint8_t role) { assert(role); return role-1u; }
 // `slot 2 bond` to READY, then with nobody typing: the SDP query ends, our
 // signalling channel opens, and only then is the SDP channel closed; Get
 // All Capabilities (their record says AVDTP 1.3) through Open, the media
-// channel, and the pump attaches. Never more than two channels at once.
+// channel, and the pump attaches. These headphones refuse AVCTP, so our
+// request for it is a third channel for a moment, made twice (two seconds
+// after signalling opens, and once more a second after the refusal), and
+// never again. Never more than three channels at once.
 static void a2dp_session_from_bond(void)
 {
     a2_bonded();
@@ -2418,8 +2444,9 @@ static void a2dp_session_from_bond(void)
     assert(ENC.begins==1 && ENC.settings.bitpool==51 && ENC.settings.joint && ENC.fb==115);
     assert(bt_host_media_room(&host)==672);         // their MTU: 672 < ours and a controller packet's room
     assert(bt_avdtp_edges(&host.avdtp)->sessions==1 && host.a2dp.sessions_begun==1);
-    // Nothing to play: no Start, no packet.
-    for(unsigned i=0;i<2000;i++) a2_step();
+    // Nothing to play: no Start, no packet, for long enough that both our
+    // AVCTP requests have been made and refused.
+    for(unsigned i=0;i<5000;i++) a2_step();
     assert(!HA.starts && !HA.packets && !SEAM.pulls && bt_avdtp_state(&host.avdtp)==BT_AVDTP_OPEN);
     assert(status_has("avdtp: open, sessions made 1, gone wrong 0\n"));
     assert(status_has("a2dp: attached\n"));
@@ -2428,7 +2455,9 @@ static void a2dp_session_from_bond(void)
                             a2_avdtp_index(host.avdtp_sig),a2_avdtp_index(host.avdtp_media));
     assert(status_has(want));
     assert(status_has("avdtp pdus received off the signalling channel (media, or a channel being closed), dropped: 0\n"));
-    assert(a2_peak==2 && a2_peak<=BT_L2CAP_CHANNELS);
+    assert(a2_peak==3 && a2_peak<=BT_L2CAP_CHANNELS);
+    assert(RC.conn_reqs==2 && !host.avctp && !host.avctp_asking && host.avctp_asked==2 && host.avctp_ends==2);
+    assert(bt_avrcp_state(&host.avrcp)==BT_AVRCP_IDLE);
     // The whole text fits the file's buffer.
     static char text[BT_SCAN_TEXT_BYTES];
     assert(bt_host_status(&host,text,sizeof text)<sizeof(text)-512);

@@ -106,6 +106,10 @@ void audio_sink_delay(const audio_sink_t *sink, uint32_t delay_us);
 // the stream is not paused (audio_stream_has_sound). Any thread; never
 // sleeps; takes the stream's lock, so never from inside a nudge.
 bool audio_sink_has_sound(const audio_sink_t *sink);
+// audio_sink_has_sound's answer and, in *paused, whether the stream is
+// paused (whoever the sink is), read in one hold of the lock so the two
+// agree. The same rules as audio_sink_has_sound.
+bool audio_sink_sound(const audio_sink_t *sink, bool *paused);
 // Fill `out` with `frames` frames (audio_stream_pull) and wake whoever was
 // waiting on what it changed. Any thread; never sleeps.
 audio_pulled_t audio_pull(const audio_sink_t *self, int16_t *out, uint32_t frames);

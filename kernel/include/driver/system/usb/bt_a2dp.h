@@ -51,7 +51,8 @@ typedef struct {
 } bt_a2dp_pulled_t;
 
 // Everything outside the pump, as the host supplies it. Each is called from
-// the pump's own pass and none may sleep.
+// the Bluetooth clockwork's pass, the pump's or the host's, and none may
+// sleep.
 typedef struct {
     bt_a2dp_pulled_t (*pull)(void *ctx, int16_t *out, uint32_t frames);
     bool (*has_sound)(void *ctx);                       // the ring holds frames and the stream is not paused
@@ -62,6 +63,13 @@ typedef struct {
     bool (*encoder_begin)(void *ctx, const sbc_settings_t *settings);
     bool (*encoder_encode)(void *ctx, const int16_t *pcm, uint8_t *out, size_t capacity);
     uint64_t (*clock_us)(void *ctx);                    // monotonic microseconds, to time an encode
+    // The host's own, which the pump does not call. Optional: NULL where
+    // the host is not given it.
+    // has_sound's answer and, in *paused, whether the stream is paused, as
+    // ONE reading: the host reads the seam once a tick, and two readings
+    // could disagree. Without it the host reads has_sound and never finds
+    // the stream paused.
+    bool (*sound)(void *ctx, bool *paused);
 } bt_a2dp_ops_t;
 
 typedef struct bt_a2dp {

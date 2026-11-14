@@ -27,6 +27,7 @@ static void outb(uint16_t port, uint8_t value);
 #include "../kernel/src/driver/system/usb/bt_avdtp.c"
 #include "../kernel/src/audio/sbc_frame.c"
 #include "../kernel/src/driver/system/usb/bt_a2dp.c"
+#include "../kernel/src/driver/system/usb/bt_avrcp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "../kernel/src/driver/system/usb/xhci_service.c"
 #include "../kernel/src/driver/system/usb/xhci.c"

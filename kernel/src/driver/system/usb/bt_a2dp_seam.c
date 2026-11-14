@@ -33,6 +33,12 @@ static bool seam_has_sound(void *ctx)
 	return audio_sink_has_sound(&s_sink);
 }
 
+static bool seam_sound(void *ctx, bool *paused)
+{
+	(void)ctx;
+	return audio_sink_sound(&s_sink, paused);
+}
+
 static void seam_attach(void *ctx)
 {
 	(void)ctx;
@@ -87,4 +93,5 @@ const bt_a2dp_ops_t kBtA2dpSeamOps = {
 	.encoder_begin = seam_encoder_begin,
 	.encoder_encode = seam_encoder_encode,
 	.clock_us = seam_clock_us,
+	.sound = seam_sound,
 };

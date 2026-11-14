@@ -7,6 +7,7 @@
 #include "driver/system/usb/bt_sdp.h"
 #include "driver/system/usb/bt_avdtp.h"
 #include "driver/system/usb/bt_a2dp.h"
+#include "driver/system/usb/bt_avrcp.h"
 
 #define BT_HOST_PEERS BT_BOND_SLOTS
 // The transport's ACL send slots (xhci.c): each holds one packet until its
@@ -121,9 +122,10 @@ typedef struct {
     void *a2dp_ctx;
     bt_avdtp_t avdtp;
     bt_a2dp_t a2dp;
-    // The microsecond clock of the last tick: the pump's, and AVDTP's in
-    // milliseconds (every AVDTP call is handed now_us / 1000, so its timers
-    // and the pump's calls into it share one clock).
+    // The microsecond clock of the last tick: the pump's, and AVDTP's and
+    // AVRCP's in milliseconds (every AVDTP and AVRCP call is handed
+    // now_us / 1000, so their timers and the pump's calls into AVDTP share
+    // one clock).
     uint64_t now_us;
     // The 0x0019 channels: signalling, media, and the one we are asking
     // for (connecting or configuring, not yet given a role), each its index
@@ -148,6 +150,28 @@ typedef struct {
     uint32_t avdtp_media_dropped;
     // The media packet the pump writes and L2CAP copies.
     uint8_t a2dp_packet[BT_L2CAP_MTU];
+    // Slot 2's remote control (AUDIO_REMOTE.md § Part W): AVCTP's one
+    // channel and the AVRCP it carries, with an audio sink, started over
+    // when the link comes up and when it goes, as AVDTP is. bt_host.c
+    // § Slot 2's remote control has the channel's lifecycle table; the
+    // fields below are its state. `avctp` is the AVCTP channel and
+    // `avctp_asking` the one we asked for that has not opened, each its
+    // index PLUS ONE (0: none) and its CID; `avctp_parked` the serial
+    // (bt_avrcp_next) of AVRCP's message in the channel's payload slot, 0
+    // when the slot holds none. `avctp_sig_since` is when AVDTP's
+    // signalling channel began (0: none is open), which our first request
+    // waits two seconds from. `avctp_asked` counts our requests on this
+    // connection and `avctp_ends` the AVCTP channels (anyone's) that ended
+    // and requests of ours that failed; a request after an end waits until
+    // avctp_again_at. `avctp_dropped`, since start-up: PDUs on a 0x0017
+    // channel that is not the AVCTP channel.
+    bt_avrcp_t avrcp;
+    uint8_t avctp, avctp_asking;
+    uint16_t avctp_cid, avctp_asking_cid;
+    uint32_t avctp_parked;
+    uint64_t avctp_sig_since, avctp_again_at;
+    uint8_t avctp_asked, avctp_ends;
+    uint32_t avctp_dropped;
     // Slot 2's sniff policy (AUDIO_REMOTE.md § Part Z), kept with an audio
     // sink while the link is READY and started over when it is not;
     // bt_host.c § Slot 2's sniff has the lifecycle table. `sniff_state` is
@@ -160,12 +184,14 @@ typedef struct {
     // wake first saw the refusing write confirmed (0: not yet), the start
     // of its settle; `sniff_wake_spent` that this stream's wake ran out its
     // second. `sniff_sound` is this tick's ONE reading of the seam's
-    // has_sound, and `sniff_start_ok` whether this tick may decide our
-    // Start; the pump's policy sees their conjunction. Counted per host,
-    // not per connection.
+    // has_sound, `seam_paused` the same reading's word on a pause (the
+    // ops' `sound`; false without it), and `sniff_start_ok` whether this
+    // tick may decide our Start; the pump's policy sees the conjunction of
+    // the first and the last, AVRCP's playback status the first two.
+    // Counted per host, not per connection.
     uint8_t sniff_state;
     uint64_t sniff_idle_since, sniff_wake_began, sniff_wake_last, sniff_refused_at;
-    bool sniff_barred, sniff_awake_allowed, sniff_wake_spent, sniff_sound, sniff_start_ok;
+    bool sniff_barred, sniff_awake_allowed, sniff_wake_spent, sniff_sound, sniff_start_ok, seam_paused;
     uint8_t sniff_wake_tries;
     uint32_t sniff_dozes, sniff_wakes, sniff_woke_late, sniff_wake_retries;
     uint32_t sniff_allows_failed, sniff_refuses_failed;
@@ -246,7 +272,7 @@ void bt_host_receive(bt_host_t *, const uint8_t *, size_t, size_t max_packet,
                      bt_host_report_t, void *);
 // One step. `now` is milliseconds, the clock of everything but slot 2's
 // audio; `now_us` is the monotonic microsecond clock the pump paces by
-// (and AVDTP's, in milliseconds). `usb_done`: no command's control
+// (and AVDTP's and AVRCP's, in milliseconds). `usb_done`: no command's control
 // transfer is in flight. `tx_in_flight`: how many of the transport's
 // BT_HOST_TX_SLOTS send slots hold a packet whose USB transfer has not
 // completed. `failed`: the transport is gone. ACL packets leave through

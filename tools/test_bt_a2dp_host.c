@@ -233,7 +233,10 @@ static uint64_t e_clock(void *ctx)
     return E.clock;
 }
 
-static const bt_a2dp_ops_t ops = { m_pull, m_has_sound, m_attach, m_detach, m_failed, m_delay, e_begin, e_encode, e_clock };
+// The pump's own ops; those only the host calls are left out.
+static const bt_a2dp_ops_t ops = { .pull = m_pull, .has_sound = m_has_sound, .attach = m_attach, .detach = m_detach,
+                                   .failed = m_failed, .delay = m_delay, .encoder_begin = e_begin,
+                                   .encoder_encode = e_encode, .clock_us = e_clock };
 
 // ── The model headphones ────────────────────────────────────────────────────
 
