@@ -1310,7 +1310,8 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 	// The probe is too large for a kernel stack (the host inside it is most
 	// of it), so it is allocated, zeroed, filled in place, copied into the
 	// controller's storage when bring-up succeeds, and freed on every way
-	// out of this function.
+	// out of this function. The host is then started where it lies
+	// (bt_host_init wipes it in place, for the same reason).
 	xhci_bt_probe_t *probe = kmalloc_try(sizeof(*probe));
 	if (!probe) {
 		printd(DEBUG_USB, "xhci: AX210 probe not started: no memory for its %u bytes\n", (unsigned)sizeof(*probe));

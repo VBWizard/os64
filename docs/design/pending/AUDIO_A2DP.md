@@ -327,7 +327,7 @@ PSM.
 | `IDLE` | No signalling channel | the host says sig is open: `CONNECTED` |
 | `CONNECTED` | Sig up, no stream, nothing outstanding | we begin: `DISCOVERING`. Their Set Configuration, accepted: `CONFIGURED` |
 | `DISCOVERING` | Our Discover is out | its answer: the first audio SINK endpoint not in use is chosen; none is a walk that ended (below). Their Set Configuration, accepted: `CONFIGURED`, and ours is abandoned |
-| `ASKING` | Get All Capabilities (when their SDP record says AVDTP 1.3 or later) or Get Capabilities is out | its answer: SBC offering 48 kHz, 16 blocks, 8 subbands, joint stereo or stereo, loudness, and a bitpool range that meets ours; else the next sink endpoint; none left is a walk that ended (below). Get All Capabilities REJECTED: Get Capabilities is asked instead. Their Set Configuration, accepted: `CONFIGURED` |
+| `ASKING` | Get All Capabilities (when their SDP record says AVDTP 1.3 or later, or no record was read) or Get Capabilities is out | its answer: SBC offering 48 kHz, 16 blocks, 8 subbands, joint stereo or stereo, loudness, and a bitpool range that meets ours; else the next sink endpoint; none left is a walk that ended (below). Get All Capabilities REJECTED: Get Capabilities is asked instead. Their Set Configuration, accepted: `CONFIGURED` |
 | `CONFIGURING` | Our Set Configuration is out: media transport, one SBC setting in each field, the bitpool range from their least (or 2, if higher) to the one chosen, and delay reporting if they offered it | accepted: `OPENING`. Rejected "in use" or "bad state" while we have just rejected theirs: once, after 1 s, sent again. Any other reject: § When a session goes wrong |
 | `CONFIGURED` | We accepted THEIR Set Configuration; they are to open the stream | their Open, accepted: `AWAITING_MEDIA`. 10 s without it: Abort, then `CONNECTED` |
 | `OPENING` | Our Open is out | accepted: the host opens media, `AWAITING_MEDIA` |
@@ -461,6 +461,10 @@ the sanitizers; a mutant harness.
   or drops. `bt_avdtp_may_begin` says whether a walk may start.
 - **Nothing we send is ever fragmented**: every message is built in 16
   bytes, asserted under the least MTU of 48.
+- **A version not known (0) is asked Get All Capabilities**, falling back
+  to Get Capabilities on a reject, as for a 1.3 peer that refuses it; only
+  a version known to be below 1.3 is asked Get Capabilities first. The host
+  may open signalling before its SDP query has ended (§ P, as built).
 - **What it does not handle**: headphones that configure us first with a
   codec we lack and do not fall back to SBC; content protection in their
   configuration (refused); both sides sending Open.
@@ -486,15 +490,17 @@ the sanitizers; a mutant harness.
   suite fills it.
 - **The SDP channel is closed once sig is open**, not before.
 - **AVDTP is tried even when the SDP query was not made.** The PSM is
-  fixed by assigned numbers; without their record we ask Get Capabilities,
-  as for a 1.2 sink.
+  fixed by assigned numbers; without their record (or before it has come)
+  we ask Get All Capabilities, and Get Capabilities if they reject it.
 - **A refusal for each channel.** L2CAP keeps the last refusal of each
   channel index, what the last channel we asked for there ended with, so
   the SDP attempt's and each AVDTP attempt's are read apart.
-- **The Bluetooth probe is allocated.** `xhci_bt_probe_t` is too large for
-  a kernel stack, and the pump adds about 9 KB: PCM for the most frames a
-  packet may hold (15 frames of 128 stereo samples) and a packet.
-  Bring-up allocates the probe before it fills it. This is the first
+- **The Bluetooth host stays off the stack.** `xhci_bt_probe_t` is too
+  large for a kernel stack, and the pump adds about 9 KB: PCM for the most
+  frames a packet may hold (15 frames of 128 stereo samples) and a packet.
+  Bring-up allocates the probe before it fills it, and the host and the
+  scan are started by wiping them in place, never by assigning a compound
+  literal (a whole second copy on the stack at `-O0`). This is the first
   commit of part P, alone, because the keyboard depends on bring-up.
 
 ### The seam: what changes
@@ -678,10 +684,13 @@ it left open:
   the anchor it was made under. The host calls `bt_a2dp_sent` from its
   L2CAP send callback, when the media channel's PDU (found by the peer's
   CID that heads it) is handed over, in whichever tick that is. A packet
-  that leaves the payload slot any other way (the peer's new MTU no longer
-  takes it, or one controller packet cannot carry it) is let go as sent
-  and counted (`a2dp media packets dropped before the controller`), so the
-  pump is never left waiting for it.
+  that leaves a live media channel's payload slot any other way (the
+  peer's new MTU no longer takes it, or one controller packet cannot carry
+  it) is let go as LOST (`bt_a2dp_lost`): its time passes so the clock
+  keeps pace, it is not counted as sent, and the headphones see one gap in
+  the sequence (`a2dp: ... lost before the controller N`). One queued when
+  the media channel closes stays pending until the next session or a
+  reset, which is harmless: a media channel closing ends the session.
 - **Their Start re-anchors the clock and begins a new quiet spell**: it
   may follow our accepted Suspend between two passes, so the state alone
   never shows the stream stop.
@@ -734,9 +743,22 @@ it left open:
   signalling slot is free.
 - **The probe is allocated** (`kmalloc_try`), filled in place, copied into
   the controller's storage and freed on every way out of bring-up; no
-  memory for it releases the slot.
-- **A failed controller detaches the pump**, so the null sink plays and a
-  player's writes are not held.
+  memory for it releases the slot. `bt_host_init` and `bt_scan_start` wipe
+  in place; DEBTS has the stack frames measured before and after.
+- **A failed controller detaches the pump** (`bt_a2dp_detach`), so the
+  null sink plays and a player's writes are not held, and keeps its
+  counters and reasons: slot 2's status says `a2dp: stopped: the Bluetooth
+  controller failed` above what the pump had done. A dropped link still
+  starts everything over (`bt_a2dp_reset`).
+- **Every 0x0019 request goes through one guard**
+  (`host_avdtp_connect`): none is made on a link that is not encrypted.
+- **No version means Get All Capabilities.** Signalling may open before
+  our SDP query ends (headphones that call us and open it at once, as the
+  P5's pair did when switched off and on), so AVDTP is told version 0. It
+  asks Get All Capabilities then too, and falls back to Get Capabilities
+  on a reject of either shape, so the order of the SDP answer and the
+  signalling channel cannot cost delay reporting; a version known to be
+  below 1.3 is asked Get Capabilities at once.
 - **The nudge rings `kusb`'s doorbell** and sets no flag of its own: the
   doorbell's rung bit is the flag, and the pump decides from state at the
   pass the ring brings.

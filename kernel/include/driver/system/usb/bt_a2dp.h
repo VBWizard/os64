@@ -115,7 +115,8 @@ typedef struct bt_a2dp {
     // Counted for the status text.
     uint8_t slow_run;
     uint32_t frames_a_packet;   // as the last packet was made
-    uint64_t packets_sent, frames_sent;
+    uint64_t packets_sent, frames_sent;   // handed to the controller (bt_a2dp_sent)
+    uint32_t packets_lost;                // let go without reaching it (bt_a2dp_lost)
     uint32_t slips, slow, dry_packets, starts_held, generations;
     uint32_t start_rejects_seen, suspend_rejects_seen, sessions_begun, closes_asked;
     // PCM for the largest packet: BT_A2DP_FRAMES_MAX frames of
@@ -147,6 +148,14 @@ size_t bt_a2dp_packet(bt_a2dp_t *p, uint64_t now_us, uint16_t media_mtu,
                       uint8_t *out, size_t capacity, const bt_a2dp_ops_t *ops, void *ctx);
 // The packet last made was handed to the controller: its frames are sent.
 void bt_a2dp_sent(bt_a2dp_t *p);
+// The packet last made will not reach the controller (L2CAP dropped it from
+// its slot): its frames' time passes as if sent, so the clock keeps pace,
+// and it is counted as lost, not sent.
+void bt_a2dp_lost(bt_a2dp_t *p);
+// Let the seam go, keeping the counters, the failure and its reason (the
+// controller failed: they are the evidence), and forget a packet made and
+// not handed over. bt_a2dp_reset is the one that also wipes.
+void bt_a2dp_detach(bt_a2dp_t *p, const bt_a2dp_ops_t *ops, void *ctx);
 
 // The pump's state as a word: detached, attached, streaming, quiet, held,
 // failed.

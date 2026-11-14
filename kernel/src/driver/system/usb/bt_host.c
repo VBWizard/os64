@@ -21,7 +21,10 @@ static bool host_setup(const bt_host_t *h)
 }
 void bt_host_init(bt_host_t *h,uint64_t now)
 {
-    *h=(bt_host_t){.credits=1};
+    // Wiped in place: the host is tens of kilobytes, and assigning it from
+    // a compound literal builds a whole second one on the kernel stack.
+    host_wipe(h,sizeof(*h));
+    h->credits=1;
     bt_acl_init(&h->acl);
     for(unsigned i=0;i<BT_HOST_PEERS;i++) h->peers[i].le.shared_controller=true;
     bt_scan_start_le(&h->scan,now);
@@ -256,8 +259,9 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
     if(h->classic.phase==BT_CLASSIC_READY && !h->sdp_asked) {
         h->sdp_asked=true;
         // SDP may precede encryption. A channel to any other PSM must wait
-        // for the link to be encrypted, and that guard is the host's to
-        // keep when it opens one (A.3): L2CAP does not refuse it.
+        // for the link to be encrypted, and L2CAP does not refuse it: the
+        // host's guard is host_avdtp_connect, which every 0x0019 request
+        // goes through.
         int ch=bt_l2cap_connect(l,BT_L2CAP_PSM_SDP,now);
         if(ch<0) { host_sdp_ended(h,"no L2CAP channel was free"); return; }
         h->sdp_channel=(uint8_t)(ch+1); h->sdp_cid=l->ch[ch].cid;
@@ -448,16 +452,18 @@ static bool host_l2cap_may_send(const bt_host_t *h);
 // The pump makes at most one packet, which the host queues on the media
 // channel; its frames count as sent when L2CAP hands that PDU to the
 // controller, which host_l2cap_send sees by its CID, in whichever tick it
-// leaves (the gate may hold it for several). A packet that leaves the
-// channel's slot any other way (the peer's new MTU dropped it, or a
-// controller packet could not carry it) is let go here, counted, so the
-// pump is never left waiting for a packet that will not leave.
+// leaves (the gate may hold it for several). A packet that leaves a live
+// media channel's slot any other way (the peer's new MTU dropped it, or a
+// controller packet could not carry it) is let go here as lost
+// (bt_a2dp_lost), so the stream goes on. One queued when the media channel
+// closes is not let go here: the pump keeps it pending until the next
+// session or a reset clears it, which is harmless because a media channel
+// closing ends the session in AVDTP.
 static void host_a2dp_settle(bt_host_t *h)
 {
     if(!h->a2dp.pending || !host_role_live(h,h->avdtp_media,h->avdtp_media_cid)) return;
     if(h->l2cap.ch[h->avdtp_media-1u].queued) return;
-    h->a2dp_media_lost++;
-    bt_a2dp_sent(&h->a2dp);
+    bt_a2dp_lost(&h->a2dp);
 }
 // The one loop, after LE's turn and SDP's and AVDTP's, at most three times
 // round: while the media channel is open and the send gate allows, a packet
@@ -483,6 +489,17 @@ static void host_a2dp_send(bt_host_t *h,uint64_t now,host_call_t *call)
         bt_l2cap_tick(l,now,true,host_l2cap_send,call);
         host_a2dp_settle(h);
     }
+}
+// Our 0x0019 Connection Request, signalling or media, recorded as the one
+// being asked for. L2CAP does not refuse a non-SDP connect on a link that
+// is not encrypted; the host does, here, for both.
+static bool host_avdtp_connect(bt_host_t *h,bool media,uint64_t now)
+{
+    if(!h->l2cap.encrypted || !h->classic.encrypted) return false;
+    int ch=bt_l2cap_connect(&h->l2cap,BT_L2CAP_PSM_AVDTP,now);
+    if(ch<0) return false;
+    h->avdtp_asking=(uint8_t)(ch+1); h->avdtp_asking_cid=h->l2cap.ch[ch].cid; h->avdtp_asking_media=media;
+    return true;
 }
 // Slot 2's audio, each tick, after SDP: the roles, the channels AVDTP wants
 // opened and closed, its timers and its messages, then the pump's policy
@@ -510,16 +527,9 @@ static void host_audio_tick(bt_host_t *h,uint64_t now,host_call_t *call)
         if(h->avdtp_media) bt_l2cap_close(l,h->avdtp_media-1u,now);
         if(h->avdtp_asking && h->avdtp_asking_media) bt_l2cap_close(l,h->avdtp_asking-1u,now);
     } else if(bt_avdtp_wants_media(a) && !h->avdtp_media && !h->avdtp_asking) {
-        int ch=bt_l2cap_connect(l,BT_L2CAP_PSM_AVDTP,now);
-        if(ch>=0) { h->avdtp_asking=(uint8_t)(ch+1); h->avdtp_asking_cid=l->ch[ch].cid; h->avdtp_asking_media=true; }
+        (void)host_avdtp_connect(h,true,now);
     }
-    if(host_avdtp_may_ask(h)) {
-        int ch=bt_l2cap_connect(l,BT_L2CAP_PSM_AVDTP,now);
-        if(ch>=0) {
-            h->avdtp_asking=(uint8_t)(ch+1); h->avdtp_asking_cid=l->ch[ch].cid; h->avdtp_asking_media=false;
-            h->avdtp_sig_asked++;
-        }
-    }
+    if(host_avdtp_may_ask(h) && host_avdtp_connect(h,false,now)) h->avdtp_sig_asked++;
     // What was let go above is AVDTP's news now, not at the next look.
     host_avdtp_channels(h,now);
     host_avdtp_feed(h);
@@ -908,8 +918,9 @@ void bt_host_tick(bt_host_t *h,uint64_t now,uint64_t now_us,bool usb_done,unsign
     }
     if(h->failed && classic) host_classic_tick(h,now,usb_done,&call);
     // A failed controller runs no services: the pump lets the seam go, so
-    // the null sink plays and a player's writes are not held for ever.
-    if(h->failed && h->a2dp_ops && h->a2dp.attached) bt_a2dp_reset(&h->a2dp,h->a2dp_ops,h->a2dp_ctx);
+    // the null sink plays and a player's writes are not held for ever. Its
+    // counters and reasons stay, for the status file to show.
+    if(h->failed && h->a2dp_ops && h->a2dp.attached) bt_a2dp_detach(&h->a2dp,h->a2dp_ops,h->a2dp_ctx);
     bt_host_policy(h,now);
     host_classic_policy(h,now);
 }
@@ -1108,14 +1119,16 @@ static size_t host_services_status(const bt_host_t *h,char *out,size_t used,size
     if(!h->a2dp_ops || used>=cap-1) return used;
     used+=bt_avdtp_status(&h->avdtp,out+used,cap-used);
     if(used>=cap-1) return used;
-    used+=bt_a2dp_status(&h->a2dp,out+used,cap-used);
-    if(used>=cap-1) return used;
-    if(h->a2dp_media_lost) {
-        n=snprintf(out+used,cap-used,"a2dp media packets dropped before the controller: %u\n",(unsigned)h->a2dp_media_lost);
+    // A failed controller stopped the pump where it stood: what it says
+    // below is how things were then.
+    if(h->failed) {
+        n=snprintf(out+used,cap-used,"a2dp: stopped: the Bluetooth controller failed; reboot required\n");
         if(n<0) return used;
         used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
         if(used>=cap-1) return used;
     }
+    used+=bt_a2dp_status(&h->a2dp,out+used,cap-used);
+    if(used>=cap-1) return used;
     char sig[8]="none", media[8]="none";
     if(h->avdtp_sig) snprintf(sig,sizeof sig,"%u",h->avdtp_sig-1u);
     if(h->avdtp_media) snprintf(media,sizeof media,"%u",h->avdtp_media-1u);

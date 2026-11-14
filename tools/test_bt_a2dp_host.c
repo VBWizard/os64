@@ -1001,6 +1001,53 @@ static void failed_then_recovers(const char *what)
     CHECK_EQ(M.fails, 1);
 }
 
+// A packet L2CAP drops is lost, not sent: the clock moves on as if it had
+// been sent, nothing counts it as handed over, and the next one is made at
+// its own time. A detach keeps the counters, the failure and its reason.
+static void test_lost_and_detach(void)
+{
+    to_streaming();
+    W.hold_sent = true;
+    pass(20 * MS);
+    CHECK(P.pending);
+    uint64_t sent = P.packets_sent, frames = P.frames_sent, since = P.frames_since_anchor;
+    bt_a2dp_lost(&P);
+    CHECK(!P.pending);
+    CHECK_EQ(P.packets_lost, 1);
+    CHECK_EQ(P.packets_sent, sent);
+    CHECK_EQ(P.frames_sent, frames);
+    CHECK_EQ(P.frames_since_anchor, since + 640);
+    bt_a2dp_lost(&P);                           // nothing pending: nothing more
+    CHECK_EQ(P.packets_lost, 1);
+    W.hold_sent = false;
+    // The next packet is due where the lost one's time ends, not at once.
+    uint64_t due = P.anchor + P.frames_since_anchor * SEC / 48000;
+    if (now < due) CHECK_EQ(bt_a2dp_packet(&P, now, W.mtu, pkt, W.cap, &ops, NULL), 0);
+    pass(20 * MS);
+    CHECK(P.packets_sent > sent);
+    char text[1024];
+    bt_a2dp_status(&P, text, sizeof(text));
+    CHECK(strstr(text, "lost before the controller 1,") != NULL);
+
+    // Detach: the seam is let go, the evidence stays.
+    to_open();
+    E.fail_encode_at = 1;
+    M.endless = true;
+    for (int i = 0; i < 20 && !P.failed; i++) pass(10 * MS);
+    CHECK(P.failed && P.why != NULL);
+    uint64_t packets = P.packets_sent;
+    uint32_t sessions = P.sessions_begun;
+    const char *why = P.why;
+    int detaches = M.detaches, stale = M.stale_detaches;
+    bt_a2dp_detach(&P, &ops, NULL);
+    CHECK(!P.attached && !P.streaming && !P.pending);
+    CHECK_EQ(M.detaches, detaches + 1);
+    CHECK(P.failed && P.why == why && P.packets_sent == packets && P.sessions_begun == sessions);
+    bt_a2dp_detach(&P, &ops, NULL);             // not attached: the seam is not asked again
+    CHECK_EQ(M.detaches, detaches + 1);
+    CHECK_EQ(M.stale_detaches, stale);
+    E.fail_encode_at = 0;
+}
 static void test_failures(void)
 {
     // The encoder will not begin: failed at once, closed at OPEN.
@@ -1308,6 +1355,7 @@ int main(int argc, char **argv)
     test_new_session_between_passes();
     test_mtu();
     test_failures();
+    test_lost_and_detach();
     test_reset_everywhere();
     test_avdtp_reset_alone();
     test_displaced();

@@ -289,6 +289,23 @@ void bt_a2dp_sent(bt_a2dp_t *p)
     p->frames_sent+=p->pending_frames;
 }
 
+// Its time passes as if it had been sent, so the clock keeps the
+// headphones' pace; it is counted as lost, not sent. Its sequence number
+// and timestamp were spent when it was made, so the headphones see a gap.
+void bt_a2dp_lost(bt_a2dp_t *p)
+{
+    if(!p->pending) return;
+    p->pending=false;
+    if(p->pending_anchor==p->anchors) p->frames_since_anchor+=p->pending_frames;
+    p->packets_lost++;
+}
+
+void bt_a2dp_detach(bt_a2dp_t *p, const bt_a2dp_ops_t *ops, void *ctx)
+{
+    if(p->attached) a2_detach(p,ops,ctx);
+    p->pending=false;
+}
+
 const char *bt_a2dp_state_name(const bt_a2dp_t *p)
 {
     if(p->failed) return "failed";
@@ -312,9 +329,9 @@ size_t bt_a2dp_status(const bt_a2dp_t *p, char *out, size_t cap)
         if(w>0) n+=(size_t)w;
     }
     if(n<cap) {
-        w=snprintf(out+n,cap-n,"a2dp: packets sent %lu, frames %lu, dry packets %u, slips %u, slow encodes %u, flushes seen %u\n",
-                   (unsigned long)p->packets_sent,(unsigned long)p->frames_sent,(unsigned)p->dry_packets,(unsigned)p->slips,
-                   (unsigned)p->slow,(unsigned)p->generations);
+        w=snprintf(out+n,cap-n,"a2dp: packets sent %lu, frames %lu, lost before the controller %u, dry packets %u, slips %u, slow encodes %u, flushes seen %u\n",
+                   (unsigned long)p->packets_sent,(unsigned long)p->frames_sent,(unsigned)p->packets_lost,(unsigned)p->dry_packets,
+                   (unsigned)p->slips,(unsigned)p->slow,(unsigned)p->generations);
         if(w>0) n+=(size_t)w;
     }
     if(n<cap) {

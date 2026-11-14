@@ -901,7 +901,7 @@ typedef struct {
 } ha_ch_t;
 enum { HA_IDLE, HA_CONFIGURED, HA_OPENED, HA_STREAMING };
 static struct {
-    bool on, hang_up, answer_open, cross, they_begin, they_open_sig;
+    bool on, hang_up, answer_open, cross, they_begin, they_open_sig, reject_getall;
     uint16_t mtu;
     unsigned delay_ours, delay_theirs;   // ms before they configure a channel we, or they, asked for
     ha_ch_t ch[8]; unsigned chn;
@@ -917,6 +917,7 @@ static struct {
     // The media channel as received.
     unsigned packets; uint64_t frames;
     uint16_t seq; uint32_t ts; bool seq_known;
+    unsigned gaps; uint16_t gap_packets; uint32_t gap_samples;   // the last gap in the sequence
     uint64_t at[HA_PACKETS]; uint8_t nframes[HA_PACKETS];
     uint8_t kept[HA_FRAMES][SBC_FRAME_BYTES_MAX]; size_t kept_n;
     // What arrived this step, in order: 's' signalling, 'm' media.
@@ -1029,6 +1030,7 @@ static void ha_signal(int k,const uint8_t *p,size_t n)
     switch(s) {
     case AV_DISCOVER: HA.discovers++; HA_SAY(k,AV_ACC(l),AV_DISCOVER,AV_EP(HA_SEID,0,0,1)); break;
     case AV_GETALL: HA.getalls++;
+        if(HA.reject_getall) { HA_SAY(k,AVH(l,1),AV_GETALL); break; }      // a 1.2 sink: not understood
         HA_SAY(k,AV_ACC(l),AV_GETALL,AV_TRANSPORT,AV_SBC(AV_F48|AV_STEREO|AV_JOINT,AV_B16|AV_SB8|AV_LOUD,2,53),AV_DELAYREP); break;
     case AV_GETCAP: HA.getcaps++;
         HA_SAY(k,AV_ACC(l),AV_GETCAP,AV_TRANSPORT,AV_SBC(AV_F48|AV_STEREO|AV_JOINT,AV_B16|AV_SB8|AV_LOUD,2,53)); break;
@@ -1064,7 +1066,11 @@ static void ha_media(const uint8_t *p,size_t n)
     unsigned frames=p[12]&15;
     assert(frames>=1 && HA.fb && n==13u+frames*HA.fb);
     uint16_t seq=be16(p+2); uint32_t ts=ha_be32(p+4);
-    if(HA.seq_known) assert(seq==HA.seq && ts==HA.ts);
+    // A gap is a packet made and never sent (bt_a2dp_lost): its sequence
+    // number and its samples are missing, nothing else.
+    if(HA.seq_known && seq!=HA.seq) {
+        HA.gaps++; HA.gap_packets=(uint16_t)(seq-HA.seq); HA.gap_samples=ts-HA.ts;
+    } else if(HA.seq_known) assert(ts==HA.ts);
     HA.seq=(uint16_t)(seq+1); HA.ts=ts+frames*128u; HA.seq_known=true;
     for(unsigned i=0;i<frames;i++) {
         assert(p[13+i*HA.fb]==0x9c);           // the SBC syncword
@@ -2229,8 +2235,12 @@ static uint64_t enc_clock(void *ctx) { (void)ctx; if(ENC.clock<now*1000) ENC.clo
 static const bt_a2dp_ops_t A2_OPS={seam_pull,seam_has_sound,seam_attach,seam_detach,seam_failed,seam_delay,enc_begin,enc_encode,enc_clock};
 
 // Per step: the pump's sent packets against the headphones' received ones
-// (a pump started over begins its count again), the most channels in use.
-static unsigned a2_peak, a2_base, a2_seen_sent;
+// (a pump started over begins its count again), the packets lost and the
+// gaps in the headphones' sequence against what the case expects (none,
+// unless it says), the controller alive unless the case fails it, and the
+// most channels in use.
+static unsigned a2_peak, a2_base, a2_seen_sent, a2_expect_lost;
+static bool a2_expect_failed;
 static void a2_checks(void)
 {
     unsigned used=0;
@@ -2238,8 +2248,9 @@ static void a2_checks(void)
     if(used>a2_peak) a2_peak=used;
     if(host.a2dp.packets_sent<a2_seen_sent) a2_base=HA.packets-(unsigned)host.a2dp.packets_sent;
     a2_seen_sent=(unsigned)host.a2dp.packets_sent;
-    assert(host.a2dp.packets_sent+a2_base==HA.packets && !host.a2dp_media_lost);
-    assert(!host.failed);
+    assert(host.a2dp.packets_sent+a2_base==HA.packets);
+    assert(host.a2dp.packets_lost==a2_expect_lost && HA.gaps<=a2_expect_lost);
+    assert(host.failed==a2_expect_failed);
 }
 static void a2_step(void) { HA.order_n=0; step(); a2_checks(); }
 // The host with its Classic slot and an audio sink, bonded to the
@@ -2250,7 +2261,7 @@ static void a2_bonded_refusing(uint16_t refuse)
     HP.refuse=refuse;
     bt_host_audio(&host,&A2_OPS,NULL);
     memset(&SEAM,0,sizeof(SEAM)); memset(&ENC,0,sizeof(ENC));
-    a2_peak=a2_base=a2_seen_sent=0;
+    a2_peak=a2_base=a2_seen_sent=a2_expect_lost=0; a2_expect_failed=false;
     HA.on=true;
     host.scan.count=1; host.scan.devices[0]=(bt_scan_device_t){.le=false};
     memcpy(host.scan.devices[0].address,PH,6);
@@ -2307,15 +2318,20 @@ static void a2dp_session_from_bond(void)
 }
 
 // The headphones refuse the SDP channel (the query is not made): AVDTP is
-// tried all the same, with Get Capabilities, since there is no record.
+// tried all the same, with no version known: Get All Capabilities, and Get
+// Capabilities after headphones that general-reject it.
 static void a2dp_session_without_sdp(void)
 {
-    a2_bonded_refusing(0x0002);
-    a2_until(a2_is_open,5000);
-    assert(host.sdp_not_made && host.sdp_refused==0x0002 && !host.sdp_result_current);
-    assert(HA.getcaps==1 && !HA.getalls && HA.setconfs==1 && SEAM.attached);
-    assert(HA.sdp_closed==0);       // there was no SDP channel to close
-    puts("PASS: with the SDP query not made, AVDTP is tried all the same, with Get Capabilities");
+    for(unsigned older=0;older<2;older++) {
+        a2_bonded_refusing(0x0002);
+        HA.reject_getall=older;
+        a2_until(a2_is_open,5000);
+        assert(host.sdp_not_made && host.sdp_refused==0x0002 && !host.sdp_result_current);
+        assert(host.avdtp.peer_version==0 && HA.getalls==1 && HA.getcaps==older && HA.setconfs==1 && SEAM.attached);
+        assert(host.avdtp.delay_reporting==!older);
+        assert(HA.sdp_closed==0);       // there was no SDP channel to close
+    }
+    puts("PASS: with the SDP query not made, AVDTP is tried all the same: Get All Capabilities, Get Capabilities after a reject of it");
 }
 
 // Sound: the seam is given PCM, Start goes out, and packets reach the
@@ -2440,7 +2456,10 @@ static void a2dp_pool_exhausted(void)
 // packet is made meanwhile. The transport holds its slots, and an Echo
 // from the headphones lands in the tick the packet is due, so L2CAP's
 // signalling goes first and takes the last slot the Classic link may use.
-static void a2dp_gate_closed_with_a_packet(void)
+// A stream, and a media packet left queued with the gate closed: the
+// transport holds its slots (TX.hold, left set) and the packet sits in the
+// media channel's payload slot, pending.
+static void a2_hold_a_packet(void)
 {
     a2_bonded();
     a2_until(a2_is_open,5000);
@@ -2464,10 +2483,16 @@ static void a2dp_gate_closed_with_a_packet(void)
     a2_step();
     assert(HP.echo_rsps==echoes+1 && p->pending && p->packets_sent==sent);
     assert(host.l2cap.ch[host.avdtp_media-1].queued && TX.n==3 && SEAM.pulls==pulls+1);
+}
+static void a2dp_gate_closed_with_a_packet(void)
+{
+    a2_hold_a_packet();
+    const bt_a2dp_t *p=&host.a2dp;
+    uint64_t sent=p->packets_sent, pulls=SEAM.pulls;
     unsigned packets=HA.packets;
     for(unsigned i=0;i<30;i++) {
         a2_step();
-        assert(p->pending && p->packets_sent==sent && HA.packets==packets && SEAM.pulls==pulls+1);
+        assert(p->pending && p->packets_sent==sent && HA.packets==packets && SEAM.pulls==pulls);
     }
     // The transport lets its slots go: the packet leaves, and is counted, once.
     TX.hold=false;
@@ -2475,6 +2500,62 @@ static void a2dp_gate_closed_with_a_packet(void)
     assert(HA.packets>=packets+1 && p->packets_sent>=sent+1);
     for(unsigned i=0;i<100;i++) a2_step();
     puts("PASS: a packet queued while the gate stays closed is counted sent once, in the tick it leaves; nothing else is made meanwhile");
+}
+
+// The packet let go: one is queued with the gate closed, and the
+// headphones reconfigure the media channel to an MTU it no longer fits.
+// L2CAP drops it (outgrown); the pump's pending is released and the packet
+// counted lost, not sent; the stream goes on in smaller packets, and the
+// headphones' sequence has exactly the one gap, of that packet's samples.
+static void a2dp_packet_let_go(void)
+{
+    a2_hold_a_packet();
+    const bt_a2dp_t *p=&host.a2dp;
+    uint32_t held_samples=p->pending_frames;
+    uint64_t sent=p->packets_sent;
+    uint32_t outgrown=host.l2cap.outgrown;
+    int k=HA.media;
+    assert(k>=0 && held_samples==640);
+    a2_expect_lost=1;
+    HP_CMD(4,HP.ident++,W16(HA.ch[k].host_cid),0,0,1,2,W16(200));     // their new MTU: 200
+    for(unsigned i=0;i<3 && !p->packets_lost;i++) a2_step();
+    assert(p->packets_lost==1 && !p->pending && p->packets_sent==sent && host.l2cap.outgrown==outgrown+1);
+    assert(bt_host_media_room(&host)==200);
+    TX.hold=false;
+    unsigned packets=HA.packets;
+    for(unsigned i=0;i<500;i++) a2_step();
+    assert(HA.packets>packets+100 && p->frames_a_packet==1 && !p->slips && !p->failed);
+    assert(HA.gaps==1 && HA.gap_packets==1 && HA.gap_samples==held_samples);
+    assert(status_has("lost before the controller 1,"));
+    puts("PASS: a packet the peer's new MTU no longer fits is let go as lost: pending released, the stream goes on, one gap in the sequence");
+}
+
+// The transport fails mid-stream: the pump lets the seam go (the null sink
+// would take over), nothing more is pulled, and the status keeps what the
+// pump had done and says the controller failed.
+static void a2dp_controller_fails(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    for(unsigned i=0;i<300;i++) a2_step();
+    uint64_t sent=host.a2dp.packets_sent;
+    assert(sent>10 && SEAM.attached);
+    a2_expect_failed=true;
+    ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
+    bt_host_tick(&host,now,now*1000,true,TX.n,true,multi_command,multi_acl,multi_report,NULL);
+    a2_checks();
+    assert(host.failed && !SEAM.attached && SEAM.detaches==1 && !host.a2dp.attached);
+    uint64_t pulls=SEAM.pulls;
+    unsigned packets=HA.packets;
+    for(unsigned i=0;i<500;i++) a2_step();
+    assert(SEAM.pulls==pulls && HA.packets==packets && SEAM.detaches==1);
+    // The evidence stays.
+    assert(host.a2dp.packets_sent==sent && host.a2dp.sessions_begun==1);
+    char want[96]; snprintf(want,sizeof want,"a2dp: packets sent %lu,",(unsigned long)sent);
+    assert(status_has(want) && status_has("a2dp: stopped: the Bluetooth controller failed; reboot required\n"));
+    puts("PASS: the controller failing mid-stream detaches the pump, pulls nothing more, and the status keeps the evidence");
 }
 
 // L2CAP sends something older first: an AVDTP answer (to their Delay
@@ -2532,6 +2613,35 @@ static void a2dp_signalling_crossings(void)
         a2_until(a2_is_streaming,100);
     }
     puts("PASS: their signalling first, and both at once in either order: one channel survives, the other we close, one session; the table full");
+}
+
+// The headphones go and come back by calling us (the P5's pair did, switched
+// off and on mid-song), and open signalling before our SDP query has ended:
+// AVDTP is told no version, asks Get All Capabilities all the same, and the
+// session has delay reporting, which they offer.
+static void a2dp_they_call_and_open_first(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    assert(host.avdtp.peer_version==0x0103 && host.avdtp.delay_reporting && HA.getalls==1);
+    cm_disconn(0,0x13); CM.live=false; a2_step();
+    ha_link_down();
+    assert(host.classic.phase==BT_CLASSIC_STOPPED && !host.l2cap.up);
+    // They call, and open signalling the moment the link is theirs.
+    CM.they_secure=true;
+    cm_request(0,PH);
+    bool opened=false;
+    for(unsigned i=0;i<3000 && !opened;i++) {
+        a2_step();
+        if(host.classic.phase==BT_CLASSIC_READY) { ha_connect(); opened=true; }
+    }
+    assert(opened && host.classic.session==BT_CLASSIC_SESSION_INBOUND);
+    a2_until(a2_is_open,5000);
+    // Signalling was open before the SDP answer: no version, yet Get All.
+    assert(host.avdtp.peer_version==0 && host.sdp_result_current && host.sdp_result.avdtp_version==0x0103);
+    assert(HA.getalls==2 && !HA.getcaps && host.avdtp.delay_reporting);
+    assert(status_has("delay reporting on"));
+    puts("PASS: they call us and open signalling before our SDP query ends: Get All Capabilities all the same, delay reporting on");
 }
 
 // They begin the session themselves: their Set Configuration, Open, the
@@ -2724,8 +2834,11 @@ int main(void)
     a2dp_beside_le();
     a2dp_pool_exhausted();
     a2dp_gate_closed_with_a_packet();
+    a2dp_packet_let_go();
+    a2dp_controller_fails();
     a2dp_older_first();
     a2dp_signalling_crossings();
+    a2dp_they_call_and_open_first();
     a2dp_they_begin();
     a2dp_gone_wrong();
     a2dp_link_drop();

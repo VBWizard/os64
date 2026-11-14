@@ -144,6 +144,15 @@ mutants = [
     ('a-failed-sink-is-not-closed', '    if(p->failed && (st==BT_AVDTP_OPEN || st==BT_AVDTP_STREAMING) && bt_avdtp_close(a,ms)) {',
      '    if(0 && bt_avdtp_close(a,ms)) {'),
     ('the-link-drop-does-not-detach', '    if(p->attached) ops->detach(ctx);\n    a2_wipe(p,sizeof(*p));', '    if(0) ops->detach(ctx);\n    a2_wipe(p,sizeof(*p));'),
+    # A packet lost before the controller; a detach that keeps the evidence.
+    ('a-lost-packet-stays-pending', '    if(!p->pending) return;\n    p->pending=false;\n    if(p->pending_anchor==p->anchors) p->frames_since_anchor+=p->pending_frames;\n    p->packets_lost++;',
+     '    if(!p->pending) return;\n    if(p->pending_anchor==p->anchors) p->frames_since_anchor+=p->pending_frames;\n    p->packets_lost++;'),
+    ('a-lost-packet-takes-no-time', '    p->pending=false;\n    if(p->pending_anchor==p->anchors) p->frames_since_anchor+=p->pending_frames;\n    p->packets_lost++;',
+     '    p->pending=false;\n    p->packets_lost++;'),
+    ('a-lost-packet-is-sent', '    p->packets_lost++;\n}', '    p->packets_lost++;\n    p->packets_sent++;\n}'),
+    ('a-lost-packet-is-not-counted', '    p->packets_lost++;\n}', '}'),
+    ('a-detach-asks-the-seam-anyway', '    if(p->attached) a2_detach(p,ops,ctx);\n    p->pending=false;', '    a2_detach(p,ops,ctx);\n    p->pending=false;'),
+    ('a-detach-wipes', '    if(p->attached) a2_detach(p,ops,ctx);\n    p->pending=false;', '    if(p->attached) a2_detach(p,ops,ctx);\n    a2_wipe(p,sizeof(*p));'),
 ]
 
 caught, missed, unbuilt = [], [], []

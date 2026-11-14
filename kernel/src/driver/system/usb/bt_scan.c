@@ -44,8 +44,12 @@ bool bt_scan_start(bt_scan_t *s, uint64_t now)
     uint8_t address[6],features[8];
     scan_copy(address,s->address,sizeof(address));
     scan_copy(features,s->features,sizeof(features));
-    *s=(bt_scan_t){.phase=shared?BT_SCAN_LE_PARAMS:BT_SCAN_RESET,
-        .shared_controller=shared,.le_only=shared,.credits=1,.total_deadline=now+40000};
+    // Wiped in place: a compound literal would build a second scan, devices
+    // and all, on the kernel stack.
+    uint8_t *wipe=(uint8_t *)s;
+    for(size_t i=0;i<sizeof(*s);i++) wipe[i]=0;
+    s->phase=shared?BT_SCAN_LE_PARAMS:BT_SCAN_RESET;
+    s->shared_controller=shared; s->le_only=shared; s->credits=1; s->total_deadline=now+40000;
     // Shared scans skip controller discovery, so retain its public metadata.
     if(shared) {
         scan_copy(s->address,address,sizeof(address));

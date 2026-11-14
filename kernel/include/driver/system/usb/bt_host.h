@@ -136,11 +136,10 @@ typedef struct {
     uint8_t avdtp_sig_asked, avdtp_sig_ends;
     uint64_t avdtp_sig_again_at;
     // PDUs that arrived on the media channel (we are a source) or on a
-    // 0x0019 channel with no role, dropped; media packets that left the
-    // channel's payload slot without being handed to the controller (the
-    // peer's new MTU no longer took one, or the controller's packet could
-    // not carry it), let go as sent so the pump goes on. Since start-up.
-    uint32_t avdtp_media_dropped, a2dp_media_lost;
+    // 0x0019 channel with no role, dropped. Since start-up. (Media packets
+    // that never reach the controller are the pump's to count:
+    // bt_a2dp_lost.)
+    uint32_t avdtp_media_dropped;
     // The media packet the pump writes and L2CAP copies.
     uint8_t a2dp_packet[BT_L2CAP_MTU];
     // Reconnection (AUDIO_CLASSIC.md § L6): with a bond and `classic_auto`,
