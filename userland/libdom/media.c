@@ -409,6 +409,8 @@ static void source_failed(os64_dom_t *dom, DMediaElement *m, const char *why)
 {
     session_close(dom, m);
     if (m->from_children) {
+        /* The next candidate's session is new: its error is unseen. */
+        m->error_seen = false;
         m->candidate++;
         select_resource(dom, m);
         return;
@@ -626,13 +628,20 @@ static void step(os64_dom_t *dom, DMediaElement *m)
     const os64_html_attr_t *src = os64_html_attr(m->node, "src");
     const char *now = src != NULL ? src->value : NULL;
     if (!m->src_looked || !same_text(now, m->src_seen)) {
+        bool first = !m->src_looked;
         m->src_looked = true;
         char *copy = copy_text(dom, now);
         if (now == NULL || copy != NULL) {
             d_free(dom, m->src_seen);
             m->src_seen = copy;
-            /* HTML: setting or changing src loads; removing it does not. */
+            /* HTML: setting or changing src loads; removing it does not.
+             * The first look at a parsed element's src is the load the
+             * parser started, arriving late: a seek a script asked before
+             * it (default_start) is the script's, as it would have been
+             * had the load come first. */
+            double start = m->default_start;
             if (now != NULL) media_load(dom, NULL, m);
+            if (first) m->default_start = start;
         }
     }
     if (m->network == N_EMPTY && !m->select_pending && src == NULL && has_source_child(m->node))
@@ -1276,9 +1285,14 @@ int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
         return -1;
     }
     JSValue audio_interface = d_interface_new(ctx, "HTMLAudioElement", 0, NULL, audio, media_interface);
+    /* Each define takes its value whatever it answers, so the second
+     * interface is let go here if the first define fails. */
     if (JS_DefinePropertyValueStr(ctx, global, "HTMLMediaElement", media_interface,
-                                  JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0 ||
-        JS_IsException(audio_interface) ||
+                                  JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0) {
+        JS_FreeValue(ctx, audio_interface);
+        return -1;
+    }
+    if (JS_IsException(audio_interface) ||
         JS_DefinePropertyValueStr(ctx, global, "HTMLAudioElement", audio_interface,
                                   JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
         return -1;

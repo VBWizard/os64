@@ -145,6 +145,11 @@ struct yonder_scripts {
     // HTML's sticky activation: a person's key, press or click has reached
     // the page (yonder_scripts_activated).
     bool activated;
+    // Whether the document holds a media element, as of the tree version
+    // it was last looked at (media_in_document): a page with no script
+    // gets its runtime for one.
+    uint64_t media_version;
+    bool media_scanned, media_found;
     char note[256];
     // The whole address of the script the last task ran, NULL when it was
     // an inline script, an event or a timer (yonder_scripts_task_address).
@@ -2499,9 +2504,41 @@ void yonder_scripts_canvas_painted(yonder_scripts_t *s, const os64_html_node_t *
     if (s) os64_dom_canvas_painted(s->dom, node);
 }
 
+// Whether the document holds a media element: looked for once per tree
+// version, and only while the page has no runtime.
+static bool media_in_document(yonder_scripts_t *s)
+{
+    uint64_t version = os64_html_version(s->doc);
+    if (s->media_scanned && s->media_version == version)
+        return s->media_found;
+    s->media_found = false;
+    const os64_html_node_t *root = s->doc->document;
+    for (const os64_html_node_t *at = root; at != NULL && !s->media_found;
+         at = os64_html_shadow_including_next(root, at))
+        s->media_found = at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML &&
+                         at->tag == OS64_HTML_TAG_AUDIO;
+    s->media_version = version;
+    s->media_scanned = true;
+    return s->media_found;
+}
+
 bool yonder_scripts_media_turn(yonder_scripts_t *s)
 {
-    return s != NULL && !s->dead && s->dom != NULL && os64_dom_media_turn(s->dom);
+    if (s == NULL || s->dead || !s->options.modern)
+        return false;
+    // A page that never ran a script still has its media elements: the
+    // binding they live in is made for the first one, as a handler
+    // attribute's is (dispatch_event).
+    if (s->dom == NULL) {
+        if (!media_in_document(s))
+            return false;
+        os64_js_outcome_t out;
+        if (!ensure_runtime(s, &out)) {
+            retire(s);
+            return false;
+        }
+    }
+    return s->dom != NULL && os64_dom_media_turn(s->dom);
 }
 
 bool yonder_scripts_media_pending(const yonder_scripts_t *s)

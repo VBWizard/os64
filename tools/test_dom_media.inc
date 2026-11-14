@@ -364,8 +364,36 @@ static void dom_media_document_cases(void)
     check(media_opened == 4 && strcmp(media_sessions[3].url, "https://example.test/dir/w.mp3") == 0,
           "media: the source whose type plays");
     media_script(&f, "assert(d.currentSrc==='https://example.test/dir/w.mp3');", "media: currentSrc is the source's");
+
+    /* Two playable candidates that both fail while loading: each failure
+     * moves on, and after the last the element has no source. */
+    media_script(&f, "globalThis.e=document.createElement('audio');"
+                     "e.innerHTML='<source src=\"p.mp3\" type=\"audio/mpeg\"><source src=\"q.mp3\" type=\"audio/mpeg\">';"
+                     "document.body.appendChild(e);",
+                 "media: two failing sources");
+    media_turn(&f, "media: the first opens");
+    check(media_opened == 5, "media: the first candidate opened");
+    media_sessions[4].facts.error = OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED;
+    media_turn(&f, "media: the first fails");
+    check(media_opened == 6 && strcmp(media_sessions[5].url, "https://example.test/dir/q.mp3") == 0,
+          "media: on to the second");
+    media_sessions[5].facts.error = OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED;
+    media_turn(&f, "media: the second fails");
+    media_script(&f, "assert(e.networkState===3,'no source left: '+e.networkState);",
+                 "media: the second's failure is heard too");
+
+    /* A seek a script asks of a parsed element before its first turn is
+     * kept through the load the turn starts. */
+    media_script(&f, "globalThis.g=document.createElement('audio');g.setAttribute('src','r.mp3');"
+                     "document.body.appendChild(g);g.currentTime=1.5;",
+                 "media: a seek before the first turn");
+    media_turn(&f, "media: the first turn");
+    media_ready(&media_sessions[6], 3);
+    media_turn(&f, "media: metadata");
+    check(media_sessions[6].seek_generation == 1 && media_sessions[6].seek_to == 1.5,
+          "media: the early seek is made once the length is known");
     fixture_free(&f);
-    check(media_closed == 4, "media: every session closed at teardown");
+    check(media_closed == 7, "media: every session closed at teardown");
 }
 
 static void dom_media_loop_cases(void)

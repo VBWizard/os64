@@ -699,8 +699,16 @@ static int64_t decoder_main(void *arg)
         }
     }
     // Nothing more to do until stopped (a failed session waits for its
-    // close like any other).
-    while (decoder_wait(m, OS64_WAIT_FOREVER)) {
+    // close like any other). The stop is looked at BEFORE each wait: the
+    // loop above may have left on the very ring that said stop, and a wait
+    // first would wait for a ring that never comes.
+    for (;;) {
+        os64_lock_acquire(&m->lock);
+        bool stop = m->stop;
+        os64_lock_release(&m->lock);
+        if (stop)
+            break;
+        (void)os64_bell_wait(&m->bell, OS64_WAIT_FOREVER);
     }
     os64_media_close(media);
     if (m->file >= 0)
