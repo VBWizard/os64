@@ -410,7 +410,9 @@ enum { O_UNSET, O_SINGLE, O_MULTIPLE };
  * and whether its next callback is told droppedEntriesCount. */
 typedef struct {
     /* The timeline and observer registry belong to the constructor realm. */
-    JSValue anchor, callback;
+    JSValue anchor;
+    os64_dom_t *dom;
+    DScheduledCallback callback;
     JSValue *entries;
     uint32_t count, cap, script;
     os64_dom_t *report_owner;
@@ -434,8 +436,8 @@ static void observer_finalizer(JSRuntime *rt, JSValue value)
 {
     DObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
     if (o == NULL) return;
+    d_scheduled_clear(o->dom, &o->callback);
     JS_FreeValueRT(rt, o->anchor);
-    JS_FreeValueRT(rt, o->callback);
     values_free(rt, o->entries, o->count);
     js_free_rt(rt, o);
 }
@@ -445,7 +447,7 @@ static void observer_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
     DObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
     if (o == NULL) return;
     JS_MarkValue(rt, o->anchor, mark);
-    JS_MarkValue(rt, o->callback, mark);
+    JS_MarkValue(rt, o->callback.value, mark);
     for (uint32_t i = 0; i < o->count; i++) JS_MarkValue(rt, o->entries[i], mark);
 }
 
@@ -538,7 +540,7 @@ static JSValue observer_task(JSContext *ctx, JSValueConst self, int argc, JSValu
     for (uint32_t i = 0; i < count && !JS_IsException(result); i++) {
         DObserver *o = JS_GetOpaque(notify[i], os64_js_class_id(&observer_slot));
         if (o == NULL || o->count == 0) continue;
-        int eligible = d_delivery_eligible(dom, ctx, o->callback);
+        int eligible = d_observer_eligible(dom, ctx, &o->callback);
         if (eligible <= 0) {
             /* Consume obsolete entries without allocating an author-facing
              * list, retaining the observer itself and its registration. */
@@ -567,12 +569,10 @@ static JSValue observer_task(JSContext *ctx, JSValueConst self, int argc, JSValu
         o->dropped_owed = false;
         uint32_t script = o->script;
         os64_dom_t *report_owner = o->report_owner;
-        JSValue callback = JS_DupValue(ctx, o->callback);
         JSValueConst args[3] = {list, notify[i], options};
         DScripts before = d_script_enter(report_owner, script);
-        JSValue called = JS_Call(ctx, callback, notify[i], 3, args);
+        JSValue called = d_scheduled_invoke(dom, ctx, &o->callback, notify[i], 3, args);
         d_script_leave(report_owner, &before, false);
-        JS_FreeValue(ctx, callback);
         JS_FreeValue(ctx, list);
         JS_FreeValue(ctx, options);
         if (!JS_IsException(called)) JS_FreeValue(ctx, called);
@@ -1276,25 +1276,35 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     if (dom == NULL) return JS_EXCEPTION;
     if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
         return JS_ThrowTypeError(ctx, "A PerformanceObserver needs a callback function");
+    DScheduledCallback callback = D_SCHEDULED_CALLBACK_INIT;
+    if (!d_observer_capture(dom, ctx, argv[0], &callback)) return JS_EXCEPTION;
     os64_dom_t *report_owner;
     uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
-    if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
+    if (script == D_SCRIPT_FAILED) goto failed;
     JSClassID id = os64_js_class_id(&observer_slot);
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
-    if (JS_IsException(prototype)) return prototype;
+    if (JS_IsException(prototype)) goto failed;
+    if (!d_require_active(dom, ctx) || !d_scheduled_live(ctx, &callback)) {
+        JS_FreeValue(ctx, prototype);
+        goto failed;
+    }
     JSValue object = JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, id) : JS_NewObjectClass(ctx, (int)id);
     JS_FreeValue(ctx, prototype);
     DObserver *o = JS_IsException(object) ? NULL : js_mallocz(ctx, sizeof(*o));
     if (o == NULL) {
         JS_FreeValue(ctx, object);
-        return JS_EXCEPTION;
+        goto failed;
     }
+    o->dom = dom;
     o->anchor = JS_DupValue(ctx, dom->anchor->value);
-    o->callback = JS_DupValue(ctx, argv[0]);
+    o->callback = callback;
     o->script = script;
     o->report_owner = report_owner;
     JS_SetOpaque(object, o);
     return object;
+failed:
+    d_scheduled_clear(dom, &callback);
+    return JS_EXCEPTION;
 }
 
 /* `self` on the registered list, at its end unless it is there already;

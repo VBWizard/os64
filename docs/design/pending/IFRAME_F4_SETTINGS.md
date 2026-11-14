@@ -249,13 +249,16 @@ binding/security integration. Native jobs still require host preparation;
 Promise incumbent capture and exact script/module identity remain separate.
 Evidence: [IFRAME_F4_CURRENT_REALM_VALIDATION.md](IFRAME_F4_CURRENT_REALM_VALIDATION.md).
 
+Observer integration and its qualified proof are recorded in
+[IFRAME_F4_OBSERVER_SETTINGS.md](IFRAME_F4_OBSERVER_SETTINGS.md).
+
 ## Remaining F.4b interfaces and acceptance gates
 
 Before publishing browser settings queries, implement and prove:
 
 - DOM integration of checked entry/lifecycle scopes and role-specific
   attribution, including relevant settings from the target binding.
-- Extend timer/listener/scheduled integration to the remaining WebIDL conversion and invocation sites,
+- Extend timer/listener/scheduled/handler/observer integration to the remaining WebIDL conversion and invocation sites,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.
 - Promise reaction and thenable capture/invocation, including bound foreign

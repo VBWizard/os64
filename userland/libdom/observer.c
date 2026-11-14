@@ -49,7 +49,7 @@ typedef struct DObserver {
      * reference to it a registration keeps (`held`). */
     JSValue object;
     bool held;
-    JSValue callback;
+    DScheduledCallback callback;
     uint32_t script;
     os64_dom_t *report_owner;
     DMutation *first, *last;
@@ -556,7 +556,7 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
         if (!callback_ctx) { status = -1; break; }
         bool any = o->first != NULL;
         int eligible = 1;
-        if (eligible && any) eligible = d_delivery_eligible(owner, callback_ctx, o->callback);
+        if (eligible && any) eligible = d_observer_eligible(owner, callback_ctx, &o->callback);
         if (eligible <= 0) queue_clear(owner, o);
         if (eligible == 0) {
             registrations_drop(dom, transient_for, o);
@@ -573,10 +573,11 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
                 else d_report(owner, callback_ctx, error);
                 JS_FreeValue(callback_ctx, error);
             }
-        } else if (any && JS_IsObject(o->object) && JS_IsFunction(callback_ctx, o->callback)) {
-            JSValue args[2] = {records, o->object};
+        } else if (any && JS_IsObject(o->object) && JS_IsFunction(callback_ctx, o->callback.value)) {
+            JSValue self = JS_DupValue(callback_ctx, o->object);
+            JSValue args[2] = {records, self};
             DScripts before = d_script_enter(o->report_owner, o->script);
-            JSValue result = JS_Call(callback_ctx, o->callback, o->object, 2, args);
+            JSValue result = d_scheduled_invoke(owner, callback_ctx, &o->callback, self, 2, args);
             d_script_leave(o->report_owner, &before, false);
             if (JS_IsException(result)) {
                 if (!d_exception_catchable(callback_ctx)) status = -1;
@@ -587,6 +588,7 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
                 }
             }
             JS_FreeValue(callback_ctx, result);
+            JS_FreeValue(callback_ctx, self);
         }
         JS_FreeValue(callback_ctx, records);
         o = next;
@@ -659,16 +661,16 @@ static DObserver *observer_of(os64_dom_t *dom, JSValueConst self)
 static void observer_finalizer(JSRuntime *rt, JSValue value)
 {
     DObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
+    (void)rt;
     if (o == NULL) return;
-    JS_FreeValueRT(rt, o->callback);
-    o->callback = JS_UNDEFINED;
+    d_scheduled_clear(o->dom, &o->callback);
     o->object = JS_UNDEFINED;
 }
 
 static void observer_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 {
     DObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
-    if (o != NULL) JS_MarkValue(rt, o->callback, mark);
+    if (o != NULL) JS_MarkValue(rt, o->callback.value, mark);
 }
 
 static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
@@ -676,12 +678,18 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     os64_dom_t *dom = d_binding(ctx);
     if (dom == NULL) return JS_EXCEPTION;
     if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "MutationObserver needs a callback");
+    DScheduledCallback callback = D_SCHEDULED_CALLBACK_INIT;
+    if (!d_observer_capture(dom, ctx, argv[0], &callback)) return JS_EXCEPTION;
     struct DObservers *s = dom->observers;
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
-    if (JS_IsException(prototype)) return prototype;
+    if (JS_IsException(prototype)) goto failed;
     if (!JS_IsObject(prototype)) {
         JS_FreeValue(ctx, prototype);
         prototype = JS_GetClassProto(ctx, s->observer_class);
+    }
+    if (!d_require_active(dom, ctx) || !d_scheduled_live(ctx, &callback)) {
+        JS_FreeValue(ctx, prototype);
+        goto failed;
     }
     os64_dom_t *report_owner;
     uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
@@ -691,12 +699,12 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     if (JS_IsException(object)) {
         d_free(dom, o);
         if (!JS_HasException(ctx)) d_error(ctx, "QuotaExceededError", "MutationObserver quota exceeded");
-        return JS_EXCEPTION;
+        goto failed;
     }
     os64_memset(o, 0, sizeof(*o));
     o->dom = dom;
     o->object = object;
-    o->callback = JS_DupValue(ctx, argv[0]);
+    o->callback = callback;
     o->script = script;
     o->report_owner = report_owner;
     if (s->observers_last != NULL) s->observers_last->next = o;
@@ -704,6 +712,9 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     s->observers_last = o;
     JS_SetOpaque(object, o);
     return object;
+failed:
+    d_scheduled_clear(dom, &callback);
+    return JS_EXCEPTION;
 }
 
 /* MutationObserverInit, its members read in their WebIDL order
