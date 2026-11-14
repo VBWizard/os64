@@ -22,7 +22,9 @@
 //
 // Exit codes: 0x91A10000 success, 0x91A100NN the step that failed (99: it
 // was given arguments).
+// 0x91A100FE: skipped because something can be heard (sound_guard.h).
 
+#include "../audiotest/sound_guard.h"
 #include "os64/os64.h"
 #include "os64/audio.h"
 #include "../resampletest/checks.h"
@@ -146,7 +148,7 @@ static int play(const char *path)
     return -1;   // the thread is left waiting; the test is failing anyway
 }
 
-int main(int argc, char **argv)
+static int steps(int argc, char **argv)
 {
     (void)argv;
     if (argc != 1)
@@ -248,4 +250,22 @@ int main(int argc, char **argv)
     os64_close(gPos);
     os64_printf("playtest: all steps passed\n");
     return (int)PLAYTEST_OK;
+}
+
+// Only where nothing can be heard (sound_guard.h), and the volume put back
+// as it was found.
+int main(int argc, char **argv)
+{
+    char sink[32];
+    if (sound_guard_audible(sink, sizeof(sink)))
+    {
+        os64_printf("playtest: SKIP: the sink is %s, and this test plays tones and an MP3 and sets the volume;\n"
+                    "          it runs only when nothing can be heard (slot 2 disconnect first)\n", sink);
+        return (int)0x91A100FE;
+    }
+    int volume = sound_guard_volume_get();
+    int code = steps(argc, argv);
+    if (volume >= 0)
+        sound_guard_volume_set(volume);
+    return code;
 }
