@@ -479,14 +479,21 @@ static uint64_t gcd(uint64_t a, uint64_t b)
     return a;
 }
 
-// A seek restarts the resampler, and a resampler with no history makes the
-// first few milliseconds a ramp up from silence, not the song. So the
-// decoder starts EARLIER than the target (`preroll`: twice the resampler's
-// latency, which covers its filter) and the output before the target is
-// counted off with the delay. The early start is put on a boundary of the
-// resampling ratio's cycle (147 media frames for 44.1 kHz, which make
-// exactly 160 output frames), so what comes out is sampled at the same
-// instants as an unbroken decode, and equals it.
+// A seek starts two things over that keep history, and each needs a run-in
+// or its first output is not the song:
+//
+// - The DECODER (a lossy one): an MP3's frame may draw on bits stored in
+//   the frames before it (the bit reservoir, at most 511 bytes back, which
+//   is a few frames at the lowest bitrates), and its filters overlap the
+//   frame before. So decoding starts ten of its frames earlier (and as much
+//   more as the stream says it needs, `seek_preroll`), and what it makes
+//   there is dropped before the resampler.
+// - The RESAMPLER, whose filter needs input on both sides of each output.
+//   It is fed from twice its latency before the target, and its output
+//   before the target is counted off with the delay. That start is put on
+//   a boundary of the ratio's cycle (147 media frames for 44.1 kHz, which
+//   make exactly 160 output frames), so what comes out is sampled at the
+//   same instants as an unbroken decode, and equals it.
 int os64_media_seek(os64_media_t *m, int64_t frame)
 {
     if (m == NULL || frame < 0) return OS64_MEDIA_BAD_ARGS;
@@ -502,14 +509,19 @@ int os64_media_seek(os64_media_t *m, int64_t frame)
     int64_t start_out = start / (int64_t)cycle_in * (int64_t)cycle_out;  // exact: a whole number of cycles
 
     AVStream *s = m->format->streams[m->stream];
-    int64_t ts = av_rescale_q(start, (AVRational){ 1, (int)m->rate }, s->time_base);
+    const AVCodecDescriptor *codec = avcodec_descriptor_get(s->codecpar->codec_id);
+    int64_t decoder_preroll = s->codecpar->seek_preroll;
+    if (codec != NULL && (codec->props & AV_CODEC_PROP_LOSSY))
+        decoder_preroll += s->codecpar->frame_size > 0 ? 10 * (int64_t)s->codecpar->frame_size : m->rate / 2;
+    int64_t decode_from = start - decoder_preroll < 0 ? 0 : start - decoder_preroll;
+    int64_t ts = av_rescale_q(decode_from, (AVRational){ 1, (int)m->rate }, s->time_base);
     if (s->start_time != AV_NOPTS_VALUE) ts += s->start_time;
     if (av_seek_frame(m->format, m->stream, ts, AVSEEK_FLAG_BACKWARD) < 0) return OS64_MEDIA_CANNOT_SEEK;
     avcodec_flush_buffers(m->codec);
     av_packet_unref(m->packet);
     m->packet_waiting = m->reading_done = m->decoding_done = m->tail_done = false;
     m->out_at = m->out_len = 0;
-    m->seek_target = start;                       // media frames before it are dropped
+    m->seek_target = start;                       // media frames before it (the decoder's run-in) are dropped
     if (frame > start_out) m->skip_out += (uint32_t)(frame - start_out);   // the run-in, with the delay
     m->position = frame;
     return 0;

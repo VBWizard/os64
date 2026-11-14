@@ -15,7 +15,8 @@
 //   4  a 48 kHz stereo WAV decodes sample for sample
 //   5  a seek in it returns the target frame first, sample for sample
 //   6  a seek in the MP3 lands on the frame asked for, by the count of
-//      frames left after it
+//      frames left after it, and what it returns is what the unbroken
+//      decode gave there (the decoder and the resampler both run in)
 //  11  a seek in a 44.1 kHz WAV, which goes through the resampler, returns
 //      what an unbroken decode gives at that frame, not a ramp up from
 //      silence
@@ -157,12 +158,41 @@ static int steps_mp3(void)
         if (r == 0) os64_media_close(m);
         return FAIL(1);
     }
+    // The whole decode, kept, for step 6 to compare a seek against.
+    static int16_t whole[48000 * 2 + 64];
+    int64_t got = 0, n;
+    while ((n = os64_media_decode(m, whole + 2 * got, (uint32_t)(48000 + 32 - got))) > 0) got += n;
     Tally t;
-    tally_all(m, &t);
+    os64_memset(&t, 0, sizeof(t));
+    t.result = (int)n;
+    for (int64_t i = 0; i < got; i++) {
+        int16_t l = whole[2 * i], rr = whole[2 * i + 1];
+        if (l != rr) t.mismatched_sides++;
+        if (t.frames > 0 && (t.last < 0) != (l < 0)) t.crossings++;
+        t.last = l;
+        t.sum_squares += (double)l * l;
+        t.frames++;
+    }
     int failed = check_mp3_sound(&t, 2, 3);
     if (failed) { os64_media_close(m); return failed; }
 
-    // 6. Seek to half a second: what is left is the other half.
+    // 6a. A seek into the middle of a packet whose frame draws on the bit
+    // reservoir (5,200 output frames: Codex's case on #595) gives back the
+    // unbroken decode's samples.
+    int16_t after[256 * 2];
+    r = os64_media_seek(m, 5200);
+    n = r == 0 ? os64_media_decode(m, after, 256) : r;
+    if (n != 256) { say("MP3 seek (result, frames)", r, (long)n); os64_media_close(m); return FAIL(6); }
+    for (int i = 0; i < 256; i++) {
+        int d = after[2 * i] - whole[2 * (5200 + i)];
+        if (d < -2 || d > 2) {
+            say("MP3 seek differs from the unbroken decode (frame, by)", 5200 + i, d);
+            os64_media_close(m);
+            return FAIL(6);
+        }
+    }
+
+    // 6b. Seek to half a second: what is left is the other half.
     r = os64_media_seek(m, 24000);
     tally_all(m, &t);
     os64_media_close(m);
