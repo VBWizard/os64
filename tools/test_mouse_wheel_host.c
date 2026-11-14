@@ -53,6 +53,7 @@ void printd(__uint128_t level, const char *fmt, ...)
 { (void)level; (void)fmt; ++diagnostic_lines; }
 // Clipboard and paste are outside this fixture; reaching them is a failure.
 void *kmalloc(uint64_t n) { (void)n; abort(); }
+void *kmalloc_try(uint64_t n) { (void)n; abort(); }
 void kfree(void *p) { (void)p; abort(); }
 snarf_pending_t *clipboard_begin(void) { abort(); }
 int clipboard_append(snarf_pending_t *p,const void *b,size_t n)

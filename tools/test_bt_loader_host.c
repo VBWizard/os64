@@ -138,8 +138,24 @@ void *kmalloc_aligned(uint64_t size)
     allocated[allocations++]=p;
     return p;
 }
+// The probe itself (xhci_ax210_bringup allocates it rather than build it on
+// the stack): one allocation a bring-up, freed exactly once whichever way
+// bring-up ends, and refused when `probe_refused` says so.
+static void *probe_block;
+static unsigned probe_allocs, probe_frees;
+static bool probe_refused;
+extern void *calloc(size_t,size_t);
+void *kmalloc_try(uint64_t size)
+{
+    CHECK(size==sizeof(xhci_bt_probe_t) && !probe_block);
+    if (probe_refused) return NULL;
+    probe_block=calloc(1,size); CHECK(probe_block);
+    probe_allocs++;
+    return probe_block;
+}
 void kfree(void *p)
 {
+    if (p && p==probe_block) { probe_block=NULL; probe_frees++; free(p); return; }
     for (unsigned i=0;i<allocations;i++) if (allocated[i]==p) {
         allocated[i]=NULL; ++frees; free(p); return;
     }
@@ -753,6 +769,7 @@ int main(void)
         hc.dcbaa=dcbaa; hc.rt=(void *)runtime; hc.db=doorbell; hc.evt=(xhci_evt_ring_t){.trb=events,.size=RING_TRBS,.cycle=1};
         hc.ctx_size=32;
         allocations=frees=secure_commands=resets=reads=ddc_commands=pump=0;
+        probe_allocs=probe_frees=0;
         failure_log[0]=0; deferred=false;
         endpoint_resets=halted_enqueue=0;
         resume_endpoint=-1; halted_trb=0;
@@ -767,6 +784,9 @@ int main(void)
         device.input_ctx=kmalloc_aligned(PAGE_SIZE); device.input_ctx_phys=(uintptr_t)device.input_ctx;
         device.dev_ctx=kmalloc_aligned(PAGE_SIZE); dcbaa[2]=(uintptr_t)device.dev_ctx;
         xhci_ax210_bringup(&device,config,sizeof(config));
+        // The probe was allocated once and is gone, whichever way it ended:
+        // a retained adapter lives on in the controller's own storage.
+        CHECK(probe_allocs==1 && probe_frees==1 && !probe_block);
         bool retained=scenario==COLD_RSA || scenario==COLD_ECDSA || scenario==WARM ||
             scenario==DEFERRED_ZERO_OPCODE_SUCCESS || scenario==BOOT_BULK_ERROR || scenario==BOOT_INTR_ERROR;
         CHECK((hc.bt_probe!=NULL)==retained);
@@ -875,6 +895,29 @@ int main(void)
         else CHECK(released && allocations-frees==1 && !dcbaa[2]);
         // The command ring is controller-owned. Failed Disable Slot deliberately
         // retains device DMA as well; the fixture frees it after hardware stops.
+        for (unsigned i=0;i<allocations;i++) if (allocated[i]) free(allocated[i]);
+    }
+    // No memory for the probe: nothing is configured or asked, the slot is
+    // released, and no pointer to a probe is left behind.
+    {
+        xhci_t hc={0}; s_hc=&hc; s_bluetooth_hc=NULL;
+        uint64_t dcbaa[4]={0}, runtime[16]={0}; uint32_t doorbell[4]={0};
+        xhci_trb_t events[RING_TRBS]={0};
+        uint32_t operational[(0x400+0x10*8)/4]={0}; hc.op=(void *)operational; hc.max_ports=8;
+        hc.dcbaa=dcbaa; hc.rt=(void *)runtime; hc.db=doorbell; hc.evt=(xhci_evt_ring_t){.trb=events,.size=RING_TRBS,.cycle=1};
+        hc.ctx_size=32;
+        allocations=frees=secure_commands=resets=reads=probe_allocs=probe_frees=0;
+        fail_after=UINT32_MAX; scenario=WARM; event_write=0; event_cycle=1; released=false;
+        CHECK(ring_init(&hc.cmd));
+        xhci_device_t device={.slot=2,.port=3,.speed=1};
+        CHECK(ring_init(&device.ep0));
+        device.input_ctx=kmalloc_aligned(PAGE_SIZE); device.input_ctx_phys=(uintptr_t)device.input_ctx;
+        device.dev_ctx=kmalloc_aligned(PAGE_SIZE); dcbaa[2]=(uintptr_t)device.dev_ctx;
+        probe_refused=true;
+        xhci_ax210_bringup(&device,config,sizeof(config));
+        probe_refused=false;
+        CHECK(!probe_allocs && !probe_frees && !hc.bt_probe && !s_bluetooth_hc);
+        CHECK(released && !dcbaa[2] && !secure_commands && !reads && allocations-frees==1);
         for (unsigned i=0;i<allocations;i++) if (allocated[i]) free(allocated[i]);
     }
     puts("test_bt_loader_host: RSA/ECDSA upload, boot receive recovery, warm skip, failures and DMA cleanup passed");

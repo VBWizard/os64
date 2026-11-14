@@ -198,7 +198,7 @@ typedef struct {
 	uint64_t deadline;   // the tick by which that transfer must have completed
 } xhci_bt_tx_slot_t;
 
-// Intel transport state. Bring-up uses a stack instance, then transfers a
+// Intel transport state. Bring-up fills an allocated instance, then copies a
 // successful device into controller-owned storage for discovery and LE input.
 typedef struct {
 	xhci_device_t *device;
@@ -1299,9 +1299,21 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 		xhci_release_probe(dev);
 		return;
 	}
+	// The probe is too large for a kernel stack (the host inside it is most
+	// of it), so it is allocated, zeroed, filled in place, copied into the
+	// controller's storage when bring-up succeeds, and freed on every way
+	// out of this function.
+	xhci_bt_probe_t *probe = kmalloc_try(sizeof(*probe));
+	if (!probe) {
+		printd(DEBUG_USB, "xhci: AX210 probe not started: no memory for its %u bytes\n", (unsigned)sizeof(*probe));
+		printf("USB Bluetooth: Intel AX210 probe stopped at its allocation\n");
+		xhci_release_probe(dev);
+		return;
+	}
+	probe->device = dev;
+	probe->tx_done = true;
+	probe->deadline = kTicksSinceStart + 120u * TICKS_PER_SECOND;
 	bt_intel_usb_t usb;
-	xhci_bt_probe_t probe = {.device = dev, .tx_done = true,
-	    .deadline = kTicksSinceStart + 120u * TICKS_PER_SECOND};
 	bool queried = false, attempted = false;
 	const char *stage = "USB layout";
 	// The P5's AX210 is full-speed. Reject other layouts before configuring
@@ -1310,12 +1322,12 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 		printd(DEBUG_USB, "xhci: AX210 Read Version skipped: unsupported USB layout/speed\n");
 		goto cleanup;
 	}
-	probe.rx[0].endpoint = usb.interrupt_in;
-	probe.rx[1].endpoint = usb.bulk_in;
-	probe.tx.endpoint = usb.bulk_out;
+	probe->rx[0].endpoint = usb.interrupt_in;
+	probe->rx[1].endpoint = usb.bulk_in;
+	probe->tx.endpoint = usb.bulk_out;
 	stage = "endpoint buffer allocation";
 	for (unsigned i = 0; i < 3; i++) {
-		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe.rx[i] : &probe.tx;
+		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe->rx[i] : &probe->tx;
 		if (!ring_init(&endpoint->ring)) goto cleanup;
 		// The transmit endpoint's page is followed by its send slots.
 		endpoint->buffer = kmalloc_aligned(i < 2 ? PAGE_SIZE : BT_TX_BYTES);
@@ -1329,7 +1341,7 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 	memset(dev->input_ctx, 0, PAGE_SIZE);
 	uint32_t additions = 1, last_dci = 1;
 	for (unsigned i = 0; i < 3; i++) {
-		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe.rx[i] : &probe.tx;
+		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe->rx[i] : &probe->tx;
 		uint32_t dci = (endpoint->endpoint.address & 15) * 2 + (i < 2);
 		additions |= 1u << dci;
 		if (dci > last_dci) last_dci = dci;
@@ -1356,22 +1368,22 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 	        TRB_TYPE(TRB_CONFIG_ENDPOINT) | (dev->slot << 24)) != TRB_CC_SUCCESS)
 		goto cleanup;
 
-	s_hc->bt_probe = &probe;
-	probe.listening = true;
-	for (unsigned i = 0; i < 2; i++) xhci_bt_arm(&probe, &probe.rx[i]);
+	s_hc->bt_probe = probe;
+	probe->listening = true;
+	for (unsigned i = 0; i < 2; i++) xhci_bt_arm(probe, &probe->rx[i]);
 	// USB carries the HCI command header directly, without a UART packet-type
 	// byte. Intel's ff parameter requests the TLV form of Read Version.
 	uint8_t tlv = 0xff;
 	printd(DEBUG_USB, "xhci: AX210 Read Version sending fc05(ff), interrupt %02x / bulk %02x\n",
 	       usb.interrupt_in.address, usb.bulk_in.address);
 	attempted = true;
-	queried = xhci_bt_command(&probe, BT_INTEL_READ_VERSION, &tlv, 1, false);
-	if (queried && !probe.failed && probe.events.version.result == BT_INTEL_VERSION) {
-		const bt_intel_reply_t *v = &probe.events.version;
+	queried = xhci_bt_command(probe, BT_INTEL_READ_VERSION, &tlv, 1, false);
+	if (queried && !probe->failed && probe->events.version.result == BT_INTEL_VERSION) {
+		const bt_intel_reply_t *v = &probe->events.version;
 		const char *state = v->image == 1 ? "bootloader (firmware required)" :
 		                    v->image == 3 ? "operational firmware" : "unknown image type";
 		printd(DEBUG_USB, "xhci: AX210 Read Version: %s, image=%02x, USB packets=%u\n",
-		       state, v->image, probe.packets);
+		       state, v->image, probe->packets);
 		printf("USB Bluetooth: Intel AX210 %s\n", state);
 		// In the log as well as on the glass: whether the firmware was found
 		// already running (a warm boot) is the first fact a start-up
@@ -1388,14 +1400,18 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 			printd(DEBUG_USB, "xhci: AX210 firmware build %u\n", v->build);
 		if (v->fields & BT_INTEL_SHA1)
 			printd(DEBUG_USB, "xhci: AX210 firmware SHA1 %08x\n", v->sha1);
-		if (v->image == 1 && !xhci_ax210_load(&probe)) {
+		if (v->image == 1 && !xhci_ax210_load(probe)) {
 			printd(DEBUG_USB, "xhci: AX210 firmware load failed (no retry this boot)\n");
 			printf("USB Bluetooth: Intel AX210 firmware load failed (see USB log)\n");
 			goto cleanup;
 		}
-		if (probe.events.version.image == 3 && !probe.failed) {
+		if (probe->events.version.image == 3 && !probe->failed) {
 			s_hc->bluetooth_device = *dev;
-			s_hc->bluetooth = probe;
+			s_hc->bluetooth = *probe;
+			// The event handler reaches the probe through bt_probe: it names
+			// the controller's copy before the allocation goes.
+			s_hc->bt_probe = &s_hc->bluetooth;
+			kfree(probe);
 			s_hc->bluetooth.device = &s_hc->bluetooth_device;
 			s_hc->bluetooth.runtime = true;
 			// From here a change on the adapter's port is news: clear what
@@ -1406,7 +1422,6 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 				s_hc->bluetooth.keyboards[i].name = "bluetooth";
 				s_hc->bluetooth.keyboards[i].debug = DEBUG_USB;
 			}
-			s_hc->bt_probe = &s_hc->bluetooth;
 			s_bluetooth_hc = s_hc;
 			printd(DEBUG_USB, "xhci: AX210 slot %u retained for runtime discovery\n", dev->slot);
 			printf("USB Bluetooth: discovery ready at /sys/bluetooth/scan\n");
@@ -1414,8 +1429,8 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 		}
 	} else {
 		printd(DEBUG_USB, "xhci: AX210 Read Version incomplete: query_ok=%u receive_error=%u result=%u status=%02x packets=%u partial=%u/%u\n",
-		       queried, probe.failed, probe.events.version.result, probe.events.version.status,
-		       probe.packets, probe.rx[0].stream.used, probe.rx[1].stream.used);
+		       queried, probe->failed, probe->events.version.result, probe->events.version.status,
+		       probe->packets, probe->rx[0].stream.used, probe->rx[1].stream.used);
 		printf("USB Bluetooth: Intel AX210 Read Version incomplete (see USB log)\n");
 	}
 cleanup:
@@ -1423,20 +1438,23 @@ cleanup:
 		printd(DEBUG_USB, "xhci: AX210 Read Version setup failed at %s\n", stage);
 		printf("USB Bluetooth: Intel AX210 probe stopped at %s\n", stage);
 	}
-	probe.listening = false;
+	probe->listening = false;
 	// An idle receive is still owned by the HC. Disable the slot before freeing
-	// its buffers, and remove the stack pointer even when disabling times out.
+	// its buffers, and remove the pointer to the probe even when disabling
+	// times out. Disabling drains events, which reach the probe through that
+	// pointer, so the probe itself is freed last.
 	bool released = xhci_release_probe(dev);
 	s_hc->bt_probe = NULL;
 	printd(DEBUG_USB, "xhci: AX210 probe slot %u %s\n", dev->slot,
 	       released ? "released" : "retained after Disable Slot failure");
 	if (released) {
 		for (unsigned i = 0; i < 3; i++) {
-			xhci_bt_endpoint_t *endpoint = i < 2 ? &probe.rx[i] : &probe.tx;
+			xhci_bt_endpoint_t *endpoint = i < 2 ? &probe->rx[i] : &probe->tx;
 			if (endpoint->buffer) kfree(endpoint->buffer);
 			if (endpoint->ring.trb) kfree(endpoint->ring.trb);
 		}
 	}
+	kfree(probe);
 }
 
 // The runtime command's bytes are at offset 512 of the transmit storage's
