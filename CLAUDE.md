@@ -642,6 +642,19 @@ virtio because its drain waits for the tick.
   record of what was checked upstream. `tools/test_resample_host.sh`,
   `/tests/resampletest` and `/tests/playtest` prove it; run
   `tools/test_sound_audit.py` after a build that touches it
+  **FFmpeg is `libav.so`** (`userland/libav/`; AUDIO_YONDER.md is the arc,
+  `YAUDIO_TRACKER.csv` its state): libavutil, libavcodec and libavformat,
+  unpatched, built down to what `manifest.json`'s `configure_args` names
+  (WAV and MP3 today). **It is LGPL and stays a library of its own** —
+  never linked into another program or library, never configured with GPL,
+  nonfree or version-3 parts; `tools/test_av_audit.py` fails on any of
+  those. `configure` runs on the host (`tools/import_av.py`), and its
+  answers about a C library are replaced by what the shims in
+  `libav/port/` provide (README.md § The C library: no file ever opens,
+  `snprintf` has no `%f`). Built WITHOUT threads, so a program using it
+  from several threads does every open and close under one lock of its
+  own. A program that calls it is named in `LIBAV_PROGRAMS` and compiles
+  with `LIBAV_CONSUMER_CFLAGS`. Fixture: `/tests/avtest`
   **The SBC encoder is built and linked with the kernel**
   (`kernel/ports/sbc/`, the first third-party code in ring 0), and the A2DP
   sink calls it (AUDIO_A2DP.md part P). Android's, unpatched

@@ -7,7 +7,7 @@ Q5,Does play learn MP3?,,ruled,,"RULED 2026-11-14 by Chris: yes, he wants play t
 Q6,FFmpeg or one port per format,,ruled,,"RULED 2026-11-14 by Chris: FFmpeg, started small (built with only what is asked for), as its own shared library because of the LGPL (his flag): /lib/libav.so, never static, never --enable-gpl or --enable-nonfree"
 
 Y.1,"FFmpeg, libmedia, and play learns MP3",,code,,"Design: AUDIO_YONDER.md, cleared by Chris 2026-11-14. Two pull requests. No yonder change"
-Y.1.1,"The port: libav.so (FFmpeg's libavutil, libavcodec, libavformat) built down to the WAV and MP3 readers and the PCM and MP3 decoders; shims over libos64; manifest, licence, THIRD_PARTY.md row; the audit (no GPL or nonfree, imports, exports, configuration matches the pinned configure); host build",Q6,todo,,One cold Opus read before the push
+Y.1.1,"The port: libav.so (FFmpeg's libavutil, libavcodec, libavformat) built down to the WAV and MP3 readers and the PCM and MP3 decoders; shims over libos64; manifest, licence, THIRD_PARTY.md row; the audit (no GPL or nonfree, imports, exports, configuration matches the pinned configure); the shims host-tested against glibc; /tests/avtest decodes MP3 and WAV in ring 3",Q6,doing,,One cold Opus read before the push
 Y.1.2,"libmedia: source, decoder, resampling to the stream's format, the bounded queue; host-tested against the host's ffmpeg. play reads MP3 through it",Y.1.1 Q5,todo,,One cold Opus read before the push. Proven by /tests/playtest growing an MP3 case at the tap
 
 Y.2,The element: HTMLMediaElement and HTMLAudioElement in yonder,Y.1,todo,,Two pull requests. Codex reviews both (threads meet the window)

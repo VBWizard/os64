@@ -1,0 +1,9 @@
+# What leaves libav.so: FFmpeg's public interface, by FFmpeg's own prefixes
+# (the same patterns its libav*/lib*.v version scripts export). Everything
+# internal (ff_*, avpriv_*) stays local, so no program can come to depend on
+# one, and an FFmpeg upgrade cannot break a program through one.
+{
+  global:
+    av_*; avcodec_*; avformat_*; avio_*; avutil_*; avsubtitle_free;
+  local: *;
+};

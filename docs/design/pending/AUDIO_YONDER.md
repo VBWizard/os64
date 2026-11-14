@@ -68,7 +68,7 @@ first thing this design does for video.
 
 | Piece | What it is | Proof |
 |---|---|---|
-| `userland/libav/` → `/lib/libav.so` | FFmpeg, ported: libavutil, libavcodec, libavformat, built down to the decoders and readers we name. Its own library, never linked into anything (§ FFmpeg) | Host build of the same configuration; `tools/test_av_audit.py` (licence, exports, imports, the configuration) |
+| `userland/libav/` → `/lib/libav.so` | FFmpeg, ported: libavutil, libavcodec, libavformat, built down to the decoders and readers we name. Its own library, never linked into anything (§ FFmpeg) | `/tests/avtest` (decodes in ring 3); `tools/test_av_libc_host.sh` (the shims against glibc); `tools/test_av_audit.py` (licence, exports, imports, the configuration) |
 | `userland/libmedia/` → `/lib/libmedia.so` | The pipeline, independent of yonder: a SOURCE (where bytes come from: a callback that reads and seeks), a DECODER over libav, the resampler, and the bounded PCM queue; plus the MIXER. No window, no DOM | Host: decode fixtures against FFmpeg's own CLI output, the mixer and the clock against a model, under ASan/UBSan |
 | yonder | The element's record, the provider libdom polls, the audio thread, the controls widget, the media document | QEMU: pages that play, heard at `/dev/audiotap` |
 
@@ -141,14 +141,14 @@ door):
 
 **What libos64 must supply.** There is no libc, and FFmpeg expects one.
 The shims live in `libav/port/compat/`, in the pattern libwebp, libjpeg
-and QuickJS already use: `stdlib.h`, `string.h`, `stdio.h` (an opaque
-`FILE` and `snprintf`; logging routed to a callback that stays silent
-unless asked), `errno.h` (FFmpeg's own `AVERROR` codes travel through it),
-`inttypes.h`, `limits.h`, `math.h` from libmath, `time.h` (only what
-libavutil asks), and aligned allocation (FFmpeg wants 64-byte alignment;
-`os64_malloc` gives 16, so the shim over-allocates and stores the offset). The exact list is what the
-compiler says on the first build; this is the expected shape, and the
-port's README will hold the real inventory.
+and QuickJS already use: a name libos64 has is mapped onto libos64, and
+the rest is a small pure file host-tested against glibc plus a file of
+doors that stay shut (no file opens, no environment, no clock but a
+stopwatch). `userland/libav/README.md` § The C library is the inventory.
+Aligned allocation is NOT shimmed: with FFmpeg's assembly off nothing in
+it asks for more than the 16 bytes `os64_malloc` gives, so the
+configuration says it has no `posix_memalign` and FFmpeg uses `malloc`.
+The day assembly comes on, that changes.
 
 **Pin**: the newest FFmpeg release on the day of the import, its tarball's
 SHA-256 in `manifest.json`, every shipped file hashed. A release, not a
@@ -452,10 +452,14 @@ A type yonder cannot decode is still offered as a download, unchanged.
   error and never a crash, under ASan/UBSan. The mixer and the per-element
   clock against a model. The host test FAILS without `ffmpeg`, as
   `test_sbc_host.sh` does.
-- **Host, the port**: `tools/test_av_audit.py` — manifest hashes, the
-  configuration committed equals the one the pinned `configure` generates,
-  no `CONFIG_GPL`/`CONFIG_NONFREE`, `libav.so` imports only libos64 and
-  libmath, exports only the `av*` interface libmedia calls.
+- **The port**: `tools/test_av_audit.py` — manifest hashes, no GPL,
+  nonfree or version-3 parts in the arguments or in `config.h`, `libav.so`
+  imports only libos64 and libmath and exports only FFmpeg's public
+  prefixes, and no other program carries FFmpeg's code;
+  `tools/import_av.py --check` — the committed configuration is the one
+  the pinned `configure` generates; `tools/test_av_libc_host.sh` — the
+  shims against glibc; `/tests/avtest` — an MP3 and a WAV decoded in
+  ring 3.
 - **QEMU**: a local test page set under `/tests` (served by yonder's
   `file://`): `<audio controls>` with a WAV, a script playing an MP3
   through `new Audio()`, two elements at once, a pause, a seek, a loop,
@@ -465,6 +469,33 @@ A type yonder cannot decode is still offered as a download, unchanged.
 - **The P5**: Chris, with the headphones, on the pages that sent him
   looking last night.
 
+## As built (Y.1.1, the port)
+
+`userland/libav/README.md` is the record; what departs from the text
+above:
+
+- **FFmpeg 9.0.2**, unpatched, and the configuration is `configure`'s own
+  output with the C-library answers overridden in `manifest.json`
+  (`config_overrides`), so an upstream change to what `configure` writes
+  fails the import instead of slipping through.
+- **The whole public interface is exported** (FFmpeg's own prefixes), not
+  only what libmedia calls: the LGPL's replaceable library is FFmpeg's
+  interface, and a narrower one would make a user's own build of it a
+  different library.
+- **A build without threads is safe from several threads only under a
+  rule**: every open and close under one lock, and a thread-safe log
+  callback (README.md § Switched off). That is libmedia's rule in Y.1.2.
+- **`snprintf` has no floating point** (libos64's formatter): a `%f`
+  prints as itself. FFmpeg formats floats only off the decode path.
+- **Two userland flags are dropped for FFmpeg's sources**: `-masm=intel`
+  (a symbol spelled like a register does not assemble in Intel syntax) and
+  `-Wredundant-decls`.
+- **`/tests/avtest`'s reference is a measurement**: the level the host's
+  FFmpeg decodes the fixture's MP3 to with its assembly off. The port
+  matched it to six digits on the first boot; the level written into the
+  first draft (the sine's own) was 5% high, because LAME's encode does
+  not land there.
+
 ## Slices
 
 `YAUDIO_TRACKER.csv` beside this file is the state of each one
@@ -473,7 +504,7 @@ request is one row; a slice of several has a task row per pull request.
 
 1. **Y.1 — FFmpeg, libmedia, and `play` learns MP3.** Two pull requests:
    - **Y.1.1** the port: `libav.so` in the audio-only configuration
-     above, its shims, manifest, audit and host build. No consumer yet.
+     above, its shims, manifest and audit, proven by `/tests/avtest`.
    - **Y.1.2** libmedia (source, decoder, resampling, queue) and `play`
      reading MP3 through it (ruled 2026-11-14: Chris wants `play` to play
      his MP3s). No yonder change.
