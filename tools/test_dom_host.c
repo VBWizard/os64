@@ -295,6 +295,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_callback_reports.inc"
 #include "test_dom_timer_settings.inc"
 #include "test_dom_listener_settings.inc"
+#include "test_dom_scheduled_settings.inc"
 #include "test_dom_animation_retirement.inc"
 #include "test_dom_animation_routing.inc"
 #include "test_dom_departure.inc"
@@ -667,6 +668,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--animation-routing")){dom_animation_routing_cases();printf("DOM animation routing: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--animation-retirement")){dom_animation_retirement_cases();printf("DOM animation retirement: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--recovery")){dom_recovery_cases();printf("DOM recovery: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--scheduled-settings")){dom_scheduled_settings_cases();printf("DOM scheduled settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--listener-settings")){dom_listener_settings_cases();printf("DOM listener settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--timer-settings")){dom_timer_settings_cases();printf("DOM timer settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--callback-reports")){dom_callback_report_cases();printf("DOM callback reports: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -686,6 +688,7 @@ int main(int argc, char **argv)
     dom_callback_report_cases();
     dom_timer_settings_cases();
     dom_listener_settings_cases();
+    dom_scheduled_settings_cases();
     dom_animation_retirement_cases();
     dom_animation_routing_cases();
     dom_departure_cases();

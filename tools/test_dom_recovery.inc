@@ -221,6 +221,12 @@ static void dom_recovery_success_cases(void)
     for (unsigned modern = 0; modern < 2; ++modern) {
         DomRecoveryFixture f;
         if (!dom_recovery_open(&f, policy, modern)) continue;
+        if (modern) realm_script(f.realm[1], "requestAnimationFrame(badCallback);requestIdleCallback(badCallback,{timeout:50})",
+                     "DOM recovery: affected frame and timed idle records precede interruption");
+        if (modern) realm_script(f.realm[2], "shared.frames='';shared.idles='';"
+            "requestAnimationFrame(B.badCallback);requestAnimationFrame(()=>shared.frames+='C');"
+            "requestIdleCallback(B.badCallback);requestIdleCallback(()=>shared.idles+='C');",
+            "DOM recovery: healthy scheduled queues retain failed and healthy callable identities");
         if (modern) realm_script(f.realm[2], "globalThis.healthyCallback=function(){shared.native+='F'}",
             "DOM recovery: healthy callback may be stored in another realm's custom definition");
         if (modern) realm_script(f.realm[1],
@@ -298,8 +304,14 @@ static void dom_recovery_success_cases(void)
               os64_dom_timer_fire(f.binding[2], p2b_ms, &out) && out.status == OS64_JS_OK &&
               os64_dom_timer_fire(f.binding[0], p2b_ms, &out) && out.status == OS64_JS_OK,
               "DOM recovery: independent sibling and primary timers retain their native order");
+        if (modern) check(os64_dom_animation_fire(f.binding[2], p2b_ms, &out) && out.status == OS64_JS_OK,
+              "DOM recovery: frame batch skips sealed callback and continues healthy sibling work");
+        if (modern) check(os64_dom_idle_run(f.binding[2], &out) && out.status == OS64_JS_OK &&
+              os64_dom_idle_run(f.binding[2], &out) && out.status == OS64_JS_OK,
+              "DOM recovery: idle queue skips sealed callback and continues healthy sibling work");
         realm_script(f.realm[2], STORAGE_ASSERT
             "assert(shared.value===42&&shared.order==='12A'&&shared.forbidden===undefined&&shared.escaped===undefined);"
+            "if(typeof requestAnimationFrame==='function')assert(shared.frames==='C'&&shared.idles==='C');"
             "document.body.dispatchEvent.call(B.node,new Event('ping'));assert(shared.events==='C');"
             "let proto=document.body,descriptor;while(proto&&!(descriptor=Object.getOwnPropertyDescriptor(proto,'nodeType')))proto=Object.getPrototypeOf(proto);assert(descriptor.get.call(B.node)===1);"
             "let caught=false;try{B.bad(true)}catch(e){caught=true}assert(caught&&shared.forbidden===undefined);",
@@ -309,6 +321,8 @@ static void dom_recovery_success_cases(void)
             "assert(px[0]===255&&px[3]===255)", "DOM recovery: retained Canvas pixels use a healthy realm's native API");
         check(os64_dom_timer_next(f.binding[1]) == UINT64_MAX && !os64_dom_fetches_pending(f.binding[1]),
               "DOM recovery: failed native activity remains stopped after provider storage release");
+        if (modern) check(!f.binding[1]->idle_live && !f.binding[1]->animation_count,
+              "DOM recovery: failed native frame and timed idle ownership released during preparation");
         dom_recovery_close(&f);
     }
 }

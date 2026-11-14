@@ -642,6 +642,22 @@ virtio because its drain waits for the tick.
   record of what was checked upstream. `tools/test_resample_host.sh`,
   `/tests/resampletest` and `/tests/playtest` prove it; run
   `tools/test_sound_audit.py` after a build that touches it
+  **FFmpeg is `libav.so`** (`userland/libav/`; AUDIO_YONDER.md is the arc,
+  `YAUDIO_TRACKER.csv` its state): libavutil, libavcodec and libavformat,
+  unpatched, built down to what `manifest.json`'s `configure_args` names
+  (WAV and MP3 today). **It is LGPL and stays a library of its own** —
+  never linked into another program or library, never configured with GPL,
+  nonfree or version-3 parts; `tools/test_av_audit.py` fails on any of
+  those. `configure` runs on the host (`tools/import_av.py`), and its
+  answers about a C library are replaced by what the shims in
+  `libav/port/` provide (README.md § The C library: no file ever opens,
+  `snprintf` is the port's own, `av_format.c`, because libos64's skips an
+  unknown conversion without taking its argument; the shims' own names
+  are libav's alone, so a caller of FFmpeg's headers sees only names
+  libos64 exports). Built WITHOUT threads, so a program using it
+  from several threads does every open and close under one lock of its
+  own. A program that calls it is named in `LIBAV_PROGRAMS` and compiles
+  with `LIBAV_CONSUMER_CFLAGS`. Fixture: `/tests/avtest`
   **The SBC encoder is built and linked with the kernel**
   (`kernel/ports/sbc/`, the first third-party code in ring 0), and the A2DP
   sink calls it (AUDIO_A2DP.md part P). Android's, unpatched
@@ -1339,7 +1355,9 @@ rather than to prove something stayed in `/bin` (`gbounce`, `glogo`,
 - **The lifeboat carries `/tests` too**: it exists to be trusted while
   everything else is suspect, and one that cannot demonstrate the CPU, the
   kernel and the syscall floor are sound is asking to be taken on faith at
-  the worst possible moment. ~750KB of its ~59MB spare.
+  the worst possible moment. Its `/lib` is copied without DWARF (the root
+  GNUmakefile says why): the partition is small, and the debug info was
+  most of every library.
 - **`PATH=/bin:/tests`, in that order** (seeded in `kernel.c`), so fixtures
   stay typeable while a fixture can never shadow a command of the same name.
 - **Fixtures draw link bases from the same pool as apps** (`app_bases.py` is

@@ -215,3 +215,48 @@ then both runtime binaries with `--child-recovery`, `--recovery-barrier`,
 `python3 tools/test_js_port_target.py` audits the target link/import surface.
 The initial chapter's broad DOM and ten-defect evidence remains qualified by
 its earlier engine identity; this receipt establishes the affected composition.
+
+## Composition with merged F4 scheduled callbacks
+
+The merge forward through `2415f60b` incorporates #594. Settings and recovery
+policy flags and the recovery/scheduled/listener test selectors remain present.
+The recovery constructor keeps scheduled settings disabled; checked settings
+overruns and pending engine microtasks retain their existing global fallback.
+Frame and idle cleanup now release the imported `DScheduledCallback` records
+through `d_scheduled_clear`, preserving callback holds and report/activity
+binding lifetimes until the existing safe boundary.
+
+In modern bindings, the recovery regression queues failed B frame/idle callbacks in healthy C
+before C's own callbacks, and queues affected B frame/timed-idle work. After
+containment it checks that C skips sealed callables and continues its own work,
+while B's queued native ownership is released during preparation. Retained data,
+provider release and native timer order remain covered by the same fixture.
+All DOM units are rebuilt for the new records and shared header layout.
+Engine identity remains `3be09416c3df09ee3c4d85b8fe54af3d8f90d24ed32678042f8a7ca67ac4aa39`;
+the engine/runtime sources and runtime test units are unchanged from the #591
+composition, whose complete-runtime receipt above remains applicable.
+
+With ASan/UBSan and LeakSanitizer enabled, both teardown policies pass:
+
+| Integrated check | Shipping / instrumented |
+|---|---:|
+| Native DOM recovery, including frame/idle continuation | 2,532 / 6,672 |
+| F4 scheduled settings | 5,570 / 6,066 |
+| Listener settings / timer settings | 1,736 / 1,736; 718 / 718 |
+| Frame callbacks / retirement / routing | 106 / 106; 1,196 / 1,196; 564 / 564 |
+
+The earlier dispatch/reporting, shared custom/observer, realm routing,
+retirement, departure, Streams, installation and provider lifecycle selectors
+also pass on both freshly rebuilt DOM profiles. Removing failed-status
+suppression from `d_scheduled_call` produces six named recovery failures per
+profile: a sealed callback must not stop healthy frame/idle work. The isolated
+mutant leaves the real source unchanged.
+
+The unchanged runtime cohort is reused for the recovery/fence/terminal-record
+and F4 settings selectors; each passes on both profiles. Target libraries,
+header/preparer/teardown/link audits and tracker checks pass. Stale references
+and whitespace are checked against the merged PR base, preserving unrelated
+upstream imports. Reproduce with the canonical DOM `--recovery` build, then
+the composition selectors above plus `--scheduled-settings`, `--animation`,
+`--animation-retirement`, and `--animation-routing` on both binaries. This
+receipt does not extend the original broad-DOM or browser acceptance claims.
