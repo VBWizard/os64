@@ -505,6 +505,7 @@ static void wrong_length(void)
 	sbc_settings_t s = { 48000, 2, true, 16, 8, false, 51 };
 	CHECK(sbc_port_begin(&s), "begin");
 	CHECK(sbc_port_encode(pcm, out, sizeof(out)), "a good frame");
+	CHECK(sbc_port_encode(pcm, out, 115), "a capacity of exactly the frame was refused");
 	CHECK(!sbc_port_encode(pcm, out, 114), "a capacity one short of the frame was accepted");
 	CHECK(!sbc_port_encode(pcm, out, sizeof(out)), "the boundary was usable again after refusing a capacity");
 	CHECK(sbc_port_begin(&s), "begin after the capacity refusal");
