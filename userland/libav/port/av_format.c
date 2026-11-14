@@ -343,8 +343,10 @@ int avlibc_vsnprintf(char *out, size_t cap, const char *fmt, va_list ap)
         case 's': {
             const char *str = va_arg(args, const char *);
             if (!str) str = "(null)";
+            // The precision is tested FIRST: with one, the array need not
+            // be terminated, and no byte past it may be read.
             size_t n = 0;
-            while (str[n] && (f.precision < 0 || n < (size_t)f.precision)) n++;
+            while ((f.precision < 0 || n < (size_t)f.precision) && str[n]) n++;
             field(&s, &f, NULL, 0, 0, str, n, 0);
             break;
         }
