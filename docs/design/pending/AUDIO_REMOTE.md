@@ -87,7 +87,12 @@ link commands, where an unanswered or refused command ends the link:
   link is `READY` and connected. LATCHED answers go first, as always.
 - **Neither can end the link.** A refusal, a malformed reply or no reply is
   recorded (status, a count) and the flag is cleared. `cl_finish` and
-  `cl_timeout` treat these two opcodes apart from the rest.
+  `cl_timeout` treat these two opcodes apart from the rest. That is the
+  link's rule; the host's is older and stays: a command the controller
+  NEVER answers holds the command credit, and the host fails the
+  controller three seconds past its deadline, as it does for an
+  unanswered command of any link's. A READY link that sends these makes
+  that reachable more often.
 - **Each has its own reply shape.** Write Link Policy Settings answers
   status then handle (an eight-byte Command Complete, six of them
   parameters, a shape the link's reader did not know before part Z and
@@ -118,10 +123,10 @@ untouched).
 
 | State | Meaning | Leaves by |
 |---|---|---|
-| `AWAKE` | Confirmed: sniff refused. Every new link | idle for 10 s: the allowing write is asked: `ALLOWING` |
+| `AWAKE` | Confirmed: sniff refused. Every new link | idle for 10 s: the allowing write is asked: `ALLOWING`. A stream wanted while the mode reads sniff (added as built): `WAKING` |
 | `ALLOWING` | The write allowing sniff is owed or out | confirmed: `DOZING`. Refused or unanswered: `AWAKE`, counted, and not asked again until a stream has come and gone. Sound or a stream arrives first: `WAKING` |
 | `DOZING` | Confirmed: sniff allowed. The mode may be active or sniff | sound waiting, or AVDTP in `STARTING`, `STREAMING` or `SUSPENDING`: `WAKING` |
-| `WAKING` | The refusing write is owed or out; Exit Sniff Mode is sent while the mode reads sniff | the write answered (confirmed or not) AND the mode reads active: `AWAKE`. 1 s gone: `AWAKE` all the same, counted (`woke late`); Exit Sniff Mode goes on being retried, each second up to five times, while the mode reads sniff and a stream is wanted |
+| `WAKING` | The refusing write is owed or out; Exit Sniff Mode is sent while the mode reads sniff | the write CONFIRMED, 100 ms settled since, AND the mode reads active (as built: "Z, as built"; this table first said "answered, confirmed or not"): `AWAKE`. 1 s gone: `AWAKE` all the same, counted (`woke late`); Exit Sniff Mode goes on being retried, each second up to five times, while the mode reads sniff and a stream is wanted |
 
 The link dropping ends every state. If the refusing write is refused,
 Exit Sniff Mode is still sent; the link is then awake with sniff still
@@ -176,8 +181,29 @@ design left open, and what differs:
   says which. Neither command arms the phase wait, whose expiry would end
   a READY link.
 - **The mode reads awake when it is active OR unknown**: a link begins
-  active and headphones that never sniff send no Mode Change, so WAKING
-  ends on the refusing write's answer alone. Hold counts as not awake.
+  active and headphones that never sniff send no Mode Change. Hold counts
+  as not awake.
+- **WAKING ends only on the refusing write CONFIRMED, 100 ms settled
+  since, with the mode awake**, or at 1 s (woke late). A sniff request the
+  controller accepted under the allowing policy can complete after the
+  refusing write is confirmed, its Mode Change in flight; ending on
+  "answered, mode unknown" let our Start go into a link about to sleep.
+  The settle is long enough for that Mode Change to arrive, and Exit
+  Sniff Mode then answers it. A refusing write that is refused never
+  confirms, so its wake runs the whole second: sniff is still allowed and
+  no settle can say the headphones will not sleep.
+- **Our Start is decided only on a tick whose state says the link is
+  awake: AWAKE, with the mode not reading sniff** (or this stream's wake
+  having run out its second). The seam's `has_sound` is live, written by
+  a player on another CPU, so it is read ONCE a tick; the sniff decision
+  and the pump's policy both use that reading. Two readings could
+  disagree, the second seeing sound the first did not, and Start the
+  pump into a link that was being allowed to sleep.
+- **A stream wanted while AWAKE and the mode reads sniff goes to
+  WAKING**: the refusing write was refused earlier, sniff is still
+  allowed, and the headphones went back to sleep during the idle count.
+  Not again for a stream whose wake already ran out its second, which
+  would hold our Start for ever behind headphones that never leave sniff.
 - **Exit Sniff Mode is asked whenever a stream is wanted and the mode
   reads sniff, in WAKING or AWAKE**: at once, then a second after each
   ask (the first goes on the wire behind the refusing write), five asks a
@@ -186,9 +212,10 @@ design left open, and what differs:
   pump's own stream**: a player writing into the null sink before AVDTP
   is open is idle to the host. Sound becomes visible when the pump is the
   seam's sink, which is when our Start could follow it.
-- **The hold is a second ops table**, given to `bt_a2dp_step` alone and
-  only while WAKING: every op forwards to the seam's but `has_sound`,
-  which answers no. Outside WAKING the pump is called exactly as in A.3.
+- **The hold is a second ops table**, given to `bt_a2dp_step` alone, on
+  every tick: every op forwards to the seam's but `has_sound`, which
+  answers the tick's one reading on a tick that may decide our Start and
+  no on any other.
 - **It runs on any READY link with an audio sink**, a `connect` session
   among them; with no bond there is no link, so nothing runs (the
   multi-host suite's ten thousand ticks with no bond send neither
@@ -200,13 +227,15 @@ design left open, and what differs:
   line (state, time idle, dozes, wakes, woke late, retries, refusals, and
   "awake with sniff allowed", counted once a wake) follows the link's
   text.
-- **An Exit Sniff Mode that is never answered at all** is recorded by the
+- **A sniff command that is never answered at all** is recorded by the
   link like any unanswered sniff command; in the host, a command with no
   reply leaves the slot held with no credit, and the controller is called
-  failed three seconds after its deadline, as for every Classic command
-  (`BT_HOST_CLASSIC_REPLY_GRACE_MS`). The multi-host case of "the wake
-  unanswered" is therefore the Command Status with no Mode Change after
-  it, which is what a controller that keeps its credits does.
+  failed three seconds after its deadline, as for an unanswered command
+  of any link's (`BT_HOST_CLASSIC_REPLY_GRACE_MS`); a READY link sending
+  these makes that reachable more often than the link's setup alone did.
+  The multi-host case of "the wake unanswered" is therefore the Command
+  Status with no Mode Change after it, which is what a controller that
+  keeps its credits does.
 
 Proof, as built: `tools/test_bt_classic_host.sh` (both commands' bytes
 and reply shapes, the turn behind a latched answer, behind `next_op` and
@@ -221,8 +250,13 @@ packet only at an anchor, so the controller's Classic buffers fill and a
 stream started asleep is late: idle to dozing, sound woken before our
 Start and first packet, dozing again after the song, the wake unanswered,
 each write refused, headphones that never sniff, a stream they start, the
-link dropping in each state, and the whole cycle beside a typing keyboard
-and a moving mouse with part S's LE assertions at every step).
+link dropping in each state, the seam's answer changing between two calls
+in one tick (a model seam that counts its calls: the Start does not go on
+that tick, and no tick reads it twice), a sniff request in flight across
+the refusing write (sound while the allowing write is out, and just after
+it is confirmed), the link asleep again while AWAKE, and the whole cycle
+beside a typing keyboard and a moving mouse with part S's LE assertions
+at every step).
 
 ## Part R: AVCTP and AVRCP
 

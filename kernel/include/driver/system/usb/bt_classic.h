@@ -152,7 +152,12 @@ typedef struct bt_classic {
     // closing overwrites) and sent at the link's turn after `next_op` and
     // before page scan, only while READY and connected. Neither can end
     // the link: a refusal, a malformed reply or no reply is recorded and
-    // counted, and the flag is cleared.
+    // counted, and the flag is cleared. That is the LINK's answer. A
+    // command the controller never answers at all still holds its command
+    // credit, and the host fails the controller three seconds past the
+    // deadline (bt_host.c BT_HOST_CLASSIC_REPLY_GRACE_MS), as an
+    // unanswered command of any link's does; a READY link sending these
+    // makes that reachable more often than its setup alone did.
     // `sniff_wanted` is what the owner last asked (bt_classic_policy),
     // `sniff_confirmed` what the controller confirmed for this connection;
     // a new connection starts at "refused, confirmed", which is the
@@ -234,10 +239,11 @@ bt_classic_mode_t bt_classic_mode(const bt_classic_t *c);
 // An answer is latched that the controller is waiting for. The sniff
 // commands are not answers and never make a link urgent.
 bool bt_classic_urgent(const bt_classic_t *c);
-// IDLE or STOPPED, nothing in flight, latched or left to send. The sniff
-// commands are owed only while READY and every way out of READY clears
-// them, so they never stand between a link and quiescence (the
-// reconnection ladder and the Classic scan ask this).
+// IDLE or STOPPED, nothing in flight, latched or left to send. A sniff
+// command OWED never stands between a link and quiescence: it is owed only
+// while READY and every way out of READY clears it. One in FLIGHT when the
+// link drops does, like any command in flight, until it is answered or
+// times out (the reconnection ladder and the Classic scan ask this).
 bool bt_classic_quiescent(const bt_classic_t *c);
 size_t bt_classic_status(const bt_classic_t *c, char *out, size_t capacity);
 #endif

@@ -2403,7 +2403,6 @@ static void test_soup(unsigned rounds)
     }
 }
 
-// The status text in a buffer too small for it stays a string.
 // ── Sniff: Write Link Policy Settings and Exit Sniff Mode (AUDIO_REMOTE.md § Part Z)
 
 // A bonded link, reconnected and READY, with nothing owed.
@@ -2723,6 +2722,7 @@ static void test_sniff_changed_while_out(void)
     CHECK(bt_classic_sniff_allowed(&c));
 }
 
+// The status text in a buffer too small for it stays a string.
 static void test_status_capacity(void)
 {
     bt_classic_t c;

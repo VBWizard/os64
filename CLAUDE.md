@@ -532,8 +532,10 @@ virtio because its drain waits for the tick.
   unavailable and LE is untouched. Sniff is ALLOWED on a link with an
   audio sink once it has been idle ten seconds, and REFUSED, the link taken
   out of sniff, before our stream starts; neither of the two commands can
-  end the link (`bt_host.c` § Slot 2's sniff is the lifecycle,
-  AUDIO_REMOTE.md § Part Z the design). Its data packets are its L2CAP's
+  end the link, though one the controller NEVER answers still fails the
+  controller three seconds past its deadline, as any unanswered command
+  does (`bt_host.c` § Slot 2's sniff is the lifecycle, AUDIO_REMOTE.md
+  § Part Z the design). Its data packets are its L2CAP's
   (`bt_l2cap.c`, pure, Basic mode, admitting SDP and, with an audio sink,
   AVDTP), and at `READY` the host asks the headphones one SDP question a
   connection, what Audio Sink they are (`bt_sdp.c`, pure, which also

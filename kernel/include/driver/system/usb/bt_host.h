@@ -156,11 +156,16 @@ typedef struct {
     // write refused or unanswered, not asked again until a stream has come
     // and gone; when WAKING began, the last Exit Sniff Mode asked and how
     // many this stream; `sniff_awake_allowed` that this wake ended with
-    // sniff still allowed (counted once). Counted per host, not per
-    // connection.
+    // sniff still allowed (counted once). `sniff_refused_at` when this
+    // wake first saw the refusing write confirmed (0: not yet), the start
+    // of its settle; `sniff_wake_spent` that this stream's wake ran out its
+    // second. `sniff_sound` is this tick's ONE reading of the seam's
+    // has_sound, and `sniff_start_ok` whether this tick may decide our
+    // Start; the pump's policy sees their conjunction. Counted per host,
+    // not per connection.
     uint8_t sniff_state;
-    uint64_t sniff_idle_since, sniff_wake_began, sniff_wake_last;
-    bool sniff_barred, sniff_awake_allowed;
+    uint64_t sniff_idle_since, sniff_wake_began, sniff_wake_last, sniff_refused_at;
+    bool sniff_barred, sniff_awake_allowed, sniff_wake_spent, sniff_sound, sniff_start_ok;
     uint8_t sniff_wake_tries;
     uint32_t sniff_dozes, sniff_wakes, sniff_woke_late, sniff_wake_retries;
     uint32_t sniff_allows_failed, sniff_refuses_failed;

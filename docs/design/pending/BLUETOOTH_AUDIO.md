@@ -110,8 +110,10 @@ against a model of the peer before it meets the radio.
   Pairing Mode` on, `Write Local Name` (headphones show it on their
   display and some refuse a nameless host), `Write Class of Device`
   (some sinks check the major class), `Write Default Link Policy
-  Settings` allowing role switch and sniff, and the event mask bits for
-  the classic events below.
+  Settings` allowing role switch, and the event mask bits for the
+  classic events below. As built the default REFUSES sniff: every link
+  begins awake, and the host allows sniff per link while nothing plays
+  (AUDIO_REMOTE.md § Part Z).
 - **Connection**: `Create Connection` to the inquiry's address, with the
   page scan repetition mode the inquiry reported. The sink may ask to
   ROLE SWITCH to master; allow it, or some sinks drop the link.
@@ -133,9 +135,13 @@ against a model of the peer before it meets the radio.
   reconnect. Then `Authentication Requested` and `Set Connection
   Encryption` on; A2DP data over an unencrypted link is refused by most
   sinks.
-- **Sniff mode** once streaming is up, or the radio and the headphones'
-  battery pay for a link that is mostly idle between packets. The sink
-  usually asks; `Sniff Subrating` is optional.
+- **Sniff mode** while nothing plays, or the radio and the headphones'
+  battery pay for a link that is idle. As built (AUDIO_REMOTE.md § Part
+  Z) sniff is allowed on a link idle ten seconds and refused, the link
+  taken out of sniff, before our stream starts: the P5's headphones kept
+  a link in sniff through a stream, and a link in sniff carries media
+  only at its anchors. The sink asks; we never do (DEBTS.md), and `Sniff
+  Subrating` is not used.
 - **Read Buffer Size** (0x1005) is already issued for LE's sake; the
   CLASSIC half of its reply — ACL packet length and the number of
   packets — is what audio's credits come from. The AX210 reports 1021
