@@ -100,7 +100,7 @@ static bool html(const os64_html_node_t *node, os64_html_tag_t tag)
 
 /* The interfaces of `kReflections`' masks a node is one of: a member
  * called on anything else is a TypeError, as WebIDL's brand check is. */
-static uint64_t control_kind(const os64_html_node_t *node)
+static d_kinds_t control_kind(const os64_html_node_t *node)
 {
     return html(node, OS64_HTML_TAG_INPUT) ? IN : html(node, OS64_HTML_TAG_TEXTAREA) ? TA :
            html(node, OS64_HTML_TAG_SELECT) ? SE : html(node, OS64_HTML_TAG_BUTTON) ? BU :
@@ -428,7 +428,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
-    uint64_t kind = control_kind(node);
+    d_kinds_t kind = control_kind(node);
     if (magic < M_TEXT_DEFAULT) {
         const DReflection *row = &kReflections[magic];
         if ((row->on & kind) == 0) return JS_ThrowTypeError(ctx, "Illegal invocation");
@@ -559,7 +559,7 @@ int d_controls_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     dom->date_get_time = d_intrinsic(dom, ctx, date_prototype, "getTime");
     JS_FreeValue(ctx, date_prototype);
     if (dom->date_get_time == NULL) return -1;
-    static const struct { const char *name; int magic; bool writable; uint64_t on; } kMembers[] = {
+    static const struct { const char *name; int magic; bool writable; d_kinds_t on; } kMembers[] = {
         {"defaultValue", M_TEXT_DEFAULT, true, TA}, {"textLength", M_TEXT_LENGTH, false, TA},
         {"indeterminate", M_INDETERMINATE, true, IN}, {"autocomplete", M_AUTOCOMPLETE, true, IN | TA | SE},
         {"width", M_WIDTH, true, IN}, {"height", M_HEIGHT, true, IN},
@@ -570,7 +570,7 @@ int d_controls_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
                                 D_PROTO_LABEL, D_PROTO_FIELDSET, D_PROTO_LEGEND, D_PROTO_OUTPUT};
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
         JSValueConst prototype = dom->prototypes[kinds[k]]->value;
-        uint64_t mask = D_KIND(kinds[k]);
+        d_kinds_t mask = D_KIND(kinds[k]);
         for (size_t i = 0; i < sizeof(kReflections) / sizeof(kReflections[0]); i++)
             if ((kReflections[i].on & mask) &&
                 d_accessor(dom, ctx, prototype, kReflections[i].property, control_member, (int)i, true) < 0)

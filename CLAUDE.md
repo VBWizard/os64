@@ -644,7 +644,13 @@ virtio because its drain waits for the tick.
   FFmpeg (`tools/test_av_audit.py` holds that), so the decoder behind it
   can change without a player changing; its pure core `media_pcm.c` is
   host-tested (`tools/test_media_pcm_host.sh`), its glue by
-  `/tests/mediatest`. Sound at another rate goes through **`libsound.so`**
+  `/tests/mediatest`. **yonder plays a page's `<audio>`** through it
+  (`apps/yonder/media.c`: a decoder thread per element feeding libmedia's
+  PCM queue, `os64/media_queue.h`, a loader thread for a network address,
+  one audio thread owning `/dev/audio`), while libdom keeps the element's
+  HTML states, events and promises (`libdom/media.c`, `dom/media.h`'s
+  provider); AUDIO_YONDER.md § As built (Y.2.1) is the record, and
+  `/tests/pages/audio.html` the page to try. Sound at another rate goes through **`libsound.so`**
   (`os64/resample.h`): speexdsp's resampler, one file, unpatched, pinned by
   `userland/libsound/manifest.json`; its README is the inventory and the
   record of what was checked upstream. `tools/test_resample_host.sh`,
@@ -963,6 +969,11 @@ the library serves every process). How it fits together:
   would not have been enough. A path that no longer
   resolves now fails the load instead of serving the cached image of a deleted
   program. Fixture: `test_shared_object_reload`.
+- **An object names at most `ELF_MAX_NEEDED` libraries** (elf_loader.h);
+  one naming more is REFUSED at load (`DEBUG_TASK` says why). It used to keep
+  the first sixteen and drop the rest without a word, so the program died
+  at its first call into a library left out, far from the cause (yonder,
+  gaining libmedia, was the one that found it).
 - Deliberately absent: lazy PLT binding, TLS/IFUNC/init_array, `RPATH`/search
   paths (`DT_NEEDED` name → `/lib/<name>`, full stop). See DEBTS § Shared
   libraries.

@@ -236,9 +236,10 @@ FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSerif.ttf DejaVuSer
 # machine with no network. Where each page came from is in
 # tools/html_corpus/SOURCES.json, which ships beside them. tools/pages holds
 # pages written here to show a feature beside Chrome (each says what to look
-# for), with the pictures they name.
+# for), with the pictures and sounds they name.
 PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css tools/garb_corpus/*.html \
-                            tools/pages/*.html tools/pages/*.gif tools/pages/*.png tools/pages/*.webp tools/pages/*.jpg tools/pages/*.svg)
+                            tools/pages/*.html tools/pages/*.gif tools/pages/*.png tools/pages/*.webp tools/pages/*.jpg tools/pages/*.svg \
+                            tools/pages/*.mp3 tools/pages/*.wav)
 
 # The same fixtures for the wire, staged alone: os64serve serves a directory
 # whole, and tools/html_corpus also holds the host harness's expected dumps,

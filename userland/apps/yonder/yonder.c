@@ -47,6 +47,7 @@
 #include "agent.h"
 #include "bar.h"
 #include "mail.h"
+#include "media.h"
 #include "paint.h"
 #include "keep.h"
 #include "picture.h"
@@ -186,6 +187,7 @@ static yonder_cookies_mode_t s_cookies_asked;
 #define BELL_SCRIPTS (1u << 4)    // a page has another script or timer to run
 #define BELL_STREAM (1u << 5)     // an arriving page has more to parse than one slice
 #define BELL_BODY (1u << 6)       // a script's request has more of its answer: bodies_turn hands it over
+#define BELL_MEDIA (1u << 7)      // a media element's sound has news: media_turn folds it in (media.h)
 
 // A GIF frame that asks for 10 ms or less is shown for this long, as every
 // browser shows the ones that ask for "as fast as you can".
@@ -10529,6 +10531,51 @@ static os64_font_status_t canvas_text_layout(void *opaque,const os64_font_family
 }
 static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length);
 
+// ── A page's media elements (AUDIO_YONDER.md) ──────────────────────────
+//
+// libdom's media provider (dom/media.h) over media.h's sessions. Its
+// opaque is the page's serial, so a session's open names the page it
+// belongs to without holding the page. Whether the page may play sound is
+// its host's sticky activation (§ Autoplay).
+
+static void *media_open(void *opaque, const os64_html_node_t *node, const char *url, os64_dom_media_cors_t cors,
+                        os64_dom_media_preload_t preload)
+{
+    (void)node;
+    uint64_t serial = (uint64_t)(uintptr_t)opaque;
+    yonder_scripts_t *host = scripts_for(serial);
+    yonder_media_request_t r = {url, host != NULL ? yonder_scripts_url(host) : "about:blank", serial, cors, preload};
+    return yonder_media_open(&r);
+}
+static void media_close(void *opaque, void *session) { (void)opaque; yonder_media_close(session); }
+static void media_play(void *opaque, void *session) { (void)opaque; yonder_media_play(session); }
+static void media_pause(void *opaque, void *session) { (void)opaque; yonder_media_pause(session); }
+static void media_seek(void *opaque, void *session, double seconds, uint64_t generation)
+{
+    (void)opaque;
+    yonder_media_seek(session, seconds, generation);
+}
+static void media_settings(void *opaque, void *session, double gain, bool loop)
+{
+    (void)opaque;
+    yonder_media_settings(session, gain, loop);
+}
+static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out)
+{
+    (void)opaque;
+    yonder_media_facts(session, out);
+}
+static bool media_activated(void *opaque)
+{
+    yonder_scripts_t *host = scripts_for((uint64_t)(uintptr_t)opaque);
+    return host != NULL && yonder_scripts_activated(host);
+}
+static int media_can_play(void *opaque, const char *type)
+{
+    (void)opaque;
+    return yonder_media_can_play(type);
+}
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, bool encrypted, uint64_t serial,
                                       yonder_diag_t *diag, bool modern)
@@ -10546,6 +10593,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .intersections = script_intersections, .resizes = script_resizes, .opaque = doc,
         .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed,
         .images={canvas_source,canvas_source_release,doc,image_sources_update},
+        .media = {(void *)(uintptr_t)serial, media_open, media_close, media_play, media_pause, media_seek,
+                  media_settings, media_facts, media_activated, media_can_play},
         .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
         .css_animations = {css_animations_count, css_animations_at, css_animations_drive, css_animations_version, doc},
@@ -10872,6 +10921,13 @@ static void body_bell(void *ctx)
     (void)os64_gui_event_ring(g.win, BELL_BODY);
 }
 
+// A media session's thread (media.c): the window has news of its sound.
+static void media_bell(void)
+{
+    if (s_bells)
+        (void)os64_gui_event_ring(g.win, BELL_MEDIA);
+}
+
 static void streamed_free(Streamed *e)
 {
     for (Streamed **link = &s_streamed; *link != NULL; link = &(*link)->next)
@@ -10994,6 +11050,17 @@ static bool body_piece(Streamed *e)
 // loop for the next turn. A step can run a task that cancels any request,
 // so the walk starts over after each one. A turn of the loop's; a
 // writer's bell (BELL_BODY) is what wakes the loop for it.
+// The media turn (AUDIO_YONDER.md § How events reach the page): the closed
+// sessions whose threads have ended are freed, and the shown page's media
+// elements brought up to date with their sound, no script running. True
+// when a media task waits, which the loop rings itself to run as one of
+// the page's tasks (scripts_task).
+static bool media_turn(void)
+{
+    yonder_media_reap();
+    return g.page.scripts != NULL && yonder_scripts_media_turn(g.page.scripts);
+}
+
 static bool bodies_turn(void)
 {
     s_bodies_asked = false;
@@ -11607,8 +11674,8 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
     asks_perform_with_fallback(host, doc, shown, NULL);
 }
 
-// One task of a page's: script, image event, message or timer. True when one
-// ran. `shown` decides whether its asks may reach the page on screen.
+// One task of a page's: script, image, media or sheet event, message or
+// timer. True when one ran. `shown` decides whether its asks may reach the page on screen.
 static bool page_event_run(Page *p, bool shown);
 
 // A page's queued task (MODERN_WEB.md § P2b): its oldest posted message or
@@ -11643,6 +11710,7 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
     const char *what = "script";
     bool ran = yonder_scripts_step(host, &out);
     if (!ran) { what="image"; ran=yonder_scripts_image_fire(host,&out); }
+    if (!ran) { what="media"; ran=yonder_scripts_media_fire(host,&out); }
     if (!ran) { what="sheet"; ran=yonder_scripts_owed_fire(host,&out); }
     if (!ran)
         ran = queued_task(host, &what, &out);
@@ -11654,8 +11722,8 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
 }
 
 // Whether a host has a task to run now: a history event owed its page, a
-// script ready, an image's or a sheet's event owed, a message posted, or a
-// timer due. An idle callback is no
+// script ready, an image's, a media element's or a sheet's event owed, a
+// message posted, or a timer due. An idle callback is no
 // task owed: the shown page's turn runs one only when nothing else is
 // (script_turn).
 static bool scripts_owed(const yonder_scripts_t *host)
@@ -11663,7 +11731,8 @@ static bool scripts_owed(const yonder_scripts_t *host)
     const Page *p = page_of_host(host);
     uint64_t now = yonder_now_ms();
     return (p != NULL && p->nevents > 0 && yonder_scripts_alive(host)) || yonder_scripts_pending(host) ||
-           yonder_scripts_images_pending(host) || yonder_scripts_owed_pending(host) ||
+           yonder_scripts_images_pending(host) || yonder_scripts_media_pending(host) ||
+           yonder_scripts_owed_pending(host) ||
            yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now ||
            yonder_scripts_intersections_due(host);
 }
@@ -12903,6 +12972,10 @@ static bool script_turn(void)
     if (!ran) {
         what = "image";
         ran = yonder_scripts_image_fire(g.page.scripts, &out);
+    }
+    if (!ran) {
+        what = "media";
+        ran = yonder_scripts_media_fire(g.page.scripts, &out);
     }
     if (!ran) {
         what = "sheet";
@@ -18229,6 +18302,10 @@ int main(int argc, char **argv)
     downloads_follow();
 
     g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET - PICTURE_RESERVE, g.win, BELL_WORK);
+    // The media elements' sessions make their requests as every other
+    // request is made (media.h); their threads start with the first.
+    const yonder_media_env_t media_env = {g.way.agent, g.way.identity, g.way.jar, s_preflight, g.cache, media_bell};
+    yonder_media_start(&media_env);
     g.settle_due = YONDER_NEVER;
     g.ticker = yonder_ticker_start(g.win, BELL_TICK);
     window_seen();                      // a window born covered learns it now, not at a nudge
@@ -18332,6 +18409,7 @@ int main(int argc, char **argv)
         bool coming_more = coming_turn();
         bool scripts_ready = script_turn();
         bodies_turn();
+        bool media_more = media_turn();
         motion_tick();
         storage_turn();
         cookies_turn();
@@ -18352,7 +18430,7 @@ int main(int argc, char **argv)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (s_bodies_asked)
             (void)os64_gui_event_ring(g.win, BELL_BODY);
-        if (coming_more || observed || script_followup(scripts_ready, painted_frame))
+        if (coming_more || observed || media_more || script_followup(scripts_ready, painted_frame))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
         exit_follow();
         // A task may have set or cleared a timer, and a frame for an
@@ -18394,6 +18472,10 @@ int main(int argc, char **argv)
     page_clear(&g.page);
     page_clear(&g.coming.page);
     way_history_clear(&g.way);
+    // Every page's binding has closed its media sessions by here; the
+    // sessions' threads use the jar, the cache and the preflight cache,
+    // all freed below.
+    yonder_media_stop();
     // After the departure write (page_clear), which reads its counts.
     yonder_paint_cache_free(g.paint_cache);
     g.paint_cache = NULL;

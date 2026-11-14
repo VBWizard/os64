@@ -45,7 +45,7 @@ static const uint8_t kTagKinds[OS64_HTML_TAG_COUNT] = {
     [OS64_HTML_TAG_INPUT] = D_PROTO_INPUT, [OS64_HTML_TAG_TEXTAREA] = D_PROTO_TEXTAREA,
     [OS64_HTML_TAG_SELECT] = D_PROTO_SELECT, [OS64_HTML_TAG_BUTTON] = D_PROTO_BUTTON,
     [OS64_HTML_TAG_FORM] = D_PROTO_FORM, [OS64_HTML_TAG_IMG] = D_PROTO_IMAGE,
-    [OS64_HTML_TAG_SOURCE] = D_PROTO_SOURCE,
+    [OS64_HTML_TAG_SOURCE] = D_PROTO_SOURCE, [OS64_HTML_TAG_AUDIO] = D_PROTO_AUDIO,
     [OS64_HTML_TAG_SCRIPT] = D_PROTO_SCRIPT, [OS64_HTML_TAG_A] = D_PROTO_ANCHOR,
     [OS64_HTML_TAG_LINK] = D_PROTO_LINK, [OS64_HTML_TAG_IFRAME] = D_PROTO_IFRAME,
     [OS64_HTML_TAG_OPTION] = D_PROTO_OPTION, [OS64_HTML_TAG_OPTGROUP] = D_PROTO_OPTGROUP,
@@ -690,7 +690,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
     return d_wrap_in(dom, ctx, created, node);
 }
 
-static uint64_t property_prototypes(int magic)
+static d_kinds_t property_prototypes(int magic)
 {
     switch (magic) {
     case D_CHILDREN: case D_CHILD_ELEMENT_COUNT: case D_FIRST_ELEMENT: case D_LAST_ELEMENT:
@@ -716,7 +716,7 @@ static uint64_t property_prototypes(int magic)
     }
 }
 
-static uint64_t method_prototypes(int magic)
+static d_kinds_t method_prototypes(int magic)
 {
     switch (magic) {
     case D_GET_ID: return D_KIND(D_PROTO_DOCUMENT) | D_KIND(D_PROTO_FRAGMENT);
@@ -740,6 +740,7 @@ int d_proto_parent(int kind)
         return D_PROTO_NODE;
     case D_PROTO_TEXT: case D_PROTO_COMMENT: return D_PROTO_CHARACTER_DATA;
     case D_PROTO_HTML_ELEMENT: case D_PROTO_SVG: return D_PROTO_ELEMENT;
+    case D_PROTO_AUDIO: return D_PROTO_MEDIA;
     default: return D_PROTO_HTML_ELEMENT;
     }
 }

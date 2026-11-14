@@ -140,6 +140,13 @@ int64_t yonder_fetch_run(void *job, bool (*cancelled)(void *ctx), void *ctx, voi
 // parsing while preserving the response type and enforcing hop/CORS checks.
 // Its product must not enter script-response delivery.
 int64_t yonder_fetch_style_run(void *job, bool (*cancelled)(void *), void *ctx, void **out);
+// Native media consumer (a media element's resource, media.c): the hop and
+// CORS checks of the others, an opaque body's bytes kept, as an image's
+// are, and the body streamed down the job's pipe with no cap. It runs on
+// the element's own thread, not the pool, so a song left paused half
+// loaded holds no worker. Its product must not enter script-response
+// delivery.
+int64_t yonder_fetch_media_run(void *job, bool (*cancelled)(void *), void *ctx, void **out);
 // Frees the job and the product (either may be NULL).
 void yonder_fetch_release(void *job, void *product);
 // Frees a product alone.

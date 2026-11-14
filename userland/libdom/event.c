@@ -18,11 +18,15 @@ static const char *const kinds[D_EVENT_COUNT] = {
     "visibilitychange", "prerenderingchange", "DOMContentLoaded", "message", "messageerror", "invalid",
     "pointerdown", "pointerup", "pointermove", "pointerover", "pointerout", "pointerenter", "pointerleave",
     "pointercancel", "gotpointercapture", "lostpointercapture", "mouseenter", "mouseleave", "auxclick", "slotchange",
-    "animationstart", "animationend", "animationiteration", "animationcancel"
+    "animationstart", "animationend", "animationiteration", "animationcancel",
+    "loadstart", "progress", "suspend", "abort", "emptied", "stalled", "loadedmetadata", "loadeddata", "canplay",
+    "canplaythrough", "playing", "waiting", "seeking", "seeked", "ended", "durationchange", "timeupdate", "play",
+    "pause", "ratechange", "volumechange"
 };
-/* A page's handler attributes are a bit per kind in a uint64_t
- * (os64_dom_handler_attributes, attribute_mask). */
-_Static_assert(D_EVENT_COUNT <= 64, "the handler-attribute mask holds a bit per event kind");
+/* A page's handler attributes are a bit per kind in an
+ * os64_dom_handler_mask_t (os64_dom_handler_attributes, attribute_mask). */
+_Static_assert(D_EVENT_COUNT <= 128, "the handler-attribute mask holds a bit per event kind");
+#define HANDLER_BIT(kind) ((os64_dom_handler_mask_t)1 << (kind))
 
 enum { PHASE_NONE, PHASE_CAPTURING, PHASE_AT_TARGET, PHASE_BUBBLING };
 
@@ -1568,37 +1572,37 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
 /* Attributes are counted once per tree version: a walk of the connected
  * tree, shadow trees included, for on<type> names. Listener and property
  * counts are kept as they change. */
-uint64_t os64_dom_handler_attributes(const os64_html_document_t *doc)
+os64_dom_handler_mask_t os64_dom_handler_attributes(const os64_html_document_t *doc)
 {
-    uint64_t mask = 0;
+    os64_dom_handler_mask_t mask = 0;
     const os64_html_node_t *root = doc != NULL ? doc->document : NULL;
     for (const os64_html_node_t *at = root; at != NULL; at = os64_html_shadow_including_next(root, at))
         if (at->kind == OS64_HTML_ELEMENT)
             for (const os64_html_attr_t *attr = at->attrs; attr != NULL; attr = attr->next) {
                 int kind = handler_kind(attr->name);
-                if (kind >= 0) mask |= UINT64_C(1) << kind;
+                if (kind >= 0) mask |= HANDLER_BIT(kind);
             }
     return mask;
 }
 
-static uint64_t attribute_mask(os64_dom_t *dom)
+static os64_dom_handler_mask_t attribute_mask(os64_dom_t *dom)
 {
     uint64_t version = os64_html_version(dom->document);
     if (dom->attribute_scanned && dom->attribute_version == version) return dom->attribute_mask;
-    uint64_t mask = os64_dom_handler_attributes(dom->document);
+    os64_dom_handler_mask_t mask = os64_dom_handler_attributes(dom->document);
     // With the switch off the arc's types' attributes are no handlers.
     if (!dom->options.modern)
-        for (int kind = D_EVENT_SCROLL; kind < D_EVENT_COUNT; kind++) mask &= ~(UINT64_C(1) << kind);
+        for (int kind = D_EVENT_SCROLL; kind < D_EVENT_COUNT; kind++) mask &= ~HANDLER_BIT(kind);
     dom->attribute_mask = mask;
     dom->attribute_version = version;
     dom->attribute_scanned = true;
     return mask;
 }
 
-uint64_t os64_dom_handler_bit(const char *type)
+os64_dom_handler_mask_t os64_dom_handler_bit(const char *type)
 {
     int kind = type != NULL ? d_event_kind(type) : -1;
-    return content_attribute(kind) ? UINT64_C(1) << kind : 0;
+    return content_attribute(kind) ? HANDLER_BIT(kind) : 0;
 }
 
 bool os64_dom_listens(os64_dom_t *dom, const char *type)
@@ -1609,7 +1613,7 @@ bool os64_dom_listens(os64_dom_t *dom, const char *type)
     if (dom->cluster)
         for (size_t i = 0; i < dom->cluster->count; ++i)
             if (dom->cluster->members[i]->listen_counts[kind]) return true;
-    return dom->listen_counts[kind] != 0 || (attribute_mask(dom) & (UINT64_C(1) << kind)) != 0;
+    return dom->listen_counts[kind] != 0 || (attribute_mask(dom) & HANDLER_BIT(kind)) != 0;
 }
 
 /* SCRIPT SURFACE. */

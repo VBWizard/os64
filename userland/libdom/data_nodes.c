@@ -7,8 +7,7 @@
  *
  * libhtml keeps a CDATA section as a TEXT node with `cdata` set and a
  * processing instruction as its PI kind, so neither has a prototype kind of
- * its own here (the binding's kinds are one uint64_t's bits, all taken):
- * their prototypes refine a wrapper's as ShadowRoot's do (d_node_prototype),
+ * its own here: their prototypes refine a wrapper's as ShadowRoot's do (d_node_prototype),
  * CDATASection's over Text's and ProcessingInstruction's over
  * CharacterData's, so every member and receiver check those kinds have
  * applies to them unchanged. The prototypes, and a PI's `target`, are the

@@ -904,6 +904,7 @@ static void departure_detach(os64_dom_t *dom)
     dom->options.focus = NULL;
     dom->options.host_opaque = NULL;
     os64_memset(&dom->image_provider, 0, sizeof(dom->image_provider));
+    os64_memset(&dom->media_provider, 0, sizeof(dom->media_provider));
     os64_memset(&dom->canvas_text, 0, sizeof(dom->canvas_text));
     dom->geometry = NULL; dom->geometry_opaque = NULL;
     dom->svg_hit = NULL; dom->svg_hit_opaque = NULL;
@@ -1051,6 +1052,7 @@ static void departure_activity_cancel(os64_dom_t *dom)
     d_observers_cancel(dom);
     d_intersections_cancel(dom);
     d_performance_cancel(dom);
+    d_media_elements_cancel(dom);
     if (dom->subtle_queue) {
         JS_FreeValueRT(dom->engine, dom->subtle_queue->value);
         dom->subtle_queue->value = JS_UNDEFINED;
@@ -1115,6 +1117,8 @@ static void binding_drain(os64_dom_t *dom)
     d_resizes_drain(dom);
     d_walkers_drain(dom);
     d_performance_drain(dom);
+    /* The media sessions are closed with the host, as the requests below. */
+    d_media_elements_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
@@ -1148,6 +1152,7 @@ static void binding_free(os64_dom_t *dom)
     d_observers_free(dom);
     d_intersections_free(dom);
     d_resizes_free(dom);
+    d_media_elements_free(dom);
     d_walkers_free(dom);
     d_ranges_free(dom);
     if (dom->body_context != NULL) os64_html_release(dom->document, dom->body_context);

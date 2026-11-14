@@ -85,6 +85,7 @@ static char *modern_chain_shape(DomFixture *f)
         "|^(text|link|vLink|aLink|bgColor|background|onpopstate|onhashchange|ononline|onoffline|onlanguagechange"
         "|onmessage|onmessageerror|onunhandledrejection|onrejectionhandled)$"
         "|^on(pointerdown|pointerup|pointermove|pointerover|pointerout|pointerenter|pointerleave|pointercancel|gotpointercapture|lostpointercapture|mouseenter|mouseleave|auxclick|animationstart|animationend|animationiteration|animationcancel)$"
+        "|^on(loadstart|progress|suspend|abort|emptied|stalled|loadedmetadata|loadeddata|canplay|canplaythrough|playing|waiting|seeking|seeked|ended|durationchange|timeupdate|play|pause|ratechange|volumechange)$"
         "|^(setPointerCapture|releasePointerCapture|hasPointerCapture)$|^(animate|getAnimations)$"
         "|^(scrollWidth|scrollHeight|scroll|scrollTo|scrollBy)$"
         "|^onerror$|^getRootNode$|^normalize$|^isSameNode$|^isEqualNode$|^compareDocumentPosition$"

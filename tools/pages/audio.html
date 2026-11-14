@@ -1,0 +1,101 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>The media element</title>
+<!--
+  AUDIO_YONDER.md, Y.2.1: the media element from script, no controls yet.
+
+  What to look for. Before you touch the page, the WAV's play() is refused
+  (NotAllowedError): a page may not make sound until the person has
+  interacted with it, as in other browsers. Then press a key:
+
+    m   plays the MP3 through new Audio() (a 440 Hz tone, two seconds)
+    w   plays the WAV element (a 660 Hz tone, one second)
+    p   pauses both          s   seeks the WAV to 0.5 s
+    l   turns the WAV's loop on or off
+
+  The log shows each element's events with its readyState, and when the
+  MP3 ends, how long it took by the page's clock: a little over 2000 ms
+  after play() (the decoder's start, then two seconds of sound), because
+  the end is when the last of it is heard. The time after `playing` is
+  shorter by however late the window was to say so. The line above the log is the time
+  each element is at, four times a second (timeupdate).
+
+  The sounds were made by the host's ffmpeg:
+    ffmpeg -f lavfi -i sine=frequency=440:sample_rate=44100:duration=2 \
+           -af volume=0.25 -ac 2 -c:a libmp3lame -b:a 64k audio-tone.mp3
+    ffmpeg -f lavfi -i sine=frequency=660:sample_rate=22050:duration=1 \
+           -af volume=0.25 -ac 1 -c:a pcm_s16le audio-tone.wav
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  button { font-size: 15px; margin-right: 6px; }
+  #now { font-family: monospace; margin: 8px 0; }
+  #log { font: 14px monospace; background: #f4f4f4; padding: 8px; min-height: 12em; }
+</style>
+<h1>The media element</h1>
+<p>Press a key first: <b>m</b> MP3, <b>w</b> WAV, <b>p</b> pause, <b>s</b> seek the WAV, <b>l</b> loop it.</p>
+<p>
+  <button id="mp3">MP3 (new Audio)</button>
+  <button id="wav">WAV element</button>
+  <button id="pause">Pause</button>
+  <button id="seek">Seek WAV 0.5 s</button>
+  <button id="loop">Loop WAV</button>
+</p>
+<audio id="w" src="audio-tone.wav" preload="auto"></audio>
+<div id="now">-</div>
+<pre id="log"></pre>
+<script>
+  const log = document.getElementById('log'), now = document.getElementById('now');
+  const w = document.getElementById('w');
+  let m = null, began = 0, asked = 0;
+  function note(text) { log.textContent += text + '\n'; }
+  function tick() {
+    now.textContent = 'wav ' + w.currentTime.toFixed(2) + (m ? '   mp3 ' + m.currentTime.toFixed(2) : '');
+  }
+  function hear(a, name) {
+    for (const t of ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'play', 'playing',
+                     'waiting', 'pause', 'seeking', 'seeked', 'ended', 'error', 'volumechange'])
+      a.addEventListener(t, () => {
+        let line = name + ' ' + t + ' readyState=' + a.readyState;
+        if (t === 'loadedmetadata') line += ' duration=' + a.duration.toFixed(3);
+        if (t === 'error') line += ' code=' + a.error.code + ' ' + a.error.message;
+        if (name === 'mp3' && t === 'playing' && !began) began = performance.now();
+        if (name === 'mp3' && t === 'ended') {
+          const at = performance.now();
+          line += ' ' + Math.round(at - asked) + ' ms after play(), ' + Math.round(at - began) +
+                  ' ms after playing, at ' + a.currentTime.toFixed(2) + ' s';
+          began = 0;
+        }
+        note(line);
+      });
+    a.addEventListener('timeupdate', tick);
+  }
+  function play(a, name) {
+    a.play().then(() => note(name + ' play() resolved'), e => note(name + ' play() rejected: ' + e.name));
+  }
+  function mp3() {
+    if (m === null) { m = new Audio('audio-tone.mp3'); hear(m, 'mp3'); }
+    asked = performance.now();
+    play(m, 'mp3');
+  }
+  function pause() { w.pause(); if (m) m.pause(); }
+  function seek() { w.currentTime = 0.5; }
+  function loop() { w.loop = !w.loop; note('wav loop=' + w.loop); }
+  hear(w, 'wav');
+  note('canPlayType: audio/mpeg "' + w.canPlayType('audio/mpeg') + '", audio/wav "' + w.canPlayType('audio/wav') +
+       '", audio/ogg "' + w.canPlayType('audio/ogg') + '"');
+  // Before any key or click: refused, as other browsers refuse it.
+  play(w, 'wav (before interacting)');
+  document.getElementById('mp3').onclick = mp3;
+  document.getElementById('wav').onclick = () => play(w, 'wav');
+  document.getElementById('pause').onclick = pause;
+  document.getElementById('seek').onclick = seek;
+  document.getElementById('loop').onclick = loop;
+  document.addEventListener('keydown', e => {
+    if (e.key === 'm') mp3();
+    else if (e.key === 'w') play(w, 'wav');
+    else if (e.key === 'p') pause();
+    else if (e.key === 's') seek();
+    else if (e.key === 'l') loop();
+  });
+</script>

@@ -123,7 +123,7 @@ static JSValue element_member(JSContext *ctx, JSValueConst this_value, int argc,
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
-    uint64_t own = magic == E_TITLE_TEXT ? D_KIND(D_PROTO_TITLE)
+    d_kinds_t own = magic == E_TITLE_TEXT ? D_KIND(D_PROTO_TITLE)
                    : magic == E_LINK_CORS ? D_KIND(D_PROTO_LINK) : kRows[magic].on;
     if (D_KIND(d_node_kind(node)) != own) return JS_ThrowTypeError(ctx, "Illegal invocation");
     if (magic == E_LINK_CORS) {

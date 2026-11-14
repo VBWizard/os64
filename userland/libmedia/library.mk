@@ -4,9 +4,9 @@
 # file goes through os64/media.h and never sees FFmpeg, so the decoder
 # behind it can change without a caller changing. tools/test_av_audit.py
 # holds that line. It resamples with libsound.so.
-# The programs that call it.
-LIBMEDIA_PROGRAMS := play mediatest
-LIBMEDIA_SRCS := libmedia/media.c libmedia/media_pcm.c
+# The programs that call it: yonder for a page's media elements.
+LIBMEDIA_PROGRAMS := play mediatest yonder
+LIBMEDIA_SRCS := libmedia/media.c libmedia/media_pcm.c libmedia/media_queue.c
 LIBMEDIA_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBMEDIA_SRCS))
 LIBMEDIA_SO   := $(BIN)/libmedia.so
 LIBMEDIA_BASE  = $(patsubst libmedia.so=%,%,$(filter libmedia.so=%,$(LIB_BASE_PAIRS)))

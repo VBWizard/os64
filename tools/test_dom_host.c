@@ -5,6 +5,7 @@
 #include <os64/js_engine.h>
 #include "quickjs.h"
 #include <dom/dom.h>
+#include <dom/media.h>
 #include <html/html.h>
 #include <page/page.h>
 #include <math.h>
@@ -281,6 +282,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_webanimation.inc"
 #include "test_dom_intersection.inc"
 #include "test_dom_resize.inc"
+#include "test_dom_media.inc"
 #include "test_dom_walker.inc"
 #include "test_dom_pointer.inc"
 #include "test_dom_importmap.inc"
@@ -649,6 +651,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--scroll")){dom_geometry_cases();dom_element_scroll_cases();dom_view_cases();printf("DOM scroll probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--intersection")){dom_intersection_cases();printf("DOM intersection probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--resize")){dom_resize_cases();printf("DOM resize probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--media")){dom_media_cases();printf("DOM media probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--walker")){dom_walker_cases();printf("DOM walker probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--performance")){dom_performance_cases();dom_performance_observer_cases();printf("DOM performance probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -722,6 +725,7 @@ int main(int argc, char **argv)
     dom_webanimation_cases();
     dom_intersection_cases();
     dom_resize_cases();
+    dom_media_cases();
     dom_walker_cases();
     dom_import_map_cases();
     dom_geometry_cases();

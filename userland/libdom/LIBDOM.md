@@ -491,9 +491,11 @@ here fires (§ P1-W's rows); window has `onerror`,
 `onunhandledrejection` and `onrejectionhandled` and the document `onerror`,
 whose events the binding fires for a script's failures (§ P2a's rows; an
 `onerror` content attribute on any element is a handler for an `error`
-event dispatched at it, though no element has the property); window has
-`onmessage` and `onmessageerror`, whose events a posted message's task
-fires (§ P2b's rows); and a document alone has `onreadystatechange`, `onvisibilitychange` and
+event dispatched at it, though only a media element has the property);
+window has `onmessage` and `onmessageerror`, whose events a posted
+message's task fires (§ P2b's rows); window, every element and the
+document have the media element's events' handlers, and a media element
+`onerror` (§ The media row); and a document alone has `onreadystatechange`, `onvisibilitychange` and
 `onprerenderingchange`, which HTML gives no content attribute, so no
 element's attribute of that name is a handler (§ P1-Da's rows). With it
 off none of these is a property, and
@@ -523,8 +525,9 @@ switch on `scroll`, `resize`, `popstate`, `hashchange`, `online`, `offline`,
 property for (`load`, `focus`, `blur`, `scroll`, `resize`) that is so from
 `<body onload>` and `document.body.onload` alike, and for the others
 HTMLBodyElement has them too (0f's P6a's WindowEventHandlers), but for
-`error`: no element has `onerror` here, so `document.body.onerror` is an
-ordinary expando, and only the content attribute is window's (DEBTS.md).
+`error`: no element but a media element has `onerror` here, so
+`document.body.onerror` is an ordinary expando, and only the content
+attribute is window's (DEBTS.md).
 
 The body is first checked by the intrinsic Function constructor, taken
 before any page script could replace it. QuickJS builds that function by
@@ -1592,6 +1595,28 @@ the prototype is there, as every kind's is, with HTMLElement's members
 alone, so `src` set as a property is the script's own and the frame names
 nothing, as before; `setAttribute` and `innerHTML` name it either way.
 
+### The media row
+
+`media.c` (AUDIO_YONDER.md § The element in libdom): `HTMLMediaElement`
+and `HTMLAudioElement` over the binding's media prototypes (`D_PROTO_MEDIA`,
+and `D_PROTO_AUDIO` under it), `MediaError`, `TimeRanges`, the `Audio`
+factory, and the media events' handlers on window, Element and Document,
+with `onerror` on the media prototype. HTML's half of the element is kept here and
+the sound is the host's (`dom/media.h`'s provider: open a resource, play,
+pause, seek, the gain and loop, and its facts). Each element the document
+holds, and each a script reaches through a media member, has a record that
+holds its node: networkState, readyState and the standard's flags, and the
+play() promises pending. `os64_dom_media_turn`, which runs no script, walks
+the tree once per version (a removed element pauses), runs the load
+algorithm when `src` was set or changed, resource selection over `src` or
+the first `<source>` whose type plays, and folds the host's facts into the
+states, queuing each event the standard's steps fire; `os64_dom_media_fire`
+runs one as a task, settling the promises that step took. A script's `src`
+setter, `load()`, `play()`, `pause()` and `currentTime` run their own steps
+at once. `play()` with sound needs the person (the provider's `activated`);
+muted, it does not. `tools/test_dom_media.inc` plays every step against a
+fake host.
+
 ### P2a's rows: a script's failures
 
 One row (MODERN_WEB.md § P2a, as built; WINDOW_DOCUMENT.md § P2a is the
@@ -1944,8 +1969,8 @@ href against the document's own URL, booleans, enumerations, longs, the
 unsigned kinds and a span's and a row span's clamps), one row per member
 and interface, so each accessor's brand is its own interface. Beside
 them a title's `text` and a body's WindowEventHandlers, which are
-window's. A set of kinds is a uint64_t (`D_KIND`); a static assertion
-holds the kinds to 64.
+window's. A set of kinds is a `d_kinds_t`, GCC's 128-bit integer
+(`D_KIND`); a static assertion holds the kinds to 128.
 
 **The tables row** (`tables.c`, naming nothing on window; MODERN_WEB.md
 § 0f's P6b). A table's `caption`, `tHead` and `tFoot`, read and replaced,
