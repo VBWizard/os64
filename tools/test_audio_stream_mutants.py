@@ -240,7 +240,7 @@ mutants = [
     ('a-failed-stream-has-work', '\treturn !s->failed && !s->paused && (s->open || s->fill > 0);',
      '\treturn !s->paused && (s->open || s->fill > 0);'),
     ('any-sink-has-the-sound', '\treturn s->sink == sink && !s->paused && s->fill > 0;',
-     '\treturn !s->paused && s->fill > 0;'),
+     '\t(void)sink;\n\treturn !s->paused && s->fill > 0;'),
     ('a-paused-stream-has-sound', '\treturn s->sink == sink && !s->paused && s->fill > 0;',
      '\treturn s->sink == sink && s->fill > 0;'),
     ('an-open-empty-stream-has-sound', '\treturn s->sink == sink && !s->paused && s->fill > 0;',
