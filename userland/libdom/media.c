@@ -271,6 +271,16 @@ static void seek(os64_dom_t *dom, DMediaElement *m, double t)
 static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
 {
     struct DMediaElements *s = dom->media_elements;
+    /* Whichever way the load came (load(), the src setter, the turn), it
+     * has acted on the src attribute as it stands, so the turn does not
+     * take that same src for a change and load a second time. */
+    const os64_html_attr_t *src = os64_html_attr(m->node, "src");
+    char *copy = copy_text(dom, src != NULL ? src->value : NULL);
+    if (src == NULL || copy != NULL) {
+        d_free(dom, m->src_seen);
+        m->src_seen = copy;
+        m->src_looked = true;
+    }
     m->select_pending = false;
     m->deferred = false;
     m->dormant = false;
@@ -887,15 +897,10 @@ static const DReflection kBooleans[] = {
 };
 
 /* A script set the src attribute: setting it loads at once (HTML
- * § 4.8.11.2), so a script reading readyState next sees HAVE_NOTHING, and
- * the turn takes the attribute as already acted on. */
+ * § 4.8.11.2), so a script reading readyState next sees HAVE_NOTHING
+ * (media_load records the attribute as acted on). */
 static void src_set(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
 {
-    const os64_html_attr_t *src = os64_html_attr(m->node, "src");
-    char *copy = copy_text(dom, src != NULL ? src->value : NULL);
-    d_free(dom, m->src_seen);
-    m->src_seen = copy;
-    m->src_looked = copy != NULL || src == NULL;
     if (d_provider_enter(dom)) {
         media_load(dom, ctx, m);
         d_provider_leave(dom);
@@ -1176,6 +1181,11 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
             m->muted = on != 0;
             queue(dom, m, "volumechange", SETTLE_NONE);
             if (d_provider_enter(dom)) {
+                /* Muted is what let it play without the person: unmuted
+                 * while it plays and still without them, it pauses, as
+                 * other browsers pause it, rather than sound unasked
+                 * (§ Autoplay). */
+                if (!m->muted && !m->paused && !allowed(dom, m)) internal_pause(dom, m);
                 tell_settings(dom, m);
                 d_provider_leave(dom);
             }

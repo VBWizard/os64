@@ -467,6 +467,14 @@ static bool loader_start(yonder_media_t *m)
     return true;
 }
 
+// Whether the queue will take no more for now: no room for a decode, or
+// every segment in use (a short clip on loop uses one per run, and runs
+// out of them before it runs out of frames). `m->lock` held.
+static bool queue_full_locked(const yonder_media_t *m)
+{
+    return os64_media_queue_room(&m->queue) < DECODE_FRAMES || m->queue.segments == OS64_MEDIA_QUEUE_SEGMENTS;
+}
+
 // The readiness the queue makes, and the fetch's progress, told; `m->lock`
 // held. True when anything libdom reacts to changed. A media decoded to
 // its end is as ready as it will ever be, however little of it is still
@@ -477,7 +485,7 @@ static bool readiness_locked(yonder_media_t *m, bool decoded_all)
     uint32_t count = os64_media_queue_count(&m->queue);
     m->facts.current = count > 0 || decoded_all;
     m->facts.future = count >= FUTURE_FRAMES || decoded_all;
-    m->facts.enough = os64_media_queue_room(&m->queue) < DECODE_FRAMES || decoded_all;
+    m->facts.enough = queue_full_locked(m) || decoded_all;
     bool loaded = m->file >= 0 || m->arrived;
     m->facts.loaded = loaded;
     if (m->facts.probed && isfinite(m->facts.duration))
@@ -577,7 +585,7 @@ static int64_t decoder_main(void *arg)
         m->seek_asked = false;
         m->resync = false;
         bool wanted = m->play || m->want_all;
-        uint32_t room = os64_media_queue_room(&m->queue);
+        bool full = queue_full_locked(m);
         bool loop = m->loop;
         os64_lock_release(&m->lock);
         if (dom_seek || resync) {
@@ -621,7 +629,7 @@ static int64_t decoder_main(void *arg)
         // is read no further: the fetch waits on the pipe's backpressure.
         // A seek still decodes its first frames, which is how it lands.
         bool moved = (wanted || landing) && pump(m);
-        if ((!wanted && !landing) || room < DECODE_FRAMES || decoded_all) {
+        if ((!wanted && !landing) || full || decoded_all) {
             os64_lock_acquire(&m->lock);
             moved = readiness_locked(m, decoded_all) || moved;
             os64_lock_release(&m->lock);
@@ -661,7 +669,7 @@ static int64_t decoder_main(void *arg)
                 os64_lock_release(&m->lock);
                 if (was_empty)
                     ring_audio();
-                if (pushed < (uint32_t)n && (giving_way || !decoder_wait(m, 20)))
+                if (pushed < (uint32_t)n && (giving_way || !decoder_wait(m, OS64_WAIT_FOREVER)))
                     break;
             }
             run_frames += pushed;
@@ -1088,7 +1096,10 @@ static int64_t audio_main(void *arg)
             owner->facts.position = (double)frame / RATE;
         owner->facts.sounding = playing && synced;
         bool ended_now = false;
-        if (finished && (all_heard || d.written == 0) && !owner->facts.ended) {
+        // `finished` and what was heard describe the generation the take
+        // saw; a seek that flushed the queue since makes them another
+        // playback's, which must not be called ended.
+        if (synced && finished && (all_heard || d.written == 0) && !owner->facts.ended) {
             owner->facts.ended = true;
             owner->facts.sounding = false;
             ended_now = true;

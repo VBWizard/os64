@@ -431,8 +431,38 @@ static void dom_media_loop_cases(void)
     fixture_free(&f);
 }
 
+static void dom_media_rule_cases(void)
+{
+    DomFixture f;
+    media_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    /* load() and play() on a parsed element before its first turn: one
+     * load, and play()'s promise is not rejected by a second. */
+    media_script(&f, "globalThis.a=document.createElement('audio');a.setAttribute('src','s.mp3');a.muted=true;"
+                     "document.body.appendChild(a);hear(a);globalThis.R=[];a.load();"
+                     "a.play().then(()=>R.push('ok'),e=>R.push(e.name));",
+                 "media: load and play before the first turn");
+    media_turn(&f, "media: the first turn");
+    media_ready(&media_sessions[0], 2);
+    media_turn(&f, "media: ready");
+    check(media_opened == 1, "media: one session, not two");
+    media_script(&f, "const h=heard();assert(R.join()==='ok','not rejected: '+R.join());"
+                     "assert(h.indexOf('abort')<0&&h.indexOf('emptied')<0,'no second load: '+h);",
+                 "media: one load");
+    /* Muted let it play without the person; unmuted, still without them,
+     * it pauses rather than sound. */
+    media_script(&f, "heard();a.muted=false;assert(a.paused&&!a.muted,'unmuting without the person pauses');",
+                 "media: unmute without activation");
+    check(!media_sessions[0].playing, "media: the host was told to pause");
+    media_activated = true;
+    media_script(&f, "a.play();a.muted=true;a.muted=false;assert(!a.paused,'with the person it plays on');",
+                 "media: unmute with activation");
+    fixture_free(&f);
+}
+
 static void dom_media_cases(void)
 {
+    dom_media_rule_cases();
     dom_media_interface_cases();
     dom_media_play_cases();
     dom_media_abort_cases();
