@@ -52,7 +52,7 @@ mutants = [
     # Frames a packet.
     ('the-mtu-forgets-the-header', '    uint32_t n=(mtu-BT_A2DP_HEADER_BYTES)/fb;', '    uint32_t n=mtu/fb;'),
     ('frames-are-not-capped', '    if(n>BT_A2DP_FRAMES_MAX) n=BT_A2DP_FRAMES_MAX;\n', ''),
-    ('the-buffer-is-not-a-limit', '    if(n>room) n=room;', '    if(n>room+1) n=room;'),
+    ('the-buffer-is-not-a-limit', '    if(n>room) n=room;', '    if(n>room) n=room+1;'),
     ('a-small-buffer-is-not-refused', '    if(cap<BT_A2DP_HEADER_BYTES+fb) return 0;\n', ''),
     ('a-small-mtu-is-not-a-failure', '{ a2_fail(p,"the media channel\'s MTU is smaller than a frame",ops,ctx); return 0; }', '{ return 0; }'),
     # The clock.
