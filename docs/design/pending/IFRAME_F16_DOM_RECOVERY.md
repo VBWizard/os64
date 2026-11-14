@@ -1,5 +1,7 @@
 # F.16d — native DOM recovery policy
 
+Implementation PR: **#593**, source `0d23ad19`.
+
 This chapter adds an opt-in libdom policy over the libjs protocol from #582.
 It contains an attributed child EXECUTION episode after complete engine unwind,
 settles native activity behind the execution fence, and permits independent
