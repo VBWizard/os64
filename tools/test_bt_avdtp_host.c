@@ -97,7 +97,16 @@ static void fresh(uint16_t version)
     bt_avdtp_signalling_open(&A, now, version);
 }
 
-static void feed_(const uint8_t *p, size_t n) { bt_avdtp_receive(&A, p, n, now); }
+// Every message is handed over in storage of exactly its length, so that a
+// byte read past its end is a report from ASan, not a zero from the stack.
+static void feed_(const uint8_t *p, size_t n)
+{
+    uint8_t *copy = malloc(n ? n : 1);
+    if (!copy) { failures++; return; }
+    memcpy(copy, p, n);
+    bt_avdtp_receive(&A, copy, n, now);
+    free(copy);
+}
 #define FEED(...) feed_(BYTES(__VA_ARGS__))
 
 static void out_(const char *f, int line, const uint8_t *want, size_t n)
@@ -333,6 +342,21 @@ static void test_initiator_get_all_rejected(void)
     FEED(REJ(LAST), GETCAP, E_BAD_SEID);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_FAILED);
     CHECK_STR(A.why, "no settings in common: capabilities refused");
+
+    // The refusal is this session's: the next one asks Get All again.
+    to_asking(0x0103);
+    FEED(REJ(LAST), GETALL, E_NSC);
+    OURS(GETCAP, S(3));
+    FEED(ACC(LAST), GETCAP, TRANSPORT, ALLSBC);
+    OURS(SETCONF, S(3), S(1), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 51));
+    tick(now + 6000);
+    OURS(ABORT, S(3));
+    bt_avdtp_signalling_closed(&A, now);
+    bt_avdtp_signalling_open(&A, now, 0x0103);
+    CHECK(bt_avdtp_begin(&A, now));
+    OURS(DISCOVER);
+    FEED(ACC(LAST), DISCOVER, EP(3, 0, 0, 1));
+    OURS(GETALL, S(3));
 }
 
 // The walk: the first sink not in use, then the next, skipping sources,
@@ -479,6 +503,7 @@ static void test_initiator_rejects(void)
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_OPEN);
     CHECK_EQ(bt_avdtp_edges(&A)->start_rejects, 2);
     CHECK_EQ(A.last_reject_code, 0);
+    CHECK_EQ(A.malformed, 0);                 // a general reject carries no code, and is not short
     // Suspend: the endpoint and the code; STREAMING still, counted.
     to_streaming();
     bt_avdtp_suspend(&A, now);
@@ -973,6 +998,10 @@ static void test_both_at_once(void)
     NONE();
     tick(at + 1000);
     OURS(SETCONF, S(3), S(1), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 51), DELAYREP);
+    tick(at + 1500);
+    NONE();                                   // sent once, not again
+    tick(at + 3000);
+    NONE();
     FEED(ACC(LAST), SETCONF);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_OPENING);
     OURS(OPEN, S(3));
@@ -1002,6 +1031,51 @@ static void test_both_at_once(void)
     NONE();
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
     CHECK(bt_avdtp_settings(&A) && !bt_avdtp_settings(&A)->joint);
+    // The retry is this session's: a collision in one session does not
+    // earn a retry in the next on the same connection.
+    to_configuring();
+    FEED(CMD(3), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    OUT(REJ(3), SETCONF, 0x00, E_IN_USE);
+    FEED(ACC(LAST), SETCONF);
+    OURS(OPEN, S(3));
+    FEED(ACC(LAST), OPEN);
+    bt_avdtp_media_open(&A, now);
+    bt_avdtp_close(&A, now);
+    OURS(CLOSE, S(3));
+    FEED(ACC(LAST), CLOSE);
+    CHECK(bt_avdtp_begin(&A, now));
+    OURS(DISCOVER);
+    FEED(ACC(LAST), DISCOVER, EP(3, 0, 0, 1));
+    OURS(GETALL, S(3));
+    FEED(ACC(LAST), GETALL, TRANSPORT, ALLSBC);
+    OURS(SETCONF, S(3), S(1), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 51));
+    FEED(REJ(LAST), SETCONF, 0x00, E_IN_USE);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_ENDING);
+    // ...nor does a retry spent in one session leave the next without one.
+    to_configuring();
+    FEED(CMD(3), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    OUT(REJ(3), SETCONF, 0x00, E_IN_USE);
+    FEED(REJ(LAST), SETCONF, 0x00, E_IN_USE);
+    tick(now + 1000);
+    OURS(SETCONF, S(3), S(1), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 51), DELAYREP);
+    FEED(ACC(LAST), SETCONF);
+    OURS(OPEN, S(3));
+    FEED(ACC(LAST), OPEN);
+    bt_avdtp_media_open(&A, now);
+    bt_avdtp_close(&A, now);
+    OURS(CLOSE, S(3));
+    FEED(ACC(LAST), CLOSE);
+    CHECK(bt_avdtp_begin(&A, now));
+    OURS(DISCOVER);
+    FEED(ACC(LAST), DISCOVER, EP(3, 0, 0, 1));
+    OURS(GETALL, S(3));
+    FEED(ACC(LAST), GETALL, TRANSPORT, ALLSBC);
+    OURS(SETCONF, S(3), S(1), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 51));
+    FEED(CMD(4), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    OUT(REJ(4), SETCONF, 0x00, E_IN_USE);
+    FEED(REJ(LAST), SETCONF, 0x00, E_IN_USE);
+    tick(now + 1000);
+    OURS(SETCONF, S(3), S(1), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 51));
     // Another reject code while both rejected: no retry.
     to_configuring();
     FEED(CMD(3), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
@@ -1265,6 +1339,7 @@ static void test_endings(void)
     bt_avdtp_signalling_open(&A, now + 10000, 0x0103);
     now += 10000;
     CHECK(bt_avdtp_begin(&A, now));
+    CHECK(A.why == NULL);                     // a new walk starts with no reason of the last
     OURS(DISCOVER);
     // ...twice: FAILED, and the host still closes both.
     FEED(ACC(LAST), DISCOVER, EP(3, 0, 0, 1));
@@ -1435,6 +1510,14 @@ static void test_fragments(void)
         CHECK_EQ(A.fragments_dropped, 1);
         CHECK(A.rx_active);
     }
+    // A message half reassembled goes with the signalling channel.
+    to_asking(0x0103);
+    FEED(H(LAST, P_START, T_ACC), 2, GETALL, TRANSPORT);
+    bt_avdtp_signalling_closed(&A, now);
+    bt_avdtp_signalling_open(&A, now, 0x0103);
+    FEED(H(LAST, P_END, T_ACC), ALLSBC, DELAYREP);
+    CHECK_EQ(A.fragments_dropped, 1);
+    CHECK(!A.rx_active);
     // An empty payload is malformed.
     to_asking(0x0103);
     feed_((const uint8_t *)"", 0);

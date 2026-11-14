@@ -154,22 +154,23 @@ static void av_send_setconf(bt_avdtp_t *a)
 
 // ── Leaving a session ───────────────────────────────────────────────────────
 
-// Everything the stream held. Answers owed, their delay and the counters stay.
+// The stream is gone: nothing is configured. The rest of what it held is
+// set afresh where it is next used (the settings, their range and delay
+// reporting by each configuration; the state timer, media_ours and
+// CONFIGURING's retry flags on entering the states that read them), and
+// answers owed, their delay and the counters stay.
 static void av_drop_stream(bt_avdtp_t *a)
 {
-    a->configured=false; a->delay_reporting=false; a->media_ours=false;
-    a->retry_waiting=false; a->retried=false; a->rejected_theirs=false;
-    a->state_deadline=0;
+    a->configured=false;
 }
 
 // To CONNECTED: the session is over and a new one is theirs to ask for or
 // ours to begin. A command of ours still outstanding is forgotten (its
-// answer, if it comes, is a stray), except an Abort, which runs out its
-// own short timer.
+// answer, if it comes, is a stray).
 static void av_to_connected(bt_avdtp_t *a)
 {
     av_drop_stream(a);
-    if(a->command_live && a->command_signal!=SIG_ABORT) a->command_live=false;
+    a->command_live=false;
     a->state=BT_AVDTP_CONNECTED;
 }
 
@@ -184,23 +185,22 @@ static void av_abort_to_connected(bt_avdtp_t *a)
 
 // A session gone wrong (§ When a session goes wrong): Abort if a stream may
 // be configured, and the host closes media and sig. The second on this
-// connection is FAILED.
+// connection is FAILED. Its callers have already retired our command.
 static void av_gone_wrong(bt_avdtp_t *a, const char *why)
 {
     bool stream=a->state>=BT_AVDTP_CONFIGURING && a->state<=BT_AVDTP_CLOSING && a->remote_seid;
     av_drop_stream(a);
-    a->command_live=false;
     if(stream) av_command_seid(a,SIG_ABORT,BT_AVDTP_ABORT_MS);
     a->why=why; a->wrongs++;
     a->close_wanted=true;
     a->state=a->wrongs>=2 ? BT_AVDTP_FAILED : BT_AVDTP_ENDING;
 }
 
-// No session can be made: asking again would get the same answer.
+// No session can be made: asking again would get the same answer. It comes
+// of an answer to our command, so none is outstanding.
 static void av_fail(bt_avdtp_t *a, const char *why)
 {
     av_drop_stream(a);
-    a->command_live=false;
     a->why=why;
     a->state=BT_AVDTP_FAILED;
 }
@@ -211,7 +211,7 @@ static const char *const WHY_NO_SINK="no sink endpoint free";
 
 // Ask the first audio sink endpoint not in use at or after `from`. None
 // left: FAILED, "no sink" when none was ever asked, else why the last one
-// did not suit (`why`, which Discover's answer clears).
+// did not suit (`why`, which bt_avdtp_begin clears).
 static void av_ask(bt_avdtp_t *a, unsigned from)
 {
     for(unsigned i=from;i<a->endpoint_count;i++) {
@@ -310,7 +310,7 @@ static bool av_judge(bt_avdtp_t *a, const uint8_t *p, size_t n, uint8_t *cat, ui
     if(sbc[1]!=(SBC_BLOCKS_16|SBC_SUBBANDS_8|SBC_LOUDNESS)) return false;
     uint8_t lo=sbc[2], hi=sbc[3];
     uint8_t chosen=hi<BT_AVDTP_BITPOOL ? hi : BT_AVDTP_BITPOOL;
-    if(lo<SBC_LEAST_BITPOOL || lo>hi || chosen<lo) return false;
+    if(lo<SBC_LEAST_BITPOOL || chosen<lo) return false;      // a backward range fails here too
     a->settings=(bt_avdtp_sbc_t){ .rate=48000, .channels=2, .joint=mode==SBC_JOINT,
                                   .blocks=16, .subbands=8, .snr=false, .bitpool=chosen };
     a->range_lo=lo; a->range_hi=hi;
@@ -338,7 +338,6 @@ static void av_their_setconf(bt_avdtp_t *a, bt_avdtp_msg_t *m, uint8_t label, co
     if(!av_judge(a,p+2,n-2,&cat,&code)) { av_reject(m,label,SIG_SET_CONFIGURATION,cat,code); return; }
     // Accepted: our own sequence is abandoned.
     a->command_live=false;
-    a->retry_waiting=false; a->retried=false; a->rejected_theirs=false;
     a->remote_seid=intr;
     a->configured=true;
     a->state=BT_AVDTP_CONFIGURED;
@@ -492,7 +491,6 @@ static void av_response(bt_avdtp_t *a, uint8_t label, uint8_t signal, uint8_t ty
             e->seid=p[i]>>2; e->in_use=(p[i]&0x02)!=0;
             e->media=p[i+1]>>4; e->sink=(p[i+1]&0x08)!=0;
         }
-        a->why=0;
         av_ask(a,0);
         return;
     case SIG_GET_CAPABILITIES: case SIG_GET_ALL_CAPABILITIES: {
@@ -606,7 +604,6 @@ void bt_avdtp_media_open(bt_avdtp_t *a, uint64_t now)
     a->now=now;
     if(a->state!=BT_AVDTP_AWAITING_MEDIA) return;
     a->state=BT_AVDTP_OPEN;
-    a->state_deadline=0;
 }
 
 void bt_avdtp_media_closed(bt_avdtp_t *a, uint64_t now, bool refused)
