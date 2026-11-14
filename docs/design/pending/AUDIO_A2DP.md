@@ -696,7 +696,8 @@ it left open:
 - **The flush question (Q7) is answered**: a flush mid-song is heard as a
   click and the song carries on; no tail of old sound plays from the
   headphones' own buffer. Nothing is done around a flush.
-- **Sniff is managed, not refused** (A.4: AUDIO_REMOTE.md § Part Z). The
+- **Sniff is managed, not refused** (A.4: AUDIO_REMOTE.md § Part Z and
+  its "Z, as built"). The
   first sound on the P5 came out as clicks: the
   headphones had put the idle link into sniff with a 500 ms interval and
   left it so through the stream, and a link in sniff carries data only at

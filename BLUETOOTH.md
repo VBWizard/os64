@@ -405,7 +405,9 @@ underrun); and switched off and on mid-song, they call the P5 back and the
 sound returns. The first sound was two clicks a second, because the link was
 in sniff mode at 500 ms; sniff is now allowed only on a link idle for ten
 seconds, and refused again, the link taken out of sniff, before our stream
-starts (docs/design/pending/AUDIO_REMOTE.md § Part Z).
+starts (docs/design/pending/AUDIO_REMOTE.md § Part Z). An LE scan and a
+20-second Classic scan during six songs (2026-11-14) cost no slip and no
+underrun, so the manager does nothing about a scan during a stream.
 
 ## Controller and transport
 
