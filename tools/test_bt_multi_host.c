@@ -45,6 +45,8 @@ static struct {
     // Classic link, and how many it has held back.
     bool withhold;
     uint16_t withheld;
+    // The link policy the controller holds for the Classic link.
+    uint16_t policy;
 } CM;
 // The headphones' L2CAP and SDP (headphones_acl, below): their end of the
 // channel we open to their SDP server, and of the one they open to ours.
@@ -741,6 +743,14 @@ static void classic_model(uint16_t op,const uint8_t *p,uint8_t n)
         CM_PUSH(100,1,1,0);
         break;
     case 0x0402: cm_cc(1,op,0); break;
+    // Sniff (AUDIO_REMOTE.md § Part Z): the policy written, answered with
+    // its handle; Exit Sniff Mode refused, as the headphones never sniff.
+    case 0x080d:
+        assert(n==4 && CM.live && le_u16(p)==CM.handle && (le_u16(p+2)==0x0001 || le_u16(p+2)==0x0005));
+        CM.policy=le_u16(p+2);
+        CM_PUSH(1,0x0e,6,1,(uint8_t)op,(uint8_t)(op>>8),0,p[0],p[1]);
+        break;
+    case 0x0804: assert(n==2 && CM.live && le_u16(p)==CM.handle); cm_cs(1,0x0c,op); break;
     default: printf("unexpected Classic command %04x\n",op); assert(0);
     }
 }

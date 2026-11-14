@@ -26,6 +26,8 @@ enum {
     BT_HOST_OWNER_PEER0 = 2,
     BT_HOST_OWNER_CLASSIC = 2 + BT_HOST_PEERS
 };
+// Slot 2's sniff policy (bt_host.c § Slot 2's sniff).
+enum { BT_HOST_SNIFF_AWAKE, BT_HOST_SNIFF_ALLOWING, BT_HOST_SNIFF_DOZING, BT_HOST_SNIFF_WAKING };
 // Controller commands and ACL credits are shared; pairing, encryption, ATT,
 // bond policy and input state belong to a peer. USB's serializing flag
 // (xhci.c) orders access.
@@ -146,6 +148,22 @@ typedef struct {
     uint32_t avdtp_media_dropped;
     // The media packet the pump writes and L2CAP copies.
     uint8_t a2dp_packet[BT_L2CAP_MTU];
+    // Slot 2's sniff policy (AUDIO_REMOTE.md § Part Z), kept with an audio
+    // sink while the link is READY and started over when it is not;
+    // bt_host.c § Slot 2's sniff has the lifecycle table. `sniff_state` is
+    // BT_HOST_SNIFF_*; `sniff_idle_since` when the link last had neither
+    // sound nor a stream (0: it has one now); `sniff_barred` an allowing
+    // write refused or unanswered, not asked again until a stream has come
+    // and gone; when WAKING began, the last Exit Sniff Mode asked and how
+    // many this stream; `sniff_awake_allowed` that this wake ended with
+    // sniff still allowed (counted once). Counted per host, not per
+    // connection.
+    uint8_t sniff_state;
+    uint64_t sniff_idle_since, sniff_wake_began, sniff_wake_last;
+    bool sniff_barred, sniff_awake_allowed;
+    uint8_t sniff_wake_tries;
+    uint32_t sniff_dozes, sniff_wakes, sniff_woke_late, sniff_wake_retries;
+    uint32_t sniff_allows_failed, sniff_refuses_failed;
     // Reconnection (AUDIO_CLASSIC.md § L6): with a bond and `classic_auto`,
     // page the headphones once when the bond is loaded, and again after a
     // drop they may come back from or a page they did not answer, at
