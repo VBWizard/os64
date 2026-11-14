@@ -72,13 +72,13 @@ not can never be confused in a diff. `THIRD_PARTY.md` gains its row.
 Bluetooth module; Copyright 1999-2012 Broadcom Corporation; Apache License
 2.0). Read file by file on 2026-11-13:
 
-- **C, eight source files and four headers**, about 2,500 lines, the
+- **C, eight source files and four headers**, about 3,000 lines, the
   largest being the analysis filter's macros.
-- **Integer-only in its default configuration.** No `float`, `double` or
-  `<math.h>` in code. Two files hold floating-point LITERALS in tables that
-  the default switches compile out (`SBC_FAST_DCT` true, `SBC_IPAQ_OPT`
-  true). The kernel is built `-mno-sse` but not without the x87, so a
-  switch flipped by mistake would compile; the audit reads the objects for
+- **Integer-only.** No `float`, `double` or `<math.h>` in code, and no
+  floating-point literal either: `sbc_dct.c`'s cosines appear as decimals
+  only in comments, beside the fixed-point values the code uses. The
+  kernel is built `-mno-sse` but not without the x87, so floating point
+  added by mistake would compile; the audit reads the objects for
   floating-point instructions so that it cannot pass.
 - **Allocates nothing.** One libc call in all of it, a `memset` at
   initialisation. One compiler builtin, `__builtin_mul_overflow` in
@@ -90,7 +90,7 @@ Its rough edges, and what the port does about each:
 
 | Edge | Handling |
 |---|---|
-| State in file-scope statics and three globals: one encoder in the machine | There is one stream in the machine (AUDIO_SEAM.md). The boundary says so and refuses a second user |
+| State in file-scope statics and three globals: one encoder in the machine | There is one stream in the machine (AUDIO_SEAM.md). The boundary says so: a second `begin` restarts the one encoder with its settings |
 | `SBC_Encode(params, pcm, out)` takes no output capacity | The boundary encodes into its own buffer, sized for the longest frame ANY setting gives, with guard bytes after it. A length that is not the one the settings give, or a disturbed guard, fails the sink |
 | **Its knob is a bit rate, not a bitpool.** `SBC_Encoder_Init` computes the bitpool from `u16BitRate`, corrects it once, clamps it, and writes it over whatever the caller put there | AVDTP agrees a BITPOOL with the headphones. The boundary takes the bitpool, gives the encoder the bit rate that upstream's own formula turns into it, and refuses to begin unless the bitpool the encoder then holds is exactly the one asked. Whether writing the field after Init is also sound is settled by reading Init when the port is built, and recorded in the README; the check stands either way |
 | It reads one buffer through two pointer types (a 16-bit view of 32-bit storage) | Built `-fno-strict-aliasing` |
@@ -124,6 +124,7 @@ can replace this one by changing one directory.
 
 ```c
 // kernel/ports/sbc/port/sbc_port.h — everything the kernel may call.
+// (The settings live in kernel/include/audio/sbc_frame.h, which it includes.)
 typedef struct sbc_settings
 {
 	uint32_t rate;        // 44100 or 48000
@@ -201,6 +202,60 @@ switches, under the sanitizers, and:
 **The suite FAILS, by name, on a machine with no `ffmpeg`.** Other suites
 skip when a tool is missing; this is the only proof the first third-party
 code in ring 0 has, so it is not allowed to pass by not running.
+
+### E, as built
+
+`kernel/ports/sbc/README.md` is the record (the commit, every switch, what
+was read upstream, what the proof found). Where it differs from the design
+above, and why:
+
+- **The pin** is commit `6b3bed84` (2025-01-09), the newest on `main` that
+  touches the directory; the files taken last changed in November 2024.
+  Files are pinned by git blob id as well as SHA-256, and each directory by
+  its tree id, because Gitiles' tarballs carry the time they were made and
+  have no stable digest.
+- **`sbc_settings_t` lives in `kernel/include/audio/sbc_frame.h`**, which
+  `sbc_port.h` includes: V and P need the settings without the encoder.
+- **The bitpool's range is 2 to 250**, the range an A2DP configuration can
+  name (BlueZ's `SBC_MIN_BITPOOL`/`SBC_MAX_BITPOOL`), inside the frame's own
+  limit of 32 × subbands. What a pair of headphones takes is AVDTP's to
+  agree; the encoder is proven over the whole range, so the boundary's
+  buffer is 513 bytes.
+- **A second `begin` restarts the one encoder** rather than being refused:
+  a session made again simply begins again, and there is no verb to end
+  one. The caller serializes.
+- **The bit rate is found by asking `Init`**, halving between 1 and 4,096
+  kbit/s, rather than by restating its formula; the exact-bitpool check is
+  kept, and proven by a build whose search cannot reach the bitpool asked.
+  Writing `s16BitPool` after `Init` would also have been sound: `Init`
+  derives nothing else from the bit rate.
+- **The PCM is cast, not copied**: upstream only reads it.
+- **The switches are written out** in `port/sbc_switches.h`, force-included
+  by every build, each at upstream's default; the audit fails if upstream
+  grows one the file does not set.
+- **Upstream compiles without a warning** under `-Wall -Wextra`, so "shown,
+  not fatal" has nothing to show today.
+- **UBSan found one idiom**, a left shift of a negative value at five lines
+  of `sbc_dct.c`'s fast DCT; that check (`shift-base`) is off for
+  `upstream/` alone in the host build, and the README says why it is benign
+  under GCC.
+- **Against FFmpeg**: the delay through either encoder and FFmpeg's decoder
+  is 73 samples at every setting; ours is at worst 1.06 dB below FFmpeg's
+  encoder (full-scale squares at bitpool 250, both above 67 dB) and usually
+  within 0.3 dB either way. FFmpeg's encoder has no SNR allocation and
+  picks joint or plain stereo from the bit rate (`-b:a`), the bitpool from
+  `-q:a`; the suite checks its headers say the settings, and holds SNR
+  settings against its loudness stream.
+- **FFmpeg 6.1's `-xerror` exits 0** after a frame it could not decode. The
+  frame count is the check that holds, and the suite proves it fails on a
+  stream with one bad CRC.
+- **A frame costs about 3 µs** on the build machine at the port's flags
+  (0.11% of a core in real time); the bound asserted is 200 µs.
+- **The kernel links the objects and calls nothing yet**, so the binary
+  carries none of the encoder until P; the licence goes on the images then
+  (DEBTS).
+- **The audit builds the objects it reads**, and proves its instruction
+  scan sees x87 and SSE code in a probe built the same way.
 
 ## Part V: AVDTP (`bt_avdtp.c`)
 
