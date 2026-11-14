@@ -827,8 +827,12 @@ static int64_t heard_frame(Device *d, bool *playing, bool *drained, uint32_t *de
     }
     // Anchors the ear has gone past (its successor is heard too) are done
     // with; dropping them here is what frees room for more (the take waits
-    // while there is none).
-    while (d->anchors > 1 && d->anchor[1].stream <= heard) {
+    // while there is none). Once the ring has run dry with all of it taken,
+    // `heard` stops short of `taken` by the sink's delay and moves no more
+    // until something is written, so the prune goes by `taken` then, or a
+    // take waiting for room would wait forever.
+    uint64_t passed = *drained ? pos.taken : heard;
+    while (d->anchors > 1 && d->anchor[1].stream <= passed) {
         for (uint32_t k = 1; k < d->anchors; k++)
             d->anchor[k - 1] = d->anchor[k];
         d->anchors--;
@@ -836,6 +840,10 @@ static int64_t heard_frame(Device *d, bool *playing, bool *drained, uint32_t *de
     uint32_t i = d->anchors;
     while (i > 1 && d->anchor[i - 1].stream > heard)
         i--;
+    // Pruned by `taken`, the ear can be short of the first anchor kept: it
+    // is at that anchor's start as near as the clock can say.
+    if (heard < d->anchor[i - 1].stream)
+        return d->anchor[i - 1].media;
     return d->anchor[i - 1].media + (int64_t)(heard - d->anchor[i - 1].stream);
 }
 
