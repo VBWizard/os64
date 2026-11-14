@@ -539,6 +539,12 @@ virtio because its drain waits for the tick.
   Slot 2's status shows L2CAP's channels and counters, the `sdp:` line
   (versions, features and AVDTP's PSM, or why the query was not made) and
   the questions answered. §§ L and S, as built are the record
+  **AVDTP's signalling** is `bt_avdtp.c` (pure, both roles;
+  `tools/test_bt_avdtp_host.sh` plays the sink, 321 mutants): find the
+  headphones' SBC endpoint, configure it, open, start, suspend, close, and
+  answer when they do the same to us. Nothing calls it until the A2DP
+  pump is wired (docs/design/pending/AUDIO_A2DP.md part P; its § V, as
+  built is the record)
 - **Sound** (`audio/audio.c`, `audio/audio_stream.c`, `audio/kaudio.c`) —
   docs/design/pending/AUDIO_SEAM.md is the design. One stream in the
   machine: a program writes PCM (signed 16-bit, two channels, 48 kHz) to

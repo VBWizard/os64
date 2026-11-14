@@ -312,8 +312,10 @@ recalled, and checked when built.
 ### What we are
 
 One local endpoint: identifier 1, an audio SOURCE, SBC. Its capabilities
-are what the encoder's boundary accepts, plus delay reporting in the Get
-All Capabilities answer.
+are what the pump can stream: 48 kHz (the seam's rate; the encoder would
+take 44.1 kHz, the seam cannot feed it), joint stereo and stereo, 16
+blocks, 8 subbands, loudness, bitpools 2 to 51; plus delay reporting in
+the Get All Capabilities answer.
 
 ### The session's states (the lifecycle table comes first)
 
@@ -324,8 +326,8 @@ PSM.
 |---|---|---|
 | `IDLE` | No signalling channel | the host says sig is open: `CONNECTED` |
 | `CONNECTED` | Sig up, no stream, nothing outstanding | we begin: `DISCOVERING`. Their Set Configuration, accepted: `CONFIGURED` |
-| `DISCOVERING` | Our Discover is out | its answer: the first audio SINK endpoint not in use is chosen; none is `FAILED` (no sink). Their Set Configuration, accepted: `CONFIGURED`, and ours is abandoned |
-| `ASKING` | Get All Capabilities (when their SDP record says AVDTP 1.3 or later) or Get Capabilities is out | its answer: SBC offering 48 kHz, 16 blocks, 8 subbands, joint stereo or stereo, loudness, and a bitpool range that meets ours; else the next sink endpoint; none left is `FAILED` (no settings in common). Get All Capabilities REJECTED: Get Capabilities is asked instead. Their Set Configuration, accepted: `CONFIGURED` |
+| `DISCOVERING` | Our Discover is out | its answer: the first audio SINK endpoint not in use is chosen; none is a walk that ended (below). Their Set Configuration, accepted: `CONFIGURED`, and ours is abandoned |
+| `ASKING` | Get All Capabilities (when their SDP record says AVDTP 1.3 or later) or Get Capabilities is out | its answer: SBC offering 48 kHz, 16 blocks, 8 subbands, joint stereo or stereo, loudness, and a bitpool range that meets ours; else the next sink endpoint; none left is a walk that ended (below). Get All Capabilities REJECTED: Get Capabilities is asked instead. Their Set Configuration, accepted: `CONFIGURED` |
 | `CONFIGURING` | Our Set Configuration is out: media transport, one SBC setting in each field, the bitpool range from their least (or 2, if higher) to the one chosen, and delay reporting if they offered it | accepted: `OPENING`. Rejected "in use" or "bad state" while we have just rejected theirs: once, after 1 s, sent again. Any other reject: § When a session goes wrong |
 | `CONFIGURED` | We accepted THEIR Set Configuration; they are to open the stream | their Open, accepted: `AWAITING_MEDIA`. 10 s without it: Abort, then `CONNECTED` |
 | `OPENING` | Our Open is out | accepted: the host opens media, `AWAITING_MEDIA` |
@@ -335,7 +337,16 @@ PSM.
 | `STREAMING` | Media may be sent | Suspend, ours or theirs; Close; Abort |
 | `SUSPENDING` | Our Suspend is out | accepted: `OPEN`. Rejected: `STREAMING` still (a reject leaves the stream as it was), counted |
 | `CLOSING` | Our Close is out | its answer or its timer: the host closes media; `CONNECTED` |
-| `FAILED` | No session can be made with these headphones on this connection (no sink, no settings in common, or a second session gone wrong); why is kept | the link drops |
+| `ENDING` | A session went wrong and the host is closing both channels; nothing is taken | sig closes: `IDLE` |
+| `FAILED` | A second session went wrong on this connection; why is kept | the link drops |
+
+**A walk that ended is not a failure.** "No sink endpoint", "no sink
+endpoint free" and "no settings in common" return to `CONNECTED` with the
+reason kept and shown. Their own Set Configuration is still judged on its
+merits there, so headphones that would rather configure us can. We walk
+again only after "no sink endpoint free", thirty seconds later and for as
+long as it stays so (headphones whose sink a phone is holding); after the
+other two, not on this link.
 
 From any state from `CONFIGURED` on:
 
@@ -344,7 +355,7 @@ From any state from `CONFIGURED` on:
 | their Close, accepted | the host closes media; `CONNECTED`. We do not begin again by ourselves: they chose to end it, and a new session is theirs to ask for or the next connection's |
 | their Abort | answered; media closed; `CONNECTED`, likewise |
 | the media channel closes by itself | Abort; `CONNECTED` |
-| sig closes, the link staying up | everything cleared; `IDLE`; § When a session goes wrong |
+| sig closes, the link staying up | everything cleared; `IDLE`; counted as a session gone wrong only if there was a session (from `CONFIGURING` on) or a command of ours had been sent |
 | the link drops | everything cleared, silently; `IDLE` |
 
 **Timers** (BlueZ's figures): a command we send waits 6 s; Suspend 10 s;
@@ -354,14 +365,13 @@ Abort 2 s, and Abort is not waited for beyond that.
 command outstanding; anything else is counted as a stray. We send one
 command at a time.
 
-**One answer and one command may wait.** An L2CAP channel holds one
+**Answers owed and one command may wait.** An L2CAP channel holds one
 payload. While our command waits its turn, they may send something that
-must be answered. `bt_avdtp.c` therefore keeps at most one answer owed and
-one command to send, and hands the host the answer first each time the
-channel can take a payload. A second message from them while an answer is
-still owed is one message too many for a peer that sends one command at a
-time: it is rejected (bad state) when the answer's turn comes, never
-dropped.
+must be answered. `bt_avdtp.c` keeps up to two answers owed and one
+command to send, and hands the host the answers first each time the
+channel can take a payload. A peer sends one command at a time, so a
+third message while two answers are owed is dropped and counted; except
+an Abort, which is always obeyed and takes the newer answer's place.
 
 ### When they do it to us
 
@@ -372,7 +382,7 @@ dropped.
 | Set Configuration | In `CONNECTED`, `DISCOVERING` or `ASKING`: accepted when it names one SBC setting in each field that the boundary takes, a bitpool range that meets ours, and no category we lack; else rejected with the category and code. In `CONFIGURING` or later: rejected (endpoint in use) |
 | Get Configuration | What is configured; rejected (bad state) when nothing is |
 | Open, Start, Suspend, Close, Abort | By the state table; a signal the state does not allow is rejected (bad state) |
-| Delay Report | Taken in any state from `CONFIGURED` on (§ The delay) |
+| Delay Report | Taken in any state from `CONFIGURED` on, under our endpoint's identifier or the sink's: there is one stream, and refusing it would lose the delay (§ The delay) |
 | Reconfigure | Rejected (not supported command) |
 | Security Control, anything else | General Reject |
 
@@ -387,9 +397,6 @@ open, or sig closing under us. One rule:
 3. With headphones that keep the link: the host opens sig again after
    10 s, once. A second session gone wrong on the same connection is
    `FAILED`, which stays until the link drops.
-
-"No sink" and "no settings in common" are `FAILED` at once: asking again
-would get the same answer.
 
 ### Bounds
 
@@ -407,6 +414,52 @@ do, at every point in our own sequence; every message built by the model
 from the specification and compared byte for byte, each reject's layout
 included; every row of the three tables above reached; random bytes under
 the sanitizers; a mutant harness.
+
+### V, as built
+
+- **The wire was checked** against BlueZ (`profiles/audio/avdtp.c`,
+  `a2dp-codecs.h`) and Android (`stack/avdt/avdt_msg.cc`): every error
+  code, the header, the fragment rules, the Discover entry, the codec
+  element and SBC's bits, each signal's layout and each reject's. Still
+  unconfirmed by either: that a Delay Report counts in tenths of a
+  millisecond. The specification's own text was not reachable.
+- **Two shapes of general reject are taken**: message type 01 with the
+  signal and nothing after (BlueZ), and a reject of one byte with no
+  signal (AVDTP 1.0, as Android reads it), which matches the one command
+  outstanding by label alone.
+- **Collisions are accepted where accepting is harmless**: their Start
+  while ours is out, and their Suspend likewise; a reject of ours that
+  arrives after theirs already moved the stream is not counted as a
+  refusal. Their Set Configuration is taken while ours is queued and not
+  yet sent, or waiting for its one retry. Both sending Open is not
+  resolved: theirs is rejected (bad state).
+- **An Abort of ours and their new configuration**: an Abort still queued
+  is dropped when their Set Configuration is accepted (it names the
+  endpoint they have just configured); one already sent keeps its timer
+  and its answer changes nothing.
+- **What their Set Configuration is refused with**: a codec, field or
+  category we lack, 0x29; an unknown category, 0x17; media transport with
+  a length, 0x23; an element past the end of the message, 0x11; a wrong
+  endpoint, 0x12. A2DP's own codec codes are not used.
+- **Their Abort for another endpoint gets no answer** (an Abort is never
+  rejected); in a state with no stream it is accepted and changes
+  nothing.
+- **What the caller reads**: the state; whether we are to open the media
+  channel; whether a media channel should exist at all; whether both
+  channels are to be closed; the settings agreed; their delay; and five
+  counters that only go up (sessions agreed, their starts, their
+  suspends, our rejected starts, our rejected suspends), so a caller that
+  polls misses nothing. The counters start again when the link comes up
+  or drops. `bt_avdtp_may_begin` says whether a walk may start.
+- **Nothing we send is ever fragmented**: every message is built in 16
+  bytes, asserted under the least MTU of 48.
+- **What it does not handle**: headphones that configure us first with a
+  codec we lack and do not fall back to SBC; content protection in their
+  configuration (refused); both sides sending Open.
+- Proof: `tools/test_bt_avdtp_host.sh`, every message compared with one
+  built from the specification, messages fed in storage of exactly their
+  length so a read past the end is a sanitizer report, a responsive
+  random peer that must reach `OPEN` and `STREAMING`; 321 mutants.
 
 ## Part P: the pump (`bt_a2dp.c`) and the wiring
 
