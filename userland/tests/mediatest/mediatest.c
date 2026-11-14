@@ -16,6 +16,9 @@
 //   5  a seek in it returns the target frame first, sample for sample
 //   6  a seek in the MP3 lands on the frame asked for, by the count of
 //      frames left after it
+//  11  a seek in a 44.1 kHz WAV, which goes through the resampler, returns
+//      what an unbroken decode gives at that frame, not a ramp up from
+//      silence
 //   7  a six-channel WAV, which names no layout, is read as 5.1 and folds
 //      to stereo by BS.775's weights, normalised
 //   8  a source that cannot seek but knows its length plays whole, and a
@@ -92,6 +95,9 @@ static size_t make_wav(uint8_t *out, uint32_t channels, uint32_t rate, uint32_t 
 }
 
 static int16_t ramp(uint32_t c, uint32_t i) { int16_t v = (int16_t)(i * 3); return c ? (int16_t)~v : v; }
+// A slow wave well inside the resampler's band, so what comes out of the
+// resampler is close to what went in and a ramp-up would show.
+static int16_t wave(uint32_t c, uint32_t i) { (void)c; int32_t p = (int32_t)(i % 400); return (int16_t)((p < 200 ? p : 400 - p) * 100 - 10000); }
 static const int16_t kSurround[6] = { 8000, -6000, 4000, 30000, 2000, -1000 };   // FL FR FC LFE BL BR
 static int16_t surround(uint32_t c, uint32_t i) { (void)i; return kSurround[c]; }
 
@@ -197,6 +203,38 @@ static int steps_wav(void)
     return 0;
 }
 
+static int step_resampled_seek(void)
+{
+    static uint8_t wav[44 + 8820 * 2];
+    size_t size = make_wav(wav, 1, 44100, 8820, wave);
+    Memory mem;
+    os64_media_source_t src = source_of(&mem, wav, size, true);
+    os64_media_t *m;
+    int r = os64_media_open(&src, &m, NULL);
+    if (r != 0) { say("44.1 kHz WAV open (result)", r, 0); return FAIL(11); }
+    static int16_t whole[9600 * 2 + 64];
+    int64_t got = 0, n;
+    while ((n = os64_media_decode(m, whole + 2 * got, (uint32_t)(9600 + 32 - got))) > 0) got += n;
+    // 4,960 output frames is 4,557 media frames, exactly 31 of the 44.1 to
+    // 48 kHz ratio's cycles of 147: a seek that started its resampler right
+    // there, with no run-in, would have nothing before the target to work
+    // from, and its first frames would ramp up from silence.
+    enum { AT = 4960 };
+    int16_t after[256 * 2];
+    r = os64_media_seek(m, AT);
+    n = r == 0 ? os64_media_decode(m, after, 256) : r;
+    os64_media_close(m);
+    if (got < AT + 256 || n != 256) { say("resampled seek (frames before, after)", (long)got, (long)n); return FAIL(11); }
+    for (int i = 0; i < 256; i++) {
+        int d = after[2 * i] - whole[2 * (AT + i)];
+        if (d < -2 || d > 2) {
+            say("resampled seek differs from the unbroken decode (frame, by)", AT + i, d);
+            return FAIL(11);
+        }
+    }
+    return 0;
+}
+
 static int step_surround(void)
 {
     static uint8_t wav[44 + 480 * 12];
@@ -294,6 +332,7 @@ int main(void)
     int failed = step_threads();      // first: see step 10 above
     if (!failed) failed = steps_mp3();
     if (!failed) failed = steps_wav();
+    if (!failed) failed = step_resampled_seek();
     if (!failed) failed = step_surround();
     if (!failed) failed = step_unseekable();
     if (!failed) failed = step_noise();

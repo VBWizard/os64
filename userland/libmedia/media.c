@@ -11,9 +11,11 @@
 // resampler are silence that is not the media's; they are counted off
 // (`skip_out`), and at the end of the media the same latency is drawn out
 // of it with silence (`tail`), so what comes out is the media's length.
-// After a seek the decoder starts at a packet boundary at or before the
-// target; the media frames before the target (`seek_target`) are dropped
-// before they reach the resampler, so the first frame out is the target.
+// After a seek the decoder starts a little before the target, so the
+// fresh resampler has the song to work from (os64_media_seek says how
+// much); media frames before that start (`seek_target`) are dropped, and
+// the output before the target is counted off with the delay, so the
+// first frame out is the target, as an unbroken decode would give it.
 //
 // THREADS. libav is built without threads, so what it shares between
 // callers must be set up by one thread at a time (libav/README.md
@@ -62,7 +64,7 @@ struct os64_media {
     media_role_t roles[MEDIA_PCM_MAX_CHANNELS];
 
     os64_resampler_t *resampler;     // NULL when the media is already 48 kHz
-    uint32_t skip_out;               // output frames still owed to the resampler's delay
+    uint32_t skip_out;               // output frames still to count off: the delay, and a seek's run-in
     bool reading_done;               // the demuxer has nothing more
     bool decoding_done;              // the decoder has given its last frame
     bool tail_done;                  // the resampler's held frames have been drawn out
@@ -471,21 +473,46 @@ fail:
     return result;
 }
 
+static uint64_t gcd(uint64_t a, uint64_t b)
+{
+    while (b) { uint64_t t = a % b; a = b; b = t; }
+    return a;
+}
+
+// A seek restarts the resampler, and a resampler with no history makes the
+// first few milliseconds a ramp up from silence, not the song. So the
+// decoder starts EARLIER than the target (`preroll`: twice the resampler's
+// latency, which covers its filter) and the output before the target is
+// counted off with the delay. The early start is put on a boundary of the
+// resampling ratio's cycle (147 media frames for 44.1 kHz, which make
+// exactly 160 output frames), so what comes out is sampled at the same
+// instants as an unbroken decode, and equals it.
 int os64_media_seek(os64_media_t *m, int64_t frame)
 {
     if (m == NULL || frame < 0) return OS64_MEDIA_BAD_ARGS;
     if (m->src.seek == NULL) return OS64_MEDIA_CANNOT_SEEK;
+    int r = resampler_start(m);
+    if (r < 0) return r;
+    uint64_t cycle_in = m->rate / gcd(m->rate, OS64_AUDIO_RATE);
+    uint64_t cycle_out = OS64_AUDIO_RATE / gcd(m->rate, OS64_AUDIO_RATE);
+    int64_t preroll = m->resampler ? 2 * (int64_t)os64_resampler_latency(m->resampler) : 0;
+    int64_t target = av_rescale(frame, m->rate, OS64_AUDIO_RATE);         // in media frames
+    int64_t start = target - preroll;
+    start = start < 0 ? 0 : start / (int64_t)cycle_in * (int64_t)cycle_in;
+    int64_t start_out = start / (int64_t)cycle_in * (int64_t)cycle_out;  // exact: a whole number of cycles
+
     AVStream *s = m->format->streams[m->stream];
-    int64_t ts = av_rescale_q(frame, (AVRational){ 1, OS64_AUDIO_RATE }, s->time_base);
+    int64_t ts = av_rescale_q(start, (AVRational){ 1, (int)m->rate }, s->time_base);
     if (s->start_time != AV_NOPTS_VALUE) ts += s->start_time;
     if (av_seek_frame(m->format, m->stream, ts, AVSEEK_FLAG_BACKWARD) < 0) return OS64_MEDIA_CANNOT_SEEK;
     avcodec_flush_buffers(m->codec);
     av_packet_unref(m->packet);
     m->packet_waiting = m->reading_done = m->decoding_done = m->tail_done = false;
     m->out_at = m->out_len = 0;
-    m->seek_target = av_rescale(frame, m->rate, OS64_AUDIO_RATE);
+    m->seek_target = start;                       // media frames before it are dropped
+    if (frame > start_out) m->skip_out += (uint32_t)(frame - start_out);   // the run-in, with the delay
     m->position = frame;
-    return resampler_start(m);
+    return 0;
 }
 
 int64_t os64_media_position(const os64_media_t *m)
