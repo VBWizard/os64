@@ -39,11 +39,11 @@ A.2.14,"S: SDP answered: the Audio Source record and the three request kinds, wi
 A.2.15,"S: P5: the SDP line in /sys/bluetooth/connection, and whether the headphones stay on an idle link",A.2.13 A.2.14,done,#581,"P5 pass 2026-11-13 (Chris): sdp: audio sink, avdtp 1.3, a2dp 1.3, features 0x0001, psm 0019. The headphones hung up two seconds after the SDP channel closed, so it is left open; with it open the link holds"
 A.2.16,"The books for A.2: CLAUDE.md, DEBTS rows for what each part leaves out, BLUETOOTH.md",A.2.15,done,#581,Each pull request carries its own share
 A.3,AVDTP and the SBC encoder: sound plays,A.1 A.2,todo,,
-A.3.1,"The design: AVDTP as initiator and acceptor, the A2DP sink behind the seam, the encoder boundary and how it fails closed, pacing against credits, RTP sequence per packet, the latency constant",A.2.1,todo,,
-A.3.2,"The SBC encoder, PORTED, behind PCM-in frames-out: integer-only, no allocation, host-tested against a reference decoder to the error bound the specification allows",A.3.1,todo,,"Which implementation is ported, and its licence, are decided in the design and recorded in THIRD_PARTY.md"
+A.3.1,"The design: AVDTP as initiator and acceptor, the A2DP sink behind the seam, the encoder boundary and how it fails closed, pacing against credits, RTP sequence per packet, the latency constant",A.2.1,doing,,"AUDIO_A2DP.md. Three stacked pull requests: E the encoder, V the signalling, P the pump"
+A.3.2,"The SBC encoder, PORTED, behind PCM-in frames-out: integer-only, no allocation, host-tested against a reference decoder to the error bound the specification allows",A.3.1,todo,,"Android's SBC encoder (Broadcom, Apache 2.0), unpatched, in kernel/ports/sbc; the notice in license/. Proven against FFmpeg's decoder"
 A.3.3,"AVDTP: discover, capabilities, configure, open, start, suspend, close, from either end and both at once; pure, with a host model of a sink, fuzzed",A.3.1,todo,,
 A.3.4,"The A2DP sink behind the audio seam: the pump paced by the controller credits, RTP sequence and timestamp checked apart from the encoder, underruns counted",A.3.2 A.3.3,todo,,
-A.3.5,"P5: pair, play a WAV; take the battery out mid-song and put it back; a scan during playback; the keyboard typing during playback; /sys/audio read after each",A.3.4,todo,,"Chris's hands, with the Bose QuietComfort Ultra and the older pair as backup"
+A.3.5,"P5: pair, play a WAV; take the battery out mid-song and put it back; a scan during playback; the keyboard typing during playback; /sys/audio read after each",A.3.4,todo,,"Chris's hands, with the Bose SoundLink around-ear II (the pair A.2 was proven on)"
 A.3.6,P5: the flush proof (Q7) and the latency constant measured,A.3.5,todo,,
 A.4,"Volume from the headphones, sniff mode, and scanning while streaming",A.3,todo,,
 A.4.1,"AVRCP absolute volume, both ways",A.3,todo,,
