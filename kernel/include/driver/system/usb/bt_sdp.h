@@ -4,7 +4,8 @@
 // bt_sdp.h — the Service Discovery Protocol on a Classic link, both ends
 // (docs/design/pending/AUDIO_CLASSIC.md §§ S2, S3; Bluetooth Core Vol 3
 // Part B). The client asks a headphone one question: what Audio Sink are
-// you? The responder answers for os64's one record, an Audio Source.
+// you? The responder answers for os64's records: an Audio Source, and the
+// two AVRCP records (AUDIO_REMOTE.md § What we say we are).
 //
 // PURE: no kernel headers, no allocation, no waits, no logging, no clock.
 // Time is the `now` (milliseconds) its owner hands in. Each side reads and
@@ -92,17 +93,24 @@ typedef enum { BT_SDP_PARSED, BT_SDP_TRUNCATED, BT_SDP_MALFORMED } bt_sdp_parse_
 bt_sdp_parse_t bt_sdp_parse_attribute_lists(const uint8_t *lists, size_t bytes, uint16_t wanted_class,
                                             bool complete, bt_sdp_sink_t *out);
 
-// ── The responder: os64's one record, an Audio Source ─────────────────────
+// ── The responder: os64's records ─────────────────────────────────────────
 // Stateless: a request in, a response out (its length; 0 = send nothing,
 // for a request too short to carry a transaction ID or no room for the
 // answer).
-// Handles ServiceSearchRequest (0x02), ServiceAttributeRequest (0x04) and
-// ServiceSearchAttributeRequest (0x06), each within the requester's stated
-// maximum and `capacity`, with continuation (the continuation state it
-// issues is an offset it can validate when it comes back); ErrorResponse
-// (0x01) with the right error code for a malformed request, an unknown
-// PDU, a bad handle, or a continuation state it did not issue.
-#define BT_SDP_RECORD_HANDLE 0x00010001u
+// Handles ServiceSearchRequest (0x02: every matching record's handle, at
+// most the requester's maximum), ServiceAttributeRequest (0x04: any of the
+// handles below) and ServiceSearchAttributeRequest (0x06: one attribute
+// list per matching record), each within the requester's stated maximum
+// and `capacity`, with continuation (the continuation state it issues is an
+// offset it can validate when it comes back, and runs across records);
+// ErrorResponse (0x01) with the right error code for a malformed request,
+// an unknown PDU, a handle that is not one of ours, or a continuation
+// state it did not issue. A pattern matches a record that holds each of
+// its UUIDs in any attribute, so AV Remote Control (0x110E) finds both
+// AVRCP records: the Target names it as its profile.
+#define BT_SDP_RECORD_HANDLE            0x00010001u   // the Audio Source
+#define BT_SDP_RECORD_HANDLE_TARGET     0x00010002u   // AV Remote Control Target (0x110C)
+#define BT_SDP_RECORD_HANDLE_CONTROLLER 0x00010003u   // AV Remote Control (0x110E) and its Controller (0x110F)
 size_t bt_sdp_respond(const uint8_t *request, size_t bytes, uint8_t *out, size_t capacity);
 
 #endif

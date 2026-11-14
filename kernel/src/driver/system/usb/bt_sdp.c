@@ -288,10 +288,20 @@ size_t bt_sdp_client_status(const bt_sdp_client_t *c, char *out, size_t cap)
 
 // ── The responder ───────────────────────────────────────────────────────────
 
-// os64's record (§ S3), attribute by attribute in ascending ID order, each
-// value one data element.
-typedef struct { uint16_t id; uint8_t bytes; uint8_t value[18]; } sdp_attribute_t;
-static const sdp_attribute_t sdp_record[]={
+// os64's records (AUDIO_CLASSIC.md § S3, AUDIO_REMOTE.md § What we say we
+// are), in ascending handle order: the Audio Source; the AV Remote Control
+// Target, which takes their buttons; the AV Remote Control (with its
+// Controller class), which sets their volume. Each holds the same six
+// attributes in ascending ID order, each value one data element. The two
+// AVRCP records are Android's (stack/avrc/avrc_sdp.cc) for AVRCP 1.4 without
+// browsing: AVCTP's version in the protocol list is the profile's minus one,
+// 1.3; the Controller class follows AV Remote Control from 1.4 on.
+#define SDP_RECORD_ATTRIBUTES 6
+#define SDP_VALUE_MAX         18
+typedef struct { uint16_t id; uint8_t bytes; uint8_t value[SDP_VALUE_MAX]; } sdp_attribute_t;
+typedef struct { uint32_t handle; sdp_attribute_t attribute[SDP_RECORD_ATTRIBUTES]; } sdp_service_t;
+static const sdp_service_t sdp_records[]={
+  { BT_SDP_RECORD_HANDLE, {
     {0x0000,5,{0x0a,0x00,0x01,0x00,0x01}},                                    // ServiceRecordHandle
     {0x0001,5,{0x35,0x03,0x19,0x11,0x0a}},                                    // ServiceClassIDList: Audio Source
     {0x0004,18,{0x35,0x10,0x35,0x06,0x19,0x01,0x00,0x09,0x00,0x19,            // ProtocolDescriptorList: L2CAP, PSM AVDTP;
@@ -299,15 +309,42 @@ static const sdp_attribute_t sdp_record[]={
     {0x0005,5,{0x35,0x03,0x19,0x10,0x02}},                                    // BrowseGroupList: PublicBrowseRoot
     {0x0009,10,{0x35,0x08,0x35,0x06,0x19,0x11,0x0d,0x09,0x01,0x03}},          // BluetoothProfileDescriptorList: A2DP 1.3
     {0x0311,3,{0x09,0x00,0x01}},                                              // SupportedFeatures: player
+  } },
+  { BT_SDP_RECORD_HANDLE_TARGET, {
+    {0x0000,5,{0x0a,0x00,0x01,0x00,0x02}},                                    // ServiceRecordHandle
+    {0x0001,5,{0x35,0x03,0x19,0x11,0x0c}},                                    // ServiceClassIDList: AV Remote Control Target
+    {0x0004,18,{0x35,0x10,0x35,0x06,0x19,0x01,0x00,0x09,0x00,0x17,            // ProtocolDescriptorList: L2CAP, PSM AVCTP;
+                0x35,0x06,0x19,0x00,0x17,0x09,0x01,0x03}},                    //   AVCTP 1.3 (the target's)
+    {0x0005,5,{0x35,0x03,0x19,0x10,0x02}},                                    // BrowseGroupList: PublicBrowseRoot (the target's)
+    {0x0009,10,{0x35,0x08,0x35,0x06,0x19,0x11,0x0e,0x09,0x01,0x04}},          // BluetoothProfileDescriptorList: AVRCP 1.4 (the target's)
+    {0x0311,3,{0x09,0x00,0x03}},                                              // SupportedFeatures: category 1 (player) and 2 (amplifier)
+  } },
+  { BT_SDP_RECORD_HANDLE_CONTROLLER, {
+    {0x0000,5,{0x0a,0x00,0x01,0x00,0x03}},                                    // ServiceRecordHandle
+    {0x0001,8,{0x35,0x06,0x19,0x11,0x0e,0x19,0x11,0x0f}},                     // ServiceClassIDList: AV Remote Control, its Controller
+    {0x0004,18,{0x35,0x10,0x35,0x06,0x19,0x01,0x00,0x09,0x00,0x17,            // ProtocolDescriptorList: L2CAP, PSM AVCTP;
+                0x35,0x06,0x19,0x00,0x17,0x09,0x01,0x03}},                    //   AVCTP 1.3 (the controller's)
+    {0x0005,5,{0x35,0x03,0x19,0x10,0x02}},                                    // BrowseGroupList: PublicBrowseRoot (the controller's)
+    {0x0009,10,{0x35,0x08,0x35,0x06,0x19,0x11,0x0e,0x09,0x01,0x04}},          // BluetoothProfileDescriptorList: AVRCP 1.4 (the controller's)
+    {0x0311,3,{0x09,0x00,0x02}},                                              // SupportedFeatures: category 2 (the volume's controller)
+  } },
 };
-#define SDP_ATTRIBUTES (sizeof(sdp_record)/sizeof(sdp_record[0]))
+#define SDP_RECORDS (sizeof(sdp_records)/sizeof(sdp_records[0]))
+// The whole answer is built before it is cut into parts: an attribute
+// list's header is at most 3 bytes for these sizes, and so is the list of
+// lists' around three of them.
+#define SDP_RECORDS_MAX 3
+#define SDP_LIST_MAX  (3 + SDP_RECORD_ATTRIBUTES*(3 + SDP_VALUE_MAX))
+#define SDP_WHOLE_MAX (3 + SDP_RECORDS_MAX*SDP_LIST_MAX)
+_Static_assert(SDP_RECORDS <= SDP_RECORDS_MAX, "the answer buffer holds every record");
+_Static_assert(SDP_WHOLE_MAX <= 0xffff, "a continuation offset is 16 bits");
 
 // Does the record hold this UUID (in its 16-bit form) anywhere? Every
 // element of our own record is visited by stepping into each sequence.
-static bool sdp_record_has(uint32_t uuid)
+static bool sdp_record_has(const sdp_service_t *r, uint32_t uuid)
 {
-    for(unsigned a=0;a<SDP_ATTRIBUTES;a++) {
-        const sdp_attribute_t *at=&sdp_record[a];
+    for(unsigned a=0;a<SDP_RECORD_ATTRIBUTES;a++) {
+        const sdp_attribute_t *at=&r->attribute[a];
         sdp_el_t e;
         for(size_t i=0;i<at->bytes && sdp_element(at->value,i,at->bytes,&e);) {
             if(e.type==T_UUID && sdp_uuid16(at->value,&e)==uuid) return true;
@@ -335,7 +372,9 @@ static size_t sdp_seq(uint8_t *out, size_t n)
 // a check of it against the request it continues, so a state that does
 // not match its request (damaged, or moved to another one) is refused. The
 // check is not a secret: a peer can compute one for any offset, and gets
-// what that offset of our own record holds.
+// what that offset of our own records holds. The offset is a byte of the
+// whole answer for the attribute requests and a handle's place in the list
+// for a Service Search.
 #define SDP_STATE_BYTES 6
 static uint32_t sdp_check(const uint8_t *a, size_t an, const uint8_t *b, size_t bn, uint8_t pdu, uint16_t offset)
 {
@@ -347,40 +386,91 @@ static uint32_t sdp_check(const uint8_t *a, size_t an, const uint8_t *b, size_t 
 }
 
 // A ServiceSearchPattern: a sequence of 1 to 12 UUIDs. True when it is
-// well formed; *match when the record holds every one.
-static bool sdp_pattern(const uint8_t *p, size_t at, size_t lim, size_t *next, bool *match)
+// well formed; match[r] when record r holds every one.
+static bool sdp_pattern(const uint8_t *p, size_t at, size_t lim, size_t *next, bool match[SDP_RECORDS])
 {
     sdp_el_t s, e;
     if(!sdp_element(p,at,lim,&s) || s.type!=T_SEQ) return false;
     unsigned n=0;
-    *match=true;
+    for(unsigned r=0;r<SDP_RECORDS;r++) match[r]=true;
     for(size_t i=s.data;i<s.data+s.size;i=e.data+e.size) {
         if(!sdp_element(p,i,s.data+s.size,&e) || e.type!=T_UUID || ++n>SDP_MAX_PATTERN) return false;
         uint32_t u=sdp_uuid16(p,&e);
-        if(u==SDP_NOT_16 || !sdp_record_has(u)) *match=false;
+        for(unsigned r=0;r<SDP_RECORDS;r++)
+            if(u==SDP_NOT_16 || !sdp_record_has(&sdp_records[r],u)) match[r]=false;
     }
     *next=s.data+s.size;
     return n>0;
 }
 
 // An AttributeIDList: a sequence of uint16 IDs and uint32 ranges (high
-// half the first ID, low half the last). The record's attributes any of
+// half the first ID, low half the last). Each record's attributes any of
 // them names are marked; true when it is well formed.
-static bool sdp_attributes(const uint8_t *p, size_t at, size_t lim, size_t *next, bool wanted[SDP_ATTRIBUTES])
+static bool sdp_attributes(const uint8_t *p, size_t at, size_t lim, size_t *next,
+                           bool wanted[SDP_RECORDS][SDP_RECORD_ATTRIBUTES])
 {
     sdp_el_t s, e;
     if(!sdp_element(p,at,lim,&s) || s.type!=T_SEQ || !s.size) return false;
-    for(unsigned a=0;a<SDP_ATTRIBUTES;a++) wanted[a]=false;
+    for(unsigned r=0;r<SDP_RECORDS;r++) for(unsigned a=0;a<SDP_RECORD_ATTRIBUTES;a++) wanted[r][a]=false;
     for(size_t i=s.data;i<s.data+s.size;i=e.data+e.size) {
         if(!sdp_element(p,i,s.data+s.size,&e) || e.type!=T_UINT || (e.index!=1 && e.index!=2)) return false;
         uint16_t lo, hi;
         if(e.index==1) lo=hi=sdp_u16(p+e.data);
         else { lo=sdp_u16(p+e.data); hi=sdp_u16(p+e.data+2); }
         if(lo>hi) return false;
-        for(unsigned a=0;a<SDP_ATTRIBUTES;a++) if(sdp_record[a].id>=lo && sdp_record[a].id<=hi) wanted[a]=true;
+        for(unsigned r=0;r<SDP_RECORDS;r++) for(unsigned a=0;a<SDP_RECORD_ATTRIBUTES;a++) {
+            uint16_t id=sdp_records[r].attribute[a].id;
+            if(id>=lo && id<=hi) wanted[r][a]=true;
+        }
     }
     *next=s.data+s.size;
     return true;
+}
+
+// One record's attribute list for the attributes marked: the length of
+// its contents (sdp_list_contents), its whole length with the sequence's
+// header (sdp_list_bytes), and the list itself written at `out`, its
+// length returned (sdp_list_put).
+static size_t sdp_list_contents(const sdp_service_t *r, const bool wanted[SDP_RECORD_ATTRIBUTES])
+{
+    size_t n=0;
+    for(unsigned a=0;a<SDP_RECORD_ATTRIBUTES;a++) if(wanted[a]) n+=3u+r->attribute[a].bytes;
+    return n;
+}
+static size_t sdp_list_bytes(const sdp_service_t *r, const bool wanted[SDP_RECORD_ATTRIBUTES])
+{
+    size_t n=sdp_list_contents(r,wanted);
+    return n+(n<256 ? 2 : 3);
+}
+static size_t sdp_list_put(uint8_t *out, const sdp_service_t *r, const bool wanted[SDP_RECORD_ATTRIBUTES])
+{
+    size_t o=sdp_seq(out,sdp_list_contents(r,wanted));
+    for(unsigned a=0;a<SDP_RECORD_ATTRIBUTES;a++) if(wanted[a]) {
+        const sdp_attribute_t *at=&r->attribute[a];
+        out[o]=0x09; sdp_put16(out+o+1,at->id);
+        sdp_copy(out+o+3,at->value,at->bytes);
+        o+=3u+at->bytes;
+    }
+    return o;
+}
+
+// A continuation state of ours, checked: the offset it names, or 0 when it
+// is not one we issued for this request (an offset of 0 is never issued).
+static uint16_t sdp_state(const uint8_t *s, uint8_t cont, size_t whole, const uint8_t *key, size_t key_bytes,
+                          const uint8_t *list, size_t list_bytes, uint8_t pdu)
+{
+    if(cont!=SDP_STATE_BYTES) return 0;
+    uint16_t offset=sdp_u16(s);
+    if(!offset || offset>=whole || sdp_u32(s+2)!=sdp_check(key,key_bytes,list,list_bytes,pdu,offset)) return 0;
+    return offset;
+}
+static void sdp_put_state(uint8_t *out, const uint8_t *key, size_t key_bytes, const uint8_t *list, size_t list_bytes,
+                          uint8_t pdu, uint16_t following)
+{
+    out[0]=SDP_STATE_BYTES;
+    sdp_put16(out+1,following);
+    uint32_t check=sdp_check(key,key_bytes,list,list_bytes,pdu,following);
+    sdp_put16(out+3,(uint16_t)(check>>16)); sdp_put16(out+5,(uint16_t)check);
 }
 
 size_t bt_sdp_respond(const uint8_t *req, size_t n, uint8_t *out, size_t cap)
@@ -390,12 +480,12 @@ size_t bt_sdp_respond(const uint8_t *req, size_t n, uint8_t *out, size_t cap)
     uint8_t pdu=req[0];
     if(pdu!=SDP_SEARCH_REQ && pdu!=SDP_ATTR_REQ && pdu!=SDP_SEARCH_ATTR_REQ) return sdp_error(req,out,cap,SDP_BAD_SYNTAX);
     size_t at=5, next;
-    bool match=true, wanted[SDP_ATTRIBUTES];
+    bool match[SDP_RECORDS]={0}, wanted[SDP_RECORDS][SDP_RECORD_ATTRIBUTES];
     uint16_t max;
     const uint8_t *key=req+5;               // what the continuation state is checked against: the parameters
     size_t key_bytes;                       // before the maximum, and the attribute list after it
     if(pdu==SDP_SEARCH_REQ || pdu==SDP_SEARCH_ATTR_REQ) {
-        if(!sdp_pattern(req,at,n,&next,&match)) return sdp_error(req,out,cap,SDP_BAD_SYNTAX);
+        if(!sdp_pattern(req,at,n,&next,match)) return sdp_error(req,out,cap,SDP_BAD_SYNTAX);
     } else {
         if(n-at<4) return sdp_error(req,out,cap,SDP_BAD_SYNTAX);
         next=at+4;
@@ -411,47 +501,60 @@ size_t bt_sdp_respond(const uint8_t *req, size_t n, uint8_t *out, size_t cap)
     uint8_t cont=req[at];
     if(cont>BT_SDP_CONTINUATION) return sdp_error(req,out,cap,SDP_BAD_SYNTAX);
     if(n-at-1!=cont) return sdp_error(req,out,cap,SDP_BAD_SIZE);
-    if(pdu==SDP_ATTR_REQ && sdp_u32(req+5)!=BT_SDP_RECORD_HANDLE) return sdp_error(req,out,cap,SDP_BAD_HANDLE);
+    // A ServiceAttributeRequest names one of our records by its handle.
+    const sdp_service_t *named=0;
+    if(pdu==SDP_ATTR_REQ) {
+        uint32_t handle=sdp_u32(req+5);
+        for(unsigned r=0;r<SDP_RECORDS;r++) if(sdp_records[r].handle==handle) named=&sdp_records[r];
+        if(!named) return sdp_error(req,out,cap,SDP_BAD_HANDLE);
+    }
     if(pdu==SDP_SEARCH_REQ ? !max : max<SDP_MIN_ATTR_BYTES) return sdp_error(req,out,cap,SDP_BAD_SYNTAX);
+    const uint8_t *list=req+list_at, *state=req+at+1;
+    size_t list_bytes=at-list_at;
 
     if(pdu==SDP_SEARCH_REQ) {
-        // One record: one handle at most, never a continuation.
-        if(cont) return sdp_error(req,out,cap,SDP_BAD_CONTINUATION);
-        size_t m=match ? 1 : 0, len=5+4+4*m+1;
-        if(cap<len) return 0;
+        // The handles of the records matched, at most `max` of them. A
+        // response carries as many as the room allows, and the rest follow
+        // with continuation; the state names the next handle's place.
+        uint32_t handles[SDP_RECORDS];
+        size_t total=0;
+        for(unsigned r=0;r<SDP_RECORDS;r++) if(match[r] && total<max) handles[total++]=sdp_records[r].handle;
+        uint16_t from=0;
+        if(cont && !(from=sdp_state(state,cont,total,key,key_bytes,list,list_bytes,pdu)))
+            return sdp_error(req,out,cap,SDP_BAD_CONTINUATION);
+        // Header, both counts and the state's length byte come first.
+        size_t part=total-from;
+        if(cap<10+4*part) {
+            if(cap<10+SDP_STATE_BYTES+4) return 0;
+            part=(cap-10-SDP_STATE_BYTES)/4;
+        }
+        bool more=from+part<total;
+        size_t len=9+4*part+1+(more ? SDP_STATE_BYTES : 0);
         out[0]=SDP_SEARCH_RSP; out[1]=req[1]; out[2]=req[2]; sdp_put16(out+3,(uint16_t)(len-5));
-        sdp_put16(out+5,(uint16_t)m); sdp_put16(out+7,(uint16_t)m);
-        if(m) { sdp_put16(out+9,(uint16_t)(BT_SDP_RECORD_HANDLE>>16)); sdp_put16(out+11,(uint16_t)BT_SDP_RECORD_HANDLE); }
-        out[len-1]=0;
+        sdp_put16(out+5,(uint16_t)total); sdp_put16(out+7,(uint16_t)part);
+        for(size_t i=0;i<part;i++) {
+            sdp_put16(out+9+4*i,(uint16_t)(handles[from+i]>>16)); sdp_put16(out+11+4*i,(uint16_t)handles[from+i]);
+        }
+        if(more) sdp_put_state(out+9+4*part,key,key_bytes,list,list_bytes,pdu,(uint16_t)(from+part));
+        else out[9+4*part]=0;
         return len;
     }
 
-    // The whole answer, then the part of it this response carries.
-    uint8_t whole[160];
-    size_t inner=0, w;
-    for(unsigned a=0;a<SDP_ATTRIBUTES;a++) if(wanted[a]) inner+=3u+sdp_record[a].bytes;
-    if(pdu==SDP_SEARCH_ATTR_REQ && !match) w=sdp_seq(whole,0);
+    // The whole answer, then the part of it this response carries: the
+    // named record's attribute list, or a list of one list per record
+    // matched (an empty list when none is).
+    uint8_t whole[SDP_WHOLE_MAX];
+    size_t w=0;
+    if(named) w=sdp_list_put(whole,named,wanted[named-sdp_records]);
     else {
-        size_t o=0;
-        if(pdu==SDP_SEARCH_ATTR_REQ) o=sdp_seq(whole,inner+2);
-        o+=sdp_seq(whole+o,inner);
-        for(unsigned a=0;a<SDP_ATTRIBUTES;a++) if(wanted[a]) {
-            whole[o]=0x09; sdp_put16(whole+o+1,sdp_record[a].id);
-            sdp_copy(whole+o+3,sdp_record[a].value,sdp_record[a].bytes);
-            o+=3u+sdp_record[a].bytes;
-        }
-        w=o;
+        size_t inner=0;
+        for(unsigned r=0;r<SDP_RECORDS;r++) if(match[r]) inner+=sdp_list_bytes(&sdp_records[r],wanted[r]);
+        w=sdp_seq(whole,inner);
+        for(unsigned r=0;r<SDP_RECORDS;r++) if(match[r]) w+=sdp_list_put(whole+w,&sdp_records[r],wanted[r]);
     }
-    const uint8_t *list=req+list_at;
-    size_t list_bytes=at-list_at;
     uint16_t offset=0;
-    if(cont) {
-        if(cont!=SDP_STATE_BYTES) return sdp_error(req,out,cap,SDP_BAD_CONTINUATION);
-        const uint8_t *s=req+at+1;
-        offset=sdp_u16(s);
-        if(!offset || offset>=w || sdp_u32(s+2)!=sdp_check(key,key_bytes,list,list_bytes,pdu,offset))
-            return sdp_error(req,out,cap,SDP_BAD_CONTINUATION);
-    }
+    if(cont && !(offset=sdp_state(state,cont,w,key,key_bytes,list,list_bytes,pdu)))
+        return sdp_error(req,out,cap,SDP_BAD_CONTINUATION);
     // Header, byte count and the longest continuation state come first.
     if(cap<5+2+1+SDP_STATE_BYTES+1) return 0;
     size_t part=w-offset, room=cap-(5+2+1+SDP_STATE_BYTES);
@@ -463,12 +566,7 @@ size_t bt_sdp_respond(const uint8_t *req, size_t n, uint8_t *out, size_t cap)
     out[1]=req[1]; out[2]=req[2]; sdp_put16(out+3,(uint16_t)(len-5));
     sdp_put16(out+5,(uint16_t)part);
     sdp_copy(out+7,whole+offset,part);
-    if(more) {
-        uint16_t following=(uint16_t)(offset+part);
-        out[7+part]=SDP_STATE_BYTES;
-        sdp_put16(out+8+part,following);
-        uint32_t check=sdp_check(key,key_bytes,list,list_bytes,pdu,following);
-        sdp_put16(out+10+part,(uint16_t)(check>>16)); sdp_put16(out+12+part,(uint16_t)check);
-    } else out[7+part]=0;
+    if(more) sdp_put_state(out+7+part,key,key_bytes,list,list_bytes,pdu,(uint16_t)(offset+part));
+    else out[7+part]=0;
     return len;
 }

@@ -323,10 +323,9 @@ returns each matching handle; Service Attribute takes any of the three
 handles), with the continuation rules the one record has today, and the
 responder's buffers grow to hold three records.
 
-### `bt_avctp.c` and `bt_avrcp.c` (pure)
+### `bt_avrcp.c` (pure)
 
-One file each, or one if that reads better: the builder's call. Pure, one
-per link, embedded by the host; whole messages in and out; carrying them
+One file holds both AVCTP and AVRCP. Pure, one per link, embedded by the host; whole messages in and out; carrying them
 on L2CAP is the host's, with the take-then-commit shape AVDTP has (`next`
 gives the head message and a serial, `sent` commits it), because the same
 parked-message hazard exists. At least two transaction labels of ours are
@@ -359,9 +358,9 @@ not. Without it they guess.
 | `IDLE` | No AVCTP channel | the host says it is open: `ASKING` |
 | `ASKING` | Get Capabilities (events) is out | the answer lists volume-changed: `REGISTERING`. It does not, or the command is rejected or not implemented: `PLAIN` |
 | `REGISTERING` | Register Notification (volume changed) is out | INTERIM, carrying their volume now: `READY`, and the volume is known. Rejected or not implemented: `PLAIN` |
-| `READY` | Absolute volume works; a registration is standing | CHANGED: the new volume is known and the registration is made again (each lasts one change); the INTERIM that answers it carries their volume again, so a change made between the two is not lost. The re-registration REJECTED: `PLAIN`. A Set of ours answered ACCEPTED: the volume they took is known. Answered INTERIM: go on waiting. Answered REJECTED: counted, the volume stays what it was |
+| `READY` | Absolute volume works; a registration is standing | CHANGED: the new volume is known and the registration is made again (each lasts one change); the INTERIM that answers it carries their volume again, so a change made between the two is not lost. The re-registration REJECTED: `PLAIN`. A Set of ours answered ACCEPTED: the volume they took is known. Answered INTERIM: go on waiting. Answered REJECTED: counted, the volume stays what it was. Never answered: the Set alone ends, counted, and `READY` stands |
 | `PLAIN` | These headphones have no absolute volume | the channel closes |
-| `FAILED` | A command of ours went unanswered (2 s) twice | the channel closes |
+| `FAILED` | Get Capabilities or Register Notification went unanswered through two periods of 2 s (sent, then sent once more) | the channel closes; or the playback status becomes playing, which asks again from `ASKING`, at most three times a channel |
 
 Every state returns to `IDLE` when the AVCTP channel closes, the link
 staying up or not; the host says when.
@@ -397,6 +396,54 @@ responsive random peer that must reach `READY`; mutants.
 class, all three by the public browse root, each handle's attributes, a
 handle that is none of ours, continuation across records, the cross check
 with the client's walker.
+
+### R, as built
+
+`bt_avrcp.c` and its header are the code; `tools/test_bt_avrcp_host.sh`
+(201 mutants) and `tools/test_bt_sdp_host.sh` (156) the proof. Nothing
+calls it until part W. What differs from the tables above, or was left
+open by them:
+
+- **A Set is sent once.** A Set Absolute Volume that gets no answer waits a
+  second period of 2 s and is not sent again: sending a level twice can
+  undo a button pressed between the two. One that is never answered ends
+  alone, counted (`silent`); the registration that stands is evidence
+  enough that the headphones are alive. Get Capabilities and Register
+  Notification ARE sent a second time, and it is those going unanswered
+  that is `FAILED`.
+- **An answer to either copy is the answer.** A command sent once takes its
+  answer while its second copy still waits to leave, and that copy is then
+  withdrawn.
+- **`sent` finds the message by its serial**, not by its place: an answer
+  owed to a command of theirs that arrives while a message of ours is
+  parked with the carrier goes ahead of it, and the parked one is still
+  committed when the carrier says it left. Nothing goes out twice.
+- **A Set answered INTERIM** waits a fresh 2 s for the answer proper.
+- **A second INTERIM** (no CHANGED between) is taken as their level.
+- **Answers owed are bounded at eight**, one of them kept for a CHANGED of
+  ours; a command of theirs beyond that is dropped and counted.
+- **Lengths**: a message shorter than its PDU needs is malformed; one that
+  carries more than it needs is read for what is needed. Headphones that
+  pad are not failed for it.
+- **`FAILED` is retried when sound starts**: the playback status becoming
+  playing asks again from `ASKING`, at most three times a channel, since
+  headphones busy at connect are the likely cause.
+- **Unit Info** names the Bluetooth SIG as the company. **Get Element
+  Attributes** answers zero attributes. **The track identifier** is 0
+  while playing and all ones otherwise, and no track CHANGED is sent when
+  playback starts.
+- **Presses** reach the host through a ring of sixteen; a press enters
+  only when there is room for its release, and loss is counted.
+- **`bt_avrcp_channel_open` comes before the first `receive`**: a message
+  received while `IDLE` is dropped unread and counted.
+- **The SDP responder** answers for three records, handles 0x00010001
+  (Audio Source), 0x00010002 (target, features 0x0003) and 0x00010003
+  (controller, classes 0x110E and 0x110F, features 0x0002), AVCTP 1.3 and
+  AVRCP 1.4 in both, as Android's own records are laid out.
+
+Known and left: a NOT IMPLEMENTED or REJECTED echo carries at most 26
+operands of theirs; a pass-through for a subunit that is not the panel is
+REJECTED; BlueZ waits 10 s for a control answer where we wait 2 s twice.
 
 ## Part W: the volume wired
 
