@@ -42,10 +42,24 @@ static void scroll_cases(void)
            p4 != NULL && flow_box_scroller(p4) == 0 && flow_box_scroller(s) == -1, NULL);
     expect("scroll: what it scrolls does not make the page taller",
            t != NULL && flow_height(t) == 130 + 1000, NULL);
+    const flow_box_t *body = s != NULL ? s->parent : NULL;
+    expect("scroll: as laid out, nothing has changed what a box draws in place",
+           s != NULL && body != NULL && p4 != NULL && s->drawn == 0 && body->drawn == 0 &&
+               p4->drawn == 0, NULL);
     flow_point_t past = flow_scroll_set(t, 0, (flow_point_t){7, 500});
+    uint64_t scrolled = s != NULL ? s->drawn : 0;
     flow_point_t before = flow_scroll_set(t, 0, (flow_point_t){-5, -5});
     expect("scroll: a position is held to the range",
            past.x == 0 && past.y == 100 && before.x == 0 && before.y == 0, NULL);
+    // A scroll changes what the container draws, and what each box it is in
+    // draws, not what its content does; one that moves nothing changes
+    // nothing.
+    expect("scroll: a scroll stamps the container and the boxes it is in, later each time",
+           scrolled != 0 && body->drawn == s->drawn && s->drawn > scrolled && p4->drawn == 0,
+           NULL);
+    uint64_t still = s->drawn;
+    (void)flow_scroll_set(t, 0, (flow_point_t){0, -9});
+    expect("scroll: a scroll held where it is stamps nothing", s->drawn == still, NULL);
 
     flow_scroll_set(t, 0, (flow_point_t){0, 50});
     os64_gui_rect_t r4 = p4 != NULL ? flow_box_doc_rect(p4, top) : (os64_gui_rect_t){0};

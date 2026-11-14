@@ -122,6 +122,15 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
 #lens{position:absolute;left:30%;top:6%;width:40%;height:40%;border-radius:50%;
       background:conic-gradient(#fffbe6 0 90deg,#0000 90deg);animation:quarter 2s steps(4) infinite}
 @keyframes quarter{to{transform:rotate(360deg)}}
+/* Festival lanterns: a paper frame of spokes, round, turning on its post
+   while the candle inside glows gold to red and back — a colour moving
+   inside a turning box, which is painted afresh every frame, beside the
+   turning boxes that hold still inside and are laid from what was kept. */
+.lantern{border-radius:50%;background:repeating-conic-gradient(#c0392b 0 20deg,#e67e22 20deg 40deg);
+         -webkit-mask:radial-gradient(closest-side,#000 70%,#0000 74%);mask:radial-gradient(closest-side,#000 70%,#0000 74%);
+         animation:sweep 4s linear infinite}
+.lantern .candle{position:absolute;inset:30%;border-radius:50%;animation:glow 1.2s ease-in-out infinite alternate}
+@keyframes glow{from{background-color:#ffd54f}to{background-color:#ff5252}}
 #banner{position:absolute;left:10%;right:10%;top:36%;padding:14px;text-align:center;border-radius:12px;
         background:#0b1630e6;border:2px solid var(--gold);font-size:22px;z-index:9;display:none}
 #banner small{display:block;font-size:15px;color:var(--dim);margin-top:6px}
@@ -205,7 +214,10 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       look: 'The lighthouse lens clicks round a quarter turn at a time, crisp at every stop.',
       check: function () {
         return probed('', function (p) { p.style.animationTimingFunction = 'steps(4)'; return cs(p, 'animation-timing-function') === 'steps(4)'; });
-      } }
+      } },
+    turncolour: { name: 'a colour moving inside a turning box', from: 'kept drawings',
+      look: 'Each lantern turns on its post while the candle inside glows gold to red and back: the glow never freezes while the lantern turns. Light every lamp and press F: the meter holds up, the turning rays laid from what was kept.',
+      check: function () { return midway('background-color', 'rgb(255, 0, 0)', 'rgb(0, 0, 255)') === 'rgb(128, 0, 128)'; } }
   };
 
   // What `read` says of a probe of class `cls` of its own, so a check
@@ -244,7 +256,8 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
   // Buoys block the way as rocks do; `glint` is the row the moon's path
   // lies on, and `halo` puts a breathing glow round the tower. Steering
   // into a whirlpool (`whirls`) sends the keeper back as a boat does;
-  // `lens` sets the tower's lens turning.
+  // `lens` sets the tower's lens turning. Lanterns block the way as rocks
+  // do.
   var LEVELS = [
     { name: 'First Light', shows: ['aspect', 'conic', 'cssanim', 'waapi'],
       start: [0, 7], tower: [11, 0],
@@ -280,7 +293,15 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       whirls: [[5, 2], [2, 4], [8, 5]],
       fog: [[10, 2, 1]],
       lanes: [{ row: 1, dur: 9000, dir: -1, boats: [0, 0.5] }, { row: 3, dur: 11000, dir: 1, boats: [0.2, 0.7] },
-              { row: 6, dur: 8000, dir: -1, boats: [0.15, 0.65] }] }
+              { row: 6, dur: 8000, dir: -1, boats: [0.15, 0.65] }] },
+    { name: 'Lantern Festival', shows: ['turncolour'],
+      start: [0, 7], tower: [11, 0], lens: true,
+      lamps: [[2, 0], [7, 1], [10, 3], [4, 3], [0, 4], [8, 6], [3, 7]],
+      rocks: [[5, 0], [9, 5]],
+      lanterns: [[3, 1], [8, 3], [1, 6], [6, 5]],
+      whirls: [[6, 2], [11, 5]],
+      fog: [[0, 4, 1]],
+      lanes: [{ row: 2, dur: 10000, dir: 1, boats: [0, 0.5] }, { row: 6, dur: 9000, dir: -1, boats: [0.2, 0.7] }] }
   ];
 
   function cs(el, prop) { return el ? getComputedStyle(el).getPropertyValue(prop).trim() : ''; }
@@ -327,6 +348,11 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
     whirls = {}; (level.whirls || []).forEach(function (w) { tile('whirl', w[0], w[1]); whirls[w[0] + ',' + w[1]] = true; });
     rocks = {}; level.rocks.forEach(function (r) { tile('rock', r[0], r[1]); rocks[r[0] + ',' + r[1]] = true; });
     (level.buoys || []).forEach(function (b) { tile('buoy', b[0], b[1]); rocks[b[0] + ',' + b[1]] = true; });
+    (level.lanterns || []).forEach(function (l) {
+      var lantern = tile('lantern', l[0], l[1]), candle = document.createElement('div');
+      candle.className = 'candle'; lantern.appendChild(candle);
+      rocks[l[0] + ',' + l[1]] = true;
+    });
     rocks[level.tower[0] + ',' + level.tower[1]] = true;
     lamps = level.lamps.map(function (l) { return { x: l[0], y: l[1], lit: false, el: tile('lamp', l[0], l[1]) }; });
     lanes = level.lanes.map(function (spec) {

@@ -211,18 +211,17 @@ classic and le together, ...`.)
 
 ### T, as built
 
-- **Nothing is gated on the count yet.** The accountant is sized, told of
+- **Part T gated nothing on the count.** The accountant is sized, told of
   every link, send and completion, and shown in the status file; the LE
   peers are still serialized among themselves by `tx_used`, exactly as
   before, so the keyboard's path decides nothing new. The first sender held
-  to the count is the Classic link (part L). The multi-peer suite asserts
-  at every step that the controller-wide count agrees with each LE peer's
-  own.
+  to the count is the Classic link's L2CAP (§ S, as built). The multi-peer
+  suite asserts at every step that the controller-wide count agrees with
+  each peer's own.
 - **§ T3 is deferred to part L**, which is the first to have a second kind
   of receiver. `bt_host_receive` is unchanged.
-- **"Nothing of mine is in flight", per link, is deferred to the part that
-  first sends Classic data** (S). With only LE sending, one packet at a
-  time, "the endpoint is idle" is still the same question.
+- **"Nothing of mine is in flight", per link, was left to the part that
+  first sends Classic data** (§ S, as built has it).
 - **A completion that is not the oldest slot's is counted, not fatal**
   (`unmatched`, as the receive endpoints count theirs): an event for a
   transfer from before the runtime began must not end the transport. A
@@ -276,10 +275,12 @@ slot 2 reconnect                     # needs a saved bond
 slot 2 forget
 ```
 
-- **A Classic scan has to exist first.** `scan classic` runs
-  `bt_scan_start` (the inquiry the code already has and nothing calls), and
-  a result keeps the page-scan repetition mode and clock offset the inquiry
-  reported, which make the page that follows quick.
+- **A Classic scan has to exist first.** `scan classic` runs the inquiry
+  the code already has and nothing calls, on a controller in service, and
+  then the usual LE scan. (A result does not yet keep the page-scan
+  repetition mode and clock offset the inquiry reported, which would make
+  the page that follows quicker; a page without them is the
+  specification's default and takes up to its five seconds. DEBTS.)
 - `bt_host_command` parses `slot 2` on a path of its own (today any digit
   past `BT_HOST_PEERS` is refused) and gives it to the Classic link.
 - **A slot says what kind of address it takes.** Dual-mode headphones use
@@ -299,13 +300,19 @@ Sent once, in the start-up round. The event mask is ONE write, the round's
 existing `BT_SCAN_MASK`, widened: a second mask written later would be
 overwritten by it.
 
+**The keyboard does not depend on any of it.** A controller that REFUSES
+one of the Classic setup commands below (answers with a failing status) is
+a controller with no Classic slot: the round notes which command and
+carries on, LE comes up as before, and slot 2 says why it is unavailable.
+Only silence fails the round, as it does for every command.
+
 | Command | Value | Why |
 |---|---|---|
 | Set Event Mask (0x0c01) | adds Connection Complete (0x03), Connection Request (0x04), Authentication Complete (0x06), Role Change (0x12), Mode Change (0x14), PIN Code Request (0x16), Link Key Request (0x17), Link Key Notification (0x18), Encryption Key Refresh Complete (0x30), IO Capability Request (0x31) and Response (0x32), User Confirmation Request (0x33), Simple Pairing Complete (0x36) | the events below |
 | Write Simple Pairing Mode (0x0c56) | on | SSP, § 7.3.59 |
 | Write Local Name (0x0c13) | `os64` | headphones show it, and some refuse a nameless host |
 | Write Class Of Device (0x0c24) | 0x200104 | service class Audio, major class Computer, minor class Desktop: a computer that is a source of sound |
-| Write Default Link Policy Settings (0x080f) | role switch and sniff allowed | a sink that asks to be master is let |
+| Write Default Link Policy Settings (0x080f) | role switch allowed, sniff refused | a sink that asks to be master is let. Sniff was allowed until the first sound on the P5 (2026-11-13): the headphones put the idle link into sniff at 500 ms and left it there through the stream, so audio left twice a second. It stays refused as every new link's default; A.4 allows it per link while nothing plays and refuses it again before our stream starts (AUDIO_REMOTE.md § Part Z) |
 | Write Page Timeout (0x0c18) | 5.12 s (the default) | stated, not left to the controller's last host |
 | Write Connection Accept Timeout (0x0c16) | 5.06 s (the default) | how long the controller holds a caller while we find a turn to answer: the bound § L3's latching is built against |
 
@@ -325,7 +332,7 @@ like an LE peer and given the events that are its own.
 
 | State | Entered by | Leaves on |
 |---|---|---|
-| `IDLE` | boot; `forget`; a failed attempt's cleanup | `connect` / `reconnect` → `PAGING`; Connection Request from the bonded address → `ACCEPTING` |
+| `IDLE` | boot, and nothing since | `bond` / `connect` / `reconnect` → `PAGING`; Connection Request from the bonded address → `ACCEPTING` |
 | `PAGING` | Create Connection (0x0405) sent, with the inquiry's page-scan repetition mode and clock offset when the scan has them | Connection Complete: status 0 → `LINKED`; else → `STOPPED` with the status |
 | `ACCEPTING` | Accept Connection Request (0x0409), role: stay slave unless asked | Connection Complete, as above |
 | `LINKED` | a handle; `bt_acl_link_up` | we called → `AUTHENTICATING` (which pairs when there is no key); they called → Encryption Change on → `CHECKING` (the side that did not ask for authentication is sent no Authentication Complete: recalled), or after 2 s with no encryption → `AUTHENTICATING` |
@@ -334,7 +341,7 @@ like an LE peer and given the events that are its own.
 | `CHECKING` | Read Encryption Key Size (0x1408) | 16 bytes → `READY`; fewer → `CLOSING`, "weak encryption refused" (the key-size negotiation attack) |
 | `READY` | encrypted | Disconnection Complete → `STOPPED` (retryable or not by reason, as LE's manager judges); `forget` → `CLOSING` |
 | `CLOSING` | Disconnect (0x0406) sent, or a cancel of a page (0x0408) | Disconnection Complete, or Connection Complete with an error → `STOPPED` |
-| `STOPPED` | any failure, after its cleanup is confirmed | the manager's next attempt, or a command |
+| `STOPPED` | the end of every attempt and every link, whatever ended it (a failure, the far end, `forget`, `disconnect`), after its cleanup is confirmed: a link that is up is closed first, through `CLOSING` | the same exits as `IDLE` |
 | `FAILED` | the controller cannot be trusted (a bad count, a reply that cannot be) | never: `h->failed` |
 
 Events answered in any linked state, because the far end may start them:
@@ -355,11 +362,26 @@ Events answered in any linked state, because the far end may start them:
   bond, saved when encryption comes up, as LE's is saved when its keys
   are distributed.
 - **Role Change** (0x12), **Mode Change** (0x14): recorded for the status
-  file. Sniff is A.4's.
+  file. A.4's sniff policy reads the mode, and a Mode Change carrying an
+  error is counted (AUDIO_REMOTE.md § Part Z).
 - **Connection Request** (0x04) from any address but the bonded one:
   Reject Connection Request (0x040a, reason 0x0f, "unacceptable address").
   For a synchronous link (SCO, eSCO), from anyone: Reject Synchronous
   Connection Request (0x042a; recalled).
+
+- **A call from the bonded address while we are busy with it or another**
+  is refused as "limited resources" (0x0d), which is the truth; 0x0f is for
+  an address we will never accept.
+- **Two calls that cross.** We page the headphones at the moment they page
+  us, and their Connection Request arrives while we are `PAGING` that same
+  address. It is ACCEPTED, not refused as busy: the controller then
+  completes one of the two and fails the other, and the link takes
+  whichever Connection Complete for that address carries status 0. One
+  that carries an error while the other is still owed is not the end of
+  the attempt.
+- **A debug link key is used and never kept.** A key of type 0x03 is what a
+  controller in Simple Pairing debug mode produces; the session works, the
+  bond is not saved, and the status file says why.
 
 **Answering in time with one command slot.** These events want an answer
 while the scan or an LE peer may hold the slot. The controller waits about
@@ -382,7 +404,7 @@ Every command has the scan's deadline and its `timed_out` detail.
 Page scan is on only while slot 2 holds a bond, and a Connection Request is
 accepted only from that bond's address. So the machine is never
 discoverable, and before a pairing nothing can connect to it. A pairing is
-always started from our side, by a person typing `slot 2 connect`, after
+always started from our side, by a person typing `slot 2 bond`, after
 putting the headphones in their own pairing mode. That is the LE keyboard's
 rule, kept.
 
@@ -395,16 +417,31 @@ of its own, apart from LE's arrays: `/home/bluetooth_bond_classic`, a fixed
 record with the magic `OS64BC01`, written by the same atomic replace.
 `xhci_bluetooth_maintain` loads and saves it beside the two LE records.
 `bond` saves it when encryption comes up; `forget` deletes it and turns
-page scan off.
+page scan off. The link is initialised, and given the bond, only after the
+start-up round has finished, so no controller reset can follow and clear a
+scan enable the link believes is set.
 
 ### L6. Reconnection
 
 `bt_manager.c`'s policy is the model, not the code: it is written around
 LE scanning. The Classic manager is smaller. With a bond and `automatic`:
-page the headphones once at boot and after a retryable disconnection, with
-the same backoff ladder, and otherwise wait, because page scan is on and
-headphones switched on will call us. A page is 5 s of radio time the
-keyboard shares, so it is not repeated on a short timer.
+page the headphones at boot, after a retryable disconnection, and after a
+page they did not answer, on one ladder: 5 s doubling to 60 s, starting
+again once a connection has lasted half a minute. Page scan is on as
+well, for headphones that call.
+
+The first cut paged once and then waited for their call, reasoning that a
+page is 5 s of radio time the keyboard shares. The P5 run of 2026-11-13
+ended that: the Bose pair held our key (it reconnected in 70 ms when
+paged) and never once called, with no audio connection ever made to it.
+So an unanswered page is asked again. The cost is one page a minute while
+bonded headphones are off; `slot 2 disconnect` stops it, and it is the
+figure to look at first if a keyboard or mouse stutters once a minute.
+
+The ladder used to start again at `READY`, however brief. The P5's first
+run of part S showed what that costs: the headphones answered every page,
+hung up two seconds after `READY` (see § S, as built), and were paged
+again five seconds later, round and round every ten seconds.
 
 ### L, proof
 
@@ -415,9 +452,10 @@ under the sanitizers; a mutant harness for the state table and the bond
 codec. P5, by Chris, with `/sys/bluetooth/connection` open:
 
 1. `scan classic`, then `slot 2 bond <address>` with the headphones in
-   pairing mode: `READY`, encrypted, and the headphones say "connected".
-2. Switch the headphones off and on: they call us, and it is `READY` again
-   with no typing.
+   pairing mode: `READY`, encrypted. (Headphones announce "connected"
+   when an audio connection opens, which is A.3's.)
+2. Switch the headphones off and on: it is `READY` again with no typing,
+   by their call or by our next page.
 3. Reboot: `READY` again.
 4. Type and move the mouse through all of it.
 5. `slot 2 forget`; switch them off and on: nothing connects.
@@ -427,6 +465,88 @@ that has just connected asks its host questions over L2CAP at once
 (recalled), and part L answers none of them, so the pair may hang up after
 a few seconds. `READY` reached from each end is L's pass; staying connected
 is S's. The disconnect reason is shown either way.
+
+### L, as built
+
+The core (`bt_classic.c`) and its wiring were built by two Opus builders
+from written briefs (`~/os64-opus-kit/BRIEF_BT_CLASSIC_CORE.md`,
+`BRIEF_BT_CLASSIC_INTEGRATION.md`) and read by Fable. Every command and
+event layout was checked against Linux 6.12's `hci.h`: no disagreement.
+Where the code departs from the text above, or settles what it left open:
+
+- **Every phase is entered at the event that decides it**, and its command
+  waits for a turn. So a page that connects goes straight to
+  `AUTHENTICATING`; `LINKED` is only the wait after an inbound call.
+- **A failure with a link up closes it first** (`CLOSING`, a Disconnect,
+  then `STOPPED`): a stale bond, a failed authentication, a weak key, lost
+  encryption, a failed pairing, a refused command, a timeout.
+- **The order answers are sent in**: the accept (the controller waits five
+  seconds), the link key, the IO capability, the confirmation, the PIN
+  refusal; then refusals to strangers, oldest first; then the link's own
+  command; Write Scan Enable last.
+- **"The first free turn" is the end of whoever holds the slot's chain of
+  commands**, since chained commands do not release it between them. The
+  bound is the chain's length, tens of milliseconds as a rule; the
+  25-second limit on a latched answer covers the worst.
+- **Waits the text did not give**: 40 s for an Authentication Complete
+  (the controller's own 30 s reports first), 10 s for the Encryption
+  Change, 6 s for an accepted call's Connection Complete. A caller that
+  has begun to authenticate is waited for up to 40 s, since starting ours
+  as well would collide with it.
+- **Retryable** (paged again, after 5 s doubling to 60): the far end went
+  away and may be back (reasons 0x08, 0x13, 0x14, 0x15, 0x22), or did
+  not answer a page (0x04). **Not**: key or authentication trouble, a
+  page the controller ended for another reason, `forget`, `disconnect`.
+- **Page scan** is written once the bond file has been read, 0x02 with a
+  bond and 0x00 without, and again only when that changes. A write the
+  controller refuses is not repeated until then.
+- **The Classic link still holding the command slot three seconds past
+  its command's deadline fails the controller**, as an unanswered LE
+  command does: the reply never came, or the USB transfer that carried the
+  command never reported done. Left there it would starve the keyboard
+  silently.
+- **Slot 2 takes no command until the bond file has been read**, a few
+  seconds after start-up: the read would otherwise undo a bond just made
+  or bring back one just forgotten.
+- **A `scan classic` that fails before its LE half began sends no LE
+  disable**: a disable for a scan that is not running is a command a
+  controller may refuse, and a refusal in a scan's cleanup fails the host.
+- **The link sends only with a credit the controller has given back**
+  (the host tells it each tick whether there is one: `no_credit`), and
+  never in the tick it gave up on a command. Finishing a command that was
+  answered needs no credit: the reply itself may carry none.
+- **Two crossing calls cannot be told apart** by their Connection
+  Completes, which carry the same address: the rule is only as good as
+  the controller's promise to complete one and fail the other. A refused
+  accept after the page's link is up is harmless.
+- **The setup phase is `BT_SCAN_LOCAL_NAME`** (`BT_SCAN_NAME` was taken).
+  The mask bytes came out as predicted: 0xbf, 0xe0, 0xee, 0, 0x02, 0xc0,
+  0x27, 0x20.
+- **Slot 2 is also unavailable on a controller with no LE**: the round
+  ends before the Classic setup. Not a machine in scope; DEBTS.
+- **`slot 2 forget` works on a failed controller**, as LE's does. **`slot
+  2 disconnect` turns automatic connection off** even when there was no
+  link to close: the person still meant stop.
+- **The "use slot 2" refusal on slots 0 and 1** applies only to a command
+  that names an address the last scan heard as Classic alone.
+- **The bond file is never deleted**: `forget` writes a record that says
+  "no bond". A record made as another adapter is treated as none.
+- Proof: `test_bt_classic_host` (a model headphone through every phase,
+  2,000 rounds of soup) and its 176 mutants; `test_bt_scan_host` (the
+  mask with and without BR/EDR, the six phases, each refused, `scan
+  classic`, its cleanup); `test_bt_multi_host` (with no bond and nobody
+  typing, 10,000 ticks of LE traffic send one Classic command, Write Scan
+  Enable(0), and every earlier LE scenario holds; a bond end to end beside
+  a typing keyboard; the urgent turn; the owner's bounds; the refusals;
+  reconnection); `test_bt_loader_host` (the real start-up with the six
+  commands, the 248-byte name against a guard); `test_bt_bond_store_host`.
+
+**What the P5 run is the first to try** (most worrying first): six new
+commands in every start-up round, one of them 251 bytes over the control
+endpoint, where silence (not refusal) fails the round; a Write Scan
+Enable on every boot; Encryption Key Refresh Complete now unmasked, which
+the adapter has never been free to send us; a five-second page sharing
+the radio with the keyboard; and everything about real headphones.
 
 ## Part S: the services
 
@@ -450,12 +570,14 @@ is S's. The disconnect reason is shown either way.
   parameters" with Basic mode; a flush timeout is accepted as a hint.
 - **Admission**: an incoming Connection Request is accepted for PSM 0x0001
   (SDP) now, and for 0x0019 (AVDTP) from A.3; anything else is "PSM not
-  supported" (result 0x0002). SDP may precede encryption; any other PSM
-  asked for on a link that is not yet encrypted is answered "security
-  block" (0x0003), not "not supported", so the peer tries again later.
-- Every request we send has a timer (the RTX of § 6.2.1, 2 s here). A
+  supported" (result 0x0002). SDP may precede encryption; any other
+  admitted PSM asked for on a link that is not yet encrypted is answered
+  "pending, authentication pending" and held until encryption arrives
+  (then success) or 30 s pass (then "security block", 0x0003).
+- Every request we send has a timer (the RTX of § 6.2.1, 10 s here). A
   Connection Response of "pending" replaces it with the long one (ERTX,
-  60 s). An unanswered request closes the channel, not the link.
+  60 s). An unanswered request closes the channel, not the link, and so
+  does a configuration still unfinished 30 s after it began.
 
 ### S2. SDP, asked
 
@@ -467,9 +589,9 @@ Audio Sink class (0x110B), attributes 0x0000 to 0xFFFF.
   5 s, and the query ends with what it has, marked incomplete.
 - The data-element parser is bounded: depth 6, every length checked
   against the bytes that remain, no recursion.
-- What is kept: the AVDTP version from the protocol descriptor list, the
-  A2DP profile version, the supported-features word. They go to the status
-  file and to A.3.
+- What is kept: the AVDTP version and the L2CAP PSM from the protocol
+  descriptor list, the A2DP profile version, the supported-features word.
+  They go to the status file and to A.3.
 
 ### S3. SDP, answered
 
@@ -489,8 +611,8 @@ against the parser:
 The responder answers Service Search, Service Attribute and Service Search
 Attribute requests for it, each within the requester's stated maximum and
 with continuation when the record does not fit, and an Error Response for
-a malformed request. It holds no state between requests but a continuation
-offset.
+a malformed request. It holds no state between requests: the continuation
+state it issues carries the offset.
 
 ### S, proof
 
@@ -501,12 +623,114 @@ that asks our responder everything, with small maxima; both parsers fuzzed.
 P5: after `READY`, the status file gains
 
 ```
-sdp: audio sink, avdtp 1.3, a2dp 1.3, features 0x0003 (complete)
+sdp: audio sink, avdtp 1.3, a2dp 1.3, features 0x0003, psm 0019 (complete)
 ```
 
 and the headphones stay connected instead of dropping an idle link after
 their own timeout. If they do drop it, that is recorded, and A.3 is where
 a stream gives them a reason to stay.
+
+### S, as built
+
+The two pure cores (`bt_l2cap.c`, `bt_sdp.c`) and their wiring into the
+host were built by Opus builders from written briefs
+(`~/os64-opus-kit/BRIEF_BT_SERVICES_INTEGRATION.md` is the wiring's).
+Where the code departs from §§ S1 to S3, or settles what they left open:
+
+- **"Pending" before encryption, not a security block.** A request for an
+  admitted PSM other than SDP on a link not yet encrypted is answered
+  "pending, authentication pending" with a channel held for it; encryption
+  sends its success, under the request's own identifier, and starts its
+  configuration; 30 s without it, the security block. The stacks the
+  headphones are tested against do this, and an immediate block makes some
+  peers give up instead of trying again.
+- **RTX is 10 s**, not 2: legal either way, and a radio busy with pairing
+  or sniff can be slow to answer. ERTX stays 60 s.
+- **A channel connected but not open 30 s after its configuration began**
+  (or after the peer began reconfiguring it) is closed with a
+  Disconnection Request, so a peer that never sends its own Configuration
+  Request cannot leave one half-open. When that deadline and an
+  unanswered request's RTX fall in one tick, the channel is closed once.
+- **Settled in the L2CAP core**: Connection Responses 0x0006 and 0x0007
+  for a source CID outside the dynamic range or already in use; an
+  unanswered Configuration Request closes the channel with a Disconnection
+  Request; the peer's count of configuration rounds starts over when it
+  agrees; Echo data is cut to 44 bytes so the response fits a 48-byte
+  signalling MTU; our CIDs rotate rather than reuse the one just freed;
+  a success that answers a request we no longer hold is sent a
+  Disconnection Request for the pair it names.
+- **The SDP line carries the PSM** the headphones' record names for
+  AVDTP, which A.3 opens. Its continuation state is an offset plus a check
+  against the request it continues, so a state that does not match its
+  request is refused (the check is not a secret, and need not be: the
+  offset is bounded by our own record). A deeper nesting than six is stepped over by its size, and a
+  32- or 128-bit UUID on the Bluetooth base equals its 16-bit form.
+- **The query's MTU is the smaller of the channel's two**: the peer's, and
+  the one we stated for the channel (1,017, unless the peer's answer to our
+  configuration asked us lower). The client's five seconds start when the
+  channel is open, so L2CAP's RTX and the configuration are not inside
+  them.
+- **One query a connection, made by us, and never retried on it.** At
+  `READY` the host opens the SDP channel; the client starts when it is
+  open; DONE or FAILED leaves it open, and what arrives on it afterwards
+  is ignored. The first cut closed it, and the Bose pair hung up (reason
+  0x13) two seconds after its last channel closed, every time: a link
+  with a channel on it is one they keep, and until A.3 opens AVDTP this
+  channel is the only one there is. A channel refused, unanswered, or closed
+  before the answer is whole ends the query as "not made", with the
+  reason in the status and the log (DEBTS). A link that drops mid-query
+  takes the query with it and says nothing of it: the link's own line is
+  the reason.
+- **The result outlives its connection**, marked as the current one's or
+  an earlier one's; the status file shows an earlier connection's while
+  this one has found nothing.
+- **What we answer** is bounded by the smallest of the peer's MTU, ours,
+  and one of the controller's Classic ACL packets after the L2CAP header.
+  L2CAP queues one payload a channel; an answer it cannot take yet is held
+  by the host (one) and offered every tick, and a question that arrives
+  while one is held is dropped and counted (`sdp requests answered: N
+  dropped: N`).
+- **The send turn: LE goes first.** Each host tick L2CAP is offered one PDU
+  after the LE peers have had theirs, and may send it only when the
+  accountant gives the Classic link a buffer (the first sender held to the
+  count), a send slot is free with another left over, and no LE peer is
+  still holding a packet it could not send. In a pool the two kinds share
+  it also leaves a buffer for each LE slot the host has, connected or not,
+  because an LE peer does not ask the count before it sends (the AX210's
+  pools are separate). The transport reports how many
+  of its four send slots are in flight (`bt_host_tick`'s `tx_in_flight`,
+  replacing one "endpoint idle" flag, which could not say "busy, with a
+  slot free"); slots complete in order, so the host knows who filled each.
+  The LE peers' sending rule decides what it did when only LE sends. An
+  LE packet still queues behind Classic packets already on the one
+  transmit ring (at most three), which is A.3's to measure.
+- **"Nothing of mine is in flight", per link** (§ T2): an LE peer cleaning
+  up waits for its own packets to leave the send slots: not the Classic
+  link's, and no longer the other LE peer's either, which the old
+  "endpoint idle" question also waited for. It is the slots, not the controller's buffers: waiting for its
+  completions would make a cleanup after link loss wait for completions
+  that never come.
+- **A PDU one Classic ACL packet cannot carry is dropped and counted**,
+  never cut: what we send is at most 1,021 bytes, which the AX210's
+  packets carry; a controller with smaller ones is booked in DEBTS.
+- **A payload queued on a channel leaves only while the channel is open**
+  and fits the MTU the peer states now. While the peer reconfigures it is
+  held, and signalling and other channels go past it; one the new MTU no
+  longer admits is dropped and counted (`outgrown`).
+- **An unknown configuration option is returned whole** (type, length,
+  data), as many whole ones as the 50 bytes of a signalling row's room
+  hold; one that does not fit is left off, never cut.
+- The ACL assembler's buffer was already 1,028 bytes; a static assertion
+  now ties it to a whole Classic packet.
+- Proof: `test_bt_l2cap_host` (every case scripted byte for byte, 3,000
+  fuzz rounds) and 211 mutants; `test_bt_sdp_host` (the client against a
+  model server cut at every byte, the responder asked everything, the
+  cross check, fuzz) and 123 mutants; `test_bt_multi_host` (the query after
+  `slot 2 bond`, LE first on a slow transport kept busy, the Classic pool
+  exhausted, our SDP asked across continuations and three questions at
+  once, AVDTP refused, a drop mid-query, a refused channel, a full-size
+  Classic packet, an LE cleanup with Classic packets in the slots, and no
+  L2CAP byte without a link).
 
 ## What is seen and logged
 

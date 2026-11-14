@@ -70,8 +70,9 @@ require clean root release; recovery is separate from reclamation/slot reuse.
 Patch `0029-recovery-entry-barrier.patch` follows accepted patch 0028 without
 changing F4 entry/incumbent/current/native-caller meanings. It adds scalar
 owner-thread execution facts and a runtime/generation-bound raw fence. Tracking
-is opt-in. The prepared engine identity is
-`c0df922a1972f114bd80180bafc9f03249ad7b7ba6a15bff3663605fed70428c`;
+is opt-in. With F4 callback patch 0030 composed after 0029, the prepared
+engine identity is
+`eb3773e6dac0a1b7f7d107384db954271905aa696bbf22def1a393b23866cce9`;
 patch SHA-256 is
 `36b3f6e7877adc06c1007016277b95ecd6eca607d760e56268e698b35da39a5b`.
 Rebuild dependent objects together. Embedding ABI 5 and existing public
@@ -146,7 +147,9 @@ retain ASan/UBSan. Run both binaries with `--child-recovery` and
 `tools/test_js_runtime_host.sh`. Raw-engine no-recovery and F4 settings suites
 are also rerun on that coherent engine.
 
-Final-source focused checks pass on both the shipping target core and the
+The initial chapter cohort (engine
+`c0df922a1972f114bd80180bafc9f03249ad7b7ba6a15bff3663605fed70428c`)
+passes focused checks on both the shipping target core and the
 instrumented engine, with ASan/UBSan support fixtures and LeakSanitizer enabled:
 
 | Proof | Shipping / instrumented checks |
@@ -207,3 +210,50 @@ checkpoint links reported as retired names still target retained evidence files.
 Guest/WPT/P5 recovery evidence is not claimed by this chapter. DOM/native
 certification and host adoption remain open; the F.16 tracker row stays in
 progress.
+
+## Composition with merged F4 timer settings
+
+PR #582 merges `userland` `4eab8270`, including F4 timer settings #580.
+The manifest orders 0029 before 0030, retaining both patch files and hashes.
+The composed engine identity is the `eb3773e6...` value above. Existing config,
+outcome and ABI 5 layouts remain unchanged; rebuild dependent objects together.
+
+The shared call path retains F4's callback hold before potentially allocating
+revoked-proxy discovery, uses the associated entry context for discovery and
+invocation, and keeps report/entry/incumbent roles independent. Failed target
+admission preserves REALM_FAILED rather than returning ordinary REALM_RETIRED.
+Raw/checked settings overrun exclusion and the recovery opt-in remain unchanged.
+
+The recovery fixture now retains a failed B target under a live A incumbent,
+with A reporting and C entry. Both legacy realm_call and callback_call refuse
+that target as REALM_FAILED. A failed associated entry also refuses a healthy
+target. A healthy callback then executes in the same task, proving that these
+refusals do not poison the recovered runtime. Replacing failed-target refusal
+with REALM_RETIRED is caught by eight named assertions on each engine profile;
+both mutant runs retain clean sanitizer/leak results.
+
+The composed shipping/instrumented engine profiles pass:
+
+| Check | Shipping / instrumented |
+|---|---:|
+| Child recovery, both teardown policies | 4,553 / 4,553 |
+| Raw recovery fence / terminal records | 505 / 505; 819 / 819 |
+| Complete runtime | 21,972 / 69,320 |
+| F4 DOM timer settings | 718 / 718 |
+| DOM callback reporting | 1,118 / 1,118 |
+| DOM realm routing / retirement queues | 678 / 678; 9,770 / 9,770 |
+| DOM departure / Streams / child installation | 353 / 353; 104 / 104; 58 / 58 |
+
+Both complete runtime runs finish with zero live allocations; parser failure
+sweeps and fatal/reclaim invariant checks pass. ASan/UBSan and LeakSanitizer
+remain enabled. The DOM sources and both engine profiles are rebuilt together;
+prior-cohort objects are not mixed with the new engine layout. Source/header,
+six preparer tests, teardown, tracker and target symbol/import/link audits pass:
+216 engine exports and 78 wrapper exports, with 32 math / 26 os64 imports.
+The target export inventory includes F4's two new callback APIs. Stale-reference
+output names retained upstream evidence files and imported audio comments;
+the composition changes no audio code beyond the accepted merge.
+
+These composition checks do not broaden recovery admission or replace the
+initial chapter's qualified broad DOM and mutation evidence. Browser recovery
+and DOM/native/Streams certification remain open.

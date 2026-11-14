@@ -89,9 +89,10 @@ const char *xhci_bluetooth_quiesce_verdict(void);
 void xhci_bluetooth_start_manager(void);
 
 // Non-blocking sysfs commands refuse absent/busy/failed adapters or invalid input.
-bool xhci_bluetooth_scan(void);
+// `classic`: a Classic inquiry before the LE scan ("scan classic").
+bool xhci_bluetooth_scan(bool classic);
 bool xhci_bluetooth_connection(const char *data, size_t bytes);
-// file: 0 scan status, 1 discovery results, 2 LE connection status.
+// file: 0 scan status, 1 discovery results, 2 connection status (the LE slots, then the Classic one).
 size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file);
 // /sys/usb: the controllers and what is on each, kusb's passes and
 // latencies, how long an event on each controller may have waited, and the

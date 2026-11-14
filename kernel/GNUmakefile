@@ -178,6 +178,12 @@ override OBJ += obj/shared/decoration.c.o obj/shared/copy_fill.c.o obj/shared/da
 override HEADER_DEPS := $(patsubst src/%,obj/%,$(SRC_CFILES:.c=.c.d) $(ASFILES:.S=.S.d)) \
     $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.d)) obj/shared/decoration.c.d obj/shared/copy_fill.c.d obj/shared/damage.c.d
 
+# Ported code lives in ports/, outside the find above, with rules and flags of
+# its own: each port's .mk says how and why.
+include ports/sbc/sbc.mk
+override OBJ += $(SBC_OBJ)
+override HEADER_DEPS += $(SBC_OBJ:.o=.d)
+
 
 # Default target.
 .PHONY: all

@@ -609,6 +609,20 @@ static void xform_group_close(void *ctx, const flow_box_t *b)
     ((XformGroups *)ctx)->closes++;
 }
 
+// How the walk is asked to cull inside each drawn-through group — the box
+// `s_xform_inner` answered apart, when set — and how often it asked.
+static flow_inside_t s_xform_inside;
+static int32_t s_xform_asked;
+static const flow_box_t *s_xform_inner;
+static flow_inside_t s_xform_inner_inside;
+
+static flow_inside_t xform_inside(void *ctx, const flow_box_t *b)
+{
+    (void)ctx;
+    s_xform_asked++;
+    return b == s_xform_inner ? s_xform_inner_inside : s_xform_inside;
+}
+
 static bool rect_is(os64_gui_rect_t r, int32_t x, int32_t y, int32_t w, int32_t h)
 {
     return r.x == x && r.y == y && r.w == w && r.h == h;
@@ -731,12 +745,83 @@ static void transform_through_cases(void)
            NULL);
     XformGroups gr = {0};
     gr.watch = cb;
-    flow_visitor_t vis = {xform_group_visit, xform_group_open, xform_group_close, &gr, NULL};
+    flow_visitor_t vis = {xform_group_visit, xform_group_open, xform_group_close, &gr, NULL, NULL};
     flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
     expect("transform: a turned box is a group, its bounds its own",
            gr.opens == 1 && gr.closes == 1 && gr.box == tb && rect_is(gr.bounds, 100, 100, 100, 20) &&
                gr.seen,
            NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // How a face asks the walk to cull inside a drawn-through group
+    // (flow_visitor_t.inside). Moved 30 back and turned a quarter about its
+    // centre (50, 10) — (x, y) to (30 - y, x - 40) — the box's child at its
+    // start lands above the view, and where an upright drawing would put
+    // it, 30 back, is left of it: the walk culls the child. Asked for all,
+    // the child is handed over; asked for none, not even the box's own
+    // background is, though it shows, while the turned group inside still
+    // opens and closes.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform:translateX(-30px)"
+                     " rotate(90deg)} .c{width:20px;height:20px} .n{margin-left:80px;width:10px;"
+                     "height:10px;transform:rotate(45deg)}</style>"
+                     "<div class=t id=t><div class=c id=c></div><div class=n id=n></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    tb = box_with_id(t, q.doc->document, "t");
+    cb = box_with_id(t, q.doc->document, "c");
+    const flow_box_t *nb = box_with_id(t, q.doc->document, "n");
+    const flow_inside_t modes[3] = {FLOW_INSIDE_VIEW, FLOW_INSIDE_ALL, FLOW_INSIDE_NONE};
+    bool child[3], own[3], nested[3];
+    int32_t opens[3], asked[3];
+    for (int i = 0; i < 3; i++) {
+        s_xform_inside = modes[i];
+        s_xform_asked = 0;
+        XformGroups w = {0};
+        w.watch = cb;
+        flow_visitor_t iv = {xform_group_visit, xform_group_open, xform_group_close, &w, NULL,
+                             xform_inside};
+        flow_visit_groups(t, (os64_gui_rect_t){0, 0, 200, 100}, top, &iv);
+        child[i] = w.seen;
+        opens[i] = w.opens;
+        asked[i] = s_xform_asked;
+        XformGroups self = {0};
+        self.watch = tb;
+        iv.ctx = &self;
+        flow_visit_groups(t, (os64_gui_rect_t){0, 0, 200, 100}, top, &iv);
+        own[i] = self.seen;
+        XformGroups inner = {0};
+        inner.watch = nb;
+        iv.ctx = &inner;
+        flow_visit_groups(t, (os64_gui_rect_t){0, 0, 200, 100}, top, &iv);
+        nested[i] = inner.seen;
+    }
+    char said[192];
+    snprintf(said, sizeof(said),
+             "child %d %d %d own %d %d %d nested %d %d %d opens %d %d %d asked %d %d %d",
+             child[0], child[1], child[2], own[0], own[1], own[2], nested[0], nested[1], nested[2],
+             opens[0], opens[1], opens[2], asked[0], asked[1], asked[2]);
+    // The turned group inside, which shows, is handed over unless the walk
+    // was asked for none of the group around it.
+    expect("transform: a face may ask the walk for all of a turned group, or none of it",
+           tb != NULL && cb != NULL && nb != NULL && !child[0] && child[1] && !child[2] &&
+               own[0] && own[1] && !own[2] && nested[0] && nested[1] && !nested[2] &&
+               opens[0] == 2 && opens[1] == 2 && opens[2] == 2 && asked[0] == 2 &&
+               asked[1] == 2 && asked[2] == 2,
+           said);
+    // Nothing inside a group asked for none is handed over, though a group
+    // inside it asks for all of its own: all of nothing is nothing.
+    s_xform_inside = FLOW_INSIDE_NONE;
+    s_xform_inner = nb;
+    s_xform_inner_inside = FLOW_INSIDE_ALL;
+    XformGroups none_all = {0};
+    none_all.watch = nb;
+    flow_visitor_t nv = {xform_group_visit, xform_group_open, xform_group_close, &none_all, NULL,
+                         xform_inside};
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 200, 100}, top, &nv);
+    s_xform_inner = NULL;
+    expect("transform: a group asked for all inside one asked for none is handed nothing",
+           nb != NULL && !none_all.seen && none_all.opens == 2, NULL);
     flow_free(t);
     sheeted_close(&q);
 

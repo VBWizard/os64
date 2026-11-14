@@ -1383,7 +1383,7 @@ static void motion_effect_cases(void)
     expect("motion: will-change: opacity stacks it",
            w != NULL && w->stacked && w->style->animating == 0, NULL);
     MotionGroups seen = {{NULL}, 0};
-    flow_visitor_t v = {motion_group_visit, motion_group_open, NULL, &seen, NULL};
+    flow_visitor_t v = {motion_group_visit, motion_group_open, NULL, &seen, NULL, NULL};
     flow_visit_groups(m.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}, &v);
     bool g1_open = false, w_open = false;
     for (int32_t i = 0; i < seen.n; i++) {
@@ -4609,8 +4609,83 @@ static void motion_entries_cases(void)
     moving_close(&m);
 }
 
+// What a tick stamps in boxes' `drawn` (flow_box_t.drawn; PILE3.md §
+// Transforms, the painter: Kept drawings): a box whose own drawn value
+// changed, and every box it is inside; a turn or a fade alone stamps only
+// the boxes it is inside, since it says only how its group is laid.
+static void motion_drawn_cases(void)
+{
+#define DRAWN_PAGE(rules) MOTION_STYLE                                                   \
+    "@keyframes spin{to{transform:rotate(360deg)}}"                                      \
+    "@keyframes tint{from{background-color:#f00}to{background-color:#00f}}"              \
+    "@keyframes fade{from{opacity:.2}to{opacity:1}}" rules                               \
+    "</style><div id=p><div id=t><div id=c></div></div></div>"
+    static const char *const kPages[] = {
+        DRAWN_PAGE("#t{animation:spin 1s linear infinite}"),
+        DRAWN_PAGE("#t{animation:spin 1s linear infinite}#c{animation:tint 1s linear infinite}"),
+        DRAWN_PAGE("#t{animation:fade 1s linear infinite}"),
+        DRAWN_PAGE("#t{animation:tint 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes go{to{translate:30px 10px}}#t{animation:go 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes turn{to{rotate:90deg}}#t{animation:turn 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes grow{to{scale:2}}#t{animation:grow 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes pivot{to{transform-origin:0 0}}"
+                   "#t{transform:rotate(30deg);animation:pivot 1s linear infinite}"),
+    };
+#undef DRAWN_PAGE
+    // What each page's tick stamps: p, t and c, own (1) or not (0).
+    static const int kStamped[8][3] = {{1, 0, 0}, {1, 1, 1}, {1, 0, 0}, {1, 1, 0},
+                                       {1, 0, 0}, {1, 0, 0}, {1, 0, 0}, {1, 0, 0}};
+    static const char *const kWhat[8] = {
+        "drawn: a turn stamps the boxes it is inside, not itself or what it holds",
+        "drawn: a colour inside a turn stamps it, the turn and the box around, alike",
+        "drawn: a fade stamps the boxes it is inside, not itself",
+        "drawn: a box's own colour stamps it and the boxes it is inside, not its child",
+        "drawn: `translate` stamps the boxes it is inside, not itself",
+        "drawn: `rotate` stamps the boxes it is inside, not itself",
+        "drawn: `scale` stamps the boxes it is inside, not itself",
+        "drawn: `transform-origin` stamps the boxes it is inside, not itself",
+    };
+    const flow_point_t o = {0, 0};
+    uint64_t serials[8];
+    for (int i = 0; i < 8; i++) {
+        Moving m;
+        moving_open_for(&m, kPages[i], 0, true);
+        serials[i] = flow_tree_serial(m.tree);
+        const flow_box_t *b[3] = {moving_box(&m, "p"), moving_box(&m, "t"), moving_box(&m, "c")};
+        bool laid = b[0] != NULL && b[1] != NULL && b[2] != NULL && b[0]->drawn == 0 &&
+                    b[1]->drawn == 0 && b[2]->drawn == 0;
+        bool taken = flow_motion_tick(m.tree, 100, o, NULL, NULL, NULL);
+        bool as[3];
+        uint64_t stamp = laid ? b[0]->drawn : 0;
+        for (int k = 0; k < 3; k++)
+            as[k] = laid && (kStamped[i][k] ? b[k]->drawn == stamp && stamp != 0 : b[k]->drawn == 0);
+        char why[96];
+        snprintf(why, sizeof(why), "laid %d taken %d p %llu t %llu c %llu", laid, taken,
+                 laid ? (unsigned long long)b[0]->drawn : 0, laid ? (unsigned long long)b[1]->drawn : 0,
+                 laid ? (unsigned long long)b[2]->drawn : 0);
+        expect(kWhat[i], laid && taken && as[0] && as[1] && as[2], why);
+        if (i == 0 && laid) {
+            // Each tick that changes something stamps later; one that
+            // changes nothing stamps nothing.
+            (void)flow_motion_tick(m.tree, 200, o, NULL, NULL, NULL);
+            uint64_t later = b[0]->drawn;
+            (void)flow_motion_tick(m.tree, 200, o, NULL, NULL, NULL);
+            expect("drawn: a later tick stamps later, and one that changes nothing, nothing",
+                   later > stamp && b[0]->drawn == later && b[1]->drawn == 0, NULL);
+            expect("drawn: the boxes the box around is inside are stamped too",
+                   b[0]->parent != NULL && b[0]->parent->drawn == later, NULL);
+        }
+        moving_close(&m);
+    }
+    expect("drawn: every tree has a serial of its own",
+           serials[0] != 0 && serials[1] != serials[0] && serials[2] != serials[1] &&
+               serials[3] != serials[2] && serials[3] != serials[0] && flow_tree_serial(NULL) == 0,
+           NULL);
+}
+
 static void motion_tick_cases(void)
 {
+    motion_drawn_cases();
     motion_entries_cases();
     motion_tick_layout_cases();
     motion_tick_condition_cases();
@@ -4698,7 +4773,7 @@ static void motion_batch_a_cases(void)
                     0, true);
     bool ticked = flow_motion_tick(m.tree, 500, (flow_point_t){0, 0}, NULL, NULL, NULL);
     int32_t rings = 0;
-    flow_visitor_t vis = {motion_no_visit, NULL, NULL, &rings, motion_count_ring};
+    flow_visitor_t vis = {motion_no_visit, NULL, NULL, &rings, motion_count_ring, NULL};
     flow_visit_groups(m.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}, &vis);
     expect("tick: an outline below a ticked shadow is still painted", ticked && rings == 1, NULL);
     moving_close(&m);

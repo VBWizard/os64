@@ -43,4 +43,17 @@ os64_js_status_t os64_js_callback_with_settings(os64_js_realm_t *entry,
     const char *caller_abi, const os64_js_callback_t *record,
     os64_js_callback_body_t *body, void *opaque, JSValue *value,
     os64_js_outcome_t *outcome);
+/* Enable checked ordinary host scopes for classic/module roots and realm_call.
+ * Owner thread, before any task/evaluation. Jobs do not inherit these scopes:
+ * Promise callback preparation requires its own capture/invocation protocol. */
+os64_js_status_t os64_js_enable_host_settings(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome);
+
+/* Task-owned reporting call. The binding independently supplies associated
+ * entry and error-reporting realm; captured incumbent is checked separately.
+ * Holds value through reentry and reports exceptions as realm_call does.
+ * No checkpoint, budget renewal or record ownership transfer. */
+os64_js_status_t os64_js_callback_call(os64_js_realm_t *report,
+    os64_js_realm_t *entry, const char *caller_abi, const os64_js_callback_t *record,
+    JSValue this_value, int argc, JSValue *argv, os64_js_outcome_t *outcome);
 #endif

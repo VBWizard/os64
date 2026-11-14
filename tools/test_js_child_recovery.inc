@@ -595,6 +595,28 @@ static void child_recovery_cases(void)
             check(os64_js_realm_context(h.realm[1], OS64_JS_ABI_ID, &out) == NULL && out.status == OS64_JS_REALM_FAILED &&
                   realm_execute(h.realm[1], "throw 1", &out) == OS64_JS_REALM_FAILED,
                   "contained realm receives distinct non-sticky wrapper refusal");
+            check(os64_js_realm_task_begin(h.realm[2], OS64_JS_ABI_ID, "failed-callback-alias", &out) == OS64_JS_OK &&
+                  os64_js_callback_clear(h.runtime, OS64_JS_ABI_ID, &h.callback[0], &out) == OS64_JS_OK,
+                  "healthy task prepares a retained failed target under a live incumbent");
+            h.capture_value = realm_property(h.ctx[0], "bad");
+            JSValue captured = JS_UNDEFINED;
+            check(os64_js_realm_with_settings(h.realm[0], h.realm[0], OS64_JS_ABI_ID,
+                  recovery_capture_body, &h, &captured, &out) == OS64_JS_OK,
+                  "live callback record can retain a sealed child alias without entering it");
+            JS_FreeValue(h.ctx[0], captured); JS_FreeValue(h.ctx[0], h.capture_value);
+            check(os64_js_realm_call(h.realm[0], OS64_JS_ABI_ID, h.callback[0].value,
+                  JS_UNDEFINED, 0, NULL, NULL, &out) == OS64_JS_REALM_FAILED,
+                  "legacy call preserves failed-target refusal after callback rooting merge");
+            check(os64_js_callback_call(h.realm[0], h.realm[2], OS64_JS_ABI_ID, &h.callback[0],
+                  JS_UNDEFINED, 0, NULL, &out) == OS64_JS_REALM_FAILED,
+                  "reporting callback with live entry and incumbent refuses its failed target distinctly");
+            check(os64_js_callback_call(h.realm[0], h.realm[1], OS64_JS_ABI_ID, &h.callback[2],
+                  JS_UNDEFINED, 0, NULL, &out) == OS64_JS_REALM_FAILED,
+                  "live target cannot substitute for a failed associated callback entry");
+            check(os64_js_callback_call(h.realm[0], h.realm[2], OS64_JS_ABI_ID, &h.callback[2],
+                  JS_UNDEFINED, 0, NULL, &out) == OS64_JS_OK &&
+                  os64_js_task_end(h.runtime, OS64_JS_ABI_ID, &out) == OS64_JS_OK,
+                  "failed callback refusals leave independent healthy callback and task usable");
             check(os64_js_realm_retire(h.realm[3], OS64_JS_ABI_ID, &out) == OS64_JS_OK,
                   "ordinary departure remains available for a separate child");
             JSValue retained = record_function(h.ctx[3], "(function(){return 7})");

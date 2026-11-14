@@ -3,6 +3,7 @@
 
 #include "dom/dom.h"
 #include "os64/js_engine.h"
+#include "os64/js_callbacks.h"
 #include "way/origin.h"
 #include "os64/mem.h"
 #include "os64/str.h"
@@ -330,6 +331,9 @@ struct DTimer {
      * so a page could name it. */
     bool binding;
     JSValue callback;
+    /* In settings mode callback aliases captured.value; captured owns it. */
+    os64_js_callback_t captured;
+    os64_js_realm_t *callback_entry;
     char *source;
     size_t source_length;
     int argc;
@@ -380,6 +384,7 @@ struct os64_dom_cluster {
     uint64_t effect_generation, animation_serial;
     bool sweep_pending;
     bool poisoned, drained;
+    bool timer_settings;
 };
 
 struct os64_dom {

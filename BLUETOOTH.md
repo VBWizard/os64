@@ -27,8 +27,9 @@ cat /sys/bluetooth/devices
 Runtime discovery uses two-second LE scans plus command overhead. Controller
 initialization runs an initial scan before connection commands are accepted.
 Read the files again for progress; each open is a consistent snapshot. Discovery
-does not pair or connect, and a device must advertise to appear. Classic inquiry
-is not exposed by the shared runtime controller.
+does not pair or connect, and a device must advertise to appear. `echo "scan
+classic" > /sys/bluetooth/scan` runs a Classic inquiry (about ten seconds) and
+then the LE scan, for headphones and other Classic devices.
 
 `scan` also reports the latest round's start and finish dates in UTC,
 boot-relative milliseconds, and outcome. Manual and automatic rounds both use
@@ -339,6 +340,100 @@ cleanup disconnects the resulting handle. Confirmed cleanup permits slot reuse
 and retains errors and bonds. A transport failure, missing command reply, or
 unconfirmed cleanup makes the controller terminal and releases both inputs.
 A routine peer disconnect does not reset the controller. DMA stays allocated.
+
+## Headphones (Classic, slot 2)
+
+Slot 2 of `/sys/bluetooth/connection` is one Classic (BR/EDR) link, for
+headphones: it pairs, encrypts, keeps the bond, comes back without being
+asked, learns what the headphones are, and carries the sound. Once the link
+is `ready` the audio connection opens by itself (AVDTP, then the stream's
+channel), and the headphones announce "connected" when it does; from then on
+`play file.wav` comes out of them. docs/design/pending/AUDIO_CLASSIC.md is the
+link's design, AUDIO_A2DP.md the sound's.
+
+```sh
+echo "scan classic" > /sys/bluetooth/scan      # headphones in pairing mode
+cat /sys/bluetooth/devices                      # the line that begins "Classic"
+echo "slot 2 bond 4c:87:5d:6d:9a:37" > /sys/bluetooth/connection
+cat /sys/bluetooth/connection                   # slot 2: state: ready, then avdtp: open
+play song.wav                                   # in the headphones
+cat /sys/audio                                  # sink: a2dp
+```
+
+- **Use the `Classic` line's address.** Dual-mode headphones also appear as an
+  `LE` device (the P5's pair as `LE-Bonzo`) under a random address that changes;
+  slot 2 refuses it. A Classic address does not change, and slot 2 takes it
+  whether or not the last scan heard it.
+- `bond` pairs (Secure Simple Pairing, no PIN) and saves the bond to
+  `/home/bluetooth_bond_classic`; `connect` pairs without keeping it;
+  `reconnect` pages the bonded headphones now; `disconnect` ends the link and
+  stops automatic reconnection until `bond` or `reconnect`; `forget` also
+  erases the bond.
+- **With a bond, the link comes back by itself**: at boot, after the headphones
+  drop, and after a page they did not answer, at 5 s doubling to a minute, the
+  wait starting over once a connection has lasted half a minute. While bonded
+  headphones are off that is one five-second page a minute. The `automatic:`
+  line says what is owed.
+- At `ready` the host asks the headphones what they are and shows the answer:
+  `sdp: audio sink, avdtp 1.3, a2dp 1.3, features 0x0001, psm 0019 (complete)`.
+  The channel it asked on stays open until the audio connection's own is, so
+  the link always has a channel on it.
+- **The sound.** With the stream open, slot 2's `avdtp:` lines say `open` (or
+  `streaming` while something plays), with the settings agreed (SBC, 48 kHz,
+  joint stereo, bitpool 51 unless the headphones take less), and the `a2dp:`
+  lines say what the pump is doing: `attached`, `streaming`, `quiet`, `held`
+  or `failed: why`, the packets and frames sent, slips, and the delay.
+  `/sys/audio` names the sink `a2dp`. Three seconds of silence or a pause
+  suspends the stream and the next sound starts it again. Headphones switched
+  off mid-song: the song carries on unheard (the null sink plays), and sound
+  returns when they reconnect. A failed encoder fails the stream instead:
+  `play` is told, and the session is made again at the next connection or
+  `slot 2 reconnect`.
+- **The volume is the headphones' own.** Headphones that let their host
+  set their volume (AVRCP's absolute volume; slot 2's `avrcp:` line says
+  `ready` when they do, `plain` when they do not) hand
+  it to `/dev/volume` while the stream is open: `cat /dev/volume` reads
+  their level, `echo 30 > /dev/volume` turns THEM down, and their own
+  volume buttons move the number `cat` shows. Connecting never turns the
+  headphones up and never changes a song that is already playing:
+  `/dev/volume` takes the level they were already at, nothing is sent to
+  them until somebody writes a number or presses their button, and if a
+  song is playing when they connect, the volume stays the machine's until
+  it stops (slot 2's `volume:` line says so). One number has a cost: the
+  next song plays at THEIR level, whatever `/dev/volume` said before, so
+  it can be louder than the machine's own gain had it; `cat /dev/volume`
+  shows the level you will hear. While it is theirs `/sys/audio` reads `volume: 31 (set at
+  its end by the sink a2dp)`; when the stream closes or they disconnect,
+  `/dev/volume` keeps the number and the machine's own gain applies it
+  again. Headphones without absolute volume keep their own level, and a
+  volume press from them moves `/dev/volume` by 5. 0 to 100 here is 0 to
+  127 at their end, and "30" when it is theirs is not the same loudness
+  as "30" when it is the machine's: their curve is not ours.
+- **Their play, pause, next and previous buttons are heard and do nothing
+  yet.** Each press is answered (so the headphones are content), counted
+  under its name on slot 2's `buttons:` line with the last one, and
+  logged under `DEBUG_USB` (`bluetooth: slot 2 avrcp: play pressed`).
+  Slot 2's `avctp channel:`, `avrcp:` and `volume:` lines show the remote
+  control's channel, what AVRCP knows, and whose the volume is.
+- `/sys/usb`'s timeline has slot 2's steps (`slot 2 classic paging ->
+  authenticating`), and the log a `bluetooth: slot 2 ...` line for each end,
+  each query, each audio session made or gone wrong, and a failed sink.
+
+Measured on the P5 with a Bose SoundLink around-ear II (2026-11-13): bonded in
+under four seconds; reconnected with the saved key in about 140 ms once a page
+was answered; back with no typing after a power cycle and after a reboot.
+Before the P5 could carry sound these headphones never called it themselves,
+and they hung up two seconds after their last L2CAP channel was closed, which
+is why the SDP channel stays open until the audio connection's has opened.
+With sound (2026-11-13 and 14): they announce "Connected to Os64"; songs play
+whole, through scans, typing and mousing (14,918 packets, no slip, no
+underrun); and switched off and on mid-song, they call the P5 back and the
+sound returns. The first sound was two clicks a second, because the link was
+in sniff mode at 500 ms; sniff is now allowed only on a link idle for ten
+seconds, and refused again, the link taken out of sniff, before our stream
+starts (docs/design/pending/AUDIO_REMOTE.md § Part Z). An LE scan and a
+20-second Classic scan during six songs (2026-11-14) cost no slip and no
+underrun, so the manager does nothing about a scan during a stream.
 
 ## Controller and transport
 

@@ -1,6 +1,7 @@
 #ifndef OS64_BT_MANAGER_H
 #define OS64_BT_MANAGER_H
 #include "driver/system/usb/bt_le.h"
+#include "driver/system/usb/bt_classic.h"
 
 typedef struct {
     bool loaded, automatic, suppressed, blocked, scan_owned, dirty;
@@ -32,4 +33,11 @@ bool bt_bond_load(bt_le_bond_t *,bool *);
 bool bt_bond_save(const bt_le_bond_t *,bool);
 bool bt_bond_load_slot(unsigned,bt_le_bond_t *,bool *);
 bool bt_bond_save_slot(unsigned,const bt_le_bond_t *,bool);
+// The Classic link's bond, /home/bluetooth_bond_classic (bt_classic.h's
+// record), by the same rules: an absent file is created holding "no bond";
+// saving a bond that is not valid writes "no bond" (the file stays). Task
+// context, as above. A loaded record made as another adapter is the
+// caller's to refuse.
+bool bt_classic_bond_load(bt_classic_bond_t *);
+bool bt_classic_bond_save(const bt_classic_bond_t *);
 #endif

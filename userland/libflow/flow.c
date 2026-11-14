@@ -111,7 +111,29 @@ struct flow_tree {
     int live;
     size_t tick_room;
     uint64_t tick_ms;
+    // flow_tree_serial's number, and the last stamp handed a box's `drawn`.
+    uint64_t serial, drawn;
 };
+
+// The serials handed out so far: trees are laid out on more than one
+// thread.
+static uint64_t s_tree_serials;
+
+uint64_t flow_tree_serial(const flow_tree_t *tree)
+{
+    return tree != NULL ? tree->serial : 0;
+}
+
+// What `b` draws inside its own group changed (`own`), and so, wherever
+// it is, did what every box it is inside draws: each stamped `stamp`.
+// One already stamped with it had its ancestors stamped too.
+static void drawn_changed(const flow_box_t *b, bool own, uint64_t stamp)
+{
+    if (own)
+        ((flow_box_t *)b)->drawn = stamp;
+    for (const flow_box_t *a = b->parent; a != NULL && a->drawn != stamp; a = a->parent)
+        ((flow_box_t *)a)->drawn = stamp;
+}
 
 // The document a tree's boxes were built from, whose flat tree
 // (internal.h) its walks follow.
@@ -2167,6 +2189,7 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
     flow_tree_t *tree = os64_calloc(1, sizeof(*tree));
     if (tree == NULL)
         return NULL;
+    tree->serial = __atomic_add_fetch(&s_tree_serials, 1, __ATOMIC_RELAXED);
     tree->doc = doc;
     tree->pin = os64_html_pin(doc);
     if (tree->pin == 0 || (model != NULL && !os64_page_retain(model))) {
@@ -3495,7 +3518,7 @@ static void visit_outlines(const flow_box_t *b, bool top, os64_gui_rect_t view,
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx)
 {
-    flow_visitor_t v = {visit, NULL, NULL, ctx, NULL};
+    flow_visitor_t v = {visit, NULL, NULL, ctx, NULL, NULL};
     flow_visit_groups(tree, viewport, scroll, &v);
 }
 
@@ -3513,12 +3536,15 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
     // bilinear sample at the view's edge mixes the source pixel beyond),
     // joined with it moved back to where an upright drawing puts the group
     // — the face may refuse to lay it through (flow_box_through's
-    // `upright`), and the walk is over before it is asked. A filtered
+    // `upright`), and the walk is not told which it did. A filtered
     // group's view is grown by how far from outside it what its filter
     // draws there can come (filter_sources), in the group's own coordinates
     // (taken back through its matrix first, when it has one): a box that
     // far outside it blurs or casts into it. Past the deepest
     // kept, the whole plane, which culls nothing and so loses nothing.
+    // A drawn-through group the visitor asks to have whole (`inside`) is
+    // the whole plane too, and one it asks to have none of is no view at
+    // all, which every group inside it keeps.
     os64_gui_rect_t views[F_VIEWS];
     int32_t depth = 0;
     for (int32_t i = 0; i < tree->nlayers; i++) {
@@ -3526,29 +3552,37 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
         os64_gui_rect_t view = depth == 0 ? viewport : depth <= F_VIEWS ? views[depth - 1]
                                                                         : kWholePlane;
         if (tree->layers[i].part == PART_OPEN) {
-            double m[6];
-            flow_point_t up;
-            bool through = flow_box_through(b, scroll, m, NULL, &up);
-            if (through || f_group_filter(b->style, f_atom(b))) {
-                if (depth < F_VIEWS) {
-                    os64_gui_rect_t in = view;
-                    if (through) {
-                        os64_gui_rect_t back = affine_back(m, view);
-                        if (back.w > 0 && back.h > 0)
-                            back = grown(back, (const int32_t[4]){1, 1, 1, 1});
-                        os64_gui_rect_t upright = moved(view, -(int64_t)up.x, -(int64_t)up.y);
-                        in = back.w > 0 && back.h > 0 ? join(back, upright) : upright;
-                    }
-                    views[depth] = view.w == kWholePlane.w ? kWholePlane : filter_sources(b, in);
-                }
-                depth++;
-            }
             // Bounds are only worked for a visitor that asks: all at once,
             // or, with no memory for that, this group's alone.
             if (visitor->open != NULL) {
                 int32_t end;
                 visitor->open(ctx, b, bounds != NULL ? bounds[i]
                                                      : group_bounds(tree, i, scroll, &end));
+            }
+            double m[6];
+            flow_point_t up;
+            bool through = flow_box_through(b, scroll, m, NULL, &up);
+            if (through || f_group_filter(b->style, f_atom(b))) {
+                if (depth < F_VIEWS) {
+                    flow_inside_t asked = through && visitor->inside != NULL
+                                              ? visitor->inside(ctx, b) : FLOW_INSIDE_VIEW;
+                    os64_gui_rect_t in = view;
+                    if (view.w <= 0 || view.h <= 0 || asked == FLOW_INSIDE_NONE) {
+                        views[depth] = (os64_gui_rect_t){0, 0, 0, 0};
+                    } else if (view.w == kWholePlane.w || asked == FLOW_INSIDE_ALL) {
+                        views[depth] = kWholePlane;
+                    } else {
+                        if (through) {
+                            os64_gui_rect_t back = affine_back(m, view);
+                            if (back.w > 0 && back.h > 0)
+                                back = grown(back, (const int32_t[4]){1, 1, 1, 1});
+                            os64_gui_rect_t upright = moved(view, -(int64_t)up.x, -(int64_t)up.y);
+                            in = back.w > 0 && back.h > 0 ? join(back, upright) : upright;
+                        }
+                        views[depth] = filter_sources(b, in);
+                    }
+                }
+                depth++;
             }
             continue;
         }
@@ -4005,7 +4039,10 @@ flow_point_t flow_scroll_set(flow_tree_t *tree, int32_t i, flow_point_t at)
     if (scroller_at(tree, i) == NULL)
         return (flow_point_t){0, 0};
     flow_frame_t *f = tree->scrollers[i];
+    flow_point_t was = f->at;
     f->at = (flow_point_t){held(at.x, f->range.x), held(at.y, f->range.y)};
+    if (f->at.x != was.x || f->at.y != was.y)
+        drawn_changed(f->box, true, ++tree->drawn);
     return f->at;
 }
 
@@ -4288,9 +4325,29 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
         f_arena_free(lists);
         return false;
     }
+    // Each element that changed stamps its boxes' `drawn` (drawn_changed):
+    // its own only when a value it draws changed, not only how its group
+    // is laid.
+    uint64_t stamp = 0;
     for (int32_t i = 0; i < tree->nticking; i++) {
         FTick *e = &tree->ticking[i];
-        e->changed = f_motion_changed(e->st->motion, &e->st->style, &e->worked);
+        FProps props = {{0}};
+        e->changed = f_motion_changed_props(e->st->motion, &e->st->style, &e->worked, &props);
+        if (!e->changed)
+            continue;
+        f_props_remove(&props, GARB_TRANSFORM);
+        f_props_remove(&props, GARB_TRANSLATE);
+        f_props_remove(&props, GARB_ROTATE);
+        f_props_remove(&props, GARB_SCALE);
+        f_props_remove(&props, GARB_TRANSFORM_ORIGIN);
+        f_props_remove(&props, GARB_OPACITY);
+        bool own = false;
+        for (int32_t w = 0; w < F_PROP_WORDS; w++)
+            own = own || props.w[w] != 0;
+        if (stamp == 0)
+            stamp = ++tree->drawn;
+        for (int32_t j = 0; j < e->nboxes; j++)
+            drawn_changed(e->boxes[j], own, stamp);
     }
     if (mark != NULL)
         tick_marks(tree, scroll, mark, ctx);

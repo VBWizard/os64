@@ -512,7 +512,87 @@ virtio because its drain waits for the tick.
   one pool or two, a reserve for LE in a shared pool, completions by
   handle. `/sys/bluetooth/connection`'s `acl pools:` line shows them.
   docs/design/pending/AUDIO_CLASSIC.md is the design; its § T, as built
-  says what is counted but not yet gated
+  says what is counted, and the Classic link's L2CAP is the sender held to
+  the count (§ S, as built), always leaving a send slot for the LE peers
+  **A Classic (BR/EDR) link** is slot 2 of `/sys/bluetooth/connection`
+  (`bt_classic.c`, pure; `tools/test_bt_classic_host.sh` plays the
+  headphones, 214 mutants): `scan classic`, then `slot 2 bond <address>`,
+  `connect`, `reconnect`, `disconnect`, `forget`. Bonded headphones that
+  drop or do not answer are PAGED AGAIN, 5 s doubling to a minute (the
+  wait starts over once a connection has lasted half a minute), until
+  `slot 2 disconnect`: the P5's pair held our key and never
+  called us back. Secure Simple Pairing as
+  a device with no keys or display; the bond is
+  `/home/bluetooth_bond_classic`; page scan is on only while a bond is
+  held, and only the bonded address is accepted. Whatever the controller
+  asks of the link is LATCHED and answered at its next turn of the one
+  command slot, which it takes ahead of the scan and the LE peers when an
+  answer is waiting. The start-up round's Classic setup commands may be
+  REFUSED without costing the round: the slot then says why it is
+  unavailable and LE is untouched. Sniff is ALLOWED on a link with an
+  audio sink once it has been idle ten seconds, and REFUSED, the link taken
+  out of sniff, before our stream starts; neither of the two commands can
+  end the link, though one the controller NEVER answers still fails the
+  controller three seconds past its deadline, as any unanswered command
+  does (`bt_host.c` § Slot 2's sniff is the lifecycle, AUDIO_REMOTE.md
+  § Part Z the design). Its data packets are its L2CAP's
+  (`bt_l2cap.c`, pure, Basic mode, six channels, admitting SDP and, with
+  an audio sink, AVDTP and AVCTP), and at `READY` the host asks the headphones one SDP question a
+  connection, what Audio Sink they are (`bt_sdp.c`, pure, which also
+  answers for os64's own records: Audio Source and the two remote-control
+  ones), and KEEPS THAT CHANNEL OPEN
+  until AVDTP's signalling channel is: the P5's pair hangs up a link whose
+  last channel has closed; L2CAP sends only after the LE peers have had
+  their turn, while the count gives it a buffer and a send slot is left
+  for LE. Slot 2's status shows L2CAP's channels and counters (a refusal
+  is the channel index's), the `sdp:` line (versions, features and
+  AVDTP's PSM, or why the query was not made) and the questions answered.
+  §§ L and S, as built are the record
+  **AVDTP's signalling** is `bt_avdtp.c` (pure, both roles;
+  `tools/test_bt_avdtp_host.sh` plays the sink, 332 mutants): find the
+  headphones' SBC endpoint, configure it, open, start, suspend, close, and
+  answer when they do the same to us. The host opens its signalling
+  channel once the SDP query has ended, found or not, and gives each
+  0x0019 channel its role from AVDTP's state (`bt_host.c` § Slot 2's audio
+  has the lifecycle table; AUDIO_A2DP.md § V, as built is AVDTP's record)
+  **AVCTP and AVRCP** are `bt_avrcp.c` (pure, both roles;
+  `tools/test_bt_avrcp_host.sh` plays the headphones, 201 mutants): as the
+  target it answers their buttons and says what is playing; as the
+  controller it learns whether they have absolute volume, hears it change
+  and sets it. The host carries it on one AVCTP channel with an audio sink
+  (`bt_host.c` § Slot 2's remote control: theirs is taken whenever it
+  opens, ours asked for two seconds after AVDTP's signalling, at most
+  twice a connection). **While AVRCP is ready and the pump is the seam's
+  sink, `/dev/volume` IS the headphones' volume** (§ Slot 2's volume):
+  the seam applies no gain, a write becomes one Set Absolute Volume, and
+  their own buttons move the number. Connecting never raises the
+  headphones' level and never changes the sound of a stream that is
+  playing: the number takes THEIR level first, then the seam stops
+  applying its gain, nothing is sent to them, and ownership waits while a
+  stream is under way with `/dev/volume` below 100. The cost of one
+  number: a stream that STARTS owned plays at their own level whatever
+  `/dev/volume` held before, which can be louder than the seam's gain
+  would have made it. Their play, pause,
+  next and previous presses are answered, counted and logged under
+  `DEBUG_USB`, and do nothing yet (§ Slot 2's buttons). Slot 2's status
+  shows the `avctp channel:`, AVRCP's lines, `volume:` and `buttons:`.
+  AUDIO_REMOTE.md §§ R and W, as built are the record
+  **The A2DP sink** is the pump, `bt_a2dp.c` (pure;
+  `tools/test_bt_a2dp_host.sh`), run by the host inside `kusb`'s pass
+  after the LE peers: it is the audio seam's sink, named `a2dp` in
+  `/sys/audio`, from the stream's `open` until the session ends, and turns
+  the PCM it pulls into SBC media packets at the sample clock's pace
+  (`bt_host_tick`'s `now_us`), one loop of at most three packets a pass
+  under the same send gate as L2CAP. Its way to the seam, the encoder and
+  the clock is `bt_a2dp_seam.c`, which the transport hands the host
+  (`bt_host_audio`). Slot 2's status gains AVDTP's lines, the pump's
+  (`a2dp:` state, settings, packets, slips, dry packets, rejects, the
+  delay) and the channels' roles; `tools/test_bt_multi_host.sh` plays the
+  headphones end to end. When sound stutters read `/sys/audio` FIRST
+  (`underruns_since_read`: the player fell behind), then slot 2's `a2dp:`
+  slips and slow encodes (the pump was held off, or the encoder was slow),
+  then `acl pools:` and `/sys/usb` for a link or a pass held off.
+  AUDIO_A2DP.md § P, as built is the record
 - **Sound** (`audio/audio.c`, `audio/audio_stream.c`, `audio/kaudio.c`) —
   docs/design/pending/AUDIO_SEAM.md is the design. One stream in the
   machine: a program writes PCM (signed 16-bit, two channels, 48 kHz) to
@@ -532,7 +612,15 @@ virtio because its drain waits for the tick.
   write and the tap's read wait, and the position is asked for often enough
   that it must cost a syscall and no more. **`/dev/audioctl`** (`pause`,
   `resume`, `flush`, `format`) and **`/dev/volume`** (0 to 100, applied at
-  the pull) are plain devfs text, and anyone may write them. The write
+  the pull, unless the sink OWNS the volume: then the number is carried
+  out at the sink's end, headphones with absolute volume, and the pull
+  applies no gain) are plain devfs text, and anyone may write them. A sink
+  has three calls for the volume: `audio_sink_owns_volume`,
+  `audio_sink_volume_set` (what it is at the sink's end; needs no
+  ownership) and `audio_sink_volume_now`; the first two are refused from
+  anything but the sink, and the seam takes the volume back by itself at
+  every attach and detach, so no later sink inherits a pull with no gain.
+  `/sys/audio`'s `volume:` line says whose it is. The write
   takes write's patience (forever, some milliseconds, none). One open of
   the stream at a time (`OS64_AUDIO_BUSY`); a close never waits and never
   cuts the sound, and the next open's frames follow under a new
@@ -554,6 +642,21 @@ virtio because its drain waits for the tick.
   record of what was checked upstream. `tools/test_resample_host.sh`,
   `/tests/resampletest` and `/tests/playtest` prove it; run
   `tools/test_sound_audit.py` after a build that touches it
+  **The SBC encoder is built and linked with the kernel**
+  (`kernel/ports/sbc/`, the first third-party code in ring 0), and the A2DP
+  sink calls it (AUDIO_A2DP.md part P). Android's, unpatched
+  in `upstream/`, pinned by `manifest.json`, built by `sbc.mk` with flags of
+  its own (the kernel's code generation, `-O2`, warnings not fatal) and the
+  switches in `port/sbc_switches.h`. The kernel may call `sbc_port.h`'s two functions
+  and nothing else: `sbc_port_begin` (settings `sbc_settings_valid` takes,
+  `kernel/include/audio/sbc_frame.h`, and exactly the bitpool asked) and
+  `sbc_port_encode` (one frame into the boundary's own guarded buffer;
+  a wrong length or a touched guard fails it until the next begin).
+  `tools/test_sbc_host.sh` proves it against FFmpeg's decoder and encoder
+  and FAILS without ffmpeg; `tools/test_sbc_audit.py` reads the objects
+  (integer-only, `memset` the one import, and no caller of the boundary
+  but those named in its `BOUNDARY_CALLERS`: the pump's ops,
+  `bt_a2dp_seam.c`). Its README is the record
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer

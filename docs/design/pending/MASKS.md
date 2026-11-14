@@ -189,7 +189,9 @@ layers and its size; that is a measured follow-up, not this slice.
 - **M2, the rest**: `-webkit-mask-composite` and its legacy keywords (§ 4;
   M1 left the name unread, so a page that wrote only `xor` drew its layers
   added); `mask-position` and `-size` animated (§ 5).
-- **The coverage cache** (§ 3) is its own slice, if the P5 asks for it:
+- **The coverage cache** (§ 3) became kept drawings (PILE3.md §
+  Transforms, the painter: Kept drawings), a group's two sheets kept
+  whole, its masks and all, which the record below asked for:
   Lamplighter's beam, a masked gradient turning, costs about 1.5 ms a
   frame at 100% zoom and 4–5 ms zoomed in on the P5 (Chris's frame meter,
   2026-11-12), growing with the pixels it covers; yonder's record splits
@@ -200,10 +202,11 @@ layers and its size; that is a measured follow-up, not this slice.
   2026-11-13 (level 3, every lamp lit, 150%) answered first for the
   turning itself: warps 19.8 ms of a 38.3 ms paint, gradients 7.4,
   layers 6.6. So the warp went first (warp speed, PILE3.md § Transforms,
-  the painter); the cache is weighed against the record that follows it,
-  as a cache of a turning box's sheets — its gradients and masks drawn
-  once while only its angle changes — rather than of a mask's coverage
-  alone.
+  the painter). The record after it (100% zoom: gradients 5.1, layers
+  5.2, laid 3.7 of a 16.6 ms paint, warps 2.4) put most of what was left
+  inside turning groups, so the cache keeps a turning box's sheets — its
+  gradients and masks drawn once while only its angle changes — rather
+  than a mask's coverage alone.
 
 Each slice gets a cold read before Codex and mutants of its rules, as this
 arc's slices have.

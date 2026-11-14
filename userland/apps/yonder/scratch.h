@@ -32,6 +32,9 @@ typedef struct {
     size_t idle_bytes;              // what the idle buffers hold, now
     uint64_t made, reused;          // pooled takes that allocated, and that did not
     uint64_t unpooled;              // takes that went straight to os64_malloc
+    // Takes that found no memory: what a kept drawing asks, since a paint
+    // short of a buffer draws otherwise than a later one would.
+    uint64_t refused;
 } yonder_scratch_counts_t;
 
 // NULL when there is no memory. Every call below takes a NULL scratch too,

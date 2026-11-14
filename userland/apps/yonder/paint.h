@@ -9,6 +9,19 @@
 #include "flow/flow.h"
 #include "scratch.h"
 
+// What a kept drawing of a group drawn through its matrix was made from
+// (the `keep` verb, below): the tree (flow_tree_serial) and its box, what
+// the box's `drawn` said, the group's bounds in its own coordinates, and
+// where the page was scrolled. A face adds what it alone knows changed.
+typedef struct yonder_keep_key {
+    uint64_t tree;
+    const flow_box_t *box;
+    uint64_t drawn;
+    os64_gui_rect_t bounds;
+    flow_point_t scroll;
+} yonder_keep_key_t;
+enum { YONDER_KEEP_NO = 0, YONDER_KEEP_MAKE, YONDER_KEEP_HAVE };
+
 // Everything is in PAGE coordinates — a box in a fixed subtree moved there
 // by the scroll, which the painter does for every verb — and the executor
 // moves it onto the glass; between a through_open and its close, in that
@@ -79,9 +92,29 @@ typedef struct {
     // too large): the painter then draws the group upright, and every verb
     // it calls is in the coordinates painted before. Either NULL: no group
     // is laid through.
+    // KEPT DRAWINGS (PILE3.md § Transforms, the painter: Kept drawings): a
+    // face that can keep what a group drawn through its matrix painted, to
+    // lay it again through a later frame's matrix, answers `keep` for it
+    // before it opens, `key` saying what that drawing is made from:
+    // YONDER_KEEP_NO, and it is opened with `keep` NO and painted as
+    // above; YONDER_KEEP_MAKE, and it is opened with MAKE and all of
+    // `key->bounds` (not cut to what shows), painted whole, and at its
+    // close `keep` says whether what was painted may be kept — not when
+    // something inside it can change while the box's `drawn` holds still
+    // (a picture, a control, a canvas, a stand-in) or was drawn otherwise
+    // than the face would draw it again (a layer, sheets or a clip
+    // refused), and the face may still decline what its own verbs drew
+    // short of memory; or YONDER_KEEP_HAVE, and it is opened with HAVE and
+    // `key->bounds`, nothing is painted inside it, and its close lays what
+    // was kept. An open with MAKE or HAVE that is refused is made again
+    // with NO.
+    // The open (or the two) that follow a `keep` are the group it was
+    // asked for, with no verb between. NULL: nothing is kept, every open
+    // is NO and every close's `keep` false.
+    int (*keep)(void *ctx, const yonder_keep_key_t *key);
     bool (*through_open)(void *ctx, os64_gui_rect_t bounds, const double m[6],
-                         os64_gui_rect_t clip);
-    void (*through_close)(void *ctx, uint8_t alpha);
+                         os64_gui_rect_t clip, int keep);
+    void (*through_close)(void *ctx, uint8_t alpha, bool keep);
     // A TEXT CLIP (PILE3.md § The text clip): a group whose opacity is per
     // pixel. After clip_open, what is painted is the MASK — the clip's text
     // in white, nothing else, and its coverage is the white; after

@@ -134,6 +134,8 @@ void audio_sink_attach(const audio_sink_t *sink);   // becomes the sink; one at 
 void audio_sink_detach(const audio_sink_t *sink);   // the null sink takes over
 void audio_sink_failed(const audio_sink_t *sink, const char *why);   // fail closed
 void audio_sink_delay(const audio_sink_t *sink, uint32_t delay_us);  // how far behind the pull the ear is
+bool audio_sink_has_sound(const audio_sink_t *sink);  // it is the sink, the ring holds frames, not paused
+                                                      // (A.3: the A2DP pump asks before it starts a stream)
 
 // What a pull tells the sink, read under the same lock as the frames.
 typedef struct audio_pulled
@@ -209,7 +211,11 @@ that makes the slider's middle sound like half), multiplied per sample and
 rounded toward zero (a gain of at most one cannot overflow). 100 is exactly
 unity and copies without arithmetic. The value
 is the kernel's until reboot; keeping it across boots is a conf question
-for whoever builds the slider.
+for whoever builds the slider. A sink that can set the loudness at its end
+(headphones with absolute volume) may OWN the volume
+(AUDIO_REMOTE.md § Part W): the number is then its to carry out and the
+pull applies no gain; the seam takes it back whenever a sink attaches or
+detaches.
 
 **The tap** is the same pull seen from the side. While `/dev/audiotap` is
 open, each pull also appends a record to a capture ring (one second,

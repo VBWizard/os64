@@ -228,6 +228,11 @@
       "path": "patches/0029-recovery-entry-barrier.patch",
       "sha256": "36b3f6e7877adc06c1007016277b95ecd6eca607d760e56268e698b35da39a5b",
       "reason": "Expose opt-in engine activity markers and a generation-checked raw recovery entry fence without resetting wrapper failures or certifying external native state."
+    },
+    {
+      "path": "patches/0030-callback-associated-realm.patch",
+      "sha256": "b9c228c5f1cb11ab3b8fb2476e45d0745919b8fbd1839d87708ab580cbb06efe",
+      "reason": "Preserve proxy creation realm for callable callback entry, independently of executable target and captured incumbent."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
