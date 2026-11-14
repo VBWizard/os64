@@ -203,7 +203,10 @@ static void ar_pass_through(bt_avrcp_t *a, bt_avrcp_msg_t *m, uint8_t label, con
 // table has it, or rejected with the status its fault calls for (a PDU we
 // do not take, or one sent as the wrong command type or in AVRCP's own
 // fragments, is an invalid command; a parameter we do not offer, or a
-// length that is not the PDU's, an invalid parameter).
+// parameter length shorter than the PDU needs or longer than the message
+// holds, an invalid parameter). A peer that pads is not refused: the
+// length may run past what the PDU needs, and the message past the
+// length, and only what is needed is read.
 static void ar_vendor_in(bt_avrcp_t *a, bt_avrcp_msg_t *m, uint8_t label, const uint8_t *f, size_t n)
 {
     uint8_t ctype=f[0]&0x0f, subunit=f[1];
@@ -213,12 +216,12 @@ static void ar_vendor_in(bt_avrcp_t *a, bt_avrcp_msg_t *m, uint8_t label, const 
     uint8_t pdu=on>3 ? o[3] : 0;
     if(on<7 || (o[4]&3)!=PKT_SINGLE) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_COMMAND); return; }
     const uint8_t *p=o+7;
-    size_t pn=on-7;
-    if(ar_u16(o+5)!=pn) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_PARAMETER); return; }
+    size_t pn=ar_u16(o+5);
+    if(pn>on-7) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_PARAMETER); return; }
     switch(pdu) {
     case PDU_GET_CAPABILITIES:
         if(ctype!=CT_STATUS) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_COMMAND); return; }
-        if(pn!=1 || (p[0]!=CAP_COMPANY && p[0]!=CAP_EVENTS)) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_PARAMETER); return; }
+        if(pn<1 || (p[0]!=CAP_COMPANY && p[0]!=CAP_EVENTS)) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_PARAMETER); return; }
         ar_begin(m,label,true,CT_STABLE,subunit,OP_VENDOR);
         if(p[0]==CAP_COMPANY) {
             ar_vendor(m,pdu,5);
@@ -230,7 +233,7 @@ static void ar_vendor_in(bt_avrcp_t *a, bt_avrcp_msg_t *m, uint8_t label, const 
         break;
     case PDU_REGISTER_NOTIFICATION:
         if(ctype!=CT_NOTIFY) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_COMMAND); return; }
-        if(pn!=5 || (p[0]!=EVENT_PLAYBACK && p[0]!=EVENT_TRACK)) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_PARAMETER); return; }
+        if(pn<5 || (p[0]!=EVENT_PLAYBACK && p[0]!=EVENT_TRACK)) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_PARAMETER); return; }
         ar_begin(m,label,true,CT_INTERIM,subunit,OP_VENDOR);
         if(p[0]==EVENT_PLAYBACK) {
             // Its INTERIM, and the CHANGED it may come to owe, each need a
@@ -253,8 +256,8 @@ static void ar_vendor_in(bt_avrcp_t *a, bt_avrcp_msg_t *m, uint8_t label, const 
         break;
     case PDU_GET_PLAY_STATUS:
         if(ctype!=CT_STATUS) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_COMMAND); return; }
-        if(pn) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_PARAMETER); return; }
-        // The song's length and position are not known: 0xFFFFFFFF each.
+        // It needs no parameters, so any it carries are padding. The song's
+        // length and position are not known: 0xFFFFFFFF each.
         ar_begin(m,label,true,CT_STABLE,subunit,OP_VENDOR);
         ar_vendor(m,pdu,9);
         for(int i=0;i<8;i++) ar_put(m,0xff);
@@ -266,7 +269,7 @@ static void ar_vendor_in(bt_avrcp_t *a, bt_avrcp_msg_t *m, uint8_t label, const 
         // of four-byte attribute ids: answered with no attributes.
         bool playing=pn>=9;
         for(size_t i=0;playing && i<8;i++) if(p[i]) playing=false;
-        if(!playing || pn!=9u+4u*p[8]) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_PARAMETER); return; }
+        if(!playing || pn<9u+4u*p[8]) { ar_reject(a,m,label,subunit,pdu,STATUS_INVALID_PARAMETER); return; }
         ar_begin(m,label,true,CT_STABLE,subunit,OP_VENDOR);
         ar_vendor(m,pdu,1);
         ar_put(m,0);
@@ -403,10 +406,12 @@ static void ar_refused(bt_avrcp_t *a, bt_avrcp_command_t *c)
 }
 
 // Get Capabilities (events), answered STABLE: the capability, a count and
-// that many events.
+// that many events. Here and in the two below, `n` is the parameter
+// length the answer declares, already held to the bytes it carries: it
+// may run past what is needed (padding), and only what is needed is read.
 static void ar_capabilities(bt_avrcp_t *a, uint8_t ctype, const uint8_t *p, size_t n)
 {
-    if(ctype!=CT_STABLE || n<2 || p[0]!=CAP_EVENTS || n!=2u+p[1]) { a->malformed++; return; }
+    if(ctype!=CT_STABLE || n<2 || p[0]!=CAP_EVENTS || n<2u+p[1]) { a->malformed++; return; }
     a->reg.live=false;
     for(size_t i=0;i<p[1];i++)
         if(p[2+i]==EVENT_VOLUME) { a->state=BT_AVRCP_REGISTERING; ar_register(a); return; }
@@ -423,7 +428,7 @@ static void ar_capabilities(bt_avrcp_t *a, uint8_t ctype, const uint8_t *p, size
 // the command, and its queued copy with it.
 static void ar_registration(bt_avrcp_t *a, uint8_t ctype, const uint8_t *p, size_t n)
 {
-    if(n!=2 || p[0]!=EVENT_VOLUME || (ctype!=CT_INTERIM && ctype!=CT_CHANGED)) { a->malformed++; return; }
+    if(n<2 || p[0]!=EVENT_VOLUME || (ctype!=CT_INTERIM && ctype!=CT_CHANGED)) { a->malformed++; return; }
     if(ctype==CT_INTERIM) {
         a->reg.sent=true; a->reg.waiting=false;
         ar_level(a,p[1]);
@@ -440,7 +445,7 @@ static void ar_registration(bt_avrcp_t *a, uint8_t ctype, const uint8_t *p, size
 static void ar_set_answer(bt_avrcp_t *a, uint8_t ctype, const uint8_t *p, size_t n)
 {
     if(ctype==CT_INTERIM) { a->sets_interim++; a->set.deadline=a->now+BT_AVRCP_REPLY_MS; return; }
-    if(ctype!=CT_ACCEPTED || n!=1) { a->malformed++; return; }
+    if(ctype!=CT_ACCEPTED || n<1) { a->malformed++; return; }
     a->sets_accepted++;
     ar_level(a,p[0]);
     ar_set_done(a);
@@ -479,9 +484,9 @@ static void ar_response(bt_avrcp_t *a, uint8_t header, const uint8_t *f, size_t 
     }
     if(!sig || on<7) { a->malformed++; return; }
     if(o[3]!=c->pdu_id) { a->strays++; return; }
-    if((o[4]&3)!=PKT_SINGLE || ar_u16(o+5)!=on-7) { a->malformed++; return; }
+    size_t pn=ar_u16(o+5);
+    if((o[4]&3)!=PKT_SINGLE || pn>on-7) { a->malformed++; return; }
     const uint8_t *p=o+7;
-    size_t pn=on-7;
     if(ctype==CT_REJECTED) { ar_refused(a,c); return; }
     if(c==&a->set) ar_set_answer(a,ctype,p,pn);
     else if(c->pdu_id==PDU_GET_CAPABILITIES) ar_capabilities(a,ctype,p,pn);

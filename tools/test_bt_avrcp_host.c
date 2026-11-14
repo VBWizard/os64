@@ -456,7 +456,8 @@ static void test_controller_plain(void)
     feed(&bad);
     CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_ASKING);
     CHECK_EQ(A.malformed, 8);
-    // A volume answer of the wrong event or length is not believed either.
+    // A volume answer of the wrong event, too short, or of the wrong type is
+    // not believed either.
     fresh();
     bt_avrcp_channel_open(&A, T);
     g = ASKED();
@@ -467,7 +468,7 @@ static void test_controller_plain(void)
     vendor(&w, REGISTER, 2); put(&w, EV_PLAYBACK); put(&w, 9);
     feed(&w);
     w = REPLY(r, R_INTERIM);
-    vendor(&w, REGISTER, 3); put(&w, EV_VOLUME); put(&w, 9); put(&w, 9);
+    vendor(&w, REGISTER, 1); put(&w, EV_VOLUME);
     feed(&w);
     w = volume_reply(r, R_ACCEPTED, 9);
     feed(&w);
@@ -476,6 +477,87 @@ static void test_controller_plain(void)
     w = volume_reply(r, R_INTERIM, 9);
     feed(&w);
     expect_volume(9);
+}
+
+// A peer that pads: a parameter length past what the PDU needs, and bytes
+// past the parameter length, are taken, and only what is needed is read.
+static void test_padding(void)
+{
+    // A padded Get Capabilities answer: the length past the list, and a
+    // byte past the length.
+    fresh(); bt_avrcp_channel_open(&A, T);
+    unsigned g = ASKED();
+    msg_t e = REPLY(g, R_STABLE);
+    vendor(&e, GET_CAPS, 7); put(&e, 0x03); put(&e, 2); put(&e, EV_PLAYBACK); put(&e, EV_VOLUME);
+    put(&e, 0); put(&e, 0); put(&e, 0); put(&e, 0xee);
+    feed(&e);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_REGISTERING);
+    // A padded INTERIM: the level is the byte after the event.
+    unsigned r = REGISTERED();
+    msg_t i = REPLY(r, R_INTERIM);
+    vendor(&i, REGISTER, 4); put(&i, EV_VOLUME); put(&i, 44); put(&i, 0x7f); put(&i, 0x7f);
+    feed(&i);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_READY);
+    expect_volume(44);
+    // A padded CHANGED, a byte past its length too.
+    msg_t c = REPLY(r, R_CHANGED);
+    vendor(&c, REGISTER, 3); put(&c, EV_VOLUME); put(&c, 45); put(&c, 0); put(&c, 0xee);
+    feed(&c);
+    expect_volume(45);
+    r = REGISTERED();
+    i = volume_reply(r, R_INTERIM, 45);
+    feed(&i);
+    // A padded ACCEPTED to a Set.
+    CHECK(bt_avrcp_set_volume(&A, 60, T));
+    unsigned s = SET(60);
+    msg_t a = REPLY(s, R_ACCEPTED);
+    vendor(&a, SET_VOLUME, 2); put(&a, 60); put(&a, 0);
+    feed(&a);
+    expect_volume(60);
+    CHECK_EQ(A.malformed, 0);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_READY);
+    // Too short stays malformed: a list that claims more than its length,
+    // and a length past the bytes held.
+    fresh(); bt_avrcp_channel_open(&A, T);
+    g = ASKED();
+    e = REPLY(g, R_STABLE);
+    vendor(&e, GET_CAPS, 3); put(&e, 0x03); put(&e, 2); put(&e, EV_VOLUME); put(&e, EV_PLAYBACK);
+    feed(&e);
+    e = REPLY(g, R_STABLE);
+    vendor(&e, GET_CAPS, 4); put(&e, 0x03); put(&e, 1); put(&e, EV_VOLUME);
+    feed(&e);
+    CHECK_EQ(A.malformed, 2);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_ASKING);
+
+    // Padded commands of theirs are answered as if exact.
+    to_ready(20);
+    msg_t m = vcmd(1, C_STATUS, GET_CAPS, P(0x03, 0x00));
+    feed(&m);
+    expect(vanswer(1, R_STABLE, GET_CAPS, P(0x03, 2, EV_PLAYBACK, EV_TRACK)));
+    m = vcmd(2, C_NOTIFY, REGISTER, P(EV_TRACK, 0, 0, 0, 0, 0));
+    feed(&m);
+    expect(vanswer(2, R_INTERIM, REGISTER, P(EV_TRACK, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
+    m = vcmd(3, C_STATUS, GET_PLAY, P(0));
+    feed(&m);
+    expect(vanswer(3, R_STABLE, GET_PLAY, P(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, BT_AVRCP_STOPPED)));
+    m = vcmd(4, C_STATUS, GET_ELEMENTS, P(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0));
+    feed(&m);
+    expect(vanswer(4, R_STABLE, GET_ELEMENTS, P(0)));
+    m = vcmd(4, C_STATUS, GET_CAPS, P(0x02));    // a byte past an exact length
+    put(&m, 0xee);
+    feed(&m);
+    expect(vanswer(4, R_STABLE, GET_CAPS, P(0x02, 1, 0x00, 0x19, 0x58)));
+    // A byte past the length is not read as a parameter: here it would make
+    // an unknown capability out of an empty one, so the length (0) rules.
+    m = vcmd(5, C_STATUS, GET_CAPS, P(0x03));
+    m.b[12] = 0;
+    feed(&m);
+    expect(vreject(5, GET_CAPS, ST_INVALID_PARAMETER));
+    m = vcmd(6, C_NOTIFY, REGISTER, P(EV_PLAYBACK, 0, 0, 0, 0));
+    m.b[12] = 4;                                  // the length short of the PDU, the bytes there
+    feed(&m);
+    expect(vreject(6, REGISTER, ST_INVALID_PARAMETER));
+    CHECK(!A.play_registered);
 }
 
 static void test_controller_sets(void)
@@ -509,9 +591,10 @@ static void test_controller_sets(void)
     T += 1999; bt_avrcp_tick(&A, T);
     expect_nothing();
     CHECK_EQ(A.silences, 0);
-    // An ACCEPTED of the wrong length is not believed: the Set waits on.
+    // An ACCEPTED too short, or claiming more than it holds, is not
+    // believed: the Set waits on.
     msg_t odd = REPLY(s, R_ACCEPTED);
-    vendor(&odd, SET_VOLUME, 2); put(&odd, 11); put(&odd, 11);
+    vendor(&odd, SET_VOLUME, 2); put(&odd, 11);
     feed(&odd);
     odd = REPLY(s, R_ACCEPTED);
     vendor(&odd, SET_VOLUME, 0);
@@ -1085,7 +1168,8 @@ static void test_answers(void)
 
     // Every reject: invalid command for a PDU we do not take, the wrong
     // command type, or AVRCP's own fragments; invalid parameter for a
-    // parameter we do not offer or a length that is not the PDU's.
+    // parameter we do not offer or a length short of what the PDU needs
+    // (padding past it is taken: test_padding).
     struct { uint8_t ctype, pdu; uint8_t p[24]; unsigned n; uint8_t status; } bad[] = {
         { C_STATUS, LIST_ATTRS, { 0 }, 0, ST_INVALID_COMMAND },
         { C_CONTROL, REQ_CONTINUE, { GET_ELEMENTS }, 1, ST_INVALID_COMMAND },
@@ -1101,19 +1185,15 @@ static void test_answers(void)
         { C_STATUS, GET_CAPS, { 0x01 }, 1, ST_INVALID_PARAMETER },
         { C_STATUS, GET_CAPS, { 0x04 }, 1, ST_INVALID_PARAMETER },
         { C_STATUS, GET_CAPS, { 0 }, 0, ST_INVALID_PARAMETER },
-        { C_STATUS, GET_CAPS, { 0x03, 0x00 }, 2, ST_INVALID_PARAMETER },
         { C_NOTIFY, REGISTER, { EV_VOLUME, 0, 0, 0, 0 }, 5, ST_INVALID_PARAMETER },
         { C_NOTIFY, REGISTER, { EV_POSITION, 0, 0, 0, 1 }, 5, ST_INVALID_PARAMETER },
         { C_NOTIFY, REGISTER, { 0x03, 0, 0, 0, 0 }, 5, ST_INVALID_PARAMETER },
         { C_NOTIFY, REGISTER, { 0x00, 0, 0, 0, 0 }, 5, ST_INVALID_PARAMETER },
         { C_NOTIFY, REGISTER, { EV_PLAYBACK, 0, 0, 0 }, 4, ST_INVALID_PARAMETER },
-        { C_NOTIFY, REGISTER, { EV_TRACK, 0, 0, 0, 0, 0 }, 6, ST_INVALID_PARAMETER },
-        { C_STATUS, GET_PLAY, { 0 }, 1, ST_INVALID_PARAMETER },
         { C_STATUS, GET_ELEMENTS, { 0, 0, 0, 0, 0, 0, 0, 1, 0 }, 9, ST_INVALID_PARAMETER },     // a track by UID
         { C_STATUS, GET_ELEMENTS, { 1, 0, 0, 0, 0, 0, 0, 0, 0 }, 9, ST_INVALID_PARAMETER },
         { C_STATUS, GET_ELEMENTS, { 0, 0, 0, 0, 0, 0, 0, 0 }, 8, ST_INVALID_PARAMETER },
         { C_STATUS, GET_ELEMENTS, { 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0 }, 12, ST_INVALID_PARAMETER },
-        { C_STATUS, GET_ELEMENTS, { 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0 }, 14, ST_INVALID_PARAMETER },
     };
     unsigned rejected = A.rejected;
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
@@ -1903,6 +1983,7 @@ int main(int argc, char **argv)
     test_presses();
     test_press_ring();
     test_answers();
+    test_padding();
     test_notifications();
     test_parked();
     test_avctp();
