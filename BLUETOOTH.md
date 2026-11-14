@@ -394,10 +394,15 @@ cat /sys/audio                                  # sink: a2dp
   `ready` when they do, `plain` when they do not) hand
   it to `/dev/volume` while the stream is open: `cat /dev/volume` reads
   their level, `echo 30 > /dev/volume` turns THEM down, and their own
-  volume buttons move the number `cat` shows. Connecting never makes
-  anything louder: `/dev/volume` takes the level they were already at,
-  and nothing is sent to them until somebody writes a number or presses
-  their button. While it is theirs `/sys/audio` reads `volume: 31 (set at
+  volume buttons move the number `cat` shows. Connecting never turns the
+  headphones up and never changes a song that is already playing:
+  `/dev/volume` takes the level they were already at, nothing is sent to
+  them until somebody writes a number or presses their button, and if a
+  song is playing when they connect, the volume stays the machine's until
+  it stops (slot 2's `volume:` line says so). One number has a cost: the
+  next song plays at THEIR level, whatever `/dev/volume` said before, so
+  it can be louder than the machine's own gain had it; `cat /dev/volume`
+  shows the level you will hear. While it is theirs `/sys/audio` reads `volume: 31 (set at
   its end by the sink a2dp)`; when the stream closes or they disconnect,
   `/dev/volume` keeps the number and the machine's own gain applies it
   again. Headphones without absolute volume keep their own level, and a

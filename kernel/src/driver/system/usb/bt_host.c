@@ -392,6 +392,7 @@ static void host_audio_link(bt_host_t *h,bool up)
     h->avctp_sig_since=h->avctp_again_at=0;
     h->avctp_asked=h->avctp_ends=0;
     h->vol_owned=false;          // the pump's detach above took the volume back, if it was owned
+    h->vol_waiting=false;
 }
 // The roles, settled and claimed (the table above). `lnow` is L2CAP's
 // clock, for the channels this closes.
@@ -847,26 +848,38 @@ static uint8_t host_avrcp_playback(const bt_host_t *h)
 //
 // When the headphones have absolute volume, /dev/volume IS their volume:
 // the seam's number is carried out at their end, and the seam applies no
-// gain. CONNECTING NEVER MAKES ANYTHING LOUDER: when ownership begins the
-// seam's number takes THEIR level first, and only then does the seam stop
-// applying its gain; nothing is sent to them. They get louder only when a
-// person writes a larger number or presses their own button.
+// gain. CONNECTING NEVER RAISES THE HEADPHONES' LEVEL, AND NEVER CHANGES THE
+// SOUND OF A STREAM THAT IS PLAYING: when ownership begins the seam's number
+// takes THEIR level first, and only then does the seam stop applying its
+// gain; nothing is sent to them; and it begins only on a tick where that
+// cannot change what is heard (no stream going out, or the seam at unity
+// already). They get louder only when a person writes a larger number or
+// presses their own button. The cost of one number: a stream that STARTS
+// owned plays at their own level whatever /dev/volume held before, which
+// can be louder than the seam's gain would have made it.
 //
 // Ownership is a STATE, decided every tick with the volume ops (all three;
 // without them nothing is owned): OWNED while AVRCP is READY and the pump
 // is the seam's sink (attached, from the stream's open to the session's
-// end). The seam takes it back by itself at every attach and detach.
+// end). It BEGINS only while AVDTP is not starting, streaming or
+// suspending, or the seam's number is 100; until then it waits
+// (`vol_waiting`) and /dev/volume is the seam's gain. Ownership already
+// held goes on through a stream. The seam takes it back by itself at every
+// attach and detach.
 //
 //   the tick finds              | it does
 //   ----------------------------+-----------------------------------------------
-//   owned, not yet the seam's   | volume_set(their level, as 0..100), THEN
-//                               | owns_volume(true); their level is the one
+//   owned, not yet the seam's,  | nothing: waiting. The number stays the
+//   a stream going out and the  | person's and the gain theirs
+//   number below 100            |
+//   owned, not yet the seam's,  | volume_set(their level, as 0..100), THEN
+//   otherwise                   | owns_volume(true); their level is the one
 //                               | shared, and their serial taken. Nothing sent
 //   owned, and the seam's       | the number now differs from what the shared
 //                               | level converts to: a write of ours, sent as
 //                               | ONE Set, and its level is the one shared.
 //                               | Then, AVRCP's serial moved (their CHANGED,
-//                               | INTERIM or a Set's answer): their level is
+//                               | INTERIM or a Set's ACCEPTED): their level is
 //                               | the one shared, written to the seam only if
 //                               | it converts to another number. Nothing sent
 //   not owned, the seam's       | owns_volume(false): the number stays what it
@@ -890,11 +903,18 @@ static void host_volume_tick(bt_host_t *h)
     if(!host_volume_ops(h)) return;
     const bt_a2dp_ops_t *o=h->a2dp_ops;
     uint8_t theirs;
+    h->vol_waiting=false;
     if(!bt_avrcp_volume(&h->avrcp,&theirs) || !h->a2dp.attached) {
         if(h->vol_owned) { (void)o->owns_volume(h->a2dp_ctx,false); h->vol_owned=false; }
         return;
     }
     if(!h->vol_owned) {
+        // Not while sound may be going out, unless the seam is at unity
+        // already: the gain would step up with their level unchanged.
+        bt_avdtp_state_t st=bt_avdtp_state(&h->avdtp);
+        h->vol_waiting=(st==BT_AVDTP_STARTING || st==BT_AVDTP_STREAMING || st==BT_AVDTP_SUSPENDING) &&
+                       o->volume_now(h->a2dp_ctx)!=100;
+        if(h->vol_waiting) return;
         // The order is the rule: a seam that applied no gain while it still
         // held its old number would have that number sent to them as a write.
         if(!o->volume_set(h->a2dp_ctx,host_volume_number(theirs)) || !o->owns_volume(h->a2dp_ctx,true)) return;
@@ -1607,6 +1627,9 @@ static size_t host_remote_status(const bt_host_t *h,char *out,size_t used,size_t
         n=snprintf(out+used,cap-used,"volume: the headphones' (/dev/volume %u is carried out at their end, "
                    "the seam applies no gain); level shared %u/127",
                    (unsigned)host_volume_number(h->vol_raw),(unsigned)h->vol_raw);
+    else if(h->vol_waiting)
+        n=snprintf(out+used,cap-used,"volume: the seam's (its gain follows /dev/volume); the headphones' once the "
+                   "stream stops, since taking it now would change the sound");
     else n=snprintf(out+used,cap-used,"volume: the seam's (its gain follows /dev/volume)");
     if(n<0) return used;
     used+=(size_t)n<cap-used?(size_t)n:cap-used-1;

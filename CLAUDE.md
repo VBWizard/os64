@@ -565,9 +565,14 @@ virtio because its drain waits for the tick.
   twice a connection). **While AVRCP is ready and the pump is the seam's
   sink, `/dev/volume` IS the headphones' volume** (§ Slot 2's volume):
   the seam applies no gain, a write becomes one Set Absolute Volume, and
-  their own buttons move the number. Connecting never makes anything
-  louder: the number takes THEIR level first, then the seam stops
-  applying its gain, and nothing is sent to them. Their play, pause,
+  their own buttons move the number. Connecting never raises the
+  headphones' level and never changes the sound of a stream that is
+  playing: the number takes THEIR level first, then the seam stops
+  applying its gain, nothing is sent to them, and ownership waits while a
+  stream is under way with `/dev/volume` below 100. The cost of one
+  number: a stream that STARTS owned plays at their own level whatever
+  `/dev/volume` held before, which can be louder than the seam's gain
+  would have made it. Their play, pause,
   next and previous presses are answered, counted and logged under
   `DEBUG_USB`, and do nothing yet (§ Slot 2's buttons). Slot 2's status
   shows the `avctp channel:`, AVRCP's lines, `volume:` and `buttons:`.

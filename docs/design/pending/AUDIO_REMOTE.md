@@ -476,24 +476,36 @@ REJECTED; BlueZ waits 10 s for a control answer where we wait 2 s twice.
 volume.** One number, one place to set it, and the buttons on the cup move
 the same number.
 
-**The rule that comes first: connecting never makes anything louder.**
-When ownership begins, `/dev/volume` takes THEIR level; nothing is sent to
-them. The first design set the headphones to whatever `/dev/volume` held,
-which is 100 on a machine nobody has touched: full volume, in someone's
-ears, the moment the link came up, with no hand on anything. After this
-rule, the headphones get louder only when a person writes a larger number
-or presses their own button.
+**The rule that comes first: connecting never raises the headphones'
+level, and never changes the sound of a stream that is playing.** When
+ownership begins, `/dev/volume` takes THEIR level; nothing is sent to them.
+The first design set the headphones to whatever `/dev/volume` held, which
+is 100 on a machine nobody has touched: full volume, in someone's ears, the
+moment the link came up, with no hand on anything. After this rule, the
+headphones get louder only when a person writes a larger number or presses
+their own button. And ownership BEGINS only when taking it cannot change
+what is heard: no stream starting, streaming or suspending, or the seam's
+number at 100 (unity already, so their level times unity is the sound
+there was). A stream playing at the seam's gain when AVRCP becomes ready
+keeps that gain, and the person's number, until it stops.
+
+**The cost of one number, said plainly**: a stream that STARTS owned plays
+at the headphones' own level whatever `/dev/volume` held before, which can
+be louder than the seam's gain would have made it. `/dev/volume` reads
+their level from the moment ownership begins, so what it says is what is
+heard; but a person who left it at 20 and comes back to headphones at their
+own 80 hears 80.
 
 Ownership is a STATE, decided every pass, never an edge: the sink owns the
 volume while AVRCP is `READY` and the pump is the seam's sink (it is the
 sink only from the stream's `open` to its end, and the seam ignores a sink
-that is not the sink). The seam itself drops ownership whenever a sink
-attaches or detaches, so no later sink can inherit a seam that applies no
-gain.
+that is not the sink), beginning only on a pass the rule above allows. The
+seam itself drops ownership whenever a sink attaches or detaches, so no
+later sink can inherit a seam that applies no gain.
 
 | Event | What happens |
 |---|---|
-| Ownership begins | `/dev/volume` becomes their level (their INTERIM's 0 to 127, as 0 to 100). THEN the seam stops applying its own gain. Headphones that say 0 read 0 |
+| Ownership begins | `/dev/volume` becomes their level (their INTERIM's 0 to 127, as 0 to 100). THEN the seam stops applying its own gain. Headphones that say 0 read 0. Not while a stream is under way with `/dev/volume` below 100: it waits for the stream to stop |
 | A write to `/dev/volume` | The seam's number changes; the host, which reads the seam's volume every pass while it owns it, sees the change and sends Set Absolute Volume |
 | The volume buttons on the cup | They announce CHANGED; the host puts their level in the seam; nothing is sent back |
 | Ownership ends (the stream's session ends, AVRCP leaves `READY`, the link drops) | The seam applies its gain again, at the number it holds. That can only be quieter or the same |
@@ -634,6 +646,16 @@ the design left open, and what differs:
   is cleared wherever the seam takes it back: the pump's attach and detach
   (the host's wrappers of those ops), the link starting over, and a failed
   controller's detach.
+- **Ownership waits while a stream is under way** (AVDTP starting,
+  streaming or suspending: suspending too, since a refused Suspend goes on
+  streaming) unless the seam's number is 100. Without the wait, AVRCP
+  becoming ready mid-song (our request at two seconds, the FAILED retry
+  that playing starts, AVCTP closing and opening again under a stream)
+  would take the gain to unity with their level unchanged, up to 28 dB
+  louder with no hand on anything, and overwrite the person's number. Waiting, `/dev/volume` is the seam's gain and slot 2's `volume:`
+  line says the headphones will have it once the stream stops. The stream
+  a player opens on a connected link is owned from the start: the pump
+  attaches at AVDTP's `open`, long before the first sound.
 - **A write and their level in one tick**: the write is sent first, then
   their level is taken into the seam; the answer to our Set, arriving
   later, puts the write back. Whichever arrives last is believed, as part R
@@ -661,16 +683,22 @@ the design left open, and what differs:
 - **AVRCP's clock** is AVDTP's: `now_us / 1000`.
 
 Proof, as built: `tools/test_audio_stream_host.sh` (the ownership rule in
-the random rounds' model and a named case; 126 mutants in all, 13 of them
+the random rounds' model and a named case; 126 mutants in all, 12 of them
 the rule's) and `tools/test_bt_multi_host.sh`: model headphones with
 AVCTP and both AVRCP roles (absolute volume or none; a channel opened
-promptly, in a crossing, or never; Sets taken as asked or rounded to even
-levels), the cases § Proof lists, the playback status heard as playing,
-paused and stopped, their channel arriving after ours carries AVRCP, and
-part Z's whole cycle beside a typing keyboard and a moving mouse with
-AVRCP talking on the dozing link. The volume rule's order, a Set at the
-start, a level sent back, our channel kept in a crossing, a third request,
-the two-second wait, a parked message left in place, volume presses while
+promptly, in a crossing, or never; Sets taken as asked, rounded to even
+levels, rejected or never answered; commands unanswered while busy), the
+cases § Proof lists, the playback status heard as playing, paused and
+stopped, their channel arriving after ours carries AVRCP, AVRCP ready
+mid-stream (at 20 and at 100, after AVCTP closes and opens again, and
+through the FAILED retry), and part Z's whole cycle beside a typing
+keyboard and a moving mouse with AVRCP talking on the dozing link. The
+model seam keeps the gain it would apply, and every tick of a playing
+stream asserts that gain times their level has not risen unless a write
+of ours or a press of theirs came within the ticks their answer takes.
+The volume rule's order, a Set at the start, a level sent back, the
+mid-stream wait, our channel kept in a crossing, a third request, the
+two-second wait, a parked message left in place, volume presses while
 `READY` and the playback status each fail the suite when broken by hand.
 `bt_host.c` has no mutant harness of its own.
 
@@ -693,9 +721,11 @@ change:
 
 1. **`/dev/volume` becomes the headphones' own volume** when they support
    being set, and the seam's gain steps aside. One number.
-2. **Connecting never raises the volume.** `/dev/volume` adopts THEIR
-   level when ownership begins. So after connecting it will read what the
-   headphones were at, not 100.
+2. **Connecting never raises the headphones' volume, and never changes a
+   song that is playing.** `/dev/volume` adopts THEIR level when ownership
+   begins, which waits for a playing stream to stop. So after connecting
+   it will read what the headphones were at, not 100; and the next song
+   plays at their level, which can be louder than `/dev/volume` had it.
 3. **A link earns sniff after ten idle seconds**, and is woken before our
    stream starts, waiting at most a second for it.
 4. **AVRCP 1.4 is what we claim**, the lowest version with absolute

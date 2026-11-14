@@ -186,7 +186,9 @@ typedef struct {
     // volume serial as last taken. Counted since start-up: ownerships
     // begun, Sets sent, levels of theirs that changed the seam's number,
     // and volume presses applied to it.
-    bool vol_owned;
+    // `vol_waiting`: this tick found the volume to be owned but did not
+    // begin, a stream being under way with the seam below unity.
+    bool vol_owned, vol_waiting;
     uint8_t vol_raw;
     uint32_t vol_serial;
     uint32_t vol_ownerships, vol_sets, vol_taken, vol_presses;
