@@ -1355,7 +1355,9 @@ rather than to prove something stayed in `/bin` (`gbounce`, `glogo`,
 - **The lifeboat carries `/tests` too**: it exists to be trusted while
   everything else is suspect, and one that cannot demonstrate the CPU, the
   kernel and the syscall floor are sound is asking to be taken on faith at
-  the worst possible moment. ~750KB of its ~59MB spare.
+  the worst possible moment. Its `/lib` is copied without DWARF (the root
+  GNUmakefile says why): the partition is small, and the debug info was
+  most of every library.
 - **`PATH=/bin:/tests`, in that order** (seeded in `kernel.c`), so fixtures
   stay typeable while a fixture can never shadow a command of the same name.
 - **Fixtures draw link bases from the same pool as apps** (`app_bases.py` is

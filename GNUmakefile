@@ -633,8 +633,7 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	# THE LIFEBOAT CARRIES THE PROOF HARNESS TOO (Chris's call, 2026-08-29):
 	# a lifeboat exists to be trusted while everything else is suspect, and one
 	# that cannot demonstrate the CPU, the kernel and the syscall floor are
-	# sound is asking to be taken on faith at the worst possible moment. It
-	# costs ~750KB of the 59MB this partition has spare.
+	# sound is asking to be taken on faith at the worst possible moment.
 	$(foreach t,$(USERLAND_TESTBINS),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(t) ::/tests/$(notdir $(t));)
 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,\
@@ -654,8 +653,15 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	# rather than a partition full of programs that cannot start. Iterated
 	# like the apps above — a second library added to USERLAND_LIBS must not
 	# be able to rebuild the image and still be missing from it.
+	# COPIED WITHOUT THEIR DWARF (objcopy --strip-debug), because the
+	# partition is small and the debug info is most of a library: nothing on
+	# a running os64 reads it (the kernel's stack traces read the symbol
+	# table, which is kept), and the debugger reads userland/bin on the host.
+	# `mdir -i disk/os64.img@@1048576 -/ ::` says what is left free.
+	@mkdir -p $(EXT2_STAGING)/lifeboat-lib
 	$(foreach l,$(USERLAND_LIBS),\
-	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(l) ::/lib/$(notdir $(l));)
+	    x86_64-elf-objcopy --strip-debug $(l) $(EXT2_STAGING)/lifeboat-lib/$(notdir $(l)) && \
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(EXT2_STAGING)/lifeboat-lib/$(notdir $(l)) ::/lib/$(notdir $(l));)
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 	# husk's startup script. It rides the FAT partition rather than root
@@ -723,7 +729,6 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	# kernel, and a running os64 can update BOTH through /fat. ISO and QEMU
 	# boots never see any of it: Limine prefers its own boot volume's conf
 	# (proven by decoy in both firmwares — see limine-hd.conf's header).
-	# ~4.3MB against the partition's ~54MB of headroom.
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/boot > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/boot/limine > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/EFI > /dev/null 2>&1
