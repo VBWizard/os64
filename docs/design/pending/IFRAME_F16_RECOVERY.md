@@ -4,8 +4,10 @@ Implementation brief and proposed PR cuts, 2026-11-13. Source audit baseline:
 `6e25f3232aa1238b7a4f1570cfa0f79f8b229dde`, merged F.3b (#553), embedding
 ABI 5, prepared engine identity
 `73ef22d5921da4ccb6d9482de6edfc6d9787dbccd17cc09de8205f2cfd70c280`.
-**Design proposal: recovery is not implemented or proved.** Existing
-runtime-wide failures remain the shipping contract. This brief owns F.16;
+**Implementation status:** the opt-in libjs/native chapter is described in
+[IFRAME_F16_CHILD_RECOVERY.md](IFRAME_F16_CHILD_RECOVERY.md). Default/diagnostic
+constructors and browser consumers retain runtime-wide failure. DOM/native
+certification and host acceptance remain open. This brief owns F.16;
 WindowProxy/security is F.4, reclamation is F.15, and frame loading remains
 in the integration slices. No visible frames or slot reuse are enabled here.
 
@@ -20,7 +22,7 @@ permits direct retained-function calls; failure containment is stronger.
 The first supported candidate is deliberately narrow: an execution timeout
 with a complete affected set of child environments, a closed outer task,
 proved engine/native unwind, and no surviving engine jobs. A deadline inside
-a child-owned Promise job may qualify under the same rules. Pending native
+a child-owned Promise job remains outside the initial implemented subset. Pending native
 sibling timers/events can survive and retain their order. A native host must
 certify its invariants before recovery; arbitrary embedders do not acquire
 that certification merely by enabling an option.
@@ -228,6 +230,9 @@ PR scope, not additional completed tracker rows.
 Split F16b by entry family if needed, keeping primitives dormant until complete.
 Do not combine an incomplete entry guard with enabled recovery. F16d may split
 native preparation from host adoption; neither alone finishes the slice.
+The remaining work is batched as reviewable behavior chapters: libjs recovery
+with its engine/helpers/lifecycle/proofs; DOM/native containment; coherent host
+acceptance, with an extra native-proof chapter if review size requires it.
 No automatic merge or reviewer-comment loop is part of these cuts.
 
 ## Validation planned before implementation

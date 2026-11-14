@@ -1,0 +1,649 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -364,6 +364,10 @@
+     JSExecutionScope *execution_scopes;
+     BOOL execution_scope_tracking;
+     BOOL executable_failure_seen;
++    BOOL recovery_barrier;
++    uint64_t recovery_generation;
++    unsigned native_callback_depth;
++    unsigned recovery_gc_depth;
+ 
+     JSInterruptHandler *interrupt_handler;
+     void *interrupt_opaque;
+@@ -2296,10 +2300,74 @@
+ #define free(p) free_is_forbidden(p)
+ #define realloc(p,s) realloc_is_forbidden(p,s)
+ 
++/* These markers cover engine-dispatched execution and native callouts.
++   The owner must separately exclude native work outside the engine. */
++static BOOL js_execution_idle(JSRuntime *rt)
++{
++    return !rt->execution_scopes && !rt->current_stack_frame &&
++        !rt->native_call_contexts && !rt->settings_depth &&
++        !rt->native_callback_depth && !rt->recovery_gc_depth && rt->gc_phase == JS_GC_PHASE_NONE;
++}
++
++JS_BOOL JS_GetExecutionState(JSRuntime *rt, JSExecutionState *out)
++{
++    if (!out)
++        return FALSE;
++    *out = (JSExecutionState){0};
++    if (!rt)
++        return FALSE;
++    out->tracking = rt->execution_scope_tracking;
++    out->callback_depth = rt->native_callback_depth;
++    out->scopes = rt->execution_scopes != NULL;
++    out->interpreter = rt->current_stack_frame != NULL;
++    out->native_callbacks = rt->native_call_contexts != NULL || rt->native_callback_depth != 0;
++    out->settings = rt->settings_depth != 0;
++    out->gc = rt->recovery_gc_depth != 0 || rt->gc_phase != JS_GC_PHASE_NONE;
++    out->blocked = rt->recovery_barrier;
++    return TRUE;
++}
++
++JS_BOOL JS_BeginRecoveryBarrier(JSRuntime *rt, JSRecoveryBarrier *out)
++{
++    if (!rt || !out || !rt->execution_scope_tracking || rt->recovery_barrier ||
++        !js_execution_idle(rt) || rt->recovery_generation == UINT64_MAX)
++        return FALSE;
++    rt->recovery_generation++;
++    rt->recovery_barrier = TRUE;
++    *out = (JSRecoveryBarrier){rt, rt->recovery_generation};
++    return TRUE;
++}
++
++JS_BOOL JS_EndRecoveryBarrier(JSRuntime *rt, const JSRecoveryBarrier *barrier)
++{
++    if (!rt || !barrier || barrier->runtime != rt || !rt->recovery_barrier ||
++        barrier->generation != rt->recovery_generation || !js_execution_idle(rt))
++        return FALSE;
++    rt->recovery_barrier = FALSE;
++    return TRUE;
++}
++
++/* Instrument opt-in native callouts without changing their callback context
++   or adding script/settings provenance. Native callbacks must return in C. */
++#define JS_ENGINE_CALLBACK(rt_arg, call)                         \
++    ({ JSRuntime *const cb_rt = (rt_arg);                        \
++       const BOOL cb_track = cb_rt->execution_scope_tracking;    \
++       if (cb_track) cb_rt->native_callback_depth++;             \
++       __auto_type cb_result = (call);                          \
++       if (cb_track) cb_rt->native_callback_depth--;             \
++       cb_result; })
++#define JS_ENGINE_CALLBACK_VOID(rt_arg, call) do {               \
++    JSRuntime *const cb_rt = (rt_arg);                           \
++    const BOOL cb_track = cb_rt->execution_scope_tracking;       \
++    if (cb_track) cb_rt->native_callback_depth++;                \
++    (call);                                                     \
++    if (cb_track) cb_rt->native_callback_depth--;                \
++} while (0)
++
+ BOOL JS_MarkContextExecutableFailed(JSContext *ctx)
+ {
+     JSRuntime *rt = ctx->rt;
+-    if (!rt->execution_scope_tracking || rt->execution_scopes || rt->current_stack_frame)
++    if (!rt->execution_scope_tracking || !js_execution_idle(rt))
+         return FALSE;
+     ctx->executable_failed = TRUE;
+     rt->executable_failure_seen = TRUE;
+@@ -2520,6 +2588,11 @@
+     JSValue res;
+     int i, ret;
+ 
++    if (rt->recovery_barrier) {
++        if (pctx)
++            *pctx = NULL;
++        return -1;
++    }
+     e = js_job_first(rt, group);
+     if (!e) {
+         if (pctx)
+@@ -2538,7 +2611,7 @@
+         (e->activity && e->activity->executable_failed))
+         res = js_throw_failed_code(ctx);
+     else
+-        res = e->job_func(ctx, e->argc, (JSValueConst *)e->argv);
++        res = JS_ENGINE_CALLBACK(rt, e->job_func(ctx, e->argc, (JSValueConst *)e->argv));
+     for(i = 0; i < e->argc; i++)
+         JS_FreeValue(ctx, e->argv[i]);
+     if (JS_IsException(res))
+@@ -3153,6 +3226,8 @@
+     if (!entry || !body || !out || (incumbent && incumbent->rt != entry->rt))
+         return FALSE;
+     rt = entry->rt;
++    if (rt->recovery_barrier)
++        return FALSE;
+     if (rt->settings_depth == JS_SETTINGS_SCOPE_LIMIT)
+         return FALSE;
+     previous_current = rt->settings_current;
+@@ -6761,7 +6836,7 @@
+ 
+     finalizer = rt->class_array[p->class_id].finalizer;
+     if (finalizer)
+-        (*finalizer)(rt, JS_MKPTR(JS_TAG_OBJECT, p));
++        JS_ENGINE_CALLBACK_VOID(rt, (*finalizer)(rt, JS_MKPTR(JS_TAG_OBJECT, p)));
+ 
+     /* fail safe */
+     p->class_id = 0;
+@@ -6954,7 +7029,7 @@
+         case JS_TAG_OBJECT:
+         case JS_TAG_FUNCTION_BYTECODE:
+         case JS_TAG_MODULE:
+-            mark_func(rt, JS_VALUE_GET_PTR(val));
++            JS_ENGINE_CALLBACK_VOID(rt, mark_func(rt, JS_VALUE_GET_PTR(val)));
+             break;
+         default:
+             break;
+@@ -7003,7 +7078,7 @@
+                 JSClassGCMark *gc_mark;
+                 gc_mark = rt->class_array[p->class_id].gc_mark;
+                 if (gc_mark)
+-                    gc_mark(rt, JS_MKPTR(JS_TAG_OBJECT, p), mark_func);
++                    JS_ENGINE_CALLBACK_VOID(rt, gc_mark(rt, JS_MKPTR(JS_TAG_OBJECT, p), mark_func));
+             }
+         }
+         break;
+@@ -7212,6 +7287,9 @@
+ 
+ static void JS_RunGCInternal(JSRuntime *rt, BOOL remove_weak_objects)
+ {
++    const BOOL tracking = rt->execution_scope_tracking;
++    if (tracking)
++        rt->recovery_gc_depth++;
+     if (remove_weak_objects) {
+         /* free the weakly referenced object or symbol structures, delete
+            the associated Map/Set entries and queue the finalization
+@@ -7228,6 +7306,8 @@
+ 
+     /* free the GC objects in a cycle */
+     gc_free_cycles(rt);
++    if (tracking)
++        rt->recovery_gc_depth--;
+ }
+ 
+ void JS_RunGC(JSRuntime *rt)
+@@ -8288,7 +8368,7 @@
+     JSRuntime *rt = ctx->rt;
+     ctx->interrupt_counter = JS_INTERRUPT_COUNTER_INIT;
+     if (rt->interrupt_handler) {
+-        if (rt->interrupt_handler(rt, rt->interrupt_opaque)) {
++        if (JS_ENGINE_CALLBACK(rt, rt->interrupt_handler(rt, rt->interrupt_opaque))) {
+             JS_ThrowInterrupted(ctx);
+             return -1;
+         }
+@@ -8350,7 +8430,7 @@
+         const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
+         int ret;
+         if (em && em->set_prototype) {
+-            ret = em->set_prototype(ctx, obj, proto_val);
++            ret = JS_ENGINE_CALLBACK(ctx->rt, em->set_prototype(ctx, obj, proto_val));
+             if (ret == 0 && throw_flag) {
+                 JS_ThrowTypeError(ctx, "proxy: bad prototype");
+                 return -1;
+@@ -8459,7 +8539,7 @@
+         if (unlikely(p->is_exotic)) {
+             const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
+             if (em && em->get_prototype) {
+-                return em->get_prototype(ctx, obj);
++                return JS_ENGINE_CALLBACK(ctx->rt, em->get_prototype(ctx, obj));
+             }
+         }
+         p = p->shape->proto;
+@@ -8647,7 +8727,7 @@
+     if (JS_VALUE_GET_OBJ(obj) != JS_VALUE_GET_OBJ(ctx->global_obj) ||
+         __JS_AtomIsTaggedInt(prop) || JS_AtomGetKind(ctx, prop) != JS_ATOM_KIND_STRING)
+         return;
+-    ctx->global_miss(ctx->global_miss_opaque, JS_AtomGetStr(ctx, buf, sizeof(buf), prop));
++    JS_ENGINE_CALLBACK_VOID(ctx->rt, ctx->global_miss(ctx->global_miss_opaque, JS_AtomGetStr(ctx, buf, sizeof(buf), prop)));
+ }
+ 
+ JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
+@@ -8767,7 +8847,7 @@
+                         /* Note: if 'p' is a prototype, it can be
+                            freed in the called function */
+                         obj1 = JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
+-                        retval = em->get_property(ctx, obj1, prop, this_obj);
++                        retval = JS_ENGINE_CALLBACK(ctx->rt, em->get_property(ctx, obj1, prop, this_obj));
+                         JS_FreeValue(ctx, obj1);
+                         return retval;
+                     }
+@@ -8779,7 +8859,7 @@
+                         /* Note: if 'p' is a prototype, it can be
+                            freed in the called function */
+                         obj1 = JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
+-                        ret = em->get_own_property(ctx, &desc, obj1, prop);
++                        ret = JS_ENGINE_CALLBACK(ctx->rt, em->get_own_property(ctx, &desc, obj1, prop));
+                         JS_FreeValue(ctx, obj1);
+                         if (ret < 0)
+                             return JS_EXCEPTION;
+@@ -9108,8 +9188,8 @@
+         } else {
+             const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
+             if (em && em->get_own_property_names) {
+-                if (em->get_own_property_names(ctx, &tab_exotic, &exotic_count,
+-                                               JS_MKPTR(JS_TAG_OBJECT, p)))
++                if (JS_ENGINE_CALLBACK(ctx->rt, em->get_own_property_names(ctx, &tab_exotic, &exotic_count,
++                                               JS_MKPTR(JS_TAG_OBJECT, p))))
+                     return -1;
+                 for(i = 0; i < exotic_count; i++) {
+                     atom = tab_exotic[i].atom;
+@@ -9329,8 +9409,8 @@
+         } else {
+             const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
+             if (em && em->get_own_property) {
+-                return em->get_own_property(ctx, desc,
+-                                            JS_MKPTR(JS_TAG_OBJECT, p), prop);
++                return JS_ENGINE_CALLBACK(ctx->rt, em->get_own_property(ctx, desc,
++                                            JS_MKPTR(JS_TAG_OBJECT, p), prop));
+             }
+         }
+     }
+@@ -9358,7 +9438,7 @@
+     if (unlikely(p->is_exotic)) {
+         const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
+         if (em && em->is_extensible) {
+-            return em->is_extensible(ctx, obj);
++            return JS_ENGINE_CALLBACK(ctx->rt, em->is_extensible(ctx, obj));
+         }
+     }
+     return p->extensible;
+@@ -9386,7 +9466,7 @@
+         } else {
+             const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
+             if (em && em->prevent_extensions) {
+-                return em->prevent_extensions(ctx, obj);
++                return JS_ENGINE_CALLBACK(ctx->rt, em->prevent_extensions(ctx, obj));
+             }
+         }
+     }
+@@ -9410,7 +9490,7 @@
+             if (em && em->has_property) {
+                 /* has_property can free the prototype */
+                 obj1 = JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
+-                ret = em->has_property(ctx, obj1, prop);
++                ret = JS_ENGINE_CALLBACK(ctx->rt, em->has_property(ctx, obj1, prop));
+                 JS_FreeValue(ctx, obj1);
+                 return ret;
+             }
+@@ -9841,7 +9921,7 @@
+         } else {
+             const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
+             if (em && em->delete_property) {
+-                return em->delete_property(ctx, JS_MKPTR(JS_TAG_OBJECT, p), atom);
++                return JS_ENGINE_CALLBACK(ctx->rt, em->delete_property(ctx, JS_MKPTR(JS_TAG_OBJECT, p), atom));
+             }
+         }
+     }
+@@ -10230,8 +10310,8 @@
+                     if (em->set_property) {
+                         /* set_property can free the prototype */
+                         obj1 = JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, p1));
+-                        ret = em->set_property(ctx, obj1, prop,
+-                                               val, this_obj, flags);
++                        ret = JS_ENGINE_CALLBACK(ctx->rt, em->set_property(ctx, obj1, prop,
++                                               val, this_obj, flags));
+                         JS_FreeValue(ctx, obj1);
+                         JS_FreeValue(ctx, val);
+                         return ret;
+@@ -10239,8 +10319,8 @@
+                     if (em->get_own_property) {
+                         /* get_own_property can free the prototype */
+                         obj1 = JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, p1));
+-                        ret = em->get_own_property(ctx, &desc,
+-                                                   obj1, prop);
++                        ret = JS_ENGINE_CALLBACK(ctx->rt, em->get_own_property(ctx, &desc,
++                                                   obj1, prop));
+                         JS_FreeValue(ctx, obj1);
+                         if (ret < 0) {
+                             JS_FreeValue(ctx, val);
+@@ -10635,8 +10715,8 @@
+             const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
+             if (em) {
+                 if (em->define_own_property) {
+-                    return em->define_own_property(ctx, JS_MKPTR(JS_TAG_OBJECT, p),
+-                                                   prop, val, getter, setter, flags);
++                    return JS_ENGINE_CALLBACK(ctx->rt, em->define_own_property(ctx, JS_MKPTR(JS_TAG_OBJECT, p),
++                                                   prop, val, getter, setter, flags));
+                 }
+                 ret = JS_IsExtensible(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
+                 if (ret < 0)
+@@ -14136,12 +14216,12 @@
+ 
+ static void js_putc(JSPrintValueState *s, char c)
+ {
+-    s->write_func(s->write_opaque, &c, 1);
++    JS_ENGINE_CALLBACK_VOID(s->rt, s->write_func(s->write_opaque, &c, 1));
+ }
+ 
+ static void js_puts(JSPrintValueState *s, const char *str)
+ {
+-    s->write_func(s->write_opaque, str, strlen(str));
++    JS_ENGINE_CALLBACK_VOID(s->rt, s->write_func(s->write_opaque, str, strlen(str)));
+ }
+ 
+ static void __attribute__((format(printf, 2, 3))) js_printf(JSPrintValueState *s, const char *fmt, ...)
+@@ -14152,7 +14232,7 @@
+     va_start(ap, fmt);
+     vsnprintf(buf, sizeof(buf), fmt, ap);
+     va_end(ap);
+-    s->write_func(s->write_opaque, buf, strlen(buf));
++    JS_ENGINE_CALLBACK_VOID(s->rt, s->write_func(s->write_opaque, buf, strlen(buf)));
+ }
+ 
+ static void js_print_float64(JSPrintValueState *s, double d)
+@@ -14161,7 +14241,7 @@
+     char buf[32];
+     int len;
+     len = js_dtoa(buf, d, 10, 0, JS_DTOA_FORMAT_FREE | JS_DTOA_MINUS_ZERO, &dtoa_mem);
+-    s->write_func(s->write_opaque, buf, len);
++    JS_ENGINE_CALLBACK_VOID(s->rt, s->write_func(s->write_opaque, buf, len));
+ }
+ 
+ static uint32_t js_string_get_length(JSValueConst val)
+@@ -14228,7 +14308,7 @@
+                     goto escape;
+                 }
+                 l = unicode_to_utf8(buf, c);
+-                s->write_func(s->write_opaque, (char *)buf, l);
++                JS_ENGINE_CALLBACK_VOID(s->rt, s->write_func(s->write_opaque, (char *)buf, l));
+             }
+             break;
+         }
+@@ -14279,7 +14359,7 @@
+     size_t len;
+     cstr = JS_ToCStringLen(s->ctx, &len, val);
+     if (cstr) {
+-        s->write_func(s->write_opaque, cstr, len);
++        JS_ENGINE_CALLBACK_VOID(s->rt, s->write_func(s->write_opaque, cstr, len));
+         JS_FreeCString(s->ctx, cstr);
+     }
+ }
+@@ -14464,7 +14544,7 @@
+         len = strlen(str);
+         if (len > 0 && str[len - 1] == '\n')
+             len--;
+-        s->write_func(s->write_opaque, str, len);
++        JS_ENGINE_CALLBACK_VOID(s->rt, s->write_func(s->write_opaque, str, len));
+         
+         JS_FreeCString(s->ctx, str);
+     }
+@@ -17051,6 +17131,8 @@
+ 
+             /* This dispatch bypasses JS_CallInternal to avoid result boxing,
+                so containment and native attribution must precede the callback. */
++            if (rt->recovery_barrier)
++                goto fail;
+             if (!js_failed_call_allowed(ctx, method)) {
+                 js_throw_failed_code(ctx);
+                 goto fail;
+@@ -18462,6 +18544,8 @@
+     JSExecutionScope scope;
+     JSExecutionScopeInfo info;
+     JSValue result;
++    if (rt->recovery_barrier)
++        return JS_EXCEPTION;
+     if (rt->executable_failure_seen) {
+         JSValueConst code = func_obj;
+         if (flags & JS_CALL_FLAG_GENERATOR)
+@@ -21452,6 +21536,8 @@
+     JSRuntime *rt = ctx->rt;
+     JSExecutionScope scope;
+     JSValue result;
++    if (rt->recovery_barrier)
++        return JS_EXCEPTION;
+     if (!js_failed_call_allowed(ctx, func_obj))
+         return js_throw_failed_code(ctx);
+     if (!rt->execution_scope_tracking)
+@@ -30777,8 +30863,8 @@
+     if (!rt->module_normalize_func) {
+         cname = js_default_module_normalize_name(ctx, base_cname, cname1);
+     } else {
+-        cname = rt->module_normalize_func(ctx, base_cname, cname1,
+-                                          rt->module_loader_opaque);
++        cname = JS_ENGINE_CALLBACK(rt, rt->module_normalize_func(ctx, base_cname, cname1,
++                                          rt->module_loader_opaque));
+     }
+     if (!cname)
+         return NULL;
+@@ -30808,9 +30894,9 @@
+         return NULL;
+     }
+     if (rt->module_loader_has_attr) {
+-        m = rt->u.module_loader_func2(ctx, cname, rt->module_loader_opaque, attributes);
++        m = JS_ENGINE_CALLBACK(rt, rt->u.module_loader_func2(ctx, cname, rt->module_loader_opaque, attributes));
+     } else {
+-        m = rt->u.module_loader_func(ctx, cname, rt->module_loader_opaque);
++        m = JS_ENGINE_CALLBACK(rt, rt->u.module_loader_func(ctx, cname, rt->module_loader_opaque));
+     }
+     js_free(ctx, cname);
+     return m;
+@@ -31950,7 +32036,7 @@
+             }
+             JS_FreePropertyEnum(ctx, atoms, atoms_len);
+             if (ctx->rt->module_check_attrs &&
+-                ctx->rt->module_check_attrs(ctx, ctx->rt->module_loader_opaque, attributes) < 0) {
++                JS_ENGINE_CALLBACK(ctx->rt, ctx->rt->module_check_attrs(ctx, ctx->rt->module_loader_opaque, attributes)) < 0) {
+                 goto exception;
+             }
+             JS_FreeValue(ctx, attributes_obj);
+@@ -32214,7 +32300,7 @@
+     }
+     if (m->init_func) {
+         /* C module init : no asynchronous execution */
+-        if (m->init_func(ctx, m) < 0)
++        if (JS_ENGINE_CALLBACK(ctx->rt, m->init_func(ctx, m)) < 0)
+             goto fail;
+     } else {
+         JSValue promise;
+@@ -32485,7 +32571,7 @@
+     }
+     if (!JS_IsUndefined(rme->attributes) &&
+         ctx->rt->module_check_attrs &&
+-        ctx->rt->module_check_attrs(ctx, ctx->rt->module_loader_opaque, rme->attributes) < 0) {
++        JS_ENGINE_CALLBACK(ctx->rt, ctx->rt->module_check_attrs(ctx, ctx->rt->module_loader_opaque, rme->attributes)) < 0) {
+         return -1;
+     }
+     return js_parse_expect(s, '}');
+@@ -38091,6 +38177,10 @@
+     JSExecutionScope scope;
+     JSValue result;
+     JSContext *owner = ctx;
++    if (rt->recovery_barrier) {
++        JS_FreeValue(ctx, fun_obj);
++        return JS_EXCEPTION;
++    }
+     if (JS_VALUE_GET_TAG(fun_obj) == JS_TAG_FUNCTION_BYTECODE)
+         owner = ((JSFunctionBytecode *)JS_VALUE_GET_PTR(fun_obj))->realm;
+     else if (JS_VALUE_GET_TAG(fun_obj) == JS_TAG_MODULE)
+@@ -38101,7 +38191,7 @@
+     }
+     if (!rt->execution_scope_tracking)
+         return JS_EvalFunctionInternalImpl(ctx, fun_obj, this_obj, var_refs, sf);
+-    js_execution_scope_enter(rt, &scope, (JSExecutionScopeInfo){ ctx, ctx, JS_EXECUTION_SCOPE_EVAL_FUNCTION, JS_EXECUTION_CODE_UNKNOWN });
++    js_execution_scope_enter(rt, &scope, (JSExecutionScopeInfo){ ctx, owner, JS_VALUE_GET_TAG(fun_obj) == JS_TAG_MODULE ? JS_EXECUTION_SCOPE_MODULE_EVAL : JS_EXECUTION_SCOPE_EVAL_FUNCTION, JS_EXECUTION_CODE_UNKNOWN });
+     result = JS_EvalFunctionInternalImpl(ctx, fun_obj, this_obj, var_refs, sf);
+     js_execution_scope_leave(rt, &scope);
+     return result;
+@@ -38280,6 +38370,8 @@
+     JSRuntime *rt = ctx->rt;
+     JSExecutionScope scope;
+     JSValue result;
++    if (rt->recovery_barrier)
++        return JS_EXCEPTION;
+     if (ctx->executable_failed)
+         return js_throw_failed_code(ctx);
+     if (!rt->execution_scope_tracking)
+@@ -38350,7 +38442,7 @@
+                        eval_flags);
+ }
+ 
+-int JS_ResolveModule(JSContext *ctx, JSValueConst obj)
++static int js_resolve_module_entry(JSContext *ctx, JSValueConst obj)
+ {
+     if (JS_VALUE_GET_TAG(obj) == JS_TAG_MODULE) {
+         JSModuleDef *m = JS_VALUE_GET_PTR(obj);
+@@ -38364,6 +38456,22 @@
+         }
+     }
+     return 0;
++}
++
++int JS_ResolveModule(JSContext *ctx, JSValueConst obj)
++{
++    JSRuntime *rt = ctx->rt;
++    JSExecutionScope scope;
++    int result;
++    if (rt->recovery_barrier)
++        return -1;
++    if (!rt->execution_scope_tracking)
++        return js_resolve_module_entry(ctx, obj);
++    js_execution_scope_enter(rt, &scope, (JSExecutionScopeInfo){
++        ctx, ctx, JS_EXECUTION_SCOPE_MODULE_RESOLVE, JS_EXECUTION_CODE_UNKNOWN });
++    result = js_resolve_module_entry(ctx, obj);
++    js_execution_scope_leave(rt, &scope);
++    return result;
+ }
+ 
+ /*******************************************************************/
+@@ -48945,7 +49053,7 @@
+     JSContext *ctx = opaque;
+     JSRuntime *rt = ctx->rt;
+     return (rt->interrupt_handler && 
+-            rt->interrupt_handler(rt, rt->interrupt_opaque));
++            JS_ENGINE_CALLBACK(rt, rt->interrupt_handler(rt, rt->interrupt_opaque)));
+ }
+ 
+ void *lre_realloc(void *opaque, void *ptr, size_t size)
+@@ -54285,8 +54393,8 @@
+         return;
+     s->is_handled = TRUE;
+     if (s->promise_state == JS_PROMISE_REJECTED && ctx->rt->host_promise_rejection_tracker) {
+-        ctx->rt->host_promise_rejection_tracker(ctx, promise, s->promise_result, TRUE,
+-                                                ctx->rt->host_promise_rejection_tracker_opaque);
++        JS_ENGINE_CALLBACK_VOID(ctx->rt, ctx->rt->host_promise_rejection_tracker(ctx, promise, s->promise_result, TRUE,
++                                                ctx->rt->host_promise_rejection_tracker_opaque));
+     }
+ }
+ 
+@@ -54409,8 +54517,8 @@
+     if (s->promise_state == JS_PROMISE_REJECTED && !s->is_handled) {
+         JSRuntime *rt = ctx->rt;
+         if (rt->host_promise_rejection_tracker) {
+-            rt->host_promise_rejection_tracker(ctx, promise, value, FALSE,
+-                                               rt->host_promise_rejection_tracker_opaque);
++            JS_ENGINE_CALLBACK_VOID(ctx->rt, rt->host_promise_rejection_tracker(ctx, promise, value, FALSE,
++                                               rt->host_promise_rejection_tracker_opaque));
+         }
+     }
+ 
+@@ -55187,8 +55295,8 @@
+         if (s->promise_state == JS_PROMISE_REJECTED && !s->is_handled) {
+             JSRuntime *rt = ctx->rt;
+             if (rt->host_promise_rejection_tracker) {
+-                rt->host_promise_rejection_tracker(ctx, promise, s->promise_result,
+-                                                   TRUE, rt->host_promise_rejection_tracker_opaque);
++                JS_ENGINE_CALLBACK_VOID(ctx->rt, rt->host_promise_rejection_tracker(ctx, promise, s->promise_result,
++                                                   TRUE, rt->host_promise_rejection_tracker_opaque));
+             }
+         }
+         i = s->promise_state - JS_PROMISE_FULFILLED;
+@@ -57745,8 +57853,8 @@
+             // TOOD(bnoordhuis) resizing backing memory for SABs atomically
+             // is hard so we cheat and allocate |maxByteLength| bytes upfront
+             sab_alloc_len = max_len ? *max_len : len;
+-            abuf->data = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque,
+-                                                 max_int(sab_alloc_len, 1));
++            abuf->data = JS_ENGINE_CALLBACK(rt, rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque,
++                                                 max_int(sab_alloc_len, 1)));
+             if (!abuf->data)
+                 goto fail;
+             memset(abuf->data, 0, sab_alloc_len);
+@@ -57759,7 +57867,7 @@
+     } else {
+         if (class_id == JS_CLASS_SHARED_ARRAY_BUFFER &&
+             rt->sab_funcs.sab_dup) {
+-            rt->sab_funcs.sab_dup(rt->sab_funcs.sab_opaque, buf);
++            JS_ENGINE_CALLBACK_VOID(rt, rt->sab_funcs.sab_dup(rt->sab_funcs.sab_opaque, buf));
+         }
+         abuf->data = buf;
+     }
+@@ -57898,10 +58006,10 @@
+             }
+         }
+         if (abuf->shared && rt->sab_funcs.sab_free) {
+-            rt->sab_funcs.sab_free(rt->sab_funcs.sab_opaque, abuf->data);
++            JS_ENGINE_CALLBACK_VOID(rt, rt->sab_funcs.sab_free(rt->sab_funcs.sab_opaque, abuf->data));
+         } else {
+             if (abuf->free_func)
+-                abuf->free_func(rt, abuf->opaque, abuf->data);
++                JS_ENGINE_CALLBACK_VOID(rt, abuf->free_func(rt, abuf->opaque, abuf->data));
+         }
+         js_free_rt(rt, abuf);
+     }
+@@ -58034,7 +58142,7 @@
+     if (!abuf || abuf->detached)
+         return;
+     if (abuf->free_func)
+-        abuf->free_func(ctx->rt, abuf->opaque, abuf->data);
++        JS_ENGINE_CALLBACK_VOID(ctx->rt, abuf->free_func(ctx->rt, abuf->opaque, abuf->data));
+     abuf->data = NULL;
+     abuf->byte_length = 0;
+     abuf->detached = TRUE;
+@@ -58139,7 +58247,7 @@
+                     return res;
+                 new_abuf = JS_GetOpaque2(ctx, res, JS_CLASS_ARRAY_BUFFER);
+                 memcpy(new_abuf->data, abuf->data, min_int(old_len, new_len));
+-                abuf->free_func(ctx->rt, abuf->opaque, abuf->data);
++                JS_ENGINE_CALLBACK_VOID(ctx->rt, abuf->free_func(ctx->rt, abuf->opaque, abuf->data));
+             } else {
+                 JSArrayBuffer *new_abuf;
+                 uint8_t *new_bs;
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -65,6 +65,8 @@
+     JS_EXECUTION_SCOPE_EVAL,
+     JS_EXECUTION_SCOPE_EVAL_FUNCTION,
+     JS_EXECUTION_SCOPE_JOB,
++    JS_EXECUTION_SCOPE_MODULE_RESOLVE,
++    JS_EXECUTION_SCOPE_MODULE_EVAL,
+ } JSExecutionScopeKind;
+ typedef enum {
+     JS_EXECUTION_CODE_UNKNOWN,
+@@ -97,6 +99,36 @@
+    Wrapper/proxy dispatch may report UNKNOWN while nested calls report code. */
+ JS_BOOL JS_VisitExecutionScopes(JSRuntime *rt, JSExecutionScopeVisitor *visitor,
+                                void *opaque);
++/* Owner-thread execution markers. No allocation, exception/refcount changes or
++   script. These facts do not certify native/provider consistency. Native
++   callbacks includes C/data dispatch and instrumented engine host callouts;
++   custom callable classes are also covered by the tracked scope marker. */
++typedef struct {
++    JS_BOOL tracking, scopes, interpreter, native_callbacks, settings, gc, blocked;
++    unsigned callback_depth; /* instrumented callouts, including the budget hook */
++} JSExecutionState;
++JS_BOOL JS_GetExecutionState(JSRuntime *rt, JSExecutionState *out);
++/* Trusted recovery fence, requiring tracking enabled and all reported activity
++   markers clear. The owner separately excludes native work/loans outside the
++   engine. No task, budget, health or exception reset; no native safety proof.
++   Refusal leaves the token unchanged. Tokens borrow their runtime lifetime. */
++typedef struct {
++    JSRuntime *runtime;
++    uint64_t generation;
++} JSRecoveryBarrier;
++JS_BOOL JS_BeginRecoveryBarrier(JSRuntime *rt, JSRecoveryBarrier *out);
++/* Only the matching runtime/generation can end an active, engine-idle fence.
++   Stale/foreign/repeated release refuses without changing state. Native hooks
++   must return normally in C. Cleanup/discard may release values or enqueue
++   jobs; the owner validates those effects before ending the fence.
++   Entry guards return JS_EXCEPTION without throwing a replacement exception.
++   Compiled eval still consumes its input through ordinary finalization; the
++   owner validates native cleanup effects. Job execution returns -1,
++   clears its output context and preserves the queue. Settings entry refuses
++   without invoking body or changing its output. Plain data/native cleanup
++   operations remain subject to their ordinary contracts. */
++JS_BOOL JS_EndRecoveryBarrier(JSRuntime *rt, const JSRecoveryBarrier *barrier);
++
+ typedef uint32_t JSClassID;
+ typedef uint32_t JSAtom;
+ 

@@ -1,5 +1,8 @@
 # F.16 dormant engine containment checkpoint
 
+Later implementation: [opt-in libjs child recovery](IFRAME_F16_CHILD_RECOVERY.md).
+The evidence below qualifies this earlier checkpoint and its terminal APIs.
+
 This implements the engine primitives in the approved
 [F16 brief](IFRAME_F16_RECOVERY.md), following the
 [scope checkpoint](IFRAME_F16_SCOPES_VALIDATION.md). The initial integration baseline

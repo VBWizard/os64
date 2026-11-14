@@ -35,7 +35,8 @@ typedef enum {
     OS64_JS_REALM_LIMIT, /* non-sticky slot refusal; no allocation attempted */
     OS64_JS_ADMISSION_REFUSED, /* non-sticky admission/native installation refusal */
     OS64_JS_REALM_RETIRED, /* non-sticky entry refusal; retained objects remain valid */
-    OS64_JS_REALM_INSTALLING /* ordinary entry refused until successful activation */
+    OS64_JS_REALM_INSTALLING, /* ordinary entry refused until successful activation */
+    OS64_JS_REALM_FAILED /* executable environment was contained after an overrun */
 } os64_js_status_t;
 
 typedef enum {

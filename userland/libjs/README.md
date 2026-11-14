@@ -14,6 +14,11 @@ state. Legacy operations address the primary realm. A runtime admits up to 65
 realms and keeps them until whole-runtime destruction; this does not enable
 iframe elements or independent child retirement. See CONTRACT.md § Realms.
 
+F.16 adds a separate native-host-certified child recovery constructor. It can
+contain supported child execution overruns after native preparation and a
+generation-bound commit. Default/diagnostic constructors and browser consumers
+retain terminal failure. See CONTRACT.md § Opt-in child execution recovery.
+
 D8 adds creation-selected teardown reporting/reclamation for audited browser
 hosts. Ordinary creation and raw engine destruction retain the fatal policy.
 The contract and audits are in [TEARDOWN.md](TEARDOWN.md); independent review

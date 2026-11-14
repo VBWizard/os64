@@ -1,5 +1,8 @@
 # F.16 dormant execution-scope checkpoint
 
+Later implementation: [opt-in libjs child recovery](IFRAME_F16_CHILD_RECOVERY.md).
+The evidence below qualifies this earlier checkpoint and its terminal APIs.
+
 Source: F16 brief commit `80f6b794` plus the execution-scope patch described
 below. This checkpoint is a partial F16b cut. It does not implement recovery,
 failed-environment guards, native consistency certification or the F16 exit.

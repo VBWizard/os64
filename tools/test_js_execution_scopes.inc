@@ -191,7 +191,7 @@ static void execution_scope_cases(void)
                             JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
     check(!JS_IsException(module), "scope module compiled");
     JSValue module_result = JS_EvalFunction(b, module);
-    check(!JS_IsException(module_result) && execution_has(JS_EXECUTION_SCOPE_EVAL_FUNCTION, b),
+    check(!JS_IsException(module_result) && execution_has(JS_EXECUTION_SCOPE_MODULE_EVAL, b),
           "compiled module execution has a separate scope");
     JS_FreeValue(b, module_result);
     visits = 0;

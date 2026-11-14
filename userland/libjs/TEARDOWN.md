@@ -68,6 +68,25 @@ release drops that hold. Native modules follow the same ownership rule, so an
 externally retained module cannot lose the context used by its failure check.
 Both wrapper teardown policies still require zero leaked roots.
 
+
+## Child-recovery native preparation
+
+The separate child-recovery constructor adds generation-bound preparation and
+commit for supported child EXECUTION episodes. Its engine fence and failed
+marks add scalar state, not independent engine roots. Affected wrapper realms
+become failed/retired before the host is called. Their slots, contexts, shared
+objects and intrinsic backing remain charged until root destruction; recovery
+never invokes either root teardown path or reuses a slot.
+
+The host owns callback/registry release and provider storage. A BUSY preparation
+keeps the same engine fence and generation while loans drain through native
+release. It must not free a provider opaque pointer beneath a borrower. Failed
+preparation or late global failure retains the fence for root cleanup; normal
+value release, job discard and finalizers remain usable, with executable reentry
+blocked. Root cleanup must release host resources independently and clear
+C-held values before destroying the runtime. Both teardown profiles retain
+their existing leak checks. See [the recovery contract](CONTRACT.md#opt-in-child-execution-recovery).
+
 ## Detection and reclamation
 
 Manifest patch `0006-reporting-runtime-teardown.patch` preserves the original
