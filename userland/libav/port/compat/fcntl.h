@@ -13,10 +13,12 @@
 #include <stddef.h>
 #include <stdint.h>
 typedef int64_t off_t;
+#ifdef HAVE_AV_CONFIG_H
 int avport_open(const char *path, int flags, ...);
 int avport_close(int fd);
 int64_t avport_read(int fd, void *buffer, size_t length);
 #define open avport_open
 #define close avport_close
 #define read avport_read
+#endif
 #endif

@@ -100,16 +100,24 @@ clock_t avport_clock(void)
     return (clock_t)os64_micros();
 }
 
-// C's strtod through FFmpeg's own scanf (musl's, libavutil/avsscanf.c),
-// which skips the same leading space and reads the same forms: decimal,
-// hexadecimal, inf and nan. `end` is where the number stopped.
+// C's strtod: av_libc.c measures how much of `s` the C grammar takes, and
+// FFmpeg's own scanf (musl's, libavutil/avsscanf.c) converts exactly that
+// much, its field width keeping it from reading further (scanf alone would
+// refuse "1e" outright, where strtod reads the 1). A range error sets errno
+// inside the scanf.
 double avport_strtod(const char *s, char **end)
 {
+    size_t span = avlibc_strtod_span(s);
     double value = 0;
-    int used = 0;
-    if (av_sscanf(s, "%lf%n", &value, &used) != 1) used = 0;
-    if (end) *end = (char *)s + used;
-    return value;
+    if (span > 0) {
+        size_t space = 0;
+        while (s[space] == ' ' || (s[space] >= '\t' && s[space] <= '\r')) space++;
+        char format[32];
+        avlibc_snprintf(format, sizeof(format), "%%%zulf", span - space);
+        if (av_sscanf(s, format, &value) != 1) span = 0;
+    }
+    if (end) *end = (char *)s + span;
+    return span > 0 ? value : 0;
 }
 
 // FFmpeg aborts on a broken internal invariant (av_assert0). os64 has no

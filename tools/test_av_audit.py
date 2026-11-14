@@ -100,13 +100,23 @@ disasm = run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', SO)
 check(not re.search(r'\t(syscall|sysenter|int)\b', disasm), 'libav.so contains a system call')
 
 # A LIBRARY OF ITS OWN: the LGPL is met by a library the user can replace,
-# so no other program or library may carry FFmpeg's code linked in.
+# so no other program or library may carry FFmpeg's code linked in. The
+# test is every FFmpeg name libav.so defines (its full symbol table, local
+# ones included: ff_*, avpriv_* and the public prefixes), against what each
+# other binary defines. A binary with no symbol table cannot be checked, and
+# says so, rather than passing.
+ffmpeg_prefix = re.compile(r'^(ff_|avpriv_|av_|avcodec_|avformat_|avio_|avutil_)')
+ours = {l.split()[-1] for l in run('x86_64-elf-nm', '--defined-only', SO).splitlines()
+        if len(l.split()) == 3 and ffmpeg_prefix.match(l.split()[-1])}
+check(len(ours) > 1000, f'libav.so\'s symbol table names only {len(ours)} FFmpeg symbols: is it stripped?')
 for path in sorted((USERLAND / 'bin').rglob('*')):
     if not path.is_file() or path == SO or path.read_bytes()[:4] != b'\x7fELF':
         continue
-    symbols = run('x86_64-elf-nm', '--defined-only', path)
-    check(not re.search(r'\b(avcodec_open2|avformat_open_input|ff_mpadsp_init)\b', symbols),
-          f'{path.relative_to(USERLAND)} carries FFmpeg code of its own')
+    lines = run('x86_64-elf-nm', '--defined-only', path).splitlines()
+    check(lines, f'{path.relative_to(USERLAND)} has no symbol table, so the audit cannot see what it carries')
+    theirs = {l.split()[-1] for l in lines if len(l.split()) == 3}
+    shared = sorted(theirs & ours)
+    check(not shared, f'{path.relative_to(USERLAND)} carries FFmpeg code of its own: {shared[:5]}')
 
 # The notice that travels with both images: FFmpeg's LICENSE.md and the
 # LGPL it names, byte for byte, and where the source is.

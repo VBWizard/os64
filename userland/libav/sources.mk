@@ -194,4 +194,4 @@ AV_UPSTREAM_SRCS := \
     upstream/libavutil/xga_font_data.c \
     upstream/libavutil/xtea.c \
 
-AV_PORT_SRCS := port/av_libc.c port/av_port.c
+AV_PORT_SRCS := port/av_libc.c port/av_format.c port/av_port.c

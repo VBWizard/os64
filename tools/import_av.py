@@ -14,9 +14,14 @@ os64 cannot run configure, so it runs here, on the host, and what it writes
 is committed:
 
 - port/config/: config.h (with manifest.json's `config_overrides` applied:
-  configure probes the HOST's C library, and every answer about a C
-  library is replaced by what libos64 and the port's shims provide), and
-  the other files configure generates that the build compiles or includes.
+  configure probes the HOST's C library and build tools, and every answer
+  about a C library is replaced by what libos64 and the port's shims
+  provide, and every answer about a tool, perl or makeinfo, by "no", which
+  is what os64 has and keeps --check from depending on what this machine
+  has installed), and the other files configure generates that the build
+  compiles or includes. What it records about the C COMPILER (INT128,
+  inline-asm abilities) is the host gcc's, which answers as the cross gcc
+  does; a host whose cc is not gcc may see --check differ there.
 - sources.mk: the objects FFmpeg's own makefiles would build (its
   lib*.a.objs lists), as source paths.
 - upstream/: exactly those sources and every FFmpeg header they include,
@@ -157,7 +162,7 @@ def produce(archive, manifest, out):
                  'AV_UPSTREAM_SRCS := \\']
         lines += [f'    upstream/{c} \\' for c in sources]
         lines.append('')
-        lines.append('AV_PORT_SRCS := port/av_libc.c port/av_port.c')
+        lines.append('AV_PORT_SRCS := port/av_libc.c port/av_format.c port/av_port.c')
         (out / 'sources.mk').write_text('\n'.join(lines) + '\n')
         return {name: sha256(upstream / name) for name in sorted(needed)}
 

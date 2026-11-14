@@ -102,7 +102,13 @@
     "HAVE_ROUNDF": 0,
     "HAVE_SINF": 0,
     "HAVE_TRUNCF": 0,
-    "HAVE_RINT": 0
+    "HAVE_RINT": 0,
+    "HAVE_RSYNC_CONTIMEOUT": 0,
+    "HAVE_GZIP": 0,
+    "HAVE_MAKEINFO_HTML": 0,
+    "HAVE_PERL": 0,
+    "HAVE_POD2MAN": 0,
+    "HAVE_TEXI2HTML": 0
   },
   "patches": [],
   "files": {

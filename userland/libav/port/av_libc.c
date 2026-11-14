@@ -67,14 +67,6 @@ char *avlibc_strcpy(char *dst, const char *src)
     return dst;
 }
 
-// FFmpeg's av_strerror answers from its own table first; this is what it
-// falls back to for a number outside it.
-char *avlibc_strerror(int code)
-{
-    (void)code;
-    return (char *)"Unknown error";
-}
-
 // ---------------------------------------------------------------- numbers
 
 static int digit_value(char c)
@@ -156,6 +148,58 @@ long avlibc_strtol(const char *s, char **end, int base)
 unsigned long avlibc_strtoul(const char *s, char **end, int base)
 {
     return (unsigned long)avlibc_strtoull(s, end, base);
+}
+
+static int lower(char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+
+static int starts_nocase(const char *s, const char *word)
+{
+    for (; *word; s++, word++)
+        if (lower(*s) != *word) return 0;
+    return 1;
+}
+
+size_t avlibc_strtod_span(const char *s)
+{
+    const char *p = s;
+    while (is_space(*p)) p++;
+    if (*p == '+' || *p == '-') p++;
+    if (starts_nocase(p, "inf")) {
+        p += starts_nocase(p, "infinity") ? 8 : 3;
+        return (size_t)(p - s);
+    }
+    if (starts_nocase(p, "nan")) {
+        p += 3;
+        if (*p == '(') {           // nan(n-char-sequence), only if it closes
+            const char *q = p + 1;
+            while ((*q >= '0' && *q <= '9') || (lower(*q) >= 'a' && lower(*q) <= 'z') || *q == '_') q++;
+            if (*q == ')') p = q + 1;
+        }
+        return (size_t)(p - s);
+    }
+    int hex = p[0] == '0' && (p[1] == 'x' || p[1] == 'X');
+    const char *digits = hex ? p + 2 : p;
+    int base = hex ? 16 : 10, seen = 0;
+    const char *q = digits;
+    while (digit_value(*q) < base) { q++; seen = 1; }
+    if (*q == '.') {
+        q++;
+        while (digit_value(*q) < base) { q++; seen = 1; }
+    }
+    if (!seen) {
+        // "0x" with no hex digit is the constant 0; anything else converts nothing.
+        return hex ? (size_t)(p + 1 - s) : 0;
+    }
+    char mark = hex ? 'p' : 'e';
+    if (lower(*q) == mark) {     // an exponent counts only if a digit follows
+        const char *e = q + 1;
+        if (*e == '+' || *e == '-') e++;
+        if (*e >= '0' && *e <= '9') {
+            while (*e >= '0' && *e <= '9') e++;
+            q = e;
+        }
+    }
+    return (size_t)(q - s);
 }
 
 // frexp and scalbn by the bits of the double: exact, as the standard asks.

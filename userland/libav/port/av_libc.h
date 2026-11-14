@@ -2,9 +2,9 @@
 #define OS64_AV_LIBC_H
 // The pure half of the FFmpeg port's C library (av_libc.c), declared without
 // any libc header so the host test can include it beside glibc's. The
-// compat headers declare the same functions under the C names FFmpeg uses;
-// `struct avlibc_tm` is compat/time.h's `struct tm` field for field, which
-// compat/time.h asserts.
+// compat headers map the C names FFmpeg uses onto them. `struct avlibc_tm`
+// has `struct tm`'s fields; compat/time.h copies between the two.
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -16,11 +16,14 @@ char *avlibc_strstr(const char *haystack, const char *needle);
 size_t avlibc_strspn(const char *s, const char *accept);
 size_t avlibc_strcspn(const char *s, const char *reject);
 char *avlibc_strcpy(char *dst, const char *src);
-char *avlibc_strerror(int code);
 long avlibc_strtol(const char *s, char **end, int base);
 unsigned long avlibc_strtoul(const char *s, char **end, int base);
 long long avlibc_strtoll(const char *s, char **end, int base);
 unsigned long long avlibc_strtoull(const char *s, char **end, int base);
+// How many bytes of `s` strtod would consume (leading space included), by
+// C17's grammar for a floating constant, or 0 when it would convert
+// nothing. avport_strtod converts exactly that many with FFmpeg's scanf.
+size_t avlibc_strtod_span(const char *s);
 double avlibc_frexp(double x, int *exponent);
 double avlibc_scalbn(double x, int n);
 void avlibc_qsort(void *base, size_t count, size_t size, int (*compare)(const void *, const void *));
@@ -29,4 +32,7 @@ void *avlibc_bsearch(const void *key, const void *base, size_t count, size_t siz
 struct avlibc_tm *avlibc_gmtime(const int64_t *t);
 int64_t avlibc_mktime(struct avlibc_tm *tm);
 size_t avlibc_strftime(char *out, size_t cap, const char *fmt, const struct avlibc_tm *tm);
+// av_format.c: C's snprintf, taking every standard conversion's argument.
+int avlibc_snprintf(char *out, size_t cap, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+int avlibc_vsnprintf(char *out, size_t cap, const char *fmt, va_list ap) __attribute__((format(printf, 3, 0)));
 #endif

@@ -1,22 +1,24 @@
 #ifndef OS64_AV_STDIO_H
 #define OS64_AV_STDIO_H
-/* Private to the FFmpeg port. FILE is opaque and no stream ever opens:
- * FFmpeg's bytes arrive through libmedia's AVIOContext, and its words go to
- * av_log, whose callback libmedia owns. stderr exists so the default log
- * callback compiles; writes to it are discarded (av_port.c). The formatter
- * is libos64's, which has no floating point: a %f prints as itself. */
+/* Private to the FFmpeg port; string.h beside this file says who sees
+ * what. FILE is opaque and no stream ever opens: FFmpeg's bytes arrive
+ * through its caller's AVIOContext, and its words go to av_log, whose
+ * callback the caller owns. stderr exists so the default log callback
+ * compiles; writes to it are discarded (av_port.c). The formatter is
+ * av_format.c's, which takes every standard conversion's argument. */
 #include <stdarg.h>
 #include <stddef.h>
-#include "os64/fmt.h"
 typedef struct avport_file FILE;
-extern FILE *const avport_stderr;
-#define stderr avport_stderr
 #define EOF (-1)
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
-#define snprintf os64_snprintf
-#define vsnprintf os64_vsnprintf
+#ifdef HAVE_AV_CONFIG_H
+#include "av_libc.h"
+extern FILE *const avport_stderr;
+#define stderr avport_stderr
+#define snprintf avlibc_snprintf
+#define vsnprintf avlibc_vsnprintf
 /* FFmpeg carries its own scanf (libavutil/avsscanf.c, musl's); plain
  * sscanf calls are routed to it. */
 int av_sscanf(const char *s, const char *fmt, ...);
@@ -34,4 +36,5 @@ FILE *avport_fdopen(int fd, const char *mode);
 #define fopen avport_fopen
 #define fdopen avport_fdopen
 #define fclose avport_fclose
+#endif
 #endif

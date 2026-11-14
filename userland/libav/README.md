@@ -13,8 +13,10 @@ and the C library FFmpeg's sources expect and libos64 does not provide.
 ## What was taken
 
 FFmpeg 9.0.2, the release archive `manifest.json` names and pins by
-SHA-256 (its signature checked against FFmpeg's release key,
-`FCF986EA15E6E293A5644F10B4322F04D67658D8`, on import).
+SHA-256. Its signature was checked by hand against FFmpeg's release key
+(`FCF986EA15E6E293A5644F10B4322F04D67658D8`) on the day of the import, and
+`manifest.json` records that (`archive_signature`); from then on the
+SHA-256 is the check, and `tools/import_av.py` makes it.
 
 **What is built is FFmpeg's decision, from one line of arguments.**
 `manifest.json`'s `configure_args` is FFmpeg's `configure` with everything
@@ -83,34 +85,46 @@ started after.
 FFmpeg's sources include `<stdio.h>`, `<stdlib.h>`, `<string.h>`,
 `<errno.h>`, `<time.h>` and the rest. `port/compat/` answers them, private
 to this library, in the shape libwebp's and QuickJS's ports use: a name
-libos64 has is mapped onto libos64 (`memcpy`, `strlen`, `malloc`,
-`snprintf`…), and the rest is os64's, in two files:
+libos64 has is mapped onto libos64 (`memcpy`, `strlen`, `malloc`…), and
+the rest is os64's, in three files:
 
 - **`port/av_libc.c`** is pure (no os64 header): `strncmp`, `strstr`,
   `strspn`, `strcspn`, `strcpy`, the four integer `strto*`, `frexp`,
   `scalbn`, `qsort` (a heapsort: no recursion, no allocation), `bsearch`,
-  and UTC `gmtime`, `mktime` and `strftime`. `tools/test_av_libc_host.sh`
-  compares every one with glibc (C17 rules), under ASan and UBSan.
+  UTC `gmtime`, `mktime` and `strftime`, and how much of a string
+  `strtod` takes (C17's grammar for a floating constant).
+- **`port/av_format.c`** is pure too: `snprintf` and `vsnprintf`. It is
+  not libos64's because a formatter that does not know a conversion cannot
+  step over its argument, and every later argument is then read from the
+  wrong place (FFmpeg uses `%zu`; a `%s` after it would print from a size).
+  It walks C's whole grammar and takes each argument at its own type.
+  Integers, characters, strings and pointers print exactly as glibc
+  prints them; a double's digits come from 80-bit arithmetic, exact for
+  the 17 a double carries and possibly different from glibc past them.
+- `tools/test_av_libc_host.sh` compares all of both with glibc (C17
+  rules), under ASan and UBSan.
 - **`port/av_port.c`** is the doors. FFmpeg never opens a file here, so
   `open` and `fopen` answer as for a missing file and FFmpeg takes the path
   it already has for that. `stderr` takes the default log callback's words
   and discards them: a caller that wants them installs its own
-  (`av_log_set_callback`). `strtod` goes through FFmpeg's own scanf
-  (`av_sscanf`, musl's), as plain `sscanf` does. `clock` is `micros()`.
+  (`av_log_set_callback`). `strtod` converts exactly the span `av_libc.c`
+  measured, with FFmpeg's own scanf (`av_sscanf`, musl's), which plain
+  `sscanf` calls are routed to as well. `clock` is `micros()`.
   `abort` (FFmpeg's `av_assert0`) ends the program with `0x41564641`
   ("AVFA"), QuickJS's port's shape.
 
 What a caller should know the shims do NOT do:
 
-- **No floating point in `snprintf`.** libos64's formatter has none: a
-  `%f` prints as itself, and the arguments after it still line up (a
-  double travels in a register of its own). FFmpeg formats floats into its
-  logs, its dumps (`av_dump_format`), and a few text renderings of numbers
-  (`av_opt_get` of a float option, EXIF and SDP text). None is on the path
-  from bytes to sound.
-- **No environment and no clock reach the library**: `getenv` answers
-  nothing, `time()` answers 0 (FFmpeg's "unknown"), and local time is UTC.
-- **`errno` is one word**, written only by `strto*` on overflow.
+- **No environment reaches the library**: `getenv` answers nothing, and
+  local time is UTC.
+- **FFmpeg's clock functions have no clock behind them** (the
+  configuration says there is no `gettimeofday`, `clock_gettime`,
+  `usleep` or `nanosleep`): `av_gettime()` answers -1,
+  `av_gettime_relative()` a constant, and `av_usleep()` `ENOSYS`. A caller
+  keeps time with `micros()` (`os64/proc.h`).
+- **`errno` is one word for every thread**, written by `strto*` on
+  overflow, by the shut file doors, and by FFmpeg's own scanf on a failed
+  match or a range error. FFmpeg reads it right after such a call.
 
 ## Switched off, and how they come on
 
@@ -136,18 +150,21 @@ they stay off.
 ## How it is built (`shared.mk`)
 
 FFmpeg's sources compile with FFmpeg's own flags for this target (its
-configure's `CFLAGS`: `-std=c17 -O3 -fno-math-errno -fno-signed-zeros`
-and its warning set), not with userland's `-Wextra -Werror`, which
-upstream code was never written against (the kernel's SBC port follows
-the same rule). os64's code generation is kept: PIC, no red zone, SSE2,
-no AVX, the stack-clash probes. Two of userland's flags are dropped for
-them:
+configure's `CFLAGS`: `-std=c17 -O3 -fno-math-errno -fno-signed-zeros`,
+its warning set and the warnings it makes errors), not with userland's
+`-Wextra -Werror`, which upstream code was never written against (the
+kernel's SBC port follows the same rule). Two of FFmpeg's guards matter
+more on os64 than on Linux, because a thread's stack is fixed:
+`-Werror=vla` and `-Wstack-usage`. os64's code generation is kept: PIC,
+no red zone, SSE2, no AVX, the stack-clash probes. Left out:
 
-- `-masm=intel`: FFmpeg is written for GCC's default syntax, and in Intel
-  syntax a symbol spelled like a register (FFmpeg has them) does not
-  assemble. This is also why inline assembly is a flag away, not a rewrite.
-- `-Wredundant-decls`: the shims declare what FFmpeg's internal headers
-  declare again (`av_sscanf`), by design.
+- userland's `-masm=intel`: FFmpeg is written for GCC's default syntax,
+  and in Intel syntax a symbol spelled like a register (FFmpeg has them)
+  does not assemble. This is also why inline assembly is a flag away, not
+  a rewrite.
+- FFmpeg's `-Wredundant-decls`: the shims declare what FFmpeg's internal
+  headers declare again (`av_sscanf`), by design.
+- FFmpeg's `-fomit-frame-pointer`: userland's default is kept.
 
 GCC 14 at `-O3` warns about array subscripts in `libavcodec/vlc.c`; that
 is upstream's code, unchanged, and they stay warnings. `port/` is os64's
@@ -155,13 +172,20 @@ code and keeps userland's full alarm.
 
 The library is linked `--no-undefined --gc-sections` against `libos64.so`
 and `libmath.so` only, exports FFmpeg's public prefixes (`exports.map`:
-`av_*`, `avcodec_*`, `avformat_*`, `avio_*`, `avutil_*`), and has no
+`av_*`, `avcodec_*`, `avformat_*`, `avio_*`, `avutil_*`,
+`avsubtitle_free`), and has no
 initialisers, no thread-local storage and no system call: the audit checks
 each.
 
 A program that calls FFmpeg compiles with `LIBAV_CONSUMER_CFLAGS` and is
-named in `LIBAV_PROGRAMS` (`shared.mk`): FFmpeg's public headers include
-C-library headers, so the caller sees the shims too.
+named in `LIBAV_PROGRAMS` (`shared.mk`). FFmpeg's public headers include
+C-library headers, so the caller sees `port/compat/` too, but only the
+part of it that names libos64's exports (`memcpy`, `malloc`…), the error
+numbers and the types: the names `av_libc.c`, `av_format.c` and
+`av_port.c` supply leave libav.so under no name, and are mapped only
+inside libav's own build (`HAVE_AV_CONFIG_H`, which FFmpeg defines for its
+sources and `shared.mk` for `port/`). A caller that calls `strncmp` gets a
+link error, not a function it cannot reach.
 
 ## Proof
 

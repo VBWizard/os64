@@ -130,35 +130,56 @@ static int codec_open(Input *in)
     return avcodec_open2(in->codec, decoder, NULL);
 }
 
+// Hands every frame the decoder has ready to `take`. Returns 0 when it
+// wants more input, 1 when the decoder has ended, FFmpeg's error, or what
+// `take` returned to stop (2).
+static int drain(Input *in, AVFrame *frame, int (*take)(const AVFrame *, void *), void *ctx)
+{
+    for (;;) {
+        int r = avcodec_receive_frame(in->codec, frame);
+        if (r == AVERROR(EAGAIN)) return 0;
+        if (r == AVERROR_EOF) return 1;
+        if (r < 0) return r;
+        int stop = take(frame, ctx);
+        av_frame_unref(frame);
+        if (stop) return stop;
+    }
+}
+
+// FFmpeg's send/receive contract: a packet the decoder answers EAGAIN to is
+// not taken; drain what it has ready and send the SAME packet again. A NULL
+// packet starts the decoder's end.
+static int send(Input *in, AVPacket *packet, AVFrame *frame, int (*take)(const AVFrame *, void *), void *ctx)
+{
+    for (;;) {
+        int r = avcodec_send_packet(in->codec, packet);
+        if (r == AVERROR(EAGAIN)) {
+            int d = drain(in, frame, take, ctx);
+            if (d != 0) return d;
+            continue;
+        }
+        if (r < 0) return r;
+        return drain(in, frame, take, ctx);
+    }
+}
+
 // Calls `take` with every decoded frame until the input ends; returns 0, or
-// FFmpeg's error, or what `take` returned to stop early (positive).
+// FFmpeg's error, or what `take` returned to stop early (2).
 static int decode_all(Input *in, int (*take)(const AVFrame *, void *), void *ctx)
 {
     AVPacket *packet = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
-    int result = 0, draining = 0;
-    if (!packet || !frame) result = AVERROR(ENOMEM);
+    int result = packet && frame ? 0 : AVERROR(ENOMEM);
     while (result == 0) {
-        if (!draining) {
-            int r = av_read_frame(in->format, packet);
-            if (r == AVERROR_EOF) {
-                draining = 1;
-                r = avcodec_send_packet(in->codec, NULL);
-            } else if (r >= 0) {
-                if (packet->stream_index == in->stream) r = avcodec_send_packet(in->codec, packet);
-                av_packet_unref(packet);
-            }
-            if (r < 0 && r != AVERROR(EAGAIN)) { result = r; break; }
+        int r = av_read_frame(in->format, packet);
+        if (r == AVERROR_EOF) {
+            result = send(in, NULL, frame, take, ctx);
+            if (result == 0) result = drain(in, frame, take, ctx);
+            break;
         }
-        for (;;) {
-            int r = avcodec_receive_frame(in->codec, frame);
-            if (r == AVERROR(EAGAIN)) break;
-            if (r == AVERROR_EOF) { result = 1; break; }
-            if (r < 0) { result = r; break; }
-            int stop = take(frame, ctx);
-            av_frame_unref(frame);
-            if (stop) { result = stop; break; }
-        }
+        if (r < 0) { result = r; break; }
+        if (packet->stream_index == in->stream) result = send(in, packet, frame, take, ctx);
+        av_packet_unref(packet);
     }
     av_frame_free(&frame);
     av_packet_free(&packet);

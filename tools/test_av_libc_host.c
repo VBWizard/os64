@@ -120,6 +120,107 @@ static void test_floats(void)
                   "scalbn(%a, %d)", values[i], edges[j]);
 }
 
+// The span strtod would consume, against glibc's own end pointer.
+static void test_strtod_span(void)
+{
+    const char *inputs[] = {
+        "", " ", "1", "-1", "+.5", ".", "-.", "1.", ".e1", "1e", "1e+", "1e-", "1e5", "1E-5x", "2.5e+10q",
+        "0x", "0X", "0x1", "0x1p", "0x1p3", "0x.8p-1", "0x.p1", "0xg", "  \t 42", "inf", "-INF", "infinity",
+        "Infinit", "nan", "NaN(abc_1)", "nan(", "nan(x", "nan()", "+nan", "e5", "-e5", "1e5e5", "00012",
+        "1.2.3", "9" "99999999999999999999999999999999999999", "1e400", "-1e-400", "0x1.fffffffffffffp1023",
+    };
+    for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
+        char *end;
+        strtod(inputs[i], &end);
+        size_t want = (size_t)(end - inputs[i]);
+        CHECK(avlibc_strtod_span(inputs[i]) == want, "strtod span(\"%s\"): %zu vs %zu",
+              inputs[i], avlibc_strtod_span(inputs[i]), want);
+    }
+    const char alphabet[] = "0123456789.eEpPxX+-abcfinINF() ";
+    for (int r = 0; r < 200000; r++) {
+        char buf[16];
+        int n = (int)(rnd() % 12);
+        for (int i = 0; i < n; i++) buf[i] = alphabet[rnd() % (sizeof(alphabet) - 1)];
+        buf[n] = 0;
+        char *end;
+        strtod(buf, &end);
+        CHECK(avlibc_strtod_span(buf) == (size_t)(end - buf), "strtod span(\"%s\")", buf);
+    }
+}
+
+// The formatter, against glibc's snprintf: exactly, for everything but the
+// digits of a double past what av_format.c promises.
+#define SAME(fmt, ...) do { char a_[512], b_[512]; \
+    int na_ = avlibc_snprintf(a_, sizeof(a_), fmt, __VA_ARGS__); \
+    int nb_ = snprintf(b_, sizeof(b_), fmt, __VA_ARGS__); \
+    CHECK(na_ == nb_ && strcmp(a_, b_) == 0, "snprintf(\"%s\"): \"%s\" vs \"%s\"", fmt, a_, b_); } while (0)
+
+static void test_format(void)
+{
+    const char *int_formats[] = { "%d", "%5d", "%-5d|", "%05d", "%+d", "% d", "%.3d", "%8.3d", "%-+8.3d|",
+                                  "%.0d", "%x", "%#x", "%#X", "%08x", "%#010x", "%o", "%#o", "%#.0o", "%u",
+                                  "%hhd", "%hd", "%hhu", "%hx", "%c" };
+    int ints[] = { 0, 1, -1, 7, 255, 256, -129, 65535, 65536, 2147483647, (int)0x80000000, 12345, -98765 };
+    for (size_t f = 0; f < sizeof(int_formats) / sizeof(int_formats[0]); f++)
+        for (size_t i = 0; i < sizeof(ints) / sizeof(ints[0]); i++) {
+            if (int_formats[f][1] == 'c' && (ints[i] <= 0 || ints[i] > 126)) continue;
+            SAME(int_formats[f], ints[i]);
+        }
+    const char *long_formats[] = { "%ld", "%lld", "%lu", "%llx", "%zu", "%zd", "%td", "%jd", "%ju",
+                                   "%20ld", "%-20lx|", "%#lo", "%+lld" };
+    int64_t longs[] = { 0, 1, -1, INT64_MAX, INT64_MIN, (int64_t)0x123456789abcdefLL, 4294967296LL };
+    for (size_t f = 0; f < sizeof(long_formats) / sizeof(long_formats[0]); f++)
+        for (size_t i = 0; i < sizeof(longs) / sizeof(longs[0]); i++)
+            SAME(long_formats[f], longs[i]);
+    // The case this formatter exists for: a conversion os64's own formatter
+    // does not know, then more arguments, all landing where they belong.
+    SAME("%zu then %s then %d", (size_t)42, "words", 7);
+    SAME("%td|%hhx|%s|%p", (ptrdiff_t)-3, 300, "x", (void *)0x1234);
+    SAME("%s|%.2s|%-6s|%6s|%.0s|", "hello", "hello", "ab", "ab", "zzz");
+    SAME("%*d|%-*d|%.*d|%*.*s|", 6, 42, 6, 42, 4, 7, 8, 3, "abcdef");
+    SAME("%*d|", -6, 42);
+    SAME("100%% %c%c", 'o', 'k');
+    SAME("%p %p", (void *)0, (void *)&s_checks);
+    char small[4];
+    CHECK(avlibc_snprintf(small, sizeof(small), "%s", "truncated") == 9 && strcmp(small, "tru") == 0,
+          "truncation keeps the full count and terminates");
+    CHECK(avlibc_snprintf(NULL, 0, "%d", 12345) == 5, "a count with no room at all");
+    int count = -1;
+    char tmp[32];
+    avlibc_snprintf(tmp, sizeof(tmp), "abc%n", &count);
+    CHECK(count == 3, "%%n");
+
+    const char *float_formats[] = { "%f", "%.0f", "%.1f", "%.3f", "%10.2f", "%-10.2f|", "%+.2f", "% .2f",
+                                    "%#.0f", "%e", "%.0e", "%.3e", "%E", "%12.4e", "%g", "%.0g", "%.3g", "%G",
+                                    "%#g", "%.10g", "%010.3f", "%-+12.3e|" };
+    double floats[] = { 0.0, -0.0, 1.0, -1.0, 0.5, 1.5, 2.5, 0.125, 3.14159265358979, 123456.789, 1e-5,
+                        9.9999, 99.5, 1e10, 1e15, 6.02e23, 1.23e-10, 0.1, 0.07, 100.0, 1e100, 1e-300,
+                        INFINITY, -INFINITY, NAN };
+    for (size_t f = 0; f < sizeof(float_formats) / sizeof(float_formats[0]); f++)
+        for (size_t i = 0; i < sizeof(floats) / sizeof(floats[0]); i++) {
+            if (strchr(float_formats[f], 'f') && fabs(floats[i]) > 1e17) continue;   // past 17 digits
+            SAME(float_formats[f], floats[i]);
+        }
+    // Random doubles: the layout exactly, the value to the digits a double has.
+    int differ = 0;
+    for (int r = 0; r < 100000; r++) {
+        union { double d; uint64_t u; } v = { .u = rnd() };
+        if (isnan(v.d) || isinf(v.d)) continue;
+        int p = (int)(rnd() % 16);
+        char fmt[16], a[512], b[512];
+        snprintf(fmt, sizeof(fmt), "%%.%d%c", p, "eg"[r & 1]);
+        avlibc_snprintf(a, sizeof(a), fmt, v.d);
+        snprintf(b, sizeof(b), fmt, v.d);
+        if (strcmp(a, b) != 0) {
+            differ++;
+            double x = strtod(a, NULL), y = strtod(b, NULL);
+            CHECK(strlen(a) == strlen(b) && fabs(x - y) <= fabs(y) * 1e-15 * pow(10, 16 - p) * 1.0000001,
+                  "%s of %a: \"%s\" vs \"%s\"", fmt, v.d, a, b);
+        }
+    }
+    printf("  random doubles: %d of 100000 differ from glibc in the last digit\n", differ);
+}
+
 static int compare_int(const void *a, const void *b)
 {
     int x = *(const int *)a, y = *(const int *)b;
@@ -202,6 +303,8 @@ int main(void)
     test_strings();
     test_integers();
     test_floats();
+    test_strtod_span();
+    test_format();
     test_sorting();
     test_time();
     if (s_failures) {

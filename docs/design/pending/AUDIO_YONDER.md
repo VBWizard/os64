@@ -96,7 +96,7 @@ started after. So:
 
 - `libav.so` is its own library, linked by `libmedia.so` alone. Never
   static, never merged into libos64 or libmedia.
-- Its source and our patches live in the tree (`upstream/`, `patches/`,
+- Its source lives in the tree (`upstream/`, unpatched, and
   `manifest.json`), which is the "source offered" half.
 - `--enable-gpl` and `--enable-nonfree` are never passed, and the audit
   FAILS if the generated configuration carries either (`CONFIG_GPL`,
@@ -119,9 +119,10 @@ MP3's patents expired in 2017; it carries no question of that kind.
 
 The configuration is generated ON THE HOST by FFmpeg's own `configure`
 (cross, `--target-os=none`), and the generated `config.h` and
-`config_components.h` are committed beside the manifest, checked by the
-audit. os64 cannot run `configure`, and a committed configuration is a
-reviewable one.
+`config_components.h` are committed beside the manifest:
+`tools/import_av.py --check` proves them the pinned `configure`'s, and the
+audit checks `config.h`'s licence and overrides on every run. os64 cannot
+run `configure`, and a committed configuration is a reviewable one.
 
 **Three switches that are off now and must be able to come on** (video's
 door):
@@ -485,8 +486,13 @@ above:
 - **A build without threads is safe from several threads only under a
   rule**: every open and close under one lock, and a thread-safe log
   callback (README.md § Switched off). That is libmedia's rule in Y.1.2.
-- **`snprintf` has no floating point** (libos64's formatter): a `%f`
-  prints as itself. FFmpeg formats floats only off the decode path.
+- **`snprintf` is the port's own** (`av_format.c`), not libos64's: a
+  formatter that does not know a conversion cannot step over its argument,
+  and FFmpeg uses `%zu` with more arguments after it. A cold read found
+  that before anything printed from the wrong place.
+- **The shims' own names are libav's alone**: a program that includes
+  FFmpeg's headers sees only the compat names that resolve to libos64
+  (README.md § How it is built), or libmedia would have failed to link.
 - **Two userland flags are dropped for FFmpeg's sources**: `-masm=intel`
   (a symbol spelled like a register does not assemble in Intel syntax) and
   `-Wredundant-decls`.

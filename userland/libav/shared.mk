@@ -20,25 +20,31 @@ AV_OBJS    := $(patsubst %,$(OBJ)/av/%.o,$(AV_UPSTREAM_SRCS) $(AV_PORT_SRCS))
 AV_INCLUDES := -Ilibav/port/compat -Ilibav/port -Ilibav/port/config -Ilibav/upstream
 
 # FFmpeg's sources build with FFmpeg's own flags (its configure's CFLAGS for
-# this target, ffbuild/config.mak): -O3, the maths it is written for, and its
-# own warning set, not os64's -Wextra -Werror, which upstream code was never
-# written against (the SBC port's rule). os64's code generation is kept: PIC,
-# no red zone, SSE2 and no AVX, the stack-clash probes. FFmpeg's
-# -Wredundant-decls is left out: the shims declare what FFmpeg's internal
-# headers declare again (av_sscanf), by design. And -masm=intel is left out:
-# FFmpeg is written for GCC's default syntax, and in Intel syntax a symbol
-# that is spelled like a register (FFmpeg has them) does not assemble.
+# this target, ffbuild/config.mak): -O3, the maths it is written for, its
+# warning set and the warnings it makes errors, not os64's -Wextra -Werror,
+# which upstream code was never written against (the SBC port's rule).
+# Two of FFmpeg's guards matter more here than on Linux, because a thread's
+# stack is fixed: -Werror=vla and -Wstack-usage. os64's code generation is
+# kept: PIC, no red zone, SSE2 and no AVX, the stack-clash probes. Left out:
+# -Wredundant-decls (the shims declare what FFmpeg's internal headers
+# declare again, av_sscanf, by design), -fomit-frame-pointer (os64's
+# userland default is kept), and userland's -masm=intel (FFmpeg is written
+# for GCC's default syntax, and in Intel syntax a symbol that is spelled
+# like a register, which FFmpeg has, does not assemble).
 AV_UPSTREAM_FLAGS := $(AV_INCLUDES) $(filter-out -O2 -Wextra -Werror -masm=intel,$(LIBOS64_CFLAGS)) \
-    -std=c17 -O3 -fno-math-errno -fno-signed-zeros -mno-avx -mno-fma -fno-builtin \
+    -std=c17 -O3 -fno-math-errno -fno-signed-zeros -mno-avx -mno-fma \
     -D_ISOC11_SOURCE -DHAVE_AV_CONFIG_H \
     -Wdisabled-optimization -Wpointer-arith -Wwrite-strings -Wtype-limits \
-    -Wundef -Wempty-body -Wmissing-prototypes -Wstrict-prototypes \
+    -Wundef -Wempty-body -Wstack-usage=122880 -Wimplicit-fallthrough=5 \
+    -Wmissing-prototypes -Wstrict-prototypes \
     -Wno-parentheses -Wno-switch -Wno-format-zero-length -Wno-pointer-sign \
     -Wno-unused-const-variable -Wno-bool-operation -Wno-char-subscripts -Wno-maybe-uninitialized \
-    -Werror=implicit-function-declaration -Werror=return-type
+    -Werror=implicit-function-declaration -Werror=missing-prototypes -Werror=format-security \
+    -Werror=return-type -Werror=vla -Wformat
 
-# os64's own code in the port keeps the full alarm.
-AV_PORT_FLAGS := $(AV_INCLUDES) $(LIBOS64_CFLAGS) -std=c17 -mno-avx -mno-fma -fno-builtin
+# os64's own code in the port keeps the full alarm. It is libav's build
+# too, so it sees the shims' libav-only names (compat/string.h).
+AV_PORT_FLAGS := $(AV_INCLUDES) $(LIBOS64_CFLAGS) -std=c17 -mno-avx -mno-fma -fno-builtin -DHAVE_AV_CONFIG_H
 
 $(OBJ)/av/upstream/%.c.o: libav/upstream/%.c libav/shared.mk
 	@mkdir -p "$(dir $@)"

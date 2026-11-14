@@ -4,11 +4,16 @@
  * in-band errors only), but FFmpeg spells its error codes as AVERROR(E...),
  * the negated POSIX number, so the numbers are needed and are Linux's,
  * which is what FFmpeg's own av_strerror table and every FFmpeg user
- * expect. `errno` itself is one word, shared by every thread: strto* set it
- * on overflow and the shut file doors (av_port.c) on a refused open, and
+ * expect, and a caller testing AVERROR(EAGAIN) needs them too. `errno`
+ * itself is libav's alone (a caller never sees the name: string.h says
+ * why) and one word shared by every thread: strto* set it on overflow, the
+ * shut file doors (av_port.c) on a refused open, and FFmpeg's own scanf
+ * (av_sscanf, and strtod through it) on a failed match or a range error.
  * FFmpeg reads it right after such a call, to name the error. */
+#ifdef HAVE_AV_CONFIG_H
 #include "av_libc.h"
 #define errno avlibc_errno
+#endif
 #define EPERM 1
 #define ENOENT 2
 #define ESRCH 3
