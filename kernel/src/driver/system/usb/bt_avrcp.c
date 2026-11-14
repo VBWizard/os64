@@ -599,18 +599,33 @@ static bt_avrcp_msg_t *ar_head(bt_avrcp_t *a, bt_avrcp_command_t **c)
     return 0;
 }
 
-// The head is gone to the controller (or dropped as too long for the
-// channel): an answer leaves the owed list; a command is sent and its
-// timer starts. A Set is counted when it leaves (it leaves once), so one
-// replaced while queued is not.
-static void ar_commit(bt_avrcp_t *a, bt_avrcp_command_t *c)
+// The message given out under this serial, wherever it now stands: an
+// answer owed (its place in *at; one owed later may have been queued
+// behind it, or ahead of our command, since it was given out), or a
+// command of ours not yet sent (*c). NULL when it is none of them: it was
+// retired, replaced or committed already. No message's id is 0, so serial
+// 0 (next's "nothing") finds none.
+static bt_avrcp_msg_t *ar_find(bt_avrcp_t *a, uint32_t serial, bt_avrcp_command_t **c, unsigned *at)
+{
+    *c=0; *at=0;
+    for(unsigned i=0;i<a->answers;i++) if(a->answer[i].id==serial) { *at=i; return &a->answer[i]; }
+    if(a->reg.live && !a->reg.sent && a->reg.msg.id==serial) { *c=&a->reg; return &a->reg.msg; }
+    if(a->set.live && !a->set.sent && a->set.msg.id==serial) { *c=&a->set; return &a->set.msg; }
+    return 0;
+}
+
+// A message is gone to the controller (or dropped as too long for the
+// channel): an answer leaves the owed list, the rest keeping their order;
+// a command is sent and its timer starts. A Set is counted when it leaves
+// (it leaves once), so one replaced while queued is not.
+static void ar_commit(bt_avrcp_t *a, bt_avrcp_command_t *c, unsigned at)
 {
     if(c) {
         if(c==&a->set) a->sets++;
         c->sent=true; c->waiting=true; c->deadline=a->now+BT_AVRCP_REPLY_MS;
         return;
     }
-    for(unsigned i=1;i<a->answers;i++) a->answer[i-1]=a->answer[i];
+    for(unsigned i=at+1;i<a->answers;i++) a->answer[i-1]=a->answer[i];
     a->answers--;
     ar_wipe(&a->answer[a->answers],sizeof(a->answer[0]));
 }
@@ -626,7 +641,7 @@ size_t bt_avrcp_next(bt_avrcp_t *a, uint8_t *out, size_t cap, uint16_t mtu, uint
         bt_avrcp_msg_t *m=ar_head(a,&c);
         if(!m) return 0;
         size_t n=m->bytes;
-        if(n>mtu) { a->unsendable++; ar_commit(a,c); continue; }
+        if(n>mtu) { a->unsendable++; ar_commit(a,c,0); continue; }
         if(cap<n) return 0;
         ar_copy(out,m->pdu,n);
         *serial=m->id;
@@ -639,9 +654,9 @@ bool bt_avrcp_sent(bt_avrcp_t *a, uint32_t serial, uint64_t now)
 {
     a->now=now;
     bt_avrcp_command_t *c;
-    bt_avrcp_msg_t *m=ar_head(a,&c);
-    if(!m || !serial || m->id!=serial) { a->stale_sends++; return false; }
-    ar_commit(a,c);
+    unsigned at;
+    if(!ar_find(a,serial,&c,&at)) { a->stale_sends++; return false; }
+    ar_commit(a,c,at);
     return true;
 }
 

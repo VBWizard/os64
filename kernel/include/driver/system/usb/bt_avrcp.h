@@ -147,7 +147,7 @@ typedef struct bt_avrcp {
     uint32_t malformed;       // a message, or a response of ours, not well formed
     uint32_t fragments_dropped, too_long;
     uint32_t unsendable;      // a message longer than the channel's MTU, dropped
-    uint32_t stale_sends;     // bt_avrcp_sent for a serial that was no longer the head's
+    uint32_t stale_sends;     // bt_avrcp_sent for a serial no message has any more
     uint32_t overrun;         // a command of theirs with no room for its answer, dropped
     uint32_t ignored;         // a message while IDLE
     uint32_t invalid_profile; // their messages for another profile, and their answers saying ours was
@@ -170,14 +170,21 @@ void bt_avrcp_tick(bt_avrcp_t *a, uint64_t now);     // the timers: our commands
 // The message to send NOW: the oldest answer owed first, then our commands
 // not yet sent (the registration's, then the Set). It is copied to `out`
 // and its serial to *serial; nothing is consumed, so asking again before
-// bt_avrcp_sent gives the same message and serial. Returns its length; 0
-// (and serial 0) when there is nothing, or `capacity` is too small (the
-// message waits). A message longer than `mtu` is dropped here and counted:
-// a command so dropped is treated as sent and left to its timer.
+// bt_avrcp_sent gives the same message and serial, unless something was
+// queued ahead of it meanwhile (an answer owed goes ahead of our commands).
+// Returns its length; 0 (and serial 0) when there is nothing, or
+// `capacity` is too small (the message waits). A message longer than
+// `mtu` is dropped here and counted: a command so dropped is treated as
+// sent and left to its timer.
 size_t bt_avrcp_next(bt_avrcp_t *a, uint8_t *out, size_t capacity, uint16_t mtu, uint64_t now, uint32_t *serial);
-// The message with this serial was handed to the controller: an answer
-// leaves the owed list, a command is sent and its timer starts. False, and
-// nothing changes, when the serial is not the head's any more.
+// The message with this serial was handed to the controller. The serial
+// is looked up among everything next can have handed out (the answers
+// owed, our commands not yet sent), not only the head, because a message
+// the carrier parked may have been overtaken since: an answer leaves the
+// owed list, the rest keeping their order; a command is sent and its
+// timer starts. False, and nothing changes, when no message has this
+// serial any more (it was retired, replaced or already committed): the
+// carrier should not have sent it.
 bool bt_avrcp_sent(bt_avrcp_t *a, uint32_t serial, uint64_t now);
 
 // The controller's side: their volume.

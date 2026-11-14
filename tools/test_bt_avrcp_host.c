@@ -1278,6 +1278,93 @@ static void test_notifications(void)
     SET(3);
 }
 
+// ── Take then commit, with the carrier parking a message ─────────────────────
+
+// The head handed out by next and not yet sent; its bytes and serial.
+static uint32_t handed(uint8_t *out, size_t *n)
+{
+    uint32_t s = 0;
+    *n = bt_avrcp_next(&A, out, 64, 48, T, &s);
+    return s;
+}
+
+static void test_parked(void)
+{
+    uint8_t out[64];
+    size_t n;
+    // Our command handed out, an answer of theirs queued ahead of it before
+    // it is sent: the command is still committed by its serial, never sent
+    // twice, and their answer to it is taken.
+    fresh(); bt_avrcp_channel_open(&A, T);
+    uint32_t s = handed(out, &n);
+    unsigned g = out[0] >> 4;
+    CHECK(n > 0 && out[9] == GET_CAPS);
+    msg_t p = pass(4, 0x44);
+    feed(&p);
+    CHECK(bt_avrcp_sent(&A, s, T));
+    expect(pass_answer(4, R_ACCEPTED, 0x44));
+    expect_nothing();
+    msg_t e = events(g, ALL_EVENTS, 3);
+    feed(&e);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_REGISTERING);
+    CHECK_EQ(A.strays, 0);
+    CHECK_EQ(A.stale_sends, 0);
+    // Its timer runs from that send: silence is counted as usual.
+    unsigned r = REGISTERED();
+    msg_t i = volume_reply(r, R_INTERIM, 50);
+    feed(&i);
+    // A Set handed out, a command of theirs arriving before it is sent.
+    CHECK(bt_avrcp_set_volume(&A, 70, T));
+    s = handed(out, &n);
+    unsigned sl = out[0] >> 4;
+    CHECK(n > 0 && out[9] == SET_VOLUME);
+    msg_t c = vcmd(5, C_STATUS, GET_CAPS, P(0x03));
+    feed(&c);
+    CHECK(bt_avrcp_sent(&A, s, T));
+    expect(vanswer(5, R_STABLE, GET_CAPS, P(0x03, 2, EV_PLAYBACK, EV_TRACK)));
+    expect_nothing();
+    msg_t a = set_reply(sl, R_ACCEPTED, 70);
+    feed(&a);
+    expect_volume(70);
+    CHECK_EQ(A.sets, 1);
+    CHECK_EQ(A.strays, 0);
+    // A CHANGED handed out, another command of theirs queued behind it.
+    msg_t reg = vcmd(6, C_NOTIFY, REGISTER, P(EV_PLAYBACK, 0, 0, 0, 0));
+    feed(&reg);
+    expect(vanswer(6, R_INTERIM, REGISTER, P(EV_PLAYBACK, BT_AVRCP_STOPPED)));
+    bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
+    s = handed(out, &n);
+    CHECK(n > 0 && out[3] == R_CHANGED);
+    p = pass(7, 0x46);
+    feed(&p);
+    CHECK(bt_avrcp_sent(&A, s, T));
+    expect(pass_answer(7, R_ACCEPTED, 0x46));
+    expect_nothing();
+    // An answer handed out, a second answer queued behind it and a third
+    // arriving before the first is sent: neither later one is disturbed.
+    msg_t p1 = pass(8, 0x41), p2 = pass(9, 0x42), p3 = pass(10, 0x45);
+    feed(&p1); feed(&p2);
+    s = handed(out, &n);
+    CHECK(n > 0 && out[0] >> 4 == 8);
+    feed(&p3);
+    CHECK(bt_avrcp_sent(&A, s, T));
+    CHECK(!bt_avrcp_sent(&A, s, T));
+    expect(pass_answer(9, R_ACCEPTED, 0x42));
+    expect(pass_answer(10, R_ACCEPTED, 0x45));
+    expect_nothing();
+    CHECK_EQ(A.stale_sends, 1);
+    // A Set handed out and then replaced: its serial is refused, and the
+    // command of ours queued behind an answer is sent once by its own.
+    CHECK(bt_avrcp_set_volume(&A, 80, T));
+    s = handed(out, &n);
+    feed(&p1);
+    CHECK(bt_avrcp_set_volume(&A, 81, T));
+    CHECK(!bt_avrcp_sent(&A, s, T));
+    expect(pass_answer(8, R_ACCEPTED, 0x41));
+    SET(81);
+    expect_nothing();
+}
+
 // ── AVCTP: profiles, fragments, labels ──────────────────────────────────────
 
 // A message cut into AVCTP fragments at `cuts` (the frame's offsets, the
@@ -1751,6 +1838,7 @@ int main(int argc, char **argv)
     test_press_ring();
     test_answers();
     test_notifications();
+    test_parked();
     test_avctp();
     test_restarts();
     test_status();
