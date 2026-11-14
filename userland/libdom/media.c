@@ -10,8 +10,8 @@
  * HTML's half of the element lives here and the sound lives with the host
  * (dom/media.h). Each media element the page has is a RECORD: one for each
  * <audio> in the document, found by the media turn's walk, and one for
- * each element a script reaches through a media member, which is how an
- * element no document holds (`new Audio(url)`) gets one. The record holds
+ * each element a script reaches through a media member or gives a src,
+ * which is how an element no document holds (`new Audio(url)`) gets one. The record holds
  * its node, so a playing element the page dropped keeps playing, as the
  * standard has it, and lives until the binding does.
  *
@@ -30,9 +30,10 @@
  * controller, a playback rate other than 1 (kept and reported; the host
  * plays at 1, DEBTS.md), getStartDate, the per-candidate `error` events at
  * <source> elements (a failed candidate moves to the next one silently),
- * and an element that is neither in the document nor reached through a
- * media member: one a script makes and gives a src with setAttribute
- * alone has no record, and loads once it has one. */
+ * and an element that is in no document, was never given a src and was
+ * never reached through a media member (one made with innerHTML holding
+ * its <source> children, say): it has no record, and loads once it has
+ * one. */
 
 enum { N_EMPTY, N_IDLE, N_LOADING, N_NO_SOURCE };
 enum { R_NOTHING, R_METADATA, R_CURRENT, R_FUTURE, R_ENOUGH };
@@ -98,6 +99,7 @@ struct DMediaElements {
     bool walked;
     DValue *then;                   /* Promise.prototype.then, taken at install */
     JSClassID error_class, ranges_class;
+    DMutationConsumer mutations;    /* src set or changed: src_changed */
 };
 
 static JSClassID media_error_slot, time_ranges_slot;
@@ -927,13 +929,20 @@ static const DReflection kBooleans[] = {
     {"defaultMuted", "muted", K_BOOLEAN, 0, NULL, NULL, NULL, 0},
 };
 
-/* A script set the src attribute: setting it loads at once (HTML
- * § 4.8.11.2), so a script reading readyState next sees HAVE_NOTHING
- * (media_load records the attribute as acted on). */
-static void src_set(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
+/* The src attribute set or changed, by any route (the property, setAttribute,
+ * the Audio factory): HTML loads at once (§ 4.8.11.2), so a script that
+ * sets it and calls play() next plays the new resource, and one reading
+ * readyState sees HAVE_NOTHING. A media element no document holds gets
+ * its record here too. Removing src loads nothing. */
+static void src_changed(os64_dom_t *dom, const os64_html_change_t *record)
 {
-    if (d_provider_enter(dom)) {
-        media_load(dom, ctx, m);
+    if (record->kind != OS64_HTML_CHANGE_ATTR || record->attr_ns != NULL || record->attr_local == NULL ||
+        !os64_streq(record->attr_local, "src") || !is_media(record->target) ||
+        os64_html_attr(record->target, "src") == NULL || dom->media_elements == NULL)
+        return;
+    DMediaElement *m = record_of(dom, record->target, true);
+    if (m != NULL && d_provider_enter(dom)) {
+        media_load(dom, NULL, m);
         d_provider_leave(dom);
     }
 }
@@ -1047,9 +1056,8 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
     case M_ERROR: return error_object(dom, ctx, m);
     case M_SRC: {
         if (!set) return d_reflection_get(dom, ctx, m->node, &kSrc);
-        JSValue r = d_reflection_set(dom, ctx, m->node, &kSrc, value);
-        if (!JS_IsException(r)) src_set(dom, ctx, m);
-        return r;
+        /* The attribute's change loads (src_changed). */
+        return d_reflection_set(dom, ctx, m->node, &kSrc, value);
     }
     case M_CURRENT_SRC: return JS_NewString(ctx, m->current_src != NULL ? m->current_src : "");
     case M_CROSS_ORIGIN: {
@@ -1251,11 +1259,9 @@ static JSValue audio_factory(JSContext *ctx, JSValueConst new_target, int argc, 
         if (audio != NULL && status >= 0 && has_src)
             status = d_set_attr(dom, audio, "src", src.data != NULL ? src.data : "", src.length, false);
         if (audio != NULL && status >= 0) {
+            /* Its src attribute's change gave it a record and loaded it
+             * (src_changed), though no document holds it. */
             result = d_wrap_constructed(dom, ctx, audio, prototype);
-            /* Its record now, though no document holds it, and its src
-             * loaded as setting one does. */
-            DMediaElement *m = !JS_IsException(result) && has_src ? record_of(dom, audio, true) : NULL;
-            if (m != NULL) src_set(dom, ctx, m);
         } else {
             result = d_html_error(ctx, status);
         }
@@ -1383,5 +1389,7 @@ int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
     for (int kind = D_EVENT_LOADSTART; kind <= D_EVENT_VOLUMECHANGE; kind++)
         for (size_t i = 0; i < sizeof(holders) / sizeof(holders[0]); i++)
             if (d_event_handler(dom, ctx, holders[i], kind) < 0) return -1;
-    return d_event_handler(dom, ctx, media, D_EVENT_ERROR) < 0 ? -1 : 0;
+    if (d_event_handler(dom, ctx, media, D_EVENT_ERROR) < 0) return -1;
+    d_mutation_register(dom, &s->mutations, src_changed);
+    return 0;
 }

@@ -1604,16 +1604,17 @@ factory, and the media events' handlers on window, Element and Document,
 with `onerror` on the media prototype. HTML's half of the element is kept here and
 the sound is the host's (`dom/media.h`'s provider: open a resource, play,
 pause, seek, the gain and loop, and its facts). Each element the document
-holds, and each a script reaches through a media member, has a record that
-holds its node: networkState, readyState and the standard's flags, and the
-play() promises pending. `os64_dom_media_turn`, which runs no script, walks
-the tree once per version (a removed element pauses), runs the load
-algorithm when `src` was set or changed, resource selection over `src` or
-the first `<source>` whose type plays, and folds the host's facts into the
-states, queuing each event the standard's steps fire; `os64_dom_media_fire`
-runs one as a task, settling the promises that step took. A script's `src`
-setter, `load()`, `play()`, `pause()` and `currentTime` run their own steps
-at once. `play()` with sound needs the person (the provider's `activated`);
+holds, and each a script reaches through a media member or gives a src,
+has a record that holds its node: networkState, readyState and the
+standard's flags, and the play() promises pending. A `src` attribute set or
+changed by any route runs the load algorithm at once (a mutation consumer,
+`src_changed`), as do `load()`, `play()`, `pause()` and `currentTime`
+their own steps. `os64_dom_media_turn`, which runs no script, walks the
+tree once per version (a removed element pauses; a parsed element's first
+load is started there), runs resource selection over `src` or the first
+`<source>` whose type plays, and folds the host's facts into the states,
+queuing each event the standard's steps fire; `os64_dom_media_fire` runs
+one as a task, settling the promises that step took. `play()` with sound needs the person (the provider's `activated`);
 muted, it does not. An element that has ended or failed, is paused and is
 in no document closes its session, and `play()` or a seek opens another
 (`session_wake`), so a page playing `new Audio(x)` per sound keeps no

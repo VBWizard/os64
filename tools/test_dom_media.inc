@@ -322,7 +322,7 @@ static void dom_media_document_cases(void)
      * metadata by default; removed while playing, it pauses. Muted, it may
      * play without the person. */
     media_script(&f, "globalThis.a=document.createElement('audio');a.setAttribute('src','x.mp3');"
-                     "a.setAttribute('muted','');document.body.appendChild(a);hear(a);",
+                     "a.muted=true;document.body.appendChild(a);hear(a);",
                  "media: one in the document");
     media_turn(&f, "media: the walk finds it");
     check(media_opened == 1 && media_sessions[0].preload == OS64_DOM_MEDIA_PRELOAD_METADATA,
@@ -460,13 +460,32 @@ static void dom_media_rule_cases(void)
     media_turn(&f, "media: ready");
     check(media_opened == 1, "media: one session, not two");
     media_script(&f, "const h=heard();assert(R.join()==='ok','not rejected: '+R.join());"
-                     "assert(h.indexOf('abort')<0&&h.indexOf('emptied')<0,'no second load: '+h);",
+                     "assert(h.indexOf('abort')<0&&h.split('loadstart').length===2,'one selection: '+h);",
                  "media: one load");
+    /* setAttribute('src') loads at once, as the property does: a play()
+     * right after it plays the new resource, and a detached element given
+     * a src that way loads with no media member touched. */
+    media_script(&f, "heard();a.setAttribute('src','s2.mp3');assert(a.readyState===0&&a.networkState===3,'loaded at once');"
+                     "R.length=0;a.play().then(()=>R.push('ok'),e=>R.push(e.name));",
+                 "media: setAttribute src then play");
+    media_turn(&f, "media: the new resource opens");
+    MediaSession *s2 = &media_sessions[media_opened - 1];
+    check(strcmp(s2->url, "https://example.test/dir/s2.mp3") == 0 && s2->playing,
+          "media: the new resource opened, playing");
+    media_ready(s2, 2);
+    media_turn(&f, "media: ready");
+    media_script(&f, "assert(R.join()==='ok'&&!a.paused,'play() is for the new resource: '+R.join());heard();",
+                 "media: play resolves for it");
+    media_script(&f, "globalThis.d=document.createElement('audio');globalThis.D=[];"
+                     "d.addEventListener('loadstart',()=>D.push('loadstart'));d.setAttribute('src','d.mp3');",
+                 "media: a detached element by attribute");
+    media_turn(&f, "media: it loads");
+    media_script(&f, "assert(D.join()==='loadstart','loads: '+D.join());", "media: the detached element loads");
     /* Muted let it play without the person; unmuted, still without them,
      * it pauses rather than sound. */
     media_script(&f, "heard();a.muted=false;assert(a.paused&&!a.muted,'unmuting without the person pauses');",
                  "media: unmute without activation");
-    check(!media_sessions[0].playing, "media: the host was told to pause");
+    check(!s2->playing, "media: the host was told to pause");
     media_activated = true;
     media_script(&f, "a.play();a.muted=true;a.muted=false;assert(!a.paused,'with the person it plays on');",
                  "media: unmute with activation");
