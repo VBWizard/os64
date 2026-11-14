@@ -276,10 +276,12 @@ slot 2 reconnect                     # needs a saved bond
 slot 2 forget
 ```
 
-- **A Classic scan has to exist first.** `scan classic` runs
-  `bt_scan_start` (the inquiry the code already has and nothing calls), and
-  a result keeps the page-scan repetition mode and clock offset the inquiry
-  reported, which make the page that follows quick.
+- **A Classic scan has to exist first.** `scan classic` runs the inquiry
+  the code already has and nothing calls, on a controller in service, and
+  then the usual LE scan. (A result does not yet keep the page-scan
+  repetition mode and clock offset the inquiry reported, which would make
+  the page that follows quicker; a page without them is the
+  specification's default and takes up to its five seconds. DEBTS.)
 - `bt_host_command` parses `slot 2` on a path of its own (today any digit
   past `BT_HOST_PEERS` is refused) and gives it to the Classic link.
 - **A slot says what kind of address it takes.** Dual-mode headphones use
@@ -298,6 +300,12 @@ slot 2 forget
 Sent once, in the start-up round. The event mask is ONE write, the round's
 existing `BT_SCAN_MASK`, widened: a second mask written later would be
 overwritten by it.
+
+**The keyboard does not depend on any of it.** A controller that REFUSES
+one of the Classic setup commands below (answers with a failing status) is
+a controller with no Classic slot: the round notes which command and
+carries on, LE comes up as before, and slot 2 says why it is unavailable.
+Only silence fails the round, as it does for every command.
 
 | Command | Value | Why |
 |---|---|---|
@@ -325,7 +333,7 @@ like an LE peer and given the events that are its own.
 
 | State | Entered by | Leaves on |
 |---|---|---|
-| `IDLE` | boot; `forget`; a failed attempt's cleanup | `connect` / `reconnect` → `PAGING`; Connection Request from the bonded address → `ACCEPTING` |
+| `IDLE` | boot, and nothing since | `bond` / `connect` / `reconnect` → `PAGING`; Connection Request from the bonded address → `ACCEPTING` |
 | `PAGING` | Create Connection (0x0405) sent, with the inquiry's page-scan repetition mode and clock offset when the scan has them | Connection Complete: status 0 → `LINKED`; else → `STOPPED` with the status |
 | `ACCEPTING` | Accept Connection Request (0x0409), role: stay slave unless asked | Connection Complete, as above |
 | `LINKED` | a handle; `bt_acl_link_up` | we called → `AUTHENTICATING` (which pairs when there is no key); they called → Encryption Change on → `CHECKING` (the side that did not ask for authentication is sent no Authentication Complete: recalled), or after 2 s with no encryption → `AUTHENTICATING` |
@@ -334,7 +342,7 @@ like an LE peer and given the events that are its own.
 | `CHECKING` | Read Encryption Key Size (0x1408) | 16 bytes → `READY`; fewer → `CLOSING`, "weak encryption refused" (the key-size negotiation attack) |
 | `READY` | encrypted | Disconnection Complete → `STOPPED` (retryable or not by reason, as LE's manager judges); `forget` → `CLOSING` |
 | `CLOSING` | Disconnect (0x0406) sent, or a cancel of a page (0x0408) | Disconnection Complete, or Connection Complete with an error → `STOPPED` |
-| `STOPPED` | any failure, after its cleanup is confirmed | the manager's next attempt, or a command |
+| `STOPPED` | the end of every attempt and every link, whatever ended it (a failure, the far end, `forget`, `disconnect`), after its cleanup is confirmed: a link that is up is closed first, through `CLOSING` | the same exits as `IDLE` |
 | `FAILED` | the controller cannot be trusted (a bad count, a reply that cannot be) | never: `h->failed` |
 
 Events answered in any linked state, because the far end may start them:
@@ -361,6 +369,20 @@ Events answered in any linked state, because the far end may start them:
   For a synchronous link (SCO, eSCO), from anyone: Reject Synchronous
   Connection Request (0x042a; recalled).
 
+- **A call from the bonded address while we are busy with it or another**
+  is refused as "limited resources" (0x0d), which is the truth; 0x0f is for
+  an address we will never accept.
+- **Two calls that cross.** We page the headphones at the moment they page
+  us, and their Connection Request arrives while we are `PAGING` that same
+  address. It is ACCEPTED, not refused as busy: the controller then
+  completes one of the two and fails the other, and the link takes
+  whichever Connection Complete for that address carries status 0. One
+  that carries an error while the other is still owed is not the end of
+  the attempt.
+- **A debug link key is used and never kept.** A key of type 0x03 is what a
+  controller in Simple Pairing debug mode produces; the session works, the
+  bond is not saved, and the status file says why.
+
 **Answering in time with one command slot.** These events want an answer
 while the scan or an LE peer may hold the slot. The controller waits about
 five seconds for a Connection Request's answer and thirty for a pairing
@@ -382,7 +404,7 @@ Every command has the scan's deadline and its `timed_out` detail.
 Page scan is on only while slot 2 holds a bond, and a Connection Request is
 accepted only from that bond's address. So the machine is never
 discoverable, and before a pairing nothing can connect to it. A pairing is
-always started from our side, by a person typing `slot 2 connect`, after
+always started from our side, by a person typing `slot 2 bond`, after
 putting the headphones in their own pairing mode. That is the LE keyboard's
 rule, kept.
 
@@ -395,16 +417,25 @@ of its own, apart from LE's arrays: `/home/bluetooth_bond_classic`, a fixed
 record with the magic `OS64BC01`, written by the same atomic replace.
 `xhci_bluetooth_maintain` loads and saves it beside the two LE records.
 `bond` saves it when encryption comes up; `forget` deletes it and turns
-page scan off.
+page scan off. The link is initialised, and given the bond, only after the
+start-up round has finished, so no controller reset can follow and clear a
+scan enable the link believes is set.
 
 ### L6. Reconnection
 
 `bt_manager.c`'s policy is the model, not the code: it is written around
 LE scanning. The Classic manager is smaller. With a bond and `automatic`:
-page the headphones once at boot and after a retryable disconnection, with
-the same backoff ladder, and otherwise wait, because page scan is on and
-headphones switched on will call us. A page is 5 s of radio time the
-keyboard shares, so it is not repeated on a short timer.
+page the headphones at boot, after a retryable disconnection, and after a
+page they did not answer, on one ladder: 5 s doubling to 60 s, starting
+again at `READY`. Page scan is on as well, for headphones that call.
+
+The first cut paged once and then waited for their call, reasoning that a
+page is 5 s of radio time the keyboard shares. The P5 run of 2026-11-13
+ended that: the Bose pair held our key (it reconnected in 70 ms when
+paged) and never once called, with no audio connection ever made to it.
+So an unanswered page is asked again. The cost is one page a minute while
+bonded headphones are off; `slot 2 disconnect` stops it, and it is the
+figure to look at first if a keyboard or mouse stutters once a minute.
 
 ### L, proof
 
@@ -415,9 +446,10 @@ under the sanitizers; a mutant harness for the state table and the bond
 codec. P5, by Chris, with `/sys/bluetooth/connection` open:
 
 1. `scan classic`, then `slot 2 bond <address>` with the headphones in
-   pairing mode: `READY`, encrypted, and the headphones say "connected".
-2. Switch the headphones off and on: they call us, and it is `READY` again
-   with no typing.
+   pairing mode: `READY`, encrypted. (Headphones announce "connected"
+   when an audio connection opens, which is A.3's.)
+2. Switch the headphones off and on: it is `READY` again with no typing,
+   by their call or by our next page.
 3. Reboot: `READY` again.
 4. Type and move the mouse through all of it.
 5. `slot 2 forget`; switch them off and on: nothing connects.
@@ -427,6 +459,88 @@ that has just connected asks its host questions over L2CAP at once
 (recalled), and part L answers none of them, so the pair may hang up after
 a few seconds. `READY` reached from each end is L's pass; staying connected
 is S's. The disconnect reason is shown either way.
+
+### L, as built
+
+The core (`bt_classic.c`) and its wiring were built by two Opus builders
+from written briefs (`~/os64-opus-kit/BRIEF_BT_CLASSIC_CORE.md`,
+`BRIEF_BT_CLASSIC_INTEGRATION.md`) and read by Fable. Every command and
+event layout was checked against Linux 6.12's `hci.h`: no disagreement.
+Where the code departs from the text above, or settles what it left open:
+
+- **Every phase is entered at the event that decides it**, and its command
+  waits for a turn. So a page that connects goes straight to
+  `AUTHENTICATING`; `LINKED` is only the wait after an inbound call.
+- **A failure with a link up closes it first** (`CLOSING`, a Disconnect,
+  then `STOPPED`): a stale bond, a failed authentication, a weak key, lost
+  encryption, a failed pairing, a refused command, a timeout.
+- **The order answers are sent in**: the accept (the controller waits five
+  seconds), the link key, the IO capability, the confirmation, the PIN
+  refusal; then refusals to strangers, oldest first; then the link's own
+  command; Write Scan Enable last.
+- **"The first free turn" is the end of whoever holds the slot's chain of
+  commands**, since chained commands do not release it between them. The
+  bound is the chain's length, tens of milliseconds as a rule; the
+  25-second limit on a latched answer covers the worst.
+- **Waits the text did not give**: 40 s for an Authentication Complete
+  (the controller's own 30 s reports first), 10 s for the Encryption
+  Change, 6 s for an accepted call's Connection Complete. A caller that
+  has begun to authenticate is waited for up to 40 s, since starting ours
+  as well would collide with it.
+- **Retryable** (paged again, after 5 s doubling to 60): the far end went
+  away and may be back (reasons 0x08, 0x13, 0x14, 0x15, 0x22), or did
+  not answer a page (0x04). **Not**: key or authentication trouble, a
+  page the controller ended for another reason, `forget`, `disconnect`.
+- **Page scan** is written once the bond file has been read, 0x02 with a
+  bond and 0x00 without, and again only when that changes. A write the
+  controller refuses is not repeated until then.
+- **The Classic link still holding the command slot three seconds past
+  its command's deadline fails the controller**, as an unanswered LE
+  command does: the reply never came, or the USB transfer that carried the
+  command never reported done. Left there it would starve the keyboard
+  silently.
+- **Slot 2 takes no command until the bond file has been read**, a few
+  seconds after start-up: the read would otherwise undo a bond just made
+  or bring back one just forgotten.
+- **A `scan classic` that fails before its LE half began sends no LE
+  disable**: a disable for a scan that is not running is a command a
+  controller may refuse, and a refusal in a scan's cleanup fails the host.
+- **The link sends only with a credit the controller has given back**
+  (the host tells it each tick whether there is one: `no_credit`), and
+  never in the tick it gave up on a command. Finishing a command that was
+  answered needs no credit: the reply itself may carry none.
+- **Two crossing calls cannot be told apart** by their Connection
+  Completes, which carry the same address: the rule is only as good as
+  the controller's promise to complete one and fail the other. A refused
+  accept after the page's link is up is harmless.
+- **The setup phase is `BT_SCAN_LOCAL_NAME`** (`BT_SCAN_NAME` was taken).
+  The mask bytes came out as predicted: 0xbf, 0xe0, 0xee, 0, 0x02, 0xc0,
+  0x27, 0x20.
+- **Slot 2 is also unavailable on a controller with no LE**: the round
+  ends before the Classic setup. Not a machine in scope; DEBTS.
+- **`slot 2 forget` works on a failed controller**, as LE's does. **`slot
+  2 disconnect` turns automatic connection off** even when there was no
+  link to close: the person still meant stop.
+- **The "use slot 2" refusal on slots 0 and 1** applies only to a command
+  that names an address the last scan heard as Classic alone.
+- **The bond file is never deleted**: `forget` writes a record that says
+  "no bond". A record made as another adapter is treated as none.
+- Proof: `test_bt_classic_host` (a model headphone through every phase,
+  2,000 rounds of soup) and its 176 mutants; `test_bt_scan_host` (the
+  mask with and without BR/EDR, the six phases, each refused, `scan
+  classic`, its cleanup); `test_bt_multi_host` (with no bond and nobody
+  typing, 10,000 ticks of LE traffic send one Classic command, Write Scan
+  Enable(0), and every earlier LE scenario holds; a bond end to end beside
+  a typing keyboard; the urgent turn; the owner's bounds; the refusals;
+  reconnection); `test_bt_loader_host` (the real start-up with the six
+  commands, the 248-byte name against a guard); `test_bt_bond_store_host`.
+
+**What the P5 run is the first to try** (most worrying first): six new
+commands in every start-up round, one of them 251 bytes over the control
+endpoint, where silence (not refusal) fails the round; a Write Scan
+Enable on every boot; Encryption Key Refresh Complete now unmasked, which
+the adapter has never been free to send us; a five-second page sharing
+the radio with the keyboard; and everything about real headphones.
 
 ## Part S: the services
 

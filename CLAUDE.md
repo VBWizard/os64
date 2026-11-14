@@ -513,6 +513,22 @@ virtio because its drain waits for the tick.
   handle. `/sys/bluetooth/connection`'s `acl pools:` line shows them.
   docs/design/pending/AUDIO_CLASSIC.md is the design; its § T, as built
   says what is counted but not yet gated
+  **A Classic (BR/EDR) link** is slot 2 of `/sys/bluetooth/connection`
+  (`bt_classic.c`, pure; `tools/test_bt_classic_host.sh` plays the
+  headphones, 178 mutants): `scan classic`, then `slot 2 bond <address>`,
+  `connect`, `reconnect`, `disconnect`, `forget`. Bonded headphones that
+  drop or do not answer are PAGED AGAIN, 5 s doubling to a minute, until
+  `READY` or `slot 2 disconnect`: the P5's pair held our key and never
+  called us back. Secure Simple Pairing as
+  a device with no keys or display; the bond is
+  `/home/bluetooth_bond_classic`; page scan is on only while a bond is
+  held, and only the bonded address is accepted. Whatever the controller
+  asks of the link is LATCHED and answered at its next turn of the one
+  command slot, which it takes ahead of the scan and the LE peers when an
+  answer is waiting. The start-up round's Classic setup commands may be
+  REFUSED without costing the round: the slot then says why it is
+  unavailable and LE is untouched. Its data packets are not read yet
+  (L2CAP is the next part). § L, as built is the record
 - **Sound** (`audio/audio.c`, `audio/audio_stream.c`, `audio/kaudio.c`) —
   docs/design/pending/AUDIO_SEAM.md is the design. One stream in the
   machine: a program writes PCM (signed 16-bit, two channels, 48 kHz) to

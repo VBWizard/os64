@@ -16,12 +16,24 @@ static bool scan_equal(const uint8_t *a, const uint8_t *b, size_t n)
 }
 
 static bool scan_space(char c) { return c==' ' || c=='\t' || c=='\r' || c=='\n'; }
-bool bt_scan_request_valid(const char *data, size_t bytes)
+static bool scan_request_is(const char *data, size_t bytes, const char *word)
 {
     while (bytes && scan_space(*data)) { data++; bytes--; }
     while (bytes && scan_space(data[bytes-1])) bytes--;
-    return bytes==4 && data[0]=='s' && data[1]=='c' && data[2]=='a' && data[3]=='n';
+    size_t i=0;
+    for (; i<bytes && word[i]; i++) if (data[i]!=word[i]) return false;
+    return i==bytes && !word[i];
 }
+bool bt_scan_request_classic(const char *data, size_t bytes)
+{ return scan_request_is(data,bytes,"scan classic"); }
+bool bt_scan_request_valid(const char *data, size_t bytes)
+{ return scan_request_is(data,bytes,"scan") || bt_scan_request_classic(data,bytes); }
+
+// The controller has BR/EDR: LMP feature bit 37, "BR/EDR Not Supported", is
+// clear.
+static bool scan_bredr(const bt_scan_t *s) { return !(s->features[4]&0x20); }
+static bool scan_classic_setup(bt_scan_phase_t phase)
+{ return phase>=BT_SCAN_SSP && phase<=BT_SCAN_ACCEPT_TIMEOUT; }
 
 bool bt_scan_quiescent(const bt_scan_t *s)
 { return s->phase==BT_SCAN_IDLE || s->phase==BT_SCAN_DONE || s->phase==BT_SCAN_STOPPED; }
@@ -45,6 +57,11 @@ bool bt_scan_start_le(bt_scan_t *s,uint64_t now)
 {
     if(!bt_scan_start(s,now)) return false;
     s->le_only=true; return true;
+}
+bool bt_scan_start_classic(bt_scan_t *s,uint64_t now)
+{
+    if(!s->shared_controller || !scan_bredr(s) || !bt_scan_start(s,now)) return false;
+    s->phase=BT_SCAN_INQUIRY_MODE; s->le_only=false; return true;
 }
 
 // Validate the complete AD/EIR chain before changing a cached name. A zero
@@ -166,7 +183,7 @@ void bt_scan_event(void *context, const uint8_t *e, size_t n)
         } else if (n!=6) s->bad_reply=true;
     } else if (e[0]==1 && (s->phase==BT_SCAN_INQUIRY || s->phase==BT_SCAN_CLASSIC_WAIT)) {
         if (n!=3) { s->bad_reply=true; return; }
-        s->inquiry_done=true; s->inquiry_status=e[2];
+        s->inquiry_done=true; s->inquiry_status=e[2]; s->inquiry_active=false;
     } else if (e[0]==0x10) {
         if (n!=3) s->bad_reply=true;
         else { s->hardware_error=true; s->status=e[2]; }
@@ -214,20 +231,37 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         if (timed_out && !s->error) {
             s->timed_out=true; s->timeout_usb_done=usb_done; s->timeout_reply=s->command_done;
         }
-        if (timed_out || (s->command_done && s->status) || s->bad_reply || s->hardware_error) {
+        // Two refusals are answers, not failures: a Classic setup command
+        // (it costs the Classic slot, bt_scan.h), and the cleanup's Inquiry
+        // Cancel (a controller refuses it when no inquiry is running).
+        bool refused=s->command_done && s->status;
+        bool answered=refused && (scan_classic_setup(s->phase) ||
+                                  (s->phase==BT_SCAN_CLEANUP && s->opcode==0x0402));
+        if (timed_out || (refused && !answered) || s->bad_reply || s->hardware_error) {
             if (s->phase==BT_SCAN_CLEANUP) { s->phase=BT_SCAN_FAILED; return; }
             scan_fail(s,timed_out ? "HCI command timed out" : "HCI command rejected",now);
             return;
         }
         if (!usb_done || !s->command_done) return;
         s->pending=false;
-        if (s->phase==BT_SCAN_CLEANUP) {
+        if (refused && scan_classic_setup(s->phase) && !s->classic_setup_refused) {
+            s->classic_setup_refused=true;
+            s->classic_refused_opcode=s->opcode; s->classic_refused_status=s->status;
+        }
+        if (s->phase==BT_SCAN_CLEANUP && s->opcode!=0x0402) {
             s->radio_active=false; s->phase=BT_SCAN_STOPPED; return;
         }
-        if (s->phase==BT_SCAN_INQUIRY) s->deadline=now+12000;
-        if (s->phase==BT_SCAN_LE_ENABLE) s->deadline=now+(s->le_only?2000:10000);
-        if (s->phase==BT_SCAN_RESET || s->phase==BT_SCAN_LE_DISABLE) s->radio_active=false;
-        s->phase++;
+        if (s->phase==BT_SCAN_CLEANUP) {
+            // The inquiry is stopped; the LE scan's disable goes next, with
+            // a cleanup's time of its own.
+            s->inquiry_active=false; s->deadline=now+2000;
+        } else {
+            if (s->phase==BT_SCAN_INQUIRY) s->deadline=now+12000;
+            if (s->phase==BT_SCAN_LE_ENABLE) s->deadline=now+(s->le_only?2000:10000);
+            if (s->phase==BT_SCAN_RESET || s->phase==BT_SCAN_LE_DISABLE) s->radio_active=false;
+            if (s->phase==BT_SCAN_LE_DISABLE) s->le_scan_on=false;
+            s->phase++;
+        }
     }
     if (s->phase==BT_SCAN_CLASSIC_WAIT) {
         if (!s->inquiry_done) {
@@ -235,7 +269,8 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
             return;
         }
         if (s->inquiry_status) { s->status=s->inquiry_status; scan_fail(s,"Classic inquiry failed",now); return; }
-        s->radio_active=false; s->phase=BT_SCAN_LE_HOST;
+        // A controller in service has had its LE setup: on to the LE scan.
+        s->radio_active=false; s->phase=s->shared_controller ? BT_SCAN_LE_PARAMS : BT_SCAN_LE_HOST;
     }
     if (s->phase==BT_SCAN_LE_WAIT) {
         if (now<s->deadline) return;
@@ -243,27 +278,47 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
     }
     if (s->phase==BT_SCAN_INQUIRY_MODE && (s->le_only || (s->features[4]&0x20))) s->phase=BT_SCAN_LE_HOST;
     if (s->phase==BT_SCAN_LE_HOST && !(s->features[4]&0x40)) s->phase=BT_SCAN_DONE;
+    if (scan_classic_setup(s->phase) && !scan_bredr(s)) s->phase=BT_SCAN_LE_PARAMS;
     if (s->phase==BT_SCAN_DONE) return;
     if (s->phase==BT_SCAN_CLEANUP && now>=s->deadline) { s->phase=BT_SCAN_FAILED; return; }
-    // Wait for USB to release command storage before cleanup: Scan Disable
-    // on a shared controller, or Reset during exclusive initialization.
+    // Wait for USB to release command storage before cleanup: Inquiry
+    // Cancel and Scan Disable on a shared controller, or Reset during
+    // exclusive initialization.
     if (!usb_done || (!s->credits && s->phase!=BT_SCAN_CLEANUP)) {
         return;
     }
-    uint8_t p[8]={0}, length=0;
+    // Write Local Name's 248 bytes are the longest parameters sent.
+    uint8_t p[248]={0}, length=0;
     uint16_t op=0;
     switch (s->phase) {
     case BT_SCAN_RESET: op=0x0c03; break;
     case BT_SCAN_CLEANUP:
+        // A controller in service keeps its links, so what may be running
+        // is stopped rather than reset away: the inquiry, then the LE scan.
+        if (s->shared_controller && s->inquiry_active) { op=0x0402; break; }
+        // A Classic scan that failed before its LE scan was switched on has
+        // nothing left to stop.
+        if (s->shared_controller && !s->le_only && !s->le_scan_on) {
+            s->radio_active=false; s->phase=BT_SCAN_STOPPED; return;
+        }
         op=s->shared_controller?0x200c:0x0c03;
         length=s->shared_controller?2:0; break;
     case BT_SCAN_FEATURES: op=0x1003; break;
     case BT_SCAN_ADDRESS: op=0x1009; break;
     case BT_SCAN_MASK:
         op=0x0c01; length=8;
-        // Inquiry, disconnect, encryption, command replies, completed ACL,
-        // Hardware Error, RSSI/EIR and LE Meta.
+        // Bit n is event code n+1. Inquiry, disconnect, encryption,
+        // command replies, completed ACL, Hardware Error, RSSI/EIR and LE
+        // Meta.
         p[0]=0x93; p[1]=0xe0; p[2]=4; p[4]=2; p[5]=0x40; p[7]=0x20;
+        if (scan_bredr(s)) {
+            // The Classic link's (bt_classic.c): Connection Complete and
+            // Request, Authentication Complete; Role Change, Mode Change,
+            // PIN Code Request, Link Key Request and Notification;
+            // Encryption Key Refresh Complete; IO Capability Request and
+            // Response, User Confirmation Request, Simple Pairing Complete.
+            p[0]|=0x2c; p[2]|=0xea; p[5]|=0x80; p[6]|=0x27;
+        }
         break;
     case BT_SCAN_INQUIRY_MODE:
         op=0x0c45; length=1;
@@ -271,15 +326,26 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         break;
     case BT_SCAN_INQUIRY:
         op=0x0401; length=5; p[0]=0x33; p[1]=0x8b; p[2]=0x9e; p[3]=8;
-        s->radio_active=true; break; // GIAC, 8 * 1.28 seconds, unlimited responses.
+        s->radio_active=true; s->inquiry_active=true; break; // GIAC, 8 * 1.28 seconds, unlimited responses.
     case BT_SCAN_LE_HOST: op=0x0c6d; length=2; p[0]=1; break;
     case BT_SCAN_LE_MASK: op=0x2001; length=8; p[0]=7; break; // Connection, advertising, connection update.
     case BT_SCAN_BUFFER: op=0x1005; break;
     case BT_SCAN_LE_BUFFER: op=0x2002; break;
+    case BT_SCAN_SSP: op=0x0c56; length=1; p[0]=1; break;   // Simple Pairing on
+    case BT_SCAN_LOCAL_NAME:
+        op=0x0c13; length=248; p[0]='o'; p[1]='s'; p[2]='6'; p[3]='4';   // the rest zero
+        break;
+    case BT_SCAN_CLASS:
+        // 0x200104: service class Audio, major class Computer, minor Desktop.
+        op=0x0c24; length=3; p[0]=0x04; p[1]=0x01; p[2]=0x20;
+        break;
+    case BT_SCAN_POLICY: op=0x080f; length=2; p[0]=0x05; break;   // role switch and sniff allowed
+    case BT_SCAN_PAGE_TIMEOUT: op=0x0c18; length=2; p[1]=0x20; break;   // 0x2000 slots: 5.12 s
+    case BT_SCAN_ACCEPT_TIMEOUT: op=0x0c16; length=2; p[0]=0xa0; p[1]=0x1f; break;   // 0x1fa0 slots: 5.06 s
     case BT_SCAN_LE_PARAMS:
         op=0x200b; length=7; p[0]=1; p[1]=0x60; p[3]=0x30;
         break; // Active scan, 60ms interval / 30ms window, public own address, all advertisers.
-    case BT_SCAN_LE_ENABLE: op=0x200c; length=2; p[0]=1; p[1]=1; s->radio_active=true; break;
+    case BT_SCAN_LE_ENABLE: op=0x200c; length=2; p[0]=1; p[1]=1; s->radio_active=true; s->le_scan_on=true; break;
     case BT_SCAN_LE_DISABLE: op=0x200c; length=2; break;
     default: return;
     }
@@ -301,18 +367,19 @@ size_t bt_scan_status(const bt_scan_t *s, char *out, size_t cap)
     const char *state=s->phase==BT_SCAN_IDLE ? "idle" : s->phase==BT_SCAN_DONE ? "complete" :
         s->phase==BT_SCAN_STOPPED ? "stopped (retry available)" :
         s->phase==BT_SCAN_FAILED ? "failed (reboot required)" : s->phase==BT_SCAN_CLEANUP ? "stopping after error" :
-        s->phase<=BT_SCAN_INQUIRY || s->phase==BT_SCAN_BUFFER || s->phase==BT_SCAN_LE_BUFFER ? "initializing" :
+        s->shared_controller && s->phase>=BT_SCAN_INQUIRY_MODE && s->phase<=BT_SCAN_CLASSIC_WAIT ? "Classic inquiry" :
+        s->phase<=BT_SCAN_INQUIRY || (s->phase>=BT_SCAN_BUFFER && s->phase<=BT_SCAN_ACCEPT_TIMEOUT) ? "initializing" :
         s->phase==BT_SCAN_CLASSIC_WAIT ? "Classic inquiry" : "LE scan";
     const char *timeout=bt_scan_timeout_text(s);
     int n=snprintf(out,cap,"state: %s\ncontroller: %02x:%02x:%02x:%02x:%02x:%02x\n"
         "devices: %u\nreports beyond capacity: %u\nmalformed reports: %u\n"
         "error: %s (opcode %04x status %02x)%s\n"
-        "discovery may be active: %s\nwrite scan to start %s\n",
+        "discovery may be active: %s\nwrite scan to start LE discovery (about 2 seconds)%s\n",
         state,s->address[5],s->address[4],s->address[3],s->address[2],s->address[1],s->address[0],
         s->count,s->dropped,s->malformed_reports,s->error ? s->error : "none",
         s->error_opcode,s->error_status,timeout,s->radio_active ? "yes" : "no",
-        s->le_only || s->shared_controller ? "LE discovery (about 2 seconds)" :
-        "Classic then LE discovery (about 21 seconds)");
+        scan_bredr(s) ? ", or scan classic to start Classic then LE discovery (about 21 seconds)" :
+        "; this controller has no Classic radio");
     return n<0 || !cap ? 0 : (size_t)n<cap ? (size_t)n : cap-1;
 }
 

@@ -16,6 +16,7 @@
 #include "kmalloc.h"
 #include "memset.h"
 #include "memcpy.h"
+#include "memcmp.h"
 #include "paging.h"
 #include "serial_logging.h"
 #include "BasicRenderer.h"   // printf — framebuffer boot lines only
@@ -225,6 +226,16 @@ typedef struct {
 	hid_keyboard_t keyboards[BT_HOST_PEERS];
 	input_pointer_source_t pointers[BT_HOST_PEERS];
 	uint8_t timeline_phase[BT_HOST_PEERS];   // each slot's phase as /sys/usb's timeline last wrote it
+	uint8_t timeline_classic_phase;          // the same, for the Classic link (slot 2)
+	// Headphones left off are paged again and again, and each page is two
+	// moves (stopped, paging, stopped). The first unanswered page is
+	// written; the ones after it are counted here until the link does
+	// anything else, so they cannot push every other line out of the
+	// timeline. `quiet`: the page under way is one of those.
+	bool timeline_classic_unanswered, timeline_classic_quiet;
+	uint64_t timeline_classic_unlisted;
+	// When a Classic bond save that failed is tried again (ms); 0: at once.
+	uint64_t classic_save_at;
 	// The adapter's port, as its status-change events left it, and control
 	// endpoint events that named no request in flight (xhci_bt_log_usb_state).
 	uint32_t port_changes, port_last_sc, ep0_unmatched;
@@ -241,6 +252,8 @@ typedef struct {
 		uint32_t event_resyncs, acl_resyncs;
 		const char *error[BT_HOST_PEERS];
 		bool blocked[BT_HOST_PEERS];
+		const char *classic_error;
+		bool classic_refused;
 	} logged;
 } xhci_bt_probe_t;
 
@@ -406,6 +419,7 @@ typedef enum {
 	XHCI_TL_SCAN_STARTED,
 	XHCI_TL_SCAN_FINISHED,   // `to` = devices found, `from` = 1 when the scan failed
 	XHCI_TL_LE_PHASE,        // `slot` moved from phase `from` to phase `to`
+	XHCI_TL_CLASSIC_PHASE,   // the Classic link (`slot` 2) moved from phase `from` to phase `to`
 } xhci_timeline_kind_t;
 
 typedef struct {
@@ -1587,6 +1601,26 @@ static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
 				printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u's automatic connection has stopped and waits for the user (write reconnect to /sys/bluetooth/connection)\n", i);
 		}
 	}
+	// The Classic slot: a setup command the controller refused costs it,
+	// and LE carries on; said once.
+	if (h->classic_setup_refused && !p->logged.classic_refused) {
+		p->logged.classic_refused = true;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: the controller refused Classic setup command %04x (status %02x); slot %u is unavailable, LE is unaffected\n",
+		       h->classic_refused_opcode, h->classic_refused_status, BT_HOST_CLASSIC_SLOT);
+	}
+	// The Classic link stopping with an error, said when the error changes,
+	// as for an LE slot; a link that reaches READY clears the memory.
+	const bt_classic_t *c = &h->classic;
+	if (c->phase == BT_CLASSIC_READY) {
+		p->logged.classic_error = NULL;
+	} else if ((c->phase == BT_CLASSIC_STOPPED || c->phase == BT_CLASSIC_FAILED) && c->error &&
+	           c->error != p->logged.classic_error) {
+		p->logged.classic_error = c->error;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u (Classic) stopped: %s (command %04x status %02x, disconnect reason %02x); %s\n",
+		       BT_HOST_CLASSIC_SLOT, c->error, c->error_opcode, c->error_status, c->disconnect_reason,
+		       c->phase == BT_CLASSIC_FAILED ? "the controller has failed" :
+		       c->retryable ? "it may be paged again" : "it waits for the headphones or the user");
+	}
 }
 
 static void xhci_bt_runtime_poll(void)
@@ -1656,6 +1690,30 @@ static void xhci_bt_runtime_poll(void)
             printd(DEBUG_USB, "xhci: AX210 slot %u LE phase=%u error=%s opcode=%04x status=%02x\n",
                    i, s->phase, s->error ? s->error : "none", s->error_opcode, s->error_status);
     }
+    // The Classic link's phase, against what the timeline last wrote, for
+    // the same reason as the LE slots'.
+    const bt_classic_t *classic = &p->host.classic;
+    if (classic->phase != p->timeline_classic_phase) {
+        bool paging = p->timeline_classic_phase == BT_CLASSIC_STOPPED && classic->phase == BT_CLASSIC_PAGING;
+        // Only a page timeout is one of the run: a page that ends any
+        // other way is written, and ends the run.
+        bool unanswered = p->timeline_classic_phase == BT_CLASSIC_PAGING && classic->phase == BT_CLASSIC_STOPPED &&
+                          classic->error_status == 0x04 && classic->retryable;
+        if (paging && p->timeline_classic_unanswered) {
+            p->timeline_classic_quiet = true;
+        } else if (unanswered && p->timeline_classic_quiet) {
+            p->timeline_classic_quiet = false;
+            p->timeline_classic_unlisted++;
+        } else {
+            xhci_timeline_add(XHCI_TL_CLASSIC_PHASE, BT_HOST_CLASSIC_SLOT, p->timeline_classic_phase, classic->phase);
+            p->timeline_classic_unanswered = unanswered;
+            p->timeline_classic_quiet = false;
+        }
+        printd(DEBUG_USB, "xhci: AX210 slot %u Classic phase=%u error=%s opcode=%04x status=%02x\n",
+               BT_HOST_CLASSIC_SLOT, classic->phase, classic->error ? classic->error : "none",
+               classic->error_opcode, classic->error_status);
+        p->timeline_classic_phase = (uint8_t)classic->phase;
+    }
     xhci_bt_log_trouble(p);
     if (usb_done && !p->host.owner) crypto_wipe(p->tx.buffer + 512, 258);
     // A send slot is wiped as its transfer completes, and not before: one
@@ -1666,11 +1724,13 @@ static void xhci_bt_runtime_poll(void)
         if (bt_le_input_active(&p->host.peers[i].le)) hid_keyboard_tick(&p->keyboards[i]);
 }
 
-bool xhci_bluetooth_scan(void)
+bool xhci_bluetooth_scan(bool classic)
 {
     if (__sync_lock_test_and_set(&s_poll_busy, 1)) return false;
+    uint64_t now = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
     bool ok = s_bluetooth_hc && !s_bluetooth_hc->bluetooth.failed &&
-        bt_host_scan(&s_bluetooth_hc->bluetooth.host, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
+        (classic ? bt_host_scan_classic(&s_bluetooth_hc->bluetooth.host, now)
+                 : bt_host_scan(&s_bluetooth_hc->bluetooth.host, now));
     xhci_serial_release();
     return ok;
 }
@@ -1687,6 +1747,49 @@ bool xhci_bluetooth_connection(const char *data, size_t bytes)
 
 void xhci_bluetooth_start_manager(void)
 { __atomic_store_n(&s_bond_manager_ready, true, __ATOMIC_RELEASE); }
+
+// The Classic bond's unit of work, when no LE slot has one: read the file
+// once the host is up with its Classic slot available, and write it when
+// the link has changed the bond. Called holding the serializing flag and
+// the bond I/O flag, and releases both; the serializing flag is let go
+// around the disk, as for the LE records.
+static void xhci_bt_classic_bond_work(xhci_bt_probe_t *p, uint64_t now)
+{
+	bt_host_t *h = &p->host;
+	bool ready = h->initialized && h->classic_available;
+	bool loading = ready && !h->classic.bond_loaded;
+	bool saving = ready && !loading && h->classic.bond_dirty && now >= p->classic_save_at;
+	if (!loading && !saving) {
+		xhci_serial_release(); __sync_lock_release(&s_bond_io_busy); return;
+	}
+	bt_classic_bond_t snapshot = h->classic.bond;
+	xhci_serial_release();
+	bool good = loading ? bt_classic_bond_load(&snapshot) : bt_classic_bond_save(&snapshot);
+	// Published under the flag, which this waits for, sleeping between
+	// tries: kusb may hold it for a tick, too long to spin a core through.
+	while (__sync_lock_test_and_set(&s_poll_busy, 1)) {
+		thread_t *self = get_core_local_storage()->currentThread;
+		signal_raise(SIGSLEEP, kTicksSinceStart + 1, self);
+	}
+	now = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
+	if (loading) {
+		// An unreadable file is taken as no bond, and stays until a bond is
+		// saved over it.
+		if (h->initialized && h->classic_available && !h->classic.bond_loaded)
+			(void)bt_host_classic_bond(h, good ? &snapshot : NULL, now);
+		h->classic_storage = good ? NULL : "saved bond unavailable or invalid";
+	} else {
+		// Saved as it was when read: a bond changed meanwhile is saved again.
+		if (good && !memcmp(&h->classic.bond, &snapshot, sizeof(snapshot))) h->classic.bond_dirty = false;
+		h->classic_storage = good ? NULL : "save failed; RAM bond retained";
+		p->classic_save_at = good ? 0 : now + 10000;
+	}
+	xhci_serial_release();
+	// A loaded bond is paged by kusb's pass: bring it round now.
+	if (loading) doorbell_ring(&kUsbDoorbell);
+	crypto_wipe(&snapshot, sizeof(snapshot));
+	__sync_lock_release(&s_bond_io_busy);
+}
 
 void xhci_bluetooth_maintain(void)
 {
@@ -1710,7 +1813,8 @@ void xhci_bluetooth_maintain(void)
         if (!candidate->loaded || (candidate->dirty && now >= candidate->next_save)) break;
     }
     if (slot == BT_HOST_PEERS) {
-        xhci_serial_release(); __sync_lock_release(&s_bond_io_busy); return;
+        xhci_bt_classic_bond_work(p, now);
+        return;
     }
     bt_host_peer_t *peer = &p->host.peers[slot];
     bt_manager_t *m = &peer->manager;
@@ -1840,6 +1944,19 @@ static const char *xhci_le_phase_name(unsigned phase)
 	return phase <= BT_LE_STOPPED ? kLePhaseNames[phase] : "?";
 }
 
+// The Classic link's phases by name; bt_classic.h's enum in its order.
+static const char *const kClassicPhaseNames[] = {
+	"idle", "paging", "accepting", "linked", "authenticating", "encrypting",
+	"checking", "ready", "closing", "stopped", "failed",
+};
+_Static_assert(sizeof(kClassicPhaseNames) / sizeof(kClassicPhaseNames[0]) == BT_CLASSIC_FAILED + 1,
+               "kClassicPhaseNames must name every bt_classic_phase_t");
+
+static const char *xhci_classic_phase_name(unsigned phase)
+{
+	return phase <= BT_CLASSIC_FAILED ? kClassicPhaseNames[phase] : "?";
+}
+
 // Append to a bounded text; what does not fit is dropped and the text stays
 // terminated.
 static void xhci_report_addf(char *out, size_t cap, size_t *len, const char *fmt, ...)
@@ -1948,6 +2065,10 @@ size_t xhci_usb_report(char *out, size_t cap)
 	// line above (since boot, for the first line ever written).
 	uint64_t shown = s_timeline_count < XHCI_TIMELINE ? s_timeline_count : XHCI_TIMELINE;
 	xhci_report_addf(out, cap, &len, "timeline: %lu of %lu lines\n", shown, s_timeline_count);
+	// A run of unanswered Classic pages is one pair of lines and this count.
+	if (s_bluetooth_hc)
+		xhci_report_addf(out, cap, &len, "slot %u classic pages not answered and not listed: %lu\n",
+		                 BT_HOST_CLASSIC_SLOT, s_bluetooth_hc->bluetooth.timeline_classic_unlisted);
 	for (uint64_t n = s_timeline_count - shown; n < s_timeline_count; n++) {
 		const xhci_timeline_entry_t *e = &s_timeline[n % XHCI_TIMELINE];
 		xhci_report_addf(out, cap, &len, "  ms=%lu polls=%u events=%u gap_max_us=%lu ",
@@ -1957,6 +2078,9 @@ size_t xhci_usb_report(char *out, size_t cap)
 		else if (e->kind == XHCI_TL_SCAN_FINISHED)
 			xhci_report_addf(out, cap, &len, "scan %s found=%u\n",
 			                 e->from ? "failed" : "finished", e->to);
+		else if (e->kind == XHCI_TL_CLASSIC_PHASE)
+			xhci_report_addf(out, cap, &len, "slot %u classic %s -> %s\n", e->slot,
+			                 xhci_classic_phase_name(e->from), xhci_classic_phase_name(e->to));
 		else
 			xhci_report_addf(out, cap, &len, "slot %u %s -> %s\n", e->slot,
 			                 xhci_le_phase_name(e->from), xhci_le_phase_name(e->to));

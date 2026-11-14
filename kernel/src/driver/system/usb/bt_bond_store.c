@@ -107,3 +107,85 @@ bool bt_bond_load(bt_le_bond_t *bond,bool *automatic)
 { return bt_bond_load_slot(0,bond,automatic); }
 bool bt_bond_save(const bt_le_bond_t *bond,bool automatic)
 { return bt_bond_save_slot(0,bond,automatic); }
+
+// The Classic link's bond: its own file and record (bt_classic.h), kept by
+// the same rules as the LE ones above: read, or created empty when absent
+// (an exclusive create, so an unreadable record is never replaced by a
+// load); written to a temporary and renamed over; every copy wiped.
+static const char classic_path[]="/home/bluetooth_bond_classic";
+static const char classic_temp[]="/home/bluetooth_bond_classic.new";
+_Static_assert(BT_CLASSIC_BOND_RECORD_BYTES==BT_BOND_RECORD_BYTES,"bond_write writes one record length for both");
+static bool classic_load_io(bt_classic_bond_t *bond)
+{
+    uint8_t record[BT_CLASSIC_BOND_RECORD_BYTES+1]; bool good=false;
+    crypto_wipe(bond,sizeof(*bond));
+    vfs_path_enter();
+    const char *tail=NULL; vfs_filesystem_t *fs=vfs_resolve_mount(classic_path,&tail);
+    if(!fs || !fs->fops) goto out;
+    vfs_file_operations_t ops=*fs->fops;
+    if(!ops.open || !ops.close || !ops.read) goto out;
+    vfs_file_t *file=NULL;
+    if(ops.open(&file,tail,"r",fs)!=0) {
+        if(!ops.write || !ops.sync || ops.open(&file,tail,"x",fs)!=0) goto out;
+        bt_classic_bond_encode(record,bond); good=bond_write(&ops,file,record); goto out;
+    }
+    size_t used=0; bool eof=false;
+    while(used<sizeof(record)) {
+        int n=ops.read(file,record+used,sizeof(record)-used);
+        if(n<0 || (size_t)n>sizeof(record)-used) break;
+        if(!n) { eof=true; break; }
+        used+=(size_t)n;
+    }
+    int closed=ops.close(file);
+    good=eof && !closed && bt_classic_bond_decode(bond,record,used);
+out:
+    vfs_path_exit(); crypto_wipe(record,sizeof(record)); return good;
+}
+static bool classic_save_io(const bt_classic_bond_t *bond)
+{
+    uint8_t record[BT_CLASSIC_BOND_RECORD_BYTES]; bool good=false;
+    bt_classic_bond_encode(record,bond);
+    vfs_path_enter();
+    const char *tail=NULL,*temporary=NULL;
+    vfs_filesystem_t *fs=vfs_resolve_mount(classic_path,&tail);
+    vfs_filesystem_t *temp_fs=vfs_resolve_mount(classic_temp,&temporary);
+    if(!fs || fs!=temp_fs || !fs->fops) goto out;
+    vfs_file_operations_t ops=*fs->fops;
+    if(!ops.open || !ops.close || !ops.write || !ops.sync || !ops.rename || !ops.rm) goto out;
+    vfs_file_t *file=NULL;
+    if(ops.open(&file,temporary,"w",fs)!=0) goto out;
+    if(bond_write(&ops,file,record))
+        good=ops.rename(temporary,tail,fs,OS64_RENAME_REQUIRE_ATOMIC_REPLACE)==0;
+    if(!good) (void)ops.rm(temporary,fs);
+out:
+    vfs_path_exit(); crypto_wipe(record,sizeof(record)); return good;
+}
+typedef struct {
+    bt_classic_bond_t bond;
+    bool loading,good;
+} classic_io_t;
+static void classic_io_kernel(void *arg)
+{
+    classic_io_t *io=arg;
+    io->good=io->loading?classic_load_io(&io->bond):classic_save_io(&io->bond);
+}
+static bool classic_transfer(const bt_classic_bond_t *input,bt_classic_bond_t *output)
+{
+    // As bond_transfer: the disk callbacks need kernel mappings, and the
+    // arguments live in the HHDM across the trampoline's stack swap.
+    classic_io_t *io=kmalloc_try(sizeof(*io));
+    if(!io) return false;
+    io->loading=output!=NULL;
+    if(input) io->bond=*input;
+    call_in_kernel_context(classic_io_kernel,io);
+    bool good=io->good;
+    if(good && output) *output=io->bond;
+    crypto_wipe(io,sizeof(*io)); kfree(io); return good;
+}
+bool bt_classic_bond_load(bt_classic_bond_t *bond)
+{
+    crypto_wipe(bond,sizeof(*bond));
+    return classic_transfer(NULL,bond);
+}
+bool bt_classic_bond_save(const bt_classic_bond_t *bond)
+{ return classic_transfer(bond,NULL); }

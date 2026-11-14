@@ -2,8 +2,22 @@
 #define OS64_BT_HOST_H
 #include "driver/system/usb/bt_manager.h"
 #include "driver/system/usb/bt_acl.h"
+#include "driver/system/usb/bt_classic.h"
 
 #define BT_HOST_PEERS BT_BOND_SLOTS
+// The Classic link is slot 2 to a person (docs/design/pending/AUDIO_CLASSIC.md
+// § L1): the slot after the LE peers'. BT_HOST_PEERS also sizes the LE bond
+// files, keyboards and pointers, so the Classic slot is not one of them.
+#define BT_HOST_CLASSIC_SLOT BT_HOST_PEERS
+// Who holds the one command slot (`owner`): nobody, the scan, LE peer i
+// (BT_HOST_OWNER_PEER0 + i), or the Classic link. Every reader of `owner`
+// is bounded for each kind.
+enum {
+    BT_HOST_OWNER_NONE = 0,
+    BT_HOST_OWNER_SCAN = 1,
+    BT_HOST_OWNER_PEER0 = 2,
+    BT_HOST_OWNER_CLASSIC = 2 + BT_HOST_PEERS
+};
 // Controller commands and ACL credits are shared; pairing, encryption, ATT,
 // bond policy and input state belong to a peer. USB's serializing flag
 // (xhci.c) orders access.
@@ -16,9 +30,43 @@ typedef struct {
     bt_host_peer_t peers[BT_HOST_PEERS];
     bool initialized, failed, command_done, tx_used;
     uint8_t owner, credits, next_peer, poll_peer;
+    // The Classic link (bt_classic.h). Initialised when the start-up round
+    // reaches DONE and not before, so no reset can follow and clear a page
+    // scan the link believes is on; ticked and offered events only while
+    // `classic_available`: the controller has BR/EDR, the round ran its
+    // Classic setup, and the controller refused none of it. Otherwise
+    // `classic_unavailable` says why, as a string literal. The first
+    // refused setup command is copied here from the round, as the buffer
+    // sizes are: the next scan clears the round's copy.
+    bt_classic_t classic;
+    bool classic_available;
+    const char *classic_unavailable;
+    bool classic_setup_refused;
+    uint16_t classic_refused_opcode;
+    uint8_t classic_refused_status;
+    // The handle the Classic link is counted under in `acl`, PLUS ONE, as
+    // acl_link[]; and its ACL packets received, which are dropped until
+    // something reads them.
+    uint16_t acl_classic;
+    uint32_t classic_rx_unread;
+    // Reconnection (AUDIO_CLASSIC.md § L6): with a bond and `classic_auto`,
+    // page the headphones once when the bond is loaded, and again after a
+    // drop they may come back from or a page they did not answer, at
+    // classic_page_at (0: no page owed), the wait doubling from 5 s to
+    // 60 s and starting again at READY. Any other end waits for them to
+    // call (page scan is on) or for the user.
+    bool classic_auto;
+    uint64_t classic_page_at;
+    uint32_t classic_backoff_ms;
+    // Why the Classic bond file could not be read or written (a string
+    // literal, from whoever keeps the file); NULL when it could.
+    const char *classic_storage;
+    // Why the last command was refused, when the refusal has words (a
+    // string literal); NULL when it was taken or has none.
+    const char *refused_why;
     // The controller's ACL buffers (bt_acl.h): sized from the start-up
-    // round, a link for each connected LE peer, every packet sent and
-    // completed counted. The LE peers still send one packet at a time by
+    // round, a link for each connected LE peer and for the Classic link,
+    // every packet sent and completed counted. The LE peers still send one packet at a time by
     // their own rule (tx_used); this is the count a link that sends more
     // will be held to. acl_link[i] is the handle peer i is counted under
     // PLUS ONE, zero when it has none, so a host made by zeroing is right.
@@ -64,6 +112,17 @@ void bt_host_tick(bt_host_t *, uint64_t, bool, bool, bool,
                   bt_scan_send_t, bt_le_acl_send_t, bt_host_report_t, void *);
 void bt_host_policy(bt_host_t *, uint64_t);
 bool bt_host_scan(bt_host_t *, uint64_t);
+// `scan classic`: a Classic inquiry, then the LE scan. Refused as
+// bt_host_scan is, and while the Classic link is neither quiescent nor
+// READY (an inquiry beside a page or a pairing would starve it).
+bool bt_host_scan_classic(bt_host_t *, uint64_t);
+// The Classic bond file has been read (bond->valid false: there is none).
+// A bond made as another adapter is taken as none. Given to the link, and
+// a valid one is paged once. False, and nothing done, unless the host is
+// initialised with its Classic slot available.
+bool bt_host_classic_bond(bt_host_t *, const bt_classic_bond_t *, uint64_t);
+// "slot N COMMAND" (slot 0 when no slot is named). Slot 2 is the Classic
+// link: COMMAND goes to bt_classic_request.
 bool bt_host_command(bt_host_t *, const char *, size_t, uint64_t);
 size_t bt_host_status(const bt_host_t *, char *, size_t);
 #endif

@@ -2671,7 +2671,8 @@ static int sys_close(vfs_file_t *vfs_file)
 		if (h->kind == SYS_HANDLE_BTWRITE) {
 			if (h->bt_refused || (h->bt_length &&
 			    (h->bt_connection ? !xhci_bluetooth_connection(h->bt_command, h->bt_length) :
-			     (!bt_scan_request_valid(h->bt_command, h->bt_length) || !xhci_bluetooth_scan()))))
+			     (!bt_scan_request_valid(h->bt_command, h->bt_length) ||
+			      !xhci_bluetooth_scan(bt_scan_request_classic(h->bt_command, h->bt_length))))))
 				verdict = -1;
 		}
 		else if (h->kind == SYS_HANDLE_DECORATIONS_WRITE) {
