@@ -111,6 +111,13 @@ const char *os64_media_strerror(int result);
 #define OS64_MEDIA_TYPE_PROBABLY  2
 int os64_media_type_supported(const char *type);
 
+// The MIME types os64_media_type_supported answers other than NO for when
+// they name no codecs, comma-separated as an Accept list is ("audio/mpeg,
+// audio/mp3, ..."), into `out`. Answers the length the whole list needs,
+// as os64_snprintf does; a list that does not fit is cut at a type, never
+// within one.
+size_t os64_media_type_list(char *out, size_t cap);
+
 // A source over an open file handle (os64_open's): the whole file, read
 // and seeked on that handle, which is moved to the file's start. It stays
 // the caller's, to close after the media. A handle with no position (a

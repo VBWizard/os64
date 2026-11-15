@@ -201,7 +201,7 @@ HEAD = {
     b'bytes': rb'([0-9]+)', b'kept lines': rb'([0-9]+)', b'zoom': rb'([0-9]+)', b'script seconds': rb'([0-9]+)',
     b'status': rb'([0-9]+)(?: .*)?',
     b'laid out at': rb'([0-9]+)(?:x([0-9]+))? px(?: in ([0-9]+) ms)?',
-    b'body': rb'html|text|image', b'encrypted': rb'yes|no', b'scripts': rb'on|off', b'modern': rb'on|off',
+    b'body': rb'html|text|image|media', b'encrypted': rb'yes|no', b'scripts': rb'on|off', b'modern': rb'on|off',
     b'appearance': rb'light|dark', b'motion': rb'full|reduce', b'animate': rb'on|off', b'kept': rb'whole|not whole: .+',
     b'final address': rb'.*', b'content-type': rb'.*', b'charset': rb'.*', b'TLS': rb'.*',
     b'agent': rb'.+', b'cookies': rb'.*', b'clock': rb'([0-9]+)', b'tz': rb'.+',

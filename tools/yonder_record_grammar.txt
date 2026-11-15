@@ -80,6 +80,8 @@ head	laid out at: 830 px in 12 ms
 head	laid out at: 830x600 px
 head	laid out at: 1400x900 px in 0 ms
 head	body: html
+head	body: image
+head	body: media
 head	encrypted: no
 head	scripts: off
 head	scripts: on

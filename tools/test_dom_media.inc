@@ -533,8 +533,76 @@ static void dom_media_rule_cases(void)
     fixture_free(&f);
 }
 
+static const os64_html_node_t *media_by_id(const os64_html_node_t *node, const char *id)
+{
+    for (; node != NULL; node = node->next) {
+        const os64_html_attr_t *attr = node->kind == OS64_HTML_ELEMENT ? os64_html_attr(node, "id") : NULL;
+        if (attr != NULL && strcmp(attr->value, id) == 0) return node;
+        const os64_html_node_t *inside = media_by_id(node->first_child, id);
+        if (inside != NULL) return inside;
+    }
+    return NULL;
+}
+
+/* The controls (§ The controls): what they show is the element's members,
+ * and what they do is what a script's call would do, events and all. A
+ * refused play() is the element's state, not the page's rejection. */
+static void dom_media_controls_cases(void)
+{
+    DomFixture f;
+    media_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    media_script(&f, "globalThis.a=document.createElement('audio');a.id='player';a.controls=true;"
+                     "a.src='song.mp3';document.body.appendChild(a);hear(a);"
+                     "globalThis.U=[];addEventListener('unhandledrejection',e=>U.push(e.reason&&e.reason.name));",
+                 "controls: an element");
+    const os64_html_node_t *node = media_by_id(f.document->document, "player");
+    os64_dom_media_view_t view;
+    check(node != NULL && os64_dom_media_view(f.binding, node, &view) && view.paused && !view.ended &&
+          isnan(view.duration) && view.position == 0 && view.volume == 1 && !view.muted,
+          "controls: the view of an element not yet loaded");
+    media_turn(&f, "controls: the turn opens it");
+    MediaSession *s = &media_sessions[0];
+    media_ready(s, 4);
+    media_turn(&f, "controls: the probe");
+    media_script(&f, "heard();", "controls: the ladder heard");
+    check(os64_dom_media_view(f.binding, node, &view) && view.duration == 4 && view.seekable && view.arrived == 4,
+          "controls: the view has the length, what arrived and that it seeks");
+
+    os64_js_outcome_t out;
+    check(os64_dom_media_control(f.binding, node, OS64_DOM_MEDIA_PLAY, 0, &out) && out.status == OS64_JS_OK,
+          "controls: a play without the person runs");
+    media_turn(&f, "controls: nothing follows a refused play");
+    check(!s->playing && os64_dom_media_view(f.binding, node, &view) && view.paused,
+          "controls: a play without the person is refused, as script's is");
+    media_activated = true;
+    check(os64_dom_media_control(f.binding, node, OS64_DOM_MEDIA_PLAY, 0, &out) && out.status == OS64_JS_OK,
+          "controls: a play with the person runs");
+    media_turn(&f, "controls: play's events");
+    check(s->playing && os64_dom_media_view(f.binding, node, &view) && !view.paused,
+          "controls: the host plays and the view says so");
+    check(os64_dom_media_control(f.binding, node, OS64_DOM_MEDIA_SEEK, 2.5, &out) &&
+          os64_dom_media_control(f.binding, node, OS64_DOM_MEDIA_VOLUME, 0.25, &out) &&
+          os64_dom_media_control(f.binding, node, OS64_DOM_MEDIA_MUTE, 1, &out) &&
+          os64_dom_media_control(f.binding, node, OS64_DOM_MEDIA_PAUSE, 0, &out),
+          "controls: a seek, the volume, mute and a pause");
+    check(s->seek_to == 2.5 && !s->playing && s->gain == 0, "controls: the host was told each");
+    media_turn(&f, "controls: their events");
+    media_script(&f, "const h=heard();"
+                     "assert(h==='play:4 playing:4 seeking:4 volumechange:4 volumechange:4 timeupdate:4 pause:4',"
+                     "'the events: '+h);"
+                     "assert(a.volume===0.25&&a.muted&&a.paused&&a.currentTime===2.5,'the members agree');",
+                 "controls: the page hears what script's calls would fire");
+    media_script(&f, "assert(U.length===0,'no unhandled rejection: '+U.join());", "controls: the refusal was not the page's");
+    check(os64_dom_media_control(f.binding, node, OS64_DOM_MEDIA_VOLUME, 7, &out) &&
+          os64_dom_media_view(f.binding, node, &view) && view.volume == 1,
+          "controls: a volume past the end is held to it");
+    fixture_free(&f);
+}
+
 static void dom_media_cases(void)
 {
+    dom_media_controls_cases();
     dom_media_rule_cases();
     dom_media_interface_cases();
     dom_media_play_cases();

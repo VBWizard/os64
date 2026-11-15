@@ -356,17 +356,19 @@ static const char *rp_head_value(const char *key, size_t klen, const char *v, si
     static const char *const kDecimal[]={"bytes","kept lines","zoom","script seconds"};
     if(rp_is(key,klen,"clock")) return rp_decimal_to(v,n,RP_CLOCK_MAX,NULL) ? NULL : "a count no record holds";
     if(rp_is(key,klen,"agent") || rp_is(key,klen,"tz")) return n>0 ? NULL : "a value yonder does not write";
-    static const struct { const char *key, *a, *b, *c; } kWords[]={
-        {"body","html","text","image"},{"encrypted","yes","no",NULL},{"scripts","on","off",NULL},
-        {"modern","on","off",NULL},{"appearance","light","dark",NULL},{"motion","full","reduce",NULL},
-        {"animate","on","off",NULL}};
+    static const struct { const char *key, *words[4]; } kWords[]={
+        {"body",{"html","text","image","media"}},{"encrypted",{"yes","no"}},{"scripts",{"on","off"}},
+        {"modern",{"on","off"}},{"appearance",{"light","dark"}},{"motion",{"full","reduce"}},
+        {"animate",{"on","off"}}};
     const char *end=v+n;
     for(size_t i=0;i<sizeof(kDecimal)/sizeof(kDecimal[0]);i++)
         if(rp_is(key,klen,kDecimal[i])) return rp_decimal(v,n,NULL) ? NULL : "a count no record holds";
     for(size_t i=0;i<sizeof(kWords)/sizeof(kWords[0]);i++)
-        if(rp_is(key,klen,kWords[i].key))
-            return rp_is(v,n,kWords[i].a) || rp_is(v,n,kWords[i].b) || (kWords[i].c!=NULL && rp_is(v,n,kWords[i].c))
-                 ? NULL : "a value yonder does not write";
+        if(rp_is(key,klen,kWords[i].key)) {
+            for(size_t j=0;j<4 && kWords[i].words[j]!=NULL;j++)
+                if(rp_is(v,n,kWords[i].words[j])) return NULL;
+            return "a value yonder does not write";
+        }
     if(rp_is(key,klen,"status")) {
         size_t d=rp_digit_run(v,end);
         if(d==0 || (d<n && v[d]!=' ')) return "a value yonder does not write";
@@ -1599,7 +1601,8 @@ static const char *rp_window_of(const RpRecord *r, bool local, const RpIndex *in
     os64_strcopy(hd->content_type,sizeof(hd->content_type),f[F_TYPE]);
     os64_strcopy(hd->charset,sizeof(hd->charset),f[F_CHARSET]);
     hd->encrypted=!strcmp(f[F_ENCRYPTED],"yes");
-    hd->body=!strcmp(body,"text") ? WAY_BODY_TEXT : !strcmp(body,"image") ? WAY_BODY_IMAGE : WAY_BODY_HTML;
+    hd->body=!strcmp(body,"text") ? WAY_BODY_TEXT : !strcmp(body,"image") ? WAY_BODY_IMAGE :
+             !strcmp(body,"media") ? WAY_BODY_MEDIA : WAY_BODY_HTML;
     if(f[F_TLS]!=NULL) {
         hd->tls_version=!strncmp(f[F_TLS],"1.3",3) ? 0x0304 : 0x0303;
         hd->tls_fallback=strstr(f[F_TLS],"fallback")!=NULL;

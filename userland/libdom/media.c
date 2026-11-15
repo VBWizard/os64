@@ -1029,6 +1029,56 @@ static JSValue play(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
     return promise;
 }
 
+/* The members a script sets and the controls set the same way: a seek
+ * (before metadata, the default start position), pause(), volume and
+ * muted. Each queues its events and tells the host. */
+static void time_set(os64_dom_t *dom, DMediaElement *m, double t)
+{
+    if (m->ready == R_NOTHING) {
+        m->default_start = t;
+        return;
+    }
+    if (d_provider_enter(dom)) {
+        seek(dom, m, t);
+        d_provider_leave(dom);
+    }
+}
+
+static void pause_asked(os64_dom_t *dom, DMediaElement *m)
+{
+    if (m->network == N_EMPTY) m->select_pending = true;
+    if (d_provider_enter(dom)) {
+        internal_pause(dom, m);
+        d_provider_leave(dom);
+    }
+}
+
+static void volume_set(os64_dom_t *dom, DMediaElement *m, double v)
+{
+    if (v == m->volume) return;
+    m->volume = v;
+    queue(dom, m, "volumechange", SETTLE_NONE);
+    if (d_provider_enter(dom)) {
+        tell_settings(dom, m);
+        d_provider_leave(dom);
+    }
+}
+
+static void muted_set(os64_dom_t *dom, DMediaElement *m, bool on)
+{
+    if (on == m->muted) return;
+    m->muted = on;
+    queue(dom, m, "volumechange", SETTLE_NONE);
+    if (d_provider_enter(dom)) {
+        /* Muted is what let it play without the person: unmuted while it
+         * plays and still without them, it pauses, as other browsers pause
+         * it, rather than sound unasked (§ Autoplay). */
+        if (!m->muted && !m->paused && !allowed(dom, m)) internal_pause(dom, m);
+        tell_settings(dom, m);
+        d_provider_leave(dom);
+    }
+}
+
 /* The receiver's record: `this` must be a media element. */
 static DMediaElement *receiver(os64_dom_t **dom, JSContext *ctx, JSValueConst self)
 {
@@ -1137,14 +1187,7 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         double t;
         if (JS_ToFloat64(ctx, &t, value) < 0) return JS_EXCEPTION;
         if (!isfinite(t)) return JS_ThrowTypeError(ctx, "The provided double value is non-finite");
-        if (m->ready == R_NOTHING) {
-            m->default_start = t;
-            return JS_UNDEFINED;
-        }
-        if (d_provider_enter(dom)) {
-            seek(dom, m, t);
-            d_provider_leave(dom);
-        }
+        time_set(dom, m, t);
         return JS_UNDEFINED;
     }
     case M_DURATION: return JS_NewFloat64(ctx, m->duration);
@@ -1195,11 +1238,7 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         return promise;
     }
     case M_PAUSE:
-        if (m->network == N_EMPTY) m->select_pending = true;
-        if (d_provider_enter(dom)) {
-            internal_pause(dom, m);
-            d_provider_leave(dom);
-        }
+        pause_asked(dom, m);
         return JS_UNDEFINED;
     case M_VOLUME: {
         if (!set) return JS_NewFloat64(ctx, m->volume);
@@ -1207,37 +1246,97 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         if (JS_ToFloat64(ctx, &v, value) < 0) return JS_EXCEPTION;
         if (!isfinite(v)) return JS_ThrowTypeError(ctx, "The provided double value is non-finite");
         if (v < 0 || v > 1) return d_error(ctx, "IndexSizeError", "The volume is outside the range [0, 1]");
-        if (v != m->volume) {
-            m->volume = v;
-            queue(dom, m, "volumechange", SETTLE_NONE);
-            if (d_provider_enter(dom)) {
-                tell_settings(dom, m);
-                d_provider_leave(dom);
-            }
-        }
+        volume_set(dom, m, v);
         return JS_UNDEFINED;
     }
     case M_MUTED: {
         if (!set) return JS_NewBool(ctx, m->muted);
         int on = JS_ToBool(ctx, value);
         if (on < 0) return JS_EXCEPTION;
-        if ((on != 0) != m->muted) {
-            m->muted = on != 0;
-            queue(dom, m, "volumechange", SETTLE_NONE);
-            if (d_provider_enter(dom)) {
-                /* Muted is what let it play without the person: unmuted
-                 * while it plays and still without them, it pauses, as
-                 * other browsers pause it, rather than sound unasked
-                 * (§ Autoplay). */
-                if (!m->muted && !m->paused && !allowed(dom, m)) internal_pause(dom, m);
-                tell_settings(dom, m);
-                d_provider_leave(dom);
-            }
-        }
+        muted_set(dom, m, on != 0);
         return JS_UNDEFINED;
     }
     default: return JS_ThrowTypeError(ctx, "Unknown media member");
     }
+}
+
+/* ── The controls (AUDIO_YONDER.md § The controls) ──────────────────── */
+
+bool os64_dom_media_view(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_media_view_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    out->duration = NAN;
+    if (dom == NULL || !d_delivery_active(dom) || !dom->options.modern) return false;
+    dom = d_owner(dom, node);
+    DMediaElement *m = record_of(dom, node, false);
+    if (m == NULL) return false;
+    os64_dom_media_facts_t f = {0};
+    if (d_provider_enter(dom)) {
+        out->position = fresh_position(dom, m);
+        if (m->session != NULL && dom->media_provider.facts != NULL)
+            dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
+        d_provider_leave(dom);
+    } else {
+        out->position = m->position;
+    }
+    out->paused = m->paused;
+    out->ended = m->ended && !loops(m);
+    out->waiting = !m->paused && (m->ready <= R_CURRENT || f.busy);
+    out->busy = f.busy;
+    out->duration = m->duration;
+    out->arrived = isfinite(m->duration) && f.arrived > m->duration ? m->duration : f.arrived;
+    out->seekable = f.seekable && m->ready >= R_METADATA && isfinite(m->duration) && m->duration > 0;
+    out->volume = m->volume;
+    out->muted = m->muted;
+    out->error = m->error;
+    return true;
+}
+
+bool os64_dom_media_control(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_media_control_t what,
+                            double value, os64_js_outcome_t *outcome)
+{
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (dom == NULL || !d_delivery_active(dom) || !dom->options.modern || !is_media(node)) return false;
+    dom = d_owner(dom, node);
+    if (dom->media_elements == NULL) return false;
+    DMediaElement *m = record_of(dom, node, true);
+    if (m == NULL) return false;
+    switch (what) {
+    case OS64_DOM_MEDIA_PAUSE: pause_asked(dom, m); return true;
+    case OS64_DOM_MEDIA_SEEK:
+        if (isfinite(value)) time_set(dom, m, value < 0 ? 0 : value);
+        return true;
+    case OS64_DOM_MEDIA_VOLUME:
+        if (isfinite(value)) volume_set(dom, m, value < 0 ? 0 : value > 1 ? 1 : value);
+        return true;
+    case OS64_DOM_MEDIA_MUTE: muted_set(dom, m, value != 0); return true;
+    case OS64_DOM_MEDIA_PLAY: break;
+    }
+    /* play() makes a promise, which needs the realm: a task of its own, as
+     * a script's click handler calling it would be. Its rejection is the
+     * control's to see (the element's state), never a page's unhandled one. */
+    char name[OS64_JS_SOURCE_NAME_CAP];
+    os64_snprintf(name, sizeof(name), "%.*s#media-controls", (int)(sizeof(name) - 40),
+                  dom->url != NULL ? dom->url : "about:blank");
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
+        os64_js_outcome_t access;
+        JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+        if (ctx == NULL) d_outcome_fold(outcome, &access);
+        if (ctx != NULL && d_provider_enter(dom)) {
+            JSValue promise = play(dom, ctx, m);
+            d_provider_leave(dom);
+            if (JS_IsException(promise)) {
+                JSValue error = JS_GetException(ctx);
+                JS_FreeValue(ctx, error);
+            } else {
+                mark_handled(dom, ctx, promise);
+                JS_FreeValue(ctx, promise);
+            }
+        }
+        d_task_finish(dom, outcome);
+    }
+    d_task_close(dom, name, outcome);
+    return true;
 }
 
 /* ── The Audio factory (HTML § 4.8.10, a legacy factory function) ───── */

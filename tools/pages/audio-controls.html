@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>The controls</title>
+<!--
+  AUDIO_YONDER.md, Y.2.2: the native controls (`<audio controls>`), and the
+  page a sound gets when you go to it by itself.
+
+  What to look for. Two players, each a rounded bar: a play button, the
+  time ("0:00 / 0:02"), the seek bar and a speaker. The first is Chrome's
+  size; the second is wider and has a volume bar beside the speaker.
+  Clicking play plays it, and the log below says so ("play", "playing"),
+  as a page's own buttons would; the time and the bar move while it plays.
+  Click on the bar to seek, the speaker to mute; with the player focused,
+  Space plays and pauses, Left and Right seek five seconds, Up and Down
+  set the volume, and the wheel over the speaker does too. With scripts
+  off neither player is drawn: the page's sound needs its scripts.
+
+  The link opens the MP3 by itself: a dark page with one player in the
+  middle, playing at once.
+
+  The third player starts with no sound. Its buttons are the way many
+  pages play one: set the src, wait for canplay, then call play(). Each
+  says "Loading..." and goes back to "Play" as its sound starts, with
+  nothing else clicked; the missing file says "Error!".
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  #log { font: 14px monospace; background: #f4f4f4; padding: 8px; min-height: 8em; }
+</style>
+<h1>The controls</h1>
+<p><audio id="a" controls src="audio-tone.mp3"></audio></p>
+<p><audio id="b" controls loop src="audio-tone.wav" style="width: 480px"></audio></p>
+<p><a href="audio-tone.mp3">The MP3 by itself</a></p>
+<p><audio id="c" controls></audio></p>
+<p><input type="button" data-src="audio-tone.mp3" value="Play the MP3">
+   <input type="button" data-src="audio-tone.wav" value="Play the WAV">
+   <input type="button" data-src="audio-missing.mp3" value="Play a missing file"></p>
+<pre id="log"></pre>
+<script>
+  const log = document.getElementById('log');
+  for (const button of document.querySelectorAll('input[data-src]')) {
+    const label = button.value;
+    button.addEventListener('click', () => {
+      const audio = document.getElementById('c');
+      button.value = 'Loading...';
+      audio.onerror = () => { button.value = 'Error!'; };
+      audio.oncanplay = () => { audio.play(); button.value = label; };
+      audio.src = button.dataset.src;
+    });
+  }
+  for (const id of ['a', 'b', 'c']) {
+    const el = document.getElementById(id);
+    for (const t of ['canplay', 'play', 'playing', 'pause', 'seeking', 'seeked', 'ended', 'volumechange', 'error'])
+      el.addEventListener(t, () => {
+        log.textContent += id + ' ' + t + ' t=' + el.currentTime.toFixed(2) +
+          (t === 'volumechange' ? ' volume=' + el.volume.toFixed(1) + (el.muted ? ' muted' : '') : '') + '\n';
+      });
+  }
+</script>

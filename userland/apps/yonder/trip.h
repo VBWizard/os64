@@ -36,6 +36,10 @@ typedef struct {
     os64_page_request_t request;
     bool has_request;
     char referrer[OS64_FETCH_URL_MAX];      // the page it was asked for from, or ""
+    // The page that arrives can play a sound (scripts and Modern Web on, as
+    // its stream captures them), so a sound asked for by itself is a page
+    // (way_leg_t.sounds); otherwise it is a file to save, as before.
+    bool sounds;
 } yonder_trip_t;
 
 // 1 when a page's bytes all went down the mailbox, 0 when there was no page

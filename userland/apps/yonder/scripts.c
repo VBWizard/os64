@@ -2562,9 +2562,38 @@ bool yonder_scripts_media_fire(yonder_scripts_t *s, os64_js_outcome_t *out)
     return true;
 }
 
+bool yonder_scripts_media_view(yonder_scripts_t *s, const os64_html_node_t *node, os64_dom_media_view_t *out)
+{
+    if (s == NULL || s->dead || s->dom == NULL) {
+        os64_memset(out, 0, sizeof(*out));
+        return false;
+    }
+    return os64_dom_media_view(s->dom, node, out);
+}
+
+os64_js_status_t yonder_scripts_media_control(yonder_scripts_t *s, const os64_html_node_t *node,
+                                              os64_dom_media_control_t what, double value, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL)
+        return OS64_JS_OK;
+    s->written = 0;
+    s->task_address = NULL;
+    s->task_us = -1;
+    if (os64_dom_media_control(s->dom, node, what, value, out) && what == OS64_DOM_MEDIA_PLAY)
+        judged(s, out);
+    return out->status;
+}
+
 bool yonder_scripts_activated(const yonder_scripts_t *s)
 {
     return s != NULL && s->activated;
+}
+
+void yonder_scripts_activate(yonder_scripts_t *s)
+{
+    if (s != NULL)
+        s->activated = true;
 }
 
 // HTML's activation-triggering input events: a key other than Escape

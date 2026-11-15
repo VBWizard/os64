@@ -49,6 +49,7 @@
 #include "mail.h"
 #include "media.h"
 #include "paint.h"
+#include "player.h"
 #include "keep.h"
 #include "picture.h"
 #include "svg.h"
@@ -1774,6 +1775,9 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     s_laying.cascade = cascade;
     s_laying.entry = entry;
     s_env.scripting = p->scripting;
+    // A page's sound lives in script's Modern Web runtime (libdom), so only
+    // such a page has players to draw.
+    s_env.media = p->scripting && p->modern;
     // One height for `vh` and the initial containing block (flow_env_t),
     // in CSS pixels at `zoom`.
     s_env.viewport_height = view.height;
@@ -1980,6 +1984,22 @@ typedef struct {
     // closes a dropdown's open list, whose rows are a copy of what they were.
     uint64_t options_sig;
 } FormWidget;
+
+// An `<audio controls>` element's player (player.h), over its box.
+#define PLAYER_ASKS 4
+typedef struct {
+    yonder_player_t p;              // first: libui's widget is the player's
+    const os64_html_node_t *node;   // held by `document`
+    const os64_html_document_t *document;
+    // What the person asked of it, done at the loop's turn (players_ask_run):
+    // a press reaches the widget inside the page's pointer task, where no
+    // task of the control's own can begin.
+    struct {
+        os64_dom_media_control_t what;
+        double value;
+    } asks[PLAYER_ASKS];
+    int32_t nasks;
+} Player;
 
 // A person's input waiting to be dispatched as a DOM event (inputs_run).
 typedef enum {
@@ -2312,6 +2332,10 @@ static struct {
     // pointer list while preserving surviving widgets and their caret.
     FormWidget **fw;
     int32_t nfw;
+    // The page's audio players (players_build), the same way: each widget
+    // stays at its address while its element keeps its controls box.
+    Player **players;
+    int32_t nplayers;
     // What a script asked of the page's widgets during its task (focus,
     // blur, a reset), performed after it: a task does not reach widgets.
     struct {
@@ -2613,6 +2637,12 @@ static bool replaced_size(void *ctx, const os64_html_node_t *node, int32_t *w, i
     const Page *p = ctx;
     if (p->modern && yonder_svg_size(node, w, h))
         return true;
+    // An audio's controls (player.h): the size Chrome gives its player.
+    if (node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_AUDIO) {
+        *w = YONDER_PLAYER_WIDTH;
+        *h = YONDER_PLAYER_HEIGHT;
+        return true;
+    }
     const os64_page_t *model = page_model(p);
     int32_t control = model != NULL ? os64_page_control_for(model, node) : -1;
     const os64_page_control_t *c = control >= 0 ? os64_page_control(model, control) : NULL;
@@ -3925,6 +3955,12 @@ static void sync_bars(void)
 
 static void hover(int32_t x, int32_t y);
 static void forms_place(void);
+static void players_build(void);
+static void players_place(void);
+static void players_drop(void);
+static void players_show(void);
+static void players_ask_run(void);
+static void page_widgets_chain(void);
 
 // A page's scroll coordinate in device pixels, rounded and then held to
 // int32_t: a script may ask for any finite double (and a sum of two may
@@ -5040,6 +5076,7 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
     trip->agent = g.way.agent;
     trip->identity = g.way.identity;
     trip->metadata = asked;
+    trip->sounds = g.scripts_on && g.modern;
     trip->window = g.win;
     trip->mail_bell = BELL_MAIL;
     os64_strcopy(trip->url, sizeof(trip->url), url);
@@ -9974,20 +10011,18 @@ static void forms_build(void)
         if (!kept)
             widget_destroy(g.fw[i]);
     }
-    g.status.next_sibling = NULL;
-    for (int32_t i = 0; i < n; i++) {
-        fresh[i]->w->next_sibling = NULL;
-        os64_ui_add_child(&g.root, fresh[i]->w);
-    }
     os64_free(g.fw);
     g.fw = fresh;
     g.nfw = n;
+    page_widgets_chain();
     forms_place();
     forms_sync_from_model(true);
+    players_build();
     return;
 refused:
     say_failed(g.page.diag, "controls", "Out of memory making this page's controls; existing controls are kept.");
     forms_sync_from_model(true);
+    players_build();
 }
 
 // Every control's widget at its box on the glass, clipped to the page view
@@ -10083,6 +10118,8 @@ static void forms_place(void)
         else if (moved)
             control_mark(fw);
     }
+    // The audio players are the page's controls too.
+    players_place();
 }
 
 // The page's controls leave with it: interaction first (a hover or a press
@@ -10094,11 +10131,238 @@ static void forms_drop(void)
 {
     for (int32_t i = 0; i < g.nfw; i++)
         widget_destroy(g.fw[i]);
-    g.status.next_sibling = NULL;
     os64_free(g.fw);
     g.fw = NULL;
     g.nfw = 0;
+    players_drop();
+    page_widgets_chain();
     mark_whole(WHOLE_WINDOW, true);
+}
+
+// The page's widgets follow the status row in the root's list, the form
+// controls first and the players after them: a rebuild of either rethreads
+// both, so neither drops the other from the tree.
+static void page_widgets_chain(void)
+{
+    g.status.next_sibling = NULL;
+    for (int32_t i = 0; i < g.nfw; i++) {
+        g.fw[i]->w->next_sibling = NULL;
+        os64_ui_add_child(&g.root, g.fw[i]->w);
+    }
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        g.players[i]->p.w.next_sibling = NULL;
+        os64_ui_add_child(&g.root, &g.players[i]->p.w);
+    }
+}
+
+// The element a page widget stands for (a form control's or a player's),
+// NULL for any other widget: what focus and keys at the widget are, to
+// the page.
+static const os64_html_node_t *page_widget_node(const os64_ui_widget_t *w)
+{
+    for (int32_t i = 0; i < g.nfw; i++)
+        if (g.fw[i]->w == w)
+            return g.fw[i]->node;
+    for (int32_t i = 0; i < g.nplayers; i++)
+        if (&g.players[i]->p.w == w)
+            return g.players[i]->node;
+    return NULL;
+}
+
+// ── The players (player.h; AUDIO_YONDER.md § The controls) ──────────────
+
+static void player_destroy(Player *pl)
+{
+    if (&pl->p.w == g.ui.focus)
+        os64_ui_set_focus(&g.ui, &g.view);
+    os64_ui_cancel_gestures(&g.ui);
+    yonder_player_release(&pl->p);
+    os64_html_release(pl->document, pl->node);
+    os64_free(pl);
+}
+
+// What the person did with a player, noted for the loop's turn, in order.
+// An ask of the kind just before it replaces that one (a drag's seeks are
+// one seek); a full list lets its oldest go, since what the person asked
+// last is what they want.
+static void player_act(yonder_player_t *p, os64_dom_media_control_t what, double value, void *user)
+{
+    (void)p;
+    Player *pl = user;
+    if (pl->nasks > 0 && pl->asks[pl->nasks - 1].what == what) {
+        pl->asks[pl->nasks - 1].value = value;
+        return;
+    }
+    if (pl->nasks == PLAYER_ASKS) {
+        os64_memmove(pl->asks, pl->asks + 1, sizeof(pl->asks[0]) * (PLAYER_ASKS - 1));
+        pl->nasks--;
+    }
+    pl->asks[pl->nasks].what = what;
+    pl->asks[pl->nasks].value = value;
+    pl->nasks++;
+    (void)os64_gui_event_ring(g.win, BELL_MEDIA);
+}
+
+static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_t *ev);
+
+// A wheel a player has no use for scrolls the page under it.
+static bool player_pass(const os64_gui_event_t *ev, void *user)
+{
+    (void)user;
+    return view_event(&g.view, &g.ui, ev);
+}
+
+// The players' asks, each done to its element as script would do it; the
+// events they queue are fired by the media turn's tasks after.
+static void players_ask_run(void)
+{
+    yonder_scripts_t *host = g.page.scripts;
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        Player *pl = g.players[i];
+        for (int32_t k = 0; k < pl->nasks && host != NULL; k++) {
+            // Only a play runs as a task (os64_dom_media_control).
+            bool play = pl->asks[k].what == OS64_DOM_MEDIA_PLAY;
+            os64_js_outcome_t out;
+            int64_t began = play ? task_begin(host) : 0;
+            (void)yonder_scripts_media_control(host, pl->node, pl->asks[k].what, pl->asks[k].value, &out);
+            if (play)
+                task_said(host, true, "media controls", &out, began);
+        }
+        pl->nasks = 0;
+    }
+}
+
+// Each player shows its element as it stands now.
+static void players_show(void)
+{
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        os64_dom_media_view_t view;
+        if (yonder_scripts_media_view(g.page.scripts, g.players[i]->node, &view))
+            (void)yonder_player_show(&g.ui, &g.players[i]->p, &view);
+    }
+}
+
+// Each player at its element's box, as forms_place puts a control at its:
+// clipped to the page view, hidden off it, under something drawn above or
+// where the page hid it (`visibility`). One the page made invisible
+// (`opacity: 0`, the box's `unpainted`) paints nothing and still takes the
+// pointer, as other browsers' does: the page's own player is drawn over it.
+static void players_place(void)
+{
+    const os64_gui_rect_t v = g.view.bounds;
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        os64_ui_widget_t *w = &g.players[i]->p.w;
+        const flow_box_t *b = g.page.tree != NULL ? flow_box_for(g.page.tree, g.players[i]->node) : NULL;
+        os64_gui_rect_t at = b != NULL ? flow_box_doc_rect(b, scroll_now()) : (os64_gui_rect_t){0, 0, 0, 0};
+        int64_t x = (int64_t)v.x + at.x - g.sx, y = (int64_t)v.y + at.y - g.sy;
+        const os64_ui_class_t *cls = b != NULL && b->unpainted ? unpainted_class(&yonder_player_class)
+                                                               : &yonder_player_class;
+        bool shown = b != NULL && b->replaced && b->style->visibility == FLOW_VISIBLE && cls != NULL &&
+                     at.w > 0 && at.h > 0 && x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h &&
+                     x + at.w > v.x && y + at.h > v.y && !flow_box_covered(g.page.tree, b, scroll_now());
+        if (cls != NULL && cls != w->cls) {
+            w->cls = cls;
+            os64_ui_mark_dirty(&g.ui, w);
+        }
+        w->clipped = true;
+        w->clip = v;
+        os64_gui_rect_t r = {clamp32(x), clamp32(y), at.w, at.h};
+        bool moved = r.x != w->bounds.x || r.y != w->bounds.y || r.w != w->bounds.w || r.h != w->bounds.h;
+        if (moved && !w->hidden)
+            os64_ui_mark_dirty(&g.ui, w);
+        w->bounds = r;
+        if (shown == w->hidden)
+            os64_ui_set_hidden(&g.ui, w, !shown);
+        else if (moved && shown)
+            os64_ui_mark_dirty(&g.ui, w);
+    }
+}
+
+// The page's players, built beside the old list after a layout: one for
+// each audio element laid out as controls (a replaced box, which only a
+// page whose sound plays has: flow_env_t.media). A player whose element
+// keeps its box is kept, with its view and its focus; a rebuild that lets
+// any widget go ends the gesture in progress, as libui ends every one
+// (os64_ui_cancel_gestures). Refused memory keeps the old list.
+static void players_build(void)
+{
+    const os64_html_document_t *doc = page_doc(&g.page);
+    Player **fresh = NULL;
+    int32_t n = 0, cap = 0;
+    bool refused = false;
+    const os64_html_node_t *top = doc != NULL && g.page.tree != NULL ? doc->document : NULL;
+    for (const os64_html_node_t *x = top; x != NULL && !refused; x = os64_html_shadow_including_next(top, x)) {
+        if (x->kind != OS64_HTML_ELEMENT || x->ns != OS64_HTML_NS_HTML || x->tag != OS64_HTML_TAG_AUDIO)
+            continue;
+        const flow_box_t *b = flow_box_for(g.page.tree, x);
+        if (b == NULL || !b->replaced)
+            continue;
+        Player *pl = NULL;
+        for (int32_t i = 0; i < g.nplayers && pl == NULL; i++)
+            if (g.players[i]->node == x)
+                pl = g.players[i];
+        bool made = pl == NULL;
+        if (made) {
+            pl = os64_calloc(1, sizeof(*pl));
+            if (pl == NULL) {
+                refused = true;
+                break;
+            }
+            yonder_player(&pl->p, player_act, player_pass, pl);
+            pl->node = x;
+            pl->document = doc;
+            os64_html_hold(doc, x);
+            pl->p.w.hidden = true;
+            os64_ui_widget_app_face(&g.ui, &pl->p.w, true); // the page's face, as its controls'
+        }
+        if (n == cap) {
+            int32_t grown = cap != 0 ? cap * 2 : 4;
+            Player **bigger = os64_realloc(fresh, (size_t)grown * sizeof(*bigger));
+            if (bigger == NULL) {
+                if (made)
+                    player_destroy(pl);
+                refused = true;
+                break;
+            }
+            fresh = bigger;
+            cap = grown;
+        }
+        fresh[n++] = pl;
+    }
+    if (refused) {
+        for (int32_t j = 0; j < n; j++) {
+            bool kept = false;
+            for (int32_t k = 0; k < g.nplayers; k++)
+                kept |= fresh[j] == g.players[k];
+            if (!kept)
+                player_destroy(fresh[j]);
+        }
+        os64_free(fresh);
+        say_failed(g.page.diag, "players", "Out of memory making this page's players; existing players are kept.");
+        return;
+    }
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        bool kept = false;
+        for (int32_t j = 0; j < n; j++)
+            kept |= fresh[j] == g.players[i];
+        if (!kept)
+            player_destroy(g.players[i]);
+    }
+    os64_free(g.players);
+    g.players = fresh;
+    g.nplayers = n;
+    page_widgets_chain();
+    players_place();
+    players_show();
+}
+
+static void players_drop(void)
+{
+    for (int32_t i = 0; i < g.nplayers; i++)
+        player_destroy(g.players[i]);
+    os64_free(g.players);
+    g.players = NULL;
+    g.nplayers = 0;
 }
 
 static void script_alert(void *opaque, const char *text, size_t length)
@@ -10551,6 +10815,7 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
                         os64_dom_media_preload_t preload)
 {
     (void)node;
+    (void)preload;
     uint64_t serial = (uint64_t)(uintptr_t)opaque;
     yonder_scripts_t *host = scripts_for(serial);
     const char *page = host != NULL ? yonder_scripts_url(host) : "about:blank";
@@ -10560,7 +10825,7 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     // what it holds. Refused, it is the element's network error.
     if (media_file_scheme(url) && !media_file_scheme(page))
         return NULL;
-    yonder_media_request_t r = {url, page, serial, cors, preload, g.way.agent, g.way.identity};
+    yonder_media_request_t r = {url, page, serial, cors, g.way.agent, g.way.identity};
     return yonder_media_open(&r);
 }
 static void media_close(void *opaque, void *session) { (void)opaque; yonder_media_close(session); }
@@ -10571,10 +10836,14 @@ static void media_seek(void *opaque, void *session, double seconds, uint64_t gen
     (void)opaque;
     yonder_media_seek(session, seconds, generation);
 }
+// `all` (and open's preload) are HTML's hint of how much to read before
+// play: every session decodes its queue's worth whatever the hint says,
+// because pages start their sound from canplay (media.c, decoder_main).
 static void media_settings(void *opaque, void *session, double gain, bool loop, bool all)
 {
     (void)opaque;
-    yonder_media_settings(session, gain, loop, all);
+    (void)all;
+    yonder_media_settings(session, gain, loop);
 }
 static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out)
 {
@@ -11631,13 +11900,19 @@ static void asks_perform_with_fallback(yonder_scripts_t *host, const os64_html_d
         if (shown && g.asks[i].doc == page_doc(&g.page)) {
             int32_t control = os64_page_control_for(page_model(&g.page), g.asks[i].node);
             FormWidget *fw = control >= 0 ? form_widget(control) : NULL;
+            // What focus() and blur() move: the control's widget, or the
+            // audio's player.
+            os64_ui_widget_t *w = fw != NULL ? fw->w : NULL;
+            for (int32_t k = 0; k < g.nplayers && w == NULL; k++)
+                if (g.players[k]->node == g.asks[i].node)
+                    w = &g.players[k]->p.w;
             if (g.asks[i].what == OS64_DOM_ACTIVATE_RESET) {
                 int32_t form = os64_page_form_for(page_model(&g.page), g.asks[i].node);
                 if (form >= 0)
                     form_reset(form);
-            } else if (fw != NULL && !fw->w->hidden && g.asks[i].what == OS64_DOM_ACTIVATE_FOCUS) {
-                os64_ui_set_focus(&g.ui, fw->w);
-            } else if (fw != NULL && g.ui.focus == fw->w && g.asks[i].what == OS64_DOM_ACTIVATE_BLUR) {
+            } else if (w != NULL && !w->hidden && g.asks[i].what == OS64_DOM_ACTIVATE_FOCUS) {
+                os64_ui_set_focus(&g.ui, w);
+            } else if (w != NULL && g.ui.focus == w && g.asks[i].what == OS64_DOM_ACTIVATE_BLUR) {
                 os64_ui_set_focus(&g.ui, &g.view);
             } else if (g.asks[i].what == OS64_DOM_ACTIVATE_REPORT) {
                 // A control's constraint problem, reported as a refused
@@ -13449,18 +13724,15 @@ static void change_if_edited(const os64_html_node_t *node)
 }
 
 // The focus moved between libui's widgets: `blur` and `change` for the
-// control it left, `focus` for the one it reached (neither bubbles), each
-// naming the other control as its relatedTarget.
+// element it left, `focus` for the one it reached (neither bubbles), each
+// naming the other as its relatedTarget; a form control's widget or a
+// player stands for its element (page_widget_node).
 static void focus_follow(void)
 {
     if (g.ui.focus == g.focus_seen)
         return;
     g.focus_seen = g.ui.focus;
-    FormWidget *fw = NULL;
-    for (int32_t i = 0; i < g.nfw && fw == NULL; i++)
-        if (g.fw[i]->w == g.ui.focus)
-            fw = g.fw[i];
-    const os64_html_node_t *reached = fw != NULL && scripts_live() ? fw->node : NULL;
+    const os64_html_node_t *reached = scripts_live() ? page_widget_node(g.ui.focus) : NULL;
     const os64_html_node_t *left = g.focus_node;
     const os64_html_document_t *left_doc = g.focus_doc;
     if (left != NULL) {
@@ -13655,10 +13927,10 @@ static bool key_event(const os64_gui_event_t *ev)
     bool printable = a >= 0x20 && a != 0x7f;
     if (!printable && a != '\r' && a != '\n' && a != '\b' && a != 0x7f && a != '\t')
         return false;
-    const os64_html_node_t *target = NULL;
-    for (int32_t i = 0; i < g.nfw && target == NULL; i++)
-        if (g.fw[i]->w == g.ui.focus)
-            target = g.fw[i]->node;
+    // A player's keys are its element's, as a native control's are in
+    // other browsers: the page hears them, may prevent them, and they are
+    // the person's activation, which a play asked by the key needs.
+    const os64_html_node_t *target = page_widget_node(g.ui.focus);
     if (target == NULL && g.ui.focus != NULL && g.ui.focus != &g.view)
         return false;
     if (target == NULL)
@@ -13789,11 +14061,10 @@ static void feed_escaped(os64_html_parser_t *parser, const char *text, size_t le
     }
 }
 
-// A picture asked for by itself is shown as a browser shows one: alone, in
-// the middle of a dark page, the title its file's name (or its address,
-// when the path names none). The page is written here and the picture
-// fetched as any page's is: the reply's own bytes were not read.
-static void image_page(os64_html_parser_t *parser, const char *url)
+// The head of a page yonder writes for a thing asked for by itself, up to
+// its body's dark centring: the title is the file's name, or the address
+// when the path names none.
+static void own_page_head(os64_html_parser_t *parser, const char *url)
 {
     const char *end = url;
     while (*end != '\0' && *end != '?' && *end != '#')
@@ -13803,16 +14074,39 @@ static void image_page(os64_html_parser_t *parser, const char *url)
         name--;
     static const char kHead[] = "<!doctype html><title>";
     static const char kBody[] = "</title><body style=\"margin:0;min-height:100vh;display:flex;"
-                                "align-items:center;justify-content:center;background:#0e0e0e\">"
-                                "<img src=\"";
+                                "align-items:center;justify-content:center;background:#0e0e0e\">";
     os64_html_parser_feed(parser, kHead, sizeof(kHead) - 1);
     if (name < end)
         feed_escaped(parser, name, (size_t)(end - name));
     else
         feed_escaped(parser, url, os64_strlen(url));
     os64_html_parser_feed(parser, kBody, sizeof(kBody) - 1);
+}
+
+// A picture asked for by itself is shown as a browser shows one: alone, in
+// the middle of a dark page. The page is written here and the picture
+// fetched as any page's is: the reply's own bytes were not read.
+static void image_page(os64_html_parser_t *parser, const char *url)
+{
+    own_page_head(parser, url);
+    static const char kImg[] = "<img src=\"";
+    os64_html_parser_feed(parser, kImg, sizeof(kImg) - 1);
     feed_escaped(parser, url, os64_strlen(url));
     os64_html_parser_feed(parser, "\">", 2);
+}
+
+// A sound asked for by itself is played as a browser plays one: its
+// controls alone in the middle of the picture page's dark body, starting
+// at once (AUDIO_YONDER.md § The media document). As image_page, the page
+// is written here and the sound fetched as any element's is.
+static void media_page(os64_html_parser_t *parser, const char *url)
+{
+    own_page_head(parser, url);
+    static const char kAudio[] = "<audio controls autoplay src=\"";
+    os64_html_parser_feed(parser, kAudio, sizeof(kAudio) - 1);
+    feed_escaped(parser, url, os64_strlen(url));
+    static const char kEnd[] = "\"></audio>";
+    os64_html_parser_feed(parser, kEnd, sizeof(kEnd) - 1);
 }
 
 // The parser for the page whose head has arrived. HTML takes the head's
@@ -13820,9 +14114,9 @@ static void image_page(os64_html_parser_t *parser, const char *url)
 // bytes — the standard's own element for "everything after this is text",
 // so libflow sees preformatted text and needs nothing new — in the
 // encoding libway's rule chooses from the head and the body's first bytes.
-// A picture's page is yonder's own (image_page), in UTF-8. Every
-// navigation's page is first parsed here, so this is where the page on
-// screen departs (page_departs).
+// A picture's page and a sound's are yonder's own (image_page,
+// media_page), in UTF-8. Every navigation's page is first parsed here, so
+// this is where the page on screen departs (page_departs).
 static bool stream_parser(const void *first, size_t n)
 {
     page_departs();
@@ -13830,7 +14124,7 @@ static bool stream_parser(const void *first, size_t n)
     opt.scripting = g.stream.scripting;
     if (g.stream.head.body == WAY_BODY_HTML) {
         opt.charset = g.stream.head.charset[0] ? g.stream.head.charset : NULL;
-    } else if (g.stream.head.body == WAY_BODY_IMAGE) {
+    } else if (g.stream.head.body == WAY_BODY_IMAGE || g.stream.head.body == WAY_BODY_MEDIA) {
         opt.charset = "utf-8";
     } else {
         g.stream.text_utf8 = way_text_utf8(&g.stream.head, first, n);
@@ -13845,6 +14139,8 @@ static bool stream_parser(const void *first, size_t n)
         os64_html_parser_feed(g.stream.parser, kOpen, sizeof(kOpen) - 1);
     } else if (g.stream.head.body == WAY_BODY_IMAGE) {
         image_page(g.stream.parser, g.stream.head.url);
+    } else if (g.stream.head.body == WAY_BODY_MEDIA) {
+        media_page(g.stream.parser, g.stream.head.url);
     }
     return true;
 }
@@ -13889,9 +14185,10 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     }
     // The scripts, their state and the document are the page's from here.
     // A scripted page that ran no script still gets its host: its handler
-    // attributes, `<body onload>` first of all, are scripts too.
+    // attributes, `<body onload>` first of all, are scripts too. So does a
+    // sound's own page, whose element lives in the host's runtime.
     if (g.stream.scripts == NULL && fresh.scripting && !g.stream.scriptless &&
-        g.stream.head.body == WAY_BODY_HTML) {
+        (g.stream.head.body == WAY_BODY_HTML || g.stream.head.body == WAY_BODY_MEDIA)) {
         g.stream.state = os64_page_state_create(doc, 0);
         g.stream.scripts = g.stream.state != NULL
             ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.head.encrypted, g.stream.serial,
@@ -13904,6 +14201,10 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         }
         stream_scripts_entry();
     }
+    // The person navigated to the sound, which is the activation it plays
+    // with (AUDIO_YONDER.md § Autoplay).
+    if (g.stream.head.body == WAY_BODY_MEDIA)
+        yonder_scripts_activate(g.stream.scripts);
     fresh.scripts = g.stream.scripts;
     fresh.state = g.stream.state;
     fresh.serial = g.stream.serial;
@@ -13956,7 +14257,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         // laid out at have room a page's other plain lines cannot take
         // (yonder_diag_head_fact).
         static const char *const kBodies[] = {[WAY_BODY_HTML] = "html", [WAY_BODY_TEXT] = "text",
-                                              [WAY_BODY_IMAGE] = "image"};
+                                              [WAY_BODY_IMAGE] = "image", [WAY_BODY_MEDIA] = "media"};
         yonder_diag_head_fact(fresh.diag, "final address", g.stream.head.url);
         yonder_diag_head_fact(fresh.diag, "body", kBodies[g.stream.head.body]);
         if (g.stream.local == NULL) {
@@ -14009,9 +14310,11 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     // window's own, beside libway's page, as page_doc() reads it.
     os64_page_t *model = os64_page_build(doc, g.stream.head.url, NULL, fresh.state);
     fresh.model_version = os64_html_version(doc);
-    // A picture's page is a page like an HTML one (image_page): its picture
-    // is fetched and its record kept as any page's are.
-    if (g.stream.head.body == WAY_BODY_HTML || g.stream.head.body == WAY_BODY_IMAGE) {
+    // A picture's page and a sound's are pages like an HTML one (image_page,
+    // media_page): what they show is fetched and their record kept as any
+    // page's are.
+    if (g.stream.head.body == WAY_BODY_HTML || g.stream.head.body == WAY_BODY_IMAGE ||
+        g.stream.head.body == WAY_BODY_MEDIA) {
         fresh.way.doc = doc;
         fresh.way.model = model;
         if (g.stream.local != NULL)
@@ -18425,7 +18728,9 @@ int main(int argc, char **argv)
         bool coming_more = coming_turn();
         bool scripts_ready = script_turn();
         bodies_turn();
+        players_ask_run();
         bool media_more = media_turn();
+        players_show();
         motion_tick();
         storage_turn();
         cookies_turn();

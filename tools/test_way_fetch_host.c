@@ -787,6 +787,52 @@ static bool by_hand(const char *url, bool scripting, way_page_t *page, os64_fetc
     return true;
 }
 
+// A sound asked for by itself is a page for a face that plays sounds, its
+// body left unread for the face, as a picture's is (below); for one that
+// does not, or as the reply to a POST, it is a file to save. Unlike
+// pictures, the sounds are not asked for in Accept.
+static void sounds_are_pages_for_a_face_that_plays_them(void)
+{
+    static const char kMp3[] = "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: 3\r\n\r\nID3";
+    for (int sounds = 0; sounds < 2; sounds++) {
+        fresh();
+        script("snd.test", kMp3);
+        way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t leg = way_leg(&session);
+        leg.pictures = "image/png";
+        leg.sounds = sounds != 0 ? "audio/mpeg, audio/wav" : NULL;
+        way_opening_t o;
+        os64_fetch_status_t why;
+        bool opened = way_open(&leg, "http://snd.test/song.mp3", NULL, &o, &why);
+        if (sounds) {
+            expect("sounds: a sound is a page for a face that plays them",
+                   opened && o.head.body == WAY_BODY_MEDIA, leg.status);
+            bool accept_pages = false;
+            for (int k = 0; k < 8; k++)
+                accept_pages |= strstr(s_last_request[k], "Accept: text/html, image/png;q=0.5\r\n") != NULL;
+            expect("sounds: a navigation does not ask for sounds in Accept", accept_pages, NULL);
+            if (opened)
+                os64_fetch_close(o.fetch);
+        } else {
+            expect("sounds: a sound is not a page for a face that plays none",
+                   !opened && strstr(leg.status, "that is audio/mpeg, not a page") != NULL, leg.status);
+        }
+    }
+    fresh();
+    script("snd.test", kMp3);
+    static way_session_t post_session = {.name="fixture", .agent="fixture", .accept="text/html"};
+    way_leg_t leg = way_leg(&post_session);
+    leg.sounds = "audio/mpeg";
+    os64_page_request_t request = {.method = OS64_PAGE_METHOD_POST, .body = "a=1", .body_len = 3,
+                                   .content_type = "application/x-www-form-urlencoded"};
+    way_opening_t o;
+    os64_fetch_status_t why;
+    bool opened = way_open(&leg, "http://snd.test/form", &request, &o, &why);
+    expect("sounds: the reply to a POST is never a sound's page", !opened, leg.status);
+    if (opened)
+        os64_fetch_close(o.fetch);
+}
+
 // A picture asked for by itself is a page for a face that shows pictures,
 // its body left unread for the face; for one that does not, it is not a
 // page and the sentence says how to keep it.
@@ -1343,6 +1389,7 @@ int main(void)
     scripted_document_load();
     pieces_make_the_same_page();
     pictures_are_pages_for_a_face_that_shows_them();
+    sounds_are_pages_for_a_face_that_plays_them();
     whole_without_memory();
     options_left_alone();
     validator_identity();

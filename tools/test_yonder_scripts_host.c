@@ -36,7 +36,7 @@ void yonder_media_close(yonder_media_t *m) { (void)m; }
 void yonder_media_play(yonder_media_t *m) { (void)m; }
 void yonder_media_pause(yonder_media_t *m) { (void)m; }
 void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation) { (void)m; (void)seconds; (void)generation; }
-void yonder_media_settings(yonder_media_t *m, double gain, bool loop, bool all) { (void)m; (void)gain; (void)loop; (void)all; }
+void yonder_media_settings(yonder_media_t *m, double gain, bool loop) { (void)m; (void)gain; (void)loop; }
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out) { (void)m; memset(out, 0, sizeof(*out)); }
 int yonder_media_can_play(const char *type) { (void)type; return 0; }
 void yonder_media_reap(void) {}
@@ -2693,6 +2693,138 @@ static void input_links(void) {
     check(status_says("background workers"),"input: an uncancelled click follows its link after its listeners");
     probe_drop();
 }
+static os64_dom_media_control_t s_player_ask[8];
+static double s_player_value[8];
+static int s_player_asked, s_player_passed;
+static void player_asks_note(yonder_player_t *p, os64_dom_media_control_t what, double value, void *user) {
+    (void)p; (void)user;
+    if (s_player_asked < 8) { s_player_ask[s_player_asked] = what; s_player_value[s_player_asked] = value; }
+    s_player_asked++;
+}
+static bool player_pass_note(const os64_gui_event_t *ev, void *user) {
+    (void)ev; (void)user;
+    s_player_passed++;
+    return true;
+}
+static bool player_key_now(yonder_player_t *p, char ascii, uint8_t scancode) {
+    os64_gui_event_t ev = {.type = OS64_GUI_EVENT_KEY_DOWN};
+    ev.key.ascii = ascii; ev.key.scancode = scancode;
+    return yonder_player_class.event(&p->w, &g.ui, &ev);
+}
+
+/* An audio's player (player.h; AUDIO_YONDER.md § The controls): its
+ * arithmetic, and a page's `<audio controls>` getting one at its box, as
+ * a form control gets its widget, and none with scripts off. Here no
+ * session ever opens (the media stubs above), which the player says. */
+static void player_cases(void) {
+    char t[48];
+    yonder_player_time(0, 2, t, sizeof(t));
+    check(!strcmp(t, "0:00 / 0:02"), "player: the time and the length");
+    yonder_player_time(3723.9, 5025, t, sizeof(t));
+    check(!strcmp(t, "1:02:03 / 1:23:45"), "player: hours when the length has them");
+    yonder_player_time(5, NAN, t, sizeof(t));
+    check(!strcmp(t, "0:05 / --:--"), "player: a length not known yet");
+    yonder_player_time(725, INFINITY, t, sizeof(t));
+    check(!strcmp(t, "12:05"), "player: a stream with no end shows only where it is");
+    yonder_player_parts_t parts;
+    yonder_player_parts((os64_gui_rect_t){10, 20, 300, 54}, &parts);
+    check(parts.play.w > 0 && parts.time.w > 0 && parts.seek.w > 0 && parts.mute.w > 0 && parts.volume.w == 0 &&
+          parts.play.x < parts.time.x && parts.time.x < parts.seek.x && parts.seek.x + parts.seek.w <= parts.mute.x &&
+          parts.mute.x + parts.mute.w <= 310,
+          "player: Chrome's size has play, time, seek and mute in order, no volume bar");
+    yonder_player_parts((os64_gui_rect_t){0, 0, 480, 54}, &parts);
+    check(parts.volume.w > 0 && parts.seek.x + parts.seek.w <= parts.volume.x &&
+          parts.volume.x + parts.volume.w <= parts.mute.x, "player: a wider one has the volume bar before the speaker");
+    yonder_player_parts((os64_gui_rect_t){0, 0, 60, 54}, &parts);
+    check(parts.play.w > 0 && parts.time.w == 0 && parts.volume.w == 0, "player: a narrow one keeps its play button");
+    yonder_player_parts((os64_gui_rect_t){0, 0, 300, 54}, &parts);
+    check(yonder_player_value_at(parts.seek, parts.seek.x - 50, 10) == 0 &&
+          yonder_player_value_at(parts.seek, parts.seek.x + parts.seek.w + 50, 10) == 10 &&
+          yonder_player_value_at(parts.seek, parts.seek.x + parts.seek.w / 2, 10) > 4 &&
+          yonder_player_value_at(parts.seek, parts.seek.x + parts.seek.w / 2, 10) < 6 &&
+          yonder_player_value_at(parts.seek, parts.seek.x, NAN) == 0,
+          "player: the bar's value is held to its ends, and a length not known seeks nowhere");
+
+    // What the person asks, in order, from presses and keys alone (the
+    // player's own state; no element here).
+    yonder_player_t pl;
+    yonder_player(&pl, player_asks_note, player_pass_note, NULL);
+    pl.w.bounds = (os64_gui_rect_t){0, 0, 300, 54};
+    s_player_asked = 0; s_player_passed = 0;
+    player_key_now(&pl, ' ', 0x39); player_key_now(&pl, ' ', 0x39);
+    check(s_player_asked == 2 && s_player_ask[0] == OS64_DOM_MEDIA_PLAY && s_player_ask[1] == OS64_DOM_MEDIA_PAUSE,
+          "player: two presses before the element answers ask play, then pause");
+    s_player_asked = 0;
+    g.ui.any_dirty = false;
+    player_key_now(&pl, 'm', 0x32);
+    check(g.ui.any_dirty, "player: a key's change is repainted, before the element's view agrees with it");
+    os64_dom_media_view_t agreed = pl.view;
+    g.ui.any_dirty = false;
+    check(!yonder_player_show(&g.ui, &pl, &agreed) && !g.ui.any_dirty,
+          "player: the element's view agreeing paints nothing more");
+    player_key_now(&pl, 'm', 0x32);
+    check(s_player_asked == 2 && s_player_value[0] == 1 && s_player_value[1] == 0,
+          "player: two mutes ask on, then off");
+    s_player_asked = 0;
+    check(!player_key_now(&pl, 0x1b, 0x01) && s_player_asked == 0 && pl.seq == 0,
+          "player: a real Escape is not the player's");
+    bool taken = player_key_now(&pl, 0x1b, 0x49) && player_key_now(&pl, '[', 0) && player_key_now(&pl, '5', 0) &&
+                 player_key_now(&pl, '~', 0);
+    check(taken && s_player_asked == 0 && pl.seq == 0 && player_key_now(&pl, ' ', 0x39) && s_player_asked == 1,
+          "player: Page Up's burst is taken whole, asks nothing, and the next key is a key");
+    pl.view.muted = true; pl.view.volume = 0.5; s_player_asked = 0;
+    player_key_now(&pl, 0x1b, 0x50); player_key_now(&pl, '[', 0); player_key_now(&pl, 'B', 0);
+    check(s_player_asked == 2 && s_player_ask[0] == OS64_DOM_MEDIA_VOLUME && s_player_value[0] > 0.39 &&
+          s_player_value[0] < 0.41 && s_player_ask[1] == OS64_DOM_MEDIA_MUTE && s_player_value[1] == 0,
+          "player: Down while muted steps from the volume it had, and unmutes");
+    os64_gui_event_t wheel = {.type = OS64_GUI_EVENT_MOUSE_WHEEL};
+    wheel.mouse.x = pl.w.bounds.x + pl.w.bounds.w / 2; wheel.mouse.y = 27; wheel.mouse.dy = 1;
+    s_player_asked = 0;
+    check(yonder_player_class.event(&pl.w, &g.ui, &wheel) && s_player_passed == 1 && s_player_asked == 0,
+          "player: the wheel over the bar is the page's, handed on");
+    yonder_player_release(&pl);
+    probe_modern_off = true;
+    probe_page("<p><audio id=a controls src=a.mp3></audio></p>", true);
+    check(g.nplayers == 0 && flow_box_for(g.page.tree, probe_id("a")) == NULL,
+          "player: with the Modern Web off an audio's controls draw nothing");
+    probe_drop();
+    probe_modern_off = false;
+
+    probe_page("<p><audio id=a controls src=a.mp3></audio><audio id=b src=b.mp3></audio></p>", true);
+    script_turn();
+    const flow_box_t *box = flow_box_for(g.page.tree, probe_id("a"));
+    check(g.nplayers == 1 && g.players[0]->node == probe_id("a") && box != NULL && box->replaced &&
+          flow_box_for(g.page.tree, probe_id("b")) == NULL,
+          "player: an audio with controls has a player at a box, one without has neither");
+    if (g.nplayers == 1 && box != NULL) {
+        const os64_ui_widget_t *w = &g.players[0]->p.w;
+        check(!w->hidden && w->bounds.w == YONDER_PLAYER_WIDTH && w->bounds.h == YONDER_PLAYER_HEIGHT &&
+              w->parent == &g.root, "player: the widget is shown at its box, Chrome's size, in the window's tree");
+        Player *kept = g.players[0];
+        relayout(false);
+        check(g.nplayers == 1 && g.players[0] == kept, "player: a layout keeps the player it had");
+    }
+    probe_drop();
+    check(g.nplayers == 0 && g.players == NULL, "player: the page's players leave with it");
+    probe_page("<p><audio id=o style=\"opacity:0\" controls src=a.mp3></audio>"
+               "<audio id=v style=\"visibility:hidden\" controls src=b.mp3></audio></p>", true);
+    script_turn();
+    const Player *seen = NULL, *hidden = NULL;
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        if (g.players[i]->node == probe_id("o")) seen = g.players[i];
+        if (g.players[i]->node == probe_id("v")) hidden = g.players[i];
+    }
+    check(seen != NULL && !seen->p.w.hidden && seen->p.w.cls != &yonder_player_class &&
+          seen->p.w.cls->paint == NULL && seen->p.w.cls->event == yonder_player_class.event,
+          "player: one the page made invisible paints nothing and still takes the pointer");
+    check(hidden != NULL && hidden->p.w.hidden, "player: one the page hid is hidden");
+    probe_drop();
+    probe_page("<p><audio id=a controls src=a.mp3></audio></p>", false);
+    check(g.nplayers == 0 && flow_box_for(g.page.tree, probe_id("a")) == NULL,
+          "player: with scripts off an audio's controls draw nothing");
+    probe_drop();
+}
+
 /* HTML's sticky activation (AUDIO_YONDER.md § Autoplay): a press through
  * the window's pointer path counts, on a page that listens for nothing. */
 static void input_activation(void) {
@@ -2701,6 +2833,29 @@ static void input_activation(void) {
     check(!yonder_scripts_activated(g.page.scripts),"input: a page nobody has touched has no activation");
     input_click_at("b");
     check(yonder_scripts_activated(g.page.scripts),"input: a press through the pointer path is the page's activation");
+    probe_drop();
+    probe_page("<p><audio id=a controls src=a.mp3></audio></p><p id=log>-</p><p id=go>go</p><script>"
+               "var log=[],a=document.getElementById('a');"
+               "function note(n){log.push(n);document.getElementById('log').textContent=log.join('|');}"
+               "document.addEventListener('keydown',e=>note('key '+e.target.id));"
+               "a.addEventListener('focus',()=>note('focus '+document.activeElement.id));"
+               "a.addEventListener('blur',()=>note('blur'));"
+               "document.getElementById('go').addEventListener('click',()=>a.focus());"
+               "</script>",true);
+    script_turn();
+    check(g.nplayers==1,"input: the audio has its player");
+    if (g.nplayers==1) {
+        os64_ui_set_focus(&g.ui,&g.players[0]->p.w); inputs_run();
+        check(probe_text_is("log","focus a"),
+              "input: a focused player is its element's focus: the audio hears focus and is the active element");
+        os64_gui_event_t space={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=' ',.scancode=0x39}};
+        check(!key_event(&space) && yonder_scripts_activated(g.page.scripts) && probe_text_is("log","focus a|key a"),
+              "input: a key at a focused player is its element's, heard by the page, and is the activation");
+        os64_ui_set_focus(&g.ui,&g.view); inputs_run();
+        check(probe_text_is("log","focus a|key a|blur"),"input: the focus leaving the player is the audio's blur");
+        input_click_at("go"); script_turn();
+        check(g.ui.focus==&g.players[0]->p.w,"input: the audio's focus() focuses its player");
+    }
     probe_drop();
 }
 /* A `javascript:` link (MODERN_WEB.md slice 0c): the person's click runs
@@ -3185,6 +3340,7 @@ static void input_cases(void) {
 
     input_links();
     input_activation();
+    player_cases();
     input_javascript_links();
     input_attribute_backstop();
     input_hover();
@@ -12376,7 +12532,7 @@ int main(void)
         return failures ? 1 : 0;
     }
     if(getenv("YONDER_POINTER_ONLY")) {
-        pointer_window_cases(); input_links(); input_activation(); input_hover(); input_ui_events(); hover_batch_cases();
+        pointer_window_cases(); input_links(); input_activation(); player_cases(); input_hover(); input_ui_events(); hover_batch_cases();
         os64_text_font_release(probe_font);
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"pointer: text released");
         check(live==0,"pointer: heap empty");

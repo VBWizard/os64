@@ -34,10 +34,21 @@ bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
 bool yonder_scripts_media_turn(yonder_scripts_t *scripts);
 bool yonder_scripts_media_pending(const yonder_scripts_t *scripts);
 bool yonder_scripts_media_fire(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+// An audio element's controls (player.h): its view, and the person's use
+// of them done as script's would be (os64_dom_media_view, _control). A
+// control's play is a task, counted and judged as an event's is.
+bool yonder_scripts_media_view(yonder_scripts_t *scripts, const os64_html_node_t *node,
+                               os64_dom_media_view_t *out);
+os64_js_status_t yonder_scripts_media_control(yonder_scripts_t *scripts, const os64_html_node_t *node,
+                                              os64_dom_media_control_t what, double value,
+                                              os64_js_outcome_t *out);
 // Whether the person has interacted with the page (HTML's sticky
 // activation: a key, a press or a click that reached it), which a media
 // element needs before it may make sound (AUDIO_YONDER.md § Autoplay).
 bool yonder_scripts_activated(const yonder_scripts_t *scripts);
+// The page counts as interacted with from now on: a sound's own page,
+// which the person navigated to (AUDIO_YONDER.md § The media document).
+void yonder_scripts_activate(yonder_scripts_t *scripts);
 // A `link` or `style` element's sheet, judged by the window: `load` (or
 // `error` when `failed`) owed to the element, fired as a task of its own
 // and never inside the call that owed it; the node is held until then, and

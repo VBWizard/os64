@@ -285,9 +285,10 @@ display is not `none` it does this:
   does its subtree, which pass 1 never walks (Lists 3 § 4.5). Neither
   does a pseudo-element that does not exist (`content: none`). Nor does
   anything pass 2 does not draw, by the rule pass 2 itself uses
-  (`f_draws_inside`): an element that makes no box (`audio`, `embed`,
-  `f_boxless`) and what it holds, and what a replaced element holds (a
-  canvas's fallback when scripts run), unless the element is laid out
+  (`f_draws_inside`): an element that makes no box (`embed`, an `audio`
+  the face draws no player for, `f_boxless`) and what it holds, and what
+  a replaced element holds (a canvas's fallback when scripts run, an
+  audio's when it has a player), unless the element is laid out
   through `display: contents`, as a button may be.
 - **`inherit`** on a counter property takes the parent's list, climbing
   past ancestors that inherit too. `quotes` is inherited and the chapter's

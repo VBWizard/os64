@@ -574,12 +574,15 @@ above:
   probes the file's end for its tags and would otherwise wait for the
   whole download. A `Range` request for a seek far ahead is not made yet
   (YAUDIO_TRACKER.csv's Y.2.3).
-- **`preload` is honoured, by the decoder**: with metadata (the default)
-  it stops taking bytes after the probe, decodes nothing, and the fetch runs
-  on into the pipe until its backpressure stops it, 16 MiB on; `play()`,
-  `preload=auto` or `autoplay` takes the rest. `none` waits for `play()` or
-  `load()`. So a song smaller than the pipe's window still downloads whole
-  (DEBTS.md § A page's sound).
+- **`preload=none` waits for `play()` or `load()`; metadata and auto are
+  the same**: the decoder fills the two-second queue and stops, so the
+  element reaches HAVE_ENOUGH_DATA, and `canplay` and `canplaythrough`
+  fire, before anything plays, as in other browsers. Pages start their
+  sound from `canplay` (set `src`, wait for it, call `play()`), and a
+  metadata-only element that decoded nothing never fired it (Y.2.2 changed
+  this; Y.2.1 stopped at the probe). The fetch runs on into the pipe until
+  its backpressure stops it, 16 MiB on, so a song smaller than the pipe's
+  window still downloads whole (DEBTS.md § A page's sound).
 - **An element done with gives its session back**: one that has ended or
   failed, is paused and is in no document closes its session (the host's
   threads and buffers with it), and `play()` or a seek opens a new one. A
@@ -599,6 +602,74 @@ above:
   96,000 frames accepted, taken and heard; a seek lands with sound queued.
   `tools/test_dom_media.inc` plays every step against a fake host;
   `tools/test_media_queue_host.sh` holds the queue to a model.
+
+## As built (Y.2.2, the controls and the media document)
+
+- **The player is one widget** (`apps/yonder/player.c`), not a panel of
+  libui's: a play button, the time, a seek bar, a mute button and a
+  volume bar, each a share of the box's height so it zooms with the page,
+  painted in the theme's colours and the page's face. It is 300 by 54 CSS
+  pixels, Chrome's size, and that size has no ratio: a page that widens it
+  leaves it as tall, and a limit on one side (`max-width: 100%`) leaves
+  the other alone (libflow's `f_audio_controls`). The volume bar joins
+  only where the seek bar keeps two buttons' width beside it, so Chrome's
+  size shows play, time, seek and mute; there the wheel over the speaker
+  and Up and Down set the volume, which is Chrome's pop-out slider's job.
+  Space and Enter play and pause, Left and Right seek five seconds, `m`
+  mutes; the wheel anywhere but the volume scrolls the page. Busy and a failed load are said where the bar is ("Sound is
+  busy", "Cannot play this sound").
+- **It shows the element and asks the element**: libdom's
+  `os64_dom_media_view` is what a script's members would answer, and
+  `os64_dom_media_control` is a script's call (play, pause, a seek, the
+  volume, muted), through the same steps the members take, so a page
+  hears the same events. A control's play is a task of its own, and its
+  promise's rejection is the element's state, never an unhandled one. A
+  press shows its change at once, so two presses in one batch of input
+  ask play then pause, not play twice; the element's next view says what
+  happened.
+- **A press is acted on at the loop's turn**, not in the widget's
+  handler: yonder replays a press to libui from inside the page's pointer
+  task, where no task of the control's own can begin. The press has
+  already been the page's activation (yonder_scripts_pointer). A focused
+  player is its element's focus, as a native control's is in other
+  browsers: the audio is `document.activeElement` and hears `focus` and
+  `blur`, its `focus()` focuses the player, and a key at it is the
+  audio's (the page hears `keydown` there and may prevent it) and the
+  activation a play asked by it needs.
+- **An element is ready to play before it plays**: it decodes its first
+  two seconds whatever its `preload`, so `canplay` fires and a page that
+  sets `src` and calls `play()` from `canplay` plays (§ As built (Y.2.1)'s
+  preload bullet, which this slice changed).
+- **The players are built and placed with the form controls**, after the
+  same layouts and scrolls (`forms_build`, `forms_place`), threaded after
+  them in the root's list (`page_widgets_chain`), so a rebuild of either
+  keeps the other.
+- **A page with scripts or the Modern Web off has no player**: the
+  element lives in script's Modern Web runtime, so the face tells libflow
+  it plays no sounds (`flow_env_t.media`) and the audio stays boxless, and
+  a sound asked for by itself is a file to save, as before. DEBTS.md § A
+  page's sound books what that costs.
+- **The media document**: libway sorts a reply whose type is in the
+  leg's `sounds` (libmedia's `os64_media_type_list`, the table
+  `canPlayType` reads) into `WAY_BODY_MEDIA`; the list is not added to a
+  navigation's Accept. yonder writes `<audio controls autoplay>` on the
+  picture page's dark body, and the navigation is the page's activation.
+- **Proven** by `tools/test_dom_media.inc` (the view and each control,
+  events and all, and a refused play no page sees),
+  `tools/test_libflow_layout.inc` (the box with scripting, its height
+  kept when widened or limited, none without),
+  `tools/test_way_fetch_host.c` (a sound is a page for a face that plays
+  it, never a POST's reply, and Accept unchanged),
+  `tools/test_yonder_scripts_host.c` (the player's keys, repaints and
+  activation), `tools/yonder_record_grammar.txt` (a media document's
+  record is read by both record readers), and in QEMU by
+  `/tests/pages/audio-controls.html`: each part clicked plays, pauses,
+  seeks, sets the volume and mutes, with the page's log hearing `play`,
+  `playing`, `seeking`, `seeked`, `volumechange`, `pause` and `ended`;
+  the third player's buttons, which set `src` and play from `canplay`,
+  play with nothing else clicked, and the missing file says so; the link
+  to the MP3 plays it on its own page at once, and plays it again from
+  its button.
 
 ## Slices
 

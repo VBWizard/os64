@@ -708,6 +708,29 @@ int os64_media_type_supported(const char *type)
     return any ? OS64_MEDIA_TYPE_PROBABLY : OS64_MEDIA_TYPE_MAYBE;
 }
 
+size_t os64_media_type_list(char *out, size_t cap)
+{
+    size_t need = 0, kept = 0;
+    bool whole = true;
+    for (size_t i = 0; i < sizeof(kTypes) / sizeof(kTypes[0]); i++) {
+        if (os64_media_type_supported(kTypes[i].type) == OS64_MEDIA_TYPE_NO)
+            continue;
+        size_t sep = need == 0 ? 0 : 2, len = os64_strlen(kTypes[i].type);
+        need += sep + len;
+        if (whole && out != NULL && kept + sep + len < cap) {
+            if (sep != 0)
+                os64_memcpy(out + kept, ", ", 2);
+            os64_memcpy(out + kept + sep, kTypes[i].type, len);
+            kept += sep + len;
+        } else {
+            whole = false;
+        }
+    }
+    if (out != NULL && cap > 0)
+        out[kept] = '\0';
+    return need;
+}
+
 // ---------------------------------------------------------------- a file source
 
 static int64_t file_read(void *ctx, uint8_t *out, size_t cap)
