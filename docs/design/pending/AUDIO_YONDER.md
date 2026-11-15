@@ -263,7 +263,8 @@ neither verb can reach another program's sound.
 What is queued is DISCARDED (`flush`) only when it no longer belongs at
 the front: a seek, a new `src`, or another element starting while this
 one is paused. The decoder then starts again from the element's `heard`
-position.
+position. (As built, a seek flushes the device only when the element
+seeking is the only one with sound there: § As built (Y.3).)
 
 A pause that lasts gives the stream back: after 30 seconds paused, the
 thread closes `/dev/audio` (a paused close is a flush, AUDIO_SEAM.md
@@ -736,10 +737,13 @@ above:
   is a VOICE, and each block the audio thread writes is what every voice
   had for it, times its gain, summed and held to 16 bits
   (`os64/media_mix.h`, libmedia, pure: `tools/test_media_mix_host.sh`).
-  A voice with less than the block is silent for the rest of it.
+  A voice takes again across its queue's runs (a loop's wrap) until the
+  block is full, so a loop is seamless under another voice; one that has
+  no more is silent for the rest of the block.
 - **Each voice has its own clock**: anchors saying where each run of its
-  frames went in the stream (a run ends at a seek, a loop, a pause it
-  came back from, or a block it had too little for), so one
+  frames went in the stream (a run ends at a seek, a loop, or where the
+  voice was silent while others played: paused, or short of a block
+  another voice filled), so one
   `/dev/audiopos` position says where every voice is. Between runs a
   voice's ear stays at the end of the run before.
 - **A voice that pauses while others play** stops being taken from; its
@@ -791,7 +795,8 @@ request is one row; a slice of several has a task row per pull request.
 
 Y.1 is a third-party port and a library with no kernel change: one cold
 Opus read before each push. Y.2 is yonder with threads meeting the
-window: Codex. Y.3 is small and pure: reviewed here.
+window: Codex. Y.3's mixer is small and pure, but it reworks the audio
+thread, which is threads meeting the window too: Codex.
 
 ## What this arc leaves out, on purpose
 

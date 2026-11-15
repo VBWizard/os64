@@ -14,8 +14,9 @@
 // each voice is. So each voice keeps ANCHORS: for every RUN of its frames
 // (frames that continue one another in the media AND in the stream), the
 // stream frame the run began at, the media frame there, and its length. A
-// voice that pauses while others play, has a seek, loops, or has too little
-// for a block starts a new run when it next writes. What the ear hears of a
+// write that does not continue the last run in both starts a new one: a
+// seek, a loop, a voice that was silent while others played (paused, or
+// with less than a block another voice filled). What the ear hears of a
 // voice is `heard` read through its anchors: inside a run, the media frame
 // that far into it; between runs (the voice silent while others played),
 // the end of the run before; before its first, the start of that one.

@@ -102,6 +102,37 @@ static void clock_cases(void)
     }
     check(bad == 0, "clock: every history read through the anchors answers as the frames written say");
 
+    // Long histories with no prune: past OS64_MEDIA_MIX_ANCHORS runs the
+    // oldest go, and from the first kept run on the ear still answers as
+    // the frames say; before it, at that run's start (the rule a caller
+    // that prunes by `taken` while the ear lags relies on).
+    bad = 0;
+    for (int history = 0; history < 300; history++) {
+        os64_media_voice_reset(&v);
+        mo.n = 0;
+        uint64_t stream = 0;
+        int64_t media = 0;
+        for (int step = 0; step < 150; step++) {
+            uint32_t frames = (uint32_t)(1 + rnd(64));
+            stream += rnd(2) ? rnd(100) : 0;
+            media = rnd(3) == 0 ? (int64_t)rnd(100000) : media;
+            os64_media_voice_wrote(&v, stream, media, frames);
+            model_wrote(&mo, stream, media, frames);
+            stream += frames;
+            media += frames;
+        }
+        uint64_t first = v.anchor[0].stream;
+        for (int q = 0; q < 20; q++) {
+            uint64_t h = first + rnd(stream - first + 100);
+            if (os64_media_voice_heard(&v, h) != model_heard(&mo, h))
+                bad++;
+        }
+        if (first > 0 && os64_media_voice_heard(&v, first - 1) != v.anchor[0].media)
+            bad++;
+    }
+    check(bad == 0 && v.anchors == OS64_MEDIA_MIX_ANCHORS,
+          "clock: with the oldest runs let go, the kept ones answer as the frames say, and before them at the first's start");
+
     os64_media_voice_reset(&v);
     check(os64_media_voice_heard(&v, 5) == -1 && os64_media_voice_media_end(&v) == -1 &&
               os64_media_voice_stream_end(&v) == 0,
@@ -133,14 +164,24 @@ static void mix_cases(void)
     check(out[0] == 2000 && out[1] == -2000 && out[2] == 32767 && out[3] == -32768 && out[4] == 32767 &&
               out[5] == -32768 && out[6] == 7 && out[7] == -7,
           "mix: summed, held to 16 bits at both ends");
-    memset(acc, 0, sizeof(acc));
-    os64_media_mix_add(acc, a, 4, 0.5);
-    os64_media_mix_add(acc, b, 4, 0.0);
-    os64_media_mix_out(acc, out, 4);
+    // A half and a quarter: the sample divided, rounded toward minus
+    // infinity (an arithmetic shift), worked out here by division.
+    static const double gains[] = {0.5, 0.25};
+    static const int divisors[] = {2, 4};
     int ok = 1;
-    for (int i = 0; i < 8; i++)
-        ok &= out[i] == (int16_t)(((int32_t)a[i] * 32768) >> 16);
-    check(ok, "mix: a gain of a half halves, a gain of nothing adds nothing");
+    for (int g = 0; g < 2; g++) {
+        memset(acc, 0, sizeof(acc));
+        os64_media_mix_add(acc, a, 4, gains[g]);
+        os64_media_mix_add(acc, b, 4, 0.0);
+        os64_media_mix_out(acc, out, 4);
+        for (int i = 0; i < 8; i++) {
+            int q = a[i] / divisors[g];
+            if (a[i] < 0 && a[i] % divisors[g] != 0)
+                q--;
+            ok &= out[i] == q;
+        }
+    }
+    check(ok, "mix: a gain of a half halves, of a quarter quarters, and of nothing adds nothing");
     memset(acc, 0, sizeof(acc));
     os64_media_mix_add(acc, a, 2, 1.0);
     os64_media_mix_out(acc, out, 4);
