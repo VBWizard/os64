@@ -4492,7 +4492,8 @@ expectation file cannot spell, so they cannot be required); what fails
 of P6's own members is a NUL set through a string (U+FFFD, as every
 reflection page has it) and every URL reflection, whose expected value
 the harness builds from an anchor's `protocol` and `host`, which yonder
-lacks. `dom/events` +56, `dom/nodes` +61 (four renamed: a heading now
+lacked until 2026-11-15 (the anchor's parts brought `html/dom` 1,878
+passes, most of them these). `dom/events` +56, `dom/nodes` +61 (four renamed: a heading now
 prints as HTMLHeadingElement), `url` +1 and `xhr` +1, each `[required]`;
 the other directories unchanged. `css/cssom`'s serialize-all-longhands
 "Computed style" fails on the branch P6 is built on as well, unrelated.
