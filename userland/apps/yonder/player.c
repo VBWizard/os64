@@ -152,6 +152,20 @@ static void speaker_icon(os64_gui_surface_t *s, os64_gui_rect_t r, bool muted, d
     }
 }
 
+// What has arrived, between the track and the text in tone: two fifths of
+// the way from one to the other in each channel, so it stands apart from
+// the empty track and from what has played in any theme, as other
+// browsers' lighter band does.
+static uint32_t arrived_ink(const os64_ui_theme_t *t)
+{
+    uint32_t a = t->scroll_track, b = t->label_fg, out = 0xff000000u;
+    for (int shift = 0; shift < 24; shift += 8) {
+        int32_t x = (int32_t)((a >> shift) & 0xff), y = (int32_t)((b >> shift) & 0xff);
+        out |= (uint32_t)(x + (y - x) * 2 / 5) << shift;
+    }
+    return out;
+}
+
 // A bar: the track, what has arrived of it (from `from` to `have`), what
 // has played, and the thumb.
 static void bar_paint(os64_gui_surface_t *s, os64_gui_rect_t bar, double from, double have, double at,
@@ -169,7 +183,8 @@ static void bar_paint(os64_gui_surface_t *s, os64_gui_rect_t bar, double from, d
     done = done < 0 ? 0 : done > track.w ? track.w : done;
     start = start < done ? done : start > track.w ? track.w : start;
     if (ahead > start)
-        os64_draw_fill_rect(s, (os64_gui_rect_t){track.x + start, track.y, ahead - start, track.h}, t->scroll_thumb);
+        os64_draw_fill_rect(s, (os64_gui_rect_t){track.x + start, track.y, ahead - start, track.h},
+                            arrived_ink(t));
     if (done > 0)
         os64_draw_fill_rect(s, (os64_gui_rect_t){track.x, track.y, done, track.h},
                             live ? t->focus_ring : t->disabled_fg);
