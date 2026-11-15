@@ -223,7 +223,10 @@ bool f_button_faced(const flow_env_t *env, const os64_html_node_t *n, const flow
 // 15.4.1: it then represents embedded content, and its fallback is not
 // shown), and the face draws what stands in for its drawing; with
 // scripting off it is its fallback content, laid out as any element. A
-// button is one when it is the face's own (f_button_faced).
+// button is one when it is the face's own (f_button_faced). A video is one
+// where the face plays the page's sounds (flow_env_t.media), whose picture
+// it never draws (AUDIO_YONDER.md § Y.4): the box is 300 by 150 unless the
+// page says otherwise, and holds nothing; elsewhere it is its fallback.
 bool f_replaced(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s)
 {
     if (env->svg && flow_svg_root(n))
@@ -241,6 +244,8 @@ bool f_replaced(const flow_env_t *env, const os64_html_node_t *n, const flow_sty
         return env->scripting;
     case OS64_HTML_TAG_AUDIO:
         return f_audio_controls(env, n);
+    case OS64_HTML_TAG_VIDEO:
+        return env->media;
     default:
         return false;
     }

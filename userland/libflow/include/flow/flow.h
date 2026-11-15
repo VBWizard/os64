@@ -1039,8 +1039,10 @@ typedef struct {
     // False retains foreign-content fallback for text-only consumers.
     bool svg;
     // The face plays the page's sounds: an `audio` with `controls` is a
-    // replaced box it draws its player in (replaced_size gives its size).
-    // False keeps every audio boxless, as a face with no player needs.
+    // replaced box it draws its player in (replaced_size gives its size),
+    // and a `video` is a replaced box, 300 by 150 by default, drawn empty
+    // (it plays sound alone). False keeps every audio boxless, as a face
+    // with no player needs, and a video its fallback content.
     bool media;
 } flow_env_t;
 

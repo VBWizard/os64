@@ -5,11 +5,12 @@
 /* THE MEDIA ROW (AUDIO_YONDER.md § The element in libdom, § The element's
  * states): HTMLMediaElement and HTMLAudioElement over the binding's media
  * prototypes, MediaError, TimeRanges, the Audio factory, and the handlers
- * of the media events.
+ * of the media events. A <video> is a media element too, playing sound
+ * and no picture: its own members and interface are video.c's (§ Y.4).
  *
  * HTML's half of the element lives here and the sound lives with the host
  * (dom/media.h). Each media element the page has is a RECORD: one for each
- * <audio> in the document, found by the media turn's walk, and one for
+ * <audio> and <video> in the document, found by the media turn's walk, and one for
  * each element a script reaches through a media member or gives a src,
  * which is how an element no document holds (`new Audio(url)`) gets one. The record holds
  * its node, so a playing element the page dropped keeps playing, as the
@@ -107,7 +108,7 @@ static JSClassID media_error_slot, time_ranges_slot;
 static bool is_media(const os64_html_node_t *node)
 {
     return node != NULL && node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML &&
-        node->tag == OS64_HTML_TAG_AUDIO;
+        (node->tag == OS64_HTML_TAG_AUDIO || node->tag == OS64_HTML_TAG_VIDEO);
 }
 
 static char *copy_text(os64_dom_t *dom, const char *text)
@@ -637,7 +638,7 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
     }
 }
 
-/* The walk, once per tree version: a record for each <audio> in the
+/* The walk, once per tree version: a record for each <audio> and <video> in the
  * document, and the removal steps for one that has left it. */
 static void walk(os64_dom_t *dom)
 {
@@ -1494,5 +1495,5 @@ int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
             if (d_event_handler(dom, ctx, holders[i], kind) < 0) return -1;
     if (d_event_handler(dom, ctx, media, D_EVENT_ERROR) < 0) return -1;
     d_mutation_register(dom, &s->mutations, src_changed);
-    return 0;
+    return d_video_install(dom, ctx, global);
 }

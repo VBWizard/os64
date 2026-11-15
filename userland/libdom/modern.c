@@ -49,8 +49,10 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},
     /* AUDIO_YONDER.md: the media element, after the interfaces row, whose
      * HTMLElement its interface inherits; the media events' handlers on
-     * window with it. */
-    {(const char *const[]){"HTMLMediaElement", "HTMLAudioElement", "MediaError", "TimeRanges", "Audio",
+     * window with it; HTMLVideoElement, which plays sound and no picture
+     * (§ Y.4). */
+    {(const char *const[]){"HTMLMediaElement", "HTMLAudioElement", "HTMLVideoElement", "MediaError", "TimeRanges",
+                           "Audio",
                            "onloadstart", "onprogress", "onsuspend", "onabort", "onemptied", "onstalled",
                            "onloadedmetadata", "onloadeddata", "oncanplay", "oncanplaythrough", "onplaying",
                            "onwaiting", "onseeking", "onseeked", "onended", "ondurationchange", "ontimeupdate",

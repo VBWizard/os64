@@ -421,7 +421,29 @@ static void layout_cases(void)
         "      atomic audio 48 8 100 30\n"
         "      atomic audio 148 8 20 30\n"
         "      atomic audio 168 28 40 10\n");
+    // A video where the face plays sounds is replaced, with no picture
+    // (AUDIO_YONDER.md § Y.4): the default object size, its attributes as
+    // its size, a page's width leaving the default height; its fallback is
+    // not laid out.
+    cascade_layout_case("a video is a replaced box where the face plays sounds",
+        "<!doctype html><style>.w{width:150px}</style><video>fallback</video>"
+        "<video width=200 height=100></video><video class=w></video>", 1000,
+        "page 1000 172\n"
+        "block html 0 0 1000 172\n"
+        "  block body 8 8 984 156\n"
+        "    line 8 8 984 156 base 150\n"
+        "      atomic video 8 8 300 150\n"
+        "      atomic video 308 58 200 100\n"
+        "      atomic video 508 8 150 150\n");
     kEnv.media = false;
+    cascade_layout_case("a video is its fallback where the face plays no sounds",
+        "<!doctype html><video>fallback</video>", 1000,
+        "page 1000 36\n"
+        "block html 0 0 1000 36\n"
+        "  block body 8 8 984 20\n"
+        "    line 8 8 984 20 base 14\n"
+        "      span video 8 10 52 16\n"
+        "      text \"fallback\" 8 10 52 16 serif 16\n");
     // A face that plays no sound (yonder's with script or the Modern Web
     // off) has no player to draw.
     cascade_layout_case("an audio's controls are no box where the face plays no sounds",

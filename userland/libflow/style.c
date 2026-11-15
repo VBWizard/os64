@@ -1337,6 +1337,11 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
         map_dimension(c, n, "width", false, &sp->width);
         map_dimension(c, n, "height", false, &sp->height);
     }
+    // A video's are dimension properties too, though it takes no align.
+    if (is(n, OS64_HTML_TAG_VIDEO)) {
+        map_dimension(c, n, "width", false, &sp->width);
+        map_dimension(c, n, "height", false, &sp->height);
+    }
     if (is(n, OS64_HTML_TAG_EMBED) || is(n, OS64_HTML_TAG_IMG) || is(n, OS64_HTML_TAG_OBJECT) ||
         (is(n, OS64_HTML_TAG_INPUT) && attr_is(n, "type", "image"))) {
         Len v = {L_UNSET, 0, 0};

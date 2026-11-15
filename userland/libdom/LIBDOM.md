@@ -1630,7 +1630,11 @@ nothing, as before; `setAttribute` and `innerHTML` name it either way.
 and `HTMLAudioElement` over the binding's media prototypes (`D_PROTO_MEDIA`,
 and `D_PROTO_AUDIO` under it), `MediaError`, `TimeRanges`, the `Audio`
 factory, and the media events' handlers on window, Element and Document,
-with `onerror` on the media prototype. HTML's half of the element is kept here and
+with `onerror` on the media prototype. `video.c` adds `HTMLVideoElement`
+(`D_PROTO_VIDEO`, under the media kind) AS A STAND-IN THAT PLAYS NO VIDEO
+(§ Y.4): a video element is a media element through all of this, plays a
+sound file as an audio does, and has its own `width`, `height`, `poster`
+and `playsInline`, with `videoWidth` and `videoHeight` always 0. HTML's half of the element is kept here and
 the sound is the host's (`dom/media.h`'s provider: open a resource, play,
 pause, seek, the gain and loop, and its facts). Each element the document
 holds, and each a script reaches through a media member or gives a src,

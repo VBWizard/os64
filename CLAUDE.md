@@ -644,7 +644,9 @@ virtio because its drain waits for the tick.
   FFmpeg (`tools/test_av_audit.py` holds that), so the decoder behind it
   can change without a player changing; its pure core `media_pcm.c` is
   host-tested (`tools/test_media_pcm_host.sh`), its glue by
-  `/tests/mediatest`. **yonder plays a page's `<audio>`** through it
+  `/tests/mediatest`. **yonder plays a page's `<audio>`**, and a
+  `<video>`'s sound (a stand-in that shows no picture, `libdom/video.c`,
+  AUDIO_YONDER.md § Y.4), through it
   (`apps/yonder/media.c`: a decoder thread per element feeding libmedia's
   PCM queue, `os64/media_queue.h`, a loader thread for a network address,
   one audio thread owning `/dev/audio` and mixing every element that

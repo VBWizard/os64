@@ -3086,7 +3086,9 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, con
     // A frame's document is not loaded into its box (it is offered as a
     // link instead), and an embed makes no box: both are asked for and not
     // shown. An object shows its fallback, as a browser does for what it
-    // cannot play, and is not counted.
+    // cannot play, and is not counted. The Modern Web surface draws a
+    // canvas and an svg and plays an audio; a video it plays shows no
+    // picture (AUDIO_YONDER.md § Y.4), so it is counted either way.
     static const char *const kNothing[] = {"canvas", "video", "audio", "svg", "iframe", "frame", "embed"};
     enum { NOTHING = sizeof(kNothing) / sizeof(kNothing[0]) };
     uint32_t nothing[NOTHING] = {0}, canvases = 0;
@@ -3098,7 +3100,9 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, con
         if (n->kind == OS64_HTML_ELEMENT && n->name != NULL) {
             for (int k = 0; k < NOTHING; k++)
                 nothing[k] +=
-                    os64_streq(n->name, kNothing[k]) && (!modern || (!os64_streq(kNothing[k], "svg") && !os64_streq(kNothing[k], "canvas")));
+                    os64_streq(n->name, kNothing[k]) &&
+                    (!modern || (!os64_streq(kNothing[k], "svg") && !os64_streq(kNothing[k], "canvas") &&
+                                 !os64_streq(kNothing[k], "audio")));
             canvases += n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_CANVAS;
             if (n->ns == OS64_HTML_NS_HTML && n->ce != OS64_HTML_CE_CUSTOM &&
                 os64_html_custom_name(n->name)) {
@@ -10247,6 +10251,8 @@ static void players_show(void)
 // where the page hid it (`visibility`). One the page made invisible
 // (`opacity: 0`, the box's `unpainted`) paints nothing and still takes the
 // pointer, as other browsers' does: the page's own player is drawn over it.
+// A video's player is the strip along the bottom of its box, a player's
+// height at the zoom it was laid out at, or the whole box when shorter.
 static void players_place(void)
 {
     const os64_gui_rect_t v = g.view.bounds;
@@ -10254,6 +10260,13 @@ static void players_place(void)
         os64_ui_widget_t *w = &g.players[i]->p.w;
         const flow_box_t *b = g.page.tree != NULL ? flow_box_for(g.page.tree, g.players[i]->node) : NULL;
         os64_gui_rect_t at = b != NULL ? flow_box_doc_rect(b, scroll_now()) : (os64_gui_rect_t){0, 0, 0, 0};
+        if (g.players[i]->node->tag == OS64_HTML_TAG_VIDEO) {
+            int32_t strip = (int32_t)zoomed_px(YONDER_PLAYER_HEIGHT, g.page.laid_zoom);
+            if (strip < at.h) {
+                at.y += at.h - strip;
+                at.h = strip;
+            }
+        }
         int64_t x = (int64_t)v.x + at.x - g.sx, y = (int64_t)v.y + at.y - g.sy;
         const os64_ui_class_t *cls = b != NULL && b->unpainted ? unpainted_class(&yonder_player_class)
                                                                : &yonder_player_class;
@@ -10280,7 +10293,9 @@ static void players_place(void)
 
 // The page's players, built beside the old list after a layout: one for
 // each audio element laid out as controls (a replaced box, which only a
-// page whose sound plays has: flow_env_t.media). A player whose element
+// page whose sound plays has: flow_env_t.media), and one for each video
+// laid out with a `controls` attribute (players_place puts it along the
+// bottom of the video's box, where other browsers draw theirs). A player whose element
 // keeps its box is kept, with its view and its focus; a rebuild that lets
 // any widget go ends the gesture in progress, as libui ends every one
 // (os64_ui_cancel_gestures). Refused memory keeps the old list.
@@ -10292,7 +10307,10 @@ static void players_build(void)
     bool refused = false;
     const os64_html_node_t *top = doc != NULL && g.page.tree != NULL ? doc->document : NULL;
     for (const os64_html_node_t *x = top; x != NULL && !refused; x = os64_html_shadow_including_next(top, x)) {
-        if (x->kind != OS64_HTML_ELEMENT || x->ns != OS64_HTML_NS_HTML || x->tag != OS64_HTML_TAG_AUDIO)
+        bool video = x->kind == OS64_HTML_ELEMENT && x->ns == OS64_HTML_NS_HTML && x->tag == OS64_HTML_TAG_VIDEO;
+        if (!video && (x->kind != OS64_HTML_ELEMENT || x->ns != OS64_HTML_NS_HTML || x->tag != OS64_HTML_TAG_AUDIO))
+            continue;
+        if (video && os64_html_attr(x, "controls") == NULL)
             continue;
         const flow_box_t *b = flow_box_for(g.page.tree, x);
         if (b == NULL || !b->replaced)

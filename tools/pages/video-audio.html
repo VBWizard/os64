@@ -1,0 +1,63 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A video that plays its sound</title>
+<!--
+  AUDIO_YONDER.md, Y.4: a <video> plays a sound file as an <audio> does,
+  and shows no picture. It is a stand-in until the video arc.
+
+  What to look for. The log at the top, then three boxes: the first 300 by
+  150, a video's size when the page gives none, the other two the 200 by
+  100 their attributes ask (in Chrome too the first two hold nothing, since
+  an MP3 has no picture).
+
+  The first has controls: the audio player sits along its bottom edge.
+  Clicking play plays the tone, and the log says "a play", "a playing".
+
+  The second has none. "Play it the way a player does" makes a <video> in
+  script, asks canPlayType('audio/mpeg') (the log shows "maybe"), gives it
+  the MP3, waits for canplay and calls play(), as JW Player does; the
+  tone plays and the log says "b playing". canPlayType('video/mp4') is
+  printed too: "" here, since no picture is decoded (Chrome says "maybe").
+
+  The third is given a real MP4. In yonder it fails as a source not
+  supported: the log says "c error 4". Chrome plays it (a black square
+  and a tone).
+
+  With scripts off, each box shows its fallback text instead, as there is
+  nothing to play it.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #222; margin: 4px; }
+  #log { font: 14px monospace; background: #f4f4f4; padding: 8px; min-height: 1em; margin: 0 0 8px; }
+</style>
+<h1>A video that plays its sound</h1>
+<pre id="log"></pre>
+<p><video id="a" controls src="audio-tone.mp3">fallback a</video>
+   <video id="b" width="200" height="100">fallback b</video>
+   <video id="c" width="200" height="100">fallback c</video></p>
+<p><input type="button" id="go" value="Play it the way a player does">
+   <input type="button" id="mp4" value="Give the third a video file"></p>
+<script>
+  const log = document.getElementById('log');
+  const say = text => { log.textContent += text + '\n'; };
+  const watch = (id, el) => {
+    for (const t of ['canplay', 'play', 'playing', 'pause', 'ended', 'error'])
+      el.addEventListener(t, () => say(id + ' ' + t + (t === 'error' ? ' ' + el.error.code : '') +
+        ' t=' + el.currentTime.toFixed(2)));
+  };
+  watch('a', document.getElementById('a'));
+  watch('c', document.getElementById('c'));
+  document.getElementById('go').addEventListener('click', () => {
+    const probe = document.createElement('video');
+    say('canPlayType audio/mpeg: "' + probe.canPlayType('audio/mpeg') + '"');
+    say('canPlayType video/mp4: "' + probe.canPlayType('video/mp4') + '"');
+    const b = document.getElementById('b');
+    watch('b', b);
+    b.oncanplay = () => b.play();
+    b.src = 'audio-tone.mp3';
+  });
+  document.getElementById('mp4').addEventListener('click', () => {
+    document.getElementById('c').src = 'video-tiny.mp4';
+  });
+</script>
