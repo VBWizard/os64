@@ -99,7 +99,9 @@ The final host runtime suite passes 23,951 checks on the shipping engine and
 focused Promise suites pass 1,923 and 5,705 checks. Allocation refusal sweeps
 cover 6 shipping cuts and 128 instrumented cuts across both teardown policies.
 Compile-failure sweeps and fatal-invariant contracts also pass. The DOM Promise
-suite passes 242 checks in each profile; CLI stand-in/real-library suites pass
+suite passes 242 checks in each profile. The full shipping DOM suite passes
+361,893 checks with zero failures and 13,246 binding allocation-sweep cases.
+CLI stand-in/real-library suites pass
 199/40 checks. Manifest/header, target allocation/visibility audit, target
 runtime consumer, libdom, Yonder and js builds pass.
 
