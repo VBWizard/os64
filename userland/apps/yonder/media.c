@@ -3,11 +3,15 @@
 // THREADS AND WHAT EACH OWNS.
 //
 //   window    opens, closes, plays, pauses, seeks; reads facts; reaps.
-//   decoder   one per session: the bytes kept so far (`bytes`, its alone),
-//             libmedia's object, and the pushes into the PCM queue.
-//   loader    one per session whose address is not a file: (the network,
-//             or a data: URL), at most LOADERS_MAX at once: runs the fetch
-//             job, whose body goes down the pipe the decoder drains.
+//   decoder   one per session: the bytes kept (`bytes` and its window, its
+//             alone), libmedia's object, and the pushes into the PCM queue.
+//   loader    one at a time per session whose address is not a file (the
+//             network, or a data: URL), at most LOADERS_MAX at once: runs
+//             the fetch job, whose body goes down the pipe the decoder
+//             drains. The decoder begins another for a seek far from the
+//             bytes kept (a Range request, or a plain one from 0), and to
+//             resume, from the window's end, a fetch let go while nothing
+//             played or broken part way.
 //   audio     one for yonder: /dev/audio, /dev/audiopos and /dev/audioctl,
 //             and the takes from the sounding session's queue.
 //
@@ -38,6 +42,7 @@
 
 #include "fetch_job.h"
 #include "fetch_pipe.h"
+#include "media_bytes.h"
 #include "os64/audio.h"
 #include "os64/bell.h"
 #include "os64/lock.h"
@@ -59,10 +64,20 @@
 #define WRITE_FRAMES 1024u
 // HAVE_FUTURE_DATA: a quarter of a second queued.
 #define FUTURE_FRAMES (RATE / 4u)
-// The most of a resource kept: every arrived byte is, so a seek back costs
-// nothing (a seek past what has arrived waits for it). A longer one fails
-// as a network error does (AUDIO_YONDER.md § As built (Y.2.1)).
-#define KEPT_MAX ((size_t)256 << 20)
+// The most of a resource kept (media_bytes.h's window): every arrived byte
+// is, so a seek back costs nothing, until a longer one slides the window
+// forward, keeping KEPT_BEHIND before the reader. The window takes from the
+// fetch only while it holds less than KEPT_AHEAD past the reader; the rest
+// waits on the pipe's backpressure, so a long sound is read at most that
+// and the pipe's window ahead of the ear, not downloaded whole.
+#define KEPT_MAX ((uint64_t)256 << 20)
+#define KEPT_BEHIND ((uint64_t)16 << 20)
+#define KEPT_AHEAD ((uint64_t)32 << 20)
+// A session not playing whose fetch is still running lets the fetch go
+// after this long, if the server answers ranges: its connection and loader
+// slot go to a sound that is wanted. The reader reaching the window's end
+// (or a seek past it) asks again from there.
+#define HOLD_MS 10000u
 // The audio thread: how often it tries a busy device, how long the device
 // stays open with nothing to play, and how long a pause keeps it.
 #define BUSY_RETRY_MS 500u
@@ -74,10 +89,11 @@
 // How many sounds are fetched at once; the rest wait their turn. A page may
 // hold dozens of players, and a fetch costs a connection, or a bell while
 // libfetch queues it, out of the program's sixty-four handles. Fewer than
-// libfetch's six to one host (FETCH_POOL_PER_KEY), because a sound not
-// playing holds its connection on the pipe's backpressure,
-// and the page's other fetches from that host need one left (DEBTS.md
-// § A page's sound).
+// libfetch's six to one host (FETCH_POOL_PER_KEY), because a fetch held
+// off by the pipe's backpressure keeps its connection while it is held
+// (only HOLD_MS when nothing plays and the server answers ranges), and the
+// page's other fetches from that host need one left (DEBTS.md § A page's
+// sound).
 #define LOADERS_MAX 4u
 // How often yonder's end looks for the threads to have let go.
 #define STOP_POLL_MS 10u
@@ -117,10 +133,20 @@ struct yonder_media {
     yonder_fetch_job_t *job;
     yonder_fetch_pipe_t *pipe;
     int32_t file;
+    // The bytes kept (media_bytes.h): `bytes` holds the window's, `cap`
+    // long; `at` is the reader's offset in the resource.
     uint8_t *bytes;
-    size_t have, cap, at;
-    int64_t size;
-    bool arrived, failed, opening;
+    size_t cap;
+    yonder_media_window_t window;
+    uint64_t at;
+    int64_t size;                   // the resource's length, -1 unknown
+    uint64_t asked_from;            // where the running fetch's body begins
+    bool headed;                    // the running fetch's head is taken
+    bool ranges;                    // the server answers Range requests
+    char validator[128];            // the whole answer's version (yonder_media_validator), "" none
+    bool held;                      // the fetch was let go on purpose: resume at the window's end
+    bool arrived;                   // the resource's end is in the window
+    bool failed, opening;
     char why[96];
 };
 
@@ -213,50 +239,28 @@ static char *copy_text(const char *text)
 
 // ── The bytes (decoder thread) ─────────────────────────────────────────
 
-// The Content-Length of a response's header block, or -1: the size a lossy
-// file's end is found by (os64/media.h). A coded body (Content-Encoding)
-// has no size here, since what libfetch hands over is decoded.
-static int64_t content_length(const char *headers, size_t length)
-{
-    int64_t size = -1;
-    const char *p = headers, *end = headers + length;
-    while (p < end) {
-        const char *line = p;
-        while (p < end && *p != '\n')
-            p++;
-        const char *colon = line;
-        while (colon < p && *colon != ':')
-            colon++;
-        size_t name = (size_t)(colon - line);
-        const char *value = colon < p ? colon + 1 : p;
-        while (value < p && (*value == ' ' || *value == '\t'))
-            value++;
-        if (name == 16 && starts_nocase(line, "content-encoding", 16))
-            return -1;
-        if (name == 14 && starts_nocase(line, "content-length", 14)) {
-            int64_t n = 0;
-            bool digits = false;
-            while (value < p && *value >= '0' && *value <= '9' && n < INT64_MAX / 10) {
-                n = n * 10 + (*value++ - '0');
-                digits = true;
-            }
-            size = digits ? n : -1;
-        }
-        if (p < end)
-            p++;
-    }
-    return size;
-}
+static bool loader_start(yonder_media_t *m, uint64_t from);
 
+// `n` more bytes at the window's end, the front let go first when they
+// would pass KEPT_MAX. Fails with no memory, or when even that leaves no
+// room: the reader that far behind a streamed fetch (KEPT_AHEAD keeps it
+// from happening), or a whole answer longer than KEPT_MAX.
 static bool keep(yonder_media_t *m, const uint8_t *data, size_t n)
 {
-    if (m->have + n > KEPT_MAX) {
-        os64_strcopy(m->why, sizeof(m->why), "The sound is longer than yonder keeps");
+    uint64_t drop = yonder_media_drop_for(&m->window, n, m->at, KEPT_MAX, KEPT_BEHIND);
+    if (drop == UINT64_MAX) {
+        os64_strcopy(m->why, sizeof(m->why), "The sound arrived further ahead than yonder keeps");
         return false;
     }
-    if (m->have + n > m->cap) {
+    if (drop > 0) {
+        os64_memmove(m->bytes, m->bytes + drop, (size_t)(m->window.have - drop));
+        m->window.base += drop;
+        m->window.have -= drop;
+    }
+    size_t have = (size_t)m->window.have;
+    if (have + n > m->cap) {
         size_t cap = m->cap != 0 ? m->cap : (size_t)1 << 20;
-        while (cap < m->have + n)
+        while (cap < have + n)
             cap *= 2;
         if (cap > KEPT_MAX)
             cap = KEPT_MAX;
@@ -268,32 +272,81 @@ static bool keep(yonder_media_t *m, const uint8_t *data, size_t n)
         m->bytes = grown;
         m->cap = cap;
     }
-    os64_memcpy(m->bytes + m->have, data, n);
-    m->have += n;
+    os64_memcpy(m->bytes + have, data, n);
+    m->window.have += n;
     return true;
 }
 
-// What has come down the pipe, kept; and the loader's whole answer, when
-// the cache or a data: URL gave one. True when anything changed.
-static bool pump(yonder_media_t *m)
+// The running fetch's head: its status, where its body begins, the
+// resource's length, and whether the server answers ranges. A Range
+// request answered whole (200) is a server that does not: the window
+// begins again at 0, and no seek asks it for a range again. False when
+// the head fails the load (`why` says why).
+static bool head_taken(yonder_media_t *m, const yonder_fetched_t *head)
+{
+    if (head->status != 0 && (head->status < 200 || head->status > 299)) {
+        os64_snprintf(m->why, sizeof(m->why), "The server answered %d", (int)head->status);
+        return false;
+    }
+    uint64_t first = 0;
+    int64_t total = -1;
+    char validator[sizeof(m->validator)];
+    yonder_media_validator(head->headers, head->headers_len, validator, sizeof(validator));
+    if (head->status == 206) {
+        if (!yonder_media_content_range(head->headers, head->headers_len, &first, &total) ||
+            first != m->asked_from) {
+            os64_strcopy(m->why, sizeof(m->why), "The server answered with bytes not asked for");
+            return false;
+        }
+        // The bytes must be the same resource's as the ones kept, which the
+        // decoder has already read: a file replaced on the server since
+        // would be spliced into the old one.
+        if ((m->validator[0] != '\0' && validator[0] != '\0' && !os64_streq(validator, m->validator)) ||
+            (total >= 0 && m->size >= 0 && total != m->size)) {
+            os64_strcopy(m->why, sizeof(m->why), "The sound changed on the server while it played");
+            return false;
+        }
+        m->ranges = true;
+        if (total >= 0)
+            m->size = total;
+        return true;
+    }
+    if (m->asked_from > 0) {
+        m->ranges = false;
+        m->window = (yonder_media_window_t){0, 0};
+    } else {
+        m->ranges = yonder_media_accepts_ranges(head->headers, head->headers_len);
+    }
+    os64_strcopy(m->validator, sizeof(m->validator), validator);
+    m->size = yonder_media_content_length(head->headers, head->headers_len);
+    return true;
+}
+
+// What has come down the pipe, kept, while the window holds less than
+// `ahead` past the reader (pump: KEPT_AHEAD); and the loader's whole
+// answer, when the cache or a data: URL gave one. True when anything
+// changed.
+static bool pump_ahead(yonder_media_t *m, uint64_t ahead)
 {
     bool moved = false;
-    if (m->file >= 0 || m->arrived || m->failed)
+    if (m->file >= 0 || m->arrived || m->failed || m->held)
         return false;
     if (m->pipe != NULL) {
         for (;;) {
             yonder_fetch_pipe_state_t state;
             yonder_fetch_pipe_look(m->pipe, &state);
-            if (state.headed && m->size == -2) {
-                const yonder_fetched_t *head = yonder_fetch_pipe_headed(m->pipe);
-                if (head->status != 0 && (head->status < 200 || head->status > 299)) {
-                    os64_snprintf(m->why, sizeof(m->why), "The server answered %d", (int)head->status);
+            if (state.headed && !m->headed) {
+                m->headed = true;
+                moved = true;
+                if (!head_taken(m, yonder_fetch_pipe_headed(m->pipe))) {
                     m->failed = true;
                     return true;
                 }
-                m->size = content_length(head->headers, head->headers_len);
-                moved = true;
             }
+            // Past the lead the rest waits in the pipe, which holds the
+            // fetch off: the reader's next move takes more.
+            if (state.unread > 0 && !yonder_media_take_more(&m->window, m->at, ahead))
+                break;
             if (state.unread > 0) {
                 uint8_t *piece = NULL;
                 size_t n = yonder_fetch_pipe_take(m->pipe, YONDER_FETCH_PIPE_TAKE_MAX, &piece);
@@ -308,25 +361,37 @@ static bool pump(yonder_media_t *m)
                 moved = true;
                 continue;
             }
-            if (state.ended) {
-                if (state.headed) {
-                    m->arrived = state.ok;
-                    m->failed = !state.ok;
-                    if (!state.ok)
-                        os64_strcopy(m->why, sizeof(m->why), "The connection failed part way");
-                    return true;
+            if (state.ended && state.headed) {
+                uint64_t end = m->window.base + m->window.have;
+                // A part a server bounded (206 for less than asked) ends
+                // whole before the resource does: the rest is asked for.
+                bool short_part = m->ranges && m->size >= 0 && end < (uint64_t)m->size;
+                if (state.ok && !short_part) {
+                    m->arrived = true;
+                } else if (m->ranges && end > m->asked_from) {
+                    // That, or broken part way after bringing something (a
+                    // server dropping a connection held off for minutes):
+                    // it is asked again from the window's end when the
+                    // reader gets there, as a fetch let go on purpose is.
+                    m->held = true;
+                } else {
+                    m->failed = true;
+                    os64_strcopy(m->why, sizeof(m->why), "The connection failed part way");
                 }
+                return true;
             }
             yonder_fetch_pipe_ask(m->pipe);
             break;
         }
     }
-    // The job's end, for an answer that never went down the pipe.
+    // The job's end, for an answer that never went down the pipe: once a
+    // streamed head is taken, the pipe's end says how the body ended,
+    // after every byte it holds.
     os64_lock_acquire(&m->lock);
     bool done = m->loader_done;
     yonder_fetched_t *got = m->product;
     os64_lock_release(&m->lock);
-    if (done && !m->arrived && !m->failed) {
+    if (done && !m->arrived && !m->failed && !m->headed) {
         if (got == NULL || !got->ok) {
             os64_strcopy(m->why, sizeof(m->why), "The sound could not be fetched");
             m->failed = true;
@@ -337,16 +402,21 @@ static bool pump(yonder_media_t *m)
             } else if (got->body != NULL && !keep(m, got->body, got->body_len)) {
                 m->failed = true;
             } else {
-                m->size = (int64_t)m->have;
+                m->size = (int64_t)(m->window.base + m->window.have);
                 m->arrived = true;
             }
-        } else if (m->size == -2) {
-            // Streamed, but its head was never taken: nothing will come.
+        } else {
+            // Streamed, but its head was never published: nothing will come.
             m->failed = true;
         }
         moved = true;
     }
     return moved;
+}
+
+static bool pump(yonder_media_t *m)
+{
+    return pump_ahead(m, KEPT_AHEAD);
 }
 
 // The loader's answer holds the body whole (an answer the cache or a data:
@@ -375,44 +445,132 @@ static bool decoder_wait(yonder_media_t *m, uint64_t ms)
     return !stop;
 }
 
+// A loader runs, or ran and has not been let go.
+static bool fetch_running(yonder_media_t *m)
+{
+    os64_lock_acquire(&m->lock);
+    bool running = m->loader_started;
+    os64_lock_release(&m->lock);
+    return running;
+}
+
+// Whether the running fetch may be let go for now: it is still bringing
+// bytes, the server answers ranges, so it can be resumed where it stops,
+// and nothing wants the sound.
+static bool fetch_holdable(yonder_media_t *m)
+{
+    os64_lock_acquire(&m->lock);
+    bool idle = m->loader_started && !m->loader_done && !m->play;
+    os64_lock_release(&m->lock);
+    return idle && m->ranges && !m->held && !m->arrived && !m->failed;
+}
+
+// The running fetch stopped and let go of, once its loader has let go of
+// the session. False when the session stops first.
+static bool fetch_stop(yonder_media_t *m)
+{
+    os64_lock_acquire(&m->lock);
+    if (m->loader_started && !m->loader_done)
+        m->loader_quit = true;
+    os64_lock_release(&m->lock);
+    for (;;) {
+        os64_lock_acquire(&m->lock);
+        bool done = !m->loader_started || m->loader_done;
+        os64_lock_release(&m->lock);
+        if (done)
+            break;
+        if (!decoder_wait(m, OS64_WAIT_FOREVER))
+            return false;
+    }
+    os64_lock_acquire(&m->lock);
+    yonder_fetch_job_t *job = m->job;
+    void *product = m->product;
+    m->job = NULL;
+    m->product = NULL;
+    m->loader_started = m->loader_done = m->loader_quit = false;
+    os64_lock_release(&m->lock);
+    yonder_fetch_release(job, product);
+    if (m->pipe != NULL)
+        yonder_fetch_pipe_release(m->pipe);
+    m->pipe = NULL;
+    m->headed = false;
+    return true;
+}
+
+// The fetch begun again at `from` (a Range request past 0): a resume when
+// the window ends there, else a new window there. False when it could not
+// begin (`why` says why) or the session stopped.
+static bool fetch_restart(yonder_media_t *m, uint64_t from)
+{
+    if (!fetch_stop(m))
+        return false;
+    if (from != m->window.base + m->window.have)
+        m->window = (yonder_media_window_t){from, 0};
+    m->arrived = false;
+    m->held = false;
+    if (!loader_start(m, from)) {
+        os64_strcopy(m->why, sizeof(m->why), "The sound could not be fetched");
+        m->failed = true;
+        return false;
+    }
+    return true;
+}
+
 static int64_t store_read(void *ctx, uint8_t *out, size_t cap)
 {
     yonder_media_t *m = ctx;
     for (;;) {
-        if (m->at < m->have) {
-            size_t n = m->have - m->at;
+        uint64_t end = m->window.base + m->window.have;
+        if (m->at >= m->window.base && m->at < end) {
+            uint64_t n = end - m->at;
             if (n > cap)
                 n = cap;
-            os64_memcpy(out, m->bytes + m->at, n);
+            os64_memcpy(out, m->bytes + (m->at - m->window.base), (size_t)n);
             m->at += n;
             return (int64_t)n;
         }
+        if (m->failed)
+            return -1;
         if (m->arrived)
             return 0;
-        if (m->failed)
+        // A fetch let go (on purpose, or broken part way) is resumed where
+        // it stopped, unless the window already holds the resource's end:
+        // a fetch let go just as its last bytes came.
+        if (m->held && m->size >= 0 && end >= (uint64_t)m->size) {
+            m->held = false;
+            m->arrived = true;
+            continue;
+        }
+        if (m->held && !fetch_restart(m, end))
             return -1;
         if (!pump(m) && !decoder_wait(m, 200))
             return -1;
     }
 }
 
-// A seek inside what has arrived is free. One past it fails at once while
-// the media is being opened (a reader probing the file's end, as the MP3
-// reader does for its tags, carries on without them rather than wait for
-// the whole file), and afterwards waits for the bytes to come.
+// A seek inside the window is free; one far from it begins a new window
+// there when the server answers ranges; one a little past it, or past it
+// on a server that does not, moves the reader there and the next read
+// waits for the bytes (media_bytes.h; the reader's place is what lets
+// pump take them past KEPT_AHEAD). None ever waits or asks while the media
+// is being opened: a reader probing the file's end, as the MP3 reader does
+// for its tags, carries on without them. Nothing past the resource's known
+// length is asked for.
 static int64_t store_seek(void *ctx, uint64_t offset)
 {
     yonder_media_t *m = ctx;
-    for (;;) {
-        if (offset <= m->have) {
-            m->at = (size_t)offset;
-            return (int64_t)offset;
-        }
-        if (m->opening || m->arrived || m->failed)
-            return -1;
-        if (!pump(m) && !decoder_wait(m, 200))
-            return -1;
-    }
+    if (m->failed)
+        return -1;
+    yonder_media_seek_state_t s = {m->opening, m->ranges, fetch_running(m) && !m->held, m->held, m->arrived};
+    yonder_media_seek_t plan = yonder_media_seek_plan(&m->window, offset, &s);
+    if (plan != YONDER_MEDIA_SEEK_HERE && m->size >= 0 && offset >= (uint64_t)m->size)
+        plan = YONDER_MEDIA_SEEK_REFUSE;
+    if (plan == YONDER_MEDIA_SEEK_REFUSE)
+        return -1;
+    if (plan == YONDER_MEDIA_SEEK_JUMP && !fetch_restart(m, offset))
+        return -1;
+    m->at = offset;
+    return (int64_t)offset;
 }
 
 // ── The decoder thread ─────────────────────────────────────────────────
@@ -482,11 +640,12 @@ static bool is_scheme(const char *url, const char *scheme)
     return starts_nocase(url, scheme, os64_strlen(scheme));
 }
 
-// The fetch job for a network address, its body streamed to the decoder,
+// The fetch job for a network address, its body from byte `from` on (a
+// Range request past 0; the cache answers none) streamed to the decoder,
 // once a loader slot is free. False when the fetch could not begin; then
 // `loader_started` says whether a loader may be running all the same, and
 // the job and the pipe stay the session's until it is freed.
-static bool loader_start(yonder_media_t *m)
+static bool loader_start(yonder_media_t *m, uint64_t from)
 {
     if (!loader_slot_take(m))
         return false;
@@ -501,7 +660,13 @@ static bool loader_start(yonder_media_t *m)
     job->identity = m->identity;
     job->default_accept = "*/*";
     job->url = copy_text(m->url);
-    job->headers = os64_calloc(1, 1);
+    job->headers = os64_calloc(1, 48);
+    if (job->headers != NULL && from > 0) {
+        os64_snprintf(job->headers, 48, "Range: bytes=%llu-\r\n", (unsigned long long)from);
+        job->headers_len = os64_strlen(job->headers);
+    }
+    m->asked_from = from;
+    m->headed = false;
     way_origin_of(m->page_url, m->page != 0 ? m->page : 1, &job->request.origin);
     // HTML's CORS settings attribute: none is no-cors with credentials,
     // anonymous is cors same-origin, use-credentials is cors with them.
@@ -568,11 +733,16 @@ static bool readiness_locked(yonder_media_t *m, bool decoded_all)
     m->facts.current = count > 0 || decoded_all;
     m->facts.future = count >= FUTURE_FRAMES || decoded_all;
     m->facts.enough = queue_full_locked(m) || decoded_all;
-    bool loaded = m->file >= 0 || m->arrived;
+    bool loaded = m->file >= 0 || (m->arrived && m->window.base == 0);
     m->facts.loaded = loaded;
-    if (m->facts.probed && isfinite(m->facts.duration))
+    if (m->facts.probed && isfinite(m->facts.duration)) {
+        // The window, as a share of the length: it starts past 0 after a
+        // seek far ahead, or once a long sound has slid it.
+        double length = m->size > 0 ? (double)m->size : 0;
         m->facts.arrived = loaded ? m->facts.duration
-                                  : m->size > 0 ? m->facts.duration * (double)m->have / (double)m->size : 0;
+                           : length > 0 ? m->facts.duration * (double)(m->window.base + m->window.have) / length : 0;
+        m->facts.arrived_from = loaded || !(length > 0) ? 0 : m->facts.duration * (double)m->window.base / length;
+    }
     return was.current != m->facts.current || was.future != m->facts.future || was.enough != m->facts.enough ||
            was.loaded != m->facts.loaded;
 }
@@ -618,17 +788,16 @@ static int64_t decoder_main(void *arg)
             fail(m, OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED, "The file would not open");
         else
             os64_media_file_source(m->file, &source);
-    } else if (!loader_start(m)) {
+    } else if (!loader_start(m, 0)) {
         fail(m, OS64_DOM_MEDIA_ERR_NETWORK, "The sound could not be fetched");
     } else {
         // The size is the head's: wait for it (or for the answer, whole).
-        m->size = -2;
-        while (m->size == -2 && !m->failed && !m->arrived)
+        while (!m->headed && !m->failed && !m->arrived)
             if (!pump(m) && !decoder_wait(m, 200))
                 break;
-        if (m->size == -2)
-            m->size = -1;
-        source = (os64_media_source_t){m, store_read, store_seek, m->size};
+        // Remote while bytes are still to come: an answer whole already (a
+        // data: URL, the cache, a short sound) is read in memory, exactly.
+        source = (os64_media_source_t){m, store_read, store_seek, m->size, !m->arrived};
         if (m->failed)
             fail(m, OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED, m->why);
     }
@@ -661,6 +830,7 @@ static int64_t decoder_main(void *arg)
     bool landing = false;           // a seek whose first frames are not queued yet
     uint64_t landing_generation = 0;
     uint64_t run_frames = 0;        // frames queued since the last seek (a loop's run)
+    uint64_t idle_since = 0;        // ms the fetch has been holdable since (fetch_holdable), 0 not
     while (go) {
         os64_lock_acquire(&m->lock);
         if (m->stop) {
@@ -715,8 +885,8 @@ static int64_t decoder_main(void *arg)
         // Played or not, the queue is filled and no more: an element
         // reaches HAVE_ENOUGH_DATA before play, as in other browsers,
         // whatever its preload (HTML's hint), because pages start their
-        // sound from canplay. Once it is full the fetch waits on the
-        // pipe's backpressure until the audio thread takes from it.
+        // sound from canplay. Once it is full the fetch runs on into the
+        // window and the pipe until their limits hold it off (pump).
         bool moved = pump(m);
         if (full || decoded_all) {
             os64_lock_acquire(&m->lock);
@@ -725,13 +895,37 @@ static int64_t decoder_main(void *arg)
             if (moved)
                 ring_window();
             product_trim(m);
+            // A fetch still running for a session nobody plays is let go
+            // after HOLD_MS (store_read resumes it): a paused podcast does
+            // not keep a connection and a loader slot for the evening.
+            uint64_t wait = OS64_WAIT_FOREVER;
+            if (fetch_holdable(m)) {
+                uint64_t now = (uint64_t)os64_micros() / 1000;
+                if (idle_since == 0)
+                    idle_since = now;
+                if (now - idle_since >= HOLD_MS) {
+                    // What the pipe already holds is kept first, past the
+                    // usual lead: it was paid for.
+                    (void)pump_ahead(m, UINT64_MAX);
+                    if (!fetch_stop(m))
+                        break;
+                    // The pipe may have brought the end, or a failure.
+                    m->held = !m->arrived && !m->failed;
+                    idle_since = 0;
+                } else {
+                    wait = HOLD_MS - (now - idle_since);
+                }
+            } else {
+                idle_since = 0;
+            }
             // Parked until rung: every reason to go on rings this bell (a
             // play, a seek, the settings, a stop, the audio thread taking
             // from the queue), so a finished or idle element costs nothing.
-            if (!decoder_wait(m, OS64_WAIT_FOREVER))
+            if (!decoder_wait(m, wait))
                 break;
             continue;
         }
+        idle_since = 0;
         int64_t at = os64_media_position(media);
         int64_t n = os64_media_decode(media, pcm, DECODE_FRAMES);
         if (n > 0) {
@@ -1304,6 +1498,7 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     if (m == NULL)
         return NULL;
     m->file = -1;
+    m->size = -1;
     m->gain = 1;
     m->cors = r->cors;
     m->page = r->page;

@@ -152,9 +152,10 @@ static void speaker_icon(os64_gui_surface_t *s, os64_gui_rect_t r, bool muted, d
     }
 }
 
-// A bar: the track, what has arrived of it, what has played, and the thumb.
-static void bar_paint(os64_gui_surface_t *s, os64_gui_rect_t bar, double have, double at, double length,
-                      bool live, const os64_ui_theme_t *t)
+// A bar: the track, what has arrived of it (from `from` to `have`), what
+// has played, and the thumb.
+static void bar_paint(os64_gui_surface_t *s, os64_gui_rect_t bar, double from, double have, double at,
+                      double length, bool live, const os64_ui_theme_t *t)
 {
     os64_gui_rect_t track = track_of(bar);
     if (track.w <= 0)
@@ -163,10 +164,12 @@ static void bar_paint(os64_gui_surface_t *s, os64_gui_rect_t bar, double have, d
     if (!(length > 0) || !isfinite(length))
         return;
     int32_t ahead = (int32_t)(have / length * track.w + 0.5), done = (int32_t)(at / length * track.w + 0.5);
+    int32_t start = (int32_t)(from / length * track.w + 0.5);
     ahead = ahead < 0 ? 0 : ahead > track.w ? track.w : ahead;
     done = done < 0 ? 0 : done > track.w ? track.w : done;
-    if (ahead > done)
-        os64_draw_fill_rect(s, (os64_gui_rect_t){track.x + done, track.y, ahead - done, track.h}, t->scroll_thumb);
+    start = start < done ? done : start > track.w ? track.w : start;
+    if (ahead > start)
+        os64_draw_fill_rect(s, (os64_gui_rect_t){track.x + start, track.y, ahead - start, track.h}, t->scroll_thumb);
     if (done > 0)
         os64_draw_fill_rect(s, (os64_gui_rect_t){track.x, track.y, done, track.h},
                             live ? t->focus_ring : t->disabled_fg);
@@ -223,11 +226,11 @@ static void player_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_u
         char clock[48];
         yonder_player_time(at, v->duration, clock, sizeof(clock));
         text_paint(w, &p->time_run, s, parts.time, clock, t->label_fg, t->panel_bg);
-        bar_paint(s, parts.seek, v->arrived, at, v->duration, v->seekable, t);
+        bar_paint(s, parts.seek, v->arrived_from, v->arrived, at, v->duration, v->seekable, t);
     }
     if (parts.volume.w > 0) {
         double volume = p->drag == YONDER_PLAYER_DRAG_VOLUME ? p->drag_value : v->muted ? 0 : v->volume;
-        bar_paint(s, parts.volume, 1, volume, 1, !broken, t);
+        bar_paint(s, parts.volume, 0, 1, volume, 1, !broken, t);
     }
 }
 
@@ -471,7 +474,8 @@ static bool same_drawing(const yonder_player_t *p, const os64_dom_media_view_t *
         return true;
     int32_t w = track_of(parts.seek).w;
     return (int32_t)(a->position / length * w) == (int32_t)(b->position / length * w) &&
-           (int32_t)(a->arrived / length * w) == (int32_t)(b->arrived / length * w);
+           (int32_t)(a->arrived / length * w) == (int32_t)(b->arrived / length * w) &&
+           (int32_t)(a->arrived_from / length * w) == (int32_t)(b->arrived_from / length * w);
 }
 
 bool yonder_player_show(os64_ui_t *ui, yonder_player_t *p, const os64_dom_media_view_t *view)

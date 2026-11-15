@@ -196,7 +196,8 @@ and CORS rules as every other request a page makes. A media request is
 says. A seek past what has arrived restarts the request with `Range:
 bytes=N-`; a server that ignores Range (answers 200) makes the source
 unseekable, which the element reports as `seekable` empty, and the
-controls disable the bar — other browsers do the same. The body has no
+controls disable the bar — other browsers do the same. (As built, such a
+seek waits for the download instead: § As built (Y.2.3).) The body has no
 cap: a two-hour podcast is a stream, never a whole buffer, and the PCM
 queue's bound is what bounds memory.
 
@@ -572,8 +573,8 @@ above:
   back is free; a seek past what has arrived waits for it. While the media
   is being opened such a seek fails at once instead, because the MP3 reader
   probes the file's end for its tags and would otherwise wait for the
-  whole download. A `Range` request for a seek far ahead is not made yet
-  (YAUDIO_TRACKER.csv's Y.2.3).
+  whole download. (Y.2.3 made the kept bytes a window and a seek far ahead
+  a `Range` request: § As built (Y.2.3).)
 - **`preload=none` waits for `play()` or `load()`; metadata and auto are
   the same**: the decoder fills the two-second queue and stops, so the
   element reaches HAVE_ENOUGH_DATA, and `canplay` and `canplaythrough`
@@ -670,6 +671,64 @@ above:
   play with nothing else clicked, and the missing file says so; the link
   to the MP3 plays it on its own page at once, and plays it again from
   its button.
+
+## As built (Y.2.3, Range requests)
+
+- **The bytes kept are a window** of the resource (`media_bytes.h`, pure:
+  `tools/test_media_bytes_host.sh` holds it to a model). It starts at 0
+  and grows as the body arrives; past 256 MiB it slides forward, keeping
+  16 MiB before the reader, so a sound of any length plays as a stream.
+  It takes from the fetch only while it holds less than 32 MiB past the
+  reader; the rest waits on the pipe's backpressure.
+- **A seek far from the window asks for the bytes from there**: more than
+  a quarter of a mebibyte past it, or anywhere before it, begins a new
+  window with `Range: bytes=N-` (the cache answers no Range request). A
+  seek a little past it waits for the fetch already bringing it. Whether
+  the server answers ranges is its first answer's `Accept-Ranges: bytes`
+  (or any 206); a 206 whose `Content-Range` starts elsewhere fails the
+  load, and a Range request answered whole (200) is a server that has no
+  ranges after all: the window starts again at 0, and seeks past what has
+  come wait from then on, as they do on a server that never said it had
+  them. A part that ends before the resource does (a server that answers
+  ranges in pieces) is followed by a request for the rest. Every 206 must
+  be the same resource the kept bytes are: the first answer's ETag (else
+  its Last-Modified) and length are kept, and an answer that differs fails
+  the load ("The sound changed on the server") rather than splicing two
+  files under an open decoder. `buffered` begins where the window does
+  (`arrived_from` in the facts and the player's view), and the player
+  shades only that run.
+- **A seek over the network goes to an estimated byte.** FFmpeg's MP3
+  reader seeks exactly by reading every byte before the target (an MP3
+  has no index), which on a network is a download of everything up to
+  there; libmedia's source says it is `remote` and FFmpeg then seeks by
+  the stream's table or bit rate (`AVFMT_FLAG_FAST_SEEK`), as other
+  browsers' FFmpeg does. A local file still seeks exactly. DEBTS.md
+  § A page's sound books what the estimate costs.
+- **A sound nobody plays lets its fetch go** after ten seconds of nobody
+  playing it, when the server answers ranges, so a paused podcast does not
+  keep a connection and one of the four loader slots; what its pipe
+  already held is kept first, past the usual lead. The reader reaching the
+  window's end asks again from there, and so does a seek a little past it
+  (one far past it begins a new window). A fetch that breaks part way
+  after bringing something is resumed the same way; one that brought
+  nothing fails the load.
+- **Proven** by `tools/test_media_bytes_host.sh` (every seek plan against
+  the table, the window's front drop, the head's three readers),
+  `/tests/mediatest` step 12 (in a 270 KiB stream, a remote source's seek
+  two seconds from the end asks for a byte past half of it and lands
+  within two packets; a local one reads its way there and asks nothing,
+  which is how the step fails with `remote` off), `tools/test_dom_media.inc`
+  (`buffered` from where the bytes begin), and in QEMU by
+  `tools/pages/audio-range.html` beside a ten-minute MP3, served by
+  `tools/pages_serve.py --rate 200000`, which answers ranges and logs them:
+  "Near the end" plays from 9:00 at once over `Range: bytes=8633379-`
+  (206), with `buffered` 539.5 to 600; "Back to the start" asks from 0
+  again; paused for ten seconds the fetch closes, and "Near what has
+  arrived" resumes it with `Range: bytes=4587520-`, the window's end;
+  with `--no-ranges` the same seek waits for the download and plays,
+  with no Range request made; with `--part 300000` (ranges in pieces)
+  the sound plays on across each piece's end, every next one asked from
+  where the last stopped.
 
 ## Slices
 

@@ -1152,9 +1152,9 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         os64_dom_media_facts_t f = {0};
         if (m->session != NULL && dom->media_provider.facts != NULL)
             dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
-        double end = f.arrived;
+        double end = f.arrived, start = f.arrived_from > 0 ? f.arrived_from : 0;
         if (isfinite(m->duration) && end > m->duration) end = m->duration;
-        return ranges_object(dom, ctx, end > 0 ? 1 : 0, 0, end > 0 ? end : 0);
+        return ranges_object(dom, ctx, end > start ? 1 : 0, end > start ? start : 0, end > start ? end : 0);
     }
     case M_LOAD:
         m->wanted = true;
@@ -1285,6 +1285,7 @@ bool os64_dom_media_view(os64_dom_t *dom, const os64_html_node_t *node, os64_dom
     out->busy = f.busy;
     out->duration = m->duration;
     out->arrived = isfinite(m->duration) && f.arrived > m->duration ? m->duration : f.arrived;
+    out->arrived_from = f.arrived_from > 0 && f.arrived_from < out->arrived ? f.arrived_from : 0;
     out->seekable = f.seekable && m->ready >= R_METADATA && isfinite(m->duration) && m->duration > 0;
     out->volume = m->volume;
     out->muted = m->muted;

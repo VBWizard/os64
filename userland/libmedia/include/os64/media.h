@@ -45,11 +45,16 @@ typedef struct os64_media os64_media_t;
 // source cannot seek (the media then cannot either). `size` is the byte
 // length, or -1 when not known; give it when it is known, seekable or not,
 // because a lossy file's end padding is trimmed only when its end is known.
+// `remote` says reading costs a download: a seek then goes to the byte its
+// time is estimated at (a format's table, or its bit rate), as other
+// browsers' do, where a local one reads its way to the exact frame (an
+// MP3 has no index, so that read is everything before the target).
 typedef struct {
     void *ctx;
     int64_t (*read)(void *ctx, uint8_t *out, size_t cap);
     int64_t (*seek)(void *ctx, uint64_t offset);
     int64_t size;
+    bool remote;
 } os64_media_source_t;
 
 typedef struct {

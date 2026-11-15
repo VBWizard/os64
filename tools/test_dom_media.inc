@@ -568,6 +568,14 @@ static void dom_media_controls_cases(void)
     media_script(&f, "heard();", "controls: the ladder heard");
     check(os64_dom_media_view(f.binding, node, &view) && view.duration == 4 && view.seekable && view.arrived == 4,
           "controls: the view has the length, what arrived and that it seeks");
+    // After a seek far ahead, what has arrived begins where the new fetch did.
+    s->facts.arrived_from = 1.5;
+    media_script(&f, "assert(a.buffered.length===1&&a.buffered.start(0)===1.5&&a.buffered.end(0)===4,"
+                     "'buffered starts where the bytes do');",
+                 "controls: buffered after a seek far ahead");
+    check(os64_dom_media_view(f.binding, node, &view) && view.arrived_from == 1.5 && view.arrived == 4,
+          "controls: the view has where the arrived run begins");
+    s->facts.arrived_from = 0;
 
     os64_js_outcome_t out;
     check(os64_dom_media_control(f.binding, node, OS64_DOM_MEDIA_PLAY, 0, &out) && out.status == OS64_JS_OK,
