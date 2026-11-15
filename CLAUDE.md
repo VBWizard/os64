@@ -649,8 +649,11 @@ virtio because its drain waits for the tick.
   PCM queue, `os64/media_queue.h`, a loader thread for a network address,
   one audio thread owning `/dev/audio`), while libdom keeps the element's
   HTML states, events and promises (`libdom/media.c`, `dom/media.h`'s
-  provider); AUDIO_YONDER.md § As built (Y.2.1) is the record, and
-  `/tests/pages/audio.html` the page to try. Sound at another rate goes through **`libsound.so`**
+  provider). `<audio controls>` is a player widget over the element's
+  box (`apps/yonder/player.c`), and a link straight to a sound plays it on
+  a page of its own (`WAY_BODY_MEDIA`). AUDIO_YONDER.md §§ As built
+  (Y.2.1, Y.2.2) are the record, and `/tests/pages/audio.html` and
+  `audio-controls.html` the pages to try. Sound at another rate goes through **`libsound.so`**
   (`os64/resample.h`): speexdsp's resampler, one file, unpatched, pinned by
   `userland/libsound/manifest.json`; its README is the inventory and the
   record of what was checked upstream. `tools/test_resample_host.sh`,

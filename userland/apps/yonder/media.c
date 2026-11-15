@@ -1250,9 +1250,17 @@ static int64_t audio_main(void *arg)
 
 // ── The window's calls ─────────────────────────────────────────────────
 
+static char s_sounds[512];
+
 void yonder_media_start(const yonder_media_env_t *env)
 {
     s_env = *env;
+    (void)os64_media_type_list(s_sounds, sizeof(s_sounds));
+}
+
+const char *yonder_media_sounds(void)
+{
+    return s_sounds;
 }
 
 static bool audio_running(void)

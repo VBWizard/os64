@@ -239,9 +239,19 @@ bool f_replaced(const flow_env_t *env, const os64_html_node_t *n, const flow_sty
         return f_button_faced(env, n, s);
     case OS64_HTML_TAG_CANVAS:
         return env->scripting;
+    case OS64_HTML_TAG_AUDIO:
+        return f_audio_controls(env, n);
     default:
         return false;
     }
+}
+
+// An `audio` with `controls` is a box the face's controls fill, as other
+// browsers draw one; its sound is played by script's runtime, so a page
+// read without script has no player and its audio stays boxless.
+bool f_audio_controls(const flow_env_t *env, const os64_html_node_t *n)
+{
+    return env->scripting && is(n, OS64_HTML_TAG_AUDIO) && os64_html_attr(n, "controls") != NULL;
 }
 
 static bool replaced(const B *b, const os64_html_node_t *n)
@@ -250,24 +260,25 @@ static bool replaced(const B *b, const os64_html_node_t *n)
     return f_replaced(b->env, n, s != NULL ? &s->style : NULL);
 }
 
-// Elements that make no box in this browser. An `embed` and an `audio`
-// play nothing here and have no fallback content; `source` and `track`
-// are data for a player; `keygen` is a control nothing implements.
-bool f_boxless(const os64_html_node_t *n)
+// Elements that make no box in this browser. An `embed` plays nothing here
+// and an `audio` without controls (f_audio_controls) shows nothing, and
+// neither has fallback content; `source` and `track` are data for a
+// player; `keygen` is a control nothing implements.
+bool f_boxless(const flow_env_t *env, const os64_html_node_t *n)
 {
-    return is(n, OS64_HTML_TAG_EMBED) || is(n, OS64_HTML_TAG_AUDIO) ||
+    return is(n, OS64_HTML_TAG_EMBED) || (is(n, OS64_HTML_TAG_AUDIO) && !f_audio_controls(env, n)) ||
            is(n, OS64_HTML_TAG_SOURCE) || is(n, OS64_HTML_TAG_TRACK) ||
            is(n, OS64_HTML_TAG_KEYGEN);
 }
 
-static bool boxless(const os64_html_node_t *n)
+static bool boxless(const B *b, const os64_html_node_t *n)
 {
-    return f_boxless(n);
+    return f_boxless(b->env, n);
 }
 
 bool f_draws_inside(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s)
 {
-    return !f_boxless(n) && (s->display == FLOW_DISPLAY_CONTENTS || !f_replaced(env, n, s));
+    return !f_boxless(env, n) && (s->display == FLOW_DISPLAY_CONTENTS || !f_replaced(env, n, s));
 }
 
 static bool block_level(flow_display_t d)
@@ -896,7 +907,7 @@ static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *st
                 m->inline_content = true;
             continue;
         }
-        if (c->kind != OS64_HTML_ELEMENT || boxless(c))
+        if (c->kind != OS64_HTML_ELEMENT || boxless(b, c))
             continue;
         const FStyled *s = styled(b, c);
         // A box that leaves the flow is neither: a float takes no room in
@@ -1213,7 +1224,7 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
             text_node(f, c);
             continue;
         }
-        if (c->kind != OS64_HTML_ELEMENT || boxless(c))
+        if (c->kind != OS64_HTML_ELEMENT || boxless(b, c))
             continue;
         const FStyled *s = styled(b, c);
         if (s == NULL || s->style.display == FLOW_DISPLAY_NONE)
@@ -1259,7 +1270,7 @@ static bool proper_table_child(flow_display_t d)
 
 static flow_display_t display_of(const B *b, const os64_html_node_t *n)
 {
-    if (n->kind != OS64_HTML_ELEMENT || boxless(n))
+    if (n->kind != OS64_HTML_ELEMENT || boxless(b, n))
         return FLOW_DISPLAY_NONE;
     const FStyled *s = styled(b, n);
     return s != NULL ? s->style.display : FLOW_DISPLAY_NONE;

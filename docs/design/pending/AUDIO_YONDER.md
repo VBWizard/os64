@@ -600,6 +600,53 @@ above:
   `tools/test_dom_media.inc` plays every step against a fake host;
   `tools/test_media_queue_host.sh` holds the queue to a model.
 
+## As built (Y.2.2, the controls and the media document)
+
+- **The player is one widget** (`apps/yonder/player.c`), not a panel of
+  libui's: a play button, the time, a seek bar, a mute button and a
+  volume bar, each a share of the box's height so it zooms with the page,
+  painted in the theme's colours and the page's face. It is 300 by 54 CSS
+  pixels, Chrome's size, and that size has no ratio: a page that widens it
+  leaves it as tall (libflow's `f_audio_controls`). The volume bar joins
+  only where the seek bar keeps two buttons' width beside it, so Chrome's
+  size shows play, time, seek and mute; there the wheel over the speaker
+  and Up and Down set the volume, which is Chrome's pop-out slider's job.
+  Space and Enter play and pause, Left and Right seek five seconds, `m`
+  mutes. Busy and a failed load are said where the bar is ("Sound is
+  busy", "Cannot play this sound").
+- **It shows the element and asks the element**: libdom's
+  `os64_dom_media_view` is what a script's members would answer, and
+  `os64_dom_media_control` is a script's call (play, pause, a seek, the
+  volume, muted), through the same steps the members take, so a page
+  hears the same events. A control's play is a task of its own, and its
+  promise's rejection is the element's state, never an unhandled one.
+- **A press is acted on at the loop's turn**, not in the widget's
+  handler: yonder replays a press to libui from inside the page's pointer
+  task, where no task of the control's own can begin. The press has
+  already been the page's activation (yonder_scripts_pointer).
+- **The players are built and placed with the form controls**, after the
+  same layouts and scrolls (`forms_build`, `forms_place`), threaded after
+  them in the root's list (`page_widgets_chain`), so a rebuild of either
+  keeps the other.
+- **A page with scripts off has no player**: the element lives in
+  script's runtime, so its audio stays boxless, as a canvas falls back.
+  DEBTS.md § A page's sound books what that costs.
+- **The media document**: libway sorts a reply whose type is in the
+  leg's `sounds` (libmedia's `os64_media_type_list`, the table
+  `canPlayType` reads) into `WAY_BODY_MEDIA`; the list is not added to a
+  navigation's Accept. yonder writes `<audio controls autoplay>` on the
+  picture page's dark body, and the navigation is the page's activation.
+- **Proven** by `tools/test_dom_media.inc` (the view and each control,
+  events and all, and a refused play no page sees),
+  `tools/test_libflow_layout.inc` (the box with scripting, its height
+  kept, none without), `tools/test_way_fetch_host.c` (a sound is a page
+  for a face that plays it, never a POST's reply, and Accept unchanged),
+  and in QEMU by `/tests/pages/audio-controls.html`: each part clicked
+  plays, pauses, seeks, sets the volume and mutes, with the page's log
+  hearing `play`, `playing`, `seeking`, `seeked`, `volumechange`, `pause`
+  and `ended`; the link to the MP3 plays it on its own page at once, and
+  plays it again from its button.
+
 ## Slices
 
 `YAUDIO_TRACKER.csv` beside this file is the state of each one

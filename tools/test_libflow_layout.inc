@@ -403,6 +403,18 @@ static void layout_cases(void)
         "      atomic canvas 8 58 200 100\n"
         "      atomic canvas 208 108 100 50\n"
         "      atomic canvas 308 8 300 150\n");
+    // An audio with controls is replaced where scripting is on, at the
+    // face's size, and a page's width leaves its height as it is: a
+    // player's size has no ratio. One without controls has no box.
+    cascade_layout_case("an audio's controls are a box where scripting is on, its height its own",
+        "<!doctype html><style>.w{width:100px}</style><audio controls src=known.mp3>no</audio>"
+        "<audio class=w controls src=known.mp3></audio><audio src=known.mp3>no</audio>", 1000,
+        "page 1000 52\n"
+        "block html 0 0 1000 52\n"
+        "  block body 8 8 984 36\n"
+        "    line 8 8 984 36 base 30\n"
+        "      atomic audio 8 8 40 30\n"
+        "      atomic audio 48 8 100 30\n");
     // CSS Display 3 Appendix B: `display: contents` on a replaced element
     // computes to `none`, so neither a canvas's fallback nor a frame's
     // text is laid out; a canvas with scripting off is no replaced element,
@@ -417,6 +429,15 @@ static void layout_cases(void)
         "      line 8 16 984 20 base 14\n"
         "        text \"after\" 8 18 28 16 serif 16\n");
     kEnv.scripting = false;
+    // Its sound is script's to play, so without scripting it has no player.
+    cascade_layout_case("an audio's controls are no box where scripting is off",
+        "<!doctype html><audio controls src=known.mp3>no</audio><p>after</p>", 1000,
+        "page 1000 52\n"
+        "block html 0 0 1000 52\n"
+        "  block body 8 16 984 20\n"
+        "    block p 8 16 984 20\n"
+        "      line 8 16 984 20 base 14\n"
+        "        text \"after\" 8 18 28 16 serif 16\n");
     cascade_layout_case("display: contents on a canvas with scripting off is its fallback",
         "<!doctype html><style>canvas{display:contents}</style><canvas>fallback</canvas>", 1000,
         "page 1000 36\n"

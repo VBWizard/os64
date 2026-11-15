@@ -2,6 +2,7 @@
 
 #include "trip.h"
 #include "image/image.h"
+#include "media.h"
 #include "os64/gui.h"
 #include "os64/mem.h"
 #include "os64/str.h"
@@ -58,6 +59,7 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
     os64_strcopy(leg.referrer, sizeof(leg.referrer), trip->referrer);
     leg.face = (way_face_t){&r, run_confirm, run_cancelled, run_progress};
     leg.pictures = OS64_IMAGE_ACCEPT;
+    leg.sounds = yonder_media_sounds();
 
     yonder_verdict_t verdict;
     os64_memset(&verdict, 0, sizeof(verdict));
@@ -73,10 +75,10 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
     }
     yonder_mail_post_head(trip->mail, &o.head);
     ring(trip);
-    // A picture asked for by itself: the window writes the page that shows
-    // it, and fetches the picture as it fetches any, so its bytes are not
-    // read here.
-    if (o.head.body == WAY_BODY_IMAGE) {
+    // A picture or a sound asked for by itself: the window writes the page
+    // that shows or plays it, and fetches it as it fetches any, so its
+    // bytes are not read here.
+    if (o.head.body == WAY_BODY_IMAGE || o.head.body == WAY_BODY_MEDIA) {
         verdict.page = true;
         verdict.fetch = OS64_FETCH_OK;
         verdict.cookies_short = leg.cookies_short;

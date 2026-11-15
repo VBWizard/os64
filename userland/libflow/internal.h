@@ -318,8 +318,11 @@ bool f_replaced(const flow_env_t *env, const os64_html_node_t *n, const flow_sty
 // is (STYLED_BUTTONS.md § 2).
 bool f_button_faced(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s);
 // Elements that make no box in this browser, nor anything inside them
-// (boxes.c): `embed`, `audio`, `source`, `track`, `keygen`.
-bool f_boxless(const os64_html_node_t *n);
+// (boxes.c): `embed`, `audio` without controls, `source`, `track`, `keygen`.
+bool f_boxless(const flow_env_t *env, const os64_html_node_t *n);
+// An `audio` the face draws controls for: `controls` set, script running.
+// It is replaced (f_replaced), its size the face's (replaced_size).
+bool f_audio_controls(const flow_env_t *env, const os64_html_node_t *n);
 // Whether pass 2 draws anything inside element `n`, styled `s`: nothing
 // inside a boxless element, nor inside a replaced one unless it is laid
 // out through `display: contents` (a button's, whose content then flows

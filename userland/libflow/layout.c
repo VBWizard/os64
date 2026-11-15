@@ -645,16 +645,19 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     // The page's ratio (Sizing 4 § 4.1) stands in for the picture's own,
     // unless it said `auto` beside it and the picture has one.
     bool ratio = s->aspect_ratio > 0 && !(s->aspect_natural && known && kw > 0 && kh > 0);
+    // An audio's controls have a size and no ratio: a page that widens the
+    // player leaves it as tall as it was, as other browsers do.
+    bool shapeless = f_audio_controls(l->env, node);
     if (known) {
         if (w_set && h_set) {
             r.w = w;
             r.h = h;
         } else if (w_set) {
             r.w = w;
-            r.h = ratio ? ratio_height(s, w, fw, fh) : kw > 0 ? mul_div(w, kh, kw) : kh;
+            r.h = ratio ? ratio_height(s, w, fw, fh) : kw > 0 && !shapeless ? mul_div(w, kh, kw) : kh;
         } else if (h_set) {
             r.h = h;
-            r.w = ratio ? ratio_width(s, h, fw, fh) : kh > 0 ? mul_div(h, kw, kh) : kw;
+            r.w = ratio ? ratio_width(s, h, fw, fh) : kh > 0 && !shapeless ? mul_div(h, kw, kh) : kw;
         } else {
             r.w = kw;
             r.h = ratio ? ratio_height(s, kw, fw, fh) : kh;

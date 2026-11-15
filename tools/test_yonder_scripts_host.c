@@ -2693,6 +2693,74 @@ static void input_links(void) {
     check(status_says("background workers"),"input: an uncancelled click follows its link after its listeners");
     probe_drop();
 }
+/* An audio's player (player.h; AUDIO_YONDER.md § The controls): its
+ * arithmetic, and a page's `<audio controls>` getting one at its box, as
+ * a form control gets its widget, and none with scripts off. Here no
+ * session ever opens (the media stubs above), which the player says. */
+static void player_cases(void) {
+    char t[48];
+    yonder_player_time(0, 2, t, sizeof(t));
+    check(!strcmp(t, "0:00 / 0:02"), "player: the time and the length");
+    yonder_player_time(3723.9, 5025, t, sizeof(t));
+    check(!strcmp(t, "1:02:03 / 1:23:45"), "player: hours when the length has them");
+    yonder_player_time(5, NAN, t, sizeof(t));
+    check(!strcmp(t, "0:05 / --:--"), "player: a length not known yet");
+    yonder_player_time(725, INFINITY, t, sizeof(t));
+    check(!strcmp(t, "12:05"), "player: a stream with no end shows only where it is");
+    yonder_player_parts_t parts;
+    yonder_player_parts((os64_gui_rect_t){10, 20, 300, 54}, &parts);
+    check(parts.play.w > 0 && parts.time.w > 0 && parts.seek.w > 0 && parts.mute.w > 0 && parts.volume.w == 0 &&
+          parts.play.x < parts.time.x && parts.time.x < parts.seek.x && parts.seek.x + parts.seek.w <= parts.mute.x &&
+          parts.mute.x + parts.mute.w <= 310,
+          "player: Chrome's size has play, time, seek and mute in order, no volume bar");
+    yonder_player_parts((os64_gui_rect_t){0, 0, 480, 54}, &parts);
+    check(parts.volume.w > 0 && parts.seek.x + parts.seek.w <= parts.volume.x &&
+          parts.volume.x + parts.volume.w <= parts.mute.x, "player: a wider one has the volume bar before the speaker");
+    yonder_player_parts((os64_gui_rect_t){0, 0, 60, 54}, &parts);
+    check(parts.play.w > 0 && parts.time.w == 0 && parts.volume.w == 0, "player: a narrow one keeps its play button");
+    yonder_player_parts((os64_gui_rect_t){0, 0, 300, 54}, &parts);
+    check(yonder_player_value_at(parts.seek, parts.seek.x - 50, 10) == 0 &&
+          yonder_player_value_at(parts.seek, parts.seek.x + parts.seek.w + 50, 10) == 10 &&
+          yonder_player_value_at(parts.seek, parts.seek.x + parts.seek.w / 2, 10) > 4 &&
+          yonder_player_value_at(parts.seek, parts.seek.x + parts.seek.w / 2, 10) < 6 &&
+          yonder_player_value_at(parts.seek, parts.seek.x, NAN) == 0,
+          "player: the bar's value is held to its ends, and a length not known seeks nowhere");
+
+    probe_page("<p><audio id=a controls src=a.mp3></audio><audio id=b src=b.mp3></audio></p>", true);
+    script_turn();
+    const flow_box_t *box = flow_box_for(g.page.tree, probe_id("a"));
+    check(g.nplayers == 1 && g.players[0]->node == probe_id("a") && box != NULL && box->replaced &&
+          flow_box_for(g.page.tree, probe_id("b")) == NULL,
+          "player: an audio with controls has a player at a box, one without has neither");
+    if (g.nplayers == 1 && box != NULL) {
+        const os64_ui_widget_t *w = &g.players[0]->p.w;
+        check(!w->hidden && w->bounds.w == YONDER_PLAYER_WIDTH && w->bounds.h == YONDER_PLAYER_HEIGHT &&
+              w->parent == &g.root, "player: the widget is shown at its box, Chrome's size, in the window's tree");
+        Player *kept = g.players[0];
+        relayout(false);
+        check(g.nplayers == 1 && g.players[0] == kept, "player: a layout keeps the player it had");
+    }
+    probe_drop();
+    check(g.nplayers == 0 && g.players == NULL, "player: the page's players leave with it");
+    probe_page("<p><audio id=o style=\"opacity:0\" controls src=a.mp3></audio>"
+               "<audio id=v style=\"visibility:hidden\" controls src=b.mp3></audio></p>", true);
+    script_turn();
+    const Player *seen = NULL, *hidden = NULL;
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        if (g.players[i]->node == probe_id("o")) seen = g.players[i];
+        if (g.players[i]->node == probe_id("v")) hidden = g.players[i];
+    }
+    check(seen != NULL && !seen->p.w.hidden && seen->p.w.cls != &yonder_player_class &&
+          seen->p.w.cls->paint == NULL && seen->p.w.cls->event == yonder_player_class.event,
+          "player: one the page made invisible paints nothing and still takes the pointer");
+    check(hidden != NULL && hidden->p.w.hidden, "player: one the page hid is hidden");
+    probe_drop();
+    probe_page("<p><audio id=a controls src=a.mp3></audio></p>", false);
+    check(g.nplayers == 0 && flow_box_for(g.page.tree, probe_id("a")) == NULL,
+          "player: with scripts off an audio's controls draw nothing");
+    probe_drop();
+}
+
 /* HTML's sticky activation (AUDIO_YONDER.md § Autoplay): a press through
  * the window's pointer path counts, on a page that listens for nothing. */
 static void input_activation(void) {
@@ -3185,6 +3253,7 @@ static void input_cases(void) {
 
     input_links();
     input_activation();
+    player_cases();
     input_javascript_links();
     input_attribute_backstop();
     input_hover();
@@ -12376,7 +12445,7 @@ int main(void)
         return failures ? 1 : 0;
     }
     if(getenv("YONDER_POINTER_ONLY")) {
-        pointer_window_cases(); input_links(); input_activation(); input_hover(); input_ui_events(); hover_batch_cases();
+        pointer_window_cases(); input_links(); input_activation(); player_cases(); input_hover(); input_ui_events(); hover_batch_cases();
         os64_text_font_release(probe_font);
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"pointer: text released");
         check(live==0,"pointer: heap empty");

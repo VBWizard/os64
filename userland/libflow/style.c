@@ -873,8 +873,11 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     // button's centring is declared, because a button the page draws is
     // laid out (f_button_faced) and its content centred the chapter's way;
     // the face's own button centres its caption either way.
+    // An audio's controls are one too (f_audio_controls); without them it
+    // makes no box at all (f_boxless), whatever its display.
     case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_SELECT:
     case OS64_HTML_TAG_TEXTAREA: case OS64_HTML_TAG_METER: case OS64_HTML_TAG_PROGRESS:
+    case OS64_HTML_TAG_AUDIO:
         s->display = FLOW_DISPLAY_INLINE_BLOCK;
         if (n->tag == OS64_HTML_TAG_BUTTON)
             s->text_align = FLOW_ALIGN_CENTER;
@@ -5248,7 +5251,7 @@ static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
 {
     if (of->style.display == FLOW_DISPLAY_NONE || c->inert != NULL)
         return true;
-    if (f_boxless(el)) {
+    if (f_boxless(c->env, el)) {
         c->inert = el;
         return true;
     }

@@ -59,6 +59,11 @@ typedef struct {
 void yonder_media_start(const yonder_media_env_t *env);
 void yonder_media_stop(void);
 
+// The types of sound yonder plays, as a list libway sorts a reply by
+// (way_leg_t.sounds), made at yonder_media_start and unchanged after, so
+// any thread may read it.
+const char *yonder_media_sounds(void);
+
 // NULL when it cannot begin (no memory, no thread): the element's network
 // error. Window thread, as are all of these.
 yonder_media_t *yonder_media_open(const yonder_media_request_t *request);

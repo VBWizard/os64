@@ -1599,7 +1599,8 @@ static const char *rp_window_of(const RpRecord *r, bool local, const RpIndex *in
     os64_strcopy(hd->content_type,sizeof(hd->content_type),f[F_TYPE]);
     os64_strcopy(hd->charset,sizeof(hd->charset),f[F_CHARSET]);
     hd->encrypted=!strcmp(f[F_ENCRYPTED],"yes");
-    hd->body=!strcmp(body,"text") ? WAY_BODY_TEXT : !strcmp(body,"image") ? WAY_BODY_IMAGE : WAY_BODY_HTML;
+    hd->body=!strcmp(body,"text") ? WAY_BODY_TEXT : !strcmp(body,"image") ? WAY_BODY_IMAGE :
+             !strcmp(body,"media") ? WAY_BODY_MEDIA : WAY_BODY_HTML;
     if(f[F_TLS]!=NULL) {
         hd->tls_version=!strncmp(f[F_TLS],"1.3",3) ? 0x0304 : 0x0303;
         hd->tls_fallback=strstr(f[F_TLS],"fallback")!=NULL;

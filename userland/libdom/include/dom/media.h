@@ -76,6 +76,33 @@ typedef struct {
     int (*can_play)(void *opaque, const char *type);
 } os64_dom_media_provider_t;
 
+/* What a media element's controls show (AUDIO_YONDER.md § The controls),
+ * as its members would answer now. */
+typedef struct {
+    bool paused;            /* paused */
+    bool ended;             /* ended */
+    bool waiting;           /* playing, but nothing to hear yet: loading, or busy */
+    bool busy;              /* play was asked and the sound device is another program's */
+    bool seekable;          /* seekable has a range, so a seek bar may be dragged */
+    bool muted;             /* muted */
+    double position;        /* currentTime, seconds */
+    double duration;        /* duration: NaN unknown, INFINITY for no end */
+    double arrived;         /* buffered's end, seconds */
+    double volume;          /* volume, 0 to 1 */
+    int error;              /* error's code, or 0 */
+} os64_dom_media_view_t;
+
+/* What a control asks of its element: what a script would by play(),
+ * pause(), setting currentTime (value: seconds), volume (0 to 1) or muted
+ * (value nonzero). */
+typedef enum {
+    OS64_DOM_MEDIA_PLAY,
+    OS64_DOM_MEDIA_PAUSE,
+    OS64_DOM_MEDIA_SEEK,
+    OS64_DOM_MEDIA_VOLUME,
+    OS64_DOM_MEDIA_MUTE,
+} os64_dom_media_control_t;
+
 #pragma GCC visibility push(default)
 /* Install or replace (NULL removes) the host, outside callbacks. A media
  * element on a page with none plays nothing: canPlayType answers "", and a
@@ -93,5 +120,17 @@ bool os64_dom_media_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * the host's to call whenever a session has news, and at least every
  * 250 ms while one sounds (timeupdate's pace). */
 bool os64_dom_media_due(const os64_dom_t *dom);
+/* The controls' side, owner thread, between tasks. The view of `node`'s
+ * element (zeroed, duration NaN, and false while it has no state: no
+ * member has been reached and no turn has found it). */
+bool os64_dom_media_view(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_media_view_t *out);
+/* A person's use of `node`'s controls, done as the element's member would
+ * be done by script, so the page hears the same events: a play is a host
+ * task (`outcome` its verdict), and its promise's rejection is the
+ * element's state, not the page's to handle. Activation is the host's to
+ * have noted first (the press that reached the control). False when the
+ * element cannot be reached. */
+bool os64_dom_media_control(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_media_control_t what,
+                            double value, os64_js_outcome_t *outcome);
 #pragma GCC visibility pop
 #endif

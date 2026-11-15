@@ -204,6 +204,13 @@ typedef struct {
     // picture. Any other picture is not a page. way_open's alone: way_load
     // reads every body it opens, so to it no picture is a page.
     const char *pictures;
+    // The sounds the face plays, as a list of their types in the same form
+    // (yonder's is os64_media_type_list), or NULL for none: a sound asked
+    // for by itself, of a type it names, is a page, WAY_BODY_MEDIA, whose
+    // body the face does not read — it writes the page that plays it. They
+    // are not added to Accept: a navigation's asks for pages, as other
+    // browsers' does. way_open's alone, as `pictures` is.
+    const char *sounds;
     char status[WAY_SENTENCE_MAX];
     // The page this load was asked for from — a link followed, a form sent,
     // a refresh — which its Referer names (way_referrer). Empty for an
@@ -270,8 +277,9 @@ const char *way_accept_compose(const char *pages, const char *pictures, char *ou
 
 // What a body is, judged from its head. A head that is none of these is not
 // a page: way_open says so and refuses. IMAGE only for a leg whose face shows
-// pictures, and never for the reply to a POST.
-typedef enum { WAY_BODY_HTML = 0, WAY_BODY_TEXT, WAY_BODY_IMAGE } way_body_t;
+// pictures, MEDIA only for one whose face plays sounds, and neither for the
+// reply to a POST.
+typedef enum { WAY_BODY_HTML = 0, WAY_BODY_TEXT, WAY_BODY_IMAGE, WAY_BODY_MEDIA } way_body_t;
 
 // The head, COPIED out of the fetch: os64_fetch_head_t is storage inside
 // the fetch and dies with it, and the note is written from the head after
