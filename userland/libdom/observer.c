@@ -556,7 +556,7 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
         if (!callback_ctx) { status = -1; break; }
         bool any = o->first != NULL;
         int eligible = 1;
-        if (eligible && any) eligible = d_observer_eligible(owner, callback_ctx, &o->callback);
+        if (eligible && any) eligible = d_captured_eligible(owner, callback_ctx, &o->callback);
         if (eligible <= 0) queue_clear(owner, o);
         if (eligible == 0) {
             registrations_drop(dom, transient_for, o);

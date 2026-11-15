@@ -358,7 +358,7 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
             any = any || t->active;
         }
         if (any && !o->dead && JS_IsObject(o->object)) {
-            int eligible = d_observer_eligible(dom, ctx, &o->callback);
+            int eligible = d_captured_eligible(dom, ctx, &o->callback);
             if (eligible <= 0) {
                 /* A permanently retired callback cannot consume a later
                  * resize either. Remember the sample without constructing
