@@ -30,7 +30,8 @@
 //   9  bytes that are no media are refused by name
 //  13  the types it answers for (canPlayType's words): AAC and MP4 maybe,
 //      MP4 naming AAC probably, MP4 naming a video codec no, and a type it
-//      has no reader for no
+//      has no reader for no; and the sound types' list names audio/mp4
+//      and no video type
 //  14  an MP4 with a picture first and AAC after (avtest's sine_m4a.h)
 //      opens as MP4 ("mov", the reader's first name) and plays its sound:
 //      about one second of the sine at 48 kHz stereo, holding the energy
@@ -392,7 +393,7 @@ static int step_noise(void)
 static int step_types(void)
 {
     static const struct { const char *type; int answer; } kAsk[] = {
-        {"audio/mp4", OS64_MEDIA_TYPE_MAYBE}, {"audio/aac", OS64_MEDIA_TYPE_MAYBE},
+        {"audio/mp4", OS64_MEDIA_TYPE_MAYBE}, {"audio/x-m4a", OS64_MEDIA_TYPE_MAYBE}, {"audio/aac", OS64_MEDIA_TYPE_MAYBE},
         {"video/mp4", OS64_MEDIA_TYPE_MAYBE}, {"audio/mp4; codecs=\"mp4a.40.2\"", OS64_MEDIA_TYPE_PROBABLY},
         {"video/mp4; codecs=\"avc1.4d400d,mp4a.40.2\"", OS64_MEDIA_TYPE_NO},
         {"audio/mpeg", OS64_MEDIA_TYPE_MAYBE}, {"video/webm", OS64_MEDIA_TYPE_NO}, {"audio/ogg", OS64_MEDIA_TYPE_NO},
@@ -403,6 +404,23 @@ static int step_types(void)
             os64_printf("mediatest: type '%s' answered %d, not %d\n", kAsk[i].type, got, kAsk[i].answer);
             return FAIL(13);
         }
+    }
+    // The sound types' list names AAC's and leaves the video type out,
+    // which plays only its sound and so is no sound a page is made for.
+    static char list[512];
+    (void)os64_media_type_list(list, sizeof(list));
+    bool aac = false, video = false;
+    for (const char *p = list; *p != '\0';) {
+        const char *end = p;
+        while (*end != '\0' && *end != ',') end++;
+        size_t n = (size_t)(end - p);
+        aac |= n == 9 && os64_memcmp(p, "audio/mp4", 9) == 0;
+        video |= n >= 6 && os64_memcmp(p, "video/", 6) == 0;
+        p = *end == ',' ? end + 2 : end;
+    }
+    if (!aac || video) {
+        os64_printf("mediatest: the sound types' list: %s\n", list);
+        return FAIL(13);
     }
     return 0;
 }

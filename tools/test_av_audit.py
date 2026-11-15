@@ -158,12 +158,20 @@ for program in ('play', 'tests/mediatest'):
 #   mpegaudiodec_*, mpegaudiodsp*, pcm.c,  a decoder's open: libmedia's,
 #   aac/aacdec_float.c, aac/aacdec_tab.c,  and avformat_find_stream_info's,
 #   aactab.c, sinewin_tablegen.h           both under libmedia's lock (the
-#                                          AAC four from ff_aac_decode_init)
-#   crc.c                                  libmedia makes every table at its
-#                                          first open
-#   tx_template.c, aes.c                   nothing in this build's codecs or
-#                                          demuxers; only a program calling
-#                                          av_tx_* or av_aes_* itself
+#                                          AAC four from its init,
+#                                          ff_aac_decode_init_float and the
+#                                          ff_aac_decode_init it calls)
+#   crc.c, aes.c                           libmedia makes every CRC table and
+#                                          the AES tables at its first open
+#                                          (the MP4 reader runs AES over an
+#                                          `adrm` file's packets, unlocked)
+#   tx_template.c                          the AAC decoder's open (its
+#                                          MDCTs, up to 1024, under the
+#                                          lock); SBR asks again while
+#                                          decoding, unlocked, for 64-point
+#                                          ones, which that open already
+#                                          made: a power of two's tables
+#                                          include every smaller one's
 known_once = {'libavcodec/aac/aacdec_float.c': 1, 'libavcodec/aac/aacdec_tab.c': 1,
               'libavcodec/aactab.c': 1, 'libavcodec/sinewin_tablegen.h': 1,
               'libavcodec/mpegaudiodec_common.c': 1, 'libavcodec/mpegaudiodec_template.c': 1,

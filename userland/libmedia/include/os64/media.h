@@ -116,8 +116,9 @@ const char *os64_media_strerror(int result);
 #define OS64_MEDIA_TYPE_PROBABLY  2
 int os64_media_type_supported(const char *type);
 
-// The MIME types os64_media_type_supported answers other than NO for when
-// they name no codecs, comma-separated as an Accept list is ("audio/mpeg,
+// The SOUND types os64_media_type_supported answers other than NO for
+// when they name no codecs (a video type, which plays only its sound, is
+// left out), comma-separated as an Accept list is ("audio/mpeg,
 // audio/mp3, ..."), into `out`. Answers the length the whole list needs,
 // as os64_snprintf does; a list that does not fit is cut at a type, never
 // within one.

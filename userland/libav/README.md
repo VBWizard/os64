@@ -143,7 +143,9 @@ they stay off.
   one thread does every open and close under one lock of its own and
   installs a log callback that is safe from any thread. libmedia keeps a
   narrower form (its lock spans `avformat_find_stream_info` and the
-  decoder's open, where this build's setups run); `libmedia/media.c`
+  decoder's open, where this build's decoders set up, and it makes the
+  CRC and AES tables itself at its first open, since a demuxer can ask
+  for those while reading); `libmedia/media.c`
   § THREADS says why it is enough, and `tools/test_av_audit.py` pins the
   one-time setups it rests on. Turning threads on means a pthread shim (mutex, condition, once)
   over `os64_thread`, the lock and bells.

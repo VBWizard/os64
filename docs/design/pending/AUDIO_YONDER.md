@@ -862,8 +862,8 @@ the box, the place other browsers draw theirs.
 missing, and that is what a record is for. An `audio` is no longer
 counted when the Modern Web surface plays it.
 
-**Proven** by libdom's media cases for the interface, its members and a
-video element playing through the same session path as an audio
+**Proven** (as Y.4 stood; § Y.5 changed what an MP4 does) by libdom's
+media cases for the interface, its members and a video element playing through the same session path as an audio
 (`tools/test_dom_media.inc`); libflow's layout cases for the box, its
 default and its attributes, and the fallback where no sound plays
 (`tools/test_libflow_layout.inc`); the yonder scripted-page suite's
@@ -898,7 +898,14 @@ the audio stream. `canPlayType` follows the configuration as before:
 and `video/mp4` joins libmedia's type table for its sound (a codecs
 parameter naming a video codec still answers `""`). The four one-time
 setups the AAC decoder brings run in a decoder's open, under libmedia's
-lock (§ THREADS), and `tools/test_av_audit.py` names them.
+lock (§ THREADS), and `tools/test_av_audit.py` names them; the MP4
+reader can ask for libavutil's AES tables while reading a packet (a file
+with an `adrm` atom), so libmedia makes them at its first open, as it
+does the CRC tables. A video type is NOT a sound type: the list that
+makes a link straight to a sound open as a page of its own (§ The media
+document) leaves `video/mp4` out, so a link to an MP4 video is still
+offered for saving rather than opened as a page that plays only its
+sound.
 `os64_media_info_t.format` is the reader's first name (`mov`), not the
 list FFmpeg gives a reader of several kinds.
 
