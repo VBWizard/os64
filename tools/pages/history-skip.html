@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>History skip: the start</title>
+<!--
+  The browser's Back passes over the entries a page makes before anybody
+  touched it (way_crumb_t.skip), and holding Back lists where it can go.
+
+  What to do. Click the big link below (a person's click: this page is
+  touched, so its entry stays). The page it opens adds three entries to the
+  history by itself, then sends you on to a second page, which adds two more.
+  Neither is touched. Then:
+
+    press Back once    you are back here, past seven entries the trap made
+    hold Back          the list shows this page and whatever was before it,
+                       and none of the trap's entries
+
+  Click on the second page before pressing Back and its entries are yours:
+  Back then steps through them, as it does in Chrome.
+-->
+<style>
+  body { font: 18px sans-serif; margin: 16px; }
+  #go { display: block; padding: 120px 24px; font-size: 32px; background: #fe8; text-align: center; }
+</style>
+<h1>The start</h1>
+<p>A person was here. Back comes back to this page.</p>
+<a id="go" href="history-skip-trap.html">Follow the link that fills the history</a>
