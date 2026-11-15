@@ -301,7 +301,10 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     Commands commands={0};size_t capacity=OS64_GEOMETRY_COMMAND_MAX*sizeof(*commands.commands);
     if(magic&&status==OS64_FONT_OK&&d_canvas_allocate(dom,capacity,(void **)&commands.commands)!=OS64_GEOMETRY_OK)status=OS64_FONT_LIMIT;
     os64_geometry_bounds_t bounds={.empty=true};
-    if(status==OS64_FONT_OK)status=os64_text_run_outline(run,OS64_GEOMETRY_COMMAND_MAX,magic?collect:NULL,&commands,&bounds);
+    /* The outline budget is a draw's (its commands are collected and
+     * painted); measureText keeps none, only the bounds, so a long text
+     * measures as in other browsers whatever its outline would cost. */
+    if(status==OS64_FONT_OK)status=os64_text_run_outline(run,magic?OS64_GEOMETRY_COMMAND_MAX:SIZE_MAX,magic?collect:NULL,&commands,&bounds);
     if(status!=OS64_FONT_OK){os64_text_run_release(run);d_provider_leave(owner);d_canvas_release(dom,commands.commands,capacity);return font_error(ctx,status);}
     double scale=style.size/pixels,width=view.advance_x/64.0*scale;
     double ascent=view.ascent/64.0*scale,descent=view.descent/64.0*scale;
