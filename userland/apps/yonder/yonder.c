@@ -10801,6 +10801,7 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
                         os64_dom_media_preload_t preload)
 {
     (void)node;
+    (void)preload;
     uint64_t serial = (uint64_t)(uintptr_t)opaque;
     yonder_scripts_t *host = scripts_for(serial);
     const char *page = host != NULL ? yonder_scripts_url(host) : "about:blank";
@@ -10810,7 +10811,7 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     // what it holds. Refused, it is the element's network error.
     if (media_file_scheme(url) && !media_file_scheme(page))
         return NULL;
-    yonder_media_request_t r = {url, page, serial, cors, preload, g.way.agent, g.way.identity};
+    yonder_media_request_t r = {url, page, serial, cors, g.way.agent, g.way.identity};
     return yonder_media_open(&r);
 }
 static void media_close(void *opaque, void *session) { (void)opaque; yonder_media_close(session); }
@@ -10821,10 +10822,14 @@ static void media_seek(void *opaque, void *session, double seconds, uint64_t gen
     (void)opaque;
     yonder_media_seek(session, seconds, generation);
 }
+// `all` (and open's preload) are HTML's hint of how much to read before
+// play: every session decodes its queue's worth whatever the hint says,
+// because pages start their sound from canplay (media.c, decoder_main).
 static void media_settings(void *opaque, void *session, double gain, bool loop, bool all)
 {
     (void)opaque;
-    yonder_media_settings(session, gain, loop, all);
+    (void)all;
+    yonder_media_settings(session, gain, loop);
 }
 static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out)
 {
@@ -13909,6 +13914,12 @@ static bool key_event(const os64_gui_event_t *ev)
     for (int32_t i = 0; i < g.nfw && target == NULL; i++)
         if (g.fw[i]->w == g.ui.focus)
             target = g.fw[i]->node;
+    // A player's keys are its element's, as a native control's are in
+    // other browsers: the page hears them, may prevent them, and they are
+    // the person's activation, which a play asked by the key needs.
+    for (int32_t i = 0; i < g.nplayers && target == NULL; i++)
+        if (&g.players[i]->p.w == g.ui.focus)
+            target = g.players[i]->node;
     if (target == NULL && g.ui.focus != NULL && g.ui.focus != &g.view)
         return false;
     if (target == NULL)

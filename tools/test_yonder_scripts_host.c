@@ -36,7 +36,7 @@ void yonder_media_close(yonder_media_t *m) { (void)m; }
 void yonder_media_play(yonder_media_t *m) { (void)m; }
 void yonder_media_pause(yonder_media_t *m) { (void)m; }
 void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation) { (void)m; (void)seconds; (void)generation; }
-void yonder_media_settings(yonder_media_t *m, double gain, bool loop, bool all) { (void)m; (void)gain; (void)loop; (void)all; }
+void yonder_media_settings(yonder_media_t *m, double gain, bool loop) { (void)m; (void)gain; (void)loop; }
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out) { (void)m; memset(out, 0, sizeof(*out)); }
 int yonder_media_can_play(const char *type) { (void)type; return 0; }
 void yonder_media_reap(void) {}
@@ -2755,7 +2755,14 @@ static void player_cases(void) {
     check(s_player_asked == 2 && s_player_ask[0] == OS64_DOM_MEDIA_PLAY && s_player_ask[1] == OS64_DOM_MEDIA_PAUSE,
           "player: two presses before the element answers ask play, then pause");
     s_player_asked = 0;
-    player_key_now(&pl, 'm', 0x32); player_key_now(&pl, 'm', 0x32);
+    g.ui.any_dirty = false;
+    player_key_now(&pl, 'm', 0x32);
+    check(g.ui.any_dirty, "player: a key's change is repainted, before the element's view agrees with it");
+    os64_dom_media_view_t agreed = pl.view;
+    g.ui.any_dirty = false;
+    check(!yonder_player_show(&g.ui, &pl, &agreed) && !g.ui.any_dirty,
+          "player: the element's view agreeing paints nothing more");
+    player_key_now(&pl, 'm', 0x32);
     check(s_player_asked == 2 && s_player_value[0] == 1 && s_player_value[1] == 0,
           "player: two mutes ask on, then off");
     s_player_asked = 0;
@@ -2826,6 +2833,18 @@ static void input_activation(void) {
     check(!yonder_scripts_activated(g.page.scripts),"input: a page nobody has touched has no activation");
     input_click_at("b");
     check(yonder_scripts_activated(g.page.scripts),"input: a press through the pointer path is the page's activation");
+    probe_drop();
+    probe_page("<p><audio id=a controls src=a.mp3></audio></p><p id=log>-</p><script>"
+               "document.addEventListener('keydown',e=>document.getElementById('log').textContent=e.target.id)"
+               "</script>",true);
+    script_turn();
+    check(g.nplayers==1,"input: the audio has its player");
+    if (g.nplayers==1) {
+        os64_ui_set_focus(&g.ui,&g.players[0]->p.w);
+        os64_gui_event_t space={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=' ',.scancode=0x39}};
+        check(!key_event(&space) && yonder_scripts_activated(g.page.scripts) && probe_text_is("log","a"),
+              "input: a key at a focused player is its element's, heard by the page, and is the activation");
+    }
     probe_drop();
 }
 /* A `javascript:` link (MODERN_WEB.md slice 0c): the person's click runs

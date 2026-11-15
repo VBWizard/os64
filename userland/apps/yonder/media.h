@@ -38,8 +38,8 @@ typedef struct {
 
 // The resource: its absolute address (http, https, data: or file:), the
 // page that asks (its address, which is its origin and the Referer, and
-// its serial, which names an opaque origin), the element's crossorigin,
-// and its preload; and the browser's agent and preset lines as they are
+// its serial, which names an opaque origin), and the element's
+// crossorigin; and the browser's agent and preset lines as they are
 // chosen when it opens (Settings can change them), borrowed for the
 // session's life as a script's request borrows them.
 typedef struct {
@@ -47,7 +47,6 @@ typedef struct {
     const char *page_url;
     uint64_t page;
     os64_dom_media_cors_t cors;
-    os64_dom_media_preload_t preload;
     const char *agent;
     const way_identity_t *identity;
 } yonder_media_request_t;
@@ -73,7 +72,7 @@ void yonder_media_close(yonder_media_t *m);
 void yonder_media_play(yonder_media_t *m);
 void yonder_media_pause(yonder_media_t *m);
 void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation);
-void yonder_media_settings(yonder_media_t *m, double gain, bool loop, bool all);
+void yonder_media_settings(yonder_media_t *m, double gain, bool loop);
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out);
 // canPlayType's answer (0, 1 or 2; dom/media.h), libmedia's.
 int yonder_media_can_play(const char *type);

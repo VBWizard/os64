@@ -586,23 +586,25 @@ bool flow_replaced_fixed(const flow_box_t *box)
 // §10.4's limits on a replaced box's size `r`, its ratio kept in whichever
 // dimension the page left to it (`img { max-width: 100% }`): a width held
 // carries the height with it where the height was not given, and a
-// height held the width where it was not. The rest of §10.4's table —
+// height held the width where it was not. A box with no ratio (`carry`
+// false: an audio's controls, unless the page gave one) has each side
+// held alone. The rest of §10.4's table —
 // both limits binding at once against the ratio — is booked (GARB.md §
 // Booked). One door for every replaced box with a side given, whether or
 // not its picture has arrived, so a box flow_replaced_fixed calls fixed
 // sizes the same either way.
-static void replaced_hold(const flow_style_t *s, Replaced *r, bool w_set, bool h_set, int64_t cbw,
+static void replaced_hold(const flow_style_t *s, Replaced *r, bool w_set, bool h_set, bool carry, int64_t cbw,
                           int64_t cbh, int64_t fw, int64_t fh)
 {
     int64_t held = clamp_width(s, r->w, cbw, fw);
     if (held != r->w) {
-        if (!h_set && r->w > 0)
+        if (carry && !h_set && r->w > 0)
             r->h = r->h * held / r->w;
         r->w = held;
     }
     held = clamp_height(s, r->h, fh, cbh);
     if (held != r->h) {
-        if (!w_set && r->h > 0)
+        if (carry && !w_set && r->h > 0)
             r->w = r->w * held / r->h;
         r->h = held;
     }
@@ -662,7 +664,7 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
             r.w = kw;
             r.h = ratio ? ratio_height(s, kw, fw, fh) : kh;
         }
-        replaced_hold(s, &r, w_set, h_set, cbw, cbh, fw, fh);
+        replaced_hold(s, &r, w_set, h_set, ratio || !shapeless, cbw, cbh, fw, fh);
         return r;
     }
     // A picture whose size is not known yet takes its other side from the
@@ -675,7 +677,7 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     if (img && (w_set || h_set)) {
         r.w = w_set ? w : ratio ? ratio_width(s, h, fw, fh) : h;
         r.h = h_set ? h : ratio ? ratio_height(s, w, fw, fh) : w;
-        replaced_hold(s, &r, w_set, h_set, cbw, cbh, fw, fh);
+        replaced_hold(s, &r, w_set, h_set, true, cbw, cbh, fw, fh);
         return r;
     }
     if (img) {
@@ -712,7 +714,7 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     // an arrived picture's is (an <input type=image> takes this path until
     // its picture comes); the defaults alone are left as they are.
     if (w_set || h_set)
-        replaced_hold(s, &r, w_set, h_set, cbw, cbh, fw, fh);
+        replaced_hold(s, &r, w_set, h_set, true, cbw, cbh, fw, fh);
     return r;
 }
 

@@ -405,17 +405,22 @@ static void layout_cases(void)
         "      atomic canvas 308 8 300 150\n");
     // An audio with controls is replaced where the face plays sounds, at
     // the face's size, and a page's width leaves its height as it is: a
-    // player's size has no ratio. One without controls has no box.
+    // player's size has no ratio, nor does a limit on one side change the
+    // other. One without controls has no box.
     kEnv.media = true;
     cascade_layout_case("an audio's controls are a box where the face plays sounds, its height its own",
-        "<!doctype html><style>.w{width:100px}</style><audio controls src=known.mp3>no</audio>"
-        "<audio class=w controls src=known.mp3></audio><audio src=known.mp3>no</audio>", 1000,
+        "<!doctype html><style>.w{width:100px}.n{max-width:20px}.s{max-height:10px}</style>"
+        "<audio controls src=known.mp3>no</audio>"
+        "<audio class=w controls src=known.mp3></audio><audio src=known.mp3>no</audio>"
+        "<audio class=n controls src=known.mp3></audio><audio class=s controls src=known.mp3></audio>", 1000,
         "page 1000 52\n"
         "block html 0 0 1000 52\n"
         "  block body 8 8 984 36\n"
         "    line 8 8 984 36 base 30\n"
         "      atomic audio 8 8 40 30\n"
-        "      atomic audio 48 8 100 30\n");
+        "      atomic audio 48 8 100 30\n"
+        "      atomic audio 148 8 20 30\n"
+        "      atomic audio 168 28 40 10\n");
     kEnv.media = false;
     // A face that plays no sound (yonder's with script or the Modern Web
     // off) has no player to draw.

@@ -240,30 +240,34 @@ static void ask(yonder_player_t *p, os64_dom_media_control_t what, double value)
 }
 
 // Each ask shows its change at once (yonder_player_t.view), so a second
-// press before the element's next view asks from where the first left it.
-static void toggle(yonder_player_t *p)
+// press before the element's next view asks from where the first left it;
+// and repaints it, since the element's view, once it agrees, will not.
+static void toggle(os64_ui_t *ui, yonder_player_t *p)
 {
     bool play = p->view.paused || p->view.ended;
     ask(p, play ? OS64_DOM_MEDIA_PLAY : OS64_DOM_MEDIA_PAUSE, 0);
     p->view.paused = !play;
     if (play)
         p->view.ended = false;
+    os64_ui_mark_dirty(ui, &p->w);
 }
 
-static void mute_flip(yonder_player_t *p)
+static void mute_flip(os64_ui_t *ui, yonder_player_t *p)
 {
     bool on = !p->view.muted;
     ask(p, OS64_DOM_MEDIA_MUTE, on ? 1 : 0);
     p->view.muted = on;
+    os64_ui_mark_dirty(ui, &p->w);
 }
 
-static void seek_to(yonder_player_t *p, double t)
+static void seek_to(os64_ui_t *ui, yonder_player_t *p, double t)
 {
     ask(p, OS64_DOM_MEDIA_SEEK, t);
     p->view.position = t;
+    os64_ui_mark_dirty(ui, &p->w);
 }
 
-static void volume_to(yonder_player_t *p, double v)
+static void volume_to(os64_ui_t *ui, yonder_player_t *p, double v)
 {
     v = v < 0 ? 0 : v > 1 ? 1 : v;
     ask(p, OS64_DOM_MEDIA_VOLUME, v);
@@ -273,6 +277,7 @@ static void volume_to(yonder_player_t *p, double v)
         ask(p, OS64_DOM_MEDIA_MUTE, 0);
         p->view.muted = false;
     }
+    os64_ui_mark_dirty(ui, &p->w);
 }
 
 static void drag_to(os64_ui_t *ui, yonder_player_t *p, int32_t x)
@@ -283,13 +288,13 @@ static void drag_to(os64_ui_t *ui, yonder_player_t *p, int32_t x)
         double t = yonder_player_value_at(parts.seek, x, p->view.duration);
         if (t != p->drag_value) {
             p->drag_value = t;
-            seek_to(p, t);
+            seek_to(ui, p, t);
         }
     } else if (p->drag == YONDER_PLAYER_DRAG_VOLUME) {
         double v = yonder_player_value_at(parts.volume, x, 1);
         if (v != p->drag_value) {
             p->drag_value = v;
-            volume_to(p, v);
+            volume_to(ui, p, v);
         }
     }
     os64_ui_mark_dirty(ui, &p->w);
@@ -311,7 +316,6 @@ static void player_cancel(os64_ui_widget_t *w)
 
 static bool player_key(yonder_player_t *p, os64_ui_t *ui, const os64_gui_event_t *ev)
 {
-    (void)ui;
     if (ev->key.modifiers & (OS64_GUI_MOD_CTRL | OS64_GUI_MOD_ALT)) {
         p->seq = 0;
         return false;
@@ -330,14 +334,14 @@ static bool player_key(yonder_player_t *p, os64_ui_t *ui, const os64_gui_event_t
         switch (a) {
         case 'D':
             if (p->view.seekable)
-                seek_to(p, now > SEEK_STEP ? now - SEEK_STEP : 0);
+                seek_to(ui, p, now > SEEK_STEP ? now - SEEK_STEP : 0);
             return true;
         case 'C':
             if (p->view.seekable)
-                seek_to(p, now + SEEK_STEP < p->view.duration ? now + SEEK_STEP : p->view.duration);
+                seek_to(ui, p, now + SEEK_STEP < p->view.duration ? now + SEEK_STEP : p->view.duration);
             return true;
-        case 'A': volume_to(p, v + VOLUME_STEP); return true;
-        case 'B': volume_to(p, v - VOLUME_STEP); return true;
+        case 'A': volume_to(ui, p, v + VOLUME_STEP); return true;
+        case 'B': volume_to(ui, p, v - VOLUME_STEP); return true;
         default:
             if ((a >= '0' && a <= '9') || a == ';')
                 p->seq = SEQ_PARAMS;
@@ -355,11 +359,11 @@ static bool player_key(yonder_player_t *p, os64_ui_t *ui, const os64_gui_event_t
         return true;
     }
     if (a == ' ' || a == '\r' || a == '\n') {
-        toggle(p);
+        toggle(ui, p);
         return true;
     }
     if (a == 'm' || a == 'M') {
-        mute_flip(p);
+        mute_flip(ui, p);
         return true;
     }
     return false;
@@ -377,9 +381,9 @@ static bool player_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_even
         os64_ui_set_focus(ui, w);
         int32_t x = ev->mouse.x, y = ev->mouse.y;
         if (in(parts.play, x, y)) {
-            toggle(p);
+            toggle(ui, p);
         } else if (in(parts.mute, x, y)) {
-            mute_flip(p);
+            mute_flip(ui, p);
         } else if (in(parts.seek, x, y) && p->view.seekable && !p->view.busy && p->view.error == 0) {
             p->drag = YONDER_PLAYER_DRAG_SEEK;
             p->drag_value = -1;
@@ -407,7 +411,7 @@ static bool player_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_even
         if (notches == 0 || !(in(parts.mute, ev->mouse.x, ev->mouse.y) ||
                               in(parts.volume, ev->mouse.x, ev->mouse.y)))
             return p->pass != NULL && p->pass(ev, p->user);
-        volume_to(p, p->view.volume + notches * VOLUME_STEP);
+        volume_to(ui, p, p->view.volume + notches * VOLUME_STEP);
         return true;
     }
     case OS64_GUI_EVENT_KEY_DOWN:

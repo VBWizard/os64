@@ -574,12 +574,15 @@ above:
   probes the file's end for its tags and would otherwise wait for the
   whole download. A `Range` request for a seek far ahead is not made yet
   (YAUDIO_TRACKER.csv's Y.2.3).
-- **`preload` is honoured, by the decoder**: with metadata (the default)
-  it stops taking bytes after the probe, decodes nothing, and the fetch runs
-  on into the pipe until its backpressure stops it, 16 MiB on; `play()`,
-  `preload=auto` or `autoplay` takes the rest. `none` waits for `play()` or
-  `load()`. So a song smaller than the pipe's window still downloads whole
-  (DEBTS.md § A page's sound).
+- **`preload=none` waits for `play()` or `load()`; metadata and auto are
+  the same**: the decoder fills the two-second queue and stops, so the
+  element reaches HAVE_ENOUGH_DATA, and `canplay` and `canplaythrough`
+  fire, before anything plays, as in other browsers. Pages start their
+  sound from `canplay` (set `src`, wait for it, call `play()`), and a
+  metadata-only element that decoded nothing never fired it (Y.2.2 changed
+  this; Y.2.1 stopped at the probe). The fetch runs on into the pipe until
+  its backpressure stops it, 16 MiB on, so a song smaller than the pipe's
+  window still downloads whole (DEBTS.md § A page's sound).
 - **An element done with gives its session back**: one that has ended or
   failed, is paused and is in no document closes its session (the host's
   threads and buffers with it), and `play()` or a seek opens a new one. A
@@ -607,7 +610,8 @@ above:
   volume bar, each a share of the box's height so it zooms with the page,
   painted in the theme's colours and the page's face. It is 300 by 54 CSS
   pixels, Chrome's size, and that size has no ratio: a page that widens it
-  leaves it as tall (libflow's `f_audio_controls`). The volume bar joins
+  leaves it as tall, and a limit on one side (`max-width: 100%`) leaves
+  the other alone (libflow's `f_audio_controls`). The volume bar joins
   only where the seek bar keeps two buttons' width beside it, so Chrome's
   size shows play, time, seek and mute; there the wheel over the speaker
   and Up and Down set the volume, which is Chrome's pop-out slider's job.
@@ -626,7 +630,14 @@ above:
 - **A press is acted on at the loop's turn**, not in the widget's
   handler: yonder replays a press to libui from inside the page's pointer
   task, where no task of the control's own can begin. The press has
-  already been the page's activation (yonder_scripts_pointer).
+  already been the page's activation (yonder_scripts_pointer). A key at
+  a focused player is its element's, as a native control's is in other
+  browsers: the page hears `keydown` at the audio and may prevent it, and
+  the key is the activation a play asked by it needs.
+- **An element is ready to play before it plays**: it decodes its first
+  two seconds whatever its `preload`, so `canplay` fires and a page that
+  sets `src` and calls `play()` from `canplay` plays (§ As built (Y.2.1)'s
+  preload bullet, which this slice changed).
 - **The players are built and placed with the form controls**, after the
   same layouts and scrolls (`forms_build`, `forms_place`), threaded after
   them in the root's list (`page_widgets_chain`), so a rebuild of either
@@ -644,13 +655,19 @@ above:
 - **Proven** by `tools/test_dom_media.inc` (the view and each control,
   events and all, and a refused play no page sees),
   `tools/test_libflow_layout.inc` (the box with scripting, its height
-  kept, none without), `tools/test_way_fetch_host.c` (a sound is a page
-  for a face that plays it, never a POST's reply, and Accept unchanged),
-  and in QEMU by `/tests/pages/audio-controls.html`: each part clicked
-  plays, pauses, seeks, sets the volume and mutes, with the page's log
-  hearing `play`, `playing`, `seeking`, `seeked`, `volumechange`, `pause`
-  and `ended`; the link to the MP3 plays it on its own page at once, and
-  plays it again from its button.
+  kept when widened or limited, none without),
+  `tools/test_way_fetch_host.c` (a sound is a page for a face that plays
+  it, never a POST's reply, and Accept unchanged),
+  `tools/test_yonder_scripts_host.c` (the player's keys, repaints and
+  activation), `tools/yonder_record_grammar.txt` (a media document's
+  record is read by both record readers), and in QEMU by
+  `/tests/pages/audio-controls.html`: each part clicked plays, pauses,
+  seeks, sets the volume and mutes, with the page's log hearing `play`,
+  `playing`, `seeking`, `seeked`, `volumechange`, `pause` and `ended`;
+  the third player's buttons, which set `src` and play from `canplay`,
+  play with nothing else clicked, and the missing file says so; the link
+  to the MP3 plays it on its own page at once, and plays it again from
+  its button.
 
 ## Slices
 

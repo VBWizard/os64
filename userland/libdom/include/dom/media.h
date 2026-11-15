@@ -65,7 +65,7 @@ typedef struct {
     void (*seek)(void *opaque, void *session, double seconds, uint64_t generation);
     /* The gain the element's volume and muted make (0 to 1), loop, and
      * whether the whole resource is wanted now (preload became auto, or
-     * autoplay was set): a session opened for its metadata reads on. */
+     * autoplay was set): a host that reads less before play may read on. */
     void (*settings)(void *opaque, void *session, double gain, bool loop, bool all);
     void (*facts)(void *opaque, void *session, os64_dom_media_facts_t *out);
     /* Whether the person has interacted with this page (HTML's sticky

@@ -17,6 +17,11 @@
 
   The link opens the MP3 by itself: a dark page with one player in the
   middle, playing at once.
+
+  The third player starts with no sound. Its buttons are the way many
+  pages play one: set the src, wait for canplay, then call play(). Each
+  says "Loading..." and goes back to "Play" as its sound starts, with
+  nothing else clicked; the missing file says "Error!".
 -->
 <style>
   body { font: 16px sans-serif; margin: 16px; }
@@ -26,12 +31,26 @@
 <p><audio id="a" controls src="audio-tone.mp3"></audio></p>
 <p><audio id="b" controls loop src="audio-tone.wav" style="width: 480px"></audio></p>
 <p><a href="audio-tone.mp3">The MP3 by itself</a></p>
+<p><audio id="c" controls></audio></p>
+<p><input type="button" data-src="audio-tone.mp3" value="Play the MP3">
+   <input type="button" data-src="audio-tone.wav" value="Play the WAV">
+   <input type="button" data-src="audio-missing.mp3" value="Play a missing file"></p>
 <pre id="log"></pre>
 <script>
   const log = document.getElementById('log');
-  for (const id of ['a', 'b']) {
+  for (const button of document.querySelectorAll('input[data-src]')) {
+    const label = button.value;
+    button.addEventListener('click', () => {
+      const audio = document.getElementById('c');
+      button.value = 'Loading...';
+      audio.onerror = () => { button.value = 'Error!'; };
+      audio.oncanplay = () => { audio.play(); button.value = label; };
+      audio.src = button.dataset.src;
+    });
+  }
+  for (const id of ['a', 'b', 'c']) {
     const el = document.getElementById(id);
-    for (const t of ['play', 'playing', 'pause', 'seeking', 'seeked', 'ended', 'volumechange', 'error'])
+    for (const t of ['canplay', 'play', 'playing', 'pause', 'seeking', 'seeked', 'ended', 'volumechange', 'error'])
       el.addEventListener(t, () => {
         log.textContent += id + ' ' + t + ' t=' + el.currentTime.toFixed(2) +
           (t === 'volumechange' ? ' volume=' + el.volume.toFixed(1) + (el.muted ? ' muted' : '') : '') + '\n';

@@ -74,8 +74,8 @@
 // How many sounds are fetched at once; the rest wait their turn. A page may
 // hold dozens of players, and a fetch costs a connection, or a bell while
 // libfetch queues it, out of the program's sixty-four handles. Fewer than
-// libfetch's six to one host (FETCH_POOL_PER_KEY), because a sound loaded
-// only to its metadata holds its connection on the pipe's backpressure,
+// libfetch's six to one host (FETCH_POOL_PER_KEY), because a sound not
+// playing holds its connection on the pipe's backpressure,
 // and the page's other fetches from that host need one left (DEBTS.md
 // § A page's sound).
 #define LOADERS_MAX 4u
@@ -89,7 +89,6 @@ struct yonder_media {
     // Asked, under `lock`.
     bool stop;
     bool play;                      // the element wants sound
-    bool want_all;                  // preload auto, or play was asked once
     double gain;
     bool loop;
     bool seek_asked;
@@ -673,7 +672,6 @@ static int64_t decoder_main(void *arg)
         uint64_t asked = m->seek_generation;
         m->seek_asked = false;
         m->resync = false;
-        bool wanted = m->play || m->want_all;
         bool full = queue_full_locked(m);
         bool loop = m->loop;
         os64_lock_release(&m->lock);
@@ -714,11 +712,13 @@ static int64_t decoder_main(void *arg)
             ring_audio();
             continue;
         }
-        // A resource wanted only for its metadata (preload, HTML's hint)
-        // is read no further: the fetch waits on the pipe's backpressure.
-        // A seek still decodes its first frames, which is how it lands.
-        bool moved = (wanted || landing) && pump(m);
-        if ((!wanted && !landing) || full || decoded_all) {
+        // Played or not, the queue is filled and no more: an element
+        // reaches HAVE_ENOUGH_DATA before play, as in other browsers,
+        // whatever its preload (HTML's hint), because pages start their
+        // sound from canplay. Once it is full the fetch waits on the
+        // pipe's backpressure until the audio thread takes from it.
+        bool moved = pump(m);
+        if (full || decoded_all) {
             os64_lock_acquire(&m->lock);
             moved = readiness_locked(m, decoded_all) || moved;
             os64_lock_release(&m->lock);
@@ -1305,7 +1305,6 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
         return NULL;
     m->file = -1;
     m->gain = 1;
-    m->want_all = r->preload == OS64_DOM_MEDIA_PRELOAD_AUTO;
     m->cors = r->cors;
     m->page = r->page;
     m->agent = r->agent;
@@ -1357,7 +1356,6 @@ void yonder_media_play(yonder_media_t *m)
 {
     os64_lock_acquire(&m->lock);
     m->play = true;
-    m->want_all = true;
     ring_decoder_locked(m);
     os64_lock_release(&m->lock);
     ring_audio();
@@ -1381,14 +1379,11 @@ void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation)
     os64_lock_release(&m->lock);
 }
 
-void yonder_media_settings(yonder_media_t *m, double gain, bool loop, bool all)
+void yonder_media_settings(yonder_media_t *m, double gain, bool loop)
 {
     os64_lock_acquire(&m->lock);
     m->gain = gain < 0 ? 0 : gain > 1 ? 1 : gain;
     m->loop = loop;
-    // Wanting the whole is never taken back: what was read stays read.
-    if (all)
-        m->want_all = true;
     ring_decoder_locked(m);
     os64_lock_release(&m->lock);
 }
