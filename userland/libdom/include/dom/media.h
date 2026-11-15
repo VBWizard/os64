@@ -19,6 +19,7 @@ typedef struct {
     double duration;        /* seconds; INFINITY for no known end; read once probed */
     bool seekable;          /* a seek is honoured */
     double arrived;         /* seconds of the media whose bytes have arrived (buffered's end) */
+    double arrived_from;    /* where those begin (buffered's start): a seek far ahead fetches from there */
     bool loaded;            /* every byte has arrived */
     bool current;           /* decoded sound for the position waits: HAVE_CURRENT_DATA */
     bool future;            /* more than that: HAVE_FUTURE_DATA */
@@ -88,6 +89,7 @@ typedef struct {
     double position;        /* currentTime, seconds */
     double duration;        /* duration: NaN unknown, INFINITY for no end */
     double arrived;         /* buffered's end, seconds */
+    double arrived_from;    /* buffered's start, seconds */
     double volume;          /* volume, 0 to 1 */
     int error;              /* error's code, or 0 */
 } os64_dom_media_view_t;

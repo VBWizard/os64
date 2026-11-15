@@ -435,6 +435,8 @@ int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_med
     m->format->pb = m->io;
     m->format->opaque = m;
     m->format->flags |= AVFMT_FLAG_CUSTOM_IO;
+    if (src->remote)
+        m->format->flags |= AVFMT_FLAG_FAST_SEEK;   // os64_media_source_t's `remote`
 
     int r = avformat_open_input(&m->format, NULL, NULL, NULL);
     if (r < 0) {
@@ -748,6 +750,7 @@ void os64_media_file_source(int32_t handle, os64_media_source_t *out)
     out->ctx = (void *)(intptr_t)handle;
     out->read = file_read;
     out->seek = file_seek;
+    out->remote = false;
     // The media is the whole file: the size and every seek count from its
     // first byte, so reading starts there too.
     int64_t end = os64_seek(handle, 0, OS64_SEEK_END);

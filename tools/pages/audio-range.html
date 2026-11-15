@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Range requests</title>
+<!--
+  AUDIO_YONDER.md, Y.2.3: a seek past what has arrived asks the server for
+  the bytes from there (a Range request), and a sound nobody plays lets its
+  download go.
+
+  Serve it with tools/pages_serve.py, which answers ranges, slowly enough
+  that a seek can land past what has come, beside a long MP3 named
+  audio-long.mp3 (not in the tree; any will do, ten minutes is plenty):
+
+    ffmpeg -f lavfi -i sine=f=440:d=600 -ac 2 -b:a 128k DIR/audio-long.mp3
+    cp tools/pages/audio-range.html DIR/
+    tools/pages_serve.py --root DIR --rate 200000
+
+  What to look for. Play, then "Near the end": the sound goes on from
+  there at once, the server's log says `range=bytes=N-`, and buffered
+  begins there. "Back to the start" asks again from 0. Pause and wait ten
+  seconds: the log says the client closed the connection. Play, then
+  "Near what has arrived": three seconds on, the log asks from where the
+  bytes stopped, and the sound goes on. With --no-ranges a seek past what
+  has come waits for the download instead, and nothing breaks.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  #state, #log { font: 14px monospace; background: #f4f4f4; padding: 8px; }
+  #log { min-height: 8em; }
+</style>
+<h1>Range requests</h1>
+<p><audio id="a" controls src="audio-long.mp3"></audio></p>
+<p><input type="button" id="end" value="Near the end">
+   <input type="button" id="start" value="Back to the start">
+   <input type="button" id="edge" value="Near what has arrived"></p>
+<pre id="state">-</pre>
+<pre id="log"></pre>
+<script>
+  const a = document.getElementById('a'), log = document.getElementById('log');
+  const state = document.getElementById('state');
+  document.getElementById('end').onclick = () => { a.currentTime = a.duration * 0.9; };
+  document.getElementById('start').onclick = () => { a.currentTime = 0; };
+  document.getElementById('edge').onclick = () => {
+    if (a.buffered.length) a.currentTime = Math.max(0, a.buffered.end(0) - 3);
+  };
+  for (const t of ['play', 'playing', 'pause', 'seeking', 'seeked', 'waiting', 'error'])
+    a.addEventListener(t, () => { log.textContent += t + ' t=' + a.currentTime.toFixed(1) + '\n'; });
+  setInterval(() => {
+    const b = a.buffered;
+    state.textContent = 'time ' + a.currentTime.toFixed(1) + ' of ' + a.duration.toFixed(1) +
+      ', buffered ' + (b.length ? b.start(0).toFixed(1) + '-' + b.end(0).toFixed(1) : 'none') +
+      ', readyState ' + a.readyState;
+  }, 500);
+</script>
