@@ -269,6 +269,17 @@ global fallback; Yonder's primary-only constructor remains terminal. See
 
 ## Realms
 
+`os64/js_retention.h` supplies an owner-thread, by-value scalar wrapper
+snapshot. It copies known slot/cache/module-owner/rejection/allocator state
+and activity flags without observing failure, polling clocks, collecting or
+consuming work. Snapshot OK describes the read, not runtime health or
+reclamation eligibility; cancellation/allocator facts can precede the copied
+latch. Unknown incoming graph, job-role, callback-context and export/exposure
+coverage stays explicit even when visible counters are zero. Destruction
+refuses partial engine reads. This does not change the stable realm lifetime
+or cumulative slot limit. [F15 diagnostics](../../docs/design/pending/IFRAME_F15_RETENTION_DIAGNOSTICS.md)
+records the precise counts, native companion and proofs.
+
 One runtime owns one engine and up to `OS64_JS_MAX_REALMS` (65) contexts:
 the primary plus 64 additional realms. `os64_js_primary_realm` returns the
 primary handle; `os64_js_realm_create` creates an independent global and

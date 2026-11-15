@@ -15,7 +15,7 @@ runtime_exports = {'os64_js_' + name for name in
                    'create context class_id eval run run_file install_output install_args install_intl drain_jobs cancel destroy task_begin call checkpoint task_end set_execution_ms check_budget create_with_teardown destroy_report '
                    'set_script_host take_rejection run_bytecode module_compile_bytecode turn_open '
                    'set_module_loader module_compile module_requests module_run module_state module_release '
-                   'heap_bytes heap_census heap_peak heap_headroom '
+                   'heap_bytes heap_census heap_peak heap_headroom retention_snapshot '
                    'primary_realm realm_create realm_create_with_headroom realm_context realm_from_context '
                    'realm_preflight realm_stage realm_setup realm_activate realm_retire realm_is_retired '
                    'realm_is_failed realm_run realm_run_bytecode realm_call realm_task_begin '

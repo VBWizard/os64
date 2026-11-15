@@ -70,6 +70,9 @@ def main():
             ["git", "-C", str(root), "diff", "--binary", "HEAD"])).hexdigest(),
         "source_files": {name: digest(root / name) for name in [
             "userland/libdom/include/dom/dom.h", "userland/libdom/recovery.inc",
+            "userland/libdom/include/dom/retention.h", "userland/libdom/retention.inc",
+            "userland/libdom/core.c", "userland/libjs/runtime/runtime.c",
+            "userland/libjs/include/os64/js_retention.h", "userland/libjs/runtime/retention.inc",
             "userland/libdom/tests/recovery.c", "userland/libdom/tests/recovery_cases.h",
             "userland/libdom/tests/recovery_parent.c", "userland/libdom/library.mk",
             "userland/libjs/manifest.json", "tools/test_dom_recovery_guest.py"]},

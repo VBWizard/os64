@@ -1,6 +1,7 @@
 #include "internal.h"
 #include "os64/proc.h"
 #include "os64/js_failure.h"
+#include "dom/retention.h"
 
 /* Allocation ownership survives cross-document operations. The packed word
  * stores the charged size and census kind; the owner releases that charge. */
@@ -1258,3 +1259,5 @@ size_t os64_dom_registry_count(const os64_dom_t *dom)
         dom->pending_held + dom->messages_held + dom->idle_live + dom->animation_count + dom->observers_held +
         dom->intersections_held + dom->resizes_held : 0;
 }
+
+#include "retention.inc"

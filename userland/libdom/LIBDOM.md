@@ -127,6 +127,14 @@ remains the host's existing path. [Host and guest acceptance](../../docs/design/
 records the shared consumer, native wait/fallback cases and retained browser
 policy. This does not certify checked settings or Streams recovery.
 
+`dom/retention.h` adds a by-value scalar cluster snapshot. It reports existing
+registry/ledger and provider/layout-loan state while explicitly marking
+unclassified graph/export/borrower families unknown. It neither acknowledges
+loans nor certifies reclamation; drained registry counts can be zero while
+native backing remains charged. The query reads no realm/runtime handle and
+remains valid after engine destruction, before cluster free. See
+[F15 diagnostics](../../docs/design/pending/IFRAME_F15_RETENTION_DIAGNOSTICS.md).
+
 For root teardown, stop host deliveries, drain the cluster, destroy its runtime once, release
 layout borrowers, then free the cluster. Native records and allocation-owner
 descriptors survive finalizers and all native sweeps. Document records remain

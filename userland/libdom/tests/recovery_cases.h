@@ -4,6 +4,8 @@
 #include <os64/os64.h>
 #include <os64/js_engine.h>
 #include <os64/js_failure.h>
+#include <os64/js_retention.h>
+#include <dom/retention.h>
 #include "quickjs.h"
 
 /* The same owner-thread host loop runs against fake and guest OS services.
@@ -47,6 +49,11 @@ static void recovery_consumer_cancel(void *opaque, uint64_t request)
     p->canceled++;
     if (h->preparing) {
         os64_js_outcome_t saved = h->failed;
+        os64_dom_retention_t native = os64_dom_retention_snapshot(h->cluster, OS64_JS_ABI_ID);
+        os64_js_retention_t wrapper = os64_js_retention_snapshot(h->runtime, OS64_JS_ABI_ID);
+        h->require(native.status == OS64_JS_OK && native.recovery_running && native.provider_borrows &&
+            native.unknown == OS64_DOM_RETENTION_UNKNOWN_ALL && wrapper.status == OS64_JS_OK && wrapper.active,
+            "retention: provider reentry observes loans without acknowledging cleanup");
         os64_dom_recovery_result_t result = os64_dom_cluster_resolve_failure(h->cluster,
             OS64_JS_ABI_ID, h->generation, &h->failed);
         h->require(result.action == OS64_DOM_RECOVERY_WAIT && result.status == OS64_JS_BUSY,
@@ -85,6 +92,16 @@ static void recovery_consumer_case(os64_js_teardown_policy_t policy, unsigned mo
     } else h.cluster = os64_dom_cluster_create_with_recovery(&config, policy, OS64_JS_ABI_ID,
                                                             &limits, &h.runtime, &out);
     require(h.cluster && h.runtime, "recovery host: paired native policy construction");
+    os64_js_retention_t wrapper = os64_js_retention_snapshot(h.runtime, OS64_JS_ABI_ID);
+    os64_dom_retention_t native = os64_dom_retention_snapshot(h.cluster, OS64_JS_ABI_ID);
+    require(wrapper.status == OS64_JS_OK && wrapper.occupied_slots == 1 && wrapper.context_roots == 1 &&
+        wrapper.unknown == OS64_JS_RETENTION_UNKNOWN_ALL && native.status == OS64_JS_OK &&
+        !native.occupied_members && native.unknown == OS64_DOM_RETENTION_UNKNOWN_ALL,
+        "retention: empty native census does not certify absence of unclassified edges");
+    require(os64_dom_retention_snapshot(NULL, OS64_JS_ABI_ID).status == OS64_JS_BAD_ARGUMENT &&
+        os64_dom_retention_snapshot(h.cluster, NULL).status == OS64_JS_BAD_ARGUMENT &&
+        os64_dom_retention_snapshot(h.cluster, "wrong ABI").status == OS64_JS_ABI_MISMATCH,
+        "retention: native invalid arguments and ABI refuse descriptive data");
     h.realm[0] = os64_js_primary_realm(h.runtime, OS64_JS_ABI_ID, &out);
     os64_dom_installation_t installation = {.engine_headroom=OS64_DOM_CHILD_ENGINE_HEADROOM};
     for (unsigned i = 0; i < OS64_DOM_TIMING_COUNT; ++i)
@@ -142,6 +159,14 @@ static void recovery_consumer_case(os64_js_teardown_policy_t policy, unsigned mo
         "globalThis.transport=fetch('/C')");
     if (mode == 2) recovery_consumer_run(&h, 2, "globalThis.used=new ReadableStream()");
     if (mode == 4) os64_dom_effects_mark(h.dom[2]);
+    native = os64_dom_retention_snapshot(h.cluster, OS64_JS_ABI_ID);
+    wrapper = os64_js_retention_snapshot(h.runtime, OS64_JS_ABI_ID);
+    require(native.occupied_members == 3 && !native.closed_members && native.retained_value_records &&
+        native.reported_registry_values >= native.retained_value_records &&
+        wrapper.occupied_slots == 3 && wrapper.context_roots == 3 &&
+        native.layout_borrowers == (mode == 4 ? 1u : 0u) &&
+        (mode == 4 ? native.oldest_layout_generation != UINT64_MAX : native.oldest_layout_generation == UINT64_MAX),
+        "retention: live owners and outstanding layout generation remain visible");
     require(os64_js_set_execution_ms(h.runtime, 100, &out) == OS64_JS_OK,
             "recovery host: bounded event allowance configured outside a task");
     timeout_clock(true);
@@ -150,6 +175,11 @@ static void recovery_consumer_case(os64_js_teardown_policy_t policy, unsigned mo
     require(fired && h.failed.status == OS64_JS_LIMIT && h.failed.limit == OS64_JS_LIMIT_EXECUTION,
             "recovery host: native event preserves terminal execution diagnostics");
     os64_js_outcome_t saved = h.failed;
+    wrapper = os64_js_retention_snapshot(h.runtime, OS64_JS_ABI_ID);
+    require(wrapper.status == OS64_JS_OK && wrapper.latched_status == OS64_JS_LIMIT &&
+        wrapper.latched_limit == OS64_JS_LIMIT_EXECUTION && !wrapper.active && !wrapper.task_open &&
+        wrapper.occupied_slots == 3 && !os64_memcmp(&saved, &h.failed, sizeof(saved)),
+        "retention: failed-task inspection preserves immutable diagnostics and occupied slots");
     os64_js_recovery_info_t info;
     require(os64_js_recovery_inspect(h.runtime, OS64_JS_ABI_ID, &info) == OS64_JS_OK &&
         !info.task_open && !info.turn_open && info.failure.realm_count == 1 && info.failure.realms[0] == h.realm[1],
@@ -188,6 +218,13 @@ static void recovery_consumer_case(os64_js_teardown_policy_t policy, unsigned mo
             result.generation == h.generation && os64_js_realm_is_failed(h.realm[1]) &&
             !os64_js_realm_is_failed(h.realm[0]) && !os64_js_realm_is_failed(h.realm[2]),
             "recovery host: explicit ready decision seals only affected child");
+        wrapper = os64_js_retention_snapshot(h.runtime, OS64_JS_ABI_ID);
+        native = os64_dom_retention_snapshot(h.cluster, OS64_JS_ABI_ID);
+        require(wrapper.failed_slots == 1 && wrapper.retired_slots == 1 && wrapper.context_roots == 3 &&
+            wrapper.occupied_slots == 3 && native.departure_finished_members == 1 && !native.closed_members &&
+            native.recovery_completed && native.recovery_generation == h.generation &&
+            native.unknown == OS64_DOM_RETENTION_UNKNOWN_ALL,
+            "retention: successful containment retains context roots and creation identity");
         require(h.transport[1].canceled == 1 && !h.transport[2].canceled,
                 "recovery host: original producer canceled while sibling transport survives");
         require(!os64_dom_timer_fire(h.dom[1], 1000, &out), "recovery host: scheduler drops failed activity");
@@ -210,8 +247,17 @@ static void recovery_consumer_case(os64_js_teardown_policy_t policy, unsigned mo
     }
     require(!recovery_consumer_jobs, "recovery host: no pending engine work receives a replacement budget");
     os64_dom_cluster_drain(h.cluster);
+    native = os64_dom_retention_snapshot(h.cluster, OS64_JS_ABI_ID);
+    require(native.status == OS64_JS_OK && native.drained && native.closed_members == 3 &&
+        !native.retained_value_records && !native.reported_registry_values && native.dom_bytes &&
+        native.unknown == OS64_DOM_RETENTION_UNKNOWN_ALL,
+        "retention: zero drained registry values coexist with retained native backing and unknown edges");
     os64_js_teardown_report_t report;
     os64_js_destroy_report(h.runtime, &report);
+    native = os64_dom_retention_snapshot(h.cluster, OS64_JS_ABI_ID);
+    require(native.status == OS64_JS_OK && native.occupied_members == 3 && native.closed_members == 3 &&
+        native.dom_bytes && native.oldest_layout_generation == UINT64_MAX,
+        "retention: native snapshot outlives engine destruction without consulting freed realm handles");
     os64_dom_cluster_free(h.cluster);
     require(!report.leaked, "recovery host: root cleanup has no leaked engine roots");
 }
