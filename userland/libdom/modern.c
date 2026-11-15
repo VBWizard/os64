@@ -143,10 +143,13 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
     {(const char *const[]){"requestAnimationFrame", "cancelAnimationFrame", NULL}, d_animation_install},
     /* WEB_ANIMATIONS.md: Element.animate and what it makes, CSSAnimation
-     * and the CSS animation events, after the event row whose Event
-     * AnimationPlaybackEvent and AnimationEvent inherit. */
+     * (and CSSTransition, which nothing is while CSS transitions are not
+     * run) and the CSS animation
+     * events, after the event row whose Event AnimationPlaybackEvent and
+     * AnimationEvent inherit. */
     {(const char *const[]){"Animation", "AnimationEffect", "KeyframeEffect", "AnimationTimeline",
-                           "DocumentTimeline", "AnimationPlaybackEvent", "CSSAnimation", "AnimationEvent",
+                           "DocumentTimeline", "AnimationPlaybackEvent", "CSSAnimation", "CSSTransition",
+                           "AnimationEvent",
                            "onanimationstart", "onanimationend", "onanimationiteration", "onanimationcancel", NULL},
      d_web_animations_install},
     /* INTERSECTION_OBSERVER.md: after the DOMRect row, whose rects its

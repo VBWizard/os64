@@ -1500,6 +1500,22 @@ bool d_string_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString 
  * (http, https, ws, wss, ftp; a blob: address its inner http(s) address's),
  * else "null", an opaque origin. False when it does not fit in cap. */
 bool d_origin(const char *url, char *out, size_t cap);
+/* An address's components (the URL Standard § 6.1), read and set as a URL
+ * object's members read and set them (url.c), for URL and for the links'
+ * HTMLHyperlinkElementUtils (mixin.c), so the two cannot differ. */
+enum {
+    U_HREF, U_ORIGIN, U_PROTOCOL, U_USERNAME, U_PASSWORD, U_HOST, U_HOSTNAME, U_PORT, U_PATHNAME,
+    U_SEARCH, U_SEARCH_PARAMS, U_HASH, U_TO_STRING, U_CAN_PARSE, U_PARSE
+};
+/* Component `which` of `href` (a parsed address, `length` bytes), as its
+ * getter answers it. */
+JSValue d_url_component(JSContext *ctx, const char *href, size_t length, int which);
+/* `href` with component `which` set to `value` as its setter sets it: 1
+ * with the new address, parsed, in `out` (OS64_DOM_URL_MAX); 0 when the
+ * setter leaves the address as it is (a value it refuses, or one that does
+ * not parse); -1 thrown. */
+int d_url_rebuilt(os64_dom_t *dom, JSContext *ctx, const char *href, size_t length, int which,
+                  JSValueConst value, char *out);
 /* Final storage settlement (storage.c), then native map release. Drain
  * returns the first provider error, -3 for serialization OOM or -4 for a
  * borrower. Ordinary teardown still completes native cleanup; recovery

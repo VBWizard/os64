@@ -6,7 +6,8 @@
  * remove, contains and isConnected, matches and closest, the class and name
  * queries, insertAdjacent*, the attribute conveniences, the reflected
  * attributes (hidden, lang, dir, tabIndex, a script's src, a link's and an
- * anchor's href, a link's rel), classList, a link's relList and dataset.
+ * anchor's href and rel), classList, the links' relList, an anchor's and
+ * an area's address in parts (HTMLHyperlinkElementUtils) and dataset.
  * Each is the standard's steps over
  * the verbs node.c already uses, so a tree change here is the change
  * appendChild would make, scripts and controls included. */
@@ -554,6 +555,48 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     return result;
 }
 
+/* ── HTMLHyperlinkElementUtils: a link's address in parts ────────────── */
+
+/* An <a> or <area>'s origin, protocol, username, password, host,
+ * hostname, port, pathname, search, hash and toString (HTML § 4.6.3): its
+ * href resolved against the document's base, read and set as a URL's
+ * members read and set (d_url_component, d_url_rebuilt), a setter writing
+ * the address it built back to the href attribute. With no href, or one
+ * that does not resolve (the element's url is null), every getter answers
+ * "" (toString the attribute as written) and no setter changes anything.
+ * `magic` is url.c's U_ member, D_SET for a setter. */
+static JSValue hyperlink_member(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv, int magic,
+                                JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *self = d_node(dom, ctx, this_value);
+    if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
+    bool set = (magic & D_SET) != 0;
+    magic &= ~D_SET;
+    if (!is_element(self)) return JS_ThrowTypeError(ctx, "Expected an element");
+    const os64_html_attr_t *attr = os64_html_attr(self, "href");
+    char *absolute = d_alloc(dom, OS64_DOM_URL_MAX * 2);
+    if (absolute == NULL) return d_error(ctx, "QuotaExceededError", "DOM address quota exceeded");
+    bool resolved = attr != NULL && os64_dom_resolve(dom->document, dom->url, attr->value, absolute, OS64_DOM_URL_MAX);
+    JSValue result;
+    if (!set) {
+        result = resolved ? d_url_component(ctx, absolute, os64_strlen(absolute), magic)
+                 : JS_NewString(ctx, magic == U_TO_STRING && attr != NULL ? attr->value : "");
+    } else if (!resolved) {
+        result = JS_UNDEFINED;
+    } else {
+        char *built = absolute + OS64_DOM_URL_MAX;
+        int made = d_url_rebuilt(dom, ctx, absolute, os64_strlen(absolute), magic, argc > 0 ? argv[0] : JS_UNDEFINED,
+                                 built);
+        result = made < 0 ? JS_EXCEPTION
+                 : made == 0 ? JS_UNDEFINED : set_attribute(dom, ctx, self, "href", built, os64_strlen(built), false);
+    }
+    d_free(dom, absolute);
+    return result;
+}
+
 /* ── classList and relList: DOMTokenLists over `class` and `rel` ────── */
 
 typedef struct { const char *at; size_t length; } Token;
@@ -635,14 +678,21 @@ static bool token_argument(os64_dom_t *dom, JSContext *ctx, JSValueConst value, 
 
 enum { T_LENGTH, T_VALUE, T_ITEM, T_CONTAINS, T_ADD, T_REMOVE, T_TOGGLE, T_REPLACE, T_STRING, T_SUPPORTS };
 
-/* A link's supported tokens (DOM § DOMTokenList's validation steps): the
- * link types yonder acts on, compared without ASCII case. A stylesheet is
- * libpage's; style and module preloads use the Modern Web surface. */
-static bool rel_supported(const os64_dom_t *dom, const char *token, size_t length)
+/* A <link>'s supported tokens and a hyperlink's (DOM § DOMTokenList's
+ * validation steps): the link types yonder acts on, compared without ASCII
+ * case. A stylesheet is libpage's; style and module preloads use the
+ * Modern Web surface. Of a hyperlink's three (noopener, noreferrer,
+ * opener), noopener alone is kept: no page yonder opens has an opener,
+ * and a navigation sends its Referer whatever the link's rel says. */
+static bool rel_supported(const os64_dom_t *dom, const os64_html_node_t *link, const char *token, size_t length)
 {
-    static const char *const kinds[] = {"stylesheet", "modulepreload", "preload"};
-    for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
-        if (k != 0 && !dom->options.modern) continue;
+    static const char *const kLink[] = {"stylesheet", "modulepreload", "preload"};
+    static const char *const kHyperlink[] = {"noopener"};
+    bool is_link = is_html(link, OS64_HTML_TAG_LINK);
+    const char *const *kinds = is_link ? kLink : kHyperlink;
+    size_t count = is_link ? sizeof(kLink) / sizeof(kLink[0]) : sizeof(kHyperlink) / sizeof(kHyperlink[0]);
+    for (size_t k = 0; k < count; k++) {
+        if (is_link && k != 0 && !dom->options.modern) continue;
         size_t n = 0;
         while (n < length && kinds[k][n] != '\0' &&
                (token[n] >= 'A' && token[n] <= 'Z' ? token[n] - 'A' + 'a' : token[n]) == kinds[k][n])
@@ -709,8 +759,8 @@ static JSValue token_method(JSContext *ctx, JSValueConst this_value, int argc,
              * is a TypeError; a form's rel names none yonder acts on. */
             result = entry->tokens != D_TOKENS_REL
                 ? JS_ThrowTypeError(ctx, "DOMTokenList has no supported tokens")
-                : JS_NewBool(ctx, is_html(entry->target, OS64_HTML_TAG_LINK) &&
-                                      rel_supported(dom, given[0].data, given[0].length));
+                : JS_NewBool(ctx, !is_html(entry->target, OS64_HTML_TAG_FORM) &&
+                                      rel_supported(dom, entry->target, given[0].data, given[0].length));
             break;
         case T_ADD: case T_REMOVE: case T_TOGGLE: case T_REPLACE: {
             /* Room for every token added; removing writes the list again
@@ -1123,8 +1173,10 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
         {"noModule", R_NO_MODULE, true, D_KIND(D_PROTO_SCRIPT)},
         {"href", R_URL, true, D_KIND(D_PROTO_ANCHOR) | D_KIND(D_PROTO_LINK)},
         // What a module loader asks before it preloads (`relList.supports
-        // ('modulepreload')`, Vite's first statement), and what it sets.
-        {"rel", R_REL, true, D_KIND(D_PROTO_LINK)}, {"relList", R_REL_LIST, true, D_KIND(D_PROTO_LINK)},
+        // ('modulepreload')`, Vite's first statement), and what it sets. An
+        // anchor's rel is beside its relList (the hyperlink block below).
+        {"rel", R_REL, true, D_KIND(D_PROTO_LINK) | D_KIND(D_PROTO_ANCHOR)},
+        {"relList", R_REL_LIST, true, D_KIND(D_PROTO_LINK)},
     };
     for (int kind = 0; kind < D_PROTO_COUNT; kind++) {
         JSValueConst prototype = dom->prototypes[kind]->value;
@@ -1137,6 +1189,26 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
                 d_accessor(dom, ctx, prototype, reflections[i].name, reflect, reflections[i].magic,
                            reflections[i].writable) < 0)
                 return -1;
+        // HTMLHyperlinkElementUtils and relList, both links' (href is each
+        // one's own reflection): the 2010s way to take an address apart is
+        // still `a.href = url; a.hostname`, and a router reads `a.pathname`.
+        // An area's arrive with its href, which is the Modern Web switch's
+        // (elements.c); an anchor's href is every page's, and so are these.
+        static const struct { const char *name; int magic; bool writable; } kLinkParts[] = {
+            {"origin", U_ORIGIN, false}, {"protocol", U_PROTOCOL, true}, {"username", U_USERNAME, true},
+            {"password", U_PASSWORD, true}, {"host", U_HOST, true}, {"hostname", U_HOSTNAME, true},
+            {"port", U_PORT, true}, {"pathname", U_PATHNAME, true}, {"search", U_SEARCH, true},
+            {"hash", U_HASH, true},
+        };
+        if (kind != D_PROTO_ANCHOR && !(kind == D_PROTO_AREA && dom->options.modern))
+            continue;
+        for (size_t i = 0; i < sizeof(kLinkParts) / sizeof(kLinkParts[0]); i++)
+            if (d_accessor(dom, ctx, prototype, kLinkParts[i].name, hyperlink_member, kLinkParts[i].magic,
+                           kLinkParts[i].writable) < 0)
+                return -1;
+        if (d_method(dom, ctx, prototype, "toString", hyperlink_member, 0, U_TO_STRING) < 0 ||
+            d_accessor(dom, ctx, prototype, "relList", reflect, R_REL_LIST, true) < 0)
+            return -1;
     }
     static const struct { const char *name; int magic, argc; bool accessor, writable; } members[] = {
         {"length", T_LENGTH, 0, true, false}, {"value", T_VALUE, 0, true, true},

@@ -559,11 +559,6 @@ static JSValue url_constructor(JSContext *ctx, JSValueConst new_target, int argc
     return made;
 }
 
-enum {
-    U_HREF, U_ORIGIN, U_PROTOCOL, U_USERNAME, U_PASSWORD, U_HOST, U_HOSTNAME, U_PORT, U_PATHNAME,
-    U_SEARCH, U_SEARCH_PARAMS, U_HASH, U_TO_STRING, U_CAN_PARSE, U_PARSE
-};
-
 /* An address whose spans [from, to) of `href` are `middle`, NUL-terminated
  * into `out`. False when it does not fit. */
 static bool splice(const char *href, size_t length, size_t from, size_t to, const char *middle,
@@ -606,10 +601,11 @@ static size_t span_until(const DString *text, size_t from, const char *stops)
     return at;
 }
 
-/* A setter (URL § 6.1): the address with one component replaced, parsed
- * whole; kept when it parses, the old one kept when it does not. Only
- * href's refusal throws. -1 thrown. */
-static int url_assign(os64_dom_t *dom, JSContext *ctx, DUrl *url, int which, JSValueConst value)
+/* A setter (URL § 6.1; internal.h): the address with one component
+ * replaced, parsed whole. Whether a refusal throws (href's does, on a URL)
+ * is the caller's. */
+int d_url_rebuilt(os64_dom_t *dom, JSContext *ctx, const char *href, size_t length, int which,
+                  JSValueConst value, char *out)
 {
     DString text = {0};
     if (!d_string_text(dom, ctx, value, &text, true)) return -1;
@@ -617,15 +613,13 @@ static int url_assign(os64_dom_t *dom, JSContext *ctx, DUrl *url, int which, JSV
         d_string_free(dom, &text);
         return -1;
     }
-    char *candidate = d_alloc_kind(dom, OS64_DOM_URL_MAX * 3, OS64_DOM_MEM_URL);
+    char *candidate = d_alloc_kind(dom, OS64_DOM_URL_MAX * 2, OS64_DOM_MEM_URL);
     if (candidate == NULL) {
         d_string_free(dom, &text);
         d_error(ctx, "QuotaExceededError", "URL quota exceeded");
         return -1;
     }
-    char *parsed = candidate + OS64_DOM_URL_MAX, *piece = parsed + OS64_DOM_URL_MAX;
-    const char *href = url->href;
-    size_t length = url->length;
+    char *piece = candidate + OS64_DOM_URL_MAX;
     Parts p;
     parts_of(href, length, &p);
     bool scheme_special = special(href, p.scheme_end);
@@ -727,25 +721,40 @@ static int url_assign(os64_dom_t *dom, JSContext *ctx, DUrl *url, int which, JSV
     }
     default: break;
     }
-    int result = 0;
-    bool took = built && resolve(candidate, NULL, parsed, OS64_DOM_URL_MAX);
-    if (which == U_HREF && !took) {
-        JS_ThrowTypeError(ctx, "Invalid URL");
-        result = -1;
-    } else if (took && url_set(ctx, url, parsed) < 0) result = -1;
+    bool took = built && resolve(candidate, NULL, out, OS64_DOM_URL_MAX);
     d_free(dom, candidate);
     d_string_free(dom, &text);
-    return result;
+    return took ? 1 : 0;
+}
+
+/* A URL's member set: its address rebuilt (d_url_rebuilt) and taken, a
+ * href that does not parse thrown as an invalid URL, and any other setter
+ * whose address does not parse leaving it as it was. */
+static int url_assign(os64_dom_t *dom, JSContext *ctx, DUrl *url, int which, JSValueConst value)
+{
+    char *out = d_alloc_kind(dom, OS64_DOM_URL_MAX, OS64_DOM_MEM_URL);
+    if (out == NULL) {
+        d_error(ctx, "QuotaExceededError", "URL quota exceeded");
+        return -1;
+    }
+    int built = d_url_rebuilt(dom, ctx, url->href, url->length, which, value, out);
+    if (built == 0 && which == U_HREF) {
+        JS_ThrowTypeError(ctx, "Invalid URL");
+        built = -1;
+    } else if (built == 1 && url_set(ctx, url, out) < 0) {
+        built = -1;
+    }
+    d_free(dom, out);
+    return built < 0 ? -1 : 0;
 }
 
 /* A component of the address, as its getter reads it. */
-static JSValue url_component(JSContext *ctx, const DUrl *url, int which)
+JSValue d_url_component(JSContext *ctx, const char *href, size_t length, int which)
 {
-    const char *href = url->href;
     Parts p;
-    parts_of(href, url->length, &p);
+    parts_of(href, length, &p);
     switch (which) {
-    case U_HREF: case U_TO_STRING: return JS_NewStringLen(ctx, href, url->length);
+    case U_HREF: case U_TO_STRING: return JS_NewStringLen(ctx, href, length);
     case U_PROTOCOL: return JS_NewStringLen(ctx, href, p.scheme_end + 1);
     case U_USERNAME: case U_PASSWORD: return JS_NewString(ctx, "");
     case U_HOST: return JS_NewStringLen(ctx, href + p.host, p.port_end - p.host);
@@ -795,7 +804,7 @@ static JSValue url_member(JSContext *ctx, JSValueConst self, int argc, JSValueCo
         return JS_UNDEFINED;
     }
     if (magic == U_SEARCH_PARAMS) return JS_DupValue(ctx, url->params);
-    return url_component(ctx, url, magic);
+    return d_url_component(ctx, url->href, url->length, magic);
 }
 
 /* ── URLSearchParams ─────────────────────────────────────────────────── */

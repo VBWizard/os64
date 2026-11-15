@@ -92,6 +92,7 @@ static char *modern_chain_shape(DomFixture *f)
         "|^wholeText$|^splitText$|^(length|substringData|appendData|insertData|deleteData|replaceData)$"
         "|^selectionStart$|^selectionEnd$|^selectionDirection$"
         "|^setSelectionRange$|^select$|^setRangeText$|^content$|^styleSheets$"
+        "|^(target|download|ping|hreflang|type|referrerPolicy|coords|charset|name|rev|shape)$"
         "|^(accept|alt|autocomplete|defaultChecked|defaultValue|dirName|disabled|formAction|formEnctype|formMethod"
         "|formNoValidate|formTarget|height|indeterminate|max|maxLength|min|minLength|multiple|pattern|placeholder"
         "|readOnly|required|size|src|step|width|align|useMap|form|labels|localName|namespaceURI|prefix|baseURI)$)/;"
@@ -1406,6 +1407,11 @@ static void dom_modern_cases(void)
         "assert(!('href' in document.createElement('area'))&&!('colSpan' in document.createElement('td'))&&"
         "!('text' in document.createElement('title'))&&!('onpopstate' in document.body)&&"
         "'href' in document.createElement('a'));"
+        /* a link's parts follow its href: the anchor's every page's, the
+         * area's the switch's, as are the anchor's own reflections */
+        "var la=document.createElement('a'),lr=document.createElement('area');"
+        "assert('pathname' in la&&'relList' in la&&'rel' in la&&!('target' in la)&&!('text' in la)&&"
+        "!('pathname' in lr)&&!('relList' in lr),'the links\\' members with the switch off');"
         /* 0f's P6b's tables and areas */
         "assert(!('rows' in document.createElement('table'))&&!('insertCell' in document.createElement('tr'))&&"
         "!('areas' in document.createElement('map')));"

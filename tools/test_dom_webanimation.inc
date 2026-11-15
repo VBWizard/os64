@@ -734,6 +734,17 @@ static void wa_css(void)
         "assert(b.effect.getTiming().fill==='forwards'&&b.effect.getKeyframes().length===0);"
         "throws('TypeError',()=>Object.getOwnPropertyDescriptor(CSSAnimation.prototype,'animationName').get.call(s));",
         "web animations: css: CSSAnimations first, the same objects");
+    /* CSSTransition is defined, as in other browsers, though nothing is one:
+     * a page's `x instanceof CSSTransition` over getAnimations() answers
+     * false instead of throwing a ReferenceError. */
+    p2b_script(&f,
+        "throws('TypeError',()=>new CSSTransition());"
+        "assert(Object.getPrototypeOf(CSSTransition.prototype)===Animation.prototype);"
+        "assert(Object.getPrototypeOf(CSSTransition)===Animation);"
+        "assert('transitionProperty' in CSSTransition.prototype);"
+        "for(const x of document.getAnimations())assert(!(x instanceof CSSTransition),'none is one');"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(CSSTransition.prototype,'transitionProperty').get.call(a));",
+        "web animations: css: CSSTransition is an interface with no instances");
     check(wa_css_counted_current > 0, "web animations: css: getAnimations asks for the style made current");
     check(wa_css_records[0].scripted && !wa_css_records[0].r.paused && wa_css_records[0].r.start_ms == 1000 &&
               wa_css_records[1].scripted && wa_css_records[1].r.paused && wa_css_records[1].r.hold_ms == 200,

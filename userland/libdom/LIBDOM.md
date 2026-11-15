@@ -270,15 +270,28 @@ connect runs and a moved control keeps its form:
   cookie-averse: it reads "" and an assignment does nothing.
 - `classList`, a live DOMTokenList over the class attribute (`add`,
   `remove`, `toggle`, `replace`, `contains`, `item`, indices, iteration;
-  assigning the list sets the attribute), a link's `relList`, the same list
+  assigning the list sets the attribute), the `relList` of a link and an
+  anchor (and of an area, with the Modern Web surface), the same list
   over `rel`, and `dataset`, a DOMStringMap over the `data-*` attributes
   (`data-foo-bar` is `fooBar`; setting and deleting a name sets and removes
   its attribute). Each element has one of each, made when first asked for
   and held, like its style, until the page goes. `supports(token)` is a
   TypeError on a classList, which has no supported tokens; a relList's are
-  the link types yonder acts on, without ASCII case: `stylesheet`, and
-  `modulepreload` with the Modern Web surface, which runs modules (a module
-  loader asks before it preloads: Vite's first statement does).
+  the link types yonder acts on, without ASCII case: a link's `stylesheet`,
+  and `modulepreload` and `preload` with the Modern Web surface, which runs modules (a
+  module loader asks before it preloads: Vite's first statement does); an
+  anchor's and an area's `noopener` alone, since no page yonder opens has
+  an opener and a navigation sends its Referer whatever `rel` says.
+- An anchor's address in parts (HTMLHyperlinkElementUtils, HTML § 4.6.3:
+  `origin`, `protocol`, `username`, `password`, `host`, `hostname`,
+  `port`, `pathname`, `search`, `hash`, `toString`), and an area's with
+  the Modern Web surface, as its `href` is: the href resolved against the
+  document's base and read and set as a URL's members are (url.c's
+  `d_url_component` and `d_url_rebuilt`), a setter writing the address back
+  to `href`. An href that is absent or does not parse reads "" in every
+  part and no setter changes it. `a.href = url; a.hostname` is how pages
+  written in the 2010s take an address apart, and a router reads every
+  link's `pathname`.
 
 ## Mutation and control state
 

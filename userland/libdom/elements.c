@@ -9,7 +9,8 @@
  * those members, one row per member and interface, the WebIDL shape: a
  * row's one kind is its interface, so its accessor called on an element
  * of any other is a TypeError, as WebIDL's brand check is. Beside them, a
- * title's text (its child text) and a body's window-reflecting handlers,
+ * title's text (its child text), an anchor's text (its descendants') and a
+ * body's window-reflecting handlers,
  * which are window's (event.c's handler property answers window's for the
  * body). The table kinds' tree verbs (rows, cells, insertRow and the
  * rest) and a map's areas are not reflections; INTERFACES_FORMS.md § P6
@@ -64,6 +65,13 @@ static const DReflection kRows[] = {
     BOOLEAN(D_PROTO_MENU, "compact", "compact"),
     {"href", "href", K_BASE_URL, D_KIND(D_PROTO_BASE), NULL, NULL, NULL, 0}, STRING(D_PROTO_BASE, "target", "target"),
     STRING(D_PROTO_MAP, "name", "name"),
+    STRING(D_PROTO_ANCHOR, "target", "target"), STRING(D_PROTO_ANCHOR, "download", "download"),
+    STRING(D_PROTO_ANCHOR, "ping", "ping"), STRING(D_PROTO_ANCHOR, "hreflang", "hreflang"),
+    STRING(D_PROTO_ANCHOR, "type", "type"),
+    {"referrerPolicy", "referrerpolicy", K_ENUM, D_KIND(D_PROTO_ANCHOR), kReferrerPolicies, "", "", 0},
+    STRING(D_PROTO_ANCHOR, "coords", "coords"), STRING(D_PROTO_ANCHOR, "charset", "charset"),
+    STRING(D_PROTO_ANCHOR, "name", "name"), STRING(D_PROTO_ANCHOR, "rev", "rev"),
+    STRING(D_PROTO_ANCHOR, "shape", "shape"),
     {"href", "href", K_URL, D_KIND(D_PROTO_AREA), NULL, NULL, NULL, 0},
     STRING(D_PROTO_AREA, "alt", "alt"), STRING(D_PROTO_AREA, "coords", "coords"),
     STRING(D_PROTO_AREA, "shape", "shape"), STRING(D_PROTO_AREA, "target", "target"),
@@ -110,7 +118,7 @@ static const DReflection kRows[] = {
 };
 
 /* The members that are no plain reflection, numbered after the rows. */
-enum { E_TITLE_TEXT = 256, E_LINK_CORS };
+enum { E_TITLE_TEXT = 256, E_LINK_CORS, E_ANCHOR_TEXT };
 _Static_assert(sizeof(kRows) / sizeof(kRows[0]) < E_TITLE_TEXT, "the rows are numbered below E_TITLE_TEXT");
 
 static JSValue element_member(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv, int magic,
@@ -125,7 +133,8 @@ static JSValue element_member(JSContext *ctx, JSValueConst this_value, int argc,
     magic &= ~D_SET;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
     d_kinds_t own = magic == E_TITLE_TEXT ? D_KIND(D_PROTO_TITLE)
-                   : magic == E_LINK_CORS ? D_KIND(D_PROTO_LINK) : kRows[magic].on;
+                   : magic == E_LINK_CORS ? D_KIND(D_PROTO_LINK)
+                   : magic == E_ANCHOR_TEXT ? D_KIND(D_PROTO_ANCHOR) : kRows[magic].on;
     if (D_KIND(d_node_kind(node)) != own) return JS_ThrowTypeError(ctx, "Illegal invocation");
     if (magic == E_LINK_CORS) {
         if (!set) {
@@ -144,10 +153,13 @@ static JSValue element_member(JSContext *ctx, JSValueConst this_value, int argc,
         JS_FreeCString(ctx, text);
         return status == OS64_HTML_OK ? JS_UNDEFINED : d_page_error(ctx, status);
     }
-    if (magic != E_TITLE_TEXT)
+    if (magic != E_TITLE_TEXT && magic != E_ANCHOR_TEXT)
         return set ? d_reflection_set(dom, ctx, node, &kRows[magic], value)
                    : d_reflection_get(dom, ctx, node, &kRows[magic]);
-    if (!set) return d_child_text(dom, ctx, node);
+    /* A title's text is its child text, an anchor's its descendants'
+     * (textContent's answer). */
+    if (!set)
+        return magic == E_TITLE_TEXT ? d_child_text(dom, ctx, node) : d_content_get(dom, ctx, node, D_TEXT_CONTENT);
     /* String replace all: textContent's setter, with the value a string
      * first (null is "null" here). */
     JSValue text = JS_ToString(ctx, value);
@@ -169,6 +181,9 @@ int d_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     }
     if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_TITLE]->value, "text", element_member, E_TITLE_TEXT, true) <
         0)
+        return -1;
+    if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_ANCHOR]->value, "text", element_member, E_ANCHOR_TEXT,
+                   true) < 0)
         return -1;
     if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_LINK]->value, "crossOrigin", element_member,
                    E_LINK_CORS, true) < 0)

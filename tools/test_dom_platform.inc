@@ -559,6 +559,38 @@ static void dom_url_cases(void)
         "throws('RangeError',()=>new URLSearchParams(gen()));assert(closed===false,'no IteratorClose');"
         "assert(new URLSearchParams().toString()===''&&new URLSearchParams(undefined).size===0);",
         "url: URLSearchParams, and a URL's query live both ways");
+    /* HTMLHyperlinkElementUtils (libdom/mixin.c): a link's href in a URL's
+     * parts, read and set through url.c's own members. */
+    dom_script(&f, STORAGE_ASSERT
+        "var a=document.createElement('a');"
+        "assert(a.pathname===''&&a.origin===''&&a.host===''&&a.toString()===''&&String(a)==='','no href: every part empty');"
+        "a.pathname='/x';assert(!a.hasAttribute('href'),'no href: a setter changes nothing');"
+        "a.href='HTTPS://Example.TEST:8443/a/../b?x=1#f';"
+        "assert(a.protocol==='https:'&&a.username===''&&a.password===''&&a.host==='example.test:8443'"
+        "&&a.hostname==='example.test'&&a.port==='8443'&&a.pathname==='/b'&&a.search==='?x=1'&&a.hash==='#f'"
+        "&&a.origin==='https://example.test:8443','the parts');"
+        "assert(a.toString()===a.href&&String(a)===a.href&&''+a===a.href,'toString is the href');"
+        "a.pathname='c d';assert(a.getAttribute('href')==='https://example.test:8443/c%20d?x=1#f',a.getAttribute('href'));"
+        "a.search='q=2';a.hash='';a.port='443';assert(a.href==='https://example.test/c%20d?q=2',a.href);"
+        "a.username='u';assert(a.href==='https://example.test/c%20d?q=2','a username refused as a URL\\'s is');"
+        "a.host='other.test:81';a.hostname='third.test';a.protocol='http';"
+        "assert(a.href==='http://third.test:81/c%20d?q=2',a.href);"
+        "a.protocol='mailto';assert(a.protocol==='http:','a special scheme stays special');"
+        "var base=document.createElement('base');base.setAttribute('href','http://base.test/dir/');document.head.appendChild(base);"
+        "var r=document.createElement('a');r.setAttribute('href','rel/x?y');"
+        "assert(r.pathname==='/dir/rel/x'&&r.search==='?y'&&r.origin==='http://base.test','resolved against the base: '+r.pathname);"
+        "r.pathname='/z';assert(r.getAttribute('href')==='http://base.test/z?y','a setter writes the address whole');base.remove();"
+        "var bad=document.createElement('a');bad.setAttribute('href','http://');"
+        "assert(bad.pathname===''&&bad.host===''&&bad.toString()==='http://','an href that does not parse: parts empty, toString as written');"
+        "bad.hash='x';assert(bad.getAttribute('href')==='http://','and no setter changes it');"
+        "var m=document.createElement('a');m.href='mailto:me@x.test';"
+        "assert(m.protocol==='mailto:'&&m.pathname==='me@x.test'&&m.host===''&&m.origin==='null','an opaque path');"
+        "var ar=document.createElement('area');ar.href='http://h.test/p#z';ar.hash='y';"
+        "assert(ar.pathname==='/p'&&ar.getAttribute('href')==='http://h.test/p#y'&&ar.toString()===ar.href,'an area too');"
+        "var d=Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,'origin');assert(d.get&&!d.set,'origin is read-only');"
+        "assert(Object.getOwnPropertyDescriptor(HTMLAreaElement.prototype,'pathname').set,'pathname is not');"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,'pathname').get.call(document.createTextNode('t')));",
+        "url: a link's address in parts");
     fixture_free(&f);
     static const char *const kOperations[] = {
         "new URL('http://h.test/p?a=1')", "new URL('x','http://h.test/a/')",

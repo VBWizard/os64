@@ -4478,10 +4478,11 @@ map's `areas`, which are P6b's. The brief is in the opus kit.
   window-reflecting handlers already were. An area's `href` is a row of
   its own, a URL as the anchor's is, so that it exists with the switch
   alone.
-- **Left, and booked** (DEBTS.md § Classic browser scripting): an area's
-  `relList` and the hyperlink members of an area and an anchor; a style's
+- **Left, and booked** (DEBTS.md § Classic browser scripting): a style's
   `disabled`, whose sheet is never disabled; a template's declarative
-  shadow DOM members.
+  shadow DOM members. (Also left here and paid on 2026-11-15: the links'
+  `relList` and HTMLHyperlinkElementUtils on an area and an anchor, with
+  the anchor's own reflections and `text`, in `mixin.c` and `elements.c`.)
 
 **Numbers.** WPT: `html/dom`'s eight reflection pages for these kinds,
 excluded until the phase that names them, now run: 29,000 passes, 5,038
