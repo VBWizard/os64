@@ -903,7 +903,8 @@ typedef struct Page {
     // the entry it leaves for the browser's Back and Forward to pass over
     // (way_crumb_t.skip). `entry_skip` is the current entry's own mark: set
     // by a push it makes untouched (page_update), carried in from the crumb
-    // a traversal arrives at and across a reload, and out again in
+    // a traversal arrives at, across a reload and with the place a page
+    // not yet shown is replaced in (Place), and out again in
     // page_entry_left.
     uint64_t document, entry, arrives_at;
     bool touched, entry_skip;
@@ -4960,15 +4961,17 @@ static const char *file_path(const char *after)
 
 // A page not yet shown's place in the session, which the navigation that
 // replaces its entry takes (g.replacing): how it is coming, the entry a
-// traversal arrives at, and the entries its scripts made, which stay where
-// they are around the entry. `kind` is how the new page comes: as the
-// replaced page did, but a reload's successor comes as a refresh, a new
-// document in the entry on screen. `from` is the page it was taken from.
+// traversal arrives at, the entry's own mark (Page.entry_skip), and the
+// entries its scripts made, which stay where they are around the entry.
+// `kind` is how the new page comes: as the replaced page did, but a
+// reload's successor comes as a refresh, a new document in the entry on
+// screen. `from` is the page it was taken from.
 typedef struct {
     bool taken;
     Page *from;
     NavKind kind;
     uint64_t arrives_at;
+    bool entry_skip;
     way_crumb_t *back, *ahead;
     int32_t nback, nahead;
 } Place;
@@ -4988,6 +4991,7 @@ static void place_take(Place *place)
     place->from = p;
     place->kind = kind == NAV_RELOAD ? NAV_REFRESH : kind;
     place->arrives_at = p->arrives_at;
+    place->entry_skip = p->entry_skip;
     place->back = p->back;
     place->ahead = p->ahead;
     place->nback = p->nback;
@@ -5048,6 +5052,7 @@ static void start_trip(const char *url, os64_page_request_t *request, const char
         return;
     }
     g.stream.page.arrives_at = place.arrives_at;
+    g.stream.page.entry_skip = place.entry_skip;
     g.stream.page.back = place.back;
     g.stream.page.ahead = place.ahead;
     g.stream.page.nback = place.nback;
@@ -14338,6 +14343,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     fresh.entry = found->entry;
     fresh.asked = found->asked;
     fresh.arrives_at = found->arrives_at;
+    fresh.entry_skip = found->entry_skip;
     fresh.entry_state = found->entry_state;
     fresh.back = found->back;
     fresh.ahead = found->ahead;

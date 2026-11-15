@@ -4891,6 +4891,28 @@ static void loop_view_skips(void) {
     click_back(NULL,NULL);
     check(!g.stream.active && session_is("/V","/V1","/V2"),"skips: and Back steps one, fetching nothing");
     loop_drop();
+    // A page that goes back among its own entries before it is shown
+    // arrives at a marked entry, and keeps the mark (stream_finish), as
+    // does a page that replaces it before it is shown (Place): typed away
+    // from untouched, Back passes over both entries.
+    loop_page("<p id=out>W</p><script>history.replaceState(null,'','/W');history.pushState(1,'','/W1');"
+        "history.pushState(2,'','/W2');history.back()</script><p>tail</p>");
+    check(loop_settle() && view_turns() && session_is("/W","/W1","/W2") && g.page.entry_skip,
+        "skips: a page's traversal before it is shown arrives at its entry, mark and all");
+    start_trip("http://fixture.test/X",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
+    post_arriving("<p id=out>X</p><script>history.replaceState(null,'','/X')</script>");
+    check(loop_settle() && view_turns() && session_is("/W,/W1","/X","") && g.way.history[1].skip &&
+          way_browser_steps(&g.way,true)==2,
+        "skips: typed away from it, Back passes over the entry it arrived at");
+    loop_drop();
+    loop_page("<p id=out>W</p><script>history.replaceState(null,'','/W');history.pushState(1,'','/W1');"
+        "history.pushState(2,'','/W2');history.back();"
+        "document.addEventListener('DOMContentLoaded',function(){location.replace('/Y')})</script><p>tail</p>");
+    check(loop_settle() && g.stream.active && g.page.tree==NULL,"skips: a page replaced before it is shown");
+    post_arriving("<p id=out>Y</p><script>history.replaceState(null,'','/Y1')</script>");
+    check(loop_settle() && view_turns() && session_is("/W","/Y1","/W2") && g.page.entry_skip,
+        "skips: the page that replaces it takes its entry, mark and all");
+    loop_drop();
 }
 /* A history state of the size a site really keeps (a photo site's search
  * page leaves about 125 KiB with its entry) is taken and read back whole,
