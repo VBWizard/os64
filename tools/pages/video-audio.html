@@ -13,11 +13,12 @@
   The first has controls: the audio player sits along its bottom edge.
   Clicking play plays the tone, and the log says "a play", "a playing".
 
-  The second has none. "Play it the way a player does" makes a <video> in
-  script, asks canPlayType('audio/mpeg') (the log shows "maybe"), gives it
-  the MP3, waits for canplay and calls play(), as JW Player does; the
-  tone plays and the log says "b playing". canPlayType('video/mp4') is
-  printed too: "" here, since no picture is decoded (Chrome says "maybe").
+  The second has none. "Play it the way a player does" asks a <video> made
+  in script canPlayType('audio/mpeg') (the log shows "maybe"), then gives
+  the second box the MP3, waits for canplay and calls play(), as JW Player
+  does with its own; the tone plays and the log says "b playing".
+  canPlayType('video/mp4') is printed too: "" here, since no picture is
+  decoded (Chrome says "maybe").
 
   The third is given a real MP4. In yonder it fails as a source not
   supported: the log says "c error 4". Chrome plays it (a black square

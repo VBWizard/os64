@@ -847,7 +847,7 @@ Behind the Modern Web switch, in the media row.
 | A sound file | plays, as in `<audio>` | the same |
 | A video file | `canPlayType("video/…")` is `""`, so a player that has a choice takes another; one given anyway fails as a source not supported (`MEDIA_ERR_SRC_NOT_SUPPORTED`), as `<audio>` does | its picture is decoded and drawn, its sound plays |
 | `videoWidth`, `videoHeight` | 0 | the picture's size |
-| The box | 300 by 150 by default, `width` and `height` as its size (HTML § 15.4.3), its own background and border, nothing drawn inside | the frames, and the poster before the first |
+| The box | 300 by 150 by default, `width` and `height` as its size and, both given, its ratio (`aspect-ratio: auto w / h`, HTML § 15.4.3), its own background and border, nothing drawn inside | the frames, and the poster before the first; the picture's own ratio |
 | `poster` | reflected, not drawn (DEBTS.md) | drawn |
 
 **The box.** Where the face plays the page's sound (`flow_env_t.media`,
@@ -869,9 +869,9 @@ default and its attributes, and the fallback where no sound plays
 player case for `<video controls>`; and `tools/pages/video-audio.html`
 in QEMU: the player along the first box's bottom plays the tone to its
 end, a video made in script answers `canPlayType` "maybe" for
-`audio/mpeg` and "" for `video/mp4` and plays the MP3 through `canplay`
-to `ended`, and the third, given `video-tiny.mp4`, fires `error` with
-code 4. The podcast page on the P5 is the last word.
+`audio/mpeg` and "" for `video/mp4`, the second box given the MP3 by
+script plays it through `canplay` to `ended`, and the third, given
+`video-tiny.mp4`, fires `error` with code 4. The podcast page on the P5 is the last word.
 
 ## For Chris
 

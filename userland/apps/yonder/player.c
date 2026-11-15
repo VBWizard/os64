@@ -1,4 +1,4 @@
-// player.c — an audio element's controls (player.h; AUDIO_YONDER.md § The
+// player.c — a media element's controls (player.h; AUDIO_YONDER.md § The
 // controls). Every size is a share of the box's height, so the controls
 // zoom with the page that laid the box out.
 

@@ -3901,16 +3901,23 @@ bool flow_text_processed(const flow_box_t *b, size_t source, uint32_t *processed
     return true;
 }
 
+bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll)
+{
+    if (tree == NULL || box == NULL)
+        return false;
+    const flow_box_t *h = hit_at(tree, x, y, scroll, NULL, box);
+    while (h != NULL && h != box)
+        h = h->parent;
+    return h == NULL;
+}
+
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll)
 {
     if (tree == NULL || box == NULL)
         return false;
     os64_gui_rect_t r = flow_box_doc_rect(box, scroll);
-    const flow_box_t *h = hit_at(tree, (int32_t)((int64_t)r.x + r.w / 2), (int32_t)((int64_t)r.y + r.h / 2),
-                                 scroll, NULL, box);
-    while (h != NULL && h != box)
-        h = h->parent;
-    return h == NULL;
+    return flow_box_covered_at(tree, box, (int32_t)((int64_t)r.x + r.w / 2), (int32_t)((int64_t)r.y + r.h / 2),
+                               scroll);
 }
 
 // Everything in the flow — a relative box is, an out-of-flow one is not — the

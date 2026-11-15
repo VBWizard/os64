@@ -435,6 +435,18 @@ static void layout_cases(void)
         "      atomic video 8 8 300 150\n"
         "      atomic video 308 58 200 100\n"
         "      atomic video 508 8 150 150\n");
+    // Both attributes are its ratio too (HTML § 15.4.3), which a page's
+    // `height: auto` keeps; one alone gives none, and the height is the
+    // default's.
+    cascade_layout_case("a video's width and height attributes are its ratio",
+        "<!doctype html><style>video{width:320px;height:auto}</style>"
+        "<video width=640 height=360></video><video width=640></video>", 1000,
+        "page 1000 202\n"
+        "block html 0 0 1000 202\n"
+        "  block body 8 8 984 186\n"
+        "    line 8 8 984 186 base 180\n"
+        "      atomic video 8 8 320 180\n"
+        "      atomic video 328 38 320 150\n");
     kEnv.media = false;
     cascade_layout_case("a video is its fallback where the face plays no sounds",
         "<!doctype html><video>fallback</video>", 1000,

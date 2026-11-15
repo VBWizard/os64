@@ -826,6 +826,10 @@ static int64_t decoder_main(void *arg)
             fail(m, m->failed ? OS64_DOM_MEDIA_ERR_NETWORK : open_error(result),
                  m->failed ? m->why : os64_media_strerror(result));
             go = false;
+            // Nothing will read another byte of it: a video file given to
+            // a <video> (§ Y.4) would otherwise arrive whole, up to the
+            // window, while the failed session waits for its close.
+            (void)fetch_stop(m);
         }
     }
     if (go) {

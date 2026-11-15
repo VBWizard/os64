@@ -2832,6 +2832,26 @@ static void player_cases(void) {
         check(at.w == 300 && at.h == 150 && w->bounds.w == 300 && w->bounds.h == YONDER_PLAYER_HEIGHT &&
               w->bounds.y - g.view.bounds.y + g.sy == at.y + at.h - YONDER_PLAYER_HEIGHT,
               "player: a video's player is the strip along the bottom of its box");
+        zoom_to(2000);
+        relayout(false);
+        vc = flow_box_for(g.page.tree, probe_id("c"));
+        at = vc != NULL ? flow_box_doc_rect(vc, scroll_now()) : (os64_gui_rect_t){0, 0, 0, 0};
+        check(g.nplayers == 1 && at.w == 600 && at.h == 300 && g.players[0]->p.w.bounds.h == 2 * YONDER_PLAYER_HEIGHT &&
+              g.players[0]->p.w.bounds.y - g.view.bounds.y + g.sy == at.y + at.h - 2 * YONDER_PLAYER_HEIGHT,
+              "player: zoomed, the strip is the player's height at the zoom the box was laid out at");
+        zoom_to(1000);
+    }
+    probe_drop();
+    probe_page("<p><video id=s controls style=\"height:30px\" src=a.mp3></video></p>", true);
+    script_turn();
+    const flow_box_t *vs = flow_box_for(g.page.tree, probe_id("s"));
+    if (vs != NULL && g.nplayers == 1) {
+        os64_gui_rect_t at = flow_box_doc_rect(vs, scroll_now());
+        check(at.h == 30 && g.players[0]->p.w.bounds.h == 30 &&
+              g.players[0]->p.w.bounds.y - g.view.bounds.y + g.sy == at.y,
+              "player: a video shorter than the player gives it the whole box");
+    } else {
+        check(false, "player: a short video has a box and a player");
     }
     probe_drop();
     probe_page("<p><audio id=a controls src=a.mp3></audio></p>", false);
