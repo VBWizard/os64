@@ -58,7 +58,7 @@ typedef struct {
 } os64_media_source_t;
 
 typedef struct {
-    char format[16];      // the container, as libav names it: "mp3", "wav"
+    char format[16];      // the container, as libav first names it: "mp3", "wav", "mov"
     char codec[16];       // the sound inside: "mp3float", "pcm_s16le"
     uint32_t rate;        // the media's own frames a second
     uint32_t channels;    // the media's own channel count

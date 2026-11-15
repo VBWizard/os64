@@ -24,9 +24,9 @@ disabled and then, by name:
 
 | Kind | Enabled |
 |---|---|
-| readers (demuxers) | `wav`, `mp3` |
-| decoders | `mp3float`, `pcm_s16le`, `pcm_s24le`, `pcm_s32le`, `pcm_u8`, `pcm_f32le`, `pcm_alaw`, `pcm_mulaw` |
-| parsers | `mpegaudio` |
+| readers (demuxers) | `wav`, `mp3`, `mov` (MP4, M4A), `aac` (ADTS) |
+| decoders | `mp3float`, `aac`, `pcm_s16le`, `pcm_s24le`, `pcm_s32le`, `pcm_u8`, `pcm_f32le`, `pcm_alaw`, `pcm_mulaw` |
+| parsers | `mpegaudio`, `aac` |
 | protocols | none: bytes arrive through the caller's `AVIOContext`, never FFmpeg's own I/O |
 
 `tools/import_av.py --write <archive>` runs that `configure` on the host
@@ -49,6 +49,8 @@ of those answers with what the shims below provide: no `unistd.h`, no
 `mmap`, no `posix_memalign`, no `gettimeofday`, and the float maths
 libmath does not export (`expf`, `sinf`, `exp2`, `lrintf`…), which
 FFmpeg's own `libavutil/libm.h` then supplies from the double functions.
+The few it calls with no `HAVE_` to answer (`sqrtf`, `fabsf`, `ldexp`,
+the AAC decoder's) are `port/compat/math.h`'s, over libmath's own.
 `CC_IDENT` is overridden too, so the file does not record the host's
 compiler. An override that matches no line fails the import.
 
@@ -196,7 +198,10 @@ link error, not a function it cannot reach.
   ID3v2 tag reads (genre "(17)" becomes "Rock" through the routed scanf),
   it decodes to exactly one second at the level the host's FFmpeg decodes
   the same bytes to (`tools/gen_avtest_mp3.py` made them and measured it),
-  a seek lands, a WAV decodes sample for sample, and noise is refused.
+  a seek lands, a WAV decodes sample for sample, noise is refused, and an
+  MP4 whose first track is a picture yields its AAC sound, one second of
+  the sine holding the energy the host's FFmpeg decodes it to
+  (`tools/gen_avtest_m4a.py`).
 - `tools/test_av_libc_host.sh`: the shims against glibc.
 - `tools/test_av_audit.py`: the pin, the licence, the surface, the imports.
 - `tools/import_av.py --check <archive>`: the vendored tree is the

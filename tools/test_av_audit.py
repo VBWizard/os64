@@ -155,15 +155,18 @@ for program in ('play', 'tests/mediatest'):
 # its .c file includes), with its count, so a new one anywhere fails here.
 # Where each is reached in this build, which is why libmedia/media.c
 # § THREADS is enough:
-#   mpegaudiodec_*, mpegaudiodsp*, pcm.c   a decoder's open: libmedia's,
-#                                          and avformat_find_stream_info's,
-#                                          both under libmedia's lock
+#   mpegaudiodec_*, mpegaudiodsp*, pcm.c,  a decoder's open: libmedia's,
+#   aac/aacdec_float.c, aac/aacdec_tab.c,  and avformat_find_stream_info's,
+#   aactab.c, sinewin_tablegen.h           both under libmedia's lock (the
+#                                          AAC four from ff_aac_decode_init)
 #   crc.c                                  libmedia makes every table at its
 #                                          first open
 #   tx_template.c, aes.c                   nothing in this build's codecs or
 #                                          demuxers; only a program calling
 #                                          av_tx_* or av_aes_* itself
-known_once = {'libavcodec/mpegaudiodec_common.c': 1, 'libavcodec/mpegaudiodec_template.c': 1,
+known_once = {'libavcodec/aac/aacdec_float.c': 1, 'libavcodec/aac/aacdec_tab.c': 1,
+              'libavcodec/aactab.c': 1, 'libavcodec/sinewin_tablegen.h': 1,
+              'libavcodec/mpegaudiodec_common.c': 1, 'libavcodec/mpegaudiodec_template.c': 1,
               'libavcodec/mpegaudiodsp.c': 1, 'libavcodec/mpegaudiodsp_template.c': 1,
               'libavcodec/pcm.c': 3, 'libavutil/aes.c': 1, 'libavutil/crc.c': 1,
               'libavutil/tx_template.c': 2}

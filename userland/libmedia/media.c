@@ -459,7 +459,13 @@ int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_med
 
     if (info != NULL) {
         os64_memset(info, 0, sizeof(*info));
-        os64_strcopy(info->format, sizeof(info->format), m->format->iformat->name);
+        // A reader of several kinds names them all ("mov,mp4,m4a,..."):
+        // its first name is the container's.
+        const char *name = m->format->iformat->name;
+        size_t first = 0;
+        while (name[first] != '\0' && name[first] != ',' && first + 1 < sizeof(info->format)) first++;
+        os64_memcpy(info->format, name, first);
+        info->format[first] = '\0';
         os64_strcopy(info->codec, sizeof(info->codec), decoder->name);
         info->rate = m->rate;
         info->channels = (uint32_t)channels;
@@ -577,8 +583,12 @@ const char *os64_media_strerror(int result)
 // Each MIME type other browsers answer for, as the libav reader that reads
 // it and, where the type implies its codec, that codec. Which of them play
 // is libav.so's answer (av_find_input_format, avcodec_find_decoder_by_name),
-// so a type whose reader or decoder is not built answers NO.
+// so a type whose reader or decoder is not built answers NO. A video type
+// is here for its SOUND, which is what libmedia plays of it (a <video>
+// plays a file's sound and no picture, AUDIO_YONDER.md § Y.4); a codecs
+// parameter naming a video codec still answers NO, since none is decoded.
 static const struct { const char *type, *demuxer, *implied; } kTypes[] = {
+    {"video/mp4", "mov", NULL},
     {"audio/mpeg", "mp3", "mp3"}, {"audio/mp3", "mp3", "mp3"}, {"audio/mpeg3", "mp3", "mp3"},
     {"audio/x-mpeg", "mp3", "mp3"}, {"audio/x-mp3", "mp3", "mp3"},
     {"audio/wav", "wav", NULL}, {"audio/wave", "wav", NULL}, {"audio/x-wav", "wav", NULL},
