@@ -17,9 +17,12 @@ yonder_media_seek_t yonder_media_seek_plan(const yonder_media_window_t *w, uint6
         return s->ranges ? YONDER_MEDIA_SEEK_JUMP : YONDER_MEDIA_SEEK_REFUSE;
     if (s->ended)
         return YONDER_MEDIA_SEEK_REFUSE;
-    if (s->ranges && (!s->fetching || offset - end > YONDER_MEDIA_JUMP_GAP))
+    // A little past it, the bytes come anyway (the fetch, or the held one
+    // resumed from the window's end), and the window is kept.
+    bool coming = s->fetching || s->held;
+    if (s->ranges && (!coming || offset - end > YONDER_MEDIA_JUMP_GAP))
         return YONDER_MEDIA_SEEK_JUMP;
-    return s->fetching ? YONDER_MEDIA_SEEK_WAIT : YONDER_MEDIA_SEEK_REFUSE;
+    return coming ? YONDER_MEDIA_SEEK_WAIT : YONDER_MEDIA_SEEK_REFUSE;
 }
 
 uint64_t yonder_media_drop_for(const yonder_media_window_t *w, uint64_t n, uint64_t at, uint64_t max,

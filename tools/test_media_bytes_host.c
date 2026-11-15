@@ -22,7 +22,7 @@ static void check(int ok, const char *what)
 
 // The plan's table (Y23 lifecycle), read row by row.
 static yonder_media_seek_t model_plan(uint64_t base, uint64_t have, uint64_t off, int opening, int ranges,
-                                      int fetching, int ended)
+                                      int fetching, int held, int ended)
 {
     uint64_t end = base + have;
     int inside = off >= base && off <= end;
@@ -36,11 +36,11 @@ static yonder_media_seek_t model_plan(uint64_t base, uint64_t have, uint64_t off
         return ranges ? YONDER_MEDIA_SEEK_JUMP : YONDER_MEDIA_SEEK_REFUSE;
     if (ended)
         return YONDER_MEDIA_SEEK_REFUSE;
-    if (ranges && !fetching)
+    if (ranges && !fetching && !held)
         return YONDER_MEDIA_SEEK_JUMP;
     if (ranges && past > YONDER_MEDIA_JUMP_GAP)
         return YONDER_MEDIA_SEEK_JUMP;
-    if (fetching)
+    if (fetching || held)
         return YONDER_MEDIA_SEEK_WAIT;
     return YONDER_MEDIA_SEEK_REFUSE;
 }
@@ -57,11 +57,13 @@ static void plan_cases(void)
             const uint64_t offs[] = {0, base ? base - 1 : 0, base, base + have / 2, end, end + 1,
                                      end + g - 1, end + g, end + g + 1, end + 10 * g, UINT64_MAX - 1};
             for (size_t oi = 0; oi < sizeof(offs) / sizeof(offs[0]); oi++)
-                for (int bits = 0; bits < 16; bits++) {
+                for (int bits = 0; bits < 32; bits++) {
                     yonder_media_window_t w = {base, have};
-                    yonder_media_seek_state_t s = {bits & 1, (bits >> 1) & 1, (bits >> 2) & 1, (bits >> 3) & 1};
+                    yonder_media_seek_state_t s = {bits & 1, (bits >> 1) & 1, (bits >> 2) & 1, (bits >> 3) & 1,
+                                                   (bits >> 4) & 1};
                     yonder_media_seek_t got = yonder_media_seek_plan(&w, offs[oi], &s);
-                    yonder_media_seek_t want = model_plan(base, have, offs[oi], s.opening, s.ranges, s.fetching, s.ended);
+                    yonder_media_seek_t want = model_plan(base, have, offs[oi], s.opening, s.ranges, s.fetching,
+                                                          s.held, s.ended);
                     if (got != want && bad++ < 5)
                         printf("  plan base=%llu have=%llu off=%llu bits=%d: %d, the table says %d\n",
                                (unsigned long long)base, (unsigned long long)have, (unsigned long long)offs[oi],
@@ -71,7 +73,10 @@ static void plan_cases(void)
     check(bad == 0, "plan: every window, offset and state answers as the table does");
 
     yonder_media_window_t w = {0, 1000};
-    yonder_media_seek_state_t opening = {1, 1, 1, 0}, live = {0, 1, 1, 0}, plain = {0, 0, 1, 0};
+    yonder_media_seek_state_t opening = {1, 1, 1, 0, 0}, live = {0, 1, 1, 0, 0}, plain = {0, 0, 1, 0, 0};
+    yonder_media_seek_state_t held = {0, 1, 0, 1, 0};
+    check(yonder_media_seek_plan(&w, 1100, &held) == YONDER_MEDIA_SEEK_WAIT,
+          "plan: a little past a held fetch's window waits for its resume, keeping the window");
     check(yonder_media_seek_plan(&w, 1 << 30, &opening) == YONDER_MEDIA_SEEK_REFUSE,
           "plan: the probe of the end while opening makes no request");
     check(yonder_media_seek_plan(&w, 1 << 30, &live) == YONDER_MEDIA_SEEK_JUMP,

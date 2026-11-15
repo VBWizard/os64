@@ -698,11 +698,14 @@ above:
   the stream's table or bit rate (`AVFMT_FLAG_FAST_SEEK`), as other
   browsers' FFmpeg does. A local file still seeks exactly. DEBTS.md
   § A page's sound books what the estimate costs.
-- **A sound nobody plays lets its fetch go** after ten seconds held off,
-  when the server answers ranges, so a paused podcast does not keep a
-  connection and one of the four loader slots; what its pipe already held
-  is kept first, and the reader reaching the window's end resumes the
-  fetch from there.
+- **A sound nobody plays lets its fetch go** after ten seconds of nobody
+  playing it, when the server answers ranges, so a paused podcast does not
+  keep a connection and one of the four loader slots; what its pipe
+  already held is kept first, past the usual lead. The reader reaching the
+  window's end asks again from there, and so does a seek a little past it
+  (one far past it begins a new window). A fetch that breaks part way
+  after bringing something is resumed the same way; one that brought
+  nothing fails the load.
 - **Proven** by `tools/test_media_bytes_host.sh` (every seek plan against
   the table, the window's front drop, the head's three readers),
   `/tests/mediatest` step 12 (a remote source's seek asks for a byte past

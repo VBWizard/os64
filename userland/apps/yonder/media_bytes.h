@@ -22,7 +22,8 @@ typedef struct {
 
 typedef enum {
     YONDER_MEDIA_SEEK_HERE,     // inside the window: the read goes on from there
-    YONDER_MEDIA_SEEK_WAIT,     // a little past it, and the fetch is bringing it
+    YONDER_MEDIA_SEEK_WAIT,     // a little past it: the reader moves there and its read waits
+                                // for the fetch bringing it, or resumes a held one
     YONDER_MEDIA_SEEK_JUMP,     // a new window at the offset (a Range request)
     YONDER_MEDIA_SEEK_REFUSE,   // the reader carries on without it
 } yonder_media_seek_t;
@@ -36,6 +37,7 @@ typedef struct {
     bool opening;       // the media is being opened: its reader probes and must not wait
     bool ranges;        // the server answers Range requests
     bool fetching;      // a fetch is bringing the bytes at the window's end
+    bool held;          // none is, but one will be asked from the window's end when read there
     bool ended;         // the resource's end is in the window
 } yonder_media_seek_state_t;
 
