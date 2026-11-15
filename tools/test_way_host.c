@@ -474,6 +474,55 @@ static void entries(void)
            live == before, NULL);
 }
 
+// The browser's Back and Forward pass over the crumbs a page made with
+// nobody at it (way_crumb_t.skip); a person's activation of a document
+// takes the mark off every one of its entries.
+static void skips(void)
+{
+    way_session_t s = session();
+    expect("skips: nowhere to go is no steps", way_browser_steps(&s, true) == 0 && way_browser_steps(&s, false) == 0,
+           NULL);
+    // W (a person was there), then A and two entries A pushed alone.
+    way_crumb_t c = crumb_of("http://w/", 1, NULL);
+    snprintf(c.title, sizeof(c.title), "Wallpapers");
+    way_remember_entry(&s, &c);
+    c = crumb_of("http://a/", 2, NULL);
+    c.skip = true;
+    way_remember_entry(&s, &c);
+    c = crumb_of("http://a/#1", 2, "1");
+    c.skip = true;
+    way_remember_entry(&s, &c);
+    expect("skips: a crumb's mark and title ride into the session",
+           s.history[2].skip && !s.history[0].skip && strcmp(s.history[0].title, "Wallpapers") == 0, NULL);
+    expect("skips: Back passes over the marked crumbs to the nearest unmarked", way_browser_steps(&s, true) == 3,
+           NULL);
+    // Back to A#1 by the page's own history.back: the left entry goes ahead
+    // marked as it was.
+    way_crumb_t left = crumb_of("http://a/#2", 2, NULL), arrived;
+    left.skip = true;
+    way_went_back_entry(&s, &left, &arrived);
+    os64_free(arrived.state);
+    expect("skips: a mark moves to Forward with its crumb", s.forward[0].skip && way_browser_steps(&s, true) == 2,
+           NULL);
+    left = crumb_of("http://b/", 3, NULL);
+    way_forward_entry(&s, &left);
+    s.forward[1].skip = true;
+    expect("skips: Forward passes over the marked crumbs too", way_browser_steps(&s, false) == 2, NULL);
+    s.forward[1].skip = false;
+    expect("skips: Forward stops at the nearest unmarked", way_browser_steps(&s, false) == 1, NULL);
+    s.history[0].skip = true;
+    expect("skips: every crumb marked, Back goes to the furthest", way_browser_steps(&s, true) == 2, NULL);
+    way_unskip_document(&s, 2);
+    expect("skips: activation unmarks the document's entries on both sides, and no other's",
+           !s.history[1].skip && s.history[0].skip && s.forward[0].skip == false && s.forward[1].skip == false &&
+               way_browser_steps(&s, true) == 1,
+           NULL);
+    s.forward[1].skip = true;
+    way_unskip_document(&s, 0);
+    expect("skips: document 0 names nothing", s.forward[1].skip && s.history[0].skip, NULL);
+    way_history_clear(&s);
+}
+
 // ── Typed addresses and details ─────────────────────────────────────────
 
 static void typed(void)
@@ -664,6 +713,7 @@ int main(void)
     history();
     forward();
     entries();
+    skips();
     typed();
     notes();
     sweep();

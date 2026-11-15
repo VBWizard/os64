@@ -897,7 +897,17 @@ typedef struct Page {
     // (trip_send's metadata, before any hop), which every entry of the
     // document keeps (way_crumb_t.asked) for Reload and Back to replay;
     // zeroed for a file read from disk.
+    // `touched` is whether a person has pressed, clicked or typed on the
+    // page (page_touch_note), which only the page on screen can be; until then
+    // an entry it makes, by a push or by navigating away on its own, marks
+    // the entry it leaves for the browser's Back and Forward to pass over
+    // (way_crumb_t.skip). `entry_skip` is the current entry's own mark: set
+    // by a push it makes untouched (page_update), carried in from the crumb
+    // a traversal arrives at, across a reload and with the place a page
+    // not yet shown is replaced in (Place), and out again in
+    // page_entry_left.
     uint64_t document, entry, arrives_at;
+    bool touched, entry_skip;
     way_metadata_t asked;
     char *entry_state;
     way_crumb_t *back, *ahead;
@@ -2229,6 +2239,11 @@ static struct {
     uint64_t pages_made;            // the last Page.serial handed out
     uint64_t documents_made;        // the last Page.document handed out
     uint64_t entries_made;          // the last Page.entry handed out
+    // Who started the last navigation away from the page on screen
+    // (start_trip; open_address for a typed path; a person's yes to the
+    // question bar): one the page made itself, arriving as a new way, marks
+    // the entry left when nobody had touched the page (arrive_now).
+    way_initiator_t leaving_by;
     // A TRAVERSAL BEING FETCHED (session_go): the session stays as it was
     // asked until the entry arrives (arrive_now). HTML runs a traversal and
     // the state updates and fragment navigations that come after it on one
@@ -4406,6 +4421,7 @@ static void page_mark(yonder_scripts_t *host, os64_dom_milestone_t which)
 // once the layout exists, so a page this machine cannot lay out costs a
 // sentence and not the page the person was reading.
 static way_crumb_t page_entry_left(Page *p);
+static void title_of(const os64_html_document_t *doc, char *out, size_t cap);
 static void traverse_end(bool stopped);
 
 // Whether the session holds the entry named `entry` behind the page on
@@ -4467,6 +4483,11 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
             os64_memset(&g.held, 0, sizeof(g.held));
             g.has_held = false;
         }
+        // A new way the page made itself, nobody having touched it, marks
+        // the entry it leaves (Page.touched): a page that sends its reader
+        // on by itself is passed over by the browser's Back.
+        if (kind == NAV_GO && g.leaving_by == WAY_BY_PAGE && !g.page.touched)
+            left.skip = true;
         if (kind != NAV_GO && session_holds(kind == NAV_BACK, fresh->arrives_at)) {
             for (;;) {
                 if (kind == NAV_BACK)
@@ -4477,10 +4498,16 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
                     break;
                 left = arrived;
             }
+            // The entry arrived at keeps its mark, unless the page pushed
+            // before it was shown, which marked it anew (page_update).
+            if (fresh->nback == 0 && fresh->nahead == 0)
+                fresh->entry_skip = arrived.skip;
             os64_free(arrived.state);
         } else {
             way_remember_entry(&g.way, &left);
         }
+    } else if (had && kind == NAV_RELOAD && fresh->nback == 0 && fresh->nahead == 0) {
+        fresh->entry_skip = g.page.entry_skip;      // the same entry again
     }
     traverse_end(false);
     // The page on screen is being replaced, and its question and its
@@ -4845,6 +4872,10 @@ static void bar_answered(bool yes)
             g.replaying = g.pending_replays ? &g.pending_replay : NULL;
             start_trip(g.pending.url, &g.pending, g.pending_referrer, g.pending_kind, g.pending_by, NULL);
             g.replaying = NULL;
+            // Whoever asked, the person said yes: leaving is their choice,
+            // and marks nothing (arrive_now, which no trip reaches before
+            // the loop's next turn).
+            g.leaving_by = WAY_BY_PERSON;
         } else {
             os64_page_request_free(&g.pending);
             status_rest(g.pending_refused);
@@ -4915,6 +4946,8 @@ static void stop_trip(void)
 // (an empty host, then the path), `file://localhost/a/b` names this machine
 // outright, and `file://a/b` is what people type — read, as browsers read
 // it, as /a/b rather than refused for naming a host called "a".
+static size_t before_fragment(const char *url);
+
 static const char *file_path(const char *after)
 {
     static char path[OS64_FETCH_URL_MAX];
@@ -4928,15 +4961,17 @@ static const char *file_path(const char *after)
 
 // A page not yet shown's place in the session, which the navigation that
 // replaces its entry takes (g.replacing): how it is coming, the entry a
-// traversal arrives at, and the entries its scripts made, which stay where
-// they are around the entry. `kind` is how the new page comes: as the
-// replaced page did, but a reload's successor comes as a refresh, a new
-// document in the entry on screen. `from` is the page it was taken from.
+// traversal arrives at, the entry's own mark (Page.entry_skip), and the
+// entries its scripts made, which stay where they are around the entry.
+// `kind` is how the new page comes: as the replaced page did, but a
+// reload's successor comes as a refresh, a new document in the entry on
+// screen. `from` is the page it was taken from.
 typedef struct {
     bool taken;
     Page *from;
     NavKind kind;
     uint64_t arrives_at;
+    bool entry_skip;
     way_crumb_t *back, *ahead;
     int32_t nback, nahead;
 } Place;
@@ -4956,6 +4991,7 @@ static void place_take(Place *place)
     place->from = p;
     place->kind = kind == NAV_RELOAD ? NAV_REFRESH : kind;
     place->arrives_at = p->arrives_at;
+    place->entry_skip = p->entry_skip;
     place->back = p->back;
     place->ahead = p->ahead;
     place->nback = p->nback;
@@ -4987,6 +5023,10 @@ static void start_trip(const char *url, os64_page_request_t *request, const char
     bool traversal = place.taken && g.traversing && (place.kind == NAV_BACK || place.kind == NAV_FORWARD);
     if (traversal)
         g.traversing = false;           // stop_trip must not end it
+    // A page not yet shown that sends its reader on takes its own place,
+    // and so leaves who left the page on screen as it was.
+    if (!place.taken)
+        g.leaving_by = by;
     trip_send(url, request, referrer, place.taken ? place.kind : kind, by, crumb);
     if (!place.taken)
         return;
@@ -5012,6 +5052,7 @@ static void start_trip(const char *url, os64_page_request_t *request, const char
         return;
     }
     g.stream.page.arrives_at = place.arrives_at;
+    g.stream.page.entry_skip = place.entry_skip;
     g.stream.page.back = place.back;
     g.stream.page.ahead = place.ahead;
     g.stream.page.nback = place.nback;
@@ -5047,6 +5088,10 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
         // `url` may be the request's own: the path is taken before it goes.
         char path[OS64_FETCH_URL_MAX];
         os64_strcopy(path, sizeof(path), file_path(url + 7));
+        // A fragment names a place in the file, not part of its name, and
+        // the entry a push made ("#b") comes back with one on Back and
+        // Forward. The page arrives without it (DEBTS.md § yonder).
+        path[before_fragment(path)] = '\0';
         os64_page_request_free(request);
         stop_trip();
         open_local(path, kind, crumb);
@@ -5256,6 +5301,7 @@ static void open_address(const char *typed, NavKind kind, const way_position_t *
     if (typed[0] == '/') {
         bar_forget();           // the page on screen is being left (start_trip)
         stop_trip();
+        g.leaving_by = WAY_BY_BROWSER;
         open_local(typed, kind, crumb);
         return;
     }
@@ -8761,6 +8807,7 @@ typedef struct {
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
 static uint64_t resizes_next(void);
 static uint64_t resizes_due(void);
+static uint64_t step_hold_due(void);
 
 // The shown page has nothing more coming of its own accord: it has
 // streamed and arrived, its pictures and fonts are in — kept at the size
@@ -8856,6 +8903,8 @@ static void pictures_schedule(void)
     // An `--exit-when-loaded` run's next look at whether to leave, which the
     // loop makes (exit_follow).
     deadline_offer(&d, exit_due(), PAST_TIMERS);
+    // A held Back or Forward's list, which the loop opens (step_hold_turn).
+    deadline_offer(&d, step_hold_due(), PAST_TIMERS);
     // The shown page's next idle period, when only an idle callback that
     // asked for another waits for it (script_turn runs it).
     uint64_t idle = yonder_scripts_idle_next(g.page.scripts);
@@ -12566,6 +12615,8 @@ static way_crumb_t page_entry_left(Page *p)
     left.document = p->document;
     left.entry = p->entry;
     left.asked = p->asked;
+    left.skip = p->entry_skip;
+    title_of(page_doc(p), left.title, sizeof(left.title));
     left.state = p->entry_state;
     p->entry_state = NULL;
     return left;
@@ -12586,6 +12637,8 @@ static bool page_hold(void)
     g.held.document = g.page.document;
     g.held.entry = g.page.entry;
     g.held.asked = g.page.asked;
+    g.held.skip = g.page.entry_skip;
+    title_of(page_doc(&g.page), g.held.title, sizeof(g.held.title));
     g.held.state = state;
     g.has_held = true;
     return true;
@@ -12644,9 +12697,14 @@ static bool page_update(Page *p, const char *url, const char *state, size_t leng
         os64_free(kept);
         return false;
     }
+    // A push the page makes before anybody touched it marks the entry it
+    // leaves (Page.touched).
     if (held) {
         g.held_push = g.held_push || push;
+        if (push)
+            g.held.skip = !p->touched;
     } else if (push) {
+        p->entry_skip = !p->touched;
         way_crumb_t left = page_entry_left(p);
         if (p == &g.page) {
             way_remember_entry(&g.way, &left);
@@ -12655,8 +12713,10 @@ static bool page_update(Page *p, const char *url, const char *state, size_t leng
             page_stack_clear(p->ahead, &p->nahead);
         }
     }
-    if (push)
+    if (push) {
         p->entry = ++g.entries_made;
+        p->entry_skip = false;      // the new entry has made none after it
+    }
     os64_free(p->entry_state);
     p->entry_state = kept;
     os64_strcopy(address, cap, url);
@@ -12745,6 +12805,7 @@ static bool session_traverse(int32_t delta)
     os64_strcopy(g.page.way.url, sizeof(g.page.way.url), arrived.url);
     g.page.entry = arrived.entry;
     g.page.entry_state = arrived.state;
+    g.page.entry_skip = arrived.skip;
     way_position_t at = arrived.position;
     page_address_moved(&g.page);
     page_event_owe(&g.page, false, NULL);
@@ -12788,6 +12849,7 @@ static bool page_traverse(Page *p, int32_t delta)
         os64_strcopy(address, cap, arrived.url);
         p->entry = arrived.entry;
         p->entry_state = arrived.state;
+        p->entry_skip = arrived.skip;
     }
     page_address_moved(p);
     page_event_owe(p, false, NULL);
@@ -14281,6 +14343,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     fresh.entry = found->entry;
     fresh.asked = found->asked;
     fresh.arrives_at = found->arrives_at;
+    fresh.entry_skip = found->entry_skip;
     fresh.entry_state = found->entry_state;
     fresh.back = found->back;
     fresh.ahead = found->ahead;
@@ -17807,20 +17870,215 @@ static void hover(int32_t x, int32_t y)
 
 // ── The toolbar ─────────────────────────────────────────────────────────
 
-// Back and Forward: within the page's document when the entry is its own,
-// else a fetch (session_go).
+// The browser's Back (`back`) or Forward: past the entries a page made
+// with nobody touching it, to the nearest other (way_browser_steps); within
+// the page's document when the entry is its own, else a fetch (session_go).
+// A traversal in flight is stopped first, so the steps are counted from the
+// entry on screen, as session_go counts them.
+static void browser_go(bool back)
+{
+    if (traverse_pending())
+        stop_trip();
+    int32_t n = way_browser_steps(&g.way, back);
+    if (n == 0)
+        n = 1;                      // nowhere to go, which session_go says
+    session_go(back ? -n : n, WAY_BY_BROWSER, NULL);
+}
+
 static void click_back(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     (void)user;
-    session_go(-1, WAY_BY_BROWSER, NULL);
+    browser_go(true);
 }
 
 static void click_forward(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     (void)user;
-    session_go(1, WAY_BY_BROWSER, NULL);
+    browser_go(false);
+}
+
+// THE HISTORY LIST, from Back or Forward held (STEP_HOLD_MS) or
+// right-clicked: the entries that button can reach, nearest first, at most
+// STEPS_LISTED_MAX of them, each by its title or else its address. An entry
+// Back and Forward pass over is not listed, but for the furthest when every
+// one is passed over, which is where the button itself goes then. A row
+// names its entry (way_crumb_t.entry), which a pick finds wherever the
+// session has moved it since; the page may push while the list is open.
+#define STEPS_LISTED_MAX 16
+#define STEP_LABEL_MAX 72           // bytes of a label before "..."
+#define STEP_HOLD_MS 500
+static struct {
+    bool back;
+    int32_t count;
+    uint64_t entry[STEPS_LISTED_MAX];
+    char label[STEPS_LISTED_MAX][STEP_LABEL_MAX + 4];
+} s_steps;
+
+// The press on Back or Forward being held (step_event): which button, when
+// its list is due, and whether it has opened; the release that ends a press
+// that opened the list goes nowhere.
+static struct {
+    os64_ui_widget_t *w;            // NULL: none held
+    uint64_t due;
+    bool listed;
+} s_hold;
+
+// A row's label: whole characters only, since a title kept in a crumb may
+// end in a cut one, and one too long ends in "...".
+static void step_label(const way_crumb_t *c, char *out, size_t cap)
+{
+    const char *text = c->title[0] != '\0' ? c->title : c->url;
+    size_t n = os64_strlen(text), at = 0, i = 0;
+    while (i < n) {
+        uint32_t cp;
+        size_t took = os64_utf8_decode(text + i, n - i, &cp);
+        if (cp == OS64_UTF8_REPLACEMENT && took == 1) {
+            i++;                    // a cut tail, or a stray byte: left out
+            continue;
+        }
+        if (at + took > STEP_LABEL_MAX)
+            break;
+        os64_memcpy(out + at, text + i, took);
+        at += took;
+        i += took;
+    }
+    os64_strcopy(out + at, cap - at, i < n ? "..." : "");
+}
+
+static void steps_picked(void *user, size_t row)
+{
+    (void)user;
+    if (row >= (size_t)s_steps.count)
+        return;
+    if (traverse_pending())
+        stop_trip();
+    bool back = s_steps.back;
+    const way_crumb_t *stack = back ? g.way.history : g.way.forward;
+    int32_t count = back ? g.way.depth : g.way.ahead;
+    for (int32_t k = 1; k <= count; k++)
+        if (stack[count - k].entry == s_steps.entry[row]) {
+            session_go(back ? -k : k, WAY_BY_BROWSER, NULL);
+            return;
+        }
+    status_rest("That page is not in this window's history any more.");
+}
+
+// The list's rows for Back (`back`) or Forward, into s_steps.
+static void steps_rows(bool back)
+{
+    const way_crumb_t *stack = back ? g.way.history : g.way.forward;
+    int32_t count = back ? g.way.depth : g.way.ahead;
+    s_steps.back = back;
+    s_steps.count = 0;
+    for (int32_t k = 1; k <= count && s_steps.count < STEPS_LISTED_MAX; k++) {
+        const way_crumb_t *c = &stack[count - k];
+        if (c->entry == 0 || (c->skip && !(k == count && s_steps.count == 0)))
+            continue;
+        int32_t i = s_steps.count++;
+        s_steps.entry[i] = c->entry;
+        step_label(c, s_steps.label[i], sizeof(s_steps.label[i]));
+    }
+}
+
+static void steps_list(os64_ui_widget_t *w, bool back)
+{
+    if (g.menus == NULL)
+        return;
+    steps_rows(back);
+    const char *labels[STEPS_LISTED_MAX];
+    bool enabled[STEPS_LISTED_MAX];
+    for (int32_t i = 0; i < s_steps.count; i++) {
+        labels[i] = s_steps.label[i];
+        enabled[i] = true;
+    }
+    if (s_steps.count == 0) {
+        status_rest(back ? "There is nothing to go back to." : "There is nothing to go forward to.");
+        return;
+    }
+    os64_ui_menu_list_t list = {
+        .labels = labels, .enabled = enabled, .count = (size_t)s_steps.count,
+        .selected = (size_t)s_steps.count, .min_width = w->bounds.w, .widget = w,
+        .pick = steps_picked, .user = &s_steps,
+    };
+    // BUSY: it opens once a menu just shut has gone.
+    os64_ui_status_code_t rc = os64_ui_menu_open_list(g.menus, &list, w->bounds);
+    if (rc != OS64_UI_OK && rc != OS64_UI_BUSY)
+        status_rest("The history list would not open.");
+}
+
+static os64_ui_class_t s_head_class;    // the button's, painted with its picture
+static os64_ui_class_t s_step_class;    // the head button's, with step_event
+
+// Back and Forward are head buttons that also list: a left press starts
+// the hold (step_hold_turn lists when it is due), and the press that
+// listed neither presses the button again nor clicks it.
+static bool step_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_t *ev)
+{
+    switch (ev->type) {
+    case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN:
+        s_hold.listed = false;
+        s_hold.w = ev->mouse.button == OS64_GUI_MOUSE_LEFT ? w : NULL;
+        s_hold.due = yonder_now_ms() + STEP_HOLD_MS;
+        break;
+    case OS64_GUI_EVENT_MOUSE_MOVE:
+        if (s_hold.w == w && s_hold.listed)
+            return true;
+        break;
+    case OS64_GUI_EVENT_MOUSE_BUTTON_UP:
+        if (s_hold.w == w) {
+            bool listed = s_hold.listed;
+            s_hold.w = NULL;
+            s_hold.listed = false;
+            if (listed) {
+                w->pressed = false;
+                os64_ui_mark_dirty(ui, w);
+                return true;
+            }
+        }
+        break;
+    default:
+        break;
+    }
+    return s_head_class.event(w, ui, ev);
+}
+
+// libui took the press away (focus or the window lost, step_event saw no
+// release): the hold ends with it, or a later Space on the button would
+// find its list long due and open it beside the click.
+static void step_cancel(os64_ui_widget_t *w)
+{
+    if (s_hold.w == w) {
+        s_hold.w = NULL;
+        s_hold.listed = false;
+    }
+}
+
+// When the held button lists (pictures_schedule): never while the pointer
+// is off it, which unpresses it; a move back onto it wakes the loop anyway.
+static uint64_t step_hold_due(void)
+{
+    return s_hold.w != NULL && !s_hold.listed && s_hold.w->pressed ? s_hold.due : YONDER_NEVER;
+}
+
+static void step_hold_turn(void)
+{
+    if (step_hold_due() > yonder_now_ms())
+        return;
+    os64_ui_widget_t *w = s_hold.w;
+    s_hold.listed = true;
+    w->pressed = false;
+    os64_ui_mark_dirty(&g.ui, w);
+    steps_list(w, w == &g.back);
+}
+
+static bool step_context(os64_ui_widget_t *w, const os64_gui_event_t *ev, void *user)
+{
+    (void)ev;
+    (void)user;
+    steps_list(w, w == &g.back);
+    return true;
 }
 
 // The page on screen again, asked for by `by`: the browser's own Reload,
@@ -17937,7 +18195,6 @@ static HeadFace s_head_faces[] = {
 };
 static os64_icon_theme_t *s_icons;
 static uint32_t s_face_size;            // the size the pictures were taken at; 0 before
-static os64_ui_class_t s_head_class;    // the button's, painted with its picture
 
 // The pictures' size for a row `bh` high: 24 where it leaves the face a
 // margin, else 16.
@@ -18399,6 +18656,35 @@ static void ui_dispatch(const os64_gui_event_t *ev)
 
 #include "pointer_input.inc"
 
+// A person's press on the page, or a key the page has (its view or one of
+// its controls focused; neither Escape nor a Ctrl or Alt chord), is the
+// page TOUCHED (Page.touched), HTML's sticky activation as the window sees
+// it, script or none. Every entry of its document stops being passed over
+// by Back and Forward, as in Chrome: a page somebody used is one they may
+// want to come back to.
+static void page_touch_note(const os64_gui_event_t *ev)
+{
+    if (g.page.touched || g.page.tree == NULL)
+        return;
+    bool touch = false;
+    if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN) {
+        const os64_gui_rect_t *r = &g.view.bounds;
+        int32_t x = ev->mouse.x, y = ev->mouse.y;
+        touch = !g.view.hidden && x >= r->x && y >= r->y && x < r->x + r->w && y < r->y + r->h &&
+                !(g.bar.up && in_bar(x, y));
+    } else if (ev->type == OS64_GUI_EVENT_KEY_DOWN) {
+        touch = g.ui.focus != NULL && (g.ui.focus == &g.view || page_widget_node(g.ui.focus) != NULL) &&
+                !(ev->key.modifiers & (OS64_GUI_MOD_CTRL | OS64_GUI_MOD_ALT)) && ev->key.ascii != 0x1B;
+    }
+    if (!touch)
+        return;
+    g.page.touched = true;
+    g.page.entry_skip = false;
+    way_unskip_document(&g.way, g.page.document);
+    if (g.has_held && g.held.document == g.page.document)
+        g.held.skip = false;
+}
+
 // One of yonder's window's events. The pointer is read before libui
 // because a widget is handed moves only while a button is held and the
 // status line follows its current position; the question bar answers by
@@ -18423,6 +18709,7 @@ static void window_event(void *user, const os64_gui_event_t *event)
     }
     if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
         input_lost();
+    page_touch_note(&ev);
     if (ev.type == OS64_GUI_EVENT_INPUT_LOST || ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
         ev.type == OS64_GUI_EVENT_WINDOW_RESIZE || ev.type == OS64_GUI_EVENT_SETTINGS ||
         (ev.type == OS64_GUI_EVENT_WINDOW_FOCUS && !ev.focus.gained)) {
@@ -18584,7 +18871,14 @@ int main(int argc, char **argv)
     s_downloads_class.name = "downloads";
     s_downloads_class.paint = downloads_paint;
     g.downloads.cls = &s_downloads_class;
-    g.back.cls = g.forward.cls = g.reload.cls = g.stop.cls = &s_head_class;
+    g.reload.cls = g.stop.cls = &s_head_class;
+    // Back and Forward also list the history, held or right-clicked.
+    s_step_class = s_head_class;
+    s_step_class.name = "step-button";
+    s_step_class.event = step_event;
+    s_step_class.cancel = step_cancel;
+    g.back.cls = g.forward.cls = &s_step_class;
+    g.back.on_context = g.forward.on_context = step_context;
     (void)os64_icon_theme_create(&s_icons);     // NULL: the buttons are captions alone
     os64_ui_textfield(&g.field, g.field_buf, sizeof(g.field_buf), field_submit, field_cancel, NULL);
     os64_ui_label(&g.status, g.status_text);
@@ -18737,6 +19031,7 @@ int main(int argc, char **argv)
         census_turn();
         children_turn();
         downloads_turn();
+        step_hold_turn();
         pictures_settle();
         title_follow();
         bool observed = resizes_turn();

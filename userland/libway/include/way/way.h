@@ -41,6 +41,9 @@
 // Oldest dropped past this: somebody sixty-four pages in wants the
 // sixty-fifth more than the first.
 #define WAY_HISTORY_MAX 64
+// A crumb's title (way_crumb_t.title): enough to tell two pages apart in a
+// list, which is all it is kept for.
+#define WAY_TITLE_MAX 120
 // A chain of immediate refreshes is capped as a chain of redirects is, and
 // for the same reason: nobody reading can tell a slow one from a stuck one.
 #define WAY_REFRESH_MAX 5
@@ -125,6 +128,15 @@ typedef struct {
     // WAY_DEST_DOCUMENT when it was kept; a zeroed one kept nothing, and a
     // face replays the browser's own then.
     way_metadata_t asked;
+    // Whether the browser's Back and Forward pass over the entry
+    // (way_browser_steps): its document made the entry after it before a
+    // person pressed, clicked or typed on it, as a page that fills the
+    // history to hold a person on it does. The face decides it; a page's
+    // own history.go passes over nothing.
+    bool skip;
+    // The page's title when the entry was left, "" for none: what a list
+    // of the history shows for it.
+    char title[WAY_TITLE_MAX];
 } way_crumb_t;
 
 // A session is LARGE — its history is WAY_HISTORY_MAX addresses of up to
@@ -470,6 +482,16 @@ void way_forward_entry(way_session_t *session, way_crumb_t *ahead);
 // Every crumb's state freed and both lists emptied: what a face does with
 // a session it is done with.
 void way_history_clear(way_session_t *session);
+
+// How many entries the browser's Back (`back`) or Forward moves: to the
+// nearest crumb not passed over (way_crumb_t.skip), or to the furthest when
+// every one is, since the person asked to go and an entry is there. 0 when
+// there is none.
+int32_t way_browser_steps(const way_session_t *session, bool back);
+// A person activated the document named `document` (way_crumb_t.document):
+// none of its entries, on either side, is passed over now. 0 names no
+// document and changes nothing.
+void way_unskip_document(way_session_t *session, uint64_t document);
 
 // ── Judgements: what to do about a request a page makes ────────────────
 

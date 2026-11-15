@@ -4620,6 +4620,7 @@ static void loop_view_history(void) {
     check(view_turns() && probe_text_is("out","len:3"),
         "history: pushState to another fragment fires neither popstate nor hashchange");
     os64_work_id_t submitted=pool_ids;
+    input_click_at("out");      /* a person's: Back steps through the page's entries (loop_view_skips) */
     click_back(NULL,NULL);
     check(!g.stream.active && pool_ids==submitted && os64_streq(g.page.way.url,"http://fixture.test/one"),
         "history: Back into a pushed entry fetches nothing");
@@ -4834,6 +4835,83 @@ static void loop_view_identity(void) {
     stop_trip();
     check(!g.stream.active && session_is("/P,/A","/A#sec",""),
         "identity: a stopped traversal leaves the change the page made, as its entry");
+    loop_drop();
+}
+/* The browser's Back and Forward pass over the entries a page made before
+ * anybody touched it (way_crumb_t.skip), by a push or by sending its reader
+ * on; a person's touch takes the mark off its document's entries; the list
+ * held from Back shows where Back goes, by title, and a pick goes there. */
+static void loop_view_skips(void) {
+    loop_page("<title>Earlier</title><p id=out>R</p><script>history.replaceState(null,'','/R')</script>");
+    check(loop_settle() && view_turns(),"skips: R");
+    start_trip("http://fixture.test/S",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
+    post_arriving("<title>Start</title><p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns() && session_is("/R","/S",""),"skips: S, typed");
+    input_click_at("out");                  /* a person was on S */
+    start_trip("http://fixture.test/T",NULL,NULL,NAV_GO,WAY_BY_PERSON,NULL);
+    post_arriving("<title>Trap</title><p id=out>T</p><script>history.replaceState(null,'','/T');"
+        "onload=function(){history.pushState(1,'','/T1');history.pushState(2,'','/T2');"
+        "setTimeout(function(){location.href='/U'},10)}</script>");
+    check(loop_settle() && view_turns() && session_is("/R,/S,/T,/T1","/T2",""),"skips: T pushes two as it arrives");
+    now_ms+=100;
+    check(script_turn() && g.stream.active,"skips: T sends its reader on by itself");
+    post_arriving("<title>Trap again</title><p id=out>U</p><script>history.replaceState(null,'','/U');"
+        "onload=function(){history.pushState(1,'','/U1')}</script>");
+    check(loop_settle() && view_turns() && session_is("/R,/S,/T,/T1,/T2,/U","/U1",""),"skips: U pushes one");
+    bool marks=!g.way.history[0].skip && !g.way.history[1].skip;
+    for(int32_t i=2;i<g.way.depth;i++) marks=marks && g.way.history[i].skip;
+    check(marks,"skips: every entry the untouched pages left is marked, and none a person left");
+    steps_rows(true);
+    check(s_steps.count==2 && os64_streq(s_steps.label[0],"Start") && os64_streq(s_steps.label[1],"Earlier"),
+        "skips: Back's list is where Back goes, nearest first, by title");
+    click_back(NULL,NULL);
+    check(g.stream.active,"skips: Back passes over four entries to S, a fetch");
+    post_arriving("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns() && session_is("/R","/S","/T,/T1,/T2,/U,/U1"),
+        "skips: S, with what Back passed over ahead as it was");
+    steps_rows(false);
+    check(s_steps.count==1 && os64_streq(s_steps.label[0],"Trap again"),
+        "skips: Forward's list passes over the same entries, to the last one shown");
+    steps_rows(true);
+    steps_picked(&s_steps,0);
+    check(g.stream.active,"skips: a pick goes to its entry");
+    post_arriving("<p id=out>R</p><script>history.replaceState(null,'','/R')</script>");
+    check(loop_settle() && view_turns() && session_is("","/R","/S,/T,/T1,/T2,/U,/U1"),"skips: R, picked");
+    loop_drop();
+    // A page a person touches keeps its entries: Back steps through them,
+    // within the document. Untouched, Back with nowhere else to go goes to
+    // the furthest entry.
+    loop_page("<p id=out>V</p><script>history.replaceState(null,'','/V');"
+        "onload=function(){history.pushState(1,'','/V1');history.pushState(2,'','/V2')}</script>");
+    check(loop_settle() && view_turns() && session_is("/V,/V1","/V2","") && way_browser_steps(&g.way,true)==2,
+        "skips: every entry marked, Back goes to the furthest");
+    input_click_at("out");
+    check(!g.way.history[0].skip && !g.way.history[1].skip && g.page.touched,
+        "skips: a person's click takes the marks off the page's entries");
+    click_back(NULL,NULL);
+    check(!g.stream.active && session_is("/V","/V1","/V2"),"skips: and Back steps one, fetching nothing");
+    loop_drop();
+    // A page that goes back among its own entries before it is shown
+    // arrives at a marked entry, and keeps the mark (stream_finish), as
+    // does a page that replaces it before it is shown (Place): typed away
+    // from untouched, Back passes over both entries.
+    loop_page("<p id=out>W</p><script>history.replaceState(null,'','/W');history.pushState(1,'','/W1');"
+        "history.pushState(2,'','/W2');history.back()</script><p>tail</p>");
+    check(loop_settle() && view_turns() && session_is("/W","/W1","/W2") && g.page.entry_skip,
+        "skips: a page's traversal before it is shown arrives at its entry, mark and all");
+    start_trip("http://fixture.test/X",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
+    post_arriving("<p id=out>X</p><script>history.replaceState(null,'','/X')</script>");
+    check(loop_settle() && view_turns() && session_is("/W,/W1","/X","") && g.way.history[1].skip &&
+          way_browser_steps(&g.way,true)==2,
+        "skips: typed away from it, Back passes over the entry it arrived at");
+    loop_drop();
+    loop_page("<p id=out>W</p><script>history.replaceState(null,'','/W');history.pushState(1,'','/W1');"
+        "history.pushState(2,'','/W2');history.back();"
+        "document.addEventListener('DOMContentLoaded',function(){location.replace('/Y')})</script><p>tail</p>");
+    check(loop_settle() && g.stream.active && g.page.tree==NULL,"skips: a page replaced before it is shown");
+    post_arriving("<p id=out>Y</p><script>history.replaceState(null,'','/Y1')</script>");
+    check(loop_settle() && view_turns() && session_is("/W","/Y1","/W2") && g.page.entry_skip,
+        "skips: the page that replaces it takes its entry, mark and all");
     loop_drop();
 }
 /* A history state of the size a site really keeps (a photo site's search
@@ -5533,6 +5611,7 @@ static void loop_view_cases(void) {
     loop_view_scroll();
     loop_view_media();
     loop_view_history();
+    loop_view_skips();
     loop_view_history_short();
     loop_view_cold_cases();
     loop_view_off();
