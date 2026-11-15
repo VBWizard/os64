@@ -2834,16 +2834,27 @@ static void input_activation(void) {
     input_click_at("b");
     check(yonder_scripts_activated(g.page.scripts),"input: a press through the pointer path is the page's activation");
     probe_drop();
-    probe_page("<p><audio id=a controls src=a.mp3></audio></p><p id=log>-</p><script>"
-               "document.addEventListener('keydown',e=>document.getElementById('log').textContent=e.target.id)"
+    probe_page("<p><audio id=a controls src=a.mp3></audio></p><p id=log>-</p><p id=go>go</p><script>"
+               "var log=[],a=document.getElementById('a');"
+               "function note(n){log.push(n);document.getElementById('log').textContent=log.join('|');}"
+               "document.addEventListener('keydown',e=>note('key '+e.target.id));"
+               "a.addEventListener('focus',()=>note('focus '+document.activeElement.id));"
+               "a.addEventListener('blur',()=>note('blur'));"
+               "document.getElementById('go').addEventListener('click',()=>a.focus());"
                "</script>",true);
     script_turn();
     check(g.nplayers==1,"input: the audio has its player");
     if (g.nplayers==1) {
-        os64_ui_set_focus(&g.ui,&g.players[0]->p.w);
+        os64_ui_set_focus(&g.ui,&g.players[0]->p.w); inputs_run();
+        check(probe_text_is("log","focus a"),
+              "input: a focused player is its element's focus: the audio hears focus and is the active element");
         os64_gui_event_t space={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=' ',.scancode=0x39}};
-        check(!key_event(&space) && yonder_scripts_activated(g.page.scripts) && probe_text_is("log","a"),
+        check(!key_event(&space) && yonder_scripts_activated(g.page.scripts) && probe_text_is("log","focus a|key a"),
               "input: a key at a focused player is its element's, heard by the page, and is the activation");
+        os64_ui_set_focus(&g.ui,&g.view); inputs_run();
+        check(probe_text_is("log","focus a|key a|blur"),"input: the focus leaving the player is the audio's blur");
+        input_click_at("go"); script_turn();
+        check(g.ui.focus==&g.players[0]->p.w,"input: the audio's focus() focuses its player");
     }
     probe_drop();
 }

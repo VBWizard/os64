@@ -10155,6 +10155,20 @@ static void page_widgets_chain(void)
     }
 }
 
+// The element a page widget stands for (a form control's or a player's),
+// NULL for any other widget: what focus and keys at the widget are, to
+// the page.
+static const os64_html_node_t *page_widget_node(const os64_ui_widget_t *w)
+{
+    for (int32_t i = 0; i < g.nfw; i++)
+        if (g.fw[i]->w == w)
+            return g.fw[i]->node;
+    for (int32_t i = 0; i < g.nplayers; i++)
+        if (&g.players[i]->p.w == w)
+            return g.players[i]->node;
+    return NULL;
+}
+
 // ── The players (player.h; AUDIO_YONDER.md § The controls) ──────────────
 
 static void player_destroy(Player *pl)
@@ -11886,13 +11900,19 @@ static void asks_perform_with_fallback(yonder_scripts_t *host, const os64_html_d
         if (shown && g.asks[i].doc == page_doc(&g.page)) {
             int32_t control = os64_page_control_for(page_model(&g.page), g.asks[i].node);
             FormWidget *fw = control >= 0 ? form_widget(control) : NULL;
+            // What focus() and blur() move: the control's widget, or the
+            // audio's player.
+            os64_ui_widget_t *w = fw != NULL ? fw->w : NULL;
+            for (int32_t k = 0; k < g.nplayers && w == NULL; k++)
+                if (g.players[k]->node == g.asks[i].node)
+                    w = &g.players[k]->p.w;
             if (g.asks[i].what == OS64_DOM_ACTIVATE_RESET) {
                 int32_t form = os64_page_form_for(page_model(&g.page), g.asks[i].node);
                 if (form >= 0)
                     form_reset(form);
-            } else if (fw != NULL && !fw->w->hidden && g.asks[i].what == OS64_DOM_ACTIVATE_FOCUS) {
-                os64_ui_set_focus(&g.ui, fw->w);
-            } else if (fw != NULL && g.ui.focus == fw->w && g.asks[i].what == OS64_DOM_ACTIVATE_BLUR) {
+            } else if (w != NULL && !w->hidden && g.asks[i].what == OS64_DOM_ACTIVATE_FOCUS) {
+                os64_ui_set_focus(&g.ui, w);
+            } else if (w != NULL && g.ui.focus == w && g.asks[i].what == OS64_DOM_ACTIVATE_BLUR) {
                 os64_ui_set_focus(&g.ui, &g.view);
             } else if (g.asks[i].what == OS64_DOM_ACTIVATE_REPORT) {
                 // A control's constraint problem, reported as a refused
@@ -13704,18 +13724,15 @@ static void change_if_edited(const os64_html_node_t *node)
 }
 
 // The focus moved between libui's widgets: `blur` and `change` for the
-// control it left, `focus` for the one it reached (neither bubbles), each
-// naming the other control as its relatedTarget.
+// element it left, `focus` for the one it reached (neither bubbles), each
+// naming the other as its relatedTarget; a form control's widget or a
+// player stands for its element (page_widget_node).
 static void focus_follow(void)
 {
     if (g.ui.focus == g.focus_seen)
         return;
     g.focus_seen = g.ui.focus;
-    FormWidget *fw = NULL;
-    for (int32_t i = 0; i < g.nfw && fw == NULL; i++)
-        if (g.fw[i]->w == g.ui.focus)
-            fw = g.fw[i];
-    const os64_html_node_t *reached = fw != NULL && scripts_live() ? fw->node : NULL;
+    const os64_html_node_t *reached = scripts_live() ? page_widget_node(g.ui.focus) : NULL;
     const os64_html_node_t *left = g.focus_node;
     const os64_html_document_t *left_doc = g.focus_doc;
     if (left != NULL) {
@@ -13910,16 +13927,10 @@ static bool key_event(const os64_gui_event_t *ev)
     bool printable = a >= 0x20 && a != 0x7f;
     if (!printable && a != '\r' && a != '\n' && a != '\b' && a != 0x7f && a != '\t')
         return false;
-    const os64_html_node_t *target = NULL;
-    for (int32_t i = 0; i < g.nfw && target == NULL; i++)
-        if (g.fw[i]->w == g.ui.focus)
-            target = g.fw[i]->node;
     // A player's keys are its element's, as a native control's are in
     // other browsers: the page hears them, may prevent them, and they are
     // the person's activation, which a play asked by the key needs.
-    for (int32_t i = 0; i < g.nplayers && target == NULL; i++)
-        if (&g.players[i]->p.w == g.ui.focus)
-            target = g.players[i]->node;
+    const os64_html_node_t *target = page_widget_node(g.ui.focus);
     if (target == NULL && g.ui.focus != NULL && g.ui.focus != &g.view)
         return false;
     if (target == NULL)

@@ -630,10 +630,12 @@ above:
 - **A press is acted on at the loop's turn**, not in the widget's
   handler: yonder replays a press to libui from inside the page's pointer
   task, where no task of the control's own can begin. The press has
-  already been the page's activation (yonder_scripts_pointer). A key at
-  a focused player is its element's, as a native control's is in other
-  browsers: the page hears `keydown` at the audio and may prevent it, and
-  the key is the activation a play asked by it needs.
+  already been the page's activation (yonder_scripts_pointer). A focused
+  player is its element's focus, as a native control's is in other
+  browsers: the audio is `document.activeElement` and hears `focus` and
+  `blur`, its `focus()` focuses the player, and a key at it is the
+  audio's (the page hears `keydown` there and may prevent it) and the
+  activation a play asked by it needs.
 - **An element is ready to play before it plays**: it decodes its first
   two seconds whatever its `preload`, so `canplay` fires and a page that
   sets `src` and calls `play()` from `canplay` plays (§ As built (Y.2.1)'s
