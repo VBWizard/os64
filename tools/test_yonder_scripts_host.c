@@ -2693,6 +2693,16 @@ static void input_links(void) {
     check(status_says("background workers"),"input: an uncancelled click follows its link after its listeners");
     probe_drop();
 }
+/* HTML's sticky activation (AUDIO_YONDER.md § Autoplay): a press through
+ * the window's pointer path counts, on a page that listens for nothing. */
+static void input_activation(void) {
+    probe_page("<p id=b>press</p><script>var x=1;</script>",true);
+    script_turn();
+    check(!yonder_scripts_activated(g.page.scripts),"input: a page nobody has touched has no activation");
+    input_click_at("b");
+    check(yonder_scripts_activated(g.page.scripts),"input: a press through the pointer path is the page's activation");
+    probe_drop();
+}
 /* A `javascript:` link (MODERN_WEB.md slice 0c): the person's click runs
  * the address's code in the page, by the door an inline script runs
  * through, so it is on the page's record as a script; no request is made
@@ -3174,6 +3184,7 @@ static void input_cases(void) {
     yonder_bar_lower(&g.bar);
 
     input_links();
+    input_activation();
     input_javascript_links();
     input_attribute_backstop();
     input_hover();
@@ -12365,7 +12376,7 @@ int main(void)
         return failures ? 1 : 0;
     }
     if(getenv("YONDER_POINTER_ONLY")) {
-        pointer_window_cases(); input_links(); input_hover(); input_ui_events(); hover_batch_cases();
+        pointer_window_cases(); input_links(); input_activation(); input_hover(); input_ui_events(); hover_batch_cases();
         os64_text_font_release(probe_font);
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"pointer: text released");
         check(live==0,"pointer: heap empty");

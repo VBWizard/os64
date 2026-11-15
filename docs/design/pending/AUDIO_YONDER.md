@@ -559,9 +559,10 @@ above:
   what, and the lock order). A `file:` address is read through
   `os64_media_file_source` with no loader.
 - **A page of many players costs no handle per thread, and fetches four
-  sounds at a time.** The decoder and loader threads are never joined:
-  their handles are closed at birth, and a session is freed once each
-  thread has said it is done. A start that answers an error is treated as
+  sounds at a time.** No media thread is joined: their handles are
+  closed at birth, a session is freed once each of its threads has said
+  it is done, and yonder's end waits for the audio thread to say so too.
+  A start that answers an error is treated as
   one that may be running, because out of handles the kernel starts the
   thread detached and still answers an error; freeing the fetch job under
   such a loader was a crash on a page with eighteen players. The fetches

@@ -1728,8 +1728,11 @@ os64_js_status_t yonder_scripts_pointer(yonder_scripts_t *s, const os64_dom_poin
 {
     *ran = false;
     os64_memset(out, 0, sizeof(*out));
+    // A press is the mousedown and the mouse's pointerdown HTML counts as
+    // activation, whether or not the page listens. The sample carries only
+    // where and which button: the event types are libdom's to give.
     if (s != NULL && sample->action == OS64_DOM_POINTER_DOWN)
-        activation_note(s, &sample->event);
+        s->activated = true;
     if (!s || s->dead || !s->options.modern) return OS64_JS_OK;
     s->task_address = NULL; s->task_us = -1; s->written = 0;
     if (!ensure_runtime(s, out)) { retire(s); return out->status; }

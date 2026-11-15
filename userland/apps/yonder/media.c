@@ -14,9 +14,10 @@
 // A session's `lock` guards what more than one of them touch: the asks
 // (play, seek, settings, stop), the queue, the facts, the loader's
 // product. `s_audio.lock` guards the session list, which session the
-// device carries (`owner`) and the loader slots taken. The decoder and the
-// loader are never joined (thread_start): each says it is done as its last
-// touch of the session, and only then is the session freed. LOCK ORDER:
+// device carries (`owner`) and the loader slots taken. No thread is
+// joined (thread_start): a decoder or a loader says it is done as its last
+// touch of its session, and only then is the session freed; the audio
+// thread says so as its last touch of anything (`s_audio.done`). LOCK ORDER:
 // s_audio.lock, then a session's; never the other way. A bell is rung only
 // with the lock that guards its owner's right to close it held
 // (os64/bell.h): a session's under its lock, the audio thread's under
@@ -127,8 +128,9 @@ struct yonder_media {
 static struct {
     os64_lock_t lock;
     os64_bell_t bell;
-    bool started, quit;
-    int64_t thread;
+    bool started;                   // an audio thread may be running
+    bool quit;
+    bool done;                      // the audio thread's last touch of anything
     uint32_t loaders;               // loader slots taken (LOADERS_MAX)
     yonder_media_t *sessions;
     yonder_media_t *owner;
@@ -1240,6 +1242,9 @@ static int64_t audio_main(void *arg)
     }
     device_close(&d);
     os64_free(buf);
+    os64_lock_acquire(&s_audio.lock);
+    s_audio.done = true;
+    os64_lock_release(&s_audio.lock);
     return 0;
 }
 
@@ -1256,22 +1261,11 @@ static bool audio_running(void)
         return true;
     if (os64_bell_make(&s_audio.bell) != 0)
         return false;
-    s_audio.thread = os64_thread(audio_main, NULL);
-    if (s_audio.thread < 0) {
-        os64_bell_close(&s_audio.bell);
-        return false;
-    }
+    // Started or not as thread_start answers, it may be running: it keeps
+    // its bell, and no second one is ever started beside it. The open
+    // that saw the error fails.
     s_audio.started = true;
-    return true;
-}
-
-// The audio thread's handle collected and let go (a join only reads it).
-static void thread_reap(int64_t handle)
-{
-    if (handle < 0)
-        return;
-    (void)os64_thread_join((int32_t)handle, NULL);
-    os64_close((int32_t)handle);
+    return thread_start(audio_main, NULL);
 }
 
 // Whether a session's threads have all let go of it. Its lock held.
@@ -1443,21 +1437,25 @@ void yonder_media_stop(void)
     if (s_audio.started)
         (void)os64_bell_ring(&s_audio.bell);
     os64_lock_release(&s_audio.lock);
-    if (s_audio.started)
-        thread_reap(s_audio.thread);
-    os64_lock_acquire(&s_audio.lock);
-    s_audio.owner = NULL;
-    os64_lock_release(&s_audio.lock);
-    // The other threads have no handles to join (thread_start): each
-    // session is freed as its threads say they are done, and this waits
-    // for all of them, because the environment they use is freed after it.
-    // A fetch notices the stop at its next look (a hop, the pipe's room,
-    // libfetch's queue); a start that truly failed would wait forever,
-    // which is the price thread_start names.
-    for (;;) {
-        yonder_media_reap();
+    // No thread has a handle to join (thread_start): this waits for the
+    // audio thread's done and for every session to be freed as its threads
+    // say they are done, because the environment they use is freed after
+    // it. The audio thread lets go of the device first, so the owner is
+    // cleared once it has, and the reap may take the last session. A fetch
+    // notices the stop at its next look (a hop, the pipe's room, libfetch's
+    // queue); a start that truly failed would wait forever, which is the
+    // price thread_start names.
+    for (bool audio_done = !s_audio.started;;) {
         os64_lock_acquire(&s_audio.lock);
-        bool left = s_audio.sessions != NULL;
+        if (!audio_done && s_audio.done) {
+            audio_done = true;
+            s_audio.owner = NULL;
+        }
+        os64_lock_release(&s_audio.lock);
+        if (audio_done)
+            yonder_media_reap();
+        os64_lock_acquire(&s_audio.lock);
+        bool left = !audio_done || s_audio.sessions != NULL;
         os64_lock_release(&s_audio.lock);
         if (!left)
             break;
@@ -1466,4 +1464,5 @@ void yonder_media_stop(void)
     if (s_audio.started)
         os64_bell_close(&s_audio.bell);
     s_audio.started = false;
+    s_audio.done = false;
 }
