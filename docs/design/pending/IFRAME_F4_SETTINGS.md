@@ -246,7 +246,8 @@ requires the context at the appropriate operation boundary. A future binding
 must perform its pre-member check before conversions or reentry and obtain
 relevant settings from the target. This cut supplies attribution, not that
 binding/security integration. Native jobs still require host preparation;
-Promise incumbent capture and exact script/module identity remain separate.
+Promise capture/preparation has the additional opt-in described below; exact
+script/module identity remains separate.
 Evidence: [IFRAME_F4_CURRENT_REALM_VALIDATION.md](IFRAME_F4_CURRENT_REALM_VALIDATION.md).
 
 Observer integration and its qualified proof are recorded in
@@ -254,6 +255,9 @@ Observer integration and its qualified proof are recorded in
 Custom-element construction, lifecycle callbacks and transactional definition
 publication are recorded in
 [IFRAME_F4_CUSTOM_SETTINGS.md](IFRAME_F4_CUSTOM_SETTINGS.md).
+Promise reaction/thenable capture, retained context edges, job entry and nested
+DOM conversion are recorded in
+[IFRAME_F4_PROMISE_SETTINGS.md](IFRAME_F4_PROMISE_SETTINGS.md).
 
 ## Remaining F.4b interfaces and acceptance gates
 
@@ -265,10 +269,10 @@ Before publishing browser settings queries, implement and prove:
   to the remaining WebIDL conversion and invocation sites,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.
-- Promise reaction and thenable capture/invocation, including bound foreign
-  native methods. Supply host scopes per invocation rather than treating a
-  checkpoint's queue context as the captured callback incumbent. Exact active
-  script/module records needed by those algorithms are separate work.
+- Complete exact active script/module restoration for Promise callbacks and
+  the realm-less capability/finalization-job policies. The Promise opt-in
+  supplies reaction/thenable capture and per-invocation host scopes; it does
+  not complete those remaining host algorithms.
 - A pre-member-check boundary that refuses missing settings, with no guessed
   bootstrap caller. Security/lifetime review precedes browser publication.
 

@@ -643,12 +643,16 @@ static bool job_context_eligible(os64_js_runtime_t *runtime, JSContext *context)
     return !realm->failed && !realm->retired && (!realm->staged || runtime->setup_realm == realm);
 }
 
-static bool job_eligible(os64_js_runtime_t *runtime, const JSJobInfo *info)
+static bool job_eligible(os64_js_runtime_t *runtime, const JSJobInfo *info, JSJobGroup *group)
 {
     if (realm_for_context(runtime, info->context) == NULL)
         jsport_fatal("job execution context membership", __FILE__, __LINE__);
     bool owner = job_context_eligible(runtime, info->owner);
     bool activity = job_context_eligible(runtime, info->activity);
+    JSContext *entry, *incumbent;
+    if (JS_PeekPromiseJobSettings(runtime->engine, group, &entry, &incumbent))
+        return owner && activity && job_context_eligible(runtime, entry) &&
+               job_context_eligible(runtime, incumbent);
     return owner && activity;
 }
 
@@ -658,7 +662,7 @@ static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSConte
 {
     JSJobInfo info;
     if (!JS_PeekJobGroup(runtime->engine, group, &info)) return 0;
-    if (!job_eligible(runtime, &info)) {
+    if (!job_eligible(runtime, &info, group)) {
         JS_DiscardJobGroup(runtime->engine, group);
         runtime->discarded_jobs++;
         return 2;
@@ -671,7 +675,15 @@ static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSConte
     runtime->ran_jobs = true;
     const JSJobInfo *previous = runtime->failure_job;
     if (runtime->failure_records_enabled) runtime->failure_job = &info;
+    JSContext *entry, *incumbent;
+    bool prepared = JS_PeekPromiseJobSettings(runtime->engine, group, &entry, &incumbent) && entry;
+    SettingsCall settings = {runtime->settings_calls, prepared ? realm_for_context(runtime, entry) : NULL,
+                             runtime->active_outcome, NULL, NULL};
+    /* The engine prepares job entry and callback incumbent separately. This
+     * marker admits checked binding queries under the existing job guard. */
+    if (prepared) runtime->settings_calls = &settings;
     int result = JS_ExecuteJobGroup(runtime->engine, group, NULL);
+    if (prepared) runtime->settings_calls = settings.previous;
     if (runtime->failure_records_enabled) runtime->failure_job = previous;
     *context = info.owner != NULL ? info.owner : info.context;
     return result;
@@ -686,7 +698,7 @@ static os64_js_status_t leave(os64_js_runtime_t *runtime, os64_js_outcome_t *out
     bool pending = JS_IsJobPending(runtime->engine);
     if (pending && runtime->jobs == runtime->limits.jobs_per_turn) {
         JSJobInfo info;
-        if (JS_PeekPendingJob(runtime->engine, &info) && job_eligible(runtime, &info))
+        if (JS_PeekPendingJob(runtime->engine, &info) && job_eligible(runtime, &info, NULL))
             latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_JOBS, 0);
     }
     if (!observe(runtime) && !pending && runtime->turn &&
@@ -1153,6 +1165,31 @@ JS_PUBLIC os64_js_status_t os64_js_enable_host_settings(os64_js_runtime_t *runti
         if (runtime->realms[i].evaluated)
             return status(outcome, OS64_JS_BUSY, "settings configuration precedes execution");
     runtime->host_settings_enabled = true;
+    return OS64_JS_OK;
+}
+
+static int promise_incumbent_capture(JSContext *context, JSContext **incumbent, void *opaque)
+{
+    (void)context;
+    os64_js_runtime_t *runtime = opaque;
+    *incumbent = NULL;
+    /* Private interface installation is trusted bootstrap. It cannot expose
+     * checked author settings; its transaction keeps the existing job policy. */
+    if (runtime->setup_realm != NULL) return 0;
+    os64_js_outcome_t out;
+    os64_js_realm_t *realm = os64_js_settings_realm(runtime, OS64_JS_ABI_ID,
+                                                   OS64_JS_SETTINGS_INCUMBENT, &out);
+    if (!realm) return -1;
+    *incumbent = realm->context;
+    return 0;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_enable_promise_settings(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = os64_js_enable_host_settings(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    JS_SetHostPromiseIncumbent(runtime->engine, promise_incumbent_capture, runtime);
     return OS64_JS_OK;
 }
 

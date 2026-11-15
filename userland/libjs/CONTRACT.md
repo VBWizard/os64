@@ -1351,8 +1351,31 @@ late configuration and failed health. The opt-in is irreversible. Classic roots
 (including file and cached bytecode), module roots and `os64_js_realm_call`
 prepare checked ordinary entries under their existing guard and task budget.
 No implicit incumbent is supplied. Jobs do not inherit a completed root scope;
-Promise callback capture/preparation is a separate embedding obligation.
+Promise callback capture/preparation requires the additional opt-in below.
 Existing constructors and callers do not opt in implicitly.
+
+`os64_js_enable_promise_settings` adds reaction/thenable incumbent capture and
+prepared job invocation, with the same pre-execution configuration gate.
+Each callable reaction retains its captured engine context while pending and
+traces that edge during GC; enqueue transfers a retained copy to the job.
+Delivery, discard and teardown release those holds. Job entry follows
+**enqueue-time executable realm**, independently of capture, proxy creation
+and settlement. The wrapper checks executable and incumbent eligibility.
+A prepared job supplies its entry as the continuation backup; the handler call
+pushes its own captured incumbent and restores the continuation backup before
+capability resolve/reject. This makes returned-thenable assimilation possible
+without leaking the previous handler's capture into it. Script-bearing frames
+still take precedence. Raw unprepared capture refuses; trusted private setup
+and neutral internal continuations keep their existing job policy.
+
+`JS_PeekPromiseJobSettings` borrows the selected head's settings; it does not
+extend lifetime. The wrapper installs a checked-query marker while the engine
+prepares scopes, under the existing job guard and budget. Neither `JSJobInfo`
+nor wrapper ABI 5 changes; engine headers and objects must be rebuilt together.
+Exact active ScriptOrModule restoration, realm-less capability edge policy and
+finalization jobs are separate contracts. This is not a complete HTML
+HostMakeJobCallback implementation. See the
+[Promise settings chapter](../../docs/design/pending/IFRAME_F4_PROMISE_SETTINGS.md).
 
 `os64_js_callback_call(report, entry, abi, record, this, argc, argv, out)` requires
 an open task. `report` selects exception/script-host reporting; `entry` is the

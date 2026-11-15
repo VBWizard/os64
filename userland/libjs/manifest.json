@@ -243,6 +243,11 @@
       "path": "patches/0032-inline-handler-provenance.patch",
       "sha256": "cdba9e1972443b5593f678476dd273163366fa32d400745ca85545fcbf590ff8",
       "reason": "Clear ScriptOrModule presence on source-verified inline-handler bytecode closures without changing executable realm, ownership or exceptions."
+    },
+    {
+      "path": "patches/0033-promise-settings.patch",
+      "sha256": "9360c7731cb6055587d6f61d247166ae295b5e0bc07426f3d48140b3be47e4fd",
+      "reason": "Opt-in Promise reaction/thenable incumbent capture, traced context ownership and prepared per-job entry/callback invocation; active ScriptOrModule restoration remains separate."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

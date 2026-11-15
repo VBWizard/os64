@@ -1,0 +1,312 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -409,6 +409,9 @@
+     JSContext *settings_current;
+     JSContext *native_caller_context;
+     unsigned settings_depth;
++    JSHostPromiseIncumbent *promise_incumbent_capture;
++    void *promise_incumbent_opaque;
++    JSContext *promise_job_incumbent; /* borrowed from the executing queue entry */
+ };
+ 
+ typedef struct JSSettingsFrame {
+@@ -993,6 +996,7 @@
+     struct list_head link;
+     JSContext *realm;
+     JSContext *owner, *activity; /* eligibility, independent of execution context */
++    JSContext *incumbent; /* captured Promise callback context; a queue root */
+     JSJobGroup *group;
+     struct JSJobEntry *group_prev, *group_next;
+     JSJobFunc *job_func;
+@@ -2490,7 +2494,7 @@
+ 
+ static int JS_EnqueueJob2(JSContext *ctx, JSContext *owner, JSContext *activity,
+                           JSJobFunc *job_func, int argc, JSValueConst *argv,
+-                          BOOL no_exception)
++                          BOOL no_exception, JSContext *incumbent)
+ {
+     JSRuntime *rt = ctx->rt;
+     JSJobEntry *e;
+@@ -2505,6 +2509,7 @@
+     e->realm = JS_DupContext(ctx);
+     e->owner = owner ? JS_DupContext(owner) : NULL;
+     e->activity = activity ? JS_DupContext(activity) : NULL;
++    e->incumbent = incumbent ? JS_DupContext(incumbent) : NULL;
+     e->group = rt->job_group;
+     /* GC during a candidate allocation may schedule an existing sibling's
+        registry. Its cleanup is independent of the installation transaction. */
+@@ -2530,14 +2535,14 @@
+ int JS_EnqueueJob(JSContext *ctx, JSJobFunc *job_func,
+                   int argc, JSValueConst *argv)
+ {
+-    return JS_EnqueueJob2(ctx, ctx, NULL, job_func, argc, argv, FALSE);
++    return JS_EnqueueJob2(ctx, ctx, NULL, job_func, argc, argv, FALSE, NULL);
+ }
+ 
+ int JS_EnqueueJobOwned(JSContext *ctx, JSContext *owner, JSContext *activity,
+                        JSJobFunc *job_func, int argc, JSValueConst *argv)
+ {
+     assert((!owner || owner->rt == ctx->rt) && (!activity || activity->rt == ctx->rt));
+-    return JS_EnqueueJob2(ctx, owner, activity, job_func, argc, argv, FALSE);
++    return JS_EnqueueJob2(ctx, owner, activity, job_func, argc, argv, FALSE, NULL);
+ }
+ 
+ /* The head's contexts are borrowed until execution/discard. Inspection runs
+@@ -2560,11 +2565,21 @@
+         JS_FreeValueRT(rt, e->argv[i]);
+     if (e->owner) JS_FreeContext(e->owner);
+     if (e->activity) JS_FreeContext(e->activity);
++    if (e->incumbent) JS_FreeContext(e->incumbent);
+     JS_FreeContext(e->realm);
+     js_free_rt(rt, e);
+     return 1;
+ }
+ 
++BOOL JS_PeekPromiseJobSettings(JSRuntime *rt, JSJobGroup *group,
++                               JSContext **entry, JSContext **incumbent)
++{
++    JSJobEntry *e = js_job_first(rt, group);
++    *entry = e && e->incumbent ? e->owner : NULL;
++    *incumbent = e ? e->incumbent : NULL;
++    return e && e->incumbent != NULL;
++}
++
+ BOOL JS_PeekPendingJob(JSRuntime *rt, JSJobInfo *info)
+ {
+     return JS_PeekJobGroup(rt, NULL, info);
+@@ -2578,6 +2593,12 @@
+ BOOL JS_IsJobPending(JSRuntime *rt)
+ {
+     return !list_empty(&rt->job_list);
++}
++
++static JSValue js_job_settings_body(JSContext *entry, void *opaque)
++{
++    JSJobEntry *e = opaque;
++    return JS_ENGINE_CALLBACK(entry->rt, e->job_func(entry, e->argc, (JSValueConst *)e->argv));
+ }
+ 
+ /* return < 0 if exception, 0 if no job pending, 1 if a job was
+@@ -2590,6 +2611,7 @@
+     JSContext *ctx;
+     JSJobEntry *e;
+     JSValue res;
++    JSContext *previous_incumbent;
+     int i, ret;
+ 
+     if (rt->recovery_barrier) {
+@@ -2611,11 +2633,20 @@
+     if (rt->execution_scope_tracking)
+         js_execution_scope_enter(rt, &scope, (JSExecutionScopeInfo){
+             ctx, e->owner, JS_EXECUTION_SCOPE_JOB, JS_EXECUTION_CODE_UNKNOWN });
++    previous_incumbent = rt->promise_job_incumbent;
++    rt->promise_job_incumbent = e->incumbent;
+     if (ctx->executable_failed || (e->owner && e->owner->executable_failed) ||
+-        (e->activity && e->activity->executable_failed))
++        (e->activity && e->activity->executable_failed) ||
++        (e->incumbent && e->incumbent->executable_failed))
+         res = js_throw_failed_code(ctx);
+-    else
+-        res = JS_ENGINE_CALLBACK(rt, e->job_func(ctx, e->argc, (JSValueConst *)e->argv));
++    else if (e->incumbent && e->owner) {
++        /* The admitted job supplies a backup for engine continuation work
++           after HostCallJobCallback has popped the captured incumbent. */
++        if (!JS_RunWithSettings(e->owner, e->owner, js_job_settings_body, e, &res))
++            res = JS_ThrowInternalError(e->owner, "Promise job settings nesting limit");
++    } else
++        res = js_job_settings_body(ctx, e);
++    rt->promise_job_incumbent = previous_incumbent;
+     for(i = 0; i < e->argc; i++)
+         JS_FreeValue(ctx, e->argv[i]);
+     if (JS_IsException(res))
+@@ -2627,6 +2658,7 @@
+         js_execution_scope_leave(rt, &scope);
+     if (e->owner) JS_FreeContext(e->owner);
+     if (e->activity) JS_FreeContext(e->activity);
++    if (e->incumbent) JS_FreeContext(e->incumbent);
+     js_free(ctx, e);
+     if (pctx) {
+         if (js_rc(ctx)->ref_count > 1)
+@@ -2723,6 +2755,7 @@
+             JS_FreeValueRT(rt, e->argv[i]);
+         if (e->owner) JS_FreeContext(e->owner);
+         if (e->activity) JS_FreeContext(e->activity);
++        if (e->incumbent) JS_FreeContext(e->incumbent);
+         JS_FreeContext(e->realm);
+         js_free_rt(rt, e);
+     }
+@@ -54510,6 +54543,7 @@
+     struct list_head link; /* not used in promise_reaction_job */
+     JSValue resolving_funcs[2];
+     JSValue handler;
++    JSContext *incumbent; /* engine-held edge: trace with the reaction's promise */
+ } JSPromiseReactionData;
+ 
+ JSPromiseStateEnum JS_PromiseState(JSContext *ctx, JSValue promise)
+@@ -54537,7 +54571,61 @@
+     JS_FreeValueRT(rt, rd->resolving_funcs[0]);
+     JS_FreeValueRT(rt, rd->resolving_funcs[1]);
+     JS_FreeValueRT(rt, rd->handler);
++    if (rd->incumbent) JS_FreeContext(rd->incumbent);
+     js_free_rt(rt, rd);
++}
++
++void JS_SetHostPromiseIncumbent(JSRuntime *rt, JSHostPromiseIncumbent *capture, void *opaque)
++{
++    rt->promise_incumbent_capture = capture;
++    rt->promise_incumbent_opaque = opaque;
++}
++
++static int js_promise_capture_incumbent(JSContext *ctx, JSValueConst handler, JSContext **out)
++{
++    *out = NULL;
++    /* Neutral engine continuations and empty handlers have no author callback. */
++    if (!ctx->rt->promise_incumbent_capture || !js_job_function_realm(ctx, handler))
++        return 0;
++    if (JS_ENGINE_CALLBACK(ctx->rt, ctx->rt->promise_incumbent_capture(
++            ctx, out, ctx->rt->promise_incumbent_opaque)) < 0) {
++        JS_ThrowTypeError(ctx, "Promise callback incumbent settings unavailable");
++        return -1;
++    }
++    if (*out) *out = JS_DupContext(*out);
++    return 0;
++}
++
++static int js_enqueue_promise_job(JSContext *ctx, JSContext *incumbent,
++                                  JSJobFunc *job, int argc, JSValueConst *args)
++{
++    return JS_EnqueueJob2(ctx, js_job_function_realm(ctx, args[2]), NULL,
++                          job, argc, args, FALSE, incumbent);
++}
++
++typedef struct JSPromiseCallbackCall {
++    JSValueConst function, self;
++    int argc;
++    JSValueConst *argv;
++} JSPromiseCallbackCall;
++
++static JSValue js_promise_callback_body(JSContext *entry, void *opaque)
++{
++    JSPromiseCallbackCall *call = opaque;
++    return JS_Call(entry, call->function, call->self, call->argc, call->argv);
++}
++
++static JSValue js_call_promise_callback(JSContext *ctx, JSValueConst function,
++                                       JSValueConst self, int argc, JSValueConst *argv)
++{
++    JSPromiseCallbackCall call = {function, self, argc, argv};
++    JSValue result;
++    if (!ctx->rt->promise_job_incumbent)
++        return js_promise_callback_body(ctx, &call);
++    if (!JS_RunWithSettings(ctx, ctx->rt->promise_job_incumbent,
++                            js_promise_callback_body, &call, &result))
++        return JS_ThrowInternalError(ctx, "Promise callback settings nesting limit");
++    return result;
+ }
+ 
+ static JSValue promise_reaction_job(JSContext *ctx, int argc,
+@@ -54562,7 +54650,7 @@
+             res = JS_DupValue(ctx, arg);
+         }
+     } else {
+-        res = JS_Call(ctx, handler, JS_UNDEFINED, 1, &arg);
++        res = js_call_promise_callback(ctx, handler, JS_UNDEFINED, 1, &arg);
+     }
+     is_reject = JS_IsException(res);
+     if (is_reject)
+@@ -54620,8 +54708,7 @@
+         args[2] = rd->handler;
+         args[3] = JS_NewBool(ctx, is_reject);
+         args[4] = value;
+-        JS_EnqueueJobOwned(ctx, js_job_function_realm(ctx, args[2]), NULL,
+-                           promise_reaction_job, 5, args);
++        js_enqueue_promise_job(ctx, rd->incumbent, promise_reaction_job, 5, args);
+         list_del(&rd->link);
+         promise_reaction_data_free(ctx->rt, rd);
+     }
+@@ -54654,7 +54741,7 @@
+     then = argv[2];
+     if (js_create_resolving_functions(ctx, args, promise) < 0)
+         return JS_EXCEPTION;
+-    res = JS_Call(ctx, then, thenable, 2, (JSValueConst *)args);
++    res = js_call_promise_callback(ctx, then, thenable, 2, (JSValueConst *)args);
+     if (JS_IsException(res)) {
+         JSValue error = JS_GetException(ctx);
+         res = JS_Call(ctx, args[1], JS_UNDEFINED, 1, (JSValueConst *)&error);
+@@ -54784,8 +54871,13 @@
+         args[0] = s->promise;
+         args[1] = resolution;
+         args[2] = then;
+-        JS_EnqueueJobOwned(ctx, js_job_function_realm(ctx, then), NULL,
+-                           js_promise_resolve_thenable_job, 3, args);
++        JSContext *incumbent;
++        if (js_promise_capture_incumbent(ctx, then, &incumbent) < 0) {
++            JS_FreeValue(ctx, then);
++            goto fail_reject;
++        }
++        js_enqueue_promise_job(ctx, incumbent, js_promise_resolve_thenable_job, 3, args);
++        if (incumbent) JS_FreeContext(incumbent);
+         JS_FreeValue(ctx, then);
+     }
+     return JS_UNDEFINED;
+@@ -54826,6 +54918,7 @@
+             JS_MarkValue(rt, rd->resolving_funcs[0], mark_func);
+             JS_MarkValue(rt, rd->resolving_funcs[1], mark_func);
+             JS_MarkValue(rt, rd->handler, mark_func);
++            if (rd->incumbent) mark_func(rt, &rd->incumbent->header);
+         }
+     }
+     JS_MarkValue(rt, s->promise_result, mark_func);
+@@ -55375,6 +55468,11 @@
+         if (!JS_IsFunction(ctx, handler))
+             handler = JS_UNDEFINED;
+         rd->handler = JS_DupValue(ctx, handler);
++        if (js_promise_capture_incumbent(ctx, handler, &rd->incumbent) < 0) {
++            promise_reaction_data_free(ctx->rt, rd);
++            if (i == 1) promise_reaction_data_free(ctx->rt, rd_array[0]);
++            return -1;
++        }
+         rd_array[i] = rd;
+     }
+ 
+@@ -55397,8 +55495,7 @@
+         args[2] = rd->handler;
+         args[3] = JS_NewBool(ctx, i);
+         args[4] = s->promise_result;
+-        JS_EnqueueJobOwned(ctx, js_job_function_realm(ctx, args[2]), NULL,
+-                           promise_reaction_job, 5, args);
++        js_enqueue_promise_job(ctx, rd->incumbent, promise_reaction_job, 5, args);
+         for(i = 0; i < 2; i++)
+             promise_reaction_data_free(ctx->rt, rd_array[i]);
+     }
+@@ -62440,7 +62537,7 @@
+             args[1] = fre->held_val;
+             /* no exception is raised to avoid recursing into the GC */
+             JS_EnqueueJob2(frd->realm, js_job_function_realm(frd->realm, frd->cb),
+-                           frd->realm, js_finrec_job, 2, args, TRUE);
++                           frd->realm, js_finrec_job, 2, args, TRUE, NULL);
+                 
+             js_weakref_free(rt, fre->target);
+             js_weakref_free(rt, fre->token);
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -1160,6 +1160,19 @@
+ int JS_DiscardJobGroup(JSRuntime *rt, JSJobGroup *group);
+ int JS_ExecuteJobGroup(JSRuntime *rt, JSJobGroup *group, JSContext **pctx);
+ 
++/* Owner-thread Promise opt-in, configured before author execution. Capture
++ * runs without author code: return 0 with a borrowed incumbent, 0/null for
++ * explicitly trusted bootstrap, or -1 to refuse. The engine retains and
++ * traces captures through pending reactions and queued jobs. Entry follows
++ * enqueue-time GetFunctionRealm, not WebIDL callback association. Exact
++ * ScriptOrModule restoration and finalization jobs are separate contracts. */
++typedef int JSHostPromiseIncumbent(JSContext *ctx, JSContext **incumbent, void *opaque);
++void JS_SetHostPromiseIncumbent(JSRuntime *rt, JSHostPromiseIncumbent *capture, void *opaque);
++/* Read-only borrowed settings for the selected head. False for legacy/neutral
++ * jobs. The embedding applies lifecycle gates before executing/discarding. */
++JS_BOOL JS_PeekPromiseJobSettings(JSRuntime *rt, JSJobGroup *group,
++                                 JSContext **entry, JSContext **incumbent);
++
+ JS_BOOL JS_IsJobPending(JSRuntime *rt);
+ int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx);
+ 
