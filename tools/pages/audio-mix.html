@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>The mixer</title>
+<!--
+  AUDIO_YONDER.md, Y.3: several of a page's sounds at once.
+
+  What to look for. "Play both" starts the MP3 and the WAV together, both
+  on loop: you hear the two tones at once, and both clocks below move.
+  "Pause A" stops the MP3 only, its clock stays where it stopped, and the
+  WAV goes on; "Play A" brings it back from there. "Seek B" sends the WAV
+  back to the start while the MP3 plays on. "Pause both", then "Play
+  both": both go on from where they were.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  #state, #log { font: 14px monospace; background: #f4f4f4; padding: 8px; }
+  #log { min-height: 6em; }
+</style>
+<h1>The mixer</h1>
+<p>A <audio id="a" controls loop src="audio-tone.mp3"></audio></p>
+<p>B <audio id="b" controls loop src="audio-tone.wav"></audio></p>
+<p><input type="button" id="both" value="Play both">
+   <input type="button" id="pa" value="Pause A">
+   <input type="button" id="ra" value="Play A">
+   <input type="button" id="sb" value="Seek B">
+   <input type="button" id="stop" value="Pause both"></p>
+<pre id="state">-</pre>
+<pre id="log"></pre>
+<script>
+  const a = document.getElementById('a'), b = document.getElementById('b');
+  const log = document.getElementById('log'), state = document.getElementById('state');
+  const go = (id, f) => document.getElementById(id).onclick = f;
+  go('both', () => { a.play(); b.play(); });
+  go('pa', () => a.pause());
+  go('ra', () => a.play());
+  go('sb', () => { b.currentTime = 0; });
+  go('stop', () => { a.pause(); b.pause(); });
+  for (const [name, el] of [['A', a], ['B', b]])
+    for (const t of ['playing', 'pause', 'seeked', 'waiting', 'error'])
+      el.addEventListener(t, () => { log.textContent += name + ' ' + t + ' t=' + el.currentTime.toFixed(2) + '\n'; });
+  setInterval(() => {
+    state.textContent = 'A ' + a.currentTime.toFixed(2) + (a.paused ? ' paused' : ' playing') +
+      '   B ' + b.currentTime.toFixed(2) + (b.paused ? ' paused' : ' playing');
+  }, 250);
+</script>

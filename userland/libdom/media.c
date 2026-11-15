@@ -601,8 +601,9 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
     }
     if (m->ready >= R_METADATA) {
         uint8_t want = f.enough ? R_ENOUGH : f.future ? R_FUTURE : f.current ? R_CURRENT : R_METADATA;
-        /* The device another program's: the element waits, as it would for
-         * a slow network (§ When the stream is busy). */
+        /* The host cannot sound it now (the device another program's, or
+         * its mix full): the element waits, as it would for a slow network
+         * (§ When the stream is busy). */
         if (f.busy && !m->paused && want > R_CURRENT) want = R_CURRENT;
         ready_to(dom, m, want);
     }

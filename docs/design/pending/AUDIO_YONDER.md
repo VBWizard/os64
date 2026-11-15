@@ -220,10 +220,8 @@ browser (a game's sound effects over its music; two players on one page
 both started). The thread MIXES: each playing element's queue, times that
 element's `volume` (and zero when `muted`), summed and clamped to 16 bits.
 The mixer is in libmedia, pure, host-tested against a model, and it is a
-slice of its own (Y.3, ruled 2026-11-14: a slice, not an arc). Until it
-lands, the thread sounds one element at a time, and an element that
-starts while another sounds waits exactly as § When the stream is busy
-says, by the same code.
+slice of its own (Y.3, ruled 2026-11-14: a slice, not an arc; § As built
+(Y.3) is the record).
 
 **It is not what a kernel mixer would be.** A kernel mixer (DEBTS since
 A.1) mixes PROGRAMS: two yonder windows, or yonder and `play`. yonder's
@@ -265,7 +263,8 @@ neither verb can reach another program's sound.
 What is queued is DISCARDED (`flush`) only when it no longer belongs at
 the front: a seek, a new `src`, or another element starting while this
 one is paused. The decoder then starts again from the element's `heard`
-position.
+position. (As built, a seek flushes the device only when the element
+seeking is the only one with sound there: § As built (Y.3).)
 
 A pause that lasts gives the stream back: after 30 seconds paused, the
 thread closes `/dev/audio` (a paused close is a flush, AUDIO_SEAM.md
@@ -730,6 +729,51 @@ above:
   the sound plays on across each piece's end, every next one asked from
   where the last stopped.
 
+## As built (Y.3, the mixer)
+
+- **Every element that plays sounds**, up to sixteen at once
+  (`MIX_VOICES`; one past it waits, told busy, as when another program
+  has the stream). There is no owner any more: each session that plays
+  is a VOICE, and each block the audio thread writes is what every voice
+  had for it, times its gain, summed and held to 16 bits
+  (`os64/media_mix.h`, libmedia, pure: `tools/test_media_mix_host.sh`).
+  A voice takes again across its queue's runs (a loop's wrap) until the
+  block is full, so a loop is seamless under another voice; one that has
+  no more is silent for the rest of the block. A voice held back by its
+  budget of runs a block (a loop of a few hundred frames) cuts the block
+  to what it can give, worked out before anything is taken, so its
+  cadence is the same as alone. A full mix with a session waiting gives
+  up the voices that do not play, which go on from where their ears were.
+- **Each voice has its own clock**: anchors saying where each run of its
+  frames went in the stream (a run ends at a seek, a loop, or where the
+  voice was silent while others played: paused, or short of a block
+  another voice filled), so one
+  `/dev/audiopos` position says where every voice is. Between runs a
+  voice's ear stays at the end of the run before.
+- **A voice that pauses while others play** stops being taken from; its
+  last frames in the device (the ring is a fifth of a second) play out
+  under the others, its clock follows them, and it goes on from there.
+  **When nobody plays**, the stream's own pause holds everything, as one
+  element's pause did; a stream coming back that holds only the tails of
+  voices nobody plays (one paused, another started much later) flushes
+  them first, and those voices go on from where their ears were.
+- **A seek** flushes the device when the voice seeking is the only one
+  with frames there, as before; with others sounding, its old tail plays
+  out under them and its new run starts at the next block.
+- **A session leaves the mix** once it is closed, has ended, or is paused
+  with its tail heard. While in it, `voiced` keeps the window's reap off
+  it.
+- **Proven** by `tools/test_media_mix_host.sh` (thousands of random
+  histories of runs, gaps, seeks, loops and prunes, each voice's clock
+  against a model of every frame written; the mix's saturation, gains and
+  short voices; two hand mutants caught) and in QEMU by
+  `tools/pages/audio-mix.html`: both elements play at once with both
+  clocks moving; pausing A leaves B playing, and A comes back from where
+  its tail ended; seeking B leaves A playing; pausing both holds both
+  clocks, and playing both goes on from there; closing yonder while both
+  sound exits 0. The one-element pages behave as before
+  (`audio-controls.html`: play, `ended`, the `canplay` buttons).
+
 ## Slices
 
 `YAUDIO_TRACKER.csv` beside this file is the state of each one
@@ -755,7 +799,8 @@ request is one row; a slice of several has a task row per pull request.
 
 Y.1 is a third-party port and a library with no kernel change: one cold
 Opus read before each push. Y.2 is yonder with threads meeting the
-window: Codex. Y.3 is small and pure: reviewed here.
+window: Codex. Y.3's mixer is small and pure, but it reworks the audio
+thread, which is threads meeting the window too: Codex.
 
 ## What this arc leaves out, on purpose
 
