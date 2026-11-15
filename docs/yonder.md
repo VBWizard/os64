@@ -77,13 +77,14 @@ Web font settings.
 - **Back and Forward pass over the pages that put themselves in your way.**
   A page that adds history entries, or sends you on to another page, before
   you have clicked, pressed or typed on it is a page you did not choose to
-  stop at: Back goes past what it left, to the nearest page you did use, as
-  Chrome's does. A page you then use keeps its entries, and Back steps
-  through them again. A page's own `history.back()` still steps one at a
-  time.
+  stop at: Back goes past everything such pages left, as Chrome's does.
+  When everything behind you is such a page, Back goes to the oldest. A
+  page you then use keeps its entries, and Back steps through them again.
+  A page's own `history.back()` still steps one at a time.
 - **Hold Back or Forward** for half a second, or right-click it, for a list
   of where it goes, nearest first, by title; pick one to go straight there.
-  The pages it passes over are not listed.
+  The pages it passes over are not listed, but for the oldest when that is
+  where it goes.
 - **Reload** fetches the page again, once it has finished loading. What
   the page uses comes from the cache when the server said it may (see
   "The cache" below). On the reply to a form it asks first whether to

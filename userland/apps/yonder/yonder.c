@@ -901,8 +901,9 @@ typedef struct Page {
     // page (page_touch_note), which only the page on screen can be; until then
     // an entry it makes, by a push or by navigating away on its own, marks
     // the entry it leaves for the browser's Back and Forward to pass over
-    // (way_crumb_t.skip). `entry_skip` is the current entry's own mark,
-    // carried in from the crumb a traversal arrives at and out again in
+    // (way_crumb_t.skip). `entry_skip` is the current entry's own mark: set
+    // by a push it makes untouched (page_update), carried in from the crumb
+    // a traversal arrives at and across a reload, and out again in
     // page_entry_left.
     uint64_t document, entry, arrives_at;
     bool touched, entry_skip;
@@ -2238,9 +2239,9 @@ static struct {
     uint64_t documents_made;        // the last Page.document handed out
     uint64_t entries_made;          // the last Page.entry handed out
     // Who started the last navigation away from the page on screen
-    // (start_trip, and open_address for a typed path): one the page made
-    // itself, arriving as a new way, marks the entry left when nobody had
-    // touched the page (arrive_now).
+    // (start_trip; open_address for a typed path; a person's yes to the
+    // question bar): one the page made itself, arriving as a new way, marks
+    // the entry left when nobody had touched the page (arrive_now).
     way_initiator_t leaving_by;
     // A TRAVERSAL BEING FETCHED (session_go): the session stays as it was
     // asked until the entry arrives (arrive_now). HTML runs a traversal and
@@ -4870,6 +4871,10 @@ static void bar_answered(bool yes)
             g.replaying = g.pending_replays ? &g.pending_replay : NULL;
             start_trip(g.pending.url, &g.pending, g.pending_referrer, g.pending_kind, g.pending_by, NULL);
             g.replaying = NULL;
+            // Whoever asked, the person said yes: leaving is their choice,
+            // and marks nothing (arrive_now, which no trip reaches before
+            // the loop's next turn).
+            g.leaving_by = WAY_BY_PERSON;
         } else {
             os64_page_request_free(&g.pending);
             status_rest(g.pending_refused);
@@ -5015,7 +5020,7 @@ static void start_trip(const char *url, os64_page_request_t *request, const char
     if (traversal)
         g.traversing = false;           // stop_trip must not end it
     // A page not yet shown that sends its reader on takes its own place,
-    // and leaves the page on screen as whoever started it did.
+    // and so leaves who left the page on screen as it was.
     if (!place.taken)
         g.leaving_by = by;
     trip_send(url, request, referrer, place.taken ? place.kind : kind, by, crumb);
@@ -5078,8 +5083,9 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
         // `url` may be the request's own: the path is taken before it goes.
         char path[OS64_FETCH_URL_MAX];
         os64_strcopy(path, sizeof(path), file_path(url + 7));
-        // A fragment names a place in the file, not part of its name: the
-        // entry a push made ("#b") comes back with one on Back and Forward.
+        // A fragment names a place in the file, not part of its name, and
+        // the entry a push made ("#b") comes back with one on Back and
+        // Forward. The page arrives without it (DEBTS.md § yonder).
         path[before_fragment(path)] = '\0';
         os64_page_request_free(request);
         stop_trip();
@@ -18032,6 +18038,17 @@ static bool step_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
     return s_head_class.event(w, ui, ev);
 }
 
+// libui took the press away (focus or the window lost, step_event saw no
+// release): the hold ends with it, or a later Space on the button would
+// find its list long due and open it beside the click.
+static void step_cancel(os64_ui_widget_t *w)
+{
+    if (s_hold.w == w) {
+        s_hold.w = NULL;
+        s_hold.listed = false;
+    }
+}
+
 // When the held button lists (pictures_schedule): never while the pointer
 // is off it, which unpresses it; a move back onto it wakes the loop anyway.
 static uint64_t step_hold_due(void)
@@ -18853,6 +18870,7 @@ int main(int argc, char **argv)
     s_step_class = s_head_class;
     s_step_class.name = "step-button";
     s_step_class.event = step_event;
+    s_step_class.cancel = step_cancel;
     g.back.cls = g.forward.cls = &s_step_class;
     g.back.on_context = g.forward.on_context = step_context;
     (void)os64_icon_theme_create(&s_icons);     // NULL: the buttons are captions alone
