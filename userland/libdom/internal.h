@@ -397,7 +397,7 @@ struct os64_dom_cluster {
     uint64_t effect_generation, animation_serial;
     bool sweep_pending;
     bool poisoned, drained;
-    bool timer_settings, listener_settings, scheduled_settings, handler_settings, observer_settings;
+    bool timer_settings, listener_settings, scheduled_settings, handler_settings, observer_settings, custom_settings;
     bool recovery_enabled, recovering, recovery_running, recovery_completed;
     bool streams_used; /* Self-hosted stream records require a separate unwind proof. */
     uint64_t recovery_generation;
@@ -1354,8 +1354,9 @@ uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst functio
 /* Callable realm's binding within this cluster, or the supplied fallback for
  * non-functions/unbound realms. NULL leaves a realm-lookup exception pending. */
 os64_dom_t *d_callback_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
-/* One owned callback value; captured.value aliases it in settings mode.
- * Native queues root it; engine-held records must trace value once. */
+/* Owning holders keep one callback value; captured.value aliases it in
+ * settings mode. Engine-held records trace value once. A borrowed invocation
+ * view may alias an existing registry root and must not be cleared. */
 typedef struct {
     JSValue value;
     os64_js_callback_t captured;
@@ -1364,13 +1365,15 @@ typedef struct {
 #define D_SCHEDULED_CALLBACK_INIT {JS_UNDEFINED, OS64_JS_CALLBACK_INIT, NULL}
 bool d_scheduled_capture(os64_dom_t *, JSContext *, JSValueConst, DScheduledCallback *);
 bool d_observer_capture(os64_dom_t *, JSContext *, JSValueConst, DScheduledCallback *);
-int d_observer_eligible(os64_dom_t *, JSContext *, const DScheduledCallback *);
+bool d_custom_capture(os64_dom_t *, JSContext *, JSValueConst, DScheduledCallback *);
+int d_captured_eligible(os64_dom_t *, JSContext *, const DScheduledCallback *);
 bool d_scheduled_live(JSContext *, const DScheduledCallback *);
 void d_scheduled_clear(os64_dom_t *, DScheduledCallback *);
 void d_scheduled_call(os64_dom_t *, const DScheduledCallback *, JSValueConst,
                       int, JSValueConst *, os64_js_outcome_t *);
 JSValue d_scheduled_invoke(os64_dom_t *, JSContext *, const DScheduledCallback *,
                            JSValueConst, int, JSValueConst *);
+JSValue d_scheduled_construct(os64_dom_t *, JSContext *, const DScheduledCallback *);
 
 /* Record reporting provenance without moving a revoked-proxy error from
  * invocation to registration. A catchable lookup failure uses the registering

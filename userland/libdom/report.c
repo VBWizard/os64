@@ -335,7 +335,13 @@ bool d_observer_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
     return scheduled_capture(dom, ctx, value, record, dom->cluster && dom->cluster->observer_settings);
 }
 
-int d_observer_eligible(os64_dom_t *dom, JSContext *ctx, const DScheduledCallback *record)
+bool d_custom_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
+                       DScheduledCallback *record)
+{
+    return scheduled_capture(dom, ctx, value, record, dom->cluster && dom->cluster->custom_settings);
+}
+
+int d_captured_eligible(os64_dom_t *dom, JSContext *ctx, const DScheduledCallback *record)
 {
     if (!d_delivery_active(dom)) return 0;
     if (record->captured.runtime) {
@@ -386,6 +392,7 @@ typedef struct {
     JSValueConst self;
     int argc;
     JSValueConst *argv;
+    bool construct;
 } ScheduledInvocation;
 
 static JSValue scheduled_body(JSContext *ctx, JSValueConst function, void *opaque)
@@ -393,15 +400,16 @@ static JSValue scheduled_body(JSContext *ctx, JSValueConst function, void *opaqu
     ScheduledInvocation *call = opaque;
     int eligible = d_delivery_eligible(call->activity, ctx, function);
     return eligible < 0 ? JS_EXCEPTION : eligible == 0 ? JS_UNDEFINED
+        : call->construct ? JS_CallConstructor(ctx, function, call->argc, call->argv)
         : JS_Call(ctx, function, call->self, call->argc, call->argv);
 }
 
-/* A native job or binding timer already owns the turn and wrapper guard.
- * Prepare only the author callback, preserving its pending terminal exception. */
-JSValue d_scheduled_invoke(os64_dom_t *activity, JSContext *ctx, const DScheduledCallback *record,
-                           JSValueConst self, int argc, JSValueConst *argv)
+/* An admitted DOM call, native job or binding timer owns the turn and guard.
+ * Prepare the author callback, preserving its pending terminal exception. */
+static JSValue scheduled_invoke(os64_dom_t *activity, JSContext *ctx, const DScheduledCallback *record,
+                                JSValueConst self, int argc, JSValueConst *argv, bool construct)
 {
-    ScheduledInvocation call = {activity, self, argc, argv};
+    ScheduledInvocation call = {activity, self, argc, argv, construct};
     if (!record->captured.runtime) return scheduled_body(ctx, record->value, &call);
     JSValue result = JS_UNDEFINED;
     os64_js_outcome_t out;
@@ -418,6 +426,17 @@ JSValue d_scheduled_invoke(os64_dom_t *activity, JSContext *ctx, const DSchedule
             JS_SetUncatchableException(ctx, true);
     }
     return result;
+}
+
+JSValue d_scheduled_invoke(os64_dom_t *activity, JSContext *ctx, const DScheduledCallback *record,
+                           JSValueConst self, int argc, JSValueConst *argv)
+{
+    return scheduled_invoke(activity, ctx, record, self, argc, argv, false);
+}
+
+JSValue d_scheduled_construct(os64_dom_t *activity, JSContext *ctx, const DScheduledCallback *record)
+{
+    return scheduled_invoke(activity, ctx, record, JS_UNDEFINED, 0, NULL, true);
 }
 
 uint32_t d_callback_record(os64_dom_t *dom, JSContext *ctx, JSValueConst function,

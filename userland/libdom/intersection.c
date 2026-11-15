@@ -636,7 +636,7 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
         for (DIObserver *o = s->observers; ctx != NULL && o != NULL && d_delivery_active(dom);) {
             DIObserver *next = o == last ? NULL : o->next;
             if (o->first != NULL && !o->dead && JS_IsObject(o->object)) {
-                int eligible = d_observer_eligible(dom, ctx, &o->callback);
+                int eligible = d_captured_eligible(dom, ctx, &o->callback);
                 if (eligible <= 0) {
                     entries_clear(dom, o);
                     hold_update(dom, ctx, o);

@@ -40,13 +40,20 @@ enum { R_UPGRADE = CB_COUNT };
 
 #define D_CUSTOM_BUCKETS 64
 
+/* Values remain owned by the definition's DValue roots. Stable wrapper
+ * realm storage supplies these identities' lifetime until runtime teardown. */
+typedef struct {
+    os64_js_realm_t *entry, *incumbent;
+} DCustomSettings;
+
 typedef struct DDefinition {
     struct DDefinition *next, *hash_next;
     os64_dom_t *dom;
     char *name;
     DValue *constructor, *prototype, *callbacks[CB_COUNT];
-    /* Reporting belongs to the callable realm, independently of the registry
-     * that retains the definition and the current document of its elements. */
+    DCustomSettings constructor_settings, callback_settings[CB_COUNT];
+    /* Reporting uses the callable realm when available, with the registry
+     * fallback for revoked proxies; the current activity document is separate. */
     os64_dom_t *constructor_owner, *callback_owners[CB_COUNT];
     uint32_t constructor_script, scripts[CB_COUNT];
     char **observed;
@@ -468,6 +475,19 @@ static void remember_failure(os64_dom_t *dom, JSContext *ctx, DDefinition *d, JS
     d->failure = copy_text(dom, text);
 }
 
+/* A borrowed invocation view, not another owned value. The checked adapter
+ * holds the callable across author reentry; registry roots own it otherwise. */
+static DScheduledCallback definition_callback_view(os64_dom_t *dom, const DValue *value,
+                                               DCustomSettings settings)
+{
+    DScheduledCallback record = D_SCHEDULED_CALLBACK_INIT;
+    record.value = value->value;
+    record.entry = settings.entry;
+    if (settings.entry)
+        record.captured = (os64_js_callback_t){value->value, dom->runtime, settings.incumbent};
+    return record;
+}
+
 /* HTML's "upgrade an element". */
 static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r, DDefinition *d)
 {
@@ -481,7 +501,8 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r, DDefinition *d)
     else if (outcome.status != OS64_JS_REALM_FAILED) return -1;
     /* A retained definition can belong to a sealed realm while its callable
      * and current activity document remain healthy. Use the incoming context. */
-    int eligible = d_delivery_eligible(d_owner(dom, element), ctx, d->constructor->value);
+    DScheduledCallback constructor = definition_callback_view(dom, d->constructor, d->constructor_settings);
+    int eligible = d_captured_eligible(d_owner(dom, element), ctx, &constructor);
     if (eligible <= 0) return eligible < 0 ? report(report_owner, ctx, d->constructor_script) : 0;
     /* The wrapper first, so one made now is HTMLElement's and not the
      * failed state's HTMLUnknownElement (d_node_kind). */
@@ -522,7 +543,7 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r, DDefinition *d)
         result = d_error(ctx, "NotSupportedError", "The custom element's definition disables shadow, and it has a shadow root");
     } else {
         DScripts before = d_script_enter(report_owner, d->constructor_script);
-        result = JS_CallConstructor(ctx, d->constructor->value, 0, NULL);
+        result = d_scheduled_construct(d_owner(dom, element), ctx, &constructor);
         d_script_leave(report_owner, &before, false);
     }
     d->depth--;
@@ -563,7 +584,8 @@ static int callback(os64_dom_t *dom, JSContext *ctx, DCustom *r, DReaction *reac
     if (definition_ctx) ctx = definition_ctx;
     else if (outcome.status != OS64_JS_REALM_FAILED) return -1;
     uint32_t script = d->scripts[reaction->kind];
-    int eligible = d_delivery_eligible(d_owner(dom, r->element), ctx, d->callbacks[reaction->kind]->value);
+    DScheduledCallback captured = definition_callback_view(dom, d->callbacks[reaction->kind], d->callback_settings[reaction->kind]);
+    int eligible = d_captured_eligible(d_owner(dom, r->element), ctx, &captured);
     if (eligible <= 0) return eligible < 0 ? report(report_owner, ctx, script) : 0;
     JSValue self = d_wrap(dom, ctx, r->element);
     if (JS_IsException(self)) return report(report_owner, ctx, script);
@@ -582,7 +604,7 @@ static int callback(os64_dom_t *dom, JSContext *ctx, DCustom *r, DReaction *reac
     JSValue result = JS_EXCEPTION;
     if (made) {
         DScripts before = d_script_enter(report_owner, script);
-        result = JS_Call(ctx, d->callbacks[reaction->kind]->value, self, argc, args);
+        result = d_scheduled_invoke(d_owner(dom, r->element), ctx, &captured, self, argc, args);
         d_script_leave(report_owner, &before, false);
     }
     for (int i = 0; i < argc; i++) JS_FreeValue(ctx, args[i]);
@@ -856,10 +878,11 @@ int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *doc
     DDefinition *d = s != NULL && document == window_document(dom) && s->definitions != NULL
         ? definition_named(s, name) : NULL;
     if (d == NULL || !os64_html_custom_name(name)) return 0;
-    int eligible = d_delivery_eligible(d_owner(dom, document), ctx, d->constructor->value);
+    DScheduledCallback constructor = definition_callback_view(dom, d->constructor, d->constructor_settings);
+    int eligible = d_captured_eligible(d_owner(dom, document), ctx, &constructor);
     if (eligible == 0) return 0;
     DScripts before = d_script_enter(d->constructor_owner, d->constructor_script);
-    JSValue result = eligible < 0 ? JS_EXCEPTION : JS_CallConstructor(ctx, d->constructor->value, 0, NULL);
+    JSValue result = eligible < 0 ? JS_EXCEPTION : d_scheduled_construct(d_owner(dom, document), ctx, &constructor);
     d_script_leave(d->constructor_owner, &before, false);
     if (!JS_IsException(result)) {
         const os64_html_node_t *element;
@@ -1027,9 +1050,8 @@ void d_strings_free(os64_dom_t *dom, char **strings, size_t count)
     d_free(dom, strings);
 }
 
-/* A value read off `from` and converted to a callback function: NULL for
- * undefined, *failed with an exception pending for anything else that is
- * not callable. */
+/* Read and validate the callable; undefined means absent. The caller
+ * captures settings immediately after this getter returns. */
 static JSValue callback_value(JSContext *ctx, JSValueConst from, const char *name, bool *failed)
 {
     JSValue value = JS_GetPropertyStr(ctx, from, name);
@@ -1049,7 +1071,8 @@ static JSValue callback_value(JSContext *ctx, JSValueConst from, const char *nam
 /* What define reads from the constructor and its prototype, in the
  * standard's order (step 14), before anything is recorded. */
 typedef struct {
-    JSValue prototype, callbacks[CB_COUNT];
+    JSValue prototype;
+    DScheduledCallback callbacks[CB_COUNT];
     char **observed;
     size_t observed_count;
     bool disable_shadow;
@@ -1068,10 +1091,13 @@ static int read_definition(os64_dom_t *dom, JSContext *ctx, JSValueConst constru
      * moveBefore, and WPT at the pin reads these four alone. */
     static const char *const kOrder[CB_COUNT] = {"connectedCallback", "disconnectedCallback", "adoptedCallback",
                                                  "attributeChangedCallback"};
-    for (int i = 0; i < CB_COUNT && !failed; i++)
-        r->callbacks[i] = callback_value(ctx, r->prototype, kOrder[i], &failed);
+    for (int i = 0; i < CB_COUNT && !failed; i++) {
+        JSValue value = callback_value(ctx, r->prototype, kOrder[i], &failed);
+        if (!failed && !JS_IsUndefined(value)) failed = !d_custom_capture(dom, ctx, value, &r->callbacks[i]);
+        JS_FreeValue(ctx, value);
+    }
     if (failed) return -1;
-    if (!JS_IsUndefined(r->callbacks[CB_ATTRIBUTE])) {
+    if (!JS_IsUndefined(r->callbacks[CB_ATTRIBUTE].value)) {
         JSValue observed = JS_GetPropertyStr(ctx, constructor, "observedAttributes");
         if (JS_IsException(observed)) return -1;
         int status = JS_IsUndefined(observed)
@@ -1101,21 +1127,26 @@ static int read_definition(os64_dom_t *dom, JSContext *ctx, JSValueConst constru
     if (form < 0) return -1;
     static const char *const kForm[] = {"formAssociatedCallback", "formResetCallback", "formDisabledCallback",
                                         "formStateRestoreCallback"};
-    for (size_t i = 0; form && i < sizeof(kForm) / sizeof(kForm[0]) && !failed; i++)
-        JS_FreeValue(ctx, callback_value(ctx, r->prototype, kForm[i], &failed));
+    for (size_t i = 0; form && i < sizeof(kForm) / sizeof(kForm[0]) && !failed; i++) {
+        JSValue value = callback_value(ctx, r->prototype, kForm[i], &failed);
+        DScheduledCallback captured = D_SCHEDULED_CALLBACK_INIT;
+        if (!failed && !JS_IsUndefined(value)) failed = !d_custom_capture(dom, ctx, value, &captured);
+        d_scheduled_clear(dom, &captured);
+        JS_FreeValue(ctx, value);
+    }
     return failed ? -1 : 0;
 }
 
 static void reading_free(os64_dom_t *dom, JSContext *ctx, DReading *r)
 {
     JS_FreeValue(ctx, r->prototype);
-    for (int i = 0; i < CB_COUNT; i++) JS_FreeValue(ctx, r->callbacks[i]);
+    for (int i = 0; i < CB_COUNT; i++) d_scheduled_clear(dom, &r->callbacks[i]);
     d_strings_free(dom, r->observed, r->observed_count);
 }
 
 /* The definition recorded from a reading (step 16 on): every engine value
  * it keeps is the registry's for the page's life. */
-static DDefinition *record_definition(os64_dom_t *dom, JSContext *ctx, const char *name, JSValueConst constructor,
+static DDefinition *record_definition(os64_dom_t *dom, JSContext *ctx, const char *name, const DScheduledCallback *constructor,
                                       DReading *reading)
 {
     DDefinition *d = d_alloc_kind(dom, sizeof(*d), OS64_DOM_MEM_CUSTOM);
@@ -1126,25 +1157,27 @@ static DDefinition *record_definition(os64_dom_t *dom, JSContext *ctx, const cha
     os64_memset(d, 0, sizeof(*d));
     d->dom = dom;
     d->name = copy_text(dom, name);
-    d->constructor_owner = d_callback_owner(dom, ctx, constructor);
-    d->constructor_script = d->constructor_owner != NULL
-        ? d_callback_script(d->constructor_owner, ctx, constructor) : D_SCRIPT_FAILED;
+    d->constructor_script = d_callback_record(dom, ctx, constructor->value, &d->constructor_owner);
+    d->constructor_settings = (DCustomSettings){constructor->entry, constructor->captured.incumbent};
+    /* No author getters run while registry roots are added. Roll back this
+     * prefix on refusal instead of retaining a partially read definition. */
+    DValue *before = dom->values;
     bool ok = d->name != NULL && d->constructor_script != D_SCRIPT_FAILED;
     if (ok) {
-        d->constructor = d_retain(dom, ctx, JS_DupValue(ctx, constructor));
+        d->constructor = d_retain(dom, ctx, JS_DupValue(ctx, constructor->value));
         d->prototype = d_retain(dom, ctx, JS_DupValue(ctx, reading->prototype));
         ok = d->constructor != NULL && d->prototype != NULL;
     }
     for (int i = 0; ok && i < CB_COUNT; i++) {
-        if (JS_IsUndefined(reading->callbacks[i])) continue;
-        d->callback_owners[i] = d_callback_owner(dom, ctx, reading->callbacks[i]);
-        d->scripts[i] = d->callback_owners[i] != NULL
-            ? d_callback_script(d->callback_owners[i], ctx, reading->callbacks[i]) : D_SCRIPT_FAILED;
+        if (JS_IsUndefined(reading->callbacks[i].value)) continue;
+        d->scripts[i] = d_callback_record(dom, ctx, reading->callbacks[i].value, &d->callback_owners[i]);
+        d->callback_settings[i] = (DCustomSettings){reading->callbacks[i].entry, reading->callbacks[i].captured.incumbent};
         d->callbacks[i] = d->scripts[i] != D_SCRIPT_FAILED
-            ? d_retain(dom, ctx, JS_DupValue(ctx, reading->callbacks[i])) : NULL;
+            ? d_retain(dom, ctx, JS_DupValue(ctx, reading->callbacks[i].value)) : NULL;
         ok = d->callbacks[i] != NULL;
     }
     if (!ok) {
+        while (dom->values != before) d_unretain(dom, ctx, dom->values);
         if (!JS_HasException(ctx)) d_error(ctx, "QuotaExceededError", "Custom element definition quota exceeded");
         d_free(dom, d->name);
         d_free(dom, d);
@@ -1172,11 +1205,13 @@ static JSValue define(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *a
     DString name = {0};
     if (!d_string(dom, ctx, argv[0], &name)) return JS_EXCEPTION;
     JSValue result = JS_EXCEPTION;
+    DScheduledCallback constructor = D_SCHEDULED_CALLBACK_INIT;
     bool extends = false;
     if (!JS_IsFunction(ctx, argv[1])) {
         JS_ThrowTypeError(ctx, "The constructor is not a function");
         goto done;
     }
+    if (!d_custom_capture(dom, ctx, argv[1], &constructor)) goto done;
     int options = d_dictionary(ctx, argc, argv, 2);
     if (options < 0) goto done;
     if (options > 0) {
@@ -1217,10 +1252,14 @@ static JSValue define(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *a
         goto done;
     }
     s->defining = true;
-    DReading reading = {JS_UNDEFINED, {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED}, NULL, 0, false};
+    DReading reading = {.prototype = JS_UNDEFINED};
+    for (int i = 0; i < CB_COUNT; i++) reading.callbacks[i] = (DScheduledCallback)D_SCHEDULED_CALLBACK_INIT;
     int read = read_definition(dom, ctx, argv[1], &reading);
     s->defining = false;
-    DDefinition *d = read < 0 ? NULL : record_definition(dom, ctx, name.data, argv[1], &reading);
+    if (read == 0 && (!d_require_active(dom, ctx) || !d_scheduled_live(ctx, &constructor))) read = -1;
+    for (int i = 0; read == 0 && i < CB_COUNT; i++)
+        if (!d_scheduled_live(ctx, &reading.callbacks[i])) read = -1;
+    DDefinition *d = read < 0 ? NULL : record_definition(dom, ctx, name.data, &constructor, &reading);
     reading_free(dom, ctx, &reading);
     if (d == NULL) goto done;
     /* The window's document's elements of that name, in shadow-including
@@ -1249,6 +1288,7 @@ static JSValue define(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *a
     }
     result = JS_UNDEFINED;
 done:
+    d_scheduled_clear(dom, &constructor);
     d_string_free(dom, &name);
     return result;
 }

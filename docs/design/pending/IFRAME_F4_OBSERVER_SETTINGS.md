@@ -93,7 +93,9 @@ Recorded validation uses ASan/UBSan and LeakSanitizer:
   audits pass. The runtime implementation and engine are unchanged; no new
   full-runtime campaign is claimed.
 
-Custom elements, Promise reactions/thenables and the pre-member-check boundary
-remain F.4b work. Browsing-context/origin ownership (F.4c), WindowProxy/Location
-security and navigation (F.4d), visible frames and hardware acceptance remain
+Custom-element settings are covered by the
+[custom-element chapter](IFRAME_F4_CUSTOM_SETTINGS.md). Promise reactions/thenables
+and the pre-member-check boundary remain F.4b work. Browsing-context/origin
+ownership (F.4c), WindowProxy/Location security and navigation (F.4d), visible
+frames and hardware acceptance remain
 separate. This is not a complete HTML/WebIDL conformance claim.

@@ -540,7 +540,7 @@ static JSValue observer_task(JSContext *ctx, JSValueConst self, int argc, JSValu
     for (uint32_t i = 0; i < count && !JS_IsException(result); i++) {
         DObserver *o = JS_GetOpaque(notify[i], os64_js_class_id(&observer_slot));
         if (o == NULL || o->count == 0) continue;
-        int eligible = d_observer_eligible(dom, ctx, &o->callback);
+        int eligible = d_captured_eligible(dom, ctx, &o->callback);
         if (eligible <= 0) {
             /* Consume obsolete entries without allocating an author-facing
              * list, retaining the observer itself and its registration. */
