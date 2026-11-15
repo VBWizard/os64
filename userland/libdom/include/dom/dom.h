@@ -1030,17 +1030,21 @@ void os64_dom_set_current_script(os64_dom_t *dom, const os64_html_node_t *script
  * window or the document has handlers for and nothing fires. Any other type
  * is not counted and answers true. */
 bool os64_dom_listens(os64_dom_t *dom, const char *type);
+/* A set of the event types os64_dom_listens counts, a bit each: GCC's
+ * 128-bit integer, so `&` and `|` and a test against 0 work on it as on
+ * any integer. */
+__extension__ typedef unsigned __int128 os64_dom_handler_mask_t;
 /* Which event types the document's on<type> content attributes name, as a
  * mask os64_dom_handler_bit reads: the walk os64_dom_listens counts with.
  * It needs no runtime, so a host can ask before making one. It knows no
  * binding, so it names the Modern Web arc's types whatever the switch
  * says; os64_dom_listens counts them only with the switch on. */
-uint64_t os64_dom_handler_attributes(const os64_html_document_t *doc);
+os64_dom_handler_mask_t os64_dom_handler_attributes(const os64_html_document_t *doc);
 /* The bit for `type` in that mask; 0 for a type no attribute can name
  * (DOMContentLoaded; readystatechange, visibilitychange and
  * prerenderingchange, whose handlers are the document's IDL properties
  * alone; or one outside the types os64_dom_listens counts). */
-uint64_t os64_dom_handler_bit(const char *type);
+os64_dom_handler_mask_t os64_dom_handler_bit(const char *type);
 
 /* TIMERS, in the host's clock (options.now_ms). next answers the earliest due
  * time, or UINT64_MAX with none. fire runs AT MOST ONE timer due at or before

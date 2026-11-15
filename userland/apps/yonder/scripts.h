@@ -1,6 +1,7 @@
 #ifndef YONDER_SCRIPTS_H
 #define YONDER_SCRIPTS_H
 #include <dom/canvas.h>
+#include <dom/media.h>
 #include <dom/pointer.h>
 
 // A page's SCRIPT HOST (DOM_D7.md § The script host of a page): its runtime
@@ -27,6 +28,16 @@
 typedef struct yonder_scripts yonder_scripts_t;
 bool yonder_scripts_images_pending(const yonder_scripts_t *);
 bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
+// The page's media elements (dom/media.h): the turn that brings them up to
+// date with their sound (no script; true when a task waits), whether one
+// of their tasks waits, and one run as a task.
+bool yonder_scripts_media_turn(yonder_scripts_t *scripts);
+bool yonder_scripts_media_pending(const yonder_scripts_t *scripts);
+bool yonder_scripts_media_fire(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+// Whether the person has interacted with the page (HTML's sticky
+// activation: a key, a press or a click that reached it), which a media
+// element needs before it may make sound (AUDIO_YONDER.md § Autoplay).
+bool yonder_scripts_activated(const yonder_scripts_t *scripts);
 // A `link` or `style` element's sheet, judged by the window: `load` (or
 // `error` when `failed`) owed to the element, fired as a task of its own
 // and never inside the call that owed it; the node is held until then, and
@@ -103,6 +114,9 @@ typedef struct {
     os64_dom_view_provider_t view;
     os64_dom_computed_provider_t computed;
     os64_dom_image_provider_t images;
+    // The media elements' host (dom/media.h), with its own opaque; zeroed,
+    // a media element plays nothing.
+    os64_dom_media_provider_t media;
     os64_dom_text_provider_t canvas_text;
     os64_dom_history_t history;
     // The page's CSS animations as its scripts see them (CSSAnimation and

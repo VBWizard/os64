@@ -1341,6 +1341,7 @@ static const char *dest_token(way_dest_t dest)
     case WAY_DEST_STYLE: return "style";
     case WAY_DEST_IMAGE: return "image";
     case WAY_DEST_FONT: return "font";
+    case WAY_DEST_AUDIO: return "audio";
     }
     return "empty";
 }

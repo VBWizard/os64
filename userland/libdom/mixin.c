@@ -1090,7 +1090,7 @@ int d_form_rel_install(os64_dom_t *dom, JSContext *ctx)
 
 int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
 {
-    static const struct { const char *name; int magic, argc; uint64_t on; } methods[] = {
+    static const struct { const char *name; int magic, argc; d_kinds_t on; } methods[] = {
         {"append", D_APPEND_NODES, 0, PARENTS}, {"prepend", D_PREPEND, 0, PARENTS},
         {"replaceChildren", D_REPLACE_CHILDREN, 0, PARENTS},
         {"before", D_BEFORE, 0, CHILDREN}, {"after", D_AFTER, 0, CHILDREN},
@@ -1105,7 +1105,7 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
         {"getAttributeNames", D_ATTRIBUTE_NAMES, 0, ELEMENTS},
         {"toggleAttribute", D_TOGGLE_ATTR, 1, ELEMENTS}, {"hasAttributes", D_HAS_ATTRS, 0, ELEMENTS},
     };
-    static const struct { const char *name; int magic; bool writable; uint64_t on; } reflections[] = {
+    static const struct { const char *name; int magic; bool writable; d_kinds_t on; } reflections[] = {
         {"isConnected", R_CONNECTED, false, D_KIND(D_PROTO_NODE)},
         // HTMLElement's own, and HTMLOrSVGElement's (HTMLElement's and
         // SVGElement's), where HTML puts them: Svelte sets a member as a

@@ -282,9 +282,10 @@ typedef enum {
     WAY_DEST_STYLE,
     WAY_DEST_IMAGE,
     WAY_DEST_FONT,
+    WAY_DEST_AUDIO,         // a media element's resource
 } way_dest_t;
 // How many destinations there are: what a table indexed by one holds.
-#define WAY_DESTS (WAY_DEST_FONT + 1)
+#define WAY_DESTS (WAY_DEST_AUDIO + 1)
 
 // Sec-Fetch-Site: the request's origin against every URL of its URL list
 // so far, the furthest of them; NONE for a navigation the browser's own

@@ -9,9 +9,11 @@
 #include "task.h"
 #include "vfs.h"
 
-// Cap on DT_NEEDED entries per image — generous for a hobby OS with no
-// transitive dependency explosion; raise if a real test case needs more.
-#define ELF_MAX_NEEDED 16
+// Cap on DT_NEEDED entries per image. An image naming more is refused at
+// load (elf_parse_dynamic), never loaded without the rest; raise it when a
+// program needs more. It sizes the dependency edges every shared object
+// keeps (shared_object.h), so it is not free.
+#define ELF_MAX_NEEDED 32
 
 typedef struct {
     vfs_file_t *file;

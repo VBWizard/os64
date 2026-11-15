@@ -15,6 +15,7 @@
 #define D_CLONE_HELD 34
 #include <canvas/canvas.h>
 #include <dom/canvas.h>
+#include <dom/media.h>
 #include <dom/pointer.h>
 
 /* Embedded consumers of libdom's document listener. Registration happens
@@ -89,13 +90,17 @@ enum {
     D_PROTO_TABLE_CELL, D_PROTO_TABLE_COL, D_PROTO_TABLE, D_PROTO_TABLE_ROW, D_PROTO_TABLE_SECTION, D_PROTO_ULIST,
     D_PROTO_BR, D_PROTO_DLIST, D_PROTO_DIRECTORY, D_PROTO_FONT, D_PROTO_HR, D_PROTO_HEADING, D_PROTO_HTML,
     D_PROTO_MENU, D_PROTO_PARAGRAPH, D_PROTO_PRE, D_PROTO_SPAN, D_PROTO_TABLE_CAPTION, D_PROTO_TITLE,
-    D_PROTO_SOURCE, D_PROTO_COUNT
+    D_PROTO_SOURCE,
+    /* HTMLMediaElement's and HTMLAudioElement's (media.c), the media row's. */
+    D_PROTO_MEDIA, D_PROTO_AUDIO, D_PROTO_COUNT
 };
-/* A set of kinds is a uint64_t, bit `kind` for each (D_KIND): the tables
- * that put a member on some kinds' prototypes. More kinds than its bits
- * need another representation. */
-_Static_assert(D_PROTO_COUNT <= 64, "a set of prototype kinds is one uint64_t");
-#define D_KIND(kind) ((uint64_t)1 << (kind))
+/* A set of kinds is a d_kinds_t, bit `kind` for each (D_KIND): the tables
+ * that put a member on some kinds' prototypes. GCC's 128-bit integer, so a
+ * set is still one value that `|`, `&` and `==` work on; more kinds than
+ * its bits need another representation. */
+__extension__ typedef unsigned __int128 d_kinds_t;
+_Static_assert(D_PROTO_COUNT <= 128, "a set of prototype kinds is one d_kinds_t");
+#define D_KIND(kind) ((d_kinds_t)1 << (kind))
 /* The wrapper's base family; SVG graphics refine its prototype separately. */
 int d_node_kind(const os64_html_node_t *node);
 /* Its nodeType (node.c): libhtml's kind, a CDATA section's 4. */
@@ -114,7 +119,7 @@ enum { K_STRING, K_STRING_NULL_EMPTY, K_URL, K_BASE_URL, K_FORM_ACTION, K_BOOLEA
 typedef struct {
     const char *property, *attribute;
     uint8_t kind;
-    uint64_t on;
+    d_kinds_t on;
     /* An enumerated attribute's keywords, and what it reads as missing and
      * as a value that is none of them. */
     const char *const *keywords;
@@ -149,7 +154,8 @@ int d_proto_parent(int kind);
  * by its table's rows (d_event_handler), not with the rest; SLOTCHANGE's
  * by shadow trees' install, with that switch (shadow.c, observer.c fires
  * it); the CSS animation events' by Web Animations' install, whose update
- * step fires them (webanimation.c).
+ * step fires them (webanimation.c); a media element's by the media row,
+ * whose media turn fires them, with ERROR's (media.c).
  * READYSTATECHANGE, VISIBILITYCHANGE and PRERENDERINGCHANGE are the
  * document's alone: HTML gives them an IDL property on Document and no
  * content attribute, so no element's on<type> attribute is a handler for
@@ -167,7 +173,11 @@ enum {
     D_EVENT_POINTEROVER, D_EVENT_POINTEROUT, D_EVENT_POINTERENTER, D_EVENT_POINTERLEAVE,
     D_EVENT_POINTERCANCEL, D_EVENT_GOTPOINTERCAPTURE, D_EVENT_LOSTPOINTERCAPTURE,
     D_EVENT_MOUSEENTER, D_EVENT_MOUSELEAVE, D_EVENT_AUXCLICK, D_EVENT_SLOTCHANGE,
-    D_EVENT_ANIMATIONSTART, D_EVENT_ANIMATIONEND, D_EVENT_ANIMATIONITERATION, D_EVENT_ANIMATIONCANCEL, D_EVENT_COUNT
+    D_EVENT_ANIMATIONSTART, D_EVENT_ANIMATIONEND, D_EVENT_ANIMATIONITERATION, D_EVENT_ANIMATIONCANCEL,
+    D_EVENT_LOADSTART, D_EVENT_PROGRESS, D_EVENT_SUSPEND, D_EVENT_ABORT, D_EVENT_EMPTIED, D_EVENT_STALLED,
+    D_EVENT_LOADEDMETADATA, D_EVENT_LOADEDDATA, D_EVENT_CANPLAY, D_EVENT_CANPLAYTHROUGH, D_EVENT_PLAYING,
+    D_EVENT_WAITING, D_EVENT_SEEKING, D_EVENT_SEEKED, D_EVENT_ENDED, D_EVENT_DURATIONCHANGE, D_EVENT_TIMEUPDATE,
+    D_EVENT_PLAY, D_EVENT_PAUSE, D_EVENT_RATECHANGE, D_EVENT_VOLUMECHANGE, D_EVENT_COUNT
 };
 /* The UI event interfaces (event.c, 0f's P8): UI Events' UIEvent and the
  * five that inherit it, then HTML's SubmitEvent, which inherits Event. An
@@ -413,6 +423,7 @@ struct os64_dom {
     bool mutation_installed;
     size_t canvas_bytes;
     os64_dom_image_provider_t image_provider;
+    os64_dom_media_provider_t media_provider;
     JSClassID canvas_class, gradient_class, metrics_class, path2d_class;
     os64_dom_text_provider_t canvas_text;
     os64_dom_geometry_provider_t geometry;
@@ -513,7 +524,7 @@ struct os64_dom {
     /* Listener and timer callbacks are the registry's other two lists. */
     size_t listeners_held, timers_held;
     uint32_t listen_counts[D_EVENT_COUNT];
-    uint64_t attribute_mask;
+    os64_dom_handler_mask_t attribute_mask;
     uint64_t attribute_version;
     bool attribute_scanned;
     unsigned dispatching;
@@ -779,6 +790,9 @@ struct os64_dom {
     size_t intersections_held;
     os64_dom_intersections_provider_t intersections_provider;
     void *intersections_opaque;
+    /* The media elements' records, their queued tasks and the host
+     * (media.c); NULL until the media row's install. */
+    struct DMediaElements *media_elements;
     /* The traversal row's walkers and iterators (walker.c). */
     struct DWalks *walks;
     /* DOM Range's records (range.c). */
@@ -1298,6 +1312,14 @@ int d_image_data_view(os64_dom_t *, JSContext *, JSValueConst, canvas_rgba8_t *)
 /* The frames row (frames.c; IFRAME.md § The cluster and the window proxy):
  * the HTMLIFrameElement interface over D_PROTO_IFRAME, and its members. */
 int d_frames_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The media row (media.c): HTMLMediaElement, HTMLAudioElement, MediaError,
+ * TimeRanges, Audio, and the media events' handlers. Its departure step
+ * closes the host's sessions and forgets queued tasks; drain lets go of
+ * the engine values the records hold; free frees the records. */
+int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_media_elements_cancel(os64_dom_t *dom);
+void d_media_elements_drain(os64_dom_t *dom);
+void d_media_elements_free(os64_dom_t *dom);
 /* P2a, a script's failures (report.c; WINDOW_DOCUMENT.md § P2a). The row:
  * window's onerror, onunhandledrejection, onrejectionhandled and
  * reportError, document's onerror, ErrorEvent and PromiseRejectionEvent.

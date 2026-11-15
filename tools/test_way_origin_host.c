@@ -1174,6 +1174,7 @@ static void metadata(void)
     static const struct { way_dest_t dest; const char *token; } dests[] = {
         {WAY_DEST_EMPTY, "empty"}, {WAY_DEST_DOCUMENT, "document"}, {WAY_DEST_SCRIPT, "script"},
         {WAY_DEST_STYLE, "style"}, {WAY_DEST_IMAGE, "image"}, {WAY_DEST_FONT, "font"},
+        {WAY_DEST_AUDIO, "audio"},
     };
     for (size_t i = 0; i < sizeof(dests) / sizeof(dests[0]); i++) {
         m = request_from("https://a.test/p", dests[i].dest, WAY_MODE_NO_CORS);
@@ -1268,7 +1269,8 @@ static void metadata(void)
         .language = "en",
         .priority = {[WAY_DEST_EMPTY] = "u=4", [WAY_DEST_DOCUMENT] = "u=0, i", [WAY_DEST_SCRIPT] = "u=2",
                      [WAY_DEST_STYLE] = "u=3", [WAY_DEST_IMAGE] = "u=5, i"}};
-    static const char *const rows[] = {"u=4", "u=0, i", "u=2", "u=3", "u=5, i", "<absent>"};
+    static const char *const rows[] = {"u=4", "u=0, i", "u=2", "u=3", "u=5, i", "<absent>", "<absent>"};
+    _Static_assert(sizeof(rows) / sizeof(rows[0]) == WAY_DESTS, "a row's answer for each destination");
     for (size_t i = 0; i < sizeof(dests) / sizeof(dests[0]); i++) {
         m = dests[i].dest == WAY_DEST_DOCUMENT ? navigation_from(WAY_BY_PERSON, "https://a.test/p")
                                                : request_from("https://a.test/p", dests[i].dest, WAY_MODE_NO_CORS);

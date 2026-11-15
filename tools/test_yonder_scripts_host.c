@@ -25,6 +25,21 @@ extern void fixture_gif_sequence_free(os64_image_sequence_t *);
 extern const os64_image_frame_t *fixture_gif_sequence_frame(const os64_image_sequence_t *);
 extern os64_image_status_t fixture_gif_sequence_default(const os64_image_sequence_t *,os64_image_t *);
 extern os64_image_status_t fixture_gif_sequence_next(os64_image_sequence_t *);
+/* media.h, hosted: there is no sound here (libmedia, its threads and
+ * /dev/audio are the OS's). A session never opens, which the element sees
+ * as its network error, so the rest is never reached; libdom's own suite
+ * (tools/test_dom_media.inc) plays the element against a fake host. */
+void yonder_media_start(const yonder_media_env_t *env) { (void)env; }
+void yonder_media_stop(void) {}
+yonder_media_t *yonder_media_open(const yonder_media_request_t *r) { (void)r; return NULL; }
+void yonder_media_close(yonder_media_t *m) { (void)m; }
+void yonder_media_play(yonder_media_t *m) { (void)m; }
+void yonder_media_pause(yonder_media_t *m) { (void)m; }
+void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation) { (void)m; (void)seconds; (void)generation; }
+void yonder_media_settings(yonder_media_t *m, double gain, bool loop, bool all) { (void)m; (void)gain; (void)loop; (void)all; }
+void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out) { (void)m; memset(out, 0, sizeof(*out)); }
+int yonder_media_can_play(const char *type) { (void)type; return 0; }
+void yonder_media_reap(void) {}
 #ifdef OS64_JS_BYTECODE_ROUND_TRIP
 /* libjs's round-trip build counts the scripts it ran from their bytecode. */
 extern size_t os64_js_round_trips, os64_js_round_trips_skipped;
@@ -2678,6 +2693,16 @@ static void input_links(void) {
     check(status_says("background workers"),"input: an uncancelled click follows its link after its listeners");
     probe_drop();
 }
+/* HTML's sticky activation (AUDIO_YONDER.md § Autoplay): a press through
+ * the window's pointer path counts, on a page that listens for nothing. */
+static void input_activation(void) {
+    probe_page("<p id=b>press</p><script>var x=1;</script>",true);
+    script_turn();
+    check(!yonder_scripts_activated(g.page.scripts),"input: a page nobody has touched has no activation");
+    input_click_at("b");
+    check(yonder_scripts_activated(g.page.scripts),"input: a press through the pointer path is the page's activation");
+    probe_drop();
+}
 /* A `javascript:` link (MODERN_WEB.md slice 0c): the person's click runs
  * the address's code in the page, by the door an inline script runs
  * through, so it is on the page's record as a script; no request is made
@@ -3159,6 +3184,7 @@ static void input_cases(void) {
     yonder_bar_lower(&g.bar);
 
     input_links();
+    input_activation();
     input_javascript_links();
     input_attribute_backstop();
     input_hover();
@@ -12350,7 +12376,7 @@ int main(void)
         return failures ? 1 : 0;
     }
     if(getenv("YONDER_POINTER_ONLY")) {
-        pointer_window_cases(); input_links(); input_hover(); input_ui_events(); hover_batch_cases();
+        pointer_window_cases(); input_links(); input_activation(); input_hover(); input_ui_events(); hover_batch_cases();
         os64_text_font_release(probe_font);
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"pointer: text released");
         check(live==0,"pointer: heap empty");

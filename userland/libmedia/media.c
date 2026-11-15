@@ -570,6 +570,144 @@ const char *os64_media_strerror(int result)
     }
 }
 
+// ---------------------------------------------------------------- what plays
+
+// Each MIME type other browsers answer for, as the libav reader that reads
+// it and, where the type implies its codec, that codec. Which of them play
+// is libav.so's answer (av_find_input_format, avcodec_find_decoder_by_name),
+// so a type whose reader or decoder is not built answers NO.
+static const struct { const char *type, *demuxer, *implied; } kTypes[] = {
+    {"audio/mpeg", "mp3", "mp3"}, {"audio/mp3", "mp3", "mp3"}, {"audio/mpeg3", "mp3", "mp3"},
+    {"audio/x-mpeg", "mp3", "mp3"}, {"audio/x-mp3", "mp3", "mp3"},
+    {"audio/wav", "wav", NULL}, {"audio/wave", "wav", NULL}, {"audio/x-wav", "wav", NULL},
+    {"audio/vnd.wave", "wav", NULL},
+    {"audio/mp4", "mov", NULL}, {"audio/x-m4a", "mov", NULL}, {"audio/aac", "aac", "aac"},
+    {"audio/ogg", "ogg", NULL}, {"application/ogg", "ogg", NULL}, {"audio/webm", "matroska", NULL},
+    {"audio/flac", "flac", "flac"}, {"audio/x-flac", "flac", "flac"},
+};
+
+// A codecs-parameter name (RFC 6381) as the decoders that decode it.
+static const struct { const char *codec, *decoders[3]; } kCodecs[] = {
+    {"mp3", {"mp3float", "mp3"}}, {"mp4a.69", {"mp3float", "mp3"}}, {"mp4a.6b", {"mp3float", "mp3"}},
+    {"mp4a.40.34", {"mp3float", "mp3"}},
+    {"1", {"pcm_s16le"}},
+    {"aac", {"aac"}}, {"mp4a.40.2", {"aac"}}, {"mp4a.40.5", {"aac"}}, {"mp4a.40.29", {"aac"}},
+    {"mp4a.40", {"aac"}}, {"mp4a.67", {"aac"}},
+    {"opus", {"opus", "libopus"}}, {"vorbis", {"vorbis", "libvorbis"}}, {"flac", {"flac"}},
+};
+
+static bool decodes(const char *codec)
+{
+    for (size_t i = 0; i < sizeof(kCodecs) / sizeof(kCodecs[0]); i++) {
+        if (!os64_streq_nocase(kCodecs[i].codec, codec))
+            continue;
+        for (size_t d = 0; d < 3 && kCodecs[i].decoders[d] != NULL; d++)
+            if (avcodec_find_decoder_by_name(kCodecs[i].decoders[d]) != NULL)
+                return true;
+        return false;
+    }
+    return false;
+}
+
+static bool space(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+// The value of a `codecs=` parameter in `params` (what follows the type's
+// first `;`), its quotes removed, into `out`. False when there is none.
+static bool codecs_param(const char *params, char *out, size_t cap)
+{
+    const char *p = params;
+    while (*p != '\0') {
+        while (*p == ';' || space(*p))
+            p++;
+        const char *name = p;
+        while (*p != '\0' && *p != '=' && *p != ';')
+            p++;
+        size_t name_len = (size_t)(p - name);
+        while (name_len > 0 && space(name[name_len - 1]))
+            name_len--;
+        if (*p != '=') {
+            continue;
+        }
+        p++;
+        while (space(*p))
+            p++;
+        bool quoted = *p == '"';
+        if (quoted)
+            p++;
+        const char *value = p;
+        while (*p != '\0' && (quoted ? *p != '"' : *p != ';'))
+            p++;
+        size_t value_len = (size_t)(p - value);
+        if (quoted && *p == '"')
+            p++;
+        while (*p != '\0' && *p != ';')
+            p++;
+        if (name_len == 6 && (name[0] | 0x20) == 'c' && (name[1] | 0x20) == 'o' && (name[2] | 0x20) == 'd' &&
+            (name[3] | 0x20) == 'e' && (name[4] | 0x20) == 'c' && (name[5] | 0x20) == 's') {
+            if (value_len >= cap)
+                value_len = cap - 1;
+            os64_memcpy(out, value, value_len);
+            out[value_len] = '\0';
+            return true;
+        }
+    }
+    return false;
+}
+
+int os64_media_type_supported(const char *type)
+{
+    if (type == NULL)
+        return OS64_MEDIA_TYPE_NO;
+    char essence[64];
+    size_t n = 0;
+    const char *p = type;
+    while (space(*p))
+        p++;
+    while (*p != '\0' && *p != ';' && n + 1 < sizeof(essence))
+        essence[n++] = *p++;
+    while (n > 0 && space(essence[n - 1]))
+        n--;
+    essence[n] = '\0';
+    while (*p != '\0' && *p != ';')
+        p++;                                     // an essence longer than any listed
+    const char *demuxer = NULL, *implied = NULL;
+    for (size_t i = 0; i < sizeof(kTypes) / sizeof(kTypes[0]) && demuxer == NULL; i++)
+        if (os64_streq_nocase(kTypes[i].type, essence)) {
+            demuxer = kTypes[i].demuxer;
+            implied = kTypes[i].implied;
+        }
+    if (demuxer == NULL || av_find_input_format(demuxer) == NULL)
+        return OS64_MEDIA_TYPE_NO;
+    char codecs[256];
+    if (*p != ';' || !codecs_param(p + 1, codecs, sizeof(codecs)))
+        return implied == NULL || decodes(implied) ? OS64_MEDIA_TYPE_MAYBE : OS64_MEDIA_TYPE_NO;
+    // Every codec named must be one that decodes; an empty list names none.
+    bool any = false;
+    for (char *c = codecs; *c != '\0';) {
+        while (*c == ',' || space(*c))
+            c++;
+        char *start = c;
+        while (*c != '\0' && *c != ',')
+            c++;
+        char *end = c;
+        while (end > start && space(end[-1]))
+            end--;
+        if (end == start)
+            continue;
+        char saved = *end;
+        *end = '\0';
+        bool ok = decodes(start);
+        *end = saved;
+        if (!ok)
+            return OS64_MEDIA_TYPE_NO;
+        any = true;
+    }
+    return any ? OS64_MEDIA_TYPE_PROBABLY : OS64_MEDIA_TYPE_MAYBE;
+}
+
 // ---------------------------------------------------------------- a file source
 
 static int64_t file_read(void *ctx, uint8_t *out, size_t cap)

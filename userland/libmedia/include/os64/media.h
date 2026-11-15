@@ -99,6 +99,18 @@ void os64_media_close(os64_media_t *m);
 // A result's name, for messages: "not a sound file this can read", ...
 const char *os64_media_strerror(int result);
 
+// Whether media of a MIME type (with its parameters: "audio/mp4;
+// codecs=mp4a.40.2") is media this library plays, in HTML's canPlayType
+// words: NO when its container or a codec it names is not one libav.so
+// was built to read; PROBABLY when it names its codecs and each is one
+// libav.so decodes; MAYBE when it names none. The answer is asked of
+// libav.so itself, so a format switched on in its configuration answers
+// here with no list edited anywhere else.
+#define OS64_MEDIA_TYPE_NO        0
+#define OS64_MEDIA_TYPE_MAYBE     1
+#define OS64_MEDIA_TYPE_PROBABLY  2
+int os64_media_type_supported(const char *type);
+
 // A source over an open file handle (os64_open's): the whole file, read
 // and seeked on that handle, which is moved to the file's start. It stays
 // the caller's, to close after the media. A handle with no position (a

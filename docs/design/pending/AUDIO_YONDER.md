@@ -1,7 +1,8 @@
 # AUDIO_YONDER.md — a page's sound: `<audio>`, the media document, and FFmpeg
 
 *Opus, 2026-11-14. Status: DESIGN, cleared by Chris the same day
-(§ For Chris). Nothing here is built; `YAUDIO_TRACKER.csv` says what is.*
+(§ For Chris), and being built: `YAUDIO_TRACKER.csv` says what is, and
+each slice's "As built" section below what departs from the text.*
 
 *Chris's goal for this arc (2026-11-14): yonder plays a page's sound,
 generally — WAV and MP3 first, because MP3 is what an ordinary page links
@@ -312,11 +313,9 @@ fact play() needs, and is recorded on the page beside it.
 behind the Modern Web switch like the rest of the modern surface, in a
 row of their own as `HTMLIFrameElement`'s is (`modern.c`).
 
-**Prototypes**: `D_PROTO_MEDIA` and `D_PROTO_AUDIO`. The prototype table
-has a wall of 64 and 59 are used; `D_PROTO_VIDEO` will need a sixth of
-the five that remain after these two, so the video arc either fits in the
-last three or widens the table. Recorded here so the day it bites is not
-a surprise.
+**Prototypes**: `D_PROTO_MEDIA` and `D_PROTO_AUDIO`, with `D_PROTO_AUDIO`
+inheriting `D_PROTO_MEDIA`, so `D_PROTO_VIDEO` is one more kind under it.
+(The table was full when Y.2.1 came to it: § As built (Y.2.1).)
 
 **The members**, by the standard's own grouping:
 
@@ -530,6 +529,76 @@ above:
   name. A 44.1 kHz file now plays without the
   resampler's few frames of leading silence, and an 8-bit WAV plays where
   it was refused (`playtest` changed with it, and gained an MP3).
+
+## As built (Y.2.1, the element)
+
+- **The prototype table was full** (64 kinds, the last `D_PROTO_SOURCE`),
+  not 59 of 64 as this design was written against, and the handler mask's
+  51 event kinds plus the media element's 21 passed its 64 bits. Both sets
+  are GCC's 128-bit integer now (`d_kinds_t`, and `os64_dom_handler_mask_t`,
+  which yonder's handler walk reads too), so a set is still one value.
+  `error` is the existing kind; the media element's prototype has its
+  `onerror`, the first element the binding fires `error` at (the rest of
+  HTML's per-element `onerror` stays as LIBDOM.md § Events has it).
+- **The kernel refused nothing, silently**: an object's `DT_NEEDED` list
+  was capped at 16 names, and a 17th was dropped without a word, so yonder,
+  which names 17 libraries with libmedia, died at its first call into
+  libos64. The cap is 32 (`ELF_MAX_NEEDED`), and an image naming more is
+  refused at load (`elf_parse_dynamic`).
+- **libdom keeps HTML's half; yonder the sound** (`dom/media.h`, the
+  provider): libdom has the states, the events and the promises, and asks
+  the host for facts from its media turn; the host never decides an event.
+  `canPlayType` is libmedia's `os64_media_type_supported`, which asks
+  libav.so for the reader and decoder each MIME type needs.
+- **Two threads per element, one for yonder.** A DECODER thread (the bytes,
+  libmedia, the PCM queue) and, for a network address, a LOADER thread that
+  runs the fetch job itself (`yonder_fetch_media_run`, a native consumer
+  that streams its body down the pipe and keeps an opaque body's bytes):
+  off the pool, so a song left paused half-loaded holds no worker. One
+  AUDIO thread owns `/dev/audio` (yonder/media.c says which thread owns
+  what, and the lock order). A `file:` address is read through
+  `os64_media_file_source` with no loader.
+- **A page of many players costs no handle per thread, and fetches four
+  sounds at a time.** No media thread is joined: their handles are
+  closed at birth, a session is freed once each of its threads has said
+  it is done, and yonder's end waits for the audio thread to say so too.
+  A start that answers an error is treated as
+  one that may be running, because out of handles the kernel starts the
+  thread detached and still answers an error; freeing the fetch job under
+  such a loader was a crash on a page with eighteen players. The fetches
+  queue for four loader slots, below libfetch's six connections to a host
+  (DEBTS.md § A page's sound has what a slot held by a long sound costs).
+- **The source keeps every byte that has arrived**, up to 256 MiB, so a seek
+  back is free; a seek past what has arrived waits for it. While the media
+  is being opened such a seek fails at once instead, because the MP3 reader
+  probes the file's end for its tags and would otherwise wait for the
+  whole download. A `Range` request for a seek far ahead is not made yet
+  (YAUDIO_TRACKER.csv's Y.2.3).
+- **`preload` is honoured, by the decoder**: with metadata (the default)
+  it stops taking bytes after the probe, decodes nothing, and the fetch runs
+  on into the pipe until its backpressure stops it, 16 MiB on; `play()`,
+  `preload=auto` or `autoplay` takes the rest. `none` waits for `play()` or
+  `load()`. So a song smaller than the pipe's window still downloads whole
+  (DEBTS.md § A page's sound).
+- **An element done with gives its session back**: one that has ended or
+  failed, is paused and is in no document closes its session (the host's
+  threads and buffers with it), and `play()` or a seek opens a new one. A
+  page that plays `new Audio(x)` per sound effect keeps one small record
+  each, and no decoder.
+- **Only the shown page's elements turn.** A page loading behind the shown
+  one does not advance its media until it is shown.
+- **`playing` fires when the element can play** (readyState reaches
+  HAVE_FUTURE_DATA with play asked), as the standard has it; the audio
+  thread starts writing as soon as frames are queued, so the sound itself
+  never waits for the window.
+- **Proven in QEMU** by `/tests/pages/audio.html` (`tools/pages`): before
+  any key, `play()` is refused `NotAllowedError`; the parsed WAV element
+  loads by itself (duration 1.000 at 22.05 kHz, readyState 0 to 4); `new
+  Audio()` plays the MP3 (duration 2.000, LAME's padding trimmed) and its
+  `ended` comes 2,243 ms after `play()`, with `/sys/audio` showing all
+  96,000 frames accepted, taken and heard; a seek lands with sound queued.
+  `tools/test_dom_media.inc` plays every step against a fake host;
+  `tools/test_media_queue_host.sh` holds the queue to a model.
 
 ## Slices
 

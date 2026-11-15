@@ -141,7 +141,15 @@ struct yonder_scripts {
     // attribute has no runtime until an event one of them names.
     uint64_t handlers_version;
     bool handlers_scanned;
-    uint64_t handlers;
+    os64_dom_handler_mask_t handlers;
+    // HTML's sticky activation: a person's key, press or click has reached
+    // the page (yonder_scripts_activated).
+    bool activated;
+    // Whether the document holds a media element, as of the tree version
+    // it was last looked at (media_in_document): a page with no script
+    // gets its runtime for one.
+    uint64_t media_version;
+    bool media_scanned, media_found;
     char note[256];
     // The whole address of the script the last task ran, NULL when it was
     // an inline script, an event or a timer (yonder_scripts_task_address).
@@ -628,6 +636,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
         os64_dom_set_view(s->dom, &s->options.view);
     os64_dom_set_computed(s->dom, s->options.computed, s->options.opaque);
     os64_dom_set_images(s->dom,&s->options.images);
+    os64_dom_set_media(s->dom, &s->options.media);
     os64_dom_set_text(s->dom,&s->options.canvas_text);
     if (s->options.history.update != NULL)
         os64_dom_set_history(s->dom, &s->options.history);
@@ -1700,7 +1709,7 @@ void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *sou
 
 // Which types the document's on<type> attributes name (libdom's own walk):
 // one walk per tree version, and only while the page has no runtime.
-static uint64_t handler_types(yonder_scripts_t *s)
+static os64_dom_handler_mask_t handler_types(yonder_scripts_t *s)
 {
     uint64_t version = os64_html_version(s->doc);
     if (s->handlers_scanned && s->handlers_version == version)
@@ -1711,12 +1720,19 @@ static uint64_t handler_types(yonder_scripts_t *s)
     return s->handlers;
 }
 
+static void activation_note(yonder_scripts_t *s, const os64_dom_event_t *event);
+
 os64_js_status_t yonder_scripts_pointer(yonder_scripts_t *s, const os64_dom_pointer_sample_t *sample,
                                          os64_dom_pointer_default_t action, void *opaque,
                                          bool *ran, os64_js_outcome_t *out)
 {
     *ran = false;
     os64_memset(out, 0, sizeof(*out));
+    // A press is the mousedown and the mouse's pointerdown HTML counts as
+    // activation, whether or not the page listens. The sample carries only
+    // where and which button: the event types are libdom's to give.
+    if (s != NULL && sample->action == OS64_DOM_POINTER_DOWN)
+        s->activated = true;
     if (!s || s->dead || !s->options.modern) return OS64_JS_OK;
     s->task_address = NULL; s->task_us = -1; s->written = 0;
     if (!ensure_runtime(s, out)) { retire(s); return out->status; }
@@ -1784,6 +1800,9 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
     }
     if (prevented != NULL)
         *prevented = false;
+    // The person's input counts whether or not the page listens for it.
+    if (s != NULL)
+        activation_note(s, event);
     if (s == NULL || s->dead)
         return OS64_JS_OK;
     s->written = 0;
@@ -2486,6 +2505,79 @@ void yonder_scripts_canvas_visit_damage(yonder_scripts_t *s,os64_dom_canvas_dama
 void yonder_scripts_canvas_painted(yonder_scripts_t *s, const os64_html_node_t *node)
 {
     if (s) os64_dom_canvas_painted(s->dom, node);
+}
+
+// Whether the document holds a media element: looked for once per tree
+// version, and only while the page has no runtime.
+static bool media_in_document(yonder_scripts_t *s)
+{
+    uint64_t version = os64_html_version(s->doc);
+    if (s->media_scanned && s->media_version == version)
+        return s->media_found;
+    s->media_found = false;
+    const os64_html_node_t *root = s->doc->document;
+    for (const os64_html_node_t *at = root; at != NULL && !s->media_found;
+         at = os64_html_shadow_including_next(root, at))
+        s->media_found = at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML &&
+                         at->tag == OS64_HTML_TAG_AUDIO;
+    s->media_version = version;
+    s->media_scanned = true;
+    return s->media_found;
+}
+
+bool yonder_scripts_media_turn(yonder_scripts_t *s)
+{
+    if (s == NULL || s->dead || !s->options.modern)
+        return false;
+    // A page that never ran a script still has its media elements: the
+    // binding they live in is made for the first one, as a handler
+    // attribute's is (dispatch_event).
+    if (s->dom == NULL) {
+        if (!media_in_document(s))
+            return false;
+        os64_js_outcome_t out;
+        if (!ensure_runtime(s, &out)) {
+            retire(s);
+            return false;
+        }
+    }
+    return s->dom != NULL && os64_dom_media_turn(s->dom);
+}
+
+bool yonder_scripts_media_pending(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead && s->dom != NULL && os64_dom_media_due(s->dom);
+}
+
+bool yonder_scripts_media_fire(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL)
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    if (!os64_dom_media_fire(s->dom, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
+bool yonder_scripts_activated(const yonder_scripts_t *s)
+{
+    return s != NULL && s->activated;
+}
+
+// HTML's activation-triggering input events: a key other than Escape
+// pressed, a button pressed, a click.
+static void activation_note(yonder_scripts_t *s, const os64_dom_event_t *event)
+{
+    if (event->type == NULL)
+        return;
+    if (event->kind == OS64_DOM_EVENT_KEY)
+        s->activated |= os64_streq(event->type, "keydown") && !(event->key != NULL && os64_streq(event->key, "Escape"));
+    else if (event->kind == OS64_DOM_EVENT_MOUSE || event->kind == OS64_DOM_EVENT_POINTER)
+        s->activated |= os64_streq(event->type, "mousedown") || os64_streq(event->type, "pointerdown") ||
+                        os64_streq(event->type, "click");
 }
 
 bool yonder_scripts_images_pending(const yonder_scripts_t *s)

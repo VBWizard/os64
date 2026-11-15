@@ -46,6 +46,7 @@ static const DReflection kRows[] = {
     STRING(D_PROTO_IMAGE, "srcset", "srcset"), STRING(D_PROTO_IMAGE, "sizes", "sizes"),
     STRING(D_PROTO_SOURCE, "srcset", "srcset"), STRING(D_PROTO_SOURCE, "sizes", "sizes"),
     STRING(D_PROTO_SOURCE, "media", "media"), STRING(D_PROTO_SOURCE, "type", "type"),
+    {"src", "src", K_URL, D_KIND(D_PROTO_SOURCE), NULL, NULL, NULL, 0},
     STRING(D_PROTO_LINK, "media", "media"), STRING(D_PROTO_LINK, "type", "type"),
     STRING(D_PROTO_LINK, "integrity", "integrity"),
     {"as", "as", K_ENUM, D_KIND(D_PROTO_LINK), kLinkDestinations, "", "", 0},
@@ -123,7 +124,7 @@ static JSValue element_member(JSContext *ctx, JSValueConst this_value, int argc,
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
-    uint64_t own = magic == E_TITLE_TEXT ? D_KIND(D_PROTO_TITLE)
+    d_kinds_t own = magic == E_TITLE_TEXT ? D_KIND(D_PROTO_TITLE)
                    : magic == E_LINK_CORS ? D_KIND(D_PROTO_LINK) : kRows[magic].on;
     if (D_KIND(d_node_kind(node)) != own) return JS_ThrowTypeError(ctx, "Illegal invocation");
     if (magic == E_LINK_CORS) {

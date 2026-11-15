@@ -748,9 +748,18 @@ static bool preflight(Hop *h, yonder_fetch_job_t *job, way_request_t *r, const c
 
 // ── The final response ──────────────────────────────────────────────────
 
+// Whether a destination's body may go down a pipe as it arrives: a
+// script's (filtered for the page) and a media element's (its bytes kept
+// whatever the response's type, as a picture's are, and with no cap,
+// because a song is played as it comes).
+static bool streams(way_dest_t destination)
+{
+    return destination == WAY_DEST_EMPTY || destination == WAY_DEST_AUDIO;
+}
+
 // The final response, filtered for the page: from the network (`f`, whose
-// body is read here, whole for native consumers, or streamed for scripts when
-// `s` is not NULL) or from the cache (`kept`, `kept_len`, `f` NULL) — the same
+// body is read here, whole for native consumers, or streamed for scripts and
+// media when `s` is not NULL) or from the cache (`kept`, `kept_len`, `f` NULL) — the same
 // filtering either way. Native images/styles retain MIME headers for parsing;
 // styles also retain the final URL for relative imports. These products must
 // not enter script response delivery. False, with the reason in `got`, when it could not be had.
@@ -776,7 +785,7 @@ static bool finish(yonder_fetched_t *got, way_request_t *r, const char *current,
     // Script responses discard opaque bodies. Native consumers retain bytes
     // with the opaque verdict, which Canvas uses to enforce origin tainting.
     got->has_body = way_response_has_body(r, destination != WAY_DEST_EMPTY ? WAY_TYPE_BASIC : type, status);
-    if (got->has_body && f != NULL && s != NULL && destination == WAY_DEST_EMPTY) {
+    if (got->has_body && f != NULL && s != NULL && streams(destination)) {
         if (!stream_body(got, f, s, max_body))
             return false;
     } else if (got->has_body && f != NULL) {
@@ -1355,7 +1364,7 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         hop_reset(&h, current, false);
         os64_fetch_options_t opt;
         // A body streamed has no cap (fetch_job.h).
-        opt_base(&opt, &h, job, job->pipe != NULL && destination == WAY_DEST_EMPTY ? 0 : max_body);
+        opt_base(&opt, &h, job, job->pipe != NULL && streams(destination) ? 0 : max_body);
         opt.method_name = r->method;
         opt.accept = fields->accept;
         const char *preset = way_identity_accept(job->identity, destination);
@@ -1495,3 +1504,6 @@ int64_t yonder_fetch_image_run(void *job,bool (*cancelled)(void *),void *ctx,voi
 
 int64_t yonder_fetch_style_run(void *job, bool (*cancelled)(void *), void *ctx, void **out)
 { return fetch_timed(job, cancelled, ctx, out, WAY_DEST_STYLE); }
+
+int64_t yonder_fetch_media_run(void *job, bool (*cancelled)(void *), void *ctx, void **out)
+{ return fetch_timed(job, cancelled, ctx, out, WAY_DEST_AUDIO); }

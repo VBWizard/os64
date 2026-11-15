@@ -433,9 +433,17 @@ static bool elf_parse_dynamic(elf_image_t *image, vfs_file_t *file,
 
     // DT_NEEDED values are string-table byte offsets — resolve them now that
     // strtab is loaded. Names point directly into image->strtab, no copy.
+    // An image that names more libraries than ELF_MAX_NEEDED is refused: a
+    // library left out would leave its symbols unbound, and the program
+    // would die at its first call into one, far from the cause.
     for (size_t i = 0; i < dyn_count && dynamic[i].d_tag != DT_NULL; i++) {
-        if (dynamic[i].d_tag != DT_NEEDED || image->needed_count >= ELF_MAX_NEEDED) {
+        if (dynamic[i].d_tag != DT_NEEDED) {
             continue;
+        }
+        if (image->needed_count >= ELF_MAX_NEEDED) {
+            printd(DEBUG_TASK, "elf: refused: the image names more than %d libraries (DT_NEEDED)\n",
+                   ELF_MAX_NEEDED);
+            return false;
         }
         if (image->strtab != NULL && dynamic[i].d_un.d_val < image->strtab_size) {
             image->needed[image->needed_count++] = image->strtab + dynamic[i].d_un.d_val;

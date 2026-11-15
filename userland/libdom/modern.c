@@ -47,6 +47,15 @@ static const DModernRow kModern[] = {
      d_interfaces_install},
     /* After the interfaces row, whose HTMLElement its interface inherits. */
     {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},
+    /* AUDIO_YONDER.md: the media element, after the interfaces row, whose
+     * HTMLElement its interface inherits; the media events' handlers on
+     * window with it. */
+    {(const char *const[]){"HTMLMediaElement", "HTMLAudioElement", "MediaError", "TimeRanges", "Audio",
+                           "onloadstart", "onprogress", "onsuspend", "onabort", "onemptied", "onstalled",
+                           "onloadedmetadata", "onloadeddata", "oncanplay", "oncanplaythrough", "onplaying",
+                           "onwaiting", "onseeking", "onseeked", "onended", "ondurationchange", "ontimeupdate",
+                           "onplay", "onpause", "onratechange", "onvolumechange", NULL},
+     d_media_elements_install},
     /* CDATASection and ProcessingInstruction, over the row above's Text
      * and CharacterData, with Document's createCDATASection and
      * createProcessingInstruction (data_nodes.c). */

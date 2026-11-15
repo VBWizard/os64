@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A media element on a page with no script</title>
+<!--
+  AUDIO_YONDER.md, Y.2.1: a page with no script of its own still has its
+  media elements. The element below autoplays muted, which a page may do
+  without the person (other browsers allow it), and loops, so it plays
+  silence for as long as the page is open.
+
+  What to look for: nothing to hear (it is muted). In a terminal,
+  `cat /sys/audio` shows the stream open and `accepted` climbing while the
+  page is shown, and closed a few seconds after you leave it.
+-->
+<h1>A muted element that plays by itself</h1>
+<p>No script on this page: <code>&lt;audio src="audio-tone.wav" autoplay muted loop&gt;</code>.</p>
+<audio src="audio-tone.wav" autoplay muted loop></audio>
