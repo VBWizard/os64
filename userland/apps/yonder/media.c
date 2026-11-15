@@ -6,18 +6,21 @@
 //   decoder   one per session: the bytes kept so far (`bytes`, its alone),
 //             libmedia's object, and the pushes into the PCM queue.
 //   loader    one per session whose address is not a file: (the network,
-//             or a data: URL): runs the fetch job, whose body goes down the
-//             pipe the decoder drains.
+//             or a data: URL), at most LOADERS_MAX at once: runs the fetch
+//             job, whose body goes down the pipe the decoder drains.
 //   audio     one for yonder: /dev/audio, /dev/audiopos and /dev/audioctl,
 //             and the takes from the sounding session's queue.
 //
 // A session's `lock` guards what more than one of them touch: the asks
 // (play, seek, settings, stop), the queue, the facts, the loader's
-// product. `s_audio.lock` guards the session list and which session the
-// device carries (`owner`). LOCK ORDER: s_audio.lock, then a session's;
-// never the other way. A bell is rung only with the lock that guards its
-// owner's right to close it held (os64/bell.h): a session's under its
-// lock, the audio thread's under s_audio.lock.
+// product. `s_audio.lock` guards the session list, which session the
+// device carries (`owner`) and the loader slots taken. The decoder and the
+// loader are never joined (thread_start): each says it is done as its last
+// touch of the session, and only then is the session freed. LOCK ORDER:
+// s_audio.lock, then a session's; never the other way. A bell is rung only
+// with the lock that guards its owner's right to close it held
+// (os64/bell.h): a session's under its lock, the audio thread's under
+// s_audio.lock.
 //
 // THE CLOCK (AUDIO_YONDER.md § The audio thread and the mixer). The audio
 // thread counts the frames it has written since the device's counters
@@ -67,6 +70,16 @@
 // While a session sounds, the window is rung this often, for timeupdate.
 #define RING_SOUNDING_MS 250u
 #define ANCHORS 64u
+// How many sounds are fetched at once; the rest wait their turn. A page may
+// hold dozens of players, and a fetch costs a connection, or a bell while
+// libfetch queues it, out of the program's sixty-four handles. Fewer than
+// libfetch's six to one host (FETCH_POOL_PER_KEY), because a sound loaded
+// only to its metadata holds its connection on the pipe's backpressure,
+// and the page's other fetches from that host need one left (DEBTS.md
+// § A page's sound).
+#define LOADERS_MAX 4u
+// How often yonder's end looks for the threads to have let go.
+#define STOP_POLL_MS 10u
 
 struct yonder_media {
     yonder_media_t *next;           // s_audio.sessions
@@ -86,12 +99,13 @@ struct yonder_media {
     os64_dom_media_facts_t facts;
     os64_media_queue_t queue;
     int16_t *storage;
-    // The loader's product, set once as it ends.
-    void *product;
-    bool loader_done;
-    // Threads, the window's to join.
-    int64_t decoder, loader;
-    bool decoder_done;              // under `lock`: the decoder has let go of everything
+    // The threads, which hold no handles (thread_start). A session is
+    // freed only once each one that may be running has said it is done.
+    void *product;                  // the loader's, set once as it ends
+    bool loader_started;            // a loader may be running
+    bool loader_quit;               // the decoder gave up on it: cancel the fetch
+    bool loader_done;               // the loader's last touch of the session
+    bool decoder_done;              // the decoder's last touch of the session
     bool closed;                    // the window let go of it
     // The decoder's own.
     char *url;
@@ -115,6 +129,7 @@ static struct {
     os64_bell_t bell;
     bool started, quit;
     int64_t thread;
+    uint32_t loaders;               // loader slots taken (LOADERS_MAX)
     yonder_media_t *sessions;
     yonder_media_t *owner;
 } s_audio = {.bell = OS64_BELL_NONE};   // a zeroed bell would be handle 0, someone's file
@@ -138,6 +153,37 @@ static void ring_audio(void)
 static void ring_decoder_locked(yonder_media_t *m)
 {
     (void)os64_bell_ring(&m->bell);
+}
+
+// Starts a thread that is never joined: its handle is let go at once, so a
+// page with many players does not spend the program's handles on them. A
+// failure does NOT mean the thread is not running: out of handles, the
+// kernel starts it detached and still answers an error. So the caller of a
+// failed start keeps alive everything the thread may touch, and waits for
+// its done flag as it would for a started one.
+static bool thread_start(int64_t (*fn)(void *), void *arg)
+{
+    int64_t handle = os64_thread(fn, arg);
+    if (handle < 0)
+        return false;
+    os64_close((int32_t)handle);
+    return true;
+}
+
+// A loader slot let go: every decoder is rung, for one may be waiting for
+// it. Touches no session's memory but under the list's lock, so a loader
+// may call it after its last touch of its own.
+static void loader_slot_release(void)
+{
+    os64_lock_acquire(&s_audio.lock);
+    if (s_audio.loaders > 0)
+        s_audio.loaders--;
+    for (yonder_media_t *m = s_audio.sessions; m != NULL; m = m->next) {
+        os64_lock_acquire(&m->lock);
+        ring_decoder_locked(m);
+        os64_lock_release(&m->lock);
+    }
+    os64_lock_release(&s_audio.lock);
 }
 
 // Whether `text` begins with the `n` letters of `word`, ignoring ASCII case.
@@ -374,7 +420,7 @@ static bool loader_cancelled(void *ctx)
 {
     yonder_media_t *m = ctx;
     os64_lock_acquire(&m->lock);
-    bool stop = m->stop;
+    bool stop = m->stop || m->loader_quit;
     os64_lock_release(&m->lock);
     return stop;
 }
@@ -389,7 +435,25 @@ static int64_t loader_main(void *arg)
     m->loader_done = true;
     ring_decoder_locked(m);
     os64_lock_release(&m->lock);
+    // `m` may be freed from here on.
+    loader_slot_release();
     return 0;
+}
+
+// Waits for a loader slot. False when the session stops first.
+static bool loader_slot_take(yonder_media_t *m)
+{
+    for (;;) {
+        os64_lock_acquire(&s_audio.lock);
+        bool got = s_audio.loaders < LOADERS_MAX;
+        if (got)
+            s_audio.loaders++;
+        os64_lock_release(&s_audio.lock);
+        if (got)
+            return true;
+        if (!decoder_wait(m, OS64_WAIT_FOREVER))
+            return false;
+    }
 }
 
 static void pipe_ring(void *ctx)
@@ -417,12 +481,19 @@ static bool is_scheme(const char *url, const char *scheme)
     return starts_nocase(url, scheme, os64_strlen(scheme));
 }
 
-// The fetch job for a network address, its body streamed to the decoder.
+// The fetch job for a network address, its body streamed to the decoder,
+// once a loader slot is free. False when the fetch could not begin; then
+// `loader_started` says whether a loader may be running all the same, and
+// the job and the pipe stay the session's until it is freed.
 static bool loader_start(yonder_media_t *m)
 {
-    yonder_fetch_job_t *job = os64_calloc(1, sizeof(*job));
-    if (job == NULL)
+    if (!loader_slot_take(m))
         return false;
+    yonder_fetch_job_t *job = os64_calloc(1, sizeof(*job));
+    if (job == NULL) {
+        loader_slot_release();
+        return false;
+    }
     job->kind = YONDER_JOB_FETCH;
     job->page = m->page;
     job->agent = m->agent;
@@ -453,17 +524,25 @@ static bool loader_start(yonder_media_t *m)
         if (job->pipe != NULL)
             yonder_fetch_pipe_release(job->pipe);
         yonder_fetch_release(job, NULL);
+        loader_slot_release();
         return false;
     }
     m->pipe = job->pipe;
     m->job = job;
     job->submitted_us = os64_micros();
-    m->loader = os64_thread(loader_main, m);
-    if (m->loader < 0) {
-        m->job = NULL;
-        yonder_fetch_release(job, NULL);
-        yonder_fetch_pipe_release(m->pipe);
-        m->pipe = NULL;
+    // Before the start: the loader may finish before os64_thread returns,
+    // and the session must not look free of it in between. Its slot is the
+    // loader's to let go from here on, whatever the start answers; a start
+    // that truly failed (the kernel out of memory) keeps the slot and the
+    // session for the rest of the program, and yonder's end waits on it,
+    // the price of not guessing.
+    os64_lock_acquire(&m->lock);
+    m->loader_started = true;
+    os64_lock_release(&m->lock);
+    if (!thread_start(loader_main, m)) {
+        os64_lock_acquire(&m->lock);
+        m->loader_quit = true;
+        os64_lock_release(&m->lock);
         return false;
     }
     return true;
@@ -522,7 +601,13 @@ static int64_t decoder_main(void *arg)
     os64_media_source_t source = {0};
     int16_t *pcm = os64_malloc(sizeof(int16_t) * 2 * DECODE_FRAMES);
     bool network = !is_scheme(m->url, "file:");
-    if (pcm == NULL) {
+    os64_lock_acquire(&m->lock);
+    bool stopped = m->stop;
+    os64_lock_release(&m->lock);
+    if (stopped) {
+        // Closed before it ran (a start that answered an error): nothing
+        // to set up, and the wait below ends at once.
+    } else if (pcm == NULL) {
         fail(m, OS64_DOM_MEDIA_ERR_NETWORK, "No memory for the sound");
     } else if (!network) {
         char path[OS64_URL_REF_MAX];
@@ -729,10 +814,13 @@ static int64_t decoder_main(void *arg)
         os64_close(m->file);
     m->file = -1;
     os64_free(pcm);
+    // The window rung under the lock that publishes the flag: the reap
+    // reads the flag under it, so once the session is seen done this
+    // thread touches nothing of the session's or the window's again.
     os64_lock_acquire(&m->lock);
     m->decoder_done = true;
-    os64_lock_release(&m->lock);
     ring_window();
+    os64_lock_release(&m->lock);
     return 0;
 }
 
@@ -1177,8 +1265,7 @@ static bool audio_running(void)
     return true;
 }
 
-// A thread's handle collected and let go (a join only reads it, and yonder
-// makes threads for as long as it runs).
+// The audio thread's handle collected and let go (a join only reads it).
 static void thread_reap(int64_t handle)
 {
     if (handle < 0)
@@ -1187,10 +1274,15 @@ static void thread_reap(int64_t handle)
     os64_close((int32_t)handle);
 }
 
+// Whether a session's threads have all let go of it. Its lock held.
+static bool threads_done_locked(const yonder_media_t *m)
+{
+    return m->decoder_done && (!m->loader_started || m->loader_done);
+}
+
+// Frees a session no thread is using any more (threads_done_locked).
 static void session_free(yonder_media_t *m)
 {
-    thread_reap(m->decoder);
-    thread_reap(m->loader);
     yonder_fetch_release(m->job, m->product);
     if (m->pipe != NULL)
         yonder_fetch_pipe_release(m->pipe);
@@ -1209,7 +1301,6 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     yonder_media_t *m = os64_calloc(1, sizeof(*m));
     if (m == NULL)
         return NULL;
-    m->decoder = m->loader = -1;
     m->file = -1;
     m->gain = 1;
     m->want_all = r->preload == OS64_DOM_MEDIA_PRELOAD_AUTO;
@@ -1227,15 +1318,23 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
         return NULL;
     }
     os64_media_queue_init(&m->queue, m->storage, QUEUE_FRAMES);
-    m->decoder = os64_thread(decoder_main, m);
-    if (m->decoder < 0) {
-        session_free(m);
-        return NULL;
-    }
+    // On the list before the start, so a decoder that runs at once is
+    // already one a freed loader slot rings.
     os64_lock_acquire(&s_audio.lock);
     m->next = s_audio.sessions;
     s_audio.sessions = m;
     os64_lock_release(&s_audio.lock);
+    if (!thread_start(decoder_main, m)) {
+        // The decoder may be running all the same (thread_start): the
+        // session is closed and left on the list, for the reap to free
+        // once the decoder says it is done.
+        os64_lock_acquire(&m->lock);
+        m->stop = true;
+        m->closed = true;
+        ring_decoder_locked(m);
+        os64_lock_release(&m->lock);
+        return NULL;
+    }
     return m;
 }
 
@@ -1312,7 +1411,7 @@ void yonder_media_reap(void)
     while (*link != NULL) {
         yonder_media_t *m = *link;
         os64_lock_acquire(&m->lock);
-        bool gone = m->closed && m->decoder_done && (m->loader < 0 || m->loader_done) && s_audio.owner != m;
+        bool gone = m->closed && threads_done_locked(m) && s_audio.owner != m;
         os64_lock_release(&m->lock);
         if (gone) {
             *link = m->next;
@@ -1346,11 +1445,23 @@ void yonder_media_stop(void)
     os64_lock_release(&s_audio.lock);
     if (s_audio.started)
         thread_reap(s_audio.thread);
+    os64_lock_acquire(&s_audio.lock);
     s_audio.owner = NULL;
-    while (s_audio.sessions != NULL) {
-        yonder_media_t *m = s_audio.sessions;
-        s_audio.sessions = m->next;
-        session_free(m);
+    os64_lock_release(&s_audio.lock);
+    // The other threads have no handles to join (thread_start): each
+    // session is freed as its threads say they are done, and this waits
+    // for all of them, because the environment they use is freed after it.
+    // A fetch notices the stop at its next look (a hop, the pipe's room,
+    // libfetch's queue); a start that truly failed would wait forever,
+    // which is the price thread_start names.
+    for (;;) {
+        yonder_media_reap();
+        os64_lock_acquire(&s_audio.lock);
+        bool left = s_audio.sessions != NULL;
+        os64_lock_release(&s_audio.lock);
+        if (!left)
+            break;
+        (void)os64_sleep(STOP_POLL_MS);
     }
     if (s_audio.started)
         os64_bell_close(&s_audio.bell);

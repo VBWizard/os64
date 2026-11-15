@@ -54,7 +54,8 @@ typedef struct {
 
 // Once, before the first open; and once as yonder leaves, after the pages
 // are gone and before anything in the environment is freed: every session
-// is stopped and every thread joined.
+// is stopped, and it returns once every thread has let go of the sessions
+// and the environment.
 void yonder_media_start(const yonder_media_env_t *env);
 void yonder_media_stop(void);
 
