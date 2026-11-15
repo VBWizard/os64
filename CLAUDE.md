@@ -647,16 +647,17 @@ virtio because its drain waits for the tick.
   `/tests/mediatest`. **yonder plays a page's `<audio>`** through it
   (`apps/yonder/media.c`: a decoder thread per element feeding libmedia's
   PCM queue, `os64/media_queue.h`, a loader thread for a network address,
-  one audio thread owning `/dev/audio`), while libdom keeps the element's
+  one audio thread owning `/dev/audio` and mixing every element that
+  plays, `os64/media_mix.h`), while libdom keeps the element's
   HTML states, events and promises (`libdom/media.c`, `dom/media.h`'s
   provider). `<audio controls>` is a player widget over the element's
   box (`apps/yonder/player.c`), and a link straight to a sound plays it on
   a page of its own (`WAY_BODY_MEDIA`). A network sound's bytes are a
   window (`media_bytes.c`, pure), and a seek far from it is a `Range`
-  request. AUDIO_YONDER.md §§ As built (Y.2.1, Y.2.2, Y.2.3) are the
-  record, and `/tests/pages/audio.html` and `audio-controls.html` the
-  pages to try (`audio-range.html` wants `tools/pages_serve.py`, which
-  answers ranges). Sound at another rate goes through **`libsound.so`**
+  request. AUDIO_YONDER.md §§ As built (Y.2.1 to Y.3) are the record,
+  and `/tests/pages/audio.html`, `audio-controls.html` and
+  `audio-mix.html` the pages to try (`audio-range.html` wants
+  `tools/pages_serve.py`, which answers ranges). Sound at another rate goes through **`libsound.so`**
   (`os64/resample.h`): speexdsp's resampler, one file, unpatched, pinned by
   `userland/libsound/manifest.json`; its README is the inventory and the
   record of what was checked upstream. `tools/test_resample_host.sh`,

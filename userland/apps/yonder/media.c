@@ -13,12 +13,14 @@
 //             resume, from the window's end, a fetch let go while nothing
 //             played or broken part way.
 //   audio     one for yonder: /dev/audio, /dev/audiopos and /dev/audioctl,
-//             and the takes from the sounding session's queue.
+//             the takes from every sounding session's queue, the mix, and
+//             each session's voice clock (`voice`, `voice_generation`).
 //
 // A session's `lock` guards what more than one of them touch: the asks
 // (play, seek, settings, stop), the queue, the facts, the loader's
-// product. `s_audio.lock` guards the session list, which session the
-// device carries (`owner`) and the loader slots taken. No thread is
+// product. `s_audio.lock` guards the session list, which sessions are in
+// the mix (`voiced`, which keeps the reap off them) and the loader slots
+// taken. No thread is
 // joined (thread_start): a decoder or a loader says it is done as its last
 // touch of its session, and only then is the session freed; the audio
 // thread says so as its last touch of anything (`s_audio.done`). LOCK ORDER:
@@ -29,14 +31,14 @@
 //
 // THE CLOCK (AUDIO_YONDER.md § The audio thread and the mixer). The audio
 // thread counts the frames it has written since the device's counters
-// last began (an open or a flush), and keeps ANCHORS: the stream frame at
-// which each run of the media begins (a loop starts a new one). What the
-// ear hears is /dev/audiopos's `heard`, extrapolated while the stream
-// plays, and the anchor below it says which media frame that is.
+// last began (an open or a flush), and each voice keeps ANCHORS
+// (os64/media_mix.h): where in the stream each run of its frames went.
+// What the ear hears is /dev/audiopos's `heard`, extrapolated while the
+// stream plays, read through a voice's anchors.
 //
-// ONE SESSION SOUNDS AT A TIME until the mixer (Y.3): the first that asks
-// to play owns the device while it wants to, and another that asks waits
-// as a busy device makes it wait (§ When the stream is busy).
+// EVERY SESSION THAT PLAYS SOUNDS (the mix, up to MIX_VOICES; one past it
+// waits, told busy, as when another program has the stream: § When the
+// stream is busy).
 
 #include "media.h"
 
@@ -47,6 +49,7 @@
 #include "os64/bell.h"
 #include "os64/lock.h"
 #include "os64/media.h"
+#include "os64/media_mix.h"
 #include "os64/media_queue.h"
 #include "os64/os64.h"
 #include "os64/thread.h"
@@ -85,7 +88,9 @@
 #define PAUSE_KEEP_MS 30000u
 // While a session sounds, the window is rung this often, for timeupdate.
 #define RING_SOUNDING_MS 250u
-#define ANCHORS 64u
+// The sessions sounding at once. One past it waits, told busy: a page of
+// dozens of players starting together is not a page anyone listens to.
+#define MIX_VOICES 16u
 // How many sounds are fetched at once; the rest wait their turn. A page may
 // hold dozens of players, and a fetch costs a connection, or a bell while
 // libfetch queues it, out of the program's sixty-four handles. Fewer than
@@ -123,6 +128,13 @@ struct yonder_media {
     bool loader_done;               // the loader's last touch of the session
     bool decoder_done;              // the decoder's last touch of the session
     bool closed;                    // the window let go of it
+    // The audio thread's: in the mix (asks to sound, or its frames in the
+    // device are still to be heard), written under s_audio.lock, which the
+    // reap reads it under; and the voice's clock and the queue generation
+    // it was written from, which only the audio thread touches.
+    bool voiced;
+    os64_media_voice_t voice;
+    uint32_t voice_generation;
     // The decoder's own.
     char *url;
     char *page_url;
@@ -158,7 +170,6 @@ static struct {
     bool done;                      // the audio thread's last touch of anything
     uint32_t loaders;               // loader slots taken (LOADERS_MAX)
     yonder_media_t *sessions;
-    yonder_media_t *owner;
 } s_audio = {.bell = OS64_BELL_NONE};   // a zeroed bell would be handle 0, someone's file
 
 static yonder_media_env_t s_env;
@@ -1028,14 +1039,20 @@ typedef struct {
     bool generation_known;
     bool paused;                    // the stream's pause is on
     uint64_t written;               // frames written since the counters began
-    struct { uint64_t stream; int64_t media; } anchor[ANCHORS];
-    uint32_t anchors;
-    int64_t media_end;              // the media frame after the last written
-    uint32_t queue_generation;      // the owner's queue's, as last written from
     bool refused;                   // the last open found the stream another program's
     uint64_t idle_since, paused_since, busy_tried, rang;
     uint64_t drained_since;         // micros when the ring was first seen dry with all of it taken
 } Device;
+
+// What the stream says of the ear, read once a round (device_heard).
+typedef struct {
+    bool known;                     // the position could say
+    uint64_t heard;                 // the stream frame the ear is at
+    uint64_t passed;                // one it has certainly passed (what prunes anchors)
+    bool playing;                   // the stream plays
+    bool drained;                   // the sink has every frame written, and the ring ran dry
+    uint32_t delay_us;              // what the sink holds past its pull
+} Ear;
 
 static uint64_t now_ms(void)
 {
@@ -1054,8 +1071,6 @@ static void control(const char *verb)
 static void counters_restart(Device *d)
 {
     d->written = 0;
-    d->anchors = 0;
-    d->media_end = -1;
     d->generation_known = false;
     d->drained_since = 0;
 }
@@ -1071,73 +1086,50 @@ static void device_close(Device *d)
     counters_restart(d);
 }
 
-// The media frame the ear is at, or -1 when the position cannot say.
-// `*drained` (when the position can say) is true once the sink has taken
-// every frame written and the ring has run dry, with `*delay_us` what the
-// sink says lies beyond its pull: the last of it reaches the ear that long
+// Where the ear is in the stream. False with `*lost` when the stream began
+// a generation the audio thread did not start: a flush from elsewhere (a
+// sink attached or detached, a `flush` written to /dev/audioctl) threw
+// away what it held. `drained` (once the sink has taken every frame
+// written and the ring has run dry) comes with `delay_us`, what the sink
+// says lies beyond its pull: the last of it reaches the ear that long
 // after (a real sink's `heard` need not catch up with `taken` by itself).
-// `*lost` is true when the stream began a generation the audio thread did
-// not start: a flush from elsewhere (a sink attached or detached, a
-// `flush` written to /dev/audioctl) threw away what it held of ours.
-static int64_t heard_frame(Device *d, bool *playing, bool *drained, uint32_t *delay_us, bool *lost)
+static void device_heard(Device *d, Ear *ear, bool *lost)
 {
-    *playing = *drained = *lost = false;
-    *delay_us = 0;
-    if (d->position < 0 || d->anchors == 0)
-        return -1;
+    *ear = (Ear){0};
+    *lost = false;
+    if (d->position < 0)
+        return;
     os64_audio_position_t pos;
     if (os64_read((int32_t)d->position, &pos, sizeof(pos)) < (int64_t)sizeof(pos))
-        return -1;
+        return;
     if (!d->generation_known) {
         d->generation = pos.generation;
         d->generation_known = true;
     }
     if (pos.generation != d->generation) {
         *lost = true;
-        return -1;
+        return;
     }
     if (pos.accepted > d->written)
-        return -1;
-    *drained = pos.taken >= d->written && pos.state == OS64_AUDIO_STARVED;
-    *delay_us = pos.delay_us;
+        return;
+    ear->known = true;
+    ear->drained = pos.taken >= d->written && pos.state == OS64_AUDIO_STARVED;
+    ear->delay_us = pos.delay_us;
     uint64_t heard = pos.heard;
     if (pos.state == OS64_AUDIO_PLAYING) {
-        *playing = true;
+        ear->playing = true;
         uint64_t now = (uint64_t)os64_micros();
         if (now > pos.micros)
             heard += (now - pos.micros) * pos.rate / 1000000u;
         if (heard > pos.taken)
             heard = pos.taken;
     }
-    // Anchors the ear has gone past (its successor is heard too) are done
-    // with; dropping them here is what frees room for more (the take waits
-    // while there is none). Once the ring has run dry with all of it taken,
-    // `heard` stops short of `taken` by the sink's delay and moves no more
-    // until something is written, so the prune goes by `taken` then, or a
-    // take waiting for room would wait forever.
-    uint64_t passed = *drained ? pos.taken : heard;
-    while (d->anchors > 1 && d->anchor[1].stream <= passed) {
-        for (uint32_t k = 1; k < d->anchors; k++)
-            d->anchor[k - 1] = d->anchor[k];
-        d->anchors--;
-    }
-    uint32_t i = d->anchors;
-    while (i > 1 && d->anchor[i - 1].stream > heard)
-        i--;
-    // Pruned by `taken`, the ear can be short of the first anchor kept: it
-    // is at that anchor's start as near as the clock can say.
-    if (heard < d->anchor[i - 1].stream)
-        return d->anchor[i - 1].media;
-    return d->anchor[i - 1].media + (int64_t)(heard - d->anchor[i - 1].stream);
-}
-
-static void apply_gain(int16_t *pcm, uint32_t frames, double gain)
-{
-    if (gain >= 1)
-        return;
-    int32_t g = (int32_t)(gain * 65536.0 + 0.5);
-    for (uint32_t i = 0; i < frames * 2; i++)
-        pcm[i] = (int16_t)(((int32_t)pcm[i] * g) >> 16);
+    ear->heard = heard;
+    // Once the ring has run dry with all of it taken, `heard` stops short of
+    // `taken` by the sink's delay and moves no more until something is
+    // written, so the anchors are pruned by `taken` then, or a voice whose
+    // anchors are all in use would wait for room forever.
+    ear->passed = ear->drained ? pos.taken : heard;
 }
 
 // Write all of `frames`; false when the device failed.
@@ -1159,8 +1151,6 @@ static bool device_write(Device *d, const int16_t *pcm, uint32_t frames)
     return true;
 }
 
-// Which session should sound now (s_audio.lock held): the owner while it
-// wants to, else the first that asks. The others that ask wait, told busy.
 static bool asks(yonder_media_t *m)
 {
     os64_lock_acquire(&m->lock);
@@ -1169,34 +1159,14 @@ static bool asks(yonder_media_t *m)
     return asking;
 }
 
-static yonder_media_t *choose_locked(void)
-{
-    yonder_media_t *o = s_audio.owner;
-    if (o != NULL && asks(o))
-        return o;
-    for (yonder_media_t *m = s_audio.sessions; m != NULL; m = m->next)
-        if (asks(m))
-            return m;
-    return NULL;
-}
-
-// An owner that can no longer sound: closed, or played to its end.
-static bool owner_gone(yonder_media_t *o)
-{
-    os64_lock_acquire(&o->lock);
-    bool gone = o->stop || o->facts.ended;
-    os64_lock_release(&o->lock);
-    return gone;
-}
-
-// Each session that asks to play and cannot is told busy: one another
-// session owns the device for, and the owner when another program has
-// the stream (`refused`). s_audio.lock held.
+// Each session that asks to play and cannot is told busy: every one when
+// another program has the stream (`refused`), and one past the mix's
+// MIX_VOICES. s_audio.lock held.
 static void tell_busy_locked(bool refused)
 {
     for (yonder_media_t *m = s_audio.sessions; m != NULL; m = m->next) {
         os64_lock_acquire(&m->lock);
-        bool busy = m->play && !m->stop && !m->facts.ended && (m != s_audio.owner || refused);
+        bool busy = m->play && !m->stop && !m->facts.ended && (refused || !m->voiced);
         bool changed = busy != m->facts.busy;
         m->facts.busy = busy;
         if (busy)
@@ -1207,109 +1177,156 @@ static void tell_busy_locked(bool refused)
     }
 }
 
+// What the audio thread knows of a voice for one round.
+typedef struct {
+    yonder_media_t *m;
+    bool wants;                     // play, not stopped, not ended
+    bool resync;
+    bool stopped;
+    bool finished;                  // its queue has given its last frame
+    double gain;
+    uint32_t taken;                 // frames mixed into this round's block
+    int64_t at;                     // the media frame of the first
+} Voice;
+
+// Whether a voice has frames in the stream the ear has not reached.
+static bool voice_unheard(const yonder_media_t *m, const Ear *ear)
+{
+    return m->voice.anchors > 0 && (!ear->known || ear->heard < os64_media_voice_stream_end(&m->voice));
+}
+
+// The stream's counters start again (a flush, ours or another's, or the
+// device shut): no frame of any voice is in it, so every clock starts
+// again, and a voice that was not done goes on from where its ear was
+// (`resync`: its decoder seeks there and flushes its queue).
+static void voices_restart(Device *d, Voice *v, uint32_t n)
+{
+    counters_restart(d);
+    for (uint32_t i = 0; i < n; i++) {
+        yonder_media_t *m = v[i].m;
+        if (m->voice.anchors > 0) {
+            os64_lock_acquire(&m->lock);
+            if (!m->stop && !m->facts.ended)
+                m->resync = true;
+            m->facts.sounding = false;
+            os64_lock_release(&m->lock);
+        }
+        os64_media_voice_reset(&m->voice);
+    }
+}
+
+// A voice leaves the mix: the window may reap it from then on, so nothing
+// here touches it after.
+static void voice_release(yonder_media_t *m)
+{
+    os64_lock_acquire(&s_audio.lock);
+    os64_lock_acquire(&m->lock);
+    m->facts.sounding = false;
+    os64_lock_release(&m->lock);
+    m->voiced = false;
+    os64_lock_release(&s_audio.lock);
+}
+
+// THE MIX (AUDIO_YONDER.md § The audio thread and the mixer). Every session
+// that asks to play is a voice; each block is what every voice had for it,
+// times its gain, summed (os64/media_mix.h), and each voice's clock says
+// which of its frames the stream's position is. A voice that pauses while
+// others play stops being taken from and its last frames in the device
+// play out; when nobody plays, the stream's own pause holds what it has.
 static int64_t audio_main(void *arg)
 {
     (void)arg;
-    Device d = {.audio = -1, .position = -1, .media_end = -1};
+    Device d = {.audio = -1, .position = -1};
     int16_t *buf = os64_malloc(sizeof(int16_t) * 2 * WRITE_FRAMES);
+    int32_t *acc = os64_malloc(sizeof(int32_t) * 2 * WRITE_FRAMES);
+    Voice v[MIX_VOICES];
     d.idle_since = now_ms();
     for (;;) {
+        // Who is in the mix: every session that asks, and every one with
+        // frames in the device still to be heard (its clock is read until
+        // they are). `voiced` keeps the reap off them meanwhile.
         os64_lock_acquire(&s_audio.lock);
         if (s_audio.quit) {
             os64_lock_release(&s_audio.lock);
             break;
         }
-        yonder_media_t *want = choose_locked(), *owner = s_audio.owner;
-        if (owner != NULL && want != owner && (want != NULL || owner_gone(owner))) {
-            // Another takes the device, or the owner went: what the device
-            // still holds of the owner is not to be heard. One that comes
-            // back starts again from where its ear was.
-            os64_lock_acquire(&owner->lock);
-            owner->facts.sounding = false;
-            if (!owner->stop && !owner->facts.ended)
-                owner->resync = true;
-            os64_lock_release(&owner->lock);
-            if (d.audio >= 0) {
-                control("flush\n");
-                if (d.paused)
-                    control("resume\n");
-                d.paused = false;
-                counters_restart(&d);
-            }
-            s_audio.owner = owner = want;
-            if (owner != NULL) {
-                os64_lock_acquire(&owner->lock);
-                d.queue_generation = owner->queue.generation;
-                os64_lock_release(&owner->lock);
-            }
-        } else if (owner == NULL && want != NULL) {
-            // The device may still be open from one that played out: its
-            // counters start again for this one (an empty ring loses
-            // nothing to the flush).
-            if (d.audio >= 0) {
-                control("flush\n");
-                if (d.paused)
-                    control("resume\n");
-                d.paused = false;
-                counters_restart(&d);
-            }
-            s_audio.owner = owner = want;
-            os64_lock_acquire(&owner->lock);
-            d.queue_generation = owner->queue.generation;
-            os64_lock_release(&owner->lock);
+        // The voices already in it first (never more than MIX_VOICES), so
+        // none is left unvisited, then those that ask, while there is room.
+        uint32_t n = 0, wanting = 0;
+        for (yonder_media_t *m = s_audio.sessions; m != NULL; m = m->next)
+            if (m->voiced && n < MIX_VOICES)
+                v[n++] = (Voice){.m = m};
+        for (yonder_media_t *m = s_audio.sessions; m != NULL && n < MIX_VOICES; m = m->next) {
+            if (m->voiced || !asks(m))
+                continue;
+            m->voiced = true;
+            os64_media_voice_reset(&m->voice);
+            os64_lock_acquire(&m->lock);
+            m->voice_generation = m->queue.generation;
+            os64_lock_release(&m->lock);
+            v[n++] = (Voice){.m = m};
         }
         tell_busy_locked(d.refused);
         os64_lock_release(&s_audio.lock);
         uint64_t now = now_ms();
+        for (uint32_t i = 0; i < n; i++) {
+            yonder_media_t *m = v[i].m;
+            os64_lock_acquire(&m->lock);
+            v[i].stopped = m->stop;
+            v[i].wants = m->play && !m->stop && !m->facts.ended;
+            v[i].resync = m->resync;
+            v[i].gain = m->gain;
+            os64_lock_release(&m->lock);
+            if (v[i].wants)
+                wanting++;
+        }
 
-        if (owner == NULL) {
+        if (n == 0) {
             if (d.audio >= 0 && now - d.idle_since >= IDLE_CLOSE_MS)
                 device_close(&d);
             (void)os64_bell_wait(&s_audio.bell, 250);
             continue;
         }
         d.idle_since = now;
-        os64_lock_acquire(&owner->lock);
-        bool play = owner->play && !owner->stop, resync = owner->resync;
-        os64_lock_release(&owner->lock);
 
-        if (!play) {
-            // Paused, and nobody else asks: the stream's own pause keeps
-            // what it holds and stops the ear where it is. A long pause
-            // gives the device back (AUDIO_YONDER.md § Pause).
+        if (wanting == 0) {
+            // Nobody plays: the stream's own pause keeps what it holds and
+            // stops the ear where it is. A long pause gives the device back
+            // (AUDIO_YONDER.md § Pause), and each voice goes on from where
+            // its ear was when it plays again.
             if (d.audio >= 0 && !d.paused) {
                 control("pause\n");
                 d.paused = true;
                 d.paused_since = now;
             }
-            os64_lock_acquire(&owner->lock);
-            owner->facts.sounding = false;
-            os64_lock_release(&owner->lock);
-            if (d.audio >= 0 && now - d.paused_since >= PAUSE_KEEP_MS) {
+            bool close = d.audio < 0 || now - d.paused_since >= PAUSE_KEEP_MS;
+            if (close && d.audio >= 0) {
                 device_close(&d);
-                // Let go of it last: once it is no owner the window may
-                // reap it, so nothing here touches it after.
-                os64_lock_acquire(&s_audio.lock);
-                if (s_audio.owner == owner) {
-                    os64_lock_acquire(&owner->lock);
-                    owner->resync = true;
-                    os64_lock_release(&owner->lock);
-                    s_audio.owner = NULL;
-                }
-                os64_lock_release(&s_audio.lock);
+                voices_restart(&d, v, n);
+            }
+            for (uint32_t i = 0; i < n; i++) {
+                yonder_media_t *m = v[i].m;
+                os64_lock_acquire(&m->lock);
+                m->facts.sounding = false;
+                bool done = m->stop || m->facts.ended;
+                os64_lock_release(&m->lock);
+                // Its tail is for nobody (closed, or played out), or the
+                // device that held it is shut.
+                if (done || close)
+                    voice_release(m);
             }
             (void)os64_bell_wait(&s_audio.bell, 250);
             continue;
         }
-        if (resync) {
-            // The decoder seeks to where the ear was and flushes the
-            // queue, which the take below sees.
-            os64_lock_acquire(&owner->lock);
-            ring_decoder_locked(owner);
-            os64_lock_release(&owner->lock);
-            (void)os64_bell_wait(&s_audio.bell, 20);
-            continue;
-        }
+
+        // Someone plays: a voice to come back from where its ear was is
+        // asked to (its decoder seeks and flushes), and sits this round out.
+        for (uint32_t i = 0; i < n; i++)
+            if (v[i].resync) {
+                os64_lock_acquire(&v[i].m->lock);
+                ring_decoder_locked(v[i].m);
+                os64_lock_release(&v[i].m->lock);
+            }
         if (d.audio < 0) {
             if (now - d.busy_tried < BUSY_RETRY_MS && d.busy_tried != 0) {
                 (void)os64_bell_wait(&s_audio.bell, BUSY_RETRY_MS);
@@ -1318,7 +1335,7 @@ static int64_t audio_main(void *arg)
             d.busy_tried = now;
             int64_t h = os64_open("/dev/audio", "w");
             if (h < 0) {
-                // Another program has the stream: the owner waits (busy),
+                // Another program has the stream: whoever asks waits (busy),
                 // and the open is tried again twice a second.
                 d.refused = true;
                 os64_lock_acquire(&s_audio.lock);
@@ -1331,111 +1348,151 @@ static int64_t audio_main(void *arg)
             d.position = p >= 0 ? p : -1;
             d.busy_tried = 0;
             d.refused = false;
-            counters_restart(&d);
+            voices_restart(&d, v, n);
             os64_lock_acquire(&s_audio.lock);
             tell_busy_locked(false);
             os64_lock_release(&s_audio.lock);
         }
+        Ear ear;
+        bool lost;
+        device_heard(&d, &ear, &lost);
+        if (lost) {
+            voices_restart(&d, v, n);
+            continue;
+        }
         if (d.paused) {
+            // The stream comes back. What it holds that nobody playing owns
+            // (the tails of voices paused or closed, heard much later than
+            // they were meant to be) is flushed, and those voices go on
+            // from where their ears were.
+            bool owned = false;
+            for (uint32_t i = 0; i < n; i++)
+                owned |= v[i].wants && voice_unheard(v[i].m, &ear);
+            if (!owned) {
+                control("flush\n");
+                voices_restart(&d, v, n);
+            }
             control("resume\n");
             d.paused = false;
         }
-        os64_lock_acquire(&owner->lock);
-        if (owner->queue.generation != d.queue_generation) {
-            // A seek: what the device holds is from before it.
-            d.queue_generation = owner->queue.generation;
-            os64_lock_release(&owner->lock);
-            control("flush\n");
-            counters_restart(&d);
-            os64_lock_acquire(&owner->lock);
-        }
-        int64_t at = 0;
-        // No take while every anchor is in use (a clip a few milliseconds
-        // long on loop starts a run per write): the device holds runs not
-        // yet heard, and their anchors are what the clock reads them by.
-        uint32_t n = buf != NULL && (d.anchors < ANCHORS || d.position < 0)
-            ? os64_media_queue_take(&owner->queue, buf, WRITE_FRAMES, &at) : 0;
-        bool finished = os64_media_queue_finished(&owner->queue);
-        double gain = owner->gain;
-        if (n > 0)
-            ring_decoder_locked(owner);
-        os64_lock_release(&owner->lock);
 
-        if (n > 0) {
-            if (d.anchors == 0 || at != d.media_end) {
-                // Full only with no position to read (nothing prunes, and
-                // nothing reads them): the oldest goes.
-                if (d.anchors == ANCHORS) {
-                    for (uint32_t i = 1; i < ANCHORS; i++)
-                        d.anchor[i - 1] = d.anchor[i];
-                    d.anchors--;
-                }
-                d.anchor[d.anchors].stream = d.written;
-                d.anchor[d.anchors].media = at;
-                d.anchors++;
+        // A voice's queue that moved to another generation (a seek, or the
+        // resync's flush): what the device holds of it is from before. When
+        // it is the only one with frames there, those are flushed; with
+        // others sounding, its last fifth of a second plays out under them.
+        for (uint32_t i = 0; i < n; i++) {
+            yonder_media_t *m = v[i].m;
+            os64_lock_acquire(&m->lock);
+            uint32_t generation = m->queue.generation;
+            os64_lock_release(&m->lock);
+            if (generation == m->voice_generation)
+                continue;
+            bool others = false;
+            for (uint32_t j = 0; j < n; j++)
+                others |= j != i && voice_unheard(v[j].m, &ear);
+            if (!others && voice_unheard(m, &ear)) {
+                control("flush\n");
+                voices_restart(&d, v, n);
             }
-            d.media_end = at + n;
-            apply_gain(buf, n, gain);
-            if (!device_write(&d, buf, n)) {
+            m->voice_generation = generation;
+            os64_media_voice_reset(&m->voice);
+        }
+
+        // The block: what each voice playing has, up to WRITE_FRAMES, mixed.
+        // No take from a voice whose anchors are all in use (a clip a few
+        // milliseconds long on loop starts a run per block): the device
+        // holds runs not yet heard, and they are what its clock reads.
+        uint32_t block = 0;
+        if (buf != NULL && acc != NULL)
+            os64_memset(acc, 0, sizeof(int32_t) * 2 * WRITE_FRAMES);
+        for (uint32_t i = 0; i < n; i++) {
+            yonder_media_t *m = v[i].m;
+            os64_lock_acquire(&m->lock);
+            v[i].finished = os64_media_queue_finished(&m->queue);
+            bool can = buf != NULL && acc != NULL && v[i].wants && !m->resync &&
+                       m->queue.generation == m->voice_generation &&
+                       (os64_media_voice_room(&m->voice) || d.position < 0);
+            uint32_t got = can ? os64_media_queue_take(&m->queue, buf, WRITE_FRAMES, &v[i].at) : 0;
+            if (got > 0)
+                ring_decoder_locked(m);
+            os64_lock_release(&m->lock);
+            if (got > 0) {
+                os64_media_mix_add(acc, buf, got, v[i].gain);
+                v[i].taken = got;
+                if (got > block)
+                    block = got;
+            }
+        }
+        if (block > 0) {
+            os64_media_mix_out(acc, buf, block);
+            if (!device_write(&d, buf, block)) {
                 device_close(&d);
-                fail(owner, OS64_DOM_MEDIA_ERR_DECODE, "The sound device failed");
+                for (uint32_t i = 0; i < n; i++)
+                    if (v[i].taken > 0)
+                        fail(v[i].m, OS64_DOM_MEDIA_ERR_DECODE, "The sound device failed");
+                voices_restart(&d, v, n);
                 continue;
             }
-            d.written += n;
+            for (uint32_t i = 0; i < n; i++)
+                if (v[i].taken > 0)
+                    os64_media_voice_wrote(&v[i].m->voice, d.written, v[i].at, v[i].taken);
+            d.written += block;
         }
-        bool playing = false, drained = false, lost = false;
-        uint32_t delay_us = 0;
-        int64_t frame = heard_frame(&d, &playing, &drained, &delay_us, &lost);
+
+        // The ear, for each voice: its position, whether it sounds, and its
+        // end once its queue has given its last frame and the ear has heard
+        // it. A voice done (closed, ended, or paused with its tail heard)
+        // leaves the mix.
+        device_heard(&d, &ear, &lost);
         if (lost) {
-            // As when another session takes the device: the counters start
-            // again, and the owner goes on from where its ear was.
-            os64_lock_acquire(&owner->lock);
-            owner->resync = true;
-            os64_lock_release(&owner->lock);
-            counters_restart(&d);
+            voices_restart(&d, v, n);
             continue;
         }
-        if (!drained)
+        if (!ear.drained)
             d.drained_since = 0;
         else if (d.drained_since == 0)
             d.drained_since = (uint64_t)os64_micros();
-        bool all_heard = finished && frame >= 0 &&
-                         (frame >= d.media_end ||
-                          (drained && (uint64_t)os64_micros() - d.drained_since >= delay_us));
-        os64_lock_acquire(&owner->lock);
-        bool synced = owner->queue.generation == d.queue_generation;
-        if (synced && frame >= 0)
-            owner->facts.position = (double)frame / RATE;
-        owner->facts.sounding = playing && synced;
-        bool ended_now = false;
-        // `finished` and what was heard describe the generation the take
-        // saw; a seek that flushed the queue since makes them another
-        // playback's, which must not be called ended.
-        if (synced && finished && (all_heard || d.written == 0) && !owner->facts.ended) {
-            owner->facts.ended = true;
-            owner->facts.sounding = false;
-            ended_now = true;
+        bool tail_heard = ear.drained && (uint64_t)os64_micros() - d.drained_since >= ear.delay_us;
+        bool ring = ear.playing && now - d.rang >= RING_SOUNDING_MS;
+        for (uint32_t i = 0; i < n; i++) {
+            yonder_media_t *m = v[i].m;
+            int64_t frame = -1;
+            if (ear.known) {
+                os64_media_voice_prune(&m->voice, ear.passed);
+                frame = os64_media_voice_heard(&m->voice, ear.heard);
+            }
+            bool all_heard = m->voice.anchors == 0 ||
+                             (ear.known && (ear.heard >= os64_media_voice_stream_end(&m->voice) || tail_heard));
+            os64_lock_acquire(&m->lock);
+            bool synced = m->queue.generation == m->voice_generation;
+            if (synced && frame >= 0)
+                m->facts.position = (double)frame / RATE;
+            m->facts.sounding = ear.playing && synced && v[i].wants && m->voice.anchors > 0 && !all_heard;
+            // `finished` and what was heard describe the generation the take
+            // saw; a seek that flushed the queue since makes them another
+            // playback's, which must not be called ended.
+            bool ended_now = false;
+            if (v[i].wants && synced && v[i].finished && all_heard && !m->facts.ended) {
+                m->facts.ended = true;
+                m->facts.sounding = false;
+                ended_now = true;
+            }
+            bool done = m->stop || m->facts.ended || (!m->play && all_heard);
+            os64_lock_release(&m->lock);
+            ring |= ended_now;
+            if (done)
+                voice_release(m);
         }
-        os64_lock_release(&owner->lock);
-        if (ended_now || (playing && now - d.rang >= RING_SOUNDING_MS)) {
+        if (ring) {
             d.rang = now;
             ring_window();
         }
-        if (ended_now) {
-            // Played out: the device is nobody's (choose_locked passes over
-            // a session that has ended), and closes once idle.
-            os64_lock_acquire(&s_audio.lock);
-            if (s_audio.owner == owner)
-                s_audio.owner = NULL;
-            os64_lock_release(&s_audio.lock);
-            counters_restart(&d);
-            continue;
-        }
-        if (n == 0)
-            (void)os64_bell_wait(&s_audio.bell, finished ? 20 : 10);
+        if (block == 0)
+            (void)os64_bell_wait(&s_audio.bell, 10);
     }
     device_close(&d);
     os64_free(buf);
+    os64_free(acc);
     os64_lock_acquire(&s_audio.lock);
     s_audio.done = true;
     os64_lock_release(&s_audio.lock);
@@ -1603,7 +1660,7 @@ void yonder_media_reap(void)
     while (*link != NULL) {
         yonder_media_t *m = *link;
         os64_lock_acquire(&m->lock);
-        bool gone = m->closed && threads_done_locked(m) && s_audio.owner != m;
+        bool gone = m->closed && threads_done_locked(m) && !m->voiced;
         os64_lock_release(&m->lock);
         if (gone) {
             *link = m->next;
@@ -1638,8 +1695,8 @@ void yonder_media_stop(void)
     // No thread has a handle to join (thread_start): this waits for the
     // audio thread's done and for every session to be freed as its threads
     // say they are done, because the environment they use is freed after
-    // it. The audio thread lets go of the device first, so the owner is
-    // cleared once it has, and the reap may take the last session. A fetch
+    // it. The audio thread lets go of the device first, so the voices are
+    // let go once it has, and the reap may take the last session. A fetch
     // notices the stop at its next look (a hop, the pipe's room, libfetch's
     // queue); a start that truly failed would wait forever, which is the
     // price thread_start names.
@@ -1647,7 +1704,8 @@ void yonder_media_stop(void)
         os64_lock_acquire(&s_audio.lock);
         if (!audio_done && s_audio.done) {
             audio_done = true;
-            s_audio.owner = NULL;
+            for (yonder_media_t *m = s_audio.sessions; m != NULL; m = m->next)
+                m->voiced = false;
         }
         os64_lock_release(&s_audio.lock);
         if (audio_done)
