@@ -1,5 +1,7 @@
 # F.15 B1 — scalar retention diagnostics
 
+Implementation PR: **#610**, source `8d9c67ef`.
+
 Implementation baseline: merged `userland` `8aee6e2c`, including the approved
 [F15 design #600](IFRAME_F15_RECLAMATION.md), observer settings #599,
 custom-element settings #601 and the accepted media changes. Engine identity
