@@ -59,7 +59,7 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
     os64_strcopy(leg.referrer, sizeof(leg.referrer), trip->referrer);
     leg.face = (way_face_t){&r, run_confirm, run_cancelled, run_progress};
     leg.pictures = OS64_IMAGE_ACCEPT;
-    leg.sounds = yonder_media_sounds();
+    leg.sounds = trip->sounds ? yonder_media_sounds() : NULL;
 
     yonder_verdict_t verdict;
     os64_memset(&verdict, 0, sizeof(verdict));

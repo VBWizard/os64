@@ -246,12 +246,12 @@ bool f_replaced(const flow_env_t *env, const os64_html_node_t *n, const flow_sty
     }
 }
 
-// An `audio` with `controls` is a box the face's controls fill, as other
-// browsers draw one; its sound is played by script's runtime, so a page
-// read without script has no player and its audio stays boxless.
+// An `audio` with `controls` is a box the face's player fills, as other
+// browsers draw one, when the face plays the page's sounds
+// (flow_env_t.media); otherwise it stays boxless.
 bool f_audio_controls(const flow_env_t *env, const os64_html_node_t *n)
 {
-    return env->scripting && is(n, OS64_HTML_TAG_AUDIO) && os64_html_attr(n, "controls") != NULL;
+    return env->media && is(n, OS64_HTML_TAG_AUDIO) && os64_html_attr(n, "controls") != NULL;
 }
 
 static bool replaced(const B *b, const os64_html_node_t *n)
@@ -261,7 +261,7 @@ static bool replaced(const B *b, const os64_html_node_t *n)
 }
 
 // Elements that make no box in this browser. An `embed` plays nothing here
-// and an `audio` without controls (f_audio_controls) shows nothing, and
+// and an `audio` with no player (f_audio_controls) shows nothing, and
 // neither has fallback content; `source` and `track` are data for a
 // player; `keygen` is a control nothing implements.
 bool f_boxless(const flow_env_t *env, const os64_html_node_t *n)

@@ -2693,6 +2693,25 @@ static void input_links(void) {
     check(status_says("background workers"),"input: an uncancelled click follows its link after its listeners");
     probe_drop();
 }
+static os64_dom_media_control_t s_player_ask[8];
+static double s_player_value[8];
+static int s_player_asked, s_player_passed;
+static void player_asks_note(yonder_player_t *p, os64_dom_media_control_t what, double value, void *user) {
+    (void)p; (void)user;
+    if (s_player_asked < 8) { s_player_ask[s_player_asked] = what; s_player_value[s_player_asked] = value; }
+    s_player_asked++;
+}
+static bool player_pass_note(const os64_gui_event_t *ev, void *user) {
+    (void)ev; (void)user;
+    s_player_passed++;
+    return true;
+}
+static bool player_key_now(yonder_player_t *p, char ascii, uint8_t scancode) {
+    os64_gui_event_t ev = {.type = OS64_GUI_EVENT_KEY_DOWN};
+    ev.key.ascii = ascii; ev.key.scancode = scancode;
+    return yonder_player_class.event(&p->w, &g.ui, &ev);
+}
+
 /* An audio's player (player.h; AUDIO_YONDER.md § The controls): its
  * arithmetic, and a page's `<audio controls>` getting one at its box, as
  * a form control gets its widget, and none with scripts off. Here no
@@ -2725,6 +2744,44 @@ static void player_cases(void) {
           yonder_player_value_at(parts.seek, parts.seek.x + parts.seek.w / 2, 10) < 6 &&
           yonder_player_value_at(parts.seek, parts.seek.x, NAN) == 0,
           "player: the bar's value is held to its ends, and a length not known seeks nowhere");
+
+    // What the person asks, in order, from presses and keys alone (the
+    // player's own state; no element here).
+    yonder_player_t pl;
+    yonder_player(&pl, player_asks_note, player_pass_note, NULL);
+    pl.w.bounds = (os64_gui_rect_t){0, 0, 300, 54};
+    s_player_asked = 0; s_player_passed = 0;
+    player_key_now(&pl, ' ', 0x39); player_key_now(&pl, ' ', 0x39);
+    check(s_player_asked == 2 && s_player_ask[0] == OS64_DOM_MEDIA_PLAY && s_player_ask[1] == OS64_DOM_MEDIA_PAUSE,
+          "player: two presses before the element answers ask play, then pause");
+    s_player_asked = 0;
+    player_key_now(&pl, 'm', 0x32); player_key_now(&pl, 'm', 0x32);
+    check(s_player_asked == 2 && s_player_value[0] == 1 && s_player_value[1] == 0,
+          "player: two mutes ask on, then off");
+    s_player_asked = 0;
+    check(!player_key_now(&pl, 0x1b, 0x01) && s_player_asked == 0 && pl.seq == 0,
+          "player: a real Escape is not the player's");
+    bool taken = player_key_now(&pl, 0x1b, 0x49) && player_key_now(&pl, '[', 0) && player_key_now(&pl, '5', 0) &&
+                 player_key_now(&pl, '~', 0);
+    check(taken && s_player_asked == 0 && pl.seq == 0 && player_key_now(&pl, ' ', 0x39) && s_player_asked == 1,
+          "player: Page Up's burst is taken whole, asks nothing, and the next key is a key");
+    pl.view.muted = true; pl.view.volume = 0.5; s_player_asked = 0;
+    player_key_now(&pl, 0x1b, 0x50); player_key_now(&pl, '[', 0); player_key_now(&pl, 'B', 0);
+    check(s_player_asked == 2 && s_player_ask[0] == OS64_DOM_MEDIA_VOLUME && s_player_value[0] > 0.39 &&
+          s_player_value[0] < 0.41 && s_player_ask[1] == OS64_DOM_MEDIA_MUTE && s_player_value[1] == 0,
+          "player: Down while muted steps from the volume it had, and unmutes");
+    os64_gui_event_t wheel = {.type = OS64_GUI_EVENT_MOUSE_WHEEL};
+    wheel.mouse.x = pl.w.bounds.x + pl.w.bounds.w / 2; wheel.mouse.y = 27; wheel.mouse.dy = 1;
+    s_player_asked = 0;
+    check(yonder_player_class.event(&pl.w, &g.ui, &wheel) && s_player_passed == 1 && s_player_asked == 0,
+          "player: the wheel over the bar is the page's, handed on");
+    yonder_player_release(&pl);
+    probe_modern_off = true;
+    probe_page("<p><audio id=a controls src=a.mp3></audio></p>", true);
+    check(g.nplayers == 0 && flow_box_for(g.page.tree, probe_id("a")) == NULL,
+          "player: with the Modern Web off an audio's controls draw nothing");
+    probe_drop();
+    probe_modern_off = false;
 
     probe_page("<p><audio id=a controls src=a.mp3></audio><audio id=b src=b.mp3></audio></p>", true);
     script_turn();

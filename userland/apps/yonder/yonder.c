@@ -1775,6 +1775,9 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     s_laying.cascade = cascade;
     s_laying.entry = entry;
     s_env.scripting = p->scripting;
+    // A page's sound lives in script's Modern Web runtime (libdom), so only
+    // such a page has players to draw.
+    s_env.media = p->scripting && p->modern;
     // One height for `vh` and the initial containing block (flow_env_t),
     // in CSS pixels at `zoom`.
     s_env.viewport_height = view.height;
@@ -5073,6 +5076,7 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
     trip->agent = g.way.agent;
     trip->identity = g.way.identity;
     trip->metadata = asked;
+    trip->sounds = g.scripts_on && g.modern;
     trip->window = g.win;
     trip->mail_bell = BELL_MAIL;
     os64_strcopy(trip->url, sizeof(trip->url), url);
@@ -10163,24 +10167,35 @@ static void player_destroy(Player *pl)
     os64_free(pl);
 }
 
-// What the person did with a player, noted for the loop's turn. A second
-// ask of the same kind replaces the first (a drag's seeks are one seek),
-// and a full list keeps its oldest: the rest of a gesture is still to come.
+// What the person did with a player, noted for the loop's turn, in order.
+// An ask of the kind just before it replaces that one (a drag's seeks are
+// one seek); a full list lets its oldest go, since what the person asked
+// last is what they want.
 static void player_act(yonder_player_t *p, os64_dom_media_control_t what, double value, void *user)
 {
     (void)p;
     Player *pl = user;
-    for (int32_t i = 0; i < pl->nasks; i++)
-        if (pl->asks[i].what == what) {
-            pl->asks[i].value = value;
-            return;
-        }
-    if (pl->nasks < PLAYER_ASKS) {
-        pl->asks[pl->nasks].what = what;
-        pl->asks[pl->nasks].value = value;
-        pl->nasks++;
+    if (pl->nasks > 0 && pl->asks[pl->nasks - 1].what == what) {
+        pl->asks[pl->nasks - 1].value = value;
+        return;
     }
+    if (pl->nasks == PLAYER_ASKS) {
+        os64_memmove(pl->asks, pl->asks + 1, sizeof(pl->asks[0]) * (PLAYER_ASKS - 1));
+        pl->nasks--;
+    }
+    pl->asks[pl->nasks].what = what;
+    pl->asks[pl->nasks].value = value;
+    pl->nasks++;
     (void)os64_gui_event_ring(g.win, BELL_MEDIA);
+}
+
+static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_t *ev);
+
+// A wheel a player has no use for scrolls the page under it.
+static bool player_pass(const os64_gui_event_t *ev, void *user)
+{
+    (void)user;
+    return view_event(&g.view, &g.ui, ev);
 }
 
 // The players' asks, each done to its element as script would do it; the
@@ -10251,9 +10266,10 @@ static void players_place(void)
 
 // The page's players, built beside the old list after a layout: one for
 // each audio element laid out as controls (a replaced box, which only a
-// page laid out with scripting has: f_audio_controls). A player whose
-// element keeps its box is kept, view, focus and drag and all. Refused
-// memory keeps the old list.
+// page whose sound plays has: flow_env_t.media). A player whose element
+// keeps its box is kept, with its view and its focus; a rebuild that lets
+// any widget go ends the gesture in progress, as libui ends every one
+// (os64_ui_cancel_gestures). Refused memory keeps the old list.
 static void players_build(void)
 {
     const os64_html_document_t *doc = page_doc(&g.page);
@@ -10278,7 +10294,7 @@ static void players_build(void)
                 refused = true;
                 break;
             }
-            yonder_player(&pl->p, player_act, pl);
+            yonder_player(&pl->p, player_act, player_pass, pl);
             pl->node = x;
             pl->document = doc;
             os64_html_hold(doc, x);

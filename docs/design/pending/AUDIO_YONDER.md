@@ -612,14 +612,17 @@ above:
   size shows play, time, seek and mute; there the wheel over the speaker
   and Up and Down set the volume, which is Chrome's pop-out slider's job.
   Space and Enter play and pause, Left and Right seek five seconds, `m`
-  mutes. Busy and a failed load are said where the bar is ("Sound is
+  mutes; the wheel anywhere but the volume scrolls the page. Busy and a failed load are said where the bar is ("Sound is
   busy", "Cannot play this sound").
 - **It shows the element and asks the element**: libdom's
   `os64_dom_media_view` is what a script's members would answer, and
   `os64_dom_media_control` is a script's call (play, pause, a seek, the
   volume, muted), through the same steps the members take, so a page
   hears the same events. A control's play is a task of its own, and its
-  promise's rejection is the element's state, never an unhandled one.
+  promise's rejection is the element's state, never an unhandled one. A
+  press shows its change at once, so two presses in one batch of input
+  ask play then pause, not play twice; the element's next view says what
+  happened.
 - **A press is acted on at the loop's turn**, not in the widget's
   handler: yonder replays a press to libui from inside the page's pointer
   task, where no task of the control's own can begin. The press has
@@ -628,9 +631,11 @@ above:
   same layouts and scrolls (`forms_build`, `forms_place`), threaded after
   them in the root's list (`page_widgets_chain`), so a rebuild of either
   keeps the other.
-- **A page with scripts off has no player**: the element lives in
-  script's runtime, so its audio stays boxless, as a canvas falls back.
-  DEBTS.md § A page's sound books what that costs.
+- **A page with scripts or the Modern Web off has no player**: the
+  element lives in script's Modern Web runtime, so the face tells libflow
+  it plays no sounds (`flow_env_t.media`) and the audio stays boxless, and
+  a sound asked for by itself is a file to save, as before. DEBTS.md § A
+  page's sound books what that costs.
 - **The media document**: libway sorts a reply whose type is in the
   leg's `sounds` (libmedia's `os64_media_type_list`, the table
   `canPlayType` reads) into `WAY_BODY_MEDIA`; the list is not added to a

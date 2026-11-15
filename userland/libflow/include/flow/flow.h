@@ -1038,6 +1038,10 @@ typedef struct {
     // The face renders outer inline SVG viewports as replaced content.
     // False retains foreign-content fallback for text-only consumers.
     bool svg;
+    // The face plays the page's sounds: an `audio` with `controls` is a
+    // replaced box it draws its player in (replaced_size gives its size).
+    // False keeps every audio boxless, as a face with no player needs.
+    bool media;
 } flow_env_t;
 
 bool flow_svg_root(const os64_html_node_t *node);

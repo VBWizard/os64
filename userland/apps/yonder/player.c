@@ -47,9 +47,13 @@ void yonder_player_parts(os64_gui_rect_t b, yonder_player_parts_t *out)
         out->seek = (os64_gui_rect_t){(int32_t)x, b.y, (int32_t)(end - x), h};
 }
 
+// A clock past this many seconds (some 31,700 years) is a damaged header's,
+// and held there: past 2^64 the conversion would be undefined.
+#define CLOCK_MAX 1e12
+
 static size_t clock_text(double seconds, bool hours, char *out, size_t cap)
 {
-    uint64_t s = seconds > 0 && isfinite(seconds) ? (uint64_t)seconds : 0;
+    uint64_t s = seconds > 0 && isfinite(seconds) ? (uint64_t)(seconds < CLOCK_MAX ? seconds : CLOCK_MAX) : 0;
     if (hours)
         return (size_t)os64_snprintf(out, cap, "%lu:%02lu:%02lu", (unsigned long)(s / 3600),
                                      (unsigned long)(s / 60 % 60), (unsigned long)(s % 60));
@@ -235,18 +239,40 @@ static void ask(yonder_player_t *p, os64_dom_media_control_t what, double value)
         p->act(p, what, value, p->user);
 }
 
+// Each ask shows its change at once (yonder_player_t.view), so a second
+// press before the element's next view asks from where the first left it.
 static void toggle(yonder_player_t *p)
 {
-    ask(p, p->view.paused || p->view.ended ? OS64_DOM_MEDIA_PLAY : OS64_DOM_MEDIA_PAUSE, 0);
+    bool play = p->view.paused || p->view.ended;
+    ask(p, play ? OS64_DOM_MEDIA_PLAY : OS64_DOM_MEDIA_PAUSE, 0);
+    p->view.paused = !play;
+    if (play)
+        p->view.ended = false;
+}
+
+static void mute_flip(yonder_player_t *p)
+{
+    bool on = !p->view.muted;
+    ask(p, OS64_DOM_MEDIA_MUTE, on ? 1 : 0);
+    p->view.muted = on;
+}
+
+static void seek_to(yonder_player_t *p, double t)
+{
+    ask(p, OS64_DOM_MEDIA_SEEK, t);
+    p->view.position = t;
 }
 
 static void volume_to(yonder_player_t *p, double v)
 {
     v = v < 0 ? 0 : v > 1 ? 1 : v;
     ask(p, OS64_DOM_MEDIA_VOLUME, v);
+    p->view.volume = v;
     // A volume chosen is one to hear: other browsers unmute for it.
-    if (p->view.muted && v > 0)
+    if (p->view.muted && v > 0) {
         ask(p, OS64_DOM_MEDIA_MUTE, 0);
+        p->view.muted = false;
+    }
 }
 
 static void drag_to(os64_ui_t *ui, yonder_player_t *p, int32_t x)
@@ -257,7 +283,7 @@ static void drag_to(os64_ui_t *ui, yonder_player_t *p, int32_t x)
         double t = yonder_player_value_at(parts.seek, x, p->view.duration);
         if (t != p->drag_value) {
             p->drag_value = t;
-            ask(p, OS64_DOM_MEDIA_SEEK, t);
+            seek_to(p, t);
         }
     } else if (p->drag == YONDER_PLAYER_DRAG_VOLUME) {
         double v = yonder_player_value_at(parts.volume, x, 1);
@@ -276,34 +302,56 @@ static void player_cancel(os64_ui_widget_t *w)
     p->seq = 0;
 }
 
+// The keys. An arrow arrives as ESC [ and its letter, one event each, and
+// a key such as Page Up as ESC [ 5 ~: the whole of either is the player's,
+// and a real Escape (os64_ui_key_is_esc) is not.
+#define SEQ_ESC 1
+#define SEQ_CSI 2
+#define SEQ_PARAMS 3
+
 static bool player_key(yonder_player_t *p, os64_ui_t *ui, const os64_gui_event_t *ev)
 {
+    (void)ui;
     if (ev->key.modifiers & (OS64_GUI_MOD_CTRL | OS64_GUI_MOD_ALT)) {
         p->seq = 0;
         return false;
     }
     char a = ev->key.ascii;
-    // An arrow arrives as ESC [ and its letter, one event each.
-    if (p->seq == 1) {
-        p->seq = a == '[' ? 2 : 0;
-        if (p->seq == 2)
-            return true;
-    } else if (p->seq == 2) {
+    if (p->seq == SEQ_ESC) {
         p->seq = 0;
-        double now = p->view.position, v = p->view.muted ? 0 : p->view.volume;
+        if (a == '[') {
+            p->seq = SEQ_CSI;
+            return true;
+        }
+        // Not a burst after all: this key is decoded as itself.
+    } else if (p->seq == SEQ_CSI) {
+        p->seq = 0;
+        double now = p->view.position, v = p->view.volume;
         switch (a) {
-        case 'D': if (p->view.seekable) ask(p, OS64_DOM_MEDIA_SEEK, now > SEEK_STEP ? now - SEEK_STEP : 0); return true;
+        case 'D':
+            if (p->view.seekable)
+                seek_to(p, now > SEEK_STEP ? now - SEEK_STEP : 0);
+            return true;
         case 'C':
             if (p->view.seekable)
-                ask(p, OS64_DOM_MEDIA_SEEK, now + SEEK_STEP < p->view.duration ? now + SEEK_STEP : p->view.duration);
+                seek_to(p, now + SEEK_STEP < p->view.duration ? now + SEEK_STEP : p->view.duration);
             return true;
         case 'A': volume_to(p, v + VOLUME_STEP); return true;
         case 'B': volume_to(p, v - VOLUME_STEP); return true;
-        default: return true;
+        default:
+            if ((a >= '0' && a <= '9') || a == ';')
+                p->seq = SEQ_PARAMS;
+            return true;
         }
+    } else if (p->seq == SEQ_PARAMS) {
+        if (!((a >= '0' && a <= '9') || a == ';'))
+            p->seq = 0;          // its final byte (`~`), the key's whole
+        return true;
     }
     if (a == 0x1b) {
-        p->seq = 1;
+        if (os64_ui_key_is_esc(ev))
+            return false;
+        p->seq = SEQ_ESC;
         return true;
     }
     if (a == ' ' || a == '\r' || a == '\n') {
@@ -311,10 +359,9 @@ static bool player_key(yonder_player_t *p, os64_ui_t *ui, const os64_gui_event_t
         return true;
     }
     if (a == 'm' || a == 'M') {
-        ask(p, OS64_DOM_MEDIA_MUTE, p->view.muted ? 0 : 1);
+        mute_flip(p);
         return true;
     }
-    (void)ui;
     return false;
 }
 
@@ -332,7 +379,7 @@ static bool player_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_even
         if (in(parts.play, x, y)) {
             toggle(p);
         } else if (in(parts.mute, x, y)) {
-            ask(p, OS64_DOM_MEDIA_MUTE, p->view.muted ? 0 : 1);
+            mute_flip(p);
         } else if (in(parts.seek, x, y) && p->view.seekable && !p->view.busy && p->view.error == 0) {
             p->drag = YONDER_PLAYER_DRAG_SEEK;
             p->drag_value = -1;
@@ -355,12 +402,12 @@ static bool player_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_even
         return true;
     case OS64_GUI_EVENT_MOUSE_WHEEL: {
         // Over the speaker or the volume bar, the wheel is the volume: the
-        // narrow player's way to it.
+        // narrow player's way to it. Anywhere else it is the page's.
         int32_t notches = ev->mouse.dx ? ev->mouse.dx : -(int32_t)ev->mouse.dy;
         if (notches == 0 || !(in(parts.mute, ev->mouse.x, ev->mouse.y) ||
                               in(parts.volume, ev->mouse.x, ev->mouse.y)))
-            return false;
-        volume_to(p, (p->view.muted ? 0 : p->view.volume) + notches * VOLUME_STEP);
+            return p->pass != NULL && p->pass(ev, p->user);
+        volume_to(p, p->view.volume + notches * VOLUME_STEP);
         return true;
     }
     case OS64_GUI_EVENT_KEY_DOWN:
@@ -380,12 +427,14 @@ const os64_ui_class_t yonder_player_class = {
     false,
 };
 
-void yonder_player(yonder_player_t *p, yonder_player_act_t act, void *user)
+void yonder_player(yonder_player_t *p, yonder_player_act_t act,
+                   bool (*pass)(const os64_gui_event_t *ev, void *user), void *user)
 {
     os64_memset(p, 0, sizeof(*p));
     p->w.cls = &yonder_player_class;
     p->w.focusable = true;
     p->act = act;
+    p->pass = pass;
     p->user = user;
     p->view.paused = true;
     p->view.volume = 1;

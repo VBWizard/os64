@@ -33,9 +33,15 @@ typedef enum { YONDER_PLAYER_DRAG_NONE, YONDER_PLAYER_DRAG_SEEK, YONDER_PLAYER_D
 
 struct yonder_player {
     os64_ui_widget_t w;             // first: the widget libui knows
-    os64_dom_media_view_t view;     // what it shows (yonder_player_show)
+    // What it shows (yonder_player_show). A press that asks for a change
+    // shows it at once, so a second press before the element's next view
+    // asks from there; the next view says what the element did.
+    os64_dom_media_view_t view;
     yonder_player_act_t act;
     void *user;
+    // A wheel it has no use for (anywhere but the volume), handed on: the
+    // page's view scrolls under it, as it does over the page.
+    bool (*pass)(const os64_gui_event_t *ev, void *user);
     yonder_player_drag_t drag;      // a press on a bar, until its release
     double drag_value;              // where that bar is held: seconds, or the volume
     uint8_t seq;                    // an arrow key's escape burst, part way
@@ -43,15 +49,17 @@ struct yonder_player {
     void *note_run;                 // the line said instead of the bar: busy, or cannot play
 };
 
-// Where each part is drawn in `bounds`; a part with no room has width 0
-// (the volume bar first, then the time, as the box narrows).
+// Where each part is drawn in `bounds`; a part with no room has width 0.
+// As the box narrows the volume bar goes first, then the time, then the
+// speaker; the play button stays while the box is a button wide.
 typedef struct {
     os64_gui_rect_t play, time, seek, mute, volume;
 } yonder_player_parts_t;
 
 extern const os64_ui_class_t yonder_player_class;
 
-void yonder_player(yonder_player_t *p, yonder_player_act_t act, void *user);
+void yonder_player(yonder_player_t *p, yonder_player_act_t act,
+                   bool (*pass)(const os64_gui_event_t *ev, void *user), void *user);
 // The element's view now: repainted when what is drawn changes. True when
 // it did.
 bool yonder_player_show(os64_ui_t *ui, yonder_player_t *p, const os64_dom_media_view_t *view);
