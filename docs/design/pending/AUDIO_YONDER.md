@@ -689,8 +689,14 @@ above:
   load, and a Range request answered whole (200) is a server that has no
   ranges after all: the window starts again at 0, and seeks past what has
   come wait from then on, as they do on a server that never said it had
-  them. `buffered` begins where the window does (`arrived_from` in the
-  facts and the player's view), and the player shades only that run.
+  them. A part that ends before the resource does (a server that answers
+  ranges in pieces) is followed by a request for the rest. Every 206 must
+  be the same resource the kept bytes are: the first answer's ETag (else
+  its Last-Modified) and length are kept, and an answer that differs fails
+  the load ("The sound changed on the server") rather than splicing two
+  files under an open decoder. `buffered` begins where the window does
+  (`arrived_from` in the facts and the player's view), and the player
+  shades only that run.
 - **A seek over the network goes to an estimated byte.** FFmpeg's MP3
   reader seeks exactly by reading every byte before the target (an MP3
   has no index), which on a network is a download of everything up to
@@ -720,7 +726,9 @@ above:
   again; paused for ten seconds the fetch closes, and "Near what has
   arrived" resumes it with `Range: bytes=4587520-`, the window's end;
   with `--no-ranges` the same seek waits for the download and plays,
-  with no Range request made.
+  with no Range request made; with `--part 300000` (ranges in pieces)
+  the sound plays on across each piece's end, every next one asked from
+  where the last stopped.
 
 ## Slices
 

@@ -3,11 +3,13 @@
 answering Range requests as a web server does, which python3 -m http.server
 does not.
 
-    tools/pages_serve.py [--port 8731] [--root DIR] [--rate BYTES_PER_S] [--no-ranges]
+    tools/pages_serve.py [--port 8731] [--root DIR] [--rate BYTES_PER_S] [--no-ranges] [--part BYTES]
 
 --rate sends every body at most that fast, so a seek in a sound can land past
 what has arrived; --no-ranges answers every request whole and says nothing of
-ranges, as a server that has none. Each request is logged on stdout with its
+ranges, as a server that has none; --part answers a Range request with at most
+that many bytes, as servers that cut ranges into pieces do. Each request is
+logged on stdout with its
 Range header and what was answered, which is what a test reads back.
 The guest reaches it at 10.0.2.2:<port>.
 """
@@ -45,6 +47,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             first = int(m.group(1))
             if m.group(2):
                 last = min(int(m.group(2)), size - 1)
+            if ARGS.part:
+                last = min(last, first + ARGS.part - 1)
             status = 206
         self.send_response(status)
         self.send_header('Content-Type', self.guess_type(path))
@@ -84,6 +88,7 @@ def main():
     p.add_argument('--root', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pages'))
     p.add_argument('--rate', type=int, default=0)
     p.add_argument('--no-ranges', action='store_true')
+    p.add_argument('--part', type=int, default=0)
     ARGS = p.parse_args()
     os.chdir(ARGS.root)
     http.server.ThreadingHTTPServer.daemon_threads = True

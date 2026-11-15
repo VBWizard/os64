@@ -67,5 +67,9 @@ int64_t yonder_media_content_length(const char *headers, size_t length);
 bool yonder_media_content_range(const char *headers, size_t length, uint64_t *first, int64_t *total);
 // Whether Accept-Ranges names `bytes`.
 bool yonder_media_accepts_ranges(const char *headers, size_t length);
+// What says which version of the resource an answer is: its ETag, else
+// its Last-Modified (prefixed so the two never compare equal), into `out`;
+// empty when it carries neither, or when it does not fit.
+void yonder_media_validator(const char *headers, size_t length, char *out, size_t cap);
 
 #endif

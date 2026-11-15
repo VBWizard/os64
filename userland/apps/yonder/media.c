@@ -143,6 +143,7 @@ struct yonder_media {
     uint64_t asked_from;            // where the running fetch's body begins
     bool headed;                    // the running fetch's head is taken
     bool ranges;                    // the server answers Range requests
+    char validator[128];            // the whole answer's version (yonder_media_validator), "" none
     bool held;                      // the fetch was let go on purpose: resume at the window's end
     bool arrived;                   // the resource's end is in the window
     bool failed, opening;
@@ -289,10 +290,20 @@ static bool head_taken(yonder_media_t *m, const yonder_fetched_t *head)
     }
     uint64_t first = 0;
     int64_t total = -1;
+    char validator[sizeof(m->validator)];
+    yonder_media_validator(head->headers, head->headers_len, validator, sizeof(validator));
     if (head->status == 206) {
         if (!yonder_media_content_range(head->headers, head->headers_len, &first, &total) ||
             first != m->asked_from) {
             os64_strcopy(m->why, sizeof(m->why), "The server answered with bytes not asked for");
+            return false;
+        }
+        // The bytes must be the same resource's as the ones kept, which the
+        // decoder has already read: a file replaced on the server since
+        // would be spliced into the old one.
+        if ((m->validator[0] != '\0' && validator[0] != '\0' && !os64_streq(validator, m->validator)) ||
+            (total >= 0 && m->size >= 0 && total != m->size)) {
+            os64_strcopy(m->why, sizeof(m->why), "The sound changed on the server while it played");
             return false;
         }
         m->ranges = true;
@@ -306,6 +317,7 @@ static bool head_taken(yonder_media_t *m, const yonder_fetched_t *head)
     } else {
         m->ranges = yonder_media_accepts_ranges(head->headers, head->headers_len);
     }
+    os64_strcopy(m->validator, sizeof(m->validator), validator);
     m->size = yonder_media_content_length(head->headers, head->headers_len);
     return true;
 }
@@ -350,13 +362,17 @@ static bool pump_ahead(yonder_media_t *m, uint64_t ahead)
                 continue;
             }
             if (state.ended && state.headed) {
-                if (state.ok) {
+                uint64_t end = m->window.base + m->window.have;
+                // A part a server bounded (206 for less than asked) ends
+                // whole before the resource does: the rest is asked for.
+                bool short_part = m->ranges && m->size >= 0 && end < (uint64_t)m->size;
+                if (state.ok && !short_part) {
                     m->arrived = true;
-                } else if (m->ranges && m->window.base + m->window.have > m->asked_from) {
-                    // Broken part way after bringing something (a server
-                    // dropping a connection held off for minutes): it is
-                    // asked again from the window's end when the reader
-                    // gets there, as a fetch let go on purpose is.
+                } else if (m->ranges && end > m->asked_from) {
+                    // That, or broken part way after bringing something (a
+                    // server dropping a connection held off for minutes):
+                    // it is asked again from the window's end when the
+                    // reader gets there, as a fetch let go on purpose is.
                     m->held = true;
                 } else {
                     m->failed = true;

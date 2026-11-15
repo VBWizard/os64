@@ -164,6 +164,35 @@ bool yonder_media_content_range(const char *headers, size_t length, uint64_t *fi
     return false;
 }
 
+void yonder_media_validator(const char *headers, size_t length, char *out, size_t cap)
+{
+    Lines l = {headers, headers + length};
+    const char *name, *value, *etag = NULL, *modified = NULL;
+    size_t nlen, vlen, elen = 0, mlen = 0;
+    while (next_header(&l, &name, &nlen, &value, &vlen)) {
+        if (same_nocase(name, nlen, "etag")) {
+            etag = value;
+            elen = vlen;
+        } else if (same_nocase(name, nlen, "last-modified")) {
+            modified = value;
+            mlen = vlen;
+        }
+    }
+    const char *prefix = etag != NULL ? "etag " : "modified ";
+    const char *v = etag != NULL ? etag : modified;
+    size_t vl = etag != NULL ? elen : mlen, pl = etag != NULL ? 5 : 9;
+    if (cap == 0)
+        return;
+    out[0] = '\0';
+    if (v == NULL || pl + vl + 1 > cap)
+        return;
+    for (size_t i = 0; i < pl; i++)
+        out[i] = prefix[i];
+    for (size_t i = 0; i < vl; i++)
+        out[pl + i] = v[i];
+    out[pl + vl] = '\0';
+}
+
 bool yonder_media_accepts_ranges(const char *headers, size_t length)
 {
     Lines l = {headers, headers + length};

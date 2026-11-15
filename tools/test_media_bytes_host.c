@@ -148,6 +148,17 @@ static void head_cases(void)
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
         refused &= !yonder_media_content_range(bad[i], strlen(bad[i]), &first, &total);
     check(refused, "head: a range backwards, past its total, of another unit, unsatisfied, too big, or absent is none");
+    char v[64], w[64];
+    const char *both = "Last-Modified: Sat, 15 Nov 2026 10:00:00 GMT\r\nETag: \"abc\"\r\n";
+    yonder_media_validator(both, strlen(both), v, sizeof(v));
+    check(!strcmp(v, "etag \"abc\""), "validator: the ETag when there is one");
+    const char *modified = "last-modified: Sat, 15 Nov 2026 10:00:00 GMT\n";
+    yonder_media_validator(modified, strlen(modified), w, sizeof(w));
+    check(!strcmp(w, "modified Sat, 15 Nov 2026 10:00:00 GMT"), "validator: else Last-Modified, never equal to an ETag");
+    yonder_media_validator("Content-Length: 3\n", 18, v, sizeof(v));
+    char tiny[8];
+    yonder_media_validator(both, strlen(both), tiny, sizeof(tiny));
+    check(v[0] == '\0' && tiny[0] == '\0', "validator: none, or one that does not fit, is empty");
 }
 
 int main(void)
