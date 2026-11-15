@@ -1180,8 +1180,11 @@ static void tell_busy_locked(bool refused)
 }
 
 // The runs of a queue one block may take from a voice (a short clip on
-// loop wraps more than once in a block).
+// loop wraps more than once in a block), and the least a block is cut to
+// for a voice held back by that or its anchors (the block's comment in
+// audio_main).
 #define VOICE_PIECES 8u
+#define BLOCK_FLOOR 64u
 
 // One take mixed into a block: where in the block it lies, the media frame
 // it starts at, and its length.
@@ -1268,10 +1271,34 @@ static int64_t audio_main(void *arg)
         }
         // The voices already in it first (never more than MIX_VOICES), so
         // none is left unvisited, then those that ask, while there is room.
-        uint32_t n = 0, wanting = 0;
+        uint32_t n = 0, wanting = 0, waiting = 0;
         for (yonder_media_t *m = s_audio.sessions; m != NULL; m = m->next)
             if (m->voiced && n < MIX_VOICES)
                 v[n++] = (Voice){.m = m};
+            else if (!m->voiced && asks(m))
+                waiting++;
+        // A full mix with a session waiting gives up the voices that do not
+        // play (paused, their tails held): a paused voice must not keep a
+        // page's next sound waiting. One with frames the ear has not heard
+        // goes on from where its ear was when it plays again.
+        if (n == MIX_VOICES && waiting > 0) {
+            uint32_t kept = 0;
+            for (uint32_t i = 0; i < n; i++) {
+                yonder_media_t *m = v[i].m;
+                if (asks(m)) {
+                    v[kept++] = v[i];
+                    continue;
+                }
+                os64_lock_acquire(&m->lock);
+                if (m->voice.anchors > 0 && !m->stop && !m->facts.ended && m->facts.error == 0)
+                    m->resync = true;
+                m->facts.sounding = false;
+                os64_lock_release(&m->lock);
+                os64_media_voice_reset(&m->voice);
+                m->voiced = false;
+            }
+            n = kept;
+        }
         for (yonder_media_t *m = s_audio.sessions; m != NULL && n < MIX_VOICES; m = m->next) {
             if (m->voiced || !asks(m))
                 continue;
@@ -1439,6 +1466,30 @@ static int64_t audio_main(void *arg)
         // take that would start a run a voice has no anchor for (a clip a
         // few milliseconds long on loop starts one per piece): the device
         // holds runs not yet heard, and they are what its clock reads.
+        // A voice held back by those budgets (pieces, anchors) with more
+        // queued behind them would be silent for the rest of a block another
+        // voice filled, changing a short loop's cadence: the block is cut to
+        // what it can give, worked out before anything is taken, as a
+        // voice alone would make it. Less than BLOCK_FLOOR does not cut it
+        // (a loop a few frames long would make every block that small); it
+        // is padded, as a voice that has run dry is.
+        uint32_t limit = WRITE_FRAMES;
+        for (uint32_t i = 0; i < n; i++) {
+            yonder_media_t *m = v[i].m;
+            uint32_t budget = d.position < 0 ? VOICE_PIECES
+                              : m->voice.anchors >= OS64_MEDIA_MIX_ANCHORS ? 0
+                              : OS64_MEDIA_MIX_ANCHORS - m->voice.anchors;
+            if (budget > VOICE_PIECES)
+                budget = VOICE_PIECES;
+            os64_lock_acquire(&m->lock);
+            uint32_t avail = 0, runs = m->queue.segments < budget ? m->queue.segments : budget;
+            for (uint32_t k = 0; k < runs; k++)
+                avail += m->queue.segment[k].frames;
+            bool held = v[i].wants && m->queue.segments > budget;
+            os64_lock_release(&m->lock);
+            if (held && avail >= BLOCK_FLOOR && avail < limit)
+                limit = avail;
+        }
         uint32_t block = 0;
         if (buf != NULL && acc != NULL)
             os64_memset(acc, 0, sizeof(int32_t) * 2 * WRITE_FRAMES);
@@ -1448,10 +1499,10 @@ static int64_t audio_main(void *arg)
             bool can = buf != NULL && acc != NULL && v[i].wants && !m->resync &&
                        m->queue.generation == m->voice_generation;
             uint32_t filled = 0;
-            while (can && filled < WRITE_FRAMES && v[i].pieces < VOICE_PIECES &&
+            while (can && filled < limit && v[i].pieces < VOICE_PIECES &&
                    (m->voice.anchors + v[i].pieces < OS64_MEDIA_MIX_ANCHORS || d.position < 0)) {
                 int64_t at;
-                uint32_t got = os64_media_queue_take(&m->queue, buf, WRITE_FRAMES - filled, &at);
+                uint32_t got = os64_media_queue_take(&m->queue, buf, limit - filled, &at);
                 if (got == 0)
                     break;
                 os64_media_mix_add(acc + 2 * filled, buf, got, v[i].gain);

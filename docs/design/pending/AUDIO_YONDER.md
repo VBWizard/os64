@@ -739,7 +739,11 @@ above:
   (`os64/media_mix.h`, libmedia, pure: `tools/test_media_mix_host.sh`).
   A voice takes again across its queue's runs (a loop's wrap) until the
   block is full, so a loop is seamless under another voice; one that has
-  no more is silent for the rest of the block.
+  no more is silent for the rest of the block. A voice held back by its
+  budget of runs a block (a loop of a few hundred frames) cuts the block
+  to what it can give, worked out before anything is taken, so its
+  cadence is the same as alone. A full mix with a session waiting gives
+  up the voices that do not play, which go on from where their ears were.
 - **Each voice has its own clock**: anchors saying where each run of its
   frames went in the stream (a run ends at a seek, a loop, or where the
   voice was silent while others played: paused, or short of a block
