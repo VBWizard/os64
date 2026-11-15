@@ -562,38 +562,51 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
  * href resolved against the document's base, read and set as a URL's
  * members read and set (d_url_component, d_url_rebuilt), a setter writing
  * the address it built back to the href attribute. With no href, or one
- * that does not resolve (the element's url is null), every getter answers
- * "" (toString the attribute as written) and no setter changes anything.
- * `magic` is url.c's U_ member, D_SET for a setter. */
+ * that does not resolve (the element's url is null), protocol answers ":",
+ * toString the attribute as written (or ""), every other getter "", and no
+ * setter changes anything. A setter converts its argument before it reads
+ * the href, since the argument's toString may set it. `magic` is
+ * internal.h's D_URL_ member, D_SET for a setter. */
 static JSValue hyperlink_member(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv, int magic,
                                 JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
-    if (dom == NULL) return JS_EXCEPTION;
-    const os64_html_node_t *self = d_node(dom, ctx, this_value);
+    os64_dom_t *binding = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (binding == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *self = d_node(binding, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
-    dom = d_owner(dom, self);
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
-    if (!is_element(self)) return JS_ThrowTypeError(ctx, "Expected an element");
+    /* WebIDL's brand: the interfaces that include the mixin, not any
+     * element (a <link>'s href is no hyperlink's). */
+    int kind = d_node_kind(self);
+    if (kind != D_PROTO_ANCHOR && kind != D_PROTO_AREA) return JS_ThrowTypeError(ctx, "Illegal invocation");
+    DString text = {0};
+    if (set && !d_url_setter_value(binding, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, magic, &text))
+        return JS_EXCEPTION;
+    os64_dom_t *dom = d_owner(binding, self);
     const os64_html_attr_t *attr = os64_html_attr(self, "href");
     char *absolute = d_alloc(dom, OS64_DOM_URL_MAX * 2);
-    if (absolute == NULL) return d_error(ctx, "QuotaExceededError", "DOM address quota exceeded");
-    bool resolved = attr != NULL && os64_dom_resolve(dom->document, dom->url, attr->value, absolute, OS64_DOM_URL_MAX);
     JSValue result;
-    if (!set) {
-        result = resolved ? d_url_component(ctx, absolute, os64_strlen(absolute), magic)
-                 : JS_NewString(ctx, magic == U_TO_STRING && attr != NULL ? attr->value : "");
-    } else if (!resolved) {
-        result = JS_UNDEFINED;
+    if (absolute == NULL) {
+        result = d_error(ctx, "QuotaExceededError", "DOM address quota exceeded");
     } else {
-        char *built = absolute + OS64_DOM_URL_MAX;
-        int made = d_url_rebuilt(dom, ctx, absolute, os64_strlen(absolute), magic, argc > 0 ? argv[0] : JS_UNDEFINED,
-                                 built);
-        result = made < 0 ? JS_EXCEPTION
-                 : made == 0 ? JS_UNDEFINED : set_attribute(dom, ctx, self, "href", built, os64_strlen(built), false);
+        bool resolved = attr != NULL &&
+                        os64_dom_resolve(dom->document, dom->url, attr->value, absolute, OS64_DOM_URL_MAX);
+        if (!set) {
+            result = resolved ? d_url_component(ctx, absolute, os64_strlen(absolute), magic)
+                     : JS_NewString(ctx, magic == D_URL_PROTOCOL ? ":"
+                                    : magic == D_URL_TO_STRING && attr != NULL ? attr->value : "");
+        } else if (!resolved) {
+            result = JS_UNDEFINED;
+        } else {
+            char *built = absolute + OS64_DOM_URL_MAX;
+            int made = d_url_rebuilt(dom, ctx, absolute, os64_strlen(absolute), magic, &text, built);
+            result = made < 0 ? JS_EXCEPTION
+                     : made == 0 ? JS_UNDEFINED : set_attribute(dom, ctx, self, "href", built, os64_strlen(built), false);
+        }
+        d_free(dom, absolute);
     }
-    d_free(dom, absolute);
+    if (set) d_string_free(binding, &text);
     return result;
 }
 
@@ -756,10 +769,14 @@ static JSValue token_method(JSContext *ctx, JSValueConst this_value, int argc,
             break;
         case T_SUPPORTS:
             /* A classList and an htmlFor have no supported tokens, which
-             * is a TypeError; a form's rel names none yonder acts on. */
+             * is a TypeError; a form's rel names none yonder acts on, and
+             * neither does a list a relList getter was called on any
+             * other element for. */
             result = entry->tokens != D_TOKENS_REL
                 ? JS_ThrowTypeError(ctx, "DOMTokenList has no supported tokens")
-                : JS_NewBool(ctx, !is_html(entry->target, OS64_HTML_TAG_FORM) &&
+                : JS_NewBool(ctx, (is_html(entry->target, OS64_HTML_TAG_LINK) ||
+                                   is_html(entry->target, OS64_HTML_TAG_A) ||
+                                   is_html(entry->target, OS64_HTML_TAG_AREA)) &&
                                       rel_supported(dom, entry->target, given[0].data, given[0].length));
             break;
         case T_ADD: case T_REMOVE: case T_TOGGLE: case T_REPLACE: {
@@ -1195,10 +1212,10 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
         // An area's arrive with its href, which is the Modern Web switch's
         // (elements.c); an anchor's href is every page's, and so are these.
         static const struct { const char *name; int magic; bool writable; } kLinkParts[] = {
-            {"origin", U_ORIGIN, false}, {"protocol", U_PROTOCOL, true}, {"username", U_USERNAME, true},
-            {"password", U_PASSWORD, true}, {"host", U_HOST, true}, {"hostname", U_HOSTNAME, true},
-            {"port", U_PORT, true}, {"pathname", U_PATHNAME, true}, {"search", U_SEARCH, true},
-            {"hash", U_HASH, true},
+            {"origin", D_URL_ORIGIN, false}, {"protocol", D_URL_PROTOCOL, true}, {"username", D_URL_USERNAME, true},
+            {"password", D_URL_PASSWORD, true}, {"host", D_URL_HOST, true}, {"hostname", D_URL_HOSTNAME, true},
+            {"port", D_URL_PORT, true}, {"pathname", D_URL_PATHNAME, true}, {"search", D_URL_SEARCH, true},
+            {"hash", D_URL_HASH, true},
         };
         if (kind != D_PROTO_ANCHOR && !(kind == D_PROTO_AREA && dom->options.modern))
             continue;
@@ -1206,7 +1223,7 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
             if (d_accessor(dom, ctx, prototype, kLinkParts[i].name, hyperlink_member, kLinkParts[i].magic,
                            kLinkParts[i].writable) < 0)
                 return -1;
-        if (d_method(dom, ctx, prototype, "toString", hyperlink_member, 0, U_TO_STRING) < 0 ||
+        if (d_method(dom, ctx, prototype, "toString", hyperlink_member, 0, D_URL_TO_STRING) < 0 ||
             d_accessor(dom, ctx, prototype, "relList", reflect, R_REL_LIST, true) < 0)
             return -1;
     }

@@ -1504,18 +1504,24 @@ bool d_origin(const char *url, char *out, size_t cap);
  * object's members read and set them (url.c), for URL and for the links'
  * HTMLHyperlinkElementUtils (mixin.c), so the two cannot differ. */
 enum {
-    U_HREF, U_ORIGIN, U_PROTOCOL, U_USERNAME, U_PASSWORD, U_HOST, U_HOSTNAME, U_PORT, U_PATHNAME,
-    U_SEARCH, U_SEARCH_PARAMS, U_HASH, U_TO_STRING, U_CAN_PARSE, U_PARSE
+    D_URL_HREF, D_URL_ORIGIN, D_URL_PROTOCOL, D_URL_USERNAME, D_URL_PASSWORD, D_URL_HOST, D_URL_HOSTNAME, D_URL_PORT, D_URL_PATHNAME,
+    D_URL_SEARCH, D_URL_SEARCH_PARAMS, D_URL_HASH, D_URL_TO_STRING, D_URL_CAN_PARSE, D_URL_PARSE
 };
 /* Component `which` of `href` (a parsed address, `length` bytes), as its
  * getter answers it. */
 JSValue d_url_component(JSContext *ctx, const char *href, size_t length, int which);
-/* `href` with component `which` set to `value` as its setter sets it: 1
- * with the new address, parsed, in `out` (OS64_DOM_URL_MAX); 0 when the
- * setter leaves the address as it is (a value it refuses, or one that does
- * not parse); -1 thrown. */
+/* A setter's argument converted for component `which` into `text`, which
+ * the caller frees; false thrown. It runs the page's toString, so a caller
+ * converts FIRST and reads the address it sets after: the conversion may
+ * change, or free, that address. */
+bool d_url_setter_value(os64_dom_t *dom, JSContext *ctx, JSValueConst value, int which, DString *text);
+/* `href` with component `which` set to `text` (d_url_setter_value's) as its
+ * setter sets it: 1 with the new address, parsed, in `out`
+ * (OS64_DOM_URL_MAX); 0 when the setter leaves the address as it is (a
+ * value it refuses, or one that does not parse); -1 thrown. It runs no
+ * page code. */
 int d_url_rebuilt(os64_dom_t *dom, JSContext *ctx, const char *href, size_t length, int which,
-                  JSValueConst value, char *out);
+                  const DString *text, char *out);
 /* Final storage settlement (storage.c), then native map release. Drain
  * returns the first provider error, -3 for serialization OOM or -4 for a
  * borrower. Ordinary teardown still completes native cleanup; recovery

@@ -589,7 +589,24 @@ static void dom_url_cases(void)
         "assert(ar.pathname==='/p'&&ar.getAttribute('href')==='http://h.test/p#y'&&ar.toString()===ar.href,'an area too');"
         "var d=Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,'origin');assert(d.get&&!d.set,'origin is read-only');"
         "assert(Object.getOwnPropertyDescriptor(HTMLAreaElement.prototype,'pathname').set,'pathname is not');"
-        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,'pathname').get.call(document.createTextNode('t')));",
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,'pathname').get.call(document.createTextNode('t')));"
+        "var sheet=document.createElement('link');sheet.setAttribute('href','http://h.test/s.css');"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,'pathname').set.call(sheet,'/o.css'));"
+        "assert(sheet.getAttribute('href')==='http://h.test/s.css','a link\\'s href is no hyperlink\\'s');"
+        "var rl=Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,'relList').get.call(document.createElement('div'));"
+        "assert(rl.supports('noopener')===false,'a relList made for another element supports nothing');"
+        /* the url is null: protocol is ':' */
+        "assert(document.createElement('a').protocol===':'&&bad.protocol===':'&&document.createElement('area').protocol===':','a null url\\'s protocol');"
+        /* the argument is converted before the address is read: its
+         * toString may set the very address the setter is setting */
+        "var u=new URL('http://a.test/');u.pathname={toString(){u.href='http://b.test/';return '/x'}};"
+        "assert(u.href==='http://b.test/x','a URL\\'s setter reads its address after the conversion: '+u.href);"
+        "u.href={toString(){u.search='q';return 'http://c.test/'}};assert(u.href==='http://c.test/',u.href);"
+        "u.host={toString(){u.href='http://d.test/p';return 'e.test'}};assert(u.href==='http://e.test/p',u.href);"
+        "var re=document.createElement('a');re.href='http://x.test/';"
+        "re.pathname={toString(){re.href='http://y.test/';return '/p'}};"
+        "assert(re.getAttribute('href')==='http://y.test/p','and a link\\'s: '+re.getAttribute('href'));"
+        "re.hash={toString(){re.removeAttribute('href');return 'h'}};assert(!re.hasAttribute('href'),'a url made null by the conversion: nothing set');",
         "url: a link's address in parts");
     fixture_free(&f);
     static const char *const kOperations[] = {

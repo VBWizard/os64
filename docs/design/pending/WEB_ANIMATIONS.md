@@ -264,7 +264,9 @@ the validation page's freeze-and-read values match Chrome's (§ 6).
 
 **Out of both:** scroll-driven timelines (`ScrollTimeline`,
 `ViewTimeline`, `animation-timeline`; 12 hosts), a DEBTS row of their
-own; `CSSTransition`, which arrives with transitions; animations of a
+own; `CSSTransition`'s instances, which arrive with transitions (the
+interface itself is there, since pages test `instanceof` against it);
+animations of a
 pseudo-element as a script sees them — its CSS ones run (slice C) and
 are left out of `getAnimations()` and the events, a DEBTS row, and
 `pseudoElement` in `animate()`'s options is NotSupportedError until

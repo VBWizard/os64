@@ -255,7 +255,8 @@ connect runs and a moved control keeps its form:
   `tabIndex` (0 for an element that takes focus without one, else -1), a
   script's `src` and a link's and an anchor's `href` (resolved against the
   document's base, and as written when it does not resolve), a script's
-  `type`, `defer` and `noModule`, and a link's `rel`, `media` and `type`.
+  `type`, `defer` and `noModule`, a link's `rel`, `media` and `type`, and
+  an anchor's `rel`.
   Script, anchor and
   link elements have prototypes of their own for these. `hidden`, `lang`,
   `dir` and `title` are HTMLElement's, and `tabIndex` and `dataset`
@@ -288,8 +289,12 @@ connect runs and a moved control keeps its form:
   the Modern Web surface, as its `href` is: the href resolved against the
   document's base and read and set as a URL's members are (url.c's
   `d_url_component` and `d_url_rebuilt`), a setter writing the address back
-  to `href`. An href that is absent or does not parse reads "" in every
-  part and no setter changes it. `a.href = url; a.hostname` is how pages
+  to `href`, and converting its argument before it reads the href (the
+  argument's `toString` is the page's, and may set it). An href that is
+  absent or does not parse reads `:` for `protocol`, as written (or "")
+  for `toString` and "" in every other part, and no setter changes it.
+  The members are the two interfaces' alone: called on any other
+  element, one is a TypeError. `a.href = url; a.hostname` is how pages
   written in the 2010s take an address apart, and a router reads every
   link's `pathname`.
 
@@ -1996,8 +2001,8 @@ members are rows read by the controls row's rules (`d_reflection_get` and
 href against the document's own URL, booleans, enumerations, longs, the
 unsigned kinds and a span's and a row span's clamps), one row per member
 and interface, so each accessor's brand is its own interface. Beside
-them a title's `text` and a body's WindowEventHandlers, which are
-window's. A set of kinds is a `d_kinds_t`, GCC's 128-bit integer
+them a title's `text` (its child text), an anchor's `text` (its
+descendants') and a body's WindowEventHandlers, which are window's. A set of kinds is a `d_kinds_t`, GCC's 128-bit integer
 (`D_KIND`); a static assertion holds the kinds to 128.
 
 **The tables row** (`tables.c`, naming nothing on window; MODERN_WEB.md

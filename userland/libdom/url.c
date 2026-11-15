@@ -601,21 +601,27 @@ static size_t span_until(const DString *text, size_t from, const char *stops)
     return at;
 }
 
+/* A setter's value as its component reads it (internal.h): a USVString,
+ * an href's trimmed, a NUL kept as %00. */
+bool d_url_setter_value(os64_dom_t *dom, JSContext *ctx, JSValueConst value, int which, DString *text)
+{
+    *text = (DString){0};
+    if (!d_string_text(dom, ctx, value, text, true)) return false;
+    if (!address_text(dom, ctx, text, which == D_URL_HREF)) {
+        d_string_free(dom, text);
+        return false;
+    }
+    return true;
+}
+
 /* A setter (URL § 6.1; internal.h): the address with one component
  * replaced, parsed whole. Whether a refusal throws (href's does, on a URL)
  * is the caller's. */
 int d_url_rebuilt(os64_dom_t *dom, JSContext *ctx, const char *href, size_t length, int which,
-                  JSValueConst value, char *out)
+                  const DString *text, char *out)
 {
-    DString text = {0};
-    if (!d_string_text(dom, ctx, value, &text, true)) return -1;
-    if (!address_text(dom, ctx, &text, which == U_HREF)) {
-        d_string_free(dom, &text);
-        return -1;
-    }
     char *candidate = d_alloc_kind(dom, OS64_DOM_URL_MAX * 2, OS64_DOM_MEM_URL);
     if (candidate == NULL) {
-        d_string_free(dom, &text);
         d_error(ctx, "QuotaExceededError", "URL quota exceeded");
         return -1;
     }
@@ -626,20 +632,20 @@ int d_url_rebuilt(os64_dom_t *dom, JSContext *ctx, const char *href, size_t leng
     bool file = p.scheme_end == 4 && os64_memcmp(href, "file", 4) == 0;
     bool built = false;
     switch (which) {
-    case U_HREF:
-        built = os64_strcopy(candidate, OS64_DOM_URL_MAX, text.data) < OS64_DOM_URL_MAX;
+    case D_URL_HREF:
+        built = os64_strcopy(candidate, OS64_DOM_URL_MAX, text->data) < OS64_DOM_URL_MAX;
         break;
-    case U_PROTOCOL: {
+    case D_URL_PROTOCOL: {
         /* The scheme up to the first `:` (the scheme state's override): a
          * special scheme stays special and another stays not, an address
          * with a port cannot become file, and a file address with no host
          * keeps its scheme. */
-        size_t end = span_until(&text, 0, ":");
+        size_t end = span_until(text, 0, ":");
         bool valid = end > 0 && end < OS64_URL_SCHEME_MAX &&
-                     ((text.data[0] >= 'a' && text.data[0] <= 'z') || (text.data[0] >= 'A' && text.data[0] <= 'Z'));
+                     ((text->data[0] >= 'a' && text->data[0] <= 'z') || (text->data[0] >= 'A' && text->data[0] <= 'Z'));
         char scheme[OS64_URL_SCHEME_MAX];
         for (size_t i = 0; valid && i < end; i++) {
-            char c = text.data[i];
+            char c = text->data[i];
             valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
                     c == '+' || c == '-' || c == '.';
             scheme[i] = c >= 'A' && c <= 'Z' ? (char)(c + ('a' - 'A')) : c;
@@ -652,11 +658,11 @@ int d_url_rebuilt(os64_dom_t *dom, JSContext *ctx, const char *href, size_t leng
         built = splice(href, length, 0, p.scheme_end, scheme, end, candidate, OS64_DOM_URL_MAX);
         break;
     }
-    case U_USERNAME: case U_PASSWORD:
+    case D_URL_USERNAME: case D_URL_PASSWORD:
         /* The grammar holds no userinfo (url.h): an address with one is not
          * one it parses, so no setter can make one. */
         break;
-    case U_HOST: case U_HOSTNAME: {
+    case D_URL_HOST: case D_URL_HOSTNAME: {
         /* The host state's override: up to the path, the query or the
          * fragment. host takes a port with it, and keeps the address's
          * when it names none; hostname is refused one. A file address
@@ -664,58 +670,58 @@ int d_url_rebuilt(os64_dom_t *dom, JSContext *ctx, const char *href, size_t leng
          * (file://server/share becomes file:///share, the file host
          * state's empty host); no other special scheme's host is empty. */
         if (!p.authority) break;
-        size_t end = span_until(&text, 0, scheme_special ? "/?#\\" : "/?#");
-        size_t colon = span_until(&text, 0, ":");
+        size_t end = span_until(text, 0, scheme_special ? "/?#\\" : "/?#");
+        size_t colon = span_until(text, 0, ":");
         if (file && end == 0) {
             built = splice(href, length, p.host, p.host_end, "", 0, candidate, OS64_DOM_URL_MAX);
             break;
         }
-        if ((which == U_HOSTNAME || file) && colon < end) break;
+        if ((which == D_URL_HOSTNAME || file) && colon < end) break;
         if (colon == 0 || (end == 0 && scheme_special)) break;
-        size_t to = which == U_HOST && colon < end ? p.port_end : p.host_end;
-        built = splice(href, length, p.host, to, text.data, end, candidate, OS64_DOM_URL_MAX);
+        size_t to = which == D_URL_HOST && colon < end ? p.port_end : p.host_end;
+        built = splice(href, length, p.host, to, text->data, end, candidate, OS64_DOM_URL_MAX);
         break;
     }
-    case U_PORT: {
+    case D_URL_PORT: {
         /* The port state's override: the digits it starts with, or none to
          * take the port away; a value that starts with anything else, or a
          * port past 65535, changes nothing. */
         if (!p.authority || p.host == p.host_end || file) break;
         size_t digits = 0;
-        while (digits < text.length && text.data[digits] >= '0' && text.data[digits] <= '9') digits++;
-        if (digits == 0 && text.length != 0) break;
+        while (digits < text->length && text->data[digits] >= '0' && text->data[digits] <= '9') digits++;
+        if (digits == 0 && text->length != 0) break;
         size_t zeros = 0;
-        while (digits > 1 && zeros < digits - 1 && text.data[zeros] == '0') zeros++;
+        while (digits > 1 && zeros < digits - 1 && text->data[zeros] == '0') zeros++;
         if (digits - zeros > 5) break;
         char port[8] = ":";
-        os64_memcpy(port + 1, text.data + zeros, digits - zeros);
+        os64_memcpy(port + 1, text->data + zeros, digits - zeros);
         port[1 + digits - zeros] = '\0';
         built = splice(href, length, p.host_end, p.port_end, port, digits == 0 ? 0 : 1 + digits - zeros,
                        candidate, OS64_DOM_URL_MAX);
         break;
     }
-    case U_PATHNAME: {
+    case D_URL_PATHNAME: {
         /* An opaque path is not set; any other is the value, from a `/`. */
         if (!p.authority) break;
         piece[0] = '/';
-        bool slash = text.length != 0 && (text.data[0] == '/' || (scheme_special && text.data[0] == '\\'));
-        if (!escape_delimiters(&text, 0, true, piece + (slash ? 0 : 1), OS64_DOM_URL_MAX - 1)) break;
+        bool slash = text->length != 0 && (text->data[0] == '/' || (scheme_special && text->data[0] == '\\'));
+        if (!escape_delimiters(text, 0, true, piece + (slash ? 0 : 1), OS64_DOM_URL_MAX - 1)) break;
         built = splice(href, length, p.path, p.path_end, piece, os64_strlen(piece), candidate, OS64_DOM_URL_MAX);
         break;
     }
-    case U_SEARCH: case U_HASH: {
+    case D_URL_SEARCH: case D_URL_HASH: {
         /* "" takes the query (the fragment) away; anything else, its
          * leading `?` (`#`) dropped, is the new one, empty included. */
-        char mark = which == U_SEARCH ? '?' : '#';
-        size_t from = text.length != 0 && text.data[0] == mark ? 1 : 0;
-        size_t at = which == U_SEARCH ? p.query : p.fragment;
-        size_t to = which == U_SEARCH ? p.query_end : p.fragment_end;
-        if (text.length == 0) {
+        char mark = which == D_URL_SEARCH ? '?' : '#';
+        size_t from = text->length != 0 && text->data[0] == mark ? 1 : 0;
+        size_t at = which == D_URL_SEARCH ? p.query : p.fragment;
+        size_t to = which == D_URL_SEARCH ? p.query_end : p.fragment_end;
+        if (text->length == 0) {
             built = splice(href, length, at, to, "", 0, candidate, OS64_DOM_URL_MAX);
             break;
         }
         piece[0] = mark;
-        if (!escape_delimiters(&text, from, false, piece + 1, OS64_DOM_URL_MAX - 1)) break;
+        if (!escape_delimiters(text, from, false, piece + 1, OS64_DOM_URL_MAX - 1)) break;
         built = splice(href, length, at, to, piece, os64_strlen(piece), candidate, OS64_DOM_URL_MAX);
         break;
     }
@@ -723,22 +729,27 @@ int d_url_rebuilt(os64_dom_t *dom, JSContext *ctx, const char *href, size_t leng
     }
     bool took = built && resolve(candidate, NULL, out, OS64_DOM_URL_MAX);
     d_free(dom, candidate);
-    d_string_free(dom, &text);
     return took ? 1 : 0;
 }
 
 /* A URL's member set: its address rebuilt (d_url_rebuilt) and taken, a
  * href that does not parse thrown as an invalid URL, and any other setter
- * whose address does not parse leaving it as it was. */
+ * whose address does not parse leaving it as it was. The value is
+ * converted before the address is read: its toString is the page's, and
+ * may set this URL (WebIDL converts before the setter's steps run). */
 static int url_assign(os64_dom_t *dom, JSContext *ctx, DUrl *url, int which, JSValueConst value)
 {
+    DString text;
+    if (!d_url_setter_value(dom, ctx, value, which, &text)) return -1;
     char *out = d_alloc_kind(dom, OS64_DOM_URL_MAX, OS64_DOM_MEM_URL);
     if (out == NULL) {
+        d_string_free(dom, &text);
         d_error(ctx, "QuotaExceededError", "URL quota exceeded");
         return -1;
     }
-    int built = d_url_rebuilt(dom, ctx, url->href, url->length, which, value, out);
-    if (built == 0 && which == U_HREF) {
+    int built = d_url_rebuilt(dom, ctx, url->href, url->length, which, &text, out);
+    d_string_free(dom, &text);
+    if (built == 0 && which == D_URL_HREF) {
         JS_ThrowTypeError(ctx, "Invalid URL");
         built = -1;
     } else if (built == 1 && url_set(ctx, url, out) < 0) {
@@ -754,20 +765,20 @@ JSValue d_url_component(JSContext *ctx, const char *href, size_t length, int whi
     Parts p;
     parts_of(href, length, &p);
     switch (which) {
-    case U_HREF: case U_TO_STRING: return JS_NewStringLen(ctx, href, length);
-    case U_PROTOCOL: return JS_NewStringLen(ctx, href, p.scheme_end + 1);
-    case U_USERNAME: case U_PASSWORD: return JS_NewString(ctx, "");
-    case U_HOST: return JS_NewStringLen(ctx, href + p.host, p.port_end - p.host);
-    case U_HOSTNAME: return JS_NewStringLen(ctx, href + p.host, p.host_end - p.host);
-    case U_PORT: return JS_NewStringLen(ctx, href + p.port, p.port_end - p.port);
-    case U_PATHNAME: return JS_NewStringLen(ctx, href + p.path, p.path_end - p.path);
-    case U_SEARCH:
+    case D_URL_HREF: case D_URL_TO_STRING: return JS_NewStringLen(ctx, href, length);
+    case D_URL_PROTOCOL: return JS_NewStringLen(ctx, href, p.scheme_end + 1);
+    case D_URL_USERNAME: case D_URL_PASSWORD: return JS_NewString(ctx, "");
+    case D_URL_HOST: return JS_NewStringLen(ctx, href + p.host, p.port_end - p.host);
+    case D_URL_HOSTNAME: return JS_NewStringLen(ctx, href + p.host, p.host_end - p.host);
+    case D_URL_PORT: return JS_NewStringLen(ctx, href + p.port, p.port_end - p.port);
+    case D_URL_PATHNAME: return JS_NewStringLen(ctx, href + p.path, p.path_end - p.path);
+    case D_URL_SEARCH:
         return p.query_end - p.query > 1 ? JS_NewStringLen(ctx, href + p.query, p.query_end - p.query)
                                          : JS_NewString(ctx, "");
-    case U_HASH:
+    case D_URL_HASH:
         return p.fragment_end - p.fragment > 1 ? JS_NewStringLen(ctx, href + p.fragment, p.fragment_end - p.fragment)
                                                : JS_NewString(ctx, "");
-    case U_ORIGIN: {
+    case D_URL_ORIGIN: {
         /* d_origin's: a tuple for the special schemes but file, a blob:
          * address's inner http(s) address's, else "null". */
         char origin[WAY_ORIGIN_TEXT_MAX];
@@ -784,11 +795,11 @@ static JSValue url_member(JSContext *ctx, JSValueConst self, int argc, JSValueCo
     if (dom == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
-    if (magic == U_CAN_PARSE || magic == U_PARSE) {
+    if (magic == D_URL_CAN_PARSE || magic == D_URL_PARSE) {
         char *href;
         int parsed = url_arguments(dom, ctx, argc, argv, &href);
-        JSValue made = parsed < 0 ? JS_EXCEPTION : magic == U_CAN_PARSE ? JS_NewBool(ctx, parsed == 1) : JS_NULL;
-        if (parsed == 1 && magic == U_PARSE) {
+        JSValue made = parsed < 0 ? JS_EXCEPTION : magic == D_URL_CAN_PARSE ? JS_NewBool(ctx, parsed == 1) : JS_NULL;
+        if (parsed == 1 && magic == D_URL_PARSE) {
             /* URL.parse makes a URL as `new URL` does, whatever `this` is. */
             JSValue prototype = JS_GetClassProto(ctx, os64_js_class_id(&url_slot));
             made = url_make(ctx, prototype, href);
@@ -803,7 +814,7 @@ static JSValue url_member(JSContext *ctx, JSValueConst self, int argc, JSValueCo
         if (url_assign(dom, ctx, url, magic, argc > 0 ? argv[0] : JS_UNDEFINED) < 0) return JS_EXCEPTION;
         return JS_UNDEFINED;
     }
-    if (magic == U_SEARCH_PARAMS) return JS_DupValue(ctx, url->params);
+    if (magic == D_URL_SEARCH_PARAMS) return JS_DupValue(ctx, url->params);
     return d_url_component(ctx, url->href, url->length, magic);
 }
 
@@ -1367,16 +1378,16 @@ int d_url_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, iterator_prototype);
     if (iterator == NULL) return -1;
     static const struct { const char *name; int magic; bool writable; } kUrl[] = {
-        {"href", U_HREF, true}, {"origin", U_ORIGIN, false}, {"protocol", U_PROTOCOL, true},
-        {"username", U_USERNAME, true}, {"password", U_PASSWORD, true}, {"host", U_HOST, true},
-        {"hostname", U_HOSTNAME, true}, {"port", U_PORT, true}, {"pathname", U_PATHNAME, true},
-        {"search", U_SEARCH, true}, {"searchParams", U_SEARCH_PARAMS, false}, {"hash", U_HASH, true},
+        {"href", D_URL_HREF, true}, {"origin", D_URL_ORIGIN, false}, {"protocol", D_URL_PROTOCOL, true},
+        {"username", D_URL_USERNAME, true}, {"password", D_URL_PASSWORD, true}, {"host", D_URL_HOST, true},
+        {"hostname", D_URL_HOSTNAME, true}, {"port", D_URL_PORT, true}, {"pathname", D_URL_PATHNAME, true},
+        {"search", D_URL_SEARCH, true}, {"searchParams", D_URL_SEARCH_PARAMS, false}, {"hash", D_URL_HASH, true},
     };
     for (size_t i = 0; i < sizeof(kUrl) / sizeof(kUrl[0]); i++)
         if (d_accessor(dom, ctx, url->value, kUrl[i].name, url_member, kUrl[i].magic, kUrl[i].writable) < 0)
             return -1;
-    if (d_method(dom, ctx, url->value, "toString", url_member, 0, U_TO_STRING) < 0 ||
-        d_method(dom, ctx, url->value, "toJSON", url_member, 0, U_TO_STRING) < 0)
+    if (d_method(dom, ctx, url->value, "toString", url_member, 0, D_URL_TO_STRING) < 0 ||
+        d_method(dom, ctx, url->value, "toJSON", url_member, 0, D_URL_TO_STRING) < 0)
         return -1;
     static const struct { const char *name; int magic, argc; } kParams[] = {
         {"append", Q_APPEND, 2}, {"delete", Q_DELETE, 1}, {"get", Q_GET, 1}, {"getAll", Q_GET_ALL, 1},
@@ -1417,8 +1428,8 @@ int d_url_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (linked < 0) return -1;
     JSValue url_interface = d_interface_new(ctx, "URL", 1, url_constructor, url->value, JS_UNDEFINED);
     if (JS_IsException(url_interface)) return -1;
-    if (d_method(dom, ctx, url_interface, "canParse", url_member, 1, U_CAN_PARSE) < 0 ||
-        d_method(dom, ctx, url_interface, "parse", url_member, 1, U_PARSE) < 0) {
+    if (d_method(dom, ctx, url_interface, "canParse", url_member, 1, D_URL_CAN_PARSE) < 0 ||
+        d_method(dom, ctx, url_interface, "parse", url_member, 1, D_URL_PARSE) < 0) {
         JS_FreeValue(ctx, url_interface);
         return -1;
     }
