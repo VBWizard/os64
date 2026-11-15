@@ -708,8 +708,10 @@ above:
   nothing fails the load.
 - **Proven** by `tools/test_media_bytes_host.sh` (every seek plan against
   the table, the window's front drop, the head's three readers),
-  `/tests/mediatest` step 12 (a remote source's seek asks for a byte past
-  a third of the file and lands within a packet), `tools/test_dom_media.inc`
+  `/tests/mediatest` step 12 (in a 270 KiB stream, a remote source's seek
+  two seconds from the end asks for a byte past half of it and lands
+  within two packets; a local one reads its way there and asks nothing,
+  which is how the step fails with `remote` off), `tools/test_dom_media.inc`
   (`buffered` from where the bytes begin), and in QEMU by
   `tools/pages/audio-range.html` beside a ten-minute MP3, served by
   `tools/pages_serve.py --rate 200000`, which answers ranges and logs them:

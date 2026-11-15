@@ -24,8 +24,9 @@
 //      to stereo by BS.775's weights, normalised
 //   8  a source that cannot seek but knows its length plays whole, and a
 //      seek is refused by name
-//  12  a remote source's seek asks for the byte its time is estimated at,
-//      and lands within a packet of the frame asked for
+//  12  a remote source's seek in a stream longer than libmedia's reading
+//      buffer asks for the byte its time is estimated at, and lands within
+//      two packets of the frame asked for
 //   9  bytes that are no media are refused by name
 //
 // Exit codes: 0x3ED10000 success, 0x3ED100NN the step that failed.
@@ -312,24 +313,51 @@ static int step_unseekable(void)
 }
 
 // A remote source's seek goes to the byte its time is estimated at instead
-// of reading its way there: the source is asked for a byte past a third of
-// the file, and what is left after the seek is about the half asked for
-// (within a packet's 1,152 media frames, 1,254 of the output's).
+// of reading its way there. The sine's audio frames (its ID3 tag and its
+// Info frame left out, so the length is the bit rate's) are laid end to
+// end 32 times, about 270 KiB: far past libmedia's 32 KiB reading buffer
+// and the 32 KiB past it that FFmpeg reads its way across rather than
+// seek, either of which would never ask the source. A seek two seconds from
+// the end asks the source for a byte past half the stream, and what is
+// left after it is those two seconds, within two packets (a packet is
+// 1,152 media frames, 1,254 of the output's).
+#define LONG_COPIES 32
 static int step_remote_seek(void)
 {
+    static uint8_t stream[sizeof(kSineMp3) * LONG_COPIES];
+    size_t tag = 10 + ((size_t)(kSineMp3[6] & 0x7F) << 21 | (size_t)(kSineMp3[7] & 0x7F) << 14 |
+                       (size_t)(kSineMp3[8] & 0x7F) << 7 | (size_t)(kSineMp3[9] & 0x7F));
+    // MPEG-1 Layer III: 144 * bit rate / rate bytes, and one for padding.
+    static const uint32_t kKbps[16] = {0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0};
+    const uint8_t *h = kSineMp3 + tag;
+    size_t info = 144 * kKbps[h[2] >> 4] * 1000 / 44100 + ((h[2] >> 1) & 1);
+    size_t frames = sizeof(kSineMp3) - tag - info, size = 0;
+    for (int i = 0; i < LONG_COPIES; i++, size += frames)
+        os64_memcpy(stream + size, kSineMp3 + tag + info, frames);
+
     Memory mem;
-    os64_media_source_t src = source_of(&mem, kSineMp3, sizeof(kSineMp3), true);
-    src.remote = true;
+    os64_media_source_t src = source_of(&mem, stream, size, true);
     os64_media_t *m;
     int r = os64_media_open(&src, &m, NULL);
-    if (r != 0) { say("remote open (result)", r, 0); return FAIL(12); }
+    if (r != 0) { say("remote open, whole (result)", r, 0); return FAIL(12); }
+    Tally whole;
+    tally_all(m, &whole);
+    os64_media_close(m);
+    src = source_of(&mem, stream, size, true);
+    src.remote = true;
+    r = os64_media_open(&src, &m, NULL);
+    if (r != 0 || whole.result != 0 || whole.frames < 24 * 48000) {
+        say("remote open (result, whole frames)", r, (long)whole.frames);
+        if (r == 0) os64_media_close(m);
+        return FAIL(12);
+    }
     mem.seek_max = 0;
-    r = os64_media_seek(m, 24000);
+    r = os64_media_seek(m, whole.frames - 2 * 48000);
     Tally t;
     tally_all(m, &t);
     os64_media_close(m);
-    if (r != 0 || t.result != 0 || mem.seek_max < sizeof(kSineMp3) / 3 || t.frames < 24000 - 1300 ||
-        t.frames > 24000 + 1300) {
+    if (r != 0 || t.result != 0 || mem.seek_max < size / 2 || t.frames < 2 * 48000 - 2600 ||
+        t.frames > 2 * 48000 + 2600) {
         say("remote seek (furthest byte asked, frames after)", (long)mem.seek_max, (long)t.frames);
         return FAIL(12);
     }
