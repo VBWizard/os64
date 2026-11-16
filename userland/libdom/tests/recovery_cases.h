@@ -8,6 +8,7 @@
 #include <dom/retention.h>
 #include "quickjs.h"
 #include "../../libpage/tests/retention_cases.h"
+#include "kept_retention_cases.h"
 
 /* The same owner-thread host loop runs against fake and guest OS services.
  * Raw context exchange is trusted setup; dispatch and decisions use public APIs. */
@@ -52,6 +53,10 @@ static void recovery_consumer_cancel(void *opaque, uint64_t request)
         os64_js_outcome_t saved = h->failed;
         os64_dom_retention_t native = os64_dom_retention_snapshot(h->cluster, OS64_JS_ABI_ID);
         os64_js_retention_t wrapper = os64_js_retention_snapshot(h->runtime, OS64_JS_ABI_ID);
+        os64_dom_kept_retention_t kept = os64_dom_kept_retention_snapshot(h->dom[1], OS64_JS_ABI_ID, SIZE_MAX);
+        h->require(kept.status == OS64_JS_OK && kept.records_complete && kept.records_seen == 1 &&
+            kept.shared_records == 1 && (kept.unknown & OS64_DOM_KEPT_UNKNOWN_INCOMING),
+            "kept retention: fenced provider inspection preserves retained source backing");
         h->require(native.status == OS64_JS_OK && native.recovery_running && native.provider_borrows &&
             native.unknown == OS64_DOM_RETENTION_UNKNOWN_ALL && wrapper.status == OS64_JS_OK && wrapper.active,
             "retention: provider reentry observes loans without acknowledging cleanup");
@@ -151,6 +156,7 @@ static void recovery_consumer_case(os64_js_teardown_policy_t policy, unsigned mo
     }
     require(os64_js_task_end(h.runtime, OS64_JS_ABI_ID, &out) == OS64_JS_OK,
             "recovery host: setup task closed");
+    kept_retention_alias_case(h.realm, h.dom, require);
     recovery_consumer_run(&h, 0, "globalThis.shared={value:0,order:'',forbidden:0};"
         "globalThis.assert=function(x){if(!x)throw Error('host assertion')};setTimeout(()=>shared.order+='A',0)");
     recovery_consumer_run(&h, 1, "globalThis.shared=A.shared;globalThis.kept=document.createElement('div');"
@@ -159,7 +165,10 @@ static void recovery_consumer_case(os64_js_teardown_policy_t policy, unsigned mo
     recovery_consumer_run(&h, 2, "globalThis.shared=A.shared;globalThis.assert=A.assert;"
         "document.body.appendChild(B.kept);setTimeout(()=>shared.order+='1',0);setTimeout(()=>shared.order+='2',0);"
         "globalThis.transport=fetch('/C')");
-    if (mode == 2) recovery_consumer_run(&h, 2, "globalThis.used=new ReadableStream()");
+    if (mode == 2) {
+        kept_retention_response_case(h.realm, h.dom, require);
+        recovery_consumer_run(&h, 2, "globalThis.used=new ReadableStream()");
+    }
     if (mode == 4) os64_dom_effects_mark(h.dom[2]);
     native = os64_dom_retention_snapshot(h.cluster, OS64_JS_ABI_ID);
     wrapper = os64_js_retention_snapshot(h.runtime, OS64_JS_ABI_ID);
@@ -256,6 +265,10 @@ static void recovery_consumer_case(os64_js_teardown_policy_t policy, unsigned mo
         "retention: zero drained registry values coexist with retained native backing and unknown edges");
     os64_js_teardown_report_t report;
     os64_js_destroy_report(h.runtime, &report);
+    os64_dom_kept_retention_t kept = os64_dom_kept_retention_snapshot(h.dom[1], OS64_JS_ABI_ID, SIZE_MAX);
+    require(kept.status == OS64_JS_OK && kept.closed && kept.records_complete &&
+        (kept.unknown & OS64_DOM_KEPT_UNKNOWN_REFERENCE_ROLES),
+        "kept retention: native ledger is readable after engine destruction without classifying stale aliases");
     native = os64_dom_retention_snapshot(h.cluster, OS64_JS_ABI_ID);
     require(native.status == OS64_JS_OK && native.occupied_members == 3 && native.closed_members == 3 &&
         native.dom_bytes && native.oldest_layout_generation == UINT64_MAX,

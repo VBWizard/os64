@@ -24,10 +24,12 @@ for compiler in cc x86_64-elf-gcc; do
         -include os64/js_failure.h -x c -fsyntax-only /dev/null
     "$compiler" -std=c11 -ffreestanding -Wall -Wextra -Werror -I userland/libjs/include \
         -include os64/js_retention.h -x c -fsyntax-only /dev/null
-    "$compiler" -std=c11 -ffreestanding -Wall -Wextra -Werror \
-        -I userland/libjs/include -I userland/libdom/include -I userland/libhtml/include \
-        -I userland/libpage/include -I userland/libway/include -I userland/libos64/include -I abi/include \
-        -include dom/retention.h -x c -fsyntax-only /dev/null
+    for header in dom/retention.h dom/kept_retention.h; do
+        "$compiler" -std=c11 -ffreestanding -Wall -Wextra -Werror \
+            -I userland/libjs/include -I userland/libdom/include -I userland/libhtml/include \
+            -I userland/libpage/include -I userland/libway/include -I userland/libos64/include -I abi/include \
+            -include "$header" -x c -fsyntax-only /dev/null
+    done
 done
 # Binding syntax uses upstream's host headers here; R1 target compatibility
 # headers remain separate work. Do not describe this as an os64 binding build.

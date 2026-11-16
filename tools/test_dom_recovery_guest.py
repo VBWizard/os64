@@ -71,6 +71,8 @@ def main():
         "source_files": {name: digest(root / name) for name in [
             "userland/libdom/include/dom/dom.h", "userland/libdom/recovery.inc",
             "userland/libdom/include/dom/retention.h", "userland/libdom/retention.inc",
+            "userland/libdom/include/dom/kept_retention.h", "userland/libdom/kept_retention.inc",
+            "userland/libdom/kept.c", "userland/libdom/tests/kept_retention_cases.h",
             "userland/libdom/core.c", "userland/libjs/runtime/runtime.c",
             "userland/libjs/include/os64/js_retention.h", "userland/libjs/runtime/retention.inc",
             "userland/libhtml/include/html/retention.h", "userland/libhtml/retention.inc",

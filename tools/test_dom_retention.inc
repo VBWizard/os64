@@ -1,11 +1,14 @@
 #include <dom/retention.h>
 #include <os64/js_retention.h>
+#include "test_dom_kept_retention.inc"
 
 static void dom_retention_cases(void)
 {
     for (unsigned policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy) {
         DomRecoveryFixture f;
         if (!dom_recovery_open(&f, policy, true)) continue;
+        dom_kept_retention_native_cases(&f);
+        kept_retention_alias_case(f.realm, f.binding, recovery_host_require);
         size_t allocated = attempts, native_allocated = dom_attempts;
         int64_t now = dom_clock;
         fail_at = allocated+1; dom_fail_at = native_allocated+1; dom_clock_step = 5000000;
@@ -49,6 +52,14 @@ static void dom_retention_cases(void)
               "retention: ordinary departure retains backing separately from executable containment");
         realm_script(f.realm[0], "if(B.bad(true)!==7)throw Error('retained ordinary alias')",
                      "retention: diagnostic reads preserve callable aliases after ordinary departure");
+        os64_dom_kept_retention_t payload = os64_dom_kept_retention_snapshot(f.binding[1], OS64_JS_ABI_ID, SIZE_MAX);
+        realm_script(f.realm[2], "if(payloadAlias.size!==4||payloadSlice.size!==2)throw Error('departed payload')",
+                     "kept retention: foreign Blob data remains readable after ordinary source departure");
+        os64_dom_kept_retention_t after = os64_dom_kept_retention_snapshot(f.binding[1], OS64_JS_ABI_ID, SIZE_MAX);
+        check(payload.records_seen == 1 && payload.shared_records == 1 && payload.quota_bytes &&
+              after.quota_bytes == payload.quota_bytes && after.max_record_references == payload.max_record_references &&
+              (after.unknown & OS64_DOM_KEPT_UNKNOWN_REFERENCE_ROLES),
+              "kept retention: source departure preserves backing charges and unknown incoming aliases");
         dom_recovery_close(&f);
         check(!live && !dom_live && !dom_allocations, "retention: both root policies release native and engine allocations");
     }
