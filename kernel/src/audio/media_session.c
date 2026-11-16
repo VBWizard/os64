@@ -4,7 +4,7 @@
 
 #include "audio/media_session.h"
 #include "audio/media_keys.h"
-#include "audio/audio.h"     // audio_control: the kernel's own answer
+#include "audio/audio.h"     // audio_toggle: the kernel's own answer
 #include "gui/window.h"      // wm_focus_owner
 #include "spinlock.h"
 #include "kmalloc.h"
@@ -201,14 +201,11 @@ void media_key_pressed(uint32_t key)
 	if (!r.kernel_toggle)
 		return;
 	// No session would take it. Decided under the lock, carried out after
-	// it: audio_control takes the stream's lock and wakes under it. Pause
-	// refuses with nothing open to pause, resume unless paused, so trying
-	// one and then the other is the toggle.
-	kernel_answer_t did = KERNEL_REFUSED;
-	if (audio_control("pause", 5))
-		did = KERNEL_PAUSED;
-	else if (audio_control("resume", 6))
-		did = KERNEL_RESUMED;
+	// it: audio_toggle takes the stream's lock and wakes under it, and is
+	// one step there, so two presses at once are two toggles.
+	audio_toggle_t toggled = audio_toggle();
+	kernel_answer_t did = toggled == AUDIO_TOGGLE_PAUSED ? KERNEL_PAUSED
+	                    : toggled == AUDIO_TOGGLE_RESUMED ? KERNEL_RESUMED : KERNEL_REFUSED;
 	flags = spinlock_acquire_irqsave(&s_lock);
 	s_kernel_last = did;
 	if (did == KERNEL_PAUSED)

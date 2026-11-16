@@ -133,11 +133,12 @@ wait, the wake, the focus load and the fallback call, in
    `/bin/desktop`), the most recently active.
 3. **Else the session most recently active.**
 4. **Else no session**: the kernel answers itself. Play and Pause are
-   `audio_control`'s `pause`, and if that is refused, `resume` (pause
-   refuses when nothing is open; resume unless paused). Both refused, and
-   Next, Previous and Stop, are counted as unanswered. The call is made
-   after the session lock is released (it takes the stream's lock and
-   wakes under it).
+   `audio_toggle`: pause, and if that is refused, resume (pause refuses
+   when nothing is open; resume unless paused), as one step under the
+   stream's lock, so two presses at once are two toggles. Both refused,
+   and Next, Previous and Stop, are counted as unanswered. The call is
+   made after the session lock is released (it takes the stream's lock
+   and wakes under it).
 
 **Active** is a sequence number stamped under the session lock at each
 state write and each delivery, never a clock: two cannot tie.

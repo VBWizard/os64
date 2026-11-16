@@ -189,6 +189,7 @@
 #include "driver/system/usb/xhci.h"
 #include "audio/audio.h"
 #include "audio/media_session.h"   // /sys/mediakeys
+#include "spinlock.h"              // cmd_lock: one writer at a time in a handle's command
 #include "driver/system/usb/bt_scan.h"
 #include "memcpy.h"
 #include "doorbell.h"                   // /sys/net/knet — every bell in the registry
@@ -2321,6 +2322,10 @@ typedef struct
 	snarf_pending_t  *pending;   // CLIPWRITE: the copy being accumulated
 	decoration_pending_t *decoration;
 	console_font_pending_t *font; // FONTWRITE: the image being accumulated
+	// One writer at a time in the command being assembled below (bt_* and
+	// mk_*): two threads may write one handle at once, and a length checked
+	// by one and advanced by the other indexes past the buffer.
+	spinlock_t cmd_lock;
 	char bt_command[64];
 	bool bt_connection;
 	uint8_t bt_length;
@@ -2617,24 +2622,37 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 // at close, which can run with interrupts off or inside a burial: text left
 // without a newline when the handle closes is refused there. A refused line
 // does not stop the lines after it in the same write; the write answers -1
-// when any of its lines was refused.
+// when any of its lines was refused. The line is assembled under cmd_lock,
+// and a finished one is copied out and carried out after it is released.
 static int sys_mediakeys_write(sys_file_handle_t *h, const char *b, size_t size)
 {
 	bool refused = false;
-	for (size_t i = 0; i < size; i++)
+	size_t i = 0;
+	while (i < size)
 	{
-		if (b[i] == '\n')
+		char line[sizeof(h->mk_line)];
+		size_t length = 0;
+		bool complete = false, outgrown = false;
+		uint64_t flags = spinlock_acquire_irqsave(&h->cmd_lock);
+		for (; i < size && !complete; i++)
 		{
-			if (h->mk_refused || media_keys_command(h->mk_line, h->mk_length) != 0)
-				refused = true;
-			h->mk_length = 0;
-			h->mk_refused = false;
-			continue;
+			if (b[i] == '\n')
+			{
+				complete = true;
+				outgrown = h->mk_refused;
+				length = h->mk_length;
+				memcpy(line, h->mk_line, length);
+				h->mk_length = 0;
+				h->mk_refused = false;
+			}
+			else if (h->mk_length == sizeof(h->mk_line))
+				h->mk_refused = true;
+			else
+				h->mk_line[h->mk_length++] = b[i];
 		}
-		if (h->mk_length == sizeof(h->mk_line))
-			h->mk_refused = true;
-		else
-			h->mk_line[h->mk_length++] = b[i];
+		spinlock_release_irqrestore(&h->cmd_lock, flags);
+		if (complete && (outgrown || media_keys_command(line, length) != 0))
+			refused = true;
 	}
 	return refused ? -1 : (int)size;
 }
@@ -2652,12 +2670,15 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	if (h == NULL || buffer == NULL)
 		return -1;
 	if (h->kind == SYS_HANDLE_BTWRITE) {
+		uint64_t flags = spinlock_acquire_irqsave(&h->cmd_lock);
 		if (h->bt_refused || size > (h->bt_connection ? sizeof(h->bt_command) : 32u) - h->bt_length) {
 			h->bt_refused = true;
+			spinlock_release_irqrestore(&h->cmd_lock, flags);
 			return -1;
 		}
 		memcpy(h->bt_command + h->bt_length, buffer, size);
 		h->bt_length += size;
+		spinlock_release_irqrestore(&h->cmd_lock, flags);
 		return (int)size;
 	}
 
