@@ -33,6 +33,7 @@
 #include "driver/system/usb/bt_le.h"
 #include "driver/system/usb/bt_manager.h"
 #include "driver/system/usb/bt_host.h"
+#include "audio/media_session.h"   // media_key_pressed: where the headphones' presses go
 #include "driver/system/usb/bt_a2dp_seam.h"   // slot 2's audio sink, given to the host at bring-up
 #include "micros.h"                            // the pump's clock, handed to each host tick
 #include "crypto/wipe.h"
@@ -1636,7 +1637,8 @@ static void xhci_bt_log_audio(xhci_bt_probe_t *p)
 	p->logged.avdtp_state = (uint8_t)st;
 	// Their buttons, each press and release once, from slot 2's ring by
 	// number. Events the ring no longer holds (overwritten, which its
-	// status counts as lost, or taken by a consumer) are skipped.
+	// status counts as lost) are skipped. The media keys take from the
+	// same ring only after this has logged them (xhci_bt_route_buttons).
 	if (h->buttons_seen - p->logged.buttons > BT_HOST_BUTTONS)
 		p->logged.buttons = h->buttons_seen - BT_HOST_BUTTONS;
 	for (; p->logged.buttons != h->buttons_seen; p->logged.buttons++) {
@@ -1644,6 +1646,31 @@ static void xhci_bt_log_audio(xhci_bt_probe_t *p)
 		if (bt_host_button(h, p->logged.buttons, &b))
 			printd(DEBUG_USB, "bluetooth: slot %u avrcp: %s %s\n", BT_HOST_CLASSIC_SLOT,
 			       bt_avrcp_operation_name(b.operation), b.pressed ? "pressed" : "released");
+	}
+}
+
+// The headphones' presses go to the program they are for (MEDIA_KEYS.md).
+// Taken after xhci_bt_log_trouble, which logs them from the same ring by
+// number: a take before it would leave the DEBUG_USB lines nothing to read.
+// Presses only, of the five keys a player answers; releases and the volume
+// keys stay bt_host's, which gives the volume its own meaning.
+static void xhci_bt_route_buttons(xhci_bt_probe_t *p)
+{
+	bt_host_button_t b;
+	while (bt_host_button_take(&p->host, &b)) {
+		if (!b.pressed)
+			continue;
+		uint32_t key = 0;
+		switch (b.operation) {
+			case BT_AVRCP_OP_PLAY:     key = OS64_MEDIA_KEY_PLAY; break;
+			case BT_AVRCP_OP_PAUSE:    key = OS64_MEDIA_KEY_PAUSE; break;
+			case BT_AVRCP_OP_STOP:     key = OS64_MEDIA_KEY_STOP; break;
+			case BT_AVRCP_OP_FORWARD:  key = OS64_MEDIA_KEY_NEXT; break;
+			case BT_AVRCP_OP_BACKWARD: key = OS64_MEDIA_KEY_PREVIOUS; break;
+			default: break;
+		}
+		if (key != 0)
+			media_key_pressed(key);
 	}
 }
 
@@ -1839,6 +1866,7 @@ static void xhci_bt_runtime_poll(void)
         p->timeline_classic_phase = (uint8_t)classic->phase;
     }
     xhci_bt_log_trouble(p);
+    xhci_bt_route_buttons(p);
     if (usb_done && !p->host.owner) crypto_wipe(p->tx.buffer + 512, 258);
     // A send slot is wiped as its transfer completes, and not before: one
     // still queued is the controller's to read, and zeroing it would put a

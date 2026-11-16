@@ -1871,6 +1871,18 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	}
 }
 
+// Contract in task.h. Bounded by `cap` as well as by ktask, so a parent
+// chain that ever looped could not hold the lock forever.
+uint32_t task_lineage(task_t* task, uint64_t* out, uint32_t cap)
+{
+	uint32_t n = 0;
+	uint64_t flags = spinlock_acquire_irqsave(&kDeadChildLock);
+	for (task_t *t = task; t != NULL && t != kKernelTask && n < cap; t = t->parentTask)
+		out[n++] = t->taskID;
+	spinlock_release_irqrestore(&kDeadChildLock, flags);
+	return n;
+}
+
 // The non-blocking half of task_wait (contract in task.h). Deliberately shares
 // task_wait's check-first block and NOTHING else: no live-child probe, because
 // "children exist but none are dead" is a normal answer here rather than a

@@ -27,7 +27,8 @@
 //
 //   /sys/                        the root: "bluetooth", "bus", "console", "cpu", "memory", "net",
 //                                "acpi", "block", "cache", "conf", "gui", "log", "mounts",
-//                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio"
+//                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio",
+//                                "mediakeys"
 //   /sys/acpi                    everything the firmware's ACPI tables
 //                                said, used or not: every table, the
 //                                FADT's power-management facts, the MADT's
@@ -42,6 +43,11 @@
 //                                the position, underruns since boot and since
 //                                this file was last read, the null sink's
 //                                pump. Read it FIRST when sound stutters
+//   /sys/mediakeys               the media-key sessions, the focus word, the
+//                                last press and the rule that routed it.
+//                                Read it FIRST when a press goes nowhere.
+//                                WRITE `press play|pause|next|previous|stop`
+//                                to route a press as the headphones would
 //   /sys/usb                     the xHCI controllers and what is on each, how
 //                                often the poll that serves them came round,
 //                                and what Bluetooth did when. Read it FIRST
@@ -182,6 +188,7 @@
 #include "knet.h"                       // /sys/net/knet — the drainer's counters
 #include "driver/system/usb/xhci.h"
 #include "audio/audio.h"
+#include "audio/media_session.h"   // /sys/mediakeys
 #include "driver/system/usb/bt_scan.h"
 #include "memcpy.h"
 #include "doorbell.h"                   // /sys/net/knet — every bell in the registry
@@ -393,6 +400,7 @@ typedef enum
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
 	SYS_NODE_USBFILE,    // /usb — the xHCI controllers, the poll's gaps, the Bluetooth timeline
 	SYS_NODE_AUDIOFILE,  // /audio — the sound stream, its sink and its counters
+	SYS_NODE_MEDIAKEYS,  // /mediakeys — the media-key sessions; write `press <key>`
 	SYS_NODE_CONFFILE,   // /conf — the config search path, and who took what (2026-08-23)
 	SYS_NODE_RANDOMFILE, // /random — the entropy pool: sources, seeding, counters (RANDOM.md)
 	SYS_NODE_ACPIFILE,   // /acpi — what the firmware's ACPI tables said (acpi_tables.h)
@@ -540,6 +548,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_AUDIOFILE;
+		return;
+	}
+
+	if (strcmp(comp, "mediakeys") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_MEDIAKEYS;
 		return;
 	}
 
@@ -1200,6 +1216,8 @@ static void sys_gen_memory_ledger(synth_text_t *t)
 // at the stream under its lock; the since-read counters start again at each
 // open of this file.
 #define SYS_AUDIO_TEXT_BYTES 2048
+// /sys/mediakeys: the header and a line a session, every session full.
+#define SYS_MEDIAKEYS_TEXT_BYTES 8192
 static void sys_gen_audio(synth_text_t *t)
 {
 	char *text = kmalloc(SYS_AUDIO_TEXT_BYTES);
@@ -2275,6 +2293,7 @@ typedef enum
 {
 	SYS_HANDLE_SNAPSHOT = 0,   // the ordinary case: text generated at open
 	SYS_HANDLE_MOUSE_WRITE,
+	SYS_HANDLE_MEDIAKEYS_WRITE,   // /sys/mediakeys opened "w" — each write is a press
 	SYS_HANDLE_APPEARANCE_WRITE,
 	SYS_HANDLE_DECORATIONS_WRITE,
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
@@ -2320,13 +2339,35 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	bool is_clip  = (sp.type == SYS_NODE_CLIPFILE);
 	bool is_decoration = (sp.type == SYS_NODE_DECORATIONS);
 	bool is_mouse = (sp.type == SYS_NODE_MOUSE);
+	bool is_mediakeys = (sp.type == SYS_NODE_MEDIAKEYS);
 	bool is_appearance = (sp.type == SYS_NODE_APPEARANCE);
 	bool is_font = (sp.type == SYS_NODE_CONSOLEFONT);
 	bool is_bt = (sp.type == SYS_NODE_BTSCAN || sp.type == SYS_NODE_BTCONNECTION);
 	if (mode == NULL || mode[0] == '\0' || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
 		return -1;
-	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration && !is_bt && !is_mouse)
+	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration && !is_bt && !is_mouse
+	    && !is_mediakeys)
 		return -1;
+
+	// Read: the report. Write: each write is one complete `press <key>`,
+	// applied at the write (a sysfs close can run with interrupts off), and
+	// anyone may write it, as anyone may write /dev/audioctl.
+	if (is_mediakeys)
+	{
+		synth_text_t text = {0};
+		if (mode[0] == 'r')
+		{
+			if (!synth_text_init(&text, SYS_MEDIAKEYS_TEXT_BYTES)) return -1;
+			text.len = media_keys_report(text.buf, text.cap);
+		}
+		sys_file_handle_t *mh = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+		                                              sizeof(sys_file_handle_t), FILETYPE_SYSFILE);
+		if (mh == NULL)
+			return -1;
+		if (mode[0] == 'w')
+			mh->kind = SYS_HANDLE_MEDIAKEYS_WRITE;
+		return 0;
+	}
 
 	if (is_bt || sp.type == SYS_NODE_BTDEVICES) {
 		synth_text_t text = {0};
@@ -2567,7 +2608,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	return 0;
 }
 
-// Probe, appearance and mouse writes are complete commands, never partial streams.
+// Probe, appearance, mouse and media-key writes are complete commands, never partial streams.
 // Clipboard writes accumulate content which becomes visible at close;
 // Bluetooth scan writes assemble one bounded command, submitted at close.
 static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
@@ -2593,6 +2634,9 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 
 	if (h->kind == SYS_HANDLE_MOUSE_WRITE)
 		return input_mouse_apply(buffer, size);
+
+	if (h->kind == SYS_HANDLE_MEDIAKEYS_WRITE)
+		return media_keys_command(buffer, size) == 0 ? (int)size : -1;
 
 	if (h->kind == SYS_HANDLE_APPEARANCE_WRITE)
 		return appearance_publish(buffer, size);
@@ -2774,7 +2818,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bluetooth", "bus", "console", "cpu", "memory", "net" };
-			static const char *kSysRootFiles[] = { "acpi", "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio" };
+			static const char *kSysRootFiles[] = { "acpi", "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio", "mediakeys" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -3008,6 +3052,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_AUDIOFILE:
 			strncpy(entry->name, "audio", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEDIAKEYS:
+			strncpy(entry->name, "mediakeys", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_CONFFILE:

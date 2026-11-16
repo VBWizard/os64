@@ -367,6 +367,13 @@ window_t *wm_window_by_id(uint32_t id);
 
 window_t *wm_focused(void);
 
+// The focused window's owner task ID, 0 when nothing is focused (or no task
+// is behind the window, or there is no desktop). One word, stored beside
+// every assignment of the focus under kGuiLock and read here with an atomic
+// load, so a reader that may not take kGuiLock (the media keys' rule, from
+// kusb) can ask.
+uint64_t wm_focus_owner(void);
+
 // Snapshot every window's id (the safe handle — see wm_window_by_id) in
 // MOST-RECENTLY-FOCUSED order, the focused window first. Returns how many
 // were written, at most `max`. Alt+Tab walks this snapshot rather than any
