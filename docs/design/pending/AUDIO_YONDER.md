@@ -328,7 +328,7 @@ added that kind, `HTMLVideoElement` playing sound alone (§ Y.4).
 | playback | `currentTime`, `fastSeek()`, `duration`, `paused`, `played`, `seekable`, `ended`, `autoplay`, `loop`, `play()`, `pause()` | yes |
 | rate | `defaultPlaybackRate`, `playbackRate`, `preservesPitch` | stored and reported; a rate other than 1 is a DEBTS row (it plays at 1) |
 | controls | `controls`, `volume`, `muted`, `defaultMuted` | yes |
-| tracks | `audioTracks`, `videoTracks`, `textTracks`, `addTextTrack()` | `textTracks` yes, always an empty `TextTrackList` (an EventTarget whose events never fire, 2026-11-16: JW Player's html5 provider reads `video.textTracks.length` at every media event, and threw on a page whose `<video>` stand-in it plays through); the rest no: video arc |
+| tracks | `audioTracks`, `videoTracks`, `textTracks`, `addTextTrack()` | `textTracks` yes, always an empty `TextTrackList` (an EventTarget at which the binding fires nothing, 2026-11-16: JW Player's html5 provider reads `video.textTracks.length` at every media event, and threw on a page whose `<video>` stand-in it plays through); the rest no: video arc |
 | `<source>` children | resource selection over `<source src type>` | yes: the algorithm walks them and takes the first whose `type` `canPlayType` does not answer `""` |
 
 `play()` returns a promise, settled later (the pattern `fetch()` uses);

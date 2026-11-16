@@ -28,7 +28,8 @@
  * it was queued, as "notify about playing" does. The tasks run through
  * os64_dom_media_fire, one at a time.
  *
- * What it leaves out: the text, audio and video track lists, the media
+ * What it leaves out: the audio and video track lists, any text track
+ * (textTracks is always empty, and there is no addTextTrack()), the media
  * controller, a playback rate other than 1 (kept and reported; the host
  * plays at 1, DEBTS.md), getStartDate, the per-candidate `error` events at
  * <source> elements (a failed candidate moves to the next one silently),
@@ -905,7 +906,8 @@ static JSValue ranges_object(os64_dom_t *dom, JSContext *ctx, uint32_t count, do
 /* A media element's TextTrackList (HTML § 4.8.11.11.1), always empty:
  * yonder reads no text tracks from a resource, and addTextTrack() is the
  * video arc's (AUDIO_YONDER.md's tracks row), so nothing is ever added and
- * its change, addtrack and removetrack events never fire. It is still an
+ * the binding never fires its change, addtrack or removetrack events
+ * (a page may dispatch them itself, as at any EventTarget). It is still an
  * EventTarget a player can listen on, with its entry in the object (A
  * PLAIN EVENT TARGET, internal.h), and the same object on every read: the
  * element's record holds it until the page's drain. */
