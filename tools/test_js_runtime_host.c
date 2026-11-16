@@ -2621,6 +2621,12 @@ int main(int argc, char **argv)
         printf("libjs callback settings: %u checks, %u failures\n", checks, failures);
         return failures != 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--active-script")) {
+        active_script_cases();
+        check(live == 0, "active script records release allocations");
+        printf("libjs active script: %u checks, %u failures\n", checks, failures);
+        return failures != 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--promise-settings")) {
         promise_settings_cases(); promise_failure_cases();
         check(live == 0, "promise settings release allocations");

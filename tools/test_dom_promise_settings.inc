@@ -1,5 +1,5 @@
-/* A native Promise handler has no script frame to hide the captured backup.
- * Its nested WebIDL conversions must retain A, independently of entry C. */
+/* A native Promise handler restores the captured script activation. Its
+ * nested WebIDL conversions must retain A, independently of entry C. */
 static JSValue promise_dom_define(JSContext *ctx, JSValueConst self, int argc,
                                  JSValueConst *argv, int magic, JSValue *data)
 {
@@ -9,6 +9,14 @@ static JSValue promise_dom_define(JSContext *ctx, JSValueConst self, int argc,
           OS64_JS_SETTINGS_ENTRY,&out)==ce_realms[2],"Promise DOM: executable C supplies job entry");
     check(os64_js_settings_realm(ce_runtime,OS64_JS_ABI_ID,OS64_JS_SETTINGS_INCUMBENT,&out)==ce_realms[0],
           "Promise DOM: registration A supplies native incumbent");
+    JSValue record=JS_GetActiveScriptOrModule(JS_GetRuntime(ctx));
+    check(JS_GetScriptOrModuleContext(record)==ce_contexts[0],
+          "Promise DOM: exact restored record belongs to registration A");
+    JSAtom source=JS_GetScriptOrModuleName(ctx,0);
+    const char *name=JS_AtomToCString(ctx,source);
+    check(name&&!strcmp(name,"Promise DOM: job defines custom element"),
+          "Promise DOM: native conversion observes the original source name");
+    JS_FreeCString(ctx,name);JS_FreeAtom(ctx,source);JS_FreeValue(ctx,record);
     JSValue global=JS_GetGlobalObject(ce_contexts[3]);
     JSValue registry=JS_GetPropertyStr(ctx,global,"customElements");JS_FreeValue(ctx,global);
     global=JS_GetGlobalObject(ce_contexts[1]);

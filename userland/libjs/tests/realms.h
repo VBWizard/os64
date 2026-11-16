@@ -583,6 +583,7 @@ static void realm_failure_order_cases(void)
 #include "callback_settings.h"
 #include "current_settings.h"
 #include "promise_settings.h"
+#include "active_script.h"
 
 static void realm_cases(void)
 {
@@ -593,6 +594,7 @@ static void realm_cases(void)
     callback_settings_cases();
     current_settings_cases();
     promise_settings_cases();
+    active_script_cases();
     retirement_cases();
     staging_cases();
     realm_identity_cases();

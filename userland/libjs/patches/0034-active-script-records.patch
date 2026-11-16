@@ -1,0 +1,632 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -412,6 +412,7 @@
+     JSHostPromiseIncumbent *promise_incumbent_capture;
+     void *promise_incumbent_opaque;
+     JSContext *promise_job_incumbent; /* borrowed from the executing queue entry */
++    JSValue promise_job_script; /* borrowed ScriptOrModule from that entry */
+ };
+ 
+ typedef struct JSSettingsFrame {
+@@ -419,6 +420,7 @@
+     JSContext *context;
+     JSContext *previous_current;
+     unsigned skip;
++    JSValue script_or_module; /* owned until this activation unwinds */
+ } JSSettingsFrame;
+ 
+ struct JSClass {
+@@ -754,6 +756,7 @@
+     uint8_t *byte_code_buf; /* (self pointer) */
+     int byte_code_len;
+     JSAtom func_name;
++    JSAtom source_name; /* semantic source name, retained without debug data */
+     JSBytecodeVarDef *vardefs; /* arguments + local variables (arg_count + var_count) (self pointer) */
+     JSClosureVar *closure_var; /* list of variables in the closure (self pointer) */
+     uint16_t arg_count;
+@@ -996,7 +999,8 @@
+     struct list_head link;
+     JSContext *realm;
+     JSContext *owner, *activity; /* eligibility, independent of execution context */
+-    JSContext *incumbent; /* captured Promise callback context; a queue root */
++    JSContext *incumbent; /* callback capture or module-continuation backup; a queue root */
++    JSValue script_or_module; /* captured active record, a separate queue root */
+     JSJobGroup *group;
+     struct JSJobEntry *group_prev, *group_next;
+     JSJobFunc *job_func;
+@@ -1095,11 +1099,12 @@
+         struct JSAsyncFunctionState *async_function_data; /* JS_CLASS_ASYNC_FUNCTION_RESOLVE, JS_CLASS_ASYNC_FUNCTION_REJECT */
+         struct JSAsyncFromSyncIteratorData *async_from_sync_iterator_data; /* JS_CLASS_ASYNC_FROM_SYNC_ITERATOR */
+         struct JSAsyncGeneratorData *async_generator_data; /* JS_CLASS_ASYNC_GENERATOR */
+-        struct { /* JS_CLASS_BYTECODE_FUNCTION: 12/24 bytes */
++        struct { /* bytecode function closure and its retained ScriptOrModule */
+             /* also used by JS_CLASS_GENERATOR_FUNCTION, JS_CLASS_ASYNC_FUNCTION and JS_CLASS_ASYNC_GENERATOR_FUNCTION */
+             struct JSFunctionBytecode *function_bytecode;
+             JSVarRef **var_refs;
+             JSObject *home_object; /* for 'super' access */
++            JSValue script_or_module; /* root bytecode or exact module record */
+         } func;
+         struct { /* JS_CLASS_C_FUNCTION: 12/20 bytes */
+             JSContext *realm;
+@@ -2140,6 +2145,7 @@
+     if (!rt)
+         return NULL;
+     memset(rt, 0, sizeof(*rt));
++    rt->promise_job_script = JS_UNDEFINED;
+     js_malloc_init(&rt->malloc_ctx);
+     rt->malloc_ctx.mf = *mf;
+     rt->malloc_ctx.malloc_state = ms;
+@@ -2494,7 +2500,7 @@
+ 
+ static int JS_EnqueueJob2(JSContext *ctx, JSContext *owner, JSContext *activity,
+                           JSJobFunc *job_func, int argc, JSValueConst *argv,
+-                          BOOL no_exception, JSContext *incumbent)
++                          BOOL no_exception, JSContext *incumbent, JSValueConst script)
+ {
+     JSRuntime *rt = ctx->rt;
+     JSJobEntry *e;
+@@ -2510,6 +2516,7 @@
+     e->owner = owner ? JS_DupContext(owner) : NULL;
+     e->activity = activity ? JS_DupContext(activity) : NULL;
+     e->incumbent = incumbent ? JS_DupContext(incumbent) : NULL;
++    e->script_or_module = JS_DupValue(ctx, script);
+     e->group = rt->job_group;
+     /* GC during a candidate allocation may schedule an existing sibling's
+        registry. Its cleanup is independent of the installation transaction. */
+@@ -2535,14 +2542,14 @@
+ int JS_EnqueueJob(JSContext *ctx, JSJobFunc *job_func,
+                   int argc, JSValueConst *argv)
+ {
+-    return JS_EnqueueJob2(ctx, ctx, NULL, job_func, argc, argv, FALSE, NULL);
++    return JS_EnqueueJob2(ctx, ctx, NULL, job_func, argc, argv, FALSE, NULL, JS_UNDEFINED);
+ }
+ 
+ int JS_EnqueueJobOwned(JSContext *ctx, JSContext *owner, JSContext *activity,
+                        JSJobFunc *job_func, int argc, JSValueConst *argv)
+ {
+     assert((!owner || owner->rt == ctx->rt) && (!activity || activity->rt == ctx->rt));
+-    return JS_EnqueueJob2(ctx, owner, activity, job_func, argc, argv, FALSE, NULL);
++    return JS_EnqueueJob2(ctx, owner, activity, job_func, argc, argv, FALSE, NULL, JS_UNDEFINED);
+ }
+ 
+ /* The head's contexts are borrowed until execution/discard. Inspection runs
+@@ -2566,6 +2573,7 @@
+     if (e->owner) JS_FreeContext(e->owner);
+     if (e->activity) JS_FreeContext(e->activity);
+     if (e->incumbent) JS_FreeContext(e->incumbent);
++    JS_FreeValueRT(rt, e->script_or_module);
+     JS_FreeContext(e->realm);
+     js_free_rt(rt, e);
+     return 1;
+@@ -2612,6 +2620,7 @@
+     JSJobEntry *e;
+     JSValue res;
+     JSContext *previous_incumbent;
++    JSValue previous_script;
+     int i, ret;
+ 
+     if (rt->recovery_barrier) {
+@@ -2635,6 +2644,8 @@
+             ctx, e->owner, JS_EXECUTION_SCOPE_JOB, JS_EXECUTION_CODE_UNKNOWN });
+     previous_incumbent = rt->promise_job_incumbent;
+     rt->promise_job_incumbent = e->incumbent;
++    previous_script = rt->promise_job_script;
++    rt->promise_job_script = e->script_or_module;
+     if (ctx->executable_failed || (e->owner && e->owner->executable_failed) ||
+         (e->activity && e->activity->executable_failed) ||
+         (e->incumbent && e->incumbent->executable_failed))
+@@ -2647,6 +2658,7 @@
+     } else
+         res = js_job_settings_body(ctx, e);
+     rt->promise_job_incumbent = previous_incumbent;
++    rt->promise_job_script = previous_script;
+     for(i = 0; i < e->argc; i++)
+         JS_FreeValue(ctx, e->argv[i]);
+     if (JS_IsException(res))
+@@ -2659,6 +2671,7 @@
+     if (e->owner) JS_FreeContext(e->owner);
+     if (e->activity) JS_FreeContext(e->activity);
+     if (e->incumbent) JS_FreeContext(e->incumbent);
++    JS_FreeValueRT(rt, e->script_or_module);
+     js_free(ctx, e);
+     if (pctx) {
+         if (js_rc(ctx)->ref_count > 1)
+@@ -2756,6 +2769,7 @@
+         if (e->owner) JS_FreeContext(e->owner);
+         if (e->activity) JS_FreeContext(e->activity);
+         if (e->incumbent) JS_FreeContext(e->incumbent);
++        JS_FreeValueRT(rt, e->script_or_module);
+         JS_FreeContext(e->realm);
+         js_free_rt(rt, e);
+     }
+@@ -3295,15 +3309,44 @@
+     return TRUE;
+ }
+ 
++static JSValueConst js_active_script_or_module(JSRuntime *rt)
++{
++    return rt->settings_script_frame ? rt->settings_script_frame->script_or_module : JS_UNDEFINED;
++}
++
++JSValue JS_GetActiveScriptOrModule(JSRuntime *rt)
++{
++    return JS_DupValueRT(rt, js_active_script_or_module(rt));
++}
++
++JSContext *JS_GetScriptOrModuleContext(JSValueConst record)
++{
++    if (JS_VALUE_GET_TAG(record) == JS_TAG_MODULE)
++        return ((JSModuleDef *)JS_VALUE_GET_PTR(record))->realm;
++    if (JS_VALUE_GET_TAG(record) == JS_TAG_FUNCTION_BYTECODE)
++        return ((JSFunctionBytecode *)JS_VALUE_GET_PTR(record))->realm;
++    return NULL;
++}
++
++static JSAtom js_script_or_module_name(JSValueConst record)
++{
++    if (JS_VALUE_GET_TAG(record) == JS_TAG_MODULE)
++        return ((JSModuleDef *)JS_VALUE_GET_PTR(record))->module_name;
++    if (JS_VALUE_GET_TAG(record) == JS_TAG_FUNCTION_BYTECODE)
++        return ((JSFunctionBytecode *)JS_VALUE_GET_PTR(record))->source_name;
++    return JS_ATOM_NULL;
++}
++
+ static void js_settings_script_enter(JSRuntime *rt, JSSettingsFrame *frame,
+-                                      JSContext *context, BOOL has_script)
+-{
++                                      JSContext *context, JSValueConst record)
++{
++    frame->script_or_module = JS_DupValueRT(rt, record);
+     frame->previous = rt->settings_script_frame;
+     frame->context = context;
+     frame->previous_current = rt->settings_current;
+     rt->settings_current = context;
+     frame->skip = 0;
+-    if (has_script)
++    if (!JS_IsUndefined(record))
+         rt->settings_script_frame = frame;
+ }
+ 
+@@ -3312,6 +3355,7 @@
+     rt->settings_current = frame->previous_current;
+     assert(frame->skip == 0);
+     rt->settings_script_frame = frame->previous;
++    JS_FreeValueRT(rt, frame->script_or_module);
+ }
+ 
+ static void update_stack_limit(JSRuntime *rt)
+@@ -6129,6 +6173,14 @@
+ 
+     switch(class_id) {
+     case JS_CLASS_OBJECT:
++        break;
++    case JS_CLASS_BYTECODE_FUNCTION:
++    case JS_CLASS_GENERATOR_FUNCTION:
++    case JS_CLASS_ASYNC_FUNCTION:
++    case JS_CLASS_ASYNC_GENERATOR_FUNCTION:
++        p->u.func.var_refs = NULL;
++        p->u.func.home_object = NULL;
++        p->u.func.script_or_module = JS_UNDEFINED;
+         break;
+     case JS_CLASS_ARRAY:
+         {
+@@ -6348,7 +6400,7 @@
+ }
+ 
+ /* HTML creates inline handlers without an associated ScriptOrModule.
+-   Match the complete expected function text before changing its marker:
++   Match the complete expected function text before releasing its record:
+    source concatenation must not let a malformed body select another closure. */
+ JS_BOOL JS_ClearFunctionScriptProvenance(JSValueConst function,
+                                        const char *source, size_t length)
+@@ -6364,7 +6416,10 @@
+     if (!b->has_debug || !b->debug.source || b->debug.source_len != length ||
+         memcmp(b->debug.source, source, length))
+         return FALSE;
++    JSValue record = p->u.func.script_or_module;
++    p->u.func.script_or_module = JS_UNDEFINED;
+     p->has_script_provenance = 0;
++    JS_FreeValueRT(b->realm->rt, record);
+     return TRUE;
+ }
+ 
+@@ -6777,6 +6832,7 @@
+     JSVarRef **var_refs;
+     int i;
+ 
++    JS_FreeValueRT(rt, p->u.func.script_or_module);
+     p1 = p->u.func.home_object;
+     if (p1) {
+         JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_OBJECT, p1));
+@@ -6801,6 +6857,7 @@
+     JSFunctionBytecode *b = p->u.func.function_bytecode;
+     int i;
+ 
++    JS_MarkValue(rt, p->u.func.script_or_module, mark_func);
+     if (p->u.func.home_object) {
+         JS_MarkValue(rt, JS_MKPTR(JS_TAG_OBJECT, p->u.func.home_object),
+                      mark_func);
+@@ -17940,11 +17997,20 @@
+     p->u.func.function_bytecode = b;
+     /* Eval inherits its immediate execution context: direct eval has sf,
+        indirect eval runs under a native builtin with no ScriptOrModule.
+-       Ordinary closures use GetActiveScriptOrModule's presence instead. */
+-    p->has_script_provenance = m != NULL ||
+-        (is_eval ? (!b->is_direct_or_indirect_eval ||
+-                    (sf && JS_VALUE_GET_OBJ(sf->cur_func)->has_script_provenance))
+-                 : ctx->rt->settings_script_frame != NULL);
++       Ordinary closures inherit the exact active record instead. */
++    JSValueConst record = JS_UNDEFINED;
++    if (m)
++        record = JS_MKPTR(JS_TAG_MODULE, m);
++    else if (is_eval) {
++        if (!b->is_direct_or_indirect_eval)
++            record = JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, b);
++        else if (sf)
++            record = JS_VALUE_GET_OBJ(sf->cur_func)->u.func.script_or_module;
++    } else {
++        record = js_active_script_or_module(ctx->rt);
++    }
++    p->u.func.script_or_module = JS_DupValue(ctx, record);
++    p->has_script_provenance = !JS_IsUndefined(record);
+     p->u.func.home_object = NULL;
+     p->u.func.var_refs = NULL;
+     if (b->closure_var_count) {
+@@ -18693,7 +18759,7 @@
+             pc = sf->cur_pc;
+             sf->prev_frame = rt->current_stack_frame;
+             rt->current_stack_frame = sf;
+-            js_settings_script_enter(rt, &settings_frame, ctx, p->has_script_provenance);
++            js_settings_script_enter(rt, &settings_frame, ctx, p->u.func.script_or_module);
+             if (s->throw_flag)
+                 goto exception;
+             else
+@@ -18759,7 +18825,7 @@
+     sf->prev_frame = rt->current_stack_frame;
+     rt->current_stack_frame = sf;
+     ctx = b->realm; /* set the current realm */
+-    js_settings_script_enter(rt, &settings_frame, ctx, p->has_script_provenance);
++    js_settings_script_enter(rt, &settings_frame, ctx, p->u.func.script_or_module);
+ 
+  restart:
+     for(;;) {
+@@ -31856,16 +31922,16 @@
+     return 0;
+ }
+ 
+-/* return JS_ATOM_NULL if the name cannot be found. Only works with
+-   not striped bytecode functions. */
++/* Zero depth names the exact active record, including stripped bytecode and
++   restored Promise callbacks. Positive depths retain the diagnostic physical
++   stack walk; they do not enumerate synthetic host activations. */
+ JSAtom JS_GetScriptOrModuleName(JSContext *ctx, int n_stack_levels)
+ {
+     JSStackFrame *sf;
+     JSFunctionBytecode *b;
+     JSObject *p;
+-    /* XXX: currently we just use the filename of the englobing
+-       function from the debug info. May need to add a ScriptOrModule
+-       info in JSFunctionBytecode. */
++    if (n_stack_levels == 0)
++        return JS_DupAtom(ctx, js_script_or_module_name(js_active_script_or_module(ctx->rt)));
+     sf = ctx->rt->current_stack_frame;
+     if (!sf)
+         return JS_ATOM_NULL;
+@@ -31927,23 +31993,10 @@
+ 
+ static JSValue js_import_meta(JSContext *ctx)
+ {
+-    JSAtom filename;
+-    JSModuleDef *m;
+-
+-    filename = JS_GetScriptOrModuleName(ctx, 0);
+-    if (filename == JS_ATOM_NULL)
+-        goto fail;
+-
+-    /* XXX: inefficient, need to add a module or script pointer in
+-       JSFunctionBytecode */
+-    m = js_find_loaded_module(ctx, filename);
+-    JS_FreeAtom(ctx, filename);
+-    if (!m) {
+-    fail:
+-        JS_ThrowTypeError(ctx, "import.meta not supported in this context");
+-        return JS_EXCEPTION;
+-    }
+-    return JS_GetImportMeta(ctx, m);
++    JSValueConst record = js_active_script_or_module(ctx->rt);
++    if (JS_VALUE_GET_TAG(record) != JS_TAG_MODULE)
++        return JS_ThrowTypeError(ctx, "import.meta not supported in this context");
++    return JS_GetImportMeta(ctx, JS_VALUE_GET_PTR(record));
+ }
+ 
+ static JSValue JS_NewModuleValue(JSContext *ctx, JSModuleDef *m)
+@@ -32095,7 +32148,10 @@
+     JSAtom basename;
+     JSValue promise, resolving_funcs[2], basename_val, err, ret;
+     JSValue specifier_str = JS_UNDEFINED, attributes = JS_UNDEFINED, attributes_obj = JS_UNDEFINED;
+-    JSValueConst args[5];
++    JSValueConst args[6];
++    JSValue referrer = JS_GetActiveScriptOrModule(ctx->rt);
++    JSContext *load_context = JS_GetScriptOrModuleContext(referrer);
++    if (!load_context) load_context = ctx;
+ 
+     basename = JS_GetScriptOrModuleName(ctx, 0);
+     if (basename == JS_ATOM_NULL)
+@@ -32103,12 +32159,15 @@
+     else
+         basename_val = JS_AtomToValue(ctx, basename);
+     JS_FreeAtom(ctx, basename);
+-    if (JS_IsException(basename_val))
++    if (JS_IsException(basename_val)) {
++        JS_FreeValue(ctx, referrer);
+         return basename_val;
++    }
+ 
+     promise = JS_NewPromiseCapability(ctx, resolving_funcs);
+     if (JS_IsException(promise)) {
+         JS_FreeValue(ctx, basename_val);
++        JS_FreeValue(ctx, referrer);
+         return promise;
+     }
+ 
+@@ -32161,6 +32220,7 @@
+                 goto exception;
+             }
+             JS_FreeValue(ctx, attributes_obj);
++            attributes_obj = JS_UNDEFINED;
+         }
+     }
+ 
+@@ -32169,11 +32229,20 @@
+     args[2] = basename_val;
+     args[3] = specifier_str;
+     args[4] = attributes;
++    args[5] = referrer;
+     
+     /* cannot run JS_LoadModuleInternal synchronously because it would
+        cause an unexpected recursion in js_evaluate_module() */
+-    JS_EnqueueJob(ctx, js_dynamic_import_job, 5, args);
++    /* The module continuation must prepare an entry before module evaluation
++       or native promise chaining can capture host settings. The referrer in
++       argv keeps source identity alive; it is not a callback activation. */
++    if (JS_EnqueueJob2(load_context, load_context, NULL, js_dynamic_import_job,
++                       6, args, FALSE,
++                       ctx->rt->promise_incumbent_capture ? load_context : NULL,
++                       JS_UNDEFINED) < 0)
++        goto exception;
+  done:
++    JS_FreeValue(ctx, referrer);
+     JS_FreeValue(ctx, basename_val);
+     JS_FreeValue(ctx, resolving_funcs[0]);
+     JS_FreeValue(ctx, resolving_funcs[1]);
+@@ -37286,6 +37355,7 @@
+ 
+     strip_var_debug = fd->strip_debug && !fd->has_eval_call; /* XXX: check */
+     b->func_name = fd->func_name;
++    b->source_name = JS_DupAtom(ctx, fd->filename);
+     if (fd->arg_count + fd->var_count > 0) {
+         int i;
+         b->vardefs = (void *)((uint8_t*)b + vardefs_offset);
+@@ -37451,6 +37521,7 @@
+         JS_FreeContext(b->realm);
+ 
+     JS_FreeAtomRT(rt, b->func_name);
++    JS_FreeAtomRT(rt, b->source_name);
+     if (b->has_debug) {
+         JS_FreeAtomRT(rt, b->debug.filename);
+         js_free_rt(rt, b->debug.pc2line_buf);
+@@ -38724,7 +38795,7 @@
+     BC_TAG_OBJECT_REFERENCE,
+ } BCTagEnum;
+ 
+-#define BC_VERSION 5
++#define BC_VERSION 6
+ 
+ typedef struct BCWriterState {
+     JSContext *ctx;
+@@ -39068,6 +39139,7 @@
+     bc_put_u16(s, flags);
+     bc_put_u8(s, b->js_mode);
+     bc_put_atom(s, b->func_name);
++    bc_put_atom(s, b->source_name);
+ 
+     bc_put_leb128(s, b->arg_count);
+     bc_put_leb128(s, b->var_count);
+@@ -39998,8 +40070,12 @@
+     if (bc_get_u8(s, &v8))
+         goto fail;
+     bc.js_mode = v8;
+-    if (bc_get_atom(s, &bc.func_name))  //@ atom leak if failure
++    if (bc_get_atom(s, &bc.func_name) || bc_get_atom(s, &bc.source_name))
+         goto fail;
++    if (s->filename != JS_ATOM_NULL) {
++        JS_FreeAtom(ctx, bc.source_name);
++        bc.source_name = JS_DupAtom(ctx, s->filename);
++    }
+     if (bc_get_leb128_u16(s, &bc.arg_count))
+         goto fail;
+     if (bc_get_leb128_u16(s, &bc.var_count))
+@@ -40035,14 +40111,17 @@
+         function_size += bc.byte_code_len;
+     }
+ 
+-    if (function_size > INT32_MAX)
+-        return JS_ThrowOutOfMemory(ctx);
++    if (function_size > INT32_MAX) {
++        JS_ThrowOutOfMemory(ctx);
++        goto fail;
++    }
+ 
+     b = js_mallocz(ctx, function_size);
+     if (!b)
+-        return JS_EXCEPTION;
++        goto fail;
+ 
+     memcpy(b, &bc, offsetof(JSFunctionBytecode, debug));
++    bc.func_name = bc.source_name = JS_ATOM_NULL; /* ownership transferred */
+     if (local_count != 0) {
+         b->vardefs = (void *)((uint8_t*)b + vardefs_offset);
+     }
+@@ -40168,6 +40247,8 @@
+     b->realm = JS_DupContext(ctx);
+     return obj;
+  fail:
++    JS_FreeAtom(ctx, bc.func_name);
++    JS_FreeAtom(ctx, bc.source_name);
+     JS_FreeValue(ctx, obj);
+     return JS_EXCEPTION;
+ }
+@@ -54544,6 +54625,7 @@
+     JSValue resolving_funcs[2];
+     JSValue handler;
+     JSContext *incumbent; /* engine-held edge: trace with the reaction's promise */
++    JSValue script_or_module; /* exact active record retained at registration */
+ } JSPromiseReactionData;
+ 
+ JSPromiseStateEnum JS_PromiseState(JSContext *ctx, JSValue promise)
+@@ -54572,6 +54654,7 @@
+     JS_FreeValueRT(rt, rd->resolving_funcs[1]);
+     JS_FreeValueRT(rt, rd->handler);
+     if (rd->incumbent) JS_FreeContext(rd->incumbent);
++    JS_FreeValueRT(rt, rd->script_or_module);
+     js_free_rt(rt, rd);
+ }
+ 
+@@ -54581,9 +54664,11 @@
+     rt->promise_incumbent_opaque = opaque;
+ }
+ 
+-static int js_promise_capture_incumbent(JSContext *ctx, JSValueConst handler, JSContext **out)
++static int js_promise_capture_incumbent(JSContext *ctx, JSValueConst handler, JSContext **out,
++                                       JSValue *script)
+ {
+     *out = NULL;
++    *script = JS_UNDEFINED;
+     /* Neutral engine continuations and empty handlers have no author callback. */
+     if (!ctx->rt->promise_incumbent_capture || !js_job_function_realm(ctx, handler))
+         return 0;
+@@ -54592,15 +54677,18 @@
+         JS_ThrowTypeError(ctx, "Promise callback incumbent settings unavailable");
+         return -1;
+     }
+-    if (*out) *out = JS_DupContext(*out);
++    if (*out) {
++        *out = JS_DupContext(*out);
++        *script = JS_DupValue(ctx, js_active_script_or_module(ctx->rt));
++    }
+     return 0;
+ }
+ 
+-static int js_enqueue_promise_job(JSContext *ctx, JSContext *incumbent,
++static int js_enqueue_promise_job(JSContext *ctx, JSContext *incumbent, JSValueConst script,
+                                   JSJobFunc *job, int argc, JSValueConst *args)
+ {
+     return JS_EnqueueJob2(ctx, js_job_function_realm(ctx, args[2]), NULL,
+-                          job, argc, args, FALSE, incumbent);
++                          job, argc, args, FALSE, incumbent, script);
+ }
+ 
+ typedef struct JSPromiseCallbackCall {
+@@ -54612,7 +54700,16 @@
+ static JSValue js_promise_callback_body(JSContext *entry, void *opaque)
+ {
+     JSPromiseCallbackCall *call = opaque;
+-    return JS_Call(entry, call->function, call->self, call->argc, call->argv);
++    JSRuntime *rt = entry->rt;
++    JSValueConst script = rt->promise_job_script;
++    JSSettingsFrame frame;
++    BOOL restore = rt->promise_job_incumbent && !JS_IsUndefined(script);
++    if (restore)
++        js_settings_script_enter(rt, &frame, JS_GetScriptOrModuleContext(script), script);
++    JSValue result = JS_Call(entry, call->function, call->self, call->argc, call->argv);
++    if (restore)
++        js_settings_script_leave(rt, &frame);
++    return result;
+ }
+ 
+ static JSValue js_call_promise_callback(JSContext *ctx, JSValueConst function,
+@@ -54708,7 +54805,7 @@
+         args[2] = rd->handler;
+         args[3] = JS_NewBool(ctx, is_reject);
+         args[4] = value;
+-        js_enqueue_promise_job(ctx, rd->incumbent, promise_reaction_job, 5, args);
++        js_enqueue_promise_job(ctx, rd->incumbent, rd->script_or_module, promise_reaction_job, 5, args);
+         list_del(&rd->link);
+         promise_reaction_data_free(ctx->rt, rd);
+     }
+@@ -54872,11 +54969,13 @@
+         args[1] = resolution;
+         args[2] = then;
+         JSContext *incumbent;
+-        if (js_promise_capture_incumbent(ctx, then, &incumbent) < 0) {
++        JSValue script;
++        if (js_promise_capture_incumbent(ctx, then, &incumbent, &script) < 0) {
+             JS_FreeValue(ctx, then);
+             goto fail_reject;
+         }
+-        js_enqueue_promise_job(ctx, incumbent, js_promise_resolve_thenable_job, 3, args);
++        js_enqueue_promise_job(ctx, incumbent, script, js_promise_resolve_thenable_job, 3, args);
++        JS_FreeValue(ctx, script);
+         if (incumbent) JS_FreeContext(incumbent);
+         JS_FreeValue(ctx, then);
+     }
+@@ -54919,6 +55018,7 @@
+             JS_MarkValue(rt, rd->resolving_funcs[1], mark_func);
+             JS_MarkValue(rt, rd->handler, mark_func);
+             if (rd->incumbent) mark_func(rt, &rd->incumbent->header);
++            JS_MarkValue(rt, rd->script_or_module, mark_func);
+         }
+     }
+     JS_MarkValue(rt, s->promise_result, mark_func);
+@@ -55468,7 +55568,7 @@
+         if (!JS_IsFunction(ctx, handler))
+             handler = JS_UNDEFINED;
+         rd->handler = JS_DupValue(ctx, handler);
+-        if (js_promise_capture_incumbent(ctx, handler, &rd->incumbent) < 0) {
++        if (js_promise_capture_incumbent(ctx, handler, &rd->incumbent, &rd->script_or_module) < 0) {
+             promise_reaction_data_free(ctx->rt, rd);
+             if (i == 1) promise_reaction_data_free(ctx->rt, rd_array[0]);
+             return -1;
+@@ -55495,7 +55595,7 @@
+         args[2] = rd->handler;
+         args[3] = JS_NewBool(ctx, i);
+         args[4] = s->promise_result;
+-        js_enqueue_promise_job(ctx, rd->incumbent, promise_reaction_job, 5, args);
++        js_enqueue_promise_job(ctx, rd->incumbent, rd->script_or_module, promise_reaction_job, 5, args);
+         for(i = 0; i < 2; i++)
+             promise_reaction_data_free(ctx->rt, rd_array[i]);
+     }
+@@ -62537,7 +62637,7 @@
+             args[1] = fre->held_val;
+             /* no exception is raised to avoid recursing into the GC */
+             JS_EnqueueJob2(frd->realm, js_job_function_realm(frd->realm, frd->cb),
+-                           frd->realm, js_finrec_job, 2, args, TRUE, NULL);
++                           frd->realm, js_finrec_job, 2, args, TRUE, NULL, JS_UNDEFINED);
+                 
+             js_weakref_free(rt, fre->target);
+             js_weakref_free(rt, fre->token);
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -1165,7 +1165,8 @@
+  * explicitly trusted bootstrap, or -1 to refuse. The engine retains and
+  * traces captures through pending reactions and queued jobs. Entry follows
+  * enqueue-time GetFunctionRealm, not WebIDL callback association. Exact
+- * ScriptOrModule restoration and finalization jobs are separate contracts. */
++ * ScriptOrModule is retained/restored with the callback; finalization jobs
++ * retain their separate contract. */
+ typedef int JSHostPromiseIncumbent(JSContext *ctx, JSContext **incumbent, void *opaque);
+ void JS_SetHostPromiseIncumbent(JSRuntime *rt, JSHostPromiseIncumbent *capture, void *opaque);
+ /* Read-only borrowed settings for the selected head. False for legacy/neutral
+@@ -1205,6 +1206,12 @@
+    returns a module. */
+ int JS_ResolveModule(JSContext *ctx, JSValueConst obj);
+ 
++/* Owner-thread exact active record; result is an owned engine value (or
++ * undefined). Treat it as opaque: compare identity, retain/release, or query
++ * its borrowed realm. It is provenance, not permission to execute that realm.
++ * Classic records use their root bytecode; modules use their module record. */
++JSValue JS_GetActiveScriptOrModule(JSRuntime *rt);
++JSContext *JS_GetScriptOrModuleContext(JSValueConst record);
+ /* only exported for os.Worker() */
+ JSAtom JS_GetScriptOrModuleName(JSContext *ctx, int n_stack_levels);
+ /* only exported for os.Worker() */
