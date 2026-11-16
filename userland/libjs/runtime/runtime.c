@@ -651,7 +651,7 @@ static bool job_eligible(os64_js_runtime_t *runtime, const JSJobInfo *info, JSJo
     bool owner = job_context_eligible(runtime, info->owner);
     bool activity = job_context_eligible(runtime, info->activity);
     JSContext *entry, *incumbent;
-    if (JS_PeekPromiseJobSettings(runtime->engine, group, &entry, &incumbent))
+    if (JS_PeekJobCallbackSettings(runtime->engine, group, &entry, &incumbent, NULL))
         return owner && activity && job_context_eligible(runtime, entry) &&
                job_context_eligible(runtime, incumbent);
     return owner && activity;
@@ -677,7 +677,8 @@ static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSConte
     const JSJobInfo *previous = runtime->failure_job;
     if (runtime->failure_records_enabled) runtime->failure_job = &info;
     JSContext *entry, *incumbent;
-    bool prepared = JS_PeekPromiseJobSettings(runtime->engine, group, &entry, &incumbent) && entry;
+    JSContext *report = NULL;
+    bool prepared = JS_PeekJobCallbackSettings(runtime->engine, group, &entry, &incumbent, &report) && entry;
     SettingsCall settings = {runtime->settings_calls, prepared ? realm_for_context(runtime, entry) : NULL,
                              runtime->active_outcome, NULL, NULL};
     /* The engine prepares job entry and callback incumbent separately. This
@@ -686,7 +687,7 @@ static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSConte
     int result = JS_ExecuteJobGroup(runtime->engine, group, NULL);
     if (prepared) runtime->settings_calls = settings.previous;
     if (runtime->failure_records_enabled) runtime->failure_job = previous;
-    *context = info.owner != NULL ? info.owner : info.context;
+    *context = report ? report : info.owner != NULL ? info.owner : info.context;
     return result;
 }
 
@@ -1169,7 +1170,7 @@ JS_PUBLIC os64_js_status_t os64_js_enable_host_settings(os64_js_runtime_t *runti
     return OS64_JS_OK;
 }
 
-static int promise_incumbent_capture(JSContext *context, JSContext **incumbent, void *opaque)
+static int job_incumbent_capture(JSContext *context, JSContext **incumbent, void *opaque)
 {
     (void)context;
     os64_js_runtime_t *runtime = opaque;
@@ -1190,7 +1191,16 @@ JS_PUBLIC os64_js_status_t os64_js_enable_promise_settings(os64_js_runtime_t *ru
 {
     os64_js_status_t result = os64_js_enable_host_settings(runtime, caller_abi, outcome);
     if (result != OS64_JS_OK) return result;
-    JS_SetHostPromiseIncumbent(runtime->engine, promise_incumbent_capture, runtime);
+    JS_SetHostPromiseIncumbent(runtime->engine, job_incumbent_capture, runtime);
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_enable_finalization_settings(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = os64_js_enable_promise_settings(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    JS_SetHostFinalizationRegistryIncumbent(runtime->engine, job_incumbent_capture, runtime);
     return OS64_JS_OK;
 }
 

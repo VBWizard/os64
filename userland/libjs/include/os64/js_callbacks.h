@@ -58,6 +58,13 @@ os64_js_status_t os64_js_enable_host_settings(os64_js_runtime_t *runtime,
 os64_js_status_t os64_js_enable_promise_settings(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_outcome_t *outcome);
 
+/* Extends Promise settings to FinalizationRegistry construction and cleanup.
+ * Retains captured incumbent and exact source record; registry activity and
+ * executable eligibility remain independent. Uses the bounded engine queue,
+ * not a browser task-source scheduler. Configuration precedes execution. */
+os64_js_status_t os64_js_enable_finalization_settings(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome);
+
 /* Task-owned reporting call. The binding independently supplies associated
  * entry and error-reporting realm; captured incumbent is checked separately.
  * Holds value through reentry and reports exceptions as realm_call does.

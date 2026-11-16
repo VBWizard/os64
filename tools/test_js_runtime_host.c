@@ -2576,6 +2576,7 @@ static void module_bytecode_cases(void)
 #include "../userland/libjs/tests/realms.h"
 #include "test_js_realms_host.inc"
 #include "test_js_promise_failures.inc"
+#include "test_js_finalization_failures.inc"
 #include "test_js_execution_scopes.inc"
 #include "test_js_failed_code.inc"
 #include "test_js_failure_records.inc"
@@ -2627,6 +2628,12 @@ int main(int argc, char **argv)
         printf("libjs callback settings: %u checks, %u failures\n", checks, failures);
         return failures != 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--finalization-settings")) {
+        finalization_settings_cases(); finalization_failure_cases();
+        check(live == 0, "finalization settings release allocations");
+        printf("libjs finalization settings: %u checks, %u failures\n", checks, failures);
+        return failures ? 1 : 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--active-script")) {
         active_script_cases();
         check(live == 0, "active script records release allocations");
@@ -2669,7 +2676,7 @@ int main(int argc, char **argv)
         return failures != 0;
     }
     if (argc == 2 && !strcmp(argv[1], "--realms-only")) {
-        realm_cases(); realm_host_cases(); promise_failure_cases();
+        realm_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases();
         check(live == 0, "realm cases release every allocation");
         printf("libjs realms: %u checks, %u failures\n", checks, failures);
         return failures != 0;
@@ -2728,7 +2735,7 @@ int main(int argc, char **argv)
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases();
-    realm_cases(); realm_host_cases(); promise_failure_cases();
+    realm_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases();
     task_cases();
     script_host_cases();
     module_cases();

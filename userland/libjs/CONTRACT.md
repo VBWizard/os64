@@ -1391,6 +1391,14 @@ chaining. Realm-less capability and finalization-job policies remain separate
 contracts. This is not complete browser integration. See the
 [Promise settings chapter](../../docs/design/pending/IFRAME_F4_PROMISE_SETTINGS.md).
 
+`os64_js_enable_finalization_settings` extends the Promise opt-in to registry
+cleanup. Construction retains a traced incumbent and exact script record;
+queued cleanup checks registry activity, executable realm and incumbent before
+execution. Entry follows the executable realm; exceptions report to the registry
+realm. The existing bounded engine queue remains in use; browser task-source
+scheduling is a separate integration gate. Ownership, bootstrap refusal and
+validation are in the [finalization chapter](../../docs/design/pending/IFRAME_F4_FINALIZATION_SETTINGS.md).
+
 `os64_js_callback_call(report, entry, abi, record, this, argc, argv, out)` requires
 an open task. `report` selects exception/script-host reporting; `entry` is the
 binding's independently proven associated realm. The owned record supplies the
