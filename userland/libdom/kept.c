@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "dom/kept_retention.h"
 
 /* BYTES A PAGE KEEPS OUTSIDE THE ENGINE (XHR_BYTES.md): a response's body,
  * and the bytes of a Blob the page makes. A body is the process's memory,
@@ -228,3 +229,5 @@ void os64_dom_body_stats(const os64_dom_t *dom, size_t *held, uint64_t *refused)
     if (held != NULL) *held = dom != NULL ? dom->body_bytes : 0;
     if (refused != NULL) *refused = dom != NULL ? dom->bodies_refused : 0;
 }
+
+#include "kept_retention.inc"
