@@ -2599,16 +2599,16 @@ static void bounded_resources(void) {
     check(ran==4096,"a page's scripts past the 4096th are not queued");
     probe_drop();
     /* An inline script one past the source limit, built by the page from
-     * two text nodes: a parsed page cannot carry one, since the HTML
-     * parser's own input budget is no larger than the limit, and one
-     * string that long is past libdom's own string quota. */
+     * text nodes of a MiB each: a parsed page cannot carry one, since the
+     * HTML parser's own input budget is smaller than the limit, and one
+     * string that long is past libdom's budget for a string it copies. */
     char over[640];
-    snprintf(over,sizeof over,"<script>var s=document.createElement('script');"
-        "s.appendChild(document.createTextNode(' '.repeat(%zu)));"
-        "s.appendChild(document.createTextNode(' '.repeat(%zu)+\"document.body.id='ran'\"));"
+    snprintf(over,sizeof over,"<script>var s=document.createElement('script'),mib=' '.repeat(1<<20);"
+        "for(var i=0;i<%zu;i++)s.appendChild(document.createTextNode(mib));"
+        "s.appendChild(document.createTextNode(\"document.body.id='ran'\"));"
         "document.body.appendChild(s);</script>"
         "<script>document.body.className='after';</script>",
-        (size_t)SCRIPT_SOURCE_MAX/2,(size_t)SCRIPT_SOURCE_MAX/2);
+        (size_t)SCRIPT_SOURCE_MAX>>20);
     probe_page(over,true);
     bool refused=false;
     while(yonder_scripts_step(g.page.scripts,&out))
@@ -2619,18 +2619,19 @@ static void bounded_resources(void) {
         os64_streq(os64_html_attr(g.page.way.doc->body,"class")->value,"after"),
         "the scripts after it still run");
     probe_drop();
-    /* One past libjs's standalone 4 MiB runs: the page's runtime takes
-     * yonder's limit, not the library's default. */
-    size_t past=(size_t)4*1024*1024+1;
-    const char *head="<script>", *body="document.body.id='big';";
-    char *large=malloc(strlen(head)+past+strlen(body)+strlen("</script>")+1);
-    check(large!=NULL,"large script fixture allocation");
-    strcpy(large,head); memset(large+strlen(head),' ',past);
-    strcpy(large+strlen(head)+past,body); strcat(large+strlen(head)+past,"</script>");
-    probe_page(large,true); free(large);
-    check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK &&
-        os64_html_attr(g.page.way.doc->body,"id") && os64_streq(os64_html_attr(g.page.way.doc->body,"id")->value,"big"),
-        "a script past libjs's own default source limit runs");
+    /* A script of 9 MiB runs, the size a code-hosting site's entry module
+     * reached on 2026-11-15: past libjs's standalone 4 MiB and yonder's
+     * old 8, so the page's runtime takes yonder's limit. */
+    snprintf(over,sizeof over,"<script>var s=document.createElement('script'),mib=' '.repeat(1<<20);"
+        "for(var i=0;i<9;i++)s.appendChild(document.createTextNode(mib));"
+        "s.appendChild(document.createTextNode(\"document.body.id='big'\"));"
+        "document.body.appendChild(s);</script>");
+    probe_page(over,true);
+    bool big=true;
+    while(yonder_scripts_step(g.page.scripts,&out)) big&=out.status==OS64_JS_OK;
+    check(big && os64_html_attr(g.page.way.doc->body,"id") &&
+        os64_streq(os64_html_attr(g.page.way.doc->body,"id")->value,"big"),
+        "a script of 9 MiB runs");
     probe_drop();
 }
 

@@ -17,9 +17,12 @@
 // The longest script source yonder runs, the libjs source limit a page's
 // runtime is created with (ensure_runtime sets it from this, rather than
 // keep libjs's standalone default). A longer one is refused, as a too-big
-// sheet is. 8 MiB holds a large single-page app's entry module, which can
-// run past 5 MiB; DEBTS.md books the bundles longer still.
-#define SCRIPT_SOURCE_MAX ((size_t)8 * 1024 * 1024)
+// sheet is. What a long script costs is the page's script heap's to bound
+// (yonder.conf's script_memory_mb): its bytecode measures about three times
+// its source, so a 32 MiB source compiles inside the default 512 MiB with
+// room, and a heap set smaller says so when a compile runs it out. Nothing
+// is reserved at this size; it only refuses.
+#define SCRIPT_SOURCE_MAX ((size_t)32 * 1024 * 1024)
 // The largest compiled form kept for a script, or read back: a script's
 // bytecode measures about three times its source, so four times the
 // largest source holds any script yonder runs, and one past it is not kept.
