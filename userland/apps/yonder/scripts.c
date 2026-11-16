@@ -2587,10 +2587,14 @@ os64_js_status_t yonder_scripts_media_control(yonder_scripts_t *s, const os64_ht
 
 bool yonder_scripts_media_session(yonder_scripts_t *s, os64_dom_media_session_t *out)
 {
-    if (s == NULL || s->dead || s->dom == NULL) {
-        os64_memset(out, 0, sizeof(*out));
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL)
         return false;
-    }
+    // A page with no binding (no script, no media element), or one whose
+    // binding was retired, has nothing to say: stopped, an answer, not a
+    // refusal.
+    if (s->dead || s->dom == NULL)
+        return true;
     return os64_dom_media_session_state(s->dom, out);
 }
 

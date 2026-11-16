@@ -212,14 +212,15 @@ does, only which word the headphones send.
   plays on, deaf to the keys.
 - **yonder (Y.6)** holds one session per window, opened when its page
   first has something to say (AUDIO_YONDER.md § Y.6), and says `playing`
-  while the page declares `playbackState = "playing"` or any of its
-  elements plays, `paused` while it declares `"paused"` or one it played
-  is paused, `stopped` otherwise. A press goes to the page through the
+  while one of its audible elements (not muted, a volume, no error)
+  plays, or the page declares `playbackState = "playing"` of one that has
+  played; `paused` while one that played is paused, or it declares
+  `"paused"`; `stopped` otherwise. A muted clip says nothing. A press goes to the page through the
   web's own door, the **Media Session API** (`navigator.mediaSession`): a
   page that set an action handler for `play`, `pause`, `nexttrack`,
   `previoustrack` or `stop` has it run, as podcast and music sites do.
-  With no handler, Play plays the element that played last, Pause and
-  Stop pause every element, as other browsers do, and the others do
+  With no handler, Play plays the audible element that played last,
+  Pause and Stop pause every audible element, as other browsers do, and the others do
   nothing. `MediaMetadata` (title, artist, artwork) is kept and shown
   nowhere yet.
 

@@ -961,19 +961,24 @@ never asked (DEBTS).
 **libdom: the host's side** (`dom/media.h`), owner thread, between
 tasks:
 
-- `os64_dom_media_session_state(dom)`: what the window says of itself.
-  PLAYING when `playbackState` is `"playing"` or any media element the
-  page made, in its document or not (`new Audio()` is how many players
-  play), is not paused (the standard's "actual playback state"),
-  else PAUSED when `playbackState` is `"paused"` or an element that has
-  played is paused, else STOPPED; and whether the page has anything to
-  say at all (an action handler set, or an element that has played).
+- `os64_dom_media_session_state(dom)`: what the window says of itself,
+  over the page's AUDIBLE media elements (not muted, a volume above 0, no
+  error; in its document or not, since `new Audio()` is how many players
+  play). PLAYING when one is not paused, or `playbackState` is
+  `"playing"` and one has played (the standard's "actual playback
+  state"); else PAUSED when one that played is paused, or `playbackState`
+  is `"paused"` and one has played; else STOPPED. Whether the page has
+  anything to say (an action handler set, or an audible element that has
+  played), and which presses it answers itself. A muted clip looping on a
+  news page, or a library declaring a muted preview "playing", says
+  nothing: other browsers give such a page no keys, and here it would
+  take them from the podcast in the next window.
 - `os64_dom_media_session_action(dom, action, outcome)`: a press, as a
   host task. With a handler for the action, it runs, given
   `{action}` (`MediaSessionActionDetails`). With none, the browser's own
-  answer, as other browsers give it: `play` plays the element that played
-  most recently; `pause` and `stop` pause every element that is playing;
-  `nexttrack` and `previoustrack` do nothing.
+  answer, as other browsers give it: `play` plays the audible element
+  that played most recently; `pause` and `stop` pause every audible
+  element that is playing; `nexttrack` and `previoustrack` do nothing.
 
 **yonder: the window's session.** One yonder is one window and one page
 at a time, so a yonder holds at most ONE session:
@@ -989,8 +994,12 @@ at a time, so a yonder holds at most ONE session:
   to the window through a small queue and a doorbell bit (`BELL_KEYS`);
   the loop's `keys_turn`, beside the players' asks, dispatches each as a
   page task (`os64_dom_media_session_action`). Before it, the page is
-  marked activated: a press is a person's, and a handler calling `play()`
-  must be allowed to, as other browsers allow it.
+  marked activated when the press will act (a handler for it, or the
+  browser's own Play, Pause or Stop on a page with something to say): a
+  press is a person's, and a handler calling `play()` must be allowed to,
+  as other browsers allow it, but a press that does nothing grants
+  nothing. A refused open (every session taken) is not tried again until
+  the next page.
 - The key maps to the action: Play `play`, Pause `pause`, Next
   `nexttrack`, Previous `previoustrack`, Stop `stop`. The kernel's toggle
   (MEDIA_KEYS.md) already decided Play against Pause from the state word,
@@ -1011,14 +1020,16 @@ calls), with media.c's `d_media_session_facts` and
 (`played_seq`), which is how the browser's Play finds the one that played
 last, and every element the page made counts, in its document or not
 (`new Audio()` is how many players play; HTML pauses an element that
-leaves its document). A handler is taken out of its slot while it is
+leaves its document), when it can be heard. A handler is taken out of its slot while it is
 called and put back unless the page set that action meanwhile, so one
 that replaces or removes itself is safe. yonder's `keys.c` is the session
 and its reader; `keys_turn` (yonder.c) runs after the media turn. Proven
 by libdom's media probe (`tools/test_dom_host.sh --media`: the interface,
-its TypeErrors, MediaMetadata's artwork, the state, handlers that replace
-and remove themselves, a throwing handler reaching `error`, the defaults
-over two elements, a page's play handler asked instead) and in QEMU on the
+its TypeErrors, MediaMetadata's artwork read by its own iterator in
+WebIDL's order, the state, handlers that replace and remove themselves, a
+throwing handler reaching `error`, the defaults over two elements, a
+page's play handler asked instead, a muted clip saying nothing until it
+is unmuted) and in QEMU on the
 GUI boot: two windows on `media-session.html`, presses written to
 `/sys/mediakeys`: the first window's session opened when its page set
 handlers, Play went to it and its handler played the track; with the

@@ -659,8 +659,9 @@ virtio because its drain waits for the tick.
   a page of its own (`WAY_BODY_MEDIA`). A network sound's bytes are a
   window (`media_bytes.c`, pure), and a seek far from it is a `Range`
   request. A page answers the media keys through
-  **`navigator.mediaSession`** (`libdom/media_session.c`; with no handler,
-  Play plays the element that played last and Pause pauses every one),
+  **`navigator.mediaSession`** (`libdom/media_session.c`; only audible
+  elements count, and with no handler Play plays the one that played last
+  and Pause pauses every one),
   and each yonder window holds a `/dev/mediakeys` session of its own once
   its page has something to say (`apps/yonder/keys.c`, AUDIO_YONDER.md
   § Y.6; `/tests/pages/media-session.html`; on a fresh `/home`, yonder

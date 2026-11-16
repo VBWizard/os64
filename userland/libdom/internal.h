@@ -1326,10 +1326,11 @@ int d_video_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_media_elements_cancel(os64_dom_t *dom);
 void d_media_elements_drain(os64_dom_t *dom);
 void d_media_elements_free(os64_dom_t *dom);
-/* For the media session (media_session.c): the page's elements as the
- * window's state reads them (one not paused; a paused one that has played;
- * one that has played at all), and the browser's own answer to a press of
- * play (`play`) or pause, inside an open task. */
+/* For the media session (media_session.c): the page's AUDIBLE elements
+ * (not muted, a volume, no error) as the window's state reads them (one not
+ * paused; a paused one that has played; one that has played at all), and
+ * the browser's own answer to a press of play (`play`) or pause, inside an
+ * open task, which acts on audible elements alone. */
 void d_media_session_facts(os64_dom_t *dom, bool *playing, bool *paused_after_play, bool *played);
 void d_media_session_default(os64_dom_t *dom, JSContext *ctx, bool play);
 /* The MediaSession row (modern.c), after the one that makes

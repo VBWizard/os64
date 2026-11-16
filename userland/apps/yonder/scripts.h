@@ -43,7 +43,8 @@ os64_js_status_t yonder_scripts_media_control(yonder_scripts_t *scripts, const o
                                               os64_dom_media_control_t what, double value,
                                               os64_js_outcome_t *out);
 // The page's media session (AUDIO_YONDER.md § Y.6): what it says of its
-// sound (false while it has no binding), and a media key's press done as a
+// sound (stopped, wanting nothing, while it has no binding or its binding
+// was retired; false only when its binding cannot answer now), and a media key's press done as a
 // task, counted and judged as an event's is (os64_dom_media_session_state,
 // _action).
 bool yonder_scripts_media_session(yonder_scripts_t *scripts, os64_dom_media_session_t *out);

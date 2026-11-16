@@ -699,6 +699,16 @@ static void dom_media_session_cases(void)
         "throws('TypeError',()=>new MediaMetadata({artwork:[{sizes:'1x1'}]}));"
         "throws('TypeError',()=>new MediaMetadata({artwork:[{src:'http://[nope'}]}));"
         "throws('TypeError',()=>new MediaMetadata({artwork:5}));"
+        "throws('TypeError',()=>new MediaMetadata({artwork:{src:'a.png'}}));"
+        "throws('TypeError',()=>new MediaMetadata({artwork:{length:1,0:{src:'a.png'}}}));"
+        "const from=Array.from;Array.from=()=>{throw new Error('page code ran')};"
+        "assert(new MediaMetadata({artwork:[{src:'x.png'}]}).artwork.length===1,'the page\\'s Array.from is not called');"
+        "Array.from=from;"
+        "const order=[];new MediaMetadata({get album(){order.push('album');return''},get artist(){order.push('artist');return''},"
+        "get artwork(){order.push('artwork');return[{get sizes(){order.push('sizes');return''},get src(){order.push('src');return'a.png'},"
+        "get type(){order.push('type');return''}}]},get title(){order.push('title');return''}});"
+        "assert(order.join()==='album,artist,artwork,sizes,src,type,title','WebIDL\\'s order: '+order.join());"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(Navigator.prototype,'mediaSession').get.call({}));"
         "m.title=42;assert(m.title==='42','a DOMString');"
         "m.artwork=new Set([{src:'other.png'}]);assert(m.artwork[0].src==='https://example.test/dir/other.png','any sequence');"
         "throws('TypeError',()=>{m.artwork=[{src:'http://[nope'}]});"
@@ -713,11 +723,8 @@ static void dom_media_session_cases(void)
     check(os64_dom_media_session_state(f.binding, &st) && st.state == OS64_DOM_MEDIA_SESSION_STOPPED && !st.wanted,
           "session: a page that said nothing is stopped and wants no session");
     media_script(&f, "navigator.mediaSession.playbackState='playing';", "session: declared playing");
-    check(os64_dom_media_session_state(f.binding, &st) && st.state == OS64_DOM_MEDIA_SESSION_PLAYING && st.wanted,
-          "session: declared playing is playing");
-    media_script(&f, "navigator.mediaSession.playbackState='paused';", "session: declared paused");
-    check(os64_dom_media_session_state(f.binding, &st) && st.state == OS64_DOM_MEDIA_SESSION_PAUSED,
-          "session: declared paused is paused");
+    check(os64_dom_media_session_state(f.binding, &st) && st.state == OS64_DOM_MEDIA_SESSION_STOPPED && !st.wanted,
+          "session: declared playing with nothing audible behind it says nothing");
     media_script(&f, "navigator.mediaSession.playbackState='none';", "session: declared none");
 
     /* A press with a handler: the handler, given its action. */
@@ -727,8 +734,10 @@ static void dom_media_session_cases(void)
                      "navigator.mediaSession.setActionHandler('previoustrack',()=>R.push('second'))});"
                      "navigator.mediaSession.setActionHandler('stop',()=>{R.push('stop');navigator.mediaSession.setActionHandler('stop',null)});",
                  "session: handlers");
-    check(os64_dom_media_session_state(f.binding, &st) && st.wanted && st.state == OS64_DOM_MEDIA_SESSION_STOPPED,
-          "session: a handler makes a page want a session");
+    check(os64_dom_media_session_state(f.binding, &st) && st.wanted && st.state == OS64_DOM_MEDIA_SESSION_STOPPED &&
+          st.handled == ((1u << OS64_DOM_MEDIA_SESSION_NEXT) | (1u << OS64_DOM_MEDIA_SESSION_PREVIOUS) |
+                         (1u << OS64_DOM_MEDIA_SESSION_STOP)),
+          "session: a handler makes a page want a session, and says which presses it answers");
     os64_js_outcome_t out;
     check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_NEXT, &out) && out.status == OS64_JS_OK,
           "session: next runs");
@@ -792,6 +801,29 @@ static void dom_media_session_cases(void)
     check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_PLAY, &out) && !sa->playing && !sb->playing,
           "session: a page's play handler is asked instead, and plays nothing itself");
     media_script(&f, "assert(R.join()==='play','the page was asked: '+R.join());", "session: the play handler ran");
+    fixture_free(&f);
+
+    /* What nobody can hear says nothing: a muted clip playing by itself, as
+     * a news page's hero video does, wants no session and plays nothing a
+     * press could reach; unmuted, it is the window's sound. */
+    media_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    media_script(&f, "globalThis.v=document.createElement('video');v.muted=true;v.loop=true;v.src='hero.mp3';"
+                     "document.body.append(v);",
+                 "session: a muted clip");
+    media_turn(&f, "session: its session");
+    media_ready(&media_sessions[0], 10);
+    media_turn(&f, "session: ready");
+    media_script(&f, "v.play();assert(!v.paused,'muted, it may play without the person');"
+                     "navigator.mediaSession.playbackState='playing';",
+                 "session: the muted clip plays");
+    check(os64_dom_media_session_state(f.binding, &st) && st.state == OS64_DOM_MEDIA_SESSION_STOPPED && !st.wanted,
+          "session: a muted element playing says nothing, even declared playing");
+    check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_PAUSE, &out) && media_sessions[0].playing,
+          "session: pause, no handler, leaves a silent element alone");
+    media_script(&f, "v.muted=false;", "session: unmuted");
+    check(os64_dom_media_session_state(f.binding, &st) && st.state == OS64_DOM_MEDIA_SESSION_PLAYING && st.wanted,
+          "session: unmuted, it is the window's sound");
     fixture_free(&f);
 }
 

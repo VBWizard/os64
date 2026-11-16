@@ -10293,17 +10293,23 @@ static void players_ask_run(void)
 static void keys_bell(void);
 
 // The window's media-key session (AUDIO_YONDER.md § Y.6): opened when the
-// page first has something to say; each press waiting done as a page task,
-// the page first marked activated (a press is a person's, and a handler
-// may call play()); then the window's state said, which a press, a media
-// turn or a task may have changed since the last turn.
+// page first has something to say, and tried once a page (a refusal, every
+// session taken, is not asked again every turn); each press waiting done as
+// a page task, the page first marked activated when the press will act (a
+// press is a person's, and a handler may call play(), but one that does
+// nothing grants nothing); then the window's state said, which a press, a
+// media turn or a task may have changed since the last turn. A page that
+// cannot answer for a moment (its binding recovering) leaves the last word
+// in place.
+static const void *s_keys_refused;   // the page whose open was refused
 static void keys_turn(void)
 {
     yonder_scripts_t *host = g.page.scripts;
     os64_dom_media_session_t session;
     bool known = host != NULL && yonder_scripts_media_session(host, &session);
-    if (known && session.wanted && !yonder_keys_opened())
-        (void)yonder_keys_open(keys_bell);
+    if (known && session.wanted && !yonder_keys_opened() && s_keys_refused != host &&
+        !yonder_keys_open(keys_bell))
+        s_keys_refused = host;
     uint32_t key;
     while (yonder_keys_take(&key)) {
         os64_dom_media_session_action_t action;
@@ -10317,7 +10323,12 @@ static void keys_turn(void)
         }
         if (host == NULL)
             continue;
-        yonder_scripts_activate(host);
+        bool acts = known && ((session.handled & (1u << action)) != 0 ||
+                              (session.wanted && (action == OS64_DOM_MEDIA_SESSION_PLAY ||
+                                                  action == OS64_DOM_MEDIA_SESSION_PAUSE ||
+                                                  action == OS64_DOM_MEDIA_SESSION_STOP)));
+        if (acts)
+            yonder_scripts_activate(host);
         os64_js_outcome_t out;
         int64_t began = task_begin(host);
         (void)yonder_scripts_media_session_action(host, action, &out);
@@ -10325,8 +10336,10 @@ static void keys_turn(void)
     }
     if (!yonder_keys_opened())
         return;
-    if (host == NULL || !yonder_scripts_media_session(host, &session))
+    if (host == NULL)
         session.state = OS64_DOM_MEDIA_SESSION_STOPPED;
+    else if (!yonder_scripts_media_session(host, &session))
+        return;
     yonder_keys_say(session.state);
 }
 

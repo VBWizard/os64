@@ -104,48 +104,62 @@ static JSValue string_member(JSContext *ctx, JSValueConst dict, const char *name
     return s;
 }
 
-/* MediaImage artwork, converted as the standard's convert-artwork steps:
- * a sequence of {src, sizes, type}, each src parsed against the document's
- * URL (one that does not parse is a TypeError), into a frozen list of
- * frozen objects. */
-static JSValue artwork_convert(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+/* MediaImage artwork, in two halves as WebIDL and the standard order them.
+ * images_read is the sequence<MediaImage> conversion (d_sequence walks the
+ * value's own iterator, a value with none is a TypeError), each image's
+ * members read in lexicographic order, src required: a list of plain
+ * {src, sizes, type} with src as written. images_resolve is the
+ * standard's convert-artwork steps: each src parsed against the
+ * document's URL (one that does not parse is a TypeError), into a frozen
+ * list of frozen objects. */
+static JSValue images_read(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
 {
-    if (!JS_IsObject(value)) return JS_ThrowTypeError(ctx, "MediaMetadata's artwork must be a sequence");
-    /* A sequence is read through its iterator; Array.from does exactly
-     * that, and hands back a list to walk. */
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue array_ctor = JS_GetPropertyStr(ctx, global, "Array");
-    JS_FreeValue(ctx, global);
-    JSValue from = JS_IsException(array_ctor) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, array_ctor, "from");
-    JSValue items = JS_IsException(from) ? JS_EXCEPTION : JS_Call(ctx, from, array_ctor, 1, &value);
-    JS_FreeValue(ctx, from);
-    JS_FreeValue(ctx, array_ctor);
-    if (JS_IsException(items)) return items;
-    /* Array.from's own list: its length is a plain number. */
+    JSValue *items = NULL;
+    size_t count = 0;
+    if (d_sequence(dom, ctx, value, D_SEQUENCE_MAX, &items, &count) < 0) return JS_EXCEPTION;
+    JSValue out = JS_NewArray(ctx);
+    static const char *const kFields[] = {"sizes", "src", "type"};
+    for (size_t i = 0; i < count && !JS_IsException(out); i++) {
+        JSValue image = JS_EXCEPTION;
+        if (!JS_IsObject(items[i]))
+            JS_ThrowTypeError(ctx, "Each MediaImage must be a dictionary");
+        else
+            image = JS_NewObject(ctx);
+        for (int f = 0; f < 3 && !JS_IsException(image); f++) {
+            JSValue v = string_member(ctx, items[i], kFields[f], "", f == 1, "A MediaImage");
+            if (JS_IsException(v) || JS_DefinePropertyValueStr(ctx, image, kFields[f], v, JS_PROP_C_W_E) < 0) {
+                JS_FreeValue(ctx, image);
+                image = JS_EXCEPTION;
+            }
+        }
+        if (JS_IsException(image) || JS_DefinePropertyValueUint32(ctx, out, (uint32_t)i, image, JS_PROP_C_W_E) < 0) {
+            JS_FreeValue(ctx, out);
+            out = JS_EXCEPTION;
+        }
+    }
+    d_sequence_free(ctx, items, count);
+    return out;
+}
+
+static JSValue images_resolve(os64_dom_t *dom, JSContext *ctx, JSValueConst raw)
+{
     uint32_t count = 0;
-    JSValue length = JS_GetPropertyStr(ctx, items, "length");
+    JSValue length = JS_GetPropertyStr(ctx, raw, "length");
     if (JS_IsException(length) || JS_ToUint32(ctx, &count, length) < 0) {
         JS_FreeValue(ctx, length);
-        JS_FreeValue(ctx, items);
         return JS_EXCEPTION;
     }
     JS_FreeValue(ctx, length);
     JSValue out = JS_NewArray(ctx);
     static const char *const kFields[] = {"src", "sizes", "type"};
     for (uint32_t i = 0; i < count && !JS_IsException(out); i++) {
-        JSValue image = JS_GetPropertyUint32(ctx, items, i);
+        JSValue image = JS_GetPropertyUint32(ctx, raw, i);
         JSValue fields[3] = {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED};
         bool ok = !JS_IsException(image);
-        if (ok && !JS_IsObject(image)) {
-            JS_ThrowTypeError(ctx, "Each MediaImage must be a dictionary");
-            ok = false;
+        for (int f = 0; f < 3 && ok; f++) {
+            fields[f] = JS_GetPropertyStr(ctx, image, kFields[f]);
+            ok = !JS_IsException(fields[f]);
         }
-        /* WebIDL reads a dictionary's members in lexicographic order. */
-        if (ok) fields[1] = string_member(ctx, image, "sizes", "", false, "A MediaImage");
-        if (ok && !JS_IsException(fields[1])) fields[0] = string_member(ctx, image, "src", "", true, "A MediaImage");
-        if (ok && !JS_IsException(fields[0]) && !JS_IsException(fields[1]))
-            fields[2] = string_member(ctx, image, "type", "", false, "A MediaImage");
-        ok = ok && !JS_IsException(fields[0]) && !JS_IsException(fields[1]) && !JS_IsException(fields[2]);
         if (ok) {
             char *url = NULL;
             int parsed = d_url_parse(dom, ctx, fields[0], &url);
@@ -158,14 +172,16 @@ static JSValue artwork_convert(os64_dom_t *dom, JSContext *ctx, JSValueConst val
             ok = parsed == 1 && !JS_IsException(fields[0]);
         }
         JSValue made = ok ? JS_NewObject(ctx) : JS_EXCEPTION;
-        for (int f = 0; f < 3 && !JS_IsException(made); f++) {
-            if (JS_DefinePropertyValueStr(ctx, made, kFields[f], fields[f], JS_PROP_C_W_E) < 0) {
+        for (int f = 0; f < 3; f++) {
+            if (!JS_IsException(made) &&
+                JS_DefinePropertyValueStr(ctx, made, kFields[f], fields[f], JS_PROP_C_W_E) < 0) {
                 JS_FreeValue(ctx, made);
                 made = JS_EXCEPTION;
+            } else if (JS_IsException(made)) {
+                JS_FreeValue(ctx, fields[f]);
             }
             fields[f] = JS_UNDEFINED;
         }
-        for (int f = 0; f < 3; f++) JS_FreeValue(ctx, fields[f]);
         JS_FreeValue(ctx, image);
         if (!JS_IsException(made) && freeze(ctx, made, kFields, 3, false) < 0) {
             JS_FreeValue(ctx, made);
@@ -176,11 +192,19 @@ static JSValue artwork_convert(os64_dom_t *dom, JSContext *ctx, JSValueConst val
             out = JS_EXCEPTION;
         }
     }
-    JS_FreeValue(ctx, items);
     if (!JS_IsException(out) && freeze(ctx, out, NULL, count, true) < 0) {
         JS_FreeValue(ctx, out);
         out = JS_EXCEPTION;
     }
+    return out;
+}
+
+static JSValue artwork_convert(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+{
+    JSValue raw = images_read(dom, ctx, value);
+    if (JS_IsException(raw)) return raw;
+    JSValue out = images_resolve(dom, ctx, raw);
+    JS_FreeValue(ctx, raw);
     return out;
 }
 
@@ -192,18 +216,17 @@ static JSValue metadata_constructor(JSContext *ctx, JSValueConst new_target, int
     if (present < 0) return JS_EXCEPTION;
     JSValueConst init = present ? argv[0] : JS_UNDEFINED;
     /* MediaMetadataInit's members in lexicographic order: album, artist,
-     * artwork, title. */
+     * artwork (its sequence walked and its images' members read here),
+     * title; then the constructor's steps resolve the artwork. */
     JSValue album = string_member(ctx, init, "album", "", false, "MediaMetadata");
     JSValue artist = JS_IsException(album) ? JS_EXCEPTION : string_member(ctx, init, "artist", "", false, "MediaMetadata");
     JSValue art_given = JS_IsException(artist) || JS_IsUndefined(init) ? JS_UNDEFINED : JS_GetPropertyStr(ctx, init, "artwork");
-    JSValue artwork = JS_IsException(artist) || JS_IsException(art_given) ? JS_EXCEPTION
-                    : JS_IsUndefined(art_given) ? JS_NewArray(ctx) : JS_DupValue(ctx, art_given);
-    JSValue title = JS_IsException(artwork) ? JS_EXCEPTION : string_member(ctx, init, "title", "", false, "MediaMetadata");
-    /* The artwork converted after every member is read, as the
-     * constructor's steps run after the dictionary's conversion. */
-    JSValue converted = JS_IsException(title) ? JS_EXCEPTION : artwork_convert(dom, ctx, artwork);
+    JSValue raw = JS_IsException(artist) || JS_IsException(art_given) ? JS_EXCEPTION
+                : JS_IsUndefined(art_given) ? JS_NewArray(ctx) : images_read(dom, ctx, art_given);
     JS_FreeValue(ctx, art_given);
-    JS_FreeValue(ctx, artwork);
+    JSValue title = JS_IsException(raw) ? JS_EXCEPTION : string_member(ctx, init, "title", "", false, "MediaMetadata");
+    JSValue converted = JS_IsException(title) ? JS_EXCEPTION : images_resolve(dom, ctx, raw);
+    JS_FreeValue(ctx, raw);
     JSValue prototype = JS_IsException(converted) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, new_target, "prototype");
     if (!JS_IsException(prototype) && !JS_IsObject(prototype)) {
         JS_FreeValue(ctx, prototype);
@@ -223,10 +246,13 @@ static JSValue metadata_constructor(JSContext *ctx, JSValueConst new_target, int
         JS_FreeValue(ctx, converted);
         return JS_EXCEPTION;
     }
-    if (JS_DefinePropertyValueStr(ctx, slots, "title", title, JS_PROP_C_W_E) < 0 ||
-        JS_DefinePropertyValueStr(ctx, slots, "artist", artist, JS_PROP_C_W_E) < 0 ||
-        JS_DefinePropertyValueStr(ctx, slots, "album", album, JS_PROP_C_W_E) < 0 ||
-        JS_DefinePropertyValueStr(ctx, slots, "artwork", converted, JS_PROP_C_W_E) < 0) {
+    /* Each define takes its value whether or not it succeeds, so all four
+     * run before the verdict. */
+    int failed = JS_DefinePropertyValueStr(ctx, slots, "title", title, JS_PROP_C_W_E) < 0;
+    failed |= JS_DefinePropertyValueStr(ctx, slots, "artist", artist, JS_PROP_C_W_E) < 0;
+    failed |= JS_DefinePropertyValueStr(ctx, slots, "album", album, JS_PROP_C_W_E) < 0;
+    failed |= JS_DefinePropertyValueStr(ctx, slots, "artwork", converted, JS_PROP_C_W_E) < 0;
+    if (failed) {
         js_free(ctx, m);
         JS_FreeValue(ctx, slots);
         JS_FreeValue(ctx, object);
@@ -294,7 +320,11 @@ static JSValue session_member(JSContext *ctx, JSValueConst self, int argc, JSVal
     struct DMediaSession *ms = dom->media_session;
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
-    if (magic == S_NAVIGATOR) return JS_DupValue(ctx, ms->object->value);
+    if (magic == S_NAVIGATOR) {
+        if (!JS_IsObject(self) || JS_VALUE_GET_PTR(self) != JS_VALUE_GET_PTR(dom->navigator->value))
+            return JS_ThrowTypeError(ctx, "Expected a Navigator");
+        return JS_DupValue(ctx, ms->object->value);
+    }
     if (JS_GetOpaque(self, os64_js_class_id(&session_slot)) == NULL)
         return JS_ThrowTypeError(ctx, "Expected a MediaSession");
     switch (magic) {
@@ -439,10 +469,11 @@ void d_media_session_drain(os64_dom_t *dom)
     for (int i = 0; i < ACTIONS; i++) d_scheduled_clear(dom, &ms->handlers[i]);
 }
 
+/* After the runtime is gone: native memory only. The drain has let go of
+ * every handler. */
 void d_media_session_free(os64_dom_t *dom)
 {
     if (dom->media_session == NULL) return;
-    d_media_session_drain(dom);
     d_free(dom, dom->media_session);
     dom->media_session = NULL;
 }
@@ -458,13 +489,20 @@ bool os64_dom_media_session_state(os64_dom_t *dom, os64_dom_media_session_t *out
     d_media_session_facts(dom, &playing, &paused_after_play, &played);
     bool handled = false;
     for (int i = 0; i < ACTIONS; i++) handled = handled || ms->calling[i] || !JS_IsUndefined(ms->handlers[i].value);
-    /* The standard's actual playback state: playing when the page says so
-     * or an element plays; else what the page said, or what its elements
-     * show. */
-    if (ms->declared == S_PLAYING || playing) out->state = OS64_DOM_MEDIA_SESSION_PLAYING;
-    else if (ms->declared == S_PAUSED || paused_after_play) out->state = OS64_DOM_MEDIA_SESSION_PAUSED;
+    /* The standard's actual playback state, over the elements a person can
+     * hear: playing when one plays, or the page says so of one that has
+     * played; else paused when one that played is paused, or the page says
+     * so. A declaration with nothing audible behind it (a library marking a
+     * muted preview "playing") says nothing. */
+    if (playing || (ms->declared == S_PLAYING && played)) out->state = OS64_DOM_MEDIA_SESSION_PLAYING;
+    else if (paused_after_play || (ms->declared == S_PAUSED && played)) out->state = OS64_DOM_MEDIA_SESSION_PAUSED;
     else out->state = OS64_DOM_MEDIA_SESSION_STOPPED;
-    out->wanted = handled || played || ms->declared != S_NONE;
+    out->wanted = handled || played;
+    for (int i = 0; i < 5; i++) {
+        static const int kHostActions[5] = {A_PLAY, A_PAUSE, A_NEXT, A_PREVIOUS, A_STOP};
+        int at = kHostActions[i];
+        if (ms->calling[at] || !JS_IsUndefined(ms->handlers[at].value)) out->handled |= 1u << i;
+    }
     return true;
 }
 

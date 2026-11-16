@@ -13,8 +13,8 @@
 
 // Open the session and start its reader, which calls `bell` (any thread)
 // after queueing each press. False, and nothing held, when it would not
-// open (every session the machine keeps is taken): presses then go to
-// other programs, as if this window had none.
+// open (every session the machine keeps is taken) or its reader would not
+// start: presses then go to other programs, as if this window had none.
 bool yonder_keys_open(void (*bell)(void));
 bool yonder_keys_opened(void);
 // Say the window's state: written to the session only when it changed.

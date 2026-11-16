@@ -1347,15 +1347,24 @@ bool os64_dom_media_control(os64_dom_t *dom, const os64_html_node_t *node, os64_
 }
 
 /* ── For the media session (media_session.c) ────────────────────────── */
-/* Every element the page has made counts, in its document or not: a player
+/* Every element the page has made counts, in its document or not (a player
  * that plays through `new Audio()` is still the page's sound, and HTML
- * pauses an element that leaves its document. */
+ * pauses an element that leaves its document), WHEN IT CAN BE HEARD: not
+ * muted, a volume above 0, no error. A muted clip looping on a news page,
+ * or an element whose source failed, must not take the keys from a sound
+ * a person is listening to, and other browsers give it none. */
+
+static bool audible(const DMediaElement *m)
+{
+    return !m->muted && m->volume > 0 && m->error == 0;
+}
 
 void d_media_session_facts(os64_dom_t *dom, bool *playing, bool *paused_after_play, bool *played)
 {
     *playing = *paused_after_play = *played = false;
     if (dom->media_elements == NULL) return;
     for (DMediaElement *m = dom->media_elements->records; m != NULL; m = m->next) {
+        if (!audible(m)) continue;
         *playing = *playing || !m->paused;
         *played = *played || m->played_seq != 0;
         *paused_after_play = *paused_after_play || (m->paused && m->played_seq != 0);
@@ -1367,12 +1376,12 @@ void d_media_session_default(os64_dom_t *dom, JSContext *ctx, bool play_one)
     if (dom->media_elements == NULL) return;
     if (!play_one) {
         for (DMediaElement *m = dom->media_elements->records; m != NULL; m = m->next)
-            if (!m->paused) pause_asked(dom, m);
+            if (!m->paused && audible(m)) pause_asked(dom, m);
         return;
     }
     DMediaElement *last = NULL;
     for (DMediaElement *m = dom->media_elements->records; m != NULL; m = m->next)
-        if (m->played_seq != 0 && (last == NULL || m->played_seq > last->played_seq)) last = m;
+        if (audible(m) && m->played_seq != 0 && (last == NULL || m->played_seq > last->played_seq)) last = m;
     if (last == NULL || !last->paused || !d_provider_enter(dom)) return;
     /* As a control's play: its rejection is the element's state, not the
      * page's to handle. */
