@@ -14,9 +14,9 @@ immediately after its `then` getter returns. The capture is independent of
 callable-proxy creation, mutable prototypes, executable realm and settlement.
 Bound functions retain their receiver and executable target.
 
-Pending reactions retain real engine context references and trace those edges
-with the promise. Enqueue retains a separate context reference before the
-reaction releases its own. Execution, discard and runtime destruction release
+Pending reactions retain real engine context references and exact active
+ScriptOrModule records, tracing both edges with the promise. Enqueue retains
+separate copies before the reaction releases its own. Execution, discard and runtime destruction release
 the queue reference. A failed capture publishes no reaction pair; allocation
 failure releases the initialized prefix. These are engine roots, unlike the
 borrowed wrapper identities used by the DOM callback records. F15 retention
@@ -55,16 +55,18 @@ interface installation is explicitly trusted bootstrap; neutral internal
 continuations and empty handlers keep their existing queue policy. Ordinary
 noncallable-handler value forwarding remains covered. This chapter does not
 assign browser authority to arbitrary raw jobs or change generic/finalization
-job policy.
+job policy. The active-script chapter adds prepared dynamic-import continuations
+so module evaluation and its native Promise chaining can capture settings.
 
 ## Boundaries and source basis
 
 HTML's [HostMakeJobCallback](https://html.spec.whatwg.org/multipage/webappapis.html#hostmakejobcallback),
 [HostCallJobCallback](https://html.spec.whatwg.org/multipage/webappapis.html#hostcalljobcallback)
 and [HostEnqueuePromiseJob](https://html.spec.whatwg.org/multipage/webappapis.html#hostenqueuepromisejob)
-separate capture, invocation and job entry. Exact active ScriptOrModule
-restoration is still required for full HTML integration, including delayed
-`eval` and dynamic-import attribution. Realm-less jobs with custom capability
+separate capture, invocation and job entry.
+[Exact active ScriptOrModule restoration](IFRAME_F4_ACTIVE_SCRIPT.md) retains
+the registration record and pushes its synthetic activation around invocation,
+including delayed `eval` and dynamic-import attribution. Realm-less jobs with custom capability
 callbacks, finalization jobs, remaining WebIDL conversions and pre-member
 security checks retain separate acceptance gates. Do not treat this opt-in as
 a complete HostMakeJobCallback implementation or publish WindowProxy authority
@@ -73,8 +75,9 @@ on its strength.
 Patch `0033-promise-settings.patch` adds internal runtime/reaction/job fields
 and additive engine APIs. `JSJobInfo`, public wrapper layouts and wrapper ABI 5
 are unchanged. Rebuild engine consumers with matching prepared headers and
-objects. The prepared engine identity is
-`31bcaae4fa1778113d0c3cebc4de4435ab7d34f9ef8306e334e89774c06fa631`.
+objects. The original 0033 evidence below used engine identity
+`31bcaae4fa1778113d0c3cebc4de4435ab7d34f9ef8306e334e89774c06fa631`;
+the active-script chapter records its successor and composition checks.
 `JS_PeekPromiseJobSettings` is a read-only borrowed query for the selected
 queue head; it supplies no pin, origin permission or recovery authorization.
 

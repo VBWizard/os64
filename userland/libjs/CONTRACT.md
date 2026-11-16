@@ -1367,8 +1367,9 @@ Existing constructors and callers do not opt in implicitly.
 
 `os64_js_enable_promise_settings` adds reaction/thenable incumbent capture and
 prepared job invocation, with the same pre-execution configuration gate.
-Each callable reaction retains its captured engine context while pending and
-traces that edge during GC; enqueue transfers a retained copy to the job.
+Each callable reaction retains its captured engine context and exact active
+ScriptOrModule while pending and traces both edges during GC; enqueue transfers
+retained copies to the job.
 Delivery, discard and teardown release those holds. Job entry follows
 **enqueue-time executable realm**, independently of capture, proxy creation
 and settlement. The wrapper checks executable and incumbent eligibility.
@@ -1383,9 +1384,11 @@ and neutral internal continuations keep their existing job policy.
 extend lifetime. The wrapper installs a checked-query marker while the engine
 prepares scopes, under the existing job guard and budget. Neither `JSJobInfo`
 nor wrapper ABI 5 changes; engine headers and objects must be rebuilt together.
-Exact active ScriptOrModule restoration, realm-less capability edge policy and
-finalization jobs are separate contracts. This is not a complete HTML
-HostMakeJobCallback implementation. See the
+The callback pushes a synthetic activation for its captured ScriptOrModule
+when present, then unwinds it before capability resolution. Dynamic-import
+continuations prepare their module entry and backup for evaluation and Promise
+chaining. Realm-less capability and finalization-job policies remain separate
+contracts. This is not complete browser integration. See the
 [Promise settings chapter](../../docs/design/pending/IFRAME_F4_PROMISE_SETTINGS.md).
 
 `os64_js_callback_call(report, entry, abi, record, this, argc, argv, out)` requires
@@ -1422,17 +1425,54 @@ records the consumer and collection policy.
 
 Raw `JS_ClearFunctionScriptProvenance(function, source, length)` is a trusted
 owner-thread operation for fresh, unexposed inline-handler bytecode closures.
-It clears the existing ScriptOrModule presence marker only when the saved
+It releases the closure's retained ScriptOrModule only when the saved
 function text exactly matches the supplied source span. Other classes, missing
 source and mismatches refuse without modifying the closure or pending
-exception. It performs no allocation, lookup, executable-realm change or
-reference transfer. The embedding must supply a readable source span and keep
-the value alive; this is not a script-facing operation or a general parser.
+exception. It performs no allocation, lookup or executable-realm change.
+An active invocation has its own record hold and is unaffected. The embedding
+must supply a readable source span and keep the value alive; this is not a script-facing operation or a general parser.
 
 HTML handler compilation uses the source check to prevent a concatenation
 escape from selecting another function for provenance mutation. It then
 captures the document's explicitly prepared incumbent. The operation does
-not create complete Script/Module records, change a suspended/active frame's
-record, enter a task or affect F16 recovery. Patch 0032 changes engine identity;
+not create records, change a suspended/active invocation's record, enter a task
+or grant recovery authority. Patches 0032 and 0034 change engine identity;
 engine objects and prepared headers must be rebuilt together. Wrapper ABI 5
 and public wrapper layouts remain unchanged.
+
+
+### Exact active ScriptOrModule
+
+Patch 0034 stores an owned record on bytecode closures: the compiled root
+bytecode for a classic script, or the exact module object. Nested closures and
+dynamic functions inherit the active record; direct eval inherits its immediate
+caller's record and indirect eval's root has none. Null-provenance execution
+does not hide an older record. Code realm and record realm can differ.
+
+`JS_GetActiveScriptOrModule` returns an owned opaque engine value or undefined.
+Compare identity, retain/release it with the engine value APIs, and query its
+borrowed realm with `JS_GetScriptOrModuleContext`; do not expose these internal
+tags to script. The owner-thread query follows active records independently of
+incumbent suppression. It is provenance, not admission or origin authority.
+Activations retain their records through reentry and release after unwinding;
+closures and pending reactions trace their record edges during GC. Queue
+entries keep separate roots through delivery, discard and teardown. Retaining
+a classic record keeps its root's compiled constants alive, including nested
+bytecode; this is retained storage for F15 to account for, not reclamation.
+
+`JS_GetScriptOrModuleName(ctx, 0)` names the active record, including restored
+native Promise callbacks and stripped bytecode. Positive depths keep the
+physical diagnostic stack walk. `import.meta` uses exact module identity, not
+a filename lookup. Dynamic import captures the referrer before coercion and
+keeps it through queued loading; source realm selects the module provider while
+the resulting Promise belongs to the executing realm. A null referrer still
+lacks the browser current-settings API-base-URL fallback and refuses import.
+
+Semantic source names survive stripping and serialization; named classic-script
+reads rebind them to the embedding's supplied name. The bytecode version is 6, so
+older layouts refuse. The engine identity is
+`50e0bb8409b1d0d01fd0dad73adaa305e4a449e49b3eacac33d58c322cc632ba`.
+Wrapper ABI 5 and public wrapper layouts are unchanged. Rebuild consumers
+against matching prepared headers and objects. The
+[active-script chapter](../../docs/design/pending/IFRAME_F4_ACTIVE_SCRIPT.md)
+records validation and remaining browser gates.

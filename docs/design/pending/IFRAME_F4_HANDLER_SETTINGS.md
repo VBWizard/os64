@@ -46,17 +46,18 @@ Patch `0032-inline-handler-provenance.patch` adds the trusted raw operation
 unexposed bytecode closure before publishing the inline handler. It verifies
 the complete saved function source against the generated inner function; an
 escaped body cannot select another closure for provenance mutation. It clears
-the existing ScriptOrModule presence marker without changing executable realm,
-allocation, ownership or pending exceptions. It refuses other value/classes,
+the retained ScriptOrModule and its derived presence marker without changing
+executable realm or pending exceptions, and without allocation. It refuses other value/classes,
 including proxies and bound functions, absent source and mismatched source.
 The existing concatenating compiler can still execute malformed input while
 compiling; this guard protects provenance mutation rather than replacing that
-parser. It does not alter an active invocation
-or provide complete Script/Module records. Clearing the marker prevents a
+parser. Active invocations hold their own records and are unaffected.
+[Exact-record ownership](IFRAME_F4_ACTIVE_SCRIPT.md) extends the original
+marker operation. Clearing the record prevents a
 handler called directly from masking an older script-bearing caller merely
 because some script happened to trigger its compilation.
 
-The engine identity is
+The original marker-only evidence below used engine identity
 `39063a8f7f5747a9737b4f15b67dddb87f6344021bfba9fe3ae79a12ef020fbf`;
 prepared headers and engine/runtime/DOM objects
 must be rebuilt together. Wrapper ABI 5 and public wrapper layouts do not
