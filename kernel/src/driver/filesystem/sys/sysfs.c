@@ -1665,6 +1665,20 @@ static void sys_gen_gui(synth_text_t *t)
 	                "under 2 ms %lu, under 4 ms %lu, under 8 ms %lu, 8 ms or more %lu\n",
 	                comp.holds[0], comp.holds[1], comp.holds[2], comp.holds[3], comp.holds[4],
 	                comp.holds[5], comp.holds[6]);
+	// How long a client's published pixels waited to be on the framebuffer:
+	// the compositor's latency as a video player sees it (gui_internal.h).
+	// Voided publishes had nothing visible to show. A pass's waits are counted
+	// from the next pass on (compositor.c, publish to glass).
+	uint64_t glass_avg = comp.glass_waits ? comp.glass_wait_us / comp.glass_waits : 0;
+	synth_text_addf(t, "publish to glass: %lu waits, %lu us waiting, %lu us average, longest %lu us, "
+	                "longest %lu us since this file was last read, %lu voided; "
+	                "under 1 ms %lu, under 2 ms %lu, under 4 ms %lu, under 8 ms %lu, "
+	                "under 16 ms %lu, under 32 ms %lu, 32 ms or more %lu\n",
+	                comp.glass_waits, comp.glass_wait_us, glass_avg, comp.glass_wait_max_us,
+	                comp.glass_wait_max_since_read_us, comp.glass_voided,
+	                comp.glass_buckets[0], comp.glass_buckets[1], comp.glass_buckets[2],
+	                comp.glass_buckets[3], comp.glass_buckets[4], comp.glass_buckets[5],
+	                comp.glass_buckets[6]);
 }
 
 // ── /sys/net (2026-08-20) ───────────────────────────────────────────────────

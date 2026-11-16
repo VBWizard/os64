@@ -63,10 +63,24 @@ typedef struct {
 // holds of kGuiLock by length, so a run of long passes shows. Bucket k
 // counts holds under 250 us << k, the last those longer. Written under
 // kGuiLock.
+//
+// And how long a client's published pixels waited to be on the framebuffer
+// ("publish to glass"): the time from a publish adding its damage to the end
+// of the flush of the pass that took it, which is the compositor's latency
+// as a video player sees it. One wait per publish whose damage was visible
+// (`glass_waits`, their sum and longest in microseconds, the longest also
+// since the counts were last read, and by length: bucket k counts waits
+// under 1 ms << k, the last those longer); a publish none of whose pixels
+// could reach the glass, because the window was covered or a text terminal
+// held the screen, is `glass_voided` instead of a long wait.
 #define GUI_COMPOSITE_HOLD_BUCKETS 7
+#define GUI_GLASS_WAIT_BUCKETS 7
 typedef struct {
 	uint64_t passes, drawn, rects, pixels, painted, stops, faults, collapses;
 	uint64_t holds[GUI_COMPOSITE_HOLD_BUCKETS];
+	uint64_t glass_waits, glass_wait_us, glass_wait_max_us, glass_wait_max_since_read_us;
+	uint64_t glass_voided;
+	uint64_t glass_buckets[GUI_GLASS_WAIT_BUCKETS];
 } gui_composite_count_t;
 
 uint64_t gui_lock(gui_lock_site_t site);
@@ -74,8 +88,9 @@ void gui_unlock(uint64_t irqflags);
 // Every site's counts into `out` (GUI_LOCK_SITES of them) and the
 // compositor's into `comp`, in one hold of the lock so the two agree (the
 // composite site's acquisitions are the compositor's passes). The worst wait
-// and hold of each site restart when `restart`, so each read reports the
-// stretch since the last. The read is counted as OTHER.
+// and hold of each site, and the longest publish-to-glass wait, restart when
+// `restart`, so each read reports the stretch since the last. The read is
+// counted as OTHER.
 void gui_lock_counts(gui_lock_count_t *out, gui_composite_count_t *comp, bool restart);
 const char *gui_lock_site_name(gui_lock_site_t site);
 
@@ -86,6 +101,11 @@ const char *gui_lock_site_name(gui_lock_site_t site);
 // the take-the-lock-yourself variant; kGuiLock is not recursive, so picking
 // the wrong one deadlocks — hence the loud name.
 void gui_damage_add_locked(rect_t screen_rect);
+
+// A client's publish has added its damage (`visible`), or found none of it
+// visible: stamp it for the publish-to-glass wait, or count it voided
+// (gui_composite_count_t). Caller holds kGuiLock.
+void gui_glass_publish_locked(bool visible);
 
 // Move up to `cap` pending damage rects into `out`, oldest first, and answer
 // how many were moved; any beyond `cap` stay pending. Caller holds kGuiLock.

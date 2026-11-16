@@ -21,6 +21,7 @@
 #include "gui/glass.h"         // glass_damage_locked — every frame feeds /dev/glass
 #include "os64/damage.h"       // the damage list's rule, shared with libos64
 #include "driver/system/x86_64.h"   // rdtsc — the lock times itself for /sys/gui
+#include "micros.h"          // micros_now — a publish's wait to reach the glass
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
 #include "vt_select.h"       // the other side of the input fork: console mouse selection
@@ -119,6 +120,8 @@ void gui_lock_counts(gui_lock_count_t *out, gui_composite_count_t *comp, bool re
 		if (restart)
 			s_lock_counts[s].max_wait_cycles = s_lock_counts[s].max_hold_cycles = 0;
 	}
+	if (restart)
+		s_composite_counts.glass_wait_max_since_read_us = 0;
 	gui_unlock(flags);
 }
 
@@ -287,6 +290,98 @@ void gui_damage_add_locked(rect_t screen_rect)
 	if (os64_damage_add(kPendingDamage, &kPendingDamageCount, DAMAGE_MAX_RECTS, DAMAGE_MERGE_SLACK,
 	                    screen_rect))
 		s_composite_counts.collapses++;
+}
+
+// ---------------------------------------------------------------------------
+// Publish to glass: how long a publisher's pixels wait to be seen.
+//
+// Each publish whose damage is visible stamps itself here, beside the damage
+// list and under the same lock (gui_glass_publish_locked). The pass that
+// takes the damage takes these stamps with it; once its flush has put pixels
+// on the framebuffer, each publish's wait is now minus its stamp. A pass that
+// flushes nothing (a text terminal holds the screen, or nothing it took
+// survived the clip) voids what it took instead.
+//
+// The waits are measured after the flush, outside kGuiLock, by the compositor
+// thread alone, so they are kept in s_glass_owed and folded into the counts
+// at the start of the next pass, under the lock that pass takes anyway: no
+// lock and no wait of their own. A reader therefore sees a pass's waits from
+// the next pass on, which on a desktop with nothing to draw is the
+// compositor's idle wake (the "Frame pacing" comment).
+//
+// More publishes between two passes than the list holds share its last slot
+// and its stamp, which is the oldest of them: a shared wait is never counted
+// short.
+// ---------------------------------------------------------------------------
+#define GLASS_PENDING_MAX 32
+
+typedef struct {
+	uint64_t stamp_us;
+	uint32_t publishes;
+} glass_pending_t;
+
+static glass_pending_t s_glass_pending[GLASS_PENDING_MAX];   // under kGuiLock
+static uint32_t s_glass_pending_count;
+
+// Written by the compositor thread outside the lock, folded in under it.
+static struct {
+	uint64_t waits, wait_us, max_us, voided;
+	uint64_t buckets[GUI_GLASS_WAIT_BUCKETS];
+} s_glass_owed;
+
+void gui_glass_publish_locked(bool visible)
+{
+	if (!visible) {
+		s_composite_counts.glass_voided++;
+		return;
+	}
+	if (s_glass_pending_count < GLASS_PENDING_MAX) {
+		s_glass_pending[s_glass_pending_count].stamp_us = micros_now();
+		s_glass_pending[s_glass_pending_count].publishes = 1;
+		s_glass_pending_count++;
+	} else {
+		s_glass_pending[GLASS_PENDING_MAX - 1].publishes++;
+	}
+}
+
+// The waits the previous pass measured, into the counts. Under kGuiLock.
+static void glass_fold_locked(void)
+{
+	gui_composite_count_t *c = &s_composite_counts;
+	c->glass_waits += s_glass_owed.waits;
+	c->glass_wait_us += s_glass_owed.wait_us;
+	c->glass_voided += s_glass_owed.voided;
+	if (s_glass_owed.max_us > c->glass_wait_max_us)
+		c->glass_wait_max_us = s_glass_owed.max_us;
+	if (s_glass_owed.max_us > c->glass_wait_max_since_read_us)
+		c->glass_wait_max_since_read_us = s_glass_owed.max_us;
+	for (int k = 0; k < GUI_GLASS_WAIT_BUCKETS; k++)
+		c->glass_buckets[k] += s_glass_owed.buckets[k];
+	s_glass_owed.waits = s_glass_owed.wait_us = s_glass_owed.max_us = s_glass_owed.voided = 0;
+	for (int k = 0; k < GUI_GLASS_WAIT_BUCKETS; k++)
+		s_glass_owed.buckets[k] = 0;
+}
+
+// What a pass took has reached the glass at `now_us` (`flushed`), or never
+// will. Compositor thread, outside the lock.
+static void glass_settle(const glass_pending_t *taken, uint32_t count, bool flushed)
+{
+	uint64_t now_us = count != 0 && flushed ? micros_now() : 0;
+	for (uint32_t i = 0; i < count; i++) {
+		if (!flushed) {
+			s_glass_owed.voided += taken[i].publishes;
+			continue;
+		}
+		uint64_t wait = now_us > taken[i].stamp_us ? now_us - taken[i].stamp_us : 0;
+		int k = 0;
+		while (k < GUI_GLASS_WAIT_BUCKETS - 1 && wait >= (1000ull << k))
+			k++;
+		s_glass_owed.waits += taken[i].publishes;
+		s_glass_owed.wait_us += wait * taken[i].publishes;
+		s_glass_owed.buckets[k] += taken[i].publishes;
+		if (wait > s_glass_owed.max_us)
+			s_glass_owed.max_us = wait;
+	}
 }
 
 uint32_t gui_damage_take_locked(rect_t *out, uint32_t cap)
@@ -1625,6 +1720,7 @@ bool guicomp_thread(bool daemon)
 
 		// -------- Drain input, route events, recomposite (one lock hold) ---
 		uint64_t irqflags = gui_lock(GUI_LOCK_COMPOSITE);
+		glass_fold_locked();   // the last pass's publish-to-glass waits
 		// A VT transition can occur without another pointer event.
 		if (!gui_owns_glass() || s_glass_regained) gui_decoration_changed();
 
@@ -1692,6 +1788,12 @@ bool guicomp_thread(bool daemon)
 		s_composite_counts.passes++;
 		s_composite_counts.drawn += drew;
 		kPendingDamageCount = 0;
+		// The publishes behind this damage leave the list with it.
+		glass_pending_t glass_taken[GLASS_PENDING_MAX];
+		uint32_t glass_taken_count = s_glass_pending_count;
+		for (uint32_t i = 0; i < glass_taken_count; i++)
+			glass_taken[i] = s_glass_pending[i];
+		s_glass_pending_count = 0;
 		// Every /dev/glass viewer learns what this frame changed. Here,
 		// after the pixels are down and before the lock goes, is what makes
 		// a viewer's copy eventually exact (gui/glass.h): any composite that
@@ -1730,17 +1832,21 @@ bool guicomp_thread(bool daemon)
 		if (!gui_owns_glass())
 			vtsel_paint();
 
+		bool flushed_any = false;
 		if (gui_owns_glass())
 		for (uint32_t i = 0; i < damage_count; i++) {
 			if (rect_is_empty(damage[i]))
 				continue;
 			surface_flush_rect(&kBackbuffer, damage[i]);
 			flushes++;
+			flushed_any = true;
 			printd(DEBUG_GUI | DEBUG_DETAILED,
 				"guicomp: composited %dx%d at (%d,%d) [rect %u/%u], tick %lu\n",
 				damage[i].w, damage[i].h, damage[i].x, damage[i].y,
 				i + 1, damage_count, kTicksSinceStart);
 		}
+		// This pass's publishes are on the glass now, or never will be.
+		glass_settle(glass_taken, glass_taken_count, flushed_any);
 
 		if (kTicksSinceStart - last_heartbeat_tick >= TICKS_PER_SECOND) {
 			printd(DEBUG_GUI, "guicomp: heartbeat, %lu frames, %lu flushes (tick %lu)\n",

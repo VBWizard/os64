@@ -111,3 +111,38 @@ a few long passes or many ordinary ones.
 collapses, and 30 holds of 8 ms or more: under TCG a pass that draws is
 slow, so only the proportions and the agreement with the lock lines mean
 anything here.
+
+## Publish to glass, counted
+
+**Why.** A video player publishes a whole window thirty or sixty times a
+second, and what it needs to know is not how long the lock was held but
+how long its pixels waited to be seen. A publish adds damage and returns;
+the compositor composites and flushes it on a later pass, so the wait is
+the compositor's latency as a video sees it. Nothing measured it
+(VIDEO.md § 7; `/tests/glassbench` is the fixture that reads it).
+
+**What.** One line in `/sys/gui`, `publish to glass:`, in `/sys/net/knet`'s
+words: the waits, their total and average in microseconds, the longest
+since boot and since the file was last read, the publishes `voided`, and
+the waits by length in buckets doubling from 1 ms.
+
+- A publish whose damage is visible stamps itself (`micros_now()`) beside
+  the damage list, under the lock it already holds. The pass that takes
+  the damage takes the stamps; once its flush has put pixels on the
+  framebuffer, each publish's wait is the flush's end minus its stamp.
+- A publish with nothing visible (its window covered, or a text terminal
+  holding the screen) is `voided`, never a long wait; so is everything a
+  pass took when that pass flushed nothing.
+- The waits are measured after the flush, outside the lock, by the
+  compositor thread alone, and folded into the counts at the next pass's
+  hold: no lock and no wait of their own. A read sees a pass's waits from
+  the next pass on.
+- More publishes between two passes than the stamp list holds
+  (`GLASS_PENDING_MAX`) share
+  its last stamp, the oldest of them, so a shared wait is never short.
+
+| State | Begun | Changed | Read | Let go |
+|---|---|---|---|---|
+| A publish's stamp | at the publish, under the lock | — | by the pass that takes it, after its flush | when that pass settles it |
+| The waits a pass measured | after its flush, by the compositor thread | — | folded at the next pass, under the lock | zeroed by the fold |
+| The publish-to-glass counts | zero at boot | at the fold, and a voided publish at its publish, under the lock | by `/sys/gui` (`gui_lock_counts`) | never; the since-read longest restarts at each read |
