@@ -25,8 +25,8 @@ disabled and then, by name:
 | Kind | Enabled |
 |---|---|
 | readers (demuxers) | `wav`, `mp3`, `mov` (MP4, M4A), `aac` (ADTS) |
-| decoders | `mp3float`, `aac`, `pcm_s16le`, `pcm_s24le`, `pcm_s32le`, `pcm_u8`, `pcm_f32le`, `pcm_alaw`, `pcm_mulaw` |
-| parsers | `mpegaudio`, `aac` |
+| decoders | `mp3float`, `aac`, `pcm_s16le`, `pcm_s24le`, `pcm_s32le`, `pcm_u8`, `pcm_f32le`, `pcm_alaw`, `pcm_mulaw`, `h264` (video) |
+| parsers | `mpegaudio`, `aac`, `h264` |
 | protocols | none: bytes arrive through the caller's `AVIOContext`, never FFmpeg's own I/O |
 
 `tools/import_av.py --write <archive>` runs that `configure` on the host
@@ -157,8 +157,10 @@ they stay off.
 ## How it is built (`shared.mk`)
 
 FFmpeg's sources compile with FFmpeg's own flags for this target (its
-configure's `CFLAGS`: `-std=c17 -O3 -fno-math-errno -fno-signed-zeros`,
-its warning set and the warnings it makes errors), not with userland's
+configure's `CFLAGS`: `-std=c17 -fno-math-errno -fno-signed-zeros`,
+its warning set and the warnings it makes errors) at `-O2` where configure
+says `-O3`, the level os64 builds the library at now that it decodes
+video (Chris's ruling), not with userland's
 `-Wextra -Werror`, which upstream code was never written against (the
 kernel's SBC port follows the same rule). Two of FFmpeg's guards matter
 more on os64 than on Linux, because a thread's stack is fixed:
@@ -173,9 +175,8 @@ no red zone, SSE2, no AVX, the stack-clash probes. Left out:
   headers declare again (`av_sscanf`), by design.
 - FFmpeg's `-fomit-frame-pointer`: userland's default is kept.
 
-GCC 14 at `-O3` warns about array subscripts in `libavcodec/vlc.c`; that
-is upstream's code, unchanged, and they stay warnings. `port/` is os64's
-code and keeps userland's full alarm.
+A warning in upstream's code stays a warning: the code is upstream's,
+unchanged. `port/` is os64's code and keeps userland's full alarm.
 
 The library is linked `--no-undefined --gc-sections` against `libos64.so`
 and `libmath.so` only, exports FFmpeg's public prefixes (`exports.map`:

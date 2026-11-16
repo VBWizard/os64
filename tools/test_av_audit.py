@@ -131,8 +131,9 @@ check('userland/bin/libav.so' in root_make, 'libav.so is not in the images')
 
 # ONE DOOR TO FFMPEG: libmedia.so is the library programs play sound
 # through (os64/media.h), and the only one that may load libav.so, beside
-# libav's own fixture. A player that called FFmpeg directly would tie
-# itself to the decoder libmedia exists to hide.
+# libav's own fixtures (avtest, and avbench, which measures the video
+# decoder). A player that called FFmpeg directly would tie itself to the
+# decoder libmedia exists to hide.
 def needed(path):
     return set(re.findall(r'\(NEEDED\).*\[(.*?)\]', run('x86_64-elf-readelf', '-dW', path)))
 
@@ -140,7 +141,8 @@ callers = set()
 for path in sorted((USERLAND / 'bin').rglob('*')):
     if path.is_file() and path != SO and path.read_bytes()[:4] == b'\x7fELF' and 'libav.so' in needed(path):
         callers.add(str(path.relative_to(USERLAND / 'bin')))
-check(callers == {'libmedia.so', 'tests/avtest'}, f'libav.so is loaded by {sorted(callers)}, not only libmedia.so and avtest')
+check(callers == {'libmedia.so', 'tests/avtest', 'tests/avbench'},
+      f'libav.so is loaded by {sorted(callers)}, not only libmedia.so and the fixtures')
 MEDIA = USERLAND / 'bin/libmedia.so'
 check(needed(MEDIA) == {'libav.so', 'libsound.so', 'libos64.so'}, f'libmedia.so needs {sorted(needed(MEDIA))}')
 media_exports = {l.split()[-1] for l in run('x86_64-elf-nm', '-D', '--defined-only', MEDIA).splitlines()}
@@ -172,7 +174,14 @@ for program in ('play', 'tests/mediatest'):
 #                                          ones, which that open already
 #                                          made: a power of two's tables
 #                                          include every smaller one's
+#   h264dec.c                              the H.264 decoder's open (its VLC
+#                                          tables): find_stream_info's when
+#                                          libmedia probes an MP4 with a
+#                                          video track, under the lock, and
+#                                          a video program's own open
+#                                          (avbench decodes on one thread)
 known_once = {'libavcodec/aac/aacdec_float.c': 1, 'libavcodec/aac/aacdec_tab.c': 1,
+              'libavcodec/h264dec.c': 1,
               'libavcodec/aactab.c': 1, 'libavcodec/sinewin_tablegen.h': 1,
               'libavcodec/mpegaudiodec_common.c': 1, 'libavcodec/mpegaudiodec_template.c': 1,
               'libavcodec/mpegaudiodsp.c': 1, 'libavcodec/mpegaudiodsp_template.c': 1,

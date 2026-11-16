@@ -21,11 +21,14 @@ AV_UPSTREAM_SRCS := \
     upstream/libavcodec/adts_header.c \
     upstream/libavcodec/adts_parser.c \
     upstream/libavcodec/allcodecs.c \
+    upstream/libavcodec/aom_film_grain.c \
+    upstream/libavcodec/atsc_a53.c \
     upstream/libavcodec/avcodec.c \
     upstream/libavcodec/avdct.c \
     upstream/libavcodec/bitstream.c \
     upstream/libavcodec/bitstream_filters.c \
     upstream/libavcodec/bsf.c \
+    upstream/libavcodec/cabac.c \
     upstream/libavcodec/cbrt_data.c \
     upstream/libavcodec/cbrt_tablegen_common.c \
     upstream/libavcodec/codec_desc.c \
@@ -35,16 +38,45 @@ AV_UPSTREAM_SRCS := \
     upstream/libavcodec/dct32_float.c \
     upstream/libavcodec/decode.c \
     upstream/libavcodec/dirac.c \
+    upstream/libavcodec/dovi_rpu.c \
+    upstream/libavcodec/dovi_rpudec.c \
     upstream/libavcodec/dv_profile.c \
+    upstream/libavcodec/dynamic_hdr_vivid.c \
     upstream/libavcodec/encode.c \
+    upstream/libavcodec/error_resilience.c \
     upstream/libavcodec/exif.c \
     upstream/libavcodec/faandct.c \
     upstream/libavcodec/faanidct.c \
     upstream/libavcodec/fdctdsp.c \
     upstream/libavcodec/get_buffer.c \
+    upstream/libavcodec/golomb.c \
     upstream/libavcodec/h2645_parse.c \
+    upstream/libavcodec/h2645_sei.c \
+    upstream/libavcodec/h2645_vui.c \
+    upstream/libavcodec/h2645data.c \
+    upstream/libavcodec/h264_cabac.c \
+    upstream/libavcodec/h264_cavlc.c \
+    upstream/libavcodec/h264_direct.c \
+    upstream/libavcodec/h264_loopfilter.c \
+    upstream/libavcodec/h264_mb.c \
+    upstream/libavcodec/h264_parse.c \
+    upstream/libavcodec/h264_parser.c \
+    upstream/libavcodec/h264_picture.c \
+    upstream/libavcodec/h264_ps.c \
+    upstream/libavcodec/h264_refs.c \
+    upstream/libavcodec/h264_sei.c \
+    upstream/libavcodec/h264_slice.c \
+    upstream/libavcodec/h264chroma.c \
+    upstream/libavcodec/h264data.c \
+    upstream/libavcodec/h264dec.c \
+    upstream/libavcodec/h264dsp.c \
+    upstream/libavcodec/h264idct.c \
+    upstream/libavcodec/h264pred.c \
+    upstream/libavcodec/h264qpel.c \
+    upstream/libavcodec/h274.c \
     upstream/libavcodec/idctdsp.c \
     upstream/libavcodec/imgconvert.c \
+    upstream/libavcodec/itut35.c \
     upstream/libavcodec/jfdctfst.c \
     upstream/libavcodec/jfdctint.c \
     upstream/libavcodec/jni.c \
@@ -52,6 +84,7 @@ AV_UPSTREAM_SRCS := \
     upstream/libavcodec/kbdwin.c \
     upstream/libavcodec/lcevctab.c \
     upstream/libavcodec/mathtables.c \
+    upstream/libavcodec/me_cmp.c \
     upstream/libavcodec/mediacodec.c \
     upstream/libavcodec/mpeg12framerate.c \
     upstream/libavcodec/mpeg4audio.c \
@@ -78,11 +111,13 @@ AV_UPSTREAM_SRCS := \
     upstream/libavcodec/sbrdsp.c \
     upstream/libavcodec/simple_idct.c \
     upstream/libavcodec/sinewin.c \
+    upstream/libavcodec/startcode.c \
     upstream/libavcodec/threadprogress.c \
     upstream/libavcodec/tiff_common.c \
     upstream/libavcodec/to_upper4.c \
     upstream/libavcodec/utils.c \
     upstream/libavcodec/version.c \
+    upstream/libavcodec/videodsp.c \
     upstream/libavcodec/vlc.c \
     upstream/libavcodec/vorbis_parser.c \
     upstream/libavcodec/xiph.c \

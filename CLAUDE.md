@@ -689,7 +689,7 @@ virtio because its drain waits for the tick.
   **FFmpeg is `libav.so`** (`userland/libav/`; AUDIO_YONDER.md is the arc,
   `YAUDIO_TRACKER.csv` its state): libavutil, libavcodec and libavformat,
   unpatched, built down to what `manifest.json`'s `configure_args` names
-  (WAV, MP3, and AAC in MP4 or ADTS, today). **It is LGPL and stays a library of its own** —
+  (its README's table lists them). **It is LGPL and stays a library of its own** —
   never linked into another program or library, never configured with GPL,
   nonfree or version-3 parts; `tools/test_av_audit.py` fails on any of
   those. `configure` runs on the host (`tools/import_av.py`), and its
