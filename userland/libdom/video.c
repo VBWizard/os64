@@ -10,8 +10,10 @@
  * What a video element has that an audio element lacks is here: its
  * size, poster and inline playback reflected, and the picture's size,
  * which is 0 because no picture is ever decoded. canPlayType is the
- * host's, which answers "" for a video type, so a player with a choice
- * takes another; a video file given anyway fails as one not supported. */
+ * host's: yonder's answers for the video types whose sound it plays (an
+ * MP4, § Y.5) and "" for the rest, so a player with a choice takes
+ * another, and a file given anyway that it cannot read fails as one not
+ * supported. */
 
 enum { V_VIDEO_WIDTH = 16, V_VIDEO_HEIGHT };
 

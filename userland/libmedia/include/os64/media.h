@@ -58,7 +58,7 @@ typedef struct {
 } os64_media_source_t;
 
 typedef struct {
-    char format[16];      // the container, as libav names it: "mp3", "wav"
+    char format[16];      // the container, as libav first names it: "mp3", "wav", "mov"
     char codec[16];       // the sound inside: "mp3float", "pcm_s16le"
     uint32_t rate;        // the media's own frames a second
     uint32_t channels;    // the media's own channel count
@@ -116,8 +116,9 @@ const char *os64_media_strerror(int result);
 #define OS64_MEDIA_TYPE_PROBABLY  2
 int os64_media_type_supported(const char *type);
 
-// The MIME types os64_media_type_supported answers other than NO for when
-// they name no codecs, comma-separated as an Accept list is ("audio/mpeg,
+// The SOUND types os64_media_type_supported answers other than NO for
+// when they name no codecs (a video type, which plays only its sound, is
+// left out), comma-separated as an Accept list is ("audio/mpeg,
 // audio/mp3, ..."), into `out`. Answers the length the whole list needs,
 // as os64_snprintf does; a list that does not fit is cut at a type, never
 // within one.

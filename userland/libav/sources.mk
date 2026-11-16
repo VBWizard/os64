@@ -2,7 +2,23 @@
 # from FFmpeg's own object lists for manifest.json's configure_args;
 # never edited by hand.
 AV_UPSTREAM_SRCS := \
+    upstream/libavcodec/aac/aacdec.c \
+    upstream/libavcodec/aac/aacdec_ac.c \
+    upstream/libavcodec/aac/aacdec_float.c \
+    upstream/libavcodec/aac/aacdec_lpd.c \
+    upstream/libavcodec/aac/aacdec_tab.c \
+    upstream/libavcodec/aac/aacdec_usac.c \
+    upstream/libavcodec/aac/aacdec_usac_mps212.c \
+    upstream/libavcodec/aac_ac3_parser.c \
+    upstream/libavcodec/aac_parser.c \
+    upstream/libavcodec/aacps_common.c \
+    upstream/libavcodec/aacps_float.c \
+    upstream/libavcodec/aacpsdsp_float.c \
+    upstream/libavcodec/aacsbr.c \
+    upstream/libavcodec/aactab.c \
+    upstream/libavcodec/ac3_channel_layout_tab.c \
     upstream/libavcodec/ac3_parser.c \
+    upstream/libavcodec/adts_header.c \
     upstream/libavcodec/adts_parser.c \
     upstream/libavcodec/allcodecs.c \
     upstream/libavcodec/avcodec.c \
@@ -10,6 +26,8 @@ AV_UPSTREAM_SRCS := \
     upstream/libavcodec/bitstream.c \
     upstream/libavcodec/bitstream_filters.c \
     upstream/libavcodec/bsf.c \
+    upstream/libavcodec/cbrt_data.c \
+    upstream/libavcodec/cbrt_tablegen_common.c \
     upstream/libavcodec/codec_desc.c \
     upstream/libavcodec/codec_par.c \
     upstream/libavcodec/d3d11va.c \
@@ -31,10 +49,13 @@ AV_UPSTREAM_SRCS := \
     upstream/libavcodec/jfdctint.c \
     upstream/libavcodec/jni.c \
     upstream/libavcodec/jrevdct.c \
+    upstream/libavcodec/kbdwin.c \
     upstream/libavcodec/lcevctab.c \
     upstream/libavcodec/mathtables.c \
     upstream/libavcodec/mediacodec.c \
     upstream/libavcodec/mpeg12framerate.c \
+    upstream/libavcodec/mpeg4audio.c \
+    upstream/libavcodec/mpeg4audio_sample_rates.c \
     upstream/libavcodec/mpegaudio.c \
     upstream/libavcodec/mpegaudio_parser.c \
     upstream/libavcodec/mpegaudiodata.c \
@@ -54,7 +75,9 @@ AV_UPSTREAM_SRCS := \
     upstream/libavcodec/profiles.c \
     upstream/libavcodec/qsv_api.c \
     upstream/libavcodec/raw.c \
+    upstream/libavcodec/sbrdsp.c \
     upstream/libavcodec/simple_idct.c \
+    upstream/libavcodec/sinewin.c \
     upstream/libavcodec/threadprogress.c \
     upstream/libavcodec/tiff_common.c \
     upstream/libavcodec/to_upper4.c \
@@ -63,7 +86,9 @@ AV_UPSTREAM_SRCS := \
     upstream/libavcodec/vlc.c \
     upstream/libavcodec/vorbis_parser.c \
     upstream/libavcodec/xiph.c \
+    upstream/libavformat/aacdec.c \
     upstream/libavformat/allformats.c \
+    upstream/libavformat/apetag.c \
     upstream/libavformat/av1.c \
     upstream/libavformat/avformat.c \
     upstream/libavformat/avio.c \
@@ -71,14 +96,24 @@ AV_UPSTREAM_SRCS := \
     upstream/libavformat/codecstring.c \
     upstream/libavformat/demux.c \
     upstream/libavformat/demux_utils.c \
+    upstream/libavformat/dovi_isom.c \
     upstream/libavformat/dump.c \
     upstream/libavformat/dv.c \
+    upstream/libavformat/dvdclut.c \
     upstream/libavformat/format.c \
+    upstream/libavformat/iamf.c \
+    upstream/libavformat/iamf_parse.c \
+    upstream/libavformat/iamf_reader.c \
     upstream/libavformat/id3v1.c \
     upstream/libavformat/id3v2.c \
+    upstream/libavformat/img2.c \
+    upstream/libavformat/isom.c \
     upstream/libavformat/isom_tags.c \
     upstream/libavformat/lcevc.c \
     upstream/libavformat/metadata.c \
+    upstream/libavformat/mov.c \
+    upstream/libavformat/mov_chan.c \
+    upstream/libavformat/mov_esds.c \
     upstream/libavformat/mp3dec.c \
     upstream/libavformat/mux.c \
     upstream/libavformat/mux_utils.c \
@@ -88,6 +123,8 @@ AV_UPSTREAM_SRCS := \
     upstream/libavformat/packet_list.c \
     upstream/libavformat/pcm.c \
     upstream/libavformat/protocols.c \
+    upstream/libavformat/qtpalette.c \
+    upstream/libavformat/rawdec.c \
     upstream/libavformat/replaygain.c \
     upstream/libavformat/riff.c \
     upstream/libavformat/riffdec.c \

@@ -20,16 +20,22 @@
 // THREADS. libav is built without threads, so what it shares between
 // callers must be set up by one thread at a time (libav/README.md
 // § Switched off). In this configuration that is libavutil's CRC tables,
-// which a demuxer can first ask for while reading a header, and the
-// decoders' static tables, made when a decoder opens: by this media's own
-// open, and by avformat_find_stream_info, which opens decoders of its own
-// to learn the sample format. So libmedia makes every CRC table at its
-// first open, and takes one lock (`s_lock`) across find_stream_info and
-// the decoder's open. Opening the input and its header, reading packets
-// and decoding take no lock. The cost: two media probing at once take
-// turns at find_stream_info, which reads a few packets from the source.
-// tools/test_av_audit.py pins every one-time setup in the build, so a
-// configuration that adds one fails until it has been looked at here.
+// which a demuxer can first ask for while reading a header, its AES
+// tables, which the MP4 reader asks for while reading a packet of a file
+// with an `adrm` atom, and the decoders' static tables, made when a
+// decoder opens: by this media's own open, and by
+// avformat_find_stream_info, which opens decoders of its own to learn the
+// sample format. (AAC's SBR asks for transform tables again while
+// decoding, but only ones its decoder's open already made.) So libmedia
+// makes every CRC table and the AES tables at its first open, and takes
+// one lock (`s_lock`) across find_stream_info and the decoder's open.
+// Opening the input and its header, reading packets and decoding take no
+// lock. The cost: two media probing at once take turns at
+// find_stream_info, which reads a few packets of a sound, and of an MP4
+// video up to some twenty of its picture's frames, from the source,
+// across the network for a page's. tools/test_av_audit.py pins every
+// one-time setup in the build, so a configuration that adds one fails
+// until it has been looked at here.
 
 #include "os64/media.h"
 
@@ -42,6 +48,7 @@
 
 #include "libavcodec/avcodec.h"
 #include "libavformat/avformat.h"
+#include "libavutil/aes.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/crc.h"
 #include "libavutil/log.h"
@@ -101,13 +108,21 @@ static void on_log(void *avcl, int level, const char *fmt, va_list vl)
     while (n > 0 && (m->error[n - 1] == '\n' || m->error[n - 1] == '\r')) m->error[--n] = 0;
 }
 
-// Once per program, under s_lock: the log callback, and every CRC table, so
-// no demuxer makes one while another thread does.
+// Once per program, under s_lock: the log callback, every CRC table, and
+// the AES tables, so no demuxer makes one while another thread does (the
+// MP4 reader runs AES over each packet of a file with an `adrm` atom,
+// inside av_read_frame, which takes no lock).
 static void ready_locked(void)
 {
     if (s_ready) return;
     av_log_set_callback(on_log);
     for (int id = 0; id < AV_CRC_MAX; id++) av_crc_get_table((AVCRCId)id);
+    struct AVAES *aes = av_aes_alloc();
+    if (aes != NULL) {
+        static const uint8_t kZeroKey[16];
+        (void)av_aes_init(aes, kZeroKey, 128, 0);
+        av_free(aes);
+    }
     s_ready = true;
 }
 
@@ -459,7 +474,13 @@ int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_med
 
     if (info != NULL) {
         os64_memset(info, 0, sizeof(*info));
-        os64_strcopy(info->format, sizeof(info->format), m->format->iformat->name);
+        // A reader of several kinds names them all ("mov,mp4,m4a,..."):
+        // its first name is the container's.
+        const char *name = m->format->iformat->name;
+        size_t first = 0;
+        while (name[first] != '\0' && name[first] != ',' && first + 1 < sizeof(info->format)) first++;
+        os64_memcpy(info->format, name, first);
+        info->format[first] = '\0';
         os64_strcopy(info->codec, sizeof(info->codec), decoder->name);
         info->rate = m->rate;
         info->channels = (uint32_t)channels;
@@ -577,8 +598,12 @@ const char *os64_media_strerror(int result)
 // Each MIME type other browsers answer for, as the libav reader that reads
 // it and, where the type implies its codec, that codec. Which of them play
 // is libav.so's answer (av_find_input_format, avcodec_find_decoder_by_name),
-// so a type whose reader or decoder is not built answers NO.
+// so a type whose reader or decoder is not built answers NO. A video type
+// is here for its SOUND, which is what libmedia plays of it (a <video>
+// plays a file's sound and no picture, AUDIO_YONDER.md § Y.4); a codecs
+// parameter naming a video codec still answers NO, since none is decoded.
 static const struct { const char *type, *demuxer, *implied; } kTypes[] = {
+    {"video/mp4", "mov", NULL},
     {"audio/mpeg", "mp3", "mp3"}, {"audio/mp3", "mp3", "mp3"}, {"audio/mpeg3", "mp3", "mp3"},
     {"audio/x-mpeg", "mp3", "mp3"}, {"audio/x-mp3", "mp3", "mp3"},
     {"audio/wav", "wav", NULL}, {"audio/wave", "wav", NULL}, {"audio/x-wav", "wav", NULL},
@@ -715,7 +740,10 @@ size_t os64_media_type_list(char *out, size_t cap)
     size_t need = 0, kept = 0;
     bool whole = true;
     for (size_t i = 0; i < sizeof(kTypes) / sizeof(kTypes[0]); i++) {
-        if (os64_media_type_supported(kTypes[i].type) == OS64_MEDIA_TYPE_NO)
+        // A video type plays only its sound here, so it is no SOUND type:
+        // a link to a video is not offered as a sound's page.
+        if (os64_memcmp(kTypes[i].type, "video/", 6) == 0 ||
+            os64_media_type_supported(kTypes[i].type) == OS64_MEDIA_TYPE_NO)
             continue;
         size_t sep = need == 0 ? 0 : 2, len = os64_strlen(kTypes[i].type);
         need += sep + len;

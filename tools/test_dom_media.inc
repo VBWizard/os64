@@ -629,7 +629,7 @@ static void dom_media_video_cases(void)
         "assert(v.videoWidth===0&&v.videoHeight===0,'no picture');"
         "assert(!Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype,'videoWidth').set,'videoWidth is read-only');"
         "throws('TypeError',()=>Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype,'width').get.call(new Audio()));"
-        "assert(v.canPlayType('audio/mpeg')==='maybe'&&v.canPlayType('video/mp4')==='','canPlayType is the host\\'s');"
+        "assert(v.canPlayType('audio/mpeg')==='maybe'&&v.canPlayType('video/mp4')==='','canPlayType is the host\\'s (this fake host plays only MP3)');"
         "assert(v.paused&&v.networkState===0&&v.readyState===0&&isNaN(v.duration),'a media element\\'s start');",
         "media: video: the interface and its members");
     /* JW Player's way: a video element given an MP3, in the document. */

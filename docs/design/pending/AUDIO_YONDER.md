@@ -796,8 +796,9 @@ request is one row; a slice of several has a task row per pull request.
 3. **Y.3 — the mixer.** One pull request: several elements in one window
    sounding at once.
 4. **Then the gaps the pages show**, each its own small slice: a decoder
-   switched on, a member a page needed, `playbackRate`. The first is
-   **Y.4**, a `<video>` that plays its sound (§ Y.4).
+   switched on, a member a page needed, `playbackRate`. The first are
+   **Y.4**, a `<video>` that plays its sound (§ Y.4), and **Y.5**, MP4
+   and AAC switched on (§ Y.5).
 
 Y.1 is a third-party port and a library with no kernel change: one cold
 Opus read before each push. Y.2 is yonder with threads meeting the
@@ -807,8 +808,8 @@ thread, which is threads meeting the window too: Codex.
 ## What this arc leaves out, on purpose
 
 `<video>`'s picture (the element plays sound since Y.4, and nothing
-more); Media Source Extensions; MP4, WebM, Ogg; AAC, Opus, Vorbis
-(each a configure switch when a page asks); text tracks; Web Audio
+more); Media Source Extensions; WebM, Ogg; Opus, Vorbis (each a
+configure switch when a page asks; MP4 and AAC were the first, § Y.5); text tracks; Web Audio
 (`AudioContext`); a playback rate other than 1; picture-in-picture;
 DRM (EME), which os64 will never have: a licensed decryption module is
 not something one person's browser can obtain. The headphones' buttons
@@ -845,7 +846,7 @@ Behind the Modern Web switch, in the media row.
 | | Y.4 | The video arc |
 |---|---|---|
 | A sound file | plays, as in `<audio>` | the same |
-| A video file | `canPlayType("video/…")` is `""`, so a player that has a choice takes another; one given anyway fails as a source not supported (`MEDIA_ERR_SRC_NOT_SUPPORTED`), as `<audio>` does | its picture is decoded and drawn, its sound plays |
+| A video file | an MP4 plays its sound and `canPlayType("video/mp4")` is "maybe" for it (§ Y.5); one naming a video codec (`codecs="avc1…"`) is `""`, and so is every other video type, so a player that has a choice takes another; one given anyway fails as a source not supported (`MEDIA_ERR_SRC_NOT_SUPPORTED`), as `<audio>` does | its picture is decoded and drawn, its sound plays |
 | `videoWidth`, `videoHeight` | 0 | the picture's size |
 | The box | 300 by 150 by default, `width` and `height` as its size and, both given, its ratio (`aspect-ratio: auto w / h`, HTML § 15.4.3), its own background and border, nothing drawn inside | the frames, and the poster before the first; the picture's own ratio |
 | `poster` | reflected, not drawn (DEBTS.md) | drawn |
@@ -861,8 +862,8 @@ the box, the place other browsers draw theirs.
 missing, and that is what a record is for. An `audio` is no longer
 counted when the Modern Web surface plays it.
 
-**Proven** by libdom's media cases for the interface, its members and a
-video element playing through the same session path as an audio
+**Proven** (as Y.4 stood; § Y.5 changed what an MP4 does) by libdom's
+media cases for the interface, its members and a video element playing through the same session path as an audio
 (`tools/test_dom_media.inc`); libflow's layout cases for the box, its
 default and its attributes, and the fallback where no sound plays
 (`tools/test_libflow_layout.inc`); the yonder scripted-page suite's
@@ -872,6 +873,51 @@ end, a video made in script answers `canPlayType` "maybe" for
 `audio/mpeg` and "" for `video/mp4`, the second box given the MP3 by
 script plays it through `canplay` to `ended`, and the third, given
 `video-tiny.mp4`, fires `error` with code 4. The podcast page on the P5 is the last word.
+
+## Y.5, MP4 and AAC
+
+**Why.** The podcast site's player starts with a placeholder,
+`blank.mp4` (an H.264 picture and AAC sound, two and a half seconds),
+and asks a `<video>` `canPlayType("video/mp4")` before anything else.
+Answered `""`, the placeholder was the playlist's only item, JW Player
+dropped it, and its setup failed with its own "empty playlist" (102630)
+before the episode's MP3 was ever reached. AAC is also the other half of
+the podcast world (`.m4a`), and an MP4's reader and the AAC decoder are
+step one of the video arc's H.264, so nothing here is spent twice.
+
+**Ruled** (Chris, 2026-11-15): yes, as its own slice on Y.4.
+
+**What it is.** libav's configuration (`manifest.json`'s
+`configure_args`) gains the `mov` reader (MP4, M4A) and the `aac` reader
+(ADTS), the `aac` decoder and its parser; `tools/import_av.py` brought in
+what they need, unpatched, and the port's `<math.h>` the three float
+functions the decoder calls with no `HAVE_` to answer. libmedia reads an
+MP4's best AUDIO stream and passes over its picture, as it always chose
+the audio stream. `canPlayType` follows the configuration as before:
+`audio/mp4`, `audio/x-m4a` and `audio/aac` answer "maybe" with no edit,
+and `video/mp4` joins libmedia's type table for its sound (a codecs
+parameter naming a video codec still answers `""`). The four one-time
+setups the AAC decoder brings run in a decoder's open, under libmedia's
+lock (§ THREADS), and `tools/test_av_audit.py` names them; the MP4
+reader can ask for libavutil's AES tables while reading a packet (a file
+with an `adrm` atom), so libmedia makes them at its first open, as it
+does the CRC tables. A video type is NOT a sound type: the list that
+makes a link straight to a sound open as a page of its own (§ The media
+document) leaves `video/mp4` out, so a link to an MP4 video is still
+offered for saving rather than opened as a page that plays only its
+sound.
+`os64_media_info_t.format` is the reader's first name (`mov`), not the
+list FFmpeg gives a reader of several kinds.
+
+**Proven** by `/tests/avtest` (an MP4 whose first track is a picture
+yields its AAC sound: one second of the sine, holding the energy the
+host's FFmpeg decodes it to; the reference is energy because releases
+trim the encoder's priming differently) and `/tests/mediatest` (the type
+answers; the MP4's sound through libmedia at 48 kHz stereo), both in
+QEMU; `tools/test_av_audit.py` and `tools/import_av.py --check`; and
+`tools/pages/video-audio.html` in QEMU, where a script-made `<video>`
+answers "maybe" for `video/mp4` and the third box, given
+`video-tiny.mp4`, plays its sound to `ended`.
 
 ## For Chris
 
@@ -893,3 +939,6 @@ script plays it through `canplay` to `ended`, and the third, given
 7. **A `<video>` that plays its sound** (asked 2026-11-15, when a podcast
    site's player would play only through one). RULED the same day: yes,
    plainly a stand-in that plays no video, in a module of its own (§ Y.4).
+8. **MP4 and AAC** (asked 2026-11-15, when the same player's setup
+   wanted `video/mp4` for its placeholder). RULED the same day: yes,
+   since the video arc needs both anyway (§ Y.5).
