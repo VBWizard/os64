@@ -309,6 +309,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_child_install.inc"
 #include "test_dom_recovery.inc"
 #include "test_dom_recovery_host.inc"
+#include "test_dom_retention.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -675,6 +676,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--importmap")){dom_import_map_cases();dom_import_map_sweep_cases();printf("DOM import maps: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--animation-routing")){dom_animation_routing_cases();printf("DOM animation routing: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--animation-retirement")){dom_animation_retirement_cases();printf("DOM animation retirement: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--retention")){dom_recovery_host_cases();dom_retention_cases();printf("DOM retention: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--recovery")){dom_recovery_cases();printf("DOM recovery: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--promise-settings")){dom_promise_settings_cases();printf("DOM Promise settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--custom-settings")){dom_custom_settings_cases();printf("DOM custom settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -711,6 +713,7 @@ int main(int argc, char **argv)
     dom_departure_cases();
     dom_recovery_cases();
     dom_recovery_host_cases();
+    dom_retention_cases();
     dom_stream_realm_cases();
     dom_child_install_cases();
     dom_child_install_sweeps(false);

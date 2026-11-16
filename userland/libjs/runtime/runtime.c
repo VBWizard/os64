@@ -1,6 +1,7 @@
 #include "os64/js_engine.h"
 #include "os64/js_failure.h"
 #include "os64/js_callbacks.h"
+#include "os64/js_retention.h"
 #include "os64/mem.h"
 #include "os64/io.h"
 #include "os64/proc.h"
@@ -3513,3 +3514,5 @@ JS_PUBLIC os64_js_status_t os64_js_set_rejection_router(os64_js_runtime_t *runti
     runtime->router = router != NULL ? *router : (os64_js_rejection_router_t){0};
     return OS64_JS_OK;
 }
+
+#include "retention.inc"
