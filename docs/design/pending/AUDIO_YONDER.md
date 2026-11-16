@@ -813,9 +813,7 @@ configure switch when a page asks; MP4 and AAC were the first, § Y.5); text tra
 (`AudioContext`); a playback rate other than 1; picture-in-picture;
 DRM (EME), which os64 will never have: a licensed decryption module is
 not something one person's browser can obtain. The headphones' buttons
-(one press is play, two next, three previous) reaching a page wait on
-the audio arc's answer to how a press reaches a program; when there is
-one, yonder's audio thread is the natural listener.
+reach a page through the Media Session API (§ Y.6).
 
 ## Y.4, a `<video>` that plays its sound (a stand-in)
 
@@ -918,6 +916,93 @@ QEMU; `tools/test_av_audit.py` and `tools/import_av.py --check`; and
 `tools/pages/video-audio.html` in QEMU, where a script-made `<video>`
 answers "maybe" for `video/mp4` and the third box, given
 `video-tiny.mp4`, plays its sound to `ended`.
+
+## Y.6, the media keys reach the page (Media Session)
+
+**Why.** The audio arc's A.5.1 gave programs sessions on
+`/dev/mediakeys` (MEDIA_KEYS.md): the headphones' play, pause, next and
+previous reach the program playing, else the focused one. Chris runs
+several yonder windows (a podcast, a radio station, videos), so each
+window must be a session, and a page must be able to answer the press
+itself: a podcast site's Next is its playlist's, not anything yonder
+could guess. That is the web's **Media Session API**
+(`navigator.mediaSession`, W3C Media Session), which podcast and music
+sites already use for other browsers' media keys.
+
+**libdom: the interface** (`libdom/media_session.c`, a Modern Web row
+after the one that makes `Navigator.prototype`, naming `MediaSession`
+and `MediaMetadata`):
+
+- `navigator.mediaSession`, the same `MediaSession` every time.
+- `setActionHandler(action, handler)`: the action is a
+  `MediaSessionAction` (all sixteen of the standard's names; anything
+  else is a TypeError, as an enum conversion is); `null` removes it.
+  One handler an action, the last set.
+- `metadata`: a `MediaMetadata` or `null` (anything else, TypeError).
+  `new MediaMetadata({title, artist, album, artwork})`, each string
+  defaulting to `""`; `artwork` a list of `{src, sizes, type}` whose
+  `src` is resolved against the document's URL (one that does not parse
+  is a TypeError at construction or assignment) and read back as a
+  frozen list of frozen objects.
+- `playbackState`: `"none"` (the start), `"paused"` or `"playing"`; an
+  assignment of anything else is ignored, as an enum attribute's is.
+- `setPositionState(state)`: an empty one clears it; otherwise
+  `duration` is required and not negative, `position` between 0 and
+  `duration`, `playbackRate` not 0, each a TypeError when not. Kept;
+  nothing in os64 shows it yet.
+- `setMicrophoneActive` and `setCameraActive`: kept as nothing, since
+  os64 has neither.
+
+Metadata and position are kept and reported (the session lines yonder
+shows nowhere yet); they change nothing here. Only the TOP document's
+`navigator.mediaSession` is the window's session: a frame's is kept and
+never asked (DEBTS).
+
+**libdom: the host's side** (`dom/media.h`), owner thread, between
+tasks:
+
+- `os64_dom_media_session_state(dom)`: what the window says of itself.
+  PLAYING when `playbackState` is `"playing"` or any media element of the
+  document is not paused (the standard's "actual playback state"),
+  else PAUSED when `playbackState` is `"paused"` or an element that has
+  played is paused, else STOPPED; and whether the page has anything to
+  say at all (an action handler set, or an element that has played).
+- `os64_dom_media_session_action(dom, action, outcome)`: a press, as a
+  host task. With a handler for the action, it runs, given
+  `{action}` (`MediaSessionActionDetails`). With none, the browser's own
+  answer, as other browsers give it: `play` plays the element that played
+  most recently; `pause` and `stop` pause every element that is playing;
+  `nexttrack` and `previoustrack` do nothing.
+
+**yonder: the window's session.** One yonder is one window and one page
+at a time, so a yonder holds at most ONE session:
+
+- **Opened when the page first has something to say** (the state's
+  "anything to say"), not at start: a window that never played holds no
+  session, so it neither takes a press meant for another nor keeps the
+  kernel's own answer from running. Once opened it lasts the window's
+  life, saying `stopped` when the page that follows has nothing.
+- **The state word** is written when `os64_dom_media_session_state`
+  changes, looked at after every media turn and every task.
+- **A reader thread** blocks in the session's read and hands each press
+  to the window through a small queue and a doorbell bit (`BELL_KEYS`);
+  the loop's `keys_turn`, beside the players' asks, dispatches each as a
+  page task (`os64_dom_media_session_action`). Before it, the page is
+  marked activated: a press is a person's, and a handler calling `play()`
+  must be allowed to, as other browsers allow it.
+- The key maps to the action: Play `play`, Pause `pause`, Next
+  `nexttrack`, Previous `previoustrack`, Stop `stop`. The kernel's toggle
+  (MEDIA_KEYS.md) already decided Play against Pause from the state word,
+  so a page with only a `play` handler is never asked to play while it
+  says it plays.
+
+**Proof.** libdom's host suite for the interface (its members, its
+TypeErrors, the state, a handler's call and the defaults); a page in
+`/tests/pages` (`media-session.html`) with a playlist that sets every
+handler and shows each press; QEMU on the GUI boot with two yonder
+windows, presses written to `/sys/mediakeys`: the playing window takes
+them, and with both paused the focused one does (the focus rule's first
+live run); then the P5 with the headphones on a podcast site.
 
 ## For Chris
 
