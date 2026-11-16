@@ -54,9 +54,10 @@ DEBTS row's "variable-size image": a per-boot size would only be needed for
 components this design refuses to enable.
 
 **R4. The kernel never restores a header it did not write.** `xrstor64` is
-a kernel `#GP` if the image's header names a component outside XCR0, sets
-the compaction word, has a nonzero reserved byte, or carries a reserved
-MXCSR bit. Signal frames live in user memory, so ring 3 can hand back any
+a kernel `#GP` if the image's header names a component outside XCR0, has a
+nonzero reserved byte, or carries a reserved MXCSR bit; a set compaction
+word is a `#GP` on a CPU without XSAVEC and, on one with it, a request for
+a layout the kernel never writes (R6). Signal frames live in user memory, so ring 3 can hand back any
 bytes it likes. Therefore sanitizing lives INSIDE `fpu_restore`, where the
 MXCSR mask already is, so that no caller can restore an unsanitized image:
 
@@ -117,7 +118,10 @@ small follow-up slice with the rule above written beside it.
 already begins at offset 64 and the head's offsets (the ones the stub in
 `task_exit_asm.S` reads) do not move. What changes:
 
-- the frame grows by 320 bytes (576 to 896; the full frame by the same);
+- the frame grows by 320 bytes (576 to 896; the full frame by 336, 688 to
+  1024, because the image's 64-byte alignment rounds it up — those 16
+  bytes are a named `tail` member so every byte copied to ring 3 is
+  initialized);
 - the three delivery paths copy the larger image, unchanged in shape;
 - `sigreturn` copies the larger frame in, and its restore goes through R4.
 

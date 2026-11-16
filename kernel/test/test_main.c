@@ -428,12 +428,12 @@ static bool test_fpu_image_on_this_cpu(void)
 	image.bytes[FPU_IMAGE_HEADER_OFFSET + 40] = 0x5A;                  // a reserved header byte
 	for (uint32_t i = 0; i < 4; i++)
 		image.bytes[FPU_IMAGE_MXCSR_OFFSET + i] = 0xFF;                // every MXCSR bit
-	fpu_restore(&image);          // a #GP here is the failure, and a loud one
+	// A #GP here is the failure, and a loud one; surviving is the pass (a
+	// CPU cannot hold an illegal MXCSR: loading one IS the fault).
+	fpu_restore(&image);
 	uint32_t mxcsr;
 	__asm__ volatile("stmxcsr %0" : "=m"(mxcsr));
 	fpu_restore(&original);
-	if (mxcsr & ~kFPUFeatures.mxcsr_mask)
-		TEST_FAIL("a forged MXCSR came back with a reserved bit set");
 	printd(DEBUG_TESTS, "\tfpu_image_on_this_cpu: %s mode, forged image restored, MXCSR 0x%x\n",
 	       kFPUFeatures.mode == FPU_MODE_AVX ? "avx" : "sse", mxcsr);
 	return true;

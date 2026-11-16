@@ -117,7 +117,7 @@ int main(int argc, char **argv)
             __asm__ volatile("vpxord zmm0, zmm0, zmm0" ::: "memory");
             return surviving("executed an AVX-512 instruction with its state off");
         }
-        os64_printf("fpfault: executing vzeroupper with XSAVE off — expect #UD, exit 206\n");
+        os64_printf("fpfault: AVX is off; executing vzeroupper - expect #UD, exit 206\n");
         __asm__ volatile("vzeroupper" ::: "memory");
         return surviving("executed an AVX instruction");
     }

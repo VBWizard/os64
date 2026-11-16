@@ -96,9 +96,11 @@ fpu_why_t fpu_mode_layout(const fpu_cpu_answers_t *a);
 void fpu_image_init(uint8_t image[FPU_IMAGE_SIZE]);
 
 // R4: make an image safe for the kernel to restore, whoever wrote it. A
-// header naming a component outside XCR0, a set compaction word, a nonzero
-// reserved header byte and a reserved MXCSR bit are each a KERNEL #GP on
-// xrstor64 (the last also on fxrstor64). Sanitize, never refuse: XSTATE_BV
+// header naming a component outside XCR0, a nonzero reserved header byte
+// and a reserved MXCSR bit are each a KERNEL #GP on xrstor64 (the last also
+// on fxrstor64). A compaction word is a #GP on a CPU without XSAVEC and, on
+// one with it, asks xrstor64 to read a layout the kernel never writes (the
+// standard form is R6's). Sanitize, never refuse: XSTATE_BV
 // is ANDed with FPU_XCR0, header bytes 8-63 are zeroed, and MXCSR is ANDed
 // with `mxcsr_mask` (the CPU's; 0 means FPU_MXCSR_FALLBACK_MASK). Nothing
 // else changes, so an image that was already legal is restored as it was.

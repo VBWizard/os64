@@ -62,10 +62,12 @@
 // Then the hostile case. The frame lives on the program's own stack, and
 // sigreturn restores the image out of it — xrstor64 or fxrstor64, in the
 // KERNEL. A reserved MXCSR bit faults either; a header naming a component
-// outside XCR0, a set compaction word or a nonzero reserved header byte
-// faults xrstor64. So the kernel sanitizes the image first. The last phase
-// forges each of the four in turn from inside a handler and returns: the OS
-// must survive, and the MXCSR that comes back must be legal.
+// outside XCR0 or a nonzero reserved header byte faults xrstor64, and a
+// compaction word faults it on a CPU without XSAVEC (on one with it, it
+// asks for a layout the kernel never writes). So the kernel sanitizes the
+// image first. The last phase forges each of the four in turn from inside a
+// handler and returns: the OS must survive, which is the whole check — a
+// CPU cannot hold an illegal MXCSR, because loading one IS the fault.
 //
 // ONE ASM BLOCK PER CHECK, on purpose. The state is loaded and checked
 // inside a single asm statement, so no C code — and no function call — sits
@@ -91,7 +93,6 @@
 #define FPUTEST_X87CW_CLOBBERED  0xF0DE0009
 #define FPUTEST_HIGHXMM_CLOBBERED 0xF0DE000A
 #define FPUTEST_FORGE_NO_SIGNAL  0xF0DE000B
-#define FPUTEST_FORGE_BAD_MXCSR  0xF0DE000C
 #define FPUTEST_NO_HELPER        0xF0DE000D   // could not spawn the external sender
 #define FPUTEST_NO_SELF_SIGNALS  0xF0DE000E   // the pinger's own syscall exits never delivered (§5 untested)
 #define FPUTEST_YMM_CLOBBERED    0xF0DE000F   // an upper half of a YMM register came back wrong
@@ -588,8 +589,9 @@ static int helper_main(const char *taskid_text)
 #define FRAME_XCOMP_BV     (FRAME_IMAGE + 512 + 8)
 #define FRAME_RESERVED     (FRAME_IMAGE + 512 + 40)
 
-// The four ways a frame's image can fault the kernel's restore, one per
-// signal. Each is a kernel #GP unless sigreturn sanitizes it first.
+// The four ways a frame's image can trouble the kernel's restore, one per
+// signal: three are a kernel #GP unless sigreturn sanitizes them first, and
+// the compaction word is one too on a CPU without XSAVEC.
 enum { FORGE_MXCSR, FORGE_COMPONENTS, FORGE_COMPACTED, FORGE_RESERVED, FORGE_KINDS };
 static const char *const kForgeNames[FORGE_KINDS] = {
     "MXCSR 0xFFFFFFFF", "XSTATE_BV naming every component", "XCOMP_BV's compaction bit",
@@ -845,14 +847,11 @@ int main(int argc, char **argv)
             say("fputest: the forging handler never ran for %s\n", kForgeNames[kind]);
             return FPUTEST_FORGE_NO_SIGNAL;
         }
-        // Still here: the kernel survived the restore. What did it hand
-        // back? Every bit above 17 is reserved on every CPU (bit 17 only on
-        // AMD, and the mask knows); a legal MXCSR has none of them set.
+        // Still here: the kernel survived the restore, which is the pass.
+        // The MXCSR it handed back is printed for the record only.
         uint32_t mxcsr_now;
         __asm__ volatile("stmxcsr %0" : "=m"(mxcsr_now));
         say("fputest: forged %s and lived; MXCSR is 0x%x\n", kForgeNames[kind], mxcsr_now);
-        if (mxcsr_now & 0xFFFC0000U)
-            return FPUTEST_FORGE_BAD_MXCSR;
     }
     return FPUTEST_OK;
 }
