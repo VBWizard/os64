@@ -166,6 +166,41 @@ static void dom_classic_cases(void)
         "assert('gridGap' in style&&'grid-gap' in style&&!('-webkit-margin' in style));"
         "assert(!('display-x' in style)&&!Object.prototype.hasOwnProperty.call(style,'margin'));",
         "classic-inline-style-names");
+    /* CSSOM's list of an inline style's declarations: valid ones in order,
+     * a shorthand as its longhands, a custom property by its name, each
+     * once; length, item(), indices and an iterator over it. Setting or
+     * removing a name takes away the declarations it covers, and a longhand
+     * removed from inside a shorthand is left there, as DEBTS.md books
+     * (the shorthand would have to be written back as text). The last
+     * case is shaped like chatgpt.com's style bookkeeping, which spreads a
+     * style to learn its names and removes each from another. */
+    dom_script(&f,CLASSIC_ASSERT
+        "var box=document.createElement('div');document.body.appendChild(box);var style=box.style;"
+        "assert(style.length===0&&style.item(0)===''&&style[0]===undefined&&[...style].length===0);"
+        "assert(style.parentRule===null);"
+        "style.cssText='color:red; margin:0; --Brand:blue; color:green; bogus:1; width:';"
+        "assert(style.length===6&&style[0]==='color'&&style.item(1)==='margin-top'&&style[4]==='margin-left');"
+        "assert(style[5]==='--Brand'&&style.item(6)===''&&style[6]===undefined&&style.item(-1)==='');"
+        "assert([...style].join()==='color,margin-top,margin-right,margin-bottom,margin-left,--Brand');"
+        "assert(Object.keys(style).join()==='0,1,2,3,4,5'&&(5 in style)&&!(6 in style));"
+        "style[0]='width';assert(style[0]==='color');var refused=false;"
+        "try{(function(){'use strict';style[0]='width'})()}catch(e){refused=e instanceof TypeError}"
+        "assert(refused&&style[0]==='color');"
+        "assert(Array.prototype.indexOf.call(style,'--Brand')===5);"
+        "style.removeProperty('margin');assert(style.length===2&&style[1]==='--Brand');"
+        "style.cssText='margin-top:1px;color:red;margin-left:2px';style.margin='3px';"
+        "assert(style.length===5&&style[0]==='color'&&box.getAttribute('style').indexOf('margin-top')<0);"
+        "style.cssText='margin:4px;color:red';style.removeProperty('margin-top');"
+        "assert(style.margin==='4px'&&style.length===5);"
+        "style.cssFloat='left';assert(style.cssFloat==='left'&&style.getPropertyValue('float')==='left');"
+        "style.cssText='';"
+        "function yr(e,t){if(!e||!t)return e??void 0;let n=document.createElement('div').style;n.cssText=t;"
+        "let a=[...n];n.cssText=e;for(let e of a)n.removeProperty(e);return n.cssText||void 0}"
+        "var left=yr('display:none; width:5px; --gap:1px','width:9px;--gap:2px');"
+        "assert(left.indexOf('display:none')===0&&left.indexOf('width')<0&&left.indexOf('--gap')<0);"
+        "assert(yr('margin-top:4px;color:red','margin:0').indexOf('margin')<0);"
+        "assert(yr('width:1px','width:2px')===undefined);",
+        "classic-inline-style-list");
     dom_script(&f,CLASSIC_ASSERT
         "assert(window.event===undefined);var outer=new Event('outer'),inner=new Event('inner');"
         "document.body.addEventListener('inner',function(e){assert(event===e&&e===inner)});"

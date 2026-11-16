@@ -2094,7 +2094,15 @@ int d_style_install(os64_dom_t *dom, JSContext *ctx);
  * style.setProperty(name, value) does; an empty value removes it. */
 JSValue d_style_write(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const char *name,
                       const char *value);
-extern JSClassExoticMethods d_node_exotic;
+extern JSClassExoticMethods d_node_exotic, d_style_exotic;
+/* The longhands (libgarb's garb_prop_t indices) the property `name` stands
+ * for, its `length` bytes compared ASCII case folded, into `props` (at
+ * least D_LONGHANDS_MAX): a longhand stands for itself, a shorthand, alias
+ * or flow-relative name for what libgarb sets when it is given a CSS-wide
+ * keyword (view.c's table, learned once). 0 for a name libgarb does not
+ * read, or one that sets more than D_LONGHANDS_MAX; -1 on no memory. */
+#define D_LONGHANDS_MAX 16
+int32_t d_longhands(os64_dom_t *dom, const char *name, size_t length, int32_t *props);
 /* ── Custom elements (custom.c; docs/design/pending/CUSTOM_ELEMENTS.md) ──
  * The row: CustomElementRegistry, window.customElements and the document's
  * listener. HTMLElement's constructor, which the interfaces row makes and

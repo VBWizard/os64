@@ -700,7 +700,9 @@ static int install_binding(os64_dom_t *dom, JSContext *ctx)
     os64_dom_cluster_t *cluster = dom->cluster;
     const JSClassDef anchor_definition = {.class_name = "DOMBinding", .finalizer = clear_opaque};
     const JSClassDef node_definition = {.class_name = "Node", .finalizer = clear_opaque, .exotic = &d_node_exotic};
-    const JSClassDef style_definition = {.class_name = "CSSStyleDeclaration", .finalizer = clear_opaque};
+    const JSClassDef style_definition = {
+        .class_name = "CSSStyleDeclaration", .finalizer = clear_opaque, .exotic = &d_style_exotic
+    };
     const JSClassDef token_definition = {
         .class_name = "DOMTokenList", .finalizer = clear_opaque, .exotic = &d_token_exotic
     };
