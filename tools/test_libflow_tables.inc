@@ -353,6 +353,28 @@ static void fixed_table_cases(void)
         "          cell td 108 8 8 20\n"
         "            line 108 8 8 20 base 14\n"
         "              text \"b\" 108 10 8 16 serif 16\n");
+    // So does a spanning cell: a border-box 300px over two columns makes a
+    // 300 table, not 300 and its padding.
+    cascade_layout_case("tables: an automatic table reads a border-box spanning cell's width as its border box",
+        "<!doctype html><style>table{border-spacing:0}td{padding:0}</style>"
+        "<table><tr><td colspan=2 style='box-sizing:border-box;width:300px;padding:0 10px'>a"
+        "<tr><td>b<td>c</table>", 600,
+        "page 600 56\n"
+        "block html 0 0 600 56\n"
+        "  block body 8 8 584 40\n"
+        "    table table 8 8 300 40\n"
+        "      row-group tbody 8 8 300 40\n"
+        "        row tr 8 8 300 20\n"
+        "          cell td 8 8 300 20\n"
+        "            line 18 8 280 20 base 14\n"
+        "              text \"a\" 18 10 8 16 serif 16\n"
+        "        row tr 8 28 300 20\n"
+        "          cell td 8 28 150 20\n"
+        "            line 8 28 150 20 base 14\n"
+        "              text \"b\" 8 30 8 16 serif 16\n"
+        "          cell td 158 28 150 20\n"
+        "            line 158 28 150 20 base 14\n"
+        "              text \"c\" 158 30 8 16 serif 16\n");
     // Set widths wider than the table widen it: 80 and 80 in a 100px table
     // make it 160.
     cascade_layout_case("fixed tables: set columns wider than the table widen it",
@@ -369,7 +391,7 @@ static void fixed_table_cases(void)
         "          cell td 88 8 80 20\n"
         "            line 88 8 80 20 base 14\n"
         "              text \"b\" 88 10 8 16 serif 16\n");
-    // Every column set and the table wider: the 200 over goes to them as
+    // Every column set and the table wider: the 150 over goes to them as
     // they are wide, 50+100 of 300 becoming 100 and 200.
     cascade_layout_case("fixed tables: every column set, the room left goes to them as they are wide",
         FIXED_SHEET "<table style=width:300px><tr><td style=width:50px>a<td style=width:100px>b</table>", 600,

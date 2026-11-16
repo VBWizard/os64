@@ -6923,9 +6923,9 @@ static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
         Intr ci = intrinsic(l, gc->cell);
         const flow_style_t *s = gc->cell->style;
         int64_t gaps = (int64_t)(gc->cols - 1) * hsp;
-        int64_t cmax = ci.max;
-        if (s->width.kind == FLOW_LENGTH_PX)
-            cmax = max64(ci.min, s->width.value + hframe(gc->cell, 0));
+        int64_t cmax = ci.max, set = cell_set_width(gc->cell);
+        if (set >= 0)
+            cmax = max64(ci.min, set);
         spread(cols, gc->col, gc->cols, ci.min - gaps, false);
         spread(cols, gc->col, gc->cols, cmax - gaps, true);
         if (s->width.kind == FLOW_LENGTH_PERCENT)
