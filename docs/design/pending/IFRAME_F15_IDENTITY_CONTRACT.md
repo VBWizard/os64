@@ -149,6 +149,11 @@ measurement alternative. This design PR claims no new runtime proof.
 | C3 — Target and exposure publication | Stable contexts publish a named target/generation/origin relationship; exposure history vetoes release without serving as a reachability certificate. | F4c/d define the actual snapshots, cache keys, unavailable/discarded answers and stale-request checks. F15 cannot infer them from binding addresses or URLs. |
 | C4 — Ownership of required settings/creation services | Give engine traces, native exports, invocation loans and allocation owners separate release obligations. | Audit who keeps each entry/incumbent/report/creator alive, including late native wrapping and finalizers, before selecting pins or releasing a root. Existing callback/registry layouts remain owned by their implementing slices. |
 
+The concrete [export-lifetime proposal](IFRAME_F15_EXPORT_LIFETIMES.md)
+recommends migration semantics for C1/C2/C4, including tickets, scoped loans,
+compatibility retention and bounded refusal. It leaves C3 as required F4 input;
+its interfaces and implementation are still subject to review.
+
 Review of this brief records the proposed direction and unresolved decisions.
 It does not complete C's implementation gate, authorize D/E, or settle the
 F4c/d contract by assumption. Those stages need the agreed concrete interfaces
