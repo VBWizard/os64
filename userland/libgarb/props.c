@@ -118,6 +118,7 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_BORDER_SPACING] = {"border-spacing", true, false},
     [GARB_BORDER_COLLAPSE] = {"border-collapse", true, false},
     [GARB_CAPTION_SIDE] = {"caption-side", true, false},
+    [GARB_TABLE_LAYOUT] = {"table-layout", false, false},
     [GARB_FLOAT] = {"float", false, false},
     [GARB_CLEAR] = {"clear", false, false},
     [GARB_OVERFLOW_X] = {"overflow-x", false, false},
@@ -498,6 +499,7 @@ static const char *const kImageRendering[] = {
 static const char *const kListPosition[] = {"inside", "outside", NULL};
 static const char *const kCollapse[] = {"collapse", "separate", NULL};
 static const char *const kCaption[] = {"top", "bottom", NULL};
+static const char *const kTableLayout[] = {"auto", "fixed", NULL};
 static const char *const kFloat[] = {"left", "right", "none", "inline-start", "inline-end", NULL};
 static const char *const kClear[] = {"none", "left", "right", "both", "inline-start",
                                      "inline-end", NULL};
@@ -2444,6 +2446,7 @@ static const Longhand kLonghands[] = {
     {GARB_LIST_STYLE_POSITION, G_KEYWORDS, kListPosition},
     {GARB_LIST_STYLE_IMAGE, G_LIST_IMAGE, NULL}, {GARB_BORDER_SPACING, G_SPACING, NULL},
     {GARB_BORDER_COLLAPSE, G_KEYWORDS, kCollapse}, {GARB_CAPTION_SIDE, G_KEYWORDS, kCaption},
+    {GARB_TABLE_LAYOUT, G_KEYWORDS, kTableLayout},
     {GARB_FLOAT, G_KEYWORDS, kFloat}, {GARB_CLEAR, G_KEYWORDS, kClear},
     {GARB_OVERFLOW_X, G_KEYWORDS, kOverflow}, {GARB_OVERFLOW_Y, G_KEYWORDS, kOverflow},
     // Position 3 § 3.1. The insets are the margins' grammar exactly — auto

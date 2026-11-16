@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixed table layout</title>
+<!--
+  CSS 2.1 § 17.5.2.1: a table with table-layout: fixed and a width of its
+  own takes its columns from that width and its first row, never from what
+  the cells hold. The page shapes it as a code-hosting site's file list does:
+  a name column of 40%, a date column of 136px, and a message column with
+  what is left, whose long lines are cut with "..." and never push the date
+  column out of the box.
+
+  What to look for: both tables are as wide as the grey box and line up with
+  the box beside them. The second table is the same with table-layout: auto,
+  for comparison: there the long message decides the width, and the table
+  runs past the box into the column beside it.
+-->
+<style>
+  * { box-sizing: border-box; }
+  body { font: 15px sans-serif; margin: 16px; }
+  .page { display: flex; gap: 24px; }
+  .main { flex: 1 1 0; min-width: 0; background: #eee; padding: 8px; }
+  .side { width: 220px; background: #cde; padding: 8px; }
+  table { width: 100%; border: 1px solid #888; border-spacing: 0; margin-bottom: 16px; }
+  .fixed { table-layout: fixed; }
+  td, th { border-top: 1px solid #ccc; padding: 6px 0 6px 12px; text-align: left; }
+  .name { width: 40%; }
+  .date { width: 136px; text-align: right; padding-right: 12px; }
+  .msg div { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+</style>
+<div class="page">
+  <div class="main">
+    <p>table-layout: fixed</p>
+    <table class="fixed">
+      <tr><th class="name">Name</th><th>Last commit message</th><th class="date">Date</th></tr>
+      <tr><td>kernel</td><td class="msg"><div>Add network bars and a synchronized stay-on-top control to the instruments window</div></td><td class="date">last week</td></tr>
+      <tr><td>userland</td><td class="msg"><div>Checkpoint: fourteen stale host harnesses repaired, the rule moves to shared</div></td><td class="date">2 months ago</td></tr>
+    </table>
+    <p>table-layout: auto (for comparison)</p>
+    <table>
+      <tr><th class="name">Name</th><th>Last commit message</th><th class="date">Date</th></tr>
+      <tr><td>kernel</td><td class="msg"><div>Add network bars and a synchronized stay-on-top control to the instruments window</div></td><td class="date">last week</td></tr>
+    </table>
+  </div>
+  <div class="side">About: the column the table must not reach into.</div>
+</div>

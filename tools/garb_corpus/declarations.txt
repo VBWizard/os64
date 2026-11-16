@@ -367,6 +367,12 @@ IN: border-collapse: collapse
 OUT: border-collapse: collapse
 IN: caption-side: bottom
 OUT: caption-side: bottom
+IN: table-layout: fixed
+OUT: table-layout: fixed
+IN: table-layout: AUTO
+OUT: table-layout: auto
+IN: table-layout: 100px
+OUT: invalid
 
 # ── Backgrounds (Backgrounds 3 § 3) ──
 IN: background: red

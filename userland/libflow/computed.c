@@ -1408,6 +1408,7 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
         puts_(&o, s->border_collapse == FLOW_COLLAPSE_BORDERS ? "collapse" : "separate");
         break;
     case GARB_CAPTION_SIDE: puts_(&o, s->caption_side == FLOW_CAPTION_BOTTOM ? "bottom" : "top"); break;
+    case GARB_TABLE_LAYOUT: puts_(&o, s->table_layout == FLOW_TABLE_FIXED ? "fixed" : "auto"); break;
     case GARB_FLOAT: WORD(&o, kFloat, s->float_side); break;
     case GARB_CLEAR: WORD(&o, kClear, s->clear); break;
     case GARB_OVERFLOW_X: WORD(&o, kOverflow, s->overflow_x); break;

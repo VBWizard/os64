@@ -248,6 +248,272 @@ static void table_cases(void)
         "              atomic img 48 8 40 30\n");
 }
 
+// CSS 2.1 §17.5.2.1's fixed layout: the columns from the table's width and
+// its first row, never from the cells' content. Spacing and padding are 0
+// here unless a case says otherwise, so a column's width is its cell's.
+#define FIXED_SHEET "<!doctype html><style>table{table-layout:fixed;border-spacing:0}td{padding:0}</style>"
+static void fixed_table_cases(void)
+{
+    // GitHub's file list, the shape: 40% of 400 is 160, 100px is 100, and
+    // the column nothing sets has the 140 left, its long word overflowing
+    // it rather than widening the table.
+    cascade_layout_case("fixed tables: the first row's widths, the rest to the column nothing sets",
+        FIXED_SHEET "<table style=width:400px><tr><td style=width:40%>a<td>wwwwwwwwwwwwwwwwwwwwwwwwwwwwww"
+        "<td style=width:100px>c</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 400 20\n"
+        "      row-group tbody 8 8 400 20\n"
+        "        row tr 8 8 400 20\n"
+        "          cell td 8 8 160 20\n"
+        "            line 8 8 160 20 base 14\n"
+        "              text \"a\" 8 10 8 16 serif 16\n"
+        "          cell td 168 8 140 20\n"
+        "            line 168 8 140 20 base 14\n"
+        "              text \"wwwwwwwwwwwwwwwwwwwwwwwwwwwwww\" 168 10 360 16 serif 16\n"
+        "          cell td 308 8 100 20\n"
+        "            line 308 8 100 20 base 14\n"
+        "              text \"c\" 308 10 8 16 serif 16\n");
+    // A hidden cell takes no column: the first row's visible cells are the
+    // three columns, as the body's are.
+    cascade_layout_case("fixed tables: a hidden first-row cell sets nothing",
+        FIXED_SHEET "<table style=width:400px><tr><td colspan=2 style=display:none;width:100%>x"
+        "<td style=width:40%>a<td>b<td style=width:100px>c<tr><td>d<td>e<td>f</table>", 600,
+        "page 600 56\n"
+        "block html 0 0 600 56\n"
+        "  block body 8 8 584 40\n"
+        "    table table 8 8 400 40\n"
+        "      row-group tbody 8 8 400 40\n"
+        "        row tr 8 8 400 20\n"
+        "          cell td 8 8 160 20\n"
+        "            line 8 8 160 20 base 14\n"
+        "              text \"a\" 8 10 8 16 serif 16\n"
+        "          cell td 168 8 140 20\n"
+        "            line 168 8 140 20 base 14\n"
+        "              text \"b\" 168 10 8 16 serif 16\n"
+        "          cell td 308 8 100 20\n"
+        "            line 308 8 100 20 base 14\n"
+        "              text \"c\" 308 10 8 16 serif 16\n"
+        "        row tr 8 28 400 20\n"
+        "          cell td 8 28 160 20\n"
+        "            line 8 28 160 20 base 14\n"
+        "              text \"d\" 8 30 8 16 serif 16\n"
+        "          cell td 168 28 140 20\n"
+        "            line 168 28 140 20 base 14\n"
+        "              text \"e\" 168 30 8 16 serif 16\n"
+        "          cell td 308 28 100 20\n"
+        "            line 308 28 100 20 base 14\n"
+        "              text \"f\" 308 30 4 16 serif 16\n");
+    // A border-box cell's width holds its padding: 100 and the 200 left; a
+    // content-box one's 100 grows by its 20 of padding, to 120 and 180.
+    cascade_layout_case("fixed tables: a border-box cell's width is its border box",
+        FIXED_SHEET "<table style=width:300px><tr><td style='box-sizing:border-box;width:100px;padding:0 10px'>a"
+        "<td>b</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 300 20\n"
+        "      row-group tbody 8 8 300 20\n"
+        "        row tr 8 8 300 20\n"
+        "          cell td 8 8 100 20\n"
+        "            line 18 8 80 20 base 14\n"
+        "              text \"a\" 18 10 8 16 serif 16\n"
+        "          cell td 108 8 200 20\n"
+        "            line 108 8 200 20 base 14\n"
+        "              text \"b\" 108 10 8 16 serif 16\n");
+    cascade_layout_case("fixed tables: a content-box cell's width gains its padding",
+        FIXED_SHEET "<table style=width:300px><tr><td style='width:100px;padding:0 10px'>a<td>b</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 300 20\n"
+        "      row-group tbody 8 8 300 20\n"
+        "        row tr 8 8 300 20\n"
+        "          cell td 8 8 120 20\n"
+        "            line 18 8 100 20 base 14\n"
+        "              text \"a\" 18 10 8 16 serif 16\n"
+        "          cell td 128 8 180 20\n"
+        "            line 128 8 180 20 base 14\n"
+        "              text \"b\" 128 10 8 16 serif 16\n");
+    // A percentage is read the same way: 50% of 300 is 150, and the
+    // content-box cell's 20 of padding makes its column 170, leaving 130.
+    cascade_layout_case("fixed tables: a content-box percentage cell's width gains its padding",
+        FIXED_SHEET "<table style=width:300px><tr><td style='width:50%;padding:0 10px'>a<td>b</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 300 20\n"
+        "      row-group tbody 8 8 300 20\n"
+        "        row tr 8 8 300 20\n"
+        "          cell td 8 8 170 20\n"
+        "            line 18 8 150 20 base 14\n"
+        "              text \"a\" 18 10 8 16 serif 16\n"
+        "          cell td 178 8 130 20\n"
+        "            line 178 8 130 20 base 14\n"
+        "              text \"b\" 178 10 8 16 serif 16\n");
+    // A border-box percentage holds its padding, and is never less than
+    // it: 50% is 150 with the padding inside; 5% is 15, under the 20 of
+    // padding, so the column is 20.
+    cascade_layout_case("fixed tables: a border-box percentage cell is its border box, at least its padding",
+        FIXED_SHEET "<table style=width:300px><tr><td style='box-sizing:border-box;width:50%;padding:0 10px'>a"
+        "<td style='box-sizing:border-box;width:5%;padding:0 10px'><td>c</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 300 20\n"
+        "      row-group tbody 8 8 300 20\n"
+        "        row tr 8 8 300 20\n"
+        "          cell td 8 8 150 20\n"
+        "            line 18 8 130 20 base 14\n"
+        "              text \"a\" 18 10 8 16 serif 16\n"
+        "          cell td 158 8 20 20\n"
+        "          cell td 178 8 130 20\n"
+        "            line 178 8 130 20 base 14\n"
+        "              text \"c\" 178 10 8 16 serif 16\n");
+    // The automatic layout reads a cell's width the same way: a border-box
+    // 100px cell wants 100, not 100 and its padding, and the table is 108.
+    cascade_layout_case("tables: an automatic table reads a border-box cell's width as its border box",
+        "<!doctype html><style>table{border-spacing:0}td{padding:0}</style>"
+        "<table><tr><td style='box-sizing:border-box;width:100px;padding:0 10px'>a<td>b</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 108 20\n"
+        "      row-group tbody 8 8 108 20\n"
+        "        row tr 8 8 108 20\n"
+        "          cell td 8 8 100 20\n"
+        "            line 18 8 80 20 base 14\n"
+        "              text \"a\" 18 10 8 16 serif 16\n"
+        "          cell td 108 8 8 20\n"
+        "            line 108 8 8 20 base 14\n"
+        "              text \"b\" 108 10 8 16 serif 16\n");
+    // So does a spanning cell: a border-box 300px over two columns makes a
+    // 300 table, not 300 and its padding.
+    cascade_layout_case("tables: an automatic table reads a border-box spanning cell's width as its border box",
+        "<!doctype html><style>table{border-spacing:0}td{padding:0}</style>"
+        "<table><tr><td colspan=2 style='box-sizing:border-box;width:300px;padding:0 10px'>a"
+        "<tr><td>b<td>c</table>", 600,
+        "page 600 56\n"
+        "block html 0 0 600 56\n"
+        "  block body 8 8 584 40\n"
+        "    table table 8 8 300 40\n"
+        "      row-group tbody 8 8 300 40\n"
+        "        row tr 8 8 300 20\n"
+        "          cell td 8 8 300 20\n"
+        "            line 18 8 280 20 base 14\n"
+        "              text \"a\" 18 10 8 16 serif 16\n"
+        "        row tr 8 28 300 20\n"
+        "          cell td 8 28 150 20\n"
+        "            line 8 28 150 20 base 14\n"
+        "              text \"b\" 8 30 8 16 serif 16\n"
+        "          cell td 158 28 150 20\n"
+        "            line 158 28 150 20 base 14\n"
+        "              text \"c\" 158 30 8 16 serif 16\n");
+    // Set widths wider than the table widen it: 80 and 80 in a 100px table
+    // make it 160.
+    cascade_layout_case("fixed tables: set columns wider than the table widen it",
+        FIXED_SHEET "<table style=width:100px><tr><td style=width:80px>a<td style=width:80px>b</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 160 20\n"
+        "      row-group tbody 8 8 160 20\n"
+        "        row tr 8 8 160 20\n"
+        "          cell td 8 8 80 20\n"
+        "            line 8 8 80 20 base 14\n"
+        "              text \"a\" 8 10 8 16 serif 16\n"
+        "          cell td 88 8 80 20\n"
+        "            line 88 8 80 20 base 14\n"
+        "              text \"b\" 88 10 8 16 serif 16\n");
+    // Every column set and the table wider: the 150 over goes to them as
+    // they are wide, 50+100 of 300 becoming 100 and 200.
+    cascade_layout_case("fixed tables: every column set, the room left goes to them as they are wide",
+        FIXED_SHEET "<table style=width:300px><tr><td style=width:50px>a<td style=width:100px>b</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 300 20\n"
+        "      row-group tbody 8 8 300 20\n"
+        "        row tr 8 8 300 20\n"
+        "          cell td 8 8 100 20\n"
+        "            line 8 8 100 20 base 14\n"
+        "              text \"a\" 8 10 8 16 serif 16\n"
+        "          cell td 108 8 200 20\n"
+        "            line 108 8 200 20 base 14\n"
+        "              text \"b\" 108 10 8 16 serif 16\n");
+    // A `col`'s width wins over the first row's cell.
+    cascade_layout_case("fixed tables: a col sets its column before the first row does",
+        FIXED_SHEET "<table style=width:300px><col style=width:50px><tr><td style=width:200px>a<td>b</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 300 20\n"
+        "      column-group colgroup 8 8 50 20\n"
+        "        column col 8 8 50 20\n"
+        "      row-group tbody 8 8 300 20\n"
+        "        row tr 8 8 300 20\n"
+        "          cell td 8 8 50 20\n"
+        "            line 8 8 50 20 base 14\n"
+        "              text \"a\" 8 10 8 16 serif 16\n"
+        "          cell td 58 8 250 20\n"
+        "            line 58 8 250 20 base 14\n"
+        "              text \"b\" 58 10 8 16 serif 16\n");
+    // Only the first row counts: the second row's wide cell sets nothing.
+    cascade_layout_case("fixed tables: only the first row sets widths",
+        FIXED_SHEET "<table style=width:300px><tr><td>a<td>b<tr><td style=width:250px>c<td>d</table>", 600,
+        "page 600 56\n"
+        "block html 0 0 600 56\n"
+        "  block body 8 8 584 40\n"
+        "    table table 8 8 300 40\n"
+        "      row-group tbody 8 8 300 40\n"
+        "        row tr 8 8 300 20\n"
+        "          cell td 8 8 150 20\n"
+        "            line 8 8 150 20 base 14\n"
+        "              text \"a\" 8 10 8 16 serif 16\n"
+        "          cell td 158 8 150 20\n"
+        "            line 158 8 150 20 base 14\n"
+        "              text \"b\" 158 10 8 16 serif 16\n"
+        "        row tr 8 28 300 20\n"
+        "          cell td 8 28 150 20\n"
+        "            line 8 28 150 20 base 14\n"
+        "              text \"c\" 8 30 8 16 serif 16\n"
+        "          cell td 158 28 150 20\n"
+        "            line 158 28 150 20 base 14\n"
+        "              text \"d\" 158 30 8 16 serif 16\n");
+    // An auto width keeps the automatic layout, content and all.
+    cascade_layout_case("fixed tables: an auto width lays out automatically",
+        FIXED_SHEET "<table><tr><td>aaaa<td>b</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 40 20\n"
+        "      row-group tbody 8 8 40 20\n"
+        "        row tr 8 8 40 20\n"
+        "          cell td 8 8 32 20\n"
+        "            line 8 8 32 20 base 14\n"
+        "              text \"aaaa\" 8 10 32 16 serif 16\n"
+        "          cell td 40 8 8 20\n"
+        "            line 40 8 8 20 base 14\n"
+        "              text \"b\" 40 10 8 16 serif 16\n");
+    // Shrink-to-fit asks a fixed table for its set width, not its content:
+    // the float is 200 wide around a 200px table of a long word.
+    cascade_layout_case("fixed tables: a float around one is as wide as its set width",
+        FIXED_SHEET "<div style=float:left><table style=width:200px><tr><td>wwwwwwwwwwwwwwwwwwwwwwwwwwwwww"
+        "</table></div>", 600,
+        "page 600 28\n"
+        "block html 0 0 600 28\n"
+        "  block body 8 8 584 0\n"
+        "    line 8 8 584 0 base 14\n"
+        "    block div 8 8 200 20 float-left\n"
+        "      table table 8 8 200 20\n"
+        "        row-group tbody 8 8 200 20\n"
+        "          row tr 8 8 200 20\n"
+        "            cell td 8 8 200 20\n"
+        "              line 8 8 200 20 base 14\n"
+        "                text \"wwwwwwwwwwwwwwwwwwwwwwwwwwwwww\" 8 10 360 16 serif 16\n");
+}
+
 static FLayout *layout_raw(const char *html, int32_t width, os64_html_document_t **doc,
                            os64_page_t **page, FStyles **styles, FBoxes **boxes)
 {
