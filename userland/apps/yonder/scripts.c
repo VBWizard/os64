@@ -2592,7 +2592,8 @@ bool yonder_scripts_media_session(yonder_scripts_t *s, os64_dom_media_session_t 
         return false;
     // A page with no binding (no script, no media element), or one whose
     // binding was retired, has nothing to say: stopped, an answer, not a
-    // refusal.
+    // refusal. A binding with no session (the Modern Web off) answers so
+    // itself.
     if (s->dead || s->dom == NULL)
         return true;
     return os64_dom_media_session_state(s->dom, out);

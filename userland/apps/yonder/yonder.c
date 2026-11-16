@@ -10312,6 +10312,10 @@ static void keys_turn(void)
         s_keys_refused = host;
     uint32_t key;
     while (yonder_keys_take(&key)) {
+        // Each press against the page as it stands now: the last one's
+        // tail may have navigated.
+        host = g.page.scripts;
+        known = host != NULL && yonder_scripts_media_session(host, &session);
         os64_dom_media_session_action_t action;
         switch (key) {
         case OS64_MEDIA_KEY_PLAY: action = OS64_DOM_MEDIA_SESSION_PLAY; break;
@@ -10330,10 +10334,20 @@ static void keys_turn(void)
         if (acts)
             yonder_scripts_activate(host);
         os64_js_outcome_t out;
+        const os64_html_document_t *doc = page_doc(&g.page);
         int64_t began = task_begin(host);
         (void)yonder_scripts_media_session_action(host, action, &out);
         task_said(host, true, "media keys", &out, began);
+        // A task's tail, as script_turn's: the handler's changes built,
+        // then what it asked for (a navigation, a focus), which would
+        // otherwise wait for some later task.
+        if (script_rebuild()) {
+            asks_perform(g.page.scripts, doc, true);
+            if (page_doc(&g.page) == doc)
+                (void)pointer_turn();
+        }
     }
+    host = g.page.scripts;
     if (!yonder_keys_opened())
         return;
     if (host == NULL)

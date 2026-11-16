@@ -164,8 +164,9 @@ bool os64_dom_media_control(os64_dom_t *dom, const os64_html_node_t *node, os64_
  * not muted, a volume, no error): PLAYING when one is not paused, or
  * navigator.mediaSession.playbackState is "playing" and one has played;
  * else PAUSED when one that played is paused, or playbackState is
- * "paused" and one has played; else STOPPED.
- * False on a page with no session (no binding, the Modern Web off). */
+ * "paused" and one has played; else STOPPED. A page with no session (the
+ * Modern Web off) answers STOPPED, wanting none. False only when the
+ * binding cannot answer now (recovering, or no longer active). */
 bool os64_dom_media_session_state(os64_dom_t *dom, os64_dom_media_session_t *out);
 /* A media key pressed, as a host task (`outcome` its verdict): the page's
  * handler for the action, given {action}; with none, the browser's own

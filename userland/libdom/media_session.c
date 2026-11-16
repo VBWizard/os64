@@ -20,7 +20,6 @@
  * keeps it alive and lets it go. */
 
 static JSClassID session_slot, metadata_slot;
-static int session_mark;
 
 static const char *const kActions[] = {
     "play", "pause", "seekbackward", "seekforward", "previoustrack", "nexttrack", "skipad", "stop", "seekto",
@@ -34,6 +33,7 @@ static const char *const kStates[] = {"none", "paused", "playing"};
 enum { S_NONE, S_PAUSED, S_PLAYING };
 
 struct DMediaSession {
+    os64_dom_t *dom;            /* the binding whose session this is */
     DScheduledCallback handlers[ACTIONS];
     uint32_t scripts[ACTIONS];
     os64_dom_t *owners[ACTIONS];
@@ -325,8 +325,11 @@ static JSValue session_member(JSContext *ctx, JSValueConst self, int argc, JSVal
             return JS_ThrowTypeError(ctx, "Expected a Navigator");
         return JS_DupValue(ctx, ms->object->value);
     }
-    if (JS_GetOpaque(self, os64_js_class_id(&session_slot)) == NULL)
-        return JS_ThrowTypeError(ctx, "Expected a MediaSession");
+    /* The receiver's session, which a method borrowed from another
+     * window's prototype must act on, not its own binding's. */
+    ms = JS_GetOpaque(self, os64_js_class_id(&session_slot));
+    if (ms == NULL) return JS_ThrowTypeError(ctx, "Expected a MediaSession");
+    dom = ms->dom;
     switch (magic) {
     case S_METADATA: {
         if (!set) return JS_GetPropertyStr(ctx, ms->holder->value, "metadata");
@@ -422,6 +425,7 @@ int d_media_session_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global
     }
     os64_memset(ms, 0, sizeof(*ms));
     for (int i = 0; i < ACTIONS; i++) ms->handlers[i] = (DScheduledCallback)D_SCHEDULED_CALLBACK_INIT;
+    ms->dom = dom;
     dom->media_session = ms;
     JSClassID session_id = os64_js_class_id(&session_slot), metadata_id = os64_js_class_id(&metadata_slot);
     JSValue session_prototype;
@@ -449,7 +453,7 @@ int d_media_session_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global
     JSValue session = JS_NewObjectClass(ctx, (int)session_id);
     ms->object = d_retain(dom, ctx, session);
     if (ms->object == NULL) return -1;
-    JS_SetOpaque(session, &session_mark);
+    JS_SetOpaque(session, ms);
     JSValue holder = JS_NewObject(ctx);
     ms->holder = d_retain(dom, ctx, holder);
     if (ms->holder == NULL || JS_SetPropertyStr(ctx, holder, "metadata", JS_NULL) < 0) return -1;
@@ -462,11 +466,15 @@ int d_media_session_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global
     return done;
 }
 
+/* The handlers let go, and the session object's opaque cleared: another
+ * window's script may still hold the object after this binding has gone,
+ * and its next call must be refused, not reach the memory freed below. */
 void d_media_session_drain(os64_dom_t *dom)
 {
     struct DMediaSession *ms = dom->media_session;
     if (ms == NULL) return;
     for (int i = 0; i < ACTIONS; i++) d_scheduled_clear(dom, &ms->handlers[i]);
+    if (ms->object != NULL && JS_IsObject(ms->object->value)) JS_SetOpaque(ms->object->value, NULL);
 }
 
 /* After the runtime is gone: native memory only. The drain has let go of
@@ -483,7 +491,9 @@ void d_media_session_free(os64_dom_t *dom)
 bool os64_dom_media_session_state(os64_dom_t *dom, os64_dom_media_session_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
-    if (dom == NULL || !d_delivery_active(dom) || !dom->options.modern || dom->media_session == NULL) return false;
+    if (dom == NULL || !d_delivery_active(dom)) return false;
+    /* No session (the Modern Web off) is an answer: stopped, wanting none. */
+    if (!dom->options.modern || dom->media_session == NULL) return true;
     struct DMediaSession *ms = dom->media_session;
     bool playing = false, paused_after_play = false, played = false;
     d_media_session_facts(dom, &playing, &paused_after_play, &played);
