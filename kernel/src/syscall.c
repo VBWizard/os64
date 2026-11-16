@@ -57,6 +57,7 @@
 #include "bell.h"                    // bell_wait / bell_ring — the object behind HANDLE_BELL
 #include "micros.h"                  // micros_now — the clock micros() hands out
 #include "audio/audio.h"             // audio_write and the reads — the object behind HANDLE_AUDIO
+#include "audio/media_session.h"     // a media-key session — the object behind HANDLE_MEDIA_KEYS
 #include "os64/audio.h"              // OS64_AUDIO_* — the answers ring 3 is given
 
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
@@ -1557,6 +1558,22 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 			return copied;
 		}
 
+		case HANDLE_MEDIA_KEYS:
+		{
+			// The program's state, one word (os64/mediakeys.h), applied
+			// whole or refused whole. Copied in before the session's lock
+			// is taken: a user page may fault, and nothing under that lock
+			// may.
+			char word[32];
+			if (length > sizeof(word))
+				return SYSCALL_RESULT_INVALID;   // longer than any state's word
+			if (!copy_user_buffer(user_buffer, word, length))
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			if (media_session_write((media_session_t *)h->object, word, length) != 0)
+				return SYSCALL_RESULT_INVALID;
+			return length;
+		}
+
 		case HANDLE_BELL:
 			// A ring (bell.h). What the bytes say is not looked at: a bell
 			// carries one bit, and the write is it. Refused only on a bell
@@ -1972,7 +1989,7 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 		    h->type != HANDLE_NET_ICMP && h->type != HANDLE_NET_LISTENER &&
 		    h->type != HANDLE_PTY_MASTER &&   // a STREAM master; GRID refuses the read itself
 		    h->type != HANDLE_GLASS && h->type != HANDLE_BELL &&
-		    h->type != HANDLE_AUDIO)
+		    h->type != HANDLE_AUDIO && h->type != HANDLE_MEDIA_KEYS)
 			return SYSCALL_RESULT_INVALID;
 		deadline = syscall_io_deadline(timeout_ms);
 	}
@@ -2175,6 +2192,36 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 				return SYSCALL_RESULT_BAD_USER_DATA;
 			}
 			return (uint64_t)got;
+		}
+
+		case HANDLE_MEDIA_KEYS:
+		{
+			// The next press (os64/mediakeys.h), one whole record a read.
+			os64_media_key_t key;
+			if (length < sizeof(key))
+				return SYSCALL_RESULT_INVALID;   // never part of a record
+			got = media_session_read((media_session_t *)h->object, &key, deadline);
+			if (got == MEDIA_SESSION_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
+			if (got == MEDIA_SESSION_ERR_INTERRUPTED)
+			{
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
+				*die = true;   // unpin first, then the death: the wrapper does both
+				return 0;
+			}
+			if (got == MEDIA_SESSION_ERR_CLOSED)
+				return 0;   // a sibling closed the handle under the wait: no press will come
+			if (got < 0)
+				return (uint64_t)(int64_t)got;   // OS64_MEDIA_KEYS_BUSY: another thread is already waiting here
+			// Copied out here and not by the common tail, so that a press a
+			// bad pointer cost is counted as lost instead of vanishing.
+			if (!copy_to_user_buffer(user_buffer, &key, sizeof(key)))
+			{
+				media_session_undelivered((media_session_t *)h->object);
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			}
+			return sizeof(key);
 		}
 
 		case HANDLE_BELL:

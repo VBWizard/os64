@@ -122,6 +122,10 @@ void devfs_mount(void);
 //             read of it costs a syscall and no borrowed stack. The stream
 //             and the tap are one open at a time: a second is HANDLE_NONE
 //             with *refusal set to OS64_AUDIO_BUSY.
+//   "/mediakeys" "u" gets HANDLE_MEDIA_KEYS and a new session
+//             (audio/media_session.h): its read waits for a press. Past the
+//             machine's sessions it is HANDLE_NONE with *refusal set to
+//             OS64_MEDIA_KEYS_FULL.
 //
 // *refusal is written only when the answer is HANDLE_NONE and the kind has a
 // reason of its own to give; the caller presets it to its ordinary refusal.

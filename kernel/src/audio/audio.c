@@ -614,6 +614,23 @@ bool audio_control(const char *text, size_t length)
 	return done;
 }
 
+audio_toggle_t audio_toggle(void)
+{
+	audio_toggle_t did = AUDIO_TOGGLE_REFUSED;
+	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
+	if (audio_stream_pause(&s_stream))
+		did = AUDIO_TOGGLE_PAUSED;
+	else if (audio_stream_resume(&s_stream))
+		did = AUDIO_TOGGLE_RESUMED;
+	if (did != AUDIO_TOGGLE_REFUSED)
+	{
+		republish_locked();
+		nudge_sink_locked();
+	}
+	spinlock_release_irqrestore(&s_lock, flags);
+	return did;
+}
+
 bool audio_volume_write(const char *text, size_t length)
 {
 	char word[8], extra[4];

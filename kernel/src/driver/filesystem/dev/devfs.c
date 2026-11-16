@@ -25,6 +25,7 @@
 #include "random.h"            // /dev/random: the entropy pool's door
 #include "gui/glass.h"         // /dev/glass: a viewer of the screen
 #include "audio/audio.h"       // /dev/audio and its neighbours: the sound stream
+#include "audio/media_session.h"   // /dev/mediakeys: a media-key session
 #include "os64/audio.h"
 
 // ── The node vocabulary ─────────────────────────────────────────────────────
@@ -43,7 +44,8 @@ typedef enum
 	DEV_NODE_AUDIOPOS,   // "/audiopos" — the playback position; a handle kind (its read is asked for every picture a player shows)
 	DEV_NODE_AUDIOTAP,   // "/audiotap" — what the sink was given; a handle kind (its read waits)
 	DEV_NODE_AUDIOCTL,   // "/audioctl" — pause, resume, flush, format: a line of text
-	DEV_NODE_VOLUME      // "/volume" — 0 to 100: a line of text
+	DEV_NODE_VOLUME,     // "/volume" — 0 to 100: a line of text
+	DEV_NODE_MEDIAKEYS   // "/mediakeys" — a media-key session; a handle kind (its read waits)
 } dev_node_t;
 
 // ONE table, walked by every path lookup and by readdir alike. Counted, never
@@ -68,6 +70,7 @@ static const dev_entry_t kDevNodes[] = {
 	{ "audiotap", DEV_NODE_AUDIOTAP },
 	{ "audioctl", DEV_NODE_AUDIOCTL },
 	{ "volume", DEV_NODE_VOLUME },
+	{ "mediakeys", DEV_NODE_MEDIAKEYS },
 };
 static const int kDevNodeCount = (int)(sizeof(kDevNodes) / sizeof(kDevNodes[0]));
 
@@ -146,7 +149,8 @@ static int dev_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		return -1;
 
 	// ROOT is a directory (dops), NONE does not exist, and the handle
-	// aliases (TTY, GLASS, the audio stream, its position and its tap) are
+	// aliases (TTY, GLASS, the audio stream, its position and its tap, the
+	// media keys) are
 	// answered by syscall_open before the filesystem is asked to open
 	// anything (devfs.h, THE ALIAS). One that arrives here was asked for in
 	// a mode its alias does not take, and refusing is the honest answer:
@@ -480,6 +484,20 @@ bool devfs_handle_alias(vfs_filesystem_t *fs, const char *path,
 			*refusal = why;   // OS64_AUDIO_BUSY: the stream and the tap are one open at a time
 		return true;
 	}
+	if (node == DEV_NODE_MEDIAKEYS)
+	{
+		// A session is read (its presses) and written (its state), so it
+		// is opened "u"; any other mode falls through to the ordinary open,
+		// which refuses it as a file.
+		if (mode == NULL || mode[0] != 'u' || mode[1] != '\0')
+			return false;
+		long why = -1;
+		*object = media_session_open(&why);
+		*type = *object != NULL ? HANDLE_MEDIA_KEYS : HANDLE_NONE;
+		if (*object == NULL && refusal != NULL)
+			*refusal = why;   // OS64_MEDIA_KEYS_FULL: every session the machine keeps is taken
+		return true;
+	}
 	if (node == DEV_NODE_GLASS)
 	{
 		// One viewer per open: "r" watches, "u" watches and types
@@ -523,6 +541,8 @@ void devfs_handle_alias_abandon(handle_type_t type, void *object)
 	// is what frees the name for the next open.
 	if (type == HANDLE_AUDIO && object != NULL)
 		audio_open_close((audio_open_t *)object);
+	if (type == HANDLE_MEDIA_KEYS && object != NULL)
+		media_session_close((media_session_t *)object);
 }
 
 // ── Mounting ────────────────────────────────────────────────────────────────

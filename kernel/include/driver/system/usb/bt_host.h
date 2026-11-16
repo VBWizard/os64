@@ -332,8 +332,8 @@ void bt_host_policy(bt_host_t *, uint64_t);
 // bt_host_init (which clears it). Until it is given, neither AVDTP nor
 // AVCTP is admitted or opened.
 void bt_host_audio(bt_host_t *, const bt_a2dp_ops_t *, void *);
-// Their buttons, as slot 2 holds them (bt_host_t buttons). A press does
-// nothing yet: these are where a consumer will be handed them. _take
+// Their buttons, as slot 2 holds them (bt_host_t buttons), where the
+// transport takes presses for the media keys (MEDIA_KEYS.md). _take
 // gives the oldest held and removes it (false when none). bt_host_button
 // gives the event numbered `number` (0 is the first since start-up)
 // without removing it, false once the ring no longer holds it.
