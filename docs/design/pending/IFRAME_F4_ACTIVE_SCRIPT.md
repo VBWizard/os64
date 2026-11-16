@@ -137,7 +137,8 @@ and [HostCallJobCallback](https://html.spec.whatwg.org/multipage/webappapis.html
 specify capture and restoration separately from job entry. The implementation
 uses existing GC objects to represent their source identity; it does not claim
 complete browser host integration. Imports with no active record gain current-settings API-base-URL fallback
-through the separate [import-settings opt-in](IFRAME_F4_IMPORT_SETTINGS.md). Realm-less
-custom-capability jobs, browser finalization task scheduling, remaining WebIDL conversions and
+through the separate [import-settings opt-in](IFRAME_F4_IMPORT_SETTINGS.md).
+[Neutral capability settings](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md) have a separate
+opt-in; their exception-reporting policy, browser finalization task scheduling, remaining WebIDL conversions and
 pre-member security checks remain F.4b gates. F.4c contexts/origins and F.4d
 proxy/location behavior retain their own acceptance requirements.

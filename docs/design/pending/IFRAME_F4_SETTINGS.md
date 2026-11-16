@@ -273,9 +273,10 @@ Before publishing browser settings queries, implement and prove:
   to the remaining WebIDL conversion and invocation sites,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.
-- Complete realm-less capability policy and browser finalization task scheduling. The Promise opt-in
-  supplies reaction/thenable capture, exact-record restoration and per-invocation
-  host scopes; it does not complete those remaining host algorithms.
+- Complete browser finalization task scheduling and the unresolved neutral-job
+  exception-reporting policy. The [neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md)
+  supplies actual capability current/script incumbent without inventing entry or
+  backup settings; it does not complete those remaining browser host algorithms.
 - A pre-member-check boundary that refuses missing settings, with no guessed
   bootstrap caller. Security/lifetime review precedes browser publication.
 

@@ -66,8 +66,10 @@ and [HostEnqueuePromiseJob](https://html.spec.whatwg.org/multipage/webappapis.ht
 separate capture, invocation and job entry.
 [Exact active ScriptOrModule restoration](IFRAME_F4_ACTIVE_SCRIPT.md) retains
 the registration record and pushes its synthetic activation around invocation,
-including delayed `eval` and dynamic-import attribution. Realm-less jobs with custom capability
-callbacks, browser finalization task scheduling, remaining WebIDL conversions and pre-member
+including delayed `eval` and dynamic-import attribution. The separate
+[neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md) admits actual
+capability execution settings without a job entry. Its exception-reporting
+policy, browser finalization task scheduling, remaining WebIDL conversions and pre-member
 security checks retain separate acceptance gates. Do not treat this opt-in as
 a complete HostMakeJobCallback implementation or publish WindowProxy authority
 on its strength.

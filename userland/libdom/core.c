@@ -705,6 +705,13 @@ os64_dom_cluster_t *os64_dom_cluster_create_with_import_settings(os64_js_runtime
     return os64_dom_cluster_create_with_custom_settings(runtime, limits, outcome);
 }
 
+os64_dom_cluster_t *os64_dom_cluster_create_with_neutral_promise_settings(os64_js_runtime_t *runtime,
+    const os64_dom_cluster_limits_t *limits, os64_js_outcome_t *outcome)
+{
+    if (os64_js_enable_neutral_promise_settings(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) return NULL;
+    return os64_dom_cluster_create_with_custom_settings(runtime, limits, outcome);
+}
+
 static JSValue import_base(JSContext *ctx, void *opaque)
 {
     os64_dom_t *dom = opaque;

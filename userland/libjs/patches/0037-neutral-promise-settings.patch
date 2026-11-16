@@ -1,0 +1,129 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -413,6 +413,7 @@
+     void *promise_incumbent_opaque;
+     JSHostJobIncumbent *finalization_incumbent_capture;
+     void *finalization_incumbent_opaque;
++    BOOL promise_neutral_settings;
+     JSHostImportBase *import_base;
+     void *import_base_opaque;
+     JSContext *job_callback_incumbent; /* borrowed from the executing queue entry */
+@@ -2501,6 +2502,7 @@
+ 
+ static JSContext *js_job_function_realm(JSContext *ctx, JSValueConst function);
+ static JSValue js_finrec_job(JSContext *ctx, int argc, JSValueConst *argv);
++static JSValue promise_reaction_job(JSContext *ctx, int argc, JSValueConst *argv);
+ static JSContext *js_promise_function_realm(JSContext *ctx, JSValueConst function);
+ 
+ static int JS_EnqueueJob2(JSContext *ctx, JSContext *owner, JSContext *activity,
+@@ -2584,6 +2586,17 @@
+     return 1;
+ }
+ 
++void JS_SetPromiseNeutralSettings(JSRuntime *rt, BOOL enabled)
++{
++    rt->promise_neutral_settings = enabled;
++}
++
++static BOOL js_neutral_promise_job(JSRuntime *rt, JSJobEntry *e)
++{
++    return e && rt->promise_neutral_settings && !e->owner &&
++        e->job_func == promise_reaction_job;
++}
++
+ BOOL JS_PeekJobCallbackSettings(JSRuntime *rt, JSJobGroup *group,
+                                JSContext **entry, JSContext **incumbent, JSContext **report)
+ {
+@@ -2594,7 +2607,7 @@
+        the callable's execution realm. The wrapper reports after scopes unwind. */
+     if (report)
+         *report = e && e->incumbent ? (e->job_func == js_finrec_job ? e->realm : e->owner) : NULL;
+-    return e && e->incumbent != NULL;
++    return e && (e->incumbent != NULL || js_neutral_promise_job(rt, e));
+ }
+ 
+ BOOL JS_PeekPromiseJobSettings(JSRuntime *rt, JSJobGroup *group,
+@@ -2622,6 +2635,30 @@
+ {
+     JSJobEntry *e = opaque;
+     return JS_ENGINE_CALLBACK(entry->rt, e->job_func(entry, e->argc, (JSValueConst *)e->argv));
++}
++
++/* Empty-handler reactions have no script entry. A custom capability can
++   nevertheless run code: expose its actual current/script incumbent without
++   borrowing an outer host scope or inventing an entry/backup realm. */
++static JSValue js_neutral_job_body(JSContext *ctx, JSJobEntry *e)
++{
++    JSRuntime *rt = ctx->rt;
++    if (rt->settings_depth == JS_SETTINGS_SCOPE_LIMIT)
++        return JS_ThrowInternalError(ctx, "Job settings nesting limit");
++    JSContext *entry = rt->settings_entry, *backup = rt->settings_backup;
++    JSContext *current = rt->settings_current;
++    JSSettingsFrame *script = rt->settings_script_frame;
++    rt->settings_entry = rt->settings_backup = rt->settings_current = NULL;
++    rt->settings_script_frame = NULL;
++    rt->settings_depth++;
++    JSValue result = js_job_settings_body(ctx, e);
++    assert(rt->settings_script_frame == NULL);
++    rt->settings_depth--;
++    rt->settings_script_frame = script;
++    rt->settings_current = current;
++    rt->settings_backup = backup;
++    rt->settings_entry = entry;
++    return result;
+ }
+ 
+ /* return < 0 if exception, 0 if no job pending, 1 if a job was
+@@ -2670,7 +2707,9 @@
+            after HostCallJobCallback has popped the captured incumbent. */
+         if (!JS_RunWithSettings(e->owner, e->owner, js_job_settings_body, e, &res))
+             res = JS_ThrowInternalError(e->owner, "Job settings nesting limit");
+-    } else
++    } else if (js_neutral_promise_job(rt, e))
++        res = js_neutral_job_body(ctx, e);
++    else
+         res = js_job_settings_body(ctx, e);
+     rt->job_callback_incumbent = previous_incumbent;
+     rt->job_callback_script = previous_script;
+@@ -3262,12 +3301,12 @@
+ 
+ JSContext *JS_GetCurrentContext(JSRuntime *rt)
+ {
+-    return rt && rt->settings_entry ? rt->settings_current : NULL;
++    return rt && rt->settings_depth ? rt->settings_current : NULL;
+ }
+ 
+ JSContext *JS_GetNativeCallerContext(JSRuntime *rt)
+ {
+-    return rt && rt->settings_entry && rt->native_call_contexts
++    return rt && rt->settings_depth && rt->native_call_contexts
+         ? rt->native_caller_context : NULL;
+ }
+ 
+@@ -3279,7 +3318,7 @@
+ JSContext *JS_GetIncumbentContext(JSRuntime *rt)
+ {
+     JSSettingsFrame *frame;
+-    if (!rt || !rt->settings_entry)
++    if (!rt || !rt->settings_depth)
+         return NULL;
+     frame = rt->settings_script_frame;
+     return frame && !frame->skip ? frame->context : rt->settings_backup;
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -1181,10 +1181,14 @@
+                                              void *opaque);
+ /* Read-only borrowed settings until the selected queue head is consumed.
+  * Includes Promise, finalization and prepared module-continuation jobs.
++ * Opted-in empty-handler reactions return true with null entry/incumbent/report.
+  * Optional report receives the registry realm for cleanup, otherwise entry. */
+ JS_BOOL JS_PeekJobCallbackSettings(JSRuntime *rt, JSJobGroup *group,
+                                   JSContext **entry, JSContext **incumbent, JSContext **report);
+-/* Compatibility spelling of JS_PeekJobCallbackSettings. False for legacy/neutral
++/* Enable before execution: empty-handler reactions expose actual execution
++ * settings without a job entry or fallback incumbent. Raw jobs stay unprepared. */
++void JS_SetPromiseNeutralSettings(JSRuntime *rt, JS_BOOL enabled);
++/* Compatibility spelling of JS_PeekJobCallbackSettings. False for unprepared
+  * jobs. The embedding applies lifecycle gates before executing/discarding. */
+ JS_BOOL JS_PeekPromiseJobSettings(JSRuntime *rt, JSJobGroup *group,
+                                  JSContext **entry, JSContext **incumbent);

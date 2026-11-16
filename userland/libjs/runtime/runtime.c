@@ -681,11 +681,11 @@ static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSConte
     if (runtime->failure_records_enabled) runtime->failure_job = &info;
     JSContext *entry, *incumbent;
     JSContext *report = NULL;
-    bool prepared = JS_PeekJobCallbackSettings(runtime->engine, group, &entry, &incumbent, &report) && entry;
-    SettingsCall settings = {runtime->settings_calls, prepared ? realm_for_context(runtime, entry) : NULL,
+    bool prepared = JS_PeekJobCallbackSettings(runtime->engine, group, &entry, &incumbent, &report);
+    SettingsCall settings = {runtime->settings_calls, prepared && entry ? realm_for_context(runtime, entry) : NULL,
                              runtime->active_outcome, NULL, NULL};
-    /* The engine prepares job entry and callback incumbent separately. This
-     * marker admits checked binding queries under the existing job guard. */
+    /* Admit queries under the existing job guard. Prepared neutral reactions
+     * have no entry; their invoked code can still supply current/incumbent. */
     if (prepared) runtime->settings_calls = &settings;
     int result = JS_ExecuteJobGroup(runtime->engine, group, NULL);
     if (prepared) runtime->settings_calls = settings.previous;
@@ -1229,6 +1229,15 @@ JS_PUBLIC os64_js_status_t os64_js_enable_import_settings(os64_js_runtime_t *run
     os64_js_status_t result = os64_js_enable_finalization_settings(runtime, caller_abi, outcome);
     if (result != OS64_JS_OK) return result;
     JS_SetHostImportBase(runtime->engine, import_base_current, runtime);
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_enable_neutral_promise_settings(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = os64_js_enable_import_settings(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    JS_SetPromiseNeutralSettings(runtime->engine, true);
     return OS64_JS_OK;
 }
 

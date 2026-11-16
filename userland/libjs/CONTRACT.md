@@ -1486,8 +1486,29 @@ are in the [import-settings chapter](../../docs/design/pending/IFRAME_F4_IMPORT_
 Semantic source names survive stripping and serialization; named classic-script
 reads rebind them to the embedding's supplied name. The bytecode version is 6, so
 older layouts refuse. The engine identity is
-`83e3863bc254f13fe66b3d20ae99edaac4cb1794e9f9bac2672c2fafb6330f43`.
+`944d3d773802c9c4fdaa4f0c53f84eecae8eea75f58860a4618388295518b9b5`.
 Wrapper ABI 5 and public wrapper layouts are unchanged. Rebuild consumers
 against matching prepared headers and objects. The
 [active-script chapter](../../docs/design/pending/IFRAME_F4_ACTIVE_SCRIPT.md)
 records validation and remaining browser gates.
+
+
+### Empty-handler Promise capabilities
+
+`os64_js_enable_neutral_promise_settings` extends the import-settings opt-in
+before execution. An empty-handler reaction has no job entry or backup
+incumbent. Executing capability code can supply checked current settings and a
+script-bearing incumbent; a native-only capability cannot invent an incumbent
+for callback capture. Nested explicit callback scopes restore the neutral scope
+on success or throw. Generic raw jobs remain unprepared, and legacy constructors
+do not opt in.
+
+`JS_PeekJobCallbackSettings` (also `JS_PeekPromiseJobSettings`) returns true for
+these opted-in reactions with null entry/incumbent/report outputs. True admits
+checked queries under the existing job guard; it does not promise those roles
+exist. Actual current/incumbent queries retain lifecycle checks. The raw engine
+scope borrows execution contexts, adds no roots, and restores enclosing settings.
+It shares existing cancellation and job caps and does not authorize child-local
+recovery. Custom-capability throws retain queue-context diagnostic reporting,
+not a new HTML reporting-global claim. The unresolved browser policy and DOM
+integration proof are in the [neutral Promise chapter](../../docs/design/pending/IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md).
