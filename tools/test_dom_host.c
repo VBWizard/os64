@@ -645,6 +645,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--attributes")){dom_attributes_cases();attributes_allocation_cases();implementation_jquery_cases();printf("DOM attributes probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--fetch")){dom_fetch_cases();printf("DOM fetch probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--window-reads")){dom_window_read_timing();return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--classic")){dom_classic_cases();printf("DOM classic probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--window")){dom_window_cases();printf("DOM window probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--report")){dom_report_cases();dom_report_sweep_cases();printf("DOM report probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--document")){dom_document_cases();printf("DOM document probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}

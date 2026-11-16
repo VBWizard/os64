@@ -358,7 +358,7 @@ static int32_t property_named(const char *name)
  * longhands that reading cannot list is kept with none (`n` 0), and
  * answers "". */
 #define SHORT_MAX 512
-#define SHORT_PROPS 16
+#define SHORT_PROPS D_LONGHANDS_MAX
 typedef struct {
     int32_t name_at;
     int32_t n;
@@ -419,6 +419,24 @@ static const DShort *short_named(const char *name)
         if (*p == '\0' && *n == '\0') return &kShort[i];
     }
     return NULL;
+}
+
+int32_t d_longhands(os64_dom_t *dom, const char *name, size_t length, int32_t *props)
+{
+    char folded[128];
+    if (length == 0 || length >= sizeof(folded)) return 0;
+    os64_memcpy(folded, name, length);
+    folded[length] = '\0';
+    int32_t prop = property_named(folded);
+    if (prop >= 0) {
+        props[0] = prop;
+        return 1;
+    }
+    if (shorts_learn(dom) < 0) return -1;
+    const DShort *s = short_named(folded);
+    if (s == NULL) return 0;
+    for (int32_t i = 0; i < s->n; i++) props[i] = s->props[i];
+    return s->n;
 }
 
 /* Whether `s`'s four longhands are a box's sides in CSS's order (top,
