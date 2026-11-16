@@ -658,7 +658,14 @@ virtio because its drain waits for the tick.
   box (`apps/yonder/player.c`), and a link straight to a sound plays it on
   a page of its own (`WAY_BODY_MEDIA`). A network sound's bytes are a
   window (`media_bytes.c`, pure), and a seek far from it is a `Range`
-  request. AUDIO_YONDER.md §§ As built (Y.2.1 to Y.3) are the record,
+  request. A page answers the media keys through
+  **`navigator.mediaSession`** (`libdom/media_session.c`; with no handler,
+  Play plays the element that played last and Pause pauses every one),
+  and each yonder window holds a `/dev/mediakeys` session of its own once
+  its page has something to say (`apps/yonder/keys.c`, AUDIO_YONDER.md
+  § Y.6; `/tests/pages/media-session.html`; on a fresh `/home`, yonder
+  runs scripts only with `scripts = on` in `yonder.conf`).
+  AUDIO_YONDER.md §§ As built (Y.2.1 to Y.3) are the record,
   and `/tests/pages/audio.html`, `audio-controls.html` and
   `audio-mix.html` the pages to try (`audio-range.html` wants
   `tools/pages_serve.py`, which answers ranges). Sound at another rate goes through **`libsound.so`**

@@ -1005,6 +1005,27 @@ windows, presses written to `/sys/mediakeys`: the playing window takes
 them, and with both paused the focused one does (the focus rule's first
 live run); then the P5 with the headphones on a podcast site.
 
+**As built.** `libdom/media_session.c` (the interface, the host's two
+calls), with media.c's `d_media_session_facts` and
+`d_media_session_default`; each element is stamped as it begins to play
+(`played_seq`), which is how the browser's Play finds the one that played
+last, and every element the page made counts, in its document or not
+(`new Audio()` is how many players play; HTML pauses an element that
+leaves its document). A handler is taken out of its slot while it is
+called and put back unless the page set that action meanwhile, so one
+that replaces or removes itself is safe. yonder's `keys.c` is the session
+and its reader; `keys_turn` (yonder.c) runs after the media turn. Proven
+by libdom's media probe (`tools/test_dom_host.sh --media`: the interface,
+its TypeErrors, MediaMetadata's artwork, the state, handlers that replace
+and remove themselves, a throwing handler reaching `error`, the defaults
+over two elements, a page's play handler asked instead) and in QEMU on the
+GUI boot: two windows on `media-session.html`, presses written to
+`/sys/mediakeys`: the first window's session opened when its page set
+handlers, Play went to it and its handler played the track; with the
+second window focused, Pause still went to the first (playing), Play then
+went to the second (the focus rule, live for the first time) and Next to
+it while it played, its handlers logging each.
+
 ## For Chris
 
 *Put to Chris 2026-11-14 with leans; his answers the same day:*

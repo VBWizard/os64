@@ -210,15 +210,18 @@ does, only which word the headphones send.
   of a file goes back a file, later restarts the file, as players do; Next
   after the last ends it); Stop ends it. Without a session (all taken) it
   plays on, deaf to the keys.
-- **yonder (Y.6)** holds one session per window and says `playing` while
-  any element of its page sounds, `paused` while one it played is paused,
-  `stopped` otherwise. A press goes to the page through the web's own door,
-  the **Media Session API** (`navigator.mediaSession`): a page that set an
-  action handler for `play`, `pause`, `nexttrack`, `previoustrack` or
-  `stop` has it run, as podcast and music sites do. With no handler, Play
-  and Pause act on the element that last played, as other browsers do,
-  and the others do nothing. `MediaMetadata` (title, artist, artwork) and
-  `playbackState` are kept and reported, and change nothing here.
+- **yonder (Y.6)** holds one session per window, opened when its page
+  first has something to say (AUDIO_YONDER.md § Y.6), and says `playing`
+  while the page declares `playbackState = "playing"` or any of its
+  elements plays, `paused` while it declares `"paused"` or one it played
+  is paused, `stopped` otherwise. A press goes to the page through the
+  web's own door, the **Media Session API** (`navigator.mediaSession`): a
+  page that set an action handler for `play`, `pause`, `nexttrack`,
+  `previoustrack` or `stop` has it run, as podcast and music sites do.
+  With no handler, Play plays the element that played last, Pause and
+  Stop pause every element, as other browsers do, and the others do
+  nothing. `MediaMetadata` (title, artist, artwork) is kept and shown
+  nowhere yet.
 
 ## Seeing it: `/sys/mediakeys`
 
