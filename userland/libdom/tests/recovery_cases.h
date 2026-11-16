@@ -7,6 +7,7 @@
 #include <os64/js_retention.h>
 #include <dom/retention.h>
 #include "quickjs.h"
+#include "../../libpage/tests/retention_cases.h"
 
 /* The same owner-thread host loop runs against fake and guest OS services.
  * Raw context exchange is trusted setup; dispatch and decisions use public APIs. */
@@ -78,6 +79,7 @@ static void recovery_consumer_run(RecoveryConsumer *h, unsigned realm, const cha
 static void recovery_consumer_case(os64_js_teardown_policy_t policy, unsigned mode,
     void (*require)(bool, const char *), void (*timeout_clock)(bool))
 {
+    native_retention_cases(require, NULL);
     RecoveryConsumer h = {.require=require};
     recovery_consumer_jobs = 0;
     os64_js_config_t config = {.limits=os64_js_default_limits()};

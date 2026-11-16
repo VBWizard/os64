@@ -10,8 +10,9 @@ embedding ABI 5 and existing runtime/DOM/callback record layouts are unchanged.
 
 This is the first bounded diagnostic cut. It adds no roots, pins, collection,
 slot reuse, admission decision or browser integration. Deep incoming-edge
-counts, HTML/page borrower instrumentation and release-stage injection points
-remain separate cuts. F15's identity/export contract and reclamation behavior
+counts and release-stage injection points remain separate cuts. Native
+HTML/page instrumentation is described in [B2](IFRAME_F15_NATIVE_BORROWS.md).
+F15's identity/export contract and reclamation behavior
 still depend on the reviewed F4c/d boundary.
 
 ## Public queries
