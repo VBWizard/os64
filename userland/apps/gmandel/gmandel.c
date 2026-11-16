@@ -407,8 +407,10 @@ static int64_t run_view(void *arg)
 		tour_now(&target, &log2zoom, &paused);
 		int max_iter = ITER_BASE + (int)(ITER_PER_DOUBLING * log2zoom);
 		// Paused, the picture is the last one: no frame is owed, and the
-		// rate stays what it was while the race was on.
-		if (target != drawn_target || log2zoom != drawn_zoom)
+		// rate stays what it was while the race was on. Running, every pass
+		// renders, even through the hold at the bottom of a dive where the
+		// view stands still: the rates measure rendering, not change.
+		if (!paused || target != drawn_target || log2zoom != drawn_zoom)
 		{
 			int64_t t0 = os64_micros();
 			render(&ctx, v, &kTargets[target], log2zoom, max_iter);
