@@ -1,0 +1,263 @@
+# Video in yonder
+
+*OUTLINE, 2026-11-16, Fable. Not ratified, not complete. It sets down what
+the measurements of this morning decided, the shape that follows from them,
+and the gaps still open (each marked **GAP**). Chris: "Video is one of the
+big bosses. I want to take our time and get it right."*
+
+*Stands on AUDIO_YONDER.md (the element, the sessions, libmedia, libav).
+Evidence: `~/os64-opus-kit/VIDEO_DECODE_MEASURE_REPORT.md` and
+`VIDEO_SCALE_MEASURE_REPORT.md` (3900X under Linux, not os64, not the P5).*
+
+## 0. What this arc is
+
+**A `<video>` shows its picture.** The first goal is the video file on an
+ordinary page: an MP4 holding H.264 and AAC, as a hero clip, a news clip, a
+product video, or a link straight to the file.
+
+| In this arc | Named, and left for a later one |
+|---|---|
+| MP4 / H.264 (8-bit 4:2:0) with AAC or no sound | Media Source Extensions (script-fed streams: the big video sites) |
+| the picture in its box, at frame pace, in step with the sound | WebM, VP9; AV1 (a second decoder port, dav1d) |
+| `poster`, `videoWidth`/`videoHeight`, `object-fit` | captions drawn over the picture |
+| `<video controls>` over the picture; a page for a linked video file | `drawImage(video)` into a canvas, `requestVideoFrameCallback` |
+| silent files and muted clips, at their true cost | picture-in-picture, 10-bit and HDR |
+| full screen (**GAP**: this arc or the next, § 9) | protected (DRM) streams: not planned |
+
+Nothing here may make the later column harder. Where a choice bears on it,
+the section says so.
+
+## 1. What was measured, and what it decided
+
+One thread, 3900X, real footage at the bitrates sites serve. "x" is the
+multiple of real time.
+
+| | plain C (libav today) | SSE assembly | with AVX2 |
+|---|---|---|---|
+| H.264 1080p30 decode | 2.7x; worst frame 61 ms | 6.6x; worst 34 ms | 6.2x |
+| H.264 1080p60 decode | 1.5x | 3.6x; worst 42 ms | 3.3x |
+| H.264 1440p30 decode | 1.6x | 3.7x | not run |
+| 1440p60, any codec (by pixel count) | under 1x | about 2x | 1.9x to 2.5x |
+| convert + stretch 1080p to 2560x1440 | 16.3 ms a frame | 4.7 ms | same |
+| convert 1440p at natural size | 3.2 ms | 1.45 ms | same |
+| copy one 2560x1440 frame (`rep movsb`) | 1.6 ms | | |
+
+What follows from it:
+
+1. **Assembly is required, for the decoder and for the scaler.** Plain C
+   cannot fill a 1440p screen at 60 fps: the stretch alone is a whole
+   frame's time.
+2. **AVX is not required for H.264.** It is worth 10 to 30 % for VP9 and
+   AV1 later. Ring 3 may use AVX (AVX.md), and FFmpeg's run-time
+   detection decides for itself whether to.
+3. **One decoder thread is enough to start; FFmpeg's own threading can
+   wait.** 1440p60 is where a second decoder thread would be wanted.
+4. **A frame is converted and scaled in ONE step, to the size it will be
+   drawn at.** It beat converting small and stretching later in every row.
+5. **Average speed is not the test; the worst frame is.** At 1080p60 the
+   worst frame takes two and a half frame times. The player decodes ahead
+   into a queue or it stutters at every keyframe.
+6. **Decoding and scaling want separate threads at 60 fps.** Together they
+   are about 10 ms of a 16.7 ms frame on one thread, before anything else.
+
+**GAP (the P5 point).** How much of this survives on os64 on the P5:
+`BRIEF_VIDEO_P5_POINT.md`, in progress. If os64's figures are far below
+the table, § 3's thread shape and § 6's queue depths are revisited.
+
+## 2. The libraries
+
+**libav.so** gains the H.264 decoder and parser, FFmpeg's assembly with
+run-time CPU detection (`nasm` returns as a build prerequisite), and
+**libswscale**. Lean: use FFmpeg's scaler rather than write one; it is the
+same LGPL source, already measured, and its SSE routines are the 4.7 ms
+above. The library stays one LGPL library of its own, and the audit's
+rules stand.
+
+**libmedia.so stays the one door to FFmpeg.** It grows a picture side
+beside the sound side: what the picture is (size, frame rate, the pixel
+aspect), "give me the next decoded picture and its time", and "convert
+this picture into these pixels at this size". Times are on the same output
+timeline as sound. yonder, and any other player, see no FFmpeg type.
+
+**Pure cores, host-tested with mutants**, in the pattern of
+`media_queue.h` and `media_mix.h`:
+
+- the picture queue (what is kept, what is dropped, generations across a
+  seek);
+- the choice of which picture to show at a given time, and what to do
+  when late;
+- the clock (§ 4).
+
+## 3. Threads for one playing video
+
+| Thread | Owns | Parks when |
+|---|---|---|
+| **decoder** (the session's existing one) | the demuxer, the sound decoder, the picture decoder; fills the PCM queue and the decoded-picture queue | both queues are full, or the media is decoded to its end |
+| **picture** (new, one per playing video) | conversion and scaling into ready frames at the box's size | the ready queue is full, the video is not visible, or nothing is due |
+| **audio** (the one for all of yonder) | `/dev/audio`, the mix, the heard position | as today |
+| **main** (yonder's loop) | choosing the frame that is due, painting it, the page | as today |
+
+One demuxer feeds both decoders, because an MP4 interleaves them. The
+decoder thread parks on whichever queue fills first only when BOTH have
+enough, or a starved one deadlocks the other.
+
+**A door left open for later:** FFmpeg's frame threads (needs a pthread
+shim) replace nothing here; they would live inside the decoder thread's
+calls.
+
+## 4. The clock
+
+An element's time comes from the audio position today, and a file with no
+sound is refused. Video needs a clock that does not depend on sound.
+
+| The element | Its clock | Sound decoded? | Holds a mixer voice? |
+|---|---|---|---|
+| has sound, audible | the heard position (as today) | yes | yes |
+| has sound, muted or volume 0 | the monotonic clock (`micros()`), anchored at play | **GAP** | no |
+| has no sound track | the monotonic clock | n/a | no |
+| sound refused (`/dev/audio` busy) | as today: waits | | |
+
+Moving between rows (mute, unmute) must not jump the time: the new clock
+is anchored at the old one's reading.
+
+**GAP (muted sound).** Decoding sound nobody hears is cheap, and keeps
+unmute instant; not decoding it is what the booked debt asks for. Lean:
+decode it but hold no voice, and measure.
+
+**The headphones' delay comes due here.** Pictures follow `heard`, which
+rests on the sink's reported delay (150 ms from the P5's pair, never
+measured: DEBTS). The first player is where it is measured.
+
+## 5. From a decoded picture to the page
+
+1. Layout gives the video box a content size in device pixels. The page
+   tells the session that size and the `object-fit` rectangle inside it.
+2. The picture thread converts each decoded picture straight to XRGB at
+   that size (libswscale's `bgr0` is the window canvas's format).
+3. When a ready frame comes due, the main loop marks the box's visible
+   part dirty, as a GIF's frame does today. No layout.
+4. The paint copies that frame's rows into the window canvas, clipped.
+   Whatever lies over the video (its controls, the page's own overlay) is
+   painted after it by the ordinary walk of the dirty part.
+
+**The plain path and the general path.** Step 4's row copy applies when
+the box is drawn plainly. A video under a transform, an opacity, a rounded
+clip or a filter is drawn by the existing picture path from the same
+frame (per-pixel, slower, correct). Same for the moment between a resize
+and the first frame at the new size.
+
+**What is not shown is not converted.** Covered window, scrolled out of
+view, a page that is not the shown one: the picture thread parks. **GAP:**
+whether the decoder also stops decoding pictures then (it must resume at a
+keyframe, so the picture returns late) or keeps going (a steady cost for
+nothing seen). Lean: keep decoding in this arc, book the saving.
+
+**Late policy** (to become a lifecycle table before code): a ready frame
+whose time has passed is skipped, never shown late; a picture thread that
+is behind skips conversion of pictures already due; a decoder that is
+behind asks FFmpeg to skip pictures nothing depends on; a decoder far
+behind lets the sound run and resumes the picture at the next keyframe.
+
+## 6. Queues and memory
+
+| Queue | Holds | Depth (first guess) | At 1080p | At 1440p |
+|---|---|---|---|---|
+| decoded pictures (YUV 4:2:0) | decoder's output | 8 | 25 MiB | 44 MiB |
+| ready frames (XRGB at the box's size) | picture thread's output | 3 | up to 44 MiB when filling a 1440p screen | same |
+
+Eight decoded pictures cover a 42 ms worst frame at 60 fps with room. The
+ready queue is kept short because its frames are the large ones.
+
+**GAP (how many at once).** A page may hold many videos. Other browsers
+play every visible one. A budget is needed (pictures decode only for
+visible videos; a ceiling on total queue memory, beyond which a video
+shows its poster or last frame), with numbers from the P5.
+
+## 7. The path to the glass (the part that is the kernel's)
+
+What a frame costs after yonder has it, from the code as it stands:
+
+- **Four copies of the frame's pixels**: ready frame to window canvas
+  (yonder), canvas to the compositor's copy (publish), that to the back
+  buffer (the compositor's pass), the back buffer to the framebuffer. At
+  2560x1440 that is 14.7 MB each time.
+- **Publish holds `kGuiLock` with interrupts off for its whole copy.**
+  Measured at 0.3 ms for a 1080p paint on the P5; a full-screen video
+  takes that lock sixty times a second.
+- **A publish does not wake the compositor.** Its damage waits for the
+  next interrupt, in practice the 10 ms tick. A 16.7 ms frame cadence on a
+  10 ms grid shows frames for 10 and 20 ms by turns: visible judder. This
+  is booked (DEBTS: "no wake of its own").
+- **There is no vertical sync and no report of when a frame was shown.**
+  Tearing is possible, and a player cannot pace itself to the display.
+
+**GAP (the glass's number).** What a full-screen 60 fps publisher costs on
+the P5 and how evenly its frames arrive: a small fixture publishing
+full-window frames at a set rate, read against `/sys/gui`'s counters. To
+be briefed. Its answer decides what this arc asks of the kernel:
+
+| Candidate | What it cures | Size |
+|---|---|---|
+| a publish wakes the compositor | the 10 ms grid | small; already a debt |
+| one copy fewer (publish into the back buffer when the window is unobscured, or hand the compositor the canvas) | 1.6 ms a frame, and lock time | medium; GRAPHICS.md rejected page flipping once, for reasons to re-read |
+| a "frame shown" answer for a publisher | pacing; no late frames queued behind a slow pass | medium |
+
+Kernel changes here are GUI-lock work and get their own short design.
+
+## 8. The element
+
+- `videoWidth`, `videoHeight` once metadata is known; the box takes the
+  picture's ratio then (one layout), unless the page fixed it.
+- `poster`: fetched as an image, shown until the first frame is.
+- Readiness counts pictures as well as sound: `loadeddata` means a first
+  frame exists.
+- `canPlayType`: `video/mp4` and `avc1` codecs answer for what is built.
+- `<video controls>`: the existing player, along the bottom, over the
+  picture. **GAP:** hide when idle, as other browsers do.
+- A link straight to a video file opens a page showing it
+  (`WAY_BODY_MEDIA`'s video twin).
+- **A file whose index is at the END** (common for MP4s not prepared for
+  the web): today's loader refuses the seek FFmpeg makes while opening.
+  With ranges, the open fetches the tail; without, the file must arrive
+  whole. Needs a fixture; nothing in the tree exercises it.
+
+## 9. Full screen (**GAP**: scope)
+
+There is no full-screen window in os64: no client call to drop the
+decorations or cover the screen after creation, and no `requestFullscreen`
+in libdom. It needs a small window-manager call plus the DOM's Fullscreen
+API. Lean: a late slice of THIS arc, since a video player without it is
+not one, and since 2560x1440 full screen is the worst case everything
+above was sized for.
+
+## 10. Slices (a first cut, to be argued)
+
+| | Slice | Proves |
+|---|---|---|
+| V0 | libav: H.264 + assembly, `/tests/avbench` (in progress) | the P5 point |
+| V1 | the glass fixture and its measurement | § 7's number |
+| V2 | whatever V1 says the kernel owes (at least: publish wakes the compositor) | even frame pacing |
+| V3 | libswscale in libav; libmedia's picture side; the pure cores | pictures and times, host-tested |
+| V4 | **a standalone player** (`play`'s sibling: a window, a file, picture and sound in step) | the whole pipeline on the P5, before any page code |
+| V5 | yonder: the picture in the box, the clock, silent files, `videoWidth` | a video on a page |
+| V6 | poster, controls over the picture, the video page, index-at-end | the ordinary web |
+| V7 | visibility, the budget for many videos, the muted-clip debt | what it costs |
+| V8 | full screen | |
+
+V4 is the lean worth arguing: a player outside the browser lets sync,
+pacing and the glass be judged with nothing else in the way, and gives
+os64 a video player in its own right.
+
+A tracker (CSV and its page) once the slices are ratified, as for sound.
+
+## For Chris (so far)
+
+1. **Scope:** files with H.264 first, streams a later arc. (Ruled in
+   conversation; set down here.)
+2. **FFmpeg's scaler** in libav rather than one of our own. Lean: yes.
+3. **A standalone player before the browser work** (V4). Lean: yes.
+4. **Full screen in this arc**, as its last slice. Lean: yes.
+5. **H.264 and patents.** FFmpeg's decoder is LGPL code and freely
+   usable; the format itself is covered by patents in some countries,
+   many now expired. For a personal operating system I see no obstacle,
+   but it is yours to know about.
