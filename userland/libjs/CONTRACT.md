@@ -1468,10 +1468,10 @@ keeps it through queued loading; source realm selects the module provider while
 the resulting Promise belongs to the executing realm. A null referrer still
 lacks the browser current-settings API-base-URL fallback and refuses import.
 
-Semantic source names survive stripping and serialization; named bytecode reads
-rebind them to the embedding's supplied name. The bytecode version is 6, so
+Semantic source names survive stripping and serialization; named classic-script
+reads rebind them to the embedding's supplied name. The bytecode version is 6, so
 older layouts refuse. The engine identity is
-`07db006decd9ab530a10c0de033d2609a8c2b3ee22c88242035c00668834a224`.
+`50e0bb8409b1d0d01fd0dad73adaa305e4a449e49b3eacac33d58c322cc632ba`.
 Wrapper ABI 5 and public wrapper layouts are unchanged. Rebuild consumers
 against matching prepared headers and objects. The
 [active-script chapter](../../docs/design/pending/IFRAME_F4_ACTIVE_SCRIPT.md)

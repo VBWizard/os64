@@ -32,6 +32,17 @@ with the captured record's realm and pops it before capability resolution.
 The actual callable's execution realm remains independent. A script-bearing
 handler can establish its own record above the restored activation.
 
+The closure stores its owned record pointer in a trailing slot of its variable
+reference array, with the type tag in spare object-header bits. The array is
+allocated when closure variables or a record require it; clearing provenance
+releases the record, and function destruction releases the storage. The heap
+census includes the trailing slot. General JS objects remain 72 bytes.
+Pending reactions grow from 72 to 88 bytes and bytecode headers from 128 to
+136 bytes on x86-64. The existing 5,000-Promise crypto stress fixture passes
+its unchanged 16 MiB cap in both shipping and instrumented engine profiles.
+Putting the record in the general object union exceeded that cap; the
+function-local storage avoids charging nonfunctions for this edge.
+
 This adds retained storage. A classic record keeps the root's compiled constant
 pool and nested bytecode alive. F15 diagnostics do not enumerate these graph
 edges and must keep them explicitly unknown. No physical realm reclamation,
@@ -55,7 +66,8 @@ The test now requires both module loading and an observed fulfilled value.
 
 Semantic source names are stored independently of debug data. Stripped code
 therefore keeps its source name, and `JS_ReadObjectNamed` rebinds it when cached
-code is read into another realm. Bytecode format version 6 rejects previous
+classic code is read into another realm. Module records keep their module name
+as resolution identity. Bytecode format version 6 rejects previous
 layouts. Partial reads release decoded name atoms before and after ownership
 moves into the allocated bytecode object; this also fixes the reader's existing
 function-name atom leak on prefix/allocation failure.
@@ -86,11 +98,11 @@ P5 execution or visible iframe acceptance.
 ## Integration boundary
 
 The prepared engine identity is
-`07db006decd9ab530a10c0de033d2609a8c2b3ee22c88242035c00668834a224`.
+`50e0bb8409b1d0d01fd0dad73adaa305e4a449e49b3eacac33d58c322cc632ba`.
 Internal engine layouts change; rebuild consumers with matching prepared
 headers and objects. Public wrapper layouts and ABI 5 remain unchanged.
-The target export audit also includes the existing Promise opt-in export that
-was missing from its inventory.
+The branch composes merged F15 diagnostics (#610), preserving both focused
+test families and the complete Promise/retention export inventory.
 
 HTML's [HostMakeJobCallback](https://html.spec.whatwg.org/multipage/webappapis.html#hostmakejobcallback)
 and [HostCallJobCallback](https://html.spec.whatwg.org/multipage/webappapis.html#hostcalljobcallback)
