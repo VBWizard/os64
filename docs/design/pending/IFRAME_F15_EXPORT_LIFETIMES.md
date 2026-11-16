@@ -1,5 +1,7 @@
 # F15 C1/C2/C4 — proposed checked export lifetimes
 
+Contract proposal PR: **#625**, source `69a92e64`.
+
 Proposal baseline: merged `userland` `2a2420b7`, including #621 and the import
 provider work in #622. Engine identity is
 `83e3863bc254f13fe66b3d20ae99edaac4cb1794e9f9bac2672c2fafb6330f43`,
