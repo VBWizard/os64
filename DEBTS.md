@@ -915,6 +915,13 @@ YAUDIO_TRACKER.csv holds what has a slice already (the mixer); these have none.
 | **No recording, and one listener at the tap**: `/dev/audiotap` is the proof's ear and takes one open; there is no input device at all | Feature | Large | A microphone, or a second program that wants to watch what plays | `audio_stream_tap_open` |
 | **A killed player leaves up to 200 ms playing**: a close never cuts the sound, and a program that dies with no chance to write `flush` leaves its ring to play out | Behaviour | Small | It being heard as a fault | AUDIO_SEAM.md § Close never waits |
 
+## Media keys (MEDIA_KEYS.md, A.5.1, 2026-11-15 — booked the day it was built)
+
+| Debt | Class | Size | Trigger | Where |
+|---|---|---|---|---|
+| **A session's lineage is as of its open**: the task IDs of the opener and its ancestors are copied once, so the rule never walks a task. A task ID recycled after the ID space wraps, onto a task that then owns the focused window, would match an older session's lineage and hand it a press meant for another. A program orphaned later still lists its dead ancestors, which is harmless (a dead task owns no window) | Correctness (unobserved) | Small | A press going to the wrong program with a long-lived session open across a wrap of task IDs | `kernel/src/audio/media_session.c` (`media_session_open`), `task_lineage` (task.c) |
+| **Only the headphones press**: a keyboard's media keys, a remote control and a desktop's own buttons have no driver that calls `media_key_pressed`; `/sys/mediakeys`' press verb is the door they would use | Feature | Small | A keyboard with media keys, or a person asking for desktop buttons | `kernel/src/audio/media_session.c`; the HID keyboard drivers |
+
 ## Text on the glass
 
 | Debt | Class | Size | Trigger | Where |

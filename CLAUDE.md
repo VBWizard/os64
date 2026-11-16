@@ -574,7 +574,8 @@ virtio because its drain waits for the tick.
   `/dev/volume` held before, which can be louder than the seam's gain
   would have made it. Their play, pause,
   next and previous presses are answered, counted and logged under
-  `DEBUG_USB`, and do nothing yet (§ Slot 2's buttons). Slot 2's status
+  `DEBUG_USB`, and go to the program they are for (the media keys, under
+  Sound) (§ Slot 2's buttons). Slot 2's status
   shows the `avctp channel:`, AVRCP's lines, `volume:` and `buttons:`.
   AUDIO_REMOTE.md §§ R and W, as built are the record
   **The A2DP sink** is the pump, `bt_a2dp.c` (pure;
@@ -666,6 +667,25 @@ virtio because its drain waits for the tick.
   record of what was checked upstream. `tools/test_resample_host.sh`,
   `/tests/resampletest` and `/tests/playtest` prove it; run
   `tools/test_sound_audit.py` after a build that touches it
+  **The media keys** (`audio/media_keys.c`, pure, beside a model and 35
+  mutants; `audio/media_session.c` the lock, the wait and the routing;
+  MEDIA_KEYS.md the design): a program that wants the headphones' play,
+  pause, next and previous opens **`/dev/mediakeys`** `"u"`, and the handle
+  IS its session (never shared, 32 machine-wide, `os64/mediakeys.h`): it
+  writes its state (`playing`, `paused`, `stopped`) and reads one
+  `os64_media_key_t` a press. A press goes to the newest session saying
+  `playing`, else the one whose program owns the focused window, or
+  descends from its owner (a gterm's focus counts for the `play` it runs:
+  each session's lineage of task IDs is taken at open, and the focus is
+  `wm_focus_owner`, read without kGuiLock), else the most recently
+  active; with no session at all, Play and Pause pause or resume the
+  stream itself. Play and Pause are one toggle decided by the target's own
+  state, and a session whose ring is full is passed over. kusb takes the
+  presses from slot 2's ring after the `DEBUG_USB` log has read them.
+  **`/sys/mediakeys`** shows the sessions, the focus and why the last press
+  went where it did, and takes `press <key>` lines, which is how QEMU,
+  with no headphones, drives it: read it FIRST when a press goes nowhere.
+  `play` holds a session; fixture `/tests/mediakeystest`
   **FFmpeg is `libav.so`** (`userland/libav/`; AUDIO_YONDER.md is the arc,
   `YAUDIO_TRACKER.csv` its state): libavutil, libavcodec and libavformat,
   unpatched, built down to what `manifest.json`'s `configure_args` names

@@ -53,8 +53,8 @@ long media_session_write(media_session_t *s, const char *text, size_t length);
 // that may take a spinlock; never waits.
 void media_key_pressed(uint32_t key);
 
-// /sys/mediakeys: `press play|pause|next|previous|stop`, one command a
-// write (optional trailing whitespace). 0, or -1 for anything else.
+// /sys/mediakeys: one line, without its newline, `press play|pause|next|
+// previous|stop` (optional trailing whitespace). 0, or -1 for anything else.
 long media_keys_command(const char *text, size_t length);
 // /sys/mediakeys' text.
 size_t media_keys_report(char *out, size_t capacity);

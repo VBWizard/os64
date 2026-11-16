@@ -71,7 +71,7 @@ its reader on.
 **Write: the session's state**, one word a write with optional trailing
 whitespace: `playing`, `paused` or `stopped` (a fresh session is
 `stopped`). It is parsed whole and applied under the lock, or refused
-whole as invalid (`OS64_INVALID`), never guessed at. A write never waits,
+whole (-1, the system's refusal), never guessed at. A write never waits,
 so a finite patience on it is refused as for any write. The state is the
 PROGRAM's word for itself, because only it knows: yonder mixes every
 element of a window into one stream, so the stream cannot say which window
@@ -114,11 +114,12 @@ reading, so the rule passes it over (below).
 
 ## The rule: which session a press is for
 
-Worked out once a press, under the session lock, by `media_keys_pick` in
+Worked out once a press, under the session lock, by `media_keys_press` in
 `kernel/src/audio/media_keys.c`, a pure file with no kernel headers that
 also holds the ring, the Play/Pause rewrite, the state-word parser and the
 sequence stamp (the `audio_stream.c` split: the glue keeps the lock, the
-wait, the wake, the focus load and the fallback call):
+wait, the wake, the focus load and the fallback call, in
+`media_session.c`):
 
 1. **A session that says `playing`.** If several do, the one that said it
    most recently (the newest player wins, as starting a second video in
@@ -175,7 +176,7 @@ does, only which word the headphones send.
   logged that pass's presses (the log reads the same ring by number, and a
   take before it would blind the `DEBUG_USB` lines), keeps only `pressed`
   entries of PLAY, PAUSE, STOP, FORWARD (Next) and BACKWARD (Previous)
-  (`bt_avrcp.h`), and hands each to `media_keys_press(key)`. Releases and
+  (`bt_avrcp.h`), and hands each to `media_key_pressed(key)`. Releases and
   volume keys stay `bt_host`'s. That is a thread, not an interrupt; the
   press is routed and delivered there.
 - **The session table has a spinlock of its own**, taken irqsave (`kusb`
@@ -185,7 +186,7 @@ does, only which word the headphones send.
   then queue lock, the audio stream's order (`audio.h`). Nothing that runs
   under the queue lock (the tick, `processSignals`) ever takes the session
   lock; `/sys/mediakeys` copies under the lock and formats after it.
-  `media_keys_press` may run in `kusb` and in a sysfs writer at once: the
+  `media_key_pressed` may run in `kusb` and in a sysfs writer at once: the
   session lock is the only serialization, so the last-press record and the
   unanswered count live under it, and nothing assumes USB's `s_poll_busy`.
 - **The focus is read without the GUI's lock.** `s_focused` is assigned at
@@ -201,9 +202,13 @@ does, only which word the headphones send.
 ## What a player does
 
 - **`play`** opens a session, says `playing` as it starts and `paused`
-  while paused. Play/Pause pause and resume it; Next and Previous move
+  while paused, and looks for a press between two pieces of sound without
+  waiting (a piece is under a tenth of a second). Play/Pause pause the
+  stream at once (`/dev/audioctl`) and resume it; Next and Previous move
   through the files it was given (Previous within its first three seconds
-  of a file goes back a file, later restarts the file, as players do).
+  of a file goes back a file, later restarts the file, as players do; Next
+  after the last ends it); Stop ends it. Without a session (all taken) it
+  plays on, deaf to the keys.
 - **yonder (Y.6)** holds one session per window and says `playing` while
   any element of its page sounds, `paused` while one it played is paused,
   `stopped` otherwise. A press goes to the page through the web's own door,
@@ -223,9 +228,12 @@ which rule picked its target (or that the kernel answered it), and the
 unanswered count. Read it FIRST when a press seems to go nowhere.
 
 **Writing `press play|pause|next|previous|stop` routes a press** as if
-the headphones had sent it, applied at the write (the `/dev/audioctl`
-shape; a sysfs close can run with interrupts off), and anyone may write
-it, as anyone may write `/dev/audioctl`. That is how QEMU, which has no
+the headphones had sent it, a line at a time: the line is carried out by
+the write that brings its newline, because `echo` writes its words, the
+spaces between and the newline separately. Never at close, which can run
+with interrupts off: text left without a newline when the handle closes
+is refused there. Anyone may write it, as anyone may write
+`/dev/audioctl`. That is how QEMU, which has no
 headphones, tests the rule, and how a keyboard's media keys could arrive
 one day without the rule changing.
 
@@ -258,9 +266,27 @@ consumer" (`xhci.c`, true now), and CLAUDE.md's "and do nothing yet".
 - **Y.6, yonder**: `navigator.mediaSession` (MediaSession, MediaMetadata,
   the action handlers) in libdom, and yonder's session per window.
 
+## As built (A.5.1)
+
+- The rule, the ring, the toggle, the state word and the stamps:
+  `kernel/src/audio/media_keys.c` (pure), `tools/test_media_keys_host.sh`
+  beside a model, `tools/test_media_keys_mutants.py` (35 mutants, all
+  caught).
+- The session handle, its wait, the routing entry, the kernel's answer and
+  the report: `kernel/src/audio/media_session.c`; the lineage at open:
+  `task_lineage` (task.c); the focus word: `wm_focus_owner` (window.c); the
+  take: `xhci_bt_route_buttons` (xhci.c); the ABI: `os64/mediakeys.h`
+  (refusals -30 FULL and -31 BUSY).
+- Opening counts as activity, so two sessions never tie at rule 3 (a fresh
+  session is stamped when listed).
+- `/tests/mediakeystest` (nine steps, in `testrun`; it skips itself when
+  another program holds a session or the sound is busy, since its presses
+  would reach them) and `play` driven through `/sys/mediakeys` in QEMU:
+  pause, resume, next, previous both ways, stop.
+
 ## Left out, on purpose
 
 - Telling the headphones the song (AVRCP track metadata): they show none.
 - Keyboard media keys: the door is `/sys/mediakeys`' press verb (or
-  `media_keys_press` from a driver); no keyboard sends them yet.
+  `media_key_pressed` from a driver); no keyboard sends them yet.
 - Two programs sounding at once (a kernel mixer).

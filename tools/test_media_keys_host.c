@@ -27,7 +27,8 @@ static media_keys_session_t *open_with(int i, const uint64_t *lineage, uint32_t 
 static void drain(media_keys_session_t *s)
 {
 	os64_media_key_t k;
-	while (media_keys_take(s, &k)) {}
+	for (uint32_t i = 0; i <= MEDIA_KEYS_RING && media_keys_take(s, &k); i++) {}
+	CHECK(s->count == 0, "a ring drains in at most its size");
 }
 
 static void directed(void)
@@ -117,6 +118,26 @@ static void directed(void)
 	media_keys_remove(&T, a);
 	r = media_keys_press(&T, OS64_MEDIA_KEY_NEXT, 0, 33);
 	CHECK(r.target == NULL && T.listed == 0, "removed sessions are never reached");
+
+	// The ring gives back what it was given, in order, and then nothing.
+	media_keys_session_t *e = open_with(4, a_line, 1);
+	media_keys_press(&T, OS64_MEDIA_KEY_NEXT, 0, 40);
+	media_keys_press(&T, OS64_MEDIA_KEY_PREVIOUS, 0, 41);
+	media_keys_press(&T, OS64_MEDIA_KEY_STOP, 0, 42);
+	CHECK(media_keys_take(e, &k) && k.key == OS64_MEDIA_KEY_NEXT && k.serial == 1 && k.at_us == 40, "first in");
+	CHECK(media_keys_take(e, &k) && k.key == OS64_MEDIA_KEY_PREVIOUS && k.serial == 2 && k.at_us == 41, "second");
+	CHECK(media_keys_take(e, &k) && k.key == OS64_MEDIA_KEY_STOP && k.serial == 3 && k.at_us == 42, "third");
+	CHECK(!media_keys_take(e, &k) && e->delivered == 3, "then nothing");
+	media_keys_remove(&T, e);
+
+	// A focus word of 0 is no focus: it matches no lineage, even one holding 0.
+	uint64_t zero_line[] = {0, 3};
+	media_keys_session_t *z = open_with(5, zero_line, 2), *y = open_with(6, a_line, 1);
+	r = media_keys_press(&T, OS64_MEDIA_KEY_NEXT, 0, 43);
+	CHECK(r.target == y && T.last_rule == MEDIA_KEYS_RULE_ACTIVE, "focus 0 matched a lineage");
+	(void)z;
+	media_keys_remove(&T, z);
+	media_keys_remove(&T, y);
 
 	// Undelivered counts lost.
 	media_keys_session_t *d = open_with(3, a_line, 1);

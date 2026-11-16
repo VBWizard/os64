@@ -2293,7 +2293,7 @@ typedef enum
 {
 	SYS_HANDLE_SNAPSHOT = 0,   // the ordinary case: text generated at open
 	SYS_HANDLE_MOUSE_WRITE,
-	SYS_HANDLE_MEDIAKEYS_WRITE,   // /sys/mediakeys opened "w" — each write is a press
+	SYS_HANDLE_MEDIAKEYS_WRITE,   // /sys/mediakeys opened "w" — each line is a press
 	SYS_HANDLE_APPEARANCE_WRITE,
 	SYS_HANDLE_DECORATIONS_WRITE,
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
@@ -2324,6 +2324,9 @@ typedef struct
 	bool bt_connection;
 	uint8_t bt_length;
 	bool bt_refused;
+	char mk_line[32];         // MEDIAKEYS_WRITE: the line so far
+	uint8_t mk_length;
+	bool mk_refused;          // the line outgrew mk_line: refused at its newline
 } sys_file_handle_t;
 
 static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
@@ -2349,9 +2352,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	    && !is_mediakeys)
 		return -1;
 
-	// Read: the report. Write: each write is one complete `press <key>`,
-	// applied at the write (a sysfs close can run with interrupts off), and
-	// anyone may write it, as anyone may write /dev/audioctl.
+	// Read: the report. Write: `press <key>` lines (sys_mediakeys_write),
+	// and anyone may write them, as anyone may write /dev/audioctl.
 	if (is_mediakeys)
 	{
 		synth_text_t text = {0};
@@ -2608,7 +2610,34 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	return 0;
 }
 
-// Probe, appearance, mouse and media-key writes are complete commands, never partial streams.
+// /sys/mediakeys takes a line a command. echo writes its words, the spaces
+// between and the newline separately, so the bytes are gathered until a
+// newline and the line is carried out by the write that brought it — never
+// at close, which can run with interrupts off or inside a burial: text left
+// without a newline when the handle closes is refused there.
+static int sys_mediakeys_write(sys_file_handle_t *h, const char *b, size_t size)
+{
+	for (size_t i = 0; i < size; i++)
+	{
+		if (b[i] == '\n')
+		{
+			bool ok = !h->mk_refused && media_keys_command(h->mk_line, h->mk_length) == 0;
+			h->mk_length = 0;
+			h->mk_refused = false;
+			if (!ok)
+				return -1;
+			continue;
+		}
+		if (h->mk_length == sizeof(h->mk_line))
+			h->mk_refused = true;
+		else
+			h->mk_line[h->mk_length++] = b[i];
+	}
+	return (int)size;
+}
+
+// Probe, appearance and mouse writes are complete commands, never partial streams;
+// media-key commands are lines, each carried out by the write that ends it.
 // Clipboard writes accumulate content which becomes visible at close;
 // Bluetooth scan writes assemble one bounded command, submitted at close.
 static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
@@ -2636,7 +2665,7 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 		return input_mouse_apply(buffer, size);
 
 	if (h->kind == SYS_HANDLE_MEDIAKEYS_WRITE)
-		return media_keys_command(buffer, size) == 0 ? (int)size : -1;
+		return sys_mediakeys_write(h, buffer, size);
 
 	if (h->kind == SYS_HANDLE_APPEARANCE_WRITE)
 		return appearance_publish(buffer, size);
@@ -2718,6 +2747,10 @@ static int sys_close(vfs_file_t *vfs_file)
 			     (!bt_scan_request_valid(h->bt_command, h->bt_length) ||
 			      !xhci_bluetooth_scan(bt_scan_request_classic(h->bt_command, h->bt_length))))))
 				verdict = -1;
+		}
+		else if (h->kind == SYS_HANDLE_MEDIAKEYS_WRITE) {
+			if (h->mk_length != 0 || h->mk_refused)
+				verdict = -1;   // a line with no newline: refused, never carried out here
 		}
 		else if (h->kind == SYS_HANDLE_DECORATIONS_WRITE) {
 			decorations_discard(h->decoration);
