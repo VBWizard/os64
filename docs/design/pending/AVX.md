@@ -283,6 +283,22 @@ the answer is no. It doubles as a standing proof: both run while the
 desktop switches threads around them, and a lost upper half shows as
 garbage in the picture.
 
+**As built** (`userland/apps/gmandel/gmandel.c`): one program, two threads,
+a window each, reading one tour clock so both show the same view at the
+same moment. The kernels are GCC vector extensions (16- and 32-byte float
+vectors; the AVX one in a `target("avx2,fma")` function with the complex
+multiply as an FMA), because the freestanding compiler's `immintrin.h`
+needs a C library. Single precision is what makes the lanes four and
+eight, and a float runs out of digits about 2^14 into the zoom, so the
+tour turns at 2^13. Built `-O2` (`OPTIMIZED_APPS`): at `-O0` both kernels
+spill every vector to the stack and the race measures the spills. The AVX
+window's status line gives its speed against the SSE2 one. In QEMU TCG
+the AVX window is the SLOWER one (TCG emulates 256-bit operations
+expensively), so the real race is the P5's; QEMU proves the pictures, the
+keys, the bare model's refusal, and that paused, the two engines draw the
+same view. On the P5 (Chris, 2026-11-16) the AVX window ran at nearly
+twice the SSE2 window's frame rate.
+
 ## Rulings
 
 Slice A was built and merged (PR #626) on all four of the design's leans,
