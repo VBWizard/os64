@@ -45,12 +45,27 @@
 //   thread before any sibling is visited — so the sender is the thread
 //   that must hold a pattern.
 //
+//   §9, the page fault's delivery: main loads its pattern and touches page
+//   zero inside the same asm block. The SIGSEGV handler wipes everything,
+//   steps the frame's RIP past the faulting instruction, and returns; the
+//   registers must be back on the far side.
+//
+// WITH AVX ON (the program asks the CPU: CPUID's OSXSAVE, then XGETBV) every
+// pattern also fills the upper halves of all sixteen YMM registers, each
+// register and each thread its own, and every check reads all sixteen back;
+// the handlers wipe them with vzeroall. With AVX off the same phases run
+// without the upper halves. A separate step spawns this program again
+// pinned to ONE CPU (`--pinned`, PINCPU inherited at spawn) with two
+// spinning threads, so the CPU's registers pass between exactly those two
+// for two seconds — the leak an FXSAVE-only switch had (AVX.md § Proof).
+//
 // Then the hostile case. The frame lives on the program's own stack, and
-// sigreturn restores MXCSR out of it with fxrstor — in the KERNEL. An MXCSR
-// with a reserved bit set makes fxrstor #GP, so the kernel masks the value
-// with the CPU's own MXCSR_MASK first. The last phase writes 0xFFFFFFFF
-// into the frame's MXCSR slot from inside a handler and returns: the OS
-// must survive, and what comes back must be a legal MXCSR.
+// sigreturn restores the image out of it — xrstor64 or fxrstor64, in the
+// KERNEL. A reserved MXCSR bit faults either; a header naming a component
+// outside XCR0, a set compaction word or a nonzero reserved header byte
+// faults xrstor64. So the kernel sanitizes the image first. The last phase
+// forges each of the four in turn from inside a handler and returns: the OS
+// must survive, and the MXCSR that comes back must be legal.
 //
 // ONE ASM BLOCK PER CHECK, on purpose. The state is loaded and checked
 // inside a single asm statement, so no C code — and no function call — sits
@@ -79,6 +94,9 @@
 #define FPUTEST_FORGE_BAD_MXCSR  0xF0DE000C
 #define FPUTEST_NO_HELPER        0xF0DE000D   // could not spawn the external sender
 #define FPUTEST_NO_SELF_SIGNALS  0xF0DE000E   // the pinger's own syscall exits never delivered (§5 untested)
+#define FPUTEST_YMM_CLOBBERED    0xF0DE000F   // an upper half of a YMM register came back wrong
+#define FPUTEST_NO_SEGV          0xF0DE0010   // the page-fault delivery never ran its handler (§9 untested)
+#define FPUTEST_NO_PINNED        0xF0DE0011   // could not spawn the one-CPU run
 
 #define WORKERS      4
 #define PATTERNS     (WORKERS + 2)   // + the main thread + the pinger: every thread its own
@@ -89,6 +107,8 @@
 #define HELPER_SENDS 60              // ~2s of external SIGINTs at 30ms
 #define HELPER_GAP_MS 30
 #define PHASE_A_MS   3000            // longer than the helper's sends, so every one lands in phase A
+#define SEGV_ROUNDS  20
+#define PINNED_CPU   "1"             // a CPU that does not exist leaves the run unpinned (PINCPU's rule)
 
 // Which checks failed inside a chunk — one bit each, OR'd across chunks.
 #define BAD_XMM7    (1U << 0)
@@ -96,6 +116,7 @@
 #define BAD_MXCSR   (1U << 2)
 #define BAD_X87CW   (1U << 3)
 #define BAD_HIGHXMM (1U << 4)
+#define BAD_YMM     (1U << 5)
 
 // One pattern per THREAD — workers, main, and the pinger. Every field
 // differs between any two of them, so a cross-thread leak cannot pass by
@@ -109,44 +130,71 @@ typedef struct {
     double   x87;         // st(0)
     uint32_t mxcsr;       // all exceptions masked, a distinct rounding mode
     uint16_t x87cw;       // all exceptions masked, distinct rounding + precision
+    uint16_t pad;
+    uint8_t  upper[16][16];   // YMM0..15 bits 255:128, filled in main; used with AVX on
 } pattern_t;
 
 // MXCSR: 0x1F80 is every exception masked; bits 13-14 are the rounding
 // mode. x87 CW: 0x037F is masked/extended/nearest; bits 10-11 rounding,
-// 8-9 precision.
+// 8-9 precision. The sums and the upper halves are filled in by
+// fill_patterns.
 static pattern_t kPatterns[PATTERNS] = {
-    { 0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL, 0, 0, 1.0000001, 0x1F80U | (0U << 13), 0x037FU },
-    { 0xDEADBEEFCAFEBABEULL, 0x1122334455667788ULL, 0, 0, 2.7182818, 0x1F80U | (1U << 13), 0x077FU },   // round down
-    { 0xA5A5A5A55A5A5A5AULL, 0x0F0F0F0FF0F0F0F0ULL, 0, 0, 3.1415926, 0x1F80U | (2U << 13), 0x0A7FU },   // round up, double precision
-    { 0x8000000000000001ULL, 0x7FFFFFFFFFFFFFFFULL, 0, 0, 0.0000042, 0x1F80U | (3U << 13), 0x0F7FU },   // toward zero
-    { 0xC0FFEE0000C0FFEEULL, 0x0BADF00D0BADF00DULL, 0, 0, 6.0221408, 0x1F80U | (1U << 13), 0x027FU },   // main: round down, single
-    { 0x5EED5EED5EED5EEDULL, 0x9E3779B97F4A7C15ULL, 0, 0, 1.6180339, 0x1F80U | (2U << 13), 0x0E7FU },   // pinger: round up, toward-zero x87
+    { 0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL, 0, 0, 1.0000001, 0x1F80U | (0U << 13), 0x037FU, 0, {{0}} },
+    { 0xDEADBEEFCAFEBABEULL, 0x1122334455667788ULL, 0, 0, 2.7182818, 0x1F80U | (1U << 13), 0x077FU, 0, {{0}} },   // round down
+    { 0xA5A5A5A55A5A5A5AULL, 0x0F0F0F0FF0F0F0F0ULL, 0, 0, 3.1415926, 0x1F80U | (2U << 13), 0x0A7FU, 0, {{0}} },   // round up, double precision
+    { 0x8000000000000001ULL, 0x7FFFFFFFFFFFFFFFULL, 0, 0, 0.0000042, 0x1F80U | (3U << 13), 0x0F7FU, 0, {{0}} },   // toward zero
+    { 0xC0FFEE0000C0FFEEULL, 0x0BADF00D0BADF00DULL, 0, 0, 6.0221408, 0x1F80U | (1U << 13), 0x027FU, 0, {{0}} },   // main: round down, single
+    { 0x5EED5EED5EED5EEDULL, 0x9E3779B97F4A7C15ULL, 0, 0, 1.6180339, 0x1F80U | (2U << 13), 0x0E7FU, 0, {{0}} },   // pinger: round up, toward-zero x87
 };
 
 static volatile int64_t gHandlerRuns;
 static volatile int64_t gRunsByPattern[PATTERNS];   // who was interrupted, by control word
 static volatile int64_t gRunsUnknown;               // a thread with no pattern loaded
+static volatile int64_t gSegvRuns;
 static volatile bool    gStop;
+static bool             gHaveAvx;                   // the CPU says AVX state is enabled
 
-// Wipe everything the frame is supposed to protect. Every XMM register
-// zeroed, the x87 stack emptied and its control word reset, MXCSR reset.
-// If sigreturn restores from the frame, the interrupted thread never
-// notices; if it restores nothing, every check in the next iteration fails.
-//
-// Before the wipe: the live file still belongs to the interrupted thread
-// (the frame is a COPY), so the control word read here says whose turn it
-// was. That is how the fixture knows a delivery reached a spinning worker.
-static void clobber_handler(int signo)
+// Every line to the terminal AND the serial wire, so a headless harness can
+// read which paths ran without a screendump.
+static void say(const char *fmt, ...) OS64_PRINTF(1, 2);
+static void say(const char *fmt, ...)
 {
-    (void)signo;
+    char text[240];
+    va_list args;
+    va_start(args, fmt);
+    os64_vsnprintf(text, sizeof(text), fmt, args);
+    va_end(args);
+    os64_printf("%s", text);
+    // The wire takes one line without its newline.
+    size_t n = os64_strlen(text);
+    if (n > 0 && text[n - 1] == '\n')
+        text[n - 1] = '\0';
+    os64_serial_log(text);
+}
+
+// Asked once, before any thread starts: CPUID.1:ECX.OSXSAVE (XGETBV is legal),
+// then XCR0's SSE and AVX bits. AVX.md § What ring 3 gets.
+static bool cpu_has_avx_on(void)
+{
+    uint32_t a, b, c, d;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    if (!(c & (1U << 27)) || !(c & (1U << 28)))
+        return false;
+    uint32_t lo, hi;
+    __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+    return (lo & 0x6U) == 0x6U;
+}
+
+// Wipe everything the frame is supposed to protect. Every YMM register
+// zeroed whole when AVX is on, every XMM register zeroed, the x87 stack
+// emptied and its control word reset, MXCSR reset. If sigreturn restores
+// from the frame, the interrupted thread never notices; if it restores
+// nothing, every check in the next iteration fails.
+static void wipe_registers(void)
+{
     static const uint32_t reset_mxcsr = 0x1F80U;
-    uint16_t cw;
-    __asm__ volatile("fnstcw %0" : "=m"(cw));
-    bool known = false;
-    for (int i = 0; i < PATTERNS; i++)
-        if (kPatterns[i].x87cw == cw) { gRunsByPattern[i]++; known = true; }
-    if (!known)
-        gRunsUnknown++;
+    if (gHaveAvx)
+        __asm__ volatile("vzeroall" ::: "memory");
     __asm__ volatile(
         "pxor xmm0, xmm0\n\t"  "pxor xmm1, xmm1\n\t"  "pxor xmm2, xmm2\n\t"  "pxor xmm3, xmm3\n\t"
         "pxor xmm4, xmm4\n\t"  "pxor xmm5, xmm5\n\t"  "pxor xmm6, xmm6\n\t"  "pxor xmm7, xmm7\n\t"
@@ -155,7 +203,41 @@ static void clobber_handler(int signo)
         "fninit\n\t"
         "ldmxcsr %[m]\n\t"
         :: [m] "m"(reset_mxcsr) : "memory");
+}
+
+// Before the wipe: the live file still belongs to the interrupted thread
+// (the frame is a COPY), so the control word read here says whose turn it
+// was. That is how the fixture knows a delivery reached a spinning worker.
+static void clobber_handler(int signo)
+{
+    (void)signo;
+    uint16_t cw;
+    __asm__ volatile("fnstcw %0" : "=m"(cw));
+    bool known = false;
+    for (int i = 0; i < PATTERNS; i++)
+        if (kPatterns[i].x87cw == cw) { gRunsByPattern[i]++; known = true; }
+    if (!known)
+        gRunsUnknown++;
+    wipe_registers();
     gHandlerRuns++;
+}
+
+// §9: the fault is `mov rax, [rax]` with RAX = 0x10 — three bytes, emitted
+// as bytes so the length is not the assembler's choice — and returning
+// would retry it forever, so the handler steps the frame's RIP past it. The
+// stub CALLs the handler with RSP pointing AT the frame (task_exit_asm.S);
+// at -O0 (push rbp; mov rbp, rsp) that is rbp + 16, and RIP is at +16 in it
+// (signal_frame_t, signals.h).
+#define SEGV_FAULT_LENGTH 3
+#define FRAME_RIP_OFFSET  16
+
+static void segv_handler(int signo)
+{
+    (void)signo;
+    uint8_t *frame = (uint8_t *)__builtin_frame_address(0) + 16;
+    *(volatile uint64_t *)(frame + FRAME_RIP_OFFSET) += SEGV_FAULT_LENGTH;
+    wipe_registers();
+    gSegvRuns++;
 }
 
 // The load and the check, as text, so the spin loop and the syscall probe
@@ -224,6 +306,55 @@ static void clobber_handler(int signo)
         "or %[bad], %[bcw]\n\t" \
         "9:\n\t"
 
+// With AVX on: the upper half of every YMM register from the pattern's
+// table. vinsertf128 with the register itself as the first source keeps the
+// low half, so XMM0..5 (the compiler's) and XMM6..15 (the pattern above)
+// are untouched. Legacy SSE never writes an upper half, so the low-half
+// checks cannot disturb these either.
+#define FPU_UPPER_LOAD_ASM \
+        "vinsertf128 ymm0, ymm0, [%[pat] + 48], 1\n\t" \
+        "vinsertf128 ymm1, ymm1, [%[pat] + 64], 1\n\t" \
+        "vinsertf128 ymm2, ymm2, [%[pat] + 80], 1\n\t" \
+        "vinsertf128 ymm3, ymm3, [%[pat] + 96], 1\n\t" \
+        "vinsertf128 ymm4, ymm4, [%[pat] + 112], 1\n\t" \
+        "vinsertf128 ymm5, ymm5, [%[pat] + 128], 1\n\t" \
+        "vinsertf128 ymm6, ymm6, [%[pat] + 144], 1\n\t" \
+        "vinsertf128 ymm7, ymm7, [%[pat] + 160], 1\n\t" \
+        "vinsertf128 ymm8, ymm8, [%[pat] + 176], 1\n\t" \
+        "vinsertf128 ymm9, ymm9, [%[pat] + 192], 1\n\t" \
+        "vinsertf128 ymm10, ymm10, [%[pat] + 208], 1\n\t" \
+        "vinsertf128 ymm11, ymm11, [%[pat] + 224], 1\n\t" \
+        "vinsertf128 ymm12, ymm12, [%[pat] + 240], 1\n\t" \
+        "vinsertf128 ymm13, ymm13, [%[pat] + 256], 1\n\t" \
+        "vinsertf128 ymm14, ymm14, [%[pat] + 272], 1\n\t" \
+        "vinsertf128 ymm15, ymm15, [%[pat] + 288], 1\n\t"
+
+// Each upper half out to the scratch and XORed against the table, every
+// difference ORed into R11; one branch at the end. Local label 4 belongs to
+// this check.
+#define FPU_UPPER_CHECK_ONE(reg, off) \
+        "vextractf128 [%[scr]], " reg ", 1\n\t" \
+        "mov rax, [%[scr]]\n\t" \
+        "xor rax, [%[pat] + " #off "]\n\t" \
+        "or r11, rax\n\t" \
+        "mov rax, [%[scr] + 8]\n\t" \
+        "xor rax, [%[pat] + " #off " + 8]\n\t" \
+        "or r11, rax\n\t"
+#define FPU_UPPER_CHECK_ASM \
+        "xor r11, r11\n\t" \
+        FPU_UPPER_CHECK_ONE("ymm0", 48)   FPU_UPPER_CHECK_ONE("ymm1", 64) \
+        FPU_UPPER_CHECK_ONE("ymm2", 80)   FPU_UPPER_CHECK_ONE("ymm3", 96) \
+        FPU_UPPER_CHECK_ONE("ymm4", 112)  FPU_UPPER_CHECK_ONE("ymm5", 128) \
+        FPU_UPPER_CHECK_ONE("ymm6", 144)  FPU_UPPER_CHECK_ONE("ymm7", 160) \
+        FPU_UPPER_CHECK_ONE("ymm8", 176)  FPU_UPPER_CHECK_ONE("ymm9", 192) \
+        FPU_UPPER_CHECK_ONE("ymm10", 208) FPU_UPPER_CHECK_ONE("ymm11", 224) \
+        FPU_UPPER_CHECK_ONE("ymm12", 240) FPU_UPPER_CHECK_ONE("ymm13", 256) \
+        FPU_UPPER_CHECK_ONE("ymm14", 272) FPU_UPPER_CHECK_ONE("ymm15", 288) \
+        "test r11, r11\n\t" \
+        "jz 4f\n\t" \
+        "or %[bad], %[bymm]\n\t" \
+        "4:\n\t"
+
 // Two base registers, not eight: the pattern's fields and the scratch
 // slots are reached by offset, because the syscall probe below needs six
 // more GPRs than an eight-pointer operand list leaves on x86-64. The
@@ -233,19 +364,24 @@ _Static_assert(__builtin_offsetof(pattern_t, x87)    == 32, "pattern_t.x87 is re
 _Static_assert(__builtin_offsetof(pattern_t, mxcsr)  == 40, "pattern_t.mxcsr is read at +40");
 _Static_assert(__builtin_offsetof(pattern_t, x87cw)  == 44, "pattern_t.x87cw is read at +44");
 _Static_assert(__builtin_offsetof(pattern_t, sum_lo) == 16, "pattern_t.sum_lo is read at +16");
+_Static_assert(__builtin_offsetof(pattern_t, upper)  == 48, "pattern_t.upper is read at +48");
 // scratch[4]: +0..15 an XMM spill, +16 the st(0) store, +24 MXCSR, +28 the x87 CW.
 #define FPU_ASM_OPERANDS(p, scratch) \
           [pat] "r"(p), [scr] "r"(scratch), \
           [bxmm] "i"(BAD_XMM7), [bst] "i"(BAD_ST0), [bmx] "i"(BAD_MXCSR), \
-          [bcw] "i"(BAD_X87CW), [bhigh] "i"(BAD_HIGHXMM)
+          [bcw] "i"(BAD_X87CW), [bhigh] "i"(BAD_HIGHXMM), [bymm] "i"(BAD_YMM)
 
 #define FPU_ASM_CLOBBERS \
           "rax", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10", "xmm11", \
           "xmm12", "xmm13", "xmm14", "xmm15", "memory", "cc"
+// The AVX variants also write the upper halves of XMM0..5 and use R11.
+// vzeroupper at the end puts every upper half back to zero, as the SysV
+// ABI expects of SSE code, and leaves every low half alone.
+#define FPU_AVX_CLOBBERS "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5"
 
 // Load the pattern, then spin CHUNK_ITERS times comparing what the
 // registers hold against what was loaded. Returns the BAD_* bits.
-static uint32_t run_chunk(const pattern_t *p)
+static uint32_t run_chunk_sse(const pattern_t *p)
 {
     uint32_t bad = 0;
     uint64_t scratch[4];
@@ -263,6 +399,32 @@ static uint32_t run_chunk(const pattern_t *p)
     return bad;
 }
 
+static uint32_t run_chunk_avx(const pattern_t *p)
+{
+    uint32_t bad = 0;
+    uint64_t scratch[4];
+    __asm__ volatile(
+        FPU_LOAD_ASM
+        FPU_UPPER_LOAD_ASM
+        "mov rcx, %[iters]\n\t"
+        "1:\n\t"
+        FPU_CHECK_ASM
+        FPU_UPPER_CHECK_ASM
+        "dec rcx\n\t"
+        "jnz 1b\n\t"
+        "fstp st(0)\n\t"
+        "vzeroupper\n\t"
+        : [bad] "+r"(bad)
+        : FPU_ASM_OPERANDS(p, scratch), [iters] "i"(CHUNK_ITERS)
+        : "rcx", "r11", FPU_AVX_CLOBBERS, FPU_ASM_CLOBBERS);
+    return bad;
+}
+
+static uint32_t run_chunk(const pattern_t *p)
+{
+    return gHaveAvx ? run_chunk_avx(p) : run_chunk_sse(p);
+}
+
 // Load the pattern, make ONE syscall — the ctl write that publishes SIGINT
 // to this very thread — and check on the far side. The `syscall` is inline
 // so nothing but the kernel stands between load and check: the frame is
@@ -275,31 +437,86 @@ static uint32_t run_chunk(const pattern_t *p)
 // fourth argument, infinite patience, is loaded as an immediate.
 typedef struct { uint64_t handle; const char *text; uint64_t length; } syscall_args_t;
 
+// The raw write, shared by both variants. R11 is free again after the
+// syscall (the hardware put RFLAGS in it), so the upper check may use it.
+#define FPU_SYSCALL_ASM \
+        "mov rax, %[nr]\n\t" \
+        "mov rdi, [%[a]]\n\t" \
+        "mov rsi, [%[a] + 8]\n\t" \
+        "mov rdx, [%[a] + 16]\n\t" \
+        "mov r10, -1\n\t"       /* OS64_WAIT_FOREVER: this raw write bypasses libos64. */ \
+        "syscall\n\t"
+// A syscall clobbers what a C call clobbers (ABI.md § register contract):
+// every caller-saved GPR, not just the hardware's RCX/R11 — the kernel
+// zeroes them so nothing of its own leaks out. Name them all, or the
+// compiler parks an operand in R10 and the first store after `syscall`
+// goes through a null pointer.
+#define FPU_SYSCALL_CLOBBERS "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10"
+
 static uint32_t run_syscall_checked(const pattern_t *p, int64_t handle,
                                     const char *text, uint64_t length)
 {
     uint32_t bad = 0;
     uint64_t scratch[4];
     syscall_args_t args = { (uint64_t)handle, text, length };
-    __asm__ volatile(
-        FPU_LOAD_ASM
-        "mov rax, %[nr]\n\t"
-        "mov rdi, [%[a]]\n\t"
-        "mov rsi, [%[a] + 8]\n\t"
-        "mov rdx, [%[a] + 16]\n\t"
-        "mov r10, -1\n\t"       // OS64_WAIT_FOREVER: this raw write bypasses libos64.
-        "syscall\n\t"
-        FPU_CHECK_ASM
-        "fstp st(0)\n\t"
-        : [bad] "+r"(bad)
-        : FPU_ASM_OPERANDS(p, scratch),
-          [nr] "i"(SYSCALL_WRITE), [a] "r"(&args)
-        // A syscall clobbers what a C call clobbers (ABI.md § register
-        // contract): every caller-saved GPR, not just the hardware's
-        // RCX/R11 — the kernel zeroes them so nothing of its own leaks out.
-        // Name them all, or the compiler parks an operand in R10 and the
-        // first store after `syscall` goes through a null pointer.
-        : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", FPU_ASM_CLOBBERS);
+    if (gHaveAvx)
+        __asm__ volatile(
+            FPU_LOAD_ASM
+            FPU_UPPER_LOAD_ASM
+            FPU_SYSCALL_ASM
+            FPU_CHECK_ASM
+            FPU_UPPER_CHECK_ASM
+            "fstp st(0)\n\t"
+            "vzeroupper\n\t"
+            : [bad] "+r"(bad)
+            : FPU_ASM_OPERANDS(p, scratch),
+              [nr] "i"(SYSCALL_WRITE), [a] "r"(&args)
+            : FPU_SYSCALL_CLOBBERS, FPU_AVX_CLOBBERS, FPU_ASM_CLOBBERS);
+    else
+        __asm__ volatile(
+            FPU_LOAD_ASM
+            FPU_SYSCALL_ASM
+            FPU_CHECK_ASM
+            "fstp st(0)\n\t"
+            : [bad] "+r"(bad)
+            : FPU_ASM_OPERANDS(p, scratch),
+              [nr] "i"(SYSCALL_WRITE), [a] "r"(&args)
+            : FPU_SYSCALL_CLOBBERS, FPU_ASM_CLOBBERS);
+    return bad;
+}
+
+// Load the pattern, fault on page zero, check. The SIGSEGV handler steps
+// RIP past the three bytes of `mov rax, [rax]` (segv_handler); everything
+// else must come back from the frame (§9).
+#define FPU_SEGV_ASM \
+        "mov rax, 0x10\n\t" \
+        ".byte 0x48, 0x8b, 0x00\n\t"     /* mov rax, [rax] — SEGV_FAULT_LENGTH bytes */
+
+static uint32_t run_segv_checked(const pattern_t *p)
+{
+    uint32_t bad = 0;
+    uint64_t scratch[4];
+    if (gHaveAvx)
+        __asm__ volatile(
+            FPU_LOAD_ASM
+            FPU_UPPER_LOAD_ASM
+            FPU_SEGV_ASM
+            FPU_CHECK_ASM
+            FPU_UPPER_CHECK_ASM
+            "fstp st(0)\n\t"
+            "vzeroupper\n\t"
+            : [bad] "+r"(bad)
+            : FPU_ASM_OPERANDS(p, scratch)
+            : "r11", FPU_AVX_CLOBBERS, FPU_ASM_CLOBBERS);
+    else
+        __asm__ volatile(
+            FPU_LOAD_ASM
+            FPU_SEGV_ASM
+            FPU_CHECK_ASM
+            "fstp st(0)\n\t"
+            : [bad] "+r"(bad)
+            : FPU_ASM_OPERANDS(p, scratch)
+            : FPU_ASM_CLOBBERS);
     return bad;
 }
 
@@ -361,19 +578,85 @@ static int helper_main(const char *taskid_text)
 // ── The hostile frame ──────────────────────────────────────────────────────
 //
 // The stub CALLs the handler with RSP pointing AT the frame (task_exit_asm.S),
-// so at -O0 — push rbp; mov rbp, rsp — the frame is rbp + 16. Its FXSAVE
-// image starts at +64 (signal_frame_t, signals.h) and MXCSR is at +24 inside
-// that: frame + 88. Write all ones there and let sigreturn deal with it.
-#define FRAME_MXCSR_OFFSET (64 + 24)
+// so at -O0 — push rbp; mov rbp, rsp — the frame is rbp + 16. Its register
+// image starts at +64 (signal_frame_t, signals.h), the standard XSAVE layout
+// in both modes: MXCSR at +24 inside it, the header at +512 — XSTATE_BV,
+// then XCOMP_BV at +8, then reserved bytes to +63.
+#define FRAME_IMAGE        64
+#define FRAME_MXCSR_OFFSET (FRAME_IMAGE + 24)
+#define FRAME_XSTATE_BV    (FRAME_IMAGE + 512)
+#define FRAME_XCOMP_BV     (FRAME_IMAGE + 512 + 8)
+#define FRAME_RESERVED     (FRAME_IMAGE + 512 + 40)
 
+// The four ways a frame's image can fault the kernel's restore, one per
+// signal. Each is a kernel #GP unless sigreturn sanitizes it first.
+enum { FORGE_MXCSR, FORGE_COMPONENTS, FORGE_COMPACTED, FORGE_RESERVED, FORGE_KINDS };
+static const char *const kForgeNames[FORGE_KINDS] = {
+    "MXCSR 0xFFFFFFFF", "XSTATE_BV naming every component", "XCOMP_BV's compaction bit",
+    "a reserved header byte",
+};
+static volatile int gForgeKind;
 static volatile int64_t gForgeRuns;
 
 static void forge_handler(int signo)
 {
     (void)signo;
     uint8_t *frame = (uint8_t *)__builtin_frame_address(0) + 16;
-    *(volatile uint32_t *)(frame + FRAME_MXCSR_OFFSET) = 0xFFFFFFFFU;
+    switch (gForgeKind)
+    {
+    case FORGE_MXCSR:      *(volatile uint32_t *)(frame + FRAME_MXCSR_OFFSET) = 0xFFFFFFFFU; break;
+    case FORGE_COMPONENTS: *(volatile uint64_t *)(frame + FRAME_XSTATE_BV) = ~0ULL; break;
+    case FORGE_COMPACTED:  *(volatile uint64_t *)(frame + FRAME_XCOMP_BV) = (1ULL << 63) | 7; break;
+    case FORGE_RESERVED:   *(volatile uint8_t *)(frame + FRAME_RESERVED) = 0x5A; break;
+    }
     gForgeRuns++;
+}
+
+// ── One CPU, two threads ───────────────────────────────────────────────────
+//
+// `fputest --pinned`: spawned with PINCPU set, so this task and both its
+// workers live on one CPU, and every switch there hands the registers from
+// one worker to the other. Patterns 0 and 1; returns FPUTEST_OK or the
+// first BAD_* code either saw.
+static int pinned_main(void)
+{
+    gHaveAvx = cpu_has_avx_on();
+    int64_t a = os64_thread(worker, (void *)0);
+    int64_t b = os64_thread(worker, (void *)1);
+    if (a < 0 || b < 0)
+        return FPUTEST_NO_START;
+    os64_sleep(RUN_MS);
+    gStop = true;
+    int64_t abad = -1, bbad = -1;
+    if (os64_thread_join((int32_t)a, &abad) < 0 || abad < 0 ||
+        os64_thread_join((int32_t)b, &bbad) < 0 || bbad < 0)
+        return FPUTEST_BAD_JOIN;
+    uint32_t bad = (uint32_t)abad | (uint32_t)bbad;
+    if (bad & BAD_YMM)     return FPUTEST_YMM_CLOBBERED;
+    if (bad & BAD_XMM7)    return FPUTEST_XMM_CLOBBERED;
+    if (bad & BAD_HIGHXMM) return FPUTEST_HIGHXMM_CLOBBERED;
+    if (bad & BAD_ST0)     return FPUTEST_X87_CLOBBERED;
+    if (bad & BAD_MXCSR)   return FPUTEST_MXCSR_CLOBBERED;
+    if (bad & BAD_X87CW)   return FPUTEST_X87CW_CLOBBERED;
+    return FPUTEST_OK;
+}
+
+// Each register and each thread its own upper half: a register that came
+// back as another register's, or another thread's, fails the compare.
+static void fill_patterns(void)
+{
+    for (int i = 0; i < PATTERNS; i++)
+    {
+        pattern_t *p = &kPatterns[i];
+        p->sum_lo = p->lo * 44ULL;   // paddq wraps per lane, so does this
+        p->sum_hi = p->hi * 44ULL;
+        for (int r = 0; r < 16; r++)
+            for (int b = 0; b < 16; b++)
+            {
+                uint64_t word = b < 8 ? p->lo : p->hi;
+                p->upper[r][b] = (uint8_t)((word >> (8 * (b & 7))) ^ (uint8_t)(r * 0x1D + b * 0x07 + 1));
+            }
+    }
 }
 
 int main(int argc, char **argv)
@@ -381,15 +664,17 @@ int main(int argc, char **argv)
     if (argc == 3 && os64_streq(argv[1], "--helper"))
         return helper_main(argv[2]);
 
-    for (int i = 0; i < PATTERNS; i++)
-    {
-        kPatterns[i].sum_lo = kPatterns[i].lo * 44ULL;   // paddq wraps per lane, so does this
-        kPatterns[i].sum_hi = kPatterns[i].hi * 44ULL;
-    }
+    fill_patterns();
+    if (argc == 2 && os64_streq(argv[1], "--pinned"))
+        return pinned_main();
+
+    gHaveAvx = cpu_has_avx_on();
+    say("fputest: AVX %s - the upper halves of YMM0..15 are %s\n",
+                gHaveAvx ? "on" : "off", gHaveAvx ? "checked too" : "not in play");
 
     if (os64_signal_set_handler(OS64_SIGINT, clobber_handler) < 0)
     {
-        os64_printf("fputest: could not install the SIGINT handler\n");
+        say("fputest: could not install the SIGINT handler\n");
         return FPUTEST_NO_HANDLER;
     }
 
@@ -399,7 +684,7 @@ int main(int argc, char **argv)
         handles[i] = os64_thread(worker, (void *)i);
         if (handles[i] < 0)
         {
-            os64_printf("fputest: could not start worker %ld\n", i);
+            say("fputest: could not start worker %ld\n", i);
             return FPUTEST_NO_START;
         }
     }
@@ -429,7 +714,7 @@ int main(int argc, char **argv)
     int64_t helper = os64_spawn("/tests/fputest", helper_argv);
     if (helper < 0)
     {
-        os64_printf("fputest: could not spawn the external sender\n");
+        say("fputest: could not spawn the external sender\n");
         return FPUTEST_NO_HELPER;
     }
 
@@ -465,7 +750,7 @@ int main(int argc, char **argv)
         int64_t wbad = -1;
         if (os64_thread_join((int32_t)handles[i], &wbad) < 0 || wbad < 0)
         {
-            os64_printf("fputest: join of worker %ld failed\n", i);
+            say("fputest: join of worker %ld failed\n", i);
             return FPUTEST_BAD_JOIN;
         }
         bad |= (uint32_t)wbad;
@@ -474,18 +759,20 @@ int main(int argc, char **argv)
     os64_thread_join((int32_t)ping, &ping_result);
     if (ping_result == FPUTEST_NO_CTL)
     {
-        os64_printf("fputest: could not open /proc/self/ctl to send SIGINT\n");
+        say("fputest: could not open /proc/self/ctl to send SIGINT\n");
         return FPUTEST_NO_CTL;
     }
     bad |= (uint32_t)ping_result;
 
-    os64_printf("fputest: %ld handler runs — %ld on syscall-free spinners (scheduler-delivered), %ld on the pinger's own syscall (syscall-exit), %ld on main afterwards, %ld unidentified\n",
+    say("fputest: %ld handler runs — %ld on syscall-free spinners (scheduler-delivered), %ld on the pinger's own syscall (syscall-exit), %ld on main afterwards, %ld unidentified\n",
                 gHandlerRuns, spinner_runs, gRunsByPattern[PINGER_PATTERN],
                 gRunsByPattern[MAIN_PATTERN] - main_runs_a, gRunsUnknown);
-    os64_printf("fputest: bad checks: xmm7 %s, xmm8-15 %s, st(0) %s, mxcsr %s, x87cw %s\n",
+    say("fputest: bad checks: xmm7 %s, xmm8-15 %s, ymm upper halves %s, st(0) %s, mxcsr %s, x87cw %s\n",
                 (bad & BAD_XMM7) ? "YES" : "none", (bad & BAD_HIGHXMM) ? "YES" : "none",
+                (bad & BAD_YMM) ? "YES" : (gHaveAvx ? "none" : "not checked"),
                 (bad & BAD_ST0) ? "YES" : "none", (bad & BAD_MXCSR) ? "YES" : "none",
                 (bad & BAD_X87CW) ? "YES" : "none");
+    if (bad & BAD_YMM)     return FPUTEST_YMM_CLOBBERED;
     if (bad & BAD_XMM7)    return FPUTEST_XMM_CLOBBERED;
     if (bad & BAD_HIGHXMM) return FPUTEST_HIGHXMM_CLOBBERED;
     if (bad & BAD_ST0)     return FPUTEST_X87_CLOBBERED;
@@ -494,38 +781,78 @@ int main(int argc, char **argv)
     // A pass that never exercised a path must say so rather than claim it.
     if (spinner_runs == 0)
     {
-        os64_printf("fputest: no external SIGINT ever reached a spinning thread — the scheduler-delivered frame went untested\n");
+        say("fputest: no external SIGINT ever reached a spinning thread — the scheduler-delivered frame went untested\n");
         return FPUTEST_NO_SIGNALS;
     }
     if (gRunsByPattern[PINGER_PATTERN] == 0)
     {
-        os64_printf("fputest: the pinger's own syscalls never delivered — the syscall-exit frame went untested\n");
+        say("fputest: the pinger's own syscalls never delivered — the syscall-exit frame went untested\n");
         return FPUTEST_NO_SELF_SIGNALS;
     }
+
+    // ── §9: the page fault's delivery, main alone ─────────────────────────
+    if (os64_signal_set_handler(OS64_SIGSEGV, segv_handler) < 0)
+        return FPUTEST_NO_HANDLER;
+    uint32_t segv_bad = 0;
+    for (int i = 0; i < SEGV_ROUNDS; i++)
+        segv_bad |= run_segv_checked(&kPatterns[MAIN_PATTERN]);
+    os64_signal_set_handler(OS64_SIGSEGV, OS64_SIG_DEFAULT);   // a real fault must kill, not skip
+    say("fputest: %ld of %d page faults delivered to the SIGSEGV handler (page-fault path), bad bits 0x%x\n",
+                gSegvRuns, SEGV_ROUNDS, segv_bad);
+    if (segv_bad & BAD_YMM)     return FPUTEST_YMM_CLOBBERED;
+    if (segv_bad & BAD_XMM7)    return FPUTEST_XMM_CLOBBERED;
+    if (segv_bad & BAD_HIGHXMM) return FPUTEST_HIGHXMM_CLOBBERED;
+    if (segv_bad & BAD_ST0)     return FPUTEST_X87_CLOBBERED;
+    if (segv_bad & BAD_MXCSR)   return FPUTEST_MXCSR_CLOBBERED;
+    if (segv_bad & BAD_X87CW)   return FPUTEST_X87CW_CLOBBERED;
+    if (gSegvRuns != SEGV_ROUNDS)
+        return FPUTEST_NO_SEGV;
+
+    // ── Two threads, one CPU ──────────────────────────────────────────────
+    // PINCPU is read at birth from the environment the child inherits, and
+    // unset again at once so nothing else this program spawns is pinned.
+    os64_setenv("PINCPU", PINNED_CPU);
+    char *const pinned_argv[] = { "/tests/fputest", "--pinned", NULL };
+    int64_t pinned = os64_spawn("/tests/fputest", pinned_argv);
+    os64_unsetenv("PINCPU");
+    if (pinned < 0)
+        return FPUTEST_NO_PINNED;
+    int32_t pinned_code = 0;
+    while (os64_wait(pinned, &pinned_code) == OS64_INTERRUPTED)
+        ;
+    say("fputest: two threads sharing CPU " PINNED_CPU " for %d ms: exit 0x%x\n",
+                RUN_MS, (uint32_t)pinned_code);
+    if ((uint32_t)pinned_code != FPUTEST_OK)
+        return pinned_code;
 
     // Now the forgery. Only this thread is left, so the signal is ours.
     // Delivery rides the ctl write's own syscall exit (§5), so the handler
     // has run by the time the write returns; the sleep is a backstop.
     os64_signal_set_handler(OS64_SIGINT, forge_handler);
-    int64_t h = open_ctl(os64_taskid());
-    if (h < 0)
-        return FPUTEST_NO_CTL;
-    os64_write((int32_t)h, "interrupt", 9);
-    os64_close((int32_t)h);
-    for (int i = 0; i < 50 && gForgeRuns == 0; i++)
-        os64_sleep(10);
-    if (gForgeRuns == 0)
+    for (int kind = 0; kind < FORGE_KINDS; kind++)
     {
-        os64_printf("fputest: the forging handler never ran\n");
-        return FPUTEST_FORGE_NO_SIGNAL;
+        gForgeKind = kind;
+        int64_t before = gForgeRuns;
+        int64_t h = open_ctl(os64_taskid());
+        if (h < 0)
+            return FPUTEST_NO_CTL;
+        os64_write((int32_t)h, "interrupt", 9);
+        os64_close((int32_t)h);
+        for (int i = 0; i < 50 && gForgeRuns == before; i++)
+            os64_sleep(10);
+        if (gForgeRuns == before)
+        {
+            say("fputest: the forging handler never ran for %s\n", kForgeNames[kind]);
+            return FPUTEST_FORGE_NO_SIGNAL;
+        }
+        // Still here: the kernel survived the restore. What did it hand
+        // back? Every bit above 17 is reserved on every CPU (bit 17 only on
+        // AMD, and the mask knows); a legal MXCSR has none of them set.
+        uint32_t mxcsr_now;
+        __asm__ volatile("stmxcsr %0" : "=m"(mxcsr_now));
+        say("fputest: forged %s and lived; MXCSR is 0x%x\n", kForgeNames[kind], mxcsr_now);
+        if (mxcsr_now & 0xFFFC0000U)
+            return FPUTEST_FORGE_BAD_MXCSR;
     }
-    // Still here: the kernel survived the fxrstor. What did it hand back?
-    // Every bit above 17 is reserved on every CPU (bit 17 only on AMD, and
-    // the mask knows); a legal MXCSR has none of them set.
-    uint32_t mxcsr_now;
-    __asm__ volatile("stmxcsr %0" : "=m"(mxcsr_now));
-    os64_printf("fputest: forged MXCSR 0xFFFFFFFF came back as 0x%x\n", mxcsr_now);
-    if (mxcsr_now & 0xFFFC0000U)
-        return FPUTEST_FORGE_BAD_MXCSR;
     return FPUTEST_OK;
 }

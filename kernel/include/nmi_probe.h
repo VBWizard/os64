@@ -119,6 +119,9 @@ typedef struct {
 	uint32_t msrCount;
 	uint64_t msr[NMI_PROBE_MSR_MAX];
 	uint64_t dr7;
+	// XCR0, read only when this CPU's CR4.OSXSAVE is set (xgetbv is #UD
+	// otherwise): the AVX mode's R1, verified on the thread itself.
+	uint64_t xcr0;
 
 	// Published LAST. A reader that sees this true is guaranteed to see every
 	// field above it, because the write is release-ordered by the compiler

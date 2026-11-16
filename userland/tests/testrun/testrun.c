@@ -117,7 +117,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/malloctest",      argv_malloc_stomp,      0xCA9A12ED, 0, "a stomped canary kills the program (it must)" },
     { "/tests/nx_test",         argv_nx_stack, 139, 0,         "executing the stack kills the program (NX works)" },
     { "/tests/nx_test",         argv_nx_text,  139, 0,         "writing to .text kills the program (W^X works)" },
-    { "/tests/fputest",         NULL, 0xF0DE0000,  0,          "x87/SSE data AND control state survive preemption, migration, a handler that wipes them, and a forged frame MXCSR" },
+    { "/tests/fputest",         NULL, 0xF0DE0000,  0,          "x87/SSE/AVX data AND control state survive preemption, migration, two threads on one CPU, a handler that wipes them on each delivery path, and a forged frame image" },
     { "/tests/mathtest",        NULL, 0x3A740000,  0,          "libmath.so matches the host build bit for bit, keeps the caller's FP control state, and holds across threads" },
     // PASS BY DYING: a CPU exception from ring 3 ends the program with
     // 200 + vector (user_exception_kill), never the machine.
@@ -127,7 +127,9 @@ static const fixture_t kFixtures[] = {
     { "/tests/fpfault",         argv_fpfault_xm, 219, 3,       "an unmasked SSE exception (#XM) kills the program, not the OS" },
     { "/tests/fpfault",         argv_fpfault_mf, 216, 0,       "an unmasked x87 exception (#MF) kills the program, not the OS" },
     { "/tests/fpfault",         argv_fpfault_de, 200, 0,       "an integer divide by zero (#DE) kills the program, not the OS" },
-    { "/tests/fpfault",         argv_fpfault_ud, 206, 0,       "an AVX instruction with XSAVE off (#UD) kills the program, not the OS" },
+    { "/tests/fpfault",         argv_fpfault_ud, 206, 0,       "an instruction whose state is off (#UD: AVX-512 with AVX on, AVX without) kills the program, not the OS" },
+    // 2 = the CPU says AVX is off (`sse` mode, or no AVX at all): a SKIP.
+    { "/tests/avxprobe",        NULL, 0, 2,                    "AVX, AVX2 and FMA give exact answers on CPU 0 and CPU 1, and a spawned program is born with zero upper halves" },
     // The guard below a thread's stack catches a runaway recursion
     // (-fstack-clash-protection keeps a big frame from leaping it), and the
     // kernel heads the death "Stack overflow". 139 is what testrun can see;

@@ -40,6 +40,7 @@ extern uintptr_t kKernelPML4v;
 // LAPIC register offsets we only ever READ. Named here rather than pulled from
 // a driver header because this file must stay compilable on a path where as
 // little as possible is trusted.
+#define NMI_PROBE_CR4_OSXSAVE  (1UL << 18)   // xgetbv is legal only with it set
 #define APIC_TPR_OFFSET        0x80
 #define APIC_PPR_OFFSET        0xA0
 #define APIC_LVT_TIMER_OFFSET  0x320
@@ -237,6 +238,13 @@ bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame)
 	for (uint32_t i = 0; i < s->msrCount; i++)
 		s->msr[i] = rdmsr64(kNmiProbeMsrs[i].index);
 	__asm__ volatile("mov %0, dr7" : "=r"(s->dr7));
+	// Only behind OSXSAVE: xgetbv without it is #UD, and nothing here may fault.
+	s->xcr0 = 0;
+	if (s->cr4 & NMI_PROBE_CR4_OSXSAVE) {
+		uint32_t lo, hi;
+		__asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+		s->xcr0 = ((uint64_t)hi << 32) | lo;
+	}
 
 	// Publish. Everything above must be visible before `valid` is, and must
 	// not be sunk below it by the compiler.
@@ -472,6 +480,13 @@ void nmi_probe_render(const nmi_probe_snapshot_t *s, nmi_probe_line_fn emit, voi
 		emit(ctx, line);
 	}
 	sprintf(line, "  dr7=%016lx\n", s->dr7);
+	emit(ctx, line);
+	// The AVX mode's two per-thread facts (AVX.md): every thread of a boot
+	// must agree, OSXSAVE 1 with XCR0 0x7 in `avx` mode and OSXSAVE 0 in `sse`.
+	if (s->cr4 & NMI_PROBE_CR4_OSXSAVE)
+		sprintf(line, "  fpu: OSXSAVE=1 XCR0=%016lx\n", s->xcr0);
+	else
+		sprintf(line, "  fpu: OSXSAVE=0 (XCR0 unreadable)\n");
 	emit(ctx, line);
 
 	probe_walk_stack(emit, ctx, s);

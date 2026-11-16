@@ -161,7 +161,7 @@ thread_t* createThread(void* ownerTask, bool kernelThread, uint64_t userStack)
 	thread_t* newThread;
 
 	// The allocator zeroes memory, so the thread context starts initialized.
-	// FXSAVE/FXRSTOR require the embedded FPU image to be 16-byte aligned.
+	// XSAVE/XRSTOR require the embedded FPU image to be 64-byte aligned.
 	// Allocate the enclosing thread on a page boundary so that its asserted
 	// fpuState member alignment holds for the object as well as its layout.
 	newThread = kmalloc_aligned(sizeof(thread_t));

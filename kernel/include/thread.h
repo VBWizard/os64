@@ -99,7 +99,7 @@ typedef struct s_thread
 	bool wakeOwed;
 	volatile uint64_t retVal;
 	thread_context_t regs;
-	// The x87/MMX/SSE register file belongs to the thread just as regs does.
+	// The x87/MMX/SSE(/AVX) register file belongs to the thread just as regs does.
 	// The scheduler saves it before another thread runs, and signal frames
 	// snapshot it before a handler is allowed to use floating-point code.
 	fpu_state_t fpuState;
@@ -216,8 +216,8 @@ typedef struct s_thread
 	uint32_t gui_wait_cursor;
 } thread_t;
 
-_Static_assert(offsetof(thread_t, fpuState) % 16 == 0,
-		"thread FXSAVE state must begin on a 16-byte boundary");
+_Static_assert(offsetof(thread_t, fpuState) % FPU_IMAGE_ALIGN == 0,
+		"thread FPU state must begin on XSAVE's 64-byte boundary");
 
 // `userStack` is the ring-3 stack the program asked for, 0 for the default
 // (THREAD_USER_STACK_SIZE): a task's main thread takes its PT_GNU_STACK
