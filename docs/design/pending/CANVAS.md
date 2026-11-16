@@ -563,7 +563,8 @@ Font styles are copied with native save/restore/reset. Pixel font assignments
 need no computed-style layout; relative inputs request the applicable style.
 Yonder supplies font selection through its existing page/system family provider
 and text-run layout. Font size is bounded at 1280px, input at 16 KiB, and emitted
-contours at 4096 commands per operation. Resource refusal occurs before painting.
+contours at 4096 commands per draw; `measureText` emits none, keeps only
+the bounds, and is not held to it. Resource refusal occurs before painting.
 
 TextMetrics owns engine-managed storage and is collectible independently of the
 page. Gradient wrappers share the binding's retained-object registry and remain

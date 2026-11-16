@@ -301,7 +301,19 @@ static void dom_classic_method_cases(void)
         "ln.relList='icon';assert(ln.rel==='icon','PutForwards');"
         "assert(ln.relList.supports('modulepreload')&&ln.relList.supports('StyleSheet')&&!ln.relList.supports('icon')&&!ln.relList.supports(''),'supports');"
         "throws('TypeError',()=>ln.relList.supports());"
-        "assert(!('relList' in one)&&!('rel' in one)&&!('relList' in a),'relList on a link alone');"
+        "assert(!('relList' in one)&&!('rel' in one),'relList on the links alone');"
+        /* a hyperlink's relList: noopener is the one of its types yonder keeps */
+        "a.rel='noopener NoReferrer';assert(a.relList.length===2&&a.relList.contains('NoReferrer')&&a.relList===a.relList,'an anchor\\'s relList');"
+        "assert(a.relList.supports('NOOPENER')&&!a.relList.supports('noreferrer')&&!a.relList.supports('opener')&&!a.relList.supports('stylesheet'),'a hyperlink\\'s tokens');"
+        "const ar=document.createElement('area');ar.relList.add('noopener');assert(ar.rel==='noopener'&&ar.relList.supports('noopener'),'an area\\'s');"
+        "assert(!ln.relList.supports('noopener'),'a link\\'s are its own');"
+        /* the anchor's other members: reflections, and its text */
+        "a.target='_blank';a.download='f.txt';a.hreflang='en';a.type='text/plain';a.name='n';a.ping='https://p.test/';"
+        "assert(a.getAttribute('target')==='_blank'&&a.getAttribute('download')==='f.txt'&&a.getAttribute('hreflang')==='en'"
+        "&&a.getAttribute('type')==='text/plain'&&a.getAttribute('name')==='n'&&a.target==='_blank'&&a.ping==='https://p.test/','an anchor\\'s reflections');"
+        "a.setAttribute('referrerpolicy','ORIGIN');assert(a.referrerPolicy==='origin'&&a.coords===''&&a.charset===''&&a.rev===''&&a.shape==='','enumerated and obsolete');"
+        "a.innerHTML='go <b>on</b>';assert(a.text==='go on','text is the descendants\\'');a.text='x<y';assert(a.firstChild.data==='x<y'&&a.childNodes.length===1,'and sets as textContent');"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,'text').get.call(document.createElement('title')));"
         /* dataset */
         "one.setAttribute('data-foo-bar','1');const d=one.dataset;assert(d===one.dataset&&d.fooBar==='1','dataset reads');"
         "d.someName='v';assert(one.getAttribute('data-some-name')==='v','dataset sets');"

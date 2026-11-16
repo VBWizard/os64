@@ -1059,6 +1059,23 @@ animation-model/animation-types/accumulation-per-property-002.html	list-style-po
 animation-model/animation-types/accumulation-per-property-002.html	list-style-type (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	list-style-type: "circle" onto "square"
 animation-model/animation-types/accumulation-per-property-002.html	list-style-type: "square" onto "circle"
+animation-model/animation-types/accumulation-per-property-002.html	mask (type: discrete) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	mask-clip (type: discrete) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	mask-clip: "border-box" onto "content-box"
+animation-model/animation-types/accumulation-per-property-002.html	mask-clip: "content-box" onto "border-box"
+animation-model/animation-types/accumulation-per-property-002.html	mask-composite (type: discrete) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	mask-composite: "add" onto "subtract"
+animation-model/animation-types/accumulation-per-property-002.html	mask-composite: "subtract" onto "add"
+animation-model/animation-types/accumulation-per-property-002.html	mask-image (type: discrete) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	mask-image: "url("http://localhost/test-1")" onto "url("http://localhost/test-2")"
+animation-model/animation-types/accumulation-per-property-002.html	mask-image: "url("http://localhost/test-2")" onto "url("http://localhost/test-1")"
+animation-model/animation-types/accumulation-per-property-002.html	mask-mode (type: discrete) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	mask-mode: "alpha" onto "luminance"
+animation-model/animation-types/accumulation-per-property-002.html	mask-mode: "luminance" onto "alpha"
+animation-model/animation-types/accumulation-per-property-002.html	mask-origin (type: discrete) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	mask-origin: "border-box" onto "content-box"
+animation-model/animation-types/accumulation-per-property-002.html	mask-origin: "content-box" onto "border-box"
+animation-model/animation-types/accumulation-per-property-002.html	mask-repeat (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	mix-blend-mode (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	mix-blend-mode: "multiply" onto "screen"
 animation-model/animation-types/accumulation-per-property-002.html	mix-blend-mode: "screen" onto "multiply"
@@ -1364,6 +1381,23 @@ animation-model/animation-types/addition-per-property-002.html	list-style-positi
 animation-model/animation-types/addition-per-property-002.html	list-style-type (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	list-style-type: "circle" onto "square"
 animation-model/animation-types/addition-per-property-002.html	list-style-type: "square" onto "circle"
+animation-model/animation-types/addition-per-property-002.html	mask (type: discrete) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	mask-clip (type: discrete) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	mask-clip: "border-box" onto "content-box"
+animation-model/animation-types/addition-per-property-002.html	mask-clip: "content-box" onto "border-box"
+animation-model/animation-types/addition-per-property-002.html	mask-composite (type: discrete) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	mask-composite: "add" onto "subtract"
+animation-model/animation-types/addition-per-property-002.html	mask-composite: "subtract" onto "add"
+animation-model/animation-types/addition-per-property-002.html	mask-image (type: discrete) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	mask-image: "url("http://localhost/test-1")" onto "url("http://localhost/test-2")"
+animation-model/animation-types/addition-per-property-002.html	mask-image: "url("http://localhost/test-2")" onto "url("http://localhost/test-1")"
+animation-model/animation-types/addition-per-property-002.html	mask-mode (type: discrete) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	mask-mode: "alpha" onto "luminance"
+animation-model/animation-types/addition-per-property-002.html	mask-mode: "luminance" onto "alpha"
+animation-model/animation-types/addition-per-property-002.html	mask-origin (type: discrete) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	mask-origin: "border-box" onto "content-box"
+animation-model/animation-types/addition-per-property-002.html	mask-origin: "content-box" onto "border-box"
+animation-model/animation-types/addition-per-property-002.html	mask-repeat (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	mix-blend-mode (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	mix-blend-mode: "multiply" onto "screen"
 animation-model/animation-types/addition-per-property-002.html	mix-blend-mode: "screen" onto "multiply"
@@ -1731,6 +1765,28 @@ animation-model/animation-types/interpolation-per-property-002.html	list-style-t
 animation-model/animation-types/interpolation-per-property-002.html	list-style-type uses discrete animation when animating between "circle" and "square" with effect easing
 animation-model/animation-types/interpolation-per-property-002.html	list-style-type uses discrete animation when animating between "circle" and "square" with keyframe easing
 animation-model/animation-types/interpolation-per-property-002.html	list-style-type uses discrete animation when animating between "circle" and "square" with linear easing
+animation-model/animation-types/interpolation-per-property-002.html	mask (type: discrete) has testInterpolation function
+animation-model/animation-types/interpolation-per-property-002.html	mask-clip (type: discrete) has testInterpolation function
+animation-model/animation-types/interpolation-per-property-002.html	mask-clip uses discrete animation when animating between "content-box" and "border-box" with effect easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-clip uses discrete animation when animating between "content-box" and "border-box" with keyframe easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-clip uses discrete animation when animating between "content-box" and "border-box" with linear easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-composite (type: discrete) has testInterpolation function
+animation-model/animation-types/interpolation-per-property-002.html	mask-composite uses discrete animation when animating between "add" and "subtract" with effect easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-composite uses discrete animation when animating between "add" and "subtract" with keyframe easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-composite uses discrete animation when animating between "add" and "subtract" with linear easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-image (type: discrete) has testInterpolation function
+animation-model/animation-types/interpolation-per-property-002.html	mask-image uses discrete animation when animating between "url("http://localhost/test-1")" and "url("http://localhost/test-2")" with effect easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-image uses discrete animation when animating between "url("http://localhost/test-1")" and "url("http://localhost/test-2")" with keyframe easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-image uses discrete animation when animating between "url("http://localhost/test-1")" and "url("http://localhost/test-2")" with linear easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-mode (type: discrete) has testInterpolation function
+animation-model/animation-types/interpolation-per-property-002.html	mask-mode uses discrete animation when animating between "alpha" and "luminance" with effect easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-mode uses discrete animation when animating between "alpha" and "luminance" with keyframe easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-mode uses discrete animation when animating between "alpha" and "luminance" with linear easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-origin (type: discrete) has testInterpolation function
+animation-model/animation-types/interpolation-per-property-002.html	mask-origin uses discrete animation when animating between "content-box" and "border-box" with effect easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-origin uses discrete animation when animating between "content-box" and "border-box" with keyframe easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-origin uses discrete animation when animating between "content-box" and "border-box" with linear easing
+animation-model/animation-types/interpolation-per-property-002.html	mask-repeat (type: discrete) has testInterpolation function
 animation-model/animation-types/interpolation-per-property-002.html	mix-blend-mode (type: discrete) has testInterpolation function
 animation-model/animation-types/interpolation-per-property-002.html	mix-blend-mode uses discrete animation when animating between "multiply" and "screen" with effect easing
 animation-model/animation-types/interpolation-per-property-002.html	mix-blend-mode uses discrete animation when animating between "multiply" and "screen" with keyframe easing
