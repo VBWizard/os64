@@ -6,7 +6,7 @@ typedef struct {
     os64_js_realm_t *realm[3];
     JSContext *ctx[3];
     JSValue records[16];
-    unsigned loads[3], resolves[3];
+    unsigned loads[3], resolves[3], incumbent_calls;
     char bases[3][128];
 } ActiveScriptFixture;
 static ActiveScriptFixture *active_script;
@@ -39,6 +39,41 @@ static JSValue active_record(JSContext *ctx, JSValueConst self, int argc,
         result=JS_NewInt32(ctx,index);
     }
     JS_FreeValue(ctx,record);return result;
+}
+
+static JSValue active_incumbent_nested(JSContext *ctx, void *opaque)
+{
+    ActiveScriptFixture *f=opaque;JSRuntime *rt=JS_GetRuntime(ctx);
+    JSValue record=JS_GetActiveScriptOrModule(rt);
+    check(JS_GetIncumbentContext(rt)==f->ctx[1]&&JS_GetScriptOrModuleContext(record)==f->ctx[0],
+          "active script: nested callback suppression selects B while provenance stays A");
+    JS_FreeValue(ctx,record);return JS_UNDEFINED;
+}
+static JSValue active_incumbent_probe(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv)
+{
+    (void)self;(void)argc;(void)argv;
+    ActiveScriptFixture *f=active_script;JSRuntime *rt=JS_GetRuntime(ctx);
+    JSValue record=JS_GetActiveScriptOrModule(rt);os64_js_outcome_t out;
+    check(JS_GetEntryContext(rt)==f->ctx[2]&&JS_GetCurrentContext(rt)==f->ctx[2],
+          "active script: native callback entry and current remain C");
+    check(JS_VALUE_GET_TAG(record)==JS_VALUE_GET_TAG(f->records[12])&&
+          JS_VALUE_GET_PTR(record)==JS_VALUE_GET_PTR(f->records[12]),
+          "active script: native callback restores the exact originating A record");
+    check(JS_GetIncumbentContext(rt)==f->ctx[0],
+          "active script: unskipped synthetic A activation takes precedence over captured B backup");
+    JSValue fn=realm_property(ctx,"incumbentProbe");
+    os64_js_callback_t captured=OS64_JS_CALLBACK_INIT;
+    check(os64_js_callback_capture(f->runtime,OS64_JS_ABI_ID,fn,&captured,&out)==OS64_JS_OK&&
+          captured.incumbent==f->realm[0],"active script: nested WebIDL-style conversion captures selected A");
+    check(os64_js_callback_clear(f->runtime,OS64_JS_ABI_ID,&captured,&out)==OS64_JS_OK,
+          "active script: nested capture releases");
+    JSValue result=JS_UNDEFINED;
+    check(os64_js_realm_with_settings(f->realm[1],f->realm[1],OS64_JS_ABI_ID,
+          active_incumbent_nested,f,&result,&out)==OS64_JS_OK,"active script: explicit nested B callback scope enters");
+    JS_FreeValue(ctx,result);JS_FreeValue(ctx,fn);JS_FreeValue(ctx,record);
+    check(JS_GetIncumbentContext(rt)==f->ctx[0]&&JS_GetEntryContext(rt)==f->ctx[2],
+          "active script: nested scope restores synthetic A selection and job entry C");
+    f->incumbent_calls++;return JS_UNDEFINED;
 }
 
 static char *active_resolve(void *opaque,const char *base,const char *specifier)
@@ -97,6 +132,9 @@ static bool active_open(ActiveScriptFixture *f,int policy)
               "active script: record inspection installed");
         check(JS_SetPropertyStr(f->ctx[i],global,"clearRecord",JS_NewCFunction(f->ctx[i],active_clear,"clearRecord",1))>=0,
               "active script: executing provenance clear seam installed");
+        if(i==2)check(JS_SetPropertyStr(f->ctx[i],global,"incumbentProbe",
+              JS_NewCFunction(f->ctx[i],active_incumbent_probe,"incumbentProbe",0))>=0,
+              "active script: native incumbent probe installed");
         JS_FreeValue(f->ctx[i],global);
     }
     return true;
@@ -143,6 +181,19 @@ static void active_script_cases(void)
               "active script: identical filenames do not merge script identities");
         check(active_run(&f,1,"captureRecord(2);let r=A.foreign();if(r[0]!==0||r[1]!==0||r[2]!==2||r[3]!=='same-name.js'||recordId()!==2)throw 1;","caller.js")==OS64_JS_OK,
               "active script: creation record and execution realm remain independent");
+        check(active_run(&f,0,"captureRecord(12);globalThis.registerForeign=B.Function('Promise.resolve().then(C.incumbentProbe)')",
+              "incumbent-source.js")==OS64_JS_OK,"active script: A creates registration code executing in B");
+        os64_js_outcome_t registration_out;JSValue registration=realm_property(f.ctx[0],"registerForeign");
+        check(os64_js_realm_task_begin(f.realm[1],OS64_JS_ABI_ID,"incumbent-registration",&registration_out)==OS64_JS_OK&&
+              os64_js_realm_call(f.realm[1],OS64_JS_ABI_ID,registration,JS_UNDEFINED,0,NULL,NULL,&registration_out)==OS64_JS_OK,
+              "active script: B registers the native C callback under script record A");
+        JSContext *queued_entry=NULL,*queued_incumbent=NULL;
+        check(JS_PeekPromiseJobSettings(JS_GetRuntime(f.ctx[0]),NULL,&queued_entry,&queued_incumbent)&&
+              queued_entry==f.ctx[2]&&queued_incumbent==f.ctx[1],
+              "active script: queue preserves captured incumbent B independently of record A and entry C");
+        check(os64_js_task_end(f.runtime,OS64_JS_ABI_ID,&registration_out)==OS64_JS_OK&&f.incumbent_calls==1,
+              "active script: divergent incumbent/source callback delivers once and unwinds");
+        JS_FreeValue(f.ctx[0],registration);
         JS_RunGC(JS_GetRuntime(f.ctx[0]));
         check(active_run(&f,0,"captureRecord(3);Promise.resolve(\"globalThis.delayed=import('./delayed')\").then(C.eval);","delayed-source.js")==OS64_JS_OK,
               "active script: Promise eval restores source before dynamic import");

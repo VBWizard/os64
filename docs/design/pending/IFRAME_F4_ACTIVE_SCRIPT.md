@@ -32,6 +32,12 @@ with the captured record's realm and pops it before capability resolution.
 The actual callable's execution realm remains independent. A script-bearing
 handler can establish its own record above the restored activation.
 
+Captured backup and selected incumbent can differ. HTML prepares the captured
+incumbent before pushing the synthetic context; that new context has skip zero
+and participates in [incumbent selection](https://html.spec.whatwg.org/multipage/webappapis.html#incumbent-settings-object).
+Thus an A-created `B.Function` registering native C can capture B yet select A
+when C runs. Nested callback preparation can suppress that activation.
+
 The closure stores its owned record pointer in a trailing slot of its variable
 reference array, with the type tag in spare object-header bits. The array is
 allocated when closure variables or a record require it; clearing provenance
@@ -104,6 +110,12 @@ The full shipping DOM suite passes **370,768 checks**, zero failures, with
 **13,582 binding allocation-sweep cases**. CLI suites pass **199 / 40**.
 Target runtime, libdom, Yonder and js builds, manifest/header checks, allocator/
 visibility audits, and **222 engine / 80 runtime export** checks pass.
+
+The review regression separates queue capture B, exact source record A and
+native entry/current C, then checks nested callback capture, suppression and
+unwind under both teardown policies. With this addition, the focused suite
+passes **505 checks per profile**, including ASan/UBSan and leak detection.
+This is host evidence; browser interoperability has not been tested.
 
 Three negative controls fail in both engine profiles: omitted synthetic-record
 restoration, filename-based module lookup, and omitted pending-reaction record
