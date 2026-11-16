@@ -13,8 +13,8 @@
 //
 // Keys: type to insert; arrows/Home/End/PgUp/PgDn move; Shift+motion
 // selects; Ctrl+Home/End jump to document ends, Ctrl+Left/Right by word,
-// Ctrl+A selects all; click places, drag selects. Ctrl+S save, Ctrl+F find (Enter =
-// next hit), Ctrl+O open, Ctrl+Q quit. Esc leaves the entry field.
+// Ctrl+A selects all; click places, drag selects. Ctrl+S save, Ctrl+F find,
+// F3/Shift+F3 next/previous match, Ctrl+O open, Ctrl+Q quit. Esc closes Find.
 
 #include "os64/os64.h"
 #include "os64/gui.h"
@@ -72,6 +72,8 @@ typedef struct
     const scribe_hooks_t *hooks;
     os64_ui_widget_t mode_label;    // names what the field means right now
     os64_ui_textfield_t field;
+    os64_ui_widget_t find_previous, find_next, find_close;
+    os64_ui_checkbox_t find_case, find_wrap;
     os64_ui_textview_t view;
     os64_ui_scrollbar_t scroll;     // vertical: lines
     os64_ui_scrollbar_t hscroll;    // horizontal: pixels of the document face
@@ -142,7 +144,9 @@ static const char *kHelpLines[] = {
     "  Alt or F10                     menus (even when hidden)",
     "  Shift+F10 or right-click        editing context menu",
     "  Ctrl+S                          save",
-    "  Ctrl+F                          find (Enter = next hit, wraps)",
+    "  Ctrl+F                          open Find",
+    "  Enter / Shift+Enter in Find      next / previous match",
+    "  F3 / Shift+F3                   next / previous (Find can be closed)",
     "  Ctrl+O                          open another file",
     "  Ctrl+G                          this page (Esc or ^G returns)",
     "  Ctrl+Q, Alt+F4                  quit (asks first if there are",
@@ -177,6 +181,15 @@ static const char *kHelpLines[] = {
     "  Find and confirmations use the field below the menu. Enter acts,",
     "  Esc cancels.",
     "  Ctrl+V pastes into it too - one line's worth, since it is one line.",
+    "",
+    "FIND",
+    "  Previous and Next search from the document caret or selection.",
+    "  Match case and Wrap around start unchecked. Options and the",
+    "  search text are remembered while Scribe is open. Wrapping reports",
+    "  when it crosses the document boundary. Esc or Close returns to",
+    "  the document; an unsuccessful search keeps your position.",
+    "  With Match case off, ASCII A-Z match a-z. Other UTF-8 text matches",
+    "  exactly; matches start and end on complete character clusters.",
     "",
     "THE CLIPBOARD IS A FILE",
     "  Copy and cut write /sys/clipboard; paste reads it. It is the",
@@ -259,8 +272,7 @@ static void status_refresh(void)
 // ── layout ──────────────────────────────────────────────────────────────────
 // Manual bounds, recomputed on resize — layout is a call the app makes.
 // Menu bar, wrapping toolbar, optional entry field, document and status bar.
-// The entry row (only in a field mode):
-// mode label | entry field.  Body: textview + scrollbar.
+// Find adds a wrapping row of navigation buttons and search options.
 
 // Every rectangle scribe's window is made of. Computed by one function and
 // then either ASSIGNED (startup, a window resize) or STAGED (a font change,
@@ -272,8 +284,16 @@ typedef struct
     os64_gui_rect_t bar, status;
     os64_ui_toolbar_plan_t toolbar;
     os64_gui_rect_t mode_label, field, view, scroll, hscroll;
-    bool bar2;
+    os64_gui_rect_t find_controls[5];
+    bool bar2, finding;
 } scribe_layout_t;
+
+static os64_ui_widget_t *find_control(unsigned i)
+{
+    os64_ui_widget_t *controls[] = {&g.find_previous, &g.find_next,
+        &g.find_close, &g.find_case.w, &g.find_wrap.w};
+    return controls[i];
+}
 
 // THE WINDOW, UNDER WHATEVER FACE THE CALLS BELOW ARE REPORTING. Inside a
 // font transaction that is the candidate; everywhere else it is the face the
@@ -301,6 +321,7 @@ static os64_font_status_t compute_layout(os64_ui_t *ui, scribe_layout_t *out)
     }
     out->status = (os64_gui_rect_t){pad,H-pad-bh,W-2*pad,bh};
     out->bar2 = (g.mode != MODE_NONE);
+    out->finding = (g.mode == MODE_FIND);
     if (out->bar2) {
         // MEASURE the label instead of assuming it (2026-08-23): a flat
         // allowance fits "open:" and guillotines "save before quit:". A
@@ -321,6 +342,23 @@ static os64_font_status_t compute_layout(os64_ui_t *ui, scribe_layout_t *out)
                                              W - 2 * pad - lw - gap, bh };
         if (out->field.w <= 0)
             return OS64_FONT_LIMIT;
+        y += bh + gap;
+    }
+
+    if (out->finding) {
+        int32_t x = pad;
+        for (unsigned i = 0; i < 5; ++i) {
+            const char *caption = find_control(i)->text;
+            int32_t width;
+            os64_font_status_t rc = os64_ui_text_measure(ui, OS64_FONT_ROLE_UI,
+                caption, os64_strlen(caption), &width);
+            if (rc != OS64_FONT_OK) return rc;
+            width += i < 3 ? 2 * pad : t->checkbox_size + gap;
+            if (width > W - 2 * pad) return OS64_FONT_LIMIT;
+            if (x > pad && x + width > W - pad) { x = pad; y += bh + gap; }
+            out->find_controls[i] = (os64_gui_rect_t){x, y, width, bh};
+            x += width + gap;
+        }
         y += bh + gap;
     }
 
@@ -359,6 +397,9 @@ static void apply_layout(const scribe_layout_t *l, bool staged)
         place(&g.mode_label, l->mode_label, staged);
         place(&g.field.w, l->field, staged);
     }
+    if (l->finding)
+        for (unsigned i = 0; i < 5; ++i)
+            place(find_control(i), l->find_controls[i], staged);
     place(&g.view.w, l->view, staged);
     place(&g.scroll.w, l->scroll, staged);
     place(&g.hscroll.w, l->hscroll, staged);
@@ -377,6 +418,7 @@ static void layout(os64_ui_t *ui)
     if (compute_layout(ui, &l) != OS64_FONT_OK)
         return;
     g.mode_label.hidden = g.field.w.hidden = !l.bar2;
+    for (unsigned i = 0; i < 5; ++i) find_control(i)->hidden = !l.finding;
     apply_layout(&l, false);
     sync_scrollbar();
 }
@@ -426,6 +468,7 @@ static void commit_font(os64_ui_t *ui, void *user, void *plan)
     (void)ui; (void)user;
     scribe_font_plan_t *p = plan;
     g.mode_label.hidden = g.field.w.hidden = !p->layout.bar2;
+    for (unsigned i = 0; i < 5; ++i) find_control(i)->hidden = !p->layout.finding;
     g.max_width = 0;
     if (g.help_active) {
         // The document waiting behind help has shown no row in this face,
@@ -603,7 +646,9 @@ static void help_toggle(void)
 
 static void enter_mode(field_mode_t m, const char *label, const char *prefill)
 {
-    help_leave();   // a file verb always means the DOCUMENT, never the help
+    if (g.mode == MODE_FIND)
+        os64_strcopy(g.find_text, sizeof(g.find_text), g.field.buf);
+    help_leave();   // Entry modes operate on the document behind the guide.
     g.mode = m;
     g.mode_label.text = label;
     // The bar is laid out FIRST: that is what shows the field, and a hidden
@@ -618,6 +663,8 @@ static void enter_mode(field_mode_t m, const char *label, const char *prefill)
 
 static void leave_mode(void)
 {
+    if (g.mode == MODE_FIND)
+        os64_strcopy(g.find_text, sizeof(g.find_text), g.field.buf);
     g.mode = MODE_NONE;
     os64_ui_set_focus(&g.ui, &g.view.w);
     relayout_all();
@@ -784,19 +831,29 @@ static void request_quit(void)
 }
 
 // ── find ────────────────────────────────────────────────────────────────────
-// Linear scan from just past the cursor, wrapping once — SCRIBE.md's
-// promotion: "finding things in os64.log" IS this feature.
-
-static bool find_in_line(const char *hay, size_t hlen, size_t from,
-                         const char *needle, size_t nlen, size_t *at)
+// Candidate start positions are half-open ranges. Splitting the origin row
+// lets either direction wrap once without searching that row twice in full.
+// Case-insensitive matching folds ASCII letters; other UTF-8 bytes stay exact.
+static unsigned char find_byte(unsigned char c)
 {
-    if (nlen == 0 || nlen > hlen)
-        return false;
-    for (size_t i = from; i + nlen <= hlen; i++) {
+    return !g.find_case.checked && c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
+}
+
+static bool find_in_line(const char *hay, size_t hlen, size_t lo, size_t hi,
+                         const char *needle, size_t nlen, bool previous, size_t *at)
+{
+    if (!nlen || nlen > hlen) return false;
+    size_t limit = hlen - nlen + 1;
+    if (hi > limit) hi = limit;
+    while (lo < hi) {
+        size_t i = previous ? --hi : lo++;
         size_t j = 0;
-        while (j < nlen && hay[i + j] == needle[j])
-            j++;
-        if (j == nlen) {
+        while (j < nlen && find_byte((unsigned char)hay[i + j]) ==
+                           find_byte((unsigned char)needle[j])) ++j;
+        // The selection must describe the bytes that matched, not widen a
+        // partial UTF-8 character or a base letter out to a different cluster.
+        if (j == nlen && os64_ui_text_snap(hay, hlen, i, false) == i &&
+            os64_ui_text_snap(hay, hlen, i + nlen, false) == i + nlen) {
             *at = i;
             return true;
         }
@@ -804,31 +861,75 @@ static bool find_in_line(const char *hay, size_t hlen, size_t from,
     return false;
 }
 
-static void do_find(const char *needle)
+static void find_open(void)
 {
-    size_t nlen = os64_strlen(needle);
-    if (nlen == 0)
-        return;
-    os64_strcopy(g.find_text, sizeof(g.find_text), needle);
+    if (g.mode == MODE_FIND) {
+        os64_ui_set_focus(&g.ui, &g.field.w);
+    } else enter_mode(MODE_FIND, "Find:", g.find_text);
+    os64_ui_textfield_select_all(&g.ui, &g.field);
+}
 
+static void do_find(bool previous)
+{
+    if (g.mode != MODE_NONE && g.mode != MODE_FIND) return;
+    if (g.help_active) help_leave();
+    if (g.mode == MODE_FIND)
+        os64_strcopy(g.find_text, sizeof(g.find_text), g.field.buf);
+    const char *needle = g.find_text;
+    size_t nlen = os64_strlen(needle);
+    if (!nlen) {
+        find_open();
+        status_show("Enter text to find");
+        return;
+    }
+
+    size_t line = g.view.cur_line, split = g.view.cur_col;
+    bool selected = g.view.sel && (g.view.sel_line != line || g.view.sel_col != split);
+    if (selected) {
+        bool anchor_before = g.view.sel_line < line ||
+            (g.view.sel_line == line && g.view.sel_col < split);
+        if (anchor_before == previous) { line = g.view.sel_line; split = g.view.sel_col; }
+    } else if (previous) {
+        // A fresh search includes a match starting exactly at the caret.
+        ++split;
+    }
     size_t total = g.buf.count;
-    size_t line = g.view.cur_line;
-    size_t col = g.view.cur_col + 1;   // past the cursor, so Enter advances
-    for (size_t seen = 0; seen <= total; seen++, col = 0) {
-        size_t li = (line + seen) % total;
-        size_t len, at;
-        const char *ln = g.textbuf.line(g.textbuf.user, li, &len);
-        size_t from = (seen == 0) ? (col > len ? len : col) : 0;
-        if (find_in_line(ln, len, from, needle, nlen, &at)) {
-            os64_ui_textview_select(&g.ui, &g.view, li, at, li, at + nlen);
-            char msg[SCRIBE_STATUS_MAX];
-            os64_snprintf(msg, sizeof(msg), "found at line %lu",
-                          (unsigned long)(li + 1));
-            status_show(msg);
-            return;
+    for (unsigned wrapped = 0; wrapped < (g.find_wrap.checked ? 2u : 1u); ++wrapped) {
+        size_t li = wrapped ? (previous ? total - 1 : 0) : line;
+        for (;;) {
+            size_t len, at;
+            const char *ln = g.textbuf.line(g.textbuf.user, li, &len);
+            size_t lo = 0, hi = len;
+            if (li == line) {
+                if (previous != (wrapped != 0)) hi = split;
+                else lo = split;
+            }
+            if (find_in_line(ln, len, lo, hi, needle, nlen, previous, &at)) {
+                os64_ui_textview_select(&g.ui, &g.view, li, at, li, at + nlen);
+                char msg[SCRIBE_STATUS_MAX];
+                const char *prefix = wrapped ? (previous ? "Wrapped to end; found" :
+                                                            "Wrapped to start; found") : "Found";
+                os64_snprintf(msg, sizeof(msg), "%s at line %lu", prefix, (unsigned long)(li + 1));
+                status_show(msg);
+                return;
+            }
+            if (wrapped && li == line) break;
+            if (previous) { if (!li) break; --li; }
+            else { if (li + 1 >= total) break; ++li; }
         }
     }
-    status_show("not found");
+    status_show(g.find_wrap.checked ? "Text not found" :
+                previous ? "No earlier match" : "No later match");
+}
+
+static void find_click(os64_ui_widget_t *w, void *user)
+{
+    (void)user;
+    if (w == &g.find_close) leave_mode();
+    else {
+        do_find(w == &g.find_previous);
+        os64_ui_set_focus(&g.ui, &g.field.w);
+    }
 }
 
 // ── widget callbacks ────────────────────────────────────────────────────────
@@ -838,7 +939,7 @@ static void field_submit(os64_ui_textfield_t *tf, void *user)
     (void)user;
     switch (g.mode) {
     case MODE_OPEN_CONFIRM: file_choose(FILE_OPEN, g.path); break;
-    case MODE_FIND:   do_find(tf->buf); break;   // stays open: Enter = next
+    case MODE_FIND:   do_find(false); break;   // stays open: Enter = next
     case MODE_QUITSAVE:
         if (g.path[0] && os64_streq(tf->buf, g.path)) {
             if (save_document(g.path, !g.path_is_new)) g.running = false;
@@ -899,7 +1000,7 @@ static void command_saveas(void)
 // Actions retain the editing target that opened a menu. Native popup focus
 // must not redirect a field's clipboard command to the file.
 enum { ACT_OPEN=1, ACT_SAVE, ACT_SAVEAS, ACT_QUIT, ACT_CUT, ACT_COPY,
-       ACT_PASTE, ACT_FIND, ACT_BAR, ACT_STATUS, ACT_HELP, ACT_TOOLBAR };
+       ACT_PASTE, ACT_FIND, ACT_BAR, ACT_STATUS, ACT_HELP, ACT_TOOLBAR, ACT_FIND_NEXT, ACT_FIND_PREVIOUS };
 static bool action_valid(void *cookie, uint64_t generation)
 {
     return generation == 1 && (cookie == &g.view.w || cookie == &g.field.w);
@@ -917,6 +1018,8 @@ static void action_query(void *app, const os64_ui_action_context_t *context,
         state->enabled = field ? g.mode != MODE_NONE : true;
         if (!field && g.help_active && id != ACT_COPY) state->enabled = false;
     }
+    if (id == ACT_FIND_NEXT || id == ACT_FIND_PREVIOUS)
+        state->enabled = g.mode == MODE_NONE || g.mode == MODE_FIND;
     if (id == ACT_BAR) state->checked = !g.bar.w.hidden && !g.bar.temporary;
     if (id == ACT_STATUS) state->checked = !g.status.w.hidden;
     if (id == ACT_TOOLBAR) state->checked = !g.toolbar.w.hidden;
@@ -953,7 +1056,9 @@ static os64_ui_action_result_t action_invoke(void *app,
     case ACT_QUIT: request_quit(); break;
     case ACT_CUT: case ACT_COPY: case ACT_PASTE:
         clipboard(id,context->cookie == &g.field.w); break;
-    case ACT_FIND: enter_mode(MODE_FIND,"find:",g.find_text); break;
+    case ACT_FIND: find_open(); break;
+    case ACT_FIND_NEXT: do_find(false); break;
+    case ACT_FIND_PREVIOUS: do_find(true); break;
     case ACT_HELP: help_toggle(); break;
     case ACT_BAR:
         if (g.bar.temporary) { g.bar.temporary=false; g.bar.w.hidden=true; }
@@ -1002,6 +1107,21 @@ static void tool_refresh(void)
 }
 static bool app_shortcut(const os64_gui_event_t *ev)
 {
+    if (ev->type == OS64_GUI_EVENT_KEY_DOWN && g.mode == MODE_FIND) {
+        if (os64_ui_key_is_esc(ev)) { leave_mode(); return true; }
+        bool search_focus = g.ui.focus == &g.field.w ||
+            g.ui.focus == &g.find_case.w || g.ui.focus == &g.find_wrap.w;
+        // Enter searches after clicking an option too; Space toggles it.
+        // The labelled buttons keep their own Enter activation.
+        if (search_focus && !g.field.seq) {
+            bool previous = os64_ui_shortcut_match(
+                (os64_ui_shortcut_t){OS64_UI_KEY_ENTER,OS64_GUI_MOD_SHIFT},ev);
+            if (previous || os64_ui_shortcut_match(
+                (os64_ui_shortcut_t){OS64_UI_KEY_ENTER,0},ev)) {
+                do_find(previous); return true;
+            }
+        }
+    }
     if (ev->type == OS64_GUI_EVENT_KEY_DOWN && g.help_active && os64_ui_key_is_esc(ev)) {
         help_leave(); return true;
     }
@@ -1039,6 +1159,8 @@ static bool build_actions(void)
         {ACT_COPY,OS64_UI_ACTION_COMMAND,0,"Copy","Copy selection to the clipboard","edit-copy",'c',{'c',OS64_GUI_MOD_CTRL}},
         {ACT_PASTE,OS64_UI_ACTION_COMMAND,0,"Paste","Paste into the selected editing target","edit-paste",'p',{'v',OS64_GUI_MOD_CTRL}},
         {ACT_FIND,OS64_UI_ACTION_COMMAND,0,"Find","Find text in the document","search",'f',{'f',OS64_GUI_MOD_CTRL}},
+        {ACT_FIND_NEXT,OS64_UI_ACTION_COMMAND,0,"Find Next","Find the next match",NULL,'n',{OS64_UI_KEY_F3,0}},
+        {ACT_FIND_PREVIOUS,OS64_UI_ACTION_COMMAND,0,"Find Previous","Find the previous match",NULL,'r',{OS64_UI_KEY_F3,OS64_GUI_MOD_SHIFT}},
         {ACT_BAR,OS64_UI_ACTION_TOGGLE,0,"Show Menu Bar","Recover with Alt, F10 or right-click",NULL,'m',{0,0}},
         {ACT_TOOLBAR,OS64_UI_ACTION_TOGGLE,0,"Show Toolbar","Show command buttons",NULL,'t',{0,0}},
         {ACT_STATUS,OS64_UI_ACTION_TOGGLE,0,"Show Status Bar","Show file information and notices",NULL,'s',{0,0}},
@@ -1058,11 +1180,11 @@ static bool build_actions(void)
     if (os64_ui_toolbar_bind(&g.toolbar,g.actions,tools,sizeof(tools)/sizeof(*tools),
                             tool_click,NULL) != OS64_UI_OK) return false;
     const os64_ui_menu_entry_t file[] = {{.action=ACT_OPEN},{.action=ACT_SAVE},{.action=ACT_SAVEAS},{.kind=OS64_UI_MENU_SEPARATOR},{.action=ACT_QUIT}};
-    const os64_ui_menu_entry_t edit[] = {{.action=ACT_CUT},{.action=ACT_COPY},{.action=ACT_PASTE},{.kind=OS64_UI_MENU_SEPARATOR},{.action=ACT_FIND}};
+    const os64_ui_menu_entry_t edit[] = {{.action=ACT_CUT},{.action=ACT_COPY},{.action=ACT_PASTE},{.kind=OS64_UI_MENU_SEPARATOR},{.action=ACT_FIND},{.action=ACT_FIND_NEXT},{.action=ACT_FIND_PREVIOUS}};
     const os64_ui_menu_entry_t view[] = {{.action=ACT_BAR},{.action=ACT_TOOLBAR},{.action=ACT_STATUS}};
     const os64_ui_menu_entry_t help[] = {{.action=ACT_HELP}};
     if (os64_ui_menu_model_create(g.actions,file,5,&g.models[0]) ||
-        os64_ui_menu_model_create(g.actions,edit,5,&g.models[1]) ||
+        os64_ui_menu_model_create(g.actions,edit,7,&g.models[1]) ||
         os64_ui_menu_model_create(g.actions,view,3,&g.models[2]) ||
         os64_ui_menu_model_create(g.actions,help,1,&g.models[3])) return false;
     const os64_ui_menu_entry_t bar[] = {
@@ -1273,6 +1395,11 @@ static const char *scribe_build(void)
     os64_ui_label(&g.mode_label, "");
     os64_ui_textfield(&g.field, g.field_buf, sizeof(g.field_buf),
                       field_submit, field_cancel, NULL);
+    os64_ui_button(&g.find_previous, "Previous", find_click, NULL);
+    os64_ui_button(&g.find_next, "Next", find_click, NULL);
+    os64_ui_button(&g.find_close, "Close", find_click, NULL);
+    os64_ui_checkbox(&g.find_case, "Match case", false, NULL, NULL);
+    os64_ui_checkbox(&g.find_wrap, "Wrap around", false, NULL, NULL);
     os64_ui_textview(&g.view, &g.textbuf, view_changed, view_moved, NULL);
     os64_ui_scrollbar(&g.scroll, scrolled, NULL);
     os64_ui_scrollbar(&g.hscroll, hscrolled, NULL);
@@ -1283,6 +1410,7 @@ static const char *scribe_build(void)
     os64_ui_add_child(&g.root, &g.status.w);
     os64_ui_add_child(&g.root, &g.mode_label);
     os64_ui_add_child(&g.root, &g.field.w);
+    for (unsigned i = 0; i < 5; ++i) os64_ui_add_child(&g.root, find_control(i));
     os64_ui_add_child(&g.root, &g.view.w);
     os64_ui_add_child(&g.root, &g.scroll.w);
     os64_ui_add_child(&g.root, &g.hscroll.w);
