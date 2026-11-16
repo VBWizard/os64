@@ -135,14 +135,15 @@ static void tour_key(uint32_t ascii)
 
 // ── The two kernels ─────────────────────────────────────────────────────────
 //
-// One row each: the escape count of every pixel, and |z|^2 where it escaped
-// (for the smooth colour). The row buffers are padded to a multiple of eight,
-// so the last vector of a row may compute pixels past the window's edge and
-// nobody reads them. Each mirrors the scalar loop exactly: a lane counts an
+// One stretch of a row each — `width` pixels starting at pixel `first` —
+// giving the escape count of every pixel and |z|^2 where it escaped (for
+// the smooth colour). The buffers are padded to a multiple of eight, so the
+// last vector may compute pixels past the stretch and nobody reads them.
+// Each mirrors the scalar loop exactly: a lane counts an
 // iteration only while it is still inside, and stops updating z the moment
 // it is not.
 
-static void row_sse2(float ci, float left, float scale, int width, int max_iter,
+static void row_sse2(float ci, float left, float scale, int first, int width, int max_iter,
                      int *counts, float *mags)
 {
 	const v4f lane = { 0, 1, 2, 3 };
@@ -150,7 +151,7 @@ static void row_sse2(float ci, float left, float scale, int width, int max_iter,
 	const v4f civ = { ci, ci, ci, ci };
 	for (int x = 0; x < width; x += 4)
 	{
-		v4f cr = left + scale * ((float)x + lane);
+		v4f cr = left + scale * ((float)(first + x) + lane);
 		v4f zr = { 0 }, zi = { 0 }, zr2 = { 0 }, zi2 = { 0 };
 		v4i inside = { -1, -1, -1, -1 }, count = { 0 };
 		for (int n = 0; n < max_iter; n++)
@@ -180,7 +181,7 @@ static void row_sse2(float ci, float left, float scale, int width, int max_iter,
 // rest of the program stays the SSE2 every program is built for; called only
 // after the CPU has said yes.
 __attribute__((target("avx2,fma"), noinline))
-static void row_avx2(float ci, float left, float scale, int width, int max_iter,
+static void row_avx2(float ci, float left, float scale, int first, int width, int max_iter,
                      int *counts, float *mags)
 {
 	const v8f lane = { 0, 1, 2, 3, 4, 5, 6, 7 };
@@ -189,7 +190,7 @@ static void row_avx2(float ci, float left, float scale, int width, int max_iter,
 	const v8f civ = { ci, ci, ci, ci, ci, ci, ci, ci };
 	for (int x = 0; x < width; x += 8)
 	{
-		v8f cr = left + scale * ((float)x + lane);
+		v8f cr = left + scale * ((float)(first + x) + lane);
 		v8f zr = { 0 }, zi = { 0 }, zr2 = { 0 }, zi2 = { 0 };
 		v8i inside = { -1, -1, -1, -1, -1, -1, -1, -1 }, count = { 0 };
 		for (int n = 0; n < max_iter; n++)
@@ -267,16 +268,19 @@ typedef struct {
 	const char *why_not;
 } view_t;
 
-#define ROW_MAX 2048                   // row buffers, padded past any window we draw
+// A row goes through the kernel a stretch at a time, so any surface width
+// is drawn whole with fixed buffers. A multiple of eight, so every stretch
+// starts on a vector of either width.
+#define STRETCH 512
 
 static void render(os64_draw_ctx_t *ctx, const view_t *v, const target_t *t, float log2zoom, int max_iter)
 {
-	static int   counts[2][ROW_MAX + 8];
-	static float mags[2][ROW_MAX + 8];
+	static int   counts[2][STRETCH + 8];   // one set per window's thread
+	static float mags[2][STRETCH + 8];
+	int *count = counts[v->which];
+	float *mag = mags[v->which];
 	int width = (int)ctx->surf.width;
 	int height = (int)ctx->surf.height - BAND_H;
-	if (width > ROW_MAX)
-		width = ROW_MAX;
 	float scale = 3.2f / pow2f(log2zoom) / (float)width;
 	float left = t->x - scale * (float)width / 2.0f;
 	float top  = t->y - scale * (float)height / 2.0f;
@@ -285,21 +289,36 @@ static void render(os64_draw_ctx_t *ctx, const view_t *v, const target_t *t, flo
 	for (int y = 0; y < height; y++)
 	{
 		float ci = top + scale * (float)y;
-		if (v->which == 1)
-			row_avx2(ci, left, scale, width, max_iter, counts[1], mags[1]);
-		else
-			row_sse2(ci, left, scale, width, max_iter, counts[0], mags[0]);
 		uint32_t *out = &px[(uint32_t)(y + BAND_H) * pitch];
-		for (int x = 0; x < width; x++)
+		for (int first = 0; first < width; first += STRETCH)
 		{
-			int n = counts[v->which][x];
-			if (n >= max_iter)
-				out[x] = 0xFF000000U;   // inside: black
+			int n_px = width - first < STRETCH ? width - first : STRETCH;
+			if (v->which == 1)
+				row_avx2(ci, left, scale, first, n_px, max_iter, count, mag);
 			else
-				out[x] = palette((float)n + 1.0f -
-				                 log2_approx(log2_approx(mags[v->which][x]) * 0.5f));
+				row_sse2(ci, left, scale, first, n_px, max_iter, count, mag);
+			for (int x = 0; x < n_px; x++)
+			{
+				int n = count[x];
+				if (n >= max_iter)
+					out[first + x] = 0xFF000000U;   // inside: black
+				else
+					out[first + x] = palette((float)n + 1.0f -
+					                         log2_approx(log2_approx(mag[x]) * 0.5f));
+			}
 		}
 	}
+}
+
+#define NAP_MS    100   // covered or unusable: how often to look again
+#define PAUSED_MS 33    // paused: poll keys at about thirty a second
+
+// THE FLAG IS THE TRUTH (gui.h § OS64_GUI_WINDOW_COVERED): the COVERED and
+// UNCOVERED events are only nudges, and a full queue can drop them.
+static bool window_covered(int64_t win)
+{
+	os64_gui_window_state_t st;
+	return os64_gui_window_get_state(win, &st) >= 0 && (st.flags & OS64_GUI_WINDOW_COVERED);
 }
 
 static void status(os64_draw_ctx_t *ctx, const char *text)
@@ -330,10 +349,6 @@ static int64_t run_view(void *arg)
 		os64_gui_window_destroy(win);
 		return 1;
 	}
-	os64_frame_clock_t clock;
-	os64_frame_clock_init(&clock);
-	os64_frame_clock_bind(&clock, win);   // sleep while nobody can see this one
-
 	if (!v->usable)
 	{
 		os64_draw_fill_rect(&ctx.surf, (os64_gui_rect_t){ 0, 0, (int32_t)ctx.surf.width,
@@ -373,9 +388,16 @@ static int64_t run_view(void *arg)
 		}
 		if (erc < 0 || s_tour.quit)
 			break;
-		if (!v->usable)
+		// Nobody watching this window, or nothing to race: nap, a bounded
+		// one, then poll again. Not the frame clock's covered wait — that
+		// sleeps until THIS window has an event, and a quit from the other
+		// window would leave this thread asleep and the program unable to
+		// end until something reached a window nobody can see.
+		if (!v->usable || window_covered(win))
 		{
-			os64_frame_wait(&clock, 100);
+			frames = 0;                    // a hidden second is not a slow one
+			mark_us = os64_micros();
+			os64_sleep(NAP_MS);
 			continue;
 		}
 
@@ -426,9 +448,9 @@ static int64_t run_view(void *arg)
 		}
 		status(&ctx, line);
 		os64_draw_publish(&ctx, NULL);
-		// No budget: the race is how fast each can go. Covered, the clock
-		// sleeps until the window is seen again.
-		os64_frame_wait(&clock, paused ? 33 : 0);
+		// Racing, no pause between frames: the race is how fast each can go.
+		if (paused)
+			os64_sleep(PAUSED_MS);
 	}
 	os64_gui_window_destroy(win);
 	return 0;
