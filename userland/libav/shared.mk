@@ -11,7 +11,7 @@ include libav/sources.mk
 
 LIBAV_SO   := $(BIN)/libav.so
 LIBAV_BASE := $(patsubst libav.so=%,%,$(filter libav.so=%,$(LIB_BASE_PAIRS)))
-AV_OBJS    := $(patsubst %,$(OBJ)/av/%.o,$(AV_UPSTREAM_SRCS) $(AV_PORT_SRCS))
+AV_OBJS    := $(patsubst %,$(OBJ)/av/%.o,$(AV_UPSTREAM_SRCS) $(AV_UPSTREAM_ASM) $(AV_PORT_SRCS))
 
 # Both halves see the shims first (port/compat, the C library FFmpeg's
 # sources call), then configure's generated headers, then FFmpeg's tree,
@@ -25,17 +25,23 @@ AV_INCLUDES := -Ilibav/port/compat -Ilibav/port -Ilibav/port/config -Ilibav/upst
 # which upstream code was never written against (the SBC port's rule).
 # Two of FFmpeg's guards matter more here than on Linux, because a thread's
 # stack is fixed: -Werror=vla and -Wstack-usage. os64's code generation is
-# kept: PIC, no red zone, SSE2 and no AVX, the stack-clash probes. Left out:
-# -Wredundant-decls (the shims declare what FFmpeg's internal headers
-# declare again, av_sscanf, by design), -fomit-frame-pointer (os64's
-# userland default is kept), and userland's -masm=intel (FFmpeg is written
-# for GCC's default syntax, and in Intel syntax a symbol that is spelled
-# like a register, which FFmpeg has, does not assemble). One of its flags is
-# changed: -O2 where configure says -O3, the level os64 builds the library
-# at now that it decodes video (Chris's ruling).
+# kept: PIC, no red zone, SSE2 and no AVX, the stack-clash probes (so the
+# only AVX in the library is FFmpeg's assembly, chosen at run time). Taken
+# explicitly: -fomit-frame-pointer, because FFmpeg's inline assembly (H.264's
+# CABAC reader, x86/cabac.h) uses RBP as a register, which a function that
+# keeps a frame pointer refuses to compile; and -DPIC, configure's own for
+# --enable-pic, without which that inline assembly addresses its tables
+# absolutely (libavutil/x86/asm.h), which a shared library cannot link
+# (-z text says so by name). Left out: -Wredundant-decls (the
+# shims declare what FFmpeg's internal headers declare again, av_sscanf, by
+# design) and userland's -masm=intel (FFmpeg is written for GCC's default
+# syntax, and in Intel syntax a symbol that is spelled like a register,
+# which FFmpeg has, does not assemble). One of its flags is changed: -O2
+# where configure says -O3, the level os64 builds the library at now that it
+# decodes video (Chris's ruling).
 AV_UPSTREAM_FLAGS := $(AV_INCLUDES) $(filter-out -O2 -Wextra -Werror -masm=intel,$(LIBOS64_CFLAGS)) \
-    -std=c17 -O2 -fno-math-errno -fno-signed-zeros -mno-avx -mno-fma \
-    -D_ISOC11_SOURCE -DHAVE_AV_CONFIG_H \
+    -std=c17 -O2 -fomit-frame-pointer -fno-math-errno -fno-signed-zeros -mno-avx -mno-fma \
+    -D_ISOC11_SOURCE -DHAVE_AV_CONFIG_H -DPIC \
     -Wdisabled-optimization -Wpointer-arith -Wwrite-strings -Wtype-limits \
     -Wundef -Wempty-body -Wstack-usage=122880 -Wimplicit-fallthrough=5 \
     -Wmissing-prototypes -Wstrict-prototypes \
@@ -56,13 +62,29 @@ $(OBJ)/av/port/%.c.o: libav/port/%.c libav/shared.mk
 	@mkdir -p "$(dir $@)"
 	$(CC) $(AV_PORT_FLAGS) -c $< -o $@
 
+# FFmpeg's x86 assembly, assembled the way its own makefiles do (common.mak:
+# -I. -I$(SRC_PATH) -I$(<D)/ -Pconfig.asm, and configure's -f elf64 for
+# this target); x86inc.asm makes every routine position-independent on
+# x86-64. nasm is a prerequisite of the build, and its absence is said by
+# name before any assembly is attempted.
+NASM := $(shell command -v nasm 2>/dev/null)
+$(OBJ)/av/.nasm:
+	@if [ -z "$(NASM)" ]; then \
+	    echo "libav: nasm is required to build FFmpeg's x86 assembly (install nasm)" >&2; exit 1; fi
+	@mkdir -p "$(dir $@)" && touch $@
+
+$(OBJ)/av/upstream/%.asm.o: libav/upstream/%.asm libav/shared.mk | $(OBJ)/av/.nasm
+	@mkdir -p "$(dir $@)"
+	$(NASM) -f elf64 -Ilibav/port/config/ -Ilibav/upstream/ -I$(dir $<) \
+	    -Plibav/port/config/config.asm -MD $(@:.o=.d) -MT $@ -o $@ $<
+
 # sources.mk is on this line: removing a file from the list creates no newer
 # object, so without it the old library would look up to date.
 $(LIBAV_SO): $(AV_OBJS) $(LIBOS64_SO) $(LIBMATH_SO) libav/exports.map link/lib.ld \
         tools/app_bases.py libav/shared.mk libav/sources.mk
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBAV_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
-	    $(SHARED_LIB_LDFLAGS) -soname libav.so --no-undefined --no-as-needed --gc-sections \
+	    $(SHARED_LIB_LDFLAGS) -soname libav.so --no-undefined --no-as-needed --gc-sections -z text \
 	    --version-script=libav/exports.map -Map=$(OBJ)/av/link.map \
 	    -o $@ $(AV_OBJS) $(LIBOS64_SO) $(LIBMATH_SO)
 

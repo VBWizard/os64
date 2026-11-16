@@ -63,8 +63,19 @@ check(config.get('FFMPEG_CONFIGURATION', '').strip('"').replace("'", '').split()
 for name, value in manifest['config_overrides'].items():
     want = str(value) if isinstance(value, int) else json.dumps(value)
     check(config.get(name) == want, f'config.h has {name} {config.get(name)}, manifest.json says {want}')
-for name in ('HAVE_PTHREADS', 'HAVE_X86ASM', 'HAVE_INLINE_ASM', 'CONFIG_NETWORK'):
+for name in ('HAVE_PTHREADS', 'CONFIG_NETWORK'):
     check(config.get(name) == '0', f'config.h has {name} {config.get(name)}: README.md says it is off')
+# FFmpeg's x86 assembly is built, and FFmpeg chooses its routines from what
+# the CPU and the OS offer at run time (README.md § How it is built).
+for name in ('HAVE_X86ASM', 'HAVE_INLINE_ASM', 'CONFIG_RUNTIME_CPUDETECT', 'CONFIG_PIC'):
+    check(config.get(name) == '1', f'config.h has {name} {config.get(name)}: README.md says it is on')
+# AVX-512 is configured OUT: os64 never enables its state (AVX.md), so those
+# routines could never be chosen, and leaving them out keeps FFmpeg's ALIGN at
+# 32, which os64_malloc_aligned's dedicated blocks exceed.
+for flag in ('--disable-avx512', '--disable-avx512icl'):
+    check(flag in args, f'configure_args lacks {flag}')
+for name in ('HAVE_AVX512', 'HAVE_AVX512ICL'):
+    check(config.get(name) == '0', f'config.h has {name} {config.get(name)}: AVX-512 must be absent')
 
 # Every translation unit sources.mk builds is vendored.
 built = set(re.findall(r'upstream/(\S+\.c)', (LIB / 'sources.mk').read_text()))
@@ -98,6 +109,22 @@ check('TLS' not in run('x86_64-elf-readelf', '-lW', SO), 'libav.so has thread-lo
 # No system call of its own: every door FFmpeg reaches for is a shim.
 disasm = run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', SO)
 check(not re.search(r'\t(syscall|sysenter|int)\b', disasm), 'libav.so contains a system call')
+check('%zmm' not in disasm, 'libav.so contains AVX-512 code (a zmm register)')
+
+# THE ONLY AVX IN THE LIBRARY IS FFMPEG'S ASSEMBLY, chosen at run time: every
+# C object (upstream's and the port's) is compiled -mno-avx, so none may hold
+# a VEX-encoded instruction (their mnemonics are the v-prefixed ones), and
+# the assembly objects are where the AVX routines must be.
+objdir = USERLAND / 'obj/av'
+c_objects = sorted(objdir.rglob('*.c.o'))
+asm_objects = sorted(objdir.rglob('*.asm.o'))
+check(c_objects and asm_objects, 'no libav objects to read: build userland first')
+vex = re.compile(r'^\s+[0-9a-f]+:\s+v[a-z0-9]+\s', re.M)
+for obj in c_objects:
+    found = vex.search(run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', obj))
+    check(found is None, f'{obj.relative_to(USERLAND)} (C) holds a VEX instruction: {found and found.group(0).strip()}')
+check(any('%ymm' in run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', o) for o in asm_objects),
+      'no assembly object holds an AVX (ymm) routine: is the assembly built?')
 
 # A LIBRARY OF ITS OWN: the LGPL is met by a library the user can replace,
 # so no other program or library may carry FFmpeg's code linked in. The
