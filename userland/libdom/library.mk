@@ -33,6 +33,8 @@ LIBDOM_SRCS += libdom/frames.c
 # The media row (AUDIO_YONDER.md): HTMLMediaElement, HTMLAudioElement, Audio,
 # and HTMLVideoElement playing sound alone (§ Y.4).
 LIBDOM_SRCS += libdom/media.c libdom/video.c
+# AUDIO_YONDER.md § Y.6: navigator.mediaSession, the media keys' door.
+LIBDOM_SRCS += libdom/media_session.c
 # P2a: a script's failures, as the window's error and rejection events.
 LIBDOM_SRCS += libdom/report.c
 # P1-Da: the document's state reads and document.body's setter.

@@ -78,6 +78,9 @@ static const DModernRow kModern[] = {
      * the history row, whose members History.prototype takes. */
     {(const char *const[]){"Location", "History", "Navigator", "PluginArray", "MimeTypeArray", NULL},
      d_window_objects_install},
+    /* AUDIO_YONDER.md § Y.6: navigator.mediaSession, after the row above,
+     * whose Navigator.prototype it joins. */
+    {(const char *const[]){"MediaSession", "MediaMetadata", NULL}, d_media_session_install},
     {(const char *const[]){"localStorage", "sessionStorage", "Storage", NULL}, d_storage_install},
     {(const char *const[]){"performance", "Performance", "PerformanceEntry", "PerformanceMark",
                            "PerformanceMeasure", "PerformanceResourceTiming", "PerformanceNavigationTiming",

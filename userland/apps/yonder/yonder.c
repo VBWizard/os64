@@ -47,6 +47,8 @@
 #include "agent.h"
 #include "bar.h"
 #include "mail.h"
+#include "keys.h"
+#include "os64/mediakeys.h"
 #include "media.h"
 #include "paint.h"
 #include "player.h"
@@ -189,6 +191,7 @@ static yonder_cookies_mode_t s_cookies_asked;
 #define BELL_STREAM (1u << 5)     // an arriving page has more to parse than one slice
 #define BELL_BODY (1u << 6)       // a script's request has more of its answer: bodies_turn hands it over
 #define BELL_MEDIA (1u << 7)      // a media element's sound has news: media_turn folds it in (media.h)
+#define BELL_KEYS (1u << 8)       // a media key was pressed for this window: keys_turn does it (keys.h)
 
 // A GIF frame that asks for 10 ms or less is shown for this long, as every
 // browser shows the ones that ask for "as fast as you can".
@@ -10287,6 +10290,46 @@ static void players_ask_run(void)
     }
 }
 
+static void keys_bell(void);
+
+// The window's media-key session (AUDIO_YONDER.md § Y.6): opened when the
+// page first has something to say; each press waiting done as a page task,
+// the page first marked activated (a press is a person's, and a handler
+// may call play()); then the window's state said, which a press, a media
+// turn or a task may have changed since the last turn.
+static void keys_turn(void)
+{
+    yonder_scripts_t *host = g.page.scripts;
+    os64_dom_media_session_t session;
+    bool known = host != NULL && yonder_scripts_media_session(host, &session);
+    if (known && session.wanted && !yonder_keys_opened())
+        (void)yonder_keys_open(keys_bell);
+    uint32_t key;
+    while (yonder_keys_take(&key)) {
+        os64_dom_media_session_action_t action;
+        switch (key) {
+        case OS64_MEDIA_KEY_PLAY: action = OS64_DOM_MEDIA_SESSION_PLAY; break;
+        case OS64_MEDIA_KEY_PAUSE: action = OS64_DOM_MEDIA_SESSION_PAUSE; break;
+        case OS64_MEDIA_KEY_NEXT: action = OS64_DOM_MEDIA_SESSION_NEXT; break;
+        case OS64_MEDIA_KEY_PREVIOUS: action = OS64_DOM_MEDIA_SESSION_PREVIOUS; break;
+        case OS64_MEDIA_KEY_STOP: action = OS64_DOM_MEDIA_SESSION_STOP; break;
+        default: continue;
+        }
+        if (host == NULL)
+            continue;
+        yonder_scripts_activate(host);
+        os64_js_outcome_t out;
+        int64_t began = task_begin(host);
+        (void)yonder_scripts_media_session_action(host, action, &out);
+        task_said(host, true, "media keys", &out, began);
+    }
+    if (!yonder_keys_opened())
+        return;
+    if (host == NULL || !yonder_scripts_media_session(host, &session))
+        session.state = OS64_DOM_MEDIA_SESSION_STOPPED;
+    yonder_keys_say(session.state);
+}
+
 // Each player shows its element as it stands now.
 static void players_show(void)
 {
@@ -11285,6 +11328,13 @@ static void media_bell(void)
 {
     if (s_bells)
         (void)os64_gui_event_ring(g.win, BELL_MEDIA);
+}
+
+// A media key's press, from the session's reader (keys.h).
+static void keys_bell(void)
+{
+    if (s_bells)
+        (void)os64_gui_event_ring(g.win, BELL_KEYS);
 }
 
 static void streamed_free(Streamed *e)
@@ -19049,6 +19099,7 @@ int main(int argc, char **argv)
         bodies_turn();
         players_ask_run();
         bool media_more = media_turn();
+        keys_turn();
         players_show();
         motion_tick();
         storage_turn();

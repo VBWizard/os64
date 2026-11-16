@@ -655,8 +655,136 @@ static void dom_media_video_cases(void)
     fixture_free(&f);
 }
 
+/* THE MEDIA SESSION (libdom/media_session.c; AUDIO_YONDER.md § Y.6): the
+ * interface and its TypeErrors, MediaMetadata, the window's state the host
+ * reads, a press done (the page's handler, or the browser's own answer),
+ * and a handler that replaces or removes itself while it is called. */
+static void dom_media_session_cases(void)
+{
+    DomFixture f;
+    media_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    media_script(&f,
+        "const s=navigator.mediaSession;"
+        "assert(s instanceof MediaSession&&s===navigator.mediaSession,'one MediaSession, the same each time');"
+        "assert(String(s)==='[object MediaSession]');throws('TypeError',()=>new MediaSession());"
+        "assert(Object.getOwnPropertyDescriptor(Navigator.prototype,'mediaSession').get,'a member of Navigator.prototype');"
+        "assert(s.playbackState==='none'&&s.metadata===null,'the start');"
+        "s.playbackState='paused';assert(s.playbackState==='paused');"
+        "s.playbackState='sleeping';assert(s.playbackState==='paused','a value outside the enum is ignored');"
+        "s.playbackState='none';"
+        "throws('TypeError',()=>{s.metadata=5});throws('TypeError',()=>{s.metadata={title:'x'}});"
+        "throws('TypeError',()=>s.setActionHandler('dance',()=>{}));"
+        "throws('TypeError',()=>s.setActionHandler('play',5));throws('TypeError',()=>s.setActionHandler('play'));"
+        "s.setActionHandler('play',null);s.setActionHandler('seekto',undefined);"
+        "s.setPositionState();s.setPositionState({});"
+        "throws('TypeError',()=>s.setPositionState({position:1}));"
+        "throws('TypeError',()=>s.setPositionState({duration:-1}));"
+        "throws('TypeError',()=>s.setPositionState({duration:10,position:11}));"
+        "throws('TypeError',()=>s.setPositionState({duration:10,playbackRate:0}));"
+        "throws('TypeError',()=>s.setPositionState({duration:10,position:NaN}));"
+        "s.setPositionState({duration:Infinity,position:5});s.setPositionState({duration:10,position:10,playbackRate:-1});"
+        "assert(s.setMicrophoneActive(true)===undefined&&s.setCameraActive(false)===undefined);",
+        "session: the interface");
+    media_script(&f,
+        "const e=new MediaMetadata();"
+        "assert(e.title===''&&e.artist===''&&e.album===''&&e.artwork.length===0,'empty by default');"
+        "const m=new MediaMetadata({title:'Episode 7',artist:'Two Hosts',album:'The Show',"
+        "artwork:[{src:'cover.png',sizes:'96x96',type:'image/png'},{src:'https://cdn.test/big.jpg'}]});"
+        "assert(m.title==='Episode 7'&&m.artist==='Two Hosts'&&m.album==='The Show','the strings');"
+        "assert(m.artwork.length===2&&m.artwork[0].src==='https://example.test/dir/cover.png'&&"
+        "m.artwork[0].sizes==='96x96'&&m.artwork[0].type==='image/png','artwork resolved: '+m.artwork[0].src);"
+        "assert(m.artwork[1].sizes===''&&m.artwork[1].type==='','a MediaImage\\'s defaults');"
+        "assert(Object.isFrozen(m.artwork)&&Object.isFrozen(m.artwork[0]),'artwork is frozen');"
+        "throws('TypeError',()=>new MediaMetadata({artwork:[{sizes:'1x1'}]}));"
+        "throws('TypeError',()=>new MediaMetadata({artwork:[{src:'http://[nope'}]}));"
+        "throws('TypeError',()=>new MediaMetadata({artwork:5}));"
+        "m.title=42;assert(m.title==='42','a DOMString');"
+        "m.artwork=new Set([{src:'other.png'}]);assert(m.artwork[0].src==='https://example.test/dir/other.png','any sequence');"
+        "throws('TypeError',()=>{m.artwork=[{src:'http://[nope'}]});"
+        "assert(m.artwork[0].src==='https://example.test/dir/other.png','a refused assignment changes nothing');"
+        "navigator.mediaSession.metadata=m;assert(navigator.mediaSession.metadata===m);"
+        "navigator.mediaSession.metadata=null;assert(navigator.mediaSession.metadata===null);"
+        "throws('TypeError',()=>MediaMetadata());",
+        "session: MediaMetadata");
+
+    /* The window's state, before and after the page says anything. */
+    os64_dom_media_session_t st;
+    check(os64_dom_media_session_state(f.binding, &st) && st.state == OS64_DOM_MEDIA_SESSION_STOPPED && !st.wanted,
+          "session: a page that said nothing is stopped and wants no session");
+    media_script(&f, "navigator.mediaSession.playbackState='playing';", "session: declared playing");
+    check(os64_dom_media_session_state(f.binding, &st) && st.state == OS64_DOM_MEDIA_SESSION_PLAYING && st.wanted,
+          "session: declared playing is playing");
+    media_script(&f, "navigator.mediaSession.playbackState='paused';", "session: declared paused");
+    check(os64_dom_media_session_state(f.binding, &st) && st.state == OS64_DOM_MEDIA_SESSION_PAUSED,
+          "session: declared paused is paused");
+    media_script(&f, "navigator.mediaSession.playbackState='none';", "session: declared none");
+
+    /* A press with a handler: the handler, given its action. */
+    media_script(&f, "globalThis.R=[];"
+                     "navigator.mediaSession.setActionHandler('nexttrack',d=>R.push(d.action));"
+                     "navigator.mediaSession.setActionHandler('previoustrack',function(d){R.push('p:'+d.action+':'+Object.keys(d).join());"
+                     "navigator.mediaSession.setActionHandler('previoustrack',()=>R.push('second'))});"
+                     "navigator.mediaSession.setActionHandler('stop',()=>{R.push('stop');navigator.mediaSession.setActionHandler('stop',null)});",
+                 "session: handlers");
+    check(os64_dom_media_session_state(f.binding, &st) && st.wanted && st.state == OS64_DOM_MEDIA_SESSION_STOPPED,
+          "session: a handler makes a page want a session");
+    os64_js_outcome_t out;
+    check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_NEXT, &out) && out.status == OS64_JS_OK,
+          "session: next runs");
+    check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_NEXT, &out) && out.status == OS64_JS_OK,
+          "session: next again");
+    check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_PREVIOUS, &out) &&
+          os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_PREVIOUS, &out) &&
+          os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_STOP, &out) &&
+          os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_STOP, &out) && out.status == OS64_JS_OK,
+          "session: previous twice, stop twice");
+    media_script(&f, "assert(R.join()==='nexttrack,nexttrack,p:previoustrack:action,second,stop',"
+                     "'each handler, the one set during a call next time, a removed one never: '+R.join());",
+                 "session: the handlers ran as set");
+    media_script(&f, "globalThis.E=[];addEventListener('error',e=>E.push(e.message));"
+                     "navigator.mediaSession.setActionHandler('nexttrack',()=>{throw new Error('broken handler')});",
+                 "session: a handler that throws");
+    (void)os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_NEXT, &out);
+    media_script(&f, "assert(E.length===1&&E[0].indexOf('broken handler')>=0,'the window heard it: '+E.join());",
+                 "session: a handler's exception is the window's error event");
+
+    /* With no handler, the browser's answer: two elements, the last played
+     * is the one Play plays; Pause and Stop pause every one. */
+    media_script(&f, "navigator.mediaSession.setActionHandler('nexttrack',null);"
+                     "globalThis.a=new Audio('one.mp3');globalThis.b=new Audio('two.mp3');",
+                 "session: two elements");
+    media_turn(&f, "session: their sessions");
+    MediaSession *sa = &media_sessions[0], *sb = &media_sessions[1];
+    media_ready(sa, 30);
+    media_ready(sb, 30);
+    media_turn(&f, "session: both ready");
+    media_activated = true;
+    media_script(&f, "a.play();b.play();", "session: both play");
+    check(sa->playing && sb->playing && os64_dom_media_session_state(f.binding, &st) &&
+          st.state == OS64_DOM_MEDIA_SESSION_PLAYING, "session: an element playing makes the window playing");
+    check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_PAUSE, &out) && out.status == OS64_JS_OK &&
+          !sa->playing && !sb->playing, "session: pause, no handler, pauses every element");
+    check(os64_dom_media_session_state(f.binding, &st) && st.state == OS64_DOM_MEDIA_SESSION_PAUSED,
+          "session: elements paused after playing make the window paused");
+    check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_PLAY, &out) && out.status == OS64_JS_OK &&
+          sb->playing && !sa->playing, "session: play, no handler, plays the element that played last");
+    check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_NEXT, &out) && out.status == OS64_JS_OK &&
+          sb->playing, "session: next, no handler, does nothing");
+    check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_STOP, &out) && !sb->playing,
+          "session: stop, no handler, pauses");
+    media_turn(&f, "session: the events");
+    media_script(&f, "R.length=0;navigator.mediaSession.setActionHandler('play',d=>R.push(d.action));",
+                 "session: a play handler");
+    check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_PLAY, &out) && !sa->playing && !sb->playing,
+          "session: a page's play handler is asked instead, and plays nothing itself");
+    media_script(&f, "assert(R.join()==='play','the page was asked: '+R.join());", "session: the play handler ran");
+    fixture_free(&f);
+}
+
 static void dom_media_cases(void)
 {
+    dom_media_session_cases();
     dom_media_video_cases();
     dom_media_controls_cases();
     dom_media_rule_cases();

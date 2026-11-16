@@ -42,6 +42,14 @@ bool yonder_scripts_media_view(yonder_scripts_t *scripts, const os64_html_node_t
 os64_js_status_t yonder_scripts_media_control(yonder_scripts_t *scripts, const os64_html_node_t *node,
                                               os64_dom_media_control_t what, double value,
                                               os64_js_outcome_t *out);
+// The page's media session (AUDIO_YONDER.md § Y.6): what it says of its
+// sound (false while it has no binding), and a media key's press done as a
+// task, counted and judged as an event's is (os64_dom_media_session_state,
+// _action).
+bool yonder_scripts_media_session(yonder_scripts_t *scripts, os64_dom_media_session_t *out);
+os64_js_status_t yonder_scripts_media_session_action(yonder_scripts_t *scripts,
+                                                     os64_dom_media_session_action_t action,
+                                                     os64_js_outcome_t *out);
 // Whether the person has interacted with the page (HTML's sticky
 // activation: a key, a press or a click that reached it), which a media
 // element needs before it may make sound (AUDIO_YONDER.md § Autoplay).
