@@ -23,7 +23,7 @@ runtime_exports = {'os64_js_' + name for name in
                    'realm_set_module_loader realm_module_compile realm_module_compile_bytecode '
                    'realm_module_requests realm_module_run realm_module_state realm_module_release '
                    'realm_with_settings settings_realm callback_capture callback_clear callback_mark '
-                   'callback_with_settings callback_call enable_host_settings enable_promise_settings enable_finalization_settings quiescent set_rejection_router create_with_failure_records '
+                   'callback_with_settings callback_call enable_host_settings enable_promise_settings enable_finalization_settings enable_import_settings realm_set_import_base quiescent set_rejection_router create_with_failure_records '
                    'observe_failure create_with_child_recovery recovery_inspect recovery_prepare '
                    'recovery_commit'.split()}
 

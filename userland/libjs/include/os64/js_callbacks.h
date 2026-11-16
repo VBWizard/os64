@@ -65,6 +65,22 @@ os64_js_status_t os64_js_enable_promise_settings(os64_js_runtime_t *runtime,
 os64_js_status_t os64_js_enable_finalization_settings(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_outcome_t *outcome);
 
+/* Extends finalization/Promise settings to current-realm import base fallback.
+ * Configure before execution. A realm with no provider refuses null-record
+ * imports; imports with active script records keep their source identity. */
+os64_js_status_t os64_js_enable_import_settings(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome);
+/* Native provider: return an owned immutable URL string or JS_EXCEPTION.
+ * Runs inside the existing guard after argument conversions, with checked
+ * current settings; no author code. Keep opaque alive until detached or runtime
+ * destruction. First installation may occur during private setup; replacements
+ * and detachment require idle execution (failed-realm recovery may detach).
+ * Clear with a NULL provider and opaque, including after retirement/failure. */
+typedef JSValue os64_js_import_base_t(JSContext *current, void *opaque);
+os64_js_status_t os64_js_realm_set_import_base(os64_js_realm_t *realm,
+    const char *caller_abi, os64_js_import_base_t *base, void *opaque,
+    os64_js_outcome_t *outcome);
+
 /* Task-owned reporting call. The binding independently supplies associated
  * entry and error-reporting realm; captured incumbent is checked separately.
  * Holds value through reentry and reports exceptions as realm_call does.

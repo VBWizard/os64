@@ -34,6 +34,9 @@ struct os64_js_realm {
     JSContext *context;
     os64_js_script_host_t host;
     os64_js_module_loader_t loader;
+    os64_js_import_base_t *import_base;
+    void *import_base_opaque;
+    bool import_base_configured;
     struct os64_js_module *modules;
     JSValue promise_then;
     bool retired; /* eligibility only; contexts and values stay retained */
@@ -1201,6 +1204,31 @@ JS_PUBLIC os64_js_status_t os64_js_enable_finalization_settings(os64_js_runtime_
     os64_js_status_t result = os64_js_enable_promise_settings(runtime, caller_abi, outcome);
     if (result != OS64_JS_OK) return result;
     JS_SetHostFinalizationRegistryIncumbent(runtime->engine, job_incumbent_capture, runtime);
+    return OS64_JS_OK;
+}
+
+static JSValue import_base_current(JSContext *context, void *opaque)
+{
+    os64_js_runtime_t *runtime = opaque;
+    os64_js_outcome_t out;
+    os64_js_realm_t *realm = os64_js_settings_realm(runtime, OS64_JS_ABI_ID,
+                                                    OS64_JS_SETTINGS_CURRENT, &out);
+    if (!realm || realm->context != context || !realm->import_base)
+        return JS_ThrowTypeError(context, "current import base settings unavailable");
+    JSValue result = realm->import_base(context, realm->import_base_opaque);
+    if (realm->retired || realm->staged || observe(runtime)) {
+        JS_FreeValue(context, result);
+        return JS_ThrowTypeError(context, "current import settings became inactive");
+    }
+    return result;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_enable_import_settings(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = os64_js_enable_finalization_settings(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    JS_SetHostImportBase(runtime->engine, import_base_current, runtime);
     return OS64_JS_OK;
 }
 
@@ -3056,6 +3084,32 @@ JS_PUBLIC os64_js_status_t os64_js_realm_set_module_loader(os64_js_realm_t *real
     if (loader != NULL) realm->loader = *loader;
     else os64_memset(&realm->loader, 0, sizeof(realm->loader));
     realm->loader_configured |= loader != NULL;
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_set_import_base(os64_js_realm_t *realm,
+    const char *caller_abi, os64_js_import_base_t *base, void *opaque,
+    os64_js_outcome_t *outcome)
+{
+    os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
+    if (!outcome) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (!runtime || !caller_abi || (!base && opaque))
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "realm, ABI and provider are required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return status(outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
+    if (runtime->destroying)
+        return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime is being destroyed");
+    if (realm->retired && base)
+        return status(outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
+    bool recovery_detach = !base && runtime->recovery_enabled &&
+        runtime->recovery_state == OS64_JS_RECOVERY_PREPARING && realm->failed;
+    if (runtime->active && !recovery_detach && (!base || realm->evaluated || realm->import_base_configured))
+        return status(outcome, OS64_JS_BUSY, "runtime is executing");
+    realm->import_base = base;
+    realm->import_base_opaque = opaque;
+    realm->import_base_configured |= base != NULL;
     return OS64_JS_OK;
 }
 

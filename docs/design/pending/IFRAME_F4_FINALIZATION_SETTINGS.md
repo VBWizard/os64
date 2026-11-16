@@ -66,8 +66,9 @@ further author execution and is reported at the next checked boundary. This
 slice does not implement HTML's separate global task source or guarantee GC
 notification timing. Browser scheduling and its registry-global task association
 remain integration gates; the opt-in alone must not enable visible frames.
-Realm-less Promise capabilities, null-referrer import fallback, remaining WebIDL
-conversions and Window/Location security gates also remain open.
+The [import-settings opt-in](IFRAME_F4_IMPORT_SETTINGS.md) supplies null-referrer
+base fallback. Realm-less Promise capabilities, remaining WebIDL conversions
+and Window/Location security gates remain open.
 
 ## Validation
 

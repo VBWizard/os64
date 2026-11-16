@@ -44,6 +44,8 @@ static os64_js_status_t recovery_prepare_native(void *opaque,
         os64_js_outcome_t out;
         status = os64_js_realm_set_module_loader(dom->realm, OS64_JS_ABI_ID, NULL, &out);
         if (status == OS64_JS_OK)
+            status = os64_js_realm_set_import_base(dom->realm, OS64_JS_ABI_ID, NULL, NULL, &out);
+        if (status == OS64_JS_OK)
             status = os64_js_realm_set_script_host(dom->realm, OS64_JS_ABI_ID, NULL, &out);
         if (status != OS64_JS_OK) break;
         departure_activity_cancel(dom);

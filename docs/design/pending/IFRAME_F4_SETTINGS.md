@@ -260,6 +260,9 @@ FinalizationRegistry capture, cleanup scopes, lifecycle gates and registry-realm
 exception reporting have a separate opt-in described in
 [IFRAME_F4_FINALIZATION_SETTINGS.md](IFRAME_F4_FINALIZATION_SETTINGS.md).
 
+Current-settings base capture for imports without a source record is described in
+[IFRAME_F4_IMPORT_SETTINGS.md](IFRAME_F4_IMPORT_SETTINGS.md).
+
 ## Remaining F.4b interfaces and acceptance gates
 
 Before publishing browser settings queries, implement and prove:
@@ -270,8 +273,7 @@ Before publishing browser settings queries, implement and prove:
   to the remaining WebIDL conversion and invocation sites,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.
-- Complete realm-less capability policy, browser finalization task scheduling and the browser
-  API-base-URL fallback for imports without an active record. The Promise opt-in
+- Complete realm-less capability policy and browser finalization task scheduling. The Promise opt-in
   supplies reaction/thenable capture, exact-record restoration and per-invocation
   host scopes; it does not complete those remaining host algorithms.
 - A pre-member-check boundary that refuses missing settings, with no guessed

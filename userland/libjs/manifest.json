@@ -258,6 +258,11 @@
       "path": "patches/0035-finalization-settings.patch",
       "sha256": "9104849bad09a3a3255c9ebcdf60e15c47d51ceb021a91459408c68561d48bdc",
       "reason": "Opt-in FinalizationRegistry callback settings: trace construction-time incumbent and exact source record, restore them during cleanup, and retain independent registry activity and executable job eligibility."
+    },
+    {
+      "path": "patches/0036-import-base-settings.patch",
+      "sha256": "335011047b85ebc9d86f0f8dd1e64c8566fa8c8a210df0cc7f483ef3cdde9c05",
+      "reason": "Snapshot a checked current-settings API base URL for imports without an active script record after argument conversion and before queued module loading."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
