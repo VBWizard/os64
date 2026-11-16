@@ -109,6 +109,14 @@ identity; its parent checks the exact process exit. See
 
 ## Detection and reclamation
 
+F15's scalar retention queries do not release roots or provide a child
+teardown certificate. The wrapper query refuses once destruction starts;
+the native cluster query uses only still-owned native storage and remains
+valid after engine destruction, before cluster free. Explicit unknown
+families survive zero registry counters. Existing finalizer/native sweep
+ordering remains required. See
+[F15 diagnostics](../../docs/design/pending/IFRAME_F15_RETENTION_DIAGNOSTICS.md).
+
 Manifest patch `0006-reporting-runtime-teardown.patch` preserves the original
 upstream files. It factors `JS_FreeRuntime` into shared cleanup with the fatal
 entry retaining both assertions. The private reporting entry returns at that
