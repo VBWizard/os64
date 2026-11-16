@@ -1,5 +1,7 @@
 # F15 B3 — kept-payload ledger diagnostics
 
+Implementation PR: **#617**, source `33463cc8`.
+
 Baseline: merged `userland` `4ccb6ee2` (#614), embedding ABI 5, engine
 `31bcaae4fa1778113d0c3cebc4de4435ab7d34f9ef8306e334e89774c06fa631`.
 This is the native payload cut coordinated with the F4 lane. Callback-holder
