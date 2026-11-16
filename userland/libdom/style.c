@@ -168,8 +168,11 @@ static JSValue write(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *no
     size_t old_len = os64_strlen(old);
     if (old_len > STYLE_MAX || value_len > STYLE_MAX || old_len + value_len + name_len + 16 > STYLE_MAX)
         return d_error(ctx,"QuotaExceededError","Inline style text quota exceeded");
-    // The declarations the new one takes the place of (covered): its own
-    // name's, and, for a shorthand, its longhands' written on their own.
+    // The declarations the new one takes the place of (covered): any whose
+    // longhands it sets all of, its own name's among them, a shorthand's
+    // longhands and narrower shorthands (`border` takes `border-top`), and
+    // a name libgarb maps onto the same longhand (`margin-inline-start`
+    // and `margin-left`: DEBTS.md).
     Stands target;
     if (!stands_for(dom,ctx,name,name_len,&target)) return JS_EXCEPTION;
     char *text = d_alloc(dom,old_len + value_len + name_len + 16);
