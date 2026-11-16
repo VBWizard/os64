@@ -755,7 +755,18 @@ static void dom_media_session_cases(void)
                      "globalThis.a=new Audio('one.mp3');globalThis.b=new Audio('two.mp3');",
                  "session: two elements");
     media_turn(&f, "session: their sessions");
-    MediaSession *sa = &media_sessions[0], *sb = &media_sessions[1];
+    /* Each element's session by its address: the turn opens them in its
+     * own order. */
+    MediaSession *sa = NULL, *sb = NULL;
+    for (size_t i = 0; i < media_opened; i++) {
+        if (strstr(media_sessions[i].url, "one.mp3") != NULL) sa = &media_sessions[i];
+        if (strstr(media_sessions[i].url, "two.mp3") != NULL) sb = &media_sessions[i];
+    }
+    check(sa != NULL && sb != NULL && sa != sb, "session: a session for each element");
+    if (sa == NULL || sb == NULL) {
+        fixture_free(&f);
+        return;
+    }
     media_ready(sa, 30);
     media_ready(sb, 30);
     media_turn(&f, "session: both ready");
@@ -769,6 +780,8 @@ static void dom_media_session_cases(void)
           "session: elements paused after playing make the window paused");
     check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_PLAY, &out) && out.status == OS64_JS_OK &&
           sb->playing && !sa->playing, "session: play, no handler, plays the element that played last");
+    media_script(&f, "assert(!b.paused&&a.paused,'the page agrees: a '+a.paused+' b '+b.paused);",
+                 "session: the elements say so too");
     check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_NEXT, &out) && out.status == OS64_JS_OK &&
           sb->playing, "session: next, no handler, does nothing");
     check(os64_dom_media_session_action(f.binding, OS64_DOM_MEDIA_SESSION_STOP, &out) && !sb->playing,

@@ -1326,7 +1326,7 @@ int d_video_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_media_elements_cancel(os64_dom_t *dom);
 void d_media_elements_drain(os64_dom_t *dom);
 void d_media_elements_free(os64_dom_t *dom);
-/* For the media session (media_session.c): the document's elements as the
+/* For the media session (media_session.c): the page's elements as the
  * window's state reads them (one not paused; a paused one that has played;
  * one that has played at all), and the browser's own answer to a press of
  * play (`play`) or pause, inside an open task. */

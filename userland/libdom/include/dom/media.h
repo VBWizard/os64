@@ -159,8 +159,9 @@ bool os64_dom_media_control(os64_dom_t *dom, const os64_html_node_t *node, os64_
                             double value, os64_js_outcome_t *outcome);
 /* The media session's side, owner thread, between tasks. The window's
  * state: PLAYING when navigator.mediaSession.playbackState is "playing" or
- * one of the document's media elements is not paused, else PAUSED when it
- * is "paused" or an element that has played is paused, else STOPPED.
+ * one of the page's media elements (in its document or not) is not
+ * paused, else PAUSED when it is "paused" or an element that has played is
+ * paused, else STOPPED.
  * False on a page with no session (no binding, the Modern Web off). */
 bool os64_dom_media_session_state(os64_dom_t *dom, os64_dom_media_session_t *out);
 /* A media key pressed, as a host task (`outcome` its verdict): the page's

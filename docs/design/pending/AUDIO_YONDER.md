@@ -962,8 +962,9 @@ never asked (DEBTS).
 tasks:
 
 - `os64_dom_media_session_state(dom)`: what the window says of itself.
-  PLAYING when `playbackState` is `"playing"` or any media element of the
-  document is not paused (the standard's "actual playback state"),
+  PLAYING when `playbackState` is `"playing"` or any media element the
+  page made, in its document or not (`new Audio()` is how many players
+  play), is not paused (the standard's "actual playback state"),
   else PAUSED when `playbackState` is `"paused"` or an element that has
   played is paused, else STOPPED; and whether the page has anything to
   say at all (an action handler set, or an element that has played).
