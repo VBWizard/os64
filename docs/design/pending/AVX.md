@@ -283,12 +283,13 @@ the answer is no. It doubles as a standing proof: both run while the
 desktop switches threads around them, and a lost upper half shows as
 garbage in the picture.
 
-## For Chris
+## Rulings
 
-1. **Plain `xsave64` first, `xsaveopt64` only if the P5's number asks.**
-   My lean: yes, for the two reasons in § The save instruction.
-2. **A `NOAVX` token.** My lean: yes; it costs a table row and keeps the
-   old path honest.
-3. **The makefile's default CPU model gains AVX.** My lean: yes. The probe
-   saw `testrun` take 5 to 7 % longer under it, from one sample each.
-4. **One PR for slice A.** My lean: yes; I do not see a safe way to cut it.
+Slice A was built and merged (PR #626) on all four of the design's leans,
+which is Chris's ruling on each:
+
+1. Plain `xsave64`. `xsaveopt64` is slice C, only if the P5's switch cost
+   asks for it.
+2. `NOAVX` exists.
+3. The makefile's default CPU model has AVX; `QEMU_CPU=` boots another.
+4. Slice A was one PR.
