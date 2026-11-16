@@ -2,12 +2,14 @@
 
 Implementation PR: **#617**, source `33463cc8`.
 
-Baseline: merged `userland` `4ccb6ee2` (#614), embedding ABI 5, engine
+Current qualified composition: merged #615 (`fe4b1d2b`), described below.
+
+Initial baseline: merged `userland` `4ccb6ee2` (#614), embedding ABI 5, engine
 `31bcaae4fa1778113d0c3cebc4de4435ab7d34f9ef8306e334e89774c06fa631`.
 This is the native payload cut coordinated with the F4 lane. Callback-holder
 conversion/invocation fields remain outside this change; the identity/export
-contract still depends on F4c/d. Existing B1/B2 structures, production record
-layouts, engine code and lifetime policy are unchanged.
+contract still depends on F4c/d. B3 leaves existing B1/B2 structures,
+production record layouts, engine code and lifetime policy unchanged.
 
 ## Observation and limits
 
@@ -48,7 +50,7 @@ reference. It remains valid after drain and engine destruction, before native
 binding free. Root teardown's existing finalizer/native-sweep ordering governs
 release; diagnostic inspection does not acknowledge any of it.
 
-## Validation on the pinned baseline
+## Initial validation on the pinned baseline
 
 The host uses a fresh coherent native cohort including the merged style-list
 layout changes. The final query and consumer are rebuilt against those
@@ -80,3 +82,35 @@ F15 remains in progress. These observations complement
 [B2](IFRAME_F15_NATIVE_BORROWS.md); deep engine/callback/export classification,
 release-stage injection and the reviewed identity/lifetime contract remain
 separate cuts in the [reclamation brief](IFRAME_F15_RECLAMATION.md).
+
+
+## Composition with merged F4 active-script records
+
+PR #617 composes merged `userland` `fe4b1d2b` (#615), including its review
+follow-up. Engine identity is
+`50e0bb8409b1d0d01fd0dad73adaa305e4a449e49b3eacac33d58c322cc632ba`;
+embedding ABI 5 remains compatible and bytecode format is 6. The B3 query,
+headers and shared consumer are byte-identical to `33463cc8`. The new engine's
+closure/reaction/job ScriptOrModule roots remain unclassified incoming edges;
+the native ledger does not enumerate them or supply a release certificate.
+
+The host is rebuilt as a fresh matching native/engine cohort; prior 31bc
+objects are not mixed into this proof. Target libraries and the frozen guest
+are rebuilt together. The original receipts above retain their 31bc scope.
+
+
+| New-engine composition receipt | Result |
+|---|---|
+| Fresh DOM `--retention` | 3,652 per profile. |
+| `--fetch`, `--recovery`, `--departure` | 1,497 / 10,560 fetch, 2,532 / 6,672 recovery, 353 departure per profile. Allocation-cut counts vary with engine storage. |
+| `--promise-settings`, `--handler-settings` | 246 and 5,526 per profile; accepted settings behavior preserved. |
+| Nine mutations per profile | Eighteen named rejections on the new matching cohort. |
+| Headers/preparer/teardown/link | Pass, six preparer tests, 222 engine / 80 runtime exports; DOM retains its old export union plus the new query. |
+| Fresh frozen QEMU cohort | Nineteen matching files, shared cases under both root policies, target heap baseline/accounting and exact parent exit pass. |
+
+Positive host runs retain leak-enabled sanitizers outside the sandbox. The
+query's target relocations remain its ABI string and `os64_strcmp`; the merge
+adds no engine entry to diagnostic inspection. Both original and composition
+proofs retain their source/cohort manifests. The kernel fixture's unrelated
+NONET ARP preboot failure stays outside the consumer claim. This composition
+adds no full-DOM, WPT or P5 receipt.
