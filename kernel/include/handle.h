@@ -61,6 +61,9 @@ typedef enum handle_type
 	HANDLE_AUDIO,          // object = audio_open_t*, one face of the sound
 	                       // stream (audio/audio.h): /dev/audio (write PCM),
 	                       // /dev/audiopos, /dev/audiotap
+	HANDLE_MEDIA_KEYS,     // object = media_session_t*, a media-key session
+	                       // (/dev/mediakeys, audio/media_session.h): write
+	                       // = the program's state, read = its next press
 
 	// A slot reserved before an operation that may publish external state.
 	// Exclusive file creation uses it so a full handle table is discovered

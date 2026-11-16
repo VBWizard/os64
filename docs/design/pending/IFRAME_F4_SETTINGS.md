@@ -133,29 +133,26 @@ or target binding. They borrow their results and do not touch exceptions.
 
 ### Script provenance and suspension
 
-The engine records the **presence** of ScriptOrModule on each bytecode closure,
-not the identity of a Script Record or Module Record. Script/module roots
-establish that presence. Ordinary closures, including dynamic functions,
-inherit presence from the active script-bearing chain when instantiated.
-Direct eval inherits its immediate calling frame's presence; indirect eval's
-root has none. A function created inside indirect eval can still inherit the
-active outer script's presence. This distinction follows
-[PerformEval](https://tc39.es/ecma262/multipage/global-object.html#sec-performeval)
+The engine retains the exact ScriptOrModule on each bytecode closure: root
+bytecode for a classic script, or its module record. Ordinary closures,
+including dynamic functions, inherit the active record. Direct eval inherits
+its immediate calling frame's record; indirect eval's root has none. A closure
+created inside indirect eval can still inherit an active outer record. This
+follows [PerformEval](https://tc39.es/ecma262/multipage/global-object.html#sec-performeval)
 and [OrdinaryFunctionCreate](https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinaryfunctioncreate).
 
-The marker uses a spare bit in the object header and is initialized with the
-object. It does not retain a context or record, and it is derived again when
-cached bytecode is instantiated. Each ordinary bytecode call or generator/
-async resume creates an automatic activation record with its execution realm
-and a zero suppression count. Suspension, normal return and exception unwind
-restore the previous chain; no pointer to a suspended native stack survives.
-Null-provenance code does not mask an older script-bearing activation.
-Tracking runs even outside opt-in scopes so closures created there remain
-correct when later invoked inside one. Queries still require explicit entry.
+Closure and pending-reaction edges participate in GC tracing. Calls and
+generator/async resumes create automatic activations holding their own record,
+execution realm and suppression count. Normal/abrupt return and suspension
+restore the previous chain without leaving a pointer to suspended native stack
+storage. Null-provenance code does not mask an older record. Tracking runs
+outside opt-in scopes; checked settings queries still require explicit entry.
+The presence bit is derived from the retained record, including when cached
+code is instantiated. Exact-record ownership, Promise restoration and source
+serialization are specified in [IFRAME_F4_ACTIVE_SCRIPT.md](IFRAME_F4_ACTIVE_SCRIPT.md).
 
-This presence marker is sufficient for this incumbent-selection primitive.
-It is not an active-script-record API or the Promise HostMakeJobCallback
-capture record. Queue ownership from the existing job API remains separate.
+The exact active-record API does not replace operation-specific settings
+attribution. Queue eligibility remains separate from retained source identity.
 
 ## Checked wrapper bridge
 
@@ -269,10 +266,10 @@ Before publishing browser settings queries, implement and prove:
   to the remaining WebIDL conversion and invocation sites,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.
-- Complete exact active script/module restoration for Promise callbacks and
-  the realm-less capability/finalization-job policies. The Promise opt-in
-  supplies reaction/thenable capture and per-invocation host scopes; it does
-  not complete those remaining host algorithms.
+- Complete realm-less capability/finalization-job policies and the browser
+  API-base-URL fallback for imports without an active record. The Promise opt-in
+  supplies reaction/thenable capture, exact-record restoration and per-invocation
+  host scopes; it does not complete those remaining host algorithms.
 - A pre-member-check boundary that refuses missing settings, with no guessed
   bootstrap caller. Security/lifetime review precedes browser publication.
 

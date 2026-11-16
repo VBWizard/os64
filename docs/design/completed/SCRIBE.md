@@ -42,9 +42,17 @@ Open, edit, save, scroll, select. Explicitly OUT of v1, each with a reason:
   journal attaches).
 - ~~**Search**~~ — PROMOTED INTO v1 (2026-08-20, second reading): Chris named
   "finding things in os64.log" as a primary use, and search IS that feature.
-  Ctrl+F reveals the path textfield repurposed as a search field; Enter jumps
-  to the next hit and scrolls it into view. Linear scan over the loaded
-  buffer — no index, no regex (booked), honest and fast enough.
+  Ctrl+F opens the Find bar. Enter/Shift+Enter search forward/backward;
+  F3/Shift+F3 repeat with the bar open or closed. Previous, Next and Close
+  buttons share a wrapping control row with Match case and Wrap around.
+  Both options start unchecked and are retained with the query for the
+  lifetime of the window. Searches scan the loaded lines in the requested
+  direction, without an index or regular expressions. A match at the caret
+  is eligible; a selected range is passed over on repetition. Failure leaves
+  the viewport and selection alone. Optional wrapping visits the remaining
+  portion once and reports crossing the document boundary. Case-insensitive
+  matching folds ASCII A-Z; other UTF-8 bytes match exactly, and both ends
+  must be text-engine cluster boundaries.
 - **Mouse wheel** — supplied by libui: three rows per notch over the textview,
   with its existing viewport callback keeping the scrollbar synchronized.
 - **Word wrap** — v1 clips long lines and scrolls horizontally to follow the

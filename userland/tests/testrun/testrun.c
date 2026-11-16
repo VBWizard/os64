@@ -96,6 +96,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/guiwake",         NULL, 0x60E00000,  0x60E00002, "GUI event wait: a ring landing mid-park wakes the waiter, not its backstop" },
     { "/tests/belltest",        NULL, 0xBE110000,  0,          "the bell: a ring is kept, one waiter, close and a handled signal end a wait, and a ring landing mid-park wakes the waiter" },
     { "/tests/audiotest",       NULL, 0xA0D10000,  0xA0D100FE,        "sound as a file: one owner, the ramp at the tap sample for sample, patience, pause, flush, a signal, close, volume, two generations, a shared handle" },
+    { "/tests/mediakeystest",   NULL, 0x3E4B0000,  0x3E4B00FE,        "the media keys: the rule (playing, most recently active, the toggle), a full ring passed over, BUSY, a press, a signal and a close end a parked read, the kernel's answer, a killed session, the wall" },
     { "/tests/resampletest",    NULL, 0x5A3E0000,  0,          "libsound's resampler: a sine at 44.1 kHz comes out the same sine at 48, and back, and mono" },
     { "/tests/playtest",        NULL, 0x91A10000,  0x91A100FE,        "/bin/play end to end at the tap: a 44.1 kHz mono WAV is the same sine at 48, a 48 kHz one arrives sample for sample, bad files are refused, an MP3 is heard whole" },
     { "/tests/avtest",          NULL, 0xA7E50000,  0,          "libav.so (FFmpeg): an MP3 in memory probes, its tag reads, it decodes to one second of the same sine and seeks; a WAV decodes sample for sample; noise is refused; an MP4 with a picture yields its AAC sound" },

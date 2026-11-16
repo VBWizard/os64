@@ -458,6 +458,12 @@
 	// Does NOT touch kForegroundTask — collecting a background corpse is not
 	// a change of who owns the console.
 	uint64_t task_reap_any_dead(task_t* parentTask, uint64_t* exitCode);
+	// The task's ID and its ancestors', nearest first, at most `cap`, stopping
+	// before kKernelTask (everyone's parent after an orphaning, so it names
+	// nobody's lineage). Read under the graveyard lock, which is the lock the
+	// orphanage rewrites parentTask under: every ancestor it reaches is
+	// unburied. Returns how many were written.
+	uint32_t task_lineage(task_t* task, uint64_t* out, uint32_t cap);
 	int task_reap_eligible_zombies(size_t max_to_reap);
 	void* task_alloc_aligned(task_t* task, size_t size);
 	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);

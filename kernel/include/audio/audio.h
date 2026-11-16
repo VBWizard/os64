@@ -79,6 +79,11 @@ void audio_tap_undelivered(const uint8_t *records, size_t bytes);
 // spinlock; never waits.
 bool audio_control(const char *text, size_t length);
 bool audio_volume_write(const char *text, size_t length);
+// Pause the stream, or resume it when it will not pause: one step under the
+// stream's lock, so two at once are two toggles. What happened, or
+// AUDIO_TOGGLE_REFUSED with nothing open to pause and nothing paused.
+typedef enum { AUDIO_TOGGLE_REFUSED, AUDIO_TOGGLE_PAUSED, AUDIO_TOGGLE_RESUMED } audio_toggle_t;
+audio_toggle_t audio_toggle(void);
 size_t audio_control_text(char *out, size_t capacity);
 size_t audio_volume_text(char *out, size_t capacity);
 // /sys/audio. The since-read counters start again at each call.

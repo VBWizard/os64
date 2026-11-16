@@ -966,8 +966,10 @@ static void host_volume_tick(bt_host_t *h)
 // Every press and release AVRCP answered (bt_avrcp_press) is drained each
 // tick, and before AVRCP starts over with the link: counted by name, kept
 // as the last, and held in a ring of its own for a consumer, with loss
-// counted (bt_host.h). The transport logs each from the ring by its number.
-// A PRESS DOES NOTHING, with one exception the design makes: headphones
+// counted (bt_host.h). The transport logs each from the ring by its number,
+// then takes the presses of play, pause, stop, forward and backward for the
+// media keys (MEDIA_KEYS.md). HERE a press does nothing, with one exception
+// the design makes: headphones
 // without absolute volume (AVRCP not READY) that send volume up or down
 // move the seam's number by BT_HOST_VOLUME_STEP, clamped to 0..100, through
 // volume_set, which the seam takes from its sink whether or not the sink
