@@ -1,5 +1,7 @@
 # F15 B2 — native owner and borrower diagnostics
 
+Implementation PR: **#614**, source `c1085571`.
+
 Baseline: merged `userland` `6e62460e` (#610), embedding ABI 5, engine
 `31bcaae4fa1778113d0c3cebc4de4435ab7d34f9ef8306e334e89774c06fa631`.
 This extends the [B1 scalar diagnostics](IFRAME_F15_RETENTION_DIAGNOSTICS.md)
