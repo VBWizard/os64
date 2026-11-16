@@ -1216,7 +1216,8 @@ static void sys_gen_memory_ledger(synth_text_t *t)
 // at the stream under its lock; the since-read counters start again at each
 // open of this file.
 #define SYS_AUDIO_TEXT_BYTES 2048
-// /sys/mediakeys: the header and a line a session, every session full.
+// /sys/mediakeys: the header and a line a session. Room for every session
+// with a plain name; names that escape heavily can cut the last rows short.
 #define SYS_MEDIAKEYS_TEXT_BYTES 8192
 static void sys_gen_audio(synth_text_t *t)
 {
@@ -2614,18 +2615,20 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 // between and the newline separately, so the bytes are gathered until a
 // newline and the line is carried out by the write that brought it — never
 // at close, which can run with interrupts off or inside a burial: text left
-// without a newline when the handle closes is refused there.
+// without a newline when the handle closes is refused there. A refused line
+// does not stop the lines after it in the same write; the write answers -1
+// when any of its lines was refused.
 static int sys_mediakeys_write(sys_file_handle_t *h, const char *b, size_t size)
 {
+	bool refused = false;
 	for (size_t i = 0; i < size; i++)
 	{
 		if (b[i] == '\n')
 		{
-			bool ok = !h->mk_refused && media_keys_command(h->mk_line, h->mk_length) == 0;
+			if (h->mk_refused || media_keys_command(h->mk_line, h->mk_length) != 0)
+				refused = true;
 			h->mk_length = 0;
 			h->mk_refused = false;
-			if (!ok)
-				return -1;
 			continue;
 		}
 		if (h->mk_length == sizeof(h->mk_line))
@@ -2633,7 +2636,7 @@ static int sys_mediakeys_write(sys_file_handle_t *h, const char *b, size_t size)
 		else
 			h->mk_line[h->mk_length++] = b[i];
 	}
-	return (int)size;
+	return refused ? -1 : (int)size;
 }
 
 // Probe, appearance and mouse writes are complete commands, never partial streams;

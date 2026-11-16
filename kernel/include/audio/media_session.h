@@ -24,8 +24,9 @@ media_session_t *media_session_open(long *refusal);
 void media_session_ref(media_session_t *s);
 void media_session_release(media_session_t *s);
 // The handle goes: the session is struck from the table, so no press can
-// reach it again, and a reader parked in it wakes to CLOSED. A spinlock and
-// nothing else: legal with interrupts off and under any address space.
+// reach it again, and a reader parked in it wakes to CLOSED. A spinlock and,
+// when it was the last holder, a kfree: legal with interrupts off and under
+// any address space, as the bell's close is.
 void media_session_close(media_session_t *s);
 
 #define MEDIA_SESSION_ERR_CLOSED       (-1)   // the handle was closed under the call

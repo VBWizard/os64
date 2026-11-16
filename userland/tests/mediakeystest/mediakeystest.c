@@ -7,7 +7,9 @@
 //       handle is listed as `mediakeys`;
 //    2. the rule: the newest session to say `playing` takes a press; with
 //       none playing, the most recently active; Play and Pause are given
-//       as the target's toggle; a record carries its serial and when;
+//       as the target's toggle; a record carries its serial and when; a
+//       write whose middle line is refused still carries out the others,
+//       and answers refused;
 //    3. a session whose ring is full is passed over, and the report says
 //       so; its eight presses are still there, in order;
 //    4. a second reader on a parked session is refused BUSY, and a press
@@ -247,6 +249,14 @@ static int run(void)
         return die(2, "Pause with none playing was not given to the most recently active as Play", r);
     if (!say(a, "stopped") || !press("previous") || (r = take(a, 0, NULL)) != OS64_MEDIA_KEY_PREVIOUS)
         return die(2, "Previous did not go to the most recently active", r);
+    static const char kMixed[] = "press next\npress bogus\npress stop\n";
+    int64_t mh = os64_open("/sys/mediakeys", "w");
+    r = mh < 0 ? mh : os64_write((int32_t)mh, kMixed, sizeof(kMixed) - 1);
+    if (mh >= 0) os64_close((int32_t)mh);
+    if (r != -1)
+        return die(2, "a write with a refused line was not answered refused", r);
+    if ((r = take(a, 0, NULL)) != OS64_MEDIA_KEY_NEXT || (r = take(a, 0, NULL)) != OS64_MEDIA_KEY_STOP)
+        return die(2, "a refused line stopped the lines around it", r);
 
     // 3. A full ring is passed over.
     if (!say(a, "playing"))

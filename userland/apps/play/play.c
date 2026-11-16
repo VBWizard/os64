@@ -42,7 +42,8 @@ static volatile int gStop;
 static void on_interrupt(int signo) { (void)signo; gStop = 1; }
 
 // What the keys asked of the file playing.
-typedef enum { GO_ON, GO_NEXT, GO_PREVIOUS, GO_RESTART, GO_STOP } go_t;
+// GO_SKIP: the file would not play; go on the way we were going.
+typedef enum { GO_ON, GO_NEXT, GO_PREVIOUS, GO_RESTART, GO_STOP, GO_SKIP } go_t;
 
 typedef struct
 {
@@ -91,7 +92,9 @@ static go_t answer(uint32_t key, uint64_t played)
 }
 
 // Paused: the stream stops at once, and nothing is written until Play (or
-// a key that moves, which plays on from where it lands, or Ctrl+C).
+// a key that moves, which plays on from where it lands, or Ctrl+C). Leaving
+// to move or to stop, the paused sound is flushed BEFORE the resume: a
+// resume wakes the sink at once, and it would play what was queued.
 static go_t paused(player_t *p, uint64_t played)
 {
     control(p, "pause");
@@ -111,13 +114,17 @@ static go_t paused(player_t *p, uint64_t played)
         go = answer(key, played);
         break;
     }
+    if (go != GO_ON || gStop)
+        control(p, "flush");   // the paused song never sounds again
     control(p, "resume");
     if (go != GO_STOP && !gStop)
         say(p, "playing");
     return go;
 }
 
-// Look for a press without waiting, between two pieces of sound.
+// Look for a press without waiting, between two pieces of sound. A key
+// that moves flushes what is queued: the next sound now, not in a fifth of
+// a second (a pause that ends in a move has flushed already).
 static go_t keys_now(player_t *p, uint64_t played)
 {
     uint32_t key;
@@ -127,7 +134,10 @@ static go_t keys_now(player_t *p, uint64_t played)
             return paused(p, played);
         go_t go = answer(key, played);
         if (go != GO_ON)
+        {
+            control(p, "flush");
             return go;
+        }
     }
     return GO_ON;
 }
@@ -177,7 +187,7 @@ static go_t play_file(player_t *p, const char *path, bool verbose)
     {
         os64_printf("play: %s: cannot open\n", path);
         p->exit_code = 2;
-        return GO_NEXT;
+        return GO_SKIP;
     }
     os64_media_source_t source;
     os64_media_file_source((int32_t)file, &source);
@@ -189,7 +199,7 @@ static go_t play_file(player_t *p, const char *path, bool verbose)
         os64_printf("play: %s: %s\n", path, os64_media_strerror(opened));
         os64_close((int32_t)file);
         p->exit_code = 2;
-        return GO_NEXT;
+        return GO_SKIP;
     }
     if (verbose)
     {
@@ -209,7 +219,6 @@ static go_t play_file(player_t *p, const char *path, bool verbose)
         if (asked != GO_ON)
         {
             go = asked;
-            control(p, "flush");   // the next sound now, not in a fifth of a second
             break;
         }
         int64_t n = os64_media_decode(media, pcm, CHUNK_FRAMES);
@@ -266,11 +275,15 @@ int main(int argc, char **argv)
     say(&p, "playing");
 
     int at = first;
+    bool back = false;   // the last move was Previous
     while (at < argc && !gStop)
     {
         go_t go = play_file(&p, argv[at], verbose);
         if (go == GO_STOP || p.exit_code == 3)
             break;
+        if (go == GO_SKIP)   // a file that will not play: on the way we were going, forward from the first
+            go = back && at > first ? GO_PREVIOUS : GO_NEXT;
+        back = go == GO_PREVIOUS;
         if (go == GO_NEXT)
             at++;
         else if (go == GO_PREVIOUS && at > first)
