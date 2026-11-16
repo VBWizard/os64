@@ -35,7 +35,7 @@ handler can establish its own record above the restored activation.
 The closure stores its owned record pointer in a trailing slot of its variable
 reference array, with the type tag in spare object-header bits. The array is
 allocated when closure variables or a record require it; clearing provenance
-releases the record, and function destruction releases the storage. The heap
+releases the record, and function destruction releases the storage. The storage remains charged through the allocator, and the ordinary-function
 census includes the trailing slot. General JS objects remain 72 bytes.
 Pending reactions grow from 72 to 88 bytes and bytecode headers from 128 to
 136 bytes on x86-64. The existing 5,000-Promise crypto stress fixture passes
@@ -94,6 +94,22 @@ compatibility. Full runtime tests include allocation-failure sweeps for pending
 reactions, queued jobs and bytecode reading, parser failures and terminal paths.
 Sanitizer profiles retain ASan/UBSan and LeakSanitizer. Host tests do not prove
 P5 execution or visible iframe acceptance.
+
+Final qualification on merged #610 uses the engine identity below. Full runtime
+profiles pass **24,413 / 76,047 checks**, with zero failures/live allocations;
+parser refusal sweeps and fatal-invariant checks also pass. The exact-record
+suite passes **479 checks per profile**. DOM Promise/handler/retention suites
+pass **246 / 5,526 / 834 per profile**; window/crypto passes **648 / 820**.
+The full shipping DOM suite passes **370,768 checks**, zero failures, with
+**13,582 binding allocation-sweep cases**. CLI suites pass **199 / 40**.
+Target runtime, libdom, Yonder and js builds, manifest/header checks, allocator/
+visibility audits, and **222 engine / 80 runtime export** checks pass.
+
+Three negative controls fail in both engine profiles: omitted synthetic-record
+restoration, filename-based module lookup, and omitted pending-reaction record
+marking. The first two hit source/metadata assertions. The third triggers the
+engine's unreleased-object invariant; an abandoned pending reaction is needed
+to expose that cycle instead of releasing the record through settlement first.
 
 ## Integration boundary
 
