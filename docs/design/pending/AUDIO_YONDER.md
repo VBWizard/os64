@@ -266,11 +266,17 @@ one is paused. The decoder then starts again from the element's `heard`
 position. (As built, a seek flushes the device only when the element
 seeking is the only one with sound there: § As built (Y.3).)
 
-A pause that lasts gives the stream back: after 30 seconds paused, the
+A pause that lasts gives the stream back: after 3 seconds paused, the
 thread closes `/dev/audio` (a paused close is a flush, AUDIO_SEAM.md
-§ The stream's states), so a song paused in yonder does not keep `play`
-in a terminal busy for the rest of the evening. Resuming after that opens
-the stream again and is a seek to where the element stood.
+§ The stream's states), so a song paused in yonder keeps neither `play`
+in a terminal nor another window busy. Resuming after that opens the
+stream again and is a seek to where the element stood, which costs
+milliseconds; the second a resume takes after a longer pause is
+Bluetooth headphones starting their stream again, which they suspend
+after the same 3 seconds of quiet whether or not the device is held.
+(Ruled 2026-11-16: it was 30 seconds, and with the media keys moving a
+press from one window to another, the window that paused kept the next
+one waiting "busy" for no gain.)
 
 With others still sounding (Y.3), pausing one stops the mixer taking
 from its queue, and its last fifth of a second plays out under the

@@ -82,10 +82,14 @@
 // (or a seek past it) asks again from there.
 #define HOLD_MS 10000u
 // The audio thread: how often it tries a busy device, how long the device
-// stays open with nothing to play, and how long a pause keeps it.
+// stays open with nothing to play, and how long a pause keeps it. A pause
+// keeps it as long as Bluetooth headphones keep their stream through
+// silence (BT_A2DP_QUIET_US): a longer hold saves nothing on resume, since
+// the headphones must be started again either way, and keeps the sound
+// from another window a press may have moved on to.
 #define BUSY_RETRY_MS 500u
 #define IDLE_CLOSE_MS 3000u
-#define PAUSE_KEEP_MS 30000u
+#define PAUSE_KEEP_MS 3000u
 // While a session sounds, the window is rung this often, for timeupdate.
 #define RING_SOUNDING_MS 250u
 // The sessions sounding at once. One past it waits, told busy: a page of
