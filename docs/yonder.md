@@ -432,8 +432,9 @@ use for browsing: `--script-audit`, `--layout-profile` and
 
 ## What it does not do yet
 
-- **Video and sound.** A page's `<video>` and `<audio>` show and play
-  nothing.
+- **Video.** A page's `<audio>` plays, and a `<video>` plays its sound in
+  an empty box, but no video's picture is shown (with scripts and the
+  Modern Web surface on; with either off, neither plays).
 - **Frames.** A page inside a page (`<iframe>`) is not loaded; a panel
   naming its address stands in for it, and is a link to it.
 - **New windows a page opens.** A script cannot open a window, so a

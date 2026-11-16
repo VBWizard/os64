@@ -725,10 +725,10 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"HTMLSourceElement", D_PROTO_SOURCE},
     };
     /* HTMLIFrameElement's is the frames row's (frames.c), with its members:
-     * IFRAME.md's HTMLIFrameElement is one row. HTMLMediaElement's and
-     * HTMLAudioElement's are the media row's (media.c), for the same
-     * reason. */
-    _Static_assert(sizeof(kInterfaces) / sizeof(kInterfaces[0]) == D_PROTO_COUNT - 3,
+     * IFRAME.md's HTMLIFrameElement is one row. HTMLMediaElement's,
+     * HTMLAudioElement's and HTMLVideoElement's are the media row's
+     * (media.c, video.c), for the same reason. */
+    _Static_assert(sizeof(kInterfaces) / sizeof(kInterfaces[0]) == D_PROTO_COUNT - 4,
                    "an interface object for each of the binding's prototypes but the frames and media rows'");
     /* Each interface object made so far, by prototype kind, borrowed from
      * the global that holds it; the table names a parent before its

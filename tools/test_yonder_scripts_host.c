@@ -2819,6 +2819,41 @@ static void player_cases(void) {
           "player: one the page made invisible paints nothing and still takes the pointer");
     check(hidden != NULL && hidden->p.w.hidden, "player: one the page hid is hidden");
     probe_drop();
+    /* A video (AUDIO_YONDER.md § Y.4): a box of its own, 300 by 150, and
+     * with controls the player along its bottom; without, no player. */
+    probe_page("<p><video id=c controls src=a.mp3></video><video id=n src=b.mp3></video></p>", true);
+    script_turn();
+    const flow_box_t *vc = flow_box_for(g.page.tree, probe_id("c")), *vn = flow_box_for(g.page.tree, probe_id("n"));
+    check(vc != NULL && vc->replaced && vn != NULL && vn->replaced && g.nplayers == 1 &&
+          g.players[0]->node == probe_id("c"), "player: a video is a box, and only the one with controls has a player");
+    if (vc != NULL && g.nplayers == 1) {
+        os64_gui_rect_t at = flow_box_doc_rect(vc, scroll_now());
+        const os64_ui_widget_t *w = &g.players[0]->p.w;
+        check(at.w == 300 && at.h == 150 && w->bounds.w == 300 && w->bounds.h == YONDER_PLAYER_HEIGHT &&
+              w->bounds.y - g.view.bounds.y + g.sy == at.y + at.h - YONDER_PLAYER_HEIGHT,
+              "player: a video's player is the strip along the bottom of its box");
+        zoom_to(2000);
+        relayout(false);
+        vc = flow_box_for(g.page.tree, probe_id("c"));
+        at = vc != NULL ? flow_box_doc_rect(vc, scroll_now()) : (os64_gui_rect_t){0, 0, 0, 0};
+        check(g.nplayers == 1 && at.w == 600 && at.h == 300 && g.players[0]->p.w.bounds.h == 2 * YONDER_PLAYER_HEIGHT &&
+              g.players[0]->p.w.bounds.y - g.view.bounds.y + g.sy == at.y + at.h - 2 * YONDER_PLAYER_HEIGHT,
+              "player: zoomed, the strip is the player's height at the zoom the box was laid out at");
+        zoom_to(1000);
+    }
+    probe_drop();
+    probe_page("<p><video id=s controls style=\"height:30px\" src=a.mp3></video></p>", true);
+    script_turn();
+    const flow_box_t *vs = flow_box_for(g.page.tree, probe_id("s"));
+    if (vs != NULL && g.nplayers == 1) {
+        os64_gui_rect_t at = flow_box_doc_rect(vs, scroll_now());
+        check(at.h == 30 && g.players[0]->p.w.bounds.h == 30 &&
+              g.players[0]->p.w.bounds.y - g.view.bounds.y + g.sy == at.y,
+              "player: a video shorter than the player gives it the whole box");
+    } else {
+        check(false, "player: a short video has a box and a player");
+    }
+    probe_drop();
     probe_page("<p><audio id=a controls src=a.mp3></audio></p>", false);
     check(g.nplayers == 0 && flow_box_for(g.page.tree, probe_id("a")) == NULL,
           "player: with scripts off an audio's controls draw nothing");

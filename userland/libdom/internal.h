@@ -91,8 +91,9 @@ enum {
     D_PROTO_BR, D_PROTO_DLIST, D_PROTO_DIRECTORY, D_PROTO_FONT, D_PROTO_HR, D_PROTO_HEADING, D_PROTO_HTML,
     D_PROTO_MENU, D_PROTO_PARAGRAPH, D_PROTO_PRE, D_PROTO_SPAN, D_PROTO_TABLE_CAPTION, D_PROTO_TITLE,
     D_PROTO_SOURCE,
-    /* HTMLMediaElement's and HTMLAudioElement's (media.c), the media row's. */
-    D_PROTO_MEDIA, D_PROTO_AUDIO, D_PROTO_COUNT
+    /* HTMLMediaElement's and HTMLAudioElement's (media.c), and
+     * HTMLVideoElement's (video.c), the media row's. */
+    D_PROTO_MEDIA, D_PROTO_AUDIO, D_PROTO_VIDEO, D_PROTO_COUNT
 };
 /* A set of kinds is a d_kinds_t, bit `kind` for each (D_KIND): the tables
  * that put a member on some kinds' prototypes. GCC's 128-bit integer, so a
@@ -1313,10 +1314,14 @@ int d_image_data_view(os64_dom_t *, JSContext *, JSValueConst, canvas_rgba8_t *)
  * the HTMLIFrameElement interface over D_PROTO_IFRAME, and its members. */
 int d_frames_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The media row (media.c): HTMLMediaElement, HTMLAudioElement, MediaError,
- * TimeRanges, Audio, and the media events' handlers. Its departure step
- * closes the host's sessions and forgets queued tasks; drain lets go of
- * the engine values the records hold; free frees the records. */
+ * TimeRanges, Audio, and the media events' handlers, then HTMLVideoElement
+ * (d_video_install). Its departure step closes the host's sessions and
+ * forgets queued tasks; drain lets go of the engine values the records
+ * hold; free frees the records. */
 int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* HTMLVideoElement (video.c), a media element that plays sound and no
+ * picture (AUDIO_YONDER.md § Y.4), over the HTMLMediaElement on window. */
+int d_video_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_media_elements_cancel(os64_dom_t *dom);
 void d_media_elements_drain(os64_dom_t *dom);
 void d_media_elements_free(os64_dom_t *dom);

@@ -1995,7 +1995,8 @@ typedef struct {
     uint64_t options_sig;
 } FormWidget;
 
-// An `<audio controls>` element's player (player.h), over its box.
+// A media element's player (player.h): over an `<audio controls>` box, along
+// the bottom of a `<video controls>` one.
 #define PLAYER_ASKS 4
 typedef struct {
     yonder_player_t p;              // first: libui's widget is the player's
@@ -2347,8 +2348,8 @@ static struct {
     // pointer list while preserving surviving widgets and their caret.
     FormWidget **fw;
     int32_t nfw;
-    // The page's audio players (players_build), the same way: each widget
-    // stays at its address while its element keeps its controls box.
+    // The page's players (players_build), the same way: each widget
+    // stays at its address while its element keeps its box and its controls.
     Player **players;
     int32_t nplayers;
     // What a script asked of the page's widgets during its task (focus,
@@ -3101,7 +3102,10 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, con
     // A frame's document is not loaded into its box (it is offered as a
     // link instead), and an embed makes no box: both are asked for and not
     // shown. An object shows its fallback, as a browser does for what it
-    // cannot play, and is not counted.
+    // cannot play, and is not counted. The Modern Web surface draws a
+    // canvas and an svg, and with scripts on plays an audio; a video it
+    // plays shows no picture (AUDIO_YONDER.md § Y.4), so it is counted
+    // either way.
     static const char *const kNothing[] = {"canvas", "video", "audio", "svg", "iframe", "frame", "embed"};
     enum { NOTHING = sizeof(kNothing) / sizeof(kNothing[0]) };
     uint32_t nothing[NOTHING] = {0}, canvases = 0;
@@ -3111,9 +3115,11 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, con
     const os64_html_node_t *top = doc != NULL ? doc->document : NULL;
     for (const os64_html_node_t *n = top; n != NULL; n = os64_html_shadow_including_next(top, n)) {
         if (n->kind == OS64_HTML_ELEMENT && n->name != NULL) {
-            for (int k = 0; k < NOTHING; k++)
-                nothing[k] +=
-                    os64_streq(n->name, kNothing[k]) && (!modern || (!os64_streq(kNothing[k], "svg") && !os64_streq(kNothing[k], "canvas")));
+            for (int k = 0; k < NOTHING; k++) {
+                bool shown = modern && (os64_streq(kNothing[k], "svg") || os64_streq(kNothing[k], "canvas") ||
+                                        (scripting && os64_streq(kNothing[k], "audio")));
+                nothing[k] += os64_streq(n->name, kNothing[k]) && !shown;
+            }
             canvases += n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_CANVAS;
             if (n->ns == OS64_HTML_NS_HTML && n->ce != OS64_HTML_CE_CUSTOM &&
                 os64_html_custom_name(n->name)) {
@@ -10167,7 +10173,7 @@ static void forms_place(void)
         else if (moved)
             control_mark(fw);
     }
-    // The audio players are the page's controls too.
+    // The media players are the page's controls too.
     players_place();
 }
 
@@ -10296,6 +10302,10 @@ static void players_show(void)
 // where the page hid it (`visibility`). One the page made invisible
 // (`opacity: 0`, the box's `unpainted`) paints nothing and still takes the
 // pointer, as other browsers' does: the page's own player is drawn over it.
+// A video's player is the strip along the bottom of its box, a player's
+// height at the zoom it was laid out at, or the whole box when shorter;
+// what covers it is asked at the strip's centre, not the box's, since a
+// page's own badge in the middle of the video leaves the strip clear.
 static void players_place(void)
 {
     const os64_gui_rect_t v = g.view.bounds;
@@ -10303,12 +10313,21 @@ static void players_place(void)
         os64_ui_widget_t *w = &g.players[i]->p.w;
         const flow_box_t *b = g.page.tree != NULL ? flow_box_for(g.page.tree, g.players[i]->node) : NULL;
         os64_gui_rect_t at = b != NULL ? flow_box_doc_rect(b, scroll_now()) : (os64_gui_rect_t){0, 0, 0, 0};
+        if (g.players[i]->node->tag == OS64_HTML_TAG_VIDEO) {
+            int32_t strip = (int32_t)zoomed_px(YONDER_PLAYER_HEIGHT, g.page.laid_zoom);
+            if (strip < at.h) {
+                at.y += at.h - strip;
+                at.h = strip;
+            }
+        }
         int64_t x = (int64_t)v.x + at.x - g.sx, y = (int64_t)v.y + at.y - g.sy;
         const os64_ui_class_t *cls = b != NULL && b->unpainted ? unpainted_class(&yonder_player_class)
                                                                : &yonder_player_class;
         bool shown = b != NULL && b->replaced && b->style->visibility == FLOW_VISIBLE && cls != NULL &&
                      at.w > 0 && at.h > 0 && x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h &&
-                     x + at.w > v.x && y + at.h > v.y && !flow_box_covered(g.page.tree, b, scroll_now());
+                     x + at.w > v.x && y + at.h > v.y &&
+                     !flow_box_covered_at(g.page.tree, b, (int32_t)((int64_t)at.x + at.w / 2),
+                                          (int32_t)((int64_t)at.y + at.h / 2), scroll_now());
         if (cls != NULL && cls != w->cls) {
             w->cls = cls;
             os64_ui_mark_dirty(&g.ui, w);
@@ -10329,10 +10348,13 @@ static void players_place(void)
 
 // The page's players, built beside the old list after a layout: one for
 // each audio element laid out as controls (a replaced box, which only a
-// page whose sound plays has: flow_env_t.media). A player whose element
-// keeps its box is kept, with its view and its focus; a rebuild that lets
-// any widget go ends the gesture in progress, as libui ends every one
-// (os64_ui_cancel_gestures). Refused memory keeps the old list.
+// page whose sound plays has: flow_env_t.media), and one for each video
+// laid out with a `controls` attribute (players_place puts it along the
+// bottom of the video's box, where other browsers draw theirs). A player
+// whose element keeps its box is kept, with its view and its focus; a
+// rebuild that lets any widget go ends the gesture in progress, as libui
+// ends every one (os64_ui_cancel_gestures). Refused memory keeps the old
+// list.
 static void players_build(void)
 {
     const os64_html_document_t *doc = page_doc(&g.page);
@@ -10341,7 +10363,10 @@ static void players_build(void)
     bool refused = false;
     const os64_html_node_t *top = doc != NULL && g.page.tree != NULL ? doc->document : NULL;
     for (const os64_html_node_t *x = top; x != NULL && !refused; x = os64_html_shadow_including_next(top, x)) {
-        if (x->kind != OS64_HTML_ELEMENT || x->ns != OS64_HTML_NS_HTML || x->tag != OS64_HTML_TAG_AUDIO)
+        bool video = x->kind == OS64_HTML_ELEMENT && x->ns == OS64_HTML_NS_HTML && x->tag == OS64_HTML_TAG_VIDEO;
+        if (!video && (x->kind != OS64_HTML_ELEMENT || x->ns != OS64_HTML_NS_HTML || x->tag != OS64_HTML_TAG_AUDIO))
+            continue;
+        if (video && os64_html_attr(x, "controls") == NULL)
             continue;
         const flow_box_t *b = flow_box_for(g.page.tree, x);
         if (b == NULL || !b->replaced)
@@ -11950,7 +11975,7 @@ static void asks_perform_with_fallback(yonder_scripts_t *host, const os64_html_d
             int32_t control = os64_page_control_for(page_model(&g.page), g.asks[i].node);
             FormWidget *fw = control >= 0 ? form_widget(control) : NULL;
             // What focus() and blur() move: the control's widget, or the
-            // audio's player.
+            // media element's player.
             os64_ui_widget_t *w = fw != NULL ? fw->w : NULL;
             for (int32_t k = 0; k < g.nplayers && w == NULL; k++)
                 if (g.players[k]->node == g.asks[i].node)
