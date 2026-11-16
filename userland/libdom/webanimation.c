@@ -2401,7 +2401,7 @@ static JSValue animation_construct(JSContext *ctx, JSValueConst new_target, int 
 enum {
     A_ID, A_EFFECT, A_TIMELINE, A_START, A_CURRENT, A_RATE, A_STATE, A_REPLACE, A_PENDING, A_READY, A_FINISHED,
     A_CANCEL, A_FINISH, A_PLAY, A_PAUSE, A_UPDATE_RATE, A_REVERSE, A_PERSIST, A_COMMIT, T_CURRENT, D_TIMELINE,
-    A_CSS_NAME
+    A_CSS_NAME, A_CSS_PROPERTY
 };
 
 static void css_take_over(DWaAnimation *a, int magic, bool set, bool was_paused);
@@ -2489,6 +2489,11 @@ static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSV
     case A_CSS_NAME:
         if (!a->css) return JS_ThrowTypeError(ctx, "Expected a CSSAnimation");
         return JS_NewStringLen(ctx, a->css_name, a->css_name_len);
+    case A_CSS_PROPERTY:
+        /* No animation is a CSSTransition: CSS transitions are not run
+         * (PILE3.md § Transitions), so the interface has no instances to
+         * answer for. */
+        return JS_ThrowTypeError(ctx, "Expected a CSSTransition");
     case A_REPLACE:
         return JS_NewString(ctx, a->replace == WA_REMOVED ? "removed" : a->replace == WA_PERSISTED ? "persisted"
                                                                                                   : "active");
@@ -3792,6 +3797,21 @@ int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
         JSValue f = d_interface_new(ctx, "CSSAnimation", 0, NULL, dom->wa_css_prototype->value, animation_interface);
         if (JS_IsException(f) ||
             JS_DefinePropertyValueStr(ctx, global, "CSSAnimation", f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+            result = -1;
+    }
+    /* CSSTransition (CSS Transitions 2), Animation's other style-made
+     * subclass, with no constructor either. CSS transitions are not run
+     * (PILE3.md § Transitions), so nothing is ever one; the interface is there because pages test
+     * against it (`a instanceof CSSTransition` over getAnimations()'s
+     * answer), and in other browsers the name is always defined. */
+    if (result == 0) {
+        JSValue proto = JS_NewObjectProto(ctx, ap->value);
+        JSValue f = JS_IsException(proto) ||
+                    d_accessor(dom, ctx, proto, "transitionProperty", animation_member, A_CSS_PROPERTY, false) < 0
+                    ? JS_EXCEPTION : d_interface_new(ctx, "CSSTransition", 0, NULL, proto, animation_interface);
+        JS_FreeValue(ctx, proto);
+        if (JS_IsException(f) ||
+            JS_DefinePropertyValueStr(ctx, global, "CSSTransition", f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
             result = -1;
     }
     JS_FreeValue(ctx, animation_interface);

@@ -671,8 +671,9 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     // page's ratio, or is guessed square from the side the page gave,
     // until it arrives, held by the limits an arrived one is
     // (replaced_hold); anything else keeps its own default on the side the
-    // page left unset (a frame's 300 by 150), or the ratio's, and is held
-    // the same way where the page gave a side.
+    // page left unset (the default object size, 300 by 150, a frame's and a
+    // video's, which has no picture here), or the ratio's, and is held the
+    // same way where the page gave a side.
     bool img = node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG;
     if (img && (w_set || h_set)) {
         r.w = w_set ? w : ratio ? ratio_width(s, h, fw, fh) : h;
@@ -692,9 +693,10 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
         }
         return r;
     }
-    bool frame = node->ns == OS64_HTML_NS_HTML &&
-                 (node->tag == OS64_HTML_TAG_IFRAME || node->tag == OS64_HTML_TAG_FRAME);
-    if (frame || (l->env->svg && flow_svg_root(node))) {
+    bool object_sized = node->ns == OS64_HTML_NS_HTML &&
+                        (node->tag == OS64_HTML_TAG_IFRAME || node->tag == OS64_HTML_TAG_FRAME ||
+                         node->tag == OS64_HTML_TAG_VIDEO);
+    if (object_sized || (l->env->svg && flow_svg_root(node))) {
         r.w = f_css_units(l->env, 300);
         r.h = f_css_units(l->env, 150);
     } else {

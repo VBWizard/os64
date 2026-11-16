@@ -69,6 +69,10 @@ static void dom_canvas_paint_cases(void)
         "x.direction='ltr';assert(x.measureText('A\\tV').width===x.measureText('A V').width);"
         "assert(x.measureText('A\\nV').width===x.measureText('A V').width);"
         "assert(x.measureText('').width===0&&x.measureText('').actualBoundingBoxAscent===0);"
+        /* the outline budget is a draw's: a text past it measures, and is refused only when drawn */
+        "var long='Wide AV text, '.repeat(800),unit=x.measureText('Wide AV text, ').width;assert(long.length<16384);"
+        "var lm=x.measureText(long);assert(lm.width>unit*790&&lm.actualBoundingBoxAscent>10,'a long text measures: '+lm.width);"
+        "throws('QuotaExceededError',()=>x.fillText(long,0,40));"
         "x.beginPath();x.rect(150,0,10,10);x.fillStyle='red';x.fillText('AV',10,40);"
         "var data=x.getImageData(0,0,160,80).data;assert(data.some((v,i)=>i%4===3&&v));"
         "assert(x.getImageData(155,5,1,1).data[3]===0);x.fillStyle='blue';x.fill();assert(x.getImageData(155,5,1,1).data[2]===255);"

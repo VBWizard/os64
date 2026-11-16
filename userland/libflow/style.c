@@ -1337,6 +1337,20 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
         map_dimension(c, n, "width", false, &sp->width);
         map_dimension(c, n, "height", false, &sp->height);
     }
+    // A video's are dimension properties too, though it takes no align, and
+    // together they map to `aspect-ratio: auto w / h`, the ratio a page's
+    // `height: auto` keeps since no picture ever gives it one. Only where
+    // the video is a box (flow_env_t.media): elsewhere it is its fallback.
+    if (is(n, OS64_HTML_TAG_VIDEO) && c->env->media) {
+        map_dimension(c, n, "width", false, &sp->width);
+        map_dimension(c, n, "height", false, &sp->height);
+        int32_t w, h;
+        if (f_parse_dimension(attr(n, "width"), false, &w) == F_DIM_PX &&
+            f_parse_dimension(attr(n, "height"), false, &h) == F_DIM_PX && w > 0 && h > 0) {
+            s->aspect_ratio = (double)w / h;
+            s->aspect_natural = true;
+        }
+    }
     if (is(n, OS64_HTML_TAG_EMBED) || is(n, OS64_HTML_TAG_IMG) || is(n, OS64_HTML_TAG_OBJECT) ||
         (is(n, OS64_HTML_TAG_INPUT) && attr_is(n, "type", "image"))) {
         Len v = {L_UNSET, 0, 0};

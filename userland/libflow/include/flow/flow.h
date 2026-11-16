@@ -1039,8 +1039,10 @@ typedef struct {
     // False retains foreign-content fallback for text-only consumers.
     bool svg;
     // The face plays the page's sounds: an `audio` with `controls` is a
-    // replaced box it draws its player in (replaced_size gives its size).
-    // False keeps every audio boxless, as a face with no player needs.
+    // replaced box it draws its player in (replaced_size gives its size),
+    // and a `video` is a replaced box, 300 by 150 by default, drawn empty
+    // (it plays sound alone). False keeps every audio boxless, as a face
+    // with no player needs, and a video its fallback content.
     bool media;
 } flow_env_t;
 
@@ -1800,6 +1802,10 @@ int32_t flow_box_scroller(const flow_box_t *box);
 // field, drawn at its edges or not at all, which a page's script answers
 // by focusing the field, leave the field usable.
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll);
+// The same question at (`x`, `y`) in document coordinates rather than at
+// the box's centre, for a widget that covers only part of its box (a
+// video's player, the strip along its bottom).
+bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll);
 
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of
 // their own (flow_hit can still answer one) — except a line of a box with

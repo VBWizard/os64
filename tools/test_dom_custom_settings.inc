@@ -106,7 +106,7 @@ typedef struct {
     os64_html_document_t *documents[5];
 } CeFixture;
 
-static bool ce_open(CeFixture *f,int policy,bool tracked)
+static bool ce_open(CeFixture *f,int policy,unsigned tracked)
 {
     *f=(CeFixture){0};ce_entry=1;ce_incumbent=0;ce_constructors=ce_order_count=ce_script_calls=0;ce_nested=ce_throw=ce_bound=false;
     memset(ce_calls,0,sizeof(ce_calls));p2b_ms=1000;p2b_us=1000000;
@@ -114,7 +114,8 @@ static bool ce_open(CeFixture *f,int policy,bool tracked)
     os64_js_outcome_t out;
     if(os64_js_create_with_teardown(&config,policy,OS64_JS_ABI_ID,&ce_runtime,&out)!=OS64_JS_OK)return false;
     os64_dom_cluster_limits_t limits={64u<<20,16u<<20,8u<<20,256u<<20,128u<<20};
-    f->cluster=tracked?os64_dom_cluster_create_with_custom_settings(ce_runtime,&limits,&out)
+    f->cluster=tracked==2?os64_dom_cluster_create_with_promise_settings(ce_runtime,&limits,&out)
+                      :tracked?os64_dom_cluster_create_with_custom_settings(ce_runtime,&limits,&out)
                       :os64_dom_cluster_create_with_observer_settings(ce_runtime,&limits,&out);
     check(f->cluster!=NULL,"custom settings: selected cluster created");if(!f->cluster)return false;
     ce_realms[0]=os64_js_primary_realm(ce_runtime,OS64_JS_ABI_ID,&out);

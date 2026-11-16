@@ -96,6 +96,8 @@ static void push(way_crumb_t *stack, int32_t *depth, way_crumb_t *crumb)
     top->document = crumb->document;
     top->entry = crumb->entry;
     top->asked = crumb->asked;
+    top->skip = crumb->skip;
+    os64_strcopy(top->title, sizeof(top->title), crumb->title);
     top->state = crumb->state;
     crumb->state = NULL;
     (*depth)++;
@@ -210,6 +212,28 @@ void way_history_clear(way_session_t *s)
         drop(s->history, &s->depth);
     while (s->ahead > 0)
         drop(s->forward, &s->ahead);
+}
+
+int32_t way_browser_steps(const way_session_t *s, bool back)
+{
+    const way_crumb_t *stack = back ? s->history : s->forward;
+    int32_t count = back ? s->depth : s->ahead;
+    for (int32_t k = 1; k <= count; k++)
+        if (!stack[count - k].skip)
+            return k;
+    return count;
+}
+
+void way_unskip_document(way_session_t *s, uint64_t document)
+{
+    if (document == 0)
+        return;
+    for (int32_t i = 0; i < s->depth; i++)
+        if (s->history[i].document == document)
+            s->history[i].skip = false;
+    for (int32_t i = 0; i < s->ahead; i++)
+        if (s->forward[i].document == document)
+            s->forward[i].skip = false;
 }
 
 // ── Judgements ──────────────────────────────────────────────────────────

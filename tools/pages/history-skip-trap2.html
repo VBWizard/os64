@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>History skip: trap two</title>
+<!--
+  history-skip.html's trap, second half: once loaded, with nobody touching
+  it, it pushes two entries. Press Back once and the start page is back;
+  click here first and Back steps through these two, as in Chrome.
+-->
+<style>body { font: 18px sans-serif; margin: 16px; }</style>
+<h1>Trap two</h1>
+<p id="say">Press Back once: the start page comes back.</p>
+<p>The history length here: <span id="n"></span></p>
+<script>
+  addEventListener("load", function () {
+    history.pushState(1, "", "#a");
+    history.pushState(2, "", "#b");
+    document.getElementById("n").textContent = history.length;
+  });
+</script>

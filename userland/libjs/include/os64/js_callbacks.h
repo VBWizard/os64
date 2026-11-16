@@ -49,6 +49,14 @@ os64_js_status_t os64_js_callback_with_settings(os64_js_realm_t *entry,
 os64_js_status_t os64_js_enable_host_settings(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_outcome_t *outcome);
 
+/* Enable Promise reaction/thenable capture and job entry in addition to host
+ * settings, before execution. Captures retain engine contexts; queued jobs
+ * check executable and captured-incumbent lifecycle independently. Native
+ * bootstrap and neutral continuations retain their separate job contract.
+ * Exact active-script/module restoration is not supplied by this opt-in. */
+os64_js_status_t os64_js_enable_promise_settings(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome);
+
 /* Task-owned reporting call. The binding independently supplies associated
  * entry and error-reporting realm; captured incumbent is checked separately.
  * Holds value through reentry and reports exceptions as realm_call does.

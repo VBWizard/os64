@@ -608,8 +608,56 @@ static void dom_media_controls_cases(void)
     fixture_free(&f);
 }
 
+/* A <video> (libdom/video.c; AUDIO_YONDER.md § Y.4): a media element in
+ * full, playing through the same sessions, with its own members and no
+ * picture. */
+static void dom_media_video_cases(void)
+{
+    DomFixture f;
+    media_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    media_script(&f,
+        "assert(Object.getPrototypeOf(HTMLVideoElement)===HTMLMediaElement,'HTMLVideoElement is a media element');"
+        "const v=document.createElement('video');"
+        "assert(v instanceof HTMLVideoElement&&v instanceof HTMLMediaElement&&!(v instanceof HTMLAudioElement));"
+        "assert(String(v)==='[object HTMLVideoElement]');throws('TypeError',()=>new HTMLVideoElement());"
+        "assert(v.width===0&&v.height===0&&v.poster===''&&!v.playsInline,'the members start empty');"
+        "v.width=640;v.height=360;v.playsInline=true;v.poster='still.png';"
+        "assert(v.getAttribute('width')==='640'&&v.getAttribute('height')==='360'&&v.hasAttribute('playsinline'),'reflected');"
+        "assert(v.poster==='https://example.test/dir/still.png','a poster resolves: '+v.poster);"
+        "v.setAttribute('width','-3');assert(v.width===0,'an unsigned reflection');"
+        "assert(v.videoWidth===0&&v.videoHeight===0,'no picture');"
+        "assert(!Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype,'videoWidth').set,'videoWidth is read-only');"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype,'width').get.call(new Audio()));"
+        "assert(v.canPlayType('audio/mpeg')==='maybe'&&v.canPlayType('video/mp4')==='','canPlayType is the host\\'s (this fake host plays only MP3)');"
+        "assert(v.paused&&v.networkState===0&&v.readyState===0&&isNaN(v.duration),'a media element\\'s start');",
+        "media: video: the interface and its members");
+    /* JW Player's way: a video element given an MP3, in the document. */
+    media_script(&f, "globalThis.a=document.createElement('video');hear(a);a.src='episode.mp3';document.body.append(a);",
+                 "media: video: given a sound");
+    media_turn(&f, "media: video: the turn opens it");
+    MediaSession *s = &media_sessions[0];
+    check(media_opened == 1 && s->open && strcmp(s->url, "https://example.test/dir/episode.mp3") == 0,
+          "media: video: a session for the sound, as an audio's");
+    media_ready(s, 5);
+    media_turn(&f, "media: video: the probe");
+    media_script(&f, "const h=heard();assert(h.endsWith('canplay:4 canplaythrough:4'),'the ladder: '+h);"
+                     "assert(a.duration===5&&a.videoWidth===0,'its length, and still no picture');",
+                 "media: video: metadata to enough");
+    media_activated = true;
+    media_script(&f, "globalThis.R=[];a.play().then(()=>R.push('ok'),e=>R.push(e.name));",
+                 "media: video: play");
+    check(s->playing, "media: video: the host plays it");
+    media_turn(&f, "media: video: play's tasks");
+    media_script(&f, "assert(R.join()==='ok'&&!a.paused,'the promise: '+R.join());a.pause();assert(a.paused);",
+                 "media: video: played and paused");
+    check(!s->playing, "media: video: the host pauses it");
+    fixture_free(&f);
+}
+
 static void dom_media_cases(void)
 {
+    dom_media_video_cases();
     dom_media_controls_cases();
     dom_media_rule_cases();
     dom_media_interface_cases();

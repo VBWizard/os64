@@ -636,15 +636,18 @@ virtio because its drain waits for the tick.
   `micros()`'s clock is `micros_now()` (micros.c), which the position
   stamps with so a player can compare
   **`play file`** is the first player: anything **`libmedia.so`** reads
-  (`os64/media.h`: MP3, and the WAV forms libav's `configure_args` name,
-  at any rate and channel count),
+  (`os64/media.h`: MP3, AAC (in MP4 or ADTS, and the sound of an MP4
+  video), and the WAV forms libav's `configure_args` name, at any rate
+  and channel count),
   which hands back the stream's own format on the output's timeline
   (48 kHz frames from the start, the resampler's delay counted off, so a
   seek lands on the frame asked for). libmedia is the ONE caller of
   FFmpeg (`tools/test_av_audit.py` holds that), so the decoder behind it
   can change without a player changing; its pure core `media_pcm.c` is
   host-tested (`tools/test_media_pcm_host.sh`), its glue by
-  `/tests/mediatest`. **yonder plays a page's `<audio>`** through it
+  `/tests/mediatest`. **yonder plays a page's `<audio>`**, and a
+  `<video>`'s sound (a stand-in that shows no picture, `libdom/video.c`,
+  AUDIO_YONDER.md § Y.4), through it
   (`apps/yonder/media.c`: a decoder thread per element feeding libmedia's
   PCM queue, `os64/media_queue.h`, a loader thread for a network address,
   one audio thread owning `/dev/audio` and mixing every element that
@@ -666,7 +669,7 @@ virtio because its drain waits for the tick.
   **FFmpeg is `libav.so`** (`userland/libav/`; AUDIO_YONDER.md is the arc,
   `YAUDIO_TRACKER.csv` its state): libavutil, libavcodec and libavformat,
   unpatched, built down to what `manifest.json`'s `configure_args` names
-  (WAV and MP3 today). **It is LGPL and stays a library of its own** —
+  (WAV, MP3, and AAC in MP4 or ADTS, today). **It is LGPL and stays a library of its own** —
   never linked into another program or library, never configured with GPL,
   nonfree or version-3 parts; `tools/test_av_audit.py` fails on any of
   those. `configure` runs on the host (`tools/import_av.py`), and its

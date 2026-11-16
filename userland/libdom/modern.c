@@ -49,8 +49,10 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},
     /* AUDIO_YONDER.md: the media element, after the interfaces row, whose
      * HTMLElement its interface inherits; the media events' handlers on
-     * window with it. */
-    {(const char *const[]){"HTMLMediaElement", "HTMLAudioElement", "MediaError", "TimeRanges", "Audio",
+     * window with it; HTMLVideoElement, which plays sound and no picture
+     * (§ Y.4). */
+    {(const char *const[]){"HTMLMediaElement", "HTMLAudioElement", "HTMLVideoElement", "MediaError", "TimeRanges",
+                           "Audio",
                            "onloadstart", "onprogress", "onsuspend", "onabort", "onemptied", "onstalled",
                            "onloadedmetadata", "onloadeddata", "oncanplay", "oncanplaythrough", "onplaying",
                            "onwaiting", "onseeking", "onseeked", "onended", "ondurationchange", "ontimeupdate",
@@ -143,10 +145,13 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
     {(const char *const[]){"requestAnimationFrame", "cancelAnimationFrame", NULL}, d_animation_install},
     /* WEB_ANIMATIONS.md: Element.animate and what it makes, CSSAnimation
-     * and the CSS animation events, after the event row whose Event
-     * AnimationPlaybackEvent and AnimationEvent inherit. */
+     * (and CSSTransition, which nothing is while CSS transitions are not
+     * run) and the CSS animation
+     * events, after the event row whose Event AnimationPlaybackEvent and
+     * AnimationEvent inherit. */
     {(const char *const[]){"Animation", "AnimationEffect", "KeyframeEffect", "AnimationTimeline",
-                           "DocumentTimeline", "AnimationPlaybackEvent", "CSSAnimation", "AnimationEvent",
+                           "DocumentTimeline", "AnimationPlaybackEvent", "CSSAnimation", "CSSTransition",
+                           "AnimationEvent",
                            "onanimationstart", "onanimationend", "onanimationiteration", "onanimationcancel", NULL},
      d_web_animations_install},
     /* INTERSECTION_OBSERVER.md: after the DOMRect row, whose rects its

@@ -2519,7 +2519,7 @@ static bool media_in_document(yonder_scripts_t *s)
     for (const os64_html_node_t *at = root; at != NULL && !s->media_found;
          at = os64_html_shadow_including_next(root, at))
         s->media_found = at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML &&
-                         at->tag == OS64_HTML_TAG_AUDIO;
+                         (at->tag == OS64_HTML_TAG_AUDIO || at->tag == OS64_HTML_TAG_VIDEO);
     s->media_version = version;
     s->media_scanned = true;
     return s->media_found;

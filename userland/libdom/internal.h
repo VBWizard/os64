@@ -91,8 +91,9 @@ enum {
     D_PROTO_BR, D_PROTO_DLIST, D_PROTO_DIRECTORY, D_PROTO_FONT, D_PROTO_HR, D_PROTO_HEADING, D_PROTO_HTML,
     D_PROTO_MENU, D_PROTO_PARAGRAPH, D_PROTO_PRE, D_PROTO_SPAN, D_PROTO_TABLE_CAPTION, D_PROTO_TITLE,
     D_PROTO_SOURCE,
-    /* HTMLMediaElement's and HTMLAudioElement's (media.c), the media row's. */
-    D_PROTO_MEDIA, D_PROTO_AUDIO, D_PROTO_COUNT
+    /* HTMLMediaElement's and HTMLAudioElement's (media.c), and
+     * HTMLVideoElement's (video.c), the media row's. */
+    D_PROTO_MEDIA, D_PROTO_AUDIO, D_PROTO_VIDEO, D_PROTO_COUNT
 };
 /* A set of kinds is a d_kinds_t, bit `kind` for each (D_KIND): the tables
  * that put a member on some kinds' prototypes. GCC's 128-bit integer, so a
@@ -1313,10 +1314,14 @@ int d_image_data_view(os64_dom_t *, JSContext *, JSValueConst, canvas_rgba8_t *)
  * the HTMLIFrameElement interface over D_PROTO_IFRAME, and its members. */
 int d_frames_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The media row (media.c): HTMLMediaElement, HTMLAudioElement, MediaError,
- * TimeRanges, Audio, and the media events' handlers. Its departure step
- * closes the host's sessions and forgets queued tasks; drain lets go of
- * the engine values the records hold; free frees the records. */
+ * TimeRanges, Audio, and the media events' handlers, then HTMLVideoElement
+ * (d_video_install). Its departure step closes the host's sessions and
+ * forgets queued tasks; drain lets go of the engine values the records
+ * hold; free frees the records. */
 int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* HTMLVideoElement (video.c), a media element that plays sound and no
+ * picture (AUDIO_YONDER.md § Y.4), over the HTMLMediaElement on window. */
+int d_video_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_media_elements_cancel(os64_dom_t *dom);
 void d_media_elements_drain(os64_dom_t *dom);
 void d_media_elements_free(os64_dom_t *dom);
@@ -1500,6 +1505,28 @@ bool d_string_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString 
  * (http, https, ws, wss, ftp; a blob: address its inner http(s) address's),
  * else "null", an opaque origin. False when it does not fit in cap. */
 bool d_origin(const char *url, char *out, size_t cap);
+/* An address's components (the URL Standard § 6.1), read and set as a URL
+ * object's members read and set them (url.c), for URL and for the links'
+ * HTMLHyperlinkElementUtils (mixin.c), so the two cannot differ. */
+enum {
+    D_URL_HREF, D_URL_ORIGIN, D_URL_PROTOCOL, D_URL_USERNAME, D_URL_PASSWORD, D_URL_HOST, D_URL_HOSTNAME, D_URL_PORT, D_URL_PATHNAME,
+    D_URL_SEARCH, D_URL_SEARCH_PARAMS, D_URL_HASH, D_URL_TO_STRING, D_URL_CAN_PARSE, D_URL_PARSE
+};
+/* Component `which` of `href` (a parsed address, `length` bytes), as its
+ * getter answers it. */
+JSValue d_url_component(JSContext *ctx, const char *href, size_t length, int which);
+/* A setter's argument converted for component `which` into `text`, which
+ * the caller frees; false thrown. It runs the page's toString, so a caller
+ * converts FIRST and reads the address it sets after: the conversion may
+ * change, or free, that address. */
+bool d_url_setter_value(os64_dom_t *dom, JSContext *ctx, JSValueConst value, int which, DString *text);
+/* `href` with component `which` set to `text` (d_url_setter_value's) as its
+ * setter sets it: 1 with the new address, parsed, in `out`
+ * (OS64_DOM_URL_MAX); 0 when the setter leaves the address as it is (a
+ * value it refuses, or one that does not parse); -1 thrown. It runs no
+ * page code. */
+int d_url_rebuilt(os64_dom_t *dom, JSContext *ctx, const char *href, size_t length, int which,
+                  const DString *text, char *out);
 /* Final storage settlement (storage.c), then native map release. Drain
  * returns the first provider error, -3 for serialization OOM or -4 for a
  * borrower. Ordinary teardown still completes native cleanup; recovery

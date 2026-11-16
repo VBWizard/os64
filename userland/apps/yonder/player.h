@@ -1,9 +1,10 @@
 #ifndef YONDER_PLAYER_H
 #define YONDER_PLAYER_H
 
-// player.h — an audio element's controls (AUDIO_YONDER.md § The controls):
-// one widget laid over the element's box, as a form control's is, drawing
-// a play button, the time, a seek bar, a mute button and a volume bar.
+// player.h — a media element's controls (AUDIO_YONDER.md § The controls):
+// one widget laid over the element's box (an audio's whole box, the strip
+// along a video's bottom, § Y.4), as a form control's is, drawing a play
+// button, the time, a seek bar, a mute button and a volume bar.
 //
 // It is driven by the element, never the other way round: what it shows is
 // the element's view (os64_dom_media_view), handed in by the window, and

@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>History skip: trap one</title>
+<!--
+  history-skip.html's trap, first half: once loaded, with nobody touching
+  it, it pushes three entries and sends the reader on to the second half.
+  Every entry it leaves is one Back passes over.
+-->
+<style>body { font: 18px sans-serif; margin: 16px; }</style>
+<h1>Trap one</h1>
+<p id="say">Filling the history...</p>
+<script>
+  addEventListener("load", function () {
+    history.pushState(1, "", "#a");
+    history.pushState(2, "", "#b");
+    history.pushState(3, "", "#c");
+    setTimeout(function () { location.href = "history-skip-trap2.html"; }, 300);
+  });
+</script>

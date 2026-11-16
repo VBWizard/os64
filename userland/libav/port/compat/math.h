@@ -10,6 +10,12 @@ double avlibc_scalbn(double x, int n);
 #define frexp avlibc_frexp
 #define scalbn avlibc_scalbn
 static inline float logf(float x) { return (float)log(x); }
+/* The AAC decoder's, which config.h has no HAVE_ for: sqrtf and fabsf
+ * through libmath's double forms, ldexp as scalbn (the same for a binary
+ * floating point). */
+static inline float sqrtf(float x) { return (float)sqrt(x); }
+static inline float fabsf(float x) { return __builtin_fabsf(x); }
+static inline double ldexp(double x, int n) { return avlibc_scalbn(x, n); }
 #define FP_NAN 0
 #define FP_INFINITE 1
 #define FP_ZERO 2

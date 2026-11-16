@@ -2,10 +2,10 @@
 
 Implementation PR: **#610**, source `8d9c67ef`.
 
-Implementation baseline: merged `userland` `8aee6e2c`, including the approved
+Initial implementation baseline: merged `userland` `8aee6e2c`, including the approved
 [F15 design #600](IFRAME_F15_RECLAMATION.md), observer settings #599,
 custom-element settings #601 and the accepted media changes. Engine identity
-remains `39063a8f7f5747a9737b4f15b67dddb87f6344021bfba9fe3ae79a12ef020fbf`;
+was `39063a8f7f5747a9737b4f15b67dddb87f6344021bfba9fe3ae79a12ef020fbf`;
 embedding ABI 5 and existing runtime/DOM/callback record layouts are unchanged.
 
 This is the first bounded diagnostic cut. It adds no roots, pins, collection,
@@ -138,7 +138,7 @@ The reused NONET validation kernel retains the documented unrelated ARP
 preboot-test failure; this receipt covers the child/parent consumer, not a
 passing kernel-suite claim.
 
-Validation on the coherent baseline with LeakSanitizer enabled:
+Initial validation on `8aee6e2c` with LeakSanitizer enabled:
 
 - Focused runtime: **104 checks per engine profile**; focused DOM: **834 per
   profile**, both root teardown policies, zero failures and balanced native/
@@ -162,3 +162,46 @@ Validation on the coherent baseline with LeakSanitizer enabled:
 
 No new broad DOM or named WPT campaign is claimed for these additive queries;
 the affected lifecycle/F4/F16 selectors supply their composition checks.
+
+## Composition with Promise settings #609
+
+The merge forward to `b844384e` includes #609 and accepted CSS/video/media
+changes. The current engine identity is
+`31bcaae4fa1778113d0c3cebc4de4435ab7d34f9ef8306e334e89774c06fa631`;
+embedding ABI 5 and the F15 public snapshot types are unchanged. The F15
+production query bodies and headers are unchanged from the reviewed source.
+
+Both runtime driver conflicts retain `--retention` and `--promise-settings`,
+and the default matrix calls both retention and Promise failure cases. The
+target export inventory includes both `retention_snapshot` and the new
+`enable_promise_settings` entry. Runtime units were rebuilt against a private
+copy of the matching #609 engine cohort. The DOM cohort was rebuilt from the
+merged source, rather than reusing units with older private CSS/video/media
+fields. Target libraries and the guest use the same merged sources.
+
+Promise reactions and queued jobs add incumbent-context holds. These remain
+explicitly unknown to B1. `settings_active` reports wrapper checked-settings
+records, not every prepared engine Promise scope; active/task/turn and queue
+facts remain descriptive. No counter is promoted to an ownership certificate.
+
+Composed validation keeps ASan/UBSan and LeakSanitizer enabled:
+
+- Retention: **104 runtime / 834 DOM checks per profile**, both root policies.
+- Promise settings: **1,923 / 5,705 runtime checks** and **242 DOM checks per
+  profile**. Native recovery **2,532 / 6,672** and the affected callback,
+  settings, ownership, departure and animation selectors pass again.
+- Full runtime: **24,055 / 75,212 checks**, zero failures and live allocations;
+  parser refusal and the complete fatal-invariant exit badges pass again.
+- The shared six-case guest passes under both policies, restores the target
+  heap baseline and reports exact parent-observed exit `0x446f0200`. The new
+  19-file cohort has matching libraries and final source hashes.
+- CLI **199 / 40**, headers/preparer, teardown and import/link checks pass;
+  the merged interface has **220 engine / 80 runtime exports**.
+- All eight mutation oracles are rejected by named assertions on both
+  matching engine profiles, with the same positive/leak-evidence distinction
+  as the original receipt.
+
+Earlier broad-coverage qualifications remain: no new full DOM, WPT, P5 or
+reclamation campaign is implied. The stale-reference audit's imported
+`libav/README.md` references and `mpegaudiodec_*` family pattern name existing
+files; they are not retired interfaces.

@@ -28,6 +28,14 @@
 //      buffer asks for the byte its time is estimated at, and lands within
 //      two packets of the frame asked for
 //   9  bytes that are no media are refused by name
+//  13  the types it answers for (canPlayType's words): AAC and MP4 maybe,
+//      MP4 naming AAC probably, MP4 naming a video codec no, and a type it
+//      has no reader for no; and the sound types' list names audio/mp4
+//      and no video type
+//  14  an MP4 with a picture first and AAC after (avtest's sine_m4a.h)
+//      opens as MP4 ("mov", the reader's first name) and plays its sound:
+//      about one second of the sine at 48 kHz stereo, holding the energy
+//      the host's FFmpeg decodes the bytes to
 //
 // Exit codes: 0x3ED10000 success, 0x3ED100NN the step that failed.
 
@@ -35,6 +43,7 @@
 #include "os64/media.h"
 #include "os64/thread.h"
 
+#include "../avtest/sine_m4a.h"
 #include "../avtest/sine_mp3.h"
 
 #define PASS 0x3ED10000
@@ -381,6 +390,71 @@ static int step_noise(void)
     return 0;
 }
 
+static int step_types(void)
+{
+    static const struct { const char *type; int answer; } kAsk[] = {
+        {"audio/mp4", OS64_MEDIA_TYPE_MAYBE}, {"audio/x-m4a", OS64_MEDIA_TYPE_MAYBE}, {"audio/aac", OS64_MEDIA_TYPE_MAYBE},
+        {"video/mp4", OS64_MEDIA_TYPE_MAYBE}, {"audio/mp4; codecs=\"mp4a.40.2\"", OS64_MEDIA_TYPE_PROBABLY},
+        {"video/mp4; codecs=\"avc1.4d400d,mp4a.40.2\"", OS64_MEDIA_TYPE_NO},
+        {"audio/mpeg", OS64_MEDIA_TYPE_MAYBE}, {"video/webm", OS64_MEDIA_TYPE_NO}, {"audio/ogg", OS64_MEDIA_TYPE_NO},
+    };
+    for (size_t i = 0; i < sizeof(kAsk) / sizeof(kAsk[0]); i++) {
+        int got = os64_media_type_supported(kAsk[i].type);
+        if (got != kAsk[i].answer) {
+            os64_printf("mediatest: type '%s' answered %d, not %d\n", kAsk[i].type, got, kAsk[i].answer);
+            return FAIL(13);
+        }
+    }
+    // The sound types' list names AAC's and leaves the video type out,
+    // which plays only its sound and so is no sound a page is made for.
+    static char list[512];
+    (void)os64_media_type_list(list, sizeof(list));
+    bool aac = false, video = false;
+    for (const char *p = list; *p != '\0';) {
+        const char *end = p;
+        while (*end != '\0' && *end != ',') end++;
+        size_t n = (size_t)(end - p);
+        aac |= n == 9 && os64_memcmp(p, "audio/mp4", 9) == 0;
+        video |= n >= 6 && os64_memcmp(p, "video/", 6) == 0;
+        p = *end == ',' ? end + 2 : end;
+    }
+    if (!aac || video) {
+        os64_printf("mediatest: the sound types' list: %s\n", list);
+        return FAIL(13);
+    }
+    return 0;
+}
+
+static int step_m4a(void)
+{
+    Memory mem;
+    os64_media_source_t src = source_of(&mem, kSineM4a, sizeof(kSineM4a), true);
+    os64_media_t *m;
+    os64_media_info_t info;
+    int r = os64_media_open(&src, &m, &info);
+    if (r != 0 || !os64_streq(info.format, "mov") || info.rate != 44100 || info.channels != 1) {
+        say("MP4 open (result, rate)", r, r == 0 ? (long)info.rate : 0);
+        if (r == 0) os64_media_close(m);
+        return FAIL(14);
+    }
+    Tally t;
+    tally_all(m, &t);
+    os64_media_close(m);
+    // avtest's bounds on the samples (one AAC frame of priming either way
+    // between FFmpeg releases), at 48 kHz.
+    int64_t most = ((int64_t)SINE_M4A_SAMPLES + 1024) * 48000 / 44100 + 64;
+    double hz = (double)t.crossings / 2.0 * 48000.0 / (double)(t.frames > 0 ? t.frames : 1);
+    // Its energy, which resampling to 48 kHz scales by 48000/44100 (the
+    // same power in more samples) and the priming trimmed does not move.
+    double energy = t.sum_squares / (32768.0 * 32768.0) * 1e6 * 44100.0 / 48000.0;
+    if (t.result != 0 || t.frames < 48000 || t.frames > most || t.mismatched_sides != 0 || hz < 435 || hz > 445
+        || energy < SINE_M4A_ENERGY_PPM * 0.98 || energy > SINE_M4A_ENERGY_PPM * 1.02) {
+        say("MP4 sound (frames, energy per million)", (long)t.frames, (long)energy);
+        return FAIL(14);
+    }
+    return 0;
+}
+
 // Both threads wait here until the main thread lets them go together, so
 // their opens overlap as nearly as two threads can be made to.
 static volatile int gGo;
@@ -424,10 +498,13 @@ int main(void)
     if (!failed) failed = step_unseekable();
     if (!failed) failed = step_remote_seek();
     if (!failed) failed = step_noise();
+    if (!failed) failed = step_types();
+    if (!failed) failed = step_m4a();
     if (failed) {
         os64_printf("mediatest: FAIL step %d\n", failed & 0xFF);
         return failed;
     }
-    os64_printf("mediatest: MP3 and WAV to 48 kHz stereo, seeks, a 5.1 fold, two threads; all steps passed\n");
+    os64_printf("mediatest: MP3, WAV and AAC in MP4 to 48 kHz stereo, seeks, a 5.1 fold, two threads; "
+                "all steps passed\n");
     return PASS;
 }

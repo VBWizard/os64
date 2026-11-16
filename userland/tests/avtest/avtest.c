@@ -14,6 +14,11 @@
 //   7  a seek to half a second lands there, to within one MP3 frame
 //   8  a WAV built here decodes sample for sample (PCM is lossless)
 //   9  bytes that are no media at all are refused, and nothing breaks
+//  10  an MP4 whose first track is a picture no decoder here reads opens
+//      as MP4, and its sound (AAC-LC, mono, 44.1 kHz) is the stream found
+//  11  the AAC decoder opens
+//  12  the sound is one second of the 440 Hz sine, holding the energy the
+//      host's FFmpeg decodes the same bytes to (sine_m4a.h)
 //
 // Exit codes: 0xA7E50000 success, 0xA7E500NN the step that failed.
 
@@ -25,6 +30,7 @@
 #include "libavutil/dict.h"
 #include "libavutil/mem.h"
 
+#include "sine_m4a.h"
 #include "sine_mp3.h"
 
 #define PASS 0xA7E50000
@@ -283,6 +289,45 @@ static int check_mp3(void)
     return 0;
 }
 
+// ------------------------------------------------------------ the MP4
+
+static int check_m4a(void)
+{
+    Input in;
+    int r = input_open(&in, kSineM4a, sizeof(kSineM4a));
+    const AVCodecParameters *par = r >= 0 ? in.format->streams[in.stream]->codecpar : NULL;
+    if (r < 0 || os64_strcmp(in.format->iformat->name, "mov,mp4,m4a,3gp,3g2,mj2") != 0 || in.format->nb_streams != 2
+        || in.stream != 1
+        || par->codec_id != AV_CODEC_ID_AAC || par->sample_rate != 44100 || par->ch_layout.nb_channels != 1) {
+        say("MP4 probe (stream or error, rate)", r, par ? par->sample_rate : 0);
+        input_close(&in);
+        return FAIL(10);
+    }
+    if ((r = codec_open(&in)) < 0) {
+        say("AAC decoder open (error)", r, 0);
+        input_close(&in);
+        return FAIL(11);
+    }
+    // The count is bounded, not exact as the MP3's is, and the reference is
+    // the sound's energy, not its level: the host's FFmpeg may be another
+    // release than the port's, and releases differ in how much of the
+    // encoder's priming (near silence) they trim, never more than one AAC
+    // frame (1,024 samples), which moves the count and the average level
+    // but not the energy.
+    Sine sine = { .planar_float = 1 };
+    r = decode_all(&in, take_sine, &sine);
+    double hz = (double)sine.crossings / 2.0 * 44100.0 / (double)(sine.samples > 0 ? sine.samples : 1);
+    double energy = sine.sum_squares * 1e6;
+    if (r != 0 || !sine.planar_float || sine.samples < 44100 || sine.samples > SINE_M4A_SAMPLES + 1024
+        || hz < 435.0 || hz > 445.0 || energy < SINE_M4A_ENERGY_PPM * 0.995 || energy > SINE_M4A_ENERGY_PPM * 1.005) {
+        say("AAC sound (samples, energy per million)", (long)sine.samples, (long)energy);
+        input_close(&in);
+        return FAIL(12);
+    }
+    input_close(&in);
+    return 0;
+}
+
 // ------------------------------------------------------------ the WAV
 
 enum { WAV_FRAMES = 4800 };
@@ -372,10 +417,11 @@ int main(void)
     int failed = check_mp3();
     if (!failed) failed = check_wav();
     if (!failed) failed = check_garbage();
+    if (!failed) failed = check_m4a();
     if (failed) {
         os64_printf("avtest: FAIL step %d\n", failed & 0xFF);
         return failed;
     }
-    os64_printf("avtest: FFmpeg %s decodes MP3 and WAV; all checks passed\n", av_version_info());
+    os64_printf("avtest: FFmpeg %s decodes MP3, WAV and AAC in MP4; all checks passed\n", av_version_info());
     return PASS;
 }

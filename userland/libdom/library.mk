@@ -30,8 +30,9 @@ LIBDOM_BEARSSL := $(patsubst %,$(OBJ)/pic/libtls/upstream/src/%.c.o,hash/sha1 ha
     int/i31_sub int/i31_tmont int/i32_div32)
 # The frames row (IFRAME.md): HTMLIFrameElement.
 LIBDOM_SRCS += libdom/frames.c
-# The media row (AUDIO_YONDER.md): HTMLMediaElement, HTMLAudioElement, Audio.
-LIBDOM_SRCS += libdom/media.c
+# The media row (AUDIO_YONDER.md): HTMLMediaElement, HTMLAudioElement, Audio,
+# and HTMLVideoElement playing sound alone (§ Y.4).
+LIBDOM_SRCS += libdom/media.c libdom/video.c
 # P2a: a script's failures, as the window's error and rejection events.
 LIBDOM_SRCS += libdom/report.c
 # P1-Da: the document's state reads and document.body's setter.
