@@ -253,8 +253,8 @@ void os64_js_module_release(os64_js_runtime_t *runtime, os64_js_module_t *module
 os64_js_status_t os64_js_check_budget(os64_js_runtime_t *runtime, const char *caller_abi,
                                       os64_js_outcome_t *outcome);
 /* Multiple realms share one engine, queue, owner thread and task budget.
- * Handles/contexts are borrowed until runtime destruction; no per-realm
- * retirement is exposed. Legacy operations select the primary realm.
+ * Handles/contexts are borrowed until runtime destruction, including after
+ * realm retirement. Legacy operations select the primary realm.
  * Realm creation and initial installers may borrow an active task's guard;
  * run/call do not permit wrapper re-entry. Each handle must come from this
  * library and remain live; arbitrary/stale native pointers are not validated.

@@ -302,6 +302,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_observer_settings.inc"
 #include "test_dom_custom_settings.inc"
 #include "test_dom_promise_settings.inc"
+#include "test_dom_import_settings.inc"
 #include "test_dom_animation_retirement.inc"
 #include "test_dom_animation_routing.inc"
 #include "test_dom_departure.inc"
@@ -679,6 +680,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--animation-retirement")){dom_animation_retirement_cases();printf("DOM animation retirement: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--retention")){dom_recovery_host_cases();dom_retention_cases();printf("DOM retention: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--recovery")){dom_recovery_cases();printf("DOM recovery: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--import-settings")){dom_import_settings_cases();printf("DOM import settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--finalization-settings")){dom_finalization_settings_cases();printf("DOM finalization settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--promise-settings")){dom_promise_settings_cases();printf("DOM Promise settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--custom-settings")){dom_custom_settings_cases();printf("DOM custom settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -711,6 +713,7 @@ int main(int argc, char **argv)
     dom_custom_settings_cases();
     dom_promise_settings_cases();
     dom_finalization_settings_cases();
+    dom_import_settings_cases();
     dom_animation_retirement_cases();
     dom_animation_routing_cases();
     dom_departure_cases();

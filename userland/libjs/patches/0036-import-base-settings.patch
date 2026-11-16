@@ -1,0 +1,71 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -413,6 +413,8 @@
+     void *promise_incumbent_opaque;
+     JSHostJobIncumbent *finalization_incumbent_capture;
+     void *finalization_incumbent_opaque;
++    JSHostImportBase *import_base;
++    void *import_base_opaque;
+     JSContext *job_callback_incumbent; /* borrowed from the executing queue entry */
+     JSValue job_callback_script; /* borrowed ScriptOrModule from that entry */
+ };
+@@ -32063,6 +32065,8 @@
+     if (JS_IsException(ns)) {
+         JSValue err = JS_GetException(ctx);
+         js_load_module_rejected(ctx, JS_UNDEFINED, 1, (JSValueConst *)&err, 0, func_data);
++        /* The rejection callback borrows the exception returned above. */
++        JS_FreeValue(ctx, err);
+         return JS_UNDEFINED;
+     }
+     ret = JS_Call(ctx, resolving_funcs[0], JS_UNDEFINED,
+@@ -32170,6 +32174,12 @@
+     JS_FreeValue(ctx, err);
+     JS_FreeCString(ctx, basename);
+     return JS_UNDEFINED;
++}
++
++void JS_SetHostImportBase(JSRuntime *rt, JSHostImportBase *base, void *opaque)
++{
++    rt->import_base = base;
++    rt->import_base_opaque = opaque;
+ }
+ 
+ static JSValue js_dynamic_import(JSContext *ctx, JSValueConst specifier, JSValueConst options)
+@@ -32251,6 +32261,23 @@
+             JS_FreeValue(ctx, attributes_obj);
+             attributes_obj = JS_UNDEFINED;
+         }
++    }
++
++    /* HostLoadImportedModule runs after specifier/options conversion. Snapshot
++       the current realm's API base before queueing; later DOM edits must not
++       change this import. A retained script record takes precedence. */
++    if (JS_IsUndefined(referrer) && ctx->rt->import_base) {
++        JSValue base = JS_ENGINE_CALLBACK(ctx->rt,
++            ctx->rt->import_base(ctx, ctx->rt->import_base_opaque));
++        if (JS_IsException(base))
++            goto exception;
++        if (!JS_IsString(base)) {
++            JS_FreeValue(ctx, base);
++            JS_ThrowTypeError(ctx, "import base URL unavailable");
++            goto exception;
++        }
++        JS_FreeValue(ctx, basename_val);
++        basename_val = base;
+     }
+ 
+     args[0] = resolving_funcs[0];
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -1117,6 +1117,11 @@
+                              JSModuleLoaderFunc2 *module_loader,
+                              JSModuleCheckSupportedImportAttributes *module_check_attrs,
+                              void *opaque);
++/* Called for import() without an active ScriptOrModule, after argument
++ * conversions and before enqueue. Return an owned base-URL string or exception.
++ * The trusted host validates current settings and must not execute author code. */
++typedef JSValue JSHostImportBase(JSContext *current, void *opaque);
++void JS_SetHostImportBase(JSRuntime *rt, JSHostImportBase *base, void *opaque);
+ /* return the import.meta object of a module */
+ JSValue JS_GetImportMeta(JSContext *ctx, JSModuleDef *m);
+ JSAtom JS_GetModuleName(JSContext *ctx, JSModuleDef *m);

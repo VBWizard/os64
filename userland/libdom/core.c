@@ -698,6 +698,22 @@ os64_dom_cluster_t *os64_dom_cluster_create_with_finalization_settings(os64_js_r
     return os64_dom_cluster_create_with_custom_settings(runtime, limits, outcome);
 }
 
+os64_dom_cluster_t *os64_dom_cluster_create_with_import_settings(os64_js_runtime_t *runtime,
+    const os64_dom_cluster_limits_t *limits, os64_js_outcome_t *outcome)
+{
+    if (os64_js_enable_import_settings(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) return NULL;
+    return os64_dom_cluster_create_with_custom_settings(runtime, limits, outcome);
+}
+
+static JSValue import_base(JSContext *ctx, void *opaque)
+{
+    os64_dom_t *dom = opaque;
+    if (!d_provider_begin(dom, ctx)) return JS_EXCEPTION;
+    JSValue result = d_base_uri(dom, ctx, dom->document->document);
+    d_provider_leave(dom);
+    return result;
+}
+
 /* Trusted bootstrap: install interfaces and private algorithms, without
  * exposing the candidate or invoking author code. */
 static int install_binding(os64_dom_t *dom, JSContext *ctx)
@@ -784,9 +800,13 @@ static int install_binding(os64_dom_t *dom, JSContext *ctx)
     if (installed >= 0) installed = d_window_install(dom, ctx, global);
     if (installed >= 0) installed = d_modern_install(dom, ctx, global);
     JS_FreeValue(ctx, global);
-    /* Last: from here the runtime hands the binding its script's failures
-     * (report.c), which a binding that failed to be made never sees. */
     if (installed < 0 || !d_report_host(dom)) goto fail;
+    /* Publish the base provider after fallible installation: a failed standalone
+     * binding can free its shell before the engine. Successful shells stay alive
+     * until engine destruction, and closed/retired bindings refuse the callback. */
+    os64_js_outcome_t out;
+    if (os64_js_realm_set_import_base(dom->realm, OS64_JS_ABI_ID, import_base, dom, &out) != OS64_JS_OK)
+        goto fail;
     return 0;
 fail:
     return -1;
@@ -1126,6 +1146,8 @@ os64_js_status_t os64_dom_depart_finish(os64_dom_t *dom, os64_js_outcome_t *outc
     status = os64_js_quiescent(dom->runtime, OS64_JS_ABI_ID, outcome);
     if (status != OS64_JS_OK) goto done;
     status = os64_js_realm_set_module_loader(dom->realm, OS64_JS_ABI_ID, NULL, outcome);
+    if (status != OS64_JS_OK) goto done;
+    status = os64_js_realm_set_import_base(dom->realm, OS64_JS_ABI_ID, NULL, NULL, outcome);
     if (status != OS64_JS_OK) goto done;
     departure_activity_cancel(dom);
     departure_detach(dom);

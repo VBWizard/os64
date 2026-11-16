@@ -1473,13 +1473,20 @@ native Promise callbacks and stripped bytecode. Positive depths keep the
 physical diagnostic stack walk. `import.meta` uses exact module identity, not
 a filename lookup. Dynamic import captures the referrer before coercion and
 keeps it through queued loading; source realm selects the module provider while
-the resulting Promise belongs to the executing realm. A null referrer still
-lacks the browser current-settings API-base-URL fallback and refuses import.
+the resulting Promise belongs to the executing realm. With
+`os64_js_enable_import_settings`, a null referrer uses the executing realm's
+checked current settings and registered `os64_js_realm_set_import_base` provider.
+The owned base string is captured after argument conversions and retained through
+queueing; later document edits cannot change it. Providers run no author code,
+and their opaque storage remains valid until detachment or runtime destruction.
+Missing/ineligible settings or an invalid base refuses the import; legacy opt-ins
+keep the null-referrer rejection. The DOM constructor and lifetime/failure proof
+are in the [import-settings chapter](../../docs/design/pending/IFRAME_F4_IMPORT_SETTINGS.md).
 
 Semantic source names survive stripping and serialization; named classic-script
 reads rebind them to the embedding's supplied name. The bytecode version is 6, so
 older layouts refuse. The engine identity is
-`50e0bb8409b1d0d01fd0dad73adaa305e4a449e49b3eacac33d58c322cc632ba`.
+`83e3863bc254f13fe66b3d20ae99edaac4cb1794e9f9bac2672c2fafb6330f43`.
 Wrapper ABI 5 and public wrapper layouts are unchanged. Rebuild consumers
 against matching prepared headers and objects. The
 [active-script chapter](../../docs/design/pending/IFRAME_F4_ACTIVE_SCRIPT.md)

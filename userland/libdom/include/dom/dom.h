@@ -486,6 +486,10 @@ os64_dom_cluster_t *os64_dom_cluster_create_with_promise_settings(os64_js_runtim
  * engine queue; browser task-source scheduling remains a host responsibility. */
 os64_dom_cluster_t *os64_dom_cluster_create_with_finalization_settings(os64_js_runtime_t *,
     const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Extends finalization settings to null-record import() using the current
+ * document's live base URL. The import captures it after argument conversion. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_import_settings(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
 os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *, os64_js_realm_t *,
     os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
 
