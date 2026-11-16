@@ -6730,6 +6730,10 @@ typedef struct {
     int64_t min, max;
     int64_t fixed;          // a width the page gave, or -1
     int64_t pct;            // a percentage the page gave, in 1/64ths, or -1 (a span's share)
+    // A fixed table's percentage cell's frame, its share of the cell's
+    // padding and borders (columns_fixed): `pct_add` joins the percentage
+    // for a content-box cell, `pct_least` is the least a border-box one is.
+    int64_t pct_add, pct_least;
     int64_t width, x;
 } Col;
 
@@ -6960,7 +6964,9 @@ static bool table_fixed(const flow_style_t *s)
 // FIXED TABLE LAYOUT (CSS 2.1 § 17.5.2.1): each column's width from the
 // table's `col`s (columns_new), else from the first row's cell that spans
 // it, a cell's set width shared evenly over its columns after the spacing
-// between them, a percentage being of `grid_w`; what the grid has left is
+// between them, a percentage being of `grid_w` and, as a pixel width is,
+// widened by a content-box cell's padding and borders and never narrower
+// than a border-box one's (each column its share); what the grid has left is
 // shared evenly by the columns nothing set, or, when every column is set,
 // over all of them as they are wide. What the cells hold never counts, so
 // a cell's content can overflow it. `grid_w` is the room for the columns,
@@ -6982,10 +6988,16 @@ static Col *columns_fixed(L *l, FBox *t, Grid *g, int64_t hsp, int64_t grid_w, i
         for (int32_t k = gc->col; k < gc->col + gc->cols && k < g->ncols; k++) {
             if (cols[k].fixed >= 0 || cols[k].pct >= 0)
                 continue;
-            if (px >= 0)
+            if (px >= 0) {
                 cols[k].fixed = share;
-            else if (s->width.kind == FLOW_LENGTH_PERCENT)
+            } else if (s->width.kind == FLOW_LENGTH_PERCENT) {
                 cols[k].pct = s->width.value / gc->cols;
+                int64_t frame = hframe(gc->cell, 0) / gc->cols;
+                if (s->box_sizing == FLOW_BORDER_BOX)
+                    cols[k].pct_least = frame;
+                else
+                    cols[k].pct_add = frame;
+            }
         }
     }
     int64_t taken = 0;
@@ -6994,7 +7006,7 @@ static Col *columns_fixed(L *l, FBox *t, Grid *g, int64_t hsp, int64_t grid_w, i
         if (cols[k].fixed >= 0)
             cols[k].width = cols[k].fixed;
         else if (cols[k].pct >= 0)
-            cols[k].width = mul_div(grid_w, cols[k].pct, 100 * 64);
+            cols[k].width = max64(mul_div(grid_w, cols[k].pct, 100 * 64) + cols[k].pct_add, cols[k].pct_least);
         else
             nauto++;
         taken += cols[k].width;
@@ -7030,7 +7042,8 @@ static Intr table_intrinsic(L *l, FBox *t)
     }
     int64_t hsp = spacing_h(t);
     // A fixed table's content never counts: it wants what its set column
-    // widths take, its percentages and unset columns nothing.
+    // widths take, a percentage cell its padding and borders and no more,
+    // an unset column nothing.
     int64_t need = 0;
     bool fixed = table_fixed(t->style);
     Col *cols = fixed ? columns_fixed(l, t, &g, hsp, 0, &need) : columns_of(l, t, &g, hsp);

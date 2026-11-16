@@ -614,10 +614,12 @@ the table's own; an auto width keeps the automatic one) reads no cell's
 content at all. Each column takes its `col`'s width, else that of the
 first row's cell that spans it (a spanning cell's shared evenly over its
 columns after the spacing between them, a percentage being of the grid's
-width); the columns nothing set share what the grid has left evenly, or,
+width and, as a pixel width is, widened by a content-box cell's padding
+and borders); the columns nothing set share what the grid has left evenly, or,
 when every column is set, the room left goes to all of them as they are
 wide. The table is its set width, wider only when its set columns do not
-fit, and asks shrink-to-fit for just those set columns, so a float around
+fit, and asks shrink-to-fit for just those set columns (and a percentage
+cell's padding and borders), so a float around
 one is as wide as the table and not as its content. A cell's content can
 overflow it: the code-hosting site's file list, whose commit messages are
 one unbreakable line each, cut with an ellipsis, is the case it exists

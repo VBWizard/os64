@@ -336,6 +336,41 @@ static void fixed_table_cases(void)
         "          cell td 128 8 180 20\n"
         "            line 128 8 180 20 base 14\n"
         "              text \"b\" 128 10 8 16 serif 16\n");
+    // A percentage is read the same way: 50% of 300 is 150, and the
+    // content-box cell's 20 of padding makes its column 170, leaving 130.
+    cascade_layout_case("fixed tables: a content-box percentage cell's width gains its padding",
+        FIXED_SHEET "<table style=width:300px><tr><td style='width:50%;padding:0 10px'>a<td>b</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 300 20\n"
+        "      row-group tbody 8 8 300 20\n"
+        "        row tr 8 8 300 20\n"
+        "          cell td 8 8 170 20\n"
+        "            line 18 8 150 20 base 14\n"
+        "              text \"a\" 18 10 8 16 serif 16\n"
+        "          cell td 178 8 130 20\n"
+        "            line 178 8 130 20 base 14\n"
+        "              text \"b\" 178 10 8 16 serif 16\n");
+    // A border-box percentage holds its padding, and is never less than
+    // it: 50% is 150 with the padding inside; 5% is 15, under the 20 of
+    // padding, so the column is 20.
+    cascade_layout_case("fixed tables: a border-box percentage cell is its border box, at least its padding",
+        FIXED_SHEET "<table style=width:300px><tr><td style='box-sizing:border-box;width:50%;padding:0 10px'>a"
+        "<td style='box-sizing:border-box;width:5%;padding:0 10px'><td>c</table>", 600,
+        "page 600 36\n"
+        "block html 0 0 600 36\n"
+        "  block body 8 8 584 20\n"
+        "    table table 8 8 300 20\n"
+        "      row-group tbody 8 8 300 20\n"
+        "        row tr 8 8 300 20\n"
+        "          cell td 8 8 150 20\n"
+        "            line 18 8 130 20 base 14\n"
+        "              text \"a\" 18 10 8 16 serif 16\n"
+        "          cell td 158 8 20 20\n"
+        "          cell td 178 8 130 20\n"
+        "            line 178 8 130 20 base 14\n"
+        "              text \"c\" 178 10 8 16 serif 16\n");
     // The automatic layout reads a cell's width the same way: a border-box
     // 100px cell wants 100, not 100 and its padding, and the table is 108.
     cascade_layout_case("tables: an automatic table reads a border-box cell's width as its border box",
