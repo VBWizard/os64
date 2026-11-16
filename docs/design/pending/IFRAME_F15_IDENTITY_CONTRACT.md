@@ -1,5 +1,7 @@
 # F15 C — identity and export compatibility requirements
 
+Design PR: **#621**, proposal source `a1d9e88f`.
+
 Design baseline: merged `userland` `20e6f772`, including the F15 diagnostic
 slices #610/#614/#617 and F4 finalization settings #618. Engine identity is
 `1a60b7a86e45e2e82bc5f359c3295ad68333a2f18f1ea79f3f710fd9cea9b598`,
