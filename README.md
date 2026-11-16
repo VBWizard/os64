@@ -1,5 +1,7 @@
 # os64
 
+![Logo](assets/images/os64_Overview_20261018.PNG)
+
 A 64-bit x86 operating system built for educational purposes: a Limine-booted
 higher-half kernel, a ring-3 userland dynamically linked against its own
 libraries, a shell (`husk`), a windowing system, a TCP/IP stack with TLS, and a

@@ -34,6 +34,7 @@ static void restyle_cases(void)
         "box-shadow:1px 2px 3px red;text-shadow:2px 3px blue;transform:translate(2px,3px) rotate(5deg);"
         "filter:blur(2px) url(effect.svg#ink);backdrop-filter:brightness(0.8) url(back.svg#glass);"
         "mix-blend-mode:multiply;isolation:isolate;"
+        "mask:linear-gradient(red,blue) content-box,url(m.svg) 1px 2px/3px luminance exclude;"
         "display:grid;grid-template-columns:20px 1fr;grid-template-areas:'one two';}"
         "#kept span{grid-area:one}"
         "</style><div id=changed>change <b>me</b></div>"

@@ -403,6 +403,69 @@ static void layout_cases(void)
         "      atomic canvas 8 58 200 100\n"
         "      atomic canvas 208 108 100 50\n"
         "      atomic canvas 308 8 300 150\n");
+    // An audio with controls is replaced where the face plays sounds, at
+    // the face's size, and a page's width leaves its height as it is: a
+    // player's size has no ratio, nor does a limit on one side change the
+    // other. One without controls has no box.
+    kEnv.media = true;
+    cascade_layout_case("an audio's controls are a box where the face plays sounds, its height its own",
+        "<!doctype html><style>.w{width:100px}.n{max-width:20px}.s{max-height:10px}</style>"
+        "<audio controls src=known.mp3>no</audio>"
+        "<audio class=w controls src=known.mp3></audio><audio src=known.mp3>no</audio>"
+        "<audio class=n controls src=known.mp3></audio><audio class=s controls src=known.mp3></audio>", 1000,
+        "page 1000 52\n"
+        "block html 0 0 1000 52\n"
+        "  block body 8 8 984 36\n"
+        "    line 8 8 984 36 base 30\n"
+        "      atomic audio 8 8 40 30\n"
+        "      atomic audio 48 8 100 30\n"
+        "      atomic audio 148 8 20 30\n"
+        "      atomic audio 168 28 40 10\n");
+    // A video where the face plays sounds is replaced, with no picture
+    // (AUDIO_YONDER.md § Y.4): the default object size, its attributes as
+    // its size, a page's width leaving the default height; its fallback is
+    // not laid out.
+    cascade_layout_case("a video is a replaced box where the face plays sounds",
+        "<!doctype html><style>.w{width:150px}</style><video>fallback</video>"
+        "<video width=200 height=100></video><video class=w></video>", 1000,
+        "page 1000 172\n"
+        "block html 0 0 1000 172\n"
+        "  block body 8 8 984 156\n"
+        "    line 8 8 984 156 base 150\n"
+        "      atomic video 8 8 300 150\n"
+        "      atomic video 308 58 200 100\n"
+        "      atomic video 508 8 150 150\n");
+    // Both attributes are its ratio too (HTML § 15.4.3), which a page's
+    // `height: auto` keeps; one alone gives none, and the height is the
+    // default's.
+    cascade_layout_case("a video's width and height attributes are its ratio",
+        "<!doctype html><style>video{width:320px;height:auto}</style>"
+        "<video width=640 height=360></video><video width=640></video>", 1000,
+        "page 1000 202\n"
+        "block html 0 0 1000 202\n"
+        "  block body 8 8 984 186\n"
+        "    line 8 8 984 186 base 180\n"
+        "      atomic video 8 8 320 180\n"
+        "      atomic video 328 38 320 150\n");
+    kEnv.media = false;
+    cascade_layout_case("a video is its fallback where the face plays no sounds",
+        "<!doctype html><video>fallback</video>", 1000,
+        "page 1000 36\n"
+        "block html 0 0 1000 36\n"
+        "  block body 8 8 984 20\n"
+        "    line 8 8 984 20 base 14\n"
+        "      span video 8 10 52 16\n"
+        "      text \"fallback\" 8 10 52 16 serif 16\n");
+    // A face that plays no sound (yonder's with script or the Modern Web
+    // off) has no player to draw.
+    cascade_layout_case("an audio's controls are no box where the face plays no sounds",
+        "<!doctype html><audio controls src=known.mp3>no</audio><p>after</p>", 1000,
+        "page 1000 52\n"
+        "block html 0 0 1000 52\n"
+        "  block body 8 16 984 20\n"
+        "    block p 8 16 984 20\n"
+        "      line 8 16 984 20 base 14\n"
+        "        text \"after\" 8 18 28 16 serif 16\n");
     // CSS Display 3 Appendix B: `display: contents` on a replaced element
     // computes to `none`, so neither a canvas's fallback nor a frame's
     // text is laid out; a canvas with scripting off is no replaced element,

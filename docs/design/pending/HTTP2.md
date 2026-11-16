@@ -1,0 +1,2888 @@
+# HTTP2.md — one connection per origin, many requests at once
+
+*Written by Fable on 2026-11-09 at Chris's ask, after the morning's
+question "what would HTTP/2 buy us?" and the ruling that followed: do it,
+as a stack of ordinary PRs on userland, with a tracker that says where the
+whole thing stands. This file is the design and the briefs. The TRACKER is
+`HTTP2_TRACKER.csv` beside it, and § 0 says how it is kept. The feature is
+libfetch's, below the fetch object, invisible to its callers — yonder,
+os64get and wend get it without a line changed. It stays INERT until its
+last slice offers `h2` in ALPN (§ 2.1), which is what lets every earlier
+slice merge as it clears review: nothing before that is reachable from a
+page. HTTP/3 is not in this arc, and § 1 says why.*
+
+Read first, in this order: WIRE.md § 2 and its "as built" (the connection
+pool this arc grows out of; the numbers in `pool.h`), LIBFETCH.md (the
+fetch object's contract), TLS13.md (the engine the resumption slice
+extends; its § The profile is the ClientHello that slice changes), and
+`abi/include/os64/syscall_numbers.h`'s "read's patience" block, which is
+the whole of what ring 3 can wait on today and the reason § 2.4 exists.
+
+## 0. The tracker — how `HTTP2_TRACKER.csv` is kept
+
+Chris, 2026-11-09: "Keeping track of where we are and the whole picture
+gets hard when we're in the middle of it. And we get sidetracked because
+we see a kitten, and then lose track of something." So the arc has one
+file that answers "where are we?", kept by the same hands that do the
+work, and kept by rule rather than by memory. Anyone working an HTTP/2
+slice — Opus, Fable, Quinn, Codex — follows this section; nobody working
+another arc touches the file.
+
+**The file.** `docs/design/pending/HTTP2_TRACKER.csv`, one row per task,
+six columns: `id`, `task`, `depends_on`, `status`, `done_in`, `notes`.
+Fields are quoted when they hold a comma. `tools/http2_tracker.py` reads
+it: with no arguments it checks the file (ids unique, every status in its
+vocabulary, every `depends_on` an id that exists, every `done` row with a
+`done_in`) and prints the board; `--html <path>` writes the page Chris
+asked for, grouped by slice with a progress bar each. The page is
+GENERATED and never edited: the CSV is the truth, the page is the view.
+
+**Three kinds of row, told apart by their id.**
+
+- **A slice row** (`H2.1`) has a status that walks the lifecycle a slice
+  goes through in this house, in order: `todo` (named, no brief yet),
+  `design` (the brief is being written), `design-review` (Fable is reading
+  the brief), `code` (being built, tests included, the three passes),
+  `review` (Codex's round), `p5` (Chris is testing it), `done` (merged to
+  userland), `dropped`. One row says where the slice is in the pipeline,
+  which is the thing that gets lost.
+- **A sub-task row** (`H2.1.3`) is a piece of work inside a slice. Its
+  statuses are `todo`, `doing`, `done`, `dropped`. Sub-tasks never go
+  through review on their own, so they do not get the long vocabulary.
+  Captures (`C1`) are sub-tasks of the slice that needs them.
+- **A question row** (`Q1`) is a ruling the arc needs from Chris: `open`
+  or `ruled`, with the ruling written into `notes` when it comes. A
+  question asked in passing gets a row the same day, so it has a place
+  until it is answered.
+
+**The rules.**
+
+1. **A row is added in the PR that defines it.** A slice's sub-task rows
+   are added by the PR that writes the slice's brief, never before; a
+   question row by whoever asks the question, in whatever PR they are in.
+   Nothing is ever deleted: a task we decide not to do becomes `dropped`,
+   with the reason in `notes`, so what was decided stays visible.
+2. **A row changes only in the PR that does the work, and a branch touches
+   only its own rows.** A slice's branch flips that slice's rows and no
+   other's. The `done` flip and the PR number in `done_in` land in the
+   same PR as the code, as its last commit: merging IS the crossing-off,
+   and there is no separate bookkeeping commit to forget.
+3. **Start from the copy beneath you.** Before a branch edits the file it
+   rebases onto the copy it is stacked on: userland as Chris last pushed
+   it when the branch is first in its stack, the branch below otherwise
+   (which already carries the flips of everything under it, so a stack
+   merged in order is a no-op on the rows above). THE OWNER OF THE
+   USERLAND COPY — Chris — PUSHES EVERY TIME IT CHANGES; he signed up for
+   that on 2026-11-09, and it is the one step no agent can do for him.
+4. **Slices are separated by a blank line in the file** and a row is one
+   line, so two branches on two slices never edit the same hunk and never
+   conflict at merge.
+5. **The builder owns the slice row's status.** It moves to `code` when
+   the builder starts, `review` when the Codex round opens, `p5` when the
+   round is clean and the branch is handed to Chris, `done` in the PR's
+   last commit. Chris may move a row himself, from userland, and push.
+6. **`tools/http2_tracker.py` passes before every push that touches the
+   file.** A check that fails names the row.
+
+## 1. Why, and why now
+
+**What it cost when this arc began** (H2.1 and H2.2 have since paid the
+ticket and the cap; their as-built sections say how; the rest of this
+paragraph is the state they started from). libfetch speaks HTTP/1.1 with
+keep-alive and a pool of kept connections (WIRE.md § 2): six idle per key, sixteen in all, sixty
+seconds idle. Concurrency is not capped by the pool — a host is dialled by
+as many fetches as are asking at once, which is the caller's thread count
+(yonder: its twelve workers and a synchronous XHR), and a page that asks
+for forty resources dials more than that over its life, because only six
+idle connections per key are kept between requests (DEBTS § libfetch,
+"Fetches to one host are not capped at once"; WIRE.md § 2's table counts
+21 connections for a page of 26 resources). Each one pays a TCP handshake and a
+WHOLE TLS 1.3 handshake, because session tickets were consumed and
+discarded when this arc began (H2.1 keeps them: TLS13.md § Resumption). On
+a kept connection a request waits for the one before it to finish; the
+pool's measurement showed connections falling to a quarter and arrival
+time barely moving, because a page's burst of same-host requests dials
+anyway (WIRE.md § 2, "The measurement").
+
+**What HTTP/2 buys, honestly.**
+
+- **One connection per origin, many streams on it.** Every request after
+  the first on an origin starts one round trip later instead of three, and
+  a page's burst costs one handshake, not a dozen. Real, and modest on a
+  wired LAN with a millisecond to the gateway; largest on sites that ship
+  hundreds of small unbundled files.
+- **The fingerprint, which is bigger than "a check or two".** Chrome never
+  speaks HTTP/1.1 to a server that offers h2, so a client sending Chrome's
+  User-Agent over HTTP/1.1 is a mismatch a bot-management service scores
+  (WIRE.md § 1 named this and declined it as "the honest outcome"; this
+  arc pays it). The catch is that h2 is fingerprinted too — SETTINGS order
+  and values, the first WINDOW_UPDATE's increment, PRIORITY frames,
+  pseudo-header order — so speaking it means speaking it the way the
+  preset's browser does, or one tell is traded for another (§ 2.9).
+- **Browser-like politeness.** Forty parallel connections from one address
+  is a burst no browser makes; h2 fixes that structurally, and a
+  six-per-host cap (§ 4, H2.2) fixes it for h1 sites on the way.
+- **Not advantages any more:** server push is dead in every browser, and
+  h2's priority tree is ignored by most servers in favour of the
+  `Priority` header the presets already send (WIRE.md § 1 as built).
+
+**Why not HTTP/3 in this arc.** QUIC is a whole transport in ring 3:
+congestion control, loss recovery, pacing, per-packet AEAD with header
+protection the engine does not expose, QPACK, and a fall back to TCP when
+UDP is blocked. Its wins over h2 are on lossy links — head-of-line blocking
+across streams, a faster cold start — which the P5's wired RTL8125 does not
+have. It becomes interesting after the Wi-Fi plan, and it needs h1 or h2
+first anyway, since h3 is discovered through Alt-Svc. One DEBTS row when
+this arc lands; no design now.
+
+**The ranking the slices follow (§ 3)**: session resumption first, because
+it is the cheapest cut of the same handshake cost and stands alone (so it
+looked: H2.1's "as built" has the P5's measurement, which found the
+handshake's cost to be its round trip, and resumption to save none of it); the
+pool's new ownership and the cap second, because h2 rides on it and h1
+sites gain from it today; then the pure pieces; then the one hard thing,
+the multiplexer; then the switch.
+
+## 2. The contracts — decided once, before any slice is coded
+
+### 2.1 Where the protocol is chosen: ALPN, and nothing else
+
+A connection speaks h2 when, and only when, the TLS 1.3 handshake's ALPN
+answer is `h2`. libfetch offers `h2, http/1.1` in that order on a direct
+https dial (today `dial` in fetch.c offers `http/1.1` alone); the server's
+pick is the connection's protocol for its whole life, recorded on the
+connection object, never re-negotiated. Everything else is h1, unchanged:
+
+- A plain `http://` hop (no `h2c`, no `Upgrade: h2c`, no prior knowledge:
+  no browser speaks them, and a preset that did would be a tell).
+- A hop through a proxy: libfetch sends https through a plain proxy in
+  absolute form (WIRE.md § 2 as built), so a proxied connection is plain
+  and h1.
+- The TLS 1.2 fallback: the Bear client (TLS13.md § Version selection)
+  offers `http/1.1` alone. RFC 9113 § 9.2 puts conditions on h2 over 1.2
+  that are not worth meeting for a path that exists to reach legacy
+  servers.
+- A preset that says so. A costume whose browser never spoke h2 (Netscape
+  4, Lynx) offers `http/1.1` alone, because a preset is a whole identity
+  (WIRE.md § 1) and a Lynx that negotiates h2 is not Lynx. The browser
+  presets and yonder's own offer both. (Ruled here: web-identity policy,
+  the kind this seat decides and tells; it is in the tracker as a note on
+  H2.5, not as a question.)
+
+The pool key does not change: a kept connection's protocol is a fact
+about the connection, not about who may share it, and a key's connections
+may be a mix during the moment ALPN answers differ (two dials in flight to
+one host, one answering h2 and the other h1 — rare, legal, handled by
+§ 2.2's "which connection a fetch takes").
+
+### 2.2 Ownership: a connection is a shared object with a count
+
+Today a connection belongs to exactly one fetch between its take and its
+put, and the pool is a table of idle `fetch_transport_t`s (pool.h). Under
+h2 many fetches use one connection at once, so the unit changes:
+
+- **`fetch_conn_t`** (name is the builder's) is a heap object: the
+  transport, the key, the protocol, a reference count, the time it was
+  last left idle, and — for h2 — the connection state of § 2.5. The pool
+  becomes a table of pointers to these, idle AND live; `fetch_pool_take`
+  increments the count, `fetch_pool_put` decrements it, and a connection
+  with a count of zero is idle: kept with the idle timer, evicted by the
+  caps, exactly as today. For h1 the count is 0 or 1 and nothing a fetch
+  can observe changes. That is why the ownership change ships BEFORE any
+  h2 code (H2.2): an h1-only PR that is behaviour-neutral, reviewed on its
+  own.
+- **Which connection a fetch takes, for its key, in this order:** a live
+  h2 connection with room (its streams below the peer's
+  `SETTINGS_MAX_CONCURRENT_STREAMS`); else an idle connection, most
+  recently kept first, probed as today (an idle h2 connection needs no
+  probe — its reader thread has watched it the whole time, § 2.3); else,
+  if the key is REMEMBERED as h2 (the last ALPN answer for it in this
+  process) and a dial to it is in flight, wait for that dial's verdict
+  rather than dialling another; else, if the key's connections (live,
+  idle and dialling together) are below `FETCH_POOL_PER_KEY`, dial; else
+  wait. **A dial needs a slot in the table, and an idle connection never
+  makes a fetch wait for one:** when the table is full, the least recently
+  kept idle connection of any key is closed for the slot, and when the key
+  is at its own cap holding an idle connection this fetch may not take (a
+  request sent once passes over one kept longer than
+  `FETCH_POOL_ONCE_MS`), that one is closed for it. A fetch waits only
+  when every connection that stands in its way is live or dialling. The
+  remembered-h2 clause is what keeps a page's burst to a known
+  h2 host from dialling six connections that will all answer h2; the
+  first visit to a host still bursts up to the cap, as Chrome's does
+  without a stored property. (Alt-Svc and HTTPS DNS records, which would
+  tell us in advance, are not spoken; a row.)
+- **The cap is a queue in front of the dial.** A fetch that must wait
+  parks on its bell (§ 2.4) in the pool's queue. **A ring is a hint and
+  never a grant.** When a connection of a key is put back, dies, finishes
+  its handshake or gains room, EVERY waiter of that key is rung, and when
+  a table slot comes free every waiter is; each one woken re-asks the
+  whole question above under the pool's lock, since the world moved, and
+  parks again if it lost. Ringing one waiter would hand the news to a
+  fetch that may be on its way out (cancelled, or out of patience) and
+  strand the rest until their own patience ran out; ringing all costs a
+  wake apiece for at most a caller's thread count of waiters. No order is
+  promised among them. The wait is under the fetch's idle deadline and
+  its cancellation predicate like every wait in libfetch. (As built, the
+  wait has a bound of its own and not the idle deadline: "H2.2, as
+  built" says why.)
+- **Excess h2 connections to one key** (the burst case above) are not
+  spread across: a new stream goes to the h2 connection that has been
+  live longest and has room, so the duplicates carry what was already
+  sent on them and nothing more, then idle out. Spreading streams over
+  them would keep several connections and their reader threads working
+  where one will do, and several busy h2 connections from one address to
+  one origin is a shape no browser makes. Chrome closes duplicates; ours
+  go quiet and let the timer close them.
+- **A connection's death is fanned out.** When an h2 connection's reader
+  sees the transport fail, or a GOAWAY, every stream on it ends as § 2.5
+  says, every waiter of the key is rung, and the object is freed
+  when its count reaches zero — the pool drops its own reference on
+  death, the reader thread holds one for as long as it runs (§ 2.3), and
+  whoever leaves last frees it. No stream ever holds a
+  pointer to a freed connection: the count is what makes that true, and
+  it is the one invariant the Codex round reads hardest.
+
+### 2.3 Threads and the socket — the central decision
+
+Three facts about os64 shape this, and none of them is negotiable inside
+this arc:
+
+1. **Ring 3 waits on ONE handle at a time.** `read(handle, buf, len,
+   timeout_ms)` is the only wait (syscall_numbers.h, "read's patience");
+   there is no select or poll over a set of handles, and the GUI's
+   wait-any is the window owner's alone.
+2. **A TLS object has one serialized owner** (tls.h: "One serialized owner
+   per client"; transport.h: "do not use the handle or reenter
+   operations"). Two threads may not drive one TLS connection at once.
+3. **A TCP connection parks one reader AND one writer** (tcp.h's `reader`
+   and `writer` slots), so a thread blocked in read on a socket does not
+   stop another thread writing to it.
+
+An h2 connection must read frames for many streams while any of them may
+want to send, and the thread that wants to send is a fetch's thread,
+blocked nowhere the reader can see. So:
+
+- **Each h2 connection has ONE READER THREAD**, started when ALPN answers
+  h2 and detached (its handle closed: thread.h, "close(h) detaches"), so it
+  costs no handle. It blocks in `os64_read_for` on the raw socket in
+  SLICES (a second or less; the H2.4 brief names the number), and feeds
+  what arrives to
+  the TLS ENGINE under the connection lock, then parses frames out of the
+  plaintext and delivers them to streams. A slice that ends with nothing
+  read is the reader's turn to look around: at whether the connection is
+  to end (below), at whether it has idled out (§ 2.5), and at ciphertext
+  still owed to the wire (below). It holds a reference on the connection
+  for as long as it runs. It never takes a stream's lock
+  while holding the connection's for longer than a delivery, and it never
+  blocks on a stream (§ 2.6 makes that true: a stream's buffer always has
+  room for what the window allowed).
+- **The TLS engine, not the transport wrapper.** fetch.c's h1 path drives
+  `os64_tls_transport_*`, which owns the socket I/O and the single-owner
+  rule with it. The h2 connection drives the ENGINE directly
+  (`os64_tls_client_*`, tls.h: feed ciphertext, take ciphertext, read and
+  write plaintext — "the second engine wears Bear's buffer interface",
+  TLS13.md § Architecture) under one connection lock held for engine
+  calls and the queue's bookkeeping, never across a syscall that can
+  block (a bell's ring cannot, and § 2.4 is why some are made under a
+  lock). The handshake itself is still the
+  transport wrapper's (the dial is unchanged up to the ALPN answer); the
+  wrapper's engine is then adopted by the connection. Whether the wrapper
+  can hand its engine over, or the h2 connection must be created from the
+  engine API end to end, is the H2.4 brief's first question of the code.
+- **Ciphertext reaches the wire through one queue with one drainer, and
+  no lock is held across a write.** Whoever has something to send — a
+  fetch thread (HEADERS, DATA, WINDOW_UPDATE, RST_STREAM) or the reader
+  (a SETTINGS ack, a PING ack, the connection's WINDOW_UPDATE for bytes it
+  discarded, a GOAWAY, and whatever the engine itself owes after a feed:
+  a KeyUpdate reply, an alert) — takes the connection lock, writes
+  plaintext frames into the engine, moves the engine's ciphertext to the
+  tail of the connection's OUT QUEUE, and lets the lock go. The queue's
+  order is the engine's order, so TLS records reach the wire in sequence.
+  Then, if nobody is draining (a flag, under the lock), that thread
+  becomes the DRAINER: it takes bytes from the queue's head under the
+  lock and writes them to the socket outside it, until it finds the queue
+  empty and gives the role up in that same critical section. A thread
+  that finds a drainer at work leaves its bytes to it and goes back to
+  its own business. The rules that make this sound:
+  - **Queued ciphertext is owed.** The engine's record sequence moved
+    when it was made, so it cannot be withdrawn, and a record half
+    written must be finished. A drainer drains to empty whatever becomes
+    of its own fetch; its writes carry the connection's write patience
+    (one number for the connection, since the bytes are everybody's), and
+    a write that fails or outlasts it is the connection's death (§ 2.5),
+    as it is on h1.
+  - **A thread with no patience to give drains with none.** The reader,
+    and a fetch that was cancelled, write what the socket takes at once
+    and leave the rest queued with no drainer. The next sender takes the
+    role; failing one, the reader tries again each time it wakes, which
+    its slices bound. So the reader never blocks on the wire, and a
+    blocked socket stalls senders and never the reading of frames. Bytes
+    the socket has refused for longer than the write patience are the
+    same death as a write that outlasted it, and the reader is who
+    notices.
+  - **The queue is bounded at the door, for what can wait.** A sender
+    with DATA, or with a new stream's HEADERS, while the queue is past
+    its mark (the brief names it) parks on its bell until the drainer
+    brings it under. What ends a stream (a reset, a credit) is queued
+    regardless and never waits: it is bounded by the streams that were
+    let in. (Amended 2026-11-10 on Quinn's read of the H2.4 brief: the
+    first wording bounded DATA alone and let HEADERS through, on the
+    ground that live streams bound them, and a stream opened and
+    cancelled frees its slot while its bytes are still owed.)
+  A lock held across the write is set aside:
+  `os64_lock_t` contenders spin and yield (lock.h), so every sender
+  waiting on a stuck socket would burn a CPU for as long as it was stuck,
+  the reader would wait there too for its acks, and a sender that gave up
+  mid-record would leave half a record nobody owned.
+- **The reader is the socket's only closer, and a flag is how it is
+  stopped.** No verb hangs up a TCP connection without closing its
+  handle, and a close from another thread, though it does wake the parked
+  reader (`tcp_conn_close`), frees the handle's NUMBER for the next open:
+  a drainer between two writes, or the reader between two reads, would
+  then be speaking to whatever took the number. So nobody but the reader
+  closes the socket. The connection carries `dying`, set under the
+  connection lock by whoever decides it must end — the pool evicting or
+  draining it, a drainer whose write failed, the reader itself (a
+  transport failure, a GOAWAY, the idle timer). Senders look at it under
+  the lock before they encrypt and send nothing on a dying connection; a
+  drainer looks between writes and gives the role up. The reader looks
+  each time it wakes, and once the connection is dying and nobody is
+  draining it closes the socket, ends every stream (§ 2.5) and lets its
+  reference go. The cost is that a connection somebody else condemned
+  ends up to a slice later (or, with a drainer blocked in a write, when
+  that write returns, which the write patience bounds), and one wake a
+  slice per h2 connection.
+  `fetch_pool_evict_one` therefore takes an idle h1 connection first,
+  whose close is immediate, and `fetch_pool_drain` waits for the readers
+  to leave (how is the H2.4 brief's).
+- **A fetch never reads the socket.** It reads its STREAM: a buffer the
+  reader fills, and a bell the reader rings (§ 2.4). From the fetch's
+  side `os64_fetch_read` is unchanged in contract — bytes, 0 at the end,
+  negative with a status — and `os64_fetch_open` returns when the
+  stream's final HEADERS arrived, exactly as it returns today when the
+  head was read.
+
+Alternatives weighed and set aside, so the review need not re-derive them:
+a connection with no thread, where whichever fetch needs bytes reads the
+socket for everyone (fairness and hand-off between readers is a second
+protocol, and a fetch satisfied early must keep reading for others or
+strand them); a reader that polls the socket and a send queue by turns on
+a tick (ten milliseconds of latency on every request, the flashlight
+DOORBELL.md replaced in the kernel); a kernel poll over handles (the right
+long-term primitive and its own design, not this arc's, and not needed
+once the reader owns the socket and the out queue has its drainer); a
+WRITER thread per connection parked on a bell, which would own every
+socket write and make the drainer role unnecessary (one more thread and
+one more handle per h2 connection, and the handle table of § 2.4 has no
+sixteen to spare); and a kernel verb that hangs a connection up without
+freeing its handle, which would stop a reader at once instead of within a
+slice (new kernel surface for a second of teardown latency; Q3, ruled for
+the slices, and booked in § 2.10 for the day the latency matters).
+
+### 2.4 The bell — how a fetch waits for its stream
+
+A fetch thread waiting for bytes on its stream has nothing to block on:
+the socket is the reader's, and a lock is a spin (lock.h, "contenders spin
+briefly, then yield"). The work pool solved the same problem for jobs with
+pipes (work.c: a byte written per job, a worker blocked in `os64_read` on
+the pipe), and that is the house's wait primitive today: A THREAD WAITS BY
+READING A HANDLE WITH PATIENCE.
+
+A pipe costs two handles and a 64 KiB ring (`PIPE_CAPACITY`) for a
+one-bit message. The handle budget says that is too dear here: a task has
+64 handles (`OS64_TASK_HANDLES`), yonder's baseline holds about nineteen
+(its three standard handles, the work pool's two pipes, twelve worker
+thread handles), the pool keeps up to sixteen, and thirteen fetches may be
+in flight at once (twelve workers and a synchronous XHR on the window
+thread). Thirteen pipe pairs is twenty-six handles on top of that, and the
+table is full before a window or a file is opened.
+
+**The bell is a handle whose read waits and whose write rings** — the pipe
+with the ring buffer taken out: one handle, no buffer, one parked waiter
+(pipe.c's single-waiter shape, `readWaiter`, the park discipline
+`pipe_forget_waiter` and `signal_park_must_end` spell out), a flag that
+stays set from a ring until a wait consumes it so a ring that lands before
+the wait is never lost. `read(bell, &b, 1, timeout_ms)` returns 1 when
+rung (the flag cleared), `OS64_ERR_TIMEOUT` when the patience ran out
+unrung, and the interrupted answer when a caught signal cut the park short,
+exactly as a pipe's read does; `write(bell, &b, 1)` from any thread of the
+task sets the flag and wakes the waiter if one is parked; `close` frees it
+and wakes a waiter with the closed answer. Bells are never inherited by a
+spawned child (philosophy 6: nothing is inherited that was not asked for).
+Thirteen in-flight fetches cost thirteen handles, and os64get's one fetch
+costs one. It is `os64_bell()` in libos64 (`os64/bell.h`), and it is what
+the pool's cap queue (§ 2.2), a stream's reads (§ 2.3) and a stream's
+sends waiting on a window (§ 2.6) all park on: one bell per fetch, made
+when the fetch first needs one and closed with it.
+
+**A ring is made under the lock its owner takes to withdraw the bell.** A
+ring is `write(handle)`, and a handle is a number: one that lands after
+the fetch closed its bell, and after the number was given to the next
+open, writes a byte into somebody else's file or socket. So whoever holds
+a fetch's bell for ringing — the pool's waiter list, a stream — holds it
+under a lock, rings while holding that lock (a ring never blocks, so it
+may), and the fetch takes the same lock to remove its bell from that
+place before it closes it. And because one bell serves a fetch's every
+wait, a ring left over from the last one may open the next: every wait on
+a bell is a loop that asks its question again when rung, and a ring with
+nothing behind it costs one pass.
+
+**This is kernel work** (a handle kind, a park loop, a syscall to make
+one), small and in the class the review rule names, so it is its own slice
+(H2.0) with a Codex round, and it is the subject of Q1: the alternative is
+the pipe-backed bell in libos64 alone (no kernel change, the handle cost
+above, which only yonder feels), with the same `os64/bell.h` either way so
+nothing above it cares which was chosen. Fable's lean is the kernel bell.
+
+### 2.5 Streams, fetches, and how each thing ends
+
+- **A stream is one request and its response**, owned by one fetch. A
+  redirect hop opens a new stream — on the same connection when the hop
+  stays on the key, on another when it leaves — and the old stream is
+  complete or reset. A fetch holds at most one stream at a time.
+- **Opening a stream is sending its HEADERS** (END_HEADERS; END_STREAM
+  when the request has no body), with the next odd stream id, taken
+  under the connection lock so ids rise with sends as RFC 9113 § 5.1.1
+  requires. The request body goes as DATA under the send windows (§ 2.6);
+  the fetch's `sent_whole` means the same as today.
+- **`os64_fetch_open` returns at the final HEADERS** (`:status` ≥ 200,
+  END_HEADERS seen). Interim responses (1xx, 103 Early Hints among them)
+  are consumed and ignored, as the h1 path consumes interim heads;
+  trailers end the body and are not delivered, as h1's are not.
+- **Cancellation is RST_STREAM(CANCEL) and no wait**: a fetch whose
+  predicate says stop, or that is closed with its body unread, queues the
+  reset (queuing never blocks; it drains with no patience, § 2.3), marks
+  the stream closed, and leaves. Frames that arrive for a closed stream
+  were sent before the reset was seen: they count against the
+  connection's flow-control window, are discarded, and their bytes are
+  credited back to the connection (§ 2.6), as are the bytes a closing
+  fetch leaves unread in its stream's buffer.
+- **A server's RST_STREAM ends the fetch** as `OS64_FETCH_BROKE` mid-body
+  or `OS64_FETCH_REQUEST_FAILED` before the head, with the error code in
+  the detail and in the reason sentence; `REFUSED_STREAM` before any
+  response byte is retried once on another connection (or the same one,
+  later) whatever the method, because RFC 9113 § 8.7 defines it as "the
+  request was not processed".
+- **GOAWAY** carries the last stream id the server processed. Streams
+  above it were never processed and are RETRIED on a fresh connection,
+  whatever their method, by the same reasoning (RFC 9113 § 6.8); streams
+  at or below it run to their end on the connection, which accepts no new
+  stream and dies when the last one leaves. The retry rule's count in the
+  reason sentence (fetch.c `retried`) counts these too.
+- **A silent connection is condemned by the first stream it fails.** A
+  path that died without a FIN (a NAT that forgot the flow, a cable)
+  looks like a live h2 connection with room, and without a rule every new
+  fetch would join it and wait out its own idle deadline. So when a
+  stream ends `SILENT` and the connection received no frame of any kind
+  while it waited, the connection takes no new stream, exactly as after a
+  GOAWAY: the streams on it meet their own deadlines, and it dies when
+  the last one leaves. Silence on one stream while frames arrive for
+  others is that stream's alone.
+- **A connection's death** (transport failure, a write the socket would
+  not take within the write patience, a connection error we
+  detect, a GOAWAY with an error code) ends every open stream: BROKE
+  mid-body, and before any response byte the h1 retry rule applies as
+  written — retried once on a fresh connection when the request is
+  idempotent and the connection was a kept one, else REQUEST_FAILED.
+- **Connection errors we raise** (a frame that violates the protocol, a
+  PUSH_PROMISE, an HPACK decode failure, a flow-control violation) send
+  GOAWAY with the code and close; the detail names the code. A STREAM
+  error we raise is RST_STREAM with the code, and that fetch alone ends.
+- **Idle** is a connection with zero streams. It is kept like any idle
+  connection and closed by the same idle timer, which the reader judges
+  when a slice ends: zero streams, and kept longer than
+  `FETCH_POOL_IDLE_MS`. The verdict is reached under the POOL's lock,
+  where a take would find the connection, so a fetch can never take one
+  the reader has just decided to close. A server's idle GOAWAY or FIN
+  closes it sooner, and the reader sees that at once, so an idle h2
+  connection taken from the pool is never one the server closed — the
+  probe at take and the 408 rule are h1's.
+- **PING is answered, never sent.** No keepalive pings: a connection that
+  has nothing to say says nothing, and Chrome sends none either. What
+  Chrome does send is a PING ahead of a request on a connection that has
+  been quiet a while, to learn that the path died before the request
+  finds out; the rule above is our cheaper answer to the same failure,
+  and the probe is a row (§ 2.10).
+
+### 2.6 Flow control: a window is what we are willing to buffer
+
+- **Receive side.** Each stream has a buffer in user memory that grows on
+  demand up to the stream window, and the connection window is the sum
+  the connection will hold across streams. The reader never blocks on a
+  stream because a peer that obeys flow control cannot send more than the
+  window, and a peer that does not has made a connection error
+  (FLOW_CONTROL_ERROR), not a full buffer. The consumer (the fetch's
+  thread, in `os64_fetch_read`) sends WINDOW_UPDATE for its stream once it
+  has consumed half the stream window, and for the connection once the
+  connection has consumed half of its own, from the sending side of the
+  connection (§ 2.3) — the reader thread sends no window update for bytes
+  a fetch has yet to read, so a page that stops reading stops the server,
+  which is the point of the mechanism. **Bytes nobody will ever read are
+  credited by whoever discards them**, to the connection's window alone
+  (their stream is gone): the reader for frames that arrive on a closed
+  or reset stream, the closing fetch for what it leaves unread in its
+  buffer. Without that, each cancelled stream would take its unread bytes
+  out of the connection's window for good, and a connection that had seen
+  enough cancellations would stop receiving for every stream on it.
+- **The window values are the preset's** (§ 2.9), because the server sees
+  them. The ceiling is the arithmetic the brief must state: thirteen
+  streams at a Chrome-sized window is tens of megabytes IF every server
+  floods every stream before its fetch reads a byte, which no server does
+  to a client that is reading; the buffers hold only what has arrived and
+  not been consumed, and the body cap (`max_body`) still ends a fetch at
+  the byte it names. Q2 asks Chris whether to match the preset's window or
+  cap ours below it at a memory cost he names.
+- **Send side.** DATA frames are cut to the peer's `SETTINGS_MAX_FRAME_SIZE`
+  and sent only within both the stream's and the connection's send
+  windows; a sender out of window parks on its bell until the reader
+  delivers a WINDOW_UPDATE, under the fetch's idle deadline and
+  cancellation. Request bodies are small for a browser (a form, a JSON
+  post) and large for a download tool's upload, and the rule is the same.
+
+### 2.7 One request model, two renderers
+
+`http_request` (http.c) writes the request as TEXT — a request line, `Host`
+first, then the lines the caller's `order` names, then the rest in the
+writer's own order — and the reply parser reads text. h2 carries the same
+fields as a LIST: pseudo-headers (`:method`, `:authority`, `:scheme`,
+`:path`) then fields, names lowercase, in HPACK. The contract:
+
+- **One model.** The request is composed once as an ordered list of
+  (name, value) pairs with the ordering rules http.h already states
+  (`order`, the writer's own order for the rest, every value judged by the
+  field-byte rule), and rendered two ways: h1 text, or h2 pseudo-headers
+  and fields. `Host` becomes `:authority` (and is never also sent as
+  `host`); the method, scheme and path become their pseudo-headers in the
+  preset's pseudo-header ORDER (§ 2.9, captured). The connection-specific
+  fields h2 forbids (RFC 9113 § 8.2.2: `Connection`, `Keep-Alive`,
+  `Proxy-Connection`, `Transfer-Encoding`, `Upgrade`) are not rendered on
+  h2, whatever `keep_alive` says — a preset's `Connection: keep-alive`
+  describes its browser's h1 request, and its browser does not send it on
+  h2 either. `TE` is sent only as `trailers`, the one value HTTP/2
+  allows, and only by a caller whose browser sends it (Firefox does, on
+  every request: capture C2; the connection reads trailers, so the line
+  is true). A caller's own lines cannot hold a TE.
+- **Cookies are crumbled on send and joined on receipt** (RFC 9113
+  § 8.2.3): a `Cookie` line is sent as one `cookie` field per
+  cookie-pair, as Chrome does, which is what lets HPACK index them
+  individually; `cookie` fields in a response head do not occur, and
+  several `set-cookie` fields reach `on_set_cookie` one by one as today.
+- **The reply model** fills `os64_fetch_head_t` the same way: `:status`
+  is `status`, `reason` is `""` (h2 has no reason phrase; callers already
+  tolerate an empty one), `content-length` fills `length` when present,
+  there is no chunked framing (DATA frames are the framing; `encoding` is
+  the content coding as today), and `on_header` hears every field in wire
+  order with the pseudo-headers left out. The head gains one fact,
+  `http2` (true when the final head came over h2), because yonder's
+  request record, lsof's story and a person's curiosity all want it; the
+  detail gains the h2 error code when one ended the fetch.
+- **The head's size limit holds** (`YONDER_FETCH_HEAD_MAX` in yonder is
+  64 KiB, and libfetch has `HTTP_LINE_MAX` per line): a header block past
+  what the decoder will hold is still DECODED to keep the HPACK dynamic
+  table in step — a decoder that stops mid-block desynchronises every
+  later head on the connection — and then the stream is reset
+  (ENHANCE_YOUR_CALM, the code that says "you asked too much of me"; the
+  H2.4 brief confirms the choice against RFC 9113 § 10.5.1, which is
+  explicit only that the block must be processed either way) and the
+  fetch ends `OS64_FETCH_UNSUPPORTED` with `head` in `unsupported`, as the
+  h1 path ends on a framing header too long to read.
+- **Bodiless replies** are the same three (a HEAD's answer, 204, 304) plus
+  any stream whose final HEADERS carried END_STREAM. A 205's body is read
+  and handed to nobody, as today.
+
+### 2.8 The error vocabulary stays libfetch's
+
+No new `os64_fetch_status_t` values. h2's ways of ending map onto the ones
+callers already act on: a reset or a dead connection mid-body is `BROKE`;
+before the head it is `REQUEST_FAILED` (or retried, § 2.5); a protocol
+violation we detect is `BAD_HEAD` when it is the reply's shape and
+`UNSUPPORTED` when it is a legal thing we refuse (a head too large, a
+PUSH_PROMISE); the idle deadline is `SILENT`; the cancellation predicate is
+`INTERRUPTED`. What is new is in `os64_fetch_detail_t` (the h2 error code
+and which side sent it, the stream id) and in the reason sentence ("the
+server reset the stream: REFUSED_STREAM"; "the connection went away:
+GOAWAY ENHANCE_YOUR_CALM, retried once on a fresh connection"). yonder's
+record prints the reason; nothing above libfetch learns new words.
+
+### 2.9 The greeting is the preset's, like its headers
+
+What the far end can fingerprint on h2, in the order it sees it: the
+connection preface's SETTINGS frame (which identifiers, in what order, with
+what values), the WINDOW_UPDATE that usually follows it (its increment),
+whether PRIORITY frames are sent and what tree they build, the
+pseudo-header order of the first HEADERS, and the HPACK choices in it. All
+of it is the browser's, so all of it lives where the browser's headers
+live: **`agent.c`'s preset table gains a GREETING** — the SETTINGS list,
+the window increment, the priority behaviour, the pseudo-header order —
+and libfetch's options gain a way to pass one (`os64_fetch_options_t`,
+beside `order`). yonder's own preset sends its own honest greeting, which
+the H2.5 brief writes down and which is also the default for a caller that
+passes none (os64get, wend).
+
+**The values come from captures, not from this file** (W1's rule, WIRE.md
+§ 1 as built): Chrome and Firefox on Windows, each making a navigation and
+a page's worth of sub-resources to a local h2 server that prints every
+frame it receives — `nghttpd -v` with a self-signed certificate does this
+(the nghttp2 server tools; Chrome is started with the flag that ignores the
+certificate error for that host) — and the captures are kept beside the W1
+set with the browser's version in their names. Rows C1 and C2. Firefox is
+captured too because its preset exists and its greeting differs (it builds
+a priority tree; Chrome does not).
+
+**What is matched and what is not.** The SETTINGS (identifiers, order,
+values), the window increment, the pseudo-header order and whether
+PRIORITY frames are sent are matched byte for byte, because they cost
+nothing but care. The HPACK encoder's indexing choices are not matched:
+no published fingerprint scores them, and matching an encoder's internal
+policy is a rabbit hole with no floor. The TLS handshake is still os64's
+own (DIVERGENCES, "The browser's identity"); a gate that scores it keeps
+scoring it, and this arc moves the line from "h1 under a Chrome string" to
+"os64's handshake under a Chrome greeting", which is the honest next step.
+
+### 2.10 Deliberately absent, and where each is booked
+
+Server push (we send `ENABLE_PUSH = 0` where the preset does, and a
+PUSH_PROMISE is a connection error); `h2c`, `Upgrade` and prior knowledge;
+the h2 priority tree beyond what a preset's greeting sends; CONNECT and
+extended CONNECT (no WebSockets over h2 — WebSockets themselves are a
+separate design); Alt-Svc and HTTPS records (so h3 is never learned of,
+and a host's h2 support is remembered per process only); keepalive PINGs,
+and the PING Chrome sends ahead of a request on a quiet connection
+(§ 2.5); a verb that hangs a connection up without closing its handle, so
+a reader stops at once instead of within a slice (§ 2.3);
+h2 over the TLS 1.2 fallback; h2 through a proxy. Each is one row in
+DEBTS § libfetch when H2.5 lands, and none is a hook designed now.
+
+## 3. The slices, in order, and what each depends on
+
+| Slice | What | Reaches a page? | Depends on | Review |
+|---|---|---|---|---|
+| **H2.0** The bell | A handle whose read waits and whose write rings (§ 2.4): kernel handle kind, one syscall, `os64/bell.h` | No (no caller until H2.2) | Q1 | Codex (kernel) |
+| **H2.1** Session resumption | TLS 1.3 tickets kept and offered; a resumed handshake skips the chain | Yes, on its own: every reconnect is cheaper | nothing | Codex (TLS) |
+| **H2.2** Connections as shared objects, and the cap | `fetch_conn_t` with a count; the per-key queue in front of the dial (§ 2.2) | Yes, on its own: six per host, like Chrome | H2.0 | Codex (concurrency) |
+| **H2.3** Framing and HPACK | Pure libraries with host tests and vectors | No | nothing | in-house |
+| **H2.4** The connection | State machine, streams, flow control, the reader thread (§ 2.3, § 2.5, § 2.6), alone against a scripted peer | No (nothing calls it) | H2.0, H2.2, H2.3 | Codex (concurrency) |
+| **H2.6** Fetches on the connection | fetch.c and the pool join it: § 2.2's h2 clauses, the retry rules, the words; a guest probe | No (ALPN still offers h1 alone) | H2.4 | Codex (concurrency) |
+| **H2.5** The switch | ALPN offers h2; the preset half of the request model (§ 2.7); the greeting per preset (§ 2.9); captures; QEMU and P5 proof | YES — this is the arc | H2.6, C1, C2 | Codex, then Chris on the P5 |
+
+H2.1 and H2.3 touch nothing the others touch and can run beside anything.
+H2.0 goes before H2.2 because the cap's wait parks on a bell. Only H2.5 changes what the wire sees, so only H2.5 needs
+Chris's P5 pass before merge; H2.1 and H2.2 change the wire's SHAPE (fewer
+handshakes, fewer connections) without changing a byte of a request, and
+get the QEMU `make run-net` page load every wire-facing slice gets.
+
+Briefs for H2.0 through H2.4 follow in full. H2.6 and H2.5 have their
+contracts above and get their briefs when their turn comes, written
+against the tree as it stands then: H2.6's shape depends on what H2.4
+became after its round, and H2.5's on the captures. (H2.6 is numbered
+after H2.5 because it was split from H2.4 once the tracker's rows were
+laid down; it is built before it.)
+
+## 4. The briefs
+
+Each brief is a builder's: the three passes (builder, one cold Opus
+reader, Fable), then the review column above. Every brief's PR adds its
+rows to the tracker as § 0 says, and its "as built" subsection here.
+
+### H2.0 — The bell
+
+**What.** A kernel handle kind with the semantics of § 2.4, and
+`os64/bell.h` over it. Q1 ruled for the kernel bell; the pipe-backed
+fallback's differences are marked where the brief was written with both
+in view.
+
+**Kernel.**
+- A `bell_t` (kernel/src/bell.c, kernel/include/bell.h): a spinlock, a
+  `rung` flag, one `thread_t *volatile waiter`. The park loop is pipe.c's
+  shape to the letter — `pipe_read`'s discipline of clearing its own
+  waiter slot at the top of every pass (`pipe_forget_waiter`), asking
+  `signal_park_must_end` before parking, and `current_thread_will_catch`
+  on the way out — because that loop has had its Codex rounds and this
+  one must not re-learn them. The builder reads pipe.c's read path before
+  writing a line, and the brief's first review question is "where does it
+  differ from pipe_read, and why".
+- `read(bell, buf, 1, patience)`: if `rung`, clear it, write one byte
+  (value 1) and return 1; else park under the patience the read syscall
+  already defines (0 polls, N ms, FOREVER), returning `OS64_ERR_TIMEOUT`
+  unrung, `OS64_INTERRUPTED` when a caught signal ends the park, and the
+  handle layer's closed answer when the bell is closed under the waiter.
+  A second thread reading a bell that already has a waiter is refused
+  (one parked waiter, as a pipe has one); the builder picks the existing
+  refusal code that says "busy" and names it in the header.
+- `write(bell, buf, len)` from any thread of the task: set `rung`, claim
+  and wake a parked waiter (pipe.c's `pipe_claim_parked_waiter`), return
+  `len`. A write never blocks and never fails for a full anything: a bell
+  has no capacity.
+- `close`: frees it; a parked waiter is woken with the closed answer
+  before the memory goes (the builder reads how pipe.c orders this and
+  does the same).
+- **The pin.** A handle is resolved PINNED (handle.c's header, § The
+  pin): an operation in flight holds a reference on the object in the
+  object's own currency, so a sibling's close cannot free it under a
+  parked waiter. A bell joins that as every kind has: a count of holders
+  that `handle_pin` raises and the unpin drops, the waiter woken by
+  `close` being the one who frees the bell when it leaves. `handle_share`
+  (a spawn's redirections) refuses a bell.
+- Not inherited across spawn (the 0/1/2-plus-what-was-asked rule); no
+  `seek`, `stat` answers a bell as its own kind; `/proc/<pid>/handles`
+  names it `bell`, and lsof (Chris's) shows it by that name.
+- `SYSCALL_BELL` (the next free number in syscall_numbers.h, with its
+  comment in the house style: what it makes and what read/write/close
+  mean on it). Patience on a bell read must be accepted: the dispatcher's
+  "other handles refuse finite patience" rule gains the bell beside pipes.
+
+**libos64.** `os64/bell.h`: `os64_bell_t` (a struct holding what the
+implementation needs: one handle for the kernel bell, two for the pipe
+fallback), `int64_t os64_bell_make(os64_bell_t *)`, `int64_t
+os64_bell_wait(os64_bell_t *, uint64_t timeout_ms)` (1 rung,
+`OS64_ERR_TIMEOUT`, `OS64_INTERRUPTED`, negative closed), `int64_t
+os64_bell_ring(os64_bell_t *)`, `void os64_bell_close(os64_bell_t *)`. The
+header says what a bell is for (one waiter, many ringers, a ring is never
+lost), what it is not (not a counter: two rings before a wait are one),
+and the rule its ringers keep (§ 2.4: ring under the lock the owner takes
+to withdraw the bell, because a ring is a write to a handle number).
+
+**Proof.** `/tests/belltest`: ring before wait is not lost; wait then ring
+from another thread wakes it; patience expires unrung with the timeout
+answer; two rings, one wait, then a second wait times out; close under a
+parked waiter wakes it with the closed answer; a SIGWINCH handler
+installed, the wait interrupted and answering INTERRUPTED; a spawned child
+that lists its handles sees no bell; a second thread's read on an occupied
+bell is refused. The suite gains a kernel case for the park/ring race
+(ring landing between the flag check and the park — the case pipe.c's
+claim/forget pair exists for). Under the fallback, belltest runs unchanged
+against the pipe-backed `os64_bell_t`, which is the point of the one
+header.
+
+#### H2.0, as built (2026-11-10, Fable)
+
+The bell is `kernel/src/bell.c` behind `HANDLE_BELL`, made by
+`SYSCALL_BELL` (67), wrapped by `os64/bell.h`. Where the build departs
+from the brief, or says more than it did:
+
+- **The owed wake, not pipe.c's claim and sweep.** The brief asked for
+  `pipe_read`'s park loop to the letter. A pipe's wake acts only on a
+  waiter that has finished parking, so pipes keep a list and a sweep in
+  `processSignals` for the one that registered and had not parked yet,
+  and a ring in that window costs a scheduler pass. `bell_ring` uses
+  `scheduler_wake_or_owe` under the bell's lock instead (WAKE_OWED.md,
+  the glass reader's shape): a waiter not yet parked is left a debt its
+  own park pays. So there is no list of bells and no sweep, and the
+  window is closed rather than swept. What is kept from pipe.c is the
+  discipline the brief was after: the waiter voids its registration (and
+  any debt) at the top of every pass under the lock it registered under,
+  asks `signal_park_must_end`, and parks with a one-second backstop.
+- **The answers.** A wait returns 1 with one byte when rung; a close under
+  the wait returns 0, as a pipe's EOF and a closed glass view do ("no ring
+  will come"); a second waiter is refused with -1, the syscall's plain
+  refusal, since no handle kind has a busy code to borrow, and it is
+  refused BEFORE the ring is looked at: a ring made while a waiter is
+  registered is that waiter's, which may be awake and on its way back for
+  it. A signal that ends the wait outranks a ring already made, and the
+  ring stays for the next wait; so does the ring of a wait whose byte
+  could not be written to the caller's buffer, which is rung back.
+- **A ring is a write of at least one byte.** An empty write moves nothing
+  on any handle and rings nothing here. A ring that finds the bell closed
+  (possible only for a write that held its pin across a sibling's close)
+  is refused.
+- **The pin.** A bell counts its holders (`refs`): the handle, and each
+  read or write in flight through `handle_pin`. `handle_share` refuses it
+  by its default arm, so a spawn that names a bell as a child's 0/1/2
+  fails, and a child's table never holds one.
+- **The interrupt case is SIGINT, not SIGWINCH.** A program can raise
+  SIGINT on a task through `/proc/<id>/ctl`; nothing lets one raise
+  SIGWINCH without a pty. `belltest` spawns a child to send it, so the
+  only thread of the fixture that can take the signal is the one parked
+  in the bell.
+- **Proof.** Kernel: `test_bell` (late phase) drives the object with no
+  handle, and stands in the window itself: it registers as the waiter,
+  rings while still running, then parks against a ten-second backstop
+  (the park returned in 0 ticks). Ring 3: `/tests/belltest`, in testrun,
+  nine steps through the syscalls with real second threads; its last is
+  2,000 rings each a random fraction of a millisecond after the waiter
+  took the one before (under QEMU's TCG, eight CPUs: all taken, worst
+  1.4 ms, mean 200 us, against the one-second backstop a lost ring would
+  wait for). Twelve hand mutants, each built and booted against both, and
+  each caught by at least one: a ring, and a close, that wake only a
+  parked waiter (the kernel case sleeps its whole backstop, and the race
+  loses 8 rings of 2,000 at 1,008 ms each); a wait that leaves the ring
+  set; no refusal of a second waiter; a second thread allowed the ring of
+  a registered waiter; a close that wakes nobody; a wait that keeps its
+  registration, or a debt owed to it; a wait that never asks
+  `signal_park_must_end`; a wait that keeps a ring it could not deliver;
+  and a pin that takes no reference.
+
+### H2.1 — Session resumption
+
+**What.** TLS 1.3 session tickets are kept and offered, so a connection to
+a host visited moments ago authenticates by its earlier handshake and
+skips the certificate chain and its signatures. TLS13.md's ruling 6 ("no
+resumption") was Chris's on 2026-10-09 and is reversed by his 2026-11-09
+ruling to run this arc; DEBTS § TLS 1.3 engine boundaries loses the
+tickets clause, and TLS13.md § The profile gains the two extensions (45
+on every hello, 41 with a ticket; its "not offered" list loses both) and
+notes the reversal in one line.
+
+**The engine (`userland/libtls/port/`).**
+- **Keep what a NewSessionTicket says.** `ticket_byte` (tls13_handshake.c)
+  already walks the message's fields and discards them; it now keeps
+  `ticket_lifetime`, `ticket_age_add`, the nonce, the ticket (up to
+  `TLS13_TICKET_MAX`, 2 KiB — a ticket longer than that is consumed and
+  not kept, counted in the state so a harness can see it) and ignores
+  `early_data` and any other extension. The PSK for it is
+  `HKDF-Expand-Label(resumption_master_secret, "resumption", nonce,
+  Hash.len)` (RFC 8446 § 4.6.1).
+- **Derive `resumption_master_secret`** = Derive-Secret(master_secret,
+  "res master", CH..client Finished) at the moment the client's Finished
+  is sent (tls13_schedule.c; the line in TLS13.md § The key schedule that
+  says it is not derived changes). `master_secret` lives until then, which
+  it already does; `res master` lives until the connection closes, and is
+  wiped with the rest.
+- **The session cache** (`port/session_cache.c`): one per process inside
+  libtls, under one lock, keyed by (hostname as the config normalises it,
+  port, the trust store's pointer) — the store because a resumed
+  connection is authenticated by a handshake verified under THAT store,
+  and a connection to the same host under another store is not the same
+  trust. An entry holds its own reference on that store for as long as it
+  lives, as a kept connection does (pool.h's key): a store that could be
+  freed while an entry named it would let another be made at the same
+  address, and the pointer would stop being an identity.
+  `os64_tls_config_t` gains `uint16_t port` for the key (0 means
+  "do not resume", which is also the default for a zeroed config, so no
+  caller changes behaviour until it says a port). Capacity 32 entries,
+  two tickets per key (servers commonly send two), least recently added
+  evicted; an entry carries the PSK, the ticket, the suite (so its hash),
+  `received_at` on the platform clock, `lifetime` and `age_add`. Expired
+  entries (lifetime passed, or past the seven-day maximum RFC 8446
+  § 4.6.1 sets) are dropped when seen. **Each ticket is used once**: an
+  offer removes it, as Chrome does and the RFC recommends against linking
+  connections; the server's new tickets refill the key. Wiped on free.
+  `os64_tls_sessions_drop(void)` empties it, for the harnesses between
+  cases.
+- **EVERY ClientHello that may resume says how: `psk_key_exchange_modes`
+  (45) with `psk_dhe_ke` alone**, whether or not the cache holds a ticket
+  for the key (a config with port 0 sends neither extension, and its
+  hello is today's). ECDHE is always done, so a resumed connection keeps
+  forward secrecy and no 0-RTT is ever possible. It goes on every hello
+  because it is how a server learns the client can use a ticket at all:
+  RFC 8446 § 4.2.9 tells servers not to send tickets a client's modes
+  cannot use, and BoringSSL (Google's servers) and GnuTLS send none to a
+  hello without it — so a client that offered 45 only alongside a ticket
+  would never be given its first one. Chrome sends it on every hello too.
+- **The ClientHello offers a PSK when the cache has one for the key**:
+  `pre_shared_key` (41) LAST in the extension list as
+  the RFC requires, one identity (the ticket, `obfuscated_ticket_age` =
+  (age in ms + age_add) mod 2^32) and its binder. The binder is
+  HMAC(finished_key(binder_key), Transcript-Hash(the truncated
+  ClientHello)), binder_key = Derive-Secret(early_secret, "res binder",
+  ""), early_secret = Extract(0, PSK). The truncated hello ends with the
+  identities field: the binders list and the two-byte length in front of
+  it are left out of the hash, while every length field before that point
+  already counts them (RFC 8446 § 4.2.11.2). So the hello is built whole
+  with the binder's bytes reserved, hashed up to the end of identities,
+  and the binder filled in — the fiddly part, and the part the OpenSSL
+  server will check for us. The suite list is
+  unchanged; the ticket's hash must be one of the offered suites' (it
+  always is: we offer every suite the engine speaks).
+- **The server's answer.** `pre_shared_key` in the ServerHello with
+  `selected_identity` 0 means resumed: the key schedule's `early_secret`
+  is the PSK's, the handshake continues from EncryptedExtensions to
+  Finished with NO Certificate and NO CertificateVerify (a server that
+  sends them anyway after selecting the PSK is a protocol error), and the
+  state reports `resumed = true`. No `pre_shared_key` in the ServerHello
+  means declined: `early_secret` is Extract(0, 0^Hash.len) and the
+  handshake is the full one, as today. A server selecting a suite whose
+  hash differs from the ticket's while also selecting the PSK is a
+  protocol error (RFC 8446 § 4.2.11). On HelloRetryRequest the second
+  hello recomputes the age and the binder over the new transcript (§
+  4.1.2) and keeps the offer.
+- **Fallback.** The Bear TLS 1.2 client is untouched: no 1.2 session
+  cache. A 1.2 fallback connection is never resumed and never offers.
+
+**libfetch.** `dial` passes the peer port in the TLS config (resumption is
+on for every direct https dial); `os64_fetch_detail_t` gains
+`tls_resumed`, filled by `tls_snapshot`; the reason sentence does not
+mention it (it is not a failure), but yonder's request record gains a
+word for it beside the TLS version it already prints, and os64get's `-v`
+says it.
+
+**Proof.** The TLS 1.3 engine harness (tools/test_tls13_engine_host.py,
+which drives the engine against OpenSSL; TLS13.md § Proof names its
+ticket paths and `-num_tickets`): the first hello to a key with an empty
+cache carries extension 45 and no 41, and a hello under port 0 carries
+neither (checked on the hello's bytes, because OpenSSL may send tickets
+to a hello without 45 and so cannot be what proves it is there); a first
+connection
+yields tickets in the cache (count, lifetime kept); a second to the same
+key is resumed — the transcript shows no Certificate message, the state
+says `resumed`, the application data flows; a server started with
+`-num_tickets 0` leaves the cache empty and the next connection full; a
+server that declines (restart it, so its ticket key changes) falls back to
+a full handshake on the same connection attempt and refills the cache;
+expired entries are not offered (the clock is the harness's); a ticket
+over `TLS13_TICKET_MAX` is not kept; HRR (`-groups P-384` as the existing
+HRR case does) with a PSK offered, resumed on the second hello; a wrong
+binder (a mutant flips a byte) is refused by the server with
+`illegal_parameter`, and the harness proves the case fails without the
+mutant's catch; two keys that differ only by trust pointer do not share
+tickets; use-once (a third connection after two resumptions with one
+ticket each performs a full handshake). The fuzz loop
+(tools/fuzz_tls13_host.py) gains the PSK server extension shapes. Mutants
+through tools/mutants_parallel.py once at the end, twelve workers.
+**Measurement in the PR body:** handshake time in the guest, cold and
+resumed, against one host that sends tickets (micros around the dial in
+os64get `-v`), and the connection count unchanged on WIRE.md's blog page
+with its arrival time, before and after.
+
+#### H2.1, as built (2026-11-10, Fable)
+
+TLS13.md § Resumption is the record of what the engine does and of its
+proof; this is where the build departs from the brief above, or says more.
+
+- **The engine keeps nothing and reads no clock.** The brief put the
+  keeping of a ticket's fields in the engine and the cache beside it. The
+  engine (`tls13_resumption`, tls13_engine.h) is handed one session to
+  offer and hands back each one that arrives; the client wrapper owns
+  both, and the cache (`port/session_cache.c`) is the wrapper's. That
+  keeps the engine a thing the harness drives with no platform behind it.
+- **`OS64_TLS_RESUMED` is a flag, not a field.** The state's `flags`
+  already said what a connection is; the struct did not have to grow.
+- **The key's trust is an identity with a hold.** The cache is given a
+  pointer it compares and never looks into, and a retain/release pair it
+  calls once per entry; libtls passes the trust store and its own
+  reference count. The cache therefore has no trust-store code in it and
+  links into every harness that has the client engine.
+- **The second hello reports the first hello's age.** The brief had a
+  HelloRetryRequest's second hello recompute `obfuscated_ticket_age`. The
+  engine has no clock, the two hellos are a round trip apart, and with no
+  0-RTT a server has nothing to protect with the age; the binder, which
+  is what matters, is recomputed over the new transcript.
+- **A second hello drops an offer the retry made unusable.** When the
+  HelloRetryRequest fixes a suite whose hash is not the session's, the
+  session is not offered again, and a ServerHello may not accept what the
+  hello it answers did not offer.
+- **Lifetimes.** Zero is the server's "discard at once" and is not kept;
+  more than seven days is held to seven. `TLS13_ERR_PSK`
+  (`illegal_parameter`) is the engine's word for an acceptance it may not
+  honour: an identity it did not offer, or a suite of another hash.
+- **The clock is `os64_micros`**, which does not jump when the wall clock
+  is set: a session's age and its lifetime are both told by it.
+- **A redundant test left out of the cache.** "The clock has gone back"
+  needs no clause: the age is an unsigned difference, and a clock behind
+  the keeping reads as an age no lifetime reaches. A mutant that removed
+  the clause was not caught because nothing had changed; the clause went.
+- **The server that declines is another context, not a restarted
+  process.** The harness runs OpenSSL in process, so "restart it, so its
+  ticket key changes" is a second `SSL_CTX`, whose keys cannot open the
+  first one's tickets.
+- **libfetch.** Every direct https dial passes the peer's port. A fetch on
+  a kept connection reports that connection's own handshake, so
+  `tls_resumed` says how the connection was made, not whether this fetch
+  made it. `/tests/resumeprobe` is the hand probe: it opens one address
+  several times on connections of its own and says which resumed.
+- **A debt booked on the way** (DEBTS, beside "TLS 1.3 engine
+  boundaries"): the hello is still os64's own and a fingerprint tells it
+  from a browser's. Chris asked on 2026-11-10 whether it could ride this
+  slice; it is its own design, under the rule that a hello never
+  advertises what the client cannot honour or safely ignore.
+- **Proof beyond the engine harness.** The four TLS host suites and the
+  thirteen fetch, libway and os64get ones pass with the cache linked in;
+  the library's export audit passes with one new export and four new
+  imports; the fuzz loop ran 11,138 cases in two minutes with no
+  sanitizer finding. Thirty-seven hand mutants
+  (`tools/test_tls13_resumption_mutants.py`), every one caught, after a
+  first run that missed two: nothing had fed a ticket split across
+  records, so the code that reassembles one could be broken unseen.
+- **Measured in the guest** (QEMU under TCG, e1000 on slirp, one public
+  https site, `resumeprobe ... 4`): the first open, a full handshake,
+  407 ms; the three after it, each resumed on a connection of its own,
+  124, 140 and 125 ms. The first figure includes the name lookup, and TCG
+  overstates what the signature checks cost, so the P5 is the number to
+  trust.
+- **Measured on the P5, and what it says** (Chris, 2026-11-10, one public
+  site, `resumeprobe ... 4`): the full handshake's open 149 ms; the three
+  resumed ones 157, 139 and 160 ms. No difference outside the network's
+  own variation. A TLS 1.3 handshake is one round trip full or resumed,
+  and `psk_dhe_ke` resumption removes none of it: what it removes is the
+  certificate chain's bytes and the CPU that checks them, which on this
+  machine is milliseconds inside an open that is mostly round trips. The
+  brief's claim, and § 1's ranking of this slice as "the cheapest cut of
+  the same handshake cost", held under QEMU's emulated CPU and does not
+  hold on the hardware. What the slice buys on the P5 is a client that
+  resumes as every browser does, fewer bytes, and less work on a slow or
+  loaded CPU; what cuts a page's waiting is fewer handshakes, which is
+  H2.2's cap and H2.5's one connection per origin. Only 0-RTT would take a
+  round trip out of a reconnect, and § "The hello" in TLS13.md says why
+  that is not offered. **Not measured:** WIRE.md's blog page before and after, which the
+  brief asked for. Resumption changes no connection count, and that
+  page's arrival time under TCG is its scripts'.
+
+### H2.2 — Connections as shared objects, and the cap
+
+**What.** § 2.2's ownership model, built for h1 alone so it reviews on its
+own: `fetch_conn_t`, a count, a pool of pointers, and the per-key cap in
+front of the dial with its queue on the bell. Behaviour-neutral for a page
+that opens six connections or fewer; a page that dialled a host from
+every worker at once now opens six and queues the rest (its other workers
+wait in the queue, holding their threads), which is Chrome's behaviour and the DEBTS row "Fetches to
+one host are not capped at once" paid.
+
+**pool.h / pool.c.**
+- `kept_t` becomes `fetch_conn_t`, heap-allocated by the first take or
+  the dial that makes it: `key`, `io` (the transport), `protocol`
+  (`FETCH_PROTO_H1` only in this slice; the enum exists so H2.4 adds a
+  value, not a field), `refs`, `kept_at`, `dialling` (a reservation: the
+  slot is counted toward the key's cap while its dial is in flight, and
+  released if the dial fails). The pool table is `fetch_conn_t
+  *s_conns[FETCH_POOL_TOTAL]` — idle entries have `refs == 0`, live ones
+  `refs == 1`, dialling ones `dialling` set — and `FETCH_POOL_TOTAL`
+  stays sixteen and keeps its handle-table reasoning, now counting LIVE
+  connections too, which is a change: today sixteen idle plus a dozen in
+  use is twenty-eight handles, and the assert "a quarter of the table"
+  was written for the idle ones. The brief's number: the table counts
+  every connection libfetch holds, idle or live, and sixteen in all is
+  the cap for both; a fetch to a new host with sixteen LIVE or dialling
+  waits on the total exactly as a seventh to one host waits on the key's,
+  and with an idle one among the sixteen it closes that one and dials
+  (§ 2.2: an idle connection never makes a fetch wait). (The
+  builder measures a corpus page's distinct hosts at once; if sixteen
+  starves a page, the number moves and the reasoning in pool.h moves
+  with it.)
+- `fetch_pool_take(key, idle_most_ms, &conn)`: § 2.2's order less the h2
+  clauses: an idle connection of the key (probed by the caller as today),
+  else a dial slot if the key is under `FETCH_POOL_PER_KEY` and the table
+  under `FETCH_POOL_TOTAL` — making the slot, when an idle connection is
+  all that stands in the way, by closing it (§ 2.2: the table's least
+  recently kept idle one when the table is full; the key's own idle one
+  that this fetch passed over when the key is at its cap; closed after
+  the lock is let go, as the pool closes everything) — else WAIT. The
+  wait: the fetch's waiter node
+  (its bell, its key, a link) goes on the pool's waiter list under the
+  lock; the lock is released; `os64_bell_wait` under the remaining idle
+  patience; the node is REMOVED under the lock before any return (the
+  park-loop discipline, § 2.4's pipe.c citation applies in ring 3 too:
+  a node left on the list naming a fetch that returned is a wake of a
+  stranger or a read of freed memory); then the question is asked again.
+  `fetch_pool_put`, a dial's end and a failed probe's close ring EVERY
+  waiter whose key matches, and whatever frees a TABLE slot rings every
+  waiter (§ 2.2: a ring is a hint, and one waiter rung alone may be the
+  one that is leaving). The rings are made under the pool's lock (§ 2.4).
+  A fetch whose patience runs out waiting answers
+  `OS64_FETCH_DIAL_FAILED` with `detail.dial = OS64_NET_ERR_NO_RESOURCES`
+  and `why` saying "waited <n> ms for one of <key>'s <cap> connections",
+  because "no road within patience" is the truth of it; a cancelled wait
+  is `INTERRUPTED`.
+- `fetch_pool_put(conn)` decrements, keeps when `connection_reusable`
+  said so (the caller's judgement, as today), frees the object otherwise,
+  rings as above. `fetch_pool_evict_one` and `fetch_pool_drain` keep
+  their contracts over the new table (a live connection is never
+  evicted). `fetch_pool_idle()` counts `refs == 0`; a `fetch_pool_live()`
+  joins it for the harness.
+- One lock still, held to take, put, reserve or release a slot, to edit
+  the waiter list, and to ring the bells on it. Never across a dial, a
+  probe, a close or a bell wait.
+
+**fetch.c.** `take_kept` (built as `acquire`), `dial` and `release_connection` speak to connections
+instead of transports; the fetch gains its bell, made on the first wait
+and closed with the fetch (`os64_fetch_close`); the retry rule, the 408
+rule, the probe and the ONCE_MS rule are untouched and their cases prove
+it.
+
+**Proof.** tools/test_fetch_pool_host.c (the pool's threaded harness,
+pthreads under the sanitizers — the "two threads never share a
+connection" sweep lives there) for every case that waits, and
+tools/test_fetch_host.c (one thread, the scripted peer) for the rest: a
+seventh fetch to a key with six live waits and
+proceeds when one is put back; it proceeds when one dies; it is
+INTERRUPTED when cancelled while waiting and its node is gone (a mutant
+that skips the removal is caught by the sanitizer's read of the freed
+node); its patience expiring answers DIAL_FAILED with the sentence; a
+new key with sixteen live waits on the total, and with fifteen live and
+one idle it closes the idle one and dials without waiting; a request sent
+once at a key's cap with an idle connection too old for it closes that
+one and dials; three waiters on one key and the first rung cancelled as
+it wakes — a put still reaches one of the other two (a mutant that rings
+one waiter strands them and is caught by their patience expiring); a
+ring made after a waiter left reaches no bell (the harness's bell stub
+fails the case on a ring to a closed bell); a dial slot reserved by a
+dial that fails is released and the waiters rung; every existing pool
+case passes
+unchanged (reuse, eviction, the probe, the retry rule, ONCE_MS) with the
+counts read through the new accessors; the sweep that proves two threads
+never share a connection stays. The harness stubs the bell behind
+`os64_bell_t` (make, wait, ring, close), which is the whole of what the
+pool sees of it. QEMU `make run-net` against the W2 local page: the dump shows at most
+six SYNs to the host at once and the requests queued behind them, and the
+arrival time within the W2 figures. P5: Chris on the blog page and the
+storefront, by feel and by the record's connection count.
+
+#### H2.2, as built (2026-11-10, Fable)
+
+The pool is `userland/libfetch/pool.c` still, with pool.h's contract
+rewritten; fetch.c asks it through `acquire`. Where the build departs from
+the brief above, or says more than it did:
+
+- **What it removes, said first** (the lesson of H2.1's measurement). Not
+  latency by itself. A page that asked one host for twelve things at once
+  opened up to thirteen connections and now opens six: up to seven fewer
+  TCP and TLS handshakes a burst, and a client that looks like a browser
+  to the server. The requests that would have dialled wait for one of the
+  six instead, so a page of many small same-host requests should load
+  about as fast, and one whose replies are slow can load SLOWER, at half
+  the parallelism: Chrome's own trade. What makes a page faster is H2.5,
+  where the twelve go at once down one connection; this slice is the
+  ownership that needs, and the cap HTTP/1.1 sites get meanwhile.
+- **THE WAIT IS NOT UNDER THE FETCH'S IDLE DEADLINE.** § 2.2 and the brief
+  put it there. That deadline measures a server's silence, thirty seconds
+  by default; a fetch in this queue is waiting on its own program's other
+  fetches, and six slow downloads to one host would have failed the
+  seventh at thirty seconds where before it simply dialled. The wait has
+  its own bound, `FETCH_POOL_WAIT_MS`, five minutes: a browser's queue has
+  none, and this one has a long one so that connections held by fetches
+  nobody is reading end as a named refusal and not as a wait nobody can
+  explain. Cancellation is a flag that rings nothing, so a waiter looks
+  up once a second (`FETCH_POOL_LOOK_MS`) to ask, and leaves as
+  INTERRUPTED within that.
+- **A connection's transport is lent, not shared.** `fetch_conn_t` is the
+  heap object the brief asked for (key, transport, protocol, count, when
+  it was kept, whether it is being dialled). An HTTP/1.1 connection has
+  one user, so the fetch still works on its own copy of the transport, as
+  it always did, and the object holds the transport while the connection
+  is idle. H2.4's connections keep theirs in the object.
+- **`fetch_pool_take` answers one of two things to do**: KEPT (probe it;
+  `fetch_pool_gone` if the probe refuses) or DIAL (a slot reserved;
+  `fetch_pool_dialled` or `fetch_pool_gone`). The old pool's `put` took a
+  key and found a slot; now a connection has had its slot since before
+  its dial, which is what makes the cap a cap on what a server sees.
+- **Room is made before the dial, not after the put.** With the table
+  full, the least recently kept connection goes when the next dial needs
+  its slot. The old pool closed it when the seventeenth was given back. A
+  consequence in the harness: "out of handles" now needs a task with one
+  handle fewer than before to reach the refused dial.
+- **Every waiter is rung at every put and every departure**, of any key:
+  a connection given back is one a waiter of its key can take and one a
+  waiter of another key can put out for its slot.
+- **A fetch that cannot have a bell cannot wait**, and says so
+  (`FETCH_POOL_FAILED`, DIAL_FAILED with the sentence). The bell is made
+  at a fetch's first wait and closed with the fetch, after its connection
+  is released.
+- **The reason sentence.** A wait that ran out is DIAL_FAILED with
+  `detail.dial = OS64_NET_ERR_NO_RESOURCES`, and the sentence is the
+  pool's ("waited N ms for one of the 6 connections to it, all in use",
+  or "one of this program's 16 connections" when it was the whole table
+  that was full), not the kernel's word for no resources, which would
+  point at the wrong thing.
+- **`fetch_pool_counts`** reads the kept and the in-use counts in one
+  look. The harness needed it: adding two separate reads counted a
+  connection twice as it changed hands.
+- **`tools/host_bell.c`** is os64/bell.h for the host harnesses that link
+  the pool: a mutex and a condition with the bell's three rules, a ring of
+  a bell that is not one stopping the program, and hooks only a stand-in
+  can give (a wait that never blocks, for a harness with one thread; an
+  interrupt, as a caught signal would be; a refusal to make one).
+- **Proof.** `tools/test_fetch_pool_host.sh` (ASan and UBSan, then TSan):
+  each rule of the cap and the wait as a case of its own, then eight
+  threads on three keys, 160,000 asks, about 26,000 connections made,
+  never seven in use to a key or seventeen held in all, several hundred
+  to some 1,500 waits a run, every connection closed once; ten runs in a row clean. (One TSan report
+  on an earlier run, before a read the harness itself made of a field
+  another thread was writing was replaced with an atomic flag; it was not
+  kept and has not come back.) `tools/test_fetch_host.sh`: the six-per-key
+  case rewritten for the cap, with the wait's sentence checked word for
+  word, and a check at the end that no case left a fetch holding a place
+  or a bell; 2,781 checks. The libway, os64get, wend and yonder fetch-job
+  suites pass with the pool linked in. Mutants:
+  `tools/test_fetch_keepalive_mutants.py`, 102 of 102 caught, 26 of them
+  new for the cap and the wait. The first run missed two (the order
+  `fetch_pool_evict_one` closes in, which the fetch harness no longer
+  reaches now that room is made before the dial, and a cancelled waiter
+  taking the connection that rang it); each has a pool case now.
+- **In the guest** (QEMU under TCG, e1000 on slirp, one public site):
+  `/tests/capprobe <address> 12` starts twelve fetches at one moment, each
+  holding its connection a third of a second: none failed, and at most six
+  held a connection at once. `testrun`: 63 passed, 0 failed, 6 skipped.
+  **Not done:** the brief's `make run-net` dump counting SYNs on the W2
+  page, and the corpus page's count of distinct hosts at once (whether
+  sixteen in all starves a page). capprobe shows the cap on the wire's
+  near side; the SYN count would show it on the far side.
+
+### H2.3 — Framing and HPACK
+
+**What.** Two pure libraries in libfetch with no kernel or syscall
+dependency, host-tested, unreachable from any program until H2.4 calls
+them: `userland/libfetch/h2_frame.c/.h` (the frame layer) and
+`userland/libfetch/h2_hpack.c/.h` (field compression). Plus the pure
+validators H2.4 will need and this slice can prove alone:
+`h2_head_check` (RFC 9113 § 8.2's rules on a decoded field list) and the
+error-code and setting-identifier name tables.
+
+**h2_frame.**
+- `h2_frame_header_t` (length, type, flags, stream id) from nine bytes,
+  with the reserved bit cleared; `h2_frame_parse(header, payload, len,
+  our_max_frame_size, &frame)` validates length against type (SETTINGS a
+  multiple of six and zero when ACK, PING eight, WINDOW_UPDATE four with a
+  nonzero increment, RST_STREAM four, GOAWAY at least eight, PRIORITY
+  five), stream-id rules per type (zero where the type is a connection's,
+  nonzero where it is a stream's), padding (PADDED flag: the pad length
+  byte and that it fits, on DATA and HEADERS and PUSH_PROMISE), the
+  PRIORITY fields on a HEADERS with the flag, and hands back the payload's
+  meaningful bytes. Unknown frame types are a parsed frame of kind
+  `H2_FRAME_UNKNOWN` (RFC 9113 § 4.1: ignored, never an error). A
+  violation is `H2_ERR_FRAME_SIZE` or `H2_ERR_PROTOCOL` with which rule,
+  for the connection to turn into a GOAWAY.
+- Writers for every frame the client sends: SETTINGS (a list of
+  identifier/value pairs IN THE ORDER GIVEN — the greeting's order is
+  data, § 2.9), SETTINGS ack, WINDOW_UPDATE, PING ack, RST_STREAM, GOAWAY,
+  HEADERS (with END_HEADERS and END_STREAM flags, and CONTINUATION split
+  when the block is past the peer's max frame size), DATA (cut to a size
+  the caller gives), PRIORITY (for a preset that sends them). Each writes
+  into a caller's buffer and refuses what does not fit.
+- The connection preface string, and the SETTINGS and error-code names
+  (`h2_error_name`, `h2_setting_name`) for reason sentences and `/sys`
+  style readers later.
+- CONTINUATION reassembly is a small state object: a HEADERS or
+  PUSH_PROMISE without END_HEADERS opens a block; only CONTINUATION on the
+  same stream may follow until END_HEADERS; anything else is a connection
+  error; the block is bounded by the caller's head limit (§ 2.7's "decode
+  anyway, then reset" is the CONNECTION's policy — this layer only
+  enforces the hard cap past which the connection is closed).
+
+**h2_hpack.**
+- Decoder: `h2_hpack_decoder_t` with the static table (61 entries, RFC
+  7541 Appendix A), a dynamic table bounded by the size WE advertised
+  (`SETTINGS_HEADER_TABLE_SIZE`, the preset's value), integer decoding
+  with a width cap (an integer past 2^31 is an error, not a wrap), string
+  decoding plain or Huffman (the 257-symbol code of Appendix B as data; a
+  padding longer than seven bits, or not all ones, or an EOS symbol in the
+  string, is `H2_ERR_COMPRESSION`), dynamic table size updates (allowed
+  only at a block's start, never above the advertised maximum), indexed
+  and literal representations with and without indexing, the
+  never-indexed flag carried to the caller. `h2_hpack_decode(dec, block,
+  len, emit, ctx)` calls `emit(name, name_len, value, value_len, sensitive)`
+  per field in order; it decodes THE WHOLE BLOCK even when the caller's
+  emit says "too much" (§ 2.7), so the table stays in step.
+- Encoder: `h2_hpack_encoder_t` with a dynamic table bounded by the PEER's
+  advertised size (4096 until its SETTINGS say otherwise; a shrink is
+  announced with a table size update at the next block's start as the RFC
+  requires), indexing policy: a field found in either table by name and
+  value is sent indexed; one found by name alone is sent literal with
+  incremental indexing; `authorization` and a caller-marked sensitive
+  field are sent never-indexed; strings are Huffman-coded when that is
+  shorter. Cookie crumbling is the connection's (§ 2.7), above this
+  layer.
+- `h2_head_check(fields, n, is_response)`: names lowercase and legal
+  field bytes, pseudo-headers before regular ones and only the four
+  request ones or `:status`, none duplicated, no connection-specific
+  field, no `te` other than `trailers`, a `content-length` that parses.
+  Returns the rule broken, for a stream error.
+
+**Proof.** tools/test_h2_host.sh (one script building both files with
+their test under ASan/UBSan, the test_fetch_host.sh shape): RFC 7541
+Appendix C's worked examples, every one, byte for byte in both
+directions (C.1 integers, C.2 literals, C.3 and C.4 request sequences
+plain and Huffman with the dynamic table's state checked after each, C.5
+and C.6 responses with evictions); every frame type's length and
+stream-id rules, each violation named; padding rules; CONTINUATION
+reassembly across one, two and three frames and the interleaving errors;
+unknown types ignored; a block fed one byte at a time through the
+reassembler; the head-check rules one by one; the encoder's table
+shrinking on a smaller peer setting; a fuzz loop over random blocks and
+frames under the sanitizers (tools/fuzz_tls13_host.py's shape) run for a
+fixed count in the script. A mutant per rule, run once at the end. No
+QEMU: nothing in this slice runs in the guest yet.
+
+#### H2.3, as built (2026-11-10, Fable)
+
+`userland/libfetch/h2_frame.c/.h` and `h2_hpack.c/.h`, with RFC 7541's two
+tables as data in `h2_hpack_tables.h`. They are compiled into libfetch.so
+and nothing calls them: no program's behaviour changes with this slice.
+(libfetch.so exports every symbol it defines, these among them, as it
+does the pool's; no header a program includes declares them. An earlier
+wording here said the library hid its symbols, which it does not.) Where the build departs from the brief,
+or says more than it did:
+
+- **A fault says whose it is.** `h2_fault_t` is the error code, the rule,
+  and whether RFC 9113 makes it the stream's or the connection's. Two
+  frame rules are the stream's (a PRIORITY of the wrong length, a
+  WINDOW_UPDATE of nothing on a stream); the connection would otherwise
+  have had to know that by frame type.
+- **`h2_frame_header_check`** judges a header alone, so a connection can
+  refuse a frame longer than its max frame size before reading sixteen
+  megabytes of it. `h2_frame_parse` takes the payload's length from the
+  header and not as a separate argument.
+- **`flow_len`** on a parsed DATA frame is the whole payload, padding
+  included, which is what the windows are charged (§ 6.9.1); `data_len`
+  is the body's bytes alone.
+- **`h2_setting_check`** judges a setting's value (ENABLE_PUSH, the
+  initial window's 31 bits with its own error code, the max frame size's
+  two bounds). The brief did not list it; H2.4 applies the peer's
+  settings and would have written it there.
+- **Names are never NULL**: an error code or a setting this file has no
+  name for answers "UNKNOWN_ERROR" or "UNKNOWN_SETTING", since a peer may
+  send either and a reason sentence must print something.
+- **The reassembler copies every fragment** into the caller's buffer,
+  the one-frame block included, so there is one path. A block past the
+  buffer is the connection's ENHANCE_YOUR_CALM.
+- **HPACK allocates nothing.** Each side is given its storage once
+  (`H2_HPACK_STORAGE(size)`), and the decoder a scratch for one literal
+  field. A literal's name and value are copied to the scratch before the
+  field is added, which is what makes RFC 7541 § 4.4's case sound: a
+  field named by the index of the entry its own insertion evicts.
+- **Three answers from a decode.** `H2_HPACK_OK`; `H2_HPACK_REFUSED`, the
+  block decoded whole and the table in step but its fields not all
+  delivered (the caller's emit said enough, or a field was larger than
+  the scratch), which is the stream's problem; `H2_HPACK_BAD`, the
+  connection's COMPRESSION_ERROR.
+- **The decoder's table size has a before and an after.** Until the peer
+  has acknowledged our SETTINGS it may encode against the default 4096
+  whatever we advertised, so the decoder allows the larger of the two;
+  `h2_hpack_decoder_settings_acked` then holds it to what we advertised,
+  and when that is under the table's size at that moment, the peer's next
+  block must begin with the size update that shrinks it (RFC 7541 § 4.2)
+  or the connection ends.
+- **The encoder has a ceiling of its own** (its storage) and follows the
+  peer's size up to it, announcing each change at the next block's start,
+  the smallest size it passed through first. An encoder made with a
+  ceiling under 4096 announces that in its first block.
+- **A field too large for the table is sent without indexing**, not
+  added: adding it would only empty the table.
+- **A sensitive field is never sent as an index**, even when a table
+  holds it whole: an index carries no never-indexed instruction, and a
+  decoder hands it over as an ordinary field. (Codex, on the PR.)
+- **"Huffman when shorter" is not "Huffman always"**, and one of the
+  RFC's examples shows the difference: C.6.2's `:status: 307` is three
+  bytes either way, the RFC's encoder codes it and ours does not. The
+  harness checks our bytes for that one string and the RFC's bytes for
+  everything else, in both directions. The encoder has a `huffman` switch
+  (on by default) because C.3 and C.5 are the plain-string examples.
+- **An integer is at most 2^31 - 1 and at most five continuation bytes.**
+- **Padding is judged after a frame's fixed fields.** A HEADERS or
+  PUSH_PROMISE too short to hold its priority fields or its promised
+  stream is FRAME_SIZE_ERROR; one that holds them, with padding longer
+  than what is left for the block, is PROTOCOL_ERROR (§§ 6.2, 6.6).
+- **An owed size update is owed by the very next block**, an empty one
+  included.
+- **`h2_head_check` takes a kind** (request, response, or trailers, which
+  may carry no pseudo-header at all) and answers which field broke the
+  rule. Beyond the brief's list it requires a response's `:status` to be
+  three digits, a request's method, scheme and path to be present
+  (`:authority` may be absent, § 8.3.1), and a value to carry no NUL, CR
+  or LF and no space or tab at either end (§ 8.2.1). CONNECT's different
+  pseudo-header set is not modelled (§ 2.10).
+- **Proof.** `tools/test_h2_host.sh` under ASan and UBSan, 630,000-odd
+  checks in about eleven seconds: the Huffman code proved canonical and
+  complete from its lengths; RFC 7541 C.1 to C.6, each block in both
+  directions with the table read after it; every frame type's rules by
+  name; the writers read back through the parser, HEADERS split at ten
+  block sizes around the frame boundary; reassembly including a block
+  one byte to a frame; each of the decoder's refusals; the head rules one
+  at a time; and three random loops (blocks at a decoder, frames at the
+  parser, field lists through an encoder into a decoder with the table
+  size moving). Mutants: `tools/test_h2_mutants.py`, 215 of 215 caught,
+  one deliberate break to a rule. The first whole run caught 192: ten
+  mutants did not compile and were rewritten, five were gaps in the
+  harness and each has a case now (a setting identifier past one byte,
+  the settings count asked of another frame, a content-length of `-`, a
+  plain string copied past the scratch, a name and a value that fit the
+  scratch apart and not together), and one was a line in the encoder
+  that did nothing, which is gone.
+- **The harness ends itself.** It stops at its fiftieth failed check and
+  sets a two-minute alarm. One mutant (the table evicting nothing) made a
+  loop here print a failure line for each of a wrapped entry count, at
+  125 MB a second, into a log the mutant harness then read back whole:
+  it filled the disk and then memory, twice, before it was found. The
+  runner's own ceilings are `tools/mutants_parallel.py`'s (#534).
+- **The sanitizer does not watch libos64's long copies** in a host
+  harness (DEBTS § Build system), so the harness keeps guard bytes after
+  the decoder's scratch and checks them.
+- **A second opinion on the decoder**, run once on the host and not kept
+  in the tree: the hpack-test-case stories that ship in the WPT checkout
+  (the output of eleven other implementations' encoders), 36,990 blocks
+  and 430,305 fields, every one decoded to the fields the corpus lists.
+
+### H2.4 — The connection
+
+**What.** `userland/libfetch/h2_conn.c/.h`: one HTTP/2 connection as an
+object, with its reader thread, its streams, its windows and its one way
+of dying. It is the first caller of h2_frame and h2_hpack. Nothing in
+fetch.c calls it in this slice: it is proved alone, against a scripted
+peer, with real threads under the sanitizers. Joining it to fetches (the
+pool's h2 clauses, the retry rules, the error words) is H2.6, split from
+this slice by Q4's ruling; `dial` offers `http/1.1` alone until H2.5 either way.
+
+Contracts: § 2.3 (the reader and its slices; the engine under the lock;
+the out queue and its drainer; `dying`, and the reader as the socket's
+only closer), § 2.4 (a ring is made under the lock its owner withdraws
+the bell under), § 2.5 (every way a stream and a connection end), § 2.6
+(windows and buffers), § 2.7 (the head limit).
+
+**The first question of the code, answered: the wrapper hands its engine
+over.** `os64_tls_transport` (libtls/transport.c) is a struct of the
+engine (`os64_tls_client *`), the socket, and two ciphertext buffers. The
+dial stays the wrapper's to the end of the handshake, and libtls gains
+one verb:
+
+    os64_tls_status_t os64_tls_transport_release(os64_tls_transport *transport,
+        os64_tls_client **client, int32_t *handle, void *unread, size_t room, size_t *unread_len);
+
+Legal once the handshake is done, with nothing closing and no ciphertext
+of its own still to send (it flushes first, under the caller's patience,
+and refuses if that does not empty it). It hands back the engine, the
+socket, and whatever ciphertext it had read and not yet fed (the server's
+SETTINGS may ride in the same segment as its Finished), wipes and frees
+the wrapper, and closes nothing. On refusal the wrapper is intact and the
+caller closes it as it would have. Building the connection on the engine
+API from the first byte was set aside: it is the handshake loop, its
+deadline and its resumption plumbing written a second time.
+
+**Sizes and times, each with its reason.**
+
+| Name | Value | Why |
+|---|---|---|
+| `H2_READER_SLICE_MS` | 100 | How long the reader sleeps in one read. It is the most a connection condemned from outside lingers, which a fetch needing that socket's place waits out, and it costs ten wakes a second for each h2 connection. It was 500 until the P5 measurement (H2.5, as built): a page of thirty hosts evicts on nearly every new host, and the linger was seen. |
+| `H2_WRITE_PATIENCE_MS` | 30000 | How long the socket may refuse the queue's head before the connection dies: `FETCH_IDLE_MS_DEFAULT`, since the bytes are every stream's and no one fetch's deadline is theirs. |
+| `H2_OUT_MARK` | 256 KiB | Past this much queued ciphertext, a sender with DATA or with a new stream to open parks. Sixteen full frames: enough that a fast socket never parks a sender, little enough that a stalled one is felt by the sender and not by memory. |
+| `H2_OUT_CONTROL_MOST` | 1 MiB | Past this much queued, the frames a PEER makes us owe (PING and SETTINGS acks, resets, credits) end the connection with ENHANCE_YOUR_CALM. A peer that floods pings at a socket it will not read is otherwise a way to grow the queue without bound. |
+| `H2_STREAMS_MOST` | 64 | The stream table's size, a task's handle count: a fetch holds a bell, so no task has more fetches than handles. The peer's MAX_CONCURRENT_STREAMS lowers it. |
+| `H2_BLOCK_MOST` | 256 KiB | The reassembler's room: the hard cap on one compressed field block, past which the connection ends (ENHANCE_YOUR_CALM). Four times the head limit below, so a head merely too large is the stream's problem and only an abusive one is the connection's. |
+| `H2_HEAD_MOST` | 64 KiB | The decoded head a stream keeps (`YONDER_FETCH_HEAD_MAX`'s figure, now libfetch's for h2). Past it the block is still decoded, the stream is reset with ENHANCE_YOUR_CALM, and its fetch ends UNSUPPORTED (§ 2.7). RFC 9113 § 10.5.1 asks only that the block be processed, which it is. |
+
+A connection costs about 400 KiB before any body arrives: the decoder's
+table and scratch at a 65,536-byte advertised size (the presets'), the
+encoder's at 4,096 (its ceiling here, whatever a peer allows; § 2.9 does
+not match the encoder's choices), the reassembler's room, and the reader's
+1 MiB of stack address space, of which it touches a few pages. Body
+buffers grow on demand to what is unread, and the CONNECTION window bounds
+their sum: at Chrome's 15 MiB, sixteen connections whose every server
+floods and whose every fetch has stopped reading hold 240 MiB, and a
+connection whose fetches are reading holds a frame or two. (Q2, ruled:
+the windows are the preset's.)
+
+**Two objects, one lock, one count.**
+
+`h2_conn_t` holds: the engine and the socket; the out queue (a list of
+16 KiB blocks, its byte counts for data and for control, the `draining`
+flag, and when its head was first refused); the stream table; the next
+stream id; what the peer set (max streams, initial window, max frame
+size, header table size) and whether it has acknowledged ours; the two
+connection windows; the HPACK encoder; `dying` with its reason, `goaway`
+with the last stream id, `quiet` (§ 2.5's silent connection: no new
+stream); a count of frames received; and `holds`.
+
+`h2_stream_t` holds: its id; its fetch's bell; the final head as decoded
+bytes, or that it was refused; the body buffer; the two stream windows
+and the bytes consumed since the last WINDOW_UPDATE; whether each side
+has ended; and how it ended, when it did not end well (the peer's reset
+and its code, the connection's death and its reason, a GOAWAY that never
+processed it, a head we refused).
+
+- **The connection lock** guards all of the above. It is held for engine
+  calls and bookkeeping and never across a syscall that can block. A bell
+  is rung under it, which is what lets a fetch withdraw its bell under it
+  (§ 2.4).
+- **What the reader owns alone, with no lock:** its read buffer, the
+  frame it is assembling, the reassembler, and the HPACK DECODER. Only
+  the reader decodes, so a block is decoded outside the lock into the
+  reader's own list, and the lock is taken to hand the result to a
+  stream. The lock is therefore held for a delivery and not for a decode.
+- **Lock order: the pool's, then a connection's.** Never the pool's while
+  holding a connection's. The reader takes the pool's lock for the idle
+  verdict and to tell the pool of a death or of room; it holds no
+  connection lock when it does.
+- **`holds` is the object's life**: one for the pool's table while the
+  connection is listed, one for the reader while it runs, one for each
+  stream. It is counted atomically and whoever takes it to zero frees the
+  engine, the queue and the object. A stream is freed by its fetch and by
+  nobody else: the reader marks a stream ended and rings; it never frees
+  one. So a fetch's stream pointer is good until that fetch closes it,
+  and the connection under it is good for as long.
+
+**The reader, pass by pass.**
+
+1. Read the socket for at most a slice, with no lock held.
+2. With bytes: take the lock, feed the engine, move plaintext to the
+   reader's buffer and whatever ciphertext the engine now owes (a
+   KeyUpdate reply, an alert) to the out queue, let the lock go.
+3. Cut whole frames from the buffer. `h2_frame_header_check` judges a
+   header before its payload is waited for. Each frame goes through
+   `h2_frame_parse` and the reassembler; a complete block through the
+   decoder; then the lock is taken and the frame is delivered (below).
+4. Drain the out queue with no patience (§ 2.3), if nobody is draining.
+5. With or without bytes, look around: is the connection dying; has the
+   queue's head been refused for longer than the write patience; has the
+   connection idled out (the pool's verdict, under the pool's lock).
+6. Dying, and nobody draining: close the socket, end every stream that
+   has not ended, tell the pool, drop the reader's hold, and exit.
+
+A read of zero bytes is the peer's FIN and an error is a transport
+failure: both are step 6 with their reason.
+
+**What each frame does on delivery.** A stream id we never opened, or an
+even one, is the connection's PROTOCOL_ERROR wherever a stream is needed.
+"Closed" below is a stream we opened that has since been closed or reset.
+
+| Frame | On an open stream | On a closed stream |
+|---|---|---|
+| DATA | Charged to both receive windows by its whole payload; past either window is FLOW_CONTROL_ERROR (the stream's, or the connection's). The body bytes are appended and the bell rung; padding is credited at once, having no reader. END_STREAM ends the peer's side. The body's bytes are counted against the head's `content-length`, when it had one (below). | Charged to the connection's window and credited straight back (§ 2.6). |
+| HEADERS | Judged by `h2_head_check`. A 1xx head is dropped and the wait goes on. The final head is kept and the bell rung. A second head is trailers: it must end the stream, and its fields are dropped. A head that breaks a rule resets the stream (PROTOCOL_ERROR) and ends its fetch BAD_HEAD; one past `H2_HEAD_MOST` resets it (ENHANCE_YOUR_CALM), UNSUPPORTED. | Decoded, since the table must see it, and dropped. |
+| RST_STREAM | Before the peer's END_STREAM: the stream ends with the peer's code, and the bell is rung. AFTER it: the response is whole and stays whole, whatever the code; the reset only stops our sending (below). | Ignored. |
+| WINDOW_UPDATE | Added to the stream's send window (or the connection's, on stream 0) and every sender waiting on it is rung. Past 2^31 - 1 is FLOW_CONTROL_ERROR, the stream's or the connection's. | Ignored. |
+| SETTINGS | Each value judged by `h2_setting_check`, then applied: the header table size to the encoder; the initial window as a difference to every stream's send window, which may go negative and may not pass 2^31 - 1; max frame size and max streams as they are. Then our acknowledgement is queued. The peer's acknowledgement of ours tells the decoder (`h2_hpack_decoder_settings_acked`). | |
+| PING | An acknowledgement is queued; an acknowledgement received is dropped. | |
+| GOAWAY | No new stream. Streams above its last id end as never processed (§ 2.5: retried whatever their method). With an error code it is the connection's death. | |
+| PUSH_PROMISE | The connection's PROTOCOL_ERROR (§ 2.10). | |
+| PRIORITY, unknown | Dropped. | |
+
+**A response's length is checked, and its end is not always a failure.**
+
+- **`content-length` against DATA** (RFC 9113 § 8.1.1). A stream whose
+  final head carried a `content-length` keeps that number and the count
+  of body bytes delivered, padding left out. A DATA frame that takes the
+  count past it, or an END_STREAM that arrives short of it (on DATA, or
+  on the final HEADERS itself), is a malformed response: the stream is
+  reset with PROTOCOL_ERROR and ends as a truncated body does on h1,
+  BROKE, and never as a successful end. Exempt, because their
+  content-length describes content they do not carry: a stream opened
+  `bodiless`, and a 304. `h2_head_check` judges only that the number
+  parses; the count is the stream's.
+- **A reset after a whole response stops the upload and nothing else**
+  (RFC 9113 § 8.1). A server may answer before it has read the request,
+  and then send RST_STREAM(NO_ERROR) to stop the rest of it. When a reset
+  arrives on a stream whose peer side has ended, the head and the body
+  already delivered are kept and are read to their successful end;
+  `h2_stream_send` answers "stop", so the fetch sends no more
+  (`sent_whole` stays false) and goes to read its response; and no reset
+  of our own is sent for it at close. That holds in whatever order the
+  fetch gets to them: the END_STREAM and the reset may both have arrived
+  before it reads a byte. The code is kept for the detail.
+
+The server's first frame must be SETTINGS (RFC 9113 § 3.4); anything else
+is PROTOCOL_ERROR. A connection error we raise queues GOAWAY with the
+code, sets `dying`, and is the death of step 6.
+
+**The out queue has a ceiling, and here is the sum.** Three kinds of
+bytes enter it. What can wait (DATA, a new stream's HEADERS) parks at
+`H2_OUT_MARK`, so it adds at most the mark and one sender's frame beyond
+it: a block of at most `H2_HEAD_MOST`, or one DATA frame. What a PEER
+makes us owe is counted and ends the connection at `H2_OUT_CONTROL_MOST`.
+What a stream's own life owes without waiting is bounded by the streams
+that were let in: one RST_STREAM at its close, and credits that follow
+what was consumed, of which a stream has one outstanding for itself and
+the connection one for all (a credit not yet in the queue is a number
+that grows, not a second frame). So a stalled socket holds at most the
+mark, a head, the control ceiling, and a reset for each stream admitted
+since it stalled, and no more streams are admitted past the mark. A
+thread that opens and cancels streams against a stalled socket fills the
+queue to the mark and then parks at the door.
+
+**What a fetch's thread calls** (H2.6's fetch.c; the harness now). Every
+wait takes the pool's wait shape from H2.2 (a bell, a patience, a
+cancellation predicate) and looks up as that does, so a cancellation is
+noticed within `FETCH_POOL_LOOK_MS`.
+
+- `h2_conn_adopt(engine, socket, unread, greeting, hooks)`: queues the
+  preface, the greeting's SETTINGS and its WINDOW_UPDATE, starts the
+  reader, and returns the connection holding the pool's hold. The
+  greeting is a parameter (H2.5 supplies each preset's); `hooks` are the
+  pool's three calls: the idle verdict, "this connection has room", "this
+  connection is dead".
+- `h2_conn_room(conn)`: not dying, no GOAWAY, not quiet, and streams under
+  the lesser of the peer's limit and `H2_STREAMS_MOST`.
+- `h2_stream_open(conn, fields, count, ends, bodiless, wait, &stream)`:
+  parks while the queue is past `H2_OUT_MARK`; then, under the lock,
+  takes the next id, encodes, writes HEADERS, queues; then drains.
+  Refused when the connection has no room, with which reason, and when
+  the fields encode past `H2_HEAD_MOST`. `bodiless` says the reply
+  carries no content whatever its content-length says (a HEAD).
+- `h2_stream_send(stream, bytes, len, ends, wait)`: DATA, cut to the
+  peer's frame size and to both send windows; parks on the bell for
+  window, and for the queue when it is past `H2_OUT_MARK`. It answers
+  "stop" when the peer has ended the stream under it (below).
+- `h2_stream_head(stream, wait, emit, ctx)`: waits for the final head and
+  hands its fields over in wire order.
+- `h2_stream_read(stream, buffer, room, wait)`: bytes; 0 at the peer's
+  END_STREAM; negative when the stream ended otherwise or the wait did.
+  After consuming, it sends the stream's WINDOW_UPDATE at half the stream
+  window and the connection's at half of its own.
+- `h2_stream_close(stream)`: takes the bell out under the lock; if either
+  side had not ended and the peer has not reset it, queues
+  RST_STREAM(CANCEL) and drains with no patience; credits what is unread
+  to the connection; frees the stream and drops its hold. Never waits.
+- `h2_stream_ended(stream)`: how it ended, the error code and whose it
+  was, for the detail and the reason sentence (§ 2.8).
+- `h2_conn_condemn(conn)`, `h2_conn_release(conn)`: the pool's, for
+  eviction and for dropping its hold.
+
+A wait that runs out of patience ends SILENT; if no frame of any kind
+reached the connection while it waited, the connection is marked `quiet`
+(§ 2.5).
+
+**How `fetch_pool_drain` waits for the readers** (§ 2.3 left it here):
+it condemns each h2 connection and parks on a bell that the "dead" hook
+rings, under the pool's lock, as each reader leaves; it has waited for
+them all within a slice, or within the write patience when a drainer is
+blocked. Only harnesses drain. The hook is this slice's; the pool's side
+of it is H2.6's.
+
+**Not in this slice, and where each is.** SETTINGS_TIMEOUT (we never end
+a connection because a peer was slow to acknowledge; a DEBTS row with
+H2.5's). A GOAWAY of our own on an idle close (the socket is closed; a
+row). Everything of § 2.10.
+
+**Proof.** `tools/test_h2_conn_host.sh`, the pool harness's shape: ASan
+and UBSan, then TSan, real threads. The far end is `tools/h2_peer.c`, a
+scripted server over an in-memory socket whose reads can be made to stall:
+
+- **The engine stand-in numbers its records.** Each plaintext write
+  becomes a record with a sequence number, and the peer refuses a record
+  out of order, repeated or cut. That is what makes the out queue's one
+  rule (records reach the wire whole and in the engine's order)
+  something a test can fail.
+- **Cases**, each observing the peer's side and the fetch's: the
+  greeting byte for byte; two streams interleaved; a stream reset
+  mid-body; GOAWAY above and below a stream; a window exhausted and
+  refilled, the stream's and the connection's; an initial-window change
+  that takes a stream's send window negative; a connection dying under
+  three streams; cancellation of one of three; a head over the limit; a
+  block over the hard cap; a PUSH_PROMISE; a frame-size violation; a
+  first frame that is not SETTINGS; interim heads and trailers; DATA and
+  HEADERS for a closed stream, credited and decoded; padding credited;
+  enough cancelled streams to spend the connection window were their
+  bytes not credited; a body short of its content-length, one past it,
+  and a final HEADERS that ends a stream promised ten bytes, each a
+  reset and none a clean end, with a HEAD's and a 304's content-length
+  left alone; a whole response followed by RST_STREAM(NO_ERROR) while
+  the request body is still going, the response read to its end and the
+  upload stopped, with both frames arriving before the fetch reads
+  either; a drainer stalled while another thread opens and cancels
+  streams by the thousand, the queue never past its ceiling and the
+  thread parked at the door; a socket that stops taking bytes (two senders
+  queued behind it, the reader still delivering, then death at the write
+  patience); a cancelled fetch's reset reaching the wire after it left;
+  a flood of pings at a stalled socket ending the connection; a
+  connection condemned from outside ending within a slice with its
+  socket closed once and by the reader; ciphertext handed over at
+  adoption; ciphertext the engine owes after a feed; a stream going
+  silent on a silent connection marking it quiet, and on a busy one not;
+  eight threads opening, sending, reading and cancelling against a peer
+  that answers at random, with every record in order at the end and
+  every hold returned.
+- **The harness ends itself**, as test_h2_host.c does: at its fiftieth
+  failed check and after its alarm.
+- libtls's transport harness gains the release verb's cases: refused
+  mid-handshake and while closing, unread ciphertext handed back whole,
+  the wrapper intact after a refusal.
+- Mutants once at the end, through `tools/mutants_parallel.py`.
+- No QEMU: nothing here is reachable in the guest. The first guest proof
+  is H2.6's probe.
+
+#### H2.4, as built (2026-11-10, Fable)
+
+`userland/libfetch/h2_conn.c/.h`, compiled into libfetch.so (which
+exports it, like everything it defines: see H2.3's note), and one new
+verb in libtls,
+`os64_tls_transport_release`. Nothing calls the connection: no program's
+behaviour changes with this slice, and H2.6 is what joins it to a fetch.
+Where the build departs from the brief, or says more than it did:
+
+- **The release verb does not flush.** `os64_tls_transport_release` hands
+  over the engine, the socket and up to `OS64_TLS_TRANSPORT_UNREAD_MAX`
+  bytes of ciphertext that arrived with the handshake, and frees the
+  wrapper without closing anything. While the engine still owes
+  ciphertext it answers NEED_PROGRESS and the caller steps the transport
+  as it would for any other verb; the brief had the verb send what was
+  owed. A verb that writes to a socket needs a deadline and a
+  cancellation, and the transport's step already has both.
+- **The control ceiling is on the whole queue.** A frame the peer makes
+  us owe (an acknowledgement, a reset of its stream) ends the connection
+  with ENHANCE_YOUR_CALM when the queue already holds more than
+  `H2_OUT_MARK + H2_OUT_CONTROL_MOST`. The brief counted control bytes
+  apart from DATA; one count is one rule, and DATA and new streams stop
+  at the mark, so everything above it is control by construction.
+- **The reader has a last word.** Before it closes a dying connection's
+  socket it offers the queue once more with no patience
+  (`drain_as(c, false, true)`). Without it a GOAWAY of ours, queued by
+  the same call that condemned the connection, never reached the wire:
+  every drainer stops at `dying`. It waits for a drainer that is inside
+  a write to come back first, so the socket is never closed under one.
+- **A condemned connection sends nothing more.** `emit` refuses once the
+  connection is dying, which makes a fetch that leaves its stream
+  afterwards owe the server no reset; the socket's close is the news.
+- **`h2_conn_queued`** says how many bytes wait in the out queue. The
+  brief did not list it; the harness needs it to see the mark hold, and
+  H2.6's probe will print it.
+- **`H2_TOO_LARGE` is judged on the encoder's bound**, not on the encoded
+  size: `h2_hpack_encode_bound` over the request's fields against
+  `H2_HEAD_MOST`, before any table changes. A request refused this way
+  has touched nothing. The bound is the most the fields can encode to
+  with any table, so a request the table would have shortened under the
+  limit is refused all the same: the limit is on what is asked, and does
+  not depend on what the connection carried before.
+- **Our own frames are cut at 16,384 bytes** whatever the peer allows:
+  the smallest frame is always legal, and a larger one buys nothing on a
+  connection that interleaves.
+- **A greeting that asks for a max frame size or a table over 1 MiB is
+  not adopted.** Both are memory this connection allocates at adoption.
+- **The first frame must be the server's SETTINGS** (RFC 9113 § 3.4), and
+  an acknowledgement does not count. Anything else is PROTOCOL_ERROR.
+- **DATA for a stream that has ended** (our reset, or its own
+  END_STREAM) is dropped and its bytes credited to the connection at
+  once; DATA for a stream we never opened is the connection's error.
+- **A reset after a whole response holds for any code.** The brief wrote
+  the rule for NO_ERROR (RFC 9113 § 8.1); a server that says CANCEL or
+  REFUSED_STREAM after its END_STREAM has still sent a whole response.
+  The response stands, `reset_after_end` and `reset_code` say why the
+  upload stopped, and a send answers `H2_STOP`.
+- **A head that ends its stream short of its content-length is
+  delivered**, and the stream then fails at the first read
+  (`H2_END_BAD_LENGTH`). The head did arrive; it is the body that is not
+  what it promised, and a fetch's sentence can say so.
+- **The server's close does not cost the frames that came with it.**
+  When the engine reports the peer's close_notify, the reader reads and
+  cuts the plaintext that preceded it and only then ends the connection:
+  a server that sends its last DATA and closes, in one segment, has sent
+  a whole response.
+- **A send stops (`H2_STOP`) when the response is whole**, reset or no
+  reset. A server that answers an upload early sends no RST_STREAM as
+  often as not; the answer stands and the rest of the request is not
+  owed. (As first built this held only for a connection that was also
+  ending; H2.6's Codex round found an early 413 with no reset waiting
+  out the upload's window, and the rule is HTTP/1.1's now: the final
+  response ends the upload.)
+- **`H2_END_BAD_FRAME`** is an ending of its own for a stream we reset:
+  a frame for it broke a rule RFC 9113 makes the stream's (a
+  WINDOW_UPDATE of nothing), with the code in `code`. `H2_END_FLOW` is
+  the windows alone.
+- **A stream's fault inside an open field block is the connection's.**
+  RFC 9113 § 6.10 lets nothing but a CONTINUATION follow an open block,
+  and that outranks what else is wrong with the frame.
+- **A server's `ENABLE_PUSH = 1` is PROTOCOL_ERROR** (§ 6.5.2), judged
+  here because `h2_setting_check` cannot know which end it is reading
+  for.
+- **The pool is asked about idleness only for a connection with no
+  stream**, and its yes is checked again under the lock: a stream opened
+  between the question and the answer keeps the connection.
+- **A wait whose patience is under `H2_LOOK_MS` never looks up.** It is
+  woken by what it waits for or it ends at its patience, which is what
+  lets the harness prove each wake (below).
+
+Proof. `tools/test_h2_conn_host.sh` builds the connection against
+`tools/h2_peer.c` twice, under ASan/UBSan and under TSan: about 6,100
+checks in nine groups of cases. The peer's stand-in for the TLS engine
+numbers its records and refuses a second thread inside it, so the out
+queue's order and the one-lock rule are things a case can fail; its
+clock is the host's plus what a case skips, so thirty seconds of write
+patience take no time. `tools/test_h2_conn_mutants.py` is 122 deliberate
+breaks, one rule each. The first run through `tools/mutants_parallel.py`,
+of the 102 written before the cold read, caught 82; the other twenty
+were eight that did not compile as written and twelve the harness
+missed, and each of the twelve got a case:
+
+- three wakes (DATA, a head, and a window given by SETTINGS each ring the
+  fetch that waits) had been hidden by the look every second, and are
+  proved with a patience too short to look;
+- a wait rung after its patience was spent;
+- a body longer than both windows, which fails unless what was credited
+  became window again;
+- a refusal remembered after the socket took the bytes;
+- the reader closing under a drainer; the pool asked about a connection
+  with a stream; a reset sent after a condemnation; a reset for a stream
+  both sides had finished;
+- a head for a stream never opened, and a head over the limit by the sum
+  of many small fields.
+
+One cold read by Opus followed. It found five defects, each fixed with
+a case and a mutant of its own: the four entries above that begin "The
+server's close", "A send stops", "A stream's fault" and "A server's
+`ENABLE_PUSH`", and a quiet connection that did not end when its last
+stream left, which § 2.5 already asked for. Then the mutants once more:
+109 of 109 caught.
+
+Codex's first round (#538) found five more, each fixed with a case and
+at least one mutant, all caught:
+
+- **Window given back counts against the queue's ceiling.** A
+  WINDOW_UPDATE is a frame the peer makes us owe like any other: padded
+  frames at a stream with a small window, sent to a socket that takes
+  nothing, grew the queue past `H2_OUT_MARK + H2_OUT_CONTROL_MOST`.
+- **Plaintext the engine already holds at adoption is read at once.**
+  The reader's first act is to take in what came with the handshake,
+  ciphertext or not: a server's SETTINGS decrypted with its Finished
+  would otherwise wait for the next record.
+- **The decoder's scratch is a head, not a table.** One literal field
+  passes through it, and a field may be as large as `H2_HEAD_MOST`
+  whatever SETTINGS_HEADER_TABLE_SIZE is. With the scratch at the
+  table's 4,096 bytes a 5,000-byte cookie ended its stream.
+- **A change to the initial window is applied to streams that still
+  send.** One that has sent its last, or was reset, keeps its slot until
+  its fetch leaves and has no window to overflow.
+- **Two content-lengths that differ** are a malformed head (RFC 9110
+  § 8.6), as they are for HTTP/1.1 in `http.c`; two that agree are one.
+
+Its second round found four:
+
+- **What the engine owes of its own accord has the ceiling too.** A
+  KeyUpdate's answer is ciphertext no frame of ours asked for; a peer
+  that asks for them at a socket that takes nothing is ended at the same
+  `H2_OUT_MARK + H2_OUT_CONTROL_MOST`.
+- **Content where none may be resets the stream** (`H2_END_BAD_LENGTH`):
+  a HEAD's response, a 204 and a 304 (RFC 9110 § 6.4.1). `bodiless` had
+  only excused the content-length; `no_content`, decided at the final
+  head, also refuses DATA that carries a byte. An empty DATA frame with
+  END_STREAM is how such a stream is meant to end.
+- **A receive buffer read empty is freed once it has grown past
+  64 KiB.** The window its bytes held goes back to the peer when they
+  are read, so a buffer kept at its high-water mark is memory held twice
+  over: a server filling each of 64 streams in turn could hold the
+  stream window 64 times against one connection window.
+  `h2_conn_buffered` says what the buffers are allocated to hold.
+- **A signal does not start the write patience again.** A patient write
+  that is interrupted having moved nothing stamps the refusal as a
+  timeout does, so the thirty seconds are counted from the first attempt
+  that moved nothing.
+
+Its third found three:
+
+- **`any_seen` is set when a HEADERS or DATA frame for the stream
+  arrives**, not when its head has been decoded: a head whose
+  CONTINUATION never comes is still a server that answered, and the
+  retry rule's "before any byte" must say so.
+- **The pool is told of room by the limit a whole SETTINGS frame
+  leaves**, so a frame that states MAX_CONCURRENT_STREAMS twice is
+  judged once.
+- **A window past 2^31 - 1 for a stream whose answer is whole and whose
+  request is still going up is the connection's error.** RFC 9113
+  § 6.9.1 allows either; a reset would not change how that stream ended.
+
+Its fourth was clean. A last run of every mutant caught 122 of 124, and
+the two it missed were struck from the set as no longer breaks: removing
+the ceiling from owed frames, or from window credits, changes nothing a
+case can see once the reader holds the queue to the same ceiling after
+every feed (round two). The ceiling is still checked at the frame, which
+ends a flood one pass sooner.
+No QEMU and no P5 pass: nothing here is reachable in the guest.
+
+### H2.6 — Fetches on the connection
+
+Split from H2.4 by Q4's ruling. H2.4 built the connection and proved it
+against a scripted peer; nothing calls it. This slice joins it to a
+fetch: the pool learns to share one connection among many fetches, a
+fetch learns to run on a stream, and a probe fetches from a real h2
+server inside the guest. **The switch stays off**: `dial` in the shipped
+library still offers `http/1.1` alone, so no program's behaviour
+changes. What turns it on is one flag private to libfetch (below), set
+by the host harness and by the probe; H2.5 replaces the flag with the
+preset's say.
+
+Contracts: § 2.1 (ALPN decides, per connection), § 2.2 (which
+connection a fetch takes), § 2.5 (how each thing ends, and what is
+retried), § 2.7 (one request model, two renderers; the reply model),
+§ 2.8 (the words). Read "H2.2, as built" and "H2.4, as built" first:
+this brief is written against the tree they describe.
+
+**What changes hands, in one paragraph.** Under h1 a fetch takes a
+connection's transport whole (`f->io`), reads and writes it, and gives
+it back. Under h2 the transport is the connection's for its whole life:
+`fetch.c` releases the TLS engine and the socket out of the transport
+the dial built (`os64_tls_transport_release`), `h2_conn_adopt` takes
+them, and from then on a fetch holds a `fetch_conn_t` and an
+`h2_stream_t` and never touches a socket. `f->io` is unused on an h2
+hop. Every place fetch.c reads `f->io` today is listed below with its h2
+answer, because a missed one is a read of a transport nobody opened.
+
+#### The offer, and the flag
+
+- `dial` offers `h2, http/1.1` when ALL of: the hop is direct TLS
+  (never through a proxy, § 2.1), the config's protocol is the default
+  (never the TLS 1.2 fallback), and `fetch_h2_offer` is set.
+  `fetch_h2_offer` is a `bool`, false at rest, declared in `pool.h` with
+  hidden visibility: the one symbol of libfetch's that the shared
+  library does not export (it exports the rest, as built). Nothing in
+  libfetch.so sets it and no exported function writes it, so a program
+  linked against the library cannot turn h2 on. The host harness and `/tests/h2probe`
+  compile libfetch's sources into themselves and set it. H2.5 deletes
+  the flag.
+- The connection's protocol is the ALPN name the handshake chose, read
+  once after `fetch_transport_open` succeeds (libtls already reports it;
+  the transport grows `fetch_transport_alpn`). Anything but `h2` is h1,
+  and the hop goes on exactly as today.
+- **What we say first** is one greeting, `fetch_h2_greeting`, a constant
+  in fetch.c until H2.5 moves it to the preset: SETTINGS `ENABLE_PUSH =
+  0`, `INITIAL_WINDOW_SIZE = 1 MiB`, `MAX_HEADER_LIST_SIZE = 64 KiB`
+  (what `H2_HEAD_MOST` holds), and a WINDOW_UPDATE that raises the
+  connection's window to 4 MiB. These are os64's own honest numbers and
+  nobody's fingerprint; Q2's ruling (match the preset's window) is
+  H2.5's to apply, where a preset exists to match. The pseudo-header
+  order is `:method, :authority, :scheme, :path` until H2.5 makes it the
+  preset's.
+
+#### The pool: one connection, many fetches
+
+`fetch_conn_t` gains `h2` (the `h2_conn_t`, NULL for h1) and three bits
+of its own life; `fetch_proto_t` gains `FETCH_PROTO_H2`. Its lifecycle,
+which is the thing to get right before any code:
+
+| State | In the table | `refs` | Reader | How it gets here | What may happen next |
+|---|---|---|---|---|---|
+| DIALLING | yes | 0 | none | `fetch_pool_take` answered DIAL | h1: `fetch_pool_dialled`. h2: `fetch_pool_adopting`. Failed: `fetch_pool_gone` |
+| ADOPTING | yes | 1, the dialler's | starting | `fetch_pool_adopting`, BEFORE `h2_conn_adopt` | `fetch_pool_dialled_h2`; the `dead` hook (STRUCK, and still the dialler's); adopt failed: `fetch_pool_gone` |
+| H2 LIVE | yes | n ≥ 0 | running | `fetch_pool_dialled_h2`, when it was not struck meanwhile | a take joins it (`refs++`); a put leaves it (`refs--`, and at 0 `kept_at = now`); STRUCK |
+| STRUCK | no | n ≥ 0 | running or done | the `dead` hook; the `idle_out` hook answering yes; eviction for a slot; `fetch_pool_drain` | puts until `refs == 0`; the `dead` hook if it has not come |
+| FREED | — | 0 | done | STRUCK, `refs == 0` and `dead` heard, whichever comes last | — |
+
+- **The dialler holds the connection before its reader exists**
+  (Quinn's read of this brief). `h2_conn_adopt` starts the reader
+  before it returns, and a peer that fails at once runs the `dead` hook
+  before the dialler has the connection back. So the dialler's reference
+  is taken first, by `fetch_pool_adopting`, and `fetch_pool_dialled_h2`
+  publishes a connection only if it is still in the table: one the
+  `dead` hook struck meanwhile stays STRUCK, the dialler's stream open
+  answers `H2_NO_ROOM`, its put frees the connection, and it asks again.
+  No take can join an ADOPTING connection (it has no `h2` to ask for
+  room), and `idle_out` says no to it (`refs` is 1).
+- **A connection is freed by whoever sees the last of three things**:
+  struck from the table, its last fetch gone, and its reader's `dead`
+  hook heard. The hook's `ctx` is the `fetch_conn_t`, so the object must
+  outlive the reader: that is what the third condition is for. The
+  pool's hold on the `h2_conn_t` (the adopter's, `h2_conn_release`) goes
+  when the `fetch_conn_t` is freed, and not before.
+- **Lock order**: the pool's lock, then a connection's (H2.4). The pool
+  calls `h2_conn_room` and `h2_conn_condemn` under its own lock. The
+  three hooks arrive with no connection lock held and take the pool's.
+  The pool never calls `h2_stream_*`, and never holds its lock across a
+  call that waits.
+- **The hooks.** `idle_out`: under the pool's lock, yes when the
+  connection is in the table with `refs == 0` and kept longer than
+  `FETCH_POOL_IDLE_MS`; saying yes strikes it in the same hold, so no
+  take can find a connection the reader is about to close (§ 2.5).
+  `room`: ring the waiters. `dead`: strike it if it is still in the
+  table, ring the waiters, and free it if its last fetch has gone.
+- **Which connection a take gives** (§ 2.2's order, as the code will
+  have it), all under one hold of the pool's lock:
+  1. an H2 LIVE connection of the key that `h2_conn_room` says has
+     room, the one longest in the table first: `FETCH_POOL_SHARED`,
+     `refs++`. An h2 connection with no fetch on it is found here too,
+     so an idle h2 connection needs no probe and has no "kept" answer;
+  2. a kept h1 connection, as today (`FETCH_POOL_KEPT`, probed by the
+     fetch);
+  3. if the key is REMEMBERED as h2 and one of its connections is
+     DIALLING: wait for that dial's verdict, even under the key's cap;
+  4. a slot to dial in (`FETCH_POOL_DIAL`), by today's rules, with one
+     more: **a connection whose socket is still open counts, in the
+     table or not.** An idle h2 connection is evictable for a slot as an
+     idle h1 one is, condemned and struck in the same hold, but its
+     socket closes only when its reader next looks, within
+     `H2_READER_SLICE_MS`. Until its `dead` hook it is CLOSING, the pool
+     counts the closing, and a dial is admitted only while the table's
+     connections and the closing ones together are under
+     `FETCH_POOL_TOTAL`. So the sockets libfetch holds never pass the
+     sixteen the table promises a task's handles (Quinn's read: freeing
+     the slot at once let evictions pile up closing sockets past any
+     bound). The price is that a fetch may wait, for at most a slice,
+     on an h2 connection that was idle: § 2.2's "an idle connection
+     never makes a fetch wait" is exact for h1 and within a slice
+     for h2. With the table holding no place, the least recently kept
+     idle h1 connection goes before any h2 one, since it closes at
+     once; with none, one idle h2 connection is condemned for each
+     fetch that wants a place, so a burst waits one slice together and
+     not one behind another. Fetches to one key that last answered h2
+     want one place between them: the first to wait asks for it, and
+     the rest wait for the connection it dials. The `dead` hook rings
+     the waiters. The key's own cap does
+     not count the closing: they are leaving, and a server sees them
+     go;
+  5. otherwise wait, as today.
+- **`FETCH_POOL_SHARED` is leave to try, not a stream.** The fetch calls
+  `h2_stream_open`; `H2_NO_ROOM` (the connection filled, went quiet,
+  heard a GOAWAY or died between the take and the open) is answered by
+  `fetch_pool_put` and asking again from the top. That loop ends: a
+  connection that said no has no room at the next take, so it is not
+  offered again.
+- **Remembered as h2** (§ 2.2): a table in pool.c of the last ALPN
+  answer per key, sixteen keys, the least recently written replaced.
+  Written by `fetch_pool_dialled_h2` (h2) and `fetch_pool_dialled` on a
+  TLS key (not h2). Process-wide and never persisted. It decides one
+  thing, clause 3 above, and a wrong memory costs one wait for one
+  dial's verdict.
+- **`fetch_pool_put` for h2** takes no transport: `refs--`, the time
+  noted at zero, the waiters rung. `fetch_pool_gone` is for a dial that
+  failed and for h1, as today; nothing a fetch does ends an h2
+  connection but `h2_conn_condemn`, and a fetch has no reason to call
+  it.
+- **The counts** (`fetch_pool_idle`, `fetch_pool_live`): an h2
+  connection is live while `refs > 0` and kept at zero, one connection
+  whatever its streams. A STRUCK one is in neither.
+- `fetch_pool_drain` condemns and strikes every h2 connection with no
+  fetch on it and waits for nothing; the host harness, which checks for
+  leaks, waits for the closing count (`fetch_pool_closing`) to reach
+  zero.
+
+#### The dial that answers h2
+
+In `acquire`, after `dial` succeeds on a DIAL slot and the ALPN answer
+is `h2`:
+
+1. `fetch_transport_release(&f->io, &engine, &socket, unread, &len)`
+   steps the transport until libtls's release verb stops answering
+   NEED_PROGRESS, under the fetch's idle deadline and cancellation like
+   any step. Failure is the dial's failure (`TLS_FAILED`, the transport
+   closed, `fetch_pool_gone`).
+2. `fetch_pool_adopting(conn)`: the dialler's reference, taken before
+   a reader exists (the lifecycle above).
+3. `h2_conn_adopt(engine, socket, unread, len, &fetch_h2_greeting,
+   &hooks)`. NULL (no memory, no thread) leaves the engine and socket
+   the caller's: both are closed, `fetch_pool_gone`, and the fetch ends
+   `DIAL_FAILED` with the sentence "an HTTP/2 connection could not be
+   started (memory or a thread)".
+4. `fetch_pool_dialled_h2(conn, h2, &tls_facts)`: the connection is H2
+   LIVE with this fetch on it unless it died meanwhile, the key is
+   remembered, the waiters are rung. `tls_facts` is the version and the resumed bit, kept on the
+   `fetch_conn_t` so a fetch that joins later can fill its detail
+   (`tls_snapshot`'s h2 arm) without a transport of its own.
+
+The fetch then opens its stream on the connection it dialled like any
+other fetch would. `f->reused` is false for it and true for a fetch
+that joined through `FETCH_POOL_SHARED`: the h1 meaning, "not dialled
+for this request", unchanged.
+
+#### One request, rendered twice (§ 2.7)
+
+`http_request` is split, with its text output unchanged byte for byte
+(tools/test_http_host.sh pins it, and gains the list's cases):
+
+- `http_request_compose(url, absoluteForm, extras, emit, ctx)` walks
+  the request ONCE in wire order and hands each field to `emit` as a
+  (name, value) pair: `Host` first, then `order`'s names, then the rest
+  in the writer's order. Every rule http.h states (the field-byte rule,
+  the reserved names, what a method may carry) is judged here.
+- `http_request` is compose plus the text emitter.
+- `http_request_fields(url, extras, fields, most, storage, room,
+  &count)` is compose plus the h2 emitter: the four pseudo-headers
+  first, `Host`'s value as `:authority` and no `host` field; every name
+  lowercased into `storage`; `Connection`, `Keep-Alive`,
+  `Proxy-Connection`, `Transfer-Encoding`, `Upgrade` and `TE` left out
+  whatever `keep_alive` says; a `Cookie` line crumbled into one `cookie`
+  field per cookie-pair (split at `"; "`), each indexed like any field,
+  which is what crumbling is for; `proxy-authorization` marked
+  `sensitive` beside the `authorization` the encoder already never
+  indexes.
+  False when the fields or their bytes do not fit, which is the same
+  REQUEST_FAILED sentence as a request that does not fit today.
+
+The fetch object gains `h2_field_t h2_fields[256]` beside `request`
+(the same reason `request` is there and not on a stack), and
+`h2_names`, a buffer the size of `request`, for the lowercase names and
+the crumbled cookies they point into.
+
+#### The exchange on a stream
+
+`exchange` keeps its signature and gains an arm: after `acquire`, a
+connection whose protocol is h2 goes to `exchange_h2`, which does what
+the h1 loop does and answers in the same vocabulary.
+
+1. **Open**: `h2_stream_open(conn, fields, count, ends = no body,
+   bodiless = method is HEAD, &wait, &f->h2_stream)`. `wait` is the
+   fetch's bell, `f->opt.idle_ms` (or the default) as its patience, and
+   `cancel_predicate`. The same `wait` serves every h2 call the fetch
+   makes; the bell is the one the pool's queue uses, and a fetch is only
+   ever in one wait.
+2. **Upload**: `h2_stream_send` over `f->opt.body`, `ends = true`.
+   `H2_STOP` (the server answered and wants no more) is not a failure:
+   `sent_whole` is false and the exchange goes on to the head.
+   `sent_whole` is `sent == body_len`.
+3. **Head**: `h2_stream_head(stream, &wait, on_field, f)`. `on_field`
+   fills `f->reply` (an `http_response_t`, the same one) and calls
+   `response_header` for every field that is not a pseudo-header, in
+   wire order: `:status` → `status`; `reason` empty; `content-length` →
+   `hasLength`/`length`; `content-encoding`, `content-type`, `location`
+   as the h1 parser fills them, by the same helper functions (http.c
+   exposes the per-field half of its head reader as
+   `http_head_field(reply, name, value)`, so the two parsers cannot
+   disagree about what a `Content-Type` is); `transferEncoding` stays
+   empty; `http11` and `connectionClose` are not read on an h2 hop.
+   Interim heads never arrive here (the connection drops them).
+   `set-cookie` fields reach `on_set_cookie` one by one, as today.
+4. **Position**: `f->have_head`, `head_fill`, redirects, hops: all
+   unchanged, they read `f->reply`.
+
+**The body.** `http_body_t` frames a byte stream; an h2 stream is
+already framed. So `read_identity` and `read_gzip` stop calling
+`http_body_read` directly and call `wire_read(f, dst, cap)`, which is
+`http_body_read` on an h1 hop and, on an h2 hop, `h2_stream_read`
+translated into the same three answers by setting `f->body.result`:
+
+| `h2_stream_read` | `h2_stream_ended` | `wire_read` returns | `f->body.result` | The fetch ends |
+|---|---|---|---|---|
+| n > 0 | — | n | OPEN | — |
+| 0 | CLEAN | 0 | DONE | OK |
+| `-H2_ENDED` | PEER_RESET, CONN_DEAD, UNPROCESSED | -1 | BROKE | BROKE |
+| `-H2_ENDED` | BAD_LENGTH | 0 | CUT | CUT |
+| `-H2_ENDED` | BAD_HEAD, HEAD_TOO_LARGE, FLOW, BAD_FRAME | -1 | SYNTAX | BAD_HEAD |
+| `-H2_SILENT` | — | -1 | BROKE, `f->h2_silent` | SILENT, `silent_after_body` |
+| `-H2_INTERRUPTED` | — | -1 | BROKE | INTERRUPTED (the predicate is asked, as today) |
+| `-H2_FAILED` | — | -1 | BROKE | BROKE |
+
+`framing_ended` stays the one place that turns those into statuses. A
+body shorter or longer than its content-length is CUT, the word h1 uses
+for a length-framed body that ended early: the caller acts on it the
+same way. `body_prepare` on an h2 hop opens no `http_body_t`; the three
+bodiless replies and a final head that carried END_STREAM read as zero
+bytes and DONE at the first read, and a 205's `wire_unread` is not set
+(closing the stream discards what the server sent). gzip is downstream
+and untouched.
+
+**Every `f->io` in fetch.c, and its h2 answer.**
+
+| Today | On an h2 hop |
+|---|---|
+| `tls_snapshot`: the transport's status, policy, engine error, version, resumed | the version and resumed bit the pool kept at adoption; the rest zero (a TLS failure after adoption is the connection's death, told through the ending) |
+| `fetch_transport_write` / `_read` | `h2_stream_send` / `h2_stream_read` |
+| `fetch_transport_complete` at a head and at a body's end | not asked: an authenticated prefix beside a TLS failure cannot be a CLEAN ending, because the connection ends every stream that had not ended before it dies |
+| `f->io.silent` | `f->h2_silent`, set where a wait answered `H2_SILENT` |
+| `f->io.received == 0` (the retry rule) | `!ending.any_seen` |
+| `fetch_transport_close`, `fetch_pool_gone` in `drop_connection` | `h2_stream_close`, `fetch_pool_put` |
+| `release_connection`'s `connection_reusable` | not asked: `h2_stream_close`, `fetch_pool_put` |
+| `fetch_transport_idle_ok` at a take | not asked (no probe) |
+| `f->io.encrypted`, read by `head_fill` (the head's `encrypted`) and by the `Set-Cookie` callback (whether a `Secure` cookie may be kept) | `f->hop_encrypted`, for h1 and h2 alike: `ask` already works out whether the hop is direct https before it takes a connection, and that answer is the fact. A fetch that JOINS an h2 connection never opened a transport, so its `f->io.encrypted` is false, its head would say unencrypted and the jar would refuse every `Secure` cookie (Quinn's read) |
+
+`drop_connection` and `release_connection` each gain the h2 arm at
+their top, and `f->connected` means "holds a connection or a stream" in
+both worlds.
+
+**Leaving.** `os64_fetch_close`, a redirect hop, a refused body, the
+body cap (`LIMIT`) and a cancellation all end the same way:
+`h2_stream_close` (which resets the stream if either side had not
+finished, and credits what was unread), then `fetch_pool_put`. A fetch
+never closes an h2 connection.
+
+#### What is tried again (§ 2.5), and what it is called (§ 2.8)
+
+`exchange_h2` sets `*again` by the stream's ending when it ended before
+the final head. **A request goes at most twice**, as today, whatever
+the reason for the first failure.
+
+| Ended, before the final head | Again? | Else the fetch ends |
+|---|---|---|
+| UNPROCESSED (a GOAWAY whose last stream is below ours) | yes, any method | REQUEST_FAILED |
+| PEER_RESET with REFUSED_STREAM and `!any_seen` | yes, any method | REQUEST_FAILED |
+| CONN_DEAD, `!any_seen`, `f->reused`, idempotent | yes | REQUEST_FAILED |
+| CONN_DEAD otherwise; PEER_RESET otherwise | no | REQUEST_FAILED |
+| BAD_HEAD, BAD_FRAME, FLOW | no | BAD_HEAD |
+| HEAD_TOO_LARGE | no | UNSUPPORTED, `head` in `unsupported` |
+| `H2_SILENT` | no | SILENT |
+| `H2_INTERRUPTED` | no | INTERRUPTED |
+
+The second try passes `fresh`, which keeps its h1 meaning (no kept h1
+connection) and adds none for h2: the connection that failed has no
+room (dead, or past its GOAWAY), and one that refused a single stream
+may be tried again, which RFC 9113 § 8.7 allows. The 408 rule is h1's
+and is not asked on an h2 hop.
+
+`os64_fetch_detail_t` gains four fields, and `os64_fetch_reason` the
+sentences that use them:
+
+- `h2` (the hop that ended the fetch was on HTTP/2), `h2_stream` (its
+  stream id), `h2_code` (an RFC 9113 § 7 error code, when one ended it)
+  and `h2_code_ours` (we sent it; false, the server did).
+- "the server reset the stream: REFUSED_STREAM"; "the server ended the
+  connection: GOAWAY ENHANCE_YOUR_CALM"; "the connection ended under the
+  request" (no code); "we reset the stream: the response's head broke
+  HTTP/2's rules (PROTOCOL_ERROR)"; each with today's ", retried once on
+  a fresh connection" tail when `retried` says so. Names come from
+  `h2_error_name`.
+- `os64_fetch_head_t`'s `http2` fact is H2.5's (§ 2.7): it is what a
+  page's record shows, and nothing shows it until the switch.
+
+#### Proof
+
+- **`tools/test_fetch_host.sh`** gains an h2 world beside its h1 one.
+  The harness already scripts the transport seam; a dial may now be
+  scripted to answer ALPN `h2`, and its `os64_tls_transport_release`
+  hands over tools/h2_peer.c's engine and socket, one peer per
+  connection (h2_peer.c grows from one connection at a time to a small
+  table of them; test_h2_conn_host.sh must still pass). The cases:
+  - a GET, a POST with a body, a HEAD, a 204 and a gzip body over h2,
+    each compared field by field with the same exchange over h1 (the
+    head a caller reads, `on_header`'s calls, the bytes);
+  - six fetches at once to one key: one dial, one connection, six
+    streams; the pool's counts say one;
+  - the first visit's burst: three fetches before any ALPN answer dial
+    three; the key is then remembered, and three more with a dial in
+    flight wait for it and dial nothing;
+  - a dial that answers h1 for a key remembered as h2: the waiters dial;
+  - `H2_NO_ROOM` between take and open (the peer's limit is one): the
+    second fetch dials or waits, and never spins;
+  - a take racing the idle close: with the clock skipped past
+    `FETCH_POOL_IDLE_MS`, either the take wins and the connection
+    lives, or the reader wins and the take dials; never a stream on a
+    closed connection;
+  - a quiet connection: the next fetch dials past it;
+  - REFUSED_STREAM and an unprocessed GOAWAY, each retried once, a POST
+    among them; a second refusal is REQUEST_FAILED; a death under an
+    idempotent request on a joined connection is retried and under a
+    POST is not;
+  - a redirect from h2 to h1 and back, the stream closed and the
+    connection kept;
+  - a `Secure` cookie set on a fetch that joined an h2 connection, and
+    on each side of a redirect between https over h2 and plain http:
+    kept on the first, refused on the second, and the head's
+    `encrypted` says which;
+  - the `dead` hook forced before `h2_conn_adopt` returns (the peer
+    hangs up as the reader starts): no use after free, the dialler asks
+    again;
+  - eviction after eviction with every reader's close held back: the
+    sockets open never pass `FETCH_POOL_TOTAL`, and a fetch that waits
+    for one is rung when a reader closes;
+  - `max_body` reached, a cancelled fetch, and a close with the body
+    unread: each resets its stream, the connection lives, and the next
+    fetch uses it;
+  - the lifecycle table's last row three ways (struck, last put, `dead`
+    hook, in each order): freed once, by the last;
+  - every sentence above;
+  - `fetch_h2_offer` clear: every one of the above dials h1.
+- **`tools/test_http_host.sh`**: the text request is byte for byte what
+  it was, for every case the suite has; the field list for the same
+  cases (pseudo-headers, lowercase, the forbidden fields gone, cookies
+  crumbled, sensitivity).
+- **Mutants** once at the end, through `tools/mutants_parallel.py`,
+  over the new code in pool.c, fetch.c and http.c.
+- **`/tests/h2probe`** (`userland/tests/h2probe/`): built with
+  libfetch's sources and the flag set. `h2probe URL [count]` makes ONE
+  fetch first, so the origin's ALPN answer is known and its connection
+  is in the pool, and then fetches the URL `count` times at once
+  (default 6) on threads of its own. It prints, per fetch, the status,
+  the bytes and the time; then the pool's counts, the protocol the
+  connection spoke, and what the connection's queue and buffers held at
+  the end. Passes (exit 0) when every fetch is OK and the measured
+  fetches dialled nothing: one connection carried them. Bodies that
+  differ fail it only with `--fixture`, where the server serves a file;
+  a live site may make its page anew for each request, so there the
+  difference is printed and not judged (the P5's first run against a
+  live site failed a correct run on exactly that). `h2probe --cold URL
+  [count]` skips the first fetch and does not judge the number of
+  connections, printing how many
+  the burst dialled: an origin met for the first time may be dialled up
+  to the key's cap (§ 2.2), and that is correct (Quinn's read: the
+  first draft's pass condition would have failed a correct pool).
+- **QEMU**: h2probe against a real h2 server, headless, on the e1000
+  and on virtio. This is the first time the reader's slices, the bell,
+  a detached thread and the real TLS engine meet the kernel. The server
+  is `nghttpd` on the workstation, reached through slirp's gateway.
+- **P5**: Chris can run `h2probe` against any https site he likes; it
+  is the one thing in this slice a person can test. The slice does not
+  wait on it.
+
+#### Out of scope, on purpose
+
+The offer in the shipped library, the greeting per preset, the head's
+`http2` fact, yonder's record, and the DEBTS rows of § 2.10: H2.5.
+Spreading streams over duplicate connections, a PING ahead of a request,
+and h2 through a proxy: § 2.10.
+
+#### H2.6, as built (2026-11-11, Fable)
+
+libfetch's pool shares one HTTP/2 connection among fetches, a fetch runs
+on a stream, and `/tests/h2probe` fetches from a real h2 server in the
+guest. The shipped library still offers `http/1.1` alone. Where the build
+departs from the brief, or says more than it did:
+
+- **libfetch.so exports every symbol it defines.** The brief, and the
+  as-built notes of H2.3 and H2.4, said the library hid its symbols; it
+  does not, and those notes are corrected. `fetch_h2_offer` is declared
+  with hidden visibility and is the one symbol the shared library does
+  not export, which is what makes "a program linked against the library
+  cannot turn h2 on" true.
+- **An HTTP/1.1 harness links HTTP/2 stand-ins that abort**
+  (tools/h2_absent.c). The five harnesses that script h1 alone never set
+  the offer, so each stand-in is a call that cannot happen, and their
+  passing is the proof that with the offer off libfetch does nothing of
+  HTTP/2's.
+- **The h2 cases are a harness of their own**, tools/test_fetch_h2_host.sh,
+  and not a second world inside test_fetch_host.c: that harness is one
+  thread with its own clock, and a connection's reader is a thread. Each
+  dial gets a server thread; what a server says is a table of routes; a
+  case is client code. tools/h2_peer.c serves twenty-four connections
+  (its state moved into a wire apiece), and the wire a case speaks for
+  is the calling thread's own.
+- **The dead hook strikes; `fetch_pool_dialled_h2` never restores.** The
+  brief had publication check that the connection was still in the
+  table. As built there is nothing to check: publication only records
+  the `h2` and the facts on a record the dialler holds, and a record the
+  reader struck during adoption stays struck.
+- **The pool gained four small questions**: `fetch_pool_h2` (the
+  connection a fetch opens its stream on), `fetch_pool_tls_facts` (the
+  version and the resumed bit, for a fetch that joined), and for the
+  probe and the harness `fetch_pool_closing` and `fetch_pool_h2_stats`.
+- **`fetch_pool_evict_one` evicts HTTP/1.1 connections alone.** It
+  exists for a dial refused for want of a handle, and an HTTP/2
+  connection's handle is not free until its reader looks.
+- **A lost ring is covered by the look.** A waiter in the pool's queue
+  looks up every second (`FETCH_POOL_LOOK_MS`), so a ring lost at a
+  connection's death or at room gained costs up to a second and no
+  more. No case can tell the two apart without timing a wait, and the
+  mutants that drop those two rings were struck from the set.
+- **A wait for a dial's verdict looks up too.** A fetch waiting on a
+  dial to a key remembered as h2 asks again every second like any
+  waiter, so a dial that answers HTTP/1.1 costs it a ring's delay at
+  most.
+- **`detail.h2` is set whenever the hop that ended the fetch was
+  HTTP/2**, mid-body as well as before the head; the brief listed the
+  field without saying when. A mid-body silence had read its idle limit
+  off a transport the fetch never opened until it was.
+- **Bodiless replies are not waited on.** A HEAD's answer, a 204, a 205
+  and a 304 read as zero bytes at once, as HTTP/1.1's do, whether the
+  server has ended the stream or not; closing the stream resets what
+  the server left open.
+- **The request's fields are capped at 256** (`FETCH_H2_FIELDS`), and
+  their bytes at the size of the text request's buffer. A request past
+  either is the same REQUEST_FAILED sentence as a text request that does
+  not fit.
+- **Every HTTP/2 fetch holds a bell.** Under HTTP/1.1 only a fetch that
+  queued for a connection made one; under HTTP/2 every wait on a stream
+  is on the fetch's bell, so each fetch in flight holds one handle of
+  its task's sixty-four. `h2probe` is capped at sixteen fetches for
+  that: thirty-two, each with a thread's handle too, ran it out.
+- **A dialler is refused by its own new connection at most twice.** A
+  server that allows no stream, or ends each connection as it begins,
+  refuses the stream on a connection the fetch has just dialled, and a
+  new dial is a new connection every time. The second such refusal ends
+  the fetch REQUEST_FAILED ("the server's HTTP/2 connections took no
+  request, twice"). The brief argued that the take's loop ends only for a
+  connection the pool shared; the cold read found the other half.
+- **HTTP/2's detail and its note are cleared at each exchange**, so a
+  second try or a later hop says nothing of the first.
+- **The retry's tail says "on a fresh connection" for HTTP/1.1 alone.**
+  A refused stream's second try may ride the connection that refused the
+  first (RFC 9113 § 8.7 allows it), so an HTTP/2 retry reads "(retried
+  once)".
+- **A response field's name of any length reaches the observers**, as
+  over HTTP/1.1; only a name short enough to be one the fetch itself
+  reads (under 64 bytes) is read for it.
+- **`h2probe --fixture`** verifies the server against libtls's test root,
+  so a local `nghttpd` holding the fixture certificate (`example.test`)
+  serves it with no change to the guest's store.
+
+Proof. tools/test_fetch_h2_host.sh: 343 checks, under ASan/UBSan and
+under TSan. tools/test_http_host.sh: the text request unchanged for every
+case it had, and the field list checked against the text of the same
+request, line for line. tools/test_fetch_transport_host.sh: the release
+verb. The HTTP/1.1 harnesses (fetch, pool, way, os64get) pass as they
+did. tools/test_fetch_h2_mutants.py: 78 deliberate breaks, all caught at
+the end; the first run caught 56 of 77, and of the rest three were
+struck as above (two lost rings, and `TE`, which the composer never
+emits), five were missed and each got a case or a stronger one, and the
+others had not compiled or had not run. One more was struck after the
+cold read: a refusal by a SHARED connection counted as a dialler's own,
+which only a race between a take and an open can reach. Two faults of the HARNESS were found on
+the way and fixed: `peer_frame` handed every server thread one static
+buffer, which dropped a request about once in ten runs under load, and
+a case that had allowed "one to three" dials now holds the handshake
+open so that it is three.
+
+In the guest, QEMU, headless, against `nghttpd` on the workstation
+through slirp, on the e1000 and on virtio alike:
+
+| Run | Result |
+|---|---|
+| `h2probe --fixture URL 6` | PASS: one HTTP/2 connection carried the first fetch and six at once |
+| `h2probe --cold --fixture URL 6` | PASS: the burst dialled six connections, all HTTP/2 (§ 2.2's first visit) |
+| `h2probe --fixture URL 16` | PASS: one connection, sixteen at once |
+
+Each fetch read the same 240,000 bytes. (Timings under TCG say nothing
+about the P5 and are not recorded.) The table is of the final code.
+
+One cold read by Opus found the redial with no bound, the detail kept
+from an earlier try, the long names the observers did not hear, the
+field cap's comment, and six comments that were not the whole truth;
+each is fixed, the first four with a case and a mutant.
+
+Codex's first round (#542) found one: an upload waited for flow-control
+window under a response that was already whole (an early 413 with no
+reset), and ended SILENT with the answer discarded. A send now stops as
+soon as the response is whole, in `h2_stream_send`, with a case at each
+level and a mutant.
+Its second found a case of the harness that counted resets a
+finished stream does not owe; its third was clean.
+
+Known and left: a request of more than 256 fields (a Cookie line of
+some 245 pairs, with the rest of a head) is refused over HTTP/2 where
+HTTP/1.1 would send it. The tools/test_h2_conn_host.sh harness failed
+once in some twenty runs with a case using a stream whose open had
+failed; it did not recur in twelve runs under load, its helper now
+fails a named check instead of crashing, and its cause is not found.
+
+### H2.5 — The switch
+
+Contracts: § 2.1 (the offer, and who offers), § 2.7 (one model, two
+renderers; the head's new fact), § 2.8 (the words), § 2.9 (the greeting
+per preset, from captures C1 and C2), § 2.10 (the rows). Written against
+the tree after H2.6 (#542) and the exit-code fix (#543). This is the
+slice that changes what the wire sees, and the one whose merge waits on
+Chris's P5 pass.
+
+**What it removes, and what it does not.** Over HTTP/1.1 a page's
+requests to one host wait in line for six connections, and each
+connection costs a TCP and a TLS handshake (a resumed one since H2.1).
+Over HTTP/2 they share one connection: the waiting in line goes, and so
+do up to five handshakes per host. That is round trips, so its size on
+the P5 follows the distance to the server and the number of requests a
+page makes to one host. It removes no CPU work: QuickJS, layout and
+decoding cost what they did. A QEMU TCG timing says nothing about the
+saving; the P5 pass and § 5's table do.
+
+#### What the captures say
+
+Each browser loaded one page (a document, a sheet, a script, two
+pictures, one same-origin `fetch`) from a local `nghttpd -v`. The files
+are in `~/os64-opus-kit/h2cap/`, the browser's version in each name.
+C2 was made with Firefox 158 on Linux, driven headless; the W1 set
+already found Firefox's requests the same on either platform apart from
+the platform token in its User-Agent, and nothing in an HTTP/2 greeting
+names a platform.
+
+| | Chrome 157, Windows (C1) | Firefox 158 (C2) |
+|---|---|---|
+| SETTINGS, in order | `HEADER_TABLE_SIZE` 65536, `ENABLE_PUSH` 0, `INITIAL_WINDOW_SIZE` 6291456, `MAX_HEADER_LIST_SIZE` 262144 | `HEADER_TABLE_SIZE` 65536, `ENABLE_PUSH` 0, `INITIAL_WINDOW_SIZE` 131072, `MAX_FRAME_SIZE` 16384 |
+| Connection WINDOW_UPDATE | 15663105 | 12517377 |
+| First stream id | 1 | 3 |
+| Pseudo-header order | `:method`, `:authority`, `:scheme`, `:path` | `:method`, `:path`, `:authority`, `:scheme` |
+| HEADERS carries a priority | yes: exclusive, weight by kind (document 256, sheet 256, script 220, picture 183, `fetch` 220), depending on an earlier stream (below) | yes: depends on 0, not exclusive, weight by kind (document 42, sheet 22, script 22, picture 12, `fetch` 22) |
+| WINDOW_UPDATE on each new stream | none | 12451840, straight after its HEADERS |
+| PRIORITY frames | none | none |
+| Lines sent over HTTP/2 that HTTP/1.1 lacks | `priority`, last: document `u=0, i`, sheet `u=0`, script `u=1`, picture `u=2, i`, `fetch` `u=1, i` | `te: trailers`, last |
+
+Firefox's `priority` line is the one its preset already sends over
+HTTP/1.1, with the same values. The weights are as `nghttpd` prints
+them, one more than the byte on the wire.
+
+**Chrome's dependencies.** In the capture the document and the sheet
+depend on stream 0, the script on the sheet, the first picture on the
+script, the second picture on the first, and the `fetch`, sent after the
+others had finished, on stream 0 again. C1's requests went out in
+falling order of weight, so it cannot tell "the newest heavier stream"
+from the rule Chromium's source states
+(`Http2PriorityDependencies::PriorityLowerBound`, read 2026-11-11;
+Quinn's finding on this brief's first draft, which had the former): of
+the streams still open whose weight is at least the new one's, take
+those of the LOWEST such weight, and of those the most recently opened;
+depend on it exclusively, and on 0 when there is none. With a script
+(220) open, then a sheet (256) opened after it, a picture (183) depends
+on the script by Chromium's rule and on the sheet by the other. Capture
+C3 is that page, with responses large enough to still be arriving, and
+it shows Chromium's rule: the script (stream 3, 220) and the sheet
+(stream 5, 256) each depended on 0, the first picture (183) on stream 3
+while stream 5 was open and newer, and the second picture on the first.
+The connection applies that rule, and the host case for it is the same
+streams in that order. Which streams Chrome itself
+counted as still open at each instant is its own bookkeeping and is not
+matched.
+
+The capture is of Chrome 157 and the preset says 156. Its string and
+client hints are refreshed from this capture in this slice, since the
+lines are in hand.
+
+#### The greeting's representation
+
+- **`os64_fetch_h2_t`** (fetch.h), what a connection of this caller's
+  says first and how its requests are shaped: the SETTINGS as (id, value)
+  pairs in order, at most eight; the connection's window increment (0
+  sends none); the first stream id (1 or 3); an increment sent as a
+  WINDOW_UPDATE on each new stream after its HEADERS (0 sends none); the
+  pseudo-header order as four letters (`"masp"`, `"mpas"`); and how
+  HEADERS carries a priority: not at all, flat (depending on stream 0,
+  not exclusive: Firefox's), or chained (exclusive, by the rule above:
+  Chrome's). `os64_fetch_options_t`
+  gains `h2`, a pointer to one, borrowed until the fetch is closed.
+  NULL means libfetch's own (below).
+- **Per request**, beside `order`: `h2_weight` (the priority's weight for
+  this request, used when the greeting says HEADERS carries one) and
+  `h2_lines` (whole `Name: value\r\n` lines sent only when the request
+  goes over HTTP/2, placed by `order` like any other line). The caller
+  cannot know the protocol before the dial answers, so it says what the
+  browser adds over HTTP/2 and libfetch decides.
+- **`http1`** in the options: true offers `http/1.1` alone. § 2.1's
+  costumes set it.
+- **`h2_greeting_t`** (h2_conn.h) gains the first stream id, and
+  `h2_stream_open` takes the priority and the stream increment. The
+  connection copies the SETTINGS at adoption, as it does now.
+- **`way_identity_t`** (libway) gains the preset's half: a pointer to its
+  `os64_fetch_h2_t`, a weight for each destination, its HTTP/2-only lines
+  (for Chrome a `priority` value for each destination), and `http1`. A
+  destination the captures do not show (a font, a frame, a worker) takes
+  the `fetch` row's weight and line, and is booked in DEBTS until someone
+  captures it. `agent.c`'s table fills them from the captures;
+  `way_load` passes them down beside `order`.
+- **A connection keeps the greeting it was dialled with, and the pool
+  hands it only to a fetch that would have said the same** (Quinn's
+  finding: closing idle connections on an agent change is not enough,
+  because a connection in use and a dial in flight both outlive it, and
+  the pool prefers an HTTP/2 connection with room). The rule is the
+  pool's, at every place it gives a fetch a connection or a dial to wait
+  on:
+  - An HTTP/2 connection records its greeting. `fetch_pool_take` gives
+    it only to a fetch whose `h2` is equal to it, value for value (two
+    NULLs are equal), and never to a fetch that says `http1`. This holds
+    for a connection that is idle, in use, or being adopted.
+  - A dial in flight records its dialler's `h2` and `http1`. A fetch
+    waits on it only when both are its own; otherwise the dial is not
+    this fetch's to wait for, and it dials for itself under the key's
+    cap as if the other were not there.
+  - The remembered ALPN answer (a host that chose h2) is ignored by an
+    `http1` fetch, which dials as HTTP/1.1 fetches do.
+  - An HTTP/1.1 connection has no greeting and is anyone's, as now.
+  - Connections under an identity nobody asks for any more are not
+    hunted down: they finish their streams and idle out. yonder still
+    closes the idle ones when the agent setting changes, so they go
+    sooner.
+  The pseudo-header order, weight and lines are each request's own and
+  need no rule.
+
+#### libfetch's own greeting
+
+For a caller that passes no `h2` (os64get, wend, a typed agent in
+yonder) and for yonder's own preset: H2.6's numbers stay. `ENABLE_PUSH`
+0, `INITIAL_WINDOW_SIZE` 1 MiB, `MAX_HEADER_LIST_SIZE` 64 KiB (the head
+limit the connection holds itself to); the connection's window raised to
+4 MiB; first stream 1; no priority on HEADERS; no stream increment;
+pseudo-headers `:method`, `:authority`, `:scheme`, `:path`; no added
+lines. These are os64's numbers and claim to be nobody else's: a
+megabyte a stream is what one picture's worth of buffering costs, and
+four for the connection lets four streams fill at once.
+
+A preset's windows are larger (Q2's ruling: match them). What bounds
+memory under a preset is the connection's window, since no more than
+that can be in flight unread across all its streams: about 12 MiB for
+Firefox's and 15 MiB for Chrome's.
+
+#### What a preset is allowed to say
+
+- **`te: trailers`** under the Firefox preset. § 2.7 said TE is not sent
+  at all; the capture shows Firefox sends it on every HTTP/2 request, and
+  the connection reads trailers (H2.4), so the line is true. § 2.7 is
+  amended in this slice's PR: TE is sent only as `trailers`, only where
+  the preset's browser sends it.
+- **`MAX_HEADER_LIST_SIZE`** as the preset's browser states it, when it
+  states one. The connection still resets a head past 64 KiB (§ 2.7). The
+  setting is advice to the server and the reset is the rule; a site whose
+  head is between the two fails as `UNSUPPORTED` with `head`, as now.
+- **`HEADER_TABLE_SIZE`** as stated: the decoder holds a table of that
+  size (H2.4 sized its scratch from it).
+- **Not matched**, as § 2.9 says: the HPACK encoder's indexing choices,
+  and the TLS handshake.
+
+#### The offer
+
+`fetch_h2_offer` is deleted. `dial` offers `h2, http/1.1` on a direct
+https dial that is not the TLS 1.2 fallback and whose options do not say
+`http1`; everything else in § 2.1 is unchanged. `/tests/h2probe` loses
+its use of the flag, its wait for the connection's reader and the
+comment that cites the 137 artifact (#543 paid it), and links
+`libfetch.so` like any program.
+
+#### The head's fact, and the record
+
+`os64_fetch_head_t` gains `http2`: true when the final head came over
+HTTP/2. yonder's request record says `HTTP/2` or `HTTP/1.1` for each
+request, and the stream id beside it. The reason sentences are H2.6's.
+
+#### Proof
+
+- **Host.** For each preset and for libfetch's own greeting, a scripted
+  peer (`tools/h2_peer`) checks every row of the table above against what
+  the connection sent: the SETTINGS in order, the window increment, the
+  first stream id, the priority fields and weight for each kind of
+  request, the stream increment and where it falls, the pseudo-header
+  order, and the HTTP/2-only lines and their place. `http1` offers no h2;
+  a typed agent gets libfetch's own. Chrome's dependency rule on the
+  three streams C3 distinguishes. The identity changing under load: with
+  a response still arriving on one preset's connection, and again with a
+  dial still in flight, a fetch under another preset and a fetch saying
+  `http1` each get a connection of their own, the first fetch finishes
+  whole, and no request rides a connection greeted as someone else. Under
+  ASan/UBSan and TSan with the
+  rest of the HTTP/2 harness. Mutants once at the end, through
+  `tools/mutants_parallel.py`.
+- **QEMU, against `nghttpd -v`.** yonder loads the capture page under
+  each browser preset, on the e1000 and on virtio. The server's log of
+  what we sent is compared with the capture, frame by frame, for every
+  row of the table; the lines of each request are compared by name and
+  order, with the values that are os64's own (Accept, Accept-Encoding)
+  set aside as DIVERGENCES already records. The record shows one
+  connection and `HTTP/2` on every request. `h2probe` passes without its
+  flag.
+- **The measurement** of § 5: connections per page and `arrived after`
+  on the local page, the blog page and the course page, before and after
+  this slice, each a fresh VM under the Chrome preset.
+- **The P5 pass, Chris's.** The sites that scored us, by outcome and
+  never by name; a session of ordinary browsing under each browser
+  preset; `h2probe` against a live site. The merge waits on it.
+
+#### The books
+
+As § 6 lists, in this slice's PR: the DEBTS and DIVERGENCES rows, the
+§ 2.10 rows, WIRE.md's pointer, § 2.7's TE sentence.
+
+#### Out of scope, on purpose
+
+Everything in § 2.10. A greeting for a browser with no capture (Safari's
+preset keeps libfetch's own until someone captures it). PRIORITY and
+PRIORITY_UPDATE frames, which neither capture shows on a page load.
+
+#### The off switch (Q5, ruled)
+
+`http2 = off` in `net.conf`, on the config ladder, read by libfetch once
+per process: every dial then offers `http/1.1` alone. `net.conf` and not
+`yonder.conf` because the choice is the network's and not one program's:
+os64get and wend speak through libfetch too, and one line turns all of
+them. It gives the P5 a before-and-after on one build, which § 5's table
+wants, and a way round a site that breaks. `/sys/conf` shows which file
+answered, as for any reader.
+
+#### H2.5, as built (2026-11-11, Fable)
+
+What the build made of the brief, and where it left it.
+
+- **The offer.** `fetch_h2_offer` is gone. `dial` (fetch.c) offers
+  `h2, http/1.1` on an encrypted hop unless the fetch speaks HTTP/1.1
+  alone: its caller's `http1`, or `http2 = off` in net.conf, which
+  `h2_switched_off` reads once per process at the first fetch. The shipped
+  `/etc/net.conf` documents the line, commented out, and says that a
+  `/home/net.conf` is read in place of it and not on top of it.
+- **The greeting.** `os64_fetch_h2_t` (fetch.h) as the brief has it, with
+  one more member, `te_trailers`. A fetch copies its caller's at open, or
+  libfetch's own (`kOwnGreeting`), into a `fetch_pool_say_t` (pool.h): the
+  greeting by value and `http1`. That one value is what the pool compares
+  and what a dial hands `h2_conn_adopt`.
+- **A departure: typed fields, not lines.** The brief gave a caller
+  `h2_lines`, whole lines sent only over HTTP/2. The request model refuses
+  a caller's own `TE` line (it is libfetch's to say), so what a browser
+  adds over HTTP/2 is two typed things: `h2_priority` in the options (a
+  Priority value, per request) and `te_trailers` in the greeting (the
+  preset's, on every request). http.c walks them after every other line
+  unless `order` names them (`head_lines_next`), only for the HTTP/2
+  rendering, and no longer drops `te` there.
+- **The connection** (h2_conn.c): the greeting's `first_stream`,
+  `stream_increment` and `priority` mode; `h2_stream_open` takes a weight.
+  `chained_parent` is Chromium's rule as capture C3 shows it. A stream's
+  receive window is the SETTINGS' and the increment together
+  (`our_stream_window`), and its credit is given back at half of that. A
+  frame for a stream below the first is a frame for one this client never
+  opened, and the connection's error.
+- **The pool** (Quinn's finding): `same_say` compares two says value for
+  value, and `fetch_pool_take` shares an HTTP/2 connection, or waits on a
+  dial in flight, only for a fetch whose say is the same. A record keeps
+  its dialler's say from the moment its slot is reserved. A dial that
+  offered HTTP/1.1 alone leaves what is remembered of its host as it was
+  (`fetch_pool_dialled`): its answer says nothing of what the host speaks,
+  and the builder's own re-read found it forgetting hosts that speak
+  HTTP/2.
+- **A greeting is judged at open**, before any dial: at most eight
+  settings, a pseudo-header order that is the four letters once each
+  (`http_h2_pseudo_ok`, shared with the renderer), and what HTTP/2 itself
+  forbids of one (an even first stream, a window past 2^31 - 1, a
+  setting's value out of range), by the connection's own judgement
+  (`h2_greeting_ok`, which adoption asks too).
+- **A server that requires HTTP/1.1** (the cold read's finding: HTTP/2 is
+  on for every program now, and IIS answers this way for its Windows
+  sign-in). A stream reset, or a connection ended, with `HTTP_1_1_REQUIRED`
+  before the head (a GOAWAY that took up no stream among them: Codex's
+  round 1; and one heard before the fetch has a stream at all, which the
+  connection keeps as `h2_conn_wants_h1` for a fetch it then has no room
+  for: round 2) is remembered of the server's key
+  (`fetch_pool_require_h1`), and the request goes again; that try and
+  every later fetch to the key dial HTTP/1.1 (`hop_http1` in `acquire`),
+  for as long as the pool remembers the key.
+- **A page's own Priority stands.** Under a preset that adds a Priority
+  over HTTP/2, a request whose page headers carry one sends the page's
+  alone (`opt_base`, fetch_job.c), as over HTTP/1.1.
+- **net.conf's switch is kept only when the file was read or is absent.**
+  A read that failed otherwise leaves the question open for the next
+  fetch.
+- **An HTTP/1.1 connection is anyone's**, whatever ALPN its dial offered:
+  a costume may ride one a browser preset dialled, and the other way
+  round. The TLS handshake is not matched (§ 2.9); booked in DEBTS.
+- **libway and yonder.** `way_identity_t` carries the greeting, a weight
+  and an HTTP/2-only Priority for each destination, and `http1`;
+  `way_identity_h2` gives a destination with none the fetch row's.
+  `agent.c` holds the two greetings and the rows, from C1, C2 and C3; the
+  costumes say `http1`. The Chrome preset is 157's string and hints, and
+  its 156 string is retired to it. `os64_fetch_forget_idle` (new, public)
+  closes the kept connections, and yonder calls it when the agent changes.
+- **The head's fact, and the record.** `os64_fetch_head_t.http2`, and the
+  detail's `h2` and `h2_stream` on every head that came over HTTP/2.
+  **A departure:** yonder's record has no line for each request, so it
+  cannot say the protocol of each. It gains one fact for the page, `HTTP`:
+  `2 (stream N)` or `1.1`. A page's other requests are seen in a server's
+  log, or by `h2probe`.
+- **`/tests/h2probe`** links `libfetch.so`, sets no flag, and no longer
+  waits for the connection's reader before it returns (#543 made a
+  program's exit code its own).
+- **`tools/host_suites.py`** lists `test_tracker.py`, which was in tools/
+  and in no list, so the runner refused to start.
+
+**Proof, host.** `tools/test_fetch_h2_host.sh`: every row of the capture
+table for yonder's own, Chrome's and Firefox's presets, read by a scripted
+server from the client's frames, with the presets taken from `agent.c`
+itself; Chrome's dependencies on C3's streams; a font under Chrome; a
+greeting that cannot be sent; Quinn's two cases (a response still
+arriving, a dial still in flight), in which Firefox and Lynx each get a
+connection of their own and neither waits on Chrome's dial; seven
+greetings that differ from a held connection's in one thing each; `http1`
+beside a live HTTP/2 connection; and, in a process of its own, net.conf's
+switch. `tools/test_h2_conn_host.sh`: the three shapes of opening a
+stream, the stream window and its credit, a greeting the connection
+refuses. `tools/test_http_host.sh fields`: the pseudo-header orders, the
+two HTTP/2-only lines and their place, what is refused. The wire counters
+(#547) are counted on the HTTP/2 path at the same places.
+
+**Mutants.** `tools/test_fetch_h2_mutants.py` (125) and
+`tools/test_h2_conn_mutants.py` (140), through `tools/mutants_parallel.py`:
+the full run, before the cold read, caught 248 of 253. Three did not
+build and were rewritten; two were missed and each got a case (a
+greeting with one more setting than a held connection's; a third stream
+of a weight two open streams share). Those, the ones written after the
+run and the ones whose lines the cold read's fixes moved were then run
+alone, and each was caught: every mutant in both lists is caught on its
+latest run, and the two lists have not been run whole since the fixes.
+
+**Proof, QEMU** (headless, against `nghttpd -v` with the libtls fixture
+certificate; the logs and the comparison script are in the kit's
+`h2cap/proof/`). yonder loaded the capture page under the Chrome preset
+and under the Firefox preset, each on the e1000 and on virtio: one
+HTTP/2 connection and six streams every time, and no row of the capture
+table differing from that browser's capture (the SETTINGS, the
+connection's window, the first stream, each request's field names in
+order, its priority's weight and exclusive bit, its stream's window, and
+every value but Accept, Accept-Encoding, the host and the User-Agent's
+platform; which earlier stream a chained priority depends on is not
+compared, being a matter of what was still open). Under yonder's own
+preset, libfetch's own greeting. Under Lynx, and under Chrome with
+`http2 = off` in net.conf, the dial offered `http/1.1` alone; that server
+speaks HTTP/2 only and turned them away, so a page loading over HTTP/1.1
+with the switch off is proved on the host and not in the guest. The
+record of the Chrome load: `HTTP: 2 (stream 1)`, one connection made,
+six requests sent over HTTP/2, no fetch waited.
+
+**Codex.** Three rounds. The first two each found one way a server's `HTTP_1_1_REQUIRED` went unheard (above); the third was clean, at `e8dd1d0f`.
+
+**The P5 measurement** (2026-11-12, Chris: nine sites, thirty-two page
+loads a round, three rounds before the switch and three after, the Chrome
+preset, the cache off, the records' `wire` facts summed a round).
+Connections made: 423, 417, 406 before; 230, 206, 227 after. The load
+events summed: 37.8, 35.4 and 38.9 seconds before; 35.3, 36.8 and 36.3
+after, which is inside the spread of either. The switch removes
+handshakes, and on these pages the time to load is parsing, script and
+layout.
+
+It also showed a cost this brief had priced wrongly. Fetches that waited
+for a connection: 52, 74 and 97 a round before, under 3.5 seconds summed;
+about 200 a round after, 91 to 101 seconds summed, nearly all on two
+sites whose pages speak to about thirty hosts. With sixteen places and
+every one an idle HTTP/2 connection, each new host evicted one and waited
+for its reader's look, half a second at the most, and a second fetch
+waited behind the first: the table condemned one connection at a time.
+Two changes, made after the measurement and before the merge. A fetch
+the table has no place for now has an idle HTTP/1.1 connection closed
+before any HTTP/2 one, which admits it at once, and with none an idle
+HTTP/2 one is condemned for each fetch that wants a place, so a burst
+waits one look together; fetches to one host that speaks h2 want one
+place between them (`fetch_pool_take`). And `H2_READER_SLICE_MS` is 100,
+so that look is a tenth of a second at the most. Three cases hold the
+reader's closes back to prove each rule, and mutants of each. The cure is the kernel
+verb DEBTS names; until it exists the reader's wakes are the price.
+
+One round on the P5 with both changes: 144 fetches waited, 7.3 seconds
+summed, about 50 ms a wait where it had been about 500; the three pages
+of the thirty-host site 107 waits and 5.7 seconds, where they had been
+about 135 and 80. Connections made, 245, and the load events summed,
+35.7 seconds, are where the three rounds before the changes were, with
+one page apart: the thirty-host site's first page made 50 connections
+where it had made 31 to 35. One round does not say whether that is the
+page or the pool. A host not yet known to speak h2 is still dialled once
+for each fetch of a burst (§ 2.2), and with the table full each of those
+dials now closes a connection at once where it used to wait its turn.
+A round under yonder's own agent agreed: 254 connections, 145 fetches
+waiting 7.6 seconds summed, that page 40 connections. And `h2probe`
+against a live site: twelve fetches at once, one HTTP/2 connection.
+
+**Not done.** A Firefox Reload's place for `te` beside `Pragma` and
+`Cache-Control`, which was not captured: `te` follows them here.
+
+## 5. Proof, across the arc
+
+- **Host first, always.** H2.3 and most of H2.4 are pure or scripted and
+  never need the guest; H2.1 runs against OpenSSL on the host; H2.2's
+  concurrency runs under the sanitizers with real threads. A QEMU boot is
+  for what a unit test cannot see: the wire, and the kernel's bell.
+- **A scripted h2 peer, not a real server, for the connection's cases**,
+  because the cases that matter are the ones a well-behaved server will
+  not produce on request (WIRE.md's precedent: "the awkward cases added").
+  The real server (`nghttpd`) is for the switch, where interoperability
+  is the question.
+- **Mutants once, at the end of each slice**, through
+  tools/mutants_parallel.py, twelve workers, re-run only for lines a
+  review round changed.
+- **The measurement that justifies the arc** is WIRE.md § 2's table with
+  a third column — connections per page and `arrived after` — on the
+  local page, the blog page and the course page, before H2.1, after H2.1,
+  after H2.2 and after H2.5, each a fresh VM under the Chrome preset. The
+  expectation: connections to one or two per host and handshakes with
+  them; arrival time following on the pages whose wait was connections,
+  and not on the one whose wait is QuickJS under TCG. The P5's storefront
+  is the figure QEMU cannot stand in for, and Chris reads it.
+- **How it is read.** yonder's record of a page (`diagnostics =` in
+  yonder.conf) carries five `wire` facts beside `arrived after`: the
+  connections the load made and what each spoke, its TLS handshakes and
+  how many resumed, its requests and what carried them, how many fetches
+  waited for a connection and for how long in all, and what the cache
+  answered without the wire. They are libfetch's counters
+  (`os64_fetch_counts`, every fetch in the process) and the cache's, read
+  when the load begins and subtracted each time the record is written, so
+  the last writing of a record has the whole load. A before and an after
+  are comparable when their `wire cache` lines agree: a load the cache
+  answered did not cost what it would have.
+
+## 6. The books
+
+When H2.5 lands: DEBTS § libfetch loses "HTTP/2 and pipelining are not
+spoken" and "Fetches to one host are not capped at once" (paid by H2.2),
+DEBTS § TLS 1.3 engine boundaries loses the tickets clause (H2.1), and
+gains the § 2.10 rows and one for HTTP/3; DIVERGENCES' "The browser's
+identity" row changes its last cell from "HTTP/1.1, os64's own handshake"
+to "HTTP/2 under the preset's greeting, os64's own handshake";
+BROWSER_DEBTS loses nothing it has not already lost. WIRE.md § 2 gains a
+one-line pointer here. Each slice's "as built" lands under its brief
+above, by its builder, in its PR.
+
+## 7. Questions (each is a `Q` row in the tracker; all ruled by Chris for the leans, Q1 to Q3 on 2026-11-09, Q4 on 2026-11-10 and Q5 on 2026-11-11)
+
+- **Q1 — the bell's implementation.** A kernel handle kind (§ 2.4; one
+  handle per bell, a small kernel slice with a Codex round; Fable's lean),
+  or a pipe-backed `os64_bell_t` in libos64 alone (no kernel change; two
+  handles and 64 KiB per bell, which yonder's handle table cannot afford
+  at thirteen in flight unless the pool's total drops). Same header either
+  way.
+- **Q2 — the receive window.** Match the preset's window values exactly
+  (the fingerprint's whole point; the buffer ceiling is thirteen streams
+  times the window, reached only by a server that floods a client that is
+  not reading), or advertise a smaller window of our own at a known cost
+  in fidelity. Fable's lean: match the preset; the ceiling is theoretical
+  and `max_body` is the real bound.
+- **Q3 — how a reader is stopped.** The reader parks in slices and checks
+  a flag, and is the socket's only closer (§ 2.3; no kernel change, a
+  condemned connection ends up to a slice late; Fable's lean), or a
+  kernel verb that hangs a connection up without closing its handle
+  (prompt; new kernel surface with a Codex round of its own).
+- **Q4 — H2.4 as one slice or two.** The connection built and proved
+  alone, then joined to fetches in a second slice (H2.6; two PRs, two
+  Codex rounds, each reading one kind of problem: the connection's own
+  concurrency, then its meeting with the pool and the retry rules;
+  Fable's lean), or one slice as § 3 first had it (one PR and one round,
+  on what would be the largest diff of the arc, with the pool's changes
+  and the connection's reviewed together). RULED by Chris on 2026-11-10:
+  two slices. Quinn's read of the brief recommended the same.
+- **Q5 — a way to turn HTTP/2 off without a rebuild.** An `http2 = off`
+  line in `net.conf` on the config ladder, read by libfetch once per
+  process (Fable's lean), or no switch. RULED by Chris on 2026-11-11:
+  yes, in `net.conf` (§ 4 H2.5, The off switch).

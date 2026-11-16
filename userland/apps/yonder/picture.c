@@ -6,8 +6,41 @@
 #include "scale.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
+#include "os64/proc.h"
 #include "os64/slurp.h"
 #include "os64/str.h"
+
+yonder_picture_backing_t *yonder_picture_backing_new(void)
+{
+    yonder_picture_backing_t *b=os64_calloc(1,sizeof(*b));
+    if(b)b->refs=1;
+    return b;
+}
+yonder_picture_backing_t *yonder_picture_backing_hold(yonder_picture_backing_t *b)
+{
+    if(b)__atomic_add_fetch(&b->refs,1,__ATOMIC_RELAXED);
+    return b;
+}
+void yonder_picture_backing_free(yonder_picture_backing_t *b)
+{
+    if(!b || __atomic_sub_fetch(&b->refs,1,__ATOMIC_ACQ_REL))return;
+    os64_free(b->bytes);os64_image_free(&b->image);os64_free(b);
+}
+
+// Raster admission and the first layout choose which representation to retain.
+// Sequences own their input; refused sequences keep no separate body. A data:
+// URL already supplies immutable bytes.
+static void preserve_body(const yonder_picture_job_t *j,yonder_picture_t *p,uint8_t **bytes,size_t len)
+{
+    if(!j->recoverable || j->data_url || p->status!=OS64_IMAGE_OK || p->kind!=YONDER_PICTURE_RASTER)return;
+    p->encoded=yonder_picture_backing_new();
+    if(!p->encoded) {
+        p->status=OS64_IMAGE_NO_MEMORY;
+        os64_strcopy(p->why,sizeof(p->why),"no memory for image reconstruction owner");
+        return;
+    }
+    p->encoded->bytes=*bytes;p->encoded->length=len;*bytes=NULL;
+}
 
 // Negotiated image types, then anything: a server that labels a GIF
 // as text/plain still sent a GIF, and the decoder reads the bytes, not the
@@ -29,6 +62,12 @@ static bool xml_candidate(const uint8_t *bytes, size_t len)
     while (at < len && (bytes[at] == ' ' || bytes[at] == '\t' || bytes[at] == '\r' || bytes[at] == '\n'))
         ++at;
     return at < len && bytes[at] == '<';
+}
+static bool header_content_type(const char *name)
+{
+    const char *expected="content-type";
+    for(size_t i=0;i<12;i++)if((name[i]|32)!=expected[i])return false;
+    return true;
 }
 static bool svg_type(const char *s)
 {
@@ -147,6 +186,21 @@ static os64_image_status_t decode(const uint8_t *bytes, size_t len, const char *
     return st;
 }
 
+static os64_image_status_t decode_observed(const uint8_t *bytes, size_t len, const char *type,
+    const yonder_picture_job_t *job, bool (*cancelled)(void *), void *ctx, yonder_picture_t *p)
+{
+    int64_t began = os64_micros();
+    os64_image_status_t status = decode(bytes, len, type, job, cancelled, ctx, p);
+    int64_t ended = os64_micros();
+    p->decoded = true;
+    p->body_bytes = len;
+    p->decode_timed = began >= 0 && ended >= began;
+    if (p->decode_timed) p->decode_us = (uint64_t)(ended - began);
+    p->reduced = status == OS64_IMAGE_OK && p->kind == YONDER_PICTURE_RASTER &&
+                 (p->image.width < p->width || p->image.height < p->height);
+    return status;
+}
+
 int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out)
 {
     yonder_picture_job_t *j = job;
@@ -157,6 +211,32 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
     if (cancelled && cancelled(ctx)) {
         p->status = svg_failure(SVG_CANCELLED, p);
         return 0;
+    }
+    if(j->source) {
+        p->origin_clean=j->source_clean;
+        if(j->source->bytes) {
+            p->status=decode_observed(j->source->bytes,j->source->length,NULL,j,cancelled,ctx,p);
+        } else {
+            // The full raster is immutable. Reduction allocates its own result;
+            // the job never frees or lends the catalog's source allocation.
+            int64_t began=os64_micros();
+            const os64_image_t *src=&j->source->image;
+            p->width=src->width;p->height=src->height;
+            uint32_t w=j->cover_w<src->width?j->cover_w:src->width;
+            uint32_t h=j->cover_h<src->height?j->cover_h:src->height;
+            p->status=OS64_IMAGE_NO_MEMORY;
+            if(w && h && !(cancelled && cancelled(ctx))) {
+                p->image.pixels=os64_malloc((size_t)w*h*4);
+                if(p->image.pixels && yonder_reduce_picture(src->pixels,src->width,src->height,p->image.pixels,w,h)) {
+                    p->image.width=w;p->image.height=h;p->cost=(size_t)w*h*4;
+                    p->status=OS64_IMAGE_OK;p->reduced=w<src->width || h<src->height;
+                }
+            }
+            int64_t ended=os64_micros();
+            p->decode_timed=began>=0 && ended>=began;
+            if(p->decode_timed)p->decode_us=(uint64_t)(ended-began);
+        }
+        return p->status==OS64_IMAGE_OK?1:0;
     }
     // A data: picture is its own address, decoded here as Fetch decodes
     // one (fetch_job.h): nothing is fetched or read. Its type is what the
@@ -172,9 +252,10 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
             p->status = OS64_IMAGE_NO_FILE;
             os64_strcopy(p->why, sizeof(p->why), "its data: address is empty");
         } else {
-            p->status = decode(bytes, len, type, j, cancelled, ctx, p);
+            p->status = decode_observed(bytes, len, type, j, cancelled, ctx, p);
             p->origin_clean = true;
         }
+        preserve_body(j,p,&bytes,len);
         os64_free(bytes);
         return p->status == OS64_IMAGE_OK ? 1 : 0;
     }
@@ -184,21 +265,24 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         uint8_t *bytes = NULL;
         p->status = OS64_IMAGE_IO_ERROR;
         if (os64_slurp(j->url + 7, OS64_IMAGE_CAP_DEFAULT, &bytes, &len) == OS64_SLURP_OK) {
-            p->status = decode(bytes, len, NULL, j, cancelled, ctx, p);
+            p->status = decode_observed(bytes, len, NULL, j, cancelled, ctx, p);
             /* Local pages may sample local fixtures; a network page may not
              * acquire file pixels through this worker's Canvas request. */
             p->origin_clean=(os64_strlen(j->hooks.referrer)>=7&&!os64_memcmp(j->hooks.referrer,"file://",7));
+            preserve_body(j,p,&bytes,len);
             os64_free(bytes);
         } else {
             os64_strcopy(p->why, sizeof(p->why), "could not be read");
         }
         return p->status == OS64_IMAGE_OK ? 1 : 0;
     }
-    if(j->canvas_request) {
+    if(j->recoverable || j->canvas_request || j->display_cors) {
         yonder_fetch_job_t request={.agent=j->agent,.identity=j->hooks.identity,.url=j->url,
-            .jar=j->hooks.jar,.max_body=OS64_IMAGE_CAP_DEFAULT};
-        request.request.mode=j->canvas_request==1?WAY_MODE_NO_CORS:WAY_MODE_CORS;
-        request.request.credentials=j->canvas_request==2?WAY_CREDENTIALS_SAME_ORIGIN:WAY_CREDENTIALS_INCLUDE;
+            .jar=j->hooks.jar,.cache=j->hooks.cache,.max_body=OS64_IMAGE_CAP_DEFAULT,
+            .default_accept=j->svg_enabled?PICTURE_ACCEPT:OS64_IMAGE_ACCEPT ", */*;q=0.5"};
+        unsigned mode=j->canvas_request?j->canvas_request:j->display_cors?j->display_cors:1;
+        request.request.mode=mode==1?WAY_MODE_NO_CORS:WAY_MODE_CORS;
+        request.request.credentials=mode==2?WAY_CREDENTIALS_SAME_ORIGIN:WAY_CREDENTIALS_INCLUDE;
         request.request.redirect=WAY_REDIRECT_FOLLOW;
         request.request.policy=WAY_POLICY_STRICT_ORIGIN_WHEN_CROSS_ORIGIN;
         way_origin_of(j->hooks.referrer,0,&request.request.origin);
@@ -206,11 +290,25 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         os64_strcopy(request.referrer,sizeof(request.referrer),j->hooks.referrer);
         yonder_fetched_t *got=NULL;
         yonder_fetch_image_run(&request,cancelled,ctx,(void **)&got);
+        if (got && got->ok) {
+            p->fetched = true;
+            p->served = got->served;
+            p->body_bytes = got->body_len;
+        }
         p->status=OS64_IMAGE_IO_ERROR;
         if(got&&got->ok&&got->status>=200&&got->status<300&&got->has_body) {
-            p->status=decode(got->body,got->body_len,NULL,j,cancelled,ctx,p);
+            char type[WAY_MIME_SERIALIZED_MAX]={0};
+            size_t at=0;way_header_t header;
+            while(way_header_next(got->headers,got->headers_len,&at,&header))
+                if(header.name_len==12 && header_content_type(header.name)) {
+                    size_t n=header.value_len<sizeof(type)-1?header.value_len:sizeof(type)-1;
+                    os64_memcpy(type,header.value,n);type[n]=0;break;
+                }
+            p->status=decode_observed(got->body,got->body_len,type,j,cancelled,ctx,p);
+            preserve_body(j,p,&got->body,got->body_len);
             p->origin_clean=got->type!=WAY_TYPE_OPAQUE;
         } else os64_strcopy(p->why,sizeof(p->why),got&&got->why[0]?got->why:"image fetch failed");
+        if(got)j->hooks.cookies_short=got->cookies_short;
         yonder_fetched_free(got);return p->status==OS64_IMAGE_OK?1:0;
     }
     os64_fetch_options_t opt = {0};
@@ -224,6 +322,9 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         os64_snprintf(p->why, sizeof(p->why), "did not fetch (%s)", os64_fetch_status_name(body.fetch));
         return 0;
     }
+    p->fetched = true;
+    p->served = body.served;
+    p->body_bytes = body.len;
     // An error's body is the server's page about the error, not the picture.
     if (cancelled && cancelled(ctx)) {
         os64_strcopy(p->why, sizeof(p->why), "cancelled");
@@ -239,7 +340,7 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         else
             os64_strcopy(p->why, sizeof(p->why), "an empty reply");
     } else {
-        p->status = decode(body.bytes, body.len, body.content_type, j, cancelled, ctx, p);
+        p->status = decode_observed(body.bytes, body.len, body.content_type, j, cancelled, ctx, p);
     }
     os64_free(body.bytes);
     return p->status == OS64_IMAGE_OK ? 1 : 0;
@@ -249,12 +350,15 @@ void yonder_picture_release(void *job, void *product)
 {
     yonder_picture_t *p = product;
     if (p != NULL) {
+        yonder_picture_backing_free(p->encoded);
         yonder_svg_document_free(p->svg);
         os64_image_free(&p->image);
         os64_image_sequence_free(p->sequence);
         os64_free(p);
     }
-    if (job != NULL)
+    if (job != NULL) {
+        yonder_picture_backing_free(((yonder_picture_job_t *)job)->source);
         os64_free(((yonder_picture_job_t *)job)->data_url);
+    }
     os64_free(job);
 }

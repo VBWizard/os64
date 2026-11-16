@@ -1159,6 +1159,7 @@ static JSValue form_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         for (size_t i = 0;; i++) {
             f = form_state(self);
             if (f == NULL || i >= f->count) break;
+            if (!d_require_callback(dom, ctx, argv[0])) return JS_EXCEPTION;
             JSValue args[3] = {entry_value(ctx, &f->entries[i]),
                                JS_NewStringLen(ctx, f->entries[i].name, f->entries[i].name_length), JS_DupValue(ctx, self)};
             JSValue done = JS_IsException(args[0]) || JS_IsException(args[1]) ? JS_EXCEPTION

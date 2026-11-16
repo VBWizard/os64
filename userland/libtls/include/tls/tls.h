@@ -29,7 +29,11 @@ typedef enum {
 enum {
     OS64_TLS_RECV_CIPHER = 1u << 0, OS64_TLS_SEND_CIPHER = 1u << 1,
     OS64_TLS_RECV_PLAIN = 1u << 2, OS64_TLS_SEND_PLAIN = 1u << 3,
-    OS64_TLS_HANDSHAKE_DONE = 1u << 4, OS64_TLS_CLOSING = 1u << 5
+    OS64_TLS_HANDSHAKE_DONE = 1u << 4, OS64_TLS_CLOSING = 1u << 5,
+    // With HANDSHAKE_DONE: the server accepted a kept session, so this
+    // connection is authenticated by an earlier one to the same host, port
+    // and trust, and its handshake carried no certificate.
+    OS64_TLS_RESUMED = 1u << 6
 };
 typedef enum {
     OS64_TLS_PROTOCOL_DEFAULT, OS64_TLS_PROTOCOL_TLS12,
@@ -77,6 +81,13 @@ typedef struct {
     size_t alpn_count;
     os64_tls_trust *trust; // Borrowed sealed snapshot; retained by the client.
     os64_tls_protocol_t protocol; // DEFAULT: TLS 1.3; TLS12: explicit; TLS12_FALLBACK: guarded retry.
+    // The peer's port, and with it leave to RESUME (TLS 1.3 only): the
+    // tickets this connection is given are kept, and one kept for the same
+    // hostname, port and trust is offered. 0: neither, and the hello says
+    // nothing of resumption. The kept session is taken when the client is
+    // CREATED, and a session is offered once: a client made and freed
+    // without a handshake has spent it.
+    uint16_t port;
 } os64_tls_config_t;
 
 // One serialized owner per client. Creation samples OS UTC and fresh entropy;
@@ -110,6 +121,9 @@ OS64_TLS_API const char *os64_tls_status_name(os64_tls_status_t status);
 OS64_TLS_API const char *os64_tls_error_description(os64_tls_status_t status,
                                                   os64_tls_policy_reason_t policy_reason, int upstream_error);
 OS64_TLS_API const char *os64_tls_license(void);
+// Forget every kept session, so the next connection to any host is a full
+// handshake. For a program that wants none left behind, and the harnesses.
+OS64_TLS_API void os64_tls_sessions_drop(void);
 
 // A builder has one serialized owner. Failed additions leave existing anchors
 // intact. Sealed snapshots cannot be changed; clients retain their own reference.

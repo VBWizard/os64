@@ -7,6 +7,7 @@
         os64_image_sequence_decode;
         os64_image_sequence_load;
         os64_image_sequence_frame;
+        os64_image_sequence_default;
         os64_image_sequence_next;
         os64_image_sequence_rewind;
         os64_image_sequence_free;

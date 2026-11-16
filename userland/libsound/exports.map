@@ -1,0 +1,8 @@
+# The whole public surface: os64/resample.h. speexdsp's own names stay
+# local, so no program can come to depend on one.
+{
+  global:
+    os64_resampler_create; os64_resampler_run; os64_resampler_latency;
+    os64_resampler_destroy;
+  local: *;
+};

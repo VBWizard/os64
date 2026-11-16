@@ -899,6 +899,17 @@ uint64_t os64_heap_verify(void)
 	return problems;
 }
 
+// The report as the heap stands now, copied under the heap's own lock, so
+// the copy is never torn and its generation is always even.
+void os64_heap_report_copy(os64_heap_report_t *out)
+{
+	if (out == NULL)
+		return;
+	heap_lock();
+	*out = gReport;
+	heap_unlock();
+}
+
 // ── malloc ──────────────────────────────────────────────────────────────────
 
 static void *malloc_dedicated(uint64_t size)

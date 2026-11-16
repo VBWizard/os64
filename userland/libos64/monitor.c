@@ -426,8 +426,8 @@ static void calculate(os64_monitor_t *m, monitor_buffer_t *b,
     }
 }
 
-int32_t os64_monitor_sample(os64_monitor_t *m, bool threads,
-                            const os64_monitor_snapshot_t **out)
+static int32_t sample(os64_monitor_t *m, bool tasks, bool threads,
+                      const os64_monitor_snapshot_t **out)
 {
     if (!out) return -1;
     *out = NULL;
@@ -436,8 +436,8 @@ int32_t os64_monitor_sample(os64_monitor_t *m, bool threads,
     os64_monitor_snapshot_t *s = &b->snapshot;
     os64_memset(s, 0, sizeof(*s));
     s->tasks = b->tasks; s->threads = b->threads; s->cores = b->cores;
-    s->threads_sampled = threads;
-    if (collect_tasks(m, b, threads) < 0) goto failed;
+    s->threads_sampled = tasks && threads;
+    if (tasks && collect_tasks(m, b, threads) < 0) goto failed;
     collect_cores(m, b);
     if (os64_ticks(&s->ticks) < 0 || !s->ticks.per_second) goto failed;
     s->memory_valid = os64_memory(&s->memory) == 0;
@@ -452,6 +452,18 @@ failed:
     m->events_previous_valid = false;
     os64_memset(&m->initial_ticks, 0, sizeof(m->initial_ticks));
     return -1;
+}
+
+int32_t os64_monitor_sample(os64_monitor_t *m, bool threads,
+                            const os64_monitor_snapshot_t **out)
+{
+    return sample(m, true, threads, out);
+}
+
+int32_t os64_monitor_sample_system(os64_monitor_t *m,
+                                   const os64_monitor_snapshot_t **out)
+{
+    return sample(m, false, false, out);
 }
 
 bool os64_monitor_task_split(const os64_monitor_t *m, uint64_t pid,

@@ -33,6 +33,9 @@
 #define OS64_GUI_ERR_NO_RESOURCES    (-2)
 #define OS64_GUI_ERR_BAD_ARGS        (-3)
 #define OS64_GUI_ERR_BUSY            (-7) // child windows or another event waiter
+#define OS64_GUI_ERR_BELOW_MINIMUM   (-9)
+#define OS64_GUI_ERR_ABOVE_CAPACITY  (-10)
+#define OS64_GUI_ERR_SCREEN_FIT      (-11)
 #define OS64_GUI_ERR_NOT_FOCUSED     (-8) // owned popup parent lost focus
 // A blocking wait (os64_gui_event_wait) cut short by a signal. NOT a GUI
 // error of its own: it is THE system-wide sentinel, OS64_INTERRUPTED, because
@@ -312,6 +315,9 @@ typedef struct os64_gui_surface
 // Frame x/y and content width/height; use only fields named by changed.
 // Automatic fitting, maximize/restore and layout changes do not originate it.
 #define OS64_GUI_EVENT_WINDOW_PLACEMENT 17
+// Pin state changed through the frame, keyboard or client API. No payload;
+// query get_state. This hint can be dropped on overflow; reconcile on input loss.
+#define OS64_GUI_EVENT_WINDOW_PIN_CHANGED 18
 #define OS64_GUI_PLACEMENT_X      (1u << 0)
 #define OS64_GUI_PLACEMENT_Y      (1u << 1)
 #define OS64_GUI_PLACEMENT_WIDTH  (1u << 2)
@@ -496,6 +502,12 @@ static inline int64_t os64_gui_window_get_state(int64_t handle,
 static inline int64_t os64_gui_window_focus(int64_t handle)
 { return (int64_t)os64_syscall1(SYSCALL_GUI_WINDOW_FOCUS, (uint64_t)handle); }
 
+// Change the stacking band of an owned ordinary window without taking focus.
+// Uses the same state as the frame pin and Ctrl+Alt+P. Desktop and popup
+// windows are refused. Returns 0, or a negative OS64_GUI_ERR_* without change.
+static inline int64_t os64_gui_window_set_pinned(int64_t handle,bool pinned)
+{ return (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_SET_PINNED,(uint64_t)handle,pinned?1:0); }
+
 // Set minimum drawable dimensions, excluding borders/titlebar. Zero or a
 // value below the WM floor uses that floor (64x32, capped per dimension by a
 // popup's birth capacity). The minimum must fit the
@@ -512,6 +524,23 @@ static inline int64_t os64_gui_window_set_min_size(int64_t handle,
 {
     return (int64_t)os64_syscall3(SYSCALL_GUI_WINDOW_SET_MIN_SIZE,
                                   (uint64_t)handle, width, height);
+}
+
+// Request exact content dimensions on an owned ordinary window. Desktop and
+// popup targets are refused. BELOW_MINIMUM, ABOVE_CAPACITY and SCREEN_FIT
+// leave geometry and gestures unchanged. The complete frame uses the current
+// decoration metrics: preserve its top-left where possible, otherwise shift
+// it onto the screen. Sizes are refused rather than silently reduced.
+// Maximized windows update their normal restore frame only; their visible
+// surface stays maximized. No-op requests succeed. Visible changes emit
+// WINDOW_RESIZE, never WINDOW_PLACEMENT; refresh the surface after success.
+// Focus, pin and minimization state are preserved. Valid requests cancel an
+// active resize gesture using the compositor's normal release-draining rules.
+static inline int64_t os64_gui_window_set_content_size(int64_t handle,
+                                                        uint32_t width,uint32_t height)
+{
+    return (int64_t)os64_syscall3(SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE,
+                                  (uint64_t)handle,width,height);
 }
 
 static inline int64_t os64_gui_screen_info(uint32_t *width, uint32_t *height)

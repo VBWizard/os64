@@ -8,6 +8,8 @@
 // Single-threaded fault-injection fixture; this is not the library allocator.
 static size_t allocations, frees, allocation_calls, fail_allocation;
 typedef union { max_align_t alignment; size_t size; } allocation_header;
+// session_cache.c takes an os64 lock, whose contended path yields.
+void os64_yield(void) {}
 void *os64_malloc(size_t n)
 {
     if (++allocation_calls == fail_allocation) return NULL;

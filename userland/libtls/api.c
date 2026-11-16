@@ -8,7 +8,8 @@ os64_tls_status_t os64_tls_client_create(const os64_tls_config_t *config, os64_t
     *out = NULL;
     if (!config) return OS64_TLS_BAD_ARGUMENT;
     tls_os_config inputs = {.hostname = config->hostname, .alpn = config->alpn,
-        .alpn_count = config->alpn_count, .trust = config->trust, .protocol = config->protocol};
+        .alpn_count = config->alpn_count, .trust = config->trust, .protocol = config->protocol,
+        .port = config->port};
     os64_tls_engine *engine = NULL;
     tls_status status = os64_tls_engine_create_os(&inputs, &engine);
     *out = (os64_tls_client *)engine;
@@ -132,6 +133,7 @@ const char *os64_tls_error_description(os64_tls_status_t status,
         case TLS13_ERR_ALPN: return "server selected an unoffered application protocol";
         case TLS13_ERR_RETRY: return "HelloRetryRequest did not request a permitted change";
         case TLS13_ERR_SIGNATURE_SCHEME: return "TLS signature scheme does not match the authenticated key";
+        case TLS13_ERR_PSK: return "server accepted a resumed session it was not offered, or under another hash";
         }
         if (error >= BR_ERR_SEND_FATAL_ALERT && error < BR_ERR_SEND_FATAL_ALERT + 256)
             return "client sent a fatal TLS alert";

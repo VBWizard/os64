@@ -7,12 +7,15 @@
 
 static uint64_t now_ms(const os64_dom_t *dom)
 {
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
+    return d_host_now_ms(dom);
 }
 
 static void release_values(os64_dom_t *dom, DTimer *timer)
 {
-    if (!JS_IsUndefined(timer->callback)) JS_FreeValueRT(dom->engine, timer->callback);
+    if (timer->captured.runtime) {
+        os64_js_outcome_t out;
+        os64_js_callback_clear(dom->runtime, OS64_JS_ABI_ID, &timer->captured, &out);
+    } else if (!JS_IsUndefined(timer->callback)) JS_FreeValueRT(dom->engine, timer->callback);
     for (int i = 0; i < timer->argc; i++) JS_FreeValueRT(dom->engine, timer->argv[i]);
     timer->callback = JS_UNDEFINED;
     timer->argc = 0;
@@ -69,6 +72,23 @@ static uint64_t clamp(uint64_t delay, uint32_t nesting)
 
 enum { T_TIMEOUT, T_INTERVAL, T_CLEAR };
 
+static void clear_capture(os64_dom_t *dom, os64_js_callback_t *record)
+{
+    os64_js_outcome_t out;
+    os64_js_callback_clear(dom->runtime, OS64_JS_ABI_ID, record, &out);
+}
+
+static bool capture_live(JSContext *ctx, const os64_js_callback_t *record,
+                         os64_js_realm_t *entry)
+{
+    if (!record->runtime) return true;
+    if (os64_js_realm_is_retired(record->incumbent) || os64_js_realm_is_retired(entry)) {
+        d_error(ctx, "InvalidStateError", "Timer callback settings have retired");
+        return false;
+    }
+    return true;
+}
+
 static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                             int magic, JSValue *data)
 {
@@ -82,47 +102,61 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
         if (timer != NULL) timer_free(dom, timer);
         return JS_UNDEFINED;
     }
-    /* Both conversions run script (a string handler's toString, the delay's
-     * valueOf), and that script may set timers of its own. They happen
-     * first, in WebIDL's argument order, so the quota below counts every
-     * timer that exists by the time this one is added. */
+    /* Capture the callable at its WebIDL conversion, before delay.valueOf
+     * can reenter or retire a realm. String conversion has the same argument
+     * order; quota admission follows both conversions and counts nested work. */
     JSValueConst handler = argc > 0 ? argv[0] : JS_UNDEFINED;
     DString source = {0};
     bool function = JS_IsFunction(ctx, handler);
+    os64_js_callback_t captured = OS64_JS_CALLBACK_INIT;
+    os64_js_realm_t *entry = NULL;
+    if (function && dom->cluster && dom->cluster->timer_settings) {
+        os64_js_outcome_t out;
+        JSContext *associated = JS_GetCallbackRealm(ctx, handler);
+        entry = associated ? os64_js_realm_from_context(dom->runtime, associated, OS64_JS_ABI_ID, &out) : NULL;
+        if (!entry || os64_js_callback_capture(dom->runtime, OS64_JS_ABI_ID, handler, &captured, &out) != OS64_JS_OK)
+            return d_error(ctx, "InvalidStateError", "Timer callback settings are unavailable");
+    }
     // The old web's setTimeout("tick()", 1000): a string is a script.
     if (!function && !d_string(dom, ctx, handler, &source)) return JS_EXCEPTION;
-    /* WebIDL's long: the delay wraps as a 32-bit integer, and below zero is
-     * zero. */
+    /* WebIDL's long wraps as a 32-bit integer; negative delays become zero. */
     int32_t delay = 0;
-    if (argc > 1 && JS_ToInt32(ctx, &delay, argv[1]) < 0) {
-        d_free(dom, source.data);
-        return JS_EXCEPTION;
-    }
+    if (argc > 1 && JS_ToInt32(ctx, &delay, argv[1]) < 0) goto fail;
     if (delay < 0) delay = 0;
-    uint32_t script = function ? d_callback_script(dom, ctx, handler) : D_SCRIPT_PAGE;
-    if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
+    if (!d_require_active(dom, ctx) || !capture_live(ctx, &captured, entry)) goto fail;
+    os64_dom_t *report_owner = dom;
+    uint32_t script = function ? d_callback_record(dom, ctx, handler, &report_owner) : D_SCRIPT_PAGE;
+    if (script == D_SCRIPT_FAILED) goto fail;
     if (dom->timer_count >= OS64_DOM_TIMERS_MAX || dom->timer_id == INT32_MAX) {
-        d_free(dom, source.data);
-        return d_error(ctx, "QuotaExceededError", "Too many timers");
+        d_error(ctx, "QuotaExceededError", "Too many timers");
+        goto fail;
     }
-    DTimer *timer = d_alloc(dom, sizeof(*timer));
+    DTimer *timer = d_alloc_kind(dom, sizeof(*timer), OS64_DOM_MEM_TIMER);
     if (timer == NULL) {
-        d_free(dom, source.data);
-        return d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
+        d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
+        goto fail;
     }
     timer->callback = JS_UNDEFINED;
+    timer->captured = (os64_js_callback_t)OS64_JS_CALLBACK_INIT;
+    timer->report_owner = report_owner;
     if (function) {
         int extra = argc > 2 ? argc - 2 : 0;
         if (extra != 0) {
-            timer->argv = d_alloc(dom, (size_t)extra * sizeof(*timer->argv));
+            timer->argv = d_alloc_kind(dom, (size_t)extra * sizeof(*timer->argv), OS64_DOM_MEM_TIMER);
             if (timer->argv == NULL) {
                 d_free(dom, timer);
-                return d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
+                d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
+                goto fail;
             }
             for (int i = 0; i < extra; i++) timer->argv[i] = JS_DupValue(ctx, argv[i + 2]);
             timer->argc = extra;
         }
-        timer->callback = JS_DupValue(ctx, handler);
+        /* Transfer the captured reference into the registry, without a second
+         * callback root. Legacy and internal timers retain their direct value. */
+        timer->captured = captured;
+        captured = (os64_js_callback_t)OS64_JS_CALLBACK_INIT;
+        timer->callback_entry = entry;
+        timer->callback = timer->captured.runtime ? timer->captured.value : JS_DupValue(ctx, handler);
         timer->script = script;
         dom->timers_held += held_values(timer);
     } else {
@@ -134,31 +168,43 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
     timer->nesting = dom->timer_nesting + 1;
     timer->delay = clamp((uint64_t)delay, timer->nesting);
     timer->due = now_ms(dom) + timer->delay;
+    if (!d_require_active(dom, ctx) || !capture_live(ctx, &timer->captured, entry)) {
+        timer_free(dom, timer);
+        return JS_EXCEPTION;
+    }
     insert(dom, timer);
     dom->timer_count++;
     return JS_NewUint32(ctx, timer->id);
+fail:
+    clear_capture(dom, &captured);
+    d_free(dom, source.data);
+    return JS_EXCEPTION;
 }
 
 uint32_t d_timer_add(os64_dom_t *dom, JSContext *ctx, JSValue callback, uint64_t delay)
 {
+    if (!d_require_active(dom, ctx)) { JS_FreeValue(ctx, callback); return 0; }
     if (dom->timer_count >= OS64_DOM_TIMERS_MAX || dom->timer_id == INT32_MAX) {
         JS_FreeValue(ctx, callback);
         d_error(ctx, "QuotaExceededError", "Too many timers");
         return 0;
     }
-    DTimer *timer = d_alloc(dom, sizeof(*timer));
+    DTimer *timer = d_alloc_kind(dom, sizeof(*timer), OS64_DOM_MEM_TIMER);
     if (timer == NULL) {
         JS_FreeValue(ctx, callback);
         d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
         return 0;
     }
+    timer->captured = (os64_js_callback_t)OS64_JS_CALLBACK_INIT;
     timer->callback = callback;
+    timer->report_owner = dom;
     timer->binding = true;
     dom->timers_held += held_values(timer);
     timer->id = ++dom->timer_id;
     timer->nesting = dom->timer_nesting + 1;
     timer->delay = delay;
     timer->due = now_ms(dom) + delay;
+    if (!d_require_active(dom, ctx)) { timer_free(dom, timer); return 0; }
     insert(dom, timer);
     dom->timer_count++;
     return timer->id;
@@ -183,6 +229,7 @@ int d_timer_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
  * made. */
 uint64_t os64_dom_timer_next(const os64_dom_t *dom)
 {
+    if (!d_delivery_active(dom)) return UINT64_MAX;
     if (os64_dom_reactions_owed(dom)) return 0;
     return dom != NULL && !dom->closed && dom->timers != NULL ? dom->timers->due : UINT64_MAX;
 }
@@ -197,6 +244,10 @@ static void fold(os64_js_outcome_t *into, const os64_js_outcome_t *from)
 
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome)
 {
+    if (!d_delivery_active(dom)) {
+        if (outcome) os64_memset(outcome, 0, sizeof(*outcome));
+        return false;
+    }
     if (os64_dom_reactions_run(dom, outcome)) return true;
     if (outcome != NULL) os64_memset(outcome, 0, sizeof(*outcome));
     if (outcome == NULL || dom == NULL || dom->closed || dom->timers == NULL || dom->timers->due > now)
@@ -209,6 +260,8 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
     /* The call holds its own references: a callback that clears its own
      * timer frees the table's, not the ones running. */
     JSValue held = JS_UNDEFINED;
+    os64_js_callback_t captured = OS64_JS_CALLBACK_INIT;
+    os64_js_realm_t *entry = timer->callback_entry;
     JSValue *args = NULL;
     int argc = timer->argc;
     char *source = NULL;
@@ -221,14 +274,16 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         insert(dom, timer);
         if (!JS_IsUndefined(timer->callback)) {
             held = JS_DupValueRT(dom->engine, timer->callback);
+            if (timer->captured.runtime)
+                captured = (os64_js_callback_t){held, dom->runtime, timer->captured.incumbent};
             if (argc != 0) {
-                args = d_alloc(dom, (size_t)argc * sizeof(*args));
+                args = d_alloc_kind(dom, (size_t)argc * sizeof(*args), OS64_DOM_MEM_TIMER);
                 refused = args == NULL;
                 if (refused) argc = 0;
                 for (int i = 0; i < argc; i++) args[i] = JS_DupValueRT(dom->engine, timer->argv[i]);
             }
         } else if (timer->source != NULL) {
-            source = d_alloc(dom, source_length + 1);
+            source = d_alloc_kind(dom, source_length + 1, OS64_DOM_MEM_TIMER);
             refused = source == NULL;
             if (source != NULL) os64_memcpy(source, timer->source, source_length + 1);
         }
@@ -238,6 +293,8 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         dom->timer_count--;
         dom->timers_held -= held_values(timer);
         held = timer->callback;
+        captured = timer->captured;
+        timer->captured = (os64_js_callback_t)OS64_JS_CALLBACK_INIT;
         args = timer->argv;
         source = timer->source;
         timer->callback = JS_UNDEFINED;
@@ -245,7 +302,9 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         timer->argc = 0;
         timer->source = NULL;
     }
-    uint32_t nesting = timer->nesting, script = timer->script;
+    os64_dom_t *report_owner = timer->report_owner;
+    uint32_t nesting = timer->nesting, script = timer->script, id = timer->id;
+    bool interval = timer->interval, binding = timer->binding;
     if (!timer->interval) d_free(dom, timer);
     dom->timer_nesting = nesting;
     if (refused) {
@@ -256,15 +315,26 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         os64_strcopy(outcome->source_name, sizeof(outcome->source_name), name);
     } else if (!JS_IsUndefined(held)) {
         os64_js_outcome_t call;
-        if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
+        if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
             /* What the callback throws is its script's (report.c). */
-            DScripts before = d_script_enter(dom, script);
-            os64_js_call(dom->runtime, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
-            d_script_leave(dom, &before, true);
+            DScripts before = d_script_enter(report_owner, script);
+            if (captured.runtime)
+                os64_js_callback_call(report_owner->realm, entry, OS64_JS_ABI_ID, &captured,
+                                      dom->window->value, argc, args, &call);
+            else
+                os64_js_realm_call(report_owner->realm, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
+            if (call.status == OS64_JS_REALM_RETIRED || call.status == OS64_JS_REALM_FAILED) {
+                /* The callback cannot become eligible again. In particular,
+                 * do not leave its interval waking the live document. */
+                DTimer *discarded = interval ? unlink_id(dom, id, binding) : NULL;
+                if (discarded) timer_free(dom, discarded);
+                os64_memset(&call, 0, sizeof(call));
+            }
+            d_script_leave(report_owner, &before, true);
             fold(outcome, &call);
             /* Its exception is reported before the checkpoint after it,
              * as a listener's is (event.c's invoke_target). */
-            if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, outcome);
+            if (call.status == OS64_JS_EXCEPTION) d_errors_fire(report_owner, outcome);
             /* What the callback left owed (report.c) runs in its task. */
             d_task_finish(dom, outcome);
         }
@@ -275,7 +345,7 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         char engine_name[32];
         if (!os64_dom_script_name(dom, NULL, engine_name, sizeof(engine_name)))
             os64_strcopy(engine_name, sizeof(engine_name), "os64-script:0");
-        os64_js_run(dom->runtime, source, source_length, engine_name, outcome);
+        os64_js_realm_run(dom->realm, source, source_length, engine_name, outcome);
         /* A string that threw leaves the jobs it queued: `run` drains only
          * after a source that finishes, and the binding is this run's host
          * (CONTRACT.md § Results). Until they run every later task is
@@ -296,7 +366,8 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         dom->running_script = D_NO_SCRIPT;
     }
     dom->timer_nesting = 0;
-    if (!JS_IsUndefined(held)) JS_FreeValueRT(dom->engine, held);
+    if (captured.runtime) clear_capture(dom, &captured);
+    else if (!JS_IsUndefined(held)) JS_FreeValueRT(dom->engine, held);
     for (int i = 0; i < argc; i++) JS_FreeValueRT(dom->engine, args[i]);
     d_free(dom, args);
     d_free(dom, source);

@@ -136,7 +136,7 @@ purpose; ORIGIN.md carries each argument.
 
 | The standard / browsers | yonder | Why | Recorded |
 |---|---|---|---|
-| A browser's request carries its engine: Chrome and Firefox send `Accept-Encoding: gzip, deflate, br, zstd`, Chrome's navigation `Accept` names JPEG XL, AVIF, WebP, APNG and signed exchanges and Firefox's picture `Accept` AVIF, JPEG XL, WebP and SVG, both speak HTTP/2, and each greets a server with its own TLS handshake | An agent preset sends that browser's string, client hints, `Accept-Language`, `Priority` and `Connection: keep-alive` byte for byte and in its browser's order, and libway its Fetch Metadata; it claims nothing yonder cannot do: the browser's `Accept` for each destination LESS the types yonder cannot decode (WebP and APNG among them, whose animations it cannot play), `Accept-Encoding: gzip, identity`, HTTP/1.1, os64's own handshake | A header that claims a decoder yonder lacks is a header that lies, and invites a body it must refuse. A gate that scores the handshake will keep flagging yonder, which is the honest outcome for a browser that is not pretending to be another engine | `agent.c`; WIRE.md § 1 and § 2, each as built |
+| A browser's request carries its engine: Chrome and Firefox send `Accept-Encoding: gzip, deflate, br, zstd`, Chrome's navigation `Accept` names JPEG XL, AVIF, WebP, APNG and signed exchanges and Firefox's picture `Accept` AVIF, JPEG XL, WebP and SVG, both speak HTTP/2, and each greets a server with its own TLS handshake | An agent preset sends that browser's string, client hints, `Accept-Language`, `Priority` and `Connection: keep-alive` byte for byte and in its browser's order, and libway its Fetch Metadata; it claims nothing yonder cannot do: the browser's `Accept` for each destination LESS the types yonder cannot decode (WebP and APNG among them, whose animations it cannot play), `Accept-Encoding: gzip, identity`, and os64's own TLS handshake. Over HTTP/2 it greets as that browser greets (its SETTINGS, its windows, its first stream, its priority on each request, its pseudo-header order: HTTP2.md § 4 H2.5), under os64's own handshake | A header that claims a decoder yonder lacks is a header that lies, and invites a body it must refuse. A gate that scores the handshake will keep flagging yonder, which is the honest outcome for a browser that is not pretending to be another engine | `agent.c`; WIRE.md § 1 and § 2, each as built |
 | A kept connection belongs to a network partition (Fetch § 2.6, "connection pool"): keyed by the top-level site that asked as well as the origin, so a connection opened under one site is never used for another's request, as Chrome and Firefox partition | libfetch's pool is keyed by origin (or proxy) and trust store alone, shared across every top-level site, as yonder's cookie jar is shared (`way/jar.h`, one jar per browser) | A tracker embedded on two sites can link a person's visits by the connection both reuse, as it can by a cookie the jar keeps for both: the same cost, from the same missing partition. Partitioning the jar and the pool is one change, the site that asked becoming part of both keys | `userland/libfetch/pool.h` `fetch_pool_key_t`; WIRE.md § 2 as built |
 | A script's navigation inside a person's gesture (a listener's `a.click()`, `form.submit()` or `location=` during their click) carries their activation: HTML's "create navigation params by fetching" takes it from the source's transient activation, and the request sends `Sec-Fetch-User: ?1` | Every navigation a page's script asks for is nobody's: no `Sec-Fetch-User` | yonder tracks no transient activation yet; saying less than a browser would is honest, saying a person acted when nobody did would not be. Booked in BROWSER_DEBTS | `way/origin.h` (`WAY_BY_PAGE`); WIRE.md § 1 as built |
 | Sec-Fetch-Site names the request's site against each URL by the public-suffix list (`same-site` for a site's own subdomains) | Where the site cannot be known without the list (two hosts sharing their last two labels: sibling subdomains, or two sites under one public suffix) the request sends no `Sec-Fetch-*` at all; what is certain is said | A site's own subdomain called `cross-site` is what a resource-isolation policy refuses, so the stand-in that is restrictive for CORS is not restrictive here; silence is what a browser from before Fetch Metadata sends, and every such policy lets it through. Ends when the public-suffix list lands (DEBTS) | `way_origin_site`; WIRE.md § 1 as built |
@@ -275,6 +275,32 @@ itself.
 Parts from the DOM Standard rather than from Unix, recorded here because a
 page's script can see them.
 
+- **Iframe retirement is bounded retention.** The F.3 foundation keeps
+  departed and failed contexts/native shells until root teardown. All consume
+  the cumulative 65-slot limit and aggregate byte caps. Admission uses an
+  8 MiB engine allowance for full DOM setup and sibling work. Ordinary
+  departure stops document-owned activity while retained objects and direct
+  function calls remain usable under the live caller's budget. F.15 tracks
+  independent reclamation; F.11 requires that proof or accepted session-churn
+  measurements. `IFRAME_F3_RETIREMENT.md`; libdom `LIBDOM.md`.
+- **Child overrun recovery is explicit and limited.** F.16 can contain a
+  completely attributed plain child EXECUTION episode after engine/native
+  unwind and preserve independent sibling work in an opted-in DOM cluster.
+  Checked settings, Streams use, job-cap exhaustion, pending engine work and
+  other unsupported scopes retain global fallback, as do memory, clock,
+  cancellation and host failure. Yonder's primary-only policy remains terminal.
+  F.11 must evaluate the supported subset for its actual host or explicitly
+  accept fallback; it cannot infer checked-settings recovery from F.16's
+  completion. `IFRAME_F16_HOST_ACCEPTANCE.md` records the proof and exclusions.
+  These foundations do not enable frame browsing or reclaim realm slots.
+
+- **A history state is at most 2 MiB of JSON** (`OS64_DOM_STATE_MAX`): a
+  `pushState` or `replaceState` with more is a QuotaExceededError. The
+  standard sets no number and other browsers allow more (Firefox 16 MiB).
+  Two is sixteen times the largest a page has been seen to keep (a photo
+  site's list of what it has loaded, about 125 KiB), and what a session's
+  sixty-four entries can then hold is bounded at 128 MiB. It was 64 KiB
+  until 2026-11-11, which that site passed. `dom.h` § HISTORY.
 - **A Node member called on an Attr through `Node.prototype` itself**
   (`Node.prototype.appendChild.call(attr, x)`) is a TypeError, "an Attr is
   a Node with no place in the tree", where the standard would answer as
@@ -289,9 +315,19 @@ page's script can see them.
   opened in a new window, or the first page of one). In yonder the window
   is the person's: no page closes it, and `closed` stays false
   (`browsing.c`; LIBDOM.md § P1-W's rows).
-- **`crypto` has no `subtle`** on an `https:` page, where browsers have
-  SubtleCrypto: `getRandomValues` and `randomUUID` are whole, and pages
-  detect `crypto.subtle` apart from them (WINDOW_DOCUMENT.md, ruling 1).
+- **`crypto.subtle` does its work on the call, not in parallel.** Web
+  Cryptography computes "in parallel" and settles from a queued task;
+  yonder computes before the method returns and settles from a task of
+  no delay, one task for every answer waiting, in call order, so the page
+  sees the answer when another browser's page would, its reactions in a
+  task of their own (a page whose own timers hold its whole timer quota
+  has its promise settled on the call instead). What a page can
+  tell: the call holds it for as long as the work takes, which is long
+  only for an input the size of its heap or a PBKDF2 iteration count in
+  the millions. Its consequence, which no page can tell: a BufferSource
+  argument is read where it lies rather than copied, read after the last
+  algorithm is normalized as the spec copies it, since no page code runs
+  between the read and the answer (`subtle.c`; WEB_CRYPTO.md § 5).
 - **An offset inside a character above U+FFFF means the character's
   start.** CharacterData offsets count UTF-16 code units and such a
   character is two of them; the tree holds UTF-8, which cannot hold half of

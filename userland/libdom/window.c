@@ -14,6 +14,8 @@ static const char *page_url(const os64_dom_t *dom)
 void d_navigate(os64_dom_t *dom, os64_dom_navigation_kind_t kind, const os64_html_node_t *node,
                 const os64_html_node_t *submitter, const char *url, int32_t delta)
 {
+    /* Clearing an owed ask releases its node holds even after departure. */
+    if (kind != OS64_DOM_NAVIGATE_NONE && !d_delivery_active(dom)) return;
     /* The last ask of a task wins, as the last location= does in a browser;
      * but with the Modern Web switch on, history.go()s add up, as HTML
      * queues each traversal after the one before it: go(-2) then go(-1) is
@@ -40,6 +42,10 @@ bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask)
 {
     if (ask != NULL) os64_memset(ask, 0, sizeof(*ask));
     if (dom == NULL || ask == NULL || dom->navigation.kind == OS64_DOM_NAVIGATE_NONE) return false;
+    if (!d_delivery_active(dom)) {
+        d_navigate(dom, OS64_DOM_NAVIGATE_NONE, NULL, NULL, NULL, 0);
+        return false;
+    }
     ask->kind = dom->navigation.kind;
     ask->user_activated = dom->navigation.user_activated;
     ask->node = dom->navigation.node;
@@ -99,8 +105,10 @@ static bool windowless(os64_dom_t *dom, JSValueConst self)
 
 static int64_t host_write(os64_dom_t *dom, const char *utf8, size_t length)
 {
-    return dom->options.write != NULL ? dom->options.write(dom->options.host_opaque, utf8, length)
-                                      : OS64_HTML_BAD_ARGUMENT;
+    if (dom->options.write == NULL || !d_provider_enter(dom)) return OS64_HTML_BAD_ARGUMENT;
+    int64_t status = dom->options.write(dom->options.host_opaque, utf8, length);
+    d_provider_leave(dom);
+    return status;
 }
 
 static JSValue document_write(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv, bool line)
@@ -221,6 +229,7 @@ static JSValue ask_url(os64_dom_t *dom, JSContext *ctx, os64_dom_navigation_kind
 {
     DString text = {0};
     if (!d_string(dom, ctx, value, &text)) return JS_EXCEPTION;
+    if (!d_require_active(dom, ctx)) { d_string_free(dom, &text); return JS_EXCEPTION; }
     char url[OS64_DOM_URL_MAX];
     bool resolved;
     if (fragment) {
@@ -266,6 +275,16 @@ static JSValue ask_url(os64_dom_t *dom, JSContext *ctx, os64_dom_navigation_kind
     return JS_UNDEFINED;
 }
 
+/* History specifies SecurityError for an inactive associated document,
+ * including state and scroll-restoration reads. Exported state values do not
+ * depend on that service and retain their ordinary object lifetime. */
+static bool history_active(os64_dom_t *dom, JSContext *ctx)
+{
+    if (d_delivery_active(dom)) return true;
+    d_error(ctx, "SecurityError", "The history document is inactive");
+    return false;
+}
+
 static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                              int magic, JSValue *data)
 {
@@ -289,7 +308,10 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         return set ? JS_UNDEFINED : location_part(dom, ctx, magic);
     case L_ASSIGN: return ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, false);
     case L_REPLACE: return ask_url(dom, ctx, OS64_DOM_NAVIGATE_REPLACE, value, false);
-    case L_RELOAD: d_navigate(dom, OS64_DOM_NAVIGATE_RELOAD, NULL, NULL, page_url(dom), 0); return JS_UNDEFINED;
+    case L_RELOAD:
+        if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
+        d_navigate(dom, OS64_DOM_NAVIGATE_RELOAD, NULL, NULL, page_url(dom), 0);
+        return JS_UNDEFINED;
     case L_TO_STRING: return location_part(dom, ctx, L_HREF);
     case H_BACK: case H_FORWARD: case H_GO: {
         int32_t delta = magic == H_BACK ? -1 : 1;
@@ -297,6 +319,7 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
             delta = 0;
             if (argc > 0 && JS_ToInt32(ctx, &delta, value) < 0) return JS_EXCEPTION;
         }
+        if (!history_active(dom, ctx)) return JS_EXCEPTION;
         /* go(0) is a reload, as HTML's traversal makes it. */
         if (delta == 0) d_navigate(dom, OS64_DOM_NAVIGATE_RELOAD, NULL, NULL, page_url(dom), 0);
         else d_navigate(dom, OS64_DOM_NAVIGATE_HISTORY, NULL, NULL, NULL, delta);
@@ -305,8 +328,14 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     case H_LENGTH: {
         /* The session's entries are the host's to count once the arc's
          * history is on; a window with no host is one entry. */
-        uint32_t entries = dom->options.modern && dom->history_host.length != NULL
-            ? dom->history_host.length(dom->history_host.opaque) : 1;
+        if (!history_active(dom, ctx)) return JS_EXCEPTION;
+        uint32_t entries = 1;
+        if (dom->options.modern && dom->history_host.length != NULL) {
+            if (!d_provider_enter(dom)) { history_active(dom, ctx); return JS_EXCEPTION; }
+            entries = dom->history_host.length(dom->history_host.opaque);
+            d_provider_leave(dom);
+            if (!history_active(dom, ctx)) return JS_EXCEPTION;
+        }
         return JS_NewUint32(ctx, entries > 0 ? entries : 1);
     }
     case W_STATUS: {
@@ -483,8 +512,11 @@ static int fire(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, c
  * § Classic browser scripting). */
 static void notify(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_activation_t what)
 {
-    if (dom->options.activate != NULL && d_window_document(dom, node))
+    dom = d_owner(dom, node);
+    if (dom->options.activate != NULL && d_window_document(dom, node) && d_provider_enter(dom)) {
         dom->options.activate(dom->options.host_opaque, node, what);
+        d_provider_leave(dom);
+    }
 }
 
 enum { A_CLICK, A_FOCUS, A_BLUR, A_SUBMIT, A_REQUEST_SUBMIT, A_RESET };
@@ -500,7 +532,7 @@ enum { A_CLICK, A_FOCUS, A_BLUR, A_SUBMIT, A_REQUEST_SUBMIT, A_RESET };
 static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
                   const os64_html_node_t *submitter, bool event, bool native)
 {
-    if (!d_window_document(dom, form) || !d_connected(form)) return 1;
+    if (!d_delivery_active(dom) || !d_window_document(dom, form) || !d_connected(form)) return 1;
     if (!event) {
         d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
         return 1;
@@ -508,16 +540,19 @@ static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
     /* HTML's firing-submission-events flag: a submission asked from inside
      * this form's own invalid or submit listener does nothing, rather than
      * validating and firing again until the engine's stack gives out. */
-    for (const struct DClicking *at = dom->submitting; at != NULL; at = at->next)
+    os64_dom_t *guard = d_creation_owner(dom, form);
+    for (const struct DClicking *at = guard->submitting; at != NULL; at = at->next)
         if (at->node == form) return 1;
-    struct DClicking self = {form, dom->submitting};
-    dom->submitting = &self;
+    struct DClicking self = {form, guard->submitting};
+    guard->submitting = &self;
     bool novalidate = (submitter != NULL && os64_html_attr(submitter, "formnovalidate") != NULL) ||
         os64_html_attr(form, "novalidate") != NULL;
     int valid = novalidate ? 1 : d_form_validate(dom, ctx, form, true);
     int result = valid > 0 ? fire_made(dom, ctx, form, d_submit_event_new(dom, ctx, submitter)) : valid < 0 ? -1 : 1;
-    dom->submitting = self.next;
-    if (valid > 0 && result > 0) {
+    guard->submitting = self.next;
+    /* The submit listener can adopt or disconnect the form. */
+    dom = d_owner(dom, form);
+    if (valid > 0 && result > 0 && d_delivery_active(dom) && d_window_document(dom, form) && d_connected(form)) {
         d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
         dom->navigation.user_activated = native;
     }
@@ -546,7 +581,7 @@ static int reset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form)
 bool d_activation_has(const os64_html_node_t *node)
 {
     if (html_element(node, OS64_HTML_TAG_A) || html_element(node, OS64_HTML_TAG_AREA))
-        return os64_html_attr(node, "href") != NULL;
+        return os64_html_attr_ns(node, NULL, "href") != NULL;
     if (html_element(node, OS64_HTML_TAG_BUTTON)) return true;
     return html_element(node, OS64_HTML_TAG_INPUT) &&
         (type_is(node, "checkbox", false) || type_is(node, "radio", false) || type_is(node, "submit", false) ||
@@ -559,10 +594,10 @@ int d_activation_before(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
     bool checkbox = html_element(node, OS64_HTML_TAG_INPUT) && type_is(node, "checkbox", false);
     *saved = (DActivation){.checkable = (radio || checkbox) && !disabled(node), .checkbox = checkbox};
     if (!saved->checkable) return 0;
-    int64_t status = os64_page_node_checked(dom->state, node, &saved->was);
-    if (status >= 0) status = os64_page_node_indeterminate(dom->state, node, &saved->was_indeterminate);
-    if (status >= 0) status = os64_page_node_set_checked(dom->state, node, radio ? true : !saved->was);
-    if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(dom->state, node, false);
+    int64_t status = os64_page_node_checked(d_owner(dom, node)->state, node, &saved->was);
+    if (status >= 0) status = os64_page_node_indeterminate(d_owner(dom, node)->state, node, &saved->was_indeterminate);
+    if (status >= 0) status = os64_page_node_set_checked(d_owner(dom, node)->state, node, radio ? true : !saved->was);
+    if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(d_owner(dom, node)->state, node, false);
     if (status < 0) { d_page_error(ctx, status); return -1; }
     return 0;
 }
@@ -570,15 +605,16 @@ int d_activation_before(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
 int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool canceled,
                        const DActivation *saved)
 {
+    dom = d_owner(dom, node);
     if (saved->checkable) {
         bool now = false;
         int result = 1;
         if (canceled) {
-            int64_t status = os64_page_node_set_checked(dom->state, node, saved->was);
+            int64_t status = os64_page_node_set_checked(d_owner(dom, node)->state, node, saved->was);
             if (status >= 0 && saved->checkbox)
-                status = os64_page_node_set_indeterminate(dom->state, node, saved->was_indeterminate);
+                status = os64_page_node_set_indeterminate(d_owner(dom, node)->state, node, saved->was_indeterminate);
             if (status < 0) { d_page_error(ctx, status); return -1; }
-        } else if (os64_page_node_checked(dom->state, node, &now) >= 0 && now != saved->was) {
+        } else if (os64_page_node_checked(d_owner(dom, node)->state, node, &now) >= 0 && now != saved->was) {
             /* HTML's checkbox and radio activation: input is composed,
              * change is not. */
             JSValue input = d_event_new(dom, ctx, "input", true, false, false);
@@ -590,9 +626,9 @@ int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *
     }
     if (canceled || disabled(node)) return 0;
     if ((html_element(node, OS64_HTML_TAG_A) || html_element(node, OS64_HTML_TAG_AREA)) &&
-        os64_html_attr(node, "href") != NULL) {
+        os64_html_attr_ns(node, NULL, "href") != NULL) {
         /* A link in a document with no window cannot navigate. */
-        if (d_window_document(dom, node)) {
+        if (d_delivery_active(dom) && d_window_document(dom, node)) {
             d_navigate(dom, OS64_DOM_NAVIGATE_FOLLOW, node, NULL, NULL, 0);
             dom->navigation.user_activated = saved->native;
         }
@@ -630,12 +666,13 @@ static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
 static int click(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
     if (disabled(node)) return 1;
-    for (const struct DClicking *at = dom->clicking; at != NULL; at = at->next)
+    os64_dom_t *guard = d_creation_owner(dom, node);
+    for (const struct DClicking *at = guard->clicking; at != NULL; at = at->next)
         if (at->node == node) return 1;
-    struct DClicking self = {node, dom->clicking};
-    dom->clicking = &self;
+    struct DClicking self = {node, guard->clicking};
+    guard->clicking = &self;
     int result = click_activate(dom, ctx, node);
-    dom->clicking = self.next;
+    guard->clicking = self.next;
     return result;
 }
 
@@ -662,6 +699,7 @@ static JSValue element_method(JSContext *ctx, JSValueConst self, int argc, JSVal
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
     if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "Expected an element");
+    dom = d_owner(dom, node);
     /* requestSubmit(submitter) (HTML § 4.10.3): a submitter given is a
      * submit button this form owns, and the submission is its. */
     if (magic == A_REQUEST_SUBMIT && argc > 0 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
@@ -756,7 +794,7 @@ int d_window_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 
 void os64_dom_set_history(os64_dom_t *dom, const os64_dom_history_t *history)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     if (history != NULL) dom->history_host = *history;
     else os64_memset(&dom->history_host, 0, sizeof(dom->history_host));
 }
@@ -778,7 +816,7 @@ typedef struct {
 static int json_put(DJson *j, JSContext *ctx, const char *s, size_t n)
 {
     if (n > OS64_DOM_STATE_MAX - j->used) {
-        d_error(ctx, "QuotaExceededError", "A history state may be at most 64 KiB of JSON");
+        d_error(ctx, "QuotaExceededError", "A history state may be at most 2 MiB of JSON");
         return -1;
     }
     if (j->used + n + 1 > j->cap) {
@@ -996,11 +1034,11 @@ static JSValue update_state(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCo
         has_url = false;
     }
     DJson json = {.dom = dom};
-    int written = JS_IsUndefined(argv[0]) ? json_puts(&json, ctx, "null")
+    int written = !history_active(dom, ctx) ? -1 : JS_IsUndefined(argv[0]) ? json_puts(&json, ctx, "null")
                                           : json_value(&json, ctx, argv[0], 0, false);
     char target[OS64_DOM_URL_MAX];
     JSValue result = JS_UNDEFINED;
-    if (written < 0) {
+    if (written < 0 || !history_active(dom, ctx)) {
         result = JS_EXCEPTION;
     } else if (has_url && (!resolve(dom, url.data, target, sizeof(target)) || !rewritable(page_url(dom), target))) {
         result = d_error(ctx, "SecurityError", "A history entry's address must be this document's own origin");
@@ -1018,11 +1056,20 @@ static JSValue update_state(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCo
                 value = JS_EXCEPTION;
             }
         }
-        if (!JS_IsException(value) && dom->history_host.update != NULL &&
-            !dom->history_host.update(dom->history_host.opaque, target, null_state ? NULL : json.text,
-                                      null_state ? 0 : json.used, push)) {
-            JS_FreeValue(ctx, value);
-            value = d_error(ctx, "QuotaExceededError", "The browser could not keep another history entry");
+        if (!JS_IsException(value) && dom->history_host.update != NULL) {
+            bool accepted = false;
+            if (d_provider_enter(dom)) {
+                accepted = dom->history_host.update(dom->history_host.opaque, target, null_state ? NULL : json.text,
+                                                    null_state ? 0 : json.used, push);
+                d_provider_leave(dom);
+            }
+            if (!history_active(dom, ctx)) {
+                JS_FreeValue(ctx, value);
+                value = JS_EXCEPTION;
+            } else if (!accepted) {
+                JS_FreeValue(ctx, value);
+                value = d_error(ctx, "QuotaExceededError", "The browser could not keep another history entry");
+            }
         }
         if (JS_IsException(value)) {
             d_free(dom, address);
@@ -1056,14 +1103,24 @@ static JSValue history_event(os64_dom_t *dom, JSContext *ctx, void *arg);
  * dispatched or, when the binding had no room for it, reported, since the
  * navigation the script asked for stands; 0, with nothing changed and
  * nothing fired, when the host could not take it; -1 when it was made and
- * the runtime failed under a listener, with the exception pending, so the
- * script ends as it would have in dispatchEvent. */
+ * the runtime failed under a listener, or the provider retired the document,
+ * with an exception pending. Retirement prevents a local commit and fallback
+ * navigation even if the host already accepted its entry. */
 static int fragment_navigation(os64_dom_t *dom, JSContext *ctx, const char *url, bool replace)
 {
     if (!dom->options.modern || dom->history_host.fragment == NULL) return 0;
     char *address = copy_text(dom, url, os64_strlen(url));
     if (address == NULL) return 0;
-    if (!dom->history_host.fragment(dom->history_host.opaque, url, replace)) {
+    bool accepted = false;
+    if (d_provider_enter(dom)) {
+        accepted = dom->history_host.fragment(dom->history_host.opaque, url, replace);
+        d_provider_leave(dom);
+    }
+    if (!d_require_active(dom, ctx)) {
+        d_free(dom, address);
+        return -1;
+    }
+    if (!accepted) {
         d_free(dom, address);
         return 0;
     }
@@ -1089,7 +1146,7 @@ static int fragment_navigation(os64_dom_t *dom, JSContext *ctx, const char *url,
 
 bool os64_dom_history_moved(os64_dom_t *dom, const char *url, const char *state, size_t length)
 {
-    if (dom == NULL || dom->closed || url == NULL || (state == NULL && length != 0)) return false;
+    if (!d_delivery_active(dom) || url == NULL || (state == NULL && length != 0)) return false;
     char *address = copy_text(dom, url, os64_strlen(url));
     char *kept = state != NULL ? copy_text(dom, state, length) : NULL;
     if (address == NULL || (state != NULL && kept == NULL)) {
@@ -1169,6 +1226,7 @@ os64_js_status_t os64_dom_history_event(os64_dom_t *dom, const os64_dom_history_
         outcome->status = OS64_JS_FAILED_RUNTIME;
         return outcome->status;
     }
+    if (!d_delivery_active(dom)) return OS64_JS_OK;
     const char *type = event->hashchange ? "hashchange" : "popstate";
     if (!dom->options.modern || dom->popstate_prototype == NULL || !os64_dom_listens(dom, type))
         return OS64_JS_OK;
@@ -1187,12 +1245,13 @@ static JSValue history_member(JSContext *ctx, JSValueConst self, int argc, JSVal
     magic &= ~D_SET;
     switch (magic) {
     case HS_PUSH: case HS_REPLACE: return update_state(dom, ctx, argc, argv, magic == HS_PUSH);
-    case HS_STATE: return state_value(dom, ctx);
+    case HS_STATE: return history_active(dom, ctx) ? state_value(dom, ctx) : JS_EXCEPTION;
     case HS_RESTORATION: {
-        if (!set) return JS_NewString(ctx, dom->scroll_manual ? "manual" : "auto");
+        if (!set) return history_active(dom, ctx) ? JS_NewString(ctx, dom->scroll_manual ? "manual" : "auto") : JS_EXCEPTION;
         /* An enum attribute ignores a word it does not have (WebIDL). */
         const char *word = JS_ToCString(ctx, argc > 0 ? argv[0] : JS_UNDEFINED);
         if (word == NULL) return JS_EXCEPTION;
+        if (!history_active(dom, ctx)) { JS_FreeCString(ctx, word); return JS_EXCEPTION; }
         if (os64_strcmp(word, "manual") == 0) dom->scroll_manual = true;
         else if (os64_strcmp(word, "auto") == 0) dom->scroll_manual = false;
         JS_FreeCString(ctx, word);
@@ -1334,6 +1393,36 @@ static int name_accessors(JSContext *ctx, JSAtom atom, const JSPropertyDescripto
             result = -1;
     }
     JS_FreeCString(ctx, name);
+    return result;
+}
+
+int d_idl_members(JSContext *ctx, JSValueConst prototype)
+{
+    JSPropertyEnum *names;
+    uint32_t count;
+    if (JS_GetOwnPropertyNames(ctx, &names, &count, prototype, JS_GPN_STRING_MASK) < 0) return -1;
+    JSAtom constructor = JS_NewAtom(ctx, "constructor");
+    int result = constructor == JS_ATOM_NULL ? -1 : 0;
+    for (uint32_t i = 0; result == 0 && i < count; i++) {
+        if (names[i].atom == constructor) continue;
+        JSPropertyDescriptor desc;
+        int has = JS_GetOwnProperty(ctx, &desc, prototype, names[i].atom);
+        if (has <= 0) {
+            result = has;
+            continue;
+        }
+        bool accessor = (desc.flags & JS_PROP_GETSET) != 0;
+        if (name_accessors(ctx, names[i].atom, &desc) < 0 ||
+            (!accessor && JS_IsFunction(ctx, desc.value) &&
+             JS_DefineProperty(ctx, prototype, names[i].atom, desc.value, JS_UNDEFINED, JS_UNDEFINED,
+                               JS_PROP_HAS_ENUMERABLE | JS_PROP_ENUMERABLE) < 0))
+            result = -1;
+        JS_FreeValue(ctx, desc.value);
+        JS_FreeValue(ctx, desc.getter);
+        JS_FreeValue(ctx, desc.setter);
+    }
+    if (constructor != JS_ATOM_NULL) JS_FreeAtom(ctx, constructor);
+    JS_FreePropertyEnum(ctx, names, count);
     return result;
 }
 
@@ -1627,16 +1716,19 @@ static size_t script_bucket(const os64_html_node_t *node)
     return ((key >> 4) ^ (key >> 12)) % (sizeof(((os64_dom_t *)0)->scripts) / sizeof(DScript *));
 }
 
-static bool script_marked(const os64_dom_t *dom, const os64_html_node_t *node)
+static bool script_marked(os64_dom_t *dom, const os64_html_node_t *node)
 {
+    dom = d_creation_owner(dom, node);
     for (const DScript *mark = dom->scripts[script_bucket(node)]; mark != NULL; mark = mark->next)
         if (mark->node == node) return true;
     return false;
 }
 
-/* ALREADY STARTED, kept as a held node so the identity outlives a removal. */
+/* ALREADY STARTED belongs to node identity. Its immutable creation binding
+ * keeps the mark and native hold across adoption, including clone lookups. */
 int d_script_mark(os64_dom_t *dom, const os64_html_node_t *node)
 {
+    dom = d_creation_owner(dom, node);
     if (script_marked(dom, node)) return 0;
     DScript *mark = d_alloc(dom, sizeof(*mark));
     if (mark == NULL) return -1;
@@ -1718,11 +1810,10 @@ size_t d_script_collect(const os64_html_node_t *node,
     return count;
 }
 
-/* HTML prepares a script element when it becomes connected: one that has
- * not started, of a kind that runs, is marked started and handed to the
- * host, which runs it or registers it (or records one it does not).
- * Connected to a document with no window, it is marked started all the
- * same and runs nowhere, then or after it is moved into the page (HTML's
+/* Connecting an unstarted executable script to an active window document
+ * marks it started and notifies the host, which runs or registers it.
+ * Connected to a document with no window, it is marked started and runs
+ * nowhere, then or after it is moved into the page (HTML's
  * "prepare the script element": scripting is disabled for it), unless the
  * binding has no memory left to mark it with. */
 void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts, size_t count)
@@ -1730,8 +1821,13 @@ void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts,
     for (size_t i = 0; i < count; i++) {
         const os64_html_node_t *script = scripts[i];
         if (os64_dom_script_kind(script) == OS64_DOM_SCRIPT_NONE) continue;
-        if (d_in_window_tree(dom, script)) {
-            if (d_script_mark(dom, script) == 1) dom->options.script_connected(dom->options.host_opaque, script);
+        os64_dom_t *owner = d_owner(dom, script);
+        if (d_in_window_tree(owner, script)) {
+            if (owner->options.script_connected != NULL && d_provider_enter(owner)) {
+                if (d_script_mark(owner, script) == 1)
+                    owner->options.script_connected(owner->options.host_opaque, script);
+                d_provider_leave(owner);
+            }
         } else if (d_connected(script)) {
             (void)d_script_mark(dom, script);
         }

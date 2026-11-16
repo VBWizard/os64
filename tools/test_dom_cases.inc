@@ -301,7 +301,19 @@ static void dom_classic_method_cases(void)
         "ln.relList='icon';assert(ln.rel==='icon','PutForwards');"
         "assert(ln.relList.supports('modulepreload')&&ln.relList.supports('StyleSheet')&&!ln.relList.supports('icon')&&!ln.relList.supports(''),'supports');"
         "throws('TypeError',()=>ln.relList.supports());"
-        "assert(!('relList' in one)&&!('rel' in one)&&!('relList' in a),'relList on a link alone');"
+        "assert(!('relList' in one)&&!('rel' in one),'relList on the links alone');"
+        /* a hyperlink's relList: noopener is the one of its types yonder keeps */
+        "a.rel='noopener NoReferrer';assert(a.relList.length===2&&a.relList.contains('NoReferrer')&&a.relList===a.relList,'an anchor\\'s relList');"
+        "assert(a.relList.supports('NOOPENER')&&!a.relList.supports('noreferrer')&&!a.relList.supports('opener')&&!a.relList.supports('stylesheet'),'a hyperlink\\'s tokens');"
+        "const ar=document.createElement('area');ar.relList.add('noopener');assert(ar.rel==='noopener'&&ar.relList.supports('noopener'),'an area\\'s');"
+        "assert(!ln.relList.supports('noopener'),'a link\\'s are its own');"
+        /* the anchor's other members: reflections, and its text */
+        "a.target='_blank';a.download='f.txt';a.hreflang='en';a.type='text/plain';a.name='n';a.ping='https://p.test/';"
+        "assert(a.getAttribute('target')==='_blank'&&a.getAttribute('download')==='f.txt'&&a.getAttribute('hreflang')==='en'"
+        "&&a.getAttribute('type')==='text/plain'&&a.getAttribute('name')==='n'&&a.target==='_blank'&&a.ping==='https://p.test/','an anchor\\'s reflections');"
+        "a.setAttribute('referrerpolicy','ORIGIN');assert(a.referrerPolicy==='origin'&&a.coords===''&&a.charset===''&&a.rev===''&&a.shape==='','enumerated and obsolete');"
+        "a.innerHTML='go <b>on</b>';assert(a.text==='go on','text is the descendants\\'');a.text='x<y';assert(a.firstChild.data==='x<y'&&a.childNodes.length===1,'and sets as textContent');"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,'text').get.call(document.createElement('title')));"
         /* dataset */
         "one.setAttribute('data-foo-bar','1');const d=one.dataset;assert(d===one.dataset&&d.fooBar==='1','dataset reads');"
         "d.someName='v';assert(one.getAttribute('data-some-name')==='v','dataset sets');"
@@ -536,14 +548,20 @@ static void dom_budget_cases(void)
         DomFixture f=fixture_base(mode==1?65536:0,mode==2?4096:0,0);
         os64_dom_options_t options=os64_dom_default_options();
         /* Room for the binding's own installation, whose peak (the custom
-         * row's wrap list over everything kept before it) is near 128 KiB,
-         * and less than what it keeps plus the 100000 bytes the script then
-         * asks for. */
+         * row's wrap list over everything kept before it) is near 128 KiB.
+         * The script then asks for text that fits the budget on its own, as
+         * a binding with room for what it keeps besides proves, but not on
+         * top of what this one keeps. */
         if(mode==0) options.max_bytes=163840;
         os64_js_outcome_t outcome;
         f.binding=os64_dom_create(f.runtime,f.document,f.state,&options,&outcome);
         if(!fixture_ready(&f))continue;
-        const char *source=mode==0?DOM_ASSERT "throws('QuotaExceededError',()=>document.body.textContent='x'.repeat(100000));assert(document.getElementById('one').textContent==='one');":
+        char kept_source[512];
+        size_t kept=os64_dom_bytes(f.binding),length=options.max_bytes-kept/2;
+        if(mode==0){
+            snprintf(kept_source,sizeof(kept_source),DOM_ASSERT "throws('QuotaExceededError',()=>document.body.textContent='x'.repeat(%zu));assert(document.getElementById('one').textContent==='one');",length);
+        }
+        const char *source=mode==0?kept_source:
             mode==1?DOM_ASSERT "throws('QuotaExceededError',()=>document.body.innerHTML='<p>'+ 'x'.repeat(100000)+'</p>');assert(document.getElementById('one').textContent==='one');":
             DOM_ASSERT "throws('QuotaExceededError',()=>document.getElementById('field').value='x'.repeat(10000));assert(document.getElementById('field').value==='default');";
         char *before=native_serialized(f.document->document);uint64_t version=os64_html_version(f.document);
@@ -553,6 +571,14 @@ static void dom_budget_cases(void)
         char *after=native_serialized(f.document->document);
         check(!strcmp(before,after)&&version==os64_html_version(f.document),"native quota preserves visible tree/version");
         free(before);free(after);fixture_free(&f);
+        if(mode!=0)continue;
+        /* After `f`: the teardown's accounting is global, one fixture at a time. */
+        os64_dom_options_t roomy=options;roomy.max_bytes=options.max_bytes+kept;
+        DomFixture control=fixture_new(&roomy);
+        if(!fixture_ready(&control))continue;
+        snprintf(kept_source,sizeof(kept_source),"document.body.textContent='x'.repeat(%zu)",length);
+        dom_script(&control,kept_source,"native-budget-control.js: the request fits a budget on its own");
+        fixture_free(&control);
     }
     /* Allow interface installation in both engine builds, then exhaust the
      * runtime with retained nodes rather than failing during setup. */

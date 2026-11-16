@@ -128,6 +128,7 @@ void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt)
     opt->ctx = hooks;
     opt->order = way_identity_order(hooks->identity, &hooks->metadata);
     opt->keep_alive = way_identity_keep_alive(hooks->identity);
+    way_identity_h2(hooks->identity, hooks->metadata.dest, &opt->h2, &opt->h2_weight, &opt->h2_priority, &opt->http1);
     const char *accept = way_identity_accept(hooks->identity, hooks->metadata.dest);
     if (accept != NULL)
         opt->accept = accept;
@@ -467,6 +468,7 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     }
     opt.order = way_identity_order(s->identity, &s->metadata);
     opt.keep_alive = way_identity_keep_alive(s->identity);
+    way_identity_h2(s->identity, s->metadata.dest, &opt.h2, &opt.h2_weight, &opt.h2_priority, &opt.http1);
     opt.max_body = limits.max_bytes;     // the same page, the same cap
     opt.cancelled = fetch_cancelled;
     opt.on_hop = hop_ask;
@@ -509,7 +511,10 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     // it always was, not a page showing a broken picture.
     bool image = !html && !plain && head->method != OS64_FETCH_METHOD_POST &&
                  way_accept_names(s->pictures, type);
-    if (!html && !plain && !image) {
+    // A SOUND ASKED FOR BY ITSELF likewise, on a page that plays it.
+    bool sound = !html && !plain && !image && head->method != OS64_FETCH_METHOD_POST &&
+                 way_accept_names(s->sounds, type);
+    if (!html && !plain && !image && !sound) {
         // Not a page at all. Say what it is and how to keep it — unless the
         // reply was to a POST, which a new GET of the address cannot fetch
         // again. The FINAL method decides: a redirect may have turned it.
@@ -532,11 +537,15 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
         return false;
     }
     out->fetch = f;
-    head_copy(&out->head, head, html ? WAY_BODY_HTML : image ? WAY_BODY_IMAGE : WAY_BODY_TEXT);
+    head_copy(&out->head, head, html ? WAY_BODY_HTML : image ? WAY_BODY_IMAGE : sound ? WAY_BODY_MEDIA
+                                                                                      : WAY_BODY_TEXT);
     out->head.redirects = s->left_at != 0 && s->left_at <= head->hops ? 0 : head->hops;
     const os64_fetch_detail_t *detail = os64_fetch_detail(f);
     out->head.tls_version = detail->tls_version;
     out->head.tls_fallback = detail->tls_fallback;
+    out->head.tls_resumed = detail->tls_resumed;
+    out->head.http2 = head->http2;
+    out->head.h2_stream = head->http2 ? detail->h2_stream : 0;
     os64_strcopy(out->asked, sizeof(out->asked), url);
     return true;
 }
@@ -673,14 +682,17 @@ void way_script_cookie(way_jar_t *jar, const char *page_url, bool arrived, const
 bool way_load(way_leg_t *s, const char *url, const os64_page_request_t *request,
               way_page_t *out, os64_fetch_status_t *why)
 {
-    // The whole-page load reads every body it opens, and a picture's is the
-    // face's to fetch itself (WAY_BODY_IMAGE): this path has nowhere to hand
-    // one over, so a picture is not a page here, whatever the leg shows.
+    // The whole-page load reads every body it opens, and a picture's or a
+    // sound's is the face's to fetch itself (WAY_BODY_IMAGE, _MEDIA): this
+    // path has nowhere to hand one over, so neither is a page here,
+    // whatever the leg shows or plays.
     way_opening_t o;
-    const char *pictures = s->pictures;
+    const char *pictures = s->pictures, *sounds = s->sounds;
     s->pictures = NULL;
+    s->sounds = NULL;
     bool opened = way_open(s, url, request, &o, why);
     s->pictures = pictures;
+    s->sounds = sounds;
     if (!opened)
         return false;
     bool short_of_memory = false;        // a truncation of OURS, not the wire's

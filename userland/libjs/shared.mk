@@ -4,8 +4,10 @@ $(OBJ)/js/runtime/%.o: libjs/runtime/%.c $(LIBJS_GENERATED)/.prepared libjs/shar
 	@mkdir -p "$(@D)"
 	$(CC) $(LIBJS_FLAGS) -c $< -o $@
 # Intl (INTL.md): the script and its CLDR data are carried in intl.o's
-# rodata (.incbin), so the object depends on both.
+# rodata (.incbin), so the object depends on both; the segmentation
+# (SEGMENTER.md) is compiled into it, with its generated table.
 $(OBJ)/js/intl/intl.o: libjs/intl/intl.c libjs/intl/intl.js libjs/intl/intl_data.js libjs/intl/zones.inc \
+    libjs/intl/segment.c libjs/intl/segment.h libjs/intl/segment_data.inc \
     $(LIBJS_GENERATED)/.prepared libjs/shared.mk libjs/core.mk
 	@mkdir -p "$(@D)"
 	$(CC) $(LIBJS_FLAGS) -c $< -o $@

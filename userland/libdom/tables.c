@@ -131,7 +131,7 @@ static JSValue insert_at(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
         return d_error(ctx, "IndexSizeError", "The index is out of range");
     const os64_html_node_t *before = index == -1 || (size_t)index == count ? NULL : nodes[index];
     JSValue value;
-    const os64_html_node_t *made = create(dom, ctx, name, &value);
+    const os64_html_node_t *made = create(d_owner(dom, owner), ctx, name, &value);
     return made == NULL ? value : placed(dom, ctx, owner, made, before, value);
 }
 
@@ -175,11 +175,11 @@ static JSValue insert_row(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
         before = rows[index];
     }
     JSValue row;
-    const os64_html_node_t *made = create(dom, ctx, "tr", &row);
+    const os64_html_node_t *made = create(d_owner(dom, table), ctx, "tr", &row);
     if (made == NULL) return row;
     if (parent != NULL) return placed(dom, ctx, parent, made, before, row);
     JSValue body;
-    const os64_html_node_t *section = create(dom, ctx, "tbody", &body);
+    const os64_html_node_t *section = create(d_owner(dom, table), ctx, "tbody", &body);
     if (section == NULL) {
         JS_FreeValue(ctx, row);
         return body;
@@ -246,7 +246,7 @@ static JSValue create_part(os64_dom_t *dom, JSContext *ctx, const os64_html_node
     const os64_html_node_t *present = first_child(table, tag);
     if (present != NULL) return d_wrap(dom, ctx, present);
     JSValue value;
-    const os64_html_node_t *made = create(dom, ctx, member == T_CREATE_CAPTION ? "caption" :
+    const os64_html_node_t *made = create(d_owner(dom, table), ctx, member == T_CREATE_CAPTION ? "caption" :
                                           member == T_CREATE_HEAD ? "thead" : "tfoot", &value);
     if (made == NULL) return value;
     const os64_html_node_t *before = member == T_CREATE_CAPTION ? table->first_child :
@@ -262,7 +262,7 @@ static JSValue create_body(os64_dom_t *dom, JSContext *ctx, const os64_html_node
     for (const os64_html_node_t *child = table->first_child; child != NULL; child = child->next)
         if (html_is(child, OS64_HTML_TAG_TBODY)) last = child;
     JSValue value;
-    const os64_html_node_t *made = create(dom, ctx, "tbody", &value);
+    const os64_html_node_t *made = create(d_owner(dom, table), ctx, "tbody", &value);
     return made == NULL ? value : placed(dom, ctx, table, made, last != NULL ? last->next : NULL, value);
 }
 
@@ -273,6 +273,7 @@ static JSValue table_member(JSContext *ctx, JSValueConst this_value, int argc, J
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *node = d_node(dom, ctx, this_value);
     if (node == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     if (d_node_kind(node) != member_kind(magic)) return JS_ThrowTypeError(ctx, "Illegal invocation");

@@ -8,8 +8,8 @@ The capture is what tools/pages/intl-capture.html recorded in a browser:
 every case's options, and per case the construction's outcome, the
 resolved options, and the strings and parts of its formats and ranges
 (DateTimeFormat's, NumberFormat's, RelativeTimeFormat's, ListFormat's), its
-plural categories (PluralRules') or the sign of its comparisons
-(Collator's).
+plural categories (PluralRules'), the sign of its comparisons (Collator's)
+or its segments with their indices and word-likeness (Segmenter's).
 Each case is run again through libjs (the runner's --script mode), and
 every field that differs is reported with both answers; U+202F and U+2009
 are shown by name, since they are what a folded comparison would hide.
@@ -61,6 +61,8 @@ for (const c of %s) {
     if (c.relative) r.relative = c.relative.map(([v, u]) => [v, u, attempt(() => f.format(numberValue(v), u)), attempt(() => f.formatToParts(numberValue(v), u))]);
     if (c.lists) r.lists = c.lists.map(([l]) => [l, f.format(l), f.formatToParts(l)]);
     if (c.compare) r.compare = c.compare.map(([x, y]) => [x, y, Math.sign(f.compare(x, y))]);
+    if (c.segments) r.segments = c.segments.map(([t]) => [t, Array.from(f.segment(t),
+        d => [d.segment, d.index, d.isWordLike === undefined ? null : d.isWordLike])]);
     numberOut.push(r);
 }
 const zoneOf = z => attempt(() => new Intl.DateTimeFormat('en-US', {timeZone: z}).resolvedOptions().timeZone);
@@ -79,6 +81,10 @@ probes['Date toLocaleDateString long'] = new Date(1.5e12).toLocaleDateString('en
 probes['getCanonicalLocales'] = attempt(() => Intl.getCanonicalLocales(['EN-us', 'en-latn-US', 'hy-SU']));
 for (const k of ['calendar', 'collation', 'currency', 'numberingSystem', 'timeZone', 'unit'])
     probes['supportedValuesOf ' + k] = attempt(() => Intl.supportedValuesOf(k));
+const wordsOf = t => attempt(() => Array.from(new Intl.Segmenter('en-US', {granularity: 'word'}).segment(t), d => d.segment));
+probes['Segmenter words Thai'] = wordsOf('\u0E2A\u0E27\u0E31\u0E2A\u0E14\u0E35\u0E04\u0E23\u0E31\u0E1A\u0E1C\u0E21');
+probes['Segmenter words Chinese'] = wordsOf('\u6211\u559C\u6B22\u5403\u82F9\u679C');
+probes['Segmenter words Japanese'] = wordsOf('\u79C1\u306F\u65E5\u672C\u8A9E\u3092\u8A71\u3057\u307E\u3059');
 const surface = {Intl: Object.getOwnPropertyNames(Intl).sort()};
 for (const name of surface.Intl) {
     const value = Intl[name];
@@ -124,7 +130,7 @@ def main():
                 differences.append((theirs['options'], field, theirs.get(field), mine.get(field)))
     for theirs, mine in zip(number_cases, ours['numberCases']):
         for field in ('construct', 'resolved', 'format', 'parts', 'range', 'rangeParts', 'select', 'selectRange',
-                      'relative', 'lists', 'compare'):
+                      'relative', 'lists', 'compare', 'segments'):
             if field not in theirs and field not in mine:
                 continue
             compared += 1

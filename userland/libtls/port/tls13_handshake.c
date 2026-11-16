@@ -2,6 +2,7 @@
 #include "os64/str.h"
 
 _Static_assert(sizeof(tls13_engine) < 65536, "TLS 1.3 engine memory budget");
+_Static_assert(sizeof(size_t) >= 8, "a streamed field is read as up to eight bytes");
 enum { WAIT_HELLO, WAIT_EXTENSIONS, WAIT_CERTIFICATE, WAIT_CERTIFICATE_AFTER_REQUEST,
        WAIT_VERIFY, WAIT_FINISHED, CONNECTED };
 enum { H_CLIENT_HELLO = 1, H_SERVER_HELLO = 2, H_TICKET = 4, H_EXTENSIONS = 8,
@@ -26,6 +27,12 @@ static void forget_secrets(tls13_engine *e)
     tls13_wipe(e->client_hs,sizeof e->client_hs); tls13_wipe(e->server_hs,sizeof e->server_hs);
     tls13_wipe(e->master,sizeof e->master);
 }
+static void forget_ticket(tls13_engine *e)
+{
+    if (e->res.arriving) tls13_wipe(e->res.arriving,sizeof *e->res.arriving);
+    tls13_wipe(e->ticket_nonce,sizeof e->ticket_nonce);
+    e->nonce_len=e->ticket_len=0; e->ticket_keep=false;
+}
 static unsigned alert_for(int error)
 {
     switch (error) {
@@ -38,6 +45,7 @@ static unsigned alert_for(int error)
     case BR_ERR_BAD_LENGTH: case BR_ERR_BAD_HANDSHAKE: return BR_ALERT_DECODE_ERROR;
     case TLS13_ERR_DOWNGRADE: case TLS13_ERR_SESSION_ID: case TLS13_ERR_KEY_SHARE:
     case TLS13_ERR_RETRY: case TLS13_ERR_SIGNATURE_SCHEME: case TLS13_ERR_PKCS1:
+    case TLS13_ERR_PSK:
     case BR_ERR_BAD_CIPHER_SUITE: return BR_ALERT_ILLEGAL_PARAMETER;
     default:
         if (error >= BR_ERR_X509_INVALID_VALUE && error <= BR_ERR_X509_NOT_TRUSTED)
@@ -64,6 +72,7 @@ static void fail(tls13_engine *e, int error)
         }
     }
     forget_secrets(e);
+    tls13_wipe(e->res_master,sizeof e->res_master); forget_ticket(e);
     tls13_wipe(e->client_ap,sizeof e->client_ap); tls13_wipe(e->server_ap,sizeof e->server_ap);
     tls13_wipe(&e->read_key,sizeof e->read_key); tls13_wipe(&e->write_key,sizeof e->write_key);
     tls13_wipe(e->recv,sizeof e->recv); tls13_wipe(e->app,sizeof e->app);
@@ -111,6 +120,35 @@ static void list16(writer *w, const uint16_t *values, size_t count)
 { u16(w,2*count); for (size_t i=0;i<count;i++) u16(w,values[i]); }
 static void ccs(unsigned char *out)
 { const unsigned char record[] = {20,3,3,0,1,1}; os64_memcpy(out,record,sizeof record); }
+// The suite whose hash the offered session's PSK is of, when this hello may
+// carry the session: there is one, it is whole, and once a HelloRetryRequest
+// has fixed the suite its hash is that suite's (RFC 8446 4.1.4, 4.2.11).
+static const tls13_suite *offer_suite(const tls13_engine *e)
+{
+    const tls13_session *s=e->res.offer;
+    if (!s || !s->ticket_len || s->ticket_len>TLS13_TICKET_MAX) return NULL;
+    const tls13_suite *suite=tls13_suite_find(s->suite);
+    if (!suite || (e->suite && e->suite->hash_len!=suite->hash_len)) return NULL;
+    return suite;
+}
+// The binder: the client's proof that it holds the PSK, an HMAC under a key
+// derived from it over the transcript so far and the hello TRUNCATED at the
+// end of the identities, so over everything but the binders themselves
+// (RFC 8446 4.2.11.2). The transcript is copied, never advanced: the whole
+// hello enters it once the binder is in place.
+static int binder(const tls13_engine *e, const tls13_suite *suite,
+                  const unsigned char *hello_bytes, size_t truncated, unsigned char *out)
+{
+    unsigned char zeros[48]={0}, early[48], key[48];
+    br_multihash_context partial=e->transcript, empty;
+    tls13_transcript_init(&empty);
+    br_multihash_update(&partial,hello_bytes,truncated);
+    int error=tls13_extract(suite,zeros,e->res.offer->psk,suite->hash_len,early);
+    if (!error) error=tls13_derive_secret(suite,early,"res binder",&empty,key);
+    if (!error) error=tls13_finished(suite,key,&partial,out);
+    tls13_wipe(early,sizeof early); tls13_wipe(key,sizeof key); tls13_wipe(&partial,sizeof partial);
+    return error;
+}
 static int hello(tls13_engine *e, const unsigned char *cookie, size_t cookie_len)
 {
     // In compatibility mode the second flight starts with CCS, whether that
@@ -145,9 +183,31 @@ static int hello(tls13_engine *e, const unsigned char *cookie, size_t cookie_len
     }
     end_vector(&w,names); end_vector(&w,x);
     if (cookie) { x=extension(&w,44); u16(&w,cookie_len); bytes(&w,cookie,cookie_len); end_vector(&w,x); }
+    // psk_dhe_ke alone: a resumed handshake still does the key exchange.
+    if (e->res.advertise) { x=extension(&w,45); u8(&w,1); u8(&w,1); end_vector(&w,x); }
+    // pre_shared_key is the LAST extension, as the RFC requires: the binder
+    // covers the hello up to it. One identity, and its binder reserved.
+    const tls13_suite *psk=offer_suite(e);
+    size_t truncated=0, binder_at=0;
+    if (psk) {
+        const tls13_session *s=e->res.offer;
+        uint32_t age=s->age_ms+s->age_add;   // modulo 2^32, as obfuscated_ticket_age is
+        x=extension(&w,41); names=start_vector(&w);
+        u16(&w,s->ticket_len); bytes(&w,s->ticket,s->ticket_len);
+        u16(&w,age>>16); u16(&w,age&65535);
+        end_vector(&w,names);
+        truncated=w.n;
+        const unsigned char reserved[TLS13_HASH_MAX]={0};
+        u16(&w,1+psk->hash_len); u8(&w,psk->hash_len); binder_at=w.n; bytes(&w,reserved,psk->hash_len);
+        end_vector(&w,x);
+    }
     end_vector(&w,all);
     if (w.bad || w.n>TLS13_CONTENT_MAX) return BR_ERR_TOO_LARGE;
     put24(w.p+1,w.n-4);
+    // Every length before the binders already counts them, so the truncated
+    // hello hashed here is the one the server will hash.
+    if (psk) { int error=binder(e,psk,w.p,truncated,w.p+binder_at); if (error) return error; }
+    e->offered=psk!=NULL;
     br_multihash_update(&e->transcript,w.p,w.n);
     record[0]=TLS13_HANDSHAKE; record[1]=3; record[2]=3; put16(record+3,w.n);
     e->send_at=0; e->send_used=prefix+5+w.n;
@@ -194,8 +254,8 @@ static int server_hello(tls13_engine *e)
     if (compression) return BR_ERR_BAD_COMPRESSION;
     bool retry=tls13_equal(random,retry_random,32);
     const unsigned char *share=NULL, *cookie=NULL; size_t share_len=0,cookie_len=0;
-    unsigned selected_version=0,group=0; bool have_version=false,have_share=false,have_cookie=false;
-    bool other_extension=false;
+    unsigned selected_version=0,group=0,identity=0; bool have_version=false,have_share=false,have_cookie=false;
+    bool other_extension=false,have_psk=false;
     while (exts.at<exts.n && !exts.bad) {
         size_t at=exts.at; unsigned type=number(&exts,2); cursor v=vector(&exts,2);
         if (exts.bad || duplicate(&exts,at,type)) return BR_ERR_BAD_HANDSHAKE;
@@ -209,6 +269,12 @@ static int server_hello(tls13_engine *e)
         } else if (type==44 && retry) {
             have_cookie=true; cursor p=vector(&v,2); cookie=p.p; cookie_len=p.n;
             if (!ended(&v) || !cookie_len) return BR_ERR_BAD_HANDSHAKE;
+        } else if (type==41 && !retry && e->offered) {
+            // The server accepts the session this hello offered. In a
+            // HelloRetryRequest, or unasked, it is an extension we did not
+            // offer there, and falls to the refusal below.
+            have_psk=true; identity=number(&v,2);
+            if (!ended(&v)) return BR_ERR_BAD_HANDSHAKE;
         } else other_extension=true;
     }
     if (!ended(&exts)) return BR_ERR_BAD_HANDSHAKE;
@@ -252,10 +318,19 @@ static int server_hello(tls13_engine *e)
     for (unsigned i=0;i<e->share_count;i++) if (e->shares[i].group->id==group) own=&e->shares[i];
     if (!own || (e->retry_group && e->retry_group!=group) || share_len!=own->group->point_len)
         return TLS13_ERR_KEY_SHARE;
+    // One identity was offered, so the only one to select is the first, and
+    // the suite chosen with it must hash as the session's did (RFC 8446
+    // 4.2.11). With it the early secret is the PSK's; without, as before.
+    const unsigned char *psk=NULL;
+    if (have_psk) {
+        const tls13_suite *issued=tls13_suite_find(e->res.offer->suite);
+        if (identity || !issued || issued->hash_len!=suite->hash_len) return TLS13_ERR_PSK;
+        psk=e->res.offer->psk;
+    }
     unsigned char shared[48], secret[48], derived[48], zeros[48]={0};
     br_multihash_context empty; tls13_transcript_init(&empty);
     int error=tls13_shared_secret(own->group,own->scalar,own->group->secret_len,share,share_len,shared);
-    if (!error) error=tls13_extract(suite,zeros,zeros,suite->hash_len,secret);
+    if (!error) error=tls13_extract(suite,zeros,psk?psk:zeros,suite->hash_len,secret);
     if (!error) error=tls13_derive_secret(suite,secret,"derived",&empty,derived);
     if (!error) error=tls13_extract(suite,derived,shared,own->group->secret_len,secret);
     br_multihash_update(&e->transcript,e->header,4);
@@ -268,7 +343,10 @@ static int server_hello(tls13_engine *e)
     if (!error) error=install(e,&e->write_key,e->client_hs);
     tls13_wipe(shared,sizeof shared); tls13_wipe(secret,sizeof secret); tls13_wipe(derived,sizeof derived);
     tls13_wipe(e->shares,sizeof e->shares); tls13_wipe(&e->rng,sizeof e->rng);
-    if (!error) { e->phase=WAIT_EXTENSIONS; e->read_encrypted=e->write_encrypted=true; e->version=0x0304; }
+    if (!error) {
+        e->phase=WAIT_EXTENSIONS; e->read_encrypted=e->write_encrypted=true; e->version=0x0304;
+        e->resumed=psk!=NULL;
+    }
     return error;
 }
 static int encrypted_extensions(tls13_engine *e)
@@ -362,7 +440,12 @@ static int client_finished(tls13_engine *e)
     if (!error) {
         br_multihash_update(&e->transcript,p+n,4+e->suite->hash_len);
         n+=4+e->suite->hash_len;
+        // The secret every ticket's PSK is derived from, over the handshake
+        // through this Finished. `master` is forgotten below.
+        if (e->res.arriving)
+            error=tls13_derive_secret(e->suite,e->master,"res master",&e->transcript,e->res_master);
         size_t wire=0;
+        if (!error)
         error=tls13_record_seal(&e->write_key,TLS13_HANDSHAKE,record,n,sizeof e->send-prefix,&wire);
         e->send_at=0; e->send_used=prefix+wire;
     }
@@ -413,14 +496,25 @@ static int certificate_byte(tls13_engine *e, unsigned byte, size_t remaining)
 static int ticket_byte(tls13_engine *e, unsigned byte, size_t remaining)
 {
     switch (e->stream_stage) {
-    case 0: if (++e->field_used==8) { e->field_used=0; e->stream_stage=1; } break;
+    case 0:
+        // ticket_lifetime, then ticket_age_add: four bytes each.
+        if (stream_number(e,byte,8)) {
+            uint64_t both=stream_value(e);
+            e->ticket_lifetime=(uint32_t)(both>>32); e->ticket_age_add=(uint32_t)both;
+            e->stream_stage=1;
+        }
+        break;
     case 1:
         if (byte>remaining) return BR_ERR_BAD_HANDSHAKE;
+        e->nonce_len=byte;
         e->stream_left=byte; e->stream_stage=byte?2:3; break;
     case 3:
         if (stream_number(e,byte,2)) {
             size_t n=stream_value(e);
             if (!n || n>remaining) return BR_ERR_BAD_HANDSHAKE;
+            // A ticket past what a session holds is read to its end like any
+            // other and not kept.
+            e->ticket_len=n; e->ticket_keep=e->res.arriving && n<=TLS13_TICKET_MAX;
             e->stream_left=n; e->stream_stage=4;
         }
         break;
@@ -454,6 +548,10 @@ static int streamed(tls13_engine *e, const unsigned char *p, size_t n)
         if (data) {
             size_t count=n-at<e->stream_left?n-at:e->stream_left;
             if (cert) (*e->validator)->append(e->validator,p+at,count);
+            else if (e->stream_stage==2)
+                os64_memcpy(e->ticket_nonce+(e->nonce_len-e->stream_left),p+at,count);
+            else if (e->stream_stage==4 && e->ticket_keep)
+                os64_memcpy(e->res.arriving->ticket+(e->ticket_len-e->stream_left),p+at,count);
             at+=count; e->message_used+=count; e->stream_left-=count;
             if (!e->stream_left) {
                 if (cert) { (*e->validator)->end_cert(e->validator); e->stream_stage=4; }
@@ -481,6 +579,27 @@ static bool expected(const tls13_engine *e, unsigned type)
     default: return false;
     }
 }
+// A NewSessionTicket has been read whole. Its PSK is derived from the
+// resumption secret and the ticket's own nonce (RFC 8446 4.6.1), so each
+// ticket of a connection is a different secret. A lifetime of zero is the
+// server saying "discard at once"; one past the RFC's ceiling is held to it.
+static int ticket_done(tls13_engine *e)
+{
+    tls13_session *s=e->res.arriving;
+    int error=0;
+    if (s && e->ticket_keep && e->ticket_lifetime) {
+        uint32_t lifetime=e->ticket_lifetime<TLS13_TICKET_LIFETIME_MAX?e->ticket_lifetime:TLS13_TICKET_LIFETIME_MAX;
+        s->suite=e->suite->id; s->age_add=e->ticket_age_add; s->age_ms=0; s->ticket_len=e->ticket_len;
+        error=tls13_expand_label(e->suite,e->res_master,"resumption",e->ticket_nonce,e->nonce_len,
+                                 s->psk,e->suite->hash_len);
+        if (!error) {
+            e->tickets_kept++;
+            if (e->res.received) e->res.received(e->res.context,s,lifetime);
+        }
+    } else if (s) e->tickets_dropped++;
+    forget_ticket(e);
+    return error;
+}
 static int complete_message(tls13_engine *e)
 {
 #ifdef OS64_TLS13_TEST
@@ -494,7 +613,7 @@ static int complete_message(tls13_engine *e)
         return error;
     }
     if (e->message_type==H_TICKET)
-        return e->stream_stage==6 && !e->field_used ? 0 : BR_ERR_BAD_HANDSHAKE;
+        return e->stream_stage==6 && !e->field_used ? ticket_done(e) : BR_ERR_BAD_HANDSHAKE;
     if (e->message_type==H_UPDATE) {
         if (e->message_length!=1 || e->message[0]>1) return BR_ERR_BAD_HANDSHAKE;
         int error=tls13_update_secret(e->suite,e->server_ap);
@@ -518,7 +637,10 @@ static int complete_message(tls13_engine *e)
     // own framing is added. Streamed Certificate was hashed as it arrived.
     br_multihash_update(&e->transcript,e->header,4);
     br_multihash_update(&e->transcript,e->message,e->message_length);
-    if (e->message_type==H_EXTENSIONS) e->phase=WAIT_CERTIFICATE;
+    // A resumed handshake has no Certificate, CertificateRequest or
+    // CertificateVerify: the server's Finished is next, and anything else is
+    // unexpected.
+    if (e->message_type==H_EXTENSIONS) e->phase=e->resumed?WAIT_FINISHED:WAIT_CERTIFICATE;
     else if (e->message_type==H_CERT_REQUEST) { e->certificate_requested=true; e->phase=WAIT_CERTIFICATE_AFTER_REQUEST; }
     else if (e->message_type==H_VERIFY) e->phase=WAIT_FINISHED;
     else if (e->message_type==H_FINISHED) {
@@ -547,7 +669,7 @@ static void handshake(tls13_engine *e, const unsigned char *p, size_t n)
                 br_multihash_update(&e->transcript,e->header,4);
                 (*e->validator)->start_chain(e->validator,e->hostname);
             }
-            if (e->message_type==H_TICKET) os64_memset(e->message,0,sizeof e->message);
+            if (e->message_type==H_TICKET) { os64_memset(e->message,0,sizeof e->message); forget_ticket(e); }
         }
         size_t count=e->message_length-e->message_used; if (count>n) count=n;
         int error=0;
@@ -603,9 +725,11 @@ static void pump(tls13_engine *e)
     }
 }
 int tls13_init(tls13_engine *e, const br_x509_class **validator, const char *hostname,
-               const char *const *alpn, size_t alpn_count, const unsigned char seed[32])
+               const char *const *alpn, size_t alpn_count, const unsigned char seed[32],
+               const tls13_resumption *resumption)
 {
     e->validator=validator; e->hostname=hostname; e->alpn=alpn; e->alpn_count=alpn_count;
+    if (resumption) e->res=*resumption;
     e->recv_need=5; tls13_transcript_init(&e->transcript);
     br_hmac_drbg_init(&e->rng,&br_sha256_vtable,seed,32);
     br_hmac_drbg_generate(&e->rng,e->random,32); br_hmac_drbg_generate(&e->rng,e->session,32);
@@ -631,6 +755,7 @@ unsigned tls13_current_state(tls13_engine *e)
     return state;
 }
 int tls13_last_error(const tls13_engine *e) { return (int)e->error; }
+bool tls13_resumed(const tls13_engine *e) { return e->resumed; }
 const char *tls13_selected_protocol(const tls13_engine *e) { return e->selected[0]?e->selected:NULL; }
 void tls13_flush(tls13_engine *e) { e->flush_pending=true; pump(e); }
 void tls13_close(tls13_engine *e) { e->closing=true; pump(e); }

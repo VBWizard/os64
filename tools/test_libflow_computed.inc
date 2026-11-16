@@ -17,10 +17,13 @@ static const char kComputedPage[] =
     "#flt{float:left;margin:auto;width:10px;height:10px;box-sizing:border-box;padding:1px}"
     "#shadow{box-shadow:2px 3px rgb(1,2,3);text-shadow:1px 1px 2px currentcolor;color:rgb(9,9,9)}"
     "#anim{animation:spin 2s linear infinite;will-change:transform}"
+    "#mask{-webkit-mask:url(icon.svg) right 2px top 0/10px no-repeat content-box,"
+    "linear-gradient(#000,transparent) exclude luminance no-clip}"
+    "#mask>b{display:block;mask-image:inherit;mask-mode:inherit}"
     "</style>"
     "<div id=box>box</div><div id=hidden><p id=inner>x<span id=deep>y</span></p></div>"
     "<div id=pos>p</div><div id=grid></div><span id=face>s</span><div id=flt></div>"
-    "<div id=shadow>t</div><div id=anim>a</div>";
+    "<div id=shadow>t</div><div id=anim>a</div><div id=mask>m<b id=heir>h</b></div>";
 
 static const os64_html_node_t *computed_find(const os64_html_node_t *n, const char *id)
 {
@@ -172,6 +175,35 @@ static void computed_cases(void)
     computed_is(c, "computed: a keyword easing", GARB_ANIMATION_TIMING_FUNCTION, "linear");
     computed_is(c, "computed: infinite", GARB_ANIMATION_ITERATION_COUNT, "infinite");
     computed_is(c, "computed: will-change", GARB_WILL_CHANGE, "transform");
+    flow_computed_free(c);
+
+    // A mask's longhands as its background twins are written, each list
+    // a layer an item; its origin and clip start at the border box.
+    c = flow_computed_new(tree, &p.env, computed_find(root, "box"), NULL);
+    computed_is(c, "computed: mask-image none", GARB_MASK_IMAGE, "none");
+    computed_is(c, "computed: mask-origin starts at the border box", GARB_MASK_ORIGIN, "border-box");
+    computed_is(c, "computed: mask-clip too", GARB_MASK_CLIP, "border-box");
+    computed_is(c, "computed: mask-composite add", GARB_MASK_COMPOSITE, "add");
+    computed_is(c, "computed: mask-mode match-source", GARB_MASK_MODE, "match-source");
+    computed_is(c, "computed: mask-size auto", GARB_MASK_SIZE, "auto");
+    flow_computed_free(c);
+    c = flow_computed_new(tree, &p.env, computed_find(root, "mask"), NULL);
+    computed_is(c, "computed: mask-image, a picture and a gradient", GARB_MASK_IMAGE,
+                "url(\"icon.svg\"), linear-gradient(rgb(0, 0, 0), rgba(0, 0, 0, 0))");
+    computed_is(c, "computed: mask-position-x", GARB_MASK_POSITION_X, "calc(100% - 2px), 0%");
+    computed_is(c, "computed: mask-position-y", GARB_MASK_POSITION_Y, "0px, 0%");
+    computed_is(c, "computed: mask-size", GARB_MASK_SIZE, "10px, auto");
+    computed_is(c, "computed: mask-repeat", GARB_MASK_REPEAT, "no-repeat, repeat");
+    computed_is(c, "computed: mask-origin", GARB_MASK_ORIGIN, "content-box, border-box");
+    computed_is(c, "computed: mask-clip, no-clip", GARB_MASK_CLIP, "content-box, no-clip");
+    computed_is(c, "computed: mask-composite", GARB_MASK_COMPOSITE, "add, exclude");
+    computed_is(c, "computed: mask-mode", GARB_MASK_MODE, "match-source, luminance");
+    flow_computed_free(c);
+    c = flow_computed_new(tree, &p.env, computed_find(root, "heir"), NULL);
+    computed_is(c, "computed: mask-image taken by inherit", GARB_MASK_IMAGE,
+                "url(\"icon.svg\"), linear-gradient(rgb(0, 0, 0), rgba(0, 0, 0, 0))");
+    computed_is(c, "computed: mask-mode taken by inherit", GARB_MASK_MODE, "match-source, luminance");
+    computed_is(c, "computed: what it does not inherit is initial", GARB_MASK_CLIP, "border-box");
     flow_computed_free(c);
 
     // A node that is no element, and an element no layout of this document
@@ -393,6 +425,32 @@ static bool computed_svg_url(void *ctx, const char *written, uint32_t len, int32
 {
     *(int32_t *)ctx = sheet;
     return computed_url(NULL, written, len, sheet, out, cap);
+}
+
+// A conic gradient as getComputedStyle writes it, as Chrome does: where
+// its turn starts and its centre, each left out at its initial value, and
+// its stops in the units the page wrote.
+static void conic_computed_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><style>"
+                     "#a{background-image:conic-gradient(from 90deg at 4px 4px,red 25%,blue 90deg)}"
+                     "#b{background-image:conic-gradient(red,blue)}</style>"
+                     "<div id=a></div><div id=b></div>",
+                 800, 600);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 800, &p.env);
+    const os64_html_node_t *root = p.doc->document;
+    flow_computed_t *c = tree != NULL ? flow_computed_new(tree, &p.env, computed_find(root, "a"), NULL)
+                                      : NULL;
+    computed_is(c, "computed: a conic gradient as written", GARB_BACKGROUND_IMAGE,
+                "conic-gradient(from 90deg at 4px 4px, rgb(255, 0, 0) 25%, rgb(0, 0, 255) 90deg)");
+    flow_computed_free(c);
+    c = tree != NULL ? flow_computed_new(tree, &p.env, computed_find(root, "b"), NULL) : NULL;
+    computed_is(c, "computed: a conic gradient's initial start and centre left out", GARB_BACKGROUND_IMAGE,
+                "conic-gradient(rgb(255, 0, 0), rgb(0, 0, 255))");
+    flow_computed_free(c);
+    flow_free(tree);
+    sheeted_close(&p);
 }
 
 static void computed_svg_cases(void)

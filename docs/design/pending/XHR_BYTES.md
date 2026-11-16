@@ -8,7 +8,7 @@ script memory", which Chris ruled a fast follower to Streams S3.*
 XHR keeps every byte a response brings (XHR § "received bytes"), and
 libdom keeps them in the engine's heap (`xhr_part`'s `js_malloc`), whose
 64 MiB was the page's whole script budget (it is `yonder.conf`'s
-`script_memory_mb` since 2026-11-05, 256 MiB by default). A speed test that asks for
+`script_memory_mb` since 2026-11-05, 512 MiB by default). A speed test that asks for
 25 MiB on each of up to eight connections passes the budget at the third,
 and the runtime retires: "this page runs without scripts". The DOM host
 holds that bound today (`dom_xhr_downloads_case`: two of 25 MiB fit, three

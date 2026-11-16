@@ -26,6 +26,7 @@
 #include "download.h"
 #include "mail.h"
 #include "paint.h"
+#include "filter.h"
 #include "paint_cache.h"
 #include "garb/cascade.h"
 #include "scale.h"
@@ -270,12 +271,45 @@ static bool inside(os64_gui_rect_t r, os64_gui_rect_t clip)
            (int64_t)r.y + r.h <= (int64_t)clip.y + clip.h;
 }
 
+// A layer the recorder holds while it is open (rec_layer_open): its
+// bounds and its painting, premultiplied 0xAARRGGBB — the fills and the
+// painter's pixels laid into it — so a mask's capture taken back
+// (rec_layer_take) is the coverage the painter really drew.
+#define REC_LAYERS 8
+typedef struct {
+    os64_gui_rect_t at;
+    uint32_t *px;
+} RecLayer;
+
 typedef struct {
     Out out;
     os64_gui_rect_t view;
     bool escaped;           // a fill reached past the viewport
     const os64_page_t *page;
+    RecLayer layers[REC_LAYERS];
+    int32_t nlayers;
+    int32_t throughs;       // laid groups open
 } Rec;
+
+// Straight `argb` laid over the open layer's pixel at page (x, y), if it
+// has one there.
+static void rec_lay(Rec *rec, int32_t x, int32_t y, uint32_t argb)
+{
+    if (rec->nlayers <= 0 || rec->nlayers > REC_LAYERS)
+        return;
+    RecLayer *l = &rec->layers[rec->nlayers - 1];
+    if (l->px == NULL || x < l->at.x || y < l->at.y || x >= l->at.x + l->at.w || y >= l->at.y + l->at.h)
+        return;
+    uint32_t *d = &l->px[(size_t)(y - l->at.y) * (size_t)l->at.w + (size_t)(x - l->at.x)];
+    uint32_t a = argb >> 24, keep = 255 - a, o = 0;
+    for (int k = 0; k < 4; k++) {
+        uint32_t sc = k == 3 ? a : ((argb >> (8 * k)) & 0xff) * a / 255;
+        uint32_t dc = (*d >> (8 * k)) & 0xff;
+        uint32_t v = sc + (dc * keep + 127) / 255;
+        o |= (v > 255 ? 255 : v) << (8 * k);
+    }
+    *d = o;
+}
 
 // A colour as its RGB, and its alpha after a slash when it is not opaque.
 static void colour_note(Rec *rec, uint32_t colour)
@@ -293,6 +327,9 @@ static void rec_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
     out(&rec->out, "fill %d %d %d %d", r.x, r.y, r.w, r.h);
     colour_note(rec, colour);
     out(&rec->out, "\n");
+    for (int32_t y = r.y; rec->nlayers > 0 && y < r.y + r.h; y++)
+        for (int32_t x = r.x; x < r.x + r.w; x++)
+            rec_lay(rec, x, y, colour);
 }
 
 // A text is drawn whole and cut by its verb, so a clip narrower than the
@@ -323,6 +360,15 @@ static void rec_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gu
     out(&rec->out, "\n");
 }
 
+static void rec_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    (void)b;
+    Rec *rec = ctx;
+    out(&rec->out, "canvas %d %d %d %d", c.x, c.y, c.w, c.h);
+    clip_note(rec, clip);
+    out(&rec->out, "\n");
+}
+
 static void rec_stand_in(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip,
                          uint32_t ink, uint32_t paper)
 {
@@ -349,6 +395,14 @@ static bool rec_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
 {
     (void)clip;
     Rec *rec = ctx;
+    if (area == NULL && layer >= 0 && (layer & YONDER_MASK_LAYER) != 0)
+        return flow_mask_layer(b->style, layer & ~YONDER_MASK_LAYER).layer.image != NULL;
+    if (area != NULL && layer >= 0 && (layer & YONDER_MASK_LAYER) != 0) {
+        out(&rec->out, "backdrop %d %d %d %d mask %d origin %d %d %d %d\n", area->x, area->y,
+            area->w, area->h, (int)(layer & ~YONDER_MASK_LAYER), origin.x, origin.y, origin.w,
+            origin.h);
+        return true;
+    }
     bool sheet = false;
     for (int32_t i = 0; i < flow_background_layers(b->style); i++)
         sheet |= flow_background_layer(b->style, i).image != NULL;
@@ -380,27 +434,60 @@ static void rec_group_close(void *ctx, uint8_t alpha)
 // thousandths, and the clip it is laid in. Laid unless the case says the
 // face has no memory for it (s_through_refused).
 static bool s_through_refused;
+// Kept drawings (paint.h, `keep`): when a case sets s_keeps, the face is
+// asked, and answers s_keep_answer, recording the question; an open with
+// HAVE is refused when s_have_refused says the drawing was let go.
+static bool s_keeps, s_have_refused;
+static int s_keep_answer;
+// When set, the face has no memory for a group laid inside another: one
+// inside a group being kept is drawn upright.
+static bool s_inner_through_refused;
+// When set, an open with MAKE is refused (its sheets past the face's
+// limits): it is opened again with NO.
+static bool s_make_refused;
+// When set, the face draws a canvas's pixels (paint.h, `canvas`).
+static bool s_canvas_verb;
+static const char *const kKeepNames[] = {"no", "make", "have"};
 
-static bool rec_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6],
-                             os64_gui_rect_t clip)
+static int rec_keep(void *ctx, const yonder_keep_key_t *key)
 {
     Rec *rec = ctx;
-    if (s_through_refused)
+    out(&rec->out, "keep? %s drawn %llu bounds %d %d %d %d scroll %d %d tree %s\n",
+        key->box != NULL && key->box->node != NULL && key->box->node->name != NULL
+            ? key->box->node->name : "?",
+        (unsigned long long)key->drawn, key->bounds.x, key->bounds.y, key->bounds.w,
+        key->bounds.h, key->scroll.x, key->scroll.y, key->tree != 0 ? "set" : "none");
+    return s_keep_answer;
+}
+
+static bool rec_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6],
+                             os64_gui_rect_t clip, int keep)
+{
+    Rec *rec = ctx;
+    if (s_through_refused || (keep == YONDER_KEEP_HAVE && s_have_refused) ||
+        (keep == YONDER_KEEP_MAKE && s_make_refused))
         return false;
+    if (s_inner_through_refused && rec->throughs > 0)
+        return false;
+    rec->throughs++;
     out(&rec->out, "through %d %d %d %d", bounds.x, bounds.y, bounds.w, bounds.h);
     for (int i = 0; i < 6; i++) {
         double v = m[i] * 1000;
         v = v < -9e18 ? -9e18 : v > 9e18 ? 9e18 : v;
         out(&rec->out, " %lld", (long long)(v < 0 ? v - 0.5 : v + 0.5));
     }
-    out(&rec->out, " clip %d %d %d %d\n", clip.x, clip.y, clip.w, clip.h);
+    out(&rec->out, " clip %d %d %d %d", clip.x, clip.y, clip.w, clip.h);
+    if (keep != YONDER_KEEP_NO)
+        out(&rec->out, " %s", kKeepNames[keep]);
+    out(&rec->out, "\n");
     return true;
 }
 
-static void rec_through_close(void *ctx, uint8_t alpha)
+static void rec_through_close(void *ctx, uint8_t alpha, bool keep)
 {
     Rec *rec = ctx;
-    out(&rec->out, "end through %d\n", (int)alpha);
+    rec->throughs--;
+    out(&rec->out, "end through %d%s\n", (int)alpha, keep ? " kept" : "");
 }
 
 // A text clip (PILE3.md § The text clip): its bounds, where its mask ends
@@ -429,6 +516,11 @@ static void rec_clip_close(void *ctx)
     out(&((Rec *)ctx)->out, "end clip\n");
 }
 
+// THE PAINT CACHE'S ORACLE (YONDER_PERF.md § perf-2): while set, a mask, a
+// layer's coverage and a picture are recorded whole, every alpha and every
+// pixel, so two paintings of one page compare pixel for pixel (paint_of).
+static bool s_record_all;
+
 // A layer (FILTER.md, MIX_BLEND.md): its bounds when it opens, and its
 // list's length, its currentColor, its alpha and — when not normal — its
 // mode when it closes. Refused when the case says the face cannot make one
@@ -441,18 +533,62 @@ static bool rec_layer_open(void *ctx, os64_gui_rect_t bounds)
     if (s_filter_refused)
         return false;
     out(&rec->out, "filter %d %d %d %d\n", bounds.x, bounds.y, bounds.w, bounds.h);
+    if (rec->nlayers < REC_LAYERS)
+        rec->layers[rec->nlayers] =
+            (RecLayer){bounds, calloc((size_t)bounds.w * (size_t)bounds.h, sizeof(uint32_t))};
+    rec->nlayers++;
     return true;
 }
 
+static void rec_layer_pop(Rec *rec)
+{
+    if (rec->nlayers <= 0)
+        return;
+    if (--rec->nlayers < REC_LAYERS) {
+        free(rec->layers[rec->nlayers].px);
+        rec->layers[rec->nlayers].px = NULL;
+    }
+}
+
+// A layer's close, and with a mask its coverage: its sum, and with
+// s_record_all each row in hex, as a shadow's mask is recorded.
 static void rec_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                            uint8_t alpha, flow_blend_t mode)
+                            uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
 {
     Rec *rec = ctx;
     (void)filter;
     out(&rec->out, "end filter %d #%06x %d", (int)n, current, (int)alpha);
     if (mode != FLOW_BLEND_NORMAL)
         out(&rec->out, " mode %d", (int)mode);
+    os64_gui_rect_t at = rec->nlayers > 0 && rec->nlayers <= REC_LAYERS
+                             ? rec->layers[rec->nlayers - 1].at : (os64_gui_rect_t){0, 0, 0, 0};
+    if (cover != NULL) {
+        long sum = 0;
+        for (int32_t k = 0; k < at.w * at.h; k++)
+            sum += cover[k];
+        out(&rec->out, " cover %ld", sum);
+    }
     out(&rec->out, "\n");
+    for (int32_t k = 0; cover != NULL && s_record_all && k < at.w * at.h; k++)
+        out(&rec->out, "%02x%s", cover[k], (k + 1) % at.w == 0 ? "\n" : "");
+    rec_layer_pop(rec);
+}
+
+// A mask's capture taken back: its coverage read from what was laid into
+// it, as the face reads it (filter.h).
+static void rec_layer_take(void *ctx, uint8_t *cover, bool luminance)
+{
+    Rec *rec = ctx;
+    out(&rec->out, "take%s\n", luminance ? " luminance" : "");
+    if (rec->nlayers > 0 && rec->nlayers <= REC_LAYERS) {
+        RecLayer *l = &rec->layers[rec->nlayers - 1];
+        size_t n = (size_t)l->at.w * (size_t)l->at.h;
+        if (l->px != NULL)
+            yonder_mask_take(l->px, n, luminance, cover);
+        else
+            memset(cover, 0, n);
+    }
+    rec_layer_pop(rec);
 }
 
 // A backdrop (FILTER.md § 7): its rect, its coverage (the mask's sum, or
@@ -475,10 +611,6 @@ static bool rec_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *
     return true;
 }
 
-// THE PAINT CACHE'S ORACLE (YONDER_PERF.md § perf-2): while set, a mask and
-// a picture are recorded whole, every alpha and every pixel, so two
-// paintings of one page compare pixel for pixel (paint_of).
-static bool s_record_all;
 
 // A shadow's mask: where, its colour, and the sum and the largest of its
 // alphas, which a hand-worked case can check without listing every pixel.
@@ -520,6 +652,8 @@ static void rec_pixels(void *ctx, os64_gui_rect_t r, const uint32_t *argb)
         if (n <= 16 || k == 0 || k == n - 1 || s_record_all)
             out(&rec->out, " %08x", argb[k]);
     out(&rec->out, "\n");
+    for (int32_t k = 0; rec->nlayers > 0 && k < n; k++)
+        rec_lay(rec, r.x + k % r.w, r.y + k / r.w, argb[k]);
 }
 
 static const char *kPage = "http://host/dir/page.html";
@@ -550,9 +684,12 @@ static yonder_verbs_t verbs_of(Rec *rec)
 {
     return (yonder_verbs_t){rec,          rec_fill,     rec_text,       rec_image,
                             rec_control,  rec_backdrop, rec_group_open, rec_group_close,
-                            rec_mask,     rec_pixels,   rec_stand_in,   rec_through_open,
-                            rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close, NULL,
-                            rec_layer_open, rec_layer_close, rec_backdrop_filter};
+                            rec_mask,     rec_pixels,   rec_stand_in,
+                            s_keeps ? rec_keep : NULL, rec_through_open,
+                            rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close,
+                            s_canvas_verb ? rec_canvas : NULL,
+                            rec_layer_open, rec_layer_close, rec_backdrop_filter,
+                            rec_layer_take};
 }
 
 // The oracle's caches: the suite's, which every page painted before fills,
@@ -576,16 +713,26 @@ static yonder_scratch_t *s_suite_scratch;
 
 // `t` painted through `view`, every pixel recorded, through `cache` and
 // `scratch` (NULL for none).
+// When set (w > 0), the whole view a paint's `view` is a part of, whose
+// pixels the layers' budget is measured by (yonder_paint's `whole`);
+// otherwise the view painted is the whole.
+static os64_gui_rect_t s_paint_whole;
+
+static os64_gui_rect_t whole_of(os64_gui_rect_t view)
+{
+    return s_paint_whole.w > 0 ? s_paint_whole : view;
+}
+
 static char *paint_whole(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view,
                          yonder_paint_cache_t *cache, yonder_scratch_t *scratch)
 {
-    Rec rec = {{0}, view, false, page};
+    Rec rec = {{0}, view, false, page, {{{0}, NULL}}, 0, 0};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = verbs_of(&rec);
     s_record_all = true;
     s_alloc_starved = s_paint_starved;
-    yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, cache, scratch,
-                 &v);
+    yonder_paint(t, view, whole_of(view), (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint,
+                 cache, scratch, &v);
     s_alloc_starved = false;
     s_record_all = false;
     if (scratch != NULL) {
@@ -661,7 +808,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     flow_tree_t *t = flow_layout(doc, page, width, &env);
     if (t != NULL && s_paint_scrolls)
         (void)flow_scroll_set(t, 0, s_paint_scroll);
-    Rec rec = {{0}, view, false, page};
+    Rec rec = {{0}, view, false, page, {{{0}, NULL}}, 0, 0};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = verbs_of(&rec);
     s_alloc_starved = s_paint_starved;
@@ -669,8 +816,8 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     size_t bytes = s_alloc_bytes;
     uint64_t big = s_big_mallocs;
     if (t != NULL)
-        yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, s_through,
-                     s_through_scratch, &v);
+        yonder_paint(t, view, whole_of(view), (flow_point_t){view.x, view.y}, kEnv.paper,
+                     s_dark_paint, s_through, s_through_scratch, &v);
     yonder_scratch_paint_end(s_through_scratch);
     s_paint_bytes = s_alloc_bytes - bytes;
     s_paint_big = s_big_mallocs - big;
@@ -766,13 +913,13 @@ static void filter_paint_cases(void)
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true, kPlain);
     s_filter_refused = false;
     expect("filter: a refused layer is counted", yonder_paint_layers_refused == 1, NULL);
-    // Each layer is charged the pixels it shows in the view: three boxes
-    // filling the 200 x 100 view spend 2 x 200 x 100 with two, and the
-    // third is a plain group.
+    // Each layer is charged the pixels it shows in the view: five boxes
+    // filling the 200 x 100 view spend YONDER_FILTER_AREA_VIEWS (4) x 200
+    // x 100 with four, and the fifth is a plain group.
     static const char kThree[] =
         "<!doctype html><style>body { margin: 0 } div { position: absolute; top: 0;"
         " width: 200px; height: 100px; filter: grayscale(1) }</style>"
-        "<div>a</div><div>b</div><div>c</div>";
+        "<div>a</div><div>b</div><div>c</div><div>d</div><div>e</div>";
     bool escaped = false;
     char *got = paint_of(kThree, strlen(kThree), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped,
                          true);
@@ -782,7 +929,7 @@ static void filter_paint_cases(void)
     for (const char *at = got; at != NULL && (at = strstr(at, "\ngroup ")) != NULL; at++)
         groups++;
     expect("filter: past the paint's budget, a plain group",
-           filters == 2 && groups == 1 && yonder_paint_layers_refused == 1, got);
+           filters == 4 && groups == 1 && yonder_paint_layers_refused == 1, got);
     free(got);
     // A filter inside a filter is charged what it shows in the repaint,
     // not in the outer layer's margin (Codex #445 round 1): a 10 x 10
@@ -885,6 +1032,40 @@ static void blend_paint_cases(void)
         layers++;
     expect("blend: inside a filter's layer, only the filter's layer, counted once",
            layers == 1 && yonder_paint_layers_refused == 1 && strstr(got, " mode ") == NULL, got);
+    free(got);
+}
+
+#include "test_yonder_masks.inc"
+
+// An ATOM below full opacity — an inline-block, an inline picture — is a
+// group of its own, its atom whole: its frame and its content laid at its
+// opacity once, after the flow it sits in (CSS Color 4 § 3.2, painted as a
+// positioned box at z-index 0 is).
+static void atom_group_paint_cases(void)
+{
+    bool escaped = false;
+    static const char kBlock[] = "<!doctype html><style>body { margin: 0 }"
+        " span { display: inline-block; opacity: 0.5; width: 4px; height: 4px;"
+        " background: #00ff00 }</style>a<span></span>b";
+    char *got = paint_of(kBlock, strlen(kBlock), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    expect("atom: an inline-block below full opacity is a group, after its line's text",
+           got != NULL && strcmp(got, "fill 0 0 200 100 #fefefe\n"
+                                      "text \"a\" 0 14 #101010\n"
+                                      "text \"b\" 12 14 #101010\n"
+                                      "group 8 10 4 4\n"
+                                      "fill 8 10 4 4 #00ff00\n"
+                                      "end group 128\n") == 0, got);
+    free(got);
+    static const char kPicture[] = "<!doctype html><style>body { margin: 0 }"
+        " img { opacity: 0.5 }</style>a<img src=a.png width=4 height=4>b";
+    got = paint_of(kPicture, strlen(kPicture), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    expect("atom: an inline picture below full opacity is a group",
+           got != NULL && strcmp(got, "fill 0 0 200 100 #fefefe\n"
+                                      "text \"a\" 0 14 #101010\n"
+                                      "text \"b\" 12 14 #101010\n"
+                                      "group 8 10 4 4\n"
+                                      "image 8 10 4 4\n"
+                                      "end group 128\n") == 0, got);
     free(got);
 }
 
@@ -2058,8 +2239,11 @@ static const char *reload_block(const yonder_agent_preset_t *p, way_initiator_t 
 }
 
 // EACH PRESET BYTE FOR BYTE AGAINST WHAT THAT BROWSER SENT: the W1
-// capture files, raw request bytes Chris's Chrome 156 and Firefox 158 on
-// Windows sent a local listener (WIRE.md § 1 as built names them). Chrome:
+// capture files, raw request bytes Chris's Chrome and Firefox 158 on
+// Windows sent a local listener (WIRE.md § 1 as built names them), with
+// Chrome's string and client hints as Chrome 157 sent them a month later
+// (HTTP2.md § 4 H2.5, capture C1): the lines and their order did not
+// change between the two. Chrome:
 // capture-01-chrome-win-get-root (a typed navigation),
 // capture-25-chrome-win-get-clicked (a link clicked),
 // capture-26-chrome-win-get-clicked (the browser's Reload of it),
@@ -2081,9 +2265,9 @@ static void agent_identity_cases(void)
         return;
     expect_text("identity: Chrome's agent, captured",
                 chrome->agent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-                               "Chrome/156.0.0.0 Safari/537.36");
+                               "Chrome/157.0.0.0 Safari/537.36");
     expect_text("identity: Chrome's client hints, captured", chrome->identity.hints,
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n");
     expect_text("identity: Chrome's language, captured", chrome->identity.language, "en-US,en;q=0.9");
@@ -2128,6 +2312,9 @@ static void agent_identity_cases(void)
     expect("identity: a saved Chrome 154 preset is Chrome's preset now",
            yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
                                 "Chrome/154.0.0.0 Safari/537.36") == chrome->agent, NULL);
+    expect("identity: a saved Chrome 156 preset is Chrome's preset now",
+           yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/156.0.0.0 Safari/537.36") == chrome->agent, NULL);
     expect("identity: a saved Firefox 156 preset is Firefox's preset now",
            yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0") ==
                firefox->agent, NULL);
@@ -2145,7 +2332,7 @@ static void agent_identity_cases(void)
     expect_text("identity: Chrome, the browser's Reload of a clicked link",
                 reload_block(chrome, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
                 "Cache-Control: max-age=0\r\n"
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n"
                 "Upgrade-Insecure-Requests: 1\r\n"
@@ -2165,7 +2352,7 @@ static void agent_identity_cases(void)
                 "Priority: u=0, i\r\n");
     expect_text("identity: Chrome, an address given",
                 navigation_block(chrome, WAY_BY_BROWSER, NULL, "https://a.test/"),
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n"
                 "Upgrade-Insecure-Requests: 1\r\n"
@@ -2176,7 +2363,7 @@ static void agent_identity_cases(void)
                 "Accept-Language: en-US,en;q=0.9\r\n");
     expect_text("identity: Chrome, a link clicked",
                 navigation_block(chrome, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n"
                 "Upgrade-Insecure-Requests: 1\r\n"
@@ -2297,14 +2484,14 @@ static void wire_request_cases(void)
     char extra[512];
 
 #define CHROME_HINTS_NAV                                                                       \
-    "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n" \
+    "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n" \
     "sec-ch-ua-mobile: ?0\r\nsec-ch-ua-platform: \"Windows\"\r\n"
 #define CHROME_UA "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " \
-                  "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36\r\n"
+                  "(KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36\r\n"
 #define CHROME_NAV_ACCEPT "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
 #define CHROME_SUB_HEAD(path, host) "GET " path " HTTP/1.1\r\nHost: " host "\r\nConnection: keep-alive\r\n" \
     "sec-ch-ua-platform: \"Windows\"\r\n" CHROME_UA \
-    "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n" \
+    "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n" \
     "sec-ch-ua-mobile: ?0\r\n"
 #define CHROME_TAIL "Referer: http://localhost:8765/\r\nAccept-Encoding: gzip, identity\r\n" \
                     "Accept-Language: en-US,en;q=0.9\r\n\r\n"
@@ -2372,7 +2559,7 @@ static void wire_request_cases(void)
                 wire_request(chrome, &put, "PUT", "https://127.0.0.1:8765/fetch-cross-preflight", NULL, extra),
                 "PUT /fetch-cross-preflight HTTP/1.1\r\nHost: 127.0.0.1:8765\r\nConnection: keep-alive\r\n"
                 "Content-Length: 0\r\nsec-ch-ua-platform: \"Windows\"\r\n" CHROME_UA
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\nAccept: */*\r\nOrigin: http://localhost:8765\r\n"
                 "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n" CHROME_TAIL);
     snprintf(extra, sizeof(extra), "X-W1: 1\r\n%s%s", ref, origin);
@@ -2566,6 +2753,7 @@ static yonder_paint_cache_counts_t paint_through(yonder_paint_cache_t *c, const 
 // Boxes alike but for one value each that makes their pixels — a stop's
 // colour, place or hint (a hint's colour is 0, so .g16's black stop where
 // .g4's hint is), the line's angle, a repeat, the ray's shape and centre,
+// a turn's start and centre,
 // currentColor's colour, the tile's size — a ray sized in px is the same
 // ray in any tile — and a shadow's blur, offset, spread, inset and corners
 // — and a small tile placed in from the box's corner, so the box's first
@@ -2597,6 +2785,9 @@ static const char *kCacheKeys =
     " .g18 { background: radial-gradient(10px 10px at 5px 5px, #ff0000, #0000ff); width: 70px }"
     " .g19 { background: radial-gradient(10px 10px at 5px 5px, #ff0000, #0000ff); height: 31px }"
     " .g20 { background: radial-gradient(#ff0000, #0000ff) 7px 5px / 20px 20px }"
+    " .g21 { background: conic-gradient(#ff0000, #0000ff) }"
+    " .g22 { background: conic-gradient(from 90deg, #ff0000, #0000ff) }"
+    " .g23 { background: conic-gradient(at 20% 30%, #ff0000, #0000ff) }"
     " .s0 { box-shadow: 4px 4px 6px #000000 }"
     " .s1 { box-shadow: 4px 4px 10px #000000 }"
     " .s2 { box-shadow: 6px 4px 6px #000000 }"
@@ -2613,7 +2804,7 @@ static const char *kCacheKeys =
     "<div class=g8></div><div class=g9></div><div class=g10></div><div class=g11></div>"
     "<div class=g12></div><div class=g13></div><div class=g14></div><div class=g15></div>"
     "<div class=g16></div><div class=g17></div><div class=g18></div><div class=g19></div>"
-    "<div class=g20></div>"
+    "<div class=g20></div><div class=g21></div><div class=g22></div><div class=g23></div>"
     "<div class=s0></div><div class=s1></div><div class=s2></div><div class=s3></div>"
     "<div class=s4></div><div class=s5></div><div class=s6></div><div class=s7></div>"
     "<div class=s8></div><div class=s9></div>";
@@ -2999,6 +3190,24 @@ static void scratch_cases(void)
            past != NULL && s_mallocs == m0 + 1 && d.unpooled == c.unpooled + 1 && d.made == c.made &&
            d.lent == 0 && yonder_scratch_counts(s).idle == 4, NULL);
 
+    // A take that finds no memory, pooled or not, is counted (what a kept
+    // drawing asks); a take of nothing is no refusal.
+    c = yonder_scratch_counts(s);
+    s_alloc_refuse_once = true;
+    void *pooled = yonder_scratch_take(s, part + part / 2);   // more than any idle buffer holds
+    s_alloc_refuse_once = true;
+    void *tiny = yonder_scratch_take(s, 64);
+    d = yonder_scratch_counts(s);
+    expect("scratch: a take that finds no memory is counted",
+           pooled == NULL && tiny == NULL && d.refused == c.refused + 2, NULL);
+    // A heap may answer a take of nothing with no memory; this one is made to.
+    s_alloc_refuse_once = true;
+    void *nothing = yonder_scratch_take(s, 0);
+    s_alloc_refuse_once = false;
+    yonder_scratch_give(s, nothing);
+    expect("scratch: a take of nothing is no refusal", yonder_scratch_counts(s).refused == d.refused,
+           NULL);
+
     // No scratch at all: the heap's, every time.
     m0 = s_mallocs;
     void *none = yonder_scratch_take(NULL, big);
@@ -3065,6 +3274,25 @@ static void scratch_paint_cases(void)
     yonder_scratch_free(sc);
 }
 
+// A button the page draws is painted as the page's boxes (STYLED_BUTTONS.md):
+// its background and its words, and never the face's control, whose
+// stand-in for a hidden widget would cover them. A button of text alone
+// the page left alone is still the face's control.
+static void styled_button_paint_cases(void)
+{
+    static const char kButtons[] =
+        "<!doctype html><style>body{margin:0} #s{background:#ff0000;border:0;padding:0}</style>"
+        "<button>Save</button><button id=s>Go</button>";
+    bool escaped = false;
+    char *got = paint_of(kButtons, strlen(kButtons), 400, (os64_gui_rect_t){0, 0, 400, 100}, &escaped, true);
+    const char *control = got != NULL ? strstr(got, "control ") : NULL;
+    expect("styled button: the plain one is the face's control, painted once",
+           control != NULL && strstr(control + 1, "control ") == NULL, got);
+    expect("styled button: the styled one paints its background and its words",
+           got != NULL && strstr(got, "#ff0000") != NULL && strstr(got, "text \"Go\"") != NULL, got);
+    free(got);
+}
+
 int main(int argc, char **argv)
 {
     os64_text_options_t o = {
@@ -3095,12 +3323,15 @@ int main(int argc, char **argv)
         scratch_cases();
         scratch_paint_cases();
         paint_cases();
+        styled_button_paint_cases();
         batch_a_paint_cases();
         shadow_blur_cases();
         huge_corner_case();
         filter_paint_cases();
         backdrop_paint_cases();
         blend_paint_cases();
+        mask_paint_cases();
+        atom_group_paint_cases();
         round_picture_cases();
         shadow_split_cases();
         canvas_owner_cases();

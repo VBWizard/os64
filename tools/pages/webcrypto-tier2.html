@@ -1,0 +1,204 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>crypto.subtle, tier 2</title>
+<style>
+body{font-family:sans-serif;margin:2em;max-width:62em}
+pre{background:#eee;color:#000;padding:.6em;white-space:pre-wrap}
+.pass{color:#080}.fail{color:#c00}
+</style>
+</head><body>
+<h1>crypto.subtle, tier 2</h1>
+<p>WEB_CRYPTO.md's tier 2: AES-CTR, AES-CBC and AES-GCM, HMAC over each SHA,
+<code>generateKey</code>, <code>importKey</code> and <code>exportKey</code> in
+the raw and JWK formats, and <code>wrapKey</code>/<code>unwrapKey</code> with
+those ciphers. Each line is a check against a published value (NIST SP
+800-38A, the GCM paper's test case 4, RFC 4231 and RFC 2202) or the behaviour
+Web Cryptography requires; another browser shows every line PASS, and so
+should yonder.</p>
+<p id="summary">Running...</p>
+<pre id="checks"></pre>
+<script>
+const lines = [];
+let passed = 0, failed = 0;
+function record(ok, what, detail) {
+  if (ok) passed++; else failed++;
+  lines.push((ok ? 'PASS ' : 'FAIL ') + what + (ok || !detail ? '' : '\n     ' + detail));
+}
+const subtle = crypto.subtle;
+const enc = s => new TextEncoder().encode(s);
+const dec = b => new TextDecoder().decode(b);
+function hex(b) { return Array.from(new Uint8Array(b), x => x.toString(16).padStart(2, '0')).join(''); }
+function unhex(s) { return new Uint8Array(s.match(/../g).map(x => parseInt(x, 16))); }
+async function is(what, make, want) {
+  try {
+    const got = await make();
+    record(got === want, what, 'got ' + got + ', want ' + want);
+  } catch (e) { record(false, what, 'rejected: ' + e.name + ' ' + e.message); }
+}
+async function rejectsWith(what, make, name) {
+  let promise;
+  try { promise = make(); } catch (e) { record(false, what, 'threw instead of rejecting: ' + e.name); return; }
+  if (!(promise instanceof Promise)) { record(false, what, 'no promise'); return; }
+  try { await promise; record(false, what, 'resolved; want ' + name); }
+  catch (e) { record(e.name === name, what, 'rejected with ' + e.name + ', want ' + name); }
+}
+const raw = (bytes, algorithm, usages) => subtle.importKey('raw', bytes, algorithm, true, usages);
+
+async function aes() {
+  const key128 = unhex('2b7e151628aed2a6abf7158809cf4f3c');
+  const plain = unhex('6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52ef' +
+                      'f69f2445df4f9b17ad2b417be66c3710');
+  const cbc = await raw(key128, 'AES-CBC', ['encrypt', 'decrypt']);
+  const iv = unhex('000102030405060708090a0b0c0d0e0f');
+  const cbcWant = '7649abac8119b246cee98e9b12e9197d5086cb9b507219ee95db113a917678b273bed6b8e3c1743b7116e69e22229516' +
+                  '3ff1caa1681fac09120eca307586e1a78cb82807230e1321d3fae00d18cc2012';
+  await is('AES-128-CBC, SP 800-38A F.2.1 and a block of padding',
+           async () => hex(await subtle.encrypt({name: 'AES-CBC', iv}, cbc, plain)), cbcWant);
+  await is('AES-CBC decrypts and unpads',
+           async () => hex(await subtle.decrypt({name: 'AES-CBC', iv}, cbc, unhex(cbcWant))), hex(plain));
+  const key256 = await raw(unhex('603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4'), 'AES-CBC', ['encrypt']);
+  await is('AES-256-CBC pads a short message',
+           async () => hex(await subtle.encrypt({name: 'AES-CBC', iv}, key256, enc('abc'))), '83286afe49594ce405a251bdb203750f');
+  const badPad = unhex(cbcWant.slice(0, 64));
+  await rejectsWith('AES-CBC refuses a bad pad: OperationError',
+                    () => subtle.decrypt({name: 'AES-CBC', iv}, cbc, badPad.subarray(0, 16)), 'OperationError');
+  await rejectsWith('an IV that is not 16 bytes: OperationError',
+                    () => subtle.encrypt({name: 'AES-CBC', iv: new Uint8Array(12)}, cbc, plain), 'OperationError');
+
+  const ctr = await raw(key128, 'AES-CTR', ['encrypt', 'decrypt']);
+  const counter = unhex('f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff');
+  const ctrWant = '874d6191b620e3261bef6864990db6ce9806f66b7970fdff8617187bb9fffdff5ae4df3edbd5d35e5b4f09020db03eab' +
+                  '1e031dda2fbe03d1792170a0f3009cee';
+  await is('AES-128-CTR, SP 800-38A F.5.1',
+           async () => hex(await subtle.encrypt({name: 'AES-CTR', counter, length: 128}, ctr, plain)), ctrWant);
+  await is('AES-CTR is its own inverse',
+           async () => hex(await subtle.decrypt({name: 'AES-CTR', counter, length: 128}, ctr, unhex(ctrWant))), hex(plain));
+  await is('an 8-bit counter wraps within its bits',
+           async () => hex(await subtle.encrypt({name: 'AES-CTR', counter: unhex('000102030405060708090a0b0c0d0eff'), length: 8},
+                                                ctr, plain.subarray(0, 32))),
+           'ab930eb6a1f9b307c8633228ae164c15cc73f9de397d6cabbe04204b6d68a45e');
+  await rejectsWith('a counter length of 0: OperationError',
+                    () => subtle.encrypt({name: 'AES-CTR', counter, length: 0}, ctr, plain), 'OperationError');
+
+  const gcm = await raw(unhex('feffe9928665731c6d6a8f9467308308'), 'AES-GCM', ['encrypt', 'decrypt']);
+  const gcmParams = {name: 'AES-GCM', iv: unhex('cafebabefacedbaddecaf888'),
+                     additionalData: unhex('feedfacedeadbeeffeedfacedeadbeefabaddad2')};
+  const gcmPlain = unhex('d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525' +
+                         'b16aedf5aa0de657ba637b39');
+  const gcmWant = '42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa05' +
+                  '1ba30b396a0aac973d58e0915bc94fbc3221a5db94fae95ae7121a47';
+  await is('AES-128-GCM, the GCM paper\'s test case 4',
+           async () => hex(await subtle.encrypt(gcmParams, gcm, gcmPlain)), gcmWant);
+  await is('AES-GCM decrypts', async () => hex(await subtle.decrypt(gcmParams, gcm, unhex(gcmWant))), hex(gcmPlain));
+  await is('a 96-bit tag is the first 12 bytes of the tag',
+           async () => hex(await subtle.encrypt({...gcmParams, tagLength: 96}, gcm, gcmPlain)), gcmWant.slice(0, 144));
+  const altered = unhex(gcmWant);
+  altered[3] ^= 1;
+  await rejectsWith('AES-GCM refuses an altered ciphertext: OperationError',
+                    () => subtle.decrypt(gcmParams, gcm, altered), 'OperationError');
+  await rejectsWith('AES-GCM refuses other additional data: OperationError',
+                    () => subtle.decrypt({...gcmParams, additionalData: new Uint8Array(1)}, gcm, unhex(gcmWant)), 'OperationError');
+  await rejectsWith('a tag length GCM does not have: OperationError',
+                    () => subtle.encrypt({...gcmParams, tagLength: 100}, gcm, gcmPlain), 'OperationError');
+}
+
+async function hmac() {
+  const key = new Uint8Array(20).fill(0x0b), data = enc('Hi There');
+  const want = {
+    'SHA-1': 'b617318655057264e28bc0b6fb378c8ef146be00',
+    'SHA-256': 'b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7',
+    'SHA-384': 'afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6',
+    'SHA-512': '87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4' +
+               'be9d914eeb61f1702e696c203a126854',
+  };
+  for (const [hash, mac] of Object.entries(want)) {
+    const k = await raw(key, {name: 'HMAC', hash}, ['sign', 'verify']);
+    await is('HMAC-' + hash + ', RFC ' + (hash === 'SHA-1' ? '2202' : '4231') + ' case 1',
+             async () => hex(await subtle.sign('HMAC', k, data)), mac);
+    await is('HMAC-' + hash + ' verifies its own MAC', () => subtle.verify('HMAC', k, unhex(mac), data), true);
+  }
+  const k = await raw(key, {name: 'HMAC', hash: 'SHA-256'}, ['sign', 'verify']);
+  const bad = unhex(want['SHA-256']);
+  bad[0] ^= 1;
+  await is('a wrong MAC verifies false, not a rejection', () => subtle.verify('HMAC', k, bad, data), false);
+  await is('a short MAC verifies false', () => subtle.verify('HMAC', k, bad.subarray(0, 16), data), false);
+  await is('the key\'s algorithm names its hash and length',
+           async () => k.algorithm.name + ' ' + k.algorithm.hash.name + ' ' + k.algorithm.length, 'HMAC SHA-256 160');
+  const generated = await subtle.generateKey({name: 'HMAC', hash: 'SHA-512'}, true, ['sign']);
+  await is('a generated HMAC key is the hash\'s block size', async () => generated.algorithm.length, 1024);
+  await rejectsWith('importing HMAC with no hash: TypeError',
+                    () => subtle.importKey('raw', key, {name: 'HMAC'}, true, ['sign']), 'TypeError');
+  await rejectsWith('an empty HMAC key: DataError',
+                    () => subtle.importKey('raw', new Uint8Array(0), {name: 'HMAC', hash: 'SHA-256'}, true, ['sign']), 'DataError');
+}
+
+async function keys() {
+  const key = await subtle.generateKey({name: 'AES-GCM', length: 256}, true, ['encrypt', 'decrypt']);
+  await is('a generated key is a secret CryptoKey',
+           async () => (key instanceof CryptoKey) + ' ' + key.type + ' ' + key.extractable, 'true secret true');
+  await is('its algorithm', async () => key.algorithm.name + ' ' + key.algorithm.length, 'AES-GCM 256');
+  await is('its usages', async () => key.usages.join(','), 'encrypt,decrypt');
+  await is('raw export is the key\'s 32 bytes', async () => (await subtle.exportKey('raw', key)).byteLength, 32);
+  const jwk = await subtle.exportKey('jwk', key);
+  await is('a JWK names the key', async () => jwk.kty + ' ' + jwk.alg + ' ' + jwk.ext + ' ' + jwk.key_ops.join(','),
+           'oct A256GCM true encrypt,decrypt');
+  await is('the JWK\'s k is base64url without padding', async () => /^[A-Za-z0-9_-]{43}$/.test(jwk.k), true);
+  const back = await subtle.importKey('jwk', jwk, 'AES-GCM', true, ['encrypt', 'decrypt']);
+  await is('a JWK imports back to the same key',
+           async () => hex(await subtle.exportKey('raw', back)) === hex(await subtle.exportKey('raw', key)), true);
+  const known = await subtle.importKey('jwk', {kty: 'oct', k: 'K34VFiiu0qar9xWICc9PPA', alg: 'A128CBC'},
+                                       'AES-CBC', true, ['encrypt']);
+  await is('a JWK\'s k decodes', async () => hex(await subtle.exportKey('raw', known)), '2b7e151628aed2a6abf7158809cf4f3c');
+  await rejectsWith('a JWK whose alg disagrees: DataError',
+                    () => subtle.importKey('jwk', {...jwk, alg: 'A128GCM'}, 'AES-GCM', true, ['encrypt']), 'DataError');
+  await rejectsWith('a raw key of 20 bytes: DataError',
+                    () => subtle.importKey('raw', new Uint8Array(20), 'AES-GCM', true, ['encrypt']), 'DataError');
+  await rejectsWith('an AES length of 100: OperationError',
+                    () => subtle.generateKey({name: 'AES-CTR', length: 100}, true, ['encrypt']), 'OperationError');
+  await rejectsWith('an AES key that signs: SyntaxError',
+                    () => subtle.generateKey({name: 'AES-GCM', length: 128}, true, ['sign']), 'SyntaxError');
+  await rejectsWith('no usages at all: SyntaxError',
+                    () => subtle.generateKey({name: 'AES-GCM', length: 128}, true, []), 'SyntaxError');
+  const sealed = await subtle.generateKey({name: 'AES-CBC', length: 128}, false, ['encrypt']);
+  await rejectsWith('exporting a key that is not extractable: InvalidAccessError',
+                    () => subtle.exportKey('raw', sealed), 'InvalidAccessError');
+  await rejectsWith('decrypting with a key that may only encrypt: InvalidAccessError',
+                    () => subtle.decrypt({name: 'AES-CBC', iv: new Uint8Array(16)}, sealed, new Uint8Array(16)), 'InvalidAccessError');
+  await rejectsWith('a key used with another algorithm: InvalidAccessError',
+                    () => subtle.encrypt({name: 'AES-CTR', counter: new Uint8Array(16), length: 64}, sealed, new Uint8Array(1)),
+                    'InvalidAccessError');
+}
+
+async function wrapping() {
+  const kek = await subtle.generateKey({name: 'AES-GCM', length: 128}, false, ['wrapKey', 'unwrapKey']);
+  const mac = await subtle.importKey('raw', new Uint8Array(20).fill(0x0b), {name: 'HMAC', hash: 'SHA-256'}, true, ['sign']);
+  const params = {name: 'AES-GCM', iv: new Uint8Array(12)};
+  for (const format of ['raw', 'jwk']) {
+    const wrapped = await subtle.wrapKey(format, mac, kek, params);
+    const back = await subtle.unwrapKey(format, wrapped, kek, params, {name: 'HMAC', hash: 'SHA-256'}, true, ['sign']);
+    await is('an HMAC key wrapped as ' + format + ' with AES-GCM unwraps and signs the same',
+             async () => hex(await subtle.sign('HMAC', back, enc('Hi There'))),
+             'b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7');
+  }
+  const plainKek = await subtle.generateKey({name: 'AES-GCM', length: 128}, false, ['encrypt']);
+  await rejectsWith('wrapping with a key that may not wrap: InvalidAccessError',
+                    () => subtle.wrapKey('raw', mac, plainKek, params), 'InvalidAccessError');
+  const sealed = await subtle.generateKey({name: 'AES-CBC', length: 128}, false, ['encrypt']);
+  await rejectsWith('wrapping a key that is not extractable: InvalidAccessError',
+                    () => subtle.wrapKey('raw', sealed, kek, params), 'InvalidAccessError');
+}
+
+async function checks() {
+  record(window.isSecureContext === true, 'this page is a secure context');
+  await aes();
+  await hmac();
+  await keys();
+  await wrapping();
+}
+checks().catch(e => record(false, 'the checks themselves', e.name + ' ' + e.message)).then(() => {
+  document.getElementById('checks').textContent = lines.join('\n');
+  const summary = document.getElementById('summary');
+  summary.textContent = passed + ' passed, ' + failed + ' failed';
+  summary.className = failed ? 'fail' : 'pass';
+});
+</script>
+</body></html>

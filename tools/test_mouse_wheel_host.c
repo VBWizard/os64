@@ -20,13 +20,29 @@ static void outb(uint16_t port, uint8_t value);
 #include "../kernel/src/driver/system/usb/bt_le.c"
 #include "../kernel/src/driver/system/usb/bt_manager.c"
 #include "../kernel/src/driver/system/usb/bt_bond.c"
+#include "../kernel/src/driver/system/usb/bt_acl.c"
+#include "../kernel/src/driver/system/usb/bt_classic.c"
+#include "../kernel/src/driver/system/usb/bt_l2cap.c"
+#include "../kernel/src/driver/system/usb/bt_sdp.c"
+#include "../kernel/src/driver/system/usb/bt_avdtp.c"
+#include "../kernel/src/audio/sbc_frame.c"
+#include "../kernel/src/driver/system/usb/bt_a2dp.c"
+#include "../kernel/src/driver/system/usb/bt_avrcp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
+#include "../kernel/src/driver/system/usb/xhci_service.c"
 #include "../kernel/src/driver/system/usb/xhci.c"
 #include "../kernel/src/tty.c"
 #include "../kernel/src/vt_select.c"
 extern int puts(const char *);
 extern _Noreturn void abort(void);
 volatile uint64_t kTicksSinceStart;
+uint64_t kCPUCyclesPerSecond = 1000000000;
+// What the driver asks of kusb's side of the kernel, none of it reached by
+// these cases: a bell, a clock that moves, a sleep.
+doorbell_t kUsbDoorbell;
+void doorbell_ring(doorbell_t *db) { db->rings++; }
+uint64_t rdtsc(void) { static uint64_t cycles; return cycles += 1000; }
+void signal_raise(signals signal, uint64_t data, void *thread) { (void)signal; (void)data; (void)thread; }
 uintptr_t kHHDMOffset;
 __uint128_t kDebugLevel;
 struct Framebuffer kFrameBuffer = {.width=1024, .height=768};
@@ -41,6 +57,10 @@ void printd(__uint128_t level, const char *fmt, ...)
 { (void)level; (void)fmt; ++diagnostic_lines; }
 // Clipboard and paste are outside this fixture; reaching them is a failure.
 void *kmalloc(uint64_t n) { (void)n; abort(); }
+void *kmalloc_try(uint64_t n) { (void)n; abort(); }
+// Bluetooth's audio, never reached by these cases.
+uint64_t micros_now(void) { abort(); }
+const bt_a2dp_ops_t kBtA2dpSeamOps;
 void kfree(void *p) { (void)p; abort(); }
 snarf_pending_t *clipboard_begin(void) { abort(); }
 int clipboard_append(snarf_pending_t *p,const void *b,size_t n)
@@ -258,7 +278,7 @@ int main(void)
 
     // A delayed command completion cannot authorize Disable Slot cleanup.
     xhci_trb_t events[RING_TRBS]={0}; uint64_t runtime[16]={0};
-    hc.evt=events; hc.evt_cycle=1; hc.rt=(uint8_t *)runtime;
+    hc.evt=(xhci_evt_ring_t){.trb=events,.size=RING_TRBS,.cycle=1}; hc.rt=(uint8_t *)runtime;
     hc.command_trb=0x2000;
     events[0]=(xhci_trb_t){.param=0x2010,.status=TRB_CC_SUCCESS << 24,
         .control=TRB_TYPE(TRB_EV_CMD_COMPLETE) | TRB_CYCLE | (2u << 24)};

@@ -205,10 +205,12 @@ bool wm_set_decoration(const os64_decor_view_t *view, void **retired)
 // Initial client pixels are independent of the installed decoration palette.
 #define WINDOW_CONTENT_INITIAL    GUI_COLOR_LIGHT_GRAY
 
-// Focus recency, see window_t.focusSerial. EVERY assignment to s_focused
-// goes through here so the serial can never be forgotten at one site —
-// which is the whole reason it is a function and not a field write.
+// Focus recency, see window_t.focusSerial, and the owner word
+// wm_focus_owner publishes. EVERY assignment to s_focused goes through
+// focus_window so neither can be forgotten at one site — which is the whole
+// reason it is a function and not a field write.
 static uint64_t s_focus_serial = 0;
+static uint64_t s_focus_owner = 0;   // wm_focus_owner's word
 window_t *wm_focus_root(window_t *w)
 {
     while (w && w->popup_owner_id) {
@@ -235,6 +237,7 @@ static void focus_window(window_t *w)
 	s_focused = w;
 	if (w)
 		w->focusSerial = ++s_focus_serial;
+	__atomic_store_n(&s_focus_owner, w ? w->owner : 0, __ATOMIC_RELEASE);
 
 	// Tell both ends (INPUT_EVENT_WINDOW_FOCUS, input.h). Every focus change
 	// passes through here — birth, death, raise — which is why the event is
@@ -544,6 +547,8 @@ void wm_set_pinned(window_t *w, bool pinned)
 	unlink_window(w);
 	link_on_top(w);
 	gui_damage_add_locked(w->frame);
+    input_event_t changed={.type=INPUT_EVENT_WINDOW_PIN_CHANGED,.tick=kTicksSinceStart};
+    wm_deliver_event(w,&changed);
 }
 
 void wm_set_decorated(window_t *w, bool decorated)
@@ -868,6 +873,11 @@ window_t *wm_window_by_id(uint32_t id)
 window_t *wm_focused(void)
 {
 	return s_focused;
+}
+
+uint64_t wm_focus_owner(void)
+{
+	return __atomic_load_n(&s_focus_owner, __ATOMIC_ACQUIRE);
 }
 
 size_t wm_recency_ids(uint32_t *ids, size_t max)

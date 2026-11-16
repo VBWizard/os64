@@ -3,7 +3,8 @@
 #include "os64/ui.h"
 #include "os64/ui_dispatcher.h"
 
-/* App-owned modeless dialog. Build children in body after open, then call
+/* App-owned modeless dialog, inheriting the parent's pinned band at creation.
+ * Build children in body after open, then call
  * ready. Its events reach it one of two ways: pumped from the parent's loop,
  * or, attached to the parent's dispatcher, delivered by its turns; attached,
  * the dialog closes itself when asked (Close, Escape). Close before

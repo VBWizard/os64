@@ -1,0 +1,146 @@
+# F.3b provider lifetime inventory
+
+Work in progress, 2026-11-12. This is the implementation inventory required by
+[the retirement brief](IFRAME_F3_RETIREMENT.md). `os64_dom_depart` publishes
+retirement before releasing obsolete work. `os64_dom_depart_finish` integrates
+the ABI 5 engine quiescence check with cluster-wide dispatch, reaction,
+observer, scheduler and provider-loan exclusion. Only a successful finish
+permits releasing provider opaque storage; a sticky runtime failure requires
+the root path after unwind.
+
+`d_provider_enter` refuses inactive activity and counts a loan on both binding
+and cluster. `d_provider_leave` ends it after consuming and releasing the
+producer's output. The finish operation first commits storage and cancels
+requests while their providers are valid, then releases obsolete task payloads
+and detaches callback tables. Its finishing flag excludes recursive cleanup,
+including cleanup entered through a sibling. Retained object records and
+layout generations remain owned until their existing release paths.
+
+## Guarded rendering providers
+
+| Entry sites in `userland/libdom` | Activity owner | Loan extent and inactive behavior |
+|---|---|---|
+| `geometry.c`: geometry read | Element's current document | Provider call; copied snapshot remains binding-owned. Script refuses inactive service, including retirement during the call. Foreign-namespace empty geometry needs no provider. |
+| `view.c`: computed-style snapshot | Element's current document | Provider call and output into binding-owned storage; inactive provider query refuses. |
+| `view.c`: viewport read, window and element scroll | Window service owner or element's current document | Each native call; no read/scroll after retirement. Script viewport queries and scroll services refuse; native view stepping stops. Pure replacement properties and no-op window focus remain ordinary operations. |
+| `hit.c`: hit query, including expanded second buffer | Queried document or shadow root's current document | Each provider call; recheck before a second query. Inactive service refuses without calling the provider. |
+| `range.c`: text rectangles, including expanded second buffer | Range's current document | Each provider call into caller-owned storage; stop before a second query if the first marks retirement. Range tree operations remain usable. |
+| `svg_geometry.c`: fill hit query | SVG node's current document | Provider call including its bounded cancellation polling and scratch allocations; inactive service refuses. |
+| `resize.c`: measurement batches | Each target's current document | Each native batch; discard retired-owner measurements and stop if the observer activity retires. Existing registrations remain. |
+| `intersection.c`: measurement batches and viewport read | Explicit root/current measurement document | Each call; retirement during measurement prevents the subsequent viewport call and commit for that owner. |
+| `canvas_image.c`: image acquire/release | Source image's current document | Captured producer and opaque remain borrowed through pixel/text consumption and matching release, including refused acquisitions. Retirement stops new queries but does not skip an owed release. Canvas-to-canvas pixels remain pure retained data. |
+| `canvas_image.c`: image update/event polling | Queried document | Each update and image loan; stop native polling after callback-triggered retirement. |
+| `canvas_text.c`: font layout | Canvas node's current document | From layout entry through retained-run inspection, outline use and run release, including refusal paths. Inactive font service refuses; pixel drawing without fonts remains available. |
+| `canvas.c`: damage visitor | Current document whose damage is visited | Entire native walk, including visitor calls and borrowed node/damage arguments. Stop after retirement; retained bitmap storage is not drained. |
+
+## Guarded synchronous services
+
+| Entry sites in `userland/libdom` | Activity owner | Loan extent and inactive behavior |
+|---|---|---|
+| `core.c`: alert | Dialog's window | After message conversion, through native notice. Inactive provider entry throws; an already delivered notice may finish unwinding. Constant confirm/prompt fallback results use no provider. |
+| `window.c`: parser write/open | Document's window | Native parser call after argument conversion. An inactive write answers the existing InvalidStateError path; no parser call occurs. |
+| `window.c`, `validity.c`: activation and validation reporting | Node's current document | Native notice and borrowed node. Inactive focus/blur/reset/report notices are omitted, including retirement in a preceding invalid event. Validation data remains usable. |
+| `window.c`: connected-script notices | Script's current document | Mark-started and native notice under the loan. Eligibility is checked for each script; a provider that marks retirement prevents later notices in the same tree change. Pure tree mutation remains available. |
+| `crypto.c`: entropy | Crypto service's window | Entropy call through scratch consumption and erasure. Refuse inactive service; if the provider marks retirement, erase scratch and leave the caller's buffer unchanged. Empty fills and cryptography that needs no entropy remain usable. |
+| `document.c`: focus | Queried document | Native call and returned-node validation. Departed window documents answer null activeElement and false hasFocus without querying the host. |
+| `classic.c`: user-agent text | Navigator's window | Provider call through string interpretation/copy. Inactive service refuses; constant Navigator members do not query the provider. |
+| `classic.c`: cookies | Document or Navigator window | Each get/set/enabled call. Setters check after conversion; reads recheck after a response, before retrying with a larger buffer. Inactive cookie service refuses. |
+| `classic.c`, `attr.c`: missing-global and broken-attribute diagnostics | Diagnostic binding | Native callback. Inactive diagnostics are omitted; retained functions and detached Attr records remain usable. |
+| `core.c`: shared millisecond/microsecond reads; callers in timers, idle, animation, events, messages, storage, XHR, intersection and Web Animations | Clock's document | Each host read; inactive reads use binding-owned saved samples. Timer/idle/frame creation and message posting recheck after clock callbacks before publishing work or detaching transfers. Storage settlement and XHR send/timeout setup recheck clocks. |
+| `performance.c`: current time and navigation timing | Performance object's window | Native clock/timing call through snapshot copy. Live `now()` and implicit mark/measure timestamps refuse retirement; explicit timestamps and previously sampled navigation timing remain usable. |
+| `screen.c`, `view.c`: zoom and media-query sampling | Screen or media-query window | Each zoom call. A media environment uses one sample; post-call retirement refuses script query results and stops native media delivery. Stored screen metadata remains available. |
+| `window.c`: history length/update/fragment | History or Location service's document | Each native call; recheck after argument/state conversion and host completion. Inactive History operations use SecurityError, while exported state objects remain usable. Retirement prevents local completion and fragment fallback even when the host accepted an entry. Pending navigation holds are discarded when taken after retirement; late native moves and history events do no work. |
+| `storage.c`: identity/load/commit and cleanup | Storage receiver's document | Each native call; commit holds a loan through serialization and response handling. Inactive normal access refuses, including cached/memory-only areas. Clock, conversion, load retry and quota-driven commit paths recheck activity. Quiescent native cleanup may borrow inactive providers for one final attempt per owed area, then drops pending changes and detaches callbacks; root drain remains supported after `closed`. Reentrant settlement/forget/replacement/drain cannot disturb borrowed maps. |
+
+`os64_dom_storage_walk` and `os64_dom_storage_merge` operate on caller-owned
+bytes, without a binding or DOM-owned visitor. They do not create a document
+activity loan of their own. A walk invoked from a storage provider callback is
+inside that callback's loan. The native storage cleanup entry refuses while
+provider borrowers remain; the public finish operation must also establish
+the engine/dispatch/reaction barriers before calling it.
+
+## Guarded transport providers
+
+| Entry sites | Activity owner | Loan extent and inactive behavior |
+|---|---|---|
+| `fetch.c`: request start/more/cancel | Request's document | Start and more require active service. An accepted id returned after retirement is cancelled through its original producer before the start loan ends. Each outstanding request retains the producer table; more/cancel cannot switch to a replacement provider. Cleanup unlinks the token and clears fetch signal/XHR timer bookkeeping before cancellation reentry, retaining a cleanup loan even when inactive. |
+| `xhr.c`: synchronous run/release | XHR receiver's document | Original provider loan spans run, response consumption and matching release even when the installed table is cleared. Stop polling observes retirement; retired completion does not deliver events. Borrowed XHR methods follow their receiver's binding. |
+| `fetch.c`: incoming whole/head/body/end | Original binding and token | Inactive, unknown-token and provider-reentrant delivery is discarded before engine entry. Incoming buffers stay caller-owned. A closed binding returns FAILED_RUNTIME. |
+| `abort.c`: dependent fetch algorithms and signal timers | Dependent signal's document | A cross-realm source abort routes each dependent to its own binding, where request tokens and timer ids are meaningful. It cannot cancel a sibling request with the same numeric token. |
+
+The native transport drain refuses outstanding provider loans. At a quiescent
+point it cancels this binding's requests, releases their held values and
+detaches its installed table. It does not signal author abort/error callbacks,
+reset retained XHR bytes, error exported streams, or close shared connections.
+An explicit abort after retirement also cannot settle still-pending transport
+work. Public safe-point finish and module-loading integration remain separate
+obligations; provider snapshots alone do not authorize freeing opaque storage.
+
+## Guarded native visitors
+
+| Entry sites | Activity owner | Loan extent and inactive behavior |
+|---|---|---|
+| `importmap.c`: normalized-entry visitor | Parsed map's document | Each callback and its borrowed strings hold a provider loan. The walker table is captured for the parse. Retirement stops subsequent entries and returns REALM_RETIRED, including retirement on the last entry, so the host discards its partial map. Native provider reentry cannot open an import task. |
+| `pointer.c`: mouse/activation defaults and quiet-hover default | Input document | Callback and borrowed node/event hold a provider loan. Activity is rechecked after listeners and native callbacks; retirement prevents subsequent defaults, click synthesis and late input tasks. Provider-reentrant input is refused, including quiet hover that opens no script task. |
+
+Pointer activity and capture queries become inactive at mark, before native
+cleanup. New capture is refused; release remains usable, and retained nodes
+remain ordinary DOM objects. Import-map type support remains a pure query.
+
+## Report and module boundaries
+
+| Entry sites | Activity owner | Loan extent and inactive behavior |
+|---|---|---|
+| `report.c`: failed diagnostics | Reporting document | Each native notice holds a provider loan through its borrowed strings. Task close detaches report bookkeeping into a local snapshot before reentry. Retirement suppresses subsequent notices, including the overflow summary. Native reentry cannot settle or drain borrowed report state. |
+| `report.c`: error/rejection delivery | Reporting document | Inactive hooks and `reportError` do not create new report debt. Queued error/handled-rejection delivery checks activity; obsolete values are released without author events. |
+| `custom.c`: callback, constructor and upgrade failures | Callable's realm | Error events and script muting use the callable binding's script table, independently of the retained definition registry and the element's current activity document. |
+| `timer.c`, `animation.c`, `idle.c`, `browsing.c`, mutation/performance/resize/intersection observers: callback failures | Callable's realm, separately from the activity owner | Registration caches the reporting owner and script identity. Delivery and microtask execution use that report binding; a later script or retirement of the scheduling document cannot redirect its error. An already revoked proxy retains the registration fallback and fails at invocation. |
+| `libjs/runtime/runtime.c`: module resolver/source | Module's realm | The engine active-call barrier retains the loader table and source loan. Retirement during a callback prevents further linking or source compilation; an owned resolved name is freed. Loader/script-host replacement is BUSY during the callback and can detach after unwinding. |
+| `libjs/runtime/runtime.c`: console output | Console's realm | Existing eligibility checks precede output and are repeated after conversions and between writes. Output uses a borrowed handle under the engine barrier, rather than a DOM callback table. |
+
+Public finish observes both the engine barrier and DOM provider counters
+before detaching loaders and diagnostic hosts. The console descriptor is
+borrowed engine state; irreversible retirement prevents further output writes
+after finish certifies that the enclosing engine stack has unwound.
+The callback-owner helper is shared with events. Task settlement visits the
+cluster's report queues under the enclosing budget, and close consumes the
+members' diagnostic debt. If a directly run script retired its service owner,
+an active sibling can drive the owed reports without changing their owners.
+Hosts must settle a directly run script before starting another native task.
+
+## CSS animation snapshots and retained effects
+
+| Entry sites | Activity owner | Loan extent and inactive behavior |
+|---|---|---|
+| `webanimation.c`: CSS count/at/version snapshots | Queried or stepped document | One loan spans count, records and consumption, including nested clock pushes. Retirement stops later records and prevents partial script queries. Replacement and scheduler reentry are refused while the cluster has a provider loan. |
+| `webanimation.c`: CSS clock drive and scheduler version | Animation's document | Captured provider and opaque stay borrowed through the response. Retirement suppresses later host calls and scheduling. Version can run outside a script task; the previous public comment claiming all callbacks were inside tasks was incorrect. |
+| `webanimation.c`: native activity cleanup | Departed animation owner | Internal quiescent cleanup detaches CSS services, frees event payloads, freezes clocks and releases activity holds. Exported animation/effect records and layout generations survive. Public finish supplies the engine/dispatch/reaction barrier before invoking this seam. |
+
+Retained current-time seeks, effect edits and cancellation do not restore
+departed activity. Starting a timeline, including `startTime` assignment after
+argument conversion, refuses. Native layout data outlives JavaScript's last
+reference until the borrowing trees acknowledge release; another document's
+acknowledgement does not stand in for the borrowing document's.
+
+## Finish and retained ownership
+
+Finish clears the option callbacks and opaque pointers, geometry/hit/text/image
+providers, viewport/computed/history/cookie/user-agent services, storage and
+network tables, observer measurement providers, CSS animation service and
+global-miss route. Module loaders and script hosts detach through libjs's
+realm-specific APIs. Cancellation is request-local and retains the original
+producer; no shared HTTP/2 connection is closed by this cleanup.
+
+Queued timers, idle/rAF callbacks, messages (including unstarted ports),
+reports, SubtleCrypto settlement payloads and inactive observer records are
+released. Shared custom/mutation queues retain live siblings' work. Custom
+reactions on adopted nodes are judged by the current document. Exported
+listeners, definitions, registrations, wrappers, Canvas pixels, settled bytes,
+animation identities and tree generations are preserved.
+
+Provider replacement cannot erase an owed release. Image and transport loans
+capture the producer explicitly; finish refuses while those loans are held.
+Setters cannot install fresh host pointers during or after successful finish.
+
+Validation and remaining F.3b limits are recorded in
+[IFRAME_F3_DOM_VALIDATION.md](IFRAME_F3_DOM_VALIDATION.md).

@@ -21,12 +21,117 @@ object-position-valid.html	e.style['object-position'] = "left bottom" should set
 object-position-valid.html	e.style['object-position'] = "left center" should set the property value
 object-position-valid.html	e.style['object-position'] = "right 30% top 60px" should set the property value
 object-position-valid.html	e.style['object-position'] = "right 40%" should set the property value
+# Conic gradients (Images 4 § 3.3), read, drawn and written back as
+# Chrome does: where the turn starts, its centre (left out at the
+# centre), and a calc() of a percentage and a number refused. Each fails
+# with the switch off.
+gradient-interpolation-method-computed.html	Property background-image value 'conic-gradient(from 30deg, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at 10% 20%, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at center, red, blue)'
+conic-gradient-calc-angle-percentage-invalid.html	e.style['background-image'] = "conic-gradient(red calc(50% + 0), blue)" should not set the property value
 [excluded]
 [passing]
+conic-gradient-calc-angle-percentage-invalid.html	e.style['background-image'] = "conic-gradient(red calc(50% + 0), blue)" should not set the property value
 conic-gradient-calc-angle-percentage-invalid.html	e.style['background-image'] = "linear-gradient(red calc(50% + 30deg), blue)" should not set the property value
 conic-gradient-calc-angle-percentage-invalid.html	e.style['background-image'] = "radial-gradient(red calc(50% + 30deg), blue)" should not set the property value
 conic-gradient-calc-angle-percentage-valid.html	e.style['background-image'] = "conic-gradient(red calc(100% - 45deg), blue)" should set the property value
+gradient-interpolation-method-computed.html	Property background-image value 'conic-gradient(at left 10px top 50em, red, blue)'
+gradient-interpolation-method-computed.html	Property background-image value 'conic-gradient(from 30deg, red, blue)'
 gradient-interpolation-method-computed.html	Property background-image value 'linear-gradient(30deg, red, blue)'
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(decreasing hue hsl, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(decreasing hue hwb, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(decreasing hue lch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(decreasing hue oklch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hsl decreasing, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hsl foo hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hsl hsl, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hsl hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hsl increasing, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hsl longer, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hsl shorter, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hsl specified, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hwb decreasing, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hwb foo hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hwb hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hwb hwb, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hwb increasing, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hwb longer, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hwb shorter, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(hwb specified, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(increasing hue hsl, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(increasing hue hwb, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(increasing hue lch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(increasing hue oklch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(lab lab, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(lab shorter hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(lch decreasing, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(lch foo hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(lch hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(lch increasing, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(lch lch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(lch longer, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(lch shorter, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(lch specified, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(longer hue hsl, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(longer hue hwb, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(longer hue lch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(longer hue oklch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(oklab oklab, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(oklab shorter hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(oklch decreasing, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(oklch foo hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(oklch hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(oklch increasing, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(oklch longer, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(oklch oklch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(oklch shorter, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(oklch specified, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, hsl decreasing hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, hsl increasing hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, hsl longer hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, hsl shorter hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, hsl specified hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, hwb decreasing hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, hwb increasing hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, hwb longer hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, hwb shorter hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, hwb specified hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, lab)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, lch decreasing hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, lch increasing hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, lch longer hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, lch shorter hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, lch specified hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, oklab)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, oklch decreasing hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, oklch increasing hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, oklch longer hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, oklch shorter hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, oklch specified hue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, srgb)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, srgb-linear)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, xyz)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, xyz-d50)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(red, blue, xyz-d65)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(shorter hue hsl, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(shorter hue hwb, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(shorter hue lch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(shorter hue oklch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(specified hue hsl, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(specified hue hwb, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(specified hue lch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(specified hue oklch, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(srgb shorter hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(srgb srgb, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(srgb-linear shorter hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(srgb-linear srgb-linear, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(xyz shorter hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(xyz xyz, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(xyz-d50 shorter hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(xyz-d50 xyz-d50, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(xyz-d65 shorter hue, red, blue)" should not set the property value
+gradient-interpolation-method-invalid.html	e.style['background-image'] = "conic-gradient(xyz-d65 xyz-d65, red, blue)" should not set the property value
 gradient-interpolation-method-invalid.html	e.style['background-image'] = "linear-gradient(, red, blue)" should not set the property value
 gradient-interpolation-method-invalid.html	e.style['background-image'] = "linear-gradient(45deg in, black, transparent)" should not set the property value
 gradient-interpolation-method-invalid.html	e.style['background-image'] = "linear-gradient(90deg in hsl longer, black, transparent)" should not set the property value
@@ -224,6 +329,31 @@ gradient-interpolation-method-invalid.html	e.style['background-image'] = "radial
 gradient-interpolation-method-invalid.html	e.style['background-image'] = "radial-gradient(xyz-d50 xyz-d50, red, blue)" should not set the property value
 gradient-interpolation-method-invalid.html	e.style['background-image'] = "radial-gradient(xyz-d65 shorter hue, red, blue)" should not set the property value
 gradient-interpolation-method-invalid.html	e.style['background-image'] = "radial-gradient(xyz-d65 xyz-d65, red, blue)" should not set the property value
+gradient-position-computed.html	Property background-image value 'conic-gradient(at -10% -20%, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at -10px 50px, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at 0% 100%, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at 10% 20%, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at 1000% 1000%, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at 150% 200%, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at 20px 40px, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at 30%, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at 50% 50%, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at 70px, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at bottom 20px left 30px, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at bottom right, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at bottom, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at center right, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at center, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at left 5% bottom 10px, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at left center, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at left top, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at left, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at right 10px top 20px, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at right bottom, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at right, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at top 5px right 10px, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at top left, red, blue)'
+gradient-position-computed.html	Property background-image value 'conic-gradient(at top, red, blue)'
 gradient-position-invalid.html	e.style['background-image'] = "radial-gradient(at bottom 6% center, red, blue)" should not set the property value
 gradient-position-invalid.html	e.style['background-image'] = "radial-gradient(at bottom 7% left, red, blue)" should not set the property value
 gradient-position-invalid.html	e.style['background-image'] = "radial-gradient(at bottom right 8%, red, blue)" should not set the property value

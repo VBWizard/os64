@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Responsive images</title>
+<style>body { margin:24px; font:16px sans-serif; } img,canvas { display:block; margin:12px 0; } p { max-width:900px; }</style>
+</head><body><h1>Responsive images</h1>
+<p>Use Modern mode with scripts ON. Check at 100% and 200% zoom, then press
+the replacement button. Each result should say PASS. The width-candidate image
+is blue/orange at 100% and green/yellow at 200%. Its natural size stays 160 x 90.</p>
+<h2>Fixed 2x source and one-shot Canvas</h2>
+<img id="fixed" srcset="image-responsive-2x.png 2x" alt="Green and yellow">
+<canvas id="copy" width="180" height="100"></canvas>
+<p id="fixed-result">Waiting for the fixed 2x image.</p>
+<h2>Width candidates</h2>
+<img id="width-image" srcset="image-responsive-1x.png 160w, image-responsive-2x.png 320w" sizes="auto, 160px" alt="Selected width candidate">
+<p id="width-result">Waiting for width selection.</p>
+<h2>Picture media and type</h2>
+<picture><source type="image/avif" srcset="must-not-fetch.avif">
+<source media="(min-width: 600px)" type="image/png" srcset="image-responsive-2x.png 2x">
+<img id="picture-image" src="image-responsive-1x.png" alt="Selected picture source">
+<source srcset="must-not-fetch.png"></picture>
+<p id="picture-result">Waiting for picture selection.</p>
+<h2>Detached Image replacement</h2>
+<button id="replace">Select the 2x source</button>
+<p id="detached-result">Waiting for detached Image.</p>
+<script>
+var fixed = document.getElementById('fixed');
+var widths = document.getElementById('width-image');
+var picture = document.getElementById('picture-image');
+var detached = new Image();
+function report(id, img, ok, detail) {
+  document.getElementById(id).textContent = (ok ? 'PASS: ' : 'FAIL: ') + detail +
+    '; natural ' + img.naturalWidth + ' x ' + img.naturalHeight + '; currentSrc ' + img.currentSrc;
+}
+function natural(img) { return img.complete && img.naturalWidth === 160 && img.naturalHeight === 90; }
+fixed.onload = function () {
+  var c = document.getElementById('copy').getContext('2d');
+  c.clearRect(0, 0, 180, 100);
+  c.drawImage(fixed, 0, 0);
+  var edge = c.getImageData(160, 0, 1, 1).data[3];
+  c.drawImage(fixed, 120, 20, 1, 1, 0, 0, 1, 1);
+  var crop = c.getImageData(0, 0, 1, 1).data;
+  report('fixed-result', fixed, natural(fixed) && edge === 0 && crop[0] === 224 && crop[1] === 192 && crop[2] === 32 && crop[3] === 255,
+    '2x natural size, default draw size and immediate source crop');
+};
+widths.onload = function () { report('width-result', widths, natural(widths), 'width candidate at DPR ' + window.devicePixelRatio); };
+picture.onload = function () { report('picture-result', picture, natural(picture), 'preceding supported picture source'); };
+detached.onload = function () { report('detached-result', detached, natural(detached), 'detached selection'); };
+fixed.onerror = function () { document.getElementById('fixed-result').textContent = 'FAIL: fixed source error'; };
+widths.onerror = function () { document.getElementById('width-result').textContent = 'FAIL: width source error'; };
+picture.onerror = function () { document.getElementById('picture-result').textContent = 'FAIL: picture source error'; };
+detached.onerror = function () { document.getElementById('detached-result').textContent = 'FAIL: detached source error'; };
+detached.srcset = 'image-responsive-1x.png 1x';
+document.getElementById('replace').onclick = function () { detached.srcset = 'image-responsive-2x.png 2x'; };
+</script></body></html>

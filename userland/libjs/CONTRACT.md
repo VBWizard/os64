@@ -1,7 +1,6 @@
 # JavaScript runtime API contract
 
-Status: R0/R2 contract with D7a's host tasks, D8's opt-in teardown and D10's
-callback budget extensions, 2026-10-06, and P2a's script host, 2026-10-23.
+Status: embedding ABI 5, including the owner-thread quiescence query, 2026-11-12.
 `libjs.so` exports the embedding operations `js.h` and `js_engine.h` declare:
 create (fatal or reporting teardown), context access, class-ID allocation, eval,
 run, file execution, job draining, output/argument setup, cancellation, callback
@@ -49,10 +48,10 @@ before publishing its context. No filesystem module loader is installed.
 Creation binds the runtime to the creating thread. The same thread owns setup,
 evaluation, jobs, diagnostic extraction, and destruction. This is a caller
 obligation: os64 does not expose a current-thread identifier for a runtime to
-compare. Calls on one runtime must not overlap. Wrapper evaluation/drain/setup
-entry points reject active-call re-entry with BUSY without replacing the outer
-call's result or budget. Native bindings are responsible for obeying the rule
-when using the raw engine API. Independent runtimes may execute on different
+compare. Concurrent calls on one runtime must not overlap. Wrapper evaluation,
+drain and setup entry points reject active-call re-entry with BUSY without
+replacing the outer call's result or budget, except initial realm setup
+(§ Realms). Native bindings must obey this rule when using the raw engine API. Independent runtimes may execute on different
 threads; class IDs use `os64_js_class_id(&slot)`. The library serializes the
 slot check and engine allocation together process-wide: a zero-initialized,
 process-lifetime slot receives an ID once; later calls reuse it. Bindings access
@@ -61,7 +60,7 @@ NULL returns the invalid ID zero without entering the engine. The caller
 registers the returned ID in each runtime with QuickJS's class API; allocation
 and per-runtime registration are different operations.
 
-`os64_js_context(runtime, OS64_JS_ABI_ID, outcome)` borrows the owned context.
+`os64_js_context(runtime, OS64_JS_ABI_ID, outcome)` borrows the primary context.
 It is available for idle setup and inside native callbacks executing in an
 evaluation/job call; it is unavailable during destruction. Its caller-owned
 outcome is required and must be separate from an active outer call's outcome.
@@ -70,13 +69,543 @@ null runtime/ABI argument, or FAILED_RUNTIME for a failed runtime, without
 changing the runtime or active budgets. On success it initializes the outcome
 with OK. Each translation unit using engine inline helpers checks through this
 accessor before using the context. Consumers must
-not free it, create additional contexts, migrate its runtime, or replace the
+not free it, create contexts through the raw engine API, migrate its runtime, or replace the
 library's allocator, interrupt hook, Promise tracker, or loader configuration.
 The runtime and context opaque slots both hold wrapper state. Custom bindings
 must leave them unchanged and keep native state in their own objects and
 function data. A raw engine runtime constructed outside this wrapper has its
 ordinary engine configuration, including shared-buffer exposure; this contract
-governs the wrapper-owned context.
+governs the wrapper-owned contexts.
+
+### Embedding global this
+
+`JS_SetGlobalThis(context, value)` retains an object as the engine context's
+default script/sloppy-call receiver. A trusted binding calls it on the owner
+thread during setup before author execution, using a value from that runtime.
+Like other raw JSValue arguments, cross-runtime values are outside the API
+contract; the engine does not discover their runtime from an arbitrary object.
+Non-objects return false without changing the receiver or pending exception.
+Success duplicates the reference before releasing the old hold, which may
+invoke native finalizers. The context marks the hold during GC and releases
+it on destruction. No extra reference is held for the unconfigured default.
+
+Global name/lexical storage and `JS_GetGlobalObject` keep their meaning.
+The setter does not rewrite `globalThis` or DOM aliases. Script evaluation,
+compiled script evaluation, indirect eval and sloppy null/undefined this
+selection use the receiver; explicit `JS_EvalThis` and strict/module semantics
+remain separate. The prepared-engine identity changes with this hook; public
+wrapper layouts and ABI 5 are unchanged.
+
+This primitive does not install a WindowProxy, protect a global object or
+complete browser receiver semantics. Global-property accessor/reference paths
+and the engine's `groupBy` callback receiver also need the F.4 security audit
+before a proxy can be exposed. Existing consumers do not opt in. See
+[the F.4 brief](../../docs/design/pending/IFRAME_F4_SECURITY.md).
+
+## Dormant engine execution observations
+
+The raw engine exposes explicitly enabled execution-scope observations for
+trusted diagnostics. `JS_EnableExecutionScopeTracking` must run on the owner
+thread outside engine entry, before code to be observed executes. Default wrapper
+setup leaves tracking disabled. `JS_VisitExecutionScopes` is allocation-free and
+visits borrowed incoming-context/code-environment facts, innermost first,
+including pending calls before their interrupt poll. Its visitor must not
+allocate, reenter the engine, release values or mutate runtime state.
+
+Unknown proxy/custom dispatch, eval preparation and native job provenance are
+explicit; observations do not certify complete interrupted-environment
+attribution, browser caller authority or native consistency. Scope tracking
+does not change eligibility, failure or budget behavior and cannot recover a
+runtime. See [the F16 scope checkpoint](../../docs/design/pending/IFRAME_F16_SCOPES_VALIDATION.md).
+
+## Dormant executable containment
+
+`JS_MarkContextExecutableFailed` is an irreversible raw-engine mark, separate
+from document retirement and wrapper failure. A trusted owner calls it after
+engine/native unwind, with scope tracking enabled; tracked active entry is
+refused without changing the mark. It allocates/releases nothing and does not
+change queues, pending exceptions, cancellation or task budgets. Marking alone
+grants no permission to resume a failed wrapper; reuse follows its results
+and task contract.
+
+Marked function/code contexts cannot be reentered through raw calls,
+constructors, native/data/neutral functions, eval, module handles or suspended
+resumptions. Marked execution/callback/activity contexts also block native job
+bodies. Unknown custom call classes and over-deep wrapper chains refuse
+conservatively once executable failure has been seen. Healthy callers receive
+a catchable TypeError unless an uncatchable exception remains pending; that
+original exception is preserved. A consumed exception marker does not suppress
+a fresh refusal. Allocation/host failure retains the existing sticky contract.
+
+Identity, ordinary data and initialized namespace exports remain retained.
+Property access that invokes code still crosses the guard. Module creation
+contexts are explicitly retained and GC-marked, including for native/unlinked
+modules. These are ownership facts; they grant no origin authority and prove
+no interrupted native algorithm consistent. Ordinary departed functions retain
+their existing behavior. See [the engine checkpoint](../../docs/design/pending/IFRAME_F16_ENGINE_VALIDATION.md).
+
+## Opt-in failure records
+
+`os64/js_failure.h` adds `os64_js_create_with_failure_records`, with the existing
+configuration, teardown policy, ABI and publication rules. It enables engine
+scope tracking before publishing the runtime. Default constructors leave
+tracking disabled. The fixed record is part of the charged wrapper allocation;
+capture and observation add no allocations or retained engine roots. Existing
+public layouts and embedding ABI 5 are unchanged.
+
+`os64_js_observe_failure` runs on the owner thread, including native callbacks
+and after failure/task closure. It returns OK when it copied a record, not when
+the runtime is healthy. NULL arguments return BAD_ARGUMENT; ABI mismatch returns
+ABI_MISMATCH; a default runtime returns ADMISSION_REFUSED; destruction returns
+FAILED_RUNTIME. Refusal leaves record storage unchanged. Use separate storage
+from active outcomes. The operation runs no script, consumes no exception,
+drains no jobs and renews no budget.
+
+`original` freezes the first terminal verdict, its armed deadline, task owner,
+explicit/implicit task state and counts at that observation, before unwind.
+The owner can name an unpublished setup slot; it is a diagnostic role, not a
+published-realm or settings capability.
+Outside a turn, owner/deadline/counts are zero rather than inherited from an
+earlier task. Final task-close counters remain in the existing outcome;
+`jobs_pending` reflects the queue even on failure-close, without draining it.
+`global` independently preserves the first non-EXECUTION cause observed: JOBS,
+SOURCE, memory refusal, OOM, cancellation or host failure. An EXECUTION timeout
+does not suppress later cancellation/allocator observation or negative-clock
+polling, including after turn/task closure. Once a global cause is recorded it
+remains first; the original task verdict is not replaced. Healthy idle
+observation does not sample a deadline. These are observed causes, not an
+atomic guarantee against a cancellation arriving after the poll.
+
+The record contains up to 65 deduplicated code-candidate realm handles. Capture
+uses engine scope facts; incoming native call context and task ownership do not
+invent author frames. Native definition realms are not added as author code.
+Wrapper job execution/callback/activity handles are recorded separately, and a
+job ownership slot is not treated as author code. Raw-only jobs have no wrapper
+provenance; a nested raw job retains the enclosing wrapper dispatch's facts,
+which do not identify the nested job. Membership uses the wrapper table rather than context
+opaque storage. Handles remain borrowed until runtime destruction.
+
+`scope_issues` exposes unknown code, foreign contexts, native/job scopes, setup,
+checked settings bodies, missing scopes and capacity failure. Incomplete eval
+and module preparation remain unknown. `scopes_classified` means the visited
+scope facts were classified, not that native cleanup or affected-set coverage
+has been certified. Primary author frames can be present even when that flag
+is true. An empty `global` cause, a classified scope set or a closed task
+grants no admission: these constructors retain terminal runtime-wide failures.
+The diagnostic constructor supplies no recovery protocol. The distinct native
+policy below adds recovery for a supported subset; native/provider/Streams
+consistency for browser adoption remains a separate F16 obligation.
+
+Evidence and the next protocol boundary:
+[IFRAME_F16_FAILURE_RECORDS.md](../../docs/design/pending/IFRAME_F16_FAILURE_RECORDS.md).
+
+
+## Opt-in child execution recovery
+
+`os64_js_create_with_child_recovery` in `os64/js_failure.h` requires a native
+host preparation callback at construction and enables scope tracking before
+exposure. The default and failure-record constructors retain their terminal
+contract. Public config/outcome layouts and ABI 5 remain unchanged. The prepared
+engine identity changes; rebuild engine-dependent objects together.
+
+A candidate is a LIMIT/EXECUTION episode whose complete observed author-code
+set contains child realms, with no primary author frame or unsupported scope.
+A primary incoming call context alone is neutral. Ordinary script eval and
+callable child tasks are supported. Compiler-only/unknown attribution,
+foreign contexts, native callbacks, raw/checked settings and setup, GC, jobs, modules
+and suspended resumptions fall back globally. JOBS exhaustion stays global;
+no next job is blamed and no pending engine job receives a replacement budget.
+
+The owner closes the failed task, inspects the record, then calls
+`os64_js_recovery_prepare`. Admission requires wrapper/engine/native idle,
+empty engine jobs and rejection bookkeeping, no wrapper module handles, no
+pending exception and no observed global failure. A raw engine fence blocks
+executable entry before every affected context is irreversibly marked failed
+and its wrapper realm is made failed/retired. Retained objects and slots stay
+charged; data mutations survive, including mutations made before interruption.
+Uncatchable interruption does not run abandoned author catch/finally blocks.
+
+Only then does the guarded native host callback certify shared state and
+remove affected activity. It must return normally without author execution,
+release affected callback/registry roots, preserve healthy native task order,
+and keep provider opaque storage alive through native loans. BUSY retains the
+same generation and engine fence for a later retry after pure native loan
+release; it publishes no completion token or storage-release permission. OK
+certifies complete preparation and returns a runtime/generation token. A native
+failure, late health failure, newly queued work or pending exception requires
+root cleanup. Once acquired, a failed preparation's engine fence stays closed.
+
+`os64_js_recovery_commit` requires that exact prepared runtime/generation,
+closed work, native/engine idle, empty bookkeeping and good late health. It
+clears the approved local execution latch and residual consumed interruption
+flag only. It does not resume the task, reset its counters or deadline, execute
+jobs, clear cancellation/allocator flags, or undo a global cause. The next
+independent native event must use ordinary task admission to arm a fresh budget.
+Cancellation racing commit is checked again by that normal admission.
+
+`recovery_inspect` preserves original first-failure facts and final abandoned
+job counts across later healthy tasks; a new failure episode advances the
+generation and replaces that episode's record. Stale/foreign tokens, guessed
+unprepared generations and repeated commits refuse. `REALM_FAILED` distinguishes
+wrapper refusal for contained realms; raw retained failed aliases remain subject
+to the engine's catchable failed-code guard. Ordinary retirement still permits
+retained direct-function execution. Root destruction retains both teardown
+policies and the zero-leaked-roots obligation.
+
+This interface delegates native safety to an audited host; it does not supply a
+DOM/Streams/provider certificate. Libdom supplies a separate paired opt-in
+constructor and coordinator for its audited native subset; Yonder remains
+opted out. During guarded PREPARING, NULL-only module-loader/script-host detach
+is permitted for failed realms. Healthy realms, replacement services and other
+active phases retain their existing BUSY/retirement checks. See
+[the DOM policy](../../docs/design/pending/IFRAME_F16_DOM_RECOVERY.md). Source audit,
+proofs and reproducible commands: [F16 child recovery](../../docs/design/pending/IFRAME_F16_CHILD_RECOVERY.md).
+
+The DOM host adapter preserves the original terminal task outcome and returns
+a separate generation-bound ROOT_REQUIRED/WAIT/READY decision. The shared
+host/guest consumer verifies native unwind, independent sibling scheduling and
+global fallback; Yonder's primary-only constructor remains terminal. See
+[F16 host acceptance](../../docs/design/pending/IFRAME_F16_HOST_ACCEPTANCE.md).
+
+## Realms
+
+`os64/js_retention.h` supplies an owner-thread, by-value scalar wrapper
+snapshot. It copies known slot/cache/module-owner/rejection/allocator state
+and activity flags without observing failure, polling clocks, collecting or
+consuming work. Snapshot OK describes the read, not runtime health or
+reclamation eligibility; cancellation/allocator facts can precede the copied
+latch. Unknown incoming graph, job-role, callback-context and export/exposure
+coverage stays explicit even when visible counters are zero. Destruction
+refuses partial engine reads. This does not change the stable realm lifetime
+or cumulative slot limit. [F15 diagnostics](../../docs/design/pending/IFRAME_F15_RETENTION_DIAGNOSTICS.md)
+records the precise counts, native companion and proofs.
+
+One runtime owns one engine and up to `OS64_JS_MAX_REALMS` (65) contexts:
+the primary plus 64 additional realms. `os64_js_primary_realm` returns the
+primary handle; `os64_js_realm_create` creates an independent global and
+intrinsics with the same capability profile. Both require the binding ABI.
+`os64_js_realm_context` borrows a realm's context and
+`os64_js_realm_from_context` checks membership without trusting a foreign
+context's opaque slot. A context or realm handle remains borrowed until
+runtime destruction, including after retirement.
+
+The wrapper reserves a fixed descriptor table in its enclosing allocation,
+charged before the engine memory ceiling is set. Contexts, retained values,
+modules and rejection records use the shared engine allocator. A full table
+returns non-sticky `OS64_JS_REALM_LIMIT` before allocation; failed construction
+publishes no handle. Memory, cancellation, clock, execution and job-limit
+failures remain sticky for the entire runtime. Ordinary engine stack overflow
+remains EXCEPTION unless another sticky condition is observed. A failing child
+does not isolate its parent from shared-runtime failures.
+
+`os64_js_heap_headroom` reports the remaining engine allowance after the
+runtime wrapper's storage and current allocator charge. It is an owner-thread
+snapshot, usable inside callbacks and after failure, with no allocation, GC
+or failure observation. A positive number does not certify runtime health.
+`os64_js_realm_preflight` checks the ABI, runtime health, available slot and
+a positive caller-supplied headroom requirement. An insufficient allowance
+returns non-sticky `OS64_JS_ADMISSION_REFUSED`; a full table returns REALM_LIMIT.
+Neither allocates, consumes a slot, touches the parent's outcome, advances its
+deadline/job count, or drains queued work. A pending allocator failure cannot
+be reported as local refusal. Invalid input and ABI mismatch remain refusals.
+
+The headroom requirement is the host's measured peak installation cost plus
+its sibling operating margin. Preflight does not reserve bytes; subsequent
+allocations can invalidate it. `os64_js_realm_create_with_headroom` repeats
+the check immediately before ordinary realm creation, including when nested
+inside a parent callback. It publishes no handle on refusal. The legacy
+`os64_js_realm_create` keeps its existing slot-only admission. Neither path
+promises that arbitrary later allocations or system OOM are recoverable.
+libdom's `os64_dom_create_child` supplies staged installation and native
+rollback; its 8 MiB admission allowance includes the measured interface peak
+and sibling margin. [F.3b's measurements](../../docs/design/pending/IFRAME_F3_DOM_VALIDATION.md)
+cover both allocator profiles. A bare engine realm's size is not the cost of
+an installed DOM binding.
+
+`os64_js_realm_stage` performs guarded creation and reserves an Installing
+slot. It exposes a native handle for private installation, but ordinary
+source/module/task entry returns non-sticky REALM_INSTALLING. Keep its objects
+unexposed until `os64_js_realm_activate` succeeds. Activation requires a
+successful `os64_js_realm_setup` and no pending candidate work; it does not
+open a turn or change the budget. A slot remains consumed if setup fails. Refusal before guard entry (such as
+BUSY or invalid input) leaves the private candidate unchanged for retry or
+explicit retirement. Once the guard starts, failure retires it.
+
+`os64_js_realm_setup` calls a trusted native installer, permits its private
+bootstrap, and drains its candidate-tagged jobs before returning success.
+The callback returns OK, ADMISSION_REFUSED with no pending engine exception,
+or EXCEPTION with a pending exception. An ordinary exception/native refusal
+retires the candidate without poisoning healthy siblings; engine memory,
+cancellation, clock and budget failures still poison the shared runtime.
+An unhandled candidate rejection is a private setup failure, without calling
+script-host reporting hooks. Native partial-state cleanup belongs to the host.
+
+A standalone setup guard requires no earlier pending turn. Nested setup borrows
+the enclosing task or evaluation's deadline and executed-job count, protects
+its outcome storage, and neither runs nor reorders sibling jobs. Setup cannot
+nest another candidate installation. Installers may use separate outcomes for
+nested installation APIs, but may not call siblings/external providers or
+publish candidate references. Output and module providers remain closed until
+activation, including after their hooks have been installed privately.
+
+Patch 0020 attaches a stable transaction group independently of execution
+ownership. An intrusive second queue permits constant-time selection of the
+next candidate job while preserving the global sibling FIFO. Neutral jobs
+and descendants enqueued under the guard belong to the candidate. Abort
+releases that group's entries without executing them or settling promises.
+GC may enqueue an existing sibling registry's cleanup during a candidate
+allocation; that cleanup stays outside the candidate group. Group storage
+lives in the retained realm slot through engine teardown. The raw group APIs
+are trusted embedding machinery, not a way to bypass wrapper job budgets.
+
+`os64_js_realm_retire` irreversibly marks a realm ineligible. It is owner-thread,
+idempotent and allocation-free, including inside a native callback with a
+separate outcome. It also remains available after failure for native cleanup;
+it does not change the failure latch. `os64_js_realm_is_retired` reads the mark.
+New source/file/bytecode/module execution, installers and realm tasks return
+non-sticky REALM_RETIRED. Host function calls also check the function's realm,
+so selecting A's context cannot schedule a departed B callback. Existing
+JavaScript stacks may finish/unwind, and live scripts may directly call
+retained ordinary functions. Retirement neither frees context/global/native
+storage nor removes queued entries under an active stack.
+
+`os64_js_quiescent` is an owner-thread, allocation-free snapshot for native
+cleanup. It returns BUSY while an engine call, task/turn, checkpoint, installer
+or queued job remains. The queue check also rejects malformed raw work outside
+a turn; it does not authorize executing such work. FAILED_RUNTIME covers latched failure, unobserved allocator
+failure or cancellation, and destruction; that result requires the root cleanup
+path after its normal unwind. An ordinary sibling exception does not prevent a
+later OK result. Argument and ABI errors are ordinary refusals, and an aliased
+active outcome is left untouched.
+
+The query does not run jobs, sample the clock, change budgets or latch a failure.
+OK is not a lock or permission to free arbitrary binding state: the host must
+also exclude native dispatch, reactions and provider borrows, and perform no
+intervening engine entry before the protected cleanup. ABI 5 publishes this
+entry; the bytecode engine identity is unchanged because the engine sources
+and compilation profile are unchanged.
+
+Script reporting and new module-provider/output activity stop at the mark.
+At the host's safe point after active entries and checkpoints, clear script
+and module hooks before freeing their opaque storage. Context/member queries
+and module release remain available while their ordinary runtime-health rules
+allow them. The libjs mark is not DOM departure: a DOM host must separately
+stop its timers, observers, network activity and binding providers.
+libdom's `os64_dom_depart_finish` joins this engine barrier with native walk
+and provider-loan checks, clears obsolete work and detaches providers while
+retaining exported objects. Its successful return permits releasing provider
+opaque storage; a sticky failure requires root teardown instead.
+
+Queued work carries native execution context, callback/code owner and an
+optional activity owner. Patch 0019 retains these independently. Promise
+reaction ownership follows the handler, thenable work follows `then`, and
+handlerless propagation is explicitly neutral. Custom capability resolve/reject
+functions use ordinary Call inside an admitted job. Native data functions and
+async continuations retain their creation/code realm; bound/proxy traversal is
+iterative, with revoked proxies falling back to the enqueue context without
+allocating or throwing at enqueue. FinalizationRegistry work additionally
+checks the registry's activity realm. Dynamic imports retain importing context
+ownership. Binding jobs default to the enqueuing context; native hosts can use
+`JS_EnqueueJobOwned` for explicit or neutral ownership and must gate records
+inside a neutral shared delivery queue themselves.
+
+Patch 0021 adds `JS_NewCFunctionDataNeutral` for trusted native continuations
+used by self-hosted bindings. It retains the ordinary function realm and data
+holds, including `JS_GetFunctionRealm` results, but promise-job discovery treats
+it as neutral through direct, bound and proxy references. It does not exempt a
+job from execution budgets or installation transaction tagging. The binding
+must check author callback eligibility inside the continuation. Libdom uses
+this constructor only behind its private Streams factory; page JavaScript has
+no API for assigning neutral ownership. The generated engine identity changes
+with the patch; the wrapper's public configuration and value layouts do not.
+
+Manual drains, task checkpoints and candidate drains inspect before execution. Dead entries release their holds without
+running a job or settling its promises, preserving surviving FIFO order.
+Foreign contexts are invariant failures, not neutral work. Discarded entries
+count against slice visits and the original deadline, but not executed jobs.
+Dead heads can be removed at the job cap; the next eligible entry still fails
+with LIMIT/JOBS. Obsolete reporting records/owed module errors do not surface
+in a live sibling's checkpoint.
+
+Legacy verbs select the primary realm. Explicit realm verbs select the owner
+for source/bytecode execution, task begin/call, module operations, script hosts,
+rejection taking, output and Intl. They do not swap a runtime context pointer.
+There is no realm-specific eval, file or argument installer: legacy eval/file/
+arguments retain their primary-only behavior. A realm module handle is refused
+by another realm's module operations, even within the same engine; release
+returns BAD_ARGUMENT rather than releasing a foreign handle. Release remains
+available after runtime failure. Module state without an ABI parameter assumes
+the caller already obtained the realm through the checked binding interface.
+
+Tasks, the engine job queue, deadline, job count, guard and active outcome are
+shared. A task begun for A can call B with `os64_js_realm_call`; raw native
+bindings can call shared-runtime values through `JS_Call`. Neither changes the
+enclosing task's budget. Checkpoints drain the shared queue. Exceptions from a
+job use the context returned by the engine; late module failures use their
+module's owner and source name, with runtime-wide first-failure ordering.
+Values from a different engine must not be passed to these calls.
+
+The opt-in `os64_js_realm_with_settings` bridge supplies checked native entry
+and callback scopes without changing these legacy execution verbs. It requires
+an existing active turn, or an open task between calls. Entry and an optional
+captured incumbent must be published, non-retired members of the same wrapper
+runtime. Private candidate setup, failed/cancelled runtimes, foreign realms,
+invalid ABI and missing arguments refuse before the native body runs. Scope
+nesting is bounded by the engine's `JS_SETTINGS_SCOPE_LIMIT`; overflow is a
+non-sticky ADMISSION_REFUSED. A null incumbent means ordinary script entry;
+a non-null incumbent prepares callback suppression and backup selection. The
+host supplies that captured realm explicitly; this API does not capture it.
+
+An outer bridge call acquires the wrapper guard; nested native calls borrow it
+without updating the stack origin. Separate outcome storage is required at
+each level, including queries. The guard covers the native body's whole
+lifetime, so task closure, top-level run/call, destruction and quiescent cleanup
+cannot pass through the interval between its JS calls. The body must return
+normally in C. Entry counts as evaluated when the admitted body starts.
+No task is opened, deadline renewed, queue drained, rejection reported, or
+engine exception consumed. Existing failure observation runs before/after the
+body. Outcomes report queued/executed/discarded job counts without checkpointing.
+
+Initialize the `JSValue` output to JS_UNDEFINED. Refusal leaves it untouched;
+admission transfers the body's value after restoring engine scopes. Release
+the value even when post-body failure observation returns LIMIT/CANCELLED/
+HOST_FAILURE. A body returning JS_EXCEPTION produces EXCEPTION with the engine
+exception still pending, unless a sticky failure takes precedence. The caller
+must propagate or consume that exception; no diagnostic conversion or script
+host exception callback runs in this bridge. These semantics differ from the
+reporting/discarding `os64_js_realm_call` API.
+
+`os64_js_settings_realm` maps ENTRY, INCUMBENT, CURRENT or NATIVE_CALLER to a borrowed wrapper handle
+inside an active checked scope. It checks membership and current wrapper
+lifecycle on each query; missing settings, a raw-only scope, or an unregistered
+engine context give ADMISSION_REFUSED. Retired/installing contexts give their
+lifecycle refusal. Unknown roles are BAD_ARGUMENT. Queries do not allocate,
+read the clock, latch a failure, consume an exception, or extend lifetime.
+Recheck after reentry or retirement. Runtime health checks include pending
+cancellation and allocator failure, without converting them into a new latch.
+
+The opt-in `os64/js_callbacks.h` adds a native-owned inline callback record.
+Initialize `os64_js_callback_t` with `OS64_JS_CALLBACK_INIT`; populated records
+own one engine value reference and must not be shallow-copied. Their wrapper
+runtime must outlive them. The binding accounts for the record storage as part
+of its holder and supplies values from the same engine, as for raw engine APIs.
+Output/result storage must not overlap the record or the invocation's inputs.
+
+`os64_js_callback_capture` runs at the conversion point after binding-specific
+type validation. It accepts an object and an empty record, retains the value,
+and captures the checked INCUMBENT realm. It neither calls JavaScript nor
+reads properties, allocates, infers the associated entry realm, or checks
+callability. Missing checked settings, invalid input and health/lifecycle
+refusals leave the record and pending exception untouched. The callback's
+value, the native registration binding and the captured incumbent may all
+belong to different realms within the runtime.
+
+`os64_js_callback_with_settings` takes a separately established associated
+entry realm and an invocation adapter. The bridge's guard, budget, eligibility,
+outcome-alias and exception rules apply. The adapter runs property lookup,
+argument/result conversion and invocation under the prepared settings; it
+must apply the binding's callback type and activity/security checks. This
+helper does not infer entry from `JS_GetFunctionRealm`, a bound/proxy target,
+`handleEvent`, the registration binding or the task owner. The held value and
+captured incumbent are fixed for that invocation. The adapter borrows the
+value, returns an owned result as usual, and may clear/reuse the record or
+release its enclosing holder. The temporary value hold is freed before the
+checked scope exits, including normal native finalization. Refusal before
+admission leaves the caller's value output untouched.
+
+`os64_js_callback_clear` empties the record before releasing its value so
+reentrant native cleanup sees an empty record. Clearing an empty initialized
+record is idempotent. Clear remains available after cancellation, failure and
+realm retirement, and during an engine holder's destruction. It validates
+runtime/ABI and rejects active outcome aliases, without sampling time,
+consuming exceptions or acquiring a guard. Normal value finalization can run.
+C-root records must be cleared before destroying the runtime. An engine-owned
+holder instead calls `os64_js_callback_mark` from its `gc_mark` and clears the
+record in its finalizer; marking the engine edge permits cycle collection.
+A C root must not be reported as an engine edge. Captured realm handles do not
+extend realm eligibility: retirement prevents later delivery, while cleanup
+can still release the retained value.
+
+CURRENT follows the executing realm: explicit host preparation, bytecode
+activation/resumption, native function entry and supported built-in call
+classes. It is independent of script-provenance presence and incumbent
+suppression. C-function-data and optimized-iterator bodies retain their
+incoming `ctx` argument while CURRENT reports their defining realm. Bound and
+proxy dispatch preserve current until a target or trap enters its own context.
+Unknown custom call classes mask CURRENT; the wrapper refuses the query
+instead of assigning the surrounding caller's realm to unclassified code.
+Property exotics themselves do not create a function execution context.
+
+NATIVE_CALLER is the snapshot of current immediately before the innermost
+active C-function/data or optimized-iterator entry. It remains that native
+invocation's snapshot across JavaScript reentry, while CURRENT follows the
+reentrant execution. This is not a general caller query, the incoming C
+argument, or automatic WebIDL authorization. A binding must use it at its own
+native boundary and apply the operation-specific pre-member check before
+conversions/reentry. Missing proof is refusal, including a native call from
+an unclassified custom call. Relevant settings still come from the target
+binding. Neither role guesses from task owner, function prototype or incumbent.
+
+The underlying `JS_GetCurrentContext` and `JS_GetNativeCallerContext` require
+an explicit raw settings scope but do not check wrapper lifecycle. Engine
+bookkeeping adds two runtime pointers and automatic saved pointers; it adds no
+retained roots or allocations beyond the runtime's existing allocation. The
+prepared engine identity changes, so engine objects and headers must rebuild
+together and incompatible cached bytecode is refused. Existing public layouts
+and ABI 5 remain unchanged. Native job execution does not establish HTML entry
+or capture a Promise incumbent: the host must prepare its job scope separately.
+
+These interfaces have no production browser consumer. Relevant role
+integration, WebIDL conversion-site integration and associated-object realm
+proofs, Promise reaction/thenable capture, DOM entry-site integration and origin
+security checks remain separate work. A settings handle is not a permission.
+The opt-in child recovery policy rejects overruns inside checked settings
+bodies and synchronizes wrapper failed/retired state with the engine before
+native preparation. Raw engine marking alone grants no wrapper admission.
+
+Creation and the explicit realm output/Intl installers support three setup
+modes: idle setup owns a bounded turn; setup between calls of an open task
+borrows its budget and acquires the guard; setup inside a native callback
+borrows the existing guard and budget. The last mode preserves the outer
+outcome and stack origin. Each nested operation needs separate outcome storage.
+An installer requires an unevaluated realm and an uninstalled facility; a
+recursive install of the same facility is refused. A binding can install host
+objects or traps between creation and installation, so those traps remain
+inside this guard. Setup that queues jobs leaves them with its enclosing task,
+or with its own idle setup turn for draining. Legacy installers retain their
+idle-only rule. Wrapper run/call re-entry remains BUSY.
+
+A child's script host and module loader may be installed for the first time
+inside a native callback while that realm is unused. Replacing or clearing
+configured services during a call is BUSY. Outside a call, explicit realm
+service setters can copy or clear their non-executing configuration after
+a sticky failure; this does not restore execution. The legacy module-loader
+setter retains its FAILED_RUNTIME entry refusal. Script hosts, loaders, module lists and captured
+Promise `then` belong to each realm. A borrowed script function's dynamic
+import uses its code realm's loader. Output handles, console group depth,
+counts, timers and Intl belong to the installing realm. QuickJS data-bearing
+native callbacks receive the caller's context, so console methods and module
+watchers retain their owner's slot explicitly in their function data.
+
+Rejection lookup is keyed by promise identity across the engine. Each record
+also carries a reporting realm; taking A's oldest record leaves B's records
+alone. Handling a promise before take removes its pending record regardless
+of the attaching realm or routing policy. Handling after take uses the policy
+at that later moment. Hosted realms retain records for their hosts; unhosted
+realms are judged at checkpoints without consuming hosted siblings' records.
+
+The optional runtime rejection router selects a reporting realm while the
+native callback stack is present; absent a router, the engine callback context
+selects it. The router must execute no script. NULL suppresses a new report;
+a foreign handle causes sticky HOST_FAILURE. Host hooks receive the triggering
+native context even when policy selects a different host. Pending-record removal
+precedes router invocation. This is a native policy seam, not HTML settings-
+object attribution; the browser bridge and any needed record changes belong
+to F.4. F.1 does not expose arbitrary realm selection to page JavaScript.
+
+Destroy disables service reporting, releases per-realm retained values and
+module handles, drops all contexts, then destroys the engine before freeing
+the fixed descriptor table. Both teardown policies apply to this whole set.
 
 ## Capabilities and native bindings
 
@@ -227,8 +756,8 @@ One turn starts at evaluation and ends when its runnable job queue is empty.
 It has one monotonic execution deadline and one total executed-job cap. Time
 spent between manual job slices counts against that deadline; slicing does not
 refresh either budget. `eval` can return OK with `jobs_pending` true.
-`drain_jobs` executes up to positive `slice_jobs`, returning MORE_JOBS if the
-queue remains nonempty. `run` drains until the queue empties or a non-success
+`drain_jobs` visits up to positive `slice_jobs` entries (executed or discarded),
+returning MORE_JOBS if the queue remains nonempty. `run` drains until the queue empties or a non-success
 outcome occurs.
 No new top-level evaluation is accepted while a turn has runnable jobs; return
 BUSY and preserve the turn. Reaching a slice boundary with an empty queue is OK;
@@ -251,7 +780,7 @@ for an already-reported rejection is harmless. If an exception is the primary
 outcome at the same queue exhaustion, EXCEPTION takes precedence and checkpoint
 bookkeeping is still released. The standalone outcome carries one diagnostic;
 a browser that fires an event per rejection sets a script host instead
-(§ A script host), and then none of this paragraph's judging happens. A
+(§ A script host), and then that realm's records wait for its host. A
 browser's tasks and checkpoints use § Host tasks; the standalone profile does
 not implement the HTML event loop. The tracker finds a rejection by its
 promise in a table, so neither the thousandth rejection of a turn nor a
@@ -263,7 +792,8 @@ Outcomes use caller-owned fixed-capacity diagnostic arrays. Each operation
 initializes its outcome, with NUL-terminated fields, even when formatting fails.
 Truncation sets `diagnostic_truncated`; unavailable locations are zero. The
 structured status and limit identify failure without parsing text.
-`jobs_executed` is cumulative for the current turn, not just the last slice. Diagnostics
+`jobs_executed` and `jobs_discarded` are cumulative for the current turn, not
+just the last slice; only executed jobs consume the execution cap. Diagnostics
 may use engine conversions, which can fail or invoke script; the original turn
 budget and entry guard remain active during exception extraction, with a fixed
 fallback when conversion fails. Rejection checkpoint diagnostics avoid executing
@@ -274,7 +804,9 @@ message is parsed. Returned status equals the
 outcome's status. There is no release operation for an outcome.
 
 OK and MORE_JOBS keep the runtime usable. BAD_ARGUMENT and BUSY reject the
-operation without changing its runtime. ABI_MISMATCH publishes no runtime at
+operation without changing its runtime. REALM_LIMIT and ADMISSION_REFUSED
+refuse realm admission before allocation and leave the runtime usable.
+ABI_MISMATCH publishes no runtime at
 creation and no context at access; an existing runtime stays unchanged.
 
 EXCEPTION and UNHANDLED_REJECTION report script outcomes and keep the runtime
@@ -288,7 +820,8 @@ can replace it. UNHANDLED_REJECTION is reported at queue exhaustion and ends tha
 turn. The runner stops on either outcome and destroys its runtime; other hosts
 may continue with the documented draining rule.
 
-LIMIT, CANCELLED, and HOST_FAILURE make the runtime failed: no further script or
+Under the default and diagnostic policies, LIMIT, CANCELLED, and HOST_FAILURE
+make the runtime failed: no further script or
 jobs run, and pending work is discarded at destruction. An already-failed runtime
 returns FAILED_RUNTIME. A browser can continue showing the document without its
 script environment. Sticky limit/cancellation/host-failure signals take precedence
@@ -424,7 +957,8 @@ The rules:
 - **A sticky failure ends the task's work.** LIMIT, CANCELLED and
   HOST_FAILURE inside any entry make every later entry of the task answer
   FAILED_RUNTIME, except `task_end`, which closes the task and reports the
-  sticky status. After that, as before, nothing is accepted but destroy.
+  sticky status. Script execution stays refused; non-executing access, service
+  cleanup and module release retain their documented failure-state contracts.
 - **Calls are not re-entrant.** `os64_js_call` and `task_begin` are refused
   from inside a callback, as eval is. A native binding that must run script
   synchronously under a call (a script's `dispatchEvent`) uses the raw
@@ -562,9 +1096,26 @@ wrapper's module entry (`js_engine.h`) is built on that:
 - **A module's failure is an exception, never an unhandled rejection.**
   HTML reports a module script's error as it reports a classic script's
   (an `error` event). The engine rejects the evaluation's promise instead,
-  so the wrapper's tracker knows each handle's promise and takes its
-  rejection as the module's failure: kept for `module_state`, and handed
-  to a script host's `exception`, not its `rejected`. Patch 0012 also makes
+  so the wrapper takes that rejection as the module's failure: kept for
+  `module_state` under the module's name, and handed to a script host's
+  `exception`, not its `rejected`. A failure at once is the run's own
+  outcome. A module still evaluating when its run returns is **watched**:
+  the wrapper attaches a rejection handler of its own through the engine's
+  `then`, read at construction before any script ran (a page may replace
+  the one it can reach), so its failure is heard even when an `import()`
+  of it has handled the promise and the tracker stays silent. `then` asks
+  the promise's `constructor` for its species, which a page can replace;
+  the evaluation's promise is the engine's own and no script holds it, so
+  the wrapper gives it an own `constructor` of undefined first, and
+  watching asks the page nothing. A failure heard after the run returned
+  has no call of its own, so it is **owed** to the outcome of the call
+  whose jobs surfaced it, as an EXCEPTION naming the module, when that
+  outcome is still OK; another waits for the next call that runs jobs or
+  checkpoints (never a task's begin), in the order they failed, so each is
+  in exactly one outcome. Any call that drains jobs can therefore answer
+  EXCEPTION for a module that is not its own. A host that keeps one
+  failure a task keeps the first: a second late failure in a task that
+  already failed is heard by the host's `exception` and no further. Patch 0012 also makes
   handled the inner promise of a module body the engine takes as the
   module's error, which the tracker otherwise heard as a second, unhandled
   rejection.
@@ -592,13 +1143,20 @@ order; a syntax error (the compile's alone, the host hearing nothing), an
 import nobody can load, a missing export and an evaluation that throws,
 each the module's own and the last heard once as an exception and never as
 a rejection; a top-level await pending after its
-task and fulfilled, or rejected, in a later one; and a failed resolve
+task and fulfilled, or rejected in a later one and that call's outcome,
+reported once; a late failure an `import()` also waits on; two late
+failures surfaced by one call, the first its outcome and the second the
+next call's; a page's counting species getter, which watching a module
+reads no more than running it does; and a failed resolve
 reached again, by a graph sharing a module whose import failed and, for a
 cycle whose entry failed, by a later graph and by `import()`. The module
 sweep fails
 every allocation of a graph's run in turn, on the target core and the
 instrumented engine, under RECLAIM; it compiles uncut, because a compile
-under memory pressure is DEBTS.md's 0011b row. The module bytecode cases
+under memory pressure is DEBTS.md's 0011b row. The watch sweep does the
+same to a watched module's life, its run and the later task that fails
+it: each refusal either leaves the failure reported or ends the runtime,
+and destroy reclaims all. The module bytecode cases
 run a graph compiled keeping its blobs, then read from them in another
 runtime (requests named, imports found by name, nothing loaded); an inline
 module's blob read under another URL; blobs refused for another module's
@@ -768,3 +1326,113 @@ zero length with the engine exception pending. This includes a rope
 linearized by `JS_ToString`; the temporary string belongs to the conversion
 until it is returned or released. `tools/test_js_port_host.sh` refuses the
 conversion of both a Latin-1 and a wide string and checks teardown ownership.
+
+## Native call context facts
+
+`JS_GetNativeCallContexts` is an additive raw-engine query for the innermost
+active C-function/data invocation, including optimized native iterator dispatch.
+It copies borrowed `incoming` and `defining` contexts without allocation,
+reference changes or exception access.
+No invocation (or a null runtime) returns false and clears a supplied output;
+a null output returns false. Query on the owner thread and do not retain the
+borrowed pair beyond the native invocation.
+
+Generic C functions receive their defining context as their callback argument;
+data functions receive the incoming context while retaining their defining
+context. Optimized `iterator_next` callbacks also receive the incoming context;
+their direct dispatcher checks executable containment and records an opt-in
+native execution scope before invoking the callback, without boxing its result.
+The query preserves those conventions. Nested calls restore the
+enclosing pair on normal or abrupt return. During JS reentry, that enclosing
+pair still describes the native invocation, not the current JS realm. Other
+class/provider callbacks do not establish a new pair.
+
+These are dispatcher facts, not browser security authority, entry/incumbent
+settings, job ownership or an interrupted-environment set. Raw host callers can
+choose the incoming context. Production DOM/Yonder do not use the query; the
+remaining browser attribution obligations are in
+[the F.4b interface note](../../docs/design/pending/IFRAME_F4_SETTINGS.md).
+Wrapper ABI 5 is unchanged; use matching rebuilt engine objects and headers.
+
+### Opt-in host scopes and reporting callbacks
+
+`os64_js_enable_host_settings(runtime, abi, out)` configures an idle runtime
+before a task or realm evaluation. It refuses active/queued work, private setup,
+late configuration and failed health. The opt-in is irreversible. Classic roots
+(including file and cached bytecode), module roots and `os64_js_realm_call`
+prepare checked ordinary entries under their existing guard and task budget.
+No implicit incumbent is supplied. Jobs do not inherit a completed root scope;
+Promise callback capture/preparation requires the additional opt-in below.
+Existing constructors and callers do not opt in implicitly.
+
+`os64_js_enable_promise_settings` adds reaction/thenable incumbent capture and
+prepared job invocation, with the same pre-execution configuration gate.
+Each callable reaction retains its captured engine context while pending and
+traces that edge during GC; enqueue transfers a retained copy to the job.
+Delivery, discard and teardown release those holds. Job entry follows
+**enqueue-time executable realm**, independently of capture, proxy creation
+and settlement. The wrapper checks executable and incumbent eligibility.
+A prepared job supplies its entry as the continuation backup; the handler call
+pushes its own captured incumbent and restores the continuation backup before
+capability resolve/reject. This makes returned-thenable assimilation possible
+without leaking the previous handler's capture into it. Script-bearing frames
+still take precedence. Raw unprepared capture refuses; trusted private setup
+and neutral internal continuations keep their existing job policy.
+
+`JS_PeekPromiseJobSettings` borrows the selected head's settings; it does not
+extend lifetime. The wrapper installs a checked-query marker while the engine
+prepares scopes, under the existing job guard and budget. Neither `JSJobInfo`
+nor wrapper ABI 5 changes; engine headers and objects must be rebuilt together.
+Exact active ScriptOrModule restoration, realm-less capability edge policy and
+finalization jobs are separate contracts. This is not a complete HTML
+HostMakeJobCallback implementation. See the
+[Promise settings chapter](../../docs/design/pending/IFRAME_F4_PROMISE_SETTINGS.md).
+
+`os64_js_callback_call(report, entry, abi, record, this, argc, argv, out)` requires
+an open task. `report` selects exception/script-host reporting; `entry` is the
+binding's independently proven associated realm. The owned record supplies the
+captured incumbent. These realms must be live published members of the runtime.
+The call separately checks executable-target eligibility, holds the callback
+through reentry and uses realm_call's exception reporting. It does not consume
+the record or retain the argument array after return. Retirement can suppress a
+call with REALM_RETIRED; contained environments refuse with REALM_FAILED.
+There is no checkpoint or budget renewal. The enclosing
+host owns activity, arguments, callback type conversion and security policy.
+
+Raw `JS_GetCallbackRealm(ctx, value)` returns a borrowed associated context for
+supported callable classes, or NULL without changing the exception. Defining
+contexts supply ordinary/native functions; bound functions inherit their target
+object's associated context; proxies retain their constructor context even when
+revoked. No property lookup or trap occurs. This is distinct from executable
+`JS_GetFunctionRealm`, and is not an arbitrary object's birth-realm API.
+
+
+Raw `JS_GetObjectRealm(ctx, value)` uses that callable policy for functions;
+for noncallable objects it matches immutable construction-context IDs against
+live contexts. It returns NULL if that context has been collected, without
+substituting a prototype's context or a reused context address. It borrows the
+result and adds no context root, allocation, property access, trap or exception
+mutation. This is a trusted same-runtime API; lifecycle admission and security
+remain embedding responsibilities. Wrapper contexts already stay retained
+through root destruction. Each engine object/context/runtime accounts for one
+additional uint64_t in its allocation. The [listener settings chapter](../../docs/design/pending/IFRAME_F4_LISTENER_SETTINGS.md)
+records the consumer and collection policy.
+
+### Inline-handler provenance
+
+Raw `JS_ClearFunctionScriptProvenance(function, source, length)` is a trusted
+owner-thread operation for fresh, unexposed inline-handler bytecode closures.
+It clears the existing ScriptOrModule presence marker only when the saved
+function text exactly matches the supplied source span. Other classes, missing
+source and mismatches refuse without modifying the closure or pending
+exception. It performs no allocation, lookup, executable-realm change or
+reference transfer. The embedding must supply a readable source span and keep
+the value alive; this is not a script-facing operation or a general parser.
+
+HTML handler compilation uses the source check to prevent a concatenation
+escape from selecting another function for provenance mutation. It then
+captures the document's explicitly prepared incumbent. The operation does
+not create complete Script/Module records, change a suspended/active frame's
+record, enter a task or affect F16 recovery. Patch 0032 changes engine identity;
+engine objects and prepared headers must be rebuilt together. Wrapper ABI 5
+and public wrapper layouts remain unchanged.

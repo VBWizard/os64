@@ -297,7 +297,7 @@ This is a field-by-field graft, not a `memcpy` of the old internal graph.
 | Record/reference | Destination and rule |
 |---|---|
 | `FBox` parent/child/sibling links, style, node, model indices | Fresh pass-2 records; retain their identities and links |
-| `FBox` placed geometry, content height, baseline, lines, marker fragment | Explicit copied outputs after eligibility; translate coordinates |
+| `FBox` placed geometry, content height, baseline, lines, marker fragment, definite heights (`cb_h`, `def_h`) | Explicit copied outputs after eligibility; translate coordinates |
 | `FItem`, processed/generated text, markers | Fresh records and bytes; old fragments map to the corresponding new item |
 | `FInline` | Fresh shared record; reconnect first/last span to copied spans; reject escaping split pieces |
 | `FLine`, `FFrag`, `FSpan` | Allocate in the new layout arena; remap item/inline/style/text references and translate geometry/baselines |

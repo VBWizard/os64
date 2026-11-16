@@ -137,7 +137,7 @@ void d_ranges_sweep(os64_dom_t *dom)
 
 static DRange *record_new(os64_dom_t *dom, JSContext *ctx, uint8_t kind)
 {
-    DRange *r = d_alloc(dom, sizeof(*r));
+    DRange *r = d_alloc_kind(dom, sizeof(*r), OS64_DOM_MEM_RANGE);
     if (r == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
         return NULL;
@@ -266,7 +266,7 @@ static void substring(const os64_html_node_t *n, uint32_t offset, uint32_t count
 static int replace_data(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n, uint32_t offset,
                         uint32_t count)
 {
-    int64_t status = os64_page_node_replace_data(dom->state, (os64_html_node_t *)n, offset, count, "", 0);
+    int64_t status = os64_page_node_replace_data(d_owner(dom, n)->state, (os64_html_node_t *)n, offset, count, "", 0);
     return status < 0 ? throw_status(ctx, status) : 0;
 }
 
@@ -281,7 +281,7 @@ static int clone_cut(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n,
     const char *bytes;
     size_t len;
     substring(n, offset, count, &bytes, &len);
-    int64_t status = c != NULL ? os64_page_node_set_text(dom->state, (os64_html_node_t *)c, bytes, len)
+    int64_t status = c != NULL ? os64_page_node_set_text(d_owner(dom, c)->state, (os64_html_node_t *)c, bytes, len)
                                : OS64_HTML_BAD_ARGUMENT;
     int done = status < 0 ? throw_status(ctx, status) : d_tree_change(dom, ctx, D_APPEND, parent, c, NULL);
     JS_FreeValue(ctx, copy);
@@ -334,14 +334,12 @@ static void collapse_point(const Bounds *b, const os64_html_node_t **node, uint3
  * standard's live subrange is read once, at its start). */
 static JSValue contents(os64_dom_t *dom, JSContext *ctx, DRange *r, const Bounds *b, bool clone)
 {
+    dom = d_owner(dom, b->start);
     const os64_html_node_t *document = d_node_document(dom, b->start);
     int64_t status = OS64_HTML_OK;
     os64_html_node_t *made = os64_html_create_fragment(dom->document, &status);
     if (made == NULL) return d_html_error(ctx, status);
-    /* The wrapper first: d_made_in records the document on the node's
-     * wrapper, and a node with none keeps no record. */
-    JSValue fragment = d_wrap(dom, ctx, made);
-    if (!JS_IsException(fragment)) d_made_in(dom, made, document);
+    JSValue fragment = d_wrap_in(dom, ctx, made, document);
     if (JS_IsException(fragment) || (b->start == b->end && b->start_offset == b->end_offset)) return fragment;
     /* A subrange's points were read before a clone ran page code that may
      * have moved one; points in two trees hold nothing to take. */
@@ -361,7 +359,7 @@ static JSValue contents(os64_dom_t *dom, JSContext *ctx, DRange *r, const Bounds
     const os64_html_node_t *last = inclusive_ancestor(b->end, b->start) ? NULL : child_toward(common, b->end);
     size_t children = 0;
     for (const os64_html_node_t *c = common->first_child; c != NULL; c = c->next) children++;
-    Holds h = {.dom = dom, .held = d_alloc(dom, (children + 6) * sizeof(*h.held))};
+    Holds h = {.dom = dom, .held = d_alloc_kind(dom, (children + 6) * sizeof(*h.held), OS64_DOM_MEM_RANGE)};
     if (h.held == NULL) {
         JS_FreeValue(ctx, fragment);
         return d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
@@ -480,7 +478,7 @@ static int delete_contents(os64_dom_t *dom, JSContext *ctx, DRange *r)
     if (b.start == b.end && b.start_offset == b.end_offset) return 0;
     if (b.start == b.end && is_data(b.start))
         return replace_data(dom, ctx, b.start, b.start_offset, b.end_offset - b.start_offset);
-    Holds h = {.dom = dom, .held = d_alloc(dom, (top_contained(&b, NULL) + 3) * sizeof(*h.held))};
+    Holds h = {.dom = dom, .held = d_alloc_kind(dom, (top_contained(&b, NULL) + 3) * sizeof(*h.held), OS64_DOM_MEM_RANGE)};
     if (h.held == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
         return -1;
@@ -535,14 +533,14 @@ static int insert_node(os64_dom_t *dom, JSContext *ctx, DRange *r, const os64_ht
      * element or fragment a Text has for a parent (only a document's rules
      * hang on where among its children a node goes). */
     int64_t status = OS64_HTML_OK;
-    if (start->kind == OS64_HTML_TEXT && (status = os64_html_may_insert(dom->document, parent, node)) < 0)
+    if (start->kind == OS64_HTML_TEXT && (status = os64_html_may_insert(d_owner(dom, parent)->document, parent, node)) < 0)
         return throw_status(ctx, status);
     os64_html_hold(dom->document, node);
     os64_html_hold(dom->document, parent);
     int failed = 0;
     if (start->kind == OS64_HTML_TEXT) {
         os64_html_node_t *tail = NULL;
-        status = os64_page_node_split_text(dom->state, (os64_html_node_t *)start, b.start_offset, &tail);
+        status = os64_page_node_split_text(d_owner(dom, start)->state, (os64_html_node_t *)start, b.start_offset, &tail);
         if (status < 0) {
             failed = throw_status(ctx, status);
         } else {
@@ -656,7 +654,7 @@ static JSValue stringify(os64_dom_t *dom, JSContext *ctx, const DRange *r)
         }
         if (pass == 0) {
             total = at;
-            out = d_alloc(dom, total + 1);
+            out = d_alloc_kind(dom, total + 1, OS64_DOM_MEM_RANGE);
             if (out == NULL) return d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
         }
     }
@@ -675,6 +673,7 @@ static JSValue contextual_fragment(os64_dom_t *dom, JSContext *ctx, const DRange
 {
     Bounds b = bounds_of(r);
     const os64_html_node_t *node = b.start, *element = NULL;
+    dom = d_owner(dom, node);
     if (node->kind == OS64_HTML_ELEMENT)
         element = node;
     else if ((node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT) && node->parent != NULL &&
@@ -696,12 +695,9 @@ static JSValue contextual_fragment(os64_dom_t *dom, JSContext *ctx, const DRange
     os64_html_node_t *fragment = os64_html_parse_fragment(dom->document, element, markup->data, markup->length,
                                                           d_scripting(dom, node), &status);
     if (fragment == NULL) return d_html_error(ctx, status);
-    /* Wrapped first, so d_made_in has a wrapper to record the document
-     * on; then a defined custom element in it is upgraded before the
-     * fragment is handed back, as a clone's is. */
-    JSValue wrapped = d_wrap(dom, ctx, fragment);
+    /* Initialize native ownership before exposing or upgrading the fragment. */
+    JSValue wrapped = d_wrap_in(dom, ctx, fragment, document);
     if (JS_IsException(wrapped)) return wrapped;
-    d_made_in(dom, fragment, document);
     if (d_custom_upgrade_new(dom, ctx, fragment) < 0) {
         JS_FreeValue(ctx, wrapped);
         return JS_EXCEPTION;
@@ -723,7 +719,7 @@ enum {
 
 void os64_dom_set_text_rects(os64_dom_t *dom, os64_dom_text_rects_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->text_rects = provider;
     dom->text_rects_opaque = opaque;
 }
@@ -739,7 +735,7 @@ static int rects_room(Rects *r, size_t more)
     if (r->count + more <= r->cap) return 0;
     size_t cap = r->cap ? r->cap * 2 : 16;
     while (cap < r->count + more) cap *= 2;
-    double *v = d_alloc(r->dom, cap * 4 * sizeof(double));
+    double *v = d_alloc_kind(r->dom, cap * 4 * sizeof(double), OS64_DOM_MEM_RANGE);
     if (v == NULL) return -1;
     if (r->v != NULL) {
         os64_memcpy(v, r->v, r->count * 4 * sizeof(double));
@@ -762,24 +758,30 @@ static int text_rects(JSContext *ctx, Rects *r, const os64_html_node_t *n, size_
     if (dom->text_rects == NULL) return 0;
     double few[4 * 8];
     os64_dom_geometry_stats_t cost = {0};
+    if (!d_provider_begin(dom, ctx)) return -1;
     size_t count = dom->text_rects(dom->text_rects_opaque, n, from, to, few, 8, &cost);
+    d_provider_leave(dom);
+    dom->geometry_stats.layouts = rect_add_sat(dom->geometry_stats.layouts, cost.layouts);
+    dom->geometry_stats.elapsed_us = rect_add_sat(dom->geometry_stats.elapsed_us, cost.elapsed_us);
+    if (!d_require_active(dom, ctx)) return -1;
     const double *source = few;
     double *more = NULL;
     if (count > 8) {
-        more = d_alloc(dom, count * 4 * sizeof(double));
+        more = d_alloc_kind(dom, count * 4 * sizeof(double), OS64_DOM_MEM_RANGE);
         if (more == NULL) {
             d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
             return -1;
         }
         os64_dom_geometry_stats_t again = {0};
+        if (!d_provider_begin(dom, ctx)) { d_free(dom, more); return -1; }
         size_t got = dom->text_rects(dom->text_rects_opaque, n, from, to, more, count, &again);
-        cost.layouts = rect_add_sat(cost.layouts, again.layouts);
-        cost.elapsed_us = rect_add_sat(cost.elapsed_us, again.elapsed_us);
+        d_provider_leave(dom);
+        dom->geometry_stats.layouts = rect_add_sat(dom->geometry_stats.layouts, again.layouts);
+        dom->geometry_stats.elapsed_us = rect_add_sat(dom->geometry_stats.elapsed_us, again.elapsed_us);
+        if (!d_require_active(dom, ctx)) { d_free(dom, more); return -1; }
         count = got < count ? got : count;
         source = more;
     }
-    dom->geometry_stats.layouts = rect_add_sat(dom->geometry_stats.layouts, cost.layouts);
-    dom->geometry_stats.elapsed_us = rect_add_sat(dom->geometry_stats.elapsed_us, cost.elapsed_us);
     int result = rects_room(r, count) < 0 ? (d_error(ctx, "QuotaExceededError", "DOM range quota exceeded"), -1) : 0;
     if (result == 0) {
         os64_memcpy(r->v + r->count * 4, source, count * 4 * sizeof(double));
@@ -1522,7 +1524,7 @@ int d_ranges_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (!dom->options.ranges || !dom->options.modern) return 0;
     static const JSClassDef range_def = {.class_name = "Range", .finalizer = range_finalizer};
     static const JSClassDef static_def = {.class_name = "StaticRange", .finalizer = static_finalizer};
-    struct DRanges *s = d_alloc(dom, sizeof(*s));
+    struct DRanges *s = d_alloc_kind(dom, sizeof(*s), OS64_DOM_MEM_RANGE);
     if (s == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
         return -1;

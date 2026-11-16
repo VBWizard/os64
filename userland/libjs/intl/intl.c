@@ -272,6 +272,78 @@ static JSValue completion(JSContext *ctx, Compiled *c)
     return JS_EvalFunction(ctx, function);
 }
 
+/* ── Segmentation (SEGMENTER.md) ──────────────────────────────────────── */
+/* Compiled into this object, as zones.inc is: it is pure, and its host test
+ * (tools/test_intl_segment_host.sh) compiles it alone. */
+#include "segment.c"
+
+/* A JS string's UTF-16 units from the engine's UTF-8 of it, which writes a
+ * lone surrogate as its own three bytes, into `out`, room for as many units
+ * as the UTF-8 has bytes. The count. */
+static size_t utf16_of(const unsigned char *s, size_t n, uint16_t *out)
+{
+    size_t units = 0;
+    for (size_t i = 0; i < n;) {
+        uint32_t c = s[i];
+        if (c < 0x80) {
+            i += 1;
+        } else if (c < 0xE0 && i + 1 < n) {
+            c = (c & 0x1F) << 6 | (s[i + 1] & 0x3F);
+            i += 2;
+        } else if (c < 0xF0 && i + 2 < n) {
+            c = (c & 0x0F) << 12 | (s[i + 1] & 0x3F) << 6 | (s[i + 2] & 0x3F);
+            i += 3;
+        } else if (i + 3 < n) {
+            c = (c & 0x07) << 18 | (s[i + 1] & 0x3F) << 12 | (s[i + 2] & 0x3F) << 6 | (s[i + 3] & 0x3F);
+            i += 4;
+        } else {
+            c = 0xFFFD;
+            i = n;
+        }
+        if (c >= 0x10000) {
+            c -= 0x10000;
+            out[units++] = (uint16_t)(0xD800 + (c >> 10));
+            out[units++] = (uint16_t)(0xDC00 + (c & 0x3FF));
+        } else {
+            out[units++] = (uint16_t)c;
+        }
+    }
+    return units;
+}
+
+/* segment(kind, string): the string's segments by kind (0 grapheme, 1 word,
+ * 2 sentence), all of them in one call, as an ArrayBuffer of uint32: each
+ * segment's end in UTF-16 code units times two, plus one when it is
+ * word-like. A JS string is shorter than 2^30 units, so an end fits. */
+static JSValue segment(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv)
+{
+    (void)this_value;
+    int32_t kind = 0;
+    if (argc < 2 || JS_ToInt32(ctx, &kind, argv[0]) < 0) return JS_EXCEPTION;
+    size_t bytes = 0;
+    const char *utf8 = JS_ToCStringLen(ctx, &bytes, argv[1]);
+    if (utf8 == NULL) return JS_EXCEPTION;
+    uint16_t *text = js_malloc(ctx, (bytes ? bytes : 1) * sizeof(*text));
+    uint32_t *ends = text != NULL ? js_malloc(ctx, (bytes ? bytes : 1) * sizeof(*ends)) : NULL;
+    JSValue result = JS_EXCEPTION;
+    if (ends != NULL) {
+        size_t length = utf16_of((const unsigned char *)utf8, bytes, text), count = 0;
+        intl_segment_kind_t which = kind == 1 ? INTL_SEGMENT_WORD : kind == 2 ? INTL_SEGMENT_SENTENCE
+                                                                              : INTL_SEGMENT_GRAPHEME;
+        for (size_t at = 0; at < length;) {
+            bool word_like;
+            size_t end = intl_segment_next(which, text, length, at, &word_like);
+            ends[count++] = (uint32_t)end << 1 | (word_like ? 1u : 0u);
+            at = end;
+        }
+        result = JS_NewArrayBufferCopy(ctx, (const uint8_t *)ends, count * sizeof(*ends));
+    }
+    js_free(ctx, ends);
+    js_free(ctx, text);
+    JS_FreeCString(ctx, utf8);
+    return result;
+}
+
 /* data(): the CLDR tables, evaluated in this realm. intl.js asks once, at
  * the first construction (INTL.md § 6: a realm that never constructs one
  * never pays for them); the number tables in it are a function the first
@@ -289,6 +361,7 @@ static const JSCFunctionListEntry kDoor[] = {
     JS_CFUNC_DEF("zoneOffset", 2, zone_offset),
     JS_CFUNC_DEF("zoneHost", 0, zone_host),
     JS_CFUNC_DEF("zoneList", 0, zone_list),
+    JS_CFUNC_DEF("segment", 2, segment),
 };
 
 JSValue js_intl_build(JSContext *ctx, const char *locale)

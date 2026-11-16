@@ -381,6 +381,165 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime,
                             const os64_dom_options_t *options,
                             os64_js_outcome_t *outcome);
 
+/* Explicit clusters own admitted document/state pairs through root teardown.
+ * Create and admit while the runtime is idle, before exposing the new realm.
+ * Admission refusal leaves ownership with the caller. Once consumed is true,
+ * even a NULL binding belongs to the cluster: failure poisons the cluster,
+ * drains it and requires engine destruction. Never free a member separately.
+ * Drain the cluster, destroy the runtime, release layout borrowers, then free
+ * the cluster. Provider opaque storage must survive through drain. */
+typedef struct os64_dom_cluster os64_dom_cluster_t;
+typedef struct {
+    size_t html_bytes, page_bytes, dom_bytes, kept_bytes, canvas_bytes;
+} os64_dom_cluster_limits_t;
+typedef struct {
+    os64_dom_t *binding;
+    bool consumed;
+} os64_dom_admission_t;
+os64_dom_cluster_t *os64_dom_cluster_create(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Paired native opt-in: creates a runtime with the DOM preparation policy.
+ * The caller owns the returned runtime; drain cluster, destroy runtime, then
+ * free cluster. On failure neither handle is published. Other constructors
+ * do not select this policy. Raw/checked settings and
+ * unsupported engine scopes retain global fallback. Any Streams record or
+ * private Streams bridge use in the cluster requires root cleanup; interface
+ * installation alone is permitted. Yonder does not select this policy. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_recovery(const os64_js_config_t *,
+    os64_js_teardown_policy_t, const char *caller_abi,
+    const os64_dom_cluster_limits_t *, os64_js_runtime_t **, os64_js_outcome_t *);
+/* Requires the paired DOM recovery policy; a custom libjs policy cannot
+ * certify DOM provider cleanup. Close the failed task before calling.
+ * Preparation pauses cluster activity,
+ * contains affected bindings and waits for native/provider/layout borrowers.
+ * BUSY grants no permission to release provider opaque storage; retry after
+ * the borrowers release. OK commits the generation and permits independent
+ * healthy tasks and affected provider release. Failure requires root cleanup
+ * after native borrowers unwind. Final storage settlement must succeed;
+ * negative provider status or serialization OOM requires root cleanup.
+ * Retained backing/slots are not reclaimed. Use this coordinator to publish
+ * DOM activity after preparation, including separately prepared generations. */
+os64_js_status_t os64_dom_cluster_recover(os64_dom_cluster_t *, const char *caller_abi,
+    os64_js_outcome_t *);
+
+typedef enum {
+    OS64_DOM_RECOVERY_ROOT_REQUIRED,
+    OS64_DOM_RECOVERY_WAIT,
+    OS64_DOM_RECOVERY_READY
+} os64_dom_recovery_action_t;
+typedef struct {
+    os64_dom_recovery_action_t action;
+    os64_js_status_t status; /* recovery admission, separate from the failed task */
+    os64_js_limit_t limit;
+    int64_t host_error;
+    uint64_t generation; /* requested failure episode */
+} os64_dom_recovery_result_t;
+/* Host routing for LIMIT/CANCELLED/HOST_FAILURE/FAILED_RUNTIME task results.
+ * Requires the paired DOM recovery policy to return WAIT or READY.
+ * The original result remains unchanged. Observe
+ * its generation with os64_js_recovery_inspect and retain that generation
+ * through WAIT/retry. Close/unwind the failed task before recovery can finish.
+ * WAIT parks cluster dispatch until native unwind/loan release; do not drain
+ * queued engine jobs to manufacture admission. ROOT_REQUIRED needs root
+ * cleanup after borrowers unwind. READY certifies affected DOM provider release
+ * and permits independent tasks through normal admission, never continuation
+ * of the failed task. Stale generations and nonterminal task results refuse.
+ * Observed global health overrides the execution candidate, including after
+ * a new failure episode.
+ * The result is returned by value; input diagnostics are not modified or retained. */
+os64_dom_recovery_result_t os64_dom_cluster_resolve_failure(os64_dom_cluster_t *,
+    const char *caller_abi, uint64_t generation, const os64_js_outcome_t *failed_task);
+
+/* Native opt-in timer callback settings, configured before runtime execution.
+ * Enables host root scopes and conversion-time timer capture. Promise jobs and
+ * other callback kinds require their own preparation; absent settings refuse
+ * timer registration. No origin gates or iframe publication are enabled.
+ * Failure may leave host settings enabled; destroy the failed runtime. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_timer_settings(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Extends the timer opt-in to addEventListener callback interfaces, including
+ * object listeners and handleEvent lookup. HTML on-event handler slots, other
+ * callback families and Promise preparation retain their separate contracts. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_listener_settings(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Extends listener/timer settings to animation frames, idle callbacks and
+ * queueMicrotask. Promise reactions and HTML handler slots remain separate. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_scheduled_settings(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Extends scheduled settings to HTML handler properties, named handlers and
+ * lazy inline attributes. Promise preparation and origin gates remain separate. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_handler_settings(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Extends handler settings to Mutation/Resize/Intersection/PerformanceObserver
+ * callbacks. Custom elements, Promise preparation and origin gates remain separate. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_observer_settings(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Extends observer settings to custom-element constructors and lifecycle
+ * callbacks. Promise preparation and origin gates retain their separate contracts. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_custom_settings(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Extends custom settings to Promise reactions/thenables. Exact active-script
+ * restoration, pre-member security checks and origin gates remain separate. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_promise_settings(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *, os64_js_realm_t *,
+    os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
+
+/* Admission allowance for the installed DOM interfaces, including shadow
+ * trees and ranges, plus sibling work. Validated under the 64 MiB engine cap
+ * with both allocator profiles; this check does not reserve heap storage. */
+#define OS64_DOM_CHILD_ENGINE_HEADROOM (8u * 1024u * 1024u)
+
+/* Fresh private child installation. The host supplies measured engine peak
+ * plus sibling headroom, and a copied creation-time snapshot in its clock
+ * domains. Setup does not call option providers. Timing offsets use
+ * OS64_DOM_TIMING_NOT_YET for milestones that have not happened.
+ * A nested installation borrows the parent's task budget and preserves its
+ * queued jobs. Use an outcome distinct from the enclosing engine call.
+ * CHILD_REFUSED leaves document/state ownership with the caller. Once consumed is
+ * true, the cluster retains the binding shell and backing, including failure;
+ * only CHILD_ACTIVE publishes a usable child. CHILD_FAILED leaves siblings usable;
+ * CHILD_RUNTIME_FAILED requires root teardown after executing stacks unwind.
+ * Failed consumed slots and native charges are retained until root teardown. */
+typedef struct {
+    size_t engine_headroom;
+    uint64_t now_ms, now_us;
+    os64_dom_timing_t timing;
+} os64_dom_installation_t;
+typedef enum {
+    OS64_DOM_CHILD_REFUSED = 0,
+    OS64_DOM_CHILD_ACTIVE,
+    OS64_DOM_CHILD_FAILED,
+    OS64_DOM_CHILD_RUNTIME_FAILED
+} os64_dom_child_state_t;
+typedef struct {
+    os64_dom_child_state_t state;
+    os64_dom_t *binding;
+    os64_js_realm_t *realm;
+    bool consumed;
+} os64_dom_child_t;
+os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *, os64_html_document_t *,
+    os64_page_state_t *, const os64_dom_options_t *, const os64_dom_installation_t *,
+    os64_js_outcome_t *);
+void os64_dom_cluster_drain(os64_dom_cluster_t *);
+void os64_dom_cluster_free(os64_dom_cluster_t *);
+os64_dom_cluster_limits_t os64_dom_cluster_bytes(const os64_dom_cluster_t *);
+
+/* Owner-thread document departure. Mark is allocation-free and idempotent;
+ * it stops new activity, including when called from a native callback, but
+ * does not release records beneath the executing stack. Use a separate
+ * outcome from the enclosing engine call.
+ * Finish requires a marked binding and returns BUSY until engine tasks/jobs,
+ * DOM dispatch/reaction walks and provider loans across the cluster unwind.
+ * It commits storage once, cancels owned requests and queued deliveries, and
+ * detaches host providers. Only OK permits freeing their opaque storage.
+ * Exported objects, document/state ownership and layout borrows survive;
+ * finish is not drain or free. Repeated finish is harmless. FAILED_RUNTIME
+ * requires the root teardown path after its executing stacks unwind; it is
+ * not evidence that teardown is already safe. */
+os64_js_status_t os64_dom_depart(os64_dom_t *, os64_js_outcome_t *);
+os64_js_status_t os64_dom_depart_finish(os64_dom_t *, os64_js_outcome_t *);
+
 /* Owner-thread browser identity provider, borrowed text for the getter call.
  * NULL restores the native Yonder identity; install/replace outside callbacks. */
 void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *opaque), void *opaque);
@@ -427,7 +586,7 @@ void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies);
  * either throws QuotaExceededError and changes nothing. */
 #define OS64_DOM_STORAGE_QUOTA ((size_t)5 * 1024 * 1024)
 /* Changes are handed over at most this often, and once more as the
- * binding is drained (the page departing: os64_dom_drain); sooner when the
+ * binding is drained (os64_dom_drain); sooner when the
  * changes not yet handed over would pass the quota or the keys' cap. */
 #define OS64_DOM_STORAGE_COMMIT_MS 1000
 typedef enum {
@@ -457,7 +616,10 @@ typedef enum {
  * again with room when it did not fit, a few times; a store still
  * outgrowing its room is read at the next task.
  * commit: this page's changes since its last commit (a change list in
- * os64_dom_storage_merge's format), merged onto the store as it stands. */
+ * os64_dom_storage_merge's format), merged onto the store as it stands.
+ * Calls hold provider loans. A callback may mark retirement, but must keep
+ * opaque storage valid through the call; normal reads/settlement then stop.
+ * Final native cleanup can still commit changes owed before retirement. */
 typedef struct {
     uint64_t (*identity)(void *opaque, const char *origin);
     int64_t (*load)(void *opaque, const char *origin, void *out, size_t cap);
@@ -466,23 +628,28 @@ typedef struct {
     void *opaque;
 } os64_dom_storage_t;
 /* Copied; NULL removes the area's provider. Install before the first
- * script: an area already touched keeps what it has and reads the store
- * at its next touch. */
+ * script or outside callbacks: an area already touched keeps what it has
+ * and reads the store at its next touch. Changes while the cluster has a
+ * provider loan are ignored; inactive documents accept removal only. */
 void os64_dom_set_storage(os64_dom_t *dom, os64_dom_storage_area_t area,
                           const os64_dom_storage_t *storage);
 /* Between tasks: the task that just ran is over, so the next touch asks the
  * provider again, and an area with changes commits them when they are due:
  * at once when the area has not committed for OS64_DOM_STORAGE_COMMIT_MS
  * of the host's now_ms (or ever), else that long after its last commit.
- * os64_dom_drain commits what is left, due or not. A host that never
- * settles asks the provider once per area and commits at drain. */
+ * Inactive documents and calls during provider loans do no work.
+ * os64_dom_drain makes a final attempt for what is left, due or not, and
+ * detaches storage providers. Serialization failure at that final attempt
+ * drops the owed changes; ordinary allocation failure waits for a retry.
+ * A host that never settles asks once per area and commits at drain. */
 void os64_dom_storage_settle(os64_dom_t *dom);
 /* When the next commit is due on the now_ms clock: UINT64_MAX with nothing
- * to commit. */
+ * to commit or the document is inactive. */
 uint64_t os64_dom_storage_due(const os64_dom_t *dom);
 /* Forgets both areas' maps and their changes not yet committed, so their
  * next touch reads the store as it is: "Clear page storage" while a page
- * is open. Owner thread, outside callbacks. */
+ * is open. Owner thread, outside callbacks; ignored for inactive documents
+ * or while the cluster has a provider loan. */
 void os64_dom_storage_forget(os64_dom_t *dom);
 
 /* THE STORE'S BYTES, libdom's format and the host's to move: an image is a
@@ -512,7 +679,8 @@ bool os64_dom_storage_walk(const void *bytes, size_t length,
  * name a lookup on window did not find, before the lookup answers as it
  * always does, so what the page sees is unchanged. The name is borrowed
  * for the call; `heard` must not enter JS. NULL stops it. Install outside
- * callbacks. */
+ * callbacks. Inactive documents neither call the hook nor accept a new one;
+ * NULL can still clear it while the binding remains open. */
 void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const char *name),
                               void *opaque);
 
@@ -654,8 +822,15 @@ void os64_dom_set_computed(os64_dom_t *dom, os64_dom_computed_provider_t provide
  * strings, arrays without holes and plain objects of them; `undefined` in
  * an object is left out, as JSON leaves it, and in an array it is null),
  * anything else a DataCloneError, and at most OS64_DOM_STATE_MAX bytes, a
- * QuotaExceededError past that. */
-#define OS64_DOM_STATE_MAX ((size_t)64 * 1024)
+ * QuotaExceededError past that.
+ *
+ * TWO MEBIBYTES, because sites keep real data there: a photo site's search
+ * page leaves the list of every photo it has loaded with the entry (about
+ * 125 KiB after one click, measured in Firefox), and a script whose
+ * pushState throws stops in the middle of the click it was handling. The
+ * limit is what bounds a session's history: WAY_HISTORY_MAX entries of it.
+ * Other browsers allow more (Firefox 16 MiB): DIVERGENCES. */
+#define OS64_DOM_STATE_MAX ((size_t)2 * 1024 * 1024)
 typedef struct {
     /* pushState (push) or replaceState: the session's current entry
      * becomes `url` (absolute, and a URL the document may rewrite its own
@@ -663,39 +838,43 @@ typedef struct {
      * JSON (NULL for null; copied), and when `push` the entry that was
      * current stays behind it. No event, whatever the fragment did. False
      * when the host could not (no memory): QuotaExceededError, and nothing
-     * changed. */
+     * changed. If the callback retires the document, the binding refuses
+     * local completion with SecurityError, irrespective of this result. */
     bool (*update)(void *opaque, const char *url, const char *state, size_t length, bool push);
     /* A fragment navigation the document's script asked for (location.hash
      * =, or an address that differs from the document's only in its
      * fragment): the host adds the entry `url` (replaces the current one
      * when `replace`), scrolls to its fragment, and owes hashchange when
      * the fragment moved (os64_dom_history_event). On true the binding
-     * makes `url` the document's address and null its state, and fires
+     * makes `url` the active document's address and null its state, and fires
      * popstate itself, inside the script that asked (HTML § Navigate to a
      * fragment, whose "update document for history step application"
      * fires it then and there). False when the host could not: nothing
      * changed, and the binding asks for the address as a navigation
-     * instead (os64_dom_take_navigation). */
+     * instead (os64_dom_take_navigation). Retirement during the callback
+     * prevents local completion and fallback navigation. */
     bool (*fragment)(void *opaque, const char *url, bool replace);
     /* history.length: the entries in the session. */
     uint32_t (*length)(void *opaque);
     void *opaque;
 } os64_dom_history_t;
-/* Copied; NULL removes it, after which pushState and replaceState change
- * only the document's own address and state, a fragment navigation is an
- * ask (os64_dom_take_navigation), and history.length reads 1. The
+/* Copied; NULL removes it, after which an active document's pushState and
+ * replaceState change only the document's own address and state, a fragment
+ * navigation is an ask (os64_dom_take_navigation), and history.length reads 1. The
  * callbacks are owner-thread, inside a script's task: they must not enter
- * JS. Install outside callbacks. */
+ * JS. Install outside callbacks. A callback may mark retirement; its opaque
+ * storage must remain valid until the provider loan has ended. */
 void os64_dom_set_history(os64_dom_t *dom, const os64_dom_history_t *history);
 /* The session moved to another entry of this document without a fetch: a
  * traversal (Back, Forward, history.go) or a fragment navigation the host
  * began (a link to `#x`). The document's address becomes `url`, its state
  * `length` bytes of the JSON the host kept (NULL for null), read the next
  * time history.state is. Nothing is dispatched: the host follows with
- * os64_dom_history_event. False on no memory, nothing changed; it is the
- * step of a move that can fail, so a host calls it before its own entries
- * move and moves them only on true, or the window would show one address
- * while the page's scripts read another. Owner thread, outside JS. */
+ * os64_dom_history_event. False on an inactive document or no memory, with
+ * nothing changed; it is the step of a move that can fail, so a host calls
+ * it before its own entries move and moves them only on true, or the window
+ * would show one address while the page's scripts read another. Owner thread,
+ * outside JS. */
 bool os64_dom_history_moved(os64_dom_t *dom, const char *url, const char *state, size_t length);
 /* The document's current entry and its state, named: a new name at every
  * state update, fragment navigation and move. A host takes it when it owes
@@ -720,8 +899,8 @@ typedef struct {
     uint64_t entry;
 } os64_dom_history_event_t;
 /* `popstate` or `hashchange` at window, as one task. OK with nothing run
- * when modern is off or nothing could hear it; BAD_ARGUMENT for a
- * hashchange without both addresses, or a length with no state. */
+ * when the document is retired, modern is off or nothing could hear it;
+ * BAD_ARGUMENT for a hashchange without both addresses, or a length with no state. */
 os64_js_status_t os64_dom_history_event(os64_dom_t *dom, const os64_dom_history_event_t *event,
                                         os64_js_outcome_t *outcome);
 /* Whether the page set history.scrollRestoration to "manual": the host
@@ -744,6 +923,40 @@ void os64_dom_free(os64_dom_t *dom);
  * of C-retained engine values; it becomes zero on drain. NULL answers zero. */
 size_t os64_dom_bytes(const os64_dom_t *dom);
 size_t os64_dom_registry_count(const os64_dom_t *dom);
+/* WHAT os64_dom_bytes HOLDS, by kind (MEMORY_CENSUS.md § 4): every block
+ * the binding charges carries the kind of thing it was made for, and these
+ * are the live bytes, live blocks and blocks ever made of each. The kinds
+ * sum to os64_dom_bytes. `other` is what no kind claims, counted like the
+ * rest so the unclaimed share is itself a number. */
+typedef enum {
+    OS64_DOM_MEM_OTHER,
+    OS64_DOM_MEM_WRAPPER,     /* a node wrapper's record (its object is the engine's) */
+    OS64_DOM_MEM_RETAINED,    /* any other value the binding holds for script */
+    OS64_DOM_MEM_EXTRA,       /* the rarely needed half of a wrapper's or value's record */
+    OS64_DOM_MEM_LISTENER,    /* event listeners */
+    OS64_DOM_MEM_ATTR,        /* Attr records and attribute maps */
+    OS64_DOM_MEM_COLLECTION,  /* live collections and their snapshots */
+    OS64_DOM_MEM_MUTATION,    /* mutation observers, registrations and records */
+    OS64_DOM_MEM_INTERSECTION,/* intersection observers, targets and entries */
+    OS64_DOM_MEM_RESIZE,      /* resize observers */
+    OS64_DOM_MEM_CUSTOM,      /* custom element definitions and reactions */
+    OS64_DOM_MEM_RANGE,       /* live ranges */
+    OS64_DOM_MEM_TIMER,       /* timers */
+    OS64_DOM_MEM_URL,         /* URL and URLSearchParams state */
+    OS64_DOM_MEM_TEXT,        /* text the binding copies out: content, encodings */
+    OS64_DOM_MEM_KINDS
+} os64_dom_mem_kind_t;
+typedef struct {
+    size_t bytes, blocks;
+    uint64_t made;
+} os64_dom_mem_t;
+/* The kind's name as the census prints it ("wrapper"); "?" past the enum. */
+const char *os64_dom_mem_kind_name(os64_dom_mem_kind_t kind);
+/* One kind's counters; all zero for NULL or a kind past the enum. */
+os64_dom_mem_t os64_dom_memory(const os64_dom_t *dom, os64_dom_mem_kind_t kind);
+/* Canvas bitmaps, which the binding keeps apart from os64_dom_bytes under
+ * their own cap. NULL answers zero. */
+size_t os64_dom_canvas_bytes(const os64_dom_t *dom);
 /* The bytes the page keeps outside the engine now (responses' and Blobs'),
  * against max_body_bytes, and how many responses failed since the binding
  * was made because their bytes could not be kept: past that bound, or the
@@ -825,17 +1038,21 @@ void os64_dom_set_current_script(os64_dom_t *dom, const os64_html_node_t *script
  * window or the document has handlers for and nothing fires. Any other type
  * is not counted and answers true. */
 bool os64_dom_listens(os64_dom_t *dom, const char *type);
+/* A set of the event types os64_dom_listens counts, a bit each: GCC's
+ * 128-bit integer, so `&` and `|` and a test against 0 work on it as on
+ * any integer. */
+__extension__ typedef unsigned __int128 os64_dom_handler_mask_t;
 /* Which event types the document's on<type> content attributes name, as a
  * mask os64_dom_handler_bit reads: the walk os64_dom_listens counts with.
  * It needs no runtime, so a host can ask before making one. It knows no
  * binding, so it names the Modern Web arc's types whatever the switch
  * says; os64_dom_listens counts them only with the switch on. */
-uint64_t os64_dom_handler_attributes(const os64_html_document_t *doc);
+os64_dom_handler_mask_t os64_dom_handler_attributes(const os64_html_document_t *doc);
 /* The bit for `type` in that mask; 0 for a type no attribute can name
  * (DOMContentLoaded; readystatechange, visibilitychange and
  * prerenderingchange, whose handlers are the document's IDL properties
  * alone; or one outside the types os64_dom_listens counts). */
-uint64_t os64_dom_handler_bit(const char *type);
+os64_dom_handler_mask_t os64_dom_handler_bit(const char *type);
 
 /* TIMERS, in the host's clock (options.now_ms). next answers the earliest due
  * time, or UINT64_MAX with none. fire runs AT MOST ONE timer due at or before
@@ -911,11 +1128,109 @@ bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 uint64_t os64_dom_animation_next(const os64_dom_t *dom);
 bool os64_dom_animation_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
 
+/* WEB ANIMATIONS (Web Animations 1; WEB_ANIMATIONS.md). The update step is
+ * HTML's "update animations and send events": it samples the document
+ * timeline's time, runs each animation's pending play and pause tasks,
+ * updates their finished states, brings each CSSAnimation the style's
+ * changes and cancels one whose CSS animation went, works out the CSS
+ * animation events owed (os64_dom_set_css_animations), removes the
+ * filling animations later ones replace (Web Animations 1 § 5.5),
+ * dispatches the playback and CSS animation events queued since the last
+ * step in the order they happened, as one task, and lets go of the
+ * animations that can change nothing more. next answers when a step is
+ * due on the host's clock — at once for the first, then no sooner than a
+ * frame after the last: at once while a script animation or CSSAnimation
+ * has work (a pending task, running, an event, a script that read the
+ * timeline, something to let go of, one that finished since the last look
+ * for replaced ones), or the host's CSS animations moved while a
+ * CSSAnimation or a CSS animation event's listener cares, or such a
+ * listener came or went; else when a listened-for CSS animation next
+ * crosses a boundary — or UINT64_MAX for none of these. The host runs it
+ * on its rendering step, before the frame callbacks; update answers
+ * whether it ran (outcome filled). Owner thread, between tasks. */
+uint64_t os64_dom_web_animations_next(os64_dom_t *dom);
+bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
+
+/* What libflow reads (its env's script_effects, flow.h): the effects whose
+ * target is `node` in composite order, `*out` pointing at their count of
+ * them, 0 with `*out` NULL for none. The array is the binding's, good
+ * until the next call; each effect (garb/timing.h) until the host
+ * releases its generation. A layout tree keeps effects past the call, so
+ * a host MARKS each tree it builds with the generation current then
+ * (effects_mark answers it) and RELEASES, whenever trees go, everything
+ * buried before the oldest generation still held: the keyframes of an
+ * effect that was collected, or that setKeyframes gave new ones, are freed
+ * by release, and remaining data at native binding/cluster free. Explicit
+ * clusters share generations and retain retired data until the oldest borrowing
+ * host advances. Release with UINT64_MAX when that host has no trees left;
+ * all hosts must release their trees before cluster_free. */
+struct garb_effect;
+int32_t os64_dom_script_effects(os64_dom_t *dom, const os64_html_node_t *node,
+                                const struct garb_effect *const **out);
+uint64_t os64_dom_effects_mark(os64_dom_t *dom);
+void os64_dom_effects_release(os64_dom_t *dom, uint64_t oldest);
+/* Whether the binding holds any effect a tree may still read — after
+ * os64_dom_drain, every one is buried: a host that frees the binding while
+ * such a tree stands must keep it (drained, its engine gone) until the
+ * tree goes. */
+bool os64_dom_effects_held(const os64_dom_t *dom);
+
+/* CSS ANIMATIONS as a script sees them (CSSAnimation and the CSS animation
+ * events; WEB_ANIMATIONS.md § 3): the host keeps them, and answers for
+ * every one the document's style names, a canceled or finished one
+ * included. Each has an id, the same while it lives and never 0; its
+ * element; its animation-name (good until the next count);
+ * its clock on now_ms's — while `paused` the local time it holds, else
+ * the time its local time was 0 at and its rate (local time = (now -
+ * start_ms) * rate), and a `canceled` one applies nothing;
+ * animation-play-state as its style gives it; and its timing as its style
+ * gives it, `direction` and `fill` garb/timing.h's garb_direction_t and
+ * garb_fill_t. */
+typedef struct {
+    uint64_t id;
+    const os64_html_node_t *element;
+    const char *name;
+    size_t name_len;
+    bool paused, canceled;
+    double start_ms, hold_ms, rate;
+    bool style_paused;
+    double duration_ms, delay_ms, iterations;
+    int32_t direction, fill;
+} os64_dom_css_animation_t;
+typedef struct {
+    /* How many there are, in composite order, the style made current first
+     * when `current` (a script asked: getAnimations); else as the page
+     * shows them. */
+    int32_t (*count)(void *opaque, bool current);
+    /* The i'th of them as count last answered; false past them. */
+    bool (*at)(void *opaque, int32_t i, os64_dom_css_animation_t *out);
+    /* A script drives `id` from now on: its clock is the one given (as
+     * `at` reads it), shown at once, and animation-play-state no longer
+     * moves it — the binding answers that property's changes itself. False
+     * when no animation has that id. */
+    bool (*drive)(void *opaque, uint64_t id, bool paused, bool canceled, double start_ms, double hold_ms,
+                  double rate);
+    /* A number that moves whenever what count and at answer may have
+     * changed other than by drive (a layout the page shows). */
+    uint64_t (*version)(void *opaque);
+    void *opaque;
+} os64_dom_css_animations_t;
+/* Copied; NULL removes it, after which active getAnimations queries answer
+ * script animations alone and no CSS animation event fires. A CSS snapshot
+ * holds a provider loan from count through record consumption; drive/version
+ * calls also hold loans. Replacement while a provider is borrowed is ignored.
+ * Callbacks are owner-thread and must not enter JS. Version may be queried
+ * outside a script task by the native scheduler. Inactive getAnimations and
+ * timeline-scheduling methods refuse with InvalidStateError; exported object
+ * identity and pure retained effect/time data remain available. */
+void os64_dom_set_css_animations(os64_dom_t *dom, const os64_dom_css_animations_t *css);
+
 /* INTERSECTION OBSERVATIONS (Intersection Observer § 3.2.8, run from HTML's
  * "update the rendering"; INTERSECTION_OBSERVER.md). The binding keeps the
  * observers and does the standard's arithmetic; the host answers the
- * geometry, every observed pair in ONE call, from the layout it is about to
- * paint. Every rectangle is left, top, right, bottom in CSS pixels in the
+ * geometry in one batch per measurement document, from its current layout.
+ * An explicit root selects its current document; an implicit root keeps the
+ * observer's window. Every rectangle is left, top, right, bottom in CSS pixels in the
  * viewport's coordinates: getBoundingClientRect's space. */
 typedef struct {
     /* In: an element of the binding's document, and the observer's root:
@@ -952,32 +1267,38 @@ typedef struct {
  * as the geometry provider's. */
 typedef bool (*os64_dom_intersections_provider_t)(void *opaque, os64_dom_intersection_t *items, size_t count,
                                                  os64_dom_geometry_stats_t *cost);
-/* Install/replace outside callbacks; NULL removes it, and the binding then
- * runs no step. */
+/* Install/replace outside callbacks; NULL removes this document's provider.
+ * A step needing its measurements then waits without updating observations. */
 void os64_dom_set_intersections(os64_dom_t *dom, os64_dom_intersections_provider_t provider, void *opaque);
 /* How many targets the page's observers observe: 0, and the host need not
  * watch for movement at all. */
 size_t os64_dom_intersections_observed(const os64_dom_t *dom);
 /* Whether a step is owed whether or not anything moved: a target waits for
  * its first observation, or the last step passed one over for its
- * observer's `delay` and that delay has run (options.now_ms's clock). And
- * when that delay runs out, for the host to wake at; UINT64_MAX for none. */
+ * observer's `delay` and that delay has run (options.now_ms's clock), or a
+ * required provider or batch allocation refused. And
+ * when that delay runs out, for the host to wake at; UINT64_MAX for none.
+ * Inactive observer documents and inactive explicit-root documents owe no
+ * measurements; retained registrations can resume after root adoption. */
 bool os64_dom_intersections_owed(const os64_dom_t *dom);
 uint64_t os64_dom_intersections_next(const os64_dom_t *dom);
 /* THE UPDATE INTERSECTION OBSERVATIONS STEPS: the host calls it in its
  * rendering step, after the animation frame callbacks and the layout they
  * asked for, when something an observation reads may have moved (a
- * layout, a scroll, a resize) or one is owed. It asks the provider once
- * and queues an entry for each target whose threshold index or
+ * layout, a scroll, a resize) or one is owed. A cluster host must step an
+ * observer when its explicit root's document changes geometry too. It asks
+ * each required provider once and queues an entry for each target whose threshold index or
  * intersecting state changed; it runs no script. True when the delivery
- * task is due after it; false when nothing is, and when the provider
- * refused the batch (the step observed nothing, and is owed again as it
- * was). */
+ * task is due after it, the first step the DOM budget refuses its batch
+ * among them (the task reports the observations lost); false when nothing
+ * is, when a required provider is absent or refused (no observation changes
+ * and the step stays owed), and when the budget refuses the batch again
+ * before a step has had one. */
 bool os64_dom_intersections_update(os64_dom_t *dom);
 /* RESIZE OBSERVATIONS (Resize Observer 1; INTERSECTION_OBSERVER.md § 11):
- * the binding keeps the observers, the host answers every observed target's
- * sizes in one call from a layout it makes current, in CSS pixels but for
- * `device`. Unlike the intersection batch, this provider MAY lay the page
+ * the binding keeps the observers; each target's current-document provider
+ * answers its batch in one call from a layout it makes current, in CSS pixels
+ * but for `device`. Unlike the intersection batch, this provider MAY lay the page
  * out: its second round must see what the first round's callbacks changed. */
 typedef struct {
     /* In: an element of the binding's document. */
@@ -997,7 +1318,9 @@ void os64_dom_set_resizes(os64_dom_t *dom, os64_dom_resizes_provider_t provider,
  * first report, the last step's loop passed one over (its loop error),
  * which the next step reports, or the last step left work undone (the
  * provider refused, or a callback's entries could not be made), so what
- * it did not measure or deliver waits for the next. */
+ * it did not measure or deliver waits for the next. Inactive observer or
+ * target documents owe no measurements. Registrations remain intact so
+ * adopting a target into an active document can make it eligible again. */
 size_t os64_dom_resizes_observed(const os64_dom_t *dom);
 bool os64_dom_resizes_owed(const os64_dom_t *dom);
 /* THE RESIZE STEP, the standard's loop as ONE task: gather what moved,
@@ -1005,9 +1328,10 @@ bool os64_dom_resizes_owed(const os64_dom_t *dom);
  * until nothing is active; then the loop error, an ErrorEvent at window,
  * when an observation was passed over. The host calls it in its rendering
  * step after the animation frame callbacks and before the intersection
- * step, when it laid the page out since the last or one is owed. True
- * when a task ran, its outcome filled; false when nothing had moved, or the
- * provider refused. */
+ * step, when a target document was laid out since the last or one is owed.
+ * A cluster host must also step observers whose targets changed in a sibling.
+ * True when a task ran, its outcome filled; false when nothing had moved,
+ * or a required provider is absent or refused. */
 bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* "NOTIFY INTERSECTION OBSERVERS": whether its task is queued, and the
  * task: each observer with entries, in the order the page made them,
@@ -1038,13 +1362,16 @@ bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_
 /* A script navigation request or native activation since the last take: the last
  * ask wins, but with the Modern Web switch on history.go()s in a row add
  * up to one delta (OS64_DOM_NAVIGATE_HISTORY), as HTML runs each after the
- * one before it. False when there is none. */
+ * one before it. False when there is none or the document is inactive;
+ * taking from an inactive document discards the owed ask and its node holds. */
 bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
 /* An error a nested dispatch or a handler compile reported inside a task the
  * host did not open through libdom (a script run with os64_js_run). The
- * first one is kept until taken, here or by os64_dom_script_ended, which
- * always takes it: the outcome when that is OK, else a line told to
- * options.failed. False when there is none. */
+ * first one is kept until taken here or consumed when a DOM task closes,
+ * including os64_dom_script_ended: the outcome when that is OK, else a line
+ * told to this binding's options.failed. A cluster task closes reports from
+ * its members; settle a directly run script before opening another task.
+ * False when there is none. */
 bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* A script the host is about to run with os64_js_run is compiled under the
  * name this writes to `out` (`os64-script:<n>`, the binding's), never its
@@ -1103,7 +1430,10 @@ const char *os64_dom_frame_script(const os64_dom_t *dom, const os64_dom_frame_t 
  * an UNHANDLED_REJECTION whose message begins "unhandled rejection: ", and
  * those past the outcome's first failure are told to options.failed. No
  * engine entry when nothing is owed. False for a missing argument or a
- * drained binding. */
+ * drained binding, or reentry from a borrowed provider. In a cluster, report
+ * settlement visits its members under one budget, using an active member
+ * as the driver if the original service owner retired. Error events and
+ * diagnostic providers retain their own binding identities. */
 bool os64_dom_script_ended(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome);
 
 /* SCRIPT ELEMENTS. kind follows HTML's "prepare the script element" type
@@ -1134,7 +1464,10 @@ bool os64_dom_javascript_mime(const char *value, size_t length);
  * that is none, or a scope that is none; each thrown before any entry is
  * walked) is reported at the window as a task's exception is, and is the
  * outcome: the host registers nothing then. Integrity's entries are not
- * walked. Owner thread, between tasks. */
+ * walked. The visitor table is copied for the walk. Retirement stops later
+ * entries and returns REALM_RETIRED, including when the last visited entry
+ * was accepted; the host must discard that partial result. Provider-reentrant
+ * entry is refused. Owner thread, between tasks. */
 typedef struct {
     void *opaque;
     bool (*entry)(void *opaque, const char *scope, const char *key, const char *value);
@@ -1207,22 +1540,26 @@ typedef struct {
  * pieces (os64_dom_fetch_head, below).
  * cancel: the id's answer is no longer wanted (a fetch aborted, an XHR's
  * abort(), a body's stream cancelled, a page leaving); a cancelled request
- * never answers, not even the rest of a body.
+ * should stop producing answers, including the rest of a body. Late payloads
+ * already in flight remain the host's to release; they cannot revive a token.
  * run: a synchronous XMLHttpRequest's request, run to its end before this
  * returns, filling `*response`, which stays the host's until `release`;
  * false when it could not be run, which the page sees as a network error.
  * The run asks `stop(stop_ctx)` between its waits and gives up when it says
- * yes: the binding's answer is the script task's own budget (the task's
- * deadline, and libjs's cancel), so a synchronous request ends when the
- * task that made it would, as one mechanism.
+ * yes: the binding checks document activity and the script task's budget
+ * (the task's deadline and libjs's cancel).
  * more: the binding wants the next bytes of the id's body (a streamed
  * answer's, below): a reader waits on it. It is called from inside a
  * task, so the host answers later, never inside the call: a piece through
  * os64_dom_fetch_body once it has one, and the binding asks again when it
  * wants another. Pieces nobody asked for are the host's to send too (the
  * streamed answer below). NULL leaves the host to deliver as it pleases.
- * With no network, every request is a network error. Copied; NULL removes
- * it. Install before the first script. */
+ * With no network, an active document's request is a network error. Copied;
+ * NULL removes the installed table. Each accepted request retains its
+ * producer's callbacks/opaque until completion or cancellation; a synchronous
+ * response retains its original release through the call. Replacing/clearing
+ * the installed table does not release those outstanding producer lifetimes.
+ * Installing a non-NULL table on an inactive document is ignored. */
 typedef struct {
     uint64_t (*start)(void *opaque, const os64_dom_request_t *request, uint32_t token);
     void (*cancel)(void *opaque, uint64_t id);
@@ -1237,8 +1574,11 @@ void os64_dom_set_network(os64_dom_t *dom, const os64_dom_network_t *network);
  * runtime's memory (a body the runtime has no room for is the runtime's
  * memory limit, as any allocation a script makes is), the fetch's promise
  * is settled or the XMLHttpRequest's events fire, and the microtasks run.
- * An answer for a token nothing waits on (aborted, or after drain) does
- * nothing. The outcome is the task's, as os64_dom_dispatch's is. */
+ * An answer for an unknown token or an inactive document is discarded before
+ * engine entry; delivery during a provider callback is also discarded. The
+ * host keeps ownership of these borrowed response buffers on every path.
+ * A closed binding reports FAILED_RUNTIME. Otherwise the outcome is the
+ * task's, as os64_dom_dispatch's is. */
 os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_dom_response_t *response,
                                   os64_js_outcome_t *outcome);
 /* A STREAMED ANSWER (STREAMS.md § 5, S3): the answer in pieces, each ONE
@@ -1258,10 +1598,12 @@ os64_js_status_t os64_dom_fetch_head(os64_dom_t *dom, uint32_t token, const os64
 os64_js_status_t os64_dom_fetch_body(os64_dom_t *dom, uint32_t token, const void *bytes, size_t length,
                                      os64_js_outcome_t *outcome);
 os64_js_status_t os64_dom_fetch_end(os64_dom_t *dom, uint32_t token, bool ok, os64_js_outcome_t *outcome);
-/* How many requests the binding has out. os64_dom_drain cancels each
- * through the network's cancel and forgets it. */
+/* How many requests the binding owns, including ineligible work awaiting
+ * native cleanup. Binding/cluster drain cancels these through their original
+ * producer and forgets them. */
 size_t os64_dom_fetches_pending(const os64_dom_t *dom);
-/* Whether request `token` is out, so its answer would run a task. */
+/* Whether request `token` is out on an active binding. Delivery still requires
+ * a quiescent provider boundary and an admissible engine task. */
 bool os64_dom_fetch_waiting(const os64_dom_t *dom, uint32_t token);
 
 #pragma GCC visibility pop

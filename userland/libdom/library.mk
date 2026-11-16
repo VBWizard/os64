@@ -14,14 +14,31 @@ LIBDOM_SRCS += libdom/attr.c
 LIBDOM_SRCS += libdom/fetch.c libdom/abort.c libdom/blob.c libdom/xhr.c libdom/exception.c
 # P1-W: window as a browsing context, its BarProps and external; crypto.
 LIBDOM_SRCS += libdom/browsing.c libdom/crypto.c
+# crypto.subtle (WEB_CRYPTO.md): the binding and its pure core, over the
+# BearSSL objects it calls, linked privately (libtls.so exports none of them;
+# tools/subtle_bearssl.sh is the host harnesses' copy of this list, held equal
+# to it by tools/test_subtle_core_host.sh).
+LIBDOM_SRCS += libdom/subtle.c libdom/subtle_core.c
+LIBDOM_BEARSSL := $(patsubst %,$(OBJ)/pic/libtls/upstream/src/%.c.o,hash/sha1 hash/sha2small hash/sha2big \
+    codec/dec32be codec/enc32be codec/dec64be codec/enc64be codec/dec32le codec/enc32le codec/dec64le codec/enc64le \
+    symcipher/aes_common symcipher/aes_ct64 symcipher/aes_ct64_enc symcipher/aes_ct64_dec symcipher/aes_ct64_cbcenc \
+    symcipher/aes_ct64_cbcdec symcipher/aes_ct64_ctr aead/gcm hash/ghash_ctmul64 mac/hmac kdf/hkdf \
+    ec/ec_p256_m31 ec/ec_prime_i31 ec/ec_secp256r1 ec/ec_secp384r1 ec/ec_secp521r1 ec/ec_keygen \
+    ec/ecdsa_i31_sign_raw ec/ecdsa_i31_vrfy_raw ec/ecdsa_i31_bits rand/hmac_drbg codec/ccopy \
+    int/i31_add int/i31_bitlen int/i31_decmod int/i31_decode int/i31_encode int/i31_fmont \
+    int/i31_iszero int/i31_modpow int/i31_montmul int/i31_muladd int/i31_ninv31 int/i31_rshift \
+    int/i31_sub int/i31_tmont int/i32_div32)
 # The frames row (IFRAME.md): HTMLIFrameElement.
 LIBDOM_SRCS += libdom/frames.c
+# The media row (AUDIO_YONDER.md): HTMLMediaElement, HTMLAudioElement, Audio,
+# and HTMLVideoElement playing sound alone (§ Y.4).
+LIBDOM_SRCS += libdom/media.c libdom/video.c
 # P2a: a script's failures, as the window's error and rejection events.
 LIBDOM_SRCS += libdom/report.c
 # P1-Da: the document's state reads and document.body's setter.
 LIBDOM_SRCS += libdom/document.c
 # P2b: the structured clone, same-window postMessage, idle callbacks.
-LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c libdom/animation.c libdom/pointer.c
+LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c libdom/animation.c libdom/webanimation.c libdom/pointer.c
 # INTERSECTION_OBSERVER.md: DOMRect, IntersectionObserver and ResizeObserver.
 LIBDOM_SRCS += libdom/rect.c libdom/intersection.c libdom/resize.c libdom/kept.c libdom/css.c
 # DOM § 6: TreeWalker, NodeIterator and NodeFilter.
@@ -60,6 +77,7 @@ LIBDOM_SRCS += libdom/observer.c
 # The Streams standard: streams.js, carried in streams.c's object.
 LIBDOM_SRCS += libdom/streams.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
+$(OBJ)/pic/libdom/subtle_core.c.o: LIBDOM_CFLAGS += -I$(CURDIR)/libtls/upstream/inc
 # The compiler's dependency list does not see an .incbin.
 $(OBJ)/pic/libdom/streams.c.o: libdom/streams.js
 LIBDOM_SO := $(BIN)/libdom.so
@@ -68,11 +86,11 @@ LIBDOM_CFLAGS = $(LIBJS_FLAGS) -I$(CURDIR)/libdom/include -I$(CURDIR)/libcanvas/
 
 # libway for one copy of the origin and CORS rules (way/origin.h), which a
 # script's Headers and Request ask as the fetch job does.
-$(LIBDOM_SO): $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBHTML_SO) $(LIBXML_SO) $(LIBPAGE_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO) \
+$(LIBDOM_SO): $(LIBDOM_OBJS) $(LIBDOM_BEARSSL) $(LIBJS_SO) $(LIBHTML_SO) $(LIBXML_SO) $(LIBPAGE_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO) \
     link/lib.ld GNUmakefile libdom/library.mk tools/app_bases.py
 	$(LD) --defsym LIB_BASE=$(LIBDOM_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
 	    $(SHARED_LIB_LDFLAGS) -soname libdom.so --no-undefined --no-as-needed \
-	    -o $@ $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBXML_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO)
+	    -o $@ $(LIBDOM_OBJS) $(LIBDOM_BEARSSL) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBXML_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO)
 
 $(OBJ)/pic/libdom/%.c.o: libdom/%.c $(LIBJS_GENERATED)/.prepared libdom/library.mk GNUmakefile
 	@mkdir -p "$(@D)"
@@ -97,3 +115,37 @@ $(LIBDOM_GEOMETRY_TEST_ELF): $(LIBDOM_GEOMETRY_TEST_OBJ) $(OBJ)/apps/yonder/geom
 .PHONY: dom-geometry-test
 dom-geometry-test: $(LIBDOM_GEOMETRY_TEST_ELF)
 -include $(LIBDOM_GEOMETRY_TEST_OBJ:.o=.d)
+
+# Three actual JS realms sharing a DOM cluster, in the reserved fixture slot.
+LIBDOM_REALMS_TEST_OBJ := $(OBJ)/dom/realms-test.o
+LIBDOM_REALMS_TEST_ELF := $(OBJ)/dom/realms-test
+$(LIBDOM_REALMS_TEST_OBJ): libdom/tests/realms.c libdom/tests/realm_cases.h \
+    libdom/include/dom/dom.h $(LIBJS_GENERATED)/.prepared libdom/library.mk
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBDOM_CFLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(LIBDOM_REALMS_TEST_ELF): $(LIBDOM_REALMS_TEST_OBJ) $(LAUNCH_OBJS) $(LIBDOM_SO) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_jsembedtest) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) $(BIG_STACK_LDFLAGS) -o $@ $^
+.PHONY: dom-realms-test
+dom-realms-test: $(LIBDOM_REALMS_TEST_ELF)
+
+# Recovery host/guest consumer shares its decision oracle with the host suite.
+LIBDOM_RECOVERY_TEST_OBJ := $(OBJ)/dom/recovery-test.o
+LIBDOM_RECOVERY_TEST_ELF := $(OBJ)/dom/recovery-test
+$(LIBDOM_RECOVERY_TEST_OBJ): libdom/tests/recovery.c libdom/tests/recovery_cases.h \
+    libdom/include/dom/dom.h $(LIBJS_GENERATED)/.prepared libdom/library.mk
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBDOM_CFLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(LIBDOM_RECOVERY_TEST_ELF): $(LIBDOM_RECOVERY_TEST_OBJ) $(LAUNCH_OBJS) $(LIBDOM_SO) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_jsembedtest) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) $(BIG_STACK_LDFLAGS) -o $@ $^
+.PHONY: dom-recovery-test
+dom-recovery-test: $(LIBDOM_RECOVERY_TEST_ELF) $(OBJ)/dom/recovery-parent
+-include $(LIBDOM_RECOVERY_TEST_OBJ:.o=.d)
+$(OBJ)/dom/recovery-parent.o: libdom/tests/recovery_parent.c libdom/library.mk
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBDOM_CFLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(OBJ)/dom/recovery-parent: $(OBJ)/dom/recovery-parent.o $(LAUNCH_OBJS) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_testrun) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) -o $@ $^
+-include $(OBJ)/dom/recovery-parent.d

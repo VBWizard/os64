@@ -104,13 +104,13 @@ PAGE
 <!doctype html><style>
 p { display: bogusword; display: inline frob; width: 10quux; display: -webkit-box }
 p { display: flow-root; background-clip: text }
-div { DISPLAY: Flow-Root; background-image: conic-gradient(red, blue) }
+div { DISPLAY: Flow-Root; background-image: image-set("a.png" 1x) }
 </style>
 <p>x<div>y</div>
 WANT
 value display: bogusword 1
 value display: inline frob 1
-value background-image: conic-gradient 1
+value background-image: image-set 1
 (end)
 END
 

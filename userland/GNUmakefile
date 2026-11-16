@@ -100,7 +100,7 @@ CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
            $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include \
            -I$(CURDIR)/libdraw2d/include -I$(CURDIR)/libcanvas/include -I$(CURDIR)/libsvg/include -I$(CURDIR)/libxml/include -I$(CURDIR)/libhtml/include -I$(CURDIR)/libpage/include -I$(CURDIR)/libflow/include -I$(CURDIR)/libway/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libwebp/include -I$(CURDIR)/libtls/include -I$(CURDIR)/libfetch/include \
-           -I$(CURDIR)/libmath/include -I$(CURDIR)/libjs/include -I$(CURDIR)/libdom/include
+           -I$(CURDIR)/libmath/include -I$(CURDIR)/libsound/include -I$(CURDIR)/libmedia/include -I$(CURDIR)/libjs/include -I$(CURDIR)/libdom/include
 # -z noexecstack: bare-metal objects carry no .note.GNU-stack section (that
 # annotation is a Linux userspace convention), and without the flag ld warns
 # about one arbitrary object per link — noise with no meaning here, since
@@ -167,7 +167,7 @@ LAUNCH_OBJS := $(patsubst %,$(OBJ)/%.o,$(LAUNCH_SRCS))
 # the same day: a shared object's relocations resolve against itself and its
 # own dependencies (never against the executable that loaded it), so the
 # library has to carry every symbol the library uses.
-LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/monitor.c libos64/monitor_io.c libos64/proc_command.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/arena.c libos64/decoration_prepare.c libos64/decoration_session.c libos64/decoration_startup.c libos64/env.c libos64/str.c libos64/bidi.c libos64/walk.c libos64/date.c libos64/klog.c libos64/thread.c libos64/work.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_window.c libos64/window_placement.c libos64/ui_theme.c libos64/ui_session.c libos64/ui_settings.c libos64/ui_envelope.c libos64/ui_saved.c libos64/ui_list.c libos64/ui_data.c libos64/ui_dataview.c libos64/directory.c libos64/browser.c libos64/ui_browser.c libos64/ui_file_dialog.c libos64/ui_palette.c libos64/ui_color.c libos64/ui_controls.c libos64/ui_menu.c libos64/ui_menu_widget.c libos64/ui_dropdown.c libos64/ui_dispatcher.c libos64/ui_icon.c libos64/ui_icon_button.c libos64/ui_toolbar.c libos64/ui_action.c libos64/ui_status.c libos64/ui_text.c libos64/ui_font.c libos64/ui_font_settings.c libos64/clip.c libos64/mouse_settings.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/launch.c libos64/thread_trampoline.S \
+LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/bell.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/monitor.c libos64/monitor_io.c libos64/proc_command.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/arena.c libos64/decoration_prepare.c libos64/decoration_session.c libos64/decoration_startup.c libos64/env.c libos64/str.c libos64/bidi.c libos64/walk.c libos64/date.c libos64/klog.c libos64/thread.c libos64/work.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_window.c libos64/window_placement.c libos64/ui_theme.c libos64/ui_session.c libos64/ui_settings.c libos64/ui_envelope.c libos64/ui_saved.c libos64/ui_list.c libos64/ui_data.c libos64/ui_dataview.c libos64/directory.c libos64/browser.c libos64/ui_browser.c libos64/ui_file_dialog.c libos64/ui_palette.c libos64/ui_color.c libos64/ui_controls.c libos64/ui_menu.c libos64/ui_menu_widget.c libos64/ui_dropdown.c libos64/ui_dispatcher.c libos64/ui_icon.c libos64/ui_icon_button.c libos64/ui_toolbar.c libos64/ui_action.c libos64/ui_status.c libos64/ui_text.c libos64/ui_font.c libos64/ui_font_settings.c libos64/clip.c libos64/mouse_settings.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/launch.c libos64/thread_trampoline.S \
     libos64/text.c libos64/text_cache.c libos64/text_decode.c libos64/text_bitmap.c libos64/text_draw.c libos64/font_provider.c libos64/font_family.c libos64/font_adopt.c libos64/font_config.c libos64/font_discovery.c libos64/font_install.c libos64/font_psf2.c
 # PIC objects live under obj/pic/ — a separate tree, because these are
 # compiled with different flags than everything else and an object built for
@@ -205,7 +205,7 @@ LIBPNG_SO   := $(BIN)/libpng.so
 # downstream of the framing. It records real DT_NEEDED edges on libtls,
 # libgzip and libos64; none of those knows a URL exists.
 LIBFETCH_SRCS := libfetch/fetch.c libfetch/http.c libfetch/transport.c libfetch/proxy.c \
-                 libfetch/pool.c
+                 libfetch/pool.c libfetch/h2_frame.c libfetch/h2_hpack.c libfetch/h2_conn.c
 LIBFETCH_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBFETCH_SRCS))
 LIBFETCH_SO   := $(BIN)/libfetch.so
 
@@ -260,7 +260,7 @@ LIBFETCH_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libfetch.so
 # isolation would miss a hash collision and prelink two objects into the same
 # slot. app_bases.py sorts before probing, so adding a library gives the build
 # one deterministic map independent of link order.
-LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libwebp.so libimage.so libfetch.so libhtml.so libpage.so libflow.so libway.so libgarb.so libfreetype.so libmath.so libjs.so libdom.so libxml.so libsvg.so libdraw2d.so libcanvas.so)
+LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libwebp.so libimage.so libfetch.so libhtml.so libpage.so libflow.so libway.so libgarb.so libfreetype.so libmath.so libsound.so libav.so libmedia.so libjs.so libdom.so libxml.so libsvg.so libdraw2d.so libcanvas.so)
 LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
 LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
 LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
@@ -303,7 +303,7 @@ TELNET_ENGINE_OBJ      := $(OBJ)/apps/telnet/telnet_protocol.c.o
 LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd yonder
 
 # Programs that download: they name libfetch and get its whole closure.
-LIBFETCH_PROGRAMS := os64get wend worktest fetchhooktest fetchposttest yonder
+LIBFETCH_PROGRAMS := os64get wend worktest fetchhooktest fetchposttest resumeprobe capprobe yonder h2probe
 # What a page MEANS is a browser's edge and nobody else's (LIBPAGE.md).
 # `wend` declares the edge before it CALLS anything through it, which is
 # deliberate: the library is otherwise on the image with nothing loading it,
@@ -320,7 +320,7 @@ LIBWAY_PROGRAMS := wend yonder
 LIBGARB_PROGRAMS := garbdump flowdump yonder
 # libtls's own probes, and yonder, which calls the entropy door
 # (os64_tls_entropy) itself for crypto.getRandomValues.
-LIBTLS_PROGRAMS := tlslibtest tlstransportprobe yonder
+LIBTLS_PROGRAMS := tlslibtest tlstransportprobe yonder h2probe
 
 # Programs whose main thread asks for a 4 MiB stack, not the 1 MiB every
 # thread gets (SCRIPT_STACK.md): `-z stack-size` writes it in PT_GNU_STACK,
@@ -407,6 +407,9 @@ include libjpeg/shared.mk
 include libwebp/shared.mk
 include libfreetype/shared.mk
 include libmath/shared.mk
+include libsound/shared.mk
+include libav/shared.mk
+include libmedia/library.mk
 include libimage/shared.mk
 include libxml/library.mk
 include libdraw2d/library.mk
@@ -422,10 +425,10 @@ include libdom/library.mk
 include apps/js/runner.mk
 
 # Source membership and the population used for prelink placement live here.
-$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBXML_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBSVG_SO) $(LIBDRAW2D_SO) $(LIBCANVAS_SO): GNUmakefile
+$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBXML_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBSOUND_SO) $(LIBAV_SO) $(LIBMEDIA_SO) $(LIBSVG_SO) $(LIBDRAW2D_SO) $(LIBCANVAS_SO): GNUmakefile
 
 .PHONY: all
-all: $(LIBDRAW2D_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBXML_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
+all: $(LIBDRAW2D_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBXML_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBSOUND_SO) $(LIBAV_SO) $(LIBMEDIA_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
      $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
 
 $(BIN)/[: $(BIN)/test
@@ -526,10 +529,12 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),$(TELNET_ENGINE_PROGRAMS)),$(TELNET_ENGINE_OBJ)) \
                        $(if $(filter $(1),bearssltest),$(BEARSSL_TEST_OBJ)) \
                        $(if $(filter $(1),sshtest),$(addprefix $(OBJ)/apps/sshd/,ssh_codec.c.o ssh_keys.c.o ssh_transport.c.o ssh_connection.c.o)) \
+                       $(if $(filter $(1),pulsedialtest),$(addprefix $(OBJ)/apps/pulse/,pulse_instruments.c.o pulse_data.c.o)) \
+                       $(if $(filter $(1),pulsebench),$(addprefix $(OBJ)/apps/pulse/,pulse_instruments.c.o pulse_data.c.o pulse_placement.c.o pulse_overlay.c.o pulse_details.c.o)) \
                        $(if $(filter $(1),scribefonttest),$(addprefix $(OBJ)/apps/scribe/,scribe.c.o scribe_buf.c.o)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
-                       $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
+                       $(if $(filter $(1),tlslibtest tlstransportprobe h2probe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
 APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),yonder),$(LIBSVG_SO) $(LIBDRAW2D_SO)) \
                        $(if $(filter $(1),htmltest wend pagetest flowdump yonder garbdump),$(LIBHTML_SO)) \
                        $(if $(filter $(1),domtest yonder),$(LIBDOM_SO) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO)) \
@@ -540,9 +545,12 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),yonder),$(LIBSVG_SO) $(LIBDRAW2D_SO)) 
                        $(if $(filter $(1),gview desktop jpegtest webptest giftest yonder scribe scribefonttest grootmenu actiongallery roam),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
                        $(if $(filter $(1),webptest),$(LIBWEBP_SO)) \
-                       $(if $(filter $(1),fonttest texttest flowdump yonder),$(LIBFREETYPE_SO)) \
+                       $(if $(filter $(1),fonttest texttest flowdump yonder pulse pulsedialtest pulsebench),$(LIBFREETYPE_SO)) \
                        $(if $(filter $(1),js),$(LIBJS_SO)) \
-                       $(if $(filter $(1),mathtest yonder),$(LIBMATH_SO)) \
+                       $(if $(filter $(1),mathtest yonder resampletest playtest mediatest),$(LIBMATH_SO)) \
+                       $(if $(filter $(1),resampletest playtest),$(LIBSOUND_SO)) \
+                       $(if $(filter $(1),$(LIBAV_PROGRAMS)),$(LIBAV_SO) $(LIBMATH_SO)) \
+                       $(if $(filter $(1),$(LIBMEDIA_PROGRAMS)),$(LIBMEDIA_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
                        $(if $(filter $(1),$(LIBFETCH_PROGRAMS)),$(LIBFETCH_SO)) \
@@ -567,7 +575,7 @@ $(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
 # FIXTURES ARE IN HERE TOO, and that is the point of the line rather than an
 # afterthought: a fixture is the program you are most likely to be single-
 # stepping, because it is what you reach for when something is already broken.
-$(BIN)/app_bases.gdb: $(LIBDRAW2D_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBXML_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBJS_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
+$(BIN)/app_bases.gdb: $(LIBDRAW2D_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBXML_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBSOUND_SO) $(LIBAV_SO) $(LIBMEDIA_SO) $(LIBJS_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
 	@mkdir -p "$(BIN)"
 	@printf '# GENERATED by userland/GNUmakefile — do not edit.\n' > $@
 	@printf '# Every program at its own base, so GDB can hold all their symbols at once.\n' >> $@
@@ -593,6 +601,9 @@ $(BIN)/app_bases.gdb: $(LIBDRAW2D_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBXML_SO) 
 	@printf 'add-symbol-file %s\n' "$(LIBWEBP_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBFREETYPE_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBMATH_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBSOUND_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBAV_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBMEDIA_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBJS_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBIMAGE_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBFETCH_SO)" >> $@
@@ -660,6 +671,10 @@ SSH_CFLAGS := -O2 -I$(CURDIR)/libtls/port/include
 $(OBJ)/apps/sshd/%.c.o: CFLAGS += $(SSH_CFLAGS)
 $(OBJ)/tests/sshtest/%.c.o: CFLAGS += $(SSH_CFLAGS)
 
+# A program that calls FFmpeg compiles against its headers (libav/shared.mk).
+$(foreach p,$(LIBAV_PROGRAMS),\
+  $(eval $(OBJ)/$(if $(filter $(p),$(TESTS)),tests,apps)/$(p)/%.c.o: CFLAGS += $(LIBAV_CONSUMER_CFLAGS)))
+
 # AN OBJECT REBUILDS WHEN ITS FLAGS CHANGE. Make compares dates, and nothing
 # dates a flag: before these stamps, an edit to the flags relinked the old
 # objects, and a library or an app put on -O2 went on running its -O0 code
@@ -676,7 +691,7 @@ $(if $(call flags_same,$(strip $(2)),$(strip $(file <$(1)))),,$(file >$(1),$(str
 endef
 $(shell mkdir -p $(OBJ)/flags)
 $(eval $(call flags_stamp,$(PIC_FLAGS_STAMP),$(LIBOS64_CFLAGS) | $(LIBGZIP_CFLAGS) | $(LIBPNG_CFLAGS) | $(LIBFETCH_CFLAGS)))
-$(eval $(call flags_stamp,$(STATIC_FLAGS_STAMP),$(CFLAGS) | $(OPTIMIZED_APPS) | $(OPTIMIZED_CFLAGS) | $(SSH_CFLAGS)))
+$(eval $(call flags_stamp,$(STATIC_FLAGS_STAMP),$(CFLAGS) | $(OPTIMIZED_APPS) | $(OPTIMIZED_CFLAGS) | $(SSH_CFLAGS) | $(LIBAV_PROGRAMS) | $(LIBAV_CONSUMER_CFLAGS)))
 
 $(OBJ)/%.c.o: %.c $(STATIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"

@@ -504,7 +504,7 @@ static void test_passive_storage(void)
 {
 	cleanup(init());
 	int64_t why = 0;
-	tcp_listener_t *l = tcp_listener_announce(&dev, 23, &why);
+	tcp_listener_t *l = tcp_listener_announce(kNetIPv4Address, 23, &why);
 	assert(l);
 	/* Expected policy bound, independent of the implementation's macro. */
 	const unsigned limit = 32;
@@ -529,7 +529,7 @@ static void test_passive_storage(void)
 	assert(kTcpStats.heap_moves == moves && kTcpConnList == head && npackets == sent);
 	assert(!l->pending && l->syns_dropped == 1);
 	tcp_listener_close(l);
-	l = tcp_listener_announce(&dev, 23, &why);
+	l = tcp_listener_announce(kNetIPv4Address, 23, &why);
 	assert(l);
 	moves = kTcpStats.heap_moves;
 	incoming(&excess, 5000, 0, 65535, TCP_SYN);
@@ -577,7 +577,7 @@ static void test_passive_storage_across_listeners(void)
 	tcp_listener_t *listeners[3];
 	for (unsigned i = 0; i < 3; i++)
 	{
-		listeners[i] = tcp_listener_announce(&dev, 23 + i, &why);
+		listeners[i] = tcp_listener_announce(kNetIPv4Address, 23 + i, &why);
 		assert(listeners[i]);
 	}
 	for (unsigned i = 0; i < 32; i++)

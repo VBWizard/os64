@@ -12,6 +12,10 @@
  *   I.zoneHost       () → the machine's zone: a canonical name, or an
  *                    offset zone ("+05:30")
  *   I.zoneList       () → every canonical zone name the table holds
+ *   I.segment        (kind, string) → an ArrayBuffer of the string's UAX #29
+ *                    segments by kind (0 grapheme, 1 word, 2 sentence), a
+ *                    uint32 each: its end in UTF-16 code units times two,
+ *                    plus one when it is word-like (segment.c)
  *
  * Because it runs before any page script, every built-in it touches is
  * the realm's own: the ones it calls while formatting are captured here,
@@ -58,6 +62,12 @@ const getPrototypeOf = Object_.getPrototypeOf, setPrototypeOf = Object_.setProto
 const ObjectPrototype = Object_.prototype;
 const RegExpProto = RegExp.prototype, r_exec = RegExpProto.exec;
 const zoneCanonical = I.zoneCanonical, zoneOffset = I.zoneOffset, zoneHost = I.zoneHost, zoneList = I.zoneList;
+const segmentBoundaries = I.segment;
+const Uint32Array_ = Uint32Array;
+// %TypedArray%.prototype's length getter, which a page may replace on the
+// prototype; a Segments object counts its ends with this one.
+const typedArrayLength = getOwnPropertyDescriptor(getPrototypeOf(Uint32Array_.prototype), 'length').get;
+const IteratorPrototype = getPrototypeOf(getPrototypeOf([][Symbol_.iterator]()));
 // The methods that read a built-in's own value (thisTimeValue and its kin),
 // which refuse a receiver without the slot as the engine's own do.
 const dateGetTime = Date_.prototype.getTime, numberValueOf = Number_.prototype.valueOf;
@@ -3432,6 +3442,125 @@ method(ListFormatPrototype, 'resolvedOptions', methodOf(function () {
 }), 0);
 
 
+// ── Intl.Segmenter (ECMA-402 § 18; SEGMENTER.md) ────────────────────────
+// The boundaries are UAX #29's, found by the door (I.segment, segment.c):
+// one call answers a whole string, each segment's end in UTF-16 code units
+// times two, plus one when it is word-like. A Segments object asks the
+// first time it is iterated or asked what contains an index, and keeps the
+// answer, so neither iterating nor walking `containing` backwards is
+// quadratic.
+const SEGMENTERS = new WeakMap(), SEGMENTS = new WeakMap(), SEGMENT_ITERATORS = new WeakMap();
+const SEGMENT_KINDS = {__proto__: null, grapheme: 0, word: 1, sentence: 2};
+function ToIntegerOrInfinity(v) {
+    const n = ToNumber(v);
+    if (isNaN_(n) || n === 0) return 0;
+    return isFinite_(n) ? trunc(n) : n;
+}
+function Segmenter(locales, options) {
+    if (new.target === undefined) throw new TypeError_("Constructor Intl.Segmenter requires 'new'");
+    const made = constructed(this, SegmenterPrototype);
+    loadData();
+    const requested = CanonicalizeLocaleList(locales);
+    options = GetOptionsObject(options);
+    const opt = {__proto__: null};
+    opt.localeMatcher = GetOption(options, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+    const s = {__proto__: null};
+    s.locale = ResolveLocale(AVAILABLE, requested, opt, [], () => []).locale;
+    s.granularity = GetOption(options, 'granularity', 'string', ['grapheme', 'word', 'sentence'], 'grapheme');
+    apply(wm_set, SEGMENTERS, [made, s]);
+    return made;
+}
+const SegmenterPrototype = Segmenter.prototype;
+defineProperty(Segmenter, 'prototype', {__proto__: null, writable: false, enumerable: false, configurable: false});
+defineProperty(Segmenter, 'length', {__proto__: null, value: 0, configurable: true});
+function thisSegmenter(o, name) {
+    const s = slots(SEGMENTERS, o);
+    if (s === undefined) throw new TypeError_('Method Intl.Segmenter.prototype.' + name + ' called on incompatible receiver');
+    return s;
+}
+// A Segments object's ends, asked of the door once, and how many.
+function segmentEnds(r) {
+    if (r.ends === undefined) {
+        r.ends = new Uint32Array_(segmentBoundaries(SEGMENT_KINDS[r.granularity], r.string));
+        r.count = apply(typedArrayLength, r.ends, []);
+    }
+    return r.ends;
+}
+// CreateSegmentDataObject (§ 18.7.1).
+function segmentData(r, start, packed) {
+    const end = packed >>> 1;
+    const o = {};
+    put(o, 'segment', slice(r.string, start, end));
+    put(o, 'index', start);
+    put(o, 'input', r.string);
+    if (r.granularity === 'word') put(o, 'isWordLike', (packed & 1) === 1);
+    return o;
+}
+method(Segmenter, 'supportedLocalesOf', methodOf(supportedLocalesOf), 1);
+defineProperty(SegmenterPrototype, toStringTag, {__proto__: null, value: 'Intl.Segmenter', writable: false, enumerable: false, configurable: true});
+method(SegmenterPrototype, 'resolvedOptions', methodOf(function () {
+    const s = thisSegmenter(this, 'resolvedOptions');
+    const o = {};
+    put(o, 'locale', s.locale); put(o, 'granularity', s.granularity);
+    return o;
+}), 0);
+// %IntlSegmentsPrototype% (§ 18.5.2): no constructor, an object a Segments
+// object inherits, as each realm makes one.
+const SegmentsPrototype = {};
+method(SegmenterPrototype, 'segment', methodOf(function (string) {
+    const s = thisSegmenter(this, 'segment');
+    const str = ToString(string);
+    const segments = objectCreate(SegmentsPrototype);
+    apply(wm_set, SEGMENTS, [segments, {__proto__: null, granularity: s.granularity, string: str, ends: undefined, count: 0}]);
+    return segments;
+}), 1);
+function thisSegments(o, name) {
+    const r = slots(SEGMENTS, o);
+    if (r === undefined) throw new TypeError_('Method %Segments.prototype%.' + name + ' called on incompatible receiver');
+    return r;
+}
+method(SegmentsPrototype, 'containing', methodOf(function (index) {
+    const r = thisSegments(this, 'containing');
+    const n = ToIntegerOrInfinity(index);
+    if (n < 0 || n >= r.string.length) return undefined;
+    const ends = segmentEnds(r);
+    let low = 0, high = r.count - 1;              // the first segment whose end is past n
+    while (low < high) {
+        const mid = (low + high) >>> 1;
+        if ((ends[mid] >>> 1) > n) high = mid;
+        else low = mid + 1;
+    }
+    return segmentData(r, low === 0 ? 0 : ends[low - 1] >>> 1, ends[low]);
+}), 1);
+// %IntlSegmentIteratorPrototype% (§ 18.6.2), on %IteratorPrototype%.
+const SegmentIteratorPrototype = objectCreate(IteratorPrototype);
+method(SegmentsPrototype, Symbol_.iterator, methodOf(function () {
+    const r = thisSegments(this, '[Symbol.iterator]');
+    const iterator = objectCreate(SegmentIteratorPrototype);
+    apply(wm_set, SEGMENT_ITERATORS, [iterator, {__proto__: null, segments: r, position: 0, k: 0}]);
+    return iterator;
+}), 0);
+defineProperty(SegmentsPrototype[Symbol_.iterator], 'name', {__proto__: null, value: '[Symbol.iterator]', configurable: true});
+method(SegmentIteratorPrototype, 'next', methodOf(function () {
+    const it = slots(SEGMENT_ITERATORS, this);
+    if (it === undefined) throw new TypeError_('Method %SegmentIterator.prototype%.next called on incompatible receiver');
+    const r = it.segments;
+    const result = {};
+    if (it.position >= r.string.length) {
+        put(result, 'value', undefined); put(result, 'done', true);
+        return result;
+    }
+    const ends = segmentEnds(r);
+    const packed = ends[it.k];
+    put(result, 'value', segmentData(r, it.position, packed));
+    put(result, 'done', false);
+    it.position = packed >>> 1;
+    it.k++;
+    return result;
+}), 0);
+defineProperty(SegmentIteratorPrototype, toStringTag, {__proto__: null, value: 'Segmenter String Iterator', writable: false, enumerable: false, configurable: true});
+
+
 // ── Intl.Collator (ECMA-402 § 10; the collation is INTL.md § 4.1's) ─────
 // CLDR root's collation elements for the characters the data holds (Latin,
 // the combining marks, general punctuation; COLLATION in the data), each
@@ -3785,7 +3914,8 @@ defineProperty(Intl, toStringTag, {__proto__: null, value: 'Intl', writable: fal
 method(Intl, 'getCanonicalLocales', methodOf(getCanonicalLocales), 1);
 method(Intl, 'supportedValuesOf', methodOf(supportedValuesOf), 1);
 const CONSTRUCTORS = [['DateTimeFormat', DateTimeFormat], ['NumberFormat', NumberFormat], ['Collator', Collator], ['PluralRules', PluralRules],
-                      ['RelativeTimeFormat', RelativeTimeFormat], ['ListFormat', ListFormat], ['Locale', Locale]];
+                      ['RelativeTimeFormat', RelativeTimeFormat], ['ListFormat', ListFormat], ['Locale', Locale],
+                      ['Segmenter', Segmenter]];
 for (let i = 0; i < CONSTRUCTORS.length; i++)
     defineProperty(Intl, CONSTRUCTORS[i][0], {__proto__: null, value: CONSTRUCTORS[i][1], writable: true, enumerable: false, configurable: true});
 // The redefined built-ins, last: once they are defined the realm's

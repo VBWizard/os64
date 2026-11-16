@@ -106,7 +106,7 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
 {
     if (query->elements && node->kind != OS64_HTML_ELEMENT) return false;
     if (query->kind >= D_QUERY_TBODIES) return table_member(query, node);
-    if (query->kind == D_QUERY_CLASSES) return has_classes(query->dom, node, query->named);
+    if (query->kind == D_QUERY_CLASSES) return has_classes(d_owner(query->dom, query->root), node, query->named);
     if (query->kind == D_QUERY_NAME) {
         const os64_html_attr_t *name = node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML
             ? os64_html_attr(node, "name") : NULL;
@@ -117,7 +117,7 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
     if (query->kind == D_QUERY_OPTIONS) return true;
     if (query->kind == D_QUERY_SELECTED_OPTIONS) {
         bool on = false;
-        return os64_page_node_option_selected(query->dom->state, node, &on) == 0 && on;
+        return os64_page_node_option_selected(d_owner(query->dom, node)->state, node, &on) == 0 && on;
     }
     if (query->kind == D_QUERY_LABELS) return d_label_control(node) == query->owner;
     if (query->kind == D_QUERY_SHEETS) return os64_page_names_sheet(node);
@@ -155,14 +155,16 @@ static bool refresh(DQuery *query, JSContext *ctx)
             query->version = 0;
         }
     }
-    uint64_t version = os64_html_version(query->dom->document);
-    uint64_t state_version = query->kind == D_QUERY_SELECTED_OPTIONS ? os64_page_state_version(query->dom->state) : 0;
-    if (query->version == version && query->state_version == state_version) return true;
+    os64_dom_t *owner = d_owner(query->dom, query->root);
+    uint64_t version = os64_html_version(owner->document);
+    uint64_t state_version = query->kind == D_QUERY_SELECTED_OPTIONS ? os64_page_state_version(owner->state) : 0;
+    if (query->observed_document == owner->document && query->version == version &&
+        query->state_version == state_version) return true;
     size_t count = 0;
     for (const os64_html_node_t *at = query_step(query, NULL); at != NULL; at = query_step(query, at))
         if (matches(query, at)) count++;
     if (count > SIZE_MAX / sizeof(*query->nodes)) goto quota;
-    const os64_html_node_t **nodes = count != 0 ? d_alloc(query->dom, count * sizeof(*nodes)) : NULL;
+    const os64_html_node_t **nodes = count != 0 ? d_alloc_kind(query->dom, count * sizeof(*nodes), OS64_DOM_MEM_COLLECTION) : NULL;
     if (count != 0 && nodes == NULL) goto quota;
     size_t index = 0;
     /* A table's rows are three groups, each in tree order: a walk each. */
@@ -177,6 +179,7 @@ static bool refresh(DQuery *query, JSContext *ctx)
     size_t old_count = query->count;
     query->nodes = nodes;
     query->count = count;
+    query->observed_document = owner->document;
     query->version = version;
     query->state_version = state_version;
     for (size_t i = 0; i < old_count; i++)
@@ -204,7 +207,7 @@ JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *ro
                      bool descendants, bool elements, const char *name)
 {
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
-    DQuery *query = d_alloc(dom, sizeof(*query));
+    DQuery *query = d_alloc_kind(dom, sizeof(*query), OS64_DOM_MEM_COLLECTION);
     if (query == NULL) return d_error(ctx, "QuotaExceededError", "DOM query quota exceeded");
     query->dom = dom;
     query->root = root;
@@ -214,8 +217,8 @@ JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *ro
     query->html_document = d_document_type(dom, d_node_document(dom, root)) == D_DOCUMENT_HTML;
     if (name != NULL) {
         size_t size = os64_strlen(name) + 1;
-        query->name = d_alloc(dom, size);
-        query->folded = d_alloc(dom, size);
+        query->name = d_alloc_kind(dom, size, OS64_DOM_MEM_COLLECTION);
+        query->folded = d_alloc_kind(dom, size, OS64_DOM_MEM_COLLECTION);
         if (query->name == NULL || query->folded == NULL) {
             d_query_free(dom, query);
             return d_error(ctx, "QuotaExceededError", "DOM query-name quota exceeded");
@@ -246,13 +249,19 @@ JSValue d_children(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     DValue *entry = d_find(dom, root);
     if (entry == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    DQuery *query = elements ? entry->children : entry->child_nodes;
+    dom = entry->dom;
+    os64_js_outcome_t outcome;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
+    if (ctx == NULL) return JS_EXCEPTION;
+    DQuery *query = elements ? d_more_peek(entry)->children : entry->child_nodes;
     if (query != NULL) return JS_DupValue(ctx, query->entry->value);
+    DValueMore *more = elements ? d_more(dom, ctx, entry) : NULL;
+    if (elements && more == NULL) return JS_EXCEPTION;
     JSValue value = d_collection(dom, ctx, root, false, elements, NULL);
     if (!elements) value = as_node_list(dom, ctx, value);
     if (JS_IsException(value)) return value;
     query = JS_GetOpaque(value, dom->collection_class);
-    if (elements) entry->children = query;
+    if (elements) more->children = query;
     else entry->child_nodes = query;
     return value;
 }
@@ -262,7 +271,9 @@ JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *contro
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     DValue *entry = d_find(dom, control);
     if (entry == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    if (entry->labels != NULL) return JS_DupValue(ctx, entry->labels->entry->value);
+    if (d_more_peek(entry)->labels != NULL) return JS_DupValue(ctx, d_more_peek(entry)->labels->entry->value);
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) return JS_EXCEPTION;
     JSValue value = d_special_collection(dom, ctx, control, D_QUERY_LABELS, NULL);
     if (JS_IsException(value)) return value;
     /* refresh() roots it at the control's tree, whose root moves with it. */
@@ -270,7 +281,7 @@ JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *contro
     query->owner = control;
     value = as_node_list(dom, ctx, value);
     if (JS_IsException(value)) return value;
-    entry->labels = query;
+    more->labels = query;
     return value;
 }
 
@@ -615,7 +626,7 @@ static garb_selectors_t *selectors_of(os64_dom_t *dom, JSContext *ctx, JSValueCo
         bool short_of_memory = status != GARB_OK || parsed->incomplete;
         /* The message names the selector, so a page's record does. */
         size_t size = string.length + 32;
-        char *message = short_of_memory ? NULL : d_alloc(dom, size);
+        char *message = short_of_memory ? NULL : d_alloc_kind(dom, size, OS64_DOM_MEM_COLLECTION);
         if (message != NULL)
             os64_snprintf(message, size, "'%s' is not a valid selector", string.data);
         if (message != NULL) d_error(ctx, "SyntaxError", message);
@@ -701,7 +712,7 @@ JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_no
     char *copy = NULL;
     if (named != NULL) {
         size_t len = os64_strlen(named) + 1;
-        copy = d_alloc(dom, len);
+        copy = d_alloc_kind(dom, len, OS64_DOM_MEM_COLLECTION);
         if (copy == NULL) return d_error(ctx,"QuotaExceededError","DOM named collection quota exceeded");
         os64_memcpy(copy, named, len);
     }
@@ -726,7 +737,9 @@ DQuery *d_table_query(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *o
         JS_ThrowTypeError(ctx, "Missing node wrapper");
         return NULL;
     }
-    DQuery **made = kind == D_QUERY_TBODIES ? &entry->bodies : &entry->members;
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) return NULL;
+    DQuery **made = kind == D_QUERY_TBODIES ? &more->bodies : &more->members;
     if (*made != NULL) return *made;
     /* Children, but for a table's rows, which reach into its sections,
      * and a map's areas, which may lie anywhere below it. */
@@ -772,8 +785,10 @@ JSValue d_attribute_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_
 JSValue d_radio_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form, const char *name)
 {
     DValue *entry = dom->radio_prototype != NULL ? d_find(dom, form) : NULL;
-    for (DQuery *made = entry != NULL ? entry->radio_lists : NULL; made != NULL; made = made->radio_next)
+    for (DQuery *made = entry != NULL ? d_more_peek(entry)->radio_lists : NULL; made != NULL; made = made->radio_next)
         if (os64_streq(made->named, name)) return JS_DupValue(ctx, made->entry->value);
+    DValueMore *more = entry != NULL ? d_more(dom, ctx, entry) : NULL;
+    if (entry != NULL && more == NULL) return JS_EXCEPTION;
     /* refresh() roots a form's controls at the document its form is in. */
     JSValue value = d_special_collection(dom, ctx, form, D_QUERY_CONTROLS, name);
     if (JS_IsException(value)) return value;
@@ -785,9 +800,9 @@ JSValue d_radio_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *fo
         JS_FreeValue(ctx, value);
         return JS_EXCEPTION;
     }
-    if (entry != NULL) {
-        query->radio_next = entry->radio_lists;
-        entry->radio_lists = query;
+    if (more != NULL) {
+        query->radio_next = more->radio_lists;
+        more->radio_lists = query;
     }
     return value;
 }
@@ -824,7 +839,7 @@ static JSValue radio_value(JSContext *ctx, JSValueConst self, int argc, JSValueC
         if (!is_radio(node)) continue;
         const char *text;
         size_t length;
-        int64_t status = os64_page_node_value(dom->state, node, &text, &length);
+        int64_t status = os64_page_node_value(d_owner(dom, node)->state, node, &text, &length);
         if (status < 0) {
             JS_FreeValue(ctx, result);
             result = d_page_error(ctx, status);
@@ -833,12 +848,12 @@ static JSValue radio_value(JSContext *ctx, JSValueConst self, int argc, JSValueC
         if (set) {
             if (length != wanted.length || os64_memcmp(text, wanted.data != NULL ? wanted.data : "", length) != 0)
                 continue;
-            status = os64_page_node_set_checked(dom->state, node, true);
+            status = os64_page_node_set_checked(d_owner(dom, node)->state, node, true);
             if (status < 0) result = d_page_error(ctx, status);
             break;
         }
         bool on = false;
-        if (os64_page_node_checked(dom->state, node, &on) == 0 && on) {
+        if (os64_page_node_checked(d_owner(dom, node)->state, node, &on) == 0 && on) {
             JS_FreeValue(ctx, result);
             result = JS_NewStringLen(ctx, text, length);
             break;
@@ -891,7 +906,9 @@ JSValue d_style_sheets(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     DValue *entry = d_find(dom, document);
     if (entry == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    if (entry->style_sheets != NULL) return JS_DupValue(ctx, entry->style_sheets->entry->value);
+    if (d_more_peek(entry)->style_sheets != NULL) return JS_DupValue(ctx, d_more_peek(entry)->style_sheets->entry->value);
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) return JS_EXCEPTION;
     JSValue value = d_special_collection(dom, ctx, document, D_QUERY_SHEETS, NULL);
     if (JS_IsException(value)) return value;
     DQuery *query = JS_GetOpaque(value, dom->collection_class);
@@ -901,7 +918,7 @@ JSValue d_style_sheets(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *
         JS_FreeValue(ctx, value);
         return JS_EXCEPTION;
     }
-    entry->style_sheets = query;
+    more->style_sheets = query;
     return value;
 }
 

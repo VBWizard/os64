@@ -161,6 +161,7 @@ typedef struct {
     const way_identity_t *identity;     // the agent's preset lines, NULL for none
     way_cache_mode_t cache_mode;        // how the request uses http_cache
     bool module;                        // a module script's fetch
+    bool style;                         // native stylesheet response, never script delivery
 } Ask;
 
 static yonder_fetch_job_t *job_of(const Ask *a)
@@ -215,7 +216,10 @@ static yonder_fetched_t *run(const Ask *a)
     if (j == NULL)
         return NULL;
     void *out = NULL;
-    yonder_fetch_run(j, cancel_cb, NULL, &out);
+    if (a->style)
+        yonder_fetch_style_run(j, cancel_cb, NULL, &out);
+    else
+        yonder_fetch_run(j, cancel_cb, NULL, &out);
     yonder_fetch_release(j, NULL);
     return out;
 }
@@ -1597,6 +1601,65 @@ static void streamed_cache_cases(const char *page)
     yonder_fetched_free(g);
 }
 
+static void native_styles(void)
+{
+    fresh();
+    const char *page = "https://a.test/page";
+    const char *url = "https://b.test/style.css";
+    const char *css = "p { color: blue }";
+    fake_answer_t *answer = fake_answer(NULL, url, 200,
+        "Content-Type: text/css; charset=utf-8\r\nCache-Control: max-age=60\r\n"
+        "ETag: \"style\"\r\nSet-Cookie: private=value\r\n", css);
+    Ask ask = {page, url, .mode = WAY_MODE_NO_CORS, .style = true};
+    for (int phase = 0; phase < 3; phase++) {
+        int before = nfake_requests;
+        if (phase == 2) {
+            s_epoch += 120;
+            answer->status = 304;
+            answer->headers = "Cache-Control: max-age=600\r\n";
+            answer->body = NULL;
+        }
+        yonder_fetched_t *g = run(&ask);
+        expect("native styles: network, fresh and validated replies retain CSS and opaque verdict",
+               g && g->ok && g->status == 200 && g->type == WAY_TYPE_OPAQUE &&
+               g->body_len == strlen(css) && !memcmp(g->body, css, strlen(css)) &&
+               has_line(g, "Content-Type: text/css; charset=utf-8\r\n") &&
+               !has_line(g, "Set-Cookie: private=value\r\n") &&
+               g->served == (phase == 0 ? WAY_SERVED_NETWORK : phase == 1 ? WAY_SERVED_KEPT : WAY_SERVED_CONFIRMED),
+               g ? g->why : NULL);
+        expect("native styles: a fresh reply needs no second request",
+               nfake_requests == before + (phase != 1), NULL);
+        expect_text("native styles: final URL available to the parser", g ? g->url : NULL, url);
+        if (phase == 0) {
+            expect_text("native styles: request destination", field(before, "Sec-Fetch-Dest"), "style");
+            expect_text("native styles: request Accept", fake_requests[before].accept, "text/css,*/*;q=0.1");
+        }
+        yonder_fetched_free(g);
+    }
+    // A script fetch of the same cached reply remains opaque and empty.
+    ask.style = false;
+    yonder_fetched_t *g = run(&ask);
+    expect("native styles: keeping CSS grants no script visibility",
+           g && g->ok && g->served == WAY_SERVED_KEPT && g->type == WAY_TYPE_OPAQUE &&
+           g->status == 0 && !g->has_body && g->body == NULL && g->headers_len == 0 &&
+           g->url && g->url[0] == '\0', g ? g->why : NULL);
+    yonder_fetched_free(g);
+    ask.style = true;
+    ask.mode = WAY_MODE_CORS;
+    g = run(&ask);
+    expect("native styles: cached or network replies cannot bypass CORS", g && !g->ok, g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    fresh();
+    fake_answer(NULL, "https://a.test/start.css", 302, "Location: https://b.test/final.css\r\n", NULL);
+    fake_answer(NULL, "https://b.test/final.css", 200, "Content-Type: text/css\r\n", css);
+    g = run(&(Ask){page, "https://a.test/start.css", .mode = WAY_MODE_NO_CORS, .style = true});
+    expect("native styles: redirected CSS retains the final import base and taint",
+           g && g->ok && g->redirected && g->type == WAY_TYPE_OPAQUE &&
+           !strcmp(g->url, "https://b.test/final.css"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+}
+
 static void http_cache_cases(void)
 {
     char root[] = "/tmp/fetch_cacheXXXXXX";
@@ -1986,6 +2049,7 @@ static void http_cache_cases(void)
            g ? g->why : NULL);
     yonder_fetched_free(g);
 
+    native_styles();
     cache_revalidation_vary(page);
     cache_unsafe_redirects(page);
     fresh();

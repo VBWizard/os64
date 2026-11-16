@@ -34,6 +34,8 @@
 #include "kworker.h"
 #include "test_framework.h"      // late_tests_thread — the "/latetests" task's body
 #include "knet.h"                // knet_thread — the "/knet" task's body
+#include "kusb.h"                // kusb_thread — the "/kusb" task's body
+#include "audio/audio.h"         // kaudio_thread — the "/kaudio" task's body
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
 #include "tty.h"   // per-tty foreground (task_wait) + the task-departure hook (shell gone, or the foreground job)
@@ -200,6 +202,44 @@ bool task_signal_and_nudge(task_t* task, signals signal)
 	}
 	spinlock_release_irqrestore(&task->signalLock, f);
 	return true;
+}
+
+// Offer `code` as the task's exit code. An offer made after a thread has
+// claimed the teardown (`tearingDown`) is refused, so the code the parent
+// collects is the last one offered before the claim.
+//
+// The deaths that come after the claim are the task's own doing. Teardown
+// marks every sibling with SIGKILL, and each one dies at its next boundary
+// through the same ladder a real kill takes, which would stamp 137 over
+// the code main returned; a sibling that faults or calls exit in that
+// stretch would stamp its own. All of them are consequences of an exit
+// that has already been decided.
+//
+// The claim (task_claim_teardown) and the offer take signalLock, so no
+// offer that read "unclaimed" can store after the claim. The claim comes
+// BEFORE the siblings are marked, so a thread dying of the mark is always
+// refused. Threads that each offer before any has claimed are a real race
+// between deaths, and whichever code stands is a true answer.
+void task_offer_exit_code(task_t* task, uint64_t code)
+{
+	if (task == NULL)
+		return;
+	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
+	if (!task->tearingDown)
+		task->retVal = code;
+	spinlock_release_irqrestore(&task->signalLock, f);
+}
+
+// Claim the task's teardown: true for the one thread that gets it. Under
+// signalLock so that the exit code is settled at the same instant
+// (task_offer_exit_code).
+static bool task_claim_teardown(task_t* task)
+{
+	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
+	bool won = !task->tearingDown;
+	task->tearingDown = true;
+	spinlock_release_irqrestore(&task->signalLock, f);
+	return won;
 }
 
 // Bring down every thread of a dying task EXCEPT the one doing the dying.
@@ -1320,9 +1360,9 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	thread_t *thread = cls ? cls->currentThread : NULL;
 	task_t *task = cls ? cls->task : NULL;
 
-	// task->retVal was already written by task_exit_with_retval (asm) before
-	// any C code ran or any stack switch occurred.  We just propagate it to
-	// thread->retVal here.
+	// Any exit code was offered before this call (task_offer_exit_code); a
+	// road that offers none leaves the task's zero.  We just propagate
+	// task->retVal to thread->retVal here.
 	//
 	// `exiting`, NOT `exited` — and this ordering is the whole fix (2026-08-09,
 	// Chris ran it to ground). `exited` is what the scheduler's take-off-CPU
@@ -1364,7 +1404,7 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	// gets corrupted. A thread that finds its task already dead has exactly
 	// one job left: mark itself and get off the CPU.
 	//
-	// AN ATOMIC CLAIM, NOT A READ OF `exited` (Codex #29 rd10). The danger
+	// A CLAIM, NOT A READ OF `exited` (Codex #29 rd10). The danger
 	// above was understood from the day this guard was written; what was
 	// missed is that `exited` is not published until AFTER handle_close_all(),
 	// and task_exit's own comment describes that stretch as one that "may
@@ -1376,12 +1416,12 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	// enqueued twice self-links (`child->deadChildNext = child`) and the
 	// undertaker's walk never terminates.
 	//
-	// One exchange decides the owner before any of that can happen. Everyone
+	// One claim, made under signalLock (task_claim_teardown), decides the
+	// owner before any of that can happen, and settles the exit code with it. Everyone
 	// else takes the same road they always did — mark yourself, get off the
 	// CPU — which is exactly what a post-`exited` arrival did before, so the
 	// losing path is not new code, just correctly reached now.
-	if (task != NULL &&
-	    __atomic_exchange_n(&task->tearingDown, true, __ATOMIC_ACQ_REL))
+	if (task != NULL && !task_claim_teardown(task))
 	{
 		printd(DEBUG_TASK | DEBUG_THREAD,
 		       "task_exit: thread 0x%08lx arrived while/after %s was being torn down — retiring the thread only\n",
@@ -1829,6 +1869,18 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// strangers to sleep). GS is per-core; read it where you stand.
 		signal_raise(SIGSLEEP, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, waiter);
 	}
+}
+
+// Contract in task.h. Bounded by `cap` as well as by ktask, so a parent
+// chain that ever looped could not hold the lock forever.
+uint32_t task_lineage(task_t* task, uint64_t* out, uint32_t cap)
+{
+	uint32_t n = 0;
+	uint64_t flags = spinlock_acquire_irqsave(&kDeadChildLock);
+	for (task_t *t = task; t != NULL && t != kKernelTask && n < cap; t = t->parentTask)
+		out[n++] = t->taskID;
+	spinlock_release_irqrestore(&kDeadChildLock, flags);
+	return n;
 }
 
 // The non-blocking half of task_wait (contract in task.h). Deliberately shares
@@ -2548,6 +2600,8 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 	bool isGKeysTask   = (path != NULL && strncmp(path, "/gkeys", 6) == 0);
 	bool isLateTestTask = (path != NULL && strncmp(path, "/latetests", 10) == 0);
 	bool isKnetTask    = (path != NULL && strncmp(path, "/knet", 5) == 0);
+	bool isKusbTask    = (path != NULL && strncmp(path, "/kusb", 5) == 0);
+	bool isKaudioTask  = (path != NULL && strncmp(path, "/kaudio", 7) == 0);
 
 	// ONE ANSWER TO "IS THIS THE KERNEL'S OWN CODE?", because the question is
 	// asked in more than one place and the copies drifted. The list used to be
@@ -2583,7 +2637,8 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 	bool isKernelBuiltinTask = isKernelTask &&
 	                          (isIdleTask || isLogdTask || isKWorkerTask ||
 	                           isGuiCompTask || isGBounceTask || isGKeysTask ||
-	                           isLateTestTask || isKnetTask);
+	                           isLateTestTask || isKnetTask || isKusbTask ||
+	                           isKaudioTask);
 
 	// Set when we actually load an ELF image below, so we know to latch the ELF
 	// entry registers (argc/argv/env) later — AFTER those fields are populated.
@@ -2758,6 +2813,10 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 			newTask->threads->regs.RIP = (uint64_t)&gkeys_thread;
 		else if (isKnetTask)
 			newTask->threads->regs.RIP = (uint64_t)&knet_thread;
+		else if (isKusbTask)
+			newTask->threads->regs.RIP = (uint64_t)&kusb_thread;
+		else if (isKaudioTask)
+			newTask->threads->regs.RIP = (uint64_t)&kaudio_thread;
 		else if (isLateTestTask)
 			newTask->threads->regs.RIP = (uint64_t)&late_tests_thread;
 	}

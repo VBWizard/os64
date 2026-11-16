@@ -2,20 +2,48 @@
 #include <png/png.h>
 #include <math.h>
 
-enum { I_DRAW,I_SMOOTH,I_QUALITY,I_EXPORT,I_WIDTH,I_HEIGHT,I_COMPLETE,I_CORS };
+enum { I_DRAW,I_SMOOTH,I_QUALITY,I_EXPORT,I_WIDTH,I_HEIGHT,I_COMPLETE,I_CORS,I_CURRENT };
 void os64_dom_set_images(os64_dom_t *dom,const os64_dom_image_provider_t *provider)
 {
-    if(dom&&!dom->closed)dom->image_provider=provider?*provider:(os64_dom_image_provider_t){0};
+    if(dom&&!dom->closed&&!dom->departure_finishing&&!dom->departure_finished)dom->image_provider=provider?*provider:(os64_dom_image_provider_t){0};
 }
+typedef struct {
+    os64_dom_t *owner;
+    os64_dom_image_provider_t provider;
+} DImageLoan;
+
 static os64_dom_image_status_t image_acquire(os64_dom_t *dom,const os64_html_node_t *node,
-                                             bool pixels,os64_dom_image_view_t *view)
+                                             bool pixels,os64_dom_image_view_t *view,DImageLoan *loan)
 {
     *view=(os64_dom_image_view_t){0};
-    return dom->image_provider.acquire?dom->image_provider.acquire(dom->image_provider.opaque,node,pixels,view):OS64_DOM_IMAGE_PENDING;
+    *loan=(DImageLoan){0};
+    if(!dom->image_provider.acquire||!d_provider_enter(dom))return OS64_DOM_IMAGE_PENDING;
+    *loan=(DImageLoan){dom,dom->image_provider};
+    return loan->provider.acquire(loan->provider.opaque,node,pixels,view);
 }
-static void image_release(os64_dom_t *dom,os64_dom_image_view_t *view)
+static void image_release(DImageLoan *loan,os64_dom_image_view_t *view)
 {
-    if(dom->image_provider.release)dom->image_provider.release(dom->image_provider.opaque,view);
+    if(!loan->owner)return;
+    /* Departure stops new acquisitions, but this producer still owns the
+     * borrowed pixels/text until its matching release returns. */
+    if(loan->provider.release)loan->provider.release(loan->provider.opaque,view);
+    d_provider_leave(loan->owner);
+    loan->owner=NULL;
+}
+static void image_update(os64_dom_t *dom)
+{
+    if(dom->image_provider.update&&d_provider_enter(dom)) {
+        dom->image_provider.update(dom->image_provider.opaque);
+        d_provider_leave(dom);
+    }
+}
+static double image_density(const os64_dom_image_view_t *view)
+{ return view->density_set?view->density:1; }
+static uint32_t image_dimension(const os64_dom_image_view_t *view,bool height)
+{
+    double d=image_density(view), n=height?view->surface.height:view->surface.width;
+    n=d>0?n/d:UINT32_MAX;
+    return n>UINT32_MAX?UINT32_MAX:n>0?(uint32_t)n:0;
 }
 static bool image_attribute_size(const os64_html_attr_t *attr,uint32_t *out)
 {
@@ -37,38 +65,53 @@ JSValue d_image_dimension(os64_dom_t *dom,JSContext *ctx,const os64_html_node_t 
 {
     /* Texture images created with new Image() need no layout: absent or
      * invalid dimension attributes fall back to the loaded image size. */
+    dom=d_owner(dom,node);
     uint32_t value;
     if(image_attribute_size(os64_html_attr(node,height?"height":"width"),&value))
         return JS_NewUint32(ctx,value);
+    dom=d_owner(dom,node);
+    if(!d_require_active(dom,ctx))return JS_EXCEPTION;
     os64_dom_image_view_t view;
-    os64_dom_image_status_t status=image_acquire(dom,node,false,&view);
-    value=status==OS64_DOM_IMAGE_READY?(height?view.surface.height:view.surface.width):0;
-    image_release(dom,&view);
+    DImageLoan loan;
+    os64_dom_image_status_t status=image_acquire(dom,node,false,&view,&loan);
+    value=status==OS64_DOM_IMAGE_READY?image_dimension(&view,height):0;
+    image_release(&loan,&view);
     return JS_NewUint32(ctx,value);
 }
 void d_image_changed(os64_dom_t *dom,const os64_html_change_t *change)
 {
     if(change->kind!=OS64_HTML_CHANGE_ATTR||change->attr_ns||
-       (os64_strcmp(change->attr_local,"src")&&os64_strcmp(change->attr_local,"crossorigin")))return;
+       (os64_strcmp(change->attr_local,"src")&&os64_strcmp(change->attr_local,"crossorigin")&&
+        os64_strcmp(change->attr_local,"srcset")&&os64_strcmp(change->attr_local,"sizes")))return;
     DValue *e=d_find(dom,change->target);
-    if(e)e->image_reported=false;
+    if(e && !e->image_generation)e->image_reported=false;
 }
 bool os64_dom_image_event(os64_dom_t *dom,const os64_html_node_t **node,bool *failed,bool consume)
 {
-    if(!dom||dom->closed||!dom->options.modern||!dom->image_provider.acquire)return false;
-    for(DValue *e=dom->values;e;e=e->next) {
-        if(e->image_reported||!e->node||e->node->ns!=OS64_HTML_NS_HTML||e->node->tag!=OS64_HTML_TAG_IMG)continue;
-        const os64_html_attr_t *src=os64_html_attr(e->node,"src");
-        if(!src||!src->value[0])continue;
+    if(!d_delivery_active(dom)||!dom->options.modern||!dom->image_provider.acquire)return false;
+    image_update(dom);
+    if(!d_delivery_active(dom))return false;
+    size_t members=dom->cluster?dom->cluster->count:1;
+    for(size_t i=0;i<members;++i)
+    for(DValue *e=(dom->cluster?dom->cluster->members[i]:dom)->values;e;e=e->next) {
+        if(e->node && d_owner(dom,e->node)!=dom)continue;
+        if(!e->node||e->node->ns!=OS64_HTML_NS_HTML||e->node->tag!=OS64_HTML_TAG_IMG)continue;
         os64_dom_image_view_t view;
-        os64_dom_image_status_t status=image_acquire(dom,e->node,false,&view);
-        image_release(dom,&view);
-        if(status==OS64_DOM_IMAGE_PENDING)continue;
-        if(consume)e->image_reported=true;
+        DImageLoan loan;
+        os64_dom_image_status_t status=image_acquire(dom,e->node,false,&view,&loan);
+        bool skip=view.pending||view.empty||(e->image_reported && e->image_generation==view.generation);
+        uint64_t generation=view.generation;
+        image_release(&loan,&view);
+        if(!d_delivery_active(dom))return false;
+        if(skip||status==OS64_DOM_IMAGE_PENDING)continue;
+        if(consume){e->image_reported=true;e->image_generation=generation;}
         if(node)*node=e->node;
         if(failed)*failed=status!=OS64_DOM_IMAGE_READY;
         return true;
     }
+    // The probes above can discover a detached new Image whose source was
+    // never read by script or layout. Submit it before an idle host sleeps.
+    image_update(dom);
     return false;
 }
 static JSValue image_member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
@@ -90,13 +133,23 @@ static JSValue image_member(JSContext *ctx,JSValueConst self,int argc,JSValueCon
         const os64_html_attr_t *cors=os64_html_attr(node,"crossorigin");
         return !cors?JS_NULL:JS_NewString(ctx,os64_streq_nocase(cors->value,"use-credentials")?"use-credentials":"anonymous");
     }
+    dom=d_owner(dom,node);
+    if(!d_require_active(dom,ctx))return JS_EXCEPTION;
     os64_dom_image_view_t view;
-    os64_dom_image_status_t status=image_acquire(dom,node,false,&view);
-    uint32_t value=status==OS64_DOM_IMAGE_READY?(magic==I_WIDTH?view.surface.width:view.surface.height):0;
-    image_release(dom,&view);
+    DImageLoan loan;
+    os64_dom_image_status_t status=image_acquire(dom,node,false,&view,&loan);
+    if(magic==I_CURRENT) {
+        JSValue result=JS_NewString(ctx,view.current_src?view.current_src:"");
+        image_release(&loan,&view);return result;
+    }
+    uint32_t value=status==OS64_DOM_IMAGE_READY?image_dimension(&view,magic==I_HEIGHT):0;
+    bool pending=view.pending,empty=view.empty;
+    image_release(&loan,&view);
     if(magic==I_COMPLETE) {
         const os64_html_attr_t *src=os64_html_attr(node,"src");
-        return JS_NewBool(ctx,!src||!src->value[0]||status==OS64_DOM_IMAGE_READY||status==OS64_DOM_IMAGE_BROKEN);
+        const os64_html_attr_t *set=os64_html_attr(node,"srcset");
+        return JS_NewBool(ctx,empty||(!pending && (status==OS64_DOM_IMAGE_READY||status==OS64_DOM_IMAGE_BROKEN||
+            ((!src||!src->value[0])&&(!set||!set->value[0])))));
     }
     return JS_NewUint32(ctx,value);
 }
@@ -113,9 +166,9 @@ static JSValue exported(JSContext *ctx,JSValueConst self,int argc,JSValueConst *
     }
     DValue *e=d_find(dom,node);
     if(d_canvas_prepare(e)!=CANVAS_OK)return JS_NewString(ctx,"data:,");
-    if(!canvas_origin_clean(e->canvas))return d_error(ctx,"SecurityError","Canvas contains an image from another origin");
+    if(!canvas_origin_clean(d_more_peek(e)->canvas))return d_error(ctx,"SecurityError","Canvas contains an image from another origin");
     canvas_bitmap_t bitmap;
-    if(canvas_bitmap(e->canvas,&bitmap)!=CANVAS_OK||!bitmap.width||!bitmap.height)return JS_NewString(ctx,"data:,");
+    if(canvas_bitmap(d_more_peek(e)->canvas,&bitmap)!=CANVAS_OK||!bitmap.width||!bitmap.height)return JS_NewString(ctx,"data:,");
     size_t png_size;
     if(os64_png_encode_size(bitmap.width,bitmap.height,&png_size)!=OS64_PNG_OK)return JS_NewString(ctx,"data:,");
     const char prefix[]="data:image/png;base64,";
@@ -148,7 +201,8 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
 {
     os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||e->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    dom = e->dom;
     bool set=magic&D_SET;magic&=~D_SET;
     if(magic==I_SMOOTH||magic==I_QUALITY) {
         bool enabled=false;unsigned quality=0;bool valid=true;
@@ -164,8 +218,8 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
             }
         }
         d_canvas_sync(e);canvas_state_t state={.image_smoothing=true};
-        if(e->canvas)canvas_state(e->canvas,&state);
-        if(set)return !valid||!e->canvas?JS_UNDEFINED:d_canvas_result(ctx,canvas_set_smoothing(e->canvas,
+        if(d_more_peek(e)->canvas)canvas_state(d_more_peek(e)->canvas,&state);
+        if(set)return !valid||!d_more_peek(e)->canvas?JS_UNDEFINED:d_canvas_result(ctx,canvas_set_smoothing(d_more_peek(e)->canvas,
             magic==I_SMOOTH?enabled:state.image_smoothing,magic==I_QUALITY?quality:state.image_quality));
         return magic==I_SMOOTH?JS_NewBool(ctx,state.image_smoothing):
             JS_NewString(ctx,state.image_quality==2?"high":state.image_quality==1?"medium":"low");
@@ -178,29 +232,33 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     unsigned count=argc>=9?8:argc>=5?4:2;double v[8];
     for(unsigned i=0;i<count;++i)if(JS_ToFloat64(ctx,&v[i],argv[i+1])<0)return JS_EXCEPTION;
     for(unsigned i=0;i<count;++i)if(!isfinite(v[i]))return JS_UNDEFINED;
-    os64_dom_image_view_t image={0};bool borrowed=false;
+    os64_dom_t *source_owner=d_owner(dom,source_node);
+    os64_dom_image_view_t image={0};DImageLoan loan={0};
     if(source_node->tag==OS64_HTML_TAG_CANVAS) {
         DValue *source=d_find(dom,source_node);
         if(d_canvas_prepare(source)!=CANVAS_OK)return d_error(ctx,"InvalidStateError","Canvas source is unavailable");
         canvas_bitmap_t bitmap;
-        if(canvas_bitmap(source->canvas,&bitmap)!=CANVAS_OK||!bitmap.width||!bitmap.height)
+        if(canvas_bitmap(d_more_peek(source)->canvas,&bitmap)!=CANVAS_OK||!bitmap.width||!bitmap.height)
             return d_error(ctx,"InvalidStateError","Canvas source has no pixels");
         image.surface=(draw2d_surface_t){(void *)bitmap.pixels,bitmap.width,bitmap.height,bitmap.stride,bitmap.capacity,DRAW2D_ARGB8_PREMULTIPLIED};
-        image.origin_clean=canvas_origin_clean(source->canvas);
+        image.origin_clean=canvas_origin_clean(d_more_peek(source)->canvas);
     } else {
-        os64_dom_image_status_t status=image_acquire(dom,source_node,true,&image);borrowed=true;
+        if(!d_require_active(source_owner,ctx))return JS_EXCEPTION;
+        os64_dom_image_status_t status=image_acquire(source_owner,source_node,true,&image,&loan);
         if(status!=OS64_DOM_IMAGE_READY) {
-            image_release(dom,&image);
+            image_release(&loan,&image);
             return status==OS64_DOM_IMAGE_PENDING?JS_UNDEFINED:
                 d_error(ctx,status==OS64_DOM_IMAGE_REFUSED?"QuotaExceededError":"InvalidStateError","Image source is unavailable");
         }
     }
-    double sx=0,sy=0,sw=image.surface.width,sh=image.surface.height,dx=v[0],dy=v[1],dw=sw,dh=sh;
+    double density=image_density(&image);
+    double sx=0,sy=0,sw=image.surface.width,sh=image.surface.height,dx=v[0],dy=v[1],
+        dw=density>0?sw/density:UINT32_MAX,dh=density>0?sh/density:UINT32_MAX;
     if(count==4){dw=v[2];dh=v[3];}
-    if(count==8){sx=v[0];sy=v[1];sw=v[2];sh=v[3];dx=v[4];dy=v[5];dw=v[6];dh=v[7];}
+    if(count==8){sx=v[0]*density;sy=v[1]*density;sw=v[2]*density;sh=v[3]*density;dx=v[4];dy=v[5];dw=v[6];dh=v[7];}
     d_canvas_sync(e);
-    canvas_status_t status=e->canvas?canvas_draw_image(e->canvas,&image.surface,image.origin_clean,sx,sy,sw,sh,dx,dy,dw,dh):CANVAS_OK;
-    if(borrowed)image_release(dom,&image);
+    canvas_status_t status=d_more_peek(e)->canvas?canvas_draw_image(d_more_peek(e)->canvas,&image.surface,image.origin_clean,sx,sy,sw,sh,dx,dy,dw,dh):CANVAS_OK;
+    image_release(&loan,&image);
     return d_canvas_result(ctx,status);
 }
 int d_canvas_images_install(os64_dom_t *dom,JSContext *ctx,JSValueConst prototype)
@@ -213,5 +271,6 @@ int d_canvas_images_install(os64_dom_t *dom,JSContext *ctx,JSValueConst prototyp
     return d_accessor(dom,ctx,image,"naturalWidth",image_member,I_WIDTH,false)<0||
         d_accessor(dom,ctx,image,"naturalHeight",image_member,I_HEIGHT,false)<0||
         d_accessor(dom,ctx,image,"complete",image_member,I_COMPLETE,false)<0||
+        d_accessor(dom,ctx,image,"currentSrc",image_member,I_CURRENT,false)<0||
         d_accessor(dom,ctx,image,"crossOrigin",image_member,I_CORS,true)<0?-1:0;
 }

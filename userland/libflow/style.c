@@ -374,6 +374,13 @@ static const flow_edge_t kPaddingBox = FLOW_EDGE_PADDING, kBorderBox = FLOW_EDGE
 static const flow_backgrounds_t kBackgrounds = {&kNoImage, &kRepeat, &kAtStart, &kAtStart,
                                                 &kOwnSize, &kPaddingBox, &kBorderBox,
                                                 1, 1, 1, 1, 1, 1, 1};
+// One mask layer of nothing — no mask: a background's empty layer but
+// placed in the border box, added, its mode matching its image's.
+static const flow_composite_t kAdd = FLOW_COMPOSITE_ADD;
+static const flow_mask_mode_t kMatchSource = FLOW_MASK_MATCH_SOURCE;
+static const flow_masks_t kMasks = {{&kNoImage, &kRepeat, &kAtStart, &kAtStart, &kOwnSize,
+                                     &kBorderBox, &kBorderBox, 1, 1, 1, 1, 1, 1, 1},
+                                    &kAdd, &kMatchSource, 1, 1};
 
 static flow_style_t initial(const Ctx *c)
 {
@@ -388,6 +395,7 @@ static flow_style_t initial(const Ctx *c)
     s.fill = s.color;
     s.current_colours = FLOW_CURRENT_FILL;
     s.backgrounds = kBackgrounds;
+    s.masks = kMasks;
     s.opacity = 1000;
     s.flex_shrink = 1000;
     s.align_self = FLOW_PLACE_AUTO;
@@ -860,11 +868,19 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         break;
 
     // §15.3.10 Form controls: laid out as boxes the face's widgets fill.
-    // The chapter's `text-align` for controls and `white-space` for a
-    // textarea place the text INSIDE the widget, which the face draws.
+    // The chapter's `text-align` for an input and `white-space` for a
+    // textarea place the text INSIDE the widget, which the face draws. A
+    // button's centring is declared, because a button the page draws is
+    // laid out (f_button_faced) and its content centred the chapter's way;
+    // the face's own button centres its caption either way.
+    // An audio's controls are one too (f_audio_controls); without them it
+    // makes no box at all (f_boxless), whatever its display.
     case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_SELECT:
     case OS64_HTML_TAG_TEXTAREA: case OS64_HTML_TAG_METER: case OS64_HTML_TAG_PROGRESS:
+    case OS64_HTML_TAG_AUDIO:
         s->display = FLOW_DISPLAY_INLINE_BLOCK;
+        if (n->tag == OS64_HTML_TAG_BUTTON)
+            s->text_align = FLOW_ALIGN_CENTER;
         break;
     // §15.5.13: a marquee that does not move (booked) is the box it moves in.
     case OS64_HTML_TAG_MARQUEE:
@@ -1320,6 +1336,20 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
             s->vertical_align = FLOW_VALIGN_HTML_MIDDLE;
         map_dimension(c, n, "width", false, &sp->width);
         map_dimension(c, n, "height", false, &sp->height);
+    }
+    // A video's are dimension properties too, though it takes no align, and
+    // together they map to `aspect-ratio: auto w / h`, the ratio a page's
+    // `height: auto` keeps since no picture ever gives it one. Only where
+    // the video is a box (flow_env_t.media): elsewhere it is its fallback.
+    if (is(n, OS64_HTML_TAG_VIDEO) && c->env->media) {
+        map_dimension(c, n, "width", false, &sp->width);
+        map_dimension(c, n, "height", false, &sp->height);
+        int32_t w, h;
+        if (f_parse_dimension(attr(n, "width"), false, &w) == F_DIM_PX &&
+            f_parse_dimension(attr(n, "height"), false, &h) == F_DIM_PX && w > 0 && h > 0) {
+            s->aspect_ratio = (double)w / h;
+            s->aspect_natural = true;
+        }
     }
     if (is(n, OS64_HTML_TAG_EMBED) || is(n, OS64_HTML_TAG_IMG) || is(n, OS64_HTML_TAG_OBJECT) ||
         (is(n, OS64_HTML_TAG_INPUT) && attr_is(n, "type", "image"))) {
@@ -2087,6 +2117,11 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         break;
     case GARB_MIX_BLEND_MODE: d->mix_blend = s->mix_blend; break;
     case GARB_ISOLATION: d->isolate = s->isolate; break;
+    case GARB_MASK_IMAGE: case GARB_MASK_REPEAT: case GARB_MASK_POSITION_X:
+    case GARB_MASK_POSITION_Y: case GARB_MASK_SIZE: case GARB_MASK_ORIGIN: case GARB_MASK_CLIP:
+    case GARB_MASK_COMPOSITE: case GARB_MASK_MODE:
+        f_take_mask(prop, d, s);
+        break;
     case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
     case GARB_TRANSFORM:
         d->transform = s->transform;
@@ -2433,6 +2468,23 @@ static int32_t angle_thousandths(double deg)
     return (int32_t)(t >= 360000 ? t - 360000 : t);
 }
 
+// A stop's position as flow keeps it (flow_gradient_stop_t): a
+// length-percentage; round a conic gradient, an angle as degrees in PX, or
+// a percentage of the turn. AUTO for what will not read.
+static flow_length_t stop_at(const Author *a, const garb_val_t *v, flow_gradient_kind_t kind)
+{
+    static const flow_length_t kUnwritten = {FLOW_LENGTH_AUTO, 0, 0};
+    if (kind != FLOW_GRADIENT_CONIC || v->kind != GARB_V_ANGLE)
+        return author_lp(a, v, kUnwritten);
+    double deg = v->unit == GARB_U_TURN ? v->number * 360
+               : v->unit == GARB_U_GRAD ? v->number * 0.9
+               : v->unit == GARB_U_RAD  ? v->number * (180 / 3.14159265358979323846)
+                                        : v->number;
+    // Held to a million degrees either way, so its 64ths fit an int32_t.
+    double held = deg > 1e6 ? 1e6 : deg < -1e6 ? -1e6 : deg;
+    return (flow_length_t){FLOW_LENGTH_PX, (int32_t)(held * 64 + (held < 0 ? -0.5 : 0.5)), 0};
+}
+
 // libgarb's gradient (values.h's GARB_V_IMAGE: its geometry, then its
 // stops) as flow's, out of the lists' budget (list_alloc) — past it, *out
 // is left as it was; a currentColor stop is marked `current`, for the box
@@ -2453,7 +2505,8 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
     os64_memset(g, 0, sizeof(*g));
     const char *name = v->text;             // one of libgarb's own names
     g->repeating = name != NULL && (os64_streq(name, "repeating-linear-gradient") ||
-                                    os64_streq(name, "repeating-radial-gradient"));
+                                    os64_streq(name, "repeating-radial-gradient") ||
+                                    os64_streq(name, "repeating-conic-gradient"));
     const garb_val_t *geo = &v->items[0];
     if (geo->kind == GARB_V_NUMBER) {
         g->kind = FLOW_GRADIENT_LINEAR;
@@ -2472,6 +2525,11 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
                 g->to_x = kTo[k].x;
                 g->to_y = kTo[k].y;
             }
+    } else if (is_word(geo, "conic") && geo->nitems == 3) {
+        g->kind = FLOW_GRADIENT_CONIC;
+        g->angle = angle_thousandths(geo->items[0].number);
+        g->centre[0] = author_lp(a, &geo->items[1], kHalf);
+        g->centre[1] = author_lp(a, &geo->items[2], kHalf);
     } else {
         g->kind = FLOW_GRADIENT_RADIAL;
         g->circle = is_word(geo, "circle");
@@ -2501,13 +2559,13 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
         o->at = kUnwritten;
         if (st->kind != GARB_V_COLOR) {
             o->hint = true;
-            o->at = author_lp(a, st, kUnwritten);
+            o->at = stop_at(a, st, g->kind);
             continue;
         }
         o->current = st->color.current;
         o->colour = st->color.current ? s->color : colour_of(st->color);
         if (st->nitems > 0)
-            o->at = author_lp(a, &st->items[0], kUnwritten);
+            o->at = stop_at(a, &st->items[0], g->kind);
     }
     g->stops = stops;
     g->nstops = n;
@@ -2960,11 +3018,12 @@ static bool author_individual(const Author *a, flow_style_t *s, garb_prop_t p,
     return true;
 }
 
-// A background property's list, one entry per layer libgarb read (a
-// LAYERS value, or one value for one layer); an entry flow cannot read is
-// the property's initial value. A url() is fetched by the face, a
-// gradient libgarb kept is drawn (values.h); a conic gradient or an
-// image-set is no picture yet (PILE3.md § Booked). Past the lists' budget
+// A background or mask property's list, one entry per layer libgarb read
+// (a LAYERS value, or one value for one layer); an entry flow cannot read
+// is the property's initial value. A url() is fetched by the face, a
+// gradient libgarb kept is drawn (values.h); an image-set, or a conic
+// gradient taken by name, is no picture yet (PILE3.md § Booked, DEBTS.md).
+// Past the lists' budget
 // (list_alloc), the property's list is left as it was.
 static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const garb_val_t *v)
 {
@@ -2972,7 +3031,16 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
     int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1;
     if (n <= 0)
         return true;
-    flow_backgrounds_t *b = &s->backgrounds;
+    // A mask's placing longhand is read as its background twin is, into
+    // the mask's lists; its origin starts at the border box.
+    static const garb_prop_t kTwin[] = {
+        GARB_BACKGROUND_IMAGE, GARB_BACKGROUND_REPEAT, GARB_BACKGROUND_POSITION_X,
+        GARB_BACKGROUND_POSITION_Y, GARB_BACKGROUND_SIZE, GARB_BACKGROUND_ORIGIN,
+        GARB_BACKGROUND_CLIP};
+    bool mask = p >= GARB_MASK_IMAGE && p <= GARB_MASK_CLIP;
+    flow_backgrounds_t *b = mask ? &s->masks.layers : &s->backgrounds;
+    if (mask)
+        p = kTwin[p - GARB_MASK_IMAGE];
     Len l, two[2];
     int32_t w;
     bool spent;                             // past the lists' budget: the list as it was
@@ -3044,14 +3112,17 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
         return true;
     }
     case GARB_BACKGROUND_ORIGIN: case GARB_BACKGROUND_CLIP: {
-        static const char *const edges[] = {"border-box", "padding-box", "content-box", "text"};
+        // flow_edge_t's order; libgarb gives `text` to a background's clip
+        // alone and `no-clip` to a mask's.
+        static const char *const edges[] = {"border-box", "padding-box", "content-box", "text",
+                                            "no-clip"};
         bool origin = p == GARB_BACKGROUND_ORIGIN;
         flow_edge_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
         if (list == NULL)
             return spent;
         for (int32_t k = 0; k < n; k++)
             list[k] = (w = pick(&items[k], edges, F_ARRAY(edges))) >= 0 ? (flow_edge_t)w
-                      : origin ? kPaddingBox : kBorderBox;
+                      : origin && !mask ? kPaddingBox : kBorderBox;
         *(origin ? &b->origin : &b->clip) = list;
         *(origin ? &b->norigin : &b->nclip) = n;
         return true;
@@ -3061,49 +3132,40 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
     }
 }
 
-// An easing, as libgarb read it (values.h); false for none it read.
-static bool easing_of(const garb_val_t *v, flow_easing_t *out)
+// `mask-composite` or `mask-mode`'s list (Masking 1 § 7.8, § 7.2), one entry
+// per layer, in flow_composite_t's or flow_mask_mode_t's order; an entry
+// flow cannot read is the initial value. Past the lists' budget, the list
+// is left as it was.
+static bool author_mask_words(const Author *a, flow_style_t *s, garb_prop_t p,
+                              const garb_val_t *v)
 {
-    // Easing 1 § 2.2's keywords as their curves, § 2.3's as their steps.
-    static const struct { const char *word; flow_easing_t e; } kWords[] = {
-        {"linear", {FLOW_EASE_LINEAR, {0, 0, 0, 0}, 0, FLOW_JUMP_END, false}},
-        {"ease", {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, FLOW_JUMP_END, true}},
-        {"ease-in", {FLOW_EASE_CUBIC, {0.42, 0, 1, 1}, 0, FLOW_JUMP_END, true}},
-        {"ease-out", {FLOW_EASE_CUBIC, {0, 0, 0.58, 1}, 0, FLOW_JUMP_END, true}},
-        {"ease-in-out", {FLOW_EASE_CUBIC, {0.42, 0, 0.58, 1}, 0, FLOW_JUMP_END, true}},
-        {"step-start", {FLOW_EASE_STEPS, {0, 0, 0, 0}, 1, FLOW_JUMP_START, false}},
-        {"step-end", {FLOW_EASE_STEPS, {0, 0, 0, 0}, 1, FLOW_JUMP_END, false}},
-    };
-    if (v->kind == GARB_V_KEYWORD) {
-        for (int32_t k = 0; k < F_ARRAY(kWords); k++)
-            if (os64_streq(v->keyword, kWords[k].word)) {
-                *out = kWords[k].e;
-                return true;
-            }
-        return false;
-    }
-    if (v->kind != GARB_V_FUNCTION)
-        return false;
-    os64_memset(out, 0, sizeof(*out));
-    if (os64_streq(v->keyword, "cubic-bezier") && v->nitems == 4) {
-        out->kind = FLOW_EASE_CUBIC;
-        for (int k = 0; k < 4; k++)
-            out->p[k] = v->items[k].number;
+    static const char *const composites[] = {"add", "subtract", "intersect", "exclude"};
+    static const char *const modes[] = {"alpha", "luminance", "match-source"};
+    const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
+    int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1, w;
+    bool spent;
+    if (n <= 0)
+        return true;
+    if (p == GARB_MASK_COMPOSITE) {
+        flow_composite_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = (w = pick(&items[k], composites, F_ARRAY(composites))) >= 0
+                          ? (flow_composite_t)w : kAdd;
+        s->masks.composite = list;
+        s->masks.ncomposite = n;
         return true;
     }
-    if (os64_streq(v->keyword, "steps") && v->nitems >= 1) {
-        static const char *const kJumps[] = {"jump-end", "jump-start", "jump-none", "jump-both"};
-        out->kind = FLOW_EASE_STEPS;
-        out->steps = v->items[0].number < INT32_MAX ? (int32_t)v->items[0].number : INT32_MAX;
-        out->jump = FLOW_JUMP_END;
-        if (v->nitems == 2) {
-            int32_t w = pick(&v->items[1], kJumps, F_ARRAY(kJumps));
-            out->jump = w >= 0 ? (flow_jump_t)w
-                      : is_word(&v->items[1], "start") ? FLOW_JUMP_START : FLOW_JUMP_END;
-        }
-        return true;
-    }
-    return false;
+    flow_mask_mode_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+    if (list == NULL)
+        return spent;
+    for (int32_t k = 0; k < n; k++)
+        list[k] = (w = pick(&items[k], modes, F_ARRAY(modes))) >= 0 ? (flow_mask_mode_t)w
+                                                                   : kMatchSource;
+    s->masks.mode = list;
+    s->masks.nmode = n;
+    return true;
 }
 
 // A time, in milliseconds (libgarb held it to the domain, values.h).
@@ -3124,9 +3186,9 @@ static bool author_animations(const Author *a, flow_style_t *s, garb_prop_t p, c
     flow_animations_t *an = &s->animations;
     bool spent;
     size_t each = p == GARB_ANIMATION_NAME ? sizeof(flow_name_t)
-                : p == GARB_ANIMATION_TIMING_FUNCTION ? sizeof(flow_easing_t)
-                : p == GARB_ANIMATION_DIRECTION ? sizeof(flow_direction_t)
-                : p == GARB_ANIMATION_FILL_MODE ? sizeof(flow_fill_t)
+                : p == GARB_ANIMATION_TIMING_FUNCTION ? sizeof(garb_easing_t)
+                : p == GARB_ANIMATION_DIRECTION ? sizeof(garb_direction_t)
+                : p == GARB_ANIMATION_FILL_MODE ? sizeof(garb_fill_t)
                 : p == GARB_ANIMATION_PLAY_STATE ? sizeof(bool) : sizeof(double);
     void *list = n > 0 ? list_alloc(a->c, (size_t)n * each, &spent) : NULL;
     if (list == NULL)
@@ -3144,9 +3206,9 @@ static bool author_animations(const Author *a, flow_style_t *s, garb_prop_t p, c
             ((double *)list)[k] = ms_of(one);
             break;
         case GARB_ANIMATION_TIMING_FUNCTION:
-            if (!easing_of(one, &((flow_easing_t *)list)[k]))
-                (void)easing_of(&(garb_val_t){.kind = GARB_V_KEYWORD, .keyword = "ease"},
-                                &((flow_easing_t *)list)[k]);
+            if (!garb_easing_of(one, &((garb_easing_t *)list)[k]))
+                (void)garb_easing_of(&(garb_val_t){.kind = GARB_V_KEYWORD, .keyword = "ease"},
+                                &((garb_easing_t *)list)[k]);
             break;
         case GARB_ANIMATION_ITERATION_COUNT:
             ((double *)list)[k] = is_word(one, "infinite") ? INFINITY
@@ -3155,14 +3217,14 @@ static bool author_animations(const Author *a, flow_style_t *s, garb_prop_t p, c
         case GARB_ANIMATION_DIRECTION: {
             static const char *const words[] = {"normal", "reverse", "alternate",
                                                 "alternate-reverse"};
-            ((flow_direction_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
-                                                ? (flow_direction_t)w : FLOW_DIRECTION_NORMAL;
+            ((garb_direction_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
+                                                ? (garb_direction_t)w : GARB_DIRECTION_NORMAL;
             break;
         }
         case GARB_ANIMATION_FILL_MODE: {
             static const char *const words[] = {"none", "forwards", "backwards", "both"};
-            ((flow_fill_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
-                                           ? (flow_fill_t)w : FLOW_FILL_NONE;
+            ((garb_fill_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
+                                           ? (garb_fill_t)w : GARB_FILL_NONE;
             break;
         }
         case GARB_ANIMATION_PLAY_STATE:
@@ -3259,7 +3321,13 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     case GARB_BACKGROUND_IMAGE: case GARB_BACKGROUND_REPEAT: case GARB_BACKGROUND_POSITION_X:
     case GARB_BACKGROUND_POSITION_Y: case GARB_BACKGROUND_SIZE: case GARB_BACKGROUND_ORIGIN:
     case GARB_BACKGROUND_CLIP:
+    case GARB_MASK_IMAGE: case GARB_MASK_REPEAT: case GARB_MASK_POSITION_X:
+    case GARB_MASK_POSITION_Y: case GARB_MASK_SIZE: case GARB_MASK_ORIGIN: case GARB_MASK_CLIP:
         if (!author_layers(a, s, p, v))
+            return false;
+        break;
+    case GARB_MASK_COMPOSITE: case GARB_MASK_MODE:
+        if (!author_mask_words(a, s, p, v))
             return false;
         break;
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
@@ -3809,6 +3877,7 @@ static bool lay_sets(Ctx *c, Spec *sp, const Spec *ua, const flow_style_t *paren
 }
 
 static void medium_widths(Ctx *c, Spec *sp, garb_style_t st);
+static bool author_draws_box(garb_style_t st);
 
 static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
                    const flow_style_t *parent)
@@ -3821,7 +3890,24 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     if (!lay_sets(c, sp, ua, parent, st.sets, st.sheet, -1, st.n, NULL))
         return false;
     medium_widths(c, sp, st);
+    sp->s.author_box = author_draws_box(st);
     return true;
+}
+
+// Whether the author's winners give what a box is drawn with a value of
+// their own: its background's colour or image, a border's style, width or
+// colour, a corner's radius (flow_style_t.author_box). A `revert` does
+// not: it hands the property back to the user agent, whose button it is.
+static bool author_draws_box(garb_style_t st)
+{
+    if (author_declares(st, GARB_BACKGROUND_COLOR) || author_declares(st, GARB_BACKGROUND_IMAGE))
+        return true;
+    for (int i = 0; i < 4; i++)
+        if (author_declares(st, GARB_BORDER_TOP_WIDTH + i) || author_declares(st, GARB_BORDER_TOP_STYLE + i) ||
+            author_declares(st, GARB_BORDER_TOP_COLOR + i) ||
+            author_declares(st, GARB_BORDER_TOP_LEFT_RADIUS + i))
+            return true;
+    return false;
 }
 
 // A border style the author drew with no width from any origin has the
@@ -4073,24 +4159,24 @@ static flow_unit_t own_outline_width(const Ctx *c, const Spec *sp, garb_style_t 
 // is itself and not the same curve written as cubic-bezier(), and steps
 // are their count and where they jump however written (Chrome's answer,
 // as libgarb groups the blocks).
-static bool easing_same(const flow_easing_t *a, const flow_easing_t *b)
+static bool easing_same(const garb_easing_t *a, const garb_easing_t *b)
 {
     if (a->kind != b->kind)
         return false;
-    if (a->kind == FLOW_EASE_CUBIC)
+    if (a->kind == GARB_EASE_CUBIC)
         return a->named == b->named && a->p[0] == b->p[0] && a->p[1] == b->p[1] && a->p[2] == b->p[2] &&
                a->p[3] == b->p[3];
-    if (a->kind == FLOW_EASE_STEPS)
+    if (a->kind == GARB_EASE_STEPS)
         return a->steps == b->steps && a->jump == b->jump;
     return true;
 }
 
 // Whether keyframe `f` eases as the element's own easing `own` does: it
 // names none (or one libflow cannot read, which is none), or names `own`.
-static bool eases_own(const garb_keyframe_t *f, const flow_easing_t *own)
+static bool eases_own(const garb_keyframe_t *f, const garb_easing_t *own)
 {
-    flow_easing_t e;
-    return f->easing == NULL || !easing_of(f->easing, &e) || easing_same(&e, own);
+    garb_easing_t e;
+    return f->easing == NULL || !garb_easing_of(f->easing, &e) || easing_same(&e, own);
 }
 
 // Keyframes at one offset that ease as the element's own easing — one
@@ -4100,7 +4186,7 @@ static bool eases_own(const garb_keyframe_t *f, const flow_easing_t *own)
 // (garb_keyframe_t.order), at the place of the first. One pass, each
 // longhand found by its number, however many blocks a page repeats. `*kf`
 // is replaced when any are joined; false on no memory.
-static bool join_own_easing(Ctx *c, const garb_keyframe_t **kf, int32_t *nk, const flow_easing_t *own)
+static bool join_own_easing(Ctx *c, const garb_keyframe_t **kf, int32_t *nk, const garb_easing_t *own)
 {
     const garb_keyframe_t *in = *kf;
     int32_t n = *nk, joins = 0;
@@ -4246,10 +4332,32 @@ static const FResolved *keyframe_resolved(void *ctx, int32_t a, int32_t j, const
     return r;
 }
 
+// Whether an animation of `m` sets a size whose layers in `s` name a
+// picture: how big a copy of a picture is kept is worked out after each
+// layout from the size it is drawn at (PICTURE_SIZES.md § The needed
+// size), so a picture's size moves by layouts. A gradient's is drawn at
+// whatever size it has.
+static bool sizes_a_picture(const FMotion *m, const flow_style_t *s)
+{
+    bool bg = false, mask = false;
+    for (int32_t a = 0; a < m->nanims; a++) {
+        bg |= f_props_has(&m->anims[a].props, GARB_BACKGROUND_SIZE);
+        mask |= f_props_has(&m->anims[a].props, GARB_MASK_SIZE);
+    }
+    for (int32_t i = 0; bg && i < flow_background_layers(s); i++)
+        if (flow_background_layer(s, i).image != NULL)
+            return true;
+    for (int32_t i = 0; mask && i < flow_mask_layers(s); i++)
+        if (flow_mask_layer(s, i).layer.image != NULL)
+            return true;
+    return false;
+}
+
 // Whether the element's animations TICK (PILE3.md § Animations in place,
 // What ticks), `s` its style at the layout's time: every property they set
-// is of the tick set, none of their lists was dropped, and its background
-// is not cut to its text; then every keyframe is resolved — once each, as
+// is of the tick set, none of their lists was dropped, its background is
+// not cut to its text, and no size they set is a picture's
+// (sizes_a_picture); then every keyframe is resolved — once each, as
 // the mix resolves it, against the font size and colour the animations
 // leave, which they do not move — and kept for the ticks, none of their
 // lists refused. A child's `inherit` of one of them takes the ticks away
@@ -4265,6 +4373,8 @@ static bool ticks(Ctx *c, FMotion *m, const flow_style_t *s, Mixing *mix)
     for (int32_t i = 0; i < flow_background_layers(s); i++)
         if (flow_background_layer(s, i).clip == FLOW_EDGE_TEXT)
             return true;
+    if (sizes_a_picture(m, s))
+        return true;
     for (int32_t a = 0; a < m->nanims; a++)
         for (int32_t j = 0; j < m->anims[a].nframes; j++) {
             const FResolved *r = keyframe_resolved(mix, a, j, s);
@@ -4322,6 +4432,10 @@ static bool text_reach(FMotion *m, const flow_style_t *s, Mixing *mix)
             continue;
         sets = true;
         double over = f_easing_overshoot(&an->timing.easing);
+        /* A script effect's own easing overshoots the progress itself,
+         * which an interval then carries past its ends as far as its
+         * width is narrow: no span bounds that. */
+        unbounded |= an->script != NULL && f_easing_overshoot(&an->script->timing.easing) > 0;
         double alo[2] = {lo[0], lo[1]}, ahi[2] = {hi[0], hi[1]};
         for (int32_t j = 0; j < an->nframes; j++) {
             if (an->frames[j].has_easing)
@@ -4349,32 +4463,73 @@ static bool text_reach(FMotion *m, const flow_style_t *s, Mixing *mix)
     return true;
 }
 
-// An element's animations at the layout's time: for each name whose
-// @keyframes exist, every keyframe's declarations and the longhands they
+// The page's script effects on `n` (flow_env_t.script_effects): how many,
+// `*out` pointing at them.
+static int32_t script_effects_of(const Ctx *c, const os64_html_node_t *n,
+                                 const garb_effect_t *const **out)
+{
+    *out = NULL;
+    if (c->env->script_effects == NULL)
+        return 0;
+    int32_t k = c->env->script_effects(c->env->ctx, n, out);
+    return k > 0 && *out != NULL ? k : 0;
+}
+
+// `n` among the styles' animated nodes, which the ticks and the parts walk.
+// False on no memory.
+static bool list_animated(FStyles *st, const os64_html_node_t *n)
+{
+    if (st->nanimated == st->cap_animated) {
+        int32_t cap = st->cap_animated > 0 ? st->cap_animated * 2 : 16;
+        const os64_html_node_t **more = os64_realloc(st->animated, (size_t)cap * sizeof(*more));
+        if (more == NULL)
+            return false;
+        st->animated = more;
+        st->cap_animated = cap;
+    }
+    st->animated[st->nanimated++] = n;
+    return true;
+}
+
+// An element's animations at the layout's time — or, `which` naming one,
+// its ::before's or ::after's, read from the pseudo-element's winners and
+// kept on the timeline as the element's (f_timeline_element): unless its
+// display is none, for each name whose @keyframes exist, every keyframe's declarations and the longhands they
 // set but where an `!important` winner holds, and the name's record on the
-// timeline; then the element's style at `now`, each keyframe resolved
+// timeline; after them each of a script's effects on it (an element's:
+// a script aims none at a pseudo-element here), read the same way and on
+// its own clock; then the element's style at `now`, each
+// keyframe resolved
 // where it is mixed (keyframe_resolved), and what its animations make it
 // (flow_style_t.animating). `sp` is the element's Spec before `finish`.
 // With animations, `*out` is the element's FMotion and `sp`'s style is
 // computed; with none, `*out` is NULL and `sp` as it was. A keyframe's
 // url() is read against the sheet its @keyframes rule was written in, as a
 // winner's is against its own. False on no memory.
-static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
+static bool animate(Ctx *c, const os64_html_node_t *n, garb_pseudo_t which, Spec *sp, const Spec *ua,
                     const flow_style_t *parent, bool item, bool root, FMotion **out)
 {
     *out = NULL;
     flow_timeline_t *tl = c->out->timeline;
-    int32_t count = f_animations(&sp->s);
-    if (tl == NULL || c->env->cascade == NULL || count == 0)
+    // CSS animations run on the timeline; a script's effects on clocks of
+    // their own, so they are laid whether the face gave a timeline or not.
+    int32_t count = tl != NULL && c->env->cascade != NULL && sp->s.display != FLOW_DISPLAY_NONE
+                  ? f_animations(&sp->s) : 0;
+    const garb_effect_t *const *fx = NULL;
+    int32_t nfx = which == GARB_PSEUDO_NONE ? script_effects_of(c, n, &fx) : 0;
+    if (count == 0 && nfx == 0)
         return true;
     FProps important;
     os64_memset(&important, 0, sizeof(important));
-    garb_style_t st = garb_style_for(c->env->cascade, n);
+    const garb_style_t none_st = {NULL, NULL, NULL, 0};
+    garb_style_t st = c->env->cascade == NULL       ? none_st
+                    : which == GARB_PSEUDO_NONE     ? garb_style_for(c->env->cascade, n)
+                                                    : garb_style_for_pseudo(c->env->cascade, n, which);
     for (int32_t i = 0; st.important != NULL && i < st.n; i++)
         if (st.important[i])
             f_props_add(&important, st.sets[i].prop);
     FMotion *m = f_arena_alloc(&c->out->arena, sizeof(*m));
-    FAnimation *anims = m != NULL ? f_arena_alloc(&c->out->arena, (size_t)count * sizeof(*anims))
+    FAnimation *anims = m != NULL ? f_arena_alloc(&c->out->arena, (size_t)(count + nfx) * sizeof(*anims))
                                   : NULL;
     if (anims == NULL)
         return false;
@@ -4389,7 +4544,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     for (int side = 0; side < 4; side++)
         m->base.border_width[side] = own_width(c, &base, st, none, side);
     m->base.outline_width = own_outline_width(c, &base, st, none);
-    int32_t *first = f_arena_alloc(&c->out->arena, (size_t)count * sizeof(*first));
+    int32_t *first = f_arena_alloc(&c->out->arena, (size_t)(count + nfx) * sizeof(*first));
     if (first == NULL)
         return false;
     int32_t nframes = 0;
@@ -4411,7 +4566,8 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         for (int32_t j = 0; j < nk; j++) {
             FKeyframe *f = &an->frames[j];
             f->offset = kf[j].offset;
-            f->has_easing = kf[j].easing != NULL && easing_of(kf[j].easing, &f->easing);
+            f->has_easing = kf[j].easing != NULL && garb_easing_of(kf[j].easing, &f->easing);
+            f->composite = GARB_COMPOSITE_REPLACE;
             f->decls = kf[j].sets;
             f->ndecls = kf[j].nsets;
             f->sheet = kf[j].sheet;
@@ -4429,11 +4585,52 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         first[m->nanims++] = nframes;
         nframes += nk;
     }
+    m->ncss = m->nanims;
+    // A script's effects after them, in the order they were made (Web
+    // Animations 1 § 5.4's composite order): each keyframe as a @keyframes
+    // block is, read against the document as the `style` attribute is.
+    for (int32_t i = 0; i < nfx; i++) {
+        const garb_effect_t *x = fx[i];
+        FAnimation *an = &anims[m->nanims];
+        os64_memset(an, 0, sizeof(*an));
+        an->script = x;
+        an->iteration_accumulate = x->iteration_accumulate;
+        an->timing.duration_ms = x->timing.duration_ms;
+        an->timing.delay_ms = x->timing.delay_ms;
+        an->timing.iterations = x->timing.iterations;
+        an->timing.direction = x->timing.direction;
+        an->timing.fill = x->timing.fill;
+        an->timing.paused = x->held;
+        an->frames = x->nframes > 0 ? f_arena_alloc(&c->out->arena, (size_t)x->nframes * sizeof(FKeyframe))
+                                    : NULL;
+        if (x->nframes > 0 && an->frames == NULL)
+            return false;
+        for (int32_t j = 0; j < x->nframes; j++) {
+            FKeyframe *f = &an->frames[j];
+            f->offset = x->frames[j].offset;
+            f->has_easing = x->frames[j].has_easing;
+            f->easing = x->frames[j].easing;
+            f->composite = x->frames[j].composite;
+            f->decls = x->frames[j].sets;
+            f->ndecls = x->frames[j].nsets;
+            f->sheet = -1;
+            for (int32_t k = 0; k < x->frames[j].nsets; k++)
+                if (!f_props_has(&important, x->frames[j].sets[k].prop)) {
+                    f_props_add(&f->sets, x->frames[j].sets[k].prop);
+                    f_props_add(&an->props, x->frames[j].sets[k].prop);
+                    if (takes_parent(&x->frames[j].sets[k]))
+                        f_props_add(&sp->taken, x->frames[j].sets[k].prop);
+                }
+        }
+        an->nframes = x->nframes;
+        first[m->nanims++] = nframes;
+        nframes += x->nframes;
+    }
     if (m->nanims == 0)
         return true;
     m->in_place = f_motion_in_place(m);
     double now = (double)c->env->now_ms;
-    if (!f_timeline_element(tl, n, m, now))
+    if (m->ncss > 0 && !f_timeline_element(tl, n, which, m, now))
         return false;
     flow_style_t s = m->base;
     // A list past the budget leaves its property as it was, named in its
@@ -4517,8 +4714,12 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     const FStyled *old = c->previous ? f_style_of(c->previous, n) : NULL;
     bool untouched = old && !garb_style_updated_since(c->env->cascade, n, c->previous->cascade_updates);
     bool ancestry = !up || up->reuse_safe;
+    // A script's effect on it moves it whatever the cascade did, and so may
+    // one made since the old style was computed, which that style knew
+    // nothing of.
+    const garb_effect_t *const *effects;
     bool copied = untouched && ancestry && !old->motion && !old->style.animations.nname &&
-                  !c->out->lists_refused &&
+                  script_effects_of(c, n, &effects) == 0 && !c->out->lists_refused &&
                   old->list_cost <= c->out->lists_left && n != c->doc->html && !is(n, OS64_HTML_TAG_BODY);
     Spec sp;
     os64_memset(&sp, 0, sizeof(sp));
@@ -4583,13 +4784,14 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         // picture, a frame, a canvas, a form control) computes to `none`,
         // so a canvas's fallback is not shown that way either. A button's
         // `contents` works as any element's there, so it is left alone.
-        if (sp.s.display == FLOW_DISPLAY_CONTENTS && f_replaced(c->env, n) &&
+        if (sp.s.display == FLOW_DISPLAY_CONTENTS && f_replaced(c->env, n, &sp.s) &&
             !is(n, OS64_HTML_TAG_BUTTON))
             sp.s.display = FLOW_DISPLAY_NONE;
-        // `display: none` ends its animations (Animations 1 § 2): the
-        // timeline drops what no layout styles.
-        if (sp.s.display != FLOW_DISPLAY_NONE &&
-            !animate(c, n, &sp, &ua, parent, item, root, &motion))
+        // `display: none` ends its CSS animations (Animations 1 § 2): the
+        // timeline drops what no layout styles. A script's effects go on
+        // (Web Animations 1 applies an effect to its target's computed
+        // style whatever is rendered), so animate lays them alone.
+        if (!animate(c, n, GARB_PSEUDO_NONE, &sp, &ua, parent, item, root, &motion))
             return NULL;
     }
     if (motion == NULL && !copied)
@@ -4601,18 +4803,8 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
                              f_style_equal(&old->style, &out->style));
     out->subtree_steady = out->steady;
     out->reuse_safe = untouched && ancestry && out->steady;
-    if (motion != NULL) {
-        FStyles *st = c->out;
-        if (st->nanimated == st->cap_animated) {
-            int32_t cap = st->cap_animated > 0 ? st->cap_animated * 2 : 16;
-            const os64_html_node_t **more = os64_realloc(st->animated, (size_t)cap * sizeof(*more));
-            if (more == NULL)
-                return NULL;
-            st->animated = more;
-            st->cap_animated = cap;
-        }
-        st->animated[st->nanimated++] = n;
-    }
+    if (motion != NULL && !list_animated(c->out, n))
+        return NULL;
     out->lays_out_items = f_display_flex(sp.s.display) || f_display_grid(sp.s.display) ||
                           (sp.s.display == FLOW_DISPLAY_CONTENTS && up != NULL &&
                            up->lays_out_items);
@@ -4997,6 +5189,13 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
     char *text = content_text(c, el, content, quotes, &len, &failed);
     if (text == NULL)
         return !failed;
+    // Its animations, once it is sure to be made (content the budget cut
+    // makes none, and starts nothing on the timeline), which leave its
+    // style computed; none, and it is finished as an element's is, once its
+    // node is made.
+    FMotion *motion = NULL;
+    if (!animate(c, el, which, &sp, &ua, &of->style, of->lays_out_items, false, &motion))
+        return false;
     os64_html_node_t *node = f_arena_alloc(&c->out->arena, sizeof(*node));
     os64_html_node_t *words = f_arena_alloc(&c->out->arena, sizeof(*words));
     FStyled *out = f_arena_alloc(&c->out->arena, sizeof(*out));
@@ -5014,8 +5213,12 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
     words->text_len = len;
     words->parent = node;
     node->first_child = node->last_child = len > 0 ? words : NULL;
-    finish(c, &sp, &of->style, of->lays_out_items, false);
+    if (motion == NULL)
+        finish(c, &sp, &of->style, of->lays_out_items, false);
+    else if (!list_animated(c->out, node))
+        return false;
     out->style = sp.s;
+    out->motion = motion;
     out->lays_out_items = f_display_flex(sp.s.display) || f_display_grid(sp.s.display);
     out->link = of->link;
     out->lists = of->lists;
@@ -5025,7 +5228,8 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
     out->quotes = quotes;
     out->anchor = f_contains_absolute(&sp.s) ? node : of->anchor;
     out->fixed_anchor = f_contains_fixed(&sp.s) ? node : of->fixed_anchor;
-    out->transparent = sp.s.opacity == 0 || of->transparent;
+    // As an element's: an opacity an animation moves is the painter's.
+    out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) || of->transparent;
     out->taken = sp.taken;
     taken_from(of, &sp.taken);
     out->decoration = sp.s.text_decoration;
@@ -5044,11 +5248,11 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
     return true;
 }
 
-// Whether `el`, whose display is `display`, has pseudo-elements: only when
-// pass 2 draws what is inside it (f_draws_inside), and not outside HTML.
-static bool generates(const Ctx *c, const os64_html_node_t *el, flow_display_t display)
+// Whether `el`, styled `s`, has pseudo-elements: only when pass 2 draws
+// what is inside it (f_draws_inside), and not outside HTML.
+static bool generates(const Ctx *c, const os64_html_node_t *el, const flow_style_t *s)
 {
-    return el->ns == OS64_HTML_NS_HTML && f_draws_inside(c->env, el, display);
+    return el->ns == OS64_HTML_NS_HTML && f_draws_inside(c->env, el, s);
 }
 
 // Steps 1 and 2 of GENERATED_CONTENT.md § 8.2, once `el` is styled: its
@@ -5061,7 +5265,7 @@ static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
 {
     if (of->style.display == FLOW_DISPLAY_NONE || c->inert != NULL)
         return true;
-    if (f_boxless(el)) {
+    if (f_boxless(c->env, el)) {
         c->inert = el;
         return true;
     }
@@ -5071,9 +5275,9 @@ static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
         const os64_html_node_t *up = parent != NULL && parent->kind == OS64_HTML_ELEMENT ? parent : NULL;
         count_on(c, garb_style_for(c->env->cascade, el), up, parent);
     }
-    if (!f_draws_inside(c->env, el, of->style.display))
+    if (!f_draws_inside(c->env, el, &of->style))
         c->inert = el;
-    else if (generates(c, el, of->style.display) && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
+    else if (generates(c, el, &of->style) && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
         return false;
     return !c->counters_failed;
 }
@@ -5085,7 +5289,7 @@ static bool close_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
     if (c->inert != NULL && c->inert != el)
         return true;
     c->inert = NULL;
-    if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el, of->style.display) &&
+    if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el, &of->style) &&
         !style_pseudo(c, el, of, GARB_PSEUDO_AFTER))
         return false;
     while (c->ncounters > 0 && c->counters[c->ncounters - 1].scope == el)

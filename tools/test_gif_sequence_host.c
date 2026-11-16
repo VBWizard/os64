@@ -8,6 +8,27 @@ static void unchanged(const os64_image_frame_t *f, const uint32_t *pixels,
                        size_t n, uint32_t index)
 { assert(f->index == index && !memcmp(f->pixels,pixels,n)); }
 
+static void default_frame(os64_image_sequence_t *seq,const uint32_t *first,size_t plane)
+{
+    const os64_image_frame_t *frame=os64_image_sequence_frame(seq);
+    uint32_t *shown=malloc(plane);assert(shown);memcpy(shown,frame->pixels,plane);
+    uint32_t index=frame->index;size_t held=bytes,started=attempts;
+    os64_image_t image;
+    assert(os64_image_sequence_default(seq,&image)==OS64_IMAGE_OK);
+    size_t allocations=attempts-started;
+    assert(image.width==frame->width && image.height==frame->height &&
+           image.pixels!=frame->pixels && !memcmp(image.pixels,first,plane));
+    unchanged(frame,shown,plane,index);os64_image_free(&image);
+    assert(bytes==held);
+    for(size_t cut=1;cut<=allocations;cut++) {
+        fail_at=attempts+cut;
+        assert(os64_image_sequence_default(seq,&image)==OS64_IMAGE_NO_MEMORY);
+        fail_at=0;
+        assert(!image.pixels && bytes==held);unchanged(frame,shown,plane,index);
+    }
+    free(shown);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 3 || argc == 4);
@@ -74,7 +95,8 @@ int main(int argc, char **argv)
     const os64_image_frame_t *f=os64_image_sequence_frame(seq);
     assert(f->width==w && f->height==h && f->frame_count==count && f->play_count==plays);
     size_t plane=(size_t)w*h*4;
-    uint32_t *pixels=malloc(plane); assert(pixels);
+    uint32_t *pixels=malloc(plane),*first=malloc(plane); assert(pixels && first);
+    memcpy(first,f->pixels,plane);
     size_t before=attempts;
     size_t sequence_bytes=bytes;
     unsigned passes=plays ? plays : 2;
@@ -105,6 +127,9 @@ int main(int argc, char **argv)
             } else assert(st==OS64_IMAGE_OK);
         }
     }
+    assert(attempts==before);
+    default_frame(seq,first,plane);
+    before=attempts;
 rewound:
     assert(os64_image_sequence_rewind(seq)==OS64_IMAGE_OK);
     assert(!fseek(ref,20,SEEK_SET)); assert(f->delay_ms==word(ref));
@@ -113,5 +138,5 @@ rewound:
     os64_image_sequence_free(seq); assert(!live && !bytes);
     assert(peak <= 128u*1024u*1024u);
     printf("PASS %s: %u frames, %u plays, owned %zu bytes (mutation peak %zu)\n",argv[1],count,plays,sequence_bytes,peak);
-    free(pixels); fclose(ref); return 0;
+    free(first);free(pixels); fclose(ref); return 0;
 }

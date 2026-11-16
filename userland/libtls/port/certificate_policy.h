@@ -11,6 +11,9 @@
 // Keep a live owner reference while using the factory to create validators.
 // Successful validators retain the sealed snapshot independently.
 tls_validator_factory os64_tls_policy_factory(os64_tls_trust *store);
+// One more hold on a store, given back with os64_tls_trust_free: false when
+// the store is already gone or its count is spent, and no hold was taken.
+bool os64_tls_trust_retain(os64_tls_trust *store);
 typedef struct { tls_policy_reason reason; unsigned upstream_error; } tls_policy_result;
 tls_policy_result os64_tls_policy_result(const br_x509_class *const *validator);
 #endif

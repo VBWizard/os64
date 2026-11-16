@@ -13,6 +13,8 @@ extern bool kEnableGUI;
 extern bool kRunTests;
 extern bool kEnableUSB;
 extern bool kUSBQuiet;
+extern bool kUsbPoll;
+extern int  kUsbImod;
 extern bool kEnableNet;
 extern bool kEnableR8125;
 extern bool kNetPoll;
@@ -361,6 +363,10 @@ static cmdopt_t cmdopts[] = {
     // hygiene — see kUSBQuiet's declaration (kernel.c) for the two burn
     // scars that made this a flashlight instead of a default.
     {"USBQUIET", OPT_BOOL, &kUSBQuiet, true, 0},
+    // The USB flashlight and the moderation dial (kernel.c). Like every
+    // token, neither travels to the P5: that boot entry is edited there.
+    {"USBPOLL", OPT_BOOL, &kUsbPoll, true, 0},
+    {"USBIMOD", OPT_INT, &kUsbImod, 0, 0},
     {"NONET", OPT_BOOL, &kEnableNet, false, 0},
     // The RTL8125 flashlight, sibling of NOAHCI/NONVME. UPPERCASE because
     // this table is matched with strcmp and folds no case — the lesson

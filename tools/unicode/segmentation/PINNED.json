@@ -1,0 +1,16 @@
+{
+  "version": "17.0.0",
+  "fetched": {
+    "auxiliary/GraphemeBreakProperty.txt": "d6b51d1d2ae5c33b451b7ed994b48f1f4dc62b2272a5831e7fd418514a6bae89",
+    "auxiliary/WordBreakProperty.txt": "72274cac1e6b919507db35655c3e175aa27274668a1ece95c28d2069f2ad9852",
+    "auxiliary/SentenceBreakProperty.txt": "871c0c985ad95125e25b302414065a10839d068970bceb383ecec138f22a0a18",
+    "DerivedCoreProperties.txt": "24c7fed1195c482faaefd5c1e7eb821c5ee1fb6de07ecdbaa64b56a99da22c08",
+    "emoji/emoji-data.txt": "2cb2bb9455cda83e8481541ecf5b6dfda66a3bb89efa3fa7c5297eccf607b72b",
+    "extracted/DerivedGeneralCategory.txt": "d62e5bab70ca74f099343f71224fa051cb1fdd61a1ab45c0488c44cfc0b6102e"
+  },
+  "kept": {
+    "GraphemeBreakTest.txt": "e2d134d2c52919bace503ebb6a551c1855fe1a1faec18478c78fff254a1793ec",
+    "WordBreakTest.txt": "1de23a75f37904abc7d206239ee8d34f8fdf0fb4ab32a7174dfbabbde25419b2",
+    "SentenceBreakTest.txt": "12cb47d028ded0c1cb8a28558f95479cbcd24559c46977015c82f3b50a1cc6e4"
+  }
+}

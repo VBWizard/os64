@@ -75,4 +75,19 @@ void yonder_backdrop_put(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, co
                          int32_t w, int32_t h, int32_t x0, int32_t y0, os64_gui_rect_t box,
                          const uint8_t *cover);
 
+// A MASK (MASKS.md § 3). A capture's coverage, from its recovered layer
+// (yonder_layer_recover), `n` pixels into `out`: each pixel's alpha, or
+// with `luminance` the luminance of its premultiplied colour — the
+// colour's luminance times its alpha (Masking 1 § 7.2, § 7.10.1): the
+// feColorMatrix luminance-to-alpha weights on the sRGB channels.
+void yonder_mask_take(const uint32_t *layer, size_t n, bool luminance, uint8_t *out);
+
+// Coverage `c`, a mask layer's, laid onto `run`, what the layers below it
+// came to, by `op` (Masking 1 § 7.8), each in 255ths: ADD source-over,
+// SUBTRACT source-out, INTERSECT source-in, EXCLUDE xor.
+void yonder_mask_combine(uint8_t *run, const uint8_t *c, size_t n, flow_composite_t op);
+
+// Every channel of a premultiplied layer's `n` pixels times its coverage.
+void yonder_layer_cover(uint32_t *layer, size_t n, const uint8_t *cover);
+
 #endif

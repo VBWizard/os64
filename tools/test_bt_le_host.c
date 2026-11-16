@@ -1029,6 +1029,85 @@ static void persistent_manager(void)
     puts("PASS: versioned bond records, corruption refusal, automatic restored-key reconnect, capped retries and user controls");
 }
 
+// Reason 3d on a link the saved key has ALREADY encrypted is the radio's,
+// not the key's: it is retried, and counted, and after
+// BT_MANAGER_MIC_DROPS in a row with no input in between the slot waits
+// for its user. (At the start of encryption 3d still means a key that does
+// not match: reconnect_link_failure's kind 5.)
+static void integrity_drop_after_encryption(void)
+{
+    begin_bond(2); run(); stop_session();
+    peer_bonding=false; peer_reconnecting=true;
+    bt_manager_t manager={.loaded=true,.automatic=true,.revision_seen=session.bond_revision};
+    bt_scan_t scan={0};
+    // The first attempt is the user's; the ones after it are the manager's
+    // own, which is what the cap is on.
+    assert(bt_manager_command(&manager,&session,&scan,"reconnect",9,now));
+    for(unsigned drop=1;drop<=BT_MANAGER_MIC_DROPS;drop++) {
+        // Into HID setup on the encrypted link, and no further.
+        for(unsigned i=0;i<2000 && !(session.encrypted && session.phase>=BT_LE_SERVICES);i++) {
+            tick(true,true); controller(); peripheral();
+        }
+        assert(session.connected && session.encrypted && session.bond_reused);
+        assert(session.phase>=BT_LE_SERVICES && session.phase<BT_LE_READY);
+        const uint8_t dropped[]={5,4,0,0x0b,0,0x3d}; event(dropped,sizeof(dropped)); run();
+        assert(session.phase==BT_LE_STOPPED && session.retryable && session.bond.valid);
+        assert(session.disconnect_reason==0x3d);
+        bt_manager_step(&manager,&session,&scan,now);
+        assert(manager.mic_drops==drop);
+        assert(manager.blocked==(drop==BT_MANAGER_MIC_DROPS));
+        // Stepping again does not count the same drop twice.
+        bt_manager_step(&manager,&session,&scan,now);
+        assert(manager.mic_drops==drop);
+        if(manager.blocked) break;
+        // The manager's retry: a scan round, the peer found, a reconnect.
+        if(!manager.scan_owned) {
+            if(now<manager.next_attempt) now=manager.next_attempt;
+            bt_manager_step(&manager,&session,&scan,now);
+        }
+        assert(manager.scan_owned);
+        scan.phase=BT_SCAN_DONE; scan.count=1;
+        scan.devices[0].le=true; scan.devices[0].address_type=peer_air_type;
+        memcpy(scan.devices[0].address,peer_air,6);
+        bt_manager_step(&manager,&session,&scan,now);
+        assert(!manager.scan_owned && !bt_le_quiescent(&session) && manager.mic_drops==drop);
+    }
+    assert(manager.blocked && manager.mic_drops==BT_MANAGER_MIC_DROPS);
+    // Lifting the block starts the count again: the user's reconnect is not
+    // one drop away from being blocked.
+    assert(bt_manager_command(&manager,&session,&scan,"reconnect",9,now));
+    assert(!manager.blocked && manager.mic_drops==0);
+    run(); assert(session.phase==BT_LE_READY);
+    // And so does input flowing: drops with work between them are first drops.
+    // A link that is merely ready, with no report delivered, is not that.
+    manager.mic_drops=2;
+    assert(session.reports==0);
+    bt_manager_step(&manager,&session,&scan,now);
+    assert(manager.mic_drops==2);
+    session.reports=1;
+    bt_manager_step(&manager,&session,&scan,now);
+    assert(manager.mic_drops==0);
+    session.reports=0;
+    // The same reason BEFORE the saved key has encrypted the link is the
+    // key's: no retry, and the slot waits for its user.
+    assert(bt_manager_command(&manager,&session,&scan,"disconnect",10,now)); tick(true,true); run();
+    manager=(bt_manager_t){.loaded=true,.automatic=true,.revision_seen=session.bond_revision};
+    scan=(bt_scan_t){0};
+    assert(bt_manager_command(&manager,&session,&scan,"reconnect",9,now));
+    for(unsigned i=0;i<100;i++) {
+        tick(true,true);
+        if(cmd_n && le_u16(cmd)==0x2019) break;
+        controller(); peripheral();
+    }
+    assert(cmd_n && le_u16(cmd)==0x2019 && session.connected && !session.encrypted && session.bond_reused);
+    cmd_n=0;
+    const uint8_t early[]={5,4,0,0x0b,0,0x3d}; event(early,sizeof(early)); run();
+    assert(session.phase==BT_LE_STOPPED && !session.retryable);
+    bt_manager_step(&manager,&session,&scan,now);
+    assert(manager.blocked && manager.mic_drops==0);
+    puts("PASS: an integrity-check drop on an encrypted bonded link is retried, counted once, and capped");
+}
+
 static void failures(void)
 {
     for(int kind=WRONG_CONFIRM;kind<=GATT_ERROR;kind++) {
@@ -1115,7 +1194,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); late_completion(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding(); identity_bonding(); power_loss_recovery(); reconnect_link_failure(); stopped_scan_retry(); persistent_manager();
+    vectors(); late_completion(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding(); identity_bonding(); power_loss_recovery(); reconnect_link_failure(); integrity_drop_after_encryption(); stopped_scan_retry(); persistent_manager();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));

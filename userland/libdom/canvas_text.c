@@ -13,7 +13,7 @@ static const char *const metric_names[]={"width","actualBoundingBoxLeft","actual
     "fontBoundingBoxAscent","fontBoundingBoxDescent","actualBoundingBoxAscent","actualBoundingBoxDescent",
     "emHeightAscent","emHeightDescent","hangingBaseline","alphabeticBaseline","ideographicBaseline"};
 void os64_dom_set_text(os64_dom_t *dom,const os64_dom_text_provider_t *provider)
-{ if(dom&&!dom->closed)dom->canvas_text=provider?*provider:(os64_dom_text_provider_t){0}; }
+{ if(dom&&!dom->closed&&!dom->departure_finishing&&!dom->departure_finished)dom->canvas_text=provider?*provider:(os64_dom_text_provider_t){0}; }
 static bool word(const garb_val_t *v,const char *s)
 { return v->kind==GARB_V_KEYWORD&&!os64_strcmp(v->keyword,s); }
 typedef struct {
@@ -186,14 +186,15 @@ static int canonical_font(DValue *e,JSContext *ctx,const char *s,size_t n,canvas
 static canvas_text_style_t text_style(DValue *e)
 {
     canvas_state_t state={.text={.font="10px sans-serif",.size=10}};
-    d_canvas_sync(e);if(e->canvas)canvas_state(e->canvas,&state);
+    d_canvas_sync(e);if(d_more_peek(e)->canvas)canvas_state(d_more_peek(e)->canvas,&state);
     return state.text;
 }
 static JSValue style_member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
 {
     os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||e->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    dom = e->dom;
     bool set=magic&D_SET;magic&=~D_SET;
     const char *s=NULL;size_t n=0;
     if(set){s=JS_ToCStringLen(ctx,&n,argc?argv[0]:JS_UNDEFINED);if(!s)return JS_EXCEPTION;}
@@ -207,7 +208,7 @@ static JSValue style_member(JSContext *ctx,JSValueConst self,int argc,JSValueCon
     else for(unsigned i=0;i<count;++i)if(n==os64_strlen(names[i])&&!os64_memcmp(s,names[i],n)){*slot=i;valid=1;break;}
     JS_FreeCString(ctx,s);
     if(valid<0)return JS_EXCEPTION;
-    return valid&&e->canvas?d_canvas_result(ctx,canvas_set_text_style(e->canvas,&style)):JS_UNDEFINED;
+    return valid&&d_more_peek(e)->canvas?d_canvas_result(ctx,canvas_set_text_style(d_more_peek(e)->canvas,&style)):JS_UNDEFINED;
 }
 static JSValue metric_member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
 {
@@ -243,7 +244,8 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
 {
     os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||e->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    dom = e->dom;
     if(argc<(magic==0?1:3))return JS_ThrowTypeError(ctx,"Canvas text arguments are missing");
     size_t length;const char *string=JS_ToCStringLen(ctx,&length,argv[0]);if(!string)return JS_EXCEPTION;
     double x=0,y=0,max_width=0;bool limited=magic&&argc>3;
@@ -288,15 +290,22 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     bool italic=!word(f.style,"normal");
     os64_font_family_list_t families={names,count,generic};os64_text_run_t *run=NULL;
     uint32_t pixels=style.size>0?(uint32_t)ceil(style.size):1;
-    os64_font_status_t status=dom->canvas_text.layout?dom->canvas_text.layout(dom->canvas_text.opaque,&families,bold,italic,pixels,text,length,&run):OS64_FONT_UNSUPPORTED;
+    os64_dom_t *owner = d_owner(dom, e->node);
+    if(!d_provider_begin(owner,ctx)) {
+        garb_free(&f.parsed);d_canvas_release(dom,text,length+1);return JS_EXCEPTION;
+    }
+    os64_font_status_t status=owner->canvas_text.layout?owner->canvas_text.layout(owner->canvas_text.opaque,&families,bold,italic,pixels,text,length,&run):OS64_FONT_UNSUPPORTED;
     garb_free(&f.parsed);d_canvas_release(dom,text,length+1);
-    if(status!=OS64_FONT_OK){os64_text_run_release(run);return font_error(ctx,status);}
+    if(status!=OS64_FONT_OK){os64_text_run_release(run);d_provider_leave(owner);return font_error(ctx,status);}
     os64_text_run_view_t view;status=os64_text_run_view(run,&view);
     Commands commands={0};size_t capacity=OS64_GEOMETRY_COMMAND_MAX*sizeof(*commands.commands);
     if(magic&&status==OS64_FONT_OK&&d_canvas_allocate(dom,capacity,(void **)&commands.commands)!=OS64_GEOMETRY_OK)status=OS64_FONT_LIMIT;
     os64_geometry_bounds_t bounds={.empty=true};
-    if(status==OS64_FONT_OK)status=os64_text_run_outline(run,OS64_GEOMETRY_COMMAND_MAX,magic?collect:NULL,&commands,&bounds);
-    if(status!=OS64_FONT_OK){os64_text_run_release(run);d_canvas_release(dom,commands.commands,capacity);return font_error(ctx,status);}
+    /* The outline budget is a draw's (its commands are collected and
+     * painted); measureText keeps none, only the bounds, so a long text
+     * measures as in other browsers whatever its outline would cost. */
+    if(status==OS64_FONT_OK)status=os64_text_run_outline(run,magic?OS64_GEOMETRY_COMMAND_MAX:SIZE_MAX,magic?collect:NULL,&commands,&bounds);
+    if(status!=OS64_FONT_OK){os64_text_run_release(run);d_provider_leave(owner);d_canvas_release(dom,commands.commands,capacity);return font_error(ctx,status);}
     double scale=style.size/pixels,width=view.advance_x/64.0*scale;
     double ascent=view.ascent/64.0*scale,descent=view.descent/64.0*scale;
     /* Fonts without explicit baseline tables use the same metric-based
@@ -317,14 +326,14 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     } else {
         double squeeze=limited&&width>max_width?max_width/width:1;
         os64_geometry_map_t placement={scale*squeeze,0,0,scale,x-anchor*squeeze,y+baseline};
-        result=e->canvas?d_canvas_result(ctx,canvas_draw_contours(e->canvas,commands.commands,commands.count,&placement,magic==2)):JS_UNDEFINED;
+        result=d_more_peek(e)->canvas?d_canvas_result(ctx,canvas_draw_contours(d_more_peek(e)->canvas,commands.commands,commands.count,&placement,magic==2)):JS_UNDEFINED;
     }
-    os64_text_run_release(run);d_canvas_release(dom,commands.commands,capacity);return result;
+    os64_text_run_release(run);d_provider_leave(owner);d_canvas_release(dom,commands.commands,capacity);return result;
 }
 int d_canvas_text_install(os64_dom_t *dom,JSContext *ctx,JSValueConst global,JSValueConst prototype)
 {
     dom->metrics_class=os64_js_class_id(&metrics_slot);
-    const JSClassDef definition={.class_name="TextMetrics",.finalizer=metrics_finalize};if(JS_NewClass(dom->engine,dom->metrics_class,&definition)<0)return -1;
+    const JSClassDef definition={.class_name="TextMetrics",.finalizer=metrics_finalize};if (!JS_IsRegisteredClass(dom->engine, dom->metrics_class) && JS_NewClass(dom->engine, dom->metrics_class, &definition) < 0)return -1;
     JSValue metrics=JS_NewObject(ctx);if(!d_retain(dom,ctx,metrics))return -1;
     JS_SetClassProto(ctx,dom->metrics_class,JS_DupValue(ctx,metrics));
     JSValue constructor=d_interface_new(ctx,"TextMetrics",0,NULL,metrics,JS_UNDEFINED);

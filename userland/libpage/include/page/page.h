@@ -35,12 +35,29 @@ typedef struct os64_page_state os64_page_state_t;
 #define OS64_PAGE_STATE_DEFAULT_MAX_BYTES ((size_t)16 * 1024 * 1024)
 #define OS64_PAGE_FATAL_EXIT 0x50414745
 
+/* A state group owns its admitted states until group teardown, before the
+ * corresponding HTML group is freed. States must share an HTML lifetime
+ * group; admit them before borrowing models. The cap includes states,
+ * records, scratch transactions and retained cross-document value bytes. */
+typedef struct os64_page_state_group os64_page_state_group_t;
+os64_page_state_group_t *os64_page_state_group_create(size_t max_bytes);
+/* Ledger/borrower preflight, before joining the corresponding HTML arena.
+ * Does not check HTML membership: group_add checks that after HTML admission.
+ * Valid until state, borrowers or group membership change. */
+bool os64_page_state_group_check(os64_page_state_group_t *group, os64_page_state_t *state);
+bool os64_page_state_group_add(os64_page_state_group_t *group, os64_page_state_t *state);
+void os64_page_state_group_free(os64_page_state_group_t *group);
+size_t os64_page_state_group_bytes(const os64_page_state_group_t *group);
+size_t os64_page_state_group_peak(const os64_page_state_group_t *group);
+
 // State belongs to one document, including nodes not connected to its tree.
 // The cap includes its header, records, cached values and operation scratch.
 // Builds retain sparse normalized defaults where they differ from markup;
 // script assignments can spend the cap on records for their whole group.
 // Zero selects the default cap. NULL means no memory (or no document).
-// Freeing explicit state with models still borrowing it ends the program
+// Grouped records may migrate logically while their allocations stay charged
+// to the original state. Shared value bytes retire until group models leave.
+// Freeing grouped state individually, or state with models borrowing it, ends the program
 // with OS64_PAGE_FATAL_EXIT. State holds its persistent and reserved node keys;
 // it does not pin snapshot strings in the document.
 os64_page_state_t *os64_page_state_create(os64_html_document_t *doc, size_t max_bytes);
@@ -269,11 +286,13 @@ typedef struct {
 // and belong to whoever lays the page out — its `width` and `height` stay
 // attributes on the node.
 //
-// Every `img` and every `input type=image` whose `src` names something. An
+// Images whose src names something, and img elements with srcset candidates
+// of their own or from preceding picture sources. Selection belongs to the
+// browser's environment; src here remains the resolved fallback. An
 // empty or blank `src` names nothing: such an image is shown broken rather
 // than fetching the page it sits on as a picture — the standard's rule for
 // the empty string, and browsers' for white space — so it is not
-// listed, and `os64_page_image_for` answers -1.
+// listed unless responsive candidates are present.
 typedef struct {
     const os64_html_node_t *node;   // the `img` or `input type=image`
     os64_page_ref_t src;            // resolved against the base; refused says why. A data:
@@ -562,17 +581,30 @@ int64_t os64_page_reset(os64_page_t *page, int32_t form);
 // Ordinary owned elements accept attributes too; remove ignores value/len.
 int64_t os64_page_node_set_attr(os64_page_state_t *state, const os64_html_node_t *node,
                                 const char *name, const char *value, size_t len, bool remove);
+// The same by namespace (NULL for none) and the local part of `name`, as
+// setAttributeNS and removeAttributeNS address an attribute: a new one
+// takes `name` and `ns`, an existing one keeps its own qualified name. One
+// in no namespace is staged as os64_page_node_set_attr stages a change; one
+// in a namespace changes no control's state (libpage's controls read the
+// attributes in no namespace) and goes straight to the tree.
+int64_t os64_page_node_set_attr_ns(os64_page_state_t *state, const os64_html_node_t *node, const char *ns,
+                                   const char *name, const char *value, size_t len, bool remove);
 
 /* State-aware tree verbs retain libhtml's placement rules/status codes and
  * normalize the radio/select effects of each move without changing dirty
  * flags. Reservations precede tree mutation; refusal preserves both tree
  * and control state. State allocation refusals answer OS64_HTML_NO_MEMORY.
- * Calls are serialized with the document's other operations.
+ * Calls are serialized with the group's other operations. Cross-document
+ * insertion/adoption requires source and destination states in the same
+ * state group and migrates dirty records before publishing to model readers.
  * replace_children accepts an ELEMENT or FRAGMENT parent and a detached,
  * freshly prepared replacement node/fragment (NULL: empty). It reserves
  * once, inserts before the original children, then removes those children;
  * the successful tree commit cannot be followed by a state allocation
  * refusal. Detached preparation belongs to the caller's document budget. */
+/* Explicit adoption uses the same state transaction as insertion. */
+int64_t os64_page_node_adopt(os64_page_state_t *state, os64_html_node_t *document,
+                             os64_html_node_t *node);
 int64_t os64_page_node_insert(os64_page_state_t *state, os64_html_node_t *parent,
                               os64_html_node_t *node, os64_html_node_t *before);
 int64_t os64_page_node_replace(os64_page_state_t *state, os64_html_node_t *parent,
@@ -581,7 +613,8 @@ int64_t os64_page_node_remove(os64_page_state_t *state, os64_html_node_t *node);
 int64_t os64_page_node_replace_children(os64_page_state_t *state, os64_html_node_t *parent,
                                         os64_html_node_t *replacement);
 
-// Clone an owned non-DOCUMENT node into the same document, detached, with INPUT current
+// Clone an owned non-DOCUMENT node into the same document, or import from an
+// explicit source state into the destination. The detached result has INPUT current
 // value/checkedness and their dirty flags, and TEXTAREA current value/dirty
 // flag. Other control state starts from cloned markup. Deep cloning includes
 // descendant and template-content controls. Status uses HTML codes; a state
@@ -589,6 +622,9 @@ int64_t os64_page_node_replace_children(os64_page_state_t *state, os64_html_node
 // published values and both revisions; detached HTML preparation may remain
 // charged to the document. Cloning does not change either revision. Status
 // may be NULL; a failed call returns NULL.
+os64_html_node_t *os64_page_node_import(os64_page_state_t *destination,
+                                        const os64_page_state_t *source,
+                                        const os64_html_node_t *node, bool deep, int64_t *status);
 os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
                                        const os64_html_node_t *node, bool deep,
                                        int64_t *status);

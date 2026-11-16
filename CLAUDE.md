@@ -70,6 +70,12 @@ upstream of the reviewer, not a filter on it.
   and ring-boundary work. Userland apps, GUI, and polish slices get reviewed
   here and merged.
 
+**WORKING AN HTTP/2 SLICE?** `docs/design/pending/HTTP2.md` § 0 says how
+`HTTP2_TRACKER.csv` beside it is kept — which rows a branch may touch, when
+a row flips, and that `tools/http2_tracker.py` passes before a push. It is
+that arc's rule alone: an arc with a tracker keeps its own rules beside its
+design (`tools/TRACKERS.md` is the shared format).
+
 ## Project Overview
 
 os64 is a 64-bit x86 operating system kernel built for educational purposes. It uses the Limine bootloader protocol and boots on QEMU (or real hardware) in both BIOS and UEFI modes.
@@ -438,7 +444,11 @@ print milliseconds: 0.6 ms to the slirp gateway on the e1000, 7–11 ms on
 virtio because its drain waits for the tick.
 
 **System Drivers:**
-- **PCI** (`pci.c`): PCI device enumeration and configuration
+- **PCI** (`pci.c`): PCI device enumeration and configuration. Each
+  function's capability list is read at enumeration (`pci_caps.c`, pure,
+  `tools/test_pci_caps_host.sh`) and printed by its `/sys/bus/pci` node:
+  `capabilities:` in list order, then `msi:` and `msix:` with what the
+  device can ask for. Read it before planning an interrupt for a device
 - **ACPI** (`acpi.c`, `acpi_tables.c`): one walk at boot of everything
   reachable from Limine's RSDP. **Firmware puts its tables wherever it
   likes**, so each is mapped by its own address and Length (the header
@@ -454,6 +464,259 @@ virtio because its drain waits for the tick.
   boot-architecture flags), CPUs, IOAPICs, overrides, the HPET, the
   firmware's boot logo, and the walk's problems. Read it FIRST on a machine
   meeting os64 for the first time.
+- **USB** (`usb/xhci.c`, `kusb.c`): the xHCI controllers, drained by
+  **`kusb`**, a kernel daemon pinned to the BSP and parked on a doorbell the
+  controllers' interrupt and the tick both ring (`knet`'s shape; docs/design/pending/XHCI_INTERRUPT.md § The
+  design). It is the one consumer of the event rings once the scheduler
+  runs. A wake is one PASS (`xhci_pass`): each controller drained until its
+  ring is empty or a one-tick deadline passes (checked before every event;
+  the controller that used the time is served last next pass), then
+  Bluetooth's clockwork and the keyboards' typematic repeat. Input is
+  therefore delivered from a THREAD, not from inside the scheduler's pass.
+  USB's serializing flag (`s_poll_busy`) has one release door for everyone
+  but `kusb`, and that door rings `kusb` if a held flag turned it away. The
+  arithmetic (the drain, what `ERDP` is owed, the wait bound, the visit's
+  order) is `xhci_service.c`, pure: `tools/test_xhci_service_host.sh`
+  drives it against a model controller and `tools/test_xhci_service_mutants.py`
+  breaks each rule (`mutants_parallel.py ... --with kernel`). **`/sys/usb`**
+  says which controller carries the keyboard, the mouse and the Bluetooth
+  adapter and how each is driven; per controller, how long an event may
+  have waited (from the last time its ring was seen empty); `kusb`'s wakes
+  and latencies in `/sys/net/knet`'s words; passes refused the flag and the
+  longest wait; the gap between passes, which is a cadence and NOT a wait;
+  and a timeline of Bluetooth's scans and connection steps. The
+  `since_read` maxima start again at each read, so reading it before and
+  after a workload measures that workload. Read it FIRST when a USB or
+  Bluetooth device answers late. **Each controller interrupts** (MSI where
+  it offers it, MSI-X where that is all it offers; `driven=` says which, or
+  `tick (why)`): one vector, 0x47, for all of them, addressed at the BSP.
+  The top half (`xhci_isr`) acknowledges `USBSTS.EINT` then `IMAN.IP`,
+  marks the controller and rings `kusb`'s bell; it takes no lock and
+  touches no event ring. `kusb` enables the interrupts itself, at its
+  first wake that finds USB's flag free, marking each controller so its
+  next drain takes what boot left on the ring. The tick still
+  rings the bell, which is all a tick-driven controller has. Per
+  interrupting controller `/sys/usb` gives `fires` and the time from an
+  interrupt to the drain that answered it; `interrupt_spurious` counts
+  handler entries that found nobody signalling. MSI and MSI-X are
+  programmed by `pci_msi_enable` / `pci_msix_enable_one` (pci.c), which
+  read back what they wrote and say whether it took; the RTL8125 uses the
+  first
+  **Bluetooth's ACL data** leaves through SEND SLOTS (xhci.c `BT_TX_SLOTS`):
+  a packet is copied into storage of its own after the transmit endpoint's
+  first page and queued, so several can be with the controller at once and
+  none can reach the command's bytes; a completion frees the oldest, each
+  slot has its own five-second deadline, and a packet the transport cannot
+  carry fails it and writes nothing. The controller's own buffers are
+  counted in `bt_acl.c` (pure; `tools/test_bt_acl_host.sh`, 50 mutants):
+  one pool or two, a reserve for LE in a shared pool, completions by
+  handle. `/sys/bluetooth/connection`'s `acl pools:` line shows them.
+  docs/design/pending/AUDIO_CLASSIC.md is the design; its § T, as built
+  says what is counted, and the Classic link's L2CAP is the sender held to
+  the count (§ S, as built), always leaving a send slot for the LE peers
+  **A Classic (BR/EDR) link** is slot 2 of `/sys/bluetooth/connection`
+  (`bt_classic.c`, pure; `tools/test_bt_classic_host.sh` plays the
+  headphones, 214 mutants): `scan classic`, then `slot 2 bond <address>`,
+  `connect`, `reconnect`, `disconnect`, `forget`. Bonded headphones that
+  drop or do not answer are PAGED AGAIN, 5 s doubling to a minute (the
+  wait starts over once a connection has lasted half a minute), until
+  `slot 2 disconnect`: the P5's pair held our key and never
+  called us back. Secure Simple Pairing as
+  a device with no keys or display; the bond is
+  `/home/bluetooth_bond_classic`; page scan is on only while a bond is
+  held, and only the bonded address is accepted. Whatever the controller
+  asks of the link is LATCHED and answered at its next turn of the one
+  command slot, which it takes ahead of the scan and the LE peers when an
+  answer is waiting. The start-up round's Classic setup commands may be
+  REFUSED without costing the round: the slot then says why it is
+  unavailable and LE is untouched. Sniff is ALLOWED on a link with an
+  audio sink once it has been idle ten seconds, and REFUSED, the link taken
+  out of sniff, before our stream starts; neither of the two commands can
+  end the link, though one the controller NEVER answers still fails the
+  controller three seconds past its deadline, as any unanswered command
+  does (`bt_host.c` § Slot 2's sniff is the lifecycle, AUDIO_REMOTE.md
+  § Part Z the design). Its data packets are its L2CAP's
+  (`bt_l2cap.c`, pure, Basic mode, six channels, admitting SDP and, with
+  an audio sink, AVDTP and AVCTP), and at `READY` the host asks the headphones one SDP question a
+  connection, what Audio Sink they are (`bt_sdp.c`, pure, which also
+  answers for os64's own records: Audio Source and the two remote-control
+  ones), and KEEPS THAT CHANNEL OPEN
+  until AVDTP's signalling channel is: the P5's pair hangs up a link whose
+  last channel has closed; L2CAP sends only after the LE peers have had
+  their turn, while the count gives it a buffer and a send slot is left
+  for LE. Slot 2's status shows L2CAP's channels and counters (a refusal
+  is the channel index's), the `sdp:` line (versions, features and
+  AVDTP's PSM, or why the query was not made) and the questions answered.
+  §§ L and S, as built are the record
+  **AVDTP's signalling** is `bt_avdtp.c` (pure, both roles;
+  `tools/test_bt_avdtp_host.sh` plays the sink, 332 mutants): find the
+  headphones' SBC endpoint, configure it, open, start, suspend, close, and
+  answer when they do the same to us. The host opens its signalling
+  channel once the SDP query has ended, found or not, and gives each
+  0x0019 channel its role from AVDTP's state (`bt_host.c` § Slot 2's audio
+  has the lifecycle table; AUDIO_A2DP.md § V, as built is AVDTP's record)
+  **AVCTP and AVRCP** are `bt_avrcp.c` (pure, both roles;
+  `tools/test_bt_avrcp_host.sh` plays the headphones, 201 mutants): as the
+  target it answers their buttons and says what is playing; as the
+  controller it learns whether they have absolute volume, hears it change
+  and sets it. The host carries it on one AVCTP channel with an audio sink
+  (`bt_host.c` § Slot 2's remote control: theirs is taken whenever it
+  opens, ours asked for two seconds after AVDTP's signalling, at most
+  twice a connection). **While AVRCP is ready and the pump is the seam's
+  sink, `/dev/volume` IS the headphones' volume** (§ Slot 2's volume):
+  the seam applies no gain, a write becomes one Set Absolute Volume, and
+  their own buttons move the number. Connecting never raises the
+  headphones' level and never changes the sound of a stream that is
+  playing: the number takes THEIR level first, then the seam stops
+  applying its gain, nothing is sent to them, and ownership waits while a
+  stream is under way with `/dev/volume` below 100. The cost of one
+  number: a stream that STARTS owned plays at their own level whatever
+  `/dev/volume` held before, which can be louder than the seam's gain
+  would have made it. Their play, pause,
+  next and previous presses are answered, counted and logged under
+  `DEBUG_USB`, and go to the program they are for (the media keys, under
+  Sound) (§ Slot 2's buttons). Slot 2's status
+  shows the `avctp channel:`, AVRCP's lines, `volume:` and `buttons:`.
+  AUDIO_REMOTE.md §§ R and W, as built are the record
+  **The A2DP sink** is the pump, `bt_a2dp.c` (pure;
+  `tools/test_bt_a2dp_host.sh`), run by the host inside `kusb`'s pass
+  after the LE peers: it is the audio seam's sink, named `a2dp` in
+  `/sys/audio`, from the stream's `open` until the session ends, and turns
+  the PCM it pulls into SBC media packets at the sample clock's pace
+  (`bt_host_tick`'s `now_us`), one loop of at most three packets a pass
+  under the same send gate as L2CAP. Its way to the seam, the encoder and
+  the clock is `bt_a2dp_seam.c`, which the transport hands the host
+  (`bt_host_audio`). Slot 2's status gains AVDTP's lines, the pump's
+  (`a2dp:` state, settings, packets, slips, dry packets, rejects, the
+  delay) and the channels' roles; `tools/test_bt_multi_host.sh` plays the
+  headphones end to end. When sound stutters read `/sys/audio` FIRST
+  (`underruns_since_read`: the player fell behind), then slot 2's `a2dp:`
+  slips and slow encodes (the pump was held off, or the encoder was slow),
+  then `acl pools:` and `/sys/usb` for a link or a pass held off.
+  AUDIO_A2DP.md § P, as built is the record
+- **Sound** (`audio/audio.c`, `audio/audio_stream.c`, `audio/kaudio.c`) —
+  docs/design/pending/AUDIO_SEAM.md is the design. One stream in the
+  machine: a program writes PCM (signed 16-bit, two channels, 48 kHz) to
+  **`/dev/audio`** and a SINK empties the ring by PULLING (`audio_pull`),
+  from its own thread at its own pace. The seam never calls into a sink
+  with a fact: a pause and a flush are what the sink's next pull tells it
+  (`paused`, a new `generation`). With no sink attached the NULL SINK is the
+  sink: **`kaudio`**, a daemon in `knet`'s shape, takes frames at the rate
+  a real output would and discards them, so `play` on a machine with no
+  headphones runs for the length of the song. The tick rings `kaudio` only
+  while `kAudioClocked` is set, a flag it reads WITHOUT the stream's lock:
+  the tick runs inside the scheduler's pass, and the stream's lock is one a
+  wake is made under, so it is taken before the queue lock and never under
+  it. `/dev/audio`, **`/dev/audiopos`** (the playback position, one record
+  a read) and **`/dev/audiotap`** (what the sink was given, as records) are
+  handle kinds (`HANDLE_AUDIO`, three faces; devfs.h § THE ALIAS): the
+  write and the tap's read wait, and the position is asked for often enough
+  that it must cost a syscall and no more. **`/dev/audioctl`** (`pause`,
+  `resume`, `flush`, `format`) and **`/dev/volume`** (0 to 100, applied at
+  the pull, unless the sink OWNS the volume: then the number is carried
+  out at the sink's end, headphones with absolute volume, and the pull
+  applies no gain) are plain devfs text, and anyone may write them. A sink
+  has three calls for the volume: `audio_sink_owns_volume`,
+  `audio_sink_volume_set` (what it is at the sink's end; needs no
+  ownership) and `audio_sink_volume_now`; the first two are refused from
+  anything but the sink, and the seam takes the volume back by itself at
+  every attach and detach, so no later sink inherits a pull with no gain.
+  `/sys/audio`'s `volume:` line says whose it is. The write
+  takes write's patience (forever, some milliseconds, none). One open of
+  the stream at a time (`OS64_AUDIO_BUSY`); a close never waits and never
+  cuts the sound, and the next open's frames follow under a new
+  GENERATION, which is also what a flush and a change of sink move. Every
+  rule (the ring, the split frame, the states, underruns, the gain, the
+  position, the null sink's clock, the tap's records) is `audio_stream.c`,
+  pure: `tools/test_audio_stream_host.sh` runs it beside a model and
+  `tools/test_audio_stream_mutants.py` breaks each one
+  (`mutants_parallel.py ... --with kernel`). **`/sys/audio`** is the
+  report: read it FIRST when sound stutters (`underruns_since_read`,
+  `kaudio_gap_max_since_read_us` and `clock_slips` separate a player that
+  fell behind from a pump that was held off). Fixture: `/tests/audiotest`.
+  `micros()`'s clock is `micros_now()` (micros.c), which the position
+  stamps with so a player can compare
+  **`play file`** is the first player: anything **`libmedia.so`** reads
+  (`os64/media.h`: MP3, AAC (in MP4 or ADTS, and the sound of an MP4
+  video), and the WAV forms libav's `configure_args` name, at any rate
+  and channel count),
+  which hands back the stream's own format on the output's timeline
+  (48 kHz frames from the start, the resampler's delay counted off, so a
+  seek lands on the frame asked for). libmedia is the ONE caller of
+  FFmpeg (`tools/test_av_audit.py` holds that), so the decoder behind it
+  can change without a player changing; its pure core `media_pcm.c` is
+  host-tested (`tools/test_media_pcm_host.sh`), its glue by
+  `/tests/mediatest`. **yonder plays a page's `<audio>`**, and a
+  `<video>`'s sound (a stand-in that shows no picture, `libdom/video.c`,
+  AUDIO_YONDER.md § Y.4), through it
+  (`apps/yonder/media.c`: a decoder thread per element feeding libmedia's
+  PCM queue, `os64/media_queue.h`, a loader thread for a network address,
+  one audio thread owning `/dev/audio` and mixing every element that
+  plays, `os64/media_mix.h`), while libdom keeps the element's
+  HTML states, events and promises (`libdom/media.c`, `dom/media.h`'s
+  provider). `<audio controls>` is a player widget over the element's
+  box (`apps/yonder/player.c`), and a link straight to a sound plays it on
+  a page of its own (`WAY_BODY_MEDIA`). A network sound's bytes are a
+  window (`media_bytes.c`, pure), and a seek far from it is a `Range`
+  request. AUDIO_YONDER.md §§ As built (Y.2.1 to Y.3) are the record,
+  and `/tests/pages/audio.html`, `audio-controls.html` and
+  `audio-mix.html` the pages to try (`audio-range.html` wants
+  `tools/pages_serve.py`, which answers ranges). Sound at another rate goes through **`libsound.so`**
+  (`os64/resample.h`): speexdsp's resampler, one file, unpatched, pinned by
+  `userland/libsound/manifest.json`; its README is the inventory and the
+  record of what was checked upstream. `tools/test_resample_host.sh`,
+  `/tests/resampletest` and `/tests/playtest` prove it; run
+  `tools/test_sound_audit.py` after a build that touches it
+  **The media keys** (`audio/media_keys.c`, pure, beside a model and 35
+  mutants; `audio/media_session.c` the lock, the wait and the routing;
+  MEDIA_KEYS.md the design): a program that wants the headphones' play,
+  pause, next and previous opens **`/dev/mediakeys`** `"u"`, and the handle
+  IS its session (never shared, 32 machine-wide, `os64/mediakeys.h`): it
+  writes its state (`playing`, `paused`, `stopped`) and reads one
+  `os64_media_key_t` a press. A press goes to the newest session saying
+  `playing`, else the one whose program owns the focused window, or
+  descends from its owner (a gterm's focus counts for the `play` it runs:
+  each session's lineage of task IDs is taken at open, and the focus is
+  `wm_focus_owner`, read without kGuiLock), else the most recently
+  active; with no session at all, Play and Pause pause or resume the
+  stream itself. Play and Pause are one toggle decided by the target's own
+  state, and a session whose ring is full is passed over. kusb takes the
+  presses from slot 2's ring after the `DEBUG_USB` log has read them.
+  **`/sys/mediakeys`** shows the sessions, the focus and why the last press
+  went where it did, and takes `press <key>` lines, which is how QEMU,
+  with no headphones, drives it: read it FIRST when a press goes nowhere.
+  `play` holds a session; fixture `/tests/mediakeystest`
+  **FFmpeg is `libav.so`** (`userland/libav/`; AUDIO_YONDER.md is the arc,
+  `YAUDIO_TRACKER.csv` its state): libavutil, libavcodec and libavformat,
+  unpatched, built down to what `manifest.json`'s `configure_args` names
+  (WAV, MP3, and AAC in MP4 or ADTS, today). **It is LGPL and stays a library of its own** —
+  never linked into another program or library, never configured with GPL,
+  nonfree or version-3 parts; `tools/test_av_audit.py` fails on any of
+  those. `configure` runs on the host (`tools/import_av.py`), and its
+  answers about a C library are replaced by what the shims in
+  `libav/port/` provide (README.md § The C library: no file ever opens,
+  `snprintf` is the port's own, `av_format.c`, because libos64's skips an
+  unknown conversion without taking its argument; the shims' own names
+  are libav's alone, so a caller of FFmpeg's headers sees only names
+  libos64 exports). Built WITHOUT threads, so a program using it
+  from several threads does every open and close under one lock of its
+  own (libmedia keeps a narrower form the audit pins: media.c § THREADS). A program that calls it is named in `LIBAV_PROGRAMS` and compiles
+  with `LIBAV_CONSUMER_CFLAGS`. Fixture: `/tests/avtest`
+  **The SBC encoder is built and linked with the kernel**
+  (`kernel/ports/sbc/`, the first third-party code in ring 0), and the A2DP
+  sink calls it (AUDIO_A2DP.md part P). Android's, unpatched
+  in `upstream/`, pinned by `manifest.json`, built by `sbc.mk` with flags of
+  its own (the kernel's code generation, `-O2`, warnings not fatal) and the
+  switches in `port/sbc_switches.h`. The kernel may call `sbc_port.h`'s two functions
+  and nothing else: `sbc_port_begin` (settings `sbc_settings_valid` takes,
+  `kernel/include/audio/sbc_frame.h`, and exactly the bitpool asked) and
+  `sbc_port_encode` (one frame into the boundary's own guarded buffer;
+  a wrong length or a touched guard fails it until the next begin).
+  `tools/test_sbc_host.sh` proves it against FFmpeg's decoder and encoder
+  and FAILS without ffmpeg; `tools/test_sbc_audit.py` reads the objects
+  (integer-only, `memset` the one import, and no caller of the boundary
+  but those named in its `BOUNDARY_CALLERS`: the pump's ops,
+  `bt_a2dp_seam.c`). Its README is the record
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer
@@ -736,6 +999,11 @@ the library serves every process). How it fits together:
   would not have been enough. A path that no longer
   resolves now fails the load instead of serving the cached image of a deleted
   program. Fixture: `test_shared_object_reload`.
+- **An object names at most `ELF_MAX_NEEDED` libraries** (elf_loader.h);
+  one naming more is REFUSED at load (`DEBUG_TASK` says why). It used to keep
+  the first sixteen and drop the rest without a word, so the program died
+  at its first call into a library left out, far from the cause (yonder,
+  gaining libmedia, was the one that found it).
 - Deliberately absent: lazy PLT binding, TLS/IFUNC/init_array, `RPATH`/search
   paths (`DT_NEEDED` name → `/lib/<name>`, full stop). See DEBTS § Shared
   libraries.
@@ -885,6 +1153,14 @@ the library serves every process). How it fits together:
     MSI — and knet wakes only when the tick rings it (DOORBELL.md's
     flashlight, the path that carried every packet before the doorbell).
     Like every token: it does NOT travel to the P5 by itself
+  - `USBPOLL`: no xHCI controller is given an interrupt; `kusb` drains them
+    when the tick rings it (XHCI_INTERRUPT.md's flashlight). `/sys/usb`
+    then reads `driven=tick (USBPOLL)`. Like every token it does NOT travel
+    to the P5
+  - `USBIMOD=<n>`: the xHCI interrupt moderation interval for this boot, in
+    250 ns units, 0 to 65535 (absent = the driver's 1000, which is 250 us;
+    0 = none).
+    A measuring dial; it does not travel to the P5 either
   - `USBQUIET`: Opt-in 2.4GHz hygiene — unpower idle xHCI controllers'
     ports after enumeration (USB3 signaling jams wireless dongles; Intel's
     2012 whitepaper). Default OFF: connector USB2/USB3 twins share VBUS —
@@ -1128,7 +1404,9 @@ rather than to prove something stayed in `/bin` (`gbounce`, `glogo`,
 - **The lifeboat carries `/tests` too**: it exists to be trusted while
   everything else is suspect, and one that cannot demonstrate the CPU, the
   kernel and the syscall floor are sound is asking to be taken on faith at
-  the worst possible moment. ~750KB of its ~59MB spare.
+  the worst possible moment. Its `/lib` is copied without DWARF (the root
+  GNUmakefile says why): the partition is small, and the debug info was
+  most of every library.
 - **`PATH=/bin:/tests`, in that order** (seeded in `kernel.c`), so fixtures
   stay typeable while a fixture can never shadow a command of the same name.
 - **Fixtures draw link bases from the same pool as apps** (`app_bases.py` is

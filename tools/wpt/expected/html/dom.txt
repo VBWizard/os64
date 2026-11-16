@@ -8525,6 +8525,20 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	MathMLAnchorElement inclu
 idlharness.https.html?exclude=(Document|Window|HTML.+)	MathMLElement includes ElementCSSInlineStyle: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	MathMLElement includes GlobalEventHandlers: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	MathMLElement includes HTMLOrSVGOrMathMLElement: member names are unique
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: constant MEDIA_ERR_ABORTED on interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: constant MEDIA_ERR_ABORTED on interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: constant MEDIA_ERR_DECODE on interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: constant MEDIA_ERR_DECODE on interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: constant MEDIA_ERR_NETWORK on interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: constant MEDIA_ERR_NETWORK on interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: constant MEDIA_ERR_SRC_NOT_SUPPORTED on interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: constant MEDIA_ERR_SRC_NOT_SUPPORTED on interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MediaError interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	MessageChannel interface object length
 idlharness.https.html?exclude=(Document|Window|HTML.+)	MessageChannel interface object name
 idlharness.https.html?exclude=(Document|Window|HTML.+)	MessageChannel interface: existence and properties of interface object
@@ -8737,6 +8751,7 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of new DO
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of new ImageData(10, 10)
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of new MessageEvent("message", { data: 5 })
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of new PopStateEvent("popstate", { data: {} })
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of new XMLSerializer()
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of sessionStorage
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of window.external
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of window.history
@@ -8754,6 +8769,12 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	TextMetrics interface: ex
 idlharness.https.html?exclude=(Document|Window|HTML.+)	TextMetrics interface: existence and properties of interface prototype object
 idlharness.https.html?exclude=(Document|Window|HTML.+)	TextMetrics interface: existence and properties of interface prototype object's "constructor" property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	TextMetrics interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TimeRanges interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TimeRanges interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TimeRanges interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TimeRanges interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TimeRanges interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TimeRanges interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	ValidityState interface object length
 idlharness.https.html?exclude=(Document|Window|HTML.+)	ValidityState interface object name
 idlharness.https.html?exclude=(Document|Window|HTML.+)	ValidityState interface: document.createElement("input").validity must inherit property "badInput" with the proper type
@@ -8789,6 +8810,15 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	WorkerNavigator includes 
 idlharness.https.html?exclude=(Document|Window|HTML.+)	WorkerNavigator includes NavigatorOnLine: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	WorkerNavigator interface: existence and properties of interface object
 idlharness.https.html?exclude=(Document|Window|HTML.+)	WorkletGlobalScope interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: calling serializeToString(Node) on new XMLSerializer() with too few arguments must throw TypeError
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: new XMLSerializer() must inherit property "serializeToString(Node)" with the proper type
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer must be primary interface of new XMLSerializer()
 idlharness.https.html?exclude=(Document|Window|HTML.+)	idl_test setup
 idlharness.https.html?exclude=(Document|Window|HTML.+)	idl_test validation
 reflection-embedded.html	area.alt: IDL get with DOM attribute unset
@@ -9025,6 +9055,44 @@ reflection-embedded.html	area.hidden: setAttribute() to true
 reflection-embedded.html	area.hidden: setAttribute() to undefined
 reflection-embedded.html	area.hidden: typeof IDL attribute
 reflection-embedded.html	area.href: IDL get with DOM attribute unset
+reflection-embedded.html	area.href: IDL set to " foo "
+reflection-embedded.html	area.href: IDL set to ""
+reflection-embedded.html	area.href: IDL set to "+100"
+reflection-embedded.html	area.href: IDL set to ".5"
+reflection-embedded.html	area.href: IDL set to "//site.example/path???@#l"
+reflection-embedded.html	area.href: IDL set to "5%"
+reflection-embedded.html	area.href: IDL set to "http://site.example/"
+reflection-embedded.html	area.href: IDL set to -Infinity
+reflection-embedded.html	area.href: IDL set to 1.5
+reflection-embedded.html	area.href: IDL set to 7
+reflection-embedded.html	area.href: IDL set to Infinity
+reflection-embedded.html	area.href: IDL set to NaN
+reflection-embedded.html	area.href: IDL set to false
+reflection-embedded.html	area.href: IDL set to null
+reflection-embedded.html	area.href: IDL set to object "[object Object]"
+reflection-embedded.html	area.href: IDL set to object "test-toString"
+reflection-embedded.html	area.href: IDL set to object "test-valueOf"
+reflection-embedded.html	area.href: IDL set to true
+reflection-embedded.html	area.href: IDL set to undefined
+reflection-embedded.html	area.href: setAttribute() to " foo "
+reflection-embedded.html	area.href: setAttribute() to ""
+reflection-embedded.html	area.href: setAttribute() to "+100"
+reflection-embedded.html	area.href: setAttribute() to ".5"
+reflection-embedded.html	area.href: setAttribute() to "//site.example/path???@#l"
+reflection-embedded.html	area.href: setAttribute() to "5%"
+reflection-embedded.html	area.href: setAttribute() to "http://site.example/"
+reflection-embedded.html	area.href: setAttribute() to -Infinity
+reflection-embedded.html	area.href: setAttribute() to 1.5
+reflection-embedded.html	area.href: setAttribute() to 7
+reflection-embedded.html	area.href: setAttribute() to Infinity
+reflection-embedded.html	area.href: setAttribute() to NaN
+reflection-embedded.html	area.href: setAttribute() to false
+reflection-embedded.html	area.href: setAttribute() to null
+reflection-embedded.html	area.href: setAttribute() to object "[object Object]"
+reflection-embedded.html	area.href: setAttribute() to object "test-toString"
+reflection-embedded.html	area.href: setAttribute() to object "test-valueOf"
+reflection-embedded.html	area.href: setAttribute() to true
+reflection-embedded.html	area.href: setAttribute() to undefined
 reflection-embedded.html	area.href: typeof IDL attribute
 reflection-embedded.html	area.hreflang: IDL get with DOM attribute unset
 reflection-embedded.html	area.hreflang: IDL set to ""
@@ -9474,7 +9542,44 @@ reflection-embedded.html	area.type: setAttribute() to true
 reflection-embedded.html	area.type: setAttribute() to undefined
 reflection-embedded.html	area.type: typeof IDL attribute
 reflection-embedded.html	audio.autofocus: IDL set to true
+reflection-embedded.html	audio.autoplay: IDL get with DOM attribute unset
+reflection-embedded.html	audio.autoplay: IDL set to " foo "
+reflection-embedded.html	audio.autoplay: IDL set to ""
+reflection-embedded.html	audio.autoplay: IDL set to "+100"
+reflection-embedded.html	audio.autoplay: IDL set to ".5"
+reflection-embedded.html	audio.autoplay: IDL set to "5%"
+reflection-embedded.html	audio.autoplay: IDL set to "\\0"
+reflection-embedded.html	audio.autoplay: IDL set to -Infinity
+reflection-embedded.html	audio.autoplay: IDL set to 1.5
+reflection-embedded.html	audio.autoplay: IDL set to 7
+reflection-embedded.html	audio.autoplay: IDL set to Infinity
+reflection-embedded.html	audio.autoplay: IDL set to NaN
+reflection-embedded.html	audio.autoplay: IDL set to false
+reflection-embedded.html	audio.autoplay: IDL set to null
+reflection-embedded.html	audio.autoplay: IDL set to object "[object Object]"
+reflection-embedded.html	audio.autoplay: IDL set to object "test-toString"
+reflection-embedded.html	audio.autoplay: IDL set to object "test-valueOf"
 reflection-embedded.html	audio.autoplay: IDL set to true
+reflection-embedded.html	audio.autoplay: IDL set to undefined
+reflection-embedded.html	audio.autoplay: setAttribute() to " foo "
+reflection-embedded.html	audio.autoplay: setAttribute() to ""
+reflection-embedded.html	audio.autoplay: setAttribute() to "+100"
+reflection-embedded.html	audio.autoplay: setAttribute() to ".5"
+reflection-embedded.html	audio.autoplay: setAttribute() to "5%"
+reflection-embedded.html	audio.autoplay: setAttribute() to "autoplay"
+reflection-embedded.html	audio.autoplay: setAttribute() to -Infinity
+reflection-embedded.html	audio.autoplay: setAttribute() to 1.5
+reflection-embedded.html	audio.autoplay: setAttribute() to 7
+reflection-embedded.html	audio.autoplay: setAttribute() to Infinity
+reflection-embedded.html	audio.autoplay: setAttribute() to NaN
+reflection-embedded.html	audio.autoplay: setAttribute() to false
+reflection-embedded.html	audio.autoplay: setAttribute() to null
+reflection-embedded.html	audio.autoplay: setAttribute() to object "[object Object]"
+reflection-embedded.html	audio.autoplay: setAttribute() to object "test-toString"
+reflection-embedded.html	audio.autoplay: setAttribute() to object "test-valueOf"
+reflection-embedded.html	audio.autoplay: setAttribute() to true
+reflection-embedded.html	audio.autoplay: setAttribute() to undefined
+reflection-embedded.html	audio.autoplay: typeof IDL attribute
 reflection-embedded.html	audio.className (<audio class>): IDL get with DOM attribute unset
 reflection-embedded.html	audio.className (<audio class>): IDL set to ""
 reflection-embedded.html	audio.className (<audio class>): IDL set to "+100"
@@ -9509,8 +9614,135 @@ reflection-embedded.html	audio.className (<audio class>): setAttribute() to obje
 reflection-embedded.html	audio.className (<audio class>): setAttribute() to true
 reflection-embedded.html	audio.className (<audio class>): setAttribute() to undefined
 reflection-embedded.html	audio.className (<audio class>): typeof IDL attribute
+reflection-embedded.html	audio.controls: IDL get with DOM attribute unset
+reflection-embedded.html	audio.controls: IDL set to " foo "
+reflection-embedded.html	audio.controls: IDL set to ""
+reflection-embedded.html	audio.controls: IDL set to "+100"
+reflection-embedded.html	audio.controls: IDL set to ".5"
+reflection-embedded.html	audio.controls: IDL set to "5%"
+reflection-embedded.html	audio.controls: IDL set to "\\0"
+reflection-embedded.html	audio.controls: IDL set to -Infinity
+reflection-embedded.html	audio.controls: IDL set to 1.5
+reflection-embedded.html	audio.controls: IDL set to 7
+reflection-embedded.html	audio.controls: IDL set to Infinity
+reflection-embedded.html	audio.controls: IDL set to NaN
+reflection-embedded.html	audio.controls: IDL set to false
+reflection-embedded.html	audio.controls: IDL set to null
+reflection-embedded.html	audio.controls: IDL set to object "[object Object]"
+reflection-embedded.html	audio.controls: IDL set to object "test-toString"
+reflection-embedded.html	audio.controls: IDL set to object "test-valueOf"
 reflection-embedded.html	audio.controls: IDL set to true
+reflection-embedded.html	audio.controls: IDL set to undefined
+reflection-embedded.html	audio.controls: setAttribute() to " foo "
+reflection-embedded.html	audio.controls: setAttribute() to ""
+reflection-embedded.html	audio.controls: setAttribute() to "+100"
+reflection-embedded.html	audio.controls: setAttribute() to ".5"
+reflection-embedded.html	audio.controls: setAttribute() to "5%"
+reflection-embedded.html	audio.controls: setAttribute() to "controls"
+reflection-embedded.html	audio.controls: setAttribute() to -Infinity
+reflection-embedded.html	audio.controls: setAttribute() to 1.5
+reflection-embedded.html	audio.controls: setAttribute() to 7
+reflection-embedded.html	audio.controls: setAttribute() to Infinity
+reflection-embedded.html	audio.controls: setAttribute() to NaN
+reflection-embedded.html	audio.controls: setAttribute() to false
+reflection-embedded.html	audio.controls: setAttribute() to null
+reflection-embedded.html	audio.controls: setAttribute() to object "[object Object]"
+reflection-embedded.html	audio.controls: setAttribute() to object "test-toString"
+reflection-embedded.html	audio.controls: setAttribute() to object "test-valueOf"
+reflection-embedded.html	audio.controls: setAttribute() to true
+reflection-embedded.html	audio.controls: setAttribute() to undefined
+reflection-embedded.html	audio.controls: typeof IDL attribute
+reflection-embedded.html	audio.crossOrigin: IDL get with DOM attribute unset
+reflection-embedded.html	audio.crossOrigin: IDL set to ""
+reflection-embedded.html	audio.crossOrigin: IDL set to "+100"
+reflection-embedded.html	audio.crossOrigin: IDL set to ".5"
+reflection-embedded.html	audio.crossOrigin: IDL set to "5%"
+reflection-embedded.html	audio.crossOrigin: IDL set to "ANONYMOUS"
+reflection-embedded.html	audio.crossOrigin: IDL set to "USE-CREDENTIALS"
+reflection-embedded.html	audio.crossOrigin: IDL set to "anonymous"
+reflection-embedded.html	audio.crossOrigin: IDL set to "anonymouſ"
+reflection-embedded.html	audio.crossOrigin: IDL set to "nonymous"
+reflection-embedded.html	audio.crossOrigin: IDL set to "se-credentials"
+reflection-embedded.html	audio.crossOrigin: IDL set to "use-credentials"
+reflection-embedded.html	audio.crossOrigin: IDL set to "uſe-credentialſ"
+reflection-embedded.html	audio.crossOrigin: IDL set to "xanonymous"
+reflection-embedded.html	audio.crossOrigin: IDL set to "xuse-credentials"
+reflection-embedded.html	audio.crossOrigin: IDL set to -Infinity
+reflection-embedded.html	audio.crossOrigin: IDL set to 1.5
+reflection-embedded.html	audio.crossOrigin: IDL set to 7
+reflection-embedded.html	audio.crossOrigin: IDL set to Infinity
+reflection-embedded.html	audio.crossOrigin: IDL set to NaN
+reflection-embedded.html	audio.crossOrigin: IDL set to false
+reflection-embedded.html	audio.crossOrigin: IDL set to null
+reflection-embedded.html	audio.crossOrigin: IDL set to object "[object Object]"
+reflection-embedded.html	audio.crossOrigin: IDL set to object "test-toString"
+reflection-embedded.html	audio.crossOrigin: IDL set to object "test-valueOf"
+reflection-embedded.html	audio.crossOrigin: IDL set to true
+reflection-embedded.html	audio.crossOrigin: setAttribute() to ""
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "+100"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to ".5"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "5%"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "ANONYMOUS"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "USE-CREDENTIALS"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "anonymous"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "anonymouſ"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "nonymous"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "se-credentials"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "use-credentials"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "uſe-credentialſ"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "xanonymous"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to "xuse-credentials"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to -Infinity
+reflection-embedded.html	audio.crossOrigin: setAttribute() to 1.5
+reflection-embedded.html	audio.crossOrigin: setAttribute() to 7
+reflection-embedded.html	audio.crossOrigin: setAttribute() to Infinity
+reflection-embedded.html	audio.crossOrigin: setAttribute() to NaN
+reflection-embedded.html	audio.crossOrigin: setAttribute() to false
+reflection-embedded.html	audio.crossOrigin: setAttribute() to null
+reflection-embedded.html	audio.crossOrigin: setAttribute() to object "[object Object]"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to object "test-toString"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to object "test-valueOf"
+reflection-embedded.html	audio.crossOrigin: setAttribute() to true
+reflection-embedded.html	audio.crossOrigin: setAttribute() to undefined
+reflection-embedded.html	audio.crossOrigin: typeof IDL attribute
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL get with DOM attribute unset
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to " foo "
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to ""
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to "+100"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to ".5"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to "5%"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to "\\0"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to -Infinity
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to 1.5
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to 7
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to Infinity
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to NaN
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to false
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to null
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to object "[object Object]"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to object "test-toString"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to object "test-valueOf"
 reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to true
+reflection-embedded.html	audio.defaultMuted (<audio muted>): IDL set to undefined
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to " foo "
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to ""
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to "+100"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to ".5"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to "5%"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to "muted"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to -Infinity
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to 1.5
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to 7
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to Infinity
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to NaN
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to false
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to null
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to object "[object Object]"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to object "test-toString"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to object "test-valueOf"
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to true
+reflection-embedded.html	audio.defaultMuted (<audio muted>): setAttribute() to undefined
+reflection-embedded.html	audio.defaultMuted (<audio muted>): typeof IDL attribute
 reflection-embedded.html	audio.dir: IDL get with DOM attribute unset
 reflection-embedded.html	audio.dir: IDL set to ""
 reflection-embedded.html	audio.dir: IDL set to "+100"
@@ -9642,7 +9874,142 @@ reflection-embedded.html	audio.lang: setAttribute() to object "test-valueOf"
 reflection-embedded.html	audio.lang: setAttribute() to true
 reflection-embedded.html	audio.lang: setAttribute() to undefined
 reflection-embedded.html	audio.lang: typeof IDL attribute
+reflection-embedded.html	audio.loop: IDL get with DOM attribute unset
+reflection-embedded.html	audio.loop: IDL set to " foo "
+reflection-embedded.html	audio.loop: IDL set to ""
+reflection-embedded.html	audio.loop: IDL set to "+100"
+reflection-embedded.html	audio.loop: IDL set to ".5"
+reflection-embedded.html	audio.loop: IDL set to "5%"
+reflection-embedded.html	audio.loop: IDL set to "\\0"
+reflection-embedded.html	audio.loop: IDL set to -Infinity
+reflection-embedded.html	audio.loop: IDL set to 1.5
+reflection-embedded.html	audio.loop: IDL set to 7
+reflection-embedded.html	audio.loop: IDL set to Infinity
+reflection-embedded.html	audio.loop: IDL set to NaN
+reflection-embedded.html	audio.loop: IDL set to false
+reflection-embedded.html	audio.loop: IDL set to null
+reflection-embedded.html	audio.loop: IDL set to object "[object Object]"
+reflection-embedded.html	audio.loop: IDL set to object "test-toString"
+reflection-embedded.html	audio.loop: IDL set to object "test-valueOf"
 reflection-embedded.html	audio.loop: IDL set to true
+reflection-embedded.html	audio.loop: IDL set to undefined
+reflection-embedded.html	audio.loop: setAttribute() to " foo "
+reflection-embedded.html	audio.loop: setAttribute() to ""
+reflection-embedded.html	audio.loop: setAttribute() to "+100"
+reflection-embedded.html	audio.loop: setAttribute() to ".5"
+reflection-embedded.html	audio.loop: setAttribute() to "5%"
+reflection-embedded.html	audio.loop: setAttribute() to "loop"
+reflection-embedded.html	audio.loop: setAttribute() to -Infinity
+reflection-embedded.html	audio.loop: setAttribute() to 1.5
+reflection-embedded.html	audio.loop: setAttribute() to 7
+reflection-embedded.html	audio.loop: setAttribute() to Infinity
+reflection-embedded.html	audio.loop: setAttribute() to NaN
+reflection-embedded.html	audio.loop: setAttribute() to false
+reflection-embedded.html	audio.loop: setAttribute() to null
+reflection-embedded.html	audio.loop: setAttribute() to object "[object Object]"
+reflection-embedded.html	audio.loop: setAttribute() to object "test-toString"
+reflection-embedded.html	audio.loop: setAttribute() to object "test-valueOf"
+reflection-embedded.html	audio.loop: setAttribute() to true
+reflection-embedded.html	audio.loop: setAttribute() to undefined
+reflection-embedded.html	audio.loop: typeof IDL attribute
+reflection-embedded.html	audio.preload: IDL get with DOM attribute unset
+reflection-embedded.html	audio.preload: IDL set to ""
+reflection-embedded.html	audio.preload: IDL set to "+100"
+reflection-embedded.html	audio.preload: IDL set to ".5"
+reflection-embedded.html	audio.preload: IDL set to "5%"
+reflection-embedded.html	audio.preload: IDL set to "AUTO"
+reflection-embedded.html	audio.preload: IDL set to "METADATA"
+reflection-embedded.html	audio.preload: IDL set to "NONE"
+reflection-embedded.html	audio.preload: IDL set to "auto"
+reflection-embedded.html	audio.preload: IDL set to "etadata"
+reflection-embedded.html	audio.preload: IDL set to "metadata"
+reflection-embedded.html	audio.preload: IDL set to "none"
+reflection-embedded.html	audio.preload: IDL set to "one"
+reflection-embedded.html	audio.preload: IDL set to "uto"
+reflection-embedded.html	audio.preload: IDL set to "xauto"
+reflection-embedded.html	audio.preload: IDL set to "xmetadata"
+reflection-embedded.html	audio.preload: IDL set to "xnone"
+reflection-embedded.html	audio.preload: IDL set to -Infinity
+reflection-embedded.html	audio.preload: IDL set to 1.5
+reflection-embedded.html	audio.preload: IDL set to 7
+reflection-embedded.html	audio.preload: IDL set to Infinity
+reflection-embedded.html	audio.preload: IDL set to NaN
+reflection-embedded.html	audio.preload: IDL set to false
+reflection-embedded.html	audio.preload: IDL set to null
+reflection-embedded.html	audio.preload: IDL set to object "[object Object]"
+reflection-embedded.html	audio.preload: IDL set to object "test-toString"
+reflection-embedded.html	audio.preload: IDL set to object "test-valueOf"
+reflection-embedded.html	audio.preload: IDL set to true
+reflection-embedded.html	audio.preload: IDL set to undefined
+reflection-embedded.html	audio.preload: setAttribute() to ""
+reflection-embedded.html	audio.preload: setAttribute() to "+100"
+reflection-embedded.html	audio.preload: setAttribute() to ".5"
+reflection-embedded.html	audio.preload: setAttribute() to "5%"
+reflection-embedded.html	audio.preload: setAttribute() to "AUTO"
+reflection-embedded.html	audio.preload: setAttribute() to "METADATA"
+reflection-embedded.html	audio.preload: setAttribute() to "NONE"
+reflection-embedded.html	audio.preload: setAttribute() to "auto"
+reflection-embedded.html	audio.preload: setAttribute() to "etadata"
+reflection-embedded.html	audio.preload: setAttribute() to "metadata"
+reflection-embedded.html	audio.preload: setAttribute() to "none"
+reflection-embedded.html	audio.preload: setAttribute() to "one"
+reflection-embedded.html	audio.preload: setAttribute() to "uto"
+reflection-embedded.html	audio.preload: setAttribute() to "xauto"
+reflection-embedded.html	audio.preload: setAttribute() to "xmetadata"
+reflection-embedded.html	audio.preload: setAttribute() to "xnone"
+reflection-embedded.html	audio.preload: setAttribute() to -Infinity
+reflection-embedded.html	audio.preload: setAttribute() to 1.5
+reflection-embedded.html	audio.preload: setAttribute() to 7
+reflection-embedded.html	audio.preload: setAttribute() to Infinity
+reflection-embedded.html	audio.preload: setAttribute() to NaN
+reflection-embedded.html	audio.preload: setAttribute() to false
+reflection-embedded.html	audio.preload: setAttribute() to null
+reflection-embedded.html	audio.preload: setAttribute() to object "[object Object]"
+reflection-embedded.html	audio.preload: setAttribute() to object "test-toString"
+reflection-embedded.html	audio.preload: setAttribute() to object "test-valueOf"
+reflection-embedded.html	audio.preload: setAttribute() to true
+reflection-embedded.html	audio.preload: setAttribute() to undefined
+reflection-embedded.html	audio.preload: typeof IDL attribute
+reflection-embedded.html	audio.src: IDL get with DOM attribute unset
+reflection-embedded.html	audio.src: IDL set to " foo "
+reflection-embedded.html	audio.src: IDL set to ""
+reflection-embedded.html	audio.src: IDL set to "+100"
+reflection-embedded.html	audio.src: IDL set to ".5"
+reflection-embedded.html	audio.src: IDL set to "//site.example/path???@#l"
+reflection-embedded.html	audio.src: IDL set to "5%"
+reflection-embedded.html	audio.src: IDL set to "http://site.example/"
+reflection-embedded.html	audio.src: IDL set to -Infinity
+reflection-embedded.html	audio.src: IDL set to 1.5
+reflection-embedded.html	audio.src: IDL set to 7
+reflection-embedded.html	audio.src: IDL set to Infinity
+reflection-embedded.html	audio.src: IDL set to NaN
+reflection-embedded.html	audio.src: IDL set to false
+reflection-embedded.html	audio.src: IDL set to null
+reflection-embedded.html	audio.src: IDL set to object "[object Object]"
+reflection-embedded.html	audio.src: IDL set to object "test-toString"
+reflection-embedded.html	audio.src: IDL set to object "test-valueOf"
+reflection-embedded.html	audio.src: IDL set to true
+reflection-embedded.html	audio.src: IDL set to undefined
+reflection-embedded.html	audio.src: setAttribute() to " foo "
+reflection-embedded.html	audio.src: setAttribute() to ""
+reflection-embedded.html	audio.src: setAttribute() to "+100"
+reflection-embedded.html	audio.src: setAttribute() to ".5"
+reflection-embedded.html	audio.src: setAttribute() to "//site.example/path???@#l"
+reflection-embedded.html	audio.src: setAttribute() to "5%"
+reflection-embedded.html	audio.src: setAttribute() to "http://site.example/"
+reflection-embedded.html	audio.src: setAttribute() to -Infinity
+reflection-embedded.html	audio.src: setAttribute() to 1.5
+reflection-embedded.html	audio.src: setAttribute() to 7
+reflection-embedded.html	audio.src: setAttribute() to Infinity
+reflection-embedded.html	audio.src: setAttribute() to NaN
+reflection-embedded.html	audio.src: setAttribute() to false
+reflection-embedded.html	audio.src: setAttribute() to null
+reflection-embedded.html	audio.src: setAttribute() to object "[object Object]"
+reflection-embedded.html	audio.src: setAttribute() to object "test-toString"
+reflection-embedded.html	audio.src: setAttribute() to object "test-valueOf"
+reflection-embedded.html	audio.src: setAttribute() to true
+reflection-embedded.html	audio.src: setAttribute() to undefined
+reflection-embedded.html	audio.src: typeof IDL attribute
 reflection-embedded.html	audio.tabIndex: IDL set to -1
 reflection-embedded.html	audio.tabIndex: IDL set to -2147483648
 reflection-embedded.html	audio.tabIndex: IDL set to -36
@@ -10467,6 +10834,44 @@ reflection-embedded.html	iframe.lang: setAttribute() to true
 reflection-embedded.html	iframe.lang: setAttribute() to undefined
 reflection-embedded.html	iframe.lang: typeof IDL attribute
 reflection-embedded.html	iframe.src: IDL get with DOM attribute unset
+reflection-embedded.html	iframe.src: IDL set to " foo "
+reflection-embedded.html	iframe.src: IDL set to ""
+reflection-embedded.html	iframe.src: IDL set to "+100"
+reflection-embedded.html	iframe.src: IDL set to ".5"
+reflection-embedded.html	iframe.src: IDL set to "//site.example/path???@#l"
+reflection-embedded.html	iframe.src: IDL set to "5%"
+reflection-embedded.html	iframe.src: IDL set to "http://site.example/"
+reflection-embedded.html	iframe.src: IDL set to -Infinity
+reflection-embedded.html	iframe.src: IDL set to 1.5
+reflection-embedded.html	iframe.src: IDL set to 7
+reflection-embedded.html	iframe.src: IDL set to Infinity
+reflection-embedded.html	iframe.src: IDL set to NaN
+reflection-embedded.html	iframe.src: IDL set to false
+reflection-embedded.html	iframe.src: IDL set to null
+reflection-embedded.html	iframe.src: IDL set to object "[object Object]"
+reflection-embedded.html	iframe.src: IDL set to object "test-toString"
+reflection-embedded.html	iframe.src: IDL set to object "test-valueOf"
+reflection-embedded.html	iframe.src: IDL set to true
+reflection-embedded.html	iframe.src: IDL set to undefined
+reflection-embedded.html	iframe.src: setAttribute() to " foo "
+reflection-embedded.html	iframe.src: setAttribute() to ""
+reflection-embedded.html	iframe.src: setAttribute() to "+100"
+reflection-embedded.html	iframe.src: setAttribute() to ".5"
+reflection-embedded.html	iframe.src: setAttribute() to "//site.example/path???@#l"
+reflection-embedded.html	iframe.src: setAttribute() to "5%"
+reflection-embedded.html	iframe.src: setAttribute() to "http://site.example/"
+reflection-embedded.html	iframe.src: setAttribute() to -Infinity
+reflection-embedded.html	iframe.src: setAttribute() to 1.5
+reflection-embedded.html	iframe.src: setAttribute() to 7
+reflection-embedded.html	iframe.src: setAttribute() to Infinity
+reflection-embedded.html	iframe.src: setAttribute() to NaN
+reflection-embedded.html	iframe.src: setAttribute() to false
+reflection-embedded.html	iframe.src: setAttribute() to null
+reflection-embedded.html	iframe.src: setAttribute() to object "[object Object]"
+reflection-embedded.html	iframe.src: setAttribute() to object "test-toString"
+reflection-embedded.html	iframe.src: setAttribute() to object "test-valueOf"
+reflection-embedded.html	iframe.src: setAttribute() to true
+reflection-embedded.html	iframe.src: setAttribute() to undefined
 reflection-embedded.html	iframe.src: typeof IDL attribute
 reflection-embedded.html	iframe.tabIndex: IDL set to -1
 reflection-embedded.html	iframe.tabIndex: IDL set to -2147483648
@@ -10791,7 +11196,79 @@ reflection-embedded.html	img.name: setAttribute() to true
 reflection-embedded.html	img.name: setAttribute() to undefined
 reflection-embedded.html	img.name: typeof IDL attribute
 reflection-embedded.html	img.src: IDL get with DOM attribute unset
+reflection-embedded.html	img.src: IDL set to " foo "
+reflection-embedded.html	img.src: IDL set to ""
+reflection-embedded.html	img.src: IDL set to "+100"
+reflection-embedded.html	img.src: IDL set to ".5"
+reflection-embedded.html	img.src: IDL set to "//site.example/path???@#l"
+reflection-embedded.html	img.src: IDL set to "5%"
+reflection-embedded.html	img.src: IDL set to "http://site.example/"
+reflection-embedded.html	img.src: IDL set to -Infinity
+reflection-embedded.html	img.src: IDL set to 1.5
+reflection-embedded.html	img.src: IDL set to 7
+reflection-embedded.html	img.src: IDL set to Infinity
+reflection-embedded.html	img.src: IDL set to NaN
+reflection-embedded.html	img.src: IDL set to false
+reflection-embedded.html	img.src: IDL set to null
+reflection-embedded.html	img.src: IDL set to object "[object Object]"
+reflection-embedded.html	img.src: IDL set to object "test-toString"
+reflection-embedded.html	img.src: IDL set to object "test-valueOf"
+reflection-embedded.html	img.src: IDL set to true
+reflection-embedded.html	img.src: IDL set to undefined
+reflection-embedded.html	img.src: setAttribute() to " foo "
+reflection-embedded.html	img.src: setAttribute() to ""
+reflection-embedded.html	img.src: setAttribute() to "+100"
+reflection-embedded.html	img.src: setAttribute() to ".5"
+reflection-embedded.html	img.src: setAttribute() to "//site.example/path???@#l"
+reflection-embedded.html	img.src: setAttribute() to "5%"
+reflection-embedded.html	img.src: setAttribute() to "http://site.example/"
+reflection-embedded.html	img.src: setAttribute() to -Infinity
+reflection-embedded.html	img.src: setAttribute() to 1.5
+reflection-embedded.html	img.src: setAttribute() to 7
+reflection-embedded.html	img.src: setAttribute() to Infinity
+reflection-embedded.html	img.src: setAttribute() to NaN
+reflection-embedded.html	img.src: setAttribute() to false
+reflection-embedded.html	img.src: setAttribute() to null
+reflection-embedded.html	img.src: setAttribute() to object "[object Object]"
+reflection-embedded.html	img.src: setAttribute() to object "test-toString"
+reflection-embedded.html	img.src: setAttribute() to object "test-valueOf"
+reflection-embedded.html	img.src: setAttribute() to true
+reflection-embedded.html	img.src: setAttribute() to undefined
 reflection-embedded.html	img.src: typeof IDL attribute
+reflection-embedded.html	img.srcset: IDL get with DOM attribute unset
+reflection-embedded.html	img.srcset: IDL set to ""
+reflection-embedded.html	img.srcset: IDL set to "+100"
+reflection-embedded.html	img.srcset: IDL set to ".5"
+reflection-embedded.html	img.srcset: IDL set to "5%"
+reflection-embedded.html	img.srcset: IDL set to -Infinity
+reflection-embedded.html	img.srcset: IDL set to 1.5
+reflection-embedded.html	img.srcset: IDL set to 7
+reflection-embedded.html	img.srcset: IDL set to Infinity
+reflection-embedded.html	img.srcset: IDL set to NaN
+reflection-embedded.html	img.srcset: IDL set to false
+reflection-embedded.html	img.srcset: IDL set to null
+reflection-embedded.html	img.srcset: IDL set to object "[object Object]"
+reflection-embedded.html	img.srcset: IDL set to object "test-toString"
+reflection-embedded.html	img.srcset: IDL set to object "test-valueOf"
+reflection-embedded.html	img.srcset: IDL set to true
+reflection-embedded.html	img.srcset: IDL set to undefined
+reflection-embedded.html	img.srcset: setAttribute() to ""
+reflection-embedded.html	img.srcset: setAttribute() to "+100"
+reflection-embedded.html	img.srcset: setAttribute() to ".5"
+reflection-embedded.html	img.srcset: setAttribute() to "5%"
+reflection-embedded.html	img.srcset: setAttribute() to -Infinity
+reflection-embedded.html	img.srcset: setAttribute() to 1.5
+reflection-embedded.html	img.srcset: setAttribute() to 7
+reflection-embedded.html	img.srcset: setAttribute() to Infinity
+reflection-embedded.html	img.srcset: setAttribute() to NaN
+reflection-embedded.html	img.srcset: setAttribute() to false
+reflection-embedded.html	img.srcset: setAttribute() to null
+reflection-embedded.html	img.srcset: setAttribute() to object "[object Object]"
+reflection-embedded.html	img.srcset: setAttribute() to object "test-toString"
+reflection-embedded.html	img.srcset: setAttribute() to object "test-valueOf"
+reflection-embedded.html	img.srcset: setAttribute() to true
+reflection-embedded.html	img.srcset: setAttribute() to undefined
+reflection-embedded.html	img.srcset: typeof IDL attribute
 reflection-embedded.html	img.tabIndex: IDL set to -1
 reflection-embedded.html	img.tabIndex: IDL set to -2147483648
 reflection-embedded.html	img.tabIndex: IDL set to -36
@@ -11973,6 +12450,148 @@ reflection-embedded.html	source.lang: setAttribute() to object "test-valueOf"
 reflection-embedded.html	source.lang: setAttribute() to true
 reflection-embedded.html	source.lang: setAttribute() to undefined
 reflection-embedded.html	source.lang: typeof IDL attribute
+reflection-embedded.html	source.media: IDL get with DOM attribute unset
+reflection-embedded.html	source.media: IDL set to ""
+reflection-embedded.html	source.media: IDL set to "+100"
+reflection-embedded.html	source.media: IDL set to ".5"
+reflection-embedded.html	source.media: IDL set to "5%"
+reflection-embedded.html	source.media: IDL set to -Infinity
+reflection-embedded.html	source.media: IDL set to 1.5
+reflection-embedded.html	source.media: IDL set to 7
+reflection-embedded.html	source.media: IDL set to Infinity
+reflection-embedded.html	source.media: IDL set to NaN
+reflection-embedded.html	source.media: IDL set to false
+reflection-embedded.html	source.media: IDL set to null
+reflection-embedded.html	source.media: IDL set to object "[object Object]"
+reflection-embedded.html	source.media: IDL set to object "test-toString"
+reflection-embedded.html	source.media: IDL set to object "test-valueOf"
+reflection-embedded.html	source.media: IDL set to true
+reflection-embedded.html	source.media: IDL set to undefined
+reflection-embedded.html	source.media: setAttribute() to ""
+reflection-embedded.html	source.media: setAttribute() to "+100"
+reflection-embedded.html	source.media: setAttribute() to ".5"
+reflection-embedded.html	source.media: setAttribute() to "5%"
+reflection-embedded.html	source.media: setAttribute() to -Infinity
+reflection-embedded.html	source.media: setAttribute() to 1.5
+reflection-embedded.html	source.media: setAttribute() to 7
+reflection-embedded.html	source.media: setAttribute() to Infinity
+reflection-embedded.html	source.media: setAttribute() to NaN
+reflection-embedded.html	source.media: setAttribute() to false
+reflection-embedded.html	source.media: setAttribute() to null
+reflection-embedded.html	source.media: setAttribute() to object "[object Object]"
+reflection-embedded.html	source.media: setAttribute() to object "test-toString"
+reflection-embedded.html	source.media: setAttribute() to object "test-valueOf"
+reflection-embedded.html	source.media: setAttribute() to true
+reflection-embedded.html	source.media: setAttribute() to undefined
+reflection-embedded.html	source.media: typeof IDL attribute
+reflection-embedded.html	source.sizes: IDL get with DOM attribute unset
+reflection-embedded.html	source.sizes: IDL set to ""
+reflection-embedded.html	source.sizes: IDL set to "+100"
+reflection-embedded.html	source.sizes: IDL set to ".5"
+reflection-embedded.html	source.sizes: IDL set to "5%"
+reflection-embedded.html	source.sizes: IDL set to -Infinity
+reflection-embedded.html	source.sizes: IDL set to 1.5
+reflection-embedded.html	source.sizes: IDL set to 7
+reflection-embedded.html	source.sizes: IDL set to Infinity
+reflection-embedded.html	source.sizes: IDL set to NaN
+reflection-embedded.html	source.sizes: IDL set to false
+reflection-embedded.html	source.sizes: IDL set to null
+reflection-embedded.html	source.sizes: IDL set to object "[object Object]"
+reflection-embedded.html	source.sizes: IDL set to object "test-toString"
+reflection-embedded.html	source.sizes: IDL set to object "test-valueOf"
+reflection-embedded.html	source.sizes: IDL set to true
+reflection-embedded.html	source.sizes: IDL set to undefined
+reflection-embedded.html	source.sizes: setAttribute() to ""
+reflection-embedded.html	source.sizes: setAttribute() to "+100"
+reflection-embedded.html	source.sizes: setAttribute() to ".5"
+reflection-embedded.html	source.sizes: setAttribute() to "5%"
+reflection-embedded.html	source.sizes: setAttribute() to -Infinity
+reflection-embedded.html	source.sizes: setAttribute() to 1.5
+reflection-embedded.html	source.sizes: setAttribute() to 7
+reflection-embedded.html	source.sizes: setAttribute() to Infinity
+reflection-embedded.html	source.sizes: setAttribute() to NaN
+reflection-embedded.html	source.sizes: setAttribute() to false
+reflection-embedded.html	source.sizes: setAttribute() to null
+reflection-embedded.html	source.sizes: setAttribute() to object "[object Object]"
+reflection-embedded.html	source.sizes: setAttribute() to object "test-toString"
+reflection-embedded.html	source.sizes: setAttribute() to object "test-valueOf"
+reflection-embedded.html	source.sizes: setAttribute() to true
+reflection-embedded.html	source.sizes: setAttribute() to undefined
+reflection-embedded.html	source.sizes: typeof IDL attribute
+reflection-embedded.html	source.src: IDL get with DOM attribute unset
+reflection-embedded.html	source.src: IDL set to " foo "
+reflection-embedded.html	source.src: IDL set to ""
+reflection-embedded.html	source.src: IDL set to "+100"
+reflection-embedded.html	source.src: IDL set to ".5"
+reflection-embedded.html	source.src: IDL set to "//site.example/path???@#l"
+reflection-embedded.html	source.src: IDL set to "5%"
+reflection-embedded.html	source.src: IDL set to "http://site.example/"
+reflection-embedded.html	source.src: IDL set to -Infinity
+reflection-embedded.html	source.src: IDL set to 1.5
+reflection-embedded.html	source.src: IDL set to 7
+reflection-embedded.html	source.src: IDL set to Infinity
+reflection-embedded.html	source.src: IDL set to NaN
+reflection-embedded.html	source.src: IDL set to false
+reflection-embedded.html	source.src: IDL set to null
+reflection-embedded.html	source.src: IDL set to object "[object Object]"
+reflection-embedded.html	source.src: IDL set to object "test-toString"
+reflection-embedded.html	source.src: IDL set to object "test-valueOf"
+reflection-embedded.html	source.src: IDL set to true
+reflection-embedded.html	source.src: IDL set to undefined
+reflection-embedded.html	source.src: setAttribute() to " foo "
+reflection-embedded.html	source.src: setAttribute() to ""
+reflection-embedded.html	source.src: setAttribute() to "+100"
+reflection-embedded.html	source.src: setAttribute() to ".5"
+reflection-embedded.html	source.src: setAttribute() to "//site.example/path???@#l"
+reflection-embedded.html	source.src: setAttribute() to "5%"
+reflection-embedded.html	source.src: setAttribute() to "http://site.example/"
+reflection-embedded.html	source.src: setAttribute() to -Infinity
+reflection-embedded.html	source.src: setAttribute() to 1.5
+reflection-embedded.html	source.src: setAttribute() to 7
+reflection-embedded.html	source.src: setAttribute() to Infinity
+reflection-embedded.html	source.src: setAttribute() to NaN
+reflection-embedded.html	source.src: setAttribute() to false
+reflection-embedded.html	source.src: setAttribute() to null
+reflection-embedded.html	source.src: setAttribute() to object "[object Object]"
+reflection-embedded.html	source.src: setAttribute() to object "test-toString"
+reflection-embedded.html	source.src: setAttribute() to object "test-valueOf"
+reflection-embedded.html	source.src: setAttribute() to true
+reflection-embedded.html	source.src: setAttribute() to undefined
+reflection-embedded.html	source.src: typeof IDL attribute
+reflection-embedded.html	source.srcset: IDL get with DOM attribute unset
+reflection-embedded.html	source.srcset: IDL set to ""
+reflection-embedded.html	source.srcset: IDL set to "+100"
+reflection-embedded.html	source.srcset: IDL set to ".5"
+reflection-embedded.html	source.srcset: IDL set to "5%"
+reflection-embedded.html	source.srcset: IDL set to -Infinity
+reflection-embedded.html	source.srcset: IDL set to 1.5
+reflection-embedded.html	source.srcset: IDL set to 7
+reflection-embedded.html	source.srcset: IDL set to Infinity
+reflection-embedded.html	source.srcset: IDL set to NaN
+reflection-embedded.html	source.srcset: IDL set to false
+reflection-embedded.html	source.srcset: IDL set to null
+reflection-embedded.html	source.srcset: IDL set to object "[object Object]"
+reflection-embedded.html	source.srcset: IDL set to object "test-toString"
+reflection-embedded.html	source.srcset: IDL set to object "test-valueOf"
+reflection-embedded.html	source.srcset: IDL set to true
+reflection-embedded.html	source.srcset: IDL set to undefined
+reflection-embedded.html	source.srcset: setAttribute() to ""
+reflection-embedded.html	source.srcset: setAttribute() to "+100"
+reflection-embedded.html	source.srcset: setAttribute() to ".5"
+reflection-embedded.html	source.srcset: setAttribute() to "5%"
+reflection-embedded.html	source.srcset: setAttribute() to -Infinity
+reflection-embedded.html	source.srcset: setAttribute() to 1.5
+reflection-embedded.html	source.srcset: setAttribute() to 7
+reflection-embedded.html	source.srcset: setAttribute() to Infinity
+reflection-embedded.html	source.srcset: setAttribute() to NaN
+reflection-embedded.html	source.srcset: setAttribute() to false
+reflection-embedded.html	source.srcset: setAttribute() to null
+reflection-embedded.html	source.srcset: setAttribute() to object "[object Object]"
+reflection-embedded.html	source.srcset: setAttribute() to object "test-toString"
+reflection-embedded.html	source.srcset: setAttribute() to object "test-valueOf"
+reflection-embedded.html	source.srcset: setAttribute() to true
+reflection-embedded.html	source.srcset: setAttribute() to undefined
+reflection-embedded.html	source.srcset: typeof IDL attribute
 reflection-embedded.html	source.tabIndex: IDL set to -1
 reflection-embedded.html	source.tabIndex: IDL set to -2147483648
 reflection-embedded.html	source.tabIndex: IDL set to -36
@@ -12035,6 +12654,40 @@ reflection-embedded.html	source.title: setAttribute() to object "test-valueOf"
 reflection-embedded.html	source.title: setAttribute() to true
 reflection-embedded.html	source.title: setAttribute() to undefined
 reflection-embedded.html	source.title: typeof IDL attribute
+reflection-embedded.html	source.type: IDL get with DOM attribute unset
+reflection-embedded.html	source.type: IDL set to ""
+reflection-embedded.html	source.type: IDL set to "+100"
+reflection-embedded.html	source.type: IDL set to ".5"
+reflection-embedded.html	source.type: IDL set to "5%"
+reflection-embedded.html	source.type: IDL set to -Infinity
+reflection-embedded.html	source.type: IDL set to 1.5
+reflection-embedded.html	source.type: IDL set to 7
+reflection-embedded.html	source.type: IDL set to Infinity
+reflection-embedded.html	source.type: IDL set to NaN
+reflection-embedded.html	source.type: IDL set to false
+reflection-embedded.html	source.type: IDL set to null
+reflection-embedded.html	source.type: IDL set to object "[object Object]"
+reflection-embedded.html	source.type: IDL set to object "test-toString"
+reflection-embedded.html	source.type: IDL set to object "test-valueOf"
+reflection-embedded.html	source.type: IDL set to true
+reflection-embedded.html	source.type: IDL set to undefined
+reflection-embedded.html	source.type: setAttribute() to ""
+reflection-embedded.html	source.type: setAttribute() to "+100"
+reflection-embedded.html	source.type: setAttribute() to ".5"
+reflection-embedded.html	source.type: setAttribute() to "5%"
+reflection-embedded.html	source.type: setAttribute() to -Infinity
+reflection-embedded.html	source.type: setAttribute() to 1.5
+reflection-embedded.html	source.type: setAttribute() to 7
+reflection-embedded.html	source.type: setAttribute() to Infinity
+reflection-embedded.html	source.type: setAttribute() to NaN
+reflection-embedded.html	source.type: setAttribute() to false
+reflection-embedded.html	source.type: setAttribute() to null
+reflection-embedded.html	source.type: setAttribute() to object "[object Object]"
+reflection-embedded.html	source.type: setAttribute() to object "test-toString"
+reflection-embedded.html	source.type: setAttribute() to object "test-valueOf"
+reflection-embedded.html	source.type: setAttribute() to true
+reflection-embedded.html	source.type: setAttribute() to undefined
+reflection-embedded.html	source.type: typeof IDL attribute
 reflection-embedded.html	track.autofocus: IDL set to true
 reflection-embedded.html	track.className (<track class>): IDL get with DOM attribute unset
 reflection-embedded.html	track.className (<track class>): IDL set to ""
@@ -12629,8 +13282,44 @@ reflection-forms.html	button.disabled: setAttribute() to true
 reflection-forms.html	button.disabled: setAttribute() to undefined
 reflection-forms.html	button.disabled: typeof IDL attribute
 reflection-forms.html	button.formAction: IDL get with DOM attribute unset
+reflection-forms.html	button.formAction: IDL set to " foo "
 reflection-forms.html	button.formAction: IDL set to ""
+reflection-forms.html	button.formAction: IDL set to "+100"
+reflection-forms.html	button.formAction: IDL set to ".5"
+reflection-forms.html	button.formAction: IDL set to "//site.example/path???@#l"
+reflection-forms.html	button.formAction: IDL set to "5%"
+reflection-forms.html	button.formAction: IDL set to "http://site.example/"
+reflection-forms.html	button.formAction: IDL set to -Infinity
+reflection-forms.html	button.formAction: IDL set to 1.5
+reflection-forms.html	button.formAction: IDL set to 7
+reflection-forms.html	button.formAction: IDL set to Infinity
+reflection-forms.html	button.formAction: IDL set to NaN
+reflection-forms.html	button.formAction: IDL set to false
+reflection-forms.html	button.formAction: IDL set to null
+reflection-forms.html	button.formAction: IDL set to object "[object Object]"
+reflection-forms.html	button.formAction: IDL set to object "test-toString"
+reflection-forms.html	button.formAction: IDL set to object "test-valueOf"
+reflection-forms.html	button.formAction: IDL set to true
+reflection-forms.html	button.formAction: IDL set to undefined
+reflection-forms.html	button.formAction: setAttribute() to " foo "
 reflection-forms.html	button.formAction: setAttribute() to ""
+reflection-forms.html	button.formAction: setAttribute() to "+100"
+reflection-forms.html	button.formAction: setAttribute() to ".5"
+reflection-forms.html	button.formAction: setAttribute() to "//site.example/path???@#l"
+reflection-forms.html	button.formAction: setAttribute() to "5%"
+reflection-forms.html	button.formAction: setAttribute() to "http://site.example/"
+reflection-forms.html	button.formAction: setAttribute() to -Infinity
+reflection-forms.html	button.formAction: setAttribute() to 1.5
+reflection-forms.html	button.formAction: setAttribute() to 7
+reflection-forms.html	button.formAction: setAttribute() to Infinity
+reflection-forms.html	button.formAction: setAttribute() to NaN
+reflection-forms.html	button.formAction: setAttribute() to false
+reflection-forms.html	button.formAction: setAttribute() to null
+reflection-forms.html	button.formAction: setAttribute() to object "[object Object]"
+reflection-forms.html	button.formAction: setAttribute() to object "test-toString"
+reflection-forms.html	button.formAction: setAttribute() to object "test-valueOf"
+reflection-forms.html	button.formAction: setAttribute() to true
+reflection-forms.html	button.formAction: setAttribute() to undefined
 reflection-forms.html	button.formAction: typeof IDL attribute
 reflection-forms.html	button.formEnctype: IDL get with DOM attribute unset
 reflection-forms.html	button.formEnctype: IDL set to ""
@@ -13650,8 +14339,44 @@ reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute()
 reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to undefined
 reflection-forms.html	form.acceptCharset (<form accept-charset>): typeof IDL attribute
 reflection-forms.html	form.action: IDL get with DOM attribute unset
+reflection-forms.html	form.action: IDL set to " foo "
 reflection-forms.html	form.action: IDL set to ""
+reflection-forms.html	form.action: IDL set to "+100"
+reflection-forms.html	form.action: IDL set to ".5"
+reflection-forms.html	form.action: IDL set to "//site.example/path???@#l"
+reflection-forms.html	form.action: IDL set to "5%"
+reflection-forms.html	form.action: IDL set to "http://site.example/"
+reflection-forms.html	form.action: IDL set to -Infinity
+reflection-forms.html	form.action: IDL set to 1.5
+reflection-forms.html	form.action: IDL set to 7
+reflection-forms.html	form.action: IDL set to Infinity
+reflection-forms.html	form.action: IDL set to NaN
+reflection-forms.html	form.action: IDL set to false
+reflection-forms.html	form.action: IDL set to null
+reflection-forms.html	form.action: IDL set to object "[object Object]"
+reflection-forms.html	form.action: IDL set to object "test-toString"
+reflection-forms.html	form.action: IDL set to object "test-valueOf"
+reflection-forms.html	form.action: IDL set to true
+reflection-forms.html	form.action: IDL set to undefined
+reflection-forms.html	form.action: setAttribute() to " foo "
 reflection-forms.html	form.action: setAttribute() to ""
+reflection-forms.html	form.action: setAttribute() to "+100"
+reflection-forms.html	form.action: setAttribute() to ".5"
+reflection-forms.html	form.action: setAttribute() to "//site.example/path???@#l"
+reflection-forms.html	form.action: setAttribute() to "5%"
+reflection-forms.html	form.action: setAttribute() to "http://site.example/"
+reflection-forms.html	form.action: setAttribute() to -Infinity
+reflection-forms.html	form.action: setAttribute() to 1.5
+reflection-forms.html	form.action: setAttribute() to 7
+reflection-forms.html	form.action: setAttribute() to Infinity
+reflection-forms.html	form.action: setAttribute() to NaN
+reflection-forms.html	form.action: setAttribute() to false
+reflection-forms.html	form.action: setAttribute() to null
+reflection-forms.html	form.action: setAttribute() to object "[object Object]"
+reflection-forms.html	form.action: setAttribute() to object "test-toString"
+reflection-forms.html	form.action: setAttribute() to object "test-valueOf"
+reflection-forms.html	form.action: setAttribute() to true
+reflection-forms.html	form.action: setAttribute() to undefined
 reflection-forms.html	form.action: typeof IDL attribute
 reflection-forms.html	form.autocomplete: IDL get with DOM attribute unset
 reflection-forms.html	form.autocomplete: IDL set to ""
@@ -14570,8 +15295,44 @@ reflection-forms.html	input.disabled: setAttribute() to true
 reflection-forms.html	input.disabled: setAttribute() to undefined
 reflection-forms.html	input.disabled: typeof IDL attribute
 reflection-forms.html	input.formAction: IDL get with DOM attribute unset
+reflection-forms.html	input.formAction: IDL set to " foo "
 reflection-forms.html	input.formAction: IDL set to ""
+reflection-forms.html	input.formAction: IDL set to "+100"
+reflection-forms.html	input.formAction: IDL set to ".5"
+reflection-forms.html	input.formAction: IDL set to "//site.example/path???@#l"
+reflection-forms.html	input.formAction: IDL set to "5%"
+reflection-forms.html	input.formAction: IDL set to "http://site.example/"
+reflection-forms.html	input.formAction: IDL set to -Infinity
+reflection-forms.html	input.formAction: IDL set to 1.5
+reflection-forms.html	input.formAction: IDL set to 7
+reflection-forms.html	input.formAction: IDL set to Infinity
+reflection-forms.html	input.formAction: IDL set to NaN
+reflection-forms.html	input.formAction: IDL set to false
+reflection-forms.html	input.formAction: IDL set to null
+reflection-forms.html	input.formAction: IDL set to object "[object Object]"
+reflection-forms.html	input.formAction: IDL set to object "test-toString"
+reflection-forms.html	input.formAction: IDL set to object "test-valueOf"
+reflection-forms.html	input.formAction: IDL set to true
+reflection-forms.html	input.formAction: IDL set to undefined
+reflection-forms.html	input.formAction: setAttribute() to " foo "
 reflection-forms.html	input.formAction: setAttribute() to ""
+reflection-forms.html	input.formAction: setAttribute() to "+100"
+reflection-forms.html	input.formAction: setAttribute() to ".5"
+reflection-forms.html	input.formAction: setAttribute() to "//site.example/path???@#l"
+reflection-forms.html	input.formAction: setAttribute() to "5%"
+reflection-forms.html	input.formAction: setAttribute() to "http://site.example/"
+reflection-forms.html	input.formAction: setAttribute() to -Infinity
+reflection-forms.html	input.formAction: setAttribute() to 1.5
+reflection-forms.html	input.formAction: setAttribute() to 7
+reflection-forms.html	input.formAction: setAttribute() to Infinity
+reflection-forms.html	input.formAction: setAttribute() to NaN
+reflection-forms.html	input.formAction: setAttribute() to false
+reflection-forms.html	input.formAction: setAttribute() to null
+reflection-forms.html	input.formAction: setAttribute() to object "[object Object]"
+reflection-forms.html	input.formAction: setAttribute() to object "test-toString"
+reflection-forms.html	input.formAction: setAttribute() to object "test-valueOf"
+reflection-forms.html	input.formAction: setAttribute() to true
+reflection-forms.html	input.formAction: setAttribute() to undefined
 reflection-forms.html	input.formAction: typeof IDL attribute
 reflection-forms.html	input.formEnctype: IDL get with DOM attribute unset
 reflection-forms.html	input.formEnctype: IDL set to ""
@@ -15329,6 +16090,44 @@ reflection-forms.html	input.size: setAttribute() to true
 reflection-forms.html	input.size: setAttribute() to undefined
 reflection-forms.html	input.size: typeof IDL attribute
 reflection-forms.html	input.src: IDL get with DOM attribute unset
+reflection-forms.html	input.src: IDL set to " foo "
+reflection-forms.html	input.src: IDL set to ""
+reflection-forms.html	input.src: IDL set to "+100"
+reflection-forms.html	input.src: IDL set to ".5"
+reflection-forms.html	input.src: IDL set to "//site.example/path???@#l"
+reflection-forms.html	input.src: IDL set to "5%"
+reflection-forms.html	input.src: IDL set to "http://site.example/"
+reflection-forms.html	input.src: IDL set to -Infinity
+reflection-forms.html	input.src: IDL set to 1.5
+reflection-forms.html	input.src: IDL set to 7
+reflection-forms.html	input.src: IDL set to Infinity
+reflection-forms.html	input.src: IDL set to NaN
+reflection-forms.html	input.src: IDL set to false
+reflection-forms.html	input.src: IDL set to null
+reflection-forms.html	input.src: IDL set to object "[object Object]"
+reflection-forms.html	input.src: IDL set to object "test-toString"
+reflection-forms.html	input.src: IDL set to object "test-valueOf"
+reflection-forms.html	input.src: IDL set to true
+reflection-forms.html	input.src: IDL set to undefined
+reflection-forms.html	input.src: setAttribute() to " foo "
+reflection-forms.html	input.src: setAttribute() to ""
+reflection-forms.html	input.src: setAttribute() to "+100"
+reflection-forms.html	input.src: setAttribute() to ".5"
+reflection-forms.html	input.src: setAttribute() to "//site.example/path???@#l"
+reflection-forms.html	input.src: setAttribute() to "5%"
+reflection-forms.html	input.src: setAttribute() to "http://site.example/"
+reflection-forms.html	input.src: setAttribute() to -Infinity
+reflection-forms.html	input.src: setAttribute() to 1.5
+reflection-forms.html	input.src: setAttribute() to 7
+reflection-forms.html	input.src: setAttribute() to Infinity
+reflection-forms.html	input.src: setAttribute() to NaN
+reflection-forms.html	input.src: setAttribute() to false
+reflection-forms.html	input.src: setAttribute() to null
+reflection-forms.html	input.src: setAttribute() to object "[object Object]"
+reflection-forms.html	input.src: setAttribute() to object "test-toString"
+reflection-forms.html	input.src: setAttribute() to object "test-valueOf"
+reflection-forms.html	input.src: setAttribute() to true
+reflection-forms.html	input.src: setAttribute() to undefined
 reflection-forms.html	input.src: typeof IDL attribute
 reflection-forms.html	input.step: IDL get with DOM attribute unset
 reflection-forms.html	input.step: IDL set to ""
@@ -18789,6 +19588,44 @@ reflection-forms.html	textarea.wrap: setAttribute() to undefined
 reflection-forms.html	textarea.wrap: typeof IDL attribute
 reflection-grouping.html	blockquote.autofocus: IDL set to true
 reflection-grouping.html	blockquote.cite: IDL get with DOM attribute unset
+reflection-grouping.html	blockquote.cite: IDL set to " foo "
+reflection-grouping.html	blockquote.cite: IDL set to ""
+reflection-grouping.html	blockquote.cite: IDL set to "+100"
+reflection-grouping.html	blockquote.cite: IDL set to ".5"
+reflection-grouping.html	blockquote.cite: IDL set to "//site.example/path???@#l"
+reflection-grouping.html	blockquote.cite: IDL set to "5%"
+reflection-grouping.html	blockquote.cite: IDL set to "http://site.example/"
+reflection-grouping.html	blockquote.cite: IDL set to -Infinity
+reflection-grouping.html	blockquote.cite: IDL set to 1.5
+reflection-grouping.html	blockquote.cite: IDL set to 7
+reflection-grouping.html	blockquote.cite: IDL set to Infinity
+reflection-grouping.html	blockquote.cite: IDL set to NaN
+reflection-grouping.html	blockquote.cite: IDL set to false
+reflection-grouping.html	blockquote.cite: IDL set to null
+reflection-grouping.html	blockquote.cite: IDL set to object "[object Object]"
+reflection-grouping.html	blockquote.cite: IDL set to object "test-toString"
+reflection-grouping.html	blockquote.cite: IDL set to object "test-valueOf"
+reflection-grouping.html	blockquote.cite: IDL set to true
+reflection-grouping.html	blockquote.cite: IDL set to undefined
+reflection-grouping.html	blockquote.cite: setAttribute() to " foo "
+reflection-grouping.html	blockquote.cite: setAttribute() to ""
+reflection-grouping.html	blockquote.cite: setAttribute() to "+100"
+reflection-grouping.html	blockquote.cite: setAttribute() to ".5"
+reflection-grouping.html	blockquote.cite: setAttribute() to "//site.example/path???@#l"
+reflection-grouping.html	blockquote.cite: setAttribute() to "5%"
+reflection-grouping.html	blockquote.cite: setAttribute() to "http://site.example/"
+reflection-grouping.html	blockquote.cite: setAttribute() to -Infinity
+reflection-grouping.html	blockquote.cite: setAttribute() to 1.5
+reflection-grouping.html	blockquote.cite: setAttribute() to 7
+reflection-grouping.html	blockquote.cite: setAttribute() to Infinity
+reflection-grouping.html	blockquote.cite: setAttribute() to NaN
+reflection-grouping.html	blockquote.cite: setAttribute() to false
+reflection-grouping.html	blockquote.cite: setAttribute() to null
+reflection-grouping.html	blockquote.cite: setAttribute() to object "[object Object]"
+reflection-grouping.html	blockquote.cite: setAttribute() to object "test-toString"
+reflection-grouping.html	blockquote.cite: setAttribute() to object "test-valueOf"
+reflection-grouping.html	blockquote.cite: setAttribute() to true
+reflection-grouping.html	blockquote.cite: setAttribute() to undefined
 reflection-grouping.html	blockquote.cite: typeof IDL attribute
 reflection-grouping.html	blockquote.className (<blockquote class>): IDL get with DOM attribute unset
 reflection-grouping.html	blockquote.className (<blockquote class>): IDL set to ""
@@ -23194,6 +24031,152 @@ reflection-metadata.html	head.title: setAttribute() to object "test-valueOf"
 reflection-metadata.html	head.title: setAttribute() to true
 reflection-metadata.html	head.title: setAttribute() to undefined
 reflection-metadata.html	head.title: typeof IDL attribute
+reflection-metadata.html	link.as: IDL get with DOM attribute unset
+reflection-metadata.html	link.as: IDL set to ""
+reflection-metadata.html	link.as: IDL set to "+100"
+reflection-metadata.html	link.as: IDL set to ".5"
+reflection-metadata.html	link.as: IDL set to "5%"
+reflection-metadata.html	link.as: IDL set to "FETCH"
+reflection-metadata.html	link.as: IDL set to "FONT"
+reflection-metadata.html	link.as: IDL set to "IMAGE"
+reflection-metadata.html	link.as: IDL set to "SCRIPT"
+reflection-metadata.html	link.as: IDL set to "SHAREDWORKER"
+reflection-metadata.html	link.as: IDL set to "STYLE"
+reflection-metadata.html	link.as: IDL set to "TRACK"
+reflection-metadata.html	link.as: IDL set to "WORKER"
+reflection-metadata.html	link.as: IDL set to "anifest"
+reflection-metadata.html	link.as: IDL set to "bject"
+reflection-metadata.html	link.as: IDL set to "cript"
+reflection-metadata.html	link.as: IDL set to "eport"
+reflection-metadata.html	link.as: IDL set to "etch"
+reflection-metadata.html	link.as: IDL set to "fetch"
+reflection-metadata.html	link.as: IDL set to "font"
+reflection-metadata.html	link.as: IDL set to "haredworker"
+reflection-metadata.html	link.as: IDL set to "ideo"
+reflection-metadata.html	link.as: IDL set to "image"
+reflection-metadata.html	link.as: IDL set to "mage"
+reflection-metadata.html	link.as: IDL set to "manifeſt"
+reflection-metadata.html	link.as: IDL set to "mbed"
+reflection-metadata.html	link.as: IDL set to "ocument"
+reflection-metadata.html	link.as: IDL set to "ont"
+reflection-metadata.html	link.as: IDL set to "orker"
+reflection-metadata.html	link.as: IDL set to "rack"
+reflection-metadata.html	link.as: IDL set to "script"
+reflection-metadata.html	link.as: IDL set to "sharedworker"
+reflection-metadata.html	link.as: IDL set to "sharedworKer"
+reflection-metadata.html	link.as: IDL set to "slt"
+reflection-metadata.html	link.as: IDL set to "style"
+reflection-metadata.html	link.as: IDL set to "track"
+reflection-metadata.html	link.as: IDL set to "tracK"
+reflection-metadata.html	link.as: IDL set to "tyle"
+reflection-metadata.html	link.as: IDL set to "udio"
+reflection-metadata.html	link.as: IDL set to "worker"
+reflection-metadata.html	link.as: IDL set to "worKer"
+reflection-metadata.html	link.as: IDL set to "xaudio"
+reflection-metadata.html	link.as: IDL set to "xdocument"
+reflection-metadata.html	link.as: IDL set to "xembed"
+reflection-metadata.html	link.as: IDL set to "xfetch"
+reflection-metadata.html	link.as: IDL set to "xfont"
+reflection-metadata.html	link.as: IDL set to "ximage"
+reflection-metadata.html	link.as: IDL set to "xmanifest"
+reflection-metadata.html	link.as: IDL set to "xobject"
+reflection-metadata.html	link.as: IDL set to "xreport"
+reflection-metadata.html	link.as: IDL set to "xscript"
+reflection-metadata.html	link.as: IDL set to "xsharedworker"
+reflection-metadata.html	link.as: IDL set to "xstyle"
+reflection-metadata.html	link.as: IDL set to "xtrack"
+reflection-metadata.html	link.as: IDL set to "xvideo"
+reflection-metadata.html	link.as: IDL set to "xworker"
+reflection-metadata.html	link.as: IDL set to "xxslt"
+reflection-metadata.html	link.as: IDL set to "xſlt"
+reflection-metadata.html	link.as: IDL set to "ſcript"
+reflection-metadata.html	link.as: IDL set to "ſharedworker"
+reflection-metadata.html	link.as: IDL set to "ſtyle"
+reflection-metadata.html	link.as: IDL set to -Infinity
+reflection-metadata.html	link.as: IDL set to 1.5
+reflection-metadata.html	link.as: IDL set to 7
+reflection-metadata.html	link.as: IDL set to Infinity
+reflection-metadata.html	link.as: IDL set to NaN
+reflection-metadata.html	link.as: IDL set to false
+reflection-metadata.html	link.as: IDL set to null
+reflection-metadata.html	link.as: IDL set to object "[object Object]"
+reflection-metadata.html	link.as: IDL set to object "test-toString"
+reflection-metadata.html	link.as: IDL set to object "test-valueOf"
+reflection-metadata.html	link.as: IDL set to true
+reflection-metadata.html	link.as: IDL set to undefined
+reflection-metadata.html	link.as: setAttribute() to ""
+reflection-metadata.html	link.as: setAttribute() to "+100"
+reflection-metadata.html	link.as: setAttribute() to ".5"
+reflection-metadata.html	link.as: setAttribute() to "5%"
+reflection-metadata.html	link.as: setAttribute() to "FETCH"
+reflection-metadata.html	link.as: setAttribute() to "FONT"
+reflection-metadata.html	link.as: setAttribute() to "IMAGE"
+reflection-metadata.html	link.as: setAttribute() to "SCRIPT"
+reflection-metadata.html	link.as: setAttribute() to "SHAREDWORKER"
+reflection-metadata.html	link.as: setAttribute() to "STYLE"
+reflection-metadata.html	link.as: setAttribute() to "TRACK"
+reflection-metadata.html	link.as: setAttribute() to "WORKER"
+reflection-metadata.html	link.as: setAttribute() to "anifest"
+reflection-metadata.html	link.as: setAttribute() to "bject"
+reflection-metadata.html	link.as: setAttribute() to "cript"
+reflection-metadata.html	link.as: setAttribute() to "eport"
+reflection-metadata.html	link.as: setAttribute() to "etch"
+reflection-metadata.html	link.as: setAttribute() to "fetch"
+reflection-metadata.html	link.as: setAttribute() to "font"
+reflection-metadata.html	link.as: setAttribute() to "haredworker"
+reflection-metadata.html	link.as: setAttribute() to "ideo"
+reflection-metadata.html	link.as: setAttribute() to "image"
+reflection-metadata.html	link.as: setAttribute() to "mage"
+reflection-metadata.html	link.as: setAttribute() to "manifeſt"
+reflection-metadata.html	link.as: setAttribute() to "mbed"
+reflection-metadata.html	link.as: setAttribute() to "ocument"
+reflection-metadata.html	link.as: setAttribute() to "ont"
+reflection-metadata.html	link.as: setAttribute() to "orker"
+reflection-metadata.html	link.as: setAttribute() to "rack"
+reflection-metadata.html	link.as: setAttribute() to "script"
+reflection-metadata.html	link.as: setAttribute() to "sharedworker"
+reflection-metadata.html	link.as: setAttribute() to "sharedworKer"
+reflection-metadata.html	link.as: setAttribute() to "slt"
+reflection-metadata.html	link.as: setAttribute() to "style"
+reflection-metadata.html	link.as: setAttribute() to "track"
+reflection-metadata.html	link.as: setAttribute() to "tracK"
+reflection-metadata.html	link.as: setAttribute() to "tyle"
+reflection-metadata.html	link.as: setAttribute() to "udio"
+reflection-metadata.html	link.as: setAttribute() to "worker"
+reflection-metadata.html	link.as: setAttribute() to "worKer"
+reflection-metadata.html	link.as: setAttribute() to "xaudio"
+reflection-metadata.html	link.as: setAttribute() to "xdocument"
+reflection-metadata.html	link.as: setAttribute() to "xembed"
+reflection-metadata.html	link.as: setAttribute() to "xfetch"
+reflection-metadata.html	link.as: setAttribute() to "xfont"
+reflection-metadata.html	link.as: setAttribute() to "ximage"
+reflection-metadata.html	link.as: setAttribute() to "xmanifest"
+reflection-metadata.html	link.as: setAttribute() to "xobject"
+reflection-metadata.html	link.as: setAttribute() to "xreport"
+reflection-metadata.html	link.as: setAttribute() to "xscript"
+reflection-metadata.html	link.as: setAttribute() to "xsharedworker"
+reflection-metadata.html	link.as: setAttribute() to "xstyle"
+reflection-metadata.html	link.as: setAttribute() to "xtrack"
+reflection-metadata.html	link.as: setAttribute() to "xvideo"
+reflection-metadata.html	link.as: setAttribute() to "xworker"
+reflection-metadata.html	link.as: setAttribute() to "xxslt"
+reflection-metadata.html	link.as: setAttribute() to "xſlt"
+reflection-metadata.html	link.as: setAttribute() to "ſcript"
+reflection-metadata.html	link.as: setAttribute() to "ſharedworker"
+reflection-metadata.html	link.as: setAttribute() to "ſtyle"
+reflection-metadata.html	link.as: setAttribute() to -Infinity
+reflection-metadata.html	link.as: setAttribute() to 1.5
+reflection-metadata.html	link.as: setAttribute() to 7
+reflection-metadata.html	link.as: setAttribute() to Infinity
+reflection-metadata.html	link.as: setAttribute() to NaN
+reflection-metadata.html	link.as: setAttribute() to false
+reflection-metadata.html	link.as: setAttribute() to null
+reflection-metadata.html	link.as: setAttribute() to object "[object Object]"
+reflection-metadata.html	link.as: setAttribute() to object "test-toString"
+reflection-metadata.html	link.as: setAttribute() to object "test-valueOf"
+reflection-metadata.html	link.as: setAttribute() to true
+reflection-metadata.html	link.as: setAttribute() to undefined
+reflection-metadata.html	link.as: typeof IDL attribute
 reflection-metadata.html	link.autofocus: IDL set to true
 reflection-metadata.html	link.className (<link class>): IDL get with DOM attribute unset
 reflection-metadata.html	link.className (<link class>): IDL set to ""
@@ -23229,6 +24212,59 @@ reflection-metadata.html	link.className (<link class>): setAttribute() to object
 reflection-metadata.html	link.className (<link class>): setAttribute() to true
 reflection-metadata.html	link.className (<link class>): setAttribute() to undefined
 reflection-metadata.html	link.className (<link class>): typeof IDL attribute
+reflection-metadata.html	link.crossOrigin: IDL get with DOM attribute unset
+reflection-metadata.html	link.crossOrigin: IDL set to ""
+reflection-metadata.html	link.crossOrigin: IDL set to "+100"
+reflection-metadata.html	link.crossOrigin: IDL set to ".5"
+reflection-metadata.html	link.crossOrigin: IDL set to "5%"
+reflection-metadata.html	link.crossOrigin: IDL set to "ANONYMOUS"
+reflection-metadata.html	link.crossOrigin: IDL set to "USE-CREDENTIALS"
+reflection-metadata.html	link.crossOrigin: IDL set to "anonymous"
+reflection-metadata.html	link.crossOrigin: IDL set to "anonymouſ"
+reflection-metadata.html	link.crossOrigin: IDL set to "nonymous"
+reflection-metadata.html	link.crossOrigin: IDL set to "se-credentials"
+reflection-metadata.html	link.crossOrigin: IDL set to "use-credentials"
+reflection-metadata.html	link.crossOrigin: IDL set to "uſe-credentialſ"
+reflection-metadata.html	link.crossOrigin: IDL set to "xanonymous"
+reflection-metadata.html	link.crossOrigin: IDL set to "xuse-credentials"
+reflection-metadata.html	link.crossOrigin: IDL set to -Infinity
+reflection-metadata.html	link.crossOrigin: IDL set to 1.5
+reflection-metadata.html	link.crossOrigin: IDL set to 7
+reflection-metadata.html	link.crossOrigin: IDL set to Infinity
+reflection-metadata.html	link.crossOrigin: IDL set to NaN
+reflection-metadata.html	link.crossOrigin: IDL set to false
+reflection-metadata.html	link.crossOrigin: IDL set to null
+reflection-metadata.html	link.crossOrigin: IDL set to object "[object Object]"
+reflection-metadata.html	link.crossOrigin: IDL set to object "test-toString"
+reflection-metadata.html	link.crossOrigin: IDL set to object "test-valueOf"
+reflection-metadata.html	link.crossOrigin: IDL set to true
+reflection-metadata.html	link.crossOrigin: setAttribute() to ""
+reflection-metadata.html	link.crossOrigin: setAttribute() to "+100"
+reflection-metadata.html	link.crossOrigin: setAttribute() to ".5"
+reflection-metadata.html	link.crossOrigin: setAttribute() to "5%"
+reflection-metadata.html	link.crossOrigin: setAttribute() to "ANONYMOUS"
+reflection-metadata.html	link.crossOrigin: setAttribute() to "USE-CREDENTIALS"
+reflection-metadata.html	link.crossOrigin: setAttribute() to "anonymous"
+reflection-metadata.html	link.crossOrigin: setAttribute() to "anonymouſ"
+reflection-metadata.html	link.crossOrigin: setAttribute() to "nonymous"
+reflection-metadata.html	link.crossOrigin: setAttribute() to "se-credentials"
+reflection-metadata.html	link.crossOrigin: setAttribute() to "use-credentials"
+reflection-metadata.html	link.crossOrigin: setAttribute() to "uſe-credentialſ"
+reflection-metadata.html	link.crossOrigin: setAttribute() to "xanonymous"
+reflection-metadata.html	link.crossOrigin: setAttribute() to "xuse-credentials"
+reflection-metadata.html	link.crossOrigin: setAttribute() to -Infinity
+reflection-metadata.html	link.crossOrigin: setAttribute() to 1.5
+reflection-metadata.html	link.crossOrigin: setAttribute() to 7
+reflection-metadata.html	link.crossOrigin: setAttribute() to Infinity
+reflection-metadata.html	link.crossOrigin: setAttribute() to NaN
+reflection-metadata.html	link.crossOrigin: setAttribute() to false
+reflection-metadata.html	link.crossOrigin: setAttribute() to null
+reflection-metadata.html	link.crossOrigin: setAttribute() to object "[object Object]"
+reflection-metadata.html	link.crossOrigin: setAttribute() to object "test-toString"
+reflection-metadata.html	link.crossOrigin: setAttribute() to object "test-valueOf"
+reflection-metadata.html	link.crossOrigin: setAttribute() to true
+reflection-metadata.html	link.crossOrigin: setAttribute() to undefined
+reflection-metadata.html	link.crossOrigin: typeof IDL attribute
 reflection-metadata.html	link.dir: IDL get with DOM attribute unset
 reflection-metadata.html	link.dir: IDL set to ""
 reflection-metadata.html	link.dir: IDL set to "+100"
@@ -23326,8 +24362,80 @@ reflection-metadata.html	link.hidden: setAttribute() to true
 reflection-metadata.html	link.hidden: setAttribute() to undefined
 reflection-metadata.html	link.hidden: typeof IDL attribute
 reflection-metadata.html	link.href: IDL get with DOM attribute unset
+reflection-metadata.html	link.href: IDL set to " foo "
+reflection-metadata.html	link.href: IDL set to ""
+reflection-metadata.html	link.href: IDL set to "+100"
+reflection-metadata.html	link.href: IDL set to ".5"
+reflection-metadata.html	link.href: IDL set to "//site.example/path???@#l"
+reflection-metadata.html	link.href: IDL set to "5%"
+reflection-metadata.html	link.href: IDL set to "http://site.example/"
+reflection-metadata.html	link.href: IDL set to -Infinity
+reflection-metadata.html	link.href: IDL set to 1.5
+reflection-metadata.html	link.href: IDL set to 7
+reflection-metadata.html	link.href: IDL set to Infinity
+reflection-metadata.html	link.href: IDL set to NaN
+reflection-metadata.html	link.href: IDL set to false
+reflection-metadata.html	link.href: IDL set to null
+reflection-metadata.html	link.href: IDL set to object "[object Object]"
+reflection-metadata.html	link.href: IDL set to object "test-toString"
+reflection-metadata.html	link.href: IDL set to object "test-valueOf"
+reflection-metadata.html	link.href: IDL set to true
+reflection-metadata.html	link.href: IDL set to undefined
+reflection-metadata.html	link.href: setAttribute() to " foo "
+reflection-metadata.html	link.href: setAttribute() to ""
+reflection-metadata.html	link.href: setAttribute() to "+100"
+reflection-metadata.html	link.href: setAttribute() to ".5"
+reflection-metadata.html	link.href: setAttribute() to "//site.example/path???@#l"
+reflection-metadata.html	link.href: setAttribute() to "5%"
+reflection-metadata.html	link.href: setAttribute() to "http://site.example/"
+reflection-metadata.html	link.href: setAttribute() to -Infinity
+reflection-metadata.html	link.href: setAttribute() to 1.5
+reflection-metadata.html	link.href: setAttribute() to 7
+reflection-metadata.html	link.href: setAttribute() to Infinity
+reflection-metadata.html	link.href: setAttribute() to NaN
+reflection-metadata.html	link.href: setAttribute() to false
+reflection-metadata.html	link.href: setAttribute() to null
+reflection-metadata.html	link.href: setAttribute() to object "[object Object]"
+reflection-metadata.html	link.href: setAttribute() to object "test-toString"
+reflection-metadata.html	link.href: setAttribute() to object "test-valueOf"
+reflection-metadata.html	link.href: setAttribute() to true
+reflection-metadata.html	link.href: setAttribute() to undefined
 reflection-metadata.html	link.href: typeof IDL attribute
 reflection-metadata.html	link.inert: IDL set to true
+reflection-metadata.html	link.integrity: IDL get with DOM attribute unset
+reflection-metadata.html	link.integrity: IDL set to ""
+reflection-metadata.html	link.integrity: IDL set to "+100"
+reflection-metadata.html	link.integrity: IDL set to ".5"
+reflection-metadata.html	link.integrity: IDL set to "5%"
+reflection-metadata.html	link.integrity: IDL set to -Infinity
+reflection-metadata.html	link.integrity: IDL set to 1.5
+reflection-metadata.html	link.integrity: IDL set to 7
+reflection-metadata.html	link.integrity: IDL set to Infinity
+reflection-metadata.html	link.integrity: IDL set to NaN
+reflection-metadata.html	link.integrity: IDL set to false
+reflection-metadata.html	link.integrity: IDL set to null
+reflection-metadata.html	link.integrity: IDL set to object "[object Object]"
+reflection-metadata.html	link.integrity: IDL set to object "test-toString"
+reflection-metadata.html	link.integrity: IDL set to object "test-valueOf"
+reflection-metadata.html	link.integrity: IDL set to true
+reflection-metadata.html	link.integrity: IDL set to undefined
+reflection-metadata.html	link.integrity: setAttribute() to ""
+reflection-metadata.html	link.integrity: setAttribute() to "+100"
+reflection-metadata.html	link.integrity: setAttribute() to ".5"
+reflection-metadata.html	link.integrity: setAttribute() to "5%"
+reflection-metadata.html	link.integrity: setAttribute() to -Infinity
+reflection-metadata.html	link.integrity: setAttribute() to 1.5
+reflection-metadata.html	link.integrity: setAttribute() to 7
+reflection-metadata.html	link.integrity: setAttribute() to Infinity
+reflection-metadata.html	link.integrity: setAttribute() to NaN
+reflection-metadata.html	link.integrity: setAttribute() to false
+reflection-metadata.html	link.integrity: setAttribute() to null
+reflection-metadata.html	link.integrity: setAttribute() to object "[object Object]"
+reflection-metadata.html	link.integrity: setAttribute() to object "test-toString"
+reflection-metadata.html	link.integrity: setAttribute() to object "test-valueOf"
+reflection-metadata.html	link.integrity: setAttribute() to true
+reflection-metadata.html	link.integrity: setAttribute() to undefined
+reflection-metadata.html	link.integrity: typeof IDL attribute
 reflection-metadata.html	link.lang: IDL get with DOM attribute unset
 reflection-metadata.html	link.lang: IDL set to ""
 reflection-metadata.html	link.lang: IDL set to "+100"
@@ -23362,12 +24470,154 @@ reflection-metadata.html	link.lang: setAttribute() to object "test-valueOf"
 reflection-metadata.html	link.lang: setAttribute() to true
 reflection-metadata.html	link.lang: setAttribute() to undefined
 reflection-metadata.html	link.lang: typeof IDL attribute
+reflection-metadata.html	link.media: IDL get with DOM attribute unset
+reflection-metadata.html	link.media: IDL set to ""
+reflection-metadata.html	link.media: IDL set to "+100"
+reflection-metadata.html	link.media: IDL set to ".5"
+reflection-metadata.html	link.media: IDL set to "5%"
+reflection-metadata.html	link.media: IDL set to -Infinity
+reflection-metadata.html	link.media: IDL set to 1.5
+reflection-metadata.html	link.media: IDL set to 7
+reflection-metadata.html	link.media: IDL set to Infinity
+reflection-metadata.html	link.media: IDL set to NaN
+reflection-metadata.html	link.media: IDL set to false
+reflection-metadata.html	link.media: IDL set to null
+reflection-metadata.html	link.media: IDL set to object "[object Object]"
+reflection-metadata.html	link.media: IDL set to object "test-toString"
+reflection-metadata.html	link.media: IDL set to object "test-valueOf"
+reflection-metadata.html	link.media: IDL set to true
+reflection-metadata.html	link.media: IDL set to undefined
+reflection-metadata.html	link.media: setAttribute() to ""
+reflection-metadata.html	link.media: setAttribute() to "+100"
+reflection-metadata.html	link.media: setAttribute() to ".5"
+reflection-metadata.html	link.media: setAttribute() to "5%"
+reflection-metadata.html	link.media: setAttribute() to -Infinity
+reflection-metadata.html	link.media: setAttribute() to 1.5
+reflection-metadata.html	link.media: setAttribute() to 7
+reflection-metadata.html	link.media: setAttribute() to Infinity
+reflection-metadata.html	link.media: setAttribute() to NaN
+reflection-metadata.html	link.media: setAttribute() to false
+reflection-metadata.html	link.media: setAttribute() to null
+reflection-metadata.html	link.media: setAttribute() to object "[object Object]"
+reflection-metadata.html	link.media: setAttribute() to object "test-toString"
+reflection-metadata.html	link.media: setAttribute() to object "test-valueOf"
+reflection-metadata.html	link.media: setAttribute() to true
+reflection-metadata.html	link.media: setAttribute() to undefined
+reflection-metadata.html	link.media: typeof IDL attribute
 reflection-metadata.html	link.nonce: IDL set to " \\0\\x01\\x02\\x03\\x04\\x05\\x06\\x07 \\b\\t\\n\\v\\f\\r\\x0e\\x0f \\x10\\x11\\x12\\x13\\x14\\x15\\x16\\x17 \\x18\\x19\\x1a\\x1b\\x1c\\x1d\\x1e\\x1f  foo "
 reflection-metadata.html	link.nonce: IDL set to ""
 reflection-metadata.html	link.nonce: IDL set to "+100"
 reflection-metadata.html	link.nonce: IDL set to ".5"
 reflection-metadata.html	link.nonce: IDL set to "5%"
 reflection-metadata.html	link.nonce: IDL set to "\\0"
+reflection-metadata.html	link.referrerPolicy: IDL get with DOM attribute unset
+reflection-metadata.html	link.referrerPolicy: IDL set to ""
+reflection-metadata.html	link.referrerPolicy: IDL set to "+100"
+reflection-metadata.html	link.referrerPolicy: IDL set to ".5"
+reflection-metadata.html	link.referrerPolicy: IDL set to "5%"
+reflection-metadata.html	link.referrerPolicy: IDL set to "NO-REFERRER"
+reflection-metadata.html	link.referrerPolicy: IDL set to "NO-REFERRER-WHEN-DOWNGRADE"
+reflection-metadata.html	link.referrerPolicy: IDL set to "ORIGIN"
+reflection-metadata.html	link.referrerPolicy: IDL set to "ORIGIN-WHEN-CROSS-ORIGIN"
+reflection-metadata.html	link.referrerPolicy: IDL set to "SAME-ORIGIN"
+reflection-metadata.html	link.referrerPolicy: IDL set to "STRICT-ORIGIN"
+reflection-metadata.html	link.referrerPolicy: IDL set to "STRICT-ORIGIN-WHEN-CROSS-ORIGIN"
+reflection-metadata.html	link.referrerPolicy: IDL set to "UNSAFE-URL"
+reflection-metadata.html	link.referrerPolicy: IDL set to "ame-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "no-referrer"
+reflection-metadata.html	link.referrerPolicy: IDL set to "no-referrer-when-downgrade"
+reflection-metadata.html	link.referrerPolicy: IDL set to "nsafe-url"
+reflection-metadata.html	link.referrerPolicy: IDL set to "o-referrer"
+reflection-metadata.html	link.referrerPolicy: IDL set to "o-referrer-when-downgrade"
+reflection-metadata.html	link.referrerPolicy: IDL set to "origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "origin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "origin-when-croſſ-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "rigin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "rigin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "same-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "strict-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "strict-origin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "trict-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "trict-origin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "unsafe-url"
+reflection-metadata.html	link.referrerPolicy: IDL set to "unſafe-url"
+reflection-metadata.html	link.referrerPolicy: IDL set to "xno-referrer"
+reflection-metadata.html	link.referrerPolicy: IDL set to "xno-referrer-when-downgrade"
+reflection-metadata.html	link.referrerPolicy: IDL set to "xorigin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "xorigin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "xsame-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "xstrict-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "xstrict-origin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "xunsafe-url"
+reflection-metadata.html	link.referrerPolicy: IDL set to "ſame-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "ſtrict-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to "ſtrict-origin-when-croſſ-origin"
+reflection-metadata.html	link.referrerPolicy: IDL set to -Infinity
+reflection-metadata.html	link.referrerPolicy: IDL set to 1.5
+reflection-metadata.html	link.referrerPolicy: IDL set to 7
+reflection-metadata.html	link.referrerPolicy: IDL set to Infinity
+reflection-metadata.html	link.referrerPolicy: IDL set to NaN
+reflection-metadata.html	link.referrerPolicy: IDL set to false
+reflection-metadata.html	link.referrerPolicy: IDL set to null
+reflection-metadata.html	link.referrerPolicy: IDL set to object "[object Object]"
+reflection-metadata.html	link.referrerPolicy: IDL set to object "test-toString"
+reflection-metadata.html	link.referrerPolicy: IDL set to object "test-valueOf"
+reflection-metadata.html	link.referrerPolicy: IDL set to true
+reflection-metadata.html	link.referrerPolicy: IDL set to undefined
+reflection-metadata.html	link.referrerPolicy: setAttribute() to ""
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "+100"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to ".5"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "5%"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "NO-REFERRER"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "NO-REFERRER-WHEN-DOWNGRADE"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "ORIGIN"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "ORIGIN-WHEN-CROSS-ORIGIN"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "SAME-ORIGIN"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "STRICT-ORIGIN"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "STRICT-ORIGIN-WHEN-CROSS-ORIGIN"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "UNSAFE-URL"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "ame-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "no-referrer"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "no-referrer-when-downgrade"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "nsafe-url"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "o-referrer"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "o-referrer-when-downgrade"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "origin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "origin-when-croſſ-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "rigin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "rigin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "same-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "strict-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "strict-origin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "trict-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "trict-origin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "unsafe-url"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "unſafe-url"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "xno-referrer"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "xno-referrer-when-downgrade"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "xorigin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "xorigin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "xsame-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "xstrict-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "xstrict-origin-when-cross-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "xunsafe-url"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "ſame-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "ſtrict-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to "ſtrict-origin-when-croſſ-origin"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to -Infinity
+reflection-metadata.html	link.referrerPolicy: setAttribute() to 1.5
+reflection-metadata.html	link.referrerPolicy: setAttribute() to 7
+reflection-metadata.html	link.referrerPolicy: setAttribute() to Infinity
+reflection-metadata.html	link.referrerPolicy: setAttribute() to NaN
+reflection-metadata.html	link.referrerPolicy: setAttribute() to false
+reflection-metadata.html	link.referrerPolicy: setAttribute() to null
+reflection-metadata.html	link.referrerPolicy: setAttribute() to object "[object Object]"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to object "test-toString"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to object "test-valueOf"
+reflection-metadata.html	link.referrerPolicy: setAttribute() to true
+reflection-metadata.html	link.referrerPolicy: setAttribute() to undefined
+reflection-metadata.html	link.referrerPolicy: typeof IDL attribute
 reflection-metadata.html	link.rel: IDL get with DOM attribute unset
 reflection-metadata.html	link.rel: IDL set to ""
 reflection-metadata.html	link.rel: IDL set to "+100"
@@ -23464,6 +24714,40 @@ reflection-metadata.html	link.title: setAttribute() to object "test-valueOf"
 reflection-metadata.html	link.title: setAttribute() to true
 reflection-metadata.html	link.title: setAttribute() to undefined
 reflection-metadata.html	link.title: typeof IDL attribute
+reflection-metadata.html	link.type: IDL get with DOM attribute unset
+reflection-metadata.html	link.type: IDL set to ""
+reflection-metadata.html	link.type: IDL set to "+100"
+reflection-metadata.html	link.type: IDL set to ".5"
+reflection-metadata.html	link.type: IDL set to "5%"
+reflection-metadata.html	link.type: IDL set to -Infinity
+reflection-metadata.html	link.type: IDL set to 1.5
+reflection-metadata.html	link.type: IDL set to 7
+reflection-metadata.html	link.type: IDL set to Infinity
+reflection-metadata.html	link.type: IDL set to NaN
+reflection-metadata.html	link.type: IDL set to false
+reflection-metadata.html	link.type: IDL set to null
+reflection-metadata.html	link.type: IDL set to object "[object Object]"
+reflection-metadata.html	link.type: IDL set to object "test-toString"
+reflection-metadata.html	link.type: IDL set to object "test-valueOf"
+reflection-metadata.html	link.type: IDL set to true
+reflection-metadata.html	link.type: IDL set to undefined
+reflection-metadata.html	link.type: setAttribute() to ""
+reflection-metadata.html	link.type: setAttribute() to "+100"
+reflection-metadata.html	link.type: setAttribute() to ".5"
+reflection-metadata.html	link.type: setAttribute() to "5%"
+reflection-metadata.html	link.type: setAttribute() to -Infinity
+reflection-metadata.html	link.type: setAttribute() to 1.5
+reflection-metadata.html	link.type: setAttribute() to 7
+reflection-metadata.html	link.type: setAttribute() to Infinity
+reflection-metadata.html	link.type: setAttribute() to NaN
+reflection-metadata.html	link.type: setAttribute() to false
+reflection-metadata.html	link.type: setAttribute() to null
+reflection-metadata.html	link.type: setAttribute() to object "[object Object]"
+reflection-metadata.html	link.type: setAttribute() to object "test-toString"
+reflection-metadata.html	link.type: setAttribute() to object "test-valueOf"
+reflection-metadata.html	link.type: setAttribute() to true
+reflection-metadata.html	link.type: setAttribute() to undefined
+reflection-metadata.html	link.type: typeof IDL attribute
 reflection-metadata.html	meta.autofocus: IDL set to true
 reflection-metadata.html	meta.className (<meta class>): IDL get with DOM attribute unset
 reflection-metadata.html	meta.className (<meta class>): IDL set to ""
@@ -24394,6 +25678,44 @@ reflection-metadata.html	title.title: setAttribute() to undefined
 reflection-metadata.html	title.title: typeof IDL attribute
 reflection-misc.html	del.autofocus: IDL set to true
 reflection-misc.html	del.cite: IDL get with DOM attribute unset
+reflection-misc.html	del.cite: IDL set to " foo "
+reflection-misc.html	del.cite: IDL set to ""
+reflection-misc.html	del.cite: IDL set to "+100"
+reflection-misc.html	del.cite: IDL set to ".5"
+reflection-misc.html	del.cite: IDL set to "//site.example/path???@#l"
+reflection-misc.html	del.cite: IDL set to "5%"
+reflection-misc.html	del.cite: IDL set to "http://site.example/"
+reflection-misc.html	del.cite: IDL set to -Infinity
+reflection-misc.html	del.cite: IDL set to 1.5
+reflection-misc.html	del.cite: IDL set to 7
+reflection-misc.html	del.cite: IDL set to Infinity
+reflection-misc.html	del.cite: IDL set to NaN
+reflection-misc.html	del.cite: IDL set to false
+reflection-misc.html	del.cite: IDL set to null
+reflection-misc.html	del.cite: IDL set to object "[object Object]"
+reflection-misc.html	del.cite: IDL set to object "test-toString"
+reflection-misc.html	del.cite: IDL set to object "test-valueOf"
+reflection-misc.html	del.cite: IDL set to true
+reflection-misc.html	del.cite: IDL set to undefined
+reflection-misc.html	del.cite: setAttribute() to " foo "
+reflection-misc.html	del.cite: setAttribute() to ""
+reflection-misc.html	del.cite: setAttribute() to "+100"
+reflection-misc.html	del.cite: setAttribute() to ".5"
+reflection-misc.html	del.cite: setAttribute() to "//site.example/path???@#l"
+reflection-misc.html	del.cite: setAttribute() to "5%"
+reflection-misc.html	del.cite: setAttribute() to "http://site.example/"
+reflection-misc.html	del.cite: setAttribute() to -Infinity
+reflection-misc.html	del.cite: setAttribute() to 1.5
+reflection-misc.html	del.cite: setAttribute() to 7
+reflection-misc.html	del.cite: setAttribute() to Infinity
+reflection-misc.html	del.cite: setAttribute() to NaN
+reflection-misc.html	del.cite: setAttribute() to false
+reflection-misc.html	del.cite: setAttribute() to null
+reflection-misc.html	del.cite: setAttribute() to object "[object Object]"
+reflection-misc.html	del.cite: setAttribute() to object "test-toString"
+reflection-misc.html	del.cite: setAttribute() to object "test-valueOf"
+reflection-misc.html	del.cite: setAttribute() to true
+reflection-misc.html	del.cite: setAttribute() to undefined
 reflection-misc.html	del.cite: typeof IDL attribute
 reflection-misc.html	del.className (<del class>): IDL get with DOM attribute unset
 reflection-misc.html	del.className (<del class>): IDL set to ""
@@ -25378,6 +26700,44 @@ reflection-misc.html	html.version: setAttribute() to undefined
 reflection-misc.html	html.version: typeof IDL attribute
 reflection-misc.html	ins.autofocus: IDL set to true
 reflection-misc.html	ins.cite: IDL get with DOM attribute unset
+reflection-misc.html	ins.cite: IDL set to " foo "
+reflection-misc.html	ins.cite: IDL set to ""
+reflection-misc.html	ins.cite: IDL set to "+100"
+reflection-misc.html	ins.cite: IDL set to ".5"
+reflection-misc.html	ins.cite: IDL set to "//site.example/path???@#l"
+reflection-misc.html	ins.cite: IDL set to "5%"
+reflection-misc.html	ins.cite: IDL set to "http://site.example/"
+reflection-misc.html	ins.cite: IDL set to -Infinity
+reflection-misc.html	ins.cite: IDL set to 1.5
+reflection-misc.html	ins.cite: IDL set to 7
+reflection-misc.html	ins.cite: IDL set to Infinity
+reflection-misc.html	ins.cite: IDL set to NaN
+reflection-misc.html	ins.cite: IDL set to false
+reflection-misc.html	ins.cite: IDL set to null
+reflection-misc.html	ins.cite: IDL set to object "[object Object]"
+reflection-misc.html	ins.cite: IDL set to object "test-toString"
+reflection-misc.html	ins.cite: IDL set to object "test-valueOf"
+reflection-misc.html	ins.cite: IDL set to true
+reflection-misc.html	ins.cite: IDL set to undefined
+reflection-misc.html	ins.cite: setAttribute() to " foo "
+reflection-misc.html	ins.cite: setAttribute() to ""
+reflection-misc.html	ins.cite: setAttribute() to "+100"
+reflection-misc.html	ins.cite: setAttribute() to ".5"
+reflection-misc.html	ins.cite: setAttribute() to "//site.example/path???@#l"
+reflection-misc.html	ins.cite: setAttribute() to "5%"
+reflection-misc.html	ins.cite: setAttribute() to "http://site.example/"
+reflection-misc.html	ins.cite: setAttribute() to -Infinity
+reflection-misc.html	ins.cite: setAttribute() to 1.5
+reflection-misc.html	ins.cite: setAttribute() to 7
+reflection-misc.html	ins.cite: setAttribute() to Infinity
+reflection-misc.html	ins.cite: setAttribute() to NaN
+reflection-misc.html	ins.cite: setAttribute() to false
+reflection-misc.html	ins.cite: setAttribute() to null
+reflection-misc.html	ins.cite: setAttribute() to object "[object Object]"
+reflection-misc.html	ins.cite: setAttribute() to object "test-toString"
+reflection-misc.html	ins.cite: setAttribute() to object "test-valueOf"
+reflection-misc.html	ins.cite: setAttribute() to true
+reflection-misc.html	ins.cite: setAttribute() to undefined
 reflection-misc.html	ins.cite: typeof IDL attribute
 reflection-misc.html	ins.className (<ins class>): IDL get with DOM attribute unset
 reflection-misc.html	ins.className (<ins class>): IDL set to ""
@@ -26377,6 +27737,44 @@ reflection-misc.html	script.noModule: setAttribute() to true
 reflection-misc.html	script.noModule: setAttribute() to undefined
 reflection-misc.html	script.noModule: typeof IDL attribute
 reflection-misc.html	script.src: IDL get with DOM attribute unset
+reflection-misc.html	script.src: IDL set to " foo "
+reflection-misc.html	script.src: IDL set to ""
+reflection-misc.html	script.src: IDL set to "+100"
+reflection-misc.html	script.src: IDL set to ".5"
+reflection-misc.html	script.src: IDL set to "//site.example/path???@#l"
+reflection-misc.html	script.src: IDL set to "5%"
+reflection-misc.html	script.src: IDL set to "http://site.example/"
+reflection-misc.html	script.src: IDL set to -Infinity
+reflection-misc.html	script.src: IDL set to 1.5
+reflection-misc.html	script.src: IDL set to 7
+reflection-misc.html	script.src: IDL set to Infinity
+reflection-misc.html	script.src: IDL set to NaN
+reflection-misc.html	script.src: IDL set to false
+reflection-misc.html	script.src: IDL set to null
+reflection-misc.html	script.src: IDL set to object "[object Object]"
+reflection-misc.html	script.src: IDL set to object "test-toString"
+reflection-misc.html	script.src: IDL set to object "test-valueOf"
+reflection-misc.html	script.src: IDL set to true
+reflection-misc.html	script.src: IDL set to undefined
+reflection-misc.html	script.src: setAttribute() to " foo "
+reflection-misc.html	script.src: setAttribute() to ""
+reflection-misc.html	script.src: setAttribute() to "+100"
+reflection-misc.html	script.src: setAttribute() to ".5"
+reflection-misc.html	script.src: setAttribute() to "//site.example/path???@#l"
+reflection-misc.html	script.src: setAttribute() to "5%"
+reflection-misc.html	script.src: setAttribute() to "http://site.example/"
+reflection-misc.html	script.src: setAttribute() to -Infinity
+reflection-misc.html	script.src: setAttribute() to 1.5
+reflection-misc.html	script.src: setAttribute() to 7
+reflection-misc.html	script.src: setAttribute() to Infinity
+reflection-misc.html	script.src: setAttribute() to NaN
+reflection-misc.html	script.src: setAttribute() to false
+reflection-misc.html	script.src: setAttribute() to null
+reflection-misc.html	script.src: setAttribute() to object "[object Object]"
+reflection-misc.html	script.src: setAttribute() to object "test-toString"
+reflection-misc.html	script.src: setAttribute() to object "test-valueOf"
+reflection-misc.html	script.src: setAttribute() to true
+reflection-misc.html	script.src: setAttribute() to undefined
 reflection-misc.html	script.src: typeof IDL attribute
 reflection-misc.html	script.tabIndex: IDL set to -1
 reflection-misc.html	script.tabIndex: IDL set to -2147483648
@@ -37425,6 +38823,40 @@ reflection-tabular.html	tr.vAlign: setAttribute() to true
 reflection-tabular.html	tr.vAlign: setAttribute() to undefined
 reflection-tabular.html	tr.vAlign: typeof IDL attribute
 reflection-text.html	a.autofocus: IDL set to true
+reflection-text.html	a.charset: IDL get with DOM attribute unset
+reflection-text.html	a.charset: IDL set to ""
+reflection-text.html	a.charset: IDL set to "+100"
+reflection-text.html	a.charset: IDL set to ".5"
+reflection-text.html	a.charset: IDL set to "5%"
+reflection-text.html	a.charset: IDL set to -Infinity
+reflection-text.html	a.charset: IDL set to 1.5
+reflection-text.html	a.charset: IDL set to 7
+reflection-text.html	a.charset: IDL set to Infinity
+reflection-text.html	a.charset: IDL set to NaN
+reflection-text.html	a.charset: IDL set to false
+reflection-text.html	a.charset: IDL set to null
+reflection-text.html	a.charset: IDL set to object "[object Object]"
+reflection-text.html	a.charset: IDL set to object "test-toString"
+reflection-text.html	a.charset: IDL set to object "test-valueOf"
+reflection-text.html	a.charset: IDL set to true
+reflection-text.html	a.charset: IDL set to undefined
+reflection-text.html	a.charset: setAttribute() to ""
+reflection-text.html	a.charset: setAttribute() to "+100"
+reflection-text.html	a.charset: setAttribute() to ".5"
+reflection-text.html	a.charset: setAttribute() to "5%"
+reflection-text.html	a.charset: setAttribute() to -Infinity
+reflection-text.html	a.charset: setAttribute() to 1.5
+reflection-text.html	a.charset: setAttribute() to 7
+reflection-text.html	a.charset: setAttribute() to Infinity
+reflection-text.html	a.charset: setAttribute() to NaN
+reflection-text.html	a.charset: setAttribute() to false
+reflection-text.html	a.charset: setAttribute() to null
+reflection-text.html	a.charset: setAttribute() to object "[object Object]"
+reflection-text.html	a.charset: setAttribute() to object "test-toString"
+reflection-text.html	a.charset: setAttribute() to object "test-valueOf"
+reflection-text.html	a.charset: setAttribute() to true
+reflection-text.html	a.charset: setAttribute() to undefined
+reflection-text.html	a.charset: typeof IDL attribute
 reflection-text.html	a.className (<a class>): IDL get with DOM attribute unset
 reflection-text.html	a.className (<a class>): IDL set to ""
 reflection-text.html	a.className (<a class>): IDL set to "+100"
@@ -37459,6 +38891,40 @@ reflection-text.html	a.className (<a class>): setAttribute() to object "test-val
 reflection-text.html	a.className (<a class>): setAttribute() to true
 reflection-text.html	a.className (<a class>): setAttribute() to undefined
 reflection-text.html	a.className (<a class>): typeof IDL attribute
+reflection-text.html	a.coords: IDL get with DOM attribute unset
+reflection-text.html	a.coords: IDL set to ""
+reflection-text.html	a.coords: IDL set to "+100"
+reflection-text.html	a.coords: IDL set to ".5"
+reflection-text.html	a.coords: IDL set to "5%"
+reflection-text.html	a.coords: IDL set to -Infinity
+reflection-text.html	a.coords: IDL set to 1.5
+reflection-text.html	a.coords: IDL set to 7
+reflection-text.html	a.coords: IDL set to Infinity
+reflection-text.html	a.coords: IDL set to NaN
+reflection-text.html	a.coords: IDL set to false
+reflection-text.html	a.coords: IDL set to null
+reflection-text.html	a.coords: IDL set to object "[object Object]"
+reflection-text.html	a.coords: IDL set to object "test-toString"
+reflection-text.html	a.coords: IDL set to object "test-valueOf"
+reflection-text.html	a.coords: IDL set to true
+reflection-text.html	a.coords: IDL set to undefined
+reflection-text.html	a.coords: setAttribute() to ""
+reflection-text.html	a.coords: setAttribute() to "+100"
+reflection-text.html	a.coords: setAttribute() to ".5"
+reflection-text.html	a.coords: setAttribute() to "5%"
+reflection-text.html	a.coords: setAttribute() to -Infinity
+reflection-text.html	a.coords: setAttribute() to 1.5
+reflection-text.html	a.coords: setAttribute() to 7
+reflection-text.html	a.coords: setAttribute() to Infinity
+reflection-text.html	a.coords: setAttribute() to NaN
+reflection-text.html	a.coords: setAttribute() to false
+reflection-text.html	a.coords: setAttribute() to null
+reflection-text.html	a.coords: setAttribute() to object "[object Object]"
+reflection-text.html	a.coords: setAttribute() to object "test-toString"
+reflection-text.html	a.coords: setAttribute() to object "test-valueOf"
+reflection-text.html	a.coords: setAttribute() to true
+reflection-text.html	a.coords: setAttribute() to undefined
+reflection-text.html	a.coords: typeof IDL attribute
 reflection-text.html	a.dir: IDL get with DOM attribute unset
 reflection-text.html	a.dir: IDL set to ""
 reflection-text.html	a.dir: IDL set to "+100"
@@ -37517,6 +38983,40 @@ reflection-text.html	a.dir: setAttribute() to object "test-valueOf"
 reflection-text.html	a.dir: setAttribute() to true
 reflection-text.html	a.dir: setAttribute() to undefined
 reflection-text.html	a.dir: typeof IDL attribute
+reflection-text.html	a.download: IDL get with DOM attribute unset
+reflection-text.html	a.download: IDL set to ""
+reflection-text.html	a.download: IDL set to "+100"
+reflection-text.html	a.download: IDL set to ".5"
+reflection-text.html	a.download: IDL set to "5%"
+reflection-text.html	a.download: IDL set to -Infinity
+reflection-text.html	a.download: IDL set to 1.5
+reflection-text.html	a.download: IDL set to 7
+reflection-text.html	a.download: IDL set to Infinity
+reflection-text.html	a.download: IDL set to NaN
+reflection-text.html	a.download: IDL set to false
+reflection-text.html	a.download: IDL set to null
+reflection-text.html	a.download: IDL set to object "[object Object]"
+reflection-text.html	a.download: IDL set to object "test-toString"
+reflection-text.html	a.download: IDL set to object "test-valueOf"
+reflection-text.html	a.download: IDL set to true
+reflection-text.html	a.download: IDL set to undefined
+reflection-text.html	a.download: setAttribute() to ""
+reflection-text.html	a.download: setAttribute() to "+100"
+reflection-text.html	a.download: setAttribute() to ".5"
+reflection-text.html	a.download: setAttribute() to "5%"
+reflection-text.html	a.download: setAttribute() to -Infinity
+reflection-text.html	a.download: setAttribute() to 1.5
+reflection-text.html	a.download: setAttribute() to 7
+reflection-text.html	a.download: setAttribute() to Infinity
+reflection-text.html	a.download: setAttribute() to NaN
+reflection-text.html	a.download: setAttribute() to false
+reflection-text.html	a.download: setAttribute() to null
+reflection-text.html	a.download: setAttribute() to object "[object Object]"
+reflection-text.html	a.download: setAttribute() to object "test-toString"
+reflection-text.html	a.download: setAttribute() to object "test-valueOf"
+reflection-text.html	a.download: setAttribute() to true
+reflection-text.html	a.download: setAttribute() to undefined
+reflection-text.html	a.download: typeof IDL attribute
 reflection-text.html	a.hidden: IDL get with DOM attribute unset
 reflection-text.html	a.hidden: IDL set to " foo "
 reflection-text.html	a.hidden: IDL set to ""
@@ -37556,7 +39056,79 @@ reflection-text.html	a.hidden: setAttribute() to true
 reflection-text.html	a.hidden: setAttribute() to undefined
 reflection-text.html	a.hidden: typeof IDL attribute
 reflection-text.html	a.href: IDL get with DOM attribute unset
+reflection-text.html	a.href: IDL set to " foo "
+reflection-text.html	a.href: IDL set to ""
+reflection-text.html	a.href: IDL set to "+100"
+reflection-text.html	a.href: IDL set to ".5"
+reflection-text.html	a.href: IDL set to "//site.example/path???@#l"
+reflection-text.html	a.href: IDL set to "5%"
+reflection-text.html	a.href: IDL set to "http://site.example/"
+reflection-text.html	a.href: IDL set to -Infinity
+reflection-text.html	a.href: IDL set to 1.5
+reflection-text.html	a.href: IDL set to 7
+reflection-text.html	a.href: IDL set to Infinity
+reflection-text.html	a.href: IDL set to NaN
+reflection-text.html	a.href: IDL set to false
+reflection-text.html	a.href: IDL set to null
+reflection-text.html	a.href: IDL set to object "[object Object]"
+reflection-text.html	a.href: IDL set to object "test-toString"
+reflection-text.html	a.href: IDL set to object "test-valueOf"
+reflection-text.html	a.href: IDL set to true
+reflection-text.html	a.href: IDL set to undefined
+reflection-text.html	a.href: setAttribute() to " foo "
+reflection-text.html	a.href: setAttribute() to ""
+reflection-text.html	a.href: setAttribute() to "+100"
+reflection-text.html	a.href: setAttribute() to ".5"
+reflection-text.html	a.href: setAttribute() to "//site.example/path???@#l"
+reflection-text.html	a.href: setAttribute() to "5%"
+reflection-text.html	a.href: setAttribute() to "http://site.example/"
+reflection-text.html	a.href: setAttribute() to -Infinity
+reflection-text.html	a.href: setAttribute() to 1.5
+reflection-text.html	a.href: setAttribute() to 7
+reflection-text.html	a.href: setAttribute() to Infinity
+reflection-text.html	a.href: setAttribute() to NaN
+reflection-text.html	a.href: setAttribute() to false
+reflection-text.html	a.href: setAttribute() to null
+reflection-text.html	a.href: setAttribute() to object "[object Object]"
+reflection-text.html	a.href: setAttribute() to object "test-toString"
+reflection-text.html	a.href: setAttribute() to object "test-valueOf"
+reflection-text.html	a.href: setAttribute() to true
+reflection-text.html	a.href: setAttribute() to undefined
 reflection-text.html	a.href: typeof IDL attribute
+reflection-text.html	a.hreflang: IDL get with DOM attribute unset
+reflection-text.html	a.hreflang: IDL set to ""
+reflection-text.html	a.hreflang: IDL set to "+100"
+reflection-text.html	a.hreflang: IDL set to ".5"
+reflection-text.html	a.hreflang: IDL set to "5%"
+reflection-text.html	a.hreflang: IDL set to -Infinity
+reflection-text.html	a.hreflang: IDL set to 1.5
+reflection-text.html	a.hreflang: IDL set to 7
+reflection-text.html	a.hreflang: IDL set to Infinity
+reflection-text.html	a.hreflang: IDL set to NaN
+reflection-text.html	a.hreflang: IDL set to false
+reflection-text.html	a.hreflang: IDL set to null
+reflection-text.html	a.hreflang: IDL set to object "[object Object]"
+reflection-text.html	a.hreflang: IDL set to object "test-toString"
+reflection-text.html	a.hreflang: IDL set to object "test-valueOf"
+reflection-text.html	a.hreflang: IDL set to true
+reflection-text.html	a.hreflang: IDL set to undefined
+reflection-text.html	a.hreflang: setAttribute() to ""
+reflection-text.html	a.hreflang: setAttribute() to "+100"
+reflection-text.html	a.hreflang: setAttribute() to ".5"
+reflection-text.html	a.hreflang: setAttribute() to "5%"
+reflection-text.html	a.hreflang: setAttribute() to -Infinity
+reflection-text.html	a.hreflang: setAttribute() to 1.5
+reflection-text.html	a.hreflang: setAttribute() to 7
+reflection-text.html	a.hreflang: setAttribute() to Infinity
+reflection-text.html	a.hreflang: setAttribute() to NaN
+reflection-text.html	a.hreflang: setAttribute() to false
+reflection-text.html	a.hreflang: setAttribute() to null
+reflection-text.html	a.hreflang: setAttribute() to object "[object Object]"
+reflection-text.html	a.hreflang: setAttribute() to object "test-toString"
+reflection-text.html	a.hreflang: setAttribute() to object "test-valueOf"
+reflection-text.html	a.hreflang: setAttribute() to true
+reflection-text.html	a.hreflang: setAttribute() to undefined
+reflection-text.html	a.hreflang: typeof IDL attribute
 reflection-text.html	a.inert: IDL set to true
 reflection-text.html	a.lang: IDL get with DOM attribute unset
 reflection-text.html	a.lang: IDL set to ""
@@ -37592,6 +39164,284 @@ reflection-text.html	a.lang: setAttribute() to object "test-valueOf"
 reflection-text.html	a.lang: setAttribute() to true
 reflection-text.html	a.lang: setAttribute() to undefined
 reflection-text.html	a.lang: typeof IDL attribute
+reflection-text.html	a.name: IDL get with DOM attribute unset
+reflection-text.html	a.name: IDL set to ""
+reflection-text.html	a.name: IDL set to "+100"
+reflection-text.html	a.name: IDL set to ".5"
+reflection-text.html	a.name: IDL set to "5%"
+reflection-text.html	a.name: IDL set to -Infinity
+reflection-text.html	a.name: IDL set to 1.5
+reflection-text.html	a.name: IDL set to 7
+reflection-text.html	a.name: IDL set to Infinity
+reflection-text.html	a.name: IDL set to NaN
+reflection-text.html	a.name: IDL set to false
+reflection-text.html	a.name: IDL set to null
+reflection-text.html	a.name: IDL set to object "[object Object]"
+reflection-text.html	a.name: IDL set to object "test-toString"
+reflection-text.html	a.name: IDL set to object "test-valueOf"
+reflection-text.html	a.name: IDL set to true
+reflection-text.html	a.name: IDL set to undefined
+reflection-text.html	a.name: setAttribute() to ""
+reflection-text.html	a.name: setAttribute() to "+100"
+reflection-text.html	a.name: setAttribute() to ".5"
+reflection-text.html	a.name: setAttribute() to "5%"
+reflection-text.html	a.name: setAttribute() to -Infinity
+reflection-text.html	a.name: setAttribute() to 1.5
+reflection-text.html	a.name: setAttribute() to 7
+reflection-text.html	a.name: setAttribute() to Infinity
+reflection-text.html	a.name: setAttribute() to NaN
+reflection-text.html	a.name: setAttribute() to false
+reflection-text.html	a.name: setAttribute() to null
+reflection-text.html	a.name: setAttribute() to object "[object Object]"
+reflection-text.html	a.name: setAttribute() to object "test-toString"
+reflection-text.html	a.name: setAttribute() to object "test-valueOf"
+reflection-text.html	a.name: setAttribute() to true
+reflection-text.html	a.name: setAttribute() to undefined
+reflection-text.html	a.name: typeof IDL attribute
+reflection-text.html	a.ping: IDL get with DOM attribute unset
+reflection-text.html	a.ping: IDL set to ""
+reflection-text.html	a.ping: IDL set to "+100"
+reflection-text.html	a.ping: IDL set to ".5"
+reflection-text.html	a.ping: IDL set to "5%"
+reflection-text.html	a.ping: IDL set to -Infinity
+reflection-text.html	a.ping: IDL set to 1.5
+reflection-text.html	a.ping: IDL set to 7
+reflection-text.html	a.ping: IDL set to Infinity
+reflection-text.html	a.ping: IDL set to NaN
+reflection-text.html	a.ping: IDL set to false
+reflection-text.html	a.ping: IDL set to null
+reflection-text.html	a.ping: IDL set to object "[object Object]"
+reflection-text.html	a.ping: IDL set to object "test-toString"
+reflection-text.html	a.ping: IDL set to object "test-valueOf"
+reflection-text.html	a.ping: IDL set to true
+reflection-text.html	a.ping: IDL set to undefined
+reflection-text.html	a.ping: setAttribute() to ""
+reflection-text.html	a.ping: setAttribute() to "+100"
+reflection-text.html	a.ping: setAttribute() to ".5"
+reflection-text.html	a.ping: setAttribute() to "5%"
+reflection-text.html	a.ping: setAttribute() to -Infinity
+reflection-text.html	a.ping: setAttribute() to 1.5
+reflection-text.html	a.ping: setAttribute() to 7
+reflection-text.html	a.ping: setAttribute() to Infinity
+reflection-text.html	a.ping: setAttribute() to NaN
+reflection-text.html	a.ping: setAttribute() to false
+reflection-text.html	a.ping: setAttribute() to null
+reflection-text.html	a.ping: setAttribute() to object "[object Object]"
+reflection-text.html	a.ping: setAttribute() to object "test-toString"
+reflection-text.html	a.ping: setAttribute() to object "test-valueOf"
+reflection-text.html	a.ping: setAttribute() to true
+reflection-text.html	a.ping: setAttribute() to undefined
+reflection-text.html	a.ping: typeof IDL attribute
+reflection-text.html	a.referrerPolicy: IDL get with DOM attribute unset
+reflection-text.html	a.referrerPolicy: IDL set to ""
+reflection-text.html	a.referrerPolicy: IDL set to "+100"
+reflection-text.html	a.referrerPolicy: IDL set to ".5"
+reflection-text.html	a.referrerPolicy: IDL set to "5%"
+reflection-text.html	a.referrerPolicy: IDL set to "NO-REFERRER"
+reflection-text.html	a.referrerPolicy: IDL set to "NO-REFERRER-WHEN-DOWNGRADE"
+reflection-text.html	a.referrerPolicy: IDL set to "ORIGIN"
+reflection-text.html	a.referrerPolicy: IDL set to "ORIGIN-WHEN-CROSS-ORIGIN"
+reflection-text.html	a.referrerPolicy: IDL set to "SAME-ORIGIN"
+reflection-text.html	a.referrerPolicy: IDL set to "STRICT-ORIGIN"
+reflection-text.html	a.referrerPolicy: IDL set to "STRICT-ORIGIN-WHEN-CROSS-ORIGIN"
+reflection-text.html	a.referrerPolicy: IDL set to "UNSAFE-URL"
+reflection-text.html	a.referrerPolicy: IDL set to "ame-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "no-referrer"
+reflection-text.html	a.referrerPolicy: IDL set to "no-referrer-when-downgrade"
+reflection-text.html	a.referrerPolicy: IDL set to "nsafe-url"
+reflection-text.html	a.referrerPolicy: IDL set to "o-referrer"
+reflection-text.html	a.referrerPolicy: IDL set to "o-referrer-when-downgrade"
+reflection-text.html	a.referrerPolicy: IDL set to "origin"
+reflection-text.html	a.referrerPolicy: IDL set to "origin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "origin-when-croſſ-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "rigin"
+reflection-text.html	a.referrerPolicy: IDL set to "rigin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "same-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "strict-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "strict-origin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "trict-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "trict-origin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "unsafe-url"
+reflection-text.html	a.referrerPolicy: IDL set to "unſafe-url"
+reflection-text.html	a.referrerPolicy: IDL set to "xno-referrer"
+reflection-text.html	a.referrerPolicy: IDL set to "xno-referrer-when-downgrade"
+reflection-text.html	a.referrerPolicy: IDL set to "xorigin"
+reflection-text.html	a.referrerPolicy: IDL set to "xorigin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "xsame-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "xstrict-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "xstrict-origin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "xunsafe-url"
+reflection-text.html	a.referrerPolicy: IDL set to "ſame-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "ſtrict-origin"
+reflection-text.html	a.referrerPolicy: IDL set to "ſtrict-origin-when-croſſ-origin"
+reflection-text.html	a.referrerPolicy: IDL set to -Infinity
+reflection-text.html	a.referrerPolicy: IDL set to 1.5
+reflection-text.html	a.referrerPolicy: IDL set to 7
+reflection-text.html	a.referrerPolicy: IDL set to Infinity
+reflection-text.html	a.referrerPolicy: IDL set to NaN
+reflection-text.html	a.referrerPolicy: IDL set to false
+reflection-text.html	a.referrerPolicy: IDL set to null
+reflection-text.html	a.referrerPolicy: IDL set to object "[object Object]"
+reflection-text.html	a.referrerPolicy: IDL set to object "test-toString"
+reflection-text.html	a.referrerPolicy: IDL set to object "test-valueOf"
+reflection-text.html	a.referrerPolicy: IDL set to true
+reflection-text.html	a.referrerPolicy: IDL set to undefined
+reflection-text.html	a.referrerPolicy: setAttribute() to ""
+reflection-text.html	a.referrerPolicy: setAttribute() to "+100"
+reflection-text.html	a.referrerPolicy: setAttribute() to ".5"
+reflection-text.html	a.referrerPolicy: setAttribute() to "5%"
+reflection-text.html	a.referrerPolicy: setAttribute() to "NO-REFERRER"
+reflection-text.html	a.referrerPolicy: setAttribute() to "NO-REFERRER-WHEN-DOWNGRADE"
+reflection-text.html	a.referrerPolicy: setAttribute() to "ORIGIN"
+reflection-text.html	a.referrerPolicy: setAttribute() to "ORIGIN-WHEN-CROSS-ORIGIN"
+reflection-text.html	a.referrerPolicy: setAttribute() to "SAME-ORIGIN"
+reflection-text.html	a.referrerPolicy: setAttribute() to "STRICT-ORIGIN"
+reflection-text.html	a.referrerPolicy: setAttribute() to "STRICT-ORIGIN-WHEN-CROSS-ORIGIN"
+reflection-text.html	a.referrerPolicy: setAttribute() to "UNSAFE-URL"
+reflection-text.html	a.referrerPolicy: setAttribute() to "ame-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "no-referrer"
+reflection-text.html	a.referrerPolicy: setAttribute() to "no-referrer-when-downgrade"
+reflection-text.html	a.referrerPolicy: setAttribute() to "nsafe-url"
+reflection-text.html	a.referrerPolicy: setAttribute() to "o-referrer"
+reflection-text.html	a.referrerPolicy: setAttribute() to "o-referrer-when-downgrade"
+reflection-text.html	a.referrerPolicy: setAttribute() to "origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "origin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "origin-when-croſſ-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "rigin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "rigin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "same-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "strict-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "strict-origin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "trict-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "trict-origin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "unsafe-url"
+reflection-text.html	a.referrerPolicy: setAttribute() to "unſafe-url"
+reflection-text.html	a.referrerPolicy: setAttribute() to "xno-referrer"
+reflection-text.html	a.referrerPolicy: setAttribute() to "xno-referrer-when-downgrade"
+reflection-text.html	a.referrerPolicy: setAttribute() to "xorigin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "xorigin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "xsame-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "xstrict-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "xstrict-origin-when-cross-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "xunsafe-url"
+reflection-text.html	a.referrerPolicy: setAttribute() to "ſame-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "ſtrict-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to "ſtrict-origin-when-croſſ-origin"
+reflection-text.html	a.referrerPolicy: setAttribute() to -Infinity
+reflection-text.html	a.referrerPolicy: setAttribute() to 1.5
+reflection-text.html	a.referrerPolicy: setAttribute() to 7
+reflection-text.html	a.referrerPolicy: setAttribute() to Infinity
+reflection-text.html	a.referrerPolicy: setAttribute() to NaN
+reflection-text.html	a.referrerPolicy: setAttribute() to false
+reflection-text.html	a.referrerPolicy: setAttribute() to null
+reflection-text.html	a.referrerPolicy: setAttribute() to object "[object Object]"
+reflection-text.html	a.referrerPolicy: setAttribute() to object "test-toString"
+reflection-text.html	a.referrerPolicy: setAttribute() to object "test-valueOf"
+reflection-text.html	a.referrerPolicy: setAttribute() to true
+reflection-text.html	a.referrerPolicy: setAttribute() to undefined
+reflection-text.html	a.referrerPolicy: typeof IDL attribute
+reflection-text.html	a.rel: IDL get with DOM attribute unset
+reflection-text.html	a.rel: IDL set to ""
+reflection-text.html	a.rel: IDL set to "+100"
+reflection-text.html	a.rel: IDL set to ".5"
+reflection-text.html	a.rel: IDL set to "5%"
+reflection-text.html	a.rel: IDL set to -Infinity
+reflection-text.html	a.rel: IDL set to 1.5
+reflection-text.html	a.rel: IDL set to 7
+reflection-text.html	a.rel: IDL set to Infinity
+reflection-text.html	a.rel: IDL set to NaN
+reflection-text.html	a.rel: IDL set to false
+reflection-text.html	a.rel: IDL set to null
+reflection-text.html	a.rel: IDL set to object "[object Object]"
+reflection-text.html	a.rel: IDL set to object "test-toString"
+reflection-text.html	a.rel: IDL set to object "test-valueOf"
+reflection-text.html	a.rel: IDL set to true
+reflection-text.html	a.rel: IDL set to undefined
+reflection-text.html	a.rel: setAttribute() to ""
+reflection-text.html	a.rel: setAttribute() to "+100"
+reflection-text.html	a.rel: setAttribute() to ".5"
+reflection-text.html	a.rel: setAttribute() to "5%"
+reflection-text.html	a.rel: setAttribute() to -Infinity
+reflection-text.html	a.rel: setAttribute() to 1.5
+reflection-text.html	a.rel: setAttribute() to 7
+reflection-text.html	a.rel: setAttribute() to Infinity
+reflection-text.html	a.rel: setAttribute() to NaN
+reflection-text.html	a.rel: setAttribute() to false
+reflection-text.html	a.rel: setAttribute() to null
+reflection-text.html	a.rel: setAttribute() to object "[object Object]"
+reflection-text.html	a.rel: setAttribute() to object "test-toString"
+reflection-text.html	a.rel: setAttribute() to object "test-valueOf"
+reflection-text.html	a.rel: setAttribute() to true
+reflection-text.html	a.rel: setAttribute() to undefined
+reflection-text.html	a.rel: typeof IDL attribute
+reflection-text.html	a.rev: IDL get with DOM attribute unset
+reflection-text.html	a.rev: IDL set to ""
+reflection-text.html	a.rev: IDL set to "+100"
+reflection-text.html	a.rev: IDL set to ".5"
+reflection-text.html	a.rev: IDL set to "5%"
+reflection-text.html	a.rev: IDL set to -Infinity
+reflection-text.html	a.rev: IDL set to 1.5
+reflection-text.html	a.rev: IDL set to 7
+reflection-text.html	a.rev: IDL set to Infinity
+reflection-text.html	a.rev: IDL set to NaN
+reflection-text.html	a.rev: IDL set to false
+reflection-text.html	a.rev: IDL set to null
+reflection-text.html	a.rev: IDL set to object "[object Object]"
+reflection-text.html	a.rev: IDL set to object "test-toString"
+reflection-text.html	a.rev: IDL set to object "test-valueOf"
+reflection-text.html	a.rev: IDL set to true
+reflection-text.html	a.rev: IDL set to undefined
+reflection-text.html	a.rev: setAttribute() to ""
+reflection-text.html	a.rev: setAttribute() to "+100"
+reflection-text.html	a.rev: setAttribute() to ".5"
+reflection-text.html	a.rev: setAttribute() to "5%"
+reflection-text.html	a.rev: setAttribute() to -Infinity
+reflection-text.html	a.rev: setAttribute() to 1.5
+reflection-text.html	a.rev: setAttribute() to 7
+reflection-text.html	a.rev: setAttribute() to Infinity
+reflection-text.html	a.rev: setAttribute() to NaN
+reflection-text.html	a.rev: setAttribute() to false
+reflection-text.html	a.rev: setAttribute() to null
+reflection-text.html	a.rev: setAttribute() to object "[object Object]"
+reflection-text.html	a.rev: setAttribute() to object "test-toString"
+reflection-text.html	a.rev: setAttribute() to object "test-valueOf"
+reflection-text.html	a.rev: setAttribute() to true
+reflection-text.html	a.rev: setAttribute() to undefined
+reflection-text.html	a.rev: typeof IDL attribute
+reflection-text.html	a.shape: IDL get with DOM attribute unset
+reflection-text.html	a.shape: IDL set to ""
+reflection-text.html	a.shape: IDL set to "+100"
+reflection-text.html	a.shape: IDL set to ".5"
+reflection-text.html	a.shape: IDL set to "5%"
+reflection-text.html	a.shape: IDL set to -Infinity
+reflection-text.html	a.shape: IDL set to 1.5
+reflection-text.html	a.shape: IDL set to 7
+reflection-text.html	a.shape: IDL set to Infinity
+reflection-text.html	a.shape: IDL set to NaN
+reflection-text.html	a.shape: IDL set to false
+reflection-text.html	a.shape: IDL set to null
+reflection-text.html	a.shape: IDL set to object "[object Object]"
+reflection-text.html	a.shape: IDL set to object "test-toString"
+reflection-text.html	a.shape: IDL set to object "test-valueOf"
+reflection-text.html	a.shape: IDL set to true
+reflection-text.html	a.shape: IDL set to undefined
+reflection-text.html	a.shape: setAttribute() to ""
+reflection-text.html	a.shape: setAttribute() to "+100"
+reflection-text.html	a.shape: setAttribute() to ".5"
+reflection-text.html	a.shape: setAttribute() to "5%"
+reflection-text.html	a.shape: setAttribute() to -Infinity
+reflection-text.html	a.shape: setAttribute() to 1.5
+reflection-text.html	a.shape: setAttribute() to 7
+reflection-text.html	a.shape: setAttribute() to Infinity
+reflection-text.html	a.shape: setAttribute() to NaN
+reflection-text.html	a.shape: setAttribute() to false
+reflection-text.html	a.shape: setAttribute() to null
+reflection-text.html	a.shape: setAttribute() to object "[object Object]"
+reflection-text.html	a.shape: setAttribute() to object "test-toString"
+reflection-text.html	a.shape: setAttribute() to object "test-valueOf"
+reflection-text.html	a.shape: setAttribute() to true
+reflection-text.html	a.shape: setAttribute() to undefined
+reflection-text.html	a.shape: typeof IDL attribute
 reflection-text.html	a.tabIndex: IDL set to -1
 reflection-text.html	a.tabIndex: IDL set to -2147483648
 reflection-text.html	a.tabIndex: IDL set to -36
@@ -37620,6 +39470,40 @@ reflection-text.html	a.tabIndex: setAttribute() to 2147483647
 reflection-text.html	a.tabIndex: setAttribute() to object "2"
 reflection-text.html	a.tabIndex: setAttribute() to object "3"
 reflection-text.html	a.tabIndex: typeof IDL attribute
+reflection-text.html	a.target: IDL get with DOM attribute unset
+reflection-text.html	a.target: IDL set to ""
+reflection-text.html	a.target: IDL set to "+100"
+reflection-text.html	a.target: IDL set to ".5"
+reflection-text.html	a.target: IDL set to "5%"
+reflection-text.html	a.target: IDL set to -Infinity
+reflection-text.html	a.target: IDL set to 1.5
+reflection-text.html	a.target: IDL set to 7
+reflection-text.html	a.target: IDL set to Infinity
+reflection-text.html	a.target: IDL set to NaN
+reflection-text.html	a.target: IDL set to false
+reflection-text.html	a.target: IDL set to null
+reflection-text.html	a.target: IDL set to object "[object Object]"
+reflection-text.html	a.target: IDL set to object "test-toString"
+reflection-text.html	a.target: IDL set to object "test-valueOf"
+reflection-text.html	a.target: IDL set to true
+reflection-text.html	a.target: IDL set to undefined
+reflection-text.html	a.target: setAttribute() to ""
+reflection-text.html	a.target: setAttribute() to "+100"
+reflection-text.html	a.target: setAttribute() to ".5"
+reflection-text.html	a.target: setAttribute() to "5%"
+reflection-text.html	a.target: setAttribute() to -Infinity
+reflection-text.html	a.target: setAttribute() to 1.5
+reflection-text.html	a.target: setAttribute() to 7
+reflection-text.html	a.target: setAttribute() to Infinity
+reflection-text.html	a.target: setAttribute() to NaN
+reflection-text.html	a.target: setAttribute() to false
+reflection-text.html	a.target: setAttribute() to null
+reflection-text.html	a.target: setAttribute() to object "[object Object]"
+reflection-text.html	a.target: setAttribute() to object "test-toString"
+reflection-text.html	a.target: setAttribute() to object "test-valueOf"
+reflection-text.html	a.target: setAttribute() to true
+reflection-text.html	a.target: setAttribute() to undefined
+reflection-text.html	a.target: typeof IDL attribute
 reflection-text.html	a.title: IDL get with DOM attribute unset
 reflection-text.html	a.title: IDL set to ""
 reflection-text.html	a.title: IDL set to "+100"
@@ -37654,6 +39538,40 @@ reflection-text.html	a.title: setAttribute() to object "test-valueOf"
 reflection-text.html	a.title: setAttribute() to true
 reflection-text.html	a.title: setAttribute() to undefined
 reflection-text.html	a.title: typeof IDL attribute
+reflection-text.html	a.type: IDL get with DOM attribute unset
+reflection-text.html	a.type: IDL set to ""
+reflection-text.html	a.type: IDL set to "+100"
+reflection-text.html	a.type: IDL set to ".5"
+reflection-text.html	a.type: IDL set to "5%"
+reflection-text.html	a.type: IDL set to -Infinity
+reflection-text.html	a.type: IDL set to 1.5
+reflection-text.html	a.type: IDL set to 7
+reflection-text.html	a.type: IDL set to Infinity
+reflection-text.html	a.type: IDL set to NaN
+reflection-text.html	a.type: IDL set to false
+reflection-text.html	a.type: IDL set to null
+reflection-text.html	a.type: IDL set to object "[object Object]"
+reflection-text.html	a.type: IDL set to object "test-toString"
+reflection-text.html	a.type: IDL set to object "test-valueOf"
+reflection-text.html	a.type: IDL set to true
+reflection-text.html	a.type: IDL set to undefined
+reflection-text.html	a.type: setAttribute() to ""
+reflection-text.html	a.type: setAttribute() to "+100"
+reflection-text.html	a.type: setAttribute() to ".5"
+reflection-text.html	a.type: setAttribute() to "5%"
+reflection-text.html	a.type: setAttribute() to -Infinity
+reflection-text.html	a.type: setAttribute() to 1.5
+reflection-text.html	a.type: setAttribute() to 7
+reflection-text.html	a.type: setAttribute() to Infinity
+reflection-text.html	a.type: setAttribute() to NaN
+reflection-text.html	a.type: setAttribute() to false
+reflection-text.html	a.type: setAttribute() to null
+reflection-text.html	a.type: setAttribute() to object "[object Object]"
+reflection-text.html	a.type: setAttribute() to object "test-toString"
+reflection-text.html	a.type: setAttribute() to object "test-valueOf"
+reflection-text.html	a.type: setAttribute() to true
+reflection-text.html	a.type: setAttribute() to undefined
+reflection-text.html	a.type: typeof IDL attribute
 reflection-text.html	abbr.autofocus: IDL set to true
 reflection-text.html	abbr.className (<abbr class>): IDL get with DOM attribute unset
 reflection-text.html	abbr.className (<abbr class>): IDL set to ""
@@ -40688,6 +42606,44 @@ reflection-text.html	mark.title: setAttribute() to undefined
 reflection-text.html	mark.title: typeof IDL attribute
 reflection-text.html	q.autofocus: IDL set to true
 reflection-text.html	q.cite: IDL get with DOM attribute unset
+reflection-text.html	q.cite: IDL set to " foo "
+reflection-text.html	q.cite: IDL set to ""
+reflection-text.html	q.cite: IDL set to "+100"
+reflection-text.html	q.cite: IDL set to ".5"
+reflection-text.html	q.cite: IDL set to "//site.example/path???@#l"
+reflection-text.html	q.cite: IDL set to "5%"
+reflection-text.html	q.cite: IDL set to "http://site.example/"
+reflection-text.html	q.cite: IDL set to -Infinity
+reflection-text.html	q.cite: IDL set to 1.5
+reflection-text.html	q.cite: IDL set to 7
+reflection-text.html	q.cite: IDL set to Infinity
+reflection-text.html	q.cite: IDL set to NaN
+reflection-text.html	q.cite: IDL set to false
+reflection-text.html	q.cite: IDL set to null
+reflection-text.html	q.cite: IDL set to object "[object Object]"
+reflection-text.html	q.cite: IDL set to object "test-toString"
+reflection-text.html	q.cite: IDL set to object "test-valueOf"
+reflection-text.html	q.cite: IDL set to true
+reflection-text.html	q.cite: IDL set to undefined
+reflection-text.html	q.cite: setAttribute() to " foo "
+reflection-text.html	q.cite: setAttribute() to ""
+reflection-text.html	q.cite: setAttribute() to "+100"
+reflection-text.html	q.cite: setAttribute() to ".5"
+reflection-text.html	q.cite: setAttribute() to "//site.example/path???@#l"
+reflection-text.html	q.cite: setAttribute() to "5%"
+reflection-text.html	q.cite: setAttribute() to "http://site.example/"
+reflection-text.html	q.cite: setAttribute() to -Infinity
+reflection-text.html	q.cite: setAttribute() to 1.5
+reflection-text.html	q.cite: setAttribute() to 7
+reflection-text.html	q.cite: setAttribute() to Infinity
+reflection-text.html	q.cite: setAttribute() to NaN
+reflection-text.html	q.cite: setAttribute() to false
+reflection-text.html	q.cite: setAttribute() to null
+reflection-text.html	q.cite: setAttribute() to object "[object Object]"
+reflection-text.html	q.cite: setAttribute() to object "test-toString"
+reflection-text.html	q.cite: setAttribute() to object "test-valueOf"
+reflection-text.html	q.cite: setAttribute() to true
+reflection-text.html	q.cite: setAttribute() to undefined
 reflection-text.html	q.cite: typeof IDL attribute
 reflection-text.html	q.className (<q class>): IDL get with DOM attribute unset
 reflection-text.html	q.className (<q class>): IDL set to ""

@@ -1,0 +1,24 @@
+# Expose the existing realm query for browser callback ownership.
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -20807,7 +20807,7 @@
+ 
+ /* warning: the refcount of the context is not incremented. Return
+    NULL in case of exception (case of revoked proxy only) */
+-static JSContext *JS_GetFunctionRealm(JSContext *ctx, JSValueConst func_obj)
++JSContext *JS_GetFunctionRealm(JSContext *ctx, JSValueConst func_obj)
+ {
+     JSObject *p;
+     JSContext *realm;
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -775,6 +775,9 @@
+ JSValue JS_NewObject(JSContext *ctx);
+ 
+ JS_BOOL JS_IsFunction(JSContext* ctx, JSValueConst val);
++/* Borrow the callable realm, following bound functions and proxies without
++   invoking script. Non-functions use ctx; a revoked proxy throws and returns NULL. */
++JSContext *JS_GetFunctionRealm(JSContext *ctx, JSValueConst func_obj);
+ JS_BOOL JS_IsConstructor(JSContext* ctx, JSValueConst val);
+ JS_BOOL JS_SetConstructorBit(JSContext *ctx, JSValueConst func_obj, JS_BOOL val);
+ 

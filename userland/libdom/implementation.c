@@ -20,18 +20,8 @@
  * fires its event and resets no control (DEBTS.md). Its body reflects no
  * handler onto window, and scripting is off for its nodes (d_scripting).
  *
- * WHICH DOCUMENT A NODE BELONGS TO is the document its tree hangs from, and
- * a tree that hangs from none (a node made and not yet inserted, or one
- * taken out) remembers the document it was made in or last left on its
- * root's wrapper (DValue.document). Every verb that takes a node out of a
- * tree records first the document it leaves (d_leaving), and every node a
- * document of its own makes, a clone copies or adoptNode moves is recorded
- * as it is made or moved (d_made_in), so a root that has a wrapper always
- * says. One that has none (a child innerHTML replaced,
- * never handed to a script) says nothing, and reads as the window's: a
- * script reaches it only through a descendant it held before. While no
- * document of its own exists every node is the window's, and none of this
- * runs. */
+ * Native metadata records the current Document even for unwrapped detached
+ * nodes. Wrapper records retain identity and creation-realm prototypes. */
 
 static JSClassID implementation_slot;
 
@@ -42,40 +32,35 @@ static const os64_html_node_t *window_document(os64_dom_t *dom)
 
 const os64_html_node_t *d_node_document(os64_dom_t *dom, const os64_html_node_t *node)
 {
-    if (node->kind == OS64_HTML_DOCUMENT) return node;
-    if (dom->documents == 0) return window_document(dom);
-    /* A shadow tree's document is its host's: the climb crosses. */
-    const os64_html_node_t *root = os64_html_shadow_including_root(node);
-    if (root->kind == OS64_HTML_DOCUMENT) return root;
-    DValue *entry = d_find(dom, root);
-    return entry != NULL && entry->document != NULL ? entry->document : window_document(dom);
+    (void)dom;
+    return os64_html_node_document(node);
 }
 
 bool d_window_document(os64_dom_t *dom, const os64_html_node_t *node)
 {
-    return dom->documents == 0 || d_node_document(dom, node) == window_document(dom);
+    return d_node_document(dom, node) == window_document(dom);
 }
 
 bool d_scripting(os64_dom_t *dom, const os64_html_node_t *node)
 {
+    dom = d_owner(dom, node);
     return dom->options.scripting && d_window_document(dom, node);
 }
 
-void d_made_in(os64_dom_t *dom, const os64_html_node_t *node, const os64_html_node_t *document)
+int64_t d_made_in(os64_dom_t *dom, const os64_html_node_t *node, const os64_html_node_t *document)
 {
-    DValue *entry = d_find(dom, node);
-    if (entry != NULL) entry->document = document != window_document(dom) ? document : NULL;
+    dom = d_owner(dom, document);
+    int64_t status = OS64_HTML_OK;
+    if (os64_html_node_document(node) != document)
+        status = os64_html_adopt(dom->document, (os64_html_node_t *)document, (os64_html_node_t *)node);
+    return status;
 }
 
-/* Only a node with a wrapper keeps a record, so one without costs a lookup
- * and no walk to its root. */
-void d_leaving(os64_dom_t *dom, const os64_html_node_t *node)
+JSValue d_wrap_in(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
+                   const os64_html_node_t *document)
 {
-    if (dom->documents == 0 || node->parent == NULL) return;
-    DValue *entry = d_find(dom, node);
-    if (entry == NULL) return;
-    const os64_html_node_t *document = d_node_document(dom, node);
-    entry->document = document != window_document(dom) ? document : NULL;
+    int64_t status = d_made_in(dom, node, document);
+    return status == OS64_HTML_OK ? d_wrap(dom, ctx, node) : d_html_error(ctx, status);
 }
 
 int d_document_type(os64_dom_t *dom, const os64_html_node_t *node)
@@ -96,19 +81,33 @@ static DValue *implementation_of(JSContext *ctx, JSValueConst self)
     return owner;
 }
 
-/* A new DOCUMENT node, counted from the moment it exists, so that from then
- * on nodes are asked which document they are in: one may be moved into it
- * before it has a wrapper. NULL with the refusal thrown. */
-static os64_html_node_t *document_made(os64_dom_t *dom, JSContext *ctx)
+/* Additional Documents remain arena-owned even when a wrapper was never
+ * requested. Detached nodes and template associations can still name them. */
+static os64_html_node_t *native_document(os64_dom_t *dom, JSContext *ctx)
 {
     int64_t status;
     os64_html_node_t *document = os64_html_create_document(dom->document, &status);
-    if (document == NULL) {
-        d_html_error(ctx, status);
-        return NULL;
-    }
-    dom->documents++;
+    if (!document) { d_html_error(ctx, status); return NULL; }
+    status = os64_html_document_keep(dom->document, document);
+    if (status != OS64_HTML_OK) { d_html_error(ctx, status); return NULL; }
     return document;
+}
+
+int d_document_templates(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document)
+{
+    os64_html_node_t *inert = native_document(dom, ctx);
+    if (!inert) return -1;
+    int64_t status = os64_html_document_templates(dom->document, (os64_html_node_t *)document, inert);
+    if (status != OS64_HTML_OK) { d_html_error(ctx, status); return -1; }
+    return 0;
+}
+
+static os64_html_node_t *document_made(os64_dom_t *dom, JSContext *ctx)
+{
+    os64_html_node_t *document = native_document(dom, ctx);
+    if (!document) return NULL;
+    dom->documents++;
+    return d_document_templates(dom, ctx, document) == 0 ? document : NULL;
 }
 
 /* The new document's wrapper, which records what kind of document it is. */
@@ -192,8 +191,7 @@ static JSValue create_document_type(os64_dom_t *dom, JSContext *ctx, DValue *own
             int64_t status;
             os64_html_node_t *doctype = os64_html_create_doctype(dom->document, name.data, public_id.data,
                                                                  system_id.data, &status);
-            result = doctype != NULL ? d_wrap(dom, ctx, doctype) : d_html_error(ctx, status);
-            if (!JS_IsException(result)) d_made_in(dom, doctype, owner->node);
+            result = doctype != NULL ? d_wrap_in(dom, ctx, doctype, owner->node) : d_html_error(ctx, status);
         }
     }
     d_string_free(dom, &system_id);
@@ -337,6 +335,8 @@ static JSValue implementation_method(JSContext *ctx, JSValueConst self, int argc
     if (dom == NULL) return JS_EXCEPTION;
     DValue *owner = implementation_of(ctx, self);
     if (owner == NULL) return JS_EXCEPTION;
+    if (!d_same_cluster(dom, owner->dom)) return JS_ThrowTypeError(ctx, "Foreign DOMImplementation");
+    dom = owner->dom;
     switch (magic) {
     case I_HTML_DOCUMENT: return create_html_document(dom, ctx, argc, argv);
     case I_DOCUMENT: return create_document(dom, ctx, argc, argv);
@@ -359,6 +359,7 @@ static JSValue document_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
     if (magic >= M_NAME) {
         if (node->kind != OS64_HTML_DOCTYPE) return JS_ThrowTypeError(ctx, "Expected a DocumentType");
         const char *text = magic == M_NAME ? node->name : magic == M_PUBLIC_ID ? node->public_id : node->system_id;
@@ -371,13 +372,15 @@ static JSValue document_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         return JS_NULL;
     }
     DValue *entry = d_find(dom, node);
-    if (entry->implementation != NULL) return JS_DupValue(ctx, entry->implementation->value);
+    if (d_more_peek(entry)->implementation != NULL) return JS_DupValue(ctx, d_more_peek(entry)->implementation->value);
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) return JS_EXCEPTION;
     JSValue object = JS_NewObjectProtoClass(ctx, dom->implementation_prototype->value,
                                             os64_js_class_id(&implementation_slot));
     DValue *held = d_retain(dom, ctx, object);
     if (held == NULL) return JS_EXCEPTION;
     JS_SetOpaque(held->value, entry);
-    entry->implementation = held;
+    more->implementation = held;
     return JS_DupValue(ctx, held->value);
 }
 
@@ -451,6 +454,7 @@ static JSValue create_element_ns(JSContext *ctx, JSValueConst self, int argc, JS
     if (JS_IsUndefined(result) && document == NULL) result = JS_EXCEPTION;
     else if (JS_IsUndefined(result) && document->kind != OS64_HTML_DOCUMENT)
         result = JS_ThrowTypeError(ctx, "createElementNS requires a document");
+    if (JS_IsUndefined(result)) dom = d_owner(dom, document);
     const char *prefix = NULL, *local = NULL;
     if (JS_IsUndefined(result)) result = element_namespace(ctx, has_ns, &ns, &name, &prefix, &local);
     /* An HTML element with a definition is constructed (custom.c), inside
@@ -470,8 +474,7 @@ static JSValue create_element_ns(JSContext *ctx, JSValueConst self, int argc, JS
         int64_t status = OS64_HTML_OK;
         os64_html_node_t *element = os64_html_create_element_ns(dom->document, has_ns ? ns.data : NULL, prefix, local,
                                                                 &status);
-        result = element != NULL ? d_wrap(dom, ctx, element) : d_html_error(ctx, status);
-        if (!JS_IsException(result)) d_made_in(dom, element, document);
+        result = element != NULL ? d_wrap_in(dom, ctx, element, document) : d_html_error(ctx, status);
     }
     d_string_free(dom, &ns);
     d_string_free(dom, &name);
@@ -494,6 +497,7 @@ static JSValue document_take(JSContext *ctx, JSValueConst self, int argc, JSValu
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *document = d_node(dom, ctx, self);
     if (document == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, document);
     if (document->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "Expected a document");
     if (argc < 1) return JS_ThrowTypeError(ctx, "Missing node argument");
     int deep = magic == T_IMPORT && argc > 1 ? JS_ToBool(ctx, argv[1]) : 0;
@@ -509,10 +513,9 @@ static JSValue document_take(JSContext *ctx, JSValueConst self, int argc, JSValu
                                                                    "A document cannot be adopted");
     if (magic == T_IMPORT) return d_node_clone(dom, ctx, node, deep != 0, document);
     const os64_html_node_t *from = d_node_document(dom, node);
-    if (node->parent != NULL && d_tree_change(dom, ctx, D_REMOVE, node->parent, node, NULL) < 0)
-        return JS_EXCEPTION;
+    int64_t status = os64_page_node_adopt(dom->state, (os64_html_node_t *)document, (os64_html_node_t *)node);
+    if (status != OS64_HTML_OK) return d_html_error(ctx, status);
     if (from != document) {
-        d_made_in(dom, node, document);
         d_custom_adopted(dom, node, from, document);
     }
     return JS_DupValue(ctx, argv[0]);
@@ -584,6 +587,56 @@ static JSValue parse_from_string(JSContext *ctx, JSValueConst self, int argc, JS
     return result;
 }
 
+/* ── XMLSerializer (DOM Parsing § 3.1) ───────────────────────────────── */
+
+static JSClassID serializer_slot;
+
+/* `new XMLSerializer()`: stateless as DOMParser is, of new.target's
+ * prototype (a subclass's) or XMLSerializer's. */
+static JSValue serializer_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    (void)argc; (void)argv;
+    if (d_binding(ctx) == NULL) return JS_EXCEPTION;
+    JSClassID id = os64_js_class_id(&serializer_slot);
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValue made = JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, id) : JS_NewObjectClass(ctx, (int)id);
+    JS_FreeValue(ctx, prototype);
+    if (!JS_IsException(made)) JS_SetOpaque(made, &serializer_slot);
+    return made;
+}
+
+/* serializeToString(root): the XML serialization of a node and its subtree
+ * (libhtml's os64_html_serialize_xml, require well-formed false, so no
+ * node is refused as unserializable); an Attr's is the empty string. A
+ * root that is no Node is a TypeError, and running out of memory a
+ * QuotaExceededError. */
+static JSValue serialize_to_string(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                                   JSValue *data)
+{
+    (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (JS_GetOpaque(self, os64_js_class_id(&serializer_slot)) == NULL)
+        return JS_ThrowTypeError(ctx, "Expected an XMLSerializer");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "serializeToString needs a node");
+    DAttrView view;
+    int attr = d_attr_view(dom, ctx, argv[0], &view);
+    if (attr < 0) return JS_EXCEPTION;
+    if (attr == 1) return JS_NewString(ctx, "");
+    const os64_html_node_t *node = d_node(dom, ctx, argv[0]);
+    if (node == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
+    int64_t length = os64_html_serialize_xml(node, NULL, 0);
+    if (length < 0) return d_html_error(ctx, length);
+    char *buffer = (uint64_t)length >= SIZE_MAX ? NULL : d_alloc(dom, (size_t)length + 1);
+    if (buffer == NULL) return d_error(ctx, "QuotaExceededError", "DOM serialization quota exceeded");
+    int64_t written = os64_html_serialize_xml(node, buffer, (size_t)length + 1);
+    JSValue result = written < 0 ? d_html_error(ctx, written) : JS_NewStringLen(ctx, buffer, (size_t)length);
+    d_free(dom, buffer);
+    return result;
+}
+
 int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValue f = d_interface_new(ctx, "DOMImplementation", 0, NULL, dom->implementation_prototype->value,
@@ -602,6 +655,17 @@ int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
     JS_SetClassProto(ctx, id, JS_DupValue(ctx, prototype));
     if (d_method(dom, ctx, prototype, "parseFromString", parse_from_string, 2, 0) < 0) return -1;
     JSValue parser = d_interface_new(ctx, "DOMParser", 0, parser_construct, prototype, JS_UNDEFINED);
-    if (JS_IsException(parser)) return -1;
-    return JS_DefinePropertyValueStr(ctx, global, "DOMParser", parser, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+    if (JS_IsException(parser) ||
+        JS_DefinePropertyValueStr(ctx, global, "DOMParser", parser, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+        return -1;
+    static const JSClassDef serializer_definition = {.class_name = "XMLSerializer"};
+    id = os64_js_class_id(&serializer_slot);
+    if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &serializer_definition) < 0) return -1;
+    prototype = JS_NewObject(ctx);
+    if (d_retain(dom, ctx, prototype) == NULL) return -1;
+    JS_SetClassProto(ctx, id, JS_DupValue(ctx, prototype));
+    if (d_method(dom, ctx, prototype, "serializeToString", serialize_to_string, 1, 0) < 0) return -1;
+    JSValue serializer = d_interface_new(ctx, "XMLSerializer", 0, serializer_construct, prototype, JS_UNDEFINED);
+    if (JS_IsException(serializer)) return -1;
+    return JS_DefinePropertyValueStr(ctx, global, "XMLSerializer", serializer, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }

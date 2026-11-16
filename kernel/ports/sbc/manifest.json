@@ -1,0 +1,78 @@
+{
+  "component": "Android's SBC encoder (the Android Bluetooth module)",
+  "repository": "https://android.googlesource.com/platform/packages/modules/Bluetooth",
+  "path": "system/embdrv/sbc/encoder",
+  "branch": "main",
+  "commit": "6b3bed846fb38036e23e70b18c07be2fa1c0aaaf",
+  "commit_date": "2025-01-09",
+  "commit_subject": "Modify apex_available to Bluetooth apex",
+  "main_head_when_fetched": "745ee92b87ed62b5a8a1bac47d5df8cad623bf59",
+  "fetched": "2026-11-13",
+  "archive_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+archive/6b3bed846fb38036e23e70b18c07be2fa1c0aaaf/system/embdrv/sbc/encoder.tar.gz",
+  "archive_note": "Gitiles builds the tarball on request and stamps it with the time of the request, so it has no stable digest. Each file is pinned by SHA-256 and by its git blob id, which is what the commit's tree names (https://android.googlesource.com/platform/packages/modules/Bluetooth/+/6b3bed846fb38036e23e70b18c07be2fa1c0aaaf/system/embdrv/sbc/encoder/srce?format=JSON lists them).",
+  "trees": {
+    "srce": "e7effca032ec66f9e4348492b7853b0637a50f89",
+    "include": "2e22fc4a85695d0e99b318ce7620170adb752fea"
+  },
+  "licence": {
+    "file": "NOTICE",
+    "url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/6b3bed846fb38036e23e70b18c07be2fa1c0aaaf/NOTICE",
+    "git_blob": "37c501a3b1a2d79582190f45c85c0e41c257fffb",
+    "sha256": "fcfd08d120e2558dded978b780df4404a221b94372f7d2aa407b7ada7c54ff07",
+    "carried_in": "license/android-sbc-LICENSE"
+  },
+  "not_taken": [
+    "Android.bp"
+  ],
+  "patches": [],
+  "files": {
+    "include/sbc_dct.h": {
+      "sha256": "e562e68e357c682d8fd0750aa3c9f61e64c5719f5a6044ca5ecb250842928298",
+      "git_blob": "fc817576e54c6b820cb6e24e6a455ba77b4427a5"
+    },
+    "include/sbc_enc_func_declare.h": {
+      "sha256": "38264207e02f465e19cbe39afa7ced612618481c8afb2a308c86944f05e4a339",
+      "git_blob": "cc1bb977ba552e5e3fa0df099e575e91f0e368bb"
+    },
+    "include/sbc_encoder.h": {
+      "sha256": "1ee8239baa7614c9bde0886d616ef8a7a8c2bc61d40b32230877fdc153cf7068",
+      "git_blob": "d225b5d19e31c5d56042eb702163ac431f539df0"
+    },
+    "include/sbc_if.h": {
+      "sha256": "cf0642202729e03f0b09b59a5fa81e583aa106e704a8a8badf53a70204a4f110",
+      "git_blob": "5679383cdac984b153ad3e9cdd2b906ea5f4756d"
+    },
+    "srce/sbc_analysis.c": {
+      "sha256": "532739d723b8d713bc94a26786fc09b9cd13850447cca5f103a39266456d26a6",
+      "git_blob": "6f5066d992cfc49edfe63950ca36c92924c1814c"
+    },
+    "srce/sbc_dct.c": {
+      "sha256": "5d120114e09ae0b361eede1659f52a1ee86651c18f8a5e356431fd38a746b69c",
+      "git_blob": "fa9734b3c91f4765f0082642b502e00788e3722b"
+    },
+    "srce/sbc_dct_coeffs.c": {
+      "sha256": "6630baec6fecf41e56ac29f1f7e34d0fa42c1a3a406963a7c743988afc07c3ef",
+      "git_blob": "538371ff03442558c73ebaaf1c999e18b38e3477"
+    },
+    "srce/sbc_enc_bit_alloc_mono.c": {
+      "sha256": "b44fb39124e85e8c12f304d4ca8a9258851d6049913ff609ad16c803fd8b6a89",
+      "git_blob": "ea4c460887175925e1f8ebf1717655a8c5bab297"
+    },
+    "srce/sbc_enc_bit_alloc_ste.c": {
+      "sha256": "1d33605d7af3227128cda2eab0856210ebd5a3c7efe1f894ec449b270807e7a4",
+      "git_blob": "f1098886e19d859f1a2552058acd9df2ee62b504"
+    },
+    "srce/sbc_enc_coeffs.c": {
+      "sha256": "ae0b2ec6f526e77bb8ca89a0662f5baf83b879cbac452732862b34e1fb78b774",
+      "git_blob": "f356af48d7ec7342b6052def5a07a23067518ce6"
+    },
+    "srce/sbc_encoder.c": {
+      "sha256": "7a824081f87d1a5feb4153e696e9d42efb6dbe739ac89eda6b63ea95c4f23521",
+      "git_blob": "36fb5a73eb61a51bfe0bfaf1a8b5edc7481ff5ed"
+    },
+    "srce/sbc_packing.c": {
+      "sha256": "4aa7d35434464ee25e402ccbd2ae9b4af47dc244f8eb21c5b2f09c2ba79ad547",
+      "git_blob": "29880b2169b253a90681c16870d840109c54dfb2"
+    }
+  }
+}

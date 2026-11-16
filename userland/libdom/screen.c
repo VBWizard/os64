@@ -9,28 +9,36 @@
  * orientation is the display's shape; it never changes here, so its
  * `change` event never fires, and lock() is refused, as a desktop browser
  * refuses it. window's screen and devicePixelRatio are [Replaceable]: a
- * page may assign over them. */
+ * page may assign over them. Zoom-dependent reads refuse inactive document
+ * services; stored color depth and orientation remain ordinary data. */
 
 static JSClassID screen_slot, orientation_slot;
 static int screen_mark;
 
-static uint32_t zoom_of(const os64_dom_t *dom)
+static bool zoom_read(os64_dom_t *dom, uint32_t *out)
 {
+    if (!d_provider_enter(dom)) return false;
     uint32_t zoom = dom->options.zoom != NULL ? dom->options.zoom(dom->options.host_opaque) : 1000;
-    return zoom != 0 ? zoom : 1000;
+    *out = zoom != 0 ? zoom : 1000;
+    d_provider_leave(dom);
+    return d_delivery_active(dom);
 }
 
 /* A device length at the page's zoom, in whole CSS pixels. */
-static int32_t css(const os64_dom_t *dom, int32_t device)
+static int32_t css(uint32_t zoom, int32_t device)
 {
-    return device > 0 ? (int32_t)((int64_t)device * 1000 / zoom_of(dom)) : 0;
+    return device > 0 ? (int32_t)((int64_t)device * 1000 / zoom) : 0;
 }
 
-void d_screen_media(const os64_dom_t *dom, double *width, double *height, double *ratio)
+bool d_screen_media(os64_dom_t *dom, double *width, double *height, double *ratio)
 {
-    *width = css(dom, dom->options.screen.width);
-    *height = css(dom, dom->options.screen.height);
-    *ratio = zoom_of(dom) / 1000.0;
+    uint32_t zoom;
+    *width = *height = *ratio = 0;
+    if (!zoom_read(dom, &zoom)) return false;
+    *width = css(zoom, dom->options.screen.width);
+    *height = css(zoom, dom->options.screen.height);
+    *ratio = zoom / 1000.0;
+    return true;
 }
 
 enum {
@@ -87,17 +95,24 @@ static JSValue screen_member(JSContext *ctx, JSValueConst self, int argc, JSValu
             JS_FreeValue(ctx, global);
             return done < 0 ? JS_EXCEPTION : JS_UNDEFINED;
         }
-        if (magic == W_RATIO) return JS_NewFloat64(ctx, zoom_of(dom) / 1000.0);
+        if (magic == W_RATIO) {
+            uint32_t zoom;
+            return zoom_read(dom, &zoom) ? JS_NewFloat64(ctx, zoom / 1000.0) :
+                d_error(ctx, "InvalidStateError", "The document's zoom service is inactive");
+        }
         return JS_DupValue(ctx, dom->screen->value);
     }
     if (magic <= S_ORIENTATION) {
         if (JS_GetOpaque(self, os64_js_class_id(&screen_slot)) == NULL)
             return JS_ThrowTypeError(ctx, "Expected a Screen");
+        uint32_t zoom = 1000;
+        if (magic >= S_WIDTH && magic <= S_AVAIL_HEIGHT && !zoom_read(dom, &zoom))
+            return d_error(ctx, "InvalidStateError", "The document's zoom service is inactive");
         switch (magic) {
-        case S_WIDTH: return JS_NewInt32(ctx, css(dom, s->width));
-        case S_HEIGHT: return JS_NewInt32(ctx, css(dom, s->height));
-        case S_AVAIL_WIDTH: return JS_NewInt32(ctx, css(dom, s->avail_width));
-        case S_AVAIL_HEIGHT: return JS_NewInt32(ctx, css(dom, s->avail_height));
+        case S_WIDTH: return JS_NewInt32(ctx, css(zoom, s->width));
+        case S_HEIGHT: return JS_NewInt32(ctx, css(zoom, s->height));
+        case S_AVAIL_WIDTH: return JS_NewInt32(ctx, css(zoom, s->avail_width));
+        case S_AVAIL_HEIGHT: return JS_NewInt32(ctx, css(zoom, s->avail_height));
         case S_COLOR_DEPTH: return JS_NewUint32(ctx, s->color_depth);
         default: return JS_DupValue(ctx, dom->orientation->value);
         }

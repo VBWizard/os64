@@ -20,7 +20,102 @@ external buffers, native handles and host allocations need independent host
 cleanup. No leaked handle may be touched afterward. Other engine aborts and
 active destruction remain fatal. See CONTRACT.md for the complete contract.
 
+## Realm retirement and retained engine roots
+
+Realm retirement marks scheduling ineligible and does not invoke either root
+teardown path. The runtime keeps retired contexts, intrinsic handles and
+module storage until destruction. Queued entries retain their execution,
+callback and optional activity contexts independently; execution, discard
+and root cleanup release those holds. Native data callbacks, Promise resolver
+functions and async state also retain and GC-mark their function/code realm.
+An async state can outlive completion of its suspended stack.
+
+Hosts detach provider hooks only after active entries/checkpoints return,
+and release exported values before root destruction as before. Retirement
+cannot clear cancellation, allocator flags or an interrupt outcome. Tests
+cover surviving siblings, pending retired jobs and modules, retained direct
+functions and clean root teardown in both profiles. libdom's departure finish
+waits for engine quiescence and native walks/provider loans before releasing
+obsolete tasks and detaching providers. Staged DOM installation failures keep
+closed native shells and backing, while releasing candidate registry roots
+and restoring shared lookup/dispatcher state. Neither operation frees a realm
+slot or its context; the cluster drains before engine destruction and frees
+its native owners afterward. See [libdom's lifecycle](../libdom/LIBDOM.md).
+
+## Dormant execution scopes
+
+Opt-in raw-engine execution scope records live on the native stack and borrow
+contexts held by their active operation. They add no independently retained
+engine roots. Call/eval/constructor/resume wrappers and optimized native iterator
+dispatch pop on ordinary and exceptional return; a job pops after body/value
+cleanup and before releasing its context and owner references. Snapshot visitors
+must not release values or reenter the engine. An empty snapshot is not a native cleanup certificate
+and does not clear wrapper failure. Default wrapper setup leaves tracking disabled.
+
+## Executable containment and module owners
+
+The opt-in failure-record constructor stores borrowed stable realm handles and
+scalar facts in charged wrapper storage. Capture uses native scratch and adds
+no engine roots, finalizers or cleanup allocations. Observation remains usable
+after failure and task closure; destruction refuses it before releasing roots.
+These records do not make a failed wrapper reusable or certify native cleanup.
+
+An explicit raw-engine executable-failure mark does not drain values, free
+contexts, discard queues or alter wrapper teardown. Retained functions remain
+GC roots but their failed code cannot execute. Modules hold a GC-marked context
+reference independently of membership in the context's module list; module
+release drops that hold. Native modules follow the same ownership rule, so an
+externally retained module cannot lose the context used by its failure check.
+Both wrapper teardown policies still require zero leaked roots.
+
+
+## Child-recovery native preparation
+
+The separate child-recovery constructor adds generation-bound preparation and
+commit for supported child EXECUTION episodes. Its engine fence and failed
+marks add scalar state, not independent engine roots. Affected wrapper realms
+become failed/retired before the host is called. Their slots, contexts, shared
+objects and intrinsic backing remain charged until root destruction; recovery
+never invokes either root teardown path or reuses a slot.
+
+The host owns callback/registry release and provider storage. A BUSY preparation
+keeps the same engine fence and generation while loans drain through native
+release. It must not free a provider opaque pointer beneath a borrower. Failed
+preparation or late global failure retains the fence for root cleanup; normal
+value release, job discard and finalizers remain usable, with executable reentry
+blocked. Root cleanup must release host resources independently and clear
+C-held values before destroying the runtime. Both teardown profiles retain
+their existing leak checks. See [the recovery contract](CONTRACT.md#opt-in-child-execution-recovery).
+
+Libdom's paired recovery constructor owns the native preparation policy until
+the runtime is destroyed. Its coordinator waits for cluster-wide provider,
+walk and layout loans, cancels affected activity, then detaches providers.
+BUSY/failure grants no opaque release permission. Retained definitions,
+registrations, listener records, exported objects and native backing still
+release at root teardown in the established order. NULL-only failed-realm
+module/script-host clearing inside PREPARING removes provider routes without
+entering author code. This is separate from browser adoption and reclamation;
+[the DOM audit](../../docs/design/pending/IFRAME_F16_DOM_RECOVERY.md) states the
+Streams exclusion and strict storage-settlement failure rules.
+
+The DOM host decision adapter returns admission state separately from the
+read-only failed task outcome. WAIT retains the native/root ownership rules;
+READY certifies the matching completed generation, without changing the old
+task's diagnostics. Root-required decisions retain provider storage until root
+cleanup. The shared guest consumer checks live heap blocks/bytes return to
+baseline after each case, both teardown policies and the target allocator
+identity; its parent checks the exact process exit. See
+[host acceptance](../../docs/design/pending/IFRAME_F16_HOST_ACCEPTANCE.md).
+
 ## Detection and reclamation
+
+F15's scalar retention queries do not release roots or provide a child
+teardown certificate. The wrapper query refuses once destruction starts;
+the native cluster query uses only still-owned native storage and remains
+valid after engine destruction, before cluster free. Explicit unknown
+families survive zero registry counters. Existing finalizer/native sweep
+ordering remains required. See
+[F15 diagnostics](../../docs/design/pending/IFRAME_F15_RETENTION_DIAGNOSTICS.md).
 
 Manifest patch `0006-reporting-runtime-teardown.patch` preserves the original
 upstream files. It factors `JS_FreeRuntime` into shared cleanup with the fatal
@@ -127,3 +222,12 @@ Constructor-failure sweeps, tracked resize/refusal/alignment tests and a live
 peer-runtime probe add host coverage. Separate fatal processes retain the full
 JSFA badge for default leaks, raw-engine leaks under reclaiming creation,
 active destruction in both policies and unrelated invariants.
+
+Staged installation keeps its `JSJobGroup` in the same retained realm slot.
+Each queued entry also links into its transaction group; execution, discard
+and runtime destruction unlink both lists before releasing values/contexts.
+The group borrows its owner's context from the wrapper. A failed installer
+releases its candidate queue at guard exit, including neutral entries, and
+marks its slot retired. Sibling finalization scheduled by allocation-triggered
+GC is ungrouped and survives that abort. Native DOM partial-state rollback is
+separate from these engine holds.

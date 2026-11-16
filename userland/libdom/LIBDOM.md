@@ -12,33 +12,145 @@ adds `document.write`, which is the host's parser's (§ `document.write`).
 
 ## Ownership and calls
 
-`include/dom/dom.h` is the public native contract. Creation borrows a fresh,
-idle runtime, a finished document and that document's page state. One binding
-belongs to one runtime. The host grants console output separately through
-`os64_js_install_output`; the binding grants no filesystem or network access.
+`include/dom/dom.h` is the public native contract. The legacy constructor
+borrows a fresh idle runtime, a finished document and its page state. It
+installs one binding in the primary realm. Explicit clusters admit up to 65
+bindings in distinct libjs realms of one runtime and own their admitted
+documents/states. The host grants console output separately; bindings grant
+no filesystem or network access. Yonder uses the legacy constructor.
 
-Callbacks capture a private anchor object through function data. Runtime and
-context opaque slots belong to libjs and are untouched. Binding translation
-units check their compiled-in ABI identity before entering the engine. Class
-IDs come from `os64_js_class_id` and are registered in each runtime.
+Callbacks capture a private anchor through function data. Runtime and context
+opaque slots belong to libjs. Class definitions are registered per runtime;
+prototypes, constructors and anchors are installed per realm. Callbacks check
+context membership and retain their defining binding. Receiver operations
+resolve the node's current document separately, including after conversions
+that can run script. Nested calls share the enclosing runtime task budget.
 
-The wrapper table maps native node identities to strongly held engine values.
-Looking up a node returns its existing wrapper, retaining expandos across GC,
-detachment, reinsertion and model rebuilds. The host drains every value held
-by C through the binding registry. Engine-owned properties and function data
-follow the engine's reference graph. Finalizers clear engine opaque pointers;
-the native ledger owns native storage.
+The cluster wrapper cache maps a native node to one strongly retained JS
+object. Native creation metadata selects its prototype realm even when its
+first wrapper is made after adoption. Moving nodes preserves wrapper identity,
+listeners, custom definitions and physical allocation charges. Control state
+moves transactionally; geometry, document, image, style and damage services
+use the current document. Mutation observers share one creation-order registry;
+custom elements share one reaction stack and backup queue. Definitions remain
+per realm. Aggregate HTML, page, DOM, kept-body and Canvas caps supplement the
+existing local caps; counters include headers and retained backing.
 
-Retire the page and its queued work before calling `os64_dom_drain` outside
-JavaScript. Drain is idempotent and also works after a sticky libjs failure.
-Then destroy the runtime, free the binding's native ledger, release models
-and control state, and finally free the document. Native data survives engine
-finalizers. A failed constructor can leave partial engine registration; it
-clears native opaque pointers and retained values, and the host destroys that
-runtime without evaluating more source. The idle custom installer cannot
-distinguish engine-cap exhaustion from host allocation failure; it consumes
-the pending exception and reports construction failure. Evaluation's limit
-classification belongs to the guarded libjs operation.
+For explicit admissions, `consumed == false` leaves document/state ownership
+with the caller. `os64_dom_create_in_realm` installs into an existing realm;
+its consumed installation failure poisons and drains the cluster and requires
+root teardown. Public individual drain/free calls do nothing for cluster members.
+
+`os64_dom_create_child` creates a fresh staged realm and installs its DOM
+privately. Admission checks cumulative slots, aggregate native ledgers and
+caller-supplied engine headroom before taking document/state ownership.
+`OS64_DOM_CHILD_ENGINE_HEADROOM` supplies an 8 MiB admission allowance for the
+full interface bootstrap and sibling work under the 64 MiB engine limit;
+[the validation record](../../docs/design/pending/IFRAME_F3_DOM_VALIDATION.md)
+records measurements for both allocator profiles. Preflight does not reserve
+bytes or make arbitrary later engine OOM recoverable.
+
+The host supplies a copied creation-time clock/timing snapshot. Bootstrap
+cannot call option providers, author code or siblings. The privileged engine
+setup guard tags private jobs, drains only candidate work and activates the
+realm only on success. Nested setup borrows the parent's deadline/job count
+and requires a distinct outcome; it preserves queued parent work and its order.
+
+`CHILD_REFUSED` is unconsumed. `CHILD_ACTIVE` is the publication boundary.
+`CHILD_FAILED` retains a closed, charged shell and owned backing, removes its
+wrappers from shared lookup, restores shared dispatcher ownership and retires
+the candidate without draining siblings. Partial private observer/custom
+storage stays attached to its shell until native teardown; a later child
+cannot overwrite it. `CHILD_RUNTIME_FAILED` preserves sticky engine memory,
+clock, cancellation and budget failure and requires root teardown after stacks
+unwind. The result's `consumed` flag remains authoritative for backing ownership
+in every state. Failed and departed realms retain their slots and bytes until
+root teardown; no per-child reclamation or slot reuse is implied.
+
+`os64_dom_depart` marks a document ineligible for new activity without freeing
+records beneath a running callback. `os64_dom_depart_finish` returns BUSY while
+the shared engine has active work or pending jobs, or any member has DOM walks
+or provider loans. At a safe point it commits storage once, cancels this
+binding's request tokens and obsolete task payloads, freezes timeline activity,
+and detaches provider pointers and module/report hosts. It does not close the
+binding, release exported objects, stop tree mutation tracking or acknowledge
+layout generations. Provider setters cannot attach fresh pointers during or
+after successful finish. The console's borrowed descriptor remains engine
+state, protected by irreversible realm retirement and the engine barrier.
+
+Only a successful finish permits releasing provider opaque storage. A sticky
+runtime failure requires root teardown after its stacks unwind; FAILED_RUNTIME
+from finish does not certify that unwind. Ordinary sibling exceptions do not
+prevent finishing a marked child. Repeated mark and finish are harmless.
+
+`os64_dom_cluster_create_with_recovery` creates a paired runtime and cluster
+with an explicit native recovery policy. The caller owns the runtime and uses
+the same cluster drain, runtime destroy, cluster free order. Ordinary clusters
+and Yonder retain terminal failure handling. After a supported child-only
+EXECUTION episode closes, `os64_dom_cluster_recover` fences engine execution,
+marks affected realms failed, and pauses cluster activity before native cleanup.
+Cluster-wide provider loans, DOM walks, reaction frames and borrowed animation
+layout generations return BUSY; provider opaque storage remains owned until a
+successful retry commits the same generation. Cleanup checks loans again after
+provider reentry and before commit. It never runs author callbacks or resumes
+the abandoned task.
+
+Affected storage gets one final settlement attempt. A negative provider status
+or serialization OOM refuses native certification. Requests cancel through
+their original producer; timers and other obsolete delivery payloads stop.
+Provider pointers and libjs module/script hosts detach before success. Retained
+nodes, listeners, custom definitions, observer registrations, Canvas pixels and
+animation data keep their backing and charges. Healthy callbacks on adopted
+nodes and native owed custom/observer queues retain independent delivery;
+failed callbacks cannot execute. Partial DOM/data mutations survive.
+
+The supported subset requires empty engine job/rejection/module bookkeeping.
+Native owed reactions between tasks are separate from queued engine jobs.
+Raw/checked settings, native callback overruns and other unproved engine scopes
+retain libjs's global fallback. Streams state needs a separate unwind proof:
+creating a Readable/Writable/Transform stream record or using a private Streams
+bridge marks the cluster permanently ineligible for local recovery. Installing
+the interfaces alone does not. BUSY grants no storage-release permission;
+failure requires root cleanup after loans unwind. Only a successful coordinator
+commit permits affected provider release and independent healthy tasks.
+[The native audit and proofs](../../docs/design/pending/IFRAME_F16_DOM_RECOVERY.md)
+record this subset; no browser recovery adoption or slot reuse is implied.
+
+The host decision adapter `os64_dom_cluster_resolve_failure` takes the failed
+task outcome read-only and its observed generation. It returns ROOT_REQUIRED,
+WAIT or READY by value, with native admission codes separate from the original
+diagnostics. WAIT parks dispatch until native unwind/loan release; READY
+certifies the matching commit and permits independent tasks through normal
+admission. Stale requests cannot prepare another episode; observed global
+health overrides an EXECUTION candidate. Ordinary exception/rejection handling
+remains the host's existing path. [Host and guest acceptance](../../docs/design/pending/IFRAME_F16_HOST_ACCEPTANCE.md)
+records the shared consumer, native wait/fallback cases and retained browser
+policy. This does not certify checked settings or Streams recovery.
+
+`dom/retention.h` adds a by-value scalar cluster snapshot. It reports existing
+registry/ledger and provider/layout-loan state while explicitly marking
+unclassified graph/export/borrower families unknown. It neither acknowledges
+loans nor certifies reclamation; drained registry counts can be zero while
+native backing remains charged. The query reads no realm/runtime handle and
+remains valid after engine destruction, before cluster free. See
+[F15 diagnostics](../../docs/design/pending/IFRAME_F15_RETENTION_DIAGNOSTICS.md).
+
+For root teardown, stop host deliveries, drain the cluster, destroy its runtime once, release
+layout borrowers, then free the cluster. Native records and allocation-owner
+descriptors survive finalizers and all native sweeps. Document records remain
+arena-owned while detached nodes may name them; this does not pin ordinary
+fragment churn. Retired animation data uses a shared generation and the oldest
+borrowing host. Providers not detached by successful departure finish must
+survive through drain.
+
+The legacy sequence remains drain, runtime destruction, native binding free,
+then state/document release; layout borrowers must be gone before native free.
+A failed legacy installation can leave engine registration, so destroy that
+runtime without evaluating further source. Existing-realm installation runs
+through a guarded realm task; fresh child installation uses staged setup. These ownership APIs do not implement an origin gate;
+only the trusted native fixtures exchange raw realm references. See
+[the F.2 contract](../../docs/design/pending/IFRAME_F2_OWNERSHIP.md) and
+[validation](../../docs/design/pending/IFRAME_F2_BINDINGS_VALIDATION.md).
 
 ## Objects and collections
 
@@ -151,7 +263,8 @@ connect runs and a moved control keeps its form:
   `tabIndex` (0 for an element that takes focus without one, else -1), a
   script's `src` and a link's and an anchor's `href` (resolved against the
   document's base, and as written when it does not resolve), a script's
-  `type`, `defer` and `noModule`, and a link's `rel`, `media` and `type`.
+  `type`, `defer` and `noModule`, a link's `rel`, `media` and `type`, and
+  an anchor's `rel`.
   Script, anchor and
   link elements have prototypes of their own for these. `hidden`, `lang`,
   `dir` and `title` are HTMLElement's, and `tabIndex` and `dataset`
@@ -166,15 +279,32 @@ connect runs and a moved control keeps its form:
   cookie-averse: it reads "" and an assignment does nothing.
 - `classList`, a live DOMTokenList over the class attribute (`add`,
   `remove`, `toggle`, `replace`, `contains`, `item`, indices, iteration;
-  assigning the list sets the attribute), a link's `relList`, the same list
+  assigning the list sets the attribute), the `relList` of a link and an
+  anchor (and of an area, with the Modern Web surface), the same list
   over `rel`, and `dataset`, a DOMStringMap over the `data-*` attributes
   (`data-foo-bar` is `fooBar`; setting and deleting a name sets and removes
   its attribute). Each element has one of each, made when first asked for
   and held, like its style, until the page goes. `supports(token)` is a
   TypeError on a classList, which has no supported tokens; a relList's are
-  the link types yonder acts on, without ASCII case: `stylesheet`, and
-  `modulepreload` with the Modern Web surface, which runs modules (a module
-  loader asks before it preloads: Vite's first statement does).
+  the link types yonder acts on, without ASCII case: a link's `stylesheet`,
+  and `modulepreload` and `preload` with the Modern Web surface, which runs modules (a
+  module loader asks before it preloads: Vite's first statement does); an
+  anchor's and an area's `noopener` alone, since no page yonder opens has
+  an opener and a navigation sends its Referer whatever `rel` says.
+- An anchor's address in parts (HTMLHyperlinkElementUtils, HTML § 4.6.3:
+  `origin`, `protocol`, `username`, `password`, `host`, `hostname`,
+  `port`, `pathname`, `search`, `hash`, `toString`), and an area's with
+  the Modern Web surface, as its `href` is: the href resolved against the
+  document's base and read and set as a URL's members are (url.c's
+  `d_url_component` and `d_url_rebuilt`), a setter writing the address back
+  to `href`, and converting its argument before it reads the href (the
+  argument's `toString` is the page's, and may set it). An href that is
+  absent or does not parse reads `:` for `protocol`, as written (or "")
+  for `toString` and "" in every other part, and no setter changes it.
+  The members are the two interfaces' alone: called on any other
+  element, one is a TypeError. `a.href = url; a.hostname` is how pages
+  written in the 2010s take an address apart, and a router reads every
+  link's `pathname`.
 
 ## Mutation and control state
 
@@ -398,9 +528,11 @@ here fires (§ P1-W's rows); window has `onerror`,
 `onunhandledrejection` and `onrejectionhandled` and the document `onerror`,
 whose events the binding fires for a script's failures (§ P2a's rows; an
 `onerror` content attribute on any element is a handler for an `error`
-event dispatched at it, though no element has the property); window has
-`onmessage` and `onmessageerror`, whose events a posted message's task
-fires (§ P2b's rows); and a document alone has `onreadystatechange`, `onvisibilitychange` and
+event dispatched at it, though only a media element has the property);
+window has `onmessage` and `onmessageerror`, whose events a posted
+message's task fires (§ P2b's rows); window, every element and the
+document have the media element's events' handlers, and a media element
+`onerror` (§ The media row); and a document alone has `onreadystatechange`, `onvisibilitychange` and
 `onprerenderingchange`, which HTML gives no content attribute, so no
 element's attribute of that name is a handler (§ P1-Da's rows). With it
 off none of these is a property, and
@@ -430,8 +562,9 @@ switch on `scroll`, `resize`, `popstate`, `hashchange`, `online`, `offline`,
 property for (`load`, `focus`, `blur`, `scroll`, `resize`) that is so from
 `<body onload>` and `document.body.onload` alike, and for the others
 HTMLBodyElement has them too (0f's P6a's WindowEventHandlers), but for
-`error`: no element has `onerror` here, so `document.body.onerror` is an
-ordinary expando, and only the content attribute is window's (DEBTS.md).
+`error`: no element but a media element has `onerror` here, so
+`document.body.onerror` is an ordinary expando, and only the content
+attribute is window's (DEBTS.md).
 
 The body is first checked by the intrinsic Function constructor, taken
 before any page script could replace it. QuickJS builds that function by
@@ -440,6 +573,17 @@ shapes (`} + (f(), function(){`) still compiles, where a browser that parses
 a FunctionBody refuses it. It is the page's own code in its own realm: it can
 change when that code runs, not what it may do. A compiled value that is not
 a function is a compile failure.
+
+Native hosts can enable EventTarget callback settings with
+`os64_dom_cluster_create_with_listener_settings`, which also enables timer
+settings. Listener conversion captures the incumbent before options getters;
+invocation prepares the listener object's associated realm before looking up
+`handleEvent`. Captured settings, executable code and target activity have
+separate eligibility checks, including after a getter adopts the target.
+Once-removal and reentry retain the invocation's capture; plain target cycles
+remain collectable. HTML on-event handler slots, Promise callbacks and origin
+checks remain separate work. Ordinary cluster construction and Yonder retain
+their existing mode. See the [listener settings contract](../../docs/design/pending/IFRAME_F4_LISTENER_SETTINGS.md).
 
 ## Timers
 
@@ -461,6 +605,26 @@ The host drives it in its own clock (`options.now_ms`):
 together fire in the order they were set. An interval is re-armed before its
 callback runs, so a callback that clears its own interval wins; a callback
 that clears the timer that is running finishes running.
+
+Native hosts can opt into checked timer settings by creating the cluster with
+`os64_dom_cluster_create_with_timer_settings` before runtime execution. Callable
+conversion captures its incumbent before delay conversion; delivery separately
+uses the callable's associated entry, executable-target eligibility and script
+report owner. Captures survive self-removal and are released on cancellation,
+refusal and drain. Unprepared Promise jobs cannot register callable timers in
+this mode. Other callback families and origin checks remain separate work;
+ordinary cluster construction and Yonder do not enable this mode. See
+[the timer settings contract](../../docs/design/pending/IFRAME_F4_TIMER_SETTINGS.md).
+
+Native hosts can additionally enable frame, idle and microtask callback
+settings with `os64_dom_cluster_create_with_scheduled_settings`. It extends
+the listener/timer opt-in, capturing before idle options conversion and
+preparing associated entry and incumbent for both idle routes, frame batches
+and queued microtasks. Frame/idle callbacks in this mode use WebIDL's undefined
+receiver; the legacy mode retains its window receiver. Native queues transfer
+captures through removal; private engine job holders trace and release them
+on execution or discard. Promise callbacks remain a separate integration gate.
+See the [scheduled callback contract](../../docs/design/pending/IFRAME_F4_SCHEDULED_SETTINGS.md).
 
 ## Asks
 
@@ -485,6 +649,13 @@ count of entries, and 1 with no host or the switch off. `window.status`
 reads back the last string a script set, as HTML keeps it, and
 `defaultStatus`, which no standard has, accepts an assignment and reads
 empty; the status line itself is the browser's and shows neither.
+
+Inactive document services cannot enqueue navigation. Location requests refuse
+with InvalidStateError; retained Location data still names the binding's saved
+address. Taking an inactive document's pending ask discards its node holds.
+Stable WindowProxy/Location routing across replacement documents belongs to
+the iframe proxy slice. History uses its specified SecurityError inactive
+behavior, described below.
 
 **Element actions.** `click()` is a synthetic click: the event, then the
 element's activation unless a listener cancelled it; with the switch on the
@@ -591,14 +762,12 @@ keeps its identity, wrapper, expandos and listeners: that is what
 adoption does here. It is freed with the page and charged to its caps, as
 a fragment is.
 
-**Which document a node belongs to** is the document its tree hangs from;
-a tree that hangs from none remembers the document it was made in, copied
-into, adopted by or last taken out of, on its root's wrapper
-(`DValue.document`, written by `d_made_in` and `d_leaving`). A root with no wrapper (a child
-innerHTML replaced, never handed to a script) says nothing and reads as
-the window's: a script reaches it only through a descendant it held
-before. While no document of its own exists, every node is the window's
-and none of this runs.
+**Which document a node belongs to** comes from native node metadata,
+including detached nodes that have never had wrappers. Adoption changes
+this association and preserves the immutable creation realm. Additional
+Document roots and their inert template Documents stay arena-owned until
+teardown; this uses no snapshot pin and does not prevent detached children
+from reclaiming. The wrapper table supplies stable JavaScript identity.
 
 **`importNode(node, deep)` and `adoptNode(node)`** (Modern Web members of
 Document) are the explicit doors to the same record. importNode is
@@ -1005,7 +1174,7 @@ style's member. `document.defaultView` is window.
 **History** (`os64_dom_set_history`) is the host's session: `pushState`
 and `replaceState` give it the entry's address (one the document may
 rewrite its own to, or SecurityError) and its state as JSON (dom.h § HISTORY says what JSON may
-carry; DataCloneError otherwise, QuotaExceededError past 64 KiB or when the
+carry; DataCloneError otherwise, QuotaExceededError past 2 MiB or when the
 host refuses), and fire nothing. `history.state` is that JSON read once,
 the same object until the entry changes. A fragment navigation a script
 makes goes to the host at once, and its `popstate` fires inside that
@@ -1020,6 +1189,17 @@ the entry's state and name (`os64_dom_history_entry`), its state being
 history.state itself only while that entry is still the current one.
 `history.scrollRestoration` is the host's to read
 (`os64_dom_history_manual`).
+
+History methods and properties (including `state` and `scrollRestoration`)
+throw SecurityError for an inactive associated document, following
+[HTML's History interface](https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-history-interface).
+Previously returned state objects remain ordinary retained data. Host
+length/update/fragment callbacks hold provider loans; conversion and callback
+retirement prevent later native calls or local completion. A host-accepted
+entry is not rolled back if the callback retires the document, but the departed
+binding neither commits that result nor falls back to another navigation.
+Late native moves refuse and owed events are discarded. The finish protocol
+must still detach the provider before its opaque storage can be freed.
 
 ## The Modern Web's surface
 
@@ -1138,6 +1318,22 @@ image format is `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` and
 the key, the value and `\n` for a set, `-<key bytes>\n`, the key and `\n`
 for a removal.
 
+Storage access refuses inactive document services with InvalidStateError,
+including retained Storage objects and areas that keep only a memory map.
+Borrowed methods use the receiver's document, so a method created in a retired
+realm can still serve an active area's receiver. Argument conversions and
+named-property visibility checks recheck retirement before service work.
+Identity/load/commit calls hold provider loans; load retries and ordinary
+settlement stop if a callback or clock retires the document. Owed writes remain
+available for native cleanup, including after retirement interrupts a failed
+load. Cleanup attempts each area's remaining commit once, including during
+closed root drain, then drops pending changes and detaches the providers.
+A failed final serialization cannot be retried after detachment. Reentrant
+settle/forget/provider replacement cannot disturb borrowed maps. The pure
+byte-format walk/merge utilities have no binding or document lifetime; a walk
+inside a commit remains covered by that commit's provider loan. Public
+departure finish and its complete safe-point barrier remain F.3b work.
+
 **`performance`** (`performance.c`): `now()` and `timeOrigin`, coarsened to
 100 µs, on the host's microsecond clock (`options.now_us`) against the
 navigation's origin (`options.timing`, read as the binding is made); User
@@ -1239,6 +1435,20 @@ multipart/form-data is written here (an empty FormData is the close
 delimiter alone, as browsers send it) and
 read back by `formData()`, as is urlencoded.
 
+The self-hosted Streams interfaces keep unforgeable private-field brands.
+On a local miss, a private native bridge asks the other cluster members' raw
+probes, bounded by the cluster's realm limit. It does not inspect the public
+object's properties or prototype, and retired retained realms still answer.
+Borrowed stream/reader/writer/controller/iterator/strategy/encoding methods and
+native Response body conversion can therefore use authentic foreign objects;
+proxies and forged prototype chains do not acquire their target's brand.
+
+Internal promise-returning algorithms use a private neutral thenable for
+adoption, retaining its asynchronous step and captured Promise intrinsic.
+Piping, repeated async iteration and transform backpressure can finish after
+creator departure without looking up the retained promise's public `then`.
+Author-returned values keep their normal conversion and callback eligibility.
+
 **`fetch`, `Headers`, `Request`, `Response`** (`fetch.c`): the Fetch
 standard's § 5. A header list is a C array, its sort-and-combine kept
 until it changes, so a walk is n log n; the guards (request, no-cors,
@@ -1321,11 +1531,14 @@ assignment of anything but null makes it window's own data property),
 their arguments, `captureEvents` and `releaseEvents` no-ops,
 `clientInformation` the navigator, `frameElement` null,
 `crossOriginIsolated` false, `originAgentCluster` true, `origin` the page's
-origin serialized (`d_origin`), and `isSecureContext` whether the page's
-address is potentially trustworthy as libway judges it
-(`way_url_trustworthy`, the browser's one copy of that judgement: about:blank
-and about:srcdoc are, as Secure Contexts says, so a binding with no address
-is; the name `localhost` is not). `ononline`,
+origin serialized (`d_origin`), and `isSecureContext` whether the page is a
+secure context (`d_secure_context`): its address potentially trustworthy as
+libway judges it (`way_url_trustworthy`, the browser's one copy of that
+judgement: about:blank and about:srcdoc are, as Secure Contexts says, so a
+binding with no address is; the name `localhost` is not), or a `file:` page,
+which Chrome and Firefox both count secure, though Secure Contexts would not
+(a file URL's origin is opaque). The mixed-content rules ask libway's
+judgement alone, so a file page's secure context changes nothing there. `ononline`,
 `onoffline` and `onlanguagechange` are window's handler slots, whose events
 nothing fires. `queueMicrotask(callback)` queues a job on the engine's one
 job queue, in order with promise reactions; the checkpoint that drains the
@@ -1343,8 +1556,8 @@ answers it (anything that is no view, or a view of a resizable buffer, is a
 TypeError, as WebIDL makes one without `[AllowResizable]`; then a float
 array or a DataView is TypeMismatchError, and more bytes
 QuotaExceededError), and
-`randomUUID`, [SecureContext], answers a version 4 UUID. `subtle` is absent
-(WINDOW_DOCUMENT.md, ruling 1). The bytes are the host's
+`randomUUID`, [SecureContext], answers a version 4 UUID. `subtle` is
+[SecureContext] too, and § crypto.subtle below. The bytes are the host's
 (`options.entropy`; yonder's is libtls's door, `os64_tls_entropy`, over
 `/dev/random`), written into the binding's scratch and copied into the
 array only when the host says every one is there: a host that refuses, or
@@ -1354,6 +1567,51 @@ the buffer's resizability are read through the engine's own getters, taken
 before any page ran (a resizable buffer's view keeps the length it was made
 with in the engine's books, so it could not be filled whole), so nothing
 here runs page code.
+
+**`crypto.subtle`** (`subtle.c`, over the pure `subtle_core.c`;
+WEB_CRYPTO.md): `SubtleCrypto` and `CryptoKey`, [SecureContext], so a page
+that is not a secure context has neither interface nor `crypto.subtle`.
+All twelve methods are here; what they can do is `subtle_core.c`'s
+registry, and an algorithm it does not hold is NotSupportedError, a
+browser's answer for one it does not know. The registry holds `digest`'s
+SHA-1, SHA-256, SHA-384 and SHA-512, and AES-CTR, AES-CBC, AES-GCM and
+HMAC: their keys generated, imported and exported raw and as JWK,
+`encrypt`, `decrypt`, `sign` and `verify`, and `wrapKey`/`unwrapKey`
+through the cipher's `encrypt` and `decrypt`, as § 14.3.11 allows an
+algorithm with no wrap operation of its own; AES-KW, whose own wrap and
+unwrap they are (RFC 3394, a wrapped JWK padded with spaces to its 8
+bytes); and HKDF and PBKDF2, whose keys are imported raw and never
+exported, for `deriveBits` and `deriveKey` (the derived key type
+normalized for importKey and for get key length, then the derivation's
+bits imported raw); and ECDSA and ECDH on P-256, P-384 and P-521, key
+pairs (`generateKey` answers a CryptoKeyPair) imported and exported as
+spki, pkcs8, raw and JWK, a private key holding its public point beside
+`d` so either half exports, ECDSA's `sign` and `verify`, and ECDH's
+`deriveBits` and `deriveKey`. A dictionary's own buffers (an `iv`, a `salt`) are
+copied as § 18.4.4 step 10 copies them, after its hash is normalized; a
+later normalization's getters cannot reach them. A CryptoKey's material is
+engine heap, zeroed by its finalizer; its `algorithm` and `usages` are
+made once, at the key's birth, so every read is the same object. DEBTS.md
+books the rest, by WEB_CRYPTO.md § 2's tiers. Each method converts its arguments as WebIDL
+does (a CryptoKey argument is told by its class, a BufferSource by
+`d_buffer_source` and refused when resizable, a KeyFormat and each KeyUsage
+against the editor's draft's enumerations whole, a usage sequence item by item as it is
+iterated, and a JsonWebKey every member in order), normalizes its
+algorithm (§ 18.4.4: a string is the name; an object's `name` is read as
+the Algorithm dictionary and again as the algorithm's own, so a getter
+there runs twice), and only then reads the bytes it was given. **Every failure is a
+rejection, never a throw**, as WebIDL makes one for a promise-returning
+operation: the work is done on the call and the answer queued, in call
+order, for one binding timer of no delay that settles every answer
+waiting (`settle_later`, `settle_drain`), which is DIVERGENCES.md's row,
+and why an argument's buffer is read where it lies rather than copied. The BearSSL objects it
+calls are linked into libdom.so privately (`library.mk`'s `LIBDOM_BEARSSL`,
+the same files `tools/subtle_bearssl.sh` lists for the host harnesses), so
+libtls.so exports nothing new. Its interfaces' members, and Crypto's, have
+WebIDL's shape (`d_idl_members`: operations enumerable, accessors named
+"get x"). `tools/test_subtle_core_host.sh` holds the core to FIPS 180-2's,
+NIST SP 800-38A's, the GCM paper's, RFC 4231's, RFC 3394's, RFC 5869's,
+RFC 6070's, RFC 6979's and RFC 5903's vectors and WPT's EC key fixtures; WPT's WebCryptoAPI holds the binding (`tools/wpt/expected/WebCryptoAPI.txt`).
 
 The classic fixes beside them are every page's, the switch on or off:
 `window` and `document` [LegacyUnforgeable] (§ Objects and collections),
@@ -1373,6 +1631,36 @@ most often do, is the stand-in a parsed one is. With the modern switch off
 the prototype is there, as every kind's is, with HTMLElement's members
 alone, so `src` set as a property is the script's own and the frame names
 nothing, as before; `setAttribute` and `innerHTML` name it either way.
+
+### The media row
+
+`media.c` (AUDIO_YONDER.md § The element in libdom): `HTMLMediaElement`
+and `HTMLAudioElement` over the binding's media prototypes (`D_PROTO_MEDIA`,
+and `D_PROTO_AUDIO` under it), `MediaError`, `TimeRanges`, the `Audio`
+factory, and the media events' handlers on window, Element and Document,
+with `onerror` on the media prototype. `video.c` adds `HTMLVideoElement`
+(`D_PROTO_VIDEO`, under the media kind) AS A STAND-IN THAT PLAYS NO VIDEO
+(§ Y.4): a video element is a media element through all of this, plays a
+sound file as an audio does, and has its own `width`, `height`, `poster`
+and `playsInline`, with `videoWidth` and `videoHeight` always 0. HTML's half of the element is kept here and
+the sound is the host's (`dom/media.h`'s provider: open a resource, play,
+pause, seek, the gain and loop, and its facts). Each element the document
+holds, and each a script reaches through a media member or gives a src,
+has a record that holds its node: networkState, readyState and the
+standard's flags, and the play() promises pending. A `src` attribute set or
+changed by any route runs the load algorithm at once (a mutation consumer,
+`src_changed`), as do `load()`, `play()`, `pause()` and `currentTime`
+their own steps. `os64_dom_media_turn`, which runs no script, walks the
+tree once per version (a removed element pauses; a parsed element's first
+load is started there), runs resource selection over `src` or the first
+`<source>` whose type plays, and folds the host's facts into the states,
+queuing each event the standard's steps fire; `os64_dom_media_fire` runs
+one as a task, settling the promises that step took. `play()` with sound needs the person (the provider's `activated`);
+muted, it does not. An element that has ended or failed, is paused and is
+in no document closes its session, and `play()` or a seek opens another
+(`session_wake`), so a page playing `new Audio(x)` per sound keeps no
+decoder for each. `tools/test_dom_media.inc` plays every step against a
+fake host.
 
 ### P2a's rows: a script's failures
 
@@ -1725,9 +2013,9 @@ members are rows read by the controls row's rules (`d_reflection_get` and
 href against the document's own URL, booleans, enumerations, longs, the
 unsigned kinds and a span's and a row span's clamps), one row per member
 and interface, so each accessor's brand is its own interface. Beside
-them a title's `text` and a body's WindowEventHandlers, which are
-window's. A set of kinds is a uint64_t (`D_KIND`); a static assertion
-holds the kinds to 64.
+them a title's `text` (its child text), an anchor's `text` (its
+descendants') and a body's WindowEventHandlers, which are window's. A set of kinds is a `d_kinds_t`, GCC's 128-bit integer
+(`D_KIND`); a static assertion holds the kinds to 128.
 
 **The tables row** (`tables.c`, naming nothing on window; MODERN_WEB.md
 § 0f's P6b). A table's `caption`, `tHead` and `tFoot`, read and replaced,
@@ -1838,3 +2126,14 @@ at each. A report is the host's: `os64_dom_form_validate` runs a person's
 submission's validation as a task, before the host fires `submit`, as one
 call through the wrapper (`os64_js_call` of the binding's own function), so
 its pattern and its invalid listeners run under the task's budget.
+
+### Opt-in HTML handler settings
+
+`os64_dom_cluster_create_with_handler_settings` extends scheduled settings to
+HTML handler properties, named handlers and inline attributes. Property
+callbacks capture the assigning caller; compiled attributes capture their
+document and clear ScriptOrModule presence. Existing DListener ownership
+handles replacement, invocation and drain without larger records. The
+ordinary constructors and Yonder do not enable this mode. See the
+[handler settings contract](../../docs/design/pending/IFRAME_F4_HANDLER_SETTINGS.md)
+for scope, engine identity requirements and qualified validation.

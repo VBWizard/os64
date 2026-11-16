@@ -19,6 +19,27 @@ static int64_t pointer_host_rect(int64_t handle, os64_gui_rect_t *rect)
 #include "test_libflow_fonts.h"
 #include "../userland/libhtml/internal.h"
 #include "os64/conf.h"
+extern os64_image_status_t image_decode_gif(const uint8_t *,size_t,os64_image_t *);
+extern os64_image_status_t fixture_gif_sequence_decode(const uint8_t *,size_t,os64_image_sequence_t **);
+extern void fixture_gif_sequence_free(os64_image_sequence_t *);
+extern const os64_image_frame_t *fixture_gif_sequence_frame(const os64_image_sequence_t *);
+extern os64_image_status_t fixture_gif_sequence_default(const os64_image_sequence_t *,os64_image_t *);
+extern os64_image_status_t fixture_gif_sequence_next(os64_image_sequence_t *);
+/* media.h, hosted: there is no sound here (libmedia, its threads and
+ * /dev/audio are the OS's). A session never opens, which the element sees
+ * as its network error, so the rest is never reached; libdom's own suite
+ * (tools/test_dom_media.inc) plays the element against a fake host. */
+void yonder_media_start(const yonder_media_env_t *env) { (void)env; }
+void yonder_media_stop(void) {}
+yonder_media_t *yonder_media_open(const yonder_media_request_t *r) { (void)r; return NULL; }
+void yonder_media_close(yonder_media_t *m) { (void)m; }
+void yonder_media_play(yonder_media_t *m) { (void)m; }
+void yonder_media_pause(yonder_media_t *m) { (void)m; }
+void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation) { (void)m; (void)seconds; (void)generation; }
+void yonder_media_settings(yonder_media_t *m, double gain, bool loop) { (void)m; (void)gain; (void)loop; }
+void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out) { (void)m; memset(out, 0, sizeof(*out)); }
+int yonder_media_can_play(const char *type) { (void)type; return 0; }
+void yonder_media_reap(void) {}
 #ifdef OS64_JS_BYTECODE_ROUND_TRIP
 /* libjs's round-trip build counts the scripts it ran from their bytecode. */
 extern size_t os64_js_round_trips, os64_js_round_trips_skipped;
@@ -314,9 +335,8 @@ static unsigned script_cancels;
 /* A compiled form's write (BYTECODE_CACHE.md), held until a case reaps it. */
 static struct { os64_work_id_t id; yonder_bytecode_job_t *job; } bytecode_jobs[8];
 static int nbytecode_jobs;
-/* A sheet's fetch job is held the same way, never run: a case that wants a
- * page waiting for its sheets gets one that waits until it is cancelled or
- * the window drops it. */
+/* Sheet jobs wait until a case runs the production worker, supplies a
+ * parsed result, or cancels them. */
 static struct { os64_work_id_t id; void *job; } sheet_jobs[32];
 static int nsheet_jobs;
 static unsigned sheet_submits;      /* every sheet job the window ever sent */
@@ -364,7 +384,7 @@ void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
         os64_free(script_jobs[i].job); script_jobs[i]=script_jobs[--nscript_jobs]; script_cancels++; return;
     }
     for(int i=0;i<nsheet_jobs;i++) if(sheet_jobs[i].id==id) {
-        os64_free(sheet_jobs[i].job); sheet_jobs[i]=sheet_jobs[--nsheet_jobs]; return;
+        yonder_sheet_release(sheet_jobs[i].job,NULL); sheet_jobs[i]=sheet_jobs[--nsheet_jobs]; return;
     }
     for(int i=0;i<nfont_jobs;i++) if(font_jobs[i].id==id) {
         os64_free(font_jobs[i].job); font_jobs[i]=font_jobs[--nfont_jobs]; font_cancels++; return;
@@ -524,16 +544,6 @@ void yonder_webfont_release(void *job, void *product) {
     if(got) { os64_free(got->sfnt); os64_free(got); }
     os64_free(job);
 }
-int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
-    (void)job; (void)cancelled; (void)ctx; (void)out;
-    check(false,"unexpected worker execution"); return -1;
-}
-/* As sheet.c releases a sheet job and what it made. */
-void yonder_sheet_release(void *job, void *product) {
-    yonder_sheet_t *got=product;
-    if(got) { garb_free(&got->parsed); os64_free(got->kept); os64_free(got); }
-    os64_free(job);
-}
 int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
     (void)job; (void)cancelled; (void)ctx; (void)out;
     check(false,"unexpected worker execution"); return -1;
@@ -587,11 +597,23 @@ static bool script_land_from(const char *tail, const char *source, const char *f
     }
     return false;
 }
-/* Picture transport/codec fixtures. The SVG worker and owner are production
- * code; these stand in for the network and already-tested raster codecs. */
+struct os64_image_sequence { os64_image_frame_t frame; uint32_t nexts; os64_image_sequence_t *real; };
+/* Picture transport/codec fixtures. PNG, GIF and SVG use production decoders;
+ * synthetic rasters isolate sizing and allocation-failure cases. */
 static const char *picture_http_bytes, *picture_http_type;
 static int picture_http_status, picture_fetches, picture_raster_decodes;
 static bool picture_http_failure;
+static bool picture_resolve(const char *method,const char *url,fake_answer_t *out,char **scratch)
+{
+    (void)method;(void)url;
+    if(!picture_http_bytes || picture_http_failure)return false;
+    ++picture_fetches;
+    *scratch=malloc(256);if(!*scratch)return false;
+    snprintf(*scratch,256,"Content-Type: %s\r\n",picture_http_type?picture_http_type:"image/png");
+    *out=(fake_answer_t){.status=picture_http_status,.reason="fixture",.headers=*scratch,
+        .body=picture_http_bytes,.body_len=strlen(picture_http_bytes)};
+    return true;
+}
 bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *options,
                        size_t cap, way_whole_t *out) {
     (void)url; (void)options; ++picture_fetches; memset(out,0,sizeof(*out));
@@ -607,8 +629,13 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
 }
 /* A download's fetch rides the fake network, which reads no hooks. */
 void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *options) { (void)hooks; (void)options; }
+void os64_fetch_forget_idle(void) {}
+/* libfetch's counters, as a case sets them. */
+static os64_fetch_counts_t fake_counts;
+void os64_fetch_counts(os64_fetch_counts_t *out) { *out = fake_counts; }
 os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image_t *out) {
     ++picture_raster_decodes; memset(out,0,sizeof(*out));
+    if(len>=6 && !memcmp(bytes,"GIF8",4))return image_decode_gif(bytes,len,out);
     if(len>=8&&bytes[0]==137&&!memcmp(bytes+1,"PNG",3)) {
         os64_png_image_t png;
         os64_png_status_t status=os64_png_decode(bytes,len,0,&png);
@@ -635,7 +662,13 @@ os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image
 }
 os64_image_status_t os64_image_sequence_decode(const uint8_t *bytes,size_t len,
                                                os64_image_sequence_t **out) {
-    (void)bytes;(void)len;*out=NULL;return OS64_IMAGE_UNSUPPORTED;
+    *out=NULL;
+    os64_image_sequence_t *real=NULL;
+    os64_image_status_t status=fixture_gif_sequence_decode(bytes,len,&real);
+    if(status!=OS64_IMAGE_OK)return status;
+    os64_image_sequence_t *wrapper=os64_calloc(1,sizeof(*wrapper));
+    if(!wrapper){fixture_gif_sequence_free(real);return OS64_IMAGE_NO_MEMORY;}
+    wrapper->real=real;*out=wrapper;return OS64_IMAGE_OK;
 }
 const char *os64_fetch_status_name(os64_fetch_status_t status) {
     (void)status; return "fixture fetch status";
@@ -643,16 +676,23 @@ const char *os64_fetch_status_name(os64_fetch_status_t status) {
 const char *os64_image_status_name(os64_image_status_t status) {
     (void)status; return "fixture status";
 }
-/* A moving picture a case plays (picture_tick_cases): its frame, and how
- * many times it was advanced. No other case has one. */
-struct os64_image_sequence { os64_image_frame_t frame; uint32_t nexts; };
+/* Synthetic picture_tick_cases count advances; real GIF ownership fixtures
+ * delegate playback to the production sequence behind their wrapper. */
 os64_image_status_t os64_image_sequence_next(os64_image_sequence_t *seq) {
     if(seq==NULL) { check(false,"no moving picture"); return OS64_IMAGE_OK; }
+    if(seq->real)return fixture_gif_sequence_next(seq->real);
     seq->nexts++; return OS64_IMAGE_OK;
 }
+os64_image_status_t os64_image_sequence_default(const os64_image_sequence_t *seq,os64_image_t *out) {
+    return seq && seq->real?fixture_gif_sequence_default(seq->real,out):OS64_IMAGE_MALFORMED;
+}
 void os64_image_free(os64_image_t *image) { os64_free(image->pixels); memset(image,0,sizeof(*image)); }
-void os64_image_sequence_free(os64_image_sequence_t *sequence) { check(sequence==NULL,"no unexpected moving image"); }
+void os64_image_sequence_free(os64_image_sequence_t *sequence) {
+    if(sequence && sequence->real){fixture_gif_sequence_free(sequence->real);os64_free(sequence);return;}
+    check(sequence==NULL,"no unexpected moving image");
+}
 const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t *sequence) {
+    if(sequence && sequence->real)return fixture_gif_sequence_frame(sequence->real);
     if(sequence==NULL) { check(false,"unexpected animation read"); return NULL; }
     return &sequence->frame;
 }
@@ -691,7 +731,7 @@ bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t
 }
 static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
     saved_animations[8], saved_motion[16], saved_keep_pages[16], saved_modern[16], saved_profile[300], saved_cookies[16],
-    settings_report[256];
+    saved_page_memory[16], saved_script_memory[16], settings_report[256];
 /* yonder.conf's saved agent, "" for none. */
 static char saved_agent[300];
 /* What reading yonder.conf's profile answers instead, when not 0. */
@@ -704,11 +744,29 @@ int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) 
         os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion :
         os64_streq(key,"keep_pages") ? saved_keep_pages : os64_streq(key,"modern") ? saved_modern :
         os64_streq(key,"profile") ? saved_profile : os64_streq(key,"agent") ? saved_agent :
-        os64_streq(key,"cookies") ? saved_cookies : "";
+        os64_streq(key,"cookies") ? saved_cookies : os64_streq(key,"page_memory_mb") ? saved_page_memory :
+        os64_streq(key,"script_memory_mb") ? saved_script_memory : "";
     if(os64_streq(key,"profile") && profile_conf_failure!=0) return profile_conf_failure;
     if(!value[0]) return OS64_CONF_NO_KEY;
     /* A value too long for `out` is TRUNCATED, as the real reader says. */
     return os64_strcopy(out,cap,value)<cap ? 0 : OS64_CONF_TRUNCATED;
+}
+/* yonder.conf's `census` lines (a repeated key, read whole), up to four; NULL ends them. */
+static const char *saved_census[5];
+int64_t os64_conf_find_read(const char *name, os64_conf_fn fn, void *user, char *path_out, size_t cap) {
+    check(os64_streq(name,"yonder.conf"),"repeated settings read Yonder configuration");
+    if(path_out!=NULL && cap>0) path_out[0]='\0';
+    int64_t n=0;
+    for(int i=0;saved_census[i]!=NULL && i<4;i++,n++)
+        if(!fn("census",saved_census[i],user)) break;
+    return n;
+}
+/* The process heap as a census reads it: a report, its figures made up. */
+void os64_heap_report_copy(os64_heap_report_t *out) {
+    memset(out,0,sizeof(*out));
+    out->magic=OS64_HEAP_REPORT_MAGIC;
+    out->bytes_mapped=(uint64_t)64<<20;
+    out->bytes_live=(uint64_t)48<<20;
 }
 int64_t os64_conf_set(const char *file, const char *key, const char *value) {
     check(os64_streq(file,"yonder.conf"),"settings save Yonder configuration");
@@ -838,6 +896,7 @@ static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *famil
 }
 static bool probe_modern_off;  /* the next probe_page's window: the modern switch off */
 static size_t probe_script_memory;  /* the next probe_page's script heap, bytes; 0: libjs's own */
+static yonder_page_memory_t probe_page_memory;  /* the next probe_page's document ceilings; 0s: the libraries' own */
 /* The window's agent's preset lines: not NULL, so a job handed none is told
  * from one handed the window's. */
 static const way_identity_t s_window_identity={.hints="sec-ch-ua: \"Window\";v=\"1\"\r\n",.language="en"};
@@ -846,6 +905,7 @@ static void probe_page(const char *html, bool scripts) {
     g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.way.identity=&s_window_identity; g.settle_due=YONDER_NEVER;
     g.modern=g.page.modern=!probe_modern_off;
     g.script_memory=probe_script_memory;
+    page_memory_set(probe_page_memory);
     g.zoom=g.zoom_default=1000;
     os64_ui_init(&g.ui,NULL);
     if(probe_borrow_font)
@@ -1190,6 +1250,72 @@ static void script_lifecycle(void) {
           yonder_scripts_heap_peak(g.page.scripts)<=os64_js_default_limits().memory_bytes,
           "a live runtime's heap peak holds what the page made");
     probe_drop();
+    /* The document side's ceilings are the host's (page_memory_mb, cut by
+     * yonder_page_memory_split): the tree's refuses a script's insert past
+     * it, and the layout's is libflow's budget. */
+    probe_page_memory=(yonder_page_memory_t){.tree=(size_t)1<<20, .layout=(size_t)48<<20};
+    /* The posts go in as markup, so no script object holds them and
+     * emptying the box gives their room back for the answer. */
+    probe_page("<h1 id=heading>before</h1><div id=box></div><script>var n='none',box=document.getElementById('box');"
+        "try{for(var i=0;i<100000;i++)box.insertAdjacentHTML('beforeend','<p>a few words to fill the tree</p>')}"
+        "catch(e){n=e.name}box.innerHTML='';"
+        "document.getElementById('heading').textContent=n;</script>",true);
+    check(s_env.max_arena_bytes==((size_t)48<<20),"the page's layout budget is the host's");
+    script_turn();
+    check(probe_text_is("heading","QuotaExceededError") && g.page.way.doc->peak_arena_bytes<=((size_t)1<<20),
+          "the page's tree is held to the host's ceiling, and a script's insert past it is refused");
+    probe_drop();
+    probe_page_memory=(yonder_page_memory_t){0};
+    probe_page("<h1 id=heading>before</h1><div id=box></div><script>var n='none',box=document.getElementById('box');"
+        "try{for(var i=0;i<3000;i++)box.insertAdjacentHTML('beforeend','<p>a few words to fill the tree</p>')}"
+        "catch(e){n=e.name}box.innerHTML='';"
+        "document.getElementById('heading').textContent=n;</script>",true);
+    script_turn();
+    check(probe_text_is("heading","none") && s_env.max_arena_bytes==0,
+          "with no ceilings from the host, the libraries' own hold the same page");
+    probe_drop();
+    /* libdom's share is the page's binding budget: wrapping elements past
+     * it is refused, where libdom's own 8 MiB holds them. */
+    probe_page_memory=(yonder_page_memory_t){.dom=(size_t)256<<10};
+    /* The full budget has no room left for an answer, so the refusal is
+     * read where yonder says what stopped a script. */
+    probe_page("<h1 id=heading>before</h1><script>var keep=[];"
+        "for(var i=0;i<20000;i++)keep.push(document.createElement('i'));"
+        "document.getElementById('heading').textContent='held';</script>",true);
+    script_turn();
+    /* Which of an element's allocations meets the ceiling first (its
+     * wrapper or its strings) moves with what the binding holds at birth;
+     * either is the DOM budget refusing. */
+    check(probe_text_is("heading","before") && strstr(g.status_text,"QuotaExceededError: DOM ") &&
+          strstr(g.status_text," quota exceeded"),
+          "the page's DOM budget is the host's share");
+    probe_drop();
+    probe_page_memory=(yonder_page_memory_t){0};
+    probe_page("<h1 id=heading>before</h1><script>var keep=[];"
+        "for(var i=0;i<20000;i++)keep.push(document.createElement('i'));"
+        "document.getElementById('heading').textContent='held';</script>",true);
+    script_turn();
+    check(probe_text_is("heading","held"),"the same page fits libdom's own budget");
+    probe_drop();
+    /* The cascade's own state is held to its share: a page with many rules
+     * comes up short under a small one, and is whole under libgarb's. */
+    {
+        static char many[96*1024];
+        size_t at=(size_t)snprintf(many,sizeof(many),"<style>");
+        for(int i=0;i<2000 && at<sizeof(many)-256;i++)
+            at+=(size_t)snprintf(many+at,sizeof(many)-at,".c%d p{margin:%dpx}",i,i);
+        snprintf(many+at,sizeof(many)-at,"</style><h1 id=heading>before</h1><p class=c1>a");
+        probe_page_memory=(yonder_page_memory_t){.cascade=(size_t)64<<10};
+        probe_page(many,false);
+        check(g.page.cascade!=NULL && garb_cascade_incomplete(g.page.cascade),
+              "the page's cascade is held to the host's ceiling for its state");
+        probe_drop();
+        probe_page_memory=(yonder_page_memory_t){0};
+        probe_page(many,false);
+        check(g.page.cascade!=NULL && !garb_cascade_incomplete(g.page.cascade),
+              "the same page's cascade is whole under libgarb's own ceiling");
+        probe_drop();
+    }
 }
 static void native_refusals(void) {
     unsigned refused_model=0, refused_layout=0, survived=0;
@@ -1267,7 +1393,7 @@ static void switch_cases(void) {
     strcpy(saved_agent,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
                        "Chrome/154.0.0.0 Safari/537.36");
     const char *started=starting_agent();
-    check(started!=NULL && strstr(started,"Chrome/156.0.0.0")!=NULL && yonder_agent_identity(started)!=NULL,
+    check(started!=NULL && strstr(started,"Chrome/157.0.0.0")!=NULL && yonder_agent_identity(started)!=NULL,
           "agent: a saved Chrome 154 preset starts as today's Chrome preset, its lines with it");
     strcpy(saved_agent,"Mozilla/3.0 (compatible)");
     started=starting_agent();
@@ -1277,6 +1403,26 @@ static void switch_cases(void) {
     settings_fixture.scripts.checked=true;
     settings_fixture.limit.value=12;
     check(yonder_settings_saved_script_seconds()==5,"a missing script time limit is the 5 s lean");
+    check(yonder_settings_saved_script_memory_mb()==512,"a missing script heap is 512 MiB");
+    check(yonder_settings_saved_page_memory_mb()==1024,"a missing document side is 1024 MiB");
+    strcpy(saved_page_memory,"2048");
+    check(yonder_settings_saved_page_memory_mb()==2048,"page_memory_mb is read in MiB");
+    strcpy(saved_page_memory,"63");
+    check(yonder_settings_saved_page_memory_mb()==1024,"a document side under 64 MiB is the default");
+    strcpy(saved_page_memory,"4097");
+    check(yonder_settings_saved_page_memory_mb()==1024,"a document side over 4096 MiB is the default");
+    saved_page_memory[0]=0;
+    {
+        yonder_page_memory_t m=yonder_page_memory_split(1024);
+        size_t ninth=((size_t)1024<<20)/9;
+        check(m.tree==2*ninth && m.layout==2*ninth && m.cascade==3*ninth && m.dom==2*ninth,
+              "the document side is cut in ninths: tree 2, layout 2, cascade 3, dom 2");
+        check(m.tree<=m.layout && m.tree<m.cascade && m.tree<=m.dom && m.tree+m.layout+m.cascade+m.dom<=(size_t)1024<<20,
+              "the tree's ceiling is the lowest, and the shares fit the whole");
+        yonder_page_memory_t big=yonder_page_memory_split(YONDER_PAGE_MEMORY_MB_MAX);
+        check(big.cascade>m.cascade && big.cascade<((size_t)YONDER_PAGE_MEMORY_MB_MAX<<20),
+              "the largest document side splits without overflow");
+    }
     strcpy(saved_seconds,"61");
     check(yonder_settings_saved_script_seconds()==5,"a time limit outside 1 to 60 is the lean");
     saved_seconds[0]=0;
@@ -2453,16 +2599,16 @@ static void bounded_resources(void) {
     check(ran==4096,"a page's scripts past the 4096th are not queued");
     probe_drop();
     /* An inline script one past the source limit, built by the page from
-     * two text nodes: a parsed page cannot carry one, since the HTML
-     * parser's own input budget is no larger than the limit, and one
-     * string that long is past libdom's own string quota. */
+     * text nodes of a MiB each: a parsed page cannot carry one, since the
+     * HTML parser's own input budget is smaller than the limit, and one
+     * string that long is past libdom's budget for a string it copies. */
     char over[640];
-    snprintf(over,sizeof over,"<script>var s=document.createElement('script');"
-        "s.appendChild(document.createTextNode(' '.repeat(%zu)));"
-        "s.appendChild(document.createTextNode(' '.repeat(%zu)+\"document.body.id='ran'\"));"
+    snprintf(over,sizeof over,"<script>var s=document.createElement('script'),mib=' '.repeat(1<<20);"
+        "for(var i=0;i<%zu;i++)s.appendChild(document.createTextNode(mib));"
+        "s.appendChild(document.createTextNode(\"document.body.id='ran'\"));"
         "document.body.appendChild(s);</script>"
         "<script>document.body.className='after';</script>",
-        (size_t)SCRIPT_SOURCE_MAX/2,(size_t)SCRIPT_SOURCE_MAX/2);
+        (size_t)SCRIPT_SOURCE_MAX>>20);
     probe_page(over,true);
     bool refused=false;
     while(yonder_scripts_step(g.page.scripts,&out))
@@ -2473,18 +2619,19 @@ static void bounded_resources(void) {
         os64_streq(os64_html_attr(g.page.way.doc->body,"class")->value,"after"),
         "the scripts after it still run");
     probe_drop();
-    /* One past libjs's standalone 4 MiB runs: the page's runtime takes
-     * yonder's limit, not the library's default. */
-    size_t past=(size_t)4*1024*1024+1;
-    const char *head="<script>", *body="document.body.id='big';";
-    char *large=malloc(strlen(head)+past+strlen(body)+strlen("</script>")+1);
-    check(large!=NULL,"large script fixture allocation");
-    strcpy(large,head); memset(large+strlen(head),' ',past);
-    strcpy(large+strlen(head)+past,body); strcat(large+strlen(head)+past,"</script>");
-    probe_page(large,true); free(large);
-    check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK &&
-        os64_html_attr(g.page.way.doc->body,"id") && os64_streq(os64_html_attr(g.page.way.doc->body,"id")->value,"big"),
-        "a script past libjs's own default source limit runs");
+    /* A script of 9 MiB runs, the size a code-hosting site's entry module
+     * reached on 2026-11-15: past libjs's standalone 4 MiB and yonder's
+     * old 8, so the page's runtime takes yonder's limit. */
+    snprintf(over,sizeof over,"<script>var s=document.createElement('script'),mib=' '.repeat(1<<20);"
+        "for(var i=0;i<9;i++)s.appendChild(document.createTextNode(mib));"
+        "s.appendChild(document.createTextNode(\"document.body.id='big'\"));"
+        "document.body.appendChild(s);</script>");
+    probe_page(over,true);
+    bool big=true;
+    while(yonder_scripts_step(g.page.scripts,&out)) big&=out.status==OS64_JS_OK;
+    check(big && os64_html_attr(g.page.way.doc->body,"id") &&
+        os64_streq(os64_html_attr(g.page.way.doc->body,"id")->value,"big"),
+        "a script of 9 MiB runs");
     probe_drop();
 }
 
@@ -2545,6 +2692,206 @@ static void input_links(void) {
     char want[64]; snprintf(want,sizeof(want),"stay|down|up|go %d true",b->rect.x+2);
     check(probe_text_is("log",want),"input: mousedown, mouseup and click reach the element, with clientX and isTrusted");
     check(status_says("background workers"),"input: an uncancelled click follows its link after its listeners");
+    probe_drop();
+}
+static os64_dom_media_control_t s_player_ask[8];
+static double s_player_value[8];
+static int s_player_asked, s_player_passed;
+static void player_asks_note(yonder_player_t *p, os64_dom_media_control_t what, double value, void *user) {
+    (void)p; (void)user;
+    if (s_player_asked < 8) { s_player_ask[s_player_asked] = what; s_player_value[s_player_asked] = value; }
+    s_player_asked++;
+}
+static bool player_pass_note(const os64_gui_event_t *ev, void *user) {
+    (void)ev; (void)user;
+    s_player_passed++;
+    return true;
+}
+static bool player_key_now(yonder_player_t *p, char ascii, uint8_t scancode) {
+    os64_gui_event_t ev = {.type = OS64_GUI_EVENT_KEY_DOWN};
+    ev.key.ascii = ascii; ev.key.scancode = scancode;
+    return yonder_player_class.event(&p->w, &g.ui, &ev);
+}
+
+/* An audio's player (player.h; AUDIO_YONDER.md § The controls): its
+ * arithmetic, and a page's `<audio controls>` getting one at its box, as
+ * a form control gets its widget, and none with scripts off. Here no
+ * session ever opens (the media stubs above), which the player says. */
+static void player_cases(void) {
+    char t[48];
+    yonder_player_time(0, 2, t, sizeof(t));
+    check(!strcmp(t, "0:00 / 0:02"), "player: the time and the length");
+    yonder_player_time(3723.9, 5025, t, sizeof(t));
+    check(!strcmp(t, "1:02:03 / 1:23:45"), "player: hours when the length has them");
+    yonder_player_time(5, NAN, t, sizeof(t));
+    check(!strcmp(t, "0:05 / --:--"), "player: a length not known yet");
+    yonder_player_time(725, INFINITY, t, sizeof(t));
+    check(!strcmp(t, "12:05"), "player: a stream with no end shows only where it is");
+    yonder_player_parts_t parts;
+    yonder_player_parts((os64_gui_rect_t){10, 20, 300, 54}, &parts);
+    check(parts.play.w > 0 && parts.time.w > 0 && parts.seek.w > 0 && parts.mute.w > 0 && parts.volume.w == 0 &&
+          parts.play.x < parts.time.x && parts.time.x < parts.seek.x && parts.seek.x + parts.seek.w <= parts.mute.x &&
+          parts.mute.x + parts.mute.w <= 310,
+          "player: Chrome's size has play, time, seek and mute in order, no volume bar");
+    yonder_player_parts((os64_gui_rect_t){0, 0, 480, 54}, &parts);
+    check(parts.volume.w > 0 && parts.seek.x + parts.seek.w <= parts.volume.x &&
+          parts.volume.x + parts.volume.w <= parts.mute.x, "player: a wider one has the volume bar before the speaker");
+    yonder_player_parts((os64_gui_rect_t){0, 0, 60, 54}, &parts);
+    check(parts.play.w > 0 && parts.time.w == 0 && parts.volume.w == 0, "player: a narrow one keeps its play button");
+    yonder_player_parts((os64_gui_rect_t){0, 0, 300, 54}, &parts);
+    check(yonder_player_value_at(parts.seek, parts.seek.x - 50, 10) == 0 &&
+          yonder_player_value_at(parts.seek, parts.seek.x + parts.seek.w + 50, 10) == 10 &&
+          yonder_player_value_at(parts.seek, parts.seek.x + parts.seek.w / 2, 10) > 4 &&
+          yonder_player_value_at(parts.seek, parts.seek.x + parts.seek.w / 2, 10) < 6 &&
+          yonder_player_value_at(parts.seek, parts.seek.x, NAN) == 0,
+          "player: the bar's value is held to its ends, and a length not known seeks nowhere");
+
+    // What the person asks, in order, from presses and keys alone (the
+    // player's own state; no element here).
+    yonder_player_t pl;
+    yonder_player(&pl, player_asks_note, player_pass_note, NULL);
+    pl.w.bounds = (os64_gui_rect_t){0, 0, 300, 54};
+    s_player_asked = 0; s_player_passed = 0;
+    player_key_now(&pl, ' ', 0x39); player_key_now(&pl, ' ', 0x39);
+    check(s_player_asked == 2 && s_player_ask[0] == OS64_DOM_MEDIA_PLAY && s_player_ask[1] == OS64_DOM_MEDIA_PAUSE,
+          "player: two presses before the element answers ask play, then pause");
+    s_player_asked = 0;
+    g.ui.any_dirty = false;
+    player_key_now(&pl, 'm', 0x32);
+    check(g.ui.any_dirty, "player: a key's change is repainted, before the element's view agrees with it");
+    os64_dom_media_view_t agreed = pl.view;
+    g.ui.any_dirty = false;
+    check(!yonder_player_show(&g.ui, &pl, &agreed) && !g.ui.any_dirty,
+          "player: the element's view agreeing paints nothing more");
+    player_key_now(&pl, 'm', 0x32);
+    check(s_player_asked == 2 && s_player_value[0] == 1 && s_player_value[1] == 0,
+          "player: two mutes ask on, then off");
+    s_player_asked = 0;
+    check(!player_key_now(&pl, 0x1b, 0x01) && s_player_asked == 0 && pl.seq == 0,
+          "player: a real Escape is not the player's");
+    bool taken = player_key_now(&pl, 0x1b, 0x49) && player_key_now(&pl, '[', 0) && player_key_now(&pl, '5', 0) &&
+                 player_key_now(&pl, '~', 0);
+    check(taken && s_player_asked == 0 && pl.seq == 0 && player_key_now(&pl, ' ', 0x39) && s_player_asked == 1,
+          "player: Page Up's burst is taken whole, asks nothing, and the next key is a key");
+    pl.view.muted = true; pl.view.volume = 0.5; s_player_asked = 0;
+    player_key_now(&pl, 0x1b, 0x50); player_key_now(&pl, '[', 0); player_key_now(&pl, 'B', 0);
+    check(s_player_asked == 2 && s_player_ask[0] == OS64_DOM_MEDIA_VOLUME && s_player_value[0] > 0.39 &&
+          s_player_value[0] < 0.41 && s_player_ask[1] == OS64_DOM_MEDIA_MUTE && s_player_value[1] == 0,
+          "player: Down while muted steps from the volume it had, and unmutes");
+    os64_gui_event_t wheel = {.type = OS64_GUI_EVENT_MOUSE_WHEEL};
+    wheel.mouse.x = pl.w.bounds.x + pl.w.bounds.w / 2; wheel.mouse.y = 27; wheel.mouse.dy = 1;
+    s_player_asked = 0;
+    check(yonder_player_class.event(&pl.w, &g.ui, &wheel) && s_player_passed == 1 && s_player_asked == 0,
+          "player: the wheel over the bar is the page's, handed on");
+    yonder_player_release(&pl);
+    probe_modern_off = true;
+    probe_page("<p><audio id=a controls src=a.mp3></audio></p>", true);
+    check(g.nplayers == 0 && flow_box_for(g.page.tree, probe_id("a")) == NULL,
+          "player: with the Modern Web off an audio's controls draw nothing");
+    probe_drop();
+    probe_modern_off = false;
+
+    probe_page("<p><audio id=a controls src=a.mp3></audio><audio id=b src=b.mp3></audio></p>", true);
+    script_turn();
+    const flow_box_t *box = flow_box_for(g.page.tree, probe_id("a"));
+    check(g.nplayers == 1 && g.players[0]->node == probe_id("a") && box != NULL && box->replaced &&
+          flow_box_for(g.page.tree, probe_id("b")) == NULL,
+          "player: an audio with controls has a player at a box, one without has neither");
+    if (g.nplayers == 1 && box != NULL) {
+        const os64_ui_widget_t *w = &g.players[0]->p.w;
+        check(!w->hidden && w->bounds.w == YONDER_PLAYER_WIDTH && w->bounds.h == YONDER_PLAYER_HEIGHT &&
+              w->parent == &g.root, "player: the widget is shown at its box, Chrome's size, in the window's tree");
+        Player *kept = g.players[0];
+        relayout(false);
+        check(g.nplayers == 1 && g.players[0] == kept, "player: a layout keeps the player it had");
+    }
+    probe_drop();
+    check(g.nplayers == 0 && g.players == NULL, "player: the page's players leave with it");
+    probe_page("<p><audio id=o style=\"opacity:0\" controls src=a.mp3></audio>"
+               "<audio id=v style=\"visibility:hidden\" controls src=b.mp3></audio></p>", true);
+    script_turn();
+    const Player *seen = NULL, *hidden = NULL;
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        if (g.players[i]->node == probe_id("o")) seen = g.players[i];
+        if (g.players[i]->node == probe_id("v")) hidden = g.players[i];
+    }
+    check(seen != NULL && !seen->p.w.hidden && seen->p.w.cls != &yonder_player_class &&
+          seen->p.w.cls->paint == NULL && seen->p.w.cls->event == yonder_player_class.event,
+          "player: one the page made invisible paints nothing and still takes the pointer");
+    check(hidden != NULL && hidden->p.w.hidden, "player: one the page hid is hidden");
+    probe_drop();
+    /* A video (AUDIO_YONDER.md § Y.4): a box of its own, 300 by 150, and
+     * with controls the player along its bottom; without, no player. */
+    probe_page("<p><video id=c controls src=a.mp3></video><video id=n src=b.mp3></video></p>", true);
+    script_turn();
+    const flow_box_t *vc = flow_box_for(g.page.tree, probe_id("c")), *vn = flow_box_for(g.page.tree, probe_id("n"));
+    check(vc != NULL && vc->replaced && vn != NULL && vn->replaced && g.nplayers == 1 &&
+          g.players[0]->node == probe_id("c"), "player: a video is a box, and only the one with controls has a player");
+    if (vc != NULL && g.nplayers == 1) {
+        os64_gui_rect_t at = flow_box_doc_rect(vc, scroll_now());
+        const os64_ui_widget_t *w = &g.players[0]->p.w;
+        check(at.w == 300 && at.h == 150 && w->bounds.w == 300 && w->bounds.h == YONDER_PLAYER_HEIGHT &&
+              w->bounds.y - g.view.bounds.y + g.sy == at.y + at.h - YONDER_PLAYER_HEIGHT,
+              "player: a video's player is the strip along the bottom of its box");
+        zoom_to(2000);
+        relayout(false);
+        vc = flow_box_for(g.page.tree, probe_id("c"));
+        at = vc != NULL ? flow_box_doc_rect(vc, scroll_now()) : (os64_gui_rect_t){0, 0, 0, 0};
+        check(g.nplayers == 1 && at.w == 600 && at.h == 300 && g.players[0]->p.w.bounds.h == 2 * YONDER_PLAYER_HEIGHT &&
+              g.players[0]->p.w.bounds.y - g.view.bounds.y + g.sy == at.y + at.h - 2 * YONDER_PLAYER_HEIGHT,
+              "player: zoomed, the strip is the player's height at the zoom the box was laid out at");
+        zoom_to(1000);
+    }
+    probe_drop();
+    probe_page("<p><video id=s controls style=\"height:30px\" src=a.mp3></video></p>", true);
+    script_turn();
+    const flow_box_t *vs = flow_box_for(g.page.tree, probe_id("s"));
+    if (vs != NULL && g.nplayers == 1) {
+        os64_gui_rect_t at = flow_box_doc_rect(vs, scroll_now());
+        check(at.h == 30 && g.players[0]->p.w.bounds.h == 30 &&
+              g.players[0]->p.w.bounds.y - g.view.bounds.y + g.sy == at.y,
+              "player: a video shorter than the player gives it the whole box");
+    } else {
+        check(false, "player: a short video has a box and a player");
+    }
+    probe_drop();
+    probe_page("<p><audio id=a controls src=a.mp3></audio></p>", false);
+    check(g.nplayers == 0 && flow_box_for(g.page.tree, probe_id("a")) == NULL,
+          "player: with scripts off an audio's controls draw nothing");
+    probe_drop();
+}
+
+/* HTML's sticky activation (AUDIO_YONDER.md § Autoplay): a press through
+ * the window's pointer path counts, on a page that listens for nothing. */
+static void input_activation(void) {
+    probe_page("<p id=b>press</p><script>var x=1;</script>",true);
+    script_turn();
+    check(!yonder_scripts_activated(g.page.scripts),"input: a page nobody has touched has no activation");
+    input_click_at("b");
+    check(yonder_scripts_activated(g.page.scripts),"input: a press through the pointer path is the page's activation");
+    probe_drop();
+    probe_page("<p><audio id=a controls src=a.mp3></audio></p><p id=log>-</p><p id=go>go</p><script>"
+               "var log=[],a=document.getElementById('a');"
+               "function note(n){log.push(n);document.getElementById('log').textContent=log.join('|');}"
+               "document.addEventListener('keydown',e=>note('key '+e.target.id));"
+               "a.addEventListener('focus',()=>note('focus '+document.activeElement.id));"
+               "a.addEventListener('blur',()=>note('blur'));"
+               "document.getElementById('go').addEventListener('click',()=>a.focus());"
+               "</script>",true);
+    script_turn();
+    check(g.nplayers==1,"input: the audio has its player");
+    if (g.nplayers==1) {
+        os64_ui_set_focus(&g.ui,&g.players[0]->p.w); inputs_run();
+        check(probe_text_is("log","focus a"),
+              "input: a focused player is its element's focus: the audio hears focus and is the active element");
+        os64_gui_event_t space={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=' ',.scancode=0x39}};
+        check(!key_event(&space) && yonder_scripts_activated(g.page.scripts) && probe_text_is("log","focus a|key a"),
+              "input: a key at a focused player is its element's, heard by the page, and is the activation");
+        os64_ui_set_focus(&g.ui,&g.view); inputs_run();
+        check(probe_text_is("log","focus a|key a|blur"),"input: the focus leaving the player is the audio's blur");
+        input_click_at("go"); script_turn();
+        check(g.ui.focus==&g.players[0]->p.w,"input: the audio's focus() focuses its player");
+    }
     probe_drop();
 }
 /* A `javascript:` link (MODERN_WEB.md slice 0c): the person's click runs
@@ -3028,6 +3375,8 @@ static void input_cases(void) {
     yonder_bar_lower(&g.bar);
 
     input_links();
+    input_activation();
+    player_cases();
     input_javascript_links();
     input_attribute_backstop();
     input_hover();
@@ -3077,7 +3426,7 @@ static void stream_window_drop(void) {
     if(pool_work.job!=NULL) { yonder_trip_release(pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work)); }
     inputs_drop(); forms_drop(); page_clear(&g.page); page_clear(&g.coming.page); os64_ui_font_release(&g.ui);
     way_history_clear(&g.way);
-    while(nsheet_jobs>0) os64_free(sheet_jobs[--nsheet_jobs].job);
+    while(nsheet_jobs>0) yonder_sheet_release(sheet_jobs[--nsheet_jobs].job,NULL);
 }
 /* The real window layout participates in font adoption: a larger interface
  * face must grow its rows, without replacing the page controls' lent face
@@ -3788,6 +4137,38 @@ static void loop_local_file(void) {
     slurp_path=NULL;
     loop_drop();
 }
+static void local_link_cases(void)
+{
+    const char *names[] = {"image-memory-untouched.html", "image-memory-metadata.html", "image-memory-canvas.html"};
+    for (unsigned i = 0; i < 3; i++) {
+        stream_window();
+        g.scripts_on = true; g.script_ms = 5000;
+        char html[256], path[256];
+        snprintf(html, sizeof(html), "<a id=next href='%s'>next</a>", names[i]);
+        slurp_path = "/tests/pages/image-memory-untouched.html";
+        slurp_bytes = html;
+        open_address(slurp_path, NAV_GO, NULL, NULL);
+        check(loop_settle() && probe_id("next"), "local link: source file arrives");
+        snprintf(path, sizeof(path), "/tests/pages/%s", names[i]);
+        slurp_path = path;
+        slurp_bytes = "<p id=out>linked file</p>";
+        follow_link(os64_page_link_for(page_model(&g.page), probe_id("next")));
+        check(g.stream.active && g.stream.local != NULL && pool_work.job == NULL,
+              "local link: relative file link starts local reading without a network job");
+        check(loop_settle() && probe_text_is("out", "linked file"),
+              "local link: linked file arrives through the navigation stream");
+        slurp_path = NULL;
+        loop_drop();
+    }
+    loop_page("<a id=next href='file:///tests/pages/image-memory-canvas.html'>local file</a>");
+    check(loop_settle(), "local link: network source arrives");
+    void *pending = pool_work.job;
+    follow_link(os64_page_link_for(page_model(&g.page), probe_id("next")));
+    check(!g.stream.active && pool_work.job == pending && probe_id("next") &&
+          strstr(g.status_text, "does not fetch") != NULL,
+          "local link: a network document cannot navigate into local files");
+    loop_drop();
+}
 static void loop_handlers_only(void) {
     loop_page("<body onload=\"document.getElementById('h').textContent='onload ran '+(this===window)\">"
         "<h1 id=h>waiting</h1></body>");
@@ -4206,6 +4587,26 @@ static void loop_view_computed(void) {
         "view: on the page shown it reads the layout made current, a script's change included");
     loop_drop();
 }
+/* Element.animate's effect is what getComputedStyle reads (WEB_ANIMATIONS.md
+ * § 1): the sign-in page's key — animate, pause, seek to 440 — on a page still arriving,
+ * on a hidden element, and on the page shown, with the strings libflow's
+ * suite works out (tools/test_libflow_script.inc); and a second seek is
+ * read again, not the first one's layout. */
+static void loop_view_web_animations(void) {
+    loop_page("<div id=k>k</div><div id=h style=display:none></div><p id=early>-</p><p id=late>-</p><script>"
+        "function key(id){var d=document.getElementById(id);var a=d.animate({color:['#62df76','#31a6fd'],"
+        "transform:['rotate(0deg)','rotate(165deg)'],easing:'cubic-bezier(0.23,-0.07,0.53,0.55)'},4096);"
+        "a.pause();a.currentTime=440;var cs=getComputedStyle(d);var r=cs.color+'|'+cs.transform;"
+        "a.currentTime=0;return getComputedStyle(d).color==='rgb(98, 223, 118)'?r:'stale '+getComputedStyle(d).color}"
+        "document.getElementById('early').textContent=key('k');"
+        "onload=function(){document.getElementById('late').textContent=key('h')}</script>");
+    check(loop_settle() && g.page.tree!=NULL,"web animations: a page animating arrives");
+    check(probe_text_is("early","rgb(97, 222, 120)|matrix(0.999438, 0.0335322, -0.0335322, 0.999438, 0, 0)"),
+        "web animations: the sign-in key on a page still arriving");
+    check(probe_text_is("late","rgb(97, 222, 120)|matrix(0.999438, 0.0335322, -0.0335322, 0.999438, 0, 0)"),
+        "web animations: and on a hidden element of the page shown");
+    loop_drop();
+}
 /* A script's scroll moves g.view's, and any scroll of the view owes the
  * page a scroll event, at the document and bubbling to window. */
 static void loop_view_scroll(void) {
@@ -4255,6 +4656,7 @@ static void loop_view_history(void) {
     check(view_turns() && probe_text_is("out","len:3"),
         "history: pushState to another fragment fires neither popstate nor hashchange");
     os64_work_id_t submitted=pool_ids;
+    input_click_at("out");      /* a person's: Back steps through the page's entries (loop_view_skips) */
     click_back(NULL,NULL);
     check(!g.stream.active && pool_ids==submitted && os64_streq(g.page.way.url,"http://fixture.test/one"),
         "history: Back into a pushed entry fetches nothing");
@@ -4471,6 +4873,104 @@ static void loop_view_identity(void) {
         "identity: a stopped traversal leaves the change the page made, as its entry");
     loop_drop();
 }
+/* The browser's Back and Forward pass over the entries a page made before
+ * anybody touched it (way_crumb_t.skip), by a push or by sending its reader
+ * on; a person's touch takes the mark off its document's entries; the list
+ * held from Back shows where Back goes, by title, and a pick goes there. */
+static void loop_view_skips(void) {
+    loop_page("<title>Earlier</title><p id=out>R</p><script>history.replaceState(null,'','/R')</script>");
+    check(loop_settle() && view_turns(),"skips: R");
+    start_trip("http://fixture.test/S",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
+    post_arriving("<title>Start</title><p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns() && session_is("/R","/S",""),"skips: S, typed");
+    input_click_at("out");                  /* a person was on S */
+    start_trip("http://fixture.test/T",NULL,NULL,NAV_GO,WAY_BY_PERSON,NULL);
+    post_arriving("<title>Trap</title><p id=out>T</p><script>history.replaceState(null,'','/T');"
+        "onload=function(){history.pushState(1,'','/T1');history.pushState(2,'','/T2');"
+        "setTimeout(function(){location.href='/U'},10)}</script>");
+    check(loop_settle() && view_turns() && session_is("/R,/S,/T,/T1","/T2",""),"skips: T pushes two as it arrives");
+    now_ms+=100;
+    check(script_turn() && g.stream.active,"skips: T sends its reader on by itself");
+    post_arriving("<title>Trap again</title><p id=out>U</p><script>history.replaceState(null,'','/U');"
+        "onload=function(){history.pushState(1,'','/U1')}</script>");
+    check(loop_settle() && view_turns() && session_is("/R,/S,/T,/T1,/T2,/U","/U1",""),"skips: U pushes one");
+    bool marks=!g.way.history[0].skip && !g.way.history[1].skip;
+    for(int32_t i=2;i<g.way.depth;i++) marks=marks && g.way.history[i].skip;
+    check(marks,"skips: every entry the untouched pages left is marked, and none a person left");
+    steps_rows(true);
+    check(s_steps.count==2 && os64_streq(s_steps.label[0],"Start") && os64_streq(s_steps.label[1],"Earlier"),
+        "skips: Back's list is where Back goes, nearest first, by title");
+    click_back(NULL,NULL);
+    check(g.stream.active,"skips: Back passes over four entries to S, a fetch");
+    post_arriving("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns() && session_is("/R","/S","/T,/T1,/T2,/U,/U1"),
+        "skips: S, with what Back passed over ahead as it was");
+    steps_rows(false);
+    check(s_steps.count==1 && os64_streq(s_steps.label[0],"Trap again"),
+        "skips: Forward's list passes over the same entries, to the last one shown");
+    steps_rows(true);
+    steps_picked(&s_steps,0);
+    check(g.stream.active,"skips: a pick goes to its entry");
+    post_arriving("<p id=out>R</p><script>history.replaceState(null,'','/R')</script>");
+    check(loop_settle() && view_turns() && session_is("","/R","/S,/T,/T1,/T2,/U,/U1"),"skips: R, picked");
+    loop_drop();
+    // A page a person touches keeps its entries: Back steps through them,
+    // within the document. Untouched, Back with nowhere else to go goes to
+    // the furthest entry.
+    loop_page("<p id=out>V</p><script>history.replaceState(null,'','/V');"
+        "onload=function(){history.pushState(1,'','/V1');history.pushState(2,'','/V2')}</script>");
+    check(loop_settle() && view_turns() && session_is("/V,/V1","/V2","") && way_browser_steps(&g.way,true)==2,
+        "skips: every entry marked, Back goes to the furthest");
+    input_click_at("out");
+    check(!g.way.history[0].skip && !g.way.history[1].skip && g.page.touched,
+        "skips: a person's click takes the marks off the page's entries");
+    click_back(NULL,NULL);
+    check(!g.stream.active && session_is("/V","/V1","/V2"),"skips: and Back steps one, fetching nothing");
+    loop_drop();
+    // A page that goes back among its own entries before it is shown
+    // arrives at a marked entry, and keeps the mark (stream_finish), as
+    // does a page that replaces it before it is shown (Place): typed away
+    // from untouched, Back passes over both entries.
+    loop_page("<p id=out>W</p><script>history.replaceState(null,'','/W');history.pushState(1,'','/W1');"
+        "history.pushState(2,'','/W2');history.back()</script><p>tail</p>");
+    check(loop_settle() && view_turns() && session_is("/W","/W1","/W2") && g.page.entry_skip,
+        "skips: a page's traversal before it is shown arrives at its entry, mark and all");
+    start_trip("http://fixture.test/X",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
+    post_arriving("<p id=out>X</p><script>history.replaceState(null,'','/X')</script>");
+    check(loop_settle() && view_turns() && session_is("/W,/W1","/X","") && g.way.history[1].skip &&
+          way_browser_steps(&g.way,true)==2,
+        "skips: typed away from it, Back passes over the entry it arrived at");
+    loop_drop();
+    loop_page("<p id=out>W</p><script>history.replaceState(null,'','/W');history.pushState(1,'','/W1');"
+        "history.pushState(2,'','/W2');history.back();"
+        "document.addEventListener('DOMContentLoaded',function(){location.replace('/Y')})</script><p>tail</p>");
+    check(loop_settle() && g.stream.active && g.page.tree==NULL,"skips: a page replaced before it is shown");
+    post_arriving("<p id=out>Y</p><script>history.replaceState(null,'','/Y1')</script>");
+    check(loop_settle() && view_turns() && session_is("/W","/Y1","/W2") && g.page.entry_skip,
+        "skips: the page that replaces it takes its entry, mark and all");
+    loop_drop();
+}
+/* A history state of the size a site really keeps (a photo site's search
+ * page leaves about 125 KiB with its entry) is taken and read back whole,
+ * and the script that left it runs on; one past the limit is still refused
+ * by name, and the entry keeps the state it had. */
+static void history_state_size_case(void) {
+    loop_page("<p id=out>-</p><p id=big>-</p><script>"
+        "var list=[];for(var i=0;i<2500;i++)list.push({id:i,src:'https://images.fixture.test/photos/'+i+'/photo-'+i+'.jpeg'});"
+        "history.pushState({allMedia:list},'','/photo');"
+        "var kept=JSON.stringify(history.state);"
+        "document.getElementById('out').textContent=kept.length>130000&&history.state.allMedia.length===2500&&"
+        "history.state.allMedia[2499].id===2499?'kept':'lost '+kept.length;"
+        "var wide='x'.repeat(1100000);"
+        "try{history.replaceState({a:wide,b:wide},'','/photo');document.getElementById('big').textContent='taken';}"
+        "catch(e){document.getElementById('big').textContent=e.name+':'+history.state.allMedia.length;}"
+        "</script>");
+    check(loop_settle() && probe_text_is("out","kept"),
+        "history state: 130 KiB of a site's own data is kept and read back whole");
+    check(probe_text_is("big","QuotaExceededError:2500"),
+        "history state: one past two mebibytes is refused, and the entry keeps the state it had");
+    loop_drop();
+}
 static void unshown_back_case(const char *when, const char *script) {
     char body[512];
     loop_page("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
@@ -4518,6 +5018,7 @@ static void loop_view_unshown_back(void) {
     unshown_back_past();
     // One rule wherever the page is in its arrival: its navigation
     // committed when its response came, so Back from it is P.
+    history_state_size_case();
     unshown_back_case("during the parse","history.back()");
     unshown_back_case("at DOMContentLoaded","document.addEventListener('DOMContentLoaded',function(){history.back()})");
     unshown_back_case("at load","onload=function(){history.back()}");
@@ -5142,9 +5643,11 @@ static void loop_view_off(void) {
 static void loop_view_cases(void) {
     io_cases();
     loop_view_computed();
+    loop_view_web_animations();
     loop_view_scroll();
     loop_view_media();
     loop_view_history();
+    loop_view_skips();
     loop_view_history_short();
     loop_view_cold_cases();
     loop_view_off();
@@ -6128,6 +6631,9 @@ static uint32_t *stand_in_shot(void) {
 #include "test_yonder_animation.inc"
 #include "test_yonder_data_pictures.inc"
 #include "test_yonder_picture_sizes.inc"
+#include "test_yonder_image_cache.inc"
+#include "test_yonder_responsive_images.inc"
+#include "test_yonder_image_ownership.inc"
 
 static void svg_partial_window_cases(void)
 {
@@ -6934,6 +7440,54 @@ static void custom_element_parse_case(void) {
     if(own) { yonder_diag_free(g.page.diag); g.page.diag=NULL; }
     loop_drop();
 }
+/* THE MEMORY CENSUS (MEMORY_CENSUS.md): every record says who holds the
+ * page's memory on one line; a page whose host yonder.conf's `census`
+ * names is sampled — at once, on the census's timer, and as it is left,
+ * while its scripts still exist — and its file says it by kind and over
+ * time; a host it does not name says nothing more. Runs where the page
+ * files are written (diag_page_cases). */
+static void memory_census_cases(void) {
+    saved_census[0]="fixture.test"; saved_census[1]=NULL;
+    loop_page("<script>globalThis.kept=[];for(var i=0;i<200;i++)kept.push(document.createElement('i'))</script><p>x");
+    check(loop_settle() && g.page.censused,"census: a page on a named host is censused");
+    char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    diag_observe(&g.page,"when asked");
+    check(g.page.census.n==0,"census: an observation alone takes no sample");
+    census_turn();
+    check(g.page.census.n==1,"census: the first sample is due at once");
+    check(has(diag_file("/tmp/diag",name),"\nmemory timeline: +0s heap ") &&
+          has(diag_file("/tmp/diag",name),"\ncensus: on; 1 sample every 10s;"),
+          "census: a timer sample is in the page's file at once, not only when the page is left");
+    census_turn();
+    check(g.page.census.n==1,"census: and the next not before its interval");
+    /* The next page's parse retires these scripts first (page_departs):
+     * the departure census is taken before they go. */
+    page_departs();
+    check(g.page.census_left && g.page.census.n==2,"census: a departure takes the last sample before the scripts go");
+    check(census_due()==YONDER_NEVER,"census: and retires the timer, though the page may stay on screen");
+    loop_drop();
+    const char *file=diag_file("/tmp/diag",name);
+    check(has(file,"\nwritten: when the page was left\n") && has(file,"\nmemory: heap 64.0M (uncounted ") &&
+          has(file,"; script ") && has(file,"; dom ") && has(file," nodes"),
+          "census: the record left behind still counts the scripts, taken before they were freed");
+    check(has(file,"\nmemory dom: ") && has(file,"wrapper ") && has(file,"\nmemory script: objects "),
+          "census: and has libdom by kind and the script heap by what it holds");
+    check(has(file,"\nmemory layout: styles ") && has(file,"; lines ") && has(file,"\nmemory cascade: ") &&
+          has(file,"; state "),
+          "census: and the layout and the cascade by part");
+    check(has(file,"\nmemory timeline: +0s heap 64.0M script ") && has(file,"\ncensus: on; 2 samples every 10s;"),
+          "census: and a timeline: the first sample and the one taken as the page was left");
+    saved_census[0]=NULL;
+    loop_page("<p>x");
+    check(loop_settle() && !g.page.censused,"census: a page on a host not named is not");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    census_turn();
+    loop_drop();
+    file=diag_file("/tmp/diag",name);
+    check(has(file,"\nmemory: heap ") && !has(file,"memory dom") && !has(file,"memory timeline") &&
+          !has(file,"memory layout") && !has(file,"memory cascade") &&
+          !has(file,"\ncensus: "),"census: its record has the summary and nothing more");
+}
 static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq) {
     yonder_diag_t *d=yonder_diag_new(url,seq,0);
     if(d!=NULL && s_diag.dir[0]!='\0') yonder_diag_claim(d,s_diag.dir,false);
@@ -7310,6 +7864,39 @@ static void diag_data_short_case(void) {
               strstr(text,"see data:text/plain,hi")!=NULL && strstr(text,word)!=NULL && strlen(text)<2000,
           "diag: a long data: run keeps its start and its end, and a short one or a word that ends in it is whole");
     yonder_diag_free(d);
+}
+/* The record's wire facts are what libfetch counted SINCE the load began,
+ * not since yonder did: a load that begins with the counters already
+ * moved says only its own, and says them again, larger, when read later. */
+static void diag_wire_case(void) {
+    fake_counts=(os64_fetch_counts_t){.connections_h1=40,.connections_h2=2,.handshakes=41,.handshakes_resumed=30,
+                                      .requests_h1=300,.requests_h2=7,.waits=9,.wait_ms=1234};
+    yonder_diag_t *d=diag_begin("http://fixture.test/wire");
+    check(d!=NULL,"diag: a record begins");
+    if(d==NULL)return;
+    diag_wire(d);
+    const char *made=yonder_diag_fact_value(d,"wire connections");
+    check(made!=NULL && strcmp(made,"0 made (0 HTTP/1.1, 0 HTTP/2)")==0,
+          "diag: a load that has made nothing says so, whatever was made before it began");
+    fake_counts.connections_h1+=5; fake_counts.connections_h2+=1; fake_counts.handshakes+=6;
+    fake_counts.handshakes_resumed+=4; fake_counts.requests_h1+=20; fake_counts.requests_h2+=3;
+    fake_counts.waits+=2; fake_counts.wait_ms+=750;
+    diag_wire(d);
+    const char *v;
+    check((v=yonder_diag_fact_value(d,"wire connections"))!=NULL && strcmp(v,"6 made (5 HTTP/1.1, 1 HTTP/2)")==0,
+          "diag: the connections a load made, by what they spoke");
+    check((v=yonder_diag_fact_value(d,"wire TLS handshakes"))!=NULL && strcmp(v,"6 (4 resumed)")==0,
+          "diag: its handshakes, and how many resumed");
+    check((v=yonder_diag_fact_value(d,"wire requests"))!=NULL && strcmp(v,"23 sent (20 HTTP/1.1, 3 HTTP/2)")==0,
+          "diag: its requests, by what carried them");
+    check((v=yonder_diag_fact_value(d,"wire waits"))!=NULL &&
+              strcmp(v,"2 fetches waited for a connection, 750 ms in all")==0,
+          "diag: the fetches that waited for a connection, and for how long");
+    check((v=yonder_diag_fact_value(d,"wire cache"))!=NULL &&
+              strcmp(v,"0 answered whole, 0 confirmed by the server, 0 served stale")==0,
+          "diag: what the cache spared the wire, none with no cache");
+    yonder_diag_free(d);
+    memset(&fake_counts,0,sizeof(fake_counts));
 }
 /* A page let go before it was shown takes the families staged for it. */
 static void diag_arriving_released_case(void) {
@@ -7791,19 +8378,20 @@ static void diag_page_cases(void) {
     /* A canvas by its kind; a skipped property. A module script runs now
      * (modules.c), and an import map registers (importmap.c): neither is
      * missing. */
-    loop_page("<style>p{contain:paint;background-image:conic-gradient(red,blue);background-clip:text}"
-        "h1{display:inline frob}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
+    loop_page("<style>p{contain:paint;background-image:image-set(\"a.png\" 1x);background-clip:text}"
+        "h1{display:inline frob}h2{background-image:conic-gradient(red,blue)}</style><h2>y</h2><p id=out>x</p><canvas></canvas><canvas></canvas>"
         "<my-widget></my-widget><script type=importmap>{}</script><script type=module>1</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(!has(text,"MISSING script importmap") && !has(text,"MISSING script module") &&
         !has(text,"MISSING element canvas") &&
         has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property contain (1)\n") &&
-        has(text,"MISSING css-value background-image: conic-gradient (1)\n") &&
-        has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip"),
+        has(text,"MISSING css-value background-image: image-set (1)\n") &&
+        has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip") &&
+        !has(text,"conic-gradient"),
         "diag: an element drawn as nothing, a property the cascade skipped and a value it dropped or "
-        "approximated are each recorded; a module, run, an import map, registered, and a clip to the text, "
-        "drawn, are not");
+        "approximated are each recorded; a module, run, an import map, registered, a clip to the text and "
+        "a conic gradient, drawn, are not");
     loop_drop();
     text=diag_file("/tmp/diag",name);
     check(!has(text,"MISSING element canvas"),"diag: supported canvases remain absent from missing elements at departure");
@@ -8685,7 +9273,7 @@ static void paint_cost_cases(void) {
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
-                     "the main loop busy 75%; 3 layouts, 2 of them for animations, 1 of those repainting only what they changed; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 canvas marks, 0 form control marks; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
+                     "the main loop busy 75%; 3 layouts, 2 of them for animations, 1 of those repainting only what they changed; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; no kept drawings; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 canvas marks, 0 form control marks; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
                      "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0, frames 0, downloads 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
@@ -11090,6 +11678,7 @@ static void diag_cases(void) {
     diag_unit_cases();
     diag_setting_cases();
     diag_page_cases();
+    memory_census_cases();
     diag_bytes_case();
     diag_picture_case();
     diag_cookies_case();
@@ -11106,6 +11695,7 @@ static void diag_cases(void) {
     diag_lost_overflow_case();
     diag_lookup_bound_case();
     diag_data_short_case();
+    diag_wire_case();
     diag_arriving_released_case();
     diag_picture_moves_case();
     diag_long_source_case();
@@ -11120,6 +11710,98 @@ static void diag_cases(void) {
         "diag: with the setting absent nothing is written, and the badge still counts");
     loop_drop();
     fake_reset();
+}
+
+/* A button the page draws (STYLED_BUTTONS.md): laid out, so its words and
+ * its elements are the page's to paint, and its widget rides over it
+ * unpainted, taking the click, the focus and the keys as the face's own
+ * button does. A button of text alone that the page left alone keeps the
+ * face's button. */
+static void styled_button_cases(void) {
+    probe_page("<!doctype html><style>body{margin:0} #styled{background:white;border:0}</style>"
+        "<button id=plain>Save</button><button id=styled>Go</button>"
+        "<button id=icon><b>B</b></button><button id=empty style='width:20px;height:20px'></button>"
+        "<p id=out>-</p><script>var o=document.getElementById('out'),n=0;"
+        "document.getElementById('icon').onclick=function(){n++;o.textContent=this.id+n;};"
+        "</script>",true);
+    script_turn();
+    forms_place();
+    const FormWidget *plain=probe_field("plain"),*styled=probe_field("styled");
+    const FormWidget *icon=probe_field("icon"),*empty=probe_field("empty");
+    check(plain!=NULL && !plain->w->hidden && plain->w->cls->paint!=NULL,
+        "styled button: one of text alone the page left alone is the face's, painted");
+    check(styled!=NULL && !styled->w->hidden && styled->w->cls->paint==NULL && styled->w->cls->event!=NULL &&
+          icon!=NULL && !icon->w->hidden && icon->w->cls->paint==NULL && icon->w->cls->event!=NULL &&
+          empty!=NULL && !empty->w->hidden && empty->w->cls->paint==NULL,
+        "styled button: a styled one, one holding an element and an empty one ride unpainted");
+    const flow_box_t *box=flow_box_for(g.page.tree,probe_id("icon"));
+    check(box!=NULL && !box->replaced && box->control>=0 && box->first!=NULL,
+        "styled button: one holding an element is laid out, its content boxed, still a control");
+    ui_click_on("icon");
+    check(probe_text_is("out","icon1") && icon->w->focused,
+        "styled button: a click on it is the button's click, and takes the focus");
+    ui_key_space();
+    check(probe_text_is("out","icon2"),
+        "styled button: Space presses it, as the face's button");
+    probe_drop();
+    /* The click is at what is under the pointer, inside the button, and
+     * bubbles: a page that delegates by its target reads the icon. */
+    static const char kTarget[]="<!doctype html><style>body{margin:0} button{padding:0;border:0;background:none}"
+        " #inner{display:block;width:40px;height:20px}</style>"
+        "<form id=f action=/sent><button id=go><span id=inner>B</span></button></form><p id=out>-</p>"
+        "<script>var o=document.getElementById('out');document.addEventListener('click',function(e){"
+        "o.textContent=e.target.id+'>'+e.currentTarget.nodeName;e.preventDefault();});</script>";
+    for(int classic=0;classic<2;classic++){
+        probe_modern_off=classic!=0;
+        probe_page(kTarget,true);
+        script_turn();
+        forms_place();
+        /* The pointer is where a person's click is: over the icon. Without
+         * modern pointers the press and release reach the widget through
+         * yonder's own dispatch, which says the click is the pointer's. */
+        os64_ui_widget_t *gw=probe_field("go")->w;
+        g.pointer_x=gw->bounds.x+2; g.pointer_y=gw->bounds.y+2;
+        if(classic){
+            g.root.bounds=g.view.bounds;
+            os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+            ev.mouse.x=g.pointer_x; ev.mouse.y=g.pointer_y; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+            ui_dispatch(&ev); inputs_run();
+            ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+            ui_dispatch(&ev); inputs_run();
+        } else ui_click_on("go");
+        check(probe_text_is("out","inner>#document"),
+            classic ? "styled button: without modern pointers too, a click on its icon is targeted at the icon"
+                    : "styled button: a click on its icon is targeted at the icon, and bubbles");
+        /* Space on the focused button is the button's, though the pointer
+         * still rests on the icon. */
+        os64_ui_set_focus(&g.ui,gw);
+        ui_key_space();
+        check(probe_text_is("out","go>#document"),
+            classic ? "styled button: without modern pointers, Space is the button's, wherever the pointer rests"
+                    : "styled button: Space is the button's, wherever the pointer rests");
+        probe_drop();
+    }
+    probe_modern_off=false;
+    /* An inline button the page draws is an atom (HTML's button layout),
+     * so its widget rides at it like any other's. */
+    probe_page("<!doctype html><style>body{margin:0} .l{display:inline;background:none;border:0;padding:0}"
+        "</style><p>x <button class=l id=inl>more</button> y</p>",false);
+    forms_place();
+    check(probe_field("inl")!=NULL && !probe_field("inl")->w->hidden &&
+          probe_field("inl")->w->cls->paint==NULL,
+        "styled button: an inline one keeps its widget, unpainted");
+    probe_drop();
+    /* A transparent button laid over a field draws nothing at its centre,
+     * so the field stays drawn (flow_box_covered: a box covers only where
+     * it draws). */
+    probe_page("<!doctype html><style>body{margin:0} div{position:relative;width:200px;height:30px}"
+        " input{width:200px;height:30px;margin:0;padding:0;border:0} #over{position:absolute;left:0;top:0;"
+        "width:200px;height:30px;background:none;border:0;padding:0}</style>"
+        "<div><input id=q name=q><button id=over></button></div>",false);
+    forms_place();
+    check(probe_field("q")!=NULL && !probe_field("q")->w->hidden,
+        "styled button: a transparent one laid over a field does not hide it");
+    probe_drop();
 }
 
 /* A menu's invisible checkbox (MediaWiki Vector: absolute, width and
@@ -11396,11 +12078,21 @@ static uint8_t *bytecode_blob_of(const char *source, size_t *length) {
 }
 /* A `src` script whose body the cache holds runs through its compiled
  * form when one is kept, and a compile's form goes to a job of its own. */
-/* A page whose window has a cache, one the fakes never open: keeping asks
- * only that there is one. The window is made afresh with each page. */
+/* A page whose window has a cache: keeping asks that there is one, and the
+ * page's record reads what it has served. The window is made afresh with
+ * each page; the cache is this case's, on the fake disk, until it ends. */
+static way_cache_t *bytecode_cache;
 static void bytecode_page(void) {
     loop_page("<p id=out>-</p><script src=app.js></script>");
-    g.cache=(way_cache_t *)&nbytecode_jobs;
+    if(bytecode_cache==NULL)
+        bytecode_cache=way_cache_open("/tmp/bytecode-case-cache",1u<<20);
+    g.cache=bytecode_cache;
+}
+static void bytecode_cache_done(void) {
+    g.cache=NULL;
+    if(bytecode_cache!=NULL)
+        way_cache_close(bytecode_cache);
+    bytecode_cache=NULL;
 }
 static void bytecode_cases(void) {
     script_land_kept=true;
@@ -11418,7 +12110,7 @@ static void bytecode_cases(void) {
         bytecode_jobs[0].job->cache==g.cache && s_bytecode_queued==bytecode_jobs[0].job->length,
         "bytecode: the compile's form goes to a job of its own, beside the entry's key, under its tag");
     if(nbytecode_jobs!=1) {
-        script_land_kept=false; loop_drop(); g.cache=NULL; return;
+        script_land_kept=false; loop_drop(); bytecode_cache_done(); return;
     }
     reaped(bytecode_jobs[0].id,bytecode_jobs[0].job,NULL);
     nbytecode_jobs=0;
@@ -11469,7 +12161,7 @@ static void bytecode_cases(void) {
     got->bytecode=os64_calloc(1,sizeof(*got->bytecode));
     got->bytecode->blob=os64_malloc(8);
     reaped(0,job,got);
-    g.cache=NULL;
+    bytecode_cache_done();
 }
 
 static bool never_cancelled(void *ctx) { (void)ctx; return false; }
@@ -11567,6 +12259,353 @@ static void exit_when_loaded_cases(void) {
     check(exit_due()==YONDER_NEVER,"exit: without the switch, never");
 }
 
+static bool style_worker_land(const char *tail, bool preload)
+{
+    for (int i = 0; i < nsheet_jobs; i++) {
+        yonder_sheet_job_t *job = sheet_jobs[i].job;
+        size_t n = strlen(job->url), t = strlen(tail);
+        if (job->preload != preload || n < t || strcmp(job->url + n - t, tail)) continue;
+        os64_work_id_t id = sheet_jobs[i].id;
+        sheet_jobs[i] = sheet_jobs[--nsheet_jobs];
+        void *out = NULL;
+        yonder_sheet_run(job, NULL, NULL, &out);
+        reaped(id, job, out);
+        return true;
+    }
+    return false;
+}
+
+static void style_preload_cases(void)
+{
+    const char *css = "#box { width: 160px; height: 90px }";
+    for (int keep_handler = 0; keep_handler < 2; keep_handler++) {
+        fake_fetch_reset();
+        fake_answer(NULL, "http://fixture.test/s.css", 200,
+                    "Content-Type: text/css\r\nCache-Control: no-store\r\n", css);
+        char html[1800];
+        snprintf(html, sizeof(html),
+            "<link id=pre rel=preload as=style href=s.css onload=\""
+            "document.getElementById('out').textContent += 'L';%s"
+            "if(this.rel!=='stylesheet')this.rel='stylesheet'\">"
+            "<img id=box width=1920 height=1080><p id=out></p>"
+            "<script>document.getElementById('out').textContent='ready';"
+            "window.addEventListener('load',function(){document.getElementById('out').textContent+='W'})</script>",
+            keep_handler ? "" : "this.onload=null;");
+        loop_page(html);
+        check(loop_settle() && g.page.tree && g.page.preloads && g.page.nsheets == 0 && nsheet_jobs == 1,
+              "style preload: document finishes with a preload in flight and no applied sheet");
+        const flow_box_t *box = g.page.tree ? flow_box_for(g.page.tree, probe_id("box")) : NULL;
+        check(box && box->rect.w == 1920 && probe_text_is("out", "readyW"),
+              "style preload: neither geometry nor window load waits for its response");
+        check(style_worker_land("/s.css", true), "style preload: real fetch completes");
+        check(g.page.nsheets == 0 && g.page.preloads->bytes == strlen(css),
+              "style preload: retained no-store response has not applied CSS");
+        script_turn();
+        check(g.page.nsheets == 1 && g.page.sheets[0].waiting && nsheet_jobs == 1 && nfake_requests == 1,
+              "style preload: onload activation queues parsing without another fetch");
+        check(style_worker_land("/s.css", false), "style preload: activation worker consumes retained bytes");
+        script_turn();
+        box = g.page.tree ? flow_box_for(g.page.tree, probe_id("box")) : NULL;
+        check(box && box->rect.w == 160 && g.page.preloads->bytes == 0 && nfake_requests == 1,
+              "style preload: image fits after activation and retained response storage is released");
+        check(probe_text_is("out", keep_handler ? "readyWLL" : "readyWL"),
+              "style preload: preload and stylesheet have separate load events");
+        loop_drop();
+    }
+    fake_fetch_reset();
+    fake_answer(NULL, "http://fixture.test/pending.css", 200, "Content-Type: text/css\r\n", css);
+    loop_page("<link id=pre rel=preload as=style href=pending.css><img id=box width=1920 height=1080><script>0</script>");
+    check(loop_settle() && g.page.preloads && nsheet_jobs == 1, "style preload: pending request exists");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("pre"), "rel", "stylesheet", 10) == OS64_HTML_OK &&
+          script_rebuild() && g.page.nsheets == 1 && g.page.sheets[0].waiting && nsheet_jobs == 1,
+          "style preload: a consumer joins an in-flight request across a stylesheet rebuild");
+    check(style_worker_land("/pending.css", true) && nsheet_jobs == 1,
+          "style preload: pending handoff queues its parse");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("box"), "title", "changed", 7) == OS64_HTML_OK &&
+          script_rebuild() && nsheet_jobs == 1 && style_worker_land("/pending.css", false) && nfake_requests == 1,
+          "style preload: canceling a staged parse retains the response for its replacement without refetching");
+    loop_drop();
+
+    fake_fetch_reset();
+    fake_answer(NULL, "http://fixture.test/old.css", 200, "Content-Type: text/css\r\n", css);
+    fake_answer(NULL, "http://fixture.test/new.css", 200, "Content-Type: text/css\r\n", css);
+    loop_page("<link id=pre rel=preload as=style href=old.css onload=\"document.getElementById('out').textContent+='L'\">"
+              "<p id=out></p><script>0</script>");
+    check(loop_settle(), "style preload: replacement page settles");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("pre"), "href", "new.css", 7) == OS64_HTML_OK && script_rebuild(),
+          "style preload: replacing href creates a new request generation");
+    check(style_worker_land("/old.css", true), "style preload: obsolete completion arrives");
+    script_turn();
+    check(os64_streq(probe_text_of("out"), ""), "style preload: old href cannot fire the new request's handler");
+    check(style_worker_land("/new.css", true), "style preload: replacement completes");
+    script_turn();
+    check(probe_text_is("out", "L"), "style preload: current href gets its completion event");
+    loop_drop();
+    for (int failure = 0; failure < 3; failure++) {
+        fake_fetch_reset();
+        if (failure != 2)
+            fake_answer(NULL, "http://fixture.test/fail.css", failure == 0 ? 404 : 200,
+                        failure == 0 ? "Content-Type: text/css\r\n" : "Content-Type: text/plain\r\n", css);
+        loop_page("<link id=pre rel=preload as=style href=fail.css "
+                  "onload=\"document.getElementById('out').textContent+='L';if(this.rel!=='stylesheet')this.rel='stylesheet'\" "
+                  "onerror=\"document.getElementById('out').textContent+='E';if(this.rel!=='stylesheet')this.rel='stylesheet'\">"
+                  "<p id=out></p><script>0</script>");
+        check(loop_settle() && style_worker_land("/fail.css", true), "style preload: failure response arrives");
+        script_turn();
+        int requests = nfake_requests;
+        check(style_worker_land("/fail.css", false), "style preload: failure is handed to the activated consumer");
+        script_turn();
+        check(probe_text_is("out", failure == 2 ? "EE" : "LE") && nfake_requests == requests &&
+              g.page.nsheets == 1 && !g.page.sheets[0].ready,
+              "style preload: fetch load and CSS failure differ; failure handoff never refetches");
+        check(os64_html_set_attr(g.page.way.doc, probe_id("out"), "title", "changed", 7) == OS64_HTML_OK &&
+              script_rebuild() && nsheet_jobs == 0 && nfake_requests == requests,
+              "style preload: an unrelated rebuild does not retry a consumed failure");
+        loop_drop();
+    }
+    fake_fetch_reset();
+    fake_answer(NULL, "http://fixture.test/dynamic.css", 200, "Content-Type: text/css\r\n", css);
+    loop_page("<p id=out></p><script>var l=document.createElement('link');l.id='pre';"
+              "var ok=l.crossOrigin===null;l.crossOrigin='bogus';ok=ok&&l.crossOrigin==='anonymous';"
+              "l.crossOrigin=null;l.referrerPolicy='no-referrer';l.integrity='';"
+              "l.as='STYLE';l.rel='preload';l.href='dynamic.css';"
+              "ok=ok&&l.as==='style'&&l.referrerPolicy==='no-referrer'&&l.relList.supports('preload');"
+              "l.onload=function(){document.getElementById('out').textContent+='L'};"
+              "document.head.appendChild(l);document.getElementById('out').textContent=ok?'ok':'bad';</script>");
+    check(loop_settle() && g.page.preloads && nsheet_jobs == 1 && probe_text_is("out", "ok"),
+          "style preload: dynamic insertion and request-property reflections");
+    check(style_worker_land("/dynamic.css", true), "style preload: dynamically inserted request completes");
+    script_turn();
+    check(probe_text_is("out", "okL"), "style preload: dynamic link gets its event");
+    loop_drop();
+
+    fake_fetch_reset();
+    fake_answer(NULL, "https://other.test/cors.css", 200, "Content-Type: text/css\r\nAccess-Control-Allow-Origin: *\r\n", css);
+    loop_page("<link id=pre rel=preload as=style href=https://other.test/cors.css><script>0</script>");
+    check(loop_settle() && style_worker_land("/cors.css", true), "style preload: no-cors response is retained");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("pre"), "crossorigin", "anonymous", 9) == OS64_HTML_OK &&
+          os64_html_set_attr(g.page.way.doc, probe_id("pre"), "rel", "stylesheet", 10) == OS64_HTML_OK &&
+          script_rebuild(), "style preload: consumer changes request mode");
+    check(nsheet_jobs == 1 && !((yonder_sheet_job_t *)sheet_jobs[0].job)->input_present &&
+          ((yonder_sheet_job_t *)sheet_jobs[0].job)->request.mode == WAY_MODE_CORS,
+          "style preload: incompatible CORS identity cannot consume retained bytes");
+    check(style_worker_land("/cors.css", false) && nfake_requests == 2,
+          "style preload: incompatible identity performs its own checked fetch");
+    loop_drop();
+
+    fake_fetch_reset();
+    fake_answer(NULL, "http://fixture.test/queued.css", 200, "Content-Type: text/css\r\n", css);
+    loop_page("<link id=pre rel=preload as=style href=queued.css onload=\"document.getElementById('out').textContent='bad'\">"
+              "<p id=out>quiet</p><script>0</script>");
+    check(loop_settle() && style_worker_land("/queued.css", true), "style preload: completion event is queued");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("pre"), "href", "later.css", 9) == OS64_HTML_OK,
+          "style preload: href changes after completion but before event dispatch");
+    script_turn();
+    check(probe_text_is("out", "quiet"), "style preload: task-time guard suppresses an obsolete queued event");
+    loop_drop();
+
+    fake_fetch_reset();
+    fake_answer(NULL, "http://fixture.test/activated.css", 200, "Content-Type: text/css\r\n", css);
+    loop_page("<link id=pre rel=preload as=style href=activated.css "
+              "onload=\"document.getElementById('out').textContent+='L';if(this.rel!=='stylesheet')this.rel='stylesheet'\">"
+              "<p id=out></p><script>0</script>");
+    check(loop_settle() && style_worker_land("/activated.css", true), "style preload: consumer event guard fixture loads");
+    script_turn();
+    check(style_worker_land("/activated.css", false) && probe_text_is("out", "L"),
+          "style preload: stylesheet completion is queued after the preload event");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("pre"), "href", "next.css", 8) == OS64_HTML_OK,
+          "style preload: consumer href changes before its completion task");
+    script_turn();
+    check(probe_text_is("out", "L"), "style preload: stale stylesheet completion cannot fire the newer request's handler");
+    loop_drop();
+
+    fake_fetch_reset();
+    loop_page("<base href='http://fixture.test/css/'><link rel=preload as=style href=base.css><script>0</script>");
+    check(loop_settle() && nsheet_jobs == 1 &&
+          os64_streq(((yonder_sheet_job_t *)sheet_jobs[0].job)->url, "http://fixture.test/css/base.css"),
+          "style preload: streaming request uses the document base");
+    loop_drop();
+    check(nsheet_jobs == 0, "style preload: navigation cancels unconsumed fetches");
+
+    loop_page("<link rel=preload as=style href=a.css media=print>"
+              "<link rel=preload as=style href=b.css type=text/plain>"
+              "<link rel=preload as=image href=c.png><svg><link rel=preload as=style href=foreign.css></link></svg>"
+              "<script>0</script>");
+    check(loop_settle() && nsheet_jobs == 0 && g.page.preloads == NULL,
+          "style preload: media, MIME, destination and HTML namespace gate requests");
+    loop_drop();
+    fake_fetch_reset();
+}
+
+static void style_preload_limits(void)
+{
+    char html[8000];
+    size_t used = 0;
+    for (int i = 0; i < STYLE_PRELOAD_MAX + 1; i++)
+        used += (size_t)snprintf(html + used, sizeof(html) - used,
+                                "<link rel=preload as=style href=limit-%d.css>", i);
+    snprintf(html + used, sizeof(html) - used, "<script>0</script>");
+    loop_page(html);
+    check(loop_settle() && g.page.preloads && g.page.preloads->count == STYLE_PRELOAD_MAX && g.page.preloads->refused,
+          "style preload: document entry limit refuses excess requests");
+    loop_drop();
+    check(nsheet_jobs == 0, "style preload: capped document releases its outstanding jobs");
+
+    loop_page("<link rel=preload as=style href=first.css><link rel=preload as=style href=second.css><script>0</script>");
+    check(loop_settle() && g.page.preloads && nsheet_jobs == 2, "style preload: retained-body limit fixture");
+    for (int i = 0; i < 2 && nsheet_jobs > 0; i++) {
+        yonder_sheet_job_t *job = sheet_jobs[0].job;
+        os64_work_id_t id = sheet_jobs[0].id;
+        sheet_jobs[0] = sheet_jobs[--nsheet_jobs];
+        yonder_sheet_t *got = os64_calloc(1, sizeof(*got));
+        if (!got) { yonder_sheet_release(job, NULL); continue; }
+        got->fetched = got->usable = got->ok = true;
+        got->kept_len = 9 * 1024 * 1024;
+        got->kept = os64_malloc(got->kept_len);
+        check(got->kept != NULL, "style preload: body allocation");
+        if (!got->kept) { yonder_sheet_release(job, got); continue; }
+        reaped(id, job, got);
+    }
+    check(g.page.preloads && g.page.preloads->bytes == 9 * 1024 * 1024 &&
+          g.page.preloads->entries[0].response != NULL && g.page.preloads->entries[1].response != NULL &&
+          g.page.preloads->entries[1].response->fetched && g.page.preloads->entries[1].body_dropped &&
+          !g.page.preloads->entries[1].response->kept && g.page.preloads->entries[1].settled,
+          "style preload: aggregate retention stays bounded while excess completion keeps its successful verdict");
+    loop_drop();
+    fake_reset();fake_fetch_reset();
+    way_cache_t *cache=way_cache_open("/tmp/preload-overflow-cache",16u<<20);
+    check(cache!=NULL,"style preload: overflow cache opens");
+    fake_answer(NULL,"http://fixture.test/overflow.css",200,
+        "Content-Type: text/css\r\nCache-Control: max-age=600\r\n","#box{width:160px;height:90px}");
+    loop_page("<link id=pre rel=preload as=style href=overflow.css "
+        "onload=\"this.onload=null;this.rel='stylesheet';document.getElementById('out').textContent='loaded'\" "
+        "onerror=\"document.getElementById('out').textContent='error'\">"
+        "<img id=box width=1920 height=1080><p id=out>waiting</p><script>0</script>");
+    g.cache=cache;
+    check(loop_settle() && nsheet_jobs==1,"style preload: overflow request queued");
+    if(nsheet_jobs==1)((yonder_sheet_job_t *)sheet_jobs[0].job)->hooks.cache=cache;
+    g.page.preloads->bytes=STYLE_PRELOAD_BYTES; // Simulated competing retained bodies.
+    check(style_worker_land("/overflow.css",true),"style preload: overflow fetch arrives successfully");
+    g.page.preloads->bytes=0;
+    script_turn();
+    check(probe_text_is("out","loaded") && nsheet_jobs==1 && !((yonder_sheet_job_t *)sheet_jobs[0].job)->input_present,
+          "style preload: dropped body still delivers load and activation requests cache bytes");
+    check(style_worker_land("/overflow.css",false),"style preload: overflow activation completes");
+    script_turn();
+    const flow_box_t *box=g.page.tree?flow_box_for(g.page.tree,probe_id("box")):NULL;
+    check(box && box->rect.w==160 && nfake_requests==1,
+          "style preload: activation after retention refusal applies cached CSS without another network fetch");
+    g.cache=NULL;loop_drop();way_cache_close(cache);fake_fetch_reset();fake_reset();
+
+}
+
+static void style_preload_pages(void)
+{
+    size_t length;
+    char *css = memory_fixture_read("image-memory-preload.css", &length);
+    char *png = memory_fixture_read("image-memory.png", &length);
+    char *base64 = png != NULL ? data_b64(png, length) : NULL;
+    free(png);
+    if (css == NULL || base64 == NULL) { free(css); os64_free(base64); return; }
+    const char *modes[] = {"active", "inactive", "ordinary"};
+    for (int i = 0; i < 3; i++) {
+        char name[100];
+        snprintf(name, sizeof(name), "image-memory-preload-%s.html", modes[i]);
+        char *source = memory_fixture_read(name, &length);
+        if (source == NULL) continue;
+        char *at = strstr(source, "image-memory.png");
+        check(at != NULL, "style fixture: source names the real PNG");
+        if (at == NULL) { free(source); continue; }
+        size_t cap = length + strlen(base64) + 64;
+        char *html = malloc(cap);
+        if (html == NULL) { free(source); continue; }
+        snprintf(html, cap, "%.*sdata:image/png;base64,%s%s", (int)(at - source), source,
+                 base64, at + strlen("image-memory.png"));
+        fake_fetch_reset();
+        fake_answer(NULL, "http://fixture.test/image-memory-preload.css", 200,
+                    "Content-Type: text/css\r\nCache-Control: no-store\r\n", css);
+        loop_page(html);
+        free(source); free(html);
+        // loop_page has posted the complete response. Retire its producer
+        // before allowing image jobs to use the fixture pool's fallback slot.
+        if (pool_work.job != NULL) pool_work.release(pool_work.job, NULL);
+        memset(&pool_work, 0, sizeof(pool_work));
+        check(loop_settle() && style_worker_land("/image-memory-preload.css", i != 2),
+              "style fixture: delivered page fetches its shared stylesheet");
+        check(loop_settle(), "style fixture: page finishes parsing");
+        for (int turn = 0; turn < 8; turn++) {
+            script_turn();
+            while (sizes_run()) {}
+        }
+        if (i == 0) {
+            check(style_worker_land("/image-memory-preload.css", false), "style fixture: inline handler activates the preload");
+            for (int turn = 0; turn < 8; turn++) {
+                script_turn();
+                while (sizes_run()) {}
+            }
+        }
+        check(strncmp(probe_text_of("result"), "PASS:", 5) == 0 && nfake_requests == 1,
+              "style fixture: delivered active, inactive and ordinary pages report their expected widths");
+        loop_drop();
+    }
+    free(css);
+    os64_free(base64);
+    fake_fetch_reset();
+}
+
+static void sheet_worker_cases(void)
+{
+    const char *css = "p { color: blue }";
+    for (int scenario = 0; scenario < 11; scenario++) {
+        fake_fetch_reset();
+        bool preload = scenario == 1 || scenario == 2;
+        fake_answer(NULL, "https://a.test/start.css", 302, "Location: https://b.test/style.css\r\n", NULL);
+        fake_answer(NULL, "https://b.test/style.css", scenario == 2 ? 404 : scenario == 10 ? 204 : 200,
+                    scenario == 3 || scenario == 4 ? "Content-Type: text/plain\r\n"
+                    : "Content-Type: text/css; charset=utf-8\r\n", css);
+        fake_answer(NULL, "https://a.test/same.css", 200, "Content-Type: text/plain\r\n", css);
+        yonder_sheet_job_t *j = os64_calloc(1, sizeof(*j));
+        check(j != NULL, "sheet worker: job allocation");
+        if (!j) continue;
+        os64_strcopy(j->url, sizeof(j->url), scenario == 5 ? "https://a.test/same.css"
+                      : (scenario == 6 || scenario == 9) ? "file:///test.css" : "https://a.test/start.css");
+        way_origin_of("https://a.test/page", 1, &j->request.origin);
+        j->request.mode = scenario == 7 ? WAY_MODE_CORS : WAY_MODE_NO_CORS;
+        j->request.credentials = WAY_CREDENTIALS_INCLUDE;
+        os64_strcopy(j->request.method, sizeof(j->request.method), "GET");
+        os64_strcopy(j->hooks.referrer, sizeof(j->hooks.referrer),
+                     scenario == 6 ? "file:///page.html" : "https://a.test/page");
+        j->quirks = scenario == 4 || scenario == 5;
+        j->preload = preload;
+        j->keep = true;
+        slurp_path = "/test.css";
+        slurp_bytes = css;
+        if (scenario == 8) {
+            j->input_present = j->input_fetched = j->input_usable = true;
+            j->input = (uint8_t *)copy_text(css);
+            j->input_len = strlen(css);
+        }
+        void *out = NULL;
+        yonder_sheet_run(j, NULL, NULL, &out);
+        yonder_sheet_t *got = out;
+        bool expected = scenario != 3 && scenario != 4 && scenario != 7 && scenario != 9;
+        check(got && got->ok == expected, "sheet worker: status, MIME, CORS and final-origin quirks judgment");
+        if (preload) {
+            check(got && got->fetched && got->kept_len == strlen(css) &&
+                  !memcmp(got->kept, css, strlen(css)) && got->usable == (scenario != 2),
+                  "sheet worker: preload retains even an HTTP failure for later consumption");
+            check(got && got->parsed.items == NULL && got->parsed.nitems == 0, "sheet worker: preloading does not parse CSS");
+        }
+        if (scenario == 8)
+            check(nfake_requests == 0 && got && got->ok, "sheet worker: activation parses retained bytes without a request");
+        if (scenario < 4 && got && got->fetched)
+            check(os64_streq(got->url, "https://b.test/style.css"), "sheet worker: retained final URL is the import base");
+        yonder_sheet_release(j, got);
+        slurp_path = slurp_bytes = NULL;
+    }
+    fake_fetch_reset();
+}
+
 #include "test_yonder_pointer.inc"
 
 /* A unit that includes this file for the window and its fakes alone (the
@@ -11580,8 +12619,35 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    sheet_worker_cases();
+    style_preload_cases();
+    style_preload_pages();
+    style_preload_limits();
+    if(getenv("YONDER_STYLES_ONLY")) {
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"styles: text released");
+        check(live==0,"styles: heap empty");
+        printf("yonder styles: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_LOCAL_LINKS_ONLY")) {
+        local_link_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"local links: text released");
+        check(live==0,"local links: heap empty");
+        printf("yonder local links: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_IMAGES_ONLY")) {
+        picture_sizes_cases(); data_picture_cases(); picture_memory_baseline(); picture_memory_pages(); image_cache_cases(); responsive_image_cases(); image_ownership_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"images: text released");
+        check(live==0,"images: heap empty");
+        printf("yonder images: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_POINTER_ONLY")) {
-        pointer_window_cases(); input_links(); input_hover(); input_ui_events(); hover_batch_cases();
+        pointer_window_cases(); input_links(); input_activation(); player_cases(); input_hover(); input_ui_events(); hover_batch_cases();
         os64_text_font_release(probe_font);
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"pointer: text released");
         check(live==0,"pointer: heap empty");
@@ -11668,7 +12734,13 @@ int main(void)
     picture_svg_window_cases();
     data_picture_cases();
     picture_sizes_cases();
+    image_cache_cases();
+    responsive_image_cases(); image_ownership_cases();
+    picture_memory_baseline();
+    picture_memory_pages();
+    local_link_cases();
     covered_link_cases();
+    styled_button_cases();
     clipped_control_cases();
     classic_downloaded_cases();
     downloads_list_cases();

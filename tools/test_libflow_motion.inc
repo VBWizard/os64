@@ -43,7 +43,7 @@ static flow_timeline_t *motion_meet(const os64_html_document_t *doc, const os64_
 {
     flow_timeline_t *none = flow_timeline_new(doc);
     flow_timeline_t *t = none != NULL ? f_timeline_begin(none) : NULL;
-    *ok = t != NULL && f_timeline_element(t, n, m, now) && f_timeline_end(t, true);
+    *ok = t != NULL && f_timeline_element(t, n, GARB_PSEUDO_NONE, m, now) && f_timeline_end(t, true);
     flow_timeline_free(none);
     return t;
 }
@@ -178,15 +178,15 @@ static double reference_cubic(const double p[4], double x)
 
 static void motion_easing_cases(void)
 {
-    static const flow_easing_t kEase = {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};
-    static const flow_easing_t kOver = {FLOW_EASE_CUBIC, {0.2, 0.86, 0.32, 1.22}, 0, 0, false};
+    static const garb_easing_t kEase = {GARB_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};
+    static const garb_easing_t kOver = {GARB_EASE_CUBIC, {0.2, 0.86, 0.32, 1.22}, 0, 0, false};
     // On [0, 1], y at the parameter whose x is the input, found to the
     // last bit: within the curve's slope times a hair of the exact y.
     for (int i = 0; i <= 100; i++) {
         double x = i / 100.0;
-        const flow_easing_t *e[2] = {&kEase, &kOver};
+        const garb_easing_t *e[2] = {&kEase, &kOver};
         for (int k = 0; k < 2; k++) {
-            double got = f_ease(e[k], x, false), want = reference_cubic(e[k]->p, x);
+            double got = garb_ease(e[k], x, false), want = reference_cubic(e[k]->p, x);
             if (fabs(got - want) > 1e-6) {
                 char d[96];
                 snprintf(d, sizeof(d), "x %g got %.9f want %.9f", x, got, want);
@@ -203,55 +203,55 @@ static void motion_easing_cases(void)
     };
     bool ends = true;
     for (size_t i = 0; i < sizeof(kFar) / sizeof(kFar[0]) && ends; i++) {
-        flow_easing_t e = {FLOW_EASE_CUBIC, {kFar[i][0], kFar[i][1], kFar[i][2], kFar[i][3]}, 0, 0, false};
-        ends = f_ease(&e, 0, false) == 0 && f_ease(&e, 1, false) == 1;
+        garb_easing_t e = {GARB_EASE_CUBIC, {kFar[i][0], kFar[i][1], kFar[i][2], kFar[i][3]}, 0, 0, false};
+        ends = garb_ease(&e, 0, false) == 0 && garb_ease(&e, 1, false) == 1;
     }
     expect("easing: a cubic's ends are 0 and 1, whatever its controls", ends, NULL);
     // A curve flat in x near an end is solved, not stopped at the first t
     // whose x is near: cubic-bezier(0, 100, 0, 100) at 9.26e-8, about the
     // first 16 ms of two days, is y 1.35, where t = x would say 0.000028.
-    flow_easing_t flat = {FLOW_EASE_CUBIC, {0, 100, 0, 100}, 0, 0, false};
-    double fy = f_ease(&flat, 9.26e-8, false), fw = reference_cubic(flat.p, 9.26e-8);
+    garb_easing_t flat = {GARB_EASE_CUBIC, {0, 100, 0, 100}, 0, 0, false};
+    double fy = garb_ease(&flat, 9.26e-8, false), fw = reference_cubic(flat.p, 9.26e-8);
     char fd[64];
     snprintf(fd, sizeof(fd), "got %.6g want %.6g", fy, fw);
     expect("easing: a curve flat in x near its start is solved", fabs(fy - fw) < 1e-6 && fy > 1, fd);
     // Outside [0, 1], the tangent at the nearer end (§ 2.2.1): through
     // P0 and P1 below, P2 and P3 above.
     expect("easing: below 0, the line through P0 and P1",
-           fabs(f_ease(&kOver, -0.5, false) - 0.86 / 0.2 * -0.5) < 1e-12, NULL);
+           fabs(garb_ease(&kOver, -0.5, false) - 0.86 / 0.2 * -0.5) < 1e-12, NULL);
     expect("easing: above 1, the line through P2 and P3",
-           fabs(f_ease(&kOver, 1.5, false) - (1 + (1.22 - 1) / (0.32 - 1) * 0.5)) < 1e-12, NULL);
+           fabs(garb_ease(&kOver, 1.5, false) - (1 + (1.22 - 1) / (0.32 - 1) * 0.5)) < 1e-12, NULL);
     // With x1 at 0, below 0 the line through P0 and P2; with both at 0,
     // and above 1 with both at 1, no line: the end's own value.
-    static const flow_easing_t kX2 = {FLOW_EASE_CUBIC, {0, 0, 0.5, 0.25}, 0, 0, false};
-    static const flow_easing_t kLow = {FLOW_EASE_CUBIC, {0, 0.3, 0, 0.6}, 0, 0, false};
-    static const flow_easing_t kHigh = {FLOW_EASE_CUBIC, {1, 0.3, 1, 0.6}, 0, 0, false};
+    static const garb_easing_t kX2 = {GARB_EASE_CUBIC, {0, 0, 0.5, 0.25}, 0, 0, false};
+    static const garb_easing_t kLow = {GARB_EASE_CUBIC, {0, 0.3, 0, 0.6}, 0, 0, false};
+    static const garb_easing_t kHigh = {GARB_EASE_CUBIC, {1, 0.3, 1, 0.6}, 0, 0, false};
     expect("easing: below 0 with x1 at 0, the line through P0 and P2",
-           f_ease(&kX2, -1, false) == -0.5, NULL);
+           garb_ease(&kX2, -1, false) == -0.5, NULL);
     expect("easing: with both x at an end, past it the end's value",
-           f_ease(&kLow, -1, false) == 0 && f_ease(&kHigh, 2, false) == 1, NULL);
+           garb_ease(&kLow, -1, false) == 0 && garb_ease(&kHigh, 2, false) == 1, NULL);
     // Steps (§ 2.3.1): the examples' table.
-    static const flow_easing_t kEnd = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_END, false};
-    static const flow_easing_t kStart = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_START, false};
-    static const flow_easing_t kNone = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_NONE, false};
-    static const flow_easing_t kBoth = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_BOTH, false};
+    static const garb_easing_t kEnd = {GARB_EASE_STEPS, {0}, 4, GARB_JUMP_END, false};
+    static const garb_easing_t kStart = {GARB_EASE_STEPS, {0}, 4, GARB_JUMP_START, false};
+    static const garb_easing_t kNone = {GARB_EASE_STEPS, {0}, 4, GARB_JUMP_NONE, false};
+    static const garb_easing_t kBoth = {GARB_EASE_STEPS, {0}, 4, GARB_JUMP_BOTH, false};
     expect("easing: jump-end steps at each quarter, from 0",
-           f_ease(&kEnd, 0, false) == 0 && f_ease(&kEnd, 0.24, false) == 0 &&
-           f_ease(&kEnd, 0.25, false) == 0.25 && f_ease(&kEnd, 0.99, false) == 0.75 &&
-           f_ease(&kEnd, 1, false) == 1, NULL);
+           garb_ease(&kEnd, 0, false) == 0 && garb_ease(&kEnd, 0.24, false) == 0 &&
+           garb_ease(&kEnd, 0.25, false) == 0.25 && garb_ease(&kEnd, 0.99, false) == 0.75 &&
+           garb_ease(&kEnd, 1, false) == 1, NULL);
     expect("easing: jump-start steps first, and holds at 1",
-           f_ease(&kStart, 0, false) == 0.25 && f_ease(&kStart, 0.5, false) == 0.75 &&
-           f_ease(&kStart, 1, false) == 1, NULL);
+           garb_ease(&kStart, 0, false) == 0.25 && garb_ease(&kStart, 0.5, false) == 0.75 &&
+           garb_ease(&kStart, 1, false) == 1, NULL);
     expect("easing: jump-none takes no step at either end",
-           f_ease(&kNone, 0, false) == 0 && f_ease(&kNone, 0.25, false) == 1.0 / 3 &&
-           f_ease(&kNone, 1, false) == 1, NULL);
+           garb_ease(&kNone, 0, false) == 0 && garb_ease(&kNone, 0.25, false) == 1.0 / 3 &&
+           garb_ease(&kNone, 1, false) == 1, NULL);
     expect("easing: jump-both steps at both ends",
-           f_ease(&kBoth, 0, false) == 0.2 && f_ease(&kBoth, 0.99, false) == 0.8 &&
-           f_ease(&kBoth, 1, false) == 1, NULL);
+           garb_ease(&kBoth, 0, false) == 0.2 && garb_ease(&kBoth, 0.99, false) == 0.8 &&
+           garb_ease(&kBoth, 1, false) == 1, NULL);
     // The before flag holds the bottom of a step at its own edge.
     expect("easing: the before flag holds the bottom of the step",
-           f_ease(&kStart, 0, true) == 0 && f_ease(&kEnd, 0.5, true) == 0.25 &&
-           f_ease(&kEnd, 0.5, false) == 0.5, NULL);
+           garb_ease(&kStart, 0, true) == 0 && garb_ease(&kEnd, 0.5, true) == 0.25 &&
+           garb_ease(&kEnd, 0.5, false) == 0.5, NULL);
 }
 
 // ── Chrome's answers (PILE3.md § Animations, What Chrome draws) ─────────
@@ -368,6 +368,8 @@ static void motion_chrome_cases(void)
         "@keyframes vis{from{visibility:hidden}to{visibility:visible}}"
         "@keyframes zi{from{z-index:1}to{z-index:4}}"
         "@keyframes bp{from{background-position:0% 0%}to{background-position:100px 50%}}"
+        "@keyframes mp{from{mask-position:0% 0%}to{mask-position:100px 50%}}"
+        "@keyframes ms{from{mask-size:10px auto,5px 5px}to{-webkit-mask-size:30px auto,15px 25px}}"
         "@keyframes wd{from{width:auto}to{width:200px}}"
         "@keyframes fw{from{font-weight:100}to{font-weight:900}}"
         "@keyframes cc{from{color:currentcolor}to{color:red}}"
@@ -382,6 +384,8 @@ static void motion_chrome_cases(void)
         "<div id=vis style='animation-name:vis;" AT("0.1") "'></div>"
         "<div id=zi style='position:relative;animation-name:zi;" AT("0.5") "'></div>"
         "<div id=bp style='animation-name:bp;" AT("0.5") "'></div>"
+        "<div id=mp style='mask-image:linear-gradient(red,red);animation-name:mp;" AT("0.5") "'></div>"
+        "<div id=ms style='animation-name:ms;" AT("0.5") "'></div>"
         "<div id=wd style='animation-name:wd;" AT("0.49") "'></div>"
         "<div id=fw style='animation-name:fw;" AT("0.3") "'></div>"
         "<div id=cc style='animation-name:cc;" AT("0.5") "'></div>"
@@ -413,6 +417,23 @@ static void motion_chrome_cases(void)
            s->backgrounds.x[0].offset == 50 * 64 && s->backgrounds.ny == 1 &&
            s->backgrounds.y[0].kind == FLOW_LENGTH_PERCENT &&
            s->backgrounds.y[0].value == 25 * 64, NULL);
+    // A mask's position and size mix as a background's (MASKS.md § 5),
+    // into the mask's lists and not the background's.
+    s = moving_style(&m, "mp");
+    expect("motion: mask-position mixes into calc(0% + 50px) 25%",
+           s != NULL && s->masks.layers.nx == 1 &&
+           s->masks.layers.x[0].kind == FLOW_LENGTH_PERCENT && s->masks.layers.x[0].value == 0 &&
+           s->masks.layers.x[0].offset == 50 * 64 && s->masks.layers.ny == 1 &&
+           s->masks.layers.y[0].kind == FLOW_LENGTH_PERCENT &&
+           s->masks.layers.y[0].value == 25 * 64 && s->backgrounds.x[0].offset == 0, NULL);
+    s = moving_style(&m, "ms");
+    expect("motion: mask-size mixes layer by layer, auto by itself",
+           s != NULL && s->masks.layers.nsize == 2 &&
+           s->masks.layers.size[0].size[0].kind == FLOW_LENGTH_PX &&
+           s->masks.layers.size[0].size[0].value == 20 * 64 &&
+           s->masks.layers.size[0].size[1].kind == FLOW_LENGTH_AUTO &&
+           s->masks.layers.size[1].size[0].value == 10 * 64 &&
+           s->masks.layers.size[1].size[1].value == 15 * 64 && s->backgrounds.nsize == 1, NULL);
     expect("motion: auto against a length is discrete",
            (s = moving_style(&m, "wd")) != NULL && s->width.kind == FLOW_LENGTH_AUTO, NULL);
     expect_i64("motion: font-weight is a number",
@@ -1362,7 +1383,7 @@ static void motion_effect_cases(void)
     expect("motion: will-change: opacity stacks it",
            w != NULL && w->stacked && w->style->animating == 0, NULL);
     MotionGroups seen = {{NULL}, 0};
-    flow_visitor_t v = {motion_group_visit, motion_group_open, NULL, &seen, NULL};
+    flow_visitor_t v = {motion_group_visit, motion_group_open, NULL, &seen, NULL, NULL};
     flow_visit_groups(m.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}, &v);
     bool g1_open = false, w_open = false;
     for (int32_t i = 0; i < seen.n; i++) {
@@ -1457,7 +1478,7 @@ static void timed(FAnimation *an, const char *name, double ms)
 // When an animation that holds still ends: its start, told by its record.
 static double motion_end(FAnimation *an, double now)
 {
-    FMotion alone = {.anims = an, .nanims = 1};
+    FMotion alone = {.anims = an, .nanims = 1, .ncss = 1};
     return layout_next(&alone, now, NULL);
 }
 
@@ -1474,7 +1495,7 @@ static bool timeline_layout(flow_timeline_t **shown, double now, bool complete, 
     flow_timeline_t *t = f_timeline_begin(*shown);
     bool ok = t != NULL;
     for (int i = 0; ok && i < count; i++)
-        ok = f_timeline_element(t, meets[i].n, meets[i].m, now);
+        ok = f_timeline_element(t, meets[i].n, GARB_PSEUDO_NONE, meets[i].m, now);
     if (!ok || !f_timeline_end(t, complete)) {
         flow_timeline_free(t);
         return false;
@@ -1538,8 +1559,8 @@ static void motion_timeline_cases(void)
     memset(an, 0, sizeof(an));
     for (int i = 0; i < 2; i++)
         timed(&an[i], "a", 10000);
-    FMotion one = {.anims = an, .nanims = 1};
-    FMotion two = {.anims = an, .nanims = 2};
+    FMotion one = {.anims = an, .nanims = 1, .ncss = 1};
+    FMotion two = {.anims = an, .nanims = 2, .ncss = 2};
     bool ok = timeline_layout(&tl, 1000, true, 1, (Meet[]){{x, &one}}) &&
               timeline_layout(&tl, 2000, true, 1, (Meet[]){{x, &two}});
     expect("motion: a to a, a keeps a as the second",
@@ -1557,7 +1578,7 @@ static void motion_timeline_cases(void)
     FAnimation g;
     memset(&g, 0, sizeof(g));
     timed(&g, "g", 10000);
-    FMotion gm = {.anims = &g, .nanims = 1};
+    FMotion gm = {.anims = &g, .nanims = 1, .ncss = 1};
     flow_timeline_t *gt = flow_timeline_new(doc);
     ok = timeline_layout(&gt, 20000, true, 1, (Meet[]){{z, &gm}});
     flow_timeline_t *short_of = f_timeline_begin(gt);
@@ -1580,12 +1601,12 @@ static void motion_timeline_cases(void)
     memset(ua, 0, sizeof(ua));
     timed(&ua[0], "r", 1000);
     timed(&ua[1], "s", 1000);
-    FMotion uone = {.anims = ua, .nanims = 1}, utwo = {.anims = ua, .nanims = 2};
+    FMotion uone = {.anims = ua, .nanims = 1, .ncss = 1}, utwo = {.anims = ua, .nanims = 2, .ncss = 2};
     flow_timeline_t *ut = flow_timeline_new(doc);
     ok = timeline_layout(&ut, 40000, true, 1, (Meet[]){{z, &uone}});
     ua[0].timing.paused = true;
     flow_timeline_t *unshown = f_timeline_begin(ut);
-    ok = ok && unshown != NULL && f_timeline_element(unshown, z, &utwo, 40500) &&
+    ok = ok && unshown != NULL && f_timeline_element(unshown, z, GARB_PSEUDO_NONE, &utwo, 40500) &&
          f_timeline_end(unshown, false);
     flow_timeline_free(unshown);
     ua[0].timing.paused = false;
@@ -1601,7 +1622,7 @@ static void motion_timeline_cases(void)
     memset(&p, 0, sizeof(p));
     timed(&p, "p", 1000);
     p.timing.paused = true;
-    FMotion paused = {.anims = &p, .nanims = 1};
+    FMotion paused = {.anims = &p, .nanims = 1, .ncss = 1};
     ok = timeline_layout(&tl, 5000, true, 1, (Meet[]){{y, &paused}});
     expect("motion: paused, nothing is due", ok && isinf(layout_next(&paused, 5000, NULL)), NULL);
     p.timing.paused = false;
@@ -1614,7 +1635,7 @@ static void motion_timeline_cases(void)
     FAnimation r;
     memset(&r, 0, sizeof(r));
     timed(&r, "r", 1000);
-    FMotion running = {.anims = &r, .nanims = 1};
+    FMotion running = {.anims = &r, .nanims = 1, .ncss = 1};
     ok = timeline_layout(&tl, 11000, true, 1, (Meet[]){{y, &running}});
     r.timing.paused = true;
     ok = ok && timeline_layout(&tl, 11300, true, 1, (Meet[]){{y, &running}});
@@ -1633,8 +1654,8 @@ static void motion_timeline_cases(void)
     memset(two_names, 0, sizeof(two_names));
     timed(&two_names[0], "a", 10000);
     timed(&two_names[1], "b", 10000);
-    FMotion just_a = {.anims = two_names, .nanims = 1};
-    FMotion a_and_b = {.anims = two_names, .nanims = 2};
+    FMotion just_a = {.anims = two_names, .nanims = 1, .ncss = 1};
+    FMotion a_and_b = {.anims = two_names, .nanims = 2, .ncss = 2};
     ok = timeline_layout(&tl, 15000, true, 1, (Meet[]){{x, &just_a}}) &&
          timeline_layout(&tl, 16000, false, 1, (Meet[]){{x, &a_and_b}});
     int32_t carried_on = f_timeline_records(tl);
@@ -1649,13 +1670,13 @@ static void motion_timeline_cases(void)
     FAnimation u;
     memset(&u, 0, sizeof(u));
     timed(&u, "u", 1000);
-    FMotion pausing = {.anims = &u, .nanims = 1};
+    FMotion pausing = {.anims = &u, .nanims = 1, .ncss = 1};
     ok = timeline_layout(&tl, 18000, true, 2, (Meet[]){{y, &pausing}, {x, &just_a}});
     int32_t kept_records = f_timeline_records(tl), kept_elements = f_timeline_elements(tl);
     u.timing.paused = true;
     flow_timeline_t *failed = f_timeline_begin(tl);
-    ok = ok && failed != NULL && f_timeline_element(failed, y, &pausing, 18200) &&
-         f_timeline_element(failed, x, &a_and_b, 18200) && f_timeline_element(failed, z, &one, 18200);
+    ok = ok && failed != NULL && f_timeline_element(failed, y, GARB_PSEUDO_NONE, &pausing, 18200) &&
+         f_timeline_element(failed, x, GARB_PSEUDO_NONE, &a_and_b, 18200) && f_timeline_element(failed, z, GARB_PSEUDO_NONE, &one, 18200);
     bool grew = f_timeline_records(failed) == kept_records + 2;
     flow_timeline_free(failed);
     u.timing.paused = false;
@@ -1678,15 +1699,15 @@ static void motion_timeline_cases(void)
     FAnimation *many = calloc(kMany, sizeof(*many));
     for (int i = 0; i < kMany; i++)
         timed(&many[i], i % 2 ? "b" : "a", 100000);
-    FMotion first = {.anims = many, .nanims = kMany / 2};
-    FMotion lots = {.anims = many, .nanims = kMany};
+    FMotion first = {.anims = many, .nanims = kMany / 2, .ncss = kMany / 2};
+    FMotion lots = {.anims = many, .nanims = kMany, .ncss = kMany};
     flow_timeline_t *mt = flow_timeline_new(doc);
     ok = timeline_layout(&mt, 20000, true, 1, (Meet[]){{x, &first}}) &&
          timeline_layout(&mt, 21000, true, 1, (Meet[]){{x, &lots}});
     bool kept = ok && f_timeline_records(mt) == kMany;
     for (int i = 0; kept && i < kMany; i++)
         kept = motion_end(&many[i], 21000) == (i < kMany / 2 ? 121000 : 120000);
-    FMotion half = {.anims = many + kMany / 2, .nanims = kMany / 2};
+    FMotion half = {.anims = many + kMany / 2, .nanims = kMany / 2, .ncss = kMany / 2};
     ok = ok && timeline_layout(&mt, 22000, true, 1, (Meet[]){{x, &half}});
     for (int i = 0; kept && i < kMany / 2; i++)
         kept = motion_end(&many[kMany / 2 + i], 22000) == 120000;
@@ -2075,15 +2096,15 @@ static void motion_due_cases(void)
     }
     static const struct {
         const char *name;
-        flow_easing_t e;
+        garb_easing_t e;
         double over;
     } kOvershoot[] = {
-        {"overshoot: none for linear", {FLOW_EASE_LINEAR, {0}, 0, FLOW_JUMP_END, false}, 0},
-        {"overshoot: none for steps", {FLOW_EASE_STEPS, {0.5, 3, 0.5, -2}, 2, FLOW_JUMP_END, false}, 0},
-        {"overshoot: none for a curve that stays inside", {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, FLOW_JUMP_END, true}, 0},
-        {"overshoot: past 1 by the higher control point", {FLOW_EASE_CUBIC, {0.1, 1.2, 0.2, 1.6}, 0, FLOW_JUMP_END, false}, 0.6},
-        {"overshoot: below 0 by the lower control point", {FLOW_EASE_CUBIC, {0.1, -0.7, 0.2, -0.2}, 0, FLOW_JUMP_END, false}, 0.7},
-        {"overshoot: the farther of the two sides", {FLOW_EASE_CUBIC, {0.1, -0.3, 0.2, 1.2}, 0, FLOW_JUMP_END, false}, 0.3},
+        {"overshoot: none for linear", {GARB_EASE_LINEAR, {0}, 0, GARB_JUMP_END, false}, 0},
+        {"overshoot: none for steps", {GARB_EASE_STEPS, {0.5, 3, 0.5, -2}, 2, GARB_JUMP_END, false}, 0},
+        {"overshoot: none for a curve that stays inside", {GARB_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, GARB_JUMP_END, true}, 0},
+        {"overshoot: past 1 by the higher control point", {GARB_EASE_CUBIC, {0.1, 1.2, 0.2, 1.6}, 0, GARB_JUMP_END, false}, 0.6},
+        {"overshoot: below 0 by the lower control point", {GARB_EASE_CUBIC, {0.1, -0.7, 0.2, -0.2}, 0, GARB_JUMP_END, false}, 0.7},
+        {"overshoot: the farther of the two sides", {GARB_EASE_CUBIC, {0.1, -0.3, 0.2, 1.2}, 0, GARB_JUMP_END, false}, 0.3},
     };
     for (size_t i = 0; i < sizeof(kOvershoot) / sizeof(*kOvershoot); i++) {
         double got = f_easing_overshoot(&kOvershoot[i].e);
@@ -2567,27 +2588,27 @@ static int fuzz_below(FuzzRng *r, int n)
     return k < n ? k : n - 1;
 }
 
-static flow_easing_t fuzz_easing(FuzzRng *r)
+static garb_easing_t fuzz_easing(FuzzRng *r)
 {
     // Ten, the last two the domain's limit, which a page's 1e308 is held
     // at: kFuzzRegressions' seeds were found against a table this long.
     static const double kY[] = {-1, -0.5, 0, 0.25, 0.5, 1, 1.5, 2, GARB_EASING_Y_MAX,
                                 -GARB_EASING_Y_MAX};
-    flow_easing_t e;
+    garb_easing_t e;
     memset(&e, 0, sizeof(e));
     switch (fuzz_below(r, 4)) {
     case 0:
-        e.kind = FLOW_EASE_LINEAR;
+        e.kind = GARB_EASE_LINEAR;
         break;
     case 1:
-        e.kind = FLOW_EASE_STEPS;
-        e.jump = (flow_jump_t)fuzz_below(r, 4);
+        e.kind = GARB_EASE_STEPS;
+        e.jump = (garb_jump_t)fuzz_below(r, 4);
         e.steps = 1 + fuzz_below(r, 5);
-        if (e.jump == FLOW_JUMP_NONE && e.steps < 2)
+        if (e.jump == GARB_JUMP_NONE && e.steps < 2)
             e.steps = 2;
         break;
     default:
-        e.kind = FLOW_EASE_CUBIC;
+        e.kind = GARB_EASE_CUBIC;
         e.p[0] = fuzz_unit(r);
         e.p[2] = fuzz_unit(r);
         e.p[1] = kY[fuzz_below(r, 10)];
@@ -2642,8 +2663,8 @@ static bool fuzz_animation(FuzzRng *r, int kind, const flow_style_t *base, const
     an->timing.duration_ms = fuzz_below(r, 20) == 0 ? 0 : 100 + fuzz_below(r, 900);
     an->timing.delay_ms = (fuzz_below(r, 1600) - 800) + (fuzz_below(r, 2) ? 0.5 : 0);
     an->timing.iterations = kIterations[fuzz_below(r, 7)];
-    an->timing.direction = (flow_direction_t)fuzz_below(r, 4);
-    an->timing.fill = (flow_fill_t)fuzz_below(r, 4);
+    an->timing.direction = (garb_direction_t)fuzz_below(r, 4);
+    an->timing.fill = (garb_fill_t)fuzz_below(r, 4);
     an->timing.easing = fuzz_easing(r);
     int nk = 1 + fuzz_below(r, FUZZ_FRAMES);
     double offsets[FUZZ_FRAMES];
@@ -2766,6 +2787,7 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
     m.base = base;
     m.anims = an;
     m.nanims = nanims;
+    m.ncss = m.nanims;
     bool ok;
     flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
     int horizon = 200;
@@ -2815,14 +2837,14 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
         fprintf(stderr, "  base %u\n", fuzz_get(&base, kind));
         for (int a = 0; a < nanims; a++) {
             const flow_animation_t *tm = &an[a].timing;
-            const flow_easing_t *ae = &tm->easing;
+            const garb_easing_t *ae = &tm->easing;
             fprintf(stderr, "  %s: dur %g delay %g iter %g dir %d fill %d easing %d [%g %g %g %g] "
                     "steps %d jump %d\n", tm->name.text, tm->duration_ms, tm->delay_ms, tm->iterations,
                     tm->direction, tm->fill, ae->kind, ae->p[0], ae->p[1], ae->p[2], ae->p[3], ae->steps,
                     ae->jump);
             for (int j = 0; j < an[a].nframes; j++) {
                 const FKeyframe *f = &an[a].frames[j];
-                const flow_easing_t *fe = &f->easing;
+                const garb_easing_t *fe = &f->easing;
                 fprintf(stderr, "    frame %g: %u", f->offset, fuzz_get(&hands[a][j].r.style, kind));
                 if (f->has_easing)
                     fprintf(stderr, " easing %d [%g %g %g %g] steps %d jump %d", fe->kind, fe->p[0],
@@ -2935,6 +2957,7 @@ static void motion_list_case_cases(void)
     m.base = base;
     m.anims = an;
     m.nanims = nanims;
+    m.ncss = m.nanims;
     bool ok;
     flow_timeline_t *tl = motion_meet(lm.p.doc, motion_find(lm.p.doc->document, "v0"), &m, 0, &ok);
     Hand *const by[2] = {hands[0], hands[1]};
@@ -3135,6 +3158,7 @@ static void motion_dropped_cases(void)
     m.base = base;
     m.anims = &an;
     m.nanims = 1;
+    m.ncss = m.nanims;
     bool ok;
     flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
     Hand *const by[1] = {hands};
@@ -3387,7 +3411,8 @@ static void motion_incomplete_cases(void)
 // is asked at: transforms in percentages and `em`, lists that pair and
 // lists mixed as matrices, an origin and the individual three, opacity over
 // a value underneath and in steps, colours with currentColor at one end,
-// background positions of 2 and 3 items mixed to 6, shadows in
+// background positions of 2 and 3 items mixed to 6, a mask's positions
+// the same, both sizes, shadows in
 // currentColor, a hold between equal keyframes, an element inside a
 // turned one, and an inline-block turning on its line, whose frame is its
 // atom's. `w`, last on the page, moves by layouts.
@@ -3401,6 +3426,9 @@ static const char kTickPage[] = MOTION_STYLE
     "@keyframes hue{from{background-color:red;border-color:currentColor}"
     "to{background-color:rgba(0,0,255,.5);border-color:green}}"
     "@keyframes pos{from{background-position:0 0,10px 20%}to{background-position:50% 3em,1px 2px,30% 40%}}"
+    "@keyframes mpos{from{mask-position:0 0,10px 20%}to{-webkit-mask-position:50% 3em,1px 2px,30% 40%}}"
+    "@keyframes msize{from{mask-size:10px auto,20% 30%}to{mask-size:40px auto,1em 2px}}"
+    "@keyframes bsize{from{background-size:auto 10px}to{background-size:auto 3em,auto 40px}}"
     "@keyframes glow{from{box-shadow:0 0 0 red}"
     "to{box-shadow:5px 5px 10px 2px currentColor,inset 0 0 4px blue}}"
     "@keyframes origin{from{transform-origin:0 0}"
@@ -3412,8 +3440,9 @@ static const char kTickPage[] = MOTION_STYLE
     "#c{opacity:.3;animation:fade 700ms steps(4) infinite,over 900ms infinite}"
     "#d{color:orange;border:3px solid;animation:hue 1.1s cubic-bezier(.3,1.6,.6,-.4) infinite}"
     "#e{background-image:linear-gradient(red,blue),linear-gradient(green,white);"
-    "animation:pos 1.7s infinite}"
+    "animation:pos 1.7s infinite,bsize 1.1s infinite}"
     "#f{color:teal;animation:glow 1s infinite reverse}"
+    "#m{mask-image:linear-gradient(red,blue),radial-gradient(red,#0000);animation:mpos 1.3s infinite,msize .9s infinite}"
     "#g{font-size:12px;animation:origin 1.5s infinite}"
     "#h{animation:hold 1s ease infinite}"
     "#wrap{transform:rotate(10deg)}"
@@ -3421,13 +3450,30 @@ static const char kTickPage[] = MOTION_STYLE
     "#ib{display:inline-block;width:60px;animation:spin 1.1s linear infinite}"
     "#w{animation:wide 1s linear infinite}"
     "</style><div id=a></div><div id=b></div><div id=c></div><div id=d></div><div id=e></div>"
-    "<div id=f></div><div id=g></div><div id=h></div><div id=wrap><div id=in></div></div>"
+    "<div id=f></div><div id=m></div><div id=g></div><div id=h></div><div id=wrap><div id=in></div></div>"
     "<p>an <span id=ib>atom</span> on its line</p><div id=w></div>";
-static const char *const kTickIds[] = {"a", "b", "c", "d", "e", "f", "g", "h", "in", "ib"};
+static const char *const kTickIds[] = {"a", "b", "c", "d", "e", "f", "m", "g", "h", "in", "ib"};
 
 static const flow_frame_t *own_frame(const flow_box_t *b)
 {
     return b->frame != NULL && b->frame->box == b && b->frame->kind == F_FRAME_TRANSFORM ? b->frame : NULL;
+}
+
+// Whether two size lists are one, field by field.
+static bool sizes_same(const flow_backgrounds_t *x, const flow_backgrounds_t *y)
+{
+    if (x->nsize != y->nsize)
+        return false;
+    for (int32_t i = 0; i < x->nsize; i++) {
+        const flow_bg_size_t *p = &x->size[i], *q = &y->size[i];
+        if (p->fit != q->fit)
+            return false;
+        for (int k = 0; k < 2; k++)
+            if (p->size[k].kind != q->size[k].kind || p->size[k].value != q->size[k].value ||
+                p->size[k].offset != q->size[k].offset)
+                return false;
+    }
+    return true;
 }
 
 // What first differs between two styles in the tick set, to the bit, or
@@ -3450,6 +3496,16 @@ static const char *tick_differs(const flow_style_t *a, const flow_style_t *b)
         (x->nx > 0 && memcmp(x->x, y->x, (size_t)x->nx * sizeof(*x->x)) != 0) ||
         (x->ny > 0 && memcmp(x->y, y->y, (size_t)x->ny * sizeof(*x->y)) != 0))
         return "the background's position";
+    x = &a->masks.layers;
+    y = &b->masks.layers;
+    if (x->nx != y->nx || x->ny != y->ny ||
+        (x->nx > 0 && memcmp(x->x, y->x, (size_t)x->nx * sizeof(*x->x)) != 0) ||
+        (x->ny > 0 && memcmp(x->y, y->y, (size_t)x->ny * sizeof(*x->y)) != 0))
+        return "the mask's position";
+    if (!sizes_same(&a->backgrounds, &b->backgrounds))
+        return "the background's size";
+    if (!sizes_same(&a->masks.layers, &b->masks.layers))
+        return "the mask's size";
     if (a->nbox_shadows != b->nbox_shadows ||
         (a->nbox_shadows > 0 &&
          memcmp(a->box_shadows, b->box_shadows, (size_t)a->nbox_shadows * sizeof(*a->box_shadows)) != 0))
@@ -3564,14 +3620,39 @@ static void motion_tick_condition_cases(void)
          't'},
         {"every property of the tick set ticks together",
          "@keyframes k{to{transform:scale(2);translate:1px;rotate:5deg;scale:2;transform-origin:0 0;"
-         "opacity:.5;background-color:red;background-position:1px 2px;border-color:blue;"
-         "box-shadow:1px 1px red}}#x{animation:k 1s infinite}",
+         "opacity:.5;background-color:red;background-position:1px 2px;background-size:5px 6px;"
+         "mask-position:3px 4px;mask-size:7px 8px;border-color:blue;box-shadow:1px 1px red}}"
+         "#x{mask-image:linear-gradient(red,red);animation:k 1s infinite}",
          "<div id=x></div>", true, 't'},
         {"a face that does not tick lays it out",
          "@keyframes k{to{transform:rotate(90deg)}}#x{animation:k 1s infinite}", "<div id=x></div>", false,
          'l'},
         {"a width is laid out",
          "@keyframes k{to{width:10px}}#x{animation:k 1s infinite}", "<div id=x></div>", true, 'l'},
+        {"a mask's position ticks",
+         "@keyframes k{to{mask-position:10px 50%}}"
+         "#x{mask-image:linear-gradient(red,red);animation:k 1s infinite}",
+         "<div id=x></div>", true, 't'},
+        {"a mask's size ticks",
+         "@keyframes k{to{mask-size:10px}}"
+         "#x{mask-image:linear-gradient(red,red);animation:k 1s infinite}",
+         "<div id=x></div>", true, 't'},
+        {"a background's size ticks",
+         "@keyframes k{to{background-size:10px 20%}}"
+         "#x{background-image:linear-gradient(red,blue);animation:k 1s infinite}",
+         "<div id=x></div>", true, 't'},
+        {"a picture's size is laid out: how big a copy is kept follows a layout",
+         "@keyframes k{to{background-size:300%}}"
+         "#x{background-image:linear-gradient(red,blue),url(p.png);animation:k 1s infinite}",
+         "<div id=x></div>", true, 'l'},
+        {"a mask picture's size is laid out",
+         "@keyframes k{to{mask-size:300%}}"
+         "#x{mask-image:url(m.png);animation:k 1s infinite}",
+         "<div id=x></div>", true, 'l'},
+        {"a background's position over a picture still ticks",
+         "@keyframes k{to{background-position:10px 0}}"
+         "#x{background-image:url(p.png);animation:k 1s infinite}",
+         "<div id=x></div>", true, 't'},
         {"a colour is laid out, inherited",
          "@keyframes k{to{color:red;transform:none}}#x{animation:k 1s infinite}", "<div id=x></div>", true,
          'l'},
@@ -3766,6 +3847,55 @@ static void motion_tick_mark_cases(void)
     (void)flow_motion_tick(m.tree, 500, o, NULL, NULL, &moved);
     expect("tick marks: a tick of colours moves no frame", !moved, NULL);
     moving_close(&m);
+    // The canvas's possible owner is marked though its box reaches
+    // nothing: a body whose content is all positioned out of it.
+    static const char kEmptyBody[] = MOTION_STYLE
+        "@keyframes z{from{background-size:100% 100%}to{background-size:50% 50%}}"
+        "body{margin:0;background-image:linear-gradient(red,blue);animation:z 1s infinite}"
+        "#f{position:fixed;left:0;top:0;width:50px;height:50px}"
+        "</style><div id=f></div>";
+    moving_open_for(&m, kEmptyBody, 0, true);
+    TickMarks e = {.n = 0};
+    (void)flow_motion_tick(m.tree, 500, o, tick_mark, &e, NULL);
+    const flow_box_t *body = NULL;
+    for (const flow_box_t *b = flow_root(m.tree) != NULL ? flow_root(m.tree)->first : NULL; b != NULL; b = b->next)
+        if (b->node != NULL && b->node->kind == OS64_HTML_ELEMENT && b->node->tag == OS64_HTML_TAG_BODY)
+            body = b;
+    expect("tick marks: the body, empty, whose background the canvas may take",
+           body != NULL && marks_box(&e, body), NULL);
+    moving_close(&m);
+    // And so when that body is a group, whose bounds are empty too.
+    static const char kEmptyGroupBody[] = MOTION_STYLE
+        "@keyframes z{from{background-size:100% 100%}to{background-size:50% 50%}}"
+        "html{height:600px}"
+        "body{margin:0;opacity:.9;background-image:linear-gradient(red,blue);animation:z 1s infinite}"
+        "</style>";
+    moving_open_for(&m, kEmptyGroupBody, 0, true);
+    TickMarks eg = {.n = 0};
+    (void)flow_motion_tick(m.tree, 500, o, tick_mark, &eg, NULL);
+    body = NULL;
+    for (const flow_box_t *b = flow_root(m.tree) != NULL ? flow_root(m.tree)->first : NULL; b != NULL; b = b->next)
+        if (b->node != NULL && b->node->kind == OS64_HTML_ELEMENT && b->node->tag == OS64_HTML_TAG_BODY)
+            body = b;
+    expect("tick marks: the body, empty and a group, whose background the canvas may take",
+           body != NULL && marks_box(&eg, body), NULL);
+    moving_close(&m);
+    // And so when that group is filtered, whose layer marks nothing.
+    static const char kEmptyFilteredBody[] = MOTION_STYLE
+        "@keyframes z{from{background-size:100% 100%}to{background-size:50% 50%}}"
+        "html{height:600px}"
+        "body{margin:0;filter:brightness(.9);background-image:linear-gradient(red,blue);"
+        "animation:z 1s infinite}</style>";
+    moving_open_for(&m, kEmptyFilteredBody, 0, true);
+    TickMarks ef = {.n = 0};
+    (void)flow_motion_tick(m.tree, 500, o, tick_mark, &ef, NULL);
+    body = NULL;
+    for (const flow_box_t *b = flow_root(m.tree) != NULL ? flow_root(m.tree)->first : NULL; b != NULL; b = b->next)
+        if (b->node != NULL && b->node->kind == OS64_HTML_ELEMENT && b->node->tag == OS64_HTML_TAG_BODY)
+            body = b;
+    expect("tick marks: the body, empty and filtered, whose background the canvas may take",
+           body != NULL && marks_box(&ef, body), NULL);
+    moving_close(&m);
 }
 
 // The page laid out again at `now` beside the tree on screen, not shown:
@@ -3881,9 +4011,13 @@ static void motion_layout_part_cases(void)
         {"layout parts: none for an element with no box of its own around a bare text",
          "@keyframes a{to{color:red}}",
          "<div id=x style='display:contents;animation:a 1s linear'>x</div>", "x", false, false, FLOW_PARTS_NO_BOX},
-        {"layout parts: an element inside a button, which its widget draws instead, has nothing to mark",
+        {"layout parts: an element inside a select, which its widget draws instead, has nothing to mark",
          "@keyframes a{to{transform:rotate(90deg)}}",
-         "<button><span id=x style='display:block;animation:a 1s linear'>x</span></button>", "x", true, false,
+         "<select><option id=x style='display:block;animation:a 1s linear'>x</option></select>", "x", true, false,
+         FLOW_PARTS_MARKED},
+        {"layout parts: an element inside a button the page draws marks as any element's",
+         "@keyframes a{to{transform:rotate(90deg)}}",
+         "<button><span id=x style='display:block;animation:a 1s linear'>x</span></button>", "x", true, true,
          FLOW_PARTS_MARKED},
         {"layout parts: an element under display:none has nothing to mark", "@keyframes a{to{color:red}}",
          "<div style='display:none'><p id=x style='animation:a 1s linear'>x</p></div>", "x", true, false,
@@ -4394,6 +4528,7 @@ static void motion_entries_cases(void)
         {"one in view", "<span class=s></span>", 1, true, true, true},
         {"one below the view", "<div style='height:2000px'></div><span class=s></span>", 1, true, true, false},
         {"one display:none ends", "<div style='display:none'><span class=s></span></div>", 0, false, false, false},
+        {"one display:none itself ends", "<span class=s style='display:none'></span>", 0, false, false, false},
         {"one that is contents and holds nothing", "<span class=s style='display:contents'></span>", 1, false,
          false, false},
         {"one that is contents around a box", "<span class=s style='display:contents'><b>x</b></span>", 1, false,
@@ -4437,6 +4572,31 @@ static void motion_entries_cases(void)
                n == 1 && e.in_place && e.seen == !below && e.counted == !below, NULL);
         moving_close(&m);
     }
+    // A mask's position and size, and a background's size, repaint in
+    // place too (MASKS.md § 5): what a mask or a background paints is
+    // inside what its element already draws.
+    static const char *const kPlaced[][2] = {
+        {"mask-position:20px 0", "a mask's position"},
+        {"mask-size:4px 4px", "a mask's size"},
+        {"background-size:4px 4px", "a background's size"},
+    };
+    for (size_t k = 0; k < sizeof(kPlaced) / sizeof(kPlaced[0]); k++)
+        for (int below = 0; below < 2; below++) {
+            char html[1024], name[160];
+            snprintf(html, sizeof(html), MOTION_STYLE "@keyframes slide{to{%s}}"
+                     ".f{width:16px;height:16px;mask-image:linear-gradient(red,#0000);"
+                     "background-image:linear-gradient(red,blue);"
+                     "animation:slide 1s linear infinite}</style>%s<div class=f></div>",
+                     kPlaced[k][0], below ? "<div style='height:2000px'></div>" : "");
+            Moving m;
+            moving_open_for(&m, html, 100, false);
+            flow_motion_entry_t e;
+            int32_t n = flow_motion_entries(m.tree, kTickView, (flow_point_t){0, 0}, &e, 1);
+            snprintf(name, sizeof(name), "entries: %s %s", kPlaced[k][1],
+                     below ? "below the view is not counted" : "in view is counted");
+            expect(name, n == 1 && e.in_place && e.seen == !below && e.counted == !below, NULL);
+            moving_close(&m);
+        }
     // More than `cap`: the count is all of them, `out` holds the first.
     Moving m;
     moving_open_for(&m, MOTION_STYLE "@keyframes spin{to{transform:rotate(360deg)}}"
@@ -4449,8 +4609,83 @@ static void motion_entries_cases(void)
     moving_close(&m);
 }
 
+// What a tick stamps in boxes' `drawn` (flow_box_t.drawn; PILE3.md §
+// Transforms, the painter: Kept drawings): a box whose own drawn value
+// changed, and every box it is inside; a turn or a fade alone stamps only
+// the boxes it is inside, since it says only how its group is laid.
+static void motion_drawn_cases(void)
+{
+#define DRAWN_PAGE(rules) MOTION_STYLE                                                   \
+    "@keyframes spin{to{transform:rotate(360deg)}}"                                      \
+    "@keyframes tint{from{background-color:#f00}to{background-color:#00f}}"              \
+    "@keyframes fade{from{opacity:.2}to{opacity:1}}" rules                               \
+    "</style><div id=p><div id=t><div id=c></div></div></div>"
+    static const char *const kPages[] = {
+        DRAWN_PAGE("#t{animation:spin 1s linear infinite}"),
+        DRAWN_PAGE("#t{animation:spin 1s linear infinite}#c{animation:tint 1s linear infinite}"),
+        DRAWN_PAGE("#t{animation:fade 1s linear infinite}"),
+        DRAWN_PAGE("#t{animation:tint 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes go{to{translate:30px 10px}}#t{animation:go 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes turn{to{rotate:90deg}}#t{animation:turn 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes grow{to{scale:2}}#t{animation:grow 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes pivot{to{transform-origin:0 0}}"
+                   "#t{transform:rotate(30deg);animation:pivot 1s linear infinite}"),
+    };
+#undef DRAWN_PAGE
+    // What each page's tick stamps: p, t and c, own (1) or not (0).
+    static const int kStamped[8][3] = {{1, 0, 0}, {1, 1, 1}, {1, 0, 0}, {1, 1, 0},
+                                       {1, 0, 0}, {1, 0, 0}, {1, 0, 0}, {1, 0, 0}};
+    static const char *const kWhat[8] = {
+        "drawn: a turn stamps the boxes it is inside, not itself or what it holds",
+        "drawn: a colour inside a turn stamps it, the turn and the box around, alike",
+        "drawn: a fade stamps the boxes it is inside, not itself",
+        "drawn: a box's own colour stamps it and the boxes it is inside, not its child",
+        "drawn: `translate` stamps the boxes it is inside, not itself",
+        "drawn: `rotate` stamps the boxes it is inside, not itself",
+        "drawn: `scale` stamps the boxes it is inside, not itself",
+        "drawn: `transform-origin` stamps the boxes it is inside, not itself",
+    };
+    const flow_point_t o = {0, 0};
+    uint64_t serials[8];
+    for (int i = 0; i < 8; i++) {
+        Moving m;
+        moving_open_for(&m, kPages[i], 0, true);
+        serials[i] = flow_tree_serial(m.tree);
+        const flow_box_t *b[3] = {moving_box(&m, "p"), moving_box(&m, "t"), moving_box(&m, "c")};
+        bool laid = b[0] != NULL && b[1] != NULL && b[2] != NULL && b[0]->drawn == 0 &&
+                    b[1]->drawn == 0 && b[2]->drawn == 0;
+        bool taken = flow_motion_tick(m.tree, 100, o, NULL, NULL, NULL);
+        bool as[3];
+        uint64_t stamp = laid ? b[0]->drawn : 0;
+        for (int k = 0; k < 3; k++)
+            as[k] = laid && (kStamped[i][k] ? b[k]->drawn == stamp && stamp != 0 : b[k]->drawn == 0);
+        char why[96];
+        snprintf(why, sizeof(why), "laid %d taken %d p %llu t %llu c %llu", laid, taken,
+                 laid ? (unsigned long long)b[0]->drawn : 0, laid ? (unsigned long long)b[1]->drawn : 0,
+                 laid ? (unsigned long long)b[2]->drawn : 0);
+        expect(kWhat[i], laid && taken && as[0] && as[1] && as[2], why);
+        if (i == 0 && laid) {
+            // Each tick that changes something stamps later; one that
+            // changes nothing stamps nothing.
+            (void)flow_motion_tick(m.tree, 200, o, NULL, NULL, NULL);
+            uint64_t later = b[0]->drawn;
+            (void)flow_motion_tick(m.tree, 200, o, NULL, NULL, NULL);
+            expect("drawn: a later tick stamps later, and one that changes nothing, nothing",
+                   later > stamp && b[0]->drawn == later && b[1]->drawn == 0, NULL);
+            expect("drawn: the boxes the box around is inside are stamped too",
+                   b[0]->parent != NULL && b[0]->parent->drawn == later, NULL);
+        }
+        moving_close(&m);
+    }
+    expect("drawn: every tree has a serial of its own",
+           serials[0] != 0 && serials[1] != serials[0] && serials[2] != serials[1] &&
+               serials[3] != serials[2] && serials[3] != serials[0] && flow_tree_serial(NULL) == 0,
+           NULL);
+}
+
 static void motion_tick_cases(void)
 {
+    motion_drawn_cases();
     motion_entries_cases();
     motion_tick_layout_cases();
     motion_tick_condition_cases();
@@ -4538,14 +4773,247 @@ static void motion_batch_a_cases(void)
                     0, true);
     bool ticked = flow_motion_tick(m.tree, 500, (flow_point_t){0, 0}, NULL, NULL, NULL);
     int32_t rings = 0;
-    flow_visitor_t vis = {motion_no_visit, NULL, NULL, &rings, motion_count_ring};
+    flow_visitor_t vis = {motion_no_visit, NULL, NULL, &rings, motion_count_ring, NULL};
     flow_visit_groups(m.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}, &vis);
     expect("tick: an outline below a ticked shadow is still painted", ticked && rings == 1, NULL);
     moving_close(&m);
 }
 
+// `style` as element `id`'s style attribute, the cascade brought up to
+// date, or built again where it refuses an update (garb_cascade_update:
+// an arena renewed, say), the tree that may borrow from it freed first.
+static void moving_restyle(Moving *m, const char *id, const char *style)
+{
+    os64_html_set_attr(m->p.doc, (os64_html_node_t *)motion_find(m->p.doc->document, id), "style", style,
+                       strlen(style));
+    if (garb_cascade_update(m->p.cascade))
+        return;
+    garb_sheet_in_t sheets[16];
+    for (int32_t i = 0; i < m->p.n; i++)
+        sheets[i] = (garb_sheet_in_t){.sheet = &m->p.sheets[i]};
+    garb_cascade_t *fresh = garb_cascade(sheets, m->p.n, m->p.doc, garb_cascade_env(m->p.cascade));
+    flow_free(m->tree);
+    m->tree = NULL;
+    garb_cascade_free(m->p.cascade);
+    m->p.cascade = fresh;
+    m->p.env.cascade = fresh;
+}
+
+// The timeline as a script's CSSAnimation reads and drives it
+// (flow_timeline_at, flow_timeline_drive): ids the same through layouts,
+// the timing as the style gave it, animation-play-state moving the clock
+// of an animation no script drives and only reported for one a script
+// does, and a driven clock paused, running at another rate either way,
+// and canceled.
+static void motion_css_api_cases(void)
+{
+    Moving m;
+    moving_open(&m, "<!doctype html><style>@keyframes slide{to{margin-left:100px}}"
+                    "#a{animation:slide 1s linear}#b{animation:slide 2s 0.5s 3 alternate both paused}</style>"
+                    "<div id=a>a</div><div id=b>b</div>", 1000);
+    flow_css_animation_t a, b;
+    bool both = flow_timeline_size(m.tl) == 2 && flow_timeline_at(m.tl, 0, &a) && flow_timeline_at(m.tl, 1, &b);
+    expect("css api: each running animation is listed, in order", both, NULL);
+    expect("css api: the first, as its style gave it",
+           both && a.node == motion_find(m.p.doc->document, "a") && a.name_len == 5 && memcmp(a.name, "slide", 5) == 0 &&
+               a.place == 0 && a.clock.start_ms == 1000 && a.clock.rate == 1 && !a.clock.paused &&
+               !a.clock.canceled && !a.style_paused && !a.scripted && a.duration_ms == 1000 && a.iterations == 1,
+           NULL);
+    expect("css api: the second, paused, with its timing",
+           both && b.clock.paused && b.style_paused && b.duration_ms == 2000 && b.delay_ms == 500 &&
+               b.iterations == 3 && b.direction == GARB_DIRECTION_ALTERNATE && b.fill == GARB_FILL_BOTH, NULL);
+    expect("css api: ids are their own", both && a.id != 0 && b.id != 0 && a.id != b.id, NULL);
+    uint64_t ida = a.id, idb = b.id;
+    moving_again(&m, 1500);
+    expect("css api: an id lives through a layout",
+           flow_timeline_at(m.tl, 0, &a) && flow_timeline_at(m.tl, 1, &b) && a.id == ida && b.id == idb, NULL);
+    flow_css_clock_t held = {.paused = true, .hold_ms = 600, .rate = 1};
+    expect("css api: a script drives an id", flow_timeline_drive(m.tl, ida, &held), NULL);
+    moving_again(&m, 2000);
+    const flow_style_t *st = moving_style(&m, "a");
+    expect("css api: a driven clock holds through a layout",
+           flow_timeline_at(m.tl, 0, &a) && a.scripted && a.clock.paused && a.clock.hold_ms == 600 && st != NULL &&
+               st->margin[FLOW_LEFT].value == 60 * 64, NULL);
+    // animation-play-state changes: reported, the driven clock left alone.
+    moving_restyle(&m, "a", "animation-play-state:paused");
+    moving_again(&m, 2100);
+    moving_restyle(&m, "a", "animation-play-state:running");
+    moving_again(&m, 2200);
+    expect("css api: a driven clock is left alone by animation-play-state, which is reported",
+           flow_timeline_at(m.tl, 0, &a) && a.id == ida && a.clock.paused && a.clock.hold_ms == 600 &&
+               !a.style_paused, NULL);
+    moving_restyle(&m, "b", "animation-play-state:running");
+    moving_again(&m, 2300);
+    expect("css api: animation-play-state moves the clock no script drives",
+           flow_timeline_at(m.tl, 1, &b) && b.id == idb && !b.clock.paused && !b.style_paused &&
+               b.clock.start_ms == 2300, NULL);
+    // Twice as fast from local time 0 at 2100: 400 at 2300.
+    flow_css_clock_t fast = {.start_ms = 2100, .rate = 2};
+    expect("css api: a driven clock runs at its rate", flow_timeline_drive(m.tl, ida, &fast), NULL);
+    moving_again(&m, 2300);
+    st = moving_style(&m, "a");
+    expect("css api: at its rate", st != NULL && st->margin[FLOW_LEFT].value == 40 * 64, NULL);
+    os64_gui_rect_t view = {0, 0, 800, 600};
+    expect("css api: a clock at another rate is due at once",
+           flow_motion_due(m.tree, view, (flow_point_t){0, 0}) <= 2300, NULL);
+    // Backwards, local time 1000 at 2300: 800 at 2500.
+    flow_css_clock_t back = {.start_ms = 3300, .rate = -1};
+    expect("css api: a driven clock runs backwards", flow_timeline_drive(m.tl, ida, &back), NULL);
+    moving_again(&m, 2500);
+    st = moving_style(&m, "a");
+    expect("css api: backwards", st != NULL && st->margin[FLOW_LEFT].value == 80 * 64, NULL);
+    expect("css api: a clock running backwards is due at once",
+           flow_motion_due(m.tree, view, (flow_point_t){0, 0}) <= 2500, NULL);
+    // Backwards at its end, local time 1000: on its active side, drawn.
+    flow_css_clock_t end = {.start_ms = 3500, .rate = -1};
+    flow_timeline_drive(m.tl, ida, &end);
+    moving_again(&m, 2500);
+    st = moving_style(&m, "a");
+    expect("css api: backwards at its end, its last value", st != NULL && st->margin[FLOW_LEFT].value == 100 * 64,
+           NULL);
+    // Canceled, though its clock would show 50px.
+    flow_css_clock_t gone = {.canceled = true, .paused = true, .hold_ms = 500, .rate = 1};
+    expect("css api: a script cancels", flow_timeline_drive(m.tl, ida, &gone), NULL);
+    moving_again(&m, 2600);
+    st = moving_style(&m, "a");
+    expect("css api: a canceled one applies nothing and stays listed",
+           st != NULL && st->margin[FLOW_LEFT].value == 0 && flow_timeline_at(m.tl, 0, &a) && a.id == ida &&
+               a.clock.canceled, NULL);
+    expect("css api: no animation has an unknown id", !flow_timeline_drive(m.tl, 9999, &held), NULL);
+    moving_close(&m);
+    // Listed in the order the list names them, not by name.
+    moving_open(&m, "<!doctype html><style>@keyframes zeta{to{margin-left:1px}}@keyframes alpha{to{margin-top:1px}}"
+                    "#z{animation:zeta 1s,alpha 1s}</style><div id=z>z</div>", 1000);
+    flow_css_animation_t first;
+    expect("css api: in animation-name's order",
+           flow_timeline_at(m.tl, 0, &first) && first.name_len == 4 && memcmp(first.name, "zeta", 4) == 0 &&
+               first.place == 0, NULL);
+    moving_close(&m);
+}
+
+// The style of `id`'s ::before or ::after (`which`) as the layout made it:
+// its element's styles name its node (FStyled.pseudo).
+static const flow_style_t *moving_pseudo_style(const Moving *m, const char *id, garb_pseudo_t which)
+{
+    const os64_html_node_t *el = motion_find(m->p.doc->document, id);
+    const FStyled *of = el != NULL && m->tree != NULL ? f_style_of(f_tree_styles(m->tree), el) : NULL;
+    const os64_html_node_t *node = of != NULL ? of->pseudo[which == GARB_PSEUDO_BEFORE ? 0 : 1] : NULL;
+    const FStyled *st = node != NULL ? f_style_of(f_tree_styles(m->tree), node) : NULL;
+    return st != NULL ? &st->style : NULL;
+}
+
+// A pseudo-element's CSS animations (DEBTS.md's row, paid by slice C):
+// they run on its own winners, keep their records on the element's, live
+// through every layout as the element does, and stay out of what a
+// script's CSSAnimations see.
+static void motion_pseudo_cases(void)
+{
+    Moving m;
+    moving_open(&m, MOTION_STYLE "#k::before,#k::after{content:'x';display:inline-block;width:10px}"
+                "#k::before{animation-name:fade;" AT("0.25") "}"
+                "#k::after{animation-name:fade;" AT("0.75") "}"
+                "@keyframes fade{from{opacity:0}to{opacity:1}}</style><div id=k>y</div>", 1000);
+    const flow_style_t *before = moving_pseudo_style(&m, "k", GARB_PSEUDO_BEFORE);
+    const flow_style_t *after = moving_pseudo_style(&m, "k", GARB_PSEUDO_AFTER);
+    expect("motion: a ::before's animation moves it", before != NULL && before->opacity == 250,
+           NULL);
+    expect("motion: an ::after's too, on its own timing", after != NULL && after->opacity == 750,
+           NULL);
+    const flow_style_t *own = moving_style(&m, "k");
+    expect("motion: the element itself is left as it is", own != NULL && own->opacity == 1000, NULL);
+    expect("motion: each keeps a record of its own on the timeline", f_timeline_records(m.tl) == 2, NULL);
+    expect("motion: and a script's CSSAnimations see neither", flow_timeline_size(m.tl) == 0, NULL);
+    moving_close(&m);
+
+    moving_open(&m, MOTION_STYLE "#k::before{content:'x';display:inline-block;width:10px;"
+                "animation:fade 1s linear}@keyframes fade{from{opacity:0}to{opacity:1}}</style>"
+                "<div id=k>y</div>", 1000);
+    moving_again(&m, 1500);
+    before = moving_pseudo_style(&m, "k", GARB_PSEUDO_BEFORE);
+    expect("motion: a running ::before's clock lives through a layout, its node made anew",
+           before != NULL && before->opacity == 500, NULL);
+    moving_close(&m);
+
+    moving_open(&m, MOTION_STYLE "#k,#k::before,#z{animation:fade 1s linear}#k::before{content:'x';"
+                "display:inline-block;width:10px}@keyframes fade{from{opacity:0}to{opacity:1}}</style>"
+                "<div id=k>y</div><div id=z>w</div>", 1000);
+    flow_css_animation_t a = {0}, b = {0}, past = {0};
+    bool listed = f_timeline_records(m.tl) == 3 && flow_timeline_size(m.tl) == 2 && flow_timeline_at(m.tl, 0, &a) &&
+                  flow_timeline_at(m.tl, 1, &b) && !flow_timeline_at(m.tl, 2, &past);
+    expect("motion: an element's and its ::before's of one name are two records, and a script sees the "
+           "elements' alone, in their order",
+           listed && a.node == motion_find(m.p.doc->document, "k") && b.node == motion_find(m.p.doc->document, "z"),
+           NULL);
+    moving_close(&m);
+
+    // A spinner: a ::before turned in place, which ticks between layouts,
+    // each tick's value the layout's at the same time.
+    static const char kSpin[] = MOTION_STYLE "#k::before{content:'x';display:inline-block;width:10px;"
+                                "height:10px;animation:spin 1s linear infinite}"
+                                "@keyframes spin{to{transform:rotate(360deg)}}</style><div id=k>y</div>";
+    const flow_point_t o = {0, 0};
+    Moving lay;
+    moving_open_for(&m, kSpin, 1000, true);
+    expect("tick: a ::before turned in place is due for a tick",
+           flow_motion_tick_due(m.tree, kTickView, o) == 1000, NULL);
+    bool moved = false;
+    TickMarks marks = {.n = 0};
+    bool ticked = flow_motion_tick(m.tree, 1250, o, tick_mark, &marks, &moved);
+    bool grouped = marks.n > 0;
+    for (int32_t i = 0; i < marks.n; i++)
+        grouped = grouped && marks.box[i]->pseudo == GARB_PSEUDO_BEFORE && marks.box[i]->kind != FLOW_BOX_TEXT;
+    expect("tick: the turn is marked as the ::before's group, as an element's is", grouped, NULL);
+    moving_open(&lay, kSpin, 1000);
+    moving_again(&lay, 1250);
+    before = moving_pseudo_style(&m, "k", GARB_PSEUDO_BEFORE);
+    const flow_style_t *laid = moving_pseudo_style(&lay, "k", GARB_PSEUDO_BEFORE);
+    expect("tick: and a tick turns it as a layout would, its frame filled again",
+           ticked && moved && before != NULL && laid != NULL && f_styles_same(before, laid), NULL);
+    moving_close(&lay);
+    moving_close(&m);
+
+    // A colour in place makes no stacked box, so its pseudo-element is seen
+    // by its own boxes alone.
+    moving_open_for(&m, MOTION_STYLE "#k::before{content:'x';display:inline-block;width:10px;height:10px;"
+                    "animation:tint 1s linear infinite}@keyframes tint{to{background-color:red}}</style>"
+                    "<div id=k>y</div>", 1000, true);
+    expect("tick: a ::before tinted in place is due for a tick, seen by its own boxes",
+           flow_motion_tick_due(m.tree, kTickView, o) == 1000, NULL);
+    moving_close(&m);
+
+    // A fade in from nothing: the layout at its start must not leave the
+    // pseudo-element's boxes unpainted, since ticks raise it from there.
+    moving_open_for(&m, MOTION_STYLE "#k::before{content:'x';display:inline-block;width:10px;height:10px;"
+                    "animation:fade 1s linear}@keyframes fade{from{opacity:0}to{opacity:1}}</style>"
+                    "<div id=k>y</div>", 1000, true);
+    int32_t pseudo_boxes = 0, painted = 0;
+    for (const flow_box_t *b = flow_root(m.tree); b != NULL;) {
+        if (b->pseudo == GARB_PSEUDO_BEFORE) {
+            pseudo_boxes++;
+            painted += !b->unpainted;
+        }
+        if (b->first != NULL) {
+            b = b->first;
+            continue;
+        }
+        while (b != NULL && b->next == NULL)
+            b = b->parent;
+        b = b != NULL ? b->next : NULL;
+    }
+    expect("tick: a ::before fading in from 0 is painted, the painter judging its opacity",
+           pseudo_boxes > 0 && painted == pseudo_boxes, NULL);
+    moving_close(&m);
+
+    moving_open(&m, MOTION_STYLE "#k::before{content:'x';display:none;animation:fade 1s linear}"
+                "@keyframes fade{from{opacity:0}to{opacity:1}}</style><div id=k>y</div>", 1000);
+    expect("motion: a ::before that displays nothing starts nothing", f_timeline_records(m.tl) == 0, NULL);
+    moving_close(&m);
+}
+
 static void motion_cases(void)
 {
+    motion_css_api_cases();
+    motion_pseudo_cases();
     motion_batch_a_cases();
     motion_easing_cases();
     motion_chrome_cases();

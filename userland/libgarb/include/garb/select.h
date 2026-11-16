@@ -63,12 +63,44 @@ typedef enum {
 garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t *prelude,
                                        int32_t n, os64_html_quirks_t quirks, bool modern_off);
 
-// Dependencies include nested functional selectors. A whole-tree dependency
-// cannot be bounded by the target/ancestor/sibling restyle rule.
+// Dependencies include nested functional selectors. `ancestors`: a :has()
+// in its rule's subject, whose match a change can turn on any ancestor of
+// the change (its argument looks down from the element it tests);
+// `ancestors_preceding`: a :has() whose argument begins with `+` or `~`,
+// whose match a change can turn on a preceding sibling of the change or of
+// one of its ancestors as well. A :has() left of a combinator is an anchor
+// (garb_selectors_anchors) rather than an `ancestors` dependency;
+// `ancestors_preceding` counts both kinds. `has_filtered`: a :has() inside
+// :nth-child(… of S) or :nth-last-child(… of S), whose turning on one
+// element moves which of its siblings the count picks, which neither kind
+// follows.
 typedef struct {
-    bool following, position_front, position_back, parent_state, filtered, whole_tree;
+    bool following, position_front, position_back, parent_state, filtered;
+    bool ancestors, ancestors_preceding, has_filtered;
 } garb_selector_dependencies_t;
 garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list);
+
+// AN ANCHORED :has(): a compound holding :has() that stands left of a
+// combinator in its selector, directly or inside a functional pseudo-class
+// that does (`.group:has(.x) .y`, `:is(.p:has(.x)) ~ .z`). When its match
+// turns on an element, what changes is not that element's winners but its
+// descendants' (`down`) or its following siblings' and theirs
+// (`siblings`). `bare` says the compound has no type, id, class or
+// attribute to turn most elements away before its :has() is tried, so
+// testing it on every element costs a subtree walk each. `compound` is the
+// selector's own, valid while the list is.
+typedef struct {
+    const garb_selectors_t *list;
+    const void *compound;
+    bool down, siblings, bare;
+} garb_anchor_t;
+// Writes the list's anchored :has() compounds to out[0..cap) and answers
+// how many the list holds; more than `cap` means the rest were not written.
+int32_t garb_selectors_anchors(const garb_selectors_t *list, garb_anchor_t *out, int32_t cap);
+// Whether the anchor's compound matches `element`: its other simple
+// selectors first, its :has() and the rest of its pseudo-classes only when
+// they pass.
+bool garb_anchor_matches(const garb_anchor_t *anchor, const os64_html_node_t *element);
 
 int32_t garb_selectors_count(const garb_selectors_t *list);
 // The i-th selector's specificity, (a, b, c) packed as a << 20 | b << 10 | c,

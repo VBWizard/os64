@@ -578,7 +578,7 @@ static void dom_view_history_cases(void)
         "var named=[1];named.x=2;throws('DataCloneError',()=>history.pushState(named,''));"
         "var loop={};loop.self=loop;throws('DataCloneError',()=>history.pushState(loop,''));"
         "var deep={};for(var i=0,at=deep;i<100;i++)at=at.n={};throws('DataCloneError',()=>history.pushState(deep,''));"
-        "throws('QuotaExceededError',()=>history.pushState('x'.repeat(70000),''));"
+        "throws('QuotaExceededError',()=>history.pushState('x'.repeat(2*1024*1024),''));"
         "throws('TypeError',()=>history.pushState(1));"
         "throws('TypeError',()=>history.pushState(1,Symbol('t')));"
         "var shared={k:1};history.pushState({a:shared,b:shared},'');assert(history.state.a.k===1&&history.state.b.k===1);"
@@ -979,12 +979,20 @@ static void dom_view_edge_cases(void)
         "var big=matchMedia('x'.repeat(1<<20));assert(!big.matches&&big.media.length===1<<20,'a long unknown type');"
         "assert(!matchMedia('screen\\0, print').matches,'a NUL is part of the type, not its end');"
         "assert(matchMedia('screen\\0, print').media==='screen\\ufffd, print');"
-        "assert(getComputedStyle(document.body).getPropertyValue('color\\0')==='','a NUL is part of the name');"
-        "history.pushState('x'.repeat(65534),'');assert(history.state.length===65534,'JSON exactly at the cap');"
-        "throws('QuotaExceededError',()=>history.pushState('x'.repeat(65535),''));"
-        "assert(history.state.length===65534,'a refusal keeps the state');"
-        "throws('QuotaExceededError',()=>history.pushState({k:'x'.repeat(65530)},''));",
-        "edges: queries, names and the state's cap");
+        "assert(getComputedStyle(document.body).getPropertyValue('color\\0')==='','a NUL is part of the name');",
+        "edges: queries and names");
+    fixture_free(&f);
+    /* The large media lists above consume native storage independently of
+     * history's JSON cap. Test that boundary with a fresh binding. */
+    f = view_fixture(true, "http://view.test/page.html");
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, VIEW_ASSERT
+        "var stateCap=2*1024*1024;"
+        "history.pushState('x'.repeat(stateCap-2),'');assert(history.state.length===stateCap-2,'JSON exactly at the cap');"
+        "throws('QuotaExceededError',()=>history.pushState('x'.repeat(stateCap-1),''));"
+        "assert(history.state.length===stateCap-2,'a refusal keeps the state');"
+        "throws('QuotaExceededError',()=>history.pushState({k:'x'.repeat(stateCap-6)},''));",
+        "edges: history state's cap");
     fixture_free(&f);
 }
 

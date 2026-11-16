@@ -42,8 +42,9 @@ recoloured for dark mode (`invert()`, `brightness(0)`), greyed-out logos
   root element", `f_anchors`): `html { filter: grayscale(1) }` leaves a
   fixed header fixed to the viewport.
 - **A plain inline's filter is not drawn** and makes nothing
-  (`f_filtered`), and **an inline-block's is not drawn** though it is a
-  containing block, as their opacity is painted opaque (§ 10).
+  (`f_filtered`), as its opacity is painted opaque (§ 10). An
+  inline-block's, and an inline picture's, is drawn since 2026-11-12: the
+  atom on its line is stacked whole and is a group (`public_frag`).
 
 ## 3. The problem: a group has no coverage
 
@@ -122,10 +123,14 @@ half-covered pixel.
   against is grown the same way, so a box the blur reaches in from outside
   the view is painted. A change to any box inside a filtered group marks
   the group's bounds (`mark_filtered`), since the filter spreads it.
-- **A budget per paint**: filtered area (each layer charged the pixels it
-  shows in the view, not its margin, so a small repaint beside a big blur
-  is not refused what the rest of the page was drawn with) up to
-  `YONDER_FILTER_AREA_VIEWS` (2) times the view's pixels, and a blur's
+- **A budget per paint**: layer area (each layer charged the pixels it
+  shows in the part repainted, not its margin, so a small repaint beside a
+  big blur is not refused what the rest of the page was drawn with) up to
+  `YONDER_FILTER_AREA_VIEWS` (4) times the WHOLE view's pixels — not the
+  repainted part's, against which layers stacked over a small part (masks
+  under a sweeping beam, Lamplighter's flicker) were charged several times
+  its area and drawn plain beside where a whole repaint drew them; four,
+  since a mask charges its captures as layers — and a blur's
   standard deviation up to `FLOW_FILTER_BLUR_MAX` (100 px, libflow's, so
   its bounds and the painter agree; a larger one is drawn at it). Past the
   area budget, or a layer the face cannot make or filter, a group paints unfiltered
@@ -204,8 +209,9 @@ and booked.
 ## 10. Not in 8c (DEBTS rows)
 
 - SVG filter references (`url(#f)`) and the SVG filter primitives.
-- `filter` on an inline box or an inline-block: not drawn, as their
-  `opacity` is not (PILE3.md § Booked: neither is one layer to group).
+- `filter` on a plain inline box: not drawn, as its `opacity` is not
+  (PILE3.md § Booked: no one layer to group). The inline-block half was
+  paid 2026-11-12 (the atom group).
 - `filter` and `backdrop-filter` on a table's rows, row groups and columns:
   no containing blocks, as a transform on them is not (PILE3.md § Booked).
 - Interpolating `filter` lists (Filter Effects 1): an animated filter
@@ -235,7 +241,7 @@ and booked.
   recovery, each function (the colour ones held to WPT's reftest
   expectations), the blur, the drop shadow, the lay. The painter opens a
   layer per filtered group (`layer_try`), inside any matrix, at most
-  `YONDER_FILTER_AREA_VIEWS` times the view's pixels a paint; the pane makes
+  `YONDER_FILTER_AREA_VIEWS` times the whole view's pixels a paint; the pane makes
   it two sheets (`pane_sheets_open`, shared with a laid group, to their own
   `FILTER_SHEET_*` limits, which hold a whole 4K window and its spread) and at the
   close recovers, filters and lays them (`pane_layer_close`). A refused

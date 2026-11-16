@@ -1,0 +1,109 @@
+# Separate embedding global this from global environment storage.
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -540,6 +540,7 @@
+     JSValue eval_obj;
+ 
+     JSValue global_obj; /* global object */
++    JSValue global_this; /* optional embedding receiver; undefined uses global_obj */
+     JSValue global_var_obj; /* contains the global let/const definitions */
+ 
+     uint64_t random_state;
+@@ -2767,6 +2768,7 @@
+         return NULL;
+     }
+     ctx->rt = rt;
++    ctx->global_this = JS_UNDEFINED;
+     list_add_tail(&ctx->link, &rt->context_list);
+     for(i = 0; i < rt->class_count; i++)
+         ctx->class_proto[i] = JS_NULL;
+@@ -2898,6 +2900,7 @@
+     }
+ 
+     JS_MarkValue(rt, ctx->global_obj, mark_func);
++    JS_MarkValue(rt, ctx->global_this, mark_func);
+     JS_MarkValue(rt, ctx->global_var_obj, mark_func);
+ 
+     JS_MarkValue(rt, ctx->throw_type_error, mark_func);
+@@ -2975,6 +2978,7 @@
+     JS_FreeAtom(ctx, ctx->nc_atom);
+     ctx->nc_atom = JS_ATOM_NULL;
+     JS_FreeValue(ctx, ctx->global_obj);
++    JS_FreeValue(ctx, ctx->global_this);
+     JS_FreeValue(ctx, ctx->global_var_obj);
+ 
+     JS_FreeValue(ctx, ctx->throw_type_error);
+@@ -7546,6 +7550,21 @@
+ JSValue JS_GetGlobalObject(JSContext *ctx)
+ {
+     return JS_DupValue(ctx, ctx->global_obj);
++}
++
++/* Global environment storage remains global_obj. The embedding receiver is
++   selected only where evaluation or sloppy calls request global this. */
++static JSValueConst js_global_this(JSContext *ctx)
++{
++    return JS_IsUndefined(ctx->global_this) ? ctx->global_obj : ctx->global_this;
++}
++
++JS_BOOL JS_SetGlobalThis(JSContext *ctx, JSValueConst value)
++{
++    if (!JS_IsObject(value))
++        return FALSE;
++    set_value(ctx, &ctx->global_this, JS_DupValue(ctx, value));
++    return TRUE;
+ }
+ 
+ /* WARNING: obj is freed */
+@@ -18271,7 +18290,7 @@
+                     if (likely(tag == JS_TAG_OBJECT))
+                         goto normal_this;
+                     if (tag == JS_TAG_NULL || tag == JS_TAG_UNDEFINED) {
+-                        val = JS_DupValue(ctx, ctx->global_obj);
++                        val = JS_DupValue(ctx, js_global_this(ctx));
+                     } else {
+                         val = JS_ToObject(ctx, this_obj);
+                         if (JS_IsException(val))
+@@ -37631,7 +37650,7 @@
+ 
+ JSValue JS_EvalFunction(JSContext *ctx, JSValue fun_obj)
+ {
+-    return JS_EvalFunctionInternal(ctx, fun_obj, ctx->global_obj, NULL, NULL);
++    return JS_EvalFunctionInternal(ctx, fun_obj, js_global_this(ctx), NULL, NULL);
+ }
+ 
+ /* 'input' must be zero terminated i.e. input[input_len] = '\0'. */
+@@ -37813,7 +37832,7 @@
+ JSValue JS_Eval(JSContext *ctx, const char *input, size_t input_len,
+                 const char *filename, int eval_flags)
+ {
+-    return JS_EvalThis(ctx, ctx->global_obj, input, input_len, filename,
++    return JS_EvalThis(ctx, js_global_this(ctx), input, input_len, filename,
+                        eval_flags);
+ }
+ 
+@@ -40386,7 +40405,7 @@
+ static JSValue js_global_eval(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv)
+ {
+-    return JS_EvalObject(ctx, ctx->global_obj, argv[0], JS_EVAL_TYPE_INDIRECT, -1);
++    return JS_EvalObject(ctx, js_global_this(ctx), argv[0], JS_EVAL_TYPE_INDIRECT, -1);
+ }
+ 
+ static JSValue js_global_isNaN(JSContext *ctx, JSValueConst this_val,
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -853,6 +853,13 @@
+                     const char *input, size_t input_len,
+                     const char *filename, int eval_flags);
+ JSValue JS_GetGlobalObject(JSContext *ctx);
++/* Retain an embedding global-this receiver without changing global storage
++   or the globalThis property. Owner thread, before author execution; value
++   must belong to ctx's runtime, as with other JSValue embedding arguments.
++   Returns false for a non-object, without changing state or the exception.
++   Replacing a value releases its old hold and may run native finalizers.
++   This primitive does not implement WindowProxy or global property gates. */
++JS_BOOL JS_SetGlobalThis(JSContext *ctx, JSValueConst value);
+ /* Browser-only legacy accessor helper; install explicitly in that context. */
+ JSValue JS_GetLegacyFunctionArguments(JSContext *ctx, JSValueConst function);
+ /* os64: hear each string name a global-object lookup misses; NULL stops. */

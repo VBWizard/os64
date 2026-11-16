@@ -1,6 +1,7 @@
 #ifndef YONDER_SCRIPTS_H
 #define YONDER_SCRIPTS_H
 #include <dom/canvas.h>
+#include <dom/media.h>
 #include <dom/pointer.h>
 
 // A page's SCRIPT HOST (DOM_D7.md § The script host of a page): its runtime
@@ -20,12 +21,34 @@
 #include <dom/pointer.h>
 
 #include "diag.h"
+#include "census.h"
 #include "script_job.h"
 #include "storage.h"
 
 typedef struct yonder_scripts yonder_scripts_t;
 bool yonder_scripts_images_pending(const yonder_scripts_t *);
 bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
+// The page's media elements (dom/media.h): the turn that brings them up to
+// date with their sound (no script; true when a task waits), whether one
+// of their tasks waits, and one run as a task.
+bool yonder_scripts_media_turn(yonder_scripts_t *scripts);
+bool yonder_scripts_media_pending(const yonder_scripts_t *scripts);
+bool yonder_scripts_media_fire(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+// An audio element's controls (player.h): its view, and the person's use
+// of them done as script's would be (os64_dom_media_view, _control). A
+// control's play is a task, counted and judged as an event's is.
+bool yonder_scripts_media_view(yonder_scripts_t *scripts, const os64_html_node_t *node,
+                               os64_dom_media_view_t *out);
+os64_js_status_t yonder_scripts_media_control(yonder_scripts_t *scripts, const os64_html_node_t *node,
+                                              os64_dom_media_control_t what, double value,
+                                              os64_js_outcome_t *out);
+// Whether the person has interacted with the page (HTML's sticky
+// activation: a key, a press or a click that reached it), which a media
+// element needs before it may make sound (AUDIO_YONDER.md § Autoplay).
+bool yonder_scripts_activated(const yonder_scripts_t *scripts);
+// The page counts as interacted with from now on: a sound's own page,
+// which the person navigated to (AUDIO_YONDER.md § The media document).
+void yonder_scripts_activate(yonder_scripts_t *scripts);
 // A `link` or `style` element's sheet, judged by the window: `load` (or
 // `error` when `failed`) owed to the element, fired as a task of its own
 // and never inside the call that owed it; the node is held until then, and
@@ -34,6 +57,10 @@ bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
 // counts the element as not told. The window owes each element once per
 // sheet: per address it asked for, or for a `style`, per text.
 bool yonder_scripts_owe(yonder_scripts_t *, const os64_html_node_t *, bool failed);
+// A document-owned resource may invalidate a queued completion before its
+// task runs. The guard and context remain alive until this host is freed.
+bool yonder_scripts_owe_guarded(yonder_scripts_t *, const os64_html_node_t *, bool failed,
+                                bool (*valid)(void *), void *ctx);
 bool yonder_scripts_owed_pending(const yonder_scripts_t *);
 // The owed events, oldest first, until one is heard: true when a task ran
 // (a listener heard one, or the runtime one needed could not be made), and
@@ -47,6 +74,7 @@ typedef struct {
     const char *url;                // the page's address: names, location, a src's base
     uint64_t execution_ms;          // each task's budget (Settings' script time limit)
     size_t memory_bytes;            // the page's script heap (yonder.conf's script_memory_mb); 0: libjs's own
+    size_t dom_bytes;               // libdom's share of the page's document side (page_memory_mb); 0: libdom's own
     uint64_t serial;                // names the page to a script's fetch job
     void (*alert)(void *opaque, const char *utf8, size_t length);
     // A `src` script's fetch: the host submits it and answers its job id, 0
@@ -97,8 +125,15 @@ typedef struct {
     os64_dom_view_provider_t view;
     os64_dom_computed_provider_t computed;
     os64_dom_image_provider_t images;
+    // The media elements' host (dom/media.h), with its own opaque; zeroed,
+    // a media element plays nothing.
+    os64_dom_media_provider_t media;
     os64_dom_text_provider_t canvas_text;
     os64_dom_history_t history;
+    // The page's CSS animations as its scripts see them (CSSAnimation and
+    // the CSS animation events; dom.h), with their own opaque. Zeroed,
+    // getAnimations answers the page's script animations alone.
+    os64_dom_css_animations_t css_animations;
     // The page's record (diag.h), borrowed for the host's life: a global
     // the page reached for and did not find, a module that failed (or, with
     // `modern` off, a module script or an import map at all) are written
@@ -289,6 +324,27 @@ bool yonder_scripts_timer_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_
 // pacing and the rendering step after it (os64_dom_animation_fire).
 uint64_t yonder_scripts_animation_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_animation_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+// Web Animations' update step (os64_dom_web_animations_update), run on the
+// rendering step before the frame callbacks, as HTML orders them.
+uint64_t yonder_scripts_web_animations_next(const yonder_scripts_t *scripts);
+bool yonder_scripts_web_animations_update(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+// The page's script effects on `node` for a layout (os64_dom_script_effects;
+// none once the scripts are dead), and how long they live. A tree keeps the
+// effects it was laid out with for its ticks, its paints and its computed
+// styles (WEB_ANIMATIONS.md § 2), so the host tells the page's scripts of
+// each tree laid out with them (tree_made, with the generation it is laid
+// out at) and of each tree that goes, whichever page's it was (tree_gone):
+// what the binding buried before the oldest generation of the page's trees
+// still standing is freed then. A dead page's trees keep reading what they
+// were laid out with: the drained binding stays until the last of them
+// goes, past yonder_scripts_free when a tree outlives the scripts. The
+// scripts follow a few trees; past that nothing buried is freed, nor the
+// binding.
+struct garb_effect;
+int32_t yonder_scripts_effects(yonder_scripts_t *scripts, const os64_html_node_t *node,
+                               const struct garb_effect *const **out);
+void yonder_scripts_tree_made(yonder_scripts_t *scripts, const void *tree);
+void yonder_scripts_tree_gone(const void *tree);
 // Custom element reactions the parser's insertions left owed
 // (os64_dom_reactions_run): whether any are, and running them as one task,
 // true when it ran. The first failure of the constructor `name` defines,
@@ -334,6 +390,12 @@ size_t yonder_scripts_memory_bytes(const yonder_scripts_t *scripts);
 // The most that heap has held, in bytes: the live runtime's, or the one
 // retired's as it went; 0 before any script ran.
 size_t yonder_scripts_heap_peak(const yonder_scripts_t *scripts);
+// The script side of a memory census (MEMORY_CENSUS.md § 3): its owners —
+// the binding's records (`dom`), canvas bitmaps, the bodies kept outside
+// the heap, and the heap itself (`script`) — added to `sheet`; with
+// `detail`, the binding's kinds and the heap's own census too, its walk
+// timed into `sheet->cost_us`. Nothing for NULL or before a runtime.
+void yonder_scripts_census(yonder_scripts_t *scripts, yonder_census_sheet_t *sheet, bool detail);
 // False once a sticky outcome retired the runtime: nothing runs again.
 bool yonder_scripts_alive(const yonder_scripts_t *scripts);
 // The whole address of the `src` script the last task ran, which a task's

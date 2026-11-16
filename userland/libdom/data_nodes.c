@@ -7,8 +7,7 @@
  *
  * libhtml keeps a CDATA section as a TEXT node with `cdata` set and a
  * processing instruction as its PI kind, so neither has a prototype kind of
- * its own here (the binding's kinds are one uint64_t's bits, all taken):
- * their prototypes refine a wrapper's as ShadowRoot's do (d_node_prototype),
+ * its own here: their prototypes refine a wrapper's as ShadowRoot's do (d_node_prototype),
  * CDATASection's over Text's and ProcessingInstruction's over
  * CharacterData's, so every member and receiver check those kinds have
  * applies to them unchanged. The prototypes, and a PI's `target`, are the
@@ -53,6 +52,7 @@ static JSValue data_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         return JS_NewString(ctx, node->name != NULL ? node->name : "");
     }
     if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "Creation requires a document");
+    dom = d_owner(dom, node);
     int needed = magic == C_PI ? 2 : 1;
     if (argc < needed) return JS_ThrowTypeError(ctx, "Missing argument");
     /* The arguments converted first, in order, as WebIDL converts them. */
@@ -88,9 +88,7 @@ static JSValue data_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     d_string_free(dom, &second);
     if (!JS_IsUndefined(result)) return result;
     if (made == NULL) return d_html_error(ctx, status);
-    /* Wrapped first, so d_made_in has a wrapper to record the document on. */
-    JSValue value = d_wrap(dom, ctx, made);
-    if (!JS_IsException(value)) d_made_in(dom, made, node);
+    JSValue value = d_wrap_in(dom, ctx, made, node);
     return value;
 }
 

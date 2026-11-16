@@ -170,6 +170,11 @@ and it is said here so 5b and 8a meet on it rather than discover it.
     widths (`medium_widths`), an atomic inline's edge to the decorations,
     and the parent's animation moving by layouts when the pseudo-element
     inherits what it animates (`taken_from`).
+  - Its own CSS animations (`animate`, asked with `which`), from its
+    winners. Their records on the timeline are its element's and say which
+    pseudo-element (`f_timeline_element`), since its node is made anew by
+    every layout and the element is what lives on; a script's
+    CSSAnimations leave them out (`flow_timeline_size`, DEBTS.md).
   - The content is resolved once (`content_text`), and only for a
     pseudo-element whose display is not `none`. It is charged to the lists'
     budget, since one rule copies it into every element it reaches; past
@@ -188,7 +193,12 @@ and it is said here so 5b and 8a meet on it rather than discover it.
   which, and the box is never the element's first box (`flow_box_for`,
   `flow_image`). `flow_scroller_for` skips them too, and a
   pseudo-element's span holds only its own text for a text clip
-  (`flow_visit_text_clip`).
+  (`flow_visit_text_clip`). Inside libflow the map of first boxes also
+  keys a pseudo-element's own node to its first box, and a box resolves
+  to the node whose style it draws (`box_styled_node`), so a
+  pseudo-element's animation is seen and ticked as an element's is
+  (`motion_seen`, `ticking_build`); `flow_motion_entries` names it by its
+  element and `pseudo`.
 - **The audit of `->node` readers outside libflow** (§ 4's table, as
   found): `geometry.c` (an element's fragments skip pseudo boxes),
   `attribute_picture` and `glass_backdrop` (a `background` attribute is
@@ -200,8 +210,8 @@ and it is said here so 5b and 8a meet on it rather than discover it.
   outside libflow reads a box's text for selection or copy.
 - **What waits** is in DEBTS.md § Browser layout: counters and `quotes`
   (8b), pictures in `content`, `getComputedStyle(el, '::before')`,
-  `::marker` and the line pseudo-elements, a pseudo-element's animations,
-  tables' own, and an animation a `display: contents` element draws only
+  `::marker` and the line pseudo-elements, a script's sight of a
+  pseudo-element's animations, tables' own, and an animation a `display: contents` element draws only
   through its pseudo-elements.
 
 ## 8. Slice 8b: counters and `quotes`
@@ -275,9 +285,10 @@ display is not `none` it does this:
   does its subtree, which pass 1 never walks (Lists 3 § 4.5). Neither
   does a pseudo-element that does not exist (`content: none`). Nor does
   anything pass 2 does not draw, by the rule pass 2 itself uses
-  (`f_draws_inside`): an element that makes no box (`audio`, `embed`,
-  `f_boxless`) and what it holds, and what a replaced element holds (a
-  canvas's fallback when scripts run), unless the element is laid out
+  (`f_draws_inside`): an element that makes no box (`embed`, an `audio`
+  the face draws no player for, `f_boxless`) and what it holds, and what
+  a replaced element holds (a canvas's fallback when scripts run, an
+  audio's when it has a player), unless the element is laid out
   through `display: contents`, as a button may be.
 - **`inherit`** on a counter property takes the parent's list, climbing
   past ancestors that inherit too. `quotes` is inherited and the chapter's

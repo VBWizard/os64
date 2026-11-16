@@ -46,7 +46,7 @@ void init_e1000(void);
 // choice here was INTx-plus-IOAPIC-routing versus polling, and polling
 // wins for v1 on two grounds: it keeps this slice about the SEAM rather
 // than about interrupt plumbing, and it matches the pattern already
-// proven twice in this kernel (xhci_poll, virtio-net's drain). The interrupt
+// proven twice in this kernel (the xHCI poll, virtio-net's drain). The interrupt
 // slice belongs with the hardware that actually rewards it — the RTL8125
 // on the P5, or an e1000e — where MSI-X vectors and a bottom half buy
 // microsecond round trips instead of scheduler-pass ones. When that day

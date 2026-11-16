@@ -225,3 +225,9 @@ int main(void)
     puts("icon theme resolver: OK");
     return 0;
 }
+// The stub catalog retains nothing, so a theme's cache_bytes over it is zero.
+void os64_icon_catalog_stats(const os64_icon_catalog_t *c, os64_icon_catalog_stats_t *out)
+{
+    (void)c;
+    *out = (os64_icon_catalog_stats_t){0};
+}

@@ -54,7 +54,7 @@ static bool number_digit(char c)
     return c >= '0' && c <= '9';
 }
 
-bool p_number_parse(const char *text, bool strict, double *out)
+static bool number_parse(const char *text, bool strict, bool saturate, double *out)
 {
     if (text == NULL)
         return false;
@@ -107,11 +107,23 @@ bool p_number_parse(const char *text, bool strict, double *out)
     double value = (double)decfloat(&input, shgetc(&input), DBL_MANT_DIG,
                                    DBL_MIN_EXP-DBL_MANT_DIG, sign, 1);
     union { double f; uint64_t bits; } bits = {value};
-    if (input.error == PN_INVALID || (bits.bits >> 52 & 0x7ff) == 0x7ff)
+    if (input.error == PN_INVALID)
         return false;
+    if ((bits.bits >> 52 & 0x7ff) == 0x7ff) {
+        if(!saturate)return false;
+        value=sign<0?-DBL_MAX:DBL_MAX;
+    }
     *out = value;
     return true;
 }
+
+bool p_number_parse(const char *text, bool strict, double *out)
+{ return number_parse(text,strict,false,out); }
+
+// Image descriptors retain a syntactically valid overflowing value. Saturating
+// it preserves selection order and a zero density-corrected intrinsic size.
+bool p_number_parse_clamped(const char *text, double *out)
+{ return number_parse(text,true,true,out); }
 
 size_t p_number_spell(double value, char out[32])
 {

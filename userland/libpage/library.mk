@@ -5,7 +5,7 @@
 # form exists. Browsers and the focused guest test acquire this edge.
 LIBPAGE_SRCS := libpage/core.c libpage/state.c libpage/resolve.c libpage/value.c libpage/submit.c \
                 libpage/encode.c libpage/refresh.c libpage/activate.c libpage/number.c libpage/range.c \
-                libpage/upstream/ryu/ryu/d2s.c
+                libpage/image_source.c libpage/upstream/ryu/ryu/d2s.c
 LIBPAGE_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBPAGE_SRCS))
 LIBPAGE_SO := $(BIN)/libpage.so
 # -O2 and the sanitizer suite at the same optimization, libhtml's reasoning:

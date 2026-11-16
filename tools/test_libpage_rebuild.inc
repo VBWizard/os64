@@ -781,7 +781,7 @@ static void rebuild_reclamation_holders(void)
     rebuild_expect("reclaim: state teardown releases select and option holds",f.doc->node_count==count-3);
     rebuild_clear(&f);
 
-    // No model or snapshot pin can mask a reservation hold left on abort.
+    // No model or snapshot pin can mask a hold left by a refused preflight.
     f=(RebuildFixture){.doc=parse("<select id=select><option id=option>first</select>","utf-8")};
     f.state=os64_page_state_create(f.doc,0);
     select=rebuild_id(f.doc,"select"); option=rebuild_id(f.doc,"option");
@@ -789,10 +789,10 @@ static void rebuild_reclamation_holders(void)
     size_t bytes=os64_page_state_bytes(f.state), start=allocations;
     uint64_t version=os64_html_version(f.doc);
     int64_t status=os64_page_node_insert(f.state,f.doc->body,select,option);
-    rebuild_expect("reclaim: invalid placement reaches state reservations then refuses",
-        status!=OS64_HTML_OK && allocations>start &&
+    rebuild_expect("reclaim: invalid placement refuses before state reservations",
+        status==OS64_HTML_NOT_FOUND && allocations==start &&
         os64_page_state_bytes(f.state)==bytes && os64_html_version(f.doc)==version);
-    rebuild_expect("reclaim: aborted reservations release their select and option holds",
+    rebuild_expect("reclaim: refused preflight leaves no select or option holds",
         os64_html_remove(f.doc,select)==OS64_HTML_OK && f.doc->node_count==count-3);
     rebuild_clear(&f);
 }

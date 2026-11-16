@@ -815,6 +815,18 @@ const char *way_cache_dir(way_cache_t *c)
 
 static void sweep_if_due(way_cache_t *c);
 
+void way_cache_served(way_cache_t *c, uint64_t *hits, uint64_t *confirmed, uint64_t *stale)
+{
+    os64_lock_acquire(&c->lock);
+    if (hits != NULL)
+        *hits = c->hits;
+    if (confirmed != NULL)
+        *confirmed = c->confirmed;
+    if (stale != NULL)
+        *stale = c->stale;
+    os64_lock_release(&c->lock);
+}
+
 void way_cache_stats(way_cache_t *c, way_cache_stats_t *out)
 {
     os64_memset(out, 0, sizeof(*out));

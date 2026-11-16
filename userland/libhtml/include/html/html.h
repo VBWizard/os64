@@ -65,18 +65,18 @@ typedef struct os64_html_attr {
     struct os64_html_attr *next;
 } os64_html_attr_t;
 
-/* Nodes and attributes are read-only views owned by their document; what
- * changes one is a verb, at the foot of this file. */
+/* Nodes and attributes are read-only views. Their backing arena can differ
+ * from their current node document after adoption; mutations use verbs. */
 typedef struct os64_html_node {
     os64_html_node_kind_t kind;
     os64_html_ns_t ns;
     os64_html_tag_t tag;
-    /* The library's mark of which document the node belongs to. It means
-     * nothing to a reader. */
+    /* Private physical-allocation mark, preserved across adoption. Use
+     * os64_html_node_document for the mutable node document. */
     uint32_t document_id;
     const char *name; /* Local element name; PI target; doctype name. */
     const char *prefix, *namespace_uri; /* Owned XML spellings; NULL when absent. */
-    bool xml_document; /* Owning arena is an XML document, including detached nodes. */
+    bool xml_document; /* Current node document uses XML serialization rules. */
     /* A TEXT node that is a CDATA section (DOM's CDATASection, nodeType 4):
      * text in every other respect, except that normalize leaves it out of a
      * run of text (DOM's "exclusive Text node"). Set only by os64_html_create_cdata,
@@ -138,6 +138,49 @@ int64_t os64_html_parser_feed(os64_html_parser_t *p, const void *bytes, size_t l
 os64_html_document_t *os64_html_parser_finish(os64_html_parser_t *p);
 void os64_html_parser_destroy(os64_html_parser_t *p);
 void os64_html_document_free(os64_html_document_t *doc);
+
+/* Native lifetime groups retain separate allocation arenas under one cap.
+ * Joining transfers document ownership on success. The first arena may have
+ * borrowers; parsers must be finished. Later arenas must have no holds,
+ * pins, readers or ranges.
+ * A realm is a host-assigned byte; this API has no JavaScript dependency.
+ * Free models/state/readers/holds before group_free; do not individually free
+ * admitted documents. Failed admission changes neither ownership nor budget. */
+typedef struct os64_html_group os64_html_group_t;
+os64_html_group_t *os64_html_group_create(size_t max_bytes);
+/* Non-mutating admission preflight; valid until membership/borrowers change. */
+int64_t os64_html_group_check(os64_html_group_t *group, os64_html_document_t *doc);
+int64_t os64_html_group_add(os64_html_group_t *group, os64_html_document_t *doc,
+                            uint8_t creation_realm);
+void os64_html_group_free(os64_html_group_t *group);
+size_t os64_html_group_bytes(const os64_html_group_t *group);
+size_t os64_html_group_peak(const os64_html_group_t *group);
+/* Logical mutation owner and physical lifetime membership are separate. */
+os64_html_document_t *os64_html_node_owner(const os64_html_node_t *node);
+bool os64_html_same_group(const os64_html_document_t *a, const os64_html_document_t *b);
+/* Keep a Document root until arena/group destruction, without a snapshot pin.
+ * Its attached subtree stays live; detached children still reclaim normally.
+ * This irreversible lifetime promotion is for host-owned Document records
+ * named by native metadata. It consumes no external node hold. */
+int64_t os64_html_document_keep(os64_html_document_t *doc, os64_html_node_t *document);
+/* Associate a pre-created inert template Document with a Document in this
+ * arena. The association is fixed; nested templates reuse the inert record.
+ * Call before exposing template document identity. Existing contents are
+ * retagged; creation realms and physical allocation owners are unchanged.
+ * The host retains these Document records while nodes or associations name them. */
+int64_t os64_html_document_templates(os64_html_document_t *doc,
+                                    os64_html_node_t *document, os64_html_node_t *inert);
+int64_t os64_html_may_adopt(const os64_html_document_t *destination,
+                           const os64_html_node_t *document, const os64_html_node_t *node);
+uint8_t os64_html_node_creation_realm(const os64_html_node_t *node);
+const os64_html_node_t *os64_html_node_document(const os64_html_node_t *node);
+/* Move a node to an explicit Document node of destination, preserving its
+ * allocation owner and creation realm. Removes it from its old parent.
+ * Different allocation arenas must have joined the same lifetime group.
+ * The detached result survives this call; hold it across later mutations. */
+int64_t os64_html_adopt(os64_html_document_t *destination, os64_html_node_t *document,
+                        os64_html_node_t *node);
+
 /* Generic element child, or NULL; valid for HTML and independently owned XML. */
 const os64_html_node_t *os64_html_document_element(const os64_html_document_t *doc);
 /* URI of an element, including canonical known namespaces; NULL for none. */
@@ -241,6 +284,12 @@ int64_t os64_html_parser_end(os64_html_parser_t *p);
 os64_html_document_t *os64_html_parser_document(os64_html_parser_t *p);
 os64_html_document_t *os64_html_parser_abandon(os64_html_parser_t *p);
 const os64_html_attr_t *os64_html_attr(const os64_html_node_t *element, const char *name);
+/* The attribute of namespace `ns` (NULL for none) and local name `local`
+ * (DOM's "get an attribute by namespace and local name"), NULL for none: a
+ * record's local name is its name after the colon when it is in a
+ * namespace, its whole name when it is in none. HTML's own attributes are
+ * the ones in no namespace. */
+const os64_html_attr_t *os64_html_attr_ns(const os64_html_node_t *element, const char *ns, const char *local);
 os64_html_tag_t os64_html_tag_from_name(const char *name);
 const char *os64_html_tag_name(os64_html_tag_t tag);
 const char *os64_html_status_name(int64_t status);
@@ -284,7 +333,8 @@ uint32_t os64_html_decode_windows_1252(uint8_t byte);
  * hold preserves node identity across mutations; a pin preserves snapshot
  * bytes. Hold a node before a verb if it must remain usable afterwards.
  * A successful insertion consumes even an empty fragment container unless
- * it is held; an empty insertion still leaves the document version unchanged.
+ * it is held. An empty insertion within its node document leaves that
+ * document's version unchanged; cross-document adoption advances revisions.
  * Creation results never inserted stay charged until document teardown.
  * What a verb allocates is charged to the document's `max_arena_bytes`.
  *
@@ -301,7 +351,7 @@ uint32_t os64_html_decode_windows_1252(uint8_t byte);
  * answers "has the tree moved since?". The library calls nobody but the
  * one listener a document may be given (THE LISTENER, below). A verb that
  * leaves everything as it was answers OK and does not move it: an empty
- * fragment inserted, a node inserted where it already sits (unless that
+ * fragment inserted within its node document, a node inserted where it already sits (unless that
  * parted a control from its form, below), a text or an attribute set to the
  * value it has, an absent attribute removed, a node replaced by itself.
  *
@@ -314,13 +364,14 @@ uint32_t os64_html_decode_windows_1252(uint8_t byte);
  * `os64_html_retired_bytes` counts individually owned blocks kept by pins,
  * including unheld retired subtrees. Permanent chunks remain charged.
  *
- * EVERY NODE A VERB IS HANDED BELONGS TO `doc`, the source of a clone
- * excepted. A node lies in its document's arena and can be reclaimed when
- * removed or when that document is freed, so a foreign node would point to
- * freed memory in waiting; a verb refuses it (OS64_HTML_BAD_ARGUMENT). */
+ * Mutation targets belong to `doc` logically. Insertion/replacement may
+ * adopt a moving subtree from another member of its lifetime group after
+ * hierarchy validation; unrelated storage is refused. A clone/import may
+ * read an unrelated source because its result shares no source storage. */
 typedef uint64_t os64_html_pin_t;
-/* Allocation-free, counted identity protection. The document must own the
- * node; invalid ownership, overflow, and an unheld release end the program
+/* Allocation-free, counted identity protection. The document must share
+ * the node's lifetime group; holds charge the physical allocation owner.
+ * Invalid membership, overflow, and an unheld release end the program
  * with OS64_HTML_FATAL_EXIT. Releasing the last hold may reclaim a formerly
  * detached subtree, so the node must not be read after release. Document
  * teardown refuses outstanding holds as well as live snapshot pins. */
@@ -332,9 +383,9 @@ uint64_t os64_html_version(const os64_html_document_t *doc);
  * NULL answers zero. Zero permits skipping explicit-owner scans; a nonzero
  * count does not establish that an affected radio is in the document tree. */
 size_t os64_html_form_input_count(const os64_html_document_t *doc);
-/* Whether a live node belongs to this document, connected or detached.
- * NULL for either argument answers false. This compares the library's
- * ownership mark; it neither walks the tree nor changes the document. */
+/* Whether a live node's current document record belongs to this arena,
+ * connected or detached. Windowless document records can share an arena.
+ * NULL answers false. This is mutation ownership, not storage membership. */
 bool os64_html_owns_node(const os64_html_document_t *doc, const os64_html_node_t *node);
 os64_html_pin_t os64_html_pin(const os64_html_document_t *doc);
 void os64_html_unpin(const os64_html_document_t *doc, os64_html_pin_t pin);
@@ -346,8 +397,7 @@ size_t os64_html_retired_bytes(const os64_html_document_t *doc);
  * enums; arbitrary/no-namespace creation is supplied by the XML builder.
  * `os64_html_clone` copies one node, or with `deep`
  * its whole subtree and a template's contents; a copy has no form owner.
- * Its `node` may belong to another document, which is how a node is brought
- * from one to another: the copy then shares no memory with that document
+ * Its `node` may belong to another document: the copy shares no memory with that document
  * and outlives it. A subtree taller than this document allows is refused
  * (OS64_HTML_TOO_DEEP). */
 os64_html_node_t *os64_html_create_element(os64_html_document_t *doc, os64_html_ns_t ns,
@@ -417,6 +467,11 @@ int64_t os64_html_insert(os64_html_document_t *doc, os64_html_node_t *parent,
  * so a refusal leaves the node where it was. */
 int64_t os64_html_may_insert(const os64_html_document_t *doc, const os64_html_node_t *parent,
                              const os64_html_node_t *node);
+/* Full insertion/replacement preflight, including the reference child.
+ * The participating trees and accounting are unchanged on refusal. */
+int64_t os64_html_validate_insert(const os64_html_document_t *doc, const os64_html_node_t *parent,
+                                  const os64_html_node_t *node, const os64_html_node_t *reference,
+                                  bool replacing);
 int64_t os64_html_replace(os64_html_document_t *doc, os64_html_node_t *parent,
                           os64_html_node_t *node, os64_html_node_t *old);
 int64_t os64_html_remove(os64_html_document_t *doc, os64_html_node_t *node);
@@ -424,9 +479,13 @@ int64_t os64_html_remove(os64_html_document_t *doc, os64_html_node_t *node);
 /* An attribute by its qualified name, as os64_html_attr finds it. Setting
  * one that exists keeps its place in the list; a new one goes last.
  * `set_text` replaces a TEXT, COMMENT or PI node's data whole. */
-/* Changes are applied in order to one element's qualified attributes. A set
- * retains an existing record's namespace and position; a new name goes last.
- * A remove ignores value/value_len. All entries are validated before any
+/* Changes are applied in order to one element's attributes. A change finds
+ * its record by qualified name (first match, any namespace), or with
+ * `by_ns` by namespace `ns` (NULL for none) and the local part of `name`
+ * (after its colon when `ns` is set), which is unique on an element. A set
+ * retains an existing record's qualified name, namespace and position; a
+ * new record goes last, in `ns` when `by_ns` and in none otherwise. A
+ * remove ignores value/value_len. All entries are validated before any
  * change; failure preserves the tree, version, parse verdict and arena
  * accounting, including peak. Complete success publishes once, with replaced
  * records retired for existing pins. An unchanged final list is a no-op. */
@@ -434,6 +493,8 @@ typedef struct {
     const char *name, *value;
     size_t value_len;
     bool remove;
+    bool by_ns;
+    const char *ns;
 } os64_html_attr_change_t;
 int64_t os64_html_set_attrs(os64_html_document_t *doc, os64_html_node_t *element,
                             const os64_html_attr_change_t *changes, size_t count);
@@ -787,6 +848,18 @@ os64_html_node_t *os64_html_parse_fragment_root(os64_html_document_t *doc,
  * Do not run this concurrently with a mutation of the node's document. */
 size_t os64_html_serialize(const os64_html_node_t *node, bool children_only,
                            bool scripting, char *out, size_t cap);
+
+/* XML serialization (DOM Parsing § 3.2.1 with require well-formed false):
+ * what XMLSerializer.serializeToString makes of `node` and its subtree, a
+ * document or fragment being its children. Namespaces are declared where
+ * they change and attributes' prefixes resolved as the browsers do
+ * (serialize_xml.c). Answers the total length excluding NUL and writes as
+ * os64_html_serialize does (at most cap-1 bytes and a NUL; cap 0 writes
+ * nothing), or OS64_HTML_NO_MEMORY when its namespace map or its stack of
+ * open elements could not grow;
+ * the same tree gives the same answer twice. NULL node is empty. Do not
+ * run this concurrently with a mutation of the node's document. */
+int64_t os64_html_serialize_xml(const os64_html_node_t *node, char *out, size_t cap);
 
 #pragma GCC visibility pop
 

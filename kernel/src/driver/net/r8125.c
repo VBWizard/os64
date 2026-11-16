@@ -1754,11 +1754,6 @@ static bool r8125_init_device(pci_device_t* dev)
 // back, print what was programmed, refuse to enable anything that did not
 // take, and keep NETPOLL as the flashlight.
 #define R8125_MSI_VECTOR          0x46
-#define MSI_CTRL_ENABLE           (1u << 16)   // message control is the capability dword's high half
-#define MSI_CTRL_MME_MASK         (7u << 20)   // multiple message enable: 0 = one vector
-#define MSI_CTRL_64BIT            (1u << 23)
-#define MSI_ADDRESS_BASE          0xFEE00000u
-#define PCI_COMMAND_INTX_DISABLE  (1u << 10)
 
 // Every event this driver decodes (the ack's bit table). TOK is in: a
 // download answers every segment with an ACK, and a tick's worth of ACKs
@@ -1801,49 +1796,19 @@ void r8125_enable_msi(void)
 	pci_device_t* dev = r->pci;
 	uint8_t bus = dev->busNo, slot = dev->deviceNo, func = dev->funcNo;
 
-	uint8_t cap = pci_find_capability(bus, slot, func, PCI_CAP_MSI);
-	if (cap == 0)
+	uint8_t bsp = (uint8_t)kCPUs[BSP_CPU].apic.id;   // an MSI address names an APIC ID
+	pci_msi_result_t msi = pci_msi_enable(bus, slot, func, R8125_MSI_VECTOR, bsp);
+	if (msi.cap == 0)
 	{
 		printf("r8125: no MSI capability in config space — staying tick-driven\n");
 		return;
 	}
-
-	uint32_t ctrl  = readPCIRegister(bus, slot, func, cap);
-	bool     is64  = (ctrl & MSI_CTRL_64BIT) != 0;
-	uint8_t  bsp   = (uint8_t)kCPUs[BSP_CPU].apic.id;   // an MSI address names an APIC ID
-	uint32_t addr  = MSI_ADDRESS_BASE | ((uint32_t)bsp << 12);
-
-	// Address, then data, then enable — the order the spec wants, so the
-	// first message the device sends already has somewhere to go.
-	writePCIRegister(bus, slot, func, cap + 4, addr);
-	if (is64)
-	{
-		writePCIRegister(bus, slot, func, cap + 8, 0);
-		writePCIRegister(bus, slot, func, cap + 12, R8125_MSI_VECTOR);
-	}
-	else
-		writePCIRegister(bus, slot, func, cap + 8, R8125_MSI_VECTOR);
-
-	writePCIRegister(bus, slot, func, cap, (ctrl & ~MSI_CTRL_MME_MASK) | MSI_CTRL_ENABLE);
-
-	// INTx off at the source, so a pin nobody routes cannot assert a level
-	// line nobody answers. A LIVE read-modify-write of the command word,
-	// the a848273 rule.
-	uint32_t live = readPCIRegister(bus, slot, func, 4) & 0xFFFF;
-	writePCIRegister(bus, slot, func, 4, live | PCI_COMMAND_INTX_DISABLE);
-
-	// Read it all back. On a machine with no debugger the read-back IS the
-	// investigation, and an enable bit that did not stick means the device
-	// will interrupt nobody — say so and keep the tick.
-	uint32_t ctrl_back = readPCIRegister(bus, slot, func, cap);
-	uint32_t addr_back = readPCIRegister(bus, slot, func, cap + 4);
-	uint32_t data_back = readPCIRegister(bus, slot, func, cap + (is64 ? 12 : 8)) & 0xFFFF;
 	printd(DEBUG_BOOT, "r8125: MSI capability at 0x%02x (%s-bit), address 0x%08x data 0x%04x, control 0x%04x -> 0x%04x\n",
-	       cap, is64 ? "64" : "32", addr_back, data_back, ctrl >> 16, ctrl_back >> 16);
-	if ((ctrl_back & MSI_CTRL_ENABLE) == 0 || addr_back != addr || data_back != R8125_MSI_VECTOR)
+	       msi.cap, msi.is64 ? "64" : "32", msi.address, msi.data, msi.control_before, msi.control_after);
+	if (!msi.took)
 	{
 		printf("r8125: MSI did not take (control 0x%04x address 0x%08x data 0x%04x) — staying tick-driven\n",
-		       ctrl_back >> 16, addr_back, data_back);
+		       msi.control_after, msi.address, msi.data);
 		return;
 	}
 

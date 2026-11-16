@@ -20,6 +20,7 @@
 #include "fetch/transport.h"
 #include "os64/os64.h"
 #include "pool.h"
+#include "host_bell.h"
 #include "fixtures.h"
 
 // ── The heap, with one injectable failure ───────────────────────────────
@@ -43,6 +44,9 @@ int64_t os64_ticks(os64_ticks_t *t)
     *t = (os64_ticks_t){ .ticks = now_ms, .per_second = 1000 };
     return 0;
 }
+
+// A wait on a bell, in a harness of one thread, is the clock moving.
+static void bell_slept(uint64_t ms) { now_ms += ms; }
 
 // ── The environment ─────────────────────────────────────────────────────
 
@@ -2299,24 +2303,54 @@ static void case_keepalive_owner(void)
 static void case_keepalive_caps(void)
 {
     char out[64];
-    // SIX FOR ONE KEY: seven fetches open at once to one host, closed in
-    // order, leave six kept and the first one closed — the least recent.
+    // SIX FOR ONE KEY: six fetches open at once to one host are six
+    // connections. A seventh dials nothing: it waits for one of the six,
+    // and when its wait runs out it says what it waited for. Closed in
+    // order, the six are kept, and nothing was closed.
     reset();
     const char *many[] = { kFirst, kFirst, kFirst, NULL };
     peer_answers("cap.test", 80, many);
     os64_fetch_t *f[FETCH_POOL_PER_KEY + 1];
-    for (int i = 0; i <= FETCH_POOL_PER_KEY; i++)
+    for (int i = 0; i < FETCH_POOL_PER_KEY; i++)
         f[i] = os64_fetch_open("http://cap.test/", NULL);
-    for (int i = 0; i <= FETCH_POOL_PER_KEY; i++) {
+    CHECK(dials == FETCH_POOL_PER_KEY && fetch_pool_live() == FETCH_POOL_PER_KEY && fetch_pool_idle() == 0);
+    f[FETCH_POOL_PER_KEY] = os64_fetch_open("http://cap.test/", NULL);
+    CHECK(os64_fetch_status(f[FETCH_POOL_PER_KEY]) == OS64_FETCH_DIAL_FAILED);
+    CHECK(os64_fetch_detail(f[FETCH_POOL_PER_KEY])->dial == OS64_NET_ERR_NO_RESOURCES);
+    CHECK(strcmp(os64_fetch_reason(f[FETCH_POOL_PER_KEY]),
+                 "cannot reach cap.test:80: waited 300000 ms for one of the 6 connections to it, all in use") == 0);
+    os64_fetch_close(f[FETCH_POOL_PER_KEY]);
+    // A fetch that cannot have a bell cannot wait, and says that instead.
+    host_bell_refuse_make = true;
+    f[FETCH_POOL_PER_KEY] = os64_fetch_open("http://cap.test/", NULL);
+    host_bell_refuse_make = false;
+    CHECK(os64_fetch_status(f[FETCH_POOL_PER_KEY]) == OS64_FETCH_DIAL_FAILED);
+    CHECK(strcmp(os64_fetch_reason(f[FETCH_POOL_PER_KEY]),
+                 "cannot reach cap.test:80: no connection could be asked for or waited for "
+                 "(memory, the clock or a bell)") == 0);
+    os64_fetch_close(f[FETCH_POOL_PER_KEY]);
+    CHECK(dials == FETCH_POOL_PER_KEY && fetch_pool_live() == FETCH_POOL_PER_KEY && host_bell_alive() == 0);
+    for (int i = 0; i < FETCH_POOL_PER_KEY; i++) {
         CHECK(slurp(f[i], (uint8_t *)out, sizeof(out), 0) == 5);
         now_ms++;
         os64_fetch_close(f[i]);
     }
-    CHECK(dials == FETCH_POOL_PER_KEY + 1 && fetch_pool_idle() == FETCH_POOL_PER_KEY);
-    CHECK(closes == 1 && !conns[0].open && conns[1].open);
-    // The next request takes the most recently kept.
+    CHECK(fetch_pool_idle() == FETCH_POOL_PER_KEY && fetch_pool_live() == 0 && closes == 0);
+    // The next request takes the most recently kept, and dials nothing.
     fetch_all("http://cap.test/", NULL, out, sizeof(out), NULL, 0);
-    CHECK(requests_on(FETCH_POOL_PER_KEY) == 2 && requests_on(1) == 1);
+    CHECK(dials == FETCH_POOL_PER_KEY && requests_on(FETCH_POOL_PER_KEY - 1) == 2 && requests_on(0) == 1);
+    // A fetch whose connection may not be kept gives its place up: one of
+    // six is closed mid-body, and a seventh request dials in its stead.
+    for (int i = 0; i < FETCH_POOL_PER_KEY; i++)
+        f[i] = os64_fetch_open("http://cap.test/", NULL);
+    CHECK(dials == FETCH_POOL_PER_KEY && fetch_pool_live() == FETCH_POOL_PER_KEY);
+    os64_fetch_close(f[0]);                             // body unread: not kept
+    CHECK(fetch_pool_live() == FETCH_POOL_PER_KEY - 1 && fetch_pool_idle() == 0);
+    f[0] = os64_fetch_open("http://cap.test/", NULL);
+    CHECK(os64_fetch_status(f[0]) == OS64_FETCH_OK && dials == FETCH_POOL_PER_KEY + 1);
+    for (int i = 0; i < FETCH_POOL_PER_KEY; i++)
+        os64_fetch_close(f[i]);
+    CHECK(fetch_pool_live() == 0);
 
     // THE WHOLE POOL'S CAP: one connection to each of one host more than it
     // holds, and the first kept is the one let go.
@@ -2326,20 +2360,48 @@ static void case_keepalive_caps(void)
         snprintf(names[i], sizeof(names[i]), "h%d.test", i);
         peer_answers(names[i], 80, many);
     }
+    // All sixteen in use, one to a host: a seventeenth host's fetch waits
+    // for a place in the table, and its sentence names the table, not a
+    // host it has no connection to.
+    {
+        os64_fetch_t *held[FETCH_POOL_TOTAL];
+        char url[64];
+        for (int i = 0; i < FETCH_POOL_TOTAL; i++) {
+            snprintf(url, sizeof(url), "http://%s/", names[i]);
+            held[i] = os64_fetch_open(url, NULL);
+        }
+        CHECK(fetch_pool_live() == FETCH_POOL_TOTAL);
+        snprintf(url, sizeof(url), "http://%s/", names[FETCH_POOL_TOTAL]);
+        os64_fetch_t *late = os64_fetch_open(url, NULL);
+        CHECK(os64_fetch_status(late) == OS64_FETCH_DIAL_FAILED);
+        CHECK(strcmp(os64_fetch_reason(late), "cannot reach h16.test:80: waited 300000 ms for one of this "
+                                              "program's 16 connections, all in use") == 0);
+        os64_fetch_close(late);
+        for (int i = 0; i < FETCH_POOL_TOTAL; i++)
+            os64_fetch_close(held[i]);          // body unread: none kept
+        CHECK(fetch_pool_live() == 0 && fetch_pool_idle() == 0);
+        reset();
+        for (int i = 0; i <= FETCH_POOL_TOTAL; i++)
+            peer_answers(names[i], 80, many);
+    }
     for (int i = 0; i <= FETCH_POOL_TOTAL; i++) {
         char url[64];
         snprintf(url, sizeof(url), "http://%s/", names[i]);
         now_ms++;
         fetch_all(url, NULL, out, sizeof(out), NULL, 0);
     }
-    CHECK(fetch_pool_idle() == FETCH_POOL_TOTAL && closes == 1 && !conns[0].open);
+    // The first kept went to make room BEFORE the last one's dial, so the
+    // peer's first place is the last dial's by now.
+    CHECK(fetch_pool_idle() == FETCH_POOL_TOTAL && closes == 1 && conns[0].dialled == FETCH_POOL_TOTAL);
     fetch_all("http://h1.test/", NULL, out, sizeof(out), NULL, 0);
     fetch_all("http://h0.test/", NULL, out, sizeof(out), NULL, 0);
     CHECK(dials == FETCH_POOL_TOTAL + 2 && requests_on(1) == 2);
 
     // OUT OF HANDLES: the pool at its cap and a task with no handle left
-    // for another connection. The dial is refused, a kept connection is let
-    // go — the least recent — and the dial tried once more, which succeeds.
+    // for another connection even after the pool has put its least recent
+    // one out to make the slot. The dial is refused, another kept connection
+    // is let go — the least recent again — and the dial tried once more,
+    // which succeeds.
     reset();
     for (int i = 0; i <= FETCH_POOL_TOTAL; i++)
         peer_answers(names[i], 80, many);
@@ -2350,12 +2412,13 @@ static void case_keepalive_caps(void)
         fetch_all(url, NULL, out, sizeof(out), NULL, 0);
     }
     CHECK(fetch_pool_idle() == FETCH_POOL_TOTAL && closes == 0);
-    open_limit = FETCH_POOL_TOTAL;
+    open_limit = FETCH_POOL_TOTAL - 1;
     char url[64], why[256];
     snprintf(url, sizeof(url), "http://%s/", names[FETCH_POOL_TOTAL]);
     CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK && !strcmp(out, "first"));
-    // The least recent (the first host's) went: asking it again dials.
-    CHECK(dials == FETCH_POOL_TOTAL + 2 && closes == 1 && fetch_pool_idle() == FETCH_POOL_TOTAL);
+    // The two least recent (the first two hosts') went, one for the slot
+    // and one for the handle: asking the first again dials.
+    CHECK(dials == FETCH_POOL_TOTAL + 2 && closes == 2 && fetch_pool_idle() == FETCH_POOL_TOTAL - 1);
     open_limit = 0;
     fetch_all("http://h0.test/", NULL, out, sizeof(out), NULL, 0);
     CHECK(dials == FETCH_POOL_TOTAL + 3);
@@ -2791,6 +2854,10 @@ int main(int argc, char **argv)
 {
     unsigned seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 12345u;
     rng = seed;
+    // One thread: a fetch that has to wait for a connection has nobody to
+    // ring its bell, so its wait ends at once as one whose patience ran out.
+    host_bell_never_blocks = true;
+    host_bell_slept = bell_slept;
     printf("test_fetch_host: random-chunk seed %u\n", seed);
     for (int mode = 0; mode < 3; mode++) {
         case_plain(mode);
@@ -2830,6 +2897,11 @@ int main(int argc, char **argv)
     fetch_pool_drain();
     fetch_pool_trust_drop();
     CHECK(fetch_pool_idle() == 0);
+    // Whatever the cases did, no fetch is left holding a place in the pool
+    // or a bell: every connection a case took was given back or reported
+    // gone, by every path that ends one.
+    fetch_pool_drain();
+    CHECK(fetch_pool_live() == 0 && fetch_pool_idle() == 0 && host_bell_alive() == 0);
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }

@@ -391,8 +391,8 @@ compare over the list. GitHub defines about a hundred.
     queues `attributeChangedCallback`. That includes a set to the same
     value.
   - **Adoption:** an element whose node document changes (`adoptNode`,
-    or a move between the window's document and a second document,
-    which `d_leaving` already records) queues `adoptedCallback`, before
+    or an implicit cross-document insertion, whose native source/destination
+    metadata F.2b captures before commit) queues `adoptedCallback`, before
     its connected callbacks.
   - **No definitions, no work.** Until the first `define`, the listener's
     custom-element half returns at once, so a page that defines nothing

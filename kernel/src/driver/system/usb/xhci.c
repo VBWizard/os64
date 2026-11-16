@@ -7,8 +7,7 @@
 // from kmalloc_aligned — zeroed at the allocator choke point, physically
 // contiguous, HHDM-addressed (phys = virt - kHHDMOffset). The controller's
 // MMIO BAR is mapped at (kHHDMOffset | bar_phys) — an UPPER-HALF VA — so
-// xhci_poll() can touch the doorbells from ANY CR3 (processSignals runs
-// under whatever task was interrupted). Mapped with PAGE_PCD: this is
+// the registers are reachable under ANY CR3. Mapped with PAGE_PCD: this is
 // device memory, caching it would be lying to ourselves.
 
 #include <stdint.h>
@@ -17,6 +16,7 @@
 #include "kmalloc.h"
 #include "memset.h"
 #include "memcpy.h"
+#include "memcmp.h"
 #include "paging.h"
 #include "serial_logging.h"
 #include "BasicRenderer.h"   // printf — framebuffer boot lines only
@@ -26,14 +26,22 @@
 #include "driver/system/hid_keyboard.h"   // the boot-keyboard interpreter every HID keyboard shares
 #include "gui/input.h"
 #include "driver/system/usb/xhci.h"
+#include "driver/system/usb/xhci_service.h"   // the TRB, the event ring's consumer side, the visit
+#include "kusb.h"                              // kUsbDoorbell — a holder's release rings it for a refused daemon
 #include "driver/system/usb/bt_intel.h"
 #include "driver/system/usb/bt_scan.h"
 #include "driver/system/usb/bt_le.h"
 #include "driver/system/usb/bt_manager.h"
 #include "driver/system/usb/bt_host.h"
+#include "audio/media_session.h"   // media_key_pressed: where the headphones' presses go
+#include "driver/system/usb/bt_a2dp_seam.h"   // slot 2's audio sink, given to the host at bring-up
+#include "micros.h"                            // the pump's clock, handed to each host tick
 #include "crypto/wipe.h"
 #include "strings/sprintf.h"
 #include "driver/system/hid_mouse.h"
+#include "x86_64.h"          // rdtsc — a pass's deadline and measurements
+#include "smp_core.h"        // get_core_local_storage — the thread that sleeps for the flag
+#include "signals.h"         // SIGSLEEP
 
 extern pci_device_t* kPCIDeviceHeaders;
 extern const uint8_t bt_ax210_sfi[], bt_ax210_sfi_end[];
@@ -43,6 +51,8 @@ extern uint16_t kPCIDeviceCount, kPCIFunctionCount;
 extern uintptr_t kHHDMOffset;
 extern uintptr_t kKernelPML4v;
 extern bool kUSBQuiet;   // USBQUIET — the opt-in 2.4GHz hygiene flashlight
+extern bool kUsbPoll;    // USBPOLL — the flashlight: no controller is given an interrupt
+extern int  kUsbImod;    // USBIMOD=<n> — the moderation interval in 250 ns units; negative = the built-in value
 extern volatile uint64_t kSystemCurrentTime;
 
 // ── Register offsets (xHCI spec ch. 5) ──────────────────────────────────────
@@ -63,6 +73,7 @@ extern volatile uint64_t kSystemCurrentTime;
 
 #define USBCMD_RS            (1u << 0)
 #define USBCMD_HCRST         (1u << 1)
+#define USBCMD_INTE          (1u << 2)   // interrupter enable: the controller-wide gate over every IMAN.IE
 #define USBSTS_HCH           (1u << 0)
 #define USBSTS_CNR           (1u << 11)
 
@@ -74,6 +85,7 @@ extern volatile uint64_t kSystemCurrentTime;
 
 // Interrupter 0 (runtime base + 0x20)
 #define XHCI_IR0_IMAN        0x20
+#define XHCI_IR0_IMOD        0x24   // moderation: interval (bits 0..15, 250 ns units), countdown above
 #define XHCI_IR0_ERSTSZ      0x28
 #define XHCI_IR0_ERSTBA      0x30
 #define XHCI_IR0_ERDP        0x38
@@ -97,7 +109,7 @@ extern volatile uint64_t kSystemCurrentTime;
 #define TRB_EV_CMD_COMPLETE  33
 #define TRB_EV_PORT_STATUS   34
 
-#define TRB_CYCLE            (1u << 0)
+#define TRB_CYCLE            XHCI_TRB_CYCLE
 #define TRB_TOGGLE_CYCLE     (1u << 1)
 #define TRB_IOC              (1u << 5)
 #define TRB_ISP              (1u << 2)   // event on short packet
@@ -108,12 +120,6 @@ extern volatile uint64_t kSystemCurrentTime;
 #define TRB_CC_SUCCESS       1
 #define TRB_CC_USB_TRANSACTION_ERROR 4
 #define TRB_CC_SHORT_PACKET  13
-
-typedef struct {
-	uint64_t param;
-	uint32_t status;
-	uint32_t control;
-} __attribute__((packed)) xhci_trb_t;
 
 #define RING_TRBS 256   // one 4KB page per ring, last TRB is the Link
 
@@ -170,9 +176,32 @@ typedef struct {
 	bt_usb_endpoint_t endpoint;
 	bt_hci_stream_t stream;
 	bool retry_pending, retried, rearm_pending;
+	// For xhci_bt_log_usb_state: completions taken, the last one's code,
+	// and events for this endpoint that named a transfer not being waited on.
+	uint32_t completions, unmatched;
+	uint8_t last_cc;
 } xhci_bt_endpoint_t;
 
-// Intel transport state. Bring-up uses a stack instance, then transfers a
+// ACL packets on their way to the adapter (AUDIO_CLASSIC.md § T2). The
+// transmit endpoint's storage is one allocation: its first page is what
+// bring-up sends from, with the runtime command's bytes at offset 512 of
+// it; after that page come BT_TX_SLOTS send slots. A packet is copied into
+// a free slot and queued, so several can be with the controller at once and
+// none can reach the command's bytes, whatever its length. Each slot lies
+// inside one page. The host is told how many are in flight each pass, and
+// keeps one free for the LE peers (bt_host.h).
+#define BT_TX_SLOTS       BT_HOST_TX_SLOTS
+#define BT_TX_SLOT_STRIDE 2048
+#define BT_TX_SLOT_BYTES  (BT_LE_ACL_MAX + 4)   // an HCI ACL packet as large as the receive side assembles
+#define BT_TX_BYTES       (PAGE_SIZE + BT_TX_SLOTS * BT_TX_SLOT_STRIDE)
+_Static_assert(BT_TX_SLOT_BYTES <= BT_TX_SLOT_STRIDE && PAGE_SIZE % BT_TX_SLOT_STRIDE == 0,
+               "a send slot lies inside one page");
+typedef struct {
+	uint64_t trb;        // the transfer queued for it
+	uint64_t deadline;   // the tick by which that transfer must have completed
+} xhci_bt_tx_slot_t;
+
+// Intel transport state. Bring-up fills an allocated instance, then copies a
 // successful device into controller-owned storage for discovery and LE input.
 typedef struct {
 	xhci_device_t *device;
@@ -181,7 +210,14 @@ typedef struct {
 	bt_intel_events_t events;
 	uint64_t deadline;
 	uint32_t tx_bytes;
+	// No transmit is with the controller. Bring-up, which has one transfer
+	// at a time, waits on it; the runtime host is given tx_slots.
 	bool tx_done;
+	// The send slots in flight, oldest first: tx_slots of them, starting at
+	// slot tx_oldest. Transfers on one endpoint complete in the order they
+	// were queued, so the oldest is the one a completion is for.
+	xhci_bt_tx_slot_t tx_slot[BT_TX_SLOTS];
+	uint8_t tx_oldest, tx_slots;
 	bool listening, failed;
 	unsigned packets;
 	bool runtime;
@@ -193,12 +229,53 @@ typedef struct {
 	} scan_history;
 	hid_keyboard_t keyboards[BT_HOST_PEERS];
 	input_pointer_source_t pointers[BT_HOST_PEERS];
+	uint8_t timeline_phase[BT_HOST_PEERS];   // each slot's phase as /sys/usb's timeline last wrote it
+	uint8_t timeline_classic_phase;          // the same, for the Classic link (slot 2)
+	// Headphones left off are paged again and again, and each page is two
+	// moves (stopped, paging, stopped). The first unanswered page is
+	// written; the ones after it are counted here until the link does
+	// anything else, so they cannot push every other line out of the
+	// timeline. `quiet`: the page under way is one of those.
+	bool timeline_classic_unanswered, timeline_classic_quiet;
+	uint64_t timeline_classic_unlisted;
+	// When a Classic bond save that failed is tried again (ms); 0: at once.
+	uint64_t classic_save_at;
+	// The adapter's port, as its status-change events left it, and control
+	// endpoint events that named no request in flight (xhci_bt_log_usb_state).
+	uint32_t port_changes, port_last_sc, ep0_unmatched;
+	// The head of each of the last few HCI events, oldest overwritten: what
+	// the adapter was saying when it stopped answering. Six bytes reach an
+	// event's code, its length and a command's opcode, and stop short of
+	// anything an event carries that is secret.
+	uint8_t recent_event[4][6];
+	uint32_t recent_events;
+	// What xhci_bt_log_trouble has already said, so each trouble is one line.
+	struct {
+		uint8_t rounds;
+		bool failed;
+		uint32_t event_resyncs, acl_resyncs;
+		const char *error[BT_HOST_PEERS];
+		bool blocked[BT_HOST_PEERS];
+		const char *classic_error;
+		bool classic_refused;
+		uint32_t sdp_ended, l2cap_refusals;
+		// Slot 2's audio: the pump's sessions said, AVDTP's sessions gone
+		// wrong, the sink's failure and the pump giving up, and AVDTP's
+		// state as the start/suspend lines last saw it.
+		uint32_t a2dp_sessions;
+		uint8_t avdtp_wrongs, avdtp_state;
+		bool a2dp_failed, a2dp_gave_up;
+		// The number of the next button event of slot 2's to say
+		// (bt_host_t buttons_seen).
+		uint32_t buttons;
+	} logged;
 } xhci_bt_probe_t;
 
 // One controller. The P5 may place its keyboard and mouse on different xHCI
-// controllers, so initialized controllers remain live and are all polled.
+// controllers, so initialized controllers remain live and are all drained.
 typedef struct {
 	uint8_t pci_bus, pci_device, pci_function;
+	uint32_t     pci_bars[6];     // as enumeration read them (the MSI-X table is found through one)
 	bool         present;         // controller found and running
 	uint8_t     *cap;             // MMIO: capability base (HHDM-aliased)
 	uint8_t     *op;              // MMIO: operational base
@@ -208,10 +285,8 @@ typedef struct {
 	uint32_t     max_ports;
 	uint64_t    *dcbaa;           // device context base address array
 	xhci_ring_t  cmd;             // command ring
-	xhci_trb_t  *evt;             // event ring segment (consumer side)
-	uint64_t     evt_phys;
-	uint32_t     evt_dequeue;
-	uint32_t     evt_cycle;
+	xhci_evt_ring_t evt;          // event ring segment (consumer side)
+	xhci_wait_t  wait;            // how long an event on it may have waited (/sys/usb)
 
 	// last command completion (filled by the event drain, consumed by
 	// xhci_run_command's synchronous wait)
@@ -227,7 +302,7 @@ typedef struct {
 	xhci_device_t bluetooth_device;
 
 	// One EP0 request per controller: synchronous during enumeration,
-	// asynchronous from the serialized runtime Bluetooth poll path.
+	// asynchronous from the runtime Bluetooth step of kusb's pass.
 	volatile uint32_t control_slot;
 	volatile bool     xfer_done;
 	volatile uint8_t  xfer_cc;
@@ -235,6 +310,25 @@ typedef struct {
 	uint64_t          control_data_trb;
 	uint64_t          control_status_trb;
 	volatile uint16_t xfer_actual;
+
+	// Events kusb's passes have drained from this controller (/sys/usb).
+	uint64_t          events_polled;
+
+	// How it is driven: decided once, by kusb, in xhci_interrupts_enable.
+	xhci_drive_choice_t drive;
+	// THE TOP HALF'S MARK, written in interrupt context and taken by kusb's
+	// drain in one exchange. Non-zero: an interrupt was acknowledged for
+	// this ring since a drain last took the mark, so a drain that handles
+	// nothing must read ERDP and retire the busy bit if it is set. The
+	// value is the TSC at the OLDEST such interrupt, which is what the
+	// interrupt-to-service time is measured from; one word, so the mark
+	// and its stamp cannot be taken apart.
+	volatile uint64_t irq_at;
+	volatile uint64_t irq_fires;
+	// From an interrupt to the start of the drain that answered it, in
+	// cycles: the longest, the longest since /sys/usb was last read, and
+	// how many took longer than a tick.
+	uint64_t          irq_service_max, irq_service_recent, irq_service_late;
 } xhci_t;
 
 #define MAX_XHCI_CONTROLLERS 8
@@ -246,15 +340,162 @@ static uint32_t s_controller_count;
 static bool s_keyboard_claimed;
 static bool s_mouse_claimed;
 static uint32_t s_ax210_described;
-// Active controller while boot-time setup runs, or while xhci_poll owns its
-// global serialization lock. It is never changed concurrently.
+// The controller being worked on: by the boot thread during setup, by kusb
+// during a pass. Nothing else reads or writes it, so it is never changed
+// concurrently.
 static xhci_t *s_hc;
+// THE TOP HALF'S LIST: the controllers that interrupt, as a prefix that only
+// grows. kusb writes an entry whole and then raises the count past it; the
+// handler reads the count and never looks beyond it, so it never sees a
+// half-published controller. Through an entry it reads `op` and `rt`, which
+// are set at bring-up and not changed after, and writes that controller's
+// interrupt mark and fire count.
+static xhci_t *s_irq_list[MAX_XHCI_CONTROLLERS];
+static volatile uint32_t s_irq_count;
+static volatile uint64_t s_irq_spurious;   // handler entries that found no controller signalling
 static xhci_t *s_bluetooth_hc; // First operational AX210 retained for /sys/bluetooth.
+// THE SERIALIZING FLAG. Whoever holds it owns the Bluetooth host state and,
+// if it is kusb, the event rings. kusb's pass, a sysfs read or request and
+// kworker's bond work take it by test-and-set and never wait for it, with
+// one exception (kworker publishing a bond it has read or written).
+// s_kusb_waiting is how a refused kusb is brought back: it sets the mark
+// BEFORE it tries the flag, and every other holder releases through
+// xhci_serial_release, which rings kusb's bell if the mark is up. Set then
+// try on one side, release then look on the other: either kusb's try
+// succeeds or the releaser sees the mark.
 static volatile uint32_t s_poll_busy;
+static volatile uint32_t s_kusb_waiting;
+
+// Every holder but kusb lets go of the serializing flag here. The clearing
+// store is sequentially consistent, like the exchange after it and kusb's
+// two stores before its try: the handshake's claim is about the order of
+// those four, and a weaker store would make it true of x86 only.
+static void xhci_serial_release(void)
+{
+	__atomic_store_n(&s_poll_busy, 0, __ATOMIC_SEQ_CST);
+	if (__atomic_exchange_n(&s_kusb_waiting, 0, __ATOMIC_SEQ_CST))
+		doorbell_ring(&kUsbDoorbell);
+}
 static volatile uint32_t s_bond_io_busy;
 static bool s_bond_manager_ready;
 
 extern volatile uint64_t kTicksSinceStart;   // Typematic and USB/Bluetooth deadlines.
+extern uint64_t kCPUCyclesPerSecond;         // TSC cycles to time, for a pass's measurements.
+
+// ── What a pass measures about itself (/sys/usb) ────────────────────────────
+//
+// A device that is slow to answer has two possible causes that look alike
+// from a chair: the controller held an event and nobody came round to read
+// it, or the event had not happened yet (a Bluetooth scan that has not seen
+// the device). These numbers tell them apart.
+//
+// A PASS is one visit by kusb that held the flag. Its GAP is the time since
+// the pass before it began. The gap is a CADENCE: how often kusb comes
+// round. It does not bound how long an event waited, because a pass can
+// begin on time and reach a controller late, and work carried over from one
+// pass to the next is older than any gap. That bound is kept per controller
+// (xhci_t.wait, xhci_service.h): from the last time the controller's ring
+// was seen empty to the drain that found events on it.
+//
+// The TIMELINE lists what Bluetooth did and when, each line with the
+// passes, events and longest gap since the line before, so a slow step can
+// be laid beside how often kusb came round during it.
+//
+// Everything here is written by kusb under s_poll_busy, on the one core it
+// is pinned to, which is what makes the TSC differences meaningful.
+
+static uint64_t s_polls;               // passes
+static uint64_t s_polls_with_events;   // of those, the ones that drained an event
+static uint64_t s_poll_last_tsc;       // when the previous pass began
+static uint64_t s_poll_gap_max;        // longest gap of any pass, in cycles
+static uint64_t s_poll_gap_recent;     // the same, since /sys/usb was last read
+// Gaps of the passes that drained events, by size. The first edge is two
+// ticks, so a pass every tick lands in the first bucket and not on its
+// boundary. The per-controller waits use the same edges.
+static uint64_t s_event_gap_max;       // cycles
+static uint64_t s_event_gap_20ms, s_event_gap_200ms, s_event_gap_2s, s_event_gap_over_2s;
+// kusb turned away by a held flag: how often, when the wait in hand began
+// (0: none), and the longest from a refusal to the pass that did the work.
+static uint64_t s_refusals;
+static uint64_t s_refused_at;
+static uint64_t s_refusal_wait_max;    // cycles
+// The longest time from a wake's start to the Bluetooth step that follows
+// the drains: the deadline's bound, as it turned out (cycles).
+static uint64_t s_step_delay_max;
+// Passes that ended with a controller stopped by the deadline or not
+// reached.
+static uint64_t s_passes_left_work;
+// Where the next pass starts, so the controller that used the time is
+// served last.
+static xhci_visit_t s_visit;
+
+typedef enum {
+	XHCI_TL_SCAN_STARTED,
+	XHCI_TL_SCAN_FINISHED,   // `to` = devices found, `from` = 1 when the scan failed
+	XHCI_TL_LE_PHASE,        // `slot` moved from phase `from` to phase `to`
+	XHCI_TL_CLASSIC_PHASE,   // the Classic link (`slot` 2) moved from phase `from` to phase `to`
+} xhci_timeline_kind_t;
+
+typedef struct {
+	uint64_t at_ms;          // uptime
+	uint8_t  kind, slot, from, to;
+	uint32_t polls;          // passes since the previous line
+	uint32_t events;         // events those passes drained
+	uint64_t gap_max;        // the longest gap among them, in cycles
+} xhci_timeline_entry_t;
+
+// The last XHCI_TIMELINE lines. A reconnection walks about fifteen phases
+// and a waiting peer costs two lines a scan round, so this holds a
+// reconnection and several minutes of the waiting before it.
+#define XHCI_TIMELINE 64
+static xhci_timeline_entry_t s_timeline[XHCI_TIMELINE];
+static uint64_t s_timeline_count;      // lines ever written; the ring keeps the newest
+// Since the previous line.
+static uint32_t s_interval_polls, s_interval_events;
+static uint64_t s_interval_gap_max;
+
+static void xhci_timeline_add(xhci_timeline_kind_t kind, unsigned slot, unsigned from, unsigned to)
+{
+	xhci_timeline_entry_t *e = &s_timeline[s_timeline_count++ % XHCI_TIMELINE];
+	e->at_ms = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
+	e->kind = (uint8_t)kind;  e->slot = (uint8_t)slot;
+	e->from = (uint8_t)from;  e->to = (uint8_t)to;
+	e->polls = s_interval_polls;  e->events = s_interval_events;
+	e->gap_max = s_interval_gap_max;
+	s_interval_polls = s_interval_events = 0;
+	s_interval_gap_max = 0;
+}
+
+// A pass begins at `now`: its gap is known at once, and counted before any
+// work, so that a timeline line written during this pass includes it. The
+// event that moves Bluetooth on is drained by the pass that writes the
+// line. Returns the gap in cycles; the first pass has no pass before it and
+// so no gap.
+static uint64_t xhci_pass_began(uint64_t now)
+{
+	uint64_t gap = s_poll_last_tsc ? now - s_poll_last_tsc : 0;
+	s_poll_last_tsc = now;
+	s_polls++;
+	s_interval_polls++;
+	if (gap > s_poll_gap_max) s_poll_gap_max = gap;
+	if (gap > s_poll_gap_recent) s_poll_gap_recent = gap;
+	if (gap > s_interval_gap_max) s_interval_gap_max = gap;
+	return gap;
+}
+
+// A pass ends having drained `events` after a gap of `gap` cycles.
+static void xhci_pass_ended(uint64_t gap, uint32_t events)
+{
+	if (events == 0)
+		return;
+	s_polls_with_events++;
+	if (gap > s_event_gap_max) s_event_gap_max = gap;
+	uint64_t ms = kCPUCyclesPerSecond / 1000;
+	if (gap <= 20 * ms) s_event_gap_20ms++;
+	else if (gap <= 200 * ms) s_event_gap_200ms++;
+	else if (gap <= 2000 * ms) s_event_gap_2s++;
+	else s_event_gap_over_2s++;
+}
 
 // ── MMIO accessors ──────────────────────────────────────────────────────────
 
@@ -317,76 +558,132 @@ static uint64_t ring_push(xhci_ring_t *r, uint64_t param, uint32_t status, uint3
 
 // ── Event ring drain ────────────────────────────────────────────────────────
 
-static void xhci_handle_transfer_event(xhci_trb_t *ev);
+#define XHCI_BT_PORT_LINES 8   // port changes of the Bluetooth adapter said in the log
+
+// Acknowledge a port's change bits (PORTSC 17..23, write-one-to-clear). The
+// controller raises a port event only when a change bit goes from clear to
+// set, so a bit left standing hides every later change of its kind. Power
+// is written back as it stands; enable and reset are written as zeros,
+// which leave them alone.
+#define PORTSC_CHANGES       0x00FE0000u
+static void xhci_port_ack_changes(uint32_t port)
+{
+	uint32_t sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(port));
+	mmio_w32(s_hc->op, XHCI_OP_PORTSC(port), (sc & PORTSC_PP) | (sc & PORTSC_CHANGES));
+}
+
+static void xhci_handle_transfer_event(const xhci_trb_t *ev);
 static void xhci_hid_lost(xhci_device_t *dev);
 
-// Consume every event the controller has posted. Returns the count.
-// This is the whole "interrupt handler", minus the interrupt.
+// Handle one event of s_hc's ring: the bottom half's work, in kusb's thread
+// (or the boot thread's, before there is one).
+static void xhci_handle_event(void *ctx, const xhci_trb_t *ev)
+{
+	(void)ctx;
+	uint32_t control = ev->control;
+	switch (TRB_GET_TYPE(control)) {
+		case TRB_EV_CMD_COMPLETE:
+			// A late completion must not authorize freeing another slot's DMA.
+			if (ev->param != s_hc->command_trb)
+				break;
+			s_hc->cmd_cc = (uint8_t)TRB_CC(ev->status);
+			s_hc->cmd_slot = (control >> 24) & 0xFF;
+			s_hc->cmd_done = true;
+			break;
+		case TRB_EV_TRANSFER:
+			xhci_handle_transfer_event(ev);
+			break;
+		case TRB_EV_PORT_STATUS: {
+			// v1: no hotplug, so nothing is enumerated here. A port that
+			// has LOST its device still matters: whatever that device
+			// held is released (xhci_hid_lost).
+			uint32_t port = (uint32_t)(ev->param >> 24) & 0xFF;
+			if (port < 1 || port > s_hc->max_ports)
+				break;   // not a port this controller has
+			uint32_t sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(port));
+			bool connected = (sc & PORTSC_CCS) != 0;
+			printd(DEBUG_USB, "xhci: port %u status change (%s)\n", port,
+			       connected ? "connected" : "disconnected");
+			// The Bluetooth adapter's port is said in the system log
+			// whatever the change: an adapter that leaves the bus and comes
+			// straight back reads "connected" here and is otherwise unseen.
+			if (s_hc->bt_probe && s_hc->bt_probe->device->port == port) {
+				xhci_bt_probe_t *bt = s_hc->bt_probe;
+				bt->port_last_sc = sc;
+				if (++bt->port_changes <= XHCI_BT_PORT_LINES)
+					printd(DEBUG_EXCEPTIONS, "bluetooth: the adapter's USB port %u changed: PORTSC %08x (%s, %s, link state %u, changes %02x)%s\n",
+					       port, sc, connected ? "connected" : "disconnected",
+					       (sc & PORTSC_PED) ? "enabled" : "disabled", (sc >> 5) & 0xF, (sc >> 17) & 0x7F,
+					       bt->port_changes == XHCI_BT_PORT_LINES ? "; further changes are counted, not logged" : "");
+				xhci_port_ack_changes(port);
+			}
+			if (!connected) {
+				if (s_hc->bt_probe && s_hc->bt_probe->device->port == port) {
+					s_hc->bt_probe->failed = true;
+					s_hc->bt_probe->listening = false;
+				}
+				if (s_hc->keyboard.present && s_hc->keyboard.port == port)
+					xhci_hid_lost(&s_hc->keyboard);
+				if (s_hc->mouse.present && s_hc->mouse.port == port)
+					xhci_hid_lost(&s_hc->mouse);
+			}
+			break;
+		}
+		default:
+			printd(DEBUG_USB, "xhci: unhandled event type %u cc %u\n",
+			       TRB_GET_TYPE(control), TRB_CC(ev->status));
+			break;
+	}
+}
+
+static uint64_t xhci_clock(void *ctx)
+{
+	(void)ctx;
+	return rdtsc();
+}
+
+// Drain s_hc's event ring until it is empty or the TSC passes `deadline`
+// (0: no deadline, drain to empty), then write ERDP if the drain made
+// progress: the empty slot when it drained to empty, the last event handled
+// when the deadline stopped it (xhci_service.h says why they differ). A
+// drain that handled nothing writes nothing, unless the top half
+// acknowledged an interrupt for this ring and the busy bit reads set: then
+// the pointer is written back once, to retire the bit.
+static xhci_evt_drain_t xhci_drain_until(uint64_t deadline)
+{
+	// The mark is taken BEFORE the drain: an interrupt acknowledged while
+	// the drain runs raises it again, for the next one. It is never set for
+	// a tick-driven controller or before kusb enables interrupts, and then
+	// ERDP is never read.
+	uint64_t at = __atomic_exchange_n(&s_hc->irq_at, 0, __ATOMIC_SEQ_CST);
+	bool owed = at != 0;
+	if (owed) {
+		uint64_t now = rdtsc();
+		if (now > at) {
+			uint64_t waited = now - at;
+			if (waited > s_hc->irq_service_max) s_hc->irq_service_max = waited;
+			if (waited > s_hc->irq_service_recent) s_hc->irq_service_recent = waited;
+			if (waited > kCPUCyclesPerSecond / TICKS_PER_SECOND) s_hc->irq_service_late++;
+		}
+	}
+	xhci_evt_drain_t drain = xhci_evt_drain(&s_hc->evt, xhci_handle_event, NULL,
+	                                        deadline ? xhci_clock : NULL, NULL, deadline);
+	bool reads_set = xhci_evt_erdp_wants_read(drain, owed) &&
+	                 (mmio_r32(s_hc->rt, XHCI_IR0_ERDP) & XHCI_ERDP_EHB) != 0;
+	xhci_erdp_t erdp = xhci_evt_erdp(&s_hc->evt, drain, owed, reads_set);
+	if (erdp.write) {
+		mmio_w64(s_hc->rt, XHCI_IR0_ERDP, erdp.value);
+		xhci_evt_published(&s_hc->evt, erdp);
+	}
+	return drain;
+}
+
+// Consume every event the controller has posted. Returns the count. The
+// boot-time waits call this; the scheduler is not running then, so there is
+// nothing a deadline would be making room for.
 static uint32_t xhci_drain_events(void)
 {
-	uint32_t handled = 0;
-
-	for (;;) {
-		xhci_trb_t *ev = &s_hc->evt[s_hc->evt_dequeue];
-		uint32_t control = ev->control;
-		if ((control & TRB_CYCLE) != (s_hc->evt_cycle ? TRB_CYCLE : 0))
-			break;   // controller hasn't written this slot yet
-
-		switch (TRB_GET_TYPE(control)) {
-			case TRB_EV_CMD_COMPLETE:
-				// A late completion must not authorize freeing another slot's DMA.
-				if (ev->param != s_hc->command_trb)
-					break;
-				s_hc->cmd_cc = (uint8_t)TRB_CC(ev->status);
-				s_hc->cmd_slot = (control >> 24) & 0xFF;
-				s_hc->cmd_done = true;
-				break;
-			case TRB_EV_TRANSFER:
-				xhci_handle_transfer_event(ev);
-				break;
-			case TRB_EV_PORT_STATUS: {
-				// v1: no hotplug, so nothing is enumerated here. A port that
-				// has LOST its device still matters: whatever that device
-				// held is released (xhci_hid_lost).
-				uint32_t port = (uint32_t)(ev->param >> 24) & 0xFF;
-				if (port < 1 || port > s_hc->max_ports)
-					break;   // not a port this controller has
-				bool connected = (mmio_r32(s_hc->op, XHCI_OP_PORTSC(port)) & PORTSC_CCS) != 0;
-				printd(DEBUG_USB, "xhci: port %u status change (%s)\n", port,
-				       connected ? "connected" : "disconnected");
-				if (!connected) {
-					if (s_hc->bt_probe && s_hc->bt_probe->device->port == port) {
-						s_hc->bt_probe->failed = true;
-						s_hc->bt_probe->listening = false;
-					}
-					if (s_hc->keyboard.present && s_hc->keyboard.port == port)
-						xhci_hid_lost(&s_hc->keyboard);
-					if (s_hc->mouse.present && s_hc->mouse.port == port)
-						xhci_hid_lost(&s_hc->mouse);
-				}
-				break;
-			}
-			default:
-				printd(DEBUG_USB, "xhci: unhandled event type %u cc %u\n",
-				       TRB_GET_TYPE(control), TRB_CC(ev->status));
-				break;
-		}
-
-		s_hc->evt_dequeue++;
-		if (s_hc->evt_dequeue == RING_TRBS) {
-			s_hc->evt_dequeue = 0;
-			s_hc->evt_cycle ^= 1;
-		}
-		handled++;
-	}
-
-	if (handled > 0) {
-		// Tell the controller where our dequeue pointer is now (EHB set to
-		// clear the busy flag — harmless in polling mode, required form).
-		uint64_t erdp = s_hc->evt_phys + s_hc->evt_dequeue * sizeof(xhci_trb_t);
-		mmio_w64(s_hc->rt, XHCI_IR0_ERDP, erdp | (1u << 3));
-	}
-	return handled;
+	return xhci_drain_until(0).handled;
 }
 
 // ── Synchronous command execution (boot-time enumeration) ───────────────────
@@ -595,27 +892,70 @@ static void xhci_bt_input_report(void *context, unsigned peer, const bt_le_input
     } else hid_keyboard_report(&p->keyboards[peer], report->keys);
 }
 
+// THE ADAPTER IS RESET ON THE WAY DOWN (xhci_bluetooth_quiesce_begin). Its
+// firmware runs on through a warm reboot, links and all, and on the P5 an
+// adapter met in that state has refused its start-up reset and every
+// command after it until its power was cycled (DEBTS). Asked while the
+// machine is still up and the adapter healthy, the same reset leaves the
+// next boot an idle controller. The shutdown thread asks; kusb, which owns
+// the adapter, sends; the reply is taken where events arrive.
+enum { BT_QUIESCE_NONE, BT_QUIESCE_ASKED, BT_QUIESCE_SENT, BT_QUIESCE_ANSWERED, BT_QUIESCE_REFUSED };
+static volatile uint8_t s_bt_quiesce;
+
 static void xhci_bt_runtime_event(void *context, const uint8_t *event, size_t bytes)
 {
 	xhci_bt_probe_t *p = context;
+	uint8_t *head = p->recent_event[p->recent_events++ % 4];
+	memset(head, 0, 6);
+	memcpy(head, event, bytes < 6 ? bytes : 6);
+	if (s_bt_quiesce != BT_QUIESCE_NONE) {
+		// The host is no longer run, so nothing is fed to it; the one event
+		// that matters is the reset's Command Complete.
+		if (s_bt_quiesce == BT_QUIESCE_SENT && bytes >= 6 && event[0] == 0x0e &&
+		    event[3] == 0x03 && event[4] == 0x0c)
+			s_bt_quiesce = event[5] == 0 ? BT_QUIESCE_ANSWERED : BT_QUIESCE_REFUSED;
+		crypto_wipe(p->rx[0].stream.bytes, sizeof(p->rx[0].stream.bytes));
+		return;
+	}
 	bt_host_event(&p->host, event, bytes);
 	crypto_wipe(p->rx[0].stream.bytes, sizeof(p->rx[0].stream.bytes));
 }
 
-static bool xhci_bt_transfer(xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_t cc)
+static uint8_t *xhci_bt_tx_slot(const xhci_bt_probe_t *p, unsigned slot)
+{
+	return p->tx.buffer + PAGE_SIZE + slot * BT_TX_SLOT_STRIDE;
+}
+
+static bool xhci_bt_transfer(const xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_t cc)
 {
 	xhci_bt_probe_t *probe = s_hc->bt_probe;
 	if (!probe || slot != probe->device->slot)
 		return false;
 	if (probe->tx.endpoint.address &&
 	    dci == (uint32_t)(probe->tx.endpoint.address & 15) * 2) {
-		if (ev->param == probe->tx.pending_trb && !probe->tx_done) {
-			probe->tx_done = true;
-			if (cc != TRB_CC_SUCCESS || (ev->status & 0xffffff)) {
-				probe->failed = true;
-				printd(DEBUG_USB, "xhci: AX210 bulk OUT failed cc=%u residual=%u\n",
-				       cc, ev->status & 0xffffff);
-			}
+		bool mine;
+		if (probe->runtime) {
+			// The oldest slot in flight, or not ours: an event for anything
+			// else (a transfer from before the runtime began) is counted
+			// and frees nothing. A slot whose completion never comes is
+			// found by its deadline (xhci_bt_runtime_poll).
+			mine = probe->tx_slots && ev->param == probe->tx_slot[probe->tx_oldest].trb;
+			if (mine) {
+				crypto_wipe(xhci_bt_tx_slot(probe, probe->tx_oldest), BT_TX_SLOT_BYTES);
+				probe->tx_oldest = (uint8_t)((probe->tx_oldest + 1) % BT_TX_SLOTS);
+				probe->tx_done = --probe->tx_slots == 0;
+			} else
+				probe->tx.unmatched++;
+		} else {
+			mine = ev->param == probe->tx.pending_trb && !probe->tx_done;
+			if (mine) probe->tx_done = true;
+		}
+		if (mine && (cc != TRB_CC_SUCCESS || (ev->status & 0xffffff))) {
+			// The endpoint halts on a failed transfer, and what was queued
+			// behind it will not complete: the transport is finished.
+			probe->failed = true;
+			printd(DEBUG_USB, "xhci: AX210 bulk OUT failed cc=%u residual=%u\n",
+			       cc, ev->status & 0xffffff);
 		}
 		return true;
 	}
@@ -623,9 +963,13 @@ static bool xhci_bt_transfer(xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_
 		xhci_bt_endpoint_t *rx = &probe->rx[i];
 		if (dci != (uint32_t)(rx->endpoint.address & 15) * 2 + 1)
 			continue;
-		if (!probe->listening || ev->param != rx->pending_trb)
+		if (!probe->listening || ev->param != rx->pending_trb) {
+			rx->unmatched++;
 			return true;
+		}
 		uint32_t residual = ev->status & 0xffffff;
+		rx->completions++;
+		rx->last_cc = cc;
 		// Firmware startup can interrupt a receive without transferring data.
 		// Defer one host-side soft reset per endpoint to the wait loop; issuing
 		// a synchronous command here would recursively drain this same event.
@@ -650,9 +994,10 @@ static bool xhci_bt_transfer(xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_
 			// Re-arm after the drain so radio traffic cannot monopolize a pass.
 			if (i == 0)
 				bt_hci_feed(&rx->stream, xhci_bt_runtime_event, probe, rx->buffer,
-				            rx->endpoint.packet_bytes - residual);
+				            rx->endpoint.packet_bytes - residual, rx->endpoint.packet_bytes);
 			else
 				bt_host_receive(&probe->host, rx->buffer, rx->endpoint.packet_bytes - residual,
+				              rx->endpoint.packet_bytes,
 				              xhci_bt_input_report, probe);
 			crypto_wipe(rx->buffer, rx->endpoint.packet_bytes);
 			rx->rearm_pending = true;
@@ -674,7 +1019,7 @@ static bool xhci_bt_transfer(xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_
 	return false;
 }
 
-static void xhci_handle_transfer_event(xhci_trb_t *ev)
+static void xhci_handle_transfer_event(const xhci_trb_t *ev)
 {
 	uint32_t slot = (ev->control >> 24) & 0xFF;
 	uint32_t dci  = (ev->control >> 16) & 0x1F;
@@ -694,8 +1039,11 @@ static void xhci_handle_transfer_event(xhci_trb_t *ev)
 		}
 		if (ev->param != s_hc->control_status_trb &&
 		    ev->param != s_hc->control_data_trb &&
-		    ev->param != s_hc->control_setup_trb)
+		    ev->param != s_hc->control_setup_trb) {
+			if (s_hc->bt_probe && slot == s_hc->bt_probe->device->slot)
+				s_hc->bt_probe->ep0_unmatched++;
 			return;
+		}
 		s_hc->xfer_cc = cc;
 		s_hc->xfer_done = true;
 		return;
@@ -963,9 +1311,22 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 		xhci_release_probe(dev);
 		return;
 	}
+	// The probe is too large for a kernel stack (the host inside it is most
+	// of it), so it is allocated, zeroed, filled in place, copied into the
+	// controller's storage when bring-up succeeds, and freed on every way
+	// out of this function. The host is then started where it lies
+	// (bt_host_init wipes it in place, for the same reason).
+	xhci_bt_probe_t *probe = kmalloc_try(sizeof(*probe));
+	if (!probe) {
+		printd(DEBUG_USB, "xhci: AX210 probe not started: no memory for its %u bytes\n", (unsigned)sizeof(*probe));
+		printf("USB Bluetooth: Intel AX210 probe stopped at its allocation\n");
+		xhci_release_probe(dev);
+		return;
+	}
+	probe->device = dev;
+	probe->tx_done = true;
+	probe->deadline = kTicksSinceStart + 120u * TICKS_PER_SECOND;
 	bt_intel_usb_t usb;
-	xhci_bt_probe_t probe = {.device = dev, .tx_done = true,
-	    .deadline = kTicksSinceStart + 120u * TICKS_PER_SECOND};
 	bool queried = false, attempted = false;
 	const char *stage = "USB layout";
 	// The P5's AX210 is full-speed. Reject other layouts before configuring
@@ -974,14 +1335,15 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 		printd(DEBUG_USB, "xhci: AX210 Read Version skipped: unsupported USB layout/speed\n");
 		goto cleanup;
 	}
-	probe.rx[0].endpoint = usb.interrupt_in;
-	probe.rx[1].endpoint = usb.bulk_in;
-	probe.tx.endpoint = usb.bulk_out;
+	probe->rx[0].endpoint = usb.interrupt_in;
+	probe->rx[1].endpoint = usb.bulk_in;
+	probe->tx.endpoint = usb.bulk_out;
 	stage = "endpoint buffer allocation";
 	for (unsigned i = 0; i < 3; i++) {
-		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe.rx[i] : &probe.tx;
+		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe->rx[i] : &probe->tx;
 		if (!ring_init(&endpoint->ring)) goto cleanup;
-		endpoint->buffer = kmalloc_aligned(PAGE_SIZE);
+		// The transmit endpoint's page is followed by its send slots.
+		endpoint->buffer = kmalloc_aligned(i < 2 ? PAGE_SIZE : BT_TX_BYTES);
 		if (!endpoint->buffer) goto cleanup;
 	}
 	stage = "SET_CONFIGURATION";
@@ -992,7 +1354,7 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 	memset(dev->input_ctx, 0, PAGE_SIZE);
 	uint32_t additions = 1, last_dci = 1;
 	for (unsigned i = 0; i < 3; i++) {
-		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe.rx[i] : &probe.tx;
+		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe->rx[i] : &probe->tx;
 		uint32_t dci = (endpoint->endpoint.address & 15) * 2 + (i < 2);
 		additions |= 1u << dci;
 		if (dci > last_dci) last_dci = dci;
@@ -1019,23 +1381,27 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 	        TRB_TYPE(TRB_CONFIG_ENDPOINT) | (dev->slot << 24)) != TRB_CC_SUCCESS)
 		goto cleanup;
 
-	s_hc->bt_probe = &probe;
-	probe.listening = true;
-	for (unsigned i = 0; i < 2; i++) xhci_bt_arm(&probe, &probe.rx[i]);
+	s_hc->bt_probe = probe;
+	probe->listening = true;
+	for (unsigned i = 0; i < 2; i++) xhci_bt_arm(probe, &probe->rx[i]);
 	// USB carries the HCI command header directly, without a UART packet-type
 	// byte. Intel's ff parameter requests the TLV form of Read Version.
 	uint8_t tlv = 0xff;
 	printd(DEBUG_USB, "xhci: AX210 Read Version sending fc05(ff), interrupt %02x / bulk %02x\n",
 	       usb.interrupt_in.address, usb.bulk_in.address);
 	attempted = true;
-	queried = xhci_bt_command(&probe, BT_INTEL_READ_VERSION, &tlv, 1, false);
-	if (queried && !probe.failed && probe.events.version.result == BT_INTEL_VERSION) {
-		const bt_intel_reply_t *v = &probe.events.version;
+	queried = xhci_bt_command(probe, BT_INTEL_READ_VERSION, &tlv, 1, false);
+	if (queried && !probe->failed && probe->events.version.result == BT_INTEL_VERSION) {
+		const bt_intel_reply_t *v = &probe->events.version;
 		const char *state = v->image == 1 ? "bootloader (firmware required)" :
 		                    v->image == 3 ? "operational firmware" : "unknown image type";
 		printd(DEBUG_USB, "xhci: AX210 Read Version: %s, image=%02x, USB packets=%u\n",
-		       state, v->image, probe.packets);
+		       state, v->image, probe->packets);
 		printf("USB Bluetooth: Intel AX210 %s\n", state);
+		// In the log as well as on the glass: whether the firmware was found
+		// already running (a warm boot) is the first fact a start-up
+		// failure is read against.
+		printd(DEBUG_BOOT, "bluetooth: Intel AX210 found %s (image %u)\n", state, v->image);
 		if (v->fields & BT_INTEL_CNVI)
 			printd(DEBUG_USB, "xhci: AX210 CNVi Bluetooth %08x\n", v->cnvi);
 		if (v->fields & BT_INTEL_CNVR)
@@ -1047,22 +1413,29 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 			printd(DEBUG_USB, "xhci: AX210 firmware build %u\n", v->build);
 		if (v->fields & BT_INTEL_SHA1)
 			printd(DEBUG_USB, "xhci: AX210 firmware SHA1 %08x\n", v->sha1);
-		if (v->image == 1 && !xhci_ax210_load(&probe)) {
+		if (v->image == 1 && !xhci_ax210_load(probe)) {
 			printd(DEBUG_USB, "xhci: AX210 firmware load failed (no retry this boot)\n");
 			printf("USB Bluetooth: Intel AX210 firmware load failed (see USB log)\n");
 			goto cleanup;
 		}
-		if (probe.events.version.image == 3 && !probe.failed) {
+		if (probe->events.version.image == 3 && !probe->failed) {
 			s_hc->bluetooth_device = *dev;
-			s_hc->bluetooth = probe;
+			s_hc->bluetooth = *probe;
+			// The event handler reaches the probe through bt_probe: it names
+			// the controller's copy before the allocation goes.
+			s_hc->bt_probe = &s_hc->bluetooth;
+			kfree(probe);
 			s_hc->bluetooth.device = &s_hc->bluetooth_device;
 			s_hc->bluetooth.runtime = true;
+			// From here a change on the adapter's port is news: clear what
+			// enumeration left standing so the next one raises an event.
+			xhci_port_ack_changes(s_hc->bluetooth.device->port);
 			bt_host_init(&s_hc->bluetooth.host, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
+			bt_host_audio(&s_hc->bluetooth.host, &kBtA2dpSeamOps, NULL);
 			for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
 				s_hc->bluetooth.keyboards[i].name = "bluetooth";
 				s_hc->bluetooth.keyboards[i].debug = DEBUG_USB;
 			}
-			s_hc->bt_probe = &s_hc->bluetooth;
 			s_bluetooth_hc = s_hc;
 			printd(DEBUG_USB, "xhci: AX210 slot %u retained for runtime discovery\n", dev->slot);
 			printf("USB Bluetooth: discovery ready at /sys/bluetooth/scan\n");
@@ -1070,8 +1443,8 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 		}
 	} else {
 		printd(DEBUG_USB, "xhci: AX210 Read Version incomplete: query_ok=%u receive_error=%u result=%u status=%02x packets=%u partial=%u/%u\n",
-		       queried, probe.failed, probe.events.version.result, probe.events.version.status,
-		       probe.packets, probe.rx[0].stream.used, probe.rx[1].stream.used);
+		       queried, probe->failed, probe->events.version.result, probe->events.version.status,
+		       probe->packets, probe->rx[0].stream.used, probe->rx[1].stream.used);
 		printf("USB Bluetooth: Intel AX210 Read Version incomplete (see USB log)\n");
 	}
 cleanup:
@@ -1079,25 +1452,30 @@ cleanup:
 		printd(DEBUG_USB, "xhci: AX210 Read Version setup failed at %s\n", stage);
 		printf("USB Bluetooth: Intel AX210 probe stopped at %s\n", stage);
 	}
-	probe.listening = false;
+	probe->listening = false;
 	// An idle receive is still owned by the HC. Disable the slot before freeing
-	// its buffers, and remove the stack pointer even when disabling times out.
+	// its buffers, and remove the pointer to the probe even when disabling
+	// times out. Disabling drains events, which reach the probe through that
+	// pointer, so the probe itself is freed last.
 	bool released = xhci_release_probe(dev);
 	s_hc->bt_probe = NULL;
 	printd(DEBUG_USB, "xhci: AX210 probe slot %u %s\n", dev->slot,
 	       released ? "released" : "retained after Disable Slot failure");
 	if (released) {
 		for (unsigned i = 0; i < 3; i++) {
-			xhci_bt_endpoint_t *endpoint = i < 2 ? &probe.rx[i] : &probe.tx;
+			xhci_bt_endpoint_t *endpoint = i < 2 ? &probe->rx[i] : &probe->tx;
 			if (endpoint->buffer) kfree(endpoint->buffer);
 			if (endpoint->ring.trb) kfree(endpoint->ring.trb);
 		}
 	}
+	kfree(probe);
 }
 
-// Runtime EP0 and ACL use disjoint regions of the retained transmit DMA page.
+// The runtime command's bytes are at offset 512 of the transmit storage's
+// first page; ACL data is in the send slots after that page (BT_TX_SLOTS).
 // Runtime HCI submits after USB Status and the preceding HCI reply agree;
-// it never waits or allocates while processSignals owns the scheduler lock.
+// it never waits or allocates: it runs inside kusb's pass, against that
+// pass's deadline.
 static void xhci_bt_runtime_send(void *context, uint16_t opcode,
                               const uint8_t *params, uint8_t length)
 {
@@ -1124,14 +1502,276 @@ static void xhci_bt_runtime_send(void *context, uint16_t opcode,
 static void xhci_bt_acl_send(void *context, const uint8_t *packet, size_t bytes)
 {
 	xhci_bt_probe_t *p = context;
-	crypto_wipe(p->tx.buffer, 512);
-	memcpy(p->tx.buffer, packet, bytes);
-	p->deadline = kTicksSinceStart + 5 * TICKS_PER_SECOND;
+	// A packet no slot can hold, or no slot to hold it: the sender was told
+	// neither could happen (it asks before it sends), so its state and the
+	// controller's no longer agree. Never truncated, never written past a
+	// slot: the transport fails, and says why.
+	if (bytes > BT_TX_SLOT_BYTES || p->tx_slots == BT_TX_SLOTS) {
+		if (!p->failed)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: an ACL packet of %lu bytes could not be sent (%u of %u send slots in flight)\n",
+			       (unsigned long)bytes, p->tx_slots, BT_TX_SLOTS);
+		p->failed = true;
+		return;
+	}
+	unsigned slot = (p->tx_oldest + p->tx_slots) % BT_TX_SLOTS;
+	uint8_t *buffer = xhci_bt_tx_slot(p, slot);
+	memcpy(buffer, packet, bytes);
 	p->tx_bytes = bytes;
 	p->tx_done = false;
-	p->tx.pending_trb = ring_push(&p->tx.ring, virt_to_phys(p->tx.buffer),
+	p->tx.pending_trb = ring_push(&p->tx.ring, virt_to_phys(buffer),
 	                             bytes, TRB_TYPE(TRB_NORMAL) | TRB_IOC);
+	// Its own five seconds: one deadline pushed back by each send would
+	// let the oldest wait for as long as anything was being sent.
+	p->tx_slot[slot] = (xhci_bt_tx_slot_t){ .trb = p->tx.pending_trb,
+	                                        .deadline = kTicksSinceStart + 5 * TICKS_PER_SECOND };
+	p->tx_slots++;
 	mmio_w32((uint8_t *)s_hc->db, 4 * p->device->slot, (p->tx.endpoint.address & 15) * 2);
+}
+
+// Bluetooth's troubles, in the SYSTEM LOG. The status files say what is
+// wrong now; this is what lets the log say that something went wrong, and
+// when, to somebody who was not looking. The state machines are pure code
+// with no kernel headers, so they cannot log; this watches them for a change
+// and says each one once, on the bit that is on by default: these are
+// faults, not narration.
+#define XHCI_BT_RESYNC_LINES 8
+
+// Where the adapter stands on USB, as two log lines: what a failed start-up
+// round needs beside its own line, because "no reply" has several causes
+// that look alike from the HCI side (the adapter left the bus, an endpoint
+// halted, the receive was never armed) and they are told apart here. The
+// slot and endpoint states are the controller's own, read from the device
+// context it maintains.
+static void xhci_bt_log_usb_state(const xhci_bt_probe_t *p)
+{
+	const xhci_device_t *d = p->device;
+	uint32_t sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(d->port));
+	const uint32_t *slot_ctx = (const uint32_t *)d->dev_ctx;
+	printd(DEBUG_EXCEPTIONS, "bluetooth: adapter on USB: port %u PORTSC %08x (%s, %s, link state %u), %u port change(s), last PORTSC %08x; slot %u state %u address %u\n",
+	       d->port, sc, (sc & PORTSC_CCS) ? "connected" : "disconnected",
+	       (sc & PORTSC_PED) ? "enabled" : "disabled", (sc >> 5) & 0xF,
+	       p->port_changes, p->port_last_sc, d->slot, slot_ctx[3] >> 27, slot_ctx[3] & 0xFF);
+	unsigned dci[3] = { 1, (p->rx[0].endpoint.address & 15u) * 2 + 1, (p->rx[1].endpoint.address & 15u) * 2 + 1 };
+	unsigned state[3];
+	for (unsigned i = 0; i < 3; i++)
+		state[i] = *(const uint32_t *)(d->dev_ctx + dci[i] * s_hc->ctx_size) & 7;
+	printd(DEBUG_EXCEPTIONS, "bluetooth: adapter endpoints (state 1=running 2=halted 3=stopped 4=error): control state %u, current request %s cc %u, %u unmatched; events state %u, %s, %u taken, last cc %u, %u unmatched; data in state %u, %s, %u taken, last cc %u, %u unmatched; data out %u of %u send slots in flight, %u unmatched; listening %s, transport failed %s\n",
+	       state[0], s_hc->control_slot != d->slot ? "not ours" : s_hc->xfer_done ? "done" : "in flight",
+	       s_hc->xfer_cc, p->ep0_unmatched,
+	       state[1], p->rx[0].rearm_pending ? "waiting to be armed" : "armed", p->rx[0].completions, p->rx[0].last_cc, p->rx[0].unmatched,
+	       state[2], p->rx[1].rearm_pending ? "waiting to be armed" : "armed", p->rx[1].completions, p->rx[1].last_cc, p->rx[1].unmatched,
+	       p->tx_slots, BT_TX_SLOTS, p->tx.unmatched,
+	       p->listening ? "yes" : "no", p->failed ? "yes" : "no");
+	// Oldest first; a row of zeros is a slot no event has filled.
+	const uint8_t (*e)[6] = p->recent_event;
+	unsigned o = p->recent_events % 4;
+	printd(DEBUG_EXCEPTIONS, "bluetooth: %u HCI event(s) since start; heads of the last four, oldest first: %02x%02x%02x%02x%02x%02x %02x%02x%02x%02x%02x%02x %02x%02x%02x%02x%02x%02x %02x%02x%02x%02x%02x%02x\n",
+	       p->recent_events,
+	       e[o][0], e[o][1], e[o][2], e[o][3], e[o][4], e[o][5],
+	       e[(o+1)%4][0], e[(o+1)%4][1], e[(o+1)%4][2], e[(o+1)%4][3], e[(o+1)%4][4], e[(o+1)%4][5],
+	       e[(o+2)%4][0], e[(o+2)%4][1], e[(o+2)%4][2], e[(o+2)%4][3], e[(o+2)%4][4], e[(o+2)%4][5],
+	       e[(o+3)%4][0], e[(o+3)%4][1], e[(o+3)%4][2], e[(o+3)%4][3], e[(o+3)%4][4], e[(o+3)%4][5]);
+}
+
+// Slot 2's audio in the log (AUDIO_A2DP.md § What is seen): a line when a
+// session is made, once its media channel is up so the packet is known
+// (the settings, frames a packet, the delay and where it came from); one
+// when a session goes wrong, the sink fails or the pump gives up, with
+// why; each once per occurrence. Starts and suspends are DEBUG_USB's.
+// Nothing per packet.
+static void xhci_bt_log_audio(xhci_bt_probe_t *p)
+{
+	const bt_host_t *h = &p->host;
+	if (!h->a2dp_ops)
+		return;
+	const bt_a2dp_t *a = &h->a2dp;
+	bt_avdtp_state_t st = bt_avdtp_state(&h->avdtp);
+	// The pump's count starts again with each connection, so the one said
+	// is forgotten between sessions.
+	if (!a->session)
+		p->logged.a2dp_sessions = 0;
+	else if (h->avdtp_media && st >= BT_AVDTP_OPEN && st <= BT_AVDTP_SUSPENDING &&
+	    a->sessions_begun != p->logged.a2dp_sessions) {
+		p->logged.a2dp_sessions = a->sessions_begun;
+		// The packet as the pump will make it (bt_a2dp_packet): as many
+		// whole frames as the media channel's room holds after the
+		// headers, at most 15.
+		size_t room = bt_host_media_room(h);
+		unsigned frames = a->frame_bytes && room > BT_A2DP_HEADER_BYTES ?
+			(unsigned)((room - BT_A2DP_HEADER_BYTES) / a->frame_bytes) : 0;
+		if (frames > BT_A2DP_FRAMES_MAX) frames = BT_A2DP_FRAMES_MAX;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: session made: sbc %u Hz %s bitpool %u, %u-byte frames, %u frames a packet, delay %u.%u ms (%s)\n",
+		       BT_HOST_CLASSIC_SLOT, (unsigned)a->settings.rate, a->settings.joint ? "joint stereo" : "stereo",
+		       (unsigned)a->settings.bitpool, (unsigned)a->frame_bytes, frames,
+		       (unsigned)(a->delay_us / 1000), (unsigned)(a->delay_us % 1000 / 100),
+		       a->delay_reported ? "their report" : "default");
+	}
+	// AVDTP's count starts again with each connection: a fall is a new
+	// connection, not news.
+	if (h->avdtp.wrongs > p->logged.avdtp_wrongs)
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: the session went wrong: %s%s\n", BT_HOST_CLASSIC_SLOT,
+		       h->avdtp.why ? h->avdtp.why : "no reason recorded",
+		       st == BT_AVDTP_FAILED ? "; no more sessions on this connection" : "");
+	p->logged.avdtp_wrongs = h->avdtp.wrongs;
+	if (a->failed != p->logged.a2dp_failed) {
+		p->logged.a2dp_failed = a->failed;
+		if (a->failed)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: the sink failed: %s; writes answer failed until the session is made again\n",
+			       BT_HOST_CLASSIC_SLOT, a->why ? a->why : "no reason recorded");
+	}
+	if (a->gave_up != p->logged.a2dp_gave_up) {
+		p->logged.a2dp_gave_up = a->gave_up;
+		if (a->gave_up)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u a2dp: the headphones refused every start; the null sink plays until the session is made again\n",
+			       BT_HOST_CLASSIC_SLOT);
+	}
+	// A stream is under way from STREAMING until it leaves STREAMING and
+	// SUSPENDING (a Suspend refused leaves it streaming).
+	bool was = p->logged.avdtp_state == BT_AVDTP_STREAMING || p->logged.avdtp_state == BT_AVDTP_SUSPENDING;
+	bool is = st == BT_AVDTP_STREAMING || st == BT_AVDTP_SUSPENDING;
+	if (is && !was)
+		printd(DEBUG_USB, "bluetooth: slot %u a2dp: streaming\n", BT_HOST_CLASSIC_SLOT);
+	else if (was && !is)
+		printd(DEBUG_USB, "bluetooth: slot %u a2dp: stream %s\n", BT_HOST_CLASSIC_SLOT,
+		       st == BT_AVDTP_OPEN ? "suspended" : bt_avdtp_state_name(st));
+	p->logged.avdtp_state = (uint8_t)st;
+	// Their buttons, each press and release once, from slot 2's ring by
+	// number. Events the ring no longer holds (overwritten, which its
+	// status counts as lost) are skipped. The media keys take from the
+	// same ring only after this has logged them (xhci_bt_route_buttons).
+	if (h->buttons_seen - p->logged.buttons > BT_HOST_BUTTONS)
+		p->logged.buttons = h->buttons_seen - BT_HOST_BUTTONS;
+	for (; p->logged.buttons != h->buttons_seen; p->logged.buttons++) {
+		bt_host_button_t b;
+		if (bt_host_button(h, p->logged.buttons, &b))
+			printd(DEBUG_USB, "bluetooth: slot %u avrcp: %s %s\n", BT_HOST_CLASSIC_SLOT,
+			       bt_avrcp_operation_name(b.operation), b.pressed ? "pressed" : "released");
+	}
+}
+
+// The headphones' presses go to the program they are for (MEDIA_KEYS.md).
+// Taken after xhci_bt_log_trouble, which logs them from the same ring by
+// number: a take before it would leave the DEBUG_USB lines nothing to read.
+// Presses only, of the five keys a player answers; releases and the volume
+// keys stay bt_host's, which gives the volume its own meaning.
+static void xhci_bt_route_buttons(xhci_bt_probe_t *p)
+{
+	bt_host_button_t b;
+	while (bt_host_button_take(&p->host, &b)) {
+		if (!b.pressed)
+			continue;
+		uint32_t key = 0;
+		switch (b.operation) {
+			case BT_AVRCP_OP_PLAY:     key = OS64_MEDIA_KEY_PLAY; break;
+			case BT_AVRCP_OP_PAUSE:    key = OS64_MEDIA_KEY_PAUSE; break;
+			case BT_AVRCP_OP_STOP:     key = OS64_MEDIA_KEY_STOP; break;
+			case BT_AVRCP_OP_FORWARD:  key = OS64_MEDIA_KEY_NEXT; break;
+			case BT_AVRCP_OP_BACKWARD: key = OS64_MEDIA_KEY_PREVIOUS; break;
+			default: break;
+		}
+		if (key != 0)
+			media_key_pressed(key);
+	}
+}
+
+static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
+{
+	const bt_host_t *h = &p->host;
+	if (h->init_failed_rounds != p->logged.rounds) {
+		p->logged.rounds = h->init_failed_rounds;
+		xhci_bt_log_usb_state(p);
+		printd(DEBUG_EXCEPTIONS, "bluetooth: start-up round %u of %u failed: %s (opcode %04x status %02x)%s; %s\n",
+		       h->init_failed_rounds, BT_HOST_INIT_ROUNDS, h->round_error ? h->round_error : "no error recorded",
+		       h->round_opcode, h->round_status, h->round_timeout ? h->round_timeout : "",
+		       h->init_failed_rounds < BT_HOST_INIT_ROUNDS ? "trying again" : "giving up");
+	}
+	if (h->failed && !p->logged.failed) {
+		p->logged.failed = true;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: the controller has failed (%s); Bluetooth is off until a reboot\n",
+		       h->scan.error ? h->scan.error : h->round_error ? h->round_error : "see /sys/bluetooth/scan");
+		// On the glass too: it happens seconds after the boot messages end,
+		// with nothing else on screen to show for it.
+		printf("Bluetooth did not start (%s); the system log has the details\n",
+		       h->round_error ? h->round_error : "controller failed");
+	}
+	// A controller that keeps handing over broken framing would otherwise
+	// write a line a pass: the first few are said, the rest only counted.
+	uint32_t resyncs = p->rx[0].stream.resyncs;
+	if (resyncs != p->logged.event_resyncs) {
+		if (resyncs <= XHCI_BT_RESYNC_LINES)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: the event stream was out of step with its transfers and was resynchronised (%u so far%s)\n",
+			       resyncs, resyncs == XHCI_BT_RESYNC_LINES ? "; further ones are counted in /sys/bluetooth/scan, not logged" : "");
+		p->logged.event_resyncs = resyncs;
+	}
+	if (h->wire_resyncs != p->logged.acl_resyncs) {
+		if (h->wire_resyncs <= XHCI_BT_RESYNC_LINES)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: the ACL data stream was out of step with its transfers and was resynchronised (%u so far%s)\n",
+			       h->wire_resyncs, h->wire_resyncs == XHCI_BT_RESYNC_LINES ? "; further ones are counted in /sys/bluetooth/connection, not logged" : "");
+		p->logged.acl_resyncs = h->wire_resyncs;
+	}
+	for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
+		const bt_le_t *s = &h->peers[i].le;
+		const bt_manager_t *m = &h->peers[i].manager;
+		// A slot that stopped or failed with an error. Said when the error
+		// CHANGES, so a slot failing the same way at every attempt is one
+		// line, not one an attempt. Input flowing again clears the memory.
+		// A retryable stop that never had a link and carries no failing
+		// status is a device that is not there yet (off, or not yet
+		// advertising after a boot): ordinary, and not said.
+		bool absent = s->phase == BT_LE_STOPPED && s->retryable &&
+		              s->disconnect_reason == 0 && s->error_status == 0;
+		if (bt_le_input_active(s)) {
+			p->logged.error[i] = NULL;
+		} else if ((s->phase == BT_LE_STOPPED || s->phase == BT_LE_FAILED) && s->error && !absent &&
+		           s->error != p->logged.error[i]) {
+			p->logged.error[i] = s->error;
+			printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u stopped: %s (command %04x status %02x, disconnect reason %02x); %s\n",
+			       i, s->error, s->error_opcode, s->error_status, s->disconnect_reason,
+			       s->phase == BT_LE_FAILED ? "the controller has failed" :
+			       s->retryable ? "it will be retried" : "it waits for the user");
+		}
+		if (m->blocked != p->logged.blocked[i]) {
+			p->logged.blocked[i] = m->blocked;
+			if (m->blocked)
+				printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u's automatic connection has stopped and waits for the user (write reconnect to /sys/bluetooth/connection)\n", i);
+		}
+	}
+	// The Classic slot: a setup command the controller refused costs it,
+	// and LE carries on; said once.
+	if (h->classic_setup_refused && !p->logged.classic_refused) {
+		p->logged.classic_refused = true;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: the controller refused Classic setup command %04x (status %02x); slot %u is unavailable, LE is unaffected\n",
+		       h->classic_refused_opcode, h->classic_refused_status, BT_HOST_CLASSIC_SLOT);
+	}
+	// The Classic link stopping with an error, said when the error changes,
+	// as for an LE slot; a link that reaches READY clears the memory.
+	const bt_classic_t *c = &h->classic;
+	if (c->phase == BT_CLASSIC_READY) {
+		p->logged.classic_error = NULL;
+	} else if ((c->phase == BT_CLASSIC_STOPPED || c->phase == BT_CLASSIC_FAILED) && c->error &&
+	           c->error != p->logged.classic_error) {
+		p->logged.classic_error = c->error;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u (Classic) stopped: %s (command %04x status %02x, disconnect reason %02x); %s\n",
+		       BT_HOST_CLASSIC_SLOT, c->error, c->error_opcode, c->error_status, c->disconnect_reason,
+		       c->phase == BT_CLASSIC_FAILED ? "the controller has failed" :
+		       c->retryable ? "it may be paged again" : "it waits for the headphones or the user");
+	}
+	// Slot 2's services: a channel we asked for that the headphones refused
+	// or never answered, and the end of the one SDP query a connection
+	// makes, in the words of its status line. The query's end is said
+	// whatever it found, fault or not: it is one line a connection, and
+	// what it found is what audio will depend on. Nothing per packet.
+	if (h->l2cap_refusals != p->logged.l2cap_refusals) {
+		p->logged.l2cap_refusals = h->l2cap_refusals;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u l2cap: the headphones %s the channel we asked for (psm %04x, result %04x)\n",
+		       BT_HOST_CLASSIC_SLOT, h->l2cap_refused_result == 0xffff ? "did not answer" : "refused",
+		       h->l2cap_refused_psm, h->l2cap_refused_result);
+	}
+	if (h->sdp_ended != p->logged.sdp_ended) {
+		p->logged.sdp_ended = h->sdp_ended;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u %s", BT_HOST_CLASSIC_SLOT, h->sdp_line);
+	}
+	xhci_bt_log_audio(p);
 }
 
 static void xhci_bt_runtime_poll(void)
@@ -1144,11 +1784,23 @@ static void xhci_bt_runtime_poll(void)
 			xhci_bt_arm(p, &p->rx[i]);
 		}
 	}
-    bool usb_failed = p->failed || (!p->tx_done && kTicksSinceStart >= p->deadline) ||
+    bool usb_failed = p->failed ||
+        (p->tx_slots && kTicksSinceStart >= p->tx_slot[p->tx_oldest].deadline) ||
         (s_hc->control_slot == p->device->slot && s_hc->xfer_done &&
         (s_hc->xfer_cc != TRB_CC_SUCCESS ||
         (p->host.owner && s_hc->xfer_actual != 3u + p->tx.buffer[514])));
     bool usb_done = s_hc->control_slot != p->device->slot || s_hc->xfer_done;
+    if (s_bt_quiesce != BT_QUIESCE_NONE) {
+        // Going down: the host's clockwork has stopped for good. The reset
+        // goes out once the control endpoint is free of the host's last
+        // request; HCI lets a reset be sent whatever commands are
+        // outstanding.
+        if (s_bt_quiesce == BT_QUIESCE_ASKED && usb_done && !p->failed) {
+            xhci_bt_runtime_send(p, 0x0c03, NULL, 0);
+            s_bt_quiesce = BT_QUIESCE_SENT;
+        }
+        return;
+    }
     bt_scan_t *scan = &p->host.scan;
     bool scanning = !bt_scan_quiescent(scan) && scan->phase != BT_SCAN_FAILED;
     if (scanning && (!p->scan_history.valid || p->scan_history.finished)) {
@@ -1157,11 +1809,12 @@ static void xhci_bt_runtime_poll(void)
         p->scan_history.valid = true;
         p->scan_history.finished = p->scan_history.failed = false;
         p->scan_history.le_only = scan->le_only;
+        xhci_timeline_add(XHCI_TL_SCAN_STARTED, 0, 0, 0);
     }
     bt_le_phase_t before[BT_HOST_PEERS];
     for (unsigned i = 0; i < BT_HOST_PEERS; i++) before[i] = p->host.peers[i].le.phase;
-    bt_host_tick(&p->host, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
-                 usb_done, p->tx_done, usb_failed, xhci_bt_runtime_send,
+    bt_host_tick(&p->host, kTicksSinceStart * 1000 / TICKS_PER_SECOND, micros_now(),
+                 usb_done, p->tx_slots, usb_failed, xhci_bt_runtime_send,
                  xhci_bt_acl_send, xhci_bt_input_report, p);
     if (p->scan_history.valid && !p->scan_history.finished &&
         (bt_scan_quiescent(scan) || scan->phase == BT_SCAN_FAILED)) {
@@ -1169,27 +1822,68 @@ static void xhci_bt_runtime_poll(void)
         p->scan_history.finished_ms = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
         p->scan_history.finished = true;
         p->scan_history.failed = scan->phase != BT_SCAN_DONE;
+        xhci_timeline_add(XHCI_TL_SCAN_FINISHED, 0, p->scan_history.failed,
+                          scan->count > 255 ? 255 : scan->count);
     }
     for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
         const bt_le_t *s = &p->host.peers[i].le;
         if(s->mouse && bt_le_input_active(s)) xhci_bt_pointer_register(p,i);
         else if(p->pointers[i].settings_slot || p->pointers[i].settings_key[0]) input_pointer_unregister(&p->pointers[i]);
+        // Against the phase the timeline last wrote, not this pass's
+        // `before`: a phase also moves while events are drained, outside
+        // the tick above, and a line must not miss an arrival at ready.
+        // Phases passed through between two looks are not listed.
+        if (s->phase != p->timeline_phase[i]) {
+            xhci_timeline_add(XHCI_TL_LE_PHASE, i, p->timeline_phase[i], s->phase);
+            p->timeline_phase[i] = (uint8_t)s->phase;
+        }
         if (s->phase != before[i])
             printd(DEBUG_USB, "xhci: AX210 slot %u LE phase=%u error=%s opcode=%04x status=%02x\n",
                    i, s->phase, s->error ? s->error : "none", s->error_opcode, s->error_status);
     }
+    // The Classic link's phase, against what the timeline last wrote, for
+    // the same reason as the LE slots'.
+    const bt_classic_t *classic = &p->host.classic;
+    if (classic->phase != p->timeline_classic_phase) {
+        bool paging = p->timeline_classic_phase == BT_CLASSIC_STOPPED && classic->phase == BT_CLASSIC_PAGING;
+        // Only a page timeout is one of the run: a page that ends any
+        // other way is written, and ends the run.
+        bool unanswered = p->timeline_classic_phase == BT_CLASSIC_PAGING && classic->phase == BT_CLASSIC_STOPPED &&
+                          classic->error_status == 0x04 && classic->retryable;
+        if (paging && p->timeline_classic_unanswered) {
+            p->timeline_classic_quiet = true;
+        } else if (unanswered && p->timeline_classic_quiet) {
+            p->timeline_classic_quiet = false;
+            p->timeline_classic_unlisted++;
+        } else {
+            xhci_timeline_add(XHCI_TL_CLASSIC_PHASE, BT_HOST_CLASSIC_SLOT, p->timeline_classic_phase, classic->phase);
+            p->timeline_classic_unanswered = unanswered;
+            p->timeline_classic_quiet = false;
+        }
+        printd(DEBUG_USB, "xhci: AX210 slot %u Classic phase=%u error=%s opcode=%04x status=%02x\n",
+               BT_HOST_CLASSIC_SLOT, classic->phase, classic->error ? classic->error : "none",
+               classic->error_opcode, classic->error_status);
+        p->timeline_classic_phase = (uint8_t)classic->phase;
+    }
+    xhci_bt_log_trouble(p);
+    xhci_bt_route_buttons(p);
     if (usb_done && !p->host.owner) crypto_wipe(p->tx.buffer + 512, 258);
-    if (p->tx_done) crypto_wipe(p->tx.buffer, 512);
+    // A send slot is wiped as its transfer completes, and not before: one
+    // still queued is the controller's to read, and zeroing it would put a
+    // packet of zeroes on the air. That holds on a failed transport too,
+    // whose endpoint may still be running.
     for (unsigned i = 0; i < BT_HOST_PEERS; i++)
         if (bt_le_input_active(&p->host.peers[i].le)) hid_keyboard_tick(&p->keyboards[i]);
 }
 
-bool xhci_bluetooth_scan(void)
+bool xhci_bluetooth_scan(bool classic)
 {
     if (__sync_lock_test_and_set(&s_poll_busy, 1)) return false;
+    uint64_t now = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
     bool ok = s_bluetooth_hc && !s_bluetooth_hc->bluetooth.failed &&
-        bt_host_scan(&s_bluetooth_hc->bluetooth.host, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
-    __sync_lock_release(&s_poll_busy);
+        (classic ? bt_host_scan_classic(&s_bluetooth_hc->bluetooth.host, now)
+                 : bt_host_scan(&s_bluetooth_hc->bluetooth.host, now));
+    xhci_serial_release();
     return ok;
 }
 
@@ -1199,17 +1893,62 @@ bool xhci_bluetooth_connection(const char *data, size_t bytes)
     xhci_bt_probe_t *p = s_bluetooth_hc ? &s_bluetooth_hc->bluetooth : NULL;
     bool ok = p && bt_host_command(&p->host, data, bytes,
                                    kTicksSinceStart * 1000 / TICKS_PER_SECOND);
-    __sync_lock_release(&s_poll_busy);
+    xhci_serial_release();
     return ok;
 }
 
 void xhci_bluetooth_start_manager(void)
 { __atomic_store_n(&s_bond_manager_ready, true, __ATOMIC_RELEASE); }
 
+// The Classic bond's unit of work, when no LE slot has one: read the file
+// once the host is up with its Classic slot available, and write it when
+// the link has changed the bond. Called holding the serializing flag and
+// the bond I/O flag, and releases both; the serializing flag is let go
+// around the disk, as for the LE records.
+static void xhci_bt_classic_bond_work(xhci_bt_probe_t *p, uint64_t now)
+{
+	bt_host_t *h = &p->host;
+	bool ready = h->initialized && h->classic_available;
+	bool loading = ready && !h->classic.bond_loaded;
+	bool saving = ready && !loading && h->classic.bond_dirty && now >= p->classic_save_at;
+	if (!loading && !saving) {
+		xhci_serial_release(); __sync_lock_release(&s_bond_io_busy); return;
+	}
+	bt_classic_bond_t snapshot = h->classic.bond;
+	xhci_serial_release();
+	bool good = loading ? bt_classic_bond_load(&snapshot) : bt_classic_bond_save(&snapshot);
+	// Published under the flag, which this waits for, sleeping between
+	// tries: kusb may hold it for a tick, too long to spin a core through.
+	while (__sync_lock_test_and_set(&s_poll_busy, 1)) {
+		thread_t *self = get_core_local_storage()->currentThread;
+		signal_raise(SIGSLEEP, kTicksSinceStart + 1, self);
+	}
+	now = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
+	if (loading) {
+		// An unreadable file is taken as no bond, and stays until a bond is
+		// saved over it.
+		if (h->initialized && h->classic_available && !h->classic.bond_loaded)
+			(void)bt_host_classic_bond(h, good ? &snapshot : NULL, now);
+		h->classic_storage = good ? NULL : "saved bond unavailable or invalid";
+	} else {
+		// Saved as it was when read: a bond changed meanwhile is saved again.
+		if (good && !memcmp(&h->classic.bond, &snapshot, sizeof(snapshot))) h->classic.bond_dirty = false;
+		h->classic_storage = good ? NULL : "save failed; RAM bond retained";
+		p->classic_save_at = good ? 0 : now + 10000;
+	}
+	xhci_serial_release();
+	// A loaded bond is paged by kusb's pass: bring it round now.
+	if (loading) doorbell_ring(&kUsbDoorbell);
+	crypto_wipe(&snapshot, sizeof(snapshot));
+	__sync_lock_release(&s_bond_io_busy);
+}
+
 void xhci_bluetooth_maintain(void)
 {
 	// The maintenance worker owns disk I/O; USB keeps progressing while it is
-	// outside the poll lock. A generation prevents stale saves acknowledging forget.
+	// outside the serializing flag. A generation prevents stale saves
+	// acknowledging forget. The connection policy is not run here: it is
+	// timing, and kusb runs it every pass (bt_host_tick).
 	if (!__atomic_load_n(&s_bond_manager_ready, __ATOMIC_ACQUIRE)) return;
 	if (__sync_lock_test_and_set(&s_bond_io_busy, 1)) return;
 	if (__sync_lock_test_and_set(&s_poll_busy, 1)) {
@@ -1218,46 +1957,58 @@ void xhci_bluetooth_maintain(void)
 	xhci_bt_probe_t *p = s_bluetooth_hc ? &s_bluetooth_hc->bluetooth : NULL;
 	uint64_t now = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
 	if (!p || !p->runtime) {
-		__sync_lock_release(&s_poll_busy); __sync_lock_release(&s_bond_io_busy); return;
+		xhci_serial_release(); __sync_lock_release(&s_bond_io_busy); return;
 	}
-    bt_host_policy(&p->host, now);
     unsigned slot;
     for (slot = 0; slot < BT_HOST_PEERS; slot++) {
         bt_manager_t *candidate = &p->host.peers[slot].manager;
         if (!candidate->loaded || (candidate->dirty && now >= candidate->next_save)) break;
     }
     if (slot == BT_HOST_PEERS) {
-        __sync_lock_release(&s_poll_busy); __sync_lock_release(&s_bond_io_busy); return;
+        xhci_bt_classic_bond_work(p, now);
+        return;
     }
     bt_host_peer_t *peer = &p->host.peers[slot];
     bt_manager_t *m = &peer->manager;
 	bool loading = !m->loaded;
 	if (!loading && (!m->dirty || now < m->next_save)) {
-		__sync_lock_release(&s_poll_busy); __sync_lock_release(&s_bond_io_busy); return;
+		xhci_serial_release(); __sync_lock_release(&s_bond_io_busy); return;
 	}
 	uint64_t generation = m->generation;
 	bt_le_bond_t snapshot = peer->le.bond;
 	bool automatic = m->automatic;
-	__sync_lock_release(&s_poll_busy);
+	xhci_serial_release();
 	bool good = loading ? bt_bond_load_slot(slot, &snapshot, &automatic) : bt_bond_save_slot(slot, &snapshot, automatic);
-	while (__sync_lock_test_and_set(&s_poll_busy, 1)) __asm__ volatile("pause");
+	// The result must be published, so this waits for the flag where every
+	// other holder gives up. It sleeps between tries: kusb may hold the flag
+	// for a tick, which is too long to spin a core through.
+	while (__sync_lock_test_and_set(&s_poll_busy, 1)) {
+		thread_t *self = get_core_local_storage()->currentThread;
+		signal_raise(SIGSLEEP, kTicksSinceStart + 1, self);
+	}
 	now = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
 	bt_manager_observe(m, &peer->le, now);
+	bool loaded = false;
 	if (loading) {
 		m->loaded = true;
 		if (good && m->generation == generation) {
 			peer->le.bond = snapshot; m->automatic = automatic;
 		}
 		m->storage_error = good ? NULL : "saved bond unavailable or invalid";
-		// Start discovery as soon as the restored bond is published. Commands
-		// are submitted by USB polling; no additional worker sleep is needed.
-		bt_host_policy(&p->host, now);
+		// The restored bond is published. Discovery for it starts on kusb's
+		// next pass, which runs the connection policy.
+		loaded = true;
 	} else {
 		if (good && m->generation == generation) m->dirty = false;
 		m->storage_error = good ? NULL : "save failed; RAM bond retained";
 		m->next_save = m->generation == generation ? now + 10000 : now;
 	}
-	__sync_lock_release(&s_poll_busy);
+	xhci_serial_release();
+	// Bring kusb round for the restored bond now, not at the next tick.
+	// After the release: a ring while the flag is held would wake kusb only
+	// to be refused.
+	if (loaded)
+		doorbell_ring(&kUsbDoorbell);
 	crypto_wipe(&snapshot, sizeof(snapshot));
 	__sync_lock_release(&s_bond_io_busy);
 }
@@ -1312,9 +2063,182 @@ size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file)
 
 		if (file == 0 && n < capacity - 1)
 			n += xhci_bt_scan_history(&s_bluetooth_hc->bluetooth, out + n, capacity - n);
+		// How often the event assembler was found out of step with the
+		// transfers and emptied (bt_intel.h). Not zero after a warm reboot
+		// is the adapter handing over the tail of an event from before.
+		if (file == 0 && n < capacity - 1) {
+			int more = snprintf(out + n, capacity - n, "event framing resyncs: %u\n",
+			                    s_bluetooth_hc->bluetooth.rx[0].stream.resyncs);
+			if (more > 0) n += (size_t)more < capacity - n ? (size_t)more : capacity - n - 1;
+		}
 	}
-	__sync_lock_release(&s_poll_busy);
+	xhci_serial_release();
 	return n;
+}
+
+// The LE phases by name, for the timeline; bt_le.h's enum in its order.
+static const char *const kLePhaseNames[] = {
+	"idle", "reset", "mask", "host", "events",
+	"address", "resolve", "buffer", "shared_buffer", "create", "connecting",
+	"passkey", "random_low", "random_high", "pair",
+	"pair_wait", "confirm_low", "confirm_high", "confirm_wait",
+	"random_wait", "verify_low", "verify_high", "stk",
+	"encrypt", "encrypt_wait", "bond_keys", "services", "characteristics",
+	"descriptors", "report_map", "report_descriptors", "report_reference",
+	"protocol", "subscribe", "verify_ccc", "verify_protocol", "ready",
+	"cleanup", "failed", "stopped",
+};
+_Static_assert(sizeof(kLePhaseNames) / sizeof(kLePhaseNames[0]) == BT_LE_STOPPED + 1,
+               "kLePhaseNames must name every bt_le_phase_t");
+
+static const char *xhci_le_phase_name(unsigned phase)
+{
+	return phase <= BT_LE_STOPPED ? kLePhaseNames[phase] : "?";
+}
+
+// The Classic link's phases by name; bt_classic.h's enum in its order.
+static const char *const kClassicPhaseNames[] = {
+	"idle", "paging", "accepting", "linked", "authenticating", "encrypting",
+	"checking", "ready", "closing", "stopped", "failed",
+};
+_Static_assert(sizeof(kClassicPhaseNames) / sizeof(kClassicPhaseNames[0]) == BT_CLASSIC_FAILED + 1,
+               "kClassicPhaseNames must name every bt_classic_phase_t");
+
+static const char *xhci_classic_phase_name(unsigned phase)
+{
+	return phase <= BT_CLASSIC_FAILED ? kClassicPhaseNames[phase] : "?";
+}
+
+// Append to a bounded text; what does not fit is dropped and the text stays
+// terminated.
+static void xhci_report_addf(char *out, size_t cap, size_t *len, const char *fmt, ...)
+{
+	if (*len + 1 >= cap) return;
+	va_list args;
+	va_start(args, fmt);
+	int n = vsnprintf(out + *len, cap - *len, fmt, args);
+	va_end(args);
+	if (n < 0) return;
+	*len = (size_t)n < cap - *len ? *len + (size_t)n : cap - 1;
+}
+
+// /sys/usb: the controllers, how long an event on each may have waited,
+// kusb's passes and latencies, and the Bluetooth timeline (see "What a
+// pass measures about itself").
+size_t xhci_usb_report(char *out, size_t cap)
+{
+	if (!cap) return 0;
+	size_t len = 0;
+	out[0] = '\0';
+	if (__sync_lock_test_and_set(&s_poll_busy, 1)) {
+		xhci_report_addf(out, cap, &len, "USB busy; retry this read\n");
+		return len;
+	}
+	uint64_t per_us = kCPUCyclesPerSecond / 1000000;
+	if (per_us == 0) per_us = 1;
+
+	xhci_report_addf(out, cap, &len, "controllers: %u\n", s_controller_count);
+	for (uint32_t i = 0; i < s_controller_count; i++) {
+		xhci_t *hc = &s_controllers[i];
+		xhci_report_addf(out, cap, &len,
+		                 "controller %u: %02x:%02x.%x driven=%s ports=%u events=%lu devices:",
+		                 i, hc->pci_bus, hc->pci_device, hc->pci_function,
+		                 xhci_drive_text(hc->drive), hc->max_ports, hc->events_polled);
+		if (hc->keyboard.present)
+			xhci_report_addf(out, cap, &len, " keyboard@port%u", hc->keyboard.port);
+		if (hc->mouse.present)
+			xhci_report_addf(out, cap, &len, " mouse@port%u", hc->mouse.port);
+		if (hc->bt_probe)
+			xhci_report_addf(out, cap, &len, " bluetooth@port%u", hc->bt_probe->device->port);
+		if (!hc->keyboard.present && !hc->mouse.present && !hc->bt_probe)
+			xhci_report_addf(out, cap, &len, " none");
+		xhci_report_addf(out, cap, &len, "\n");
+		// How long an event found on this controller may have waited: from
+		// the last time its ring was seen empty to the drain that found it.
+		xhci_report_addf(out, cap, &len,
+		                 "controller %u wait: max_us=%lu since_read_max_us=%lu to_20ms=%lu to_200ms=%lu to_2s=%lu over_2s=%lu\n",
+		                 i, hc->wait.max / per_us, hc->wait.recent_max / per_us, hc->wait.within[0],
+		                 hc->wait.within[1], hc->wait.within[2], hc->wait.over);
+		hc->wait.recent_max = 0;
+		// An interrupt-driven controller: how often it interrupted, and how
+		// long from an interrupt to the start of the drain that answered it.
+		if (hc->drive.driven != XHCI_DRIVEN_TICK) {
+			xhci_report_addf(out, cap, &len,
+			                 "controller %u interrupt: fires=%lu to_service_max_us=%lu since_read_max_us=%lu over_a_tick=%lu imod=%u\n",
+			                 i, hc->irq_fires, hc->irq_service_max / per_us,
+			                 hc->irq_service_recent / per_us, hc->irq_service_late,
+			                 mmio_r32(hc->rt, XHCI_IR0_IMOD) & 0xFFFF);
+			hc->irq_service_recent = 0;
+		}
+	}
+	xhci_report_addf(out, cap, &len, "interrupt_spurious: %lu\n", s_irq_spurious);
+
+	// kusb, in /sys/net/knet's words (kusb.h).
+	xhci_report_addf(out, cap, &len,
+	                 "kusb: %s\nwakes: %lu\nwake_cycles_max: %lu\n"
+	                 "wake_latency_samples: %lu\nwake_latency_max_us: %lu\nwake_latency_avg_us: %lu\n"
+	                 "wake_latency_late_1ms: %lu\nwake_latency_late_10ms: %lu\n"
+	                 "response_latency_samples: %lu\nresponse_latency_max_us: %lu\n"
+	                 "response_latency_late_10ms: %lu\n",
+	                 kKusbTask != NULL ? "running" : "none",
+	                 kKusbWakes, kKusbWakeCyclesMax,
+	                 kKusbWakeLatencySamples, kKusbWakeLatencyMax / per_us,
+	                 kKusbWakeLatencySamples != 0
+	                     ? (kKusbWakeLatencyTotal / per_us) / kKusbWakeLatencySamples : 0,
+	                 kKusbWakeLatencyLate1ms, kKusbWakeLatencyLate10ms,
+	                 kKusbResponseLatencySamples, kKusbResponseLatencyMax / per_us,
+	                 kKusbResponseLatencyLate10ms);
+	xhci_report_addf(out, cap, &len, "bell_rings: %lu\nbell_wakes: %lu\nbell_rung_runnable: %lu\n",
+	                 kUsbDoorbell.rings, kUsbDoorbell.wakes, kUsbDoorbell.rung_runnable);
+	// A pass is a wake that held the serializing flag. passes_refused are
+	// the wakes that did not; refusal_wait is from a refusal to the pass
+	// that did the work. step_delay is from a wake's start to the Bluetooth
+	// step after the drains: one tick plus one event's handling at most.
+	xhci_report_addf(out, cap, &len,
+	                 "polls: %lu\npolls_with_events: %lu\npasses_left_work: %lu\n"
+	                 "passes_refused: %lu\nrefusal_wait_max_us: %lu\nstep_delay_max_us: %lu\n"
+	                 "poll_gap_max_us: %lu\npoll_gap_since_read_max_us: %lu\n",
+	                 s_polls, s_polls_with_events, s_passes_left_work,
+	                 s_refusals, s_refusal_wait_max / per_us, s_step_delay_max / per_us,
+	                 s_poll_gap_max / per_us, s_poll_gap_recent / per_us);
+	// "Since read" starts again here: read the file before and after a
+	// workload and the second reading is that workload's.
+	s_poll_gap_recent = 0;
+	// The gap of the passes that drained events: how often kusb comes
+	// round when there is something to find. A cadence, not a wait (the
+	// per-controller lines above are the wait).
+	xhci_report_addf(out, cap, &len,
+	                 "event_gap_max_us: %lu\nevent_gap_to_20ms: %lu\nevent_gap_to_200ms: %lu\n"
+	                 "event_gap_to_2s: %lu\nevent_gap_over_2s: %lu\n",
+	                 s_event_gap_max / per_us, s_event_gap_20ms, s_event_gap_200ms,
+	                 s_event_gap_2s, s_event_gap_over_2s);
+
+	// Oldest first. polls, events and gap_max_us cover the time since the
+	// line above (since boot, for the first line ever written).
+	uint64_t shown = s_timeline_count < XHCI_TIMELINE ? s_timeline_count : XHCI_TIMELINE;
+	xhci_report_addf(out, cap, &len, "timeline: %lu of %lu lines\n", shown, s_timeline_count);
+	// A run of unanswered Classic pages is one pair of lines and this count.
+	if (s_bluetooth_hc)
+		xhci_report_addf(out, cap, &len, "slot %u classic pages not answered and not listed: %lu\n",
+		                 BT_HOST_CLASSIC_SLOT, s_bluetooth_hc->bluetooth.timeline_classic_unlisted);
+	for (uint64_t n = s_timeline_count - shown; n < s_timeline_count; n++) {
+		const xhci_timeline_entry_t *e = &s_timeline[n % XHCI_TIMELINE];
+		xhci_report_addf(out, cap, &len, "  ms=%lu polls=%u events=%u gap_max_us=%lu ",
+		                 e->at_ms, e->polls, e->events, e->gap_max / per_us);
+		if (e->kind == XHCI_TL_SCAN_STARTED)
+			xhci_report_addf(out, cap, &len, "scan started\n");
+		else if (e->kind == XHCI_TL_SCAN_FINISHED)
+			xhci_report_addf(out, cap, &len, "scan %s found=%u\n",
+			                 e->from ? "failed" : "finished", e->to);
+		else if (e->kind == XHCI_TL_CLASSIC_PHASE)
+			xhci_report_addf(out, cap, &len, "slot %u classic %s -> %s\n", e->slot,
+			                 xhci_classic_phase_name(e->from), xhci_classic_phase_name(e->to));
+		else
+			xhci_report_addf(out, cap, &len, "slot %u %s -> %s\n", e->slot,
+			                 xhci_le_phase_name(e->from), xhci_le_phase_name(e->to));
+	}
+	xhci_serial_release();
+	return len;
 }
 
 // Validate lengths and descriptor ordering before walking untrusted USB data.
@@ -1678,6 +2602,8 @@ static bool xhci_probe_device(uint32_t port, uint32_t speed)
 static bool xhci_init_controller(pci_device_t *dev)
 {
     s_hc->pci_bus=dev->busNo; s_hc->pci_device=dev->deviceNo; s_hc->pci_function=dev->funcNo;
+	for (unsigned i = 0; i < 6; i++) s_hc->pci_bars[i] = dev->baseAdd[i];
+	s_hc->drive = (xhci_drive_choice_t){ XHCI_DRIVEN_TICK, XHCI_TICK_NOT_ASKED };
 	// BAR0 (possibly 64-bit — bits 2:1 == 10b means the high half lives in
 	// BAR1). Mask the low flag bits off to get the MMIO physical base.
 	uint64_t bar = dev->baseAdd[0] & ~0xFULL;
@@ -1691,8 +2617,9 @@ static bool xhci_init_controller(pci_device_t *dev)
 	                 dev->command | 0x6);
 
 	// Map the register file at an UPPER-half alias (kHHDMOffset | phys) so
-	// it is reachable from every task's CR3 — xhci_poll runs from the
-	// scheduler pass under whoever's page tables were live. PCD: MMIO.
+	// it is reachable from every task's CR3: a sysfs request reaches the
+	// driver under its caller's page tables, and the interrupt's top half
+	// runs under whatever CR3 it interrupted. PCD: MMIO.
 	uint64_t map_base = bar & ~(uint64_t)(PAGE_SIZE - 1);
 	paging_map_pages((pt_entry_t *)kKernelPML4v, kHHDMOffset + map_base,
 	                 map_base, 0x10000 / PAGE_SIZE,
@@ -1787,24 +2714,28 @@ static bool xhci_init_controller(pci_device_t *dev)
 	}
 	mmio_w64(s_hc->op, XHCI_OP_DCBAAP, virt_to_phys(s_hc->dcbaa));
 
-	// Command ring + event ring (interrupter 0, interrupts left DISABLED —
-	// we poll; see xhci.h for why that's a decision and not a shortcut).
+	// Command ring + event ring (interrupter 0, its interrupt left DISABLED
+	// here: bring-up drains by polling, and kusb turns the interrupt on
+	// once it exists, xhci_interrupts_enable).
 	if (!ring_init(&s_hc->cmd))
 		return false;
 	mmio_w64(s_hc->op, XHCI_OP_CRCR, s_hc->cmd.phys | 1);   // | RCS
 
-	s_hc->evt = kmalloc_aligned(PAGE_SIZE);
-	if (s_hc->evt == NULL)
+	s_hc->evt.trb = kmalloc_aligned(PAGE_SIZE);
+	if (s_hc->evt.trb == NULL)
 		return false;
-	s_hc->evt_phys = virt_to_phys(s_hc->evt);
-	s_hc->evt_cycle = 1;
+	s_hc->evt.phys = virt_to_phys(s_hc->evt.trb);
+	s_hc->evt.size = RING_TRBS;
+	s_hc->evt.dequeue = 0;
+	s_hc->evt.cycle = 1;
+	s_hc->evt.published = 0;   // ERDP is written with the segment's start just below
 	uint64_t *erst = kmalloc_aligned(PAGE_SIZE);   // segment table (1 entry)
 	if (erst == NULL)
 		return false;
-	erst[0] = s_hc->evt_phys;
+	erst[0] = s_hc->evt.phys;
 	erst[1] = RING_TRBS;                            // segment size in TRBs
 	mmio_w32(s_hc->rt, XHCI_IR0_ERSTSZ, 1);
-	mmio_w64(s_hc->rt, XHCI_IR0_ERDP, s_hc->evt_phys);
+	mmio_w64(s_hc->rt, XHCI_IR0_ERDP, s_hc->evt.phys);
 	mmio_w64(s_hc->rt, XHCI_IR0_ERSTBA, virt_to_phys(erst));
 
 	mmio_w32(s_hc->op, XHCI_OP_CONFIG, max_slots < 16 ? max_slots : 16);
@@ -1980,21 +2911,216 @@ void init_xHCI(void)
 	printd(DEBUG_USB, "xhci: AX210 discovery complete: %u described\n", s_ax210_described);
 }
 
-void xhci_poll(void)
+// ── The interrupt (XHCI_INTERRUPT.md § D5-D9) ───────────────────────────────
+
+// 250 us: at most four thousand interrupts a second from one controller and
+// at most a quarter of a millisecond added to an event. Far below a tick and
+// far below audio's pacing; the reason for any value at all is a mouse at a
+// high report rate. USBIMOD=<n> overrides it for a boot.
+#define XHCI_IMOD_DEFAULT 1000u
+
+static uint32_t xhci_irq_read(void *ctx, xhci_irq_reg_t reg)
 {
-	// Called every scheduler pass, potentially from any core. Serialize event
-	// consumption and scan commands with sysfs snapshots/requests using a
-	// non-blocking busy flag. A losing caller leaves work for a later pass.
-	if (s_controller_count == 0)
+	xhci_t *hc = ctx;
+	return reg == XHCI_REG_USBSTS ? mmio_r32(hc->op, XHCI_OP_USBSTS) : mmio_r32(hc->rt, XHCI_IR0_IMAN);
+}
+
+static void xhci_irq_write(void *ctx, xhci_irq_reg_t reg, uint32_t value)
+{
+	xhci_t *hc = ctx;
+	if (reg == XHCI_REG_USBSTS)
+		mmio_w32(hc->op, XHCI_OP_USBSTS, value);
+	else
+		mmio_w32(hc->rt, XHCI_IR0_IMAN, value);
+}
+
+// THE TOP HALF, in interrupt context on the BSP, under whatever CR3 was
+// interrupted. It takes no lock, prints nothing, and touches neither an
+// event ring nor s_hc (the doorbell rule, doorbell.h): it acknowledges, marks
+// and rings, and kusb does the work. One vector serves every controller, so
+// every published controller is asked on every entry; a message that
+// arrives while this runs sets the LAPIC's request bit again and this runs
+// again.
+void xhci_isr(void)
+{
+	uint32_t count = __atomic_load_n(&s_irq_count, __ATOMIC_ACQUIRE);
+	uint64_t now = rdtsc();
+	bool any = false;
+	for (uint32_t i = 0; i < count; i++) {
+		xhci_t *hc = s_irq_list[i];
+		if (!xhci_irq_acknowledge(xhci_irq_read, xhci_irq_write, hc))
+			continue;
+		// The mark, and the OLDEST unanswered interrupt keeps the stamp.
+		uint64_t none = 0;
+		__atomic_compare_exchange_n(&hc->irq_at, &none, now, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+		hc->irq_fires++;
+		any = true;
+	}
+	if (!any) {
+		s_irq_spurious++;
 		return;
-	if (__sync_lock_test_and_set(&s_poll_busy, 1) != 0)
-		return;
+	}
+	doorbell_ring(&kUsbDoorbell);
+}
+
+// kusb gives each controller its interrupt, once, holding the serializing
+// flag; false means the flag was held and nothing was done, so it asks
+// again at its next wake. By now the handler's vector is installed and
+// kusb's bell is registered, so a message has somewhere to go from the
+// first moment one can be sent.
+bool xhci_interrupts_enable(void)
+{
+	if (__sync_lock_test_and_set(&s_poll_busy, 1))
+		return false;
+	uint8_t bsp = (uint8_t)kCPUs[BSP_CPU].apic.id;   // a message address names an APIC ID
+	// The interval is sixteen bits; a larger request gets the longest there is.
+	uint32_t imod = kUsbImod < 0 ? XHCI_IMOD_DEFAULT : kUsbImod > 0xFFFF ? 0xFFFFu : (uint32_t)kUsbImod;
+	for (uint32_t i = 0; i < s_controller_count; i++) {
+		xhci_t *hc = &s_controllers[i];
+		const pci_caps_t *caps = pci_caps_of(hc->pci_bus, hc->pci_device, hc->pci_function);
+		xhci_drive_choice_t choice = xhci_drive_choose(caps && caps->has_msi, caps && caps->has_msix, kUsbPoll);
+		bool took = false;
+		if (choice.driven == XHCI_DRIVEN_MSI) {
+			pci_msi_result_t r = pci_msi_enable(hc->pci_bus, hc->pci_device, hc->pci_function,
+			                                    XHCI_IRQ_VECTOR, bsp);
+			took = r.took;
+			printd(DEBUG_BOOT, "xhci %02x:%02x.%x: MSI capability at 0x%02x (%s-bit), address 0x%08x data 0x%04x, control 0x%04x -> 0x%04x\n",
+			       hc->pci_bus, hc->pci_device, hc->pci_function, r.cap, r.is64 ? "64" : "32",
+			       r.address, r.data, r.control_before, r.control_after);
+		} else if (choice.driven == XHCI_DRIVEN_MSIX) {
+			pci_msix_result_t r = pci_msix_enable_one(hc->pci_bus, hc->pci_device, hc->pci_function,
+			                                          hc->pci_bars, XHCI_IRQ_VECTOR, bsp);
+			took = r.took;
+			printd(DEBUG_BOOT, "xhci %02x:%02x.%x: MSI-X capability at 0x%02x, %u entries in BAR %u at 0x%x, entry 0 address 0x%08x data 0x%04x, control 0x%04x%s%s\n",
+			       hc->pci_bus, hc->pci_device, hc->pci_function, r.cap, r.entries, r.bar, r.offset,
+			       r.address, r.data, r.control_after, r.refused ? "; refused: " : "", r.refused ? r.refused : "");
+		}
+		if (choice.driven != XHCI_DRIVEN_TICK && !took) {
+			// The device's own enables are never set, so a capability that
+			// half took sends nothing.
+			choice = (xhci_drive_choice_t){ XHCI_DRIVEN_TICK, XHCI_TICK_DID_NOT_TAKE };
+			printf("xhci %02x:%02x.%x: its interrupt did not take - staying tick-driven\n",
+			       hc->pci_bus, hc->pci_device, hc->pci_function);
+		}
+		hc->drive = choice;
+		if (choice.driven == XHCI_DRIVEN_TICK) {
+			printd(DEBUG_BOOT, "xhci %02x:%02x.%x: driven by the %s\n",
+			       hc->pci_bus, hc->pci_device, hc->pci_function, xhci_drive_text(choice));
+			continue;
+		}
+
+		mmio_w32(hc->rt, XHCI_IR0_IMOD, imod);
+		// Whatever boot left: an event the boot-time polling did not take
+		// has the busy bit set and will never signal. The mark makes this
+		// controller's first drain retire it, so nothing depends on a
+		// message for a condition older than the enable.
+		mmio_w32(hc->op, XHCI_OP_USBSTS, XHCI_USBSTS_EINT);
+		mmio_w32(hc->rt, XHCI_IR0_IMAN, XHCI_IMAN_IP);
+		__atomic_store_n(&hc->irq_at, rdtsc(), __ATOMIC_SEQ_CST);
+		// Published whole before it can interrupt.
+		uint32_t n = s_irq_count;
+		s_irq_list[n] = hc;
+		__atomic_store_n(&s_irq_count, n + 1, __ATOMIC_RELEASE);
+		mmio_w32(hc->rt, XHCI_IR0_IMAN, XHCI_IMAN_IE);
+		mmio_w32(hc->op, XHCI_OP_USBCMD, mmio_r32(hc->op, XHCI_OP_USBCMD) | USBCMD_INTE);
+		// An event that arrived between the clear above and the two gates
+		// opening may have set the pending bit with nothing to send it to,
+		// and a controller that signals only when the bit RISES would then
+		// stay silent for good. Cleared once more, with the gates open: the
+		// mark already has this controller's first drain taking whatever is
+		// on the ring, and the next event finds the bit clear.
+		mmio_w32(hc->rt, XHCI_IR0_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);
+		printd(DEBUG_BOOT, "xhci %02x:%02x.%x: interrupts live, %s vector 0x%02x at APIC %u, moderation %u (x250 ns)\n",
+		       hc->pci_bus, hc->pci_device, hc->pci_function, xhci_drive_text(choice),
+		       XHCI_IRQ_VECTOR, bsp, mmio_r32(hc->rt, XHCI_IR0_IMOD) & 0xFFFF);
+	}
+	// kusb's own release: it is the caller, and it drains next.
+	__atomic_store_n(&s_poll_busy, 0, __ATOMIC_SEQ_CST);
+	return true;
+}
+
+// Shutdown's half of the reset on the way down. Nothing is asked of an
+// adapter that never started or has already failed: it would not answer,
+// and the descent would only wait out its patience.
+void xhci_bluetooth_quiesce_begin(void)
+{
+	xhci_bt_probe_t *p = s_bluetooth_hc ? &s_bluetooth_hc->bluetooth : NULL;
+	if (p && p->runtime && !p->failed && p->host.initialized && !p->host.failed &&
+	    s_bt_quiesce == BT_QUIESCE_NONE)
+		s_bt_quiesce = BT_QUIESCE_ASKED;
+}
+
+bool xhci_bluetooth_quiescing(void)
+{
+	return s_bt_quiesce == BT_QUIESCE_ASKED || s_bt_quiesce == BT_QUIESCE_SENT;
+}
+
+const char *xhci_bluetooth_quiesce_verdict(void)
+{
+	return s_bt_quiesce == BT_QUIESCE_ANSWERED ? "reset" :
+	       s_bt_quiesce == BT_QUIESCE_REFUSED ? "refused its reset" : "did not answer its reset";
+}
+
+uint32_t xhci_controller_count(void)
+{
+	return s_controller_count;
+}
+
+// One controller's turn in a pass: drain it against the deadline and
+// account for how long what was found may have waited.
+static xhci_evt_drain_t xhci_pass_drain(void *ctx, uint32_t index, uint64_t deadline)
+{
+	(void)ctx;
+	s_hc = &s_controllers[index];
+	uint64_t ms = kCPUCyclesPerSecond / 1000;
+	const uint64_t edges[3] = { 20 * ms, 200 * ms, 2000 * ms };
+	xhci_evt_drain_t drain = xhci_drain_until(deadline);
+	xhci_wait_account(&s_hc->wait, drain, rdtsc(), edges);
+	s_hc->events_polled += drain.handled;
+	s_interval_events += drain.handled;
+	return drain;
+}
+
+bool xhci_pass(uint64_t wake_began, uint64_t deadline, bool *work_left)
+{
+	*work_left = false;
+	// The mark goes up BEFORE the try (see s_kusb_waiting).
+	__atomic_store_n(&s_kusb_waiting, 1, __ATOMIC_SEQ_CST);
+	if (__sync_lock_test_and_set(&s_poll_busy, 1) != 0) {
+		s_refusals++;
+		if (s_refused_at == 0)
+			s_refused_at = wake_began;
+		return false;
+	}
+	__atomic_store_n(&s_kusb_waiting, 0, __ATOMIC_SEQ_CST);
+	if (s_refused_at != 0) {
+		if (wake_began - s_refused_at > s_refusal_wait_max)
+			s_refusal_wait_max = wake_began - s_refused_at;
+		s_refused_at = 0;
+	}
+
+	uint64_t gap = xhci_pass_began(wake_began);
+	s_visit.count = s_controller_count;
+	xhci_visit_result_t visit = xhci_visit(&s_visit, xhci_pass_drain, NULL, deadline);
+	if (visit.work_left) {
+		s_passes_left_work++;
+		*work_left = true;
+	}
+
+	// Once per pass, after the drains, whatever the deadline did: Bluetooth's
+	// clockwork (which is also what re-arms the adapter's receive
+	// endpoints) and the keyboards' typematic repeat.
+	uint64_t step_delay = rdtsc() - wake_began;
+	if (step_delay > s_step_delay_max)
+		s_step_delay_max = step_delay;
 	for (uint32_t i = 0; i < s_controller_count; i++) {
 		s_hc = &s_controllers[i];
-		xhci_drain_events();
 		xhci_bt_runtime_poll();
 		if (s_hc->keyboard.present)
 			hid_keyboard_tick(&s_hc->keyboard.kbd);
 	}
-	__sync_lock_release(&s_poll_busy);
+	xhci_pass_ended(gap, visit.handled);
+	// kusb's own release: there is nobody to ring.
+	__atomic_store_n(&s_poll_busy, 0, __ATOMIC_SEQ_CST);
+	return true;
 }

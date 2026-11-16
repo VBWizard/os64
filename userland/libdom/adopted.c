@@ -39,20 +39,22 @@ struct DAdopted {
 
 bool d_sheet_constructed(const DValue *entry)
 {
-    return entry != NULL && entry->constructed != NULL;
+    return entry != NULL && d_more_peek(entry)->constructed != NULL;
 }
 
 void d_adopted_free(os64_dom_t *dom, DValue *entry)
 {
-    if (entry->constructed != NULL) {
-        d_free(dom, entry->constructed->text);
-        d_free(dom, entry->constructed);
-        entry->constructed = NULL;
+    DValueMore *more = entry->more;
+    if (more == NULL) return;
+    if (more->constructed != NULL) {
+        d_free(dom, more->constructed->text);
+        d_free(dom, more->constructed);
+        more->constructed = NULL;
     }
-    if (entry->adopted != NULL) {
-        d_free(dom, entry->adopted->sheets);
-        d_free(dom, entry->adopted);
-        entry->adopted = NULL;
+    if (more->adopted != NULL) {
+        d_free(dom, more->adopted->sheets);
+        d_free(dom, more->adopted);
+        more->adopted = NULL;
     }
 }
 
@@ -66,7 +68,7 @@ static DValue *constructed_of(JSContext *ctx, JSValueConst value)
         JS_ThrowTypeError(ctx, "Expected a CSSStyleSheet");
         return NULL;
     }
-    if (entry->constructed == NULL) {
+    if (d_more_peek(entry)->constructed == NULL) {
         d_error(ctx, "NotAllowedError", "Only a constructed CSSStyleSheet can be adopted or replaced");
         return NULL;
     }
@@ -91,10 +93,17 @@ JSValue d_sheet_constructor(JSContext *ctx, JSValueConst new_target, int argc, J
         JS_FreeValue(ctx, object);
         return text == NULL ? d_error(ctx, "QuotaExceededError", "DOM sheet quota exceeded") : JS_EXCEPTION;
     }
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) {
+        d_unretain(dom, ctx, entry);
+        d_free(dom, text);
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
     os64_memset(text, 0, sizeof(*text));
     text->key = ++dom->sheet_keys;
     entry->dom = dom;
-    entry->constructed = text;
+    more->constructed = text;
     JS_SetOpaque(object, entry);
     return object;
 }
@@ -115,6 +124,8 @@ static JSValue replace_text(os64_dom_t *dom, JSContext *ctx, JSValueConst self, 
 {
     DValue *entry = constructed_of(ctx, self);
     if (entry == NULL) return JS_EXCEPTION;
+    dom = entry->dom;
+    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     size_t length = 0;
     const char *given = JS_ToCStringLen(ctx, &length, argc > 0 ? argv[0] : JS_UNDEFINED);
     if (given == NULL) return JS_EXCEPTION;
@@ -126,13 +137,18 @@ static JSValue replace_text(os64_dom_t *dom, JSContext *ctx, JSValueConst self, 
     os64_memcpy(copy, given, length);
     copy[length] = '\0';
     JS_FreeCString(ctx, given);
-    struct DSheetText *text = entry->constructed;
+    struct DSheetText *text = d_more_peek(entry)->constructed;
     d_free(dom, text->text);
     text->text = copy;
     text->length = length;
     text->generation++;
-    for (struct DAdopted *a = dom->adoptions; a != NULL; a = a->next)
-        if (holds(a, entry)) (void)os64_html_touch(dom->document, (os64_html_node_t *)a->root);
+    size_t members = dom->cluster != NULL ? dom->cluster->count : 1;
+    for (size_t i = 0; i < members; i++) {
+        os64_dom_t *binding = dom->cluster != NULL ? dom->cluster->members[i] : dom;
+        for (struct DAdopted *a = binding->adoptions; a != NULL; a = a->next)
+            if (holds(a, entry))
+                (void)os64_html_touch(d_owner(dom, a->root)->document, (os64_html_node_t *)a->root);
+    }
     return JS_UNDEFINED;
 }
 
@@ -178,16 +194,17 @@ static JSValue adopt_check(JSContext *ctx, JSValueConst self, int argc, JSValueC
     (void)self;
     os64_dom_t *dom = d_binding(ctx);
     if (dom == NULL || argc < 3) return JS_EXCEPTION;
-    if (constructed_of(ctx, argv[1]) == NULL) return JS_EXCEPTION;
+    DValue *sheet = constructed_of(ctx, argv[1]);
+    if (sheet == NULL) return JS_EXCEPTION;
     const os64_html_node_t *root = d_node(dom, ctx, argv[0]);
     if (root == NULL) return JS_EXCEPTION;
-    if (d_node_document(dom, root) != dom->document->document)
+    if (d_node_document(dom, root) != sheet->dom->document->document)
         return d_error(ctx, "NotAllowedError", "A sheet is adopted only in the document it was made for");
     /* The list's room for the length the array will have, taken now, while
      * a refusal still leaves the array as it was: `changed` then never has
      * to grow it, and JS and the host cannot come to see two lists. */
     DValue *owner = d_find(dom, root);
-    struct DAdopted *list = owner != NULL ? owner->adopted : NULL;
+    struct DAdopted *list = owner != NULL ? d_more_peek(owner)->adopted : NULL;
     uint32_t size = 0;
     if (list == NULL || JS_ToUint32(ctx, &size, argv[2]) < 0) return JS_EXCEPTION;
     if (size > list->cap) {
@@ -211,7 +228,7 @@ static JSValue adopt_changed(JSContext *ctx, JSValueConst self, int argc, JSValu
     const os64_html_node_t *root = d_node(dom, ctx, argv[0]);
     if (root == NULL) return JS_EXCEPTION;
     DValue *owner = d_find(dom, root);
-    struct DAdopted *list = owner != NULL ? owner->adopted : NULL;
+    struct DAdopted *list = owner != NULL ? d_more_peek(owner)->adopted : NULL;
     if (list == NULL) return JS_ThrowTypeError(ctx, "Missing adoptedStyleSheets");
     int64_t length = 0;
     JSValue count = JS_GetPropertyStr(ctx, argv[1], "length");
@@ -227,10 +244,10 @@ static JSValue adopt_changed(JSContext *ctx, JSValueConst self, int argc, JSValu
         JS_FreeValue(ctx, one);
         /* Every value went in through `check`, which reserved its room;
          * nothing else is kept. */
-        if (sheet == NULL || sheet->constructed == NULL || list->n == list->cap) continue;
+        if (sheet == NULL || d_more_peek(sheet)->constructed == NULL || list->n == list->cap) continue;
         list->sheets[list->n++] = sheet;
     }
-    (void)os64_html_touch(dom->document, (os64_html_node_t *)root);
+    (void)os64_html_touch(d_owner(dom, root)->document, (os64_html_node_t *)root);
     return JS_UNDEFINED;
 }
 
@@ -287,9 +304,21 @@ static struct DAdopted *adopted_of(os64_dom_t *dom, JSContext *ctx, const os64_h
         JS_ThrowTypeError(ctx, "Missing node wrapper");
         return NULL;
     }
-    if (owner->adopted != NULL) {
+    dom = owner->dom;
+    os64_js_outcome_t access;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) {
+        JS_FreeValueRT(dom->engine, wrapper);
+        return NULL;
+    }
+    if (d_more_peek(owner)->adopted != NULL) {
         JS_FreeValue(ctx, wrapper);
-        return owner->adopted;
+        return d_more_peek(owner)->adopted;
+    }
+    DValueMore *more = d_more(dom, ctx, owner);
+    if (more == NULL) {
+        JS_FreeValue(ctx, wrapper);
+        return NULL;
     }
     struct DAdopted *list = d_alloc(dom, sizeof(*list));
     if (list == NULL) {
@@ -310,7 +339,7 @@ static struct DAdopted *adopted_of(os64_dom_t *dom, JSContext *ctx, const os64_h
         d_free(dom, list);
         return NULL;
     }
-    owner->adopted = list;
+    more->adopted = list;
     list->next = dom->adoptions;
     dom->adoptions = list;
     return list;
@@ -365,10 +394,10 @@ size_t os64_dom_adopted(const os64_dom_t *dom, const os64_html_node_t *root, os6
                         size_t cap)
 {
     const DValue *owner = dom != NULL && root != NULL ? d_find((os64_dom_t *)dom, root) : NULL;
-    const struct DAdopted *list = owner != NULL ? owner->adopted : NULL;
+    const struct DAdopted *list = owner != NULL ? d_more_peek(owner)->adopted : NULL;
     if (list == NULL) return 0;
     for (size_t i = 0; i < list->n && i < cap; i++) {
-        const struct DSheetText *text = list->sheets[i]->constructed;
+        const struct DSheetText *text = d_more_peek(list->sheets[i])->constructed;
         out[i] = (os64_dom_adopted_sheet_t){text->key, text->generation, text->text != NULL ? text->text : "",
                                             text->length};
     }

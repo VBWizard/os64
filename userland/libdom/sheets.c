@@ -49,7 +49,9 @@ JSValue d_sheet(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
     JS_FreeValue(ctx, wrapper);
     DValue *owner = d_find(dom, node);
     if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    if (owner->sheet != NULL) return JS_DupValue(ctx, owner->sheet->value);
+    if (d_more_peek(owner)->sheet != NULL) return JS_DupValue(ctx, d_more_peek(owner)->sheet->value);
+    DValueMore *more = d_more(dom, ctx, owner);
+    if (more == NULL) return JS_EXCEPTION;
     JSValue object = JS_NewObjectClass(ctx, (int)os64_js_class_id(&sheet_slot));
     DValue *entry = d_retain(dom, ctx, object);
     if (entry == NULL) return JS_EXCEPTION;
@@ -57,7 +59,7 @@ JSValue d_sheet(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
     entry->target = node;
     os64_html_hold(dom->document, node);
     JS_SetOpaque(object, entry);
-    owner->sheet = entry;
+    more->sheet = entry;
     return JS_DupValue(ctx, object);
 }
 

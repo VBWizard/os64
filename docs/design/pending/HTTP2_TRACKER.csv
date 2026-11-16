@@ -1,0 +1,105 @@
+id,task,depends_on,status,done_in,notes
+Q1,"The bell's implementation: kernel handle kind (Fable's lean) or pipe-backed os64_bell_t in libos64 alone",,ruled,,"RULED 2026-11-09 by Chris: the kernel bell. H2.0 is a kernel slice with a Codex round (HTTP2.md § 2.4, § 4 H2.0)"
+Q2,"The receive window: match the preset's values exactly (Fable's lean) or advertise a smaller one of our own",,ruled,,"RULED 2026-11-09 by Chris: match the preset's window; max_body stays the real bound (HTTP2.md § 2.6). Applied in H2.5"
+Q3,"How a reader is stopped: slices and a flag with the reader the socket's only closer (Fable's lean) or a kernel hang-up verb",,ruled,,"RULED 2026-11-09 by Chris: the slices; no kernel change (HTTP2.md § 2.3). Applied in H2.4; the verb is a § 2.10 row"
+Q4,"H2.4 as two slices, the connection alone and then fetches on it as H2.6 (Fable's lean), or one slice as first planned",,ruled,,"RULED 2026-11-10 by Chris: two slices (HTTP2.md § 7). Quinn's read of the brief recommended the same"
+Q5,"A way to turn HTTP/2 off without a rebuild: an http2 = off line in net.conf read by libfetch once per process (Fable's lean), or no switch",,ruled,,"RULED 2026-11-11 by Chris: yes, in net.conf, since it governs every program that speaks through libfetch (HTTP2.md section 4 H2.5, The off switch). Applied in H2.5.7"
+
+H2.0,"The bell: a handle whose read waits and whose write rings (os64/bell.h)",Q1,done,#526,"HTTP2.md § 2.4 and § 4 H2.0 (as built: the owed wake, not pipe.c's claim and sweep); merged 2026-11-10, Codex round 1 clean, P5 passed"
+H2.0.1,"Kernel bell_t: spinlock, rung flag, one parked waiter, pipe.c's park discipline; joins handle.c's pin with a holders count; handle_share refuses it",H2.0,done,#526,"read pipe.c's read path first; the first review question is where it differs"
+H2.0.2,"read with patience (1 rung / OS64_ERR_TIMEOUT / OS64_INTERRUPTED / closed), second reader refused",H2.0.1,done,#526,
+H2.0.3,"write rings from any thread, never blocks; close wakes a parked waiter",H2.0.1,done,#526,
+H2.0.4,"SYSCALL_BELL and its comment; the dispatcher accepts finite patience on a bell",H2.0.1,done,#526,
+H2.0.5,"Not inherited across spawn; /proc/<pid>/handles names it bell",H2.0.1,done,#526,
+H2.0.6,"libos64 os64/bell.h: os64_bell_t, make / wait / ring / close; the header states the ring-under-the-owner's-lock rule",H2.0,done,#526,"same header under either Q1 answer"
+H2.0.7,"/tests/belltest: ring-before-wait kept, cross-thread wake, timeout, two rings one wait, close wakes, SIGWINCH interrupts, child sees no bell, occupied bell refused",H2.0.6,done,#526,
+H2.0.8,"Kernel case for the park/ring race",H2.0.1,done,#526,
+H2.0.9,"Codex round",H2.0.7,done,#526,
+
+H2.1,"Session resumption: TLS 1.3 tickets kept and offered, a resumed handshake skips the chain",,done,#529,"HTTP2.md § 4 H2.1; reverses TLS13.md ruling 6 by Chris's 2026-11-09 ruling. Codex round 1 clean, P5 passed 2026-11-10; on the P5 a resumed open is no faster than a full one (as built)"
+H2.1.1,"Keep NewSessionTicket's fields in ticket_byte (lifetime, age_add, nonce, ticket up to TLS13_TICKET_MAX); derive the PSK",H2.1,done,#529,
+H2.1.2,"Derive resumption_master_secret at client Finished; wipe with the rest",H2.1,done,#529,"TLS13.md § The key schedule's 'not derived' line changes"
+H2.1.3,"Session cache in libtls: key (host, port, trust), each entry holding a reference on its store, 32 entries, two tickets per key, use-once, expiry, os64_tls_sessions_drop",H2.1.1,done,#529,
+H2.1.4,"os64_tls_config_t gains port (0 = do not resume); os64_tls_state_t gains resumed",H2.1.3,done,#529,
+H2.1.5,"psk_key_exchange_modes (psk_dhe_ke) on EVERY hello that may resume; pre_shared_key last when the cache has a ticket, with the binder over the truncated hello",H2.1.3,done,#529,
+H2.1.6,"ServerHello handling: resumed path (no Certificate / CertificateVerify), declined path (zero PSK early secret), hash-mismatch error, HRR recomputes age and binder",H2.1.5,done,#529,
+H2.1.7,"libfetch: dial passes the port; detail.tls_resumed; yonder's record and os64get -v say resumed",H2.1.4,done,#529,
+H2.1.8,"Host cases against OpenSSL s_server: extension 45 on a first hello checked on its bytes, tickets kept, resumed, declined, num_tickets 0, expired, oversize ticket, HRR with PSK, wrong binder refused, trust-key separation, use-once",H2.1.6,done,#529,
+H2.1.9,"Fuzz loop gains the PSK server extension shapes; mutants once at the end",H2.1.8,done,#529,
+H2.1.10,"Measurement in the PR body: cold vs resumed handshake time in the guest; WIRE.md blog page connections and arrival",H2.1.7,done,#529,"the handshake measured in the guest (full 407 ms, resumed 124 to 140 ms, QEMU TCG); the blog page not re-measured: resumption changes no connection count (as built)"
+H2.1.11,"TLS13.md § The profile and DEBTS § TLS 1.3 engine boundaries updated; as-built section",H2.1.8,done,#529,
+H2.1.12,"Codex round",H2.1.9,done,#529,
+
+H2.2,"Connections as shared objects with a count, and the six-per-host cap in front of the dial",H2.0,done,#531,"HTTP2.md § 2.2, § 4 H2.2 and 'H2.2, as built'; removes handshakes, not latency. Codex round 1 clean on #531; P5 passed 2026-11-10"
+H2.2.1,"fetch_conn_t replaces kept_t: key, io, protocol (H1 only), refs, kept_at, dialling; the table holds pointers, idle and live",H2.2,done,#531,
+H2.2.2,"fetch_pool_take: idle of the key, else a dial slot under both caps (closing an idle connection that stands in the way), else wait on the bell in the pool's queue",H2.2.1,done,#531,
+H2.2.3,"The waiter list: node added under the lock, removed under the lock before any return; put / death / a dial's end ring EVERY matching waiter, under the lock",H2.2.2,done,#531,
+H2.2.4,"A wait that outlives its patience answers DIAL_FAILED with NO_RESOURCES and the sentence; a cancelled wait INTERRUPTED",H2.2.2,done,#531,"the sentence names the host's six or the program's sixteen; the wait's bound is FETCH_POOL_WAIT_MS, not the idle deadline (as built)"
+H2.2.5,"fetch_pool_put / evict_one / drain / idle over the new table; fetch_pool_live for the harness",H2.2.1,done,#531,
+H2.2.6,"fetch.c speaks to connections; the fetch's bell made on first wait, closed with the fetch; retry / 408 / probe / ONCE_MS untouched",H2.2.1,done,#531,
+H2.2.7,"FETCH_POOL_TOTAL's reasoning in pool.h rewritten for a table that counts live connections; distinct hosts at once measured on a corpus page",H2.2.1,todo,,"pool.h's reasoning rewritten (#531); the corpus measurement of distinct hosts at once is not done"
+H2.2.8,"Host cases: seventh waits and proceeds on put / on death; cancelled wait removes its node; patience expiry; a new key waits on sixteen live and evicts an idle one otherwise; a once-only request at the cap evicts the idle it passed over; a rung waiter that leaves strands nobody; no ring reaches a closed bell; failed dial releases its slot; every existing pool case unchanged",H2.2.6,done,#531,
+H2.2.9,"Mutants once at the end",H2.2.8,done,#531,"102 of 102"
+H2.2.10,"QEMU make run-net on the W2 page: at most six SYNs to the host at once, arrival within W2's figures",H2.2.8,todo,,"not done as written: /tests/capprobe measured the cap from inside the guest (12 fetches, at most 6 at once); no SYN capture on the W2 page"
+H2.2.11,"DEBTS row 'Fetches to one host are not capped at once' paid; WIRE.md § 2 pointer; as-built section",H2.2.10,done,#531,
+H2.2.12,"Codex round",H2.2.9,done,#531,"round 1 clean, 2026-11-10"
+H2.2.13,"P5: Chris on the blog page and the storefront, by feel and by the record's connection count",H2.2.12,done,#531,"capprobe on the P5 2026-11-10: 12 fetches, at most 6 at once, opens 190 to 694 ms, 998 ms in all; Chris tested his pages in yonder and passed it"
+
+H2.3,"Framing and HPACK: pure libraries with host tests and the RFC's vectors",,done,#535,"HTTP2.md § 4 H2.3 and 'H2.3, as built'; unreachable until H2.4. Codex round 2 clean 2026-11-10; no P5 pass, nothing calls it yet"
+H2.3.1,"h2_frame: header parse, per-type length and stream-id rules, padding, PRIORITY fields, unknown types ignored",H2.3,done,#535,
+H2.3.2,"h2_frame writers: SETTINGS in the order given, ack, WINDOW_UPDATE, PING ack, RST_STREAM, GOAWAY, HEADERS with CONTINUATION split, DATA cut to size, PRIORITY",H2.3,done,#535,
+H2.3.3,"CONTINUATION reassembly state with the hard cap; the preface; error-code and setting name tables",H2.3.1,done,#535,
+H2.3.4,"HPACK decoder: static table, dynamic table bounded by our advertised size, integers with a width cap, Huffman with padding rules, size updates, never-indexed carried, whole block always decoded",H2.3,done,#535,
+H2.3.5,"HPACK encoder: dynamic table bounded by the peer's size, indexing policy, never-indexed for authorization and marked fields, Huffman when shorter, size update on a shrink",H2.3,done,#535,
+H2.3.6,"h2_head_check: RFC 9113 § 8.2's rules on a decoded field list, the rule broken returned",H2.3.4,done,#535,
+H2.3.7,"tools/test_h2_host.sh: RFC 7541 Appendix C in both directions with table state checked; every frame rule; reassembly; byte-at-a-time; head-check rules; encoder shrink; fuzz loop",H2.3.6,done,#535,"about 630,000 checks; also the hpack-test-case corpus from the WPT checkout, 36,990 blocks, run once and not kept"
+H2.3.8,"Mutants once at the end",H2.3.7,done,#535,"215 of 215"
+H2.3.9,"In-house review and as-built section",H2.3.8,done,#535,"one cold read: two defects and a leniency, fixed; Codex round 1 found two more, fixed; round 2 clean"
+
+H2.4,"The connection: state machine, streams, flow control, the reader thread, alone against a scripted peer",H2.0 H2.2 H2.3,done,#538,"HTTP2.md § 4 H2.4 and 'H2.4, as built'; nothing calls it until H2.6. Codex round 4 clean 2026-11-10 after twelve findings in three rounds; no P5 pass, nothing in the guest reaches it"
+H2.4.1,"Brief: connection object and locks named, frame-to-stream delivery, the settings exchange, the scripted h2 peer and its cases",H2.2,done,#536,"adds this slice's rows; the fetch.c half is split out as H2.6 (Q4)"
+H2.4.2,"libtls: os64_tls_transport_release hands the engine, the socket and unread ciphertext over; exports, audit, transport harness cases",H2.4.1,done,#538,
+H2.4.3,"h2_conn_t and h2_stream_t: the lock, what the reader owns alone, holds counted atomically; adopt queues preface, greeting SETTINGS and WINDOW_UPDATE",H2.4.2,done,#538,
+H2.4.4,"The out queue: ciphertext in the engine's order, one drainer, no lock across a write, drains with no patience for the reader and the cancelled; the mark at the door for DATA and new streams, the control ceiling, one credit outstanding",H2.4.3,done,#538,
+H2.4.5,"The reader: slices, feed and cut frames, the reassembler and decoder outside the lock, the look-around, the only closer of the socket",H2.4.4,done,#538,
+H2.4.6,"Delivery of every frame type to open and closed streams; the first frame is SETTINGS; settings applied and acknowledged; connection errors as GOAWAY and death",H2.4.5,done,#538,
+H2.4.7,"Streams from the fetch's side: open (parks at the mark), send under both windows and the mark, head, read with WINDOW_UPDATE at half, close with RST and credit, how it ended; content-length counted against DATA; a reset after a whole response stops the upload alone",H2.4.5,done,#538,
+H2.4.8,"Endings: peer reset, GOAWAY above and below, death fanned out, the quiet connection, condemned from outside, the write patience",H2.4.6,done,#538,
+H2.4.9,"tools/h2_peer.c (records numbered, reads that stall) and tools/test_h2_conn_host.sh: every case of the brief, eight threads, ASan/UBSan and TSan; the harness ends itself",H2.4.8,done,#538,
+H2.4.10,"Mutants once at the end, through the capped runner",H2.4.9,done,#538,"122 mutants, all caught at the end; the first run caught 82 of 102 and each of the 12 missed got a case"
+H2.4.11,"One cold read, as-built section",H2.4.10,done,#538,"Opus found five defects, each fixed with a case and a mutant"
+H2.4.12,"Codex round",H2.4.11,done,#538,"round 4 clean; 5, 4 and 3 findings in the rounds before, each fixed with a case and a mutant"
+
+H2.5,"The switch: ALPN offers h2, one request model two renderers, the greeting per preset from captures, QEMU and P5 proof",H2.6 C1 C2 C3,done,#549,"HTTP2.md § 2.1 § 2.7 § 2.8 § 2.9 § 2.10; costumes (Netscape 4, Lynx) stay h1 by ruling in § 2.1; P5 pass 2026-11-12"
+H2.5.1,"Brief: the greeting in agent.c and os64_fetch_options_t, yonder's own greeting, the record, the nghttpd proof, the rows",H2.6 C1 C2,done,#544,"adds this slice's rows"
+H2.5.2,"libfetch: os64_fetch_h2_t and the options beside order (h2, h2_weight, h2_lines, http1); fetch_h2_offer deleted and the offer rule in dial; libfetch's own greeting as the default",H2.5.1,done,#549,
+H2.5.3,"h2_conn: the first stream id in the greeting; a priority on HEADERS and a WINDOW_UPDATE after it, per stream",H2.5.1,done,#549,
+H2.5.16,"pool: an HTTP/2 connection and a dial in flight record their greeting and http1; take gives each only to a fetch that would have said the same; an http1 fetch ignores the remembered ALPN answer",H2.5.2,done,#549,"Quinn's finding on #544"
+H2.5.4,"http.c: the pseudo-header order from the greeting; the HTTP/2-only lines placed by order; TE sent only as trailers where a preset says so, and HTTP2.md 2.7 amended",H2.5.1,done,#549,
+H2.5.5,"The head's http2 fact; yonder's request record says the protocol and the stream",H2.5.1,done,#549,
+H2.5.6,"libway and agent.c: way_identity_t carries the greeting, a weight per destination, the HTTP/2-only lines and http1; the costumes set http1; yonder closes idle pool connections when the agent changes",H2.5.2,done,#549,"values from C1 and C2, never from memory"
+H2.5.15,"The Chrome preset's string and client hints refreshed to 157 from C1",H2.5.1,done,#549,
+H2.5.7,"The off switch: http2 = off in net.conf, read by libfetch once per process",H2.5.1,done,#549,"Q5"
+H2.5.8,"Host proof: every row of the brief's capture table checked by the scripted peer for each preset and for libfetch's own; http1 offers no h2; ASan/UBSan and TSan; mutants once",H2.5.6,done,#549,
+H2.5.9,"h2probe: no flag, no wait for the reader, links libfetch.so",H2.5.2,done,#549,
+H2.5.10,"QEMU against nghttpd -v under each browser preset on e1000 and virtio: the server's log against the capture, one connection, HTTP/2 on every request; the measurement of section 5",H2.5.8,done,#549,
+H2.5.11,"The books: DEBTS, DIVERGENCES, the 2.10 rows, WIRE.md's pointer",H2.5.2,done,#549,
+H2.5.12,"One cold read, then Codex",H2.5.10,done,#549,
+H2.5.13,"Chris's P5 pass: the sites that scored us by outcome, ordinary browsing under each browser preset, h2probe against a live site",H2.5.12,done,#549,"2026-11-12: three rounds of thirty-two page loads before the switch and three after under the Chrome preset, a round under Chrome and one under yonder's own after the pool's changes, h2probe against a live site (twelve fetches, one HTTP/2 connection). The Firefox preset was not browsed on the P5"
+H2.5.14,"As built, under the brief",H2.5.13,done,#549,"with the P5 measurement and the pool's changes it led to"
+
+H2.6,"Fetches on the connection: the pool shares one connection among fetches, a fetch runs on a stream, the retry rules and words, a guest probe",H2.4,done,#542,"HTTP2.md § 4 H2.6 and 'H2.6, as built'; the switch stays off (fetch_h2_offer, hidden) until H2.5. Codex round 3 clean 2026-11-11 (one library finding, one test finding before it); h2probe passes in QEMU on e1000 and virtio; no P5 pass yet, and h2probe is what to run there"
+H2.6.1,"Brief, written against the tree after H2.4's round",H2.4,done,#540,"adds this slice's rows"
+H2.6.2,"The offer and its private flag; fetch_transport_alpn and fetch_transport_release; the one greeting until H2.5",H2.6.1,done,#542,
+H2.6.3,"pool.c: fetch_conn_t's lifecycle (dialling, adopting with the dialler's reference, h2 live, struck, freed by the last of three), closing sockets counted against the table's total, the three hooks, FETCH_POOL_SHARED, fetch_pool_dialled_h2, the remembered-h2 table, put for h2, drain and the dying count",H2.6.2,done,#542,
+H2.6.4,"http.c: http_request_compose with the text unchanged byte for byte, http_request_fields (pseudo-headers, lowercase, forbidden fields out, cookies crumbled), http_head_field shared by both reply parsers",H2.6.1,done,#542,
+H2.6.5,"fetch.c: the dial that answers h2 (release, adopt, dialled_h2), exchange_h2, wire_read and its table, every f->io with its h2 arm, leaving a stream",H2.6.3 H2.6.4,done,#542,
+H2.6.6,"What is tried again and what it is called: the retry table, a request at most twice, the detail's four fields and the sentences",H2.6.5,done,#542,
+H2.6.7,"tools/h2_peer.c serves several connections; tools/test_fetch_host.sh gains the h2 world and every case of the brief; test_http_host.sh gains the field list",H2.6.6,done,#542,
+H2.6.8,"/tests/h2probe, and QEMU on the e1000 and on virtio against a real h2 server",H2.6.6,done,#542,
+H2.6.9,"Mutants once at the end, through the capped runner",H2.6.7,done,#542,"78 mutants, all caught at the end; the first run caught 56 of 77"
+H2.6.10,"One cold read, as-built section",H2.6.9,done,#542,"Opus: an unbounded redial, stale detail, long names unheard, and six comments; each fixed"
+H2.6.11,"Codex round",H2.6.10,done,#542,"round 3 clean; round 1 found an upload waiting under a whole response, round 2 a timing-dependent test"
+C1,"Capture Chrome on Windows against a local nghttpd -v: SETTINGS (ids, order, values), the first WINDOW_UPDATE, PRIORITY frames, pseudo-header order, for a navigation and a page of sub-resources",,done,#544,"Chris's; kept beside the W1 set with the browser's version in the name; needed by H2.5, not before"
+C2,"Capture Firefox on Windows the same way",,done,#544,"Chris's; Firefox builds a priority tree and Chrome does not. Made with Firefox 158 on Linux, headless, by Fable: an HTTP/2 greeting names no platform"
+C3,"Capture Chrome on Windows loading the interleaved page (a script, then a sheet, then pictures, the first two responses still arriving): which stream the picture depends on",,done,#544,"Chris's; settles Chrome's dependency rule (Quinn's finding on #544); page and server in ~/os64-opus-kit/h2cap"

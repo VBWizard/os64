@@ -90,6 +90,10 @@ implements insertion modes, formatting reconstruction/adoption, templates,
 foreign integration, and foster parenting. `fragment.c` stages contextual parses
 and copies their reachable result into document-owned ledger blocks.
 `serialize.c` writes HTML without allocating or using recursion.
+`serialize_xml.c` writes XML for XMLSerializer (DOM Parsing § 3.2.1, require
+well-formed false), iteratively too, with a heap stack of open elements and
+the namespace prefix map scoped to them; its header records where it follows
+the browsers over the standard's prose.
 `shadow.c` holds slot assignment, the flat tree and slotchange's marking
 (docs/design/pending/SHADOW_DOM.md § 4); shadow roots themselves are
 `dom.c`'s.
@@ -212,6 +216,7 @@ have `is_xml` set and no HTML landmarks: use `os64_html_document_element`.
 Names retain local spelling, prefix and namespace URI; text and CDATA
 coalesce, while processing instructions stay distinct. The same holds, pins,
 clones and mutation lifetime rules apply. HTML fragment parsing refuses XML
-documents, and the serializer remains HTML serialization. The supported XML
+documents, and `os64_html_serialize` stays HTML serialization for them too
+(only `os64_html_serialize_xml` writes XML; DEBTS.md). The supported XML
 profile, resource limits and evidence are in
 [XML.md](../../docs/design/pending/XML.md#native-shared-tree-as-built--2026-10-25).

@@ -231,8 +231,14 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
         if(s->connected && le_u16(e+3)==s->handle) {
             if(e[2]) { le_fail(s,"controller could not disconnect peer"); return; }
             bool first_error=!s->error;
+            // 3d is "terminated: the integrity check failed". At the START of
+            // encryption that is a key that does not match, and the user's to
+            // sort out. On a link the saved key has already encrypted it is
+            // the radio's: the key was right a moment ago. Seen on the P5,
+            // five seconds into HID setup, and the same bond reconnected.
             bool retry=(bt_le_input_active(s) && (e[5]==8 || e[5]==0x13 || e[5]==0x16)) ||
-                (s->bond_reused && le_retryable_link_status(e[5]));
+                (s->bond_reused && le_retryable_link_status(e[5])) ||
+                (s->bond_reused && s->encrypted && e[5]==0x3d);
             s->disconnect_reason=e[5]; s->disconnected_ms=s->now;
             if(s->phase!=BT_LE_CLEANUP) s->status=e[5];
             s->outstanding=0; s->connected=false; s->encrypted=false; s->link_may_active=false;

@@ -169,6 +169,85 @@
       "path": "patches/0017-dynbuf-refusal-sticky.patch",
       "sha256": "7f2401e82b0f3def6b25c2253e4d1be38ecbdc03091d7b06dbdbc4c458f23bb0",
       "reason": "A compile whose bytecode buffer is refused memory is freed safely: an errored DynBuf has no room (dbuf_set_error, which a refused growth calls too), so every later put is refused and no hole is left; resolve_labels patches nothing once its output has errored (a relocation recorded after the error pointed inside the last instruction written, and its patch wrote over that instruction's atom); a refused relocation marks the output errored in place of upstream's unsafe fail path, which is gone; and the refused output is what the definition's free walks."
+    },
+    {
+      "path": "patches/0018-function-realm-binding.patch",
+      "sha256": "b45056d5166f094328712c02941ae542bd9e845637b35579bec3814d22b781cc",
+      "reason": "Expose the engine function-realm query so browser listeners and handler assignments retain callback realm independently of the method binding and mutable prototypes."
+    },
+    {
+      "path": "patches/0019-job-ownership.patch",
+      "sha256": "4582ec5298a2cea8a352ca0a32d242aac9641f8d049bcae7f0edde597fb3156f",
+      "reason": "Retain native function and job execution ownership independently of the queue context; inspect or discard jobs before execution."
+    },
+    {
+      "path": "patches/0020-job-transactions.patch",
+      "sha256": "dcd5874af45a2a960758eda4f7aaaa741ba1c8114a34eaf168e0168e54f7e523",
+      "reason": "Keep installation job transactions independently linked so candidate-only execution and abort preserve sibling FIFO, including sibling finalization triggered during setup."
+    },
+    {
+      "path": "patches/0021-neutral-host-continuations.patch",
+      "sha256": "aaa1d6bd740a09dec1ecc3aaa2055b80db040d1f8f2a4438cf7be53d03462695",
+      "reason": "Separate trusted self-hosted Streams continuations from author callback ownership while retaining function realm, job budgets and installation transactions."
+    },
+    {
+      "path": "patches/0022-browser-global-this.patch",
+      "sha256": "532ffe0695ac387b0481426542cade6ed6ab47bd380dcb79fb95d84a025d89da",
+      "reason": "Retain an opt-in global-this receiver for sloppy calls, script and bytecode evaluation, and indirect eval while preserving global environment storage and standalone defaults."
+    },
+    {
+      "path": "patches/0023-execution-scope-snapshot.patch",
+      "sha256": "5ba6411600ad9ad4237c7c36eb516a56110b019dae69a6d2fd6fbb00f49a5ee4",
+      "reason": "Expose opt-in allocation-free execution scope facts before interrupt polling; unknown dispatch and native invariant coverage remain explicit, with recovery disabled."
+    },
+    {
+      "path": "patches/0024-failed-code-entry.patch",
+      "sha256": "1dad0a03f2f3a847696748ef435a75a923db0ebc637479a3ccc7496757d63600",
+      "reason": "Add dormant irreversible executable-context containment across raw calls, eval, suspended resumptions, modules and native job bodies; retain module realm ownership through unlink and GC."
+    },
+    {
+      "path": "patches/0025-native-call-contexts.patch",
+      "sha256": "9a7db65d417f2e8fb98a7ac8ba3cd47ca7989009d0228f1dacd35133dab3b3bd",
+      "reason": "Expose borrowed incoming and defining context facts for active native function calls without treating either as browser security authority or changing callback context delivery."
+    },
+    {
+      "path": "patches/0026-settings-scopes.patch",
+      "sha256": "30d85402e6c28f20d285a099a5612c8066997c1ceb94f386279950755f9a40ee",
+      "reason": "Track bounded host entry and callback incumbent scopes separately from script-bearing activations, native dispatch contexts and task ownership."
+    },
+    {
+      "path": "patches/0027-optimized-iterator-entry.patch",
+      "sha256": "314ee7bd15a9e88e766ffcee19d79995f4030b31dbfdd6af1b8ca2158a4aa467",
+      "reason": "Guard and attribute optimized native iterator entry without changing its incoming-context callback ABI."
+    },
+    {
+      "path": "patches/0028-current-realm.patch",
+      "sha256": "6a57b9475aa8dbc6620d7cb6fbcdb24502dfeccf93c865a225b1fc9e1e57e60b"
+    },
+    {
+      "path": "patches/0029-recovery-entry-barrier.patch",
+      "sha256": "36b3f6e7877adc06c1007016277b95ecd6eca607d760e56268e698b35da39a5b",
+      "reason": "Expose opt-in engine activity markers and a generation-checked raw recovery entry fence without resetting wrapper failures or certifying external native state."
+    },
+    {
+      "path": "patches/0030-callback-associated-realm.patch",
+      "sha256": "b9c228c5f1cb11ab3b8fb2476e45d0745919b8fbd1839d87708ab580cbb06efe",
+      "reason": "Preserve proxy creation realm for callable callback entry, independently of executable target and captured incumbent."
+    },
+    {
+      "path": "patches/0031-object-realm-identity.patch",
+      "sha256": "8926970d5204a3ceca655888b82b25ccbbcbc2dc358e55670a163f5f3e591b47",
+      "reason": "Record immutable non-owning object creation-context identity for callback-interface entry, with no prototype inference or context-slot reuse."
+    },
+    {
+      "path": "patches/0032-inline-handler-provenance.patch",
+      "sha256": "cdba9e1972443b5593f678476dd273163366fa32d400745ca85545fcbf590ff8",
+      "reason": "Clear ScriptOrModule presence on source-verified inline-handler bytecode closures without changing executable realm, ownership or exceptions."
+    },
+    {
+      "path": "patches/0033-promise-settings.patch",
+      "sha256": "9360c7731cb6055587d6f61d247166ae295b5e0bc07426f3d48140b3be47e4fd",
+      "reason": "Opt-in Promise reaction/thenable incumbent capture, traced context ownership and prepared per-job entry/callback invocation; active ScriptOrModule restoration remains separate."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

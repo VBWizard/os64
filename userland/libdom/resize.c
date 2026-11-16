@@ -5,8 +5,8 @@
 /* RESIZEOBSERVER (Resize Observer 1, W3C; INTERSECTION_OBSERVER.md § 11).
  *
  * The binding keeps the observers and their targets; the host answers the
- * sizes, every observed target in one call (os64_dom_set_resizes), from a
- * layout it makes current. At its rendering step the host calls
+ * sizes, batching targets by their current document (os64_dom_set_resizes),
+ * from layouts the providers make current. At its rendering step the host calls
  * os64_dom_resizes_step, which is the standard's loop as one task: gather
  * the observations whose observed size moved, deeper than a depth;
  * broadcast them, each observer's callback handed its entries in the order
@@ -39,9 +39,11 @@ typedef struct DRTarget {
 typedef struct DRObserver {
     struct DRObserver *prev, *next;
     os64_dom_t *dom;
-    JSValue object, callback;
+    JSValue object;
+    DScheduledCallback callback;
     bool held, dead;
     uint32_t script;
+    os64_dom_t *report_owner;
     DRTarget *targets, *targets_last;
     size_t ntargets;
 } DRObserver;
@@ -151,7 +153,7 @@ static void sweep(os64_dom_t *dom)
 
 void os64_dom_set_resizes(os64_dom_t *dom, os64_dom_resizes_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->resizes_provider = provider;
     dom->resizes_opaque = opaque;
 }
@@ -163,14 +165,22 @@ size_t os64_dom_resizes_observed(const os64_dom_t *dom)
 
 bool os64_dom_resizes_owed(const os64_dom_t *dom)
 {
-    return dom != NULL && !dom->closed && dom->resizes != NULL &&
-           (dom->resizes->owed != 0 || dom->resizes->skipped != 0 || dom->resizes->undone);
+    if (!d_delivery_active(dom) || dom->resizes == NULL) return false;
+    const struct DResizes *s = dom->resizes;
+    for (DRObserver *o = s->observers; o != NULL; o = o->next) {
+        if (o->dead) continue;
+        for (DRTarget *t = o->targets; t != NULL; t = t->next)
+            if (d_delivery_active(d_owner((os64_dom_t *)dom, t->node)) &&
+                (t->last[0] < 0 || t->skipped || s->undone)) return true;
+    }
+    return false;
 }
 
 /* The standard's "calculate depth for node": how many nodes from it to the
  * root of its flattened tree, itself included. */
-static size_t node_depth(const os64_dom_t *dom, const os64_html_node_t *node)
+static size_t node_depth(os64_dom_t *dom, const os64_html_node_t *node)
 {
+    dom = d_owner(dom, node);
     size_t depth = 0;
     for (; node != NULL; node = os64_html_flat_parent(dom->document, node)) depth++;
     return depth;
@@ -186,8 +196,9 @@ static void observed_size(const os64_dom_resize_t *a, uint8_t box, double out[2]
     out[1] = a->boxed ? v[1] : 0;
 }
 
-/* "Gather active resize observations at depth": the provider asked once
- * for every target, each marked active when its observed size moved and it
+/* "Gather active resize observations at depth": each current-document
+ * provider is asked once for its targets. After every batch succeeds, a
+ * target is marked active when its observed size moved and it
  * is deeper than `depth`, skipped when it moved and is not. -1 when the
  * provider refused; else how many are active, and `*skipped` how many were
  * passed over. */
@@ -196,32 +207,50 @@ static int64_t gather(os64_dom_t *dom, size_t depth, size_t *skipped)
     struct DResizes *s = dom->resizes;
     *skipped = 0;
     if (s->batch_cap < s->observed) {
-        os64_dom_resize_t *grown = d_alloc(dom, s->observed * sizeof(*grown));
+        os64_dom_resize_t *grown = d_alloc_kind(dom, s->observed * sizeof(*grown), OS64_DOM_MEM_RESIZE);
         if (grown == NULL) return -1;
         d_free(dom, s->batch);
         s->batch = grown;
         s->batch_cap = s->observed;
     }
-    size_t n = 0;
-    for (DRObserver *o = s->observers; o != NULL; o = o->next) {
-        if (o->dead) continue;
-        for (DRTarget *t = o->targets; t != NULL; t = t->next)
-            s->batch[n++] = (os64_dom_resize_t){.target = t->node};
+    size_t members = dom->cluster != NULL ? dom->cluster->count : 1;
+    for (size_t i = 0; i < members; i++) {
+        os64_dom_t *owner = dom->cluster != NULL ? dom->cluster->members[i] : dom;
+        if (!d_delivery_active(owner)) continue;
+        size_t n = 0;
+        for (DRObserver *o = s->observers; o != NULL; o = o->next) {
+            if (o->dead) continue;
+            for (DRTarget *t = o->targets; t != NULL; t = t->next)
+                if (os64_html_node_owner(t->node) == owner->document)
+                    s->batch[n++] = (os64_dom_resize_t){.target = t->node};
+        }
+        if (n == 0) continue;
+        os64_dom_geometry_stats_t cost = {0};
+        bool answered = false;
+        if (owner->resizes_provider != NULL && d_provider_enter(owner)) {
+            answered = owner->resizes_provider(owner->resizes_opaque, s->batch, n, &cost);
+            d_provider_leave(owner);
+        }
+        owner->geometry_stats.layouts += cost.layouts;
+        owner->geometry_stats.elapsed_us += cost.elapsed_us;
+        if (!d_delivery_active(dom)) return 0;
+        if (!d_delivery_active(owner)) continue;
+        if (!answered) return -1;
+        size_t at = 0;
+        for (DRObserver *o = s->observers; o != NULL; o = o->next) {
+            if (o->dead) continue;
+            for (DRTarget *t = o->targets; t != NULL; t = t->next)
+                if (os64_html_node_owner(t->node) == owner->document) t->now = s->batch[at++];
+        }
     }
-    os64_dom_geometry_stats_t cost = {0};
-    bool answered = n == 0 || dom->resizes_provider(dom->resizes_opaque, s->batch, n, &cost);
-    dom->geometry_stats.layouts += cost.layouts;
-    dom->geometry_stats.elapsed_us += cost.elapsed_us;
-    if (!answered) return -1;
     int64_t active = 0;
-    size_t at = 0;
     for (DRObserver *o = s->observers; o != NULL; o = o->next) {
         if (o->dead) continue;
         for (DRTarget *t = o->targets; t != NULL; t = t->next) {
-            t->now = s->batch[at++];
             double size[2];
-            observed_size(&t->now, t->box, size);
             t->active = t->skipped = false;
+            if (!d_delivery_active(d_owner(dom, t->node))) continue;
+            observed_size(&t->now, t->box, size);
             if (size[0] == t->last[0] && size[1] == t->last[1]) continue;
             if (node_depth(dom, t->node) > depth) {
                 t->active = true;
@@ -321,11 +350,33 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
     size_t shallowest = SIZE_MAX;
     DRObserver *last = s->observers_last;
     s->walking = true;
-    for (DRObserver *o = s->observers; o != NULL && !dom->closed && !sticky(out);) {
+    for (DRObserver *o = s->observers; o != NULL && d_delivery_active(dom) && !sticky(out);) {
         DRObserver *next = o == last ? NULL : o->next;
         bool any = false;
-        for (DRTarget *t = o->targets; t != NULL && !any; t = t->next) any = t->active;
+        for (DRTarget *t = o->targets; t != NULL; t = t->next) {
+            if (!d_delivery_active(d_owner(dom, t->node))) t->active = false;
+            any = any || t->active;
+        }
         if (any && !o->dead && JS_IsObject(o->object)) {
+            int eligible = d_captured_eligible(dom, ctx, &o->callback);
+            if (eligible <= 0) {
+                /* A permanently retired callback cannot consume a later
+                 * resize either. Remember the sample without constructing
+                 * entries or keeping the host awake for the same sizes. */
+                for (DRTarget *t = o->targets; t != NULL; t = t->next) {
+                    if (!t->active) continue;
+                    t->active = false;
+                    if (t->last[0] < 0) s->owed--;
+                    observed_size(&t->now, t->box, t->last);
+                }
+                if (eligible < 0 && d_exception_catchable(ctx)) {
+                    JSValue error = JS_GetException(ctx);
+                    d_report_as(o->report_owner, ctx, error, o->script);
+                    JS_FreeValue(ctx, error);
+                }
+                o = next;
+                continue;
+            }
             JSValue entries = JS_NewArray(ctx);
             uint32_t i = 0;
             for (DRTarget *t = o->targets; t != NULL && !JS_IsException(entries); t = t->next) {
@@ -350,7 +401,7 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
                 size_t depth = node_depth(dom, t->node);
                 if (depth < shallowest) shallowest = depth;
             }
-            JSValue self = JS_DupValue(ctx, o->object), callback = JS_DupValue(ctx, o->callback);
+            JSValue self = JS_DupValue(ctx, o->object);
             if (JS_IsException(entries)) {
                 if (d_exception_catchable(ctx)) {
                     JSValue error = JS_GetException(ctx);
@@ -360,15 +411,14 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
             } else {
                 JSValue args[2] = {entries, self};
                 os64_js_outcome_t call;
-                DScripts before = d_script_enter(dom, o->script);
-                os64_js_call(dom->runtime, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
-                d_script_leave(dom, &before, true);
+                DScripts before = d_script_enter(o->report_owner, o->script);
+                d_scheduled_call(o->report_owner, &o->callback, self, 2, args, &call);
+                d_script_leave(o->report_owner, &before, true);
                 d_outcome_fold(out, &call);
-                if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, out);
+                if (call.status == OS64_JS_EXCEPTION) d_errors_fire(o->report_owner, out);
                 d_task_settle(dom, out);
             }
             JS_FreeValue(ctx, entries);
-            JS_FreeValue(ctx, callback);
             JS_FreeValue(ctx, self);
         }
         o = next;
@@ -399,8 +449,8 @@ static void loop_error(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
 bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *out)
 {
     if (out != NULL) os64_memset(out, 0, sizeof(*out));
-    struct DResizes *s = dom != NULL && !dom->closed ? dom->resizes : NULL;
-    if (out == NULL || s == NULL || dom->resizes_provider == NULL) return false;
+    struct DResizes *s = d_delivery_active(dom) ? dom->resizes : NULL;
+    if (out == NULL || s == NULL) return false;
     sweep(dom);
     if (s->observed == 0) return false;
     size_t skipped;
@@ -412,19 +462,19 @@ bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *out)
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name, sizeof(name), "%.*s#resize-observer", (int)(sizeof(name) - 20),
                   dom->url != NULL ? dom->url : "about:blank");
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, out) == OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, out) == OS64_JS_OK) {
         os64_js_outcome_t access;
-        JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+        JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
         if (ctx == NULL) d_outcome_fold(out, &access);
         /* Each round's depth is deeper than the last's shallowest, and a
          * tree is finitely deep: the loop ends. */
-        while (ctx != NULL && active > 0 && !dom->closed && !sticky(out)) {
+        while (ctx != NULL && active > 0 && d_delivery_active(dom) && !sticky(out)) {
             size_t depth = broadcast(dom, ctx, out);
-            if (sticky(out) || dom->closed) break;
+            if (sticky(out) || !d_delivery_active(dom)) break;
             active = gather(dom, depth, &skipped);
             if (active < 0) s->undone = true;
         }
-        if (ctx != NULL && skipped != 0 && !dom->closed && !sticky(out)) loop_error(dom, ctx, out);
+        if (ctx != NULL && skipped != 0 && d_delivery_active(dom) && !sticky(out)) loop_error(dom, ctx, out);
         s->skipped = skipped;
         d_task_finish(dom, out);
     }
@@ -438,9 +488,10 @@ bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *out)
 static void observer_finalizer(JSRuntime *rt, JSValue value)
 {
     DRObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
+    (void)rt;
     if (o == NULL) return;
-    JS_FreeValueRT(rt, o->callback);
-    o->callback = o->object = JS_UNDEFINED;
+    d_scheduled_clear(o->dom, &o->callback);
+    o->object = JS_UNDEFINED;
     o->dead = true;
     if (o->dom->resizes != NULL) o->dom->resizes->has_dead = true;
 }
@@ -448,7 +499,7 @@ static void observer_finalizer(JSRuntime *rt, JSValue value)
 static void observer_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 {
     DRObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
-    if (o != NULL) JS_MarkValue(rt, o->callback, mark);
+    if (o != NULL) JS_MarkValue(rt, o->callback.value, mark);
 }
 
 static void entry_finalizer(JSRuntime *rt, JSValue value)
@@ -477,33 +528,44 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     if (dom == NULL) return JS_EXCEPTION;
     struct DResizes *s = dom->resizes;
     if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "ResizeObserver needs a callback");
+    DScheduledCallback callback = D_SCHEDULED_CALLBACK_INIT;
+    if (!d_observer_capture(dom, ctx, argv[0], &callback)) return JS_EXCEPTION;
     sweep(dom);
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
-    if (JS_IsException(prototype)) return prototype;
+    if (JS_IsException(prototype)) goto failed;
     if (!JS_IsObject(prototype)) {
         JS_FreeValue(ctx, prototype);
         prototype = JS_GetClassProto(ctx, s->observer_class);
     }
-    uint32_t script = d_callback_script(dom, ctx, argv[0]);
-    DRObserver *o = script != D_SCRIPT_FAILED ? d_alloc(dom, sizeof(*o)) : NULL;
+    if (!d_require_active(dom, ctx) || !d_scheduled_live(ctx, &callback)) {
+        JS_FreeValue(ctx, prototype);
+        goto failed;
+    }
+    os64_dom_t *report_owner;
+    uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
+    DRObserver *o = script != D_SCRIPT_FAILED ? d_alloc_kind(dom, sizeof(*o), OS64_DOM_MEM_RESIZE) : NULL;
     JSValue object = o != NULL ? JS_NewObjectProtoClass(ctx, prototype, s->observer_class) : JS_EXCEPTION;
     JS_FreeValue(ctx, prototype);
     if (JS_IsException(object)) {
         d_free(dom, o);
         if (!JS_HasException(ctx)) d_error(ctx, "QuotaExceededError", "ResizeObserver quota exceeded");
-        return JS_EXCEPTION;
+        goto failed;
     }
     os64_memset(o, 0, sizeof(*o));
     o->dom = dom;
     o->object = object;
-    o->callback = JS_DupValue(ctx, argv[0]);
+    o->callback = callback;
     o->script = script;
+    o->report_owner = report_owner;
     o->prev = s->observers_last;
     if (s->observers_last != NULL) s->observers_last->next = o;
     else s->observers = o;
     s->observers_last = o;
     JS_SetOpaque(object, o);
     return object;
+failed:
+    d_scheduled_clear(dom, &callback);
+    return JS_EXCEPTION;
 }
 
 /* ResizeObserverOptions' one member, `box`, an enum. -1 with a TypeError
@@ -538,9 +600,11 @@ static JSValue observer_member(JSContext *ctx, JSValueConst self, int argc, JSVa
 {
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
+    DRObserver *o = JS_GetOpaque(self, dom->resizes->observer_class);
+    if (o == NULL || !d_same_cluster(dom, o->dom) || o->dom->closed)
+        return JS_ThrowTypeError(ctx, "Expected a live ResizeObserver in this cluster");
+    dom = o->dom;
     struct DResizes *s = dom->resizes;
-    DRObserver *o = JS_GetOpaque(self, s->observer_class);
-    if (o == NULL) return JS_ThrowTypeError(ctx, "Expected a ResizeObserver");
     if (magic == M_DISCONNECT) {
         while (o->targets != NULL) target_remove(dom, o->targets);
         hold_update(dom, ctx, o);
@@ -561,10 +625,10 @@ static JSValue observer_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         return JS_UNDEFINED;
     }
     if (s->buckets == NULL) {
-        s->buckets = d_alloc(dom, D_RO_BUCKETS * sizeof(*s->buckets));
+        s->buckets = d_alloc_kind(dom, D_RO_BUCKETS * sizeof(*s->buckets), OS64_DOM_MEM_RESIZE);
         if (s->buckets != NULL) os64_memset(s->buckets, 0, D_RO_BUCKETS * sizeof(*s->buckets));
     }
-    t = s->buckets != NULL ? d_alloc(dom, sizeof(*t)) : NULL;
+    t = s->buckets != NULL ? d_alloc_kind(dom, sizeof(*t), OS64_DOM_MEM_RESIZE) : NULL;
     if (t == NULL) {
         hold_update(dom, ctx, o);
         return d_error(ctx, "QuotaExceededError", "ResizeObserver quota exceeded");
@@ -616,7 +680,7 @@ int d_resizes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     static const JSClassDef entry_def = {.class_name = "ResizeObserverEntry", .finalizer = entry_finalizer,
                                          .gc_mark = entry_mark};
     static const JSClassDef size_def = {.class_name = "ResizeObserverSize", .finalizer = size_finalizer};
-    struct DResizes *s = d_alloc(dom, sizeof(*s));
+    struct DResizes *s = d_alloc_kind(dom, sizeof(*s), OS64_DOM_MEM_RESIZE);
     if (s == NULL) {
         d_error(ctx, "QuotaExceededError", "ResizeObserver quota exceeded");
         return -1;
@@ -674,6 +738,11 @@ void d_resizes_drain(os64_dom_t *dom)
             JS_FreeValueRT(dom->engine, o->object);
         }
     dom->resizes_held = 0;
+}
+
+bool d_resizes_busy(const os64_dom_t *dom)
+{
+    return dom->resizes && dom->resizes->walking;
 }
 
 void d_resizes_free(os64_dom_t *dom)

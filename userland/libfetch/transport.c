@@ -98,11 +98,52 @@ bool fetch_transport_open(fetch_transport_t *io, int32_t handle,
         os64_tls_state_t state = os64_tls_transport_state(io->tls);
         remember(io, state.status);
         if (!live(state.status)) goto fail;
-        if (state.flags & OS64_TLS_HANDSHAKE_DONE) { io->error.version = state.version; return true; }
+        if (state.flags & OS64_TLS_HANDSHAKE_DONE) {
+            io->error.version = state.version;
+            io->error.resumed = (state.flags & OS64_TLS_RESUMED) != 0;
+            return true;
+        }
         remember(io, os64_tls_transport_step(io->tls, wait));
         if (!live(io->error.status)) goto fail;
     }
 fail:
+    fetch_transport_close(io, false);
+    return false;
+}
+
+const char *fetch_transport_alpn(fetch_transport_t *io)
+{
+    return io->tls != NULL ? os64_tls_transport_state(io->tls).alpn : NULL;
+}
+
+bool fetch_transport_release(fetch_transport_t *io, os64_tls_client **engine, int32_t *socket,
+                             void *unread, size_t room, size_t *unread_len)
+{
+    budget_t budget;
+    if (io->tls == NULL || !start_budget(io, &budget))
+        goto fail;
+    for (;;) {
+        uint64_t wait = patience(io, &budget);
+        if (!wait)
+            goto fail;
+        os64_tls_status_t status = os64_tls_transport_release(io->tls, engine, socket, unread, room, unread_len);
+        if (status == OS64_TLS_OK) {
+            io->tls = NULL;         // the wrapper is gone, and what it held is the caller's
+            io->handle = -1;
+            return true;
+        }
+        if (status != OS64_TLS_NEED_PROGRESS) {
+            remember(io, status);
+            goto fail;
+        }
+        // Ciphertext of the transport's own is still owed to the wire.
+        remember(io, os64_tls_transport_step(io->tls, wait));
+        if (!live(io->error.status))
+            goto fail;
+    }
+fail:
+    if (live(io->error.status))
+        io->error.status = OS64_TLS_TRANSPORT;
     fetch_transport_close(io, false);
     return false;
 }

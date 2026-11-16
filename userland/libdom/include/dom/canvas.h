@@ -7,8 +7,9 @@
 typedef enum { OS64_DOM_IMAGE_PENDING, OS64_DOM_IMAGE_READY, OS64_DOM_IMAGE_BROKEN,
                OS64_DOM_IMAGE_REFUSED } os64_dom_image_status_t;
 /* A synchronous read-only image loan. acquire does not enter script. READY
- * supplies natural dimensions and origin-clean status; pixels=true also asks
- * for natural-size sRGB pixels. An optional token tracks the loan. release is
+ * supplies source raster dimensions and origin-clean status; pixels=true also
+ * asks for sRGB pixels. density (zero-initialized providers default to 1 unless
+ * density_set) converts source pixels to natural CSS dimensions. release is
  * called for every acquire, including status-only queries and refusal. Providers
  * must keep the view stable until release and may not lend decoder-private
  * storage that can change on a worker. A zeroed provider reports pending. */
@@ -16,11 +17,17 @@ typedef struct {
     draw2d_surface_t surface;
     bool origin_clean;
     void *token;
+    double density;
+    bool density_set;
+    const char *current_src;         // borrowed until release
+    uint64_t generation;            // completed current request; zero for legacy providers
+    bool pending, empty;            // pending replacement, or no selected source
 } os64_dom_image_view_t;
 typedef struct {
     os64_dom_image_status_t (*acquire)(void *,const os64_html_node_t *,bool pixels,os64_dom_image_view_t *);
     void (*release)(void *,os64_dom_image_view_t *);
     void *opaque;
+    void (*update)(void *);         // task-boundary request submission, without script reentry
 } os64_dom_image_provider_t;
 /* The host resolves its existing font families and lays out a retained run.
  * No script reentry. Inputs are borrowed for the call; success transfers run

@@ -14,6 +14,21 @@ for source in userland/libjs/examples/runner.c userland/libjs/examples/jobs.c; d
     x86_64-elf-gcc -std=c11 -ffreestanding -m64 -Wall -Wextra -Werror \
         -I userland/libjs/include -fsyntax-only "$source"
 done
+for compiler in cc x86_64-elf-gcc; do
+    for header in html/retention.h page/retention.h; do
+        "$compiler" -std=c11 -ffreestanding -Wall -Wextra -Werror \
+            -I userland/libhtml/include -I userland/libpage/include -I userland/libos64/include \
+            -I abi/include -include "$header" -x c -fsyntax-only /dev/null
+    done
+    "$compiler" -std=c11 -ffreestanding -Wall -Wextra -Werror -I userland/libjs/include \
+        -include os64/js_failure.h -x c -fsyntax-only /dev/null
+    "$compiler" -std=c11 -ffreestanding -Wall -Wextra -Werror -I userland/libjs/include \
+        -include os64/js_retention.h -x c -fsyntax-only /dev/null
+    "$compiler" -std=c11 -ffreestanding -Wall -Wextra -Werror \
+        -I userland/libjs/include -I userland/libdom/include -I userland/libhtml/include \
+        -I userland/libpage/include -I userland/libway/include -I userland/libos64/include -I abi/include \
+        -include dom/retention.h -x c -fsyntax-only /dev/null
+done
 # Binding syntax uses upstream's host headers here; R1 target compatibility
 # headers remain separate work. Do not describe this as an os64 binding build.
 cc -std=c11 -Wall -Wextra -Werror -I userland/libjs/include \

@@ -38,7 +38,8 @@
 #include "serial_logging.h"
 #include "scheduler.h"
 #include "task.h"
-#include "tty.h"   // task_tty — the /proc tty + foreground fields
+#include "tty.h"
+#include "console.h"        // console_fg_hold — the terminal's foreground, held while it is read   // task_tty — the /proc tty + foreground fields
 #include "thread.h"
 #include "signals.h"
 #include "handle.h"
@@ -466,6 +467,9 @@ static const char *proc_handle_type_name(handle_type_t t)
 		case HANDLE_PTY_MASTER:  return "pty-master";
 		case HANDLE_NET_LISTENER: return "listener";
 		case HANDLE_GLASS:        return "glass";
+		case HANDLE_BELL:         return "bell";
+		case HANDLE_AUDIO:        return "audio";
+		case HANDLE_MEDIA_KEYS:   return "mediakeys";
 		case HANDLE_RESERVED:    return "reserved";
 		case HANDLE_CLOSING:     return "closing";
 		default:                 return "none";
@@ -687,8 +691,9 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 	// ONE read of the foreground for every line that derives from it: the
 	// pointer changes hands at a spawn, a wait and a departure, and a
 	// report that read it twice could say `mode raw` and then name a
-	// cooked task as raw_task — a pair no terminal was ever in.
-	task_t *fg = (task_t *)tty->fgTask;
+	// cooked task as raw_task — a pair no terminal was ever in. Held, so
+	// the task cannot be buried between the read and the lines below.
+	task_t *fg = console_fg_hold(tty);
 	synth_text_addf(t, "fg_task\t%lu\n", fg ? fg->taskID : 0);
 	// The line discipline, such as it is: `cooked` means Ctrl+C is SIGINT
 	// and Ctrl+D is end-of-input; `raw` means both are bytes, and raw_task
@@ -698,6 +703,8 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 	bool raw = fg != NULL && fg->wantsRaw;
 	synth_text_addf(t, "mode\t%s\n", raw ? "raw" : "cooked");
 	synth_text_addf(t, "raw_task\t%lu\n", raw ? fg->taskID : 0);
+	if (fg != NULL)
+		task_release(fg);
 	task_tty_release(tty);
 }
 

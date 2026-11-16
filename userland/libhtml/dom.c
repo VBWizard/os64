@@ -87,10 +87,10 @@ static HNode *root_of(HNode *n, uint64_t *steps)
     }
     return n;
 }
-/* True of no node, and of a node in this document's arena (HDoc.id). */
+/* True of no node, and of a node whose current document belongs to d. */
 static bool ours(const HDoc *d, const HNode *n)
 {
-    return !n || n->document_id == d->id;
+    return !n || os64_html_owns_node(&d->pub, n);
 }
 /* Preorder over the tree `root` is the root of, as the DOM counts a tree: a
  * template's contents are no part of it, being a tree of their own. */
@@ -194,6 +194,7 @@ size_t h_reclaim_visits;
 #endif
 static void unqueue(HDoc *d, HNode *n)
 {
+    d = d_lifetime(d);
     HMeta *m = h_meta(n);
     if (!(m->flags & H_NODE_QUEUED))
         return;
@@ -209,6 +210,7 @@ static void unqueue(HDoc *d, HNode *n)
 }
 static void queue(HDoc *d, HNode *n, bool wait)
 {
+    d = d_lifetime(d);
     HMeta *m = h_meta(n);
     unqueue(d, n);
     HNode **head = wait ? &d->waiting_nodes : &d->pending_nodes;
@@ -220,6 +222,7 @@ static void queue(HDoc *d, HNode *n, bool wait)
 }
 static void unit_changed(HDoc *d, HNode *root)
 {
+    d = d_lifetime(d);
     HMeta *m = h_meta(root);
     if (!(m->flags & H_NODE_PENDING))
         return;
@@ -253,6 +256,7 @@ static size_t subtree_holds(HNode *root)
 }
 void d_ref(HDoc *d, const HNode *n, bool parser, bool add)
 {
+    d = d_lifetime(d);
     HMeta *m = h_meta(n);
     uint32_t count = parser ? m->parser_refs : m->holds;
     if (add ? count == (parser ? UINT16_MAX : UINT32_MAX) : !count)
@@ -273,6 +277,7 @@ void d_ref(HDoc *d, const HNode *n, bool parser, bool add)
 }
 void d_detached(HDoc *d, HNode *n)
 {
+    d = d_lifetime(d);
     if (!n || above(n))
         return;
     HMeta *m = h_meta(n);
@@ -281,7 +286,7 @@ void d_detached(HDoc *d, HNode *n)
         m->flags |= H_NODE_PENDING;
         d->pending_units++;
     }
-    m->stamp = d->version;
+    m->stamp = d_epoch(d);
     m->flags = (m->flags & ~H_NODE_RETIRED) | H_NODE_FRESH;
     unit_changed(d, n);
 }
@@ -290,6 +295,7 @@ void d_detached(HDoc *d, HNode *n)
  * until its links and form-owner records have reached a stable boundary. */
 void d_unlinking(HDoc *d, HNode *n)
 {
+    d = d_lifetime(d);
     if (!d->pending_units || !n->parent)
         return;
     HNode *root = unit_root(n);
@@ -304,6 +310,7 @@ void d_unlinking(HDoc *d, HNode *n)
 }
 void d_linking(HDoc *d, HNode *parent, HNode *n)
 {
+    d = d_lifetime(d);
     if (!d->pending_units)
         return;
     HNode *root = unit_root(parent);
@@ -322,13 +329,6 @@ void d_linking(HDoc *d, HNode *parent, HNode *n)
         d->pending_units--;
     }
 }
-static bool older_pin(const HDoc *d, uint64_t stamp)
-{
-    for (size_t i = 0; i < H_PINS; i++)
-        if (d->pins[i] && d->pins[i] < stamp)
-            return true;
-    return false;
-}
 /* Form-owner edges are within DOM trees, including separate template trees.
  * Verify both directions before freeing nodes: an incoming external record
  * would otherwise become a dangling pointer. The zero-record gate keeps
@@ -338,9 +338,11 @@ static void assert_records(HDoc *d)
     if (!d->records)
         return;
     size_t count = 0;
-    for (HNode *n = d->live_nodes; n; n = h_meta(n)->live_next)
-        if (n->form_owner) {
-            if (n->form_owner->document_id != d->id ||
+    for (HDoc *arena = d->group ? d->group->first : d; arena;
+         arena = d->group ? arena->group_next : NULL)
+    for (HNode *n = arena->live_nodes; n; n = h_meta(n)->live_next)
+        if (d_node_document_owner(n) == d && n->form_owner) {
+            if (!os64_html_owns_node(&d->pub, n->form_owner) ||
                 root_of(n, NULL) != root_of(n->form_owner, NULL))
                 d_fatal("libhtml: form-owner record crosses a reclaimed tree edge\n");
             count++;
@@ -350,16 +352,18 @@ static void assert_records(HDoc *d)
 }
 static void node_free(HDoc *d, HNode *n)
 {
+    d = h_meta(n)->allocation_owner;
     HMeta *m = h_meta(n);
+    HDoc *document = d_node_document_owner(n);
     if (n->form_owner) {
-        if (!d->records)
+        if (!document->records)
             d_fatal("libhtml: form-owner record count underflow\n");
-        d->records--;
+        document->records--;
     }
     if (d_form_input(n)) {
-        if (!d->form_inputs)
+        if (!document->form_inputs)
             d_fatal("libhtml: explicit input count underflow\n");
-        d->form_inputs--;
+        document->form_inputs--;
     }
     if (n->kind == ELEMENT && (*h_word(n) & H_ATTRS_PRIVATE))
         for (HAttr *a = n->attrs, *next; a; a = next) {
@@ -387,7 +391,8 @@ static void node_free(HDoc *d, HNode *n)
 }
 static void subtree_free(HDoc *d, HNode *root)
 {
-    assert_records(d);
+    for (HDoc *member = d->group ? d->group->first : d; member;
+         member = d->group ? member->group_next : NULL) assert_records(member);
     HNode *n = root;
     for (;;) {
         HNode *own = owned(n, true);
@@ -405,7 +410,7 @@ static void subtree_free(HDoc *d, HNode *root)
             up->template_contents = NULL;
         else if (host(n)) {
             up->shadow_root = NULL;
-            h_slots_forget(d, n);
+            h_slots_forget(d_node_document_owner(n), n);
         } else
             h_unlink(d, n);
         node_free(d, n);
@@ -416,6 +421,7 @@ static void subtree_free(HDoc *d, HNode *root)
 }
 void d_collect(HDoc *d)
 {
+    d = d_lifetime(d);
     while (d->pending_nodes) {
         RECLAIM_VISIT();
         HNode *n = d->pending_nodes;
@@ -427,13 +433,13 @@ void d_collect(HDoc *d)
             /* Pins acquired while held may borrow this unit's current bytes.
              * Protect them without changing the visible content version. */
             if (!(m->flags & H_NODE_FRESH)) {
-                if (d->version == UINT64_MAX)
+                if (d_epoch(d) == UINT64_MAX)
                     d_fatal("libhtml: subtree retirement version overflow\n");
-                m->stamp = d->version + 1;
+                m->stamp = d_epoch(d) + 1;
             }
             m->flags = (m->flags & ~H_NODE_FRESH) | H_NODE_RETIRED;
         }
-        if (older_pin(d, m->stamp))
+        if (d_pinned_below(d, m->stamp))
             queue(d, n, true);
         else {
             m->flags &= ~(H_NODE_PENDING | H_NODE_FRESH | H_NODE_RETIRED);
@@ -444,9 +450,10 @@ void d_collect(HDoc *d)
 }
 void d_unpin_collect(HDoc *d)
 {
+    d = d_lifetime(d);
     for (HNode *n = d->waiting_nodes, *next; n; n = next) {
         next = h_meta(n)->pending_next;
-        if (!older_pin(d, h_meta(n)->stamp))
+        if (!d_pinned_below(d, h_meta(n)->stamp))
             queue(d, n, false);
     }
     d_collect(d);
@@ -454,9 +461,9 @@ void d_unpin_collect(HDoc *d)
 size_t d_pending_bytes(const HDoc *d)
 {
     size_t bytes = 0;
-    for (HNode *root = d->waiting_nodes; root; root = h_meta(root)->pending_next)
+    for (HNode *root = d->group ? d->group->first->waiting_nodes : d->waiting_nodes; root; root = h_meta(root)->pending_next)
         for (HNode *n = root; n; n = lifetime_next(root, n))
-            bytes += d_owned_bytes(n);
+            bytes += d_owned_bytes(d, n);
     return bytes;
 }
 
@@ -514,7 +521,7 @@ static bool kind_precedes(const HNode *child, os64_html_node_kind_t kind, uint64
 static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, bool replacing,
                           uint64_t *steps)
 {
-    if (!parent || !node || (replacing && !child) || !ours(d, parent) || !ours(d, node) ||
+    if (!parent || !node || (replacing && !child) || !ours(d, parent) || !d_group_contains(d, h_meta(node)->allocation_owner) ||
         !ours(d, child))
         return OS64_HTML_BAD_ARGUMENT;
     if (parent->kind != DOCUMENT && parent->kind != FRAGMENT && parent->kind != ELEMENT)
@@ -559,7 +566,10 @@ static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, boo
         /* Replacing the html element with anything that brings no element. */
         if (replacing && child->kind == ELEMENT && !element)
             return OS64_HTML_ROOT_REQUIRED;
-    } else if (!d->pub.is_xml && node->parent == &d->root && node->kind == ELEMENT)
+    }
+    HDoc *source = d_node_document_owner(node);
+    if (!source->pub.is_xml && node->parent == &source->root && node->kind == ELEMENT &&
+        parent != &source->root)
         return OS64_HTML_ROOT_REQUIRED;     /* moving the html element out of the document */
 
     size_t under = depth_of(parent, steps) + 1, limit = h_depth_limit(d);
@@ -643,7 +653,7 @@ static void take_out(HDoc *d, HNode *node, uint64_t *steps)
  * link it makes from then on (internal.h, HDoc.disturbed). */
 static void moved(HDoc *d)
 {
-    d->version++;
+    d_version_advance(d);
     d->disturbed = true;
 }
 
@@ -658,6 +668,17 @@ struct os64_html_reader {
     os64_html_reader_t *next;
     uint64_t version;
 };
+size_t d_retention_readers(const HDoc *d, size_t limit, bool *complete)
+{
+    const os64_html_reader_t *reader = d->readers;
+    size_t seen = 0;
+    while (reader && seen < limit) {
+        seen++;
+        reader = reader->next;
+    }
+    *complete = reader == NULL;
+    return seen;
+}
 static void log_ref(HDoc *d, const HNode *node, bool add)
 {
     if (node) d_ref(d, node, false, add);
@@ -835,7 +856,7 @@ static void tell(HDoc *d, os64_html_change_t *c, bool log)
 void d_seen(const HDoc *d, HNode *parent, HNode *node, HNode *before, HSeen *seen)
 {
     *seen = (HSeen){0};
-    if (!telling(d))
+    if (!telling(d) && !(node->kind == FRAGMENT && telling(d_node_document_owner(node))))
         return;
     seen->previous = before ? before->prev : parent->last_child;
     if (node->kind == FRAGMENT) {
@@ -861,7 +882,7 @@ void d_tell_removed(HDoc *d, HNode *parent, HNode *node, HNode *prev, HNode *nex
 void d_tell_placed(HDoc *d, HNode *parent, HNode *node, HNode *before, HNode *replaced,
                    const HSeen *seen, bool log)
 {
-    if (!telling(d))
+    if (!telling(d) && !(node->kind == FRAGMENT && telling(d_node_document_owner(node))))
         return;
     HNode *added = node;
     size_t nadded = 1;
@@ -871,7 +892,7 @@ void d_tell_placed(HDoc *d, HNode *parent, HNode *node, HNode *before, HNode *re
         if (nadded) {
             os64_html_change_t drained = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = node,
                                           .removed = added, .nremoved = nadded};
-            tell(d, &drained, log);
+            tell(d_node_document_owner(node), &drained, log);
         }
     } else if (seen->from)
         d_tell_removed(d, seen->from, node, seen->from_prev, seen->from_next, log);
@@ -914,7 +935,15 @@ static void place(HDoc *d, HNode *parent, HNode *node, HNode *before)
     bool touched = is_landmark_parent(d, parent) || (node->parent && is_landmark_parent(d, node->parent));
     if (node->kind == FRAGMENT) {
         for (HNode *c; (c = node->first_child) != NULL;) {
-            take_out(d, c, NULL);
+            HDoc *source = d_node_document_owner(c);
+            take_out(source, c, NULL);
+            if (source != d) {
+                /* Validated with the whole fragment before commit. The child
+                 * is detached, so adoption publishes metadata without another
+                 * removal record or a collection point. */
+                int64_t status = os64_html_adopt(&d->pub, (HNode *)os64_html_node_document(parent), c);
+                if (status) d_fatal("libhtml: prevalidated fragment child adoption failed\n");
+            }
             h_attach(d, parent, before, c);
         }
     } else {
@@ -936,6 +965,13 @@ int64_t os64_html_may_insert(const os64_html_document_t *doc, const HNode *paren
     return d ? may_insert(d, (HNode *)parent, (HNode *)node, NULL, false, NULL) : OS64_HTML_BAD_ARGUMENT;
 }
 
+int64_t os64_html_validate_insert(const os64_html_document_t *doc, const HNode *parent,
+                                  const HNode *node, const HNode *reference, bool replacing)
+{
+    return doc ? may_insert((HDoc *)doc, (HNode *)parent, (HNode *)node,
+                            (HNode *)reference, replacing, NULL) : OS64_HTML_BAD_ARGUMENT;
+}
+
 int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, HNode *before)
 {
     HDoc *d = (HDoc *)doc;
@@ -944,15 +980,21 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
     int64_t verdict = may_insert(d, parent, node, before, false, NULL);
     if (verdict)
         return verdict;
+    /* Within one arena, place keeps removal/insertion notifications at one
+     * revision; h_link updates the node document while preserving identity.
+     * A foreign arena needs its source services before destination insertion. */
+    if (node->kind != FRAGMENT && d_node_document_owner(node) != d) {
+        verdict = os64_html_adopt(doc, (HNode *)os64_html_node_document(parent), node);
+        if (verdict) return verdict;
+    }
     /* The version is every snapshot's signal to rebuild, so it moves when a
      * reader could see a difference and stays when none could. An empty
      * fragment brings nothing. A node put where it already sits is still
      * taken out and put back, which parts a control from a form outside
      * what moved; if that parted nobody, nothing is different. */
     if (node->kind == FRAGMENT && !node->first_child) {
-        /* Empty insertion changes no visible tree, but consumes the result
-         * container's lifetime just as draining a nonempty fragment does.
-         * A pin at this unchanged version may still borrow the container. */
+        /* Insertion consumes the children, not the fragment itself. An empty
+         * fragment keeps its node document and does not change a revision. */
         d_detached(d, node);
         h_meta(node)->flags &= ~H_NODE_FRESH;
         d_collect(d);
@@ -968,8 +1010,7 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
     if (!stays || d->records != records)
         moved(d);
     d_tell_placed(d, parent, node, before, NULL, &seen, !stays || d->records != records);
-    if (node->kind == FRAGMENT)
-        d_detached(d, node);
+    if (node->kind == FRAGMENT) d_detached(d, node);
     d_collect(d);
     return OS64_HTML_OK;
 }
@@ -982,6 +1023,13 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
     int64_t verdict = may_insert(d, parent, node, old, true, NULL);
     if (verdict)
         return verdict;
+    /* Within one arena, place keeps removal/insertion notifications at one
+     * revision; h_link updates the node document while preserving identity.
+     * A foreign arena needs its source services before destination insertion. */
+    if (node->kind != FRAGMENT && d_node_document_owner(node) != d) {
+        verdict = os64_html_adopt(doc, (HNode *)os64_html_node_document(parent), node);
+        if (verdict) return verdict;
+    }
     /* The standard's replace adopts the node, which takes it out of its own
      * parent, BEFORE it takes `old` out (DOM § 4.2.3, WPT's
      * MutationObserver-childList): so the node's removal names the siblings
@@ -1023,8 +1071,7 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
         landmarks(d, NULL);
     d_tell_placed(d, parent, node, before, old, &seen, true);
     d_detached(d, old);
-    if (node->kind == FRAGMENT)
-        d_detached(d, node);
+    if (node->kind == FRAGMENT) d_detached(d, node);
     d_collect(d);
     return OS64_HTML_OK;
 }
@@ -1047,6 +1094,103 @@ int64_t os64_html_remove(os64_html_document_t *doc, HNode *node)
     d_tell_removed(d, parent, node, prev, next, true);
     d_detached(d, node);
     d_collect(d);
+    return OS64_HTML_OK;
+}
+
+/* Document's private word names its associated inert template document.
+ * An inert document names itself, so nested templates reuse its realm. The
+ * binding supplies these records before exposing template ownerDocument. */
+static HNode *template_document(HNode *document)
+{
+    return *h_word(document) ? (HNode *)*h_word(document) : document;
+}
+static HNode *document_at(HNode *root, HNode *n, HNode *document)
+{
+    if (n == root) return document;
+    HNode *parent = above(n);
+    HNode *owner = (HNode *)os64_html_node_document(parent);
+    return parent->template_contents == n ? template_document(owner) : owner;
+}
+void d_document_walk(HNode *root, HNode *document)
+{
+    for (HNode *n = root; n; n = lifetime_next(root, n)) {
+        h_meta(n)->document = document_at(root, n, document);
+        n->xml_document = h_meta(n)->document->xml_document;
+    }
+}
+int64_t os64_html_document_templates(os64_html_document_t *doc, HNode *document, HNode *inert)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !document || !inert || document == inert || document->kind != DOCUMENT ||
+        inert->kind != DOCUMENT || !ours(d, document) || !ours(d, inert) ||
+        (*h_word(document) && *h_word(document) != (size_t)inert) ||
+        (*h_word(inert) && *h_word(inert) != (size_t)inert)) return OS64_HTML_BAD_ARGUMENT;
+    if (*h_word(document)) return OS64_HTML_OK;
+    *h_word(document) = (size_t)inert;
+    *h_word(inert) = (size_t)inert;
+    inert->xml_document = document->xml_document;
+    for (HDoc *arena = d->group ? d->group->first : d; arena;
+         arena = d->group ? arena->group_next : NULL)
+        for (HNode *n = arena->live_nodes; n; n = h_meta(n)->live_next)
+            if (n->template_contents && os64_html_node_document(n) == document)
+                d_document_walk(n->template_contents, inert);
+    /* Installing this ownership association changes no rendered tree, style
+     * or control state. Do not invalidate a model built before DOM binding. */
+    return OS64_HTML_OK;
+}
+
+int64_t os64_html_may_adopt(const os64_html_document_t *destination, const HNode *document, const HNode *node)
+{
+    HDoc *to = (HDoc *)destination;
+    if (!to || !document || document->kind != DOCUMENT || !ours(to, document) || !node ||
+        !d_group_contains(to, h_meta(node)->allocation_owner)) return OS64_HTML_BAD_ARGUMENT;
+    if (node->kind == DOCUMENT || os64_html_shadow_host(node))
+        return OS64_HTML_HIERARCHY;
+    HDoc *from = d_node_document_owner(node);
+    if (!from->pub.is_xml && node->parent == &from->root && node->kind == ELEMENT)
+        return OS64_HTML_ROOT_REQUIRED;
+    if (height_of((HNode *)node, NULL) > h_depth_limit(to)) return OS64_HTML_TOO_DEEP;
+    return OS64_HTML_OK;
+}
+
+int64_t os64_html_adopt(os64_html_document_t *destination, HNode *document, HNode *node)
+{
+    int64_t verdict = os64_html_may_adopt(destination, document, node);
+    if (verdict) return verdict;
+    HDoc *to = (HDoc *)destination, *from = d_node_document_owner(node);
+    /* The transaction's hold protects an unwrapped subtree through removal
+     * and observer log cleanup; it is not a new wrapper reference. */
+    os64_html_hold(&from->pub, node);
+    int64_t result = os64_html_remove(&from->pub, node);
+    if (result != OS64_HTML_OK) {
+        os64_html_release(&from->pub, node);
+        return result;
+    }
+    if (h_meta(node)->document != document) {
+        for (HNode *n = node; n; n = lifetime_next(node, n)) {
+            HDoc *old = d_node_document_owner(n);
+            if (n->shadow_root) h_slots_forget(old, n->shadow_root);
+            if (old != to) {
+                if (n->form_owner) { old->records--; to->records++; }
+                if (d_form_input(n)) { old->form_inputs--; to->form_inputs++; }
+            }
+            h_meta(n)->document = document_at(node, n, document);
+            n->xml_document = h_meta(n)->document->xml_document;
+        }
+        if (from != to) d_ranges_adopted(from, to);
+        /* Existing node serials belong to their allocation arenas. Slot
+         * caches also key by node identity, so no serial is reassigned. */
+        for (HNode *n = node; n; n = lifetime_next(node, n))
+            if (n->shadow_root) { to->shadows = true; h_slots_mark(to, n->shadow_root); }
+        moved(from);
+        if (from != to) moved(to);
+    }
+    /* Drop the transaction hold without collecting: insertion still needs
+     * this identity, and explicit adoption hands the detached result back.
+     * Its caller must hold it across subsequent mutations, like a new node. */
+    HDoc *arena = h_meta(node)->allocation_owner;
+    d_ref(arena, node, false, false);
+    arena->held--;
     return OS64_HTML_OK;
 }
 
@@ -1125,7 +1269,7 @@ void d_seat_html(HDoc *d)
     HSeen seen;
     d_seen(d, &d->root, &d->html, NULL, &seen);
     h_attach(d, &d->root, NULL, &d->html);
-    d->version++;
+    d_version_advance(d);
     if (d->disturbed)
         landmarks(d, NULL);
     d_tell_placed(d, &d->root, &d->html, NULL, NULL, &seen, true);
@@ -1156,6 +1300,7 @@ static HNode *contents_new(HDoc *d, HNode *template, int64_t *why)
     if (fragment) {
         *h_word(fragment) = (size_t)template;
         template->template_contents = fragment;
+        h_meta(fragment)->document = template_document((HNode *)os64_html_node_document(template));
     }
     return fragment;
 }
@@ -1169,6 +1314,8 @@ static HNode *shadow_new(HDoc *d, HNode *host, uint8_t options, int64_t *why)
         *h_word(root) = (size_t)host;
         root->shadow = options;
         host->shadow_root = root;
+        h_meta(root)->document = (HNode *)os64_html_node_document(host);
+        root->xml_document = host->xml_document;
         d->shadows = true;
         h_slots_mark(d, root);
     }
@@ -1316,6 +1463,24 @@ os64_html_node_t *os64_html_create_fragment(os64_html_document_t *doc, int64_t *
     say(status, why);
     return n;
 }
+int64_t os64_html_document_keep(os64_html_document_t *doc, HNode *document)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !document || document->kind != DOCUMENT || !ours(d, document))
+        return OS64_HTML_BAD_ARGUMENT;
+    /* Additional Document roots can be named by detached nodes and template
+     * associations. Retain their identity until arena teardown; removing a
+     * child still makes that child an ordinary reclaimable detached unit. */
+    HMeta *m = h_meta(document);
+    if (m->flags & H_NODE_PENDING) {
+        unqueue(d, document);
+        m->flags &= ~(H_NODE_PENDING | H_NODE_FRESH | H_NODE_RETIRED);
+        m->unit_holds = 0;
+        d_lifetime(d)->pending_units--;
+    }
+    return OS64_HTML_OK;
+}
+
 os64_html_node_t *os64_html_create_document(os64_html_document_t *doc, int64_t *status)
 {
     HDoc *d = (HDoc *)doc;
@@ -1456,6 +1621,47 @@ static HAttr **attr_slot(HNode *e, const char *name)
         slot = &(*slot)->next;
     return slot;
 }
+/* Whether `a` is the record a change addresses: by qualified name, or with
+ * by_ns by namespace and local name. */
+static bool change_finds(const HAttr *a, const os64_html_attr_change_t *c)
+{
+    if (!c->by_ns)
+        return h_eq(a->name, c->name);
+    return h_eq(a->ns, c->ns) && h_eq(h_local_name(a->name, a->ns), h_local_name(c->name, c->ns));
+}
+static HAttr **change_slot(HNode *e, const os64_html_attr_change_t *c)
+{
+    HAttr **slot = &e->attrs;
+    while (*slot && !change_finds(*slot, c))
+        slot = &(*slot)->next;
+    return slot;
+}
+/* The namespace a change touches on the list `had`: its own when by
+ * namespace, else the namespace of the record its qualified name finds,
+ * none for a new record. */
+static const char *change_touches(const HAttr *had, const os64_html_attr_change_t *c)
+{
+    if (c->by_ns)
+        return c->ns;
+    for (const HAttr *a = had; a; a = a->next)
+        if (h_eq(a->name, c->name))
+            return a->ns;
+    return NULL;
+}
+/* Whether two changes of a batch address the same record, as tell_attrs
+ * replays the batch for its listener report: two by namespace that agree
+ * on namespace and local name, or otherwise the same qualified name. That
+ * is by name, not by record: on an element holding two attributes of one
+ * qualified name, a batch that removes one by name and sets the name again
+ * (or mixes a change by name with one by namespace on that name) is
+ * reported against the wrong record. No caller builds such a batch;
+ * DEBTS.md books it. */
+static bool same_target(const os64_html_attr_change_t *a, const os64_html_attr_change_t *b)
+{
+    if (a->by_ns != b->by_ns || !a->by_ns)
+        return h_eq(a->name, b->name);
+    return h_eq(a->ns, b->ns) && h_eq(h_local_name(a->name, a->ns), h_local_name(b->name, b->ns));
+}
 /* Private records are replaced and retired independently; inline records
  * expire with their node. Clones copy either kind instead of sharing it. */
 bool d_attrs_inherit(HDoc *d, const HNode *from, HNode *to, int64_t *why)
@@ -1512,8 +1718,9 @@ static bool attrs_equal(const HAttr *a, const HAttr *b)
 /* One record for each change as it was applied, in order, to `had`, the
  * list the element had before: a set is told whether or not it changed the
  * value, a remove only when there was something to remove. A set keeps the
- * namespace of a record it replaces, and a name removed and set again comes
- * back in none, as set_attrs builds it. */
+ * qualified name and namespace of a record it replaces; a new one, and a
+ * record removed and set again, comes back as os64_html_set_attrs builds it: the
+ * change's name, in its namespace when by namespace and in none when not. */
 static void tell_attrs(HDoc *d, HNode *e, const HAttr *had,
                        const os64_html_attr_change_t *changes, size_t count, bool log)
 {
@@ -1522,15 +1729,18 @@ static void tell_attrs(HDoc *d, HNode *e, const HAttr *had,
     for (size_t i = 0; i < count; i++) {
         const os64_html_attr_change_t *c = &changes[i];
         const HAttr *a = had;
-        while (a && !h_eq(a->name, c->name))
+        while (a && !change_finds(a, c))
             a = a->next;
-        const char *ns = a ? a->ns : NULL, *value = a ? a->value : NULL;
+        const char *name = a ? a->name : c->name, *ns = a ? a->ns : c->by_ns ? c->ns : NULL;
+        const char *value = a ? a->value : NULL;
         size_t len = a ? h_len(a->value) : 0;
         for (size_t j = 0; j < i; j++) {
-            if (!h_eq(changes[j].name, c->name))
+            if (!same_target(&changes[j], c))
                 continue;
             if (changes[j].remove) {
-                ns = value = NULL;
+                name = c->name;
+                ns = c->by_ns ? c->ns : NULL;
+                value = NULL;
                 len = 0;
             } else {
                 value = changes[j].value ? changes[j].value : "";
@@ -1538,7 +1748,7 @@ static void tell_attrs(HDoc *d, HNode *e, const HAttr *had,
             }
         }
         if (!c->remove || value)
-            tell_attr(d, e, c->name, ns, value, len, log);
+            tell_attr(d, e, name, ns, value, len, log);
     }
 }
 
@@ -1554,9 +1764,10 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
         if (!c->name || !*c->name || (!c->remove && !c->value && c->value_len))
             return OS64_HTML_BAD_ARGUMENT;
         if (!d_text_ok(c->name, h_len(c->name)) ||
-            (!c->remove && !d_text_ok(c->value, c->value_len)))
+            (!c->remove && !d_text_ok(c->value, c->value_len)) ||
+            (c->by_ns && c->ns && !d_text_ok(c->ns, h_len(c->ns))))
             return OS64_HTML_BAD_TEXT;
-        const HAttr *a = *attr_slot(e, c->name);
+        const HAttr *a = *change_slot(e, c);
         effective |= c->remove ? a != NULL : !a || !same_bytes(a->value, c->value, c->value_len);
     }
     if (!effective) {
@@ -1572,14 +1783,15 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
     }
     for (size_t i = 0; i < count; i++) {
         const os64_html_attr_change_t *c = &changes[i];
-        HAttr **slot = attr_slot(&prospective, c->name), *old = *slot;
+        HAttr **slot = change_slot(&prospective, c), *old = *slot;
         if (c->remove) {
             if (old) {
                 *slot = old->next;
                 h_free(d, old);
             }
         } else if (!old || !same_bytes(old->value, c->value, c->value_len)) {
-            HAttr *fresh = attr_new(d, c->name, c->value, c->value_len, old ? old->ns : NULL, &why);
+            HAttr *fresh = attr_new(d, old ? old->name : c->name, c->value, c->value_len,
+                                    old ? old->ns : c->by_ns ? c->ns : NULL, &why);
             if (!fresh) {
                 attrs_discard(d, prospective.attrs);
                 d->pub.peak_arena_bytes = peak;
@@ -1602,9 +1814,12 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
     e->attrs = prospective.attrs;
     d->form_inputs = d->form_inputs - form_input + d_form_input(e);
     *h_word(e) |= H_ATTRS_PRIVATE;
-    d->version++;
+    d_version_advance(d);
+    /* HTML's `form` attribute is the one in no namespace, and the namespace
+     * a change touches is the record's it finds (a qualified name may find a
+     * namespaced one), a new record by name being in none. */
     for (size_t i = 0; i < count; i++)
-        if (!changes[i].remove)
+        if (!changes[i].remove && !change_touches(old, &changes[i]))
             form_attr_set(d, e, changes[i].name);
     tell_attrs(d, e, old, changes, count, true);
     if (private)
@@ -1645,11 +1860,14 @@ int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name
     }
     HAttr **slot = attr_slot(e, name), *old = *slot;
     bool form_input = d_form_input(e);
-    d->version++;
+    d_version_advance(d);
     fresh->next = old ? old->next : NULL;
     *slot = fresh;
     d->form_inputs = d->form_inputs - form_input + d_form_input(e);
-    form_attr_set(d, e, name);
+    /* A set keeps the namespace of the record it replaces: HTML's `form`
+     * attribute is the one in none. */
+    if (!fresh->ns)
+        form_attr_set(d, e, name);
     tell_attr(d, e, name, fresh->ns, old ? old->value : NULL, old ? h_len(old->value) : 0, true);
     d_retire(d, old);
     return OS64_HTML_OK;
@@ -1667,7 +1885,7 @@ int64_t os64_html_remove_attr(os64_html_document_t *doc, HNode *e, const char *n
         return why;
     HAttr **slot = attr_slot(e, name), *old = *slot;
     bool form_input = d_form_input(e);
-    d->version++;
+    d_version_advance(d);
     *slot = old->next;
     d->form_inputs = d->form_inputs - form_input + d_form_input(e);
     tell_attr(d, e, name, old->ns, old->value, h_len(old->value), true);
@@ -1734,7 +1952,7 @@ static void install_text(HDoc *d, HNode *n, char *bytes, size_t len)
     const char *was = n->text;
     size_t was_len = n->text_len;
     char *old = *h_word(n) ? (char *)n->text : NULL;
-    d->version++;
+    d_version_advance(d);
     n->text = bytes;
     n->text_len = len;
     *h_word(n) = len + 1;
@@ -1914,7 +2132,7 @@ int64_t os64_html_set_ce(os64_html_document_t *doc, HNode *e, os64_html_ce_t ce)
     if (!d || !e || !ours(d, e) || e->kind != ELEMENT || (unsigned)ce > OS64_HTML_CE_FAILED)
         return OS64_HTML_BAD_ARGUMENT;
     if (e->ce != ce) {
-        d->version++;
+        d_version_advance(d);
         e->ce = (uint8_t)ce;
         os64_html_change_t change = {.kind = OS64_HTML_CHANGE_STATE, .target = e};
         log_change(d, &change);
@@ -1927,7 +2145,7 @@ int64_t os64_html_touch(os64_html_document_t *doc, HNode *node)
     HDoc *d = (HDoc *)doc;
     if (!d || !node || !ours(d, node))
         return OS64_HTML_BAD_ARGUMENT;
-    d->version++;
+    d_version_advance(d);
     os64_html_change_t change = {.kind = OS64_HTML_CHANGE_STATE, .target = node};
     log_change(d, &change);
     return OS64_HTML_OK;
@@ -1990,7 +2208,7 @@ os64_html_node_t *os64_html_attach_shadow(os64_html_document_t *doc, os64_html_n
     int64_t why = OS64_HTML_OK;
     HNode *root = shadow_new(d, host, options, &why);
     if (root) {
-        d->version++;
+        d_version_advance(d);
         os64_html_change_t change = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = host,
                                      .version = d->version};
         log_change(d, &change);

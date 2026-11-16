@@ -9,6 +9,19 @@
 #include "flow/flow.h"
 #include "scratch.h"
 
+// What a kept drawing of a group drawn through its matrix was made from
+// (the `keep` verb, below): the tree (flow_tree_serial) and its box, what
+// the box's `drawn` said, the group's bounds in its own coordinates, and
+// where the page was scrolled. A face adds what it alone knows changed.
+typedef struct yonder_keep_key {
+    uint64_t tree;
+    const flow_box_t *box;
+    uint64_t drawn;
+    os64_gui_rect_t bounds;
+    flow_point_t scroll;
+} yonder_keep_key_t;
+enum { YONDER_KEEP_NO = 0, YONDER_KEEP_MAKE, YONDER_KEEP_HAVE };
+
 // Everything is in PAGE coordinates — a box in a fixed subtree moved there
 // by the scroll, which the painter does for every verb — and the executor
 // moves it onto the glass; between a through_open and its close, in that
@@ -38,7 +51,9 @@ typedef struct {
     // drawn if it has arrived, nothing yet if not. `origin` is the
     // painter's answer to which box: the layer's origin box of the box, or
     // for the canvas the ROOT's, whichever element the picture came from
-    // (Backgrounds 3 § 2.11.2).
+    // (Backgrounds 3 § 2.11.2). A `layer` with YONDER_MASK_LAYER set names
+    // that layer of the box's MASK (flow_mask_layer), drawn the same way,
+    // into the capture its coverage is taken from (layer_take).
     bool (*backdrop)(void *ctx, const flow_box_t *box, int32_t layer, const os64_gui_rect_t *area,
                      os64_gui_rect_t origin, int32_t ox, int32_t oy, os64_gui_rect_t clip);
     // A GROUP below full opacity (flow_visit_groups) and not laid through
@@ -77,9 +92,29 @@ typedef struct {
     // too large): the painter then draws the group upright, and every verb
     // it calls is in the coordinates painted before. Either NULL: no group
     // is laid through.
+    // KEPT DRAWINGS (PILE3.md § Transforms, the painter: Kept drawings): a
+    // face that can keep what a group drawn through its matrix painted, to
+    // lay it again through a later frame's matrix, answers `keep` for it
+    // before it opens, `key` saying what that drawing is made from:
+    // YONDER_KEEP_NO, and it is opened with `keep` NO and painted as
+    // above; YONDER_KEEP_MAKE, and it is opened with MAKE and all of
+    // `key->bounds` (not cut to what shows), painted whole, and at its
+    // close `keep` says whether what was painted may be kept — not when
+    // something inside it can change while the box's `drawn` holds still
+    // (a picture, a control, a canvas, a stand-in) or was drawn otherwise
+    // than the face would draw it again (a layer, sheets or a clip
+    // refused), and the face may still decline what its own verbs drew
+    // short of memory; or YONDER_KEEP_HAVE, and it is opened with HAVE and
+    // `key->bounds`, nothing is painted inside it, and its close lays what
+    // was kept. An open with MAKE or HAVE that is refused is made again
+    // with NO.
+    // The open (or the two) that follow a `keep` are the group it was
+    // asked for, with no verb between. NULL: nothing is kept, every open
+    // is NO and every close's `keep` false.
+    int (*keep)(void *ctx, const yonder_keep_key_t *key);
     bool (*through_open)(void *ctx, os64_gui_rect_t bounds, const double m[6],
-                         os64_gui_rect_t clip);
-    void (*through_close)(void *ctx, uint8_t alpha);
+                         os64_gui_rect_t clip, int keep);
+    void (*through_close)(void *ctx, uint8_t alpha, bool keep);
     // A TEXT CLIP (PILE3.md § The text clip): a group whose opacity is per
     // pixel. After clip_open, what is painted is the MASK — the clip's text
     // in white, nothing else, and its coverage is the white; after
@@ -94,20 +129,22 @@ typedef struct {
     void (*clip_close)(void *ctx);
     // Optional retained Canvas pixels; absent, the stand-in route applies.
     void (*canvas)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip);
-    // A LAYER: a filtered or blended group (flow_style_t.filter,
-    // .mix_blend; FILTER.md, MIX_BLEND.md). Everything painted until its
-    // close goes into a layer, `bounds` of the coordinates being painted,
-    // which do not change; at the close the list `filter` (n functions,
-    // none a URL; 0 for none) is run over it (filter.h) and the result is
-    // laid onto what was under it at `alpha` of 255 by `mode`, `current`
-    // the colour of a drop shadow in currentColor. A face that cannot
+    // A LAYER: a filtered, masked or blended group (flow_style_t.filter,
+    // .masks, .mix_blend; FILTER.md, MASKS.md, MIX_BLEND.md). Everything
+    // painted until its close goes into a layer, `bounds` of the
+    // coordinates being painted, which do not change; at the close the
+    // list `filter` (n functions, none a URL; 0 for none) is run over it
+    // (filter.h), the result multiplied by the coverage `cover` gives each
+    // of its pixels (bounds.w a row; NULL for all of it), and laid onto
+    // what was under it at `alpha` of 255 by `mode`, `current` the colour
+    // of a drop shadow in currentColor. A face that cannot
     // blend there — what is under the layer is a group's sheets, not the
     // page — lays it normal and counts it (yonder_paint_layers_refused).
     // False when it cannot be made (no memory, too large): the painter
     // paints the group plain. Either NULL: no layer is drawn.
     bool (*layer_open)(void *ctx, os64_gui_rect_t bounds);
     void (*layer_close)(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                        uint8_t alpha, flow_blend_t mode);
+                        uint8_t alpha, flow_blend_t mode, const uint8_t *cover);
     // A BACKDROP (flow_style_t.backdrop_filter; FILTER.md § 7): what is
     // painted under `rect` (a border box cut to the view, in the
     // coordinates being painted) — read with the list's reach round it —
@@ -119,7 +156,17 @@ typedef struct {
     // (inside a group's sheets). NULL: no backdrop is filtered.
     bool (*backdrop_filter)(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
                             const flow_filter_t *filter, int32_t n, uint32_t current);
+    // A CAPTURE closed (MASKS.md § 3): a layer opened with layer_open, its
+    // painting not laid anywhere but taken back as COVERAGE into `out` (its
+    // bounds.w by bounds.h, a row bounds.w) — each pixel's alpha, or with
+    // `luminance` its colour's luminance times its alpha (Masking 1
+    // § 7.2) — and discarded. NULL: no mask is drawn, and the painter
+    // never opens a layer for one.
+    void (*layer_take)(void *ctx, uint8_t *out, bool luminance);
 } yonder_verbs_t;
+
+// Set in a `layer` handed to `backdrop`: the index is of a mask layer.
+#define YONDER_MASK_LAYER ((int32_t)0x40000000)
 
 // Whose background is the CANVAS's (CSS 2.1 § 14.2): the root's when it has
 // one, colour or picture, else the body's when it has one, else none. The
@@ -185,7 +232,10 @@ yonder_paint_cache_counts_t yonder_paint_cache_counts(const yonder_paint_cache_t
 void yonder_paint_cache_counts_restart(yonder_paint_cache_t *c);
 
 // Paints every box that meets `viewport`, canvas first, the page scrolled
-// to `scroll` (flow_visit's). `paper` is the canvas when neither the root
+// to `scroll` (flow_visit's). `whole` is all of the view `viewport` is a
+// part of (equal to it for a whole repaint): the layers' budget is
+// measured by its pixels, so a repaint of a part gives a group its layer
+// whenever a repaint of the whole would (yonder_paint_layers_refused). `paper` is the canvas when neither the root
 // nor the body has a background, colour or picture; `dark`, when not NULL,
 // paints the page dark (above) and its paper is the canvas instead.
 // `cache`, when not NULL, keeps what the painter works out between paints
@@ -203,17 +253,18 @@ extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 // program started: a count the harness holds to the lines painted, not the
 // pieces on them.
 extern uint64_t yonder_paint_cuts;
-// How many filtered or blended groups and backdrops the last yonder_paint
-// drew plain: past its
-// budget for filter layers — YONDER_FILTER_AREA_VIEWS times the
-// viewport's pixels, each layer charged the pixels it shows in the
-// viewport, FILTER.md § 6 — or a layer the verbs refused or found no
-// memory to filter. The caller's to name in the record; the verbs count
+// How many filtered, masked or blended groups and backdrops the last
+// yonder_paint drew plain: past its budget for layers —
+// YONDER_FILTER_AREA_VIEWS times the WHOLE view's pixels, each layer (and
+// a mask's captures) charged the pixels it shows in the part painted,
+// FILTER.md § 6 — or a layer the verbs refused or found no memory to
+// filter. The caller's to name in the record; the verbs count
 // what they refuse at the close themselves.
 extern uint32_t yonder_paint_layers_refused;
-#define YONDER_FILTER_AREA_VIEWS 2
+#define YONDER_FILTER_AREA_VIEWS 4
 
-void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_rect_t whole,
+                  flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
                   yonder_scratch_t *scratch, const yonder_verbs_t *verbs);
 

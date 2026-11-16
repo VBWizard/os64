@@ -671,6 +671,7 @@ The lean for each is stated. All of them are Chris's.
    it: the call pages make is `getRandomValues`, and `subtle`'s absence is
    detected separately. The alternative is to wait for a WebCrypto design
    over BearSSL (d). **Ruled for the lean** (2026-10-23); P1-W ships it.
+   That design is WEB_CRYPTO.md, which brought `subtle` on 2026-11-07.
 2. **`createElementNS` for a namespace other than HTML, SVG and MathML.**
    The lean is to refuse it with NotSupportedError, as `createDocument`
    already does, rather than teach libhtml an element in an arbitrary

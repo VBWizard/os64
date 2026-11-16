@@ -28,6 +28,7 @@ host_flags=(
 host_sources=(
    userland/libdraw2d/paint.c userland/libdraw2d/blur.c
    tools/test_yonder_host.c userland/apps/yonder/paint.c userland/apps/yonder/paint_cache.c
+   userland/apps/yonder/filter.c
    userland/apps/yonder/scratch.c
    userland/apps/yonder/bar.c userland/apps/yonder/download.c userland/apps/yonder/scale.c
    userland/apps/yonder/mail.c
@@ -38,7 +39,7 @@ host_sources=(
    tools/test_libflow_fonts.c userland/libgarb/tokenize.c userland/libgarb/parse.c
    userland/libgarb/decode.c userland/libgarb/dump.c userland/libgarb/select.c
    userland/libgarb/values.c userland/libgarb/props.c userland/libgarb/media.c
-   userland/libgarb/cascade.c userland/libos64/arena.c userland/libos64/text.c
+   userland/libgarb/cascade.c userland/libgarb/timing.c userland/libos64/arena.c userland/libos64/text.c
    userland/libos64/text_cache.c userland/libos64/text_decode.c userland/libos64/text_bitmap.c
    userland/libpage/core.c userland/libpage/state.c userland/libpage/resolve.c
    userland/libpage/value.c userland/libpage/number.c userland/libpage/range.c

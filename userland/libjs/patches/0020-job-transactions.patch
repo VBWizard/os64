@@ -1,0 +1,203 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -364,6 +364,7 @@
+     void *host_promise_rejection_tracker_opaque;
+ 
+     struct list_head job_list; /* list of JSJobEntry.link */
++    JSJobGroup *job_group; /* scoped native installation transaction */
+ 
+     JSModuleNormalizeFunc *module_normalize_func;
+     BOOL module_loader_has_attr;
+@@ -960,6 +961,8 @@
+     struct list_head link;
+     JSContext *realm;
+     JSContext *owner, *activity; /* eligibility, independent of execution context */
++    JSJobGroup *group;
++    struct JSJobEntry *group_prev, *group_next;
+     JSJobFunc *job_func;
+     int argc;
+     JSValue argv[0];
+@@ -2293,6 +2296,41 @@
+     return rt->strip_flags;
+ }
+ 
++/* Groups are caller-owned stable storage; queued entries borrow the group.
++   The second linkage permits bounded candidate-only drains without walking
++   or reordering an arbitrarily long sibling queue. */
++void JS_InitJobGroup(JSJobGroup *group, JSContext *owner)
++{
++    *group = (JSJobGroup){ .runtime = owner->rt, .owner = owner };
++}
++
++JSJobGroup *JS_SetJobGroup(JSRuntime *rt, JSJobGroup *group)
++{
++    JSJobGroup *previous = rt->job_group;
++    assert(!group || group->runtime == rt);
++    rt->job_group = group;
++    return previous;
++}
++
++static void js_job_unlink(JSJobEntry *e)
++{
++    list_del(&e->link);
++    if (e->group) {
++        if (e->group_prev) e->group_prev->group_next = e->group_next;
++        else e->group->first = e->group_next;
++        if (e->group_next) e->group_next->group_prev = e->group_prev;
++        else e->group->last = e->group_prev;
++    }
++}
++
++static JSJobEntry *js_job_first(JSRuntime *rt, JSJobGroup *group)
++{
++    assert(!group || group->runtime == rt);
++    if (group) return group->first;
++    if (list_empty(&rt->job_list)) return NULL;
++    return list_entry(rt->job_list.next, JSJobEntry, link);
++}
++
+ static JSContext *js_job_function_realm(JSContext *ctx, JSValueConst function);
+ static JSContext *js_promise_function_realm(JSContext *ctx, JSValueConst function);
+ 
+@@ -2313,6 +2351,18 @@
+     e->realm = JS_DupContext(ctx);
+     e->owner = owner ? JS_DupContext(owner) : NULL;
+     e->activity = activity ? JS_DupContext(activity) : NULL;
++    e->group = rt->job_group;
++    /* GC during a candidate allocation may schedule an existing sibling's
++       registry. Its cleanup is independent of the installation transaction. */
++    if (e->group && no_exception && activity != e->group->owner)
++        e->group = NULL;
++    e->group_prev = e->group ? e->group->last : NULL;
++    e->group_next = NULL;
++    if (e->group) {
++        if (e->group_prev) e->group_prev->group_next = e;
++        else e->group->first = e;
++        e->group->last = e;
++    }
+     e->job_func = job_func;
+     e->argc = argc;
+     for(i = 0; i < argc; i++) {
+@@ -2338,24 +2388,20 @@
+ 
+ /* The head's contexts are borrowed until execution/discard. Inspection runs
+    no code; release uses the same retained values as ordinary job completion. */
+-BOOL JS_PeekPendingJob(JSRuntime *rt, JSJobInfo *info)
+-{
+-    JSJobEntry *e;
+-    if (list_empty(&rt->job_list))
+-        return FALSE;
+-    e = list_entry(rt->job_list.next, JSJobEntry, link);
++BOOL JS_PeekJobGroup(JSRuntime *rt, JSJobGroup *group, JSJobInfo *info)
++{
++    JSJobEntry *e = js_job_first(rt, group);
++    if (!e) return FALSE;
+     *info = (JSJobInfo){ e->realm, e->owner, e->activity };
+     return TRUE;
+ }
+ 
+-int JS_DiscardPendingJob(JSRuntime *rt)
+-{
+-    JSJobEntry *e;
++int JS_DiscardJobGroup(JSRuntime *rt, JSJobGroup *group)
++{
++    JSJobEntry *e = js_job_first(rt, group);
+     int i;
+-    if (list_empty(&rt->job_list))
+-        return 0;
+-    e = list_entry(rt->job_list.next, JSJobEntry, link);
+-    list_del(&e->link);
++    if (!e) return 0;
++    js_job_unlink(e);
+     for (i = 0; i < e->argc; i++)
+         JS_FreeValueRT(rt, e->argv[i]);
+     if (e->owner) JS_FreeContext(e->owner);
+@@ -2365,6 +2411,16 @@
+     return 1;
+ }
+ 
++BOOL JS_PeekPendingJob(JSRuntime *rt, JSJobInfo *info)
++{
++    return JS_PeekJobGroup(rt, NULL, info);
++}
++
++int JS_DiscardPendingJob(JSRuntime *rt)
++{
++    return JS_DiscardJobGroup(rt, NULL);
++}
++
+ BOOL JS_IsJobPending(JSRuntime *rt)
+ {
+     return !list_empty(&rt->job_list);
+@@ -2375,22 +2431,22 @@
+    if pctx != NULL. It may be NULL if the context was already
+    destroyed or if no job was pending. The 'pctx' parameter is now
+    absolete. */
+-int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx)
++int JS_ExecuteJobGroup(JSRuntime *rt, JSJobGroup *group, JSContext **pctx)
+ {
+     JSContext *ctx;
+     JSJobEntry *e;
+     JSValue res;
+     int i, ret;
+ 
+-    if (list_empty(&rt->job_list)) {
++    e = js_job_first(rt, group);
++    if (!e) {
+         if (pctx)
+             *pctx = NULL;
+         return 0;
+     }
+ 
+-    /* get the first pending job and execute it */
+-    e = list_entry(rt->job_list.next, JSJobEntry, link);
+-    list_del(&e->link);
++    /* Remove from both queues before the body can enqueue more work. */
++    js_job_unlink(e);
+     ctx = e->realm;
+     res = e->job_func(ctx, e->argc, (JSValueConst *)e->argv);
+     for(i = 0; i < e->argc; i++)
+@@ -2413,6 +2469,11 @@
+     return ret;
+ }
+ 
++int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx)
++{
++    return JS_ExecuteJobGroup(rt, NULL, pctx);
++}
++
+ static inline uint32_t atom_get_free(const JSAtomStruct *p)
+ {
+     return (uintptr_t)p >> 1;
+@@ -2488,6 +2549,7 @@
+ 
+     list_for_each_safe(el, el1, &rt->job_list) {
+         JSJobEntry *e = list_entry(el, JSJobEntry, link);
++        js_job_unlink(e);
+         for(i = 0; i < e->argc; i++)
+             JS_FreeValueRT(rt, e->argv[i]);
+         if (e->owner) JS_FreeContext(e->owner);
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -1010,6 +1010,21 @@
+ JS_BOOL JS_PeekPendingJob(JSRuntime *rt, JSJobInfo *info);
+ int JS_DiscardPendingJob(JSRuntime *rt);
+ 
++/* Caller-owned, zero-allocation transaction queue. Initialize with a live
++ * owner and keep the group and owner alive until its entries are released.
++ * NULL group selects the global queue. SetJobGroup scopes future enqueues;
++ * executing a group does not implicitly change the enqueue scope. */
++typedef struct JSJobGroup {
++    JSRuntime *runtime;
++    JSContext *owner;
++    struct JSJobEntry *first, *last;
++} JSJobGroup;
++void JS_InitJobGroup(JSJobGroup *group, JSContext *owner);
++JSJobGroup *JS_SetJobGroup(JSRuntime *rt, JSJobGroup *group);
++JS_BOOL JS_PeekJobGroup(JSRuntime *rt, JSJobGroup *group, JSJobInfo *info);
++int JS_DiscardJobGroup(JSRuntime *rt, JSJobGroup *group);
++int JS_ExecuteJobGroup(JSRuntime *rt, JSJobGroup *group, JSContext **pctx);
++
+ JS_BOOL JS_IsJobPending(JSRuntime *rt);
+ int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx);
+ 

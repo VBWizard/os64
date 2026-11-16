@@ -1,24 +1,61 @@
-// pool.c — the kept connections (pool.h), and the rule that says which may
-// be kept.
+// pool.c — libfetch's connections, in use and kept (pool.h), and the rule
+// that says which may be kept.
 
 #include "pool.h"
 
 #include "os64/lock.h"
+#include "os64/mem.h"
 #include "os64/os64.h"
 #include "os64/str.h"
 
-typedef struct {
-    bool used;
+// One connection. An HTTP/1.1 connection has one user, so its transport is
+// lent whole: `io` is the pool's while the connection is idle and the
+// fetch's own copy while it is in use, and `refs` says which. An HTTP/2
+// connection keeps its transport for life (`h2`, which owns the engine and
+// the socket), and `refs` counts the fetches with a stream on it.
+struct fetch_conn {
     fetch_pool_key_t key;
     fetch_transport_t io;
+    fetch_proto_t protocol;
+    unsigned refs;                  // fetches using it: 0 idle; h1: 1 in use
+    bool dialling;                  // a slot reserved for a dial in flight
+    fetch_pool_say_t say;           // what its dialler would say first: an HTTP/2 connection's greeting
     uint64_t kept_at;               // ticks: when it was last given back
-} kept_t;
+    // HTTP/2 alone (pool.h's lifecycle).
+    h2_conn_t *h2;                  // NULL while its reader is being started (ADOPTING)
+    bool struck;                    // out of the table, for good
+    bool dead_heard;                // its reader has said its last word: the socket is closed
+    bool closing;                   // struck with its socket still open: one of s_closing
+    uint64_t order;                 // when it became live: the longest-lived takes the new streams
+    uint16_t tls_version;           // what its handshake chose, for the fetches that join it
+    bool tls_resumed;
+};
 
-// The library's one piece of shared state: a fetch is still its own object,
-// and what fetches share is only the connections in here, one owner at a
-// time.
+// The library's shared state: a fetch is still its own object, and what
+// fetches share is the connections in here, the list of the fetches waiting
+// for one, and what each key last answered ALPN with.
 static os64_lock_t s_lock = OS64_LOCK_INIT;
-static kept_t s_kept[FETCH_POOL_TOTAL];
+static fetch_conn_t *s_conns[FETCH_POOL_TOTAL];
+static fetch_pool_wait_t *s_waiters;
+static size_t s_closing;            // connections struck whose reader has yet to close the socket
+static uint64_t s_order;
+
+// What a key's last TLS dial answered ALPN with: h2 or not. It decides one
+// thing, whether a fetch waits for the key's one connection or dials one
+// of its own (take), so a wrong or forgotten answer costs a wait or a dial
+// and nothing else. More keys than the table has places: a page speaks to
+// more hosts than it holds connections to, and comes back to them.
+#define REMEMBERED 64
+static struct {
+    fetch_pool_key_t key;
+    bool used, h2;
+    // The key's server answered a request over HTTP/2 with
+    // HTTP_1_1_REQUIRED: it is asked over HTTP/1.1 from then on
+    // (fetch_pool_h1_required).
+    bool h1_required;
+    uint64_t written;
+} s_remembered[REMEMBERED];
+static uint64_t s_written;
 
 static bool same_key(const fetch_pool_key_t *a, const fetch_pool_key_t *b)
 {
@@ -26,9 +63,77 @@ static bool same_key(const fetch_pool_key_t *a, const fetch_pool_key_t *b)
            a->trust == b->trust && os64_streq(a->host, b->host);
 }
 
+// Under the lock.
+static void remember(const fetch_pool_key_t *key, bool h2)
+{
+    size_t at = 0;
+    for (size_t i = 0; i < REMEMBERED; i++) {
+        if (s_remembered[i].used && same_key(&s_remembered[i].key, key)) {
+            at = i;
+            break;
+        }
+        if (!s_remembered[i].used || (s_remembered[at].used && s_remembered[i].written < s_remembered[at].written))
+            at = i;
+    }
+    // What the same key said of HTTP/1.1 stays said; a slot taken from
+    // another key starts clean.
+    bool same = s_remembered[at].used && same_key(&s_remembered[at].key, key);
+    s_remembered[at].key = *key;
+    s_remembered[at].used = true;
+    s_remembered[at].h2 = h2;
+    s_remembered[at].h1_required = same && s_remembered[at].h1_required;
+    s_remembered[at].written = ++s_written;
+}
+
+static bool remembered_h2(const fetch_pool_key_t *key)
+{
+    for (size_t i = 0; i < REMEMBERED; i++)
+        if (s_remembered[i].used && same_key(&s_remembered[i].key, key))
+            return s_remembered[i].h2;
+    return false;
+}
+
+static bool same_say(const fetch_pool_say_t *a, const fetch_pool_say_t *b)
+{
+    if (a->http1 != b->http1 || a->count != b->count || a->window_increment != b->window_increment ||
+        a->first_stream != b->first_stream || a->stream_increment != b->stream_increment ||
+        a->priority != b->priority)
+        return false;
+    for (uint32_t i = 0; i < a->count; i++)
+        if (a->settings[i].identifier != b->settings[i].identifier || a->settings[i].value != b->settings[i].value)
+            return false;
+    return true;
+}
+
+void fetch_pool_require_h1(fetch_conn_t *conn)
+{
+    os64_lock_acquire(&s_lock);
+    remember(&conn->key, false);
+    for (size_t i = 0; i < REMEMBERED; i++)
+        if (s_remembered[i].used && same_key(&s_remembered[i].key, &conn->key))
+            s_remembered[i].h1_required = true;
+    os64_lock_release(&s_lock);
+}
+
+bool fetch_pool_h1_required(const fetch_pool_key_t *key)
+{
+    bool required = false;
+    os64_lock_acquire(&s_lock);
+    for (size_t i = 0; i < REMEMBERED; i++)
+        if (s_remembered[i].used && same_key(&s_remembered[i].key, key))
+            required = s_remembered[i].h1_required;
+    os64_lock_release(&s_lock);
+    return required;
+}
+
 static bool clock_now(os64_ticks_t *now)
 {
     return os64_ticks(now) >= 0 && now->per_second != 0;
+}
+
+static bool idle(const fetch_conn_t *c)
+{
+    return c->refs == 0 && !c->dialling;
 }
 
 // Idle `ms` or longer, or kept at a time the clock now contradicts. The
@@ -37,117 +142,528 @@ static bool clock_now(os64_ticks_t *now)
 // a clock that went backwards, not a put that overtook the read, and a
 // connection whose age cannot be known is closed rather than trusted
 // (expired) and taken by nobody.
-static bool idle_past(const kept_t *k, const os64_ticks_t *now, uint32_t ms)
+static bool idle_past(const fetch_conn_t *c, const os64_ticks_t *now, uint32_t ms)
 {
-    if (now->ticks < k->kept_at)
+    if (now->ticks < c->kept_at)
         return true;
-    uint64_t idle = now->ticks - k->kept_at;
-    return idle >= (uint64_t)ms * now->per_second / 1000u;
+    uint64_t age = now->ticks - c->kept_at;
+    return age >= (uint64_t)ms * now->per_second / 1000u;
 }
 
 // Past its idle time: closed when next seen.
-static bool expired(const kept_t *k, const os64_ticks_t *now)
+static bool expired(const fetch_conn_t *c, const os64_ticks_t *now)
 {
-    return idle_past(k, now, FETCH_POOL_IDLE_MS);
+    return idle_past(c, now, FETCH_POOL_IDLE_MS);
 }
 
-// The connections leaving the pool, closed once the lock is let go: closing
-// one frees a TLS client and closes a handle, which is no work to hold the
-// lock across.
+// The connections leaving the pool, closed and freed once the lock is let
+// go: closing one frees a TLS client and closes a handle, which is no work
+// to hold the lock across.
 typedef struct {
-    fetch_transport_t io[FETCH_POOL_TOTAL + 1];
+    fetch_conn_t *conn[FETCH_POOL_TOTAL];
     size_t n;
 } leaving_t;
 
-static void leave(leaving_t *out, kept_t *k)
+// An HTTP/2 connection nobody will use again: the adopter's hold on it goes
+// with the record. With no lock held.
+static void free_h2(fetch_conn_t *c)
 {
-    out->io[out->n++] = k->io;
-    k->used = false;
+    if (c->h2 != NULL)
+        h2_conn_release(c->h2);
+    os64_free(c);
+}
+
+// Under the lock: an HTTP/2 connection leaves the table for good. Its
+// socket is its reader's to close, so until the reader has said so the
+// connection is CLOSING and still counts against the table's total (take).
+static void strike(fetch_conn_t *c)
+{
+    for (size_t i = 0; i < FETCH_POOL_TOTAL; i++)
+        if (s_conns[i] == c)
+            s_conns[i] = NULL;
+    c->struck = true;
+    if (!c->dead_heard && !c->closing) {
+        c->closing = true;
+        s_closing++;
+    }
+}
+
+// Under the lock: an IDLE connection leaves its slot. An HTTP/1.1 one is
+// closed by the caller once the lock is let go; an HTTP/2 one is condemned,
+// and its reader closes it and says so (dead).
+static void leave(leaving_t *out, size_t slot)
+{
+    fetch_conn_t *c = s_conns[slot];
+    if (c->protocol == FETCH_PROTO_H2) {
+        strike(c);
+        h2_conn_condemn(c->h2);
+        return;
+    }
+    out->conn[out->n++] = c;
+    s_conns[slot] = NULL;
 }
 
 static void close_all(leaving_t *out)
 {
-    for (size_t i = 0; i < out->n; i++)
-        fetch_transport_close(&out->io[i], false);
+    for (size_t i = 0; i < out->n; i++) {
+        fetch_transport_close(&out->conn[i]->io, false);
+        os64_free(out->conn[i]);
+    }
 }
 
-bool fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_most_ms, fetch_transport_t *io)
+// Under the lock (os64/bell.h's rule: a ring is made under the lock the
+// bell's owner takes to withdraw it, and a waiter withdraws under this
+// one). Everybody, because a ring is a hint: whoever is rung asks again,
+// and one rung alone may be the one that is on its way out.
+static void ring_waiters(void)
+{
+    for (fetch_pool_wait_t *w = s_waiters; w != NULL; w = w->node.next)
+        os64_bell_ring(w->bell);
+}
+
+static void waiter_add(fetch_pool_wait_t *w)
+{
+    w->node.next = s_waiters;
+    s_waiters = w;
+}
+
+static void waiter_remove(fetch_pool_wait_t *w)
+{
+    for (fetch_pool_wait_t **link = &s_waiters; *link != NULL; link = &(*link)->node.next)
+        if (*link == w) {
+            *link = w->node.next;
+            break;
+        }
+    w->node.next = NULL;
+}
+
+// How long since `start`, in milliseconds; false when the clock cannot say.
+static bool waited(const os64_ticks_t *start, uint64_t *ms)
 {
     os64_ticks_t now;
-    leaving_t out = {0};
-    kept_t *best = NULL;
-    os64_lock_acquire(&s_lock);
-    bool timed = clock_now(&now);
-    for (size_t i = 0; i < FETCH_POOL_TOTAL; i++) {
-        kept_t *k = &s_kept[i];
-        if (!k->used)
-            continue;
-        if (!timed || expired(k, &now)) {
-            leave(&out, k);
+    if (!clock_now(&now) || now.per_second != start->per_second || now.ticks < start->ticks)
+        return false;
+    *ms = (now.ticks - start->ticks) * 1000u / now.per_second;
+    return true;
+}
+
+fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, const fetch_pool_say_t *say, uint32_t idle_most_ms,
+                                  bool fresh, fetch_pool_wait_t *wait, fetch_conn_t **conn, fetch_transport_t *io)
+{
+    // The object a dial slot would need, made before the lock is taken and
+    // freed if this pass did not use it.
+    fetch_conn_t *spare = NULL;
+    os64_ticks_t began;
+    bool timing = false;
+    *conn = NULL;
+    wait->waited_ms = 0;
+    wait->for_the_table = false;
+    wait->wants_place = false;
+    wait->key = key;
+    wait->say = say;
+    for (;;) {
+        if (spare == NULL) {
+            spare = os64_malloc(sizeof(*spare));
+            if (spare == NULL)
+                return FETCH_POOL_FAILED;
+        }
+        os64_ticks_t now;
+        leaving_t out = {0};
+        fetch_conn_t *best = NULL, *slot_conn = NULL, *shared = NULL;
+        bool dial_in_flight = false;
+        size_t of_key = 0, in_all = 0, free_slot = FETCH_POOL_TOTAL;
+        size_t oldest_idle_of_key = FETCH_POOL_TOTAL;
+        fetch_pool_take_t answer = FETCH_POOL_FAILED;
+        bool wait_now = false;
+
+        os64_lock_acquire(&s_lock);
+        bool timed = clock_now(&now);
+        for (size_t i = 0; i < FETCH_POOL_TOTAL; i++) {
+            fetch_conn_t *c = s_conns[i];
+            if (c != NULL && idle(c) && (!timed || expired(c, &now))) {
+                leave(&out, i);
+                c = NULL;
+            }
+            if (c == NULL) {
+                if (free_slot == FETCH_POOL_TOTAL)
+                    free_slot = i;
+                continue;
+            }
+            in_all++;
+            bool mine = same_key(&c->key, key);
+            of_key += mine;
+            // Whether this fetch would have greeted it the same. An HTTP/2
+            // connection, and a dial that may become one, are another
+            // fetch's to share only then; a say with http1 set is like only
+            // another with it set, so such a fetch shares neither.
+            bool like = same_say(&c->say, say);
+            bool starting = c->dialling || (c->protocol == FETCH_PROTO_H2 && c->h2 == NULL);
+            dial_in_flight = dial_in_flight || (mine && starting && like);
+            // An HTTP/2 connection with room takes another stream, the one
+            // longest live first, so that duplicates dialled in a burst go
+            // quiet and idle out (HTTP2.md § 2.2).
+            if (mine && like && c->protocol == FETCH_PROTO_H2 && c->h2 != NULL && h2_conn_room(c->h2) &&
+                (shared == NULL || c->order < shared->order))
+                shared = c;
+            if (!idle(c))
+                continue;
+            if (!mine)
+                continue;
+            if (oldest_idle_of_key == FETCH_POOL_TOTAL || c->kept_at < s_conns[oldest_idle_of_key]->kept_at)
+                oldest_idle_of_key = i;
+            // The most recently kept: the one its server is least likely to
+            // have closed already. One idle too long for this request is
+            // left for another. (An idle HTTP/2 connection is never "kept":
+            // one with room was found above, and one without is no use.)
+            if (c->protocol == FETCH_PROTO_H1 && !fresh && !idle_past(c, &now, idle_most_ms) &&
+                (best == NULL || c->kept_at > best->kept_at))
+                best = c;
+        }
+        if (shared != NULL) {
+            shared->refs++;
+            *conn = shared;
+            answer = FETCH_POOL_SHARED;
+        } else if (best != NULL) {
+            best->refs = 1;
+            *io = best->io;
+            *conn = best;
+            answer = FETCH_POOL_KEPT;
+        } else if (dial_in_flight && !say->http1 && remembered_h2(key)) {
+            // The key answered h2 last time and a dial to it is in flight:
+            // its verdict is worth waiting for, since one connection will
+            // carry this fetch too. The dial's end, either way, rings.
+            wait->for_the_table = false;
+            wait->wants_place = false;
+            wait_now = wait->bell != NULL && wait->bell->handle >= 0;
+            if (wait_now)
+                waiter_add(wait);
+        } else {
+            // A slot to dial in, which the fetch may have when its key is
+            // under its cap, or at it with a kept connection of its own
+            // that this fetch may not take (or it would have above): that
+            // one is closed for the slot.
+            bool may = of_key < FETCH_POOL_PER_KEY;
+            size_t slot = may ? free_slot : FETCH_POOL_TOTAL;
+            size_t in_table = in_all;
+            if (!may && oldest_idle_of_key != FETCH_POOL_TOTAL) {
+                leave(&out, oldest_idle_of_key);
+                slot = oldest_idle_of_key;
+                in_table--;
+                may = true;
+            }
+            // A connection whose socket is still open counts, in the table
+            // or not: one struck and not yet closed by its reader holds a
+            // handle, and the table's total is a promise about handles.
+            bool admitted = slot != FETCH_POOL_TOTAL && in_table + s_closing < FETCH_POOL_TOTAL;
+            // Held back by the table alone: an idle connection of any key
+            // is closed rather than waited on. An HTTP/1.1 one closes
+            // within this call, so one goes before any HTTP/2 one and may
+            // admit the fetch at once. An HTTP/2 one closes when its reader
+            // looks, so one goes for each fetch that wants a place, this
+            // one among them: a burst of fetches then waits one look
+            // together rather than one behind another. A fetch whose key
+            // answers h2 and already has a fetch wanting a place asks for
+            // none: the one connection that fetch dials will carry both.
+            bool behind = false;
+            if (may && !admitted) {
+                size_t wanting = 1;
+                bool expects_h2 = !say->http1 && remembered_h2(key);
+                for (fetch_pool_wait_t *w = s_waiters; w != NULL; w = w->node.next) {
+                    if (!w->wants_place)
+                        continue;
+                    wanting++;
+                    behind = behind || (expects_h2 && same_key(w->key, key) && same_say(w->say, say));
+                }
+                while (!behind && !admitted) {
+                    size_t h1 = FETCH_POOL_TOTAL, h2 = FETCH_POOL_TOTAL;
+                    for (size_t i = 0; i < FETCH_POOL_TOTAL; i++) {
+                        fetch_conn_t *c = s_conns[i];
+                        if (c == NULL || !idle(c))
+                            continue;
+                        size_t *oldest = c->protocol == FETCH_PROTO_H1 ? &h1 : &h2;
+                        if (*oldest == FETCH_POOL_TOTAL || c->kept_at < s_conns[*oldest]->kept_at)
+                            *oldest = i;
+                    }
+                    size_t going = h1 != FETCH_POOL_TOTAL ? h1 : s_closing < wanting ? h2 : FETCH_POOL_TOTAL;
+                    if (going == FETCH_POOL_TOTAL)
+                        break;
+                    leave(&out, going);
+                    in_table--;
+                    if (slot == FETCH_POOL_TOTAL)
+                        slot = going;
+                    admitted = in_table + s_closing < FETCH_POOL_TOTAL;
+                }
+            }
+            if (slot != FETCH_POOL_TOTAL && admitted) {
+                os64_memset(spare, 0, sizeof(*spare));
+                spare->key = *key;
+                spare->say = *say;
+                spare->io.handle = -1;
+                spare->protocol = FETCH_PROTO_H1;
+                spare->dialling = true;
+                s_conns[slot] = slot_conn = spare;
+                *conn = spare;
+                answer = FETCH_POOL_DIAL;
+            } else {
+                // Its key is at its cap with every connection in use, or
+                // the table has no place until a socket closes or a
+                // connection is given back. Registered in the same hold
+                // that found it so, so that a put or a departure either
+                // came before (and was seen above) or rings this bell.
+                wait->for_the_table = may;
+                wait->wants_place = may && !behind;
+                wait_now = wait->bell != NULL && wait->bell->handle >= 0;
+                if (wait_now)
+                    waiter_add(wait);
+            }
+        }
+        // A connection closed above left a slot some other waiter may want.
+        if (out.n != 0)
+            ring_waiters();
+        os64_lock_release(&s_lock);
+        close_all(&out);
+        if (slot_conn != NULL)
+            spare = NULL;
+        if (answer != FETCH_POOL_FAILED) {
+            os64_free(spare);
+            return answer;
+        }
+
+        // To wait: the bell first, if this fetch has never waited, and the
+        // question asked again with it in hand, since the world may have
+        // moved while it was made.
+        if (!wait_now) {
+            if (wait->bell == NULL || (wait->bell->handle < 0 && os64_bell_make(wait->bell) < 0)) {
+                os64_free(spare);
+                return FETCH_POOL_FAILED;
+            }
             continue;
         }
-        // The most recently kept: the one its server is least likely to
-        // have closed already. One idle too long for this request is left
-        // for another.
-        if (same_key(&k->key, key) && !idle_past(k, &now, idle_most_ms) &&
-            (best == NULL || k->kept_at > best->kept_at))
-            best = k;
+        fetch_pool_take_t ended = FETCH_POOL_FAILED;
+        bool again = false;
+        uint64_t so_far = 0;
+        if (!timing)
+            timing = clock_now(&began);
+        if (!timing || !waited(&began, &so_far))
+            ended = FETCH_POOL_FAILED;
+        else if (wait->cancelled != NULL && wait->cancelled(wait->cancel_ctx))
+            ended = FETCH_POOL_INTERRUPTED;
+        else if (so_far >= wait->patience_ms)
+            ended = FETCH_POOL_TIMED_OUT;
+        else {
+            // Rung, or interrupted by a signal: both are "ask again", and
+            // the cancellation is asked below. So is a look-up, a wait cut
+            // short of what was left; a bell that timed out with nothing
+            // held back has waited out the patience. Any other answer is a
+            // bell that cannot be waited on, and asking again would only
+            // spin.
+            uint64_t left = wait->patience_ms - so_far;
+            bool look = left > FETCH_POOL_LOOK_MS;
+            int64_t rung = os64_bell_wait(wait->bell, look ? FETCH_POOL_LOOK_MS : left);
+            if (rung == 1 || rung == OS64_INTERRUPTED || (rung == OS64_ERR_TIMEOUT && look))
+                again = true;
+            else if (rung == OS64_ERR_TIMEOUT)
+                ended = FETCH_POOL_TIMED_OUT;
+        }
+        // Out of the list before anything else: a node left there names a
+        // fetch that has moved on, and its bell would be rung after the
+        // fetch closed it.
+        os64_lock_acquire(&s_lock);
+        waiter_remove(wait);
+        os64_lock_release(&s_lock);
+        if (timing && waited(&began, &so_far))
+            wait->waited_ms = so_far;
+        // Cancelled while it waited: that is how it ends, whatever else the
+        // wait would have answered, and it takes no connection on the way.
+        if (wait->cancelled != NULL && wait->cancelled(wait->cancel_ctx)) {
+            again = false;
+            ended = FETCH_POOL_INTERRUPTED;
+        }
+        if (!again) {
+            os64_free(spare);
+            return ended;
+        }
     }
-    if (best != NULL) {
-        *io = best->io;
-        best->used = false;
-    }
-    os64_lock_release(&s_lock);
-    close_all(&out);
-    return best != NULL;
 }
 
-void fetch_pool_put(const fetch_pool_key_t *key, const fetch_transport_t *io)
+void fetch_pool_dialled(fetch_conn_t *conn)
+{
+    os64_lock_acquire(&s_lock);
+    conn->dialling = false;
+    conn->refs = 1;
+    if (conn->key.tls) {
+        // Not h2: fetches waiting on this dial's verdict dial for themselves.
+        // A fetch that speaks HTTP/1.1 alone offered nothing else, so its
+        // dial heard nothing about what the host speaks and leaves what is
+        // remembered of it as it was. (A dial under the TLS 1.2 fallback
+        // offers HTTP/1.1 alone too, and is remembered: this client and
+        // that host have no HTTP/2 between them.)
+        if (!conn->say.http1)
+            remember(&conn->key, false);
+        ring_waiters();
+    }
+    os64_lock_release(&s_lock);
+}
+
+// ── HTTP/2 connections (pool.h) ─────────────────────────────────────────
+
+void fetch_pool_adopting(fetch_conn_t *conn)
+{
+    os64_lock_acquire(&s_lock);
+    conn->dialling = false;
+    conn->protocol = FETCH_PROTO_H2;
+    conn->refs = 1;
+    os64_lock_release(&s_lock);
+}
+
+void fetch_pool_dialled_h2(fetch_conn_t *conn, h2_conn_t *h2, uint16_t tls_version, bool tls_resumed)
+{
+    os64_lock_acquire(&s_lock);
+    conn->h2 = h2;
+    conn->tls_version = tls_version;
+    conn->tls_resumed = tls_resumed;
+    conn->order = ++s_order;
+    remember(&conn->key, true);
+    ring_waiters();
+    os64_lock_release(&s_lock);
+}
+
+// The reader's question when its connection has no stream: has the pool
+// done keeping it? Answered where a take would find the connection, and a
+// yes strikes it in the same hold, so no take can be given a connection its
+// reader is about to close.
+static bool hook_idle_out(void *ctx, h2_conn_t *h2)
+{
+    fetch_conn_t *c = ctx;
+    os64_ticks_t now;
+    (void)h2;
+    os64_lock_acquire(&s_lock);
+    bool yes = !c->struck && c->h2 != NULL && c->refs == 0 && (!clock_now(&now) || expired(c, &now));
+    if (yes)
+        strike(c);
+    os64_lock_release(&s_lock);
+    return yes;
+}
+
+static void hook_room(void *ctx, h2_conn_t *h2)
+{
+    (void)ctx;
+    (void)h2;
+    os64_lock_acquire(&s_lock);
+    ring_waiters();
+    os64_lock_release(&s_lock);
+}
+
+// The reader's last word: the socket is closed. The connection leaves the
+// table if it was still in it, stops counting as closing if it was, and is
+// freed here when no fetch holds it; a fetch that does frees it at its put.
+static void hook_dead(void *ctx, h2_conn_t *h2)
+{
+    fetch_conn_t *c = ctx;
+    (void)h2;
+    os64_lock_acquire(&s_lock);
+    c->dead_heard = true;
+    if (c->closing) {
+        c->closing = false;
+        s_closing--;
+    }
+    strike(c);
+    bool last = c->refs == 0;
+    ring_waiters();
+    os64_lock_release(&s_lock);
+    if (last)
+        free_h2(c);
+}
+
+h2_conn_hooks_t fetch_pool_hooks(fetch_conn_t *conn)
+{
+    return (h2_conn_hooks_t){.ctx = conn, .idle_out = hook_idle_out, .room = hook_room, .dead = hook_dead};
+}
+
+h2_conn_t *fetch_pool_h2(fetch_conn_t *conn)
+{
+    os64_lock_acquire(&s_lock);
+    h2_conn_t *h2 = conn->protocol == FETCH_PROTO_H2 ? conn->h2 : NULL;
+    os64_lock_release(&s_lock);
+    return h2;
+}
+
+void fetch_pool_tls_facts(fetch_conn_t *conn, uint16_t *version, bool *resumed)
+{
+    os64_lock_acquire(&s_lock);
+    *version = conn->tls_version;
+    *resumed = conn->tls_resumed;
+    os64_lock_release(&s_lock);
+}
+
+void fetch_pool_h2_stats(size_t *connections, size_t *queued, size_t *buffered)
+{
+    *connections = *queued = *buffered = 0;
+    os64_lock_acquire(&s_lock);
+    for (size_t i = 0; i < FETCH_POOL_TOTAL; i++) {
+        fetch_conn_t *c = s_conns[i];
+        if (c == NULL || c->protocol != FETCH_PROTO_H2 || c->h2 == NULL)
+            continue;
+        *connections += 1;
+        *queued += h2_conn_queued(c->h2);
+        *buffered += h2_conn_buffered(c->h2);
+    }
+    os64_lock_release(&s_lock);
+}
+
+size_t fetch_pool_closing(void)
+{
+    os64_lock_acquire(&s_lock);
+    size_t n = s_closing;
+    os64_lock_release(&s_lock);
+    return n;
+}
+
+void fetch_pool_put(fetch_conn_t *conn, const fetch_transport_t *io)
 {
     os64_ticks_t now;
     leaving_t out = {0};
     os64_lock_acquire(&s_lock);
-    if (!clock_now(&now)) {
+    if (conn->protocol == FETCH_PROTO_H2) {
+        // A fetch leaves an HTTP/2 connection: the connection goes on. Kept
+        // from now when it was the last; freed when the connection had left
+        // the table and its reader had finished before this fetch did.
+        conn->refs--;
+        if (conn->refs == 0)
+            conn->kept_at = clock_now(&now) ? now.ticks : 0;
+        bool last = conn->refs == 0 && conn->struck && conn->dead_heard;
+        ring_waiters();
         os64_lock_release(&s_lock);
-        out.io[out.n++] = *io;
-        close_all(&out);
+        if (last)
+            free_h2(conn);
         return;
     }
-    size_t mine = 0, all = 0;
-    kept_t *oldest_mine = NULL, *oldest = NULL, *free_slot = NULL;
-    for (size_t i = 0; i < FETCH_POOL_TOTAL; i++) {
-        kept_t *k = &s_kept[i];
-        if (k->used && expired(k, &now))
-            leave(&out, k);
-        if (!k->used) {
-            if (free_slot == NULL)
-                free_slot = k;
-            continue;
-        }
-        all++;
-        if (oldest == NULL || k->kept_at < oldest->kept_at)
-            oldest = k;
-        if (same_key(&k->key, key)) {
-            mine++;
-            if (oldest_mine == NULL || k->kept_at < oldest_mine->kept_at)
-                oldest_mine = k;
-        }
-    }
-    if (mine >= FETCH_POOL_PER_KEY) {
-        leave(&out, oldest_mine);
-        free_slot = oldest_mine;
-    } else if (all >= FETCH_POOL_TOTAL) {
-        leave(&out, oldest);
-        free_slot = oldest;
-    }
-    free_slot->used = true;
-    free_slot->key = *key;
-    free_slot->io = *io;
-    free_slot->io.cancelled = NULL;
-    free_slot->io.cancel_ctx = NULL;
-    free_slot->kept_at = now.ticks;
+    conn->io = *io;
+    conn->io.cancelled = NULL;
+    conn->io.cancel_ctx = NULL;
+    conn->refs = 0;
+    if (clock_now(&now))
+        conn->kept_at = now.ticks;
+    else
+        // A connection whose age could never be told is not kept.
+        for (size_t i = 0; i < FETCH_POOL_TOTAL; i++)
+            if (s_conns[i] == conn)
+                leave(&out, i);
+    // Kept or gone, it is a connection a waiter can use or a slot one can.
+    ring_waiters();
     os64_lock_release(&s_lock);
     close_all(&out);
+}
+
+void fetch_pool_gone(fetch_conn_t *conn)
+{
+    os64_lock_acquire(&s_lock);
+    for (size_t i = 0; i < FETCH_POOL_TOTAL; i++)
+        if (s_conns[i] == conn)
+            s_conns[i] = NULL;
+    ring_waiters();
+    os64_lock_release(&s_lock);
+    os64_free(conn);
 }
 
 void fetch_pool_drain(void)
@@ -155,8 +671,10 @@ void fetch_pool_drain(void)
     leaving_t out = {0};
     os64_lock_acquire(&s_lock);
     for (size_t i = 0; i < FETCH_POOL_TOTAL; i++)
-        if (s_kept[i].used)
-            leave(&out, &s_kept[i]);
+        if (s_conns[i] != NULL && idle(s_conns[i]))
+            leave(&out, i);
+    if (out.n != 0)
+        ring_waiters();
     os64_lock_release(&s_lock);
     close_all(&out);
 }
@@ -164,26 +682,50 @@ void fetch_pool_drain(void)
 bool fetch_pool_evict_one(void)
 {
     leaving_t out = {0};
-    kept_t *oldest = NULL;
+    size_t oldest = FETCH_POOL_TOTAL;
     os64_lock_acquire(&s_lock);
+    // An HTTP/1.1 one alone: closing it frees its handle before this
+    // returns, which is what the caller is about to dial with. An HTTP/2
+    // one's handle is freed when its reader next looks.
     for (size_t i = 0; i < FETCH_POOL_TOTAL; i++)
-        if (s_kept[i].used && (oldest == NULL || s_kept[i].kept_at < oldest->kept_at))
-            oldest = &s_kept[i];
-    if (oldest != NULL)
+        if (s_conns[i] != NULL && idle(s_conns[i]) && s_conns[i]->protocol == FETCH_PROTO_H1 &&
+            (oldest == FETCH_POOL_TOTAL || s_conns[i]->kept_at < s_conns[oldest]->kept_at))
+            oldest = i;
+    if (oldest != FETCH_POOL_TOTAL) {
         leave(&out, oldest);
+        ring_waiters();
+    }
     os64_lock_release(&s_lock);
     close_all(&out);
-    return oldest != NULL;
+    return out.n != 0;
+}
+
+void fetch_pool_counts(size_t *kept, size_t *live)
+{
+    size_t k = 0, l = 0;
+    os64_lock_acquire(&s_lock);
+    for (size_t i = 0; i < FETCH_POOL_TOTAL; i++)
+        if (s_conns[i] != NULL) {
+            if (idle(s_conns[i])) k++;
+            else l++;
+        }
+    os64_lock_release(&s_lock);
+    *kept = k;
+    *live = l;
 }
 
 size_t fetch_pool_idle(void)
 {
-    size_t n = 0;
-    os64_lock_acquire(&s_lock);
-    for (size_t i = 0; i < FETCH_POOL_TOTAL; i++)
-        n += s_kept[i].used;
-    os64_lock_release(&s_lock);
-    return n;
+    size_t kept, live;
+    fetch_pool_counts(&kept, &live);
+    return kept;
+}
+
+size_t fetch_pool_live(void)
+{
+    size_t kept, live;
+    fetch_pool_counts(&kept, &live);
+    return live;
 }
 
 static os64_lock_t s_trust_lock = OS64_LOCK_INIT;

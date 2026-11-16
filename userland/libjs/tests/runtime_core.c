@@ -3,9 +3,16 @@ static unsigned checks, failures;
 static void check(int passed, const char *name)
 {
     checks++;
-    if (!passed) { failures++; os64_printf("FAIL: %s\n", name); }
+    if (!passed) {
+        char message[256];
+        failures++;
+        os64_snprintf(message, sizeof(message), "jsembedtest FAIL: %s", name);
+        os64_printf("%s\n", message);
+        os64_debug_log(message);
+    }
 }
 #include "cases.h"
+#include "realms.h"
 static bool teardown_guest_heap(uint64_t *bytes, uint64_t *blocks)
 {
     char text[4096];
@@ -134,7 +141,7 @@ int main(int argc, char **argv)
         }
         return 1;
     }
-    teardown_cases(); runtime_cases(); guest_helpers();
+    teardown_cases(); runtime_cases(); realm_cases(); guest_helpers();
     os64_js_config_t config = fixture_config();
     config.limits.execution_ms = 10;
     os64_js_runtime_t *runtime = create_fixture(&config);
@@ -144,6 +151,10 @@ int main(int argc, char **argv)
               outcome.limit == OS64_JS_LIMIT_EXECUTION, "guest monotonic deadline interrupts script");
         os64_js_destroy(runtime);
     }
-    os64_printf("jsembedtest: %u checks, %u failures, %u native calls\n", checks, failures, native_calls);
+    char summary[160];
+    os64_snprintf(summary, sizeof(summary), "jsembedtest: %u checks, %u failures, %u native calls; exit=%08x",
+                  checks, failures, native_calls, failures ? 1u : 0x4A535254u);
+    os64_printf("%s\n", summary);
+    os64_debug_log(summary);
     return failures ? 1 : 0x4A535254; /* JSRT */
 }

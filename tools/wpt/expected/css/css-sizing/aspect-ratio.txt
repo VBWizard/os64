@@ -1,0 +1,257 @@
+# WPT's css/css-sizing/aspect-ratio in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-sizing/aspect-ratio --update
+# rewrites [passing].
+[required]
+# A height a ratio gives a box from its width is definite (libflow's
+# FBox.ratio_h): its children's percentages resolve against it. Fails with
+# the switch off. The directory's parsing pages are kept in
+# aspect-ratio/parsing.txt as well, with their own [required].
+flex-aspect-ratio-row-percentage-height-child.html	child height:100% resolves against a row flex item's aspect-ratio derived height
+[excluded]
+[passing]
+abspos-aspect-ratio-border.html	aspect-ratio 1/1 with border and padding on abspos
+abspos-aspect-ratio-border.html	aspect-ratio 1/1 with border on abspos
+abspos-aspect-ratio-border.html	aspect-ratio 1/1 with border-box sizing on abspos
+abspos-aspect-ratio-border.html	aspect-ratio 1/1 with padding on abspos
+abspos-aspect-ratio-border.html	aspect-ratio 1/1 without border on abspos (sanity)
+abspos-aspect-ratio-border.html	aspect-ratio 2/1 with border on abspos
+abspos-intrinsic-block-size.html	height: auto; width: 160px; aspect-ratio: 16 / 9 — the automatic minimum size keeps the content from overflowing
+abspos-intrinsic-block-size.html	height: auto; width: 160px; aspect-ratio: 16 / 9 — the block size comes from the ratio
+abspos-intrinsic-block-size.html	height: auto; width: 160px; aspect-ratio: 16 / 9; bottom: -90px — the ratio wins over the insets
+abspos-intrinsic-block-size.html	height: auto; width: 160px; aspect-ratio: 16 / 9; display: flex — flex container
+abspos-intrinsic-block-size.html	height: auto; width: 160px; aspect-ratio: 16 / 9; min-height: 0 — no automatic minimum size, the content overflows
+abspos-intrinsic-block-size.html	height: auto; width: 160px; aspect-ratio: 16 / 9; padding: 10px — the ratio applies to the content box
+abspos-intrinsic-block-size.html	height: auto; width: 160px; aspect-ratio: 16 / 9; padding: 10px; box-sizing: border-box — the ratio applies to the border box
+abspos-intrinsic-block-size.html	height: fit-content; width: 160px; aspect-ratio: 16 / 9 — the automatic minimum size keeps the content from overflowing
+abspos-intrinsic-block-size.html	height: fit-content; width: 160px; aspect-ratio: 16 / 9 — the block size comes from the ratio
+abspos-intrinsic-block-size.html	height: fit-content; width: 160px; aspect-ratio: 16 / 9; bottom: -90px — the ratio wins over the insets
+abspos-intrinsic-block-size.html	height: fit-content; width: 160px; aspect-ratio: 16 / 9; display: flex — flex container
+abspos-intrinsic-block-size.html	height: fit-content; width: 160px; aspect-ratio: 16 / 9; min-height: 0 — no automatic minimum size, the content overflows
+abspos-intrinsic-block-size.html	height: fit-content; width: 160px; aspect-ratio: 16 / 9; padding: 10px — the ratio applies to the content box
+abspos-intrinsic-block-size.html	height: fit-content; width: 160px; aspect-ratio: 16 / 9; padding: 10px; box-sizing: border-box — the ratio applies to the border box
+abspos-intrinsic-block-size.html	height: max-content; width: 160px; aspect-ratio: 16 / 9 — the automatic minimum size keeps the content from overflowing
+abspos-intrinsic-block-size.html	height: max-content; width: 160px; aspect-ratio: 16 / 9 — the block size comes from the ratio
+abspos-intrinsic-block-size.html	height: max-content; width: 160px; aspect-ratio: 16 / 9; bottom: -90px — the ratio wins over the insets
+abspos-intrinsic-block-size.html	height: max-content; width: 160px; aspect-ratio: 16 / 9; display: flex — flex container
+abspos-intrinsic-block-size.html	height: max-content; width: 160px; aspect-ratio: 16 / 9; min-height: 0 — no automatic minimum size, the content overflows
+abspos-intrinsic-block-size.html	height: max-content; width: 160px; aspect-ratio: 16 / 9; padding: 10px — the ratio applies to the content box
+abspos-intrinsic-block-size.html	height: max-content; width: 160px; aspect-ratio: 16 / 9; padding: 10px; box-sizing: border-box — the ratio applies to the border box
+abspos-intrinsic-block-size.html	height: min-content; width: 160px; aspect-ratio: 16 / 9 — the automatic minimum size keeps the content from overflowing
+abspos-intrinsic-block-size.html	height: min-content; width: 160px; aspect-ratio: 16 / 9 — the block size comes from the ratio
+abspos-intrinsic-block-size.html	height: min-content; width: 160px; aspect-ratio: 16 / 9; bottom: -90px — the ratio wins over the insets
+abspos-intrinsic-block-size.html	height: min-content; width: 160px; aspect-ratio: 16 / 9; display: flex — flex container
+abspos-intrinsic-block-size.html	height: min-content; width: 160px; aspect-ratio: 16 / 9; min-height: 0 — no automatic minimum size, the content overflows
+abspos-intrinsic-block-size.html	height: min-content; width: 160px; aspect-ratio: 16 / 9; padding: 10px — the ratio applies to the content box
+abspos-intrinsic-block-size.html	height: min-content; width: 160px; aspect-ratio: 16 / 9; padding: 10px; box-sizing: border-box — the ratio applies to the border box
+abspos-intrinsic-block-size.html	width: auto; height: 90px; aspect-ratio: 16 / 9 — vertical writing mode
+abspos-intrinsic-block-size.html	width: fit-content; height: 90px; aspect-ratio: 16 / 9 — vertical writing mode
+abspos-intrinsic-block-size.html	width: max-content; height: 90px; aspect-ratio: 16 / 9 — vertical writing mode
+abspos-intrinsic-block-size.html	width: min-content; height: 90px; aspect-ratio: 16 / 9 — vertical writing mode
+aspect-ratio-minimum-size-single-axis-scroll-container.html	.target 1
+aspect-ratio-minimum-size-single-axis-scroll-container.html	.target 3
+box-sizing-aspect-ratio-positioned.html	The computed width of box is 100px
+box-sizing-dimensions.html	.item 1
+box-sizing-dimensions.html	.item 2
+box-sizing-dimensions.html	.item 5
+box-sizing-dimensions.html	.item 6
+box-sizing-dimensions.html	.item 7
+box-sizing-dimensions.html	.item 8
+box-sizing-squashed.html	.item 1
+box-sizing-squashed.html	.item 10
+box-sizing-squashed.html	.item 11
+box-sizing-squashed.html	.item 12
+box-sizing-squashed.html	.item 13
+box-sizing-squashed.html	.item 14
+box-sizing-squashed.html	.item 15
+box-sizing-squashed.html	.item 16
+box-sizing-squashed.html	.item 2
+box-sizing-squashed.html	.item 3
+box-sizing-squashed.html	.item 5
+box-sizing-squashed.html	.item 6
+box-sizing-squashed.html	.item 7
+box-sizing-squashed.html	.item 8
+box-sizing-squashed.html	.item 9
+flex-aspect-ratio-row-percentage-height-child.html	child height:100% resolves against a row flex item's aspect-ratio derived height
+fractional-aspect-ratio.html	div 1
+fractional-aspect-ratio.html	div 2
+inheritance.html	Property aspect-ratio does not inherit
+inheritance.html	Property aspect-ratio has initial value auto
+parsing/aspect-ratio-computed.html	Property aspect-ratio value '0 / 0'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value '0 / 9'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value '0 auto'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value '1 / 1'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value '1'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value '1.3'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value '16 / 0'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value '16 / 9'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value '16.3 / 9.5'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value '16/9'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value 'auto 1 / 1'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value 'auto 1'
+parsing/aspect-ratio-computed.html	Property aspect-ratio value 'auto'
+parsing/aspect-ratio-invalid.html	e.style['aspect-ratio'] = "1 invalid" should not set the property value
+parsing/aspect-ratio-invalid.html	e.style['aspect-ratio'] = "16 / -9" should not set the property value
+parsing/aspect-ratio-invalid.html	e.style['aspect-ratio'] = "16 / auto" should not set the property value
+parsing/aspect-ratio-invalid.html	e.style['aspect-ratio'] = "16 /" should not set the property value
+parsing/aspect-ratio-invalid.html	e.style['aspect-ratio'] = "16 9" should not set the property value
+parsing/aspect-ratio-invalid.html	e.style['aspect-ratio'] = "16px / 9px" should not set the property value
+parsing/aspect-ratio-invalid.html	e.style['aspect-ratio'] = "auto / 16" should not set the property value
+parsing/aspect-ratio-invalid.html	e.style['aspect-ratio'] = "auto / 5" should not set the property value
+parsing/aspect-ratio-invalid.html	e.style['aspect-ratio'] = "auto 1 / 1 auto" should not set the property value
+parsing/aspect-ratio-invalid.html	e.style['aspect-ratio'] = "auto 16 /" should not set the property value
+parsing/aspect-ratio-invalid.html	e.style['aspect-ratio'] = "invalid 1.5" should not set the property value
+parsing/aspect-ratio-valid.html	e.style['aspect-ratio'] = "0 / 0" should set the property value
+parsing/aspect-ratio-valid.html	e.style['aspect-ratio'] = "0 / 9" should set the property value
+parsing/aspect-ratio-valid.html	e.style['aspect-ratio'] = "16 / 0" should set the property value
+parsing/aspect-ratio-valid.html	e.style['aspect-ratio'] = "16 / 9" should set the property value
+parsing/aspect-ratio-valid.html	e.style['aspect-ratio'] = "16.3 / 1" should set the property value
+parsing/aspect-ratio-valid.html	e.style['aspect-ratio'] = "16.3 / 9.4" should set the property value
+parsing/aspect-ratio-valid.html	e.style['aspect-ratio'] = "auto" should set the property value
+quirks-mode-001.html	body height is 100
+quirks-mode-002.html	body height equals width
+replaced-element-036.html	CSS aspect-ratio: img
+replaced-element-036.html	CSS aspect-ratio: img 1
+replaced-element-043.html	canvas 1
+replaced-element-043.html	canvas 10
+replaced-element-043.html	canvas 101
+replaced-element-043.html	canvas 102
+replaced-element-043.html	canvas 108
+replaced-element-043.html	canvas 109
+replaced-element-043.html	canvas 11
+replaced-element-043.html	canvas 110
+replaced-element-043.html	canvas 111
+replaced-element-043.html	canvas 112
+replaced-element-043.html	canvas 113
+replaced-element-043.html	canvas 114
+replaced-element-043.html	canvas 115
+replaced-element-043.html	canvas 116
+replaced-element-043.html	canvas 12
+replaced-element-043.html	canvas 123
+replaced-element-043.html	canvas 129
+replaced-element-043.html	canvas 130
+replaced-element-043.html	canvas 135
+replaced-element-043.html	canvas 136
+replaced-element-043.html	canvas 137
+replaced-element-043.html	canvas 141
+replaced-element-043.html	canvas 142
+replaced-element-043.html	canvas 143
+replaced-element-043.html	canvas 144
+replaced-element-043.html	canvas 145
+replaced-element-043.html	canvas 146
+replaced-element-043.html	canvas 147
+replaced-element-043.html	canvas 148
+replaced-element-043.html	canvas 149
+replaced-element-043.html	canvas 15
+replaced-element-043.html	canvas 150
+replaced-element-043.html	canvas 151
+replaced-element-043.html	canvas 152
+replaced-element-043.html	canvas 153
+replaced-element-043.html	canvas 154
+replaced-element-043.html	canvas 155
+replaced-element-043.html	canvas 156
+replaced-element-043.html	canvas 157
+replaced-element-043.html	canvas 158
+replaced-element-043.html	canvas 159
+replaced-element-043.html	canvas 16
+replaced-element-043.html	canvas 160
+replaced-element-043.html	canvas 161
+replaced-element-043.html	canvas 162
+replaced-element-043.html	canvas 163
+replaced-element-043.html	canvas 164
+replaced-element-043.html	canvas 165
+replaced-element-043.html	canvas 166
+replaced-element-043.html	canvas 167
+replaced-element-043.html	canvas 168
+replaced-element-043.html	canvas 169
+replaced-element-043.html	canvas 17
+replaced-element-043.html	canvas 170
+replaced-element-043.html	canvas 171
+replaced-element-043.html	canvas 172
+replaced-element-043.html	canvas 173
+replaced-element-043.html	canvas 174
+replaced-element-043.html	canvas 175
+replaced-element-043.html	canvas 176
+replaced-element-043.html	canvas 177
+replaced-element-043.html	canvas 178
+replaced-element-043.html	canvas 179
+replaced-element-043.html	canvas 18
+replaced-element-043.html	canvas 180
+replaced-element-043.html	canvas 2
+replaced-element-043.html	canvas 21
+replaced-element-043.html	canvas 22
+replaced-element-043.html	canvas 23
+replaced-element-043.html	canvas 24
+replaced-element-043.html	canvas 25
+replaced-element-043.html	canvas 26
+replaced-element-043.html	canvas 27
+replaced-element-043.html	canvas 28
+replaced-element-043.html	canvas 29
+replaced-element-043.html	canvas 3
+replaced-element-043.html	canvas 30
+replaced-element-043.html	canvas 31
+replaced-element-043.html	canvas 32
+replaced-element-043.html	canvas 33
+replaced-element-043.html	canvas 34
+replaced-element-043.html	canvas 35
+replaced-element-043.html	canvas 36
+replaced-element-043.html	canvas 39
+replaced-element-043.html	canvas 4
+replaced-element-043.html	canvas 40
+replaced-element-043.html	canvas 41
+replaced-element-043.html	canvas 42
+replaced-element-043.html	canvas 45
+replaced-element-043.html	canvas 46
+replaced-element-043.html	canvas 47
+replaced-element-043.html	canvas 48
+replaced-element-043.html	canvas 49
+replaced-element-043.html	canvas 5
+replaced-element-043.html	canvas 50
+replaced-element-043.html	canvas 51
+replaced-element-043.html	canvas 52
+replaced-element-043.html	canvas 53
+replaced-element-043.html	canvas 54
+replaced-element-043.html	canvas 55
+replaced-element-043.html	canvas 56
+replaced-element-043.html	canvas 57
+replaced-element-043.html	canvas 58
+replaced-element-043.html	canvas 59
+replaced-element-043.html	canvas 6
+replaced-element-043.html	canvas 60
+replaced-element-043.html	canvas 61
+replaced-element-043.html	canvas 62
+replaced-element-043.html	canvas 63
+replaced-element-043.html	canvas 64
+replaced-element-043.html	canvas 65
+replaced-element-043.html	canvas 66
+replaced-element-043.html	canvas 67
+replaced-element-043.html	canvas 68
+replaced-element-043.html	canvas 69
+replaced-element-043.html	canvas 7
+replaced-element-043.html	canvas 70
+replaced-element-043.html	canvas 71
+replaced-element-043.html	canvas 72
+replaced-element-043.html	canvas 73
+replaced-element-043.html	canvas 74
+replaced-element-043.html	canvas 75
+replaced-element-043.html	canvas 76
+replaced-element-043.html	canvas 77
+replaced-element-043.html	canvas 78
+replaced-element-043.html	canvas 8
+replaced-element-043.html	canvas 80
+replaced-element-043.html	canvas 81
+replaced-element-043.html	canvas 82
+replaced-element-043.html	canvas 83
+replaced-element-043.html	canvas 84
+replaced-element-043.html	canvas 87
+replaced-element-043.html	canvas 88
+replaced-element-043.html	canvas 89
+replaced-element-043.html	canvas 9
+replaced-element-043.html	canvas 90
+replaced-element-043.html	canvas 94
+replaced-element-043.html	canvas 95
+replaced-element-043.html	canvas 96
+replaced-element-044.html	canvas 1
+replaced-element-044.html	canvas 2
+replaced-element-044.html	canvas 3
+replaced-element-044.html	canvas 4

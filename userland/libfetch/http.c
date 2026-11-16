@@ -320,6 +320,7 @@ bool http_request_extras_ok(const http_request_extras_t *extras)
     }
     return extras_clean(extras->content_type, CLEAN_VALUE) &&
            extras_clean(extras->user_agent, CLEAN_VALUE) && extras_clean(extras->accept, CLEAN_VALUE) &&
+           extras_clean(extras->h2_priority, CLEAN_VALUE) &&
            extras_clean(extras->extra_headers, CLEAN_EXTRA_LINES) &&
            extras_clean(extras->body_headers, CLEAN_BODY_LINES);
 }
@@ -367,11 +368,13 @@ typedef struct {
 
 // Where a walk over those lines is, in this writer's own order: the fixed
 // lines in turn (`slot`), then the lines of `body_headers` and of
-// `extra_headers` as given (`at`, inside the block being walked). `length` is the
-// Content-Length's digits, "" for none.
+// `extra_headers` as given (`at`, inside the block being walked), then, for
+// a request HTTP/2 will carry (`h2`), the lines the extras name for it
+// alone. `length` is the Content-Length's digits, "" for none.
 typedef struct {
     const http_request_extras_t *x;
     const char *length;
+    bool h2;
     int slot;
     const char *at;
 } head_lines_t;
@@ -389,10 +392,23 @@ static bool head_lines_next(head_lines_t *w, head_line_t *line)
     for (;;) {
         const http_request_extras_t *x = w->x;
         int slot = w->slot;
-        if (slot >= 6) {
-            const char *block = slot == 6 ? x->body_headers : slot == 7 ? x->extra_headers : NULL;
-            if (slot > 7)
+        if (slot >= 8) {
+            // The lines a browser adds over HTTP/2 alone, after everything
+            // else unless the order moves them.
+            if (slot > 9)
                 return false;
+            w->slot++;
+            if (!w->h2)
+                continue;
+            if (slot == 8) {
+                if (x->h2_priority == NULL) continue;
+                head_line_fixed(line, "Priority", x->h2_priority); return true;
+            }
+            if (!x->h2_te_trailers) continue;
+            head_line_fixed(line, "TE", "trailers"); return true;
+        }
+        if (slot >= 6) {
+            const char *block = slot == 6 ? x->body_headers : x->extra_headers;
             if (w->at == NULL)
                 w->at = block != NULL ? block : "";
             if (*w->at == '\0') {
@@ -455,8 +471,17 @@ static bool head_line_put(char *out, size_t cap, size_t *at, const head_line_t *
            head_put(out, cap, at, "\r\n", 2);
 }
 
-bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm,
-                  const http_request_extras_t *extras)
+// THE REQUEST IS COMPOSED ONCE AND RENDERED TWICE (HTTP2.md § 2.7): as
+// HTTP/1.1's text, or as HTTP/2's list of fields. request_walk is the
+// composing: it judges the extras, works out the method, the target and the
+// Host value, and hands a renderer first those three and then every other
+// line in wire order. What a request holds and in what order is decided
+// here and nowhere else, so the two renderings cannot disagree about it.
+typedef bool (*request_start_fn)(void *ctx, const char *method, const char *target, const char *host);
+typedef bool (*request_line_fn)(void *ctx, const head_line_t *line);
+
+static bool request_walk(const http_url_t *url, bool absoluteForm, bool h2, const http_request_extras_t *extras,
+                         request_start_fn start, request_line_fn put, void *ctx)
 {
     static const http_request_extras_t none = {0};
     if (extras == NULL)
@@ -497,14 +522,12 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
     if (extras->body_len || extras->body_present || method_is(method, "POST") || method_is(method, "PUT"))
         os64_snprintf(length, sizeof(length), "%lu", (uint64_t)extras->body_len);
 
-    int32_t n = os64_snprintf(out, cap, "%s %s HTTP/1.1\r\nHost: %s\r\n", method, requestTarget, host);
-    if (n <= 0 || (size_t)n >= cap)
+    if (!start(ctx, method, requestTarget, host))
         return false;
-    size_t at = (size_t)n;
 
     // Then every other line, the ones the caller's order names first, each
     // where the order puts it, and the rest after them in this writer's own
-    // order (head_lines_next); the blank line is written LAST and only here.
+    // order (head_lines_next).
     const char *order = extras->order != NULL ? extras->order : "";
     for (const char *p = order; *p != '\0';) {
         while (*p == ',' || is_blank(*p))
@@ -515,19 +538,181 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
         size_t len = (size_t)(p - name);
         if (len == 0 || name_listed(order, name, name, len) || (len == 4 && name_matches(name, "host", 4)))
             continue;
-        head_lines_t lines = { .x = extras, .length = length };
+        head_lines_t lines = { .x = extras, .length = length, .h2 = h2 };
         head_line_t line;
         while (head_lines_next(&lines, &line))
-            if (line.name_len == len && name_matches(line.name, name, len) &&
-                !head_line_put(out, cap, &at, &line))
+            if (line.name_len == len && name_matches(line.name, name, len) && !put(ctx, &line))
                 return false;
     }
-    head_lines_t lines = { .x = extras, .length = length };
+    head_lines_t lines = { .x = extras, .length = length, .h2 = h2 };
     head_line_t line;
     while (head_lines_next(&lines, &line))
-        if (!name_listed(order, NULL, line.name, line.name_len) && !head_line_put(out, cap, &at, &line))
+        if (!name_listed(order, NULL, line.name, line.name_len) && !put(ctx, &line))
             return false;
-    return head_put(out, cap, &at, "\r\n", 2);
+    return true;
+}
+
+// ── HTTP/1.1's rendering: text ──────────────────────────────────────────
+
+typedef struct {
+    char *out;
+    size_t cap, at;
+} request_text_t;
+
+static bool text_start(void *ctx, const char *method, const char *target, const char *host)
+{
+    request_text_t *t = ctx;
+    int32_t n = os64_snprintf(t->out, t->cap, "%s %s HTTP/1.1\r\nHost: %s\r\n", method, target, host);
+    if (n <= 0 || (size_t)n >= t->cap)
+        return false;
+    t->at = (size_t)n;
+    return true;
+}
+
+static bool text_line(void *ctx, const head_line_t *line)
+{
+    request_text_t *t = ctx;
+    return head_line_put(t->out, t->cap, &t->at, line);
+}
+
+bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm,
+                  const http_request_extras_t *extras)
+{
+    request_text_t text = { .out = out, .cap = cap };
+    // The blank line is written LAST and only here.
+    return request_walk(url, absoluteForm, false, extras, text_start, text_line, &text) &&
+           head_put(out, cap, &text.at, "\r\n", 2);
+}
+
+// ── HTTP/2's rendering: a list of fields (RFC 9113 § 8) ─────────────────
+
+typedef struct {
+    const http_url_t *url;
+    const char *pseudo;         // the pseudo-headers' order, four letters
+    http_field_t *fields;
+    size_t most, count;
+    char *storage;
+    size_t room, used;
+} request_list_t;
+
+// One field onto the list, its name lowercased and both halves copied into
+// the caller's storage: a line's value may be a caller's block or a local
+// of the walk, and the list outlives the walk.
+static bool list_add(request_list_t *l, const char *name, size_t name_len, const char *value, size_t value_len)
+{
+    if (l->count == l->most || name_len + value_len > l->room - l->used)
+        return false;
+    char *at = l->storage + l->used;
+    for (size_t i = 0; i < name_len; i++)
+        at[i] = to_lower(name[i]);
+    if (value_len != 0)
+        os64_memcpy(at + name_len, value, value_len);
+    l->fields[l->count++] = (http_field_t){ .name = at, .name_len = name_len, .value = at + name_len,
+                                            .value_len = value_len };
+    l->used += name_len + value_len;
+    return true;
+}
+
+static bool list_start(void *ctx, const char *method, const char *target, const char *host)
+{
+    request_list_t *l = ctx;
+    (void)target;       // the origin-form path is the url's; an h2 hop is never through a proxy
+    // The four pseudo-headers in the order the extras ask for, one letter
+    // each (http.h); http_request_fields has judged the letters.
+    for (const char *p = l->pseudo; *p != '\0'; p++) {
+        bool added = *p == 'm' ? list_add(l, ":method", 7, method, os64_strlen(method))
+                   : *p == 'a' ? list_add(l, ":authority", 10, host, os64_strlen(host))
+                   : *p == 's' ? list_add(l, ":scheme", 7, l->url->scheme, os64_strlen(l->url->scheme))
+                   : list_add(l, ":path", 5, l->url->path, os64_strlen(l->url->path));
+        if (!added)
+            return false;
+    }
+    return true;
+}
+
+static bool list_line(void *ctx, const head_line_t *line)
+{
+    request_list_t *l = ctx;
+    // RFC 9113 § 8.2.2: the fields that speak of the connection have no
+    // meaning on a stream and make a request malformed. A browser's h1
+    // `Connection: keep-alive` is not sent on h2 by that browser either.
+    // TE is not among them here: a caller's lines cannot hold one
+    // (request_reserved), so one that reaches this is the walk's own
+    // `TE: trailers`, the single value § 8.2.2 allows.
+    static const char *const kOfTheConnection[] = {"connection", "keep-alive", "proxy-connection",
+                                                   "transfer-encoding", "upgrade", "host"};
+    if (name_in(line->name, line->name_len, kOfTheConnection,
+                sizeof(kOfTheConnection) / sizeof(kOfTheConnection[0])))
+        return true;
+    const char *value = line->value;
+    size_t value_len;
+    if (line->line != NULL) {
+        // A caller's whole line: the value is what follows the colon, less
+        // the blanks around it and the CR LF.
+        value = line->line + line->name_len + 1;
+        const char *end = line->line + line->line_len - 2;
+        while (value < end && is_blank(*value))
+            value++;
+        while (end > value && is_blank(end[-1]))
+            end--;
+        value_len = (size_t)(end - value);
+    } else
+        value_len = os64_strlen(value);
+
+    // § 8.2.3: a Cookie line goes as one field for each cookie-pair, which
+    // is what lets HPACK index the ones that do not change.
+    if (line->name_len == 6 && name_matches(line->name, "cookie", 6)) {
+        for (size_t at = 0; at < value_len;) {
+            size_t from = at;
+            while (at < value_len && value[at] != ';')
+                at++;
+            if (at > from && !list_add(l, "cookie", 6, value + from, at - from))
+                return false;
+            at++;
+            while (at < value_len && value[at] == ' ')
+                at++;
+        }
+        return true;
+    }
+    if (!list_add(l, line->name, line->name_len, value, value_len))
+        return false;
+    l->fields[l->count - 1].sensitive =
+        (line->name_len == 13 && name_matches(line->name, "authorization", 13)) ||
+        (line->name_len == 19 && name_matches(line->name, "proxy-authorization", 19));
+    return true;
+}
+
+bool http_h2_pseudo_ok(const char *pseudo)
+{
+    // Each of the four letters once: a request without one of its
+    // pseudo-headers, or with one twice, is malformed (RFC 9113 § 8.3.1).
+    bool seen[4] = {false};
+    size_t letters = 0;
+    for (const char *p = pseudo; *p != '\0'; p++, letters++) {
+        int which = *p == 'm' ? 0 : *p == 'a' ? 1 : *p == 's' ? 2 : *p == 'p' ? 3 : -1;
+        if (which < 0 || seen[which])
+            return false;
+        seen[which] = true;
+    }
+    return letters == 4;
+}
+
+bool http_request_fields(const http_url_t *url, const http_request_extras_t *extras, http_field_t *fields,
+                         size_t most, char *storage, size_t room, size_t *count)
+{
+    static const http_request_extras_t none = {0};
+    const char *pseudo = (extras != NULL ? extras : &none)->h2_pseudo;
+    if (pseudo == NULL)
+        pseudo = "masp";
+    if (!http_h2_pseudo_ok(pseudo))
+        return false;
+    request_list_t list = { .url = url, .pseudo = pseudo, .fields = fields, .most = most, .storage = storage,
+                            .room = room };
+    *count = 0;
+    if (!request_walk(url, false, true, extras, list_start, list_line, &list))
+        return false;
+    *count = list.count;
+    return true;
 }
 
 
@@ -744,7 +929,19 @@ static http_head_result_t header_take(char *line, http_response_t *out,
     // Set-Cookie stand for a final head that has neither.
     if (on_header && out->status >= 200)
         on_header(ctx, line, (size_t)(colon - line), value, vlen);
+    return http_head_field(out, line, value, vlen);
+}
 
+bool http_field_value_ok(const char *value, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+        if (!is_field_byte(value[i]))
+            return false;
+    return true;
+}
+
+http_head_result_t http_head_field(http_response_t *out, const char *line, const char *value, size_t vlen)
+{
     if (os64_streq_nocase(line, "Content-Length")) {
         uint64_t length = 0;
         if (!os64_parse_u64(value, &length))
@@ -914,6 +1111,20 @@ static http_head_result_t overlong_verdict(const char *prefix, http_response_t *
         return HTTP_HEAD_FRAMING;     // no name and no colon in the whole prefix
     name[n] = '\0';
 
+    http_head_result_t verdict = http_head_field_too_long(out, name);
+    if (verdict != HTTP_HEAD_OK)
+        return verdict;
+
+    // Optional metadata is omitted whole, and the observer told whose it
+    // was: a cache must not read a `Cache-Control: no-store` it never saw as
+    // no Cache-Control at all.
+    if (on_header != NULL)
+        on_header(ctx, name, n, NULL, 0);
+    return HTTP_HEAD_OK;
+}
+
+http_head_result_t http_head_field_too_long(http_response_t *out, const char *name)
+{
     if (os64_streq_nocase(name, "Content-Length") ||
         os64_streq_nocase(name, "Transfer-Encoding") ||
         os64_streq_nocase(name, "Content-Encoding") ||
@@ -921,12 +1132,6 @@ static http_head_result_t overlong_verdict(const char *prefix, http_response_t *
         return HTTP_HEAD_FRAMING;
     if (os64_streq_nocase(name, "Connection"))
         out->connectionClose = true;
-
-    // Optional metadata is omitted whole, and the observer told whose it
-    // was: a cache must not read a `Cache-Control: no-store` it never saw as
-    // no Cache-Control at all.
-    if (on_header != NULL)
-        on_header(ctx, name, n, NULL, 0);
     return HTTP_HEAD_OK;
 }
 

@@ -31,6 +31,7 @@
 // bound that keeps the whole layout inside a thread's stack.
 
 #include "internal.h"
+#include "garb/cascade.h"
 #include "os64/fmt.h"
 
 typedef struct {
@@ -171,52 +172,118 @@ bool flow_svg_root(const os64_html_node_t *n)
            os64_streq(n->name, "svg") && (!n->parent || n->parent->ns != OS64_HTML_NS_SVG);
 }
 
+// Whether the author's rules give `n`'s ::before or ::after content that
+// draws, as style.c's style_pseudo reads it: a value of its own that is no
+// keyword (`none`, `normal`) and not CSS-wide, on a pseudo-element whose
+// `display` is not `none`.
+static bool pseudo_draws(const flow_env_t *env, const os64_html_node_t *n, garb_pseudo_t which)
+{
+    if (env->cascade == NULL)
+        return false;
+    garb_style_t st = garb_style_for_pseudo(env->cascade, n, which);
+    bool content = false;
+    for (int32_t i = 0; i < st.n; i++) {
+        const garb_val_t *v = &st.sets[i].value;
+        if (st.sets[i].prop == GARB_CONTENT)
+            content = v->kind != GARB_V_WIDE && v->kind != GARB_V_KEYWORD;
+        else if (st.sets[i].prop == GARB_DISPLAY && v->kind == GARB_V_KEYWORD && os64_streq(v->keyword, "none"))
+            return false;
+    }
+    return content;
+}
+
+// A button keeps the face's widget, which draws its own caption, only
+// where the caption is the whole of what the page wrote and drew: other
+// browsers keep a button's native look until the page styles its
+// background or border, and lay out its content always (CSS UI 4's
+// devolvable widgets). An element inside, a shadow tree, a ::before or
+// ::after that draws (an icon font's glyph), or no words at all, and the
+// page's content is what is drawn.
+bool f_button_faced(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s)
+{
+    if (s != NULL && s->author_box)
+        return false;
+    if (n->shadow_root != NULL || pseudo_draws(env, n, GARB_PSEUDO_BEFORE) ||
+        pseudo_draws(env, n, GARB_PSEUDO_AFTER))
+        return false;
+    bool words = false;
+    for (const os64_html_node_t *c = n->first_child; c != NULL; c = c->next) {
+        if (c->kind == OS64_HTML_COMMENT)
+            continue;
+        if (c->kind != OS64_HTML_TEXT)
+            return false;
+        for (size_t i = 0; i < c->text_len && !words; i++)
+            words = !css_space(c->text[i]);
+    }
+    return words;
+}
+
 // Replaced elements: laid out at a size the face supplies, their insides
 // its widget or its picture. A canvas is one where scripting is on (HTML §
 // 15.4.1: it then represents embedded content, and its fallback is not
 // shown), and the face draws what stands in for its drawing; with
-// scripting off it is its fallback content, laid out as any element.
-bool f_replaced(const flow_env_t *env, const os64_html_node_t *n)
+// scripting off it is its fallback content, laid out as any element. A
+// button is one when it is the face's own (f_button_faced). A video is one
+// where the face plays the page's sounds (flow_env_t.media), whose picture
+// it never draws (AUDIO_YONDER.md § Y.4): the box is 300 by 150 unless the
+// page says otherwise, and holds nothing; elsewhere it is its fallback.
+bool f_replaced(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s)
 {
     if (env->svg && flow_svg_root(n))
         return true;
     if (n->ns != OS64_HTML_NS_HTML)
         return false;
     switch (n->tag) {
-    case OS64_HTML_TAG_IMG: case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_BUTTON:
-    case OS64_HTML_TAG_SELECT: case OS64_HTML_TAG_TEXTAREA: case OS64_HTML_TAG_IFRAME:
-    case OS64_HTML_TAG_FRAME: case OS64_HTML_TAG_METER: case OS64_HTML_TAG_PROGRESS:
+    case OS64_HTML_TAG_IMG: case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_SELECT:
+    case OS64_HTML_TAG_TEXTAREA: case OS64_HTML_TAG_IFRAME: case OS64_HTML_TAG_FRAME:
+    case OS64_HTML_TAG_METER: case OS64_HTML_TAG_PROGRESS:
         return true;
+    case OS64_HTML_TAG_BUTTON:
+        return f_button_faced(env, n, s);
     case OS64_HTML_TAG_CANVAS:
         return env->scripting;
+    case OS64_HTML_TAG_AUDIO:
+        return f_audio_controls(env, n);
+    case OS64_HTML_TAG_VIDEO:
+        return env->media;
     default:
         return false;
     }
 }
 
-static bool replaced(const B *b, const os64_html_node_t *n)
+// An `audio` with `controls` is a box the face's player fills, as other
+// browsers draw one, when the face plays the page's sounds
+// (flow_env_t.media); otherwise it stays boxless.
+bool f_audio_controls(const flow_env_t *env, const os64_html_node_t *n)
 {
-    return f_replaced(b->env, n);
+    return env->media && is(n, OS64_HTML_TAG_AUDIO) && os64_html_attr(n, "controls") != NULL;
 }
 
-// Elements that make no box in this browser. An `embed` and an `audio`
-// play nothing here and have no fallback content; `source` and `track`
-// are data for a player; `keygen` is a control nothing implements.
-bool f_boxless(const os64_html_node_t *n)
+static bool replaced(const B *b, const os64_html_node_t *n)
 {
-    return is(n, OS64_HTML_TAG_EMBED) || is(n, OS64_HTML_TAG_AUDIO) ||
+    const FStyled *s = styled(b, n);
+    return f_replaced(b->env, n, s != NULL ? &s->style : NULL);
+}
+
+// Elements that make no box in this browser. An `embed` plays nothing here
+// and an `audio` with no player (f_audio_controls) shows nothing, and
+// neither has fallback content; `source` and `track` are data for a
+// player; `keygen` is a control nothing implements.
+bool f_boxless(const flow_env_t *env, const os64_html_node_t *n)
+{
+    return is(n, OS64_HTML_TAG_EMBED) || (is(n, OS64_HTML_TAG_AUDIO) && !f_audio_controls(env, n)) ||
            is(n, OS64_HTML_TAG_SOURCE) || is(n, OS64_HTML_TAG_TRACK) ||
            is(n, OS64_HTML_TAG_KEYGEN);
 }
 
-static bool boxless(const os64_html_node_t *n)
+static bool boxless(const B *b, const os64_html_node_t *n)
 {
-    return f_boxless(n);
+    return f_boxless(b->env, n);
 }
 
-bool f_draws_inside(const flow_env_t *env, const os64_html_node_t *n, flow_display_t display)
+bool f_draws_inside(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s)
 {
-    return !f_boxless(n) && (display == FLOW_DISPLAY_CONTENTS || !f_replaced(env, n));
+    return !f_boxless(env, n) && (s->display == FLOW_DISPLAY_CONTENTS || !f_replaced(env, n, s));
 }
 
 static bool block_level(flow_display_t d)
@@ -845,7 +912,7 @@ static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *st
                 m->inline_content = true;
             continue;
         }
-        if (c->kind != OS64_HTML_ELEMENT || boxless(c))
+        if (c->kind != OS64_HTML_ELEMENT || boxless(b, c))
             continue;
         const FStyled *s = styled(b, c);
         // A box that leaves the flow is neither: a float takes no room in
@@ -863,7 +930,7 @@ static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *st
             m->block = true;
         } else {
             m->inline_content = true;
-            if (s->holds_block && !replaced(b, c))
+            if (s->holds_block && !replaced(b, c) && !is(c, OS64_HTML_TAG_BUTTON))
                 m->block = true;
         }
     }
@@ -920,7 +987,9 @@ static FBox *element_box(B *b, FBox *parent, const os64_html_node_t *el, const F
         position_box(b, box, el, true);
         return box;
     }
-    if (s->style.display == FLOW_DISPLAY_TABLE) {
+    // A button laid out as a table is laid out as a block (HTML's button
+    // layout), so its box can carry its control.
+    if (s->style.display == FLOW_DISPLAY_TABLE && !is(el, OS64_HTML_TAG_BUTTON)) {
         FBox *table = new_box(b, parent, FB_TABLE, el, &s->style);
         position_box(b, table, el, true);
         if (table != NULL) {
@@ -967,6 +1036,10 @@ static FBox *element_box(B *b, FBox *parent, const os64_html_node_t *el, const F
     position_box(b, box, el, true);
     if (box == NULL)
         return NULL;
+    // A button the page draws is still a control: its widget rides
+    // unpainted where this box is, as an inline one's rides at its atom.
+    if (is(el, OS64_HTML_TAG_BUTTON) && b->model != NULL)
+        box->control = os64_page_control_for(b->model, el);
     const char *inside = NULL;
     uint32_t inside_len = 0;
     if (marker != NULL && s->style.list_style_position == FLOW_LIST_INSIDE) {
@@ -1031,7 +1104,10 @@ static void float_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
 static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
 {
     B *b = f->b;
-    if (replaced(b, el) || f_display_atomic(s->style.display)) {
+    // A button is an atom whatever its display says: HTML's button layout
+    // lays an inline one out as an inline-block, and its widget rides at
+    // the atom.
+    if (replaced(b, el) || f_display_atomic(s->style.display) || is(el, OS64_HTML_TAG_BUTTON)) {
         FBox *ifc = target(f);
         FItem *item = ifc != NULL ? new_item(b, ifc, FI_ATOMIC, el, &s->style) : NULL;
         if (item == NULL)
@@ -1042,8 +1118,9 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
         }
         item->replaced = replaced(b, el);
         ifc->collapse_space = false;
-        // An inline-block that is not replaced (a marquee), or an inline
-        // flex or grid container, is a block of its own, laid out inside
+        // An inline-block that is not replaced (a marquee, a button the
+        // page draws), or an inline flex or grid container, is a block of
+        // its own, laid out inside
         // the atom. Its content costs two descents: a level of it holds a
         // line's frame as well as a block's, twice a block level's stack
         // (LAYOUT.md § Bounds).
@@ -1152,7 +1229,7 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
             text_node(f, c);
             continue;
         }
-        if (c->kind != OS64_HTML_ELEMENT || boxless(c))
+        if (c->kind != OS64_HTML_ELEMENT || boxless(b, c))
             continue;
         const FStyled *s = styled(b, c);
         if (s == NULL || s->style.display == FLOW_DISPLAY_NONE)
@@ -1198,7 +1275,7 @@ static bool proper_table_child(flow_display_t d)
 
 static flow_display_t display_of(const B *b, const os64_html_node_t *n)
 {
-    if (n->kind != OS64_HTML_ELEMENT || boxless(n))
+    if (n->kind != OS64_HTML_ELEMENT || boxless(b, n))
         return FLOW_DISPLAY_NONE;
     const FStyled *s = styled(b, n);
     return s != NULL ? s->style.display : FLOW_DISPLAY_NONE;

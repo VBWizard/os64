@@ -16,13 +16,19 @@ def function(text, name):
     return text[match.start():at]
 assert 'SYSCALL_WRITE_FOR' not in source
 assert re.search(r'SYSCALL_DEFINE\(SYSCALL_WRITE,.*false, 0x02\)', source)
-body = function(source, 'syscall_write')
-# Keep the real dispatch prelude and cases under test; unrelated file/pipe
-# implementations have their own harnesses and require different OS seams.
-prelude = body[:body.index('switch (h->type)')]
-console = body[body.index('case HANDLE_CONSOLE_OUT:'):body.index('case HANDLE_PTY_MASTER:')]
-tcp = body[body.index('case HANDLE_NET_TCP:'):body.index('case HANDLE_NET_ICMP:')]
-body = prelude + 'switch (h->type) {\n' + console + tcp + 'default: return SYSCALL_RESULT_INVALID;\n}}'
+# write is a wrapper that pins the handle around syscall_write_pinned, which
+# holds the prelude and the cases. Keep the real wrapper, prelude, console
+# helper and the console/TCP cases; unrelated glass/file/pipe implementations
+# have their own harnesses and require different OS seams.
+pinned = function(source, 'syscall_write_pinned')
+prelude = pinned[:pinned.index('switch (h->type)')]
+console = pinned[pinned.index('case HANDLE_CONSOLE_OUT:'):pinned.index('case HANDLE_GLASS:')]
+tcp = pinned[pinned.index('case HANDLE_NET_TCP:'):pinned.index('case HANDLE_NET_ICMP:')]
+death = re.search(r'typedef enum\s*\{[^}]+\}\s*write_death_t;', source)
+assert death, 'write_death_t'
+body = (death.group(0) + '\n' + function(source, 'syscall_write_console') + '\n'
+        + prelude + 'switch (h->type) {\n' + console + tcp
+        + 'default: return SYSCALL_RESULT_INVALID;\n}}\n' + function(source, 'syscall_write'))
 header = '''#include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -32,21 +38,20 @@ header = '''#include <stdint.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include "os64/syscall_numbers.h"
-#define HANDLE_CONSOLE_IN 0
-#define HANDLE_NET_UDP 6
-#define HANDLE_NET_ICMP 8
-#define HANDLE_NET_TCP 7
-#define HANDLE_CONSOLE_OUT 1
-#define HANDLE_CONSOLE_ERR 2
 '''
+header += re.search(r'typedef enum handle_type\s*\{.*?\}\s*\w+;',
+                    (root / 'kernel/include/handle.h').read_text(), re.S).group(0) + '\n'
 header += re.search(r'^#define OS64_INTERRUPTED .*', (root / 'abi/include/os64/signal.h').read_text(), re.M).group(0) + '\n'
 for text, pattern in ((source, r'^#define (?:SYSCALL_RESULT_\w+|READ_CHUNK_SIZE|WRITE_CHUNK_SIZE) .*'),
-                      ((root / 'kernel/include/driver/net/tcp.h').read_text(), r'^#define TCP_ERR_\w+ .*')):
+                      ((root / 'kernel/include/driver/net/tcp.h').read_text(), r'^#define TCP_ERR_\w+ .*'),
+                      ((root / 'kernel/include/pipe.h').read_text(), r'^#define PIPE_ERR_\w+ .*'),
+                      ((root / 'kernel/include/tty.h').read_text(), r'^#define PTY_MODE_\w+ .*')):
     header += '\n'.join(re.findall(pattern, text, re.M)) + '\n'
 header += '''
 typedef struct { int unused; } task_t;
 typedef struct { int unused; } tcp_conn_t;
-typedef struct { int unused; } tty_t;
+typedef struct { int unused; } pipe_t;
+typedef struct { bool is_pty; int pty_mode; pipe_t *stream; } tty_t;
 typedef struct { int type; void *object; } handle_t;
 typedef struct { task_t *task; } core_local_storage_t;
 static task_t task; static tcp_conn_t connection; static tty_t tty;
@@ -54,13 +59,19 @@ static handle_t handle = {HANDLE_NET_TCP, &connection};
 static core_local_storage_t cls = {&task};
 static uint64_t kTicksSinceStart, captured_deadline, captured_args[5];
 static bool refuse_alloc, copy_ok=true, caught=true;
-static size_t allocated, copied, requested, writes, console_bytes;
+static size_t allocated, copied, requested, writes, console_bytes, pins;
 static unsigned fail_write, fail_copy, fail_alloc;
 static long outcome;
 static jmp_buf fatal;
 static core_local_storage_t *get_core_local_storage(void) { return &cls; }
-static handle_t *handle_get(task_t *t, int h) { assert(t==&task); return h==3 ? &handle : NULL; }
-static tty_t *task_tty(task_t *t) { assert(t==&task); return &tty; }
+static bool handle_pin(task_t *t, int h, handle_t *out) { assert(t==&task); if(h!=3) return false; *out=handle; pins++; return true; }
+static void handle_unpin(handle_t *h) { assert(pins && h->object==handle.object); pins--; }
+static tty_t *task_tty_hold(task_t *t) { assert(t==&task); return &tty; }
+static void task_tty_release(tty_t *t) { assert(t==&tty); }
+// The terminal here is a plain console, never a STREAM pty: its pipe is not reached.
+static void pipe_ref_write_end(pipe_t *p) { (void)p; assert(false); }
+static void pipe_close_write_end(pipe_t *p) { (void)p; assert(false); }
+static long pipe_write(pipe_t *p, const void *b, size_t n) { (void)p; (void)b; (void)n; assert(false); return 0; }
 static void tty_write(tty_t *t, const void *p, size_t n) { assert(t==&tty && p); console_bytes+=n; }
 static void *kmalloc(size_t n) { if(refuse_alloc || (fail_alloc && writes>=fail_alloc)) return NULL; allocated++; return malloc(n); }
 static void kfree(void *p) { assert(allocated); allocated--; free(p); }
@@ -75,15 +86,17 @@ static long tcp_conn_write(tcp_conn_t *c, const void *p, size_t n, uint64_t end)
  return writes==fail_write ? outcome : (long)n;
 }
 static bool current_thread_will_catch(void) { return caught; }
-static void raise_terminating_signal_and_die(task_t *t, void *p) { assert(t==&task && !p && !allocated); longjmp(fatal,1); }
+static void raise_terminating_signal_and_die(task_t *t, void *p) { assert(t==&task && !p && !allocated && !pins); longjmp(fatal,1); }
+static void raise_sigpipe_and_die(task_t *t) { (void)t; assert(false); }
 static uint64_t os64_syscall4(uint64_t n,uint64_t a,uint64_t b,uint64_t c,uint64_t d) {
  captured_args[0]=n; captured_args[1]=a; captured_args[2]=b; captured_args[3]=c; captured_args[4]=d; return 23;
 }
 '''
-read = function(source, 'syscall_read')
+read = function(source, 'syscall_read_pinned')
 # Exercise the sibling's actual validation/deadline prelude, stopping before
-# its scratch allocation and device dispatch.
-read = read[:read.index('size_t want =')] + '(void)user_buffer; return deadline; }'
+# its scratch allocation and device dispatch, under its real pinning wrapper.
+read = (read[:read.index('size_t want =')] + '(void)task; (void)user_buffer; (void)die; return deadline; }\n'
+        + function(source, 'syscall_read'))
 program = header + function(source, 'syscall_io_deadline') + '\n' + body + '\n' + read + '\n'
 
 for name in ('os64_write', 'os64_write_for'):

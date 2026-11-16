@@ -35,9 +35,10 @@ for index, source in enumerate(upstream + port):
                         '-I' + str(root / 'userland/libfreetype/upstream/include'),
                         *extra, '-c', str(source), '-o', str(target)], check=True)
     objects.append(str(target))
-sources = ['tools/test_roam_ui_host.c'] + ['userland/libos64/' + name + '.c' for name in
+sources = ['tools/test_roam_ui_host.c', 'shared/damage.c'] + ['userland/libos64/' + name + '.c' for name in
     ['ui_browser', 'ui_data', 'ui_dataview', 'ui_menu', 'ui_menu_widget',
-     'ui_dispatcher', 'ui_icon', 'ui_action', 'ui_status', 'ui_font', 'ui',
+     'ui_dispatcher', 'ui_icon', 'ui_icon_button', 'ui_toolbar', 'ui_dropdown',
+     'ui_action', 'ui_status', 'ui_font', 'ui',
      'ui_controls', 'ui_list', 'ui_text', 'font_provider', 'font_adopt', 'text',
      'text_cache', 'text_decode', 'text_bitmap', 'text_draw', 'draw', 'str',
      'fmt', 'ui_theme']]

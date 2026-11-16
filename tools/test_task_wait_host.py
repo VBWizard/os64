@@ -47,10 +47,13 @@ static core_local_storage_t *get_core_local_storage(void) {return &cls;}
 static uint64_t spinlock_acquire_irqsave(unsigned *l) {assert(!*l);*l=1;return 0;}
 static void spinlock_release_irqrestore(unsigned *l,uint64_t f) {
  (void)f;assert(*l);*l=0;
- if(l==&kDeadChildLock && ++unlocks==1 && mode==1) {
+ // Mode 1's child exits when the hold that scanned and registered ends:
+ // the second kDeadChildLock release of a pass, after the top-of-pass void.
+ if(l==&kDeadChildLock && ++unlocks==2 && mode==1) {
   child.exited=true;parent.deadChildHead=&child;
  }
 }
+static void scheduler_forget_owed_wake(thread_t *t) {assert(kDeadChildLock && t==&thread);}
 static tty_t *task_tty_hold(task_t *t) {(void)t;return NULL;}
 static void task_tty_release(tty_t *t) {assert(!t);}
 static bool signal_park_must_end(thread_t *t) {(void)t;return false;}
@@ -72,7 +75,7 @@ int main(void) {
   child.retValCollected=mode==3;cls=(core_local_storage_t){&parent,&thread};
   unlocks=parks=0;kDeadChildLock=0;
   uint64_t code=0,pid=task_wait(&parent,42,&code);
-  if(mode<2) assert(pid==42 && code==314 && child.retValCollected);
+  if(mode<2) assert(pid==42 && code==314 && child.retValCollected && parks==1);
   else assert(pid==0 && code==0 && !parks);
  }
  puts("task wait: exit-before-enqueue and exit-between-probes retain child; missing and collected children refused PASS");

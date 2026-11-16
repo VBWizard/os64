@@ -5,22 +5,26 @@
 .intel_syntax noprefix
 
 .extern task_exit
+.extern task_offer_exit_code
 .extern kKernelPML4
 
 // Called when a task's thread returns via 'ret'.  The x86-64 ABI leaves the
-// return value in RAX.  We walk CLS -> currentThread -> ownerTask and store
-// RAX directly into task->retVal before any C function call can clobber it,
-// then fall through into the normal task_exit path.
+// return value in RAX.  We walk CLS -> currentThread -> ownerTask and offer
+// RAX as the task's exit code before anything else can clobber it
+// (task_offer_exit_code, task.c, which refuses it when a thread has already
+// claimed the task's teardown), then jump into the normal task_exit path.
+// Arriving by `ret` leaves RSP 16-aligned, so the `call` gives the callee
+// the alignment SysV promises.
 .globl task_exit_with_retval
 .type  task_exit_with_retval, @function
 task_exit_with_retval:
-    cli
-    mov  rcx, rax                                   // rcx = ELF's return value
+    mov  rsi, rax                                   // rsi = the thread's return value
+    cli                                             // this core's CLS must stay this thread's while it is read
     mov  rax, gs:[0]                                // rax = CLS self-pointer
     mov  rax, [rax + CLS_CURRENTTHREAD_OFFSET]      // rax = currentThread
-    mov  rax, [rax + THREAD_OWNERTASK_OFFSET]       // rax = ownerTask (task_t*)
-    mov  [rax + TASK_RETVAL_OFFSET], rcx            // task->retVal = return value
+    mov  rdi, [rax + THREAD_OWNERTASK_OFFSET]       // rdi = ownerTask (task_t*)
     sti
+    call task_offer_exit_code
     jmp  task_exit
 
 // void call_in_kernel_context(void (*func)(void*), void *arg)

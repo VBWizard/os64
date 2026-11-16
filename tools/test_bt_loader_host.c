@@ -14,8 +14,17 @@ static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_le.c"
 #include "../kernel/src/driver/system/usb/bt_manager.c"
 #include "../kernel/src/driver/system/usb/bt_bond.c"
+#include "../kernel/src/driver/system/usb/bt_acl.c"
+#include "../kernel/src/driver/system/usb/bt_classic.c"
+#include "../kernel/src/driver/system/usb/bt_l2cap.c"
+#include "../kernel/src/driver/system/usb/bt_sdp.c"
+#include "../kernel/src/driver/system/usb/bt_avdtp.c"
+#include "../kernel/src/audio/sbc_frame.c"
+#include "../kernel/src/driver/system/usb/bt_a2dp.c"
+#include "../kernel/src/driver/system/usb/bt_avrcp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "../kernel/src/driver/system/hid_mouse.c"
+#include "../kernel/src/driver/system/usb/xhci_service.c"
 #include "xhci_bt_host.inc"
 #include "strings/strlen.h"
 #include "strings/sprintf.h"
@@ -23,6 +32,7 @@ extern void *aligned_alloc(size_t,size_t);
 extern void free(void *);
 extern int memcmp(const void *,const void *,size_t);
 extern char *strstr(const char *,const char *);
+extern int strcmp(const char *,const char *);
 extern int puts(const char *);
 extern int fflush(void *);
 extern _Noreturn void abort(void);
@@ -45,8 +55,52 @@ bool bt_bond_save_slot(unsigned slot,const bt_le_bond_t *bond,bool automatic)
     if(store_fail) return false;
     bt_bond_encode(stored_bond,bond,automatic); store_exists=true; return true;
 }
+// The Classic bond's file, as a record in memory: absent until saved.
+static uint8_t stored_classic[BT_CLASSIC_BOND_RECORD_BYTES];
+static bool classic_exists,classic_fail,classic_change_during_save;
+static unsigned classic_loads,classic_saves;
+bool bt_classic_bond_load(bt_classic_bond_t *bond)
+{
+    CHECK(!s_poll_busy); classic_loads++;
+    memset(bond,0,sizeof(*bond));
+    if(classic_fail) return false;
+    if(!classic_exists) return true;
+    return bt_classic_bond_decode(bond,stored_classic,sizeof(stored_classic));
+}
+bool bt_classic_bond_save(const bt_classic_bond_t *bond)
+{
+    CHECK(!s_poll_busy); classic_saves++;
+    if(classic_change_during_save) {
+        // The person forgets the bond while its old self is being written.
+        classic_change_during_save=false; CHECK(xhci_bluetooth_connection("slot 2 forget",13));
+    }
+    if(classic_fail) return false;
+    bt_classic_bond_encode(stored_classic,bond); classic_exists=true; return true;
+}
 uintptr_t kHHDMOffset;
 volatile uint64_t kTicksSinceStart;
+uint64_t kCPUCyclesPerSecond = 1000000000;
+// What the driver asks of kusb's side of the kernel: a bell nobody is
+// parked on, a clock that only has to move, and a sleep this harness never
+// reaches (it is kworker's wait for the serializing flag, which is free).
+doorbell_t kUsbDoorbell;
+void doorbell_ring(doorbell_t *db) { db->rings++; }
+uint64_t rdtsc(void) { static uint64_t cycles; return cycles += 1000; }
+// The pump's clock, and its way to the seam and the encoder: no Classic
+// link comes up in these cases, so the pump never runs, and a call to any
+// of its ops is a failure.
+uint64_t micros_now(void) { return kTicksSinceStart * 10000; }
+static bt_a2dp_pulled_t no_pull(void *c,int16_t *o,uint32_t f) { (void)c; (void)o; (void)f; abort(); }
+static bool no_sound(void *c) { (void)c; abort(); }
+static void no_seam(void *c) { (void)c; abort(); }
+static void no_failed(void *c,const char *w) { (void)c; (void)w; abort(); }
+static void no_delay(void *c,uint32_t d) { (void)c; (void)d; abort(); }
+static bool no_begin(void *c,const sbc_settings_t *s) { (void)c; (void)s; abort(); }
+static bool no_encode(void *c,const int16_t *p,uint8_t *o,size_t n) { (void)c; (void)p; (void)o; (void)n; abort(); }
+static uint64_t no_clock(void *c) { (void)c; abort(); }
+const bt_a2dp_ops_t kBtA2dpSeamOps={.pull=no_pull,.has_sound=no_sound,.attach=no_seam,.detach=no_seam,.failed=no_failed,
+                                    .delay=no_delay,.encoder_begin=no_begin,.encoder_encode=no_encode,.clock_us=no_clock};
+void signal_raise(signals signal, uint64_t data, void *thread) { (void)signal; (void)data; (void)thread; }
 volatile uint64_t kSystemCurrentTime;
 // Fixed calendar fixture: exercise captured timestamps and formatting without
 // importing the kernel's scheduler-dependent time module into the transport test.
@@ -59,9 +113,12 @@ struct tm *gmtime(const time_t *stamp,struct tm *date)
 }
 __uint128_t kDebugLevel;
 static char failure_log[1024];
+static unsigned classic_stop_lines, classic_refused_lines;
 void printd(__uint128_t level,const char *fmt,...)
 {
     (void)level;
+    if (strstr(fmt,"(Classic) stopped")) classic_stop_lines++;
+    if (strstr(fmt,"refused Classic setup command")) classic_refused_lines++;
     if (!strstr(fmt,"AX210 wait failed") && !strstr(fmt,"AX210 rejected event")) return;
     size_t used=strlen(failure_log);
     va_list ap; va_start(ap,fmt);
@@ -92,13 +149,31 @@ static unsigned allocations, frees, fail_after;
 void *kmalloc_aligned(uint64_t size)
 {
     if (allocations==fail_after) return NULL;
-    CHECK(allocations<32 && size==PAGE_SIZE);
+    // A page, or the transmit endpoint's page and its send slots: ASan
+    // then polices every slot's bounds for the cases below.
+    CHECK(allocations<32 && (size==PAGE_SIZE || size==BT_TX_BYTES));
     void *p=aligned_alloc(PAGE_SIZE,size); CHECK(p); memset(p,0,size);
     allocated[allocations++]=p;
     return p;
 }
+// The probe itself (xhci_ax210_bringup allocates it rather than build it on
+// the stack): one allocation a bring-up, freed exactly once whichever way
+// bring-up ends, and refused when `probe_refused` says so.
+static void *probe_block;
+static unsigned probe_allocs, probe_frees;
+static bool probe_refused;
+extern void *calloc(size_t,size_t);
+void *kmalloc_try(uint64_t size)
+{
+    CHECK(size==sizeof(xhci_bt_probe_t) && !probe_block);
+    if (probe_refused) return NULL;
+    probe_block=calloc(1,size); CHECK(probe_block);
+    probe_allocs++;
+    return probe_block;
+}
 void kfree(void *p)
 {
+    if (p && p==probe_block) { probe_block=NULL; probe_frees++; free(p); return; }
     for (unsigned i=0;i<allocations;i++) if (allocated[i]==p) {
         allocated[i]=NULL; ++frees; free(p); return;
     }
@@ -111,7 +186,7 @@ enum { COLD_RSA, COLD_ECDSA, WARM, WRONG_ID, REJECT_FRAGMENT, BAD_USB_OUT,
        DEFERRED_ZERO_OPCODE_SUCCESS, DEFERRED_SECURE_FAILURE,
        BOOT_BULK_ERROR, BOOT_INTR_ERROR, BOOT_REPEAT_ERROR, BOOT_RESET_FAIL,
        BOOT_ERROR_NO_NOTIFY, EARLY_BULK_ERROR, BOOT_STALL_ERROR, BOOT_PARTIAL_ERROR };
-static unsigned scenario, secure_commands, resets, reads, ddc_commands, pump;
+static unsigned scenario, secure_commands, resets, reads, ddc_commands, pump, classic_setup_seen;
 static unsigned endpoint_resets, halted_enqueue;
 static bool rx_halted[2], repeated_error;
 static int resume_endpoint;
@@ -125,7 +200,7 @@ static unsigned auth_region;
 
 static void emit(uint64_t pointer, uint32_t status, uint32_t control)
 {
-    xhci_trb_t *event=&s_hc->evt[event_write];
+    xhci_trb_t *event=&s_hc->evt.trb[event_write];
     event->param=pointer; event->status=status;
     event->control=control | (event_cycle ? TRB_CYCLE : 0);
     if (++event_write==RING_TRBS) { event_write=0; event_cycle^=1; }
@@ -223,10 +298,21 @@ static void test_controller_step(void)
             CHECK(data->status==(uint32_t)command[2]+3);
             if (s_hc->bt_probe && s_hc->bt_probe->runtime) {
                 CHECK(data->param==(uintptr_t)(s_hc->bt_probe->tx.buffer+512));
+                // The Classic setup: each command whole, the name "os64" in
+                // 248 bytes, within the 258 the command storage holds.
+                static const uint16_t setup_ops[6]={0x0c56,0x0c13,0x0c24,0x080f,0x0c18,0x0c16};
+                for (unsigned i=0;i<6;i++) if (op==setup_ops[i]) classic_setup_seen|=1u<<i;
+                if (op==0x0c13) {
+                    CHECK(command[2]==248 && !memcmp(command+3,"os64",4));
+                    for (unsigned i=7;i<3+248;i++) CHECK(!command[i]);
+                }
                 uint8_t reply[14]={0x0e,4,1,op&255,op>>8,0};
                 unsigned n=6;
                 if (op==0x1003) { n=14; reply[1]=12; reply[10]=0x40; reply[12]=1; }
                 if (op==0x1009) { n=12; reply[1]=10; reply[6]=0xab; }
+                // 1021-byte ACL packets, 8 of them; LE: 251 bytes, 3.
+                if (op==0x1005) { n=13; reply[1]=11; reply[6]=0xfd; reply[7]=3; reply[8]=64; reply[9]=8; reply[11]=8; }
+                if (op==0x2002) { n=9; reply[1]=7; reply[6]=251; reply[8]=3; }
                 if (op==0x0401) {
                     const uint8_t inquiry[]={0x0f,4,0,1,1,4, 1,1,0};
                     queue(inquiry,sizeof(inquiry),0);
@@ -304,6 +390,120 @@ static void test_controller_step(void)
     }
 }
 
+// The send slots (AUDIO_CLASSIC.md § T2): several ACL packets with the
+// controller at once, each in storage of its own, freed in the order they
+// were queued, each with its own deadline; a packet that cannot be carried
+// fails the transport and writes nothing. Run last: it ends with the
+// transport failed.
+static void send_slots(void)
+{
+    xhci_bt_probe_t *p=s_hc->bt_probe;
+    p->failed=false; p->tx_done=true; p->tx_slots=p->tx_oldest=0;
+    p->host=(bt_host_t){.initialized=true,.credits=1,.scan={.shared_controller=true}};
+    s_hc->control_slot=0;
+    uint8_t packet[BT_TX_SLOT_BYTES], zero[BT_TX_SLOT_BYTES]={0}, page[512], command[258];
+    uint64_t trb[BT_TX_SLOTS];
+    xhci_trb_t ev;
+    memset(command,0xc3,sizeof(command)); memcpy(p->tx.buffer+512,command,sizeof(command));
+    memcpy(page,p->tx.buffer,sizeof(page));
+
+    // Four of the largest packets, all in flight.
+    for (unsigned i=0;i<BT_TX_SLOTS;i++) {
+        memset(packet,0x10+i,sizeof(packet));
+        xhci_bt_acl_send(p,packet,sizeof(packet));
+        trb[i]=p->tx.pending_trb;
+        CHECK(!p->failed && p->tx_slots==i+1 && !p->tx_done);
+        const xhci_trb_t *queued=(void *)(uintptr_t)trb[i];
+        CHECK(queued->param==(uintptr_t)xhci_bt_tx_slot(p,i) && (queued->status&0x1ffff)==sizeof(packet));
+        CHECK(!memcmp(xhci_bt_tx_slot(p,i),packet,sizeof(packet)));
+    }
+    // None of them reached the command's bytes or the page bring-up sends from.
+    CHECK(!memcmp(p->tx.buffer+512,command,sizeof(command)) && !memcmp(p->tx.buffer,page,sizeof(page)));
+    for (unsigned i=0;i+1<BT_TX_SLOTS;i++)
+        CHECK(xhci_bt_tx_slot(p,i)+BT_TX_SLOT_BYTES<=xhci_bt_tx_slot(p,i+1));
+
+    // A completion for one that is not the oldest frees nothing, and is counted.
+    unsigned unmatched=p->tx.unmatched;
+    ev=(xhci_trb_t){.param=trb[2]};
+    CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    CHECK(p->tx_slots==BT_TX_SLOTS && p->tx.unmatched==unmatched+1 && !p->failed && !p->tx_done);
+    // In order, each frees its own slot and wipes it; the last makes the endpoint idle.
+    for (unsigned i=0;i<BT_TX_SLOTS;i++) {
+        ev=(xhci_trb_t){.param=trb[i]};
+        CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+        CHECK(p->tx_slots==BT_TX_SLOTS-1-i && p->tx_done==(i==BT_TX_SLOTS-1) && !p->failed);
+        CHECK(!memcmp(xhci_bt_tx_slot(p,i),zero,sizeof(zero)));
+        if (i+1<BT_TX_SLOTS) CHECK(xhci_bt_tx_slot(p,i+1)[0]==0x10+i+1);
+    }
+    // The slots are a ring: with two freed and two more sent, the fourth and
+    // the first are in use again, in that order.
+    for (unsigned i=0;i<3;i++) { packet[0]=0x40+i; xhci_bt_acl_send(p,packet,8); trb[i]=p->tx.pending_trb; }
+    ev=(xhci_trb_t){.param=trb[0]}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    ev=(xhci_trb_t){.param=trb[1]}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    packet[0]=0x50; xhci_bt_acl_send(p,packet,8); trb[3]=p->tx.pending_trb;
+    packet[0]=0x51; xhci_bt_acl_send(p,packet,8);
+    CHECK(p->tx_slots==3 && p->tx_oldest==2 && xhci_bt_tx_slot(p,2)[0]==0x42);
+    CHECK(xhci_bt_tx_slot(p,3)[0]==0x50 && xhci_bt_tx_slot(p,0)[0]==0x51);
+    ev=(xhci_trb_t){.param=trb[2]}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    ev=(xhci_trb_t){.param=trb[3]}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    ev=(xhci_trb_t){.param=p->tx.pending_trb}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    CHECK(p->tx_done && !p->tx_slots && !p->failed);
+
+    // Each slot has its own five seconds: a later send does not buy the
+    // oldest more time.
+    kTicksSinceStart+=10;
+    uint64_t first=kTicksSinceStart;
+    xhci_bt_acl_send(p,packet,8);
+    kTicksSinceStart=first+3*TICKS_PER_SECOND;
+    xhci_bt_acl_send(p,packet,8);
+    kTicksSinceStart=first+5*TICKS_PER_SECOND-1;
+    xhci_bt_runtime_poll(); CHECK(!p->host.failed && p->tx_slots==2);
+    kTicksSinceStart=first+5*TICKS_PER_SECOND;
+    xhci_bt_runtime_poll();
+    CHECK(p->host.failed);
+    // What is still queued is the controller's to read, failed transport or
+    // not: neither slot is touched, and the endpoint is not called idle.
+    unsigned held=p->tx_oldest;   // the ring has moved on: these two are wherever it now is
+    CHECK(p->tx_slots==2 && !p->tx_done && xhci_bt_tx_slot(p,held)[0]==0x51 &&
+          xhci_bt_tx_slot(p,(held+1)%BT_TX_SLOTS)[0]==0x51);
+    // The same when the failure is the control endpoint's: the bulk
+    // endpoint is still running.
+    p->host=(bt_host_t){.initialized=true,.credits=1,.scan={.shared_controller=true}};
+    kTicksSinceStart=first; s_hc->control_slot=p->device->slot; s_hc->xfer_done=true; s_hc->xfer_cc=TRB_CC_USB_TRANSACTION_ERROR;
+    xhci_bt_runtime_poll();
+    CHECK(p->host.failed && p->tx_slots==2 && !p->tx_done && xhci_bt_tx_slot(p,held)[0]==0x51);
+    s_hc->control_slot=0; s_hc->xfer_cc=TRB_CC_SUCCESS;
+
+    // A fifth packet with four in flight, and one too long for a slot:
+    // the transport fails, nothing is queued and nothing is written.
+    // (The poll above wiped the idle command's bytes, as it does; plant them again.)
+    memcpy(p->tx.buffer+512,command,sizeof(command));
+    for (unsigned pass=0;pass<2;pass++) {
+        p->failed=false; p->tx_done=true; p->tx_slots=p->tx_oldest=0;
+        memset(packet,0x77,sizeof(packet));
+        if (pass==0) for (unsigned i=0;i<BT_TX_SLOTS;i++) xhci_bt_acl_send(p,packet,8);
+        unsigned queued=p->tx.ring.enqueue, in_flight=p->tx_slots;
+        uint8_t before[BT_TX_SLOTS*BT_TX_SLOT_STRIDE];
+        memcpy(before,p->tx.buffer+PAGE_SIZE,sizeof(before));
+        uint8_t long_packet[BT_TX_SLOT_BYTES+1]; memset(long_packet,0x99,sizeof(long_packet));
+        if (pass==0) xhci_bt_acl_send(p,packet,8);
+        else xhci_bt_acl_send(p,long_packet,sizeof(long_packet));
+        CHECK(p->failed && p->tx.ring.enqueue==queued && p->tx_slots==in_flight);
+        CHECK(!memcmp(before,p->tx.buffer+PAGE_SIZE,sizeof(before)));
+        CHECK(!memcmp(p->tx.buffer+512,command,sizeof(command)));
+    }
+    // A transfer that did not succeed fails the transport.
+    p->failed=false; p->tx_done=true; p->tx_slots=p->tx_oldest=0;
+    xhci_bt_acl_send(p,packet,8);
+    ev=(xhci_trb_t){.param=p->tx.pending_trb};
+    CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_USB_TRANSACTION_ERROR) && p->failed);
+    // Bring-up is as it was: its one transfer, matched by its own pointer.
+    p->failed=false; p->runtime=false; p->tx_done=false; p->tx.pending_trb=0x1234;
+    ev=(xhci_trb_t){.param=0x9999}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS) && !p->tx_done);
+    ev=(xhci_trb_t){.param=0x1234}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS) && p->tx_done && !p->failed);
+    p->runtime=true; p->failed=true;
+}
+
 static void runtime_transport(void)
 {
     xhci_bt_probe_t *p=s_hc->bt_probe;
@@ -346,7 +546,7 @@ static void runtime_transport(void)
     xhci_bt_runtime_poll();
     CHECK(bt_releases==1 && s->phase==BT_LE_STOPPED && p->device->ep0.enqueue==enqueued);
     CHECK(mouse->phase==BT_LE_READY && mouse_packets==1 && mouse_buttons==1);
-    CHECK(xhci_bluetooth_scan() && p->host.scan.phase==BT_SCAN_LE_PARAMS);
+    CHECK(xhci_bluetooth_scan(false) && p->host.scan.phase==BT_SCAN_LE_PARAMS);
     CHECK(!xhci_bluetooth_connection("reconnect",9));
     p->host.scan=(bt_scan_t){.shared_controller=true};
     p->failed=p->host.failed=true; s->phase=BT_LE_FAILED; s->bond.valid=true;
@@ -377,7 +577,13 @@ static void bond_maintenance(void)
     CHECK(xhci_bluetooth_connection("save",4)); store_fail=false;
     xhci_bluetooth_maintain(); CHECK(!p->host.peers[0].manager.dirty && store_exists && bond_saves==2);
     p->host.peers[0].manager=(bt_manager_t){0}; p->host.peers[0].le=(bt_le_t){.shared_controller=true};
+    uint64_t rings=kUsbDoorbell.rings;
     xhci_bluetooth_maintain(); CHECK(p->host.peers[0].manager.loaded && p->host.peers[0].manager.automatic && p->host.peers[0].le.bond.valid);
+    // The worker publishes the restored bond and rings kusb; the connection
+    // policy is timing, and runs in kusb's pass, not here.
+    CHECK(kUsbDoorbell.rings==rings+1 && !p->host.peers[0].manager.scan_owned);
+    s_hc->control_slot=0; p->tx_done=true;
+    xhci_bt_runtime_poll();
     CHECK(p->host.peers[0].manager.scan_owned && p->host.scan.phase==BT_SCAN_LE_PARAMS);
     // A completed scan hands off to connection in USB polling, without a worker visit.
     p->host.scan.phase=BT_SCAN_DONE; p->host.scan.count=1;
@@ -408,6 +614,106 @@ static void bond_maintenance(void)
     puts("PASS: worker storage outside poll lock, restore, write failure and forget racing a save");
 }
 
+// The Classic bond through the transport: read once the host is up with
+// its slot, given to the link (a bond made as another adapter is none),
+// saved when the link changes it, the dirty mark cleared only if nothing
+// changed meanwhile, a failed save tried again later; the timeline and
+// the log follow the link.
+static void classic_maintenance(void)
+{
+    xhci_bt_probe_t *p=s_hc->bt_probe;
+    bt_host_t *h=&p->host;
+    p->failed=false; s_hc->control_slot=0; p->tx_done=true;
+    *h=(bt_host_t){.initialized=true,.credits=1,.scan={.shared_controller=true}};
+    for(unsigned i=0;i<BT_HOST_PEERS;i++) { h->peers[i].manager.loaded=true; h->peers[i].le.shared_controller=true; }
+    const uint8_t local[6]={0xab,0,0,0,0,0};
+    memcpy(h->scan.address,local,6); h->scan.features[4]=0x40;
+    classic_exists=classic_fail=classic_change_during_save=false; classic_loads=classic_saves=0;
+    // Not available: nothing is read.
+    xhci_bluetooth_maintain(); CHECK(!classic_loads);
+    bt_classic_init(&h->classic,local); h->classic_available=true;
+    // No file: the link is told there is no bond, and nothing is paged.
+    xhci_bluetooth_maintain(); CHECK(classic_loads==1 && h->classic.bond_loaded && !h->classic.bond.valid);
+    CHECK(!h->classic_auto && !h->classic_page_at && !h->classic_storage);
+    xhci_bluetooth_maintain(); CHECK(classic_loads==1 && !classic_saves);
+    // A bond on disk: loaded, and paged once.
+    bt_classic_bond_t bond={.valid=true,.key_type=4};
+    memset(bond.peer,0xa1,6); memcpy(bond.local,local,6); memset(bond.key,0x5c,16);
+    bt_classic_bond_encode(stored_classic,&bond); classic_exists=true;
+    bt_classic_init(&h->classic,local);
+    uint64_t rings=kUsbDoorbell.rings;
+    xhci_bluetooth_maintain();
+    CHECK(classic_loads==2 && h->classic.bond.valid && !memcmp(h->classic.bond.key,bond.key,16));
+    CHECK(h->classic_auto && h->classic_page_at && kUsbDoorbell.rings==rings+1);
+    // Another adapter's bond is none.
+    bond.local[0]^=1; bt_classic_bond_encode(stored_classic,&bond); bond.local[0]^=1;
+    bt_classic_init(&h->classic,local);
+    xhci_bluetooth_maintain(); CHECK(h->classic.bond_loaded && !h->classic.bond.valid && !h->classic_auto);
+    // An unreadable file: no bond, and the status says so.
+    classic_fail=true; bt_classic_init(&h->classic,local);
+    xhci_bluetooth_maintain(); CHECK(h->classic.bond_loaded && !h->classic.bond.valid);
+    CHECK(h->classic_storage && !strcmp(h->classic_storage,"saved bond unavailable or invalid"));
+    classic_fail=false;
+    // A bond the link made is saved, and the mark cleared.
+    h->classic.bond=bond; h->classic.bond_dirty=true;
+    xhci_bluetooth_maintain();
+    CHECK(classic_saves==1 && !h->classic.bond_dirty && !h->classic_storage && classic_exists);
+    bt_classic_bond_t back; CHECK(bt_classic_bond_decode(&back,stored_classic,sizeof(stored_classic)) && back.valid);
+    // A save that fails keeps the mark, says so, and waits ten seconds.
+    h->classic.bond.key[0]^=1; h->classic.bond_dirty=true; classic_fail=true;
+    xhci_bluetooth_maintain(); CHECK(classic_saves==2 && h->classic.bond_dirty && h->classic_storage);
+    xhci_bluetooth_maintain(); CHECK(classic_saves==2);
+    classic_fail=false;
+    kTicksSinceStart+=10*TICKS_PER_SECOND;
+    xhci_bluetooth_maintain(); CHECK(classic_saves==3 && !h->classic.bond_dirty && !h->classic_storage);
+    // Forgotten while the old bond is being written: the save that was
+    // under way does not clear the mark, and the next writes "no bond".
+    h->classic.bond.key[0]^=1; h->classic.bond_dirty=true; classic_change_during_save=true;
+    xhci_bluetooth_maintain();
+    CHECK(classic_saves==4 && h->classic.bond_dirty && !h->classic.bond.valid);
+    xhci_bluetooth_maintain();
+    CHECK(classic_saves==5 && !h->classic.bond_dirty);
+    CHECK(bt_classic_bond_decode(&back,stored_classic,sizeof(stored_classic)) && !back.valid);
+    // The timeline follows the link's phase; a stop with an error is said once.
+    bt_classic_bond_t saved=bond; h->classic.bond=saved;
+    h->classic.phase=BT_CLASSIC_PAGING;
+    uint64_t lines=s_timeline_count;
+    xhci_bt_runtime_poll();
+    CHECK(s_timeline_count==lines+1 && p->timeline_classic_phase==h->classic.phase);
+    const xhci_timeline_entry_t *line=&s_timeline[(s_timeline_count-1)%XHCI_TIMELINE];
+    CHECK(line->kind==XHCI_TL_CLASSIC_PHASE && line->slot==BT_HOST_CLASSIC_SLOT && line->to==BT_CLASSIC_PAGING);
+    CHECK(!strcmp(xhci_classic_phase_name(BT_CLASSIC_PAGING),"paging") && !strcmp(xhci_classic_phase_name(99),"?"));
+    xhci_bt_runtime_poll(); CHECK(s_timeline_count==lines+1);
+    // The log: a stop with an error is one line, said again only when the
+    // error changes or after the link was READY; a refused setup command once.
+    classic_stop_lines=classic_refused_lines=0;
+    h->classic.phase=BT_CLASSIC_STOPPED; h->classic.error="the page was not answered";
+    xhci_bt_runtime_poll(); xhci_bt_runtime_poll(); CHECK(classic_stop_lines==1);
+    h->classic.error="authentication failed"; xhci_bt_runtime_poll(); CHECK(classic_stop_lines==2);
+    h->classic.phase=BT_CLASSIC_READY; xhci_bt_runtime_poll();
+    h->classic.phase=BT_CLASSIC_STOPPED; xhci_bt_runtime_poll(); CHECK(classic_stop_lines==3);
+    h->classic.phase=BT_CLASSIC_IDLE; h->classic.error=NULL;
+    h->classic_setup_refused=true; h->classic_refused_opcode=0x0c56; h->classic_refused_status=0x0c;
+    xhci_bt_runtime_poll(); xhci_bt_runtime_poll(); CHECK(classic_refused_lines==1);
+    h->classic_setup_refused=false;
+    // `scan classic` reaches the host: an inquiry, then the LE scan.
+    h->classic=(bt_classic_t){0}; bt_classic_init(&h->classic,local);
+    h->scan=(bt_scan_t){.shared_controller=true}; h->scan.features[4]=0x40; h->owner=0; h->credits=1;
+    CHECK(xhci_bluetooth_scan(true) && h->scan.phase==BT_SCAN_INQUIRY_MODE && !h->scan.le_only);
+    h->scan=(bt_scan_t){.shared_controller=true}; h->scan.features[4]=0x60;
+    CHECK(!xhci_bluetooth_scan(true) && xhci_bluetooth_scan(false) && h->scan.phase==BT_SCAN_LE_PARAMS);
+    // And `slot 2` commands reach the link through the connection file.
+    h->scan=(bt_scan_t){.shared_controller=true};
+    // Not before the bond file has been read: the read would undo it.
+    CHECK(!xhci_bluetooth_connection("slot 2 connect 4c:87:5d:c3:b2:a1\n",33) && h->classic.phase==BT_CLASSIC_IDLE);
+    h->classic.bond_loaded=true;
+    CHECK(xhci_bluetooth_connection("slot 2 connect 4c:87:5d:c3:b2:a1\n",33) && h->classic.phase==BT_CLASSIC_PAGING);
+    char status[8192]; xhci_bluetooth_read(status,sizeof(status),2);
+    CHECK(strstr(status,"\nslot 2:\nkind: classic\nstate: paging\n"));
+    h->classic=(bt_classic_t){0}; h->classic_available=false;
+    puts("PASS: the Classic bond through the transport: load, another adapter's, unreadable, save, failure, forget racing a save; timeline, scan classic, slot 2");
+}
+
 static void scan_history(void)
 {
     xhci_bt_probe_t *p=s_hc->bt_probe;
@@ -418,7 +724,7 @@ static void scan_history(void)
     char out[4096];
     xhci_bluetooth_read(out,sizeof(out),0); CHECK(strstr(out,"last scan: none this boot"));
     kSystemCurrentTime=1791475200; kTicksSinceStart=1000;
-    CHECK(xhci_bluetooth_scan()); xhci_bt_runtime_poll();
+    CHECK(xhci_bluetooth_scan(false)); xhci_bt_runtime_poll();
     xhci_bluetooth_read(out,sizeof(out),0);
     CHECK(strstr(out,"last scan: background LE; active"));
     CHECK(strstr(out,"last scan started: 2026-10-08 16:00:00 UTC (uptime ms: 10000)"));
@@ -459,7 +765,7 @@ static void scan_history(void)
     CHECK(strstr(out,"last scan started: 2026-10-08 16:00:10 UTC"));
     CHECK(strstr(out,"last scan finished: 2026-10-08 16:00:11 UTC"));
     kSystemCurrentTime=0; p->host.failed=false; p->host.owner=0; p->host.credits=1; p->failed=false; p->host.scan=(bt_scan_t){.shared_controller=true}; s_hc->control_slot=0;
-    CHECK(xhci_bluetooth_scan()); xhci_bt_runtime_poll();
+    CHECK(xhci_bluetooth_scan(false)); xhci_bt_runtime_poll();
     xhci_bluetooth_read(out,sizeof(out),0); CHECK(strstr(out,"last scan started: clock unavailable"));
     char tiny[2]; CHECK(xhci_bluetooth_read(tiny,sizeof(tiny),0)==1 && !tiny[1]);
     puts("PASS: scan timestamps cover manual/background rounds, failure, cleanup retention and missing clock");
@@ -473,9 +779,15 @@ int main(void)
         xhci_t hc={0}; s_hc=&hc; s_bluetooth_hc=NULL;
         uint64_t dcbaa[4]={0}, runtime[16]={0}; uint32_t doorbell[4]={0};
         xhci_trb_t events[RING_TRBS]={0};
-        hc.dcbaa=dcbaa; hc.rt=(void *)runtime; hc.db=doorbell; hc.evt=events;
-        hc.ctx_size=32; hc.evt_cycle=1;
+        // The adapter's port as enumeration leaves it: connected, enabled,
+        // powered, with its connect-change bit standing.
+        uint32_t operational[(0x400+0x10*8)/4]={0}; hc.op=(void *)operational; hc.max_ports=8;
+        uint32_t *portsc=&operational[XHCI_OP_PORTSC(3)/4];
+        *portsc=PORTSC_CCS|PORTSC_PED|PORTSC_PP|(1u<<17);
+        hc.dcbaa=dcbaa; hc.rt=(void *)runtime; hc.db=doorbell; hc.evt=(xhci_evt_ring_t){.trb=events,.size=RING_TRBS,.cycle=1};
+        hc.ctx_size=32;
         allocations=frees=secure_commands=resets=reads=ddc_commands=pump=0;
+        probe_allocs=probe_frees=0;
         failure_log[0]=0; deferred=false;
         endpoint_resets=halted_enqueue=0;
         resume_endpoint=-1; halted_trb=0;
@@ -490,9 +802,52 @@ int main(void)
         device.input_ctx=kmalloc_aligned(PAGE_SIZE); device.input_ctx_phys=(uintptr_t)device.input_ctx;
         device.dev_ctx=kmalloc_aligned(PAGE_SIZE); dcbaa[2]=(uintptr_t)device.dev_ctx;
         xhci_ax210_bringup(&device,config,sizeof(config));
+        // The probe was allocated once and is gone, whichever way it ended:
+        // a retained adapter lives on in the controller's own storage.
+        CHECK(probe_allocs==1 && probe_frees==1 && !probe_block);
         bool retained=scenario==COLD_RSA || scenario==COLD_ECDSA || scenario==WARM ||
             scenario==DEFERRED_ZERO_OPCODE_SUCCESS || scenario==BOOT_BULK_ERROR || scenario==BOOT_INTR_ERROR;
         CHECK((hc.bt_probe!=NULL)==retained);
+        // A retained adapter has its port's change bits acknowledged, with
+        // power written back and the enable bit NOT written (a one there
+        // disables the port). The model is plain memory, so what is read
+        // here is the value written.
+        if (retained) CHECK(*portsc==(PORTSC_PP|(1u<<17)));
+        else CHECK(*portsc==(PORTSC_CCS|PORTSC_PED|PORTSC_PP|(1u<<17)));
+        // The reset on the way down. Nothing is asked of a host that has
+        // not started; once it has, kusb's poll sends HCI_Reset and stops
+        // running the host, and only the reset's own Command Complete is
+        // the answer.
+        if (scenario==WARM) {
+            xhci_bt_probe_t *bt=hc.bt_probe;
+            s_bt_quiesce=BT_QUIESCE_NONE;
+            xhci_bluetooth_quiesce_begin();
+            CHECK(!xhci_bluetooth_quiescing());
+            bt->host.initialized=true;
+            xhci_bluetooth_quiesce_begin();
+            CHECK(xhci_bluetooth_quiescing() && s_bt_quiesce==BT_QUIESCE_ASKED);
+            hc.control_slot=0;
+            xhci_bt_runtime_poll();
+            CHECK(s_bt_quiesce==BT_QUIESCE_SENT && hc.control_slot==bt->device->slot);
+            CHECK(bt->tx.buffer[512]==0x03 && bt->tx.buffer[513]==0x0c && bt->tx.buffer[514]==0);
+            xhci_bt_runtime_poll();
+            CHECK(s_bt_quiesce==BT_QUIESCE_SENT);
+            static const uint8_t other[]={0x0e,0x04,0x01,0x01,0x10,0x00};
+            xhci_bt_runtime_event(bt,other,sizeof(other));
+            CHECK(xhci_bluetooth_quiescing());
+            static const uint8_t answer[]={0x0e,0x04,0x01,0x03,0x0c,0x00};
+            xhci_bt_runtime_event(bt,answer,sizeof(answer));
+            CHECK(!xhci_bluetooth_quiescing() && s_bt_quiesce==BT_QUIESCE_ANSWERED);
+            CHECK(xhci_bluetooth_quiesce_verdict()[0]=='r' && xhci_bluetooth_quiesce_verdict()[2]=='s');
+            CHECK(bt->recent_events==2 && bt->recent_event[1][3]==0x03);
+            // A reset the controller rejects ends the wait and is not called a reset.
+            s_bt_quiesce=BT_QUIESCE_SENT;
+            static const uint8_t rejected[]={0x0e,0x04,0x01,0x03,0x0c,0x0c};
+            xhci_bt_runtime_event(bt,rejected,sizeof(rejected));
+            CHECK(!xhci_bluetooth_quiescing() && s_bt_quiesce==BT_QUIESCE_REFUSED);
+            CHECK(xhci_bluetooth_quiesce_verdict()[2]=='f');
+            s_bt_quiesce=BT_QUIESCE_NONE; bt->host.initialized=false;
+        }
         if (scenario==CONFIGURE_FAIL || scenario==ALLOCATION_FAIL) CHECK(!secure_commands && !reads);
         else if (scenario==EARLY_BULK_ERROR) CHECK(reads==1 && !secure_commands && !endpoint_resets);
         else if (scenario==WARM || scenario==WRONG_ID) CHECK(!secure_commands && !resets && reads==1);
@@ -517,24 +872,72 @@ int main(void)
         if (scenario==DEFERRED_ZERO_OPCODE_SUCCESS) CHECK(!failure_log[0]);
         if (retained) {
             CHECK(hc.bt_probe==&hc.bluetooth && hc.bluetooth.device==&hc.bluetooth_device);
+            // The host was given slot 2's audio sink at bring-up.
+            CHECK(hc.bluetooth.host.a2dp_ops==&kBtA2dpSeamOps && !hc.bluetooth.host.a2dp.attached);
             CHECK(!released && allocations-frees==10 && dcbaa[2]);
             // The original stack device can change after enumeration returns.
             device.slot=99;
-            CHECK(!xhci_bluetooth_scan());
+            CHECK(!xhci_bluetooth_scan(false));
             xhci_bluetooth_start_manager();
             xhci_bluetooth_maintain(); CHECK(hc.bluetooth.host.peers[0].manager.loaded);
-            CHECK(!xhci_bluetooth_scan()); // Initial controller setup already owns discovery.
+            CHECK(!xhci_bluetooth_scan(false)); // Initial controller setup already owns discovery.
+            // Past the command's 258 bytes, the rest of the transmit
+            // storage's first page is nobody's: a guard pattern there must
+            // survive the start-up round, Write Local Name and all.
+            uint8_t *guard=hc.bluetooth.tx.buffer+512+258;
+            memset(guard,0xc5,PAGE_SIZE-512-258);
+            classic_setup_seen=0;
             for (unsigned poll=0;poll<5000 && hc.bluetooth.host.scan.phase!=BT_SCAN_DONE;poll++) {
                 kTicksSinceStart++;
                 xhci_drain_events(); xhci_bt_runtime_poll();
             }
             CHECK(hc.bluetooth.host.scan.phase==BT_SCAN_DONE && !hc.bluetooth.host.scan.radio_active);
+            for (unsigned i=0;i<PAGE_SIZE-512-258;i++) CHECK(guard[i]==0xc5);
+            // The controller has BR/EDR and took every Classic setup command:
+            // the Classic slot is there, with this adapter's address.
+            CHECK(classic_setup_seen==0x3f);
+            CHECK(hc.bluetooth.host.classic_available && !hc.bluetooth.host.classic_setup_refused);
+            CHECK(!memcmp(hc.bluetooth.host.classic.local,hc.bluetooth.host.scan.address,6));
             CHECK(!released && allocations-frees==10);
-            if (scenario==WARM) { runtime_transport(); bond_maintenance(); scan_history(); }
+            // The start-up round read the controller's ACL buffers, and the host
+            // took them before a later scan could clear the round's copy.
+            CHECK(hc.bluetooth.host.acl.known && !bt_acl_shared(&hc.bluetooth.host.acl));
+            CHECK(hc.bluetooth.host.acl.classic_size==1021 && hc.bluetooth.host.acl.classic_total==8);
+            CHECK(hc.bluetooth.host.acl.le_size==251 && hc.bluetooth.host.acl.le_total==3);
+            {
+                char status[2048];
+                bt_host_status(&hc.bluetooth.host,status,sizeof(status));
+                CHECK(strstr(status,"acl pools: classic 8 x 1021 bytes, in use 0; le 3 x 251 bytes, in use 0; "
+                                    "stray completions 0, bad completions 0\n")!=NULL);
+            }
+            if (scenario==WARM) { runtime_transport(); bond_maintenance(); classic_maintenance(); scan_history(); send_slots(); }
         } else if (scenario==DISABLE_FAIL) CHECK(!released && allocations-frees==10 && dcbaa[2]);
         else CHECK(released && allocations-frees==1 && !dcbaa[2]);
         // The command ring is controller-owned. Failed Disable Slot deliberately
         // retains device DMA as well; the fixture frees it after hardware stops.
+        for (unsigned i=0;i<allocations;i++) if (allocated[i]) free(allocated[i]);
+    }
+    // No memory for the probe: nothing is configured or asked, the slot is
+    // released, and no pointer to a probe is left behind.
+    {
+        xhci_t hc={0}; s_hc=&hc; s_bluetooth_hc=NULL;
+        uint64_t dcbaa[4]={0}, runtime[16]={0}; uint32_t doorbell[4]={0};
+        xhci_trb_t events[RING_TRBS]={0};
+        uint32_t operational[(0x400+0x10*8)/4]={0}; hc.op=(void *)operational; hc.max_ports=8;
+        hc.dcbaa=dcbaa; hc.rt=(void *)runtime; hc.db=doorbell; hc.evt=(xhci_evt_ring_t){.trb=events,.size=RING_TRBS,.cycle=1};
+        hc.ctx_size=32;
+        allocations=frees=secure_commands=resets=reads=probe_allocs=probe_frees=0;
+        fail_after=UINT32_MAX; scenario=WARM; event_write=0; event_cycle=1; released=false;
+        CHECK(ring_init(&hc.cmd));
+        xhci_device_t device={.slot=2,.port=3,.speed=1};
+        CHECK(ring_init(&device.ep0));
+        device.input_ctx=kmalloc_aligned(PAGE_SIZE); device.input_ctx_phys=(uintptr_t)device.input_ctx;
+        device.dev_ctx=kmalloc_aligned(PAGE_SIZE); dcbaa[2]=(uintptr_t)device.dev_ctx;
+        probe_refused=true;
+        xhci_ax210_bringup(&device,config,sizeof(config));
+        probe_refused=false;
+        CHECK(!probe_allocs && !probe_frees && !hc.bt_probe && !s_bluetooth_hc);
+        CHECK(released && !dcbaa[2] && !secure_commands && !reads && allocations-frees==1);
         for (unsigned i=0;i<allocations;i++) if (allocated[i]) free(allocated[i]);
     }
     puts("test_bt_loader_host: RSA/ECDSA upload, boot receive recovery, warm skip, failures and DMA cleanup passed");

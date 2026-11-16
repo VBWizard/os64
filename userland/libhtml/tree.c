@@ -390,6 +390,8 @@ static HNode *element(os64_html_parser_t *p, HToken *t, os64_html_ns_t ns, bool 
         if (!n->template_contents)
             return NULL;
         *h_word(n->template_contents) = (size_t)n;
+        HNode *document = (HNode *)os64_html_node_document(n);
+        h_meta(n->template_contents)->document = *h_word(document) ? (HNode *)*h_word(document) : document;
     }
     HNode *parent, *before;
     insertion_place(p, NULL, &parent, &before);

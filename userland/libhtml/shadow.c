@@ -405,9 +405,11 @@ int64_t os64_html_slot_changes(os64_html_document_t *doc,
          * ever computed or reported for it: a root whose every mark was
          * lost is in neither table. */
         d->slot_dirty_all = false;
-        for (const HNode *n = d->live_nodes; n; n = h_meta(n)->live_next)
-            if (os64_html_shadow_host(n))
-                h_slots_mark(d, n);
+        for (const HDoc *arena = d->group ? d->group->first : d; arena;
+             arena = d->group ? arena->group_next : NULL)
+            for (const HNode *n = arena->live_nodes; n; n = h_meta(n)->live_next)
+                if (os64_html_owns_node(doc, n) && os64_html_shadow_host(n))
+                    h_slots_mark(d, n);
     }
     /* Reported roots leave the list and the rest close up behind them, so
      * what is left keeps marking order for a later call. */

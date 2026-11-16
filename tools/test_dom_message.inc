@@ -670,11 +670,13 @@ static void dom_idle_failure_cases(void)
     /* Cancelling the one running, and every hole closed up. */
     dom_script(&f, "globalThis.mine=requestIdleCallback(()=>cancelIdleCallback(mine));", "idle: cancels itself");
     check(p2b_idle(&f, &outcome) && outcome.status == OS64_JS_OK, "idle: cancelling the running one is nothing");
-    size_t before = os64_dom_bytes(f.binding);
-    dom_script(&f, "{const f=()=>{};for(let round=0;round<10;round++){const hs=[];"
+    dom_script(&f, "{const f=()=>{},hs=[];for(let i=0;i<10000;i++)hs.push(requestIdleCallback(f));"
+                   "for(const h of hs)cancelIdleCallback(h)}", "idle: first cancelled batch establishes capacity");
+    size_t capacity_bytes = os64_dom_bytes(f.binding);
+    dom_script(&f, "{const f=()=>{};for(let round=0;round<9;round++){const hs=[];"
                    "for(let i=0;i<10000;i++)hs.push(requestIdleCallback(f));for(const h of hs)cancelIdleCallback(h)}}",
                "idle: 100000 asked for and cancelled");
-    check(os64_dom_bytes(f.binding) < before + 600 * 1024, "idle: the holes are closed up as they grow");
+    check(os64_dom_bytes(f.binding) <= capacity_bytes, "idle: cancelled batches reuse their existing capacity");
     check(os64_dom_idle_next(f.binding) == UINT64_MAX, "idle: none left");
     /* A page cannot size the binding's memory past its quota. */
     dom_script(&f, "{let refused=false;const f=()=>{};try{for(let i=0;i<2e6;i++)requestIdleCallback(f)}catch(e){refused=e.name}"

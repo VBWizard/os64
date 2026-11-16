@@ -3,6 +3,7 @@
 
 #include "dom/dom.h"
 #include "os64/js_engine.h"
+#include "os64/js_callbacks.h"
 #include "way/origin.h"
 #include "os64/mem.h"
 #include "os64/str.h"
@@ -14,6 +15,7 @@
 #define D_CLONE_HELD 34
 #include <canvas/canvas.h>
 #include <dom/canvas.h>
+#include <dom/media.h>
 #include <dom/pointer.h>
 
 /* Embedded consumers of libdom's document listener. Registration happens
@@ -88,13 +90,18 @@ enum {
     D_PROTO_TABLE_CELL, D_PROTO_TABLE_COL, D_PROTO_TABLE, D_PROTO_TABLE_ROW, D_PROTO_TABLE_SECTION, D_PROTO_ULIST,
     D_PROTO_BR, D_PROTO_DLIST, D_PROTO_DIRECTORY, D_PROTO_FONT, D_PROTO_HR, D_PROTO_HEADING, D_PROTO_HTML,
     D_PROTO_MENU, D_PROTO_PARAGRAPH, D_PROTO_PRE, D_PROTO_SPAN, D_PROTO_TABLE_CAPTION, D_PROTO_TITLE,
-    D_PROTO_COUNT
+    D_PROTO_SOURCE,
+    /* HTMLMediaElement's and HTMLAudioElement's (media.c), and
+     * HTMLVideoElement's (video.c), the media row's. */
+    D_PROTO_MEDIA, D_PROTO_AUDIO, D_PROTO_VIDEO, D_PROTO_COUNT
 };
-/* A set of kinds is a uint64_t, bit `kind` for each (D_KIND): the tables
- * that put a member on some kinds' prototypes. More kinds than its bits
- * need another representation. */
-_Static_assert(D_PROTO_COUNT <= 64, "a set of prototype kinds is one uint64_t");
-#define D_KIND(kind) ((uint64_t)1 << (kind))
+/* A set of kinds is a d_kinds_t, bit `kind` for each (D_KIND): the tables
+ * that put a member on some kinds' prototypes. GCC's 128-bit integer, so a
+ * set is still one value that `|`, `&` and `==` work on; more kinds than
+ * its bits need another representation. */
+__extension__ typedef unsigned __int128 d_kinds_t;
+_Static_assert(D_PROTO_COUNT <= 128, "a set of prototype kinds is one d_kinds_t");
+#define D_KIND(kind) ((d_kinds_t)1 << (kind))
 /* The wrapper's base family; SVG graphics refine its prototype separately. */
 int d_node_kind(const os64_html_node_t *node);
 /* Its nodeType (node.c): libhtml's kind, a CDATA section's 4. */
@@ -113,7 +120,7 @@ enum { K_STRING, K_STRING_NULL_EMPTY, K_URL, K_BASE_URL, K_FORM_ACTION, K_BOOLEA
 typedef struct {
     const char *property, *attribute;
     uint8_t kind;
-    uint64_t on;
+    d_kinds_t on;
     /* An enumerated attribute's keywords, and what it reads as missing and
      * as a value that is none of them. */
     const char *const *keywords;
@@ -147,7 +154,9 @@ int d_proto_parent(int kind);
  * properties of the ones from SCROLL on are the Modern Web arc's, installed
  * by its table's rows (d_event_handler), not with the rest; SLOTCHANGE's
  * by shadow trees' install, with that switch (shadow.c, observer.c fires
- * it).
+ * it); the CSS animation events' by Web Animations' install, whose update
+ * step fires them (webanimation.c); a media element's by the media row,
+ * whose media turn fires them, with ERROR's (media.c).
  * READYSTATECHANGE, VISIBILITYCHANGE and PRERENDERINGCHANGE are the
  * document's alone: HTML gives them an IDL property on Document and no
  * content attribute, so no element's on<type> attribute is a handler for
@@ -164,7 +173,12 @@ enum {
     D_EVENT_INVALID, D_EVENT_POINTERDOWN, D_EVENT_POINTERUP, D_EVENT_POINTERMOVE,
     D_EVENT_POINTEROVER, D_EVENT_POINTEROUT, D_EVENT_POINTERENTER, D_EVENT_POINTERLEAVE,
     D_EVENT_POINTERCANCEL, D_EVENT_GOTPOINTERCAPTURE, D_EVENT_LOSTPOINTERCAPTURE,
-    D_EVENT_MOUSEENTER, D_EVENT_MOUSELEAVE, D_EVENT_AUXCLICK, D_EVENT_SLOTCHANGE, D_EVENT_COUNT
+    D_EVENT_MOUSEENTER, D_EVENT_MOUSELEAVE, D_EVENT_AUXCLICK, D_EVENT_SLOTCHANGE,
+    D_EVENT_ANIMATIONSTART, D_EVENT_ANIMATIONEND, D_EVENT_ANIMATIONITERATION, D_EVENT_ANIMATIONCANCEL,
+    D_EVENT_LOADSTART, D_EVENT_PROGRESS, D_EVENT_SUSPEND, D_EVENT_ABORT, D_EVENT_EMPTIED, D_EVENT_STALLED,
+    D_EVENT_LOADEDMETADATA, D_EVENT_LOADEDDATA, D_EVENT_CANPLAY, D_EVENT_CANPLAYTHROUGH, D_EVENT_PLAYING,
+    D_EVENT_WAITING, D_EVENT_SEEKING, D_EVENT_SEEKED, D_EVENT_ENDED, D_EVENT_DURATIONCHANGE, D_EVENT_TIMEUPDATE,
+    D_EVENT_PLAY, D_EVENT_PAUSE, D_EVENT_RATECHANGE, D_EVENT_VOLUMECHANGE, D_EVENT_COUNT
 };
 /* The UI event interfaces (event.c, 0f's P8): UI Events' UIEvent and the
  * five that inherit it, then HTML's SubmitEvent, which inherits Event. An
@@ -174,28 +188,21 @@ enum {
     D_UI_NONE, D_UI_EVENT, D_UI_MOUSE, D_UI_KEYBOARD, D_UI_FOCUS, D_UI_INPUT, D_UI_COMPOSITION,
     D_UI_SUBMIT, D_UI_POINTER, D_UI_KINDS
 };
-/* A wrapper, or another engine value the binding holds strongly. A node's
- * wrapper also carries the node's listener list, in the order listeners and
- * handler slots were first added, and the element's views (its style, its
- * classList, a link's relList, its dataset, its attributes), each made
- * once. A view's own entry holds the element it stands for as `target`; so
- * does an Attr's while it is attached (attr.c). */
-struct DValue {
-    JSValue value;
-    DValue *next, *hash_next;
-    const os64_html_node_t *node, *target;
-    os64_dom_t *dom;
+/* What a DValue carries that most never need: an element's views, a
+ * document's collections, canvas state and the rest of what one kind of
+ * node or object asks for. A wrapper is made by the thousand and most hold
+ * nothing here, so this record is made the first time something needs one
+ * of its members (d_more) and read through d_more_peek, which answers an
+ * empty record for an entry that has none. */
+typedef struct DValueMore {
     DValue *style, *class_list, *rel_list, *for_list, *dataset, *attributes;
-    /* An Attr's own entry: its record (attr.c). */
-    struct DAttr *attr;
     /* Canvas bitmap and stable context identity belong to the element entry. */
     canvas_context_t *canvas;
     DValue *canvas_object;
     canvas_gradient_t *canvas_gradient;
     struct DPath2D *canvas_path2d;
     bool canvas_reset_pending;
-    bool image_reported;
-    DQuery *child_nodes, *children, *images, *forms, *links, *scripts, *elements;
+    DQuery *children, *images, *forms, *links, *scripts, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;
     /* A labelable element's labels, made once ([SameObject]). */
@@ -222,18 +229,34 @@ struct DValue {
     char *output_default;
     size_t output_default_len;
     bool output_default_set;
-    DListener *listeners, *last_listener;
-    /* The document the node was made in, copied from or last taken out of,
-     * when that is not the window's (implementation.c); NULL is the
-     * window's. Read only while the node is the root of a tree no document
-     * holds (d_node_document). */
-    const os64_html_node_t *document;
-    /* A document's DOMImplementation, made when first asked for, and what
-     * kind of document it is. */
+    /* A document's DOMImplementation, made when first asked for. */
     DValue *implementation;
+    /* Stable definition, even after adoption into another registry. */
+    struct DDefinition *custom_definition;
+} DValueMore;
+/* A wrapper, or another engine value the binding holds strongly: the
+ * members an entry of any kind is likely to use, among them a node's
+ * listener list, in the order listeners and handler slots were first
+ * added, and its childNodes, which scripts ask of nodes of every kind; the
+ * rest of what an entry can carry is in its DValueMore. A view's own entry holds the element it stands for as
+ * `target`; so does an Attr's while it is attached (attr.c). */
+struct DValue {
+    JSValue value;
+    DValue *next, *hash_next;
+    const os64_html_node_t *node, *target;
+    os64_dom_t *dom;
+    DListener *listeners, *last_listener;
+    DQuery *child_nodes;
+    /* An Attr's own entry: its record (attr.c). Here and not in the
+     * DValueMore because every Attr's entry has one. */
+    struct DAttr *attr;
+    /* Made by d_more, freed with the entry; NULL until then. */
+    DValueMore *more;
+    /* What kind of document a document's entry is (D_DOCUMENT_*). */
     uint8_t document_type;
     /* A DOMTokenList's own entry: the attribute it is over (D_TOKENS_*). */
     uint8_t tokens;
+    bool image_reported;
     /* A plain target's entry IN THE OBJECT (d_event_target_init): this
      * record is the first member of the object's own state, outside the
      * registry; `value` is the object itself, not a reference; its
@@ -242,7 +265,13 @@ struct DValue {
      * a listener is added or removed or a handler set on it (an
      * AbortSignal's GC clause, abort.c); nothing else reads it. */
     bool engine_held;
-    void (*listeners_changed)(JSRuntime *rt, DValue *entry);
+    /* Plain engine-held targets use the listener hook; node wrappers use the
+     * image generation. Sharing the slot keeps completion polling allocation
+     * free without growing every node's wrapper. */
+    union {
+        void (*listeners_changed)(JSRuntime *rt, DValue *entry);
+        uint64_t image_generation;
+    };
 };
 /* DValue.document_type: the window's document and createHTMLDocument's are
  * HTML documents; createDocument and `new Document()` make XML documents
@@ -265,6 +294,7 @@ struct DQuery {
     const os64_html_node_t **nodes;
     size_t count;
     uint64_t version;
+    os64_html_document_t *observed_document;
     uint64_t state_version;     /* SELECTED_OPTIONS: the control state it was read at */
     bool descendants, elements;
     /* A NodeList (as_node_list): its entries are reached by index alone,
@@ -278,7 +308,11 @@ struct DQuery {
  * removed record keeps its place until no dispatch can be walking it. */
 struct DListener {
     DListener *next;
+    os64_dom_t *owner, *callback_owner;
     JSValue callback;
+    /* A captured record owns callback in listener-settings mode. */
+    os64_js_callback_t captured;
+    os64_js_realm_t *callback_entry;
     char *type;
     /* Handler slots only: the content attribute's text when last looked at
      * (NULL: absent), so a changed or removed attribute is noticed. */
@@ -299,6 +333,8 @@ struct DListener {
 enum { D_LISTENER = 0, D_SLOT_EMPTY, D_SLOT_FUNCTION, D_SLOT_UNCOMPILED, D_SLOT_ERROR };
 struct DTimer {
     DTimer *next;
+    /* Callable reporting provenance; the timer queue still owns activity. */
+    os64_dom_t *report_owner;
     uint64_t due, delay;
     uint32_t id, nesting;
     /* The callback's script (d_callback_script); a string's is the page's. */
@@ -309,6 +345,9 @@ struct DTimer {
      * so a page could name it. */
     bool binding;
     JSValue callback;
+    /* In settings mode callback aliases captured.value; captured owns it. */
+    os64_js_callback_t captured;
+    os64_js_realm_t *callback_entry;
     char *source;
     size_t source_length;
     int argc;
@@ -338,19 +377,54 @@ void d_pointer_drain(os64_dom_t *);
 int d_event_in_task(os64_dom_t *, JSContext *, const os64_html_node_t *, const os64_dom_event_t *,
                     bool *, os64_js_outcome_t *);
 
+/* Installation in an explicit realm; the caller keeps the document/state.
+ * Runtime class registration refuses duplicate binding installation. */
+os64_dom_t *d_create_in_realm(os64_js_runtime_t *, os64_js_realm_t *,
+    os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
+
+#define D_REALMS 65
+struct os64_dom_cluster {
+    os64_js_runtime_t *runtime;
+    os64_html_group_t *html;
+    os64_page_state_group_t *page;
+    os64_dom_cluster_limits_t limits;
+    size_t bytes, kept_bytes, canvas_bytes, count;
+    os64_dom_t *members[D_REALMS];
+    DValue *buckets[D_BUCKETS];
+    struct DObservers *observers;
+    struct DCustomAgent *custom_agent;
+    size_t dispatching;
+    size_t provider_borrows;
+    uint64_t effect_generation, animation_serial;
+    bool sweep_pending;
+    bool poisoned, drained;
+    bool timer_settings, listener_settings, scheduled_settings, handler_settings, observer_settings, custom_settings;
+    bool recovery_enabled, recovering, recovery_running, recovery_completed;
+    bool streams_used; /* Self-hosted stream records require a separate unwind proof. */
+    uint64_t recovery_generation;
+};
+
 struct os64_dom {
     os64_js_runtime_t *runtime;
+    os64_js_realm_t *realm;
+    os64_dom_cluster_t *cluster;
     JSRuntime *engine;
     os64_html_document_t *document;
     os64_page_state_t *state;
     os64_dom_options_t options;
     size_t bytes, retained;
+    /* `bytes` by kind; the kinds sum to it. */
+    os64_dom_mem_t memory[OS64_DOM_MEM_KINDS];
     bool closed;
+    bool departure_finishing, departure_finished;
+    bool installing;
+    size_t provider_borrows;
     DPointer pointer;
     DMutationConsumer *mutation_consumers, canvas_mutations;
     bool mutation_installed;
     size_t canvas_bytes;
     os64_dom_image_provider_t image_provider;
+    os64_dom_media_provider_t media_provider;
     JSClassID canvas_class, gradient_class, metrics_class, path2d_class;
     os64_dom_text_provider_t canvas_text;
     os64_dom_geometry_provider_t geometry;
@@ -423,12 +497,16 @@ struct os64_dom {
     struct DAttr **attr_table;
     size_t attr_capacity, attr_attached;
     struct DAttrCursor {
+        os64_html_document_t *document;
         const os64_html_node_t *element;
         const os64_html_attr_t *head;
         const os64_html_attr_t **list;
         size_t capacity;
         uint64_t version;
         uint32_t count, found;
+        /* Whether any listed attribute is in a namespace: only then can
+         * two share a qualified name (attr.c's first-of-a-name rule). */
+        bool namespaced;
     } attr_cursor;
     /* Set while the map's own ordinary property is asked of the engine,
      * which the map's named properties then do not answer (attr.c). */
@@ -447,7 +525,7 @@ struct os64_dom {
     /* Listener and timer callbacks are the registry's other two lists. */
     size_t listeners_held, timers_held;
     uint32_t listen_counts[D_EVENT_COUNT];
-    uint64_t attribute_mask;
+    os64_dom_handler_mask_t attribute_mask;
     uint64_t attribute_version;
     bool attribute_scanned;
     unsigned dispatching;
@@ -470,12 +548,16 @@ struct os64_dom {
      * (importmap.c). */
     struct DImportParse *import_parse;
     DValue *invoking_entry;
+    const os64_js_callback_t *invoking_capture;
+    os64_js_realm_t *invoking_realm;
     DTimer *timers;
     size_t timer_count;
     uint32_t timer_id, timer_nesting;
     /* HTML's click-in-progress flags, one link per element.click() on the
      * C stack (window.c); and a form's firing-submission-events flags, one
-     * link per form whose validation or submit event is running. */
+     * link per form whose validation or submit event is running. These
+     * chains belong to the nodes' creation binding so adoption cannot
+     * bypass an active flag. */
     const struct DClicking *clicking, *submitting;
     DScript *scripts[64];
     char *url;
@@ -534,6 +616,9 @@ struct os64_dom {
     DValue *entry_prototypes[5];
     uint64_t time_origin_us;
     int64_t time_origin_epoch_us;
+    /* Last host samples remain binding-owned after service detachment. */
+    uint64_t clock_seen_ms, clock_seen_us;
+    os64_dom_timing_t timing_seen;
     /* PerformanceObserver (performance.c): the registered observers, each
      * held, in the order registered (d_alloc'd); whether the task that
      * delivers to them is queued; whether the navigation entry has been
@@ -552,6 +637,14 @@ struct os64_dom {
     /* The engine's typed-array `buffer` getter and ArrayBuffer's
      * `resizable` getter, taken before any page ran (crypto.c). */
     DValue *crypto_getters[2];
+    DValue *subtle; /* crypto.subtle's one SubtleCrypto (subtle.c) */
+    /* crypto.subtle's answers waiting for the task that settles them
+     * (subtle.c's THE SETTLE QUEUE): an array of [settle, value] entries,
+     * the waiting ones at [subtle_head, subtle_tail), and whether that task
+     * is queued. */
+    DValue *subtle_queue;
+    uint32_t subtle_head, subtle_tail;
+    bool subtle_drain_queued;
     /* Symbol.iterator as the engine made it, for reading an iterable a
      * page hands over (url.c). */
     DValue *iterator_symbol;
@@ -645,6 +738,35 @@ struct os64_dom {
     uint32_t animation_handle;
     uint64_t animation_due;
     bool animation_running;
+    /* Web Animations (webanimation.c): the animations in the order they
+     * were made, the pending playback events, the timeline's time as the
+     * last update step sampled it (and the face's clock less it), the
+     * buried keyframe data trees may still read, and the index of effects
+     * by target libflow reads (os64_dom_script_effects). */
+    struct DWaAnimation *wa_first, *wa_last;
+    size_t wa_count;
+    struct DWaEffect *wa_fx_first;      /* every KeyframeEffect, for the drain */
+    uint64_t wa_serial, wa_generation, wa_last_step;
+    uint64_t wa_borrowed_floor; /* oldest cluster epoch still borrowed by this host */
+    double wa_time, wa_face;
+    bool wa_sampled, wa_wanted, wa_stepped, wa_running, wa_index_stale;
+    bool wa_replace_check;              /* one finished or an effect moved: the next step looks for replaced ones */
+    struct DWaEvent *wa_events, *wa_events_last;
+    struct DWaData *wa_dead;
+    const os64_html_node_t **wa_index_nodes;
+    const struct garb_effect **wa_index_fx;
+    size_t wa_index_n;
+    DValue *wa_timeline, *wa_event_prototype, *wa_promise_then;
+    /* CSS animations (CSSAnimation and the CSS animation events): the
+     * host's (count NULL for none); the ones the last step saw, for their
+     * events; CSSAnimation's prototype and AnimationEvent's. */
+    os64_dom_css_animations_t wa_css;
+    struct DWaSeen *wa_seen;
+    size_t wa_nseen, wa_seen_cap;
+    uint32_t wa_css_pass;
+    uint64_t wa_css_version;            /* the host's version as the last step read it */
+    bool wa_css_listening;              /* whether the last step heard a CSS animation event's listener */
+    DValue *wa_css_prototype, *wa_css_event_prototype;
     DIdle *idle;
     size_t idle_count, idle_cap, idle_head, idle_split, idle_live, idle_runnable;
     uint32_t idle_handle;
@@ -669,6 +791,9 @@ struct os64_dom {
     size_t intersections_held;
     os64_dom_intersections_provider_t intersections_provider;
     void *intersections_opaque;
+    /* The media elements' records, their queued tasks and the host
+     * (media.c); NULL until the media row's install. */
+    struct DMediaElements *media_elements;
     /* The traversal row's walkers and iterators (walker.c). */
     struct DWalks *walks;
     /* DOM Range's records (range.c). */
@@ -686,8 +811,22 @@ struct os64_dom {
     struct DKept *kept;
     size_t body_bytes;
     uint64_t bodies_refused;
+    /* Ports remain reachable after their activity stops; this weak list lets
+     * cleanup release messages waiting on ports that have not started. */
+    struct DPort *ports;
+    void (*global_miss)(void *opaque, const char *name);
+    void *global_miss_opaque;
 };
 #define D_NO_SCRIPT UINT32_MAX
+/* Native walks not wholly described by the engine's task state. */
+bool d_custom_busy(const os64_dom_t *);
+bool d_observers_busy(const os64_dom_t *);
+bool d_intersections_busy(const os64_dom_t *);
+bool d_resizes_busy(const os64_dom_t *);
+void d_custom_cancel(os64_dom_t *);
+void d_observers_cancel(os64_dom_t *);
+void d_intersections_cancel(os64_dom_t *);
+void d_performance_cancel(os64_dom_t *);
 /* d_callback_script's answer when the runtime must stop: the exception is
  * pending, uncatchable, and the caller fails before it records anything. */
 #define D_SCRIPT_FAILED (UINT32_MAX - 1)
@@ -702,6 +841,38 @@ typedef struct { char *data; size_t length; } DString;
  * Native state is carried by private function data, never opaque host slots. */
 os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi);
 bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
+/* Scheduling eligibility is separate from retained-object usability. */
+bool d_activity_eligible(const os64_dom_t *dom);
+bool d_delivery_active(const os64_dom_t *dom);
+/* Service-creating methods refuse inactive owners after argument conversion. */
+bool d_require_active(os64_dom_t *dom, JSContext *ctx);
+/* Owner-thread provider loans include consuming and releasing borrowed output.
+ * The cluster count makes a sibling's outstanding loan visible to cleanup.
+ * Coverage is inventoried in IFRAME_F3_PROVIDERS.md. */
+bool d_provider_enter(os64_dom_t *dom);
+bool d_provider_begin(os64_dom_t *dom, JSContext *ctx);
+/* Native cleanup may borrow an inactive provider after checking its own
+ * safe-point barriers. This does not admit new page activity. */
+void d_provider_hold(os64_dom_t *dom);
+void d_provider_leave(os64_dom_t *dom);
+bool d_provider_busy(const os64_dom_t *dom);
+/* Read-only host queries borrow mutable provider state. Inactive documents
+ * return their saved samples without calling the host. Service creators
+ * must recheck activity after a clock callback before publishing work. */
+uint64_t d_host_now_ms(const os64_dom_t *dom);
+uint64_t d_host_now_us(const os64_dom_t *dom);
+/* 1 permits a host callback, 0 suppresses it, -1 leaves a lookup exception.
+ * activity is the operation's current document, not the callback's creator. */
+int d_delivery_eligible(os64_dom_t *activity, JSContext *ctx, JSValueConst callback);
+/* Function-only eligibility for document-neutral data iteration. `owner`
+ * identifies the runtime, not an activity document. Scheduled work must use
+ * d_delivery_eligible instead. A required inactive callback throws. */
+int d_callback_eligible(os64_dom_t *owner, JSContext *ctx, JSValueConst callback);
+bool d_require_callback(os64_dom_t *owner, JSContext *ctx, JSValueConst callback);
+/* A block of the binding's own, charged to max_bytes and counted under
+ * `kind` (MEMORY_CENSUS.md § 4); d_alloc is d_alloc_kind's OTHER. Zeroed.
+ * d_free reads the kind back from the block, so nothing else is passed. */
+void *d_alloc_kind(os64_dom_t *dom, size_t size, os64_dom_mem_kind_t kind);
 void *d_alloc(os64_dom_t *dom, size_t size);
 void d_free(os64_dom_t *dom, void *ptr);
 JSValue d_error(JSContext *ctx, const char *name, const char *message);
@@ -712,6 +883,23 @@ int d_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at);
 JSValue d_html_error(JSContext *ctx, int64_t status);
 JSValue d_page_error(JSContext *ctx, int64_t status);
 DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value);
+/* Undoes the latest d_retain, for a caller whose next step failed: `entry`
+ * must still be the registry's head, nothing retained since, and its value
+ * is freed with it. */
+void d_unretain(os64_dom_t *dom, JSContext *ctx, DValue *entry);
+/* An entry's DValueMore to read: its own, or an empty one when it has
+ * none. Never written through. */
+extern const DValueMore d_no_more;
+static inline const DValueMore *d_more_peek(const DValue *entry)
+{
+    return entry != NULL && entry->more != NULL ? entry->more : &d_no_more;
+}
+/* An entry's DValueMore to write, made zeroed the first time; NULL when the
+ * budget refuses it, with a QuotaExceededError pending on `ctx` when one is
+ * given. */
+DValueMore *d_more(os64_dom_t *dom, JSContext *ctx, DValue *entry);
+/* Frees the entry's DValueMore, after its members have been released. */
+void d_more_free(os64_dom_t *dom, DValue *entry);
 /* The function `name` of `from`, taken at install, before any page ran,
  * and kept for the binding's life (the registry owns the reference
  * d_retain is given): the engine's own, whatever a page later puts there.
@@ -745,6 +933,11 @@ JSValue d_wrap_constructed(os64_dom_t *dom, JSContext *ctx, const os64_html_node
  * names an Attr when the value is one, which is a Node with no place in the
  * tree. */
 const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
+/* Current document services, distinct from wrapper allocation/creation owner.
+ * The node must already have passed a brand and cluster-membership check. */
+os64_dom_t *d_owner(os64_dom_t *, const os64_html_node_t *);
+os64_dom_t *d_creation_owner(os64_dom_t *, const os64_html_node_t *);
+bool d_same_cluster(const os64_dom_t *, const os64_dom_t *);
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
 int d_point_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_point_dictionary(JSContext *, JSValueConst, double out[4]);
@@ -899,6 +1092,9 @@ int d_dispatch_plain_task(os64_dom_t *dom, JSContext *ctx, JSValueConst event, D
  * runs them. d_dispatch at window assumes a script's call is already
  * running, which a task the binding opened has not. */
 int d_dispatch_window_task(os64_dom_t *dom, JSContext *ctx, JSValueConst event, os64_js_outcome_t *outcome);
+/* The same at `node`, its path the node's ancestors as d_dispatch's. */
+int d_dispatch_node_task(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_html_node_t *node,
+                         os64_js_outcome_t *outcome);
 /* 0f's P1b row (event.c): EventTarget, its constructor, and Window. */
 int d_targets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* A host task's bookkeeping (event.c): an entry's outcome folded into the
@@ -1089,7 +1285,7 @@ int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The screen's width and height as `screen` reports them, in CSS pixels at
  * the page's zoom, and devicePixelRatio: what the device-* media features
  * and `resolution` answer (view.c). */
-void d_screen_media(const os64_dom_t *dom, double *width, double *height, double *ratio);
+bool d_screen_media(os64_dom_t *dom, double *width, double *height, double *ratio);
 int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* P1-W, window's low-hanging fruit (WINDOW_DOCUMENT.md § P1-W): the
@@ -1117,6 +1313,18 @@ int d_image_data_view(os64_dom_t *, JSContext *, JSValueConst, canvas_rgba8_t *)
 /* The frames row (frames.c; IFRAME.md § The cluster and the window proxy):
  * the HTMLIFrameElement interface over D_PROTO_IFRAME, and its members. */
 int d_frames_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The media row (media.c): HTMLMediaElement, HTMLAudioElement, MediaError,
+ * TimeRanges, Audio, and the media events' handlers, then HTMLVideoElement
+ * (d_video_install). Its departure step closes the host's sessions and
+ * forgets queued tasks; drain lets go of the engine values the records
+ * hold; free frees the records. */
+int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* HTMLVideoElement (video.c), a media element that plays sound and no
+ * picture (AUDIO_YONDER.md § Y.4), over the HTMLMediaElement on window. */
+int d_video_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_media_elements_cancel(os64_dom_t *dom);
+void d_media_elements_drain(os64_dom_t *dom);
+void d_media_elements_free(os64_dom_t *dom);
 /* P2a, a script's failures (report.c; WINDOW_DOCUMENT.md § P2a). The row:
  * window's onerror, onunhandledrejection, onrejectionhandled and
  * reportError, document's onerror, ErrorEvent and PromiseRejectionEvent.
@@ -1148,6 +1356,35 @@ void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t s
  * getter's call found the runtime must stop: asked before the callback is
  * recorded, so the caller can fail with nothing done. */
 uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
+/* Callable realm's binding within this cluster, or the supplied fallback for
+ * non-functions/unbound realms. NULL leaves a realm-lookup exception pending. */
+os64_dom_t *d_callback_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
+/* Owning holders keep one callback value; captured.value aliases it in
+ * settings mode. Engine-held records trace value once. A borrowed invocation
+ * view may alias an existing registry root and must not be cleared. */
+typedef struct {
+    JSValue value;
+    os64_js_callback_t captured;
+    os64_js_realm_t *entry;
+} DScheduledCallback;
+#define D_SCHEDULED_CALLBACK_INIT {JS_UNDEFINED, OS64_JS_CALLBACK_INIT, NULL}
+bool d_scheduled_capture(os64_dom_t *, JSContext *, JSValueConst, DScheduledCallback *);
+bool d_observer_capture(os64_dom_t *, JSContext *, JSValueConst, DScheduledCallback *);
+bool d_custom_capture(os64_dom_t *, JSContext *, JSValueConst, DScheduledCallback *);
+int d_captured_eligible(os64_dom_t *, JSContext *, const DScheduledCallback *);
+bool d_scheduled_live(JSContext *, const DScheduledCallback *);
+void d_scheduled_clear(os64_dom_t *, DScheduledCallback *);
+void d_scheduled_call(os64_dom_t *, const DScheduledCallback *, JSValueConst,
+                      int, JSValueConst *, os64_js_outcome_t *);
+JSValue d_scheduled_invoke(os64_dom_t *, JSContext *, const DScheduledCallback *,
+                           JSValueConst, int, JSValueConst *);
+JSValue d_scheduled_construct(os64_dom_t *, JSContext *, const DScheduledCallback *);
+
+/* Record reporting provenance without moving a revoked-proxy error from
+ * invocation to registration. A catchable lookup failure uses the registering
+ * binding; a sticky failure returns D_SCRIPT_FAILED. */
+uint32_t d_callback_record(os64_dom_t *dom, JSContext *ctx, JSValueConst function,
+                           os64_dom_t **report_owner);
 /* Around every call the binding makes into a callback of the page's: the
  * muting state (report.c's current_script reads it) as it stood, kept by
  * the caller, and the callback's script made the one being called, which
@@ -1168,10 +1405,9 @@ void d_errors_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * handler reached, until a checkpoint leaves nothing. A rejection no
  * handler cancelled is the task's failure. */
 void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome);
-/* As a task named `task` closes: the binding's own report (d_report's first
- * error) is the outcome when that is OK, else a line told to the host, and
- * is cleared either way; and the rejections it only counted, past the ones
- * told one by one, are told as one line. */
+/* As a task named `task` closes, visit the cluster's bindings (or this one
+ * standalone binding). Each first report is folded into an OK outcome or
+ * told to its own host, then cleared; counted rejections get one summary. */
 void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome);
 /* After a script the host ran with os64_js_run (and a string timer the
  * binding did): what it left owed, settled in a task of its own named
@@ -1208,13 +1444,30 @@ int d_interface_class(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSCl
  * classes could not be learned. Nothing of the value is read. */
 #define D_VIEW_DATA_VIEW 12
 int d_view_kind(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
+/* Whether a BufferSource's buffer is resizable (crypto.c), which WebIDL
+ * refuses for an argument without [AllowResizable]: 1, 0, or -1 with an
+ * exception pending. Read through the engine's own getters. */
+int d_resizable_buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
+/* `length` bytes of the host's entropy into `out` (crypto.c; the hook is
+ * options.entropy), through a scratch zeroed before it is freed: false
+ * with an OperationError pending when the host refuses or has no hook (a
+ * QuotaExceededError when the scratch cannot be had), and `out` untouched.
+ * The one source getRandomValues, randomUUID and crypto.subtle's keys
+ * draw from. */
+bool d_crypto_entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length);
+/* WebIDL's shape for an interface's members, in place on its prototype
+ * (window.c): each own operation enumerable, as d_method makes none, and
+ * each attribute's functions named "get x" and "set x", as d_accessor makes
+ * them nameless. `constructor` and symbol-keyed properties keep theirs. */
+int d_idl_members(JSContext *ctx, JSValueConst prototype);
+/* crypto.subtle, SubtleCrypto and CryptoKey on `crypto_prototype`
+ * (subtle.c); crypto.c calls it on a secure page only. */
+int d_subtle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSValueConst crypto_prototype);
 /* DOCUMENTS OF THEIR OWN (implementation.c). document.implementation and
  * DOMImplementation's prototype, which every page has (classic), and the
  * DocumentType members. */
 int d_implementation_classic(os64_dom_t *dom, JSContext *ctx);
-/* A node's node document: a document itself; else the document its tree
- * hangs from; else, for a tree no document holds, the one it was made in
- * or last left (its root's record), the window's when there is none. */
+/* Native current Document, including unwrapped and detached nodes. */
 const os64_html_node_t *d_node_document(os64_dom_t *dom, const os64_html_node_t *node);
 /* Whether a node's node document is the window's: a node of a document
  * with no window navigates, submits and takes focus nowhere, compiles no
@@ -1224,12 +1477,10 @@ bool d_window_document(os64_dom_t *dom, const os64_html_node_t *node);
  * scripting, for a node of the window's document. What a fragment parse and
  * a serialization read `noscript` by. */
 bool d_scripting(os64_dom_t *dom, const os64_html_node_t *node);
-/* A verb is about to take `node` out of its tree: its record says which
- * document it leaves, for when it is a root. */
-void d_leaving(os64_dom_t *dom, const os64_html_node_t *node);
-/* A node made for, or copied from a node of, `document`: its record says
- * so, the window's leaving none. */
-void d_made_in(os64_dom_t *dom, const os64_html_node_t *node, const os64_html_node_t *document);
+/* Initialize a new detached node's native Document before exposure. */
+int64_t d_made_in(os64_dom_t *dom, const os64_html_node_t *node, const os64_html_node_t *document);
+JSValue d_wrap_in(os64_dom_t *, JSContext *, const os64_html_node_t *, const os64_html_node_t *);
+int d_document_templates(os64_dom_t *, JSContext *, const os64_html_node_t *);
 /* The kind of document `node` is (D_DOCUMENT_*); a node that is no
  * document is the window's kind. */
 int d_document_type(os64_dom_t *dom, const os64_html_node_t *node);
@@ -1254,9 +1505,33 @@ bool d_string_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString 
  * (http, https, ws, wss, ftp; a blob: address its inner http(s) address's),
  * else "null", an opaque origin. False when it does not fit in cap. */
 bool d_origin(const char *url, char *out, size_t cap);
-/* The binding's storage (storage.c): what os64_dom_drain commits, and what
- * os64_dom_free frees. */
-void d_storage_drain(os64_dom_t *dom);
+/* An address's components (the URL Standard § 6.1), read and set as a URL
+ * object's members read and set them (url.c), for URL and for the links'
+ * HTMLHyperlinkElementUtils (mixin.c), so the two cannot differ. */
+enum {
+    D_URL_HREF, D_URL_ORIGIN, D_URL_PROTOCOL, D_URL_USERNAME, D_URL_PASSWORD, D_URL_HOST, D_URL_HOSTNAME, D_URL_PORT, D_URL_PATHNAME,
+    D_URL_SEARCH, D_URL_SEARCH_PARAMS, D_URL_HASH, D_URL_TO_STRING, D_URL_CAN_PARSE, D_URL_PARSE
+};
+/* Component `which` of `href` (a parsed address, `length` bytes), as its
+ * getter answers it. */
+JSValue d_url_component(JSContext *ctx, const char *href, size_t length, int which);
+/* A setter's argument converted for component `which` into `text`, which
+ * the caller frees; false thrown. It runs the page's toString, so a caller
+ * converts FIRST and reads the address it sets after: the conversion may
+ * change, or free, that address. */
+bool d_url_setter_value(os64_dom_t *dom, JSContext *ctx, JSValueConst value, int which, DString *text);
+/* `href` with component `which` set to `text` (d_url_setter_value's) as its
+ * setter sets it: 1 with the new address, parsed, in `out`
+ * (OS64_DOM_URL_MAX); 0 when the setter leaves the address as it is (a
+ * value it refuses, or one that does not parse); -1 thrown. It runs no
+ * page code. */
+int d_url_rebuilt(os64_dom_t *dom, JSContext *ctx, const char *href, size_t length, int which,
+                  const DString *text, char *out);
+/* Final storage settlement (storage.c), then native map release. Drain
+ * returns the first provider error, -3 for serialization OOM or -4 for a
+ * borrower. Ordinary teardown still completes native cleanup; recovery
+ * requires zero before admitting independent sibling work. */
+int64_t d_storage_drain(os64_dom_t *dom);
 void d_storage_free(os64_dom_t *dom);
 /* The storage maps' steps so far (storage.c's s_steps), for the DOM host. */
 uint64_t d_storage_steps(void);
@@ -1299,14 +1574,18 @@ char *d_params_text(JSContext *ctx, JSValueConst value, size_t *length);
 /* Whether `value` is a URLSearchParams (XHR's send() treats one as it
  * treats a string when it rewrites a charset). */
 bool d_params_is(JSValueConst value);
-/* AbortSignal (abort.c). A signal's algorithms are C's: a fetch's abort,
- * by its request's token, and a dependent signal's. */
+/* AbortSignal (abort.c): native fetch/Streams algorithms and weak dependent
+ * signal links are separate from author event listeners. */
 JSValue d_signal_new(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype);
 bool d_signal_is(JSValueConst value);
 bool d_signal_aborted(JSValueConst signal, JSValue *reason, JSContext *ctx);
 int d_signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JSValueConst reason);
 int d_signal_follow(os64_dom_t *dom, JSContext *ctx, JSValueConst dependent, JSValueConst source);
 int d_signal_add_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
+/* Private self-hosted algorithms, never author event callbacks. The signal
+ * traces their holds; removal or abort releases them before further delivery. */
+int d_signal_add_internal(JSContext *ctx, JSValueConst signal, JSValueConst callback);
+void d_signal_remove_internal(JSContext *ctx, JSValueConst signal, JSValueConst callback);
 /* A fetch answered: its algorithm now aborts the Response whose state is
  * `answered` (NULL: there is no body to error, and the algorithm goes),
  * and the Response keeps this signal's state at *back, which this side
@@ -1315,6 +1594,7 @@ int d_signal_add_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
 void d_signal_fetch_answered(JSContext *ctx, JSValueConst signal, uint32_t token, void *answered, void **back);
 void d_signal_fetch_settled(JSRuntime *rt, void *signal, void **back);
 void d_signal_remove_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
+void d_signal_remove_fetch_rt(JSRuntime *rt, JSValueConst signal, uint32_t token);
 /* How many dependents a signal's weak set links (the DOM host's bound). */
 size_t d_signal_dependents(JSValueConst signal);
 /* The steps a signal's links took (abort.c): each source followed, each
@@ -1407,6 +1687,8 @@ struct DRequest {
     uint64_t id;
     DAnswer answer;
     DPart part;
+    os64_dom_network_t network; /* original producer, valid until this request ends */
+    void (*depart)(os64_dom_t *, DRequest *); /* native bookkeeping, no author callbacks */
     bool headed;                /* its head came: the body is under way */
     bool asked;                 /* the host has been asked for more and has not answered */
     JSValue held[3];            /* C-held: the registry's fourth list, drain releases them */
@@ -1451,7 +1733,7 @@ size_t d_streams_bytecode_kept(void);
  * over at the first read, and closed behind it; closed from its creation
  * when `length` is 0. */
 JSValue d_stream_new(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size_t length);
-/* Whether `value` is a ReadableStream of this realm: 1, 0, or -1 with the
+/* Whether `value` is a genuine ReadableStream in this cluster: 1, 0, or -1 with the
  * exception pending. */
 int d_stream_is(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
 /* A stream's state, as a body asks it: 1 yes, 0 no, -1 an exception.
@@ -1693,10 +1975,22 @@ int d_message_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 double d_performance_now(const os64_dom_t *dom);
 int d_animation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_animation_drain(os64_dom_t *dom);
+/* Web Animations (webanimation.c): the row; the drain, which lets go of
+ * every animation and buries its data; and the free, which frees what is
+ * buried (no layout reads an effect once the binding is freed). */
+int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_web_animations_drain(os64_dom_t *dom);
+void d_web_animations_cancel(os64_dom_t *dom);
+void d_web_animations_free(os64_dom_t *dom);
+/* The document timeline sampled at `now` (performance.now()'s clock): a
+ * frame-callback batch's timestamp is the timeline's time in its
+ * callbacks (animation.c). */
+void d_web_animations_sample(os64_dom_t *dom, double now);
 int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* What os64_dom_drain releases (the messages' values and clones, the idle
  * callbacks), and what os64_dom_free frees (the idle entries). */
 void d_message_drain(os64_dom_t *dom);
+void d_message_cancel(os64_dom_t *dom);
 void d_idle_drain(os64_dom_t *dom);
 void d_idle_free(os64_dom_t *dom);
 /* MessageEvent (event.c): the interface, and one made for a dispatch:
@@ -1747,13 +2041,17 @@ const os64_html_node_t *d_document_element(const os64_html_node_t *document);
 const os64_html_node_t *d_document_part(const os64_html_node_t *document, bool body);
 /* An object's own [Symbol.toStringTag] (classic.c), as an interface's. */
 int d_string_tag(JSContext *ctx, JSValueConst object, const char *name);
-/* ATTRIBUTES (attr.c). THE ONE DOOR: every attribute the binding sets or
- * removes goes through d_set_attr to libpage's verb, so that a removal
- * detaches the Attr that stood for the attribute, with its last value.
- * libhtml's status; on a refusal the attribute and its Attr are as they
- * were. */
+/* ATTRIBUTES (attr.c). THE ONE DOOR, under two names: every attribute the
+ * binding sets or removes goes through d_set_attr (by qualified name, the
+ * first of that name, a new one in no namespace) or d_set_attr_ns (by
+ * namespace, NULL for none, and the local part of `name`; a new one takes
+ * `name` and `ns`) to libpage's verbs, so that a removal detaches the Attr
+ * that stood for the attribute, with its last value. libhtml's status; on a
+ * refusal the attribute and its Attr are as they were. */
 int64_t d_set_attr(os64_dom_t *dom, const os64_html_node_t *node, const char *name,
                    const char *value, size_t length, bool remove);
+int64_t d_set_attr_ns(os64_dom_t *dom, const os64_html_node_t *node, const char *ns, const char *name,
+                      const char *value, size_t length, bool remove);
 /* Whether a value is an Attr of this binding. */
 bool d_is_attr(os64_dom_t *dom, JSValueConst value);
 /* importNode's and adoptNode's Attr halves (DOM § 4.5): a detached copy
@@ -1792,7 +2090,19 @@ uint64_t d_attr_steps(void);
 bool d_prefix_valid(const char *text, size_t length);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
 int d_style_install(os64_dom_t *dom, JSContext *ctx);
-extern JSClassExoticMethods d_node_exotic;
+/* Sets `name: value` in the element's style attribute, as
+ * style.setProperty(name, value) does; an empty value removes it. */
+JSValue d_style_write(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const char *name,
+                      const char *value);
+extern JSClassExoticMethods d_node_exotic, d_style_exotic;
+/* The longhands (libgarb's garb_prop_t indices) the property `name` stands
+ * for, its `length` bytes compared ASCII case folded, into `props` (at
+ * least D_LONGHANDS_MAX): a longhand stands for itself, a shorthand, alias
+ * or flow-relative name for what libgarb sets when it is given a CSS-wide
+ * keyword (view.c's table, learned once). 0 for a name libgarb does not
+ * read, or one that sets more than D_LONGHANDS_MAX; -1 on no memory. */
+#define D_LONGHANDS_MAX 16
+int32_t d_longhands(os64_dom_t *dom, const char *name, size_t length, int32_t *props);
 /* ── Custom elements (custom.c; docs/design/pending/CUSTOM_ELEMENTS.md) ──
  * The row: CustomElementRegistry, window.customElements and the document's
  * listener. HTMLElement's constructor, which the interfaces row makes and
@@ -1817,6 +2127,15 @@ int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *doc
  * fragment's (createContextualFragment). 0, or -1 with an exception
  * pending. */
 int d_custom_upgrade_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root);
+/* Borrowed native transaction scope; mutations publish without entering JS. */
+typedef struct DAdopting {
+    struct DAdopting *previous;
+    const os64_html_node_t *first, *from, *to;
+    size_t count;
+} DAdopting;
+void d_adopting_begin(os64_dom_t *, DAdopting *, const os64_html_node_t *, const os64_html_node_t *);
+void d_adopting_end(os64_dom_t *, DAdopting *);
+void d_custom_changed(os64_dom_t *, const os64_html_change_t *);
 /* adoptNode moved `root`'s tree from document `from` to `to`: each custom
  * element in it is owed an adoptedCallback. */
 void d_custom_adopted(os64_dom_t *dom, const os64_html_node_t *root, const os64_html_node_t *from,

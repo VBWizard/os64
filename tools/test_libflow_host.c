@@ -268,6 +268,7 @@ typedef struct {
     int32_t n;
     garb_cascade_t *cascade;
     flow_env_t env;
+    const void *script;     // the script effects a case hands its layouts (test_libflow_script.inc)
 } Sheeted;
 
 static void sheeted_open(Sheeted *p, const char *html, double width, double height)
@@ -368,6 +369,8 @@ static void style_case(const char *name, const char *html, const char *expected)
 #include "test_libflow_attrs.inc"
 #include "test_libflow_style.inc"
 #include "test_libflow_boxes.inc"
+#include "test_libflow_buttons.inc"
+#include "test_libflow_percent_height.inc"
 #include "test_libflow_layout.inc"
 #include "test_libflow_tables.inc"
 #include "test_libflow_cascade.inc"
@@ -1408,6 +1411,7 @@ static void layout_sweep(void)
 #include "test_libflow_cliptext.inc"
 #include "test_libflow_motion.inc"
 #include "test_libflow_computed.inc"
+#include "test_libflow_script.inc"
 #include "test_libflow_restyle.inc"
 #include "test_libflow_snapshot.inc"
 #include "test_libflow_shadow.inc"
@@ -1448,6 +1452,7 @@ int main(int argc, char **argv)
         computed_round1_cases();
         computed_round2_cases();
         computed_svg_cases();
+        conic_computed_cases();
         text_teardown();
         printf("libflow: %d checks, %d failed%s\n", checks, failures,
                live != 0 ? " (AND LEAKED)" : "");
@@ -1505,15 +1510,35 @@ int main(int argc, char **argv)
     bool floats = argc == 2 && strcmp(argv[1], "--floats") == 0;
     bool cliptext = argc == 2 && strcmp(argv[1], "--cliptext") == 0;
     bool motion = argc == 2 && strcmp(argv[1], "--motion") == 0;
-    // `--batch-a`: the Modern Web arc's slice 4 alone, in seconds; and
+    // `--batch-a`: the Modern Web arc's slice 4 alone, in seconds;
     // `--origin`, test_libflow_origin.inc's cases alone, for
-    // test_libflow_origin_mutants.py.
+    // test_libflow_origin_mutants.py; and `--percent-height`,
+    // test_libflow_percent_height.inc's with the flex, grid, positioned and
+    // grafted layouts whose heights it reaches, for
+    // test_libflow_percent_height_mutants.py.
     bool origin = argc == 2 && strcmp(argv[1], "--origin") == 0;
-    if (origin || (argc == 2 && strcmp(argv[1], "--batch-a") == 0)) {
+    bool percent = argc == 2 && strcmp(argv[1], "--percent-height") == 0;
+    // `--script-effects`: test_libflow_script.inc's cases alone, a script's
+    // effects and their composite, for test_web_animations_mutants.py.
+    bool scripted = argc == 2 && strcmp(argv[1], "--script-effects") == 0;
+    if (scripted) {
+        text_setup();
+        script_effect_cases();
+        text_teardown();
+        printf("libflow: %d checks, %d failed%s\n", checks, failures, live != 0 ? " (AND LEAKED)" : "");
+        return failures != 0 || live != 0 ? 1 : 0;
+    }
+    if (origin || percent || (argc == 2 && strcmp(argv[1], "--batch-a") == 0)) {
         text_setup();
         if (origin) {
             origin_cases();
             nowrap_atom_cases();
+        } else if (percent) {
+            percent_height_cases();
+            flex_cases();
+            grid_cases();
+            position_cases();
+            graft_cases();
         } else {
             batch_a_cases();
         }
@@ -1547,6 +1572,9 @@ int main(int argc, char **argv)
     batch_a_cases();
     pseudo_cases();
     boxes_cases();
+    button_cases();
+    percent_height_cases();
+    script_effect_cases();
     layout_cases();
     table_cases();
     table_bounds();
@@ -1586,6 +1614,7 @@ int main(int argc, char **argv)
     computed_round1_cases();
     computed_round2_cases();
     computed_svg_cases();
+    conic_computed_cases();
     filter_cases();
     fixed_cases();
     paint_cases();

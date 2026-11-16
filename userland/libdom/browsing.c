@@ -23,9 +23,8 @@
  *     a constant; for a root: frameElement null (no frame holds it),
  *     length 0, top and parent the window itself, origin the page's
  *     origin serialized (d_origin's, which storage keys on),
- *     isSecureContext whether the page's address is potentially
- *     trustworthy (libway's one judgement, way_url_trustworthy, which
- *     counts about:blank, what a binding with no address is), and
+ *     isSecureContext whether the page is a secure context
+ *     (d_secure_context, below), and
  *     originAgentCluster true (each page's runtime is its own, so its
  *     agent cluster is keyed by no more than its origin). top, parent and
  *     length are every page's (d_browsing_classic), the rest this file's
@@ -58,7 +57,7 @@
  * BarProps, external) take an assignment as window's own data property;
  * top, [LegacyUnforgeable], has no setter and cannot be redefined. */
 
-static JSClassID bar_slot, external_slot;
+static JSClassID bar_slot, external_slot, scheduled_job_slot;
 static int bar_mark, external_mark;
 
 /* What window answers from its browsing context (context_answer). */
@@ -101,6 +100,74 @@ static JSValue microtask(JSContext *ctx, int argc, JSValueConst *argv)
     return result;
 }
 
+/* A queued job owns the holder; its callback is a traced edge, not a second
+ * C root. Discarding or draining the engine job releases the capture too. */
+typedef struct {
+    os64_dom_t *activity, *report;
+    DScheduledCallback callback;
+    uint32_t script;
+} ScheduledJob;
+
+static void scheduled_job_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    ScheduledJob *job = JS_GetOpaque(value, os64_js_class_id(&scheduled_job_slot));
+    if (job) JS_MarkValue(rt, job->callback.value, mark);
+}
+
+static void scheduled_job_free(JSRuntime *rt, JSValue value)
+{
+    ScheduledJob *job = JS_GetOpaque(value, os64_js_class_id(&scheduled_job_slot));
+    if (job) {
+        d_scheduled_clear(job->activity, &job->callback);
+        js_free_rt(rt, job);
+    }
+}
+
+static JSValue scheduled_microtask(JSContext *ctx, int argc, JSValueConst *argv)
+{
+    (void)argc;
+    ScheduledJob *job = JS_GetOpaque(argv[0], os64_js_class_id(&scheduled_job_slot));
+    if (!job) return JS_ThrowInternalError(ctx, "Scheduled microtask holder is unavailable");
+    JSValue result = d_scheduled_invoke(job->activity, ctx, &job->callback, JS_UNDEFINED, 0, NULL);
+    /* The report binding is retained with the cluster. Avoid a checked
+     * context lookup here: terminal failure must keep its pending exception. */
+    if (JS_IsException(result)) job->report->thrown_script = job->script;
+    return result;
+}
+
+static JSValue queue_callback(os64_dom_t *dom, JSContext *ctx, JSValueConst function)
+{
+    DScheduledCallback callback = D_SCHEDULED_CALLBACK_INIT;
+    if (!d_scheduled_capture(dom, ctx, function, &callback)) return JS_EXCEPTION;
+    if (!d_require_active(dom, ctx) || !d_scheduled_live(ctx, &callback)) goto fail;
+    os64_dom_t *report;
+    uint32_t script = d_callback_record(dom, ctx, function, &report);
+    if (script == D_SCRIPT_FAILED) goto fail;
+    JSContext *owner = JS_GetFunctionRealm(ctx, function);
+    if (!owner) {
+        if (!d_exception_catchable(ctx)) goto fail;
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        owner = ctx;
+    }
+    os64_js_outcome_t out;
+    JSContext *activity = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &out);
+    JSContext *report_context = os64_js_realm_context(report->realm, OS64_JS_ABI_ID, &out);
+    if (!activity || !report_context) goto fail;
+    JSValue object = JS_NewObjectClass(ctx, (int)os64_js_class_id(&scheduled_job_slot));
+    if (JS_IsException(object)) goto fail;
+    ScheduledJob *job = js_malloc(ctx, sizeof(*job));
+    if (!job) { JS_FreeValue(ctx, object); goto fail; }
+    *job = (ScheduledJob){dom, report, callback, script};
+    callback = (DScheduledCallback)D_SCHEDULED_CALLBACK_INIT;
+    JS_SetOpaque(object, job);
+    int queued = JS_EnqueueJobOwned(report_context, owner, activity, scheduled_microtask, 1, &object);
+    JS_FreeValue(ctx, object);
+    return queued < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+fail:
+    d_scheduled_clear(dom, &callback);
+    return JS_EXCEPTION;
+}
+
 static const char *page_address(const os64_dom_t *dom)
 {
     return dom->url != NULL ? dom->url : "about:blank";
@@ -115,9 +182,20 @@ static const char *page_address(const os64_dom_t *dom)
  * window is the root of its tree, with no frame element, no child frames
  * and itself for top and parent; its address stands for HTML's top-level
  * creation URL, which for a root it is. */
+/* A SECURE CONTEXT: a page whose address is potentially trustworthy
+ * (libway's one judgement, way_url_trustworthy, which counts about:blank,
+ * what a binding with no address is), or a page read from disk. Secure
+ * Contexts would count a file: URL only through its origin, which the URL
+ * standard leaves opaque, and so not at all; Chrome and Firefox both count
+ * a file page secure, and a page yonder opens from /tests/pages is one, so
+ * this does too. Only the secure context changes: libway's trustworthiness,
+ * which the mixed-content rules ask, is untouched. */
 bool d_secure_context(const os64_dom_t *context)
 {
-    return way_url_trustworthy(page_address(context));
+    const char *url = page_address(context);
+    char scheme[OS64_URL_SCHEME_MAX];
+    if (os64_url_scheme_of(url, scheme, sizeof(scheme)) && os64_streq(scheme, "file")) return true;
+    return way_url_trustworthy(url);
 }
 
 static JSValue context_answer(os64_dom_t *context, JSContext *ctx, int question)
@@ -160,10 +238,28 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     case B_QUEUE_MICROTASK: {
         if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
             return JS_ThrowTypeError(ctx, "queueMicrotask needs a function");
-        uint32_t script = d_callback_script(dom, ctx, argv[0]);
+        if (dom->cluster && dom->cluster->scheduled_settings) return queue_callback(dom, ctx, argv[0]);
+        if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
+        os64_dom_t *report_owner;
+        uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
         if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
+        JSContext *owner = JS_GetFunctionRealm(ctx, argv[0]);
+        if (!owner) {
+            /* Enqueueing a revoked proxy keeps the ordinary callback error
+             * for execution. Discovery itself must not throw or hide a
+             * sticky engine failure. */
+            if (!d_exception_catchable(ctx)) return JS_EXCEPTION;
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            owner = ctx;
+        }
+        os64_js_outcome_t access;
+        JSContext *activity = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+        JSContext *report_context = os64_js_realm_context(report_owner->realm, OS64_JS_ABI_ID, &access);
+        if (!activity || !report_context) return JS_EXCEPTION;
         JSValueConst job[2] = {argv[0], JS_NewUint32(ctx, script)};
-        return JS_EnqueueJob(ctx, microtask, 2, job) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+        /* The job writes thrown_script through its execution binding. Keep
+         * that binding with the callable's report host, not the service owner. */
+        return JS_EnqueueJobOwned(report_context, owner, activity, microtask, 2, job) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }
     case B_ISOLATED: return JS_FALSE;
     case B_EXTERNAL:
@@ -213,6 +309,13 @@ int d_browsing_classic(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 
 int d_browsing_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
+    if (dom->cluster && dom->cluster->scheduled_settings) {
+        JSClassID id = os64_js_class_id(&scheduled_job_slot);
+        const JSClassDef definition = {.class_name = "ScheduledMicrotask",
+            .finalizer = scheduled_job_free, .gc_mark = scheduled_job_mark};
+        if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &definition) < 0)
+            return -1;
+    }
     static const struct { const char *name; int magic; bool writable; } kAttributes[] = {
         {"opener", B_OPENER, true}, {"closed", B_CLOSED, false},
         {"clientInformation", B_CLIENT_INFORMATION, true}, {"isSecureContext", B_CONTEXT + C_SECURE, false},

@@ -35,7 +35,7 @@ static const os64_html_node_t *dom_root(const os64_html_node_t *node)
 bool d_named_match(const os64_html_node_t *node, const char *name)
 {
     if (node->kind != OS64_HTML_ELEMENT || node->ns != OS64_HTML_NS_HTML || *name == '\0') return false;
-    const os64_html_attr_t *id = os64_html_attr(node, "id"), *named = os64_html_attr(node, "name");
+    const os64_html_attr_t *id = os64_html_attr_ns(node, NULL, "id"), *named = os64_html_attr_ns(node, NULL, "name");
     return (id != NULL && os64_streq(id->value, name)) || (named != NULL && os64_streq(named->value, name));
 }
 
@@ -64,7 +64,7 @@ bool d_classic_match(const os64_html_node_t *root,
     case D_QUERY_IMAGES: return node->tag == OS64_HTML_TAG_IMG;
     case D_QUERY_FORMS: return node->tag == OS64_HTML_TAG_FORM;
     case D_QUERY_LINKS:
-        return (node->tag == OS64_HTML_TAG_A || node->tag == OS64_HTML_TAG_AREA) && os64_html_attr(node, "href") != NULL;
+        return (node->tag == OS64_HTML_TAG_A || node->tag == OS64_HTML_TAG_AREA) && os64_html_attr_ns(node, NULL, "href") != NULL;
     case D_QUERY_SCRIPTS: return node->tag == OS64_HTML_TAG_SCRIPT;
     case D_QUERY_DOCUMENT_NAMES:
         return node->tag == OS64_HTML_TAG_FORM || node->tag == OS64_HTML_TAG_IMG;
@@ -81,10 +81,11 @@ bool d_classic_match(const os64_html_node_t *root,
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx,
                               const os64_html_node_t *node, unsigned kind)
 {
-    DValue *entry = d_find(dom, node);
-    DQuery **slot = kind == D_QUERY_IMAGES ? &entry->images : kind == D_QUERY_FORMS ? &entry->forms :
-                    kind == D_QUERY_LINKS ? &entry->links : kind == D_QUERY_SCRIPTS ? &entry->scripts :
-                    &entry->elements;
+    DValueMore *more = d_more(dom, ctx, d_find(dom, node));
+    if (more == NULL) return JS_EXCEPTION;
+    DQuery **slot = kind == D_QUERY_IMAGES ? &more->images : kind == D_QUERY_FORMS ? &more->forms :
+                    kind == D_QUERY_LINKS ? &more->links : kind == D_QUERY_SCRIPTS ? &more->scripts :
+                    &more->elements;
     if (*slot != NULL) return JS_DupValue(ctx, (*slot)->entry->value);
     const os64_html_node_t *root = kind == D_QUERY_CONTROLS ? dom_root(node) : node;
     JSValue value = d_special_collection(dom, ctx, root, kind, NULL);
@@ -308,6 +309,38 @@ enum { C_IMAGES, C_FORMS, C_ELEMENTS, C_STYLE, C_TITLE, C_NAME, C_SRC, C_WIDTH, 
  * own allocation budget bounds. */
 #define COOKIE_READ_FIRST (16 * 1024)
 
+/* Agent-derived members borrow the provider's text through interpretation
+ * and copying. Constant Navigator members need no identity-provider call. */
+static JSValue agent_member(os64_dom_t *dom, JSContext *ctx, int magic)
+{
+    if (!d_provider_begin(dom, ctx)) return JS_EXCEPTION;
+    const char *agent = dom->user_agent != NULL ? dom->user_agent(dom->user_agent_opaque) : NULL;
+    if (agent == NULL) agent = "yonder/1.0 (os64)";
+    const char *text = agent;
+    switch (magic) {
+    case C_APP_VERSION: {
+        const char *slash = os64_strchr(agent, '/');
+        text = slash != NULL ? slash + 1 : "";
+        break;
+    }
+    case C_PLATFORM:
+        text = contains(agent,"Windows") || contains(agent,"Win98") ? "Win32" :
+            contains(agent,"iPhone") ? "iPhone" : contains(agent,"Macintosh") ? "MacIntel" : "OS64 x86_64";
+        break;
+    case C_PRODUCT_SUB:
+        /* HTML's compatibility mode follows the browser identity the host
+         * supplies: Chrome, WebKit, or the Gecko-shaped fallback. */
+        text = contains(agent,"Chrome/") || contains(agent,"Safari/") ? "20030107" : "20100101";
+        break;
+    case C_VENDOR:
+        text = contains(agent,"Chrome/") ? "Google Inc." : contains(agent,"Safari/") ? "Apple Computer, Inc." : "";
+        break;
+    }
+    JSValue result = JS_NewString(ctx, text);
+    d_provider_leave(dom);
+    return result;
+}
+
 static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
                         JSValueConst *argv, int magic, JSValue *data)
 {
@@ -319,6 +352,7 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
     if (magic == C_COOKIE) {
         const os64_html_node_t *node = d_node(dom, ctx, self);
         if (node == NULL) return JS_EXCEPTION;
+        dom = d_owner(dom, node);
         if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "cookie requires a document");
         /* A document with no window is cookie-averse (HTML § 3.1.3), as
          * every document is when the host gives no provider. */
@@ -326,16 +360,22 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
         if (set) {
             DString text = {0};
             if (!d_string(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &text)) return JS_EXCEPTION;
+            if (!d_provider_begin(dom, ctx)) { d_string_free(dom, &text); return JS_EXCEPTION; }
             if (dom->cookies.set != NULL) dom->cookies.set(dom->cookies.opaque, text.data, text.length);
+            d_provider_leave(dom);
             d_string_free(dom, &text);
             return JS_UNDEFINED;
         }
+        if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
         if (dom->cookies.get == NULL) return JS_NewString(ctx, "");
         for (size_t cap = COOKIE_READ_FIRST; cap != 0 && cap <= SIZE_MAX / 2; cap *= 2) {
             char *buffer = d_alloc(dom, cap);
             if (buffer == NULL) return d_error(ctx, "QuotaExceededError", "DOM cookie quota exceeded");
             bool whole = true;
+            if (!d_provider_begin(dom, ctx)) { d_free(dom, buffer); return JS_EXCEPTION; }
             size_t n = dom->cookies.get(dom->cookies.opaque, buffer, cap, &whole);
+            d_provider_leave(dom);
+            if (!d_require_active(dom, ctx)) { d_free(dom, buffer); return JS_EXCEPTION; }
             if (!whole) {
                 d_free(dom, buffer);
                 continue;
@@ -363,37 +403,25 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
     if (magic >= C_USER_AGENT && magic <= C_JAVA_ENABLED) {
         if (!JS_IsObject(self) || JS_VALUE_GET_PTR(self) != JS_VALUE_GET_PTR(dom->navigator->value))
             return JS_ThrowTypeError(ctx, "Navigator member requires navigator");
-        const char *agent = dom->user_agent != NULL ? dom->user_agent(dom->user_agent_opaque) : NULL;
-        if (agent == NULL) agent = "yonder/1.0 (os64)";
         switch (magic) {
-        case C_USER_AGENT: return JS_NewString(ctx, agent);
+        case C_USER_AGENT: case C_APP_VERSION: case C_PLATFORM: case C_PRODUCT_SUB: case C_VENDOR:
+            return agent_member(dom, ctx, magic);
         case C_APP_NAME: return JS_NewString(ctx, "Netscape");
-        case C_APP_VERSION: {
-            const char *slash = os64_strchr(agent, '/');
-            return JS_NewString(ctx, slash != NULL ? slash + 1 : "");
-        }
-        case C_PLATFORM:
-            return JS_NewString(ctx, contains(agent,"Windows") || contains(agent,"Win98") ? "Win32" :
-                contains(agent,"iPhone") ? "iPhone" : contains(agent,"Macintosh") ? "MacIntel" : "OS64 x86_64");
-        /* HTML § 8.9.1.1's constants. productSub and vendor are the
-         * navigator compatibility mode's, the one the agent's browser is in:
-         * Chrome's, WebKit's (Safari), else Gecko's, whose vendor is none,
-         * which is also the truth for an agent no such browser wears. */
+        /* HTML § 8.9.1.1's fixed compatibility strings. */
         case C_APP_CODE_NAME: return JS_NewString(ctx, "Mozilla");
         case C_PRODUCT: return JS_NewString(ctx, "Gecko");
-        case C_PRODUCT_SUB:
-            return JS_NewString(ctx, contains(agent,"Chrome/") || contains(agent,"Safari/") ? "20030107" : "20100101");
-        case C_VENDOR:
-            return JS_NewString(ctx, contains(agent,"Chrome/") ? "Google Inc." :
-                contains(agent,"Safari/") ? "Apple Computer, Inc." : "");
         case C_VENDOR_SUB: return JS_NewString(ctx, "");
         case C_LANGUAGE: return JS_NewString(ctx, OS64_JS_LOCALE);
         case C_LANGUAGES: return JS_DupValue(ctx, dom->languages->value);
         /* Nothing tells a page the network went away, so it never has. */
         case C_ON_LINE: return JS_TRUE;
-        case C_COOKIE_ENABLED:
-            return JS_NewBool(ctx, dom->cookies.get != NULL &&
-                                   (dom->cookies.enabled == NULL || dom->cookies.enabled(dom->cookies.opaque)));
+        case C_COOKIE_ENABLED: {
+            if (!d_provider_begin(dom, ctx)) return JS_EXCEPTION;
+            bool enabled = dom->cookies.get != NULL &&
+                (dom->cookies.enabled == NULL || dom->cookies.enabled(dom->cookies.opaque));
+            d_provider_leave(dom);
+            return JS_NewBool(ctx, enabled);
+        }
         /* A page sizes a pool of workers by it, and there are no workers
          * here, so it is a middling machine's count rather than this one's. */
         case C_HARDWARE_CONCURRENCY: return JS_NewInt32(ctx, 4);
@@ -425,6 +453,7 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
     }
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
     if (magic == C_IMAGES || magic == C_FORMS) {
         if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx,"Expected a document");
         return d_classic_collection(dom,ctx,node,magic == C_IMAGES ? D_QUERY_IMAGES : D_QUERY_FORMS);
@@ -477,26 +506,45 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
 
 void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *), void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->user_agent = provider;
     dom->user_agent_opaque = opaque;
 }
 
 void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     if (cookies != NULL) dom->cookies = *cookies;
     else os64_memset(&dom->cookies, 0, sizeof(dom->cookies));
+}
+
+static void global_miss(void *opaque, const char *name)
+{
+    os64_dom_t *dom = opaque;
+    if (dom->global_miss != NULL && d_provider_enter(dom)) {
+        dom->global_miss(dom->global_miss_opaque, name);
+        d_provider_leave(dom);
+    }
 }
 
 void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const char *name),
                               void *opaque)
 {
+    if (dom == NULL || dom->closed || (heard != NULL && !d_delivery_active(dom))) return;
+    /* Failed realms cannot lend a context. Clear the native route before
+     * querying it; any remaining engine trampoline sees no host callback,
+     * and its DOM shell stays alive through engine destruction. */
+    if (heard == NULL) {
+        dom->global_miss = NULL;
+        dom->global_miss_opaque = NULL;
+    }
     os64_js_outcome_t outcome;
-    JSContext *ctx = dom != NULL && !dom->closed ? os64_js_context(dom->runtime, OS64_JS_ABI_ID, &outcome)
-                                                 : NULL;
-    if (ctx != NULL)
-        JS_SetGlobalMissHandler(ctx, heard, opaque);
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
+    if (ctx != NULL) {
+        dom->global_miss = heard;
+        dom->global_miss_opaque = heard != NULL ? opaque : NULL;
+        JS_SetGlobalMissHandler(ctx, heard != NULL ? global_miss : NULL, heard != NULL ? dom : NULL);
+    }
 }
 
 /* An interface object: there to be named, never to be called. */
@@ -674,11 +722,14 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"HTMLParagraphElement", D_PROTO_PARAGRAPH}, {"HTMLPreElement", D_PROTO_PRE},
         {"HTMLSpanElement", D_PROTO_SPAN}, {"HTMLTableCaptionElement", D_PROTO_TABLE_CAPTION},
         {"HTMLTitleElement", D_PROTO_TITLE},
+        {"HTMLSourceElement", D_PROTO_SOURCE},
     };
     /* HTMLIFrameElement's is the frames row's (frames.c), with its members:
-     * IFRAME.md's HTMLIFrameElement is one row. */
-    _Static_assert(sizeof(kInterfaces) / sizeof(kInterfaces[0]) == D_PROTO_COUNT - 1,
-                   "an interface object for each of the binding's prototypes but the frames row's");
+     * IFRAME.md's HTMLIFrameElement is one row. HTMLMediaElement's,
+     * HTMLAudioElement's and HTMLVideoElement's are the media row's
+     * (media.c, video.c), for the same reason. */
+    _Static_assert(sizeof(kInterfaces) / sizeof(kInterfaces[0]) == D_PROTO_COUNT - 4,
+                   "an interface object for each of the binding's prototypes but the frames and media rows'");
     /* Each interface object made so far, by prototype kind, borrowed from
      * the global that holds it; the table names a parent before its
      * children. */

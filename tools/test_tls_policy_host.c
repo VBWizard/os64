@@ -21,6 +21,8 @@ typedef struct { const char *name; const blob *der; tls_policy_reason reason; } 
 
 // Host-only atomic accounting; allocation injection is used outside threads.
 static size_t allocated, freed, allocation_calls, fail_allocation;
+// session_cache.c takes an os64 lock, whose contended path yields.
+void os64_yield(void) {}
 void *os64_malloc(size_t n)
 {
     size_t call = __atomic_add_fetch(&allocation_calls, 1, __ATOMIC_RELAXED);

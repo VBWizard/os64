@@ -208,7 +208,7 @@ USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
 # dependencies. The set goes on both volumes that currently carry /bin — the
 # ext2 root and the FAT lifeboat — with independent copies so damage to one
 # volume does not also eat the repair environment's libraries.
-USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libwebp.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libgarb.so userland/bin/libfreetype.so userland/bin/libmath.so userland/bin/libjs.so userland/bin/libdom.so userland/bin/libxml.so userland/bin/libsvg.so userland/bin/libdraw2d.so userland/bin/libcanvas.so
+USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libwebp.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libgarb.so userland/bin/libfreetype.so userland/bin/libmath.so userland/bin/libsound.so userland/bin/libav.so userland/bin/libmedia.so userland/bin/libjs.so userland/bin/libdom.so userland/bin/libxml.so userland/bin/libsvg.so userland/bin/libdraw2d.so userland/bin/libcanvas.so
 # The engine's pinned notice travels with both image copies of libjs.
 QUICKJS_LICENSE := userland/libjs/upstream/LICENSE
 
@@ -236,9 +236,10 @@ FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSerif.ttf DejaVuSer
 # machine with no network. Where each page came from is in
 # tools/html_corpus/SOURCES.json, which ships beside them. tools/pages holds
 # pages written here to show a feature beside Chrome (each says what to look
-# for), with the pictures they name.
+# for), with the pictures, sounds and videos they name.
 PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css tools/garb_corpus/*.html \
-                            tools/pages/*.html tools/pages/*.gif tools/pages/*.png tools/pages/*.webp tools/pages/*.jpg tools/pages/*.svg)
+                            tools/pages/*.html tools/pages/*.gif tools/pages/*.png tools/pages/*.webp tools/pages/*.jpg tools/pages/*.svg \
+                            tools/pages/*.mp3 tools/pages/*.wav tools/pages/*.mp4)
 
 # The same fixtures for the wire, staged alone: os64serve serves a directory
 # whole, and tools/html_corpus also holds the host harness's expected dumps,
@@ -517,7 +518,7 @@ ICON_ASSETS := $(sort $(wildcard $(ICON_ASSET_DIR)/*.png))
 ICON_MANIFEST := $(ICON_ASSET_DIR)/theme.conf
 ICON_METADATA := $(ICON_MANIFEST) $(ICON_ASSET_DIR)/provenance.json $(ICON_ASSET_DIR)/LICENSE
 
-$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/mouse.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf etc/icons.conf etc/roam.conf etc/file-associations.conf GNUmakefile
+$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/ffmpeg-LICENSE license/android-sbc-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/mouse.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf etc/icons.conf etc/roam.conf etc/file-associations.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -550,6 +551,12 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 	printf 'write license/freetype-LICENSE /etc/licenses/freetype.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write license/unicode-LICENSE /etc/licenses/unicode.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write license/libmath-LICENSE /etc/licenses/libmath.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'write license/speexdsp-LICENSE /etc/licenses/speexdsp.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	# FFmpeg's LGPL notice, and where its source is, travel with libav.so.
+	printf 'write license/ffmpeg-LICENSE /etc/licenses/ffmpeg.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	# The kernel carries Android's SBC encoder (kernel/ports/sbc), whose
+	# Apache 2.0 notice travels with the binary, as speexdsp's does.
+	printf 'write license/android-sbc-LICENSE /etc/licenses/android-sbc.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write $(BT_FIRMWARE_LICENSE) /etc/licenses/intel-bluetooth.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write %s /etc/licenses/quickjs.txt\n' "$(QUICKJS_LICENSE)" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'mkdir /etc/fonts\nwrite etc/fonts.conf /etc/fonts.conf\nwrite $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt /etc/licenses/DejaVu.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
@@ -593,7 +600,7 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/ffmpeg-LICENSE license/android-sbc-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -627,8 +634,7 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	# THE LIFEBOAT CARRIES THE PROOF HARNESS TOO (Chris's call, 2026-08-29):
 	# a lifeboat exists to be trusted while everything else is suspect, and one
 	# that cannot demonstrate the CPU, the kernel and the syscall floor are
-	# sound is asking to be taken on faith at the worst possible moment. It
-	# costs ~750KB of the 59MB this partition has spare.
+	# sound is asking to be taken on faith at the worst possible moment.
 	$(foreach t,$(USERLAND_TESTBINS),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(t) ::/tests/$(notdir $(t));)
 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,\
@@ -648,8 +654,15 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	# rather than a partition full of programs that cannot start. Iterated
 	# like the apps above — a second library added to USERLAND_LIBS must not
 	# be able to rebuild the image and still be missing from it.
+	# COPIED WITHOUT THEIR DWARF (objcopy --strip-debug), because the
+	# partition is small and the debug info is most of a library: nothing on
+	# a running os64 reads it (the kernel's stack traces read the symbol
+	# table, which is kept), and the debugger reads userland/bin on the host.
+	# `mdir -i disk/os64.img@@1048576 -/ ::` says what is left free.
+	@mkdir -p $(EXT2_STAGING)/lifeboat-lib
 	$(foreach l,$(USERLAND_LIBS),\
-	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(l) ::/lib/$(notdir $(l));)
+	    x86_64-elf-objcopy --strip-debug $(l) $(EXT2_STAGING)/lifeboat-lib/$(notdir $(l)) && \
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(EXT2_STAGING)/lifeboat-lib/$(notdir $(l)) ::/lib/$(notdir $(l));)
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 	# husk's startup script. It rides the FAT partition rather than root
@@ -685,6 +698,9 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/freetype-LICENSE ::/etc/licenses/freetype.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/unicode-LICENSE ::/etc/licenses/unicode.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libmath-LICENSE ::/etc/licenses/libmath.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/speexdsp-LICENSE ::/etc/licenses/speexdsp.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/ffmpeg-LICENSE ::/etc/licenses/ffmpeg.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/android-sbc-LICENSE ::/etc/licenses/android-sbc.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(BT_FIRMWARE_LICENSE) ::/etc/licenses/intel-bluetooth.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(QUICKJS_LICENSE) ::/etc/licenses/quickjs.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
@@ -714,7 +730,6 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	# kernel, and a running os64 can update BOTH through /fat. ISO and QEMU
 	# boots never see any of it: Limine prefers its own boot volume's conf
 	# (proven by decoy in both firmwares — see limine-hd.conf's header).
-	# ~4.3MB against the partition's ~54MB of headroom.
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/boot > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/boot/limine > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/EFI > /dev/null 2>&1

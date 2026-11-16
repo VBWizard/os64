@@ -247,10 +247,11 @@ object, invisible to callers:
   applies to the hop); `Proxy-Connection` is not sent. TLS through a
   proxy (`CONNECT`) is keyed by the tunnelled host as well and reused
   only for it.
-- **Not in this PR:** TLS session resumption (tickets are consumed and
-  discarded today, DEBTS § TLS 1.3), which would cut the first-connection
-  cost further; HTTP/2; pipelining (nobody speaks it). Each stays a row,
-  and the first is the next worth paying once this lands.
+- **Not in this PR:** TLS session resumption (it came later: TLS13.md
+  § Resumption), which cuts the first-connection
+  cost further; HTTP/2 (it came later too: HTTP2.md, where one connection
+  carries a host's requests at once); pipelining (nobody speaks it). Each
+  stays a row, and the first is the next worth paying once this lands.
 
 **What stops sending.** `Connection: close` leaves the fixed block; the
 request writer sends nothing for `Connection` on HTTP/1.1 (persistent is
@@ -349,11 +350,11 @@ says more than it did:
   absolute form, not by `CONNECT`, so every proxied connection is plain to
   the proxy and keyed by it alone; the brief's `CONNECT` clause has nothing
   to apply to.
-- **Concurrency is not capped.** The pool keeps at most six IDLE
-  connections to a key; it does not make a seventh fetch to a busy host
-  wait for one, as Chrome's six-per-host limit does. A page that asks for
-  a dozen sheets at once opens a dozen connections, which then carry the
-  rest of the page between them (DEBTS § libfetch).
+- **Concurrency was not capped** (it is now: HTTP2.md § 2.2, H2.2). The
+  pool kept at most six IDLE connections to a key; it did not make a
+  seventh fetch to a busy host wait for one, as Chrome's six-per-host
+  limit does. A page that asked for a dozen sheets at once opened a dozen
+  connections, which then carried the rest of the page between them.
 
 **The `Connection` line (Chris and Opus, after the P5 capture).** The
 brief said to send nothing for `Connection` on HTTP/1.1. Chrome 156 and

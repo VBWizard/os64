@@ -1,0 +1,90 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -794,6 +794,7 @@
+ } JSRegExp;
+ 
+ typedef struct JSProxyData {
++    JSContext *creation_realm; /* Associated realm survives target revocation. */
+     JSValue target;
+     JSValue handler;
+     uint8_t is_func;
+@@ -21399,6 +21400,43 @@
+             break;
+         default:
+             return ctx;
++        }
++    }
++}
++
++/* Callback associated realm, distinct from executable target discovery.
++   Bound functions inherit their target object's associated realm; a proxy
++   keeps the realm of its constructor, even after revocation. No properties,
++   traps, allocation or exception mutation are involved. Unknown native call
++   classes have no proven associated realm and are refused. */
++JSContext *JS_GetCallbackRealm(JSContext *ctx, JSValueConst function)
++{
++    for (;;) {
++        JSObject *p;
++        if (JS_VALUE_GET_TAG(function) != JS_TAG_OBJECT)
++            return NULL;
++        p = JS_VALUE_GET_OBJ(function);
++        switch (p->class_id) {
++        case JS_CLASS_BOUND_FUNCTION:
++            function = p->u.bound_function->func_obj;
++            break;
++        case JS_CLASS_PROXY: {
++            JSProxyData *s = p->u.opaque;
++            return s && s->is_func ? s->creation_realm : NULL;
++        }
++        case JS_CLASS_C_FUNCTION:
++        case JS_CLASS_C_FUNCTION_DATA:
++        case JS_CLASS_ASYNC_FUNCTION_RESOLVE:
++        case JS_CLASS_ASYNC_FUNCTION_REJECT:
++        case JS_CLASS_PROMISE_RESOLVE_FUNCTION:
++        case JS_CLASS_PROMISE_REJECT_FUNCTION:
++        case JS_CLASS_BYTECODE_FUNCTION:
++        case JS_CLASS_GENERATOR_FUNCTION:
++        case JS_CLASS_ASYNC_FUNCTION:
++        case JS_CLASS_ASYNC_GENERATOR_FUNCTION:
++            return js_function_realm(ctx, function, FALSE);
++        default:
++            return NULL;
+         }
+     }
+ }
+@@ -51520,6 +51558,7 @@
+     if (s) {
+         JS_FreeValueRT(rt, s->target);
+         JS_FreeValueRT(rt, s->handler);
++        JS_FreeContext(s->creation_realm);
+         js_free_rt(rt, s);
+     }
+ }
+@@ -51531,6 +51570,7 @@
+     if (s) {
+         JS_MarkValue(rt, s->target, mark_func);
+         JS_MarkValue(rt, s->handler, mark_func);
++        mark_func(rt, &s->creation_realm->header);
+     }
+ }
+ 
+@@ -52406,6 +52446,7 @@
+         JS_FreeValue(ctx, obj);
+         return JS_EXCEPTION;
+     }
++    s->creation_realm = JS_DupContext(ctx);
+     s->target = JS_DupValue(ctx, target);
+     s->handler = JS_DupValue(ctx, handler);
+     s->is_func = JS_IsFunction(ctx, target);
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -860,6 +860,9 @@
+ /* Borrow the callable realm, following bound functions and proxies without
+    invoking script. Non-functions use ctx; a revoked proxy throws and returns NULL. */
+ JSContext *JS_GetFunctionRealm(JSContext *ctx, JSValueConst func_obj);
++/* Borrowed associated realm of supported callables; NULL for unknown classes.
++   No traps or exception mutation; differs from GetFunctionRealm for proxies. */
++JSContext *JS_GetCallbackRealm(JSContext *ctx, JSValueConst function);
+ JS_BOOL JS_IsConstructor(JSContext* ctx, JSValueConst val);
+ JS_BOOL JS_SetConstructorBit(JSContext *ctx, JSValueConst func_obj, JS_BOOL val);
+ 

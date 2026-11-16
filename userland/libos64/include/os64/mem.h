@@ -111,6 +111,12 @@ void os64_heap_init(void);
 // quietly changes the allocator's behaviour.
 uint64_t os64_heap_verify(void);
 
+// This program's own heap report (os64/heap.h), the figures /proc/<pid>/heap
+// renders, without the text round trip: a program that wants to say what it
+// holds (yonder's page record, MEMORY_CENSUS.md) reads them directly. Never
+// torn. Costs one lock and a copy of the struct.
+void os64_heap_report_copy(os64_heap_report_t *out);
+
 // Tell the kernel where this program's heap report lives, so procfs can
 // render /proc/<pid>/heap. LIBRARY PLUMBING — os64_heap_init calls it once
 // and no application ever should. It lives beside os64_map rather than in

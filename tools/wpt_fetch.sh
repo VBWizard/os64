@@ -57,6 +57,7 @@ WPT_DIRS=(
     css/css-overflow
     css/filter-effects
     css/compositing
+    css/css-masking
     css/support
     html/browsers/the-window-object
     html/dom
@@ -67,6 +68,8 @@ WPT_DIRS=(
     html/webappapis/scripting
     secure-contexts
     WebCryptoAPI
+    web-animations
+    css/css-animations
     page-visibility
     html/interaction/focus
     dom/events
@@ -76,6 +79,7 @@ WPT_DIRS=(
     webmessaging/without-ports
     webmessaging/message-channels
     selection
+    domparsing
     html/semantics/document-metadata/the-link-element
     html/semantics/document-metadata/the-style-element
     preload

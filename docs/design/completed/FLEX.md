@@ -283,8 +283,11 @@ box's start corner — Flexbox § 4.1 places it as if it were the only item,
 with `justify-content` and `align-items`, and that is booked.
 
 **Percentages**: a percentage `flex-basis`, width or margin of an item is
-of the container's inner size on that axis; a percentage height inside a
-stretched item is booked with GARB.md's percentage-height row.
+of the container's inner size on that axis; a percentage height of an
+item is of the container's content height where that is definite (CSS
+2.1 § 10.5 — a height the page gave, held to its limits) and is `auto`
+where it is not, so the item stretches. A percentage height inside a
+stretched or flexed item is booked with GARB.md's percentage-height row.
 
 **All or nothing.** Items are laid out in TREE order, whatever `order`
 says, and placed where they belong only once every item is laid out; a

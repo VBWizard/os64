@@ -1,6 +1,7 @@
 #include "platform_inputs.h"
 #include "os64/date.h"
 #include "os64/io.h"
+#include "os64/proc.h"     // os64_micros — the clock a session's age is told by
 
 bool os64_tls_entropy(void *out, size_t length)
 {
@@ -24,6 +25,17 @@ static tls_status entropy(void *context, unsigned char *out, size_t length)
     return os64_tls_entropy(out, length) ? TLS_OK : TLS_ENTROPY_UNAVAILABLE;
 }
 
+// A kept session's hold on the store it was earned under, and the clock its
+// age and lifetime are told by: microseconds since boot, which only move
+// forward and do not jump when the wall clock is set.
+static bool trust_retain(const void *trust) { return os64_tls_trust_retain((os64_tls_trust *)trust); }
+static void trust_release(const void *trust) { os64_tls_trust_free((os64_tls_trust *)trust); }
+static uint64_t now_ms(void *context)
+{
+    (void)context;
+    return (uint64_t)os64_micros() / 1000u;
+}
+
 tls_status os64_tls_engine_create_os(const tls_os_config *config, os64_tls_engine **out)
 {
     if (!out) return TLS_BAD_ARGUMENT;
@@ -34,7 +46,9 @@ tls_status os64_tls_engine_create_os(const tls_os_config *config, os64_tls_engin
     tls_engine_config engine = {
         .hostname = config->hostname, .alpn = config->alpn,
         .alpn_count = config->alpn_count, .epoch = now.epoch,
-        .entropy = entropy, .validator = os64_tls_policy_factory(config->trust), .protocol = config->protocol
+        .entropy = entropy, .validator = os64_tls_policy_factory(config->trust), .protocol = config->protocol,
+        .session = {.port = config->port, .trust = config->trust, .retain = trust_retain,
+                    .release = trust_release, .now_ms = now_ms}
     };
     return os64_tls_engine_create(&engine, out);
 }

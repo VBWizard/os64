@@ -44,10 +44,11 @@
 // Write's patience is arg3 of SYSCALL_WRITE, mirroring read below:
 // 0 polls, finite milliseconds round up to ticks, OS64_WAIT_FOREVER blocks.
 // Queue while room exists; once waiting would exceed the deadline, return
-// bytes queued or OS64_ERR_TIMEOUT if none. Queued bytes remain TCP's
-// responsibility and timeout leaves the handle open. TCP honors finite
-// patience; nonempty writes on other handle types refuse it rather than
-// silently blocking. os64_write supplies OS64_WAIT_FOREVER explicitly;
+// bytes queued or OS64_ERR_TIMEOUT if none. Queued bytes remain the
+// connection's or the stream's responsibility and timeout leaves the handle
+// open. TCP and the audio stream (os64/audio.h) honor finite patience;
+// nonempty writes on other handle types refuse it rather than silently
+// blocking. os64_write supplies OS64_WAIT_FOREVER explicitly;
 // os64_write_for exposes the argument. Raw syscall callers must set it too.
 
 // ── read's patience: the 4th argument (ruled 2026-08-05) ────────────────────
@@ -73,7 +74,8 @@
 // (0 = now, forever spelled out), which is the family this call belongs to.
 //
 // Finite patience is supported by console input, pipes, UDP/TCP/ICMP,
-// listeners, STREAM PTY masters, and glass readers. Other handles refuse
+// listeners, STREAM PTY masters, glass readers, bells, and the audio tap (the
+// audio position takes it and never waits). Other handles refuse
 // it rather than silently blocking. Ready pipe bytes and EOF precede the
 // deadline check: a zero-time poll can still return either.
 #define OS64_WAIT_FOREVER  UINT64_C(0xFFFFFFFFFFFFFFFF)   // ((uint64_t)-1)
@@ -83,6 +85,42 @@
 // when the branches merge, the net code aliases to THIS name, because a
 // timeout stopped being a network concept the day the console learned one.
 #define OS64_ERR_TIMEOUT   (-10)
+
+// bell() — a new BELL: a handle to wait on, for a thread that must be woken
+// by another thread of its program and has no bytes to wait for.
+//
+//   no arguments
+//   returns the bell's handle (>= 0), or negative when the handle table is
+//   full
+//
+// A bell carries one bit, RUNG, and the ordinary handle verbs mean:
+//
+//   read(bell, &byte, 1, timeout_ms)  WAIT. 1 (and one byte, value 1) once
+//       the bell has been rung, which consumes the ring; under read's
+//       patience above otherwise: OS64_ERR_TIMEOUT when it runs out unrung,
+//       OS64_INTERRUPTED when a signal the program handles ends the wait,
+//       0 when the bell is closed under the waiter. ONE thread waits at a
+//       time: a read while another thread is waiting is refused (negative),
+//       rung or not, because a ring made then is that waiter's. (A read of
+//       no bytes is no wait: like an empty read of any handle it answers 0
+//       at once, and takes no ring.)
+//   write(bell, &byte, 1)             RING, from any thread of the task.
+//       Never blocks, and what the byte says is not looked at. (A write of
+//       no bytes is no ring: an empty write moves nothing on any handle.)
+//   close(bell)                       a thread parked in it wakes to 0.
+//
+// A RING IS NEVER LOST AND NEVER COUNTED. One made before the wait is kept
+// and ends the next wait at once — which is what lets a waiter check its
+// own condition, find nothing, and then wait, with no window for a ring to
+// fall through. Two made before a wait are one: a bell says "look again",
+// so every wait on one is a loop that looks and waits again if it found
+// nothing (a ring left over from an earlier wait costs one such pass).
+//
+// It is the pipe a thread would otherwise wait on, with the ring buffer and
+// the second handle taken out: a pipe pair is two of a task's
+// OS64_TASK_HANDLES and 64 KiB to carry this one bit. A bell is never given
+// to a spawned child. libos64 wraps it as os64/bell.h.
+#define SYSCALL_BELL       67
 
 // sleep(ms) — park the calling thread for AT LEAST `ms` milliseconds.
 // The ABI speaks TIME; the kernel speaks ticks — the conversion happens at
@@ -718,6 +756,10 @@ typedef enum os64_shutdown_mode
 // Rename an owned window: arg0 = handle, arg1 = title string, arg2 = flags
 // (OS64_GUI_WINDOW_TITLE_UTF8 or 0). See os64/gui.h.
 #define SYSCALL_GUI_WINDOW_SET_TITLE 65
+// Change an owned ordinary window's stacking band: arg0 handle, arg1 0/1.
+#define SYSCALL_GUI_WINDOW_SET_PINNED 66
+// Exact owned-window content size; arg0 handle, arg1 width, arg2 height.
+#define SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE 68
 
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.

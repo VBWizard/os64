@@ -11,8 +11,12 @@ out.mkdir(parents=True, exist_ok=True)
 flags = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
          '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
          '-fno-omit-frame-pointer', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections']
-flags += ['-I'+str(ROOT/s) for s in ['userland/libos64/include', 'userland/libos64', 'abi/include', 'tools/fonts']]
-modules = ['ui_menu', 'ui_menu_widget', 'ui_dispatcher', 'ui_icon', 'ui_action', 'ui_status',
+flags += ['-I'+str(ROOT/s) for s in ['userland/libos64/include', 'userland/libimage/include',
+                                     'userland/libos64', 'abi/include', 'tools/fonts']]
+# The sources test_ui_action_host.py --menu links, so each mutant is that
+# suite's program with one edit.
+modules = ['ui_menu', 'ui_menu_widget', 'ui_dropdown', 'ui_dispatcher', 'ui_icon', 'ui_icon_button',
+           'ui_toolbar', 'ui_action', 'ui_status',
            'ui_font', 'ui', 'ui_controls', 'ui_list', 'ui_text', 'font_provider', 'font_adopt',
            'text', 'fmt', 'ui_theme', 'text_cache', 'text_decode', 'text_bitmap', 'text_draw', 'draw', 'str']
 mutations = {
@@ -46,7 +50,7 @@ failed = False
 for name, edits in mutations.items():
     folder = out/name
     folder.mkdir(exist_ok=True)
-    paths = [ROOT/'tools/test_ui_menu_host.c', ROOT/'tools/fonts/fake_backend.c']
+    paths = [ROOT/'shared/damage.c', ROOT/'tools/test_ui_menu_host.c', ROOT/'tools/fonts/fake_backend.c']
     for module in modules:
         path = ROOT/f'userland/libos64/{module}.c'
         if module in edits:

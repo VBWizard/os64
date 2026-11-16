@@ -155,7 +155,7 @@ static void attrs_batch_contract(void)
     const os64_html_attr_t *old=q->attrs;
     os64_html_pin_t pin=os64_html_pin(f.doc);
     uint64_t version=os64_html_version(f.doc);
-    os64_html_attr_change_t changes[]={{"a","new",3,false},{"b",NULL,0,true},{"c","last",4,false}};
+    os64_html_attr_change_t changes[]={{"a","new",3,false, false, NULL},{"b",NULL,0,true, false, NULL},{"c","last",4,false, false, NULL}};
     rebuild_expect("batch: complete transaction",os64_html_set_attrs(f.doc,q,changes,3)==0);
     rebuild_expect("batch: one publication",os64_html_version(f.doc)==version+1);
     rebuild_expect("batch: pin keeps old records",strcmp(old->next->value,"old")==0&&
@@ -164,12 +164,12 @@ static void attrs_batch_contract(void)
         strcmp(q->attrs->next->name,"a")==0&&strcmp(q->attrs->next->next->name,"c")==0);
     size_t arena=f.doc->arena_bytes,peak=f.doc->peak_arena_bytes;
     version=os64_html_version(f.doc);
-    os64_html_attr_change_t cancel[]={{"a","temporary",9,false},{"a","new",3,false}};
+    os64_html_attr_change_t cancel[]={{"a","temporary",9,false, false, NULL},{"a","new",3,false, false, NULL}};
     const os64_html_attr_t *current=q->attrs;
     rebuild_expect("batch: cancel changes",os64_html_set_attrs(f.doc,q,cancel,2)==0);
     rebuild_expect("batch: final no op",q->attrs==current&&version==os64_html_version(f.doc)&&
         arena==f.doc->arena_bytes&&peak==f.doc->peak_arena_bytes);
-    os64_html_attr_change_t invalid[]={{"a","changed",7,false},{"x","bad\0value",9,false}};
+    os64_html_attr_change_t invalid[]={{"a","changed",7,false, false, NULL},{"x","bad\0value",9,false, false, NULL}};
     rebuild_expect("batch: validates whole input",os64_html_set_attrs(f.doc,q,invalid,2)==OS64_HTML_BAD_TEXT);
     rebuild_expect("batch: validation changes nothing",q->attrs==current&&version==os64_html_version(f.doc)&&
         arena==f.doc->arena_bytes&&peak==f.doc->peak_arena_bytes);

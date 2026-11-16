@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Many media elements</title>
+<!--
+  AUDIO_YONDER.md, Y.2.1: a page with many players, as sound-sample sites
+  are (one such page put eighteen in front of yonder and ran it out of
+  handles). Each element below loads its metadata as the page opens.
+
+  What to look for: the page opens and stays open, and yonder does not
+  die. Served over http, the tally reads "24 of 24 have metadata, 0
+  failed" within a few seconds (with scripts on). Opened as a file: it
+  reads about 19 of 24, the rest failed: each file: player holds its file
+  as well as its bell, and the program's handles run out (DEBTS.md § A
+  page's sound). `cat /sys/audio` afterwards shows nothing stuck open.
+-->
+<h1>Twenty-four players</h1>
+<p id="tally">(the tally needs scripts on)</p>
+<p>Sound 1: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 2: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 3: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 4: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 5: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 6: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 7: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 8: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 9: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 10: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 11: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 12: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 13: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 14: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 15: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 16: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 17: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 18: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 19: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 20: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 21: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 22: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 23: <audio src="audio-tone.wav"></audio></p>
+<p>Sound 24: <audio src="audio-tone.wav"></audio></p>
+<script>
+const players = document.querySelectorAll("audio");
+function tally() {
+  let ready = 0, failed = 0;
+  for (const a of players) {
+    if (a.error) failed++;
+    else if (a.readyState >= 1) ready++;
+  }
+  document.getElementById("tally").textContent =
+    `${ready} of ${players.length} have metadata, ${failed} failed`;
+}
+for (const a of players) {
+  a.addEventListener("loadedmetadata", tally);
+  a.addEventListener("error", tally);
+}
+tally();
+</script>

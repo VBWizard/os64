@@ -75,7 +75,39 @@ static void layout_profile_cases(void)
     line=yonder_diag_fact_value(g.page.diag,"layout");
     check(line && strstr(line,"model rebuild 17 us") && strstr(line,"1 model rebuilds"),
           "layout profile: model cost remains separate from layout");
+    const char *cascade=yonder_diag_fact_value(g.page.diag,"layout cascade");
+    check(cascade && !strcmp(cascade,"updated 0, built fresh 1: sheets changed 1"),
+          "layout profile: a cascade built fresh says why");
+    g.page.sheets_changed=false;
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("p"),"title","t",1) && script_rebuild(),
+          "layout profile: a change published");
+    cascade=yonder_diag_fact_value(g.page.diag,"layout cascade");
+    check(cascade && !strcmp(cascade,"updated 1, built fresh 1: sheets changed 1"),
+          "layout profile: and the cascade it updated is counted");
+    /* Each layout whole: what became of its cascade sorts the counts, and
+     * the slowest says its phases, its cascade's fate and its attempts. */
+    const char *slow=yonder_diag_fact_value(g.page.diag,"layout slowest");
+    const char *by=yonder_diag_fact_value(g.page.diag,"layout by cascade");
+    check(by && strstr(by,"cascade updated 1, ") && strstr(by,"; cascade built fresh 1, ") && strstr(by," ms each"),
+          "layout profile: layouts are counted by what became of their cascade");
+    check(slow && strstr(slow," ms at +") && strstr(slow,": cascade ") && strstr(slow,", the rest ") &&
+          (strstr(slow,"(updated)") || strstr(slow,"(built fresh: sheets changed)")) && strstr(slow,"; 1 attempt"),
+          "layout profile: the slowest layout says its phases, its cascade's fate and its attempts");
     s_layout_profile=false;clock_step=saved_step;
+    probe_drop();
+    /* A page whose sheets hold :has(), anchored and in a subject, keeps
+     * its cascade across a change. */
+    probe_page("<style>.g:has(.x) p{color:red}.a:has(.b){margin:1px}</style><div class=g><p id=p>t</p></div>"
+               "<div class=a><i id=i></i></div>",false);
+    g.page.diag=diag_new_claimed("https://fixture.test/profile-has",1);
+    s_layout_profile=true;
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("i"),"class","b",1) && script_rebuild(),
+          "layout profile: a :has() page's change published");
+    cascade=yonder_diag_fact_value(g.page.diag,"layout cascade");
+    check(cascade && !strcmp(cascade,"updated 1, built fresh 0"),
+          "layout profile: a :has() page's cascade is updated, not built fresh");
+    if(!cascade || strcmp(cascade,"updated 1, built fresh 0")) printf("  layout cascade: %s\n",cascade?cascade:"(none)");
+    s_layout_profile=false;
     probe_drop();
     layout_profile_stream_cases();
 }

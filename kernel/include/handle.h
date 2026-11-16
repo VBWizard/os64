@@ -56,6 +56,14 @@ typedef enum handle_type
 	HANDLE_GLASS,          // object = glass_view_t*, one viewer of the screen
 	                       // (/dev/glass; read = one changed rectangle and
 	                       // its pixels, os64/glass.h)
+	HANDLE_BELL,           // object = bell_t*, a bit to wait on (bell.h;
+	                       // read = wait for a ring, write = ring)
+	HANDLE_AUDIO,          // object = audio_open_t*, one face of the sound
+	                       // stream (audio/audio.h): /dev/audio (write PCM),
+	                       // /dev/audiopos, /dev/audiotap
+	HANDLE_MEDIA_KEYS,     // object = media_session_t*, a media-key session
+	                       // (/dev/mediakeys, audio/media_session.h): write
+	                       // = the program's state, read = its next press
 
 	// A slot reserved before an operation that may publish external state.
 	// Exclusive file creation uses it so a full handle table is discovered

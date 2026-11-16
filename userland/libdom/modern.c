@@ -43,10 +43,21 @@ static const DModernRow kModern[] = {
                            "HTMLTableSectionElement", "HTMLUListElement", "HTMLBRElement", "HTMLDListElement",
                            "HTMLDirectoryElement", "HTMLFontElement", "HTMLHRElement", "HTMLHeadingElement",
                            "HTMLHtmlElement", "HTMLMenuElement", "HTMLParagraphElement", "HTMLPreElement",
-                           "HTMLSpanElement", "HTMLTableCaptionElement", "HTMLTitleElement", NULL},
+                           "HTMLSpanElement", "HTMLTableCaptionElement", "HTMLTitleElement", "HTMLSourceElement", NULL},
      d_interfaces_install},
     /* After the interfaces row, whose HTMLElement its interface inherits. */
     {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},
+    /* AUDIO_YONDER.md: the media element, after the interfaces row, whose
+     * HTMLElement its interface inherits; the media events' handlers on
+     * window with it; HTMLVideoElement, which plays sound and no picture
+     * (§ Y.4). */
+    {(const char *const[]){"HTMLMediaElement", "HTMLAudioElement", "HTMLVideoElement", "MediaError", "TimeRanges",
+                           "Audio",
+                           "onloadstart", "onprogress", "onsuspend", "onabort", "onemptied", "onstalled",
+                           "onloadedmetadata", "onloadeddata", "oncanplay", "oncanplaythrough", "onplaying",
+                           "onwaiting", "onseeking", "onseeked", "onended", "ondurationchange", "ontimeupdate",
+                           "onplay", "onpause", "onratechange", "onvolumechange", NULL},
+     d_media_elements_install},
     /* CDATASection and ProcessingInstruction, over the row above's Text
      * and CharacterData, with Document's createCDATASection and
      * createProcessingInstruction (data_nodes.c). */
@@ -79,7 +90,7 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"TextEncoder", "TextDecoder", NULL}, d_encoding_install},
     {(const char *const[]){"screen", "devicePixelRatio", "Screen", "ScreenOrientation", NULL}, d_screen_install},
     {(const char *const[]){"btoa", "atob", NULL}, d_base64_install},
-    {(const char *const[]){"DOMImplementation", "DOMParser", NULL}, d_implementation_install},
+    {(const char *const[]){"DOMImplementation", "DOMParser", "XMLSerializer", NULL}, d_implementation_install},
     {(const char *const[]){"DOMException", NULL}, d_exception_install},
     {(const char *const[]){"AbortController", "AbortSignal", NULL}, d_abort_install},
     {(const char *const[]){"Blob", "File", "FormData", NULL}, d_blob_install},
@@ -96,8 +107,9 @@ static const DModernRow kModern[] = {
                            NULL},
      d_bars_install},
     {(const char *const[]){"external", "External", NULL}, d_external_install},
-    /* After the encoding row, whose DataView it tells a view by. */
-    {(const char *const[]){"crypto", "Crypto", NULL}, d_crypto_install},
+    /* After the encoding row, whose DataView it tells a view by. The two
+     * interfaces are [SecureContext], installed on a secure page only. */
+    {(const char *const[]){"crypto", "Crypto", "SubtleCrypto", "CryptoKey", NULL}, d_crypto_install},
     {(const char *const[]){"DOMPointReadOnly", "DOMPoint", NULL}, d_point_install},
     {(const char *const[]){"DOMRectReadOnly", "DOMRect", "DOMRectList", NULL}, d_rect_install},
     {(const char *const[]){"SVGGraphicsElement", "SVGGeometryElement", NULL}, d_svg_geometry_install},
@@ -132,6 +144,16 @@ static const DModernRow kModern[] = {
                            NULL}, d_message_install},
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
     {(const char *const[]){"requestAnimationFrame", "cancelAnimationFrame", NULL}, d_animation_install},
+    /* WEB_ANIMATIONS.md: Element.animate and what it makes, CSSAnimation
+     * (and CSSTransition, which nothing is while CSS transitions are not
+     * run) and the CSS animation
+     * events, after the event row whose Event AnimationPlaybackEvent and
+     * AnimationEvent inherit. */
+    {(const char *const[]){"Animation", "AnimationEffect", "KeyframeEffect", "AnimationTimeline",
+                           "DocumentTimeline", "AnimationPlaybackEvent", "CSSAnimation", "CSSTransition",
+                           "AnimationEvent",
+                           "onanimationstart", "onanimationend", "onanimationiteration", "onanimationcancel", NULL},
+     d_web_animations_install},
     /* INTERSECTION_OBSERVER.md: after the DOMRect row, whose rects its
      * entries carry. */
     {(const char *const[]){"IntersectionObserver", "IntersectionObserverEntry", NULL}, d_intersections_install},

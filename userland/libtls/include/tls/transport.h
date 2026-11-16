@@ -11,6 +11,8 @@ typedef struct os64_tls_transport os64_tls_transport;
 typedef struct { uint64_t handshake_ms, shutdown_ms; } os64_tls_transport_limits_t;
 #define OS64_TLS_TRANSPORT_HANDSHAKE_MS 30000u
 #define OS64_TLS_TRANSPORT_SHUTDOWN_MS 2000u
+// The most ciphertext a transport holds unread: the room release needs.
+#define OS64_TLS_TRANSPORT_UNREAD_MAX 4096u
 
 // Adopt a connected TCP handle on success, leaving ownership with the caller
 // on failure (*out=NULL). NULL limits select the defaults above; explicit
@@ -46,5 +48,20 @@ OS64_TLS_TRANSPORT_API os64_tls_status_t os64_tls_transport_flush(os64_tls_trans
 OS64_TLS_TRANSPORT_API os64_tls_status_t os64_tls_transport_begin_close(os64_tls_transport *transport);
 OS64_TLS_TRANSPORT_API os64_tls_status_t os64_tls_transport_abort(os64_tls_transport *transport, os64_tls_status_t reason);
 OS64_TLS_TRANSPORT_API void os64_tls_transport_free(os64_tls_transport *transport);
+
+// Hand the connection to a caller that will drive the engine itself (tls.h)
+// and own the socket: an HTTP/2 connection, whose reader and senders are
+// different threads and so cannot be this transport's one owner. On OK the
+// client and the handle are the caller's, `unread` holds the ciphertext the
+// transport had read from the socket and not yet fed (feed it before
+// anything read after), and the transport is wiped and freed with nothing
+// closed and no close exchange begun. Refused, with the transport as it was
+// and still the caller's to free: NEED_PROGRESS before the handshake has
+// completed, or while ciphertext of the transport's own is still owed to
+// the socket (step until it is not); the terminal status of a transport
+// that has failed or begun to close; BAD_ARGUMENT when `room` is under what
+// is unread (OS64_TLS_TRANSPORT_UNREAD_MAX always holds it).
+OS64_TLS_TRANSPORT_API os64_tls_status_t os64_tls_transport_release(os64_tls_transport *transport,
+    os64_tls_client **client, int32_t *handle, void *unread, size_t room, size_t *unread_len);
 #undef OS64_TLS_TRANSPORT_API
 #endif

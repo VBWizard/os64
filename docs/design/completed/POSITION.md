@@ -526,7 +526,6 @@ he said, not a CSS one — and Fable ruled as he had recommended:
 | `position: relative` or `sticky` on table rows, row groups and columns | undefined in CSS 2.1, defined in Position 3; a sticky heading CELL sticks (P4), and that is the common spelling | a page whose sticky `thead` or `tr` matters |
 | A sticky inline, or inline-block | it has pieces on lines, not a box of its own to push, as a relative one has (below) | a page whose sticky inline matters |
 | The logical insets (`inset-inline-start` and the rest) | the physical four first; the chapter's `dialog` rule is applied physically | a page that writes them |
-| Percentage heights of an absolute box's descendants | GARB.md's percentage-height row, unchanged; the absolute box's own resolves | that row |
 | Form widgets under positioned boxes, between P1 and P2 | `flow_box_covered` is P2's | P2 |
 | A relative inline, or atom, painted in the positioned layer | an inline has no box to list, only pieces spread over lines: they move and paint in the flow's order | a page where a nudged inline must paint over its neighbours |
 | A block inside a relative inline, moved with it (CSS 2.1 § 9.2.1.1) | the offset lives on the inline's pieces and fragments; the block the inline is split round is laid out by the block flow, which knows no inline open round it | a page that nudges an inline holding a block by a visible amount |

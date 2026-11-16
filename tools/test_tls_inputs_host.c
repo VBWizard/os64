@@ -30,6 +30,10 @@ typedef struct { void *p; size_t n; bool engine; } allocation;
 static allocation allocations[32];
 static size_t calls, fail_allocation, live_allocations;
 static bool next_engine;
+// session_cache.c takes an os64 lock, whose contended path yields.
+void os64_yield(void) {}
+// ...and platform_inputs.c tells a session's age by the microsecond clock.
+int64_t os64_micros(void) { return 0; }
 void *os64_malloc(size_t n)
 {
     bool engine = next_engine; next_engine = false;

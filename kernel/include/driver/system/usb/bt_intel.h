@@ -55,11 +55,37 @@ typedef struct {
 typedef struct {
     uint8_t bytes[BT_HCI_EVENT_BYTES];
     uint16_t used;
+    // Times the accumulator was found out of step with the transfer
+    // boundaries and thrown away (bt_hci_feed).
+    uint32_t resyncs;
 } bt_hci_stream_t;
 
+// Feed received bytes; each complete event is passed to `event`.
+//
+// `max_packet` is the endpoint's maximum packet size when `data` is ONE USB
+// packet, and 0 when it is an arbitrary slice of a byte stream. The packet
+// form knows where transfers end, and uses it: a packet shorter than the
+// maximum ends a transfer, and an event does not continue past the end of
+// one. So an event still incomplete when a short packet has been taken in
+// means the accumulator is out of step: it is emptied and counted, and the
+// next transfer starts clean. Without that a length taken from the wrong
+// byte swallows every event after it. The way in is an adapter that was
+// already running when this host took it over (a warm reboot with links
+// up): the first packet it hands over can be the tail of an event whose
+// head went to the host before.
+//
+// From a controller that keeps to those two rules, the packet form drops
+// nothing a byte stream would have delivered: bytes after a complete event
+// in the same packet are still read as the next event. A tail that ends
+// exactly on a full packet is not seen as one until a short packet comes,
+// so it can still take the event after it; the start-up round's retry
+// (bt_host.h) is what covers that. The operational controller's interrupt
+// endpoint is fed this way. The bootloader's replies are not
+// (bt_intel_feed_events): what is known of their framing is what the
+// loader's tests record.
 void bt_hci_feed(bt_hci_stream_t *stream,
                  void (*event)(void *, const uint8_t *, size_t), void *context,
-                 const uint8_t *data, size_t bytes);
+                 const uint8_t *data, size_t bytes, size_t max_packet);
 
 void bt_intel_feed(bt_hci_stream_t *stream, bt_intel_reply_t *reply,
                    const uint8_t *data, size_t bytes);

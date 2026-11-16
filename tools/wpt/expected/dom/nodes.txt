@@ -1334,6 +1334,7 @@ Document-adoptNode.html	Adopting a Document should throw.
 Document-adoptNode.html	Adopting an Element called ':good:times:' should work.
 Document-adoptNode.html	Adopting an Element called 'x<' should work.
 Document-adoptNode.html	Adopting an Element should adopt its Attr nodes.
+Document-adoptNode.html	Adopting an Element should adopt its namespaced attributes.
 Document-adoptNode.html	Explicitly adopting a DocumentType should work.
 Document-adoptNode.html	Inserting an Element into another document should adopt its Attr nodes.
 Document-constructor.html	new Document(): characterSet aliases
@@ -1959,6 +1960,7 @@ Document-getElementsByTagName.html	getElementsByTagName() should be a live colle
 Document-implementation.html	Getting implementation off different documents
 Document-implementation.html	Getting implementation off the same document
 Document-importNode.html	False 'deep' argument.
+Document-importNode.html	Import an Attr node with namespace/prefix correctly.
 Document-importNode.html	No 'deep' argument.
 Document-importNode.html	True 'deep' argument.
 Document-importNode.html	Undefined 'deep' argument.
@@ -3448,6 +3450,7 @@ Element-getElementsByTagName.html	Shouldn't be able to set unsigned properties o
 Element-getElementsByTagName.html	Shouldn't be able to set unsigned properties on a HTMLCollection (strict mode)
 Element-getElementsByTagName.html	getElementsByTagName('*')
 Element-getElementsByTagName.html	getElementsByTagName() should be a live collection
+Element-hasAttribute.html	hasAttribute should check for attribute presence, irrespective of namespace
 Element-hasAttribute.html	hasAttribute should work with all attribute casings
 Element-hasAttributes.html	element.hasAttributes() must return false when the element does not have attribute.
 Element-hasAttributes.html	element.hasAttributes() must return true when the element has attribute.
@@ -3492,7 +3495,12 @@ Element-remove.html	element should support remove()
 Element-remove.html	remove() should work if element does have a parent
 Element-remove.html	remove() should work if element does have a parent and siblings
 Element-remove.html	remove() should work if element doesn't have a parent
+Element-removeAttribute.html	removeAttribute should remove the first attribute, irrespective of namespace, when the first attribute is in a namespace
+Element-removeAttribute.html	removeAttribute should remove the first attribute, irrespective of namespace, when the first attribute is not in a namespace
+Element-removeAttributeNS.html	removeAttributeNS should take a local name.
 Element-setAttribute-crbug-1138487.html	Attributes first seen in mixed ASCII case should not be corrupted.
+Element-setAttribute.html	setAttribute should change the first attribute, irrespective of namespace
+Element-setAttribute.html	setAttribute should lowercase before setting
 Element-siblingElement-null.html	Null test
 Element-tagName-adopt.html	tagName should not be uppercased when appended to XML document
 Element-tagName.html	tagName should be updated when changing ownerDocument (createDocument with prefix)
@@ -3500,6 +3508,8 @@ Element-tagName.html	tagName should be updated when changing ownerDocument (crea
 Element-tagName.html	tagName should not upper-case for SVG elements in HTML documents.
 Element-tagName.html	tagName should not upper-case for other non-HTML namespaces
 Element-tagName.html	tagName should upper-case for HTML elements in HTML documents.
+MutationObserver-attributes.html	attributeFilter alone Element.id/Element.className: multiple filter update mutation
+MutationObserver-attributes.html	attributeOldValue alone Element.id: update mutation
 MutationObserver-attributes.html	attributes Element.attributes.value: same id mutation
 MutationObserver-attributes.html	attributes Element.attributes.value: update mutation
 MutationObserver-attributes.html	attributes Element.classList.add: invalid character/no mutation
@@ -3526,12 +3536,20 @@ MutationObserver-attributes.html	attributes Element.id: update mutation
 MutationObserver-attributes.html	attributes Element.id: update, no oldValue, mutation
 MutationObserver-attributes.html	attributes Element.removeAttribute: removal mutation
 MutationObserver-attributes.html	attributes Element.removeAttribute: removal no mutation
+MutationObserver-attributes.html	attributes Element.removeAttributeNS: prefixed attribute removal no mutation
+MutationObserver-attributes.html	attributes Element.removeAttributeNS: removal mutation
+MutationObserver-attributes.html	attributes Element.removeAttributeNS: removal no mutation
 MutationObserver-attributes.html	attributes Element.setAttribute: classname mutation
 MutationObserver-attributes.html	attributes Element.setAttribute: id mutation
 MutationObserver-attributes.html	attributes Element.setAttribute: same class mutation
+MutationObserver-attributes.html	attributes Element.setAttributeNS: creation mutation
+MutationObserver-attributes.html	attributes Element.setAttributeNS: prefixed attribute creation mutation
 MutationObserver-attributes.html	attributes Element.unknown: IDL attribute no mutation
 MutationObserver-attributes.html	attributes HTMLInputElement.type: type update mutation
+MutationObserver-attributes.html	attributes/attributeFilter Element.id/Element.className: multiple filter update mutation
+MutationObserver-attributes.html	attributes/attributeFilter Element.id/Element.className: update mutation
 MutationObserver-attributes.html	childList HTMLInputElement.removeAttribute: type removal mutation
+MutationObserver-attributes.html	childList false: no childList mutation
 MutationObserver-callback-arguments.html	Callback is invoked with |this| value of MutationObserver and two arguments
 MutationObserver-callback-order.window.html	Mutation observers are notified in the order they were created
 MutationObserver-callback-order.window.html	Mutation observers are notified in the order they were created, also when one observes a removed subtree
@@ -6771,6 +6789,7 @@ Node-isEqualNode.html	comments should be compared on data
 Node-isEqualNode.html	doctypes should be compared on name, public ID, and system ID
 Node-isEqualNode.html	document fragments should not be compared based on properties
 Node-isEqualNode.html	documents should not be compared based on properties
+Node-isEqualNode.html	elements should be compared on attribute namespace, local name, and value
 Node-isEqualNode.html	elements should be compared on namespace, namespace prefix, local name, and number of attributes
 Node-isEqualNode.html	node equality testing should test descendant equality too
 Node-isEqualNode.html	processing instructions should be compared on target and data
@@ -6780,6 +6799,7 @@ Node-isSameNode.html	comments should be compared on reference
 Node-isSameNode.html	doctypes should be compared on reference
 Node-isSameNode.html	document fragments should be compared on reference
 Node-isSameNode.html	documents should be compared on reference
+Node-isSameNode.html	elements should be compared on reference (namespaced attribute)
 Node-isSameNode.html	elements should be compared on reference (namespaced element)
 Node-isSameNode.html	processing instructions should be compared on reference
 Node-isSameNode.html	text nodes should be compared on reference
@@ -7762,6 +7782,12 @@ ParentNode-querySelector-attribute-change.html	width attribute
 ParentNode-querySelector-basic-has.html	Basic :has() support in querySelector
 ParentNode-querySelector-case-insensitive.html	querySelector
 ParentNode-querySelector-case-insensitive.html	querySelectorAll
+ParentNode-querySelector-class-change.html	html complex class
+ParentNode-querySelector-class-change.html	html compound class
+ParentNode-querySelector-class-change.html	html simple class
+ParentNode-querySelector-class-change.html	svg complex class
+ParentNode-querySelector-class-change.html	svg compound class
+ParentNode-querySelector-class-change.html	svg simple class
 ParentNode-querySelector-dupe-id.html	Returns a non-null value for connected cloned node with duplicated ID
 ParentNode-querySelector-dupe-id.html	Sanity: returns a non-null value
 ParentNode-querySelector-empty-attribute-value.html	Compound [title][title=''] matches element with empty title attribute
@@ -7913,32 +7939,79 @@ adoption.window.html	appendChild() and DocumentFragment
 attributes-namednodemap-cross-document.window.html	Moving an attribute between documents
 attributes-namednodemap-cross-document.window.html	Replacing an attribute across documents
 attributes-namednodemap.html	an attribute set by setAttribute should be accessible as a field on the `attributes` field of an Element
+attributes-namednodemap.html	an attribute with a null namespace should be accessible as a field on the `attributes` field of an Element
+attributes-namednodemap.html	an attribute with a set namespace should be accessible as a field on the `attributes` field of an Element
 attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` should add and remove fields from `attributes`
 attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` should not interfere with existing method names
+attributes-namednodemap.html	setting an attribute should not overwrite the length property of an `NamedNodeMap` object
+attributes-namednodemap.html	setting an attribute should not overwrite the methods defined by prototype ancestors of an `NamedNodeMap` object
+attributes-namednodemap.html	setting an attribute should not overwrite the methods of an `NamedNodeMap` object
+attributes.html	A namespace is required to use a prefix.
 attributes.html	Attribute loses its owner when removed
 attributes.html	Attribute values should not be parsed.
+attributes.html	Attribute with prefix in local name
 attributes.html	Attributes should work in document fragments.
+attributes.html	Basic functionality of getAttributeNode/getAttributeNodeNS
 attributes.html	Basic functionality of removeAttributeNode
 attributes.html	Basic functionality of setAttributeNode
+attributes.html	Basic functionality of setAttributeNodeNS
 attributes.html	Basic functionality should be intact.
 attributes.html	Basic functionality should be intact. (toggleAttribute)
 attributes.html	Entities in attributes should have been expanded while parsing.
+attributes.html	First set attribute is returned by getAttribute
+attributes.html	First set attribute is returned with mapped attribute set first
+attributes.html	First set attribute is returned with mapped attribute set later
 attributes.html	If attr’s element is neither null nor element, throw an InUseAttributeError.
+attributes.html	Non-HTML element with upper-case attribute
+attributes.html	Only lowercase attributes are returned on HTML elements (mixed case attribute)
+attributes.html	Only lowercase attributes are returned on HTML elements (upper case attribute)
 attributes.html	Own property correctness with basic attributes
+attributes.html	Own property correctness with namespaced attribute before same-name non-namespaced one
+attributes.html	Own property correctness with non-namespaced attribute before same-name namespaced one
+attributes.html	Own property correctness with two namespaced attributes with the same name-with-prefix
+attributes.html	Own property names should include all qualified names for a non-HTML element in an HTML document
+attributes.html	Own property names should only include all-lowercase qualified names for an HTML element in an HTML document
 attributes.html	Replacing an attr by itself
+attributes.html	Setting the same attribute with another prefix should not change the prefix
 attributes.html	Specified attributes should be accessible.
+attributes.html	Style attributes are not normalized
+attributes.html	The XMLNS namespace should require xmlns as prefix or qualified name
+attributes.html	The xml prefix should not be allowed for arbitrary namespaces
+attributes.html	The xmlns prefix should not be allowed for arbitrary namespaces
+attributes.html	The xmlns qualified name should not be allowed for arbitrary namespaces
 attributes.html	Toggling element with inline style should make inline style disappear
+attributes.html	Unset attributes return null
 attributes.html	When qualifiedName does not match the Name production, an INVALID_CHARACTER_ERR exception is to be thrown. (setAttribute)
+attributes.html	When qualifiedName does not match the Name production, an INVALID_CHARACTER_ERR exception is to be thrown. (setAttributeNS)
 attributes.html	When qualifiedName does not match the Name production, an INVALID_CHARACTER_ERR exception is to be thrown. (toggleAttribute)
+attributes.html	When qualifiedName does not match the QName production, an INVALID_CHARACTER_ERR exception is to be thrown.
+attributes.html	XML-namespaced attributes don't need an xml prefix
+attributes.html	getAttributeNames tests
+attributes.html	null and the empty string should result in a null namespace.
+attributes.html	setAttribute should lowercase its name argument (mixed case attribute)
+attributes.html	setAttribute should lowercase its name argument (upper case attribute)
 attributes.html	setAttribute should not change the order of previously set attributes.
 attributes.html	setAttribute should not throw even if a load is not allowed
 attributes.html	setAttribute should not throw even when qualifiedName starts with 'xmlns'
+attributes.html	setAttribute should set the attribute with the given qualified name
+attributes.html	setAttribute should set the first attribute with the given name
 attributes.html	setAttributeNode called with an Attr that has the same name as an existing one should not change attribute order
+attributes.html	setAttributeNode doesn't have case-insensitivity even with an HTMLElement 1
+attributes.html	setAttributeNode doesn't have case-insensitivity even with an HTMLElement 2
+attributes.html	setAttributeNode doesn't have case-insensitivity even with an HTMLElement 3
 attributes.html	setAttributeNode on bound attribute should throw InUseAttributeError
+attributes.html	setAttributeNode should distinguish attributes with same local name and different namespaces
 attributes.html	setAttributeNode, if it fires mutation events, should fire one with the new node when resetting an existing attribute
 attributes.html	setAttributeNode, if it fires mutation events, should fire one with the new node when resetting an existing attribute (outer shell)
+attributes.html	toggleAttribute should lowercase its name argument (mixed case attribute)
+attributes.html	toggleAttribute should lowercase its name argument (upper case attribute)
 attributes.html	toggleAttribute should not change the order of previously set attributes.
 attributes.html	toggleAttribute should not throw even when qualifiedName starts with 'xmlns'
+attributes.html	toggleAttribute should set the attribute with the given qualified name
+attributes.html	toggleAttribute should set the first attribute with the given name
+attributes.html	xmlns should be allowed as local name
+attributes.html	xmlns should be allowed as prefix in the XMLNS namespace
+attributes.html	xmlns should be allowed as qualified name in the XMLNS namespace
 case.html	createElement ABC
 case.html	createElement Abc
 case.html	createElement abc
@@ -8029,6 +8102,86 @@ case.html	getAttribute Abc
 case.html	getAttribute abc
 case.html	getAttribute Ä
 case.html	getAttribute ä
+case.html	getAttributeNS ABC
+case.html	getAttributeNS Abc
+case.html	getAttributeNS abc
+case.html	getAttributeNS http://FOO,ABC,ABC
+case.html	getAttributeNS http://FOO,ABC,Abc
+case.html	getAttributeNS http://FOO,ABC,abc
+case.html	getAttributeNS http://FOO,ABC,Ä
+case.html	getAttributeNS http://FOO,ABC,ä
+case.html	getAttributeNS http://FOO,Abc,ABC
+case.html	getAttributeNS http://FOO,Abc,Abc
+case.html	getAttributeNS http://FOO,Abc,abc
+case.html	getAttributeNS http://FOO,Abc,Ä
+case.html	getAttributeNS http://FOO,Abc,ä
+case.html	getAttributeNS http://FOO,abc,ABC
+case.html	getAttributeNS http://FOO,abc,Abc
+case.html	getAttributeNS http://FOO,abc,abc
+case.html	getAttributeNS http://FOO,abc,Ä
+case.html	getAttributeNS http://FOO,abc,ä
+case.html	getAttributeNS http://FOO,Ä,ABC
+case.html	getAttributeNS http://FOO,Ä,Abc
+case.html	getAttributeNS http://FOO,Ä,abc
+case.html	getAttributeNS http://FOO,Ä,Ä
+case.html	getAttributeNS http://FOO,Ä,ä
+case.html	getAttributeNS http://FOO,ä,ABC
+case.html	getAttributeNS http://FOO,ä,Abc
+case.html	getAttributeNS http://FOO,ä,abc
+case.html	getAttributeNS http://FOO,ä,Ä
+case.html	getAttributeNS http://FOO,ä,ä
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,ABC,ABC
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,ABC,Abc
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,ABC,abc
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,ABC,Ä
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,ABC,ä
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,Abc,ABC
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,Abc,Abc
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,Abc,abc
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,Abc,Ä
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,Abc,ä
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,abc,ABC
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,abc,Abc
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,abc,abc
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,abc,Ä
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,abc,ä
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,Ä,ABC
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,Ä,Abc
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,Ä,abc
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,Ä,Ä
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,Ä,ä
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,ä,ABC
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,ä,Abc
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,ä,abc
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,ä,Ä
+case.html	getAttributeNS http://www.w3.org/1999/xhtml,ä,ä
+case.html	getAttributeNS http://www.w3.org/2000/svg,ABC,ABC
+case.html	getAttributeNS http://www.w3.org/2000/svg,ABC,Abc
+case.html	getAttributeNS http://www.w3.org/2000/svg,ABC,abc
+case.html	getAttributeNS http://www.w3.org/2000/svg,ABC,Ä
+case.html	getAttributeNS http://www.w3.org/2000/svg,ABC,ä
+case.html	getAttributeNS http://www.w3.org/2000/svg,Abc,ABC
+case.html	getAttributeNS http://www.w3.org/2000/svg,Abc,Abc
+case.html	getAttributeNS http://www.w3.org/2000/svg,Abc,abc
+case.html	getAttributeNS http://www.w3.org/2000/svg,Abc,Ä
+case.html	getAttributeNS http://www.w3.org/2000/svg,Abc,ä
+case.html	getAttributeNS http://www.w3.org/2000/svg,abc,ABC
+case.html	getAttributeNS http://www.w3.org/2000/svg,abc,Abc
+case.html	getAttributeNS http://www.w3.org/2000/svg,abc,abc
+case.html	getAttributeNS http://www.w3.org/2000/svg,abc,Ä
+case.html	getAttributeNS http://www.w3.org/2000/svg,abc,ä
+case.html	getAttributeNS http://www.w3.org/2000/svg,Ä,ABC
+case.html	getAttributeNS http://www.w3.org/2000/svg,Ä,Abc
+case.html	getAttributeNS http://www.w3.org/2000/svg,Ä,abc
+case.html	getAttributeNS http://www.w3.org/2000/svg,Ä,Ä
+case.html	getAttributeNS http://www.w3.org/2000/svg,Ä,ä
+case.html	getAttributeNS http://www.w3.org/2000/svg,ä,ABC
+case.html	getAttributeNS http://www.w3.org/2000/svg,ä,Abc
+case.html	getAttributeNS http://www.w3.org/2000/svg,ä,abc
+case.html	getAttributeNS http://www.w3.org/2000/svg,ä,Ä
+case.html	getAttributeNS http://www.w3.org/2000/svg,ä,ä
+case.html	getAttributeNS Ä
+case.html	getAttributeNS ä
 case.html	getElementsByTagName ABC
 case.html	getElementsByTagName Abc
 case.html	getElementsByTagName a:ABC
@@ -8044,6 +8197,90 @@ case.html	setAttribute Abc
 case.html	setAttribute abc
 case.html	setAttribute Ä
 case.html	setAttribute ä
+case.html	setAttributeNS ABC
+case.html	setAttributeNS Abc
+case.html	setAttributeNS abc
+case.html	setAttributeNS http://FOO,ABC,ABC
+case.html	setAttributeNS http://FOO,ABC,Abc
+case.html	setAttributeNS http://FOO,ABC,abc
+case.html	setAttributeNS http://FOO,ABC,Ä
+case.html	setAttributeNS http://FOO,ABC,ä
+case.html	setAttributeNS http://FOO,Abc,ABC
+case.html	setAttributeNS http://FOO,Abc,Abc
+case.html	setAttributeNS http://FOO,Abc,abc
+case.html	setAttributeNS http://FOO,Abc,Ä
+case.html	setAttributeNS http://FOO,Abc,ä
+case.html	setAttributeNS http://FOO,abc,ABC
+case.html	setAttributeNS http://FOO,abc,Abc
+case.html	setAttributeNS http://FOO,abc,abc
+case.html	setAttributeNS http://FOO,abc,Ä
+case.html	setAttributeNS http://FOO,abc,ä
+case.html	setAttributeNS http://FOO,Ä,ABC
+case.html	setAttributeNS http://FOO,Ä,Abc
+case.html	setAttributeNS http://FOO,Ä,abc
+case.html	setAttributeNS http://FOO,Ä,Ä
+case.html	setAttributeNS http://FOO,Ä,ä
+case.html	setAttributeNS http://FOO,ä,ABC
+case.html	setAttributeNS http://FOO,ä,Abc
+case.html	setAttributeNS http://FOO,ä,abc
+case.html	setAttributeNS http://FOO,ä,Ä
+case.html	setAttributeNS http://FOO,ä,ä
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,ABC,ABC
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,ABC,Abc
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,ABC,abc
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,ABC,Ä
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,ABC,ä
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,Abc,ABC
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,Abc,Abc
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,Abc,abc
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,Abc,Ä
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,Abc,ä
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,abc,ABC
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,abc,Abc
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,abc,abc
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,abc,Ä
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,abc,ä
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,Ä,ABC
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,Ä,Abc
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,Ä,abc
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,Ä,Ä
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,Ä,ä
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,ä,ABC
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,ä,Abc
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,ä,abc
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,ä,Ä
+case.html	setAttributeNS http://www.w3.org/1999/xhtml,ä,ä
+case.html	setAttributeNS http://www.w3.org/2000/svg,ABC,ABC
+case.html	setAttributeNS http://www.w3.org/2000/svg,ABC,Abc
+case.html	setAttributeNS http://www.w3.org/2000/svg,ABC,abc
+case.html	setAttributeNS http://www.w3.org/2000/svg,ABC,Ä
+case.html	setAttributeNS http://www.w3.org/2000/svg,ABC,ä
+case.html	setAttributeNS http://www.w3.org/2000/svg,Abc,ABC
+case.html	setAttributeNS http://www.w3.org/2000/svg,Abc,Abc
+case.html	setAttributeNS http://www.w3.org/2000/svg,Abc,abc
+case.html	setAttributeNS http://www.w3.org/2000/svg,Abc,Ä
+case.html	setAttributeNS http://www.w3.org/2000/svg,Abc,ä
+case.html	setAttributeNS http://www.w3.org/2000/svg,abc,ABC
+case.html	setAttributeNS http://www.w3.org/2000/svg,abc,Abc
+case.html	setAttributeNS http://www.w3.org/2000/svg,abc,abc
+case.html	setAttributeNS http://www.w3.org/2000/svg,abc,Ä
+case.html	setAttributeNS http://www.w3.org/2000/svg,abc,ä
+case.html	setAttributeNS http://www.w3.org/2000/svg,Ä,ABC
+case.html	setAttributeNS http://www.w3.org/2000/svg,Ä,Abc
+case.html	setAttributeNS http://www.w3.org/2000/svg,Ä,abc
+case.html	setAttributeNS http://www.w3.org/2000/svg,Ä,Ä
+case.html	setAttributeNS http://www.w3.org/2000/svg,Ä,ä
+case.html	setAttributeNS http://www.w3.org/2000/svg,ä,ABC
+case.html	setAttributeNS http://www.w3.org/2000/svg,ä,Abc
+case.html	setAttributeNS http://www.w3.org/2000/svg,ä,abc
+case.html	setAttributeNS http://www.w3.org/2000/svg,ä,Ä
+case.html	setAttributeNS http://www.w3.org/2000/svg,ä,ä
+case.html	setAttributeNS Ä
+case.html	setAttributeNS ä
+getElementById-namespaced-id.html	append a namespaced ID preserves ID lookup and form association
+getElementById-namespaced-id.html	change a namespaced ID preserves ID lookup and form association
+getElementById-namespaced-id.html	remove a namespaced ID preserves ID lookup and form association
+getElementById-namespaced-id.html	replace a namespaced ID preserves ID lookup and form association
 getElementsByClassName-01.htm	document.getElementsByClassName(): simple
 getElementsByClassName-02.htm	document.getElementsByClassName(): also simple
 getElementsByClassName-03.htm	document.getElementsByClassName(): changing classes
@@ -8130,6 +8367,22 @@ moveBefore/Node-moveBefore.html	Calling moveBefore with a non-Node first argumen
 moveBefore/Node-moveBefore.html	Calling moveBefore with second argument missing, or other than Node, null, or undefined, must throw TypeError.
 moveBefore/Node-moveBefore.html	moveBefore() method does not exist on non-ParentNode Nodes
 name-validation.html	Valid and invalid characters in createDocumentType.
+namespaced-attribute-mutations.html	A namespaced multiple attribute does not reset a select
+namespaced-attribute-mutations.html	A namespaced selected attribute does not change an option's selectedness
+namespaced-attribute-mutations.html	A namespaced size attribute does not reset a select
+namespaced-attribute-mutations.html	A namespaced src attribute does not prepare a script
+namespaced-attribute-mutations.html	append a namespaced event handler attribute preserves an HTML event handler
+namespaced-attribute-mutations.html	append a namespaced event handler attribute preserves an SVG event handler
+namespaced-attribute-mutations.html	append a namespaced style attribute preserves HTML inline style
+namespaced-attribute-mutations.html	append a namespaced style attribute preserves SVG inline style
+namespaced-attribute-mutations.html	change a namespaced event handler attribute preserves an HTML event handler
+namespaced-attribute-mutations.html	change a namespaced event handler attribute preserves an SVG event handler
+namespaced-attribute-mutations.html	remove a namespaced event handler attribute preserves an HTML event handler
+namespaced-attribute-mutations.html	remove a namespaced event handler attribute preserves an SVG event handler
+namespaced-attribute-mutations.html	remove a namespaced style attribute preserves HTML inline style
+namespaced-attribute-mutations.html	remove a namespaced style attribute preserves SVG inline style
+namespaced-attribute-mutations.html	replace a namespaced event handler attribute preserves an HTML event handler
+namespaced-attribute-mutations.html	replace a namespaced event handler attribute preserves an SVG event handler
 querySelector-id-nth-child.html	querySelectorAll matching #id + constant nth-child()
 querySelector-mixed-case.html	Mixed HTML/SVG/MathML tree with various mixed-case attributes
 rootNode.html	getRootNode() must return a document fragment when a node is in the fragment

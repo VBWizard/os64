@@ -865,11 +865,11 @@ bool vc_url(VCur *c, garb_val_t *out)
     return true;
 }
 
-// An <image>: a url, or a gradient or image-set this library does not draw
-// yet, taken by its name, so that a declaration naming one is valid — as
-// it is in a browser that draws it — and the rest of a `background` still
-// applies. props.c's bg_image asks a linear or radial gradient's grammar
-// first.
+// An <image>: a url, or a gradient or image-set taken by its name, so that
+// a declaration naming one is valid — as it is in a browser that draws it —
+// and the rest of a `background` still applies. props.c's bg_image asks a
+// gradient's grammar first and fills its items; an image-set, or a conic
+// gradient it takes by name, carries nothing.
 bool vc_image(VCur *c, garb_val_t *out)
 {
     if (vc_url(c, out))

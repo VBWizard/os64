@@ -291,7 +291,8 @@ list no longer holds it.
 not positioned, painted as one group after the paragraph written after
 it, its bounds, and hit over the flow it overlaps; a positioned group's
 bounds holding an absolute member 50 below it; nested groups; an
-inline-block left unstacked; `opacity: 0` opening nothing. One style dump
+inline-block stacked as its atom once, a group of its own (since the atom
+group, 2026-11-12), and hit where it is; `opacity: 0` opening nothing. One style dump
 changed by rule: a translucent background keeps its alpha in or out of
 the flow (`bg=#000000/128`). `tools/test_yonder_cases.inc`: translucent
 fill and text reach the verbs with their alpha; a group recorded open,
@@ -309,7 +310,7 @@ through the card AND through its green, the in-flow block over the card.
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| `opacity` on an inline box or an inline-block | an inline box is pieces on lines and an inline-block's content is painted where its atom is, so neither is one layer to group; both are painted opaque | a page whose faded link or badge matters |
+| `opacity` on a plain inline box | an inline box is pieces on lines, no one layer to group; it is painted opaque. (An inline-block's, and an inline picture's, is drawn since 2026-11-12: the atom on its line is stacked whole, `public_frag`.) | a page whose faded link matters |
 | Form widgets and a box's scroll bars in a group | libui widgets are windows' children drawn after the page, and the bars are drawn after it too; both stay opaque | a faded form, or a faded scrolling panel |
 | The root's own opacity over the canvas | the canvas is painted before the walk, so a translucent `html` fades the page over its own background, not over nothing | a page that fades `html` |
 | Groups past 32 deep, or a group whose copy finds no memory | painted opaque | a page that nests them that deep |
@@ -407,8 +408,11 @@ degrees, or `to` one of eight sides and corners; a radial's shape, size and
 centre — then its stops, a stop written with two positions becoming two
 and a hint a position alone. It is still written out as `name(...)`, so the
 declaration corpus does not churn; what was kept is proven through
-libflow's style dump. Conic gradients and image-set are taken by name and
-drawn as nothing.
+libflow's style dump. image-set is taken by name and drawn as nothing; a
+conic gradient is read, kept and drawn the same way since 2026-11-11 (the
+CSS Images slice: its turn's start and centre, stops at angles or
+percentages of the turn), except one whose angle or stop is a calc() with
+an angle in it, which is still taken by name (DEBTS.md).
 
 **libflow carries `flow_gradient_t`** in a background layer's image, beside
 the url() — one picture per layer, never both (S4c, below). The geometry stays
@@ -465,8 +469,8 @@ draws it.
 |---|---|---|
 | `background-size`, `-origin`, `-clip`, and `background-position` for a gradient | — | done in S4b, below |
 | An inline element's gradient across its pieces | each piece is its own tile, where the browsers lay the pieces end to end and draw one gradient along them; the public tree does not say which piece is first | a gradient on a span that wraps |
-| Conic gradients and image-set | no picture is made for them | a page whose look depends on one |
-| Interpolation in another colour space (`in oklab`) | Color 4's spaces are not converted | a page that writes one |
+| ~~Conic gradients~~ and image-set | conic: drawn since 2026-11-11 (the CSS Images slice); image-set: no picture is made for it | a page whose look depends on one |
+| Interpolation in another colour space (`in oklab`) | Color 4's spaces are not converted: a linear or radial gradient writing one is refused, a conic one taken by name and drawn as nothing, as conic gradients were before they were drawn — so the rest of its `background` applies (and WPT's invalid `conic-gradient(in from 90deg, …)` is taken that way too) | a page that writes one |
 | A gradient's cost | every pixel of it the view shows is worked out on every paint | a page whose gradients make painting slow, measured |
 
 ## Background size, origin and clip (slice S4b)
@@ -1090,6 +1094,73 @@ neither, so the two never disagree. The painter keeps 64 groups open;
 past that an opacity group is painted opaque, and a group drawn through
 its matrix not at all.
 
+### Kept drawings
+
+A box that only turns paints the same two sheets every frame: Chris's
+record of a lit Lamplighter (2026-11-13, after warp speed) spent most of
+a 16.6 ms paint on the beam's and the rays' gradients and masks, all of
+it inside groups whose insides never change. So the face KEEPS a group's
+sheets between paints of one tree and lays them through each frame's
+matrix, and the painter paints nothing inside.
+
+**What a drawing is made from**, the key (paint.h, `yonder_keep_key_t`):
+the tree (`flow_tree_serial`, since a freed tree's box may share an
+address with a later one's), the box, the box's `drawn` stamp, the
+group's bounds in its own coordinates, and the page's scroll — plus a
+stamp of the face's own. A drawing is laid only under the key and stamp
+it was made under.
+
+- **`drawn` is libflow's** (flow_box_t.drawn): a tick that changes a
+  value a box draws stamps that box, and every box it is inside, with a
+  stamp later than any before it; a scroll does the same from its
+  container. A turn or a fade stamps only the boxes it is inside — the
+  transform's properties and `opacity` say how a group is laid, not what
+  it draws — so a box that only turns keeps its key. A layout is a new
+  tree, so a new key.
+- **The face's stamp moves at every mark of the view but a tick's**: a
+  picture arriving or moving, a canvas drawn, a script's change, a
+  scroll, a settings change. Any of those may change what a group draws
+  while its box's `drawn` holds still. (A control marks its own widget,
+  not the view; a group with one inside is never kept.)
+- **What a kept drawing cannot hold is never kept** (the painter's
+  spoil): a picture (a sheet's or the `background` attribute's), a
+  control, a canvas or a stand-in inside the group, or anything drawn
+  otherwise than a later paint would draw it — a layer refused for the
+  budget or for memory, a group inside drawn upright, a text clip drawn
+  in one colour, and (the face's check) any buffer the paint's scratch
+  could not lend while the group was painted. A making whose sheets the
+  face cannot open is not tried again until its key moves.
+
+**The protocol** (paint.h, `keep`): the painter asks the face before it
+opens a drawn-through group. NO, and it is painted as ever, cut to what
+shows. MAKE, and it is opened with all of its bounds and painted whole —
+the walk culls nothing inside it (flow_visitor_t.inside) — and at its
+close the face is told whether what was painted may be kept. HAVE, and
+it is opened with its bounds, the walk culls everything inside it, and
+its close lays the kept sheets. The face answers MAKE only for a group
+asked about in two paints under one key and stamp — two dirty parts of
+one paint are one paint, so a lantern whose candle changes every frame
+is never made — so a drawing painted once is never painted whole for
+nothing; and a group whose making was spoiled
+is NO until its key or stamp moves, so it is never painted whole every
+frame for nothing either.
+
+**The store** (keep.c, pure, `tools/test_yonder_keep_host.sh`): one row
+for each group asked about, at most 256, the one asked longest ago
+forgotten first; sheets held within 64 MiB (a lit Lamplighter at 150%
+holds about 16), the least recently asked let go for room, never one
+this paint asked for; everything let go when another tree is painted.
+yonder's record says what it saved: `kept drawings:` drawings laid,
+made, groups seen afresh, makings spoiled, drawings past the budget,
+and what is held.
+
+What it removes, per frame of a box that only turns: its gradients and
+mask captures worked onto two sheets, the masks combined and the layer
+recovered and laid. What it keeps: the warp and the lay, and what the
+page under the box repaints. What it costs: the second paint of each
+such group after a layout paints it whole rather than cut to what
+shows, and the memory its sheets hold.
+
 ### Booked
 
 | Debt | Why it waits | Trigger |
@@ -1103,6 +1174,8 @@ its matrix not at all.
 | A large `visibility: hidden` box inside a turned group still sizes its sheets | the bounds come from layout overflow, which keeps what is hidden; a page whose hidden content pushes a turned group past the sheet limits gets it upright | a page that does |
 | A sticky box, a scroll container's bars, or a fragment revealed inside a drawn-through box | each is worked against the page's viewport, which the box's own coordinates are not | a page that scrolls inside a turned box |
 | `perspective` and non-flat matrices | carried over from S7a | a page whose 3D card flip matters |
+| A kept drawing does not outlive its tree: a script's change, a layout for an animation, and every other layout start each turning group's keeping again | a box is the tree's; carrying a drawing across trees means proving the two subtrees draw alike, box by box | a record whose `kept drawings:` line shows most groups seen afresh |
+| A turning group with a picture inside (an icon spinner with a mask from a URL) is painted every frame, never kept | a picture arrives, moves and is let go with no tick to say so; the face's stamp moves for each of those, but whether every such path marks the view is not yet proved | a record of a page whose turning icon is the cost |
 | `background-clip: text` | — | done in S7c, § The text clip, below |
 
 ### Proof
@@ -1123,9 +1196,23 @@ painted over black and white and laid in place lands as the content
 over any backdrop (opaque and empty paint exactly); a quarter turn and
 a mirror copied by index, pixel for pixel; a scale and a turn bilinear
 against the reference to within one level; the opacity rule; the clip;
-a matrix that cannot be undone laying nothing.
+a matrix that cannot be undone laying nothing; three hundred random
+groups with holes through random matrices, opacities and clips, each
+pixel the contract's and each pixel nothing painted reaches untouched
+to the bit; rows two thousand pixels long; opaque black, which is
+painted. It runs every frame of a turning box, so its arithmetic is
+whole numbers (warp speed, after the P5 record of 2026-11-13 put half
+of a lit Lamplighter's paint in it): a position in 1/2^32 pixels
+stepped along each row from the row's own centre, a mix in 1/65536 of
+a level, one exact division to lay it; a pixel all of whose four sheet
+pixels are nothing painted is skipped, which leaves it exactly as
+laying it would; and a row is walked only over the stretch that can
+reach the sheets. A step too big for fixed point, or a corner past
+2^30 pixels, works each pixel alone instead. About five times the old
+rate on the host's CPU, beam and rays alike.
 `tools/test_libflow_transform_mutants.py` breaks each rule, painter's
-included. In the guest, the fixture's last two rows beside headless
+included, and `tools/test_yonder_warp_mutants.py` the warp's own
+arithmetic. In the guest, the fixture's last two rows beside headless
 Chrome: turned, grown, a half-turned chevron, a mirror, a skew.
 
 ## The text clip (slice S7c, `background-clip: text`)
@@ -1504,8 +1591,9 @@ And at the edges of what a page can write (10/14, for the input domain,
   when a frame is due, as often as a layout's cost allows. Every
   property moves correctly; a frame costs a layout.
 - **S8b, in place.** The properties that change only what is painted —
-  the transform's, `opacity`, the background's colour and position, the
-  border colours, `box-shadow`: nine animations in ten — move between
+  the transform's, `opacity`, the background's colour, position and size,
+  the mask's position and size, the border colours, `box-shadow`: nine
+  animations in ten — move between
   layouts: libflow rewrites the element's style, its frame and its ink,
   and the face repaints what moved.
 
@@ -1676,7 +1764,7 @@ out, and a layout at a time is the page at that time.
 | `line-height` | a number with a number, a length with a length; else discrete |
 | `visibility` | `visible` for every fraction strictly between 0 and 1 if either end is `visible`; else discrete (Web Animations Appendix A) |
 | a shadow list | shadow by shadow, the shorter padded with transparent ones of no size that match the other's `inset`; a pair differing in `inset` makes the whole list discrete; colours as above, and a pair both `currentColor` stays `currentColor` (Appendix A) |
-| `background-position`, `background-size` | repeatable lists: repeated to their least common multiple, then item by item as lengths (`cover` and `contain` discrete) |
+| `background-position`, `background-size`, and a mask's `mask-position` and `mask-size` (MASKS.md § 5) | repeatable lists: repeated to their least common multiple, then item by item as lengths (`cover` and `contain` discrete) |
 | a transform | below |
 | everything else — keywords, families, pictures and gradients, grid tracks | discrete |
 
@@ -1755,7 +1843,8 @@ and that is a change of structure: the face is due a layout at its end.
 `flow_motion_due(tree, view, scroll)` answers the earliest time an
 animation that can show in `view` shows another value. One that only
 repaints where its element draws — a colour, a fade, visibility, a
-background's position, the corners' curves — can show there when its
+background's or a mask's position and size, the corners' curves — can
+show there when its
 element can be seen: all its box paints, the ink its shadows and the
 like reach past it included, through any transform — for an inline
 element, whose pieces may
@@ -1888,7 +1977,8 @@ what they do to the page's structure is fixed for their life:
 
 - every property any of its animations sets is one of the TICK SET: the
   transform's four properties and `transform-origin`, `opacity`,
-  `background-color`, `background-position`, the four border colours and
+  `background-color`, `background-position` and `-size`, `mask-position`
+  and `-size` (MASKS.md § 5), the four border colours and
   `box-shadow`. None is inherited, so no other element's style reads
   them — but by keyword, so
 - no child takes one of them by `inherit` (FStyled.taken): the child's
@@ -1969,7 +2059,10 @@ rectangle (§ The one dirty rectangle, below), and one outside the view
 would stretch it across the view — and the whole view for the canvas's
 owner, whose background it paints across the view, told by the
 painter's own rule from the box, asked at each mark: a tick may change
-which box that is, the root's background being what moves. An element out of view is marked
+which box that is, the root's background being what moves. libflow
+hands that element over with an empty rectangle whatever its boxes or
+its group reach — nothing, for a body whose content is all positioned
+out of it — so the painter is always asked. An element out of view is marked
 nothing, and a tick that marks nothing paints nothing. A tick that moved a frame places
 the page's live controls again (`forms_place`), so a field inside a
 sliding panel slides with it.
@@ -2146,13 +2239,13 @@ the perf slice.
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Transitions, and `:hover` with them | § Transitions: their trigger is hover, and hover is a restyle and a layout per move | the perf slice: they are the slice after it (Chris, 10/14: "as long as we don't forget") |
-| The animation events and the Web Animations API | scripts' surface, which the Modern Web arc gives (Platform waits for its arc) | a page with scripts on that waits on `animationend` |
+| ~~The animation events and the Web Animations API~~ **PAID 2026-11-09** (WEB_ANIMATIONS.md slices A, B1 and B2: `animate()`, `getAnimations()` with `CSSAnimation`, and the four CSS animation events) | — | — |
 | `animation-composition`, `animation-timeline` (scroll-driven), `animation-range`, view transitions | newer levels. GitHub writes `animation-timeline: scroll(self)` 15 times, outside `@supports`, on animations of no duration that set custom properties: run on the clock they end as they start and show nothing, as in a browser without scroll timelines | a page that runs on scroll |
 | `display` in a keyframe | ignored: an animated display builds and unbuilds boxes, and browsers began animating it only lately | a page that animates it |
 | Grid track lists interpolated | discrete here | a page that animates its grid |
 | Custom properties in a keyframe, and registered ones (`@property`) | ignored: a keyframe's `--x` would have to reach the `var()`s that read it, which libgarb replaces at the cascade | a page whose animated variable matters |
 | `will-change` beyond the transforms and `opacity` — `position`, `z-index`, and what yonder draws nothing of | read, and given no effect | a page whose stacking depends on one |
-| The properties yonder draws nothing of — `filter`, `clip-path`, masks, `stroke-dashoffset` | animating them animates nothing | the slices that draw them |
+| The properties yonder draws nothing of — `clip-path`, `stroke-dashoffset` — and, of those it draws, `filter` and a mask's images and operators | animating the first animates nothing; the rest are discrete, flipping at the midpoint (a mask's position and size interpolate, MASKS.md § 5) | the slices that draw or mix them |
 | Animations on `::before` and `::after` | yonder generates no content for them at all | the slice that does |
 | Inherited properties in place — `color`, `visibility`, `text-shadow`, the fill | they move by layouts, whose cost is ruled (S8a, the face); in place they would need every inheriting descendant's style rewritten | a page whose inherited animation costs too much in layouts |
 | A page's scrollable extent following a transform's frames | the extent is the layout's | a page scrolled to where an animation carried something |

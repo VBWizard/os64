@@ -33,7 +33,7 @@ bool d_string_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString 
     size_t length;
     const char *source = JS_ToCStringLen(ctx, &length, value);
     if (source == NULL) return false;
-    char *copy = length < SIZE_MAX ? d_alloc(dom, length + 1) : NULL;
+    char *copy = length < SIZE_MAX ? d_alloc_kind(dom, length + 1, OS64_DOM_MEM_TEXT) : NULL;
     if (copy == NULL) {
         JS_FreeCString(ctx, source);
         d_error(ctx, "QuotaExceededError", "DOM string quota exceeded");
@@ -557,7 +557,7 @@ static JSValue decoder_member(JSContext *ctx, JSValueConst self, int argc, JSVal
         *d = counting;
         return JS_ThrowTypeError(ctx, "The bytes are not valid %s", kEncodingNames[d->encoding]);
     }
-    char *out = d_alloc(dom, sink.used + 1);
+    char *out = d_alloc_kind(dom, sink.used + 1, OS64_DOM_MEM_TEXT);
     if (out == NULL) return d_error(ctx, "QuotaExceededError", "TextDecoder quota exceeded");
     DSink writing = {d, out, 0, false};
     decode_run(&writing, bytes, length, !stream);

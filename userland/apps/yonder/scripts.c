@@ -73,7 +73,18 @@ typedef struct {
 typedef struct {
     const os64_html_node_t *node;
     bool failed;
+    bool (*valid)(void *);
+    void *ctx;
 } Owed;
+
+// The trees standing that may read a binding's script effects, each with
+// the generation it was laid out at (os64_dom_effects_mark); `pinned` when
+// one could not be kept here, and then nothing buried is freed while the
+// binding lives, nor the binding itself once its page goes.
+typedef struct {
+    struct { const void *tree; uint64_t mark; } trees[16];
+    bool pinned;
+} TreeMarks;
 
 struct yonder_scripts {
     os64_html_document_t *doc;
@@ -130,7 +141,15 @@ struct yonder_scripts {
     // attribute has no runtime until an event one of them names.
     uint64_t handlers_version;
     bool handlers_scanned;
-    uint64_t handlers;
+    os64_dom_handler_mask_t handlers;
+    // HTML's sticky activation: a person's key, press or click has reached
+    // the page (yonder_scripts_activated).
+    bool activated;
+    // Whether the document holds a media element, as of the tree version
+    // it was last looked at (media_in_document): a page with no script
+    // gets its runtime for one.
+    uint64_t media_version;
+    bool media_scanned, media_found;
     char note[256];
     // The whole address of the script the last task ran, NULL when it was
     // an inline script, an event or a timer (yonder_scripts_task_address).
@@ -152,7 +171,55 @@ struct yonder_scripts {
     // The page's module map, made with its runtime when the Modern Web
     // surface is on: one per document, which is one per realm (IFRAME.md).
     yonder_modules_t *modules;
+    // A binding retired while the page's trees may still read its script
+    // effects (os64_dom_effects_held): drained, its engine gone, and kept
+    // until the scripts go and, past them, until the last of those trees
+    // goes (Orphan).
+    os64_dom_t *retired_dom;
+    // The page's trees standing that were laid out with its effects, with
+    // the generation each was laid out at (yonder_scripts_tree_made).
+    // On s_living while the scripts are, so a tree that goes finds its page.
+    TreeMarks marks;
+    yonder_scripts_t *living_next;
 };
+
+static yonder_scripts_t *s_living;
+
+// A page's binding its scripts outlived: freed when the last tree that
+// may read its effects goes (yonder_scripts_tree_gone).
+typedef struct Orphan Orphan;
+struct Orphan {
+    Orphan *next;
+    os64_dom_t *dom;
+    TreeMarks marks;
+};
+static Orphan *s_orphans;
+
+// What `marks_drop` returns: whether a row was the tree's, and whether any
+// tree is left.
+typedef enum { MARKS_NOT_MINE, MARKS_LEFT, MARKS_EMPTY } MarksDropped;
+
+// Struck the tree's row, released what was buried before the oldest left.
+static MarksDropped marks_drop(TreeMarks *m, os64_dom_t *dom, const void *tree)
+{
+    size_t n = sizeof(m->trees) / sizeof(m->trees[0]), i = 0;
+    while (i < n && m->trees[i].tree != tree)
+        i++;
+    if (i == n)
+        return MARKS_NOT_MINE;
+    m->trees[i].tree = NULL;
+    bool left = m->pinned;
+    uint64_t oldest = UINT64_MAX;
+    for (size_t k = 0; k < n; k++)
+        if (m->trees[k].tree != NULL) {
+            left = true;
+            if (m->trees[k].mark < oldest)
+                oldest = m->trees[k].mark;
+        }
+    if (!m->pinned)
+        os64_dom_effects_release(dom, oldest == UINT64_MAX ? os64_dom_effects_mark(dom) : oldest);
+    return left ? MARKS_LEFT : MARKS_EMPTY;
+}
 
 static void release_item(yonder_scripts_t *s, Item *it)
 {
@@ -197,7 +264,10 @@ static void retire(yonder_scripts_t *s)
                       s->url, (unsigned long)report.reclaimed_blocks, (unsigned long)report.reclaimed_bytes);
         os64_debug_log(line);
     }
-    os64_dom_free(s->dom);
+    if (os64_dom_effects_held(s->dom) && s->retired_dom == NULL)
+        s->retired_dom = s->dom;
+    else
+        os64_dom_free(s->dom);
     s->runtime = NULL;
     s->dom = NULL;
 }
@@ -214,9 +284,10 @@ static bool sticky(os64_js_status_t status)
 // script, at the checkpoint that follows it, so they run here. Until they
 // do, the runtime refuses every next task as busy: the page's `load`
 // went undelivered on google.com. The script's own failure stays the
-// task's; a job that throws is passed over as the next job runs, and a
-// sticky outcome (the time limit, memory) replaces it, so the runtime is
-// retired.
+// task's; a job that throws, or a module's late failure a job surfaces, is
+// passed over as the next job runs (the task keeps one failure, and the
+// window's error event has heard it), and a sticky outcome (the time
+// limit, memory) replaces it, so the runtime is retired.
 static void drain_after_exception(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
     os64_js_outcome_t jobs = *out;
@@ -500,7 +571,9 @@ static size_t own_stack_bytes(void)
 
 // The runtime and its binding, made at the first script that runs. The heap
 // is the host's (options.memory_bytes, yonder.conf's script_memory_mb), else
-// libjs's standalone profile; source is yonder's own limit
+// libjs's standalone profile, and so is the binding's budget
+// (options.dom_bytes, libdom's share of page_memory_mb), else libdom's
+// default; source is yonder's own limit
 // (SCRIPT_SOURCE_MAX), which the fetches refuse past by a body's bytes and
 // the runtime by its decoded text, which can be longer. The stack
 // is the engine's share of yonder's window thread, which layout shares
@@ -527,6 +600,8 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
                                      &s->runtime, out) != OS64_JS_OK)
         return false;
     os64_dom_options_t options = os64_dom_default_options();
+    if (s->options.dom_bytes != 0)
+        options.max_bytes = s->options.dom_bytes;
     options.modern = s->options.modern;
     options.shadow_trees = s->options.shadow_trees;
     options.ranges = s->options.ranges;
@@ -561,9 +636,12 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
         os64_dom_set_view(s->dom, &s->options.view);
     os64_dom_set_computed(s->dom, s->options.computed, s->options.opaque);
     os64_dom_set_images(s->dom,&s->options.images);
+    os64_dom_set_media(s->dom, &s->options.media);
     os64_dom_set_text(s->dom,&s->options.canvas_text);
     if (s->options.history.update != NULL)
         os64_dom_set_history(s->dom, &s->options.history);
+    if (s->options.css_animations.count != NULL)
+        os64_dom_set_css_animations(s->dom, &s->options.css_animations);
     // The state the session gave the document before there was a binding
     // to tell (a traversal's or a reload's entry): a binding that cannot
     // take it is not built, so the page never reads a state the window
@@ -620,6 +698,8 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
         return NULL;
     s->doc = doc;
     s->state = state;
+    s->living_next = s_living;
+    s_living = s;
     s->options = *options;
     s->options.url = NULL;
     s->options.timing = NULL;
@@ -662,7 +742,30 @@ void yonder_scripts_free(yonder_scripts_t *s)
 {
     if (s == NULL)
         return;
+    for (yonder_scripts_t **at = &s_living; *at != NULL; at = &(*at)->living_next)
+        if (*at == s) {
+            *at = s->living_next;
+            break;
+        }
     retire(s);
+    // Trees laid out with its effects may still stand (a page's tree goes
+    // after its scripts): the drained binding waits for the last of them.
+    bool standing = s->marks.pinned;
+    for (size_t i = 0; i < sizeof(s->marks.trees) / sizeof(s->marks.trees[0]); i++)
+        standing = standing || s->marks.trees[i].tree != NULL;
+    // A binding no tree could be followed for (pinned), or with no room
+    // to wait, is kept: no moment is known to be safe to free it.
+    if (!standing) {
+        os64_dom_free(s->retired_dom);
+    } else if (s->retired_dom != NULL && !s->marks.pinned) {
+        Orphan *o = os64_calloc(1, sizeof(*o));
+        if (o != NULL) {
+            o->dom = s->retired_dom;
+            o->marks = s->marks;
+            o->next = s_orphans;
+            s_orphans = o;
+        }
+    }
     for (uint32_t i = 0; i < s->count; i++) {
         release_item(s, &s->items[i]);
         os64_free(s->items[i].address);
@@ -1606,7 +1709,7 @@ void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *sou
 
 // Which types the document's on<type> attributes name (libdom's own walk):
 // one walk per tree version, and only while the page has no runtime.
-static uint64_t handler_types(yonder_scripts_t *s)
+static os64_dom_handler_mask_t handler_types(yonder_scripts_t *s)
 {
     uint64_t version = os64_html_version(s->doc);
     if (s->handlers_scanned && s->handlers_version == version)
@@ -1617,12 +1720,19 @@ static uint64_t handler_types(yonder_scripts_t *s)
     return s->handlers;
 }
 
+static void activation_note(yonder_scripts_t *s, const os64_dom_event_t *event);
+
 os64_js_status_t yonder_scripts_pointer(yonder_scripts_t *s, const os64_dom_pointer_sample_t *sample,
                                          os64_dom_pointer_default_t action, void *opaque,
                                          bool *ran, os64_js_outcome_t *out)
 {
     *ran = false;
     os64_memset(out, 0, sizeof(*out));
+    // A press is the mousedown and the mouse's pointerdown HTML counts as
+    // activation, whether or not the page listens. The sample carries only
+    // where and which button: the event types are libdom's to give.
+    if (s != NULL && sample->action == OS64_DOM_POINTER_DOWN)
+        s->activated = true;
     if (!s || s->dead || !s->options.modern) return OS64_JS_OK;
     s->task_address = NULL; s->task_us = -1; s->written = 0;
     if (!ensure_runtime(s, out)) { retire(s); return out->status; }
@@ -1690,6 +1800,9 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
     }
     if (prevented != NULL)
         *prevented = false;
+    // The person's input counts whether or not the page listens for it.
+    if (s != NULL)
+        activation_note(s, event);
     if (s == NULL || s->dead)
         return OS64_JS_OK;
     s->written = 0;
@@ -1794,6 +1907,69 @@ bool yonder_scripts_animation_fire(yonder_scripts_t *s, uint64_t now, os64_js_ou
         return false;
     judged(s, out);
     return true;
+}
+
+uint64_t yonder_scripts_web_animations_next(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead ? os64_dom_web_animations_next(s->dom) : UINT64_MAX;
+}
+
+bool yonder_scripts_web_animations_update(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s != NULL) {
+        s->written = 0;
+        s->task_address = NULL;
+        s->task_us = -1;
+    }
+    if (s == NULL || s->dead || !os64_dom_web_animations_update(s->dom, now, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
+int32_t yonder_scripts_effects(yonder_scripts_t *s, const os64_html_node_t *node,
+                               const struct garb_effect *const **out)
+{
+    *out = NULL;
+    return s != NULL && !s->dead ? os64_dom_script_effects(s->dom, node, out) : 0;
+}
+
+void yonder_scripts_tree_made(yonder_scripts_t *s, const void *tree)
+{
+    if (s == NULL || tree == NULL || s->dead)
+        return;
+    uint64_t mark = os64_dom_effects_mark(s->dom);
+    for (size_t i = 0; i < sizeof(s->marks.trees) / sizeof(s->marks.trees[0]); i++)
+        if (s->marks.trees[i].tree == NULL) {
+            s->marks.trees[i].tree = tree;
+            s->marks.trees[i].mark = mark;
+            return;
+        }
+    s->marks.pinned = true;
+}
+
+void yonder_scripts_tree_gone(const void *tree)
+{
+    if (tree == NULL)
+        return;
+    for (yonder_scripts_t *s = s_living; s != NULL; s = s->living_next) {
+        os64_dom_t *dom = s->dom != NULL ? s->dom : s->retired_dom;
+        if (marks_drop(&s->marks, dom, tree) != MARKS_NOT_MINE)
+            return;
+    }
+    for (Orphan **at = &s_orphans; *at != NULL; at = &(*at)->next) {
+        Orphan *o = *at;
+        MarksDropped d = marks_drop(&o->marks, o->dom, tree);
+        if (d == MARKS_NOT_MINE)
+            continue;
+        if (d == MARKS_EMPTY) {
+            *at = o->next;
+            os64_dom_free(o->dom);
+            os64_free(o);
+        }
+        return;
+    }
 }
 
 bool yonder_scripts_reactions_owed(const yonder_scripts_t *s)
@@ -1953,6 +2129,25 @@ size_t yonder_scripts_heap_peak(const yonder_scripts_t *s)
 {
     if (s == NULL) return 0;
     return s->runtime != NULL ? os64_js_heap_peak(s->runtime) : s->heap_peak;
+}
+
+void yonder_scripts_census(yonder_scripts_t *s, yonder_census_sheet_t *sheet, bool detail)
+{
+    if (s == NULL || sheet == NULL || s->runtime == NULL || s->dom == NULL) return;
+    yonder_census_owner(sheet, "dom", os64_dom_bytes(s->dom), 0, NULL);
+    yonder_census_owner(sheet, "canvas", os64_dom_canvas_bytes(s->dom), 0, NULL);
+    size_t held = 0;
+    os64_dom_body_stats(s->dom, &held, NULL);
+    yonder_census_owner(sheet, "bodies", held, 0, NULL);
+    yonder_census_owner(sheet, "script", os64_js_heap_bytes(s->runtime), 0, NULL);
+    if (!detail) return;
+    for (int k = 0; k < OS64_DOM_MEM_KINDS; k++) {
+        os64_dom_mem_t m = os64_dom_memory(s->dom, (os64_dom_mem_kind_t)k);
+        yonder_census_dom_kind(sheet, os64_dom_mem_kind_name((os64_dom_mem_kind_t)k), m.bytes, m.blocks);
+    }
+    int64_t began = os64_micros();
+    sheet->script_known = os64_js_heap_census(s->runtime, &sheet->script);
+    sheet->cost_us += (uint64_t)(os64_micros() - began);
 }
 
 bool yonder_scripts_alive(const yonder_scripts_t *s)
@@ -2312,6 +2507,108 @@ void yonder_scripts_canvas_painted(yonder_scripts_t *s, const os64_html_node_t *
     if (s) os64_dom_canvas_painted(s->dom, node);
 }
 
+// Whether the document holds a media element: looked for once per tree
+// version, and only while the page has no runtime.
+static bool media_in_document(yonder_scripts_t *s)
+{
+    uint64_t version = os64_html_version(s->doc);
+    if (s->media_scanned && s->media_version == version)
+        return s->media_found;
+    s->media_found = false;
+    const os64_html_node_t *root = s->doc->document;
+    for (const os64_html_node_t *at = root; at != NULL && !s->media_found;
+         at = os64_html_shadow_including_next(root, at))
+        s->media_found = at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML &&
+                         (at->tag == OS64_HTML_TAG_AUDIO || at->tag == OS64_HTML_TAG_VIDEO);
+    s->media_version = version;
+    s->media_scanned = true;
+    return s->media_found;
+}
+
+bool yonder_scripts_media_turn(yonder_scripts_t *s)
+{
+    if (s == NULL || s->dead || !s->options.modern)
+        return false;
+    // A page that never ran a script still has its media elements: the
+    // binding they live in is made for the first one, as a handler
+    // attribute's is (dispatch_event).
+    if (s->dom == NULL) {
+        if (!media_in_document(s))
+            return false;
+        os64_js_outcome_t out;
+        if (!ensure_runtime(s, &out)) {
+            retire(s);
+            return false;
+        }
+    }
+    return s->dom != NULL && os64_dom_media_turn(s->dom);
+}
+
+bool yonder_scripts_media_pending(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead && s->dom != NULL && os64_dom_media_due(s->dom);
+}
+
+bool yonder_scripts_media_fire(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL)
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    if (!os64_dom_media_fire(s->dom, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
+bool yonder_scripts_media_view(yonder_scripts_t *s, const os64_html_node_t *node, os64_dom_media_view_t *out)
+{
+    if (s == NULL || s->dead || s->dom == NULL) {
+        os64_memset(out, 0, sizeof(*out));
+        return false;
+    }
+    return os64_dom_media_view(s->dom, node, out);
+}
+
+os64_js_status_t yonder_scripts_media_control(yonder_scripts_t *s, const os64_html_node_t *node,
+                                              os64_dom_media_control_t what, double value, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL)
+        return OS64_JS_OK;
+    s->written = 0;
+    s->task_address = NULL;
+    s->task_us = -1;
+    if (os64_dom_media_control(s->dom, node, what, value, out) && what == OS64_DOM_MEDIA_PLAY)
+        judged(s, out);
+    return out->status;
+}
+
+bool yonder_scripts_activated(const yonder_scripts_t *s)
+{
+    return s != NULL && s->activated;
+}
+
+void yonder_scripts_activate(yonder_scripts_t *s)
+{
+    if (s != NULL)
+        s->activated = true;
+}
+
+// HTML's activation-triggering input events: a key other than Escape
+// pressed, a button pressed, a click.
+static void activation_note(yonder_scripts_t *s, const os64_dom_event_t *event)
+{
+    if (event->type == NULL)
+        return;
+    if (event->kind == OS64_DOM_EVENT_KEY)
+        s->activated |= os64_streq(event->type, "keydown") && !(event->key != NULL && os64_streq(event->key, "Escape"));
+    else if (event->kind == OS64_DOM_EVENT_MOUSE || event->kind == OS64_DOM_EVENT_POINTER)
+        s->activated |= os64_streq(event->type, "mousedown") || os64_streq(event->type, "pointerdown") ||
+                        os64_streq(event->type, "click");
+}
+
 bool yonder_scripts_images_pending(const yonder_scripts_t *s)
 { return s&&!s->dead&&os64_dom_image_event(s->dom,NULL,NULL,false); }
 bool yonder_scripts_image_fire(yonder_scripts_t *s,os64_js_outcome_t *out)
@@ -2323,6 +2620,12 @@ bool yonder_scripts_image_fire(yonder_scripts_t *s,os64_js_outcome_t *out)
 }
 
 bool yonder_scripts_owe(yonder_scripts_t *s, const os64_html_node_t *node, bool failed)
+{
+    return yonder_scripts_owe_guarded(s, node, failed, NULL, NULL);
+}
+
+bool yonder_scripts_owe_guarded(yonder_scripts_t *s, const os64_html_node_t *node, bool failed,
+                                bool (*valid)(void *), void *ctx)
 {
     if (s == NULL || s->dead || node == NULL)
         return false;
@@ -2342,7 +2645,7 @@ bool yonder_scripts_owe(yonder_scripts_t *s, const os64_html_node_t *node, bool 
         s->owed_cap = cap;
     }
     os64_html_hold(s->doc, node);
-    s->owed[s->owed_count++] = (Owed){node, failed};
+    s->owed[s->owed_count++] = (Owed){node, failed, valid, ctx};
     return true;
 }
 
@@ -2364,6 +2667,12 @@ bool yonder_scripts_owed_fire(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_memset(out, 0, sizeof(*out));
     while (s != NULL && !s->dead && s->owed_next < s->owed_count) {
         Owed one = s->owed[s->owed_next++];
+        if (one.valid != NULL && !one.valid(one.ctx)) {
+            os64_html_release(s->doc, one.node);
+            if (s->owed_next == s->owed_count)
+                s->owed_next = s->owed_count = 0;
+            continue;
+        }
         s->task_address = NULL;
         s->task_us = -1;
         s->written = 0;

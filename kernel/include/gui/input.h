@@ -61,6 +61,7 @@ typedef enum input_event_type
     INPUT_EVENT_SETTINGS,
     INPUT_EVENT_INPUT_LOST,
     INPUT_EVENT_WINDOW_PLACEMENT,
+    INPUT_EVENT_WINDOW_PIN_CHANGED,
 } input_event_type_t;
 
 _Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
@@ -76,6 +77,7 @@ _Static_assert(INPUT_EVENT_SETTINGS == OS64_GUI_EVENT_SETTINGS, "event ABI: sett
 _Static_assert(INPUT_EVENT_INPUT_LOST == OS64_GUI_EVENT_INPUT_LOST, "event ABI: input loss");
 _Static_assert(INPUT_EVENT_DOORBELL == OS64_GUI_EVENT_DOORBELL, "event ABI: doorbell");
 _Static_assert(INPUT_EVENT_WINDOW_PLACEMENT == OS64_GUI_EVENT_WINDOW_PLACEMENT, "event ABI: placement");
+_Static_assert(INPUT_EVENT_WINDOW_PIN_CHANGED == OS64_GUI_EVENT_WINDOW_PIN_CHANGED, "event ABI: pin state");
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
 // BUTTON_DOWN/UP events). These numbers are ABI — they ride out to ring 3 in

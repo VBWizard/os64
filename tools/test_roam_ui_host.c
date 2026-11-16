@@ -85,6 +85,17 @@ os64_ui_status_code_t os64_directory_path(const char *base,const char *input,
 { (void)base;snprintf(out,OS64_DIRECTORY_PATH,"%s",input);return OS64_UI_OK; }
 os64_ui_status_code_t os64_directory_home(char out[OS64_DIRECTORY_PATH])
 { snprintf(out,OS64_DIRECTORY_PATH,"/home");return OS64_UI_OK; }
+const char *os64_directory_location(const os64_directory_t *d)
+{ return d==&fake.directory?fake.location:""; }
+os64_ui_status_code_t os64_directory_join(const char *base,const char *name,
+    char out[OS64_DIRECTORY_PATH])
+{ snprintf(out,OS64_DIRECTORY_PATH,"%s/%s",base,name);return OS64_UI_OK; }
+// The host has no conf ladder and no clipboard: roam takes its built-in
+// association file, and a copy reports failure.
+int64_t os64_conf_get(const char *name,const char *key,char *out,size_t cap)
+{ (void)name;(void)key;(void)out;(void)cap;return OS64_CONF_NO_FILE; }
+int64_t os64_clip_copy(const void *bytes,uint64_t length)
+{ (void)bytes;(void)length;return -1; }
 const char *os64_getenv(const char *key)
 { return !strcmp(key,"HOME")?"/home":NULL; }
 
@@ -334,7 +345,9 @@ static void roam_ui_tests(const char *font_dir)
     CHECK(app.ui.focus==&app.browser_ui.address.w);
     location.type=OS64_GUI_EVENT_KEY_UP;commands(&app,&location);
     os64_ui_set_focus(&app.ui,&app.browser_ui.details.w);
-    os64_ui_dataview_change_t change={.domain=8,.activated=7};
+    // A row that is no longer in the listing does not navigate and says so.
+    // (Activating a file queues an open: test_roam_launch_host covers that.)
+    os64_ui_dataview_change_t change={.domain=8,.activated=9};
     changed(&app.browser_ui.details,&change,&app);
     prepare_turn(&app);
     CHECK(fake.activates==0 && app.pending_id==0);

@@ -1,13 +1,22 @@
 #ifndef OS64_BT_MANAGER_H
 #define OS64_BT_MANAGER_H
 #include "driver/system/usb/bt_le.h"
+#include "driver/system/usb/bt_classic.h"
 
 typedef struct {
     bool loaded, automatic, suppressed, blocked, scan_owned, dirty;
     uint64_t revision_seen, generation, next_attempt, next_save;
     uint32_t backoff_ms;
+    // Integrity-check drops (reason 3d) on an encrypted link since an input
+    // report last arrived or the block was last lifted, and the drop last
+    // counted.
+    // Retried, but not for ever: BT_MANAGER_MIC_DROPS in a row and the slot
+    // waits for its user like any key failure.
+    uint8_t mic_drops;
+    uint64_t mic_seen_ms;
     const char *storage_error;
 } bt_manager_t;
+#define BT_MANAGER_MIC_DROPS 3
 
 // Serialized with LE, scan and manual commands; these functions perform no I/O.
 void bt_manager_observe(bt_manager_t *,const bt_le_t *,uint64_t);
@@ -19,9 +28,16 @@ size_t bt_manager_status(const bt_manager_t *,char *,size_t);
 #define BT_BOND_RECORD_BYTES 80
 void bt_bond_encode(uint8_t [BT_BOND_RECORD_BYTES],const bt_le_bond_t *,bool);
 bool bt_bond_decode(bt_le_bond_t *,bool *,const uint8_t *,size_t);
-// Task context; marshals through kernel mappings without the USB poll lock.
+// Task context; marshals through kernel mappings without USB's serializing flag.
 bool bt_bond_load(bt_le_bond_t *,bool *);
 bool bt_bond_save(const bt_le_bond_t *,bool);
 bool bt_bond_load_slot(unsigned,bt_le_bond_t *,bool *);
 bool bt_bond_save_slot(unsigned,const bt_le_bond_t *,bool);
+// The Classic link's bond, /home/bluetooth_bond_classic (bt_classic.h's
+// record), by the same rules: an absent file is created holding "no bond";
+// saving a bond that is not valid writes "no bond" (the file stays). Task
+// context, as above. A loaded record made as another adapter is the
+// caller's to refuse.
+bool bt_classic_bond_load(bt_classic_bond_t *);
+bool bt_classic_bond_save(const bt_classic_bond_t *);
 #endif

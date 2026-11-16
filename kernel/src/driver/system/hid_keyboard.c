@@ -213,7 +213,7 @@ void hid_keyboard_report(hid_keyboard_t *kbd, const uint8_t rep[8])
 	// ONE REPORT, THREE STEPS, IN THE ORDER A HAND DOES THEM: the keys that
 	// lifted, then the modifiers that changed, then the keys that went down.
 	// A report that lets go of Alt+Tab whole (a viewer closing, or two keys
-	// lifted inside one USB poll) must deliver the Tab-up while Alt still
+	// lifted between two USB reports) must deliver the Tab-up while Alt still
 	// holds, or the Alt-up ends the Alt-Tab hold first and the Tab-up, now
 	// carrying no Alt, reaches whichever window was just focused as half a
 	// chord it never saw begin.

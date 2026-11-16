@@ -7,6 +7,7 @@
 #include "../userland/libtls/include/tls/tls.h"
 #include "../userland/libtls/port/tls13_engine.h"
 #include "../userland/libtls/port/client_engine.h"
+#include "../userland/libtls/port/session_cache.h"
 #include "os64/date.h"
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"%s:%d: %s\n",__FILE__,__LINE__,#x); ERR_print_errors_fp(stderr); exit(1); } } while (0)
@@ -33,6 +34,11 @@ int64_t os64_open(const char *path, const char *mode)
 int64_t os64_close(int32_t fd) { CHECK(fd>0); return 0; }
 int64_t os64_read(int32_t fd, void *p, uint64_t n)
 { CHECK(fd>0); for (size_t i=0;i<n;i++) ((unsigned char *)p)[i]=(unsigned char)(i*13+(unsigned)fd); return (int64_t)n; }
+// The clock kept sessions are aged by (platform_inputs.c), in the harness's
+// hands: resumption cases move it to expire a ticket.
+static int64_t clock_us=1000000;
+int64_t os64_micros(void) { return clock_us; }
+void os64_yield(void) {}
 static int64_t epoch=1791504000;
 int64_t os64_time(os64_time_t *t) { memset(t,0,sizeof *t); t->epoch=epoch; return 0; }
 static const char *directory;
@@ -54,6 +60,7 @@ typedef struct {
     unsigned char captured[131072], hs_secret[48], app_secret[48];
     size_t captured_len, secret_len;
     unsigned seed;
+    bool shared_context;    // ctx is another's: several connections to one server
 } connection;
 static void keylog(const SSL *ssl, const char *line)
 {
@@ -104,7 +111,7 @@ static connection *connect_peer(const char *kind, const char *suite, const char 
     return c;
 }
 static void destroy(connection *c)
-{ os64_tls_free(c->client); SSL_free(c->ssl); SSL_CTX_free(c->ctx); free(c); }
+{ os64_tls_free(c->client); SSL_free(c->ssl); if (!c->shared_context) SSL_CTX_free(c->ctx); free(c); }
 static void ssl_result(connection *c, int result)
 {
     if (result>0) return;
@@ -753,6 +760,47 @@ static void signature_schemes(void)
 
 static unsigned fuzz_random(unsigned *state)
 { unsigned x=*state; x^=x<<13; x^=x>>17; x^=x<<5; return *state=x; }
+// A client that offers a session: one is planted under the key first, so
+// its hello carries a pre_shared_key and an arriving ticket has somewhere to
+// go. No server issued this session; the fuzz only needs the client to
+// believe it holds one.
+static os64_tls_client *fuzz_offering_client(unsigned *random)
+{
+    static const uint16_t suites[]={0x1301,0x1302,0x1303};
+    tls13_session planted={.suite=suites[fuzz_random(random)%3],.age_add=fuzz_random(random),.ticket_len=1+fuzz_random(random)%TLS13_TICKET_MAX};
+    for (size_t i=0;i<sizeof planted.psk;i++) planted.psk[i]=(unsigned char)fuzz_random(random);
+    for (size_t i=0;i<planted.ticket_len;i++) planted.ticket[i]=(unsigned char)(i*7);
+    const tls_session_key key={"example.test",443,trust,NULL,NULL};
+    os64_tls_session_put(&key,&planted,100,(uint64_t)clock_us/1000u);
+    const os64_tls_name_t name={"http/1.1",8};
+    os64_tls_config_t cfg={.hostname={"example.test",12},.alpn=&name,.alpn_count=1,.trust=trust,
+                           .protocol=OS64_TLS_PROTOCOL_DEFAULT,.port=443};
+    os64_tls_client *client=NULL; next_engine=true;
+    CHECK(os64_tls_client_create(&cfg,&client)==OS64_TLS_OK);
+    CHECK(inner(client)->offered);
+    return client;
+}
+// Give the first record, a ServerHello or a HelloRetryRequest, a
+// pre_shared_key extension: zero to four bytes of it, so the well-formed
+// answer (two bytes, identity 0), a refused identity and the malformed
+// lengths all come up. The three lengths around it are kept true.
+static size_t fuzz_splice_psk(unsigned char *bytes, size_t length, unsigned *random)
+{
+    if (length<5 || bytes[0]!=22) return length;
+    size_t record=5+(((size_t)bytes[3]<<8)|bytes[4]), at=5+4+2+32;
+    if (record>length || at>=record) return length;
+    at+=1+bytes[at]; at+=2+1;                      // session id, suite, compression
+    if (at+2>record) return length;
+    size_t extensions=((size_t)bytes[at]<<8)|bytes[at+1];
+    if (at+2+extensions!=record) return length;
+    size_t body=fuzz_random(random)%5, added=4+body;
+    memmove(bytes+record+added,bytes+record,length-record);
+    bytes[record]=0; bytes[record+1]=41; bytes[record+2]=0; bytes[record+3]=(unsigned char)body;
+    for (size_t i=0;i<body;i++) bytes[record+4+i]=fuzz_random(random)%4?0:(unsigned char)fuzz_random(random);
+    put_u16(bytes+at,extensions+added); put_u16(bytes+3,record-5+added);
+    size_t message=record-9+added; bytes[6]=(unsigned char)(message>>16); put_u16(bytes+7,message);
+    return length+added;
+}
 static void fuzz(unsigned seconds, bool replay_case, unsigned replay_seed, size_t replay_iteration)
 {
     const char *suites[]={"TLS_AES_128_GCM_SHA256","TLS_AES_256_GCM_SHA384","TLS_CHACHA20_POLY1305_SHA256"};
@@ -779,7 +827,9 @@ static void fuzz(unsigned seconds, bool replay_case, unsigned replay_seed, size_
     size_t iterations=replay_case?replay_iteration:0,raw_cases=0,deep_cases=0,terminals=0;
     char marker[1024]; path(marker,"fuzz-current.txt");
     uint64_t coverage=0; time_t start=time(NULL); size_t baseline=live;
-    unsigned char *bytes=malloc(131073),out[32768]; CHECK(bytes);
+    // Room for a whole captured flight, the byte a mutation may append, and
+    // a spliced pre_shared_key extension.
+    unsigned char *bytes=malloc(131073+8),out[32768]; CHECK(bytes);
     do {
         unsigned seed=random;
         // Persist the next case before executing it, including for sanitizer
@@ -787,12 +837,18 @@ static void fuzz(unsigned seconds, bool replay_case, unsigned replay_seed, size_
         FILE *current=fopen(marker,"w"); CHECK(current);
         CHECK(fprintf(current,"%u %zu\n",seed,iterations)>0); CHECK(!fclose(current));
         replay *r=corpus[fuzz_random(&random)%count];
-        entropy_serial=r->seed-1; os64_tls_client *client=new_client(OS64_TLS_PROTOCOL_DEFAULT,"example.test");
+        // One case in four is a client that offers a session: the server's
+        // possible answers to that are spliced into the raw cases, and the
+        // tickets of the deep cases are assembled and kept, not discarded.
+        bool offering=fuzz_random(&random)%4==0;
+        entropy_serial=r->seed-1;
+        os64_tls_client *client=offering?fuzz_offering_client(&random):new_client(OS64_TLS_PROTOCOL_DEFAULT,"example.test");
         CHECK(drain(client,out,sizeof out)>0);
         bool deep=(iterations&1)!=0;
         size_t target=fuzz_random(&random)%r->records;
         if (!deep) {
             memcpy(bytes,r->raw,r->raw_len); size_t length=r->raw_len;
+            if (offering) length=fuzz_splice_psk(bytes,length,&random);
             unsigned mode=fuzz_random(&random)%3;
             if (mode==0) length=fuzz_random(&random)%(length+1);
             else for (unsigned i=0;i<1+(seed%4);i++) bytes[fuzz_random(&random)%length]^=(unsigned char)(1u<<(fuzz_random(&random)%8));
@@ -831,12 +887,399 @@ static void fuzz(unsigned seconds, bool replay_case, unsigned replay_seed, size_
         if (state.status!=OS64_TLS_OK) terminals++;
         else CHECK(state.flags || e->header_used || e->recv_used);
         os64_tls_input_eof(client); drain(client,out,sizeof out);
-        os64_tls_abort(client,OS64_TLS_CANCELLED); os64_tls_free(client); CHECK(live==baseline);
+        os64_tls_abort(client,OS64_TLS_CANCELLED); os64_tls_free(client);
+        os64_tls_sessions_drop();   // what the case planted, and whatever tickets it kept
+        CHECK(live==baseline);
         iterations++;
         if (!(iterations%1000)) { printf("FUZZ iterations=%zu raw=%zu deep=%zu terminals=%zu coverage=0x%llx elapsed=%ld seed=%u\n",iterations,raw_cases,deep_cases,terminals,(unsigned long long)coverage,(long)(time(NULL)-start),seed); fflush(stdout); }
     } while (!replay_case && time(NULL)-start<(time_t)seconds);
     free(bytes); for (size_t i=0;i<count;i++) free(corpus[i]);
     printf("FUZZ PASS seconds=%ld iterations=%zu raw=%zu deep=%zu terminals=%zu coverage=0x%llx initial_seed=147731\n",(long)(time(NULL)-start),iterations,raw_cases,deep_cases,terminals,(unsigned long long)coverage);
+}
+
+// ── Resumption (tls13_engine.h § Resumption, session_cache.h) ────────────
+//
+// A server CONTEXT outlives its connections here, because a ticket is sealed
+// under the context's keys: the same context accepts it, another declines.
+
+static SSL_CTX *server_context(const char *suite, const char *group)
+{
+    SSL_CTX *ctx=SSL_CTX_new(TLS_server_method()); CHECK(ctx);
+    CHECK(SSL_CTX_set_min_proto_version(ctx,TLS1_3_VERSION)); CHECK(SSL_CTX_set_max_proto_version(ctx,TLS1_3_VERSION));
+    CHECK(SSL_CTX_set_ciphersuites(ctx,suite)); CHECK(SSL_CTX_set1_groups_list(ctx,group));
+    char file[1024]; path(file,"ec.pem"); CHECK(SSL_CTX_use_certificate_chain_file(ctx,file));
+    path(file,"ec.key"); CHECK(SSL_CTX_use_PrivateKey_file(ctx,file,SSL_FILETYPE_PEM));
+    SSL_CTX_set_alpn_select_cb(ctx,alpn,NULL); SSL_CTX_set_keylog_callback(ctx,keylog);
+    SSL_CTX_set_timeout(ctx,100);   // the lifetime its tickets carry, in seconds
+    return ctx;
+}
+static connection *connect_shared(SSL_CTX *ctx, uint16_t port, os64_tls_trust *store, size_t fragment)
+{
+    connection *c=calloc(1,sizeof *c); CHECK(c); c->fragment=fragment; c->ctx=ctx; c->shared_context=true;
+    c->ssl=SSL_new(ctx); CHECK(c->ssl); SSL_set_app_data(c->ssl,c);
+    c->in=BIO_new(BIO_s_mem()); c->out=BIO_new(BIO_s_mem()); CHECK(c->in && c->out);
+    BIO_set_mem_eof_return(c->in,-1); BIO_set_mem_eof_return(c->out,-1);
+    SSL_set_bio(c->ssl,c->in,c->out); SSL_set_accept_state(c->ssl);
+    const os64_tls_name_t name={"http/1.1",8};
+    os64_tls_config_t cfg={.hostname={"example.test",12},.alpn=&name,.alpn_count=1,.trust=store,
+                           .protocol=OS64_TLS_PROTOCOL_DEFAULT,.port=port};
+    next_engine=true; CHECK(os64_tls_client_create(&cfg,&c->client)==OS64_TLS_OK); c->seed=entropy_serial;
+    return c;
+}
+// Whether the hello a fresh client is waiting to send carries an extension,
+// and whether it is the last one.
+static bool hello_extension(os64_tls_client *client, unsigned type, bool *last)
+{
+    const tls13_engine *e=inner(client); const unsigned char *b=e->send; size_t n=e->send_used;
+    CHECK(n>100 && b[0]==22 && b[5]==1);
+    size_t at=5+4+2+32; at+=1+b[at]; at+=2+read16(b+at); at+=1+b[at];
+    size_t end=at+2+read16(b+at); at+=2; CHECK(end==n);
+    bool found=false; if (last) *last=false;
+    while (at<end) {
+        unsigned found_type=read16(b+at); size_t length=read16(b+at+2);
+        if (found_type==type) { found=true; if (last) *last=at+4+length==end; }
+        at+=4+length;
+    }
+    CHECK(at==end); return found;
+}
+// The obfuscated_ticket_age of the one identity a hello offers.
+static uint32_t hello_psk_age(os64_tls_client *client)
+{
+    const tls13_engine *e=inner(client); const unsigned char *b=e->send; size_t n=e->send_used;
+    size_t at=5+4+2+32; at+=1+b[at]; at+=2+read16(b+at); at+=1+b[at]; at+=2;
+    while (at<n && read16(b+at)!=41) at+=4+read16(b+at+2);
+    CHECK(at<n);
+    const unsigned char *identity=b+at+4+2; size_t ticket=read16(identity);
+    const unsigned char *age=identity+2+ticket;
+    return ((uint32_t)age[0]<<24)|((uint32_t)age[1]<<16)|((uint32_t)age[2]<<8)|age[3];
+}
+static bool offers(connection *c)
+{
+    bool last, psk=hello_extension(c->client,41,&last);
+    CHECK(hello_extension(c->client,45,NULL));   // every hello that may resume says how
+    CHECK(!psk || last);                         // and the PSK, when there is one, is last
+    return psk;
+}
+// The handshake, and what kind it was by both ends' account. A resumed one
+// carries no Certificate (11) and no CertificateVerify (15).
+static void shake(connection *c, bool resumed)
+{
+    handshake_done(c);
+    CHECK(((os64_tls_state(c->client).flags&OS64_TLS_RESUMED)!=0)==resumed);
+    CHECK((SSL_session_reused(c->ssl)!=0)==resumed);
+    uint64_t seen=inner(c->client)->test_coverage;
+    CHECK(((seen>>11)&1)==!resumed && ((seen>>15)&1)==!resumed);
+}
+// Data both ways (which is also what carries the server's tickets across),
+// then the close.
+static void finish(connection *c) { exchange(c,4099); close_connection(c,false); destroy(c); }
+static void whole(SSL_CTX *ctx, uint16_t port, os64_tls_trust *store, bool offered, bool resumed)
+{
+    connection *c=connect_shared(ctx,port,store,4096);
+    CHECK(offers(c)==offered); shake(c,resumed); finish(c);
+}
+static uint64_t now_ms(void) { return (uint64_t)clock_us/1000u; }
+static os64_tls_trust *second_store(void)
+{
+    char name[1024]; path(name,"root.der"); FILE *f=fopen(name,"rb"); CHECK(f);
+    unsigned char der[4096]; size_t n=fread(der,1,sizeof der,f); CHECK(n && !ferror(f)); fclose(f);
+    os64_tls_trust *store=NULL;
+    CHECK(os64_tls_trust_create(&store)==OS64_TLS_OK);
+    CHECK(os64_tls_trust_add_der(store,der,n,NULL)==OS64_TLS_OK);
+    CHECK(os64_tls_trust_seal(store)==OS64_TLS_OK);
+    return store;
+}
+static int big_ticket(SSL *ssl, void *arg)
+{
+    (void)arg; static unsigned char padding[3000];
+    return SSL_SESSION_set1_ticket_appdata(SSL_get_session(ssl),padding,sizeof padding);
+}
+static SSL_TICKET_RETURN big_ticket_back(SSL *ssl, SSL_SESSION *session, const unsigned char *name,
+                                          size_t name_len, SSL_TICKET_STATUS status, void *arg)
+{
+    (void)ssl; (void)session; (void)name; (void)name_len; (void)arg;
+    return status==SSL_TICKET_SUCCESS || status==SSL_TICKET_SUCCESS_RENEW ? SSL_TICKET_RETURN_USE : SSL_TICKET_RETURN_IGNORE_RENEW;
+}
+// The SSL half of a connection whose client `refused` has already freed.
+static void discard(connection *c) { SSL_free(c->ssl); free(c); }
+enum { PHASE_WAIT_FINISHED=5 };   // tls13_handshake.c's WAIT_FINISHED
+
+static void resumption(void)
+{
+    const uint16_t port=443;
+    const tls_session_key key={"example.test",port,trust,NULL,NULL};
+    size_t baseline=live;
+    os64_tls_sessions_drop();
+    SSL_CTX *ctx=server_context("TLS_AES_128_GCM_SHA256","X25519");
+
+    // A config with no port says nothing of resumption and keeps nothing.
+    connection *c=connect_shared(ctx,0,trust,4096);
+    CHECK(!hello_extension(c->client,45,NULL) && !hello_extension(c->client,41,NULL));
+    shake(c,false); finish(c); CHECK(os64_tls_session_count(&key)==0);
+
+    // The first hello to a key says it can resume and offers nothing; the
+    // server's two tickets are kept; the next hello offers one, and the
+    // handshake it starts is resumed.
+    c=connect_shared(ctx,port,trust,37); CHECK(!offers(c)); shake(c,false);
+    exchange(c,4099);
+    CHECK(inner(c->client)->tickets_kept==2 && !inner(c->client)->tickets_dropped);
+    CHECK(os64_tls_session_count(&key)==2);
+    close_connection(c,false); destroy(c);
+    c=connect_shared(ctx,port,trust,1); CHECK(offers(c)); CHECK(os64_tls_session_count(&key)==1);
+    shake(c,true); finish(c);
+    // ...and the tickets THAT connection was handed, a byte at a time, are
+    // whole: one of them resumes the next.
+    CHECK(os64_tls_session_count(&key)==2);
+    whole(ctx,port,trust,true,true);
+    puts("PASS resumption: no port, nothing said or kept; tickets kept; the next handshake resumed, fragmented to one byte");
+
+    // Each ticket is offered once. With the server issuing no more, two
+    // tickets are two resumptions, and the third connection is a full one.
+    os64_tls_sessions_drop(); whole(ctx,port,trust,false,false); CHECK(os64_tls_session_count(&key)==2);
+    SSL_CTX_set_num_tickets(ctx,0);
+    whole(ctx,port,trust,true,true); CHECK(os64_tls_session_count(&key)==1);
+    whole(ctx,port,trust,true,true); CHECK(os64_tls_session_count(&key)==0);
+    whole(ctx,port,trust,false,false); CHECK(os64_tls_session_count(&key)==0);   // and a server with no tickets leaves it empty
+    SSL_CTX_set_num_tickets(ctx,2);
+    puts("PASS resumption: a ticket is offered once; a server that issues none leaves the cache empty");
+
+    // A session outlives neither its lifetime (100 s here) nor a clock it
+    // cannot explain. One second short, it is offered and accepted.
+    os64_tls_sessions_drop(); whole(ctx,port,trust,false,false); SSL_CTX_set_num_tickets(ctx,0);
+    clock_us+=99*1000000ll; whole(ctx,port,trust,true,true); CHECK(os64_tls_session_count(&key)==1);
+    clock_us+=2*1000000ll; whole(ctx,port,trust,false,false); CHECK(os64_tls_session_count(&key)==0);
+    SSL_CTX_set_num_tickets(ctx,2);
+    puts("PASS resumption: a ticket is offered inside its lifetime and dropped past it");
+
+    // Another port, and another trust, are other keys: nothing is offered
+    // there, and what was kept is still there for its own.
+    os64_tls_sessions_drop(); whole(ctx,port,trust,false,false);
+    os64_tls_trust *other=second_store();
+    whole(ctx,8443,trust,false,false);
+    whole(ctx,port,other,false,false);
+    whole(ctx,port,trust,true,true);
+    // A kept session holds its store: ours can go, and the store with it
+    // only when the sessions do.
+    os64_tls_sessions_drop(); size_t before=live;
+    os64_tls_trust_free(other); CHECK(live<before);   // nothing is kept under it now, so that freed it
+    other=second_store();
+    whole(ctx,port,other,false,false);
+    const tls_session_key other_key={"example.test",port,other,NULL,NULL};
+    CHECK(os64_tls_session_count(&other_key)==2);
+    size_t held=live; os64_tls_trust_free(other); CHECK(live==held);     // the cache's holds keep it
+    os64_tls_sessions_drop(); CHECK(live<held);                          // and its last one frees it
+    puts("PASS resumption: port and trust separate sessions; a kept session holds its trust store");
+
+    // A server that cannot open the ticket (another context, so other keys)
+    // declines it: the same handshake goes on as a full one, and its
+    // tickets refill the key.
+    os64_tls_sessions_drop(); whole(ctx,port,trust,false,false);
+    SSL_CTX *stranger=server_context("TLS_AES_128_GCM_SHA256","X25519");
+    whole(stranger,port,trust,true,false);
+    whole(stranger,port,trust,true,true);
+    // The same for a session whose hash the server's suite does not share:
+    // offered, not used.
+    os64_tls_sessions_drop(); whole(ctx,port,trust,false,false);
+    CHECK(SSL_CTX_set_ciphersuites(ctx,"TLS_AES_256_GCM_SHA384"));
+    whole(ctx,port,trust,true,false);
+    CHECK(SSL_CTX_set_ciphersuites(ctx,"TLS_AES_128_GCM_SHA256"));
+    SSL_CTX_free(stranger);
+    puts("PASS resumption: a declined ticket, and a ticket of another hash, fall back to a full handshake");
+
+    // What a server may say a ticket's lifetime is. Zero is "discard at
+    // once": read, counted, not kept. More than seven days is held to
+    // seven: offered a second inside them, gone a second past.
+    os64_tls_sessions_drop();
+    c=connect_shared(ctx,port,trust,4096); shake(c,false); exchange(c,4099);
+    os64_tls_sessions_drop();
+    unsigned kept=inner(c->client)->tickets_kept, dropped=inner(c->client)->tickets_dropped;
+    unsigned char ticket[]={4,0,0,17, 0,0,0,0, 1,2,3,4, 2,0xaa,0xbb, 0,2,0xcc,0xdd, 0,0};
+    tls13_test_handshake(inner(c->client),ticket,sizeof ticket);
+    CHECK(inner(c->client)->tickets_kept==kept && inner(c->client)->tickets_dropped==dropped+1);
+    CHECK(os64_tls_session_count(&key)==0);
+    memset(ticket+4,0xff,4);
+    // The same ticket whole, and then a byte at a time, as one split across
+    // records arrives: the two sessions kept are the same session, nonce
+    // (so PSK) and ticket both.
+    tls13_test_handshake(inner(c->client),ticket,sizeof ticket);
+    for (size_t i=0;i<sizeof ticket;i++) tls13_test_handshake(inner(c->client),ticket+i,1);
+    CHECK(inner(c->client)->tickets_kept==kept+2 && os64_tls_session_count(&key)==2);
+    CHECK(os64_tls_state(c->client).status==OS64_TLS_OK);
+    tls13_session crafted, again;
+    CHECK(os64_tls_session_take(&key,now_ms(),&crafted));
+    CHECK(crafted.ticket_len==2 && crafted.ticket[0]==0xcc && crafted.ticket[1]==0xdd && crafted.age_add==0x01020304);
+    CHECK(os64_tls_session_take(&key,now_ms()+(TLS13_TICKET_LIFETIME_MAX-1)*UINT64_C(1000),&again));
+    CHECK(again.ticket_len==2 && !memcmp(again.ticket,crafted.ticket,2) && !memcmp(again.psk,crafted.psk,sizeof crafted.psk));
+    tls13_test_handshake(inner(c->client),ticket,sizeof ticket);
+    CHECK(!os64_tls_session_take(&key,now_ms()+(TLS13_TICKET_LIFETIME_MAX+1)*UINT64_C(1000),&crafted));
+    CHECK(os64_tls_session_count(&key)==0);
+    close_connection(c,false); destroy(c);
+    puts("PASS resumption: a ticket of lifetime zero is not kept; one past seven days is held to seven");
+
+    // A ticket longer than a session holds is read to its end and not kept.
+    os64_tls_sessions_drop();
+    SSL_CTX *big=server_context("TLS_AES_128_GCM_SHA256","X25519");
+    CHECK(SSL_CTX_set_session_ticket_cb(big,big_ticket,big_ticket_back,NULL));
+    c=connect_shared(big,port,trust,4096); shake(c,false); exchange(c,4099);
+    CHECK(!inner(c->client)->tickets_kept && inner(c->client)->tickets_dropped==2);
+    CHECK(os64_tls_session_count(&key)==0);
+    close_connection(c,false); destroy(c); SSL_CTX_free(big);
+    puts("PASS resumption: an oversize ticket is consumed and not kept");
+
+    // HelloRetryRequest. The second hello offers the session again with a
+    // binder over the new transcript, and is resumed; when the retry fixes a
+    // suite of another hash, the second hello drops the offer.
+    os64_tls_sessions_drop();
+    SSL_CTX *retry=server_context("TLS_AES_128_GCM_SHA256","P-384");
+    whole(retry,port,trust,false,false);
+    c=connect_shared(retry,port,trust,4096); CHECK(offers(c)); shake(c,true);
+    CHECK(inner(c->client)->retry && inner(c->client)->offered); finish(c);
+    CHECK(SSL_CTX_set_ciphersuites(retry,"TLS_AES_256_GCM_SHA384"));
+    c=connect_shared(retry,port,trust,4096); CHECK(offers(c)); shake(c,false);
+    CHECK(inner(c->client)->retry && !inner(c->client)->offered); finish(c);
+    SSL_CTX_free(retry);
+    puts("PASS resumption: across HelloRetryRequest, and dropped when the retry fixes another hash");
+
+    // The binder is what the server believes. One bit of it wrong and the
+    // server refuses the hello outright (illegal_parameter, 47).
+    os64_tls_sessions_drop(); whole(ctx,port,trust,false,false);
+    c=connect_shared(ctx,port,trust,4096); CHECK(offers(c));
+    inner(c->client)->send[inner(c->client)->send_used-1]^=1;
+    os64_tls_state_t state={0};
+    for (unsigned i=0;i<1000;i++) { drive(c); state=os64_tls_state(c->client); if (state.status!=OS64_TLS_OK) break; }
+    CHECK(c->server_error && state.status==OS64_TLS_PROTOCOL && state.upstream_error==BR_ERR_RECV_FATAL_ALERT+47);
+    CHECK(!(state.flags&OS64_TLS_HANDSHAKE_DONE));
+    destroy(c);
+    puts("PASS resumption: a wrong binder is refused by the server");
+
+    // What a server may not do with an offer. One real resumed handshake is
+    // recorded; the same client is then made again (same entropy, same
+    // session, same clock, so the same hello) and shown that server's
+    // ServerHello with one thing changed.
+    os64_tls_sessions_drop(); whole(ctx,port,trust,false,false);
+    tls13_session session; CHECK(os64_tls_session_take(&key,now_ms(),&session));
+    os64_tls_sessions_drop();
+    // Kept 1234 ms ago, by the cache's clock: the age the hello reports is
+    // that, masked by the server's age_add, modulo 2^32.
+    os64_tls_session_put(&key,&session,100,now_ms()-1234);
+    c=connect_shared(ctx,port,trust,4096); CHECK(offers(c));
+    CHECK(hello_psk_age(c->client)==(uint32_t)(session.age_add+1234u));
+    unsigned seed=c->seed; unsigned char first[2048], hello_record[1024];
+    size_t first_len=inner(c->client)->send_used; CHECK(first_len<=sizeof first); memcpy(first,inner(c->client)->send,first_len);
+    shake(c,true);
+    size_t hello_len=5+read16(c->captured+3); CHECK(c->captured[0]==22 && c->captured[5]==2 && hello_len<=sizeof hello_record);
+    memcpy(hello_record,c->captured,hello_len);
+    finish(c);
+    // Where the ServerHello keeps its suite and its pre_shared_key.
+    size_t suite_at=5+4+2+32+1+32, at=suite_at+2+1+2, psk_at=0;
+    while (at<hello_len) { if (read16(hello_record+at)==41) psk_at=at+4; at+=4+read16(hello_record+at+2); }
+    CHECK(at==hello_len && psk_at && read16(hello_record+psk_at)==0);
+    for (unsigned test=0;test<3;test++) {
+        unsigned char changed[1024]; memcpy(changed,hello_record,hello_len);
+        os64_tls_sessions_drop();
+        if (test<2) os64_tls_session_put(&key,&session,100,now_ms()-1234);
+        entropy_serial=seed-1;
+        c=connect_shared(ctx,port,trust,4096);
+        if (test<2) CHECK(inner(c->client)->send_used==first_len && !memcmp(inner(c->client)->send,first,first_len));
+        else CHECK(!hello_extension(c->client,41,NULL));
+        unsigned char out[4096]; CHECK(drain(c->client,out,sizeof out));
+        if (test==0) changed[psk_at+1]=1;                    // an identity that was never offered
+        if (test==1) put_u16(changed+suite_at,0x1302);       // a suite of another hash than the session's
+        // test 2: the hello is the server's own, and it is the CLIENT that offered nothing
+        CHECK(feed(c->client,changed,hello_len)==hello_len);
+        refused(c->client,OS64_TLS_PROTOCOL,test==2?BR_ERR_EXTRA_EXTENSION:TLS13_ERR_PSK);
+        discard(c);
+    }
+    // And once the server has accepted the session, a Certificate is not a
+    // message it may send. The server's flight is fed a byte at a time, and
+    // stopped between its EncryptedExtensions and its Finished.
+    os64_tls_sessions_drop(); os64_tls_session_put(&key,&session,100,now_ms()-1234);
+    c=connect_shared(ctx,port,trust,1); CHECK(offers(c));
+    bool between=false;
+    for (unsigned i=0;i<200000 && !between;i++) {
+        drive(c); CHECK(os64_tls_state(c->client).status==OS64_TLS_OK);
+        between=inner(c->client)->resumed && inner(c->client)->phase==PHASE_WAIT_FINISHED && !inner(c->client)->header_used;
+    }
+    CHECK(between);
+    const unsigned char certificate[]={11,0,0,4,0,0,0,0};
+    tls13_test_handshake(inner(c->client),certificate,sizeof certificate);
+    refused(c->client,OS64_TLS_PROTOCOL,BR_ERR_UNEXPECTED); discard(c);
+    tls13_wipe(&session,sizeof session);
+    puts("PASS resumption: an identity not offered, another hash, an unoffered acceptance and a Certificate after one are refused");
+
+    os64_tls_sessions_drop(); SSL_CTX_free(ctx); CHECK(live==baseline);
+}
+
+// The session cache alone (session_cache.h), with a key whose trust counts
+// its holds: what each call keeps, gives back and lets go.
+static unsigned holds, refusals;
+static bool hold_retain(const void *identity) { (void)identity; if (refusals) { refusals--; return false; } holds++; return true; }
+static void hold_release(const void *identity) { (void)identity; CHECK(holds); holds--; }
+static tls13_session numbered(unsigned n)
+{
+    tls13_session s={.suite=0x1301,.age_add=n,.ticket_len=4};
+    s.ticket[0]=(unsigned char)n; s.psk[0]=(unsigned char)(n+1);
+    return s;
+}
+static void session_cache_cases(void)
+{
+    static int a_trust, b_trust;
+    const tls_session_key a={"a.test",443,&a_trust,hold_retain,hold_release};
+    tls13_session out, s;
+    os64_tls_sessions_drop(); holds=0;
+
+    // Nothing is kept for a lifetime of zero, an empty or oversize ticket,
+    // or a hold that could not be taken.
+    s=numbered(1); os64_tls_session_put(&a,&s,0,1000);
+    s.ticket_len=0; os64_tls_session_put(&a,&s,60,1000);
+    s.ticket_len=TLS13_TICKET_MAX+1; os64_tls_session_put(&a,&s,60,1000);
+    s=numbered(1); refusals=1; os64_tls_session_put(&a,&s,60,1000);
+    CHECK(os64_tls_session_count(&a)==0 && !holds && !os64_tls_session_take(&a,1000,&out));
+
+    // Host, port and trust each separate a key.
+    s=numbered(1); os64_tls_session_put(&a,&s,60,1000); CHECK(holds==1);
+    const tls_session_key host={"b.test",443,&a_trust,hold_retain,hold_release};
+    const tls_session_key other_port={"a.test",8443,&a_trust,hold_retain,hold_release};
+    const tls_session_key other_trust={"a.test",443,&b_trust,hold_retain,hold_release};
+    CHECK(!os64_tls_session_take(&host,1000,&out) && !os64_tls_session_take(&other_port,1000,&out));
+    CHECK(!os64_tls_session_take(&other_trust,1000,&out));
+    CHECK(!os64_tls_session_count(&host) && !os64_tls_session_count(&other_port) && !os64_tls_session_count(&other_trust));
+
+    // Taken once, whole, with its age; and its hold let go.
+    CHECK(os64_tls_session_take(&a,4500,&out) && out.age_add==1 && out.age_ms==3500 && out.ticket_len==4);
+    CHECK(out.ticket[0]==1 && out.psk[0]==2 && !holds);
+    CHECK(!os64_tls_session_take(&a,4500,&out) && !os64_tls_session_count(&a));
+
+    // Two a key: a third puts out the least recently kept, and the most
+    // recently kept is the one taken.
+    for (unsigned n=1;n<=3;n++) { s=numbered(n); os64_tls_session_put(&a,&s,60,1000+n); }
+    CHECK(os64_tls_session_count(&a)==2 && holds==2);
+    CHECK(os64_tls_session_take(&a,2000,&out) && out.age_add==3);
+    CHECK(os64_tls_session_take(&a,2000,&out) && out.age_add==2);
+    CHECK(!os64_tls_session_take(&a,2000,&out) && !holds);
+
+    // A lifetime is that many whole seconds and no more, and a clock behind
+    // the keeping explains nothing: both are dropped where they are found.
+    s=numbered(1); os64_tls_session_put(&a,&s,60,10000); os64_tls_session_put(&a,&s,60,10000);
+    CHECK(os64_tls_session_take(&a,10000+59999,&out));
+    CHECK(!os64_tls_session_take(&a,10000+60000,&out) && !os64_tls_session_count(&a) && !holds);
+    os64_tls_session_put(&a,&s,60,10000);
+    CHECK(!os64_tls_session_take(&a,9999,&out) && !os64_tls_session_count(&a) && !holds);
+
+    // Thirty-two in all: the thirty-third key puts out the first kept.
+    char names[TLS_SESSION_TOTAL+1][16];
+    for (unsigned n=0;n<=TLS_SESSION_TOTAL;n++) {
+        snprintf(names[n],sizeof names[n],"h%u.test",n);
+        const tls_session_key k={names[n],443,&a_trust,hold_retain,hold_release};
+        s=numbered(n); os64_tls_session_put(&k,&s,60,1000);
+    }
+    CHECK(holds==TLS_SESSION_TOTAL);
+    for (unsigned n=0;n<=TLS_SESSION_TOTAL;n++) {
+        const tls_session_key k={names[n],443,&a_trust,hold_retain,hold_release};
+        CHECK(os64_tls_session_count(&k)==(n?1u:0u));
+    }
+    os64_tls_sessions_drop(); CHECK(!holds);
+    puts("PASS session cache: what is kept, the three parts of a key, once only, two a key, lifetime, thirty-two in all, holds");
 }
 
 int main(int argc, char **argv)
@@ -855,7 +1298,7 @@ int main(int argc, char **argv)
         close_connection(c,k!=0); destroy(c);
         printf("PASS %s / %s / %s: handshake, data, KeyUpdate, close\n",suites[s],k?"RSA":"ECDSA",groups[g]); fflush(stdout);
     }
-    pending_output(); pending_close(); fallback(); fallback_downgrade(); failures(); client_hello_offer(); adversarial(); record_cases(); framing_cases(); signature_schemes();
+    pending_output(); pending_close(); fallback(); fallback_downgrade(); failures(); client_hello_offer(); adversarial(); record_cases(); framing_cases(); signature_schemes(); session_cache_cases(); resumption();
     os64_tls_trust_free(trust); CHECK(!live);
     printf("TLS 1.3 public engine PASS; largest owned allocation %zu bytes\n",peak);
     return 0;

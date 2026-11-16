@@ -6,7 +6,8 @@
  * remove, contains and isConnected, matches and closest, the class and name
  * queries, insertAdjacent*, the attribute conveniences, the reflected
  * attributes (hidden, lang, dir, tabIndex, a script's src, a link's and an
- * anchor's href, a link's rel), classList, a link's relList and dataset.
+ * anchor's href and rel), classList, the links' relList, an anchor's and
+ * an area's address in parts (HTMLHyperlinkElementUtils) and dataset.
  * Each is the standard's steps over
  * the verbs node.c already uses, so a tree change here is the change
  * appendChild would make, scripts and controls included. */
@@ -113,6 +114,7 @@ static int change(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self,
     const os64_html_node_t *parent = magic == D_APPEND_NODES || magic == D_PREPEND ||
         magic == D_REPLACE_CHILDREN ? self : self->parent;
     if (parent == NULL) return 0;
+    dom = d_owner(dom, parent);
     if (magic == D_REPLACE_CHILDREN) {
         /* A document's children are not replaced: the window's keeps its
          * <html> element (libhtml's rule; LIBDOM.md § The classic methods),
@@ -293,9 +295,9 @@ static JSValue insert_adjacent(os64_dom_t *dom, JSContext *ctx, const os64_html_
             JS_ThrowTypeError(ctx, "insertAdjacentElement takes an element");
             element = NULL;
         }
-        if (element != NULL) result = adjacent_steps(dom, ctx, self, magic, &word, element, NULL);
+        if (element != NULL) result = adjacent_steps(d_owner(dom, self), ctx, self, magic, &word, element, NULL);
     } else if (d_string(dom, ctx, argv[1], &text)) {
-        result = adjacent_steps(dom, ctx, self, magic, &word, NULL, &text);
+        result = adjacent_steps(d_owner(dom, self), ctx, self, magic, &word, NULL, &text);
     }
     d_string_free(dom, &text);
     d_string_free(dom, &word);
@@ -376,21 +378,12 @@ int d_root_options(JSContext *ctx, int argc, JSValueConst *argv)
     return truth;
 }
 
-/* normalize() (DOM § 4.4): libhtml's verb (os64_html_normalize), which
- * removes the descendants' empty Text nodes and merges each run of Text
- * siblings into its first in the standard's order, moving live ranges as it
- * goes (RANGE.md § 4). Merging keeps every parent's text, so no control's
- * value changes (os64_page_node_normalize). Each Text it may take out — an
- * empty one, or one after a Text sibling — records the document it leaves
- * first, as d_remove does; the record is read only while the node is a
- * root, so one kept in its tree is unharmed by it. */
+/* normalize() preserves native node-document metadata while removing empty
+ * Text nodes and merging siblings; libpage also updates control state. */
 static JSValue normalize(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)
 {
-    for (const os64_html_node_t *at = dom->documents != 0 ? self->first_child : NULL; at != NULL;
-         at = d_walk_next(self, at))
-        if (at->kind == OS64_HTML_TEXT && (at->text_len == 0 || (at->prev && at->prev->kind == OS64_HTML_TEXT)))
-            d_leaving(dom, at);
-    int64_t status = os64_page_node_normalize(dom->state, (os64_html_node_t *)self);
+    dom = d_owner(dom, self);
+    int64_t status = os64_page_node_normalize(d_owner(dom, self)->state, (os64_html_node_t *)self);
     return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
 }
 
@@ -401,6 +394,7 @@ static JSValue mixin_method(JSContext *ctx, JSValueConst this_value, int argc,
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     switch (magic) {
     case D_APPEND_NODES: case D_PREPEND: case D_REPLACE_CHILDREN:
     case D_BEFORE: case D_AFTER: case D_REPLACE_WITH: case D_REMOVE_SELF:
@@ -446,7 +440,7 @@ static bool focusable(const os64_html_node_t *node)
 {
     if (node->ns != OS64_HTML_NS_HTML) return false;
     switch (node->tag) {
-    case OS64_HTML_TAG_A: case OS64_HTML_TAG_AREA: return os64_html_attr(node, "href") != NULL;
+    case OS64_HTML_TAG_A: case OS64_HTML_TAG_AREA: return os64_html_attr_ns(node, NULL, "href") != NULL;
     case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_SELECT:
     case OS64_HTML_TAG_TEXTAREA: case OS64_HTML_TAG_IFRAME: case OS64_HTML_TAG_SUMMARY:
         return true;
@@ -497,6 +491,7 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     if (magic == R_CONNECTED) return JS_NewBool(ctx, d_connected(self));
@@ -557,6 +552,61 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     if (!d_string(dom, ctx, value, &text)) return JS_EXCEPTION;
     JSValue result = set_attribute(dom, ctx, self, name, text.data, text.length, false);
     d_string_free(dom, &text);
+    return result;
+}
+
+/* ── HTMLHyperlinkElementUtils: a link's address in parts ────────────── */
+
+/* An <a> or <area>'s origin, protocol, username, password, host,
+ * hostname, port, pathname, search, hash and toString (HTML § 4.6.3): its
+ * href resolved against the document's base, read and set as a URL's
+ * members read and set (d_url_component, d_url_rebuilt), a setter writing
+ * the address it built back to the href attribute. With no href, or one
+ * that does not resolve (the element's url is null), protocol answers ":",
+ * toString the attribute as written (or ""), every other getter "", and no
+ * setter changes anything. A setter converts its argument before it reads
+ * the href, since the argument's toString may set it. `magic` is
+ * internal.h's D_URL_ member, D_SET for a setter. */
+static JSValue hyperlink_member(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv, int magic,
+                                JSValue *data)
+{
+    os64_dom_t *binding = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (binding == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *self = d_node(binding, ctx, this_value);
+    if (self == NULL) return JS_EXCEPTION;
+    bool set = (magic & D_SET) != 0;
+    magic &= ~D_SET;
+    /* WebIDL's brand: the interfaces that include the mixin, not any
+     * element (a <link>'s href is no hyperlink's). */
+    int kind = d_node_kind(self);
+    if (kind != D_PROTO_ANCHOR && kind != D_PROTO_AREA) return JS_ThrowTypeError(ctx, "Illegal invocation");
+    DString text = {0};
+    if (set && !d_url_setter_value(binding, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, magic, &text))
+        return JS_EXCEPTION;
+    os64_dom_t *dom = d_owner(binding, self);
+    const os64_html_attr_t *attr = os64_html_attr(self, "href");
+    char *absolute = d_alloc(dom, OS64_DOM_URL_MAX * 2);
+    JSValue result;
+    if (absolute == NULL) {
+        result = d_error(ctx, "QuotaExceededError", "DOM address quota exceeded");
+    } else {
+        bool resolved = attr != NULL &&
+                        os64_dom_resolve(dom->document, dom->url, attr->value, absolute, OS64_DOM_URL_MAX);
+        if (!set) {
+            result = resolved ? d_url_component(ctx, absolute, os64_strlen(absolute), magic)
+                     : JS_NewString(ctx, magic == D_URL_PROTOCOL ? ":"
+                                    : magic == D_URL_TO_STRING && attr != NULL ? attr->value : "");
+        } else if (!resolved) {
+            result = JS_UNDEFINED;
+        } else {
+            char *built = absolute + OS64_DOM_URL_MAX;
+            int made = d_url_rebuilt(dom, ctx, absolute, os64_strlen(absolute), magic, &text, built);
+            result = made < 0 ? JS_EXCEPTION
+                     : made == 0 ? JS_UNDEFINED : set_attribute(dom, ctx, self, "href", built, os64_strlen(built), false);
+        }
+        d_free(dom, absolute);
+    }
+    if (set) d_string_free(binding, &text);
     return result;
 }
 
@@ -641,15 +691,21 @@ static bool token_argument(os64_dom_t *dom, JSContext *ctx, JSValueConst value, 
 
 enum { T_LENGTH, T_VALUE, T_ITEM, T_CONTAINS, T_ADD, T_REMOVE, T_TOGGLE, T_REPLACE, T_STRING, T_SUPPORTS };
 
-/* A link's supported tokens (DOM § DOMTokenList's validation steps): the
- * link types yonder acts on, compared without ASCII case. A stylesheet is
- * libpage's; a module preload is the Modern Web surface's, which runs
- * modules (MODERN_WEB.md § Slice 3), so it is supported only with it. */
-static bool rel_supported(const os64_dom_t *dom, const char *token, size_t length)
+/* A <link>'s supported tokens and a hyperlink's (DOM § DOMTokenList's
+ * validation steps): the link types yonder acts on, compared without ASCII
+ * case. A stylesheet is libpage's; style and module preloads use the
+ * Modern Web surface. Of a hyperlink's three (noopener, noreferrer,
+ * opener), noopener alone is kept: no page yonder opens has an opener,
+ * and a navigation sends its Referer whatever the link's rel says. */
+static bool rel_supported(const os64_dom_t *dom, const os64_html_node_t *link, const char *token, size_t length)
 {
-    static const char *const kinds[] = {"stylesheet", "modulepreload"};
-    for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
-        if (k == 1 && !dom->options.modern) continue;
+    static const char *const kLink[] = {"stylesheet", "modulepreload", "preload"};
+    static const char *const kHyperlink[] = {"noopener"};
+    bool is_link = is_html(link, OS64_HTML_TAG_LINK);
+    const char *const *kinds = is_link ? kLink : kHyperlink;
+    size_t count = is_link ? sizeof(kLink) / sizeof(kLink[0]) : sizeof(kHyperlink) / sizeof(kHyperlink[0]);
+    for (size_t k = 0; k < count; k++) {
+        if (is_link && k != 0 && !dom->options.modern) continue;
         size_t n = 0;
         while (n < length && kinds[k][n] != '\0' &&
                (token[n] >= 'A' && token[n] <= 'Z' ? token[n] - 'A' + 'a' : token[n]) == kinds[k][n])
@@ -713,11 +769,15 @@ static JSValue token_method(JSContext *ctx, JSValueConst this_value, int argc,
             break;
         case T_SUPPORTS:
             /* A classList and an htmlFor have no supported tokens, which
-             * is a TypeError; a form's rel names none yonder acts on. */
+             * is a TypeError; a form's rel names none yonder acts on, and
+             * neither does a list a relList getter was called on any
+             * other element for. */
             result = entry->tokens != D_TOKENS_REL
                 ? JS_ThrowTypeError(ctx, "DOMTokenList has no supported tokens")
-                : JS_NewBool(ctx, is_html(entry->target, OS64_HTML_TAG_LINK) &&
-                                      rel_supported(dom, given[0].data, given[0].length));
+                : JS_NewBool(ctx, (is_html(entry->target, OS64_HTML_TAG_LINK) ||
+                                   is_html(entry->target, OS64_HTML_TAG_A) ||
+                                   is_html(entry->target, OS64_HTML_TAG_AREA)) &&
+                                      rel_supported(dom, entry->target, given[0].data, given[0].length));
             break;
         case T_ADD: case T_REMOVE: case T_TOGGLE: case T_REPLACE: {
             /* Room for every token added; removing writes the list again
@@ -858,8 +918,14 @@ static JSValue element_view(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
 {
     DValue *owner = d_find(dom, node);
     if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    DValue **slot = view == VIEW_CLASS_LIST ? &owner->class_list : view == VIEW_REL_LIST ? &owner->rel_list
-                  : view == VIEW_FOR_LIST ? &owner->for_list : &owner->dataset;
+    dom = owner->dom;
+    os64_js_outcome_t access;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return JS_EXCEPTION;
+    DValueMore *more = d_more(dom, ctx, owner);
+    if (more == NULL) return JS_EXCEPTION;
+    DValue **slot = view == VIEW_CLASS_LIST ? &more->class_list : view == VIEW_REL_LIST ? &more->rel_list
+                  : view == VIEW_FOR_LIST ? &more->for_list : &more->dataset;
     if (*slot != NULL) return JS_DupValue(ctx, (*slot)->value);
     JSValue object = JS_NewObjectClass(ctx, class_id);
     DValue *entry = d_retain(dom, ctx, object);
@@ -1091,7 +1157,7 @@ int d_form_rel_install(os64_dom_t *dom, JSContext *ctx)
 
 int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
 {
-    static const struct { const char *name; int magic, argc; uint64_t on; } methods[] = {
+    static const struct { const char *name; int magic, argc; d_kinds_t on; } methods[] = {
         {"append", D_APPEND_NODES, 0, PARENTS}, {"prepend", D_PREPEND, 0, PARENTS},
         {"replaceChildren", D_REPLACE_CHILDREN, 0, PARENTS},
         {"before", D_BEFORE, 0, CHILDREN}, {"after", D_AFTER, 0, CHILDREN},
@@ -1106,7 +1172,7 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
         {"getAttributeNames", D_ATTRIBUTE_NAMES, 0, ELEMENTS},
         {"toggleAttribute", D_TOGGLE_ATTR, 1, ELEMENTS}, {"hasAttributes", D_HAS_ATTRS, 0, ELEMENTS},
     };
-    static const struct { const char *name; int magic; bool writable; uint64_t on; } reflections[] = {
+    static const struct { const char *name; int magic; bool writable; d_kinds_t on; } reflections[] = {
         {"isConnected", R_CONNECTED, false, D_KIND(D_PROTO_NODE)},
         // HTMLElement's own, and HTMLOrSVGElement's (HTMLElement's and
         // SVGElement's), where HTML puts them: Svelte sets a member as a
@@ -1124,8 +1190,10 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
         {"noModule", R_NO_MODULE, true, D_KIND(D_PROTO_SCRIPT)},
         {"href", R_URL, true, D_KIND(D_PROTO_ANCHOR) | D_KIND(D_PROTO_LINK)},
         // What a module loader asks before it preloads (`relList.supports
-        // ('modulepreload')`, Vite's first statement), and what it sets.
-        {"rel", R_REL, true, D_KIND(D_PROTO_LINK)}, {"relList", R_REL_LIST, true, D_KIND(D_PROTO_LINK)},
+        // ('modulepreload')`, Vite's first statement), and what it sets. An
+        // anchor's rel is beside its relList (the hyperlink block below).
+        {"rel", R_REL, true, D_KIND(D_PROTO_LINK) | D_KIND(D_PROTO_ANCHOR)},
+        {"relList", R_REL_LIST, true, D_KIND(D_PROTO_LINK)},
     };
     for (int kind = 0; kind < D_PROTO_COUNT; kind++) {
         JSValueConst prototype = dom->prototypes[kind]->value;
@@ -1138,6 +1206,26 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
                 d_accessor(dom, ctx, prototype, reflections[i].name, reflect, reflections[i].magic,
                            reflections[i].writable) < 0)
                 return -1;
+        // HTMLHyperlinkElementUtils and relList, both links' (href is each
+        // one's own reflection): the 2010s way to take an address apart is
+        // still `a.href = url; a.hostname`, and a router reads `a.pathname`.
+        // An area's arrive with its href, which is the Modern Web switch's
+        // (elements.c); an anchor's href is every page's, and so are these.
+        static const struct { const char *name; int magic; bool writable; } kLinkParts[] = {
+            {"origin", D_URL_ORIGIN, false}, {"protocol", D_URL_PROTOCOL, true}, {"username", D_URL_USERNAME, true},
+            {"password", D_URL_PASSWORD, true}, {"host", D_URL_HOST, true}, {"hostname", D_URL_HOSTNAME, true},
+            {"port", D_URL_PORT, true}, {"pathname", D_URL_PATHNAME, true}, {"search", D_URL_SEARCH, true},
+            {"hash", D_URL_HASH, true},
+        };
+        if (kind != D_PROTO_ANCHOR && !(kind == D_PROTO_AREA && dom->options.modern))
+            continue;
+        for (size_t i = 0; i < sizeof(kLinkParts) / sizeof(kLinkParts[0]); i++)
+            if (d_accessor(dom, ctx, prototype, kLinkParts[i].name, hyperlink_member, kLinkParts[i].magic,
+                           kLinkParts[i].writable) < 0)
+                return -1;
+        if (d_method(dom, ctx, prototype, "toString", hyperlink_member, 0, D_URL_TO_STRING) < 0 ||
+            d_accessor(dom, ctx, prototype, "relList", reflect, R_REL_LIST, true) < 0)
+            return -1;
     }
     static const struct { const char *name; int magic, argc; bool accessor, writable; } members[] = {
         {"length", T_LENGTH, 0, true, false}, {"value", T_VALUE, 0, true, true},
@@ -1181,6 +1269,7 @@ static JSValue character_data_member(JSContext *ctx, JSValueConst this_value, in
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     if (self->kind != OS64_HTML_TEXT && self->kind != OS64_HTML_COMMENT && self->kind != OS64_HTML_PI)
         return JS_ThrowTypeError(ctx, "CharacterData member requires a character-data node");
     if (magic == C_LENGTH) return JS_NewUint32(ctx, os64_html_node_length(self));
@@ -1211,7 +1300,7 @@ static JSValue character_data_member(JSContext *ctx, JSValueConst this_value, in
                                             : os64_html_utf16_byte(self->text, self->text_len, offset + count);
         return JS_NewStringLen(ctx, self->text + from, to - from);
     }
-    int64_t status = os64_page_node_replace_data(dom->state, (os64_html_node_t *)self, offset, count,
+    int64_t status = os64_page_node_replace_data(d_owner(dom, self)->state, (os64_html_node_t *)self, offset, count,
                                                  string.data, string.length);
     d_string_free(dom, &string);
     return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
@@ -1233,6 +1322,7 @@ static JSValue text_member(JSContext *ctx, JSValueConst this_value, int argc, JS
     }
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     if (self->kind != OS64_HTML_TEXT) return JS_ThrowTypeError(ctx, "Text member requires a text node");
     if (magic == T_WHOLE_TEXT) {
         /* The data of the contiguous Text nodes it is among (DOM § 4.11),
@@ -1260,12 +1350,9 @@ static JSValue text_member(JSContext *ctx, JSValueConst this_value, int argc, JS
      * inside a surrogate pair snapped down to the pair's start. The new
      * node belongs to this node's document. */
     os64_html_node_t *tail = NULL;
-    int64_t status = os64_page_node_split_text(dom->state, (os64_html_node_t *)self, offset, &tail);
+    int64_t status = os64_page_node_split_text(d_owner(dom, self)->state, (os64_html_node_t *)self, offset, &tail);
     if (status < 0) return d_html_error(ctx, status);
-    /* Wrapped first: d_made_in records the document on the wrapper, which
-     * a parentless node's tail needs to keep its ownerDocument. */
-    JSValue wrapped = d_wrap(dom, ctx, tail);
-    if (!JS_IsException(wrapped)) d_made_in(dom, tail, d_node_document(dom, self));
+    JSValue wrapped = d_wrap_in(dom, ctx, tail, d_node_document(dom, self));
     return wrapped;
 }
 
@@ -1281,6 +1368,7 @@ static JSValue template_content(JSContext *ctx, JSValueConst this_value, int arg
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     if (!is_html(self, OS64_HTML_TAG_TEMPLATE) || self->template_contents == NULL)
         return JS_ThrowTypeError(ctx, "content requires a template");
     return d_wrap(dom, ctx, self->template_contents);
@@ -1299,6 +1387,7 @@ static JSValue element_names(JSContext *ctx, JSValueConst this_value, int argc, 
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     if (!is_element(self)) return JS_ThrowTypeError(ctx, "An element's name requires an element");
     const char *name = magic == E_LOCAL_NAME ? self->name : magic == E_PREFIX ? self->prefix
                                                                              : os64_html_namespace_uri(self);
@@ -1311,6 +1400,7 @@ static JSValue element_names(JSContext *ctx, JSValueConst this_value, int argc, 
  * own, so about:blank is its fallback, and a base in it still counts. */
 JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)
 {
+    dom = d_owner(dom, self);
     bool window = d_window_document(dom, self);
     const char *url = window && dom->url != NULL ? dom->url : "about:blank";
     char *base = d_alloc(dom, OS64_DOM_URL_MAX);

@@ -89,6 +89,11 @@ typedef struct yonder_diag yonder_diag_t;
  * Model counts cover rebuilds, not the initial loader's model construction. */
 // flow_reuse_reason_t order; the layout wrapper checks the count at compile time.
 #define YONDER_LAYOUT_REUSE_REASONS 16
+// Why a layout's cascade was built fresh rather than updated: yonder's own
+// reasons, then libgarb's refusals (garb_update_refusal_t past DONE). The
+// names come with the sample (`cascade_reason_names`), from the code that
+// knows them; the layout wrapper checks the count at compile time.
+#define YONDER_LAYOUT_CASCADE_REASONS 20
 typedef struct {
     uint64_t model_us, cascade_us, style_us, boxes_us, layout_us, public_us;
     uint64_t elements, boxes, measures, reused;
@@ -97,8 +102,29 @@ typedef struct {
     uint64_t intrinsic_hits, marker_measures;
     uint64_t metadata_peak; // Maximum new snapshot/match/staging bytes, not a sum.
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
+    uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
+    const char *const *cascade_reason_names;
 } yonder_layout_stats_t;
 void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
+/* ONE LAYOUT, whole: its wall time (`total_us`, everything
+ * page_lay_out_run did) and what it went on: the cascade and what became
+ * of it (its time includes gathering the page's sheets for it), then the
+ * layout's phases summed over its attempts (a layout retried for room
+ * counts both). The record keeps the slowest (`<key> slowest`) and what
+ * layouts cost by what became of their cascade (`<key> by cascade`). */
+enum { YONDER_LAYOUT_CASCADE_KEPT = -2, YONDER_LAYOUT_CASCADE_UPDATED = -1 };
+typedef struct {
+    uint64_t total_us, cascade_us, style_us, boxes_us, layout_us, public_us;
+    uint64_t elements, boxes, reused, attempts;
+    uint64_t at_us;             // when it ended (os64_micros), placed against the record's start
+    // YONDER_LAYOUT_CASCADE_KEPT (nothing to update), _UPDATED, or why it
+    // was built fresh: an index into `cascade_reason_names`.
+    int32_t cascade_why;
+    const char *const *cascade_reason_names;
+    uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
+} yonder_layout_one_t;
+void yonder_diag_layout_one(yonder_diag_t *d, const yonder_layout_one_t *one);
+void yonder_diag_layout_stream_one(yonder_diag_t *d, const yonder_layout_one_t *one);
 /* Geometry reads while the parser is active, kept separately from layouts
  * after parsing. These do not imply that a stream chunk was painted. */
 void yonder_diag_layout_stream_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
@@ -113,6 +139,11 @@ yonder_diag_t *yonder_diag_new(const char *url, uint32_t seq, int64_t began_us);
 void yonder_diag_free(yonder_diag_t *d);
 uint32_t yonder_diag_seq(const yonder_diag_t *d);
 int64_t yonder_diag_began(const yonder_diag_t *d);
+// Numbers the caller read when the load began, kept for it as `began_us`
+// is, for the facts that are what happened since (zero until set).
+#define YONDER_DIAG_MARKS 11
+void yonder_diag_marks_set(yonder_diag_t *d, const uint64_t marks[YONDER_DIAG_MARKS]);
+void yonder_diag_marks(const yonder_diag_t *d, uint64_t marks[YONDER_DIAG_MARKS]);
 
 // A MISSING line per kind and name: `times` more asks for it.
 void yonder_diag_missing(yonder_diag_t *d, const char *kind, const char *name, uint32_t times);

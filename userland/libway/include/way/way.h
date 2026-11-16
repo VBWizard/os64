@@ -41,6 +41,9 @@
 // Oldest dropped past this: somebody sixty-four pages in wants the
 // sixty-fifth more than the first.
 #define WAY_HISTORY_MAX 64
+// A crumb's title (way_crumb_t.title): enough to tell two pages apart in a
+// list, which is all it is kept for.
+#define WAY_TITLE_MAX 120
 // A chain of immediate refreshes is capped as a chain of redirects is, and
 // for the same reason: nobody reading can tell a slow one from a stuck one.
 #define WAY_REFRESH_MAX 5
@@ -125,6 +128,15 @@ typedef struct {
     // WAY_DEST_DOCUMENT when it was kept; a zeroed one kept nothing, and a
     // face replays the browser's own then.
     way_metadata_t asked;
+    // Whether the browser's Back and Forward pass over the entry
+    // (way_browser_steps): its document made the entry after it before a
+    // person pressed, clicked or typed on it, as a page that fills the
+    // history to hold a person on it does. The face decides it; a page's
+    // own history.go passes over nothing.
+    bool skip;
+    // The page's title when the entry was left, "" for none: what a list
+    // of the history shows for it.
+    char title[WAY_TITLE_MAX];
 } way_crumb_t;
 
 // A session is LARGE — its history is WAY_HISTORY_MAX addresses of up to
@@ -204,6 +216,13 @@ typedef struct {
     // picture. Any other picture is not a page. way_open's alone: way_load
     // reads every body it opens, so to it no picture is a page.
     const char *pictures;
+    // The sounds the face plays, as a list of their types in the same form
+    // (yonder's is os64_media_type_list), or NULL for none: a sound asked
+    // for by itself, of a type it names, is a page, WAY_BODY_MEDIA, whose
+    // body the face does not read — it writes the page that plays it. They
+    // are not added to Accept: a navigation's asks for pages, as other
+    // browsers' does. way_open's alone, as `pictures` is.
+    const char *sounds;
     char status[WAY_SENTENCE_MAX];
     // The page this load was asked for from — a link followed, a form sent,
     // a refresh — which its Referer names (way_referrer). Empty for an
@@ -270,8 +289,9 @@ const char *way_accept_compose(const char *pages, const char *pictures, char *ou
 
 // What a body is, judged from its head. A head that is none of these is not
 // a page: way_open says so and refuses. IMAGE only for a leg whose face shows
-// pictures, and never for the reply to a POST.
-typedef enum { WAY_BODY_HTML = 0, WAY_BODY_TEXT, WAY_BODY_IMAGE } way_body_t;
+// pictures, MEDIA only for one whose face plays sounds, and neither for the
+// reply to a POST.
+typedef enum { WAY_BODY_HTML = 0, WAY_BODY_TEXT, WAY_BODY_IMAGE, WAY_BODY_MEDIA } way_body_t;
 
 // The head, COPIED out of the fetch: os64_fetch_head_t is storage inside
 // the fetch and dies with it, and the note is written from the head after
@@ -289,6 +309,11 @@ typedef struct {
     bool encrypted;
     uint16_t tls_version;
     bool tls_fallback;
+    bool tls_resumed;      // the connection's TLS 1.3 handshake resumed a kept session
+    // The final hop ran over HTTP/2, as a stream of this number on its
+    // connection (libfetch's `http2` and its detail's stream).
+    bool http2;
+    uint32_t h2_stream;
     way_body_t body;
     // Navigation Timing's redirectCount: the redirects followed to get here
     // when every one stayed on the origin of the address asked for, and 0
@@ -457,6 +482,16 @@ void way_forward_entry(way_session_t *session, way_crumb_t *ahead);
 // Every crumb's state freed and both lists emptied: what a face does with
 // a session it is done with.
 void way_history_clear(way_session_t *session);
+
+// How many entries the browser's Back (`back`) or Forward moves: to the
+// nearest crumb not passed over (way_crumb_t.skip), or to the furthest when
+// every one is, since the person asked to go and an entry is there. 0 when
+// there is none.
+int32_t way_browser_steps(const way_session_t *session, bool back);
+// A person activated the document named `document` (way_crumb_t.document):
+// none of its entries, on either side, is passed over now. 0 names no
+// document and changes nothing.
+void way_unskip_document(way_session_t *session, uint64_t document);
 
 // ── Judgements: what to do about a request a page makes ────────────────
 

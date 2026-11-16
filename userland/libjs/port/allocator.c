@@ -74,11 +74,14 @@ static void refused(JSMallocState *state, unsigned reason)
     if (owner != NULL) owner->failures |= reason;
 }
 
-/* After the charge grows: the owner's high-water mark follows it. */
+/* After every change to the charge: the owner's live figure takes it, and
+ * its high-water mark follows it up. */
 static void charged_now(JSMallocState *state)
 {
     JSPortAllocator *owner = state->opaque;
-    if (owner != NULL && state->malloc_size > owner->peak_bytes) owner->peak_bytes = state->malloc_size;
+    if (owner == NULL) return;
+    owner->charged_bytes = state->malloc_size;
+    if (state->malloc_size > owner->peak_bytes) owner->peak_bytes = state->malloc_size;
 }
 
 static void *allocate(JSMallocState *state, size_t size)
@@ -123,6 +126,7 @@ static void release(JSMallocState *state, void *ptr)
         jsport_fatal("allocator accounting", __FILE__, __LINE__);
     state->malloc_size -= charged;
     state->malloc_count--;
+    charged_now(state);
     if (header_size(state) != 0) unlink_block(state->opaque, block);
     os64_free(block);
 }

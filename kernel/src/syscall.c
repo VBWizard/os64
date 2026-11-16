@@ -54,6 +54,11 @@
 #include "driver/net/tcp.h"          // ...and HANDLE_NET_TCP
 #include "driver/net/icmp_conn.h"    // ...and HANDLE_NET_ICMP
 #include "gui/glass.h"               // glass_view_read — the object behind HANDLE_GLASS
+#include "bell.h"                    // bell_wait / bell_ring — the object behind HANDLE_BELL
+#include "micros.h"                  // micros_now — the clock micros() hands out
+#include "audio/audio.h"             // audio_write and the reads — the object behind HANDLE_AUDIO
+#include "audio/media_session.h"     // a media-key session — the object behind HANDLE_MEDIA_KEYS
+#include "os64/audio.h"              // OS64_AUDIO_* — the answers ring 3 is given
 
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
 // and handed to ring 3 by ticks().
@@ -101,6 +106,8 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_bell(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -194,6 +201,19 @@ static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uin
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_window_set_pinned(uint64_t a0,uint64_t a1,uint64_t a2,
+    uint64_t a3,uint64_t a4,uint64_t a5)
+{
+    (void)a2;(void)a3;(void)a4;(void)a5;
+    // Keep raw arg1 intact: values outside 0/1 must be refused, not narrowed.
+    return (uint64_t)gui_window_set_pinned((int64_t)a0,a1);
+}
+static uint64_t syscall_gui_window_set_content_size(uint64_t a0,uint64_t a1,uint64_t a2,
+    uint64_t a3,uint64_t a4,uint64_t a5)
+{
+    (void)a3;(void)a4;(void)a5;
+    return (uint64_t)gui_window_set_content_size((int64_t)a0,a1,a2);
+}
 static uint64_t syscall_gui_window_focus(uint64_t a0,uint64_t a1,uint64_t a2,
     uint64_t a3,uint64_t a4,uint64_t a5)
 {
@@ -247,6 +267,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_SPAWN,     "spawn",     syscall_spawn,     false, 0x03),  // arg0 = path, arg1 = argv (args 2-4 = in/out/err handles, NOT pointers)
 	SYSCALL_DEFINE(SYSCALL_WAIT,      "wait",      syscall_wait,      false, 0x02),  // arg1 = exit-code out ptr
 	SYSCALL_DEFINE(SYSCALL_PIPE,      "pipe",      syscall_pipe,      false, 0x01),  // arg0 = int[2] out
+	SYSCALL_DEFINE(SYSCALL_BELL,      "bell",      syscall_bell,      false, 0x00),  // no args — the answer is the new handle
 	SYSCALL_DEFINE(SYSCALL_CLOSE,     "close",     syscall_close,     false, 0x00),  // arg0 = handle (an int, not a pointer)
 	SYSCALL_DEFINE(SYSCALL_OPEN,      "open",      syscall_open,      false, 0x03),  // arg0 = path, arg1 = mode (both strings)
 	SYSCALL_DEFINE(SYSCALL_SEEK,      "seek",      syscall_seek,      false, 0x00),  // args: handle, offset, whence — no pointers
@@ -308,6 +329,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_POLL,         "gui_event_poll",         syscall_gui_event_poll,         false, 0x02),  // arg1 = input_event_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_SCREEN_INFO,        "gui_screen_info",        syscall_gui_screen_info,        false, 0x00),  // arg0/arg1 = uint32_t outs, EITHER may be NULL (handler validates)
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x00),  // arg1 = input_event_t out OR NULL (nullable: NULL = wait, don't take — handler validates); BLOCKS (like read)
+    SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE,"gui_window_set_content_size",syscall_gui_window_set_content_size,false,0),
+    SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_PINNED,"gui_window_set_pinned",syscall_gui_window_set_pinned,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_FOCUS,"gui_window_focus",syscall_gui_window_focus,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT_ANY,"gui_event_wait_any",syscall_gui_event_wait_any,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_CONTENT_RECT,"gui_window_get_content_rect",syscall_gui_window_get_content_rect,false,0),
@@ -1069,8 +1092,10 @@ static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 }
 
 // exit(code) — terminate the calling task.  arg0 becomes the task's retVal
-// (harvested by task_wait / the test harness).  Everything after the retVal
-// store is task_exit()'s problem: it switches to the per-core kernel interrupt
+// (harvested by task_wait / the test harness) unless another thread has
+// already claimed the task's teardown, in which case the code offered
+// before that claim stands (task_offer_exit_code).  Everything after the
+// offer is task_exit()'s problem: it switches to the per-core kernel interrupt
 // stack and kKernelPML4 itself, marks task+thread exited, and yields away for
 // good — which is why this entry runs with needs_cr3_switch=false (the
 // dispatcher's save/restore bookkeeping would never get to run anyway).
@@ -1085,10 +1110,7 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
-	if (task)
-	{
-		task->retVal = arg0;
-	}
+	task_offer_exit_code(task, arg0);
 
 	task_exit();
 	__builtin_unreachable();
@@ -1198,9 +1220,9 @@ static void raise_terminating_signal_and_die(task_t *task, thread_t *thread)
 
 	if (task != NULL)
 	{
-		task->retVal = code;
-		printd(DEBUG_TASK, "%s: task %s terminating (exit %lu)\n",
-			why, task->exename, task->retVal);
+		task_offer_exit_code(task, code);
+		printd(DEBUG_TASK, "%s: a thread of task %s terminating (the signal's exit code is %lu)\n",
+			why, task->exename, code);
 	}
 
 	task_exit();
@@ -1219,7 +1241,7 @@ static void raise_sigpipe_and_die(task_t *task)
 		// All threads: SIGPIPE's default action is to terminate the TASK,
 		// so every thread has to learn it, not just the first one.
 		task_signal_all_threads(task, SIGPIPE);
-		task->retVal = SIGNALS_EXIT_SIGPIPE;
+		task_offer_exit_code(task, SIGNALS_EXIT_SIGPIPE);
 		printd(DEBUG_TASK, "SIGPIPE: task %s wrote to a pipe with no readers — terminating\n",
 			task->exename);
 	}
@@ -1359,6 +1381,9 @@ static uint64_t syscall_io_deadline(uint64_t timeout_ms)
 // Runs on the calling task's CR3 (user buffer in the lower half, console and
 // pipe rings in the shared upper half — see the table comment).
 #define WRITE_CHUNK_SIZE 512
+// How much PCM crosses into the audio stream per hold of its lock: 85 ms of
+// sound, a copy of a few microseconds.
+#define AUDIO_WRITE_PIECE (16 * 1024)
 typedef enum {
 	WRITE_ALIVE,
 	WRITE_TERMINATING,
@@ -1431,12 +1456,13 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 	if (length == 0 && h->type != HANDLE_GLASS)
 		return 0;
 
-	// Like read, lower patience once for the complete call. TCP honors
-	// finite waits; nonempty writes on other handle types refuse them.
+	// Like read, lower patience once for the complete call. TCP and the
+	// audio stream honor finite waits; nonempty writes on other handle
+	// types refuse them.
 	uint64_t deadline = 0;
 	if (timeout_ms != OS64_WAIT_FOREVER)
 	{
-		if (h->type != HANDLE_NET_TCP) return SYSCALL_RESULT_INVALID;
+		if (h->type != HANDLE_NET_TCP && h->type != HANDLE_AUDIO) return SYSCALL_RESULT_INVALID;
 		deadline = syscall_io_deadline(timeout_ms);
 	}
 
@@ -1530,6 +1556,74 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 					break;
 			}
 			return copied;
+		}
+
+		case HANDLE_MEDIA_KEYS:
+		{
+			// The program's state, one word (os64/mediakeys.h), applied
+			// whole or refused whole. Copied in before the session's lock
+			// is taken: a user page may fault, and nothing under that lock
+			// may.
+			char word[32];
+			if (length > sizeof(word))
+				return SYSCALL_RESULT_INVALID;   // longer than any state's word
+			if (!copy_user_buffer(user_buffer, word, length))
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			if (media_session_write((media_session_t *)h->object, word, length) != 0)
+				return SYSCALL_RESULT_INVALID;
+			return length;
+		}
+
+		case HANDLE_BELL:
+			// A ring (bell.h). What the bytes say is not looked at: a bell
+			// carries one bit, and the write is it. Refused only on a bell
+			// a sibling closed while this write held its pin.
+			if (bell_ring((bell_t *)h->object) != 0)
+				return SYSCALL_RESULT_INVALID;
+			return length;
+
+		case HANDLE_AUDIO:
+		{
+			// PCM into the stream (os64/audio.h). The bytes cross in pieces
+			// through the thread's scratch, each copied in before the
+			// stream's lock is taken (a user page may fault; nothing under
+			// that lock may). Every piece carries the generation the call
+			// began under, so a flush between two of them retires the call.
+			audio_open_t *o = (audio_open_t *)h->object;
+			char *kbuf = NULL;
+			if (syscall_io_scratch(&kbuf) == NULL)
+				return SYSCALL_RESULT_INVALID;
+			uint32_t generation = audio_write_begin(o);
+			size_t written = 0;
+			while (written < length)
+			{
+				size_t piece = length - written;
+				if (piece > AUDIO_WRITE_PIECE)
+					piece = AUDIO_WRITE_PIECE;
+				if (!copy_user_buffer(user_buffer + written, kbuf, piece))
+					return written ? written : SYSCALL_RESULT_BAD_USER_DATA;
+
+				long w = audio_write(o, (const uint8_t *)kbuf, piece, generation, deadline);
+				if (w == OS64_AUDIO_FLUSHED || w == OS64_AUDIO_FAILED)
+					return (uint64_t)(int64_t)w;   // whatever was counted so far went with it
+				if (w == AUDIO_ERR_INTERRUPTED)
+				{
+					if (current_thread_will_catch())
+						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
+					*die = WRITE_TERMINATING;   // unpin first, then the death: the wrapper does both
+					return 0;
+				}
+				if (w == AUDIO_ERR_TIMEOUT)
+					return written ? written : (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
+				if (w == OS64_AUDIO_BUSY)
+					return written ? written : (uint64_t)(int64_t)OS64_AUDIO_BUSY;
+				if (w < 0)
+					return written ? written : SYSCALL_RESULT_INVALID;   // closed under the call, or not the stream's face
+				written += (size_t)w;
+				if ((size_t)w < piece)
+					return written;   // the wait ended early with some placed
+			}
+			return written;
 		}
 
 		case HANDLE_PIPE_WRITE:
@@ -1894,7 +1988,8 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 		    h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
 		    h->type != HANDLE_NET_ICMP && h->type != HANDLE_NET_LISTENER &&
 		    h->type != HANDLE_PTY_MASTER &&   // a STREAM master; GRID refuses the read itself
-		    h->type != HANDLE_GLASS)
+		    h->type != HANDLE_GLASS && h->type != HANDLE_BELL &&
+		    h->type != HANDLE_AUDIO && h->type != HANDLE_MEDIA_KEYS)
 			return SYSCALL_RESULT_INVALID;
 		deadline = syscall_io_deadline(timeout_ms);
 	}
@@ -2061,6 +2156,102 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			if (got < 0)
 				return SYSCALL_RESULT_INVALID;   // too small for the header and one row
 			break;
+
+		case HANDLE_AUDIO:
+		{
+			audio_open_t *o = (audio_open_t *)h->object;
+			if (audio_open_face(o) == AUDIO_FACE_POSITION)
+			{
+				// The position record, or as much of it as was asked for
+				// (os64/audio.h). Never waits; the common tail copies it out.
+				got = audio_position_read(o, kbuf, want);
+				break;
+			}
+			if (audio_open_face(o) != AUDIO_FACE_TAP || want < OS64_AUDIO_TAP_READ_MIN)
+				return SYSCALL_RESULT_INVALID;   // the stream is not read; a tap buffer must hold one full record
+			got = audio_tap_read(o, (uint8_t *)kbuf, want, deadline);
+			if (got == AUDIO_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
+			if (got == AUDIO_ERR_INTERRUPTED)
+			{
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
+				*die = true;   // unpin first, then the death: the wrapper does both
+				return 0;
+			}
+			if (got == AUDIO_ERR_CLOSED)
+				return 0;   // a sibling closed the handle under the wait: nothing more will come
+			if (got < 0)
+				return (uint64_t)(int64_t)got;   // OS64_AUDIO_BUSY: another thread is already listening
+			// Copied out here and not by the common tail, so that records
+			// a bad pointer cost are counted as lost (the next record's
+			// `dropped` says so) instead of vanishing.
+			if (!copy_to_user_buffer(user_buffer, kbuf, (size_t)got))
+			{
+				audio_tap_undelivered((const uint8_t *)kbuf, (size_t)got);
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			}
+			return (uint64_t)got;
+		}
+
+		case HANDLE_MEDIA_KEYS:
+		{
+			// The next press (os64/mediakeys.h), one whole record a read.
+			os64_media_key_t key;
+			if (length < sizeof(key))
+				return SYSCALL_RESULT_INVALID;   // never part of a record
+			got = media_session_read((media_session_t *)h->object, &key, deadline);
+			if (got == MEDIA_SESSION_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
+			if (got == MEDIA_SESSION_ERR_INTERRUPTED)
+			{
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
+				*die = true;   // unpin first, then the death: the wrapper does both
+				return 0;
+			}
+			if (got == MEDIA_SESSION_ERR_CLOSED)
+				return 0;   // a sibling closed the handle under the wait: no press will come
+			if (got < 0)
+				return (uint64_t)(int64_t)got;   // OS64_MEDIA_KEYS_BUSY: another thread is already waiting here
+			// Copied out here and not by the common tail, so that a press a
+			// bad pointer cost is counted as lost instead of vanishing.
+			if (!copy_to_user_buffer(user_buffer, &key, sizeof(key)))
+			{
+				media_session_undelivered((media_session_t *)h->object);
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			}
+			return sizeof(key);
+		}
+
+		case HANDLE_BELL:
+			// Waits for a ring (bell.h): 1 and one byte when the bell was
+			// rung, which the common tail copies out.
+			got = bell_wait((bell_t *)h->object, deadline);
+			if (got == BELL_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
+			if (got == BELL_ERR_INTERRUPTED)
+			{
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
+				*die = true;   // unpin first, then the death: the wrapper does both
+				return 0;
+			}
+			if (got == BELL_ERR_CLOSED)
+				return 0;   // a sibling closed the handle under the wait: no ring will come
+			if (got < 0)
+				return SYSCALL_RESULT_INVALID;   // another thread is already waiting on it
+			// The ring is consumed; the byte goes out here, not through the
+			// common tail, so that a buffer the kernel cannot write gives
+			// the ring back. A ring is never lost (the ABI's promise), and a
+			// caller's bad pointer is no exception to it.
+			kbuf[0] = 1;
+			if (!copy_to_user_buffer(user_buffer, kbuf, 1))
+			{
+				(void)bell_ring((bell_t *)h->object);
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			}
+			return 1;
 
 		case HANDLE_PIPE_READ:
 			// Waits for bytes, EOF, a signal or the caller's deadline.
@@ -2352,6 +2543,33 @@ static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	printd(DEBUG_PIPE, "pipe: task %s got handles r=%d w=%d\n", task->exename, rh, wh);
 	return 0;
+}
+
+// bell() — a new bell, as a handle (contract at SYSCALL_BELL in the abi
+// header; the object is bell.h's).
+static uint64_t syscall_bell(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	bell_t *b = bell_create();
+	if (b == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	int h = handle_alloc(task, HANDLE_BELL, b);
+	if (h < 0)
+	{
+		// The handle table is full: the bell never had a handle, so its
+		// one hold is ours to give back.
+		bell_release(b);
+		return SYSCALL_RESULT_INVALID;
+	}
+	return (uint64_t)h;
 }
 
 // pty_snapshot copies grid rows directly into the ABI struct, so their sizes
@@ -3020,11 +3238,12 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// same handle; only one of them can be written in husk.rc.
 	handle_type_t alias_type;
 	void *alias_object;
-	if (devfs_handle_alias(p->fs, tail, p->mode, &alias_type, &alias_object))
+	long alias_refusal = (long)SYSCALL_RESULT_INVALID;
+	if (devfs_handle_alias(p->fs, tail, p->mode, &alias_type, &alias_object, &alias_refusal))
 	{
 		kfree(p);
 		if (alias_type == HANDLE_NONE)
-			return SYSCALL_RESULT_INVALID;   // a kind this boot cannot give (/dev/glass with no desktop)
+			return (uint64_t)(int64_t)alias_refusal;   // a kind this boot cannot give (/dev/glass with no desktop), or one that said why (/dev/audio, busy)
 		int ah = handle_alloc(task, alias_type, alias_object);
 		if (ah < 0)
 		{
@@ -4434,7 +4653,8 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 		// WHAT CROSSES THE SPAWN BOUNDARY is what handle_share will share: a
 		// child's 0/1/2 are byte streams two tasks can hold — the console
-		// tags, pipe ends, open files and TCP connections. Everything else
+		// tags, pipe ends, open files, TCP connections and the audio
+		// stream. Everything else
 		// (a directory, a listener, a UDP or ICMP conversation, a thread's
 		// join object, a pty master — one holder each by design, and two
 		// closers of a master would hang up twice) is refused by the share
@@ -4689,61 +4909,18 @@ static uint64_t syscall_ticks(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	return 0;
 }
 
-// micros() — the same stopwatch as ticks(), read from the CPU's cycle
-// counter instead of the tick count: microseconds since boot, in RAX. No
-// pointer and no struct, because one number in the unit the caller wants
-// has nothing to fill in and nothing to get wrong (ARRIVAL_WAKE.md says why
+// micros() — microseconds since boot, in RAX: micros_now() (micros.h),
+// which is where the clock and its monotonic rule are written. No pointer
+// and no struct, because one number in the unit the caller wants has
+// nothing to fill in and nothing to get wrong (ARRIVAL_WAKE.md says why
 // this is a new call and not a field on os64_ticks_t: the struct is sized
 // by the caller at compile time, and growing it clobbers every binary
 // built before the growth).
-//
-// The rate is kCPUCyclesPerSecond, fixed for the life of the boot
-// (kernel.c says why a moving rate is worse). Divided in two steps — whole
-// seconds, then the remainder — so the multiply cannot overflow at any
-// uptime: cycles × 1,000,000 passes 2^64 within a couple of hours on a
-// 3GHz part.
-//
-// ticks() counts interrupts the BSP received and LOSES some under load
-// (DEBTS § wall-clock hardening); this reads a counter and loses none. The
-// two drift apart by exactly the lost ticks. A program measuring an
-// interval wants this one; a CPU% that divides two tick deltas wants ticks.
-//
-// MONOTONIC BY CONSTRUCTION, not by assumption. kBootTSC was read on the
-// BSP; this rdtsc runs on whatever core the caller is on, and the house
-// rule (nvme.c's completion poll) is that a TSC read on one core may not
-// be compared with one from another — QEMU and WSL2 have both been seen
-// to hand cores counters with different offsets. So the raw figure is
-// never returned as-is: it is folded through a global high-water mark
-// (compare-and-swap, the only cross-core state), and a caller can only
-// ever see a value at least as large as the last one anybody was given.
-// A core whose counter lags therefore STALLS the clock by its offset
-// rather than running it backward, and a core behind the boot anchor
-// reads 0 rather than 2^64 - offset. A stall is still a wrong interval on
-// a desynchronized machine; the boot-time sync check that would make it a
-// right one is booked (DEBTS § micros).
-static volatile uint64_t s_micros_high_water;
 static uint64_t syscall_micros(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
 	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
-
-	uint64_t cps = kCPUCyclesPerSecond;
-	if (cps == 0)
-		return 0;   // asked before calibration — nothing has, but 0 beats a divide fault
-	uint64_t now = rdtsc();
-	uint64_t cycles = now > kBootTSC ? now - kBootTSC : 0;
-	uint64_t seconds = cycles / cps;
-	uint64_t rest = cycles % cps;
-	uint64_t us = seconds * 1000000UL + (rest * 1000000UL) / cps;
-
-	for (;;)
-	{
-		uint64_t seen = s_micros_high_water;
-		if (us <= seen)
-			return seen;   // behind somebody's reading: hand out theirs, never less
-		if (__sync_bool_compare_and_swap(&s_micros_high_water, seen, us))
-			return us;
-	}
+	return micros_now();
 }
 
 // memory(out) — the physical memory picture, one atomic snapshot. free/used/

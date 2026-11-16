@@ -280,11 +280,14 @@ void p_strmap_free(PStrMap *map)
 
 // ── Reading the tree ────────────────────────────────────────────────────
 
+// An HTML attribute is the one in no namespace: a namespaced attribute of
+// the same name (setAttributeNS('urn:x', 'type', ...)) is none of a
+// control's, and other browsers' controls ignore it too.
 const char *p_attr(const os64_html_node_t *n, const char *name)
 {
     if (n == NULL || n->kind != OS64_HTML_ELEMENT)
         return NULL;
-    const os64_html_attr_t *a = os64_html_attr(n, name);
+    const os64_html_attr_t *a = os64_html_attr_ns(n, NULL, name);
     return a != NULL ? a->value : NULL;
 }
 
@@ -769,7 +772,11 @@ static bool names_something(const os64_html_node_t *n, const char *name)
 
 static void add_image(os64_page_t *page, const os64_html_node_t *n)
 {
-    if (!names_something(n, "src"))
+    bool responsive=p_is(n,OS64_HTML_TAG_IMG) && names_something(n,"srcset");
+    if(p_is(n,OS64_HTML_TAG_IMG) && p_is(n->parent,OS64_HTML_TAG_PICTURE))
+        for(const os64_html_node_t *s=n->parent->first_child;s && s!=n;s=s->next)
+            if(p_is(s,OS64_HTML_TAG_SOURCE) && names_something(s,"srcset"))responsive=true;
+    if (!names_something(n, "src") && !responsive)
         return;
     const char *src = p_attr(n, "src");
     if (!p_grow((void **)&page->images, &page->imagecap, page->nimages, sizeof(*page->images))) {
@@ -779,7 +786,7 @@ static void add_image(os64_page_t *page, const os64_html_node_t *n)
     os64_page_image_t *image = &page->images[page->nimages];
     os64_memset(image, 0, sizeof(*image));
     image->node = n;
-    p_resolve_picture(page, src, &image->src);
+    if(src && names_something(n,"src"))p_resolve_picture(page, src, &image->src);
     image->alt = p_attr(n, "alt");
     if (!p_ptrmap_put(&page->image_map, n, page->nimages))
         page->incomplete = true;
@@ -1405,6 +1412,7 @@ void os64_page_free(os64_page_t *page)
             at = &(*at)->state_next;
         if (*at == page)
             *at = page->state_next;
+        p_state_reclaim(state);
         if (state->models == NULL && state->private_owner)
             os64_page_state_free(state);
     }
@@ -1562,7 +1570,7 @@ os64_page_reason_t os64_page_resolve_fragment(const os64_page_t *page,
 PNodeState *p_state_for_control(const os64_page_t *page, int32_t control)
 {
     const os64_page_control_t *c = os64_page_control(page, control);
-    return c != NULL ? p_state_find(page->state, c->node) : NULL;
+    return c != NULL ? p_state_find(p_state_for_node(page->state, c->node), c->node) : NULL;
 }
 
 // The public options pointer is const, but the page owns mutable storage.
@@ -1570,7 +1578,8 @@ PNodeState *p_state_for_control(const os64_page_t *page, int32_t control)
 void p_publish(os64_page_t *page, int32_t control)
 {
     os64_page_control_t *c = &page->controls[control];
-    const PNodeState *edit = p_state_find(page->state, c->node);
+    PNodeState *edit = p_state_find(p_state_for_node(page->state, c->node), c->node);
+    if (page->doc != os64_html_node_owner(c->node)) p_state_cross_snapshot(edit);
     const PInitial *initial = &page->initial[control];
     c->value = initial->value;
     c->value_len = initial->value_len;
@@ -1583,7 +1592,7 @@ void p_publish(os64_page_t *page, int32_t control)
         c->value = edit->text;
         c->value_len = edit->text_len;
     } else if (edit != NULL && edit->cache != NULL &&
-               edit->cache_version == os64_html_version(page->doc)) {
+               edit->cache_version == os64_html_version(os64_html_node_owner(c->node))) {
         c->value = edit->cache;
         c->value_len = edit->cache_len;
     }
@@ -1598,7 +1607,7 @@ void p_publish(os64_page_t *page, int32_t control)
     c->indeterminate = edit != NULL && edit->indeterminate;
     for (int32_t i = 0; i < c->noptions; i++) {
         bool selected = p_has_attr(c->options[i].node, "selected");
-        const PNodeState *option = p_state_find(page->state, c->options[i].node);
+        const PNodeState *option = p_state_find(p_state_for_node(page->state, c->options[i].node), c->options[i].node);
         if (option != NULL && option->selected >= 0)
             selected = option->selected != 0;
         ((os64_page_option_t *)c->options)[i].selected = selected;

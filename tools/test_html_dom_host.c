@@ -2661,15 +2661,15 @@ static void t_form_input_count(void)
           "form count: absent removal");
     check(os64_html_set_attr(doc,a,"form","",0)==0&&os64_html_form_input_count(doc)==3,
           "form count: single creation");
-    os64_html_attr_change_t batch[]={{"form","f",1,false},{"form",NULL,0,true}};
+    os64_html_attr_change_t batch[]={{"form","f",1,false, false, NULL},{"form",NULL,0,true, false, NULL}};
     check(os64_html_set_attrs(doc,plain,batch,2)==0&&os64_html_form_input_count(doc)==3,
           "form count: batch net absence");
-    batch[1]=(os64_html_attr_change_t){"form","",0,false};
+    batch[1]=(os64_html_attr_change_t){"form","",0,false, false, NULL};
     check(os64_html_set_attrs(doc,plain,batch,2)==0&&os64_html_form_input_count(doc)==4,
           "form count: batch creation counted once");
     check(os64_html_set_attrs(doc,plain,batch,2)==0&&os64_html_form_input_count(doc)==4,
           "form count: batch no-op");
-    batch[0]=(os64_html_attr_change_t){"form",NULL,0,true};
+    batch[0]=(os64_html_attr_change_t){"form",NULL,0,true, false, NULL};
     check(os64_html_set_attrs(doc,plain,batch,1)==0&&os64_html_form_input_count(doc)==3,
           "form count: batch removal");
     HNode *copy=os64_html_clone(doc,a,false,&why);
@@ -2701,7 +2701,7 @@ static void t_form_input_count(void)
             allocations=0;fail_at=cut;
             if (operation==0) why=os64_html_set_attr(doc,a,"form","f",1);
             else if (operation==1) {
-                os64_html_attr_change_t change={"form","f",1,false};
+                os64_html_attr_change_t change={"form","f",1,false, false, NULL};
                 why=os64_html_set_attrs(doc,a,&change,1);
             } else (void)os64_html_parse_fragment(doc,host,fragment,strlen(fragment),false,&why);
             fail_at=0;
@@ -3149,9 +3149,17 @@ static void t_reclaim_rules(void)
 }
 #include "test_html_changes.inc"
 #include "test_html_ranges.inc"
+#include "test_html_ownership.inc"
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--ownership")) {
+        t_ownership_groups();
+        t_ownership_adoption();
+        t_ownership_templates();
+        printf("html ownership: %zu checks, %zu failed\n", checks_run, checks_failed);
+        return checks_failed ? 1 : 0;
+    }
 #ifdef HTML_RECLAIM_TEST
     if (argc == 2 && !strcmp(argv[1], "--reclaim-cost")) {
         t_reclaim_cost();
@@ -3195,6 +3203,9 @@ int main(int argc, char **argv)
         return checks_failed ? 1 : 0;
     }
     if (!(argc == 2 && !strcmp(argv[1], "--random"))) {
+        t_ownership_groups();
+        t_ownership_adoption();
+        t_ownership_templates();
         t_validity();
         t_structure();
         t_templates();

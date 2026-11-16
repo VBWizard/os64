@@ -356,17 +356,19 @@ static const char *rp_head_value(const char *key, size_t klen, const char *v, si
     static const char *const kDecimal[]={"bytes","kept lines","zoom","script seconds"};
     if(rp_is(key,klen,"clock")) return rp_decimal_to(v,n,RP_CLOCK_MAX,NULL) ? NULL : "a count no record holds";
     if(rp_is(key,klen,"agent") || rp_is(key,klen,"tz")) return n>0 ? NULL : "a value yonder does not write";
-    static const struct { const char *key, *a, *b, *c; } kWords[]={
-        {"body","html","text","image"},{"encrypted","yes","no",NULL},{"scripts","on","off",NULL},
-        {"modern","on","off",NULL},{"appearance","light","dark",NULL},{"motion","full","reduce",NULL},
-        {"animate","on","off",NULL}};
+    static const struct { const char *key, *words[4]; } kWords[]={
+        {"body",{"html","text","image","media"}},{"encrypted",{"yes","no"}},{"scripts",{"on","off"}},
+        {"modern",{"on","off"}},{"appearance",{"light","dark"}},{"motion",{"full","reduce"}},
+        {"animate",{"on","off"}}};
     const char *end=v+n;
     for(size_t i=0;i<sizeof(kDecimal)/sizeof(kDecimal[0]);i++)
         if(rp_is(key,klen,kDecimal[i])) return rp_decimal(v,n,NULL) ? NULL : "a count no record holds";
     for(size_t i=0;i<sizeof(kWords)/sizeof(kWords[0]);i++)
-        if(rp_is(key,klen,kWords[i].key))
-            return rp_is(v,n,kWords[i].a) || rp_is(v,n,kWords[i].b) || (kWords[i].c!=NULL && rp_is(v,n,kWords[i].c))
-                 ? NULL : "a value yonder does not write";
+        if(rp_is(key,klen,kWords[i].key)) {
+            for(size_t j=0;j<4 && kWords[i].words[j]!=NULL;j++)
+                if(rp_is(v,n,kWords[i].words[j])) return NULL;
+            return "a value yonder does not write";
+        }
     if(rp_is(key,klen,"status")) {
         size_t d=rp_digit_run(v,end);
         if(d==0 || (d<n && v[d]!=' ')) return "a value yonder does not write";
@@ -1194,9 +1196,13 @@ static RpRan rp_run(const RpLoad *load, rp_lookup_t lookup, void *ctx, RpIndex *
     stream_window();
     pool_submit_hook=rp_submit; pool_cancel_hook=rp_cancel;
     g.scripts_on=load->scripts; g.script_ms=(uint64_t)load->script_seconds*1000;
-    /* The heap yonder runs a page with by default: a record does not say
-     * which a page had (DEBTS.md). */
+    /* The heap and the document ceilings yonder runs a page with by
+     * default: a record does not say which a page had (DEBTS.md). */
     g.script_memory=(size_t)YONDER_SCRIPT_MEMORY_MB_DEFAULT<<20;
+    page_memory_set(yonder_page_memory_split(YONDER_PAGE_MEMORY_MB_DEFAULT));
+    check(s_page_memory.tree==yonder_page_memory_split(YONDER_PAGE_MEMORY_MB_DEFAULT).tree &&
+          s_env.max_arena_bytes==yonder_page_memory_split(YONDER_PAGE_MEMORY_MB_DEFAULT).layout,
+          "replay: a page runs under yonder's default document ceilings");
     g.modern=load->modern; g.zoom=load->zoom; s_dark=load->dark; s_reduce_motion=load->reduce;
     s_animations=!load->still;
     rp_apply_inputs(load);
@@ -1595,7 +1601,8 @@ static const char *rp_window_of(const RpRecord *r, bool local, const RpIndex *in
     os64_strcopy(hd->content_type,sizeof(hd->content_type),f[F_TYPE]);
     os64_strcopy(hd->charset,sizeof(hd->charset),f[F_CHARSET]);
     hd->encrypted=!strcmp(f[F_ENCRYPTED],"yes");
-    hd->body=!strcmp(body,"text") ? WAY_BODY_TEXT : !strcmp(body,"image") ? WAY_BODY_IMAGE : WAY_BODY_HTML;
+    hd->body=!strcmp(body,"text") ? WAY_BODY_TEXT : !strcmp(body,"image") ? WAY_BODY_IMAGE :
+             !strcmp(body,"media") ? WAY_BODY_MEDIA : WAY_BODY_HTML;
     if(f[F_TLS]!=NULL) {
         hd->tls_version=!strncmp(f[F_TLS],"1.3",3) ? 0x0304 : 0x0303;
         hd->tls_fallback=strstr(f[F_TLS],"fallback")!=NULL;
@@ -2180,7 +2187,10 @@ static way_head_t rp_head(int status, const char *reason, const char *type, cons
  * `paint stages` line, whose times are the processor's counter
  * (YONDER_DIAGNOSTICS.md § What paints cost), which no clock of the
  * harness moves, and a `script heap` line, whose peak is the engine's
- * allocations in whatever order the run made them; and wherever they are,
+ * allocations in whatever order the run made them, and the memory census's
+ * lines (`memory`, `memory dom`, `memory script`, `memory timeline`,
+ * `census`; MEMORY_CENSUS.md), whose figures are the run's own; and
+ * wherever they are,
  * the `kept:`, `kept lines:` and `claim:` facts, which say how the record
  * was made and not what the page did; the `animated` lines, whole, whose
  * due times — and so which are named and how many — are counted from when
@@ -2205,7 +2215,9 @@ static bool rp_same(const char *name, const char *a, const char *b) {
         if(*y && rp_let_be(y,yl,true)) { y+=yl+(ye?1:0); continue; }
         bool stages=xl>14 && yl>14 && !strncmp(x,"paint stages: ",14) && !strncmp(y,"paint stages: ",14);
         bool heap=xl>13 && yl>13 && !strncmp(x,"script heap: ",13) && !strncmp(y,"script heap: ",13);
-        if(!stages && !heap && (xl!=yl || memcmp(x,y,xl))) {
+        bool census=(xl>6 && yl>6 && !strncmp(x,"memory",6) && !strncmp(y,"memory",6)) ||
+                    (xl>8 && yl>8 && !strncmp(x,"census: ",8) && !strncmp(y,"census: ",8));
+        if(!stages && !heap && !census && (xl!=yl || memcmp(x,y,xl))) {
             if(same) printf("  %s: the replay's record differs from the page's own\n",name);
             printf("    kept:   %.*s\n    replay: %.*s\n",(int)xl,x,(int)yl,y);
             same=false;

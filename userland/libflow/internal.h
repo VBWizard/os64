@@ -101,34 +101,110 @@ static inline bool f_transformed(const flow_style_t *s)
     return f_transforms(s) && s->display != FLOW_DISPLAY_INLINE;
 }
 
-// Whether a `filter` or a `backdrop-filter` other than none is granted
-// (FILTER.md § 2): a plain inline's is not drawn and makes nothing, as its
-// opacity is painted opaque (flow_style_t.filter).
-static inline bool f_filtered(const flow_style_t *s)
+// The effects below are GRANTED to any box but a plain inline's, whose
+// pieces on lines are no one layer, so its effects are not drawn and make
+// nothing, as its opacity is painted opaque. An ATOM on a line is never a
+// plain inline whatever its display says — a picture's is `inline` — so
+// each gate takes `atom`: whether the box asked about is one
+// (FLOW_BOX_ATOMIC, f_atom); false where no box is known, an element's
+// box being then a block's or a plain inline's.
+static inline bool f_atom(const flow_box_t *b)
 {
-    return (s->nfilter > 0 || s->nbackdrop_filter > 0) && s->display != FLOW_DISPLAY_INLINE;
+    return b->kind == FLOW_BOX_ATOMIC;
+}
+
+static inline bool f_granted(const flow_style_t *s, bool atom)
+{
+    return atom || s->display != FLOW_DISPLAY_INLINE;
+}
+
+// Whether a `filter` or a `backdrop-filter` other than none is granted
+// (FILTER.md § 2; flow_style_t.filter).
+static inline bool f_filtered(const flow_style_t *s, bool atom)
+{
+    return (s->nfilter > 0 || s->nbackdrop_filter > 0) && f_granted(s, atom);
 }
 
 // Whether its `filter` makes a box a group (flow_visit_groups): granted,
 // and not only a `backdrop-filter`, which is drawn without one.
-static inline bool f_group_filter(const flow_style_t *s)
+static inline bool f_group_filter(const flow_style_t *s, bool atom)
 {
-    return s->nfilter > 0 && f_filtered(s);
+    return s->nfilter > 0 && f_filtered(s, atom);
 }
 
 // Whether a `mix-blend-mode` other than normal is granted (MIX_BLEND.md):
-// a stacking context and a group laid by its mode; a plain inline's does
-// nothing, and an inline-block's is not drawn (it is no stacked box), as
-// their opacity is painted opaque.
-static inline bool f_blended(const flow_style_t *s)
+// a stacking context and a group laid by its mode.
+static inline bool f_blended(const flow_style_t *s, bool atom)
 {
-    return s->mix_blend != FLOW_BLEND_NORMAL && s->display != FLOW_DISPLAY_INLINE;
+    return s->mix_blend != FLOW_BLEND_NORMAL && f_granted(s, atom);
+}
+
+// Whether a mask is granted (MASKS.md § 3): a layer has a picture or a
+// gradient — a mask of only `none` layers is no mask. A stacking context
+// and a group.
+static inline bool f_masked(const flow_style_t *s, bool atom)
+{
+    if (!f_granted(s, atom))
+        return false;
+    for (int32_t i = 0; i < s->masks.layers.nimage; i++)
+        if (s->masks.layers.image[i].url != NULL || s->masks.layers.image[i].gradient != NULL)
+            return true;
+    return false;
+}
+
+// Copies a mask longhand's list from `s` to `d`, shared and not copied, as
+// a list is the style's and lives as long as any style does; false for any
+// other property.
+static inline bool f_take_mask(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
+{
+    flow_masks_t *dm = &d->masks;
+    const flow_masks_t *sm = &s->masks;
+    switch (p) {
+    case GARB_MASK_IMAGE:
+        dm->layers.image = sm->layers.image;
+        dm->layers.nimage = sm->layers.nimage;
+        return true;
+    case GARB_MASK_REPEAT:
+        dm->layers.repeat = sm->layers.repeat;
+        dm->layers.nrepeat = sm->layers.nrepeat;
+        return true;
+    case GARB_MASK_POSITION_X:
+        dm->layers.x = sm->layers.x;
+        dm->layers.nx = sm->layers.nx;
+        return true;
+    case GARB_MASK_POSITION_Y:
+        dm->layers.y = sm->layers.y;
+        dm->layers.ny = sm->layers.ny;
+        return true;
+    case GARB_MASK_SIZE:
+        dm->layers.size = sm->layers.size;
+        dm->layers.nsize = sm->layers.nsize;
+        return true;
+    case GARB_MASK_ORIGIN:
+        dm->layers.origin = sm->layers.origin;
+        dm->layers.norigin = sm->layers.norigin;
+        return true;
+    case GARB_MASK_CLIP:
+        dm->layers.clip = sm->layers.clip;
+        dm->layers.nclip = sm->layers.nclip;
+        return true;
+    case GARB_MASK_COMPOSITE:
+        dm->composite = sm->composite;
+        dm->ncomposite = sm->ncomposite;
+        return true;
+    case GARB_MASK_MODE:
+        dm->mode = sm->mode;
+        dm->nmode = sm->nmode;
+        return true;
+    default:
+        return false;
+    }
 }
 
 // Whether `isolation: isolate` is granted: a stacking context, no group.
-static inline bool f_isolated(const flow_style_t *s)
+static inline bool f_isolated(const flow_style_t *s, bool atom)
 {
-    return s->isolate && s->display != FLOW_DISPLAY_INLINE;
+    return s->isolate && f_granted(s, atom);
 }
 
 // A containing block for the absolute boxes inside it: an element whose
@@ -139,7 +215,7 @@ static inline bool f_isolated(const flow_style_t *s)
 // or `none` makes no box for.
 static inline bool f_contains_absolute(const flow_style_t *s)
 {
-    if (s->position == FLOW_POSITION_STATIC && !f_transformed(s) && !f_filtered(s))
+    if (s->position == FLOW_POSITION_STATIC && !f_transformed(s) && !f_filtered(s, false))
         return false;
     switch (s->display) {
     case FLOW_DISPLAY_CONTENTS: case FLOW_DISPLAY_NONE:
@@ -157,7 +233,7 @@ static inline bool f_contains_absolute(const flow_style_t *s)
 // transformed or filtered.
 static inline bool f_contains_fixed(const flow_style_t *s)
 {
-    return f_contains_absolute(s) && (f_transformed(s) || f_filtered(s));
+    return f_contains_absolute(s) && (f_transformed(s) || f_filtered(s, false));
 }
 
 // The same two answers for an element, `root` the document's root: the
@@ -167,7 +243,7 @@ static inline bool f_contains_fixed(const flow_style_t *s)
 // grayscale(1) }` leaves a fixed header fixed to the viewport.
 static inline bool f_anchors(const flow_style_t *s, bool root, bool fixed)
 {
-    if (root && f_filtered(s)) {
+    if (root && f_filtered(s, false)) {
         flow_style_t plain = *s;
         plain.nfilter = plain.nbackdrop_filter = 0;
         return fixed ? f_contains_fixed(&plain) : f_contains_absolute(&plain);
@@ -230,18 +306,31 @@ f_dim_kind_t f_parse_dimension(const char *s, bool nonzero, int32_t *out);
 #define F_INT_MAX 1000000
 bool f_parse_integer(const char *s, int32_t *out);
 bool f_parse_nonnegative(const char *s, int32_t *out);
-// Whether `n` is laid out as a replaced element (boxes.c): a canvas only
-// where `env` says scripting is on.
-bool f_replaced(const flow_env_t *env, const os64_html_node_t *n);
+// Whether `n`, styled `s`, is laid out as a replaced element (boxes.c): a
+// canvas only where `env` says scripting is on, and a button only when it
+// is the face's own button (f_button_faced).
+bool f_replaced(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s);
+// Whether `<button>` `n`, styled `s`, is the face's own button, a widget
+// that draws its own caption: its content is text alone, not all white
+// space, it hosts no shadow tree, `env`'s cascade gives it no ::before or
+// ::after that draws, and the page drew nothing of its box
+// (flow_style_t.author_box). Any other button is laid out as any element
+// is (STYLED_BUTTONS.md § 2).
+bool f_button_faced(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s);
 // Elements that make no box in this browser, nor anything inside them
-// (boxes.c): `embed`, `audio`, `source`, `track`, `keygen`.
-bool f_boxless(const os64_html_node_t *n);
-// Whether pass 2 draws anything inside element `n`, whose display is
-// `display`: nothing inside a boxless element, nor inside a replaced one
-// unless it is laid out through `display: contents` (a button's, whose
-// content then flows where it is). Pass 1's tree-order state follows it
-// (GENERATED_CONTENT.md § 8.2).
-bool f_draws_inside(const flow_env_t *env, const os64_html_node_t *n, flow_display_t display);
+// (boxes.c): `embed`, an `audio` with no player (f_audio_controls),
+// `source`, `track`, `keygen`.
+bool f_boxless(const flow_env_t *env, const os64_html_node_t *n);
+// An `audio` the face draws a player for: `controls` set, and the face
+// plays the page's sounds (flow_env_t.media). It is replaced (f_replaced),
+// its size the face's (replaced_size).
+bool f_audio_controls(const flow_env_t *env, const os64_html_node_t *n);
+// Whether pass 2 draws anything inside element `n`, styled `s`: nothing
+// inside a boxless element, nor inside a replaced one unless it is laid
+// out through `display: contents` (a button's, whose content then flows
+// where it is). Pass 1's tree-order state follows it (GENERATED_CONTENT.md
+// § 8.2).
+bool f_draws_inside(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s);
 // "Rules for parsing a legacy colour value", `chucknorris` and all: a
 // page's colour attribute means the colour every browser draws.
 bool f_parse_legacy_color(const char *s, uint32_t *out);
@@ -307,15 +396,22 @@ typedef struct FRecord FRecord;
 typedef struct {
     double offset;
     bool has_easing;
-    flow_easing_t easing;
+    garb_easing_t easing;
+    // How its values meet the value underneath: a script effect's own
+    // (garb_effect_keyframe_t); a CSS animation's replace.
+    garb_composite_t composite;
     const garb_set_t *decls;
     int32_t ndecls;
     int32_t sheet;
     FProps sets;
 } FKeyframe;
 
-// One animation whose @keyframes exist: its timing, its record, its
-// keyframes in their used order, and every longhand any of them sets.
+// One animation: a CSS one whose @keyframes exist, with its record on the
+// timeline, or a script's effect (`script`, garb_effect_t), whose
+// clock is its own and which has no record; its timing (a script's: its
+// duration, delay and iteration count, and the linear easing a keyframe
+// without its own takes), its keyframes in their used order, and every
+// longhand any of them sets.
 // `dropped`: those whose lists found no room in this layout's style
 // (f_motion_style), each left as it was — the base's, or an earlier
 // animation's, which the tree shows — so nothing is due for this one's
@@ -327,6 +423,10 @@ typedef struct {
 typedef struct {
     flow_animation_t timing;
     FRecord *record;
+    const garb_effect_t *script;
+    // Each iteration builds on the last (a script's iterationComposite:
+    // accumulate).
+    bool iteration_accumulate;
     FKeyframe *frames;
     int32_t nframes;
     FProps props;
@@ -343,7 +443,9 @@ typedef struct {
 
 // An element's animations: its style with none of them (each property's
 // underlying value, the implicit keyframes'), and those that run, in
-// `animation-name` order — a later one's value replacing an earlier's.
+// composite order — its CSS animations in `animation-name` order, the
+// first `ncss`, then its script effects in the order they were made — a
+// later one's value replacing an earlier's.
 // `in_place` when every property they set only repaints where the element
 // already draws (f_motion_in_place) — the view's question, not `ticks`.
 // `ticks` when the element's values move between layouts (PILE3.md §
@@ -364,7 +466,7 @@ typedef struct {
 typedef struct {
     flow_style_t base;
     FAnimation *anims;
-    int32_t nanims;
+    int32_t nanims, ncss;
     int32_t text_reach;
     bool in_place;
     bool ticks;
@@ -388,7 +490,7 @@ typedef const FResolved *(*FResolve)(void *ctx, int32_t a, int32_t frame, const 
 int32_t f_animations(const flow_style_t *s);
 flow_animation_t f_animation_at(const flow_style_t *s, int32_t i);
 // Easing 1 § 2's output for the input `x`, the before flag `before`.
-double f_ease(const flow_easing_t *e, double x, bool before);
+double garb_ease(const garb_easing_t *e, double x, bool before);
 // The element's style at time `now` (ms): `out`, which holds the base,
 // with each animated property's value — and, when `record`, which of its
 // intervals hold one value (FAnimation.holds) — its keyframes resolved by
@@ -405,22 +507,23 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
 uint8_t f_motion_effects(const FMotion *m, double now);
 // Whether every property `m`'s animations set only repaints where the
 // element, and what it holds, already draw — colours, opacity,
-// visibility, a background's position, the corners' curves — or around
-// its text by no more than FMotion.text_reach (a text shadow). Such an
-// animation can wait while its element is out of view; any other (a
-// transform, a size, a position, a box shadow's offset) may carry what it
-// draws into view from anywhere (flow_motion_due).
+// visibility, a background's or a mask's position and size, the corners'
+// curves — or around its text by no more than FMotion.text_reach (a text
+// shadow). Such an animation can wait while its element is out of view;
+// any other (a transform, a box's size or position, a box shadow's
+// offset) may carry what it draws into view from anywhere
+// (flow_motion_due).
 bool f_motion_in_place(const FMotion *m);
 // How far past [0, 1] an easing's output may go at most, either side: the
 // control points' reach for a Bézier, whose curve lies inside their hull —
 // at least the overshoot, which is all a bound needs — and 0 for the
 // others.
-double f_easing_overshoot(const flow_easing_t *e);
+double f_easing_overshoot(const garb_easing_t *e);
 // Whether every property `m`'s animations set is of the TICK SET, which
 // nothing but painting reads and nothing inherits: the transform's four
-// properties and its origin, opacity, the background's colour and
-// position, the border colours, `box-shadow` (PILE3.md § Animations in
-// place).
+// properties and its origin, opacity, the background's colour, position
+// and size, the mask's position and size, the border colours,
+// `box-shadow` (PILE3.md § Animations in place).
 bool f_motion_ticks(const FMotion *m);
 // Whether any property `m`'s animations set has another value in `a` than
 // in `b`: a blend in a transform is the same only as itself, so two worked
@@ -458,17 +561,21 @@ typedef enum { F_NEXT_ALL, F_NEXT_EDGES, F_NEXT_VALUES } FNext;
 double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext half);
 // A layout's dealings with the timeline: it begins a timeline of its own
 // beside the one the page shows (`from`, read and never changed; NULL on
-// no memory), each animated element is matched to its records there
-// (Animations 1 § 2) and given records of the new one's — false on no
+// no memory), each animated element's CSS animations (its first `ncss`;
+// a script's effects keep their own clocks) are matched to its records
+// there (Animations 1 § 2) and given records of the new one's — false on no
 // memory — and it ends: a complete layout keeps only what it matched, an
 // incomplete one carries every record it did not match on as it was. The
 // new timeline is the tree's (FStyles.timeline) until the face shows the
-// tree (flow_timeline_commit), and `from` must live until it ends.
+// tree (flow_timeline_commit), and `from` must live until it ends. A
+// pseudo-element's animations are matched to the records of its element
+// and `pseudo`, never to its node's, which each layout makes anew.
 flow_timeline_t *f_timeline_begin(const flow_timeline_t *from);
-bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now);
+bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, garb_pseudo_t pseudo, FMotion *m,
+                        double now);
 bool f_timeline_end(flow_timeline_t *t, bool complete);
 // How many records the timeline keeps, each holding its element; and how
-// many elements its map names.
+// many elements and pseudo-elements its maps name.
 int32_t f_timeline_records(const flow_timeline_t *t);
 int32_t f_timeline_elements(const flow_timeline_t *t);
 // A transform function's matrix, made from its primitive and arguments
@@ -607,7 +714,9 @@ typedef struct {
     FArena arena;
     FMap map;               // element node -> FStyled
     size_t lists_left;      // of F_STYLE_LISTS_BUDGET
-    // The elements an animation runs on, in document order (FStyled.motion).
+    // The elements an animation runs on, in document order (FStyled.motion),
+    // and the pseudo-elements: each one's node, which every layout makes
+    // anew, so two layouts' lists hold different nodes for it.
     const os64_html_node_t **animated;
     int32_t nanimated, cap_animated;
     // The timeline this layout builds when the environment hands it one
@@ -878,6 +987,10 @@ struct FBox {
     // every level above it, and without the memo that is exponential.
     bool intrinsic_known;
     int64_t intrinsic_min, intrinsic_max;
+    // The def_h they were measured against (-2 before it was found): an
+    // inline picture's percentage height is of it, so a layout reusing an
+    // earlier one's widths must have measured with the same.
+    int64_t intrinsic_def;
     // The same two from its content alone, before a width or limit the page
     // gave overrides them (a picture's, its own width: replaced_own),
     // border box: what a row flex item's automatic minimum and content
@@ -900,6 +1013,28 @@ struct FBox {
     FFrag *place;
     bool abs_sized, abs_h_set;
     int64_t abs_w, abs_ml, abs_h;
+    // Its heights where they do not wait on its content (CSS 2.1 § 10.5),
+    // as seed_heights found them — block_at on its way in, a flex container
+    // for its items before it measures them — each -1 where there is none:
+    // `cb_h`, the containing block's content height its own percentage
+    // heights resolve against (an absolute box's, absolute() sets from the
+    // block it is placed in); `def_h`, its own content height — a length,
+    // a percentage of `cb_h`, or its absolute equations' — which its
+    // children's resolve against. Neither holds until `def_known`.
+    bool def_known;
+    int64_t cb_h, def_h;
+    // A box with a ratio and no height of its own: the content height its
+    // ratio gives it from its width, held to its limits, which block()
+    // finds once the width is known and before the content is laid out
+    // (-1 from seed_heights until then, for any other box, and for a flex
+    // or grid item whose container may yet give it another height,
+    // height_set_later). Definite (CSS Sizing 4: a size the ratio transfers
+    // from a definite one is), so its children's percentages and its flex
+    // lines and grid tracks resolve against it. Where its automatic
+    // minimum, its content's height, is more, a flex or grid container
+    // takes that height (ratio_grown) and places its items against it once
+    // more; a block grows to it at its end.
+    int64_t ratio_h;
     // A flex item's width and left margin, as its container decided them
     // before laying it out (FLEX.md), which block() takes as given; its
     // line, counted from the first — a row's placing it again reads that,

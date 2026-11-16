@@ -294,6 +294,46 @@ int main(void) {
   assert(os64_tls_transport_step(t,10)==expected[i]);
   assert(os64_tls_transport_abort(t,OS64_TLS_CANCELLED)==expected[i]); destroy(t);
  }
+ // RELEASE: the engine, the socket and the unread ciphertext go to a new
+ // owner, and nothing is closed. Refused before the handshake is done.
+ {
+  os64_tls_client *got=NULL; int32_t h=-1; unsigned char unread[OS64_TLS_TRANSPORT_UNREAD_MAX]; size_t n=99;
+  reset(); t=create();
+  assert(os64_tls_transport_release(t,&got,&h,unread,sizeof unread,&n)==OS64_TLS_NEED_PROGRESS && !got && h==-1 && n==99);
+  assert(os64_tls_transport_release(NULL,&got,&h,unread,sizeof unread,&n)==OS64_TLS_BAD_ARGUMENT);
+  assert(os64_tls_transport_release(t,NULL,&h,unread,sizeof unread,&n)==OS64_TLS_BAD_ARGUMENT);
+  assert(os64_tls_transport_release(t,&got,&h,NULL,4,&n)==OS64_TLS_BAD_ARGUMENT);
+  destroy(t);
+  // Done, with five bytes read from the socket and two of them fed: the
+  // other three are handed over, in order, and the transport is gone
+  // with the handle open and the client alive.
+  reset(); t=create(); authenticated(); received_end=5; feed_cap=2;
+  assert(os64_tls_transport_step(t,0)==OS64_TLS_OK && fed_end==2);
+  engine.flags&=~OS64_TLS_RECV_CIPHER;     // the engine wants its plaintext read first: the rest stays unread
+  assert(os64_tls_transport_release(t,&got,&h,unread,2,&n)==OS64_TLS_BAD_ARGUMENT && !got && n==99);   // room for two of three
+  assert(os64_tls_transport_release(t,&got,&h,unread,sizeof unread,&n)==OS64_TLS_OK);
+  assert(got==&client && h==7 && n==3 && !memcmp(unread,received+2,3) && !closed && !freed && !aborts && !allocations);
+  // Nothing unread is a release of nothing, with no room needed.
+  reset(); t=create(); authenticated(); got=NULL; h=-1; n=99;
+  assert(os64_tls_transport_release(t,&got,&h,NULL,0,&n)==OS64_TLS_OK && got==&client && h==7 && n==0 && !closed && !freed && !allocations);
+  // Ciphertext of its own still owed: refused until it has gone, and the
+  // transport works on as it was.
+  reset(); t=create(); authenticated(); got=NULL; h=-1; n=99;
+  engine.flags|=OS64_TLS_SEND_CIPHER; offered_end=4; block_write=true;
+  assert(os64_tls_transport_release(t,&got,&h,unread,sizeof unread,&n)==OS64_TLS_NEED_PROGRESS && !got);
+  os64_tls_transport_step(t,0);           // taken from the engine, and the socket will not have it
+  assert(os64_tls_transport_release(t,&got,&h,unread,sizeof unread,&n)==OS64_TLS_NEED_PROGRESS && !got && allocations==1);
+  block_write=false; write_cap=4;
+  assert(os64_tls_transport_step(t,0)==OS64_TLS_OK && sent_end==4);
+  assert(os64_tls_transport_release(t,&got,&h,unread,sizeof unread,&n)==OS64_TLS_OK && got==&client && !closed && !allocations);
+  // Closing, or failed: refused with that, and freed as ever.
+  reset(); t=create(); authenticated(); got=NULL;
+  assert(os64_tls_transport_begin_close(t)==OS64_TLS_OK);
+  assert(os64_tls_transport_release(t,&got,&h,unread,sizeof unread,&n)==OS64_TLS_CANCELLED && !got); destroy(t);
+  reset(); t=create(); authenticated(); read_error=-1;
+  assert(os64_tls_transport_step(t,10)==OS64_TLS_TRANSPORT);
+  assert(os64_tls_transport_release(t,&got,&h,unread,sizeof unread,&n)==OS64_TLS_TRANSPORT && !got); destroy(t);
+ }
  reset(); t=create(); engine.status=OS64_TLS_CERTIFICATE; engine.policy_reason=OS64_TLS_POLICY_SAN; engine.upstream_error=99;
  os64_tls_state_t state=os64_tls_transport_state(t);
  assert(state.status==OS64_TLS_CERTIFICATE && state.policy_reason==OS64_TLS_POLICY_SAN && state.upstream_error==99); destroy(t);

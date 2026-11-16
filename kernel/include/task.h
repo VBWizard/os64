@@ -159,9 +159,10 @@
 		// task_enqueue_dead_child does NOT: enqueueing one child twice makes
 		// `parent->deadChildTail->deadChildNext = child` write child->next =
 		// child, and a self-linked corpse means the undertaker's walk never
-		// ends. Claimed with an atomic exchange, so the winner is decided
-		// before any of that runs. Zeroed = unclaimed, by the
-		// all-allocations-zeroed rule.
+		// ends. Claimed under signalLock (task_claim_teardown), so the winner
+		// is decided before any of that runs. The claim also freezes retVal:
+		// an exit code offered after it is refused (task_offer_exit_code).
+		// Zeroed = unclaimed, by the all-allocations-zeroed rule.
 		volatile bool tearingDown;
         char exename[128];
         thread_t* threads;
@@ -457,6 +458,12 @@
 	// Does NOT touch kForegroundTask — collecting a background corpse is not
 	// a change of who owns the console.
 	uint64_t task_reap_any_dead(task_t* parentTask, uint64_t* exitCode);
+	// The task's ID and its ancestors', nearest first, at most `cap`, stopping
+	// before kKernelTask (everyone's parent after an orphaning, so it names
+	// nobody's lineage). Read under the graveyard lock, which is the lock the
+	// orphanage rewrites parentTask under: every ancestor it reaches is
+	// unburied. Returns how many were written.
+	uint32_t task_lineage(task_t* task, uint64_t* out, uint32_t cap);
 	int task_reap_eligible_zombies(size_t max_to_reap);
 	void* task_alloc_aligned(task_t* task, size_t size);
 	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
@@ -497,4 +504,5 @@
 	// single control point for "exit means exit" — see the implementation
 	// for why marking alone is not enough on a tickless boot.
 	void task_terminate_sibling_threads(task_t* task, thread_t* self);
+	void task_offer_exit_code(task_t* task, uint64_t code);   // refused once a thread has claimed the teardown
 	#endif

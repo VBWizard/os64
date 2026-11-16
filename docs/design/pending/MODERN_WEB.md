@@ -517,7 +517,7 @@ From 2026-10-07, so they are not re-argued from scratch:
 | Decision | State |
 |---|---|
 | D13 (incremental relayout) before `requestAnimationFrame` | ruled; slice 5 |
-| The runtime's memory limit (D5b's profile) | a per-page setting since 2026-11-05: `yonder.conf`'s `script_memory_mb`, 256 MiB by default, which each page's runtime is made with; the record's `script heap` line says what a page held. The recon's 33 MB bytecode for one bundle said the limit is per PAGE, not per runtime |
+| The runtime's memory limit (D5b's profile) | a per-page setting since 2026-11-05: `yonder.conf`'s `script_memory_mb`, 512 MiB by default, which each page's runtime is made with; the record's `script heap` line says what a page held. The recon's 33 MB bytecode for one bundle said the limit is per PAGE, not per runtime |
 | The 5 s per-task budget | measured after slice 0's instrument; the recon says compile of the largest bundle alone is 4 to 5 s on the P5, so the budget cannot include compile |
 | The script stack | 128 KiB until 2026-10-31; since then 2 MiB of a declared 4 MiB window thread, because real pages overflowed 160 calls (SCRIPT_STACK.md) |
 | Scripts on by default | Chris's, after the gates; the kill switch does not change it |
@@ -1305,8 +1305,15 @@ the style object and WPT all see it go with the switch.
   the `aspect-ratio` tile pattern (a grid of `aspect-ratio: 1` cards fills
   each column and is as tall as it is wide). A written `stretch` still
   stretches it down. Intrinsic widths follow a given height through the
-  ratio. A table's inner boxes take none, as § 4.1 says, and a table's own
-  box is booked.
+  ratio. The height a ratio gives a box from its width is definite
+  (`FBox.ratio_h`, found once the width is known and before the content
+  is laid out): a child's percentage height, a flex container's lines and
+  a grid's tracks resolve against it. Where the box's automatic minimum,
+  its content's height, is more, it is that tall instead — a flex or grid
+  container places its items again against it. A flex or grid item whose
+  container may yet stretch or flex it has none, as a stretched size is
+  not definite (FLEX.md, decision 1). A table's inner boxes take none,
+  as § 4.1 says, and a table's own box is booked.
 
 The two grammar laxities WPT exposed in passing are fixed too: a radial
 gradient's `at` is a full `<position>`, and each of `text-indent`'s
@@ -1658,11 +1665,10 @@ link yonder refused.
   parsed). It is freed with the page and charged to its caps; a change in
   it moves the page's version, so yonder rebuilds the page's model after
   that task.
-- **Which document a node belongs to** is the document its tree hangs
-  from; a detached tree's root's wrapper records the one it was made in,
-  copied from or last taken out of (`DValue.document`, written by
-  `d_made_in` and `d_leaving`). `ownerDocument` was the window's for every
-  node before.
+- **Which document a node belongs to** is native metadata, including for
+  detached roots that have never had a wrapper. Iframe F.2 separates this
+  mutable node document from physical allocation owner and immutable creation
+  realm. Adoption updates the former; wrapper lookup uses the latter.
 - **A document with no window**: `location` is null (assigning throws),
   it is cookie-averse, `write`/`writeln`/`open` throw InvalidStateError
   (a write would otherwise have reached the page's own parser), a link, a
@@ -1696,8 +1702,8 @@ link yonder refused.
 | Seam | What it is now |
 |---|---|
 | `os64_html_create_document`, `os64_html_create_doctype` | libhtml's: a second DOCUMENT node and a doctype in `doc`'s arena and mark; never inserted, charged until `doc` is freed |
-| `d_node_document`, `d_window_document` | the node's document (its tree's DOCUMENT root, else its root's record, else the window's), and whether that is the window's; while no document of its own exists, every node is the window's and neither walks |
-| `d_made_in`, `d_leaving` | the record written as a node is made or copied, and as a binding verb (`d_remove`, `d_replace`, `d_replace_content`) takes it out; only a wrapped node keeps one |
+| `d_node_document`, `d_window_document` | the native node-document record, and whether it is this binding's window Document |
+| `d_made_in`, `d_wrap_in` | establish a new node's native Document before exposing its wrapper; native adoption maintains it on later moves |
 | `d_connected`, `d_in_window_tree` | DOM's connected (isConnected, a `form` attribute's lookup, the controls and names collections), and the window's tree (a script's start) |
 | `d_scripting` | the page's scripting, for a node of the window's document: innerHTML's parse and serialization, insertAdjacentHTML's parse |
 | `yonder_scripts_address` | a `javascript:` link's code queued as a classic script (`MODE_ADDRESS`, no element) |
@@ -2223,7 +2229,8 @@ adversarial and truth passes are done; the cold read is next.
 - **The six BarProps** and `BarProp`, `visible` true; **`external`** and
   `External`, whose two methods do nothing.
 - **`crypto`** (`crypto.c`) and `Crypto`: `getRandomValues` and
-  `randomUUID`, without `subtle` (ruling 1). The bytes come through a host
+  `randomUUID`, without `subtle` (ruling 1; WEB_CRYPTO.md brought it,
+  2026-11-07). The bytes come through a host
   hook, `options.entropy`; yonder's is libtls's `/dev/random` reader, made
   public as `os64_tls_entropy` so there is one reader, not two. The hook
   writes into the binding's scratch and the page gets the bytes only when
@@ -2374,8 +2381,8 @@ reading empty. html/dom is checked out whole for one test, its other 247
 pages excluded by name: a later phase un-excludes what it names.
 
 **Booked** (DEBTS.md § Classic browser scripting): the QuotaExceededError
-interface. Not booked, by ruling: `subtle` (ruling 1), and `close()`
-(DIVERGENCES.md).
+interface. Not booked, by ruling: `subtle` (ruling 1, until WEB_CRYPTO.md
+reversed it on 2026-11-07), and `close()` (DIVERGENCES.md).
 
 ### P1-Da, as built
 
@@ -4471,10 +4478,11 @@ map's `areas`, which are P6b's. The brief is in the opus kit.
   window-reflecting handlers already were. An area's `href` is a row of
   its own, a URL as the anchor's is, so that it exists with the switch
   alone.
-- **Left, and booked** (DEBTS.md § Classic browser scripting): an area's
-  `relList` and the hyperlink members of an area and an anchor; a style's
+- **Left, and booked** (DEBTS.md § Classic browser scripting): a style's
   `disabled`, whose sheet is never disabled; a template's declarative
-  shadow DOM members.
+  shadow DOM members. (Also left here and paid on 2026-11-15: the links'
+  `relList` and HTMLHyperlinkElementUtils on an area and an anchor, with
+  the anchor's own reflections and `text`, in `mixin.c` and `elements.c`.)
 
 **Numbers.** WPT: `html/dom`'s eight reflection pages for these kinds,
 excluded until the phase that names them, now run: 29,000 passes, 5,038
@@ -4484,7 +4492,8 @@ expectation file cannot spell, so they cannot be required); what fails
 of P6's own members is a NUL set through a string (U+FFFD, as every
 reflection page has it) and every URL reflection, whose expected value
 the harness builds from an anchor's `protocol` and `host`, which yonder
-lacks. `dom/events` +56, `dom/nodes` +61 (four renamed: a heading now
+lacked until 2026-11-15 (the anchor's parts brought `html/dom` 1,878
+passes, most of them these). `dom/events` +56, `dom/nodes` +61 (four renamed: a heading now
 prints as HTMLHeadingElement), `url` +1 and `xhr` +1, each `[required]`;
 the other directories unchanged. `css/cssom`'s serialize-all-longhands
 "Computed style" fails on the branch P6 is built on as well, unrelated.

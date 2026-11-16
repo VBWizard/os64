@@ -5,9 +5,19 @@
 #include <os64/js_engine.h>
 #include "quickjs.h"
 #include <dom/dom.h>
+#include <dom/media.h>
 #include <html/html.h>
 #include <page/page.h>
 #include <math.h>
+#include <garb/timing.h>
+
+/* Internal allocator seam: a retained record can be released by a sibling. */
+void *dom_host_private_alloc(os64_dom_t *, size_t);
+void d_free(os64_dom_t *, void *);
+
+/* Internal installation seam, exercised without exposing child bindings in Yonder. */
+os64_dom_t *d_create_in_realm(os64_js_runtime_t *, os64_js_realm_t *,
+    os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
 
 int64_t os64_open(const char *path, const char *mode)
 { (void)path; (void)mode; return -1; }
@@ -139,7 +149,8 @@ static const char initial_html[] =
     "<input id=r1 type=radio name=g checked><input id=r2 type=radio name=g>"
     "<select id=select><option id=o1>A</option><option id=o2>B</option></select></form>"
     "<template id=template><b>inside</b></template></body></html>";
-static DomFixture fixture_base(size_t arena, size_t state_cap, size_t engine_cap)
+/* The fixture's document and page state over a runtime built from `config`. */
+static DomFixture fixture_configured(size_t arena, size_t state_cap, const os64_js_config_t *config)
 {
     DomFixture fixture = {0};
     os64_html_options_t html_options = os64_html_options_default();
@@ -151,10 +162,14 @@ static DomFixture fixture_base(size_t arena, size_t state_cap, size_t engine_cap
     os64_html_parser_feed(parser, initial_html, sizeof(initial_html) - 1);
     fixture.document = os64_html_parser_finish(parser);
     fixture.state = os64_page_state_create(fixture.document, state_cap);
+    fixture.runtime = create_fixture(config);
+    return fixture;
+}
+static DomFixture fixture_base(size_t arena, size_t state_cap, size_t engine_cap)
+{
     os64_js_config_t config = fixture_config();
     if(engine_cap) config.limits.memory_bytes=engine_cap;
-    fixture.runtime = create_fixture(&config);
-    return fixture;
+    return fixture_configured(arena, state_cap, &config);
 }
 /* A binding over a runtime capped at `engine_cap` bytes (0: the fixture's
  * default). */
@@ -172,9 +187,29 @@ static DomFixture fixture_new(const os64_dom_options_t *options)
     return fixture_new_capped(options, 0);
 }
 
+/* MEMORY_CENSUS.md § 4: the kinds are a partition of os64_dom_bytes, live
+ * blocks never exceed blocks made, and an unknown kind answers zero. */
+static void memory_balanced(const os64_dom_t *dom, const char *when)
+{
+    size_t bytes = 0;
+    bool sane = true;
+    for (int k = 0; k < OS64_DOM_MEM_KINDS; k++) {
+        os64_dom_mem_t m = os64_dom_memory(dom, (os64_dom_mem_kind_t)k);
+        bytes += m.bytes;
+        if (m.blocks > m.made || (m.blocks == 0) != (m.bytes == 0)) sane = false;
+    }
+    os64_dom_mem_t past = os64_dom_memory(dom, OS64_DOM_MEM_KINDS);
+    if (bytes != os64_dom_bytes(dom))
+        fprintf(stderr, "memory census %s: kinds %zu, bytes %zu\n", when, bytes, os64_dom_bytes(dom));
+    check(bytes == os64_dom_bytes(dom) && sane && past.bytes == 0 && past.made == 0,
+          "memory census: the kinds sum to the binding's bytes");
+}
+
 static void fixture_free(DomFixture *fixture)
 {
+    memory_balanced(fixture->binding, "before drain");
     os64_dom_drain(fixture->binding);
+    memory_balanced(fixture->binding, "after drain");
     check(os64_dom_registry_count(fixture->binding) == 0, "drain releases retained engine values");
     os64_dom_drain(fixture->binding);
     os64_js_destroy(fixture->runtime);
@@ -244,13 +279,37 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_document.inc"
 #include "test_dom_message.inc"
 #include "test_dom_animation.inc"
+#include "test_dom_webanimation.inc"
 #include "test_dom_intersection.inc"
 #include "test_dom_resize.inc"
+#include "test_dom_media.inc"
 #include "test_dom_walker.inc"
 #include "test_dom_pointer.inc"
 #include "test_dom_importmap.inc"
 #include "test_dom_shadow.inc"
 #include "test_dom_ranges.inc"
+#include "test_dom_realms.inc"
+#include "test_dom_retirement.inc"
+#include "test_dom_provider_retirement.inc"
+#include "test_dom_transport_retirement.inc"
+#include "test_dom_visitor_retirement.inc"
+#include "test_dom_report_retirement.inc"
+#include "test_dom_callback_reports.inc"
+#include "test_dom_timer_settings.inc"
+#include "test_dom_listener_settings.inc"
+#include "test_dom_scheduled_settings.inc"
+#include "test_dom_handler_settings.inc"
+#include "test_dom_observer_settings.inc"
+#include "test_dom_custom_settings.inc"
+#include "test_dom_promise_settings.inc"
+#include "test_dom_animation_retirement.inc"
+#include "test_dom_animation_routing.inc"
+#include "test_dom_departure.inc"
+#include "test_dom_stream_realms.inc"
+#include "test_dom_child_install.inc"
+#include "test_dom_recovery.inc"
+#include "test_dom_recovery_host.inc"
+#include "test_dom_retention.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -580,6 +639,7 @@ static void dom_global_miss_cases(void)
 
 int main(int argc, char **argv)
 {
+    if(argc==2&&!strcmp(argv[1],"--core")){dom_identity_cases();dom_control_cases();dom_clone_control_cases();dom_clone_character_data_cases();dom_refusal_cases();dom_budget_cases();printf("DOM core probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--canvas")){dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();printf("DOM canvas probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -587,16 +647,19 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--attributes")){dom_attributes_cases();attributes_allocation_cases();implementation_jquery_cases();printf("DOM attributes probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--fetch")){dom_fetch_cases();printf("DOM fetch probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--window-reads")){dom_window_read_timing();return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--classic")){dom_classic_cases();printf("DOM classic probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--window")){dom_window_cases();printf("DOM window probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--report")){dom_report_cases();dom_report_sweep_cases();printf("DOM report probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--document")){dom_document_cases();printf("DOM document probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--ranges")){dom_range_cases();printf("DOM ranges probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--shadow")){dom_shadow_cases();printf("DOM shadow probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--classic-methods")){dom_classic_method_cases();printf("DOM classic methods probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--animation")){dom_animation_cases();printf("DOM animation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--web-animations")){dom_webanimation_cases();printf("DOM web animations probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--scroll")){dom_geometry_cases();dom_element_scroll_cases();dom_view_cases();printf("DOM scroll probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--intersection")){dom_intersection_cases();printf("DOM intersection probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--resize")){dom_resize_cases();printf("DOM resize probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
-    if(argc==2&&!strcmp(argv[1],"--walker")){dom_walker_cases();printf("DOM walker probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--media")){dom_media_cases();printf("DOM media probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}    if(argc==2&&!strcmp(argv[1],"--walker")){dom_walker_cases();printf("DOM walker probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--performance")){dom_performance_cases();dom_performance_observer_cases();printf("DOM performance probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--observer")){dom_observer_cases();printf("DOM observer probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -605,7 +668,59 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();dom_screen_cases();dom_performance_cases();dom_performance_observer_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--storage-quota")){dom_storage_quota_cases();printf("DOM storage quota: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--pointer")){dom_pointer_cases();printf("DOM pointer: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--cluster-failures")){dom_cluster_failure_cases();printf("DOM cluster failures: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--realms")){dom_realm_cases();dom_cluster_cases();dom_cluster_cap_cases();printf("DOM realm routing: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--provider-retirement")){dom_provider_retirement_cases();printf("DOM provider retirement: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--realm-retirement")){dom_retirement_cases();dom_provider_retirement_cases();printf("DOM retirement queues: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--transport-retirement")){dom_transport_retirement_cases();printf("DOM transport retirement: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--visitor-retirement")){dom_visitor_retirement_cases();printf("DOM visitor retirement: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--importmap")){dom_import_map_cases();dom_import_map_sweep_cases();printf("DOM import maps: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--animation-routing")){dom_animation_routing_cases();printf("DOM animation routing: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--animation-retirement")){dom_animation_retirement_cases();printf("DOM animation retirement: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--retention")){dom_recovery_host_cases();dom_retention_cases();printf("DOM retention: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--recovery")){dom_recovery_cases();printf("DOM recovery: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--promise-settings")){dom_promise_settings_cases();printf("DOM Promise settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--custom-settings")){dom_custom_settings_cases();printf("DOM custom settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--observer-settings")){dom_observer_settings_cases();printf("DOM observer settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--recovery-host")){dom_recovery_host_cases();printf("DOM recovery host: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--handler-settings")){dom_handler_settings_cases();printf("DOM handler settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--scheduled-settings")){dom_scheduled_settings_cases();printf("DOM scheduled settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--listener-settings")){dom_listener_settings_cases();printf("DOM listener settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--timer-settings")){dom_timer_settings_cases();printf("DOM timer settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--callback-reports")){dom_callback_report_cases();printf("DOM callback reports: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--report-retirement")){dom_report_retirement_cases();printf("DOM report retirement: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--departure")){dom_departure_cases();printf("DOM departure: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--stream-realms")){dom_stream_realm_cases();printf("DOM stream realms: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--child-install")){dom_child_install_cases();printf("DOM child installation: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--child-install-sweeps")){dom_child_install_sweeps(false);printf("DOM child installation sweeps: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--child-install-engine")){dom_child_install_engine_cases();dom_child_install_budget_cases();printf("DOM child installation engine: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--child-install-nested-sweeps")){dom_child_install_sweeps(true);printf("DOM nested child installation sweeps: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
+    dom_realm_cases();dom_cluster_cases();dom_cluster_cap_cases();
+    dom_retirement_cases();dom_provider_retirement_cases();
+    dom_transport_retirement_cases();
+    dom_visitor_retirement_cases();
+    dom_report_retirement_cases();
+    dom_callback_report_cases();
+    dom_timer_settings_cases();
+    dom_listener_settings_cases();
+    dom_scheduled_settings_cases();
+    dom_handler_settings_cases();
+    dom_observer_settings_cases();
+    dom_custom_settings_cases();
+    dom_promise_settings_cases();
+    dom_animation_retirement_cases();
+    dom_animation_routing_cases();
+    dom_departure_cases();
+    dom_recovery_cases();
+    dom_recovery_host_cases();
+    dom_retention_cases();
+    dom_stream_realm_cases();
+    dom_child_install_cases();
+    dom_child_install_sweeps(false);
+    dom_child_install_sweeps(true);
+    dom_child_install_engine_cases();
+    dom_child_install_budget_cases();
     dom_classic_cases();
     dom_modern_cases();
     dom_pointer_cases();
@@ -626,8 +741,10 @@ int main(int argc, char **argv)
     dom_document_cases();
     dom_p2b_cases();
     dom_animation_cases();
+    dom_webanimation_cases();
     dom_intersection_cases();
     dom_resize_cases();
+    dom_media_cases();
     dom_walker_cases();
     dom_import_map_cases();
     dom_geometry_cases();

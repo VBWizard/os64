@@ -394,6 +394,7 @@ struct os64_image_sequence {
     os64_image_frame_t view;
     uint32_t *canvas, *restore;
     uint8_t *data, *indices;
+    size_t data_len;
     gif_frame_t *frames;
     gif_dictionary_t *dict;
     uint32_t pass;
@@ -414,6 +415,20 @@ void os64_image_sequence_free(os64_image_sequence_t *seq)
 const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t *seq)
 {
     return seq ? &seq->view : NULL;
+}
+
+os64_image_status_t os64_image_sequence_default(const os64_image_sequence_t *seq, os64_image_t *out)
+{
+    if(!out)return OS64_IMAGE_MALFORMED;
+    *out=(os64_image_t){0};
+    if(!seq)return OS64_IMAGE_MALFORMED;
+    if(seq->data)return image_decode_gif(seq->data,seq->data_len,out);
+    size_t bytes=(size_t)seq->view.width*seq->view.height*4;
+    uint32_t *pixels=os64_malloc(bytes);
+    if(!pixels)return OS64_IMAGE_NO_MEMORY;
+    os64_memcpy(pixels,seq->view.pixels,bytes);
+    out->pixels=pixels;out->width=seq->view.width;out->height=seq->view.height;
+    return OS64_IMAGE_OK;
 }
 
 static os64_image_status_t sequence_render(os64_image_sequence_t *seq,
@@ -519,6 +534,7 @@ os64_image_status_t os64_image_sequence_decode(const uint8_t *data, size_t len,
             goto fail;
         }
         os64_memcpy(seq->data, data, len);
+        seq->data_len=len;
         seq->view = (os64_image_frame_t){.width = scan.width, .height = scan.height,
             .pixels = seq->canvas, .frame_count = (uint32_t)scan.count, .play_count = scan.plays};
         gif_reader_t r = {seq->data, len, 0};

@@ -19,6 +19,7 @@
 // A layout retains its model and pins the document's borrowed strings until
 // flow_free; the document itself still belongs to its caller.
 
+#include "garb/timing.h"
 #include "html/html.h"
 #include "page/page.h"
 #include "os64/font_backend.h"
@@ -293,8 +294,10 @@ typedef enum { FLOW_FLOAT_NONE = 0, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT } flow_flo
 typedef enum { FLOW_CONTENT_BOX = 0, FLOW_BORDER_BOX } flow_box_sizing_t;
 typedef enum { FLOW_REPEAT = 0, FLOW_REPEAT_X, FLOW_REPEAT_Y, FLOW_NO_REPEAT } flow_repeat_t;
 typedef enum { FLOW_FIT_LENGTHS = 0, FLOW_FIT_COVER, FLOW_FIT_CONTAIN } flow_bg_fit_t;
+// A box a layer is placed in or cut to; NO_CLIP is a mask's clip that cuts
+// to nothing (Masking 1 § 7.5), never a background's.
 typedef enum {
-    FLOW_EDGE_BORDER = 0, FLOW_EDGE_PADDING, FLOW_EDGE_CONTENT, FLOW_EDGE_TEXT
+    FLOW_EDGE_BORDER = 0, FLOW_EDGE_PADDING, FLOW_EDGE_CONTENT, FLOW_EDGE_TEXT, FLOW_EDGE_NO_CLIP
 } flow_edge_t;
 typedef enum {
     FLOW_OVERFLOW_VISIBLE = 0,
@@ -386,9 +389,10 @@ typedef struct {
     uint32_t name_len;
     int32_t row0, row1, col0, col1;
 } flow_grid_area_t;
-// A gradient (Images 3 § 3), as a page wrote it: what it needs to be drawn
-// on a box is the box's size, which a face has and the style has not.
-typedef enum { FLOW_GRADIENT_LINEAR = 0, FLOW_GRADIENT_RADIAL } flow_gradient_kind_t;
+// A gradient (Images 3 § 3, Images 4 § 3.3 for a conic one), as a page
+// wrote it: what it needs to be drawn on a box is the box's size, which a
+// face has and the style has not.
+typedef enum { FLOW_GRADIENT_LINEAR = 0, FLOW_GRADIENT_RADIAL, FLOW_GRADIENT_CONIC } flow_gradient_kind_t;
 // How big a radial gradient's ending shape is: to a side or a corner of
 // its box, the nearest or the farthest, or a SIZE written out (`radii`).
 typedef enum {
@@ -400,7 +404,8 @@ typedef enum {
 } flow_extent_t;
 
 // A colour stop at a position along the gradient line (PX, or PERCENT of
-// the line), AUTO where the page left it out; or a HINT, where between its
+// the line; round a conic gradient, PX is degrees and PERCENT is of the
+// whole turn), AUTO where the page left it out; or a HINT, where between its
 // two neighbours their colours meet half and half, its colour unused.
 // `current`: the page wrote currentColor, which is the colour of the box
 // the gradient is drawn on — not of the element that wrote it, since a
@@ -419,12 +424,14 @@ typedef struct {
     // LINEAR: the line's angle in thousandths of a degree, clockwise from
     // up (180000 is the initial, down) — or, when `to_x` or `to_y` is not
     // 0, toward that side or corner: -1 left or top, 1 right or bottom,
-    // which only the box's shape turns into an angle.
+    // which only the box's shape turns into an angle. CONIC: where its
+    // turn starts, in the same thousandths, about `centre`.
     int32_t angle;
     int8_t to_x, to_y;
     // RADIAL: a circle or an ellipse, how big — an extent, or `radii` (a
     // circle's in radii[0]; PX, or for an ellipse PERCENT of its box too)
-    // — and its centre, x then y (PX or PERCENT of the box).
+    // — and its centre, x then y (PX or PERCENT of the box), which a CONIC
+    // one has too.
     bool circle;
     flow_extent_t extent;
     flow_length_t radii[2];
@@ -553,30 +560,9 @@ struct flow_transform {
 
 // ── Animations (CSS Animations 1, Easing 1; PILE3.md § Animations) ──────
 
-// An easing (Easing 1 § 2): linear; a cubic Bézier through (0, 0),
-// (p[0], p[1]), (p[2], p[3]) and (1, 1), which the keywords ease, ease-in,
-// ease-out and ease-in-out are — `named` when one of them is how it was
-// written, which is another easing than the same curve written as
-// cubic-bezier() where keyframes are grouped by easing (Chrome's answer);
-// or `steps` steps jumping as `jump` says, which step-start and step-end
-// are, and are the same easing as.
-typedef enum { FLOW_EASE_LINEAR = 0, FLOW_EASE_CUBIC, FLOW_EASE_STEPS } flow_ease_kind_t;
-typedef enum { FLOW_JUMP_END = 0, FLOW_JUMP_START, FLOW_JUMP_NONE, FLOW_JUMP_BOTH } flow_jump_t;
-typedef struct {
-    flow_ease_kind_t kind;
-    double p[4];
-    int32_t steps;
-    flow_jump_t jump;
-    bool named;
-} flow_easing_t;
-
-typedef enum {
-    FLOW_DIRECTION_NORMAL = 0,
-    FLOW_DIRECTION_REVERSE,
-    FLOW_DIRECTION_ALTERNATE,
-    FLOW_DIRECTION_ALTERNATE_REVERSE,
-} flow_direction_t;
-typedef enum { FLOW_FILL_NONE = 0, FLOW_FILL_FORWARDS, FLOW_FILL_BACKWARDS, FLOW_FILL_BOTH } flow_fill_t;
+// The easings, the directions and the fill modes are libgarb's
+// (garb/timing.h), where the timing arithmetic both libflow and libdom
+// use lives.
 
 // A name as the page wrote it, its bytes not terminated; `text` NULL for
 // `none`.
@@ -593,10 +579,10 @@ typedef struct {
 typedef struct {
     const flow_name_t *name;
     const double *duration, *delay;
-    const flow_easing_t *easing;
+    const garb_easing_t *easing;
     const double *iterations;
-    const flow_direction_t *direction;
-    const flow_fill_t *fill;
+    const garb_direction_t *direction;
+    const garb_fill_t *fill;
     const bool *paused;
     int32_t nname, nduration, ndelay, neasing, niterations, ndirection, nfill, npaused;
 } flow_animations_t;
@@ -606,12 +592,13 @@ typedef struct {
 typedef struct {
     flow_name_t name;
     double duration_ms, delay_ms;
-    flow_easing_t easing;
+    garb_easing_t easing;
     double iterations;
-    flow_direction_t direction;
-    flow_fill_t fill;
+    garb_direction_t direction;
+    garb_fill_t fill;
     bool paused;
 } flow_animation_t;
+
 
 // What `will-change` names that yonder gives an effect (Will Change 1 § 2):
 // a value other than the initial one of these makes a stacking context —
@@ -679,6 +666,34 @@ typedef struct {
     int32_t nimage, nrepeat, nx, ny, nsize, norigin, nclip;
 } flow_backgrounds_t;
 
+// How a mask layer is laid onto the layers below it (Masking 1 § 7.8):
+// source-over, source-out, source-in and xor.
+typedef enum {
+    FLOW_COMPOSITE_ADD = 0, FLOW_COMPOSITE_SUBTRACT, FLOW_COMPOSITE_INTERSECT,
+    FLOW_COMPOSITE_EXCLUDE
+} flow_composite_t;
+// What of a mask layer's image is its coverage (§ 7.2): its alpha, or its
+// luminance times its alpha. MATCH_SOURCE is alpha for every image libflow
+// keeps — a gradient's or a picture's, never an SVG <mask>'s.
+typedef enum { FLOW_MASK_ALPHA = 0, FLOW_MASK_LUMINANCE, FLOW_MASK_MATCH_SOURCE } flow_mask_mode_t;
+
+// Each mask property's list (§ 7): the layers placed as a background's
+// are, and how each combines and is read. The images say how many layers
+// there are, as a background's do.
+typedef struct {
+    flow_backgrounds_t layers;
+    const flow_composite_t *composite;
+    const flow_mask_mode_t *mode;
+    int32_t ncomposite, nmode;
+} flow_masks_t;
+
+// One mask layer (flow_mask_layer).
+typedef struct {
+    flow_layer_t layer;
+    flow_composite_t composite;
+    flow_mask_mode_t mode;
+} flow_mask_layer_t;
+
 typedef struct {
     flow_display_t display;
 
@@ -696,6 +711,13 @@ typedef struct {
     uint32_t fill;
     bool has_background;            // false = transparent
     uint32_t background;            // a colour
+    // An author declaration, a sheet's or the style attribute's, gives the
+    // element's background colour or image, a border's style, width or
+    // colour, or a corner's radius a value of its own (a `revert` hands it
+    // back, and does not count): the page drew its box, which is what
+    // keeps a `<button>` from being the face's own button
+    // (STYLED_BUTTONS.md § 2). Not inherited.
+    bool author_box;
     // Which of `background`, `border_color` and `fill` the page wrote as
     // currentColor (FLOW_CURRENT_*): resolved against this element's colour
     // above, and kept so that a child taking them by `inherit` — or, for
@@ -729,20 +751,27 @@ typedef struct {
     // than none makes a box a stacking context and the containing block of
     // its absolute and fixed descendants, as a transform does; a `filter`
     // makes it a group (flow_visit_groups), its bounds grown by what the
-    // filter spreads (flow_filter_reach). A plain inline's is neither drawn
-    // nor makes anything; an inline-block's makes a containing block and is
-    // not drawn, its content painted where its atom is — both booked as
-    // their opacity is (FILTER.md § 10).
+    // filter spreads (flow_filter_reach) — an inline-block's or an inline
+    // picture's too, its atom stacked whole. A plain inline's is neither
+    // drawn nor makes anything, as its opacity is painted opaque (FILTER.md
+    // § 10).
     const flow_filter_t *filter, *backdrop_filter;
     int32_t nfilter, nbackdrop_filter;
     // `mix-blend-mode` and `isolation: isolate` (MIX_BLEND.md): a mode
     // other than normal makes a box a stacking context and a group laid
     // onto what is under it by that mode; `isolate` makes a stacking
-    // context. Neither does anything on a plain inline; an inline-block's
-    // blend makes a stacking context and is not drawn, its content painted
-    // where its atom is — both as their opacity is. Neither inherited.
+    // context — an atom's (an inline-block, an inline picture) as a
+    // block's, the atom whole. Neither does anything on a plain inline, as
+    // its opacity does not. Neither inherited.
     flow_blend_t mix_blend;
     bool isolate;
+    // The mask (Masking 1 § 7; MASKS.md): a list per property, as the
+    // backgrounds' are, each at least one long. A layer with an image makes
+    // a box a stacking context and a group whose bounds are cut to its
+    // border box unless a layer is cut to no box (flow_masked) — an
+    // atom's as a block's, the atom whole; a plain inline's does nothing,
+    // as its opacity is painted opaque. Not inherited.
+    flow_masks_t masks;
     // How a picture fills its content box (CSS Images 3 § 4.5, § 4.6):
     // stretched to it, scaled to fit inside or to cover it, at its own
     // size, or the smaller of those two, placed by `object_position` — x
@@ -756,8 +785,9 @@ typedef struct {
     bool pixelated;
     flow_length_t width, height;    // AUTO, PX or PERCENT
     // The limits: PX or PERCENT, AUTO for none (`min-*: auto` is none too,
-    // outside flex and grid). A percentage on a height limit binds
-    // nothing, as a percentage height does not.
+    // outside flex and grid). A percentage on a height limit, as a
+    // percentage height, is of the containing block's height where that
+    // is definite, and binds nothing where it is not (CSS 2.1 § 10.7).
     flow_length_t min_width, max_width, min_height, max_height;
     // Whether width, height and their limits measure the content box or
     // the border box (CSS Sizing 3 § 4.1).
@@ -833,8 +863,9 @@ typedef struct {
     // In thousandths: 1000 is opaque, the initial value. 0 is not painted,
     // and neither is anything inside it. What is between makes a stacking
     // context that a face composites WHOLE at this opacity — one GROUP,
-    // not each thing in it (flow_visit_groups) — but for an inline box
-    // and an inline-block, which are painted opaque (PILE3.md § Booked).
+    // not each thing in it (flow_visit_groups); an atom (an inline-block,
+    // an inline picture) is one group, the atom whole. A plain inline box,
+    // pieces on lines, is painted opaque (PILE3.md § Booked).
     uint16_t opacity;
     // Transforms (PILE3.md § Transforms): the `transform` list, NULL and 0
     // for none, and the individual `translate`, `rotate` and `scale`, each
@@ -990,6 +1021,16 @@ typedef struct {
     // layout is the page at, on the face's clock in milliseconds.
     const struct flow_timeline *timeline;
     uint64_t now_ms;
+    // The page's script effects on `node` (garb_effect_t), in composite
+    // order (the order their animations were made), as `*out` and how
+    // many; NULL, or 0, for none. They are laid over its CSS animations whether or not a
+    // `timeline` is given: a script reads its animations' values
+    // (getComputedStyle) whatever the face draws. What they point at must
+    // outlive every tree laid out with them, which keeps them for its ticks
+    // and its paints: the face holds a cancelled effect's keyframes until
+    // no such tree is left.
+    int32_t (*script_effects)(void *ctx, const os64_html_node_t *node,
+                              const garb_effect_t *const **out);
     // The face ticks (flow_motion_tick): an element whose animations change
     // only what is painted moves between layouts, and its values are due
     // for ticks, not layouts. Without it every animation moves by layouts.
@@ -997,6 +1038,12 @@ typedef struct {
     // The face renders outer inline SVG viewports as replaced content.
     // False retains foreign-content fallback for text-only consumers.
     bool svg;
+    // The face plays the page's sounds: an `audio` with `controls` is a
+    // replaced box it draws its player in (replaced_size gives its size),
+    // and a `video` is a replaced box, 300 by 150 by default, drawn empty
+    // (it plays sound alone). False keeps every audio boxless, as a face
+    // with no player needs, and a video its fallback content.
+    bool media;
 } flow_env_t;
 
 bool flow_svg_root(const os64_html_node_t *node);
@@ -1111,7 +1158,9 @@ struct flow_box {
     // drew it — an underline and a line-through may differ.
     uint32_t underline_color, line_through_color;
     int32_t link;                   // libpage's link this box is or sits in, or -1
-    int32_t control;                // ATOMIC, REPLACED: libpage's control, or -1
+    // libpage's control, or -1: a REPLACED box's, an ATOMIC one's, and the
+    // BLOCK box of a block-level button the page draws (STYLED_BUTTONS.md).
+    int32_t control;
     // REPLACED always; an ATOMIC that is a replaced element's box, never an
     // inline-block's (or inline-flex, -grid, -table): what the face draws
     // inside, where the layout put no boxes of the element's content.
@@ -1144,10 +1193,12 @@ struct flow_box {
     bool holds_outline;
     // Painted as a layer of its own, in paint order, and never through its
     // tree ancestors: their walks skip it. A positioned box is; so is a
-    // block-level box in the flow below full opacity, a stacking context
+    // transformed one, block-level or an atom on a line, in a frame of its
+    // own; and so is one in the flow — block-level, or an atom — below full
+    // opacity, filtered, blended, masked or isolated, a stacking context
     // painted whole where CSS 2.1 Appendix E paints a positioned box of
-    // z-index 0 — and that one stays in its parent's overflow rect, clip
-    // and frame, since it has not left the flow.
+    // z-index 0, which stays in its parent's overflow rect, clip and frame,
+    // since it has not left the flow.
     bool stacked;
     // In a `position: fixed` box's subtree, the fixed box included: its
     // rects, clip and baseline are viewport coordinates (above).
@@ -1164,6 +1215,16 @@ struct flow_box {
     // `visible` and `clip` that is not the viewport's, so `hidden` too,
     // which a script and a fragment link may scroll and a person may not.
     int32_t scroller;
+    // What it draws inside its own group changed in place: 0 as laid out,
+    // then a stamp of its tree's, later than any before it, each time a
+    // tick (flow_motion_tick) changes a value it draws — any but its
+    // transform's properties and its opacity, which say only how its group
+    // is laid — or anything a box inside it draws or how that box is
+    // placed, and each time a scroll container at it or inside it scrolls
+    // (flow_scroll_set). A face keeping a group's drawing between paints
+    // of one tree (flow_tree_serial) keeps it while this holds still
+    // (PILE3.md § Transforms, the painter: Kept drawings).
+    uint64_t drawn;
     // `opacity: 0` on it or on an element it is inside, unless that
     // element's opacity is animated (a group then, laid over at its
     // opacity, which may be none): flow_visit does not hand it over.
@@ -1196,6 +1257,10 @@ typedef struct flow_tree flow_tree_t;
 // model until free. Its cascade, fonts and text context outlive it.
 flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *model,
                          int32_t width, const flow_env_t *env);
+// A number no other tree laid out since the program started has, 0 for
+// NULL: what a face keying something to one tree's boxes checks, since a
+// freed tree's box may share its address with a later tree's.
+uint64_t flow_tree_serial(const flow_tree_t *tree);
 /* The same layout with an optional output sink and injectable monotonic
  * microsecond clock. Both are borrowed for this call, and the sink is cleared
  * even on refusal. A missing/invalid clock is counted, not treated as timing
@@ -1272,6 +1337,16 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
                                     flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx);
 /* NULL supplies zero statistics. The answer is copied, not borrowed. */
 flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
+/* WHAT A TREE HOLDS (MEMORY_CENSUS.md § 3): the bytes each of its arenas
+ * has reserved — the computed styles, the boxes, the lines and fragments,
+ * and the public boxes — and how many boxes it built, anonymous ones
+ * included. Arena bytes only: the tree's side tables (its maps and paint
+ * lists) are not counted here. NULL answers zeros. Cheap: no walk. */
+typedef struct {
+    size_t styles_bytes, boxes_bytes, lines_bytes, public_bytes;
+    uint64_t boxes;
+} flow_tree_stats_t;
+flow_tree_stats_t flow_tree_stats(const flow_tree_t *tree);
 uint64_t flow_styles_reused(const flow_tree_t *tree);
 void flow_free(flow_tree_t *tree);
 // Borrowed snapshot whose indices the boxes carry; NULL if built without one.
@@ -1310,6 +1385,44 @@ void flow_timeline_free(flow_timeline_t *t);
 // built none and leaves `*shown` as it is, so animations turned off and on
 // again run on from their starts. Allocates nothing.
 void flow_timeline_commit(flow_timeline_t **shown, flow_tree_t *tree);
+// A CSS animation's clock: while `paused`, the local time it holds;
+// else the time on the face's clock its local time was 0 at, and how fast
+// it runs (local time = (now - start_ms) * rate). A `canceled` one applies
+// nothing.
+typedef struct {
+    bool paused, canceled;
+    double start_ms, hold_ms, rate;
+} flow_css_clock_t;
+// The timeline's CSS animations of elements, a canceled one included, for a
+// script's CSSAnimation objects (WEB_ANIMATIONS.md § 3) — a pseudo-element's
+// run and are left out (DEBTS.md): in its order, which is composite
+// order — elements as their layout met them, each element's by its
+// animation-name list — each with an id the same through every layout it
+// lives through, its element, its name (the timeline's bytes, good while
+// it is), its place in the list, its clock, animation-play-state as its
+// style last gave it, whether a script drives it (flow_timeline_drive),
+// and its timing as its style last gave it.
+typedef struct {
+    uint64_t id;
+    const os64_html_node_t *node;
+    const char *name;
+    uint32_t name_len;
+    int32_t place;
+    flow_css_clock_t clock;
+    bool style_paused, scripted;
+    double duration_ms, delay_ms, iterations;
+    garb_direction_t direction;
+    garb_fill_t fill;
+} flow_css_animation_t;
+int32_t flow_timeline_size(const flow_timeline_t *t);
+bool flow_timeline_at(const flow_timeline_t *t, int32_t i, flow_css_animation_t *out);
+// A script's CSSAnimation drives animation `id` from now on: its clock is
+// `clock`, written into the timeline the page shows, whose tree reads it at
+// once and whose next layouts carry it on, leaving it alone when
+// animation-play-state changes — the script answers that itself (CSS
+// Animations 2: the change pauses or plays the CSSAnimation). False when
+// no animation has that id.
+bool flow_timeline_drive(flow_timeline_t *t, uint64_t id, const flow_css_clock_t *clock);
 
 #define FLOW_NEVER UINT64_MAX
 // When the page next shows another value than the layout at its time
@@ -1334,8 +1447,10 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
 // flow_motion_due's, but their phase edges are, which a tick never
 // crosses: one waits for the layout. A time already gone is due at once.
 uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll);
-// One element the page's animations run on, for a record that says what
-// keeps a page moving (flow_motion_entries): its first box (NULL for none),
+// One element the page's animations run on — or its ::before or ::after,
+// named by the element and `pseudo` (a garb_pseudo_t, 0 for the element's
+// own), as a box names it — for a record that says what keeps a page
+// moving (flow_motion_entries): its first box (NULL for none),
 // whether it or anything inside it has a box (`drawn`), whether `view`
 // shows it, whether its animations repaint only where it draws
 // (`in_place`) and tick (`ticks`), whether flow_motion_due asks its own
@@ -1348,6 +1463,7 @@ uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flo
 // element it otherwise passes by, is not said here.
 typedef struct {
     const os64_html_node_t *node;
+    uint8_t pseudo;
     const flow_box_t *box;
     bool drawn, seen, in_place, ticks, counted;
     flow_name_t name;
@@ -1362,7 +1478,10 @@ int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_
 // tick): each element's style rewritten, its transform frames remade and
 // the ink of its shadows grown. `mark`, when not NULL, is handed what each
 // element that changed painted before the tick and what it paints after,
-// in page coordinates at `scroll`, with the box that paints it, and
+// in page coordinates at `scroll`, with the box that paints it — and an
+// empty rectangle for the element whose background the canvas may take,
+// whatever its boxes reach, since the canvas paints the view wherever its
+// box is — and
 // `*moved` (when not NULL) says whether a frame changed. False when the
 // tick is not taken — its lists found no room in what the layout's budget
 // left them, or no memory — and the tree is as the last tick left it: lay
@@ -1380,7 +1499,7 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
 // pieces, its text and any block split out of it — and each box drawn
 // outside it that takes from it what changed,
 // in page coordinates at `scroll`; true. An element no box stands for, nor
-// any inside it (a button's content, what is under `display: none`), shows
+// any inside it (a select's options, what is under `display: none`), shows
 // nothing of what changed and is passed over. False when they cannot be
 // bounded so — then repaint the whole view — and `*said` (when not NULL)
 // names why (flow_parts_why_t), with the element and the property that
@@ -1478,10 +1597,11 @@ int32_t flow_shadow_blur_reach(int32_t blur);
 // beyond what came before it, cast by its offsets — what the painter
 // spreads, its blurs held at FLOW_FILTER_BLUR_MAX, so a group's bounds and
 // the painter agree. All 0 for none, for a list holding a URL, which
-// draws unfiltered, and where a filter is not drawn (a plain inline).
+// draws unfiltered, and where a filter is not drawn (a plain inline's
+// pieces; an atom's is drawn, whatever its display says).
 // Mirrored (top for bottom, left for right) it is how far from outside a
 // rect what the filter draws in it can come from.
-void flow_filter_reach(const flow_style_t *s, int32_t out[4]);
+void flow_filter_reach(const flow_box_t *box, int32_t out[4]);
 // The same for any list, `n` functions of `list` — a `backdrop-filter`'s —
 // whatever box it is on: 0 for a list holding a URL.
 void flow_filter_list_reach(const flow_filter_t *list, int32_t n, int32_t out[4]);
@@ -1491,9 +1611,8 @@ void flow_filter_list_reach(const flow_filter_t *list, int32_t n, int32_t out[4]
 // mirrored, meets `r` or anything already joined, until nothing more
 // joins: so the box is drawn again whole (FILTER.md § 7), its backdrop
 // blurring what lies that far outside any pixel that changed, a box drawn
-// again being a change too. `r` itself when none does. An inline-block's
-// backdrop is not stacked and not seen (DEBTS § Filters); the root's is
-// not drawn.
+// again being a change too. `r` itself when none does. The root's is not
+// drawn.
 os64_gui_rect_t flow_backdrop_damage(const flow_tree_t *tree, os64_gui_rect_t r, flow_point_t scroll);
 // Whether an outer box shadow of `box` casts anything: its shape, the
 // border box grown by its spread, is not empty. One a negative spread
@@ -1612,6 +1731,15 @@ int32_t flow_background_layers(const flow_style_t *s);
 flow_layer_t flow_background_layer(const flow_style_t *s, int32_t i);
 // Whether any layer has a picture or a gradient from the page's sheets.
 bool flow_background_has_image(const flow_style_t *s);
+// A style's mask layers, as its background layers: how many, and layer
+// `i` (0 the top). A layer with no image is a transparent one (Masking 1
+// § 7.1).
+int32_t flow_mask_layers(const flow_style_t *s);
+flow_mask_layer_t flow_mask_layer(const flow_style_t *s, int32_t i);
+// Whether a box's mask is granted: a layer has a picture or a gradient,
+// and the box is no plain inline's piece (an atom never is, a picture's
+// display `inline` though it is).
+bool flow_masked(const flow_box_t *box);
 // Its clip, meaningful when `clipped`: its own, met with what clips each
 // frame it is in from outside that frame, each where its own frame is — in
 // the coordinates it is painted in, out to its drawn-through box, whose own
@@ -1674,6 +1802,10 @@ int32_t flow_box_scroller(const flow_box_t *box);
 // field, drawn at its edges or not at all, which a page's script answers
 // by focusing the field, leave the field usable.
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll);
+// The same question at (`x`, `y`) in document coordinates rather than at
+// the box's centre, for a widget that covers only part of its box (a
+// video's player, the strip along its bottom).
+bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll);
 
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of
 // their own (flow_hit can still answer one) — except a line of a box with
@@ -1699,9 +1831,10 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 
 // The same walk, told where each GROUP is: a stacking context painted below
 // full opacity (flow_style_t.opacity), drawn through its matrix
-// (flow_box_through), filtered (flow_style_t.filter), or blended by a
-// mode other than normal (flow_style_t.mix_blend), the root's included —
-// one group when it is more than one.
+// (flow_box_through), filtered (flow_style_t.filter), masked
+// (flow_masked), or blended by a mode other than normal
+// (flow_style_t.mix_blend), the root's included — one group when it is
+// more than one.
 // `open` comes before the group's first box and `close` after its last,
 // groups nesting; `bounds` holds at least everything the group paints
 // (the bounds contract, PILE3.md § Transforms, the painter, Booked), in the coordinates it is painted in at
@@ -1709,7 +1842,8 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // where its frame puts it, grown by its `ink` and cut to its clip, a
 // drawn-through group inside counted through its matrix and cut to its
 // clip, and all of it grown by what the group's filter spreads
-// (flow_filter_reach) — so a face
+// (flow_filter_reach) and, when it is masked, cut to its border box unless
+// a mask layer is cut to no box (Masking 1 § 7.5) — so a face
 // can composite it whole: everything inside painted as usual, then the
 // group laid over what was under it at its opacity (CSS Color 4 § 3.2),
 // through its matrix. Inside a drawn-through group the walk culls against
@@ -1726,12 +1860,24 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // (CSS 2.1 Appendix E, step 10) — once there and never through `visit`:
 // an outline is painted over everything of its context, its own content
 // included.
+// `inside`, when not NULL, is asked of each drawn-through group right
+// after its `open`, how the walk culls inside it, to the depth the walk
+// keeps views (past it nothing is culled): against the view taken back
+// as above; not at all, for a face that paints the whole group to keep
+// it between paints; or wholly, for one laying what it kept — the opens
+// and closes of the groups inside still come, and nothing else.
+typedef enum {
+    FLOW_INSIDE_VIEW = 0,
+    FLOW_INSIDE_ALL,
+    FLOW_INSIDE_NONE,
+} flow_inside_t;
 typedef struct {
     void (*visit)(void *ctx, const flow_box_t *box);
     void (*open)(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds);
     void (*close)(void *ctx, const flow_box_t *box);
     void *ctx;
     void (*outline)(void *ctx, const flow_box_t *box);
+    flow_inside_t (*inside)(void *ctx, const flow_box_t *box);
 } flow_visitor_t;
 
 void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
