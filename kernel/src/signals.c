@@ -364,6 +364,13 @@ _Static_assert(offsetof(signal_frame_full_t, base) == 0,  "the full frame must s
 _Static_assert(offsetof(signal_frame_full_t, rbx) == sizeof(signal_frame_t),
 		       "the full frame's extension must follow the base frame");
 _Static_assert(sizeof(signal_frame_full_t) % 16 == 0,     "the full frame must keep RSP 16-aligned");
+// Every byte copied to ring 3 is a member, so every byte is initialized:
+// no unnamed padding inside either frame (signals.h, `tail`).
+_Static_assert(sizeof(signal_frame_t) == offsetof(signal_frame_t, fpuState) + sizeof(fpu_state_t),
+		       "the short frame has no unnamed padding");
+_Static_assert(sizeof(signal_frame_full_t) == offsetof(signal_frame_full_t, tail) +
+		       sizeof(((signal_frame_full_t *)0)->tail),
+		       "the full frame has no unnamed padding");
 
 // Which pending signal, if any, would a handler run for RIGHT NOW? One
 // policy, shared by both delivery paths (§5's dispatcher exit and §10's

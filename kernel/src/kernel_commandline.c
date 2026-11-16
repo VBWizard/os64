@@ -18,6 +18,7 @@ extern int  kUsbImod;
 extern bool kEnableNet;
 extern bool kEnableR8125;
 extern bool kNetPoll;
+extern bool kFPUNoAVX;            // fpu.c — NOAVX
 // Static IPv4 configuration strings (ipv4.c owns them; empty = the 10.0.2.x
 // NAT-convention defaults shared by QEMU slirp and VirtualBox NAT). DHCP
 // supersedes all three in NETWORK.md Phase 3.
@@ -376,6 +377,10 @@ static cmdopt_t cmdopts[] = {
     // no INTx probe, no MSI — and knet wakes only when processSignals rings
     // it. The path that carried every packet before the doorbell existed.
     {"NETPOLL", OPT_BOOL, &kNetPoll, true, 0},
+    // The AVX flashlight (AVX.md): `sse` mode — FXSAVE switch, CR4.OSXSAVE
+    // clear, AVX #UD at ring 3 — on a CPU that could run `avx`. The BSP's
+    // fpu_init_this_cpu reads it when it decides the boot's mode.
+    {"NOAVX", OPT_BOOL, &kFPUNoAVX, true, 0},
     {"DEBUG_NET", OPT_UINT128_OR, &kDebugLevel, DEBUG_NET, 0},
     // The NVMe command-stream histogram (nvme.c iostat) rides this level —
     // boot with DEBUG_NVME, run the workload, read the log.

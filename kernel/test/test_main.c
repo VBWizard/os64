@@ -348,8 +348,8 @@ static bool test_allocator_zero_after_free(void)
 static bool test_fpu_state_round_trip(void)
 {
 	// Preboot runs only on the BSP before the scheduler starts. Static storage
-	// keeps these FXSAVE targets 16-byte aligned despite this kernel's current
-	// early-boot stack alignment.
+	// keeps these save targets aligned (fpu_state_t's 64 bytes) despite this
+	// kernel's current early-boot stack alignment.
 	static fpu_state_t original, first, second, observed;
 	const uint64_t first_pattern[2] = { 0x0123456789ABCDEFULL, 0x0FEDCBA987654321ULL };
 	const uint64_t second_pattern[2] = { 0xDEADBEEFCAFEBABEULL, 0x1122334455667788ULL };
@@ -368,16 +368,74 @@ static bool test_fpu_state_round_trip(void)
 	if (memcmp(&observed.bytes[160], first_pattern, sizeof(first_pattern)) != 0)
 	{
 		fpu_restore(&original);
-		TEST_FAIL("FXSAVE did not restore the first XMM0 pattern");
+		TEST_FAIL("the FPU save/restore did not keep the first XMM0 pattern");
 	}
 	fpu_restore(&second);
 	fpu_save(&observed);
 	if (memcmp(&observed.bytes[160], second_pattern, sizeof(second_pattern)) != 0)
 	{
 		fpu_restore(&original);
-		TEST_FAIL("FXSAVE did not restore the second XMM0 pattern");
+		TEST_FAIL("the FPU save/restore did not keep the second XMM0 pattern");
 	}
 	fpu_restore(&original);
+	return true;
+}
+
+// AVX.md R3-R5 against the real CPU, on the BSP before anything else runs:
+// the AVX upper half lands where the fixed layout says (576), a reset image
+// zeroes every upper half (R5), and an image with every forgery a signal
+// frame could carry — a component bit outside XCR0, the compaction word, a
+// reserved header byte, a reserved MXCSR bit — restores without faulting,
+// because fpu_restore sanitizes it (R4). The forgery runs in both modes: a
+// reserved MXCSR bit faults fxrstor64 too.
+static bool test_fpu_image_on_this_cpu(void)
+{
+	static fpu_state_t original, image, observed;
+	static const uint8_t pattern[32] = {
+		0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+		0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF,
+	};
+	fpu_save(&original);
+
+	if (kFPUFeatures.mode == FPU_MODE_AVX)
+	{
+		// The assembler takes the VEX instruction whatever -mno-sse says;
+		// the CPU takes it because this is `avx` mode.
+		__asm__ volatile("vmovdqu ymm0, %0" : : "m"(pattern) : "memory");
+		fpu_save(&observed);
+		bool low  = memcmp(&observed.bytes[160], &pattern[0], 16) == 0;
+		bool high = memcmp(&observed.bytes[FPU_IMAGE_AVX_OFFSET], &pattern[16], 16) == 0;
+		fpu_state_init(&image);
+		fpu_restore(&image);
+		fpu_save(&observed);
+		bool zeroed = true;
+		for (uint32_t i = FPU_IMAGE_AVX_OFFSET; i < FPU_IMAGE_SIZE; i++)
+			if (observed.bytes[i] != 0)
+				zeroed = false;
+		fpu_restore(&original);
+		if (!low)
+			TEST_FAIL("XSAVE did not put YMM0's low half at XMM0's place (160)");
+		if (!high)
+			TEST_FAIL("XSAVE did not put YMM0's upper half at the AVX component (576)");
+		if (!zeroed)
+			TEST_FAIL("restoring the reset image left an upper half nonzero (R5)");
+	}
+
+	fpu_save(&image);
+	image.bytes[FPU_IMAGE_HEADER_OFFSET] = 0xFF;                       // components outside XCR0
+	image.bytes[FPU_IMAGE_HEADER_OFFSET + 7] = 0x80;                   // XSTATE_BV bit 63
+	image.bytes[FPU_IMAGE_HEADER_OFFSET + 15] = 0x80;                  // XCOMP_BV bit 63: compacted
+	image.bytes[FPU_IMAGE_HEADER_OFFSET + 40] = 0x5A;                  // a reserved header byte
+	for (uint32_t i = 0; i < 4; i++)
+		image.bytes[FPU_IMAGE_MXCSR_OFFSET + i] = 0xFF;                // every MXCSR bit
+	// A #GP here is the failure, and a loud one; surviving is the pass (a
+	// CPU cannot hold an illegal MXCSR: loading one IS the fault).
+	fpu_restore(&image);
+	uint32_t mxcsr;
+	__asm__ volatile("stmxcsr %0" : "=m"(mxcsr));
+	fpu_restore(&original);
+	printd(DEBUG_TESTS, "\tfpu_image_on_this_cpu: %s mode, forged image restored, MXCSR 0x%x\n",
+	       kFPUFeatures.mode == FPU_MODE_AVX ? "avx" : "sse", mxcsr);
 	return true;
 }
 
@@ -6331,6 +6389,7 @@ static void register_builtin_tests(void)
 	test_register("stack_try_refuses", test_stack_try_refuses, TEST_PHASE_PREBOOT);
 	test_register("allocator_zero_after_free", test_allocator_zero_after_free, TEST_PHASE_PREBOOT);
 	test_register("fpu_state_round_trip", test_fpu_state_round_trip, TEST_PHASE_PREBOOT);
+	test_register("fpu_image_on_this_cpu", test_fpu_image_on_this_cpu, TEST_PHASE_PREBOOT);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set, TEST_PHASE_PREBOOT);
     test_register_policy("page_zero_unmapped", test_page_zero_unmapped, TEST_PHASE_PREBOOT, TEST_POLICY_PANIC);
     test_register("dlist_basic_operations", test_dlist_basic_operations, TEST_PHASE_PREBOOT);

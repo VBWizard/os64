@@ -310,9 +310,13 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 		uint64_t handler;   // +48  read by the stub, then CALLed
 		uint64_t pad;       // +56  keeps the frame 16-byte aligned, which is
 		                    //      what SysV promises a called function
-		// A handler executes in the interrupted thread and may use x87/SSE.
+		// A handler executes in the interrupted thread and may use x87/SSE/AVX.
 		// Its return must therefore restore the interrupted register file, not
-		// leave the handler's vector values behind.
+		// leave the handler's vector values behind. The whole 832-byte image
+		// in both modes (fpu_image.h), at +64: no ring-3 library names this
+		// layout, and the kernel never runs xsave64/xrstor64 on user memory,
+		// so the image needs only the frame's own 16-byte alignment here.
+		// What comes back through sigreturn is sanitized by fpu_restore.
 		fpu_state_t fpuState;
 	} signal_frame_t;
 
@@ -356,6 +360,13 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 		uint64_t r13;
 		uint64_t r14;
 		uint64_t r15;
+		// The image's 64-byte alignment rounds the frame up to a multiple of
+		// 64, and the whole frame is copied to the user stack, so the bytes
+		// that rounding adds are NAMED: an initializer zeroes a member it
+		// leaves out, which it does not promise for padding — unnamed, they
+		// could carry kernel stack to ring 3. signals.c asserts there is no
+		// padding left.
+		uint64_t tail[2];
 	} signal_frame_full_t;
 
 	#define SIGNAL_FRAME_MAGIC_FULL 0x5349475246524D32ULL   /* "SIGRFRM2" */

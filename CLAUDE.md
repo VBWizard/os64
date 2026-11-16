@@ -1017,21 +1017,39 @@ the library serves every process). How it fits together:
 
 ### Floating Point (`kernel/src/fpu.c`, `fpu.h`)
 
-- **The x87/MMX/SSE register file is thread context**, saved with `fxsave64`
-  in `scheduler_store_thread` and restored in `scheduler_load_thread` — EAGER,
+- **The x87/MMX/SSE/AVX register file is thread context**, saved in
+  `scheduler_store_thread` and restored in `scheduler_load_thread` — EAGER,
   no `CR0.TS`/`#NM` laziness. The invariant: the LIVE register file always
   belongs to the thread the core is running, because **the kernel is built
   `-mno-sse` and never touches it**. Kernel code that emits SIMD would break
   that invariant silently; keep the flag.
-- Userland is `-msse2` (the x86-64 baseline) — every program is an FPU
-  program (a varargs `printf` prologue touches XMM), so "disable the FPU" is
-  not a thing this OS can offer without a separately built userland.
-- **Every signal frame carries the 512-byte image** (§5 and §9 `fxsave` the
+- **One mode per boot, decided on the BSP** (docs/design/pending/AVX.md):
+  **`avx`** when the CPU has XSAVE and AVX, CPUID leaf 0xD agrees with the
+  fixed layout, and `NOAVX` is absent — `CR4.OSXSAVE` set, XCR0 WRITTEN as
+  exactly x87|SSE|AVX (7) on every CPU and read back, the switch is
+  `xsave64`/`xrstor64`; **`sse`** otherwise — `CR4.OSXSAVE` cleared (UEFI
+  leaves it on), `fxsave64`/`fxrstor64`, AVX `#UD` at ring 3. An AP that
+  cannot follow the BSP into `avx` panics by name. AVX-512's state is never
+  enabled, so its instructions are `#UD` in both modes. The image is a
+  constant 832 bytes, 64-aligned (`fpu_image.h`: legacy 512, header at 512,
+  AVX upper halves at 576), in both modes. `make run` boots `avx` (the
+  makefile's `QEMU_CPU` carries AVX); `QEMU_CPU=qemu64,+rdrand,+rdseed`
+  boots the bare model, `NOAVX` forces `sse` on any CPU.
+- Userland is `-msse2` (the x86-64 baseline), NEVER `-mavx` — every program
+  is an FPU program (a varargs `printf` prologue touches XMM), so "disable
+  the FPU" is not a thing this OS can offer without a separately built
+  userland. A program that wants AVX asks CPUID (OSXSAVE) then XGETBV, as
+  FFmpeg and `__builtin_cpu_supports` already do; no syscall.
+- **Every signal frame carries the 832-byte image** (§5 and §9 save the
   live file; §10 copies `thread->fpuState` because the thread is off-CPU).
-  `sigreturn` masks the user-supplied MXCSR with the CPU's `MXCSR_MASK`
-  before `fxrstor` — a reserved bit there is a KERNEL `#GP`.
-- **XSAVE/AVX deliberately off** (`CR4.OSXSAVE` clear): AVX is `#UD` at
-  ring 3, which is the safe, consistent state. DEBTS § Floating point.
+  **Every restore goes through `fpu_restore`, which SANITIZES first**
+  (`fpu_image_sanitize`, pure, `tools/test_fpu_image_host.sh`): XSTATE_BV
+  ANDed with 7, header bytes 8-63 zeroed, MXCSR ANDed with the CPU's
+  `MXCSR_MASK` — each of those is otherwise a KERNEL `#GP` on a frame
+  ring 3 forged.
+- The boot line says which mode and why (`... AVX AVX2 FMA3 enabled, XSAVE
+  per thread (832 bytes ...)`, or `...; AVX ... present, off (NOAVX)`), and
+  `/sys/cpu/<n>/probe` prints each thread's `OSXSAVE` and XCR0.
 - **A ring-3 CPU exception kills the program, never the machine** — ALL of
   them, in one branch of `exception_dispatch` (`user_exception_kill`), not
   per-vector special cases: `#DE`, `#UD`, `#GP`, `#AC`, and the two the FPU
@@ -1058,10 +1076,14 @@ the library serves every process). How it fits together:
   kernel's own address): a death in a gterm or on VT2 was invisible where
   the person was looking. Ring-0 panics are as loud as ever.
   `user_death_headline` / `s_fault_glass` / `exception_glass_mute`.
-- The boot line `FPU: x87 SSE SSE2 ... enabled, FXSAVE per thread` prints to
-  the glass AND the log (`fpu_report`); `kFPUFeatures` holds the answers.
-- Fixtures: `fputest` (state survives preemption, migration, and a handler
-  that wipes every register), `fpfault xm|mf|de` (pass by dying, 219/216/200).
+- The boot line prints to the glass AND the log (`fpu_report`);
+  `kFPUFeatures` holds the answers, the mode and why.
+- Fixtures: `fputest` (state, YMM upper halves included when AVX is on,
+  survives preemption, migration, two threads sharing one CPU, a handler
+  that wipes every register on each of the three delivery paths, and four
+  forged frame images), `avxprobe` (AVX/AVX2/FMA answers on two CPUs, and
+  a spawned program is born with zero upper halves; SKIP in `sse` mode),
+  `fpfault xm|mf|de|ud` (pass by dying, 219/216/200/206).
 
 ### Interrupt Handling
 
@@ -1149,6 +1171,9 @@ the library serves every process). How it fits together:
   - `NOAHCI`: Disable AHCI driver
   - `NONVME`: Disable NVMe driver
   - `NONET`: Disable networking entirely (there is no per-NIC off switch)
+  - `NOAVX`: the FPU's `sse` mode on a CPU that could run `avx` (FXSAVE
+    switch, AVX `#UD` at ring 3; AVX.md's flashlight). Like every token it
+    does NOT travel to the P5, which boots `avx`
   - `NETPOLL`: every NIC stays TICK-DRIVEN — no e1000 INTx probe, no RTL8125
     MSI — and knet wakes only when the tick rings it (DOORBELL.md's
     flashlight, the path that carried every packet before the doorbell).

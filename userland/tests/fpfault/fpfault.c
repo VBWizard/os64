@@ -12,9 +12,10 @@
 //                  #MF (vector 16) — and #MF is a trap taken at the NEXT
 //                  x87 instruction, so one follows. Exit 216.
 //   fpfault de   — integer divide by zero, #DE (vector 0). Exit 200.
-//   fpfault ud   — an AVX instruction with CR4.OSXSAVE clear, #UD (vector
-//                  6): the boot line's "present, not enabled" made real.
-//                  Exit 206.
+//   fpfault ud   — an instruction whose state the kernel did not enable,
+//                  #UD (vector 6). It asks the CPU first: with AVX on, an
+//                  AVX-512 instruction (XCR0 leaves its state off); with AVX
+//                  off, an AVX one (CR4.OSXSAVE clear). Exit 206.
 //
 // The exit code is 200 + vector (simple_exceptions.c, user_exception_kill):
 // the kill names the vector, and the fixture table expects that name. A
@@ -94,11 +95,29 @@ int main(int argc, char **argv)
 
     if (os64_streq(which, "ud"))
     {
-        // The "present, not enabled" half of the boot line is a promise:
-        // with CR4.OSXSAVE clear every VEX-encoded instruction is #UD, so
-        // AVX cannot leave YMM state behind that FXSAVE would not carry.
-        // vzeroupper is the smallest AVX instruction there is.
-        os64_printf("fpfault: executing vzeroupper with XSAVE off — expect #UD, exit 206\n");
+        // Whatever the kernel did not enable is #UD, and the CPU says which
+        // that is (AVX.md § What ring 3 gets). With AVX on, XCR0 is exactly
+        // x87|SSE|AVX, so AVX-512's state is off and an EVEX instruction is
+        // #UD whether or not the CPU has AVX-512. With AVX off (`sse` mode,
+        // CR4.OSXSAVE clear), every VEX instruction is #UD, so AVX cannot
+        // leave YMM state behind that FXSAVE would not carry; vzeroupper is
+        // the smallest one there is.
+        uint32_t a, b, c, d;
+        __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+        bool avx_on = false;
+        if (c & (1U << 27))                        // OSXSAVE: XGETBV is legal
+        {
+            uint32_t lo, hi;
+            __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+            avx_on = (lo & 0x6U) == 0x6U;          // SSE and AVX state enabled
+        }
+        if (avx_on)
+        {
+            os64_printf("fpfault: AVX is on; executing vpxord zmm0 (AVX-512, state not enabled) - expect #UD, exit 206\n");
+            __asm__ volatile("vpxord zmm0, zmm0, zmm0" ::: "memory");
+            return surviving("executed an AVX-512 instruction with its state off");
+        }
+        os64_printf("fpfault: AVX is off; executing vzeroupper - expect #UD, exit 206\n");
         __asm__ volatile("vzeroupper" ::: "memory");
         return surviving("executed an AVX instruction");
     }

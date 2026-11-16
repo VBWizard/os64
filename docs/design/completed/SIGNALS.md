@@ -372,6 +372,8 @@ of the frame you forged, never the other one's.
 and a signal handler may use x87/SSE regardless of whether the interrupted
 code did. Both frame forms therefore preserve the thread's 512-byte x87/MMX/
 SSE image; `sigreturn` validates and restores it with the integer context.
+(Since AVX.md the image is the 832-byte XSAVE layout in both FPU modes, and
+`fpu_restore` sanitizes it on the way back.)
 
 **Delivery lives where the forced push lives**, in
 `scheduler_signal_visit` (né `scheduler_sigint_forced_syscall`), called at

@@ -696,7 +696,7 @@ void exception_dispatch(exception_context_t *ctx)
 	}
 
 	// A fault RING 3 raised is the program's bug, not the kernel's: a divide
-	// by zero, an AVX instruction with XSAVE off (#UD), a wild segment (#GP),
+	// by zero, an instruction whose state is off (#UD), a wild segment (#GP),
 	// an x87 or SSE exception the program unmasked (#MF/#XM) — every one of
 	// them kills the task and keeps the OS, the same way a segfault has since
 	// the fault-isolation work. The kernel's own state is intact: the CPU

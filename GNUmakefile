@@ -32,10 +32,16 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 # machine this OS runs on has (RNG_PROBE.md); exposing them keeps the
 # harness honest about the entropy pool's normal path. A boot on the bare
 # model (drop the +features) is how the pool's timing-only path is tested.
+# The same reasoning adds XSAVE and AVX/AVX2/FMA (and the SSE4 family every
+# AVX machine has), so the kernel boots in `avx` mode as it does on the P5
+# (docs/design/pending/AVX.md § The harness). QEMU_CPU=<model> on the
+# command line boots another: QEMU_CPU=qemu64,+rdrand,+rdseed is the bare
+# model, how `sse` mode on a CPU without XSAVE is tested.
 # -smp: the CPU topology, QEMU_SMP=<spec> on the command line for any
 # target. run-sparse is the one every SMP change should also boot.
+QEMU_CPU ?= qemu64,+rdrand,+rdseed,+ssse3,+sse4.1,+sse4.2,+popcnt,+xsave,+xsaveopt,+avx,+avx2,+fma,+bmi1,+bmi2
 QEMU_SMP ?= 8
-QEMU_BASE_FLAGS = -machine q35 -cpu qemu64,+rdrand,+rdseed -m 8g -no-reboot -smp $(QEMU_SMP) \
+QEMU_BASE_FLAGS = -machine q35 -cpu $(QEMU_CPU) -m 8g -no-reboot -smp $(QEMU_SMP) \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
 				 # -d $(shell echo int,cpu_reset,pcall,guest_errors)
