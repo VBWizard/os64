@@ -478,9 +478,13 @@ os64_dom_cluster_t *os64_dom_cluster_create_with_observer_settings(os64_js_runti
  * callbacks. Promise preparation and origin gates retain their separate contracts. */
 os64_dom_cluster_t *os64_dom_cluster_create_with_custom_settings(os64_js_runtime_t *,
     const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
-/* Extends custom settings to Promise reactions/thenables. Exact active-script
- * restoration, pre-member security checks and origin gates remain separate. */
+/* Extends custom settings to Promise reactions/thenables and exact active-script
+ * restoration. Pre-member security checks and origin gates remain separate. */
 os64_dom_cluster_t *os64_dom_cluster_create_with_promise_settings(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Extends Promise settings to registry cleanup callbacks. Cleanup uses the
+ * engine queue; browser task-source scheduling remains a host responsibility. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_finalization_settings(os64_js_runtime_t *,
     const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
 os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *, os64_js_realm_t *,
     os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);

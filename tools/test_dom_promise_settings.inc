@@ -57,3 +57,44 @@ static void dom_promise_settings_cases(void)
         ce_close(&f);
     }
 }
+
+/* The native cleanup uses the same custom-element conversion oracle as a
+ * Promise callback, after the registry has retained its source through GC. */
+static void dom_finalization_settings_cases(void)
+{
+    for(int policy=OS64_JS_TEARDOWN_FATAL;policy<=OS64_JS_TEARDOWN_RECLAIM;policy++) {
+        CeFixture f;if(!ce_open(&f,policy,3)){ce_close(&f);continue;}
+        JSValue global=JS_GetGlobalObject(ce_contexts[2]);
+        check(JS_SetPropertyStr(ce_contexts[2],global,"cleanupDefine",
+              JS_NewCFunctionData(ce_contexts[2],promise_dom_define,1,0,0,NULL))>=0,
+              "Finalization DOM: native registration installed");
+        JS_FreeValue(ce_contexts[2],global);
+        realm_script(ce_realms[1],"globalThis.cleanupHandler=new Proxy(C.cleanupDefine,{});",
+                     "Finalization DOM: handler proxy B");
+        os64_js_outcome_t out;
+        realm_script(ce_realms[0],
+            "globalThis.registry=new D.FinalizationRegistry(B.cleanupHandler);"
+            "globalThis.cleanupTarget={};cleanupTarget.self=cleanupTarget;registry.register(cleanupTarget,73);",
+            "Promise DOM: job defines custom element");
+        check(os64_js_realm_task_begin(ce_realms[0],OS64_JS_ABI_ID,"cleanup-dom",&out)==OS64_JS_OK,
+              "Finalization DOM: collection task opened");
+        global=JS_GetGlobalObject(ce_contexts[0]);
+        check(JS_SetPropertyStr(ce_contexts[0],global,"cleanupTarget",JS_NULL)>=0,
+              "Finalization DOM: cyclic target released");
+        JS_FreeValue(ce_contexts[0],global);
+        /* Weak targets become collectible in the first pass, then schedule. */
+        JS_RunGC(JS_GetRuntime(ce_contexts[0]));
+        JS_RunGC(JS_GetRuntime(ce_contexts[0]));
+        check(os64_js_task_end(ce_runtime,OS64_JS_ABI_ID,&out)==OS64_JS_OK,
+              "Finalization DOM: cleanup converts the custom-element callback");
+        realm_script(ce_realms[3],
+            "globalThis.target=document.createElement('x-probe');document.body.appendChild(target);target.setAttribute('data-x','cleanup');",
+            "Finalization DOM: custom callbacks deliver after cleanup ends");
+        check(ce_constructors==1&&ce_calls[0]==1&&ce_calls[3]==1,
+              "Finalization DOM: constructor and reactions retain cleanup's capture A");
+        realm_script(ce_realms[0],"globalThis.done=0;Promise.resolve().then(()=>done++);",
+                     "Finalization DOM: Promise integration remains enabled");
+        realm_script(ce_realms[0],"assert(done===1)","Finalization DOM: Promise continuation delivered");
+        ce_close(&f);
+    }
+}

@@ -67,10 +67,14 @@ separate capture, invocation and job entry.
 [Exact active ScriptOrModule restoration](IFRAME_F4_ACTIVE_SCRIPT.md) retains
 the registration record and pushes its synthetic activation around invocation,
 including delayed `eval` and dynamic-import attribution. Realm-less jobs with custom capability
-callbacks, finalization jobs, remaining WebIDL conversions and pre-member
+callbacks, browser finalization task scheduling, remaining WebIDL conversions and pre-member
 security checks retain separate acceptance gates. Do not treat this opt-in as
 a complete HostMakeJobCallback implementation or publish WindowProxy authority
 on its strength.
+
+The [finalization opt-in](IFRAME_F4_FINALIZATION_SETTINGS.md) extends callback
+capture/restoration to registry cleanup, with independent registry activity and
+exception-reporting roles. Its bounded engine queue is not an HTML task source.
 
 Patch `0033-promise-settings.patch` adds internal runtime/reaction/job fields
 and additive engine APIs. `JSJobInfo`, public wrapper layouts and wrapper ABI 5

@@ -138,6 +138,6 @@ specify capture and restoration separately from job entry. The implementation
 uses existing GC objects to represent their source identity; it does not claim
 complete browser host integration. Imports with no active record still lack
 the browser current-settings API-base-URL fallback and refuse. Realm-less
-custom-capability jobs, finalization policy, remaining WebIDL conversions and
+custom-capability jobs, browser finalization task scheduling, remaining WebIDL conversions and
 pre-member security checks remain F.4b gates. F.4c contexts/origins and F.4d
 proxy/location behavior retain their own acceptance requirements.
