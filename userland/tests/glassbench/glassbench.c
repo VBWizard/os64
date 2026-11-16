@@ -23,14 +23,17 @@
 //          compositor's
 //
 // A frame that starts more than a whole period late moves the schedule to
-// now (a resync, counted) rather than queueing frames behind it.
+// one period from now (a resync, counted) rather than queueing frames
+// behind it.
 //
 // Per frame, with os64_micros: the copy, the publish call, and how late the
 // frame started. Around the run, /sys/gui is read before and after and the
 // differences reported: the publish and composite sites' lock holds, the
 // compositor's passes and pixels, and the publish-to-glass waits. The
 // before-read also restarts /sys/gui's since-read worsts, so the after-read's
-// are the run's own (if nothing else reads the file meanwhile).
+// are the run's own (if nothing else reads the file meanwhile). The /sys/gui
+// numbers are the whole desktop's: another window publishing during a run
+// adds its waits and holds to the run's, so run it on an idle desktop.
 //
 // Each run's result is printed, sent to the serial wire, and appended as ONE
 // line to -o (default /home/glassbench.txt). `all` runs the set the video design needs, ten
@@ -322,6 +325,8 @@ static int run_one(const run_cfg_t *cfg)
 		if (!frames[i].pixels)
 		{
 			os64_hprintf(OS64_STDERR, "glassbench: no memory for a %ux%u frame\n", frames[i].w, frames[i].h);
+			if (i > 0)
+				os64_free(frames[0].pixels);
 			os64_gui_window_destroy(win);
 			return 1;
 		}
@@ -391,29 +396,35 @@ static int run_one(const run_cfg_t *cfg)
 	if (have_gui)
 		have_gui = read_gui(&after);
 
+	// Each piece is appended where the last one ended, and the length is
+	// taken from the buffer after each, so a line that ever outgrew it would
+	// be cut short rather than written past.
 	char line[640];
 	uint64_t n = st.frames ? st.frames : 1;
 	uint64_t rate_x10 = st.elapsed_us > 0 ? st.frames * 10000000ull / (uint64_t)st.elapsed_us : 0;
-	int len = os64_snprintf(line, sizeof(line),
+	size_t len = 0;
+	os64_snprintf(line, sizeof(line),
 		"glassbench %ux%u%s %ufps %s: %lu frames, %lu.%lu fps; copy %lu/%lu us; publish %lu/%lu us; "
 		"late %lu/%lu us, %lu over 2 ms, %lu resyncs",
 		frames[0].w, frames[0].h, cfg->maximized ? " max" : "", cfg->fps, cfg->spin ? "spin" : "sleep",
 		st.frames, rate_x10 / 10, rate_x10 % 10, st.copy_sum / n, st.copy_max,
 		st.pub_sum / n, st.pub_max, st.late_sum / n, st.late_max, st.late_over_2ms, st.resyncs);
+	len = os64_strlen(line);
 	if (have_gui)
 	{
-		len += os64_snprintf(line + len, sizeof(line) - (size_t)len,
+		os64_snprintf(line + len, sizeof(line) - (size_t)len,
 			"; lock publish %lu us held, worst %lu; lock composite %lu us held, worst %lu; "
 			"compositor %lu passes, %lu drew, %lu pixels",
 			diff(after.publish[3], before.publish[3]), after.publish[5],
 			diff(after.composite[3], before.composite[3]), after.composite[5],
 			diff(after.comp[0], before.comp[0]), diff(after.comp[1], before.comp[1]),
 			diff(after.comp[3], before.comp[3]));
+		len = os64_strlen(line);
 		if (after.have_glass && before.have_glass)
 		{
 			uint64_t waits = diff(after.glass[0], before.glass[0]);
 			uint64_t us = diff(after.glass[1], before.glass[1]);
-			len += os64_snprintf(line + len, sizeof(line) - (size_t)len,
+			os64_snprintf(line + len, sizeof(line) - (size_t)len,
 				"; glass %lu waits, %lu us avg, worst %lu, %lu voided, by ms <1/2/4/8/16/32/more "
 				"%lu/%lu/%lu/%lu/%lu/%lu/%lu",
 				waits, waits ? us / waits : 0, after.glass[4], diff(after.glass[5], before.glass[5]),
@@ -423,10 +434,12 @@ static int run_one(const run_cfg_t *cfg)
 				diff(after.glass[19], before.glass[19]));
 		}
 		else
-			len += os64_snprintf(line + len, sizeof(line) - (size_t)len, "; glass: no publish-to-glass line");
+			os64_snprintf(line + len, sizeof(line) - (size_t)len, "; glass: no publish-to-glass line");
+		len = os64_strlen(line);
 	}
 	if (stopped)
-		len += os64_snprintf(line + len, sizeof(line) - (size_t)len, " [stopped]");
+		os64_snprintf(line + len, sizeof(line) - (size_t)len, " [stopped]");
+	len = os64_strlen(line);
 	os64_printf("%s\n", line);
 	wire(line);
 
@@ -435,8 +448,10 @@ static int run_one(const run_cfg_t *cfg)
 		h = os64_open(s_out, "x");
 	if (h >= 0)
 	{
+		if (len >= sizeof(line) - 1)
+			len = sizeof(line) - 2;
 		line[len++] = '\n';
-		os64_write((int32_t)h, line, (size_t)len);
+		os64_write((int32_t)h, line, len);
 		os64_close((int32_t)h);
 	}
 	else

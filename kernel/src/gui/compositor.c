@@ -295,12 +295,13 @@ void gui_damage_add_locked(rect_t screen_rect)
 // ---------------------------------------------------------------------------
 // Publish to glass: how long a publisher's pixels wait to be seen.
 //
-// Each publish whose damage is visible stamps itself here, beside the damage
-// list and under the same lock (gui_glass_publish_locked). The pass that
-// takes the damage takes these stamps with it; once its flush has put pixels
-// on the framebuffer, each publish's wait is now minus its stamp. A pass that
-// flushes nothing (a text terminal holds the screen, or nothing it took
-// survived the clip) voids what it took instead.
+// Each publish with damage visible on the screen stamps itself here, beside
+// the damage list and under the same lock (gui_glass_publish_locked); one
+// with none (its window covered, minimized, or off the screen) is voided at
+// once. The pass that takes the damage takes these stamps with it; once its
+// flush has put pixels on the framebuffer, each publish's wait is now minus
+// its stamp. A pass that flushes nothing (a text terminal holds the screen,
+// or nothing it took survived the clip) voids what it took instead.
 //
 // The waits are measured after the flush, outside kGuiLock, by the compositor
 // thread alone, so they are kept in s_glass_owed and folded into the counts
@@ -329,8 +330,17 @@ static struct {
 	uint64_t buckets[GUI_GLASS_WAIT_BUCKETS];
 } s_glass_owed;
 
-void gui_glass_publish_locked(bool visible)
+void gui_glass_publish_locked(const rect_t *pieces, size_t count)
 {
+	// Visible means some piece is on the screen: a window's visible damage is
+	// not clipped to the screen, and a piece wholly off it composites to
+	// nothing, so it could otherwise be counted as a wait whenever the same
+	// pass flushed something else.
+	rect_t screen = {0, 0, (int32_t)kBackbuffer.width, (int32_t)kBackbuffer.height};
+	rect_t on_screen;
+	bool visible = false;
+	for (size_t i = 0; i < count && !visible; i++)
+		visible = rect_intersect(pieces[i], screen, &on_screen);
 	if (!visible) {
 		s_composite_counts.glass_voided++;
 		return;

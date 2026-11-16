@@ -126,13 +126,15 @@ words: the waits, their total and average in microseconds, the longest
 since boot and since the file was last read, the publishes `voided`, and
 the waits by length in buckets doubling from 1 ms.
 
-- A publish whose damage is visible stamps itself (`micros_now()`) beside
-  the damage list, under the lock it already holds. The pass that takes
-  the damage takes the stamps; once its flush has put pixels on the
-  framebuffer, each publish's wait is the flush's end minus its stamp.
-- A publish with nothing visible (its window covered, or a text terminal
-  holding the screen) is `voided`, never a long wait; so is everything a
-  pass took when that pass flushed nothing.
+- A publish with damage visible on the screen stamps itself
+  (`micros_now()`) beside the damage list, under the lock it already holds.
+  The pass that takes the damage takes the stamps; once its flush has put
+  pixels on the framebuffer, each publish's wait is the flush's end minus
+  its stamp.
+- A publish that cannot be seen is `voided`, never a long wait: at the
+  publish when its window is covered, minimized or off the screen, and at
+  the pass that took it when that pass flushed nothing (a text terminal
+  holding the screen).
 - The waits are measured after the flush, outside the lock, by the
   compositor thread alone, and folded into the counts at the next pass's
   hold: no lock and no wait of their own. A read sees a pass's waits from

@@ -71,8 +71,10 @@ typedef struct {
 // (`glass_waits`, their sum and longest in microseconds, the longest also
 // since the counts were last read, and by length: bucket k counts waits
 // under 1 ms << k, the last those longer); a publish none of whose pixels
-// could reach the glass, because the window was covered or a text terminal
-// held the screen, is `glass_voided` instead of a long wait.
+// could reach the glass is `glass_voided` instead of a long wait — at the
+// publish when its window is covered, minimized or off the screen, and at
+// the pass that took it when that pass flushed nothing (a text terminal
+// held the screen).
 #define GUI_COMPOSITE_HOLD_BUCKETS 7
 #define GUI_GLASS_WAIT_BUCKETS 7
 typedef struct {
@@ -102,10 +104,10 @@ const char *gui_lock_site_name(gui_lock_site_t site);
 // the wrong one deadlocks — hence the loud name.
 void gui_damage_add_locked(rect_t screen_rect);
 
-// A client's publish has added its damage (`visible`), or found none of it
-// visible: stamp it for the publish-to-glass wait, or count it voided
-// (gui_composite_count_t). Caller holds kGuiLock.
-void gui_glass_publish_locked(bool visible);
+// A client's publish has added the visible `pieces` of its damage: stamp it
+// for the publish-to-glass wait if any piece is on the screen, or count it
+// voided (gui_composite_count_t). Caller holds kGuiLock.
+void gui_glass_publish_locked(const rect_t *pieces, size_t count);
 
 // Move up to `cap` pending damage rects into `out`, oldest first, and answer
 // how many were moved; any beyond `cap` stay pending. Caller holds kGuiLock.
