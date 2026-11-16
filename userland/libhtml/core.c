@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "html/retention.h"
 #include "os64/io.h"
 #include "os64/proc.h"
 
@@ -1358,3 +1359,5 @@ os64_html_document_t *os64_html_parser_abandon(os64_html_parser_t *p)
 {
     return p ? release(p) : NULL;
 }
+
+#include "retention.inc"

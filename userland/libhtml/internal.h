@@ -503,4 +503,7 @@ void h_decode_finish(os64_html_parser_t *p);
 void h_encoding_start(os64_html_parser_t *p);
 void h_codepoint(os64_html_parser_t *p, uint32_t cp);
 void h_late_meta(os64_html_parser_t *p, HNode *n);
+/* Read-only local list prefixes; limit is clamped by the snapshot caller. */
+size_t d_retention_readers(const HDoc *, size_t limit, bool *complete);
+size_t d_retention_ranges(const HDoc *, size_t limit, bool *complete);
 #endif

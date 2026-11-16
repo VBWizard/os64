@@ -445,6 +445,18 @@ static void model(const char *step_ids, const char *name, const char *html,
 #include "test_libpage_attrs.inc"
 #include "test_libpage_tree.inc"
 #include "test_libpage_ownership.inc"
+#include "../userland/libpage/tests/retention_cases.h"
+static void retention_require(bool pass, const char *what) { rebuild_expect(what, pass); }
+static size_t retention_allocations, retention_live;
+static void retention_purity(bool begin)
+{
+    if (begin) {
+        retention_allocations = allocations; retention_live = live; fail_at = allocations + 1;
+    } else {
+        fail_at = 0;
+        rebuild_expect("native retention: queries allocate/free nothing", allocations == retention_allocations && live == retention_live);
+    }
+}
 #include "test_libpage_number.inc"
 #include "test_libpage_boundaries.inc"
 #include "test_libpage_navigation.inc"
@@ -631,7 +643,9 @@ int main(int argc, char **argv)
     bool rebuild_only = argc > 1 && strcmp(argv[1], "--rebuild") == 0;
     bool attrs_only = argc > 1 && strcmp(argv[1], "--attrs-only") == 0;
     bool tree_only = argc > 1 && strcmp(argv[1], "--tree-only") == 0;
-    if (argc > 1 && strcmp(argv[1], "--ownership") == 0) {
+    if (argc > 1 && strcmp(argv[1], "--retention") == 0) {
+        native_retention_cases(retention_require, retention_purity);
+    } else if (argc > 1 && strcmp(argv[1], "--ownership") == 0) {
         test_libpage_ownership();
     } else if (numeric_boundary) {
         // Focused range regressions; the default suite also checks the
@@ -657,6 +671,7 @@ int main(int argc, char **argv)
         test_libpage_attrs();
         test_libpage_tree();
         test_libpage_ownership();
+        native_retention_cases(retention_require, retention_purity);
         number_cases();
         boundary_cases();
         navigation_cases();

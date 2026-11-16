@@ -668,6 +668,17 @@ struct os64_html_reader {
     os64_html_reader_t *next;
     uint64_t version;
 };
+size_t d_retention_readers(const HDoc *d, size_t limit, bool *complete)
+{
+    const os64_html_reader_t *reader = d->readers;
+    size_t seen = 0;
+    while (reader && seen < limit) {
+        seen++;
+        reader = reader->next;
+    }
+    *complete = reader == NULL;
+    return seen;
+}
 static void log_ref(HDoc *d, const HNode *node, bool add)
 {
     if (node) d_ref(d, node, false, add);

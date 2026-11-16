@@ -28,6 +28,17 @@ struct os64_html_range {
     uint32_t offset[2];
     struct os64_html_range *prev, *next;
 };
+size_t d_retention_ranges(const HDoc *d, size_t limit, bool *complete)
+{
+    const os64_html_range_t *range = d->ranges;
+    size_t seen = 0;
+    while (range && seen < limit) {
+        seen++;
+        range = range->next;
+    }
+    *complete = range == NULL;
+    return seen;
+}
 
 static void register_in(os64_html_range_t *r, HDoc *to)
 {

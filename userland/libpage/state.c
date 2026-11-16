@@ -2,6 +2,7 @@
 // Reservations finish before dirty state changes; views publish before any
 // replaced state bytes are freed. HTML pins govern tree storage separately.
 #include "internal.h"
+#include "page/retention.h"
 #include "os64/proc.h"
 
 // The allocation header keeps frees exact, including scratch arena blocks.
@@ -2689,3 +2690,5 @@ os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
 {
     return os64_page_node_import(state, state, node, deep, status);
 }
+
+#include "retention.inc"
