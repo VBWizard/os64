@@ -4,9 +4,10 @@
 
 /* THE MEDIA ROW (AUDIO_YONDER.md § The element in libdom, § The element's
  * states): HTMLMediaElement and HTMLAudioElement over the binding's media
- * prototypes, MediaError, TimeRanges, the Audio factory, and the handlers
- * of the media events. A <video> is a media element too, playing sound
- * and no picture: its own members and interface are video.c's (§ Y.4).
+ * prototypes, MediaError, TimeRanges, an always-empty TextTrackList, the
+ * Audio factory, and the handlers of the media events. A <video> is a
+ * media element too, playing sound and no picture: its own members and
+ * interface are video.c's (§ Y.4).
  *
  * HTML's half of the element lives here and the sound lives with the host
  * (dom/media.h). Each media element the page has is a RECORD: one for each
@@ -89,6 +90,7 @@ struct DMediaElement {
     int error;
     char message[96];
     JSValue error_object;           /* the MediaError, held once made */
+    JSValue text_tracks;            /* the TextTrackList, made once, kept for the page */
     DMediaPromise *pending;
     uint32_t pending_count, pending_cap;
 };
@@ -99,11 +101,11 @@ struct DMediaElements {
     uint64_t version;               /* the tree version the walk last saw */
     bool walked;
     DValue *then;                   /* Promise.prototype.then, taken at install */
-    JSClassID error_class, ranges_class;
+    JSClassID error_class, ranges_class, tracks_class;
     DMutationConsumer mutations;    /* src set or changed: src_changed */
 };
 
-static JSClassID media_error_slot, time_ranges_slot;
+static JSClassID media_error_slot, time_ranges_slot, text_track_list_slot;
 
 static bool is_media(const os64_html_node_t *node)
 {
@@ -184,6 +186,7 @@ static DMediaElement *record_of(os64_dom_t *dom, const os64_html_node_t *node, b
     m->muted = os64_html_attr(node, "muted") != NULL;
     m->duration = NAN;
     m->error_object = JS_UNDEFINED;
+    m->text_tracks = JS_UNDEFINED;
     m->next = s->records;
     s->records = m;
     return m;
@@ -831,6 +834,8 @@ void d_media_elements_drain(os64_dom_t *dom)
         m->pending_count = m->pending_cap = 0;
         JS_FreeValueRT(dom->engine, m->error_object);
         m->error_object = JS_UNDEFINED;
+        JS_FreeValueRT(dom->engine, m->text_tracks);
+        m->text_tracks = JS_UNDEFINED;
     }
 }
 
@@ -897,7 +902,46 @@ static JSValue ranges_object(os64_dom_t *dom, JSContext *ctx, uint32_t count, do
     return o;
 }
 
-enum { E_CODE, E_MESSAGE, T_LENGTH, T_START, T_END };
+/* A media element's TextTrackList (HTML § 4.8.11.11.1), always empty:
+ * yonder reads no text tracks from a resource, and addTextTrack() is the
+ * video arc's (AUDIO_YONDER.md's tracks row), so nothing is ever added and
+ * its change, addtrack and removetrack events never fire. It is still an
+ * EventTarget a player can listen on, with its entry in the object (A
+ * PLAIN EVENT TARGET, internal.h), and the same object on every read: the
+ * element's record holds it until the page's drain. */
+typedef struct {
+    DValue target;              /* first: the plain target's entry, in the object */
+} DTrackList;
+
+static void tracks_finalizer(JSRuntime *rt, JSValue value)
+{
+    DTrackList *t = JS_GetOpaque(value, os64_js_class_id(&text_track_list_slot));
+    if (t == NULL) return;
+    d_event_target_finalize(rt, &t->target);
+    js_free_rt(rt, t);
+}
+
+static void tracks_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    DTrackList *t = JS_GetOpaque(value, os64_js_class_id(&text_track_list_slot));
+    if (t != NULL) d_event_target_mark(rt, &t->target, mark);
+}
+
+static JSValue tracks_object(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
+{
+    if (JS_IsUndefined(m->text_tracks)) {
+        JSValue o = JS_NewObjectClass(ctx, (int)dom->media_elements->tracks_class);
+        if (JS_IsException(o)) return o;
+        DTrackList *t = js_mallocz(ctx, sizeof(*t));
+        if (t == NULL) { JS_FreeValue(ctx, o); return JS_EXCEPTION; }
+        d_event_target_init(dom, &t->target, o);
+        JS_SetOpaque(o, t);
+        m->text_tracks = o;
+    }
+    return JS_DupValue(ctx, m->text_tracks);
+}
+
+enum { E_CODE, E_MESSAGE, T_LENGTH, T_START, T_END, L_LENGTH, L_BY_ID };
 
 static JSValue small_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
 {
@@ -907,6 +951,17 @@ static JSValue small_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         DMediaError *e = JS_GetOpaque(self, dom->media_elements->error_class);
         if (e == NULL) return JS_ThrowTypeError(ctx, "Illegal invocation");
         return magic == E_CODE ? JS_NewInt32(ctx, e->code) : JS_NewString(ctx, e->message);
+    }
+    if (magic == L_LENGTH || magic == L_BY_ID) {
+        if (JS_GetOpaque(self, dom->media_elements->tracks_class) == NULL)
+            return JS_ThrowTypeError(ctx, "Illegal invocation");
+        if (magic == L_LENGTH) return JS_NewUint32(ctx, 0);
+        if (argc < 1) return JS_ThrowTypeError(ctx, "getTrackById needs an id");
+        /* The id is converted, as WebIDL's DOMString is, and matches nothing. */
+        JSValue id = JS_ToString(ctx, argv[0]);
+        if (JS_IsException(id)) return id;
+        JS_FreeValue(ctx, id);
+        return JS_NULL;
     }
     DTimeRanges *r = JS_GetOpaque(self, dom->media_elements->ranges_class);
     if (r == NULL) return JS_ThrowTypeError(ctx, "Illegal invocation");
@@ -923,6 +978,7 @@ enum {
     M_ERROR, M_SRC, M_CURRENT_SRC, M_CROSS_ORIGIN, M_NETWORK, M_PRELOAD, M_BUFFERED, M_LOAD, M_CAN_PLAY, M_READY,
     M_SEEKING, M_CURRENT_TIME, M_FAST_SEEK, M_DURATION, M_PAUSED, M_DEFAULT_RATE, M_RATE, M_PITCH, M_PLAYED,
     M_SEEKABLE, M_ENDED, M_AUTOPLAY, M_LOOP, M_PLAY, M_PAUSE, M_CONTROLS, M_VOLUME, M_MUTED, M_DEFAULT_MUTED,
+    M_TEXT_TRACKS,
 };
 
 static const DReflection kSrc = {"src", "src", K_URL, 0, NULL, NULL, NULL, 0};
@@ -1108,6 +1164,7 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
     if (dom->media_elements == NULL) return JS_ThrowTypeError(ctx, "Illegal invocation");
     switch (magic) {
     case M_ERROR: return error_object(dom, ctx, m);
+    case M_TEXT_TRACKS: return tracks_object(dom, ctx, m);
     case M_SRC: {
         if (!set) return d_reflection_get(dom, ctx, m->node, &kSrc);
         /* The attribute's change loads (src_changed). */
@@ -1410,7 +1467,7 @@ int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
         {"preservesPitch", M_PITCH, true}, {"played", M_PLAYED, false}, {"seekable", M_SEEKABLE, false},
         {"ended", M_ENDED, false}, {"autoplay", M_AUTOPLAY, true}, {"loop", M_LOOP, true},
         {"controls", M_CONTROLS, true}, {"volume", M_VOLUME, true}, {"muted", M_MUTED, true},
-        {"defaultMuted", M_DEFAULT_MUTED, true},
+        {"defaultMuted", M_DEFAULT_MUTED, true}, {"textTracks", M_TEXT_TRACKS, false},
     };
     for (size_t i = 0; i < sizeof(kAttributes) / sizeof(kAttributes[0]); i++)
         if (d_accessor(dom, ctx, media, kAttributes[i].name, media_member, kAttributes[i].magic,
@@ -1472,6 +1529,23 @@ int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
         d_accessor(dom, ctx, ranges_proto, "length", small_member, T_LENGTH, false) < 0 ||
         d_method_named(dom, ctx, ranges_proto, "start", small_member, 1, T_START) < 0 ||
         d_method_named(dom, ctx, ranges_proto, "end", small_member, 1, T_END) < 0)
+        return -1;
+
+    /* TextTrackList (tracks_object): an EventTarget with its three
+     * handlers, a length, getTrackById, and an array's iterator. */
+    static const JSClassDef tracks_class = {
+        .class_name = "TextTrackList", .finalizer = tracks_finalizer, .gc_mark = tracks_mark
+    };
+    s->tracks_class = os64_js_class_id(&text_track_list_slot);
+    JSValue tracks_proto;
+    if (d_interface_class(dom, ctx, global, s->tracks_class, &tracks_class, &tracks_proto) < 0 ||
+        d_event_target(dom, ctx, tracks_proto, s->tracks_class, NULL) < 0 ||
+        d_event_handler_named(dom, ctx, tracks_proto, "change") < 0 ||
+        d_event_handler_named(dom, ctx, tracks_proto, "addtrack") < 0 ||
+        d_event_handler_named(dom, ctx, tracks_proto, "removetrack") < 0 ||
+        d_accessor(dom, ctx, tracks_proto, "length", small_member, L_LENGTH, false) < 0 ||
+        d_method_named(dom, ctx, tracks_proto, "getTrackById", small_member, 1, L_BY_ID) < 0 ||
+        d_iterable(ctx, tracks_proto, false) < 0)
         return -1;
 
     /* Audio: its `prototype` is HTMLAudioElement's, whose `constructor`
