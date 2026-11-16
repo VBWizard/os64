@@ -160,6 +160,24 @@ static void dom_media_interface_cases(void)
         "assert(h in window&&h in document&&h in a,h);"
         "assert('onerror' in a&&!('onerror' in document.createElement('div')),'a media element has onerror');",
         "media: the interfaces");
+    /* textTracks: the same empty TextTrackList on every read, an
+     * EventTarget with its three handlers, as JW Player's html5 provider
+     * walks it (ensureMetaTracksActive) and listens on it. */
+    media_script(&f,
+        "const a=document.createElement('audio'),t=a.textTracks;"
+        "assert(t instanceof TextTrackList&&t instanceof EventTarget&&t===a.textTracks,'one list, an EventTarget');"
+        "assert(t.length===0&&t[0]===undefined&&t.getTrackById('x')===null&&[...t].length===0,'empty');"
+        "assert(String(t)==='[object TextTrackList]');throws('TypeError',()=>new TextTrackList());"
+        "assert(t!==document.createElement('audio').textTracks,'a list per element');"
+        "for(const h of ['onchange','onaddtrack','onremovetrack'])assert(h in t&&t[h]===null,h);"
+        "let heard=0;const f=()=>heard++;t.addEventListener('change',f);t.onaddtrack=f;"
+        "t.dispatchEvent(new Event('change'));t.removeEventListener('change',f);t.dispatchEvent(new Event('change'));"
+        "assert(heard===1,'listeners added and removed');"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(TextTrackList.prototype,'length').get.call({}));"
+        "const v=document.createElement('video');let e=v.textTracks,n=e.length;"
+        "for(let i=0;i<n;i++){let k=e[i];'metadata'===k.kind&&'disabled'===k.mode&&(k.mode='hidden')}"
+        "assert(n===0&&v.textTracks===e,'a video has one too, as JW Player walks it');",
+        "media: textTracks, an empty TextTrackList");
     fixture_free(&f);
 }
 

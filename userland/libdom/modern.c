@@ -50,9 +50,9 @@ static const DModernRow kModern[] = {
     /* AUDIO_YONDER.md: the media element, after the interfaces row, whose
      * HTMLElement its interface inherits; the media events' handlers on
      * window with it; HTMLVideoElement, which plays sound and no picture
-     * (§ Y.4). */
+     * (§ Y.4); TextTrackList, a media element's always-empty textTracks. */
     {(const char *const[]){"HTMLMediaElement", "HTMLAudioElement", "HTMLVideoElement", "MediaError", "TimeRanges",
-                           "Audio",
+                           "TextTrackList", "Audio",
                            "onloadstart", "onprogress", "onsuspend", "onabort", "onemptied", "onstalled",
                            "onloadedmetadata", "onloadeddata", "oncanplay", "oncanplaythrough", "onplaying",
                            "onwaiting", "onseeking", "onseeked", "onended", "ondurationchange", "ontimeupdate",
