@@ -64,6 +64,14 @@
 // fragmentation a first-fit list suffers is worse than the cost of a syscall.
 #define HEAP_BIG_BYTES     (128u * 1024u)
 
+// os64_malloc_aligned's range: a power of two from HEAP_ALIGN to a page.
+// A dedicated region's payload sits HEAP_DEDICATED_ALIGN into a page-aligned
+// region (the ledger entry, two pad words and the block header ahead of it;
+// asserted beside heap_dedicated_t), so a big block is that aligned already
+// and a stricter alignment for one is refused rather than given an offset.
+#define HEAP_ALIGNED_MAX     4096u
+#define HEAP_DEDICATED_ALIGN 64u
+
 // Block flags, in the low 4 bits of the size word (sizes are 16-aligned, so
 // those bits are structurally free — the trick every boundary-tag allocator
 // since 1968 has used).
@@ -155,6 +163,12 @@ typedef struct
 	uint64_t      pad0, pad1;   // 16-align the block header that follows
 	heap_block_t  block;
 } heap_dedicated_t;
+
+// The payload is HEAP_DEDICATED_ALIGN into a page-aligned region, which is
+// the whole of os64_malloc_aligned's answer for a big block.
+_Static_assert(sizeof(heap_dedicated_t) == HEAP_DEDICATED_ALIGN &&
+               offsetof(heap_dedicated_t, block) + sizeof(heap_block_t) == HEAP_DEDICATED_ALIGN,
+               "a dedicated payload must sit HEAP_DEDICATED_ALIGN into its region");
 
 // ── State (per PROCESS: libos64 links into each program privately) ──────────
 
@@ -944,6 +958,44 @@ static void *malloc_dedicated(uint64_t size)
 	return block_payload(&d->block);
 }
 
+// A pool block of at least `need` bytes, taken WHOLE: off the free list
+// (unlinked, its header still the free one), or carved off a frontier, or
+// out of a new pool. The caller splits it, exactly once: block_split trusts
+// that the block above is in use, which holds for a block taken whole (the
+// list never holds two neighbours, and a frontier's header says in use) and
+// stops holding for a remainder block_split has just freed. NULL is out of
+// memory. Under the lock.
+static heap_block_t *take_block(uint64_t need, heap_pool_t **home)
+{
+	heap_block_t *b = free_list_first_fit(need);
+
+	if (b != NULL)
+	{
+		free_list_remove((heap_free_t *)b);
+		*home = pool_of(region_of(b));
+		return b;
+	}
+
+	// Nothing on the list fits. Try each pool's virgin frontier, newest
+	// first (the newest pool is the one most likely to have room).
+	for (heap_region_t *r = gRegions; r != NULL; r = r->next)
+		if (r->flags & HEAP_REGION_POOL)
+		{
+			b = pool_carve(pool_of(r), need);
+			if (b != NULL)
+			{
+				*home = pool_of(r);
+				return b;
+			}
+		}
+
+	heap_pool_t *p = pool_new(need);
+	if (p == NULL)
+		return NULL;
+	*home = p;
+	return pool_carve(p, need);
+}
+
 // THE ONE ALLOCATION ENGINE, and the caller names the public column its
 // attempt lands in (PR #26, round six). calloc used to let malloc count the
 // attempt and RECLASSIFY it afterwards — and a /proc reader in that window
@@ -1006,43 +1058,17 @@ static void *heap_alloc(size_t size, uint64_t *counter)
 		return out;
 	}
 
-	heap_block_t *b = free_list_first_fit(need);
 	heap_pool_t  *home = NULL;
+	heap_block_t *b = take_block(need, &home);
 
-	if (b != NULL)
+	if (b == NULL)
 	{
-		free_list_remove((heap_free_t *)b);
-		block_split(b, need, block_flags(b) & (HEAP_PREV_FREE | HEAP_DIRTY));
-		home = pool_of(region_of(b));
+		report_end();
+		heap_unlock();
+		return NULL;    // out of memory: NULL, not a death
 	}
-	else
-	{
-		// Nothing on the list fits. Try each pool's virgin frontier, newest
-		// first (the newest pool is the one most likely to have room).
-		for (heap_region_t *r = gRegions; r != NULL && b == NULL; r = r->next)
-			if (r->flags & HEAP_REGION_POOL)
-			{
-				b = pool_carve(pool_of(r), need);
-				if (b != NULL)
-					home = pool_of(r);
-			}
-
-		if (b == NULL)
-		{
-			heap_pool_t *p = pool_new(need);
-			if (p == NULL)
-			{
-				report_end();
-				heap_unlock();
-				return NULL;    // out of memory: NULL, not a death
-			}
-			b = pool_carve(p, need);
-			home = p;
-		}
-	}
-
-	if (home != NULL)
-		home->live++;
+	block_split(b, need, block_flags(b) & (HEAP_PREV_FREE | HEAP_DIRTY));
+	home->live++;
 
 	uint64_t payload = block_size(b) - sizeof(heap_block_t);
 	gReport.blocks_live++;
@@ -1155,6 +1181,8 @@ static void block_poison(heap_block_t *b)
 		os64_memset(start, HEAP_POISON, (size_t)(end - start));
 }
 
+static void release_block_locked(heap_region_t *r, heap_block_t *b, const void *ptr);
+
 // The release engine, heap_alloc's mirror: the caller names its column
 // (calls_free for the public door, calls_realloc for realloc(p,0)'s edge,
 // NULL for an internal release an already-counted call performs itself).
@@ -1182,6 +1210,16 @@ static void heap_release(void *ptr, uint64_t *counter)
 	heap_region_t *r = NULL;
 	heap_block_t *b = block_from_user_pointer(ptr, &r, &gFreePointer);
 
+	release_block_locked(r, b, ptr);
+	report_end();
+	heap_unlock();
+}
+
+// Release a live block already validated (or made by the allocator itself)
+// in region `r`: the books, the poison, both merges, the give-back. `ptr` is
+// what a death names. Under the lock, inside a report transaction.
+static void release_block_locked(heap_region_t *r, heap_block_t *b, const void *ptr)
+{
 	uint64_t payload = block_size(b) - sizeof(heap_block_t);
 	gReport.blocks_live--;
 	gReport.bytes_live -= payload;
@@ -1193,8 +1231,6 @@ static void heap_release(void *ptr, uint64_t *counter)
 	if (block_flags(b) & HEAP_DEDICATED)
 	{
 		region_give_back(r);
-		report_end();
-		heap_unlock();
 		return;
 	}
 
@@ -1271,14 +1307,108 @@ static void heap_release(void *ptr, uint64_t *counter)
 			              block_size(b));
 		}
 	}
-
-	report_end();
-	heap_unlock();
 }
 
 void os64_free(void *ptr)
 {
 	heap_release(ptr, &gReport.calls_free);
+}
+
+// ── malloc_aligned ──────────────────────────────────────────────────────────
+//
+// THE BLOCK IT RETURNS IS AN ORDINARY BLOCK: free, realloc and malloc_size
+// take it with no case of their own, because nothing about it differs from a
+// block malloc made except where it starts. A small one is carved like this:
+// take one block big enough for the request, the alignment and a minimum
+// block, whole; put the header where the payload lands aligned, moving it on
+// by one alignment if the gap in front could not be a block of its own; make
+// that front piece a block and release it through free's own path (which
+// merges it with a free neighbour below and keeps every book balanced); trim
+// the tail with block_split. A big one is malloc's dedicated block, already
+// HEAP_DEDICATED_ALIGN-aligned; a stricter alignment for it is refused.
+// Counted as a malloc in the report, refusals included.
+void *os64_malloc_aligned(size_t size, size_t alignment)
+{
+	if (!gInited)
+		os64_heap_init();
+
+	bool shape_ok = alignment >= HEAP_ALIGN && alignment <= HEAP_ALIGNED_MAX &&
+	                (alignment & (alignment - 1)) == 0;
+	if (shape_ok && (alignment == HEAP_ALIGN ||
+	                 (size >= HEAP_BIG_BYTES && alignment <= HEAP_DEDICATED_ALIGN)))
+		return heap_alloc(size, &gReport.calls_malloc);
+
+	heap_lock();
+	report_begin();
+	gReport.calls_malloc++;
+	if (!shape_ok || size >= HEAP_BIG_BYTES)
+	{
+		report_end();
+		heap_unlock();
+		return NULL;
+	}
+	if (gCheckAlways)
+		heap_verify_locked();
+
+	uint64_t need = align_up((uint64_t)size + sizeof(heap_block_t), HEAP_ALIGN);
+	if (need < HEAP_MIN_BLOCK)
+		need = HEAP_MIN_BLOCK;
+	// The front gap is a multiple of HEAP_ALIGN below the alignment, or that
+	// plus one alignment when it was too small to be a block: always under
+	// alignment + HEAP_MIN_BLOCK.
+	uint64_t over = need + alignment + HEAP_MIN_BLOCK;
+
+	heap_pool_t  *home = NULL;
+	heap_block_t *b = take_block(over, &home);
+	if (b == NULL)
+	{
+		report_end();
+		heap_unlock();
+		return NULL;
+	}
+
+	uint64_t whole = block_size(b);
+	uint64_t keep  = block_flags(b) & (HEAP_PREV_FREE | HEAP_DIRTY);
+	uintptr_t payload = (uintptr_t)align_up((uint64_t)(uintptr_t)b + sizeof(heap_block_t), alignment);
+	uint64_t gap = payload - sizeof(heap_block_t) - (uintptr_t)b;
+	if (gap != 0 && gap < HEAP_MIN_BLOCK)
+	{
+		payload += alignment;
+		gap += alignment;
+	}
+
+	heap_block_t *front = NULL;
+	heap_block_t *aligned = b;
+	if (gap != 0)
+	{
+		// The front piece is live for a moment, so the release below finds
+		// an ordinary block; its neighbour above is the aligned block, whose
+		// own predecessor is therefore in use until that release says not.
+		front = b;
+		aligned = (heap_block_t *)(payload - sizeof(heap_block_t));
+		block_set(front, gap, keep | HEAP_IN_USE);
+		block_set(aligned, whole - gap, (keep & HEAP_DIRTY) | HEAP_IN_USE);
+		keep &= HEAP_DIRTY;
+	}
+	block_split(aligned, need, keep);
+
+	heap_block_t *live[2] = { aligned, front };
+	for (int i = 0; i < 2 && live[i] != NULL; i++)
+	{
+		uint64_t bytes = block_size(live[i]) - sizeof(heap_block_t);
+		home->live++;
+		gReport.blocks_live++;
+		gReport.bytes_live += bytes;
+		gReport.live_by_class[heap_class_of(bytes)]++;
+	}
+	if (front != NULL)
+		release_block_locked(&home->region, front, block_payload(front));
+	if (gReport.bytes_live > gReport.high_water)
+		gReport.high_water = gReport.bytes_live;
+
+	report_end();
+	heap_unlock();
+	return block_payload(aligned);
 }
 
 // ── calloc ──────────────────────────────────────────────────────────────────

@@ -226,6 +226,52 @@ The [design and evidence](../pending/HEAP_MAXIMUM_REVIEW.md) record the
 scan shape and corruption tests. This is a reduction in observed accounting
 work, not a constant-time allocation guarantee.
 
+## Aligned allocation — 2026-11-16 (Chris's ruling, Fable's rules)
+
+`os64_malloc_aligned(size, alignment)` exists because FFmpeg does: with its
+x86 assembly built in, its AVX routines load buffers with aligned
+instructions, and FFmpeg allocates through `posix_memalign`, then frees
+and reallocs through plain `free` and `realloc`. So the aligned block has
+to be one the allocator itself recognises; a wrapper that over-allocated
+and offset the pointer would hand `free` an address it never gave out.
+libav's port maps `posix_memalign` onto this call. dav1d will want the
+same.
+
+**The block it returns is an ordinary block.** `free`, `realloc` and
+`malloc_size` take it with no case of their own: no hidden offset, no side
+table, no flag bit. Only where it starts differs.
+
+- `alignment` is a power of two from 16 to 4096; anything else is NULL,
+  never rounded. 16 is plain `malloc`.
+- **A small block** (under `HEAP_BIG_BYTES`) is carved with the classic
+  method. One block big enough for the request, the alignment and a
+  minimum block is taken whole. The header goes where the payload lands
+  aligned, moved on by one alignment when the gap in front could not be a
+  block (under `HEAP_MIN_BLOCK`). The front piece becomes a block, counted
+  live for a moment, and is released through free's own path, which merges
+  it with a free neighbour below and keeps every book balanced. The tail is
+  trimmed by `block_split`. The block is taken whole and split once because
+  `block_split` trusts that the block above it is in use; a second split
+  would set a fresh free tail against the first one's remainder, the two
+  adjacent free blocks realloc's shrink once made.
+- **A big block** is malloc's dedicated one. Its payload sits 64 bytes into
+  a page-aligned region (the ledger entry, two pad words and the block
+  header), which a static assert holds there, so alignments up to 64 need
+  nothing. A stricter alignment for a big block is **refused** for now
+  (NULL): FFmpeg asks for 32, and the alternative is a per-block offset,
+  which is what this design rules out.
+- `realloc` of an aligned block keeps malloc's own promise, 16 bytes, as
+  FFmpeg's contract does; both declarations in `os64/mem.h` say so.
+- Counted as a malloc in `/proc/<pid>/heap`, refusals included; the split
+  front piece's release is internal and counts nothing.
+
+Proof: `tools/test_heap_host.c`'s `t_aligned` (every power of two over
+sizes around the minimum block, a page and the dedicated threshold; the
+refusals; free and realloc of aligned blocks; the books returning exactly)
+and `t_aligned_soak` (malloc, malloc_aligned, realloc and free mixed, 30,000
+rounds), run by `tools/test_heap_host.sh` with and without `HEAPCHECK=1`;
+`tools/test_heap_mutants.py` breaks each rule above.
+
 ## OPEN decisions — RULED 2026-08-15
 
 - **What is a region?** RULED **(b)**: pools for small allocations, one
