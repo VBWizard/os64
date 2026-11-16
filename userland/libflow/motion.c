@@ -1551,6 +1551,7 @@ static void copy_prop(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
         break;
     case GARB_BORDER_COLLAPSE: d->border_collapse = s->border_collapse; break;
     case GARB_CAPTION_SIDE: d->caption_side = s->caption_side; break;
+    case GARB_TABLE_LAYOUT: d->table_layout = s->table_layout; break;
     // A float and a position alone: the display they blockify is settled
     // once, from what every animation makes of them (style.c, settle_box).
     case GARB_FLOAT: d->float_side = s->float_side; break;

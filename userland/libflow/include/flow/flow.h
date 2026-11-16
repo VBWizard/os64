@@ -290,6 +290,7 @@ typedef enum {
 
 typedef enum { FLOW_SEPARATE = 0, FLOW_COLLAPSE_BORDERS } flow_border_collapse_t;
 typedef enum { FLOW_CAPTION_TOP = 0, FLOW_CAPTION_BOTTOM } flow_caption_side_t;
+typedef enum { FLOW_TABLE_AUTO = 0, FLOW_TABLE_FIXED } flow_table_layout_t;
 typedef enum { FLOW_FLOAT_NONE = 0, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT } flow_float_t;
 typedef enum { FLOW_CONTENT_BOX = 0, FLOW_BORDER_BOX } flow_box_sizing_t;
 typedef enum { FLOW_REPEAT = 0, FLOW_REPEAT_X, FLOW_REPEAT_Y, FLOW_NO_REPEAT } flow_repeat_t;
@@ -839,6 +840,10 @@ typedef struct {
     flow_unit_t border_spacing[2];  // horizontal, vertical
     flow_border_collapse_t border_collapse;
     flow_caption_side_t caption_side;
+    // CSS 2.1 § 17.5.2: fixed sizes a table's columns from its width and
+    // its first row alone, never from what the cells hold (layout.c,
+    // columns_fixed); a table whose width is auto lays out automatically.
+    flow_table_layout_t table_layout;
 
     // FLOATS.md: the side a box floats to, and the floats it clears.
     flow_float_t float_side;

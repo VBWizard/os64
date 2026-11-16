@@ -2022,6 +2022,7 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         break;
     case GARB_BORDER_COLLAPSE: d->border_collapse = s->border_collapse; break;
     case GARB_CAPTION_SIDE: d->caption_side = s->caption_side; break;
+    case GARB_TABLE_LAYOUT: d->table_layout = s->table_layout; break;
     case GARB_FLOAT: d->float_side = s->float_side; break;
     case GARB_CLEAR: d->clear = s->clear; break;
     case GARB_POSITION: d->position = s->position; break;
@@ -3506,6 +3507,9 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     case GARB_CAPTION_SIDE:
         s->caption_side = is_word(v, "bottom") ? FLOW_CAPTION_BOTTOM : FLOW_CAPTION_TOP;
+        break;
+    case GARB_TABLE_LAYOUT:
+        s->table_layout = is_word(v, "fixed") ? FLOW_TABLE_FIXED : FLOW_TABLE_AUTO;
         break;
     case GARB_FLOAT: {
         static const char *const words[] = {"none", "left", "right", "inline-start",

@@ -1577,6 +1577,7 @@ int main(int argc, char **argv)
     script_effect_cases();
     layout_cases();
     table_cases();
+    fixed_table_cases();
     table_bounds();
     corpus();
     hostile_corpus();

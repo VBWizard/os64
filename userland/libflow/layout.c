@@ -6239,7 +6239,8 @@ static void positioned_done(L *l, const FStyles *styles, FBox *b, int64_t cbw)
     }
 }
 
-// ── Tables (CSS 2.1 §17.5, the automatic layout of §17.5.2.2) ────────────
+// ── Tables (CSS 2.1 §17.5: the automatic layout of §17.5.2.2, and the
+// fixed one of §17.5.2.1, columns_fixed) ─────────────────────────────────
 //
 // MEASURE, THEN PLACE — Netscape 1.1's second pass. Every cell says how
 // narrow it can be (the widest thing in it that cannot break) and how wide
@@ -6800,9 +6801,12 @@ static void spread_pct(Col *cols, int32_t c, int32_t n, int64_t pct)
     }
 }
 
-// The columns' widths as constraints: one-column cells and `col` widths
-// first, then spanning cells, narrowest span first.
-static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
+// The table's columns, none set yet (`fixed` and `pct` -1), then set by
+// the table's `col`s: a `col` sets the width of the columns it spans, in
+// pixels or as a percentage; one with no width takes its group's, and a
+// group with no `col` in it sets its own `span` of columns (HTML 4's
+// default width). NULL on no memory.
+static Col *columns_new(L *l, FBox *t, Grid *g)
 {
     Col *cols = scratch_calloc(l, (size_t)(g->ncols > 0 ? g->ncols : 1), sizeof(Col));
     if (cols == NULL) {
@@ -6811,9 +6815,6 @@ static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
     }
     for (int32_t k = 0; k < g->ncols; k++)
         cols[k].fixed = cols[k].pct = -1;
-    // A `col` sets the width of the columns it spans, in pixels or as a
-    // percentage; one with no width takes its group's, and a group with no
-    // `col` in it sets its own `span` of columns (HTML 4's default width).
     int32_t k = 0;
     for (FBox *c = t->first; c != NULL && k < g->ncols; c = c->next) {
         if (c->kind != FB_COLUMN && c->kind != FB_COLUMN_GROUP)
@@ -6833,15 +6834,35 @@ static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
             }
         }
     }
+    return cols;
+}
 
+// A cell's set width in pixels as its border box, -1 for none: a
+// content-box width gains the cell's padding and borders, and a border-box
+// one is them already, never less than they are.
+static int64_t cell_set_width(const FBox *cell)
+{
+    const flow_style_t *s = cell->style;
+    if (s->width.kind != FLOW_LENGTH_PX)
+        return -1;
+    int64_t frame = hframe(cell, 0);
+    return s->box_sizing == FLOW_BORDER_BOX ? max64(s->width.value, frame) : s->width.value + frame;
+}
+
+// The columns' widths as constraints: `col` widths first (columns_new),
+// then one-column cells, then spanning cells, narrowest span first.
+static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
+{
+    Col *cols = columns_new(l, t, g);
+    if (cols == NULL)
+        return NULL;
     GCell *spanning = NULL;
     int32_t nspanning = 0;
     for (int32_t i = 0; i < g->ncells && !l->failed; i++) {
         GCell *gc = &g->cells[i];
         Intr ci = intrinsic(l, gc->cell);
         const flow_style_t *s = gc->cell->style;
-        int64_t frame = hframe(gc->cell, 0);
-        int64_t fixed = s->width.kind == FLOW_LENGTH_PX ? s->width.value + frame : -1;
+        int64_t fixed = cell_set_width(gc->cell);
         // A set width is what the cell wants at most, never less than it
         // can be; in quirks mode a nowrap cell's set width is also what it
         // can be at least (the Quirks standard's 3.9).
@@ -6928,6 +6949,77 @@ static Intr grid_sums(const Col *cols, int32_t n, int64_t hsp)
     return r;
 }
 
+// Whether a table lays out by the fixed algorithm: `table-layout: fixed`
+// with a width of its own (CSS 2.1 § 17.5.2.1: a width of auto means the
+// automatic algorithm).
+static bool table_fixed(const flow_style_t *s)
+{
+    return s->table_layout == FLOW_TABLE_FIXED && width_given(s);
+}
+
+// FIXED TABLE LAYOUT (CSS 2.1 § 17.5.2.1): each column's width from the
+// table's `col`s (columns_new), else from the first row's cell that spans
+// it, a cell's set width shared evenly over its columns after the spacing
+// between them, a percentage being of `grid_w`; what the grid has left is
+// shared evenly by the columns nothing set, or, when every column is set,
+// over all of them as they are wide. What the cells hold never counts, so
+// a cell's content can overflow it. `grid_w` is the room for the columns,
+// spacing taken out; `*need` is what they take, more than `grid_w` when
+// the set widths alone do not fit (and the table is that much wider).
+static Col *columns_fixed(L *l, FBox *t, Grid *g, int64_t hsp, int64_t grid_w, int64_t *need)
+{
+    Col *cols = columns_new(l, t, g);
+    if (cols == NULL)
+        return NULL;
+    grid_w = max64(grid_w, 0);
+    for (int32_t i = 0; i < g->ncells; i++) {
+        const GCell *gc = &g->cells[i];
+        if (gc->row != 0)
+            continue;
+        const flow_style_t *s = gc->cell->style;
+        int64_t px = cell_set_width(gc->cell);
+        int64_t share = px >= 0 ? max64(px - (int64_t)(gc->cols - 1) * hsp, 0) / gc->cols : 0;
+        for (int32_t k = gc->col; k < gc->col + gc->cols && k < g->ncols; k++) {
+            if (cols[k].fixed >= 0 || cols[k].pct >= 0)
+                continue;
+            if (px >= 0)
+                cols[k].fixed = share;
+            else if (s->width.kind == FLOW_LENGTH_PERCENT)
+                cols[k].pct = s->width.value / gc->cols;
+        }
+    }
+    int64_t taken = 0;
+    int32_t nauto = 0;
+    for (int32_t k = 0; k < g->ncols; k++) {
+        if (cols[k].fixed >= 0)
+            cols[k].width = cols[k].fixed;
+        else if (cols[k].pct >= 0)
+            cols[k].width = mul_div(grid_w, cols[k].pct, 100 * 64);
+        else
+            nauto++;
+        taken += cols[k].width;
+    }
+    int64_t left = grid_w > taken ? grid_w - taken : 0, given = 0;
+    if (nauto > 0) {
+        int32_t seen = 0;
+        for (int32_t k = 0; k < g->ncols; k++)
+            if (cols[k].fixed < 0 && cols[k].pct < 0) {
+                cols[k].width = ++seen == nauto ? left - given : left / nauto;
+                given += cols[k].width;
+            }
+    } else if (left > 0 && g->ncols > 0) {
+        for (int32_t k = 0; k < g->ncols; k++) {
+            int64_t more = k == g->ncols - 1 ? left - given
+                         : taken > 0        ? mul_div(left, cols[k].width, taken)
+                                            : left / g->ncols;
+            given += more;
+            cols[k].width += more;
+        }
+    }
+    *need = taken + given;
+    return cols;
+}
+
 static Intr table_intrinsic(L *l, FBox *t)
 {
     Intr r = {0, 0};
@@ -6937,9 +7029,17 @@ static Intr table_intrinsic(L *l, FBox *t)
         return r;
     }
     int64_t hsp = spacing_h(t);
-    Col *cols = columns_of(l, t, &g, hsp);
+    // A fixed table's content never counts: it wants what its set column
+    // widths take, its percentages and unset columns nothing.
+    int64_t need = 0;
+    bool fixed = table_fixed(t->style);
+    Col *cols = fixed ? columns_fixed(l, t, &g, hsp, 0, &need) : columns_of(l, t, &g, hsp);
     if (cols != NULL) {
-        r = grid_sums(cols, g.ncols, hsp);
+        if (fixed) {
+            r.min = r.max = need + (g.ncols > 0 ? (int64_t)(g.ncols + 1) * hsp : 0);
+        } else {
+            r = grid_sums(cols, g.ncols, hsp);
+        }
         r.min += hframe(t, 0);
         r.max += hframe(t, 0);
         // `table { box-sizing: border-box }`: a set width is the border box.
@@ -7313,24 +7413,42 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
         grid_free(l, &g);
         return;
     }
-    Col *cols = columns_of(l, t, &g, hsp);
+    int64_t frame = hframe(t, cbw);
+    int64_t spacing = g.ncols > 0 ? (int64_t)(g.ncols + 1) * hsp : 0;
+    int64_t captions = 0;
+    for (FBox *c = t->first; c != NULL; c = c->next)
+        if (c->kind == FB_CAPTION)
+            captions = max64(captions, intrinsic(l, c).min);
+    // A fixed table is its own width (or its captions', wider), and wider
+    // only when its set columns do not fit (columns_fixed); an automatic
+    // one is as wide as its columns' least, and its own width or as much
+    // of its containing block as its columns want.
+    bool fixed = table_fixed(s);
+    int64_t used = 0;
+    Col *cols;
+    if (fixed) {
+        used = max64(len(s->width, cbw), captions);
+        int64_t need = 0;
+        cols = columns_fixed(l, t, &g, hsp, used - frame - spacing, &need);
+        used = max64(used, need + frame + spacing);
+    } else {
+        cols = columns_of(l, t, &g, hsp);
+        if (cols != NULL) {
+            Intr sums = grid_sums(cols, g.ncols, hsp);
+            int64_t tmin = sums.min + frame, tmax = sums.max + frame;
+            int64_t margins = (s->margin[FLOW_LEFT].kind == FLOW_LENGTH_AUTO ? 0 : len(s->margin[FLOW_LEFT], cbw)) +
+                              (s->margin[FLOW_RIGHT].kind == FLOW_LENGTH_AUTO ? 0 : len(s->margin[FLOW_RIGHT], cbw));
+            if (width_given(s))
+                used = max64(len(s->width, cbw), tmin);
+            else
+                used = max64(tmin, tmax < cbw - margins ? tmax : cbw - margins);
+            used = max64(used, captions);
+        }
+    }
     if (cols == NULL) {
         grid_free(l, &g);
         return;
     }
-    Intr sums = grid_sums(cols, g.ncols, hsp);
-    int64_t frame = hframe(t, cbw);
-    int64_t tmin = sums.min + frame, tmax = sums.max + frame;
-    int64_t margins = (s->margin[FLOW_LEFT].kind == FLOW_LENGTH_AUTO ? 0 : len(s->margin[FLOW_LEFT], cbw)) +
-                      (s->margin[FLOW_RIGHT].kind == FLOW_LENGTH_AUTO ? 0 : len(s->margin[FLOW_RIGHT], cbw));
-    int64_t used;
-    if (width_given(s))
-        used = max64(len(s->width, cbw), tmin);
-    else
-        used = max64(tmin, tmax < cbw - margins ? tmax : cbw - margins);
-    for (FBox *c = t->first; c != NULL; c = c->next)
-        if (c->kind == FB_CAPTION)
-            used = max64(used, intrinsic(l, c).min);
 
     // Place the table box by the block width equation, with its width now
     // fixed: border-box, so the content width is what the frame leaves.
@@ -7350,7 +7468,8 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
             block(l, styles, c, t->x, t->w, &cc);
     y = cc.y + margins_sum(cc.pm);
 
-    distribute(cols, g.ncols, used - frame - (int64_t)(g.ncols + 1) * hsp);
+    if (!fixed)
+        distribute(cols, g.ncols, used - frame - (int64_t)(g.ncols + 1) * hsp);
     int64_t gx = t->x + t->border[FLOW_LEFT] + t->padding[FLOW_LEFT];
     int64_t x = gx + hsp;
     for (int32_t k = 0; k < g.ncols; k++) {

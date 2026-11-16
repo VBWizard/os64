@@ -564,7 +564,8 @@ never caches it. A replaced box sits on the baseline by its bottom margin
 edge, or where its `vertical-align` puts it. `hspace`/`vspace` are
 margins; an `hr` is an ordinary empty block whose borders are the rule.
 
-**Tables** (§17.5, automatic layout §17.5.2.2) — MEASURE, THEN PLACE.
+**Tables** (§17.5, automatic layout §17.5.2.2, fixed layout §17.5.2.1
+below) — MEASURE, THEN PLACE.
 The grid first: rows in the order they are drawn (the first header group
 first, the first footer group last, every other group and every run of
 groupless rows between), each cell given its slot past the slots rowspans
@@ -607,6 +608,21 @@ over to the auto columns in proportion to what they want (else to the
 others), never a column below its least. Every share is taken exact or
 held (`mul_div`): a nested table's most is a length as long as a face can
 read, and its column's share of a spread multiplies it by another.
+
+**The fixed layout** (§17.5.2.1, `table-layout: fixed` with a width of
+the table's own; an auto width keeps the automatic one) reads no cell's
+content at all. Each column takes its `col`'s width, else that of the
+first row's cell that spans it (a spanning cell's shared evenly over its
+columns after the spacing between them, a percentage being of the grid's
+width); the columns nothing set share what the grid has left evenly, or,
+when every column is set, the room left goes to all of them as they are
+wide. The table is its set width, wider only when its set columns do not
+fit, and asks shrink-to-fit for just those set columns, so a float around
+one is as wide as the table and not as its content. A cell's content can
+overflow it: the code-hosting site's file list, whose commit messages are
+one unbreakable line each, cut with an ellipsis, is the case it exists
+for. In both layouts a cell's set width is its border box when the cell
+says `box-sizing: border-box`.
 
 Then the heights: each cell laid out ONCE at its final width, and its
 baseline taken then — its first line's, or the bottom of its content

@@ -494,6 +494,8 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, s->border_collapse == FLOW_COLLAPSE_BORDERS ? " collapse" : " separate");
     if (s->caption_side != parent->caption_side)
         puts_(b, s->caption_side == FLOW_CAPTION_BOTTOM ? " caption-bottom" : " caption-top");
+    if (s->table_layout == FLOW_TABLE_FIXED)
+        puts_(b, " table-fixed");
     if (s->float_side != FLOW_FLOAT_NONE)
         putf(b, " float=%s", s_float[s->float_side]);
     if (s->clear != FLOW_CLEAR_NONE)
