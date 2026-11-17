@@ -70,6 +70,11 @@ os64_js_status_t os64_js_enable_finalization_settings(os64_js_runtime_t *runtime
  * imports; imports with active script records keep their source identity. */
 os64_js_status_t os64_js_enable_import_settings(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_outcome_t *outcome);
+/* Extends import settings to empty-handler Promise reactions. Actual invoked
+ * code supplies current/script incumbent; missing entry/backup remains absent.
+ * Configure before execution. Generic raw jobs do not gain checked settings. */
+os64_js_status_t os64_js_enable_neutral_promise_settings(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome);
 /* Native provider: return an owned immutable URL string or JS_EXCEPTION.
  * Runs inside the existing guard after argument conversions, with checked
  * current settings; no author code. Keep opaque alive until detached or runtime

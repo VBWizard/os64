@@ -263,6 +263,11 @@
       "path": "patches/0036-import-base-settings.patch",
       "sha256": "335011047b85ebc9d86f0f8dd1e64c8566fa8c8a210df0cc7f483ef3cdde9c05",
       "reason": "Snapshot a checked current-settings API base URL for imports without an active script record after argument conversion and before queued module loading."
+    },
+    {
+      "path": "patches/0037-neutral-promise-settings.patch",
+      "sha256": "ad7f4416356e41fe9c9bf454bd528a4455c92840ba1cce3ca20e0f18c882726b",
+      "reason": "Admit actual execution settings in empty-handler Promise reactions without fabricating entry or backup settings."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

@@ -106,7 +106,9 @@ checks pass: Promise 246, handlers 5,526, retention 3,652, window 820, callback
 reports 1,118, recovery 3,198, departure 353 and finalization 234. Sanitizer runs
 retain ASan/UBSan and LeakSanitizer. Host execution and target compilation do
 not establish P5 or browser acceptance.
-Remaining F.4b work includes realm-less capability policy, browser finalization
-task scheduling, remaining WebIDL conversions and role-specific lifecycle and
+The [neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md) supplies actual
+capability execution settings without a job entry. Remaining F.4b work includes
+its exception-reporting policy, browser finalization task scheduling, remaining
+WebIDL conversions and role-specific lifecycle and
 pre-member security checks. F.4c contexts/origins and F.4d WindowProxy/Location
 behavior keep their own implementation and acceptance gates.
