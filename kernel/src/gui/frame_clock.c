@@ -269,13 +269,20 @@ bool frame_clock_measure_feed(fc_measure_t *m, uint32_t raw, uint64_t now_us)
 	uint64_t gap = now_us > m->prev_us ? now_us - m->prev_us : 0;
 	if (gap > m->gap_max_us)
 		m->gap_max_us = gap;
+	bool wrapped = false;
 	if (raw < m->prev) {
 		if (m->prev - raw > m->lines / 2)
-			m->wraps++;
-		else if (gap * 2 >= 1000000 / FC_MEASURE_HZ_MAX)
-			m->hidden++;    // long enough to have hidden a wrap at the fastest rate
+			wrapped = true;
 		else
 			m->backward++;
+	}
+	if (wrapped)
+		m->wraps++;
+	// The unbroken stretches: a step this short cannot hide a wrap, so what
+	// it advanced is known without counting any.
+	if (gap <= FC_MEASURE_RUN_US && (raw >= m->prev || wrapped)) {
+		m->run_us += gap;
+		m->run_lines += wrapped ? raw + m->lines - m->prev : raw - m->prev;
 	}
 	uint64_t pos = m->wraps * m->lines + raw;
 	// Only a change seen right after the reading before it is the start of a
@@ -305,10 +312,18 @@ fc_measure_reason_t frame_clock_measure_result(const fc_measure_t *m, uint64_t *
 	uint64_t period = 0;
 	if (m->done)
 		period = (m->end_us - m->anchor_us) * 1000 * m->lines / (m->end_pos - m->anchor_pos);
-	// A gap of half a frame could hide a wrap, and a step back across a gap
-	// is one that may have, so either is the reason ahead of a backward step.
-	if (m->hidden > 0 || (m->done && m->gap_max_us * 2000 >= period))
+	// A gap of half a frame could hide a wrap, which would make the period
+	// above too long, so gaps are held to a frame measured another way: the
+	// unbroken stretches, which count no wraps. A window those cover less
+	// than a frame of is too broken to judge. And a gap is the reason ahead
+	// of a backward step, which is what a hidden wrap can look like.
+	if (m->done && m->run_lines < m->lines)
 		return FC_MEASURE_GAP;
+	if (m->run_lines > 0) {
+		uint64_t run_period = m->run_us * 1000 * m->lines / m->run_lines;
+		if (m->gap_max_us * 2000 >= run_period)
+			return FC_MEASURE_GAP;
+	}
 	if (m->backward > 0)
 		return FC_MEASURE_BACKWARD;
 	if (!m->anchored)

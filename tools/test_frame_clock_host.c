@@ -622,6 +622,15 @@ static void test_measure(void)
 	// says so.
 	sampler_t lapped = { 500, truth + 300000, 30001, -1, -1, false };
 	CHECK(measure_model(&P5, &lapped, &period) == FC_MEASURE_GAP, "a stall of a whole frame is a gap");
+	// Several stalls of exactly a frame (Codex #631): each hides a wrap and
+	// lands the counter where it was, so the counted period comes out more
+	// than twice too long, and a gap judged against that period would pass.
+	sampler_t laps = { 500, truth, 20000, -1, -1, false };
+	CHECK(measure_model(&P5, &laps, &period) == FC_MEASURE_GAP, "whole-frame stalls are gaps, got period %lu", period);
+	// Stalls that break the window into stretches too short to cover a frame
+	// between them leave the rate unknown.
+	sampler_t chopped = { 500, 60000, 2, -1, -1, false };
+	CHECK(measure_model(&P5, &chopped, &period) != FC_MEASURE_OK, "a window broken every other reading is not measured");
 
 	sampler_t stuck = { 500, 0, 0, -1, -1, true };
 	CHECK(measure_model(&P5, &stuck, &period) == FC_MEASURE_STILL, "a counter that never moves");

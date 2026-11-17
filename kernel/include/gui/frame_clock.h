@@ -148,11 +148,18 @@ bool frame_clock_keep_running(fc_run_t *r, bool damage, uint32_t waiting);
 // frames of the slowest rate taken.
 // What a display does, and what the result checks: every reading is a line
 // of the frame, the counter moves, and only forward except at the wrap, no
-// two readings are so far apart that a wrap could hide between them (half a
-// frame, and a step back across half the fastest frame is taken for one),
-// and the rate is a display's. Anything else is no beam, with the reason.
+// two readings are so far apart that a wrap could hide between them, and the
+// rate is a display's. Anything else is no beam, with the reason.
+//
+// "So far apart" is half a frame, and the frame it is half of is NOT the
+// period counted through the wraps: a stall that hides a wrap makes that
+// period too long, and so would excuse itself. It is a frame measured from
+// the UNBROKEN STRETCHES alone, the steps no longer than FC_MEASURE_RUN_US,
+// each too short to hide a wrap, so what they advanced is known without
+// counting any. Those stretches must cover a frame's lines.
 #define FC_MEASURE_US 70000
 #define FC_MEASURE_EDGE_US 2
+#define FC_MEASURE_RUN_US 50
 #define FC_MEASURE_BOUND_US 250000
 #define FC_MEASURE_WRAPS 3
 #define FC_MEASURE_HZ_MIN 20
@@ -176,7 +183,8 @@ typedef struct {
 	uint64_t anchor_us, anchor_pos;     // the first change: time, lines counted
 	uint64_t end_us, end_pos;           // the change that closed the window
 	uint64_t gap_max_us;
-	uint32_t beyond, backward, hidden;   // hidden: steps back across a long gap
+	uint64_t run_us, run_lines;         // the unbroken stretches: time, lines advanced
+	uint32_t beyond, backward;
 } fc_measure_t;
 
 void frame_clock_measure_begin(fc_measure_t *m, uint32_t lines);
