@@ -51,7 +51,7 @@ What follows from it:
    AV1 later. Ring 3 may use AVX (AVX.md), and FFmpeg's run-time
    detection decides for itself whether to.
 3. **One decoder thread is enough to start; FFmpeg's own threading can
-   wait.** 1440p60 is where a second decoder thread would be wanted.
+   wait.** On the P5 one thread carries H.264 at 1440p60 (below).
 4. **A frame is converted and scaled in ONE step, to the size it will be
    drawn at.** It beat converting small and stretching later in every row.
 5. **Average speed is not the test; the worst frame is.** At 1080p60 the
@@ -60,9 +60,22 @@ What follows from it:
 6. **Decoding and scaling want separate threads at 60 fps.** Together they
    are about 10 ms of a 16.7 ms frame on one thread, before anything else.
 
-**GAP (the P5 point).** How much of this survives on os64 on the P5:
-`BRIEF_VIDEO_P5_POINT.md`, in progress. If os64's figures are far below
-the table, § 3's thread shape and § 6's queue depths are revisited.
+**On os64, on the P5** (`/tests/avbench`, one pinned thread; evidence
+`~/os64-opus-kit/VIDEO_P5_POINT_REPORT.md`). Every run's pictures matched
+the host's, checksum for checksum, in every mode.
+
+| H.264 | assembly | plain C | worst frame (assembly) |
+|---|---|---|---|
+| 1080p30 | 9.3x | 4.2x | 27 ms |
+| 1080p60 | 5.1x | 2.3x | 34 ms |
+| 1440p30 | 5.0x | 2.3x | 53 ms |
+| 1440p60 | 2.8x | 1.3x | 62 ms |
+
+The P5 is about one and a half times the 3900X per thread; assembly buys
+2.2 to 2.3 times over C, as on the host; AVX and SSE are equal for H.264.
+So § 3's shape stands, **one decoder thread carries 1440p60**, and § 6's
+eight decoded pictures cover the worst frame (under four frame times).
+The scaling figures above are still the host's.
 
 ## 2. The libraries
 
@@ -191,20 +204,28 @@ What a frame costs after yonder has it, from the code as it stands:
 - **There is no vertical sync and no report of when a frame was shown.**
   Tearing is possible, and a player cannot pace itself to the display.
 
-**GAP (the glass's number).** What a full-screen 60 fps publisher costs on
-the P5 and how evenly its frames arrive: a small fixture publishing
-full-window frames at a set rate, read against `/sys/gui`'s counters.
-The instrument exists (`/tests/glassbench`, and `/sys/gui`'s `publish to
-glass:` line, GUI_LOCK.md); the P5's numbers are owed. Its answer decides
-what this arc asks of the kernel:
+**Measured on the P5** (`/tests/glassbench`, 2560x1440;
+`~/os64-opus-kit/GLASS_MEASURE_REPORT.md`):
 
-| Candidate | What it cures | Size |
-|---|---|---|
-| a publish wakes the compositor | the 10 ms grid | small; already a debt |
-| one copy fewer (publish into the back buffer when the window is unobscured, or hand the compositor the canvas) | 1.6 ms a frame, and lock time | medium; GRAPHICS.md rejected page flipping once, for reasons to re-read |
-| a "frame shown" answer for a publisher | pacing; no late frames queued behind a slow pass | medium |
+- one full-screen frame costs about 6 ms of CPU end to end, of a 16.7 ms
+  budget, across three threads;
+- a published frame waits 5 to 7 ms on average and up to 16, on the
+  10 ms tick; a program's own sleep is on the same tick;
+- `kGuiLock` is held with interrupts off for about 3 ms of every
+  full-screen frame;
+- **every moving edge tears, at every window size.**
 
-Kernel changes here are GUI-lock work and get their own short design.
+**What this arc asks of the kernel is FRAME_CLOCK.md**: the compositor
+paced by the display (the P5's graphics chip can be read for the line the
+display is on), which cures the tearing and the 10 ms grid and gives a
+player a "next frame" to wait for. This arc's players pace by that frame.
+
+**GAP (one copy fewer).** Publishing into the back buffer when the window
+is unobscured, or handing the compositor the canvas, would save about
+1.4 ms a frame and as much interrupts-off lock time. GRAPHICS.md rejected
+page flipping once, for reasons to re-read. To be weighed after the frame
+clock, with sound playing: whether a fifth of every second with
+interrupts off is heard.
 
 ## 8. The element
 
@@ -236,9 +257,9 @@ above was sized for.
 
 | | Slice | Proves |
 |---|---|---|
-| V0 | libav: H.264 + assembly, `/tests/avbench` (in progress) | the P5 point |
-| V1 | the glass fixture and its measurement | § 7's number |
-| V2 | whatever V1 says the kernel owes (at least: publish wakes the compositor) | even frame pacing |
+| V0 | libav: H.264 + assembly, `/tests/avbench`; `os64_malloc_aligned` beneath it | the P5 point (measured) |
+| V1 | the glass fixture and its measurement (done) | § 7's numbers |
+| V2 | the frame clock (FRAME_CLOCK.md, its own slices) | no tearing, even pacing, a frame to wait for |
 | V3 | libswscale in libav; libmedia's picture side; the pure cores | pictures and times, host-tested |
 | V4 | **a standalone player** (`play`'s sibling: a window, a file, picture and sound in step) | the whole pipeline on the P5, before any page code |
 | V5 | yonder: the picture in the box, the clock, silent files, `videoWidth` | a video on a page |
