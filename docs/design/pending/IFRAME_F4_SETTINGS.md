@@ -266,6 +266,9 @@ Current-settings base capture for imports without a source record is described i
 Synchronous NodeFilter and pair-iterable callback conversion/invocation are
 recorded in [IFRAME_F4_SYNCHRONOUS_SETTINGS.md](IFRAME_F4_SYNCHRONOUS_SETTINGS.md).
 
+Trusted implementation-code provenance is described in
+[IFRAME_F4_HOST_IMPLEMENTATION.md](IFRAME_F4_HOST_IMPLEMENTATION.md).
+
 ## Remaining F.4b interfaces and acceptance gates
 
 Before publishing browser settings queries, implement and prove:

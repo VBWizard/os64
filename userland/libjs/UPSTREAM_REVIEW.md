@@ -164,3 +164,13 @@ synchronous callback allocation sweep reproduces the null dereference with
 that opt-in disabled as well as enabled, and retains both paths as regression
 coverage. The engine identity changes without a public ABI or bytecode layout
 change.
+
+
+Patch 0039 adds explicit native preparation of a trusted implementation script
+and its nested bytecode before closure publication. A bounded validation pass
+checks exclusive references and realm identity before a nonallocating commit
+pass marks the tree. Marked closures carry no author ScriptOrModule; execution
+realm, budgets and lifecycle checks retain their existing behavior. The flag is
+not serialized and dynamically compiled code does not inherit it. The shared
+host/guest `host_implementation.h` fixture covers reentry, resumptions, cache
+readmission and atomic refusal. Browser consumers require their own opt-in.

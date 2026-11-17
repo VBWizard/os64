@@ -2647,6 +2647,12 @@ int main(int argc, char **argv)
         printf("libjs finalization settings: %u checks, %u failures\n", checks, failures);
         return failures ? 1 : 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--host-implementation")) {
+        host_implementation_cases();
+        check(live == 0, "host implementation releases allocations");
+        printf("Host implementation: %u checks, %u failed\n", checks, failures);
+        return failures ? 1 : 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--active-script")) {
         active_script_cases();
         check(live == 0, "active script records release allocations");

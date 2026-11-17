@@ -1,0 +1,77 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -757,7 +757,8 @@
+     uint8_t has_debug : 1;
+     uint8_t read_only_bytecode : 1;
+     uint8_t is_direct_or_indirect_eval : 1; /* used by JS_GetScriptOrModuleName() */
+-    /* XXX: 10 bits available */
++    uint8_t is_host_implementation : 1; /* trusted preparation, not serialized */
++    /* XXX: 9 bits available */
+     uint8_t *byte_code_buf; /* (self pointer) */
+     int byte_code_len;
+     JSAtom func_name;
+@@ -6467,6 +6468,36 @@
+             class_id == JS_CLASS_GENERATOR_FUNCTION ||
+             class_id == JS_CLASS_ASYNC_FUNCTION ||
+             class_id == JS_CLASS_ASYNC_GENERATOR_FUNCTION);
++}
++
++/* Preparation walks only compiled constant-pool edges, before closures exist.
++   The validation pass makes depth/sharing/realm refusal atomic. Serialized
++   code loses this privilege and must be admitted again by its native host. */
++static BOOL js_host_implementation_tree(JSContext *ctx, JSFunctionBytecode *b,
++                                        unsigned depth, BOOL commit)
++{
++    int i;
++    if (depth == 128 || b->realm != ctx || js_rc(b)->ref_count != 1)
++        return FALSE;
++    for (i = 0; i < b->cpool_count; i++) {
++        if (JS_VALUE_GET_TAG(b->cpool[i]) == JS_TAG_FUNCTION_BYTECODE &&
++            !js_host_implementation_tree(ctx, JS_VALUE_GET_PTR(b->cpool[i]),
++                                         depth + 1, commit))
++            return FALSE;
++    }
++    if (commit)
++        b->is_host_implementation = TRUE;
++    return TRUE;
++}
++
++JS_BOOL JS_PrepareHostImplementation(JSContext *ctx, JSValueConst compiled)
++{
++    if (!ctx || JS_VALUE_GET_TAG(compiled) != JS_TAG_FUNCTION_BYTECODE)
++        return FALSE;
++    JSFunctionBytecode *b = JS_VALUE_GET_PTR(compiled);
++    if (!js_host_implementation_tree(ctx, b, 0, FALSE))
++        return FALSE;
++    return js_host_implementation_tree(ctx, b, 0, TRUE);
+ }
+ 
+ /* HTML creates inline handlers without an associated ScriptOrModule.
+@@ -18071,7 +18102,10 @@
+        indirect eval runs under a native builtin with no ScriptOrModule.
+        Ordinary closures inherit the exact active record instead. */
+     JSValueConst record = JS_UNDEFINED;
+-    if (m)
++    if (b->is_host_implementation) {
++        /* Native implementation code has no author ScriptOrModule, including
++           closures made while an author's activation is still on the stack. */
++    } else if (m)
+         record = JS_MKPTR(JS_TAG_MODULE, m);
+     else if (is_eval) {
+         if (!b->is_direct_or_indirect_eval)
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -899,6 +899,13 @@
+    GetCallbackRealm's. No lookup, traps, exception mutation or context root.
+    NULL when the recorded context no longer exists. Trusted same-runtime API. */
+ JSContext *JS_GetObjectRealm(JSContext *ctx, JSValueConst object);
++/* Trusted owner-thread preparation of a fresh compile-only script tree.
++   Suppress author ScriptOrModule inheritance for its closures, preserving
++   executable/current realm and all execution/lifecycle checks. Refuses other
++   values, foreign/shared bytecode or nesting >= 128 without mutation or an
++   exception. Does not allocate or run script. The mark is not serialized;
++   cached native implementation code must be prepared again after reading. */
++JS_BOOL JS_PrepareHostImplementation(JSContext *ctx, JSValueConst compiled);
+ /* Trusted owner-thread operation on a fresh, unexposed bytecode closure.
+    Clear ScriptOrModule presence for an HTML inline handler only if its saved
+    function source exactly matches source[0..length). False for other values,
