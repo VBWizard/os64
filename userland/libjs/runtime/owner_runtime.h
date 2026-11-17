@@ -12,6 +12,7 @@ typedef struct {
     JSOwnerLimits limits;
     JSOwnerSummary summary;
     size_t requested_bytes, charged_bytes, wrapper_bytes, engine_limit;
+    size_t assigned_owners, unpublished_owners;
 } JSOwnerRuntimeMetadata;
 /* Explicit private construction alternative. Reserve metadata and its actual
  * host allocation charge before engine construction. Legacy constructors do
@@ -22,4 +23,31 @@ os64_js_status_t js_owner_runtime_create(const os64_js_config_t *, os64_js_teard
  * False (unselected/invalid) leaves output unchanged; output must be outside
  * runtime storage. Empty counts grant no lifetime or release authority. */
 bool js_owner_runtime_metadata(const os64_js_runtime_t *, JSOwnerRuntimeMetadata *out);
+typedef struct {
+    JSOwnerId owner;
+    bool primary, staged, retired, failed;
+} JSOwnerRealmSnapshot;
+/* Private checked native operations. Ticket/snapshot outputs are distinct
+ * caller storage outside runtime/metadata and execution outcomes, unchanged
+ * on refusal. Execution outcomes follow the existing ABI 5 call rules. IDs refer
+ * to the original retained realm, not an F4 context/target or origin.
+ * Issuing/duplicating refuses destruction; close and scalar inspection can
+ * participate in synchronous finalizer cleanup while the runtime is live. */
+JSOwnerStatus js_owner_runtime_primary_ticket(os64_js_runtime_t *, JSOwnerTicket *);
+/* A known raw realm is a compatibility path: its valid conversion records
+ * sticky unknown retention, preserving the raw handle's ABI 5 lifetime. */
+JSOwnerStatus js_owner_runtime_realm_ticket(os64_js_runtime_t *, const os64_js_realm_t *, JSOwnerTicket *);
+JSOwnerStatus js_owner_runtime_duplicate(os64_js_runtime_t *, JSOwnerTicket, JSOwnerTicket *);
+JSOwnerStatus js_owner_runtime_close(os64_js_runtime_t *, JSOwnerTicket);
+JSOwnerStatus js_owner_runtime_owner(const os64_js_runtime_t *, JSOwnerTicket, JSOwnerRealmSnapshot *);
+os64_js_status_t js_owner_runtime_child(os64_js_runtime_t *, const char *caller_abi,
+    size_t required_headroom, JSOwnerTicket *out, os64_js_outcome_t *);
+/* Run uses existing source/run admission and settings; its independent loan
+ * spans engine/value cleanup and draining. No raw view or persistent value
+ * is returned. Retirement uses the existing F3 transition. Neither API
+ * creates a security, target-publication or reclamation certificate. */
+os64_js_status_t js_owner_runtime_run(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket, const void *source, size_t length, const char *name, os64_js_outcome_t *);
+os64_js_status_t js_owner_runtime_retire(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket, os64_js_outcome_t *);
 #endif

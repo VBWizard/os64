@@ -2589,6 +2589,7 @@ static void module_bytecode_cases(void)
 #include "test_js_retention.inc"
 #include "../userland/libjs/tests/owner_runtime_cases.h"
 #include "../userland/libjs/tests/owner_admission_cases.h"
+#include "../userland/libjs/tests/owner_realm_cases.h"
 
 static bool owner_runtime_issuer_exhausted;
 JSOwnerStatus js_owner_observed_incarnation_next(uint64_t *out)
@@ -2596,6 +2597,81 @@ JSOwnerStatus js_owner_observed_incarnation_next(uint64_t *out)
     return owner_runtime_issuer_exhausted?JS_OWNER_EXHAUSTED:js_owner_incarnation_next(out);
 }
 static void owner_runtime_assert(bool ok, const char *what) { check(ok,what); }
+static unsigned owner_realm_loan_fault;
+JSOwnerStatus js_owner_observed_loan_begin(JSOwnerTickets *table,uint64_t incarnation,
+    JSOwnerTicket ticket,JSOwnerLoan *out)
+{
+    if(owner_realm_loan_fault==1) {
+        JSOwnerLoan held;
+        JSOwnerStatus first=js_owner_loan_begin(table,incarnation,ticket,&held);
+        if(first!=JS_OWNER_OK)return first;
+        JSOwnerStatus result=js_owner_loan_begin(table,incarnation,ticket,out);
+        js_owner_loan_end(table,incarnation,held);
+        return result;
+    }
+    if(owner_realm_loan_fault==2)table->_last_token=UINT64_MAX;
+    return js_owner_loan_begin(table,incarnation,ticket,out);
+}
+static void owner_realm_failure_cases(void)
+{
+    owner_realm_cases(owner_runtime_assert);
+    os64_js_config_t config={.limits=os64_js_default_limits()};config.limits.memory_bytes=8*1024*1024;
+    for(unsigned policy=0;policy<2;policy++) {
+        size_t baseline=live,bytes=live_bytes;
+        os64_js_runtime_t *runtime=NULL;os64_js_outcome_t out;JSOwnerTicket ticket;
+        check(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+            (JSOwnerLimits){3,2,1},&runtime,&out)==OS64_JS_OK,"realm owners: child sweep baseline runtime");
+        size_t start=attempts;
+        check(js_owner_runtime_child(runtime,OS64_JS_ABI_ID,1,&ticket,&out)==OS64_JS_OK,
+            "realm owners: child sweep baseline admission");
+        size_t cuts=attempts-start;
+        js_owner_runtime_close(runtime,ticket);os64_js_destroy(runtime);
+        for(size_t i=1;i<=cuts;i++) {
+            runtime=NULL;
+            check(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+                (JSOwnerLimits){3,2,1},&runtime,&out)==OS64_JS_OK,"realm owners: fresh child allocation-cut runtime");
+            JSOwnerTicket primary,sentinel={{81,82},83};ticket=sentinel;
+            check(js_owner_runtime_primary_ticket(runtime,&primary)==JS_OWNER_OK,"realm owners: live sibling before failed admission");
+            fail_at=attempts+i;
+            os64_js_status_t status=js_owner_runtime_child(runtime,OS64_JS_ABI_ID,1,&ticket,&out);
+            fail_at=0;
+            JSOwnerRuntimeMetadata m;JSOwnerRealmSnapshot view;
+            check(js_owner_runtime_metadata(runtime,&m) && m.summary.owners==2 && !m.summary.loans &&
+                js_owner_runtime_owner(runtime,primary,&view)==JS_OWNER_OK && owner_realm_id_equal(view.owner,primary.owner),
+                "realm owners: failure cannot rebind original owner or erase consumed row");
+            if(status==OS64_JS_OK) {
+                check(m.assigned_owners==2 && !m.unpublished_owners && m.summary.tickets==2 &&
+                    js_owner_runtime_close(runtime,ticket)==JS_OWNER_OK,"realm owners: healed refusal publishes one real child holder");
+            } else check((status==OS64_JS_HOST_FAILURE || status==OS64_JS_LIMIT) && ticket.serial==83 &&
+                m.assigned_owners==1 && m.unpublished_owners==1 && m.summary.tickets==1,
+                "realm owners: failed child retains unpublished owner without usable ticket");
+            check(js_owner_runtime_close(runtime,primary)==JS_OWNER_OK,"realm owners: failed runtime still permits holder cleanup");
+            os64_js_teardown_report_t report;os64_js_destroy_report(runtime,&report);
+            check(!report.leaked && live==baseline && live_bytes==bytes,"realm owners: child allocation cuts balance native map and engine");
+        }
+        printf("realm owners: policy%u %zu child allocation cuts balanced\n",policy,cuts);
+        check(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+            (JSOwnerLimits){1,2,1},&runtime,&out)==OS64_JS_OK &&
+            js_owner_runtime_primary_ticket(runtime,&ticket)==JS_OWNER_OK,"realm owners: loan-capacity fixture");
+        owner_realm_loan_fault=1;
+        check(owner_realm_run(runtime,ticket,"globalThis.mustNotRun=1",&out)==OS64_JS_ADMISSION_REFUSED,
+            "realm owners: full admitted loan pool refuses before source execution");
+        owner_realm_loan_fault=0;
+        JSOwnerRuntimeMetadata m;
+        check(js_owner_runtime_metadata(runtime,&m) && !m.summary.loans && m.summary.tickets==1 &&
+            owner_realm_run(runtime,ticket,"if(typeof mustNotRun!=='undefined')throw Error('loan refusal')",&out)==OS64_JS_OK,
+            "realm owners: loan-capacity refusal preserves owner and healthy execution");
+        owner_realm_loan_fault=2;
+        check(owner_realm_run(runtime,ticket,"throw Error('exhausted')",&out)==OS64_JS_ADMISSION_REFUSED,
+            "realm owners: exhausted token issuer refuses execution without wrap");owner_realm_loan_fault=0;
+        JSOwnerTicket untouched={{91,92},93};
+        check(js_owner_runtime_duplicate(runtime,ticket,&untouched)==JS_OWNER_EXHAUSTED && untouched.serial==93 &&
+            js_owner_runtime_metadata(runtime,&m) && !m.summary.loans && js_owner_runtime_close(runtime,ticket)==JS_OWNER_OK,
+            "realm owners: exhaustion preserves diagnostics and explicit holder cleanup");
+        os64_js_destroy(runtime);
+        check(live==baseline && live_bytes==bytes,"realm owners: exhausted namespace root cleanup balances");
+    }
+}
 static size_t owner_admission_baseline;
 static void owner_admission_observe(os64_js_runtime_t *runtime,const JSOwnerRuntimeMetadata *m)
 {
@@ -2667,6 +2743,11 @@ static void owner_runtime_failure_cases(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--owner-realms")) {
+        owner_realm_failure_cases();
+        printf("realm owners: %u checks, %u failures\n",checks,failures);
+        return failures?1:0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--owner-admission")) {
         owner_admission_failure_cases();
         printf("owner admission: %u checks, %u failures\n",checks,failures);
@@ -2853,7 +2934,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
-    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases();
+    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases();
     realm_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
     task_cases();
     script_host_cases();

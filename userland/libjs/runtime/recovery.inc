@@ -132,6 +132,7 @@ JS_PUBLIC os64_js_status_t os64_js_recovery_prepare(os64_js_runtime_t *runtime,
     runtime->active = true;
     runtime->active_outcome = outcome;
     int64_t error = 0;
+    owner_legacy_escape(runtime);
     os64_js_status_t native = runtime->recovery_host.prepare(runtime->recovery_host.opaque, &prepared, &failure, &error);
     runtime->active_outcome = NULL;
     runtime->active = false;

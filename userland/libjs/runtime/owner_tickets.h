@@ -49,6 +49,10 @@ JSOwnerStatus js_owner_tickets_init(JSOwnerTickets *, uint64_t live_incarnation,
 /* Create reserves one metadata owner row and first ticket, not a realm or
  * native resource. There is no owner-row erase/reuse operation in this unit. */
 JSOwnerStatus js_owner_ticket_create(JSOwnerTickets *, uint64_t, JSOwnerTicket *);
+/* Reserve an owner without an external holder, then open independent tickets
+ * for a known owner. Neither operation assigns runtime/native resources. */
+JSOwnerStatus js_owner_reserve(JSOwnerTickets *, uint64_t, JSOwnerId *);
+JSOwnerStatus js_owner_ticket_open(JSOwnerTickets *, uint64_t, JSOwnerId, JSOwnerTicket *);
 JSOwnerStatus js_owner_ticket_duplicate(JSOwnerTickets *, uint64_t, JSOwnerTicket, JSOwnerTicket *);
 JSOwnerStatus js_owner_ticket_resolve(const JSOwnerTickets *, uint64_t, JSOwnerTicket, JSOwnerId *);
 JSOwnerStatus js_owner_ticket_close(JSOwnerTickets *, uint64_t, JSOwnerTicket);
