@@ -86,6 +86,9 @@ the script copies them and refuses an existing output directory. Source
 images and previous receipts remain intact. The consumer target can also be
 built with `make -C userland js-owner-tickets-test` without preparing QuickJS.
 
+The [private incarnation issuer](IFRAME_F15_INCARNATION.md) implements the numeric
+namespace prerequisite separately; it does not bind identities to runtimes.
+
 ## Unproved integration obligations
 
 The tests supply distinct incarnation numbers. They prove numeric binding,
