@@ -416,11 +416,16 @@ static JSValue internal_microtask_run(JSContext *ctx, int argc, JSValueConst *ar
     return JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
 }
 
-static JSValue internal_microtask(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+static JSValue internal_microtask(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int prepared)
 {
     (void)self;
     if (!argc || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "Expected an internal stream microtask");
-    if (JS_EnqueueJobOwned(ctx, NULL, NULL, internal_microtask_run, 1, argv) < 0) return JS_EXCEPTION;
+    /* Private microtasks have no author entry/source to inherit. Their invoked
+     * callbacks prepare their own settings, as internal Promise reactions do. */
+    int status = prepared
+        ? JS_EnqueueJobNeutralSettings(ctx, internal_microtask_run, 1, argv)
+        : JS_EnqueueJobOwned(ctx, NULL, NULL, internal_microtask_run, 1, argv);
+    if (status < 0) return JS_EXCEPTION;
     return JS_UNDEFINED;
 }
 
@@ -470,9 +475,11 @@ static JSValue intrinsics(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         if (d_method(dom, ctx, object, "RecoveryStreamsUsed", recovery_streams_used, 0, 0) < 0) goto fail;
     } else if (JS_DefinePropertyValueStr(ctx, object, "RecoveryStreamsUsed", JS_UNDEFINED, JS_PROP_C_W_E) < 0) goto fail;
     if (d_method(dom, ctx, object, "ForeignStreamSlot", foreign_stream_slot, 2, 0) < 0) goto fail;
+    JSValue microtask = JS_NewCFunctionMagic(ctx, internal_microtask, "InternalMicrotask", 1, JS_CFUNC_generic_magic, prepared);
+    if (JS_IsException(microtask)) goto fail;
+    if (JS_DefinePropertyValueStr(ctx, object, "InternalMicrotask", microtask, JS_PROP_C_W_E) < 0) goto fail;
     static const struct { const char *name; JSCFunction *function; int length; } helpers[] = {
         {"InternalReaction", internal_reaction, 1},
-        {"InternalMicrotask", internal_microtask, 1},
         {"AddAbortAlgorithm", internal_abort_add, 2},
         {"RemoveAbortAlgorithm", internal_abort_remove, 2},
     };

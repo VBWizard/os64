@@ -174,3 +174,9 @@ realm, budgets and lifecycle checks retain their existing behavior. The flag is
 not serialized and dynamically compiled code does not inherit it. The shared
 host/guest `host_implementation.h` fixture covers reentry, resumptions, cache
 readmission and atomic refusal. Browser consumers require their own opt-in.
+
+Patch 0040 adds explicit neutral settings admission for trusted native queue
+entries. It reuses queue holds, execution/discard paths and the existing neutral
+scope save/restore; raw jobs retain their prior behavior. Streams uses it behind
+its callback-settings opt-in. The proof and ordinary Promise retirement boundary
+are recorded in `docs/design/pending/IFRAME_F4_STREAM_CONTINUATIONS.md`.

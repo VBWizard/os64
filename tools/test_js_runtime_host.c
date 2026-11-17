@@ -2579,6 +2579,7 @@ static void module_bytecode_cases(void)
 #include "test_js_finalization_failures.inc"
 #include "test_js_import_failures.inc"
 #include "test_js_neutral_failures.inc"
+#include "test_js_native_job_failures.inc"
 #include "test_js_execution_scopes.inc"
 #include "test_js_failed_code.inc"
 #include "test_js_failure_records.inc"
@@ -2647,6 +2648,12 @@ int main(int argc, char **argv)
         printf("libjs finalization settings: %u checks, %u failures\n", checks, failures);
         return failures ? 1 : 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--neutral-native-jobs")) {
+        neutral_native_job_cases(); native_job_failure_cases();
+        check(live == 0, "neutral native jobs release allocations");
+        printf("Neutral native jobs: %u checks, %u failed\n", checks, failures);
+        return failures ? 1 : 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--host-implementation")) {
         host_implementation_cases();
         check(live == 0, "host implementation releases allocations");
@@ -2695,7 +2702,7 @@ int main(int argc, char **argv)
         return failures != 0;
     }
     if (argc == 2 && !strcmp(argv[1], "--realms-only")) {
-        realm_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
+        realm_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases(); native_job_failure_cases();
         check(live == 0, "realm cases release every allocation");
         printf("libjs realms: %u checks, %u failures\n", checks, failures);
         return failures != 0;
@@ -2764,6 +2771,7 @@ int main(int argc, char **argv)
     bytecode_cases();
     module_bytecode_cases();
     intl_cases();
+    native_job_failure_cases();
     check(live == 0, "runtime suite releases every fixture allocation");
     printf("libjs runtime: %u checks, %u failures, %zu live allocations, %u native calls\n",
            checks, failures, live, native_calls);

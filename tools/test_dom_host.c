@@ -306,6 +306,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_neutral_promise.inc"
 #include "test_dom_synchronous_settings.inc"
 #include "test_dom_stream_callback_settings.inc"
+#include "test_dom_stream_continuations.inc"
 #include "test_dom_animation_retirement.inc"
 #include "test_dom_animation_routing.inc"
 #include "test_dom_departure.inc"
@@ -683,6 +684,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--animation-retirement")){dom_animation_retirement_cases();printf("DOM animation retirement: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--retention")){dom_recovery_host_cases();dom_retention_cases();printf("DOM retention: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--recovery")){dom_recovery_cases();printf("DOM recovery: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--stream-continuations")){dom_stream_continuation_cases();dom_stream_conversion_observation_cases();printf("DOM stream continuations: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--stream-callback-settings")){dom_stream_callback_settings_cases();dom_stream_callback_failure_cases();printf("DOM stream callback settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--synchronous-settings")){dom_synchronous_settings_cases();dom_synchronous_failure_cases();printf("DOM synchronous settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--neutral-promise-settings")){dom_neutral_promise_cases();printf("DOM neutral Promise: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -722,6 +724,7 @@ int main(int argc, char **argv)
     dom_import_settings_cases();
     dom_neutral_promise_cases();
     dom_stream_callback_settings_cases();dom_stream_callback_failure_cases();
+    dom_stream_continuation_cases();dom_stream_conversion_observation_cases();
     dom_synchronous_settings_cases();
     dom_synchronous_failure_cases();
     dom_animation_retirement_cases();
