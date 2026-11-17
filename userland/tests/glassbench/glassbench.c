@@ -1,7 +1,7 @@
 // glassbench — what a full-window publisher at a video's rate costs, and how
 // evenly its frames reach the glass (docs/design/pending/VIDEO.md § 7).
 //
-//   glassbench [-w WxH | -m] [-r fps] [-s seconds] [-p sleep|spin] [-o file]
+//   glassbench [-w WxH | -m] [-r fps] [-s seconds] [-p sleep|spin|frame] [-o file]
 //   glassbench all [-o file]
 //
 // One window (-m maximized, the default, or -w a content size) shows a test
@@ -21,10 +21,21 @@
 //   spin   busy-wait on os64_micros to an exact schedule, so the publisher
 //          is known to be on time and what unevenness remains is the
 //          compositor's
+//   frame  ask the display for its frames (os64_gui_frame_request) and draw
+//          on every one, or every second one at 30 fps, as a video player
+//          paced by the display would (FRAME_CLOCK.md § 6). Its line adds
+//          the answers it was told, the frames skipped (an answer whose
+//          number jumped further than the step), and the spread of the
+//          time between answers as they arrived
 //
-// A frame that starts more than a whole period late moves the schedule to
-// one period from now (a resync, counted) rather than queueing frames
-// behind it.
+// For sleep and spin, a frame that starts more than a whole period late
+// moves the schedule to one period from now (a resync, counted) rather than
+// queueing frames behind it. For frame, "late" is how much later after its
+// own blank a frame's work began than the first frame's did, so a steady
+// delivery delay (the compositor answers after its copy) is not counted
+// against every frame; a skip is counted as skipped, not as a resync. A
+// covered window is answered nothing, so a frame-paced run behind a cover
+// waits there (Escape still ends it).
 //
 // Per frame, with os64_micros: the copy, the publish call, and how late the
 // frame started. Around the run, /sys/gui is read before and after and the
@@ -57,13 +68,20 @@
 // times a second.
 #define SETTLE_MS    250
 
+typedef enum { PACE_SLEEP, PACE_SPIN, PACE_FRAME } pacer_t;
+
 typedef struct {
 	bool     maximized;
 	uint32_t w, h;                     // content size asked, when not maximized
 	uint32_t fps;
 	uint32_t seconds;
-	bool     spin;
+	pacer_t  pacer;
 } run_cfg_t;
+
+static const char *pacer_name(pacer_t p)
+{
+	return p == PACE_SPIN ? "spin" : p == PACE_FRAME ? "frame" : "sleep";
+}
 
 static const char *s_out = "/home/glassbench.txt";
 
@@ -245,7 +263,58 @@ typedef struct {
 	uint64_t frames, resyncs, late_over_2ms;
 	uint64_t copy_sum, copy_max, pub_sum, pub_max, late_sum, late_max;
 	int64_t  elapsed_us;
+	// The frame pacer's: answers told, frames skipped, and the time between
+	// answers as they arrived.
+	uint64_t told, skipped, gap_sum, gap_min, gap_max, gaps;
 } run_stats_t;
+
+// The frame pacer's wait: ask until an answer comes whose number is at least
+// `want` (0 = any), handling the window's other events meanwhile. Returns
+// the answer's blank instant through *blank_us and its number through
+// *number, or false when the run is to stop (Escape, a close, or no frames
+// to be had).
+static bool wait_frame(int64_t win, os64_draw_ctx_t *ctx, uint64_t want, run_stats_t *st,
+                       int64_t *last_arrival, uint64_t *number, uint64_t *blank_us,
+                       uint32_t *period_ns, int *stopped)
+{
+	if (os64_gui_frame_request(win, 0) != 0)
+		return false;
+	os64_gui_event_t ev;
+	for (;;) {
+		if (os64_gui_event_wait(win, &ev) != 1)
+			return false;
+		if (ev.type == OS64_GUI_EVENT_WINDOW_CLOSE ||
+		    (ev.type == OS64_GUI_EVENT_KEY_DOWN && (ev.key.ascii == 27 || ev.key.scancode == 0x01))) {
+			*stopped = 1;
+			return false;
+		}
+		if (ev.type == OS64_GUI_EVENT_WINDOW_RESIZE) {
+			os64_draw_ctx_refresh(ctx);
+			continue;
+		}
+		if (ev.type != OS64_GUI_EVENT_FRAME)
+			continue;
+		int64_t now = os64_micros();
+		st->told++;
+		if (*last_arrival != 0) {
+			uint64_t gap = (uint64_t)(now - *last_arrival);
+			st->gap_sum += gap;
+			st->gaps++;
+			if (st->gaps == 1 || gap < st->gap_min) st->gap_min = gap;
+			if (gap > st->gap_max) st->gap_max = gap;
+		}
+		*last_arrival = now;
+		uint64_t n = os64_gui_frame_number(&ev);
+		if (want == 0 || n >= want) {
+			*number = n;
+			*blank_us = os64_gui_frame_blank_us(&ev);
+			*period_ns = ev.frame.period_ns;
+			return true;
+		}
+		if (os64_gui_frame_request(win, 0) != 0)
+			return false;
+	}
+}
 
 static void wait_until(int64_t when, bool spin)
 {
@@ -347,11 +416,43 @@ static int run_one(const run_cfg_t *cfg)
 	int64_t end = start + (int64_t)cfg->seconds * 1000000;
 	int64_t when = start;
 	int stopped = 0;
+	// The frame pacer's state: the last number drawn on, the step between
+	// numbers (from the display's period, once its first answer says), and
+	// the first frame's delay after its blank.
+	uint64_t last_number = 0, step = 1;
+	int64_t first_delay = -1, last_arrival = 0;
 	for (uint64_t k = 0; when < end && !stopped; k++)
 	{
-		wait_until(when, cfg->spin);
-		int64_t t0 = os64_micros();
-		int64_t late = t0 - when;
+		int64_t t0, late;
+		if (cfg->pacer == PACE_FRAME)
+		{
+			uint64_t number = 0, blank_us = 0;
+			uint32_t period_ns = 0;
+			if (!wait_frame(win, &ctx, last_number ? last_number + step : 0, &st, &last_arrival,
+			                &number, &blank_us, &period_ns, &stopped))
+				break;
+			if (last_number == 0 && period_ns != 0) {
+				uint64_t want_ns = 1000000000ull / cfg->fps;
+				step = (want_ns + period_ns / 2) / period_ns;
+				if (step == 0)
+					step = 1;
+			}
+			else if (number > last_number + step)
+				st.skipped += number - last_number - step;
+			last_number = number;
+			t0 = os64_micros();
+			int64_t delay = t0 - (int64_t)blank_us;
+			if (first_delay < 0)
+				first_delay = delay;
+			late = delay - first_delay;
+			when = t0;   // the run's end is still wall time
+		}
+		else
+		{
+			wait_until(when, cfg->pacer == PACE_SPIN);
+			t0 = os64_micros();
+			late = t0 - when;
+		}
 		if (late < 0)
 			late = 0;
 		frame_t *f = &frames[k & 1];
@@ -382,6 +483,8 @@ static int run_one(const run_cfg_t *cfg)
 				os64_draw_ctx_refresh(&ctx);
 		}
 
+		if (cfg->pacer == PACE_FRAME)
+			continue;   // the display keeps the schedule; a skip is counted above
 		if (late > period)
 		{
 			when = os64_micros() + period;
@@ -399,17 +502,24 @@ static int run_one(const run_cfg_t *cfg)
 	// Each piece is appended where the last one ended, and the length is
 	// taken from the buffer after each, so a line that ever outgrew it would
 	// be cut short rather than written past.
-	char line[640];
+	char line[768];
 	uint64_t n = st.frames ? st.frames : 1;
 	uint64_t rate_x10 = st.elapsed_us > 0 ? st.frames * 10000000ull / (uint64_t)st.elapsed_us : 0;
 	size_t len = 0;
 	os64_snprintf(line, sizeof(line),
 		"glassbench %ux%u%s %ufps %s: %lu frames, %lu.%lu fps; copy %lu/%lu us; publish %lu/%lu us; "
 		"late %lu/%lu us, %lu over 2 ms, %lu resyncs",
-		frames[0].w, frames[0].h, cfg->maximized ? " max" : "", cfg->fps, cfg->spin ? "spin" : "sleep",
+		frames[0].w, frames[0].h, cfg->maximized ? " max" : "", cfg->fps, pacer_name(cfg->pacer),
 		st.frames, rate_x10 / 10, rate_x10 % 10, st.copy_sum / n, st.copy_max,
 		st.pub_sum / n, st.pub_max, st.late_sum / n, st.late_max, st.late_over_2ms, st.resyncs);
 	len = os64_strlen(line);
+	if (cfg->pacer == PACE_FRAME)
+	{
+		os64_snprintf(line + len, sizeof(line) - (size_t)len,
+			"; told %lu frames, %lu skipped, between answers %lu/%lu/%lu us min/avg/max",
+			st.told, st.skipped, st.gap_min, st.gaps ? st.gap_sum / st.gaps : 0, st.gap_max);
+		len = os64_strlen(line);
+	}
 	if (have_gui)
 	{
 		os64_snprintf(line + len, sizeof(line) - (size_t)len,
@@ -492,14 +602,14 @@ static uint32_t parse_u32(const char *s)
 
 static int usage(void)
 {
-	os64_printf("usage: glassbench [-w WxH | -m] [-r fps] [-s seconds] [-p sleep|spin] [-o file]\n"
+	os64_printf("usage: glassbench [-w WxH | -m] [-r fps] [-s seconds] [-p sleep|spin|frame] [-o file]\n"
 	            "       glassbench all [-o file]\n");
 	return 1;
 }
 
 int main(int argc, char **argv)
 {
-	run_cfg_t cfg = { .maximized = true, .w = 0, .h = 0, .fps = 60, .seconds = 10, .spin = false };
+	run_cfg_t cfg = { .maximized = true, .w = 0, .h = 0, .fps = 60, .seconds = 10, .pacer = PACE_SLEEP };
 	bool all = false;
 	for (int i = 1; i < argc; i++)
 	{
@@ -529,9 +639,11 @@ int main(int argc, char **argv)
 		else if (os64_streq(a, "-p") && v)
 		{
 			if (os64_streq(v, "spin"))
-				cfg.spin = true;
+				cfg.pacer = PACE_SPIN;
 			else if (os64_streq(v, "sleep"))
-				cfg.spin = false;
+				cfg.pacer = PACE_SLEEP;
+			else if (os64_streq(v, "frame"))
+				cfg.pacer = PACE_FRAME;
 			else
 				return usage();
 			i++;
@@ -550,16 +662,21 @@ int main(int argc, char **argv)
 	if (!all)
 		return run_one(&cfg);
 
-	// The set VIDEO.md § 7 needs: the full screen at both rates and both
-	// pacers, then two smaller windows on the exact schedule.
+	// The set VIDEO.md § 7 needs: the full screen at both rates and all three
+	// pacers, then smaller windows on the exact schedule and on the display's
+	// frames (FRAME_CLOCK.md § 6).
 	static const run_cfg_t kSet[] = {
-		{ true,  0,    0,   30, 10, false },
-		{ true,  0,    0,   30, 10, true  },
-		{ true,  0,    0,   60, 10, false },
-		{ true,  0,    0,   60, 10, true  },
-		{ false, 1280, 720, 30, 10, true  },
-		{ false, 1280, 720, 60, 10, true  },
-		{ false, 640,  360, 60, 10, true  },
+		{ true,  0,    0,   30, 10, PACE_SLEEP },
+		{ true,  0,    0,   30, 10, PACE_SPIN  },
+		{ true,  0,    0,   30, 10, PACE_FRAME },
+		{ true,  0,    0,   60, 10, PACE_SLEEP },
+		{ true,  0,    0,   60, 10, PACE_SPIN  },
+		{ true,  0,    0,   60, 10, PACE_FRAME },
+		{ false, 1280, 720, 30, 10, PACE_SPIN  },
+		{ false, 1280, 720, 30, 10, PACE_FRAME },
+		{ false, 1280, 720, 60, 10, PACE_SPIN  },
+		{ false, 1280, 720, 60, 10, PACE_FRAME },
+		{ false, 640,  360, 60, 10, PACE_SPIN  },
 	};
 	for (size_t i = 0; i < sizeof(kSet) / sizeof(kSet[0]); i++)
 	{
