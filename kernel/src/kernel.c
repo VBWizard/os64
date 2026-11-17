@@ -44,6 +44,7 @@
 #include "kworker.h"
 #include "env.h"
 #include "gui/compositor.h"
+#include "driver/display/beam.h"   // beam_init: the frame clock's beam
 #include "driver/system/mouse.h"
 #include "block_device.h"
 #include "ramdisk.h"
@@ -1137,6 +1138,9 @@ void kernel_init()
     // the compositor and app tasks).
     if (kEnableGUI)
 	{
+		// Where the display's sweep is, for the frame clock: looked for before
+		// the compositor's task exists, measured with interrupts on (beam.h).
+		beam_init();
 		printf("Starting GUI ...\n");
 		gui_start();
 		// Park quietly. This loop used to printf a status line onto the
