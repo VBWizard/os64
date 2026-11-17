@@ -22,6 +22,7 @@
 #include "os64/damage.h"       // the damage list's rule, shared with libos64
 #include "driver/system/x86_64.h"   // rdtsc — the lock times itself for /sys/gui
 #include "micros.h"          // micros_now — a publish's wait to reach the glass
+#include "driver/display/beam.h"   // where the display's sweep is, for the frame clock's verdict
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
 #include "vt_select.h"       // the other side of the input fork: console mouse selection
@@ -120,8 +121,10 @@ void gui_lock_counts(gui_lock_count_t *out, gui_composite_count_t *comp, bool re
 		if (restart)
 			s_lock_counts[s].max_wait_cycles = s_lock_counts[s].max_hold_cycles = 0;
 	}
-	if (restart)
+	if (restart) {
 		s_composite_counts.glass_wait_max_since_read_us = 0;
+		s_composite_counts.fc_since_read = (gui_frame_copies_t){ 0 };
+	}
 	gui_unlock(flags);
 }
 
@@ -392,6 +395,67 @@ static void glass_settle(const glass_pending_t *taken, uint32_t count, bool flus
 		if (wait > s_glass_owed.max_us)
 			s_glass_owed.max_us = wait;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// The frame clock, measured (FRAME_CLOCK.md slice F1; GUI_LOCK.md).
+//
+// The pass's flush is a copy to the framebuffer at whatever moment the pass
+// runs, so where the display's sweep was when it began, and whether it
+// overtook the copy, is the tearing in numbers. With a beam (driver/display/
+// beam.h) the line is read before the first rectangle and after the last,
+// and the pure verdict (gui/frame_clock.h) judges the copy: its pieces are
+// the rectangles in the order flushed, each copied top to bottom.
+//
+// Two reads a pass that flushes, outside kGuiLock where the flush already
+// is. The results are the compositor thread's alone, kept in s_fc_owed and
+// folded into the counts at the next pass's hold, as the publish-to-glass
+// waits are: no lock and no wait of their own.
+// ---------------------------------------------------------------------------
+static gui_frame_copies_t s_fc_owed;
+
+static void frame_copies_add(gui_frame_copies_t *into, const gui_frame_copies_t *from)
+{
+	into->copies += from->copies;
+	into->blank += from->blank;
+	into->torn += from->torn;
+	for (int b = 0; b < FC_BANDS; b++)
+		into->bands[b] += from->bands[b];
+}
+
+// The copies the previous pass judged, into the counts. Under kGuiLock.
+static void frame_clock_fold_locked(void)
+{
+	if (s_fc_owed.copies == 0)
+		return;
+	frame_copies_add(&s_composite_counts.fc, &s_fc_owed);
+	frame_copies_add(&s_composite_counts.fc_since_read, &s_fc_owed);
+	s_fc_owed = (gui_frame_copies_t){ 0 };
+}
+
+// One pass's copy, begun with the sweep at `begin_line` at `begin_us`.
+// Compositor thread, outside the lock, right after the flush.
+static void frame_clock_judge_copy(const rect_t *damage, uint32_t count, uint32_t begin_line,
+                                   uint64_t begin_us)
+{
+	uint64_t end_us = micros_now();
+	uint32_t end_line;
+	fc_frame_t frame;
+	if (!beam_line(&end_line) || !beam_frame(&frame))
+		return;
+	fc_piece_t pieces[DAMAGE_MAX_RECTS];
+	uint32_t n = 0;
+	for (uint32_t i = 0; i < count && n < DAMAGE_MAX_RECTS; i++) {
+		if (rect_is_empty(damage[i]))
+			continue;
+		pieces[n++] = (fc_piece_t){ damage[i].y, damage[i].y + damage[i].h,
+		                            (uint64_t)damage[i].w * (uint64_t)damage[i].h };
+	}
+	fc_verdict_t v = frame_clock_judge(&frame, begin_line, end_line, end_us - begin_us, pieces, n);
+	s_fc_owed.copies++;
+	s_fc_owed.blank += v.began_in_blank;
+	s_fc_owed.torn += v.torn;
+	s_fc_owed.bands[v.band]++;
 }
 
 uint32_t gui_damage_take_locked(rect_t *out, uint32_t cap)
@@ -1731,6 +1795,7 @@ bool guicomp_thread(bool daemon)
 		// -------- Drain input, route events, recomposite (one lock hold) ---
 		uint64_t irqflags = gui_lock(GUI_LOCK_COMPOSITE);
 		glass_fold_locked();   // the last pass's publish-to-glass waits
+		frame_clock_fold_locked();   // and its copy's verdict
 		// A VT transition can occur without another pointer event.
 		if (!gui_owns_glass() || s_glass_regained) gui_decoration_changed();
 
@@ -1843,6 +1908,20 @@ bool guicomp_thread(bool daemon)
 			vtsel_paint();
 
 		bool flushed_any = false;
+		// The frame clock's measurement: where the sweep is as the copy
+		// begins, read only when there is a copy to judge (the rest is
+		// frame_clock_judge_copy's).
+		uint32_t fc_begin_line = 0;
+		uint64_t fc_begin_us = 0;
+		bool fc_reading = false;
+		if (gui_owns_glass() && beam_present()) {
+			for (uint32_t i = 0; i < damage_count && !fc_reading; i++)
+				fc_reading = !rect_is_empty(damage[i]);
+			if (fc_reading)
+				fc_reading = beam_line(&fc_begin_line);
+			if (fc_reading)
+				fc_begin_us = micros_now();
+		}
 		if (gui_owns_glass())
 		for (uint32_t i = 0; i < damage_count; i++) {
 			if (rect_is_empty(damage[i]))
@@ -1855,6 +1934,8 @@ bool guicomp_thread(bool daemon)
 				damage[i].w, damage[i].h, damage[i].x, damage[i].y,
 				i + 1, damage_count, kTicksSinceStart);
 		}
+		if (fc_reading && flushed_any)
+			frame_clock_judge_copy(damage, damage_count, fc_begin_line, fc_begin_us);
 		// This pass's publishes are on the glass now, or never will be.
 		glass_settle(glass_taken, glass_taken_count, flushed_any);
 

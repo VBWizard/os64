@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "spinlock.h"
+#include "gui/frame_clock.h"   // FC_BANDS: the frame clock's histogram
 
 // GUI-internal shared state, including appearance publication and notification.
 // Client API lives in gui_client.h.
@@ -75,14 +76,28 @@ typedef struct {
 // publish when its window is covered, minimized or off the screen, and at
 // the pass that took it when that pass flushed nothing (a text terminal
 // held the screen).
+//
+// And where the display's sweep was at each copy to the framebuffer (the
+// frame clock's measurement, FRAME_CLOCK.md slice F1): for every pass that
+// flushed while there was a beam and both readings of it succeeded, a copy
+// (`fc_copies`), whether it began in the blank, whether the verdict
+// (frame_clock_judge) called it torn, and the band of the screen the sweep
+// was in when it began (`fc_bands`, eighths top to bottom, the blank last);
+// each since boot and since the counts were last read.
 #define GUI_COMPOSITE_HOLD_BUCKETS 7
 #define GUI_GLASS_WAIT_BUCKETS 7
+typedef struct {
+	uint64_t copies, blank, torn;
+	uint64_t bands[FC_BANDS];
+} gui_frame_copies_t;
+
 typedef struct {
 	uint64_t passes, drawn, rects, pixels, painted, stops, faults, collapses;
 	uint64_t holds[GUI_COMPOSITE_HOLD_BUCKETS];
 	uint64_t glass_waits, glass_wait_us, glass_wait_max_us, glass_wait_max_since_read_us;
 	uint64_t glass_voided;
 	uint64_t glass_buckets[GUI_GLASS_WAIT_BUCKETS];
+	gui_frame_copies_t fc, fc_since_read;
 } gui_composite_count_t;
 
 uint64_t gui_lock(gui_lock_site_t site);
@@ -90,9 +105,9 @@ void gui_unlock(uint64_t irqflags);
 // Every site's counts into `out` (GUI_LOCK_SITES of them) and the
 // compositor's into `comp`, in one hold of the lock so the two agree (the
 // composite site's acquisitions are the compositor's passes). The worst wait
-// and hold of each site, and the longest publish-to-glass wait, restart when
-// `restart`, so each read reports the stretch since the last. The read is
-// counted as OTHER.
+// and hold of each site, the longest publish-to-glass wait and the frame
+// clock's since-read copies restart when `restart`, so each read reports the
+// stretch since the last. The read is counted as OTHER.
 void gui_lock_counts(gui_lock_count_t *out, gui_composite_count_t *comp, bool restart);
 const char *gui_lock_site_name(gui_lock_site_t site);
 

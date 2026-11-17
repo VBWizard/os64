@@ -305,6 +305,17 @@ static void test_verdict_cases(void)
 	CHECK(v.torn, "a copy lasting a frame tears");
 	v = judge_model(&P5, at, 1481 * 2 + 3, &screen, 1);
 	CHECK(v.torn, "a copy lasting two frames tears");
+	// A few rows copied slowly over exactly one frame: each sweep reads them
+	// whole, but the rule is that a copy lasting a frame tears, so the rule
+	// itself is what this sees.
+	piece_t sliver = { 0, 10, 2560ull * 10 };
+	v = judge_model(&P5, at, 1481, &sliver, 1);
+	CHECK(v.torn, "a sliver copied over exactly one frame is called torn");
+	// An elapsed time so long its arithmetic would wrap.
+	fc_frame_t p5 = frame_of(&P5);
+	fc_piece_t p5_screen = { 0, 1440, full };
+	v = frame_clock_judge(&p5, 1478, 1478, 1ull << 62, &p5_screen, 1);
+	CHECK(v.torn, "an enormous elapsed time tears");
 
 	// A small window in the blank's shadow: read before the copy, then after.
 	piece_t corner = { 0, 50, 2560ull * 50 };
@@ -336,7 +347,8 @@ static void test_verdict_cases(void)
 	// Readings that are not lines of the frame judge nothing.
 	fc_frame_t f = frame_of(&P5);
 	fc_piece_t whole = { 0, 1440, full };
-	v = frame_clock_judge(&f, 1481, 100, 100, &whole, 1);
+	// (2000 would be row 481 if it were wrapped: a full screen from there tears.)
+	v = frame_clock_judge(&f, 2000, 100, 100, &whole, 1);
 	CHECK(!v.torn, "a begin reading beyond the frame judges nothing");
 	v = frame_clock_judge(&f, 100, 0xFFFFFFFFu, 100, &whole, 1);
 	CHECK(!v.torn, "an end reading of all ones judges nothing");
@@ -578,6 +590,12 @@ static void test_measure(void)
 	CHECK(measure_model(&P5, &long_stall, &period) == FC_MEASURE_GAP, "a stall over half a frame is a gap");
 	CHECK(period == 0, "no period with a reason");
 
+	// A stall of a frame and a little: the counter lands just ahead of where
+	// it was, with no step back to give the lost wrap away. Only the gap
+	// says so.
+	sampler_t lapped = { 500, truth + 300000, 30001, -1, -1, false };
+	CHECK(measure_model(&P5, &lapped, &period) == FC_MEASURE_GAP, "a stall of a whole frame is a gap");
+
 	sampler_t stuck = { 500, 0, 0, -1, -1, true };
 	CHECK(measure_model(&P5, &stuck, &period) == FC_MEASURE_STILL, "a counter that never moves");
 
@@ -589,6 +607,8 @@ static void test_measure(void)
 
 	display_t slow = { 1000, 990, 5, 100000, 0 };     // 10 Hz: too slow to close the window
 	CHECK(measure_model(&slow, &plain, &period) == FC_MEASURE_TOO_FEW_WRAPS, "10 Hz never closes the window");
+	display_t too_slow = { 1000, 990, 5, 66667, 0 };  // 15 Hz: closes the window, but no display
+	CHECK(measure_model(&too_slow, &plain, &period) == FC_MEASURE_RATE, "15 Hz is no display");
 	display_t slowest = { 1000, 990, 5, 50000, 0 };   // 20 Hz: the slowest taken
 	CHECK(measure_model(&slowest, &plain, &period) == FC_MEASURE_OK, "20 Hz measures");
 	display_t fast = { 100, 95, 2, 20000, 0 };        // 500 Hz: the fastest taken

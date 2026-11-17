@@ -44,8 +44,8 @@ uint32_t frame_clock_active_rows(const fc_frame_t *f);
 uint32_t frame_clock_sweep(const fc_frame_t *f, uint32_t line);
 bool frame_clock_in_blank(const fc_frame_t *f, uint32_t line);
 
-// A raw reading is a line of this frame: not all ones (nothing answered),
-// and below `lines`.
+// A raw reading is a line of this frame: below `lines`, which all ones
+// (nothing answered) never is.
 bool frame_clock_line_ok(const fc_frame_t *f, uint32_t raw);
 
 // When the next blank begins, in microseconds on the caller's clock, given

@@ -203,6 +203,7 @@
 #include "driver/system/acpi.h"         // /sys/acpi — the firmware's tables, as walked at boot
 #include "gui/compositor.h"             // /sys/gui — kEnableGUI, seat, census
 #include "gui/gui_internal.h"           // /sys/gui — kGuiLock's counts by site (gui_lock)
+#include "driver/display/beam.h"        // /sys/gui — the frame clock's beam
 #include "video.h"                      // kFrameBuffer — the resolution it reports
 #include "CONFIG.h"
 #include "logging/log.h"   // /sys/log — ring stats and sink state
@@ -1621,6 +1622,58 @@ static void sys_gen_conf(synth_text_t *t)
 		synth_text_addf(t, "(nothing has looked up a config file yet)\n");
 }
 
+// The frame clock's block of /sys/gui: where the display's sweep is read
+// from, the frame it describes, and where the sweep was at each of the
+// compositor's copies to the framebuffer (compositor.c, the frame clock,
+// measured; FRAME_CLOCK.md slice F1). Without a beam, three lines saying so.
+static void sys_gen_gui_frame_clock(synth_text_t *t, const gui_composite_count_t *comp)
+{
+	fc_frame_t f;
+	if (!beam_frame(&f))
+	{
+		const char *driver = beam_driver();
+		if (driver != NULL)
+			synth_text_addf(t, "frame clock: source none (%s at %s: %s)\n", driver, beam_where(), beam_why());
+		else
+			synth_text_addf(t, "frame clock: source none (%s)\n", beam_why());
+		synth_text_addf(t, "frame clock: no refresh rate and no lines without a beam\n");
+		synth_text_addf(t, "frame clock: copies are not judged without a beam\n");
+		return;
+	}
+	const char *why = beam_why();   // NULL while the beam is present
+	synth_text_addf(t, "frame clock: source %s (%s)%s%s\n", beam_driver(), beam_where(),
+	                why != NULL ? "; " : "", why != NULL ? why : "");
+	uint32_t active = frame_clock_active_rows(&f);
+	uint32_t blank = f.lines - active;
+	uint64_t hz_x100 = (100000000000ull + f.period_ns / 2) / f.period_ns;
+	uint64_t blank_us = ((uint64_t)blank * f.period_ns / f.lines + 500) / 1000;
+	synth_text_addf(t, "frame clock: %lu.%02lu Hz, %u lines a frame, %u shown, %u blank "
+	                "(lines %u to %u), the blank %lu us\n",
+	                hz_x100 / 100, hz_x100 % 100, f.lines, active, blank,
+	                f.blank_start, (f.blank_end + f.lines - 1) % f.lines, blank_us);
+	// A copy is one pass's flush; torn is the verdict (frame_clock_judge):
+	// the sweep read some of a rectangle new and some old.
+	const gui_frame_copies_t *all = &comp->fc, *recent = &comp->fc_since_read;
+	synth_text_addf(t, "frame clock copies: %lu since boot, %lu began in the blank, %lu torn; "
+	                "%lu since this file was last read, %lu began in the blank, %lu torn\n",
+	                all->copies, all->blank, all->torn, recent->copies, recent->blank, recent->torn);
+	// Where the sweep was when each copy began, by eighths of the shown rows
+	// top to bottom, then the blank.
+	for (int pass = 0; pass < 2; pass++)
+	{
+		const gui_frame_copies_t *c = pass == 0 ? all : recent;
+		synth_text_addf(t, "frame clock sweep at a copy's start%s:",
+		                pass == 0 ? "" : " since this file was last read");
+		for (uint32_t b = 0; b < 8; b++)
+		{
+			uint32_t first = (b * active + 7) / 8, next = ((b + 1) * active + 7) / 8;
+			synth_text_addf(t, " rows %u-%u %lu,", first, next - 1, c->bands[b]);
+		}
+		synth_text_addf(t, " blank %lu\n", c->bands[FC_BAND_BLANK]);
+	}
+	synth_text_addf(t, "frame clock beam reads failed: %lu\n", beam_read_failures());
+}
+
 static void sys_gen_gui(synth_text_t *t)
 {
 	synth_text_addf(t, "running: %s\n", kEnableGUI ? "yes" : "no");
@@ -1713,6 +1766,7 @@ static void sys_gen_gui(synth_text_t *t)
 	                comp.glass_buckets[0], comp.glass_buckets[1], comp.glass_buckets[2],
 	                comp.glass_buckets[3], comp.glass_buckets[4], comp.glass_buckets[5],
 	                comp.glass_buckets[6]);
+	sys_gen_gui_frame_clock(t, &comp);
 }
 
 // ── /sys/net (2026-08-20) ───────────────────────────────────────────────────

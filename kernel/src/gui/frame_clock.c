@@ -33,7 +33,7 @@ bool frame_clock_in_blank(const fc_frame_t *f, uint32_t line)
 
 bool frame_clock_line_ok(const fc_frame_t *f, uint32_t raw)
 {
-	return frame_clock_frame_valid(f) && raw != 0xFFFFFFFFu && raw < f->lines;
+	return frame_clock_frame_valid(f) && raw < f->lines;
 }
 
 uint64_t frame_clock_next_blank_us(const fc_frame_t *f, uint32_t line, uint64_t now_us)

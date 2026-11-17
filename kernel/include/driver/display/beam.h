@@ -1,0 +1,74 @@
+// beam.h — where the display's sweep is (FRAME_CLOCK.md § 1).
+//
+// THE SEAM answers four things and no more: is there a beam and what is it
+// called; the frame's lines; the blank's first and last line; and the line
+// being read now. A driver finds a display core it can read and says how to
+// read its line counter; the seam measures the period, keeps the facts, and
+// withdraws the beam for the rest of the boot if the counter stops making
+// sense. NO DRIVER WRITES TO THE GRAPHICS CHIP: each maps the registers it
+// reads read-only, so a stray store is a page fault, not a write.
+//
+// No beam is an ordinary answer (QEMU, another chip, a counter that reads
+// all ones), and `beam_why` says which.
+
+#ifndef BEAM_H
+#define BEAM_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "gui/frame_clock.h"
+
+// Looks once, at boot, before the compositor's task exists: the drivers in
+// turn, then the period measured over a few frames with interrupts on
+// (bounded by FC_MEASURE_BOUND_US). Called only on a boot with the desktop.
+void beam_init(void);
+
+// There is a beam now: found, measured, and not withdrawn.
+bool beam_present(void);
+
+// The driver's name and where it found the core ("64:00.0 1002:1681
+// OTG0"), or NULL when no driver ever found one.
+const char *beam_driver(void);
+const char *beam_where(void);
+
+// Why there is no beam, or why it was withdrawn; NULL while there is one.
+const char *beam_why(void);
+
+// The frame's facts as found and measured, if a beam was ever found (they
+// stay readable after a withdrawal, for /sys/gui).
+bool beam_frame(fc_frame_t *out);
+
+// The line being read now. False when the read failed: all ones (nothing
+// answered) or a line beyond the frame. BEAM_FAILS_IN_ROW failures in a row
+// withdraw the beam for the boot. ONE READER: the compositor thread, which
+// owns the failure count; others read the facts above.
+#define BEAM_FAILS_IN_ROW 8
+bool beam_line(uint32_t *line);
+
+// Reads that failed, since boot.
+uint64_t beam_read_failures(void);
+
+// ── For drivers ─────────────────────────────────────────────────────────────
+// A driver's probe either finds a core it can read, filling the frame's
+// lines and blank and a reader for its line counter, or returns why not.
+// A reader returns the counter masked to its line field, or 0xFFFFFFFF when
+// the register read all ones.
+typedef struct {
+	uint32_t lines, blank_start, blank_end;
+	uint32_t (*read_line)(void);
+	char where[48];
+} beam_found_t;
+
+typedef struct {
+	const char *name;
+	// NULL when found; otherwise why not, or BEAM_NOT_MINE when the machine
+	// has nothing this driver knows, so the next driver is asked.
+	const char *(*probe)(beam_found_t *out);
+} beam_driver_t;
+
+#define BEAM_NOT_MINE ((const char *)1)
+
+extern const beam_driver_t kBeamAmdDcn;
+
+#endif

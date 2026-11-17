@@ -148,3 +148,46 @@ the waits by length in buckets doubling from 1 ms.
 | A publish's stamp | at the publish, under the lock | — | by the pass that takes it, after its flush | when that pass settles it |
 | The waits a pass measured | after its flush, by the compositor thread | — | folded at the next pass, under the lock | zeroed by the fold |
 | The publish-to-glass counts | zero at boot | at the fold, and a voided publish at its publish, under the lock | by `/sys/gui` (`gui_lock_counts`) | never; the since-read longest restarts at each read |
+
+## The frame clock, measured
+
+**Why.** The compositor copies finished pixels to the framebuffer at
+whatever moment its pass runs, and the display reads that memory top to
+bottom once a refresh. When the copy overtakes the sweep the picture
+splits: that is tearing, and on the P5 every moving edge does it
+(FRAME_CLOCK.md). Before the frame clock aims the copy at the blank (slice
+F2), the tearing is measured, so F2 has a "before" to be judged against.
+
+**What.** A `frame clock:` block in `/sys/gui`:
+- the source: the beam's driver and where it found the display core, or
+  `none` and why (no display core this kernel can read, the counter did not
+  sweep like a display, a beam withdrawn after reads that failed);
+- the refresh rate, the frame's lines, the shown rows, the blank's lines and
+  its length;
+- copies, those that began in the blank, and those the verdict calls torn,
+  since boot and since the file was last read;
+- where the sweep was when each copy began, by eighths of the shown rows top
+  to bottom and the blank;
+- beam reads that failed.
+
+Without a beam the block is three lines saying so.
+
+- A copy is one pass's flush. When there is a beam and the pass has
+  something to flush, the compositor reads the line before the first
+  rectangle and after the last, and the pure verdict (`frame_clock_judge`,
+  `gui/frame_clock.h`) judges the copy: its pieces are the rectangles in the
+  order flushed, each copied top to bottom, sharing the copy's time by their
+  pixels. A piece is torn when one sweep reads some of its rows new and some
+  old.
+- Two reads a pass, outside the lock, where the flush already is; no lock
+  and no wait of their own. The results are the compositor thread's alone
+  and are folded into the counts at the next pass's hold, as the
+  publish-to-glass waits are. A read sees a pass's copy from the next pass
+  on.
+- Rows below the shown area are never read, so they never tear.
+
+| State | Begun | Changed | Read | Let go |
+|---|---|---|---|---|
+| The beam's facts | at `beam_init`, before the compositor exists | a withdrawal writes its reason, then clears `present`, on the compositor thread | by the compositor (the line) and `/sys/gui` (the facts and reason) | never |
+| A pass's copy, judged | after its flush, by the compositor thread | — | folded at the next pass, under the lock | zeroed by the fold |
+| The frame clock's counts | zero at boot | at the fold, under the lock | by `/sys/gui` (`gui_lock_counts`) | never; the since-read counts restart at each read |

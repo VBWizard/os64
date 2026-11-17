@@ -1407,6 +1407,21 @@ the framebuffer, by length, with publishes nobody could see counted as
 `voided`. Read it FIRST when the desktop stalls or a moving picture judders;
 `cat` before and after a workload measures it, and `/tests/glassbench`
 does exactly that for a full-window publisher at a video's rate.
+Its `frame clock:` block is the tearing in numbers (FRAME_CLOCK.md, GUI_LOCK.md
+§ The frame clock, measured): the display's refresh rate and frame, and at
+each copy to the framebuffer where the display's sweep was and whether it
+overtook the copy (`torn`). It needs a BEAM, os64's first display code
+(`kernel/src/driver/display/`): a seam that says which line the display is
+reading, and one driver, `beam_amd_dcn` (the P5's Radeon, `1002:1681`),
+which reads one counter through pages mapped READ-ONLY and uncached and
+never writes to the chip. Each chip it knows is a table row citing the
+Linux source of every register address. Without a beam (QEMU, any other
+chip) the block says `source none` and why; `beam:` lines under
+`DEBUG_BOOT` say what the boot found. Its arithmetic is
+`kernel/src/gui/frame_clock.c`, pure: `tools/test_frame_clock_host.sh`
+judges copies beside a model display, and
+`tools/test_frame_clock_mutants.py` breaks each rule
+(`mutants_parallel.py ... --with kernel`).
 
 **Failure fingerprints (logging):**
 
