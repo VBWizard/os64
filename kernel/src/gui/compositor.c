@@ -694,6 +694,12 @@ static void fc_stopped_halt(void)
 // The copy: what is carried, in strips top to bottom across all of it
 // (frame_clock_strip), so the copy only ever moves down the screen. With a
 // beam, F1's verdict judges it from the aim's last reading.
+//
+// THE SCREEN IS ASKED FOR AGAIN before the copy and before every strip: the
+// pass asked once, but the sleep and the aim since can take most of a frame,
+// and a text terminal taking the screen in between repaints the console,
+// which a copy would then overwrite. The moment it is not ours, what is
+// carried is voided (fc_drop_carry); the return switch repaints it all.
 static void fc_copy(bool judge, uint32_t begin_line, uint64_t begin_us, uint64_t *flushes)
 {
 	fc_rect_t rects[DAMAGE_MAX_RECTS], out[DAMAGE_MAX_RECTS];
@@ -702,6 +708,10 @@ static void fc_copy(bool judge, uint32_t begin_line, uint64_t begin_us, uint64_t
 	uint32_t pieces = 0;
 	int32_t height = (int32_t)kBackbuffer.height;
 	for (int32_t top = 0; top < height; top += FC_STRIP_ROWS) {
+		if (!gui_owns_glass()) {
+			fc_drop_carry();
+			return;
+		}
 		uint32_t k = frame_clock_strip(rects, s_fc_carry_count, top, FC_STRIP_ROWS, out);
 		if (k == 0)
 			continue;
@@ -806,12 +816,26 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 		// The first reading was already in the blank, so nothing yet says the
 		// counter moves, and one stopped at a blank line would look like a
 		// perfect aim every frame. It must change within FC_AIM_CONFIRM_LINES.
-		uint64_t until = micros_now() + frame_clock_lines_us(&f, FC_AIM_CONFIRM_LINES);
-		bool changed = false, unread = false;
-		while (micros_now() <= until) {
+		//
+		// Only a window actually WATCHED is evidence: each reading is taken
+		// before the clock is looked at, and a gap between readings longer
+		// than a line (an interrupt, or a pass that took the CPU) means the
+		// counter may have moved unseen. Such a window, or a failed read, is
+		// inconclusive: nothing is withdrawn, and a fresh reading decides this
+		// frame alone (the next frame's aim confirms again).
+		uint64_t span = frame_clock_lines_us(&f, FC_AIM_CONFIRM_LINES);
+		uint64_t gap_max = frame_clock_lines_us(&f, 1);
+		uint64_t start = micros_now(), last = start;
+		bool changed = false, inconclusive = false;
+		for (;;) {
 			uint32_t again;
-			if (!beam_line(&again)) {
-				unread = true;
+			bool read = beam_line(&again);
+			uint64_t t = micros_now();
+			if (t - last > gap_max)
+				inconclusive = true;
+			last = t;
+			if (!read) {
+				inconclusive = true;
 				break;
 			}
 			if (again != line) {
@@ -819,19 +843,25 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 				line = again;
 				break;
 			}
+			if (inconclusive || t - start > span)
+				break;
 			__builtin_ia32_pause();
-		}
-		if (!changed && !unread) {
-			beam_withdraw("the line counter stopped in the blank");
-			fc_copy(false, 0, 0, flushes);
-			return;
 		}
 		if (!beam_present()) {
 			fc_copy(false, 0, 0, flushes);
 			return;
 		}
+		if (!changed && !inconclusive) {
+			beam_withdraw("the line counter stopped in the blank");
+			fc_copy(false, 0, 0, flushes);
+			return;
+		}
+		if (!changed && !beam_line(&line)) {
+			s_fc_clk_owed.late[FC_LATE_PAST]++;   // no reading to copy by: held a frame
+			return;
+		}
 		now = micros_now();
-		if (changed && !frame_clock_in_blank(&f, line)) {
+		if (!frame_clock_in_blank(&f, line)) {
 			s_fc_clk_owed.late[FC_LATE_PAST]++;   // the blank ended while it was confirmed
 			return;
 		}
