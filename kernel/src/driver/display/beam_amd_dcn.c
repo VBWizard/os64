@@ -1,7 +1,7 @@
 // beam_amd_dcn.c — the beam from a Radeon display core (DCN): the output
 // timing generator's line counter, OTG_STATUS_POSITION, which says which line
-// the display is reading. The first and only display driver os64 has, and
-// all it does is read four registers of one running pipe.
+// the display is reading. All it does is read four registers of one running
+// pipe.
 //
 // READ ONLY, ENFORCED BY THE CPU. The pages holding those registers are
 // mapped present, uncached and NOT writable (CR0.WP makes that bind ring 0),
