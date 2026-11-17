@@ -24,7 +24,7 @@ Moving the existing `host_settings_enabled` boolean into tail padding leaves
 `sizeof(os64_js_runtime_t)` at **13,080 bytes**, matching the predecessor. No
 metadata arena is allocated, engine allowance is unchanged, and no public
 header/export, ABI, profile, realm cap, root release or reuse changes. Numeric
-issuer exhaustion is the new finite refusal condition. Five sibling host
+issuer exhaustion is the new finite refusal condition. Sibling host
 builders compile the issuer beside runtime.c; explicit runtime harness links
 include that object. This keeps CLI, DOM, acceptance and Yonder fixture builds
 consistent with production's new private dependency.
@@ -70,3 +70,8 @@ owner migration, C3 agreement, context pin or reclamation is claimed.
 Quinn agreed the runtime.c ownership and private boundary. Storage admission is
 a separate explicitly selected private-constructor cut; legacy constructors
 must not silently reserve that arena or lose engine allowance. F15 stays code.
+
+The shared test262/Intl runner builder also compiles the issuer. Both affected
+entry points run with leak detection: the pinned DateTimeFormat format-name
+subset passes 2/2, and the browser capture agrees on 5,635/5,635 fields across
+1,127 option sets. A recursive source-builder audit includes nested tools.

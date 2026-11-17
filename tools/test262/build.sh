@@ -12,7 +12,7 @@ libjs_runner() {
         '-DLIBJS_INTL_DIR="userland/libjs/intl/"'
         -fsanitize=address,undefined -fno-sanitize-recover=all)
     local source extra
-    for source in tools/test262/runner.c userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c \
+    for source in tools/test262/runner.c userland/libjs/runtime/runtime.c userland/libjs/runtime/owner_incarnation.c userland/libjs/intl/intl.c \
         userland/libos64/str.c userland/libos64/fmt.c tools/test_js_port_calendar.c; do
         extra=()
         case "$source" in tools/test262/runner.c) extra=(-U_FORTIFY_SOURCE -fbuiltin) ;; esac
