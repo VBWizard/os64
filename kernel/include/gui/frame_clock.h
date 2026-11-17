@@ -135,6 +135,89 @@ typedef struct {
 
 bool frame_clock_keep_running(fc_run_t *r, bool damage, uint32_t waiting);
 
+// ── Planning a frame (FRAME_CLOCK.md § 3, § 9) ─────────────────────────────
+// From a line read at `now_us`: the blank the next frame aims at, and when
+// to wake for it, the lead before. A blank that begins sooner than the lead
+// is passed over for the next, since a pass begun now would miss it.
+typedef struct {
+	uint64_t blank_at_us;   // when the aimed-at blank begins
+	uint64_t wake_at_us;    // the lead before it
+} fc_plan_t;
+
+fc_plan_t frame_clock_plan(const fc_frame_t *f, uint32_t line, uint64_t now_us, uint32_t lead_us);
+
+// The aim polls the beam after the pass. One reading's verdict: in a blank,
+// COPY (the copy then leads the sweep down the screen); in shown rows after
+// the aimed-at blank must have ended, LATE; otherwise keep polling. A
+// reading in shown rows while the blank should be under way is the blank
+// not quite begun (the plan rounds down), never a missed one: a sweep cannot
+// cross a whole blank between two readings that close.
+typedef enum { FC_AIM_WAIT, FC_AIM_COPY, FC_AIM_LATE } fc_aim_t;
+
+fc_aim_t frame_clock_aim(const fc_frame_t *f, uint32_t line, uint64_t now_us, uint64_t blank_at_us);
+
+// How long the aim may poll: the lead plus FC_AIM_SLACK_LINES lines. Past
+// it, a counter that never moved is frozen (the beam is withdrawn) and one
+// that moved is an overrun (the frame is late).
+#define FC_AIM_SLACK_LINES 8
+uint64_t frame_clock_aim_bound_us(const fc_frame_t *f, uint32_t lead_us);
+
+// Why a frame was late, for the cure: the compositor was off its CPU (a
+// pass gave the CPU to another thread); the wake came too late (a wake on
+// time, with the same pass, would have made the blank); the pass ran long
+// (it would not have fit even from an on-time wake); or the pass ended in
+// time and the sweep was past anyway when the aim looked. An overrun (the
+// counter moved but no blank came within the aim's bound) is the caller's
+// to name, from the aim.
+typedef enum {
+	FC_LATE_OFF_CPU,
+	FC_LATE_WAKE,
+	FC_LATE_PASS,
+	FC_LATE_PAST,
+	FC_LATE_OVERRUN,
+	FC_LATE_CAUSES
+} fc_late_t;
+
+fc_late_t frame_clock_late_cause(bool off_cpu, uint64_t wake_at_us, uint64_t woke_us,
+                                 uint64_t pass_end_us, uint64_t blank_end_us);
+
+// When the aimed-at blank ends (its lines' length after it begins).
+uint64_t frame_clock_blank_end_us(const fc_frame_t *f, uint64_t blank_at_us);
+
+// How late a wake arrived, by bucket: under 50 us << k for k = 0..5, then
+// 1.6 ms or more.
+#define FC_WAKE_BUCKETS 7
+uint32_t frame_clock_wake_bucket(uint64_t late_us);
+
+// ── Without a beam (FRAME_CLOCK.md § 7) ────────────────────────────────────
+// The free clock: one frame every FC_FREE_PERIOD_NS. The next frame after
+// `now_ns` is `prev_ns` plus whole periods, the first past now, so a late
+// frame skips forward rather than the clock drifting; 0 starts it at now
+// plus a period. In nanoseconds, so the sixtieth of a second is rounded
+// once (to 16,666,667 ns) rather than once a frame.
+#define FC_FREE_PERIOD_NS 16666667ull
+uint64_t frame_clock_free_next_ns(uint64_t prev_ns, uint64_t now_ns);
+
+// ── The wake's timer count ─────────────────────────────────────────────────
+// The compositor's CPU's one-shot is set for the wake, unless the lease
+// (`lease_ms`, 0 = none) is sooner: never longer than the lease, so the CPU
+// is preempted at least as often as the lease alone would. The count is in
+// the timer's ticks, at least 1 and at most the 32-bit register's reach;
+// `wake_first` says which of the two it is.
+typedef struct {
+	uint32_t count;
+	bool wake_first;
+} fc_timer_t;
+
+fc_timer_t frame_clock_timer(uint64_t wake_in_us, uint64_t ticks_per_second, uint32_t lease_ms);
+
+// ── The reservation (FRAME_CLOCK.md § 9) ───────────────────────────────────
+// While the clock runs, the compositor's CPU is kept for threads pinned to
+// it, with at least FC_RESERVE_MIN_CPUS CPUs and the dial on; below that
+// the CPU is shared, as without the clock.
+#define FC_RESERVE_MIN_CPUS 4
+bool frame_clock_reserves(uint32_t cpus, bool dial_on, bool running);
+
 // ── Measuring the period at start ──────────────────────────────────────────
 // The counter is read in a tight loop, each reading stamped, and fed here.
 // The period is measured between two LINE CHANGES, each seen within

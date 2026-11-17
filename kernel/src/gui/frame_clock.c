@@ -245,6 +245,110 @@ bool frame_clock_keep_running(fc_run_t *r, bool damage, uint32_t waiting)
 	return r->idle_frames <= FC_LINGER_FRAMES;
 }
 
+// ── Planning a frame ────────────────────────────────────────────────────────
+// In nanoseconds inside, so a blank's start is not rounded once per frame.
+
+static uint64_t blank_ns_after(const fc_frame_t *f, uint32_t line, uint64_t now_us)
+{
+	uint64_t lines_to = (f->blank_start + f->lines - line % f->lines) % f->lines;
+	return now_us * 1000 + lines_to * f->period_ns / f->lines;
+}
+
+fc_plan_t frame_clock_plan(const fc_frame_t *f, uint32_t line, uint64_t now_us, uint32_t lead_us)
+{
+	fc_plan_t p = { now_us, now_us };
+	if (!frame_clock_frame_valid(f))
+		return p;
+	uint64_t blank = blank_ns_after(f, line, now_us);
+	uint64_t earliest = now_us * 1000 + (uint64_t)lead_us * 1000;
+	if (blank < earliest)
+		blank += ((earliest - blank) / f->period_ns + 1) * f->period_ns;
+	p.blank_at_us = blank / 1000;
+	p.wake_at_us = p.blank_at_us - lead_us;
+	return p;
+}
+
+uint64_t frame_clock_blank_end_us(const fc_frame_t *f, uint64_t blank_at_us)
+{
+	if (!frame_clock_frame_valid(f))
+		return blank_at_us;
+	uint64_t blank_lines = f->lines - frame_clock_active_rows(f);
+	return blank_at_us + (blank_lines * f->period_ns / f->lines + 999) / 1000;
+}
+
+fc_aim_t frame_clock_aim(const fc_frame_t *f, uint32_t line, uint64_t now_us, uint64_t blank_at_us)
+{
+	if (!frame_clock_frame_valid(f))
+		return FC_AIM_LATE;
+	if (frame_clock_in_blank(f, line))
+		return FC_AIM_COPY;
+	return now_us >= frame_clock_blank_end_us(f, blank_at_us) ? FC_AIM_LATE : FC_AIM_WAIT;
+}
+
+uint64_t frame_clock_aim_bound_us(const fc_frame_t *f, uint32_t lead_us)
+{
+	if (!frame_clock_frame_valid(f))
+		return lead_us;
+	return lead_us + (FC_AIM_SLACK_LINES * f->period_ns / f->lines + 999) / 1000;
+}
+
+fc_late_t frame_clock_late_cause(bool off_cpu, uint64_t wake_at_us, uint64_t woke_us,
+                                 uint64_t pass_end_us, uint64_t blank_end_us)
+{
+	if (off_cpu)
+		return FC_LATE_OFF_CPU;
+	if (pass_end_us < blank_end_us)
+		return FC_LATE_PAST;
+	uint64_t pass = pass_end_us > woke_us ? pass_end_us - woke_us : 0;
+	uint64_t budget = blank_end_us > wake_at_us ? blank_end_us - wake_at_us : 0;
+	return pass <= budget ? FC_LATE_WAKE : FC_LATE_PASS;
+}
+
+uint32_t frame_clock_wake_bucket(uint64_t late_us)
+{
+	uint32_t k = 0;
+	while (k < FC_WAKE_BUCKETS - 1 && late_us >= (50ull << k))
+		k++;
+	return k;
+}
+
+uint64_t frame_clock_free_next_ns(uint64_t prev_ns, uint64_t now_ns)
+{
+	if (prev_ns == 0)
+		return now_ns + FC_FREE_PERIOD_NS;
+	uint64_t next = prev_ns + FC_FREE_PERIOD_NS;
+	if (next <= now_ns)
+		next += ((now_ns - next) / FC_FREE_PERIOD_NS + 1) * FC_FREE_PERIOD_NS;
+	return next;
+}
+
+fc_timer_t frame_clock_timer(uint64_t wake_in_us, uint64_t ticks_per_second, uint32_t lease_ms)
+{
+	if (wake_in_us > 1000000000ull)
+		wake_in_us = 1000000000ull;   // a thousand seconds: past the register's reach anyway
+	uint64_t wake = ticks_per_second * wake_in_us / 1000000;
+	if (wake == 0)
+		wake = 1;
+	fc_timer_t t = { 0, true };
+	uint64_t count = wake;
+	if (lease_ms != 0) {
+		uint64_t lease = ticks_per_second * lease_ms / 1000;
+		if (lease == 0)
+			lease = 1;
+		if (lease <= wake) {
+			count = lease;
+			t.wake_first = false;
+		}
+	}
+	t.count = count > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)count;
+	return t;
+}
+
+bool frame_clock_reserves(uint32_t cpus, bool dial_on, bool running)
+{
+	return running && dial_on && cpus >= FC_RESERVE_MIN_CPUS;
+}
+
 // ── Measuring the period ────────────────────────────────────────────────────
 
 void frame_clock_measure_begin(fc_measure_t *m, uint32_t lines)

@@ -680,6 +680,132 @@ static void test_measure(void)
 		CHECK(strcmp(frame_clock_measure_reason_name((fc_measure_reason_t)r), "unknown") != 0, "reason %d has a name", r);
 }
 
+// ── Planning a frame, the aim, and why a frame was late ─────────────────────
+
+static void test_plan(void)
+{
+	fc_frame_t f = frame_of(&P5);
+	uint64_t period_us = f.period_ns / 1000;
+	// Twenty lines before the blank, a 500 us lead: this blank (225 us away)
+	// is too close, so the next one.
+	fc_plan_t p = frame_clock_plan(&f, 1458, 1000000, 500);
+	uint64_t this_blank = 1000000 + 20ull * f.period_ns / 1481 / 1000;
+	CHECK(p.blank_at_us >= this_blank + period_us && p.blank_at_us <= this_blank + period_us + 1,
+	      "a blank closer than the lead is passed over: %lu", p.blank_at_us);
+	CHECK(p.wake_at_us == p.blank_at_us - 500, "the wake is the lead before");
+	// Mid-screen with the same lead: this frame's blank.
+	p = frame_clock_plan(&f, 38 + 700, 1000000, 500);
+	CHECK(p.blank_at_us < 1000000 + period_us, "mid-screen aims at this frame's blank");
+	// A lead longer than a frame skips as many as it must.
+	fc_frame_t fast = { 100, 95, 2, 2000000 };   // 500 Hz
+	p = frame_clock_plan(&fast, 50, 0, 8000);
+	CHECK(p.blank_at_us >= 8000 && p.blank_at_us < 10000, "a lead of four frames: %lu", p.blank_at_us);
+
+	// Against the model: the blank is the first one at least the lead away.
+	for (int round = 0; round < 3000; round++) {
+		display_t d = { (uint32_t)rnd_in(20, 3000), 0, 0, (uint64_t)rnd_in(2000, 40000), (uint64_t)rnd_in(0, 100000) };
+		d.blank_start = (uint32_t)rnd_in(0, d.lines - 1);
+		d.blank_end = (d.blank_start + (uint32_t)rnd_in(1, d.lines / 3 + 1)) % d.lines;
+		if (d.blank_end == d.blank_start)
+			d.blank_end = (d.blank_start + 1) % d.lines;
+		fc_frame_t g = frame_of(&d);
+		uint64_t n = (uint64_t)rnd_in(1000, 100000);
+		uint32_t lead = (uint32_t)rnd_in(0, 9000);
+		uint64_t now_ns = n * d.line_ns, now_us = now_ns / 1000;
+		uint64_t m = n;
+		while (counter_at_line(&d, m) != d.blank_start || m * d.line_ns < now_us * 1000 + lead * 1000ull)
+			m++;
+		uint64_t exact_us = m * d.line_ns / 1000;
+		fc_plan_t q = frame_clock_plan(&g, counter_at_line(&d, n), now_us, lead);
+		CHECK(q.blank_at_us + 1 >= exact_us && q.blank_at_us <= exact_us + 1,
+		      "round %d: plan %lu, model %lu (lead %u)", round, q.blank_at_us, exact_us, lead);
+		CHECK(q.wake_at_us + lead == q.blank_at_us && q.wake_at_us + 1 >= now_us, "round %d: the wake is not in the past", round);
+	}
+}
+
+static void test_aim(void)
+{
+	fc_frame_t f = frame_of(&P5);
+	uint64_t blank_at = 5000000;
+	uint64_t blank_end = frame_clock_blank_end_us(&f, blank_at);
+	CHECK(blank_end >= blank_at + 461 && blank_end <= blank_at + 463, "the P5's blank lasts 462 us: %lu", blank_end - blank_at);
+	CHECK(frame_clock_aim(&f, 1478, blank_at, blank_at) == FC_AIM_COPY, "the blank's first line copies");
+	CHECK(frame_clock_aim(&f, 37, blank_at + 400, blank_at) == FC_AIM_COPY, "its last line copies");
+	CHECK(frame_clock_aim(&f, 1400, blank_at - 900, blank_at) == FC_AIM_WAIT, "approaching the blank waits");
+	CHECK(frame_clock_aim(&f, 1477, blank_at + 3, blank_at) == FC_AIM_WAIT,
+	      "shown rows as the blank should begin: it has not quite begun");
+	CHECK(frame_clock_aim(&f, 38, blank_end, blank_at) == FC_AIM_LATE, "row 0 once the blank has ended: late");
+	CHECK(frame_clock_aim(&f, 500, blank_end + 4000, blank_at) == FC_AIM_LATE, "mid-screen after it: late");
+	CHECK(frame_clock_aim(&f, 500, blank_end - 1, blank_at) == FC_AIM_WAIT, "until the blank must have ended, wait");
+	fc_frame_t bad = { 0 };
+	CHECK(frame_clock_aim(&bad, 0, 0, 0) == FC_AIM_LATE, "a frame that makes no sense is late, never a copy");
+	CHECK(frame_clock_aim_bound_us(&f, 1000) >= 1000 + 90 && frame_clock_aim_bound_us(&f, 1000) <= 1000 + 91,
+	      "the aim's bound is the lead and 8 lines: %lu", frame_clock_aim_bound_us(&f, 1000));
+}
+
+static void test_late_cause(void)
+{
+	// The aimed-at blank ends at 10,000; the wake was due at 8,000.
+	CHECK(frame_clock_late_cause(true, 8000, 8000, 9000, 10000) == FC_LATE_OFF_CPU, "off its CPU comes first");
+	CHECK(frame_clock_late_cause(false, 8000, 8000, 9000, 10000) == FC_LATE_PAST, "the pass ended in time: past");
+	CHECK(frame_clock_late_cause(false, 8000, 9500, 10500, 10000) == FC_LATE_WAKE,
+	      "a 1 ms pass from a wake 1.5 ms late: an on-time wake would have made it");
+	CHECK(frame_clock_late_cause(false, 8000, 8000, 10001, 10000) == FC_LATE_PASS, "on time and still past: the pass");
+	CHECK(frame_clock_late_cause(false, 8000, 8100, 10200, 10000) == FC_LATE_PASS,
+	      "a 2.1 ms pass would not fit the 2 ms from an on-time wake");
+	CHECK(frame_clock_late_cause(false, 8000, 8000, 10000, 10000) == FC_LATE_WAKE,
+	      "a pass exactly as long as the budget is the wake's");
+	CHECK(frame_clock_late_cause(false, 8000, 7000, 10500, 10000) == FC_LATE_PASS, "an early wake cannot be blamed");
+}
+
+static void test_wake_bucket_and_free(void)
+{
+	CHECK(frame_clock_wake_bucket(0) == 0 && frame_clock_wake_bucket(49) == 0, "under 50 us");
+	CHECK(frame_clock_wake_bucket(50) == 1 && frame_clock_wake_bucket(99) == 1, "under 100 us");
+	CHECK(frame_clock_wake_bucket(799) == 4 && frame_clock_wake_bucket(800) == 5, "under 1.6 ms");
+	CHECK(frame_clock_wake_bucket(1600) == 6 && frame_clock_wake_bucket(1ull << 40) == 6, "1.6 ms or more");
+
+	CHECK(frame_clock_free_next_ns(0, 1000) == 1000 + FC_FREE_PERIOD_NS, "the free clock starts a period on");
+	CHECK(frame_clock_free_next_ns(5000, 6000) == 5000 + FC_FREE_PERIOD_NS, "the next period");
+	CHECK(frame_clock_free_next_ns(5000, 5000 + FC_FREE_PERIOD_NS) == 5000 + 2 * FC_FREE_PERIOD_NS,
+	      "on a boundary, the one after");
+	CHECK(frame_clock_free_next_ns(5000, 5000 + 3 * FC_FREE_PERIOD_NS + 7) == 5000 + 4 * FC_FREE_PERIOD_NS,
+	      "late by three periods, skips to the fourth on the grid");
+	uint64_t t = 0, now = 123;
+	for (int i = 0; i < 600; i++) {
+		t = frame_clock_free_next_ns(t, now);
+		now = t;
+	}
+	CHECK(t - 123 == 600 * FC_FREE_PERIOD_NS, "600 frames are 600 periods exactly: ten seconds and 200 ns");
+}
+
+static void test_timer(void)
+{
+	uint64_t tps = 62500000;   // a 1 GHz bus divided by 16
+	fc_timer_t t = frame_clock_timer(5000, tps, 10);
+	CHECK(t.wake_first && t.count == 312500, "a 5 ms wake under a 10 ms lease: %u", t.count);
+	t = frame_clock_timer(13000, tps, 10);
+	CHECK(!t.wake_first && t.count == 625000, "a 13 ms wake: the lease first");
+	t = frame_clock_timer(10000, tps, 10);
+	CHECK(!t.wake_first, "a tie is the lease's");
+	t = frame_clock_timer(13000, tps, 0);
+	CHECK(t.wake_first && t.count == 812500, "no lease: the wake alone");
+	t = frame_clock_timer(0, tps, 10);
+	CHECK(t.wake_first && t.count == 1, "a wake already due: one tick, never zero (zero stops the timer)");
+	t = frame_clock_timer(1ull << 50, tps, 0);
+	CHECK(t.count == 0xFFFFFFFFu, "a wake past the register's reach is the most it holds");
+	t = frame_clock_timer(5000, 10, 1);
+	CHECK(t.count == 1 && !t.wake_first, "a lease too short to count is one tick");
+}
+
+static void test_reserve(void)
+{
+	CHECK(frame_clock_reserves(4, true, true), "four CPUs, the dial on, running: reserved");
+	CHECK(!frame_clock_reserves(3, true, true), "three CPUs: shared");
+	CHECK(!frame_clock_reserves(12, false, true), "the dial off: shared");
+	CHECK(!frame_clock_reserves(12, true, false), "the clock stopped: shared");
+}
+
 int main(int argc, char **argv)
 {
 	int rounds = argc > 1 ? atoi(argv[1]) : 3000;
@@ -692,6 +818,12 @@ int main(int argc, char **argv)
 	test_strips();
 	test_keep_running();
 	test_measure();
+	test_plan();
+	test_aim();
+	test_late_cause();
+	test_wake_bucket_and_free();
+	test_timer();
+	test_reserve();
 	printf("frame_clock: %d checks, %d failed\n", s_checks, s_failures);
 	return s_failures ? 1 : 0;
 }
