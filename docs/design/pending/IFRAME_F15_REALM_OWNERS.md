@@ -1,5 +1,7 @@
 # F15 — actual realm owners and checked source access
 
+Implementation PR: **#643**, source `48e10c85`.
+
 Proof baseline: merged `userland` `60301c0d`, embedding ABI 5 and bytecode ABI 6.
 The shipping engine digest is
 `36d2ff8a0092e5ce32441ad2f6defef276a9aa2ec735600f247078cbbaf657d2`.
