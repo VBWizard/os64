@@ -1432,7 +1432,8 @@ by its own CPU's one-shot the lead before the blank (`frame_wake_set`, the
 timer's second writer beside the lease: it sets the timer again after every
 return from its halt, which is what lets the two share it), aims, and copies
 at the blank in strips; a missed blank holds the frame a refresh, counted
-by cause, never shown torn. While it runs, with four CPUs or more, its CPU
+by cause, and a frame held once that misses again is FORCED onto the glass
+wherever the sweep is, so the screen never freezes (it may tear). While it runs, with four CPUs or more, its CPU
 is RESERVED: only threads pinned there run on it (`kSchedReservedCPU`,
 read by every pass's eligibility test), and `/sys/gui` takes `reserve on`
 / `reserve off` lines to compare. With nothing to show it STOPS, which is

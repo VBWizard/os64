@@ -188,6 +188,23 @@ typedef enum {
 fc_late_t frame_clock_late_cause(bool off_cpu, uint64_t wake_at_us, uint64_t woke_us,
                                  uint64_t pass_end_us, uint64_t blank_end_us);
 
+// ── A missed blank (FRAME_CLOCK.md § 9, the hold rule) ─────────────────────
+// A composed frame that misses its blank is HELD for the next one, which a
+// single miss deserves: shown at the next blank, whole. A frame already held
+// once is FORCED at its next pass: copied at the blank if that pass makes
+// it, and wherever the sweep is if it does not, so it may tear. One rule for
+// every cause of lateness, and the property it buys: what the compositor
+// has composed is on the glass within two of its own passes, so a starved or
+// slow compositor tears, as before the clock, and never freezes the screen.
+// `made_blank` is this pass's aim; the step remembers whether the frame
+// being carried was held already.
+typedef enum { FC_SHOW_COPY, FC_SHOW_HOLD, FC_SHOW_FORCE } fc_show_t;
+typedef struct {
+	bool held;
+} fc_hold_t;
+
+fc_show_t frame_clock_hold_step(fc_hold_t *h, bool made_blank);
+
 // When the aimed-at blank ends (its lines' length after it begins).
 uint64_t frame_clock_blank_end_us(const fc_frame_t *f, uint64_t blank_at_us);
 

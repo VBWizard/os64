@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to the frame clock's rules
 (kernel/src/gui/frame_clock.c: the frame's facts, the next blank, the
-bands, the verdict on a copy, the lead, the strips, when the clock runs, and
-measuring the period), against tools/test_frame_clock_host.sh: a mutant is
+bands, the verdict on a copy, the lead, the strips, when the clock runs, the
+plan and the aim, why a frame was late, the wake's timer, the reservation,
+the hold rule, and measuring the period), against tools/test_frame_clock_host.sh: a mutant is
 CAUGHT when the suite fails, MISSED when it passes, which means a test is
 missing and gets written. A break that changes nothing a rule promises is
 not in the list; the comment after it says which and why. A build failure is
@@ -145,6 +146,12 @@ mutants = [
     ('three-cpus-reserve', 'cpus >= FC_RESERVE_MIN_CPUS', 'cpus >= FC_RESERVE_MIN_CPUS - 1'),
     ('the-dial-is-ignored', 'return running && dial_on && cpus', 'return running && (dial_on || 1) && cpus'),
     ('a-stopped-clock-reserves', 'return running && dial_on && cpus', 'return (running || 1) && dial_on && cpus'),
+    # A missed blank.
+    ('a-held-frame-is-held-forever', '	h->held = false;\n	return FC_SHOW_FORCE;', '	return FC_SHOW_HOLD;'),
+    ('a-first-miss-is-forced', '	if (!h->held) {\n		h->held = true;\n		return FC_SHOW_HOLD;', '	if (0) {\n		h->held = true;\n		return FC_SHOW_HOLD;'),
+    ('a-copy-keeps-the-hold', '	if (made_blank) {\n		h->held = false;\n		return FC_SHOW_COPY;', '	if (made_blank) {\n		return FC_SHOW_COPY;'),
+    ('a-force-keeps-the-hold', '	h->held = false;\n	return FC_SHOW_FORCE;', '	return FC_SHOW_FORCE;'),
+    ('a-made-blank-is-held', '	if (made_blank) {\n		h->held = false;\n		return FC_SHOW_COPY;\n	}', '	if (made_blank && h->held) {\n		h->held = false;\n		return FC_SHOW_COPY;\n	}'),
     # Measuring the period.
     ('a-reading-beyond-the-frame-is-a-line', '	if (m->lines == 0 || raw >= m->lines) {', '	if (m->lines == 0) {'),
     ('a-wrap-must-drop-a-whole-frame', '		if (m->prev - raw > m->lines / 2)', '		if (m->prev - raw > m->lines - 1)'),

@@ -815,6 +815,65 @@ static void test_reserve(void)
 	CHECK(!frame_clock_reserves(12, true, false), "the clock stopped: shared");
 }
 
+// The hold rule, against a model: each pass composes something new; the
+// glass shows what a COPY or a FORCE took, and keeps what it had on a HOLD.
+// Whatever the misses, what was composed reaches the glass within two of
+// the compositor's own passes.
+static void test_hold(int rounds)
+{
+	fc_hold_t h = {0};
+	CHECK(frame_clock_hold_step(&h, true) == FC_SHOW_COPY && !h.held, "a frame that makes its blank is copied");
+	CHECK(frame_clock_hold_step(&h, false) == FC_SHOW_HOLD && h.held, "one miss: held for the next blank");
+	CHECK(frame_clock_hold_step(&h, true) == FC_SHOW_COPY && !h.held, "a held frame that makes the next blank is copied");
+	CHECK(frame_clock_hold_step(&h, false) == FC_SHOW_HOLD, "a fresh miss after a copy is held again, not forced");
+	CHECK(frame_clock_hold_step(&h, false) == FC_SHOW_FORCE && !h.held, "a second miss: forced");
+	CHECK(frame_clock_hold_step(&h, false) == FC_SHOW_HOLD, "after a force the next frame is new, and may be held once");
+
+	// Every frame missing, for a long run (the 2026-11-17 freeze, where a
+	// co-tenant took the compositor's CPU at every wake): the screen must
+	// keep changing.
+	h = (fc_hold_t){0};
+	uint64_t glass = 0, shown_at = 0;
+	for (uint64_t pass = 1; pass <= 10000; pass++) {
+		fc_show_t s = frame_clock_hold_step(&h, false);
+		if (s != FC_SHOW_HOLD) {
+			glass = pass;
+			shown_at = pass;
+		}
+		if (pass - shown_at >= 2) {
+			CHECK(false, "every frame late: the glass stood still from pass %lu to %lu", shown_at, pass);
+			break;
+		}
+	}
+	CHECK(glass >= 9999, "every frame late: the last thing composed is on the glass (%lu)", glass);
+
+	// Random misses: the glass is never more than one pass behind, and a
+	// frame is forced only after a hold.
+	srand(7);
+	h = (fc_hold_t){0};
+	uint64_t last_shown = 0;
+	fc_show_t prev = FC_SHOW_COPY;
+	for (int pass = 1; pass <= rounds * 10; pass++) {
+		bool made = (rand() % 3) == 0;
+		fc_show_t s = frame_clock_hold_step(&h, made);
+		if (made && s != FC_SHOW_COPY) {
+			CHECK(false, "pass %d made its blank and was not copied", pass);
+			break;
+		}
+		if (s == FC_SHOW_FORCE && prev != FC_SHOW_HOLD) {
+			CHECK(false, "pass %d forced a frame that was never held", pass);
+			break;
+		}
+		if (s != FC_SHOW_HOLD)
+			last_shown = (uint64_t)pass;
+		if ((uint64_t)pass - last_shown >= 2) {
+			CHECK(false, "random misses: the glass stood still from pass %lu to %d", last_shown, pass);
+			break;
+		}
+		prev = s;
+	}
+}
+
 int main(int argc, char **argv)
 {
 	int rounds = argc > 1 ? atoi(argv[1]) : 3000;
@@ -833,6 +892,7 @@ int main(int argc, char **argv)
 	test_wake_bucket_and_free();
 	test_timer();
 	test_reserve();
+	test_hold(rounds);
 	printf("frame_clock: %d checks, %d failed\n", s_checks, s_failures);
 	return s_failures ? 1 : 0;
 }

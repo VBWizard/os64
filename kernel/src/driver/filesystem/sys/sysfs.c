@@ -1657,11 +1657,13 @@ static void sys_gen_gui_frame_clock_state(synth_text_t *t, const gui_composite_c
 		uint64_t late = 0;
 		for (int k = 0; k < FC_LATE_CAUSES; k++)
 			late += c->late[k];
+		// `late` counts missed blanks; a frame held once and missing again is
+		// also `forced`: copied wherever the sweep was (frame_clock_hold_step).
 		synth_text_addf(t, "frame clock frames%s: %lu, %lu late (off its CPU %lu, the wake %lu, "
-		                "the pass %lu, past the blank %lu, overran the aim %lu)\n",
+		                "the pass %lu, past the blank %lu, overran the aim %lu), %lu forced\n",
 		                pass == 0 ? "" : " since this file was last read", c->frames, late,
 		                c->late[FC_LATE_OFF_CPU], c->late[FC_LATE_WAKE], c->late[FC_LATE_PASS],
-		                c->late[FC_LATE_PAST], c->late[FC_LATE_OVERRUN]);
+		                c->late[FC_LATE_PAST], c->late[FC_LATE_OVERRUN], c->forced);
 	}
 	uint64_t aim_avg = comp->clk.aims ? comp->clk.aim_us / comp->clk.aims : 0;
 	synth_text_addf(t, "frame clock lead: %u us; aims %lu, %lu us average, longest %lu us, "

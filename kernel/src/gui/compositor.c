@@ -441,6 +441,7 @@ static void frame_clock_counts_add(gui_frame_clock_count_t *into, const gui_fram
 	into->frames += from->frames;
 	for (int c = 0; c < FC_LATE_CAUSES; c++)
 		into->late[c] += from->late[c];
+	into->forced += from->forced;
 	into->aims += from->aims;
 	into->aim_us += from->aim_us;
 	if (from->aim_max_us > into->aim_max_us)
@@ -504,7 +505,9 @@ static void frame_clock_judge_copy(const rect_t *damage, uint32_t count, uint32_
 // blank begins), copy the frame top to bottom in strips, then plan the next.
 // A frame whose blank is missed is LATE: nothing is copied, the rectangles
 // are CARRIED, and the next frame copies them with whatever arrives since,
-// so a late frame costs a refresh and never tears. With nothing to show and
+// so a late frame costs a refresh and does not tear. A frame held once and
+// late again is FORCED, copied wherever the sweep is (fc_missed): it may
+// tear, but the screen never stands still. With nothing to show and
 // nobody waiting, the clock STOPS: the compositor halts as it does with the
 // clock off, and new work NUDGES it awake (gui_frame_nudge). Without a beam
 // the clock runs FREE: a sixtieth of a second on micros_now(), no aim.
@@ -550,6 +553,9 @@ static rect_t s_fc_carry[DAMAGE_MAX_RECTS];
 static uint32_t s_fc_carry_count;
 static glass_pending_t s_fc_glass_carry[GLASS_PENDING_MAX];
 static uint32_t s_fc_glass_carry_count;
+// Whether what is carried was held at a missed blank already (the hold
+// rule, frame_clock_hold_step). Whatever copies or drops the carry ends it.
+static fc_hold_t s_fc_hold;
 
 static fc_piece_t s_fc_pieces[FC_COPY_PIECES];
 
@@ -650,6 +656,7 @@ static void fc_drop_carry(void)
 	glass_settle(s_fc_glass_carry, s_fc_glass_carry_count, false);
 	s_fc_glass_carry_count = 0;
 	s_fc_carry_count = 0;
+	s_fc_hold = (fc_hold_t){0};
 	s_fc_planned = false;
 }
 
@@ -734,11 +741,32 @@ static void fc_copy(bool judge, uint32_t begin_line, uint64_t begin_us, uint64_t
 	glass_settle(s_fc_glass_carry, s_fc_glass_carry_count, true);
 	s_fc_glass_carry_count = 0;
 	s_fc_carry_count = 0;
+	s_fc_hold = (fc_hold_t){0};
 	s_fc_clk_owed.frames++;
 }
 
+// The frame missed its blank: held for the next one if this is its first
+// miss, forced if it was held already (the hold rule, frame_clock_hold_step),
+// so the screen keeps changing whatever makes every frame late. `cause` is
+// counted as late; FC_LATE_CAUSES is a miss that is not lateness (no reading
+// of the sweep to aim by) and counts nothing but a force. A forced copy is
+// judged from a fresh reading when one can be had, so `torn` says what
+// forcing cost.
+static void fc_missed(fc_late_t cause, uint64_t *flushes)
+{
+	if (cause < FC_LATE_CAUSES)
+		s_fc_clk_owed.late[cause]++;
+	if (frame_clock_hold_step(&s_fc_hold, false) != FC_SHOW_FORCE)
+		return;
+	s_fc_clk_owed.forced++;
+	uint32_t line = 0;
+	bool read = beam_present() && beam_line(&line);
+	fc_copy(read, line, read ? micros_now() : 0, flushes);
+}
+
 // After the pass, with the clock driving and the screen ours: carry what it
-// composed, then aim and copy, or hold the frame late.
+// composed, then aim and copy, or hold the frame late (or force it, if it
+// was held already).
 static void frame_clock_present(const rect_t *damage, uint32_t count, const glass_pending_t *taken,
                                 uint32_t taken_count, uint64_t *flushes)
 {
@@ -773,7 +801,9 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 		if (!beam_line(&line)) {
 			if (!beam_present())
 				fc_copy(false, 0, 0, flushes);
-			return;   // a failed read: the carry waits for the next frame
+			else
+				fc_missed(FC_LATE_CAUSES, flushes);   // a failed read: nothing to aim by
+			return;
 		}
 		fc_plan_t p = frame_clock_plan(&f, line, micros_now(), FC_LEAD_MIN_US);
 		s_fc_blank_at = p.blank_at_us;
@@ -857,17 +887,18 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 			return;
 		}
 		if (!changed && !beam_line(&line)) {
-			s_fc_clk_owed.late[FC_LATE_PAST]++;   // no reading to copy by: held a frame
+			fc_missed(FC_LATE_PAST, flushes);   // no reading to copy by
 			return;
 		}
 		now = micros_now();
 		if (!frame_clock_in_blank(&f, line)) {
-			s_fc_clk_owed.late[FC_LATE_PAST]++;   // the blank ended while it was confirmed
+			fc_missed(FC_LATE_PAST, flushes);   // the blank ended while it was confirmed
 			return;
 		}
 	}
 
 	if (verdict == FC_AIM_COPY) {
+		frame_clock_hold_step(&s_fc_hold, true);
 		uint64_t aim = now - t0;
 		s_fc_clk_owed.aims++;
 		s_fc_clk_owed.aim_us += aim;
@@ -878,12 +909,12 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 		bool off_cpu = s_fc_self->timesLoaded != s_fc_loads;
 		fc_late_t cause = frame_clock_late_cause(off_cpu, s_fc_wake_at, s_fc_woke, pass_end,
 		                                         frame_clock_blank_end_us(&f, s_fc_blank_at));
-		s_fc_clk_owed.late[cause]++;
+		fc_missed(cause, flushes);
 	} else if (seen && !moved) {
 		beam_withdraw("the line counter stopped during an aim");
 		fc_copy(false, 0, 0, flushes);
 	} else if (seen) {
-		s_fc_clk_owed.late[FC_LATE_OVERRUN]++;
+		fc_missed(FC_LATE_OVERRUN, flushes);
 	} else {
 		// No reading succeeded within the bound, and too few failed in a row
 		// to withdraw the beam: nothing to aim by, so this frame goes unaimed

@@ -89,9 +89,16 @@ While the clock runs, one frame is:
   hundred microseconds a frame.
 - **The lead adapts**: the cost of recent passes, plus a margin, between
   half a millisecond and eight.
-- **Late is held, not shown.** If the pass ends after the blank's first
-  lines have gone, the copy waits for the next blank. A late frame costs
-  one refresh of delay and is counted; it does not tear.
+- **Late is held once, then shown.** If the pass ends after the blank's
+  first lines have gone, the copy waits for the next blank. A late frame
+  costs one refresh of delay and is counted; it does not tear. A frame
+  held once that misses again is FORCED: copied at its next pass wherever
+  the sweep is, and counted. The property: **what the compositor has
+  composed is on the glass within two of its own passes.** Without the
+  bound, anything that makes every frame late froze the screen for as long
+  as it lasted (the P5, 2026-11-17: a thread pinned to the compositor's
+  CPU took it at every wake); with it, a starved or slow compositor tears,
+  as before the clock, and `/sys/gui` says how often.
 - **Torn is counted, not assumed absent.** If something held the
   compositor off mid-copy and the sweep passed it, the check sees it.
   The number says whether the copy needs protecting (§ For Chris 3).
@@ -212,7 +219,7 @@ clears the flag whenever it re-arms or stops the timer.
 | **composing** | the lease, re-armed by the wake's pass | the pass ends: **aiming** with a beam, **copying** without one | today's pass, under `kGuiLock` (interrupts off inside the lock) |
 | **aiming** | the lease | the sweep enters the blank: **copying**. If the first reading was already in the blank, the counter must change within 3 lines first, or the beam is withdrawn as frozen and **free** (a counter stopped at a blank line would otherwise look like a perfect aim every frame); only a window actually watched counts, so a gap longer than a line between readings, or a failed read, makes it inconclusive, nothing is withdrawn, and a fresh reading decides that frame. The sweep is in shown rows having left the blank: **late**. The counter does not move within the bound (the lead plus 8 lines): withdrawn as frozen, and **free**. The counter moves but no blank arrives within the bound: **late**, counted as an overrun. No reading succeeds within the bound: the frame goes unaimed | compositor thread, interrupts on, no lock. It polls the beam |
 | **copying** | the lease | the strips are done; F1's two readings judge the copy (`torn` now means held off mid-copy). Then **running**, or **stopped** if `frame_clock_keep_running` says so. The screen is asked for again before every strip: a text terminal that took it during the sleep or the aim voids what is carried, and the copy ends | compositor thread, interrupts on, outside `kGuiLock` |
-| **late** (holding) | the next wake, one frame on | as **running** | nothing is copied; the back buffer keeps what was composed and the next pass adds what has arrived since. Counted |
+| **late** (holding) | the next wake, one frame on | as **running** | nothing is copied; the back buffer keeps what was composed and the next pass adds what has arrived since. Counted by cause. A frame that was held already is not held again: it is **forced**, copied at once wherever the sweep is, judged, and counted (`frame_clock_hold_step`) |
 | **free** (no beam, or withdrawn) | the earlier of the next period (1/60 s, from `micros_now()`) and the lease | as **running**, with no aim and no check: the copy follows the pass | entered at start without a beam, or from **aiming** on a frozen counter, or when a read withdraws the beam |
 
 **Under `NOBACKSTOP` the clock is off.** With no lease nothing keeps the
@@ -315,7 +322,10 @@ after.
    to on the P5: with `glassbench` publishing a full screen at 60 fps on
    an otherwise idle desktop, fewer than one frame in a thousand is late.
    More than that is a finding to cure (the lead, or what held the
-   compositor off), not a number to live with.
+   compositor off), not a number to live with. **Held at most once**
+   (Chris, 2026-11-17, after the P5's freeze): a frame already held that
+   misses its next blank is forced onto the glass, torn if need be, and
+   counted (§ 3).
 3. **The copy runs with interrupts on, and `torn` is counted.** If the P5
    shows tears from the compositor being held off mid-copy, the copy runs
    with interrupts off (about 1.8 ms at full screen, on the compositor's

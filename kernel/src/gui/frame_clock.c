@@ -358,6 +358,22 @@ bool frame_clock_reserves(uint32_t cpus, bool dial_on, bool running)
 	return running && dial_on && cpus >= FC_RESERVE_MIN_CPUS;
 }
 
+// ── A missed blank ──────────────────────────────────────────────────────────
+
+fc_show_t frame_clock_hold_step(fc_hold_t *h, bool made_blank)
+{
+	if (made_blank) {
+		h->held = false;
+		return FC_SHOW_COPY;
+	}
+	if (!h->held) {
+		h->held = true;
+		return FC_SHOW_HOLD;
+	}
+	h->held = false;
+	return FC_SHOW_FORCE;
+}
+
 // ── Measuring the period ────────────────────────────────────────────────────
 
 void frame_clock_measure_begin(fc_measure_t *m, uint32_t lines)

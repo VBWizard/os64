@@ -199,7 +199,7 @@ Without a beam the block is three lines saying so.
 
 **Why.** With the clock on (FRAME_CLOCK.md § 9), the compositor's pace is
 its own: a CPU of its own while it runs, a wake before each blank, frames
-held late rather than shown torn. Each of those can go wrong in a way that
+held late once rather than shown torn. Each of those can go wrong in a way that
 only numbers show, and "was a CPU withheld, and for how much of the time"
 must be one `cat`.
 
@@ -210,8 +210,9 @@ must be one `cat`.
   CPUs, when the dial says `reserve off`, or while the clock is stopped);
 - the time the clock has run and stood stopped, and how many times it
   started;
-- frames, and the late ones by cause (off its CPU, the wake, the pass,
-  past the blank, overran the aim);
+- frames, the missed blanks by cause (off its CPU, the wake, the pass,
+  past the blank, overran the aim), and the frames forced onto the glass
+  after being held once (FRAME_CLOCK.md § 3);
 - the lead in use, and the aims that ended in a copy: their number,
   average and longest polling time;
 - its wakes: how many the compositor slept toward, the timer's frame-wake

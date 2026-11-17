@@ -92,14 +92,16 @@ typedef struct {
 } gui_frame_copies_t;
 
 // And what the frame clock itself did (FRAME_CLOCK.md § 9): the frames it
-// copied, the frames it held late by cause (gui/frame_clock.h, fc_late_t),
-// the aims that ended in a copy and their polling time, and the frame wakes
+// copied, the blanks its frames missed by cause (gui/frame_clock.h,
+// fc_late_t), the frames FORCED (copied without waiting for a blank, having
+// been held once: frame_clock_hold_step), the aims that ended in a copy and their polling time, and the frame wakes
 // it slept until with how late each arrived (frame_clock_wake_bucket); each
 // since boot and since the counts were last read. Kept by the compositor
 // thread and folded in at the next pass's hold, as the copies above are.
 typedef struct {
 	uint64_t frames;
 	uint64_t late[FC_LATE_CAUSES];
+	uint64_t forced;
 	uint64_t aims, aim_us, aim_max_us;
 	uint64_t wakes;
 	uint64_t wake_late[FC_WAKE_BUCKETS];
