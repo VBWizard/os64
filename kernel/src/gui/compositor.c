@@ -715,7 +715,12 @@ static void fr_answer(uint64_t blank_us, uint64_t epoch)
 	};
 	uint32_t held = 0;
 	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
-	s_fr_counts.answered += wm_frame_answer_locked(&ev, epoch, &held);
+	// The cover verdicts are the pass's; a text terminal that took the
+	// screen since (during the aim, the copy or a wait for the blank) covers
+	// every window, so nobody is answered and every request waits for the
+	// desktop's return.
+	if (gui_owns_glass())
+		s_fr_counts.answered += wm_frame_answer_locked(&ev, epoch, &held);
 	s_fr_counts.held_back += held;
 	gui_unlock(flags);
 }
@@ -970,12 +975,16 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 			s_fc_at = FC_AT_COMPOSED;
 			if (s_fc_blank_at > micros_now())
 				fc_halt_until(s_fc_blank_at);
+			// A text terminal can take the screen during that wait: then the
+			// desktop showed nothing, and no request is answered by it.
 			uint32_t line;
 			fc_frame_t f;
-			if (beam_present() && beam_frame(&f) && beam_line(&line))
-				fr_served(frame_clock_blank_began_us(&f, line, micros_now()));
-			else
-				fr_served(fr_planned_blank_us());
+			if (gui_owns_glass()) {
+				if (beam_present() && beam_frame(&f) && beam_line(&line))
+					fr_served(frame_clock_blank_began_us(&f, line, micros_now()));
+				else
+					fr_served(fr_planned_blank_us());
+			}
 		}
 		s_fc_planned = false;
 		return;

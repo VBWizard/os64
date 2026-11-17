@@ -389,12 +389,16 @@ static bool bound_window_covered(const os64_frame_clock_t *clock)
     return (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
 }
 
-// The elapsed time since the last boundary in whole milliseconds, rounded,
-// and the boundary moved to now.
+// The elapsed time since the last boundary in whole milliseconds, and the
+// boundary moved to now. Taken as the difference of the two instants'
+// whole milliseconds, not the rounded difference of the instants: the
+// fractions then carry from one call to the next, so a run of 16.67 ms
+// frames sums to its real length (rounding each one alone gained 2% at
+// 60 Hz, and every caller's animation ran that much fast).
 static uint64_t take_dt_ms(os64_frame_clock_t *clock)
 {
     uint64_t now = now_us();
-    uint64_t dt = (now - clock->last_us + 500) / 1000;
+    uint64_t dt = now / 1000 - clock->last_us / 1000;
     clock->last_us = now;
     return dt;
 }
