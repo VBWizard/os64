@@ -11986,17 +11986,21 @@ static void blob_page_refused(const char *url)
 }
 
 // A followed link to a blob: address: with a `download` attribute it is a
-// download of the entry the binding took inside the click (ask->blob), or,
-// a person's click asking nothing of the binding, taken now; without one
-// it is a page, refused. False for a link to any other address.
+// download of the entry the binding took inside the click (ask->blob, at
+// the address it was taken for, ask->url), or, with no entry taken (a
+// revoked address, or none named), the href resolved now as the binding
+// resolves it; without the attribute it is a page, refused. False for a
+// link to any other address.
 static bool blob_follow(const os64_dom_navigation_t *ask)
 {
     const os64_html_attr_t *href = ask->node != NULL ? os64_html_attr(ask->node, "href") : NULL;
     char url[OS64_DOM_URL_MAX];
-    // Resolved as the binding resolved it for its take (os64_dom_resolve,
-    // a link's own rule), so the two agree on which address this is.
-    if (href == NULL || !os64_dom_resolve(page_doc(&g.page), g.page.way.url, href->value, url, sizeof(url)) ||
-        !blob_scheme(url))
+    if (ask->blob != NULL)
+        os64_strcopy(url, sizeof(url), ask->url);
+    else if (href == NULL ||
+             !os64_dom_resolve(page_doc(&g.page), g.page.way.url, href->value, url, sizeof(url)))
+        return false;
+    if (!blob_scheme(url))
         return false;
     const os64_html_attr_t *download = os64_html_attr(ask->node, "download");
     if (download == NULL) {

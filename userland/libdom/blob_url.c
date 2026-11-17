@@ -26,6 +26,7 @@ struct os64_dom_blob {
     const char *type;
     const uint8_t *bytes;
     size_t length;
+    size_t charge;              /* the whole block, what the store's bound counts */
 };
 
 struct os64_dom_blob_store {
@@ -185,7 +186,9 @@ os64_dom_blob_t *d_blob_url_take(os64_dom_t *dom, const char *url)
 
 /* Names `bytes` in the store under "blob:<origin>/<uuid>": 0, the entry
  * made and its URL in *made (the entry's own text); -1 without memory; -2
- * past the store's bound. */
+ * past the store's bound. The bound counts each entry's whole block, its
+ * URL and type with its bytes, so empty Blobs with long types are held to
+ * it too. */
 static int name_entry(os64_dom_blob_store_t *s, const char *origin, const char *uuid, const uint8_t *bytes,
                       size_t length, const char *type, const char **made)
 {
@@ -194,14 +197,15 @@ static int name_entry(os64_dom_blob_store_t *s, const char *origin, const char *
     size_t head = sizeof(os64_dom_blob_t);
     if (length > SIZE_MAX - head - url_length - type_length - 2)
         return -2;
+    size_t charge = head + url_length + 1 + type_length + 1 + length;
     os64_lock_acquire(&s->lock);
-    bool room = length <= s->max - s->bytes;
+    bool room = charge <= s->max - s->bytes;
     if (!room)
         s->refused++;
     os64_lock_release(&s->lock);
     if (!room)
         return -2;
-    os64_dom_blob_t *b = os64_malloc(head + url_length + 1 + type_length + 1 + length);
+    os64_dom_blob_t *b = os64_malloc(charge);
     if (b == NULL)
         return -1;
     char *text = (char *)(b + 1);
@@ -215,15 +219,15 @@ static int name_entry(os64_dom_blob_store_t *s, const char *origin, const char *
     uint8_t *copy = (uint8_t *)(kind + type_length + 1);
     if (length > 0)
         os64_memcpy(copy, bytes, length);
-    *b = (os64_dom_blob_t){1, url_hash(text, url_length), text, kind, copy, length};
+    *b = (os64_dom_blob_t){1, url_hash(text, url_length), text, kind, copy, length, charge};
     os64_lock_acquire(&s->lock);
     /* Checked again under the lock that adds it: the bound is the store's,
      * whoever else named something meanwhile. */
-    int status = length > s->max - s->bytes ? -2 : (2 * (s->count + 1) > s->cap && !grow(s)) ? -1 : 0;
+    int status = charge > s->max - s->bytes ? -2 : (2 * (s->count + 1) > s->cap && !grow(s)) ? -1 : 0;
     if (status == 0) {
         s->slots[slot_of(s, b->hash, text, url_length)] = b;
         s->count++;
-        s->bytes += length;
+        s->bytes += charge;
     } else if (status == -2) {
         s->refused++;
     }
@@ -278,7 +282,7 @@ static JSValue revoke_url(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCons
             size_t at = slot_of(s, hash, url, length);
             gone = s->slots[at];
             if (gone != NULL) {
-                s->bytes -= gone->length;
+                s->bytes -= gone->charge;
                 remove_at(s, at);
             }
         }

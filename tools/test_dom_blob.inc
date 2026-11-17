@@ -103,7 +103,9 @@ static void dom_blob_cases(void)
         "assert(URL.revokeObjectURL('blob:https://other.test/x')===undefined,'none of ours, ignored');"
         "globalThis.u=u;", "blob: the URL's form");
     os64_dom_blob_usage_t used = os64_dom_blob_store_usage(store);
-    check(used.entries == 2 && used.bytes == 5 && used.refused == 0, "blob: the store counts what it named");
+    size_t two = used.bytes;
+    check(used.entries == 2 && two > 5 && used.refused == 0,
+          "blob: the store counts what it named, each entry's URL and type beside its bytes");
 
     /* fetch() takes inside the call: revoked on the next line, it holds
      * the entry; revoked before, it holds none; a fragment is ignored. */
@@ -111,7 +113,8 @@ static void dom_blob_cases(void)
     check(net.count == 1 && net.seen[0].blob && !strcmp(net.seen[0].bytes, "hello") &&
           !strcmp(net.seen[0].type, "text/plain"), "blob: fetch() took the entry inside the call");
     used = os64_dom_blob_store_usage(store);
-    check(used.entries == 1 && used.bytes == 0, "blob: the revocation removed the name");
+    check(used.entries == 1 && used.bytes > 0 && used.bytes + 5 < two,
+          "blob: the revocation removed the name and its charge");
     dom_script(&f, "fetch(u);", "blob: fetch after revoke");
     check(net.count == 2 && !net.seen[1].blob, "blob: a revoked URL names nothing");
     dom_script(&f,
@@ -128,16 +131,19 @@ static void dom_blob_cases(void)
           "blob: xhr.open() took it before send()");
 
     /* A link clicked and revoked on the next line: the navigation ask
-     * carries the entry. */
+     * carries the entry, and the address it was taken for, whatever the
+     * page then does to the href. */
     dom_script(&f,
-        "const d=URL.createObjectURL(new Blob(['save me']));"
+        "const d=URL.createObjectURL(new Blob(['save me']));globalThis.d=d;"
         "const a=document.createElement('a');a.href=d;a.download='x.txt';document.body.appendChild(a);"
-        "a.click();URL.revokeObjectURL(d);", "blob: the hand-rolled download");
+        "a.click();URL.revokeObjectURL(d);a.href='https://example.test/elsewhere';", "blob: the hand-rolled download");
     os64_dom_navigation_t ask;
     bool asked = os64_dom_take_navigation(f.binding, &ask);
     check(asked && ask.kind == OS64_DOM_NAVIGATE_FOLLOW && ask.blob != NULL &&
           os64_dom_blob_length(ask.blob) == 7 && !memcmp(os64_dom_blob_bytes(ask.blob), "save me", 7),
           "blob: the followed link's ask holds the entry taken in the click");
+    check(asked && strncmp(ask.url, "blob:https://example.test/", 26) == 0,
+          "blob: the followed link's ask names the address its entry was taken for");
     if (asked) {
         os64_dom_blob_release(ask.blob);
         if (ask.node != NULL) os64_html_release(f.document, ask.node);
@@ -173,15 +179,23 @@ static void dom_blob_cases(void)
     blob_done(&f, store);
 
     /* The bound: a Blob that would take the store past it is refused with
-     * a QuotaExceededError, counted, and nothing is named. */
-    store = os64_dom_blob_store_new(10);
+     * a QuotaExceededError, counted, and nothing is named. One entry's
+     * charge is measured first, and a store bounded at exactly it then
+     * refuses even an empty Blob: its URL and type are counted too. */
+    store = os64_dom_blob_store_new(0);
+    f = blob_fixture("https://example.test/", store, NULL);
+    dom_script(&f, "URL.createObjectURL(new Blob(['0123456789']));", "blob: one entry's charge");
+    size_t one = os64_dom_blob_store_usage(store).bytes;
+    blob_done(&f, store);
+    check(one > 10, "blob: an entry is charged its URL and type beside its bytes");
+    store = os64_dom_blob_store_new(one);
     f = blob_fixture("https://example.test/", store, NULL);
     dom_script(&f, STORAGE_ASSERT
         "URL.createObjectURL(new Blob(['0123456789']));"
-        "let e;try{URL.createObjectURL(new Blob(['!']));}catch(x){e=x;}"
+        "let e;try{URL.createObjectURL(new Blob([]));}catch(x){e=x;}"
         "assert(e&&e.name==='QuotaExceededError',String(e));", "blob: the bound");
     used = os64_dom_blob_store_usage(store);
-    check(used.entries == 1 && used.bytes == 10 && used.refused == 1, "blob: the refusal is counted, nothing named");
+    check(used.entries == 1 && used.bytes == one && used.refused == 1, "blob: the refusal is counted, nothing named");
     blob_done(&f, store);
 
     /* No store: createObjectURL refuses. */

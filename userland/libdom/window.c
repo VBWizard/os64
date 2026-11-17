@@ -31,13 +31,17 @@ void d_navigate(os64_dom_t *dom, os64_dom_navigation_kind_t kind, const os64_htm
      * host acts on only after the task, when the page may have revoked
      * it. */
     os64_dom_blob_t *blob = NULL;
+    char resolved[OS64_DOM_URL_MAX];
     if ((kind == OS64_DOM_NAVIGATE_URL || kind == OS64_DOM_NAVIGATE_REPLACE) && url != NULL) {
         blob = d_blob_url_take(dom, url);
     } else if (kind == OS64_DOM_NAVIGATE_FOLLOW && node != NULL) {
+        /* The address the entry was taken for goes with it, so a script
+         * that changes the href before the host acts cannot pair the
+         * entry with another address. */
         const os64_html_attr_t *href = os64_html_attr_ns(node, NULL, "href");
-        char resolved[OS64_DOM_URL_MAX];
         if (href != NULL && os64_dom_resolve(dom->document, dom->url, href->value, resolved, sizeof(resolved)))
             blob = d_blob_url_take(dom, resolved);
+        if (blob != NULL) url = resolved;
     }
     os64_dom_blob_release(dom->navigation.blob);
     dom->navigation.blob = blob;

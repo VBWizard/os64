@@ -302,7 +302,9 @@ typedef enum {
  * assigned, or the followed link's href — taken there, inside the call,
  * as the standard parses it (BLOB_URLS.md § 1.3), so a download clicked
  * and revoked on the next line still has its bytes; it arrives held too,
- * released with os64_dom_blob_release, and is NULL for any other ask. */
+ * released with os64_dom_blob_release, and is NULL for any other ask.
+ * `url` is the address assigned, or for a followed link the blob: address
+ * its entry was taken for (empty when no entry was). */
 typedef struct {
     os64_dom_navigation_kind_t kind;
     const os64_html_node_t *node, *submitter;
@@ -1529,12 +1531,14 @@ bool os64_dom_resolve(const os64_html_document_t *document, const char *document
  * store's own reference: what a request already holds outlives both.
  *
  * os64_dom_blob_store_new: `max` is the bytes the store may hold named at
- * once, 0 for OS64_DOM_BLOB_STORE_MAX; NULL without memory.
+ * once, each entry counted whole (its URL and type beside the Blob's
+ * bytes), 0 for OS64_DOM_BLOB_STORE_MAX; NULL without memory.
  * os64_dom_blob_url_take: the entry `url` names in this store (its
  * fragment ignored), a reference taken; NULL when it names none (never
  * made, revoked, another page's, not a blob: address). The standard takes
  * it where it parses the URL; BLOB_URLS.md § 1.3 says where each door
- * does. os64_dom_blob_store_usage: the bytes and entries named now, and
+ * does. os64_dom_blob_store_usage: the bytes (counted as the bound counts
+ * them) and entries named now, and
  * how many times createObjectURL was refused because naming the Blob
  * would have taken the store past its bound (the page's record says so:
  * other browsers do not throw there, so a page with no catch stops

@@ -116,7 +116,9 @@ task (decision 3); and `FileReaderSync` (a worker's).
 6. **The store is bounded, and its bytes are the page's.** Its bytes count
    in the page's memory record (`memory:` line, a `blob urls` figure beside
    `pictures`), and the store refuses an entry that would take it past
-   **256 MiB**: `createObjectURL` then throws a `QuotaExceededError`. The
+   **256 MiB**, each entry counted whole (its URL and type beside the
+   Blob's bytes, so empty Blobs are bounded too): `createObjectURL` then
+   throws a `QuotaExceededError`. The
    standard sets no limit; browsers have storage limits of their own and
    fail in their own ways, and other browsers do not throw here. A page
    with no `catch` therefore stops where it stops today, and the record's
