@@ -1,5 +1,7 @@
 # F15 — private incarnation issuer
 
+Implementation PR: **#635**, source `9d0d126a`.
+
 Baseline: merged `userland` `4885f974` (#633/#634), embedding ABI 5. The
 [owner-ticket metadata](IFRAME_F15_OWNER_TICKETS.md) requires externally fresh
 incarnations; this implements a private issuer, without runtime wiring.
