@@ -10,9 +10,9 @@
  * when it is named and never written again, which is what lets a pool
  * thread read them without a lock. Its count is atomic; the map holds one
  * reference, each holder another, and the last release frees the block on
- * whichever thread makes it. The lock guards the map and the totals:
- * every map operation is the owner thread's today, and W1's workers will
- * name entries from theirs (WORKERS.md § 9). */
+ * whichever thread makes it. The lock guards the map and the totals, so
+ * that a worker's thread can name and take entries beside the window's
+ * (WORKERS.md § 9). */
 
 #include "internal.h"
 #include "os64/lock.h"

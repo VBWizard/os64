@@ -403,9 +403,11 @@ bool os64_page_base_url_in(const os64_html_document_t *doc, const os64_html_node
                            const char *document_url, char *out, size_t cap);
 // `reference` resolved against `base` by the rule the page resolves its own
 // by, canonical — for an address a page's resources name in turn, as a
-// style sheet's @import does against the sheet's own address. False when
-// either will not resolve (an opaque base, an address with no host) or the
-// answer will not fit in `cap`.
+// style sheet's @import does against the sheet's own address. An opaque
+// reference (`blob:`, `data:`) is its own answer, its scheme lower case;
+// the caller decides whether it fetches that scheme. False when either
+// will not resolve (an opaque base, a hierarchical address with no host)
+// or the answer will not fit in `cap`.
 bool os64_page_url_absolute(const char *base, const char *reference, char *out, size_t cap);
 // `reference` resolved exactly as a link in `doc` would be, without
 // building a model: the same input cleaning, the first `<base href>` as the

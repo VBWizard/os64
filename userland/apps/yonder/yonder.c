@@ -1555,6 +1555,13 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
 
 static yonder_scripts_t *page_scripts(const Page *p);
 static yonder_scripts_t *scripts_for(uint64_t serial);
+// The blob URL store of the scripts `p` runs, wherever the page is in its
+// life (a page still on the stream has its scripts there): NULL without.
+static os64_dom_blob_store_t *page_blobs(const Page *p)
+{
+    yonder_scripts_t *host = page_scripts(p);
+    return yonder_scripts_blobs(host != NULL ? host : scripts_for(p->serial));
+}
 static const yonder_scripts_t *adoptions_host(const Page *p);
 static const os64_html_node_t *adopting_root(const os64_html_document_t *doc, const os64_html_node_t *x);
 
@@ -5432,7 +5439,7 @@ static os64_work_id_t picture_submit(Page *p, int32_t index, uint32_t cover_w, u
         // later than the standard parses it, booked in DEBTS (BLOB_URLS.md
         // § 1.3); a page that revokes in onload is served.
         if (!job->source)
-            job->blob = os64_dom_blob_url_take(yonder_scripts_blobs(p->scripts), pic->url);
+            job->blob = os64_dom_blob_url_take(page_blobs(p), pic->url);
     }
     job->hooks.jar = g.way.jar;
     job->hooks.cache = g.cache;
@@ -5763,7 +5770,7 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
     // A blob: address's entry is taken as its sheet is sent for: later than
     // the standard parses it, booked in DEBTS (BLOB_URLS.md § 1.3).
     os64_dom_blob_t *blob = !p->measuring && sh->url != NULL
-        ? os64_dom_blob_url_take(yonder_scripts_blobs(p->scripts), url) : NULL;
+        ? os64_dom_blob_url_take(page_blobs(p), url) : NULL;
     bool fetchable = !p->measuring && sh->url != NULL &&
                      ((os64_strlen(url) > 7 && os64_memcmp(url, "http://", 7) == 0) ||
                       (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
@@ -6597,7 +6604,7 @@ static bool unasked_first(Page *p, const char *key)
 }
 
 // A picture the page names that never reaches the table, on the record
-// once (unasked_first): one in a scheme nothing here fetches (`blob:`, say)
+// once (unasked_first): one in a scheme nothing here fetches (`ftp:`, say)
 // is MISSING picture-scheme, counted by its scheme; an address that was refused
 // (`url` NULL) is FAILED picture, `written` as the page wrote it (named
 // short when it is a long data: address), with the refusal when there is
@@ -6615,7 +6622,8 @@ static bool picture_unasked(Page *p, const char *url, const char *written,
     char scheme[OS64_URL_SCHEME_MAX];
     bool named = os64_url_scheme_of(addr, scheme, sizeof(scheme));
     bool fetched = named && (os64_streq(scheme, "http") || os64_streq(scheme, "https") ||
-                             os64_streq(scheme, "file") || os64_streq(scheme, "data"));
+                             os64_streq(scheme, "file") || os64_streq(scheme, "data") ||
+                             os64_streq(scheme, "blob"));
     char line[OS64_FETCH_URL_MAX + 96], name[128];
     if (named && !fetched) {
         yonder_diag_missing(p->diag, "picture-scheme", scheme, 1);
@@ -11974,6 +11982,7 @@ static void blob_page_refused(const char *url)
     char line[OS64_DOM_URL_MAX + 64];
     os64_snprintf(line, sizeof(line), "%s: opening a blob: URL as a page is not supported", url);
     yonder_diag_failed_seen(g.page.diag, "navigation", line);
+    badge_follow();
 }
 
 // A followed link to a blob: address: with a `download` attribute it is a

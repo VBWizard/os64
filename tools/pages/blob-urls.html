@@ -1,0 +1,110 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Blob URLs</title>
+<style>
+  body { font: 16px sans-serif; margin: 24px; max-width: 640px; }
+  li { margin: 4px 0; }
+  .ok { color: #070; } .bad { color: #b00; }
+  #bg { width: 64px; height: 32px; border: 1px solid #888; display: inline-block; vertical-align: middle; }
+</style>
+
+<h2>Blob URLs at each door</h2>
+<p>Each line makes a <code>Blob</code>, names it with <code>URL.createObjectURL</code>,
+and hands the address to one door. Most revoke the address as soon as the
+request is made, which other browsers allow. A line turns green when its door
+was served.</p>
+<ul id="out"></ul>
+
+<p><img id="pic" alt="picture from a blob" width="64" height="32"> a picture, and
+<span id="bg"></span> a background, both from the same bytes.</p>
+<p id="css">This line is green when the style sheet from a blob applies.</p>
+<p><audio id="snd" controls></audio> a tone made here as a WAV Blob, played from it.</p>
+<p><button id="save">Save a text file made here</button>
+   <a id="open" href="#">open a blob: address as a page (yonder refuses, by name)</a></p>
+
+<script>
+  const out = document.getElementById('out');
+  function say(text, good) {
+    const li = document.createElement('li');
+    li.textContent = text;
+    li.className = good ? 'ok' : 'bad';
+    out.appendChild(li);
+  }
+  // A 4x2 PNG, two colours, as bytes.
+  const png = Uint8Array.from(atob(
+    'iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAE0lEQVR4nGM4IQcEJyAkA5wFJAFpugghRdQdPQAAAABJRU5ErkJggg=='),
+    c => c.charCodeAt(0));
+  const picture = URL.createObjectURL(new Blob([png], {type: 'image/png'}));
+  say('createObjectURL: ' + picture, picture.startsWith('blob:'));
+
+  const img = document.getElementById('pic');
+  img.onload = () => say('picture: drawn from its blob: address', true);
+  img.onerror = () => say('picture: failed', false);
+  img.src = picture;
+  document.getElementById('bg').style.backgroundImage = 'url("' + picture + '")';
+
+  // A script, revoked on the next line: taken when it was connected.
+  const code = URL.createObjectURL(new Blob(["window.ranFromBlob = true;"], {type: 'text/javascript'}));
+  const script = document.createElement('script');
+  script.onload = () => say('script: ran from its blob: address (revoked at once)', window.ranFromBlob === true);
+  script.onerror = () => say('script: failed', false);
+  script.src = code;
+  document.head.appendChild(script);
+  URL.revokeObjectURL(code);
+
+  // A style sheet.
+  const sheet = URL.createObjectURL(new Blob(['#css { color: #070; font-weight: bold; }'], {type: 'text/css'}));
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.onload = () => say('style sheet: applied from its blob: address', true);
+  link.onerror = () => say('style sheet: failed', false);
+  link.href = sheet;
+  document.head.appendChild(link);
+
+  // fetch(), revoked on the next line, then again after the revocation.
+  const text = URL.createObjectURL(new Blob(['hello from a Blob'], {type: 'text/plain'}));
+  fetch(text).then(r => r.text()).then(t => say('fetch: "' + t + '" (revoked at once)', t === 'hello from a Blob'),
+                                         e => say('fetch: failed: ' + e, false));
+  URL.revokeObjectURL(text);
+  fetch(text).then(() => say('fetch after the revocation: answered (it should not be)', false),
+                   () => say('fetch after the revocation: refused, as it should be', true));
+
+  // XMLHttpRequest, revoked between open() and send().
+  const xhrText = URL.createObjectURL(new Blob(['xhr bytes']));
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', xhrText);
+  URL.revokeObjectURL(xhrText);
+  xhr.onload = () => say('XMLHttpRequest: "' + xhr.responseText + '" (revoked before send)', xhr.responseText === 'xhr bytes');
+  xhr.onerror = () => say('XMLHttpRequest: failed', false);
+  xhr.send();
+
+  // A sound made here: half a second of 440 Hz as a WAV, played from a Blob.
+  {
+    const rate = 48000, frames = rate / 2, wav = new DataView(new ArrayBuffer(44 + frames * 2));
+    const text = (at, s) => { for (let i = 0; i < s.length; i++) wav.setUint8(at + i, s.charCodeAt(i)); };
+    text(0, 'RIFF'); wav.setUint32(4, 36 + frames * 2, true); text(8, 'WAVEfmt ');
+    wav.setUint32(16, 16, true); wav.setUint16(20, 1, true); wav.setUint16(22, 1, true);
+    wav.setUint32(24, rate, true); wav.setUint32(28, rate * 2, true);
+    wav.setUint16(32, 2, true); wav.setUint16(34, 16, true);
+    text(36, 'data'); wav.setUint32(40, frames * 2, true);
+    for (let i = 0; i < frames; i++)
+      wav.setInt16(44 + i * 2, Math.round(8000 * Math.sin(2 * Math.PI * 440 * i / rate)), true);
+    const snd = document.getElementById('snd');
+    snd.oncanplay = () => say('sound: ready to play from its blob: address', true);
+    snd.onerror = () => say('sound: failed', false);
+    snd.src = URL.createObjectURL(new Blob([wav.buffer], {type: 'audio/wav'}));
+  }
+
+  // The hand-rolled download: href, click, revoke.
+  document.getElementById('save').onclick = () => {
+    const file = URL.createObjectURL(new Blob(['Saved from a blob: URL.\n'], {type: 'text/plain'}));
+    const a = document.createElement('a');
+    a.href = file;
+    a.download = 'from-a-blob.txt';
+    document.body.appendChild(a);
+    a.click();
+    URL.revokeObjectURL(file);
+    a.remove();
+  };
+  document.getElementById('open').href = URL.createObjectURL(new Blob(['<p>a page</p>'], {type: 'text/html'}));
+</script>

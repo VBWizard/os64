@@ -2,7 +2,7 @@
 
 **Status: APPROVED TO BUILD 2026-11-17** (Fable's review, its eight
 findings taken below; the review is kept in the Opus kit as
-`BLOB_URLS_REVIEW.md`). One question remains Chris's: the store's bound
+`BLOB_URLS_REVIEW.md`); the store's bound ruled by Chris the same day
 (§ 5). This is WORKERS.md's slice W0 (§ 9 and § "The blob URL store") made
 concrete, with FileReader beside it. Chris asked for both on 2026-11-17,
 after a browser Minecraft game he tried stalled at 50%: its loader
@@ -114,7 +114,7 @@ task (decision 3); and `FileReaderSync` (a worker's).
    (booked).
 
 6. **The store is bounded, and its bytes are the page's.** Its bytes count
-   in the page's memory record (`memory:` line, a `blobs` figure beside
+   in the page's memory record (`memory:` line, a `blob urls` figure beside
    `pictures`), and the store refuses an entry that would take it past
    **256 MiB**: `createObjectURL` then throws a `QuotaExceededError`. The
    standard sets no limit; browsers have storage limits of their own and
@@ -124,7 +124,8 @@ task (decision 3); and `FileReaderSync` (a worker's).
    is accepted. The game measured in § 0 holds 56 MiB in the store, under
    a quarter of the bound; with the archive, the unpacked buffers and the
    Blobs in the engine beside it, its whole load is about 225 MiB of the
-   page's 1 GiB. *Question 1, Chris's.*
+   page's 1 GiB. The bound is `OS64_DOM_BLOB_STORE_MAX` (dom.h), a constant
+so that it can move (Chris, 2026-11-17).
 
 7. **Revocation removes the name, not the bytes.** `revokeObjectURL(url)`
    removes the map's entry when the URL is in the store (a URL of another
@@ -133,12 +134,16 @@ task (decision 3); and `FileReaderSync` (a worker's).
    goes, the store is freed and every entry with it, except those held by
    requests still in flight, which free themselves on release.
 
-8. **Every door that fetches a URL a page names takes a blob URL, and none
-   copies it again.** Each door's change is the same three steps: take
-   the entry (or receive libdom's) at the "taken at" moment, carry it,
-   answer from it in the run. The entry's bytes never change, so a door
-   reads them **in place**: a picture's decode input, a download's write
-   and media's byte window are views of the held bytes, not copies.
+8. **Every door that fetches a URL a page names takes a blob URL.** Each
+   door's change is the same three steps: take the entry (or receive
+   libdom's) at the "taken at" moment, carry it, answer from it in the
+   run. The entry's bytes never change, so a door that reads its input
+   whole reads them **in place**: a picture's decode input, a font's
+   SFNT, a classic script's source and a download's write are views of
+   the held bytes. A door whose consumer takes a fetched BODY (fetch,
+   XMLHttpRequest, modules, sheets, media's loader) is answered by the
+   fetch engine (`blob_answer`, fetch_job.c) with a body copied from the
+   entry, because that consumer owns and frees what it is handed.
 
    | Door | Taken at | Where | What a blob URL serves |
    |---|---|---|---|
@@ -149,7 +154,7 @@ task (decision 3); and `FileReaderSync` (a worker's).
    | Modules: a graph's fetches, `import()` | when the graph asks for the module (the standard's "fetch a module script"), on the window thread | the script host's request | the module |
    | Download: `<a download href=blob:>` clicked or `.click()`ed | inside the activation (libdom, with the navigation ask) | `downloads_feed` → `download_job.c` | the file, named by `download`, else from the type |
    | Pictures: `<img>`, `<picture>`'s `<source srcset>`, `<input type=image>`, CSS `background-image` and the rest of the picture catalog, a Canvas image source | the page's next picture pass (later than the standard: **booked**) | `picture_submit` → `picture.c` | the picture, decoded as a fetched one is; origin-clean |
-   | Style sheets: `<link rel=stylesheet>`, `@import` | the sheet's fetch (later: **booked**) | `sheet_fetch` → `sheet.c` | the sheet |
+   | Style sheets: `<link rel=stylesheet>`, `@import` | the sheet's fetch (later: **booked**) | `sheet_fetch` → `sheet.c` | the sheet; a `rel=preload` of one is not sent, its sheet takes its own entry |
    | Web fonts: `@font-face src: url(blob:)` | first use of the face (later: **booked**) | `webfonts_feed` → `webfont.c` | the face's bytes |
    | Media: `<audio src>`, its `<source>`s, a `<video>`'s sound | the resource selection's turn, after a stable state (the standard's moment too) | `media.c` (`yonder_fetch_media_run`) | the sound, its byte window the whole body |
    | A link followed without `download`, `window.open(url)`, `location = url` | — | — | **refused by name** (`opening a blob: URL as a page is not supported`), booked |
@@ -252,10 +257,9 @@ record line). B1 is the one with threads in it.
 
 ## 5. Questions
 
-1. **For Chris: the store's bound.** 256 MiB of copied bytes a page, past
-   which `createObjectURL` throws. The game measured in § 0 needs 56 MiB;
-   `page_memory_mb` is 1024 on the P5. Lean: 256 MiB, counted in the
-   page's memory record.
+1. **Ruled (Chris, 2026-11-17): the store's bound is 256 MiB**, as a
+   constant that can be changed (`OS64_DOM_BLOB_STORE_MAX`), counted in
+   the page's memory record.
 
 Fable's answers to the draft's others, taken: FileReader folds into the
 posted-message queue with its source named (decision 10); the bytes are
