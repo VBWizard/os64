@@ -1138,19 +1138,23 @@ size_t os64_dom_adopted(const os64_dom_t *dom, const os64_html_node_t *root, os6
 uint64_t os64_dom_custom_visits(const os64_dom_t *dom);
 
 /* POSTED MESSAGES (HTML § 9.3.3; MODERN_WEB.md § P2b): what the page's
- * window.postMessage queued, one task each, oldest first. next answers
- * when the oldest was posted on the host's clock (options.now_ms), so a
- * host can run it in its turn among the timers by time, or UINT64_MAX with
- * none. fire runs AT MOST ONE as one task, a `message` (or `messageerror`)
- * at window, and answers whether it ran one (outcome filled). A message
+ * window.postMessage queued, one task each, oldest first, and the
+ * binding's own tasks that ride the same queue (a FileReader's read,
+ * BLOB_URLS.md decision 10). next answers when the oldest was queued on
+ * the host's clock (options.now_ms), so a host can run it in its turn
+ * among the timers by time, or UINT64_MAX with none. fire runs AT MOST ONE
+ * as one task, a `message` (or `messageerror`) at window or the binding's
+ * own task, and answers whether it ran one (outcome filled). A message
  * whose targetOrigin the document does not have, or that nothing could
  * hear, is dropped without a task, and the next is tried, unless it was
  * posted after the page's next timer fell due (a timer queued first, whose
  * task may add a listener for it): then fire answers false and leaves it.
- * A message a message's task posts is queued behind it. Owner thread,
- * between tasks. */
+ * A message a message's task posts is queued behind it. kind names the
+ * oldest's task source for the host's record ("message", "file reading"),
+ * NULL with none. Owner thread, between tasks. */
 uint64_t os64_dom_message_next(const os64_dom_t *dom);
 bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
+const char *os64_dom_message_kind(const os64_dom_t *dom);
 
 /* Animation callbacks: next is a monotonic millisecond deadline (UINT64_MAX
  * when empty). fire runs one due snapshot in request order, with one shared

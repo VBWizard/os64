@@ -76,6 +76,12 @@ struct DMessage {
     char *target;              /* T_ORIGIN: the origin the target's document must have */
     uint8_t target_kind;
     uint64_t posted;           /* the host's now_ms when it was posted */
+    /* The binding's own task (d_message_task): run with what it holds, in
+     * place of a message's steps; NULL for a message. */
+    DMessageTask run;
+    JSValue held;
+    uint32_t token;
+    const char *kind;
 };
 
 static uint64_t now_ms(const os64_dom_t *dom)
@@ -100,6 +106,7 @@ static char *text_copy(os64_dom_t *dom, const char *text)
  * its node freed. */
 static void message_free(os64_dom_t *dom, DMessage *message)
 {
+    if (message->run != NULL) JS_FreeValueRT(dom->engine, message->held);
     JS_FreeValueRT(dom->engine, message->port);
     if (!JS_IsUndefined(message->source)) {
         JS_FreeValueRT(dom->engine, message->source);
@@ -258,6 +265,28 @@ uint64_t os64_dom_message_next(const os64_dom_t *dom)
     return d_delivery_active(dom) && dom->messages != NULL ? dom->messages->posted : UINT64_MAX;
 }
 
+const char *os64_dom_message_kind(const os64_dom_t *dom)
+{
+    const DMessage *head = d_delivery_active(dom) ? dom->messages : NULL;
+    return head == NULL ? NULL : head->run != NULL ? head->kind : "message";
+}
+
+static void message_enqueue(os64_dom_t *dom, DMessage *message);
+
+int d_message_task(os64_dom_t *dom, JSContext *ctx, const char *kind, DMessageTask run, JSValueConst held,
+                   uint32_t token)
+{
+    DMessage *message = d_alloc(dom, sizeof(*message));
+    if (message == NULL) {
+        d_error(ctx, "QuotaExceededError", "DOM message quota exceeded");
+        return -1;
+    }
+    *message = (DMessage){.source = JS_UNDEFINED, .port = JS_UNDEFINED, .posted = now_ms(dom), .run = run,
+                          .held = JS_DupValue(ctx, held), .token = token, .kind = kind};
+    message_enqueue(dom, message);
+    return 0;
+}
+
 bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     if (outcome != NULL) os64_memset(outcome, 0, sizeof(*outcome));
@@ -270,6 +299,13 @@ bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
         if (dropped && os64_dom_timer_next(dom) <= message->posted) return false;
         dom->messages = message->next;
         if (dom->messages == NULL) dom->messages_last = NULL;
+        /* The binding's own task runs whoever listens: it changes state a
+         * page reads without an event (a reader's result). */
+        if (message->run != NULL) {
+            message->run(dom, message->held, message->token, outcome);
+            message_free(dom, message);
+            return true;
+        }
         /* A port's message goes to its port unless that port has closed;
          * the window's to the window when its targetOrigin still holds and
          * something listens. */

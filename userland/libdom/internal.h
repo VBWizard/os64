@@ -1290,6 +1290,9 @@ int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
  * and `resolution` answer (view.c). */
 bool d_screen_media(os64_dom_t *dom, double *width, double *height, double *ratio);
 int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* `length` bytes as base64 (RFC 4648's alphabet, `=` padded) into `out`,
+ * which holds 4 for each 3 bytes begun; answers how many it wrote, no NUL. */
+size_t d_base64_write(const uint8_t *in, size_t length, char *out);
 int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* P1-W, window's low-hanging fruit (WINDOW_DOCUMENT.md § P1-W): the
  * window's members as a browsing context (browsing.c), its BarProps and
@@ -1586,6 +1589,8 @@ int d_abort_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_blob_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_fetch_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_xhr_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* FileReader (file_reader.c; BLOB_URLS.md decision 10). */
+int d_file_reader_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* ProgressEvent (event.c): the interface, and one made for a dispatch. */
 int d_progress_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 JSValue d_progress_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool computable, double loaded,
@@ -1820,6 +1825,9 @@ JSValue d_promise_settled(JSContext *ctx, JSValue value);
  * names nothing this browser decodes; a BOM of the encoding taken off, an
  * invalid sequence U+FFFD. Engine memory. d_utf8_decode is UTF-8 decode. */
 JSValue d_text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, size_t length);
+/* Whether `label` names an encoding d_text_decode decodes (else it decodes
+ * UTF-8). */
+bool d_text_decodes(const char *label);
 JSValue d_utf8_decode(JSContext *ctx, const uint8_t *bytes, size_t length);
 /* "UTF-8 decode without BOM": a leading U+FEFF is text, not a mark (what
  * the urlencoded parser decodes names and values with). */
@@ -2032,6 +2040,14 @@ int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
  * callbacks), and what os64_dom_free frees (the idle entries). */
 void d_message_drain(os64_dom_t *dom);
 void d_message_cancel(os64_dom_t *dom);
+/* A task of the binding's own on the posted-message queue, its source
+ * `kind` (a string that outlives it) for the host's record: `run` is
+ * called as the queue reaches it, between tasks, with `held` (held until
+ * then) and `token`, and opens its own task. A queue cleared at departure
+ * drops it unrun. 0, or -1 with a QuotaExceededError pending. */
+typedef void (*DMessageTask)(os64_dom_t *dom, JSValueConst held, uint32_t token, os64_js_outcome_t *outcome);
+int d_message_task(os64_dom_t *dom, JSContext *ctx, const char *kind, DMessageTask run, JSValueConst held,
+                   uint32_t token);
 void d_idle_drain(os64_dom_t *dom);
 void d_idle_free(os64_dom_t *dom);
 /* MessageEvent (event.c): the interface, and one made for a dispatch:

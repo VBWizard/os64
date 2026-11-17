@@ -9,6 +9,21 @@
 
 static const char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+size_t d_base64_write(const uint8_t *in, size_t length, char *out)
+{
+    size_t used = 0;
+    for (size_t at = 0; at < length; at += 3) {
+        size_t left = length - at;
+        uint32_t bits = (uint32_t)in[at] << 16 | (left > 1 ? (uint32_t)in[at + 1] << 8 : 0) |
+                        (left > 2 ? in[at + 2] : 0);
+        out[used++] = kAlphabet[(bits >> 18) & 63];
+        out[used++] = kAlphabet[(bits >> 12) & 63];
+        out[used++] = left > 1 ? kAlphabet[(bits >> 6) & 63] : '=';
+        out[used++] = left > 2 ? kAlphabet[bits & 63] : '=';
+    }
+    return used;
+}
+
 /* A base64 digit's value, or -1 for a byte that is none. */
 static int digit(unsigned char c)
 {
@@ -58,17 +73,7 @@ static JSValue encode(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
         d_string_free(dom, &text);
         return d_error(ctx, "QuotaExceededError", "btoa quota exceeded");
     }
-    const unsigned char *in = (const unsigned char *)text.data;
-    size_t used = 0;
-    for (size_t at = 0; at < text.length; at += 3) {
-        size_t left = text.length - at;
-        uint32_t bits = (uint32_t)in[at] << 16 | (left > 1 ? (uint32_t)in[at + 1] << 8 : 0) |
-                        (left > 2 ? in[at + 2] : 0);
-        out[used++] = kAlphabet[(bits >> 18) & 63];
-        out[used++] = kAlphabet[(bits >> 12) & 63];
-        out[used++] = left > 1 ? kAlphabet[(bits >> 6) & 63] : '=';
-        out[used++] = left > 2 ? kAlphabet[bits & 63] : '=';
-    }
+    size_t used = d_base64_write((const uint8_t *)text.data, text.length, out);
     d_string_free(dom, &text);
     JSValue result = JS_NewStringLen(ctx, out, used);
     d_free(dom, out);

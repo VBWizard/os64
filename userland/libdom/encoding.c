@@ -679,6 +679,14 @@ static JSValue text_decode(JSContext *ctx, const char *label, const uint8_t *byt
     return text;
 }
 
+bool d_text_decodes(const char *label)
+{
+    const char *name = label != NULL ? os64_html_encoding_for_label(label, os64_strlen(label)) : NULL;
+    for (int i = 0; name != NULL && i < 4; i++)
+        if (os64_streq(name, kEncodingNames[i])) return true;
+    return false;
+}
+
 JSValue d_text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, size_t length)
 {
     return text_decode(ctx, label, bytes, length, false);

@@ -12237,7 +12237,9 @@ static bool queued_task(yonder_scripts_t *host, const char **what, os64_js_outco
     uint64_t now = yonder_now_ms(), timer = yonder_scripts_timer_next(host);
     uint64_t message = yonder_scripts_message_next(host);
     if (message <= now && (timer > now || message < timer)) {
-        *what = "message";
+        // A posted message, or a task of the binding's own that rides the
+        // same queue (a FileReader's read), by its source.
+        *what = yonder_scripts_message_kind(host);
         if (yonder_scripts_message_fire(host, out))
             return true;
     }
