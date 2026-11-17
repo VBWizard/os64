@@ -575,7 +575,11 @@ static struct {
 } s_fc_stall;
 // A stall asked for by /sys/gui's `stall <ms>` (gui_frame_clock_command),
 // taken by the compositor's loop at its next turn: the tripwire's proof.
+// While it is being served it counts as work, or a stall taken while the
+// compositor had nothing to do (the screen a text terminal's, say) would
+// prove nothing.
 static volatile uint64_t s_fc_test_stall_ms;
+static volatile bool s_fc_test_stalling;
 
 static fc_piece_t s_fc_pieces[FC_COPY_PIECES];
 
@@ -1079,8 +1083,9 @@ void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart)
 // compositor's passes, and with work to do its loop turns at least once a
 // frame, because the claim gives it its CPU. So more than half a second
 // with damage owed and nothing shown, or with work to do (the clock
-// running, or damage waiting to be composed) and the loop standing still,
-// is a fault, and this names it: once an episode,
+// running, input or damage waiting, or the screen just regained) and the
+// loop standing still since the work appeared, is a fault, and this names
+// it: once an episode,
 // under DEBUG_EXCEPTIONS, with where the compositor was, its state, what its
 // CPU was running and what that CPU's passes and timer did. It logs; it
 // does not heal. Called from the BSP's pass once a tick, holding the queue
@@ -1128,14 +1133,27 @@ void gui_frame_clock_watch_locked(void)
 		at_beat_leases = leases;
 	}
 	uint64_t owed_since = s_fc_owed_since_us;
-	uint64_t still_us = now - beat_us;
 	uint64_t unshown_us = owed_since != 0 && now > owed_since ? now - owed_since : 0;
-	// A still loop counts only while there is something to do: stopped with
-	// nothing pending, a compositor sharing its CPU with threads pinned there
-	// may wait its turn by aging for longer than the bound, and that is the
-	// CPU being shared, not a stall.
-	bool busy = s_fc_running || kPendingDamageCount != 0;
-	bool stalled = (busy && still_us > FC_STALL_US) || unshown_us > FC_STALL_US;
+	// A still loop counts only while there is something to do, and only for
+	// as long as there has been: stopped with nothing pending, a compositor
+	// sharing its CPU with threads pinned there may wait its turn by aging
+	// for longer than the bound, which is the CPU being shared, not a stall;
+	// and the quiet before work arrived (a whole lease, up to a second, on a
+	// stopped compositor) is not time the work waited. So the stillness runs
+	// from the later of the last beat and the first look that found work.
+	// "Work" is the compositor's own test for it (frame_clock_pace,
+	// fc_stopped_halt), each word read unlocked as there, and a stall asked
+	// for by `stall <ms>` while it is served.
+	static uint64_t busy_since;
+	bool busy = s_fc_running || input_pending() || kPendingDamageCount != 0 || s_glass_regained ||
+	            s_fc_test_stalling;
+	if (!busy)
+		busy_since = 0;
+	else if (busy_since == 0)
+		busy_since = now;
+	uint64_t still_from = busy_since > beat_us ? busy_since : beat_us;
+	uint64_t still_us = busy ? now - still_from : 0;
+	bool stalled = still_us > FC_STALL_US || unshown_us > FC_STALL_US;
 
 	if (stalled && !in) {
 		in = true;
@@ -1145,7 +1163,7 @@ void gui_frame_clock_watch_locked(void)
 		start_leases = leases;
 		s_fc_stall.episodes++;
 		thread_t *tenant = scheduler_cpu_tenant_locked(cpu);
-		const char *tenant_name = tenant == NULL ? "(mid-switch)"
+		const char *tenant_name = tenant == NULL ? "nothing yet"
 		                        : tenant == self ? "the compositor"
 		                        : ((task_t *)tenant->ownerTask)->exename;
 		uint64_t due = kSchedFrameDueUs;
@@ -1157,7 +1175,7 @@ void gui_frame_clock_watch_locked(void)
 		else
 			snprintf(window, sizeof window, "its window opens in %lu us", due - now);
 		printd(DEBUG_EXCEPTIONS,
-		       "frame clock: STALL %lu: nothing shown for %lu ms with damage owed, the loop still for %lu ms; "
+		       "frame clock: STALL %lu: nothing shown for %lu ms with damage owed, the loop still for %lu ms with work to do; "
 		       "the compositor is %s, %s%s, the frame %s, the clock %s; CPU %u runs %s (thread 0x%lx); "
 		       "since the last beat its CPU ran %lu passes, %lu frame wakes, %lu lease expiries; "
 		       "%s; reserve %s\n",
@@ -2559,9 +2577,11 @@ bool guicomp_thread(bool daemon)
 		if (stall_ms != 0) {
 			// The proof the tripwire asked for: stand still, interrupts on,
 			// holding nothing, so only the beat stops.
+			s_fc_test_stalling = true;
 			uint64_t until = micros_now() + stall_ms * 1000;
 			while (micros_now() < until)
 				__builtin_ia32_pause();
+			s_fc_test_stalling = false;
 		}
 
 		// -------- Drain input, route events, recomposite (one lock hold) ---

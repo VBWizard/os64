@@ -194,10 +194,12 @@ rule, composed damage is on the glass within two of the compositor's
 passes, and with work to do its loop turns at least once a frame, because
 the claim gives it its CPU. So from the BSP's pass, once a tick, the clock
 is watched for more than half a second with damage owed and nothing shown,
-or with work to do (the clock running, or damage waiting to be composed)
-and the loop standing still. (Stopped with nothing to do, a compositor
-sharing its CPU waits its turn by aging, which may take longer; that is
-the CPU being shared, not a stall.) Each episode is logged once under `DEBUG_EXCEPTIONS`, with where
+or with work to do (the clock running, input or damage waiting, or the
+screen just regained) and the loop standing still since the work
+appeared. (Stopped with nothing to do, a compositor sharing its CPU waits
+its turn by aging, which may take longer; that is the CPU being shared,
+not a stall. And the quiet before work arrives, up to a whole lease, is
+not time the work waited.) Each episode is logged once under `DEBUG_EXCEPTIONS`, with where
 in its frame the compositor was, its thread state and whether it was
 expedited, whether the frame was held, what its CPU was running, that
 CPU's passes, frame wakes and lease expiries since the loop last turned,
