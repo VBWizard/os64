@@ -20,7 +20,12 @@ operations come from E. Prepared implementation frames preserve A's provenance
 at conversion. Invocation prepares B and captured A around the callback and its
 return conversion; executable eligibility still follows the actual callable.
 Retiring A, B or C refuses invocation. Retiring D alone does not invalidate a
-retained stream's data or an eligible callback.
+retained stream's data or an eligible callback. Completion can still depend on
+ordinary realm-owned Promise jobs: the wrapper's retirement contract discards
+those jobs without settling their promises. In particular, the second Promise
+adoption after a thrown callback can remain pending when D's intrinsic `then`
+is the discarded job. This cut does not give that job private-continuation
+neutrality or claim retained error-path completion after D departs.
 
 `start` returns `any` and propagates a thrown completion synchronously. `size`
 converts its result to a number within the same checked scope. Promise-returning
@@ -64,3 +69,9 @@ Promise conversion. Each cut checks scope unwind and complete root teardown.
 ASan/UBSan and normal-exit LeakSanitizer remain enabled; the upstream engine uses
 the harness's ASan instrumentation. Target compilation does not establish guest
 or P5 acceptance.
+
+The final focused proof passes 6,580 shipping and 117,856 instrumented checks
+with zero failures, including 18 and 1,142 allocation refusals respectively.
+The full shipping DOM run passes 417,476 checks and 13,553 binding-allocation
+sweeps with zero failures. Target Yonder, js, runtime guest consumer and shared
+libraries build with warnings as errors. No guest execution is claimed.
