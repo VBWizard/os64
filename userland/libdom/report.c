@@ -305,6 +305,90 @@ uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst functio
     return script != D_NO_SCRIPT ? script : running_script(dom, ctx);
 }
 
+bool d_synchronous_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
+                            DSynchronousCallback *record)
+{
+    *record = (DSynchronousCallback)D_SYNCHRONOUS_CALLBACK_INIT;
+    if (!JS_IsObject(value) || !dom->cluster || !dom->cluster->synchronous_settings) {
+        record->captured.value = JS_DupValue(ctx, value);
+        return true;
+    }
+    os64_js_outcome_t out;
+    JSContext *associated = JS_GetObjectRealm(ctx, value);
+    record->entry = associated ? os64_js_realm_from_context(dom->runtime, associated, OS64_JS_ABI_ID, &out) : NULL;
+    if (!record->entry || os64_js_callback_capture(dom->runtime, OS64_JS_ABI_ID,
+            value, &record->captured, &out) != OS64_JS_OK) {
+        d_error(ctx, "InvalidStateError", "Synchronous callback settings are unavailable");
+        return false;
+    }
+    return true;
+}
+
+void d_synchronous_clear(JSRuntime *rt, DSynchronousCallback *record)
+{
+    DSynchronousCallback held = *record;
+    *record = (DSynchronousCallback)D_SYNCHRONOUS_CALLBACK_INIT;
+    if (held.captured.runtime) {
+        os64_js_outcome_t out;
+        os64_js_callback_clear(held.captured.runtime, OS64_JS_ABI_ID, &held.captured, &out);
+    } else JS_FreeValueRT(rt, held.captured.value);
+}
+
+bool d_synchronous_live(JSContext *ctx, const DSynchronousCallback *record)
+{
+    if (record->captured.runtime && (os64_js_realm_is_retired(record->entry) ||
+                                    os64_js_realm_is_retired(record->captured.incumbent))) {
+        d_error(ctx, "InvalidStateError", "Synchronous callback settings have retired");
+        return false;
+    }
+    return true;
+}
+
+/* The caller owns the guard. Keep callback-interface lookup and return
+ * conversion in body so abrupt completion unwinds the same checked scope. */
+JSValue d_synchronous_invoke(JSContext *ctx, const DSynchronousCallback *record,
+                             os64_js_callback_body_t *body, void *opaque)
+{
+    if (!record->captured.runtime) return body(ctx, record->captured.value, opaque);
+    JSValue result = JS_UNDEFINED;
+    os64_js_outcome_t out;
+    os64_js_status_t status = os64_js_callback_with_settings(record->entry, OS64_JS_ABI_ID,
+        &record->captured, body, opaque, &result, &out);
+    if (status != OS64_JS_OK && status != OS64_JS_EXCEPTION) {
+        if (!JS_IsException(result)) {
+            JS_FreeValue(ctx, result);
+            result = status == OS64_JS_REALM_RETIRED || status == OS64_JS_REALM_FAILED
+                ? d_error(ctx, "InvalidStateError", "Synchronous callback settings have retired")
+                : JS_ThrowInternalError(ctx, "Synchronous callback settings refused: %s", out.message);
+        }
+        if (status == OS64_JS_LIMIT || status == OS64_JS_CANCELLED ||
+            status == OS64_JS_HOST_FAILURE || status == OS64_JS_FAILED_RUNTIME)
+            JS_SetUncatchableException(ctx, true);
+    }
+    return result;
+}
+
+typedef struct {
+    os64_dom_t *dom;
+    JSValueConst self;
+    int argc;
+    JSValueConst *argv;
+} SynchronousCall;
+
+static JSValue synchronous_call(JSContext *ctx, JSValueConst callback, void *opaque)
+{
+    SynchronousCall *call = opaque;
+    return d_require_callback(call->dom, ctx, callback)
+        ? JS_Call(ctx, callback, call->self, call->argc, call->argv) : JS_EXCEPTION;
+}
+
+JSValue d_synchronous_call(os64_dom_t *dom, JSContext *ctx, const DSynchronousCallback *record,
+                           JSValueConst self, int argc, JSValueConst *argv)
+{
+    SynchronousCall call = {dom, self, argc, argv};
+    return d_synchronous_invoke(ctx, record, synchronous_call, &call);
+}
+
 static bool scheduled_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
                               DScheduledCallback *record, bool enabled)
 {

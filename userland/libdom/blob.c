@@ -1155,20 +1155,24 @@ static JSValue form_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     case M_VALUES: return iterator_new(ctx, self, F_VALUES);
     case M_FOR_EACH: {
         if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "forEach needs a function");
+        DSynchronousCallback callback;
+        if (!d_synchronous_capture(dom, ctx, argv[0], &callback)) return JS_EXCEPTION;
+        JSValue result = JS_UNDEFINED;
         /* Index by index, the list read again after each call. */
         for (size_t i = 0;; i++) {
             f = form_state(self);
             if (f == NULL || i >= f->count) break;
-            if (!d_require_callback(dom, ctx, argv[0])) return JS_EXCEPTION;
+            if (!d_require_callback(dom, ctx, argv[0])) { result = JS_EXCEPTION; break; }
             JSValue args[3] = {entry_value(ctx, &f->entries[i]),
                                JS_NewStringLen(ctx, f->entries[i].name, f->entries[i].name_length), JS_DupValue(ctx, self)};
             JSValue done = JS_IsException(args[0]) || JS_IsException(args[1]) ? JS_EXCEPTION
-                         : JS_Call(ctx, argv[0], argc > 1 ? argv[1] : JS_UNDEFINED, 3, args);
+                         : d_synchronous_call(dom, ctx, &callback, argc > 1 ? argv[1] : JS_UNDEFINED, 3, args);
             for (int k = 0; k < 3; k++) JS_FreeValue(ctx, args[k]);
-            if (JS_IsException(done)) return done;
+            if (JS_IsException(done)) { result = done; break; }
             JS_FreeValue(ctx, done);
         }
-        return JS_UNDEFINED;
+        d_synchronous_clear(dom->engine, &callback);
+        return result;
     }
     default: return JS_UNDEFINED;
     }

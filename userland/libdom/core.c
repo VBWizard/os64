@@ -712,6 +712,14 @@ os64_dom_cluster_t *os64_dom_cluster_create_with_neutral_promise_settings(os64_j
     return os64_dom_cluster_create_with_custom_settings(runtime, limits, outcome);
 }
 
+os64_dom_cluster_t *os64_dom_cluster_create_with_synchronous_settings(os64_js_runtime_t *runtime,
+    const os64_dom_cluster_limits_t *limits, os64_js_outcome_t *outcome)
+{
+    os64_dom_cluster_t *cluster = os64_dom_cluster_create_with_neutral_promise_settings(runtime, limits, outcome);
+    if (cluster) cluster->synchronous_settings = true;
+    return cluster;
+}
+
 static JSValue import_base(JSContext *ctx, void *opaque)
 {
     os64_dom_t *dom = opaque;

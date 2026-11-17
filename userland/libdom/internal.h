@@ -398,7 +398,7 @@ struct os64_dom_cluster {
     uint64_t effect_generation, animation_serial;
     bool sweep_pending;
     bool poisoned, drained;
-    bool timer_settings, listener_settings, scheduled_settings, handler_settings, observer_settings, custom_settings;
+    bool timer_settings, listener_settings, scheduled_settings, handler_settings, observer_settings, custom_settings, synchronous_settings;
     bool recovery_enabled, recovering, recovery_running, recovery_completed;
     bool streams_used; /* Self-hosted stream records require a separate unwind proof. */
     uint64_t recovery_generation;
@@ -1372,6 +1372,19 @@ uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst functio
 /* Callable realm's binding within this cluster, or the supplied fallback for
  * non-functions/unbound realms. NULL leaves a realm-lookup exception pending. */
 os64_dom_t *d_callback_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
+/* A synchronous callback owns captured.value in both modes. In legacy mode
+ * its runtime/entry are null. Engine-held records trace that value once. */
+typedef struct {
+    os64_js_callback_t captured;
+    os64_js_realm_t *entry;
+} DSynchronousCallback;
+#define D_SYNCHRONOUS_CALLBACK_INIT {OS64_JS_CALLBACK_INIT, NULL}
+bool d_synchronous_capture(os64_dom_t *, JSContext *, JSValueConst, DSynchronousCallback *);
+void d_synchronous_clear(JSRuntime *, DSynchronousCallback *);
+bool d_synchronous_live(JSContext *, const DSynchronousCallback *);
+JSValue d_synchronous_invoke(JSContext *, const DSynchronousCallback *, os64_js_callback_body_t *, void *);
+JSValue d_synchronous_call(os64_dom_t *, JSContext *, const DSynchronousCallback *, JSValueConst,
+                           int, JSValueConst *);
 /* Owning holders keep one callback value; captured.value aliases it in
  * settings mode. Engine-held records trace value once. A borrowed invocation
  * view may alias an existing registry root and must not be cleared. */

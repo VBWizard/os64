@@ -1,0 +1,21 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -6260,10 +6260,16 @@
+                 if (likely(sh == ctx->array_shape)) {
+                     pr = &p->prop[0];
+                 } else {
+-                    /* only used for the first array */
+-                    /* cannot fail */
++                    /* Adding length can allocate a shape before the object
++                       joins the GC list. Free its current shape on refusal. */
+                     pr = add_property(ctx, p, JS_ATOM_length,
+                                       JS_PROP_WRITABLE | JS_PROP_LENGTH);
++                    if (unlikely(!pr)) {
++                        js_free_shape(ctx->rt, p->shape);
++                        js_free(ctx, p->prop);
++                        js_free(ctx, p);
++                        return JS_EXCEPTION;
++                    }
+                 }
+                 pr->u.value = JS_NewInt32(ctx, 0);
+             }

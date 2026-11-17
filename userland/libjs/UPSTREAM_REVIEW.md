@@ -154,3 +154,13 @@ C API regression reproduces the same ownership error for Latin-1 and wide
 strings. Patch 0017 releases the reference on that label, preserving the
 pending exception and NULL/zero-length result. The adapter suite checks both
 target and sanitized engines with leak detection enabled.
+
+
+Patch 0038 checks the length-property insertion in `JS_NewObjectFromShape`.
+Shape cloning/growth can refuse an allocation; the upstream "cannot fail"
+comment was false. On refusal the object has not joined the GC list, so the
+patch frees its current shape, property storage and object directly. The DOM
+synchronous callback allocation sweep reproduces the null dereference with
+that opt-in disabled as well as enabled, and retains both paths as regression
+coverage. The engine identity changes without a public ABI or bytecode layout
+change.

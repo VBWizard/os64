@@ -263,14 +263,18 @@ exception reporting have a separate opt-in described in
 Current-settings base capture for imports without a source record is described in
 [IFRAME_F4_IMPORT_SETTINGS.md](IFRAME_F4_IMPORT_SETTINGS.md).
 
+Synchronous NodeFilter and pair-iterable callback conversion/invocation are
+recorded in [IFRAME_F4_SYNCHRONOUS_SETTINGS.md](IFRAME_F4_SYNCHRONOUS_SETTINGS.md).
+
 ## Remaining F.4b interfaces and acceptance gates
 
 Before publishing browser settings queries, implement and prove:
 
 - DOM integration of checked entry/lifecycle scopes and role-specific
   attribution, including relevant settings from the target binding.
-- Extend timer/listener/scheduled/handler/observer/custom-element integration
-  to the remaining WebIDL conversion and invocation sites,
+- Extend timer/listener/scheduled/handler/observer/custom-element/synchronous integration
+  to the remaining WebIDL conversion and invocation sites, including self-hosted
+  Streams,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.
 - Complete browser finalization task scheduling and the unresolved neutral-job

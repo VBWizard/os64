@@ -1223,23 +1223,27 @@ static JSValue params_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         return params_update(ctx, params) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }
     case Q_FOR_EACH: {
-        if (!JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "forEach needs a function");
+        if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "forEach needs a function");
+        DSynchronousCallback callback;
+        if (!d_synchronous_capture(dom, ctx, argv[0], &callback)) return JS_EXCEPTION;
+        JSValue result = JS_UNDEFINED;
         JSValueConst that = argc > 1 ? argv[1] : JS_UNDEFINED;
         for (size_t i = 0; i < params->count; i++) {
-            if (!d_require_callback(dom, ctx, argv[0])) return JS_EXCEPTION;
+            if (!d_require_callback(dom, ctx, argv[0])) { result = JS_EXCEPTION; break; }
             JSValue args[3] = {JS_NewStringLen(ctx, params->pairs[i].value, params->pairs[i].value_length),
                                JS_NewStringLen(ctx, params->pairs[i].name, params->pairs[i].name_length),
                                JS_DupValue(ctx, self)};
             JSValue done = JS_IsException(args[0]) || JS_IsException(args[1]) ? JS_EXCEPTION
-                         : JS_Call(ctx, argv[0], that, 3, (JSValueConst *)args);
+                         : d_synchronous_call(dom, ctx, &callback, that, 3, (JSValueConst *)args);
             for (int k = 0; k < 3; k++) JS_FreeValue(ctx, args[k]);
-            if (JS_IsException(done)) return done;
+            if (JS_IsException(done)) { result = done; break; }
             JS_FreeValue(ctx, done);
             /* The callback may have changed the list under the loop. */
             params = JS_GetOpaque(self, os64_js_class_id(&params_slot));
             if (params == NULL) break;
         }
-        return JS_UNDEFINED;
+        d_synchronous_clear(dom->engine, &callback);
+        return result;
     }
     case Q_ENTRIES: case Q_KEYS: case Q_VALUES: {
         JSValue object = JS_NewObjectClass(ctx, (int)os64_js_class_id(&iterator_slot));

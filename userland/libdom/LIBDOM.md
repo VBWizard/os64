@@ -2137,3 +2137,17 @@ handles replacement, invocation and drain without larger records. The
 ordinary constructors and Yonder do not enable this mode. See the
 [handler settings contract](../../docs/design/pending/IFRAME_F4_HANDLER_SETTINGS.md)
 for scope, engine identity requirements and qualified validation.
+
+
+### Opt-in synchronous callback settings
+
+`os64_dom_cluster_create_with_synchronous_settings` extends neutral-Promise
+settings to TreeWalker/NodeIterator NodeFilter and Headers/FormData/
+URLSearchParams `forEach`. Conversion captures the incumbent; invocation uses
+the associated object's realm for entry. NodeFilter lookup and unsigned-short
+return coercion stay inside that scope and the traversal's active flag.
+Getter reentry rechecks settings, candidate activity and executable eligibility.
+Pair iteration retains its live-list behavior and releases the callback record
+on each exit. See the [synchronous settings contract](../../docs/design/pending/IFRAME_F4_SYNCHRONOUS_SETTINGS.md)
+for lifecycle boundaries and validation. Ordinary constructors and Yonder keep
+their existing behavior.
