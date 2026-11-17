@@ -792,6 +792,8 @@ static void test_timer(void)
 	CHECK(t.wake_first && t.count == 812500, "no lease: the wake alone");
 	t = frame_clock_timer(0, tps, 10);
 	CHECK(t.wake_first && t.count == 1, "a wake already due: one tick, never zero (zero stops the timer)");
+	t = frame_clock_timer(1, tps, 0);
+	CHECK(t.count == 63, "a microsecond is 62.5 ticks, rounded up so it never fires early: %u", t.count);
 	t = frame_clock_timer(1ull << 50, tps, 0);
 	CHECK(t.count == 0xFFFFFFFFu, "a wake past the register's reach is the most it holds");
 	t = frame_clock_timer(5000, 10, 1);
