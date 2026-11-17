@@ -185,6 +185,22 @@ has run and stood stopped and how many times it started, since boot and
 since the file was last read. So "was a CPU withheld, and for how much of
 the time" is one `cat`.
 
+**The stall tripwire** (added 2026-11-17, after the P5's freeze, whose
+compositor kept running while no frame reached the glass). With the hold
+rule, composed damage is on the glass within two of the compositor's
+passes, and its loop turns at least once a lease even when stopped. So
+from the BSP's pass, once a tick, the clock is watched for half a second
+or more with damage owed and nothing shown, or with the loop standing
+still. Each episode is logged once under `DEBUG_EXCEPTIONS`, with where
+in its frame the compositor was, its thread state and whether it was
+expedited, whether the frame was held, what its CPU was running, that
+CPU's passes, frame wakes and lease expiries since the loop last turned,
+the frame's window and the reservation; its end is logged with its
+length. It logs and never acts. `/sys/gui` counts the episodes and the
+longest (`frame clock stalls:`), and none is the expected number. Writing
+`stall <ms>` (1 to 5000) to `/sys/gui` makes the compositor stand still
+once, which is how the tripwire is proved on any machine.
+
 **`NOFRAMECLOCK`** on the cmdline keeps today's tick-driven compositor for
 that boot: the flashlight, as `NETPOLL` and `USBPOLL` are. It does not
 travel to the P5 and does not need to.

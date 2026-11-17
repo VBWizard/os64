@@ -46,10 +46,19 @@ typedef struct {
 	uint64_t running_us, stopped_us, starts;
 	uint64_t running_since_read_us, stopped_since_read_us, starts_since_read;
 	uint64_t frame_wake_fires, lease_fires;   // timer fires on its CPU, since boot
+	uint64_t stalls, stall_longest_us;        // the stall tripwire's episodes, since boot
 } gui_frame_clock_status_t;
 void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart);
 
-// A line written to /sys/gui: `reserve on` or `reserve off`. 0 if taken.
+// The stall tripwire (FRAME_CLOCK.md § 8): from the BSP's pass, once a
+// tick, with the scheduler's queue lock held. Logs an episode of the clock
+// running with damage owed and nothing shown, or its loop standing still,
+// for more than half a second; never acts on one.
+void gui_frame_clock_watch_locked(void);
+
+// A line written to /sys/gui: `reserve on` or `reserve off` (the
+// reservation's dial), or `stall <ms>`, 1 to 5000 (the compositor stands
+// still once, which is how the stall tripwire is proved). 0 if taken.
 long gui_frame_clock_command(const char *line, size_t length);
 
 // The compositor daemon thread body (task_create name-matches "/guicomp" to

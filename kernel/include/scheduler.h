@@ -86,6 +86,11 @@
 	// after releasing it.
 	void scheduler_wake_task_waiter(task_t *task, thread_t *waiter);
     bool in_scheduler_context(void);
+	// The thread the queues say is running on `cpu` (the RUNNING thread that
+	// last switched in there), or NULL while its pass is mid-switch. Caller
+	// holds the queue lock, and the pointer is good only while it does. For
+	// reports, not decisions.
+	thread_t *scheduler_cpu_tenant_locked(uint32_t cpu);
 	// A CPU kept for the threads pinned to it while the compositor's frame
 	// clock runs (FRAME_CLOCK.md § 9), or SCHED_NO_RESERVED_CPU. Written by
 	// the compositor thread alone.

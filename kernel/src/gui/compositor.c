@@ -23,6 +23,7 @@
 #include "driver/system/x86_64.h"   // rdtsc — the lock times itself for /sys/gui
 #include "micros.h"          // micros_now — a publish's wait to reach the glass
 #include "memory/memcmp.h"   // memcmp — /sys/gui's dial lines
+#include "strings/sprintf.h" // snprintf — the stall tripwire's report
 #include "driver/display/beam.h"   // where the display's sweep is, for the frame clock's verdict
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
@@ -50,6 +51,7 @@ extern bool kTicklessScheduler;
 extern bool kNoFrameClock;                            // NOFRAMECLOCK: the clock is off this boot
 extern volatile uint64_t kFrameWakeFires[];           // scheduler.c: frame wakes per CPU
 extern volatile uint64_t kSchedBackstopFires[];       // scheduler.c: lease expiries per CPU
+extern volatile uint64_t kDiagPassCount[];            // scheduler.c: passes per CPU
 
 // The compositor task, created by gui_start(). Kept for diagnostics (the
 // frame clock's wake on damage is gui_frame_nudge, which needs only the CPU).
@@ -557,6 +559,23 @@ static uint32_t s_fc_glass_carry_count;
 // rule, frame_clock_hold_step). Whatever copies or drops the carry ends it.
 static fc_hold_t s_fc_hold;
 
+// The stall tripwire's view of the compositor (gui_frame_clock_watch_locked):
+// a beat a loop, where in the frame it is, and since when composed damage
+// has waited for the glass (0 = nothing owed). Written by the compositor,
+// read from the BSP's pass without a lock; a stale read moves a report by
+// a tick.
+typedef enum { FC_AT_PASS, FC_AT_SLEEP, FC_AT_AIM, FC_AT_COPY, FC_AT_STOPPED, FC_AT_PLACES } fc_at_t;
+static volatile uint64_t s_fc_beat;
+static volatile uint32_t s_fc_at;
+static volatile uint64_t s_fc_owed_since_us;
+// The tripwire's record, for /sys/gui: written by the watcher alone.
+static struct {
+	volatile uint64_t episodes, longest_us;
+} s_fc_stall;
+// A stall asked for by /sys/gui's `stall <ms>` (gui_frame_clock_command),
+// taken by the compositor's loop at its next turn: the tripwire's proof.
+static volatile uint64_t s_fc_test_stall_ms;
+
 static fc_piece_t s_fc_pieces[FC_COPY_PIECES];
 
 // Why the clock is off this boot, or NULL. From boot facts alone, so
@@ -629,6 +648,8 @@ static void fc_carry_add(rect_t r)
 {
 	if (rect_is_empty(r))
 		return;
+	if (s_fc_carry_count == 0)
+		s_fc_owed_since_us = micros_now();
 	if (s_fc_carry_count < DAMAGE_MAX_RECTS) {
 		s_fc_carry[s_fc_carry_count++] = r;
 		return;
@@ -661,6 +682,7 @@ static void fc_drop_carry(void)
 	glass_settle(s_fc_glass_carry, s_fc_glass_carry_count, false);
 	s_fc_glass_carry_count = 0;
 	s_fc_carry_count = 0;
+	s_fc_owed_since_us = 0;
 	s_fc_hold = (fc_hold_t){0};
 	s_fc_planned = false;
 }
@@ -672,6 +694,7 @@ static void fc_drop_carry(void)
 // thread that takes the CPU while the compositor sleeps runs only until it.
 static void fc_sleep_until(uint64_t wake_at)
 {
+	s_fc_at = FC_AT_SLEEP;
 	kSchedFrameDueUs = wake_at;
 	for (;;) {
 		__asm__ volatile("cli" ::: "memory");
@@ -694,6 +717,7 @@ static void fc_sleep_until(uint64_t wake_at)
 // up and interrupts the halt (sti's shadow delivers it at the hlt).
 static void fc_stopped_halt(void)
 {
+	s_fc_at = FC_AT_STOPPED;
 	__asm__ volatile("cli" ::: "memory");
 	__atomic_store_n(&s_fc_halted_stopped, true, __ATOMIC_SEQ_CST);
 	if (!input_pending() && kPendingDamageCount == 0 && !s_glass_regained) {
@@ -718,6 +742,7 @@ static void fc_stopped_halt(void)
 // carried is voided (fc_drop_carry); the return switch repaints it all.
 static void fc_copy(bool judge, uint32_t begin_line, uint64_t begin_us, uint64_t *flushes)
 {
+	s_fc_at = FC_AT_COPY;
 	fc_rect_t rects[DAMAGE_MAX_RECTS], out[DAMAGE_MAX_RECTS];
 	for (uint32_t i = 0; i < s_fc_carry_count; i++)
 		rects[i] = (fc_rect_t){ s_fc_carry[i].x, s_fc_carry[i].y, s_fc_carry[i].w, s_fc_carry[i].h };
@@ -750,6 +775,7 @@ static void fc_copy(bool judge, uint32_t begin_line, uint64_t begin_us, uint64_t
 	glass_settle(s_fc_glass_carry, s_fc_glass_carry_count, true);
 	s_fc_glass_carry_count = 0;
 	s_fc_carry_count = 0;
+	s_fc_owed_since_us = 0;
 	s_fc_hold = (fc_hold_t){0};
 	s_fc_clk_owed.frames++;
 }
@@ -825,6 +851,7 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 	s_fc_planned = false;
 
 	// The aim (§ 9): poll the beam until the blank, within the bound.
+	s_fc_at = FC_AT_AIM;
 	uint64_t bound = frame_clock_aim_bound_us(&f, s_fc_plan_lead);
 	uint64_t t0 = micros_now(), now = t0;
 	uint32_t first = 0;
@@ -1005,17 +1032,135 @@ void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart)
 	gui_unlock(flags);
 	out->frame_wake_fires = kFrameWakeFires[s_fc_cpu];
 	out->lease_fires = kSchedBackstopFires[s_fc_cpu];
+	out->stalls = s_fc_stall.episodes;
+	out->stall_longest_us = s_fc_stall.longest_us;
+}
+
+// ── The stall tripwire (FRAME_CLOCK.md § 8) ────────────────────────────────
+// With the hold rule, composed damage reaches the glass within two of the
+// compositor's passes, and its loop turns at least once a lease even when
+// stopped. So a half second with damage owed and nothing shown, or with
+// the loop standing still, is a fault, and this names it: once an episode,
+// under DEBUG_EXCEPTIONS, with where the compositor was, its state, what its
+// CPU was running and what that CPU's passes and timer did. It logs; it
+// does not heal. Called from the BSP's pass once a tick, holding the queue
+// lock (the tenant's name is read under it); its own state is that pass's.
+#define FC_STALL_US 500000
+
+static const char *fc_at_name(uint32_t at)
+{
+	static const char *const names[FC_AT_PLACES] = {
+		"in its pass (composing, or waiting for kGuiLock)", "asleep until its wake",
+		"aiming at the blank", "copying", "stopped",
+	};
+	return at < FC_AT_PLACES ? names[at] : "?";
+}
+
+static const char *fc_thread_state_name(uint32_t state)
+{
+	switch (state) {
+	case THREAD_STATE_RUNNING:  return "running";
+	case THREAD_STATE_RUNNABLE: return "runnable";
+	case THREAD_STATE_STOPPED:  return "stopped";
+	case THREAD_STATE_USLEEP:   return "usleep";
+	case THREAD_STATE_ISLEEP:   return "isleep";
+	case THREAD_STATE_ZOMBIE:   return "zombie";
+	default:                    return "none";
+	}
+}
+
+void gui_frame_clock_watch_locked(void)
+{
+	static uint64_t beat, beat_us, at_beat_passes, at_beat_wakes, at_beat_leases;
+	static uint64_t start_us, start_passes, start_wakes, start_leases;
+	static bool in;
+	thread_t *self = kSchedFrameThread;
+	if (self == NULL)
+		return;   // the clock is off, or the compositor has not published itself
+	uint32_t cpu = s_fc_cpu;
+	uint64_t now = micros_now();
+	uint64_t passes = kDiagPassCount[cpu], wakes = kFrameWakeFires[cpu], leases = kSchedBackstopFires[cpu];
+	if (s_fc_beat != beat || beat_us == 0) {
+		beat = s_fc_beat;
+		beat_us = now;
+		at_beat_passes = passes;
+		at_beat_wakes = wakes;
+		at_beat_leases = leases;
+	}
+	uint64_t owed_since = s_fc_owed_since_us;
+	uint64_t still_us = now - beat_us;
+	uint64_t unshown_us = owed_since != 0 && now > owed_since ? now - owed_since : 0;
+	bool stalled = still_us > FC_STALL_US || unshown_us > FC_STALL_US;
+
+	if (stalled && !in) {
+		in = true;
+		start_us = now - (still_us > unshown_us ? still_us : unshown_us);   // when it began, not when it was seen
+		start_passes = passes;
+		start_wakes = wakes;
+		start_leases = leases;
+		s_fc_stall.episodes++;
+		thread_t *tenant = scheduler_cpu_tenant_locked(cpu);
+		const char *tenant_name = tenant == NULL ? "(mid-switch)"
+		                        : tenant == self ? "the compositor"
+		                        : ((task_t *)tenant->ownerTask)->exename;
+		uint64_t due = kSchedFrameDueUs;
+		char window[48];
+		if (due == 0)
+			snprintf(window, sizeof window, "no frame planned");
+		else if (now >= due)
+			snprintf(window, sizeof window, "its window opened %lu us ago", now - due);
+		else
+			snprintf(window, sizeof window, "its window opens in %lu us", due - now);
+		printd(DEBUG_EXCEPTIONS,
+		       "frame clock: STALL %lu: nothing shown for %lu ms with damage owed, the loop still for %lu ms; "
+		       "the compositor is %s, %s%s, the frame %s, the clock %s; CPU %u runs %s (thread 0x%lx); "
+		       "since the last beat its CPU ran %lu passes, %lu frame wakes, %lu lease expiries; "
+		       "%s; reserve %s\n",
+		       s_fc_stall.episodes, unshown_us / 1000, still_us / 1000,
+		       fc_at_name(s_fc_at), fc_thread_state_name(self->threadState),
+		       self->expedite ? " (expedite set)" : "",
+		       s_fc_hold.held ? "held once" : "not held", s_fc_running ? "running" : "stopped",
+		       cpu, tenant_name, tenant != NULL ? (uint64_t)tenant->threadID : 0,
+		       passes - at_beat_passes, wakes - at_beat_wakes, leases - at_beat_leases,
+		       window, kSchedReservedCPU == (int32_t)cpu ? "in force" : "not in force");
+	} else if (!stalled && in) {
+		in = false;
+		uint64_t lasted = now - start_us;
+		if (lasted > s_fc_stall.longest_us)
+			s_fc_stall.longest_us = lasted;
+		printd(DEBUG_EXCEPTIONS,
+		       "frame clock: STALL %lu over after about %lu ms; since it was seen CPU %u ran %lu passes, "
+		       "%lu frame wakes, %lu lease expiries\n",
+		       s_fc_stall.episodes, lasted / 1000, cpu,
+		       passes - start_passes, wakes - start_wakes, leases - start_leases);
+	}
 }
 
 long gui_frame_clock_command(const char *line, size_t length)
 {
-	if (length == 10 && memcmp(line, "reserve on", 10) == 0)
+	if (length == 10 && memcmp(line, "reserve on", 10) == 0) {
 		s_fc_reserve_dial = true;
-	else if (length == 11 && memcmp(line, "reserve off", 11) == 0)
+		return 0;
+	}
+	if (length == 11 && memcmp(line, "reserve off", 11) == 0) {
 		s_fc_reserve_dial = false;
-	else
-		return -1;
-	return 0;
+		return 0;
+	}
+	// `stall <ms>`, 1 to 5000: the compositor stands still once, on purpose,
+	// so the tripwire's report can be seen on any machine (its proof).
+	if (length > 6 && memcmp(line, "stall ", 6) == 0) {
+		uint64_t ms = 0;
+		for (size_t i = 6; i < length; i++) {
+			if (line[i] < '0' || line[i] > '9' || ms > 5000)
+				return -1;
+			ms = ms * 10 + (uint64_t)(line[i] - '0');
+		}
+		if (ms == 0 || ms > 5000)
+			return -1;
+		s_fc_test_stall_ms = ms;
+		return 0;
+	}
+	return -1;
 }
 
 uint32_t gui_damage_take_locked(rect_t *out, uint32_t cap)
@@ -2363,6 +2508,16 @@ bool guicomp_thread(bool daemon)
 
 	while (1) {
 		frames++;
+		s_fc_beat++;          // the stall tripwire's heartbeat
+		s_fc_at = FC_AT_PASS;
+		uint64_t stall_ms = __atomic_exchange_n(&s_fc_test_stall_ms, 0, __ATOMIC_SEQ_CST);
+		if (stall_ms != 0) {
+			// The proof the tripwire asked for: stand still, interrupts on,
+			// holding nothing, so only the beat stops.
+			uint64_t until = micros_now() + stall_ms * 1000;
+			while (micros_now() < until)
+				__builtin_ia32_pause();
+		}
 
 		// -------- Drain input, route events, recomposite (one lock hold) ---
 		uint64_t irqflags = gui_lock(GUI_LOCK_COMPOSITE);

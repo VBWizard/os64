@@ -1679,6 +1679,11 @@ static void sys_gen_gui_frame_clock_state(synth_text_t *t, const gui_composite_c
 	                "under 800 us %lu, under 1.6 ms %lu, 1.6 ms or more %lu\n",
 	                comp->clk.wakes, s.frame_wake_fires, s.lease_fires, s.cpu,
 	                w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
+	// The tripwire: none is the expected number. DEBUG_EXCEPTIONS has the
+	// report of each (compositor.c, gui_frame_clock_watch_locked).
+	synth_text_addf(t, "frame clock stalls: %lu, longest %lu ms (half a second or more with damage "
+	                "owed and nothing shown, or the compositor's loop still)\n",
+	                s.stalls, s.stall_longest_us / 1000);
 }
 
 // The frame clock's block of /sys/gui: where the display's sweep is read
@@ -2523,9 +2528,9 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	    && !is_mediakeys && !is_gui)
 		return -1;
 
-	// /sys/gui written: `reserve on` / `reserve off` lines, the frame clock's
-	// dial (FRAME_CLOCK.md § 9, the reservation). Read, it is the report
-	// below, like any snapshot.
+	// /sys/gui written: the frame clock's lines (gui_frame_clock_command:
+	// the reservation's dial, and the stall tripwire's proof). Read, it is
+	// the report below, like any snapshot.
 	if (is_gui && mode[0] == 'w')
 	{
 		synth_text_t text = {0};

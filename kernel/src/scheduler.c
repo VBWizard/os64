@@ -809,6 +809,15 @@ thread_t* scheduler_get_running_thread(uint64_t threadID)
 	return slot;
 }
 
+thread_t *scheduler_cpu_tenant_locked(uint32_t cpu)
+{
+	thread_t *slot = scheduler_get_queue(THREAD_STATE_RUNNING);
+	for (; slot != NO_THREAD && slot != NO_NEXT; slot = slot->next)
+		if (slot->lastRunCPU == cpu)
+			return slot;
+	return NULL;
+}
+
 // Dump the saved interrupt-frame registers for one core.
 //
 // This used to take an `unconditional` flag that forced the dump out by

@@ -217,7 +217,8 @@ must be one `cat`.
   average and longest polling time;
 - its wakes: how many the compositor slept toward, the timer's frame-wake
   fires and lease expiries on its CPU, and how late each wake arrived, in
-  buckets doubling from 50 µs.
+  buckets doubling from 50 µs;
+- the stall tripwire's episodes and the longest (FRAME_CLOCK.md § 8).
 
 Counts and times are since boot and since the file was last read. Writing
 `reserve on` or `reserve off` to `/sys/gui` sets the reservation's dial.

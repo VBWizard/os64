@@ -1447,8 +1447,12 @@ read by every pass's eligibility test), and `/sys/gui` takes `reserve on`
 the old hlt-wait plus a nudge (`gui_frame_nudge`, lock-free, which owes the
 compositor the next pick on its CPU). Without a beam
 it runs free at 60 Hz. `/sys/gui` says whether it is running, for how long,
-whether the CPU is withheld, its frames, late ones by cause, the lead, the
-aim and its wakes. `NOFRAMECLOCK` turns it off for a boot, as do one CPU,
+whether the CPU is withheld, its frames, late ones by cause and the forced,
+the lead, the aim and its wakes, and **`frame clock stalls:`**, the
+tripwire's count of half-second episodes with damage owed and nothing shown
+or the compositor's loop still (each logged under `DEBUG_EXCEPTIONS`; none
+is the expected number; `echo stall 1500 > /sys/gui` proves it on any
+machine). `NOFRAMECLOCK` turns it off for a boot, as do one CPU,
 `SCHED=periodic` and `NOBACKSTOP` (the frame wake shares the CPU's timer
 by the lease's discipline).
 
