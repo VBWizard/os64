@@ -207,8 +207,14 @@ adopted unconditionally at boot; IRQ12 only when `GUI` is set.
 
 ## Frame pacing (and its scars)
 
-- **The design: hlt-wait, always.** The compositor never sleeps through the
-  scheduler and never busy-waits. Each frame pass it checks for work (input
+- **The frame clock paces it when it is on** (FRAME_CLOCK.md, § 9 the
+  states): the compositor is pinned to the last CPU, wakes by its own CPU's
+  timer the lead before the display's blank, aims, and copies at the blank;
+  with nothing to show it stops, and stopped is exactly the hlt-wait below
+  plus a nudge. `NOFRAMECLOCK`, one CPU, or `SCHED=periodic` turn it off,
+  and the hlt-wait below is then the whole design.
+- **The design without the clock: hlt-wait.** The compositor never sleeps
+  through the scheduler and never busy-waits. Each frame pass it checks for work (input
   queued? damage pending?) and, finding none, executes `sti; hlt` — halting
   its core until the next interrupt. kernel_init routes the input IRQs
   (1, 12) at the compositor's core precisely so a mouse packet or keystroke
@@ -232,18 +238,21 @@ adopted unconditionally at boot; IRQ12 only when `GUI` is set.
   TSCs under QEMU/WSL2 are desynchronized enough that a cycle target computed
   before a preemption could resume near-eternal. Never compare TSC values
   across a possible preemption.
-- **Scar #3 — the acute half HEALED (2026-08-13, the backstop arc):**
+- **Scar #3 — HEALED, the acute half 2026-08-13 (the backstop arc), the
+  chronic half by the frame clock's slice F2:**
   tickless mode (the DEFAULT since 2026-08-05; formerly the `BSPSCHED` flag)
   masks AP scheduler timers, which for a while made a pinned thread
   unpreemptable and nudge-only — the GUI boot entries carried an explicit
   `SCHED=periodic` while that was true. The preemption LEASE ended it: every
   non-idle AP dispatch arms a one-shot deadline, and the GUI entries dropped
   the workaround and run the default scheduler with `BACKSTOP=10` (verified
-  2026-08-13 — GUI on tickless, no workaround, butter). STILL OPEN, the
-  chronic half: `gui_compositor_affinity()` still declines the core-1 pin
-  under `kTicklessScheduler`, and damage publication still has no wake IPI —
-  the compositor's hlt-wait wakes on input IRQs and the backstop cadence, not
-  on a publish. Both live in the DEBTS tickless-GUI row.
+  2026-08-13 — GUI on tickless, no workaround, butter). The chronic half was
+  a refused pin under `kTicklessScheduler` and no wake on a publish, so the
+  hlt-wait woke only on input IRQs and the backstop cadence. With the frame
+  clock on, `gui_compositor_affinity()` pins to the last CPU, the AP's timer
+  is the lease and the frame wake, and damage, input and a return to the
+  screen nudge a stopped compositor awake (`gui_frame_nudge`). With the clock
+  off the pin and the wake are as they were.
 
 ## The userland boundary — full design (unbuilt; implement from this section)
 

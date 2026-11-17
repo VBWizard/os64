@@ -1185,6 +1185,10 @@ the library serves every process). How it fits together:
     MSI — and knet wakes only when the tick rings it (DOORBELL.md's
     flashlight, the path that carried every packet before the doorbell).
     Like every token: it does NOT travel to the P5 by itself
+  - `NOFRAMECLOCK`: the compositor paced as before the frame clock (the
+    tick, no pin under tickless, no reservation), F1's tearing measurement
+    still running so the two can be compared (FRAME_CLOCK.md § 8). Like
+    every token it does NOT travel to the P5: add it at the Limine menu
   - `USBPOLL`: no xHCI controller is given an interrupt; `kusb` drains them
     when the tick rings it (XHCI_INTERRUPT.md's flashlight). `/sys/usb`
     then reads `driven=tick (USBPOLL)`. Like every token it does NOT travel
@@ -1422,6 +1426,21 @@ says `source none` and why; `beam:` lines under
 judges copies beside a model display, and
 `tools/test_frame_clock_mutants.py` breaks each rule
 (`mutants_parallel.py ... --with kernel`).
+**The frame clock paces the compositor** (FRAME_CLOCK.md, § 9 the states;
+GUI_LOCK.md § The frame clock, running): pinned to the LAST CPU, it wakes
+by its own CPU's one-shot the lead before the blank (`frame_wake_set`, the
+timer's second writer beside the lease: it sets the timer again after every
+return from its halt, which is what lets the two share it), aims, and copies
+at the blank in strips; a missed blank holds the frame a refresh, counted
+by cause, never shown torn. While it runs, with four CPUs or more, its CPU
+is RESERVED: only threads pinned there run on it (`kSchedReservedCPU`,
+read by every pass's eligibility test), and `/sys/gui` takes `reserve on`
+/ `reserve off` lines to compare. With nothing to show it STOPS, which is
+the old hlt-wait plus a nudge (`gui_frame_nudge`, lock-free). Without a beam
+it runs free at 60 Hz. `/sys/gui` says whether it is running, for how long,
+whether the CPU is withheld, its frames, late ones by cause, the lead, the
+aim and its wakes. `NOFRAMECLOCK` turns it off for a boot, as do one CPU
+and `SCHED=periodic`.
 
 **Failure fingerprints (logging):**
 

@@ -101,11 +101,11 @@ time T": every wait resolves to the 10 ms tick, and the one one-shot timer
 is the scheduler's preemption lease, in whole milliseconds. What is added
 is small and is the compositor's alone:
 
-- **The compositor is pinned again** (it has declined its pin since
-  tickless became the default: DEBTS, "Tickless + GUI coexistence"). Not
-  to the BSP, which takes every device interrupt, and not to the BSP's
-  SMT sibling. Input interrupts follow the pin, as the routing code
-  already arranges.
+- **The compositor is pinned again**, to the last CPU brought up (ruling
+  5). Not the BSP, which takes every device interrupt, and with the
+  roster's order never the BSP's SMT sibling. Input interrupts follow the
+  pin, as the routing code already arranges. The pin alone does not make
+  the CPU the compositor's; the reservation does (§ 9).
 - **Before it halts, it sets its own CPU's timer** for the wake instant,
   in timer counts, and halts with the existing `sti; hlt`. Every return
   from the halt, whatever ended it, recomputes and sets it again, so a
@@ -170,6 +170,13 @@ free, and why); the refresh rate and the frame's lines; frames, late,
 torn; the lead in use; the aim's time, average and worst; how many are
 waiting for a frame. With `publish to glass:` beside it, a read before and
 after a workload measures it. CLAUDE.md gains the paragraph.
+
+**When the clock runs, readable at a glance** (Chris's ask): the block
+says the state now (off and why, running aimed or free, stopped and why),
+the compositor's CPU and whether it is reserved, and how long the clock
+has run and stood stopped and how many times it started, since boot and
+since the file was last read. So "was a CPU withheld, and for how much of
+the time" is one `cat`.
 
 **`NOFRAMECLOCK`** on the cmdline keeps today's tick-driven compositor for
 that boot: the flashlight, as `NETPOLL` and `USBPOLL` are. It does not
@@ -306,6 +313,11 @@ after.
 4. **About 4 ms more latency on average for typing and the pointer** is
    accepted as the price of no tearing; `NOFRAMECLOCK` is there to feel
    the difference.
-5. **The compositor is pinned** to CPU 2 where the BSP has an SMT sibling,
-   CPU 1 otherwise, as one named constant; a setting only if someone needs
-   one.
+5. **The compositor is pinned to the last CPU brought up** (rewritten by
+   Chris on 2026-11-16, replacing "CPU 2 where the BSP has an SMT sibling,
+   CPU 1 otherwise"). With the roster's order (the BSP is CPU 0, siblings
+   side by side) the last CPU is never the BSP's sibling on a machine with
+   more than two, so no topology needs reading; and it keeps the compositor
+   off the low numbers people pin their own work to (`PINCPU=2` for
+   benchmarks). With two CPUs it is CPU 1; with one there is no pin and the
+   clock is off.

@@ -51,8 +51,8 @@ extern bool kNoFrameClock;                            // NOFRAMECLOCK: the clock
 extern volatile uint64_t kFrameWakeFires[];           // scheduler.c: frame wakes per CPU
 extern volatile uint64_t kSchedBackstopFires[];       // scheduler.c: lease expiries per CPU
 
-// The compositor task, created by gui_start(). Kept for future use
-// (diagnostics, wake-on-damage once an IRQ-safe wake primitive exists).
+// The compositor task, created by gui_start(). Kept for diagnostics (the
+// frame clock's wake on damage is gui_frame_nudge, which needs only the CPU).
 task_t *kGuiCompTask = NULL;
 
 // ---------------------------------------------------------------------------
@@ -223,7 +223,9 @@ void gui_vt8_focus_gained(void)
 static surface_t kDesktop;
 
 // ---------------------------------------------------------------------------
-// Frame pacing: hlt-wait, always.
+// Frame pacing: hlt-wait. With the frame clock on, the clock paces (its
+// section below; FRAME_CLOCK.md § 9), and its stopped state is exactly this
+// hlt-wait plus a nudge. What follows is the pacing with the clock off.
 //
 // The compositor never sleeps through the scheduler and never busy-waits:
 // it HALTS its core until something interrupt-shaped happens. Because
