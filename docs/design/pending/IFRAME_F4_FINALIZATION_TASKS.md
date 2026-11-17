@@ -64,8 +64,7 @@ bounded dispatch task. Global cancellation and allocation failure remain sticky.
 
 Ordinary execution outcomes' `jobs_pending` continues to describe microtasks.
 Recovery inspection and global-fallback outcomes conservatively include both
-queues. The separate
-presence query describes deferred cleanup. Quiescence and recovery bookkeeping
+queues. The separate presence query describes deferred cleanup. Quiescence and recovery bookkeeping
 include both queues: separating tasks cannot make a runtime with retained work
 eligible for child recovery. This adds no recovery or reclamation permission.
 
@@ -99,6 +98,24 @@ the conservative recovery fallback. DOM integration converts a custom-element
 callback from cleanup, then invokes its constructor and reactions after cleanup
 has ended, preserving the captured source and incumbent.
 
-Validation counts and shipping build evidence are recorded after the final run.
+The final engine passes **37,935 / 126,865 full runtime checks**, zero failures
+or live allocations, including parser refusal and fatal-invariant checks. The
+focused suite passes **3,073 / 5,103 checks**. Per teardown policy, allocation
+injection covers **3 / 17 failure points per scheduling lane** across construction,
+registration and enqueue. The saved engine without the final teardown drain
+fails the new pending-destruction regression with its unreleased-object
+invariant; the final engine passes.
+
+Final-engine DOM suites pass in both profiles: cleanup **474**, Promise **246**,
+retirement **9,770** and recovery **3,198** checks. Shipping Yonder, CLI and runtime
+consumer builds pass; source preparation, cross-header syntax and **235 engine /
+87 runtime exports** pass. The prepared engine identity is
+`080adbfbae69f140fb21523ae525a8e1e133bb6e97c3f5a602b1e49d817ca87d`.
+The full shipping-core DOM suite passes **444,031 checks**, zero failures,
+including **14,473 binding allocation cuts**. That broad run used the task
+implementation before the final shutdown-drain correction; the final-engine DOM
+suites above and the negative teardown regression cover the corrected shutdown.
+Both root teardown policies are exercised. Source, binaries and logs are frozen
+with a SHA-256 manifest for PR #646.
 ASan, UBSan and LeakSanitizer remain enabled. Host execution and guest compilation
 do not constitute P5 acceptance or enable visible frames.
