@@ -279,9 +279,14 @@ static int bench(const char *path, int mode, long limit, Result *res)
             av_frame_unref(frame);
         }
         total += dt;
+        // A decoder error fails the run before anything may end it normally,
+        // the flush included (draining H.264's delayed pictures can fail):
+        // EAGAIN (send more) and EOF (drained) are the decoder's two normal
+        // answers to a receive, and to a send while flushing.
+        if (r != AVERROR(EAGAIN) && r != AVERROR_EOF) { os64_printf("avbench: decode error %d\n", r); goto out; }
+        if (s < 0 && s != AVERROR(EAGAIN) && s != AVERROR_EOF) { os64_printf("avbench: decode error %d\n", s); goto out; }
         if (!flushing) {
             av_packet_unref(pkt);
-            if (s < 0 && s != AVERROR(EAGAIN)) { os64_printf("avbench: decode error %d\n", s); goto out; }
             if (n == cap) {
                 int64_t *bigger = os64_realloc(times, cap * 2 * sizeof(int64_t));
                 if (!bigger) goto out;
@@ -291,7 +296,6 @@ static int bench(const char *path, int mode, long limit, Result *res)
             times[n++] = dt;
         }
         if ((flushing && !got) || (limit > 0 && res->frames >= limit)) break;
-        if (r != AVERROR(EAGAIN) && r != AVERROR_EOF) { os64_printf("avbench: decode error %d\n", r); goto out; }
     }
     sort_us(times, n);
     res->crc = crc ^ 0xFFFFFFFFu;
