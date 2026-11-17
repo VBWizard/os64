@@ -118,7 +118,8 @@ hosts, read 11/07).*
    (`new Worker(URL.createObjectURL(new Blob([code])))`), and both
    challenge pages this doc is for want them (`worker-src blob:` in the
    CDN challenge's CSP; es-module-shims' takeover fetches through them,
-   importmap.c's comment). W0 builds the store: `blob:<origin>/<uuid>`,
+   importmap.c's comment). BLOB_URLS.md is W0's design, with FileReader
+   beside it. W0 builds the store: `blob:<origin>/<uuid>`,
    one store per page shared by its window and its workers under a lock,
    entries holding the bytes outside any engine, revoked by the verb or
    at the page's departure, fetched by yonder's own door before the pool
