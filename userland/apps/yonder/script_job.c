@@ -2,6 +2,7 @@
 // (script_job.h).
 
 #include "script_job.h"
+#include "dom/dom.h"
 #include "os64/mem.h"
 #include "os64/slurp.h"
 #include "os64/str.h"
@@ -16,6 +17,17 @@ int64_t yonder_script_run(void *job, bool (*cancelled)(void *ctx), void *ctx, vo
         return -1;
     *out = s;
     os64_strcopy(s->url, sizeof(s->url), j->url);
+    // A blob: address's script is its entry's bytes, read in place: no
+    // label but the fallback, and no compiled form kept (it has no cache
+    // entry to keep one beside).
+    if (j->blob != NULL) {
+        size_t len = os64_dom_blob_length(j->blob);
+        if (len > SCRIPT_SOURCE_MAX)
+            return 0;
+        s->source = yonder_script_decode(os64_dom_blob_bytes(j->blob), len, NULL, j->fallback, &s->length);
+        s->ok = s->source != NULL;
+        return s->ok ? 1 : 0;
+    }
     // A script beside a page read from disk is a file, with no label but
     // the fallback.
     if (os64_strlen(j->url) > 7 && os64_memcmp(j->url, "file://", 7) == 0) {
@@ -72,5 +84,7 @@ void yonder_script_release(void *job, void *product)
         yonder_bytecode_free(s->bytecode);
         os64_free(s);
     }
+    if (job != NULL)
+        os64_dom_blob_release(((yonder_script_job_t *)job)->blob);
     os64_free(job);
 }

@@ -31,6 +31,9 @@ typedef struct {
     // classic script").
     char fallback[32];
     way_hooks_t hooks;              // the page's cookies, its Referer, who asks, the cache
+    // A blob: address's entry (BLOB_URLS.md), held: the source is read
+    // from its bytes in place, and yonder_script_release lets it go.
+    struct os64_dom_blob *blob;
 } yonder_script_job_t;
 
 typedef struct {

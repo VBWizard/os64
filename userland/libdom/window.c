@@ -26,6 +26,21 @@ void d_navigate(os64_dom_t *dom, os64_dom_navigation_kind_t kind, const os64_htm
         dom->navigation.delta = sum > INT32_MAX ? INT32_MAX : sum < INT32_MIN ? INT32_MIN : (int32_t)sum;
         return;
     }
+    /* A blob: address's entry is taken now, inside the call that asked
+     * (BLOB_URLS.md § 1.3): a link followed or a URL assigned, which the
+     * host acts on only after the task, when the page may have revoked
+     * it. */
+    os64_dom_blob_t *blob = NULL;
+    if ((kind == OS64_DOM_NAVIGATE_URL || kind == OS64_DOM_NAVIGATE_REPLACE) && url != NULL) {
+        blob = d_blob_url_take(dom, url);
+    } else if (kind == OS64_DOM_NAVIGATE_FOLLOW && node != NULL) {
+        const os64_html_attr_t *href = os64_html_attr_ns(node, NULL, "href");
+        char resolved[OS64_DOM_URL_MAX];
+        if (href != NULL && os64_dom_resolve(dom->document, dom->url, href->value, resolved, sizeof(resolved)))
+            blob = d_blob_url_take(dom, resolved);
+    }
+    os64_dom_blob_release(dom->navigation.blob);
+    dom->navigation.blob = blob;
     if (node != NULL) os64_html_hold(dom->document, node);
     if (submitter != NULL) os64_html_hold(dom->document, submitter);
     if (dom->navigation.node != NULL) os64_html_release(dom->document, dom->navigation.node);
@@ -52,6 +67,7 @@ bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask)
     ask->submitter = dom->navigation.submitter;
     ask->delta = dom->navigation.delta;
     os64_strcopy(ask->url, sizeof(ask->url), dom->navigation.url);
+    ask->blob = dom->navigation.blob;   /* the hold passes to the taker */
     os64_memset(&dom->navigation, 0, sizeof(dom->navigation));
     return true;
 }

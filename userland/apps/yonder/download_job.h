@@ -44,6 +44,10 @@ typedef struct {
     // not, why, for the downloads list.
     bool whole;
     char why[160];
+    // A blob: address's entry (BLOB_URLS.md), held: its bytes are written
+    // from where they are and nothing is fetched; yonder_download_release
+    // lets it go. NULL for any other address.
+    struct os64_dom_blob *blob;
 } yonder_download_job_t;
 
 // 1 when the file is whole under its name, 0 when it failed (`why` says

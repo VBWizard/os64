@@ -2,6 +2,7 @@
 
 #include "picture.h"
 #include "diag.h"
+#include "dom/dom.h"
 #include "fetch_job.h"
 #include "scale.h"
 #include "os64/fmt.h"
@@ -259,6 +260,30 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         os64_free(bytes);
         return p->status == OS64_IMAGE_OK ? 1 : 0;
     }
+    // A blob: picture is its entry's bytes (BLOB_URLS.md), decoded in place
+    // with the entry's type. Unlike a data: address, a revoked blob: URL
+    // cannot be asked again, so a recoverable one keeps a copy of its
+    // bytes, as a fetched picture keeps its body.
+    if (j->blob != NULL) {
+        const uint8_t *bytes = os64_dom_blob_bytes(j->blob);
+        size_t len = os64_dom_blob_length(j->blob);
+        if (len == 0) {
+            p->status = OS64_IMAGE_NO_FILE;
+            os64_strcopy(p->why, sizeof(p->why), "its blob: entry is empty");
+        } else if (len > OS64_IMAGE_CAP_DEFAULT) {
+            p->status = OS64_IMAGE_TOO_BIG;
+            os64_strcopy(p->why, sizeof(p->why), "its blob: entry is past the picture cap");
+        } else {
+            p->status = decode_observed(bytes, len, os64_dom_blob_type(j->blob), j, cancelled, ctx, p);
+            p->origin_clean = true;
+            uint8_t *kept = j->recoverable && p->status == OS64_IMAGE_OK ? os64_malloc(len) : NULL;
+            if (kept != NULL)
+                os64_memcpy(kept, bytes, len);
+            preserve_body(j, p, &kept, len);
+            os64_free(kept);
+        }
+        return p->status == OS64_IMAGE_OK ? 1 : 0;
+    }
     // A picture on a page read from disk is a file beside it.
     if (os64_strlen(j->url) > 7 && os64_memcmp(j->url, "file://", 7) == 0) {
         size_t len = 0;
@@ -359,6 +384,7 @@ void yonder_picture_release(void *job, void *product)
     if (job != NULL) {
         yonder_picture_backing_free(((yonder_picture_job_t *)job)->source);
         os64_free(((yonder_picture_job_t *)job)->data_url);
+        os64_dom_blob_release(((yonder_picture_job_t *)job)->blob);
     }
     os64_free(job);
 }

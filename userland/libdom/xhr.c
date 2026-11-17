@@ -42,6 +42,10 @@ typedef struct {
     uint32_t generation;
     char method[WAY_METHOD_MAX];
     char *url;
+    /* A blob: URL's entry, taken at open() where the standard parses it
+     * (BLOB_URLS.md § 1.3), so a revocation before send() does not reach
+     * it; NULL for any other address. */
+    os64_dom_blob_t *blob;
     XHeader *headers;
     size_t header_count, header_cap;
     uint32_t timeout, timer, token;
@@ -118,6 +122,7 @@ static void xhr_finalizer(JSRuntime *rt, JSValue value)
     headers_clear(rt, x);
     js_free_rt(rt, x->headers);
     js_free_rt(rt, x->url);
+    os64_dom_blob_release(x->blob);
     js_free_rt(rt, x->override_type);
     response_reset(rt, x);
     JS_FreeValueRT(rt, x->upload);
@@ -696,6 +701,8 @@ static JSValue xhr_open(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int 
     os64_strcopy(x->method, sizeof(x->method), normalized);
     js_free(ctx, x->url);
     x->url = url;
+    os64_dom_blob_release(x->blob);
+    x->blob = d_blob_url_take(dom, url);
     x->sync = !async;
     headers_clear(JS_GetRuntime(ctx), x);
     response_reset(JS_GetRuntime(ctx), x);
@@ -828,6 +835,7 @@ static void request_of(const DXhr *x, os64_dom_t *dom, const char *headers, size
         .credentials = x->with_credentials ? WAY_CREDENTIALS_INCLUDE : WAY_CREDENTIALS_SAME_ORIGIN,
         .redirect = WAY_REDIRECT_FOLLOW, .policy = WAY_POLICY_STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
         .preflight = x->upload_listener, .referrer = dom->url != NULL ? dom->url : "",
+        .blob = x->blob,
     };
 }
 

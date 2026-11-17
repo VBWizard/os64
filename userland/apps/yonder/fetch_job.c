@@ -26,6 +26,7 @@
 #include "fetch_job.h"
 #include "fetch_pipe.h"
 
+#include "dom/dom.h"
 #include "os64/date.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
@@ -478,6 +479,7 @@ void yonder_fetch_release(void *job, void *product)
     yonder_fetched_free(product);
     if (j != NULL) {
         yonder_fetch_pipe_release(j->pipe);
+        os64_dom_blob_release(j->blob);
         os64_free(j->url);
         os64_free(j->headers);
         os64_free(j->body);
@@ -1240,6 +1242,49 @@ static void cache_invalidate(const yonder_fetch_job_t *job, const way_request_t 
     os64_free(target);
 }
 
+static bool blob_address(const char *url)
+{
+    return os64_strlen(url) >= 5 && os64_memcmp(url, "blob:", 5) == 0;
+}
+
+// Fetch's scheme fetch for a blob: URL (BLOB_URLS.md § 1.5), from the
+// entry the job holds: a GET only, 200 with the entry's type and length,
+// the body whole and the response basic, written to no cache. The body is
+// the answer's own copy, as every consumer of an answer takes its body.
+static int64_t blob_answer(const yonder_fetch_job_t *job, const way_request_t *r, const char *current,
+                           uint64_t max_body, yonder_fetched_t *got)
+{
+    if (job->blob == NULL)
+        return network_error(got, "a blob: URL that names nothing here (revoked, never made, or another page's)");
+    if (!os64_streq(r->method, "GET"))
+        return network_error(got, "a blob: URL fetched with a method other than GET");
+    size_t len = os64_dom_blob_length(job->blob);
+    if (len > max_body)
+        return network_error(got, "a blob: URL past the body's cap");
+    const char *type = os64_dom_blob_type(job->blob);
+    char line[WAY_MIME_SERIALIZED_MAX + 64];
+    size_t n = type[0] != '\0'
+        ? os64_snprintf(line, sizeof(line), "Content-Type: %s\r\nContent-Length: %zu\r\n", type, len)
+        : os64_snprintf(line, sizeof(line), "Content-Length: %zu\r\n", len);
+    if (n >= sizeof(line))
+        return network_error(got, "a blob: URL whose type is too long to answer with");
+    got->headers = copy_text(line, n);
+    got->headers_len = n;
+    got->url = without_fragment(current);
+    got->body = os64_malloc(len > 0 ? len : 1);
+    if (got->headers == NULL || got->url == NULL || got->body == NULL)
+        return network_error(got, "out of memory");
+    if (len > 0)
+        os64_memcpy(got->body, os64_dom_blob_bytes(job->blob), len);
+    got->ok = true;
+    got->type = WAY_TYPE_BASIC;
+    got->status = 200;
+    os64_strcopy(got->status_text, sizeof(got->status_text), "OK");
+    got->has_body = way_response_has_body(r, WAY_TYPE_BASIC, 200);
+    got->body_len = got->has_body ? len : 0;
+    return 1;
+}
+
 static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out, way_dest_t destination);
 
 // The fetch, timed whole, whichever way it ended: what a request cost is
@@ -1283,7 +1328,12 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     h.page_given = page_sets(r);
     int64_t verdict = 0;
     Cached *cached = NULL;          // the cache's, for the first hop (cache_open)
-    for (;;) {
+    // A blob: address is answered from its entry and never reaches a hop:
+    // a redirect to one is refused by way_main_fetch, and libfetch speaks
+    // no scheme but http(s), the floor under every door (BLOB_URLS.md § 1.9).
+    if (blob_address(current))
+        verdict = blob_answer(job, r, current, max_body, got);
+    else for (;;) {
         if (cancelled != NULL && cancelled(ctx)) {
             network_error(got, "cancelled");
             break;

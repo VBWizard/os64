@@ -363,6 +363,7 @@ typedef struct {
     int32_t delta;
     bool user_activated;
     char url[OS64_DOM_URL_MAX];
+    os64_dom_blob_t *blob;          /* os64_dom_navigation_t.blob, held */
 } DNavigation;
 /* Native mouse state is held by the document, not by synthetic Event objects. */
 typedef struct {
@@ -1482,6 +1483,19 @@ int d_resizable_buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst valu
  * The one source getRandomValues, randomUUID and crypto.subtle's keys
  * draw from. */
 bool d_crypto_entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length);
+/* A version 4 UUID's 36 characters and its NUL into `out`, from
+ * d_crypto_entropy (false with its exception pending). */
+bool d_uuid_text(os64_dom_t *dom, JSContext *ctx, char out[37]);
+/* URL.createObjectURL and URL.revokeObjectURL (blob_url.c, BLOB_URLS.md),
+ * installed on URL by url.c with these magics; and the take libdom makes
+ * where the standard parses a URL it was given (fetch(), xhr.open(), a
+ * followed link): the page's entry for `url`, a reference the caller
+ * releases, or NULL for an address that names none or a binding with no
+ * store. */
+enum { D_BLOB_URL_CREATE, D_BLOB_URL_REVOKE };
+JSValue d_blob_url_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                          JSValue *data);
+os64_dom_blob_t *d_blob_url_take(os64_dom_t *dom, const char *url);
 /* WebIDL's shape for an interface's members, in place on its prototype
  * (window.c): each own operation enumerable, as d_method makes none, and
  * each attribute's functions named "get x" and "set x", as d_accessor makes

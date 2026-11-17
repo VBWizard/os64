@@ -122,25 +122,31 @@ static JSValue get_random_values(os64_dom_t *dom, JSContext *ctx, int argc, JSVa
     return JS_DupValue(ctx, array);
 }
 
-/* randomUUID(): a version 4 UUID (RFC 9562 § 5.4) from 16 bytes of
- * entropy, in lowercase hex with its four dashes, as Web Cryptography
- * writes one. */
-static JSValue random_uuid(os64_dom_t *dom, JSContext *ctx)
+/* A version 4 UUID (RFC 9562 § 5.4) from 16 bytes of entropy, in
+ * lowercase hex with its four dashes, as Web Cryptography writes one:
+ * randomUUID()'s, and a blob URL's (blob_url.c). */
+bool d_uuid_text(os64_dom_t *dom, JSContext *ctx, char out[37])
 {
     uint8_t b[16];
-    if (!d_crypto_entropy(dom, ctx, b, sizeof(b))) return JS_EXCEPTION;
+    if (!d_crypto_entropy(dom, ctx, b, sizeof(b))) return false;
     b[6] = (uint8_t)((b[6] & 0x0f) | 0x40);
     b[8] = (uint8_t)((b[8] & 0x3f) | 0x80);
     static const char kHex[] = "0123456789abcdef";
-    char text[37];
     size_t at = 0;
     for (int i = 0; i < 16; i++) {
-        if (i == 4 || i == 6 || i == 8 || i == 10) text[at++] = '-';
-        text[at++] = kHex[b[i] >> 4];
-        text[at++] = kHex[b[i] & 15];
+        if (i == 4 || i == 6 || i == 8 || i == 10) out[at++] = '-';
+        out[at++] = kHex[b[i] >> 4];
+        out[at++] = kHex[b[i] & 15];
     }
-    text[at] = '\0';
-    return JS_NewStringLen(ctx, text, at);
+    out[at] = '\0';
+    return true;
+}
+
+static JSValue random_uuid(os64_dom_t *dom, JSContext *ctx)
+{
+    char text[37];
+    if (!d_uuid_text(dom, ctx, text)) return JS_EXCEPTION;
+    return JS_NewStringLen(ctx, text, 36);
 }
 
 static JSValue crypto_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,

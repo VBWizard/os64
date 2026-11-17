@@ -49,6 +49,10 @@ typedef struct {
     // `url` may not hold one whole, and the page's catalog may be gone before
     // the worker is: yonder_picture_release frees it, product or none.
     char *data_url;
+    // A blob: address's entry (BLOB_URLS.md), taken when the picture is
+    // submitted and held: the picture is decoded from it, and
+    // yonder_picture_release lets it go. NULL for any other address.
+    struct os64_dom_blob *blob;
     unsigned canvas_request;        // 0 display; 1 no-cors; 2 anonymous; 3 use-credentials
     unsigned display_cors;          // 0 ordinary display; 2 anonymous; 3 use-credentials
     // The browser's cookies and the page's address for the Referer: a

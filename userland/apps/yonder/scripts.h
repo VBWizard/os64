@@ -391,6 +391,9 @@ bool yonder_scripts_piece(yonder_scripts_t *scripts, uint32_t token, const uint8
 bool yonder_scripts_end(yonder_scripts_t *scripts, uint32_t token, bool ok, os64_js_outcome_t *outcome);
 // The navigation the last task asked for; nodes arrive held.
 bool yonder_scripts_take_navigation(yonder_scripts_t *scripts, os64_dom_navigation_t *ask);
+// The page's blob URL store (BLOB_URLS.md): what its doors take a blob:
+// address's entry from; NULL for none (no scripts host, or no memory).
+os64_dom_blob_store_t *yonder_scripts_blobs(const yonder_scripts_t *scripts);
 // A new task budget, from the next task on, and the budget tasks have.
 void yonder_scripts_set_execution_ms(yonder_scripts_t *scripts, uint64_t ms);
 uint64_t yonder_scripts_execution_ms(const yonder_scripts_t *scripts);

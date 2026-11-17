@@ -11,7 +11,7 @@ LIBDOM_SRCS += libdom/implementation.c
 # Slice 0d: Element.attributes, NamedNodeMap and Attr.
 LIBDOM_SRCS += libdom/attr.c
 # The Modern Web's slice 2: fetch and its objects, XMLHttpRequest, DOMException.
-LIBDOM_SRCS += libdom/fetch.c libdom/abort.c libdom/blob.c libdom/xhr.c libdom/exception.c
+LIBDOM_SRCS += libdom/fetch.c libdom/abort.c libdom/blob.c libdom/blob_url.c libdom/xhr.c libdom/exception.c
 # P1-W: window as a browsing context, its BarProps and external; crypto.
 LIBDOM_SRCS += libdom/browsing.c libdom/crypto.c
 # crypto.subtle (WEB_CRYPTO.md): the binding and its pure core, over the
