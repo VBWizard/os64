@@ -23,10 +23,12 @@ is committed:
   inline-asm abilities) is the host gcc's, which answers as the cross gcc
   does; a host whose cc is not gcc may see --check differ there.
 - sources.mk: the objects FFmpeg's own makefiles would build (its
-  lib*.a.objs lists), as source paths.
-- upstream/: exactly those sources and every FFmpeg header they include,
-  found by the cross compiler's own dependency output, byte for byte from
-  the archive, plus the licence files. Nothing is patched.
+  lib*.a.objs lists), as source paths: C, and the x86 assembly as a list of
+  its own.
+- upstream/: exactly those sources and every FFmpeg header and assembly
+  include they reach, found by the cross compiler's and nasm's own
+  dependency output, byte for byte from the archive, plus the licence
+  files. Nothing is patched.
 
 An override that no longer matches a line of the generated config.h fails
 the run: an upstream change to what configure writes must be looked at, not
@@ -34,8 +36,8 @@ silently skipped. tools/test_av_audit.py checks the tree against the
 manifest on every run; this script is what checks the manifest against
 FFmpeg.
 
-Needs: a host `cc` (configure's probes), `x86_64-elf-gcc` (the dependency
-walk), `make`, and the archive. Takes about a minute.
+Needs: a host `cc` (configure's probes), `x86_64-elf-gcc` and `nasm` (the
+dependency walks), `make`, and the archive. Takes about a minute.
 """
 import hashlib
 import json
@@ -60,6 +62,11 @@ SOURCES_MK = LIB / 'sources.mk'
 # configure's generated files the build needs, relative to its build tree.
 GENERATED = [
     'config.h',
+    # The assembly's twins of config.h (which every .asm source includes,
+    # nasm -P) and config_components.h. configure writes both whatever the
+    # configuration.
+    'config.asm',
+    'config_components.asm',
     'config_components.h',
     'libavutil/avconfig.h',
     'libavutil/ffversion.h',
@@ -131,20 +138,36 @@ def produce(archive, manifest, out):
         for lib in LIBRARIES:
             listed = (build / lib / f'{lib}.a.objs').read_text().split()
             objects += [o for o in listed if o.endswith('.o')]
-        sources = []
+        # An object is built from a .c, or, for FFmpeg's x86 assembly, from
+        # a .asm of the same name (its makefiles' own %.o: %.asm rule).
+        sources, asm_sources = [], []
         for obj in sorted(objects):
-            c = obj[:-2] + '.c'
-            if not (src / c).exists():
-                raise SystemExit(f'{obj}: no source {c} in the archive')
-            sources.append(c)
+            c, asm = obj[:-2] + '.c', obj[:-2] + '.asm'
+            if (src / c).exists():
+                sources.append(c)
+            elif (src / asm).exists():
+                asm_sources.append(asm)
+            else:
+                raise SystemExit(f'{obj}: no source {c} or {asm} in the archive')
 
-        needed = set(sources) | set(ALWAYS)
+        needed = set(sources) | set(asm_sources) | set(ALWAYS)
         flags = ['-std=c17', '-ffreestanding', '-MM', '-DHAVE_AV_CONFIG_H',
                  f'-I{COMPAT}', f'-I{LIB / "port"}', f'-I{config}', f'-I{src}',
                  f'-I{USERLAND / "libos64/include"}', f'-I{ROOT / "abi/include"}',
                  f'-I{USERLAND / "libmath/include"}']
         for c in sources:
             deps = run(['x86_64-elf-gcc'] + flags + [str(src / c)], build)
+            for dep in deps.replace('\\\n', ' ').split(':', 1)[1].split():
+                dep = Path(os.path.normpath(dep))
+                if dep.is_relative_to(src):
+                    needed.add(str(dep.relative_to(src)))
+        # The assembly's includes (x86inc.asm, x86util.asm and the rest), by
+        # nasm's own dependency output, with FFmpeg's include path:
+        # common.mak's -I. -I$(SRC_PATH) -I$(<D)/ -Pconfig.asm.
+        for asm in asm_sources:
+            path = src / asm
+            deps = run(['nasm', '-f', 'elf64', '-M', f'-I{config}/', f'-I{src}/',
+                        f'-I{path.parent}/', f'-P{config}/config.asm', str(path)], build)
             for dep in deps.replace('\\\n', ' ').split(':', 1)[1].split():
                 dep = Path(os.path.normpath(dep))
                 if dep.is_relative_to(src):
@@ -161,6 +184,9 @@ def produce(archive, manifest, out):
                  '# never edited by hand.',
                  'AV_UPSTREAM_SRCS := \\']
         lines += [f'    upstream/{c} \\' for c in sources]
+        lines.append('')
+        lines.append('AV_UPSTREAM_ASM := \\')
+        lines += [f'    upstream/{a} \\' for a in asm_sources]
         lines.append('')
         lines.append('AV_PORT_SRCS := port/av_libc.c port/av_format.c port/av_port.c')
         (out / 'sources.mk').write_text('\n'.join(lines) + '\n')

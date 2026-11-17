@@ -1,0 +1,12 @@
+Big Buck Bunny
+(c) copyright 2008, Blender Foundation / www.bigbuckbunny.org
+
+Licensed under the Creative Commons Attribution 3.0 licence:
+https://creativecommons.org/licenses/by/3.0/
+
+os64 ships three seconds of it as /tests/pages/bbb-480p-3s.mp4, a test
+clip for the H.264 decoder (/tests/avbench). It was cut from the film's
+2013 "sunflower" 1080p 60 fps release (bbb_sunflower_1080p_60fps_normal.mp4,
+from https://distribution.bbb3d.renderfarming.net/), starting 6:55 into the
+film, scaled to 854x480 at 30 frames a second and encoded with x264 at
+about 1 Mbit/s. The changes are those, and the cut.

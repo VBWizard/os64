@@ -63,8 +63,19 @@ check(config.get('FFMPEG_CONFIGURATION', '').strip('"').replace("'", '').split()
 for name, value in manifest['config_overrides'].items():
     want = str(value) if isinstance(value, int) else json.dumps(value)
     check(config.get(name) == want, f'config.h has {name} {config.get(name)}, manifest.json says {want}')
-for name in ('HAVE_PTHREADS', 'HAVE_X86ASM', 'HAVE_INLINE_ASM', 'CONFIG_NETWORK'):
+for name in ('HAVE_PTHREADS', 'CONFIG_NETWORK'):
     check(config.get(name) == '0', f'config.h has {name} {config.get(name)}: README.md says it is off')
+# FFmpeg's x86 assembly is built, and FFmpeg chooses its routines from what
+# the CPU and the OS offer at run time (README.md § How it is built).
+for name in ('HAVE_X86ASM', 'HAVE_INLINE_ASM', 'CONFIG_RUNTIME_CPUDETECT', 'CONFIG_PIC'):
+    check(config.get(name) == '1', f'config.h has {name} {config.get(name)}: README.md says it is on')
+# AVX-512 is configured OUT: os64 never enables its state (AVX.md), so those
+# routines could never be chosen, and leaving them out keeps FFmpeg's ALIGN at
+# 32, which os64_malloc_aligned's dedicated blocks exceed.
+for flag in ('--disable-avx512', '--disable-avx512icl'):
+    check(flag in args, f'configure_args lacks {flag}')
+for name in ('HAVE_AVX512', 'HAVE_AVX512ICL'):
+    check(config.get(name) == '0', f'config.h has {name} {config.get(name)}: AVX-512 must be absent')
 
 # Every translation unit sources.mk builds is vendored.
 built = set(re.findall(r'upstream/(\S+\.c)', (LIB / 'sources.mk').read_text()))
@@ -82,7 +93,7 @@ for needed_api in ('avformat_open_input', 'avcodec_send_packet', 'avcodec_receiv
 # and libmath's double-precision functions. A new import is a new
 # dependency somebody should have decided on.
 undefined = {l.split()[-1] for l in run('x86_64-elf-nm', '-D', '-u', SO).splitlines()}
-allowed_os64 = {'os64_malloc', 'os64_realloc', 'os64_free', 'os64_memchr', 'os64_memcmp', 'os64_memcpy',
+allowed_os64 = {'os64_malloc', 'os64_malloc_aligned', 'os64_realloc', 'os64_free', 'os64_memchr', 'os64_memcmp', 'os64_memcpy',
                 'os64_memmove', 'os64_memset', 'os64_strchr', 'os64_strcmp', 'os64_strlen', 'os64_strrchr',
                 'os64_snprintf', 'os64_vsnprintf', 'os64_micros', 'os64_exit', 'memset', 'memcpy'}
 math = set(re.findall(r'\b([a-z0-9]+);', (USERLAND / 'libmath/exports.map').read_text().split('local:')[0]))
@@ -98,6 +109,22 @@ check('TLS' not in run('x86_64-elf-readelf', '-lW', SO), 'libav.so has thread-lo
 # No system call of its own: every door FFmpeg reaches for is a shim.
 disasm = run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', SO)
 check(not re.search(r'\t(syscall|sysenter|int)\b', disasm), 'libav.so contains a system call')
+check('%zmm' not in disasm, 'libav.so contains AVX-512 code (a zmm register)')
+
+# THE ONLY AVX IN THE LIBRARY IS FFMPEG'S ASSEMBLY, chosen at run time: every
+# C object (upstream's and the port's) is compiled -mno-avx, so none may hold
+# a VEX-encoded instruction (their mnemonics are the v-prefixed ones), and
+# the assembly objects are where the AVX routines must be.
+objdir = USERLAND / 'obj/av'
+c_objects = sorted(objdir.rglob('*.c.o'))
+asm_objects = sorted(objdir.rglob('*.asm.o'))
+check(c_objects and asm_objects, 'no libav objects to read: build userland first')
+vex = re.compile(r'^\s+[0-9a-f]+:\s+v[a-z0-9]+\s', re.M)
+for obj in c_objects:
+    found = vex.search(run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', obj))
+    check(found is None, f'{obj.relative_to(USERLAND)} (C) holds a VEX instruction: {found and found.group(0).strip()}')
+check(any('%ymm' in run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', o) for o in asm_objects),
+      'no assembly object holds an AVX (ymm) routine: is the assembly built?')
 
 # A LIBRARY OF ITS OWN: the LGPL is met by a library the user can replace,
 # so no other program or library may carry FFmpeg's code linked in. The
@@ -131,8 +158,9 @@ check('userland/bin/libav.so' in root_make, 'libav.so is not in the images')
 
 # ONE DOOR TO FFMPEG: libmedia.so is the library programs play sound
 # through (os64/media.h), and the only one that may load libav.so, beside
-# libav's own fixture. A player that called FFmpeg directly would tie
-# itself to the decoder libmedia exists to hide.
+# libav's own fixtures (avtest, and avbench, which measures the video
+# decoder). A player that called FFmpeg directly would tie itself to the
+# decoder libmedia exists to hide.
 def needed(path):
     return set(re.findall(r'\(NEEDED\).*\[(.*?)\]', run('x86_64-elf-readelf', '-dW', path)))
 
@@ -140,7 +168,8 @@ callers = set()
 for path in sorted((USERLAND / 'bin').rglob('*')):
     if path.is_file() and path != SO and path.read_bytes()[:4] == b'\x7fELF' and 'libav.so' in needed(path):
         callers.add(str(path.relative_to(USERLAND / 'bin')))
-check(callers == {'libmedia.so', 'tests/avtest'}, f'libav.so is loaded by {sorted(callers)}, not only libmedia.so and avtest')
+check(callers == {'libmedia.so', 'tests/avtest', 'tests/avbench'},
+      f'libav.so is loaded by {sorted(callers)}, not only libmedia.so and the fixtures')
 MEDIA = USERLAND / 'bin/libmedia.so'
 check(needed(MEDIA) == {'libav.so', 'libsound.so', 'libos64.so'}, f'libmedia.so needs {sorted(needed(MEDIA))}')
 media_exports = {l.split()[-1] for l in run('x86_64-elf-nm', '-D', '--defined-only', MEDIA).splitlines()}
@@ -172,7 +201,14 @@ for program in ('play', 'tests/mediatest'):
 #                                          ones, which that open already
 #                                          made: a power of two's tables
 #                                          include every smaller one's
+#   h264dec.c                              the H.264 decoder's open (its VLC
+#                                          tables): find_stream_info's when
+#                                          libmedia probes an MP4 with a
+#                                          video track, under the lock, and
+#                                          a video program's own open
+#                                          (avbench decodes on one thread)
 known_once = {'libavcodec/aac/aacdec_float.c': 1, 'libavcodec/aac/aacdec_tab.c': 1,
+              'libavcodec/h264dec.c': 1,
               'libavcodec/aactab.c': 1, 'libavcodec/sinewin_tablegen.h': 1,
               'libavcodec/mpegaudiodec_common.c': 1, 'libavcodec/mpegaudiodec_template.c': 1,
               'libavcodec/mpegaudiodsp.c': 1, 'libavcodec/mpegaudiodsp_template.c': 1,

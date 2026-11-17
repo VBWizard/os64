@@ -242,10 +242,11 @@ FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSerif.ttf DejaVuSer
 # machine with no network. Where each page came from is in
 # tools/html_corpus/SOURCES.json, which ships beside them. tools/pages holds
 # pages written here to show a feature beside Chrome (each says what to look
-# for), with the pictures, sounds and videos they name.
+# for), with the pictures, sounds and videos they name, and a .txt beside
+# any of those whose licence asks for its attribution to travel with it.
 PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css tools/garb_corpus/*.html \
                             tools/pages/*.html tools/pages/*.gif tools/pages/*.png tools/pages/*.webp tools/pages/*.jpg tools/pages/*.svg \
-                            tools/pages/*.mp3 tools/pages/*.wav tools/pages/*.mp4)
+                            tools/pages/*.mp3 tools/pages/*.wav tools/pages/*.mp4 tools/pages/*.txt)
 
 # The same fixtures for the wire, staged alone: os64serve serves a directory
 # whole, and tools/html_corpus also holds the host harness's expected dumps,
@@ -524,7 +525,7 @@ ICON_ASSETS := $(sort $(wildcard $(ICON_ASSET_DIR)/*.png))
 ICON_MANIFEST := $(ICON_ASSET_DIR)/theme.conf
 ICON_METADATA := $(ICON_MANIFEST) $(ICON_ASSET_DIR)/provenance.json $(ICON_ASSET_DIR)/LICENSE
 
-$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/ffmpeg-LICENSE license/android-sbc-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/mouse.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf etc/icons.conf etc/roam.conf etc/file-associations.conf GNUmakefile
+$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/ffmpeg-LICENSE license/big-buck-bunny-LICENSE license/android-sbc-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/mouse.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf etc/icons.conf etc/roam.conf etc/file-associations.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -560,6 +561,9 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 	printf 'write license/speexdsp-LICENSE /etc/licenses/speexdsp.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	# FFmpeg's LGPL notice, and where its source is, travel with libav.so.
 	printf 'write license/ffmpeg-LICENSE /etc/licenses/ffmpeg.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	# The H.264 test clip in /tests/pages is Big Buck Bunny's (CC-BY 3.0),
+	# whose attribution travels with it.
+	printf 'write license/big-buck-bunny-LICENSE /etc/licenses/big-buck-bunny.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	# The kernel carries Android's SBC encoder (kernel/ports/sbc), whose
 	# Apache 2.0 notice travels with the binary, as speexdsp's does.
 	printf 'write license/android-sbc-LICENSE /etc/licenses/android-sbc.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
@@ -606,7 +610,7 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/ffmpeg-LICENSE license/android-sbc-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/ffmpeg-LICENSE license/big-buck-bunny-LICENSE license/android-sbc-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -706,6 +710,7 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libmath-LICENSE ::/etc/licenses/libmath.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/speexdsp-LICENSE ::/etc/licenses/speexdsp.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/ffmpeg-LICENSE ::/etc/licenses/ffmpeg.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/big-buck-bunny-LICENSE ::/etc/licenses/big-buck-bunny.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/android-sbc-LICENSE ::/etc/licenses/android-sbc.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(BT_FIRMWARE_LICENSE) ::/etc/licenses/intel-bluetooth.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(QUICKJS_LICENSE) ::/etc/licenses/quickjs.txt

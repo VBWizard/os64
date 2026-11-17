@@ -93,8 +93,10 @@ os64 is a 64-bit x86 operating system kernel built for educational purposes. It 
 - `x86_64-elf-gcc` cross-compiler
 - `x86_64-elf-ld` linker
 - `make`
-- (no `nasm`: the kernel makefile still carries a rule for `.asm` files, but
-  the tree has none; every assembly source is GNU `.S` through the cross gcc)
+- `nasm`: assembles FFmpeg's x86 routines into `libav.so`
+  (`userland/libav/README.md` § The x86 assembly); the build names it when
+  it is missing. The kernel's own assembly is GNU `.S` through the cross
+  gcc, and the kernel makefile's `.asm` rule has no file to build
 - `qemu-system-x86_64` (for testing)
 - `xorriso` (for ISO creation)
 - `ccache` (OPTIONAL, dev-box convenience): the kernel and userland builds
@@ -689,7 +691,7 @@ virtio because its drain waits for the tick.
   **FFmpeg is `libav.so`** (`userland/libav/`; AUDIO_YONDER.md is the arc,
   `YAUDIO_TRACKER.csv` its state): libavutil, libavcodec and libavformat,
   unpatched, built down to what `manifest.json`'s `configure_args` names
-  (WAV, MP3, and AAC in MP4 or ADTS, today). **It is LGPL and stays a library of its own** —
+  (its README's table lists them). **It is LGPL and stays a library of its own** —
   never linked into another program or library, never configured with GPL,
   nonfree or version-3 parts; `tools/test_av_audit.py` fails on any of
   those. `configure` runs on the host (`tools/import_av.py`), and its
@@ -700,8 +702,13 @@ virtio because its drain waits for the tick.
   are libav's alone, so a caller of FFmpeg's headers sees only names
   libos64 exports). Built WITHOUT threads, so a program using it
   from several threads does every open and close under one lock of its
-  own (libmedia keeps a narrower form the audit pins: media.c § THREADS). A program that calls it is named in `LIBAV_PROGRAMS` and compiles
-  with `LIBAV_CONSUMER_CFLAGS`. Fixture: `/tests/avtest`
+  own (libmedia keeps a narrower form the audit pins: media.c § THREADS).
+  Built WITH FFmpeg's x86 assembly (nasm), whose routines FFmpeg chooses
+  at run time from what the CPU and os64 offer, AVX2 included, AVX-512
+  configured out; its buffers come from `os64_malloc_aligned` (README
+  § The x86 assembly). A program that calls it is named in `LIBAV_PROGRAMS` and compiles
+  with `LIBAV_CONSUMER_CFLAGS`. Fixtures: `/tests/avtest`, and
+  `/tests/avbench`, which decodes H.264 to the host's CRC and measures it
   **The SBC encoder is built and linked with the kernel**
   (`kernel/ports/sbc/`, the first third-party code in ring 0), and the A2DP
   sink calls it (AUDIO_A2DP.md part P). Android's, unpatched

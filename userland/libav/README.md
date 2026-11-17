@@ -25,8 +25,8 @@ disabled and then, by name:
 | Kind | Enabled |
 |---|---|
 | readers (demuxers) | `wav`, `mp3`, `mov` (MP4, M4A), `aac` (ADTS) |
-| decoders | `mp3float`, `aac`, `pcm_s16le`, `pcm_s24le`, `pcm_s32le`, `pcm_u8`, `pcm_f32le`, `pcm_alaw`, `pcm_mulaw` |
-| parsers | `mpegaudio`, `aac` |
+| decoders | `mp3float`, `aac`, `pcm_s16le`, `pcm_s24le`, `pcm_s32le`, `pcm_u8`, `pcm_f32le`, `pcm_alaw`, `pcm_mulaw`, `h264` (video) |
+| parsers | `mpegaudio`, `aac`, `h264` |
 | protocols | none: bytes arrive through the caller's `AVIOContext`, never FFmpeg's own I/O |
 
 `tools/import_av.py --write <archive>` runs that `configure` on the host
@@ -46,7 +46,9 @@ manifest on every run.
 **`config.h`'s answers about a C library are os64's.** `configure` probes
 the HOST's C library, so `manifest.json`'s `config_overrides` replace each
 of those answers with what the shims below provide: no `unistd.h`, no
-`mmap`, no `posix_memalign`, no `gettimeofday`, and the float maths
+`mmap`, no `gettimeofday`, a `posix_memalign` (libos64's
+`os64_malloc_aligned`, whose block plain `free` and `realloc` take, which
+is what FFmpeg does with it: `port/compat/stdlib.h`), and the float maths
 libmath does not export (`expf`, `sinf`, `exp2`, `lrintf`…), which
 FFmpeg's own `libavutil/libm.h` then supplies from the double functions.
 The few it calls with no `HAVE_` to answer (`sqrtf`, `fabsf`, `ldexp`,
@@ -149,33 +151,67 @@ they stay off.
   § THREADS says why it is enough, and `tools/test_av_audit.py` pins the
   one-time setups it rests on. Turning threads on means a pthread shim (mutex, condition, once)
   over `os64_thread`, the lock and bells.
-- **Assembly** (`--disable-asm`, `--disable-x86asm`): FFmpeg's hand-written
-  x86 needs `nasm`, and much of its fast path assumes AVX, which os64
-  leaves off. Irrelevant to sound.
-- **Inline assembly** (`--disable-inline-asm`): see the next section.
+
+## The x86 assembly
+
+FFmpeg's hand-written x86 routines are built, and so is the inline
+assembly in its C. `nasm` is a prerequisite of the build (`shared.mk`
+names it, before any assembly is attempted, when it is missing). It
+assembles the `.asm` files the import lists (`sources.mk`'s
+`AV_UPSTREAM_ASM`), with FFmpeg's own include path and `config.asm`, as
+plain ELF64, which is what `configure` answers for `--target-os=none`,
+unpatched; `x86inc.asm` makes every routine position-independent on
+x86-64.
+
+- **Which routines run is FFmpeg's own choice, at run time**
+  (`CONFIG_RUNTIME_CPUDETECT`): CPUID, and for AVX, XGETBV's answer that
+  the OS saves those registers. os64 has AVX at ring 3 (AVX.md), so on a
+  CPU with AVX2 FFmpeg chooses those routines; with `NOAVX`, or on a CPU
+  without, the SSE ones. The library never overrides the choice;
+  `/tests/avbench`'s `-s` and `-c` do, for measuring.
+- **AVX-512 is configured out** (`--disable-avx512`,
+  `--disable-avx512icl`): os64 never enables its state, so those routines
+  could never be chosen, and leaving them out keeps FFmpeg's `ALIGN` at 32.
+- **FFmpeg's buffers are `ALIGN`-aligned** through `posix_memalign`
+  (libos64's `os64_malloc_aligned`), because its AVX routines load them
+  with aligned instructions.
+- **The C stays `-mno-avx`**, so the only AVX in the library is the
+  assembly FFmpeg chooses at run time. The audit holds that: no
+  VEX-encoded instruction in any C object, no `zmm` register anywhere, and
+  no text relocation (the link is `-z text`).
 
 ## How it is built (`shared.mk`)
 
 FFmpeg's sources compile with FFmpeg's own flags for this target (its
-configure's `CFLAGS`: `-std=c17 -O3 -fno-math-errno -fno-signed-zeros`,
-its warning set and the warnings it makes errors), not with userland's
+configure's `CFLAGS`: `-std=c17 -fno-math-errno -fno-signed-zeros`,
+its warning set and the warnings it makes errors) at `-O2` where configure
+says `-O3`, the level os64 builds the library at now that it decodes
+video (Chris's ruling), not with userland's
 `-Wextra -Werror`, which upstream code was never written against (the
 kernel's SBC port follows the same rule). Two of FFmpeg's guards matter
 more on os64 than on Linux, because a thread's stack is fixed:
 `-Werror=vla` and `-Wstack-usage`. os64's code generation is kept: PIC,
-no red zone, SSE2, no AVX, the stack-clash probes. Left out:
+no red zone, SSE2, no AVX, the stack-clash probes. Taken explicitly:
+
+- `-fomit-frame-pointer`: FFmpeg's inline assembly (H.264's CABAC reader,
+  `x86/cabac.h`) uses RBP as a register, which a function that keeps a
+  frame pointer refuses to compile.
+- `-DPIC`, configure's own for `--enable-pic`: `libavutil/x86/asm.h`
+  chooses RIP-relative addressing on it, and without it the inline
+  assembly addresses its tables absolutely, which a shared library cannot
+  link.
+
+Left out:
 
 - userland's `-masm=intel`: FFmpeg is written for GCC's default syntax,
   and in Intel syntax a symbol spelled like a register (FFmpeg has them)
-  does not assemble. This is also why inline assembly is a flag away, not
-  a rewrite.
+  does not assemble. This is also why the inline assembly needed only a
+  flag, not a rewrite.
 - FFmpeg's `-Wredundant-decls`: the shims declare what FFmpeg's internal
   headers declare again (`av_sscanf`), by design.
-- FFmpeg's `-fomit-frame-pointer`: userland's default is kept.
 
-GCC 14 at `-O3` warns about array subscripts in `libavcodec/vlc.c`; that
-is upstream's code, unchanged, and they stay warnings. `port/` is os64's
-code and keeps userland's full alarm.
+A warning in upstream's code stays a warning: the code is upstream's,
+unchanged. `port/` is os64's code and keeps userland's full alarm.
 
 The library is linked `--no-undefined --gc-sections` against `libos64.so`
 and `libmath.so` only, exports FFmpeg's public prefixes (`exports.map`:
@@ -204,6 +240,13 @@ link error, not a function it cannot reach.
   MP4 whose first track is a picture yields its AAC sound, one second of
   the sine holding the energy the host's FFmpeg decodes it to
   (`tools/gen_avtest_m4a.py`).
+- `/tests/avbench`, in `testrun`: 30 frames of a Big Buck Bunny clip
+  (`/tests/pages/bbb-480p-3s.mp4`) decode to the CRC the host's FFmpeg
+  gives, with the routines FFmpeg chose and with its C ones, and a 16x16
+  clip decodes whole to its CRC. H.264 is bit-exact, so the assembly and
+  the C must agree. By hand, `avbench [-s|-c] file` measures, and
+  `avbench all <dir>` runs a directory of clips in every mode into
+  `/home/avbench.txt`.
 - `tools/test_av_libc_host.sh`: the shims against glibc.
 - `tools/test_av_audit.py`: the pin, the licence, the surface, the imports.
 - `tools/import_av.py --check <archive>`: the vendored tree is the
