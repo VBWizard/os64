@@ -168,3 +168,14 @@ uint64_t beam_read_failures(void)
 {
 	return s_beam.fails;
 }
+
+void beam_withdraw(const char *why)
+{
+	if (!s_beam.present)
+		return;
+	snprintf(s_beam.why_text, sizeof(s_beam.why_text), "withdrawn: %s", why);
+	__asm__ volatile("" ::: "memory");   // the text before anyone is told to read it
+	s_beam.why = s_beam.why_text;
+	s_beam.present = false;
+	printd(DEBUG_BOOT | DEBUG_GUI, "beam: %s\n", s_beam.why);
+}

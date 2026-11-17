@@ -130,6 +130,9 @@ volatile uint64_t kDiagRunnableLen = 0;
 // the observable the backstop test asserts on (a preempted hog = a nonzero,
 // growing count on its core), and the counter /sys/cpu can surface someday.
 volatile uint64_t kSchedBackstopFires[MAX_CPUS] = {0};
+// Frame wakes per core: timer passes the compositor's frame wake caused
+// (smp_core.c, frame_wake_set), counted apart from the lease's expiries.
+volatile uint64_t kFrameWakeFires[MAX_CPUS] = {0};
 // A CPU kept for the threads pinned to it, or SCHED_NO_RESERVED_CPU: the
 // compositor's while its frame clock runs (FRAME_CLOCK.md § 9, the
 // reservation). One writer, the compositor thread; read without a lock by
@@ -857,6 +860,7 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
 	// TARGET core's storage, so this is correct even when the BSP loads a
 	// thread onto another core under tickless scheduling.
 	thread->lastRunCPU = cls->cpu;
+	thread->timesLoaded++;
 	//task_t* task = cls->currentThread->ownerTask;
 	//task_t* ownerTask = ((task_t*)cls->currentThread->ownerTask)->ownerTask;
 	uint64_t cpu = cls->cpu;
@@ -1586,9 +1590,18 @@ void scheduler_do()
 	// preempting whoever ran past SCHED_BACKSTOP_MS without re-entering the
 	// scheduler. Counted for the test suite and for anyone diagnosing "who
 	// is interrupting my pinned core" (the answer is: its own lease).
+	// The compositor's frame wake fires on the same vector (smp_core.c,
+	// frame_wake_set: the timer's second writer) and raised fcw_armed when it
+	// set a wake sooner than the lease; that fire is the frame clock's, not a
+	// lease expiry, and is counted apart so this count keeps its meaning.
 	if (kTicklessScheduler && cpu != BSP_CPU &&
 	    kDiagLastVector[cpu] == IPI_TIMER_SCHEDULE_VECTOR)
-		kSchedBackstopFires[cpu]++;
+	{
+		if (cls->fcw_armed)
+			kFrameWakeFires[cpu]++;
+		else
+			kSchedBackstopFires[cpu]++;
+	}
 
 	// ── TEMP DIAG: the once-per-second report, BSP pass only ────────────
 	// ticks vs TSC-milliseconds answers "is the tick clock starving?";

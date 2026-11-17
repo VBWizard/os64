@@ -91,6 +91,20 @@ typedef struct {
 	uint64_t bands[FC_BANDS];
 } gui_frame_copies_t;
 
+// And what the frame clock itself did (FRAME_CLOCK.md § 9): the frames it
+// copied, the frames it held late by cause (gui/frame_clock.h, fc_late_t),
+// the aims that ended in a copy and their polling time, and the frame wakes
+// it slept until with how late each arrived (frame_clock_wake_bucket); each
+// since boot and since the counts were last read. Kept by the compositor
+// thread and folded in at the next pass's hold, as the copies above are.
+typedef struct {
+	uint64_t frames;
+	uint64_t late[FC_LATE_CAUSES];
+	uint64_t aims, aim_us, aim_max_us;
+	uint64_t wakes;
+	uint64_t wake_late[FC_WAKE_BUCKETS];
+} gui_frame_clock_count_t;
+
 typedef struct {
 	uint64_t passes, drawn, rects, pixels, painted, stops, faults, collapses;
 	uint64_t holds[GUI_COMPOSITE_HOLD_BUCKETS];
@@ -98,6 +112,7 @@ typedef struct {
 	uint64_t glass_voided;
 	uint64_t glass_buckets[GUI_GLASS_WAIT_BUCKETS];
 	gui_frame_copies_t fc, fc_since_read;
+	gui_frame_clock_count_t clk, clk_since_read;
 } gui_composite_count_t;
 
 uint64_t gui_lock(gui_lock_site_t site);
@@ -106,7 +121,7 @@ void gui_unlock(uint64_t irqflags);
 // compositor's into `comp`, in one hold of the lock so the two agree (the
 // composite site's acquisitions are the compositor's passes). The worst wait
 // and hold of each site, the longest publish-to-glass wait and the frame
-// clock's since-read copies restart when `restart`, so each read reports the
+// clock's since-read counts restart when `restart`, so each read reports the
 // stretch since the last. The read is counted as OTHER.
 void gui_lock_counts(gui_lock_count_t *out, gui_composite_count_t *comp, bool restart);
 const char *gui_lock_site_name(gui_lock_site_t site);

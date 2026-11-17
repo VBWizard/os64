@@ -7,7 +7,9 @@
 // says how to read its line counter; the seam measures the period, keeps the
 // facts, and withdraws the beam for the rest of the boot after
 // BEAM_FAILS_IN_ROW reads in a row that are not lines of the frame. A
-// counter that stops at a line of the frame is not noticed. NO DRIVER WRITES
+// counter that stops at a line of the frame no read can show; the frame
+// clock's aim, which waits on it, sees it stop and withdraws the beam
+// (beam_withdraw). NO DRIVER WRITES
 // TO THE GRAPHICS CHIP: each maps the registers it reads read-only, so a
 // stray store is a page fault, not a write. A driver's mapping stays when
 // the measuring fails.
@@ -55,6 +57,11 @@ bool beam_line(uint32_t *line);
 
 // Reads that failed, since boot.
 uint64_t beam_read_failures(void);
+
+// Withdraw the beam for the rest of the boot, for a reason the reader saw
+// that no single read shows: the frame clock's aim finding the counter
+// stopped at a line of the frame. The one reader's call (beam_line's).
+void beam_withdraw(const char *why);
 
 // ── For drivers ─────────────────────────────────────────────────────────────
 // A driver's probe either finds a core it can read, filling the frame's

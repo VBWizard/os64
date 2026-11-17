@@ -133,6 +133,13 @@ typedef struct
 	// This CPU's hardware address, for code that has to name it TO the
 	// hardware. Everything else says `cpu`.
 	apic_id_t apic;
+
+	// fcw = the frame clock's wake (smp_core.c, frame_wake_set). Raised when
+	// the compositor sets this CPU's one-shot for a frame wake that comes
+	// before the lease. A timer pass that finds it raised counts a frame
+	// wake, not a lease expiry; the lease's arm and disarm lower it, since
+	// whatever they write is no longer the compositor's wake.
+	volatile bool fcw_armed;
 } __attribute__((aligned(64))) core_local_storage_t;
 
 // The roster (cpu_roster.h), built once by cpu_roster_init before the log

@@ -165,6 +165,12 @@ typedef struct s_thread
 	// scheduler_find_thread_to_run reads it as "where this thread's caches
 	// are warm" and keeps the thread there until waiting beats migrating.
 	uint32_t lastRunCPU;
+	// How many times a pass has switched this thread IN, stamped beside
+	// lastRunCPU (scheduler_load_thread runs only when the pass switches
+	// threads; a pass that keeps the current one does not call it). So a
+	// thread that reads it, then reads it again and finds it grown, was off
+	// its CPU in between: the frame clock asks exactly that of a late frame.
+	uint64_t timesLoaded;
 	// When this thread last ENTERED qRunnable (kTicksSinceStart units),
 	// stamped by scheduler_change_thread_queue_locked under the queue lock.
 	// The cache-home rule's other operand: a thread warm on another core is

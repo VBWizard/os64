@@ -326,7 +326,9 @@ fc_timer_t frame_clock_timer(uint64_t wake_in_us, uint64_t ticks_per_second, uin
 {
 	if (wake_in_us > 1000000000ull)
 		wake_in_us = 1000000000ull;   // a thousand seconds: past the register's reach anyway
-	uint64_t wake = ticks_per_second * wake_in_us / 1000000;
+	// Rounded up: a wake that fires a few ticks early only finds its instant
+	// not yet come and is set again, a second fire for nothing.
+	uint64_t wake = (ticks_per_second * wake_in_us + 999999) / 1000000;
 	if (wake == 0)
 		wake = 1;
 	fc_timer_t t = { 0, true };

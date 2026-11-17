@@ -202,8 +202,9 @@ uint64_t frame_clock_free_next_ns(uint64_t prev_ns, uint64_t now_ns);
 // The compositor's CPU's one-shot is set for the wake, unless the lease
 // (`lease_ms`, 0 = none) is sooner: never longer than the lease, so the CPU
 // is preempted at least as often as the lease alone would. The count is in
-// the timer's ticks, at least 1 and at most the 32-bit register's reach;
-// `wake_first` says which of the two it is.
+// the timer's ticks, the wake's rounded up so it never fires before its
+// instant, at least 1 and at most the 32-bit register's reach; `wake_first`
+// says which of the two it is.
 typedef struct {
 	uint32_t count;
 	bool wake_first;

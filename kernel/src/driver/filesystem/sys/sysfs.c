@@ -1622,6 +1622,62 @@ static void sys_gen_conf(synth_text_t *t)
 		synth_text_addf(t, "(nothing has looked up a config file yet)\n");
 }
 
+// The frame clock itself (FRAME_CLOCK.md § 9): whether it is on, what it is
+// doing now, where the compositor runs and whether its CPU is reserved, how
+// long the clock has run and stood stopped, its frames and the late ones by
+// cause, the lead and the aim, and its wakes. Counts since boot, then since
+// this file was last read. Off, one line saying why.
+static void sys_gen_gui_frame_clock_state(synth_text_t *t, const gui_composite_count_t *comp)
+{
+	gui_frame_clock_status_t s;
+	gui_frame_clock_status(&s, true);
+	if (s.off_why != NULL)
+	{
+		synth_text_addf(t, "frame clock: off (%s)\n", s.off_why);
+		return;
+	}
+	if (s.running)
+		synth_text_addf(t, "frame clock: on, running %s\n",
+		                s.free ? "free (no beam: a sixtieth of a second on the clock)" : "aimed at the beam");
+	else
+		synth_text_addf(t, "frame clock: on, stopped (%s)\n", s.stop_why);
+	// Reserved: while the clock runs, the compositor's CPU runs only threads
+	// pinned to it, and the machine has one CPU fewer for everything else.
+	synth_text_addf(t, "frame clock pin: CPU %u; %s\n", s.cpu,
+	                !s.reserve_applies ? "shared (fewer than 4 CPUs)"
+	                : !s.reserve_dial ? "shared (reserve off)"
+	                : s.reserved ? "reserved (reserve on)" : "shared while stopped (reserve on)");
+	synth_text_addf(t, "frame clock time: running %lu ms, stopped %lu ms, started %lu times; "
+	                "since this file was last read running %lu ms, stopped %lu ms, started %lu times\n",
+	                s.running_us / 1000, s.stopped_us / 1000, s.starts,
+	                s.running_since_read_us / 1000, s.stopped_since_read_us / 1000, s.starts_since_read);
+	for (int pass = 0; pass < 2; pass++)
+	{
+		const gui_frame_clock_count_t *c = pass == 0 ? &comp->clk : &comp->clk_since_read;
+		uint64_t late = 0;
+		for (int k = 0; k < FC_LATE_CAUSES; k++)
+			late += c->late[k];
+		synth_text_addf(t, "frame clock frames%s: %lu, %lu late (off its CPU %lu, the wake %lu, "
+		                "the pass %lu, past the blank %lu, overran the aim %lu)\n",
+		                pass == 0 ? "" : " since this file was last read", c->frames, late,
+		                c->late[FC_LATE_OFF_CPU], c->late[FC_LATE_WAKE], c->late[FC_LATE_PASS],
+		                c->late[FC_LATE_PAST], c->late[FC_LATE_OVERRUN]);
+	}
+	uint64_t aim_avg = comp->clk.aims ? comp->clk.aim_us / comp->clk.aims : 0;
+	synth_text_addf(t, "frame clock lead: %u us; aims %lu, %lu us average, longest %lu us, "
+	                "longest %lu us since this file was last read\n",
+	                s.lead_us, comp->clk.aims, aim_avg, comp->clk.aim_max_us, comp->clk_since_read.aim_max_us);
+	// A wake is the compositor's own count of the frames it slept toward;
+	// the fires are its CPU's timer passes, the frame wakes apart from the
+	// lease's expiries (scheduler.c). How late each wake arrived, by bucket.
+	const uint64_t *w = comp->clk.wake_late;
+	synth_text_addf(t, "frame clock wakes: %lu (timer: %lu frame wakes, %lu lease expiries on CPU %u); "
+	                "late by under 50 us %lu, under 100 us %lu, under 200 us %lu, under 400 us %lu, "
+	                "under 800 us %lu, under 1.6 ms %lu, 1.6 ms or more %lu\n",
+	                comp->clk.wakes, s.frame_wake_fires, s.lease_fires, s.cpu,
+	                w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
+}
+
 // The frame clock's block of /sys/gui: where the display's sweep is read
 // from, the frame it describes, and where the sweep was at each of the
 // compositor's copies to the framebuffer (compositor.c, the frame clock,
@@ -1767,6 +1823,7 @@ static void sys_gen_gui(synth_text_t *t)
 	                comp.glass_buckets[0], comp.glass_buckets[1], comp.glass_buckets[2],
 	                comp.glass_buckets[3], comp.glass_buckets[4], comp.glass_buckets[5],
 	                comp.glass_buckets[6]);
+	sys_gen_gui_frame_clock_state(t, &comp);
 	sys_gen_gui_frame_clock(t, &comp);
 }
 
@@ -2399,6 +2456,7 @@ typedef enum
 	SYS_HANDLE_SNAPSHOT = 0,   // the ordinary case: text generated at open
 	SYS_HANDLE_MOUSE_WRITE,
 	SYS_HANDLE_MEDIAKEYS_WRITE,   // /sys/mediakeys opened "w" — each line is a press
+	SYS_HANDLE_GUI_WRITE,         // /sys/gui opened "w" — each line sets the frame clock's dial
 	SYS_HANDLE_APPEARANCE_WRITE,
 	SYS_HANDLE_DECORATIONS_WRITE,
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
@@ -2433,7 +2491,7 @@ typedef struct
 	bool bt_connection;
 	uint8_t bt_length;
 	bool bt_refused;
-	char mk_line[32];         // MEDIAKEYS_WRITE: the line so far
+	char mk_line[32];         // MEDIAKEYS_WRITE and GUI_WRITE: the line so far
 	uint8_t mk_length;
 	bool mk_refused;          // the line outgrew mk_line: refused at its newline
 } sys_file_handle_t;
@@ -2455,13 +2513,28 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	bool is_appearance = (sp.type == SYS_NODE_APPEARANCE);
 	bool is_font = (sp.type == SYS_NODE_CONSOLEFONT);
 	bool is_bt = (sp.type == SYS_NODE_BTSCAN || sp.type == SYS_NODE_BTCONNECTION);
+	bool is_gui = (sp.type == SYS_NODE_GUIFILE);
 	if (mode == NULL || mode[0] == '\0' || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
 		return -1;
 	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration && !is_bt && !is_mouse
-	    && !is_mediakeys)
+	    && !is_mediakeys && !is_gui)
 		return -1;
 
-	// Read: the report. Write: `press <key>` lines (sys_mediakeys_write),
+	// /sys/gui written: `reserve on` / `reserve off` lines, the frame clock's
+	// dial (FRAME_CLOCK.md § 9, the reservation). Read, it is the report
+	// below, like any snapshot.
+	if (is_gui && mode[0] == 'w')
+	{
+		synth_text_t text = {0};
+		sys_file_handle_t *gh = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+		                                              sizeof(sys_file_handle_t), FILETYPE_SYSFILE);
+		if (gh == NULL)
+			return -1;
+		gh->kind = SYS_HANDLE_GUI_WRITE;
+		return 0;
+	}
+
+	// Read: the report. Write: `press <key>` lines (sys_line_write),
 	// and anyone may write them, as anyone may write /dev/audioctl.
 	if (is_mediakeys)
 	{
@@ -2719,15 +2792,17 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	return 0;
 }
 
-// /sys/mediakeys takes a line a command. echo writes its words, the spaces
-// between and the newline separately, so the bytes are gathered until a
-// newline and the line is carried out by the write that brought it — never
-// at close, which can run with interrupts off or inside a burial: text left
-// without a newline when the handle closes is refused there. A refused line
-// does not stop the lines after it in the same write; the write answers -1
-// when any of its lines was refused. The line is assembled under cmd_lock,
-// and a finished one is copied out and carried out after it is released.
-static int sys_mediakeys_write(sys_file_handle_t *h, const char *b, size_t size)
+// /sys/mediakeys and /sys/gui take a line a command. echo writes its words,
+// the spaces between and the newline separately, so the bytes are gathered
+// until a newline and the line is carried out by the write that brought it —
+// never at close, which can run with interrupts off or inside a burial: text
+// left without a newline when the handle closes is refused there. A refused
+// line does not stop the lines after it in the same write; the write answers
+// -1 when any of its lines was refused. The line is assembled under
+// cmd_lock, and a finished one is copied out and carried out after it is
+// released.
+static int sys_line_write(sys_file_handle_t *h, const char *b, size_t size,
+                          long (*command)(const char *line, size_t length))
 {
 	bool refused = false;
 	size_t i = 0;
@@ -2754,7 +2829,7 @@ static int sys_mediakeys_write(sys_file_handle_t *h, const char *b, size_t size)
 				h->mk_line[h->mk_length++] = b[i];
 		}
 		spinlock_release_irqrestore(&h->cmd_lock, flags);
-		if (complete && (outgrown || media_keys_command(line, length) != 0))
+		if (complete && (outgrown || command(line, length) != 0))
 			refused = true;
 	}
 	return refused ? -1 : (int)size;
@@ -2792,7 +2867,10 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 		return input_mouse_apply(buffer, size);
 
 	if (h->kind == SYS_HANDLE_MEDIAKEYS_WRITE)
-		return sys_mediakeys_write(h, buffer, size);
+		return sys_line_write(h, buffer, size, media_keys_command);
+
+	if (h->kind == SYS_HANDLE_GUI_WRITE)
+		return sys_line_write(h, buffer, size, gui_frame_clock_command);
 
 	if (h->kind == SYS_HANDLE_APPEARANCE_WRITE)
 		return appearance_publish(buffer, size);
