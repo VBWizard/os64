@@ -584,6 +584,7 @@ static void realm_failure_order_cases(void)
 #include "current_settings.h"
 #include "promise_settings.h"
 #include "active_script.h"
+#include "host_implementation.h"
 #include "finalization_settings.h"
 #include "import_settings.h"
 #include "neutral_promise_settings.h"
@@ -598,6 +599,7 @@ static void realm_cases(void)
     current_settings_cases();
     promise_settings_cases();
     active_script_cases();
+    host_implementation_cases();
     finalization_settings_cases();
     import_settings_cases();
     neutral_promise_settings_cases();
