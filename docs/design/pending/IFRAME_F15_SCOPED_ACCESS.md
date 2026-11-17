@@ -1,5 +1,7 @@
 # F15 — scoped native access and explicit compatibility export
 
+Implementation PR: **#645**, source `7d37b21a`.
+
 Proof baseline: merged `userland` `55f9ee30` (#642/#643), embedding ABI 5,
 bytecode ABI 6, engine digest
 `e0ab3d653a7a184e84f61cce94aa238768d14eef27b2db949dca6ab3f02e9c6f`.
