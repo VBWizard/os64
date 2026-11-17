@@ -4,9 +4,9 @@
 bands, the verdict on a copy, the lead, the strips, when the clock runs, and
 measuring the period), against tools/test_frame_clock_host.sh: a mutant is
 CAUGHT when the suite fails, MISSED when it passes, which means a test is
-missing and gets written (or the mutant changes nothing the rule promises,
-and is said so in EXPLAINED below). A build failure is neither. A mutant that
-loops forever is caught by the timeout.
+missing and gets written. A break that changes nothing a rule promises is
+not in the list; the comment after it says which and why. A build failure is
+neither. A mutant that loops forever is caught by the timeout.
 
 The shape is test_xhci_service_mutants.py's: each mutant is applied to the
 tree's copy of the file, the suite is run, and the file is put back from the
@@ -78,17 +78,14 @@ mutants = [
      '		if (pieces[i].top >= pieces[i].bottom)\n			continue;'),
     ('a-piece-takes-no-share-of-the-time', '		done += px;\n', '		(void)px;\n'),
     ('a-read-as-the-copy-begins-is-new', '	if (tr <= ta)\n		return false;', '	if (tr < ta)\n		return false;'),
-    ('a-read-as-the-copy-ends-is-old', '	if (tr >= tb)\n		return true;', '	if (tr > tb)\n		return true;'),
     ('a-row-is-new-when-the-front-reaches-it', '(__int128)(r + 1 - top) * (tb - ta)', '(__int128)(r - top) * (tb - ta)'),
     ('a-row-is-new-only-after-the-front-passes', '<= (__int128)height * (tr - ta);', '< (__int128)height * (tr - ta);'),
-    ('the-first-row-during-is-one-early', 'int64_t first_during = ta / total + 1 - pass * lines;', 'int64_t first_during = ta / total - pass * lines;'),
-    ('the-first-row-after-is-rounded-down', 'int64_t first_after = (tb + total - 1) / total - pass * lines;', 'int64_t first_after = tb / total - pass * lines;'),
-    ('only-the-ends-are-looked-at', '{ lo, hi - 1, first_during - 1, first_during, first_after - 1, first_after }',
-     '{ lo, hi - 1, lo + 0 * first_during, lo + 0 * first_after, lo, lo }'),
-    ('the-stretches-ends-are-not-clamped-low', 'int64_t r = rows[i] < lo ? lo : rows[i] > hi - 1 ? hi - 1 : rows[i];',
-     'int64_t r = rows[i] > hi - 1 ? hi - 1 : rows[i];'),
-    ('the-stretches-ends-are-not-clamped-high', 'int64_t r = rows[i] < lo ? lo : rows[i] > hi - 1 ? hi - 1 : rows[i];',
-     'int64_t r = rows[i] < lo ? lo : rows[i];'),
+    ('the-last-row-is-not-looked-at', '	       row_new(hi - 1, pass, lines, total, ta, tb, top, height);',
+     '	       row_new(lo, pass, lines, total, ta, tb, top, height) + 0 * hi;'),
+    ('the-first-row-is-not-looked-at', '	return row_new(lo, pass, lines, total, ta, tb, top, height) !=',
+     '	return row_new(hi - 1, pass, lines, total, ta, tb, top, height) !='),
+    ('the-row-past-the-piece-is-looked-at', '	       row_new(hi - 1, pass, lines, total, ta, tb, top, height);',
+     '	       row_new(hi, pass, lines, total, ta, tb, top, height);'),
     # The lead.
     ('no-passes-is-the-least-lead', '	if (l->count == 0)\n		return FC_LEAD_MAX_US;', '	if (l->count == 0)\n		return FC_LEAD_MIN_US;'),
     ('the-margin-is-fixed', 'uint64_t margin = worst / 4 > FC_LEAD_MARGIN_US ? worst / 4 : FC_LEAD_MARGIN_US;', 'uint64_t margin = FC_LEAD_MARGIN_US;'),
@@ -131,21 +128,11 @@ mutants = [
     ('a-step-back-is-no-reason', '	if (m->backward > 0)\n		return FC_MEASURE_BACKWARD;\n', ''),
 ]
 
-# Mutants that change nothing a rule promises, and why. Run, and reported
-# as explained rather than missed.
-EXPLAINED = {
-    'a-read-as-the-copy-ends-is-old':
-        'at the instant a piece\'s copy ends its front has finished every row, so the linear test answers new there too',
-    'the-first-row-during-is-one-early':
-        'the first row read during a copy is never the only one that differs: with the front slower than the sweep it '
-        'is old like the rows read before the copy; faster, it is the oldest of the copy\'s stretch, so either rows read '
-        'before the copy exist (old, and the piece\'s first row stands for them) or it is the piece\'s first row itself',
-    'the-first-row-after-is-rounded-down':
-        'a row read after the copy is new like every row after it, and the piece\'s last row stands for them; rounding '
-        'down only moves the evaluated pair onto the copy\'s last row, which is evaluated either way',
-}
+# Not run, because it changes nothing a rule promises: row_new's `tr >= tb`
+# made `tr > tb`. At the instant a piece's copy ends its front has finished
+# every row, so the linear test that would answer instead also says new.
 
-caught, missed, unbuilt, explained = [], [], [], []
+caught, missed, unbuilt = [], [], []
 for name, old, new in mutants:
     if args.only and args.only not in name:
         continue
@@ -179,16 +166,12 @@ for name, old, new in mutants:
     elif code != 0:
         caught.append(name)
         verdict = 'caught'
-    elif name in EXPLAINED:
-        explained.append(name)
-        verdict = 'explained: ' + EXPLAINED[name]
     else:
         missed.append(name)
         verdict = 'MISSED'
     print(f'{name}: {verdict}', flush=True)
 
-print(f'\nframe_clock mutants: {len(caught)} caught, {len(explained)} explained, {len(missed)} missed, '
-      f'{len(unbuilt)} did not build')
+print(f'\nframe_clock mutants: {len(caught)} caught, {len(missed)} missed, {len(unbuilt)} did not build')
 if missed:
     print('missed: ' + ', '.join(missed))
 if unbuilt:

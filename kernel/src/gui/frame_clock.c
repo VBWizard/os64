@@ -77,22 +77,18 @@ static bool row_new(int64_t r, int64_t pass, int64_t lines, int64_t total, int64
 }
 
 // One sweep pass over rows [lo, hi) of a piece: does it read some rows new
-// and some old? The answer is a threshold in r within each of the three
-// stretches (read before the copy, during it, after it; within the middle one
-// the test is linear in r), so the rows at the stretches' ends decide it.
+// and some old? Its reads change at most once, so the first and last rows
+// decide. Rows read before the copy are old and rows read after it new. In
+// between, a front at least as fast as the sweep stays ahead of it once
+// ahead (old, then new). A slower front given a head start is overtaken at
+// most once, and the sweep then stays ahead of it to the piece's bottom, so
+// that pass reads no row after the copy ends (new, then old). A slower front
+// with no head start finishes no row before the sweep reads it.
 static bool pass_mixed(int64_t pass, int64_t lines, int64_t total, int64_t ta, int64_t tb,
                        int64_t top, int64_t height, int64_t lo, int64_t hi)
 {
-	int64_t first_during = ta / total + 1 - pass * lines;               // first row read after τa
-	int64_t first_after = (tb + total - 1) / total - pass * lines;      // first row read at or after τb
-	int64_t rows[6] = { lo, hi - 1, first_during - 1, first_during, first_after - 1, first_after };
-	bool seen = row_new(lo, pass, lines, total, ta, tb, top, height);
-	for (int i = 1; i < 6; i++) {
-		int64_t r = rows[i] < lo ? lo : rows[i] > hi - 1 ? hi - 1 : rows[i];
-		if (row_new(r, pass, lines, total, ta, tb, top, height) != seen)
-			return true;
-	}
-	return false;
+	return row_new(lo, pass, lines, total, ta, tb, top, height) !=
+	       row_new(hi - 1, pass, lines, total, ta, tb, top, height);
 }
 
 fc_verdict_t frame_clock_judge(const fc_frame_t *f, uint32_t begin_line, uint32_t end_line,
