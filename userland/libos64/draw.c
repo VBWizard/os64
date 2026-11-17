@@ -344,23 +344,24 @@ void os64_draw_ctx_text(os64_draw_ctx_t *ctx, const char *str)
 
 // ── The frame clock ─────────────────────────────────────────────────────────
 
-// Real time in milliseconds off the monotonic tick clock. per_second is
-// read live, never baked in — a kernel rebuilt at a faster tick makes
-// every app's dt arithmetic finer with zero recompiles (ticks.h doctrine).
-static uint64_t now_ms(void)
+// Real time in microseconds (micros(), the TSC's face). A frame-paced loop
+// returns sixty times a second, and the 10 ms tick would hand it dts of 0,
+// 10 and 20 for frames that were each 16.7 ms long.
+static uint64_t now_us(void)
 {
-    os64_ticks_t t = {0, 0};
-    os64_ticks(&t);
-    if (t.per_second == 0)
-        return 0;   // pre-clock caller; the floor in frame_wait covers it
-    return t.ticks * 1000u / t.per_second;
+    int64_t t = os64_micros();
+    return t > 0 ? (uint64_t)t : 0;
 }
+
+#define FRAME_PERIOD_DEFAULT_NS 16666667u   // until the display's own frames say
 
 void os64_frame_clock_init(os64_frame_clock_t *clock)
 {
-    clock->last_ms = now_ms();
+    clock->last_us = now_us();
     clock->window = -1;
     clock->immediate_wakes = 0;
+    clock->period_ns = FRAME_PERIOD_DEFAULT_NS;
+    clock->asked = false;
 }
 
 void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window)
@@ -388,10 +389,82 @@ static bool bound_window_covered(const os64_frame_clock_t *clock)
     return (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
 }
 
+// The elapsed time since the last boundary in whole milliseconds, rounded,
+// and the boundary moved to now.
+static uint64_t take_dt_ms(os64_frame_clock_t *clock)
+{
+    uint64_t now = now_us();
+    uint64_t dt = (now - clock->last_us + 500) / 1000;
+    clock->last_us = now;
+    return dt;
+}
+
+// The budget as frames of the display: rounded to the nearest, at least one.
+static uint64_t frames_for(uint64_t budget_ms, uint32_t period_ns)
+{
+    uint64_t period = period_ns ? period_ns : FRAME_PERIOD_DEFAULT_NS;
+    uint64_t n = (budget_ms * 1000000u + period / 2) / period;
+    return n ? n : 1;
+}
+
+typedef enum { PACED_NOT, PACED_DONE, PACED_EVENT } paced_t;
+
+// Wait for the display's frames (os64_frame_wait's paced half). PACED_NOT
+// when it did not pace (the window has drawn nothing since it last asked,
+// or the request failed) and the caller sleeps instead; PACED_DONE once the
+// budget's frames have been shown; PACED_EVENT when another event is
+// waiting for the program's poll, which is left where it is.
+static paced_t paced_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
+{
+    os64_gui_event_t ans;
+    int64_t win = clock->window;
+    // An answer waiting already belongs to an earlier frame (a request an
+    // early return left behind): this wait counts from a fresh one.
+    while (os64_gui_frame_take(win, &ans) == 1)
+        clock->asked = false;
+    // Ask only while drawing, unless a request of ours was still owed: the
+    // program was drawing a moment ago, and one more frame decides.
+    int64_t rc = os64_gui_frame_request(win, clock->asked ? 0 : OS64_GUI_FRAME_IF_DRAWN);
+    if (rc != 0) {
+        clock->asked = false;
+        return PACED_NOT;
+    }
+    clock->asked = true;
+    uint64_t want = frames_for(budget_ms, clock->period_ns), first = 0;
+    bool seen = false, waited = false;
+    for (;;) {
+        int64_t t = os64_gui_frame_take(win, &ans);
+        if (t < 0)
+            return PACED_NOT;
+        if (t == 1) {
+            clock->asked = false;
+            if (ans.frame.period_ns != 0)
+                clock->period_ns = ans.frame.period_ns;
+            uint64_t number = os64_gui_frame_number(&ans);
+            if (!seen) {
+                seen = true;
+                first = number;
+            }
+            if (number - first + 1 >= want)
+                return PACED_DONE;
+            if (os64_gui_frame_request(win, 0) != 0)
+                return PACED_DONE;
+            clock->asked = true;
+            waited = false;
+            continue;
+        }
+        if (waited)
+            return PACED_EVENT;   // the wait ended for something that is not a frame
+        if (os64_gui_event_wait(win, (os64_gui_event_t *)0) < 0)
+            return PACED_NOT;
+        waited = true;
+    }
+}
+
 uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
 {
-    uint64_t now = now_ms();
-    uint64_t used = now - clock->last_ms;
+    uint64_t now = now_us() / 1000;
+    uint64_t used = now - clock->last_us / 1000;
 
     // Nobody watching? Then nobody is owed a frame. Asked BEFORE the cadence
     // sleep below, because that sleep registers no waiter: a covered window
@@ -411,9 +484,9 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
     // not hang because its window went behind another.
     if (budget_ms > 0 && bound_window_covered(clock))
     {
-        uint64_t entered = now_ms();
+        uint64_t entered = now_us();
         os64_gui_event_wait(clock->window, (os64_gui_event_t *)0);
-        clock->last_ms = now_ms();
+        clock->last_us = now_us();
         // Woken by the UNCOVERED nudge, or by a key under a window that
         // still hides us? The flag decides. Still covered means no frame is
         // owed: a dt of ZERO, so an integrator holds still and a key held
@@ -426,9 +499,9 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
             clock->immediate_wakes = 0;
             return budget_ms;
         }
-        // Still covered, and the wait returned without time passing. Once,
-        // that is ordinary: an event queued just before the wait returns in
-        // the same 10ms tick even for a caller that drains faithfully. TWICE
+        // Still covered, and the wait returned at once (within a
+        // millisecond). Once, that is ordinary: an event queued just before
+        // the wait returns at once even for a caller that drains faithfully. TWICE
         // IN A ROW it is not — a drained queue cannot wake the next wait at
         // once — so the caller is not draining (the COVERED nudge itself is
         // enough to do this to a program that never polls), and left alone
@@ -436,7 +509,7 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
         // bound clock exists to prevent. From the second immediate wake on,
         // the price of not draining is a nap, not a core; a draining caller
         // never reaches it.
-        if (clock->last_ms == entered)
+        if (clock->last_us - entered < 1000)
         {
             if (++clock->immediate_wakes >= 2)
                 os64_sleep(COVERED_UNDRAINED_NAP_MS);
@@ -444,6 +517,32 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
         else
             clock->immediate_wakes = 0;
         return 0;
+    }
+
+    // Visible, and drawing: paced by the display's frames (draw.h). A
+    // return for another event that comes at once twice in a row means the
+    // caller is not draining its queue, and it is held to sleeping its
+    // budget, as a covered caller is held to a nap, rather than spinning.
+    if (budget_ms > 0 && budget_ms <= OS64_FRAME_PACE_MAX_MS && clock->window >= 0)
+    {
+        uint64_t entered = now_us();
+        paced_t p = paced_wait(clock, budget_ms);
+        if (p == PACED_DONE) {
+            clock->immediate_wakes = 0;
+            uint64_t dt = take_dt_ms(clock);
+            return dt > 0 ? dt : 1;
+        }
+        if (p == PACED_EVENT) {
+            bool at_once = now_us() - entered < 1000;
+            if (!at_once)
+                clock->immediate_wakes = 0;
+            if (!at_once || ++clock->immediate_wakes < 2) {
+                uint64_t dt = take_dt_ms(clock);
+                return dt > 0 ? dt : 1;
+            }
+        }
+        // Not paced (idle, or no frames to be had), or a caller not
+        // draining: the sleep below.
     }
 
     // Sleep out whatever remains of the budget. os64_sleep rounds UP to
@@ -454,8 +553,6 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
     if (budget_ms > used)
         os64_sleep(budget_ms - used);
 
-    now = now_ms();
-    uint64_t dt = now - clock->last_ms;
-    clock->last_ms = now;
+    uint64_t dt = take_dt_ms(clock);
     return dt > 0 ? dt : 1;   // never 0 — a zero dt freezes integrators
 }
