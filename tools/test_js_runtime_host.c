@@ -2586,9 +2586,96 @@ static void module_bytecode_cases(void)
 #include "test_js_recovery_barrier.inc"
 #include "test_js_child_recovery.inc"
 #include "test_js_retention.inc"
+#include "../userland/libjs/tests/owner_runtime_cases.h"
+#include "../userland/libjs/tests/owner_admission_cases.h"
+
+static bool owner_runtime_issuer_exhausted;
+JSOwnerStatus js_owner_observed_incarnation_next(uint64_t *out)
+{
+    return owner_runtime_issuer_exhausted?JS_OWNER_EXHAUSTED:js_owner_incarnation_next(out);
+}
+static void owner_runtime_assert(bool ok, const char *what) { check(ok,what); }
+static size_t owner_admission_baseline;
+static void owner_admission_observe(os64_js_runtime_t *runtime,const JSOwnerRuntimeMetadata *m)
+{
+    if(!runtime) { owner_admission_baseline=live_bytes; return; }
+    os64_js_retention_t engine=os64_js_retention_snapshot(runtime,OS64_JS_ABI_ID);
+    check(live_bytes-owner_admission_baseline==m->wrapper_bytes+m->charged_bytes+engine.heap_bytes,
+        "owner admission: actual native heap census matches wrapper plus metadata plus engine charges");
+    check(m->charged_bytes>m->requested_bytes,"owner admission: fixture exercises rounded metadata charge");
+}
+static void owner_admission_failure_cases(void)
+{
+    owner_admission_cases(owner_runtime_assert,owner_admission_observe);
+    os64_js_config_t config={.limits=os64_js_default_limits()};
+    for(unsigned policy=0;policy<2;policy++) {
+        size_t baseline=live,bytes=live_bytes,start=attempts;
+        os64_js_runtime_t *runtime=NULL; os64_js_outcome_t out;
+        check(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+            (JSOwnerLimits){3,5,2},&runtime,&out)==OS64_JS_OK,"owner admission: constructor sweep baseline");
+        size_t cuts=attempts-start;
+        os64_js_destroy(runtime);
+        for(size_t i=1;i<=cuts;i++) {
+            runtime=(void *)1; fail_at=attempts+i;
+            os64_js_status_t status=js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,
+                OS64_JS_ABI_ID,(JSOwnerLimits){3,5,2},&runtime,&out);
+            fail_at=0;
+            if(status==OS64_JS_OK) os64_js_destroy(runtime);
+            else check(!runtime && (status==OS64_JS_HOST_FAILURE || status==OS64_JS_LIMIT),
+                "owner admission: failed construction publishes no partial runtime");
+            check(live==baseline && live_bytes==bytes,"owner admission: every allocation refusal balances arena and engine");
+        }
+        printf("owner admission: policy%u %zu allocation cuts balanced\n",policy,cuts);
+    }
+    size_t baseline=live,bytes=live_bytes;
+    os64_js_runtime_t *runtime=NULL; os64_js_outcome_t out;
+    check(js_owner_runtime_create(&config,OS64_JS_TEARDOWN_RECLAIM,OS64_JS_ABI_ID,
+        (JSOwnerLimits){3,5,2},&runtime,&out)==OS64_JS_OK,"owner admission: construct tracked bailout fixture");
+    JSContext *context=os64_js_context(runtime,OS64_JS_ABI_ID,&out);
+    JSValue lost=JS_NewObject(context);
+    check(!JS_IsException(lost),"owner admission: retain deliberate native object leak for reporting teardown");
+    os64_js_teardown_report_t report;
+    os64_js_destroy_report(runtime,&report);
+    check(report.leaked && report.reclaimed_blocks && live==baseline && live_bytes==bytes,
+        "owner admission: tracked engine bailout also frees independent metadata allocation");
+}
+static void owner_runtime_failure_cases(void)
+{
+    owner_runtime_cases(owner_runtime_assert);
+    os64_js_config_t config={.limits=os64_js_default_limits()};
+    for(unsigned policy=0;policy<2;policy++) {
+        os64_js_runtime_t *refused=(void *)1; os64_js_outcome_t rejection;
+        size_t allocs=attempts;
+        owner_runtime_issuer_exhausted=true;
+        check(os64_js_create_with_teardown(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,&refused,&rejection)==OS64_JS_ADMISSION_REFUSED && !refused && attempts==allocs,
+            "runtime identity: exhausted issuer refuses before allocation or publication");
+        owner_runtime_issuer_exhausted=false;
+        uint64_t before,after;
+        check(js_owner_incarnation_next(&before)==JS_OWNER_OK,"runtime identity: bracket failed admission");
+        os64_js_runtime_t *runtime=(void *)1; os64_js_outcome_t out;
+        size_t base=live,bytes=live_bytes;
+        fail_at=attempts+1;
+        check(os64_js_create_with_teardown(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,&runtime,&out)==OS64_JS_HOST_FAILURE && !runtime,
+            "runtime identity: failed allocation publishes no runtime");
+        fail_at=0;
+        check(js_owner_incarnation_next(&after)==JS_OWNER_OK && after==before+2 && live==base && live_bytes==bytes,
+            "runtime identity: failed admission burns ID without leaking wrapper");
+    }
+}
+
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--owner-admission")) {
+        owner_admission_failure_cases();
+        printf("owner admission: %u checks, %u failures\n",checks,failures);
+        return failures?1:0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "--owner-runtime")) {
+        owner_runtime_failure_cases();
+        printf("owner runtime: %u checks, %u failures\n",checks,failures);
+        return failures?1:0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--retention")) {
         retention_cases();
         printf("libjs retention: %u checks, %u failures\n", checks, failures);
@@ -2760,7 +2847,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
-    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases();
+    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases();
     realm_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
     task_cases();
     script_host_cases();

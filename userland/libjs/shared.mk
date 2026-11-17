@@ -85,6 +85,25 @@ $(OBJ)/js/owner-incarnation-parent: $(OBJ)/js/owner-incarnation-parent.o $(LAUNC
 js-owner-incarnation-test: $(OBJ)/js/owner-incarnation-test $(OBJ)/js/owner-incarnation-parent
 -include $(OBJ)/js/owner-incarnation-test.d $(OBJ)/js/owner-incarnation-parent.d
 
+# Private runtime identity oracle links the production runtime and engine
+# objects directly, so hidden inspection does not become a public export.
+$(OBJ)/js/owner-runtime-test.o: libjs/tests/owner_runtime.c libjs/tests/owner_runtime_cases.h libjs/tests/owner_admission_cases.h \
+    libjs/runtime/owner_runtime.h $(LIBJS_GENERATED)/.prepared libjs/shared.mk GNUmakefile
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBJS_FLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(OBJ)/js/owner-runtime-test: $(OBJ)/js/owner-runtime-test.o $(LIBJS_CORE) $(LIBJS_RUNTIME_OBJS) $(LAUNCH_OBJS) $(BIN)/libmath.so $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_jsembedtest) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) $(BIG_STACK_LDFLAGS) -o $@ $^
+$(OBJ)/js/owner-runtime-parent.o: libjs/tests/owner_runtime_parent.c libjs/shared.mk GNUmakefile
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBJS_FLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(OBJ)/js/owner-runtime-parent: $(OBJ)/js/owner-runtime-parent.o $(LAUNCH_OBJS) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_testrun) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) -o $@ $^
+.PHONY: js-owner-runtime-test
+js-owner-runtime-test: $(OBJ)/js/owner-runtime-test $(OBJ)/js/owner-runtime-parent
+-include $(OBJ)/js/owner-runtime-test.d $(OBJ)/js/owner-runtime-parent.d
+
 # V1 is a separate consumer alternative in the reserved fixture slot. Neither
 # fixture belongs to the normal image; validation images select one executable.
 LIBJS_ACCEPTANCE_DIR := $(OBJ)/js/acceptance

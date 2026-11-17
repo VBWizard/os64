@@ -17,11 +17,11 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -I userland/libmath/include -I userland/libjs/port -I userland/libjs/include
     -I userland/libos64/include -I abi/include -isystem userland/obj/js/upstream
     -fsanitize=address,undefined -fno-sanitize-recover=all -DLIBJS_INTL_DIR='"userland/libjs/intl/"')
-for source in userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userland/libos64/str.c userland/libos64/fmt.c \
+for source in userland/libjs/runtime/runtime.c userland/libjs/runtime/owner_incarnation.c userland/libjs/runtime/owner_tickets.c userland/libjs/intl/intl.c userland/libos64/str.c userland/libos64/fmt.c \
     tools/test_js_port_calendar.c tools/test_js_runtime_host.c; do
     observe_call=()
     if [ "$source" = userland/libjs/runtime/runtime.c ]; then
-        observe_call=(-DJS_Call=js_realm_observed_call)
+        observe_call=(-DJS_Call=js_realm_observed_call -Djs_owner_incarnation_next=js_owner_observed_incarnation_next)
     fi
     cc "${flags[@]}" "${observe_call[@]}" -c "$source" -o "$js_runtime_work/$(basename "$source" .c).o"
 done
@@ -36,7 +36,7 @@ for line in sys.stdin:
         print("\n".join(shlex.split(line.split("=", 1)[1])[0].split()))
 ')
 cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack userland/obj/js/core.o \
-    "${maths[@]}" "$js_runtime_work/runtime.o" "$js_runtime_work/intl.o" "$js_runtime_work/str-local.o" \
+    "${maths[@]}" "$js_runtime_work/runtime.o" "$js_runtime_work/owner_incarnation.o" "$js_runtime_work/owner_tickets.o" "$js_runtime_work/intl.o" "$js_runtime_work/str-local.o" \
     "$js_runtime_work/fmt.o" "$js_runtime_work/test_js_port_calendar.o" \
     "$js_runtime_work/test_js_runtime_host.o" -o "$js_runtime_work/probe"
 if [ "${JS_RUNTIME_REALMS_ONLY:-0}" = 1 ]; then
@@ -59,7 +59,7 @@ cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack \
     "$js_runtime_work/quickjs.o" "$js_runtime_work/dtoa.o" "$js_runtime_work/libregexp.o" \
     "$js_runtime_work/libunicode.o" "$js_runtime_work/cutils.o" \
     "$js_runtime_work/allocator.o" "$js_runtime_work/platform.o" "$js_runtime_work/format.o" \
-    "${maths[@]}" "$js_runtime_work/runtime.o" "$js_runtime_work/intl.o" "$js_runtime_work/str-local.o" \
+    "${maths[@]}" "$js_runtime_work/runtime.o" "$js_runtime_work/owner_incarnation.o" "$js_runtime_work/owner_tickets.o" "$js_runtime_work/intl.o" "$js_runtime_work/str-local.o" \
     "$js_runtime_work/fmt.o" "$js_runtime_work/test_js_port_calendar.o" \
     "$js_runtime_work/test_js_runtime_host.o" -o "$js_runtime_work/sanitized-probe"
 if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" = --host-implementation ] ||
@@ -71,7 +71,7 @@ if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" = --host-implementation ] ||
 fi
 if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" != "" ]; then
     case "$JS_RUNTIME_FOCUSED_SELECTOR" in
-        --retention|--failed-code-only|--failure-records|--recovery-barrier|--child-recovery|--execution-scopes-only|--native-call-contexts|--settings-scopes|--settings-bridge|--callback-settings|--current-settings|--promise-settings|--active-script|--finalization-settings|--import-settings|--neutral-promise-settings|--global-this|--realms-only|--quiescence) ;;
+        --owner-admission|--owner-runtime|--retention|--failed-code-only|--failure-records|--recovery-barrier|--child-recovery|--execution-scopes-only|--native-call-contexts|--settings-scopes|--settings-bridge|--callback-settings|--current-settings|--promise-settings|--active-script|--finalization-settings|--import-settings|--neutral-promise-settings|--global-this|--realms-only|--quiescence) ;;
         *) printf 'Unsupported focused runtime selector\n' >&2; exit 2 ;;
     esac
     for probe in probe sanitized-probe; do

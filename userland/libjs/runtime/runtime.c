@@ -11,6 +11,7 @@
 #include "platform.h"
 #include "os64_js_engine_id.h"
 #include "../intl/intl.h"
+#include "owner_runtime.h"
 #include <limits.h>
 
 #define JS_PUBLIC __attribute__((visibility("default")))
@@ -65,6 +66,11 @@ typedef struct SettingsCall {
     os64_js_settings_body_t *body;
     void *opaque;
 } SettingsCall;
+typedef struct {
+    _Alignas(max_align_t) JSOwnerTickets table;
+    uint64_t incarnation;
+    size_t requested_bytes, charged_bytes, wrapper_bytes;
+} OwnerMetadata;
 struct os64_js_runtime {
     JSRuntime *engine;
     JSPortAllocator allocator;
@@ -73,7 +79,7 @@ struct os64_js_runtime {
     SetupCall *setup_calls;
     os64_js_realm_t *setup_realm;
     SettingsCall *settings_calls;
-    bool host_settings_enabled;
+    union { uint64_t incarnation; OwnerMetadata *metadata; } owner;
     os64_js_realm_t realms[OS64_JS_MAX_REALMS];
     size_t realm_count;
     os64_js_realm_t *turn_owner;
@@ -97,10 +103,29 @@ struct os64_js_runtime {
     os64_js_recovery_host_t recovery_host;
     unsigned cancelled;
     bool active, turn, task, checkpointing, source_truncated, destroying;
-    bool ran_jobs;
+    bool ran_jobs, host_settings_enabled, metadata_selected;
     uint64_t owed_count;
     char source_name[OS64_JS_SOURCE_NAME_CAP];
 };
+
+uint64_t js_owner_runtime_incarnation(const os64_js_runtime_t *runtime)
+{
+    if (runtime == NULL) return 0;
+    return runtime->metadata_selected ? runtime->owner.metadata->incarnation : runtime->owner.incarnation;
+}
+
+bool js_owner_runtime_metadata(const os64_js_runtime_t *runtime, JSOwnerRuntimeMetadata *out)
+{
+    if (!runtime || !out || !runtime->metadata_selected) return false;
+    const OwnerMetadata *metadata = runtime->owner.metadata;
+    JSOwnerSummary summary;
+    if (js_owner_summary(&metadata->table, metadata->incarnation, &summary) != JS_OWNER_OK)
+        jsport_fatal("owner metadata identity", __FILE__, __LINE__);
+    *out = (JSOwnerRuntimeMetadata){metadata->incarnation, metadata->table._limits, summary,
+        metadata->requested_bytes, metadata->charged_bytes, metadata->wrapper_bytes,
+        runtime->allocator.allocation_limit};
+    return true;
+}
 
 static os64_js_realm_t *primary(os64_js_runtime_t *runtime)
 {
@@ -848,11 +873,12 @@ static os64_js_status_t setup_prepare(SetupCall *call, bool installed, unsigned 
     return OS64_JS_OK;
 }
 
-JS_PUBLIC os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *config,
+static os64_js_status_t create_with_teardown(const os64_js_config_t *config,
                                          os64_js_teardown_policy_t policy,
                                         const char *caller_abi,
                                         os64_js_runtime_t **out,
-                                        os64_js_outcome_t *outcome)
+                                        os64_js_outcome_t *outcome,
+                                        const JSOwnerLimits *metadata_limits)
 {
     if (out != NULL) *out = NULL;
     if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
@@ -884,19 +910,59 @@ JS_PUBLIC os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *
         outcome->limit = OS64_JS_LIMIT_MEMORY;
         return status(outcome, OS64_JS_LIMIT, "runtime storage exceeds memory limit");
     }
+    size_t metadata_bytes = 0;
+    if (metadata_limits && (js_owner_tickets_size(*metadata_limits, &metadata_bytes) != JS_OWNER_OK ||
+            metadata_bytes > SIZE_MAX - sizeof(OwnerMetadata)))
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "invalid owner metadata capacities");
+    if (metadata_limits) metadata_bytes += sizeof(OwnerMetadata);
+    uint64_t incarnation;
+    if (js_owner_incarnation_next(&incarnation) != JS_OWNER_OK)
+        return status(outcome, OS64_JS_ADMISSION_REFUSED, "runtime incarnation namespace exhausted");
     os64_js_runtime_t *runtime = os64_malloc(sizeof(*runtime));
     if (runtime == NULL)
         return status(outcome, OS64_JS_HOST_FAILURE, "host allocation failed");
     size_t storage = os64_malloc_size(runtime);
     os64_memset(runtime, 0, sizeof(*runtime));
+    runtime->owner.incarnation = incarnation;
     os64_js_realm_t *realm = primary(runtime);
     realm->runtime = runtime;
     realm->promise_then = JS_UNDEFINED;
     runtime->limits = *limits;
+    size_t reserved = storage;
+    if (metadata_limits) {
+        if (storage >= limits->memory_bytes || metadata_bytes >= limits->memory_bytes - storage) {
+            os64_free(runtime);
+            outcome->limit = OS64_JS_LIMIT_MEMORY;
+            return status(outcome, OS64_JS_LIMIT, "owner metadata exceeds memory limit");
+        }
+        OwnerMetadata *metadata = os64_malloc(metadata_bytes);
+        if (!metadata) {
+            os64_free(runtime);
+            return status(outcome, OS64_JS_HOST_FAILURE, "owner metadata allocation failed");
+        }
+        size_t charge = os64_malloc_size(metadata);
+        if (charge >= limits->memory_bytes - storage) {
+            os64_free(metadata);
+            os64_free(runtime);
+            outcome->limit = OS64_JS_LIMIT_MEMORY;
+            return status(outcome, OS64_JS_LIMIT, "owner metadata charge exceeds memory limit");
+        }
+        os64_memset(metadata, 0, sizeof(*metadata));
+        metadata->incarnation = incarnation;
+        metadata->requested_bytes = metadata_bytes;
+        metadata->charged_bytes = charge;
+        metadata->wrapper_bytes = storage;
+        if (js_owner_tickets_init(&metadata->table, incarnation, *metadata_limits,
+                (unsigned char *)metadata + sizeof(*metadata), metadata_bytes - sizeof(*metadata)) != JS_OWNER_OK)
+            jsport_fatal("owner metadata initialization", __FILE__, __LINE__);
+        runtime->owner.metadata = metadata;
+        runtime->metadata_selected = true;
+        reserved += charge;
+    }
     runtime->allocator.tracked = policy == OS64_JS_TEARDOWN_RECLAIM;
-    runtime->allocator.allocation_limit = storage < limits->memory_bytes
-        ? limits->memory_bytes - storage : 0;
-    if (storage < limits->memory_bytes)
+    runtime->allocator.allocation_limit = reserved < limits->memory_bytes
+        ? limits->memory_bytes - reserved : 0;
+    if (reserved < limits->memory_bytes)
         runtime->engine = JS_NewRuntime2(runtime->allocator.tracked
             ? &jsport_tracked_malloc_functions : &jsport_malloc_functions, &runtime->allocator);
     if (runtime->engine != NULL) {
@@ -906,7 +972,7 @@ JS_PUBLIC os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *
     }
     bool ready = runtime->engine != NULL && realm_initialize(realm);
     if (!ready || runtime->allocator.failures != 0) {
-        bool limited = storage >= limits->memory_bytes ||
+        bool limited = reserved >= limits->memory_bytes ||
             (runtime->allocator.failures & JSPORT_ALLOC_LIMIT);
         if (realm->context != NULL) {
             JS_FreeValue(realm->context, realm->promise_then);
@@ -917,6 +983,7 @@ JS_PUBLIC os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *
          * failure, not the binding-leak exception selected for normal destroy. */
         if (runtime->allocator.blocks != NULL)
             jsport_fatal("construction allocator ledger", __FILE__, __LINE__);
+        if (runtime->metadata_selected) os64_free(runtime->owner.metadata);
         os64_free(runtime);
         if (limited) outcome->limit = OS64_JS_LIMIT_MEMORY;
         return status(outcome, limited ? OS64_JS_LIMIT : OS64_JS_HOST_FAILURE,
@@ -928,6 +995,20 @@ JS_PUBLIC os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *
     JS_SetModuleLoaderFunc(runtime->engine, module_normalize, module_load, runtime);
     *out = runtime;
     return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *config,
+    os64_js_teardown_policy_t policy, const char *caller_abi,
+    os64_js_runtime_t **out, os64_js_outcome_t *outcome)
+{
+    return create_with_teardown(config, policy, caller_abi, out, outcome, NULL);
+}
+
+os64_js_status_t js_owner_runtime_create(const os64_js_config_t *config,
+    os64_js_teardown_policy_t policy, const char *caller_abi, JSOwnerLimits metadata_limits,
+    os64_js_runtime_t **out, os64_js_outcome_t *outcome)
+{
+    return create_with_teardown(config, policy, caller_abi, out, outcome, &metadata_limits);
 }
 
 JS_PUBLIC os64_js_status_t os64_js_create(const os64_js_config_t *config,
@@ -3437,6 +3518,9 @@ JS_PUBLIC void os64_js_destroy_report(os64_js_runtime_t *runtime,
     } else {
         JS_FreeRuntime(runtime->engine);
     }
+    /* Native metadata remains valid through engine finalizers and tracked
+     * bailout. Its independent host allocation ends after that unwind. */
+    if (runtime->metadata_selected) os64_free(runtime->owner.metadata);
     os64_free(runtime);
 }
 

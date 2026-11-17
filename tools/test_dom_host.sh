@@ -38,7 +38,7 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
 # side of the mark (a style member that goes with the switch) has one to
 # hold to (tools/test_dom_modern.inc); libgarb's own suite proves the rest.
 objects=()
-for source in userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userland/libos64/str.c userland/libos64/fmt.c \
+for source in userland/libjs/runtime/runtime.c userland/libjs/runtime/owner_incarnation.c userland/libjs/runtime/owner_tickets.c userland/libjs/intl/intl.c userland/libos64/str.c userland/libos64/fmt.c \
     userland/libos64/text.c userland/libos64/text_cache.c userland/libos64/text_decode.c userland/libos64/text_bitmap.c \
     userland/libos64/bidi.c userland/libos64/url.c userland/libos64/arena.c tools/test_js_port_calendar.c tools/test_dom_host.c \
     userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,serialize_xml,shadow,range}.c userland/libxml/xml.c \

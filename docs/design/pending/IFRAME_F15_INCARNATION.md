@@ -59,3 +59,6 @@ admission rollback and real allocation charge under both teardown policies.
 They must not silently charge metadata to legacy constructors. No checked
 public profile, export migration, C3 agreement, pins, release or reuse is enabled.
 F15 remains in progress.
+
+The [runtime binding](IFRAME_F15_RUNTIME_IDENTITY.md) separately connects this
+issuer to real construction and proves cleanup ordering.
