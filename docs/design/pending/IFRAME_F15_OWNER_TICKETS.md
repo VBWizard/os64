@@ -1,5 +1,7 @@
 # F15 — private owner-ticket metadata prerequisite
 
+Implementation PR: **#634**, source `1bb2d85b`.
+
 Proof baseline: merged `userland` `7ee102a6` (#625); publication includes
 `ba3fbbdd` (#620). The media-session merge changes none of the recorded private
 source/build inputs or guest cohort files. This implements a bounded
