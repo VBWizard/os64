@@ -231,6 +231,9 @@ static const char *const kWordBreak[] = {"normal", "keep-all", "break-all", "bre
 static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere"};
 static const char *const kTextOverflow[] = {"clip", "ellipsis"};
 static const char *const kObjectFit[] = {"fill", "contain", "cover", "none", "scale-down"};
+static const char *const kBoxOrient[] = {"horizontal", "vertical", "inline-axis", "block-axis"};
+static const char *const kBoxPack[] = {"start", "end", "center", "justify"};
+static const char *const kBoxAlign[] = {"start", "end", "center", "baseline", "stretch"};
 
 // One name per value: an enum that grows without its table stops the build.
 _Static_assert(F_ARRAY(kDisplay) == FLOW_DISPLAY_NONE + 1, "kDisplay");
@@ -262,6 +265,9 @@ _Static_assert(F_ARRAY(kWordBreak) == FLOW_WORD_BREAK_BREAK_WORD + 1, "kWordBrea
 _Static_assert(F_ARRAY(kOverflowWrap) == FLOW_OVERFLOW_WRAP_ANYWHERE + 1, "kOverflowWrap");
 _Static_assert(F_ARRAY(kTextOverflow) == FLOW_TEXT_OVERFLOW_ELLIPSIS + 1, "kTextOverflow");
 _Static_assert(F_ARRAY(kObjectFit) == FLOW_OBJECT_SCALE_DOWN + 1, "kObjectFit");
+_Static_assert(F_ARRAY(kBoxOrient) == FLOW_BOX_BLOCK_AXIS + 1, "kBoxOrient");
+_Static_assert(F_ARRAY(kBoxPack) == FLOW_BOX_PACK_JUSTIFY + 1, "kBoxPack");
+_Static_assert(F_ARRAY(kBoxAlign) == FLOW_BOX_ALIGN_STRETCH + 1, "kBoxAlign");
 
 // `table[v]`, or "" for a value past the table (a style is only ever
 // written by libflow, so that is a broken invariant, not a page's doing).
@@ -1250,10 +1256,27 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
     int32_t twin = mask ? (int32_t)kTwin[prop - GARB_MASK_IMAGE] : prop;
     switch (twin) {
     case GARB_DISPLAY:
-        if (s->display == FLOW_DISPLAY_BLOCK && s->flow_root)
+        // A legacy box by its own name, whatever it is laid out as (a
+        // clamping one is a block, flow_style_t.legacy_box).
+        if (s->legacy_box && s->display != FLOW_DISPLAY_NONE && s->display != FLOW_DISPLAY_CONTENTS)
+            puts_(&o, s->display == FLOW_DISPLAY_INLINE_FLEX || s->display == FLOW_DISPLAY_INLINE_BLOCK
+                          ? "-webkit-inline-box" : "-webkit-box");
+        else if (s->display == FLOW_DISPLAY_BLOCK && s->flow_root)
             puts_(&o, "flow-root");
         else
             WORD(&o, kDisplay, s->display);
+        break;
+    case GARB_BOX_ORIENT: WORD(&o, kBoxOrient, s->box_orient); break;
+    case GARB_BOX_DIRECTION: puts_(&o, s->box_reverse ? "reverse" : "normal"); break;
+    case GARB_BOX_PACK: WORD(&o, kBoxPack, s->box_pack); break;
+    case GARB_BOX_ALIGN: WORD(&o, kBoxAlign, s->box_align); break;
+    case GARB_BOX_FLEX: number(&o, s->box_flex / 1000.0); break;
+    case GARB_BOX_ORDINAL_GROUP: integer(&o, s->box_ordinal_group); break;
+    case GARB_LINE_CLAMP:
+        if (s->line_clamp > 0)
+            integer(&o, s->line_clamp);
+        else
+            puts_(&o, "none");
         break;
     case GARB_COLOR: colour(&o, s->color); break;
     case GARB_BACKGROUND_COLOR:

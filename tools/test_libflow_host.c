@@ -1417,6 +1417,7 @@ static void layout_sweep(void)
 #include "test_libflow_shadow.inc"
 #include "test_libflow_graft.inc"
 #include "test_libflow_filter.inc"
+#include "test_libflow_clamp.inc"
 
 int main(int argc, char **argv)
 {
@@ -1617,6 +1618,7 @@ int main(int argc, char **argv)
     computed_svg_cases();
     conic_computed_cases();
     filter_cases();
+    clamp_cases();
     fixed_cases();
     paint_cases();
     decoration_colour_cases();

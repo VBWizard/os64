@@ -1,0 +1,60 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Line clamp</title>
+<style>
+  body { font: 16px sans-serif; margin: 24px; max-width: 520px; }
+  .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+           overflow: hidden; }
+  .open .clamp { -webkit-line-clamp: none; }
+  .one { -webkit-line-clamp: 1; }
+  button { margin: 4px 0 18px; }
+  .row { display: -webkit-box; -webkit-box-pack: justify; width: 300px; background: #eef;
+         margin-bottom: 18px; }
+  .row span { display: block; width: 80px; background: #ccf; }
+  .grow { -webkit-box-flex: 1; }
+</style>
+
+<h2>Three lines, then "Show more"</h2>
+<p>Each description is clamped to three lines with an ellipsis. A script
+shows the button only when the text is taller than what shows
+(scrollHeight &gt; clientHeight), as podcast and news sites do.</p>
+
+<div class="item">
+  <div class="clamp">The Democratic Party swept the midterm elections by making big
+  promises to Americans about bringing down the cost of living. Now the party has to
+  deliver, and economists disagree about how much a president or a Congress can move
+  prices at all. Our reporter explains what the promises were, which of them can be
+  kept, and what happens to the party if they are not.</div>
+  <button hidden>Show more</button>
+</div>
+
+<div class="item">
+  <div class="clamp">A short description that fits.</div>
+  <button hidden>Show more</button>
+</div>
+
+<div class="item">
+  <div class="clamp"><p style="margin:0">The first paragraph is two lines long once it
+  wraps at this width, more or less.</p><p style="margin:0">The second paragraph holds
+  the third line and the rest of the story, which the clamp hides.</p></div>
+  <button hidden>Show more</button>
+</div>
+
+<h2>One line</h2>
+<div class="clamp one">A single line that is much too long for the box it is in, so it
+ends in an ellipsis rather than wrapping.</div>
+
+<h2>The legacy box as a row</h2>
+<div class="row"><span>start</span><span>end</span></div>
+<div class="row" style="-webkit-box-pack:start"><span class="grow">grows</span><span>fixed</span></div>
+
+<script>
+  for (const item of document.querySelectorAll('.item')) {
+    const text = item.querySelector('.clamp'), button = item.querySelector('button');
+    button.hidden = !(text.scrollHeight > text.clientHeight);
+    button.addEventListener('click', () => {
+      const open = item.classList.toggle('open');
+      button.textContent = open ? 'Show less' : 'Show more';
+    });
+  }
+</script>

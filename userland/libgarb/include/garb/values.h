@@ -183,6 +183,20 @@ typedef enum {
     // match-source).
     GARB_MASK_IMAGE, GARB_MASK_REPEAT, GARB_MASK_POSITION_X, GARB_MASK_POSITION_Y,
     GARB_MASK_SIZE, GARB_MASK_ORIGIN, GARB_MASK_CLIP, GARB_MASK_COMPOSITE, GARB_MASK_MODE,
+    // The legacy box (`display: -webkit-box`), which every engine reads as
+    // a flex container (Compatibility § 3.4.4-5): its axis (a KEYWORD,
+    // horizontal, vertical, inline-axis or block-axis), whether that axis
+    // runs backwards (normal or reverse), where its free space goes
+    // (start, end, center, justify) and how its items line up across it
+    // (start, end, center, baseline, stretch); an item's share of the free
+    // space (a NUMBER) and its place among its siblings (a NUMBER, an
+    // integer from 1). The names are the prefixed ones; there are no
+    // others.
+    GARB_BOX_ORIENT, GARB_BOX_DIRECTION, GARB_BOX_PACK, GARB_BOX_ALIGN, GARB_BOX_FLEX,
+    GARB_BOX_ORDINAL_GROUP,
+    // CSS Overflow 4 § 5.1.1's legacy line clamp: the KEYWORD none, or a
+    // NUMBER, an integer from 1, the lines a vertical legacy box shows.
+    GARB_LINE_CLAMP,
     GARB_NPROPS
 } garb_prop_t;
 

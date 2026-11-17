@@ -82,6 +82,21 @@ WANT
 (end)
 END
 
+# But a prefixed name every engine reads (the Compatibility Standard's) is
+# the web's, and counted like a standard name when it is not read here; one
+# that is read, -webkit-line-clamp, is not counted.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p { -webkit-text-stroke: 1px red; -webkit-line-clamp: 2; -WEBKIT-TEXT-STROKE: none }
+p { -webkit-text-size-adjust: 100% }
+</style>
+<p>x
+WANT
+property -webkit-text-stroke 2
+(end)
+END
+
 # The style attribute is read like a sheet; a var() under a property with no
 # reader is counted when it is dropped.
 VIEWPORT 800x600
@@ -102,7 +117,7 @@ END
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
-p { display: bogusword; display: inline frob; width: 10quux; display: -webkit-box }
+p { display: bogusword; display: inline frob; width: 10quux; display: -moz-box }
 p { display: flow-root; background-clip: text }
 div { DISPLAY: Flow-Root; background-image: image-set("a.png" 1x) }
 </style>

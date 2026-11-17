@@ -547,6 +547,10 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
     }
     if (s->order != 0)
         putf(b, " order=%d", (int)s->order);
+    if (s->legacy_box)
+        puts_(b, " legacy-box");
+    if (s->line_clamp > 0)
+        putf(b, " line-clamp=%d", (int)s->line_clamp);
     if (s->row_gap.kind != FLOW_LENGTH_AUTO || s->column_gap.kind != FLOW_LENGTH_AUTO) {
         puts_(b, " gap=");
         length(b, s->row_gap);
@@ -802,6 +806,8 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
         puts_(b, "line");
         box_rect(b, box->rect);
         putf(b, " base %d", (int)(box->baseline - box->rect.y));
+        if (box->line_clamp_end)
+            puts_(b, " clamp-end");
         break;
     case FLOW_BOX_SPAN:
         putf(b, "span %s", node_name(box->node));

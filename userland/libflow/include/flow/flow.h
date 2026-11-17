@@ -338,6 +338,23 @@ typedef enum {
     FLOW_PLACE_SPACE_AROUND,
     FLOW_PLACE_SPACE_EVENLY,
 } flow_place_t;
+// The legacy box's (Compatibility § 3.4.4; flow_style_t.legacy_box), each
+// as its property's keywords are listed, the initial value first but for
+// `-webkit-box-align`, whose initial value is STRETCH.
+typedef enum {
+    FLOW_BOX_HORIZONTAL = 0,
+    FLOW_BOX_VERTICAL,
+    FLOW_BOX_INLINE_AXIS,
+    FLOW_BOX_BLOCK_AXIS,
+} flow_box_orient_t;
+typedef enum { FLOW_BOX_PACK_START = 0, FLOW_BOX_PACK_END, FLOW_BOX_PACK_CENTER, FLOW_BOX_PACK_JUSTIFY } flow_box_pack_t;
+typedef enum {
+    FLOW_BOX_ALIGN_START = 0,
+    FLOW_BOX_ALIGN_END,
+    FLOW_BOX_ALIGN_CENTER,
+    FLOW_BOX_ALIGN_BASELINE,
+    FLOW_BOX_ALIGN_STRETCH,
+} flow_box_align_t;
 // Grid 2 § 7.2 (GRID.md): a track's sizing function at one end — a length
 // or percentage (FIXED, in `len`), a flexible share (FR, `fr` in
 // thousandths), or a keyword — and a track: its minimum and maximum, and
@@ -936,6 +953,36 @@ typedef struct {
     int32_t order;
     flow_length_t row_gap, column_gap;
 
+    // The legacy box (`display: -webkit-box` and `-webkit-inline-box`,
+    // Compatibility § 3.4.4-5): laid out as the flex container every engine
+    // reads it as. `legacy_box` says the display was one of them, a bit
+    // beside `display` as `flow_root` is; once every origin has spoken the
+    // box's own properties are written over the flex ones above — its
+    // axis, direction, packing and alignment over the container's, and an
+    // item's `-webkit-box-flex` and `-webkit-box-ordinal-group` over its
+    // flex factors and order, its basis auto and its own alignment its
+    // container's — so layout reads one flex container. A
+    // vertical one with a `-webkit-line-clamp` is instead the block
+    // container engines lay it out as (CSS Overflow 4 § 5.1.1), a
+    // formatting context's root, which shows `line_clamp` lines: when
+    // content follows the last of them (another line, or an in-flow box
+    // with height), the box ends at that line and the line ends in an
+    // ellipsis (flow_box_t.line_clamp_end, f_clamp_line). The rest of its content is laid
+    // out below that and overflows, as it does in other browsers, so a
+    // page that hides it reads its full height as scrollHeight. The box's
+    // properties are kept as written, for getComputedStyle, which also
+    // names the display `-webkit-box` and answers the flex properties with
+    // what was written over them (other browsers keep those as written):
+    // box_flex in thousandths, held as the flex factors are; line_clamp 0
+    // for none.
+    bool legacy_box;
+    flow_box_orient_t box_orient;
+    bool box_reverse;
+    flow_box_pack_t box_pack;
+    flow_box_align_t box_align;
+    int32_t box_flex, box_ordinal_group;
+    int32_t line_clamp;
+
     // Grids (GRID.md). A container's tracks, explicit and implicit, its
     // named areas — `grid_area_rows` by `grid_area_cols` of them in all —
     // and whether its auto-placement runs down columns, and packs back.
@@ -1129,14 +1176,22 @@ struct flow_box {
     const char *text;
     uint32_t length;
     // A box holding lines whose `text-overflow` is ellipsis and whose
-    // `overflow` is not visible: the ellipsis its lines end in where their
-    // content passes their end, laid out in its own fonts — U+2026, or
-    // three periods where those fonts have no glyph for it — and owned by
-    // the tree. Where it goes, and what of each line it hides, is
-    // flow_line_cut's and flow_line_cut_keeps', which the painter reads
-    // when flow_visit (or flow_visit_text_clip) hands it each of the box's
-    // lines, and flow_hit too. NULL otherwise.
+    // `overflow` is not visible, or holding the line a line clamp ends at
+    // (`line_clamp_end`): the ellipsis its lines end in — where their
+    // content passes their end, or at that line's end — laid out in its own
+    // fonts — U+2026, or three periods where those fonts have no glyph for
+    // it — and owned by the tree. Where it goes, and what of each line it
+    // hides, is flow_line_cut's and flow_line_cut_keeps', which the painter
+    // reads when flow_visit (or flow_visit_text_clip) hands it each of the
+    // box's lines, and flow_hit too. NULL otherwise — but a block may keep
+    // a clamp's ellipsis after the clamp stops ending on its lines (a
+    // layout reuse copies it, and a box measured at another width made
+    // it), which flow_line_cut, deciding by the line and the style, never
+    // draws.
     const os64_text_run_t *ellipsis;
+    // LINE: the last line a line clamp shows when more follow it
+    // (flow_style_t.legacy_box), which ends in its block's ellipsis.
+    bool line_clamp_end;
     // TEXT: where those bytes are in the node's processed text — what a
     // selection maps a pixel back through — when the node is a TEXT node.
     // Under an ELEMENT they are text the page never wrote there (a `q`'s
@@ -1647,9 +1702,13 @@ bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out);
 // it (CSS Overflow 4 § 4.1), in the line's coordinates: off when the
 // line's content does not pass the block's end edge — where the block's
 // scroll shows it, so content scrolled into view is not ellipsed —
-// pre-wrap spaces that hang there not counting. On, `limit` is the end
+// pre-wrap spaces that hang there not counting, or when the block's
+// `text-overflow` does not ask for the ellipsis. On, `limit` is the end
 // edge less the ellipsis, and the ellipsis starts at `at`, where what is
-// kept ends (flow_line_cut_keeps says what is). A line that would keep
+// kept ends (flow_line_cut_keeps says what is). The line a line clamp
+// ends at (flow_box_t.line_clamp_end) is on whenever it has content: its
+// ellipsis follows its content where there is room for it before
+// `limit`, and cuts it as any other line's does where there is not. A line that would keep
 // nothing keeps its first character or atom, clipped rather than
 // ellipsed: `limit` is then where that ends, and `at` follows it. Linear
 // in the line's boxes, so a caller asking for many boxes keeps the answer
