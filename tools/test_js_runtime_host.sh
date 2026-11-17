@@ -62,9 +62,16 @@ cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack \
     "${maths[@]}" "$js_runtime_work/runtime.o" "$js_runtime_work/intl.o" "$js_runtime_work/str-local.o" \
     "$js_runtime_work/fmt.o" "$js_runtime_work/test_js_port_calendar.o" \
     "$js_runtime_work/test_js_runtime_host.o" -o "$js_runtime_work/sanitized-probe"
+if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" = --host-implementation ] ||
+   [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" = --neutral-native-jobs ]; then
+    for probe in probe sanitized-probe; do
+        "$js_runtime_work/$probe" "$JS_RUNTIME_FOCUSED_SELECTOR"
+    done
+    exit
+fi
 if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" != "" ]; then
     case "$JS_RUNTIME_FOCUSED_SELECTOR" in
-        --retention|--failed-code-only|--failure-records|--recovery-barrier|--child-recovery|--execution-scopes-only|--native-call-contexts|--settings-scopes|--settings-bridge|--callback-settings|--current-settings|--promise-settings|--active-script|--finalization-settings|--import-settings|--neutral-promise-settings|--host-implementation|--neutral-native-jobs|--global-this|--realms-only|--quiescence) ;;
+        --retention|--failed-code-only|--failure-records|--recovery-barrier|--child-recovery|--execution-scopes-only|--native-call-contexts|--settings-scopes|--settings-bridge|--callback-settings|--current-settings|--promise-settings|--active-script|--finalization-settings|--import-settings|--neutral-promise-settings|--global-this|--realms-only|--quiescence) ;;
         *) printf 'Unsupported focused runtime selector\n' >&2; exit 2 ;;
     esac
     for probe in probe sanitized-probe; do
