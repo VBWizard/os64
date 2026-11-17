@@ -13,8 +13,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "script_job.h"
+#include "dom/dom.h"
 #include "os64/slurp.h"
 #include "os64/str.h"
 
@@ -63,10 +65,15 @@ os64_slurp_status_t os64_slurp(const char *path, size_t max, uint8_t **out, size
 
 /* Decoding is not what is held here (script_decode.c is the window's suites'
  * too): every label is UTF-8's, and nothing is printed. */
+/* The Encoding Standard's names, lower case as libhtml answers them, for
+ * the labels these cases use. */
 const char *os64_html_encoding_for_label(const char *label, size_t len)
 {
-    (void)label; (void)len;
-    return "UTF-8";
+    if ((len == 5 && strncasecmp(label, "utf-8", 5) == 0) || (len == 4 && strncasecmp(label, "utf8", 4) == 0))
+        return "utf-8";
+    if ((len == 12 && strncasecmp(label, "windows-1252", 12) == 0) || (len == 6 && strncasecmp(label, "latin1", 6) == 0))
+        return "windows-1252";
+    return NULL;
 }
 int64_t os64_write(int32_t handle, const void *buf, size_t len)
 {
@@ -129,6 +136,8 @@ bool way_cache_companion_put(way_cache_t *cache, const way_cache_key_t *key, con
     s_puts++;
     return true;
 }
+
+os64_dom_blob_t *host_blob_new(const void *bytes, size_t length, const char *type);
 
 static bool never(void *ctx)
 {
@@ -213,6 +222,32 @@ int main(void)
     void *none = NULL;
     expect("write: the job keeps its blob", yonder_bytecode_keep_run(job, never, NULL, &none) == 1 && s_puts == 1);
     yonder_bytecode_keep_release(job, NULL);
+
+    // A blob: script is its entry's bytes, labelled by the Blob type's
+    // charset as a response is by its Content-Type, and released with the
+    // job; with no charset, the fallback.
+    static const uint8_t latin1[] = {'v', '=', '\'', 0xe9, '\'', ';'};
+    yonder_script_job_t *bj = os64_calloc(1, sizeof(*bj));
+    bj->kind = YONDER_JOB_SCRIPT;
+    snprintf(bj->url, sizeof(bj->url), "blob:https://page.test/1");
+    snprintf(bj->fallback, sizeof(bj->fallback), "utf-8");     // which the charset outranks
+    bj->blob = host_blob_new(latin1, sizeof(latin1), "text/javascript;charset=windows-1252");
+    void *bout = NULL;
+    expect("blob: the script is its entry's", yonder_script_run(bj, never, NULL, &bout) == 1);
+    got = bout;
+    expect("blob: decoded by the Blob type's charset",
+           got != NULL && got->ok && strcmp(got->source, "v='\xc3\xa9';") == 0 && got->bytecode == NULL);
+    yonder_script_release(bj, got);
+    bj = os64_calloc(1, sizeof(*bj));
+    bj->kind = YONDER_JOB_SCRIPT;
+    snprintf(bj->url, sizeof(bj->url), "blob:https://page.test/2");
+    snprintf(bj->fallback, sizeof(bj->fallback), "utf-8");
+    bj->blob = host_blob_new("v='\xc3\xa9';", 7, "text/javascript");
+    bout = NULL;
+    yonder_script_run(bj, never, NULL, &bout);
+    got = bout;
+    expect("blob: with no charset, the fallback", got != NULL && got->ok && strcmp(got->source, "v='\xc3\xa9';") == 0);
+    yonder_script_release(bj, got);
 
     expect("everything let go", live == 0);
     printf("yonder script job: %d checks, %d failed\n", checks, failures);

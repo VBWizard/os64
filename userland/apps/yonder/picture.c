@@ -276,9 +276,19 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         } else {
             p->status = decode_observed(bytes, len, os64_dom_blob_type(j->blob), j, cancelled, ctx, p);
             p->origin_clean = true;
-            uint8_t *kept = j->recoverable && p->status == OS64_IMAGE_OK ? os64_malloc(len) : NULL;
-            if (kept != NULL)
-                os64_memcpy(kept, bytes, len);
+            // The copy preserve_body keeps; without memory for it the
+            // picture fails as preserve_body's own refusal does, rather
+            // than keep an empty backing that claims bytes.
+            uint8_t *kept = NULL;
+            if (j->recoverable && p->status == OS64_IMAGE_OK && p->kind == YONDER_PICTURE_RASTER) {
+                kept = os64_malloc(len);
+                if (kept != NULL) {
+                    os64_memcpy(kept, bytes, len);
+                } else {
+                    p->status = OS64_IMAGE_NO_MEMORY;
+                    os64_strcopy(p->why, sizeof(p->why), "no memory for image reconstruction bytes");
+                }
+            }
             preserve_body(j, p, &kept, len);
             os64_free(kept);
         }

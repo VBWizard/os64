@@ -17,11 +17,12 @@ trap cleanup EXIT
 host_flags=(-std=gnu11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -Wno-missing-field-initializers
             -I userland/apps/yonder -I userland/libway/include -I userland/libway -I userland/libfetch/include
             -I userland/libtls/include -I userland/libgzip/include -I userland/libos64/include
-            -I userland/libhtml/include -I userland/libpage/include -I abi/include -I tools)
+            -I userland/libhtml/include -I userland/libpage/include -I userland/libdom/include
+            -I userland/libjs/include -I abi/include -I tools)
 host_sources=(tools/test_yonder_fetch_job_host.c userland/apps/yonder/fetch_job.c userland/apps/yonder/fetch_pipe.c
               userland/apps/yonder/bytecode.c
               userland/libway/origin.c userland/libway/jar.c userland/libway/cache.c
-              userland/libos64/url.c userland/libos64/str.c userland/libos64/fmt.c)
+              userland/libos64/url.c userland/libos64/str.c userland/libos64/fmt.c tools/host_blob_stub.c)
 host_objects "$work"
 cc -fsanitize=address,undefined -pthread "${host_objs[@]}" -o "$work/fetch_job_driver"
 

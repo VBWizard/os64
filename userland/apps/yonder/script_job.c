@@ -6,6 +6,7 @@
 #include "os64/mem.h"
 #include "os64/slurp.h"
 #include "os64/str.h"
+#include "way/origin.h"
 
 #define SCRIPT_ACCEPT "*/*"
 
@@ -17,14 +18,19 @@ int64_t yonder_script_run(void *job, bool (*cancelled)(void *ctx), void *ctx, vo
         return -1;
     *out = s;
     os64_strcopy(s->url, sizeof(s->url), j->url);
-    // A blob: address's script is its entry's bytes, read in place: no
-    // label but the fallback, and no compiled form kept (it has no cache
-    // entry to keep one beside).
+    // A blob: address's script is its entry's bytes, read in place, its
+    // label the Blob type's charset as a response's is its Content-Type's,
+    // and no compiled form kept (it has no cache entry to keep one beside).
     if (j->blob != NULL) {
         size_t len = os64_dom_blob_length(j->blob);
         if (len > SCRIPT_SOURCE_MAX)
             return 0;
-        s->source = yonder_script_decode(os64_dom_blob_bytes(j->blob), len, NULL, j->fallback, &s->length);
+        const char *type = os64_dom_blob_type(j->blob);
+        char essence[WAY_MIME_ESSENCE_MAX], charset[WAY_MIME_CHARSET_MAX];
+        bool labelled = way_mime_parse(type, os64_strlen(type), essence, sizeof(essence), charset, sizeof(charset)) &&
+                        charset[0] != '\0';
+        s->source = yonder_script_decode(os64_dom_blob_bytes(j->blob), len, labelled ? charset : NULL, j->fallback,
+                                         &s->length);
         s->ok = s->source != NULL;
         return s->ok ? 1 : 0;
     }

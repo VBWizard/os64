@@ -12320,6 +12320,44 @@ static void blob_download_case(void)
     loop_drop();
 }
 
+/* A blob: picture's worker with every allocation cut in turn: a picture
+ * it calls whole keeps either no reconstruction backing or one that holds
+ * the bytes, never an empty one claiming a length. */
+static void blob_picture_sweep(void)
+{
+    fake_fetch_reset();
+    loop_page("<p id=u></p><script>document.getElementById('u').textContent="
+              "URL.createObjectURL(new Blob(['RASTER'],{type:'image/png'}))</script>");
+    bool settled = loop_settle();
+    yonder_scripts_t *host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
+    os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(host), probe_text_of("u"));
+    check(settled && blob != NULL, "blob picture: the page named an entry");
+    size_t allocations = 0;
+    for (size_t cut = 0; blob != NULL && (cut == 0 || cut <= allocations); cut++) {
+        yonder_picture_job_t *job = os64_calloc(1, sizeof(*job));
+        job->kind = YONDER_JOB_PICTURE;
+        job->recoverable = true;
+        snprintf(job->url, sizeof(job->url), "%s", probe_text_of("u"));
+        job->blob = os64_dom_blob_hold(blob);
+        void *out = NULL;
+        size_t before = attempts;
+        fail_at = cut == 0 ? 0 : attempts + cut;
+        int64_t r = yonder_picture_run(job, picture_cancel, NULL, &out);
+        fail_at = 0;
+        if (cut == 0) {
+            allocations = attempts - before;
+            check(r == 1 && out != NULL && ((yonder_picture_t *)out)->encoded != NULL,
+                  "blob picture: whole, it keeps its bytes for reconstruction");
+        }
+        const yonder_picture_t *p = out;
+        check(r != 1 || (p != NULL && (p->encoded == NULL || p->encoded->bytes != NULL)),
+              "blob picture: a cut allocation leaves no empty backing behind a whole picture");
+        yonder_picture_release(job, out);
+    }
+    os64_dom_blob_release(blob);
+    loop_drop();
+}
+
 /* BLOB_URLS.md's later doors: a sheet and a background named by a blob:
  * address, each taken from the page's store when it is sent for, and a
  * preload of one left to its sheet. */
@@ -12709,6 +12747,7 @@ int main(void)
     style_preload_cases();
     blob_door_cases();
     blob_download_case();
+    blob_picture_sweep();
     style_preload_pages();
     style_preload_limits();
     if(getenv("YONDER_STYLES_ONLY")) {
