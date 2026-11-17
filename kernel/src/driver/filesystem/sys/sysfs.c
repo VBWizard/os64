@@ -1669,15 +1669,20 @@ static void sys_gen_gui_frame_clock_state(synth_text_t *t, const gui_composite_c
 	synth_text_addf(t, "frame clock lead: %u us; aims %lu, %lu us average, longest %lu us, "
 	                "longest %lu us since this file was last read\n",
 	                s.lead_us, comp->clk.aims, aim_avg, comp->clk.aim_max_us, comp->clk_since_read.aim_max_us);
-	// A wake is the compositor's own count of the frames it slept toward;
-	// the fires are its CPU's timer passes, the frame wakes apart from the
-	// lease's expiries (scheduler.c, where the split is close, not exact).
-	// How late each wake arrived, by bucket.
+	// A wake is the compositor's own count of the frames it slept toward,
+	// with how late each arrived by bucket; its halts are its sleeps that
+	// halted at all, before a frame or after its pass. The fires are its
+	// CPU's timer passes, split three ways: its own wakes, a co-tenant's
+	// lease cut at its wake, and the lease's expiries (scheduler.c, where
+	// the split is close, not exact). A halted sleep ends at one of the
+	// first two, so together they match the halts, give or take the sleeps
+	// an interrupt ended at their instant.
 	const uint64_t *w = comp->clk.wake_late;
-	synth_text_addf(t, "frame clock wakes: %lu (timer: %lu frame wakes, %lu lease expiries on CPU %u); "
+	synth_text_addf(t, "frame clock wakes: %lu, %lu sleeps halted (timer on CPU %u: %lu frame wakes, "
+	                "%lu cut leases, %lu lease expiries); "
 	                "late by under 50 us %lu, under 100 us %lu, under 200 us %lu, under 400 us %lu, "
 	                "under 800 us %lu, under 1.6 ms %lu, 1.6 ms or more %lu\n",
-	                comp->clk.wakes, s.frame_wake_fires, s.lease_fires, s.cpu,
+	                comp->clk.wakes, comp->clk.halts, s.cpu, s.frame_wake_fires, s.cut_fires, s.lease_fires,
 	                w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
 	// The tripwire: none is the expected number. DEBUG_EXCEPTIONS has the
 	// report of each (compositor.c, gui_frame_clock_watch_locked).

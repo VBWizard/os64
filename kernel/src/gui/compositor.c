@@ -50,6 +50,7 @@ bool kEnableGUI = false;
 extern bool kTicklessScheduler;
 extern bool kNoFrameClock;                            // NOFRAMECLOCK: the clock is off this boot
 extern volatile uint64_t kFrameWakeFires[];           // scheduler.c: frame wakes per CPU
+extern volatile uint64_t kFrameCutFires[];            // scheduler.c: co-tenants' cut leases per CPU
 extern volatile uint64_t kSchedBackstopFires[];       // scheduler.c: lease expiries per CPU
 extern volatile uint64_t kDiagPassCount[];            // scheduler.c: passes per CPU
 
@@ -449,6 +450,7 @@ static void frame_clock_counts_add(gui_frame_clock_count_t *into, const gui_fram
 	if (from->aim_max_us > into->aim_max_us)
 		into->aim_max_us = from->aim_max_us;
 	into->wakes += from->wakes;
+	into->halts += from->halts;
 	for (int k = 0; k < FC_WAKE_BUCKETS; k++)
 		into->wake_late[k] += from->wake_late[k];
 }
@@ -547,7 +549,6 @@ static struct {
 // The frame being aimed at, from its plan to its copy or its lateness.
 static bool s_fc_planned;
 static uint64_t s_fc_wake_at, s_fc_blank_at, s_fc_woke, s_fc_free_ns, s_fc_loads;
-static uint32_t s_fc_plan_lead;
 
 // The copy owed: rectangles composed and not yet on the framebuffer, and
 // the publishes behind them.
@@ -564,7 +565,7 @@ static fc_hold_t s_fc_hold;
 // has waited for the glass (0 = nothing owed). Written by the compositor,
 // read from the BSP's pass without a lock; a stale read moves a report by
 // a tick.
-typedef enum { FC_AT_PASS, FC_AT_SLEEP, FC_AT_AIM, FC_AT_COPY, FC_AT_STOPPED, FC_AT_PLACES } fc_at_t;
+typedef enum { FC_AT_PASS, FC_AT_SLEEP, FC_AT_COMPOSED, FC_AT_AIM, FC_AT_COPY, FC_AT_STOPPED, FC_AT_PLACES } fc_at_t;
 static volatile uint64_t s_fc_beat;
 static volatile uint32_t s_fc_at;
 static volatile uint64_t s_fc_owed_since_us;
@@ -688,26 +689,46 @@ static void fc_drop_carry(void)
 }
 
 // Halt until `wake_at`, setting the timer again after every return from the
-// halt, whatever ended it (the two-writers invariant, smp_core.c). The wake
-// is published first as the frame's window (kSchedFrameDueUs): from it until
-// the next plan, a pass on this CPU keeps the CPU for the compositor, and a
-// thread that takes the CPU while the compositor sleeps runs only until it.
-static void fc_sleep_until(uint64_t wake_at)
+// halt, whatever ended it (the two-writers invariant, smp_core.c). A sleep
+// that halted at all is counted (`halts`): it ends at its own wake's fire,
+// or at a co-tenant's lease cut at that wake, so those two fires on this
+// CPU together are what it is compared with.
+static void fc_halt_until(uint64_t wake_at)
 {
-	s_fc_at = FC_AT_SLEEP;
-	kSchedFrameDueUs = wake_at;
+	bool halted = false;
 	for (;;) {
 		__asm__ volatile("cli" ::: "memory");
 		uint64_t now = micros_now();
 		if (now >= wake_at) {
 			__asm__ volatile("sti" ::: "memory");
+			if (halted)
+				s_fc_clk_owed.halts++;
 			return;
 		}
+		halted = true;
 		frame_wake_set(wake_at - now);
 		mpAcctHaltBegin();
 		__asm__ volatile("sti\n\thlt" ::: "memory");
 		mpAcctHaltEnd();
 	}
+}
+
+// Sleep until the frame's wake. The wake is published first as the frame's
+// window (kSchedFrameDueUs): from it until the next plan, a pass on this CPU
+// keeps the CPU for the compositor, and a thread that takes the CPU while
+// the compositor sleeps runs only until it.
+static void fc_sleep_until(uint64_t wake_at)
+{
+	s_fc_at = FC_AT_SLEEP;
+	kSchedFrameDueUs = wake_at;
+	fc_halt_until(wake_at);
+}
+
+// A frame wake slept toward, and how late it came (frame_clock_wake_bucket).
+static void fc_count_wake(void)
+{
+	s_fc_clk_owed.wakes++;
+	s_fc_clk_owed.wake_late[frame_clock_wake_bucket(s_fc_woke - s_fc_wake_at)]++;
 }
 
 // Stopped: one halt, as the clock-off compositor's, with the timer the lease
@@ -843,16 +864,25 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 		fc_plan_t p = frame_clock_plan(&f, line, micros_now(), FC_LEAD_MIN_US);
 		s_fc_blank_at = p.blank_at_us;
 		s_fc_wake_at = p.wake_at_us;
-		s_fc_plan_lead = FC_LEAD_MIN_US;
 		s_fc_loads = s_fc_self->timesLoaded;
 		fc_sleep_until(s_fc_wake_at);
 		s_fc_woke = pass_end = micros_now();
+		fc_count_wake();
 	}
 	s_fc_planned = false;
 
+	// Composed, waiting (§ 9): the pass is done and the blank is ahead, so
+	// halt again until FC_AIM_MARGIN_US before it rather than polling from
+	// the lead's start; the lead can then be long without costing polling.
+	// The window stays open (no publish), so the claim keeps the CPU through
+	// it. Damage that arrives meanwhile is the next frame's.
+	s_fc_at = FC_AT_COMPOSED;
+	if (s_fc_blank_at > FC_AIM_MARGIN_US)
+		fc_halt_until(s_fc_blank_at - FC_AIM_MARGIN_US);
+
 	// The aim (§ 9): poll the beam until the blank, within the bound.
 	s_fc_at = FC_AT_AIM;
-	uint64_t bound = frame_clock_aim_bound_us(&f, s_fc_plan_lead);
+	uint64_t bound = frame_clock_aim_bound_us(&f, FC_AIM_MARGIN_US);
 	uint64_t t0 = micros_now(), now = t0;
 	uint32_t first = 0;
 	bool seen = false, moved = false;
@@ -992,12 +1022,10 @@ static void frame_clock_pace(void)
 		s_fc_free_ns = frame_clock_free_next_ns(s_fc_free_ns, now * 1000);
 		s_fc_wake_at = s_fc_blank_at = s_fc_free_ns / 1000;
 	}
-	s_fc_plan_lead = lead;
 	s_fc_planned = true;
 	fc_sleep_until(s_fc_wake_at);
 	s_fc_woke = micros_now();
-	s_fc_clk_owed.wakes++;
-	s_fc_clk_owed.wake_late[frame_clock_wake_bucket(s_fc_woke - s_fc_wake_at)]++;
+	fc_count_wake();
 }
 
 void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart)
@@ -1031,6 +1059,7 @@ void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart)
 	}
 	gui_unlock(flags);
 	out->frame_wake_fires = kFrameWakeFires[s_fc_cpu];
+	out->cut_fires = kFrameCutFires[s_fc_cpu];
 	out->lease_fires = kSchedBackstopFires[s_fc_cpu];
 	out->stalls = s_fc_stall.episodes;
 	out->stall_longest_us = s_fc_stall.longest_us;
@@ -1051,7 +1080,7 @@ static const char *fc_at_name(uint32_t at)
 {
 	static const char *const names[FC_AT_PLACES] = {
 		"in its pass (composing, or waiting for kGuiLock)", "asleep until its wake",
-		"aiming at the blank", "copying", "stopped",
+		"composed, asleep until just before the blank", "aiming at the blank", "copying", "stopped",
 	};
 	return at < FC_AT_PLACES ? names[at] : "?";
 }

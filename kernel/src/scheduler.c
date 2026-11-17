@@ -131,9 +131,12 @@ volatile uint64_t kDiagRunnableLen = 0;
 // the observable the backstop test asserts on (a preempted hog = a nonzero,
 // growing count on its core), and the counter /sys/cpu can surface someday.
 volatile uint64_t kSchedBackstopFires[MAX_CPUS] = {0};
-// Frame wakes per core: timer passes the compositor's frame wake caused
-// (smp_core.c, frame_wake_set), counted apart from the lease's expiries.
+// Frame wakes per core: timer passes the compositor's own wakes caused
+// (smp_core.c, frame_wake_set), and passes at a co-tenant's lease cut at
+// the compositor's wake (frame_wake_cut), each counted apart from the
+// lease's expiries.
 volatile uint64_t kFrameWakeFires[MAX_CPUS] = {0};
+volatile uint64_t kFrameCutFires[MAX_CPUS] = {0};
 // A CPU kept for the threads pinned to it, or SCHED_NO_RESERVED_CPU: the
 // compositor's while its frame clock runs (FRAME_CLOCK.md § 9, the
 // reservation). One writer, the compositor thread; read without a lock by
@@ -1662,13 +1665,16 @@ void scheduler_do()
 	// The compositor's frame wake fires on the same vector (smp_core.c,
 	// frame_wake_set: the timer's second writer) and raised fcw_armed when it
 	// set a wake sooner than the lease; that fire is the frame clock's, not a
-	// lease expiry, and is counted apart so this count keeps its meaning.
+	// lease expiry, and is counted apart so this count keeps its meaning, as
+	// is a co-tenant's lease cut at the compositor's wake (fcw_cut).
 	// The split is close, not exact: a fire already pending when the timer
 	// was rewritten (interrupts were off) is counted under the rewrite's name.
 	if (kTicklessScheduler && cpu != BSP_CPU &&
 	    kDiagLastVector[cpu] == IPI_TIMER_SCHEDULE_VECTOR)
 	{
-		if (cls->fcw_armed)
+		if (cls->fcw_armed && cls->fcw_cut)
+			kFrameCutFires[cpu]++;
+		else if (cls->fcw_armed)
 			kFrameWakeFires[cpu]++;
 		else
 			kSchedBackstopFires[cpu]++;
@@ -1780,9 +1786,9 @@ void scheduler_do()
 	// one-shot deadline; idle dispatch: stop the timer, return the core to
 	// true silence. On the compositor's CPU, a thread other than the
 	// compositor dispatched before its frame's window opens gets the lease
-	// cut at that instant (sched_frame_cut_us): frame_wake_set, so the
+	// cut at that instant (sched_frame_cut_us): frame_wake_cut, so the
 	// count is never longer than the lease and the fire is counted as a
-	// frame wake, and that fire's pass is where the claim takes the CPU
+	// cut, and that fire's pass is where the claim takes the CPU
 	// back. The BSP keeps its 100Hz heartbeat (timekeeping lives
 	// there); periodic mode never reaches here with a masked timer at all.
 	// IF may be 1 here (the pass runs interruptible by design — see
@@ -1798,7 +1804,7 @@ void scheduler_do()
 		if (dispatched == NULL || dispatched == NO_THREAD || dispatched->idleThread)
 			sched_backstop_disarm();
 		else if (sched_frame_cut_us(cls, dispatched, &cut_us))
-			frame_wake_set(cut_us);   // the lease, cut at the compositor's wake: never longer
+			frame_wake_cut(cut_us);   // the lease, cut at the compositor's wake: never longer
 		else
 			sched_backstop_arm(cls);
 	}

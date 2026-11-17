@@ -134,12 +134,15 @@ typedef struct
 	// hardware. Everything else says `cpu`.
 	apic_id_t apic;
 
-	// fcw = the frame clock's wake (smp_core.c, frame_wake_set). Raised when
-	// the compositor sets this CPU's one-shot for a frame wake that comes
-	// before the lease. A timer pass that finds it raised counts a frame
-	// wake, not a lease expiry; the lease's arm and disarm lower it, since
-	// whatever they write is no longer the compositor's wake.
+	// fcw = the frame clock's wake (smp_core.c, frame_wake_set and
+	// frame_wake_cut). fcw_armed is raised when this CPU's one-shot is set
+	// for the compositor's wake and that comes before the lease; fcw_cut
+	// says it was set as another thread's lease cut at that wake. A timer
+	// pass that finds fcw_armed counts a frame wake (or a cut), not a lease
+	// expiry; the lease's arm and disarm lower it, since whatever they write
+	// is no longer the compositor's wake.
 	volatile bool fcw_armed;
+	volatile bool fcw_cut;
 } __attribute__((aligned(64))) core_local_storage_t;
 
 // The roster (cpu_roster.h), built once by cpu_roster_init before the log

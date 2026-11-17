@@ -85,10 +85,13 @@ While the clock runs, one frame is:
 
 - **The wake is a timer, the aim is the beam.** The timer only has to be
   early; the beam decides the moment. So timer jitter costs a little
-  polling and never a tear. The aim is at most the lead's margin, a few
-  hundred microseconds a frame.
-- **The lead adapts**: the cost of recent passes, plus a margin, between
-  half a millisecond and eight.
+  polling and never a tear. After its pass the compositor sleeps again
+  until 250 µs before the blank, so the aim is that margin, whatever the
+  lead.
+- **The lead adapts**: the worst of the last 64 passes (about a second of
+  frames), plus half of that, between half a millisecond and eight (the
+  P5, 2026-11-17: with the worst of 16 plus a quarter, every late frame was
+  a pass longer than its recent neighbours).
 - **Late is held once, then shown.** If the pass ends after the blank's
   first lines have gone, the copy waits for the next blank. A late frame
   costs one refresh of delay and is counted; it does not tear. A frame
@@ -224,18 +227,21 @@ that re-arms the lease in between therefore cannot lose a frame wake: the
 pass ended the halt, so the compositor recomputes. The frame wake fires
 on the lease's own vector (0x7E), so a wake *is* an early lease expiry and
 runs the same pass. The count set is never longer than the lease, so the
-compositor's CPU is preempted at least as often as it is today. A CPU-local
-flag set with the wake tells the pass which of the two fired, so frame
-wakes are counted apart from `kSchedBackstopFires`. The dispatch tail
-clears the flag whenever it re-arms or stops the timer.
+compositor's CPU is preempted at least as often as it is today. CPU-local
+flags set with the wake tell the pass which fired, so the compositor's own
+wakes (`kFrameWakeFires`) and a co-tenant's cut leases (`kFrameCutFires`)
+are counted apart from `kSchedBackstopFires`; a sleep that halted ends at
+one of the first two, so together they match the compositor's halts. The dispatch tail clears the flags whenever it
+re-arms or stops the timer.
 
 | State | The timer is set for | Ends when | Who moves it on, and how |
 |---|---|---|---|
 | **off** (`NOFRAMECLOCK`, one CPU, `SCHED=periodic`, `NOBACKSTOP`) | as today: the lease, the periodic tick, or nothing | never; it is the boot's | chosen once at `gui_start`, and `/sys/gui` says why. F1's measurement still runs |
 | **stopped** (nothing to show, nobody waiting) | the lease, set by the compositor before it halts (which also cancels a frame wake still pending) | a nudge, a PS/2 interrupt (routed to this CPU), or the lease; each one ends with a re-check | the nudge comes from `gui_damage_add` (under `kGuiLock`, interrupts off) or from the input queue's push (under its lock, interrupts off, often on `kusb`'s thread on the BSP). It takes no lock: one atomic exchange of the "halted and stopped" flag, then, if the flag was set, `kSchedFrameNudged` raised and `send_ipi(IPI_MANUAL_SCHEDULE_VECTOR)`, whose pass keeps the CPU for the compositor (the claim, below). The compositor sets the flag with interrupts off just before `sti; hlt` and clears it on waking. A re-check that finds work goes to **running** |
 | **running**, waiting for the lead | the earlier of the wake instant (the next blank less the lead) and the lease | the frame wake (a 0x7E pass, which keeps the CPU for the compositor: the claim, below), or any other interrupt, after which it recomputes. At or after the wake instant it goes to **composing**. A lease expiry before the wake may hand the CPU to a co-tenant, whose lease is cut at the wake | compositor thread, with interrupts off from the set to `sti; hlt`; it publishes the wake (`kSchedFrameDueUs`) first |
-| **composing** | the lease, re-armed by the wake's pass | the pass ends: **aiming** with a beam, **copying** without one | today's pass, under `kGuiLock` (interrupts off inside the lock) |
-| **aiming** | the lease | the sweep enters the blank: **copying**. If the first reading was already in the blank, the counter must change within 3 lines first, or the beam is withdrawn as frozen and **free** (a counter stopped at a blank line would otherwise look like a perfect aim every frame); only a window actually watched counts, so a gap longer than a line between readings, or a failed read, makes it inconclusive, nothing is withdrawn, and a fresh reading decides that frame. The sweep is in shown rows having left the blank: **late**. The counter does not move within the bound (the lead plus 8 lines): withdrawn as frozen, and **free**. The counter moves but no blank arrives within the bound: **late**, counted as an overrun. No reading succeeds within the bound: the frame goes unaimed | compositor thread, interrupts on, no lock. It polls the beam |
+| **composing** | the lease, re-armed by the wake's pass | the pass ends: **composed, waiting** with a beam, **copying** without one | today's pass, under `kGuiLock` (interrupts off inside the lock) |
+| **composed, waiting** | the earlier of 250 µs before the blank (`FC_AIM_MARGIN_US`) and the lease, set immediately before `sti; hlt` and recomputed on every return, as in **running** | that instant: **aiming**. Already past when the pass ends: **aiming** at once | compositor thread, interrupts off from the set to `sti; hlt`. The window stays open, so the claim keeps the CPU; damage arriving now is the next frame's |
+| **aiming** | the lease | the sweep enters the blank: **copying**. If the first reading was already in the blank, the counter must change within 3 lines first, or the beam is withdrawn as frozen and **free** (a counter stopped at a blank line would otherwise look like a perfect aim every frame); only a window actually watched counts, so a gap longer than a line between readings, or a failed read, makes it inconclusive, nothing is withdrawn, and a fresh reading decides that frame. The sweep is in shown rows having left the blank: **late**. The counter does not move within the bound (250 µs plus 8 lines): withdrawn as frozen, and **free**. The counter moves but no blank arrives within the bound: **late**, counted as an overrun. No reading succeeds within the bound: the frame goes unaimed | compositor thread, interrupts on, no lock. It polls the beam |
 | **copying** | the lease | the strips are done; F1's two readings judge the copy (`torn` now means held off mid-copy). Then **running**, or **stopped** if `frame_clock_keep_running` says so. The screen is asked for again before every strip: a text terminal that took it during the sleep or the aim voids what is carried, and the copy ends | compositor thread, interrupts on, outside `kGuiLock` |
 | **late** (holding) | the next wake, one frame on | as **running** | nothing is copied; the back buffer keeps what was composed and the next pass adds what has arrived since. Counted by cause. A frame that was held already is not held again: it is **forced**, copied at once wherever the sweep is, judged, and counted (`frame_clock_hold_step`) |
 | **free** (no beam, or withdrawn) | the earlier of the next period (1/60 s, from `micros_now()`) and the lease | as **running**, with no aim and no check: the copy follows the pass | entered at start without a beam, or from **aiming** on a frozen counter, or when a read withdraws the beam |
@@ -310,8 +316,14 @@ is everyone's again.
   average and up to 16. With the clock it waits for the next blank: about
   10 ms on average, up to about 19, and evenly. Every system that does not
   tear pays this.
-- **The aim** polls for up to a few hundred microseconds a frame while the
-  clock runs: a few percent of one CPU, during activity only.
+- **The aim** polls for about 250 µs a frame while the clock runs, plus
+  the timer's lateness: a few percent of one CPU, during activity only.
+- **The lead is time taken from the publisher's frame.** It follows the
+  last second of passes, so typing and the pointer keep it short and a
+  full-screen animation gets a long one: a publish that arrives within the
+  lead of a blank waits for the next. The lead costs no CPU (the
+  compositor sleeps from its pass to the aim); `publish to glass` beside
+  `late` on `/sys/gui` shows the trade.
 - **The pin alone gives the compositor nothing of its own.** The scheduler
   has one queue, and a pass on the compositor's CPU hands that CPU to
   whoever has aged most. **The claim** (§ 9, The wake keeps the CPU) gives

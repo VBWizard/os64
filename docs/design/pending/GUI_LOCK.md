@@ -215,9 +215,11 @@ must be one `cat`.
   after being held once (FRAME_CLOCK.md § 3);
 - the lead in use, and the aims that ended in a copy: their number,
   average and longest polling time;
-- its wakes: how many the compositor slept toward, the timer's frame-wake
-  fires and lease expiries on its CPU, and how late each wake arrived, in
-  buckets doubling from 50 µs;
+- its wakes: how many the compositor slept toward, how many of its sleeps
+  halted (before a frame and after its pass), the timer's fires on its CPU
+  split three ways (its own wakes; a co-tenant's lease cut at its wake;
+  the lease's expiries; the first two together match the halts), and how late
+  each wake arrived, in buckets doubling from 50 µs;
 - the stall tripwire's episodes and the longest (FRAME_CLOCK.md § 8).
 
 Counts and times are since boot and since the file was last read. Writing

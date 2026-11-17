@@ -468,11 +468,13 @@ static void test_lead(void)
 	CHECK(frame_clock_lead_us(&l) == FC_LEAD_MAX_US, "no passes yet: the most");
 	frame_clock_lead_record(&l, 100);
 	CHECK(frame_clock_lead_us(&l) == FC_LEAD_MIN_US, "cheap passes: the least, got %u", frame_clock_lead_us(&l));
+	frame_clock_lead_record(&l, 400);
+	CHECK(frame_clock_lead_us(&l) == 650, "400 us passes: plus the least margin, got %u", frame_clock_lead_us(&l));
 	frame_clock_lead_record(&l, 1000);
-	CHECK(frame_clock_lead_us(&l) == 1250, "1000 us passes: plus the margin, got %u", frame_clock_lead_us(&l));
+	CHECK(frame_clock_lead_us(&l) == 1500, "1000 us passes: plus half, got %u", frame_clock_lead_us(&l));
 	frame_clock_lead_record(&l, 4000);
-	CHECK(frame_clock_lead_us(&l) == 5000, "the worst plus a quarter, got %u", frame_clock_lead_us(&l));
-	frame_clock_lead_record(&l, 7000);
+	CHECK(frame_clock_lead_us(&l) == 6000, "the worst plus half, got %u", frame_clock_lead_us(&l));
+	frame_clock_lead_record(&l, 6000);
 	CHECK(frame_clock_lead_us(&l) == FC_LEAD_MAX_US, "never more than the most");
 	frame_clock_lead_record(&l, 1ull << 40);
 	CHECK(frame_clock_lead_us(&l) == FC_LEAD_MAX_US, "an absurd pass is the most, not a wrap");
@@ -484,7 +486,17 @@ static void test_lead(void)
 	memset(&l, 0, sizeof(l));
 	frame_clock_lead_record(&l, 2400);
 	frame_clock_lead_record(&l, 800);
-	CHECK(frame_clock_lead_us(&l) == 3000, "the worst of several, not the last: got %u", frame_clock_lead_us(&l));
+	CHECK(frame_clock_lead_us(&l) == 3600, "the worst of several, not the last: got %u", frame_clock_lead_us(&l));
+	// About a second: a long pass among cheap ones is remembered for 64 of
+	// them, so the next long one is not a surprise (the P5, 2026-11-17: every
+	// late frame was a pass longer than its sixteen neighbours).
+	memset(&l, 0, sizeof(l));
+	frame_clock_lead_record(&l, 3000);
+	for (int i = 0; i < 63; i++)
+		frame_clock_lead_record(&l, 200);
+	CHECK(frame_clock_lead_us(&l) == 4500, "a long pass 63 passes ago still sets the lead: got %u", frame_clock_lead_us(&l));
+	frame_clock_lead_record(&l, 200);
+	CHECK(frame_clock_lead_us(&l) == FC_LEAD_MIN_US, "64 passes on it is forgotten: got %u", frame_clock_lead_us(&l));
 }
 
 // ── The copy's order ────────────────────────────────────────────────────────
@@ -740,7 +752,7 @@ static void test_aim(void)
 	fc_frame_t bad = { 0 };
 	CHECK(frame_clock_aim(&bad, 0, 0, 0) == FC_AIM_LATE, "a frame that makes no sense is late, never a copy");
 	CHECK(frame_clock_aim_bound_us(&f, 1000) >= 1000 + 90 && frame_clock_aim_bound_us(&f, 1000) <= 1000 + 91,
-	      "the aim's bound is the lead and 8 lines: %lu", frame_clock_aim_bound_us(&f, 1000));
+	      "the aim's bound is its margin and 8 lines: %lu", frame_clock_aim_bound_us(&f, 1000));
 	CHECK(frame_clock_lines_us(&f, 3) == 34, "three of the P5's lines are 33.8 us, rounded up: %lu",
 	      frame_clock_lines_us(&f, 3));
 	CHECK(frame_clock_lines_us(&f, 0) == 0 && frame_clock_lines_us(&bad, 3) == 0, "no lines, or no frame: nothing");

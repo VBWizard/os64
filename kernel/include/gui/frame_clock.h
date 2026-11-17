@@ -93,10 +93,14 @@ fc_verdict_t frame_clock_judge(const fc_frame_t *f, uint32_t begin_line, uint32_
 
 // ── The lead (FRAME_CLOCK.md § 3) ──────────────────────────────────────────
 // How long before the blank the compositor must wake: the worst of its last
-// FC_LEAD_PASSES passes, plus a quarter of that or FC_LEAD_MARGIN_US,
-// whichever is more, between FC_LEAD_MIN_US and FC_LEAD_MAX_US. With no pass
-// recorded it is the most.
-#define FC_LEAD_PASSES 16
+// FC_LEAD_PASSES passes (about a second of frames), plus half of that or
+// FC_LEAD_MARGIN_US, whichever is more, between FC_LEAD_MIN_US and
+// FC_LEAD_MAX_US. With no pass recorded it is the most. It follows recent
+// passes, so typing and the pointer keep a short lead and a full-screen
+// animation gets a long one. The lead costs no polling (the compositor
+// sleeps again after its pass, until shortly before the blank); it is time
+// taken from the publisher's frame, which `publish to glass` shows.
+#define FC_LEAD_PASSES 64
 #define FC_LEAD_MARGIN_US 250
 #define FC_LEAD_MIN_US 500
 #define FC_LEAD_MAX_US 8000
@@ -156,11 +160,15 @@ typedef enum { FC_AIM_WAIT, FC_AIM_COPY, FC_AIM_LATE } fc_aim_t;
 
 fc_aim_t frame_clock_aim(const fc_frame_t *f, uint32_t line, uint64_t now_us, uint64_t blank_at_us);
 
-// How long the aim may poll: the lead plus FC_AIM_SLACK_LINES lines. Past
-// it, a counter that never moved is frozen (the beam is withdrawn) and one
-// that moved is an overrun (the frame is late).
+// After its pass the compositor sleeps again, until FC_AIM_MARGIN_US before
+// the blank (the margin covers the timer's lateness), and only then aims, so
+// a long lead costs no polling. How long the aim may poll: `margin_us`, how
+// far ahead of the blank it was meant to begin, plus FC_AIM_SLACK_LINES
+// lines. Past it, a counter that never moved is frozen (the beam is
+// withdrawn) and one that moved is an overrun (the frame is late).
+#define FC_AIM_MARGIN_US 250
 #define FC_AIM_SLACK_LINES 8
-uint64_t frame_clock_aim_bound_us(const fc_frame_t *f, uint32_t lead_us);
+uint64_t frame_clock_aim_bound_us(const fc_frame_t *f, uint32_t margin_us);
 
 // How long `lines` lines take, rounded up. An aim whose first reading is
 // already in the blank has seen nothing move, so the counter must change
@@ -173,7 +181,9 @@ uint64_t frame_clock_lines_us(const fc_frame_t *f, uint32_t lines);
 // pass gave the CPU to another thread); the wake came too late (a wake on
 // time, with the same pass, would have made the blank); the pass ran long
 // (it would not have fit even from an on-time wake); or the pass ended in
-// time and the sweep was past anyway when the aim looked. An overrun (the
+// time and the sweep was past anyway when the aim looked (the sleep after
+// the pass woke too late, or something held the compositor between). An
+// overrun (the
 // counter moved but no blank came within the aim's bound) is the caller's
 // to name, from the aim.
 typedef enum {

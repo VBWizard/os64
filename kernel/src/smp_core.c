@@ -965,8 +965,9 @@ void sched_backstop_arm(core_local_storage_t *cls)
     // THE TIMER HAS A SECOND WRITER, the compositor's frame wake (below).
     // What this wrote replaces its wake, which is safe because the compositor
     // sets its wake again after every return from its halt, and this pass is
-    // what ended the halt. The flag goes so the next fire counts as a lease.
+    // what ended the halt. The flags go so the next fire counts as a lease.
     cls->fcw_armed = false;
+    cls->fcw_cut = false;
 }
 
 void sched_backstop_disarm(void)
@@ -976,17 +977,21 @@ void sched_backstop_disarm(void)
     // arm rewrites the LVT anyway. A fire that races this disarm delivers one
     // spurious pass to an idle core, which the pass handles like any nudge.
     write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, 0);
-    // The frame wake's flag goes with whatever it named (sched_backstop_arm).
-    get_core_local_storage()->fcw_armed = false;
+    // The frame wake's flags go with whatever they named (sched_backstop_arm).
+    core_local_storage_t *cls = get_core_local_storage();
+    cls->fcw_armed = false;
+    cls->fcw_cut = false;
 }
 
 // ── The frame wake (FRAME_CLOCK.md § 9) ─────────────────────────────────────
 // The compositor's CPU's one-shot, set by the compositor for the instant its
 // next frame must start: the timer's SECOND WRITER beside the lease above.
-// The dispatch tail also arms it, as the lease cut short, for a thread that
-// shares the compositor's CPU (scheduler.c, sched_frame_cut_us); that is the
-// lease's own writer choosing a shorter lease, at the same moment and under
-// the same discipline as sched_backstop_arm.
+// The dispatch tail also arms it (frame_wake_cut), as the lease cut short,
+// for a thread that shares the compositor's CPU (scheduler.c,
+// sched_frame_cut_us); that is the lease's own writer choosing a shorter
+// lease, at the same moment and under the same discipline as
+// sched_backstop_arm, and its fires are counted apart from the
+// compositor's own.
 // It fires on the lease's own vector, so a wake is an early lease expiry and
 // runs the same pass, and its count is never longer than the lease
 // (frame_clock_timer), so that CPU is preempted at least as often as the
@@ -998,14 +1003,25 @@ void sched_backstop_disarm(void)
 // tickless with the lease only: SCHED=periodic's timer is the periodic tick,
 // not the compositor's to rewrite, and without the lease nothing keeps the
 // timer masked between these writes; the frame clock is off in both.
-void frame_wake_set(uint64_t wake_in_us)
+static void frame_wake_arm(uint64_t wake_in_us, bool cut)
 {
     core_local_storage_t *cls = get_core_local_storage();
     fc_timer_t t = frame_clock_timer(wake_in_us, cls->apicTicksPerSecond, (uint32_t)kSchedBackstopMS);
     write_apic_register(kMPApicBase + APIC_TIMER_DIVIDE_CONFIG, 0x3);   // as sched_backstop_arm, every time
     write_apic_register(kMPApicBase + APIC_LVT_TIMER, IPI_TIMER_SCHEDULE_VECTOR);
+    cls->fcw_cut = cut;
     cls->fcw_armed = t.wake_first;
     write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, t.count);   // the arming write, last
+}
+
+void frame_wake_set(uint64_t wake_in_us)
+{
+    frame_wake_arm(wake_in_us, false);
+}
+
+void frame_wake_cut(uint64_t wake_in_us)
+{
+    frame_wake_arm(wake_in_us, true);
 }
 
 // The timer as the lease alone would have it: a stopped compositor halts

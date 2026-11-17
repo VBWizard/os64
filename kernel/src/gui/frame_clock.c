@@ -178,7 +178,7 @@ uint32_t frame_clock_lead_us(const fc_lead_t *l)
 	for (uint32_t i = 0; i < l->count; i++)
 		if (l->cost_us[i] > worst)
 			worst = l->cost_us[i];
-	uint64_t margin = worst / 4 > FC_LEAD_MARGIN_US ? worst / 4 : FC_LEAD_MARGIN_US;
+	uint64_t margin = worst / 2 > FC_LEAD_MARGIN_US ? worst / 2 : FC_LEAD_MARGIN_US;
 	uint64_t lead = worst + margin;
 	if (lead < FC_LEAD_MIN_US)
 		return FC_LEAD_MIN_US;
@@ -285,11 +285,11 @@ fc_aim_t frame_clock_aim(const fc_frame_t *f, uint32_t line, uint64_t now_us, ui
 	return now_us >= frame_clock_blank_end_us(f, blank_at_us) ? FC_AIM_LATE : FC_AIM_WAIT;
 }
 
-uint64_t frame_clock_aim_bound_us(const fc_frame_t *f, uint32_t lead_us)
+uint64_t frame_clock_aim_bound_us(const fc_frame_t *f, uint32_t margin_us)
 {
 	if (!frame_clock_frame_valid(f))
-		return lead_us;
-	return lead_us + (FC_AIM_SLACK_LINES * f->period_ns / f->lines + 999) / 1000;
+		return margin_us;
+	return margin_us + (FC_AIM_SLACK_LINES * f->period_ns / f->lines + 999) / 1000;
 }
 
 uint64_t frame_clock_lines_us(const fc_frame_t *f, uint32_t lines)

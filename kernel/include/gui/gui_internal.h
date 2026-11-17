@@ -105,6 +105,7 @@ typedef struct {
 	uint64_t aims, aim_us, aim_max_us;
 	uint64_t wakes;
 	uint64_t wake_late[FC_WAKE_BUCKETS];
+	uint64_t halts;   // its sleeps that halted: the frame wake's and the one after the pass
 } gui_frame_clock_count_t;
 
 typedef struct {
