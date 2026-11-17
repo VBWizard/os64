@@ -2585,6 +2585,34 @@ os64_js_status_t yonder_scripts_media_control(yonder_scripts_t *s, const os64_ht
     return out->status;
 }
 
+bool yonder_scripts_media_session(yonder_scripts_t *s, os64_dom_media_session_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL)
+        return false;
+    // A page with no binding (no script, no media element), or one whose
+    // binding was retired, has nothing to say: stopped, an answer, not a
+    // refusal. A binding with no session (the Modern Web off) answers so
+    // itself.
+    if (s->dead || s->dom == NULL)
+        return true;
+    return os64_dom_media_session_state(s->dom, out);
+}
+
+os64_js_status_t yonder_scripts_media_session_action(yonder_scripts_t *s, os64_dom_media_session_action_t action,
+                                                     os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL)
+        return OS64_JS_OK;
+    s->written = 0;
+    s->task_address = NULL;
+    s->task_us = -1;
+    if (os64_dom_media_session_action(s->dom, action, out))
+        judged(s, out);
+    return out->status;
+}
+
 bool yonder_scripts_activated(const yonder_scripts_t *s)
 {
     return s != NULL && s->activated;

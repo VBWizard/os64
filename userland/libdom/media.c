@@ -76,6 +76,7 @@ struct DMediaElement {
     uint32_t candidate;             /* which <source> is being tried */
     bool loadeddata;                /* loadeddata fired for this load */
     bool ended;                     /* it has ended playback */
+    uint64_t played_seq;            /* when it last began to play (DMediaElements.play_seq), 0 never */
     bool error_seen;                /* the session's error has been acted on */
     bool settings_applied;
     double volume, rate, default_rate;
@@ -99,6 +100,7 @@ struct DMediaElement {
 struct DMediaElements {
     DMediaElement *records;
     DMediaTask *head, *tail;
+    uint64_t play_seq;              /* the stamp's source: which element began to play last */
     uint64_t version;               /* the tree version the walk last saw */
     bool walked;
     DValue *then;                   /* Promise.prototype.then, taken at install */
@@ -543,6 +545,7 @@ static void ready_to(os64_dom_t *dom, DMediaElement *m, uint8_t want)
          * through, if it may (§ Autoplay). */
         if (m->autoplaying && m->paused && os64_html_attr(m->node, "autoplay") != NULL && allowed(dom, m)) {
             m->paused = false;
+            m->played_seq = ++dom->media_elements->play_seq;
             m->autoplaying = false;
             queue(dom, m, "play", SETTLE_NONE);
             notify_playing(dom, m);
@@ -1077,6 +1080,7 @@ static JSValue play(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
     if (m->ended) seek(dom, m, 0);
     if (m->paused) {
         m->paused = false;
+        m->played_seq = ++dom->media_elements->play_seq;
         queue(dom, m, "play", SETTLE_NONE);
         if (m->ready <= R_CURRENT) queue(dom, m, "waiting", SETTLE_NONE);
         else notify_playing(dom, m);
@@ -1399,6 +1403,56 @@ bool os64_dom_media_control(os64_dom_t *dom, const os64_html_node_t *node, os64_
     }
     d_task_close(dom, name, outcome);
     return true;
+}
+
+/* ── For the media session (media_session.c) ────────────────────────── */
+/* Every element the page has made counts, in its document or not (a player
+ * that plays through `new Audio()` is still the page's sound, and HTML
+ * pauses an element that leaves its document), WHEN IT CAN BE HEARD: not
+ * muted, a volume above 0, no error. A muted clip looping on a news page,
+ * or an element whose source failed, must not take the keys from a sound
+ * a person is listening to, and other browsers give it none. */
+
+static bool audible(const DMediaElement *m)
+{
+    return !m->muted && m->volume > 0 && m->error == 0;
+}
+
+void d_media_session_facts(os64_dom_t *dom, bool *playing, bool *paused_after_play, bool *played)
+{
+    *playing = *paused_after_play = *played = false;
+    if (dom->media_elements == NULL) return;
+    for (DMediaElement *m = dom->media_elements->records; m != NULL; m = m->next) {
+        if (!audible(m)) continue;
+        *playing = *playing || !m->paused;
+        *played = *played || m->played_seq != 0;
+        *paused_after_play = *paused_after_play || (m->paused && m->played_seq != 0);
+    }
+}
+
+void d_media_session_default(os64_dom_t *dom, JSContext *ctx, bool play_one)
+{
+    if (dom->media_elements == NULL) return;
+    if (!play_one) {
+        for (DMediaElement *m = dom->media_elements->records; m != NULL; m = m->next)
+            if (!m->paused && audible(m)) pause_asked(dom, m);
+        return;
+    }
+    DMediaElement *last = NULL;
+    for (DMediaElement *m = dom->media_elements->records; m != NULL; m = m->next)
+        if (audible(m) && m->played_seq != 0 && (last == NULL || m->played_seq > last->played_seq)) last = m;
+    if (last == NULL || !last->paused || !d_provider_enter(dom)) return;
+    /* As a control's play: its rejection is the element's state, not the
+     * page's to handle. */
+    JSValue promise = play(dom, ctx, last);
+    d_provider_leave(dom);
+    if (JS_IsException(promise)) {
+        JSValue error = JS_GetException(ctx);
+        JS_FreeValue(ctx, error);
+    } else {
+        mark_handled(dom, ctx, promise);
+        JS_FreeValue(ctx, promise);
+    }
 }
 
 /* ── The Audio factory (HTML § 4.8.10, a legacy factory function) ───── */

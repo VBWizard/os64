@@ -794,6 +794,7 @@ struct os64_dom {
     /* The media elements' records, their queued tasks and the host
      * (media.c); NULL until the media row's install. */
     struct DMediaElements *media_elements;
+    struct DMediaSession *media_session;   /* media_session.c */
     /* The traversal row's walkers and iterators (walker.c). */
     struct DWalks *walks;
     /* DOM Range's records (range.c). */
@@ -1325,6 +1326,18 @@ int d_video_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_media_elements_cancel(os64_dom_t *dom);
 void d_media_elements_drain(os64_dom_t *dom);
 void d_media_elements_free(os64_dom_t *dom);
+/* For the media session (media_session.c): the page's AUDIBLE elements
+ * (not muted, a volume, no error) as the window's state reads them (one not
+ * paused; a paused one that has played; one that has played at all), and
+ * the browser's own answer to a press of play (`play`) or pause, inside an
+ * open task, which acts on audible elements alone. */
+void d_media_session_facts(os64_dom_t *dom, bool *playing, bool *paused_after_play, bool *played);
+void d_media_session_default(os64_dom_t *dom, JSContext *ctx, bool play);
+/* The MediaSession row (modern.c), after the one that makes
+ * Navigator.prototype, which navigator.mediaSession joins. */
+int d_media_session_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_media_session_drain(os64_dom_t *dom);
+void d_media_session_free(os64_dom_t *dom);
 /* P2a, a script's failures (report.c; WINDOW_DOCUMENT.md § P2a). The row:
  * window's onerror, onunhandledrejection, onrejectionhandled and
  * reportError, document's onerror, ErrorEvent and PromiseRejectionEvent.

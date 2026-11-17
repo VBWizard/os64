@@ -105,6 +105,31 @@ typedef enum {
     OS64_DOM_MEDIA_MUTE,
 } os64_dom_media_control_t;
 
+/* THE MEDIA SESSION (AUDIO_YONDER.md § Y.6): what the window says of its
+ * sound, for the media keys, and a press done on the page. */
+typedef enum {
+    OS64_DOM_MEDIA_SESSION_STOPPED,
+    OS64_DOM_MEDIA_SESSION_PAUSED,
+    OS64_DOM_MEDIA_SESSION_PLAYING,
+} os64_dom_media_session_state_t;
+
+typedef struct {
+    os64_dom_media_session_state_t state;
+    /* The page has something to say: an action handler set, or an audible
+     * element that has played. */
+    bool wanted;
+    /* Which presses the page answers itself: bit n for action n below. */
+    uint32_t handled;
+} os64_dom_media_session_t;
+
+typedef enum {
+    OS64_DOM_MEDIA_SESSION_PLAY,
+    OS64_DOM_MEDIA_SESSION_PAUSE,
+    OS64_DOM_MEDIA_SESSION_NEXT,
+    OS64_DOM_MEDIA_SESSION_PREVIOUS,
+    OS64_DOM_MEDIA_SESSION_STOP,
+} os64_dom_media_session_action_t;
+
 #pragma GCC visibility push(default)
 /* Install or replace (NULL removes) the host, outside callbacks. A media
  * element on a page with none plays nothing: canPlayType answers "", and a
@@ -134,5 +159,23 @@ bool os64_dom_media_view(os64_dom_t *dom, const os64_html_node_t *node, os64_dom
  * element cannot be reached. */
 bool os64_dom_media_control(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_media_control_t what,
                             double value, os64_js_outcome_t *outcome);
+/* The media session's side, owner thread, between tasks. The window's
+ * state, over the page's AUDIBLE media elements (in its document or not;
+ * not muted, a volume, no error): PLAYING when one is not paused, or
+ * navigator.mediaSession.playbackState is "playing" and one has played;
+ * else PAUSED when one that played is paused, or playbackState is
+ * "paused" and one has played; else STOPPED. A page with no session (the
+ * Modern Web off) answers STOPPED, wanting none. False only when the
+ * binding cannot answer now (recovering, or no longer active). */
+bool os64_dom_media_session_state(os64_dom_t *dom, os64_dom_media_session_t *out);
+/* A media key pressed, as a host task (`outcome` its verdict): the page's
+ * handler for the action, given {action}; with none, the browser's own
+ * answer: play plays the audible element that played most recently, pause
+ * and stop pause every audible element that plays, next and previous do
+ * nothing. Activation
+ * is the host's to have noted first (a press is a person's). Only the top
+ * document's session is asked. False when there is no session. */
+bool os64_dom_media_session_action(os64_dom_t *dom, os64_dom_media_session_action_t action,
+                                   os64_js_outcome_t *outcome);
 #pragma GCC visibility pop
 #endif

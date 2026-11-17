@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Media Session</title>
+<!--
+  AUDIO_YONDER.md, Y.6: the media keys reach the page.
+
+  What to look for. The page sets a handler for play, pause, next track,
+  previous track and stop, and shows each press it is given. Press the
+  headphones' button (or `echo press play > /sys/mediakeys`): the first
+  track starts, though nothing on the page was clicked, because a press
+  is a person's. Two presses go to the next track, three to the previous,
+  and the log says which handler ran. `cat /sys/mediakeys` shows this
+  window's session saying playing or paused.
+
+  Without handlers, a page gets the browser's own answer: audio-mix.html
+  sets none, so Play there plays the sound that played last and Pause
+  pauses every sound.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  #now, #log { font: 14px monospace; background: #f4f4f4; padding: 8px; }
+  #log { min-height: 8em; }
+</style>
+<h1>Media Session</h1>
+<p><audio id="p" controls loop></audio></p>
+<pre id="now">-</pre>
+<pre id="log"></pre>
+<script>
+  const tracks = [
+    {src: 'audio-tone.mp3', title: 'Track one (the MP3)'},
+    {src: 'audio-tone.wav', title: 'Track two (the WAV)'},
+  ];
+  const p = document.getElementById('p'), log = document.getElementById('log');
+  const now = document.getElementById('now');
+  let at = 0;
+  const say = line => { log.textContent += line + '\n'; };
+  function load(i, play) {
+    at = (i + tracks.length) % tracks.length;
+    p.src = tracks[at].src;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: tracks[at].title, artist: 'os64', album: 'The test pages',
+      artwork: [{src: 'banner.png', type: 'image/png'}],
+    });
+    if (play) p.play().catch(e => say('play refused: ' + e.name));
+  }
+  const ms = navigator.mediaSession;
+  ms.setActionHandler('play', d => { say('handler: ' + d.action); p.play(); });
+  ms.setActionHandler('pause', d => { say('handler: ' + d.action); p.pause(); });
+  ms.setActionHandler('nexttrack', d => { say('handler: ' + d.action); load(at + 1, true); });
+  ms.setActionHandler('previoustrack', d => { say('handler: ' + d.action); load(at - 1, true); });
+  ms.setActionHandler('stop', d => { say('handler: ' + d.action); p.pause(); p.currentTime = 0; });
+  p.addEventListener('play', () => { ms.playbackState = 'playing'; });
+  p.addEventListener('pause', () => { ms.playbackState = 'paused'; });
+  load(0, false);
+  setInterval(() => {
+    now.textContent = tracks[at].title + '  ' + p.currentTime.toFixed(1) + (p.paused ? '  paused' : '  playing') +
+      '  playbackState=' + ms.playbackState;
+  }, 250);
+</script>
