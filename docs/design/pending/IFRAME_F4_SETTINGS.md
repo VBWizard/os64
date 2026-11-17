@@ -272,6 +272,9 @@ Trusted implementation-code provenance is described in
 Streams callback dictionary and return conversion are described in
 [IFRAME_F4_STREAM_CALLBACK_SETTINGS.md](IFRAME_F4_STREAM_CALLBACK_SETTINGS.md).
 
+Trusted native microtasks and retained Streams continuation proof are described
+in [IFRAME_F4_STREAM_CONTINUATIONS.md](IFRAME_F4_STREAM_CONTINUATIONS.md).
+
 ## Remaining F.4b interfaces and acceptance gates
 
 Before publishing browser settings queries, implement and prove:
@@ -282,6 +285,9 @@ Before publishing browser settings queries, implement and prove:
   to the remaining WebIDL conversion and invocation sites and Streams continuation boundaries,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.
+- Resolve retained Streams error-path completion where ordinary realm-owned
+  Promise adoption is discarded after implementation departure. Do not grant
+  neutral lifetime authority by treating mutable Promise methods as private work.
 - Complete browser finalization task scheduling and the unresolved neutral-job
   exception-reporting policy. The [neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md)
   supplies actual capability current/script incumbent without inventing entry or

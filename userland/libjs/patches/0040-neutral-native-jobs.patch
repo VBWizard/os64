@@ -1,0 +1,135 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -1011,6 +1011,7 @@
+     struct JSJobEntry *group_prev, *group_next;
+     JSJobFunc *job_func;
+     int argc;
++    BOOL neutral_settings; /* trusted native job; no author entry or backup */
+     JSValue argv[0];
+ } JSJobEntry;
+ 
+@@ -2508,7 +2509,7 @@
+ 
+ static int JS_EnqueueJob2(JSContext *ctx, JSContext *owner, JSContext *activity,
+                           JSJobFunc *job_func, int argc, JSValueConst *argv,
+-                          BOOL no_exception, JSContext *incumbent, JSValueConst script)
++                          BOOL no_exception, JSContext *incumbent, JSValueConst script, BOOL neutral_settings)
+ {
+     JSRuntime *rt = ctx->rt;
+     JSJobEntry *e;
+@@ -2539,6 +2540,7 @@
+     }
+     e->job_func = job_func;
+     e->argc = argc;
++    e->neutral_settings = neutral_settings;
+     for(i = 0; i < argc; i++) {
+         e->argv[i] = JS_DupValue(ctx, argv[i]);
+     }
+@@ -2550,14 +2552,19 @@
+ int JS_EnqueueJob(JSContext *ctx, JSJobFunc *job_func,
+                   int argc, JSValueConst *argv)
+ {
+-    return JS_EnqueueJob2(ctx, ctx, NULL, job_func, argc, argv, FALSE, NULL, JS_UNDEFINED);
++    return JS_EnqueueJob2(ctx, ctx, NULL, job_func, argc, argv, FALSE, NULL, JS_UNDEFINED, FALSE);
+ }
+ 
+ int JS_EnqueueJobOwned(JSContext *ctx, JSContext *owner, JSContext *activity,
+                        JSJobFunc *job_func, int argc, JSValueConst *argv)
+ {
+     assert((!owner || owner->rt == ctx->rt) && (!activity || activity->rt == ctx->rt));
+-    return JS_EnqueueJob2(ctx, owner, activity, job_func, argc, argv, FALSE, NULL, JS_UNDEFINED);
++    return JS_EnqueueJob2(ctx, owner, activity, job_func, argc, argv, FALSE, NULL, JS_UNDEFINED, FALSE);
++}
++
++int JS_EnqueueJobNeutralSettings(JSContext *ctx, JSJobFunc *job_func, int argc, JSValueConst *argv)
++{
++    return JS_EnqueueJob2(ctx, NULL, NULL, job_func, argc, argv, FALSE, NULL, JS_UNDEFINED, TRUE);
+ }
+ 
+ /* The head's contexts are borrowed until execution/discard. Inspection runs
+@@ -2592,10 +2599,10 @@
+     rt->promise_neutral_settings = enabled;
+ }
+ 
+-static BOOL js_neutral_promise_job(JSRuntime *rt, JSJobEntry *e)
+-{
+-    return e && rt->promise_neutral_settings && !e->owner &&
+-        e->job_func == promise_reaction_job;
++static BOOL js_job_has_neutral_settings(JSRuntime *rt, JSJobEntry *e)
++{
++    return e && (e->neutral_settings || (rt->promise_neutral_settings && !e->owner &&
++        e->job_func == promise_reaction_job));
+ }
+ 
+ BOOL JS_PeekJobCallbackSettings(JSRuntime *rt, JSJobGroup *group,
+@@ -2608,7 +2615,7 @@
+        the callable's execution realm. The wrapper reports after scopes unwind. */
+     if (report)
+         *report = e && e->incumbent ? (e->job_func == js_finrec_job ? e->realm : e->owner) : NULL;
+-    return e && (e->incumbent != NULL || js_neutral_promise_job(rt, e));
++    return e && (e->incumbent != NULL || js_job_has_neutral_settings(rt, e));
+ }
+ 
+ BOOL JS_PeekPromiseJobSettings(JSRuntime *rt, JSJobGroup *group,
+@@ -2638,8 +2645,8 @@
+     return JS_ENGINE_CALLBACK(entry->rt, e->job_func(entry, e->argc, (JSValueConst *)e->argv));
+ }
+ 
+-/* Empty-handler reactions have no script entry. A custom capability can
+-   nevertheless run code: expose its actual current/script incumbent without
++/* Neutral reactions and explicitly prepared native jobs have no script entry.
++   Invoked code supplies actual current/script incumbent settings without
+    borrowing an outer host scope or inventing an entry/backup realm. */
+ static JSValue js_neutral_job_body(JSContext *ctx, JSJobEntry *e)
+ {
+@@ -2708,7 +2715,7 @@
+            after HostCallJobCallback has popped the captured incumbent. */
+         if (!JS_RunWithSettings(e->owner, e->owner, js_job_settings_body, e, &res))
+             res = JS_ThrowInternalError(e->owner, "Job settings nesting limit");
+-    } else if (js_neutral_promise_job(rt, e))
++    } else if (js_job_has_neutral_settings(rt, e))
+         res = js_neutral_job_body(ctx, e);
+     else
+         res = js_job_settings_body(ctx, e);
+@@ -32374,7 +32381,7 @@
+     if (JS_EnqueueJob2(load_context, load_context, NULL, js_dynamic_import_job,
+                        6, args, FALSE,
+                        ctx->rt->promise_incumbent_capture ? load_context : NULL,
+-                       JS_UNDEFINED) < 0)
++                       JS_UNDEFINED, FALSE) < 0)
+         goto exception;
+  done:
+     JS_FreeValue(ctx, referrer);
+@@ -54837,7 +54844,7 @@
+                                   JSJobFunc *job, int argc, JSValueConst *args)
+ {
+     return JS_EnqueueJob2(ctx, js_job_function_realm(ctx, args[2]), NULL,
+-                          job, argc, args, FALSE, incumbent, script);
++                          job, argc, args, FALSE, incumbent, script, FALSE);
+ }
+ 
+ typedef struct JSJobCallbackCall {
+@@ -62793,7 +62800,7 @@
+             /* no exception is raised to avoid recursing into the GC */
+             JS_EnqueueJob2(frd->realm, js_job_function_realm(frd->realm, frd->cb),
+                            frd->realm, js_finrec_job, 2, args, TRUE,
+-                           frd->incumbent, frd->script_or_module);
++                           frd->incumbent, frd->script_or_module, FALSE);
+                 
+             js_weakref_free(rt, fre->target);
+             js_weakref_free(rt, fre->token);
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -1152,6 +1152,12 @@
+ } JSJobInfo;
+ int JS_EnqueueJobOwned(JSContext *ctx, JSContext *owner, JSContext *activity,
+                       JSJobFunc *job_func, int argc, JSValueConst *argv);
++/* Trusted native work with no author owner, entry, backup or source record.
++ * Execution clears enclosing settings and restores them after the job; actual
++ * script/native calls can supply current/incumbent settings. The host must gate
++ * author callbacks reached by its algorithm. Raw Owned jobs are unchanged. */
++int JS_EnqueueJobNeutralSettings(JSContext *ctx, JSJobFunc *job_func,
++                                 int argc, JSValueConst *argv);
+ /* Peek allocates nothing and borrows until a queue mutation. Discard
+  * releases the head's holds (including native finalizers), not its body. */
+ JS_BOOL JS_PeekPendingJob(JSRuntime *rt, JSJobInfo *info);

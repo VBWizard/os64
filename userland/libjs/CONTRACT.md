@@ -419,6 +419,12 @@ this constructor only behind its private Streams factory; page JavaScript has
 no API for assigning neutral ownership. The generated engine identity changes
 with the patch; the wrapper's public configuration and value layouts do not.
 
+Patch 0040 adds `JS_EnqueueJobNeutralSettings` for a trusted native algorithm
+that needs checked execution settings without an author entry, backup or source
+record. Unlike raw neutral ownership, its explicit bit admits settings queries
+and clears/restores an enclosing scope. The host still gates author callbacks;
+ordinary Promise adoption keeps its existing realm ownership and discard rule.
+
 Manual drains, task checkpoints and candidate drains inspect before execution. Dead entries release their holds without
 running a job or settling its promises, preserving surviving FIFO order.
 Foreign contexts are invariant failures, not neutral work. Discarded entries
