@@ -1,7 +1,6 @@
 # The frame clock
 
-*Design, 2026-11-16, Fable. For Chris to rule on (§ For Chris); not yet
-ratified. The video arc (VIDEO.md § 7) asked what a player needs from the
+*Design, 2026-11-16, Fable. Ratified by Chris the same day (§ Rulings). The video arc (VIDEO.md § 7) asked what a player needs from the
 glass; two measurements on the P5 answered, and this is what follows.
 Evidence: `~/os64-opus-kit/GLASS_MEASURE_REPORT.md` and
 `BEAM_PROBE_REPORT.md` (with its register lookup in `beam_src/`).*
@@ -224,18 +223,23 @@ F1's second half is worth having by itself: a histogram of where the sweep
 was when each copy began is the tearing, shown in numbers, before and
 after.
 
-## For Chris
+## Rulings (Chris, 2026-11-16: "I say we run with it")
 
 1. **The approach:** read the beam, wake by timer, aim by polling, copy
-   from the blank. Lean: yes.
-2. **A late frame is held one refresh, not shown torn.** Lean: yes.
+   from the blank.
+2. **A late frame is held one refresh, not shown torn**, on the condition
+   that the compositor does not miss the blank often. The bar F2 is held
+   to on the P5: with `glassbench` publishing a full screen at 60 fps on
+   an otherwise idle desktop, fewer than one frame in a thousand is late.
+   More than that is a finding to cure (the lead, or what held the
+   compositor off), not a number to live with.
 3. **The copy runs with interrupts on, and `torn` is counted.** If the P5
    shows tears from the compositor being held off mid-copy, the copy runs
    with interrupts off (about 1.8 ms at full screen, on the compositor's
-   own CPU). Lean: measure first.
-4. **About 4 ms more latency on average for typing and the pointer**, as
-   the price of no tearing. Lean: accept; `NOFRAMECLOCK` is there to feel
+   own CPU). Measured first; the choice stays open until then.
+4. **About 4 ms more latency on average for typing and the pointer** is
+   accepted as the price of no tearing; `NOFRAMECLOCK` is there to feel
    the difference.
-5. **Which CPU the compositor is pinned to.** Lean: CPU 2 where the BSP
-   has an SMT sibling, CPU 1 otherwise, as one named constant; a setting
-   only if someone needs one.
+5. **The compositor is pinned** to CPU 2 where the BSP has an SMT sibling,
+   CPU 1 otherwise, as one named constant; a setting only if someone needs
+   one.
