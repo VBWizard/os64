@@ -1,5 +1,7 @@
 # F15 — binding incarnations to actual runtimes
 
+Implementation PR: **#638**, source `fadc1744`; depends on #635.
+
 Depends on the [private issuer](IFRAME_F15_INCARNATION.md) (#635). Proof baseline:
 `e0b8f188`, engine `ab1447d8`, embedding ABI 5. This binds its process-local
 namespace to wrapper runtime construction; it does not expose checked tickets.
