@@ -222,9 +222,12 @@ typedef struct {
     int64_t last_modified;
     bool (*focus)(void *opaque, const os64_html_node_t **focused);
     void *host_opaque;
-    /* The page's blob URL store (BLOB_URLS.md), the host's, living at
-     * least as long as the binding. NULL: URL.createObjectURL refuses, as
-     * a page with no store has nowhere to name a Blob. */
+    /* The page's blob URL store (BLOB_URLS.md), the host's, living as long
+     * as the binding may name, take or revoke through it: while its scripts
+     * run. A binding kept past that (for a tree that still stands) may
+     * outlive the store, as it only releases the entries its objects hold,
+     * and an entry outlives its store. NULL: URL.createObjectURL refuses,
+     * as a page with no store has nowhere to name a Blob. */
     struct os64_dom_blob_store *blobs;
 } os64_dom_options_t;
 

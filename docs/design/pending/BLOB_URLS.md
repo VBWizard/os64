@@ -138,12 +138,15 @@ so that it can move (Chris, 2026-11-17).
    door's change is the same three steps: take the entry (or receive
    libdom's) at the "taken at" moment, carry it, answer from it in the
    run. The entry's bytes never change, so a door that reads its input
-   whole reads them **in place**: a picture's decode input, a font's
-   SFNT, a classic script's source and a download's write are views of
-   the held bytes. A door whose consumer takes a fetched BODY (fetch,
+   whole reads them **in place**: a picture's decode input, a classic
+   script's source and a download's write are views of the held bytes,
+   and a font's face is made from them as a fetched face is from its
+   body. A door whose consumer takes a fetched BODY (fetch,
    XMLHttpRequest, modules, sheets, media's loader) is answered by the
    fetch engine (`blob_answer`, fetch_job.c) with a body copied from the
-   entry, because that consumer owns and frees what it is handed.
+   entry, because that consumer owns and frees what it is handed; one
+   that would have streamed the network's body takes the copy under no
+   cap, as the network's would have had none.
 
    | Door | Taken at | Where | What a blob URL serves |
    |---|---|---|---|

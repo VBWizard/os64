@@ -1331,8 +1331,12 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     // A blob: address is answered from its entry and never reaches a hop:
     // a redirect to one is refused by way_main_fetch, and libfetch speaks
     // no scheme but http(s), the floor under every door (BLOB_URLS.md § 1.9).
+    // A consumer that would have streamed the network's body takes the
+    // entry's under no cap either, as the hops below give it none: the
+    // store's own bound held it when it was named.
     if (blob_address(current))
-        verdict = blob_answer(job, r, current, max_body, got);
+        verdict = blob_answer(job, r, current, job->pipe != NULL && streams(destination) ? UINT64_MAX : max_body,
+                              got);
     else for (;;) {
         if (cancelled != NULL && cancelled(ctx)) {
             network_error(got, "cancelled");

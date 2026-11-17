@@ -12277,6 +12277,49 @@ static bool style_worker_land(const char *tail, bool preload)
     return false;
 }
 
+/* The one download job blob_download_case hands the pool. */
+static yonder_download_job_t *door_download;
+static os64_work_id_t door_submit(const os64_work_t *work) {
+    if(*(const uint32_t *)work->job!=YONDER_JOB_DOWNLOAD) return 0;
+    door_download=work->job;
+    return 991;
+}
+/* A download of a blob: entry: the row hands its entry to the job, and a
+ * finished row holds no bytes (the store frees with the page; the leak
+ * check at the end holds the job's release to letting it go). */
+static void blob_download_case(void)
+{
+    fake_fetch_reset();
+    loop_page("<p id=u></p><script>document.getElementById('u').textContent="
+              "URL.createObjectURL(new Blob(['abc'],{type:'text/plain'}))</script>");
+    bool settled = loop_settle();
+    yonder_scripts_t *host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
+    os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(host), probe_text_of("u"));
+    check(settled && blob != NULL, "blob download: the page named an entry");
+    os64_work_id_t (*was)(const os64_work_t *) = pool_submit_hook;
+    pool_submit_hook = door_submit;
+    door_download = NULL;
+    int32_t row = s_ndownloads;
+    download_start(copy_text(probe_text_of("u")), copy_text("http://fixture.test/p"), "/home/downloads/abc.txt",
+                   false, os64_dom_blob_hold(blob));
+    check(s_ndownloads == row + 1 && door_download != NULL && door_download->blob == blob &&
+          s_downloads[row].blob == NULL && s_downloads[row].state == DL_RUNNING,
+          "blob download: the waiting row hands its entry to the job it starts");
+    if (door_download != NULL) {
+        door_download->whole = true;
+        download_arrived(991, door_download);
+        yonder_download_release(door_download, NULL);
+    }
+    check(s_downloads[row].state == DL_DONE && s_downloads[row].blob == NULL,
+          "blob download: a finished row holds no entry");
+    while (s_ndownloads > row) download_forget(s_ndownloads - 1);
+    s_download_flashing = false;        // the finish's flash, which the list cases do not expect
+    s_download_flash_from = s_download_flash_seen = 0;
+    pool_submit_hook = was;
+    os64_dom_blob_release(blob);
+    loop_drop();
+}
+
 /* BLOB_URLS.md's later doors: a sheet and a background named by a blob:
  * address, each taken from the page's store when it is sent for, and a
  * preload of one left to its sheet. */
@@ -12665,6 +12708,7 @@ int main(void)
     sheet_worker_cases();
     style_preload_cases();
     blob_door_cases();
+    blob_download_case();
     style_preload_pages();
     style_preload_limits();
     if(getenv("YONDER_STYLES_ONLY")) {

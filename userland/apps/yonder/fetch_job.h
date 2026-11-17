@@ -91,8 +91,8 @@ typedef struct {
     // A blob: URL's entry (BLOB_URLS.md), taken where the standard parsed
     // the URL and held: the run answers from it and never from the wire,
     // and yonder_fetch_release lets it go. A job built to borrow another's
-    // fields (a sheet's, a picture's) borrows this too, and is freed
-    // without the release. NULL for any other address, and for a blob: URL
+    // fields (a sheet's) borrows this too, and is freed without the
+    // release. NULL for any other address, and for a blob: URL
     // that named nothing, which is a network error.
     struct os64_dom_blob *blob;
 } yonder_fetch_job_t;

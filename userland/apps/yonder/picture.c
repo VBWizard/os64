@@ -262,8 +262,8 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
     }
     // A blob: picture is its entry's bytes (BLOB_URLS.md), decoded in place
     // with the entry's type. Unlike a data: address, a revoked blob: URL
-    // cannot be asked again, so a recoverable one keeps a copy of its
-    // bytes, as a fetched picture keeps its body.
+    // cannot be asked again, so it keeps a copy of its bytes wherever a
+    // fetched picture keeps its body (preserve_body).
     if (j->blob != NULL) {
         const uint8_t *bytes = os64_dom_blob_bytes(j->blob);
         size_t len = os64_dom_blob_length(j->blob);

@@ -11993,7 +11993,9 @@ static bool blob_follow(const os64_dom_navigation_t *ask)
 {
     const os64_html_attr_t *href = ask->node != NULL ? os64_html_attr(ask->node, "href") : NULL;
     char url[OS64_DOM_URL_MAX];
-    if (href == NULL || !os64_page_url_absolute(os64_page_base(page_model(&g.page)), href->value, url, sizeof(url)) ||
+    // Resolved as the binding resolved it for its take (os64_dom_resolve,
+    // a link's own rule), so the two agree on which address this is.
+    if (href == NULL || !os64_dom_resolve(page_doc(&g.page), g.page.way.url, href->value, url, sizeof(url)) ||
         !blob_scheme(url))
         return false;
     const os64_html_attr_t *download = os64_html_attr(ask->node, "download");
@@ -17145,8 +17147,9 @@ typedef struct {
     DownloadState state;
     uint32_t serial;            // which download, for a verb picked from its row
     char *url, *referrer;       // os64_malloc'd
-    // A blob: address's entry (BLOB_URLS.md), held for as long as the row
-    // is kept: its job writes the bytes, and a retry would too.
+    // A blob: address's entry (BLOB_URLS.md), held while the row waits:
+    // its job takes it (downloads_feed), and a row failed or cancelled
+    // first lets it go, so a finished row holds no bytes.
     os64_dom_blob_t *blob;
     char path[OS64_PATH_MAX];
     bool replace;               // the dialog's consent to replace a file of that name
@@ -17308,6 +17311,8 @@ static void download_failed(Download *d, const char *why)
 {
     d->state = DL_FAILED;
     os64_strcopy(d->why, sizeof(d->why), why);
+    os64_dom_blob_release(d->blob);
+    d->blob = NULL;
     s_download_failed_unseen = true;
 }
 
@@ -17330,7 +17335,8 @@ static void downloads_feed(void)
         job->window = g.win;
         job->bell = BELL_DOWNLOAD;
         job->replace = d->replace;
-        job->blob = os64_dom_blob_hold(d->blob);
+        job->blob = d->blob;
+        d->blob = NULL;
         if (os64_strcopy(job->url, sizeof(job->url), d->url) >= sizeof(job->url) ||
             os64_strcopy(job->path, sizeof(job->path), d->path) >= sizeof(job->path)) {
             yonder_download_release(job, NULL);
@@ -17485,6 +17491,8 @@ static void download_cancel(Download *d)
     }
     if (d->state == DL_RUNNING || d->state == DL_WAITING)
         d->state = DL_CANCELLED;
+    os64_dom_blob_release(d->blob);     // a waiting row's: never given to a job
+    d->blob = NULL;
     downloads_feed();
 }
 
