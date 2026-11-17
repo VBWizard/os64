@@ -48,6 +48,14 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_MASK_CLIP] = {"mask-clip", false, true},
     [GARB_MASK_COMPOSITE] = {"mask-composite", false, true},
     [GARB_MASK_MODE] = {"mask-mode", false, true},
+    // Engines inherit the legacy box's direction, and nothing else of it.
+    [GARB_BOX_ORIENT] = {"-webkit-box-orient", false, true},
+    [GARB_BOX_DIRECTION] = {"-webkit-box-direction", true, true},
+    [GARB_BOX_PACK] = {"-webkit-box-pack", false, true},
+    [GARB_BOX_ALIGN] = {"-webkit-box-align", false, true},
+    [GARB_BOX_FLEX] = {"-webkit-box-flex", false, true},
+    [GARB_BOX_ORDINAL_GROUP] = {"-webkit-box-ordinal-group", false, true},
+    [GARB_LINE_CLAMP] = {"-webkit-line-clamp", false, true},
     [GARB_FILL] = {"fill", true, true},
     [GARB_STROKE] = {"stroke", true, true},
     [GARB_FILL_OPACITY] = {"fill-opacity", true, true},
@@ -239,7 +247,11 @@ static const char *const kDisplay[] = {
     "none", "block", "inline", "inline-block", "list-item", "table", "inline-table",
     "table-row-group", "table-header-group", "table-footer-group", "table-row",
     "table-column-group", "table-column", "table-cell", "table-caption", "contents",
-    "flow-root", "flex", "inline-flex", "grid", "inline-grid", NULL};
+    "flow-root", "flex", "inline-flex", "grid", "inline-grid",
+    // Compatibility § 3.4.5: the legacy box, and the prefixed flex
+    // containers, which are the flex containers. A reading with
+    // `modern_off` does not know them (longhand_one).
+    "-webkit-box", "-webkit-inline-box", "-webkit-flex", "-webkit-inline-flex", NULL};
 // Values this grammar reads but nothing lays out or draws as written yet
 // (GARB.md's pile 2, POSITION.md's slices, PILE3.md's booked rows). Read, so
 // the cascade keeps them; not SUPPORTED, so @supports tells a page to use
@@ -608,6 +620,12 @@ static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere", 
 // CSS Overflow 4 § 4.1 as one value: its strings, fade() and the second
 // value of a pair are not read, and a value using one is invalid.
 static const char *const kTextOverflow[] = {"clip", "ellipsis", NULL};
+// The legacy box's keywords (Compatibility § 3.4.4), as engines read them.
+static const char *const kBoxOrient[] = {"horizontal", "vertical", "inline-axis", "block-axis",
+                                         NULL};
+static const char *const kBoxDirection[] = {"normal", "reverse", NULL};
+static const char *const kBoxPack[] = {"start", "end", "center", "justify", NULL};
+static const char *const kBoxAlign[] = {"start", "end", "center", "baseline", "stretch", NULL};
 // CSS UI 4 § 3.3: a border's styles but `hidden`, and `auto`.
 static const char *const kOutlineStyle[] = {"auto", "none", "dotted", "dashed", "solid", "double",
                                             "groove", "ridge", "inset", "outset", NULL};
@@ -2329,6 +2347,8 @@ typedef enum {
     G_FACTOR,               // <number [0,∞]>: flex-grow, flex-shrink
     G_BASIS,                // flex-basis: `words` | lp >= 0
     G_INTEGER,              // <integer>: order
+    G_ORDINAL,              // <integer [0,∞]>: -webkit-box-ordinal-group
+    G_LINES,                // none | <integer [1,∞]>: -webkit-line-clamp
     G_GAP,                  // normal | lp >= 0
     G_TEMPLATE,             // grid-template-*: none | a track list
     G_AUTO_TRACKS,          // grid-auto-*: one or more track sizes
@@ -2492,6 +2512,10 @@ static const Longhand kLonghands[] = {
     // 3.2). Text 4's percentage of the font size is not read.
     {GARB_LETTER_SPACING, G_SPACING_TEXT, NULL},
     {GARB_TEXT_OVERFLOW, G_KEYWORDS, kTextOverflow},
+    {GARB_BOX_ORIENT, G_KEYWORDS, kBoxOrient}, {GARB_BOX_DIRECTION, G_KEYWORDS, kBoxDirection},
+    {GARB_BOX_PACK, G_KEYWORDS, kBoxPack}, {GARB_BOX_ALIGN, G_KEYWORDS, kBoxAlign},
+    {GARB_BOX_FLEX, G_FACTOR, NULL}, {GARB_BOX_ORDINAL_GROUP, G_ORDINAL, NULL},
+    {GARB_LINE_CLAMP, G_LINES, NULL},
     {GARB_OUTLINE_WIDTH, G_OUTLINE_WIDTH, NULL}, {GARB_OUTLINE_STYLE, G_KEYWORDS, kOutlineStyle},
     {GARB_OUTLINE_COLOR, G_OUTLINE_COLOR, NULL}, {GARB_OUTLINE_OFFSET, G_LENGTH, NULL},
     {GARB_OBJECT_FIT, G_KEYWORDS, kObjectFit}, {GARB_OBJECT_POSITION, G_POSITION, NULL},
@@ -3676,6 +3700,10 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     case G_ANIM_KEYWORD:
         if ((k = vc_keyword(c, l->words)) == NULL)
             return false;
+        // The prefixed displays came with the legacy box's properties,
+        // which a reading with `modern_off` does not know either.
+        if (l->prop == GARB_DISPLAY && s->modern_off && k[0] == '-')
+            return false;
         *out = kw(k);
         return true;
     case G_MASK_LEGACY:
@@ -3912,9 +3940,14 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
             return true;
         }
         return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, out);
-    case G_INTEGER: {
+    case G_INTEGER: case G_ORDINAL: case G_LINES: {
+        if (l->g == G_LINES && vc_keyword(c, kNone) != NULL) {
+            *out = kw("none");
+            return true;
+        }
         const garb_value_t *t = vc_peek(c);
-        if (t == NULL || t->kind != GARB_NUMBER || !t->integer)
+        if (t == NULL || t->kind != GARB_NUMBER || !t->integer ||
+            (l->g == G_LINES && t->number < 1) || (l->g == G_ORDINAL && t->number < 0))
             return false;
         c->i++;
         os64_memset(out, 0, sizeof(*out));
@@ -4649,6 +4682,30 @@ static const struct {
     {"-webkit-mask-size", "mask-size", true},
     {"-webkit-mask-origin", "mask-origin", true},
     {"-webkit-mask-clip", "mask-clip", true},
+    // The rest of § 3.4.1 whose twins are read. -webkit-background-size
+    // is left out: § 3.4.1 says it is not quite an alias (one length is
+    // both sizes), and reading it as its twin would draw it wrong.
+    {"-webkit-align-items", "align-items", true},
+    {"-webkit-align-content", "align-content", true},
+    {"-webkit-align-self", "align-self", true},
+    {"-webkit-background-origin", "background-origin", true},
+    {"-webkit-border-top-left-radius", "border-top-left-radius", true},
+    {"-webkit-border-top-right-radius", "border-top-right-radius", true},
+    {"-webkit-border-bottom-right-radius", "border-bottom-right-radius", true},
+    {"-webkit-border-bottom-left-radius", "border-bottom-left-radius", true},
+    {"-webkit-border-radius", "border-radius", true},
+    {"-webkit-box-shadow", "box-shadow", true},
+    {"-webkit-box-sizing", "box-sizing", true},
+    {"-webkit-filter", "filter", true},
+    {"-webkit-flex", "flex", true},
+    {"-webkit-flex-basis", "flex-basis", true},
+    {"-webkit-flex-direction", "flex-direction", true},
+    {"-webkit-flex-flow", "flex-flow", true},
+    {"-webkit-flex-grow", "flex-grow", true},
+    {"-webkit-flex-shrink", "flex-shrink", true},
+    {"-webkit-flex-wrap", "flex-wrap", true},
+    {"-webkit-justify-content", "justify-content", true},
+    {"-webkit-order", "order", true},
 };
 
 // CSS Logical 1's flow-relative longhands (§ 4) and the border sides'

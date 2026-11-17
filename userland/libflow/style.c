@@ -400,6 +400,8 @@ static flow_style_t initial(const Ctx *c)
     s.flex_shrink = 1000;
     s.align_self = FLOW_PLACE_AUTO;
     s.justify_self = FLOW_PLACE_AUTO;
+    s.box_align = FLOW_BOX_ALIGN_STRETCH;
+    s.box_ordinal_group = 1;
     // Margins and padding start at 0px — NOT at zero bytes, which is `auto`.
     for (int i = 0; i < 4; i++) {
         s.margin[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
@@ -414,8 +416,10 @@ static flow_style_t initial(const Ctx *c)
     // normal, its items growing by nothing from an auto basis, order 0,
     // and gaps of normal; no grid tracks or areas, auto-placement by rows,
     // and auto lines; no transform; the cursor and user-select auto;
-    // normal word breaking and spacing; no outline, ratio or ellipsis; and
-    // a picture filling its box.
+    // normal word breaking and spacing; no outline, ratio or ellipsis; a
+    // picture filling its box; and a horizontal legacy box, forwards and
+    // packed at its start, its items growing by nothing and clamping no
+    // lines.
     return s;
 }
 
@@ -1688,13 +1692,15 @@ static int32_t pick(const garb_val_t *v, const char *const *words, int32_t n)
     return -1;
 }
 
-static bool author_display(const garb_val_t *v, flow_display_t *out, bool *flow_root)
+static bool author_display(const garb_val_t *v, flow_display_t *out, bool *flow_root,
+                           bool *legacy_box)
 {
     static const char *const words[] = {
         "none", "block", "inline", "inline-block", "list-item", "table", "inline-table",
         "table-row-group", "table-header-group", "table-footer-group", "table-row",
         "table-column-group", "table-column", "table-cell", "table-caption", "contents",
         "flow-root", "flex", "inline-flex", "grid", "inline-grid",
+        "-webkit-box", "-webkit-inline-box", "-webkit-flex", "-webkit-inline-flex",
     };
     // An inline table is laid out as a table (GARB.md § Booked).
     static const flow_display_t as[] = {
@@ -1706,12 +1712,15 @@ static bool author_display(const garb_val_t *v, flow_display_t *out, bool *flow_
         FLOW_DISPLAY_TABLE_CAPTION, FLOW_DISPLAY_CONTENTS, FLOW_DISPLAY_BLOCK,
         FLOW_DISPLAY_FLEX, FLOW_DISPLAY_INLINE_FLEX, FLOW_DISPLAY_GRID,
         FLOW_DISPLAY_INLINE_GRID,
+        FLOW_DISPLAY_FLEX, FLOW_DISPLAY_INLINE_FLEX, FLOW_DISPLAY_FLEX, FLOW_DISPLAY_INLINE_FLEX,
     };
+    _Static_assert(F_ARRAY(words) == F_ARRAY(as), "author_display");
     int32_t i = pick(v, words, F_ARRAY(words));
     if (i < 0)
         return false;
     *out = as[i];
     *flow_root = os64_streq(words[i], "flow-root");
+    *legacy_box = os64_streq(words[i], "-webkit-box") || os64_streq(words[i], "-webkit-inline-box");
     return true;
 }
 
@@ -1908,7 +1917,15 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_DISPLAY:
         d->display = s->display;
         d->flow_root = s->flow_root;
+        d->legacy_box = s->legacy_box;
         break;
+    case GARB_BOX_ORIENT: d->box_orient = s->box_orient; break;
+    case GARB_BOX_DIRECTION: d->box_reverse = s->box_reverse; break;
+    case GARB_BOX_PACK: d->box_pack = s->box_pack; break;
+    case GARB_BOX_ALIGN: d->box_align = s->box_align; break;
+    case GARB_BOX_FLEX: d->box_flex = s->box_flex; break;
+    case GARB_BOX_ORDINAL_GROUP: d->box_ordinal_group = s->box_ordinal_group; break;
+    case GARB_LINE_CLAMP: d->line_clamp = s->line_clamp; break;
     case GARB_COLOR: d->color = s->color; break;
     case GARB_TEXT_FILL_COLOR:
         d->fill = s->fill;
@@ -3289,7 +3306,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     garb_prop_t p = set->prop;
     int32_t i;
     switch (p) {
-    case GARB_DISPLAY: author_display(v, &s->display, &s->flow_root); break;
+    case GARB_DISPLAY: author_display(v, &s->display, &s->flow_root, &s->legacy_box); break;
     case GARB_COLOR:
         if (v->kind == GARB_V_COLOR && v->color.current)
             s->color = a->parent != NULL ? a->parent->color : a->c->env->ink;
@@ -3651,6 +3668,46 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     case GARB_ORDER:
         if (v->kind == GARB_V_NUMBER)
             s->order = round_i32(v->number);
+        break;
+    case GARB_BOX_ORIENT: {
+        static const char *const words[] = {"horizontal", "vertical", "inline-axis", "block-axis"};
+        _Static_assert(F_ARRAY(words) == FLOW_BOX_BLOCK_AXIS + 1, "flow_box_orient_t");
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->box_orient = (flow_box_orient_t)i;
+        break;
+    }
+    case GARB_BOX_DIRECTION:
+        if (v->kind == GARB_V_KEYWORD)
+            s->box_reverse = is_word(v, "reverse");
+        break;
+    case GARB_BOX_PACK: {
+        static const char *const words[] = {"start", "end", "center", "justify"};
+        _Static_assert(F_ARRAY(words) == FLOW_BOX_PACK_JUSTIFY + 1, "flow_box_pack_t");
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->box_pack = (flow_box_pack_t)i;
+        break;
+    }
+    case GARB_BOX_ALIGN: {
+        static const char *const words[] = {"start", "end", "center", "baseline", "stretch"};
+        _Static_assert(F_ARRAY(words) == FLOW_BOX_ALIGN_STRETCH + 1, "flow_box_align_t");
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->box_align = (flow_box_align_t)i;
+        break;
+    }
+    case GARB_BOX_FLEX:
+        if (v->kind == GARB_V_NUMBER) {
+            // As the flex factors are held (GARB_FLEX_GROW).
+            double f = v->number < 0 ? 0 : v->number > 1e6 ? 1e6 : v->number;
+            s->box_flex = round_i32(f * 1000);
+        }
+        break;
+    case GARB_BOX_ORDINAL_GROUP:
+        if (v->kind == GARB_V_NUMBER)
+            s->box_ordinal_group = round_i32(v->number);
+        break;
+    case GARB_LINE_CLAMP:
+        // libgarb reads none or an integer from 1.
+        s->line_clamp = v->kind == GARB_V_NUMBER ? round_i32(v->number) : 0;
         break;
     case GARB_GRID_TEMPLATE_COLUMNS: case GARB_GRID_TEMPLATE_ROWS:
     case GARB_GRID_AUTO_COLUMNS: case GARB_GRID_AUTO_ROWS: {
@@ -4024,6 +4081,48 @@ static void settle_box(const Ctx *c, flow_style_t *s, bool item, bool root)
     }
 }
 
+// What the legacy box makes of a style once every origin has spoken
+// (flow_style_t.legacy_box): its own properties written over the flex
+// container's, or, clamping lines, the block it is — and an item of one
+// laid out by its `-webkit-box-flex` and `-webkit-box-ordinal-group`
+// alone, as engines lay it out, whatever flex properties it was given.
+// From the legacy bit, whether the display is inline-level, and the box's
+// own properties, so it gives the same answer however often it is asked
+// (an animated element's final style is settled again).
+static void legacy_box(flow_style_t *s, const flow_style_t *parent)
+{
+    if (parent != NULL && parent->legacy_box && f_display_flex(parent->display)) {
+        s->flex_grow = s->flex_shrink = s->box_flex;
+        s->flex_basis = (flow_length_t){FLOW_LENGTH_AUTO, 0, 0};
+        s->order = s->box_ordinal_group;
+        s->align_self = FLOW_PLACE_AUTO;
+    }
+    if (!s->legacy_box || s->display == FLOW_DISPLAY_NONE || s->display == FLOW_DISPLAY_CONTENTS)
+        return;
+    bool inline_level = s->display == FLOW_DISPLAY_INLINE_FLEX ||
+                        s->display == FLOW_DISPLAY_INLINE_BLOCK;
+    if (f_clamps_lines(s)) {
+        s->display = inline_level ? FLOW_DISPLAY_INLINE_BLOCK : FLOW_DISPLAY_BLOCK;
+        s->flow_root = true;
+        return;
+    }
+    static const flow_place_t pack[] = {FLOW_PLACE_FLEX_START, FLOW_PLACE_FLEX_END,
+                                        FLOW_PLACE_CENTER, FLOW_PLACE_SPACE_BETWEEN};
+    static const flow_place_t align[] = {FLOW_PLACE_FLEX_START, FLOW_PLACE_FLEX_END,
+                                         FLOW_PLACE_CENTER, FLOW_PLACE_BASELINE,
+                                         FLOW_PLACE_STRETCH};
+    _Static_assert(F_ARRAY(pack) == FLOW_BOX_PACK_JUSTIFY + 1, "pack");
+    _Static_assert(F_ARRAY(align) == FLOW_BOX_ALIGN_STRETCH + 1, "align");
+    bool vertical = s->box_orient == FLOW_BOX_VERTICAL || s->box_orient == FLOW_BOX_BLOCK_AXIS;
+    s->display = inline_level ? FLOW_DISPLAY_INLINE_FLEX : FLOW_DISPLAY_FLEX;
+    s->flow_root = false;
+    s->flex_direction = vertical ? (s->box_reverse ? FLOW_FLEX_COLUMN_REVERSE : FLOW_FLEX_COLUMN)
+                                 : (s->box_reverse ? FLOW_FLEX_ROW_REVERSE : FLOW_FLEX_ROW);
+    s->flex_wrap = FLOW_FLEX_NOWRAP;
+    s->justify_content = pack[s->box_pack];
+    s->align_items = align[s->box_align];
+}
+
 // `item`: the element's box is its parent's flex or grid item, and is
 // blockified (Flexbox 1 § 4, Grid 2 § 6) — as an out-of-flow one already
 // was — and floats nowhere (CSS 2.1 § 9.7's float row does not apply to an
@@ -4094,6 +4193,7 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
     s->flex_basis = resolve(sp->flex_basis, s->font_size, automatic);
     s->row_gap = resolve(sp->row_gap, s->font_size, automatic);
     s->column_gap = resolve(sp->column_gap, s->font_size, automatic);
+    legacy_box(s, parent);
 }
 
 // ── Animations (motion.c; PILE3.md § Animations) ───────────────────────
@@ -4652,6 +4752,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, garb_pseudo_t which, Spec
     if (c->env->ticks && !ticks(c, m, &s, &mix))
         return false;
     settle_box(c, &s, item, root);
+    legacy_box(&s, parent);
     s.animating = f_motion_effects(m, now);
     sp->s = s;
     *out = m;

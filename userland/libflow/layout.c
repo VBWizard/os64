@@ -1871,16 +1871,14 @@ typedef struct {
     int64_t rel_x, rel_y;
 } Later;
 
-// A context's ellipsis (flow_box_t.ellipsis): U+2026 in the block's fonts,
-// or three periods when the run of it is the engine's missing-glyph marker
-// (a placement of no font). Kept with the layout's runs; one the engine
-// refuses, or that cannot be kept, stops the layout as any run of its text
-// would (run_of, keep_run).
+// A context's ellipsis (flow_box_t.ellipsis), for its `text-overflow`
+// (f_text_ellipsis) or for a line clamp ending on one of its lines
+// (f_clamp_line): U+2026 in the block's fonts, or three periods when the
+// run of it is the engine's missing-glyph marker (a placement of no font).
+// Kept with the layout's runs; one the engine refuses, or that cannot be
+// kept, stops the layout as any run of its text would (run_of, keep_run).
 static void ellipsis_of(L *l, FBox *ifc, const Fonts *bf)
 {
-    const flow_style_t *s = ifc->style;
-    if (s->text_overflow != FLOW_TEXT_OVERFLOW_ELLIPSIS || s->overflow_x == FLOW_OVERFLOW_VISIBLE)
-        return;
     os64_text_run_t *run = run_of(l, bf, "\xe2\x80\xa6", 3, 0, 0, 0);
     os64_text_run_view_t v;
     if (run != NULL && os64_text_run_view(run, &v) == OS64_FONT_OK &&
@@ -1901,7 +1899,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
     segments(l, ifc, cw, &s);
     Fonts bf;
     bool have_block_font = fonts_for(l, ifc->style, &bf);
-    if (have_block_font && ifc->ellipsis == NULL)
+    if (have_block_font && ifc->ellipsis == NULL && f_text_ellipsis(ifc->style))
         ellipsis_of(l, ifc, &bf);
     Open open = {0};
     // The x each open inline's piece on the current line starts at.
@@ -2681,6 +2679,47 @@ bool f_bfc_root(const FBox *b)
            b->floated != FLOW_FLOAT_NONE || (b->node != NULL && s->flow_root) ||
            (b->kind == FB_BLOCK && b->node != NULL && f_display_atomic(s->display)) || b->flex ||
            b->grid || (b->parent != NULL && (b->parent->flex || b->parent->grid)) || drawn_button(b);
+}
+
+typedef struct {
+    int32_t n, seen;
+    const FLine *found;
+    const FBox *owner;
+    bool more;
+} ClampWalk;
+
+// f_clamp_line's walk: a box's lines in order, down through its in-flow
+// block children that start no formatting context (a nested context's
+// lines are its own, CSS Overflow 4 § 5.2), stopping at the line after the
+// one it wants. A line pass 2 broke short is no line to count.
+static void clamp_walk(const FBox *b, ClampWalk *w)
+{
+    if (b->ifc) {
+        for (const FLine *ln = b->lines; ln != NULL && !w->more; ln = ln->next) {
+            if (ln->unfinished)
+                continue;
+            if (w->found != NULL) {
+                w->more = true;
+            } else if (++w->seen == w->n) {
+                w->found = ln;
+                w->owner = b;
+            }
+        }
+        return;
+    }
+    for (const FBox *c = b->first; c != NULL && !w->more; c = c->next)
+        if (c->placed && c->kind == FB_BLOCK && !f_bfc_root(c))
+            clamp_walk(c, w);
+}
+
+const FLine *f_clamp_line(const FBox *b, const FBox **owner)
+{
+    ClampWalk w = {b->style->line_clamp, 0, NULL, NULL, false};
+    if (f_clamps_lines(b->style) && b->kind == FB_BLOCK && !b->flex && !b->grid)
+        clamp_walk(b, &w);
+    if (owner != NULL)
+        *owner = w.more ? w.owner : NULL;
+    return w.more ? w.found : NULL;
 }
 
 // The HTML alignments reach a block child whose margins are both set, that
@@ -5903,6 +5942,19 @@ static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, in
     // (§ 10.6.7); an ordinary block does not, and a float hangs out of it.
     if (floats_end != INT64_MIN)
         flowed = max64(flowed, floats_end - content_top);
+    // A line clamp's box ends at the last line it shows, whatever follows
+    // (f_clamp_line), and that line's block has an ellipsis for it to end
+    // in: the content after is laid out below and overflows.
+    const FBox *clamp_owner = NULL;
+    const FLine *clamp_end = f_clamp_line(b, &clamp_owner);
+    if (clamp_end != NULL) {
+        flowed = max64(0, clamp_end->y + clamp_end->h - content_top);
+        // The owner is `b` or a block inside it, which this layout holds.
+        FBox *owner = (FBox *)clamp_owner;
+        Fonts of;
+        if (owner->ellipsis == NULL && fonts_for(l, owner->style, &of))
+            ellipsis_of(l, owner, &of);
+    }
     // A flex or grid container's content height is what its items ask,
     // whatever height it was given and gave them.
     b->content_h = vframe_px + max64(0, asked >= 0 ? asked : flowed);
@@ -5915,8 +5967,8 @@ static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, in
         content_h = in.y - content_top;
         pm_out = margins_join(in.pm, margin_of(mb));
     } else {
-        content_h = in.y + margins_sum(in.pm) - content_top;
-        if (floats_end != INT64_MIN)
+        content_h = clamp_end != NULL ? flowed : in.y + margins_sum(in.pm) - content_top;
+        if (floats_end != INT64_MIN && clamp_end == NULL)
             content_h = max64(content_h, floats_end - content_top);
         pm_out = margin_of(mb);
     }

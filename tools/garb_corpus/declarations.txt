@@ -1242,6 +1242,61 @@ OUT: invalid
 IN: text-overflow: fade
 OUT: invalid
 
+# ── the legacy box (Compatibility § 3.4.4-5) and its line clamp (Overflow 4 § 5.1.1) ──
+IN: display: -webkit-box
+OUT: display: -webkit-box
+IN: display: -WEBKIT-INLINE-BOX
+OUT: display: -webkit-inline-box
+IN: display: -webkit-flex
+OUT: display: -webkit-flex
+IN: display: -moz-box
+OUT: invalid
+IN: -webkit-box-orient: vertical
+OUT: -webkit-box-orient: vertical
+IN: -webkit-box-orient: block-axis
+OUT: -webkit-box-orient: block-axis
+IN: -webkit-box-orient: column
+OUT: invalid
+IN: -webkit-box-direction: reverse
+OUT: -webkit-box-direction: reverse
+IN: -webkit-box-pack: justify
+OUT: -webkit-box-pack: justify
+IN: -webkit-box-pack: space-between
+OUT: invalid
+IN: -webkit-box-align: baseline
+OUT: -webkit-box-align: baseline
+IN: -webkit-box-flex: 1.5
+OUT: -webkit-box-flex: 1.5
+IN: -webkit-box-flex: -1
+OUT: invalid
+IN: -webkit-box-ordinal-group: 0
+OUT: -webkit-box-ordinal-group: 0
+IN: -webkit-box-ordinal-group: -1
+OUT: invalid
+IN: -webkit-box-ordinal-group: 2.5
+OUT: invalid
+IN: -webkit-line-clamp: 3
+OUT: -webkit-line-clamp: 3
+IN: -webkit-line-clamp: none
+OUT: -webkit-line-clamp: none
+IN: -webkit-line-clamp: 0
+OUT: invalid
+IN: -webkit-line-clamp: 2.0
+OUT: invalid
+IN: -webkit-line-clamp: auto
+OUT: invalid
+# The Compatibility Standard's aliases (§ 3.4.1) read as their twins.
+IN: -webkit-box-shadow: 1px 2px red
+OUT: box-shadow: 1px 2px 0px 0px rgb(255, 0, 0)
+IN: -webkit-border-radius: 4px
+OUT: border-top-left-radius: 4px 4px; border-top-right-radius: 4px 4px; border-bottom-right-radius: 4px 4px; border-bottom-left-radius: 4px 4px
+IN: -webkit-flex: 1
+OUT: flex-grow: 1; flex-shrink: 1; flex-basis: 0%
+IN: -webkit-justify-content: center
+OUT: justify-content: center
+IN: -webkit-background-size: 10px
+OUT: unknown
+
 # ── outline (CSS UI 4 § 3) ──
 IN: outline: 2px dashed red
 OUT: outline-width: 2px; outline-style: dashed; outline-color: rgb(255, 0, 0)

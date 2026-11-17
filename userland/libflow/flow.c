@@ -173,6 +173,9 @@ typedef struct {
     // with, when there is one; and each scroll container's public box to
     // its own, which its padding box is read from.
     FMap frames, ports;
+    // The line the nearest line clamp round the box being built ends at
+    // (f_clamp_line), or NULL: public_box marks it.
+    const FLine *clamp_end;
 } Build;
 
 static int64_t round_px(int64_t v)
@@ -1274,6 +1277,13 @@ flow_line_cut_t flow_line_cut(const flow_tree_t *tree, const flow_box_t *line)
     const flow_box_t *block = line != NULL ? line->parent : NULL;
     if (line == NULL || line->kind != FLOW_BOX_LINE || block == NULL || block->ellipsis == NULL)
         return c;
+    // The line a clamp ends at ends in the ellipsis wherever its content
+    // ends; any other only where its content passes its end, and only in a
+    // block whose `text-overflow` asks (a block may hold an ellipsis for
+    // its clamp alone).
+    bool clamp_end = line->line_clamp_end;
+    if (!clamp_end && !f_text_ellipsis(block->style))
+        return c;
     // The block clips, so where it scrolls its end edge is where the scroll
     // shows it: content scrolled into view is drawn and not ellipsed, and a
     // line scrolled to its end has no ellipsis.
@@ -1283,9 +1293,17 @@ flow_line_cut_t flow_line_cut(const flow_tree_t *tree, const flow_box_t *line)
         if (line_content(k))
             reach = cut_max(reach, content_end(k));
     os64_text_run_view_t v;
-    if (reach <= edge || os64_text_run_view(block->ellipsis, &v) != OS64_FONT_OK)
+    if (reach == INT64_MIN || (reach <= edge && !clamp_end) ||
+        os64_text_run_view(block->ellipsis, &v) != OS64_FONT_OK)
         return c;
     c.limit = edge - ((int64_t)v.advance_x + 63) / 64;
+    // A clamp's last line with room for the ellipsis after its content
+    // keeps it all, and the ellipsis follows it.
+    if (clamp_end && reach <= c.limit) {
+        c.on = true;
+        c.at = reach;
+        return c;
+    }
     int64_t at = INT64_MIN;
     for (const flow_box_t *k = line->first; k != NULL; k = k->next) {
         if (!line_content(k))
@@ -1674,8 +1692,8 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
 // then its fragments), its child boxes, then an outside marker — the
 // order a partial layout grows in, so a tree cut short is a prefix of the
 // whole one.
-static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, flow_box_t **last,
-                              Clip clip)
+static flow_box_t *public_box_body(Build *bd, const FBox *src, flow_box_t *parent,
+                                   flow_box_t **last, Clip clip)
 {
     flow_box_t *b = add(bd, parent, last, (flow_box_kind_t)src->kind, src->node, src->style);
     if (b == NULL)
@@ -1749,6 +1767,7 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
         line->overflow = line->rect;
         line->baseline = edge32(round_px(ln->baseline));
         line->unfinished = ln->unfinished;
+        line->line_clamp_end = ln == bd->clamp_end;
         flow_box_t *pieces = NULL;
         for (const FSpan *sp = ln->spans; sp != NULL && !bd->failed; sp = sp->next) {
             flow_box_t *span = add(bd, line, &pieces, FLOW_BOX_SPAN, sp->inl->node, sp->inl->style);
@@ -1806,6 +1825,21 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     }
     if (src->out_of_flow && src->style->legacy_clip_set)
         b->overflow = cut_to(b->overflow,b->clip);
+    return b;
+}
+
+// public_box_body, inside the line clamp the box makes when it makes one
+// (Build.clamp_end). A clamp counts only its own flow's lines, never those
+// inside a nested formatting context, so the clamp round a nested one
+// still has its line to mark once the nested one is built.
+static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, flow_box_t **last,
+                              Clip clip)
+{
+    const FLine *outer = bd->clamp_end;
+    if (f_clamps_lines(src->style))
+        bd->clamp_end = f_clamp_line(src, NULL);
+    flow_box_t *b = public_box_body(bd, src, parent, last, clip);
+    bd->clamp_end = outer;
     return b;
 }
 

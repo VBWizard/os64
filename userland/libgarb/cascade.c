@@ -426,11 +426,50 @@ static const char *const kFunctionsRead[] = {
     "fit-content", "repeat", "rect", NULL,
 };
 
+// The prefixed property names every engine reads (Compatibility § 3.4.1,
+// § 3.4.4 and § 3.4.6, and CSS Overflow 4 § 5.1.1's -webkit-line-clamp):
+// no one engine's dialect but the web's, so one this library does not read
+// is a gap like a standard name's. § 3.4.2's -webkit-text-size-adjust is
+// not here: it is a phone's, and engines on a desktop pass it over too.
+static const char *const kPrefixedRead[] = {
+    "-webkit-align-items", "-webkit-align-content", "-webkit-align-self",
+    "-webkit-animation", "-webkit-animation-name", "-webkit-animation-duration",
+    "-webkit-animation-timing-function", "-webkit-animation-iteration-count",
+    "-webkit-animation-direction", "-webkit-animation-play-state", "-webkit-animation-delay",
+    "-webkit-animation-fill-mode", "-webkit-backface-visibility", "-webkit-background-clip",
+    "-webkit-background-origin", "-webkit-background-size", "-webkit-border-bottom-left-radius",
+    "-webkit-border-bottom-right-radius", "-webkit-border-top-left-radius",
+    "-webkit-border-top-right-radius", "-webkit-border-radius", "-webkit-box-shadow",
+    "-webkit-box-sizing", "-webkit-flex", "-webkit-flex-basis", "-webkit-flex-direction",
+    "-webkit-flex-flow", "-webkit-flex-grow", "-webkit-flex-shrink", "-webkit-flex-wrap",
+    "-webkit-filter", "-webkit-justify-content", "-webkit-mask", "-webkit-mask-box-image",
+    "-webkit-mask-box-image-outset", "-webkit-mask-box-image-repeat",
+    "-webkit-mask-box-image-slice", "-webkit-mask-box-image-source",
+    "-webkit-mask-box-image-width", "-webkit-mask-clip", "-webkit-mask-composite",
+    "-webkit-mask-image", "-webkit-mask-origin", "-webkit-mask-position", "-webkit-mask-repeat",
+    "-webkit-mask-size", "-webkit-order", "-webkit-perspective", "-webkit-perspective-origin",
+    "-webkit-transform-origin", "-webkit-transform-style", "-webkit-transform",
+    "-webkit-transition-delay", "-webkit-transition-duration", "-webkit-transition-property",
+    "-webkit-transition-timing-function", "-webkit-transition",
+    "-webkit-box-align", "-webkit-box-flex", "-webkit-box-ordinal-group", "-webkit-box-orient",
+    "-webkit-box-pack", "-webkit-text-fill-color", "-webkit-text-stroke-color",
+    "-webkit-text-stroke-width", "-webkit-text-stroke", "-webkit-line-clamp", NULL,
+};
+
+static bool prefixed_read(const char *name, size_t len)
+{
+    for (int k = 0; kPrefixedRead[k] != NULL; k++)
+        if (ieq(name, len, kPrefixedRead[k]))
+            return true;
+    return false;
+}
+
 static void skipped(garb_cascade_t *c, garb_skip_kind_t kind, const char *name, size_t len)
 {
-    // A prefixed name is one engine's dialect, which every other engine
-    // passes over too: what a page asks of a browser is the standard name.
-    if (len == 0 || name[0] == '-')
+    // Any other prefixed name is one engine's dialect, which every other
+    // engine passes over too: what a page asks of a browser is the
+    // standard name.
+    if (len == 0 || (name[0] == '-' && !(kind == GARB_SKIP_PROPERTY && prefixed_read(name, len))))
         return;
     // ieq folds its first argument; the kept copy is already lower case.
     for (int32_t i = 0; i < c->nskips; i++)
@@ -499,7 +538,8 @@ static void skipped_value(garb_cascade_t *c, const char *prop, size_t plen, cons
     for (int32_t i = 0; i < n; i++) {
         if (v[i].kind == GARB_WHITESPACE)
             continue;
-        // A prefixed word is one engine's dialect, as a prefixed name is;
+        // A prefixed word is one engine's dialect, as most prefixed names
+        // are (kPrefixedRead);
         // so is a control character, which no keyword holds and old IE's
         // hacks (`display: none\9`) write on purpose.
         if (v[i].len != 0 && v[i].text[0] == '-')

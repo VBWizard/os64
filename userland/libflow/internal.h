@@ -70,6 +70,23 @@ static inline bool f_display_grid(flow_display_t d)
     return d == FLOW_DISPLAY_GRID || d == FLOW_DISPLAY_INLINE_GRID;
 }
 
+// Whether a style is the vertical legacy box with a line clamp, which is
+// laid out as a block container showing `line_clamp` lines
+// (flow_style_t.legacy_box).
+static inline bool f_clamps_lines(const flow_style_t *s)
+{
+    return s->legacy_box && s->line_clamp > 0 &&
+           (s->box_orient == FLOW_BOX_VERTICAL || s->box_orient == FLOW_BOX_BLOCK_AXIS);
+}
+
+// Whether a block's lines end in an ellipsis where their content passes
+// their end (CSS Overflow 4 § 4.1): its `text-overflow` is ellipsis, and
+// its overflow is not visible.
+static inline bool f_text_ellipsis(const flow_style_t *s)
+{
+    return s->text_overflow == FLOW_TEXT_OVERFLOW_ELLIPSIS && s->overflow_x != FLOW_OVERFLOW_VISIBLE;
+}
+
 // A grid's bound on either axis (GRID.md, decision 4), and on the cells of
 // one grid-template-areas (libgarb's own bound on them).
 #define F_GRID_MAX 1000
@@ -1248,6 +1265,16 @@ int64_t f_len(flow_length_t l, int64_t base);
 // list is): what holds its floats, and what the fuzz asks to find each
 // float's context.
 bool f_bfc_root(const FBox *b);
+
+// The line a line clamp ends at (f_clamps_lines, layout.c): of a box laid
+// out, the `line_clamp`th line in its own flow — its lines, or those of
+// its in-flow block children that start no formatting context, in order,
+// as far down as they go — when another line follows it there; NULL when
+// none does, and the box shows every line it has. `*owner`, when not
+// NULL, is set to the box whose line it is. One walk, read by layout for
+// the box's height and by the public tree for the line's ellipsis
+// (flow_box_t.line_clamp_end), so the two cannot disagree.
+const FLine *f_clamp_line(const FBox *b, const FBox **owner);
 
 // Lays the box tree out at `width` CSS pixels. NULL only when there is not
 // memory for the layout record.
