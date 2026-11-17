@@ -2580,6 +2580,7 @@ static void module_bytecode_cases(void)
 #include "test_js_import_failures.inc"
 #include "test_js_neutral_failures.inc"
 #include "test_js_native_job_failures.inc"
+#include "test_js_host_promise_failures.inc"
 #include "test_js_execution_scopes.inc"
 #include "test_js_failed_code.inc"
 #include "test_js_failure_records.inc"
@@ -2735,6 +2736,11 @@ int main(int argc, char **argv)
         printf("libjs finalization settings: %u checks, %u failures\n", checks, failures);
         return failures ? 1 : 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--host-promise-capabilities")) {
+        host_promise_capability_cases(); host_promise_forwarding_cases(); host_promise_failure_cases();
+        printf("Host Promise capabilities: %u checks, %u failures\n", checks, failures);
+        return failures ? 1 : 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--neutral-native-jobs")) {
         neutral_native_job_cases(); native_job_failure_cases();
         check(live == 0, "neutral native jobs release allocations");
@@ -2859,6 +2865,7 @@ int main(int argc, char **argv)
     module_bytecode_cases();
     intl_cases();
     native_job_failure_cases();
+    host_promise_failure_cases();
     check(live == 0, "runtime suite releases every fixture allocation");
     printf("libjs runtime: %u checks, %u failures, %zu live allocations, %u native calls\n",
            checks, failures, live, native_calls);

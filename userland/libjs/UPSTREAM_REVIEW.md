@@ -180,3 +180,12 @@ entries. It reuses queue holds, execution/discard paths and the existing neutral
 scope save/restore; raw jobs retain their prior behavior. Streams uses it behind
 its callback-settings opt-in. The proof and ordinary Promise retirement boundary
 are recorded in `docs/design/pending/IFRAME_F4_STREAM_CONTINUATIONS.md`.
+
+Patch 0041 admits explicitly private Promise capabilities and intrinsic-then
+adoption without changing ordinary Promise ownership. Native resolving functions
+keep actual realm/trace holds while their jobs use neutral settings. Single
+observable then lookup, late species construction, custom capabilities, groups,
+budgets and failed-code entry guards remain. Bit-packed shared resolver state
+preserves its size; the additional queue argument is charged only to private
+adoption. See `docs/design/pending/IFRAME_F4_HOST_PROMISE_LIFETIME.md` for the
+embedding policy and evidence; this is not blanket native-function neutrality.

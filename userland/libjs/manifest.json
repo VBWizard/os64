@@ -280,6 +280,10 @@
     {
       "path": "patches/0040-neutral-native-jobs.patch",
       "sha256": "a0c48a4cfefdf9b86e8493675df875b3edbab8c25f62f693e6c907adf58ffbc0"
+    },
+    {
+      "path": "patches/0041-host-promise-capabilities.patch",
+      "sha256": "d603165e40e6c8090f8cb6bca64058a8753606c546691b4601d6cc3ae7cb4393"
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

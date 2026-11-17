@@ -285,9 +285,9 @@ Before publishing browser settings queries, implement and prove:
   to the remaining WebIDL conversion and invocation sites and Streams continuation boundaries,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.
-- Resolve retained Streams error-path completion where ordinary realm-owned
-  Promise adoption is discarded after implementation departure. Do not grant
-  neutral lifetime authority by treating mutable Promise methods as private work.
+- Retained Streams native error conversion uses the explicit
+  [host capability policy](IFRAME_F4_HOST_PROMISE_LIFETIME.md). Author replacement
+  adoption retains ordinary retirement discard; it is not private continuation work.
 - Complete browser finalization task scheduling and the unresolved neutral-job
   exception-reporting policy. The [neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md)
   supplies actual capability current/script incumbent without inventing entry or

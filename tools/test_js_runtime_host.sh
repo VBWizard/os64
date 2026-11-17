@@ -62,7 +62,8 @@ cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack \
     "${maths[@]}" "$js_runtime_work/runtime.o" "$js_runtime_work/owner_incarnation.o" "$js_runtime_work/owner_tickets.o" "$js_runtime_work/intl.o" "$js_runtime_work/str-local.o" \
     "$js_runtime_work/fmt.o" "$js_runtime_work/test_js_port_calendar.o" \
     "$js_runtime_work/test_js_runtime_host.o" -o "$js_runtime_work/sanitized-probe"
-if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" = --host-implementation ] ||
+if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" = --host-promise-capabilities ] ||
+   [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" = --host-implementation ] ||
    [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" = --neutral-native-jobs ]; then
     for probe in probe sanitized-probe; do
         "$js_runtime_work/$probe" "$JS_RUNTIME_FOCUSED_SELECTOR"
