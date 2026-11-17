@@ -19,6 +19,10 @@ typedef struct {
 } allocation_t;
 
 static allocation_t gAllocations[SLOT_COUNT];
+// -a: a third of the plain allocations go through os64_malloc_aligned
+// instead, at a random alignment, checked the moment each is made. Off by
+// default, so every seed's run without it stays the run it always was.
+static bool gAligned;
 static uint64_t gRandom;
 static uint64_t gSeed;
 static uint64_t gOperation;
@@ -192,6 +196,14 @@ static int allocate_slot(uint32_t slot, bool use_calloc)
                     return fail("calloc returned non-zero data", slot, i);
             }
         }
+    } else if (gAligned && random64() % 3 == 0) {
+        // 16 .. 4096; a block of 128 KB or more is promised 64 at most.
+        size_t alignment = (size_t)16 << (random64() % 9);
+        if (size >= 128U * 1024U && alignment > 64)
+            alignment = 64;
+        pointer = os64_malloc_aligned(size, alignment);
+        if (pointer != NULL && ((uintptr_t)pointer & (alignment - 1)) != 0)
+            return fail("malloc_aligned missed its alignment", slot, alignment);
     } else {
         pointer = os64_malloc(size);
     }
@@ -241,12 +253,14 @@ int main(int argc, char **argv, char **envp)
          .value_out = &seed_text},
         {'n', "operations", true, "number of random operations (default 50000)",
          .value_out = &ops_text},
+        {'a', "aligned", false, "mix in os64_malloc_aligned at random alignments",
+         .flag = &gAligned},
     };
     os64_args_t args = {0};
-    os64_args_init(&args, argc, argv, specs, 2);
-    args.about = "Hammer malloc/calloc/realloc/free as a black-box state machine.";
+    os64_args_init(&args, argc, argv, specs, 3);
+    args.about = "Hammer malloc/calloc/realloc/free (and with -a, malloc_aligned) as a black-box state machine.";
     args.details = "Live contents, alignment, overlap, calloc zeroing, and heap integrity are checked throughout.";
-    int32_t parsed = os64_args_parse(&args, "mallochavoc [-s SEED] [-n OPERATIONS]", NULL, 0);
+    int32_t parsed = os64_args_parse(&args, "mallochavoc [-a] [-s SEED] [-n OPERATIONS]", NULL, 0);
     if (parsed == OS64_ARG_HELP)
         return 0;
     if (parsed < 0)

@@ -77,6 +77,18 @@ int64_t os64_memory(os64_memory_t *out);
 // case every caller has to remember.
 void *os64_malloc(size_t size);
 
+// Allocate at least `size` bytes whose address is a multiple of `alignment`,
+// a power of two from 16 to 4096; any other alignment returns NULL. The
+// block is an ordinary one: os64_free, os64_realloc and os64_malloc_size
+// take it exactly as they take malloc's. os64_realloc keeps only malloc's
+// promise, 16 bytes: a block it moves lands wherever malloc puts it.
+// A request of 128 KB or more gets its own region, whose payload is 64-byte
+// aligned; an alignment above 64 for one is refused (NULL). Counted as a
+// malloc in /proc/<pid>/heap. FFmpeg is the reason it exists: its AVX
+// routines load its buffers with aligned instructions, and it frees and
+// reallocs those buffers through plain free and realloc.
+void *os64_malloc_aligned(size_t size, size_t alignment);
+
 // Return the live block's payload capacity, including alignment slack but
 // excluding allocator metadata. NULL returns zero. Other pointers must be
 // live allocation bases from this heap; invalid pointers end the program
@@ -96,7 +108,8 @@ void *os64_calloc(size_t count, size_t size);
 // Resize. Grows in place when the following block is free and big enough
 // (the boundary tags make that check one load), shrinks in place always,
 // otherwise allocates-copies-frees. realloc(NULL, n) == malloc(n);
-// realloc(p, 0) frees p and returns NULL.
+// realloc(p, 0) frees p and returns NULL. The result is 16-byte aligned,
+// whatever os64_malloc_aligned gave the block it started as.
 void *os64_realloc(void *ptr, size_t size);
 
 // Called ONCE by libos64's own init, before main. Zeroes the heap state and

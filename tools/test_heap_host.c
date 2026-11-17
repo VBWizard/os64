@@ -694,6 +694,189 @@ static void t_crimes(void)
 // overlapping memory, a merge that swallows a live neighbour, or a footer
 // written one word wide all show up here as a stamp that doesn't match —
 // long before they would show up in the OS as a mystery.
+// os64_malloc_aligned: every power of two it promises, sizes around the
+// minimum block, a page and the dedicated threshold, the refusals, and the
+// rule that matters most: the block is ORDINARY, so free, realloc and
+// malloc_size take it, and the books come back exactly where they were.
+static void t_aligned(void)
+{
+    static const size_t bad[] = { 0, 1, 8, 24, 3, 48, 8192, 1u << 20 };
+    uint64_t refused0 = gReport->calls_malloc;
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+        CHECK(os64_malloc_aligned(100, bad[i]) == NULL, "alignment %zu accepted", bad[i]);
+    CHECK(gReport->calls_malloc - refused0 == sizeof(bad) / sizeof(bad[0]),
+          "refusals are calls too: %lu counted for %zu",
+          (unsigned long)(gReport->calls_malloc - refused0), sizeof(bad) / sizeof(bad[0]));
+
+    uint64_t live0 = gReport->blocks_live, bytes0 = gReport->bytes_live;
+    uint64_t calls0 = gReport->calls_malloc;
+
+    static const size_t sizes[] = { 0, 1, 31, 32, 33, 47, 48, 100, 1000, 4095, 4096, 4097,
+                                    70000, 131071 - 16, 131071 };
+    enum { N = 9 * (sizeof(sizes) / sizeof(sizes[0])) };
+    static struct { uint8_t *p; size_t len; uint8_t stamp; } blk[N];
+    int n = 0;
+    for (size_t a = 16; a <= 4096; a *= 2)
+        for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++)
+        {
+            uint8_t *p = os64_malloc_aligned(sizes[s], a);
+            CHECK(p != NULL, "malloc_aligned(%zu, %zu) returned NULL", sizes[s], a);
+            if (p == NULL)
+                continue;
+            CHECK(((uintptr_t)p & (a - 1)) == 0, "malloc_aligned(%zu, %zu) = %p, not aligned",
+                  sizes[s], a, (void *)p);
+            CHECK(os64_malloc_size(p) >= sizes[s], "malloc_aligned(%zu, %zu) holds only %zu",
+                  sizes[s], a, os64_malloc_size(p));
+            blk[n].p = p;
+            blk[n].len = sizes[s];
+            blk[n].stamp = (uint8_t)(0x40 + n);
+            memset(p, blk[n].stamp, sizes[s]);
+            n++;
+            CHECK(os64_heap_verify() == 0, "heap does not verify after malloc_aligned(%zu, %zu)",
+                  sizes[s], a);
+        }
+    CHECK(gReport->calls_malloc - calls0 == (uint64_t)n, "%lu mallocs counted for %d calls",
+          (unsigned long)(gReport->calls_malloc - calls0), n);
+
+    // Free every other block first, so the rest are freed beside free
+    // neighbours (both merges), and check every stamp on the way.
+    for (int pass = 0; pass < 2; pass++)
+        for (int i = pass; i < n; i += 2)
+        {
+            int bad_bytes = 0;
+            for (size_t k = 0; k < blk[i].len; k++)
+                if (blk[i].p[k] != blk[i].stamp)
+                    bad_bytes++;
+            CHECK(bad_bytes == 0, "block %d lost %d bytes to a neighbour", i, bad_bytes);
+            os64_free(blk[i].p);
+            CHECK(os64_heap_verify() == 0, "heap does not verify after freeing block %d", i);
+        }
+    CHECK(gReport->blocks_live == live0 && gReport->bytes_live == bytes0,
+          "the books moved: %lu blocks / %lu bytes live, were %lu / %lu",
+          (unsigned long)gReport->blocks_live, (unsigned long)gReport->bytes_live,
+          (unsigned long)live0, (unsigned long)bytes0);
+
+    // The dedicated threshold: up to 64 is the region's own layout, above
+    // it is refused, never offset.
+    for (size_t a = 16; a <= 4096; a *= 2)
+    {
+        uint8_t *p = os64_malloc_aligned(200 * 1024, a);
+        if (a <= 64)
+        {
+            CHECK(p != NULL && ((uintptr_t)p & 63) == 0, "big block at %zu: %p", a, (void *)p);
+            if (p != NULL)
+            {
+                memset(p, 0x5A, 200 * 1024);
+                os64_free(p);
+            }
+        }
+        else
+            CHECK(p == NULL, "a big block with alignment %zu was not refused", a);
+    }
+
+    // realloc of an aligned block: content kept both ways, 16-aligned after.
+    uint8_t *r = os64_malloc_aligned(300, 256);
+    CHECK(r != NULL && ((uintptr_t)r & 255) == 0, "malloc_aligned(300, 256) = %p", (void *)r);
+    for (int k = 0; k < 300; k++)
+        r[k] = (uint8_t)k;
+    r = os64_realloc(r, 5000);
+    CHECK(r != NULL && ((uintptr_t)r & 15) == 0, "grown realloc = %p", (void *)r);
+    int lost = 0;
+    for (int k = 0; k < 300; k++)
+        lost += r[k] != (uint8_t)k;
+    CHECK(lost == 0, "realloc grow lost %d bytes", lost);
+    r = os64_realloc(r, 40);
+    lost = 0;
+    for (int k = 0; k < 40; k++)
+        lost += r[k] != (uint8_t)k;
+    CHECK(lost == 0, "realloc shrink lost %d bytes", lost);
+    os64_free(r);
+
+    CHECK(os64_heap_verify() == 0, "heap does not verify after the aligned tests");
+    CHECK(gReport->blocks_live == live0 && gReport->bytes_live == bytes0,
+          "the aligned tests left %lu blocks live, were %lu",
+          (unsigned long)gReport->blocks_live, (unsigned long)live0);
+}
+
+// The soak again, with aligned blocks and reallocs mixed in, so every one of
+// their neighbours' shapes meets every other.
+static void t_aligned_soak(void)
+{
+    enum { SLOTS = 192, ROUNDS = 30000 };
+    static struct { uint8_t *p; size_t len; uint8_t stamp; } slot[SLOTS];
+    uint32_t rng = 0xA11C0DE5;
+
+    for (int round = 0; round < ROUNDS; round++)
+    {
+        rng = rng * 1664525u + 1013904223u;
+        int i = (int)((rng >> 8) % SLOTS);
+
+        if (slot[i].p != NULL)
+        {
+            int bad = 0;
+            for (size_t k = 0; k < slot[i].len; k++)
+                bad += slot[i].p[k] != slot[i].stamp;
+            if (bad)
+            {
+                CHECK(0, "round %d: block %d (%zu bytes) had %d stomped bytes",
+                      round, i, slot[i].len, bad);
+                return;
+            }
+            rng = rng * 1664525u + 1013904223u;
+            if ((rng >> 8) % 4 == 0)
+            {
+                size_t len = (size_t)(1 + (rng >> 12) % 3000);
+                uint8_t *q = os64_realloc(slot[i].p, len);
+                CHECK(q != NULL, "round %d: realloc(%zu) returned NULL", round, len);
+                if (q == NULL)
+                    return;
+                slot[i].p = q;
+                slot[i].len = len;
+                memset(q, slot[i].stamp, len);
+            }
+            else
+            {
+                os64_free(slot[i].p);
+                slot[i].p = NULL;
+            }
+            continue;
+        }
+
+        rng = rng * 1664525u + 1013904223u;
+        size_t len = ((rng >> 8) % 120 == 0) ? (size_t)(140 * 1024 + (rng % 8192))
+                                             : (size_t)(1 + (rng >> 4) % 2000);
+        size_t a = (size_t)16 << ((rng >> 20) % 9);          // 16 .. 4096
+        if (len >= 128 * 1024 && a > 64)
+            a = 64;
+        if (!((rng >> 28) & 1))
+            a = 16;                      // plain malloc's promise
+        uint8_t *p = a > 16 ? os64_malloc_aligned(len, a) : os64_malloc(len);
+        if (p == NULL || ((uintptr_t)p & (a - 1)) != 0)
+        {
+            CHECK(0, "round %d: allocation of %zu at %zu gave %p", round, len, a, (void *)p);
+            return;
+        }
+        slot[i].p = p;
+        slot[i].len = len;
+        slot[i].stamp = (uint8_t)(i ^ round ^ 0x5C);
+        memset(p, slot[i].stamp, len);
+
+        if ((round % 1500) == 0)
+            CHECK(os64_heap_verify() == 0, "round %d: heap does not verify", round);
+    }
+
+    for (int i = 0; i < SLOTS; i++)
+        if (slot[i].p != NULL)
+            os64_free(slot[i].p);
+
+    CHECK(os64_heap_verify() == 0, "heap does not verify after the aligned soak");
+    CHECK(gReport->blocks_live == 0 && gReport->bytes_live == 0,
+          "aligned soak left %lu blocks / %lu bytes live",
+          (unsigned long)gReport->blocks_live, (unsigned long)gReport->bytes_live);
+    CHECK(gReport->regions == 1, "aligned soak left %lu regions mapped, want 1",
+          (unsigned long)gReport->regions);
+}
+
 static void t_soak(void)
 {
     enum { SLOTS = 256, ROUNDS = 20000 };
@@ -776,7 +959,9 @@ int main(void)
     t_realloc();
     t_shrink_coalesce();
     t_big_and_giveback();
+    t_aligned();
     t_soak();
+    t_aligned_soak();
     t_crimes();     // last: it leaves the heap deliberately corrupted
 
     printf("%d checks, %d failures\n", gChecks, gFailures);

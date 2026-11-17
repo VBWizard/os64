@@ -38,8 +38,70 @@
 #define FAIL_PROC              0x0A110C0AUL   // /proc/<pid>/heap missing or wrong
 #define FAIL_BIG               0x0A110C0BUL   // the dedicated-region path
 #define FAIL_POISON            0x0A110C0CUL   // a freed body was not poisoned
+#define FAIL_ALIGNED           0x0A110C0DUL   // os64_malloc_aligned broke a promise
 
 // ── the battery ─────────────────────────────────────────────────────────────
+
+// os64_malloc_aligned on real regions: every power of two it promises lands
+// aligned and holds its bytes beside its neighbours, a big block is 64-byte
+// aligned and a stricter one refused, an aligned block reallocs and frees as
+// an ordinary one, and the heap walks clean after each step.
+static uint32_t test_aligned(void)
+{
+    enum { N = 9 * 4 };
+    static const size_t sizes[4] = { 1, 100, 3000, 70000 };
+    uint8_t *blk[N];
+    int n = 0;
+
+    if (os64_malloc_aligned(64, 24) != NULL || os64_malloc_aligned(64, 8192) != NULL)
+        return FAIL_ALIGNED;
+    for (size_t a = 16; a <= 4096; a *= 2)
+        for (int s = 0; s < 4; s++)
+        {
+            uint8_t *p = os64_malloc_aligned(sizes[s], a);
+            if (p == NULL)
+                return FAIL_NULL;
+            if (((uintptr_t)p & (a - 1)) != 0 || os64_malloc_size(p) < sizes[s])
+                return FAIL_ALIGNED;
+            os64_memset(p, (int)(0x30 + n), sizes[s]);
+            blk[n++] = p;
+        }
+    if (os64_heap_verify() != 0)
+        return FAIL_VERIFY;
+    for (int pass = 0; pass < 2; pass++)
+        for (int i = pass; i < n; i += 2)
+        {
+            size_t len = sizes[i % 4];
+            for (size_t k = 0; k < len; k++)
+                if (blk[i][k] != (uint8_t)(0x30 + i))
+                    return FAIL_OVERLAP;
+            os64_free(blk[i]);
+        }
+    if (os64_heap_verify() != 0)
+        return FAIL_VERIFY;
+
+    uint8_t *big = os64_malloc_aligned(200 * 1024, 64);
+    if (big == NULL || ((uintptr_t)big & 63) != 0)
+        return FAIL_ALIGNED;
+    os64_memset(big, 0x5A, 200 * 1024);
+    os64_free(big);
+    if (os64_malloc_aligned(200 * 1024, 128) != NULL)
+        return FAIL_ALIGNED;
+
+    uint8_t *r = os64_malloc_aligned(300, 256);
+    if (r == NULL || ((uintptr_t)r & 255) != 0)
+        return FAIL_ALIGNED;
+    for (int k = 0; k < 300; k++)
+        r[k] = (uint8_t)k;
+    r = os64_realloc(r, 9000);
+    if (r == NULL)
+        return FAIL_NULL;
+    for (int k = 0; k < 300; k++)
+        if (r[k] != (uint8_t)k)
+            return FAIL_REALLOC;
+    os64_free(r);
+    return os64_heap_verify() != 0 ? FAIL_VERIFY : 0;
+}
 
 static uint32_t test_basics(void)
 {
@@ -707,6 +769,7 @@ int main(int argc, char **argv)
     if ((r = test_calloc()) != 0)               return (int)r;
     if ((r = test_realloc()) != 0)              return (int)r;
     if ((r = test_big_and_giveback()) != 0)     return (int)r;
+    if ((r = test_aligned()) != 0)              return (int)r;
 
     if (os64_heap_verify() != 0)
         return (int)FAIL_VERIFY;
