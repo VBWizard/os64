@@ -191,10 +191,13 @@ the time" is one `cat`.
 **The stall tripwire** (added 2026-11-17, after the P5's freeze, whose
 compositor kept running while no frame reached the glass). With the hold
 rule, composed damage is on the glass within two of the compositor's
-passes, and its loop turns at least once a lease even when stopped. So
-from the BSP's pass, once a tick, the clock is watched for half a second
-or more with damage owed and nothing shown, or with the loop standing
-still. Each episode is logged once under `DEBUG_EXCEPTIONS`, with where
+passes, and with work to do its loop turns at least once a frame, because
+the claim gives it its CPU. So from the BSP's pass, once a tick, the clock
+is watched for more than half a second with damage owed and nothing shown,
+or with work to do (the clock running, or damage waiting to be composed)
+and the loop standing still. (Stopped with nothing to do, a compositor
+sharing its CPU waits its turn by aging, which may take longer; that is
+the CPU being shared, not a stall.) Each episode is logged once under `DEBUG_EXCEPTIONS`, with where
 in its frame the compositor was, its thread state and whether it was
 expedited, whether the frame was held, what its CPU was running, that
 CPU's passes, frame wakes and lease expiries since the loop last turned,
@@ -216,7 +219,7 @@ Two writers share the compositor's CPU's LAPIC timer:
 - the scheduler's dispatch tail, which arms the preemption lease
   (`sched_backstop_arm`) or stops it (`sched_backstop_disarm`) at every
   pass on a tickless AP, and for a thread sharing the compositor's CPU
-  arms the lease cut short at the compositor's wake (`frame_wake_set`, the
+  arms the lease cut short at the compositor's wake (`frame_wake_cut`, the
   cut in The wake keeps the CPU, below);
 - the compositor, which sets the frame wake (`frame_wake_set`) immediately
   before each `sti; hlt`.
@@ -231,8 +234,10 @@ compositor's CPU is preempted at least as often as it is today. CPU-local
 flags set with the wake tell the pass which fired, so the compositor's own
 wakes (`kFrameWakeFires`) and a co-tenant's cut leases (`kFrameCutFires`)
 are counted apart from `kSchedBackstopFires`; a sleep that halted ends at
-one of the first two, so together they match the compositor's halts. The dispatch tail clears the flags whenever it
-re-arms or stops the timer.
+one of the first two, so together they roughly match the compositor's
+halts (over by a wake that fired early and was set again, under by a
+sleep an interrupt ended at its instant). The dispatch tail clears the
+flags whenever it re-arms or stops the timer.
 
 | State | The timer is set for | Ends when | Who moves it on, and how |
 |---|---|---|---|
@@ -274,9 +279,16 @@ fpu_demo` on the P5, on demand). Two halves cure it (scheduler.c,
   alone and the pick proceeds as if there were no claim.
 - **The cut.** Another thread dispatched on that CPU before the window
   opens has its lease cut at the wake (the dispatch tail calls
-  `frame_wake_set`, so the count is never longer than the lease and the
-  fire counts as a frame wake), and that fire's pass is where the claim
-  takes the CPU back.
+  `frame_wake_cut`, so the count is never longer than the lease and the
+  fire is counted as a cut, `kFrameCutFires`), and that fire's pass is
+  where the claim takes the CPU back. The window can open between the
+  claim's look at the clock and the tail's (a wake firing a few
+  microseconds early); a tail that finds it open with the compositor
+  runnable cuts the lease to one tick, so the claim gets its pass at once.
+- **A nudge on the compositor's own CPU** while another thread holds it
+  (damage from a thread pinned there, a PS/2 interrupt routed there) owes
+  the claim too, and sends its pass to its own CPU; only with the
+  compositor itself current has the interrupt already done the job.
 
 So the window from the wake to the next plan belongs to the compositor,
 and the CPU is shared outside it. **What a co-tenant gets:** the compositor

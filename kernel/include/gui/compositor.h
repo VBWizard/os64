@@ -51,9 +51,9 @@ typedef struct {
 void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart);
 
 // The stall tripwire (FRAME_CLOCK.md § 8): from the BSP's pass, once a
-// tick, with the scheduler's queue lock held. Logs an episode of the clock
-// running with damage owed and nothing shown, or its loop standing still,
-// for more than half a second; never acts on one.
+// tick, with the scheduler's queue lock held. Logs an episode of more than
+// half a second with damage owed and nothing shown, or with work to do and
+// the compositor's loop standing still; never acts on one.
 void gui_frame_clock_watch_locked(void);
 
 // A line written to /sys/gui: `reserve on` or `reserve off` (the

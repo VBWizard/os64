@@ -1450,7 +1450,7 @@ it runs free at 60 Hz. `/sys/gui` says whether it is running, for how long,
 whether the CPU is withheld, its frames, late ones by cause and the forced,
 the lead, the aim and its wakes, and **`frame clock stalls:`**, the
 tripwire's count of half-second episodes with damage owed and nothing shown
-or the compositor's loop still (each logged under `DEBUG_EXCEPTIONS`; none
+or, with work to do, the compositor's loop still (each logged under `DEBUG_EXCEPTIONS`; none
 is the expected number; `echo stall 1500 > /sys/gui` proves it on any
 machine). `NOFRAMECLOCK` turns it off for a boot, as do one CPU,
 `SCHED=periodic` and `NOBACKSTOP` (the frame wake shares the CPU's timer

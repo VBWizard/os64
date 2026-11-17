@@ -601,15 +601,20 @@ void gui_frame_nudge(void)
 {
 	if (!__atomic_exchange_n(&s_fc_halted_stopped, false, __ATOMIC_SEQ_CST))
 		return;
-	// An interrupt handler on the compositor's own CPU has already ended
-	// the halt by arriving; an interrupt to itself would buy nothing. The
-	// interrupt sent is a pass, so it carries the claim (scheduler.h): the
-	// pass keeps the CPU for the compositor rather than handing it to a
-	// thread that aged while it halted.
-	if (cpu_self() != s_fc_cpu) {
-		__atomic_store_n(&kSchedFrameNudged, true, __ATOMIC_SEQ_CST);
-		send_ipi(s_fc_cpu, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
-	}
+	// The flag up means the compositor halted stopped, not that it still
+	// holds its CPU: a lease expiry since may have given the CPU to a thread
+	// that shares it, and the compositor waits RUNNABLE with the flag up.
+	// On the compositor's own CPU with the compositor current, this
+	// interrupt or call has already ended the halt by arriving, and nothing
+	// more is owed. Anywhere else (another CPU, or this one running someone
+	// else), a pass is sent, to itself if need be, and it carries the claim
+	// (scheduler.h): the pass gives the CPU to the compositor rather than to
+	// whoever aged most while it halted.
+	core_local_storage_t *cls = try_get_core_local_storage();
+	if (cls != NULL && cls->cpu == s_fc_cpu && cls->currentThread == s_fc_self)
+		return;
+	__atomic_store_n(&kSchedFrameNudged, true, __ATOMIC_SEQ_CST);
+	send_ipi(s_fc_cpu, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 }
 
 // The reservation follows the state and the dial. The compositor thread
@@ -725,8 +730,14 @@ static void fc_sleep_until(uint64_t wake_at)
 }
 
 // A frame wake slept toward, and how late it came (frame_clock_wake_bucket).
+// Also where "off its CPU" starts counting: the CPU may be shared while the
+// compositor sleeps (a co-tenant runs, and the cut gives the CPU back), so
+// only a switch-out between the wake and the aim is lateness's cause. A
+// wake that lost the CPU before the compositor got back counts as late
+// waking, which it was.
 static void fc_count_wake(void)
 {
+	s_fc_loads = s_fc_self->timesLoaded;
 	s_fc_clk_owed.wakes++;
 	s_fc_clk_owed.wake_late[frame_clock_wake_bucket(s_fc_woke - s_fc_wake_at)]++;
 }
@@ -864,7 +875,6 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 		fc_plan_t p = frame_clock_plan(&f, line, micros_now(), FC_LEAD_MIN_US);
 		s_fc_blank_at = p.blank_at_us;
 		s_fc_wake_at = p.wake_at_us;
-		s_fc_loads = s_fc_self->timesLoaded;
 		fc_sleep_until(s_fc_wake_at);
 		s_fc_woke = pass_end = micros_now();
 		fc_count_wake();
@@ -1010,7 +1020,6 @@ static void frame_clock_pace(void)
 
 	uint32_t lead = frame_clock_lead_us(&s_fc_lead);
 	s_fc_lead_now = lead;
-	s_fc_loads = s_fc_self->timesLoaded;
 	uint64_t now = micros_now();
 	fc_frame_t f;
 	uint32_t line;
@@ -1067,9 +1076,11 @@ void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart)
 
 // ── The stall tripwire (FRAME_CLOCK.md § 8) ────────────────────────────────
 // With the hold rule, composed damage reaches the glass within two of the
-// compositor's passes, and its loop turns at least once a lease even when
-// stopped. So a half second with damage owed and nothing shown, or with
-// the loop standing still, is a fault, and this names it: once an episode,
+// compositor's passes, and with work to do its loop turns at least once a
+// frame, because the claim gives it its CPU. So more than half a second
+// with damage owed and nothing shown, or with work to do (the clock
+// running, or damage waiting to be composed) and the loop standing still,
+// is a fault, and this names it: once an episode,
 // under DEBUG_EXCEPTIONS, with where the compositor was, its state, what its
 // CPU was running and what that CPU's passes and timer did. It logs; it
 // does not heal. Called from the BSP's pass once a tick, holding the queue
@@ -1119,7 +1130,12 @@ void gui_frame_clock_watch_locked(void)
 	uint64_t owed_since = s_fc_owed_since_us;
 	uint64_t still_us = now - beat_us;
 	uint64_t unshown_us = owed_since != 0 && now > owed_since ? now - owed_since : 0;
-	bool stalled = still_us > FC_STALL_US || unshown_us > FC_STALL_US;
+	// A still loop counts only while there is something to do: stopped with
+	// nothing pending, a compositor sharing its CPU with threads pinned there
+	// may wait its turn by aging for longer than the bound, and that is the
+	// CPU being shared, not a stall.
+	bool busy = s_fc_running || kPendingDamageCount != 0;
+	bool stalled = (busy && still_us > FC_STALL_US) || unshown_us > FC_STALL_US;
 
 	if (stalled && !in) {
 		in = true;

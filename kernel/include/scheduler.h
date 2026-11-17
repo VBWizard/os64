@@ -87,9 +87,9 @@
 	void scheduler_wake_task_waiter(task_t *task, thread_t *waiter);
     bool in_scheduler_context(void);
 	// The thread the queues say is running on `cpu` (the RUNNING thread that
-	// last switched in there), or NULL while its pass is mid-switch. Caller
-	// holds the queue lock, and the pointer is good only while it does. For
-	// reports, not decisions.
+	// last switched in there), or NULL when none did (a CPU that has not
+	// dispatched yet). Caller holds the queue lock, and the pointer is good
+	// only while it does. For reports, not decisions.
 	thread_t *scheduler_cpu_tenant_locked(uint32_t cpu);
 	// A CPU kept for the threads pinned to it while the compositor's frame
 	// clock runs (FRAME_CLOCK.md § 9), or SCHED_NO_RESERVED_CPU. Written by
@@ -100,7 +100,7 @@
 	// CPU). The compositor publishes its thread and CPU once (CPU first,
 	// thread last; NULL = the clock is off), and the instant its next frame's
 	// window opens, which is its wake: kSchedFrameDueUs, micros_now()'s
-	// clock, 0 while no frame is planned. From that instant until the
+	// clock, 0 while the clock is stopped. From that instant until the
 	// compositor publishes the next one, a pass on its CPU takes it over
 	// aging (expedite), and anything else dispatched there before it has its
 	// lease cut at it. A nudge owed a pick (gui_frame_nudge) is

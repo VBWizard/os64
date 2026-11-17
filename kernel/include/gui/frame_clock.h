@@ -178,7 +178,8 @@ uint64_t frame_clock_aim_bound_us(const fc_frame_t *f, uint32_t margin_us);
 uint64_t frame_clock_lines_us(const fc_frame_t *f, uint32_t lines);
 
 // Why a frame was late, for the cure: the compositor was off its CPU (a
-// pass gave the CPU to another thread); the wake came too late (a wake on
+// pass gave the CPU to another thread between its wake and its aim); the
+// wake came too late, including a wake that lost the CPU (a wake on
 // time, with the same pass, would have made the blank); the pass ran long
 // (it would not have fit even from an on-time wake); or the pass ended in
 // time and the sweep was past anyway when the aim looked (the sleep after

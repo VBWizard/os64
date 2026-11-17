@@ -218,7 +218,8 @@ must be one `cat`.
 - its wakes: how many the compositor slept toward, how many of its sleeps
   halted (before a frame and after its pass), the timer's fires on its CPU
   split three ways (its own wakes; a co-tenant's lease cut at its wake;
-  the lease's expiries; the first two together match the halts), and how late
+  the lease's expiries; the first two together roughly match the halts),
+  and how late
   each wake arrived, in buckets doubling from 50 µs;
 - the stall tripwire's episodes and the longest (FRAME_CLOCK.md § 8).
 

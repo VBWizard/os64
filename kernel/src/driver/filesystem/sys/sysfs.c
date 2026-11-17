@@ -1675,8 +1675,9 @@ static void sys_gen_gui_frame_clock_state(synth_text_t *t, const gui_composite_c
 	// CPU's timer passes, split three ways: its own wakes, a co-tenant's
 	// lease cut at its wake, and the lease's expiries (scheduler.c, where
 	// the split is close, not exact). A halted sleep ends at one of the
-	// first two, so together they match the halts, give or take the sleeps
-	// an interrupt ended at their instant.
+	// first two, so together they roughly match the halts: a little over
+	// when a wake fires early and is set again inside the same sleep, a
+	// little under when an interrupt ends a sleep at its instant.
 	const uint64_t *w = comp->clk.wake_late;
 	synth_text_addf(t, "frame clock wakes: %lu, %lu sleeps halted (timer on CPU %u: %lu frame wakes, "
 	                "%lu cut leases, %lu lease expiries); "
@@ -1686,8 +1687,8 @@ static void sys_gen_gui_frame_clock_state(synth_text_t *t, const gui_composite_c
 	                w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
 	// The tripwire: none is the expected number. DEBUG_EXCEPTIONS has the
 	// report of each (compositor.c, gui_frame_clock_watch_locked).
-	synth_text_addf(t, "frame clock stalls: %lu, longest %lu ms (half a second or more with damage "
-	                "owed and nothing shown, or the compositor's loop still)\n",
+	synth_text_addf(t, "frame clock stalls: %lu, longest %lu ms (over half a second with damage "
+	                "owed and nothing shown, or with work to do and the compositor's loop still)\n",
 	                s.stalls, s.stall_longest_us / 1000);
 }
 

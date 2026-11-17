@@ -247,9 +247,15 @@ static void sched_frame_claim_locked(core_local_storage_t *cls)
 // The cut: a thread other than the compositor dispatched on its CPU before
 // the compositor's window opens runs only until it opens. Returns true with
 // the time left when the lease is to be cut; false for a dispatch the claim
-// does not concern, and when the window is already open (the compositor
-// then is in no state to run, or the claim would have picked it, so the
-// plain lease is right).
+// does not concern.
+//
+// The window can open between the claim's look at the clock and this one
+// (a frame wake that fires a few microseconds early does exactly that), so
+// a window found open here with the compositor RUNNABLE is a claim missed
+// by microseconds: the lease is cut to nothing (one tick), and the pass
+// that fire runs takes the CPU back. With the window open and the
+// compositor in any other state (parked in a kernel wait) there is nothing
+// to give the CPU back to, and the plain lease is right.
 static bool sched_frame_cut_us(core_local_storage_t *cls, thread_t *dispatched, uint64_t *in_us)
 {
 	thread_t *t = kSchedFrameThread;
@@ -257,8 +263,14 @@ static bool sched_frame_cut_us(core_local_storage_t *cls, thread_t *dispatched, 
 		return false;
 	uint64_t due = kSchedFrameDueUs;
 	uint64_t now = micros_now();
-	if (due == 0 || now >= due)
+	if (due == 0)
 		return false;
+	if (now >= due) {
+		if (t->threadState != THREAD_STATE_RUNNABLE)
+			return false;
+		*in_us = 0;   // frame_clock_timer: never zero, one tick
+		return true;
+	}
 	*in_us = due - now;
 	return true;
 }
