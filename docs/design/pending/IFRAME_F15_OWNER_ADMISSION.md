@@ -1,5 +1,7 @@
 # F15 — explicit private metadata admission
 
+Implementation PR: **#639**, source `88e74211`; depends on #638/#635.
+
 Depends on [runtime identity](IFRAME_F15_RUNTIME_IDENTITY.md) (#638) and the
 [issuer](IFRAME_F15_INCARNATION.md) (#635). Proof baseline `763c6fda`, engine
 `ab1447d8`, embedding ABI 5. This reserves bounded storage; it does not select
