@@ -796,6 +796,10 @@ static void test_timer(void)
 	CHECK(t.count == 63, "a microsecond is 62.5 ticks, rounded up so it never fires early: %u", t.count);
 	t = frame_clock_timer(1ull << 50, tps, 0);
 	CHECK(t.count == 0xFFFFFFFFu, "a wake past the register's reach is the most it holds");
+	// 295,147,905,180 us times 62.5 MHz passes 2^64 by about 40 billion: a
+	// product left to wrap would come out a few hundred microseconds.
+	t = frame_clock_timer(295147905180ull, tps, 0);
+	CHECK(t.count == 0xFFFFFFFFu, "a wake whose ticks would wrap 64 bits is the most, not a few: %u", t.count);
 	t = frame_clock_timer(5000, 10, 1);
 	CHECK(t.count == 1 && !t.wake_first, "a lease too short to count is one tick");
 }

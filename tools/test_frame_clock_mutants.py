@@ -117,7 +117,7 @@ mutants = [
     ('the-wake-is-the-blank', '	p.wake_at_us = p.blank_at_us - lead_us;', '	p.wake_at_us = p.blank_at_us;'),
     ('the-lead-is-not-asked-for', 'uint64_t earliest = now_us * 1000 + (uint64_t)lead_us * 1000;', 'uint64_t earliest = now_us * 1000;'),
     ('the-blank-has-no-length', 'return blank_at_us + (blank_lines * f->period_ns / f->lines + 999) / 1000;', 'return blank_at_us + 0 * blank_lines;'),
-    ('the-blank-is-not-a-copy', '	if (frame_clock_in_blank(f, line))\n		return FC_AIM_COPY;', '	if (0)\n		return FC_AIM_COPY;'),
+    ('the-blank-is-not-a-copy', '	if (frame_clock_in_blank(f, line))\n		return FC_AIM_COPY;', '	if (frame_clock_in_blank(f, line) && 0)\n		return FC_AIM_COPY;'),
     ('late-as-the-blank-begins', 'return now_us >= frame_clock_blank_end_us(f, blank_at_us) ? FC_AIM_LATE : FC_AIM_WAIT;',
      'return now_us >= blank_at_us ? FC_AIM_LATE : FC_AIM_WAIT;'),
     ('never-late', 'return now_us >= frame_clock_blank_end_us(f, blank_at_us) ? FC_AIM_LATE : FC_AIM_WAIT;',
