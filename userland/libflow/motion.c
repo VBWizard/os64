@@ -1978,6 +1978,10 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
             round_i32(fmax(lerp(va, vb, t), 0));
         return true;
     }
+    // A number, as the flex factors are.
+    case GARB_BOX_FLEX:
+        d->box_flex = round_i32(fmax(lerp(a->box_flex, b->box_flex, t), 0));
+        return true;
     case GARB_FLEX_BASIS:
         if (!mix_nonneg(a->flex_basis, b->flex_basis, t, &d->flex_basis))
             break;

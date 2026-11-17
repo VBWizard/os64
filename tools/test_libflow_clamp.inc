@@ -172,6 +172,8 @@ static void legacy_flex_cases(void)
                      "<div class='b rev'><i id=r></i><b></b></div>"
                      "<div class=b><i id=o class=late></i><b id=o2></b></div>"
                      "<div class=b><i id=x class=flexy></i><b></b></div>"
+                     // A factor below one still takes all the free space.
+                     "<div class=b><i id=h style=-webkit-box-flex:.5></i><b></b></div>"
                      // The direction is inherited: the inner box runs
                      // backwards too.
                      "<div class='b rev'><div class=b><i id=ri></i><b></b></div></div>",
@@ -199,6 +201,9 @@ static void legacy_flex_cases(void)
     const flow_box_t *x = box_with_id(t, d, "x");
     expect("legacy box: an item's own flex properties are not read",
            x != NULL && x->rect.w == 50, NULL);
+    const flow_box_t *h = box_with_id(t, d, "h");
+    expect("legacy box: a factor below one takes all the free space (Flexbox's takes half)",
+           h != NULL && h->rect.w == 150, NULL);
     const flow_box_t *ri = box_with_id(t, d, "ri");
     expect("legacy box: -webkit-box-direction is inherited", ri != NULL && ri->rect.x == 150,
            NULL);
@@ -244,9 +249,25 @@ static void clamp_computed_cases(void)
     sheeted_close(&p);
 }
 
+// An animated -webkit-box-flex moves as a number, and what it makes of the
+// item's flex factors follows it: halfway from 0 to 4 is 2.
+static void legacy_motion_cases(void)
+{
+    Moving m;
+    moving_open(&m, MOTION_STYLE "@keyframes g{from{-webkit-box-flex:0}to{-webkit-box-flex:4}}"
+                    "</style><div style='display:-webkit-box;width:300px'>"
+                    "<p id=a style='margin:0;animation-name:g;" AT("0.5") "'></p></div>", 1000);
+    const flow_style_t *s = moving_style(&m, "a");
+    expect("legacy box: an animated -webkit-box-flex is interpolated, and is the item's grow",
+           s != NULL && s->box_flex == 2000 && s->flex_grow == 2000 && s->flex_shrink == 2000,
+           NULL);
+    moving_close(&m);
+}
+
 static void clamp_cases(void)
 {
     clamp_layout_cases();
     legacy_flex_cases();
     clamp_computed_cases();
+    legacy_motion_cases();
 }

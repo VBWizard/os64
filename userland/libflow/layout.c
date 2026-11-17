@@ -3539,9 +3539,12 @@ static int64_t outer(const FlexItem *it, int64_t size)
 // taken back by flex-shrink weighted by each item's inner base size; an
 // item a share carries past a limit is frozen there and the rest share
 // again. The line is `idx[0..n)`, and `space` its inner main size less its
-// gaps. `parts` and `w` are working memory for n shares and n weights.
+// gaps. `parts` and `w` are working memory for n shares and n weights. A
+// legacy box's factors (`legacy`, flow_style_t.legacy_box) are weights
+// alone: they share all of the space however small their sum, where
+// Flexbox's below one share only that fraction of it.
 static void resolve_flex(FlexItem *items, const int32_t *idx, int32_t n, int64_t space,
-                         int64_t *parts, double *w)
+                         int64_t *parts, double *w, bool legacy)
 {
     int64_t hyp_sum = 0;
     for (int32_t i = 0; i < n; i++)
@@ -3571,7 +3574,7 @@ static void resolve_flex(FlexItem *items, const int32_t *idx, int32_t n, int64_t
         if (!any)
             break;
         // Factors that sum below one share only that fraction.
-        if (factors < 1000) {
+        if (factors < 1000 && !legacy) {
             int64_t part = initial * factors / 1000;
             if ((part < 0 ? -part : part) < (rem < 0 ? -rem : rem))
                 rem = part;
@@ -4141,7 +4144,7 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
         const int32_t *idx = ord + lines[li].first;
         int32_t m = lines[li].count;
         int64_t space = size - gap * (m - 1);
-        resolve_flex(items, idx, m, space, r->w, r->weights);
+        resolve_flex(items, idx, m, space, r->w, r->weights, b->style->legacy_box);
         int64_t free = space;
         lines[li].cross = 0;
         for (int32_t i = 0; i < m; i++) {
@@ -4421,7 +4424,7 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             const int32_t *idx = ord + lines[li].first;
             int32_t m = lines[li].count;
             int64_t space = cw - gap * (m - 1);
-            resolve_flex(items, idx, m, space, r.w, r.weights);
+            resolve_flex(items, idx, m, space, r.w, r.weights, s->legacy_box);
             int64_t free = space;
             for (int32_t i = 0; i < m; i++)
                 free -= outer(&items[idx[i]], items[idx[i]].target);
