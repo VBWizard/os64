@@ -141,10 +141,20 @@ void ap_enable_schedulers();
 
 // The tickless preemption lease (smp_core.c doctrine): arm a one-shot LAPIC
 // deadline for the dispatched thread / stop the timer for an idle dispatch.
-// Core-local by nature — call only for the core you are standing on, from
-// scheduler_do's dispatch tail.
+// Core-local by nature — call only for the core you are standing on (the
+// dispatch tail, and frame_wake_cancel restoring what the tail would leave).
 void sched_backstop_arm(core_local_storage_t *cls);
 void sched_backstop_disarm(void);
+// The compositor's frame wake, the timer's second writer (smp_core.c has
+// the invariant the two share it by): set this CPU's one-shot to fire in
+// `wake_in_us` or at the lease, whichever is sooner; or cancel it back to
+// the lease alone. Interrupts off, on the compositor's own CPU.
+// frame_wake_cut is the same timer for another thread dispatched there,
+// its lease cut at the compositor's wake (the dispatch tail's), counted
+// apart.
+void frame_wake_set(uint64_t wake_in_us);
+void frame_wake_cut(uint64_t wake_in_us);
+void frame_wake_cancel(void);
 
 static inline core_local_storage_t* get_core_local_storage(void)
 {

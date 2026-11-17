@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 // The GUI is an optional subsystem, like AHCI/NVMe: the OS runs fully without
 // it. Enabled via the GUI kernel cmdline flag; when off, nothing GUI-related
@@ -14,11 +15,51 @@ extern bool kEnableGUI;
 // kEnableGUI is set.
 void gui_start(void);
 
-// Where the compositor will be pinned: a CPU number, or THREAD_NO_AFFINITY
-// (tickless mode / single core). kernel_init uses this to route the input
-// IRQs (1, 12) at the same core, so a keystroke or mouse packet ends the
-// compositor's hlt-wait directly instead of waiting for a scheduler pass.
+// Where the compositor will be pinned: a CPU number, or THREAD_NO_AFFINITY.
+// kernel_init uses this to route the input IRQs (1, 12) at the same core,
+// so a keystroke or mouse packet ends the compositor's hlt-wait directly
+// instead of waiting for a scheduler pass. Decided from boot facts alone,
+// so it gives the same answer before gui_start as after.
 uint64_t gui_compositor_affinity(void);
+
+// The frame clock's nudge (FRAME_CLOCK.md § 9): new damage, input or a
+// return to the screen calls it, and when the compositor is halted with the
+// clock stopped, its CPU is interrupted so the halt ends now, not at the
+// lease. Takes no lock: callable under kGuiLock, under the input queue's
+// lock, and from interrupt handlers. A burst costs one interrupt (the first
+// call takes the flag that says the compositor is halted).
+void gui_frame_nudge(void);
+
+// What the frame clock is doing, for /sys/gui. `restart` starts the
+// since-read times again. The counts live with the compositor's
+// (gui_lock_counts); this is the clock's state, place and times.
+typedef struct {
+	const char *off_why;        // NULL while the clock is on
+	bool running;               // else stopped
+	const char *stop_why;       // why it is stopped
+	bool free;                  // running without a beam
+	uint32_t cpu;               // the compositor's CPU
+	bool reserve_dial;          // /sys/gui's `reserve on|off`
+	bool reserve_applies;       // enough CPUs for the reservation at all
+	bool reserved;              // in force now
+	uint32_t lead_us;           // the lead in use
+	uint64_t running_us, stopped_us, starts;
+	uint64_t running_since_read_us, stopped_since_read_us, starts_since_read;
+	uint64_t frame_wake_fires, cut_fires, lease_fires;   // timer fires on its CPU, since boot
+	uint64_t stalls, stall_longest_us;        // the stall tripwire's episodes, since boot
+} gui_frame_clock_status_t;
+void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart);
+
+// The stall tripwire (FRAME_CLOCK.md § 8): from the BSP's pass, once a
+// tick, with the scheduler's queue lock held. Logs an episode of more than
+// half a second with damage owed and nothing shown, or with work to do and
+// the compositor's loop standing still; never acts on one.
+void gui_frame_clock_watch_locked(void);
+
+// A line written to /sys/gui: `reserve on` or `reserve off` (the
+// reservation's dial), or `stall <ms>`, 1 to 5000 (the compositor stands
+// still once, which is how the stall tripwire is proved). 0 if taken.
+long gui_frame_clock_command(const char *line, size_t length);
 
 // The compositor daemon thread body (task_create name-matches "/guicomp" to
 // this, same recipe as logd/kworker). daemon=true means loop forever.
@@ -76,8 +117,9 @@ bool gui_owns_glass(void);
 // that is forever. Its pixels live for the life of the machine once
 // allocated; /dev/glass reads them (gui/glass.h).
 const surface_t *gui_backbuffer(void);
-// tty_focus's handoff INTO the GUI: one lock-free store (safe from the
-// keyboard IRQ, where VT switches happen); the compositor converts it to a
+// tty_focus's handoff INTO the GUI: one lock-free store and the frame
+// clock's nudge, which takes no lock either (both safe from the keyboard
+// IRQ, where VT switches happen); the compositor converts it to a
 // full-screen repaint on its next frame.
 void gui_vt8_focus_gained(void);
 

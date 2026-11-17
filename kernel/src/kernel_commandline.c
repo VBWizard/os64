@@ -18,6 +18,7 @@ extern int  kUsbImod;
 extern bool kEnableNet;
 extern bool kEnableR8125;
 extern bool kNetPoll;
+extern bool kNoFrameClock;
 extern bool kFPUNoAVX;            // fpu.c — NOAVX
 // Static IPv4 configuration strings (ipv4.c owns them; empty = the 10.0.2.x
 // NAT-convention defaults shared by QEMU slirp and VirtualBox NAT). DHCP
@@ -377,6 +378,10 @@ static cmdopt_t cmdopts[] = {
     // no INTx probe, no MSI — and knet wakes only when processSignals rings
     // it. The path that carried every packet before the doorbell existed.
     {"NETPOLL", OPT_BOOL, &kNetPoll, true, 0},
+    // The frame clock's flashlight (FRAME_CLOCK.md § 8): today's tick-paced
+    // compositor for this boot, F1's measurement still running so the two
+    // can be compared. Like every token it does not travel to the P5.
+    {"NOFRAMECLOCK", OPT_BOOL, &kNoFrameClock, true, 0},
     // The AVX flashlight (AVX.md): `sse` mode — FXSAVE switch, CR4.OSXSAVE
     // clear, AVX #UD at ring 3 — on a CPU that could run `avx`. The BSP's
     // fpu_init_this_cpu reads it when it decides the boot's mode.

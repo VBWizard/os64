@@ -154,9 +154,11 @@ the waits by length in buckets doubling from 1 ms.
 **Why.** The compositor copies finished pixels to the framebuffer at
 whatever moment its pass runs, and the display reads that memory top to
 bottom once a refresh. When the copy overtakes the sweep the picture
-splits: that is tearing, and on the P5 every moving edge does it
-(FRAME_CLOCK.md). Before the frame clock aims the copy at the blank (slice
-F2), the tearing is measured, so F2 has a "before" to be judged against.
+splits: that is tearing, and on the P5 every moving edge does it with the
+frame clock off (FRAME_CLOCK.md). The measurement is the same with the
+clock on or off, so the two can be compared on one machine: off, it is the
+tearing; on, a torn copy is one the compositor was held off in the middle
+of.
 
 **What.** A `frame clock:` block in `/sys/gui`:
 - the source: the beam's driver and where it found the display core, or
@@ -172,12 +174,13 @@ F2), the tearing is measured, so F2 has a "before" to be judged against.
 
 Without a beam the block is three lines saying so.
 
-- A copy is one pass's flush. When there is a beam and the pass has
-  something to flush, the compositor reads the line before the first
-  rectangle and after the last, and the pure verdict (`frame_clock_judge`,
-  `gui/frame_clock.h`) judges the copy: its pieces are the rectangles in the
-  order flushed, each copied top to bottom, sharing the copy's time by their
-  pixels. A piece is torn when one sweep reads some of its rows new and some
+- With the clock off, a copy is one pass's flush: the compositor reads the
+  line before the first rectangle and after the last, and the pure verdict
+  (`frame_clock_judge`, `gui/frame_clock.h`) judges it, its pieces the
+  rectangles in the order flushed, each copied top to bottom, sharing the
+  copy's time by their pixels. With the clock on, a copy is the clock's
+  copy at the blank, begun at the aim's last reading, and its pieces are
+  its strips. A piece is torn when one sweep reads some of its rows new and some
   old; a copy lasting a whole frame or more is torn whatever the sweeps read.
 - Two reads a pass, outside the lock, where the flush already is; no lock
   and no wait of their own. The results are the compositor thread's alone
@@ -191,3 +194,49 @@ Without a beam the block is three lines saying so.
 | The beam's facts | at `beam_init`, before the compositor exists | a withdrawal writes its reason, then clears `present`, on the compositor thread | by the compositor (the line) and `/sys/gui` (the facts and reason) | never |
 | A pass's copy, judged | after its flush, by the compositor thread | — | folded at the next pass, under the lock | zeroed by the fold |
 | The frame clock's counts | zero at boot | at the fold, under the lock | by `/sys/gui` (`gui_lock_counts`) | never; the since-read counts restart at each read |
+
+## The frame clock, running
+
+**Why.** With the clock on (FRAME_CLOCK.md § 9), the compositor's pace is
+its own: a CPU of its own while it runs, a wake before each blank, frames
+held late once rather than shown torn. Each of those can go wrong in a way that
+only numbers show, and "was a CPU withheld, and for how much of the time"
+must be one `cat`.
+
+**What.** Above the beam's lines, `/sys/gui`'s `frame clock:` block gains:
+- the state now: off and why, running (aimed at the beam, or free without
+  one), or stopped and why;
+- the compositor's CPU, and whether it is reserved (shared below four
+  CPUs, when the dial says `reserve off`, or while the clock is stopped);
+- the time the clock has run and stood stopped, and how many times it
+  started;
+- frames, the missed blanks by cause (off its CPU, the wake, the pass,
+  past the blank, overran the aim), and the frames forced onto the glass
+  after being held once (FRAME_CLOCK.md § 3);
+- the lead in use, and the aims that ended in a copy: their number,
+  average and longest polling time;
+- its wakes: how many the compositor slept toward, how many of its sleeps
+  halted (before a frame and after its pass), the timer's fires on its CPU
+  split three ways (its own wakes; a co-tenant's lease cut at its wake;
+  the lease's expiries; the first two together roughly match the halts),
+  and how late
+  each wake arrived, in buckets doubling from 50 µs;
+- the stall tripwire's episodes and the longest (FRAME_CLOCK.md § 8).
+
+Counts and times are since boot and since the file was last read. Writing
+`reserve on` or `reserve off` to `/sys/gui` sets the reservation's dial.
+
+- The counts are the compositor thread's, kept outside the lock and
+  folded at the next pass's hold, as the copies above are. A stopped clock
+  makes passes at the lease, so a read is at most a lease behind.
+- The times have one writer, the compositor thread, at each change of
+  state, under the lock; a read adds the stretch under way under the same
+  lock, which also keeps one reader's since-read baseline at a time, so a
+  read never sees the times half moved.
+
+| State | Begun | Changed | Read | Let go |
+|---|---|---|---|---|
+| The clock's counts | zero at boot | at the fold, under the lock | by `/sys/gui` (`gui_lock_counts`) | never; the since-read counts restart at each read |
+| The clock's state and times | at `gui_start` (off or on) and the compositor's start (stopped) | at each start and stop, by the compositor thread, under the lock | by `/sys/gui` (`gui_frame_clock_status`), under the lock | never; the since-read baseline restarts at each read |
+| The dial | on at boot | by a `/sys/gui` write, from any thread | by the compositor, at each frame | never |
+| The reservation | none | by the compositor thread, from the state and the dial | by every scheduler pass (FRAME_CLOCK.md § 9) | when the clock stops |

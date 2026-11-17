@@ -406,9 +406,9 @@ priority class so the wall clock is unstealable no matter what a pass does.
    find-then-run stays atomic). Requirement from Chris: DEBUG_DETAILED must
    be slow-but-honest, never a lockup.
 5. MAX_CPUS=24 vs. the 3900X boundary (above).
-6. Tickless + GUI coexistence: needs only the damage-wake nudge IPI (see
-   the tickless section) — `gui_start()`'s pin refusal is tick-spin-era
-   conservatism kept until that exists.
+6. ~~Tickless + GUI coexistence~~ — PAID by the frame clock (FRAME_CLOCK.md
+   § 9): the compositor is pinned to the last CPU with the clock on, wakes by
+   its own CPU's timer, and is nudged when stopped.
 7. Wall-clock hardening (the autopsy's structural fixes): early EOI via the
    prologue reorder, and/or IRQ0 above the scheduler's priority class.
 8. `kSchedulerSwitchTasksLock` is raw and non-irqsave, and is taken from

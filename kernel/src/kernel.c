@@ -164,6 +164,10 @@ int kUsbImod = -1;
 // Set by NETPOLL — every NIC stays tick-driven: no INTx probe, no MSI, and
 // knet wakes only when processSignals rings it (DOORBELL.md's flashlight).
 bool kNetPoll = false;
+// Set by NOFRAMECLOCK — the compositor paced as it was before the frame
+// clock: the tick, no pin under tickless, no reservation (FRAME_CLOCK.md § 8,
+// the flashlight).
+bool kNoFrameClock = false;
 // Cleared by the NOTESTS cmdline flag to skip ALL test execution (pre-boot,
 // post-boot, and the disk/VFS tests) — used to isolate a boot hang by booting
 // with no test code in the path.

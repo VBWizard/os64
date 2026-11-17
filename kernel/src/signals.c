@@ -22,6 +22,7 @@
 #include "driver/system/usb/xhci.h"
 #include "doorbell.h"   // the net drainer's bell — rung once per tick
 #include "random.h"     // the entropy pool's tick source — stirred once per tick
+#include "gui/compositor.h"   // the frame clock's stall tripwire — looks once per tick
 #include "knet.h"
 #include "kusb.h"                // kUsbDoorbell — the tick rings it
 #include "audio/audio.h"   // kAudioDoorbell, kAudioClocked — the null sink's pump
@@ -963,6 +964,10 @@ void processSignals()
 	{
 		s_random_stirred_at_tick = kTicksSinceStart;
 		random_add_timing(RANDOM_SOURCE_TICK);
+		// The frame clock's stall tripwire looks once a tick, from here
+		// because this pass holds the queue lock it needs to name a CPU's
+		// thread, and the BSP is never the compositor's CPU.
+		gui_frame_clock_watch_locked();
 	}
 
 	// The doorbell fixture (test_doorbell_wakes_sleeper) arms this so the

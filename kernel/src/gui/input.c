@@ -160,6 +160,7 @@ static void enqueue_locked(input_event_t *ev)
 	ev->tick = kTicksSinceStart;
 	s_queue[s_head] = *ev;
 	s_head = next;
+	gui_frame_nudge();   // after the event is in: a stopped frame clock wakes for it
 }
 
 void input_inject_key(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed)

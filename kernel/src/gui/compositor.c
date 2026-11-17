@@ -22,6 +22,8 @@
 #include "os64/damage.h"       // the damage list's rule, shared with libos64
 #include "driver/system/x86_64.h"   // rdtsc — the lock times itself for /sys/gui
 #include "micros.h"          // micros_now — a publish's wait to reach the glass
+#include "memory/memcmp.h"   // memcmp — /sys/gui's dial lines
+#include "strings/sprintf.h" // snprintf — the stall tripwire's report
 #include "driver/display/beam.h"   // where the display's sweep is, for the frame clock's verdict
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
@@ -46,9 +48,14 @@ extern struct Framebuffer kFrameBuffer;
 bool kEnableGUI = false;
 
 extern bool kTicklessScheduler;
+extern bool kNoFrameClock;                            // NOFRAMECLOCK: the clock is off this boot
+extern volatile uint64_t kFrameWakeFires[];           // scheduler.c: frame wakes per CPU
+extern volatile uint64_t kFrameCutFires[];            // scheduler.c: co-tenants' cut leases per CPU
+extern volatile uint64_t kSchedBackstopFires[];       // scheduler.c: lease expiries per CPU
+extern volatile uint64_t kDiagPassCount[];            // scheduler.c: passes per CPU
 
-// The compositor task, created by gui_start(). Kept for future use
-// (diagnostics, wake-on-damage once an IRQ-safe wake primitive exists).
+// The compositor task, created by gui_start(). Kept for diagnostics (the
+// frame clock's wake on damage is gui_frame_nudge, which needs only the CPU).
 task_t *kGuiCompTask = NULL;
 
 // ---------------------------------------------------------------------------
@@ -124,6 +131,7 @@ void gui_lock_counts(gui_lock_count_t *out, gui_composite_count_t *comp, bool re
 	if (restart) {
 		s_composite_counts.glass_wait_max_since_read_us = 0;
 		s_composite_counts.fc_since_read = (gui_frame_copies_t){ 0 };
+		s_composite_counts.clk_since_read = (gui_frame_clock_count_t){ 0 };
 	}
 	gui_unlock(flags);
 }
@@ -210,6 +218,7 @@ static volatile bool s_glass_regained = false;
 void gui_vt8_focus_gained(void)
 {
 	s_glass_regained = true;
+	gui_frame_nudge();
 }
 
 // The desktop: bottom layer of the scene, painted once at startup. Windows
@@ -217,7 +226,9 @@ void gui_vt8_focus_gained(void)
 static surface_t kDesktop;
 
 // ---------------------------------------------------------------------------
-// Frame pacing: hlt-wait, always.
+// Frame pacing: hlt-wait. With the frame clock on, the clock paces (its
+// section below; FRAME_CLOCK.md § 9), and its stopped state is exactly this
+// hlt-wait plus a nudge. What follows is the pacing with the clock off.
 //
 // The compositor never sleeps through the scheduler and never busy-waits:
 // it HALTS its core until something interrupt-shaped happens. Because
@@ -293,6 +304,7 @@ void gui_damage_add_locked(rect_t screen_rect)
 	if (os64_damage_add(kPendingDamage, &kPendingDamageCount, DAMAGE_MAX_RECTS, DAMAGE_MERGE_SLACK,
 	                    screen_rect))
 		s_composite_counts.collapses++;
+	gui_frame_nudge();   // after the damage is in: the compositor looks for it next
 }
 
 // ---------------------------------------------------------------------------
@@ -423,26 +435,61 @@ static void frame_copies_add(gui_frame_copies_t *into, const gui_frame_copies_t 
 		into->bands[b] += from->bands[b];
 }
 
-// The copies the previous pass judged, into the counts. Under kGuiLock.
-static void frame_clock_fold_locked(void)
+// What the frame clock did since the last fold (the clock's section below),
+// kept and folded the same way.
+static gui_frame_clock_count_t s_fc_clk_owed;
+
+static void frame_clock_counts_add(gui_frame_clock_count_t *into, const gui_frame_clock_count_t *from)
 {
-	if (s_fc_owed.copies == 0)
-		return;
-	frame_copies_add(&s_composite_counts.fc, &s_fc_owed);
-	frame_copies_add(&s_composite_counts.fc_since_read, &s_fc_owed);
-	s_fc_owed = (gui_frame_copies_t){ 0 };
+	into->frames += from->frames;
+	for (int c = 0; c < FC_LATE_CAUSES; c++)
+		into->late[c] += from->late[c];
+	into->forced += from->forced;
+	into->aims += from->aims;
+	into->aim_us += from->aim_us;
+	if (from->aim_max_us > into->aim_max_us)
+		into->aim_max_us = from->aim_max_us;
+	into->wakes += from->wakes;
+	into->halts += from->halts;
+	for (int k = 0; k < FC_WAKE_BUCKETS; k++)
+		into->wake_late[k] += from->wake_late[k];
 }
 
-// One pass's copy, begun with the sweep at `begin_line` at `begin_us`.
-// Compositor thread, outside the lock, right after the flush.
-static void frame_clock_judge_copy(const rect_t *damage, uint32_t count, uint32_t begin_line,
-                                   uint64_t begin_us)
+// The copies the previous pass judged, and what the clock did, into the
+// counts. Under kGuiLock.
+static void frame_clock_fold_locked(void)
+{
+	if (s_fc_owed.copies != 0) {
+		frame_copies_add(&s_composite_counts.fc, &s_fc_owed);
+		frame_copies_add(&s_composite_counts.fc_since_read, &s_fc_owed);
+		s_fc_owed = (gui_frame_copies_t){ 0 };
+	}
+	frame_clock_counts_add(&s_composite_counts.clk, &s_fc_clk_owed);
+	frame_clock_counts_add(&s_composite_counts.clk_since_read, &s_fc_clk_owed);
+	s_fc_clk_owed = (gui_frame_clock_count_t){ 0 };
+}
+
+// One copy, begun with the sweep at `begin_line` at `begin_us`, as pieces in
+// the order copied. Compositor thread, outside the lock, right after it.
+static void frame_clock_judge_pieces(const fc_piece_t *pieces, uint32_t n, uint32_t begin_line,
+                                     uint64_t begin_us)
 {
 	uint64_t end_us = micros_now();
 	uint32_t end_line;
 	fc_frame_t frame;
 	if (!beam_line(&end_line) || !beam_frame(&frame))
 		return;
+	fc_verdict_t v = frame_clock_judge(&frame, begin_line, end_line, end_us - begin_us, pieces, n);
+	s_fc_owed.copies++;
+	s_fc_owed.blank += v.began_in_blank;
+	s_fc_owed.torn += v.torn;
+	s_fc_owed.bands[v.band]++;
+}
+
+// A pass's flush with the clock off: its pieces are the rectangles flushed.
+static void frame_clock_judge_copy(const rect_t *damage, uint32_t count, uint32_t begin_line,
+                                   uint64_t begin_us)
+{
 	fc_piece_t pieces[DAMAGE_MAX_RECTS];
 	uint32_t n = 0;
 	for (uint32_t i = 0; i < count && n < DAMAGE_MAX_RECTS; i++) {
@@ -451,11 +498,732 @@ static void frame_clock_judge_copy(const rect_t *damage, uint32_t count, uint32_
 		pieces[n++] = (fc_piece_t){ damage[i].y, damage[i].y + damage[i].h,
 		                            (uint64_t)damage[i].w * (uint64_t)damage[i].h };
 	}
-	fc_verdict_t v = frame_clock_judge(&frame, begin_line, end_line, end_us - begin_us, pieces, n);
-	s_fc_owed.copies++;
-	s_fc_owed.blank += v.began_in_blank;
-	s_fc_owed.torn += v.torn;
-	s_fc_owed.bands[v.band]++;
+	frame_clock_judge_pieces(pieces, n, begin_line, begin_us);
+}
+
+// ---------------------------------------------------------------------------
+// The frame clock (FRAME_CLOCK.md § 3 to § 9; § 9's table is the states).
+//
+// With the clock on, a frame is: wake the lead before the blank (the CPU's
+// one-shot, frame_wake_set), today's pass, aim (poll the beam until the
+// blank begins), copy the frame top to bottom in strips, then plan the next.
+// A frame whose blank is missed is LATE: nothing is copied, the rectangles
+// are CARRIED, and the next frame copies them with whatever arrives since,
+// so a late frame costs a refresh and does not tear. A frame held once and
+// late again is FORCED, copied wherever the sweep is (fc_missed): it may
+// tear, but the screen never stands still. With nothing to show and
+// nobody waiting, the clock STOPS: the compositor halts as it does with the
+// clock off, and new work NUDGES it awake (gui_frame_nudge). Without a beam
+// the clock runs FREE: a sixtieth of a second on micros_now(), no aim.
+//
+// Everything here is the compositor thread's, outside kGuiLock, except what
+// says otherwise: the nudge's flag, the dial and the times, which are read
+// from other CPUs, and the reservation, which the scheduler reads.
+// ---------------------------------------------------------------------------
+#define FC_STRIP_ROWS  32      // a strip's height; 45 strips at 1440 rows
+#define FC_COPY_PIECES 128     // pieces the verdict is given, one a strip
+
+static const char *s_fc_off_why;       // decided once, at gui_start; NULL = on
+static uint32_t s_fc_cpu;              // the compositor's CPU while the clock is on
+static thread_t *s_fc_self;            // the compositor's thread
+static bool s_fc_running;              // running, else stopped
+static const char *volatile s_fc_stop_why = "nothing to show";
+static volatile bool s_fc_reserve_dial = true;     // /sys/gui's `reserve on|off`
+static volatile uint32_t s_fc_lead_now;            // the lead in use
+static fc_lead_t s_fc_lead;
+static fc_run_t s_fc_run;
+static bool s_fc_had_damage;           // the last pass drew something
+
+// The nudge's flag: true only while the compositor is halted with the clock
+// stopped. Set by the compositor with interrupts off before it halts, taken
+// (exchanged to false) by whoever nudges first.
+static volatile bool s_fc_halted_stopped;
+
+// How long the clock has run and stood stopped. One writer, the compositor
+// thread, at each change, under kGuiLock; /sys/gui adds the stretch under
+// way, under the same lock.
+static struct {
+	volatile uint64_t running_us, stopped_us, since_us, starts;
+} s_fc_time;
+
+// The frame being aimed at, from its plan to its copy or its lateness.
+static bool s_fc_planned;
+static uint64_t s_fc_wake_at, s_fc_blank_at, s_fc_woke, s_fc_free_ns, s_fc_loads;
+
+// The copy owed: rectangles composed and not yet on the framebuffer, and
+// the publishes behind them.
+static rect_t s_fc_carry[DAMAGE_MAX_RECTS];
+static uint32_t s_fc_carry_count;
+static glass_pending_t s_fc_glass_carry[GLASS_PENDING_MAX];
+static uint32_t s_fc_glass_carry_count;
+// Whether what is carried was held at a missed blank already (the hold
+// rule, frame_clock_hold_step). Whatever copies or drops the carry ends it.
+static fc_hold_t s_fc_hold;
+
+// The stall tripwire's view of the compositor (gui_frame_clock_watch_locked):
+// a beat a loop, where in the frame it is, and since when composed damage
+// has waited for the glass (0 = nothing owed). Written by the compositor,
+// read from the BSP's pass without a lock; a stale read moves a report by
+// a tick.
+typedef enum { FC_AT_PASS, FC_AT_SLEEP, FC_AT_COMPOSED, FC_AT_AIM, FC_AT_COPY, FC_AT_STOPPED, FC_AT_PLACES } fc_at_t;
+static volatile uint64_t s_fc_beat;
+static volatile uint32_t s_fc_at;
+static volatile uint64_t s_fc_owed_since_us;
+// The tripwire's record, for /sys/gui: written by the watcher alone.
+static struct {
+	volatile uint64_t episodes, longest_us;
+} s_fc_stall;
+// A stall asked for by /sys/gui's `stall <ms>` (gui_frame_clock_command),
+// taken by the compositor's loop at its next turn: the tripwire's proof.
+// While it is being served it counts as work, or a stall taken while the
+// compositor had nothing to do (the screen a text terminal's, say) would
+// prove nothing.
+static volatile uint64_t s_fc_test_stall_ms;
+static volatile bool s_fc_test_stalling;
+
+static fc_piece_t s_fc_pieces[FC_COPY_PIECES];
+
+// Why the clock is off this boot, or NULL. From boot facts alone, so
+// gui_compositor_affinity can ask before the compositor exists.
+static const char *frame_clock_off_why(void)
+{
+	if (kNoFrameClock)
+		return "NOFRAMECLOCK on the command line";
+	if (kCPUCount < 2)
+		return "one CPU: nowhere to pin the compositor";
+	if (!kTicklessScheduler)
+		return "SCHED=periodic: every CPU's timer is the periodic tick, not the compositor's to set";
+	// Without the lease nothing keeps the AP's timer masked between the
+	// compositor's writes, and scheduler_trigger would arm a stray one-shot
+	// in it (the frame wake shares the timer by the lease's discipline).
+	if (!kSchedBackstopEnabled)
+		return "NOBACKSTOP: no lease for the frame wake to share the timer with";
+	return NULL;
+}
+
+void gui_frame_nudge(void)
+{
+	if (!__atomic_exchange_n(&s_fc_halted_stopped, false, __ATOMIC_SEQ_CST))
+		return;
+	// The flag up means the compositor halted stopped, not that it still
+	// holds its CPU: a lease expiry since may have given the CPU to a thread
+	// that shares it, and the compositor waits RUNNABLE with the flag up.
+	// On the compositor's own CPU with the compositor current, this
+	// interrupt or call has already ended the halt by arriving, and nothing
+	// more is owed. Anywhere else (another CPU, or this one running someone
+	// else), a pass is sent, to itself if need be, and it carries the claim
+	// (scheduler.h): the pass gives the CPU to the compositor rather than to
+	// whoever aged most while it halted.
+	core_local_storage_t *cls = try_get_core_local_storage();
+	if (cls != NULL && cls->cpu == s_fc_cpu && cls->currentThread == s_fc_self)
+		return;
+	__atomic_store_n(&kSchedFrameNudged, true, __ATOMIC_SEQ_CST);
+	send_ipi(s_fc_cpu, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+}
+
+// The reservation follows the state and the dial. The compositor thread
+// alone writes it (FRAME_CLOCK.md § 9, the reservation).
+static void fc_apply_reserve(void)
+{
+	bool reserve = frame_clock_reserves(kCPUCount, s_fc_reserve_dial, s_fc_running);
+	int32_t want = reserve ? (int32_t)s_fc_cpu : SCHED_NO_RESERVED_CPU;
+	if (kSchedReservedCPU != want)
+		kSchedReservedCPU = want;
+}
+
+// The change is made under kGuiLock, which /sys/gui's read holds too
+// (gui_frame_clock_status), so a read never sees the times half moved: a
+// stretch counted twice there would become the since-read baseline and the
+// next read would wrap. A start or a stop is rare enough to pay for it.
+static void fc_set_running(bool running)
+{
+	if (running == s_fc_running)
+		return;
+	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
+	uint64_t now = micros_now();
+	uint64_t spent = now - s_fc_time.since_us;
+	if (s_fc_running)
+		s_fc_time.running_us += spent;
+	else
+		s_fc_time.stopped_us += spent;
+	s_fc_time.since_us = now;
+	if (running)
+		s_fc_time.starts++;
+	s_fc_running = running;
+	gui_unlock(flags);
+	fc_apply_reserve();
+}
+
+static void fc_carry_add(rect_t r)
+{
+	if (rect_is_empty(r))
+		return;
+	if (s_fc_carry_count == 0)
+		s_fc_owed_since_us = micros_now();
+	if (s_fc_carry_count < DAMAGE_MAX_RECTS) {
+		s_fc_carry[s_fc_carry_count++] = r;
+		return;
+	}
+	// Full: the last becomes the box around it and the newcomer. The strips
+	// copy each pixel once whatever overlaps (frame_clock_strip).
+	rect_t *last = &s_fc_carry[DAMAGE_MAX_RECTS - 1];
+	int32_t x0 = r.x < last->x ? r.x : last->x, y0 = r.y < last->y ? r.y : last->y;
+	int32_t x1 = r.x + r.w > last->x + last->w ? r.x + r.w : last->x + last->w;
+	int32_t y1 = r.y + r.h > last->y + last->h ? r.y + r.h : last->y + last->h;
+	*last = (rect_t){ x0, y0, x1 - x0, y1 - y0 };
+}
+
+// More publishes than the list holds share its last slot and that slot's
+// stamp, the oldest of them, as gui_glass_publish_locked's list does.
+static void fc_glass_carry_add(const glass_pending_t *taken, uint32_t count)
+{
+	for (uint32_t i = 0; i < count; i++) {
+		if (s_fc_glass_carry_count < GLASS_PENDING_MAX)
+			s_fc_glass_carry[s_fc_glass_carry_count++] = taken[i];
+		else
+			s_fc_glass_carry[GLASS_PENDING_MAX - 1].publishes += taken[i].publishes;
+	}
+}
+
+// What was carried will never reach the glass as composed (a text terminal
+// took the screen; its return repaints it all): the publishes are voided.
+static void fc_drop_carry(void)
+{
+	glass_settle(s_fc_glass_carry, s_fc_glass_carry_count, false);
+	s_fc_glass_carry_count = 0;
+	s_fc_carry_count = 0;
+	s_fc_owed_since_us = 0;
+	s_fc_hold = (fc_hold_t){0};
+	s_fc_planned = false;
+}
+
+// Halt until `wake_at`, setting the timer again after every return from the
+// halt, whatever ended it (the two-writers invariant, smp_core.c). A sleep
+// that halted at all is counted (`halts`): it ends at its own wake's fire,
+// or at a co-tenant's lease cut at that wake, so those two fires on this
+// CPU together are what it is compared with.
+static void fc_halt_until(uint64_t wake_at)
+{
+	bool halted = false;
+	for (;;) {
+		__asm__ volatile("cli" ::: "memory");
+		uint64_t now = micros_now();
+		if (now >= wake_at) {
+			__asm__ volatile("sti" ::: "memory");
+			if (halted)
+				s_fc_clk_owed.halts++;
+			return;
+		}
+		halted = true;
+		frame_wake_set(wake_at - now);
+		mpAcctHaltBegin();
+		__asm__ volatile("sti\n\thlt" ::: "memory");
+		mpAcctHaltEnd();
+	}
+}
+
+// Sleep until the frame's wake. The wake is published first as the frame's
+// window (kSchedFrameDueUs): from it until the next plan, a pass on this CPU
+// keeps the CPU for the compositor, and a thread that takes the CPU while
+// the compositor sleeps runs only until it.
+static void fc_sleep_until(uint64_t wake_at)
+{
+	s_fc_at = FC_AT_SLEEP;
+	kSchedFrameDueUs = wake_at;
+	fc_halt_until(wake_at);
+}
+
+// A frame wake slept toward, and how late it came (frame_clock_wake_bucket).
+// Also where "off its CPU" starts counting: the CPU may be shared while the
+// compositor sleeps (a co-tenant runs, and the cut gives the CPU back), so
+// only a switch-out between the wake and the aim is lateness's cause. A
+// wake that lost the CPU before the compositor got back counts as late
+// waking, which it was.
+static void fc_count_wake(void)
+{
+	s_fc_loads = s_fc_self->timesLoaded;
+	s_fc_clk_owed.wakes++;
+	s_fc_clk_owed.wake_late[frame_clock_wake_bucket(s_fc_woke - s_fc_wake_at)]++;
+}
+
+// Stopped: one halt, as the clock-off compositor's, with the timer the lease
+// alone and the nudge's flag raised. The flag goes up BEFORE the last look
+// for work, both with interrupts off, and a producer adds its work before it
+// takes the flag, so work that arrives after the look always finds the flag
+// up and interrupts the halt (sti's shadow delivers it at the hlt).
+static void fc_stopped_halt(void)
+{
+	s_fc_at = FC_AT_STOPPED;
+	__asm__ volatile("cli" ::: "memory");
+	__atomic_store_n(&s_fc_halted_stopped, true, __ATOMIC_SEQ_CST);
+	if (!input_pending() && kPendingDamageCount == 0 && !s_glass_regained) {
+		frame_wake_cancel();
+		mpAcctHaltBegin();
+		__asm__ volatile("sti\n\thlt" ::: "memory");
+		mpAcctHaltEnd();
+	} else {
+		__asm__ volatile("sti" ::: "memory");
+	}
+	__atomic_store_n(&s_fc_halted_stopped, false, __ATOMIC_SEQ_CST);
+}
+
+// The copy: what is carried, in strips top to bottom across all of it
+// (frame_clock_strip), so the copy only ever moves down the screen. With a
+// beam, F1's verdict judges it from the aim's last reading.
+//
+// THE SCREEN IS ASKED FOR AGAIN before the copy and before every strip: the
+// pass asked once, but the sleep and the aim since can take most of a frame,
+// and a text terminal taking the screen in between repaints the console,
+// which a copy would then overwrite. The moment it is not ours, what is
+// carried is voided (fc_drop_carry); the return switch repaints it all.
+static void fc_copy(bool judge, uint32_t begin_line, uint64_t begin_us, uint64_t *flushes)
+{
+	s_fc_at = FC_AT_COPY;
+	fc_rect_t rects[DAMAGE_MAX_RECTS], out[DAMAGE_MAX_RECTS];
+	for (uint32_t i = 0; i < s_fc_carry_count; i++)
+		rects[i] = (fc_rect_t){ s_fc_carry[i].x, s_fc_carry[i].y, s_fc_carry[i].w, s_fc_carry[i].h };
+	uint32_t pieces = 0;
+	int32_t height = (int32_t)kBackbuffer.height;
+	for (int32_t top = 0; top < height; top += FC_STRIP_ROWS) {
+		if (!gui_owns_glass()) {
+			fc_drop_carry();
+			return;
+		}
+		uint32_t k = frame_clock_strip(rects, s_fc_carry_count, top, FC_STRIP_ROWS, out);
+		if (k == 0)
+			continue;
+		uint64_t px = 0;
+		for (uint32_t i = 0; i < k; i++) {
+			surface_flush_rect(&kBackbuffer, (rect_t){ out[i].x, out[i].y, out[i].w, out[i].h });
+			px += (uint64_t)out[i].w * (uint64_t)out[i].h;
+			(*flushes)++;
+		}
+		int32_t bottom = top + FC_STRIP_ROWS < height ? top + FC_STRIP_ROWS : height;
+		if (pieces < FC_COPY_PIECES) {
+			s_fc_pieces[pieces++] = (fc_piece_t){ top, bottom, px };
+		} else {
+			s_fc_pieces[FC_COPY_PIECES - 1].bottom = bottom;
+			s_fc_pieces[FC_COPY_PIECES - 1].pixels += px;
+		}
+	}
+	if (judge)
+		frame_clock_judge_pieces(s_fc_pieces, pieces, begin_line, begin_us);
+	glass_settle(s_fc_glass_carry, s_fc_glass_carry_count, true);
+	s_fc_glass_carry_count = 0;
+	s_fc_carry_count = 0;
+	s_fc_owed_since_us = 0;
+	s_fc_hold = (fc_hold_t){0};
+	s_fc_clk_owed.frames++;
+}
+
+// The frame missed its blank: held for the next one if this is its first
+// miss, forced if it was held already (the hold rule, frame_clock_hold_step),
+// so the screen keeps changing whatever makes every frame late. `cause` is
+// counted as late; FC_LATE_CAUSES is a miss that is not lateness (no reading
+// of the sweep to aim by) and counts nothing but a force. A forced copy is
+// judged from a fresh reading when one can be had, so `torn` says what
+// forcing cost.
+static void fc_missed(fc_late_t cause, uint64_t *flushes)
+{
+	if (cause < FC_LATE_CAUSES)
+		s_fc_clk_owed.late[cause]++;
+	if (frame_clock_hold_step(&s_fc_hold, false) != FC_SHOW_FORCE)
+		return;
+	s_fc_clk_owed.forced++;
+	uint32_t line = 0;
+	bool read = beam_present() && beam_line(&line);
+	fc_copy(read, line, read ? micros_now() : 0, flushes);
+}
+
+// After the pass, with the clock driving and the screen ours: carry what it
+// composed, then aim and copy, or hold the frame late (or force it, if it
+// was held already).
+static void frame_clock_present(const rect_t *damage, uint32_t count, const glass_pending_t *taken,
+                                uint32_t taken_count, uint64_t *flushes)
+{
+	uint64_t pass_end = micros_now();
+	bool had = false;
+	for (uint32_t i = 0; i < count; i++) {
+		had |= !rect_is_empty(damage[i]);
+		fc_carry_add(damage[i]);
+	}
+	s_fc_had_damage = had;
+	fc_glass_carry_add(taken, taken_count);
+	if (s_fc_planned)
+		frame_clock_lead_record(&s_fc_lead, pass_end - s_fc_woke);
+	if (s_fc_carry_count == 0) {
+		// Publishes whose damage composited to nothing: nothing will show.
+		glass_settle(s_fc_glass_carry, s_fc_glass_carry_count, false);
+		s_fc_glass_carry_count = 0;
+		s_fc_planned = false;
+		return;
+	}
+
+	fc_frame_t f;
+	uint32_t line = 0;
+	if (!beam_present() || !beam_frame(&f)) {
+		fc_copy(false, 0, 0, flushes);   // free: the copy follows the pass
+		s_fc_planned = false;
+		return;
+	}
+	if (!s_fc_planned) {
+		// The first frame since the clock stopped: no wake was planned for
+		// it, so aim at the first blank the shortest lead away.
+		if (!beam_line(&line)) {
+			if (!beam_present())
+				fc_copy(false, 0, 0, flushes);
+			else
+				fc_missed(FC_LATE_CAUSES, flushes);   // a failed read: nothing to aim by
+			return;
+		}
+		fc_plan_t p = frame_clock_plan(&f, line, micros_now(), FC_LEAD_MIN_US);
+		s_fc_blank_at = p.blank_at_us;
+		s_fc_wake_at = p.wake_at_us;
+		fc_sleep_until(s_fc_wake_at);
+		s_fc_woke = pass_end = micros_now();
+		fc_count_wake();
+	}
+	s_fc_planned = false;
+
+	// Composed, waiting (§ 9): the pass is done and the blank is ahead, so
+	// halt again until FC_AIM_MARGIN_US before it rather than polling from
+	// the lead's start; the lead can then be long without costing polling.
+	// The window stays open (no publish), so the claim keeps the CPU through
+	// it. Damage that arrives meanwhile is the next frame's.
+	s_fc_at = FC_AT_COMPOSED;
+	if (s_fc_blank_at > FC_AIM_MARGIN_US)
+		fc_halt_until(s_fc_blank_at - FC_AIM_MARGIN_US);
+
+	// The aim (§ 9): poll the beam until the blank, within the bound.
+	s_fc_at = FC_AT_AIM;
+	uint64_t bound = frame_clock_aim_bound_us(&f, FC_AIM_MARGIN_US);
+	uint64_t t0 = micros_now(), now = t0;
+	uint32_t first = 0;
+	bool seen = false, moved = false;
+	fc_aim_t verdict = FC_AIM_WAIT;
+	for (;;) {
+		now = micros_now();
+		if (beam_line(&line)) {
+			if (!seen) {
+				first = line;
+				seen = true;
+			} else if (line != first) {
+				moved = true;
+			}
+			verdict = frame_clock_aim(&f, line, now, s_fc_blank_at);
+			if (verdict != FC_AIM_WAIT)
+				break;
+		} else if (!beam_present()) {
+			fc_copy(false, 0, 0, flushes);   // the reads withdrew it: free from now
+			return;
+		}
+		if (now - t0 > bound)
+			break;
+		__builtin_ia32_pause();
+	}
+
+	if (verdict == FC_AIM_COPY && !moved) {
+		// The first reading was already in the blank, so nothing yet says the
+		// counter moves, and one stopped at a blank line would look like a
+		// perfect aim every frame. It must change within FC_AIM_CONFIRM_LINES.
+		//
+		// Only a window actually WATCHED is evidence: each reading is taken
+		// before the clock is looked at, and a gap between readings longer
+		// than a line (an interrupt, or a pass that took the CPU) means the
+		// counter may have moved unseen. Such a window, or a failed read, is
+		// inconclusive: nothing is withdrawn, and a fresh reading decides this
+		// frame alone (the next frame's aim confirms again).
+		uint64_t span = frame_clock_lines_us(&f, FC_AIM_CONFIRM_LINES);
+		uint64_t gap_max = frame_clock_lines_us(&f, 1);
+		uint64_t start = micros_now(), last = start;
+		bool changed = false, inconclusive = false;
+		for (;;) {
+			uint32_t again;
+			bool read = beam_line(&again);
+			uint64_t t = micros_now();
+			if (t - last > gap_max)
+				inconclusive = true;
+			last = t;
+			if (!read) {
+				inconclusive = true;
+				break;
+			}
+			if (again != line) {
+				changed = true;
+				line = again;
+				break;
+			}
+			if (inconclusive || t - start > span)
+				break;
+			__builtin_ia32_pause();
+		}
+		if (!beam_present()) {
+			fc_copy(false, 0, 0, flushes);
+			return;
+		}
+		if (!changed && !inconclusive) {
+			beam_withdraw("the line counter stopped in the blank");
+			fc_copy(false, 0, 0, flushes);
+			return;
+		}
+		if (!changed && !beam_line(&line)) {
+			fc_missed(FC_LATE_PAST, flushes);   // no reading to copy by
+			return;
+		}
+		now = micros_now();
+		if (!frame_clock_in_blank(&f, line)) {
+			fc_missed(FC_LATE_PAST, flushes);   // the blank ended while it was confirmed
+			return;
+		}
+	}
+
+	if (verdict == FC_AIM_COPY) {
+		frame_clock_hold_step(&s_fc_hold, true);
+		uint64_t aim = now - t0;
+		s_fc_clk_owed.aims++;
+		s_fc_clk_owed.aim_us += aim;
+		if (aim > s_fc_clk_owed.aim_max_us)
+			s_fc_clk_owed.aim_max_us = aim;
+		fc_copy(true, line, now, flushes);
+	} else if (verdict == FC_AIM_LATE) {
+		bool off_cpu = s_fc_self->timesLoaded != s_fc_loads;
+		fc_late_t cause = frame_clock_late_cause(off_cpu, s_fc_wake_at, s_fc_woke, pass_end,
+		                                         frame_clock_blank_end_us(&f, s_fc_blank_at));
+		fc_missed(cause, flushes);
+	} else if (seen && !moved) {
+		beam_withdraw("the line counter stopped during an aim");
+		fc_copy(false, 0, 0, flushes);
+	} else if (seen) {
+		fc_missed(FC_LATE_OVERRUN, flushes);
+	} else {
+		// No reading succeeded within the bound, and too few failed in a row
+		// to withdraw the beam: nothing to aim by, so this frame goes unaimed
+		// rather than counted as a counter that moved.
+		fc_copy(false, 0, 0, flushes);
+	}
+}
+
+// After the frame, with the clock on: stop, or plan the next frame and
+// sleep until its wake.
+static void frame_clock_pace(void)
+{
+	fc_apply_reserve();   // the dial may have moved since the last frame
+	bool owns = gui_owns_glass();
+	bool work = input_pending() || kPendingDamageCount != 0 || s_glass_regained;
+	bool show = frame_clock_keep_running(&s_fc_run, s_fc_had_damage || work, 0) || s_fc_carry_count > 0;
+	s_fc_had_damage = false;
+	if (!owns || !show) {
+		s_fc_stop_why = owns ? "nothing to show" : "a text terminal holds the screen";
+		fc_set_running(false);
+		s_fc_planned = false;
+		kSchedFrameDueUs = 0;   // no frame planned: the CPU's claim is the nudge's alone
+		fc_stopped_halt();
+		return;
+	}
+	fc_set_running(true);
+
+	uint32_t lead = frame_clock_lead_us(&s_fc_lead);
+	s_fc_lead_now = lead;
+	uint64_t now = micros_now();
+	fc_frame_t f;
+	uint32_t line;
+	if (beam_present() && beam_frame(&f) && beam_line(&line)) {
+		fc_plan_t p = frame_clock_plan(&f, line, now, lead);
+		s_fc_blank_at = p.blank_at_us;
+		s_fc_wake_at = p.wake_at_us;
+	} else {
+		s_fc_free_ns = frame_clock_free_next_ns(s_fc_free_ns, now * 1000);
+		s_fc_wake_at = s_fc_blank_at = s_fc_free_ns / 1000;
+	}
+	s_fc_planned = true;
+	fc_sleep_until(s_fc_wake_at);
+	s_fc_woke = micros_now();
+	fc_count_wake();
+}
+
+void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart)
+{
+	static uint64_t base_running, base_stopped, base_starts;
+	*out = (gui_frame_clock_status_t){ 0 };
+	out->off_why = s_fc_off_why;
+	out->cpu = s_fc_cpu;
+	out->reserve_dial = s_fc_reserve_dial;
+	out->reserve_applies = kCPUCount >= FC_RESERVE_MIN_CPUS;
+	if (s_fc_off_why != NULL)
+		return;
+	uint64_t flags = gui_lock(GUI_LOCK_OTHER);   // one reader's baseline at a time
+	bool running = s_fc_running;
+	uint64_t partial = micros_now() - s_fc_time.since_us;
+	out->running = running;
+	out->stop_why = s_fc_stop_why;
+	out->free = !beam_present();
+	out->reserved = kSchedReservedCPU == (int32_t)s_fc_cpu;
+	out->lead_us = s_fc_lead_now;
+	out->running_us = s_fc_time.running_us + (running ? partial : 0);
+	out->stopped_us = s_fc_time.stopped_us + (running ? 0 : partial);
+	out->starts = s_fc_time.starts;
+	out->running_since_read_us = out->running_us - base_running;
+	out->stopped_since_read_us = out->stopped_us - base_stopped;
+	out->starts_since_read = out->starts - base_starts;
+	if (restart) {
+		base_running = out->running_us;
+		base_stopped = out->stopped_us;
+		base_starts = out->starts;
+	}
+	gui_unlock(flags);
+	out->frame_wake_fires = kFrameWakeFires[s_fc_cpu];
+	out->cut_fires = kFrameCutFires[s_fc_cpu];
+	out->lease_fires = kSchedBackstopFires[s_fc_cpu];
+	out->stalls = s_fc_stall.episodes;
+	out->stall_longest_us = s_fc_stall.longest_us;
+}
+
+// ── The stall tripwire (FRAME_CLOCK.md § 8) ────────────────────────────────
+// With the hold rule, composed damage reaches the glass within two of the
+// compositor's passes, and with work to do its loop turns at least once a
+// frame, because the claim gives it its CPU. So more than half a second
+// with damage owed and nothing shown, or with work to do (the clock
+// running, input or damage waiting, or the screen just regained) and the
+// loop standing still since the work appeared, is a fault, and this names
+// it: once an episode,
+// under DEBUG_EXCEPTIONS, with where the compositor was, its state, what its
+// CPU was running and what that CPU's passes and timer did. It logs; it
+// does not heal. Called from the BSP's pass once a tick, holding the queue
+// lock (the tenant's name is read under it); its own state is that pass's.
+#define FC_STALL_US 500000
+
+static const char *fc_at_name(uint32_t at)
+{
+	static const char *const names[FC_AT_PLACES] = {
+		"in its pass (composing, or waiting for kGuiLock)", "asleep until its wake",
+		"composed, asleep until just before the blank", "aiming at the blank", "copying", "stopped",
+	};
+	return at < FC_AT_PLACES ? names[at] : "?";
+}
+
+static const char *fc_thread_state_name(uint32_t state)
+{
+	switch (state) {
+	case THREAD_STATE_RUNNING:  return "running";
+	case THREAD_STATE_RUNNABLE: return "runnable";
+	case THREAD_STATE_STOPPED:  return "stopped";
+	case THREAD_STATE_USLEEP:   return "usleep";
+	case THREAD_STATE_ISLEEP:   return "isleep";
+	case THREAD_STATE_ZOMBIE:   return "zombie";
+	default:                    return "none";
+	}
+}
+
+void gui_frame_clock_watch_locked(void)
+{
+	static uint64_t beat, beat_us, at_beat_passes, at_beat_wakes, at_beat_leases;
+	static uint64_t start_us, start_passes, start_wakes, start_leases;
+	static bool in;
+	thread_t *self = kSchedFrameThread;
+	if (self == NULL)
+		return;   // the clock is off, or the compositor has not published itself
+	uint32_t cpu = s_fc_cpu;
+	uint64_t now = micros_now();
+	uint64_t passes = kDiagPassCount[cpu], wakes = kFrameWakeFires[cpu], leases = kSchedBackstopFires[cpu];
+	if (s_fc_beat != beat || beat_us == 0) {
+		beat = s_fc_beat;
+		beat_us = now;
+		at_beat_passes = passes;
+		at_beat_wakes = wakes;
+		at_beat_leases = leases;
+	}
+	uint64_t owed_since = s_fc_owed_since_us;
+	uint64_t unshown_us = owed_since != 0 && now > owed_since ? now - owed_since : 0;
+	// A still loop counts only while there is something to do, and only for
+	// as long as there has been: stopped with nothing pending, a compositor
+	// sharing its CPU with threads pinned there may wait its turn by aging
+	// for longer than the bound, which is the CPU being shared, not a stall;
+	// and the quiet before work arrived (a whole lease, up to a second, on a
+	// stopped compositor) is not time the work waited. So the stillness runs
+	// from the later of the last beat and the first look that found work.
+	// "Work" is the compositor's own test for it (frame_clock_pace,
+	// fc_stopped_halt), each word read unlocked as there, and a stall asked
+	// for by `stall <ms>` while it is served.
+	static uint64_t busy_since;
+	bool busy = s_fc_running || input_pending() || kPendingDamageCount != 0 || s_glass_regained ||
+	            s_fc_test_stalling;
+	if (!busy)
+		busy_since = 0;
+	else if (busy_since == 0)
+		busy_since = now;
+	uint64_t still_from = busy_since > beat_us ? busy_since : beat_us;
+	uint64_t still_us = busy ? now - still_from : 0;
+	bool stalled = still_us > FC_STALL_US || unshown_us > FC_STALL_US;
+
+	if (stalled && !in) {
+		in = true;
+		start_us = now - (still_us > unshown_us ? still_us : unshown_us);   // when it began, not when it was seen
+		start_passes = passes;
+		start_wakes = wakes;
+		start_leases = leases;
+		s_fc_stall.episodes++;
+		thread_t *tenant = scheduler_cpu_tenant_locked(cpu);
+		const char *tenant_name = tenant == NULL ? "nothing yet"
+		                        : tenant == self ? "the compositor"
+		                        : ((task_t *)tenant->ownerTask)->exename;
+		uint64_t due = kSchedFrameDueUs;
+		char window[48];
+		if (due == 0)
+			snprintf(window, sizeof window, "no frame planned");
+		else if (now >= due)
+			snprintf(window, sizeof window, "its window opened %lu us ago", now - due);
+		else
+			snprintf(window, sizeof window, "its window opens in %lu us", due - now);
+		printd(DEBUG_EXCEPTIONS,
+		       "frame clock: STALL %lu: nothing shown for %lu ms with damage owed, the loop still for %lu ms with work to do; "
+		       "the compositor is %s, %s%s, the frame %s, the clock %s; CPU %u runs %s (thread 0x%lx); "
+		       "since the last beat its CPU ran %lu passes, %lu frame wakes, %lu lease expiries; "
+		       "%s; reserve %s\n",
+		       s_fc_stall.episodes, unshown_us / 1000, still_us / 1000,
+		       fc_at_name(s_fc_at), fc_thread_state_name(self->threadState),
+		       self->expedite ? " (expedite set)" : "",
+		       s_fc_hold.held ? "held once" : "not held", s_fc_running ? "running" : "stopped",
+		       cpu, tenant_name, tenant != NULL ? (uint64_t)tenant->threadID : 0,
+		       passes - at_beat_passes, wakes - at_beat_wakes, leases - at_beat_leases,
+		       window, kSchedReservedCPU == (int32_t)cpu ? "in force" : "not in force");
+	} else if (!stalled && in) {
+		in = false;
+		uint64_t lasted = now - start_us;
+		if (lasted > s_fc_stall.longest_us)
+			s_fc_stall.longest_us = lasted;
+		printd(DEBUG_EXCEPTIONS,
+		       "frame clock: STALL %lu over after about %lu ms; since it was seen CPU %u ran %lu passes, "
+		       "%lu frame wakes, %lu lease expiries\n",
+		       s_fc_stall.episodes, lasted / 1000, cpu,
+		       passes - start_passes, wakes - start_wakes, leases - start_leases);
+	}
+}
+
+long gui_frame_clock_command(const char *line, size_t length)
+{
+	if (length == 10 && memcmp(line, "reserve on", 10) == 0) {
+		s_fc_reserve_dial = true;
+		return 0;
+	}
+	if (length == 11 && memcmp(line, "reserve off", 11) == 0) {
+		s_fc_reserve_dial = false;
+		return 0;
+	}
+	// `stall <ms>`, 1 to 5000: the compositor stands still once, on purpose,
+	// so the tripwire's report can be seen on any machine (its proof).
+	if (length > 6 && memcmp(line, "stall ", 6) == 0) {
+		uint64_t ms = 0;
+		for (size_t i = 6; i < length; i++) {
+			if (line[i] < '0' || line[i] > '9' || ms > 5000)
+				return -1;
+			ms = ms * 10 + (uint64_t)(line[i] - '0');
+		}
+		if (ms == 0 || ms > 5000)
+			return -1;
+		s_fc_test_stall_ms = ms;
+		return 0;
+	}
+	return -1;
 }
 
 uint32_t gui_damage_take_locked(rect_t *out, uint32_t cap)
@@ -1753,6 +2521,18 @@ bool guicomp_thread(bool daemon)
 		kBackbuffer.width, kBackbuffer.height,
 		(uint64_t)kBackbuffer.width * kBackbuffer.height * 4 / 1024);
 
+	// The frame clock begins stopped (its states: FRAME_CLOCK.md § 9). With
+	// it on, the scheduler learns which thread's frames claim which CPU
+	// (scheduler.h): the CPU first, the thread last, since the thread is
+	// what a pass looks at first. The compositor is a daemon that never
+	// exits, so the pointer never dangles.
+	s_fc_self = self;
+	s_fc_time.since_us = micros_now();
+	if (s_fc_off_why == NULL && daemon) {
+		kSchedFrameCPU = s_fc_cpu;
+		__atomic_store_n(&kSchedFrameThread, self, __ATOMIC_RELEASE);
+	}
+
 	cursor_build();
 	s_cursor_x = (int32_t)kBackbuffer.width / 2;
 	s_cursor_y = (int32_t)kBackbuffer.height / 2;
@@ -1791,6 +2571,18 @@ bool guicomp_thread(bool daemon)
 
 	while (1) {
 		frames++;
+		s_fc_beat++;          // the stall tripwire's heartbeat
+		s_fc_at = FC_AT_PASS;
+		uint64_t stall_ms = __atomic_exchange_n(&s_fc_test_stall_ms, 0, __ATOMIC_SEQ_CST);
+		if (stall_ms != 0) {
+			// The proof the tripwire asked for: stand still, interrupts on,
+			// holding nothing, so only the beat stops.
+			s_fc_test_stalling = true;
+			uint64_t until = micros_now() + stall_ms * 1000;
+			while (micros_now() < until)
+				__builtin_ia32_pause();
+			s_fc_test_stalling = false;
+		}
 
 		// -------- Drain input, route events, recomposite (one lock hold) ---
 		uint64_t irqflags = gui_lock(GUI_LOCK_COMPOSITE);
@@ -1904,6 +2696,18 @@ bool guicomp_thread(bool daemon)
 		// OUTSIDE kGuiLock, deliberately — vtsel_paint takes the tty and
 		// renderer locks, and reaching those while holding ours would invent
 		// a lock order nothing else in the system has.
+		// With the clock on, the copy is the clock's: carried to the blank and
+		// made there (frame_clock_present). It drives only while the screen
+		// is ours; a text terminal taking it voids what was carried, as a
+		// pass that flushes nothing voids what it took.
+		bool clock_drives = s_fc_off_why == NULL && daemon && gui_owns_glass();
+		if (clock_drives) {
+			frame_clock_present(damage, damage_count, glass_taken, glass_taken_count, &flushes);
+			goto flushed;
+		}
+		if (s_fc_off_why == NULL && daemon && (s_fc_carry_count != 0 || s_fc_glass_carry_count != 0))
+			fc_drop_carry();
+
 		if (!gui_owns_glass())
 			vtsel_paint();
 
@@ -1939,6 +2743,7 @@ bool guicomp_thread(bool daemon)
 		// This pass's publishes are on the glass now, or never will be.
 		glass_settle(glass_taken, glass_taken_count, flushed_any);
 
+	flushed:
 		if (kTicksSinceStart - last_heartbeat_tick >= TICKS_PER_SECOND) {
 			printd(DEBUG_GUI, "guicomp: heartbeat, %lu frames, %lu flushes (tick %lu)\n",
 				frames, flushes, kTicksSinceStart);
@@ -1947,6 +2752,13 @@ bool guicomp_thread(bool daemon)
 
 		if (!daemon)
 			return true;
+
+		// With the clock on, it paces: stop, or sleep until the next frame's
+		// wake (frame_clock_pace, § 9). What follows is the clock-off pacing.
+		if (s_fc_off_why == NULL) {
+			frame_clock_pace();
+			continue;
+		}
 
 		// -------- Pace the next frame (see block comment above) --------
 		// If there's nothing to do, HALT until the next interrupt: an input
@@ -1983,16 +2795,25 @@ bool guicomp_thread(bool daemon)
 	}
 }
 
-// Pin the compositor to CPU 1 when we have one (kworker precedent): keeps
-// steady frame work off the BSP, which handles IRQ0/signals. EXCEPT in
-// tickless mode (the default): there the AP scheduler timers stay masked
-// (smp_core.c enableAPScheduling_ISR) — a thread pinned to an AP runs
-// un-preemptable and only when nudged, which wedged the compositor hard.
-// Under tickless everything stays on the BSP's normal scheduling, which is
-// why the GUI boot entries run SCHED=periodic until the damage-wake nudge
-// (SCHEDULER.md) lets a pinned compositor and parked cores coexist.
+// With the frame clock on, the compositor is pinned to the LAST CPU brought
+// up (FRAME_CLOCK.md § Rulings 5): never the BSP, which takes every device
+// interrupt, and with the roster's order never the BSP's SMT sibling on a
+// machine with more than two; and away from the low numbers people pin
+// their own work to. The input interrupts follow it (kernel_init routes them
+// here).
+//
+// Under tickless a pinned compositor used to be refused: an AP's timer was
+// masked, so a thread pinned there ran unpreemptable and only when nudged,
+// which wedged it. What makes the pin sound now: the AP's timer is the
+// preemption lease and the frame wake (smp_core.c), the compositor sets it
+// before every halt, and new work nudges it (gui_frame_nudge).
+//
+// With the clock off the pin is as it was before the clock: CPU 1 under
+// SCHED=periodic, none under tickless or with one CPU.
 uint64_t gui_compositor_affinity(void)
 {
+	if (frame_clock_off_why() == NULL)
+		return (uint64_t)(kCPUCount - 1);
 	return (kCPUCount > 1 && !kTicklessScheduler)
 	           ? (uint64_t)1
 	           : THREAD_NO_AFFINITY;
@@ -2013,6 +2834,15 @@ void gui_start(void)
 	input_init();
 
 	uint64_t affinity = gui_compositor_affinity();
+	// The frame clock's boot-long answer, before the compositor that runs it
+	// exists (FRAME_CLOCK.md § 9, "off").
+	s_fc_off_why = frame_clock_off_why();
+	if (s_fc_off_why == NULL) {
+		s_fc_cpu = (uint32_t)affinity;
+		printd(DEBUG_BOOT | DEBUG_GUI, "gui_start: frame clock on, the compositor pinned to CPU %u\n", s_fc_cpu);
+	} else {
+		printd(DEBUG_BOOT | DEBUG_GUI, "gui_start: frame clock off (%s)\n", s_fc_off_why);
+	}
 
 	kGuiCompTask = task_create("/guicomp", 0, NULL, kKernelTask, true, affinity);
 	// Pass daemon=true (first arg in RDI) to guicomp_thread
