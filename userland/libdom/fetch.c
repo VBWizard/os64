@@ -1030,20 +1030,24 @@ static JSValue headers_member(JSContext *ctx, JSValueConst self, int argc, JSVal
     case H_VALUES: return headers_iterator_new(ctx, self, H_VALUES);
     case H_FOR_EACH: {
         if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "forEach needs a function");
+        DSynchronousCallback callback;
+        if (!d_synchronous_capture(dom, ctx, argv[0], &callback)) return JS_EXCEPTION;
+        JSValue result = JS_UNDEFINED;
         for (size_t i = 0;; i++) {
             h = headers_state(self);
-            if (h == NULL || headers_sort(ctx, h) < 0) return JS_EXCEPTION;
+            if (h == NULL || headers_sort(ctx, h) < 0) { result = JS_EXCEPTION; break; }
             if (i >= h->sorted_count) break;
-            if (!d_require_callback(dom, ctx, argv[0])) return JS_EXCEPTION;
+            if (!d_require_callback(dom, ctx, argv[0])) { result = JS_EXCEPTION; break; }
             JSValue args[3] = {d_byte_text(ctx, h->sorted[i].value, h->sorted[i].value_length),
                                d_byte_text(ctx, h->sorted[i].name, h->sorted[i].name_length), JS_DupValue(ctx, self)};
             JSValue done = JS_IsException(args[0]) || JS_IsException(args[1]) ? JS_EXCEPTION
-                         : JS_Call(ctx, argv[0], argc > 1 ? argv[1] : JS_UNDEFINED, 3, args);
+                         : d_synchronous_call(dom, ctx, &callback, argc > 1 ? argv[1] : JS_UNDEFINED, 3, args);
             for (int k = 0; k < 3; k++) JS_FreeValue(ctx, args[k]);
-            if (JS_IsException(done)) return done;
+            if (JS_IsException(done)) { result = done; break; }
             JS_FreeValue(ctx, done);
         }
-        return JS_UNDEFINED;
+        d_synchronous_clear(dom->engine, &callback);
+        return result;
     }
     default: return JS_UNDEFINED;
     }

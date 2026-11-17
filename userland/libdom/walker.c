@@ -5,7 +5,7 @@
  * The algorithms are the standard's, step for step, over libhtml's links
  * (parent, first and last child, previous and next sibling). A walker
  * traverses one node tree: a template's contents are no element's children,
- * and a shadow root, were there any, is no child of its host, so neither is
+ * and a shadow root is no child of its host, so neither is
  * entered.
  *
  * A WALKER HOLDS ITS NODES. Its record (DWalk, binding memory) holds its
@@ -48,7 +48,7 @@ typedef struct DWalk {
      * the reference becomes when a node is accepted. */
     const os64_html_node_t *flight; /* held; NULL between traversals */
     bool flight_before;
-    JSValue filter;                 /* JS_NULL or the page's NodeFilter; traced */
+    DSynchronousCallback callback; /* captured.value is JS_NULL or the traced NodeFilter */
 } DWalk;
 
 struct DWalks {
@@ -95,6 +95,41 @@ static void sweep(os64_dom_t *dom)
     s->has_dead = false;
 }
 
+typedef struct {
+    os64_dom_t *dom;
+    DWalk *walk;
+    const os64_html_node_t *node;
+} FilterCall;
+
+static JSValue prepared_filter(JSContext *ctx, JSValueConst filter, void *opaque)
+{
+    FilterCall *call = opaque;
+    JSValue method, self = JS_UNDEFINED;
+    if (JS_IsFunction(ctx, filter)) method = JS_DupValue(ctx, filter);
+    else { self = filter; method = JS_GetPropertyStr(ctx, filter, "acceptNode"); }
+    if (JS_IsException(method)) return method;
+    JSValue result = JS_EXCEPTION;
+    /* Getter reentry can retire captured settings or adopt the candidate. */
+    if (!d_synchronous_live(ctx, &call->walk->callback) ||
+        !d_require_active(d_owner(call->dom, call->node), ctx)) goto done;
+    if (!JS_IsFunction(ctx, method)) {
+        result = JS_ThrowTypeError(ctx, "The NodeFilter's acceptNode is not a function");
+        goto done;
+    }
+    if (!d_require_callback(call->dom, ctx, method)) goto done;
+    JSValue argument = d_wrap(call->dom, ctx, call->node);
+    if (JS_IsException(argument)) goto done;
+    JSValue value = JS_Call(ctx, method, self, 1, &argument);
+    JS_FreeValue(ctx, argument);
+    uint32_t converted;
+    if (!JS_IsException(value) && JS_ToUint32(ctx, &converted, value) == 0)
+        result = JS_NewUint32(ctx, converted & 0xFFFF);
+    JS_FreeValue(ctx, value);
+done:
+    JS_FreeValue(ctx, method);
+    return result;
+}
+
 /* DOM § 6.1, "filter": FILTER_ACCEPT, FILTER_REJECT, FILTER_SKIP or
  * whatever else the page's filter answers (an unsigned short, which no
  * algorithm reads as any of the three), or -1 with the exception pending.
@@ -111,11 +146,21 @@ static int filter_node(os64_dom_t *dom, JSContext *ctx, DWalk *w, const os64_htm
     }
     /* whatToShow's bit for a node is its nodeType's, less one. */
     if ((w->what & (1u << (d_node_type(node) - 1))) == 0) return FILTER_SKIP;
-    if (JS_IsNull(w->filter)) return FILTER_ACCEPT;
+    if (JS_IsNull(w->callback.captured.value)) return FILTER_ACCEPT;
     if (!d_require_active(d_owner(dom, node), ctx)) return -1;
+    if (w->callback.captured.runtime) {
+        FilterCall call = {dom, w, node};
+        w->active = true;
+        JSValue result = d_synchronous_invoke(ctx, &w->callback, prepared_filter, &call);
+        w->active = false;
+        if (JS_IsException(result)) return -1;
+        int value = JS_VALUE_GET_INT(result);
+        JS_FreeValue(ctx, result);
+        return value;
+    }
     JSValue argument = d_wrap(dom, ctx, node);
     if (JS_IsException(argument)) return -1;
-    JSValue filter = JS_DupValue(ctx, w->filter), call, self = JS_UNDEFINED;
+    JSValue filter = JS_DupValue(ctx, w->callback.captured.value), call, self = JS_UNDEFINED;
     w->active = true;
     if (JS_IsFunction(ctx, filter)) call = JS_DupValue(ctx, filter);
     else {
@@ -491,7 +536,7 @@ static JSValue walk_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     switch (magic) {
     case T_ROOT: return d_wrap(dom, ctx, w->root);
     case T_WHAT: return JS_NewUint32(ctx, w->what);
-    case T_FILTER: return JS_DupValue(ctx, w->filter);
+    case T_FILTER: return JS_DupValue(ctx, w->callback.captured.value);
     case T_CURRENT: case T_REFERENCE: return d_wrap(dom, ctx, w->at);
     case T_BEFORE: return JS_NewBool(ctx, w->before);
     case T_DETACH: return JS_UNDEFINED;
@@ -548,12 +593,15 @@ static JSValue create_walk(JSContext *ctx, JSValueConst self, int argc, JSValueC
     JSValueConst filter = argc > 2 ? argv[2] : JS_UNDEFINED;
     if (!JS_IsNull(filter) && !JS_IsUndefined(filter) && !JS_IsObject(filter))
         return JS_ThrowTypeError(ctx, "A NodeFilter is an object or null");
+    DSynchronousCallback callback;
+    if (!d_synchronous_capture(dom, ctx, JS_IsObject(filter) ? filter : JS_NULL, &callback)) return JS_EXCEPTION;
     struct DWalks *s = dom->walks;
     sweep(dom);
     JSValue object = JS_NewObjectClass(ctx, (int)(magic == W_WALKER ? s->walker_class : s->iterator_class));
-    if (JS_IsException(object)) return object;
+    if (JS_IsException(object)) { d_synchronous_clear(dom->engine, &callback); return object; }
     DWalk *w = d_alloc(dom, sizeof(*w));
     if (w == NULL) {
+        d_synchronous_clear(dom->engine, &callback);
         JS_FreeValue(ctx, object);
         return d_error(ctx, "QuotaExceededError", "DOM traversal quota exceeded");
     }
@@ -562,7 +610,7 @@ static JSValue create_walk(JSContext *ctx, JSValueConst self, int argc, JSValueC
     w->kind = (uint8_t)magic;
     w->what = what;
     w->before = true;
-    w->filter = JS_IsObject(filter) ? JS_DupValue(ctx, filter) : JS_NULL;
+    w->callback = callback;
     step_to(dom, &w->root, root);
     step_to(dom, &w->at, root);
     w->next = s->list;
@@ -576,9 +624,10 @@ static JSValue create_walk(JSContext *ctx, JSValueConst self, int argc, JSValueC
  * then reads the record. */
 static void filter_free(JSRuntime *rt, DWalk *w)
 {
-    JSValue filter = w->filter;
-    w->filter = JS_NULL;
-    JS_FreeValueRT(rt, filter);
+    DSynchronousCallback held = w->callback;
+    w->callback = (DSynchronousCallback)D_SYNCHRONOUS_CALLBACK_INIT;
+    w->callback.captured.value = JS_NULL;
+    d_synchronous_clear(rt, &held);
 }
 
 static void walk_dies(JSRuntime *rt, DWalk *w)
@@ -602,13 +651,13 @@ static void iterator_finalizer(JSRuntime *rt, JSValue value)
 static void walker_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 {
     DWalk *w = JS_GetOpaque(value, os64_js_class_id(&walker_slot));
-    if (w != NULL) JS_MarkValue(rt, w->filter, mark);
+    if (w != NULL) JS_MarkValue(rt, w->callback.captured.value, mark);
 }
 
 static void iterator_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 {
     DWalk *w = JS_GetOpaque(value, os64_js_class_id(&iterator_slot));
-    if (w != NULL) JS_MarkValue(rt, w->filter, mark);
+    if (w != NULL) JS_MarkValue(rt, w->callback.captured.value, mark);
 }
 
 /* NodeFilter is a legacy callback interface (WebIDL § 3.7.7): a function

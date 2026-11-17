@@ -268,6 +268,10 @@
       "path": "patches/0037-neutral-promise-settings.patch",
       "sha256": "ad7f4416356e41fe9c9bf454bd528a4455c92840ba1cce3ca20e0f18c882726b",
       "reason": "Admit actual execution settings in empty-handler Promise reactions without fabricating entry or backup settings."
+    },
+    {
+      "path": "patches/0038-array-length-allocation.patch",
+      "sha256": "b35a785d41ca8ff6b5b70a8050bf07b19a096a1ebfd72341cb8f99deab2aee1c"
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
