@@ -46,7 +46,7 @@
 // load, which fails the realm's creation, so the DOM host suite fails at its
 // first window.
 const NEEDED = ['Promise', 'Promise_then', 'Promise_reject', 'Reflect_apply', 'RequireCallback',
-    'RecoveryStreamsUsed', 'Object_defineProperty', 'Object_getPrototypeOf', 'Object_getOwnPropertyNames',
+    'RecoveryStreamsUsed', 'CallbackSettings', 'CaptureCallback', 'CallCallback', 'Object_defineProperty', 'Object_getPrototypeOf', 'Object_getOwnPropertyNames',
     'Object_getOwnPropertyDescriptor', 'Object_create', 'ForeignStreamSlot',
     'TypeError', 'RangeError', 'Uint8Array', 'Uint8Array_set', 'InternalMicrotask', 'InternalReaction',
     'ArrayBuffer', 'DataView', 'Int8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array', 'Int32Array',
@@ -64,6 +64,9 @@ for (let i = 0; i < NEEDED.length; i++)
 const Promise_ = I.Promise;
 const then_ = I.Promise_then;
 const requireCallback = I.RequireCallback;
+const callbackSettings = I.CallbackSettings;
+const captureCallback = I.CaptureCallback;
+const callCallback = I.CallCallback;
 const recoveryStreamsUsed = I.RecoveryStreamsUsed;
 const reject_ = I.Promise_reject;
 const apply = I.Reflect_apply;
@@ -259,7 +262,7 @@ function toBoolean(v) { return !!v; }
 function callbackOrUndefined(value, what) {
     if (value === undefined) return undefined;
     if (typeof value !== 'function') throw new TypeError_(what + ' is not a function');
-    return value;
+    return callbackSettings ? captureCallback(value) : value;
 }
 
 // A dictionary argument: undefined and null are the empty dictionary,
@@ -293,7 +296,10 @@ function extractHighWaterMark(strategy, defaultHWM) {
 function extractSizeAlgorithm(strategy) {
     const size = strategy.size;
     if (size === undefined) return sizeOne;
-    return function (chunk) { return toNumber(callbackCall(size, undefined, [chunk])); };
+    return function (chunk) {
+        return callbackSettings ? callCallback(size, undefined, [chunk], 1)
+            : toNumber(callbackCall(size, undefined, [chunk]));
+    };
 }
 
 function sizeOne() { return 1; }
@@ -301,6 +307,7 @@ function sizeOne() { return 1; }
 // Author callbacks have separate eligibility from the pure stream algorithms.
 // Keep intrinsic calls and internal body-conversion functions on `apply`.
 function callbackCall(fn, thisArg, args) {
+    if (callbackSettings) return callCallback(fn, thisArg, args, 0);
     requireCallback(fn);
     return apply(fn, thisArg, args);
 }
@@ -308,6 +315,7 @@ function callbackCall(fn, thisArg, args) {
 // Invoking a callback whose IDL return is a promise: a throw is a rejected
 // promise, and what it returns is resolved into one.
 function promiseCall(fn, thisArg, args) {
+    if (callbackSettings) return callCallback(fn, thisArg, args, 2);
     try {
         return resolvedWith(callbackCall(fn, thisArg, args));
     } catch (e) {
@@ -3368,7 +3376,8 @@ function tsControllerEnqueue(c, chunk) {
 
 function tsControllerPerformTransform(c, chunk) {
     const transformed = c.transformAlgorithm(chunk);
-    return transformPromise(transformed, undefined, function (r) {
+    // The callback returns Promise<undefined>; fulfillment discards its JS value.
+    return transformPromise(transformed, noop, function (r) {
         tsError(c.stream, r);
         throw r;
     });

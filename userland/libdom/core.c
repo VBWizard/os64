@@ -720,6 +720,14 @@ os64_dom_cluster_t *os64_dom_cluster_create_with_synchronous_settings(os64_js_ru
     return cluster;
 }
 
+os64_dom_cluster_t *os64_dom_cluster_create_with_stream_callback_settings(os64_js_runtime_t *runtime,
+    const os64_dom_cluster_limits_t *limits, os64_js_outcome_t *outcome)
+{
+    os64_dom_cluster_t *cluster = os64_dom_cluster_create_with_synchronous_settings(runtime, limits, outcome);
+    if (cluster) cluster->stream_callback_settings = true;
+    return cluster;
+}
+
 static JSValue import_base(JSContext *ctx, void *opaque)
 {
     os64_dom_t *dom = opaque;
