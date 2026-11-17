@@ -55,6 +55,10 @@ _Static_assert(__builtin_offsetof(input_event_t, key) == 4,
                "input_event_t union moved — GUI ABI break");
 _Static_assert(__builtin_offsetof(input_event_t, tick) == 24,
                "input_event_t tick moved — GUI ABI break");
+_Static_assert(__builtin_offsetof(input_event_t, frame.period_ns) == 20 &&
+               __builtin_offsetof(input_event_t, frame.period_ns) ==
+               __builtin_offsetof(os64_gui_event_t, frame.period_ns),
+               "input_event_t frame answer moved — GUI ABI break");
 
 // Legacy frame-sizing defaults remain ABI-stable. New clients can request
 // content dimensions atomically; installed decoration metrics are dynamic.
@@ -662,6 +666,7 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 		memcpy(win->content.pixels + (size_t)(local.y + y) * win->content.pitch_px + local.x,
 		       win->canvas.pixels  + (size_t)(local.y + y) * win->canvas.pitch_px  + local.x,
 		       (size_t)local.w * sizeof(uint32_t));
+	win->frame_drawn = true;   // a frame request may ask whether it has drawn (gui_frame_request)
 
 	// Translate content-local damage to screen coordinates while we still
 	// hold the lock (the frame can't move under us here).
@@ -681,12 +686,11 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 	// as well would save a memcpy and show a stale frame on reveal — the
 	// classic occlusion bug, and not one worth reinventing.
 	//
-	// This is the compositor-side half only. The CLIENT still draws and
-	// publishes at full rate into a canvas nobody can see; teaching it to idle
-	// needs a publish acknowledgment it can wait on — Wayland's frame-callback
-	// insight, and the reason X11's VisibilityNotify never worked (it asked
-	// applications to volunteer, and they didn't). That half rides libui; see
-	// the occlusion row in DEBTS.
+	// This is the compositor-side half only. A client that publishes on its
+	// own schedule still draws into a canvas nobody can see; the client-side
+	// half is the frame request (gui_frame_request, FRAME_CLOCK.md § 6),
+	// which answers a covered window nothing, and the COVERED flag for a
+	// client with a loop of its own (GRAPHICS.md § Covered windows).
 	rect_t seen[PUBLISH_PIECES_MAX];
 	size_t n = wm_visible_damage(win, screen_damage, seen, PUBLISH_PIECES_MAX);
 	for (size_t i = 0; i < n; i++)
@@ -742,6 +746,55 @@ int64_t gui_event_ring(int64_t handle, uint32_t mask)
 	wm_deliver_event(win, &ev);
 	gui_unlock(irqflags);
 	return 0;
+}
+
+// Future syscall's door: SYSCALL_GUI_FRAME_REQUEST (69), scalars only, never
+// blocks; the answer is an event (FRAME_CLOCK.md § 6). Marks the window
+// wanted, and tells the compositor a request arrived so a stopped clock
+// starts (gui_frame_request_arrived; the nudge ends its halt now rather than
+// at the lease).
+int64_t gui_frame_request(int64_t handle, uint32_t flags)
+{
+	if (flags & ~OS64_GUI_FRAME_IF_DRAWN)
+		return GUI_ERR_BAD_ARGS;
+	int64_t err;
+	uint64_t irqflags = gui_lock(GUI_LOCK_OTHER);
+	window_t *win = handle_lookup_owned(handle, &err);
+	if (!win) {
+		gui_unlock(irqflags);
+		return err;
+	}
+	if ((flags & OS64_GUI_FRAME_IF_DRAWN) && !win->frame_drawn) {
+		gui_unlock(irqflags);
+		return OS64_GUI_FRAME_IDLE;
+	}
+	win->frame_drawn = false;
+	win->frame_wanted = true;
+	gui_frame_request_arrived();
+	gui_unlock(irqflags);
+	return 0;
+}
+
+// Future syscall's door: SYSCALL_GUI_FRAME_TAKE (70). The frame answer's
+// coalesced slot, taken alone: 1 and *out filled, 0 when it is empty. Every
+// other event stays where it is, for the program's own poll.
+int64_t gui_frame_take(int64_t handle, input_event_t *out)
+{
+	int64_t err;
+	uint64_t irqflags = gui_lock(GUI_LOCK_OTHER);
+	window_t *win = handle_lookup_owned(handle, &err);
+	if (!win) {
+		gui_unlock(irqflags);
+		return err;
+	}
+	int64_t got = 0;
+	if (win->event_queue.frame_pending) {
+		*out = win->event_queue.frame;
+		win->event_queue.frame_pending = false;
+		got = 1;
+	}
+	gui_unlock(irqflags);
+	return got;
 }
 
 // Future syscall: SYSCALL_GUI_EVENT_WAIT (22), user_ptr_mask 0b10 — the

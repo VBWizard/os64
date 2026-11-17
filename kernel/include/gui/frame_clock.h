@@ -150,6 +150,13 @@ typedef struct {
 
 fc_plan_t frame_clock_plan(const fc_frame_t *f, uint32_t line, uint64_t now_us, uint32_t lead_us);
 
+// When the most recent blank began, from a line read at `now_us`: the
+// instant a frame answer reports (FRAME_CLOCK.md § 6), the same for a frame
+// copied in the blank, a frame forced outside it, and a frame with nothing
+// to copy. Rounded down to the microsecond; `now_us` itself for a frame
+// that is not valid.
+uint64_t frame_clock_blank_began_us(const fc_frame_t *f, uint32_t line, uint64_t now_us);
+
 // The aim polls the beam after the pass. One reading's verdict: in a blank,
 // COPY (the copy then leads the sweep down the screen); in shown rows after
 // the aimed-at blank must have ended, LATE; otherwise keep polling. A

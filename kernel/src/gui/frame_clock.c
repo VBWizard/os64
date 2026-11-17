@@ -268,6 +268,15 @@ fc_plan_t frame_clock_plan(const fc_frame_t *f, uint32_t line, uint64_t now_us, 
 	return p;
 }
 
+uint64_t frame_clock_blank_began_us(const fc_frame_t *f, uint32_t line, uint64_t now_us)
+{
+	if (!frame_clock_frame_valid(f))
+		return now_us;
+	uint64_t lines_since = (line % f->lines + f->lines - f->blank_start) % f->lines;
+	uint64_t ago_us = lines_since * f->period_ns / f->lines / 1000;
+	return ago_us < now_us ? now_us - ago_us : 0;
+}
+
 uint64_t frame_clock_blank_end_us(const fc_frame_t *f, uint64_t blank_at_us)
 {
 	if (!frame_clock_frame_valid(f))

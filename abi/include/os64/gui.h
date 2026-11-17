@@ -318,6 +318,16 @@ typedef struct os64_gui_surface
 // Pin state changed through the frame, keyboard or client API. No payload;
 // query get_state. This hint can be dropped on overflow; reconcile on input loss.
 #define OS64_GUI_EVENT_WINDOW_PIN_CHANGED 18
+// The display's frame, answering os64_gui_frame_request: the window was
+// shown at the end of a frame that reached the glass. Coalesced outside the
+// input ring: at most one waits unread, and a newer replaces it.
+// `frame.number` counts every frame the compositor served OR HELD (a frame
+// that missed its blank and waited for the next), and is answered only for
+// served ones, so a rise of two means a refresh went by. `frame.blank` is
+// micros() at the instant that frame's blank began, the same meaning with
+// or without anything copied, so successive answers are a period apart.
+// `frame.period_ns` is the refresh period (measured, or the free clock's).
+#define OS64_GUI_EVENT_FRAME 19
 #define OS64_GUI_PLACEMENT_X      (1u << 0)
 #define OS64_GUI_PLACEMENT_Y      (1u << 1)
 #define OS64_GUI_PLACEMENT_WIDTH  (1u << 2)
@@ -325,6 +335,7 @@ typedef struct os64_gui_surface
 #define OS64_GUI_PLACEMENT_ALL    15u
 _Static_assert(OS64_GUI_EVENT_INPUT_LOST == 16, "input-loss event ABI");
 _Static_assert(OS64_GUI_EVENT_MOUSE_WHEEL == 13, "wheel event ABI");
+_Static_assert(OS64_GUI_EVENT_FRAME == 19, "frame event ABI");
 
 // Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
 // key events and — since resize — by mouse events too.
@@ -390,6 +401,13 @@ typedef struct os64_gui_event
             int32_t x, y;
             uint32_t width, height, changed;
         } placement;
+        struct {
+            // Split words preserve the event union's four-byte ABI alignment
+            // (OS64_GUI_EVENT_FRAME says what each means).
+            uint32_t number_lo, number_hi;
+            uint32_t blank_lo, blank_hi;
+            uint32_t period_ns;
+        } frame;
     };
     uint64_t tick;              // enqueue ticks; zero for synthesized INPUT_LOST
 } os64_gui_event_t;
@@ -397,6 +415,16 @@ typedef struct os64_gui_event
 static inline uint64_t os64_gui_appearance_generation(const os64_gui_event_t *ev)
 {
     return ((uint64_t)ev->appearance.generation_hi << 32) | ev->appearance.generation_lo;
+}
+
+static inline uint64_t os64_gui_frame_number(const os64_gui_event_t *ev)
+{
+    return ((uint64_t)ev->frame.number_hi << 32) | ev->frame.number_lo;
+}
+
+static inline uint64_t os64_gui_frame_blank_us(const os64_gui_event_t *ev)
+{
+    return ((uint64_t)ev->frame.blank_hi << 32) | ev->frame.blank_lo;
 }
 
 // ── L0: the wrappers (thin by doctrine — all logic is kernel-side) ──────────
@@ -480,6 +508,37 @@ static inline int64_t os64_gui_event_ring(int64_t handle, uint32_t mask)
 {
     return (int64_t)os64_syscall2(SYSCALL_GUI_EVENT_RING,
                                   (uint64_t)handle, mask);
+}
+
+// Ask for the display's next frame for an owned window (FRAME_CLOCK.md § 6).
+// One-shot: the answer is one OS64_GUI_EVENT_FRAME, at the end of the next
+// frame that reaches the glass while the window is shown (a covered window
+// is answered once it is shown again), and the program asks again for the
+// one after. Asking twice before the answer is one request. Returns 0 when
+// asked, or a negative OS64_GUI_ERR_*; an unknown flag is BAD_ARGS.
+// OS64_GUI_FRAME_IF_DRAWN asks only if the window has published since its
+// last request, and otherwise returns OS64_GUI_FRAME_IDLE and asks nothing:
+// a program with nothing new to show is not a frame's customer, and must
+// not keep the display's clock running (it sleeps instead).
+#define OS64_GUI_FRAME_IF_DRAWN 1u
+#define OS64_GUI_FRAME_IDLE     1
+static inline int64_t os64_gui_frame_request(int64_t handle, uint32_t flags)
+{
+    return (int64_t)os64_syscall2(SYSCALL_GUI_FRAME_REQUEST,
+                                  (uint64_t)handle, flags);
+}
+
+// Take the window's frame answer if one waits, leaving every other event
+// queued: 1 with *out filled, 0 when none waits, or a negative
+// OS64_GUI_ERR_*. Never blocks. For a pacer inside a program's own event
+// loop (libos64's os64_frame_wait), which must not consume the events the
+// program's poll is for, and cannot tell from a peek-wait (event_wait with
+// NULL) which kind is waiting. A program that reads its queue gets the same
+// answer from poll; whichever reads first takes it.
+static inline int64_t os64_gui_frame_take(int64_t handle, os64_gui_event_t *out)
+{
+    return (int64_t)os64_syscall2(SYSCALL_GUI_FRAME_TAKE,
+                                  (uint64_t)handle, (uint64_t)out);
 }
 
 // Where is my window, and what state is it in? Fills *out with the FRAME

@@ -550,6 +550,24 @@ static struct {
 static bool s_fc_planned;
 static uint64_t s_fc_wake_at, s_fc_blank_at, s_fc_woke, s_fc_free_ns, s_fc_loads;
 
+// Frame requests (FRAME_CLOCK.md § 6). `s_fr_arrived` is raised by a request
+// (any thread, under kGuiLock) and lowered by the pass that counts the
+// waiters, so a request that lands after the count still counts as work.
+// The rest is the compositor thread's: the shown waiters its last pass
+// counted, the frame number (every frame served or held), what this pass's
+// frame was, and, with the clock off, when the last frame was answered.
+// The counts are read by /sys/gui under kGuiLock, where they are written.
+typedef enum { FR_NONE, FR_SERVED, FR_HELD } fr_kind_t;
+static volatile bool s_fr_arrived;
+static uint32_t s_fr_waiters;
+static uint64_t s_fr_number;
+static fr_kind_t s_fr_kind;
+static uint64_t s_fr_blank_us;
+static uint64_t s_fr_off_last_us;
+static struct {
+	uint64_t requests, answered, held_back;
+} s_fr_counts;
+
 // The copy owed: rectangles composed and not yet on the framebuffer, and
 // the publishes behind them.
 static rect_t s_fc_carry[DAMAGE_MAX_RECTS];
@@ -619,6 +637,51 @@ void gui_frame_nudge(void)
 		return;
 	__atomic_store_n(&kSchedFrameNudged, true, __ATOMIC_SEQ_CST);
 	send_ipi(s_fc_cpu, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+}
+
+void gui_frame_request_arrived(void)
+{
+	s_fr_counts.requests++;
+	__atomic_store_n(&s_fr_arrived, true, __ATOMIC_SEQ_CST);
+	gui_frame_nudge();
+}
+
+// What this pass's frame was, for the answer at its end (gui_frame_answer).
+// A served frame reports when its blank began.
+static void fr_served(uint64_t blank_us)
+{
+	s_fr_kind = FR_SERVED;
+	s_fr_blank_us = blank_us;
+}
+
+// When the blank of a frame copied without a fresh reading began: the
+// blank it was planned for, if that has come, or now.
+static uint64_t fr_planned_blank_us(void)
+{
+	uint64_t now = micros_now();
+	return s_fc_blank_at != 0 && s_fc_blank_at <= now ? s_fc_blank_at : now;
+}
+
+// The answer: every shown window that wants a frame is told this one's
+// number, when its blank began and the period (os64/gui.h). Under kGuiLock
+// for the walk alone; the pushes wake waiters as every event does.
+static void fr_answer(uint64_t blank_us)
+{
+	fc_frame_t f;
+	uint32_t period_ns = beam_frame(&f) && f.period_ns <= 0xFFFFFFFFull ? (uint32_t)f.period_ns
+	                                                                    : (uint32_t)FC_FREE_PERIOD_NS;
+	input_event_t ev = {
+		.type = INPUT_EVENT_FRAME,
+		.frame = { .number_lo = (uint32_t)s_fr_number, .number_hi = (uint32_t)(s_fr_number >> 32),
+		           .blank_lo = (uint32_t)blank_us, .blank_hi = (uint32_t)(blank_us >> 32),
+		           .period_ns = period_ns },
+		.tick = kTicksSinceStart,
+	};
+	uint32_t held = 0;
+	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
+	s_fr_counts.answered += wm_frame_answer_locked(&ev, &held);
+	s_fr_counts.held_back += held;
+	gui_unlock(flags);
 }
 
 // The reservation follows the state and the dial. The compositor thread
@@ -756,7 +819,7 @@ static void fc_stopped_halt(void)
 	s_fc_at = FC_AT_STOPPED;
 	__asm__ volatile("cli" ::: "memory");
 	__atomic_store_n(&s_fc_halted_stopped, true, __ATOMIC_SEQ_CST);
-	if (!input_pending() && kPendingDamageCount == 0 && !s_glass_regained) {
+	if (!input_pending() && kPendingDamageCount == 0 && !s_glass_regained && !s_fr_arrived) {
 		frame_wake_cancel();
 		mpAcctHaltBegin();
 		__asm__ volatile("sti\n\thlt" ::: "memory");
@@ -806,6 +869,11 @@ static void fc_copy(bool judge, uint32_t begin_line, uint64_t begin_us, uint64_t
 			s_fc_pieces[FC_COPY_PIECES - 1].pixels += px;
 		}
 	}
+	fc_frame_t f;
+	if (judge && beam_frame(&f))
+		fr_served(frame_clock_blank_began_us(&f, begin_line, begin_us));
+	else
+		fr_served(fr_planned_blank_us());
 	if (judge)
 		frame_clock_judge_pieces(s_fc_pieces, pieces, begin_line, begin_us);
 	glass_settle(s_fc_glass_carry, s_fc_glass_carry_count, true);
@@ -827,8 +895,10 @@ static void fc_missed(fc_late_t cause, uint64_t *flushes)
 {
 	if (cause < FC_LATE_CAUSES)
 		s_fc_clk_owed.late[cause]++;
-	if (frame_clock_hold_step(&s_fc_hold, false) != FC_SHOW_FORCE)
+	if (frame_clock_hold_step(&s_fc_hold, false) != FC_SHOW_FORCE) {
+		s_fr_kind = FR_HELD;   // numbered, not answered: nothing reached the glass
 		return;
+	}
 	s_fc_clk_owed.forced++;
 	uint32_t line = 0;
 	bool read = beam_present() && beam_line(&line);
@@ -855,6 +925,21 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 		// Publishes whose damage composited to nothing: nothing will show.
 		glass_settle(s_fc_glass_carry, s_fc_glass_carry_count, false);
 		s_fc_glass_carry_count = 0;
+		// Still a frame, if this pass was one the clock planned: its blank
+		// is served by waiting for it, and a frame request is answered at
+		// its end with when it began (FRAME_CLOCK.md § 6). An unplanned
+		// pass (the first after a stop) is not a frame; the next is.
+		if (s_fc_planned) {
+			s_fc_at = FC_AT_COMPOSED;
+			if (s_fc_blank_at > micros_now())
+				fc_halt_until(s_fc_blank_at);
+			uint32_t line;
+			fc_frame_t f;
+			if (beam_present() && beam_frame(&f) && beam_line(&line))
+				fr_served(frame_clock_blank_began_us(&f, line, micros_now()));
+			else
+				fr_served(fr_planned_blank_us());
+		}
 		s_fc_planned = false;
 		return;
 	}
@@ -1009,8 +1094,12 @@ static void frame_clock_pace(void)
 {
 	fc_apply_reserve();   // the dial may have moved since the last frame
 	bool owns = gui_owns_glass();
-	bool work = input_pending() || kPendingDamageCount != 0 || s_glass_regained;
-	bool show = frame_clock_keep_running(&s_fc_run, s_fc_had_damage || work, 0) || s_fc_carry_count > 0;
+	// A shown window waiting for a frame keeps the clock running (and a
+	// request that arrived after the pass counted them is work); a covered
+	// one does not, so an animation nobody can see lets it stop.
+	bool work = input_pending() || kPendingDamageCount != 0 || s_glass_regained || s_fr_arrived;
+	bool show = frame_clock_keep_running(&s_fc_run, s_fc_had_damage || work, s_fr_waiters) ||
+	            s_fc_carry_count > 0;
 	s_fc_had_damage = false;
 	if (!owns || !show) {
 		s_fc_stop_why = owns ? "nothing to show" : "a text terminal holds the screen";
@@ -1049,9 +1138,20 @@ void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart)
 	out->cpu = s_fc_cpu;
 	out->reserve_dial = s_fc_reserve_dial;
 	out->reserve_applies = kCPUCount >= FC_RESERVE_MIN_CPUS;
+	// The frame requests, with the clock on or off (both answer them).
+	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
+	out->fr_requests = s_fr_counts.requests;
+	out->fr_answered = s_fr_counts.answered;
+	out->fr_held_back = s_fr_counts.held_back;
+	out->fr_number = s_fr_number;
+	uint32_t shown, covered;
+	wm_frame_waiters_locked(&shown, &covered);
+	out->fr_waiting_shown = shown;
+	out->fr_waiting_covered = covered;
+	gui_unlock(flags);
 	if (s_fc_off_why != NULL)
 		return;
-	uint64_t flags = gui_lock(GUI_LOCK_OTHER);   // one reader's baseline at a time
+	flags = gui_lock(GUI_LOCK_OTHER);   // one reader's baseline at a time
 	bool running = s_fc_running;
 	uint64_t partial = micros_now() - s_fc_time.since_us;
 	out->running = running;
@@ -2635,6 +2735,14 @@ bool guicomp_thread(bool daemon)
 		wm_cover_sweep_locked();
 		control_state_locked();
 		pointer_state_locked();
+		// The frame requests, judged by the sweep just run: the shown ones
+		// keep the clock running (frame_clock_pace). Lowering the arrival
+		// flag here, under the lock a request raises it under, means any
+		// request it hides is in this count.
+		uint32_t fr_covered;
+		wm_frame_waiters_locked(&s_fr_waiters, &fr_covered);
+		s_fr_arrived = false;
+		s_fr_kind = FR_NONE;
 
 		// Take the whole damage list in one hold and reset it, so clients
 		// publishing during this frame's flush accumulate into the NEXT
@@ -2753,6 +2861,26 @@ bool guicomp_thread(bool daemon)
 		if (!daemon)
 			return true;
 
+		// The frame's end, and the frame requests' answer (FRAME_CLOCK.md
+		// § 6). With the clock on, this pass's frame was served, held or
+		// none (frame_clock_present said which): both of the first two are
+		// numbered, a served one is answered. With the clock off a frame is
+		// a pass that has shown waiters, at least a period after the last
+		// such pass, and its blank is the pass's time.
+		if (s_fc_off_why == NULL) {
+			if (s_fr_kind != FR_NONE)
+				s_fr_number++;
+			if (s_fr_kind == FR_SERVED)
+				fr_answer(s_fr_blank_us);
+		} else if (s_fr_waiters > 0) {
+			uint64_t now = micros_now();
+			if (s_fr_off_last_us == 0 || now - s_fr_off_last_us >= FC_FREE_PERIOD_NS / 1000) {
+				s_fr_off_last_us = now;
+				s_fr_number++;
+				fr_answer(now);
+			}
+		}
+
 		// With the clock on, it paces: stop, or sleep until the next frame's
 		// wake (frame_clock_pace, § 9). What follows is the clock-off pacing.
 		if (s_fc_off_why == NULL) {
@@ -2786,7 +2914,7 @@ bool guicomp_thread(bool daemon)
 		// IRQ entry closes the nap before billing its handler; End settles
 		// our post-wake tail.
 		__asm__ volatile("cli" ::: "memory");
-		if (!input_pending() && kPendingDamageCount == 0 && !s_glass_regained) {
+		if (!input_pending() && kPendingDamageCount == 0 && !s_glass_regained && !s_fr_arrived) {
 			mpAcctHaltBegin();
 			__asm__ volatile("sti\n\thlt" ::: "memory");
 			mpAcctHaltEnd();

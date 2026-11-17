@@ -152,19 +152,77 @@ The mouse pointer is damage like any other, so it moves once a refresh.
 
 ### 6. A frame for ring 3
 
-One call: **ask for the next frame.** A program asks once; when the next
-frame its window is part of has been copied, its window gets an event
-carrying the frame's number and time. It asks again for the one after.
-This is the frame callback GRAPHICS.md names as "the more general design",
-and it arrives through the event wait a GUI program already blocks in.
+One call: **ask for the next frame** (`os64_gui_frame_request`, syscall
+69). A program asks once; at the end of the next frame that reaches the
+glass while its window is shown, its window gets an event
+(`OS64_GUI_EVENT_FRAME`) carrying the frame's number, when its blank began
+and the period. It asks again for the one after. This is the frame
+callback GRAPHICS.md names as "the more general design", and it arrives
+through the event wait a GUI program already blocks in.
 
-- A waiting program keeps the clock running.
+- A shown window waiting for a frame keeps the clock running.
 - A covered window is told nothing until it is shown again, so an
   animation nobody can see stops by itself.
-- `libos64`'s `os64_frame_wait` is rebuilt on it, so every program using
-  the frame clock helper is paced by the display with no change of its
-  own. yonder's ticker takes its animation frames from it.
-- `/tests/glassbench` gains it as a third pacer.
+- **A program with nothing new to draw is not the display's customer.**
+  A publish marks the window drawn and a request clears the mark, and a
+  request made with `OS64_GUI_FRAME_IF_DRAWN` asks only if the window has
+  published since it last asked, and otherwise answers `IDLE`. The mark is
+  the kernel's because every publish passes through it, the inline
+  `os64_draw_publish` and direct callers alike, where a flag in libos64
+  would miss them.
+- `libos64`'s `os64_frame_wait` is rebuilt on it: bound to a window, with
+  a budget of 100 ms or less, while the program draws, it waits for the
+  budget's frames (rounded to the nearest, at least one); idle, or with a
+  longer budget, it sleeps as before. Every program using the helper is
+  paced by the display with no change of its own, and an idle one (a
+  terminal at its prompt) never keeps the clock running. The helper runs
+  inside a program's own loop, so it must not take the program's events,
+  and a peek-wait cannot say which kind is waiting: it takes the answer
+  alone with `os64_gui_frame_take` (syscall 70), which moves no other
+  event. yonder's ticker takes its animation frames from it.
+- `/tests/glassbench` gains it as a third pacer, `-p frame`.
+
+**A window's frame request, its states** (*written for slice F3, before
+its code*). A request belongs to a WINDOW, not a task: a flag on the
+window (`frame_wanted`), set by the syscall and cleared by the answer, all
+under `kGuiLock`. The answer is an event in the window's ordinary queue,
+coalesced outside the input ring as the doorbell is: at most one answer
+waits unread, and a newer one replaces it (its frame number shows the
+program what it skipped), so a program that asks and never reads cannot
+fill its queue. "Shown" is the cover sweep's verdict
+(`GUI_WINDOW_COVERED`, recomputed at every compositor pass): a window
+minimized, behind one window, off the screen, or behind a text terminal is
+covered.
+
+| State | Becomes | When | Who, under what |
+|---|---|---|---|
+| none | wanted | the program asks | the window's owner, through the syscall, under `kGuiLock`; a window it does not own is refused (`NOT_OWNER`) |
+| wanted | wanted (one request) | it asks again before the answer | the syscall finds the flag set and leaves it: asking twice is one request |
+| wanted, shown, clock **running** | answered: the event queued, the flag cleared | the end of a frame that reached the glass: after the copy and its check (aimed, or forced by the hold rule), or, with nothing to copy, once the blank it slept toward has begun | the compositor thread, under `kGuiLock` for the walk alone after the copy; the push wakes a waiter in the window's event wait as every event does |
+| wanted, shown, clock running | stays wanted | the frame is HELD (it missed its blank; F2's hold rule) | nothing reached the glass, so nothing is told; the frame is numbered, and the hold rule guarantees the next frame reaches the glass and is answered, so the program sees the number rise by two |
+| wanted, shown, clock **stopped** (nothing to show) | wanted, the clock started | the request arrives | the syscall nudges the compositor (`gui_frame_nudge`); `frame_clock_keep_running` is told the number of shown waiters, so the clock starts and serves blanks while one waits |
+| wanted, shown, clock **running free** (no beam) | answered | after each free frame's copy (or its period, with nothing to copy) | the compositor, as above |
+| wanted, shown, clock **off** for the boot (`NOFRAMECLOCK`, one CPU, `SCHED=periodic`, `NOBACKSTOP`) | answered | the end of a tick-driven compositor pass that has shown waiters, no sooner than one period (16.7 ms) after the last such pass: that pass is a frame | the compositor, under `kGuiLock`. Answers come at the passes' cadence, so they are less even than with the clock, and no timer is set for them (a timer for the period would be a clock) |
+| wanted, **covered** (any of the four clocks) | stays wanted | a frame ends while it is covered | nothing moves it; it is not counted as a waiter, so an animation nobody can see lets the clock stop. Counted on `/sys/gui` as held back |
+| wanted, covered | answered | the first frame served after the cover sweep shows it again | the sweep clears the flag at that pass; the answer goes out at that frame's end |
+| wanted, behind a **text terminal** | stays wanted | the terminal holds the screen | the sweep marks every window covered; the clock stops ("a text terminal holds the screen") and no waiter keeps it running |
+| wanted, behind a text terminal | answered | the desktop is back: the first frame served after the return | the return's repaint is that frame |
+| wanted | gone | the window is destroyed, or its task dies | `gui_window_destroy` and the task's window teardown, under `kGuiLock`: the flag goes with the window, and an unread answer with its queue |
+| answered, unread | replaced | the program asks again and a later frame answers before it has read the first | the coalesced slot keeps the newest; the frame numbers say one was skipped |
+
+The answer carries the frame's **number**: the compositor's count of every
+frame it served or held (with the clock off, of every pass that answered),
+answered only for served ones, so a gap means frames went by. Its
+**blank**: `micros()` at the instant that frame's blank began, read off
+the beam (`frame_clock_blank_began_us`) when there is one, the period's
+boundary when the clock runs free, the pass's time when the clock is off.
+It means the same for a frame copied in the blank, one forced outside it,
+and one with nothing to copy, so successive answers are a period apart
+(the time a copy ended would move with how much was copied, which is not
+the display's jitter). And the refresh **period**, measured or free.
+`/sys/gui`'s `frame requests:` line counts the requests made, answered and
+held back (one per waiting covered window per frame), who waits now, and
+the frame number.
 
 ### 7. Without a beam: the clock runs free
 

@@ -1631,6 +1631,13 @@ static void sys_gen_gui_frame_clock_state(synth_text_t *t, const gui_composite_c
 {
 	gui_frame_clock_status_t s;
 	gui_frame_clock_status(&s, true);
+	// Frame requests are answered with the clock on or off (FRAME_CLOCK.md
+	// § 6), so this line comes first. Held back counts one per waiting
+	// covered window per frame.
+	synth_text_addf(t, "frame requests: %lu made, %lu answered, %lu held back while covered; "
+	                "waiting now %u shown, %u covered; frame number %lu\n",
+	                s.fr_requests, s.fr_answered, s.fr_held_back,
+	                s.fr_waiting_shown, s.fr_waiting_covered, s.fr_number);
 	if (s.off_why != NULL)
 	{
 		synth_text_addf(t, "frame clock: off (%s)\n", s.off_why);
