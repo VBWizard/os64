@@ -15,6 +15,7 @@
 #include "fpu.h"
 #include "doorbell.h"
 #include "accounting.h"
+#include "micros.h"
 
 volatile uint64_t mp_isrSavedRAX[MAX_CPUS],mp_isrSavedRBX[MAX_CPUS],mp_isrSavedRCX[MAX_CPUS],mp_isrSavedRDX[MAX_CPUS],mp_isrSavedRSI[MAX_CPUS],
                   mp_isrSavedRDI[MAX_CPUS],mp_isrSavedRBP[MAX_CPUS],mp_isrSavedCR0[MAX_CPUS],mp_isrSavedCR3[MAX_CPUS],mp_isrSavedCR4[MAX_CPUS],
@@ -139,6 +140,14 @@ volatile uint64_t kFrameWakeFires[MAX_CPUS] = {0};
 // every pass's eligibility test (scheduler_thread_can_run_on_core says why
 // a stale read is harmless either way).
 volatile int32_t kSchedReservedCPU = SCHED_NO_RESERVED_CPU;
+// The frame's claim on its CPU (scheduler.h; sched_frame_claim_locked and
+// sched_frame_cut_us below are its two halves). Each word has one writer,
+// the compositor thread, except kSchedFrameNudged, which a nudger raises
+// and the pass takes.
+thread_t *volatile kSchedFrameThread = NULL;
+volatile uint32_t kSchedFrameCPU;
+volatile uint64_t kSchedFrameDueUs;
+volatile bool kSchedFrameNudged;
 extern volatile uint64_t kDiagIPISends, kDiagICRMaxSpins, kDiagSettleBroadcasts,
 	kDiagSettleTimeouts, kDiagSettleMaxSpins, kDiagSettleLastLateCPU;
 extern volatile uint32_t kDiagLastVector[MAX_CPUS], kDiagLVT[MAX_CPUS];
@@ -198,6 +207,57 @@ static bool scheduler_thread_can_run_on_core(thread_t *thread, core_local_storag
 	if (thread->pinnedCPU != THREAD_NO_AFFINITY)
 		return false;
 	return thread->idleThread || kSchedReservedCPU != (int32_t)cls->cpu;
+}
+
+// ── The frame's claim on its CPU (FRAME_CLOCK.md § 9) ───────────────────────
+// Without it, the compositor's frame wake was a pass like any other, and a
+// pass hands the CPU to whoever has aged most: a thread sharing the
+// compositor's CPU (pinned there, or cache-home there with the CPU shared)
+// aged on every pass on every CPU while the compositor halted as that CPU's
+// current thread, so it won the pick at EVERY wake and every frame missed
+// its blank (the P5's freeze, 2026-11-17). With it, the window from the
+// compositor's wake to its next plan belongs to the compositor, and the CPU
+// is shared outside it.
+//
+// The claim: on the compositor's CPU, with its window open or a nudge owed,
+// it is marked expedite, which the pick takes over aging for one dispatch
+// (thread.h). Who may set expedite on the compositor: this function alone,
+// on the compositor's own CPU, in the pass, under the queue lock, which is
+// the doorbell's discipline. Only while it is RUNNABLE, or RUNNING, which on
+// its CPU means it is the thread this pass interrupted: the pass requeues it
+// and the pick finds it. Any other state (parked in a kernel wait) is left
+// alone, and the pick goes on as if there were no claim. Pinned to this CPU,
+// the compositor cannot be running anywhere else when its window opens here.
+static void sched_frame_claim_locked(core_local_storage_t *cls)
+{
+	thread_t *t = kSchedFrameThread;
+	if (t == NULL || cls->cpu != kSchedFrameCPU)
+		return;
+	bool nudged = __atomic_exchange_n(&kSchedFrameNudged, false, __ATOMIC_SEQ_CST);
+	uint64_t due = kSchedFrameDueUs;
+	bool window = due != 0 && micros_now() >= due;
+	if ((nudged || window) &&
+	    (t->threadState == THREAD_STATE_RUNNABLE || t->threadState == THREAD_STATE_RUNNING))
+		t->expedite = true;
+}
+
+// The cut: a thread other than the compositor dispatched on its CPU before
+// the compositor's window opens runs only until it opens. Returns true with
+// the time left when the lease is to be cut; false for a dispatch the claim
+// does not concern, and when the window is already open (the compositor
+// then is in no state to run, or the claim would have picked it, so the
+// plain lease is right).
+static bool sched_frame_cut_us(core_local_storage_t *cls, thread_t *dispatched, uint64_t *in_us)
+{
+	thread_t *t = kSchedFrameThread;
+	if (t == NULL || cls->cpu != kSchedFrameCPU || dispatched == t)
+		return false;
+	uint64_t due = kSchedFrameDueUs;
+	uint64_t now = micros_now();
+	if (due == 0 || now >= due)
+		return false;
+	*in_us = due - now;
+	return true;
 }
 
 static void scheduler_nudge_parked_aps(thread_t *thread)
@@ -1668,6 +1728,10 @@ void scheduler_do()
     // relinked here, BEFORE the peek, or the peek would find the idle thread
     // already running and shortcut past it (doorbell.h, DOORBELL.md).
     doorbell_service_locked();
+    // The frame's claim, at the same point and for the same reason: marked
+    // before the peek, so a compositor this pass interrupted is requeued and
+    // picked again rather than shortcut past.
+    sched_frame_claim_locked(cls);
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, true);
   	if (threadToRun != NO_THREAD && threadToRun->threadID!=cls->threadID)
     {
@@ -1705,7 +1769,12 @@ void scheduler_do()
 	// nudge-driven, lease-expiry-driven — so this is the one place the lease
 	// is granted or revoked. Non-idle dispatch on a tickless AP: arm the
 	// one-shot deadline; idle dispatch: stop the timer, return the core to
-	// true silence. The BSP keeps its 100Hz heartbeat (timekeeping lives
+	// true silence. On the compositor's CPU, a thread other than the
+	// compositor dispatched before its frame's window opens gets the lease
+	// cut at that instant (sched_frame_cut_us): frame_wake_set, so the
+	// count is never longer than the lease and the fire is counted as a
+	// frame wake, and that fire's pass is where the claim takes the CPU
+	// back. The BSP keeps its 100Hz heartbeat (timekeeping lives
 	// there); periodic mode never reaches here with a masked timer at all.
 	// IF may be 1 here (the pass runs interruptible by design — see
 	// SCHEDULER_REENTRANCY.md); that is safe: the LAPIC writes are each
@@ -1716,10 +1785,13 @@ void scheduler_do()
 	    cpu != BSP_CPU)
 	{
 		thread_t *dispatched = cls->currentThread;
-		if (dispatched != NULL && dispatched != NO_THREAD && !dispatched->idleThread)
-			sched_backstop_arm(cls);
-		else
+		uint64_t cut_us;
+		if (dispatched == NULL || dispatched == NO_THREAD || dispatched->idleThread)
 			sched_backstop_disarm();
+		else if (sched_frame_cut_us(cls, dispatched, &cut_us))
+			frame_wake_set(cut_us);   // the lease, cut at the compositor's wake: never longer
+		else
+			sched_backstop_arm(cls);
 	}
 }
 

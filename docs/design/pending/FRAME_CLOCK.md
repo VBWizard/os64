@@ -196,7 +196,9 @@ travel to the P5 and does not need to.
 Two writers share the compositor's CPU's LAPIC timer:
 - the scheduler's dispatch tail, which arms the preemption lease
   (`sched_backstop_arm`) or stops it (`sched_backstop_disarm`) at every
-  pass on a tickless AP;
+  pass on a tickless AP, and for a thread sharing the compositor's CPU
+  arms the lease cut short at the compositor's wake (`frame_wake_set`, the
+  cut in The wake keeps the CPU, below);
 - the compositor, which sets the frame wake (`frame_wake_set`) immediately
   before each `sti; hlt`.
 
@@ -214,8 +216,8 @@ clears the flag whenever it re-arms or stops the timer.
 | State | The timer is set for | Ends when | Who moves it on, and how |
 |---|---|---|---|
 | **off** (`NOFRAMECLOCK`, one CPU, `SCHED=periodic`, `NOBACKSTOP`) | as today: the lease, the periodic tick, or nothing | never; it is the boot's | chosen once at `gui_start`, and `/sys/gui` says why. F1's measurement still runs |
-| **stopped** (nothing to show, nobody waiting) | the lease, set by the compositor before it halts (which also cancels a frame wake still pending) | a nudge, a PS/2 interrupt (routed to this CPU), or the lease; each one ends with a re-check | the nudge comes from `gui_damage_add` (under `kGuiLock`, interrupts off) or from the input queue's push (under its lock, interrupts off, often on `kusb`'s thread on the BSP). It takes no lock: one atomic exchange of the "halted and stopped" flag, then `send_ipi(IPI_MANUAL_SCHEDULE_VECTOR)` if the flag was set. The compositor sets the flag with interrupts off just before `sti; hlt` and clears it on waking. A re-check that finds work goes to **running** |
-| **running**, waiting for the lead | the earlier of the wake instant (the next blank less the lead) and the lease | the frame wake (a 0x7E pass), or any other interrupt, after which it recomputes. At or after the wake instant it goes to **composing** | compositor thread, with interrupts off from the set to `sti; hlt` |
+| **stopped** (nothing to show, nobody waiting) | the lease, set by the compositor before it halts (which also cancels a frame wake still pending) | a nudge, a PS/2 interrupt (routed to this CPU), or the lease; each one ends with a re-check | the nudge comes from `gui_damage_add` (under `kGuiLock`, interrupts off) or from the input queue's push (under its lock, interrupts off, often on `kusb`'s thread on the BSP). It takes no lock: one atomic exchange of the "halted and stopped" flag, then, if the flag was set, `kSchedFrameNudged` raised and `send_ipi(IPI_MANUAL_SCHEDULE_VECTOR)`, whose pass keeps the CPU for the compositor (the claim, below). The compositor sets the flag with interrupts off just before `sti; hlt` and clears it on waking. A re-check that finds work goes to **running** |
+| **running**, waiting for the lead | the earlier of the wake instant (the next blank less the lead) and the lease | the frame wake (a 0x7E pass, which keeps the CPU for the compositor: the claim, below), or any other interrupt, after which it recomputes. At or after the wake instant it goes to **composing**. A lease expiry before the wake may hand the CPU to a co-tenant, whose lease is cut at the wake | compositor thread, with interrupts off from the set to `sti; hlt`; it publishes the wake (`kSchedFrameDueUs`) first |
 | **composing** | the lease, re-armed by the wake's pass | the pass ends: **aiming** with a beam, **copying** without one | today's pass, under `kGuiLock` (interrupts off inside the lock) |
 | **aiming** | the lease | the sweep enters the blank: **copying**. If the first reading was already in the blank, the counter must change within 3 lines first, or the beam is withdrawn as frozen and **free** (a counter stopped at a blank line would otherwise look like a perfect aim every frame); only a window actually watched counts, so a gap longer than a line between readings, or a failed read, makes it inconclusive, nothing is withdrawn, and a fresh reading decides that frame. The sweep is in shown rows having left the blank: **late**. The counter does not move within the bound (the lead plus 8 lines): withdrawn as frozen, and **free**. The counter moves but no blank arrives within the bound: **late**, counted as an overrun. No reading succeeds within the bound: the frame goes unaimed | compositor thread, interrupts on, no lock. It polls the beam |
 | **copying** | the lease | the strips are done; F1's two readings judge the copy (`torn` now means held off mid-copy). Then **running**, or **stopped** if `frame_clock_keep_running` says so. The screen is asked for again before every strip: a text terminal that took it during the sleep or the aim voids what is carried, and the copy ends | compositor thread, interrupts on, outside `kGuiLock` |
@@ -228,13 +230,41 @@ would arm a stray one-shot in it (F2's cold read). The frame wake shares
 the timer by the lease's discipline, so without the lease it has nothing
 to share.
 
-**The nudge is a scheduler pass** (`IPI_MANUAL_SCHEDULE_VECTOR`, the
-precedent `doorbell_ring` set). While the clock is stopped the CPU is not
-reserved, so a nudge's pass may hand the CPU to another thread, and the
-compositor then waits up to a lease before its first frame: the same
-exposure the stopped compositor's own lease expiries have, and the one
-the clock-off compositor has always had. The cure, if the P5 shows it
-mattering, is a vector that only ends the halt (DEBTS).
+**The wake keeps the CPU** (added 2026-11-17, after the P5's freeze). A
+frame wake and a nudge are scheduler passes, and a pass hands the CPU to
+whoever has aged most. While the compositor halts it is its CPU's current
+thread, not in the run queue, so it does not age; a thread that shares the
+CPU (pinned there, or cache-home there with the CPU shared) ages on every
+pass on every CPU, and won the pick at every wake. Every frame then missed
+its blank, and with late frames held the screen froze (`env PINCPU=11
+fpu_demo` on the P5, on demand). Two halves cure it (scheduler.c,
+`sched_frame_claim_locked` and `sched_frame_cut_us`):
+- **The claim.** The compositor publishes its thread and CPU once, and as
+  it goes to sleep the instant its next frame's window opens: its wake
+  (`kSchedFrameDueUs`, cleared when the clock stops). A pass on that CPU
+  with the window open, or with a nudge owed (`kSchedFrameNudged`, raised
+  by `gui_frame_nudge` before its interrupt), marks the compositor
+  `expedite`, the doorbell's one-pick boost, at the doorbell's service
+  point and under the same queue lock. Only that function sets it, only on
+  the compositor's own CPU, and only while the compositor is runnable or is
+  the thread the pass interrupted; pinned there, it cannot be running
+  anywhere else when its window opens. Parked in a kernel wait, it is left
+  alone and the pick proceeds as if there were no claim.
+- **The cut.** Another thread dispatched on that CPU before the window
+  opens has its lease cut at the wake (the dispatch tail calls
+  `frame_wake_set`, so the count is never longer than the lease and the
+  fire counts as a frame wake), and that fire's pass is where the claim
+  takes the CPU back.
+
+So the window from the wake to the next plan belongs to the compositor,
+and the CPU is shared outside it. **What a co-tenant gets:** the compositor
+still halts as its CPU's current thread between its copy and its next
+wake, so a thread waiting for that CPU gets it only at a lease expiry that
+falls inside the compositor's sleep, never at a wake. With the GUI
+entries' 10 ms lease and a 16.7 ms frame, that is the end of each sleep
+longer than the lease; with the default 50 ms lease, while the clock runs,
+nothing. Giving the CPU away for the whole sleep is the compositor parking
+between frames instead of halting (F4, DEBTS).
 
 **The reservation.** While the clock is running (not stopped, not off),
 with four CPUs or more and the dial on, the compositor's CPU runs only
@@ -267,14 +297,20 @@ is everyone's again.
 - **The aim** polls for up to a few hundred microseconds a frame while the
   clock runs: a few percent of one CPU, during activity only.
 - **The pin alone gives the compositor nothing of its own.** The scheduler
-  has one queue, and an unpinned thread may run on any CPU, so a pass on
-  the compositor's CPU can hand that CPU to another thread for a whole
-  lease, a missed blank. Pinned and unreserved it is worse than unpinned,
-  since it can only wait for its own CPU's next pass. **The reservation**
-  is what gives it the CPU (§ 9): while the clock runs, with four CPUs or
-  more, that CPU runs only threads pinned to it, and the machine has one
-  CPU fewer for everything else for that time. `/sys/gui` says whether it
-  is in force and for how much of the time.
+  has one queue, and a pass on the compositor's CPU hands that CPU to
+  whoever has aged most. **The claim** (§ 9, The wake keeps the CPU) gives
+  it the CPU from its wake to its next plan, whoever else may run there;
+  what else runs there gets the rest. **The reservation** decides who that
+  may be: while the clock runs, with four CPUs or more and the dial on,
+  only threads pinned there, so the machine has one CPU fewer for
+  everything else for that time. With it off, the cache-home rule already
+  keeps a thread that has run elsewhere off the compositor's CPU while the
+  compositor is busy there (it is passed over until it has waited three
+  ticks, and other CPUs take it first), so what the reservation adds is
+  mostly the first dispatch of a thread that has never run, which is what
+  made a spinner cache-home on the compositor's CPU in the P5's first
+  freeze. `/sys/gui` says whether it is in force and for how much of the
+  time.
 - **`kGuiLock`'s holds are untouched.** A full-screen publisher still
   holds it with interrupts off for about 3 ms a frame. That is VIDEO.md's
   to weigh (a copy removed), not this design's.

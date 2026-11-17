@@ -582,9 +582,14 @@ void gui_frame_nudge(void)
 	if (!__atomic_exchange_n(&s_fc_halted_stopped, false, __ATOMIC_SEQ_CST))
 		return;
 	// An interrupt handler on the compositor's own CPU has already ended
-	// the halt by arriving; an interrupt to itself would buy nothing.
-	if (cpu_self() != s_fc_cpu)
+	// the halt by arriving; an interrupt to itself would buy nothing. The
+	// interrupt sent is a pass, so it carries the claim (scheduler.h): the
+	// pass keeps the CPU for the compositor rather than handing it to a
+	// thread that aged while it halted.
+	if (cpu_self() != s_fc_cpu) {
+		__atomic_store_n(&kSchedFrameNudged, true, __ATOMIC_SEQ_CST);
 		send_ipi(s_fc_cpu, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+	}
 }
 
 // The reservation follows the state and the dial. The compositor thread
@@ -661,9 +666,13 @@ static void fc_drop_carry(void)
 }
 
 // Halt until `wake_at`, setting the timer again after every return from the
-// halt, whatever ended it (the two-writers invariant, smp_core.c).
+// halt, whatever ended it (the two-writers invariant, smp_core.c). The wake
+// is published first as the frame's window (kSchedFrameDueUs): from it until
+// the next plan, a pass on this CPU keeps the CPU for the compositor, and a
+// thread that takes the CPU while the compositor sleeps runs only until it.
 static void fc_sleep_until(uint64_t wake_at)
 {
+	kSchedFrameDueUs = wake_at;
 	for (;;) {
 		__asm__ volatile("cli" ::: "memory");
 		uint64_t now = micros_now();
@@ -936,6 +945,7 @@ static void frame_clock_pace(void)
 		s_fc_stop_why = owns ? "nothing to show" : "a text terminal holds the screen";
 		fc_set_running(false);
 		s_fc_planned = false;
+		kSchedFrameDueUs = 0;   // no frame planned: the CPU's claim is the nudge's alone
 		fc_stopped_halt();
 		return;
 	}
@@ -2303,9 +2313,17 @@ bool guicomp_thread(bool daemon)
 		kBackbuffer.width, kBackbuffer.height,
 		(uint64_t)kBackbuffer.width * kBackbuffer.height * 4 / 1024);
 
-	// The frame clock begins stopped (its states: FRAME_CLOCK.md § 9).
+	// The frame clock begins stopped (its states: FRAME_CLOCK.md § 9). With
+	// it on, the scheduler learns which thread's frames claim which CPU
+	// (scheduler.h): the CPU first, the thread last, since the thread is
+	// what a pass looks at first. The compositor is a daemon that never
+	// exits, so the pointer never dangles.
 	s_fc_self = self;
 	s_fc_time.since_us = micros_now();
+	if (s_fc_off_why == NULL && daemon) {
+		kSchedFrameCPU = s_fc_cpu;
+		__atomic_store_n(&kSchedFrameThread, self, __ATOMIC_RELEASE);
+	}
 
 	cursor_build();
 	s_cursor_x = (int32_t)kBackbuffer.width / 2;

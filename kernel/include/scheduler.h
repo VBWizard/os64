@@ -91,4 +91,17 @@
 	// the compositor thread alone.
 	#define SCHED_NO_RESERVED_CPU (-1)
 	extern volatile int32_t kSchedReservedCPU;
+	// THE FRAME'S CLAIM ON ITS CPU (FRAME_CLOCK.md § 9, the wake keeps the
+	// CPU). The compositor publishes its thread and CPU once (CPU first,
+	// thread last; NULL = the clock is off), and the instant its next frame's
+	// window opens, which is its wake: kSchedFrameDueUs, micros_now()'s
+	// clock, 0 while no frame is planned. From that instant until the
+	// compositor publishes the next one, a pass on its CPU takes it over
+	// aging (expedite), and anything else dispatched there before it has its
+	// lease cut at it. A nudge owed a pick (gui_frame_nudge) is
+	// kSchedFrameNudged, taken by the next pass on that CPU.
+	extern thread_t *volatile kSchedFrameThread;
+	extern volatile uint32_t kSchedFrameCPU;
+	extern volatile uint64_t kSchedFrameDueUs;
+	extern volatile bool kSchedFrameNudged;
 #endif

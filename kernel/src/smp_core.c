@@ -983,13 +983,18 @@ void sched_backstop_disarm(void)
 // ── The frame wake (FRAME_CLOCK.md § 9) ─────────────────────────────────────
 // The compositor's CPU's one-shot, set by the compositor for the instant its
 // next frame must start: the timer's SECOND WRITER beside the lease above.
+// The dispatch tail also arms it, as the lease cut short, for a thread that
+// shares the compositor's CPU (scheduler.c, sched_frame_cut_us); that is the
+// lease's own writer choosing a shorter lease, at the same moment and under
+// the same discipline as sched_backstop_arm.
 // It fires on the lease's own vector, so a wake is an early lease expiry and
 // runs the same pass, and its count is never longer than the lease
 // (frame_clock_timer), so that CPU is preempted at least as often as the
 // lease alone would. THE INVARIANT that lets the two writers share one timer:
 // the compositor calls this after EVERY return from its halt, whatever ended
 // it, so a pass that re-armed the lease in between cannot lose a wake.
-// Interrupts off, on the CPU it arms, immediately before `sti; hlt`; under
+// The compositor calls it with interrupts off, on the CPU it arms,
+// immediately before `sti; hlt`; the tail, in the pass on that CPU. Under
 // tickless with the lease only: SCHED=periodic's timer is the periodic tick,
 // not the compositor's to rewrite, and without the lease nothing keeps the
 // timer masked between these writes; the frame clock is off in both.

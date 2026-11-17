@@ -1433,11 +1433,19 @@ timer's second writer beside the lease: it sets the timer again after every
 return from its halt, which is what lets the two share it), aims, and copies
 at the blank in strips; a missed blank holds the frame a refresh, counted
 by cause, and a frame held once that misses again is FORCED onto the glass
-wherever the sweep is, so the screen never freezes (it may tear). While it runs, with four CPUs or more, its CPU
+wherever the sweep is, so the screen never freezes (it may tear). **Its wake
+keeps its CPU** (scheduler.c `sched_frame_claim_locked`): a wake and a nudge
+are scheduler passes, and without the claim a pass gave the CPU to whatever
+shared it and had aged most, at every wake (the P5's freeze, 2026-11-17,
+`env PINCPU=11 fpu_demo`). The compositor publishes its wake
+(`kSchedFrameDueUs`); from it to the next plan a pass on that CPU takes it
+over aging (`expedite`), and another thread dispatched there before it has
+its lease cut at it. While it runs, with four CPUs or more, its CPU
 is RESERVED: only threads pinned there run on it (`kSchedReservedCPU`,
 read by every pass's eligibility test), and `/sys/gui` takes `reserve on`
 / `reserve off` lines to compare. With nothing to show it STOPS, which is
-the old hlt-wait plus a nudge (`gui_frame_nudge`, lock-free). Without a beam
+the old hlt-wait plus a nudge (`gui_frame_nudge`, lock-free, which owes the
+compositor the next pick on its CPU). Without a beam
 it runs free at 60 Hz. `/sys/gui` says whether it is running, for how long,
 whether the CPU is withheld, its frames, late ones by cause, the lead, the
 aim and its wakes. `NOFRAMECLOCK` turns it off for a boot, as do one CPU,
