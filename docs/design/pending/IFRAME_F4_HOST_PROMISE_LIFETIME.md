@@ -1,5 +1,7 @@
 # F.4b — retained Streams Promise conversion
 
+Implementation PR: **#642**, code checkpoint `74243aa3`.
+
 A retained stream can invoke a live callback after its implementation document
 has departed. Its Promise-returning callback must still perform WebIDL's return
 conversion, including the second conversion after a thrown callback. The
@@ -21,6 +23,8 @@ Their shared record carries explicit host-continuation admission for direct
 resolver functions; author-created bound/proxy wrappers retain ordinary job
 ownership, including proxy traps. Reference counting, GC marking and once-only resolution use the existing paths. Copying a
 Promise object does not copy this admission into an author-created resolver.
+A direct private resolver retained by an author thenable can still be used as a
+handler under its native contract; an author wrapper cannot inherit that grant.
 
 Resolution performs the ordinary single `Get(then)`. A callable is eligible for
 private native adoption only when it is the direct built-in
@@ -89,14 +93,23 @@ GC, late constructor/species changes, custom capabilities, bound/proxy/foreign
 intrinsics, getter and constructor throws, failed code, cancellation, grouped
 discard, queued destruction, job budgets and ordinary three-job timing.
 
-Host allocation sweeps cover capability creation through enqueue and a separate
-adoption/forwarding execution seam. DOM `--stream-continuations` covers retained
+Host allocation sweeps cover the whole conversion, from capability creation
+through forwarding, and a separate adoption/forwarding execution seam. DOM `--stream-continuations` covers retained
 Streams operations and thrown callbacks across readable/default/byte, writable
 and transform families. The neighboring callback-settings allocation proof
 remains part of validation. The focused runtime proof passes 3,038 shipping and 9,992 instrumented checks,
-including construction/enqueue and execution sweeps of 3/1 and 72/29 allocation
+including whole-conversion and execution sweeps of 3/1 and 72/29 allocation
 cuts per teardown policy. The shared resolver record remains 8 bytes and the
 queue header remains 104 bytes; the private argument is charged separately.
+
+The full runtime suite passes 34,769 shipping and 116,175 instrumented checks
+with zero failures and live allocations; parser refusal and expected teardown
+invariant paths pass. The full shipping DOM suite passes 443,791 checks and
+14,473 binding-allocation sweeps. Focused Streams continuation/error proof passes
+5,010 checks per engine; the instrumented callback composition passes 117,856
+checks, including 1,142 allocation cuts. These runs report zero failures.
+Target Yonder, js and the runtime guest consumer build; header/manifest checks,
+six preparer tests and the 229 engine / 84 runtime export/link audits pass.
 
 The five negative controls remove native admission, remove forwarding admission,
 permit author thenables, bypass species, or admit wrapped private resolvers.

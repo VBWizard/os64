@@ -438,7 +438,9 @@ functions. Bound/proxy/author replacements retain ordinary job ownership and
 capture. The intrinsic executes normally, including mutable constructor/species
 lookup and custom capability calls. Native adoption has no author entry, backup
 incumbent or source record; actual script/native execution supplies its settings.
-Ordinary Promise APIs do not acquire this admission. Failed-code checks, task
+Ordinary Promise constructors and resolvers do not acquire this admission.
+A directly admitted native resolver supplied as a handler still uses its
+explicit native contract. Failed-code checks, task
 budgets, groups and terminal failure remain in force. See
 [the native lifetime contract](../../docs/design/pending/IFRAME_F4_HOST_PROMISE_LIFETIME.md).
 
