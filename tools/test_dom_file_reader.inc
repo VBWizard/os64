@@ -64,8 +64,13 @@ static void dom_file_reader_cases(void)
         "file reader: the data: URL");
     reader_task(&f);
     dom_script(&f, STORAGE_ASSERT
-        "assert(r.result==='data:application/octet-stream;base64,YWJj',r.result);",
+        "assert(r.result==='data:application/octet-stream;base64,YWJj',r.result);"
+        "log.length=0;r.readAsText(new Blob([]));",
         "file reader: an untyped Blob's data: URL");
+    reader_task(&f);
+    dom_script(&f, STORAGE_ASSERT
+        "assert(log.join()==='loadstart:0/0:1,load:0/0:2,loadend:0/0:2'&&r.result==='',log.join());",
+        "file reader: an empty Blob has no progress");
 
     /* readAsText's encoding: the label, the Blob's charset, UTF-8, and a BOM
      * over all three. */

@@ -185,7 +185,8 @@ so that it can move (Chris, 2026-11-17).
     binding already holds whole, so a read never waits on anything: each
     read is **one queued task**, folded into the posted-message queue
     (`os64_dom_message_next/_fire`, its source named "file reading" in
-    the record), that fires `loadstart` then one `progress` then `load`,
+    the record), that fires `loadstart` then one `progress` (none for an
+    empty Blob, which has no chunk to read) then `load`,
     and then `loadend` **only if the reader is not LOADING again**: a
     `load` handler that starts the next read (the chunked-reading loop)
     suppresses the first read's `loadend`, as the standard says. Starting

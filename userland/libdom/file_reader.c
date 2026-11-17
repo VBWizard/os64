@@ -7,7 +7,8 @@
  * A Blob here holds its bytes whole, so a read never waits: starting one
  * puts the reader in LOADING and queues ONE task on the posted-message
  * queue (d_message_task, its source "file reading"), which fires loadstart
- * and one progress, sets DONE and the result, fires load (or error), and
+ * and one progress (none for an empty Blob, which has no chunk to read),
+ * sets DONE and the result, fires load (or error), and
  * then loadend only if the reader is not LOADING again: a load handler
  * that starts the next read, the chunked-reading loop, suppresses the
  * first read's loadend, as the standard says.
@@ -183,7 +184,8 @@ static void read_task(os64_dom_t *dom, JSValueConst self, uint32_t token, os64_j
     double total = (double)length;
     if (live && fire(dom, ctx, r, "loadstart", 0, total, outcome) < 0) live = false;
     live = live && d_delivery_active(dom) && reader_state(self)->generation == token;
-    if (live && fire(dom, ctx, r, "progress", total, total, outcome) < 0) live = false;
+    /* A progress per chunk read: an empty Blob has none. */
+    if (live && length > 0 && fire(dom, ctx, r, "progress", total, total, outcome) < 0) live = false;
     live = live && d_delivery_active(dom) && reader_state(self)->generation == token;
     if (live) {
         /* The Blob is still held, so its bytes are where they were. */

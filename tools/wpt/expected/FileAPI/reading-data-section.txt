@@ -1,0 +1,111 @@
+# WPT's FileAPI/reading-data-section in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh FileAPI/reading-data-section --update
+# rewrites [passing].
+[required]
+# BLOB_URLS.md decision 10, B2: FileReader whole but for the sync form; every
+# case here passes and is the slice's content.
+Determining-Encoding.any.html	Blob Determing Encoding with UTF-16BE BOM
+Determining-Encoding.any.html	Blob Determing Encoding with UTF-16LE BOM
+Determining-Encoding.any.html	Blob Determing Encoding with UTF-8 BOM
+Determining-Encoding.any.html	Blob Determing Encoding with encoding argument
+Determining-Encoding.any.html	Blob Determing Encoding with type attribute
+Determining-Encoding.any.html	Blob Determing Encoding without anything implying charset.
+FileReader-event-handler-attributes.any.html	FileReader.onabort: initial value
+FileReader-event-handler-attributes.any.html	FileReader.onerror: initial value
+FileReader-event-handler-attributes.any.html	FileReader.onload: initial value
+FileReader-event-handler-attributes.any.html	FileReader.onloadend: initial value
+FileReader-event-handler-attributes.any.html	FileReader.onloadstart: initial value
+FileReader-event-handler-attributes.any.html	FileReader.onprogress: initial value
+FileReader-multiple-reads.any.html	A new read in a load handler suppresses the old read loadend
+FileReader-multiple-reads.any.html	A new read in an abort handler suppresses the old read loadend
+FileReader-multiple-reads.any.html	test FileReader InvalidStateError exception for readAsArrayBuffer
+FileReader-multiple-reads.any.html	test FileReader InvalidStateError exception for readAsDataURL
+FileReader-multiple-reads.any.html	test FileReader InvalidStateError exception for readAsText
+FileReader-multiple-reads.any.html	test FileReader InvalidStateError exception in onloadstart event for readAsArrayBuffer
+FileReader-multiple-reads.any.html	test FileReader no InvalidStateError exception in loadend event handler for readAsArrayBuffer
+FileReader-multiple-reads.any.html	test abort and restart in onloadstart event for readAsText
+filereader_abort.any.html	Aborting a reused reader after a previous read completed
+filereader_abort.any.html	Aborting after read
+filereader_abort.any.html	Aborting before read
+filereader_error.any.html	FileAPI Test: filereader_error
+filereader_events.any.html	events are dispatched in the correct order for a non-empty blob
+filereader_events.any.html	events are dispatched in the correct order for an empty blob
+filereader_readAsArrayBuffer.any.html	FileAPI Test: filereader_readAsArrayBuffer
+filereader_readAsBinaryString.any.html	FileAPI Test: filereader_readAsBinaryString
+filereader_readAsDataURL.any.html	FileReader readyState during readAsDataURL
+filereader_readAsDataURL.any.html	readAsDataURL result for Blob with specified MIME type
+filereader_readAsDataURL.any.html	readAsDataURL result for Blob with unspecified MIME type
+filereader_readAsDataURL.any.html	readAsDataURL result for empty Blob
+filereader_readAsDataURL.html	readAsDataURL result for Blob with specified MIME type including charset
+filereader_readAsText.any.html	readAsText should correctly read UTF-16.
+filereader_readAsText.any.html	readAsText should correctly read UTF-8.
+filereader_readAsText_blob_type_charset.any.html	readAsText() decodes a windows-1252 Blob body using the type's charset
+filereader_readAsText_blob_type_charset.any.html	readAsText() encoding argument overrides the Blob type's charset
+filereader_readAsText_blob_type_charset.any.html	readAsText() uses the charset parameter of the Blob's type (windows-1252)
+filereader_readystate.any.html	FileAPI Test: filereader_readystate
+filereader_result.any.html	readAsArrayBuffer
+filereader_result.any.html	readAsBinaryString
+filereader_result.any.html	readAsDataURL
+filereader_result.any.html	readAsText
+filereader_result.any.html	result is null during "loadstart" event for readAsArrayBuffer
+filereader_result.any.html	result is null during "loadstart" event for readAsBinaryString
+filereader_result.any.html	result is null during "loadstart" event for readAsDataURL
+filereader_result.any.html	result is null during "loadstart" event for readAsText
+filereader_result.any.html	result is null during "progress" event for readAsArrayBuffer
+filereader_result.any.html	result is null during "progress" event for readAsBinaryString
+filereader_result.any.html	result is null during "progress" event for readAsDataURL
+filereader_result.any.html	result is null during "progress" event for readAsText
+[excluded]
+[passing]
+Determining-Encoding.any.html	Blob Determing Encoding with UTF-16BE BOM
+Determining-Encoding.any.html	Blob Determing Encoding with UTF-16LE BOM
+Determining-Encoding.any.html	Blob Determing Encoding with UTF-8 BOM
+Determining-Encoding.any.html	Blob Determing Encoding with encoding argument
+Determining-Encoding.any.html	Blob Determing Encoding with type attribute
+Determining-Encoding.any.html	Blob Determing Encoding without anything implying charset.
+FileReader-event-handler-attributes.any.html	FileReader.onabort: initial value
+FileReader-event-handler-attributes.any.html	FileReader.onerror: initial value
+FileReader-event-handler-attributes.any.html	FileReader.onload: initial value
+FileReader-event-handler-attributes.any.html	FileReader.onloadend: initial value
+FileReader-event-handler-attributes.any.html	FileReader.onloadstart: initial value
+FileReader-event-handler-attributes.any.html	FileReader.onprogress: initial value
+FileReader-multiple-reads.any.html	A new read in a load handler suppresses the old read loadend
+FileReader-multiple-reads.any.html	A new read in an abort handler suppresses the old read loadend
+FileReader-multiple-reads.any.html	test FileReader InvalidStateError exception for readAsArrayBuffer
+FileReader-multiple-reads.any.html	test FileReader InvalidStateError exception for readAsDataURL
+FileReader-multiple-reads.any.html	test FileReader InvalidStateError exception for readAsText
+FileReader-multiple-reads.any.html	test FileReader InvalidStateError exception in onloadstart event for readAsArrayBuffer
+FileReader-multiple-reads.any.html	test FileReader no InvalidStateError exception in loadend event handler for readAsArrayBuffer
+FileReader-multiple-reads.any.html	test abort and restart in onloadstart event for readAsText
+filereader_abort.any.html	Aborting a reused reader after a previous read completed
+filereader_abort.any.html	Aborting after read
+filereader_abort.any.html	Aborting before read
+filereader_error.any.html	FileAPI Test: filereader_error
+filereader_events.any.html	events are dispatched in the correct order for a non-empty blob
+filereader_events.any.html	events are dispatched in the correct order for an empty blob
+filereader_readAsArrayBuffer.any.html	FileAPI Test: filereader_readAsArrayBuffer
+filereader_readAsBinaryString.any.html	FileAPI Test: filereader_readAsBinaryString
+filereader_readAsDataURL.any.html	FileReader readyState during readAsDataURL
+filereader_readAsDataURL.any.html	readAsDataURL result for Blob with specified MIME type
+filereader_readAsDataURL.any.html	readAsDataURL result for Blob with unspecified MIME type
+filereader_readAsDataURL.any.html	readAsDataURL result for empty Blob
+filereader_readAsDataURL.html	readAsDataURL result for Blob with specified MIME type including charset
+filereader_readAsText.any.html	readAsText should correctly read UTF-16.
+filereader_readAsText.any.html	readAsText should correctly read UTF-8.
+filereader_readAsText_blob_type_charset.any.html	readAsText() decodes a windows-1252 Blob body using the type's charset
+filereader_readAsText_blob_type_charset.any.html	readAsText() encoding argument overrides the Blob type's charset
+filereader_readAsText_blob_type_charset.any.html	readAsText() uses the charset parameter of the Blob's type (windows-1252)
+filereader_readystate.any.html	FileAPI Test: filereader_readystate
+filereader_result.any.html	readAsArrayBuffer
+filereader_result.any.html	readAsBinaryString
+filereader_result.any.html	readAsDataURL
+filereader_result.any.html	readAsText
+filereader_result.any.html	result is null during "loadstart" event for readAsArrayBuffer
+filereader_result.any.html	result is null during "loadstart" event for readAsBinaryString
+filereader_result.any.html	result is null during "loadstart" event for readAsDataURL
+filereader_result.any.html	result is null during "loadstart" event for readAsText
+filereader_result.any.html	result is null during "progress" event for readAsArrayBuffer
+filereader_result.any.html	result is null during "progress" event for readAsBinaryString
+filereader_result.any.html	result is null during "progress" event for readAsDataURL
+filereader_result.any.html	result is null during "progress" event for readAsText
