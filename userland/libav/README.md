@@ -46,7 +46,9 @@ manifest on every run.
 **`config.h`'s answers about a C library are os64's.** `configure` probes
 the HOST's C library, so `manifest.json`'s `config_overrides` replace each
 of those answers with what the shims below provide: no `unistd.h`, no
-`mmap`, no `posix_memalign`, no `gettimeofday`, and the float maths
+`mmap`, no `gettimeofday`, a `posix_memalign` (libos64's
+`os64_malloc_aligned`, whose block plain `free` and `realloc` take, which
+is what FFmpeg does with it: `port/compat/stdlib.h`), and the float maths
 libmath does not export (`expf`, `sinf`, `exp2`, `lrintf`…), which
 FFmpeg's own `libavutil/libm.h` then supplies from the double functions.
 The few it calls with no `HAVE_` to answer (`sqrtf`, `fabsf`, `ldexp`,

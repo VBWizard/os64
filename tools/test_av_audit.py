@@ -82,7 +82,7 @@ for needed_api in ('avformat_open_input', 'avcodec_send_packet', 'avcodec_receiv
 # and libmath's double-precision functions. A new import is a new
 # dependency somebody should have decided on.
 undefined = {l.split()[-1] for l in run('x86_64-elf-nm', '-D', '-u', SO).splitlines()}
-allowed_os64 = {'os64_malloc', 'os64_realloc', 'os64_free', 'os64_memchr', 'os64_memcmp', 'os64_memcpy',
+allowed_os64 = {'os64_malloc', 'os64_malloc_aligned', 'os64_realloc', 'os64_free', 'os64_memchr', 'os64_memcmp', 'os64_memcpy',
                 'os64_memmove', 'os64_memset', 'os64_strchr', 'os64_strcmp', 'os64_strlen', 'os64_strrchr',
                 'os64_snprintf', 'os64_vsnprintf', 'os64_micros', 'os64_exit', 'memset', 'memcpy'}
 math = set(re.findall(r'\b([a-z0-9]+);', (USERLAND / 'libmath/exports.map').read_text().split('local:')[0]))

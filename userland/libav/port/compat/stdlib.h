@@ -17,6 +17,18 @@ static inline long long llabs(long long x) { return x < 0 ? -x : x; }
  * live in av_port.c rather than the pure av_libc.c. */
 double avport_strtod(const char *s, char **end);
 _Noreturn void avport_abort(void);
+/* av_malloc's door (config_overrides answers HAVE_POSIX_MEMALIGN 1): FFmpeg
+ * aligns its buffers to ALIGN for its SIMD and later frees and reallocs them
+ * through plain free and realloc, which libos64's aligned block allows: it
+ * is an ordinary block. Inline, so the name never leaves the library. */
+static inline int posix_memalign(void **out, size_t alignment, size_t size)
+{
+    void *p = os64_malloc_aligned(size, alignment < 16 ? 16 : alignment);
+    if (p == (void *)0)
+        return 12; /* ENOMEM */
+    *out = p;
+    return 0;
+}
 #define strtol avlibc_strtol
 #define strtoul avlibc_strtoul
 #define strtoll avlibc_strtoll
