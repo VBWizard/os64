@@ -1467,8 +1467,9 @@ by the lease's discipline).
 states): `os64_gui_frame_request` (syscall 69) asks for an owned window's
 next frame, one-shot, and the answer is `OS64_GUI_EVENT_FRAME` in its queue,
 coalesced outside the ring (one waits unread at most), with the frame's
-number (every frame served or held; held ones are not answered, so a rise
-of two is a skip), when its blank began and the period. A covered window is
+number (a count of the display's refreshes, so a rise of more than one
+means refreshes went by unanswered), when its blank began and the period.
+A frame answers only requests made before its pass. A covered window is
 answered nothing, and only shown waiters keep the clock running; with the
 clock off, answers ride the tick-driven passes, a period apart at least.
 `OS64_GUI_FRAME_IF_DRAWN` asks only if the window has published since it

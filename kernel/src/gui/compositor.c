@@ -553,14 +553,19 @@ static uint64_t s_fc_wake_at, s_fc_blank_at, s_fc_woke, s_fc_free_ns, s_fc_loads
 // Frame requests (FRAME_CLOCK.md § 6). `s_fr_arrived` is raised by a request
 // (any thread, under kGuiLock) and lowered by the pass that counts the
 // waiters, so a request that lands after the count still counts as work.
-// The rest is the compositor thread's: the shown waiters its last pass
-// counted, the frame number (every frame served or held), what this pass's
-// frame was, and, with the clock off, when the last frame was answered.
-// The counts are read by /sys/gui under kGuiLock, where they are written.
+// `s_fr_epoch` moves on at that count, under kGuiLock, and a request is
+// stamped with it (gui_frame_epoch_locked): a frame answers only the
+// requests made before its pass, because one made during its aim or copy
+// published nothing this frame showed. The rest is the compositor
+// thread's: the shown waiters its last pass counted, the frame number and
+// the blank it last counted to, what this pass's frame was, and, with the
+// clock off, when the last frame was answered. The counts are read by
+// /sys/gui under kGuiLock, where they are written.
 typedef enum { FR_NONE, FR_SERVED, FR_HELD } fr_kind_t;
 static volatile bool s_fr_arrived;
+static uint64_t s_fr_epoch = 1;
 static uint32_t s_fr_waiters;
-static uint64_t s_fr_number;
+static uint64_t s_fr_number, s_fr_number_blank_us;
 static fr_kind_t s_fr_kind;
 static uint64_t s_fr_blank_us;
 static uint64_t s_fr_off_last_us;
@@ -646,8 +651,13 @@ void gui_frame_request_arrived(void)
 	gui_frame_nudge();
 }
 
-// What this pass's frame was, for the answer at its end (gui_frame_answer).
-// A served frame reports when its blank began.
+uint64_t gui_frame_epoch_locked(void)
+{
+	return s_fr_epoch;
+}
+
+// What this pass's frame was, for the answer at its end (fr_answer). A
+// served frame reports when its blank began.
 static void fr_served(uint64_t blank_us)
 {
 	s_fr_kind = FR_SERVED;
@@ -655,21 +665,47 @@ static void fr_served(uint64_t blank_us)
 }
 
 // When the blank of a frame copied without a fresh reading began: the
-// blank it was planned for, if that has come, or now.
+// blank it was planned for, if that has come, or now. The plan is cleared
+// when the clock stops, so the first frame after a stop never reports a
+// blank from before it.
 static uint64_t fr_planned_blank_us(void)
 {
 	uint64_t now = micros_now();
 	return s_fc_blank_at != 0 && s_fc_blank_at <= now ? s_fc_blank_at : now;
 }
 
-// The answer: every shown window that wants a frame is told this one's
-// number, when its blank began and the period (os64/gui.h). Under kGuiLock
-// for the walk alone; the pushes wake waiters as every event does.
-static void fr_answer(uint64_t blank_us)
+static uint32_t fr_period_ns(void)
 {
 	fc_frame_t f;
-	uint32_t period_ns = beam_frame(&f) && f.period_ns <= 0xFFFFFFFFull ? (uint32_t)f.period_ns
-	                                                                    : (uint32_t)FC_FREE_PERIOD_NS;
+	return beam_frame(&f) && f.period_ns <= 0xFFFFFFFFull ? (uint32_t)f.period_ns
+	                                                      : (uint32_t)FC_FREE_PERIOD_NS;
+}
+
+// The frame number counts the display's refreshes: from the last frame
+// counted to this one's blank, however many periods went by, at least one.
+// So a refresh that came and went without a frame, a held frame, a blank
+// the planner passed over, a period the free clock skipped, shows as a
+// rise of more than one, which is what lets a program see it skipped.
+static void fr_count(uint64_t blank_us)
+{
+	uint64_t n = 1;
+	if (s_fr_number_blank_us != 0 && blank_us > s_fr_number_blank_us) {
+		uint64_t period = fr_period_ns();
+		n = ((blank_us - s_fr_number_blank_us) * 1000 + period / 2) / period;
+		if (n == 0)
+			n = 1;
+	}
+	s_fr_number += n;
+	s_fr_number_blank_us = blank_us;
+}
+
+// The answer: every shown window that asked before this frame's pass is
+// told its number, when its blank began and the period (os64/gui.h).
+// Under kGuiLock for the walk alone; the pushes wake waiters as every event
+// does.
+static void fr_answer(uint64_t blank_us, uint64_t epoch)
+{
+	uint32_t period_ns = fr_period_ns();
 	input_event_t ev = {
 		.type = INPUT_EVENT_FRAME,
 		.frame = { .number_lo = (uint32_t)s_fr_number, .number_hi = (uint32_t)(s_fr_number >> 32),
@@ -679,7 +715,7 @@ static void fr_answer(uint64_t blank_us)
 	};
 	uint32_t held = 0;
 	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
-	s_fr_counts.answered += wm_frame_answer_locked(&ev, &held);
+	s_fr_counts.answered += wm_frame_answer_locked(&ev, epoch, &held);
 	s_fr_counts.held_back += held;
 	gui_unlock(flags);
 }
@@ -897,6 +933,7 @@ static void fc_missed(fc_late_t cause, uint64_t *flushes)
 		s_fc_clk_owed.late[cause]++;
 	if (frame_clock_hold_step(&s_fc_hold, false) != FC_SHOW_FORCE) {
 		s_fr_kind = FR_HELD;   // numbered, not answered: nothing reached the glass
+		s_fr_blank_us = fr_planned_blank_us();
 		return;
 	}
 	s_fc_clk_owed.forced++;
@@ -1105,6 +1142,7 @@ static void frame_clock_pace(void)
 		s_fc_stop_why = owns ? "nothing to show" : "a text terminal holds the screen";
 		fc_set_running(false);
 		s_fc_planned = false;
+		s_fc_blank_at = 0;      // a blank planned before a stop is no frame's after it
 		kSchedFrameDueUs = 0;   // no frame planned: the CPU's claim is the nudge's alone
 		fc_stopped_halt();
 		return;
@@ -1183,7 +1221,8 @@ void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart)
 // compositor's passes, and with work to do its loop turns at least once a
 // frame, because the claim gives it its CPU. So more than half a second
 // with damage owed and nothing shown, or with work to do (the clock
-// running, input or damage waiting, or the screen just regained) and the
+// running, input or damage waiting, the screen just regained, or a frame
+// request just arrived) and the
 // loop standing still since the work appeared, is a fault, and this names
 // it: once an episode,
 // under DEBUG_EXCEPTIONS, with where the compositor was, its state, what its
@@ -1246,7 +1285,7 @@ void gui_frame_clock_watch_locked(void)
 	// for by `stall <ms>` while it is served.
 	static uint64_t busy_since;
 	bool busy = s_fc_running || input_pending() || kPendingDamageCount != 0 || s_glass_regained ||
-	            s_fc_test_stalling;
+	            s_fr_arrived || s_fc_test_stalling;
 	if (!busy)
 		busy_since = 0;
 	else if (busy_since == 0)
@@ -2738,11 +2777,13 @@ bool guicomp_thread(bool daemon)
 		// The frame requests, judged by the sweep just run: the shown ones
 		// keep the clock running (frame_clock_pace). Lowering the arrival
 		// flag here, under the lock a request raises it under, means any
-		// request it hides is in this count.
+		// request it hides is in this count. The epoch moves on here too:
+		// this pass's frame answers the requests stamped before it.
 		uint32_t fr_covered;
 		wm_frame_waiters_locked(&s_fr_waiters, &fr_covered);
 		s_fr_arrived = false;
 		s_fr_kind = FR_NONE;
+		uint64_t fr_epoch = ++s_fr_epoch;
 
 		// Take the whole damage list in one hold and reset it, so clients
 		// publishing during this frame's flush accumulate into the NEXT
@@ -2864,20 +2905,21 @@ bool guicomp_thread(bool daemon)
 		// The frame's end, and the frame requests' answer (FRAME_CLOCK.md
 		// § 6). With the clock on, this pass's frame was served, held or
 		// none (frame_clock_present said which): both of the first two are
-		// numbered, a served one is answered. With the clock off a frame is
+		// counted, a served one answers the requests made before this pass
+		// (fr_epoch). With the clock off a frame is
 		// a pass that has shown waiters, at least a period after the last
 		// such pass, and its blank is the pass's time.
 		if (s_fc_off_why == NULL) {
 			if (s_fr_kind != FR_NONE)
-				s_fr_number++;
+				fr_count(s_fr_blank_us);
 			if (s_fr_kind == FR_SERVED)
-				fr_answer(s_fr_blank_us);
+				fr_answer(s_fr_blank_us, fr_epoch);
 		} else if (s_fr_waiters > 0) {
 			uint64_t now = micros_now();
 			if (s_fr_off_last_us == 0 || now - s_fr_off_last_us >= FC_FREE_PERIOD_NS / 1000) {
 				s_fr_off_last_us = now;
-				s_fr_number++;
-				fr_answer(now);
+				fr_count(now);
+				fr_answer(now, fr_epoch);
 			}
 		}
 

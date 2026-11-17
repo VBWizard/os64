@@ -769,7 +769,10 @@ int64_t gui_frame_request(int64_t handle, uint32_t flags)
 		return OS64_GUI_FRAME_IDLE;
 	}
 	win->frame_drawn = false;
-	win->frame_wanted = true;
+	if (!win->frame_wanted) {   // asking again keeps the first request's epoch
+		win->frame_wanted = true;
+		win->frame_epoch = gui_frame_epoch_locked();
+	}
 	gui_frame_request_arrived();
 	gui_unlock(irqflags);
 	return 0;

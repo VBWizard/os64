@@ -24,14 +24,16 @@
 //   frame  ask the display for its frames (os64_gui_frame_request) and draw
 //          on every one, or every second one at 30 fps, as a video player
 //          paced by the display would (FRAME_CLOCK.md § 6). Its line adds
-//          the answers it was told, the frames skipped (an answer whose
-//          number jumped further than the step), and the spread of the
+//          the answers it was told, the refreshes skipped (an answer whose
+//          number, a count of the display's refreshes, rose further than
+//          the step), and the spread of the
 //          time between answers as they arrived
 //
 // For sleep and spin, a frame that starts more than a whole period late
 // moves the schedule to one period from now (a resync, counted) rather than
 // queueing frames behind it. For frame, "late" is how much later after its
-// own blank a frame's work began than the first frame's did, so a steady
+// own blank a frame's work began than the second frame's did (the first
+// answer follows a frame with nothing of the run's to copy), so a steady
 // delivery delay (the compositor answers after its copy) is not counted
 // against every frame; a skip is counted as skipped, not as a resync. A
 // covered window is answered nothing, so a frame-paced run behind a cover
@@ -442,9 +444,12 @@ static int run_one(const run_cfg_t *cfg)
 			last_number = number;
 			t0 = os64_micros();
 			int64_t delay = t0 - (int64_t)blank_us;
-			if (first_delay < 0)
+			// The baseline is the second frame's: the first answer follows a
+			// frame this run had published nothing for, so it carries no
+			// copy, and every later one is answered after its copy.
+			if (k == 1)
 				first_delay = delay;
-			late = delay - first_delay;
+			late = first_delay < 0 ? 0 : delay - first_delay;
 			when = t0;   // the run's end is still wall time
 		}
 		else

@@ -12,7 +12,11 @@
 //   - take returns the answer and leaves the program's other events queued;
 //   - a program that asks and never reads holds at most one answer, and no
 //     input is lost for it;
-//   - a window that asks and exits leaves nothing waiting.
+//   - a window that asks and dies with its task, its request unanswered,
+//     leaves the frames working for everyone else: this window's next
+//     request is still answered. (A request is a flag on its window and
+//     goes with it, so there is nothing to leak; what could go wrong is
+//     the teardown under a waiting request.)
 //
 // A covered window is answered nothing until it is shown (the design's
 // rule), so the fixture SKIPS when its window is covered (a text terminal
@@ -69,41 +73,6 @@ static uint32_t frames_waiting(int64_t win, uint32_t *lost)
             (*lost)++;
     }
     return n;
-}
-
-static const char *find(const char *hay, const char *needle)
-{
-    size_t n = os64_strlen(needle), m = os64_strlen(hay);
-    for (size_t i = 0; i + n <= m; i++)
-        if (os64_memcmp(hay + i, needle, n) == 0)
-            return hay + i;
-    return NULL;
-}
-
-// The waiting-window count off /sys/gui's frame requests line.
-static int64_t waiting_now(void)
-{
-    char buf[4096];
-    int64_t h = os64_open("/sys/gui", "r");
-    if (h < 0)
-        return -1;
-    int64_t n = os64_read((int32_t)h, buf, sizeof(buf) - 1);
-    os64_close((int32_t)h);
-    if (n <= 0)
-        return -1;
-    buf[n] = '\0';
-    const char *p = find(buf, "waiting now ");
-    if (!p)
-        return -1;
-    p += 12;
-    int64_t shown = 0, cov = 0;
-    while (*p >= '0' && *p <= '9') shown = shown * 10 + (*p++ - '0');
-    p = find(p, "shown, ");
-    if (!p)
-        return -1;
-    p += 7;
-    while (*p >= '0' && *p <= '9') cov = cov * 10 + (*p++ - '0');
-    return shown + cov;
 }
 
 static void publish(os64_draw_ctx_t *ctx, uint32_t color)
@@ -208,16 +177,17 @@ int main(int argc, char **argv)
     CHECK(frames_waiting(win, &lost) == 0);
     CHECK(lost == 0);
 
-    // A window that asks and exits leaves nothing waiting.
-    int64_t before = waiting_now();
+    // A window that asks and dies with its task, unanswered: the frames
+    // still work for this one.
     char *args[] = { "/tests/frametest", "--orphan", NULL };
     int64_t child = os64_spawn(args[0], args);
     int32_t code = -1;
     CHECK(child > 0);
     if (child > 0)
         CHECK(os64_wait(child, &code) == child && code == 0);
-    int64_t after = waiting_now();
-    CHECK(before >= 0 && after >= 0 && after <= before);
+    publish(&ctx, 0xFF602040U);
+    CHECK(os64_gui_frame_request(win, 0) == 0);
+    CHECK(wait_answer(win, &a, ANSWER_BOUND_MS, NULL));
 
     os64_gui_window_destroy(win);
     if (failures) {

@@ -216,8 +216,8 @@ void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window);
 // has another event to service, leaving the event for your poll. A program
 // with nothing new to draw is not the display's customer: it sleeps out its
 // budget as before, so an idle window never keeps the display's clock
-// running, and the first wait after it starts drawing again is the last
-// sleep. A longer budget, or no bound window, always sleeps.
+// running; the first wait after a publish is paced again. A longer budget,
+// or no bound window, always sleeps.
 //
 // While your window is COVERED (a bound clock only): the call sleeps until
 // the window has an event to service and then returns — ONE BUDGET if the

@@ -173,13 +173,14 @@ through the event wait a GUI program already blocks in.
 - `libos64`'s `os64_frame_wait` is rebuilt on it: bound to a window, with
   a budget of 100 ms or less, while the program draws, it waits for the
   budget's frames (rounded to the nearest, at least one); idle, or with a
-  longer budget, it sleeps as before. Every program using the helper is
-  paced by the display with no change of its own, and an idle one (a
-  terminal at its prompt) never keeps the clock running. The helper runs
-  inside a program's own loop, so it must not take the program's events,
-  and a peek-wait cannot say which kind is waiting: it takes the answer
-  alone with `os64_gui_frame_take` (syscall 70), which moves no other
-  event. yonder's ticker takes its animation frames from it.
+  longer budget, it sleeps as before. Every program that binds its clock
+  to its window is paced by the display with no change of its own, and an
+  idle one never keeps the clock running; one that does not bind it (gterm,
+  gmandel) sleeps as before. The helper runs inside a program's own loop,
+  so it must not take the program's events, and a peek-wait cannot say
+  which kind is waiting: it takes the answer alone with
+  `os64_gui_frame_take` (syscall 70), which moves no other event. yonder's
+  ticker is to take its animation frames from it, in a slice of its own.
 - `/tests/glassbench` gains it as a third pacer, `-p frame`.
 
 **A window's frame request, its states** (*written for slice F3, before
@@ -199,8 +200,9 @@ covered.
 | none | wanted | the program asks | the window's owner, through the syscall, under `kGuiLock`; a window it does not own is refused (`NOT_OWNER`) |
 | wanted | wanted (one request) | it asks again before the answer | the syscall finds the flag set and leaves it: asking twice is one request |
 | wanted, shown, clock **running** | answered: the event queued, the flag cleared | the end of a frame that reached the glass: after the copy and its check (aimed, or forced by the hold rule), or, with nothing to copy, once the blank it slept toward has begun | the compositor thread, under `kGuiLock` for the walk alone after the copy; the push wakes a waiter in the window's event wait as every event does |
-| wanted, shown, clock running | stays wanted | the frame is HELD (it missed its blank; F2's hold rule) | nothing reached the glass, so nothing is told; the frame is numbered, and the hold rule guarantees the next frame reaches the glass and is answered, so the program sees the number rise by two |
-| wanted, shown, clock **stopped** (nothing to show) | wanted, the clock started | the request arrives | the syscall nudges the compositor (`gui_frame_nudge`); `frame_clock_keep_running` is told the number of shown waiters, so the clock starts and serves blanks while one waits |
+| wanted, shown, clock running | stays wanted | the frame is HELD (it missed its blank; F2's hold rule) | nothing reached the glass, so nothing is told; the hold rule guarantees the next frame reaches the glass and is answered, and the number has counted the refresh between, so the program sees it rise by two |
+| wanted, shown, clock running | stays wanted | the request was made after this frame's pass counted the waiters (during its aim or copy) | the frame showed nothing the request's window published since; the next frame answers it (each request is stamped with the pass epoch, `gui_frame_epoch_locked`) |
+| wanted, shown, clock **stopped** (nothing to show) | wanted, the clock started | the request arrives | the syscall nudges the compositor (`gui_frame_nudge`); `frame_clock_keep_running` is told the number of shown waiters, so the clock starts and serves blanks while one waits. The first pass after a stop is not a frame (no blank was planned for it), so the answer comes with the frame after it |
 | wanted, shown, clock **running free** (no beam) | answered | after each free frame's copy (or its period, with nothing to copy) | the compositor, as above |
 | wanted, shown, clock **off** for the boot (`NOFRAMECLOCK`, one CPU, `SCHED=periodic`, `NOBACKSTOP`) | answered | the end of a tick-driven compositor pass that has shown waiters, no sooner than one period (16.7 ms) after the last such pass: that pass is a frame | the compositor, under `kGuiLock`. Answers come at the passes' cadence, so they are less even than with the clock, and no timer is set for them (a timer for the period would be a clock) |
 | wanted, **covered** (any of the four clocks) | stays wanted | a frame ends while it is covered | nothing moves it; it is not counted as a waiter, so an animation nobody can see lets the clock stop. Counted on `/sys/gui` as held back |
@@ -210,9 +212,13 @@ covered.
 | wanted | gone | the window is destroyed, or its task dies | `gui_window_destroy` and the task's window teardown, under `kGuiLock`: the flag goes with the window, and an unread answer with its queue |
 | answered, unread | replaced | the program asks again and a later frame answers before it has read the first | the coalesced slot keeps the newest; the frame numbers say one was skipped |
 
-The answer carries the frame's **number**: the compositor's count of every
-frame it served or held (with the clock off, of every pass that answered),
-answered only for served ones, so a gap means frames went by. Its
+The answer carries the frame's **number**: a count of the display's
+refreshes, moved on at each frame served or held by the periods between
+its blank and the last one counted (`fr_count`), so a rise of more than one
+means refreshes went by unanswered: a held frame, a blank the planner
+passed over because a pass ran long, a period the free clock skipped, a
+stretch with no frame at all. (Counting frames served or held, as first
+ruled, missed the second and third: neither is a held frame.) Its
 **blank**: `micros()` at the instant that frame's blank began, read off
 the beam (`frame_clock_blank_began_us`) when there is one, the period's
 boundary when the clock runs free, the pass's time when the clock is off.
@@ -252,8 +258,9 @@ rule, composed damage is on the glass within two of the compositor's
 passes, and with work to do its loop turns at least once a frame, because
 the claim gives it its CPU. So from the BSP's pass, once a tick, the clock
 is watched for more than half a second with damage owed and nothing shown,
-or with work to do (the clock running, input or damage waiting, or the
-screen just regained) and the loop standing still since the work
+or with work to do (the clock running, input or damage waiting, the
+screen just regained, or a frame request just arrived) and the loop
+standing still since the work
 appeared. (Stopped with nothing to do, a compositor sharing its CPU waits
 its turn by aging, which may take longer; that is the CPU being shared,
 not a stall. And the quiet before work arrives, up to a whole lease, is
@@ -302,10 +309,11 @@ flags whenever it re-arms or stops the timer.
 | State | The timer is set for | Ends when | Who moves it on, and how |
 |---|---|---|---|
 | **off** (`NOFRAMECLOCK`, one CPU, `SCHED=periodic`, `NOBACKSTOP`) | as today: the lease, the periodic tick, or nothing | never; it is the boot's | chosen once at `gui_start`, and `/sys/gui` says why. F1's measurement still runs |
-| **stopped** (nothing to show, nobody waiting) | the lease, set by the compositor before it halts (which also cancels a frame wake still pending) | a nudge, a PS/2 interrupt (routed to this CPU), or the lease; each one ends with a re-check | the nudge comes from `gui_damage_add` (under `kGuiLock`, interrupts off) or from the input queue's push (under its lock, interrupts off, often on `kusb`'s thread on the BSP). It takes no lock: one atomic exchange of the "halted and stopped" flag, then, if the flag was set, `kSchedFrameNudged` raised and `send_ipi(IPI_MANUAL_SCHEDULE_VECTOR)`, whose pass keeps the CPU for the compositor (the claim, below). The compositor sets the flag with interrupts off just before `sti; hlt` and clears it on waking. A re-check that finds work goes to **running** |
+| **stopped** (nothing to show, nobody waiting) | the lease, set by the compositor before it halts (which also cancels a frame wake still pending) | a nudge, a PS/2 interrupt (routed to this CPU), or the lease; each one ends with a re-check | the nudge comes from `gui_damage_add` (under `kGuiLock`, interrupts off), from the input queue's push (under its lock, interrupts off, often on `kusb`'s thread on the BSP), or from a frame request (`gui_frame_request`, under `kGuiLock`; the re-check also looks at its arrival flag). It takes no lock: one atomic exchange of the "halted and stopped" flag, then, if the flag was set, `kSchedFrameNudged` raised and `send_ipi(IPI_MANUAL_SCHEDULE_VECTOR)`, whose pass keeps the CPU for the compositor (the claim, below). The compositor sets the flag with interrupts off just before `sti; hlt` and clears it on waking. A re-check that finds work goes to **running** |
 | **running**, waiting for the lead | the earlier of the wake instant (the next blank less the lead) and the lease | the frame wake (a 0x7E pass, which keeps the CPU for the compositor: the claim, below), or any other interrupt, after which it recomputes. At or after the wake instant it goes to **composing**. A lease expiry before the wake may hand the CPU to a co-tenant, whose lease is cut at the wake | compositor thread, with interrupts off from the set to `sti; hlt`; it publishes the wake (`kSchedFrameDueUs`) first |
 | **composing** | the lease, re-armed by the wake's pass | the pass ends: **composed, waiting** with a beam, **copying** without one | today's pass, under `kGuiLock` (interrupts off inside the lock) |
 | **composed, waiting** | the earlier of 250 µs before the blank (`FC_AIM_MARGIN_US`) and the lease, set immediately before `sti; hlt` and recomputed on every return, as in **running** | that instant: **aiming**. Already past when the pass ends: **aiming** at once | compositor thread, interrupts off from the set to `sti; hlt`. The window stays open, so the claim keeps the CPU; damage arriving now is the next frame's |
+| **composed, nothing to copy** (a planned frame whose pass composed nothing) | the earlier of the blank itself and the lease, as above | the blank begins: the frame is served (a frame request is answered at its end, § 6), then **running** or **stopped** | compositor thread, as above. An unplanned pass with nothing (the first after a stop) is no frame and goes straight on |
 | **aiming** | the lease | the sweep enters the blank: **copying**. If the first reading was already in the blank, the counter must change within 3 lines first, or the beam is withdrawn as frozen and **free** (a counter stopped at a blank line would otherwise look like a perfect aim every frame); only a window actually watched counts, so a gap longer than a line between readings, or a failed read, makes it inconclusive, nothing is withdrawn, and a fresh reading decides that frame. The sweep is in shown rows having left the blank: **late**. The counter does not move within the bound (250 µs plus 8 lines): withdrawn as frozen, and **free**. The counter moves but no blank arrives within the bound: **late**, counted as an overrun. No reading succeeds within the bound: the frame goes unaimed | compositor thread, interrupts on, no lock. It polls the beam |
 | **copying** | the lease | the strips are done; F1's two readings judge the copy (`torn` now means held off mid-copy). Then **running**, or **stopped** if `frame_clock_keep_running` says so. The screen is asked for again before every strip: a text terminal that took it during the sleep or the aim voids what is carried, and the copy ends | compositor thread, interrupts on, outside `kGuiLock` |
 | **late** (holding) | the next wake, one frame on | as **running** | nothing is copied; the back buffer keeps what was composed and the next pass adds what has arrived since. Counted by cause. A frame that was held already is not held again: it is **forced**, copied at once wherever the sweep is, judged, and counted (`frame_clock_hold_step`) |
@@ -442,7 +450,7 @@ is everyone's again.
 |---|---|---|---|
 | F1 | the beam seam, the AMD driver, `frame_clock.c` and its host test; `/sys/gui` reports the beam and, at each of today's copies, where the sweep was | no: it measures | here, one cold read |
 | F2 | the compositor's frame: pin, timer, lead, aim, strips, late and torn, the damage wake, `NOFRAMECLOCK` | yes | Codex: scheduler timer, pinning, an interrupt from under `kGuiLock` |
-| F3 | the ring-3 frame; `os64_frame_wait` on it; glassbench's pacer; yonder's ticker | yes | Codex for the kernel half |
+| F3 | the ring-3 frame; `os64_frame_wait` on it; glassbench's pacer (yonder's ticker is briefed after it) | yes | Codex for the kernel half |
 | F4 | later, if wanted: the compositor parks between frames | | |
 
 F1's second half is worth having by itself: a histogram of where the sweep

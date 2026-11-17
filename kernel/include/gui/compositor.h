@@ -35,6 +35,11 @@ void gui_frame_nudge(void);
 // waiters, so a stopped compositor starts its clock, and nudges it.
 void gui_frame_request_arrived(void);
 
+// The compositor's pass epoch, under kGuiLock: it moves on at each pass's
+// count of waiters, and a request is stamped with it, so a frame answers
+// only requests made before its pass (wm_frame_answer_locked).
+uint64_t gui_frame_epoch_locked(void);
+
 // What the frame clock is doing, for /sys/gui. `restart` starts the
 // since-read times again. The counts live with the compositor's
 // (gui_lock_counts); this is the clock's state, place and times.

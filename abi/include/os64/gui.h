@@ -321,9 +321,10 @@ typedef struct os64_gui_surface
 // The display's frame, answering os64_gui_frame_request: the window was
 // shown at the end of a frame that reached the glass. Coalesced outside the
 // input ring: at most one waits unread, and a newer replaces it.
-// `frame.number` counts every frame the compositor served OR HELD (a frame
-// that missed its blank and waited for the next), and is answered only for
-// served ones, so a rise of two means a refresh went by. `frame.blank` is
+// `frame.number` counts the display's refreshes, so a rise of more than one
+// between two answers means refreshes went by unanswered: a frame held at a
+// missed blank, a blank passed over, or a stretch with no frame at all.
+// Answers are given only for frames that reached the glass. `frame.blank` is
 // micros() at the instant that frame's blank began, the same meaning with
 // or without anything copied, so successive answers are a period apart.
 // `frame.period_ns` is the refresh period (measured, or the free clock's).
