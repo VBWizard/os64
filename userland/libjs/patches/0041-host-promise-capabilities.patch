@@ -1,0 +1,190 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -2505,7 +2505,7 @@
+ static JSContext *js_job_function_realm(JSContext *ctx, JSValueConst function);
+ static JSValue js_finrec_job(JSContext *ctx, int argc, JSValueConst *argv);
+ static JSValue promise_reaction_job(JSContext *ctx, int argc, JSValueConst *argv);
+-static JSContext *js_promise_function_realm(JSContext *ctx, JSValueConst function);
++static JSContext *js_promise_function_realm(JSContext *ctx, JSValueConst function, BOOL job_owner);
+ 
+ static int JS_EnqueueJob2(JSContext *ctx, JSContext *owner, JSContext *activity,
+                           JSJobFunc *job_func, int argc, JSValueConst *argv,
+@@ -21688,6 +21688,7 @@
+ static JSContext *js_function_realm(JSContext *ctx, JSValueConst func_obj,
+                                     BOOL revoked_fallback)
+ {
++    BOOL direct = TRUE;
+     for (;;) {
+         JSObject *p;
+         if (JS_VALUE_GET_TAG(func_obj) != JS_TAG_OBJECT)
+@@ -21706,7 +21707,9 @@
+             return p->u.async_function_data ? p->u.async_function_data->realm : ctx;
+         case JS_CLASS_PROMISE_RESOLVE_FUNCTION:
+         case JS_CLASS_PROMISE_REJECT_FUNCTION:
+-            return js_promise_function_realm(ctx, func_obj);
++            /* Author wrappers do not inherit private resolver admission: a proxy
++               can execute an author trap before reaching its native target. */
++            return js_promise_function_realm(ctx, func_obj, revoked_fallback && direct);
+         case JS_CLASS_BYTECODE_FUNCTION:
+         case JS_CLASS_GENERATOR_FUNCTION:
+         case JS_CLASS_ASYNC_FUNCTION:
+@@ -21720,10 +21723,12 @@
+                 JS_ThrowTypeErrorRevokedProxy(ctx);
+                 return NULL;
+             }
++            direct = FALSE;
+             func_obj = s->target;
+             break;
+         }
+         case JS_CLASS_BOUND_FUNCTION:
++            direct = FALSE;
+             func_obj = p->u.bound_function->func_obj;
+             break;
+         default:
+@@ -54747,7 +54752,8 @@
+ 
+ typedef struct JSPromiseFunctionDataResolved {
+     int ref_count;
+-    BOOL already_resolved;
++    uint32_t already_resolved : 1;
++    uint32_t host_continuation : 1; /* explicit native capability, not author Promise work */
+ } JSPromiseFunctionDataResolved;
+ 
+ typedef struct JSPromiseFunctionData {
+@@ -54756,10 +54762,26 @@
+     JSPromiseFunctionDataResolved *presolved;
+ } JSPromiseFunctionData;
+ 
+-static JSContext *js_promise_function_realm(JSContext *ctx, JSValueConst function)
++static JSContext *js_promise_function_realm(JSContext *ctx, JSValueConst function, BOOL job_owner)
+ {
+     JSPromiseFunctionData *s = JS_VALUE_GET_OBJ(function)->u.promise_function_data;
++    if (job_owner && s && s->presolved->host_continuation) return NULL;
+     return s ? s->realm : ctx;
++}
++
++static BOOL js_host_promise_function(JSValueConst function)
++{
++    if (!JS_IsObject(function)) return FALSE;
++    JSObject *p = JS_VALUE_GET_OBJ(function);
++    if (p->class_id != JS_CLASS_PROMISE_RESOLVE_FUNCTION &&
++        p->class_id != JS_CLASS_PROMISE_REJECT_FUNCTION) return FALSE;
++    JSPromiseFunctionData *s = p->u.promise_function_data;
++    return s && s->presolved->host_continuation;
++}
++
++static void js_prepare_host_resolving_functions(JSValue *functions)
++{
++    JS_VALUE_GET_OBJ(functions[0])->u.promise_function_data->presolved->host_continuation = TRUE;
+ }
+ 
+ typedef struct JSPromiseReactionData {
+@@ -54844,7 +54866,7 @@
+                                   JSJobFunc *job, int argc, JSValueConst *args)
+ {
+     return JS_EnqueueJob2(ctx, js_job_function_realm(ctx, args[2]), NULL,
+-                          job, argc, args, FALSE, incumbent, script, FALSE);
++                          job, argc, args, FALSE, incumbent, script, js_host_promise_function(args[2]));
+ }
+ 
+ typedef struct JSJobCallbackCall {
+@@ -54988,12 +55010,13 @@
+ #ifdef DUMP_PROMISE
+     printf("js_promise_resolve_thenable_job\n");
+ #endif
+-    assert(argc == 3);
++    assert(argc == 3 || argc == 4);
+     promise = argv[0];
+     thenable = argv[1];
+     then = argv[2];
+     if (js_create_resolving_functions(ctx, args, promise) < 0)
+         return JS_EXCEPTION;
++    if (argc == 4) js_prepare_host_resolving_functions(args);
+     res = js_call_job_callback(ctx, then, thenable, 2, (JSValueConst *)args);
+     if (JS_IsException(res)) {
+         JSValue error = JS_GetException(ctx);
+@@ -55028,6 +55051,7 @@
+         return -1;
+     sr->ref_count = 1;
+     sr->already_resolved = FALSE; /* must be shared between the two functions */
++    sr->host_continuation = FALSE;
+     ret = 0;
+     for(i = 0; i < 2; i++) {
+         obj = JS_NewObjectProtoClass(ctx, ctx->function_proto,
+@@ -55085,7 +55109,7 @@
+ {
+     JSObject *p = JS_VALUE_GET_OBJ(func_obj);
+     JSPromiseFunctionData *s;
+-    JSValueConst resolution, args[3];
++    JSValueConst resolution, args[4];
+     JSValue then;
+     BOOL is_reject;
+ 
+@@ -55124,15 +55148,30 @@
+         args[0] = s->promise;
+         args[1] = resolution;
+         args[2] = then;
+-        JSContext *incumbent;
+-        JSValue script;
+-        if (js_promise_capture_incumbent(ctx, then, &incumbent, &script) < 0) {
+-            JS_FreeValue(ctx, then);
+-            goto fail_reject;
+-        }
+-        js_enqueue_promise_job(ctx, incumbent, script, js_promise_resolve_thenable_job, 3, args);
+-        JS_FreeValue(ctx, script);
+-        if (incumbent) JS_FreeContext(incumbent);
++        /* Native adoption is admitted by this capability, not by the Promise
++           object or a global intrinsic. Read then normally before checking its
++           exact implementation; wrappers and author replacements keep ordinary
++           job capture/ownership. Species is still read when then executes. */
++        BOOL host = s->presolved->host_continuation;
++        JSObject *f = JS_VALUE_GET_OBJ(then);
++        BOOL intrinsic = f->class_id == JS_CLASS_C_FUNCTION &&
++            f->u.cfunc.cproto == JS_CFUNC_generic &&
++            f->u.cfunc.c_function.generic == js_promise_then;
++        args[3] = JS_UNDEFINED; /* presence carries private forwarding admission */
++        if (host && intrinsic) {
++            JS_EnqueueJobNeutralSettings(ctx, js_promise_resolve_thenable_job, 4, args);
++        } else {
++            JSContext *incumbent;
++            JSValue script;
++            if (js_promise_capture_incumbent(ctx, then, &incumbent, &script) < 0) {
++                JS_FreeValue(ctx, then);
++                goto fail_reject;
++            }
++            js_enqueue_promise_job(ctx, incumbent, script, js_promise_resolve_thenable_job,
++                                   host ? 4 : 3, args);
++            JS_FreeValue(ctx, script);
++            if (incumbent) JS_FreeContext(incumbent);
++        }
+         JS_FreeValue(ctx, then);
+     }
+     return JS_UNDEFINED;
+@@ -55292,6 +55331,13 @@
+ JSValue JS_NewPromiseCapability(JSContext *ctx, JSValue *resolving_funcs)
+ {
+     return js_new_promise_capability(ctx, resolving_funcs, JS_UNDEFINED);
++}
++
++JSValue JS_NewHostPromiseCapability(JSContext *ctx, JSValue *resolving_funcs)
++{
++    JSValue promise = JS_NewPromiseCapability(ctx, resolving_funcs);
++    if (!JS_IsException(promise)) js_prepare_host_resolving_functions(resolving_funcs);
++    return promise;
+ }
+ 
+ static JSValue js_promise_resolve(JSContext *ctx, JSValueConst this_val,
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -1073,6 +1073,11 @@
+ } JSPromiseStateEnum;
+ 
+ JSValue JS_NewPromiseCapability(JSContext *ctx, JSValue *resolving_funcs);
++/* Trusted host capability: resolving functions and exact intrinsic-then adoption
++   are neutral continuations with checked execution settings. Get(then), species,
++   author replacement jobs, actual function realms and failed-code seals retain
++   their normal behavior. This is not authority to invoke author callbacks. */
++JSValue JS_NewHostPromiseCapability(JSContext *ctx, JSValue *resolving_funcs);
+ JSPromiseStateEnum JS_PromiseState(JSContext *ctx, JSValue promise);
+ JSValue JS_PromiseResult(JSContext *ctx, JSValue promise);
+ 

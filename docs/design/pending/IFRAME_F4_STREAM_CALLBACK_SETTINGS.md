@@ -20,12 +20,10 @@ operations come from E. Prepared implementation frames preserve A's provenance
 at conversion. Invocation prepares B and captured A around the callback and its
 return conversion; executable eligibility still follows the actual callable.
 Retiring A, B or C refuses invocation. Retiring D alone does not invalidate a
-retained stream's data or an eligible callback. Completion can still depend on
-ordinary realm-owned Promise jobs: the wrapper's retirement contract discards
-those jobs without settling their promises. In particular, the second Promise
-adoption after a thrown callback can remain pending when D's intrinsic `then`
-is the discarded job. This cut does not give that job private-continuation
-neutrality or claim retained error-path completion after D departs.
+retained stream's data or an eligible callback. The
+[private capability lifetime policy](IFRAME_F4_HOST_PROMISE_LIFETIME.md) permits
+native Promise adoption and forwarding to complete after D departs. Author
+replacement `then` jobs retain ordinary retirement discard without settlement.
 
 `start` returns `any` and propagates a thrown completion synchronously. `size`
 converts its result to a number within the same checked scope. Promise-returning

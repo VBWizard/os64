@@ -589,6 +589,7 @@ static void realm_failure_order_cases(void)
 #include "import_settings.h"
 #include "neutral_promise_settings.h"
 #include "neutral_native_jobs.h"
+#include "host_promise_capabilities.h"
 
 static void realm_cases(void)
 {
@@ -605,6 +606,8 @@ static void realm_cases(void)
     import_settings_cases();
     neutral_promise_settings_cases();
     neutral_native_job_cases();
+    host_promise_capability_cases();
+    host_promise_forwarding_cases();
     retirement_cases();
     staging_cases();
     realm_identity_cases();

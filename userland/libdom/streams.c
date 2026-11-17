@@ -95,10 +95,12 @@ static JSValue capture_stream_callback(JSContext *ctx, JSValueConst self, int ar
     return object;
 }
 
-/* Consume value into a fresh intrinsic promise in the supplied realm. */
+/* Consume value into a fresh private capability in the supplied realm. Native
+ * adoption/forwarding outlive document departure; author then jobs do not gain
+ * that admission. Observable then/species and actual function realms remain. */
 static JSValue stream_promise(JSContext *ctx, JSValue value, bool rejected)
 {
-    JSValue functions[2], promise = JS_NewPromiseCapability(ctx, functions);
+    JSValue functions[2], promise = JS_NewHostPromiseCapability(ctx, functions);
     if (JS_IsException(promise)) { JS_FreeValue(ctx, value); return promise; }
     JSValue settled = JS_Call(ctx, functions[rejected ? 1 : 0], JS_UNDEFINED, 1, &value);
     JS_FreeValue(ctx, value);

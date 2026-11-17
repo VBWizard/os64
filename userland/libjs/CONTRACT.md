@@ -430,6 +430,20 @@ record. Unlike raw neutral ownership, its explicit bit admits settings queries
 and clears/restores an enclosing scope. The host still gates author callbacks;
 ordinary Promise adoption keeps its existing realm ownership and discard rule.
 
+Patch 0041 adds `JS_NewHostPromiseCapability` for explicitly private native
+Promise conversion. Direct resolving functions retain their actual realm but
+have neutral job ownership; author bound/proxy wrappers do not inherit it. Resolution still reads `then` once; a direct built-in
+Promise `then` uses a neutral native adoption job and private forwarding
+functions. Bound/proxy/author replacements retain ordinary job ownership and
+capture. The intrinsic executes normally, including mutable constructor/species
+lookup and custom capability calls. Native adoption has no author entry, backup
+incumbent or source record; actual script/native execution supplies its settings.
+Ordinary Promise constructors and resolvers do not acquire this admission.
+A directly admitted native resolver supplied as a handler still uses its
+explicit native contract. Failed-code checks, task
+budgets, groups and terminal failure remain in force. See
+[the native lifetime contract](../../docs/design/pending/IFRAME_F4_HOST_PROMISE_LIFETIME.md).
+
 Manual drains, task checkpoints and candidate drains inspect before execution. Dead entries release their holds without
 running a job or settling its promises, preserving surviving FIFO order.
 Foreign contexts are invariant failures, not neutral work. Discarded entries
