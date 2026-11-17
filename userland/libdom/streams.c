@@ -54,16 +54,133 @@ static uint8_t s_bytecode[D_STREAMS_BYTECODE_MAX];
 static size_t s_bytecode_length;
 static uint32_t s_bytecode_state;
 
+/* Private callback holders are engine-traced edges of stream algorithms.
+ * Realm handles follow the runtime's retained-slot contract. */
+typedef struct {
+    DSynchronousCallback settings;
+    os64_dom_t *dom;
+} StreamCallback;
+static JSClassID stream_callback_slot;
+
+static void stream_callback_free(JSRuntime *rt, JSValue value)
+{
+    StreamCallback *callback = JS_GetOpaque(value, os64_js_class_id(&stream_callback_slot));
+    if (!callback) return;
+    d_synchronous_clear(rt, &callback->settings);
+    js_free_rt(rt, callback);
+}
+static void stream_callback_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    StreamCallback *callback = JS_GetOpaque(value, os64_js_class_id(&stream_callback_slot));
+    if (callback) JS_MarkValue(rt, callback->settings.captured.value, mark);
+}
+static JSValue capture_stream_callback(JSContext *ctx, JSValueConst self, int argc,
+    JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)self; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (!dom) return JS_EXCEPTION;
+    if (!argc || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "Expected a stream callback");
+    DSynchronousCallback settings;
+    if (!d_synchronous_capture(dom, ctx, argv[0], &settings)) return JS_EXCEPTION;
+    JSValue object = JS_NewObjectClass(ctx, (int)os64_js_class_id(&stream_callback_slot));
+    StreamCallback *callback = JS_IsException(object) ? NULL : js_mallocz(ctx, sizeof(*callback));
+    if (!callback) {
+        d_synchronous_clear(dom->engine, &settings);
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    *callback = (StreamCallback){settings, dom};
+    JS_SetOpaque(object, callback);
+    return object;
+}
+
+/* Consume value into a fresh intrinsic promise in the supplied realm. */
+static JSValue stream_promise(JSContext *ctx, JSValue value, bool rejected)
+{
+    JSValue functions[2], promise = JS_NewPromiseCapability(ctx, functions);
+    if (JS_IsException(promise)) { JS_FreeValue(ctx, value); return promise; }
+    JSValue settled = JS_Call(ctx, functions[rejected ? 1 : 0], JS_UNDEFINED, 1, &value);
+    JS_FreeValue(ctx, value);
+    JS_FreeValue(ctx, functions[0]); JS_FreeValue(ctx, functions[1]);
+    if (JS_IsException(settled)) { JS_FreeValue(ctx, promise); return settled; }
+    JS_FreeValue(ctx, settled);
+    return promise;
+}
+
+typedef struct {
+    os64_dom_t *dom;
+    JSValueConst self;
+    JSValue args[2];
+    int argc, conversion;
+} StreamInvocation;
+static JSValue stream_callback_body(JSContext *ctx, JSValueConst function, void *opaque)
+{
+    StreamInvocation *call = opaque;
+    if (!d_require_callback(call->dom, ctx, function)) return JS_EXCEPTION;
+    JSValue result = JS_Call(ctx, function, call->self, call->argc, call->args);
+    if (JS_IsException(result)) return result;
+    if (call->conversion == 1) {
+        double number;
+        int status = JS_ToFloat64(ctx, &number, result);
+        JS_FreeValue(ctx, result);
+        return status < 0 ? JS_EXCEPTION : JS_NewFloat64(ctx, number);
+    }
+    return call->conversion == 2 ? stream_promise(ctx, result, false) : result;
+}
+static JSValue call_stream_callback(JSContext *ctx, JSValueConst self, int argc,
+    JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)self; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (!dom) return JS_EXCEPTION;
+    StreamCallback *callback = argc >= 4 ? JS_GetOpaque(argv[0], os64_js_class_id(&stream_callback_slot)) : NULL;
+    if (!callback) return JS_ThrowTypeError(ctx, "Expected a captured stream callback");
+    StreamInvocation call = {callback->dom, argv[1], {JS_UNDEFINED, JS_UNDEFINED}, 0, 0};
+    JSValue length = JS_GetPropertyStr(ctx, argv[2], "length");
+    uint32_t count;
+    if (JS_IsException(length)) return length;
+    int status = JS_ToUint32(ctx, &count, length); JS_FreeValue(ctx, length);
+    if (status < 0 || JS_ToInt32(ctx, &call.conversion, argv[3]) < 0) return JS_EXCEPTION;
+    if (count > 2 || call.conversion < 0 || call.conversion > 2)
+        return JS_ThrowInternalError(ctx, "Invalid stream callback arguments");
+    call.argc = (int)count;
+    JSValue result = JS_EXCEPTION;
+    for (uint32_t i = 0; i < count; i++) {
+        call.args[i] = JS_GetPropertyUint32(ctx, argv[2], i);
+        if (JS_IsException(call.args[i])) goto done;
+    }
+    result = d_synchronous_invoke(ctx, &callback->settings, stream_callback_body, &call);
+    /* WebIDL converts a thrown completion to a rejected promise after callback
+     * cleanup, in the caller's realm. Terminal failures are not rejections. */
+    if (call.conversion == 2 && JS_IsException(result) && d_exception_catchable(ctx)) {
+        JSValue rejected = stream_promise(ctx, JS_GetException(ctx), true);
+        result = JS_IsException(rejected) ? rejected : stream_promise(ctx, rejected, false);
+    }
+done:
+    for (int i = 0; i < call.argc; i++) JS_FreeValue(ctx, call.args[i]);
+    return result;
+}
+
+static JSValue streams_evaluate(JSContext *ctx, JSValue code, bool prepared)
+{
+    if (prepared && !JS_PrepareHostImplementation(ctx, code)) {
+        JS_FreeValue(ctx, code);
+        return JS_ThrowInternalError(ctx, "Streams implementation preparation refused");
+    }
+    return JS_EvalFunction(ctx, code);
+}
+
 /* The script's completion value, the factory, or JS_EXCEPTION. A compile
  * keeps no source text: an interface's toString then reads as a native
  * one does, and a realm holds a third less (STREAMS.md § 8). File names
  * and line numbers stay, which is what a failure's frames need. */
-static JSValue streams_factory(JSContext *ctx)
+static JSValue streams_factory(JSContext *ctx, bool prepared)
 {
     if (__atomic_load_n(&s_bytecode_state, __ATOMIC_ACQUIRE) == CACHE_READY) {
         JSValue function = JS_ReadObject(ctx, s_bytecode, s_bytecode_length, JS_READ_OBJ_BYTECODE);
         if (JS_IsException(function)) return function;
-        return JS_EvalFunction(ctx, function);
+        return streams_evaluate(ctx, function, prepared);
     }
     JSRuntime *rt = JS_GetRuntime(ctx);
     int strip = JS_GetStripInfo(rt);
@@ -100,7 +217,7 @@ static JSValue streams_factory(JSContext *ctx)
             return JS_EXCEPTION;
         }
     }
-    return JS_EvalFunction(ctx, function);
+    return streams_evaluate(ctx, function, prepared);
 }
 
 size_t d_streams_bytecode_kept(void)
@@ -277,7 +394,7 @@ static JSValue foreign_stream_slot(JSContext *ctx, JSValueConst self, int argc,
 
 /* Only the private factory can supply these functions. Their algorithms keep
  * settled data usable after creator departure; author invocation goes through
- * RequireCallback inside streams.js, rather than inheriting neutrality. */
+ * the private callback boundary inside streams.js, rather than inheriting neutrality. */
 static JSValue internal_reaction_call(JSContext *ctx, JSValueConst self, int argc,
                                      JSValueConst *argv, int magic, JSValue *data)
 {
@@ -337,6 +454,18 @@ static JSValue intrinsics(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (JS_IsException(prototype)) goto fail;
     if (JS_DefinePropertyValueStr(ctx, object, "AsyncIteratorPrototype", prototype, JS_PROP_C_W_E) < 0) goto fail;
     if (d_method(dom, ctx, object, "RequireCallback", require_callback, 1, 0) < 0) goto fail;
+    bool prepared = dom->cluster && dom->cluster->stream_callback_settings;
+    if (JS_DefinePropertyValueStr(ctx, object, "CallbackSettings", JS_NewBool(ctx, prepared), JS_PROP_C_W_E) < 0) goto fail;
+    if (prepared) {
+        static const JSClassDef callback_class = {.class_name = "StreamCallback",
+            .finalizer = stream_callback_free, .gc_mark = stream_callback_mark};
+        JSClassID id = os64_js_class_id(&stream_callback_slot);
+        if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &callback_class) < 0) goto fail;
+        if (d_method(dom, ctx, object, "CaptureCallback", capture_stream_callback, 1, 0) < 0 ||
+            d_method(dom, ctx, object, "CallCallback", call_stream_callback, 4, 0) < 0) goto fail;
+    } else if (JS_DefinePropertyValueStr(ctx, object, "CaptureCallback", JS_UNDEFINED, JS_PROP_C_W_E) < 0 ||
+               JS_DefinePropertyValueStr(ctx, object, "CallCallback", JS_UNDEFINED, JS_PROP_C_W_E) < 0) goto fail;
+
     if (dom->cluster && dom->cluster->recovery_enabled) {
         if (d_method(dom, ctx, object, "RecoveryStreamsUsed", recovery_streams_used, 0, 0) < 0) goto fail;
     } else if (JS_DefinePropertyValueStr(ctx, object, "RecoveryStreamsUsed", JS_UNDEFINED, JS_PROP_C_W_E) < 0) goto fail;
@@ -371,7 +500,7 @@ static const char *const kInterfaces[] = {
 
 int d_streams_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
-    JSValue factory = streams_factory(ctx);
+    JSValue factory = streams_factory(ctx, dom->cluster && dom->cluster->stream_callback_settings);
     if (JS_IsException(factory)) return -1;
     JSValue captured = intrinsics(dom, ctx, global);
     if (JS_IsException(captured)) {

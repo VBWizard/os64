@@ -269,6 +269,9 @@ recorded in [IFRAME_F4_SYNCHRONOUS_SETTINGS.md](IFRAME_F4_SYNCHRONOUS_SETTINGS.m
 Trusted implementation-code provenance is described in
 [IFRAME_F4_HOST_IMPLEMENTATION.md](IFRAME_F4_HOST_IMPLEMENTATION.md).
 
+Streams callback dictionary and return conversion are described in
+[IFRAME_F4_STREAM_CALLBACK_SETTINGS.md](IFRAME_F4_STREAM_CALLBACK_SETTINGS.md).
+
 ## Remaining F.4b interfaces and acceptance gates
 
 Before publishing browser settings queries, implement and prove:
@@ -276,8 +279,7 @@ Before publishing browser settings queries, implement and prove:
 - DOM integration of checked entry/lifecycle scopes and role-specific
   attribution, including relevant settings from the target binding.
 - Extend timer/listener/scheduled/handler/observer/custom-element/synchronous integration
-  to the remaining WebIDL conversion and invocation sites, including self-hosted
-  Streams,
+  to the remaining WebIDL conversion and invocation sites and Streams continuation boundaries,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.
 - Complete browser finalization task scheduling and the unresolved neutral-job
