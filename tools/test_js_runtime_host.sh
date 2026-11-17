@@ -72,7 +72,7 @@ if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" = --host-promise-capabilities ] ||
 fi
 if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" != "" ]; then
     case "$JS_RUNTIME_FOCUSED_SELECTOR" in
-        --owner-realms|--owner-admission|--owner-runtime|--retention|--failed-code-only|--failure-records|--recovery-barrier|--child-recovery|--execution-scopes-only|--native-call-contexts|--settings-scopes|--settings-bridge|--callback-settings|--current-settings|--promise-settings|--active-script|--finalization-settings|--import-settings|--neutral-promise-settings|--global-this|--realms-only|--quiescence) ;;
+        --owner-realms|--owner-admission|--owner-runtime|--retention|--failed-code-only|--failure-records|--recovery-barrier|--child-recovery|--execution-scopes-only|--native-call-contexts|--settings-scopes|--settings-bridge|--callback-settings|--current-settings|--promise-settings|--active-script|--finalization-tasks|--finalization-settings|--import-settings|--neutral-promise-settings|--global-this|--realms-only|--quiescence) ;;
         *) printf 'Unsupported focused runtime selector\n' >&2; exit 2 ;;
     esac
     for probe in probe sanitized-probe; do

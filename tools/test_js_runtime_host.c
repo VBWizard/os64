@@ -2586,6 +2586,31 @@ static void module_bytecode_cases(void)
 #include "test_js_failure_records.inc"
 #include "test_js_recovery_barrier.inc"
 #include "test_js_child_recovery.inc"
+
+static void finalization_task_recovery_cases(void)
+{
+    for(unsigned policy=OS64_JS_TEARDOWN_FATAL;policy<=OS64_JS_TEARDOWN_RECLAIM;policy++) {
+        size_t before=live; RecoveryHarness h;
+        if(!recovery_fixture(&h,policy)) continue;
+        JSRuntime *engine=JS_GetRuntime(h.ctx[2]);
+        /* Exercise conservative accounting even for raw engine scheduling. */
+        JS_SetFinalizationTaskQueue(engine,true);
+        execution_eval(h.ctx[2],"globalThis.reg=new FinalizationRegistry(()=>{});let t={};t.self=t;reg.register(t,1);t=null");
+        JS_RunGC(engine);JS_RunGC(engine);
+        check(JS_IsFinalizationTaskPending(engine)&&!JS_IsJobPending(engine),
+              "cleanup recovery: separate task queue is populated");
+        (void)recovery_overrun(&h,1,true);
+        os64_js_outcome_t out;os64_js_recovery_info_t info;os64_js_recovery_token_t token={0};
+        check(os64_js_recovery_inspect(h.runtime,OS64_JS_ABI_ID,&info)==OS64_JS_OK&&info.jobs_pending,
+              "cleanup recovery: pending task remains visible after overrun");
+        check(os64_js_recovery_prepare(h.runtime,OS64_JS_ABI_ID,&token,&out)!=OS64_JS_OK &&
+              !h.calls && os64_js_recovery_inspect(h.runtime,OS64_JS_ABI_ID,&info)==OS64_JS_OK &&
+              info.state==OS64_JS_RECOVERY_GLOBAL,
+              "cleanup recovery: deferred work prevents child-only recovery");
+        recovery_destroy(&h,before);
+    }
+}
+
 #include "test_js_retention.inc"
 #include "../userland/libjs/tests/owner_runtime_cases.h"
 #include "../userland/libjs/tests/owner_admission_cases.h"
@@ -2811,6 +2836,12 @@ int main(int argc, char **argv)
         printf("Import settings: %u checks, %u failed\n",checks,failures);
         return failures ? 1 : 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--finalization-tasks")) {
+        finalization_task_cases(); finalization_failure_cases(); finalization_task_recovery_cases();
+        check(live == 0, "finalization tasks release allocations");
+        printf("Finalization tasks: %u checks, %u failures\n", checks, failures);
+        return failures ? 1 : 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--finalization-settings")) {
         finalization_settings_cases(); finalization_failure_cases();
         check(live == 0, "finalization settings release allocations");
@@ -2876,7 +2907,7 @@ int main(int argc, char **argv)
         return failures != 0;
     }
     if (argc == 2 && !strcmp(argv[1], "--realms-only")) {
-        realm_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases(); native_job_failure_cases();
+        realm_cases(); finalization_task_recovery_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases(); native_job_failure_cases();
         check(live == 0, "realm cases release every allocation");
         printf("libjs realms: %u checks, %u failures\n", checks, failures);
         return failures != 0;
@@ -2935,7 +2966,7 @@ int main(int argc, char **argv)
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases();
-    realm_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
+    realm_cases(); finalization_task_recovery_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
     task_cases();
     script_host_cases();
     module_cases();

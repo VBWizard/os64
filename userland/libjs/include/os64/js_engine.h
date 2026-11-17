@@ -298,7 +298,7 @@ bool os64_js_realm_is_retired(const os64_js_realm_t *realm);
 
 /* Owner-thread, allocation-free safe-point snapshot. OK means the runtime is
  * healthy with no active call, open task/turn, installer, checkpoint or queued
- * job. BUSY preserves those operations; FAILED_RUNTIME requires root cleanup.
+ * microtask or finalization task. BUSY preserves those operations; FAILED_RUNTIME requires root cleanup.
  * Does not run jobs, sample time, reset budgets, latch failures or detach hosts.
  * An aliased active outcome is refused without writing it. Native bindings
  * must also exclude their own dispatch/reaction/provider borrows, and must

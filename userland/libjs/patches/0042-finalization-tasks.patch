@@ -1,0 +1,297 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -376,7 +376,9 @@
+     JSHostPromiseRejectionTracker *host_promise_rejection_tracker;
+     void *host_promise_rejection_tracker_opaque;
+ 
+-    struct list_head job_list; /* list of JSJobEntry.link */
++    struct list_head job_list; /* microtasks: JSJobEntry.link */
++    struct list_head finalization_tasks; /* host-delivered JSJobEntry.link */
++    BOOL finalization_task_queue;
+     JSJobGroup *job_group; /* scoped native installation transaction */
+ 
+     JSModuleNormalizeFunc *module_normalize_func;
+@@ -2168,6 +2170,7 @@
+     init_list_head(&rt->string_list);
+ #endif
+     init_list_head(&rt->job_list);
++    init_list_head(&rt->finalization_tasks);
+ 
+     if (JS_InitAtoms(rt))
+         goto fail;
+@@ -2494,12 +2497,19 @@
+     }
+ }
+ 
+-static JSJobEntry *js_job_first(JSRuntime *rt, JSJobGroup *group)
++static JSValue js_finrec_task(JSContext *ctx, int argc, JSValueConst *argv);
++
++static JSJobEntry *js_job_first(JSRuntime *rt, JSJobGroup *group, BOOL task)
+ {
+     assert(!group || group->runtime == rt);
+-    if (group) return group->first;
+-    if (list_empty(&rt->job_list)) return NULL;
+-    return list_entry(rt->job_list.next, JSJobEntry, link);
++    if (group) {
++        JSJobEntry *e = group->first;
++        while (e && (e->job_func == js_finrec_task) != task) e = e->group_next;
++        return e;
++    }
++    struct list_head *queue = task ? &rt->finalization_tasks : &rt->job_list;
++    if (list_empty(queue)) return NULL;
++    return list_entry(queue->next, JSJobEntry, link);
+ }
+ 
+ static JSContext *js_job_function_realm(JSContext *ctx, JSValueConst function);
+@@ -2544,7 +2554,7 @@
+     for(i = 0; i < argc; i++) {
+         e->argv[i] = JS_DupValue(ctx, argv[i]);
+     }
+-    list_add_tail(&e->link, &rt->job_list);
++    list_add_tail(&e->link, job_func == js_finrec_task ? &rt->finalization_tasks : &rt->job_list);
+     return 0;
+ }
+ 
+@@ -2571,15 +2581,14 @@
+    no code; release uses the same retained values as ordinary job completion. */
+ BOOL JS_PeekJobGroup(JSRuntime *rt, JSJobGroup *group, JSJobInfo *info)
+ {
+-    JSJobEntry *e = js_job_first(rt, group);
++    JSJobEntry *e = js_job_first(rt, group, FALSE);
+     if (!e) return FALSE;
+     *info = (JSJobInfo){ e->realm, e->owner, e->activity };
+     return TRUE;
+ }
+ 
+-int JS_DiscardJobGroup(JSRuntime *rt, JSJobGroup *group)
+-{
+-    JSJobEntry *e = js_job_first(rt, group);
++static int js_discard_job(JSRuntime *rt, JSJobEntry *e)
++{
+     int i;
+     if (!e) return 0;
+     js_job_unlink(e);
+@@ -2594,6 +2603,34 @@
+     return 1;
+ }
+ 
++int JS_DiscardJobGroup(JSRuntime *rt, JSJobGroup *group)
++{
++    return js_discard_job(rt, js_job_first(rt, group, FALSE));
++}
++
++int JS_DiscardFinalizationTask(JSRuntime *rt, JSJobGroup *group)
++{
++    return js_discard_job(rt, js_job_first(rt, group, TRUE));
++}
++
++BOOL JS_PeekFinalizationTask(JSRuntime *rt, JSJobGroup *group, JSJobInfo *info)
++{
++    JSJobEntry *e = js_job_first(rt, group, TRUE);
++    if (!e) return FALSE;
++    *info = (JSJobInfo){ e->realm, e->owner, e->activity };
++    return TRUE;
++}
++
++void JS_SetFinalizationTaskQueue(JSRuntime *rt, BOOL enabled)
++{
++    rt->finalization_task_queue = enabled;
++}
++
++BOOL JS_IsFinalizationTaskPending(JSRuntime *rt)
++{
++    return !list_empty(&rt->finalization_tasks);
++}
++
+ void JS_SetPromiseNeutralSettings(JSRuntime *rt, BOOL enabled)
+ {
+     rt->promise_neutral_settings = enabled;
+@@ -2605,17 +2642,28 @@
+         e->job_func == promise_reaction_job));
+ }
+ 
+-BOOL JS_PeekJobCallbackSettings(JSRuntime *rt, JSJobGroup *group,
++static BOOL js_job_callback_settings(JSRuntime *rt, JSJobEntry *e,
+                                JSContext **entry, JSContext **incumbent, JSContext **report)
+ {
+-    JSJobEntry *e = js_job_first(rt, group);
+     *entry = e && e->incumbent ? e->owner : NULL;
+     *incumbent = e ? e->incumbent : NULL;
+     /* Cleanup exceptions belong to the registry's global, independently of
+        the callable's execution realm. The wrapper reports after scopes unwind. */
+     if (report)
+-        *report = e && e->incumbent ? (e->job_func == js_finrec_job ? e->realm : e->owner) : NULL;
++        *report = e && e->incumbent ? ((e->job_func == js_finrec_job || e->job_func == js_finrec_task) ? e->realm : e->owner) : NULL;
+     return e && (e->incumbent != NULL || js_job_has_neutral_settings(rt, e));
++}
++
++BOOL JS_PeekJobCallbackSettings(JSRuntime *rt, JSJobGroup *group,
++                               JSContext **entry, JSContext **incumbent, JSContext **report)
++{
++    return js_job_callback_settings(rt, js_job_first(rt, group, FALSE), entry, incumbent, report);
++}
++
++BOOL JS_PeekFinalizationTaskSettings(JSRuntime *rt, JSJobGroup *group,
++                               JSContext **entry, JSContext **incumbent, JSContext **report)
++{
++    return js_job_callback_settings(rt, js_job_first(rt, group, TRUE), entry, incumbent, report);
+ }
+ 
+ BOOL JS_PeekPromiseJobSettings(JSRuntime *rt, JSJobGroup *group,
+@@ -2674,7 +2722,7 @@
+    if pctx != NULL. It may be NULL if the context was already
+    destroyed or if no job was pending. The 'pctx' parameter is now
+    absolete. */
+-int JS_ExecuteJobGroup(JSRuntime *rt, JSJobGroup *group, JSContext **pctx)
++static int js_execute_job(JSRuntime *rt, JSJobGroup *group, BOOL task, JSContext **pctx)
+ {
+     JSContext *ctx;
+     JSJobEntry *e;
+@@ -2688,7 +2736,7 @@
+             *pctx = NULL;
+         return -1;
+     }
+-    e = js_job_first(rt, group);
++    e = js_job_first(rt, group, task);
+     if (!e) {
+         if (pctx)
+             *pctx = NULL;
+@@ -2745,6 +2793,16 @@
+     return ret;
+ }
+ 
++int JS_ExecuteJobGroup(JSRuntime *rt, JSJobGroup *group, JSContext **pctx)
++{
++    return js_execute_job(rt, group, FALSE, pctx);
++}
++
++int JS_ExecuteFinalizationTask(JSRuntime *rt, JSJobGroup *group, JSContext **pctx)
++{
++    return js_execute_job(rt, group, TRUE, pctx);
++}
++
+ int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx)
+ {
+     return JS_ExecuteJobGroup(rt, NULL, pctx);
+@@ -2818,24 +2876,15 @@
+ 
+ static int JS_FreeRuntimeInternal(JSRuntime *rt, BOOL report)
+ {
+-    struct list_head *el, *el1;
+     int i;
+ 
+     JS_FreeValueRT(rt, rt->current_exception);
+ 
+-    list_for_each_safe(el, el1, &rt->job_list) {
+-        JSJobEntry *e = list_entry(el, JSJobEntry, link);
+-        js_job_unlink(e);
+-        for(i = 0; i < e->argc; i++)
+-            JS_FreeValueRT(rt, e->argv[i]);
+-        if (e->owner) JS_FreeContext(e->owner);
+-        if (e->activity) JS_FreeContext(e->activity);
+-        if (e->incumbent) JS_FreeContext(e->incumbent);
+-        JS_FreeValueRT(rt, e->script_or_module);
+-        JS_FreeContext(e->realm);
+-        js_free_rt(rt, e);
+-    }
+-    init_list_head(&rt->job_list);
++    /* Releasing either lane can run native finalizers that enqueue in the
++       other. Drain retained work to exhaustion without invoking job bodies. */
++    while (JS_IsJobPending(rt) || JS_IsFinalizationTaskPending(rt)) {
++        if (!JS_DiscardJobGroup(rt, NULL)) JS_DiscardFinalizationTask(rt, NULL);
++    }
+ 
+     /* don't remove the weak objects to avoid create new jobs with
+        FinalizationRegistry */
+@@ -2844,6 +2893,7 @@
+ #ifdef DUMP_LEAKS
+     /* leaking objects */
+     {
++        struct list_head *el;
+         BOOL header_done;
+         JSGCObjectHeader *p;
+         int count;
+@@ -62777,6 +62827,7 @@
+ typedef struct JSFinalizationRegistryData {
+     JSWeakRefHeader weakref_header;
+     struct list_head entries; /* list of JSFinRecEntry.link */
++    JSObject *registry; /* borrowed back-pointer; valid while this data is linked */
+     JSContext *realm;
+     JSValue cb;
+     JSContext *incumbent;
+@@ -62826,6 +62877,26 @@
+     return js_call_job_callback(ctx, argv[0], JS_UNDEFINED, 1, &argv[1]);
+ }
+ 
++/* One cleared cell per host task. Keep cells in the registry until delivery
++   so unregister can cancel collected targets between GC and task execution. */
++static JSValue js_finrec_task(JSContext *ctx, int argc, JSValueConst *argv)
++{
++    JSFinalizationRegistryData *frd = JS_GetOpaque(argv[0], JS_CLASS_FINALIZATION_REGISTRY);
++    struct list_head *el;
++    list_for_each(el, &frd->entries) {
++        JSFinRecEntry *fre = list_entry(el, JSFinRecEntry, link);
++        if (!JS_IsUndefined(fre->target)) continue;
++        JSValue held = fre->held_val;
++        list_del(&fre->link);
++        js_weakref_free(ctx->rt, fre->token);
++        js_free(ctx, fre);
++        JSValue result = js_call_job_callback(ctx, frd->cb, JS_UNDEFINED, 1, &held);
++        JS_FreeValue(ctx, held);
++        return result;
++    }
++    return JS_UNDEFINED;
++}
++
+ static void finrec_delete_weakref(JSRuntime *rt, JSWeakRefHeader *wh)
+ {
+     JSFinalizationRegistryData *frd = container_of(wh, JSFinalizationRegistryData, weakref_header);
+@@ -62840,6 +62911,19 @@
+         }
+ 
+         if (!js_weakref_is_live(fre->target)) {
++            if (rt->finalization_task_queue) {
++                /* Weak processing precedes cycle collection. A zero-refcount
++                   registry awaiting finalization must not be resurrected. */
++                if (js_rc(frd->registry)->ref_count != 0) {
++                    JSValue registry = JS_MKPTR(JS_TAG_OBJECT, frd->registry);
++                    JS_EnqueueJob2(frd->realm, js_job_function_realm(frd->realm, frd->cb),
++                                   frd->realm, js_finrec_task, 1, &registry, TRUE,
++                                   frd->incumbent, frd->script_or_module, FALSE);
++                }
++                js_weakref_free(rt, fre->target);
++                fre->target = JS_UNDEFINED;
++                continue;
++            }
+             JSValueConst args[2];
+             args[0] = frd->cb;
+             args[1] = fre->held_val;
+@@ -62890,6 +62974,7 @@
+     frd->weakref_header.weakref_type = JS_WEAKREF_TYPE_FINREC;
+     list_add_tail(&frd->weakref_header.link, &ctx->rt->weakref_list);
+     init_list_head(&frd->entries);
++    frd->registry = JS_VALUE_GET_OBJ(obj);
+     frd->realm = JS_DupContext(ctx);
+     frd->cb = JS_DupValue(ctx, cb);
+     JS_SetOpaque(obj, frd);
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -1183,6 +1183,18 @@
+ int JS_DiscardJobGroup(JSRuntime *rt, JSJobGroup *group);
+ int JS_ExecuteJobGroup(JSRuntime *rt, JSJobGroup *group, JSContext **pctx);
+ 
++/* Separate host task lane, configured before registry construction. Normal
++ * job APIs see microtasks; these APIs see finalization tasks, including group
++ * membership. A transaction rollback must discard both lanes. Queue holds and
++ * peek lifetimes match job APIs. Raw execution requires host lifecycle gates. */
++void JS_SetFinalizationTaskQueue(JSRuntime *rt, JS_BOOL enabled);
++JS_BOOL JS_IsFinalizationTaskPending(JSRuntime *rt);
++JS_BOOL JS_PeekFinalizationTask(JSRuntime *rt, JSJobGroup *group, JSJobInfo *info);
++JS_BOOL JS_PeekFinalizationTaskSettings(JSRuntime *rt, JSJobGroup *group,
++    JSContext **entry, JSContext **incumbent, JSContext **report);
++int JS_DiscardFinalizationTask(JSRuntime *rt, JSJobGroup *group);
++int JS_ExecuteFinalizationTask(JSRuntime *rt, JSJobGroup *group, JSContext **pctx);
++
+ /* Owner-thread Promise opt-in, configured before author execution. Capture
+  * runs without author code: return 0 with a borrowed incumbent, 0/null for
+  * explicitly trusted bootstrap, or -1 to refuse. The engine retains and

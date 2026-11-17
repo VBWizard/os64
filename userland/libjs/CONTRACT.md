@@ -1424,6 +1424,16 @@ realm. The existing bounded engine queue remains in use; browser task-source
 scheduling is a separate integration gate. Ownership, bootstrap refusal and
 validation are in the [finalization chapter](../../docs/design/pending/IFRAME_F4_FINALIZATION_SETTINGS.md).
 
+`os64_js_enable_finalization_tasks` additionally separates cleanup from ordinary
+microtasks. Hosts poll `os64_js_finalization_task_pending` and call
+`os64_js_run_finalization_task` between ordinary tasks. Each dispatch visits one
+cleanup and checkpoints its microtasks under one budget. Pending cleanup keeps
+its registry alive and cells remain unregisterable until delivery. Microtask
+outcomes retain their existing meaning; quiescence and recovery inspect both
+queues. The DOM constructor composes this with Streams settings; the default
+Yonder configuration stays unchanged. See the
+[task contract and proof](../../docs/design/pending/IFRAME_F4_FINALIZATION_TASKS.md).
+
 `os64_js_callback_call(report, entry, abi, record, this, argc, argv, out)` requires
 an open task. `report` selects exception/script-host reporting; `entry` is the
 binding's independently proven associated realm. The owned record supplies the
