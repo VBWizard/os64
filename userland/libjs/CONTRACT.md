@@ -45,6 +45,11 @@ capabilities. Disabling Atomics alone leaves shared-buffer exposure in the core.
 This wrapper deletes the shared-buffer global
 before publishing its context. No filesystem module loader is installed.
 
+Creation also reserves a private, non-reusing process-local incarnation. If
+that finite namespace is exhausted, creation returns ADMISSION_REFUSED before
+allocation/publication; later construction failure does not reuse its number.
+This numeric identity adds no caller-visible lifetime or release authority.
+
 Creation binds the runtime to the creating thread. The same thread owns setup,
 evaluation, jobs, diagnostic extraction, and destruction. This is a caller
 obligation: os64 does not expose a current-thread identifier for a runtime to

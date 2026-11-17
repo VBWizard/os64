@@ -2585,9 +2585,46 @@ static void module_bytecode_cases(void)
 #include "test_js_recovery_barrier.inc"
 #include "test_js_child_recovery.inc"
 #include "test_js_retention.inc"
+#include "../userland/libjs/tests/owner_runtime_cases.h"
+
+static bool owner_runtime_issuer_exhausted;
+JSOwnerStatus js_owner_observed_incarnation_next(uint64_t *out)
+{
+    return owner_runtime_issuer_exhausted?JS_OWNER_EXHAUSTED:js_owner_incarnation_next(out);
+}
+static void owner_runtime_assert(bool ok, const char *what) { check(ok,what); }
+static void owner_runtime_failure_cases(void)
+{
+    owner_runtime_cases(owner_runtime_assert);
+    os64_js_config_t config={.limits=os64_js_default_limits()};
+    for(unsigned policy=0;policy<2;policy++) {
+        os64_js_runtime_t *refused=(void *)1; os64_js_outcome_t rejection;
+        size_t allocs=attempts;
+        owner_runtime_issuer_exhausted=true;
+        check(os64_js_create_with_teardown(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,&refused,&rejection)==OS64_JS_ADMISSION_REFUSED && !refused && attempts==allocs,
+            "runtime identity: exhausted issuer refuses before allocation or publication");
+        owner_runtime_issuer_exhausted=false;
+        uint64_t before,after;
+        check(js_owner_incarnation_next(&before)==JS_OWNER_OK,"runtime identity: bracket failed admission");
+        os64_js_runtime_t *runtime=(void *)1; os64_js_outcome_t out;
+        size_t base=live,bytes=live_bytes;
+        fail_at=attempts+1;
+        check(os64_js_create_with_teardown(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,&runtime,&out)==OS64_JS_HOST_FAILURE && !runtime,
+            "runtime identity: failed allocation publishes no runtime");
+        fail_at=0;
+        check(js_owner_incarnation_next(&after)==JS_OWNER_OK && after==before+2 && live==base && live_bytes==bytes,
+            "runtime identity: failed admission burns ID without leaking wrapper");
+    }
+}
+
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--owner-runtime")) {
+        owner_runtime_failure_cases();
+        printf("owner runtime: %u checks, %u failures\n",checks,failures);
+        return failures?1:0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--retention")) {
         retention_cases();
         printf("libjs retention: %u checks, %u failures\n", checks, failures);
@@ -2747,7 +2784,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
-    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases();
+    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases();
     realm_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
     task_cases();
     script_host_cases();

@@ -11,6 +11,7 @@
 #include "platform.h"
 #include "os64_js_engine_id.h"
 #include "../intl/intl.h"
+#include "owner_runtime.h"
 #include <limits.h>
 
 #define JS_PUBLIC __attribute__((visibility("default")))
@@ -73,7 +74,7 @@ struct os64_js_runtime {
     SetupCall *setup_calls;
     os64_js_realm_t *setup_realm;
     SettingsCall *settings_calls;
-    bool host_settings_enabled;
+    uint64_t incarnation;
     os64_js_realm_t realms[OS64_JS_MAX_REALMS];
     size_t realm_count;
     os64_js_realm_t *turn_owner;
@@ -97,10 +98,15 @@ struct os64_js_runtime {
     os64_js_recovery_host_t recovery_host;
     unsigned cancelled;
     bool active, turn, task, checkpointing, source_truncated, destroying;
-    bool ran_jobs;
+    bool ran_jobs, host_settings_enabled;
     uint64_t owed_count;
     char source_name[OS64_JS_SOURCE_NAME_CAP];
 };
+
+uint64_t js_owner_runtime_incarnation(const os64_js_runtime_t *runtime)
+{
+    return runtime != NULL ? runtime->incarnation : 0;
+}
 
 static os64_js_realm_t *primary(os64_js_runtime_t *runtime)
 {
@@ -884,11 +890,15 @@ JS_PUBLIC os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *
         outcome->limit = OS64_JS_LIMIT_MEMORY;
         return status(outcome, OS64_JS_LIMIT, "runtime storage exceeds memory limit");
     }
+    uint64_t incarnation;
+    if (js_owner_incarnation_next(&incarnation) != JS_OWNER_OK)
+        return status(outcome, OS64_JS_ADMISSION_REFUSED, "runtime incarnation namespace exhausted");
     os64_js_runtime_t *runtime = os64_malloc(sizeof(*runtime));
     if (runtime == NULL)
         return status(outcome, OS64_JS_HOST_FAILURE, "host allocation failed");
     size_t storage = os64_malloc_size(runtime);
     os64_memset(runtime, 0, sizeof(*runtime));
+    runtime->incarnation = incarnation;
     os64_js_realm_t *realm = primary(runtime);
     realm->runtime = runtime;
     realm->promise_then = JS_UNDEFINED;
