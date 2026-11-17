@@ -2,7 +2,8 @@
 """Stage the private runtime-identity oracle and observe its parent in QEMU.
 
 This consumer links the production runtime and engine objects directly.
-It proves numeric runtime binding, not a checked profile or reclamation.
+It proves numeric runtime binding and private storage admission, not a public
+checked profile or reclamation.
 
 Inputs are a bootable TESTRUN/NONET ISO and matching FAT disk image containing
 /tests and /lib. Source images and existing output directories are preserved.
@@ -77,17 +78,19 @@ def main():
         "source_head": subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
         "working_diff_sha256": hashlib.sha256(subprocess.check_output(
             ["git", "-C", str(root), "diff", "--binary", "HEAD"])).hexdigest(),
-        "scope": "Private metadata only: actual runtime/engine objects; numeric binding only, no metadata storage, checked profile or reclamation",
+        "scope": "Private metadata only: actual runtime/engine objects; numeric binding and explicit private metadata storage, no public profile or reclamation",
         "consumer_source_sha256": digest(root / "userland/obj/js/owner-runtime-test"),
         "consumer_debug_stripped": True,
         "runtime_object_sha256": digest(root / "userland/obj/js/runtime/runtime.o"),
         "core_object_sha256": digest(root / "userland/obj/js/core.o"),
+        "tickets_object_sha256": digest(root / "userland/obj/js/runtime/owner_tickets.o"),
         "issuer_object_sha256": digest(root / "userland/obj/js/runtime/owner_incarnation.o"),
         "source_files": {name: digest(root / name) for name in [
             "userland/libjs/runtime/owner_runtime.h", "userland/libjs/runtime/runtime.c",
             "userland/libjs/runtime/owner_incarnation.h", "userland/libjs/runtime/owner_incarnation.c",
             "userland/libjs/manifest.json",
-            "userland/libjs/runtime/owner_tickets.h",
+            "userland/libjs/runtime/owner_tickets.h", "userland/libjs/runtime/owner_tickets.c",
+            "userland/libjs/tests/owner_admission_cases.h",
             "userland/libjs/tests/owner_runtime_cases.h", "userland/libjs/tests/owner_runtime.c",
             "userland/libjs/tests/owner_runtime_parent.c", "userland/libjs/shared.mk",
             "userland/libjs/include/os64/js.h", "userland/libjs/core.mk", "userland/GNUmakefile",
