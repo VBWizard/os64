@@ -241,6 +241,8 @@ typedef struct
 	uint16_t subvendor, subdevice;             // devices only (type-0 header)
 	uint8_t  irq_line, irq_pin;
 	uint8_t  primary, secondary, subordinate;  // bridges only (type-1 header)
+	uint32_t bar[6];                           // as enumeration read them
+	uint8_t  bars;                             // six for a device, two for a bridge
 } sys_pci_view_t;
 
 static int sys_pci_total(void)
@@ -273,6 +275,9 @@ static bool sys_pci_at(int idx, sys_pci_view_t *v)
 		v->revision = d->revisionID;
 		v->subvendor = d->subvendor;  v->subdevice = d->subdevice;
 		v->irq_line = d->interrupt_line;  v->irq_pin = d->interrupt_pin;
+		v->bars = 6;
+		for (int i = 0; i < 6; i++)
+			v->bar[i] = d->baseAdd[i];
 		return true;
 	}
 
@@ -291,6 +296,9 @@ static bool sys_pci_at(int idx, sys_pci_view_t *v)
 		v->primary = b->primaryBusNum;
 		v->secondary = b->secondaryBusNum;
 		v->subordinate = b->subordinateBusNum;
+		v->bars = 2;
+		for (int i = 0; i < 2; i++)
+			v->bar[i] = b->baseAdd[i];
 		return true;
 	}
 	return false;
@@ -759,6 +767,32 @@ static void sys_gen_pci_device(synth_text_t *t, const sys_pci_view_t *v)
 	// INTx", line is whatever firmware routed (255 = none/unknown).
 	synth_text_addf(t, "irq_line: %u\n", v->irq_line);
 	synth_text_addf(t, "irq_pin: %u\n", v->irq_pin);
+	// The base address registers as enumeration read them: where each window
+	// is, never how big. Its size is learned by writing ones to the register
+	// and reading back, and nothing here writes to a device. A register that
+	// reads zero is not listed (absent and unassigned look the same without
+	// that write). A 64-bit window takes two registers and is listed under
+	// the first.
+	for (int i = 0; i < v->bars; i++)
+	{
+		uint32_t raw = v->bar[i];
+		if (raw == 0)
+			continue;
+		if (raw & 1)
+		{
+			synth_text_addf(t, "bar%d: io 0x%x\n", i, raw & ~3u);
+			continue;
+		}
+		bool wide = ((raw >> 1) & 3) == 2 && i + 1 < v->bars;
+		uint64_t base = raw & ~0xFull;
+		if (wide)
+			base |= (uint64_t)v->bar[i + 1] << 32;
+		synth_text_addf(t, "bar%d: memory %s%s 0x%lx\n", i,
+		                wide ? "64-bit" : ((raw >> 1) & 3) == 1 ? "below-1M" : "32-bit",
+		                (raw & 8) ? " prefetchable" : "", base);
+		if (wide)
+			i++;
+	}
 	// The capability list as enumeration read it: `name@offset` for each
 	// entry in list order, the id in hex where it has no name, "none" for a
 	// function without a list. It is what says whether a device can be
