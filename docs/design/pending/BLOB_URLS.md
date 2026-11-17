@@ -1,13 +1,16 @@
 # Blob URLs and FileReader
 
-**Status: DRAFT 2026-11-17, for Fable's read before any code.** This is
-WORKERS.md's slice W0 (§ 9 and § "The blob URL store") made concrete, with
-FileReader beside it. Chris asked for both on 2026-11-17, after a browser
-Minecraft game he tried stalled at 50%: its loader downloads one zip of
-its assets (the first half of the bar), unpacks each file into a `Blob`,
-and calls `URL.createObjectURL` on it (the second half), then uses those
-addresses as pictures and as CSS `background-image: url(...)`. yonder has
-no `createObjectURL`, so the first call throws and the bar stops.
+**Status: APPROVED TO BUILD 2026-11-17** (Fable's review, its eight
+findings taken below; the review is kept in the Opus kit as
+`BLOB_URLS_REVIEW.md`). One question remains Chris's: the store's bound
+(§ 5). This is WORKERS.md's slice W0 (§ 9 and § "The blob URL store") made
+concrete, with FileReader beside it. Chris asked for both on 2026-11-17,
+after a browser Minecraft game he tried stalled at 50%: its loader
+downloads one zip of its assets (the first half of the bar), unpacks each
+file into a `Blob`, and calls `URL.createObjectURL` on it (the second
+half), then uses those addresses as pictures and as CSS
+`background-image: url(...)`. yonder has no `createObjectURL`, so the
+first call throws and the bar stops.
 
 The standards are the File API (§ 8 FileReader, § 9 "A URL for Blob and
 MediaSource reference"), the URL Standard (a blob URL's origin and its
@@ -29,10 +32,21 @@ download link (15), an `.href` (13), `fetch` or `XMLHttpRequest` (13),
 media objects (12 — `MediaSource`, which yonder does not have), CSS
 `url()` (5), `import()` (4).
 
-Out of this design, each with its DEBTS row: workers (W1, which is where
-15 of the 69 go next), `createObjectURL(MediaSource)` (a TypeError here, as
-in a browser without MSE), opening a blob URL as a page (§ 6), Range
-requests of a blob URL, and `FileReaderSync` (a worker's).
+**The game that started it**, measured: its archive unpacks to 56 MiB in
+867 files — 36 MiB of Ogg audio, 18 MiB of MP3, under 2 MiB of pictures and
+fonts. Past this slice it meets three walls of its own: its Ogg sounds
+(libav is built without Vorbis), the IndexedDB module it ships, and WebGL
+if it draws in 3D. This slice gets its loader past 50% and its pictures
+and backgrounds drawn.
+
+**Out of this design**, each a DEBTS row written with the code: workers
+(W1, where 15 of the 69 go next); `createObjectURL(MediaSource)` (a
+TypeError here, as in a browser without MSE); opening a blob URL as a page
+(`<a href=blob:>` followed without `download`, `window.open(url)`,
+`location = url`: refused by name, decision 8); a ranged blob fetch; a
+second window of the same origin fetching the first one's blob URLs
+(decision 4); a picture's, a style's and a font's take after the script's
+task (decision 3); and `FileReaderSync` (a worker's).
 
 ## 1. Decisions
 
@@ -46,8 +60,8 @@ requests of a blob URL, and `FileReaderSync` (a worker's).
    *Alternative considered:* sharing the Blob's `DKept` bytes instead of
    copying. `DKept` is per-binding and its counts are not thread-safe;
    making them so reaches every kept body (fetch, media). The copy costs
-   memory once per URL made (decision 6 bounds it), and is what WORKERS.md
-   § "The blob URL store" chose.
+   memory once per URL made (decision 6 bounds it); the doors make no
+   further copy (decision 8).
 
 2. **The URL is `blob:<origin>/<uuid>`.** The origin is the page's,
    serialized (`blob:https://example.com/…`), or `null` for an opaque one
@@ -57,27 +71,38 @@ requests of a blob URL, and `FileReaderSync` (a worker's).
    `MediaSource` included). A Blob of any size is accepted, within
    decision 6.
 
-3. **A blob URL is resolved when a request is made, not when it runs.**
-   The URL Standard captures the entry when the URL is parsed, so a page
-   may set `img.src = url` and revoke the URL on the next line and the
-   picture still loads, and a page may count on it. So each door, on the
-   window thread, at the moment it creates its request, asks
+3. **A blob URL is taken where the standard parses it.** The URL Standard
+   captures the entry when the URL is parsed, and a page may count on it:
+   `fetch(url)`, `xhr.open(…, url)` or a link's click followed at once by
+   `revokeObjectURL(url)` must still work (WPT's `FileAPI/url/` tests the
+   first two; the third is the hand-rolled download,
+   `a.href = url; a.click(); URL.revokeObjectURL(url)`). The take is
    `os64_dom_blob_url_take(store, url)`: a held entry (a reference taken)
-   or NULL. The request carries the held entry to the pool; the run
-   answers from it; the release drops the reference. A request made from
-   a blob URL with no entry (never made, revoked before the request, or
-   another page's) is a network error.
+   or NULL. Who takes, and when, is per door, in decision 8's "taken at"
+   column; the rule written beside `request_job` and in libdom's fetch
+   and navigation is **"a blob URL is taken where the standard parses
+   it"**. Where libdom parses (the `Request` constructor and `fetch()`,
+   `xhr.open()`, a link followed or `location` assigned), libdom takes and
+   hands the held entry to the host with the request
+   (`os64_dom_request_t.blob`) or the navigation ask (`dom->navigation`,
+   which lasts past the task); the host takes its own reference from it.
+   Where yonder is told inside the call (a script element connected), its
+   notice takes. Where the request comes later than the standard parses
+   (a picture at the page's next picture pass, a style at the cascade, a
+   font at first use), the gap is booked by name: the pattern there is to
+   revoke in `onload`, after the request. A request carries its held entry
+   to the pool, the run answers from it, the release drops the reference.
+   A request made from a blob URL with no entry is a network error.
 
 4. **A blob URL resolves only in its own page's store.** An entry is
    found only in the store of the page that made it, so a hit is always
    same origin, and the origin comparison the standard makes is true by
-   construction. That is exact while yonder has no frames and no
-   workers: it is the one place a cross-origin blob URL could come from.
-   The day frames load (IFRAME.md) a frame's page has a store of its own
-   and its parent's URLs miss there, which the standard also gives
-   (different origins) except for a same-origin frame, which must see its
-   parent's entries — IFRAME.md's design decides whether a frame shares
-   its top page's store; noted there, not solved here.
+   construction. That is exact while yonder has no frames and no workers.
+   Two differences from other browsers follow, each booked: a same-origin
+   frame, which must see its parent's entries (IFRAME.md's design decides
+   whether a frame shares its top page's store); and a second yonder
+   window of the same origin, which in other browsers can fetch the first
+   window's blob URL while that document lives, and here misses.
 
 5. **The answer is the standard's scheme fetch for `blob`.** A `GET` only
    (anything else is a network error), status 200 `OK`, `Content-Type` the
@@ -86,15 +111,20 @@ requests of a blob URL, and `FileReaderSync` (a worker's).
    written or read. A redirect to a blob URL is already refused by libway
    (`way_main_fetch` serves only http(s) and `data:` past the first hop),
    and stays so. A `Range` header is ignored and the whole body served
-   (DEBTS: the standard's ranged blob fetch).
+   (booked).
 
 6. **The store is bounded, and its bytes are the page's.** Its bytes count
    in the page's memory record (`memory:` line, a `blobs` figure beside
    `pictures`), and the store refuses an entry that would take it past
    **256 MiB**: `createObjectURL` then throws a `QuotaExceededError`. The
-   standard sets no limit and says nothing of one; browsers have storage
-   limits of their own and fail in their own ways, and a throw is the
-   answer a page's `catch` can see. *Question 1 below.*
+   standard sets no limit; browsers have storage limits of their own and
+   fail in their own ways, and other browsers do not throw here. A page
+   with no `catch` therefore stops where it stops today, and the record's
+   `FAILED` line (decision 11) is then the only place that says why; that
+   is accepted. The game measured in § 0 holds 56 MiB in the store, under
+   a quarter of the bound; with the archive, the unpacked buffers and the
+   Blobs in the engine beside it, its whole load is about 225 MiB of the
+   page's 1 GiB. *Question 1, Chris's.*
 
 7. **Revocation removes the name, not the bytes.** `revokeObjectURL(url)`
    removes the map's entry when the URL is in the store (a URL of another
@@ -103,127 +133,132 @@ requests of a blob URL, and `FileReaderSync` (a worker's).
    goes, the store is freed and every entry with it, except those held by
    requests still in flight, which free themselves on release.
 
-8. **Every door that fetches a URL a page names takes a blob URL**, by
-   decision 3. Each door's change is small, the same three steps: take
-   the entry where the request is created, carry it, answer from it in
-   the run (or, where the door answers a `data:` URL on the window
-   thread, answer there). The doors:
+8. **Every door that fetches a URL a page names takes a blob URL, and none
+   copies it again.** Each door's change is the same three steps: take
+   the entry (or receive libdom's) at the "taken at" moment, carry it,
+   answer from it in the run. The entry's bytes never change, so a door
+   reads them **in place**: a picture's decode input, a download's write
+   and media's byte window are views of the held bytes, not copies.
 
-   | Door | Where the request is made | What a blob URL serves |
-   |---|---|---|
-   | Pictures: `<img>`, CSS `background-image` and the rest of the picture catalog, a Canvas image source | `picture_submit` (yonder.c), run by `picture.c` | the picture, decoded as a fetched one is; origin-clean |
-   | Style sheets: `<link rel=stylesheet>`, `@import` | `sheet_fetch` → `sheet.c` (`yonder_fetch_style_run`) | the sheet |
-   | Scripts: classic `<script src>`, module graphs and `import()` | the script host's requests (`scripts_for`, `request_job`) | the script, compiled as a fetched one is, its address the blob URL (bytecode keyed by it is not kept: there is no cache entry) |
-   | `fetch` and `XMLHttpRequest`, async and sync | `request_job`, `script_run` (`yonder_fetch_run`) | the response of decision 5 |
-   | Web fonts: `@font-face src: url(blob:)` | `webfonts_feed` → `webfont.c` (`way_fetch_whole` today) | the face's bytes |
-   | Media: `<audio src>`, a `<video>`'s sound | `media.c` (`yonder_fetch_media_run`) | the sound; its byte window (`media_bytes.c`) is the whole body at once |
-   | Downloads: `<a download href=blob:>` and a blob URL the page asks to save | `downloads_feed` → `download_job.c` | the file, named by the `download` attribute or the Blob's type |
+   | Door | Taken at | Where | What a blob URL serves |
+   |---|---|---|---|
+   | `fetch` (`Request` constructor, `fetch()`) | inside the call (libdom) | `request_job` (`yonder_fetch_run`) | decision 5's response |
+   | `XMLHttpRequest`, async and sync | inside `open()` (libdom) | `request_job`, `script_run` | decision 5's response |
+   | Classic `<script src>` connected by a verb | inside the call (yonder's `script_connected` notice) | the script host's request | the script, compiled as a fetched one is, its address the blob URL; no bytecode kept (no cache entry) |
+   | Classic `<script src>` from the parser | when the parser reaches it (the standard's moment too) | the script host's request | as above |
+   | Modules: a graph's fetches, `import()` | when the graph asks for the module (the standard's "fetch a module script"), on the window thread | the script host's request | the module |
+   | Download: `<a download href=blob:>` clicked or `.click()`ed | inside the activation (libdom, with the navigation ask) | `downloads_feed` → `download_job.c` | the file, named by `download`, else from the type |
+   | Pictures: `<img>`, `<picture>`'s `<source srcset>`, `<input type=image>`, CSS `background-image` and the rest of the picture catalog, a Canvas image source | the page's next picture pass (later than the standard: **booked**) | `picture_submit` → `picture.c` | the picture, decoded as a fetched one is; origin-clean |
+   | Style sheets: `<link rel=stylesheet>`, `@import` | the sheet's fetch (later: **booked**) | `sheet_fetch` → `sheet.c` | the sheet |
+   | Web fonts: `@font-face src: url(blob:)` | first use of the face (later: **booked**) | `webfonts_feed` → `webfont.c` | the face's bytes |
+   | Media: `<audio src>`, its `<source>`s, a `<video>`'s sound | the resource selection's turn, after a stable state (the standard's moment too) | `media.c` (`yonder_fetch_media_run`) | the sound, its byte window the whole body |
+   | A link followed without `download`, `window.open(url)`, `location = url` | — | — | **refused by name** (`opening a blob: URL as a page is not supported`), booked |
+   | `<iframe src>` | — | frames do not load (IFRAME.md) | not applicable |
+   | `<track src>`, `<link rel=icon>`, `cursor: url()`, `<embed>`, `<object>`, SVG `<image href>`, an external SVG `<use href>` | — | yonder fetches none of these today | not applicable; each gains the take the day it fetches |
 
-   A door that cannot carry an entry yet answers a blob URL with a
-   network error that names it (`a blob: URL this door does not take`),
-   never by fetching the text as an address.
+9. **Nothing central lets a blob URL reach the network.** Below every door
+   there is one floor already: libfetch refuses any scheme but `http` and
+   `https` when it parses an address (`http.c`, `HTTP_URL_SCHEME`, which
+   `os64_fetch_open` answers as `OS64_FETCH_BAD_URL`), and every network
+   fetch in yonder goes through it — the fetch job's hops, `way_fetch_whole`
+   (web fonts), a download's `os64_fetch_open`. So a `blob:` address with
+   no held entry that reaches any door, listed or not, fails closed there.
+   The proof suite holds that per door (§ 3), and the door names the
+   failure in the record (decision 11) when it can.
 
-9. **FileReader is the File API's § 8, whole but for the sync form.** The
-   interface: `readAsArrayBuffer`, `readAsBinaryString`, `readAsText(blob,
-   encoding)`, `readAsDataURL`, `abort`; `readyState` (EMPTY, LOADING,
-   DONE), `result`, `error`; the six event handlers and their events
-   (`loadstart`, `progress`, `load`, `abort`, `error`, `loadend`) as
-   `ProgressEvent`s with `loaded` and `total`. It reads only Blobs the
-   binding already holds whole in memory, so a read never waits on
-   anything: each read is **one queued task** that fires `loadstart`, then
-   — the bytes being there — one `progress`, then `load` and `loadend`,
-   in the standard's order. The task is queued on the binding's host
-   queue the way a posted message is (`os64_dom_message_next/_fire`), so
-   it runs after the current task and in order with other queued work.
-   *Question 2.* Starting a read while one is LOADING is the standard's
-   `InvalidStateError`; `abort` during LOADING cancels the queued task's
-   delivery and fires `abort` then `loadend`. `readAsText` decodes with
-   the label given (the Encoding Standard's labels that libdom's
-   `TextDecoder` knows), falling back to the Blob's charset parameter and
-   then UTF-8, BOM sniffed. `readAsDataURL` is `data:<type>;base64,<…>`,
-   `application/octet-stream` for an empty type. A result past the
-   engine's string or buffer limit is an `error` event with a
-   `NotReadableError`, not a crash.
+10. **FileReader is the File API's § 8, whole but for the sync form.** The
+    interface: `readAsArrayBuffer`, `readAsBinaryString`, `readAsText(blob,
+    encoding)`, `readAsDataURL`, `abort`; `readyState` (EMPTY, LOADING,
+    DONE), `result`, `error`; the six event handlers and their events
+    (`loadstart`, `progress`, `load`, `abort`, `error`, `loadend`) as
+    `ProgressEvent`s with `loaded` and `total`. It reads only Blobs the
+    binding already holds whole, so a read never waits on anything: each
+    read is **one queued task**, folded into the posted-message queue
+    (`os64_dom_message_next/_fire`, its source named "file reading" in
+    the record), that fires `loadstart` then one `progress` then `load`,
+    and then `loadend` **only if the reader is not LOADING again**: a
+    `load` handler that starts the next read (the chunked-reading loop)
+    suppresses the first read's `loadend`, as the standard says. Starting
+    a read while LOADING is an `InvalidStateError`. `abort()` during
+    LOADING cancels the queued delivery and fires `abort` then `loadend`;
+    `abort()` in EMPTY or DONE fires nothing and only sets `result` to
+    null. `readAsText` decodes with the label given (the Encoding
+    Standard's labels libdom's `TextDecoder` knows), falling back to the
+    Blob's charset parameter and then UTF-8, BOM sniffed. `readAsDataURL`
+    is `data:<type>;base64,<…>`, `application/octet-stream` for an empty
+    type. A result past the engine's string or buffer limit is an `error`
+    event with a `NotReadableError`, not a crash. WPT's
+    `FileAPI/reading-data-section/` holds all of it.
 
-10. **Both are Modern Web surface.** `createObjectURL`, `revokeObjectURL`
-    and `FileReader` join the rows table beside `URL` and `Blob`
-    (modern.c), so a page read with the Modern Web off has none of them,
-    as it has no `Blob` today.
-
-11. **The page record says what happened.** A request answered from a
-    blob URL is recorded like a `data:` one (`request GET blob:…: 200
-    blob, N bytes`), a miss as `FAILED` with why (`revoked or never made`,
-    `not this page's`, `not GET`, `a door that does not take blob: URLs`);
-    the record's `memory:` line gains the store's bytes and entries, and a
-    refused `createObjectURL` is a `FAILED` line with the quota. The
-    census counts `createObjectURL` and `FileReader` as read the day they
-    are, so the tally stops listing them.
+11. **Both are Modern Web surface, and the record says what happened.**
+    `createObjectURL`, `revokeObjectURL` and `FileReader` join the rows
+    table beside `URL` and `Blob` (modern.c), so a page read with the
+    Modern Web off has none of them, as it has no `Blob` today. A request
+    answered from a blob URL is recorded as a `data:` one is (`request GET
+    blob:…: 200 blob, N bytes`); a miss is `FAILED` with why (`revoked or
+    never made`, `not this page's`, `not GET`, `opening a blob: URL as a
+    page is not supported`); the `memory:` line gains the store's bytes
+    and entries; a refused `createObjectURL` is a `FAILED` line naming the
+    bound. The census counts `createObjectURL` and `FileReader` as read
+    the day they are, so the tally stops listing them.
 
 ## 2. The entry's lifecycle
 
 | State | How it is entered | What holds it | Leaves to |
 |---|---|---|---|
-| **named** | `createObjectURL`: bytes copied, the map takes the first reference | the store's map | **held** (a door takes it), **unnamed** (revoked, or the page goes) |
-| **held** | a door's take, on the window thread: a reference per request | the map and each request | **named** (each request released), **orphaned** (revoked or page gone while held) |
-| **orphaned** | revocation or the store's free while requests hold it | requests alone | **freed** at the last release, on whichever thread releases |
-| **unnamed → freed** | revoked or the page gone with no request holding it | nothing | — |
+| **named** | `createObjectURL`: bytes copied, the map takes the first reference | the store's map | **held** (a take), **unnamed** (revoked, or the page goes) |
+| **held** | a take, on the window thread: a reference for each request or navigation ask | the map and each holder | **named** (each holder released), **orphaned** (revoked or page gone while held) |
+| **orphaned** | revocation or the store's free while holders remain | holders alone | **freed** at the last release, on whichever thread releases |
+| **unnamed → freed** | revoked or the page gone with no holder | nothing | — |
 
-Invariants: the bytes never change after creation (no reader locks them);
-a take happens only on the window thread under the store's lock, so it
-cannot race a revocation of the same URL; the last release frees, on any
-thread, which is why the count is atomic and the store's lock is not
-needed to drop a reference.
+Invariants: the bytes never change after creation (no reader locks them,
+and a door reads them in place); a take happens only on the window
+thread under the store's lock, so it cannot race a revocation of the same
+URL; the last release frees, on any thread, which is why the count is
+atomic and the store's lock is not needed to drop a reference.
 
 ## 3. Proof
 
 - **libdom's host suite** (`tools/test_dom_host.sh`, a `--blob` probe so a
   run takes minutes, not the full suite's 90): the URL's form and origin
-  (opaque included), the TypeErrors, revoke-then-fetch, revoke after a
-  request was made (the take survives), the store's free with a request
-  holding an entry (ASan), the quota, two threads releasing (a stress
-  case), and FileReader's every read kind, event order, `abort`, the
-  re-entrancy `InvalidStateError`, the encodings, and an oversized
-  result.
+  (opaque included), the TypeErrors, revoke then fetch, revoke right after
+  `fetch()`, `xhr.open()` and a link's `.click()` (each still answers),
+  the store's free with a holder (ASan), the bound, two threads releasing
+  (a stress case), and FileReader's every read kind, event order, the
+  suppressed `loadend` of a read restarted in `load`, `abort` in each
+  state, the re-entrancy `InvalidStateError`, the encodings, and an
+  oversized result.
 - **WPT**: `FileAPI/url/` and `FileAPI/reading-data-section/` added to
   `tools/wpt_fetch.sh`, run in the scripted-page host; their expectations
   pinned.
-- **yonder's host suite**: a scripted page that makes a picture, a sheet,
-  a script and a font from blob URLs and fetches one, each door asserted;
-  a revoked URL failing at each door; a download of a blob saved whole.
-- **QEMU**: `tools/pages/blob-urls.html` showing each door (a picture
-  made from bytes, a background, a script, a font, a sound, a download,
-  FileReader's four reads printed), then the Minecraft game's loader on
-  the P5 past 50% (Chris), with the honest note that what it needs after
-  that (IndexedDB, and WebGL if it draws in 3D) is not this slice.
+- **yonder's host suite**: a scripted page that makes a picture, a
+  background, a sheet, a script, a module, a font and a sound from blob
+  URLs and fetches one, each door asserted; a revoked or unknown blob URL
+  failing at each door of decision 8's table, including the refused and
+  not-applicable rows (decision 9's floor); a download saved whole after
+  `a.click(); URL.revokeObjectURL(url)`.
+- **QEMU**: `tools/pages/blob-urls.html` showing each door (a picture made
+  from bytes, a background, a script, a font, a sound, a download,
+  FileReader's four reads printed), then the game's loader on the P5 past
+  50% (Chris), with § 0's honest note.
 - A cold Opus read, then Codex: the store's two threads are the part
   worth a reviewer.
 
 ## 4. Slices
 
-One PR or two stacked, Opus's call at the code: **B1** the store,
-`createObjectURL`/`revokeObjectURL` and the doors; **B2** FileReader (no
-yonder change but its record line). B1 is the one with threads in it.
+Two PRs, stacked: **B1** the store, `createObjectURL`/`revokeObjectURL`,
+the takes and the doors; **B2** FileReader (no yonder change but its
+record line). B1 is the one with threads in it.
 
 ## 5. Questions
 
 1. **For Chris: the store's bound.** 256 MiB of copied bytes a page, past
-   which `createObjectURL` throws. Pages that unpack an archive into blob
-   URLs (the Minecraft loader, a texture pack) are the ones that reach for
-   it; `page_memory_mb` (1024 on the P5) is the page's whole budget.
-   Lean: 256 MiB, counted in the page's memory record.
-2. **For Fable: FileReader's queue.** The File API queues its tasks on the
-   "file reading task source"; folding them into the posted-message queue
-   gives the right order relative to the page's other queued work and adds
-   no host turn. A separate source would need its own `_next`/`_fire` and a
-   place in yonder's turn order. Lean: fold, with the task's source named
-   in the record.
-3. **For Fable: copy or share.** Decision 1 copies the bytes per URL. A
-   page that makes many URLs over one large Blob (slices of a sprite
-   sheet each given a URL) pays for each. Lean: copy now; share when a
-   page shows the cost, which would mean thread-safe kept bodies.
-4. **For Fable: the take on the window thread.** Decision 3 puts every
-   take where its request is made. A door that builds its request on a
-   pool thread from a window-side description would have to take earlier;
-   none does today (the table above). Is a rule ("a blob URL is taken
-   where the request is described") worth writing beside `request_job`
-   for the doors to come?
+   which `createObjectURL` throws. The game measured in § 0 needs 56 MiB;
+   `page_memory_mb` is 1024 on the P5. Lean: 256 MiB, counted in the
+   page's memory record.
+
+Fable's answers to the draft's others, taken: FileReader folds into the
+posted-message queue with its source named (decision 10); the bytes are
+copied now, read in place at the doors (decisions 1 and 8); and the rule
+is written as "a blob URL is taken where the standard parses it"
+(decision 3).
