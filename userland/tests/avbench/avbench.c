@@ -8,7 +8,8 @@
 // figure, and FFmpeg gets its bytes through the read and seek callbacks, as
 // every caller does. The first video stream is decoded on the calling
 // thread (avbench starts none, so `env PINCPU=<n>` pins all of it), sound
-// ignored, and each packet's send-and-receive is timed with micros().
+// ignored, and each packet's send-and-receive is timed with micros(): only
+// FFmpeg's calls, never the CRC below, which runs between the clocks.
 //
 //   (neither)  FFmpeg's own choice of routines for this CPU
 //   -s         the SSE tiers: AVX, AVX2 and FMA3 masked out of what FFmpeg
@@ -251,11 +252,20 @@ static int bench(const char *path, int mode, long limit, Result *res)
             if (r < 0) flushing = 1;
             else if (pkt->stream_index != stream) { av_packet_unref(pkt); continue; }
         }
+        // Only FFmpeg's own calls are timed. The CRC and the unref happen
+        // between the clocks: the CRC walks every byte of every frame, and
+        // at the fixture's -O0 it costs nearly as much as the decode.
         int64_t t0 = os64_micros();
         int s = avcodec_send_packet(dec, flushing ? NULL : pkt);
+        int64_t dt = os64_micros() - t0;
         int got = 0;
         int r;
-        while ((r = avcodec_receive_frame(dec, frame)) == 0) {
+        for (;;) {
+            t0 = os64_micros();
+            r = avcodec_receive_frame(dec, frame);
+            dt += os64_micros() - t0;
+            if (r != 0)
+                break;
             got = 1;
             if (limit <= 0 || res->frames < limit) {
                 crc = crc_frame(crc, frame);
@@ -263,7 +273,6 @@ static int bench(const char *path, int mode, long limit, Result *res)
             }
             av_frame_unref(frame);
         }
-        int64_t dt = os64_micros() - t0;
         total += dt;
         if (!flushing) {
             av_packet_unref(pkt);
