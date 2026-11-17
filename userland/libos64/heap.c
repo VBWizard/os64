@@ -971,8 +971,15 @@ static heap_block_t *take_block(uint64_t need, heap_pool_t **home)
 
 	if (b != NULL)
 	{
+		// region_of finds no home only when the ledger itself is stomped
+		// (it has already said so); counting the block into no pool would
+		// carry the corruption on, so it ends here instead.
+		heap_region_t *r = region_of(b);
+		if (r == NULL)
+			heap_die("a free-list block lies in no region of the ledger", b, 0,
+			         HEAP_EXIT_CANARIED);
 		free_list_remove((heap_free_t *)b);
-		*home = pool_of(region_of(b));
+		*home = pool_of(r);
 		return b;
 	}
 

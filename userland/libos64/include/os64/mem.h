@@ -84,8 +84,9 @@ void *os64_malloc(size_t size);
 // promise, 16 bytes: a block it moves lands wherever malloc puts it.
 // A request of 128 KB or more gets its own region, whose payload is 64-byte
 // aligned; an alignment above 64 for one is refused (NULL). Counted as a
-// malloc in /proc/<pid>/heap. FFmpeg (libav's posix_memalign) is the reason
-// it exists: its AVX routines load its buffers with aligned instructions.
+// malloc in /proc/<pid>/heap. FFmpeg is the reason it exists: its AVX
+// routines load its buffers with aligned instructions, and it frees and
+// reallocs those buffers through plain free and realloc.
 void *os64_malloc_aligned(size_t size, size_t alignment);
 
 // Return the live block's payload capacity, including alignment slack but

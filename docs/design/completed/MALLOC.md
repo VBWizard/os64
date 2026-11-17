@@ -234,7 +234,7 @@ instructions, and FFmpeg allocates through `posix_memalign`, then frees
 and reallocs through plain `free` and `realloc`. So the aligned block has
 to be one the allocator itself recognises; a wrapper that over-allocated
 and offset the pointer would hand `free` an address it never gave out.
-libav's port maps `posix_memalign` onto this call. dav1d will want the
+FFmpeg, in libav, is the consumer it was made for; dav1d will want the
 same.
 
 **The block it returns is an ordinary block.** `free`, `realloc` and
