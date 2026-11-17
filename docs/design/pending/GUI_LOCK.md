@@ -178,7 +178,7 @@ Without a beam the block is three lines saying so.
   `gui/frame_clock.h`) judges the copy: its pieces are the rectangles in the
   order flushed, each copied top to bottom, sharing the copy's time by their
   pixels. A piece is torn when one sweep reads some of its rows new and some
-  old.
+  old; a copy lasting a whole frame or more is torn whatever the sweeps read.
 - Two reads a pass, outside the lock, where the flush already is; no lock
   and no wait of their own. The results are the compositor thread's alone
   and are folded into the counts at the next pass's hold, as the

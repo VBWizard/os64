@@ -8,8 +8,12 @@
 // every line the display reads around the copy, in nanoseconds, asks whether
 // that row's write had finished by then, and calls a piece torn when one
 // sweep read it part old and part new. The judge must agree with it on every
-// copy: it sees only what the kernel will see, two counter readings and the
-// time between them.
+// copy, seeing what the kernel will see: two counter readings and the time
+// between them. The model's copies start and end on line boundaries, where a
+// reading is exact; a real reading can be up to a line late, which changes a
+// verdict only for a copy within about a line of tearing, and that is not
+// exercised here. A copy lasting a frame or more is torn by rule, which the
+// model does not know, so those are checked against the rule.
 //
 //   tools/test_frame_clock_host.sh [random rounds, default 3000]
 
@@ -407,7 +411,7 @@ static void test_rectangles_against_strips(void)
 // every one, and both answers must turn up.
 static void test_verdict_random(int rounds)
 {
-	int torn = 0, clean = 0;
+	int torn = 0, clean = 0, long_copies = 0;
 	for (int round = 0; round < rounds; round++) {
 		display_t d;
 		d.lines = (uint32_t)rnd_in(8, 600);
@@ -429,6 +433,18 @@ static void test_verdict_random(int rounds)
 		}
 		uint64_t start = (uint64_t)rnd_in(d.lines * 2, d.lines * 4);
 		uint64_t dur = rnd() % 10 == 0 ? 0 : (uint64_t)rnd_in(1, d.lines - 1);
+		if (rnd() % 8 == 0) {
+			// A frame or more, up to three: torn whenever any of it is shown.
+			dur = (uint64_t)rnd_in(d.lines, 3 * d.lines);
+			fc_verdict_t v = judge_model(&d, start, dur, p, count);
+			bool shown = false;
+			for (uint32_t i = 0; i < count; i++)
+				shown |= p[i].pixels > 0 && p[i].top < p[i].bottom && p[i].bottom > 0 && p[i].top < (int32_t)active;
+			CHECK(v.torn == shown, "round %d: a copy of %lu lines in a %u-line frame is %s, %s shown",
+			      round, dur, d.lines, v.torn ? "torn" : "clean", shown ? "something" : "nothing");
+			long_copies++;
+			continue;
+		}
 		fc_verdict_t v = judge_model(&d, start, dur, p, count);
 		bool truth = model_torn(&d, start, dur, p, count);
 		CHECK(v.torn == truth, "round %d: judge says %s, model says %s (lines %u blank %u..%u start %lu dur %lu pieces %u)",
@@ -440,6 +456,7 @@ static void test_verdict_random(int rounds)
 		if (truth) torn++; else clean++;
 	}
 	CHECK(torn > rounds / 10 && clean > rounds / 10, "both verdicts turn up: %d torn, %d clean", torn, clean);
+	CHECK(long_copies > rounds / 20, "copies of a frame or more turn up: %d", long_copies);
 }
 
 // ── The lead ────────────────────────────────────────────────────────────────

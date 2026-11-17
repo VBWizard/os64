@@ -27,7 +27,7 @@ static struct {
 	char why_text[112];
 	uint32_t fails_in_row;
 	volatile uint64_t fails;
-} s_beam = { .why = "not looked for: no desktop on this boot" };
+} s_beam = { .why = "not looked for: the desktop looks when it starts" };
 
 static void beam_say_why(const char *fmt, uint32_t a, uint32_t b)
 {
@@ -66,33 +66,44 @@ void beam_init(void)
 	s_beam.read_line = found.read_line;
 	s_beam.frame = (fc_frame_t){ found.lines, found.blank_start, found.blank_end, 0 };
 
-	// The period, from the counter against micros_now, interrupts on: an
-	// interrupt that delays a reading costs nothing unless it hides a wrap
-	// (frame_clock.h, measuring the period).
+	// The period, from the counter against micros_now, interrupts on. A
+	// delay shorter than half a frame costs nothing; one of half a frame or
+	// more (a preemption on a machine already running its shells) spoils the
+	// attempt, which is made again: a gap is the machine's doing, not the
+	// counter's. Any other reason is the counter's, and final.
 	fc_measure_t m;
-	frame_clock_measure_begin(&m, found.lines);
-	uint64_t start = micros_now();
-	for (;;) {
-		uint32_t raw = found.read_line();
-		uint64_t now = micros_now();
-		if (frame_clock_measure_feed(&m, raw, now) || now - start >= FC_MEASURE_BOUND_US)
+	fc_measure_reason_t result = FC_MEASURE_STILL;
+	uint64_t period_ns = 0;
+	for (int attempt = 1; attempt <= BEAM_MEASURE_ATTEMPTS; attempt++) {
+		frame_clock_measure_begin(&m, found.lines);
+		uint64_t start = micros_now();
+		for (;;) {
+			uint32_t raw = found.read_line();
+			uint64_t now = micros_now();
+			if (frame_clock_measure_feed(&m, raw, now) || now - start >= FC_MEASURE_BOUND_US)
+				break;
+		}
+		result = frame_clock_measure_result(&m, &period_ns);
+		if (result != FC_MEASURE_GAP)
 			break;
+		printd(DEBUG_BOOT, "beam: %s: measuring attempt %d spoiled by a %lu us gap between readings\n",
+		       driver->name, attempt, m.gap_max_us);
 	}
-	uint64_t period_ns;
-	fc_measure_reason_t result = frame_clock_measure_result(&m, &period_ns);
 	if (result != FC_MEASURE_OK) {
 		s_beam.why = frame_clock_measure_reason_name(result);
 		printd(DEBUG_BOOT, "beam: %s at %s: no beam (%s; longest gap between readings %lu us)\n",
 		       driver->name, s_beam.where, s_beam.why, m.gap_max_us);
 		return;
 	}
-	s_beam.frame.period_ns = period_ns;
-	if (!frame_clock_frame_valid(&s_beam.frame)) {
+	fc_frame_t frame = s_beam.frame;
+	frame.period_ns = period_ns;
+	if (!frame_clock_frame_valid(&frame)) {
 		s_beam.why = "the frame the core describes makes no sense";
 		printd(DEBUG_BOOT, "beam: %s at %s: no beam (%u lines, blank %u to %u)\n", driver->name,
 		       s_beam.where, found.lines, found.blank_start, found.blank_end);
 		return;
 	}
+	s_beam.frame = frame;   // the period only with facts that make sense
 	uint64_t hz_x100 = 100000000000ull / period_ns;
 	printd(DEBUG_BOOT, "beam: %s at %s: %u lines a frame, %u shown, blank from line %u to %u, "
 	       "%lu.%02lu Hz (period %lu ns, longest gap between readings %lu us)\n",

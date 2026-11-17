@@ -83,7 +83,7 @@ mutants = [
     ('the-last-row-is-not-looked-at', '	       row_new(hi - 1, pass, lines, total, ta, tb, top, height);',
      '	       row_new(lo, pass, lines, total, ta, tb, top, height) + 0 * hi;'),
     ('the-first-row-is-not-looked-at', '	return row_new(lo, pass, lines, total, ta, tb, top, height) !=',
-     '	return row_new(hi - 1, pass, lines, total, ta, tb, top, height) !='),
+     '	return row_new(hi - 1 + 0 * lo, pass, lines, total, ta, tb, top, height) !='),
     ('the-row-past-the-piece-is-looked-at', '	       row_new(hi - 1, pass, lines, total, ta, tb, top, height);',
      '	       row_new(hi, pass, lines, total, ta, tb, top, height);'),
     # The lead.

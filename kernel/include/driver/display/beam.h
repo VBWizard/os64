@@ -1,12 +1,16 @@
 // beam.h — where the display's sweep is (FRAME_CLOCK.md § 1).
 //
-// THE SEAM answers four things and no more: is there a beam and what is it
-// called; the frame's lines; the blank's first and last line; and the line
-// being read now. A driver finds a display core it can read and says how to
-// read its line counter; the seam measures the period, keeps the facts, and
-// withdraws the beam for the rest of the boot if the counter stops making
-// sense. NO DRIVER WRITES TO THE GRAPHICS CHIP: each maps the registers it
-// reads read-only, so a stray store is a page fault, not a write.
+// THE SEAM answers what the frame clock asks: is there a beam and what is it
+// called; the frame (its lines, the blank's first and last line, and the
+// period); and the line being read now; and, for /sys/gui, why there is none
+// and how many reads failed. A driver finds a display core it can read and
+// says how to read its line counter; the seam measures the period, keeps the
+// facts, and withdraws the beam for the rest of the boot after
+// BEAM_FAILS_IN_ROW reads in a row that are not lines of the frame. A
+// counter that stops at a line of the frame is not noticed. NO DRIVER WRITES
+// TO THE GRAPHICS CHIP: each maps the registers it reads read-only, so a
+// stray store is a page fault, not a write. A driver's mapping stays when
+// the measuring fails.
 //
 // No beam is an ordinary answer (QEMU, another chip, a counter that reads
 // all ones), and `beam_why` says which.
@@ -21,7 +25,10 @@
 
 // Looks once, at boot, before the compositor's task exists: the drivers in
 // turn, then the period measured over a few frames with interrupts on
-// (bounded by FC_MEASURE_BOUND_US). Called only on a boot with the desktop.
+// (bounded by FC_MEASURE_BOUND_US an attempt). An attempt spoiled by a gap
+// between readings, the busy machine's doing, is made again, up to
+// BEAM_MEASURE_ATTEMPTS. Called only on a boot with the desktop.
+#define BEAM_MEASURE_ATTEMPTS 4
 void beam_init(void);
 
 // There is a beam now: found, measured, and not withdrawn.
@@ -35,8 +42,8 @@ const char *beam_where(void);
 // Why there is no beam, or why it was withdrawn; NULL while there is one.
 const char *beam_why(void);
 
-// The frame's facts as found and measured, if a beam was ever found (they
-// stay readable after a withdrawal, for /sys/gui).
+// The frame's facts as found and measured, once they have been measured and
+// make sense (they stay readable after a withdrawal, for /sys/gui).
 bool beam_frame(fc_frame_t *out);
 
 // The line being read now. False when the read failed: all ones (nothing

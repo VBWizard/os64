@@ -1652,7 +1652,8 @@ static void sys_gen_gui_frame_clock(synth_text_t *t, const gui_composite_count_t
 	                hz_x100 / 100, hz_x100 % 100, f.lines, active, blank,
 	                f.blank_start, (f.blank_end + f.lines - 1) % f.lines, blank_us);
 	// A copy is one pass's flush; torn is the verdict (frame_clock_judge):
-	// the sweep read some of a rectangle new and some old.
+	// the sweep read some of a rectangle new and some old, or the copy
+	// lasted a whole frame.
 	const gui_frame_copies_t *all = &comp->fc, *recent = &comp->fc_since_read;
 	synth_text_addf(t, "frame clock copies: %lu since boot, %lu began in the blank, %lu torn; "
 	                "%lu since this file was last read, %lu began in the blank, %lu torn\n",
