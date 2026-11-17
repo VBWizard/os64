@@ -344,11 +344,21 @@ static void test_verdict_cases(void)
 	CHECK(v.torn, "an instant copy across the sweep's row tears");
 	CHECK(model_torn(&P5, at, 0, &band, 1), "and the model agrees");
 
+	// The front finishes a row at the very moment the sweep reads it, and
+	// only that row: a slow copy (11 lines a row) of rows 10-29 begun on the
+	// blank's last line. Row 10 is read new, the rest old: torn.
+	piece_t slow = { 10, 30, 2560ull * 20 };
+	at = line_when(&P5, 37, 5000);
+	v = judge_model(&P5, at, 220, &slow, 1);
+	CHECK(v.torn, "a row finished as it is read counts as new");
+	CHECK(model_torn(&P5, at, 220, &slow, 1), "and the model agrees");
+
 	// Readings that are not lines of the frame judge nothing.
 	fc_frame_t f = frame_of(&P5);
 	fc_piece_t whole = { 0, 1440, full };
-	// (2000 would be row 481 if it were wrapped: a full screen from there tears.)
-	v = frame_clock_judge(&f, 2000, 100, 100, &whole, 1);
+	// (2000 would be row 481 if it were wrapped, and a full screen copied
+	// from there over 160 lines tears.)
+	v = frame_clock_judge(&f, 2000, 38 + 481 + 160, 1800, &whole, 1);
 	CHECK(!v.torn, "a begin reading beyond the frame judges nothing");
 	v = frame_clock_judge(&f, 100, 0xFFFFFFFFu, 100, &whole, 1);
 	CHECK(!v.torn, "an end reading of all ones judges nothing");

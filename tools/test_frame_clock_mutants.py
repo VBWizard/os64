@@ -67,16 +67,16 @@ mutants = [
     ('the-time-picks-the-farthest', '			if (off < best_off)', '			if (off > best_off)'),
     ('a-frame-exactly-is-not-a-frame', '		outlasted = d >= lines;', '		outlasted = d > lines;'),
     ('an-enormous-time-is-not-guarded', '	if (elapsed_us >= 2 * f->period_ns / 1000 + 1) {', '	if (0) {'),
-    ('a-copy-outlasting-a-frame-is-judged', '		if (outlasted) {', '		if (0) {'),
+    ('a-copy-outlasting-a-frame-is-judged', '		if (outlasted) {', '		if (outlasted && 0) {'),
     ('the-pass-after-is-not-looked-at', '		for (int64_t pass = 0; pass <= 1 && !v.torn; pass++)', '		for (int64_t pass = 0; pass <= 0 && !v.torn; pass++)'),
     ('the-pass-begun-in-is-not-looked-at', '		for (int64_t pass = 0; pass <= 1 && !v.torn; pass++)', '		for (int64_t pass = 1; pass <= 1 && !v.torn; pass++)'),
     ('rows-below-the-picture-are-judged', '		int64_t lo = top < 0 ? 0 : top, hi = pieces[i].bottom > active ? active : pieces[i].bottom;',
-     '		int64_t lo = top < 0 ? 0 : top, hi = pieces[i].bottom;'),
+     '		int64_t lo = top < 0 ? 0 : top, hi = pieces[i].bottom + 0 * active;'),
     ('rows-above-the-picture-are-judged', '		int64_t lo = top < 0 ? 0 : top, hi = pieces[i].bottom > active ? active : pieces[i].bottom;',
      '		int64_t lo = top, hi = pieces[i].bottom > active ? active : pieces[i].bottom;'),
     ('a-piece-of-no-pixels-is-judged', '		if (pieces[i].pixels == 0 || pieces[i].top >= pieces[i].bottom)\n			continue;',
      '		if (pieces[i].top >= pieces[i].bottom)\n			continue;'),
-    ('a-piece-takes-no-share-of-the-time', '		done += px;\n', ''),
+    ('a-piece-takes-no-share-of-the-time', '		done += px;\n', '		(void)px;\n'),
     ('a-read-as-the-copy-begins-is-new', '	if (tr <= ta)\n		return false;', '	if (tr < ta)\n		return false;'),
     ('a-read-as-the-copy-ends-is-old', '	if (tr >= tb)\n		return true;', '	if (tr > tb)\n		return true;'),
     ('a-row-is-new-when-the-front-reaches-it', '(__int128)(r + 1 - top) * (tb - ta)', '(__int128)(r - top) * (tb - ta)'),
@@ -84,7 +84,7 @@ mutants = [
     ('the-first-row-during-is-one-early', 'int64_t first_during = ta / total + 1 - pass * lines;', 'int64_t first_during = ta / total - pass * lines;'),
     ('the-first-row-after-is-rounded-down', 'int64_t first_after = (tb + total - 1) / total - pass * lines;', 'int64_t first_after = tb / total - pass * lines;'),
     ('only-the-ends-are-looked-at', '{ lo, hi - 1, first_during - 1, first_during, first_after - 1, first_after }',
-     '{ lo, hi - 1, lo, lo, lo, lo }'),
+     '{ lo, hi - 1, lo + 0 * first_during, lo + 0 * first_after, lo, lo }'),
     ('the-stretches-ends-are-not-clamped-low', 'int64_t r = rows[i] < lo ? lo : rows[i] > hi - 1 ? hi - 1 : rows[i];',
      'int64_t r = rows[i] > hi - 1 ? hi - 1 : rows[i];'),
     ('the-stretches-ends-are-not-clamped-high', 'int64_t r = rows[i] < lo ? lo : rows[i] > hi - 1 ? hi - 1 : rows[i];',
@@ -100,16 +100,16 @@ mutants = [
     ('an-absurd-pass-wraps', 'pass_us > UINT32_MAX ? UINT32_MAX : (uint32_t)pass_us', '(uint32_t)pass_us'),
     # The strips.
     ('a-part-starts-above-its-strip', '		int64_t y0 = r->y > strip_top ? r->y : strip_top;', '		int64_t y0 = r->y;'),
-    ('a-part-ends-below-its-strip', '		int64_t y1 = (int64_t)r->y + r->h < strip_end ? (int64_t)r->y + r->h : strip_end;', '		int64_t y1 = (int64_t)r->y + r->h;'),
+    ('a-part-ends-below-its-strip', '		int64_t y1 = (int64_t)r->y + r->h < strip_end ? (int64_t)r->y + r->h : strip_end;', '		int64_t y1 = (int64_t)r->y + r->h + 0 * strip_end;'),
     ('an-empty-rectangle-is-a-part', '		if (r->w <= 0 || y0 >= y1)', '		if (y0 >= y1)'),
     ('the-parts-are-not-sorted', '		while (at > 0 && out[at - 1].x > piece.x) {', '		while (0 && at > 0 && out[at - 1].x > piece.x) {'),
     ('overlapping-parts-are-not-merged', '			if (out[i].x < box_right) {', '			if (0) {'),
     ('touching-parts-are-merged', '			if (out[i].x < box_right) {', '			if (out[i].x <= box_right) {'),
-    ('a-merged-box-keeps-its-height', '				box->y = (int32_t)y0;\n				box->h = (int32_t)(y1 - y0);\n', ''),
+    ('a-merged-box-keeps-its-height', '				box->y = (int32_t)y0;\n				box->h = (int32_t)(y1 - y0);\n', '				(void)y0; (void)y1;\n'),
     ('a-merged-box-ends-where-the-part-does', '? (int64_t)out[i].x + out[i].w : box_right;', '? (int64_t)out[i].x + out[i].w : (int64_t)out[i].x + out[i].w;'),
     # When the clock runs.
     ('the-linger-is-a-frame-short', '	return r->idle_frames <= FC_LINGER_FRAMES;', '	return r->idle_frames < FC_LINGER_FRAMES;'),
-    ('a-waiter-does-not-run-it', '	if (damage || waiting > 0) {', '	if (damage) {'),
+    ('a-waiter-does-not-run-it', '	if (damage || waiting > 0) {', '	if (damage || (waiting > 0 && 0)) {'),
     ('activity-does-not-restart-the-linger', '		r->idle_frames = 0;\n		return true;', '		return true;'),
     ('the-idle-count-wraps', '	if (r->idle_frames <= FC_LINGER_FRAMES)\n		r->idle_frames++;', '	r->idle_frames++;'),
     # Measuring the period.
@@ -134,6 +134,15 @@ mutants = [
 # Mutants that change nothing a rule promises, and why. Run, and reported
 # as explained rather than missed.
 EXPLAINED = {
+    'a-read-as-the-copy-ends-is-old':
+        'at the instant a piece\'s copy ends its front has finished every row, so the linear test answers new there too',
+    'the-first-row-during-is-one-early':
+        'the first row read during a copy is never the only one that differs: with the front slower than the sweep it '
+        'is old like the rows read before the copy; faster, it is the oldest of the copy\'s stretch, so either rows read '
+        'before the copy exist (old, and the piece\'s first row stands for them) or it is the piece\'s first row itself',
+    'the-first-row-after-is-rounded-down':
+        'a row read after the copy is new like every row after it, and the piece\'s last row stands for them; rounding '
+        'down only moves the evaluated pair onto the copy\'s last row, which is evaluated either way',
 }
 
 caught, missed, unbuilt, explained = [], [], [], []
