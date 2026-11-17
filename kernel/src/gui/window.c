@@ -1271,3 +1271,36 @@ void wm_cover_sweep_locked(void)
 		wm_deliver_event(w, &ev);
 	}
 }
+
+void wm_frame_waiters_locked(uint32_t *shown, uint32_t *covered)
+{
+	uint32_t s = 0, c = 0;
+	for (window_t *w = s_top; w; w = w->below) {
+		if (!w->frame_wanted)
+			continue;
+		if (w->flags & GUI_WINDOW_COVERED)
+			c++;
+		else
+			s++;
+	}
+	*shown = s;
+	*covered = c;
+}
+
+uint32_t wm_frame_answer_locked(const input_event_t *answer, uint64_t before, uint32_t *held_back)
+{
+	uint32_t answered = 0, held = 0;
+	for (window_t *w = s_top; w; w = w->below) {
+		if (!w->frame_wanted || w->frame_epoch >= before)
+			continue;
+		if (w->flags & GUI_WINDOW_COVERED) {
+			held++;
+			continue;
+		}
+		w->frame_wanted = false;
+		wm_deliver_event(w, answer);
+		answered++;
+	}
+	*held_back = held;
+	return answered;
+}

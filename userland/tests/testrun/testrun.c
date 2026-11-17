@@ -118,6 +118,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/avbench",         argv_avbench_c,    0xAB0C0000, 0, "libav.so's H.264 decoder: the same 30 frames give the same CRC with FFmpeg's C routines" },
     { "/tests/avbench",         argv_avbench_tiny, 0xAB0C0000, 0, "libav.so's H.264 decoder: the 16x16 clip decodes whole to the host's CRC" },
     { "/tests/titletest",       NULL, 0x711E0000,  0x711E0002, "GUI rename: the owner retitles and sets the encoding; create's title refusals, another task's NOT_OWNER" },
+    { "/tests/frametest",       NULL, 0xF4A30000,  0xF4A30002, "the display's frame: a request is answered, numbers rise, twice is once, if-drawn waits for a publish, take leaves other events, an unread answer is one, an asker dying unanswered breaks nothing" },
     { "/tests/pintest",         NULL, 0x91A70000,  0,          "a handle closed by a sibling thread under a parked read: pipe, pty master, thread handle" },
     { "/tests/pincputest",      NULL, 0xC02E0000,  0,          "PINCPU=<n> pins a program and its threads to CPU n; PINCORE still works; bad values leave it unpinned" },
     { "/tests/streamseat",      NULL, 0x57EA0000,  0,          "STREAM EOF refuses another seat; failed load and GRID reuse" },

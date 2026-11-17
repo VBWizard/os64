@@ -221,9 +221,16 @@ must be one `cat`.
   the lease's expiries; the first two together roughly match the halts),
   and how late
   each wake arrived, in buckets doubling from 50 µs;
-- the stall tripwire's episodes and the longest (FRAME_CLOCK.md § 8).
+- the stall tripwire's episodes and the longest (FRAME_CLOCK.md § 8);
+- first in the block, because the clock-off compositor answers them too,
+  the frame requests (FRAME_CLOCK.md § 6): made, answered, held back while
+  covered (one per waiting covered window per frame), who waits now, shown
+  and covered, and the frame number. The counts are written under
+  `kGuiLock` by the request and the answer, and read under it; the waiting
+  windows are counted by a walk under it.
 
-Counts and times are since boot and since the file was last read. Writing
+Counts and times are since boot and since the file was last read, except
+the frame requests', which are since boot. Writing
 `reserve on` or `reserve off` to `/sys/gui` sets the reservation's dial.
 
 - The counts are the compositor thread's, kept outside the lock and

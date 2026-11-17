@@ -83,6 +83,16 @@ int64_t gui_event_poll(int64_t handle, input_event_t *out);
 // its event waiter. No user pointers; GUI_ERR_* on failure, zero on success.
 int64_t gui_event_ring(int64_t handle, uint32_t mask);
 
+// Ask for the display's next frame for a window owned by the calling task
+// (os64/gui.h, os64_gui_frame_request): 0 when asked, OS64_GUI_FRAME_IDLE
+// when OS64_GUI_FRAME_IF_DRAWN found nothing published since the last ask,
+// or GUI_ERR_*. No user pointers; never blocks.
+int64_t gui_frame_request(int64_t handle, uint32_t flags);
+
+// Take the window's frame answer if one waits (os64_gui_frame_take): 1 with
+// *out filled, 0 when none, or GUI_ERR_*. Never blocks; no other event moves.
+int64_t gui_frame_take(int64_t handle, input_event_t *out);
+
 // Block until an event arrives on the window (1 = event copied out), the
 // window dies under us (GUI_ERR_INVALID_HANDLE), or the caller has a signal
 // pending that ends the wait (GUI_ERR_INTERRUPTED — signal_park_must_end:

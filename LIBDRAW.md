@@ -112,8 +112,15 @@ while (running) {
 }
 ```
 
-`frame_wait` sleeps the leftover of the target budget against
-`kTicksSinceStart`-based real time, so an app takes **whatever cadence the
+(Since the frame clock's slice F3, a clock bound to its window, with a
+budget of 100 ms or less, while the program draws, waits for the display's
+frames instead, the budget rounded to whole frames; FRAME_CLOCK.md § 6 and
+`draw.h` say how. What follows is the sleep it falls back to, and the
+history that made the loop cadence-agnostic.)
+
+`frame_wait` sleeps the leftover of the target budget against real time
+(the tick clock when this was written; `micros()` since F3), so an app
+takes **whatever cadence the
 scheduler currently delivers and gets smoother for free when the scheduler
 gets faster** — no recompile. This already paid out once: when the
 SMP_MAGIC_NUMBER multiplier was removed (2026-07-11, see SCHEDULER.md's

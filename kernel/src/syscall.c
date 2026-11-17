@@ -238,6 +238,8 @@ static uint64_t syscall_gui_event_wait_any(uint64_t, uint64_t, uint64_t, uint64_
 static uint64_t syscall_gui_window_get_content_rect(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 static uint64_t syscall_gui_event_ring(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_frame_request(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_frame_take(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -337,6 +339,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_MIN_SIZE, "gui_window_set_min_size", syscall_gui_window_set_min_size, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_STATE,   "gui_window_get_state",   syscall_gui_window_get_state,   false, 0x02),  // arg1 = os64_gui_window_state_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_RING,         "gui_event_ring",         syscall_gui_event_ring,         false, 0x00),  // scalar window handle and mask
+	SYSCALL_DEFINE(SYSCALL_GUI_FRAME_REQUEST,      "gui_frame_request",      syscall_gui_frame_request,      false, 0x00),  // scalar handle and flags; never blocks (the answer is an event), resolves no path
+	SYSCALL_DEFINE(SYSCALL_GUI_FRAME_TAKE,         "gui_frame_take",         syscall_gui_frame_take,         false, 0x02),  // arg1 = input_event_t out; never blocks, resolves no path
 	// arg1 is a CODE address the kernel will one day jump to, not a buffer it
 	// reads — so it stays OUT of the pointer mask (which validates readable
 	// user memory) and the handler range-checks it itself.
@@ -6025,6 +6029,33 @@ static uint64_t syscall_gui_event_ring(uint64_t arg0, uint64_t arg1, uint64_t ar
 	if (arg1 > UINT32_MAX)
 		return (uint64_t)GUI_ERR_BAD_ARGS;
 	return (uint64_t)gui_event_ring((int64_t)arg0, (uint32_t)arg1);
+}
+
+// gui_frame_request — ask for the display's next frame (os64/gui.h). Two
+// scalars, no pointer, so nothing in the mask; it never blocks, so it has no
+// patience to take, and it resolves no path, so it is not a path op.
+static uint64_t syscall_gui_frame_request(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)gui_frame_request((int64_t)arg0, (uint32_t)arg1);
+}
+
+// gui_frame_take — the frame answer alone, if one waits (os64/gui.h). arg1 is
+// in the mask (never NULL). Taken into a kernel local first and copied out
+// only when there was one, as poll does; a bad destination after a take
+// loses that one answer, which the next request replaces.
+static uint64_t syscall_gui_frame_take(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	input_event_t ev;
+	int64_t rc = gui_frame_take((int64_t)arg0, &ev);
+	if (rc == 1 && !copy_to_user_buffer((void *)arg1, &ev, sizeof(ev)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)rc;
 }
 
 static uint64_t syscall_gui_event_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
