@@ -1,6 +1,7 @@
 #ifndef JS_OWNER_RUNTIME_H
 #define JS_OWNER_RUNTIME_H
 #include "owner_incarnation.h"
+#include "os64/js_engine.h"
 
 /* Private numeric inspection. The caller supplies a live runtime on its
  * owner thread, including synchronous finalizer unwind before destroy frees
@@ -50,4 +51,21 @@ os64_js_status_t js_owner_runtime_run(os64_js_runtime_t *, const char *caller_ab
     JSOwnerTicket, const void *source, size_t length, const char *name, os64_js_outcome_t *);
 os64_js_status_t js_owner_runtime_retire(os64_js_runtime_t *, const char *caller_abi,
     JSOwnerTicket, os64_js_outcome_t *);
+/* This private callback lends a context and temporary values through the
+ * admitted invocation and its synchronous cleanup. The opaque scope/view
+ * must not outlive that invocation. Return one owned value (or JS_EXCEPTION)
+ * for wrapper cleanup; retain no context/value/native borrower unless an
+ * explicit compatibility export precedes it. This is no persistent root API. */
+typedef struct JSOwnerRuntimeScope JSOwnerRuntimeScope;
+typedef JSValue JSOwnerScopedBody(JSOwnerRuntimeScope *, JSContext *, void *);
+os64_js_status_t js_owner_runtime_scoped_run(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket, const char *name, JSOwnerScopedBody *, void *, os64_js_outcome_t *);
+/* Live-scope metadata operations. Promotion creates an independent ticket
+ * even after the admitting holder closes. Capacity/exhaustion leaves output
+ * and loan unchanged. Outputs are distinct caller storage outside the scope.
+ * Export uses ABI 5 getter admission and records sticky compatibility retention
+ * before publishing its runtime-lived context; it does not clear other gates. */
+JSOwnerStatus js_owner_scope_owner(const JSOwnerRuntimeScope *, JSOwnerId *);
+JSOwnerStatus js_owner_scope_promote(JSOwnerRuntimeScope *, JSOwnerTicket *);
+JSOwnerStatus js_owner_scope_export(JSOwnerRuntimeScope *, JSContext **);
 #endif
