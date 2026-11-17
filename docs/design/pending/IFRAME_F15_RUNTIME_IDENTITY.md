@@ -75,3 +75,6 @@ The shared test262/Intl runner builder also compiles the issuer. Both affected
 entry points run with leak detection: the pinned DateTimeFormat format-name
 subset passes 2/2, and the browser capture agrees on 5,635/5,635 fields across
 1,127 option sets. A recursive source-builder audit includes nested tools.
+
+The [private storage-admission follow-on](IFRAME_F15_OWNER_ADMISSION.md) adds an
+explicit construction alternative while preserving the legacy path.

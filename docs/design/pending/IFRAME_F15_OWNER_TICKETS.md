@@ -89,6 +89,11 @@ built with `make -C userland js-owner-tickets-test` without preparing QuickJS.
 The [private incarnation issuer](IFRAME_F15_INCARNATION.md) implements the numeric
 namespace prerequisite separately; it does not bind identities to runtimes.
 
+The [runtime identity](IFRAME_F15_RUNTIME_IDENTITY.md) and
+[private storage admission](IFRAME_F15_OWNER_ADMISSION.md) follow-ons supply
+separate receipts beyond this metadata-only baseline; they enable no checked
+exports or reclamation.
+
 ## Unproved integration obligations
 
 The tests supply distinct incarnation numbers. They prove numeric binding,

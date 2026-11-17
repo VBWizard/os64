@@ -22,10 +22,10 @@ def main():
     output.mkdir(parents=True,exist_ok=False)
     source=(root/'userland/libjs/runtime/runtime.c').read_text()
     variants={
-        'constant-identity':('runtime->incarnation = incarnation;', 'runtime->incarnation = 1;'),
-        'clear-during-finalization':('runtime->destroying = true;', 'runtime->destroying = true; runtime->incarnation = 0;'),
-        'hide-cancelled-identity':('return runtime != NULL ? runtime->incarnation : 0;',
-                                 'return runtime != NULL && !runtime->cancelled ? runtime->incarnation : 0;'),
+        'constant-identity':('runtime->owner.incarnation = incarnation;', 'runtime->owner.incarnation = 1;'),
+        'clear-during-finalization':('runtime->destroying = true;', 'runtime->destroying = true; runtime->owner.incarnation = 0;'),
+        'hide-cancelled-identity':('if (runtime == NULL) return 0;',
+                                 'if (runtime == NULL || runtime->cancelled) return 0;'),
         'ignore-exhaustion':('if (js_owner_incarnation_next(&incarnation) != JS_OWNER_OK)',
                             'if (js_owner_incarnation_next(&incarnation) == JS_OWNER_INVALID)'),
     }
@@ -41,7 +41,7 @@ def main():
         if line.startswith('MATH_OBJS='): maths=shlex.split(line.split('=',1)[1])[0].split()
     if not maths: raise RuntimeError('missing target maths inventory')
     common=[str(artifacts/(name+'.o')) for name in
-            ['owner_incarnation','intl','str-local','fmt','test_js_port_calendar','test_js_runtime_host']]
+            ['owner_incarnation','owner_tickets','intl','str-local','fmt','test_js_port_calendar','test_js_runtime_host']]
     engines={'target':[str(root/'userland/obj/js/core.o')],
              'instrumented':[str(artifacts/(name+'.o')) for name in
                              ['quickjs','dtoa','libregexp','libunicode','cutils','allocator','platform','format']]}
