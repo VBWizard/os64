@@ -15,6 +15,10 @@ The following rules are proposals, not implemented facilities. They reserve
 no API names, C layouts, identifier widths, ABI revision or engine patch.
 They grant no permission to release roots, free owners or reuse realm slots.
 
+The [private owner-ticket metadata prerequisite](IFRAME_F15_OWNER_TICKETS.md)
+implements bounded numeric bookkeeping separately. It does not enable the
+proposed runtime profile, export migration or any release operation.
+
 ## C1: negotiation and compatibility
 
 Select the checked lifetime profile during construction, before publishing

@@ -1,5 +1,11 @@
 include libjs/core.mk
-LIBJS_RUNTIME_OBJS := $(OBJ)/js/runtime/runtime.o $(OBJ)/js/intl/intl.o
+LIBJS_RUNTIME_OBJS := $(OBJ)/js/runtime/runtime.o $(OBJ)/js/runtime/owner_tickets.o $(OBJ)/js/intl/intl.o
+# This private metadata unit needs no prepared engine headers. The standalone
+# target oracle links the same hidden object without loading libjs/QuickJS.
+$(OBJ)/js/runtime/owner_tickets.o: libjs/runtime/owner_tickets.c libjs/runtime/owner_tickets.h \
+    libjs/include/os64/js.h libjs/shared.mk GNUmakefile
+	@mkdir -p "$(@D)"
+	$(CC) $(LIBJS_FLAGS) -c $< -o $@
 $(OBJ)/js/runtime/%.o: libjs/runtime/%.c $(LIBJS_GENERATED)/.prepared libjs/shared.mk libjs/core.mk
 	@mkdir -p "$(@D)"
 	$(CC) $(LIBJS_FLAGS) -c $< -o $@
@@ -38,6 +44,24 @@ $(LIBJS_TEST_ELF): $(LIBJS_TEST_OBJ) $(LAUNCH_OBJS) $(LIBJS_SO) $(LIBOS64_SO) GN
 .PHONY: js-runtime-test
 js-runtime-test: $(LIBJS_TEST_ELF)
 -include $(LIBJS_TEST_OBJ:.o=.d)
+
+# Private metadata oracle: same object as libjs, no engine/runtime constructor.
+$(OBJ)/js/owner-tickets-test.o: libjs/tests/owner_tickets.c libjs/tests/owner_ticket_cases.h \
+    libjs/runtime/owner_tickets.h libjs/shared.mk GNUmakefile
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBJS_FLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(OBJ)/js/owner-tickets-test: $(OBJ)/js/owner-tickets-test.o $(OBJ)/js/runtime/owner_tickets.o $(LAUNCH_OBJS) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_jsembedtest) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) $(BIG_STACK_LDFLAGS) -o $@ $^
+$(OBJ)/js/owner-tickets-parent.o: libjs/tests/owner_tickets_parent.c libjs/shared.mk GNUmakefile
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBJS_FLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(OBJ)/js/owner-tickets-parent: $(OBJ)/js/owner-tickets-parent.o $(LAUNCH_OBJS) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_testrun) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) -o $@ $^
+.PHONY: js-owner-tickets-test
+js-owner-tickets-test: $(OBJ)/js/owner-tickets-test $(OBJ)/js/owner-tickets-parent
+-include $(OBJ)/js/owner-tickets-test.d $(OBJ)/js/owner-tickets-parent.d
 
 # V1 is a separate consumer alternative in the reserved fixture slot. Neither
 # fixture belongs to the normal image; validation images select one executable.
