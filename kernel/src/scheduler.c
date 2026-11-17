@@ -1594,6 +1594,8 @@ void scheduler_do()
 	// frame_wake_set: the timer's second writer) and raised fcw_armed when it
 	// set a wake sooner than the lease; that fire is the frame clock's, not a
 	// lease expiry, and is counted apart so this count keeps its meaning.
+	// The split is close, not exact: a fire already pending when the timer
+	// was rewritten (interrupts were off) is counted under the rewrite's name.
 	if (kTicklessScheduler && cpu != BSP_CPU &&
 	    kDiagLastVector[cpu] == IPI_TIMER_SCHEDULE_VECTOR)
 	{

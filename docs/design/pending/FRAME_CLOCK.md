@@ -206,18 +206,28 @@ clears the flag whenever it re-arms or stops the timer.
 
 | State | The timer is set for | Ends when | Who moves it on, and how |
 |---|---|---|---|
-| **off** (`NOFRAMECLOCK`, one CPU, `SCHED=periodic`) | as today: the lease, or the periodic tick | never; it is the boot's | chosen once at `gui_start`, and `/sys/gui` says why. F1's measurement still runs |
+| **off** (`NOFRAMECLOCK`, one CPU, `SCHED=periodic`, `NOBACKSTOP`) | as today: the lease, the periodic tick, or nothing | never; it is the boot's | chosen once at `gui_start`, and `/sys/gui` says why. F1's measurement still runs |
 | **stopped** (nothing to show, nobody waiting) | the lease, set by the compositor before it halts (which also cancels a frame wake still pending) | a nudge, a PS/2 interrupt (routed to this CPU), or the lease; each one ends with a re-check | the nudge comes from `gui_damage_add` (under `kGuiLock`, interrupts off) or from the input queue's push (under its lock, interrupts off, often on `kusb`'s thread on the BSP). It takes no lock: one atomic exchange of the "halted and stopped" flag, then `send_ipi(IPI_MANUAL_SCHEDULE_VECTOR)` if the flag was set. The compositor sets the flag with interrupts off just before `sti; hlt` and clears it on waking. A re-check that finds work goes to **running** |
 | **running**, waiting for the lead | the earlier of the wake instant (the next blank less the lead) and the lease | the frame wake (a 0x7E pass), or any other interrupt, after which it recomputes. At or after the wake instant it goes to **composing** | compositor thread, with interrupts off from the set to `sti; hlt` |
 | **composing** | the lease, re-armed by the wake's pass | the pass ends: **aiming** with a beam, **copying** without one | today's pass, under `kGuiLock` (interrupts off inside the lock) |
-| **aiming** | the lease | the sweep enters the blank: **copying**. The sweep is in shown rows having left the blank: **late**. The counter does not move within the bound (the lead plus 8 lines): the beam is withdrawn as frozen, and **free**. The counter moves but no blank arrives within the bound: **late**, counted as an overrun | compositor thread, interrupts on, no lock. It polls the beam |
+| **aiming** | the lease | the sweep enters the blank: **copying**. If the first reading was already in the blank, the counter must change within 3 lines first, or the beam is withdrawn as frozen and **free** (a counter stopped at a blank line would otherwise look like a perfect aim every frame). The sweep is in shown rows having left the blank: **late**. The counter does not move within the bound (the lead plus 8 lines): withdrawn as frozen, and **free**. The counter moves but no blank arrives within the bound: **late**, counted as an overrun. No reading succeeds within the bound: the frame goes unaimed | compositor thread, interrupts on, no lock. It polls the beam |
 | **copying** | the lease | the strips are done; F1's two readings judge the copy (`torn` now means held off mid-copy). Then **running**, or **stopped** if `frame_clock_keep_running` says so | compositor thread, interrupts on, outside `kGuiLock` |
 | **late** (holding) | the next wake, one frame on | as **running** | nothing is copied; the back buffer keeps what was composed and the next pass adds what has arrived since. Counted |
 | **free** (no beam, or withdrawn) | the earlier of the next period (1/60 s, from `micros_now()`) and the lease | as **running**, with no aim and no check: the copy follows the pass | entered at start without a beam, or from **aiming** on a frozen counter, or when a read withdraws the beam |
 
-Under `NOBACKSTOP` there is no lease. The frame wake is then the timer
-alone, and **stopped** relies on the nudge and the PS/2 interrupt, as an
-idle desktop does today.
+**Under `NOBACKSTOP` the clock is off.** With no lease nothing keeps the
+AP's timer masked between the compositor's writes, and `scheduler_trigger`
+would arm a stray one-shot in it (F2's cold read). The frame wake shares
+the timer by the lease's discipline, so without the lease it has nothing
+to share.
+
+**The nudge is a scheduler pass** (`IPI_MANUAL_SCHEDULE_VECTOR`, the
+precedent `doorbell_ring` set). While the clock is stopped the CPU is not
+reserved, so a nudge's pass may hand the CPU to another thread, and the
+compositor then waits up to a lease before its first frame: the same
+exposure the stopped compositor's own lease expiries have, and the one
+the clock-off compositor has always had. The cure, if the P5 shows it
+mattering, is a vector that only ends the halt (DEBTS).
 
 **The reservation.** While the clock is running (not stopped, not off),
 with four CPUs or more and the dial on, the compositor's CPU runs only

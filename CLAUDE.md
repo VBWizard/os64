@@ -1439,8 +1439,9 @@ read by every pass's eligibility test), and `/sys/gui` takes `reserve on`
 the old hlt-wait plus a nudge (`gui_frame_nudge`, lock-free). Without a beam
 it runs free at 60 Hz. `/sys/gui` says whether it is running, for how long,
 whether the CPU is withheld, its frames, late ones by cause, the lead, the
-aim and its wakes. `NOFRAMECLOCK` turns it off for a boot, as do one CPU
-and `SCHED=periodic`.
+aim and its wakes. `NOFRAMECLOCK` turns it off for a boot, as do one CPU,
+`SCHED=periodic` and `NOBACKSTOP` (the frame wake shares the CPU's timer
+by the lease's discipline).
 
 **Failure fingerprints (logging):**
 

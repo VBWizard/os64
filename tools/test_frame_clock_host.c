@@ -741,6 +741,9 @@ static void test_aim(void)
 	CHECK(frame_clock_aim(&bad, 0, 0, 0) == FC_AIM_LATE, "a frame that makes no sense is late, never a copy");
 	CHECK(frame_clock_aim_bound_us(&f, 1000) >= 1000 + 90 && frame_clock_aim_bound_us(&f, 1000) <= 1000 + 91,
 	      "the aim's bound is the lead and 8 lines: %lu", frame_clock_aim_bound_us(&f, 1000));
+	CHECK(frame_clock_lines_us(&f, 3) == 34, "three of the P5's lines are 33.8 us, rounded up: %lu",
+	      frame_clock_lines_us(&f, 3));
+	CHECK(frame_clock_lines_us(&f, 0) == 0 && frame_clock_lines_us(&bad, 3) == 0, "no lines, or no frame: nothing");
 }
 
 static void test_late_cause(void)

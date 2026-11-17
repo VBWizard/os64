@@ -292,6 +292,13 @@ uint64_t frame_clock_aim_bound_us(const fc_frame_t *f, uint32_t lead_us)
 	return lead_us + (FC_AIM_SLACK_LINES * f->period_ns / f->lines + 999) / 1000;
 }
 
+uint64_t frame_clock_lines_us(const fc_frame_t *f, uint32_t lines)
+{
+	if (!frame_clock_frame_valid(f))
+		return 0;
+	return ((uint64_t)lines * f->period_ns / f->lines + 999) / 1000;
+}
+
 fc_late_t frame_clock_late_cause(bool off_cpu, uint64_t wake_at_us, uint64_t woke_us,
                                  uint64_t pass_end_us, uint64_t blank_end_us)
 {

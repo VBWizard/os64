@@ -533,7 +533,8 @@ static bool s_fc_had_damage;           // the last pass drew something
 static volatile bool s_fc_halted_stopped;
 
 // How long the clock has run and stood stopped. One writer, the compositor
-// thread, at each change; /sys/gui adds the stretch under way.
+// thread, at each change, under kGuiLock; /sys/gui adds the stretch under
+// way, under the same lock.
 static struct {
 	volatile uint64_t running_us, stopped_us, since_us, starts;
 } s_fc_time;
@@ -562,6 +563,11 @@ static const char *frame_clock_off_why(void)
 		return "one CPU: nowhere to pin the compositor";
 	if (!kTicklessScheduler)
 		return "SCHED=periodic: every CPU's timer is the periodic tick, not the compositor's to set";
+	// Without the lease nothing keeps the AP's timer masked between the
+	// compositor's writes, and scheduler_trigger would arm a stray one-shot
+	// in it (the frame wake shares the timer by the lease's discipline).
+	if (!kSchedBackstopEnabled)
+		return "NOBACKSTOP: no lease for the frame wake to share the timer with";
 	return NULL;
 }
 
@@ -585,10 +591,15 @@ static void fc_apply_reserve(void)
 		kSchedReservedCPU = want;
 }
 
+// The change is made under kGuiLock, which /sys/gui's read holds too
+// (gui_frame_clock_status), so a read never sees the times half moved: a
+// stretch counted twice there would become the since-read baseline and the
+// next read would wrap. A start or a stop is rare enough to pay for it.
 static void fc_set_running(bool running)
 {
 	if (running == s_fc_running)
 		return;
+	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
 	uint64_t now = micros_now();
 	uint64_t spent = now - s_fc_time.since_us;
 	if (s_fc_running)
@@ -599,6 +610,7 @@ static void fc_set_running(bool running)
 	if (running)
 		s_fc_time.starts++;
 	s_fc_running = running;
+	gui_unlock(flags);
 	fc_apply_reserve();
 }
 
@@ -790,6 +802,41 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 		__builtin_ia32_pause();
 	}
 
+	if (verdict == FC_AIM_COPY && !moved) {
+		// The first reading was already in the blank, so nothing yet says the
+		// counter moves, and one stopped at a blank line would look like a
+		// perfect aim every frame. It must change within FC_AIM_CONFIRM_LINES.
+		uint64_t until = micros_now() + frame_clock_lines_us(&f, FC_AIM_CONFIRM_LINES);
+		bool changed = false, unread = false;
+		while (micros_now() <= until) {
+			uint32_t again;
+			if (!beam_line(&again)) {
+				unread = true;
+				break;
+			}
+			if (again != line) {
+				changed = true;
+				line = again;
+				break;
+			}
+			__builtin_ia32_pause();
+		}
+		if (!changed && !unread) {
+			beam_withdraw("the line counter stopped in the blank");
+			fc_copy(false, 0, 0, flushes);
+			return;
+		}
+		if (!beam_present()) {
+			fc_copy(false, 0, 0, flushes);
+			return;
+		}
+		now = micros_now();
+		if (changed && !frame_clock_in_blank(&f, line)) {
+			s_fc_clk_owed.late[FC_LATE_PAST]++;   // the blank ended while it was confirmed
+			return;
+		}
+	}
+
 	if (verdict == FC_AIM_COPY) {
 		uint64_t aim = now - t0;
 		s_fc_clk_owed.aims++;
@@ -805,8 +852,13 @@ static void frame_clock_present(const rect_t *damage, uint32_t count, const glas
 	} else if (seen && !moved) {
 		beam_withdraw("the line counter stopped during an aim");
 		fc_copy(false, 0, 0, flushes);
-	} else {
+	} else if (seen) {
 		s_fc_clk_owed.late[FC_LATE_OVERRUN]++;
+	} else {
+		// No reading succeeded within the bound, and too few failed in a row
+		// to withdraw the beam: nothing to aim by, so this frame goes unaimed
+		// rather than counted as a counter that moved.
+		fc_copy(false, 0, 0, flushes);
 	}
 }
 

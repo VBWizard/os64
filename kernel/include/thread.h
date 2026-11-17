@@ -165,11 +165,12 @@ typedef struct s_thread
 	// scheduler_find_thread_to_run reads it as "where this thread's caches
 	// are warm" and keeps the thread there until waiting beats migrating.
 	uint32_t lastRunCPU;
-	// How many times a pass has switched this thread IN, stamped beside
-	// lastRunCPU (scheduler_load_thread runs only when the pass switches
-	// threads; a pass that keeps the current one does not call it). So a
-	// thread that reads it, then reads it again and finds it grown, was off
-	// its CPU in between: the frame clock asks exactly that of a late frame.
+	// How many times a pass has loaded this thread, stamped beside
+	// lastRunCPU: when it switches the thread IN, and when it reloads a
+	// thread that just exec'd; a pass that keeps the current thread
+	// otherwise does not call scheduler_load_thread. So a kernel thread,
+	// which never execs, that reads it twice and finds it grown was off its
+	// CPU in between: the frame clock asks exactly that of a late frame.
 	uint64_t timesLoaded;
 	// When this thread last ENTERED qRunnable (kTicksSinceStart units),
 	// stamped by scheduler_change_thread_queue_locked under the queue lock.

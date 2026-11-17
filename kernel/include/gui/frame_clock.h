@@ -162,6 +162,13 @@ fc_aim_t frame_clock_aim(const fc_frame_t *f, uint32_t line, uint64_t now_us, ui
 #define FC_AIM_SLACK_LINES 8
 uint64_t frame_clock_aim_bound_us(const fc_frame_t *f, uint32_t lead_us);
 
+// How long `lines` lines take, rounded up. An aim whose first reading is
+// already in the blank has seen nothing move, so the counter must change
+// within FC_AIM_CONFIRM_LINES before the copy (one stopped at a blank line
+// would otherwise look like a perfect aim every frame).
+#define FC_AIM_CONFIRM_LINES 3
+uint64_t frame_clock_lines_us(const fc_frame_t *f, uint32_t lines);
+
 // Why a frame was late, for the cure: the compositor was off its CPU (a
 // pass gave the CPU to another thread); the wake came too late (a wake on
 // time, with the same pass, would have made the blank); the pass ran long

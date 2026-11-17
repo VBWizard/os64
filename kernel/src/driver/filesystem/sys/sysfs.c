@@ -1669,7 +1669,8 @@ static void sys_gen_gui_frame_clock_state(synth_text_t *t, const gui_composite_c
 	                s.lead_us, comp->clk.aims, aim_avg, comp->clk.aim_max_us, comp->clk_since_read.aim_max_us);
 	// A wake is the compositor's own count of the frames it slept toward;
 	// the fires are its CPU's timer passes, the frame wakes apart from the
-	// lease's expiries (scheduler.c). How late each wake arrived, by bucket.
+	// lease's expiries (scheduler.c, where the split is close, not exact).
+	// How late each wake arrived, by bucket.
 	const uint64_t *w = comp->clk.wake_late;
 	synth_text_addf(t, "frame clock wakes: %lu (timer: %lu frame wakes, %lu lease expiries on CPU %u); "
 	                "late by under 50 us %lu, under 100 us %lu, under 200 us %lu, under 400 us %lu, "
@@ -2953,7 +2954,7 @@ static int sys_close(vfs_file_t *vfs_file)
 			      !xhci_bluetooth_scan(bt_scan_request_classic(h->bt_command, h->bt_length))))))
 				verdict = -1;
 		}
-		else if (h->kind == SYS_HANDLE_MEDIAKEYS_WRITE) {
+		else if (h->kind == SYS_HANDLE_MEDIAKEYS_WRITE || h->kind == SYS_HANDLE_GUI_WRITE) {
 			if (h->mk_length != 0 || h->mk_refused)
 				verdict = -1;   // a line with no newline: refused, never carried out here
 		}

@@ -225,12 +225,13 @@ Counts and times are since boot and since the file was last read. Writing
   folded at the next pass's hold, as the copies above are. A stopped clock
   makes passes at the lease, so a read is at most a lease behind.
 - The times have one writer, the compositor thread, at each change of
-  state; a read adds the stretch under way, under the lock that keeps one
-  reader's since-read baseline at a time.
+  state, under the lock; a read adds the stretch under way under the same
+  lock, which also keeps one reader's since-read baseline at a time, so a
+  read never sees the times half moved.
 
 | State | Begun | Changed | Read | Let go |
 |---|---|---|---|---|
 | The clock's counts | zero at boot | at the fold, under the lock | by `/sys/gui` (`gui_lock_counts`) | never; the since-read counts restart at each read |
-| The clock's state and times | at `gui_start` (off or on) and the compositor's start (stopped) | at each start and stop, by the compositor thread | by `/sys/gui` (`gui_frame_clock_status`) | never; the since-read baseline restarts at each read |
+| The clock's state and times | at `gui_start` (off or on) and the compositor's start (stopped) | at each start and stop, by the compositor thread, under the lock | by `/sys/gui` (`gui_frame_clock_status`), under the lock | never; the since-read baseline restarts at each read |
 | The dial | on at boot | by a `/sys/gui` write, from any thread | by the compositor, at each frame | never |
 | The reservation | none | by the compositor thread, from the state and the dial | by every scheduler pass (FRAME_CLOCK.md § 9) | when the clock stops |

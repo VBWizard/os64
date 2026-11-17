@@ -990,13 +990,13 @@ void sched_backstop_disarm(void)
 // the compositor calls this after EVERY return from its halt, whatever ended
 // it, so a pass that re-armed the lease in between cannot lose a wake.
 // Interrupts off, on the CPU it arms, immediately before `sti; hlt`; under
-// tickless only (SCHED=periodic's timer is the periodic tick, not the
-// compositor's to rewrite, and the frame clock is off there).
+// tickless with the lease only: SCHED=periodic's timer is the periodic tick,
+// not the compositor's to rewrite, and without the lease nothing keeps the
+// timer masked between these writes; the frame clock is off in both.
 void frame_wake_set(uint64_t wake_in_us)
 {
     core_local_storage_t *cls = get_core_local_storage();
-    fc_timer_t t = frame_clock_timer(wake_in_us, cls->apicTicksPerSecond,
-                                     kSchedBackstopEnabled ? (uint32_t)kSchedBackstopMS : 0);
+    fc_timer_t t = frame_clock_timer(wake_in_us, cls->apicTicksPerSecond, (uint32_t)kSchedBackstopMS);
     write_apic_register(kMPApicBase + APIC_TIMER_DIVIDE_CONFIG, 0x3);   // as sched_backstop_arm, every time
     write_apic_register(kMPApicBase + APIC_LVT_TIMER, IPI_TIMER_SCHEDULE_VECTOR);
     cls->fcw_armed = t.wake_first;
@@ -1005,12 +1005,10 @@ void frame_wake_set(uint64_t wake_in_us)
 
 // The timer as the lease alone would have it: a stopped compositor halts
 // with nothing of its own pending, and a wake set earlier is cancelled.
+// (The clock runs only with the lease, so the lease is what is put back.)
 void frame_wake_cancel(void)
 {
-    if (kSchedBackstopEnabled)
-        sched_backstop_arm(get_core_local_storage());
-    else
-        sched_backstop_disarm();
+    sched_backstop_arm(get_core_local_storage());
 }
 
 void enableAPScheduling_ISR()

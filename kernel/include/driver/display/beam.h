@@ -7,9 +7,10 @@
 // says how to read its line counter; the seam measures the period, keeps the
 // facts, and withdraws the beam for the rest of the boot after
 // BEAM_FAILS_IN_ROW reads in a row that are not lines of the frame. A
-// counter that stops at a line of the frame no read can show; the frame
-// clock's aim, which waits on it, sees it stop and withdraws the beam
-// (beam_withdraw). NO DRIVER WRITES
+// counter that stops at a line of the frame no read can show: while the
+// frame clock runs, its aim, which waits on the counter, sees it stop (in
+// the shown rows or in the blank) and withdraws the beam (beam_withdraw);
+// with the clock off nothing watches for it. NO DRIVER WRITES
 // TO THE GRAPHICS CHIP: each maps the registers it reads read-only, so a
 // stray store is a page fault, not a write. A driver's mapping stays when
 // the measuring fails.

@@ -123,6 +123,7 @@ mutants = [
     ('never-late', 'return now_us >= frame_clock_blank_end_us(f, blank_at_us) ? FC_AIM_LATE : FC_AIM_WAIT;',
      'return (now_us >= frame_clock_blank_end_us(f, blank_at_us)) && 0 ? FC_AIM_LATE : FC_AIM_WAIT;'),
     ('a-nonsense-frame-copies', '	if (!frame_clock_frame_valid(f))\n		return FC_AIM_LATE;', '	if (!frame_clock_frame_valid(f))\n		return FC_AIM_COPY;'),
+    ('the-lines-round-down', '((uint64_t)lines * f->period_ns / f->lines + 999) / 1000', '((uint64_t)lines * f->period_ns / f->lines) / 1000'),
     ('the-aim-has-no-slack', 'return lead_us + (FC_AIM_SLACK_LINES * f->period_ns / f->lines + 999) / 1000;', 'return lead_us;'),
     ('off-cpu-is-not-first', '	if (off_cpu)\n		return FC_LATE_OFF_CPU;\n', '	(void)off_cpu;\n'),
     ('past-is-never-said', '	if (pass_end_us < blank_end_us)\n		return FC_LATE_PAST;\n', ''),

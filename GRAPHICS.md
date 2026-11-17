@@ -211,7 +211,8 @@ adopted unconditionally at boot; IRQ12 only when `GUI` is set.
   states): the compositor is pinned to the last CPU, wakes by its own CPU's
   timer the lead before the display's blank, aims, and copies at the blank;
   with nothing to show it stops, and stopped is exactly the hlt-wait below
-  plus a nudge. `NOFRAMECLOCK`, one CPU, or `SCHED=periodic` turn it off,
+  plus a nudge. `NOFRAMECLOCK`, one CPU, `SCHED=periodic` or `NOBACKSTOP`
+  turn it off,
   and the hlt-wait below is then the whole design.
 - **The design without the clock: hlt-wait.** The compositor never sleeps
   through the scheduler and never busy-waits. Each frame pass it checks for work (input
