@@ -46,7 +46,8 @@ static void owner_admission_cases(void (*check)(bool,const char *),
             m.limits.owners==3 && m.limits.tickets==65536 && m.limits.loans==2,
             "owner admission: live incarnation and exact limits are bound to private table");
         check(m.charged_bytes>=m.requested_bytes && m.wrapper_bytes+m.charged_bytes+m.engine_limit==config.limits.memory_bytes &&
-            !m.summary.owners && !m.summary.tickets && !m.summary.loans && !m.summary.unknown_escape,
+            m.summary.owners==1 && m.assigned_owners==1 && !m.unpublished_owners &&
+            !m.summary.tickets && !m.summary.loans && !m.summary.unknown_escape,
             "owner admission: actual metadata charge partitions configured ceiling with wrapper and engine");
         if(observe)observe(runtime,&m);
         JSContext *context=os64_js_context(runtime,OS64_JS_ABI_ID,&out);

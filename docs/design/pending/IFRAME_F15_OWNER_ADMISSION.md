@@ -7,6 +7,10 @@ Depends on [runtime identity](IFRAME_F15_RUNTIME_IDENTITY.md) (#638) and the
 `ab1447d8`, embedding ABI 5. This reserves bounded storage; it does not select
 checked export lifetimes or reclaim a realm.
 
+The subsequent [realm-owner milestone](IFRAME_F15_REALM_OWNERS.md) assigns actual
+primary/child owners and adds private checked source execution. The results
+below describe the admission-only cut.
+
 ## Implemented boundary
 
 The hidden `js_owner_runtime_create` constructor explicitly selects metadata

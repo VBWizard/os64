@@ -33,9 +33,9 @@ def main():
             "uint64_t serial = ++table->_last_token;\n    table->_loans[at]",
             "uint64_t serial = ++table->_loans_used; table->_loans_used--;\n    table->_loans[at]"),
         "duplicate-closed": (
-            "return status == JS_OWNER_OK ? issue_ticket(table, owner, out) : status;\n}\nJSOwnerStatus js_owner_ticket_resolve",
+            "return status == JS_OWNER_OK ? issue_ticket(table, owner, out) : status;\n}\nJSOwnerStatus js_owner_reserve",
             "if (status == JS_OWNER_STALE) status = owner_at(table, incarnation, ticket.owner, &owner);\n"
-            "    return status == JS_OWNER_OK ? issue_ticket(table, owner, out) : status;\n}\nJSOwnerStatus js_owner_ticket_resolve"),
+            "    return status == JS_OWNER_OK ? issue_ticket(table, owner, out) : status;\n}\nJSOwnerStatus js_owner_reserve"),
         "consume-promotion-loan": (
             "return status == JS_OWNER_OK ? issue_ticket(table, owner, out) : status;\n}\nJSOwnerStatus js_owner_loan_end",
             "if (status == JS_OWNER_OK) js_owner_loan_end(table, incarnation, loan);\n"
@@ -88,7 +88,9 @@ def main():
             native + sanitizers + [driver, str(target_object), "-o", str(output / (name + "-target"))],
         ]
         for command in compile_commands:
-            subprocess.run(command, cwd=root / "userland", check=True, capture_output=True)
+            build = subprocess.run(command, cwd=root / "userland", capture_output=True, text=True)
+            if build.returncode:
+                raise RuntimeError("compile failed: " + name + "\n" + build.stderr)
         for mode in ("native", "target"):
             binary = output / (name + "-" + mode)
             run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
