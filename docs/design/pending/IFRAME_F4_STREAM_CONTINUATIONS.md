@@ -75,3 +75,13 @@ Focused runtime proof passes 1,199 shipping and 5,291 instrumented checks,
 including 1 and 63 allocation-refusal points per teardown policy. The focused
 DOM continuation/observation proof passes 3,232 checks on each engine. Queue
 records remain 104 bytes in both parent and changed engine debug layouts.
+
+The full shipping DOM suite passes 420,708 checks and 13,553 binding-allocation
+sweeps; the instrumented callback composition passes 117,856 checks, including
+1,142 allocation refusals. Both report zero failures. Target Yonder, js, runtime
+guest consumer and shared libraries build; manifest/header checks, six preparer
+tests and the 228 engine/84 runtime export/link audits pass.
+The complete runtime suite passes 31,065 shipping and 101,381 instrumented
+checks with zero failures and live allocations. Parser refusal sweeps and
+expected invariant-failure exits also pass. The final F4/F15 stacks and current
+userland each pass conflict checks; no combined-runtime acceptance is inferred.
