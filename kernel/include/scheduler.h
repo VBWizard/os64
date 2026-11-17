@@ -86,4 +86,9 @@
 	// after releasing it.
 	void scheduler_wake_task_waiter(task_t *task, thread_t *waiter);
     bool in_scheduler_context(void);
+	// A CPU kept for the threads pinned to it while the compositor's frame
+	// clock runs (FRAME_CLOCK.md § 9), or SCHED_NO_RESERVED_CPU. Written by
+	// the compositor thread alone.
+	#define SCHED_NO_RESERVED_CPU (-1)
+	extern volatile int32_t kSchedReservedCPU;
 #endif

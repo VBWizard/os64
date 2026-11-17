@@ -130,6 +130,12 @@ volatile uint64_t kDiagRunnableLen = 0;
 // the observable the backstop test asserts on (a preempted hog = a nonzero,
 // growing count on its core), and the counter /sys/cpu can surface someday.
 volatile uint64_t kSchedBackstopFires[MAX_CPUS] = {0};
+// A CPU kept for the threads pinned to it, or SCHED_NO_RESERVED_CPU: the
+// compositor's while its frame clock runs (FRAME_CLOCK.md § 9, the
+// reservation). One writer, the compositor thread; read without a lock by
+// every pass's eligibility test (scheduler_thread_can_run_on_core says why
+// a stale read is harmless either way).
+volatile int32_t kSchedReservedCPU = SCHED_NO_RESERVED_CPU;
 extern volatile uint64_t kDiagIPISends, kDiagICRMaxSpins, kDiagSettleBroadcasts,
 	kDiagSettleTimeouts, kDiagSettleMaxSpins, kDiagSettleLastLateCPU;
 extern volatile uint32_t kDiagLastVector[MAX_CPUS], kDiagLVT[MAX_CPUS];
@@ -169,13 +175,26 @@ const char* THREAD_STATE_NAMES[] = {"None","Running","Runnable","Stopped","Unint
 // scheduler entries now go through a real LAPIC interrupt (timer or
 // send_ipi in scheduler_trigger).
 
+// A RESERVED CPU (kSchedReservedCPU) runs only the threads pinned to it,
+// and its idle thread: an unpinned thread dispatched there could hold it for
+// a whole lease, which for the compositor's frame clock is a missed blank.
+// The word is read here without a lock, and a stale read is harmless either
+// way. Read as reserved just after the reservation lifted: an unpinned
+// thread is passed over here for one pass and another CPU's pass takes it.
+// Read as free just after it was set: one unpinned thread may be dispatched
+// here, and runs at most until this CPU's next pass (its lease), which is
+// exactly how the CPU was shared before reservations existed.
 static bool scheduler_thread_can_run_on_core(thread_t *thread, core_local_storage_t *cls)
 {
 	if (thread == NULL || cls == NULL) {
 		return false;
 	}
 
-	return thread->pinnedCPU == THREAD_NO_AFFINITY || thread->pinnedCPU == cls->cpu;
+	if (thread->pinnedCPU == cls->cpu)
+		return true;
+	if (thread->pinnedCPU != THREAD_NO_AFFINITY)
+		return false;
+	return thread->idleThread || kSchedReservedCPU != (int32_t)cls->cpu;
 }
 
 static void scheduler_nudge_parked_aps(thread_t *thread)
