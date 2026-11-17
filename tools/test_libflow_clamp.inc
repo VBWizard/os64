@@ -66,7 +66,16 @@ static void clamp_layout_cases(void)
                      // Padding below the last shown line is the box's own.
                      "<div class='c pad' id=pad>aaaa bbbb cccc dddd eeee</div>"
                      // Exactly as many lines as the clamp: no ellipsis.
-                     "<div class=c id=two>aaaa bbbb cccc</div>",
+                     "<div class=c id=two>aaaa bbbb cccc</div>"
+                     // A block, a picture made a block and a nested
+                     // context after the second line are content too.
+                     "<div class=c id=blk>aaaa bbbb cccc<div style=height:100px></div></div>"
+                     "<div class=c id=img>aaaa bbbb cccc"
+                     "<img style=display:block;width:10px;height:100px></div>"
+                     "<div class=c id=ctx>aaaa bbbb cccc"
+                     "<div style=display:flow-root;height:30px></div></div>"
+                     // An empty block after them is nothing to show.
+                     "<div class=c id=empty>aaaa bbbb cccc<div></div></div>",
                  300, 600);
     flow_tree_t *t = flow_layout(q.doc, q.page, 300, &q.env);
     const os64_html_node_t *d = q.doc->document;
@@ -126,6 +135,19 @@ static void clamp_layout_cases(void)
     const flow_box_t *two = box_with_id(t, d, "two");
     expect("line clamp: as many lines as the clamp, nothing follows, no end",
            two != NULL && two->rect.h == 40 && clamp_end_line(two) == NULL, NULL);
+
+    static const char *const kFollowed[] = {"blk", "img", "ctx"};
+    for (size_t k = 0; k < sizeof(kFollowed) / sizeof(kFollowed[0]); k++) {
+        const flow_box_t *f = box_with_id(t, d, kFollowed[k]);
+        char what[96];
+        snprintf(what, sizeof(what), "line clamp: a box after the last line is content (%s)",
+                 kFollowed[k]);
+        expect(what, f != NULL && f->rect.h == 40 && clamp_end_line(f) != NULL &&
+                         f->scroller >= 0 && flow_scroll_range(t, f->scroller).y > 0, NULL);
+    }
+    const flow_box_t *empty = box_with_id(t, d, "empty");
+    expect("line clamp: an empty block after the last line is nothing to show",
+           empty != NULL && empty->rect.h == 40 && clamp_end_line(empty) == NULL, NULL);
     flow_free(t);
     sheeted_close(&q);
 }
@@ -149,7 +171,10 @@ static void legacy_flex_cases(void)
                      "<div class='b v'><i></i><b id=v></b></div>"
                      "<div class='b rev'><i id=r></i><b></b></div>"
                      "<div class=b><i id=o class=late></i><b id=o2></b></div>"
-                     "<div class=b><i id=x class=flexy></i><b></b></div>",
+                     "<div class=b><i id=x class=flexy></i><b></b></div>"
+                     // The direction is inherited: the inner box runs
+                     // backwards too.
+                     "<div class='b rev'><div class=b><i id=ri></i><b></b></div></div>",
                  400, 600);
     flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
     const os64_html_node_t *d = q.doc->document;
@@ -174,6 +199,9 @@ static void legacy_flex_cases(void)
     const flow_box_t *x = box_with_id(t, d, "x");
     expect("legacy box: an item's own flex properties are not read",
            x != NULL && x->rect.w == 50, NULL);
+    const flow_box_t *ri = box_with_id(t, d, "ri");
+    expect("legacy box: -webkit-box-direction is inherited", ri != NULL && ri->rect.x == 150,
+           NULL);
     flow_free(t);
     sheeted_close(&q);
 }

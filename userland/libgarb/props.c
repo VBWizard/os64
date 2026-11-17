@@ -2347,7 +2347,7 @@ typedef enum {
     G_FACTOR,               // <number [0,∞]>: flex-grow, flex-shrink
     G_BASIS,                // flex-basis: `words` | lp >= 0
     G_INTEGER,              // <integer>: order
-    G_ORDINAL,              // <integer [0,∞]>: -webkit-box-ordinal-group
+    G_ORDINAL,              // <integer [1,∞]>: -webkit-box-ordinal-group
     G_LINES,                // none | <integer [1,∞]>: -webkit-line-clamp
     G_GAP,                  // normal | lp >= 0
     G_TEMPLATE,             // grid-template-*: none | a track list
@@ -3947,7 +3947,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         }
         const garb_value_t *t = vc_peek(c);
         if (t == NULL || t->kind != GARB_NUMBER || !t->integer ||
-            (l->g == G_LINES && t->number < 1) || (l->g == G_ORDINAL && t->number < 0))
+            ((l->g == G_LINES || l->g == G_ORDINAL) && t->number < 1))
             return false;
         c->i++;
         os64_memset(out, 0, sizeof(*out));

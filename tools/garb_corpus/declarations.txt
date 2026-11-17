@@ -1269,8 +1269,10 @@ IN: -webkit-box-flex: 1.5
 OUT: -webkit-box-flex: 1.5
 IN: -webkit-box-flex: -1
 OUT: invalid
+IN: -webkit-box-ordinal-group: 1
+OUT: -webkit-box-ordinal-group: 1
 IN: -webkit-box-ordinal-group: 0
-OUT: -webkit-box-ordinal-group: 0
+OUT: invalid
 IN: -webkit-box-ordinal-group: -1
 OUT: invalid
 IN: -webkit-box-ordinal-group: 2.5

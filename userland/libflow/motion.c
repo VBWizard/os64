@@ -1651,6 +1651,16 @@ static void copy_prop(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
     case GARB_OVERFLOW_WRAP: d->overflow_wrap = s->overflow_wrap; break;
     case GARB_LETTER_SPACING: d->letter_spacing = s->letter_spacing; break;
     case GARB_TEXT_OVERFLOW: d->text_overflow = s->text_overflow; break;
+    // The legacy box's own properties: what they make of the flex ones is
+    // settled once, from what every animation makes of them (style.c,
+    // legacy_box).
+    case GARB_BOX_ORIENT: d->box_orient = s->box_orient; break;
+    case GARB_BOX_DIRECTION: d->box_reverse = s->box_reverse; break;
+    case GARB_BOX_PACK: d->box_pack = s->box_pack; break;
+    case GARB_BOX_ALIGN: d->box_align = s->box_align; break;
+    case GARB_BOX_FLEX: d->box_flex = s->box_flex; break;
+    case GARB_BOX_ORDINAL_GROUP: d->box_ordinal_group = s->box_ordinal_group; break;
+    case GARB_LINE_CLAMP: d->line_clamp = s->line_clamp; break;
     // An outline's style alone, as a border side's: its width is its own
     // property, and none has no width once every animation is laid over.
     case GARB_OUTLINE_WIDTH: d->outline_width = s->outline_width; break;

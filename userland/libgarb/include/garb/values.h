@@ -190,7 +190,7 @@ typedef enum {
     // (start, end, center, justify) and how its items line up across it
     // (start, end, center, baseline, stretch); an item's share of the free
     // space (a NUMBER) and its place among its siblings (a NUMBER, an
-    // integer from 0). The names are the prefixed ones; there are no
+    // integer from 1). The names are the prefixed ones; there are no
     // others.
     GARB_BOX_ORIENT, GARB_BOX_DIRECTION, GARB_BOX_PACK, GARB_BOX_ALIGN, GARB_BOX_FLEX,
     GARB_BOX_ORDINAL_GROUP,

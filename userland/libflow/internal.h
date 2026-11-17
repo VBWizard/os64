@@ -1269,8 +1269,9 @@ bool f_bfc_root(const FBox *b);
 // The line a line clamp ends at (f_clamps_lines, layout.c): of a box laid
 // out, the `line_clamp`th line in its own flow — its lines, or those of
 // its in-flow block children that start no formatting context, in order,
-// as far down as they go — when another line follows it there; NULL when
-// none does, and the box shows every line it has. `*owner`, when not
+// as far down as they go — when content follows it there (another line,
+// or an in-flow box with height after it); NULL when none does, and the
+// box shows all it has. `*owner`, when not
 // NULL, is set to the box whose line it is. One walk, read by layout for
 // the box's height and by the public tree for the line's ellipsis
 // (flow_box_t.line_clamp_end), so the two cannot disagree.

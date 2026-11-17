@@ -2690,8 +2690,11 @@ typedef struct {
 
 // f_clamp_line's walk: a box's lines in order, down through its in-flow
 // block children that start no formatting context (a nested context's
-// lines are its own, CSS Overflow 4 § 5.2), stopping at the line after the
-// one it wants. A line pass 2 broke short is no line to count.
+// lines are its own, CSS Overflow 4 § 5.2), stopping at what follows the
+// line it wants — another line, or any in-flow box with height after it:
+// a block holding no line, a picture made a block, a nested context. A
+// line pass 2 broke short is no line to count; a float or an out-of-flow
+// box is in no flow to follow it.
 static void clamp_walk(const FBox *b, ClampWalk *w)
 {
     if (b->ifc) {
@@ -2707,9 +2710,15 @@ static void clamp_walk(const FBox *b, ClampWalk *w)
         }
         return;
     }
-    for (const FBox *c = b->first; c != NULL && !w->more; c = c->next)
-        if (c->placed && c->kind == FB_BLOCK && !f_bfc_root(c))
+    for (const FBox *c = b->first; c != NULL && !w->more; c = c->next) {
+        if (!c->placed || c->out_of_flow || c->floated != FLOW_FLOAT_NONE)
+            continue;
+        bool after = w->found != NULL;
+        if (c->kind == FB_BLOCK && !f_bfc_root(c))
             clamp_walk(c, w);
+        if (after && c->h > 0)
+            w->more = true;
+    }
 }
 
 const FLine *f_clamp_line(const FBox *b, const FBox **owner)

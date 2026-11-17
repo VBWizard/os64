@@ -964,9 +964,10 @@ typedef struct {
     // container's — so layout reads one flex container. A
     // vertical one with a `-webkit-line-clamp` is instead the block
     // container engines lay it out as (CSS Overflow 4 § 5.1.1), a
-    // formatting context's root, which shows `line_clamp` lines: it ends at
-    // the last of them, and that line ends in an ellipsis when more
-    // follow (flow_box_t.line_clamp_end). The rest of its content is laid
+    // formatting context's root, which shows `line_clamp` lines: when
+    // content follows the last of them (another line, or an in-flow box
+    // with height), the box ends at that line and the line ends in an
+    // ellipsis (flow_box_t.line_clamp_end, f_clamp_line). The rest of its content is laid
     // out below that and overflows, as it does in other browsers, so a
     // page that hides it reads its full height as scrollHeight. The box's
     // properties are kept as written, for getComputedStyle, which also
@@ -1182,7 +1183,11 @@ struct flow_box {
     // it — and owned by the tree. Where it goes, and what of each line it
     // hides, is flow_line_cut's and flow_line_cut_keeps', which the painter
     // reads when flow_visit (or flow_visit_text_clip) hands it each of the
-    // box's lines, and flow_hit too. NULL otherwise.
+    // box's lines, and flow_hit too. NULL otherwise — but a block may keep
+    // a clamp's ellipsis after the clamp stops ending on its lines (a
+    // layout reuse copies it, and a box measured at another width made
+    // it), which flow_line_cut, deciding by the line and the style, never
+    // draws.
     const os64_text_run_t *ellipsis;
     // LINE: the last line a line clamp shows when more follow it
     // (flow_style_t.legacy_box), which ends in its block's ellipsis.

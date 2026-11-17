@@ -434,6 +434,7 @@ static flow_style_t inherit(const Ctx *c, const flow_style_t *parent)
     s.font_weight = parent->font_weight;
     s.font_style = parent->font_style;
     s.font_size = parent->font_size;
+    s.box_reverse = parent->box_reverse;
     s.color = parent->color;
     s.fill = parent->fill;
     s.current_colours = (uint8_t)((s.current_colours & ~FLOW_CURRENT_FILL) |
@@ -4086,9 +4087,11 @@ static void settle_box(const Ctx *c, flow_style_t *s, bool item, bool root)
 // container's, or, clamping lines, the block it is — and an item of one
 // laid out by its `-webkit-box-flex` and `-webkit-box-ordinal-group`
 // alone, as engines lay it out, whatever flex properties it was given.
-// From the legacy bit, whether the display is inline-level, and the box's
-// own properties, so it gives the same answer however often it is asked
-// (an animated element's final style is settled again).
+// From the parent's legacy bit and display, the legacy bit, whether the
+// display is inline-level, and the box's own properties, so it gives the
+// same answer however often it is asked (an animated element's final
+// style is settled again). An item whose parent is a `display: contents`
+// element inside a legacy box keeps its own flex properties (DEBTS.md).
 static void legacy_box(flow_style_t *s, const flow_style_t *parent)
 {
     if (parent != NULL && parent->legacy_box && f_display_flex(parent->display)) {
@@ -5531,6 +5534,8 @@ void f_style_anonymous(const FStyles *styles, const flow_style_t *parent,
     out->display = display;
     for (int i = 0; i < 4; i++)
         out->border_color[i] = out->color;
+    // An anonymous item of a legacy box is one of its items too.
+    legacy_box(out, parent);
 }
 
 const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node)
