@@ -1393,6 +1393,14 @@ design in `docs/conf_path.md`.
 and per-core `used`/`lost`. Read it FIRST when the log misbehaves — it answers
 "is something stuck in the buffers?" in one `cat`.
 
+**`/sys/gui`** is the desktop's: who waits for `kGuiLock` and who holds it,
+per site, the compositor's passes, pixels and holds (GUI_LOCK.md), and
+`publish to glass:` — how long a client's published pixels waited to reach
+the framebuffer, by length, with publishes nobody could see counted as
+`voided`. Read it FIRST when the desktop stalls or a moving picture judders;
+`cat` before and after a workload measures it, and `/tests/glassbench`
+does exactly that for a full-window publisher at a video's rate.
+
 **Failure fingerprints (logging):**
 
 | Symptom | Cause |

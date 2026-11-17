@@ -193,8 +193,10 @@ What a frame costs after yonder has it, from the code as it stands:
 
 **GAP (the glass's number).** What a full-screen 60 fps publisher costs on
 the P5 and how evenly its frames arrive: a small fixture publishing
-full-window frames at a set rate, read against `/sys/gui`'s counters. To
-be briefed. Its answer decides what this arc asks of the kernel:
+full-window frames at a set rate, read against `/sys/gui`'s counters.
+The instrument exists (`/tests/glassbench`, and `/sys/gui`'s `publish to
+glass:` line, GUI_LOCK.md); the P5's numbers are owed. Its answer decides
+what this arc asks of the kernel:
 
 | Candidate | What it cures | Size |
 |---|---|---|

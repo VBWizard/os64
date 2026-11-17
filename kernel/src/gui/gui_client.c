@@ -691,6 +691,8 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 	size_t n = wm_visible_damage(win, screen_damage, seen, PUBLISH_PIECES_MAX);
 	for (size_t i = 0; i < n; i++)
 		gui_damage_add_locked(seen[i]);
+	// The publish-to-glass wait starts now, or never does (/sys/gui).
+	gui_glass_publish_locked(seen, n);
 	gui_unlock(irqflags);
 	return 0;
 }
