@@ -1,9 +1,13 @@
 include libjs/core.mk
-LIBJS_RUNTIME_OBJS := $(OBJ)/js/runtime/runtime.o $(OBJ)/js/runtime/owner_tickets.o $(OBJ)/js/intl/intl.o
+LIBJS_RUNTIME_OBJS := $(OBJ)/js/runtime/runtime.o $(OBJ)/js/runtime/owner_tickets.o $(OBJ)/js/runtime/owner_incarnation.o $(OBJ)/js/intl/intl.o
 # This private metadata unit needs no prepared engine headers. The standalone
 # target oracle links the same hidden object without loading libjs/QuickJS.
 $(OBJ)/js/runtime/owner_tickets.o: libjs/runtime/owner_tickets.c libjs/runtime/owner_tickets.h \
     libjs/include/os64/js.h libjs/shared.mk GNUmakefile
+	@mkdir -p "$(@D)"
+	$(CC) $(LIBJS_FLAGS) -c $< -o $@
+$(OBJ)/js/runtime/owner_incarnation.o: libjs/runtime/owner_incarnation.c libjs/runtime/owner_incarnation.h \
+    libjs/runtime/owner_tickets.h libjs/include/os64/js.h libjs/shared.mk GNUmakefile
 	@mkdir -p "$(@D)"
 	$(CC) $(LIBJS_FLAGS) -c $< -o $@
 $(OBJ)/js/runtime/%.o: libjs/runtime/%.c $(LIBJS_GENERATED)/.prepared libjs/shared.mk libjs/core.mk
@@ -62,6 +66,24 @@ $(OBJ)/js/owner-tickets-parent: $(OBJ)/js/owner-tickets-parent.o $(LAUNCH_OBJS) 
 .PHONY: js-owner-tickets-test
 js-owner-tickets-test: $(OBJ)/js/owner-tickets-test $(OBJ)/js/owner-tickets-parent
 -include $(OBJ)/js/owner-tickets-test.d $(OBJ)/js/owner-tickets-parent.d
+
+# Private incarnation oracle, using the production issuer object directly.
+$(OBJ)/js/owner-incarnation-test.o: libjs/tests/owner_incarnation.c libjs/tests/owner_incarnation_cases.h \
+    libjs/runtime/owner_incarnation.h libjs/shared.mk GNUmakefile
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBJS_FLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(OBJ)/js/owner-incarnation-test: $(OBJ)/js/owner-incarnation-test.o $(OBJ)/js/runtime/owner_incarnation.o $(LAUNCH_OBJS) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_jsembedtest) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) -o $@ $^
+$(OBJ)/js/owner-incarnation-parent.o: libjs/tests/owner_incarnation_parent.c libjs/shared.mk GNUmakefile
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBJS_FLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(OBJ)/js/owner-incarnation-parent: $(OBJ)/js/owner-incarnation-parent.o $(LAUNCH_OBJS) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_testrun) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) -o $@ $^
+.PHONY: js-owner-incarnation-test
+js-owner-incarnation-test: $(OBJ)/js/owner-incarnation-test $(OBJ)/js/owner-incarnation-parent
+-include $(OBJ)/js/owner-incarnation-test.d $(OBJ)/js/owner-incarnation-parent.d
 
 # V1 is a separate consumer alternative in the reserved fixture slot. Neither
 # fixture belongs to the normal image; validation images select one executable.
