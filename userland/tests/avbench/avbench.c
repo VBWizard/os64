@@ -33,9 +33,10 @@
 // which is the file to send back.
 //
 // Exit: 0 decoded to the end, 1 usage, 2 cannot read or open the file,
-// 3 decode failed, 4 CRC differs from -k. With -k, a match exits
-// AVBENCH_CRC_OK instead of 0: testrun's badge, a word spelled in hex, so a
-// program that ended for any other reason cannot pass for this one.
+// 3 reading or decoding failed partway, 4 CRC differs from -k. With -k, a
+// match exits AVBENCH_CRC_OK instead of 0: testrun's badge, a word spelled
+// in hex, so a program that ended for any other reason cannot pass for this
+// one.
 
 #include "os64/os64.h"
 
@@ -248,8 +249,12 @@ static int bench(const char *path, int mode, long limit, Result *res)
     rc = 3;
     for (;;) {
         if (!flushing) {
+            // Only the end of the file ends a run normally: any other read
+            // error would otherwise flush, and report the frames decoded so
+            // far as a whole run (which `all` would record as a result).
             int r = av_read_frame(fmt, pkt);
-            if (r < 0) flushing = 1;
+            if (r == AVERROR_EOF) flushing = 1;
+            else if (r < 0) { os64_printf("avbench: %s: read error %d partway\n", path, r); goto out; }
             else if (pkt->stream_index != stream) { av_packet_unref(pkt); continue; }
         }
         // Only FFmpeg's own calls are timed. The CRC and the unref happen
