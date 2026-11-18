@@ -1660,12 +1660,28 @@ static JSValue host_settings(os64_js_realm_t *entry, os64_js_realm_t *incumbent,
     return host_settings_dispatch(entry, incumbent, body, opaque, outcome, false);
 }
 
+/* Callers validate their admission before reading engine settings frames. */
+static bool settings_role_valid(os64_js_settings_role_t role)
+{
+    return role == OS64_JS_SETTINGS_ENTRY || role == OS64_JS_SETTINGS_INCUMBENT ||
+        role == OS64_JS_SETTINGS_CURRENT || role == OS64_JS_SETTINGS_NATIVE_CALLER;
+}
+static JSContext *settings_context(os64_js_runtime_t *runtime, os64_js_settings_role_t role)
+{
+    switch (role) {
+    case OS64_JS_SETTINGS_ENTRY: return JS_GetEntryContext(runtime->engine);
+    case OS64_JS_SETTINGS_INCUMBENT: return JS_GetIncumbentContext(runtime->engine);
+    case OS64_JS_SETTINGS_CURRENT: return JS_GetCurrentContext(runtime->engine);
+    case OS64_JS_SETTINGS_NATIVE_CALLER: return JS_GetNativeCallerContext(runtime->engine);
+    default: return NULL;
+    }
+}
+
 JS_PUBLIC os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_settings_role_t role, os64_js_outcome_t *outcome)
 {
     if (settings_ready(runtime, caller_abi, outcome) != OS64_JS_OK) return NULL;
-    if (role != OS64_JS_SETTINGS_ENTRY && role != OS64_JS_SETTINGS_INCUMBENT &&
-        role != OS64_JS_SETTINGS_CURRENT && role != OS64_JS_SETTINGS_NATIVE_CALLER) {
+    if (!settings_role_valid(role)) {
         status(outcome, OS64_JS_BAD_ARGUMENT, "unknown settings role");
         return NULL;
     }
@@ -1673,14 +1689,7 @@ JS_PUBLIC os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
         status(outcome, OS64_JS_ADMISSION_REFUSED, "no checked settings scope is active");
         return NULL;
     }
-    JSContext *context;
-    switch (role) {
-    case OS64_JS_SETTINGS_ENTRY: context = JS_GetEntryContext(runtime->engine); break;
-    case OS64_JS_SETTINGS_INCUMBENT: context = JS_GetIncumbentContext(runtime->engine); break;
-    case OS64_JS_SETTINGS_CURRENT: context = JS_GetCurrentContext(runtime->engine); break;
-    case OS64_JS_SETTINGS_NATIVE_CALLER: context = JS_GetNativeCallerContext(runtime->engine); break;
-    default: return NULL; /* Invalid roles were refused before scope inspection. */
-    }
+    JSContext *context = settings_context(runtime, role);
     os64_js_realm_t *realm = realm_for_context(runtime, context);
     if (settings_eligible(runtime, realm, outcome) != OS64_JS_OK) return NULL;
     owner_legacy_escape(runtime);
@@ -2476,6 +2485,31 @@ JSOwnerStatus js_owner_scope_owner(const JSOwnerRuntimeScope *scope, JSOwnerId *
     if (!scope) return JS_OWNER_INVALID;
     OwnerMetadata *metadata = scope->runtime->owner.metadata;
     return js_owner_loan_owner(&metadata->table, metadata->incarnation, scope->loan, out);
+}
+JSOwnerStatus js_owner_scope_settings(const JSOwnerRuntimeScope *scope,
+    os64_js_settings_role_t role, JSOwnerSettingsSnapshot *out)
+{
+    if (!scope || !out || !settings_role_valid(role)) return JS_OWNER_INVALID;
+    JSOwnerId admitting;
+    JSOwnerStatus result = js_owner_scope_owner(scope, &admitting);
+    if (result != JS_OWNER_OK) return result;
+    os64_js_runtime_t *runtime = scope->runtime;
+    if (runtime->destroying || !runtime->active || !runtime->turn || !runtime->settings_calls)
+        return JS_OWNER_INVALID;
+    JSContext *context = settings_context(runtime, role);
+    JSOwnerSettingsSnapshot snapshot = {.admitting_owner=admitting, .kind=JS_OWNER_SETTINGS_ABSENT};
+    if (context) {
+        snapshot.kind = JS_OWNER_SETTINGS_UNMAPPED;
+        os64_js_realm_t *realm = realm_for_context(runtime, context);
+        OwnerBinding *binding = owner_realm_binding(runtime, realm);
+        if (binding) {
+            snapshot.kind = JS_OWNER_SETTINGS_MAPPED;
+            snapshot.realm = (JSOwnerRealmSnapshot){.owner=binding->owner, .primary=realm == primary(runtime),
+                .staged=realm->staged, .retired=realm->retired, .failed=realm->failed};
+        }
+    }
+    *out = snapshot;
+    return JS_OWNER_OK;
 }
 JSOwnerStatus js_owner_scope_promote(JSOwnerRuntimeScope *scope, JSOwnerTicket *out)
 {

@@ -2621,6 +2621,7 @@ static void finalization_task_recovery_cases(void)
 #include "../userland/libjs/tests/owner_rejection_cases.h"
 #include "../userland/libjs/tests/owner_task_cases.h"
 #include "../userland/libjs/tests/owner_provider_cases.h"
+#include "../userland/libjs/tests/owner_settings_cases.h"
 
 static void owner_runtime_assert(bool,const char *);
 static size_t owner_failure_attempts(void) { return attempts; }
@@ -2770,6 +2771,40 @@ static void owner_task_assert(bool ok,const char *message)
     check(ok,message);
     if(!ok && owner_task_controls)exit(1);
 }
+static bool owner_settings_controls;
+static void owner_settings_assert(bool ok,const char *message)
+{check(ok,message);if(!ok && owner_settings_controls)exit(1);}
+static JSValue owner_settings_quiet(JSOwnerRuntimeScope *scope,JSContext *context,void *opaque)
+{
+    (void)context;OwnerSettingsCase *s=opaque;JSOwnerRuntimeMetadata before,after;JSOwnerSettingsSnapshot snapshot;
+    owner_settings_assert(js_owner_runtime_metadata(s->runtime,&before),"checked settings: read metadata before passive observation");
+    size_t initial=attempts;clock_error=-97;fail_at=attempts+1;owner_realm_loan_fault=1;
+    JSOwnerStatus result=js_owner_scope_settings(scope,OS64_JS_SETTINGS_ENTRY,&snapshot);
+    clock_error=0;fail_at=0;owner_realm_loan_fault=0;
+    owner_settings_assert(result==JS_OWNER_OK && snapshot.kind==JS_OWNER_SETTINGS_MAPPED && snapshot.realm.primary &&
+        owner_settings_id(snapshot.admitting_owner,s->ticket.owner) && owner_settings_id(snapshot.realm.owner,s->ticket.owner) &&
+        attempts==initial && js_owner_runtime_metadata(s->runtime,&after) && before.summary.tickets==after.summary.tickets &&
+        before.summary.loans==after.summary.loans && !after.summary.unknown_escape,
+        "checked settings: observation allocates no memory polls no health and issues no holder or loan");return JS_UNDEFINED;
+}
+static void owner_settings_host_cases(void)
+{
+    owner_settings_cases(owner_settings_assert);
+    os64_js_config_t config={.limits=os64_js_default_limits()};config.limits.memory_bytes=8*1024*1024;config.limits.execution_ms=1000;
+    for(unsigned policy=0;policy<2;policy++) {
+        size_t baseline=live,bytes=live_bytes;os64_js_runtime_t *runtime;os64_js_outcome_t out;JSOwnerTicket ticket;
+        owner_settings_assert(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,(JSOwnerLimits){1,2,1},&runtime,&out)==OS64_JS_OK &&
+            js_owner_runtime_primary_ticket(runtime,&ticket)==JS_OWNER_OK && os64_js_enable_host_settings(runtime,OS64_JS_ABI_ID,&out)==OS64_JS_OK,
+            "checked settings: passive scalar operation fixture");
+        OwnerSettingsCase s={.runtime=runtime,.ticket=ticket,.outer=&out,.check=owner_settings_assert};
+        owner_settings_assert(js_owner_runtime_task_run(runtime,OS64_JS_ABI_ID,ticket,"passive settings",owner_settings_quiet,&s,&out)==OS64_JS_OK,
+            "checked settings: passive observation leaves original task healthy");
+        os64_js_teardown_report_t report;os64_js_destroy_report(runtime,&report);
+        owner_settings_assert(!report.leaked && live==baseline && live_bytes==bytes,
+            "checked settings: native engine and owner metadata balance after passive observation");
+    }
+}
+
 static bool owner_provider_controls;
 static void owner_provider_assert(bool ok,const char *message)
 {check(ok,message);if(!ok && owner_provider_controls)exit(1);}
@@ -3372,6 +3407,10 @@ static void owner_runtime_failure_cases(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && (!strcmp(argv[1], "--owner-settings") || !strcmp(argv[1], "--owner-settings-controls"))) {
+        owner_settings_controls=!strcmp(argv[1], "--owner-settings-controls");owner_settings_host_cases();check(live==0,"checked settings: native and engine allocations balance");
+        printf("checked settings: %u checks, %u failures\n",checks,failures);return failures?1:0;
+    }
     if (argc == 2 && (!strcmp(argv[1], "--owner-providers") || !strcmp(argv[1], "--owner-provider-controls"))) {
         owner_provider_controls=!strcmp(argv[1], "--owner-provider-controls");owner_provider_host_cases();
         check(live==0,"checked providers: native and engine allocations balance");
@@ -3616,7 +3655,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
-    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases(); owner_scope_failure_cases(); owner_failure_host_cases(); owner_setup_failure_cases(); owner_rejection_host_cases(); owner_task_host_cases(); owner_provider_host_cases();
+    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases(); owner_scope_failure_cases(); owner_failure_host_cases(); owner_setup_failure_cases(); owner_rejection_host_cases(); owner_task_host_cases(); owner_provider_host_cases(); owner_settings_host_cases();
     realm_cases(); finalization_task_recovery_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
 
     task_cases();

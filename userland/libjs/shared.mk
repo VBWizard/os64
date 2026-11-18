@@ -87,7 +87,7 @@ js-owner-incarnation-test: $(OBJ)/js/owner-incarnation-test $(OBJ)/js/owner-inca
 
 # Private runtime identity oracle links the production runtime and engine
 # objects directly, so hidden inspection does not become a public export.
-$(OBJ)/js/owner-runtime-test.o: libjs/tests/owner_runtime.c libjs/tests/owner_runtime_cases.h libjs/tests/owner_admission_cases.h libjs/tests/owner_realm_cases.h libjs/tests/owner_scope_cases.h libjs/tests/owner_failure_cases.h libjs/tests/owner_setup_cases.h libjs/tests/owner_rejection_cases.h libjs/tests/owner_task_cases.h libjs/tests/owner_provider_cases.h \
+$(OBJ)/js/owner-runtime-test.o: libjs/tests/owner_runtime.c libjs/tests/owner_runtime_cases.h libjs/tests/owner_admission_cases.h libjs/tests/owner_realm_cases.h libjs/tests/owner_scope_cases.h libjs/tests/owner_failure_cases.h libjs/tests/owner_setup_cases.h libjs/tests/owner_rejection_cases.h libjs/tests/owner_task_cases.h libjs/tests/owner_provider_cases.h libjs/tests/owner_settings_cases.h \
     libjs/runtime/owner_runtime.h $(LIBJS_GENERATED)/.prepared libjs/shared.mk GNUmakefile
 	@mkdir -p "$(@D)"
 	$(CC) $(filter-out -fPIC,$(LIBJS_FLAGS)) -fno-pic -fno-pie -c $< -o $@
