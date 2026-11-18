@@ -66,11 +66,15 @@ separate coverage. An unset veto or zero counters is not a release certificate.
 
 There is no public checked-profile negotiation, DOM ownership migration, root
 release, descriptor/context/slot reuse, graph-pin proof or reclamation here.
-The private constructor does not select F16 failure-record/recovery profiles;
+The original `js_owner_runtime_create` path leaves failure records and recovery disabled;
 its scalar failed bit is not a health certificate. C3 entry/incumbent/origin,
 target/publication and exposure/cache contracts remain independent. Quinn agreed
 the private interface and cumulative admission rules before implementation;
 her F4 engine/DOM Promise-lifetime milestone is not imported by this PR.
+
+The subsequent [checked failure-observation milestone](IFRAME_F15_CHECKED_FAILURES.md)
+adds separate diagnostic construction and pointer-free snapshots; recovery stays
+disabled on that path.
 
 ## Validation
 
