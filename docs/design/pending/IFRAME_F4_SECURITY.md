@@ -55,8 +55,9 @@ The security audit must inspect both ordinary and optimized property paths,
 as well as `Reflect`/`Object` helpers. A hook existing in the header is not
 evidence that each relevant path reaches it with the required context.
 F.4a's [validation and receiver audit](IFRAME_F4_GLOBAL_THIS_VALIDATION.md)
-identifies remaining global-accessor/reference and GroupBy receiver paths
-that F.4d must resolve before proxy publication.
+identifies global-accessor/reference and GroupBy receiver paths. The
+[receiver milestone](IFRAME_F4_GLOBAL_RECEIVERS.md) supplies their engine
+closure; DOM aliases/events and proxy integration remain publication gates.
 
 ## Global-this and settings contracts
 
