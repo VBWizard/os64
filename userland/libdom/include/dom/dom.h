@@ -753,8 +753,9 @@ os64_dom_geometry_stats_t os64_dom_geometry_stats(os64_dom_t *dom, bool reset);
  * while a host keeps names on, every member a binding installs through its
  * method and accessor helpers is named by the C function and magic it is
  * made with, as "appendChild", "get offsetWidth", "set innerHTML". Turn it on
- * before the bindings to be measured are made; the table is the process's,
- * every binding's, owner thread. NULL for a key no installed member has. */
+ * before the bindings to be measured are made. One table serves every
+ * binding in the process; call on the owner thread. NULL for a key no
+ * installed member has. */
 void os64_dom_name_host_functions(bool keep);
 const char *os64_dom_host_function_name(const void *function, int magic);
 

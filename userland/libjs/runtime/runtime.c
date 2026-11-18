@@ -124,6 +124,8 @@ struct os64_js_runtime {
     ledger_t *ledger;
     bool ledger_profile;
     uint64_t ledger_period, ledger_sampled, ledger_since;
+    /* This activation opened the ledger's ENGINE frame (ledger_activate). */
+    bool ledger_entered;
 };
 
 uint64_t js_owner_runtime_incarnation(const os64_js_runtime_t *runtime)
@@ -405,8 +407,11 @@ static bool observe(os64_js_runtime_t *runtime)
 }
 
 /* ── The ledger's doors (os64_js_ledger_*, js_engine.h) ─────────────────
- * The engine's hooks (patch 0044) and the runtime's own compile frames
- * each push a frame on the clock below and pop it when the work ends. */
+ * The engine's hooks (patch 0044) and the runtime's own frames (its
+ * activation, its compiles) each push a frame on the clock below and pop it
+ * when the work ends. The engine keeps the hooks it opened a bracket with
+ * until the bracket closes, so a hook finds the ledger gone if it was
+ * disabled inside one, and does nothing. */
 JS_PUBLIC uint64_t os64_js_ledger_now(void)
 {
     uint32_t lo, hi;
@@ -417,25 +422,29 @@ JS_PUBLIC uint64_t os64_js_ledger_now(void)
 static void ledger_native_enter(void *opaque, JSCFunctionData *function, int magic)
 {
     os64_js_runtime_t *runtime = opaque;
-    ledger_push(runtime->ledger, LEDGER_NATIVE, os64_js_ledger_now(), (const void *)function, magic);
+    if (runtime->ledger != NULL)
+        ledger_push(runtime->ledger, LEDGER_NATIVE, os64_js_ledger_now(), (const void *)function, magic);
 }
 
 static void ledger_script_enter(void *opaque)
 {
     os64_js_runtime_t *runtime = opaque;
-    ledger_push(runtime->ledger, LEDGER_ENGINE, os64_js_ledger_now(), NULL, 0);
+    if (runtime->ledger != NULL)
+        ledger_push(runtime->ledger, LEDGER_ENGINE, os64_js_ledger_now(), NULL, 0);
 }
 
 static void ledger_collector_enter(void *opaque)
 {
     os64_js_runtime_t *runtime = opaque;
-    ledger_push(runtime->ledger, LEDGER_COLLECTOR, os64_js_ledger_now(), NULL, 0);
+    if (runtime->ledger != NULL)
+        ledger_push(runtime->ledger, LEDGER_COLLECTOR, os64_js_ledger_now(), NULL, 0);
 }
 
 static void ledger_leave(void *opaque)
 {
     os64_js_runtime_t *runtime = opaque;
-    ledger_pop(runtime->ledger, os64_js_ledger_now());
+    if (runtime->ledger != NULL)
+        ledger_pop(runtime->ledger, os64_js_ledger_now());
 }
 
 static const JSLedgerHooks ledger_hooks = {
@@ -456,6 +465,26 @@ static void ledger_end(os64_js_runtime_t *runtime)
         ledger_pop(runtime->ledger, os64_js_ledger_now());
 }
 
+/* The runtime's own ENGINE frame, from the moment a call makes it active
+ * (enter) to the moment it is not: so script time is the runtime's time,
+ * the host's own work around a call is not, and "a frame is open" means
+ * "script is running". A ledger enabled during a call opens nothing until
+ * the next; one disabled during a call has nothing to close. */
+static void ledger_activate(os64_js_runtime_t *runtime)
+{
+    if (runtime->ledger != NULL && !runtime->ledger_entered) {
+        ledger_push(runtime->ledger, LEDGER_ENGINE, os64_js_ledger_now(), NULL, 0);
+        runtime->ledger_entered = true;
+    }
+}
+
+static void ledger_deactivate(os64_js_runtime_t *runtime)
+{
+    if (runtime->ledger_entered && runtime->ledger != NULL)
+        ledger_pop(runtime->ledger, os64_js_ledger_now());
+    runtime->ledger_entered = false;
+}
+
 static void ledger_place_of(const JSFrameLocation *from, ledger_place_t *to)
 {
     to->function = from->function;
@@ -466,8 +495,10 @@ static void ledger_place_of(const JSFrameLocation *from, ledger_place_t *to)
 }
 
 /* The profile's sample, from the interrupt handler, which the engine calls
- * only while it interprets bytecode: the running function and its caller,
- * once a period has passed since the last. */
+ * when it polls (the interpreter, the regular expression matcher, a few long
+ * builtins and each call's entry): the running function and its caller,
+ * once a period has passed since the last; outside bytecode the innermost
+ * frame is "[native]". */
 static void ledger_profile_sample(os64_js_runtime_t *runtime)
 {
     uint64_t now = os64_js_ledger_now();
@@ -867,6 +898,7 @@ static os64_js_status_t enter(os64_js_runtime_t *runtime, os64_js_outcome_t *out
         return status(out, OS64_JS_FAILED_RUNTIME, "runtime has failed");
     runtime->active = true;
     runtime->active_outcome = out;
+    ledger_activate(runtime);
     JS_UpdateStackTop(runtime->engine);
     return OS64_JS_OK;
 }
@@ -878,6 +910,7 @@ static os64_js_status_t refuse(os64_js_runtime_t *runtime, os64_js_outcome_t *ou
     out->jobs_executed = runtime->jobs;
     out->jobs_discarded = runtime->discarded_jobs;
     runtime->active_outcome = NULL;
+    ledger_deactivate(runtime);
     runtime->active = false;
     return status(out, value, message);
 }
@@ -1002,6 +1035,7 @@ static os64_js_status_t leave(os64_js_runtime_t *runtime, os64_js_outcome_t *out
     runtime->ran_jobs = false;
     if ((!pending && !runtime->task) || runtime->failure != OS64_JS_OK) runtime->turn = false;
     runtime->active_outcome = NULL;
+    ledger_deactivate(runtime);
     runtime->active = false;
     return out->status;
 }
@@ -1072,6 +1106,7 @@ static os64_js_status_t setup_leave(SetupCall *call)
         if (call->name != NULL)
             out->diagnostic_truncated |= copy_text(out->source_name, sizeof(out->source_name), call->name);
         if (!call->borrowed) {
+            ledger_deactivate(runtime);
             runtime->active = false;
             runtime->active_outcome = NULL;
         }
@@ -1607,6 +1642,7 @@ JS_PUBLIC os64_js_status_t os64_js_realm_with_settings(os64_js_realm_t *entry,
     outcome->jobs_discarded = runtime->discarded_jobs;
     if (!borrowed) {
         runtime->active_outcome = NULL;
+        ledger_deactivate(runtime);
         runtime->active = false;
     }
     return outcome->status;
@@ -3127,12 +3163,6 @@ JS_PUBLIC void os64_js_ledger_pop(os64_js_runtime_t *runtime)
         ledger_pop(runtime->ledger, os64_js_ledger_now());
 }
 
-JS_PUBLIC void os64_js_ledger_drop(os64_js_runtime_t *runtime)
-{
-    if (runtime != NULL && runtime->ledger != NULL)
-        ledger_drop(runtime->ledger);
-}
-
 JS_PUBLIC bool os64_js_ledger_totals(const os64_js_runtime_t *runtime, os64_js_ledger_totals_t *out)
 {
     if (out == NULL)
@@ -3149,6 +3179,7 @@ JS_PUBLIC bool os64_js_ledger_totals(const os64_js_runtime_t *runtime, os64_js_l
     out->callees_lost = l->callees_lost;
     out->samples = l->samples;
     out->samples_lost = l->samples_lost;
+    out->resets = l->resets;
     out->open = l->depth;
     out->since = runtime->ledger_since;
     return true;

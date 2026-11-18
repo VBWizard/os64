@@ -20,22 +20,30 @@ static void copy_place(ledger_place_t *to, const ledger_place_t *from)
     to->file[LEDGER_FILE - 1] = '\0';
 }
 
+static int callee_row(ledger_t *l, const void *function, int magic);
+
 void ledger_reset(ledger_t *l, uint64_t now)
 {
     /* Open frames survive a reset with their clocks restarted, so a window
      * begun inside a task charges only the task's time after it. */
     unsigned depth = l->depth;
+    uint64_t resets = l->resets + 1;
     ledger_frame_t stack[LEDGER_DEPTH];
     unsigned kept = depth < LEDGER_DEPTH ? depth : LEDGER_DEPTH;
     for (unsigned i = 0; i < kept; i++)
         stack[i] = l->stack[i];
     clear(l, sizeof(*l));
     l->depth = depth;
+    l->resets = resets;
     for (unsigned i = 0; i < kept; i++) {
         l->stack[i] = stack[i];
         l->stack[i].start = now;
         l->stack[i].children = 0;
-        l->stack[i].callee = -1;
+        if (l->stack[i].kind == LEDGER_NATIVE) {
+            l->stack[i].callee = callee_row(l, l->stack[i].function, l->stack[i].magic);
+            if (l->stack[i].callee < 0)
+                l->callees_lost++;
+        }
     }
 }
 
@@ -71,6 +79,8 @@ void ledger_push(ledger_t *l, ledger_kind_t kind, uint64_t now, const void *func
     f->start = now;
     f->children = 0;
     f->callee = -1;
+    f->function = function;
+    f->magic = magic;
     if (f->kind == LEDGER_NATIVE) {
         f->callee = callee_row(l, function, magic);
         if (f->callee < 0)
@@ -107,12 +117,6 @@ void ledger_pop(ledger_t *l, uint64_t now)
     }
     if (l->depth > 0)
         l->stack[l->depth - 1].children += elapsed;
-}
-
-void ledger_drop(ledger_t *l)
-{
-    if (l->depth > 0)
-        l->depth--;
 }
 
 uint64_t ledger_engine_live(const ledger_t *l, uint64_t now)

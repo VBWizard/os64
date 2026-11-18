@@ -88,8 +88,6 @@ typedef struct {
 } TreeMarks;
 
 struct yonder_scripts {
-    // A task's ledger frame is open (yonder_scripts_ledger_task).
-    bool ledger_task_open;
     os64_html_document_t *doc;
     os64_page_state_t *state;
     yonder_scripts_options_t options;
@@ -2235,22 +2233,10 @@ void yonder_scripts_census(yonder_scripts_t *s, yonder_census_sheet_t *sheet, bo
     sheet->cost_us += (uint64_t)(os64_micros() - began);
 }
 
-void yonder_scripts_ledger_task(yonder_scripts_t *s, bool begin)
+bool yonder_scripts_ledger_running(const yonder_scripts_t *s)
 {
-    if (s == NULL || s->runtime == NULL)
-        return;
-    if (s->ledger_task_open) {
-        // Its own end, or a task begun that found nothing to run (task_begin
-        // in yonder.c): the frame closes, charging what ran in it, or
-        // nothing when it never reached its end.
-        if (begin)
-            os64_js_ledger_drop(s->runtime);
-        else
-            os64_js_ledger_pop(s->runtime);
-    }
-    s->ledger_task_open = begin;
-    if (begin)
-        os64_js_ledger_push(s->runtime, OS64_JS_LEDGER_ENGINE);
+    os64_js_ledger_totals_t totals;
+    return s != NULL && s->runtime != NULL && os64_js_ledger_totals(s->runtime, &totals) && totals.open != 0;
 }
 
 void yonder_scripts_ledger_layout(yonder_scripts_t *s, bool begin)

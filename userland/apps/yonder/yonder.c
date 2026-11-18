@@ -3312,6 +3312,7 @@ static struct {
     // one rectangle is a whole view by parts).
     uint64_t rects, rects_most, collapses_from;
     uint64_t layouts_motion;                // of `layouts`, those for the animations alone (LaidFor)
+    uint64_t layouts_in_ticks;              // cycles of PS_LAYOUTS made inside a tick, no script forcing them
     uint64_t layouts_parts;                 // of those, the ones that marked only what they changed
     // The paints of the whole view, by what marked it (s_whole_by), and the
     // layouts for the animations that marked it, by why (s_parts.why), with
@@ -3437,6 +3438,12 @@ static void layout_profile_one(const Page *p, const yonder_layout_one_t *one);
 static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
     image_sources_environment(p,width,height,zoom);
+    // A layout made while the page's own script runs is one script forced:
+    // a frame on its ledger, whichever read or step asked for it.
+    yonder_scripts_t *forcing = yonder_scripts_ledger_running(page_scripts(p)) ? page_scripts(p) : NULL;
+    yonder_scripts_ledger_layout(forcing, true);
+    bool in_tick = s_cost.depth[PS_TICKS] != 0;
+    uint64_t layout_began = cycles();
     cost_begin(PS_LAYOUTS);
     bool profiled = s_layout_profile && layout_profile_diag(p) && !s_one_open;
     int64_t began = profiled ? os64_micros() : -1;
@@ -3455,6 +3462,9 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     }
     if (laid && p == &g.page) pointer_geometry_changed();
     cost_end(PS_LAYOUTS);
+    if (in_tick && forcing == NULL)
+        s_cost.layouts_in_ticks += cycles_since(layout_began);
+    yonder_scripts_ledger_layout(forcing, false);
     s_cost.layouts++;
     cost_fold(PS_LAYOUTS, PS_LAYOUTS);
     return laid;
@@ -8277,15 +8287,17 @@ static bool whole_lines(DiagText *w)
 
 // ── Where a page's script time goes (the JS ledger, `ledger` in yonder.conf)
 //
-// libjs's ledger (os64_js_ledger_*) splits the time script tasks take into
-// the interpreter (with the engine's own builtins: sort, regular
-// expressions, JSON, string work), compiling, the collector, libdom's calls
-// by callee and the layout script forced, each its own time; its counter is
-// the TSC, as `cycles()` is, and a tick is turned into time with the rate
-// since yonder started (ledger_sample_ticks). The record's lines count from
-// the page's runtime's start, through the page arriving and being shown;
-// a `d` reading counts from the last `d`, when the paint counts start again
-// too, so it can split the whole span (diag_ledger_reading).
+// libjs's ledger (os64_js_ledger_*, js_engine.h says exactly what each
+// kind holds) splits the time the page's runtime runs into the runtime's
+// own (the interpreter, the engine's builtins, libjs's bookkeeping),
+// compiling, the collector, host calls by callee (libdom's members) and
+// the layout script forced (page_lay_out while the page's script runs),
+// each its own time; its counter is the TSC, as `cycles()` is, and a tick
+// is turned into time with the rate since yonder started
+// (ledger_sample_ticks). The record's lines count from the page's
+// runtime's start, through the page arriving and being shown; a `d` reading
+// counts from the last `d`, when the paint counts start again too, so it
+// can split the whole span (diag_ledger_reading).
 
 // Ticks in tenths of a millisecond, and a pair for "%lu.%lu".
 static uint64_t ledger_tenths(uint64_t ticks, uint64_t per_ms)
@@ -8296,8 +8308,8 @@ static uint64_t ledger_tenths(uint64_t ticks, uint64_t per_ms)
 
 static void ledger_kinds(DiagText *t, const os64_js_ledger_totals_t *k, uint64_t per_ms)
 {
-    dt_put(t, "the interpreter %lu.%lu ms (and the engine's own builtins), compiling %lu.%lu, the collector %lu.%lu, "
-           "libdom's calls %lu.%lu, layout script forced %lu.%lu",
+    dt_put(t, "the interpreter %lu.%lu ms (with the engine's builtins and libjs's own work), compiling %lu.%lu, "
+           "the collector %lu.%lu, host calls (libdom's) %lu.%lu, layout script forced %lu.%lu",
            LEDGER_MS(ledger_tenths(k->self[OS64_JS_LEDGER_ENGINE], per_ms)),
            LEDGER_MS(ledger_tenths(k->self[OS64_JS_LEDGER_COMPILE], per_ms)),
            LEDGER_MS(ledger_tenths(k->self[OS64_JS_LEDGER_COLLECTOR], per_ms)),
@@ -8409,7 +8421,10 @@ static void ledger_rows(Page *p, const os64_js_runtime_t *rt, uint64_t per_ms)
         dt_put(&u, "%lu samples", (unsigned long)k.samples);
         for (size_t i = 0; i < n && i < LEDGER_SAMPLES_SHOWN; i++) {
             const os64_js_ledger_sample_t *s = &samples[i];
-            dt_put(&u, "; %s at %s:%d:%d", s->at.name, ledger_file(s->at.file), s->at.line, s->at.column);
+            if (s->at.function != NULL)
+                dt_put(&u, "; %s at %s:%d:%d", s->at.name, ledger_file(s->at.file), s->at.line, s->at.column);
+            else
+                dt_put(&u, "; %s", s->at.name);
             if (s->caller.function != NULL)
                 dt_put(&u, " from %s at %s:%d:%d", s->caller.name, ledger_file(s->caller.file), s->caller.line,
                        s->caller.column);
@@ -8437,7 +8452,7 @@ static void diag_ledger(Page *p)
     uint64_t now = os64_js_ledger_now(), span = now > k.since ? now - k.since : 0, script = ledger_sum(&k);
     DiagText t = {0};
     dt_put(&t, "%lu.%lu ms since %s: script %lu.%lu ms: ", LEDGER_MS(ledger_tenths(span, per_ms)),
-           s_cost_readings ? "the last reading" : "the page's script began", LEDGER_MS(ledger_tenths(script, per_ms)));
+           k.resets != 0 ? "the last reading" : "the page's script began", LEDGER_MS(ledger_tenths(script, per_ms)));
     ledger_kinds(&t, &k, per_ms);
     dt_put(&t, "; not script %lu.%lu ms (yonder's own work and waiting: a reading with d splits them)",
            LEDGER_MS(ledger_tenths(span > script ? span - script : 0, per_ms)));
@@ -8448,9 +8463,11 @@ static void diag_ledger(Page *p)
 
 // A `d` reading's ledger line: the whole span since the last `d` split into
 // the ledger's kinds, yonder's own work (s_cost: the render, the publish,
-// the ticks and the layouts no task forced) and waiting, and what none of
-// them holds (the stream's parse, events, the loop itself), so the parts
-// add up to the span. Read before the paint counts start again.
+// the ticks, and the layouts neither script nor a tick made, which are in
+// those already) and waiting, and the rest: what none of them times (the
+// stream's parse, events, the loop itself). Each is timed by its own reads
+// of the counter, so the rest is said as counted twice in the rare reading
+// where the parts come out over the span. Read before the counts restart.
 static void diag_ledger_reading(Page *p, uint32_t n)
 {
     const os64_js_runtime_t *rt = yonder_scripts_ledger(page_scripts(p));
@@ -8479,19 +8496,20 @@ static void diag_ledger_reading(Page *p, uint32_t n)
     uint64_t ticks = s_cost.total[PS_TICKS] + s_cost.now[PS_TICKS];
     uint64_t layouts = s_cost.total[PS_LAYOUTS] + s_cost.now[PS_LAYOUTS];
     uint64_t forced = k.self[OS64_JS_LEDGER_LAYOUT];
-    uint64_t own_layouts = layouts > forced ? layouts - forced : 0;
+    uint64_t nested = forced + s_cost.layouts_in_ticks;
+    uint64_t own_layouts = layouts > nested ? layouts - nested : 0;
     uint64_t script = ledger_sum(&k);
     uint64_t accounted = script + render + publish + ticks + own_layouts + s_cost.waited;
     DiagText t = {0};
     dt_put(&t, "%lu.%lu ms: script %lu.%lu ms: ", LEDGER_MS(ledger_tenths(span, per_ms)),
            LEDGER_MS(ledger_tenths(script, per_ms)));
     ledger_kinds(&t, &k, per_ms);
-    dt_put(&t, "; yonder: render %lu.%lu ms, publish %lu.%lu, ticks %lu.%lu, layouts no task forced %lu.%lu; "
+    dt_put(&t, "; yonder: render %lu.%lu ms, publish %lu.%lu, ticks %lu.%lu, other layouts %lu.%lu; "
            "waiting %lu.%lu ms; %s %lu.%lu ms",
            LEDGER_MS(ledger_tenths(render, per_ms)), LEDGER_MS(ledger_tenths(publish, per_ms)),
            LEDGER_MS(ledger_tenths(ticks, per_ms)), LEDGER_MS(ledger_tenths(own_layouts, per_ms)),
            LEDGER_MS(ledger_tenths(s_cost.waited, per_ms)),
-           span >= accounted ? "unaccounted" : "counted twice (stages that nest)",
+           span >= accounted ? "the rest (parsing, events, the loop)" : "counted twice",
            LEDGER_MS(ledger_tenths(span >= accounted ? span - accounted : accounted - span, per_ms)));
     yonder_diag_fact(p->diag, key, dt_text(&t));
     os64_free(t.s);
@@ -11458,7 +11476,6 @@ static uint64_t s_task_began;
 static int64_t task_begin(yonder_scripts_t *host)
 {
     (void)yonder_scripts_geometry_stats(host, true);
-    yonder_scripts_ledger_task(host, true);
     s_task_began = cycles();
     return s_script_audit ? os64_micros() : 0;
 }
@@ -11486,7 +11503,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
     task_cost(what);
-    yonder_scripts_ledger_task(host, false);
+
     os64_dom_geometry_stats_t forced = yonder_scripts_geometry_stats(host, false);
     if (s_script_audit) {
         char line[OS64_JS_SOURCE_NAME_CAP + 160];
@@ -12641,10 +12658,6 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
 {
     const os64_html_document_t *doc = opaque;
     if (!os64_html_owns_node(doc, node)) return false;
-    // A layout this forces is a frame on the asking page's ledger.
-    Page *asking = page_of_doc(doc);
-    yonder_scripts_t *ledger = asking != NULL ? page_scripts(asking) : NULL;
-    yonder_scripts_ledger_layout(ledger, true);
     int64_t began = os64_micros();
     uint64_t before = geometry_layout_total;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
@@ -12668,7 +12681,6 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
     int64_t ended = os64_micros();
     out->layouts = geometry_layout_total - before;
     out->elapsed_us = out->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
-    yonder_scripts_ledger_layout(ledger, false);
     return ready && ended >= began;
 }
 
@@ -13742,11 +13754,7 @@ static bool script_computed(void *opaque, const os64_html_node_t *element, os64_
         return false;
     flow_env_t env;
     uint64_t layouts = 0, elapsed_us = 0;
-    Page *asking = page_of_doc(doc);
-    yonder_scripts_t *ledger = asking != NULL ? page_scripts(asking) : NULL;
-    yonder_scripts_ledger_layout(ledger, true);
     const flow_tree_t *tree = layout_current(doc, &env, &layouts, &elapsed_us);
-    yonder_scripts_ledger_layout(ledger, false);
     os64_dom_computed_cost(out, layouts, elapsed_us);
     if (tree == NULL)
         return false;

@@ -1,5 +1,5 @@
 /* ledger.h — where a runtime's script time goes, by kind, for the JS speed
- * ledger (os64_js_ledger_*, os64/js.h). Pure: no engine, no system header.
+ * ledger (os64_js_ledger_*, os64/js_engine.h). Pure: no engine, no system header.
  * Times are the caller's clock ticks (the TSC, in libjs); a ledger only
  * subtracts and adds them.
  *
@@ -8,12 +8,12 @@
  * (its elapsed less its children's elapsed) to its kind, and its elapsed to
  * its parent's children. So the kinds' totals add up to the outermost
  * frames' elapsed exactly, however the frames nest:
- *   ENGINE     the interpreter running script, and the engine's own C
- *              builtins (sort, regular expressions, JSON, string work),
- *              which pass through no door of their own;
+ *   ENGINE     the runtime's own time: the interpreter, the engine's C
+ *              builtins (sort, regular expressions, JSON, string work) and
+ *              whatever else passes no door of its own;
  *   COMPILE    a script, module or bytecode the runtime compiles or reads;
  *   COLLECTOR  a cycle collection;
- *   NATIVE     a call into a host function (libdom's), by callee;
+ *   NATIVE     a call into a host function, by callee;
  *   LAYOUT     style and layout a host forced while answering script.
  * A NATIVE frame's own time is also charged to its callee's row; a LAYOUT
  * frame's elapsed is charged to the nearest open NATIVE frame's row as what
@@ -80,6 +80,8 @@ typedef struct {
     uint64_t start;
     uint64_t children;
     int callee;               /* row index for NATIVE, -1 otherwise */
+    const void *function;     /* NATIVE's key, kept so a reset finds its row again */
+    int magic;
 } ledger_frame_t;
 
 typedef struct {
@@ -89,6 +91,7 @@ typedef struct {
     uint64_t callees_lost;    /* native calls past a full callee table */
     uint64_t samples_lost;    /* samples past a full profile table */
     uint64_t samples;         /* samples taken */
+    uint64_t resets;          /* ledger_reset calls since it was made */
     unsigned depth;           /* open frames, lost ones included */
     ledger_frame_t stack[LEDGER_DEPTH];
     ledger_callee_t callees[LEDGER_CALLEES];
@@ -101,10 +104,6 @@ typedef struct {
 void ledger_reset(ledger_t *l, uint64_t now);
 void ledger_push(ledger_t *l, ledger_kind_t kind, uint64_t now, const void *function, int magic);
 void ledger_pop(ledger_t *l, uint64_t now);
-/* Closes the innermost frame charging nothing, to it or its parent: for a
- * host frame opened for work that never came (the time it was open stays
- * in the frame below, as if it had not been pushed). */
-void ledger_drop(ledger_t *l);
 /* Interpreter time so far, the open ENGINE frames' share included. */
 uint64_t ledger_engine_live(const ledger_t *l, uint64_t now);
 /* One profile sample at `now`: charged the interpreter time since the

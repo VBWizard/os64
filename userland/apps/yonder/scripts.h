@@ -432,13 +432,13 @@ size_t yonder_scripts_heap_peak(const yonder_scripts_t *scripts);
 void yonder_scripts_census(yonder_scripts_t *scripts, yonder_census_sheet_t *sheet, bool detail);
 // False once a sticky outcome retired the runtime: nothing runs again.
 bool yonder_scripts_alive(const yonder_scripts_t *scripts);
-// The JS ledger's frames on this page's runtime (os64_js_ledger_*), each
-// nothing while the ledger is off or there is no runtime: a task's (begin
-// at task_begin, end at task_said; a second begin with no end between drops
-// the first, a task begun that found nothing to run) and a layout script
-// forced (around the work, inside the task). Reset zeroes it; the getter
-// answers the runtime to read, NULL while off.
-void yonder_scripts_ledger_task(yonder_scripts_t *s, bool begin);
+// The JS ledger on this page's runtime (os64_js_ledger_*), each nothing
+// while the ledger is off or there is no runtime. libjs opens its own frame
+// for every call into the runtime, so running answers whether the page's
+// script runs now; a layout made then is one script forced, a frame of its
+// own (begin and end around the layout, inside that call). Reset zeroes
+// it; the getter answers the runtime to read, NULL while off.
+bool yonder_scripts_ledger_running(const yonder_scripts_t *s);
 void yonder_scripts_ledger_layout(yonder_scripts_t *s, bool begin);
 void yonder_scripts_ledger_reset(yonder_scripts_t *s);
 const os64_js_runtime_t *yonder_scripts_ledger(const yonder_scripts_t *s);
