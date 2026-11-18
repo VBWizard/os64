@@ -3,6 +3,7 @@
 
 #include "dom/dom.h"
 #include "browsing_context.h"
+#include "navigation_authority.h"
 #include "os64/js_engine.h"
 #include "os64/js_callbacks.h"
 #include "way/origin.h"
@@ -397,6 +398,7 @@ struct DBrowsingContext {
     uint64_t generation;
     size_t charged_bytes;
     bool discarded;
+    DNavigationRequest *navigation;
     char name[];
 };
 
@@ -409,6 +411,7 @@ struct os64_dom_cluster {
     os64_dom_t *members[D_REALMS];
     DBrowsingContext *contexts;
     size_t context_count;
+    struct DNavigationAuthority *navigation_authority;
     DValue *buckets[D_BUCKETS];
     struct DObservers *observers;
     struct DCustomAgent *custom_agent;
@@ -872,6 +875,8 @@ JSValue d_binding_global(os64_dom_t *, JSContext *);
 JSValue d_custom_registry(os64_dom_t *, JSContext *);
 int d_window_member_magic(os64_dom_t *, JSContext *, JSValueConst, const char *, int, int);
 
+os64_js_status_t d_browsing_quiescent(os64_dom_cluster_t *, os64_js_outcome_t *);
+void d_navigation_authority_free(os64_dom_cluster_t *);
 bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
 /* Scheduling eligibility is separate from retained-object usability. */
 bool d_activity_eligible(const os64_dom_t *dom);

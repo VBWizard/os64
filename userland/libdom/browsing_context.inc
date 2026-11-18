@@ -9,7 +9,7 @@ static bool context_member(const os64_dom_cluster_t *cluster, const DBrowsingCon
     return false;
 }
 
-static os64_js_status_t context_quiescent(os64_dom_cluster_t *cluster, os64_js_outcome_t *outcome)
+os64_js_status_t d_browsing_quiescent(os64_dom_cluster_t *cluster, os64_js_outcome_t *outcome)
 {
     os64_js_status_t status = os64_js_quiescent(cluster ? cluster->runtime : NULL,
         OS64_JS_ABI_ID, outcome);
@@ -34,7 +34,7 @@ static bool context_candidate(os64_dom_cluster_t *cluster, os64_dom_t *binding)
 DBrowsingContext *d_browsing_context_create(os64_dom_cluster_t *cluster, DBrowsingContext *parent,
     os64_dom_t *initial, const char *name, os64_js_outcome_t *outcome)
 {
-    if (context_quiescent(cluster, outcome) != OS64_JS_OK) return NULL;
+    if (d_browsing_quiescent(cluster, outcome) != OS64_JS_OK) return NULL;
     if (!name || !context_candidate(cluster, initial) ||
         (parent && (!context_member(cluster, parent) || parent->discarded || !d_delivery_active(parent->active)))) {
         outcome->status = OS64_JS_BAD_ARGUMENT;
@@ -101,7 +101,7 @@ static os64_js_status_t context_change(DBrowsingContext *context, uint64_t expec
     os64_dom_t *candidate, bool discard, os64_js_outcome_t *outcome)
 {
     os64_dom_cluster_t *cluster = context ? context->cluster : NULL;
-    os64_js_status_t status = context_quiescent(cluster, outcome);
+    os64_js_status_t status = d_browsing_quiescent(cluster, outcome);
     if (status != OS64_JS_OK) return status;
     if (!context_member(cluster, context) || context->discarded ||
         expected != context->generation || (!discard && !context_candidate(cluster, candidate)))

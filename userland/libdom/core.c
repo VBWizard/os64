@@ -1538,8 +1538,13 @@ void os64_dom_cluster_free(os64_dom_cluster_t *cluster)
      * Keep all ledger descriptors until the native sweeps are finished. */
     for (size_t i = 0; i < cluster->count; ++i) binding_free(cluster->members[i]);
     for (size_t i = 0; i < cluster->count; ++i) os64_free(cluster->members[i]);
+    d_navigation_authority_free(cluster);
     for (DBrowsingContext *context = cluster->contexts; context;) {
         DBrowsingContext *next = context->registry_next;
+        if (context->navigation) {
+            cluster->bytes -= sizeof(*context->navigation);
+            os64_free(context->navigation);
+        }
         cluster->bytes -= context->charged_bytes;
         os64_free(context);
         context = next;
