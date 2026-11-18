@@ -24,10 +24,15 @@
 //              sws_scale_frame on a dynamic context (never the legacy
 //              API), threads 1, into a destination avbench owns (64-byte
 //              aligned, more than FFmpeg's routines ask of a buffer, and
-//              rows W * 4 bytes apart, as a canvas's are), from a
-//              shallow copy of the decoded frame with its colours filled
-//              in (below). Each frame is converted twice, bilinear and
-//              fast bilinear, each by its own scaler and timed apart.
+//              rows W * 4 bytes apart, as a canvas's are), from the
+//              decoded frame with its colours filled in (below). Each
+//              frame is converted twice, bilinear and fast, each by its
+//              own scaler and timed apart. FAST is FFmpeg's fast
+//              bilinear only when shrinking: enlarging, libswscale's fast
+//              path writes x86 code of its own into the heap and runs it
+//              (utils.c, ff_init_hscaler_mmxext), which os64, keeping data
+//              memory unexecutable, ends with a no-execute fault. Enlarged,
+//              the "fast" column is bilinear, and says so (fast=bilinear).
 //              `natural` is the picture's own size: conversion, no scaling.
 //              At a natural width that is not a multiple of eight, FFmpeg's
 //              unscaled converter leaves the last few pixels of each row
@@ -317,6 +322,7 @@ typedef struct {
     // -x
     int scale_width, scale_height;
     bool scale_exact;        // the bilinear figures are the bit-exact scaler's
+    bool fast_is_bilinear;   // enlarging: the fast scaler is bilinear (-x's text)
     Cost decode, bilinear, fast, with_bilinear, with_fast;
     uint32_t scale_crc;      // -e
 } Result;
@@ -418,7 +424,10 @@ static int bench(const char *path, int mode, long limit, const Scale *scale, Res
         size_t bytes = (size_t)res->scale_width * 4 * (size_t)res->scale_height;
         pixels = os64_malloc_aligned(bytes, 64);
         bilinear = scaler_new(SWS_BILINEAR | (scale->exact ? SWS_BITEXACT | SWS_ACCURATE_RND : 0));
-        fast = scaler_new(SWS_FAST_BILINEAR);
+        // FAST only when shrinking (-x's text: enlarged, FFmpeg's fast path
+        // runs code it writes into the heap).
+        res->fast_is_bilinear = res->scale_width >= dec->width;
+        fast = scaler_new(res->fast_is_bilinear ? SWS_BILINEAR : SWS_FAST_BILINEAR);
         canvas = pixels ? canvas_frame(pixels, res->scale_width, res->scale_height) : NULL;
         if (!canvas || !bilinear || !fast) { os64_printf("avbench: no memory for the conversion\n"); goto out; }
         os64_memset(pixels, 0, bytes);    // first touches out of the timings
@@ -573,12 +582,13 @@ static void report(const char *path, int mode, const Result *r)
     // and with them (the header says which packets).
 #define MS(c) (long)((c).avg_us / 1000), (long)((c).avg_us % 1000), (long)((c).worst_us / 1000), (long)((c).worst_us % 1000)
     const char *bilinear = r->scale_exact ? "bilinear-exact" : "bilinear";
+    const char *fast = r->fast_is_bilinear ? "fast=bilinear" : "fast";
     os64_snprintf(line, sizeof(line),
                   "avbench %s to %dx%d mode %s ms avg/worst: decode %ld.%03ld/%ld.%03ld "
-                  "%s %ld.%03ld/%ld.%03ld fast %ld.%03ld/%ld.%03ld "
-                  "decode+%s %ld.%03ld/%ld.%03ld decode+fast %ld.%03ld/%ld.%03ld",
+                  "%s %ld.%03ld/%ld.%03ld %s %ld.%03ld/%ld.%03ld "
+                  "decode+%s %ld.%03ld/%ld.%03ld decode+%s %ld.%03ld/%ld.%03ld",
                   path, r->scale_width, r->scale_height, k_mode_name[mode], MS(r->decode), bilinear,
-                  MS(r->bilinear), MS(r->fast), bilinear, MS(r->with_bilinear), MS(r->with_fast));
+                  MS(r->bilinear), fast, MS(r->fast), bilinear, MS(r->with_bilinear), fast, MS(r->with_fast));
 #undef MS
     os64_printf("%s\n", line);
     os64_serial_log(line);
@@ -694,11 +704,13 @@ static int bench_all(const char *dir, int runs, const Scale *scale)
                                             fps10 / 10, fps10 % 10, (long)r.worst_us, (long)r.p99_us, r.crc, r.flags);
                     if (r.scale_width && len > 0 && (size_t)len < sizeof(line))
                         len += os64_snprintf(line + len, sizeof(line) - (size_t)len,
-                                             " to %dx%d us avg/worst bilinear %ld/%ld fast %ld/%ld "
-                                             "decode+bilinear %ld/%ld decode+fast %ld/%ld",
+                                             " to %dx%d us avg/worst bilinear %ld/%ld %s %ld/%ld "
+                                             "decode+bilinear %ld/%ld decode+%s %ld/%ld",
                                              r.scale_width, r.scale_height, (long)r.bilinear.avg_us,
-                                             (long)r.bilinear.worst_us, (long)r.fast.avg_us, (long)r.fast.worst_us,
+                                             (long)r.bilinear.worst_us, r.fast_is_bilinear ? "fast=bilinear" : "fast",
+                                             (long)r.fast.avg_us, (long)r.fast.worst_us,
                                              (long)r.with_bilinear.avg_us, (long)r.with_bilinear.worst_us,
+                                             r.fast_is_bilinear ? "fast=bilinear" : "fast",
                                              (long)r.with_fast.avg_us, (long)r.with_fast.worst_us);
                     if (len > 0 && (size_t)len < sizeof(line) - 1) {
                         line[len++] = '\n';
