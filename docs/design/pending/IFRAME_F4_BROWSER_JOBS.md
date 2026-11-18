@@ -92,7 +92,9 @@ microtask exhaust the cap, its error handler runs, and that handler's microtask
 refuses without a new budget. The host runner also includes the shipping media-session
 translation unit, which its source list had omitted.
 
-Focused runtime passes **4,459 checks in each allocator profile**; DOM passes
+Final full runtime passes **38,771 shipping / 128,077 instrumented checks**,
+zero failures or live allocations, plus parser-refusal, raw-construction and
+fatal-invariant checks. Focused runtime passes **4,459 checks in each allocator profile**; DOM passes
 **801 in each profile**, including eleven sampled binding allocation failures
 from 1,263 construction points. These samples include an optional allocation
 whose refusal still permits successful construction. Full Yonder host passes
@@ -101,3 +103,6 @@ whose refusal still permits successful construction. Full Yonder host passes
 Shipping Yonder, CLI and runtime consumer builds pass, as do source preparation,
 cross-header checks and **235 engine / 89 runtime export** audits. ASan, UBSan
 and LeakSanitizer remain enabled. No guest execution or P5 acceptance is claimed.
+
+Implementation and evidence land in PR #650. Source, executed host binaries,
+compiled consumers, commands and logs are frozen with a SHA-256 manifest.
