@@ -1,6 +1,8 @@
 # F15 — checked staged native installation
 
-Proof baseline: merged `userland` `8a994b35` (#649–#652), embedding ABI 5,
+Implementation PR: **#654**, source `d4a8c335`; merged-base integration `7abd1f2a`.
+
+Proof baseline: merged `userland` `9ae58ef4` (#649–#653), embedding ABI 5,
 bytecode ABI 6, engine digest
 `3e9a81ec0428aaf6456af21c9d8cf5b152793b747ebb503bd9cc86ff5a91afd4`.
 This follows [scoped native access](IFRAME_F15_SCOPED_ACCESS.md) and the
@@ -70,8 +72,8 @@ No public profile, DOM ownership migration, engine patch, C3 representation,
 per-owner reclamation or slot reuse is selected. Public declarations, ABI,
 exports and default budgets are unchanged; header changes are comments only.
 The opaque scope type moves within `runtime.c` without adding wrapper fields.
-The wrapper remains **13,080 bytes**. Quinn's merged #651/#652 DOM changes are
-included in the baseline; her subsequent F4c context/publication work is independent.
+The wrapper remains **13,080 bytes**. Quinn's merged #651–#653 DOM/native-context changes are included in the baseline;
+this milestone changes no context/publication contract.
 
 ## Validation
 
@@ -96,7 +98,7 @@ included in the baseline; her subsequent F4c context/publication work is indepen
   and removed allocator precedence. Compile errors/invariant aborts do not count.
 - Final full runtime: **39,511 shipping / 134,451 instrumented checks**, zero
   failures/live allocations, plus compile-failure and fatal-invariant regressions.
-  Runtime sources/headers are unchanged by the subsequent DOM-only #652 merge.
+  Runtime sources/headers are unchanged by the subsequent DOM-only #652/#653 merges.
 - Actual cross-built Os64 consumer: **840 checks**, target heap integrity/balance,
   exact parent-observed **`0x4f520700`**, complete PASS. Matching production objects,
   five-file library closure, source/build-input hashes, commands and serial output
@@ -104,7 +106,7 @@ included in the baseline; her subsequent F4c context/publication work is indepen
 - At the combined merged baseline, DOM child-installation engine/budget cases
   pass **1,330 shipping / 1,258 instrumented checks**. Both profiles pass child
   installation **58**, retirement **9,770**, finalization settings **714** and
-  Window authority **304** checks each. Default CLI **199 + 40**, shared
+  Window authority **304** and native browsing contexts **1,078** checks each. Default CLI **199 + 40**, shared
   test262 builder **4/4**, public headers/link (**235 engine / 89 runtime exports**),
   source manifest, teardown inventory and wrapper layout pass. ASan/UBSan and
   LeakSanitizer remain enabled outside the sandbox.
