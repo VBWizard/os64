@@ -697,8 +697,8 @@ virtio because its drain waits for the tick.
   with no headphones, drives it: read it FIRST when a press goes nowhere.
   `play` holds a session; fixture `/tests/mediakeystest`
   **FFmpeg is `libav.so`** (`userland/libav/`; AUDIO_YONDER.md is the arc,
-  `YAUDIO_TRACKER.csv` its state): libavutil, libavcodec and libavformat,
-  unpatched, built down to what `manifest.json`'s `configure_args` names
+  `YAUDIO_TRACKER.csv` its state): libavutil, libavcodec, libavformat and
+  libswscale (the picture converter, VIDEO.md), unpatched, built down to what `manifest.json`'s `configure_args` names
   (its README's table lists them). **It is LGPL and stays a library of its own** —
   never linked into another program or library, never configured with GPL,
   nonfree or version-3 parts; `tools/test_av_audit.py` fails on any of
@@ -716,7 +716,8 @@ virtio because its drain waits for the tick.
   configured out; its buffers come from `os64_malloc_aligned` (README
   § The x86 assembly). A program that calls it is named in `LIBAV_PROGRAMS` and compiles
   with `LIBAV_CONSUMER_CFLAGS`. Fixtures: `/tests/avtest`, and
-  `/tests/avbench`, which decodes H.264 to the host's CRC and measures it
+  `/tests/avbench`, which decodes H.264 to the host's CRC and measures it,
+  and with `-x WxH` measures the conversion to a window's pixels too
   **The SBC encoder is built and linked with the kernel**
   (`kernel/ports/sbc/`, the first third-party code in ring 0), and the A2DP
   sink calls it (AUDIO_A2DP.md part P). Android's, unpatched

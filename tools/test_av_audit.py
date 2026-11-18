@@ -74,7 +74,7 @@ for name in ('HAVE_X86ASM', 'HAVE_INLINE_ASM', 'CONFIG_RUNTIME_CPUDETECT', 'CONF
 # 32, which os64_malloc_aligned's dedicated blocks exceed.
 for flag in ('--disable-avx512', '--disable-avx512icl'):
     check(flag in args, f'configure_args lacks {flag}')
-for name in ('HAVE_AVX512', 'HAVE_AVX512ICL'):
+for name in ('HAVE_AVX512', 'HAVE_AVX512ICL', 'HAVE_AVX512_EXTERNAL', 'HAVE_AVX512ICL_EXTERNAL'):
     check(config.get(name) == '0', f'config.h has {name} {config.get(name)}: AVX-512 must be absent')
 
 # Every translation unit sources.mk builds is vendored.
@@ -84,9 +84,10 @@ check(built and built <= set(manifest['files']), f'sources.mk builds unvendored 
 # The public surface: FFmpeg's own, by the prefixes its version scripts
 # export, and nothing of FFmpeg's internals or of the port's shims.
 dynamic = {l.split()[-1] for l in run('x86_64-elf-nm', '-D', '--defined-only', SO).splitlines()}
-public = re.compile(r'^(av_|avcodec_|avformat_|avio_|avutil_|avsubtitle_free$)')
+public = re.compile(r'^(av_|avcodec_|avformat_|avio_|avutil_|avsubtitle_free$|sws_|swscale_)')
 check(dynamic and all(public.match(s) for s in dynamic), f'libav.so exports {sorted(s for s in dynamic if not public.match(s))[:10]}')
-for needed_api in ('avformat_open_input', 'avcodec_send_packet', 'avcodec_receive_frame', 'avio_alloc_context'):
+for needed_api in ('avformat_open_input', 'avcodec_send_packet', 'avcodec_receive_frame', 'avio_alloc_context',
+                   'sws_alloc_context', 'sws_scale_frame', 'sws_free_context', 'sws_test_format'):
     check(needed_api in dynamic, f'libav.so does not export {needed_api}')
 
 # What it leans on: libos64's allocator and strings, its exit and clock,
@@ -95,7 +96,9 @@ for needed_api in ('avformat_open_input', 'avcodec_send_packet', 'avcodec_receiv
 undefined = {l.split()[-1] for l in run('x86_64-elf-nm', '-D', '-u', SO).splitlines()}
 allowed_os64 = {'os64_malloc', 'os64_malloc_aligned', 'os64_realloc', 'os64_free', 'os64_memchr', 'os64_memcmp', 'os64_memcpy',
                 'os64_memmove', 'os64_memset', 'os64_strchr', 'os64_strcmp', 'os64_strlen', 'os64_strrchr',
-                'os64_snprintf', 'os64_vsnprintf', 'os64_micros', 'os64_exit', 'memset', 'memcpy'}
+                'os64_snprintf', 'os64_vsnprintf', 'os64_micros', 'os64_exit',
+                # the C names the compiler emits for a copy or a fill it recognises
+                'memset', 'memcpy', 'memmove'}
 math = set(re.findall(r'\b([a-z0-9]+);', (USERLAND / 'libmath/exports.map').read_text().split('local:')[0]))
 check(undefined <= allowed_os64 | math, f'libav.so imports {sorted(undefined - allowed_os64 - math)}')
 dyn = run('x86_64-elf-readelf', '-dW', SO)
@@ -109,7 +112,23 @@ check('TLS' not in run('x86_64-elf-readelf', '-lW', SO), 'libav.so has thread-lo
 # No system call of its own: every door FFmpeg reaches for is a shim.
 disasm = run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', SO)
 check(not re.search(r'\t(syscall|sysenter|int)\b', disasm), 'libav.so contains a system call')
-check('%zmm' not in disasm, 'libav.so contains AVX-512 code (a zmm register)')
+# No AVX-512 code that can run. One routine is assembled anyway: the scaler's
+# experimental backend (libswscale/x86/ops_common.asm) instantiates
+# packed_shuffle64_64 for AVX-512 with no guard, where the scaler's other
+# AVX-512 routines (x86/rgb_2_rgb.asm) sit behind HAVE_AVX512ICL_EXTERNAL.
+# Nothing can select it: x86/ops.c reaches it only with a
+# 64-byte vector, which compile() picks only when EXTERNAL_AVX512 holds, and
+# with HAVE_AVX512_EXTERNAL 0 (pinned above) that is false at compile time.
+# Any other routine holding a zmm register fails here.
+zmm_routines, routine = set(), None
+for line in disasm.splitlines():
+    label = re.match(r'^[0-9a-f]+ <([^>]+)>:$', line)
+    if label:
+        routine = label.group(1).split('.')[0]
+    elif '%zmm' in line:
+        zmm_routines.add(routine)
+check(zmm_routines <= {'ff_packed_shuffle64_64_avx512'},
+      f'libav.so contains AVX-512 code (a zmm register) in {sorted(zmm_routines)}')
 
 # THE ONLY AVX IN THE LIBRARY IS FFMPEG'S ASSEMBLY, chosen at run time: every
 # C object (upstream's and the port's) is compiled -mno-avx, so none may hold
@@ -178,6 +197,22 @@ check(media_exports and all(e.startswith('os64_media_') for e in media_exports),
 for program in ('play', 'tests/mediatest'):
     check('libmedia.so' in needed(USERLAND / 'bin' / program), f'{program} does not load libmedia.so')
 
+# CODE THE SCALER WRITES AT RUN TIME (README.md § The x86 assembly):
+# libswscale's fast bilinear writes an x86 horizontal filter of its own
+# and runs it, in memory from mmap and mprotect where it has them and from
+# av_malloc where, as here, it has not (HAVE_MMAP 0); os64's data memory
+# does not execute, so running it is a no-execute fault. It does so only
+# for SWS_FAST_BILINEAR and only when enlarging (canMMXEXTBeUsed needs
+# dstW >= srcW), which is why os64's callers ask for fast bilinear only
+# when shrinking. A release that changes either fails here until it has
+# been read again.
+utils_c = (upstream / 'libswscale/utils.c').read_text()
+check(config.get('HAVE_MMAP') == '0' and config.get('HAVE_MPROTECT') == '0',
+      'config.h has mmap or mprotect: the scaler would write its code where it can execute, read this again')
+check('c->canMMXEXTBeUsed = dstW >= srcW &&' in utils_c and
+      'if (c->canMMXEXTBeUsed && (flags & SWS_FAST_BILINEAR)) {' in utils_c,
+      'libswscale/utils.c changed when the scaler writes code at run time: read README.md § The x86 assembly again')
+
 # FFmpeg's ONE-TIME SETUPS, which a build without threads leaves unlocked
 # (README.md § Switched off). Every ff_thread_once in every vendored file,
 # templates and headers included (a decoder's setup can live in a template
@@ -207,8 +242,16 @@ for program in ('play', 'tests/mediatest'):
 #                                          video track, under the lock, and
 #                                          a video program's own open
 #                                          (avbench decodes on one thread)
+#   libswscale/utils.c                     the scaler's: rgb2rgb's tables in
+#                                          sws_init_context, which a dynamic
+#                                          context's graph calls for its
+#                                          legacy passes at the first
+#                                          conversion (avbench converts on
+#                                          one thread); the XYZ gamma tables,
+#                                          for the XYZ pixel kinds only,
+#                                          which no decoder here produces
 known_once = {'libavcodec/aac/aacdec_float.c': 1, 'libavcodec/aac/aacdec_tab.c': 1,
-              'libavcodec/h264dec.c': 1,
+              'libavcodec/h264dec.c': 1, 'libswscale/utils.c': 2,
               'libavcodec/aactab.c': 1, 'libavcodec/sinewin_tablegen.h': 1,
               'libavcodec/mpegaudiodec_common.c': 1, 'libavcodec/mpegaudiodec_template.c': 1,
               'libavcodec/mpegaudiodsp.c': 1, 'libavcodec/mpegaudiodsp_template.c': 1,

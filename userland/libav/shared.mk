@@ -1,6 +1,6 @@
 # shared.mk — how libav.so is built.
 #
-# FFmpeg's libavutil, libavcodec and libavformat, in the configuration
+# FFmpeg's libavutil, libavcodec, libavformat and libswscale, in the configuration
 # manifest.json's configure_args names (sources.mk is generated from it by
 # tools/import_av.py), as ONE shared library of its own. It is LGPL, and a
 # separate library the user can replace is how os64 meets that licence:
