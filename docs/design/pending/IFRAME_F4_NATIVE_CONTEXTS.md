@@ -127,3 +127,5 @@ public headers, wrapper ABI and prepared engine are unchanged. Tracker and
 stale-reference checks pass. No full DOM suite, guest run or P5 acceptance is
 claimed. Matching source, probes, consumers, mutation recipes and logs are
 retained with a SHA-256 manifest.
+
+Implementation: PR #653.
