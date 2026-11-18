@@ -1,5 +1,7 @@
 # F15 — pointer-free checked failure observations
 
+Implementation PR: **#649**, source `4aec6fb2`.
+
 Proof baseline: merged `userland` `b1ff4125` (#645/#646), embedding ABI 5,
 bytecode ABI 6, engine digest
 `3e9a81ec0428aaf6456af21c9d8cf5b152793b747ebb503bd9cc86ff5a91afd4`.
