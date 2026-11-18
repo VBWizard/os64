@@ -238,7 +238,7 @@ static JSValue idle_timeout(JSContext *ctx, JSValueConst self, int argc, JSValue
 static JSValue idle_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                            JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     if (magic == I_TIME_REMAINING || magic == I_DID_TIMEOUT) {
         DDeadline *deadline = JS_GetOpaque(self, os64_js_class_id(&deadline_slot));

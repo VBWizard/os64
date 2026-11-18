@@ -292,6 +292,77 @@ os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi)
     return dom;
 }
 
+/* HTML's IDL check observes the caller before this native member became
+ * current. The data-function ctx and the task/entry realm are not that caller.
+ * This private opt-in requires explicit origin-bearing settings on both sides;
+ * the default binding has no new security policy. */
+bool d_member_access(os64_dom_t *target, JSContext *ctx, bool cross_origin)
+{
+    if (!target->binding_origin) return true;
+    os64_js_outcome_t out;
+    os64_js_realm_t *realm = os64_js_settings_realm(target->runtime, OS64_JS_ABI_ID,
+        OS64_JS_SETTINGS_NATIVE_CALLER, &out);
+    os64_dom_t *source = NULL;
+    for (size_t i = 0; realm && i < target->cluster->count; ++i)
+        if (target->cluster->members[i]->realm == realm) source = target->cluster->members[i];
+    if (!d_delivery_active(target) || !d_delivery_active(source) || !source->binding_origin ||
+        (!cross_origin && !way_origin_same(source->binding_origin, target->binding_origin))) {
+        d_error(ctx, "SecurityError", "Member settings do not permit access");
+        return false;
+    }
+    return true;
+}
+
+/* Null/undefined receivers use the function's defining global. Object identity
+ * selects other Windows without getters, coercion or a new settings scope. */
+os64_dom_t *d_member_callback(JSContext *ctx, JSValueConst self, int *magic,
+    JSValueConst *data, const char *abi)
+{
+    os64_dom_t *owner = d_callback(ctx, data, abi);
+    if (!owner || !(*magic & D_WINDOW_MEMBER)) return owner;
+    bool cross = (*magic & D_WINDOW_CROSS) != 0;
+    *magic &= ~(D_WINDOW_MEMBER | D_WINDOW_CROSS);
+    os64_dom_t *target = NULL;
+    if (JS_IsNull(self) || JS_IsUndefined(self)) target = owner;
+    else if (owner->cluster)
+        for (size_t i = 0; i < owner->cluster->count; ++i)
+            if (d_same_object(self, owner->cluster->members[i]->window))
+                target = owner->cluster->members[i];
+    if (!target) { JS_ThrowTypeError(ctx, "Expected a Window receiver"); return NULL; }
+    if (!target->binding_origin) {
+        d_error(ctx, "SecurityError", "Window receiver has no authority settings");
+        return NULL;
+    }
+    return d_member_access(target, ctx, cross) ? target : NULL;
+}
+
+JSValue d_binding_global(os64_dom_t *dom, JSContext *ctx)
+{
+    return dom->binding_origin ? JS_DupValue(ctx, dom->window->value) : JS_GetGlobalObject(ctx);
+}
+
+/* HTML CrossOriginProperties applies separately to method/getter/setter. The
+ * bits travel with the original native function; renaming it grants nothing. */
+int d_window_member_magic(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
+    const char *name, int magic, int kind)
+{
+    if (!dom->binding_origin) return magic;
+    JSValue global = JS_GetGlobalObject(ctx);
+    bool window = JS_IsObject(target) && JS_VALUE_GET_PTR(target) == JS_VALUE_GET_PTR(global);
+    JS_FreeValue(ctx, global);
+    if (!window) return magic;
+    bool cross = false;
+    if (kind == 0)
+        cross = !os64_strcmp(name, "close") || !os64_strcmp(name, "focus") ||
+            !os64_strcmp(name, "blur") || !os64_strcmp(name, "postMessage");
+    else if (kind == 1) {
+        static const char *const getters[] = {"window", "self", "location", "closed", "frames", "length", "top", "opener", "parent"};
+        for (size_t i = 0; i < sizeof(getters) / sizeof(getters[0]); ++i)
+            if (!os64_strcmp(name, getters[i])) cross = true;
+    } else cross = !os64_strcmp(name, "location");
+    return magic | D_WINDOW_MEMBER | (cross ? D_WINDOW_CROSS : 0);
+}
+
 DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value)
 {
     if (JS_IsException(value)) return NULL;
@@ -353,6 +424,7 @@ DValue *d_intrinsic(os64_dom_t *dom, JSContext *ctx, JSValueConst from, const ch
 int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
              const char *name, JSCFunctionData *fn, int argc, int magic)
 {
+    magic = d_window_member_magic(dom, ctx, target, name, magic, 0);
     JSValue function = JS_NewCFunctionData(ctx, fn, argc, magic, 1, &dom->anchor->value);
     if (JS_IsException(function)) return -1;
     return JS_DefinePropertyValueStr(ctx, target, name, function, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
@@ -361,6 +433,7 @@ int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
 int d_method_named(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
                    const char *name, JSCFunctionData *fn, int argc, int magic)
 {
+    magic = d_window_member_magic(dom, ctx, target, name, magic, 0);
     JSValue function = JS_NewCFunctionData(ctx, fn, argc, magic, 1, &dom->anchor->value);
     if (JS_IsException(function)) return -1;
     JSValue text = JS_NewString(ctx, name);
@@ -377,10 +450,10 @@ int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
 {
     JSAtom atom = JS_NewAtom(ctx, name);
     if (atom == JS_ATOM_NULL) return -1;
-    JSValue get = JS_NewCFunctionData(ctx, fn, 0, magic, 1, &dom->anchor->value);
+    JSValue get = JS_NewCFunctionData(ctx, fn, 0, d_window_member_magic(dom, ctx, target, name, magic, 1), 1, &dom->anchor->value);
     JSValue set = JS_UNDEFINED;
     if (!JS_IsException(get) && writable)
-        set = JS_NewCFunctionData(ctx, fn, 1, magic | D_SET, 1, &dom->anchor->value);
+        set = JS_NewCFunctionData(ctx, fn, 1, d_window_member_magic(dom, ctx, target, name, magic | D_SET, 2), 1, &dom->anchor->value);
     if (JS_IsException(get) || JS_IsException(set)) {
         JS_FreeValue(ctx, get);
         JS_FreeValue(ctx, set);
@@ -405,7 +478,7 @@ static JSValue dialog(JSContext *ctx, JSValueConst self, int argc,
                       JSValueConst *argv, int magic, JSValue *data)
 {
     (void)self;
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     DString message = {0};
     if (argc > 0 && !d_string(dom, ctx, argv[0], &message)) return JS_EXCEPTION;
@@ -433,9 +506,8 @@ static JSValue dialog(JSContext *ctx, JSValueConst self, int argc,
  * and an assignment is ignored outside strict mode (a TypeError in it), as
  * browsers ignore one. This is the binding's one definition of each.
  *
- * They are read on nearly every line of a page's script, so each getter is
- * as short as a getter can be: window's answers the global, and
- * document's answers the document's wrapper it holds (d_held_getter). */
+ * Legacy getters return their retained values directly. Origin-bearing
+ * bindings select and authorize the actual Window receiver first. */
 static JSValue window_get(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
 {
     (void)self;
@@ -444,23 +516,37 @@ static JSValue window_get(JSContext *ctx, JSValueConst self, int argc, JSValueCo
     return JS_GetGlobalObject(ctx);
 }
 
-static int unforgeable_window(JSContext *ctx, JSValueConst global)
+/* Private Window aliases use the receiver chosen by the common boundary. */
+static JSValue window_alias(JSContext *ctx, JSValueConst self, int argc,
+    JSValueConst *argv, int magic, JSValue *data)
+{
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
+    if (!dom) return JS_EXCEPTION;
+    if (!(magic & D_SET)) return d_binding_global(dom, ctx);
+    const char *name = (magic & ~D_SET) == 1 ? "self" : "frames";
+    JSValue global = d_binding_global(dom, ctx);
+    int result = JS_DefinePropertyValueStr(ctx, global, name,
+        JS_DupValue(ctx, argc ? argv[0] : JS_UNDEFINED), JS_PROP_C_W_E);
+    JS_FreeValue(ctx, global);
+    return result < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+}
+
+static int unforgeable_window(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSAtom atom = JS_NewAtom(ctx, "window");
     if (atom == JS_ATOM_NULL) return -1;
-    JSValue get = JS_NewCFunction2(ctx, window_get, "get window", 0, JS_CFUNC_generic, 0);
+    JSValue get = dom->binding_origin
+        ? JS_NewCFunctionData(ctx, window_alias, 0, D_WINDOW_MEMBER | D_WINDOW_CROSS, 1, &dom->anchor->value)
+        : JS_NewCFunction2(ctx, window_get, "get window", 0, JS_CFUNC_generic, 0);
     int result = JS_IsException(get)
         ? -1 : JS_DefinePropertyGetSet(ctx, global, atom, get, JS_UNDEFINED, JS_PROP_ENUMERABLE);
     JS_FreeAtom(ctx, atom);
     return result;
 }
 
-/* A getter that answers the value it holds (its data[1]) once the binding
- * is open, the one check every binding member makes first. It reads no
- * native state and enters nothing, so d_context's ABI identity, which
- * guards an entry into the engine, is not asked. The value is held by
- * the function, so it lives as long as the property does; after drain the
- * closed binding refuses it, as d_context refuses every member. */
+/* Legacy getters duplicate data[1] while their binding is open. Private
+ * Window getters select the receiver's retained value after authorization.
+ * The data root keeps the original value alive until the function is freed. */
 static JSValue held_get(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                         JSValue *data)
 {
@@ -471,6 +557,14 @@ static JSValue held_get(JSContext *ctx, JSValueConst self, int argc, JSValueCons
     JSClassID id;
     os64_dom_t *dom = JS_GetAnyOpaque(data[0], &id);
     if (dom == NULL || dom->closed) return d_error(ctx, "InvalidStateError", "DOM binding is closed");
+    if (magic & D_WINDOW_MEMBER) {
+        dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
+        if (!dom) return JS_EXCEPTION;
+        if (magic == 1) return d_wrap(dom, ctx, dom->document->document);
+        if (magic == 2) return JS_DupValue(ctx, dom->history->value);
+        if (magic == 3) return d_custom_registry(dom, ctx);
+        return JS_ThrowTypeError(ctx, "Unknown Window value getter");
+    }
     return JS_DupValue(ctx, data[1]);
 }
 
@@ -480,7 +574,18 @@ int d_held_getter(os64_dom_t *dom, JSContext *ctx, JSValueConst target, const ch
     JSAtom atom = JS_NewAtom(ctx, name);
     if (atom == JS_ATOM_NULL) return -1;
     JSValueConst data[2] = {dom->anchor->value, held};
-    JSValue get = JS_NewCFunctionData(ctx, held_get, 0, 0, 2, data);
+    int magic = d_window_member_magic(dom, ctx, target, name, 0, 1);
+    if (magic & D_WINDOW_MEMBER) {
+        int member = !os64_strcmp(name, "document") ? 1 : !os64_strcmp(name, "history") ? 2
+            : !os64_strcmp(name, "customElements") ? 3 : 0;
+        if (!member) {
+            JS_FreeAtom(ctx, atom);
+            JS_ThrowTypeError(ctx, "Window value getter needs a receiver mapping");
+            return -1;
+        }
+        magic |= member;
+    }
+    JSValue get = JS_NewCFunctionData(ctx, held_get, 0, magic, 2, data);
     int result = JS_IsException(get) ? -1 : JS_DefinePropertyGetSet(ctx, target, atom, get, JS_UNDEFINED, flags);
     JS_FreeAtom(ctx, atom);
     return result;
@@ -875,7 +980,7 @@ static int install_binding(os64_dom_t *dom, JSContext *ctx)
      * the wrapper table keeps one wrapper per node for the page's life, so
      * the one made here is the one every read answers. */
     JSValue doc = d_wrap(dom, ctx, document->document);
-    int installed = JS_IsException(doc) ? -1 : unforgeable_window(ctx, global);
+    int installed = JS_IsException(doc) ? -1 : unforgeable_window(dom, ctx, global);
     if (installed >= 0) installed = d_held_getter(dom, ctx, global, "document", doc, JS_PROP_ENUMERABLE);
     JS_FreeValue(ctx, doc);
     /* The window is its own self and frames (HTML § Window), both
@@ -883,8 +988,12 @@ static int install_binding(os64_dom_t *dom, JSContext *ctx)
      * length are its browsing context's answers, asked as P1-W's members
      * are (browsing.c, d_browsing_classic): for a window with no frames,
      * itself, itself and 0. */
-    if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "self", JS_DupValue(ctx, global), JS_PROP_C_W_E);
-    if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "frames", JS_DupValue(ctx, global), JS_PROP_C_W_E);
+    if (installed >= 0) installed = dom->binding_origin
+        ? d_accessor(dom, ctx, global, "self", window_alias, 1, true)
+        : JS_DefinePropertyValueStr(ctx, global, "self", JS_DupValue(ctx, global), JS_PROP_C_W_E);
+    if (installed >= 0) installed = dom->binding_origin
+        ? d_accessor(dom, ctx, global, "frames", window_alias, 2, true)
+        : JS_DefinePropertyValueStr(ctx, global, "frames", JS_DupValue(ctx, global), JS_PROP_C_W_E);
     if (installed >= 0) installed = d_browsing_classic(dom, ctx, global);
     if (installed >= 0) installed = d_method(dom, ctx, global, "alert", dialog, 1, 0);
     if (installed >= 0) installed = d_method(dom, ctx, global, "confirm", dialog, 1, 1);
