@@ -75,7 +75,29 @@ The P5 is about one and a half times the 3900X per thread; assembly buys
 2.2 to 2.3 times over C, as on the host; AVX and SSE are equal for H.264.
 So § 3's shape stands, **one decoder thread carries 1440p60**, and § 6's
 eight decoded pictures cover the worst frame (under four frame times).
-The scaling figures above are still the host's.
+
+**The conversion on os64, on the P5** (`avbench -x`, one pinned thread,
+2026-11-18; evidence `~/os64-opus-kit/video-v3/p5_avbench.txt`). The
+call is libmedia's: `sws_scale_frame` on a dynamic context into the
+caller's pixels. Milliseconds a frame, average / worst, with FFmpeg's own
+choice of routines (AVX2); SSE is the same within a percent.
+
+| source | at its own size | to 2560x1440, bilinear | the same, C routines | 3900X, SSE (above) |
+|---|---|---|---|---|
+| 480p | 0.09 / 0.13 | 2.78 / 5.25 | 10.1 | 3.74 |
+| 720p | 0.21 / 0.28 | 3.10 / 5.82 | 11.5 | 4.32 |
+| 1080p | 0.52 / 0.75 | 3.55 / 6.58 | 13.6 | 4.72 |
+| 1440p | 1.14 / 1.51 (is 2560x1440) | | 2.54 | 1.45 |
+
+The P5 converts about 1.3 times as fast as the 3900X, and assembly is
+worth 3.8 times over C there too: § 1's conclusion 1 holds on the
+machine. **1080p60 shown at 2560x1440 costs 6.8 ms a frame, decode and
+conversion together, on one thread** (worst decode 34 ms, which the
+queue absorbs); 1440p60 at its own size 7.2 ms. A conversion's worst
+runs to about twice its average in every row, though its work does not
+vary: that is the thread being kept from the CPU, which V4's pacing
+should watch. Fast bilinear is not in the table: enlarging, it is plain
+bilinear on os64 (§ 2, As built).
 
 ## 2. The libraries
 
