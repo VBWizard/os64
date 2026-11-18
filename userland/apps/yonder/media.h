@@ -36,12 +36,14 @@ typedef struct {
     void (*ring)(void);
 } yonder_media_env_t;
 
-// The resource: its absolute address (http, https, data: or file:), the
-// page that asks (its address, which is its origin and the Referer, and
-// its serial, which names an opaque origin), and the element's
-// crossorigin; and the browser's agent and preset lines as they are
-// chosen when it opens (Settings can change them), borrowed for the
-// session's life as a script's request borrows them.
+// The resource: its absolute address (http, https, data:, blob: or file:),
+// the page that asks (its address, which is its origin and the Referer,
+// and its serial, which names an opaque origin), and the element's
+// crossorigin; the browser's agent and preset lines as they are chosen
+// when it opens (Settings can change them), borrowed for the session's
+// life as a script's request borrows them; and a blob: address's entry,
+// taken by the caller (BLOB_URLS.md) and borrowed for the call: the
+// session holds its own, and NULL is none.
 typedef struct {
     const char *url;
     const char *page_url;
@@ -49,6 +51,7 @@ typedef struct {
     os64_dom_media_cors_t cors;
     const char *agent;
     const way_identity_t *identity;
+    struct os64_dom_blob *blob;
 } yonder_media_request_t;
 
 // Once, before the first open; and once as yonder leaves, after the pages

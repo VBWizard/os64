@@ -1555,6 +1555,13 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
 
 static yonder_scripts_t *page_scripts(const Page *p);
 static yonder_scripts_t *scripts_for(uint64_t serial);
+// The blob URL store of the scripts `p` runs, wherever the page is in its
+// life (a page still on the stream has its scripts there): NULL without.
+static os64_dom_blob_store_t *page_blobs(const Page *p)
+{
+    yonder_scripts_t *host = page_scripts(p);
+    return yonder_scripts_blobs(host != NULL ? host : scripts_for(p->serial));
+}
 static const yonder_scripts_t *adoptions_host(const Page *p);
 static const os64_html_node_t *adopting_root(const os64_html_document_t *doc, const os64_html_node_t *x);
 
@@ -4351,7 +4358,9 @@ static void click_reload(os64_ui_widget_t *w, void *user);
 static void reload_as(way_initiator_t by);
 static void follow_link_asked(int32_t link, way_ask_t ask, way_initiator_t by);
 static void follow_link(int32_t link);
-static void download_ask(const char *url, const char *referrer, const char *disposition);
+static void download_ask(const char *url, const char *referrer, const char *disposition,
+                         os64_dom_blob_t *blob);
+static void download_ask_page(const char *url, const char *disposition);
 static void download_arrived(os64_work_id_t id, yonder_download_job_t *job);
 static void downloads_follow(void);
 static void downloads_orphaned(void);
@@ -5426,6 +5435,11 @@ static os64_work_id_t picture_submit(Page *p, int32_t index, uint32_t cover_w, u
         }
     } else {
         os64_strcopy(job->url, sizeof(job->url), pic->url);
+        // A blob: address's entry is taken now, at the page's picture pass:
+        // later than the standard parses it, booked in DEBTS (BLOB_URLS.md
+        // § 1.3); a page that revokes in onload is served.
+        if (!job->source)
+            job->blob = os64_dom_blob_url_take(page_blobs(p), pic->url);
     }
     job->hooks.jar = g.way.jar;
     job->hooks.cache = g.cache;
@@ -5539,8 +5553,9 @@ static int32_t picture_find_mode(const Page *p, const char *url, unsigned mode)
 // in the page's table, QUEUED for pictures_feed
 // when it is new, or -1 for an address nothing here fetches (or no memory).
 // A data: address is taken as the others are, the picture inside it
-// decoded by the worker. The catalog owns each address. The index grows
-// with the table, so pictures found after a layout join the same one.
+// decoded by the worker, and so is a blob: address, whose entry the
+// submit takes (BLOB_URLS.md). The catalog owns each address. The index
+// grows with the table, so pictures found after a layout join the same one.
 static int32_t picture_for_mode(Page *p, const char *url, unsigned mode)
 {
     if (url == NULL)
@@ -5549,7 +5564,7 @@ static int32_t picture_for_mode(Page *p, const char *url, unsigned mode)
     bool fetchable = (len > 7 && (os64_memcmp(url, "http://", 7) == 0 ||
                                   (len > 8 && os64_memcmp(url, "https://", 8) == 0) ||
                                   os64_memcmp(url, "file://", 7) == 0)) ||
-                     data_address(url, len);
+                     data_address(url, len) || (len > 5 && os64_memcmp(url, "blob:", 5) == 0);
     if (!fetchable)
         return -1;
     int32_t found = p->pic_slot ? p->pic_slot[picture_slot(p, url, len, mode)] : -1;
@@ -5752,22 +5767,28 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
     }
     if (!p->measuring && sh->url != NULL && preload_join(p, sh, url))
         return;
+    // A blob: address's entry is taken as its sheet is sent for: later than
+    // the standard parses it, booked in DEBTS (BLOB_URLS.md § 1.3).
+    os64_dom_blob_t *blob = !p->measuring && sh->url != NULL
+        ? os64_dom_blob_url_take(page_blobs(p), url) : NULL;
     bool fetchable = !p->measuring && sh->url != NULL &&
                      ((os64_strlen(url) > 7 && os64_memcmp(url, "http://", 7) == 0) ||
                       (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
-                      (os64_strlen(url) > 7 && os64_memcmp(url, "file://", 7) == 0));
+                      (os64_strlen(url) > 7 && os64_memcmp(url, "file://", 7) == 0) || blob != NULL);
     yonder_sheet_job_t *job = fetchable && g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
     if (job == NULL) {
+        os64_dom_blob_release(blob);
         sheet_owe(p, sh, true);
         return;
     }
     style_job_request(p, &sh->request, url, job);
     job->page = p->serial;
     job->index = (int32_t)(sh - p->sheets);
+    job->blob = blob;
     os64_work_t work = {yonder_sheet_run, yonder_sheet_release, job, SHEET_RESERVE};
     sh->id = os64_work_submit(g.pool, &work);
     if (sh->id == 0) {
-        os64_free(job);         // the pool will not take it: the page goes without it
+        yonder_sheet_release(job, NULL);    // the pool will not take it: the page goes without it
         sheet_owe(p, sh, true);
         return;
     }
@@ -6583,7 +6604,7 @@ static bool unasked_first(Page *p, const char *key)
 }
 
 // A picture the page names that never reaches the table, on the record
-// once (unasked_first): one in a scheme nothing here fetches (`blob:`, say)
+// once (unasked_first): one in a scheme nothing here fetches (`ftp:`, say)
 // is MISSING picture-scheme, counted by its scheme; an address that was refused
 // (`url` NULL) is FAILED picture, `written` as the page wrote it (named
 // short when it is a long data: address), with the refusal when there is
@@ -6601,7 +6622,8 @@ static bool picture_unasked(Page *p, const char *url, const char *written,
     char scheme[OS64_URL_SCHEME_MAX];
     bool named = os64_url_scheme_of(addr, scheme, sizeof(scheme));
     bool fetched = named && (os64_streq(scheme, "http") || os64_streq(scheme, "https") ||
-                             os64_streq(scheme, "file") || os64_streq(scheme, "data"));
+                             os64_streq(scheme, "file") || os64_streq(scheme, "data") ||
+                             os64_streq(scheme, "blob"));
     char line[OS64_FETCH_URL_MAX + 96], name[128];
     if (named && !fetched) {
         yonder_diag_missing(p->diag, "picture-scheme", scheme, 1);
@@ -7013,7 +7035,8 @@ static bool webfonts_readable(const garb_face_src_t *s)
 
 // A url() source of a face resolved: against the sheet the rule was
 // written in, after its redirects, or the page's base for a `style`
-// element; held to the schemes yonder fetches.
+// element; held to the schemes yonder fetches, a blob: address's entry
+// taken when the font is sent for (BLOB_URLS.md).
 static bool webfonts_url(const Page *p, const int32_t *entry, const garb_font_face_t *f,
                          const garb_face_src_t *s, char *out, size_t cap)
 {
@@ -7034,7 +7057,8 @@ static bool webfonts_url(const Page *p, const int32_t *entry, const garb_font_fa
         return false;
     return (os64_strlen(out) > 7 && os64_memcmp(out, "http://", 7) == 0) ||
            (os64_strlen(out) > 8 && os64_memcmp(out, "https://", 8) == 0) ||
-           (os64_strlen(out) > 7 && os64_memcmp(out, "file://", 7) == 0);
+           (os64_strlen(out) > 7 && os64_memcmp(out, "file://", 7) == 0) ||
+           (os64_strlen(out) > 5 && os64_memcmp(out, "blob:", 5) == 0);
 }
 
 static int32_t webfonts_find(const char *url)
@@ -7723,6 +7747,9 @@ static void webfonts_feed(bool laid)
             *job = (yonder_webfont_job_t){.kind = YONDER_JOB_FONT, .index = s_web.next,
                                           .generation = g.page_serial, .agent = g.way.agent};
             os64_strcopy(job->url, sizeof(job->url), w->url);
+            // A blob: address's entry, taken at the face's first use: later
+            // than the standard parses it, booked in DEBTS (BLOB_URLS.md § 1.3).
+            job->blob = os64_dom_blob_url_take(yonder_scripts_blobs(g.page.scripts), w->url);
             job->hooks.jar = g.way.jar;
             job->hooks.cache = g.cache;
             os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), g.page.way.url);
@@ -7730,7 +7757,7 @@ static void webfonts_feed(bool laid)
             os64_work_t work = {yonder_webfont_run, yonder_webfont_release, job, WEBFONT_RESERVE};
             w->id = os64_work_submit(g.pool, &work);
             if (w->id == 0) {
-                os64_free(job);
+                yonder_webfont_release(job, NULL);
                 why = "the workers would not take it";
             }
         }
@@ -10772,18 +10799,24 @@ static yonder_scripts_t *scripts_for(uint64_t serial)
 
 // A `src` script's fetch, its Referer the address its page's scripts run
 // at (none when that address was too long to keep whole:
-// yonder_scripts_referrer). 0, not begun, for a page that is gone, an
-// address that is not http, https or file, no pool, no memory for the job,
-// or a pool that will not take it.
+// yonder_scripts_referrer). A blob: address's entry is taken here, which
+// is inside the verb that connected the script or the parser's reaching it
+// (BLOB_URLS.md § 1.8). 0, not begun, for a page that is gone, an address
+// that is not http, https or file nor a blob: URL naming an entry, no
+// pool, no memory for the job, or a pool that will not take it.
 static uint64_t script_fetch(void *opaque, uint64_t serial, uint32_t token, const char *url,
                              const char *fallback)
 {
     (void)opaque;
     yonder_scripts_t *host = scripts_for(serial);
-    yonder_script_job_t *job =
-        host != NULL && fetchable(url) && g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
-    if (job == NULL)
+    os64_dom_blob_t *blob = host != NULL ? os64_dom_blob_url_take(yonder_scripts_blobs(host), url) : NULL;
+    yonder_script_job_t *job = host != NULL && (fetchable(url) || blob != NULL) && g.pool != NULL
+        ? os64_calloc(1, sizeof(*job)) : NULL;
+    if (job == NULL) {
+        os64_dom_blob_release(blob);
         return 0;
+    }
+    job->blob = blob;
     job->kind = YONDER_JOB_SCRIPT;
     job->page = serial;
     job->token = token;
@@ -10798,7 +10831,7 @@ static uint64_t script_fetch(void *opaque, uint64_t serial, uint32_t token, cons
     os64_work_t work = {yonder_script_run, yonder_script_release, job, SCRIPT_RESERVE};
     os64_work_id_t id = os64_work_submit(g.pool, &work);
     if (id == 0)
-        os64_free(job);
+        yonder_script_release(job, NULL);
     return id;
 }
 
@@ -10969,8 +11002,14 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     // what it holds. Refused, it is the element's network error.
     if (media_file_scheme(url) && !media_file_scheme(page))
         return NULL;
-    yonder_media_request_t r = {url, page, serial, cors, g.way.agent, g.way.identity};
-    return yonder_media_open(&r);
+    // A blob: address's entry is taken here, at the resource selection's
+    // turn, which is where the standard parses the element's URL too
+    // (BLOB_URLS.md § 1.8).
+    os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(host), url);
+    yonder_media_request_t r = {url, page, serial, cors, g.way.agent, g.way.identity, blob};
+    yonder_media_t *session = yonder_media_open(&r);
+    os64_dom_blob_release(blob);
+    return session;
 }
 static void media_close(void *opaque, void *session) { (void)opaque; yonder_media_close(session); }
 static void media_play(void *opaque, void *session) { (void)opaque; yonder_media_play(session); }
@@ -11294,6 +11333,9 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
     job->cache = g.cache;
     job->cache_mode = q->cache <= WAY_CACHE_ONLY_IF_CACHED ? (way_cache_mode_t)q->cache : WAY_CACHE_DEFAULT;
     job->module = (token & YONDER_MODULE_TOKEN) != 0;
+    // The entry the binding took where it parsed the URL (BLOB_URLS.md
+    // § 1.3), held for the run.
+    job->blob = os64_dom_blob_hold(q->blob);
     return job;
 }
 
@@ -11926,12 +11968,73 @@ static void unshown_go(Page *p, int32_t delta)
 // Navigation requested by the binding. A native click's default retains
 // the person's activation; script requests remain WAY_BY_PAGE, including
 // a click() or submit() called by a listener (DIVERGENCES: transient activation).
+static bool blob_scheme(const char *url)
+{
+    return os64_strlen(url) > 5 && os64_memcmp(url, "blob:", 5) == 0;
+}
+
+// Opening a blob: address as a page is not done (BLOB_URLS.md § 1.8):
+// said on the status line and on the record, by name, rather than tried
+// as an address the wire would refuse.
+static void blob_page_refused(const char *url)
+{
+    status_rest("Opening a blob: address as a page is not supported.");
+    char line[OS64_DOM_URL_MAX + 64];
+    os64_snprintf(line, sizeof(line), "%s: opening a blob: URL as a page is not supported", url);
+    yonder_diag_failed_seen(g.page.diag, "navigation", line);
+    badge_follow();
+}
+
+// A followed link to a blob: address: with a `download` attribute it is a
+// download of the entry the binding took inside the click (ask->blob, at
+// the address it was taken for, ask->url), or, with no entry taken (a
+// revoked address, or none named), the href resolved now as the binding
+// resolves it; without the attribute it is a page, refused. False for a
+// link to any other address.
+static bool blob_follow(const os64_dom_navigation_t *ask)
+{
+    const os64_html_attr_t *href = ask->node != NULL ? os64_html_attr(ask->node, "href") : NULL;
+    char url[OS64_DOM_URL_MAX];
+    if (ask->blob != NULL)
+        os64_strcopy(url, sizeof(url), ask->url);
+    else if (href == NULL ||
+             !os64_dom_resolve(page_doc(&g.page), g.page.way.url, href->value, url, sizeof(url)))
+        return false;
+    if (!blob_scheme(url))
+        return false;
+    const os64_html_attr_t *download = os64_html_attr(ask->node, "download");
+    if (download == NULL) {
+        blob_page_refused(url);
+        return true;
+    }
+    os64_dom_blob_t *blob = ask->blob != NULL ? os64_dom_blob_hold(ask->blob)
+                                              : os64_dom_blob_url_take(yonder_scripts_blobs(g.page.scripts), url);
+    // The attribute's name, given to the naming rules as a server's would
+    // be; a quote or a backslash in it would end or escape the parameter.
+    char disposition[YONDER_DOWNLOAD_NAME_MAX + 32];
+    size_t at = (size_t)os64_snprintf(disposition, sizeof(disposition), "attachment; filename=\"");
+    for (const char *c = download->value; *c != '\0' && at + 2 < sizeof(disposition); c++)
+        disposition[at++] = *c == '"' || *c == '\\' ? '_' : *c;
+    disposition[at++] = '"';
+    disposition[at] = '\0';
+    if (blob != NULL)
+        download_ask(url, g.page.way.url, download->value[0] != '\0' ? disposition : NULL, blob);
+    else
+        status_rest("That blob: address names nothing here: it was revoked, or never made.");
+    os64_dom_blob_release(blob);
+    return true;
+}
+
 static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navigation_t *ask,
                                bool shown)
 {
     switch (ask->kind) {
     case OS64_DOM_NAVIGATE_URL:
     case OS64_DOM_NAVIGATE_REPLACE: {
+        if (blob_scheme(ask->url)) {
+            blob_page_refused(ask->url);
+            return;
+        }
         // Only the fragment changed: a place in the asking page, no
         // request. On screen it scrolls now; a page not yet shown keeps
         // the fragment, and arriving scrolls to it.
@@ -12012,6 +12115,8 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
     }
     case OS64_DOM_NAVIGATE_FOLLOW:
         if (shown) {
+            if (blob_follow(ask))
+                return;
             int32_t link = os64_page_link_for(page_model(&g.page), ask->node);
             if (link >= 0)
                 follow_link_asked(link, ask->user_activated ? WAY_ASK_NEVER : WAY_ASK_GO,
@@ -12098,9 +12203,11 @@ static void asks_perform_with_fallback(yonder_scripts_t *host, const os64_html_d
             os64_html_release(doc, ask.submitter);
         held.node = held.submitter = NULL;
         navigation_perform(host, &held, false);
+        os64_dom_blob_release(ask.blob);
         return;
     }
     navigation_perform(host, &held, true);
+    os64_dom_blob_release(ask.blob);
     // A shown page's model was read while the nodes were held; the page
     // may since have been replaced, and its document freed with them.
     if (page_doc(&g.page) == doc) {
@@ -12121,19 +12228,25 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
 // whether its asks may reach the page on screen.
 static bool page_event_run(Page *p, bool shown);
 
-// A page's queued task (MODERN_WEB.md § P2b): its oldest posted message or
-// its next due timer, whichever was queued first — a message when it was
-// posted, a timer when it fell due — the timer first when both were queued
-// at once, so a page whose every message posts another still has its
-// timers run. `what` names the one tried. True when one ran.
+// A page's queued task (MODERN_WEB.md § P2b): the oldest on its message
+// queue (a posted message, or a task of the binding's own such as a
+// FileReader's read) or its next due timer, whichever was queued first —
+// a message when it was posted, a timer when it fell due — the timer first
+// when both were queued at once, so a page whose every message posts
+// another still has its timers run. `what` names the one tried, by the
+// source of the task that ran. True when one ran.
 static bool queued_task(yonder_scripts_t *host, const char **what, os64_js_outcome_t *out)
 {
     uint64_t now = yonder_now_ms(), timer = yonder_scripts_timer_next(host);
     uint64_t message = yonder_scripts_message_next(host);
     if (message <= now && (timer > now || message < timer)) {
         *what = "message";
-        if (yonder_scripts_message_fire(host, out))
+        if (yonder_scripts_message_fire(host, out)) {
+            // Named after it ran: the queue may drop a message nobody
+            // hears and run what follows it.
+            *what = yonder_scripts_message_kind(host);
             return true;
+        }
     }
     *what = "timer";
     return yonder_scripts_timer_fire(host, now, out);
@@ -14982,7 +15095,7 @@ static bool stream_turn(void)
                 say_laid_out(g.laid_ms);    // the page's own line again, not the fetch's
             else
                 status_rest("");
-            download_ask(offer.url, referrer, offer.disposition);
+            download_ask(offer.url, referrer, offer.disposition, NULL);
         } else {
             status_rest(trim(line));
         }
@@ -17058,6 +17171,10 @@ typedef struct {
     DownloadState state;
     uint32_t serial;            // which download, for a verb picked from its row
     char *url, *referrer;       // os64_malloc'd
+    // A blob: address's entry (BLOB_URLS.md), held while the row waits:
+    // its job takes it (downloads_feed), and a row failed or cancelled
+    // first lets it go, so a finished row holds no bytes.
+    os64_dom_blob_t *blob;
     char path[OS64_PATH_MAX];
     bool replace;               // the dialog's consent to replace a file of that name
     os64_work_id_t id;
@@ -17108,14 +17225,19 @@ static struct {
     char *url, *referrer;       // os64_malloc'd
     char dir[OS64_PATH_MAX];
     char name[YONDER_DOWNLOAD_NAME_MAX];
+    // A blob: address's entry (BLOB_URLS.md), held while the dialog is
+    // asked and handed to the download it says yes to.
+    os64_dom_blob_t *blob;
 } s_ask;
 static os64_ui_file_dialog_t s_save;
 static bool s_save_cleanup;     // a failed open left a window to close
 
-static bool downloadable(const char *url)
+// An address a download can fetch, or a blob: address whose entry was
+// taken (`blob`), which it writes from where it is.
+static bool downloadable(const char *url, const os64_dom_blob_t *blob)
 {
     return (os64_strlen(url) > 7 && os64_memcmp(url, "http://", 7) == 0) ||
-           (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0);
+           (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) || blob != NULL;
 }
 
 static bool download_taken(void *ctx, const char *name)
@@ -17130,7 +17252,9 @@ static bool download_taken(void *ctx, const char *name)
 // ("" for none), named from `disposition` (a Content-Disposition line, NULL
 // for none) or the address. A question already up is brought forward
 // instead: one dialog at a time.
-static void download_ask(const char *url, const char *referrer, const char *disposition)
+// `blob` is a blob: address's entry, borrowed: the question holds its own.
+static void download_ask(const char *url, const char *referrer, const char *disposition,
+                         os64_dom_blob_t *blob)
 {
     if (s_ask.url != NULL) {
         if (s_save.window > 0) {
@@ -17140,8 +17264,8 @@ static void download_ask(const char *url, const char *referrer, const char *disp
         }
         return;
     }
-    if (!downloadable(url)) {
-        status_rest("Only an http or https address can be saved.");
+    if (!downloadable(url, blob)) {
+        status_rest("Only an http or https address, or a blob: one its page made, can be saved.");
         return;
     }
     const char *said = yonder_settings_saved_downloads(s_ask.dir, sizeof(s_ask.dir));
@@ -17164,7 +17288,30 @@ static void download_ask(const char *url, const char *referrer, const char *disp
         os64_free(s_ask.referrer);
         s_ask.url = s_ask.referrer = NULL;
         status_rest("Out of memory; nothing was saved.");
+        return;
     }
+    s_ask.blob = os64_dom_blob_hold(blob);
+}
+
+// Whether a Save of `url` from the page on screen could start: an address
+// a download fetches, or a blob: one the page's store names now.
+static bool page_downloadable(const char *url)
+{
+    if (downloadable(url, NULL))
+        return true;
+    os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(g.page.scripts), url);
+    os64_dom_blob_release(blob);
+    return blob != NULL;
+}
+
+// A Save asked of the page on screen: a blob: address's entry is taken
+// from its store now, which is the person's moment, as it is the
+// standard's for a link they click.
+static void download_ask_page(const char *url, const char *disposition)
+{
+    os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(g.page.scripts), url);
+    download_ask(url, g.page.way.url, disposition, blob);
+    os64_dom_blob_release(blob);
 }
 
 static int32_t downloads_running(void)
@@ -17188,6 +17335,8 @@ static void download_failed(Download *d, const char *why)
 {
     d->state = DL_FAILED;
     os64_strcopy(d->why, sizeof(d->why), why);
+    os64_dom_blob_release(d->blob);
+    d->blob = NULL;
     s_download_failed_unseen = true;
 }
 
@@ -17210,9 +17359,11 @@ static void downloads_feed(void)
         job->window = g.win;
         job->bell = BELL_DOWNLOAD;
         job->replace = d->replace;
+        job->blob = d->blob;
+        d->blob = NULL;
         if (os64_strcopy(job->url, sizeof(job->url), d->url) >= sizeof(job->url) ||
             os64_strcopy(job->path, sizeof(job->path), d->path) >= sizeof(job->path)) {
-            os64_free(job);
+            yonder_download_release(job, NULL);
             download_failed(d, "its address or its name is too long");
             continue;
         }
@@ -17226,7 +17377,7 @@ static void downloads_feed(void)
         os64_work_t work = {yonder_download_run, yonder_download_release, job, YONDER_DOWNLOAD_RESERVE};
         d->id = os64_work_submit(g.pool, &work);
         if (d->id == 0) {
-            os64_free(job);
+            yonder_download_release(job, NULL);
             download_failed(d, "the workers would not take it");
             continue;
         }
@@ -17248,12 +17399,14 @@ static void download_forget(int32_t i)
 {
     os64_free(s_downloads[i].url);
     os64_free(s_downloads[i].referrer);
+    os64_dom_blob_release(s_downloads[i].blob);
     os64_memmove(&s_downloads[i], &s_downloads[i + 1], (size_t)(s_ndownloads - i - 1) * sizeof(s_downloads[0]));
     s_ndownloads--;
 }
 
-// A download the dialog said yes to: `url` and `referrer` are taken.
-static void download_start(char *url, char *referrer, const char *path, bool replace)
+// A download the dialog said yes to: `url`, `referrer` and the blob:
+// address's entry `blob` (NULL for none) are taken.
+static void download_start(char *url, char *referrer, const char *path, bool replace, os64_dom_blob_t *blob)
 {
     if (s_ndownloads == DOWNLOADS_MAX) {
         for (int32_t i = 0; i < s_ndownloads; i++)
@@ -17265,6 +17418,7 @@ static void download_start(char *url, char *referrer, const char *path, bool rep
     if (s_ndownloads == DOWNLOADS_MAX) {
         os64_free(url);
         os64_free(referrer);
+        os64_dom_blob_release(blob);
         status_rest("Too many downloads at once; this one was not started.");
         return;
     }
@@ -17274,6 +17428,7 @@ static void download_start(char *url, char *referrer, const char *path, bool rep
     d->serial = ++s_download_serial;
     d->url = url;
     d->referrer = referrer;
+    d->blob = blob;
     d->replace = replace;
     if (os64_strcopy(d->path, sizeof(d->path), path) >= sizeof(d->path))
         download_failed(d, "its name is too long");
@@ -17315,12 +17470,15 @@ static void downloads_turn(void)
     // next click on the window would go to giving it them.
     (void)os64_gui_window_focus(g.win);
     char *url = s_ask.url, *referrer = s_ask.referrer;
+    os64_dom_blob_t *blob = s_ask.blob;
     s_ask.url = s_ask.referrer = NULL;
+    s_ask.blob = NULL;
     if (accepted && url != NULL) {
-        download_start(url, referrer, path, replace);
+        download_start(url, referrer, path, replace, blob);
     } else {
         os64_free(url);
         os64_free(referrer);
+        os64_dom_blob_release(blob);
     }
 }
 
@@ -17357,6 +17515,8 @@ static void download_cancel(Download *d)
     }
     if (d->state == DL_RUNNING || d->state == DL_WAITING)
         d->state = DL_CANCELLED;
+    os64_dom_blob_release(d->blob);     // a waiting row's: never given to a job
+    d->blob = NULL;
     downloads_feed();
 }
 
@@ -17688,6 +17848,8 @@ static void downloads_drop(void)
     os64_free(s_ask.url);
     os64_free(s_ask.referrer);
     s_ask.url = s_ask.referrer = NULL;
+    os64_dom_blob_release(s_ask.blob);
+    s_ask.blob = NULL;
     while (s_ndownloads > 0)
         download_forget(s_ndownloads - 1);
 }
@@ -17766,10 +17928,10 @@ static void context_query(void *app, const os64_ui_action_context_t *ctx, uint32
     const Download *d = download_chosen();
     switch (id) {
     case ACT_OPEN_LINK: out->enabled = context_openable(g.context_link); break;
-    case ACT_SAVE_LINK: out->enabled = downloadable(g.context_link); break;
+    case ACT_SAVE_LINK: out->enabled = page_downloadable(g.context_link); break;
     case ACT_COPY_LINK: out->enabled = g.context_link[0] != '\0'; break;
     case ACT_OPEN_PICTURE: out->enabled = context_openable(g.context_picture); break;
-    case ACT_SAVE_PICTURE: out->enabled = downloadable(g.context_picture); break;
+    case ACT_SAVE_PICTURE: out->enabled = page_downloadable(g.context_picture); break;
     case ACT_COPY_PICTURE: out->enabled = g.context_picture[0] != '\0'; break;
     case ACT_DOWNLOAD_CANCEL: out->enabled = d != NULL && (d->state == DL_WAITING || d->state == DL_RUNNING); break;
     case ACT_DOWNLOAD_SHOW: out->enabled = d != NULL && d->state == DL_DONE; break;
@@ -17817,10 +17979,10 @@ static os64_ui_action_result_t context_invoke(void *app, const os64_ui_action_co
         return (os64_ui_action_result_t){OS64_UI_REFUSED, 0};
     switch (id) {
     case ACT_OPEN_LINK: context_open(g.context_link); break;
-    case ACT_SAVE_LINK: download_ask(g.context_link, g.page.way.url, NULL); break;
+    case ACT_SAVE_LINK: download_ask_page(g.context_link, NULL); break;
     case ACT_COPY_LINK: context_copy(g.context_link, "Link address copied."); break;
     case ACT_OPEN_PICTURE: context_open(g.context_picture); break;
-    case ACT_SAVE_PICTURE: download_ask(g.context_picture, g.page.way.url, NULL); break;
+    case ACT_SAVE_PICTURE: download_ask_page(g.context_picture, NULL); break;
     case ACT_COPY_PICTURE: context_copy(g.context_picture, "Picture address copied."); break;
     case ACT_DOWNLOAD_CANCEL: download_cancel(download_chosen()); break;
     case ACT_DOWNLOAD_SHOW: download_show(download_chosen()); break;

@@ -1,6 +1,7 @@
 // sheet.c — stylesheet response acquisition and parsing on a worker.
 
 #include "sheet.h"
+#include "dom/dom.h"
 #include "fetch_job.h"
 #include "os64/mem.h"
 #include "os64/slurp.h"
@@ -61,6 +62,7 @@ int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *ctx), void *ctx, voi
     // The nested request borrows URL and policy from the worker job; free its
     // structure directly, not with the owning script-fetch release function.
     fetch->url = j->url;
+    fetch->blob = j->blob;
     fetch->agent = j->agent;
     fetch->identity = j->hooks.identity;
     fetch->request = j->request;
@@ -122,7 +124,9 @@ void yonder_sheet_release(void *job, void *product)
         os64_free(s);
     }
     yonder_sheet_job_t *j = job;
-    if (j != NULL)
+    if (j != NULL) {
         os64_free(j->input);
+        os64_dom_blob_release(j->blob);
+    }
     os64_free(j);
 }

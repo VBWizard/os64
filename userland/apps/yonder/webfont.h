@@ -27,6 +27,9 @@ typedef struct {
     const char *agent;              // the browser's, read-only for the run
     char url[OS64_FETCH_URL_MAX];
     way_hooks_t hooks;              // cookies, the Referer, who asks, the cache: as a picture's
+    // A blob: address's entry (BLOB_URLS.md), held: the face is read from
+    // its bytes in place, and yonder_webfont_release lets it go.
+    struct os64_dom_blob *blob;
 } yonder_webfont_job_t;
 
 // The file as a plain SFNT, or why there is none. `container` is what the

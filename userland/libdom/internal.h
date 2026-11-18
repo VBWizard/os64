@@ -368,6 +368,7 @@ typedef struct {
     int32_t delta;
     bool user_activated;
     char url[OS64_DOM_URL_MAX];
+    os64_dom_blob_t *blob;          /* os64_dom_navigation_t.blob, held */
 } DNavigation;
 /* Native mouse state is held by the document, not by synthetic Event objects. */
 typedef struct {
@@ -559,8 +560,8 @@ struct os64_dom {
     DActiveEvent *current_event;
     /* The classes of plain event targets (d_event_target), and each one's
      * resolver, NULL for a class whose opaque is its entry. */
-    JSClassID target_classes[12];
-    int (*target_resolvers[12])(os64_dom_t *, JSContext *, JSValueConst, bool, DValue **);
+    JSClassID target_classes[16];
+    int (*target_resolvers[16])(os64_dom_t *, JSContext *, JSValueConst, bool, DValue **);
     unsigned target_class_count;
     /* EventTarget.prototype, which holds the listener methods every target
      * inherits, and Window.prototype, between the global and it (event.c,
@@ -758,6 +759,7 @@ struct os64_dom {
     DValue *clone_held[D_CLONE_HELD];
     bool clone_classes;
     DMessage *messages, *messages_last;
+    const char *message_ran;    /* the source of the task the last fire ran (os64_dom_message_kind) */
     size_t messages_held;
     DValue *message_prototype;
     DAnimation *animations, *animation_last;
@@ -1324,6 +1326,9 @@ int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
  * and `resolution` answer (view.c). */
 bool d_screen_media(os64_dom_t *dom, double *width, double *height, double *ratio);
 int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* `length` bytes as base64 (RFC 4648's alphabet, `=` padded) into `out`,
+ * which holds 4 for each 3 bytes begun; answers how many it wrote, no NUL. */
+size_t d_base64_write(const uint8_t *in, size_t length, char *out);
 int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* P1-W, window's low-hanging fruit (WINDOW_DOCUMENT.md § P1-W): the
  * window's members as a browsing context (browsing.c), its BarProps and
@@ -1517,6 +1522,19 @@ int d_resizable_buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst valu
  * The one source getRandomValues, randomUUID and crypto.subtle's keys
  * draw from. */
 bool d_crypto_entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length);
+/* A version 4 UUID's 36 characters and its NUL into `out`, from
+ * d_crypto_entropy (false with its exception pending). */
+bool d_uuid_text(os64_dom_t *dom, JSContext *ctx, char out[37]);
+/* URL.createObjectURL and URL.revokeObjectURL (blob_url.c, BLOB_URLS.md),
+ * installed on URL by url.c with these magics; and the take libdom makes
+ * where the standard parses a URL it was given (fetch(), xhr.open(), a
+ * followed link): the page's entry for `url`, a reference the caller
+ * releases, or NULL for an address that names none or a binding with no
+ * store. */
+enum { D_BLOB_URL_CREATE, D_BLOB_URL_REVOKE };
+JSValue d_blob_url_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                          JSValue *data);
+os64_dom_blob_t *d_blob_url_take(os64_dom_t *dom, const char *url);
 /* WebIDL's shape for an interface's members, in place on its prototype
  * (window.c): each own operation enumerable, as d_method makes none, and
  * each attribute's functions named "get x" and "set x", as d_accessor makes
@@ -1607,6 +1625,8 @@ int d_abort_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_blob_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_fetch_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_xhr_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* FileReader (file_reader.c; BLOB_URLS.md decision 10). */
+int d_file_reader_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* ProgressEvent (event.c): the interface, and one made for a dispatch. */
 int d_progress_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 JSValue d_progress_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool computable, double loaded,
@@ -1841,6 +1861,9 @@ JSValue d_promise_settled(JSContext *ctx, JSValue value);
  * names nothing this browser decodes; a BOM of the encoding taken off, an
  * invalid sequence U+FFFD. Engine memory. d_utf8_decode is UTF-8 decode. */
 JSValue d_text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, size_t length);
+/* Whether `label` names an encoding d_text_decode decodes (else it decodes
+ * UTF-8). */
+bool d_text_decodes(const char *label);
 JSValue d_utf8_decode(JSContext *ctx, const uint8_t *bytes, size_t length);
 /* "UTF-8 decode without BOM": a leading U+FEFF is text, not a mark (what
  * the urlencoded parser decodes names and values with). */
@@ -2053,6 +2076,14 @@ int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
  * callbacks), and what os64_dom_free frees (the idle entries). */
 void d_message_drain(os64_dom_t *dom);
 void d_message_cancel(os64_dom_t *dom);
+/* A task of the binding's own on the posted-message queue, its source
+ * `kind` (a string that outlives it) for the host's record: `run` is
+ * called as the queue reaches it, between tasks, with `held` (held until
+ * then) and `token`, and opens its own task. A queue cleared at departure
+ * drops it unrun. 0, or -1 with a QuotaExceededError pending. */
+typedef void (*DMessageTask)(os64_dom_t *dom, JSValueConst held, uint32_t token, os64_js_outcome_t *outcome);
+int d_message_task(os64_dom_t *dom, JSContext *ctx, const char *kind, DMessageTask run, JSValueConst held,
+                   uint32_t token);
 void d_idle_drain(os64_dom_t *dom);
 void d_idle_free(os64_dom_t *dom);
 /* MessageEvent (event.c): the interface, and one made for a dispatch:

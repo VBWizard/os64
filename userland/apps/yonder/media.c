@@ -142,6 +142,9 @@ struct yonder_media {
     uint32_t voice_generation;
     // The decoder's own.
     char *url;
+    // A blob: address's entry (BLOB_URLS.md), held for the session: each
+    // loader job holds it too, and answers from it.
+    struct os64_dom_blob *blob;
     char *page_url;
     const char *agent;              // borrowed (yonder_media_request_t)
     const way_identity_t *identity;
@@ -676,6 +679,7 @@ static bool loader_start(yonder_media_t *m, uint64_t from)
     job->identity = m->identity;
     job->default_accept = "*/*";
     job->url = copy_text(m->url);
+    job->blob = os64_dom_blob_hold(m->blob);
     job->headers = os64_calloc(1, 48);
     if (job->headers != NULL && from > 0) {
         os64_snprintf(job->headers, 48, "Range: bytes=%llu-\r\n", (unsigned long long)from);
@@ -1646,6 +1650,7 @@ static void session_free(yonder_media_t *m)
     os64_free(m->storage);
     os64_free(m->bytes);
     os64_free(m->url);
+    os64_dom_blob_release(m->blob);
     os64_free(m->page_url);
     os64_free(m);
 }
@@ -1667,6 +1672,7 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     m->facts.duration = NAN;
     m->bell = (os64_bell_t)OS64_BELL_NONE;
     m->url = copy_text(r->url);
+    m->blob = os64_dom_blob_hold(r->blob);
     m->page_url = copy_text(r->page_url != NULL ? r->page_url : "about:blank");
     m->storage = os64_malloc(sizeof(int16_t) * 2 * QUEUE_FRAMES);
     if (m->url == NULL || m->page_url == NULL || m->storage == NULL || os64_bell_make(&m->bell) != 0) {

@@ -222,6 +222,13 @@ typedef struct {
     int64_t last_modified;
     bool (*focus)(void *opaque, const os64_html_node_t **focused);
     void *host_opaque;
+    /* The page's blob URL store (BLOB_URLS.md), the host's, living as long
+     * as the binding may name, take or revoke through it: while its scripts
+     * run. A binding kept past that (for a tree that still stands) may
+     * outlive the store, as it only releases the entries its objects hold,
+     * and an entry outlives its store. NULL: URL.createObjectURL refuses,
+     * as a page with no store has nowhere to name a Blob. */
+    struct os64_dom_blob_store *blobs;
 } os64_dom_options_t;
 
 static inline os64_dom_options_t os64_dom_default_options(void)
@@ -290,13 +297,21 @@ typedef enum {
 } os64_dom_navigation_kind_t;
 
 /* The last script navigation request or native activation. Nodes arrive HELD: the taker
- * releases them with os64_html_release when it is done with them. */
+ * releases them with os64_html_release when it is done with them. `blob`
+ * is the entry a blob: address named when the ask was made — the URL
+ * assigned, or the followed link's href — taken there, inside the call,
+ * as the standard parses it (BLOB_URLS.md § 1.3), so a download clicked
+ * and revoked on the next line still has its bytes; it arrives held too,
+ * released with os64_dom_blob_release, and is NULL for any other ask.
+ * `url` is the address assigned, or for a followed link the blob: address
+ * its entry was taken for (empty when no entry was). */
 typedef struct {
     os64_dom_navigation_kind_t kind;
     const os64_html_node_t *node, *submitter;
     int32_t delta;
     bool user_activated; /* the default of a trusted native click, not a script request */
     char url[OS64_DOM_URL_MAX];
+    struct os64_dom_blob *blob;
 } os64_dom_navigation_t;
 
 typedef enum {
@@ -1142,19 +1157,23 @@ size_t os64_dom_adopted(const os64_dom_t *dom, const os64_html_node_t *root, os6
 uint64_t os64_dom_custom_visits(const os64_dom_t *dom);
 
 /* POSTED MESSAGES (HTML § 9.3.3; MODERN_WEB.md § P2b): what the page's
- * window.postMessage queued, one task each, oldest first. next answers
- * when the oldest was posted on the host's clock (options.now_ms), so a
- * host can run it in its turn among the timers by time, or UINT64_MAX with
- * none. fire runs AT MOST ONE as one task, a `message` (or `messageerror`)
- * at window, and answers whether it ran one (outcome filled). A message
+ * window.postMessage queued, one task each, oldest first, and the
+ * binding's own tasks that ride the same queue (a FileReader's read,
+ * BLOB_URLS.md decision 10). next answers when the oldest was queued on
+ * the host's clock (options.now_ms), so a host can run it in its turn
+ * among the timers by time, or UINT64_MAX with none. fire runs AT MOST ONE
+ * as one task, a `message` (or `messageerror`) at window or the binding's
+ * own task, and answers whether it ran one (outcome filled). A message
  * whose targetOrigin the document does not have, or that nothing could
  * hear, is dropped without a task, and the next is tried, unless it was
  * posted after the page's next timer fell due (a timer queued first, whose
  * task may add a listener for it): then fire answers false and leaves it.
- * A message a message's task posts is queued behind it. Owner thread,
- * between tasks. */
+ * A message a message's task posts is queued behind it. kind names the
+ * source of the task the last fire ran, for the host's record ("message",
+ * "file reading"), NULL before any. Owner thread, between tasks. */
 uint64_t os64_dom_message_next(const os64_dom_t *dom);
 bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
+const char *os64_dom_message_kind(const os64_dom_t *dom);
 
 /* Animation callbacks: next is a monotonic millisecond deadline (UINT64_MAX
  * when empty). fire runs one due snapshot in request order, with one shared
@@ -1522,6 +1541,47 @@ os64_js_status_t os64_dom_import_map(os64_dom_t *dom, const char *name, const ch
 bool os64_dom_resolve(const os64_html_document_t *document, const char *document_url,
                       const char *reference, char *out, size_t cap);
 
+/* BLOB URLS (BLOB_URLS.md): a page's store of the Blobs it named with
+ * URL.createObjectURL, from which the host's doors answer a request for a
+ * `blob:` address. The host makes one store per page and hands it to the
+ * binding in its options; the binding names and revokes entries in it,
+ * and the host takes them. An ENTRY is the Blob's bytes and type, copied
+ * out of the engine when it was named and never changed after, so any
+ * thread may read them in place while it holds a reference. References
+ * are counted with atomics: a take (owner thread, under the store's lock)
+ * or a hold adds one, a release drops one on any thread, and the last
+ * release frees the entry. A revocation, or the store's free, drops the
+ * store's own reference: what a request already holds outlives both.
+ *
+ * os64_dom_blob_store_new: `max` is the bytes the store may hold named at
+ * once, each entry counted whole (its URL and type beside the Blob's
+ * bytes), 0 for OS64_DOM_BLOB_STORE_MAX; NULL without memory.
+ * os64_dom_blob_url_take: the entry `url` names in this store (its
+ * fragment ignored), a reference taken; NULL when it names none (never
+ * made, revoked, another page's, not a blob: address). The standard takes
+ * it where it parses the URL; BLOB_URLS.md § 1.3 says where each door
+ * does. os64_dom_blob_store_usage: the bytes (counted as the bound counts
+ * them) and entries named now, and
+ * how many times createObjectURL was refused because naming the Blob
+ * would have taken the store past its bound (the page's record says so:
+ * other browsers do not throw there, so a page with no catch stops
+ * without a word of its own). */
+#define OS64_DOM_BLOB_STORE_MAX ((size_t)256 << 20)
+typedef struct os64_dom_blob_store os64_dom_blob_store_t;
+typedef struct os64_dom_blob os64_dom_blob_t;
+os64_dom_blob_store_t *os64_dom_blob_store_new(size_t max);
+void os64_dom_blob_store_free(os64_dom_blob_store_t *store);
+os64_dom_blob_t *os64_dom_blob_url_take(os64_dom_blob_store_t *store, const char *url);
+os64_dom_blob_t *os64_dom_blob_hold(os64_dom_blob_t *blob);
+void os64_dom_blob_release(os64_dom_blob_t *blob);
+const uint8_t *os64_dom_blob_bytes(const os64_dom_blob_t *blob);
+size_t os64_dom_blob_length(const os64_dom_blob_t *blob);
+const char *os64_dom_blob_type(const os64_dom_blob_t *blob);
+typedef struct {
+    size_t bytes, entries, refused;
+} os64_dom_blob_usage_t;
+os64_dom_blob_usage_t os64_dom_blob_store_usage(os64_dom_blob_store_t *store);
+
 /* A SCRIPT'S REQUESTS (MODERN_WEB.md § Slice 2): fetch() and
  * XMLHttpRequest build a request; the HOST runs it, and every judgement
  * the Fetch standard makes of it (the origin rules, CORS, the cookies, the
@@ -1552,6 +1612,11 @@ typedef struct {
     // no-store, reload, no-cache, force-cache, only-if-cached — which is
     // way_cache_mode_t's order; zero, default, for a request that names none.
     uint8_t cache;
+    // A blob: URL's entry, taken where the standard parses the URL (the
+    // Request constructor, fetch(), xhr.open()), borrowed for the call: a
+    // host that keeps it holds it (os64_dom_blob_hold). NULL for any other
+    // address, and for a blob: URL that named nothing then.
+    os64_dom_blob_t *blob;
 } os64_dom_request_t;
 /* The answer, borrowed for the call: `ok` false is a network error, which
  * carries nothing else (Fetch: a network error tells the page nothing; the

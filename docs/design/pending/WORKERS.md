@@ -118,7 +118,8 @@ hosts, read 11/07).*
    (`new Worker(URL.createObjectURL(new Blob([code])))`), and both
    challenge pages this doc is for want them (`worker-src blob:` in the
    CDN challenge's CSP; es-module-shims' takeover fetches through them,
-   importmap.c's comment). W0 builds the store: `blob:<origin>/<uuid>`,
+   importmap.c's comment). BLOB_URLS.md is W0's design, with FileReader
+   beside it. W0 builds the store: `blob:<origin>/<uuid>`,
    one store per page shared by its window and its workers under a lock,
    entries holding the bytes outside any engine, revoked by the verb or
    at the page's departure, fetched by yonder's own door before the pool
@@ -185,8 +186,9 @@ hosts, read 11/07).*
   pieces, end), whose writer runs on a pool worker and whose reader is
   the window, woken by the pipe's `ring` callback; `BELL_BODY` is that
   ring today.
-- **Blob URLs.** None: `createObjectURL` has no hit in libdom; url.c's
-  `d_origin` already knows a `blob:` URL's origin is its inner URL's.
+- **Blob URLs.** W0, built as BLOB_URLS.md: the page's store (libdom
+  `blob_url.c`, owned by yonder's script host), whose lock is what lets a
+  worker name entries in it beside the window.
 - **Errors.** event.c carries `ErrorEvent` (its `error`, `message`,
   `filename`, `lineno`, `colno`); the window's `error` event and the
   record's `FAILED script` lines come from scripts.c's `fail_item` and

@@ -93,11 +93,33 @@ static os64_url_result_t parse_address(const char *text, os64_url_t *out)
 bool os64_page_url_absolute(const char *base, const char *reference, char *out, size_t cap)
 {
     os64_url_t b, url;
-    char absolute[OS64_URL_REF_MAX];
-    if (base == NULL || reference == NULL || reference[0] == '\0' ||
-        parse_address(base, &b) != OS64_URL_OK ||
-        !os64_url_absolute(&b, reference, absolute, sizeof(absolute)) ||
-        parse_address(absolute, &url) != OS64_URL_OK)
+    char absolute[OS64_URL_REF_MAX], scheme[OS64_URL_SCHEME_MAX];
+    if (base == NULL || reference == NULL || reference[0] == '\0')
+        return false;
+    if (parse_address(base, &b) == OS64_URL_OK) {
+        if (!os64_url_absolute(&b, reference, absolute, sizeof(absolute)))
+            return false;
+    } else if (os64_url_scheme_of(reference, scheme, sizeof(scheme)) && os64_strlen(reference) < sizeof(absolute)) {
+        // A base the grammar cannot take apart (a sheet's own blob:
+        // address) resolves nothing relative, but an absolute reference
+        // needs no base.
+        os64_memcpy(absolute, reference, os64_strlen(reference) + 1);
+    } else {
+        return false;
+    }
+    os64_url_result_t rc = parse_address(absolute, &url);
+    // An opaque address (`blob:`, `data:`, `mailto:`) is absolute as it
+    // stands and the grammar cannot take it apart: spelled as p_canonical
+    // spells one, its scheme lower case and the rest as written.
+    if (rc == OS64_URL_NOT_A_URL && os64_url_scheme_of(absolute, scheme, sizeof(scheme))) {
+        size_t n = os64_strlen(absolute);
+        if (n >= cap)
+            return false;
+        os64_memcpy(out, absolute, n + 1);
+        os64_memcpy(out, scheme, os64_strlen(scheme));
+        return true;
+    }
+    if (rc != OS64_URL_OK)
         return false;
     if (url.port != 0 && url.port == p_default_port(url.scheme))
         url.port = 0;

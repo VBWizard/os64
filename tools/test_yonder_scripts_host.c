@@ -538,20 +538,22 @@ int64_t yonder_webfont_run(void *job, bool (*cancelled)(void *), void *ctx, void
     (void)job; (void)cancelled; (void)ctx; (void)out;
     check(false,"unexpected worker execution"); return -1;
 }
-/* As webfont.c releases a font job and its SFNT. */
+/* As webfont.c releases a font job, its blob: entry and its SFNT. */
 void yonder_webfont_release(void *job, void *product) {
     yonder_webfont_t *got=product;
     if(got) { os64_free(got->sfnt); os64_free(got); }
+    if(job) os64_dom_blob_release(((yonder_webfont_job_t *)job)->blob);
     os64_free(job);
 }
 int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
     (void)job; (void)cancelled; (void)ctx; (void)out;
     check(false,"unexpected worker execution"); return -1;
 }
-/* As script_job.c releases a script job. */
+/* As script_job.c releases a script job and its blob: entry. */
 void yonder_script_release(void *job, void *product) {
     yonder_script_t *got=product;
     if(got) { os64_free(got->source); yonder_bytecode_free(got->bytecode); os64_free(got); }
+    if(job) os64_dom_blob_release(((yonder_script_job_t *)job)->blob);
     os64_free(job);
 }
 /* The worker's answer to the script job whose address ends with `tail`:
@@ -7748,22 +7750,22 @@ static void diag_picture_workerless_case(void) {
  * those still coming when the page is left are counted; a layout that
  * stopped partway is one standing failure however often it is written. */
 static void diag_picture_unasked_case(void) {
-    probe_page("<img src='blob:image/png;base64,iVBORw0KGgo='><img src='http://[bad'>"
+    probe_page("<img src='ftp://pictures.test/a.png'><img src='http://[bad'>"
         "<img src=file:///slow.png><img src='x:asset'>",true);
     g.page.diag=diag_new_claimed("http://u.test/",1);
     pictures_start(&g.page);        /* no workers: slow.png is refused too */
     char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(has(text,"MISSING picture-scheme blob (1)") && has(text,"FAILED picture: http://[bad: the address was refused (") &&
+    check(has(text,"MISSING picture-scheme ftp (1)") && has(text,"FAILED picture: http://[bad: the address was refused (") &&
           has(text,"MISSING picture-scheme x (1)") && has(text,"not asked for") && g.page.unasked==3,
         "diag: a picture refused before the table is on the record, by its scheme (one letter is one) or its refusal");
     /* Met with nothing out, the record is written then; met again (a
      * script's rebuild), it is the same picture and records nothing more. */
     char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
-    check(has(diag_file("/tmp/diag",name),"MISSING picture-scheme blob (1)"),
+    check(has(diag_file("/tmp/diag",name),"MISSING picture-scheme ftp (1)"),
         "diag: a refusal met with no picture out writes the record");
     pictures_start(&g.page);
     yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(g.page.unasked==3 && has(text,"MISSING picture-scheme blob (1)") &&
+    check(g.page.unasked==3 && has(text,"MISSING picture-scheme ftp (1)") &&
           has(text,"FAILED picture: http://[bad: the address was refused (the address it names is not one that resolves) (1)"),
         "diag: a refused picture met again is the same picture");
     /* Left with one still out: counted, not failed. */
@@ -7948,20 +7950,20 @@ static void diag_fact_short_case(void) {
 static void diag_css_unasked_case(void) {
     /* A page whose only picture is refused before the table: nothing will
      * ever come in to write the record, so meeting it writes it. */
-    probe_page("<img src='blob:image/png;base64,iVBORw0KGgo='>",true);
+    probe_page("<img src='ftp://pictures.test/a.png'>",true);
     g.page.diag=diag_new_claimed("http://only.test/",1);
     pictures_start(&g.page);
     char only[64]; yonder_diag_file_name(g.page.diag,only,sizeof(only));
-    check(g.page.npics==0 && has(diag_file("/tmp/diag",only),"MISSING picture-scheme blob (1)"),
+    check(g.page.npics==0 && has(diag_file("/tmp/diag",only),"MISSING picture-scheme ftp (1)"),
         "diag: a page whose only picture is refused writes the record when it meets it");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
-    probe_page("<style>p{background-image:url('blob:image/png;base64,AAAA')}</style><p>x</p>",true);
+    probe_page("<style>p{background-image:url('ftp://pictures.test/a.png')}</style><p>x</p>",true);
     g.page.diag=diag_new_claimed("http://c.test/",1);
     css_pictures(&g.page);
     css_pictures(&g.page);          /* every layout meets it again */
     char text[2048]; yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(has(text,"MISSING picture-scheme blob (1)") && g.page.unasked==1,
+    check(has(text,"MISSING picture-scheme ftp (1)") && g.page.unasked==1,
         "diag: a sheet's picture refused before the table is on the record, once");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
@@ -12285,6 +12287,146 @@ static bool style_worker_land(const char *tail, bool preload)
     return false;
 }
 
+/* A FileReader's read runs as a task of the page's message queue, named
+ * by its source, and its result reaches the page (BLOB_URLS.md decision
+ * 10). */
+static void file_reader_case(void)
+{
+    fake_fetch_reset();
+    loop_page("<p id=out>waiting</p><script>const r=new FileReader();"
+              "r.onload=()=>{document.getElementById('out').textContent=r.result;};"
+              "r.readAsText(new Blob(['read here']));</script>");
+    bool settled = loop_settle();
+    yonder_scripts_t *host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
+    check(settled && yonder_scripts_message_next(host) != UINT64_MAX, "file reader: its read is queued");
+    for (int i = 0; i < 4 && !probe_text_is("out", "read here"); i++) script_turn();
+    check(probe_text_is("out", "read here"), "file reader: the page's loop runs the read and the result arrives");
+    check(!strcmp(yonder_scripts_message_kind(host), "file reading"), "file reader: the task that ran is named");
+    loop_drop();
+}
+
+/* The one download job blob_download_case hands the pool. */
+static yonder_download_job_t *door_download;
+static os64_work_id_t door_submit(const os64_work_t *work) {
+    if(*(const uint32_t *)work->job!=YONDER_JOB_DOWNLOAD) return 0;
+    door_download=work->job;
+    return 991;
+}
+/* A download of a blob: entry: the row hands its entry to the job, and a
+ * finished row holds no bytes (the store frees with the page; the leak
+ * check at the end holds the job's release to letting it go). */
+static void blob_download_case(void)
+{
+    fake_fetch_reset();
+    loop_page("<p id=u></p><script>document.getElementById('u').textContent="
+              "URL.createObjectURL(new Blob(['abc'],{type:'text/plain'}))</script>");
+    bool settled = loop_settle();
+    yonder_scripts_t *host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
+    os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(host), probe_text_of("u"));
+    check(settled && blob != NULL, "blob download: the page named an entry");
+    os64_work_id_t (*was)(const os64_work_t *) = pool_submit_hook;
+    pool_submit_hook = door_submit;
+    door_download = NULL;
+    int32_t row = s_ndownloads;
+    download_start(copy_text(probe_text_of("u")), copy_text("http://fixture.test/p"), "/home/downloads/abc.txt",
+                   false, os64_dom_blob_hold(blob));
+    check(s_ndownloads == row + 1 && door_download != NULL && door_download->blob == blob &&
+          s_downloads[row].blob == NULL && s_downloads[row].state == DL_RUNNING,
+          "blob download: the waiting row hands its entry to the job it starts");
+    if (door_download != NULL) {
+        door_download->whole = true;
+        download_arrived(991, door_download);
+        yonder_download_release(door_download, NULL);
+    }
+    check(s_downloads[row].state == DL_DONE && s_downloads[row].blob == NULL,
+          "blob download: a finished row holds no entry");
+    while (s_ndownloads > row) download_forget(s_ndownloads - 1);
+    s_download_flashing = false;        // the finish's flash, which the list cases do not expect
+    s_download_flash_from = s_download_flash_seen = 0;
+    pool_submit_hook = was;
+    os64_dom_blob_release(blob);
+    loop_drop();
+}
+
+/* A blob: picture's worker with every allocation cut in turn: a picture
+ * it calls whole keeps either no reconstruction backing or one that holds
+ * the bytes, never an empty one claiming a length. */
+static void blob_picture_sweep(void)
+{
+    fake_fetch_reset();
+    loop_page("<p id=u></p><script>document.getElementById('u').textContent="
+              "URL.createObjectURL(new Blob(['RASTER'],{type:'image/png'}))</script>");
+    bool settled = loop_settle();
+    yonder_scripts_t *host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
+    os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(host), probe_text_of("u"));
+    check(settled && blob != NULL, "blob picture: the page named an entry");
+    size_t allocations = 0;
+    for (size_t cut = 0; blob != NULL && (cut == 0 || cut <= allocations); cut++) {
+        yonder_picture_job_t *job = os64_calloc(1, sizeof(*job));
+        job->kind = YONDER_JOB_PICTURE;
+        job->recoverable = true;
+        snprintf(job->url, sizeof(job->url), "%s", probe_text_of("u"));
+        job->blob = os64_dom_blob_hold(blob);
+        void *out = NULL;
+        size_t before = attempts;
+        fail_at = cut == 0 ? 0 : attempts + cut;
+        int64_t r = yonder_picture_run(job, picture_cancel, NULL, &out);
+        fail_at = 0;
+        if (cut == 0) {
+            allocations = attempts - before;
+            check(r == 1 && out != NULL && ((yonder_picture_t *)out)->encoded != NULL,
+                  "blob picture: whole, it keeps its bytes for reconstruction");
+        }
+        const yonder_picture_t *p = out;
+        check(r != 1 || (p != NULL && (p->encoded == NULL || p->encoded->bytes != NULL)),
+              "blob picture: a cut allocation leaves no empty backing behind a whole picture");
+        yonder_picture_release(job, out);
+    }
+    os64_dom_blob_release(blob);
+    loop_drop();
+}
+
+/* BLOB_URLS.md's later doors: a sheet and a background named by a blob:
+ * address, each taken from the page's store when it is sent for, and a
+ * preload of one left to its sheet. */
+static void blob_door_cases(void)
+{
+    fake_fetch_reset();
+    loop_page("<p id=out></p><div id=bg style='width:8px;height:8px'></div><script>"
+              "var u=URL.createObjectURL(new Blob(['#out{color:red}'],{type:'text/css'}));"
+              "var l=document.createElement('link');l.rel='stylesheet';"
+              "l.onload=function(){document.getElementById('out').textContent+='L'};"
+              "l.onerror=function(){document.getElementById('out').textContent+='E'};"
+              "l.href=u;document.head.appendChild(l);"
+              "var p=document.createElement('link');p.rel='preload';p.as='style';p.href=u;document.head.appendChild(p);"
+              "var g=URL.createObjectURL(new Blob(['not a picture'],{type:'image/png'}));"
+              "document.getElementById('bg').style.backgroundImage='url('+g+')';"
+              "document.getElementById('out').textContent='ok';</script>");
+    /* The fake pool keeps one job: the background's picture will take the
+     * trip's slot, so the trip is held here and released at the end. */
+    void *trip = pool_work.job;
+    bool settled = loop_settle() && script_rebuild();
+    yonder_sheet_job_t *sheet = nsheet_jobs == 1 ? sheet_jobs[0].job : NULL;
+    check(settled && sheet != NULL && !sheet->preload && sheet->blob != NULL && strncmp(sheet->url, "blob:", 5) == 0,
+          "blob doors: a blob: sheet is sent for with its entry, and its preload is not sent at all");
+    check(style_worker_land(sheet != NULL ? sheet->url + strlen(sheet->url) - 12 : "-", false),
+          "blob doors: the sheet is answered from its entry");
+    script_turn();
+    check(probe_text_is("out", "okL"), "blob doors: a blob: sheet's link hears load");
+    relayout(true);
+    const yonder_picture_job_t *pic = pool_work.job != NULL && *(const uint32_t *)pool_work.job == YONDER_JOB_PICTURE
+        ? pool_work.job : NULL;
+    check(pic != NULL && strncmp(pic->url, "blob:", 5) == 0 && pic->blob != NULL,
+          "blob doors: a background's url(blob:...) is a picture sent for with its entry");
+    if (pic != NULL) {
+        void *job = pool_work.job;
+        memset(&pool_work, 0, sizeof(pool_work));
+        reaped(pool_work_id, job, NULL);
+    }
+    if (trip != NULL && pool_work.job != trip) yonder_trip_release(trip, NULL);
+    loop_drop();
+}
+
 static void style_preload_cases(void)
 {
     const char *css = "#box { width: 160px; height: 90px }";
@@ -12641,6 +12783,10 @@ int main(void)
     browser_jobs_window_cases();
     sheet_worker_cases();
     style_preload_cases();
+    blob_door_cases();
+    blob_download_case();
+    blob_picture_sweep();
+    file_reader_case();
     style_preload_pages();
     style_preload_limits();
     if(getenv("YONDER_STYLES_ONLY")) {

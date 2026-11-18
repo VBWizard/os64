@@ -47,6 +47,9 @@ typedef struct {
     // The window keeps the page (keep_pages, diag.h): the product carries
     // what the sheet was parsed from.
     bool keep;
+    // A blob: address's entry (BLOB_URLS.md), held: the fetch answers from
+    // it, and yonder_sheet_release lets it go. NULL for any other address.
+    struct os64_dom_blob *blob;
 } yonder_sheet_job_t;
 
 typedef struct {

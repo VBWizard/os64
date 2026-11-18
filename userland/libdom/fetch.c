@@ -88,6 +88,10 @@ typedef struct {
     bool keepalive;
     int priority;
     JSValue signal;
+    /* A blob: URL's entry, taken as the URL was parsed (BLOB_URLS.md
+     * § 1.3), so a revocation after the Request was made does not reach
+     * it; NULL for any other address. Released with the Request. */
+    os64_dom_blob_t *blob;
 } DReq;
 
 typedef struct {
@@ -1394,6 +1398,7 @@ static void request_finalizer(JSRuntime *rt, JSValue value)
     js_free_rt(rt, q->integrity);
     JS_FreeValueRT(rt, q->headers);
     JS_FreeValueRT(rt, q->signal);
+    os64_dom_blob_release(q->blob);
     js_free_rt(rt, q);
 }
 
@@ -1677,6 +1682,8 @@ static int request_init(os64_dom_t *dom, JSContext *ctx, JSValueConst object, JS
     in = request_state(input);          /* reading the init ran page code */
     DReq *q = request_state(object);
     q->url = url;
+    /* A Request made from another carries its URL record, entry and all. */
+    q->blob = in != NULL ? os64_dom_blob_hold(in->blob) : d_blob_url_take(dom, url);
     int result = 0;
     /* The request's facts: the input's, or the defaults for a new one. */
     os64_strcopy(q->method, sizeof(q->method), in != NULL ? in->method : "GET");
@@ -1958,6 +1965,7 @@ static JSValue request_member(JSContext *ctx, JSValueConst self, int argc, JSVal
         *c = *q;
         c->body = (DBody){0};
         c->url = c->referrer = c->integrity = NULL;
+        c->blob = os64_dom_blob_hold(q->blob);
         c->headers = c->signal = JS_UNDEFINED;
         int result = body_clone(dom, ctx, &q->body, &c->body);
         c->url = result == 0 ? engine_dup(ctx, q->url, os64_strlen(q->url)) : NULL;
@@ -2647,7 +2655,7 @@ static void host_request(const DReq *q, const char *headers, size_t headers_leng
         .body = q->body.has ? (const void *)(q->body.bytes != NULL ? q->body.bytes : (const uint8_t *)"") : NULL,
         .body_length = q->body.has ? q->body.length : 0,
         .mode = q->mode, .credentials = q->credentials, .redirect = q->redirect, .policy = q->policy,
-        .preflight = false, .referrer = referrer, .cache = (uint8_t)q->cache,
+        .preflight = false, .referrer = referrer, .cache = (uint8_t)q->cache, .blob = q->blob,
     };
 }
 

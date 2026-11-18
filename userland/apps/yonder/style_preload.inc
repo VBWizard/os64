@@ -217,6 +217,11 @@ static void preloads_start(Page *p)
         if (!os64_page_base_in(doc, p->way.url, base, sizeof(base))) continue;
         char resolved[OS64_FETCH_URL_MAX];
         if (!os64_page_url_absolute(base, href->value, resolved, sizeof(resolved))) continue;
+        // A preload goes ahead of its sheet over the wire or the disk; a
+        // blob: sheet is taken from the page's store when it is sent for
+        // (sheet_fetch), which a preload would answer without.
+        if (os64_memcmp(resolved, "http://", 7) != 0 && os64_memcmp(resolved, "https://", 8) != 0 &&
+            os64_memcmp(resolved, "file://", 7) != 0) continue;
         StylePreload *entry = &map->entries[map->count];
         if (!style_request_read(node, &entry->request) || (entry->url = copy_text(resolved)) == NULL) {
             os64_free(entry->request.integrity);
