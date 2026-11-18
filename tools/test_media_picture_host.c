@@ -36,9 +36,19 @@
 //     eight, with each scaler kind, into a buffer of exactly as many rows
 //     of a pitch of the width, the width + 2 and the width + 10 pixels,
 //     followed by a guard: every pixel of every row is written, and nothing
-//     past the width or the buffer is. (ASan cannot see these writes, which
-//     FFmpeg's assembly makes; the guard and the row tails are checked by
-//     hand.)
+//     past the width or the buffer is. And an interlaced 854-wide clip with
+//     the width kept and the height changed by a row, where a field is
+//     unscaled though the frame is not. (ASan cannot see these writes,
+//     which FFmpeg's assembly makes; the guard and the row tails are
+//     checked by hand.)
+// 10  A RESYNC IN THE LAST GROUP of pictures, with H.264's delayed pictures
+//     still in the decoder: no picture comes after it, since the stream
+//     ends before another keyframe (os64_media_picture_resync flushes the
+//     decoder, which the end would otherwise drain).
+// 11  WHAT A SOUND-ONLY OPEN READS: no more of a 30-second MP4 than an
+//     open for both does (FFmpeg's probe would otherwise read the sound for
+//     five seconds waiting on the discarded picture; media.c holds its
+//     analysis to a tenth of a second when a picture is discarded).
 //  9  COVER ART is no picture: a sound with an attached picture opens for
 //     both with the picture ABSENT, is refused NO_PICTURE for the picture
 //     alone, and decodes the same sound, from the same zero, as the file
@@ -392,18 +402,17 @@ static void test_interlaced(const char *dir)
     printf("  7 interlaced: %ld pictures converted, %ld refused\n", converted, refused);
 }
 
-static void test_edge(const char *clip)
+static void test_edge(const char *clip, const char *what, const uint32_t (*sizes)[2], int count)
 {
-    static const uint32_t kSizes[][2] = { { 854, 480 }, { 853, 480 }, { 641, 361 }, { 1279, 719 }, { 640, 360 } };
     static const uint32_t kSlack[3] = { 0, 2, 10 };
     static const uint32_t kKinds[3] = { 0, OS64_MEDIA_SCALE_FAST, OS64_MEDIA_SCALE_EXACT };
     enum { GUARD = 64, BLANK = 0x11111111u };
     static uint32_t buffer[1289 * 719 + GUARD];
     long checked = 0;
-    for (int z = 0; z < 5; z++)
+    for (int z = 0; z < count; z++)
     for (int k = 0; k < 3; k++)
         for (int pi = 0; pi < 3; pi++) {
-            const uint32_t W = kSizes[z][0], H = kSizes[z][1];
+            const uint32_t W = sizes[z][0], H = sizes[z][1];
             Clip c;
             clip_open(&c, clip, OS64_MEDIA_WANT_PICTURE);
             os64_media_scaler_t *s;
@@ -435,8 +444,7 @@ static void test_edge(const char *clip)
             os64_media_scaler_destroy(s);
             clip_close(&c);
         }
-    printf("  8 the unscaled edge: %ld conversions, at the picture's own size and scaled, every pixel written and "
-           "none past\n", checked);
+    printf("  8 the unscaled edge, %s: %ld conversions, every pixel written and none past\n", what, checked);
 }
 
 static void test_cover(const char *dir)
@@ -466,6 +474,74 @@ static void test_cover(const char *dir)
     printf("  9 cover art: no picture, and the same sound as without it\n");
 }
 
+static void test_resync_at_end(const char *dir)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/av.mp4", dir);
+    Clip c;
+    clip_open(&c, path, OS64_MEDIA_WANT_PICTURE);
+    CHECK(c.result == 0, "resync at end: open %d", c.result);
+    if (c.result != 0) return;
+    // 3.5 s into the 4: the last keyframe is at 3.0 (a group of 30), so the
+    // decoder is part way through the last group, holding B pictures.
+    os64_media_seek(c.m, 3 * 48000 + 24000);
+    long before = 0, after = 0;
+    for (;;) {
+        os64_media_got_t got;
+        if (os64_media_next(c.m, NULL, 0, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
+        os64_media_picture_release(c.m, got.picture);
+        if (before < 0) after++;
+        else if (++before == 2) {
+            os64_media_picture_resync(c.m);
+            before = -1;
+        }
+    }
+    clip_close(&c);
+    CHECK(before == -1 && after == 0, "resync at end: %ld pictures after the resync", after);
+    printf(" 10 a resync in the last group: %ld pictures after it\n", after);
+}
+
+typedef struct {
+    int fd;
+    long bytes;
+} Counted;
+
+static int64_t counted_read(void *ctx, uint8_t *out, size_t cap)
+{
+    Counted *c = ctx;
+    ssize_t n = read(c->fd, out, cap);
+    if (n > 0) c->bytes += n;
+    return n;
+}
+
+static int64_t counted_seek(void *ctx, uint64_t at)
+{
+    return lseek(((Counted *)ctx)->fd, (off_t)at, SEEK_SET);
+}
+
+// Bytes a file's open reads, for `want`.
+static long open_reads(const char *path, uint32_t want)
+{
+    Counted c = { open(path, O_RDONLY), 0 };
+    os64_media_source_t src = { &c, counted_read, counted_seek, lseek(c.fd, 0, SEEK_END), false };
+    lseek(c.fd, 0, SEEK_SET);
+    os64_media_t *m;
+    int r = os64_media_open_for(&src, want, &m, NULL);
+    if (r == 0) os64_media_close(m);
+    close(c.fd);
+    return r == 0 ? c.bytes : -1;
+}
+
+static void test_open_reads(const char *dir)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/long.mp4", dir);
+    long sound = open_reads(path, OS64_MEDIA_WANT_SOUND);
+    long both = open_reads(path, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE);
+    CHECK(sound > 0 && both > 0 && sound <= both, "open reads: sound only %ld bytes, both %ld", sound, both);
+    printf(" 11 what an open reads: %ld bytes for the sound alone, %ld for both\n", sound, both);
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 3) {
@@ -477,8 +553,17 @@ int main(int argc, char **argv)
     test_info(argv[2]);
     test_skip_and_seek(argv[2]);
     test_interlaced(argv[2]);
-    test_edge(argv[1]);
+    static const uint32_t kProgressive[][2] = { { 854, 480 }, { 853, 480 }, { 641, 361 }, { 1279, 719 }, { 640, 360 } };
+    // Interlaced, the width kept and the height changed by a row: a field
+    // is then unscaled although the frame is not.
+    static const uint32_t kInterlaced[][2] = { { 854, 479 }, { 854, 481 }, { 854, 480 }, { 853, 479 } };
+    test_edge(argv[1], "progressive at its own size and scaled", kProgressive, 5);
+    char interlaced[512];
+    snprintf(interlaced, sizeof(interlaced), "%s/interlaced_854.mp4", argv[2]);
+    test_edge(interlaced, "interlaced, the height changed by a row", kInterlaced, 4);
     test_cover(argv[2]);
+    test_resync_at_end(argv[2]);
+    test_open_reads(argv[2]);
     if (s_failed) {
         printf("FAIL %d checks\n", s_failed);
         return 1;

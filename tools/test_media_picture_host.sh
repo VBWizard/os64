@@ -155,6 +155,12 @@ gen "${V[@]}" -map 0:v "${X264[@]}" "$work/upright.mp4"
 gen -display_rotation 90 -i "$work/upright.mp4" -c copy "$work/rotated_ccw90.mp4"
 gen "${V[@]}" -vf tinterlace=4 -map 0:v -c:v libx264 -preset ultrafast -flags +ildct+ilme -x264-params tff=1 \
     -pix_fmt yuv420p "$work/interlaced.mp4"
+# Thirty seconds, for what an open reads.
+gen -f lavfi -i testsrc=size=640x360:rate=30:duration=30 -f lavfi -i sine=frequency=440:sample_rate=48000:duration=30 \
+    -map 0:v -map 1:a "${X264[@]}" -b:v 2M -c:a aac -movflags +faststart "$work/long.mp4"
+# Interlaced at a width that is not a multiple of eight, for the edge.
+gen -f lavfi -i testsrc=size=854x480:rate=30:duration=1 -vf tinterlace=4 -c:v libx264 -preset ultrafast \
+    -flags +ildct+ilme -x264-params tff=1 -pix_fmt yuv420p "$work/interlaced_854.mp4"
 gen "${V[@]}" "${A[@]}" -map 0:v -map 1:a -c:v mpeg4 -c:a aac "$work/picture_mpeg4.mp4"
 # A sound with cover art (an attached picture), and the same sound without.
 gen -f lavfi -i testsrc=size=64x64:rate=1:duration=1 -frames:v 1 "$work/cover.png"

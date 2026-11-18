@@ -262,7 +262,8 @@ void os64_media_picture_release(os64_media_t *m, os64_media_picture_t *p);
 int os64_media_picture_skip(os64_media_t *m, int level);
 
 // Drops pictures, undecoded, until the next keyframe, which is the next
-// picture out; the sound goes on as before. For a decoder far behind.
+// picture out (none at all if the stream ends first); the sound goes on as
+// before. For a decoder far behind.
 // Both answer 0, or BAD_ARGS for a media that decodes no picture.
 int os64_media_picture_resync(os64_media_t *m);
 
@@ -277,7 +278,7 @@ typedef struct {
                                      // and those released since the last call on the decoding thread
     uint64_t pictures_run_in;        // dropped inside a seek's run-in, before its target
     uint64_t pictures_resync;        // dropped by a resync: packets left undecoded, pictures made and
-                                     // not given (not those inside the decoder, which the keyframe flushes)
+                                     // not given (not those inside the decoder, which the resync flushes)
     uint64_t pictures_before_zero;   // dropped: timed before the file's start
 } os64_media_counts_t;
 void os64_media_counts(const os64_media_t *m, os64_media_counts_t *out);

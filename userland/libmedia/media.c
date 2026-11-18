@@ -741,12 +741,20 @@ int os64_media_picture_resync(os64_media_t *m)
 {
     if (m == NULL || m->pcodec == NULL) return OS64_MEDIA_BAD_ARGS;
     drain_released(m);
-    // What is made and not given is from before the keyframe too.
+    // What is made and not given is from before the keyframe too, and so
+    // is what the decoder holds (H.264 delays pictures it has decoded): it
+    // is flushed now, or the end of the stream, arriving before another
+    // keyframe, would drain those pictures out after the resync.
     for (int i = 0; i < 2; i++) {
         if (m->ready[i] != NULL) m->counts.pictures_resync++;
         picture_free(m->ready[i]);
         m->ready[i] = NULL;
     }
+    if (m->seek_held != NULL) m->counts.pictures_resync++;
+    picture_free(m->seek_held);
+    m->seek_held = NULL;
+    m->seek_picture = -1;
+    avcodec_flush_buffers(m->pcodec);
     m->resync = true;
     return 0;
 }
@@ -843,14 +851,28 @@ static int open_decoder(os64_media_t *m, int s, const AVCodec *decoder, AVCodecC
 // none of its packets (its start is in the MP4's headers, so the zero does
 // not move); an unwanted sound only after, because a sound's start is
 // learnt from its first packets. Every other stream is discarded too.
+//
+// FFmpeg's probe asks every stream, discarded or not, for what only its
+// packets can tell (a picture's pixel format, its first timestamp), so a
+// discarded picture would keep it reading the sound until its analysis
+// limit, five seconds by default, inside s_lock and across the network for
+// a page's: about twice the bytes the probe read before the picture was
+// discarded. With a picture discarded the probe's analysis is held to a
+// tenth of a second, which reads what an undiscarded probe did and decodes
+// none of the picture (an MP4's sound is described by its header and its
+// decoder's open).
 static int streams_and_decoders_locked(os64_media_t *m, os64_media_info_t *info)
 {
     bool want_sound = m->want & OS64_MEDIA_WANT_SOUND, want_picture = m->want & OS64_MEDIA_WANT_PICTURE;
+    bool picture_discarded = false;
     for (unsigned i = 0; i < m->format->nb_streams; i++) {
         AVStream *st = m->format->streams[i];
-        if (st->codecpar->codec_type != AVMEDIA_TYPE_AUDIO && (st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO || !want_picture))
+        if (st->codecpar->codec_type != AVMEDIA_TYPE_AUDIO && (st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO || !want_picture)) {
             st->discard = AVDISCARD_ALL;
+            picture_discarded |= st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO;
+        }
     }
+    if (picture_discarded) m->format->max_analyze_duration = AV_TIME_BASE / 10;
     int r = avformat_find_stream_info(m->format, NULL);
     if (r < 0) return probe_error(r);
 

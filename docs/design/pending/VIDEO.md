@@ -101,7 +101,9 @@ timeline as sound. yonder, and any other player, see no FFmpeg type.
   table above measured.
 - **The header** (`os64/media.h` § THE PICTURE SIDE): `os64_media_open_for`
   with WANT_SOUND and/or WANT_PICTURE. An unwanted stream is discarded at
-  the demuxer, so a sound-only probe reads none of the picture's packets.
+  the demuxer, so a sound-only probe makes and decodes none of the
+  picture's packets (and its analysis is held short, or FFmpeg would read
+  the sound for seconds waiting on the discarded picture).
   The open succeeds with whatever wanted kind can be decoded, and the
   info says of each kind whether it is absent, playable or unplayable.
   It also gives the shown size (the pixel aspect applied), the coded size

@@ -35,15 +35,20 @@
 // group it leaves the row's last few pixels unwritten; with room, it
 // writes past the width, and on the last row past the end of the caller's
 // buffer. The accurate path (SWS_ACCURATE_RND) writes past the width too,
-// by fewer. So such a conversion is made into `bounce`, the scaler's own
-// buffer with room past the width and a row to spare, and the width of
-// each row is copied to the caller. A scaled conversion writes exactly
-// its width (tools/test_media_picture_host.sh checks both, against guard
-// words, which ASan cannot do for writes FFmpeg's assembly makes).
+// by fewer. And an interlaced picture is converted field by field
+// (libswscale/graph.c, get_field), so a field can be unscaled while the
+// frame is not: 854x480 to 854x479 has two fields of 854x240. So every
+// conversion that keeps the width, whatever its height, is made into
+// `bounce`, the scaler's own buffer with room past the width and a row to
+// spare, and the width of each row is copied to the caller. A conversion
+// that changes the width writes exactly its width
+// (tools/test_media_picture_host.sh checks both, interlaced included,
+// against guard words, which ASan cannot do for writes FFmpeg's assembly
+// makes).
 struct os64_media_scaler {
     SwsContext *sws;
     AVFrame *canvas;
-    uint32_t *bounce;                // NULL until an unscaled conversion at a width not a multiple of 8
+    uint32_t *bounce;                // NULL until a conversion keeps a width not a multiple of 8
     size_t bounce_pixels;
 };
 
@@ -91,7 +96,7 @@ int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t
         return OS64_MEDIA_BAD_ARGS;
     const AVFrame *source = media_picture_frame(p);
     uint32_t width = (uint32_t)s->canvas->width, height = (uint32_t)s->canvas->height;
-    bool edge = source->width == (int)width && source->height == (int)height && (width & 7) != 0;
+    bool edge = source->width == (int)width && (width & 7) != 0;
     if (edge) {
         // THE UNSCALED EDGE, above.
         size_t need = (size_t)bounce_pitch(width) * (height + 1);
