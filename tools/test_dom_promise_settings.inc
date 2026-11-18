@@ -63,8 +63,8 @@ static void dom_promise_settings_cases(void)
 static void dom_finalization_settings_cases(void)
 {
     for(int policy=OS64_JS_TEARDOWN_FATAL;policy<=OS64_JS_TEARDOWN_RECLAIM;policy++)
-    for(unsigned tasks=0;tasks<2;tasks++) {
-        CeFixture f;if(!ce_open(&f,policy,tasks?8:3)){ce_close(&f);continue;}
+    for(unsigned tasks=0;tasks<3;tasks++) {
+        CeFixture f;if(!ce_open(&f,policy,tasks==2?9:tasks?8:3)){ce_close(&f);continue;}
         JSValue global=JS_GetGlobalObject(ce_contexts[2]);
         check(JS_SetPropertyStr(ce_contexts[2],global,"cleanupDefine",
               JS_NewCFunctionData(ce_contexts[2],promise_dom_define,1,0,0,NULL))>=0,

@@ -42,7 +42,10 @@ Abrupt custom capabilities retain the embedding's existing queue-context
 exception diagnostic fallback. The thrown value keeps its original identity.
 This is not a claim to implement an HTML reporting-global rule: that case is
 explicitly unresolved in [HTML issue 10526](https://github.com/whatwg/html/issues/10526).
-Browser publication must resolve that policy along with the remaining host gates.
+The separate [browser job opt-in](IFRAME_F4_BROWSER_JOBS.md) chooses outcome
+diagnostics without a guessed window event for neutral jobs. This constructor
+retains its original fallback; browser publication still requires the remaining
+binding/security gates.
 
 ## Interfaces and compatibility
 
@@ -98,7 +101,7 @@ preparation and inventing entry/backup from the queue context. Host execution
 and target compilation do not establish guest or P5 acceptance.
 
 The [settings interface](IFRAME_F4_SETTINGS.md) retains the remaining F.4b gates:
-browser finalization task scheduling, remaining WebIDL conversions,
-role-specific lifecycle/security checks and the unresolved neutral exception
-reporting policy. F.4c contexts/origins and F.4d WindowProxy/Location remain
+remaining WebIDL conversions and role-specific lifecycle/security checks.
+The browser job opt-in supplies task selection and an explicit neutral
+exception-reporting policy. F.4c contexts/origins and F.4d WindowProxy/Location remain
 separate implementation and acceptance work.

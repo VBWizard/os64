@@ -238,7 +238,7 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     case B_QUEUE_MICROTASK: {
         if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
             return JS_ThrowTypeError(ctx, "queueMicrotask needs a function");
-        if (dom->cluster && dom->cluster->scheduled_settings) return queue_callback(dom, ctx, argv[0]);
+        if (d_settings(dom, scheduled)) return queue_callback(dom, ctx, argv[0]);
         if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
         os64_dom_t *report_owner;
         uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
@@ -309,7 +309,7 @@ int d_browsing_classic(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 
 int d_browsing_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
-    if (dom->cluster && dom->cluster->scheduled_settings) {
+    if (d_settings(dom, scheduled)) {
         JSClassID id = os64_js_class_id(&scheduled_job_slot);
         const JSClassDef definition = {.class_name = "ScheduledMicrotask",
             .finalizer = scheduled_job_free, .gc_mark = scheduled_job_mark};

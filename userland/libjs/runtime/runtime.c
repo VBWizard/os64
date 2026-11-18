@@ -110,7 +110,7 @@ struct os64_js_runtime {
     unsigned cancelled;
     bool active, turn, task, checkpointing, source_truncated, destroying;
     bool ran_jobs, host_settings_enabled, metadata_selected;
-    bool finalization_tasks_enabled;
+    bool finalization_tasks_enabled, browser_jobs_enabled;
     uint64_t owed_count;
     char source_name[OS64_JS_SOURCE_NAME_CAP];
 };
@@ -824,7 +824,7 @@ static bool job_eligible(os64_js_runtime_t *runtime, const JSJobInfo *info, JSJo
 
 /* One visit: 2 discarded, 1 executed, -1 exception, 0 empty/limited.
  * Manual, task and candidate drains charge live execution after eligibility. */
-static int step_job(os64_js_runtime_t *runtime, JSJobGroup *group, bool task, JSContext **context)
+static int step_job(os64_js_runtime_t *runtime, JSJobGroup *group, bool task, JSContext **context, JSContext **report_context)
 {
     JSJobInfo info;
     if (!(task ? JS_PeekFinalizationTask : JS_PeekJobGroup)(runtime->engine, group, &info)) return 0;
@@ -854,12 +854,17 @@ static int step_job(os64_js_runtime_t *runtime, JSJobGroup *group, bool task, JS
     if (prepared) runtime->settings_calls = settings.previous;
     if (runtime->failure_records_enabled) runtime->failure_job = previous;
     *context = report ? report : info.owner != NULL ? info.owner : info.context;
+    /* A neutral job has no reporting global. Browser policy keeps its
+     * diagnostic without delivering an error event to a guessed window. */
+    if (report_context)
+        *report_context = runtime->browser_jobs_enabled && prepared && !entry && !report
+            ? NULL : *context;
     return result;
 }
 
-static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSContext **context)
+static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSContext **context, JSContext **report)
 {
-    return step_job(runtime, group, false, context);
+    return step_job(runtime, group, false, context, report);
 }
 
 /* A turn ends at microtask queue exhaustion, except that an open task keeps its turn
@@ -1617,6 +1622,16 @@ JS_PUBLIC os64_js_status_t os64_js_enable_neutral_promise_settings(os64_js_runti
     return OS64_JS_OK;
 }
 
+JS_PUBLIC os64_js_status_t os64_js_enable_browser_jobs(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = os64_js_enable_neutral_promise_settings(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    result = os64_js_enable_finalization_tasks(runtime, caller_abi, outcome);
+    if (result == OS64_JS_OK) runtime->browser_jobs_enabled = true;
+    return result;
+}
+
 /* Called inside an admitted wrapper entry. It keeps the same guard, task and
  * deadline; the scope also makes checked queries available to native bindings. */
 static JSValue host_settings_dispatch(os64_js_realm_t *entry, os64_js_realm_t *incumbent,
@@ -1882,7 +1897,7 @@ JS_PUBLIC os64_js_status_t os64_js_realm_setup(os64_js_realm_t *realm,
     while (outcome->status == OS64_JS_OK && !realm->retired && !observe(runtime) &&
            JS_PeekJobGroup(runtime->engine, &realm->setup_jobs, &info)) {
         JSContext *context = NULL;
-        if (step_job_group(runtime, &realm->setup_jobs, &context) < 0) {
+        if (step_job_group(runtime, &realm->setup_jobs, &context, NULL) < 0) {
             JSValue error = JS_GetException(context);
             outcome->status = OS64_JS_EXCEPTION;
             diagnostic(runtime, context, error, outcome);
@@ -2313,11 +2328,11 @@ JS_PUBLIC os64_js_status_t os64_js_drain_jobs(os64_js_runtime_t *runtime,
     uint64_t count = 0;
     while (JS_IsJobPending(runtime->engine) && count < slice_jobs && !observe(runtime)) {
         count++;
-        JSContext *context = NULL;
-        if (step_job_group(runtime, NULL, &context) < 0) {
+        JSContext *context = NULL, *report = NULL;
+        if (step_job_group(runtime, NULL, &context, &report) < 0) {
             if (context == NULL) jsport_fatal("job context lifetime", __FILE__, __LINE__);
             JSValue error = JS_GetException(context);
-            caught(runtime, context, error);
+            if (report) caught(runtime, report, error);
             outcome->status = OS64_JS_EXCEPTION;
             diagnostic(runtime, context, error, outcome);
             JS_FreeValue(context, error);
@@ -2702,11 +2717,11 @@ JS_PUBLIC os64_js_status_t os64_js_callback_call(os64_js_realm_t *report,
 static void checkpoint(os64_js_runtime_t *runtime, os64_js_outcome_t *outcome)
 {
     while (JS_IsJobPending(runtime->engine) && !observe(runtime)) {
-        JSContext *context = NULL;
-        if (step_job_group(runtime, NULL, &context) < 0) {
+        JSContext *context = NULL, *report = NULL;
+        if (step_job_group(runtime, NULL, &context, &report) < 0) {
             if (context == NULL) jsport_fatal("job context lifetime", __FILE__, __LINE__);
             JSValue error = JS_GetException(context);
-            caught(runtime, context, error);
+            if (report) caught(runtime, report, error);
             if (outcome->status == OS64_JS_OK) {
                 outcome->status = OS64_JS_EXCEPTION;
                 diagnostic(runtime, context, error, outcome);
@@ -2758,11 +2773,13 @@ JS_PUBLIC os64_js_status_t os64_js_task_end(os64_js_runtime_t *runtime, const ch
 
 /* The host selects one JavaScript-engine task between ordinary tasks. A
  * cleanup cannot borrow an open task or jump ahead of its microtasks. */
-JS_PUBLIC os64_js_status_t os64_js_run_finalization_task(os64_js_runtime_t *runtime,
-    const char *caller_abi, os64_js_outcome_t *outcome)
+static os64_js_status_t finalization_task(os64_js_runtime_t *runtime,
+    const char *caller_abi, bool complete, bool *begun, os64_js_outcome_t *outcome)
 {
     os64_js_status_t result = enter_task(runtime, caller_abi, false, outcome);
     if (result != OS64_JS_OK) return result;
+    if (!begun) return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "task admission output is required");
+    *begun = false;
     if (!runtime->finalization_tasks_enabled)
         return refuse(runtime, outcome, OS64_JS_ADMISSION_REFUSED, "finalization tasks are not configured");
     if (runtime->turn || JS_IsJobPending(runtime->engine))
@@ -2779,19 +2796,35 @@ JS_PUBLIC os64_js_status_t os64_js_run_finalization_task(os64_js_runtime_t *runt
      * it enqueues inside the same bounded task, even for a retired owner. */
     result = begin_task(runtime, realm, "<FinalizationRegistry cleanup>", outcome);
     if (result != OS64_JS_OK) return result;
-    JSContext *context = NULL;
-    if (step_job(runtime, NULL, true, &context) < 0) {
+    *begun = true;
+    JSContext *context = NULL, *report = NULL;
+    if (step_job(runtime, NULL, true, &context, &report) < 0) {
         JSValue error = JS_GetException(context);
-        caught(runtime, context, error);
+        if (report) caught(runtime, report, error);
         outcome->status = OS64_JS_EXCEPTION;
         diagnostic(runtime, context, error, outcome);
         JS_FreeValue(context, error);
     }
-    checkpoint(runtime, outcome);
-    runtime->task = false;
+    if (complete) {
+        checkpoint(runtime, outcome);
+        runtime->task = false;
+    }
     result = leave(runtime, outcome);
     runtime->checkpointing = false;
     return result;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_finalization_task_begin(os64_js_runtime_t *runtime,
+    const char *caller_abi, bool *begun, os64_js_outcome_t *outcome)
+{
+    return finalization_task(runtime, caller_abi, false, begun, outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_run_finalization_task(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome)
+{
+    bool begun;
+    return finalization_task(runtime, caller_abi, true, &begun, outcome);
 }
 
 JS_PUBLIC os64_js_status_t os64_js_set_execution_ms(os64_js_runtime_t *runtime, uint64_t ms,

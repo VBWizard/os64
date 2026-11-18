@@ -12116,8 +12116,9 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
     asks_perform_with_fallback(host, doc, shown, NULL);
 }
 
-// One task of a page's: script, image, media or sheet event, message or
-// timer. True when one ran. `shown` decides whether its asks may reach the page on screen.
+// One task of a page's: script, image, media or sheet event, message,
+// timer or opted-in engine cleanup. True when one ran. `shown` decides
+// whether its asks may reach the page on screen.
 static bool page_event_run(Page *p, bool shown);
 
 // A page's queued task (MODERN_WEB.md § P2b): its oldest posted message or
@@ -12142,8 +12143,14 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
 {
     if (host == NULL || !yonder_scripts_alive(host))
         return false;
-    // The history's events a page is owed come first, in order: each was
-    // owed by a task or a traversal that is over.
+    os64_js_outcome_t cleanup;
+    int64_t cleanup_began = task_begin(host);
+    if (yonder_scripts_finalization_fire(host, false, &cleanup)) {
+        task_said(host, true, "cleanup", &cleanup, cleanup_began);
+        asks_perform(host, doc, shown);
+        return true;
+    }
+    // History events retain their order within the ordinary task sources.
     Page *p = page_of_host(host);
     if (p != NULL && page_event_run(p, shown))
         return true;
@@ -12156,6 +12163,7 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
     if (!ran) { what="sheet"; ran=yonder_scripts_owed_fire(host,&out); }
     if (!ran)
         ran = queued_task(host, &what, &out);
+    if (!ran) { what = "cleanup"; ran = yonder_scripts_finalization_fire(host, true, &out); }
     if (!ran)
         return false;
     task_said(host, true, what, &out, began);
@@ -12165,7 +12173,7 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
 
 // Whether a host has a task to run now: a history event owed its page, a
 // script ready, an image's, a media element's or a sheet's event owed, a
-// message posted, or a timer due. An idle callback is no
+// message posted, a timer due, or deferred engine cleanup. An idle callback is no
 // task owed: the shown page's turn runs one only when nothing else is
 // (script_turn).
 static bool scripts_owed(const yonder_scripts_t *host)
@@ -12174,7 +12182,7 @@ static bool scripts_owed(const yonder_scripts_t *host)
     uint64_t now = yonder_now_ms();
     return (p != NULL && p->nevents > 0 && yonder_scripts_alive(host)) || yonder_scripts_pending(host) ||
            yonder_scripts_images_pending(host) || yonder_scripts_media_pending(host) ||
-           yonder_scripts_owed_pending(host) ||
+           yonder_scripts_owed_pending(host) || yonder_scripts_finalization_pending(host) ||
            yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now ||
            yonder_scripts_intersections_due(host);
 }
@@ -13385,7 +13393,8 @@ static uint64_t css_animations_version(void *opaque)
     return s_trees_given;
 }
 
-// THE SHOWN PAGE'S TURN: at most one ordinary task, then due animation callbacks
+// THE SHOWN PAGE'S TURN: at most one ordinary or cleanup task, then due
+// animation callbacks
 // and one rendering step. Each callback has its own microtask checkpoint.
 // Whether the turn just ran one of the view's events: more may be owed.
 static bool s_view_ran;
@@ -13403,23 +13412,24 @@ static bool script_turn(void)
     if (!g.scripts_on || g.page.scripts == NULL)
         return false;
     forms_flush();
-    // The history's events the page is owed come before its other tasks.
-    if (page_event_run(&g.page, true))
-        return true;
     const os64_html_document_t *doc = page_doc(&g.page);
     os64_js_outcome_t out;
     int64_t began = task_begin(g.page.scripts);
+    bool ran = yonder_scripts_finalization_fire(g.page.scripts, false, &out);
+    // History precedes the other ordinary sources, preserving event order.
+    if (!ran && page_event_run(&g.page, true))
+        return true;
     // The rendering step's events (MODERN_WEB.md § Slice 1b): the view's
     // resize and scroll, and the media lists' changes, one a turn, after
     // the page's tasks, and the loop comes back for the next while one ran
     // (s_view_ran). While the tasks keep coming (a message that posts
     // another) they still run once a rendering opportunity
-    // (yonder_scripts_view_due), first in the turn, as HTML's event loop
-    // updates the rendering between tasks.
+    // (yonder_scripts_view_due), ahead of ordinary queued work. Cleanup
+    // selection still leaves the animation/rendering phase below available.
     s_view_ran = false;
-    const char *what = "view";
-    bool ran = yonder_scripts_view_due(g.page.scripts) &&
-               (s_view_ran = yonder_scripts_view_step(g.page.scripts, &out));
+    const char *what = ran ? "cleanup" : "view";
+    if (!ran) ran = yonder_scripts_view_due(g.page.scripts) &&
+                   (s_view_ran = yonder_scripts_view_step(g.page.scripts, &out));
     if (!ran) {
         what = "script";
         ran = yonder_scripts_step(g.page.scripts, &out);
@@ -13447,6 +13457,10 @@ static bool script_turn(void)
     if (!ran) {
         what = "view";
         ran = s_view_ran = yonder_scripts_view_step(g.page.scripts, &out);
+    }
+    if (!ran) {
+        what = "cleanup";
+        ran = yonder_scripts_finalization_fire(g.page.scripts, true, &out);
     }
     // And when the turn found nothing else, an idle callback (MODERN_WEB.md
     // § P2b): the loop is idle. The loop comes back for the next while one
