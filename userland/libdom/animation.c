@@ -12,13 +12,7 @@ struct DAnimation {
     uint32_t handle, script;
 };
 
-#define FRAME_INTERVAL_MS 20
 #define FRAME_CALLBACKS_MAX 1024
-
-static uint64_t frame_after(uint64_t now)
-{
-    return now>=UINT64_MAX-FRAME_INTERVAL_MS?UINT64_MAX-1:now+FRAME_INTERVAL_MS;
-}
 
 static void remove_entry(os64_dom_t *dom,DAnimation **link,DAnimation *previous)
 {
@@ -68,7 +62,7 @@ static JSValue animation_method(JSContext *ctx,JSValueConst self,int argc,
     if(dom->animation_last)dom->animation_last->next=entry;
     else {
         dom->animations=entry;
-        dom->animation_due=frame_after(now);
+        dom->animation_due=now;
     }
     dom->animation_last=entry;dom->animation_count++;
     return JS_NewUint32(ctx,entry->handle);
@@ -82,17 +76,17 @@ uint64_t os64_dom_animation_next(const os64_dom_t *dom)
     return d_delivery_active(dom)&&dom->animations?dom->animation_due:UINT64_MAX;
 }
 
-bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out)
+bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,uint64_t frame_us,os64_js_outcome_t *out)
 {
     if(out)os64_memset(out,0,sizeof(*out));
     if(!out||!d_delivery_active(dom)||dom->animation_running||!dom->animations||dom->animation_due>now)return false;
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name,sizeof(name),"%.*s#animation-frame",(int)(sizeof(name)-20),dom->url?dom->url:"about:blank");
-    uint64_t next=frame_after(now);
     uint32_t last=dom->animation_handle;
-    double timestamp=d_performance_now(dom);
+    uint64_t at=d_frame_instant(dom,frame_us);
     if(!d_delivery_active(dom))return false;
-    d_web_animations_sample(dom,timestamp);
+    double timestamp=d_performance_at(dom,at);
+    d_web_animations_sample(dom,at);
     if(!d_delivery_active(dom))return false;
     dom->animation_running=true;
     if(os64_js_realm_task_begin(dom->realm,OS64_JS_ABI_ID,name,out)==OS64_JS_OK) {
@@ -121,12 +115,11 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
         d_task_finish(dom,out);
     }
     dom->animation_running=false;
-    /* Callback/checkpoint work counts toward the interval. An overrun makes
-     * one successor ready, not a debt of missed frames. The host still gates
-     * that successor on presentation and an opportunity to handle input. */
+    /* What the callbacks asked for is ready from the batch's end: the host
+     * paces, one batch to a frame of its display, and a batch late or long
+     * makes one successor ready, not a debt of missed frames. */
     uint64_t finished=d_delivery_active(dom)?d_host_now_ms(dom):now;
-    if(finished==UINT64_MAX)finished=UINT64_MAX-1;
-    dom->animation_due=next>finished?next:finished;
+    dom->animation_due=finished==UINT64_MAX?UINT64_MAX-1:finished;
     d_task_close(dom,name,out);
     return true;
 }

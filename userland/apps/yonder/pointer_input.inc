@@ -117,19 +117,27 @@ static void pointer_cancel_run(void)
     pointer_native_release();
 }
 
+// A cancel owed is due at once and is the loop's next turn's (pointer_turn),
+// frame or none: whatever input comes next must find the gesture it ends
+// already ended.
+static uint64_t pointer_cancel_due(void)
+{
+    return g.modern && !g.covered && scripts_live() && s_pointer_cancel_owed ? 0 : YONDER_NEVER;
+}
+
+// A re-hit owed is due at once: it runs in the next frame of the display
+// (pointer_turn), which is what paces a pointer resting over content that
+// keeps moving to one re-hit a frame.
 static uint64_t pointer_next(void)
 {
-    return g.modern && !g.covered && scripts_live() &&
-        (s_pointer_cancel_owed || (s_pointer_known && s_pointer_rehit))
-            ? s_pointer_rested : YONDER_NEVER;
+    return g.modern && !g.covered && scripts_live() && s_pointer_known && s_pointer_rehit ? 0 : YONDER_NEVER;
 }
 
 static bool pointer_turn(void)
 {
-    if (pointer_next() > yonder_now_ms()) return false;
-    if (s_pointer_cancel_owed) { pointer_cancel_run(); return true; }
+    if (pointer_cancel_due() != YONDER_NEVER) { pointer_cancel_run(); return true; }
+    if (!s_frames.open || pointer_next() == YONDER_NEVER) return false;
     uint64_t revision = s_pointer_revision;
-    s_pointer_rested = yonder_now_ms() + 16;
     s_pointer_rehit = false;
     os64_dom_pointer_sample_t sample = {.action = OS64_DOM_POINTER_BOUNDARY,
         .event = pointer_coordinates(g.pointer_x, g.pointer_y, s_pointer_modifiers),
@@ -181,7 +189,6 @@ static bool pointer_route(const os64_gui_event_t *ev)
     uint64_t revision = s_pointer_revision, serial = g.page_serial;
     s_pointer_known = true;
     s_pointer_rehit = false;
-    s_pointer_rested = yonder_now_ms() + 16;
     g.pointer_x = x; g.pointer_y = y;
     if (!presence) { s_pointer_buttons = ev->mouse.buttons & 7; s_pointer_modifiers = ev->mouse.modifiers; }
     os64_dom_pointer_sample_t sample = {

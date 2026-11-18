@@ -128,7 +128,7 @@ mutants = [
     ('change-touches', WA_C,
      '    if (wa_target(a) != NULL) (void)os64_html_touch(a->dom->document, (os64_html_node_t *)wa_target(a));\n}',
      '}', [YON]),
-    ('frame-samples-timeline', 'userland/libdom/animation.c', '    d_web_animations_sample(dom,timestamp);\n', '',
+    ('frame-samples-timeline', 'userland/libdom/animation.c', '    d_web_animations_sample(dom,at);\n', '',
      [DOM]),
     ('held-keeps-direction', 'userland/libflow/motion.c', '        return garb_clock_at(&x->timing, local, x->rate < 0);',
      '        return garb_clock_at(&x->timing, local, !x->held && x->rate < 0);', [FLOW]),

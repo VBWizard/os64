@@ -300,23 +300,23 @@ therefore affects later callbacks in that batch; new requests wait for another
 frame. Exceptions are reported without skipping healthy peers. A runtime limit
 stops the batch. Callbacks and their checkpoints share one execution budget.
 
-The timestamp is sampled once per batch on `performance.now()`'s origin and
-100-microsecond resolution. Yonder's ticker wakes the existing window loop for
-pending frames: nominally 20 ms, matching the OS's 10 ms tick. After an ordinary
-task, due frame callbacks run before the final script rebuild. Their DOM edits
+The timestamp is one per batch, on `performance.now()`'s origin and
+100-microsecond resolution: the frame's time, the instant the display's frame
+began (PILE3.md § The animations' frames, on the display's beat). Pending
+callbacks ask the display for its next frame, and its answer wakes the window
+loop. After an ordinary task, due frame callbacks run before the final script
+rebuild. Their DOM edits
 share that rebuild; pixel-only canvas edits use the existing damage path without
 layout. CSS animation sampling follows the callbacks. A script rebuild has
 already sampled the CSS timeline and prevents a second CSS layout until paint.
 Synchronous geometry reads can still force measurement inside a callback.
 
 A frame remains in progress through the final paint. The next batch waits for
-both its 20 ms DOM deadline and a fixed 10 ms pause after painting, leaving
-a turn for input and eligible idle work without doubling an expensive frame's
-cost. The DOM deadline is measured from the batch's actual start, so callback
-and microtask work count toward the interval. If that work overruns the
-interval, the deadline is clamped to completion: one successor is eligible,
-subject to the host's paint/input gates. This policy is not a CPU percentage
-cap. Missed intervals do not accumulate. Covered windows
+the display's next frame, which yonder asks for after the paint, so the loop's
+other duties (input, eligible idle work, the network) take their turns between
+frames and an expensive callback is answered every second or third refresh
+rather than doubling its cost. This policy is not a CPU percentage cap. Missed
+frames do not accumulate. Covered windows
 retain requests but run no frame callbacks; uncovering permits one current batch.
 The CSS Animations preference does not disable this script API, which pages
 also use for state delivery. Scripts and Modern Web remain its feature gates.

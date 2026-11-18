@@ -1895,9 +1895,11 @@ fuzzer at the domain's edge holds it to that. And never for one that is paused, 
 of view, nor for one of nothing that can show: no property it sets is
 drawn (animatable, its list not dropped) or has a side effect, or each
 one is replaced by a later animation in effect, which is due for its
-own end. It joins the deadlines the
-ticker keeps already (`pictures_schedule`). When it rings for an
-animation the page is laid out again, quietly: the scroll kept as any
+own end. It is FRAME WORK (§ The animations' frames, on the display's
+beat, below): due now, it asks for the display's next frame; due later,
+the ticker (`pictures_schedule`) wakes the loop then, and that look asks.
+When the frame's answer comes the page is laid out again, quietly, at the
+frame's time: the scroll kept as any
 relayout keeps it, the controls placed, the cascade reused — the
 viewport and the sheets have not changed — and the standing line left
 saying what the page's own layout cost.
@@ -1940,13 +1942,55 @@ thread busy all the time):
 - otherwise the next frame waits until twice the last one's cost has
   passed since its paint ended — at most a third of the window's time
   spent on motion — and is not due at all while a frame, a layout's or a
-  tick's, waits for its paint; never sooner than MOTION_FRAME_MS (16)
-  after the last began, which the window's clock, in 10 ms ticks, makes
-  20: fifty a second at most;
+  tick's, waits for its paint; then it asks for the display's next frame,
+  so it comes no oftener than the display refreshes (`frame_plan_half_due`
+  is the rule, host-tested beside the rest of the plan);
 - a covered window lays out for no animation, as it shows no picture's
-  frames (`g.covered`).
+  frames (`g.covered`), and so asks for no frame.
 
-The constants are leans, to be moved by what the P5 measures.
+The constant is a lean, to be moved by what the P5 measures.
+
+**The animations' frames, on the display's beat** (2026-11-17, after the
+frame clock's F3). A frame of the display is asked for
+(`os64_gui_frame_request`, without the only-if-drawn flag) while the shown
+page has FRAME WORK due: a layout or a tick for its CSS animations, the Web
+Animations step, `requestAnimationFrame`'s callbacks, a ResizeObserver step,
+the pointer's re-hit (`frame_work_due`). The answer arrives among the
+window's events (`window_event`) and OPENS the frame for that turn of the
+loop; the turn's usual order runs the work — the Web Animations step and
+the callbacks (`script_turn`), the CSS layout or tick (`motion_tick`), the
+resize step — and the paint closes it (`frame_close`), after which a look
+asks again if work is still due. Asking is the main loop's, once per answer,
+never the ticker thread's. Frame work whose time is still to come (a
+`steps()` flip, a delay's end, a rest after a costly frame) is the ticker's
+to wait for, and asks when its time comes, so a two-second delay asks for
+no frames nobody needs. A covered window asks for none, and a request
+already out is answered when the window is shown again, its animations
+sampled where they should be by then. With the frame clock off the
+answers ride the tick-driven passes, so every boot has this one path.
+
+- **ONE TIME FOR ONE FRAME.** yonder's clock is `os64_micros()`
+  (`yonder_now_ms`), the clock the answer's blank instant is on, and the
+  page's timeline is that clock less the timing origin. Every animation
+  sampled in an open frame is sampled at the frame's time: libflow's
+  layout and tick at it in milliseconds, the Web Animations step and the
+  callbacks' argument at it to the tenth of a millisecond
+  (`os64_dom_animation_fire` and `os64_dom_web_animations_update` take it
+  as `frame_us`). A frame's time is its blank instant, or the latest time
+  any animation was already handed if that is later — a scroll's paint
+  samples at now, and a frame whose blank came just before it must not
+  hand the animations an earlier time (`frame_plan_answer`). So
+  `performance.now()` read inside a callback is never earlier than the
+  callback's argument, as in other browsers.
+- **A heavy frame.** The CSS halves keep their rests above;
+  `requestAnimationFrame` has none, as in other browsers: a page whose
+  callback costs 30 ms is answered every second or third refresh, because
+  yonder asks after the work. The loop's other duties — input, scrolling,
+  the network's turns — come round in their usual order in every turn,
+  frame or none.
+- **The counts.** The paint counts say how many frames were asked for and
+  answered, and how many refreshes went by unanswered while yonder asked
+  frame after frame (the answer's number, `frame_plan_answer`).
 
 **The person's settings.** yonder answers `prefers-reduced-motion` with
 `no-preference`, as every browser on a machine nobody set answers, and
@@ -2078,9 +2122,9 @@ ticks at the tick deadline and lays out at the other; a layout due by
 then wins, and brings every ticking element to its time itself.
 
 **What a tick may cost.** Ticks are paced and held to the cost rule as
-layouts are, by their OWN frames: a tick waits MOTION_FRAME_MS after the
-last began, and as long again as the last tick and its painting took
-after it ended — so ticking spends at most half the time — and a tick
+layouts are, by their OWN frames: a tick waits as long again as the last
+tick and its painting took after it ended — so ticking spends at most
+half the time — and then for a frame of the display, and a tick
 frame over MOTION_COST_MS stops the ticks as a layout over it stops the
 layouts. A frame of either half waiting for its paint is the only frame:
 no next one, of either half, is due until it is painted and its cost is

@@ -107,7 +107,18 @@ static double coarse(int64_t us)
 
 double d_performance_now(const os64_dom_t *dom)
 {
-    return coarse((int64_t)(now_us(dom) - dom->time_origin_us));
+    return d_performance_at(dom, now_us(dom));
+}
+
+double d_performance_at(const os64_dom_t *dom, uint64_t at_us)
+{
+    return coarse((int64_t)(at_us - dom->time_origin_us));
+}
+
+uint64_t d_frame_instant(const os64_dom_t *dom, uint64_t frame_us)
+{
+    uint64_t now = now_us(dom);
+    return frame_us < now ? frame_us : now;
 }
 
 static void timing_read(const os64_dom_t *dom, os64_dom_timing_t *t)

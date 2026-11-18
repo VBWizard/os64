@@ -70,6 +70,7 @@
 #include "modules.h"
 #include "geometry.h"
 #include "events.h"
+#include "frame_plan.h"
 #include "ticker.h"
 #include "trip.h"
 #include "download.h"
@@ -145,9 +146,8 @@ static yonder_cookies_mode_t s_cookies_asked;
 
 // THE STREAM (DOM_D4.md): how much of an arriving page is fed to its parser
 // per turn of the loop before the window goes back to its events. A byte
-// budget, because the window's clock is the 10 ms tick and bytes are
-// deterministic on the host; the as-built section records what one costs
-// in the guest.
+// budget, because bytes are deterministic on the host and a time is not;
+// the as-built section records what one costs in the guest.
 #define STREAM_SLICE_BYTES (64u * 1024u)
 
 // What a page's pictures may cost to keep — a still one's pixels, a moving
@@ -172,14 +172,14 @@ static yonder_cookies_mode_t s_cookies_asked;
 #define PICTURES_STALE_MS 2000
 
 // THE ANIMATIONS' FRAMES (PILE3.md § The animation model): a frame is a
-// layout for an animation and the paint after it. A page whose last frame
-// — before it has had one, its last layout — took more than MOTION_COST_MS
-// lays out for no animation. Otherwise the next frame waits until twice
-// the last one's cost has passed since it ended — at most a third of the
-// window's time spent on motion — and comes no sooner than MOTION_FRAME_MS
-// after the last began. Leans, to be moved by what the P5 measures.
+// layout for an animation and the paint after it, on a frame of the
+// display (frame_plan.h). A page whose last frame — before it has had one,
+// its last layout — took more than MOTION_COST_MS lays out for no
+// animation. Otherwise the next frame waits until twice the last one's
+// cost has passed since it ended — at most a third of the window's time
+// spent on motion — and is asked for then. A lean, to be moved by what the
+// P5 measures.
 #define MOTION_COST_MS 200
-#define MOTION_FRAME_MS 16
 
 // The window's doorbell bits: the pool's completions, and a navigation's
 // mailbox (progress and questions).
@@ -197,8 +197,31 @@ static yonder_cookies_mode_t s_cookies_asked;
 // browser shows the ones that ask for "as fast as you can".
 #define FRAME_FLOOR_MS 100
 // A frame shown this much after it was due is counted late (the paint
-// counts): well past the clock's own step, which is a tick's lateness.
+// counts): well past how late the ticker's wake may be, a tick of the
+// system clock.
 #define FRAME_LATE_MS 30
+
+// THE DISPLAY'S FRAMES for the shown page (frame_plan.h): asked for when
+// its frame work is due (pictures_schedule), answered among the window's
+// events (window_event), and open from the answer until the turn's paint
+// closes it (frame_close). The CSS animations, the Web Animations step,
+// requestAnimationFrame, the ResizeObserver step and the pointer's re-hit
+// run only in an open frame, and every animation sampled in it is sampled
+// at its time.
+static frame_plan_t s_frames;
+
+// The time the page's animations are sampled at, on yonder's clock
+// (yonder_now_us): the open frame's, else now, and never earlier than any
+// animation was handed before (frame_plan_sample).
+static uint64_t animation_time_us(void)
+{
+    return frame_plan_sample(&s_frames, yonder_now_us());
+}
+
+static uint64_t animation_time_ms(void)
+{
+    return animation_time_us() / 1000;
+}
 
 // ── The page's fonts ────────────────────────────────────────────────────
 //
@@ -1797,7 +1820,8 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     s_env.zoom = zoom;
     s_env.timeline = s_animations ? p->timeline : NULL;
     s_env.ticks = s_env.timeline != NULL;
-    s_env.now_ms = yonder_now_ms();
+    // An open frame's time, which the frame's other samples share.
+    s_env.now_ms = animation_time_ms();
     geometry_layout_total++;
     webfonts_layout_begins(p);
     flow_tree_t *fresh = profile_flow_layout(p, width);
@@ -2335,18 +2359,16 @@ static struct {
     bool ticked, tick_painting;
     uint64_t tick_began, tick_ended, tick_us;
     int64_t tick_began_us;
-    // A script frame includes callbacks, their rebuild and the final paint.
-    // Its successor leaves a 10 ms input/idle opportunity after painting,
-    // in addition to the DOM frame deadline. Missed frames do not accumulate.
+    // A script frame includes callbacks, their rebuild and the final paint;
+    // its successor waits for another frame of the display. Missed frames
+    // do not accumulate.
     bool raf_painting, script_painting;
-    uint64_t raf_resume_at;
     // Resize steps run one a frame: after one, the frame it ran in ends
-    // first (resize_paced), then the same gap script frames keep, and a
-    // requested animation frame's callbacks come before it (resizes_due). A
-    // callback that resizes its own target every time costs one step a
-    // frame, as in other browsers, never a spin.
+    // first (resize_paced), and a requested animation frame's callbacks
+    // come before it (resizes_due). A callback that resizes its own target
+    // every time costs one step a frame, as in other browsers, never a
+    // spin.
     bool resize_paced;
-    uint64_t resize_resume_at;
     // Widgets have stable addresses and node keys; rebuilding replaces the
     // pointer list while preserving surviving widgets and their caret.
     FormWidget **fw;
@@ -3200,15 +3222,20 @@ static const char *const kPaintStage[PS_COUNT] = {
 };
 
 // The deadlines a schedule hands the ticker, by where the next came from:
-// one already past when it is handed over is rung for at once, or at the
-// clock's next tick when the loop meets it itself (pictures_schedule), so a
-// source counted often here is rings that may do no work.
+// one already past when it is handed over is rung for at once, or
+// DEADLINE_RETRY_MS later when the loop meets it itself (pictures_schedule),
+// so a source counted often here is rings that may do no work. "frames" is
+// frame work whose time is still to come (frame_plan_step), an intersection
+// observer's delay and a pointer cancel owed. The retry is a tick of the
+// system clock: the loop that owes the moment comes round within it, and
+// no oftener than the clock that wakes the ticker.
+#define DEADLINE_RETRY_MS 10
 typedef enum {
-    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_FRAMES, PAST_DOWNLOADS, PAST_COUNT
+    PAST_SETTLE, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_FRAMES, PAST_DOWNLOADS, PAST_COUNT
 } PastDeadline;
 
 static const char *const kPastDeadline[PAST_COUNT] = {
-    "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures", "frames", "downloads",
+    "settle", "arrival", "stream", "timers", "pictures", "frames", "downloads",
 };
 
 static const char *const kWholeBy[WHOLE_COUNT] = {
@@ -3272,6 +3299,9 @@ static struct {
     // picture's frame was shown against when it was due (ms): the most, and
     // the frames shown more than FRAME_LATE_MS late.
     uint64_t slept_most, late_most, late_frames;
+    // The display's frames asked for and answered, and the refreshes that
+    // went by unanswered while yonder asked frame after frame (frame_plan.h).
+    uint64_t frame_asks, frame_answers, frame_skipped;
     // The ticker's bells the loop took — rings made before the loop takes
     // one arrive as one (the window's doorbell is a mask) — and the
     // deadlines handed the ticker already past.
@@ -3368,9 +3398,10 @@ static unsigned s_pointer_modifiers;
 static os64_ui_menu_model_t *s_pointer_menu;
 static os64_gui_rect_t s_pointer_menu_anchor;
 static uint64_t s_pointer_menu_serial;
-static uint64_t s_pointer_revision, s_pointer_rested;
+static uint64_t s_pointer_revision;
 static void pointer_geometry_changed(void) { s_pointer_revision++; s_pointer_rehit = true; }
 static uint64_t pointer_next(void);
+static uint64_t pointer_cancel_due(void);
 static bool pointer_turn(void);
 static void pointer_cancel_run(void);
 
@@ -4422,8 +4453,7 @@ static void page_departs(void)
 // past its stream, whose host is its own now), reached now.
 static void page_mark(yonder_scripts_t *host, os64_dom_milestone_t which)
 {
-    int64_t now = os64_micros();
-    yonder_scripts_mark(host, which, now > 0 ? (uint64_t)now : 0);
+    yonder_scripts_mark(host, which, yonder_now_us());
 }
 
 // A page is shown: laid out BESIDE the one on screen and swapped in only
@@ -4587,9 +4617,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     g.ticked = false;
     g.raf_painting = false;
     g.script_painting = false;
-    g.raf_resume_at = 0;
     g.resize_paced = false;
-    g.resize_resume_at = 0;
     g.motion_pause[0] = '\0';
     pictures_start(&g.page);
     css_pictures(&g.page);
@@ -4714,12 +4742,11 @@ static void stream_modern_capture(void)
 }
 
 // THE PAGE'S NAVIGATION TIMING (performance.timing, the navigation entry):
-// its origin is the moment the navigation began, on os64_micros' clock and
-// the wall clock's, and the fetch starts then.
+// its origin is the moment the navigation began, on yonder's clock
+// (yonder_now_us) and the wall clock's, and the fetch starts then.
 static void timing_start(os64_dom_timing_t *t, NavKind kind)
 {
-    int64_t now = os64_micros();
-    t->origin_us = now > 0 ? (uint64_t)now : 0;
+    t->origin_us = yonder_now_us();
     os64_time_t wall;
     t->origin_epoch_us = os64_time(&wall) == 0 && wall.ticks_per_second != 0
         ? wall.epoch * 1000000 + (int64_t)((uint64_t)wall.ticks_into_second * 1000000 / wall.ticks_per_second)
@@ -4733,11 +4760,10 @@ static void timing_start(os64_dom_timing_t *t, NavKind kind)
 }
 
 // A milestone of the navigation `t` times, now: kept, and answered on
-// os64_micros' clock.
+// yonder's clock.
 static uint64_t timing_mark(os64_dom_timing_t *t, os64_dom_milestone_t which)
 {
-    int64_t now = os64_micros();
-    uint64_t at = now > 0 ? (uint64_t)now : 0;
+    uint64_t at = yonder_now_us();
     t->at[which] = at > t->origin_us ? at - t->origin_us : 0;
     return at;
 }
@@ -8083,6 +8109,9 @@ static bool paint_lines(DiagText *t, DiagText *u)
            (unsigned long)s_cost.layouts_parts);
     dt_put(t, "; frames late at most %lu ms, %lu more than %d ms", (unsigned long)s_cost.late_most,
            (unsigned long)s_cost.late_frames, FRAME_LATE_MS);
+    dt_put(t, "; the display's frames: %lu asked for, %lu answered, %lu refreshes skipped",
+           (unsigned long)s_cost.frame_asks, (unsigned long)s_cost.frame_answers,
+           (unsigned long)s_cost.frame_skipped);
     if (rate != 0)
         dt_put(t, "; the longest wait %lu ms", (unsigned long)(s_cost.slept_most / rate / 1000));
     // What the painter kept (YONDER_PERF.md § perf-2).
@@ -8705,32 +8734,25 @@ static bool frame_unpainted(void)
 
 // When the shown page is next laid out for an animation: when libflow says
 // what the view shows next changes, held to the cost rules
-// (MOTION_COST_MS); never while animations are off or the window is
-// covered, nor while a frame waits for its paint (frame_unpainted), nor
-// while a script's change waits for its rebuild — a layout then is
-// script_rebuild's, page_lay_out refuses any other, and a frame refused
-// would read as one past every limit.
+// (MOTION_COST_MS, frame_plan_half_due); never while animations are off or
+// the window is covered, nor while a frame waits for its paint
+// (frame_unpainted), nor while a script's change waits for its rebuild — a
+// layout then is script_rebuild's, page_lay_out refuses any other, and a
+// frame refused would read as one past every limit. The layout itself
+// waits for a frame of the display (motion_tick).
 static uint64_t motion_next(void)
 {
     if (!s_animations || g.covered || g.page.tree == NULL || page_rebuild_owed(&g.page) ||
         frame_unpainted())
         return YONDER_NEVER;
+    // The rule first, so a page it stopped asks libflow nothing.
     uint64_t cost_us = motion_cost_us();
     if (cost_us > (uint64_t)MOTION_COST_MS * 1000)
         return YONDER_NEVER;
     os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
     uint64_t due = flow_motion_due(g.page.tree, view, scroll_now());
-    if (due == FLOW_NEVER)
-        return YONDER_NEVER;
-    if (g.motion_laid) {
-        uint64_t rested = g.motion_ended + 2 * ((cost_us + 999) / 1000);
-        uint64_t frame = g.motion_began + MOTION_FRAME_MS;
-        if (due < rested)
-            due = rested;
-        if (due < frame)
-            due = frame;
-    }
-    return due;
+    return frame_plan_half_due(due == FLOW_NEVER ? FRAME_PLAN_NEVER : due, g.motion_laid, g.motion_ended,
+                               cost_us, 2, (uint64_t)MOTION_COST_MS * 1000);
 }
 
 // Whether the shown page's ticks may run (PILE3.md § Animations in place):
@@ -8744,34 +8766,27 @@ static bool ticks_run(void)
 }
 
 // When the shown page's animations next tick: when libflow says what the
-// view shows of them next changes (flow_motion_tick_due), a frame after
-// the last tick began and, after it ended, as long again as it and its
-// painting took — so ticking spends at most half the time — and never
-// while a frame waits for its paint (frame_unpainted).
+// view shows of them next changes (flow_motion_tick_due) and, after the
+// last tick ended, as long again as it and its painting took — so ticking
+// spends at most half the time (frame_plan_half_due) — and never while a
+// frame waits for its paint (frame_unpainted). The tick itself waits for
+// a frame of the display (motion_tick).
 static uint64_t tick_next(void)
 {
     if (!ticks_run() || frame_unpainted())
         return YONDER_NEVER;
     os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
     uint64_t due = flow_motion_tick_due(g.page.tree, view, scroll_now());
-    if (due == FLOW_NEVER)
-        return YONDER_NEVER;
-    if (g.ticked) {
-        uint64_t rested = g.tick_ended + (g.tick_us + 999) / 1000;
-        uint64_t frame = g.tick_began + MOTION_FRAME_MS;
-        if (due < rested)
-            due = rested;
-        if (due < frame)
-            due = frame;
-    }
-    return due;
+    // ticks_run already stopped a tick past the limit.
+    return frame_plan_half_due(due == FLOW_NEVER ? FRAME_PLAN_NEVER : due, g.ticked, g.tick_ended,
+                               g.ticked ? g.tick_us : 0, 1, UINT64_MAX);
 }
 
 // Script frames use the rendering loop even when CSS animations are disabled:
 // pages also use them to deliver state. Covered windows retain requests but
 // spend no frames. Rebuild retries and unfinished paints precede another batch.
 // Web Animations' update step is on the same rendering step, before the
-// frame callbacks (script_turn).
+// frame callbacks (script_turn), and both wait for a frame of the display.
 static uint64_t animation_next(void)
 {
     if (!g.scripts_on || g.covered || g.page.tree == NULL ||
@@ -8779,22 +8794,19 @@ static uint64_t animation_next(void)
         return YONDER_NEVER;
     uint64_t due = yonder_scripts_animation_next(g.page.scripts);
     uint64_t step = yonder_scripts_web_animations_next(g.page.scripts);
-    if (step < due)
-        due = step;
-    return due < g.raf_resume_at ? g.raf_resume_at : due;
+    return step < due ? step : due;
 }
 
-// Hands the ticker the earliest of its deadlines: the next frame among the
+// pictures_schedule asks for the display's next frame when frame work is
+// due (frame_work_due), and hands the ticker the earliest of its deadlines:
+// frame work whose time is still to come, the next frame among the
 // pictures on screen, the moment a slow page's layout goes stale
-// (pictures_settle), the next layout for an animation (motion_next) and
-// its next tick (tick_next), script frames (animation_next), an observer's
-// delay running out and a resize step owed to the next frame
-// (resizes_next) — none for a covered window — the
-// moment a page waiting for its
-// sheets is shown whatever is still coming, the moment a script the stream
-// is stopped at stops waiting for its sheets, the next timer and the
-// next storage commit of each page's scripts, covered or not, and the
-// cookie file's next write.
+// (pictures_settle), an observer's delay running out — none for a covered
+// window — the moment a page waiting for its sheets is shown whatever is
+// still coming, the moment a script the stream is stopped at stops waiting
+// for its sheets, the next timer and the next storage commit of each
+// page's scripts, covered or not, the cookie file's next write, and the
+// rest it offers below.
 // The earliest deadline offered so far (deadline_offer): when, where the
 // first offered at that moment came from (for the counts), and whether any
 // offered at that moment is the bell's to meet.
@@ -8810,12 +8822,70 @@ typedef struct {
 // is), a censused page's timeline sample (census_turn, likewise), the
 // settle (pictures_settle) and the stream's wait for its
 // sheets (stream_turn) itself, after the events; the bell meets pictures_tick,
-// coming_show and downloads_heard. Motion and script frames run after tasks.
-// Two deadlines at one moment are common — the clock steps by the tick —
-// and the moment is the bell's if either is.
+// coming_show and downloads_heard. Frame work whose time came is the loop's
+// too: its look asks for the frame. Of two deadlines at one moment, the
+// moment is the bell's if either is.
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
 static uint64_t resizes_next(void);
 static uint64_t resizes_due(void);
+
+// The earliest frame work the shown page has: a layout or a tick for its
+// CSS animations, the Web Animations step and requestAnimationFrame's
+// callbacks, a ResizeObserver step, the pointer's re-hit. Each runs only in
+// an open frame of the display; FRAME_PLAN_NEVER for none.
+static uint64_t frame_work_due(void)
+{
+    uint64_t due = motion_next(), next;
+    if ((next = tick_next()) < due)
+        due = next;
+    if ((next = animation_next()) < due)
+        due = next;
+    if ((next = pointer_next()) < due)
+        due = next;
+    if ((next = resizes_next()) < due)
+        due = next;
+    return due;
+}
+
+// The deadline an idle period is held to: the earliest frame work, and for
+// work already waiting on a frame, the display's next blank, which is when
+// that frame comes (frame_plan_next_blank_us).
+static uint64_t idle_render_due(void)
+{
+    uint64_t due = frame_work_due(), now = yonder_now_ms();
+    if (due > now)
+        return due;
+    return frame_plan_next_blank_us(&s_frames, yonder_now_us()) / 1000;
+}
+
+// The display's next frame asked for (frame_plan_step said to). A refusal
+// is a window the GUI no longer knows, and leaves none out.
+static void frame_ask(void)
+{
+    if (os64_gui_frame_request(g.win, 0) != 0)
+        frame_plan_refused(&s_frames);
+    else
+        s_cost.frame_asks++;
+}
+
+// A frame's answer: the frame opens at its time, for this turn's work, and
+// what the counts keep of it.
+static void frame_answered(const os64_gui_event_t *ev)
+{
+    uint64_t skipped = s_frames.skipped, time_us;
+    if (!frame_plan_answer(&s_frames, os64_gui_frame_number(ev), os64_gui_frame_blank_us(ev), ev->frame.period_ns,
+                           &time_us))
+        return;
+    s_cost.frame_answers++;
+    s_cost.frame_skipped += s_frames.skipped - skipped;
+}
+
+// The turn's paint is done: an open frame closes, and the look after it
+// asks again if frame work is still due.
+static void frame_close(void)
+{
+    frame_plan_close(&s_frames);
+}
 static uint64_t step_hold_due(void);
 
 // The shown page has nothing more coming of its own accord: it has
@@ -8864,8 +8934,7 @@ static void exit_follow(void)
 
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from)
 {
-    bool bell = from != PAST_TIMERS && from != PAST_SETTLE && from != PAST_STREAM &&
-                from != PAST_FRAMES && from != PAST_LAYOUTS && from != PAST_TICKS;
+    bool bell = from != PAST_TIMERS && from != PAST_SETTLE && from != PAST_STREAM && from != PAST_FRAMES;
     if (due < d->next) {
         d->next = due;
         d->from = from;
@@ -8881,16 +8950,19 @@ static void pictures_schedule(void)
     NextDeadline d = {YONDER_NEVER, PAST_SETTLE, false};
     if (!g.covered)
         deadline_offer(&d, g.settle_due, PAST_SETTLE);
-    deadline_offer(&d, motion_next(), PAST_LAYOUTS);
-    deadline_offer(&d, tick_next(), PAST_TICKS);
-    deadline_offer(&d, animation_next(), PAST_FRAMES);
-    deadline_offer(&d, pointer_next(), PAST_FRAMES);
+    // The frame work (frame_work_due): due now, it asks for the display's
+    // next frame and hands the ticker nothing, since the answer wakes the
+    // loop; due later, the ticker wakes the loop then and that look asks.
+    frame_plan_step_t frame = frame_plan_step(&s_frames, frame_work_due(), yonder_now_ms());
+    if (frame.ask)
+        frame_ask();
+    deadline_offer(&d, frame.wake_ms, PAST_FRAMES);
+    // A pointer cancel owed, which the loop's next turn runs (pointer_turn).
+    deadline_offer(&d, pointer_cancel_due(), PAST_FRAMES);
     // A target an observer's delay passed over is owed a step when the
     // delay runs out, whether or not anything moves (intersections_turn).
     if (!g.covered)
         deadline_offer(&d, yonder_scripts_intersections_next(g.page.scripts), PAST_FRAMES);
-    // A resize step owed to the next frame (resizes_turn).
-    deadline_offer(&d, resizes_next(), PAST_FRAMES);
     if (g.coming.active)
         deadline_offer(&d, g.coming.due, PAST_ARRIVAL);
     if (g.stream.active && g.stream.sheets_due != 0)
@@ -8943,10 +9015,10 @@ static void pictures_schedule(void)
         // turn, not the ticker's to ring for: the bell is dispatched among
         // the events, which cannot meet it, so it is handed on again and
         // rings again, the batch ringing itself until its bound. One still
-        // owed when the loop next waits is rung for at the clock's next
-        // tick. A moment the bell meets is rung for now.
+        // owed when the loop next waits is rung for DEADLINE_RETRY_MS later.
+        // A moment the bell meets is rung for now.
         if (!d.bell)
-            next = now + 1;
+            next = now + DEADLINE_RETRY_MS;
     }
     yonder_ticker_set(g.ticker, next);
     cost_end(PS_SCHEDULE);
@@ -9077,31 +9149,35 @@ static void tick_page_run(uint64_t now, bool frame)
 // bring an animation into view whose last tick is long past, since nothing
 // out of view was due — the ticking animations the view shows brought to
 // now when any is behind (flow_motion_tick_due, unpaced), so the paint
-// shows each at the time it is painted. Not a frame: its paint is the
-// scroll's. A paint of parts does not tick, even parts far apart whose
-// box spans the view: what it repaints of an animation is on the glass
-// beside it already. The window loop asks before each paint.
+// shows each at the time it is painted (the open frame's, inside one:
+// animation_time_ms). Not a frame: its paint is the scroll's. A paint of
+// parts does not tick, even parts far apart whose box spans the view: what
+// it repaints of an animation is on the glass beside it already. The
+// window loop asks before each paint.
 static void ticks_before_paint(void)
 {
     const os64_gui_rect_t v = g.view.bounds;
     if (!os64_ui_dirty_covers(&g.ui, v) || !ticks_run() || frame_unpainted())
         return;
-    uint64_t now = yonder_now_ms();
+    uint64_t now = animation_time_ms();
     os64_gui_rect_t view = {g.sx, g.sy, v.w, v.h};
     if (flow_motion_tick_due(g.page.tree, view, scroll_now()) <= now)
         tick_page(now, false);
 }
 
-// After script callbacks, meet a due CSS layout (lay_out_shown) or tick
-// (tick_page). A fresh script layout waits for its paint before another
-// CSS frame can begin (frame_unpainted).
+// In an open frame of the display, after script callbacks, meet a due CSS
+// layout (lay_out_shown) or tick (tick_page), sampled at the frame's time.
+// A fresh script layout waits for its paint before another CSS frame can
+// begin (frame_unpainted).
 static void motion_tick(void)
 {
+    if (!s_frames.open)
+        return;
     uint64_t now = yonder_now_ms();
     if (motion_next() <= now)
         (void)lay_out_shown(true, LAID_FOR_MOTION);
     else if (tick_next() <= now)
-        tick_page(now, true);
+        tick_page(animation_time_ms(), true);
 }
 
 // The window painted: a frame for an animation costs its layout, or its
@@ -9111,16 +9187,8 @@ static void motion_tick(void)
 static void motion_painted(void)
 {
     g.script_painting = false;
-    if (g.raf_painting) {
-        g.raf_painting = false;
-        uint64_t now = yonder_now_ms();
-        g.raf_resume_at = now < UINT64_MAX - 10 ? now + 10 : UINT64_MAX - 1;
-    }
-    if (g.resize_paced) {
-        g.resize_paced = false;
-        uint64_t now = yonder_now_ms();
-        g.resize_resume_at = now < UINT64_MAX - 10 ? now + 10 : UINT64_MAX - 1;
-    }
+    g.raf_painting = false;
+    g.resize_paced = false;
     if (g.motion_painting) {
         g.motion_painting = false;
         g.motion_ended = yonder_now_ms();
@@ -12434,11 +12502,11 @@ static Observed s_resized;
 // callbacks and their layout (script_turn) and a CSS animation's
 // (motion_tick), and before the intersection step and the paint, when the
 // page was laid out or the view changed since the last step, or a report
-// is owed (resizes_wanted). One step a frame: the next waits for the frame
-// this one ran in to end, and the gap script frames keep after it
-// (resizes_next), because a callback's own change is laid out and would
-// otherwise want another step on the very next turn. Not while the window
-// is covered. Its callbacks run inside it, round after round, each laid
+// is owed (resizes_wanted). Only in an open frame of the display, and one
+// step a frame: the next waits for another frame (resizes_next), because a
+// callback's own change is laid out and would otherwise want another step
+// on the very next turn. Not while the window is covered. Its callbacks
+// run inside it, round after round, each laid
 // out before the next is measured (script_resizes). True when it ran a
 // task.
 static bool resizes_wanted(yonder_scripts_t *s)
@@ -12453,7 +12521,7 @@ static bool resizes_wanted(yonder_scripts_t *s)
 static bool resizes_turn(void)
 {
     yonder_scripts_t *s = g.page.scripts;
-    if (!resizes_wanted(s) || g.resize_paced || yonder_now_ms() < resizes_due())
+    if (!s_frames.open || !resizes_wanted(s) || g.resize_paced || yonder_now_ms() < resizes_due())
         return false;
     os64_js_outcome_t out;
     const os64_html_document_t *doc = page_doc(&g.page);
@@ -12483,15 +12551,15 @@ static bool resizes_turn(void)
     return ran;
 }
 
-// When a resize step may run: the next frame's moment, once the frame the
-// last one ran in has ended (motion_painted), and, while the page waits
-// for an animation frame, not before that frame's callbacks: the two are
-// one rendering step, the callbacks first (animation_next is NEVER once
-// they have run this turn).
+// When a resize step may run: at once — in the next frame of the display,
+// once the frame the last one ran in has ended (resize_paced) — and, while
+// the page waits for an animation frame, not before that frame's
+// callbacks: the two are one rendering step, the callbacks first
+// (animation_next is NEVER once they have run this turn).
 static uint64_t resizes_due(void)
 {
-    uint64_t due = g.resize_resume_at, frame = animation_next();
-    return frame != YONDER_NEVER && frame > due ? frame : due;
+    uint64_t frame = animation_next();
+    return frame != YONDER_NEVER ? frame : 0;
 }
 
 static uint64_t resizes_next(void)
@@ -13452,13 +13520,16 @@ static bool script_turn(void)
     // § P2b): the loop is idle. The loop comes back for the next while one
     // is due (main's bell), and the ticker wakes it for one that waits
     // (pictures_schedule). Tasks that keep coming leave none idle, which
-    // HTML allows: an idle period starts only when the loop is idle.
-    if (!ran && animation_next() > yonder_now_ms()) {
-        what = "idle";
-        uint64_t due = animation_next(), motion = motion_next(), tick = tick_next();
-        if (motion < due) due = motion;
-        if (tick < due) due = tick;
-        ran = yonder_scripts_idle_before(g.page.scripts, due, &out);
+    // HTML allows: an idle period starts only when the loop is idle. Its
+    // deadline is the next frame work's, which for work waiting on a frame
+    // is the display's next blank (idle_render_due); none starts in an open
+    // frame whose work is due, which comes first.
+    if (!ran && !(s_frames.open && frame_work_due() <= yonder_now_ms())) {
+        uint64_t due = idle_render_due();
+        if (due > yonder_now_ms()) {
+            what = "idle";
+            ran = yonder_scripts_idle_before(g.page.scripts, due, &out);
+        }
     }
     if (ran)
         task_said(g.page.scripts, true, what, &out, began);
@@ -13466,19 +13537,21 @@ static bool script_turn(void)
     // the rebuild below. Only a failed rebuild from an earlier turn blocks
     // callbacks (the entry guard), not the task's fresh mutations.
     uint64_t now = yonder_now_ms();
-    // HTML's "update animations and send events", then the frame callbacks.
-    if (!g.covered && !g.raf_painting && now >= g.raf_resume_at &&
+    // In an open frame of the display, at its time: HTML's "update
+    // animations and send events", then the frame callbacks.
+    uint64_t frame_us = animation_time_us();
+    if (s_frames.open && !g.covered && !g.raf_painting &&
         yonder_scripts_web_animations_next(g.page.scripts) <= now) {
         int64_t step_began = task_begin(g.page.scripts);
-        if (yonder_scripts_web_animations_update(g.page.scripts, now, &out)) {
+        if (yonder_scripts_web_animations_update(g.page.scripts, now, frame_us, &out)) {
             ran = true;
             task_said(g.page.scripts, true, "web-animations", &out, step_began);
         }
     }
-    if (!g.covered && !g.raf_painting && now >= g.raf_resume_at &&
+    if (s_frames.open && !g.covered && !g.raf_painting &&
         yonder_scripts_animation_next(g.page.scripts) <= now) {
         int64_t frame_began = task_begin(g.page.scripts);
-        if (yonder_scripts_animation_fire(g.page.scripts, now, &out)) {
+        if (yonder_scripts_animation_fire(g.page.scripts, now, frame_us, &out)) {
             g.raf_painting = true;
             ran = true;
             task_said(g.page.scripts, true, "animation-frame", &out, frame_began);
@@ -13651,7 +13724,7 @@ static void inputs_drop(void)
 {
     if (s_pointer_known && s_pointer_buttons) s_pointer_draining = true;
     s_pointer_cancel_owed = s_pointer_known = s_pointer_rehit = false;
-    s_pointer_buttons = 0; s_pointer_modifiers = 0; s_pointer_rested = 0; s_pointer_menu = NULL;
+    s_pointer_buttons = 0; s_pointer_modifiers = 0; s_pointer_menu = NULL;
     for (int32_t i = 0; i < g.ninputs; i++)
         input_release(&g.inputs[i]);
     g.ninputs = 0;
@@ -18797,6 +18870,11 @@ static void window_event(void *user, const os64_gui_event_t *event)
     if (!g.running || g.ui.quit)
         return;
     const os64_gui_event_t ev = *event;
+    // The display's frame: its work runs in this turn (frame_answered).
+    if (ev.type == OS64_GUI_EVENT_FRAME) {
+        frame_answered(&ev);
+        return;
+    }
     // The Save dialog is modal (§ Downloads): a press, a key, the wheel or
     // Settings brings it forward instead. Cancel a page gesture before the
     // dialog takes over; its later release drains without activating it.
@@ -19152,8 +19230,11 @@ int main(int argc, char **argv)
         if (coming_more || observed || media_more || script_followup(scripts_ready, painted_frame))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
         exit_follow();
-        // A task may have set or cleared a timer, and a frame for an
-        // animation has its whole cost now: the ticker hears of both.
+        // The turn's frame, if it had one, is painted and closes. A task
+        // may have set or cleared a timer, and a frame for an animation has
+        // its whole cost now: the ticker hears of both, and frame work
+        // still due asks for the next frame.
+        frame_close();
         pictures_schedule();
         looking = g.bar.up && !g.bar.armed;
     }

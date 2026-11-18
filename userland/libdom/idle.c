@@ -88,15 +88,20 @@ static uint64_t deadline_us(const os64_dom_t *dom, uint64_t start_us, uint64_t u
         if (at < deadline) deadline = at;
     }
     /* A callback may request a frame after the host granted this idle
-     * period. Shorten that grant immediately. A frame already overdue when
-     * this period began may belong to a covered window; the host's deadline
-     * decides whether such a frame prevents a new idle period. */
+     * period: the grant ends at the request, for the page now wants the
+     * host's next frame. A frame asked for before the period began is the
+     * host's to bound (the rendering deadline it granted the period to, its
+     * next frame), whether or not it can run (a covered window's). A
+     * request is known by its time on the millisecond clock, so one made in
+     * the millisecond the period began counts as before it. */
     uint64_t frame = os64_dom_animation_next(dom);
     if (frame != UINT64_MAX) {
-        uint64_t ms = now_ms(dom), at;
-        if (frame >= ms) at = us + (frame - ms) * 1000;
-        else at = ms - frame > us / 1000 ? 0 : us - (ms - frame) * 1000;
-        if (at >= start_us && at < deadline) deadline = at;
+        uint64_t ms = now_ms(dom), since = us > start_us ? (us - start_us) / 1000 : 0;
+        uint64_t start_ms = ms > since ? ms - since : 0;
+        if (frame > start_ms) {
+            uint64_t at = frame >= ms ? us + (frame - ms) * 1000 : us - (ms - frame) * 1000;
+            if (at < deadline) deadline = at;
+        }
     }
     return deadline;
 }

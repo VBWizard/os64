@@ -22,12 +22,15 @@ struct yonder_ticker {
     yonder_ticker_counts_t counts;  // for the paint counts (ticker.h)
 };
 
+uint64_t yonder_now_us(void)
+{
+    int64_t now = os64_micros();
+    return now > 0 ? (uint64_t)now : 0;
+}
+
 uint64_t yonder_now_ms(void)
 {
-    os64_ticks_t t;
-    if (os64_ticks(&t) < 0 || t.per_second == 0)
-        return 0;
-    return t.ticks * 1000 / t.per_second;
+    return yonder_now_us() / 1000;
 }
 
 // The most of `*most` and `value`, under the ticker's lock.

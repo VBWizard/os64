@@ -18,7 +18,7 @@ static const os64_html_node_t *wa_by_id(const os64_html_node_t *node, const char
 static bool wa_step(DomFixture *f, const char *what)
 {
     os64_js_outcome_t out;
-    bool ran = os64_dom_web_animations_update(f->binding, p2b_ms, &out);
+    bool ran = os64_dom_web_animations_update(f->binding, p2b_ms, OS64_DOM_FRAME_NOW, &out);
     check(ran && out.status == OS64_JS_OK, what);
     return ran;
 }
@@ -140,7 +140,8 @@ static void wa_running(void)
         "assert(!b.pending&&b.startTime===0&&b.currentTime===0&&document.timeline.currentTime===0,"
         "b.startTime+' '+b.currentTime+' '+document.timeline.currentTime);",
         "web animations: the pending play ran at the step");
-    check(os64_dom_web_animations_next(f.binding) == 1020, "web animations: the next step a frame on");
+    check(os64_dom_web_animations_next(f.binding) == 1000,
+          "web animations: the next step is due from the last, for the host's next frame");
     const struct garb_effect *const *fx = NULL;
     check(os64_dom_script_effects(f.binding, wa_by_id(f.document->document, "one"), &fx) == 1 && !fx[0]->held &&
           fx[0]->start_ms == 1000 && fx[0]->rate == 1,
@@ -397,9 +398,10 @@ static void wa_frame_time(void)
         "web animations: a frame callback asked for");
     p2b_advance(50);
     os64_js_outcome_t out;
-    check(os64_dom_animation_fire(f.binding, p2b_ms, &out) && out.status == OS64_JS_OK,
+    check(os64_dom_animation_fire(f.binding, p2b_ms, p2b_us - 7000, &out) && out.status == OS64_JS_OK,
           "web animations: the frame callback runs");
-    p2b_script(&f, "assert(tl==='same',String(tl))", "web animations: the timeline's time is the frame's");
+    p2b_script(&f, "assert(tl==='same',String(tl));assert(performance.now()-document.timeline.currentTime===7)",
+               "web animations: the timeline's time is the frame's, the host's instant");
     fixture_free(&f);
 }
 
@@ -1134,7 +1136,7 @@ static void wa_replacement_refusals(void)
         size_t start = attempts;
         if (cut != 0) fail_at = start + cut;
         os64_js_outcome_t out;
-        bool ran = os64_dom_web_animations_update(f.binding, p2b_ms, &out);
+        bool ran = os64_dom_web_animations_update(f.binding, p2b_ms, OS64_DOM_FRAME_NOW, &out);
         fail_at = 0;
         size_t reached = attempts - start;
         check(ran, "animation replacement: update attempted");

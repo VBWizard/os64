@@ -80,7 +80,7 @@ static JSValue scheduled_retire(JSContext *ctx, JSValueConst self, int argc,
 
 static bool scheduled_drive(os64_dom_t *dom, unsigned family, os64_js_outcome_t *out)
 {
-    if (family == 0) return os64_dom_animation_fire(dom, os64_dom_animation_next(dom), out);
+    if (family == 0) return os64_dom_animation_fire(dom, os64_dom_animation_next(dom), OS64_DOM_FRAME_NOW, out);
     if (family == 1) return os64_dom_idle_run(dom, out);
     if (family == 2) return os64_dom_timer_fire(dom, os64_dom_timer_next(dom), out);
     return false;
