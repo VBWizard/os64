@@ -92,6 +92,42 @@ aspect), "give me the next decoded picture and its time", and "convert
 this picture into these pixels at this size". Times are on the same output
 timeline as sound. yonder, and any other player, see no FFmpeg type.
 
+**As built (V3).** What the outline left open, settled:
+
+- **libswscale is in libav.so**, its routines chosen at run time. Its
+  experimental "ops" backend is built and never used (DEBTS: 9.0.2 does
+  not link without it). `avbench -x WxH` times decode and conversion on
+  the call path libmedia uses; on the 3900X that path costs what the
+  table above measured.
+- **The header** (`os64/media.h` § THE PICTURE SIDE): `os64_media_open_for`
+  with WANT_SOUND and/or WANT_PICTURE. An unwanted stream is discarded at
+  the demuxer, so a sound-only probe reads none of the picture's packets.
+  The open succeeds with whatever wanted kind can be decoded, and the
+  info says of each kind whether it is absent, playable or unplayable.
+  It also gives the shown size (the pixel aspect applied), the coded size
+  (cropped), the stated rate, and the rotation, which is reported but not
+  yet honoured (DEBTS). One `os64_media_next` gives sound, a picture or
+  the end. A picture is a handle with its time, duration, size and
+  keyframe flag. There are `os64_media_picture_skip` (the unused pictures),
+  `os64_media_picture_resync` (to the next keyframe) and
+  `os64_media_counts`.
+- **The timeline's zero is the FILE's start**, the earlier of the sound's
+  and the picture's starts, the same for every open. A sound that starts
+  later is preceded by silence, so it is contiguous from frame 0.
+- **A picture is released from any thread and returned on the decoding
+  thread**, because FFmpeg's pools have empty locks in this build
+  (media.c § THREADS). `tools/test_av_audit.py` follows the calls from
+  each off-thread entry point. `tools/test_media_picture_host.sh` runs
+  the glue on the host over the pinned FFmpeg, under ThreadSanitizer and
+  ASan. Freeing on the wrong thread is caught there, as a race in
+  `av_buffer_pool_get`.
+- **The scaler** converts and scales in one step into the caller's
+  pixels. The X byte is written 0xFF. Colours follow mpv's matrix rule
+  where the stream is silent. The primaries and transfer are not
+  converted. An interlaced picture is converted field by field.
+- **`canPlayType`**: `video/mp4` naming `avc1` or `avc3` answers
+  probably, and a codec string that does not parse answers no.
+
 **Pure cores, host-tested with mutants**, in the pattern of
 `media_queue.h` and `media_mix.h`:
 

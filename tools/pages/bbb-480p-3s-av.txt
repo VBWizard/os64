@@ -1,0 +1,7 @@
+bbb-480p-3s-av.mp4: the same three seconds of Big Buck Bunny as
+bbb-480p-3s.mp4, with the film's own sound, (c) copyright 2008, Blender
+Foundation / www.bigbuckbunny.org, licensed under Creative Commons
+Attribution 3.0 (https://creativecommons.org/licenses/by/3.0/). The
+picture is bbb-480p-3s.mp4's, copied; the sound is the film's stereo track
+over the same cut (6:55), AAC 48 kHz. tools/gen_bbb_av.py made it. The
+full notice is /etc/licenses/big-buck-bunny.txt.

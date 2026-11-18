@@ -648,7 +648,17 @@ virtio because its drain waits for the tick.
   FFmpeg (`tools/test_av_audit.py` holds that), so the decoder behind it
   can change without a player changing; its pure core `media_pcm.c` is
   host-tested (`tools/test_media_pcm_host.sh`), its glue by
-  `/tests/mediatest`. **yonder plays a page's `<audio>`**, and a
+  `/tests/mediatest`. **libmedia has a picture side too** (VIDEO.md, V3):
+  `os64_media_open_for` opens for the sound, the picture or both (an
+  unwanted stream is discarded at the demuxer), one thread pulls with
+  `os64_media_next` (sound, a picture or the end), and a scaler turns a
+  picture into a window's XRGB pixels. A picture may be released from
+  any thread, and goes back to FFmpeg only on the decoding thread, since
+  FFmpeg's pools have no lock in a build without threads (media.c
+  § THREADS; the audit pins which libav calls each off-thread entry point
+  can reach). `tools/test_media_picture_host.sh <archive>` runs the glue
+  on the host over the pinned FFmpeg, under ThreadSanitizer and ASan.
+  **yonder plays a page's `<audio>`**, and a
   `<video>`'s sound (a stand-in that shows no picture, `libdom/video.c`,
   AUDIO_YONDER.md § Y.4), through it
   (`apps/yonder/media.c`: a decoder thread per element feeding libmedia's

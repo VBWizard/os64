@@ -10,3 +10,8 @@ clip for the H.264 decoder (/tests/avbench). It was cut from the film's
 from https://distribution.bbb3d.renderfarming.net/), starting 6:55 into the
 film, scaled to 854x480 at 30 frames a second and encoded with x264 at
 about 1 Mbit/s. The changes are those, and the cut.
+
+/tests/pages/bbb-480p-3s-av.mp4 is the same picture with the film's own
+sound over the same cut: the release's stereo track, encoded to AAC at
+48 kHz, 128 kbit/s. That encoding, and the cut, are its changes to the
+sound.

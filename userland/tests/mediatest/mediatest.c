@@ -29,13 +29,37 @@
 //      two packets of the frame asked for
 //   9  bytes that are no media are refused by name
 //  13  the types it answers for (canPlayType's words): AAC and MP4 maybe,
-//      MP4 naming AAC probably, MP4 naming a video codec no, and a type it
-//      has no reader for no; and the sound types' list names audio/mp4
-//      and no video type
+//      MP4 naming AAC probably, MP4 naming H.264 (avc1, avc3, alone or with
+//      their six hex digits) probably, H.264 strings that do not parse and
+//      a video codec not built no, and a type it has no reader for no; and
+//      the sound types' list names audio/mp4 and no video type
 //  14  an MP4 with a picture first and AAC after (avtest's sine_m4a.h)
 //      opens as MP4 ("mov", the reader's first name) and plays its sound:
 //      about one second of the sine at 48 kHz stereo, holding the energy
 //      the host's FFmpeg decodes the bytes to
+//
+// The picture side, on /tests/pages/bbb-480p-3s-av.mp4 (92 pictures of
+// 854x480 at 30 a second, the pixel aspect 1280:1281, and AAC sound, both
+// from the file's start):
+//  15  it opens for both: sound and picture playable, h264, 854x480 coded
+//      and 853 wide as shown, 30 a second, no rotation; os64_media_decode
+//      is refused on it, as pulling sound alone would drop the pictures
+//  16  os64_media_next gives 92 pictures, picture i at 1,600 i (a 30th of
+//      a second) lasting 1,600, and the sound beside them, contiguous from
+//      frame 0 and as long as the file
+//  17  the first 30 pictures, converted bit-exact to 640x360 by a scaler,
+//      give avbench's CRC for the same pictures (a434a9b9): libmedia
+//      converts as the libav fixture does, on any CPU's routines
+//  18  a seek to 72,800 gives first the picture showing there (at 72,000)
+//      and then the 46 after it, and the sound from 72,800
+//  19  after the end, a seek to 0 makes it decode again from picture 0
+//  20  a sound-only open of the same file reads no picture packet, says
+//      the picture is absent, and decodes the same sound
+//  21  a second thread converts and releases every picture while the
+//      first decodes; once the decoder has run again, none is held
+//  22  the picture-only clip (bbb-480p-3s.mp4): open for both or for the
+//      picture, it opens with the sound absent; open for the sound, it is
+//      refused, NO_SOUND
 //
 // Exit codes: 0x3ED10000 success, 0x3ED100NN the step that failed.
 
@@ -395,7 +419,10 @@ static int step_types(void)
     static const struct { const char *type; int answer; } kAsk[] = {
         {"audio/mp4", OS64_MEDIA_TYPE_MAYBE}, {"audio/x-m4a", OS64_MEDIA_TYPE_MAYBE}, {"audio/aac", OS64_MEDIA_TYPE_MAYBE},
         {"video/mp4", OS64_MEDIA_TYPE_MAYBE}, {"audio/mp4; codecs=\"mp4a.40.2\"", OS64_MEDIA_TYPE_PROBABLY},
-        {"video/mp4; codecs=\"avc1.4d400d,mp4a.40.2\"", OS64_MEDIA_TYPE_NO},
+        {"video/mp4; codecs=\"avc1.4d400d,mp4a.40.2\"", OS64_MEDIA_TYPE_PROBABLY},
+        {"video/mp4; codecs=\"avc3.64001F\"", OS64_MEDIA_TYPE_PROBABLY}, {"video/mp4; codecs=avc1", OS64_MEDIA_TYPE_PROBABLY},
+        {"video/mp4; codecs=\"avc1.4d40\"", OS64_MEDIA_TYPE_NO}, {"video/mp4; codecs=\"avc1.4d400g\"", OS64_MEDIA_TYPE_NO},
+        {"video/mp4; codecs=\"hvc1.1.6.L93.B0\"", OS64_MEDIA_TYPE_NO},
         {"audio/mpeg", OS64_MEDIA_TYPE_MAYBE}, {"video/webm", OS64_MEDIA_TYPE_NO}, {"audio/ogg", OS64_MEDIA_TYPE_NO},
     };
     for (size_t i = 0; i < sizeof(kAsk) / sizeof(kAsk[0]); i++) {
@@ -488,6 +515,280 @@ static int step_threads(void)
     return 0;
 }
 
+// ------------------------------------------------------------ the picture side
+
+#define CLIP_AV "/tests/pages/bbb-480p-3s-av.mp4"
+#define CLIP_PICTURE "/tests/pages/bbb-480p-3s.mp4"
+#define PICTURES 92
+#define PERIOD 1600                   // output frames in a 30th of a second
+#define CLIP_SOUND 147168             // the AAC track's 3.066 s, at 48 kHz
+#define EXACT_CRC 0xa434a9b9u         // avbench -n 30 -x 640x360 -e on the same pictures
+
+static uint32_t s_crc_table[256];
+
+static uint32_t crc_update(uint32_t crc, const uint8_t *p, size_t n)
+{
+    if (s_crc_table[1] == 0)
+        for (uint32_t i = 0; i < 256; i++) {
+            uint32_t c = i;
+            for (int k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            s_crc_table[i] = c;
+        }
+    while (n--) crc = s_crc_table[(crc ^ *p++) & 0xFF] ^ (crc >> 8);
+    return crc;
+}
+
+typedef struct {
+    int32_t handle;
+    os64_media_t *m;
+    os64_media_info_t info;
+    int result;
+} Clip;
+
+static void clip_open(Clip *c, const char *path, uint32_t want)
+{
+    os64_memset(c, 0, sizeof(*c));
+    c->handle = (int32_t)os64_open(path, "r");
+    if (c->handle < 0) { c->result = OS64_MEDIA_IO; return; }
+    os64_media_source_t src;
+    os64_media_file_source(c->handle, &src);
+    c->result = os64_media_open_for(&src, want, &c->m, &c->info);
+}
+
+static void clip_close(Clip *c)
+{
+    if (c->m) os64_media_close(c->m);
+    if (c->handle >= 0) os64_close(c->handle);
+    c->m = NULL;
+    c->handle = -1;
+}
+
+typedef struct {
+    long pictures, sound_frames, first_picture_at, picture_gaps, sound_gaps;
+    int64_t sound_next;               // where the next sound should start
+    uint32_t exact_crc;
+    int result;
+} Pull;
+
+// Everything os64_media_next gives until the end. With `exact`, the first
+// 30 pictures are converted by it and folded into exact_crc.
+static void pull_all(os64_media_t *m, os64_media_scaler_t *exact, uint32_t *pixels, int64_t sound_from, Pull *p)
+{
+    static int16_t pcm[4096 * 2];
+    os64_memset(p, 0, sizeof(*p));
+    p->first_picture_at = -1;
+    p->sound_next = sound_from;
+    p->exact_crc = 0xFFFFFFFFu;
+    int64_t expect_at = -1;
+    for (;;) {
+        os64_media_got_t got;
+        int r = os64_media_next(m, pcm, 4096, &got);
+        if (r != 0) { p->result = r; return; }
+        if (got.kind == OS64_MEDIA_GOT_END) return;
+        if (got.kind == OS64_MEDIA_GOT_SOUND) {
+            if (got.at != p->sound_next) p->sound_gaps++;
+            p->sound_next = got.at + got.frames;
+            p->sound_frames += got.frames;
+            continue;
+        }
+        os64_media_picture_t *pic = got.picture;
+        if (p->first_picture_at < 0) {
+            p->first_picture_at = pic->at;
+            expect_at = pic->at;
+        }
+        if (pic->at != expect_at || pic->duration != PERIOD) p->picture_gaps++;
+        expect_at = pic->at + PERIOD;
+        if (exact != NULL && p->pictures < 30) {
+            if (os64_media_scaler_convert(exact, pic, pixels, 640 * 4) != 0) p->result = -100;
+            p->exact_crc = crc_update(p->exact_crc, (const uint8_t *)pixels, 640 * 360 * 4);
+        }
+        p->pictures++;
+        os64_media_picture_release(m, pic);
+    }
+}
+
+static int steps_pictures(void)
+{
+    Clip c;
+    clip_open(&c, CLIP_AV, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE);
+    const os64_media_info_t *i = &c.info;
+    int16_t one[2];
+    if (c.result != 0 || i->sound != OS64_MEDIA_PLAYABLE || i->picture != OS64_MEDIA_PLAYABLE ||
+        !os64_streq(i->picture_codec, "h264") || i->coded_width != 854 || i->coded_height != 480 ||
+        i->width != 853 || i->height != 480 || i->rate_num != 30 || i->rate_den != 1 || i->rotation != 0 ||
+        os64_media_decode(c.m, one, 1) != OS64_MEDIA_BAD_ARGS) {
+        say("both open (result, shown width)", c.result, (long)i->width);
+        clip_close(&c);
+        return FAIL(15);
+    }
+
+    os64_media_scaler_t *exact;
+    static uint32_t pixels[640 * 360];
+    if (os64_media_scaler_create(640, 360, OS64_MEDIA_SCALE_EXACT, &exact) != 0) {
+        clip_close(&c);
+        return FAIL(17);
+    }
+    Pull p;
+    pull_all(c.m, exact, pixels, 0, &p);
+    os64_media_scaler_destroy(exact);
+    if (p.result != 0 || p.pictures != PICTURES || p.first_picture_at != 0 || p.picture_gaps != 0 ||
+        p.sound_gaps != 0 || p.sound_frames < CLIP_SOUND - 1024 || p.sound_frames > CLIP_SOUND + 1024) {
+        say("whole pull (pictures, sound frames)", p.pictures, p.sound_frames);
+        clip_close(&c);
+        return FAIL(16);
+    }
+    if ((p.exact_crc ^ 0xFFFFFFFFu) != EXACT_CRC) {
+        say("exact conversion's crc (got, wanted)", (long)(p.exact_crc ^ 0xFFFFFFFFu), (long)EXACT_CRC);
+        clip_close(&c);
+        return FAIL(17);
+    }
+    long whole_sound = p.sound_frames;
+
+    // 18: 72,800 is half a picture past picture 45.
+    int r = os64_media_seek(c.m, 72800);
+    pull_all(c.m, NULL, NULL, 72800, &p);
+    if (r != 0 || p.result != 0 || p.first_picture_at != 72000 || p.pictures != PICTURES - 45 ||
+        p.picture_gaps != 0 || p.sound_gaps != 0) {
+        say("seek (first picture at, pictures after)", p.first_picture_at, p.pictures);
+        clip_close(&c);
+        return FAIL(18);
+    }
+    // 19: the end is behind it; a seek starts it again.
+    r = os64_media_seek(c.m, 0);
+    pull_all(c.m, NULL, NULL, 0, &p);
+    if (r != 0 || p.result != 0 || p.first_picture_at != 0 || p.pictures != PICTURES) {
+        say("replay (first picture at, pictures)", p.first_picture_at, p.pictures);
+        clip_close(&c);
+        return FAIL(19);
+    }
+    clip_close(&c);
+
+    // 20: the same file for its sound alone.
+    clip_open(&c, CLIP_AV, OS64_MEDIA_WANT_SOUND);
+    Tally t;
+    if (c.result == 0) tally_all(c.m, &t);
+    os64_media_counts_t counts;
+    os64_media_counts(c.m, &counts);
+    bool sound_only = c.result == 0 && c.info.picture == OS64_MEDIA_ABSENT && c.info.sound == OS64_MEDIA_PLAYABLE &&
+                      t.result == 0 && t.frames == whole_sound && counts.picture_packets == 0 &&
+                      counts.sound_packets > 0;
+    clip_close(&c);
+    if (!sound_only) {
+        say("sound only (picture packets, frames)", (long)counts.picture_packets, c.result == 0 ? (long)t.frames : c.result);
+        return FAIL(20);
+    }
+    return 0;
+}
+
+// 21: pictures handed to a second thread, which converts and releases them.
+#define HANDOFF 8
+static struct {
+    os64_lock_t lock;
+    os64_media_picture_t *ring[HANDOFF];
+    uint32_t head, count;
+    bool ended;
+    os64_media_t *m;
+    long converted, failed;
+} s_handoff;
+
+static int64_t convert_thread(void *arg)
+{
+    (void)arg;
+    os64_media_scaler_t *s;
+    static uint32_t pixels[320 * 180];
+    if (os64_media_scaler_create(320, 180, OS64_MEDIA_SCALE_FAST, &s) != 0) return -1;
+    for (;;) {
+        os64_lock_acquire(&s_handoff.lock);
+        os64_media_picture_t *p = NULL;
+        bool ended = s_handoff.ended;
+        if (s_handoff.count > 0) {
+            p = s_handoff.ring[s_handoff.head];
+            s_handoff.head = (s_handoff.head + 1) % HANDOFF;
+            s_handoff.count--;
+        }
+        os64_lock_release(&s_handoff.lock);
+        if (p == NULL) {
+            if (ended) break;
+            os64_yield();
+            continue;
+        }
+        if (os64_media_scaler_convert(s, p, pixels, 320 * 4) == 0) s_handoff.converted++;
+        else s_handoff.failed++;
+        os64_media_picture_release(s_handoff.m, p);
+    }
+    os64_media_scaler_destroy(s);
+    return 0;
+}
+
+static int step_handoff(void)
+{
+    Clip c;
+    clip_open(&c, CLIP_AV, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE);
+    if (c.result != 0) { say("handoff open (result)", c.result, 0); return FAIL(21); }
+    os64_memset(&s_handoff, 0, sizeof(s_handoff));
+    s_handoff.m = c.m;
+    int64_t tid = os64_thread(convert_thread, NULL);
+    static int16_t pcm[4096 * 2];
+    long given = 0;
+    int r = 0;
+    for (;;) {
+        os64_media_got_t got;
+        if ((r = os64_media_next(c.m, pcm, 4096, &got)) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
+        if (got.kind != OS64_MEDIA_GOT_PICTURE) continue;
+        for (;;) {
+            os64_lock_acquire(&s_handoff.lock);
+            bool room = s_handoff.count < HANDOFF;
+            if (room) {
+                s_handoff.ring[(s_handoff.head + s_handoff.count) % HANDOFF] = got.picture;
+                s_handoff.count++;
+            }
+            os64_lock_release(&s_handoff.lock);
+            if (room) break;
+            os64_yield();
+        }
+        given++;
+    }
+    os64_lock_acquire(&s_handoff.lock);
+    s_handoff.ended = true;
+    os64_lock_release(&s_handoff.lock);
+    int64_t joined = -99;
+    if (tid >= 0) os64_thread_join((int32_t)tid, &joined);
+    // The released pictures go back to the decoder at its next call.
+    os64_media_got_t got;
+    int again = os64_media_next(c.m, pcm, 4096, &got);
+    os64_media_counts_t counts;
+    os64_media_counts(c.m, &counts);
+    clip_close(&c);
+    if (r != 0 || joined != 0 || given != PICTURES || s_handoff.converted != PICTURES || s_handoff.failed != 0 ||
+        again != 0 || got.kind != OS64_MEDIA_GOT_END || counts.pictures_held != 0 || counts.pictures_out != PICTURES) {
+        say("handoff (converted, held)", s_handoff.converted, (long)counts.pictures_held);
+        return FAIL(21);
+    }
+    return 0;
+}
+
+static int step_picture_only(void)
+{
+    Clip c;
+    static const uint32_t kWants[2] = { OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, OS64_MEDIA_WANT_PICTURE };
+    for (int w = 0; w < 2; w++) {
+        clip_open(&c, CLIP_PICTURE, kWants[w]);
+        bool ok = c.result == 0 && c.info.sound == OS64_MEDIA_ABSENT && c.info.picture == OS64_MEDIA_PLAYABLE;
+        Pull p;
+        if (ok) {
+            pull_all(c.m, NULL, NULL, 0, &p);
+            ok = p.result == 0 && p.pictures == PICTURES && p.sound_frames == 0;
+        }
+        clip_close(&c);
+        if (!ok) { say("picture only (want, result)", (long)kWants[w], c.result); return FAIL(22); }
+    }
+    clip_open(&c, CLIP_PICTURE, OS64_MEDIA_WANT_SOUND);
+    int refused = c.result;
+    clip_close(&c);
+    if (refused != OS64_MEDIA_NO_SOUND) { say("picture only, for sound (result)", refused, 0); return FAIL(22); }
+    return 0;
+}
+
 int main(void)
 {
     int failed = step_threads();      // first: see step 10 above
@@ -500,11 +801,15 @@ int main(void)
     if (!failed) failed = step_noise();
     if (!failed) failed = step_types();
     if (!failed) failed = step_m4a();
+    if (!failed) failed = steps_pictures();
+    if (!failed) failed = step_handoff();
+    if (!failed) failed = step_picture_only();
     if (failed) {
         os64_printf("mediatest: FAIL step %d\n", failed & 0xFF);
         return failed;
     }
     os64_printf("mediatest: MP3, WAV and AAC in MP4 to 48 kHz stereo, seeks, a 5.1 fold, two threads; "
+                "H.264 pictures beside their sound, converted, seeked, handed to another thread; "
                 "all steps passed\n");
     return PASS;
 }
