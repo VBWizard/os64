@@ -174,6 +174,8 @@ response-clone-iframe.window.html	an iframe's window, and this browser draws no 
 [passing]
 json.any.html	Ensure UTF-16 results in an error
 json.any.html	Ensure the correct JSON parser is used
+response-body-read-task-handling.html	piping from a body stream to a JS-written WritableStream should occur in a microtask scope
+response-body-read-task-handling.html	reading from a body stream should occur in a microtask scope
 response-cancel-stream.any.html	Accessing .body after canceling it
 response-cancel-stream.any.html	Cancelling a closed Response stream
 response-cancel-stream.any.html	Cancelling a closed blob Response stream
@@ -231,10 +233,12 @@ response-consume.html	Consume response's body: from FormData to formData
 response-consume.html	Consume response's body: from FormData to text
 response-consume.html	Consume response's body: from FormData without correct type to formData (error case)
 response-consume.html	Consume response's body: from URLSearchParams to arrayBuffer
+response-consume.html	Consume response's body: from URLSearchParams to blob
 response-consume.html	Consume response's body: from URLSearchParams to formData
 response-consume.html	Consume response's body: from URLSearchParams to text
 response-consume.html	Consume response's body: from URLSearchParams without correct type to formData (error case)
 response-consume.html	Consume response's body: from blob to arrayBuffer
+response-consume.html	Consume response's body: from blob to blob
 response-consume.html	Consume response's body: from blob to json
 response-consume.html	Consume response's body: from blob to text
 response-consume.html	Consume response's body: from blob with correct multipart type to formData
@@ -242,9 +246,11 @@ response-consume.html	Consume response's body: from blob with correct urlencoded
 response-consume.html	Consume response's body: from blob without correct multipart type to formData (error case)
 response-consume.html	Consume response's body: from blob without correct urlencoded type to formData (error case)
 response-consume.html	Consume response's body: from fetch to arrayBuffer
+response-consume.html	Consume response's body: from fetch to blob
 response-consume.html	Consume response's body: from fetch to text
 response-consume.html	Consume response's body: from fetch without correct type to formData (error case)
 response-consume.html	Consume response's body: from stream to arrayBuffer
+response-consume.html	Consume response's body: from stream to blob
 response-consume.html	Consume response's body: from stream to json
 response-consume.html	Consume response's body: from stream to text
 response-consume.html	Consume response's body: from stream with correct multipart type to formData
@@ -252,6 +258,7 @@ response-consume.html	Consume response's body: from stream with correct urlencod
 response-consume.html	Consume response's body: from stream without correct multipart type to formData (error case)
 response-consume.html	Consume response's body: from stream without correct urlencoded type to formData (error case)
 response-consume.html	Consume response's body: from text to arrayBuffer
+response-consume.html	Consume response's body: from text to blob
 response-consume.html	Consume response's body: from text to json
 response-consume.html	Consume response's body: from text to text
 response-consume.html	Consume response's body: from text with correct multipart type to formData

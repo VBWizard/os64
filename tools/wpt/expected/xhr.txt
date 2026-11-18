@@ -849,6 +849,7 @@ setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argume
 setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 1
 setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 2
 setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 3
+status-error.htm	POST on blob uri
 status-error.htm	Unknown scheme
 sync-xhr-and-window-onload.html	sync XHR should not fire window.onload synchronously
 thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using addEventListener) goes to window.onerror

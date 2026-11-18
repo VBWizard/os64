@@ -95,6 +95,23 @@ was served.</p>
     snd.src = URL.createObjectURL(new Blob([wav.buffer], {type: 'audio/wav'}));
   }
 
+  // FileReader: a Blob read as text, and the picture's bytes read as a
+  // data: URL and drawn from it.
+  const reader = new FileReader();
+  reader.onload = () => say('FileReader: read "' + reader.result + '"', reader.result === 'read by a FileReader');
+  reader.onerror = () => say('FileReader: failed', false);
+  reader.readAsText(new Blob(['read by a FileReader']));
+  const urlReader = new FileReader();
+  urlReader.onload = () => {
+    const again = document.createElement('img');
+    again.width = 64; again.height = 32;
+    again.onload = () => say('FileReader: a data: URL drawn', urlReader.result.startsWith('data:image/png;base64,'));
+    again.onerror = () => say('FileReader: the data: URL did not draw', false);
+    again.src = urlReader.result;
+    document.getElementById('pic').after(again);
+  };
+  urlReader.readAsDataURL(new Blob([png], {type: 'image/png'}));
+
   // The hand-rolled download: href, click, revoke.
   document.getElementById('save').onclick = () => {
     const file = URL.createObjectURL(new Blob(['Saved from a blob: URL.\n'], {type: 'text/plain'}));

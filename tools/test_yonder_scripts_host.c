@@ -12287,6 +12287,24 @@ static bool style_worker_land(const char *tail, bool preload)
     return false;
 }
 
+/* A FileReader's read runs as a task of the page's message queue, named
+ * by its source, and its result reaches the page (BLOB_URLS.md decision
+ * 10). */
+static void file_reader_case(void)
+{
+    fake_fetch_reset();
+    loop_page("<p id=out>waiting</p><script>const r=new FileReader();"
+              "r.onload=()=>{document.getElementById('out').textContent=r.result;};"
+              "r.readAsText(new Blob(['read here']));</script>");
+    bool settled = loop_settle();
+    yonder_scripts_t *host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
+    check(settled && yonder_scripts_message_next(host) != UINT64_MAX, "file reader: its read is queued");
+    for (int i = 0; i < 4 && !probe_text_is("out", "read here"); i++) script_turn();
+    check(probe_text_is("out", "read here"), "file reader: the page's loop runs the read and the result arrives");
+    check(!strcmp(yonder_scripts_message_kind(host), "file reading"), "file reader: the task that ran is named");
+    loop_drop();
+}
+
 /* The one download job blob_download_case hands the pool. */
 static yonder_download_job_t *door_download;
 static os64_work_id_t door_submit(const os64_work_t *work) {
@@ -12768,6 +12786,7 @@ int main(void)
     blob_door_cases();
     blob_download_case();
     blob_picture_sweep();
+    file_reader_case();
     style_preload_pages();
     style_preload_limits();
     if(getenv("YONDER_STYLES_ONLY")) {

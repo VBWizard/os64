@@ -2058,6 +2058,12 @@ uint64_t yonder_scripts_message_next(const yonder_scripts_t *s)
     return s != NULL && !s->dead ? os64_dom_message_next(s->dom) : UINT64_MAX;
 }
 
+const char *yonder_scripts_message_kind(const yonder_scripts_t *s)
+{
+    const char *kind = s != NULL ? os64_dom_message_kind(s->dom) : NULL;
+    return kind != NULL ? kind : "message";
+}
+
 bool yonder_scripts_message_fire(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
