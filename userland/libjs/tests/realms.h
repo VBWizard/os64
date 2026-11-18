@@ -606,7 +606,7 @@ static void realm_cases(void)
     finalization_settings_cases();
     finalization_task_cases();
     import_settings_cases();
-    neutral_promise_settings_cases();
+    neutral_promise_settings_cases(); browser_job_reporting_cases();
     neutral_native_job_cases();
     host_promise_capability_cases();
     host_promise_forwarding_cases();

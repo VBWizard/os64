@@ -290,11 +290,11 @@ Before publishing browser settings queries, implement and prove:
 - Retained Streams native error conversion uses the explicit
   [host capability policy](IFRAME_F4_HOST_PROMISE_LIFETIME.md). Author replacement
   adoption retains ordinary retirement discard; it is not private continuation work.
-- Integrate the opt-in finalization task source into browser host selection and
-  resolve the neutral-job
-  exception-reporting policy. The [neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md)
-  supplies actual capability current/script incumbent without inventing entry or
-  backup settings; it does not complete those remaining browser host algorithms.
+- The [browser job policy](IFRAME_F4_BROWSER_JOBS.md) connects opt-in task
+  selection and neutral-job diagnostics. Default browser activation remains
+  gated on the binding/security acceptance here; the
+  [neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md) supplies actual
+  capability current/script incumbent without inventing entry or backup settings.
 - A pre-member-check boundary that refuses missing settings, with no guessed
   bootstrap caller. Security/lifetime review precedes browser publication.
 

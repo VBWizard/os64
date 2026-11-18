@@ -227,8 +227,35 @@ static void finalization_task_bootstrap_cases(void)
     }
 }
 
+static void finalization_task_split_cases(void)
+{
+    for(int policy=OS64_JS_TEARDOWN_FATAL;policy<=OS64_JS_TEARDOWN_RECLAIM;policy++) {
+        FinalizationSettings f;
+        if(!finalization_tasks_open(&f,policy,0)){finalization_close(&f);continue;}
+        os64_js_outcome_t out; bool begun=false;
+        check(os64_js_finalization_task_begin(f.runtime,OS64_JS_ABI_ID,&begun,&out)==OS64_JS_OK&&!begun,
+              "cleanup split: empty queue opens no task");
+        check(realm_execute(f.realm[0],"captureRecord();globalThis.reg=new D.FinalizationRegistry(C.cleanup);"
+              "let t={};t.self=t;reg.register(t,73);t=null",&out)==OS64_JS_OK,
+              "cleanup split: registry prepared");
+        finalization_tasks_collect(&f);
+        check(os64_js_finalization_task_begin(f.runtime,OS64_JS_ABI_ID,NULL,&out)==OS64_JS_BAD_ARGUMENT,
+              "cleanup split: missing output refuses without consuming task");
+        check(os64_js_finalization_task_begin(f.runtime,OS64_JS_ABI_ID,&begun,&out)==OS64_JS_OK&&begun&&
+              f.calls==1&&finalization_task_markers==0&&out.jobs_pending,
+              "cleanup split: selected task remains open before checkpoint");
+        check(os64_js_task_begin(f.runtime,OS64_JS_ABI_ID,"renew",&out)==OS64_JS_BUSY,
+              "cleanup split: host reporting cannot renew task budget");
+        check(os64_js_task_end(f.runtime,OS64_JS_ABI_ID,&out)==OS64_JS_OK&&
+              out.jobs_executed==2&&finalization_task_markers==1,
+              "cleanup split: closing checkpoints under accumulated job count");
+        finalization_close(&f);
+    }
+}
+
 static void finalization_task_cases(void)
 {
+    finalization_task_split_cases();
     finalization_task_bootstrap_cases();
     finalization_task_staging_cases();
     finalization_task_release_cases();

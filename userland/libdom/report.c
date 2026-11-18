@@ -309,7 +309,7 @@ bool d_synchronous_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
                             DSynchronousCallback *record)
 {
     *record = (DSynchronousCallback)D_SYNCHRONOUS_CALLBACK_INIT;
-    if (!JS_IsObject(value) || !dom->cluster || !dom->cluster->synchronous_settings) {
+    if (!JS_IsObject(value) || !d_settings(dom, synchronous)) {
         record->captured.value = JS_DupValue(ctx, value);
         return true;
     }
@@ -410,19 +410,19 @@ static bool scheduled_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst valu
 bool d_scheduled_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
                           DScheduledCallback *record)
 {
-    return scheduled_capture(dom, ctx, value, record, dom->cluster && dom->cluster->scheduled_settings);
+    return scheduled_capture(dom, ctx, value, record, d_settings(dom, scheduled));
 }
 
 bool d_observer_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
                          DScheduledCallback *record)
 {
-    return scheduled_capture(dom, ctx, value, record, dom->cluster && dom->cluster->observer_settings);
+    return scheduled_capture(dom, ctx, value, record, d_settings(dom, observer));
 }
 
 bool d_custom_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
                        DScheduledCallback *record)
 {
-    return scheduled_capture(dom, ctx, value, record, dom->cluster && dom->cluster->custom_settings);
+    return scheduled_capture(dom, ctx, value, record, d_settings(dom, custom));
 }
 
 int d_captured_eligible(os64_dom_t *dom, JSContext *ctx, const DScheduledCallback *record)
@@ -1059,6 +1059,25 @@ void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome)
         }
         if (!owed) return;
     }
+}
+
+bool os64_dom_finalization_task_pending(const os64_dom_t *dom)
+{
+    return d_delivery_active(dom) &&
+        os64_js_finalization_task_pending(dom->runtime, OS64_JS_ABI_ID);
+}
+
+bool os64_dom_finalization_task_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
+{
+    if (!outcome) return false;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (!os64_dom_finalization_task_pending(dom)) return false;
+    bool begun = false;
+    os64_js_status_t status = os64_js_finalization_task_begin(dom->runtime, OS64_JS_ABI_ID, &begun, outcome);
+    /* Settle errors, rejections and their microtasks before ending the task;
+     * no later ordinary task lends them a new deadline or a reporting identity. */
+    if (begun) d_task_finish(dom, outcome);
+    return begun || status != OS64_JS_BUSY;
 }
 
 /* Whether a script came from another origin than the page's, which HTML's

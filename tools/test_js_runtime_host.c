@@ -2905,6 +2905,12 @@ int main(int argc, char **argv)
         printf("libjs callback settings: %u checks, %u failures\n", checks, failures);
         return failures != 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--browser-jobs")) {
+        browser_job_reporting_cases(); neutral_promise_settings_cases(); finalization_task_cases();
+        check(live == 0, "browser jobs release allocations");
+        printf("Browser jobs: %u checks, %u failures\n",checks,failures);
+        return failures != 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--neutral-promise-settings")) {
         neutral_promise_settings_cases(); neutral_promise_failure_cases();
         check(live == 0, "neutral Promise settings release allocations");

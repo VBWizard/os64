@@ -416,6 +416,7 @@ struct os64_dom {
     size_t bytes, retained;
     /* `bytes` by kind; the kinds sum to it. */
     os64_dom_mem_t memory[OS64_DOM_MEM_KINDS];
+    bool browser_jobs; /* Standalone opt-in to the composed callback settings. */
     bool closed;
     bool departure_finishing, departure_finished;
     bool installing;
@@ -2240,4 +2241,8 @@ size_t d_reactions_rows(void);
 bool d_reactions_row_name(size_t i, char *out, size_t cap);
 const char *d_reactions_row_state(const os64_dom_t *dom, size_t i);
 size_t d_reactions_wrapped(const os64_dom_t *dom);
+
+/* Callback policy is shared by explicit clusters and standalone browser hosts. */
+#define d_settings(dom, family) ((dom)->browser_jobs || ((dom)->cluster && (dom)->cluster->family##_settings))
+
 #endif

@@ -72,6 +72,12 @@ os64_js_status_t os64_js_enable_finalization_settings(os64_js_runtime_t *runtime
  * retain the registry and cells remain unregisterable until delivery. */
 os64_js_status_t os64_js_enable_finalization_tasks(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_outcome_t *outcome);
+/* Explicit browser job policy, configured before execution: composes neutral
+ * Promise settings and deferred cleanup. Abrupt neutral jobs retain outcome
+ * diagnostics but do not call a realm's exception hook without a report global.
+ * Other constructors/opt-ins preserve their reporting policy. */
+os64_js_status_t os64_js_enable_browser_jobs(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome);
 /* Owner-thread, allocation-free presence query; false for invalid ABI/runtime
  * or absent opt-in. Includes ineligible entries that dispatch will discard. */
 bool os64_js_finalization_task_pending(os64_js_runtime_t *runtime, const char *caller_abi);
@@ -80,6 +86,12 @@ bool os64_js_finalization_task_pending(os64_js_runtime_t *runtime, const char *c
  * exceptions report to the registry host. Outcome jobs_pending describes only
  * microtasks; use the separate presence query for remaining cleanup tasks.
  * Ineligible entries are discarded before budget consumption. */
+/* Split host delivery: visits one cleanup and leaves its task open for host
+ * reporting/checkpoints under the same budget. Initialize begun to false;
+ * admission writes it, pre-admission refusal leaves it unchanged. If true,
+ * call task_end even after an exception/sticky failure. Empty queue opens none. */
+os64_js_status_t os64_js_finalization_task_begin(os64_js_runtime_t *runtime,
+    const char *caller_abi, bool *begun, os64_js_outcome_t *outcome);
 os64_js_status_t os64_js_run_finalization_task(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_outcome_t *outcome);
 

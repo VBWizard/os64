@@ -562,7 +562,7 @@ static JSValue handler_assign(os64_dom_t *dom, JSContext *ctx, DValue *entry,
 {
     os64_js_callback_t captured = OS64_JS_CALLBACK_INIT;
     os64_js_realm_t *associated = NULL;
-    bool tracked = dom->cluster && dom->cluster->handler_settings;
+    bool tracked = d_settings(dom, handler);
     if (tracked && JS_IsObject(value) && !handler_capture(dom, ctx, value, &captured, &associated))
         return JS_EXCEPTION;
     JSValue result = JS_EXCEPTION;
@@ -659,7 +659,7 @@ static int slot_compile_body(os64_dom_t *dom, JSContext *ctx, DValue *entry, DLi
         slot_state(dom, slot, D_SLOT_ERROR);
         return -1;
     }
-    if (!dom->cluster || !dom->cluster->handler_settings) {
+    if (!d_settings(dom, handler)) {
         d_free(dom, source);
         source = NULL;
     }
@@ -685,7 +685,7 @@ static int slot_compile_body(os64_dom_t *dom, JSContext *ctx, DValue *entry, DLi
     }
     os64_js_callback_t captured = OS64_JS_CALLBACK_INIT;
     os64_js_realm_t *associated = NULL;
-    if (dom->cluster && dom->cluster->handler_settings) {
+    if (d_settings(dom, handler)) {
         size_t start = sizeof(head) - 1 - (sizeof("function on") - 1);
         if (!JS_ClearFunctionScriptProvenance(function, source + start, at - 2 - start)) {
             d_free(dom, source);
@@ -725,7 +725,7 @@ static JSValue compile_handler(JSContext *ctx, void *opaque)
 
 static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListener *slot)
 {
-    if (!dom->cluster || !dom->cluster->handler_settings) return slot_compile_body(dom, ctx, entry, slot);
+    if (!d_settings(dom, handler)) return slot_compile_body(dom, ctx, entry, slot);
     HandlerCompile call = {dom, entry, slot};
     JSValue result = JS_UNDEFINED;
     os64_js_outcome_t out;
@@ -1885,7 +1885,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
         return result < 0 ? JS_EXCEPTION : JS_NewBool(ctx, result != 0);
     }
     if (argc < 2) return JS_ThrowTypeError(ctx, "Listener methods need a type and a callback");
-    bool tracked = registration->cluster && registration->cluster->listener_settings;
+    bool tracked = d_settings(registration, listener);
     bool capture, once;
     DString type = {0};
     os64_js_callback_t captured = OS64_JS_CALLBACK_INIT;

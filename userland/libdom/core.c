@@ -524,13 +524,22 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
 
 static os64_dom_t *create_binding(os64_js_runtime_t *, os64_js_realm_t *,
     os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *,
-    os64_js_outcome_t *, os64_dom_cluster_t *, bool *);
+    os64_js_outcome_t *, os64_dom_cluster_t *, bool *, bool);
 
 os64_dom_t *d_create_in_realm(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
     os64_html_document_t *document, os64_page_state_t *state,
     const os64_dom_options_t *options, os64_js_outcome_t *outcome)
 {
-    return create_binding(runtime, realm, document, state, options, outcome, NULL, NULL);
+    return create_binding(runtime, realm, document, state, options, outcome, NULL, NULL, false);
+}
+
+os64_dom_t *os64_dom_create_with_browser_jobs(os64_js_runtime_t *runtime,
+    os64_html_document_t *document, os64_page_state_t *state,
+    const os64_dom_options_t *options, os64_js_outcome_t *outcome)
+{
+    if (os64_js_enable_browser_jobs(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) return NULL;
+    os64_js_realm_t *realm = os64_js_primary_realm(runtime, OS64_JS_ABI_ID, outcome);
+    return realm ? create_binding(runtime, realm, document, state, options, outcome, NULL, NULL, true) : NULL;
 }
 
 os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *cluster, os64_js_realm_t *realm,
@@ -541,7 +550,7 @@ os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *cluster, os64_
     if (!outcome) return admission;
     if (!cluster) { outcome->status = OS64_JS_BAD_ARGUMENT; return admission; }
     admission.binding = create_binding(cluster->runtime, realm, document, state,
-        options, outcome, cluster, &admission.consumed);
+        options, outcome, cluster, &admission.consumed, false);
     return admission;
 }
 
@@ -735,6 +744,13 @@ os64_dom_cluster_t *os64_dom_cluster_create_with_finalization_tasks(os64_js_runt
     return os64_dom_cluster_create_with_stream_callback_settings(runtime, limits, outcome);
 }
 
+os64_dom_cluster_t *os64_dom_cluster_create_with_browser_jobs(os64_js_runtime_t *runtime,
+    const os64_dom_cluster_limits_t *limits, os64_js_outcome_t *outcome)
+{
+    if (os64_js_enable_browser_jobs(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) return NULL;
+    return os64_dom_cluster_create_with_stream_callback_settings(runtime, limits, outcome);
+}
+
 static JSValue import_base(JSContext *ctx, void *opaque)
 {
     os64_dom_t *dom = opaque;
@@ -873,7 +889,7 @@ static os64_dom_t *allocate_binding(os64_js_runtime_t *runtime, os64_js_realm_t 
 static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
                               os64_html_document_t *document, os64_page_state_t *state,
                               const os64_dom_options_t *options, os64_js_outcome_t *outcome,
-                              os64_dom_cluster_t *cluster, bool *consumed)
+                              os64_dom_cluster_t *cluster, bool *consumed, bool browser_jobs)
 {
     if (outcome == NULL) return NULL;
     JSContext *ctx = os64_js_realm_context(realm, OS64_JS_ABI_ID, outcome);
@@ -911,6 +927,7 @@ static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *r
     }
     os64_dom_t *dom = allocate_binding(runtime, realm, ctx, document, state, selected, cluster, outcome);
     if (!dom) return NULL;
+    dom->browser_jobs = browser_jobs;
     if (cluster) {
         /* Both ledgers were preflighted and no script has run since then.
          * Admission itself allocates nothing; ownership changes as one pair. */
@@ -925,7 +942,14 @@ static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *r
         cluster->bytes += sizeof(*dom);
         *consumed = true;
     }
+    if (browser_jobs && os64_js_realm_task_begin(realm, OS64_JS_ABI_ID, "DOM installation", outcome) != OS64_JS_OK) {
+        os64_free(dom);
+        return NULL;
+    }
     if (install_binding(dom, ctx) < 0) goto fail;
+    if (browser_jobs) {
+        if (os64_js_task_end(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) goto standalone_cleanup;
+    }
     if (cluster) {
         if (os64_js_task_end(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) {
             cluster->poisoned = true;
@@ -950,6 +974,12 @@ fail:
      * Only the binding's own classes carry an opaque slot: JS_SetOpaque writes
      * any object's union, and the registry also holds engine functions. */
     construction_error(ctx, outcome);
+    if (browser_jobs) {
+        os64_js_outcome_t ended;
+        os64_js_status_t status = os64_js_task_end(runtime, OS64_JS_ABI_ID, &ended);
+        if (status != OS64_JS_OK) *outcome = ended;
+    }
+standalone_cleanup:
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
         JSClassID id = JS_GetClassID(entry->value);
         if (id == dom->anchor_class || id == dom->node_class || id == dom->collection_class ||

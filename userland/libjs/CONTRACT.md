@@ -1545,5 +1545,14 @@ exist. Actual current/incumbent queries retain lifecycle checks. The raw engine
 scope borrows execution contexts, adds no roots, and restores enclosing settings.
 It shares existing cancellation and job caps and does not authorize child-local
 recovery. Custom-capability throws retain queue-context diagnostic reporting,
-not a new HTML reporting-global claim. The unresolved browser policy and DOM
+not a new HTML reporting-global claim. The unresolved HTML case and DOM
 integration proof are in the [neutral Promise chapter](../../docs/design/pending/IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md).
+
+The explicit `os64_js_enable_browser_jobs` composition keeps prepared neutral
+job exceptions in host outcomes without selecting a realm exception hook when
+entry/reporting settings are absent. Diagnostic context does not supply a
+reporting global. Other opt-ins keep their policy; generic raw jobs and registry
+tasks keep their destinations. Split `os64_js_finalization_task_begin` lets a
+host settle its reporting obligations before `os64_js_task_end`, under the
+original cleanup budget. See the [browser job chapter](../../docs/design/pending/IFRAME_F4_BROWSER_JOBS.md)
+for task selection and the unresolved HTML reporting case.
