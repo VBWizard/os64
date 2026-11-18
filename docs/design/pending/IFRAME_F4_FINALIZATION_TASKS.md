@@ -12,8 +12,10 @@ progress and Yonder's default configuration does not enable this opt-in.
 Patch 0042 provides a separate runtime queue with the existing owned job-entry
 machinery. Ordinary peek/execute/discard APIs select microtasks. The explicit
 finalization APIs select cleanup tasks. Transaction groups retain their second
-linkage across both queues; rollback discards both lanes without touching
-sibling work. Successful private installation drains its microtasks, leaves
+linkage across both queues; rollback keeps the group selected and discards
+both lanes to exhaustion without touching sibling work. A native finalizer
+released from one lane can enqueue transaction work in the other. Successful
+private installation drains its microtasks, leaves
 cleanup deferred, and can activate with that cleanup pending. Host delivery
 refuses an unpublished candidate.
 
@@ -56,7 +58,9 @@ thread, timer or wake notification.
 Registry activity supplies the task owner. Callback executable realm supplies
 settings entry, and captured incumbent/source restoration remains independent.
 Retired or failed executable, activity or incumbent suppress delivery. Cleanup
-exceptions report to the registry's script host after scopes unwind. A cleanup
+exceptions report to the registry's script host after scopes unwind, including
+trusted bootstrap that captured no incumbent. Reporting does not depend on
+whether callback settings were prepared. A cleanup
 and its subsequent microtasks share the deadline and jobs-per-turn limit;
 recursive dispatch cannot renew them. An ineligible task consumes no execution
 count, but its native finalizers and any jobs they enqueue still run inside the
@@ -98,7 +102,7 @@ the conservative recovery fallback. DOM integration converts a custom-element
 callback from cleanup, then invokes its constructor and reactions after cleanup
 has ended, preserving the captured source and incumbent.
 
-The final engine passes **37,935 / 126,865 full runtime checks**, zero failures
+The initial submission passes **37,935 / 126,865 full runtime checks**, zero failures
 or live allocations, including parser refusal and fatal-invariant checks. The
 focused suite passes **3,073 / 5,103 checks**. Per teardown policy, allocation
 injection covers **3 / 17 failure points per scheduling lane** across construction,
@@ -106,7 +110,7 @@ registration and enqueue. The saved engine without the final teardown drain
 fails the new pending-destruction regression with its unreleased-object
 invariant; the final engine passes.
 
-Final-engine DOM suites pass in both profiles: cleanup **474**, Promise **246**,
+Initial-submission DOM suites pass in both profiles: cleanup **474**, Promise **246**,
 retirement **9,770** and recovery **3,198** checks. Shipping Yonder, CLI and runtime
 consumer builds pass; source preparation, cross-header syntax and **235 engine /
 87 runtime exports** pass. The prepared engine identity is
@@ -119,3 +123,31 @@ Both root teardown policies are exercised. Source, binaries and logs are frozen
 with a SHA-256 manifest for PR #646.
 ASan, UBSan and LeakSanitizer remain enabled. Host execution and guest compilation
 do not constitute P5 acceptance or enable visible frames.
+
+## Review corrections
+
+The review identified rollback that stopped after one pass through each queue,
+allowing a native finalizer to leave transaction microtasks behind, and deferred
+cleanup reporting that incorrectly required a captured incumbent. Rollback now
+rechecks both transaction lanes until empty. Deferred tasks select their registry
+reporting realm independently of captured settings; legacy job policy is unchanged.
+
+Shared host/guest regressions cover a failed candidate whose held-value finalizer
+enqueues a callback in a healthy realm, preserving an independent sibling task,
+and successful bootstrap construction with a throwing foreign callback. Both
+regressions fail on the unfixed implementation under both allocator profiles.
+The merged test runner retains F15 scoped-access and F4 finalization coverage.
+
+After both corrections and the userland merge, full runtime passes **38,323 /
+127,629 checks**, zero failures or live allocations; focused finalization passes
+**3,267 / 5,297**. The scoped-access selector passes **195 / 571**; parser refusal,
+raw construction and fatal-invariant paths pass. In each allocator profile,
+DOM cleanup **474**, child installation **58**, callback reporting **1,118**,
+retirement **9,770** and recovery **3,198** pass. ASan, UBSan and LeakSanitizer
+remain enabled. Shipping Yonder, CLI and runtime consumer builds, source/header
+checks and the unchanged **235 engine / 87 runtime export** audits pass.
+
+The corrected prepared engine identity is
+`3e9a81ec0428aaf6456af21c9d8cf5b152793b747ebb503bd9cc86ff5a91afd4`.
+Review-correction evidence is frozen separately from the initial submission;
+no guest execution or P5 acceptance is claimed.

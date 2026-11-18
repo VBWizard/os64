@@ -151,8 +151,85 @@ static void finalization_task_budget_cases(void)
     }
 }
 
+/* Trusted installation captures no incumbent. The registry belongs to the
+ * candidate while its callback and native-finalizer work belong to healthy C. */
+static os64_js_status_t finalization_bootstrap_install(os64_js_realm_t *realm, JSContext *ctx, void *opaque)
+{
+    (void)realm;
+    FinalizationSettings *f = finalization_settings;
+    JSValue ctor = realm_property(ctx, "FinalizationRegistry");
+    JSValue callback = realm_property(f->ctx[2], opaque ? "cleanup" : "throwCleanup");
+    JSValue registry = JS_CallConstructor(ctx, ctor, 1, &callback);
+    JS_FreeValue(ctx, ctor); JS_FreeValue(ctx, callback);
+    if (JS_IsException(registry)) return OS64_JS_EXCEPTION;
+    JSValue args[2] = {JS_NewObject(ctx), opaque ?
+        JS_NewObjectClass(ctx, finalization_release_class) : JS_NewInt32(ctx, 73)};
+    JSValue method = JS_GetPropertyStr(ctx, registry, "register");
+    JSValue result = JS_Call(ctx, method, registry, 2, args);
+    bool failed = JS_IsException(result);
+    JS_FreeValue(ctx, result); JS_FreeValue(ctx, method);
+    JS_FreeValue(ctx, args[0]); JS_FreeValue(ctx, args[1]);
+    if (!failed) { JS_RunGC(JS_GetRuntime(ctx)); JS_RunGC(JS_GetRuntime(ctx)); }
+    JS_FreeValue(ctx, registry);
+    return failed ? OS64_JS_EXCEPTION : opaque ? OS64_JS_BAD_ARGUMENT : OS64_JS_OK;
+}
+static void finalization_task_bootstrap_cases(void)
+{
+    for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; policy++)
+    for (unsigned abort = 0; abort < 2; abort++) {
+        FinalizationSettings f;
+        if (!finalization_tasks_open(&f, policy, 0)) { finalization_close(&f); continue; }
+        os64_js_outcome_t out; os64_js_realm_t *candidate = NULL;
+        finalization_releases = 0;
+        finalization_release_class = os64_js_class_id(&finalization_release_class);
+        JSClassDef def = {.class_name="bootstrap release", .finalizer=finalization_release};
+        check(JS_NewClass(JS_GetRuntime(f.ctx[0]), finalization_release_class, &def) == 0,
+              "cleanup bootstrap: native held-value finalizer registered");
+        check(realm_execute(f.realm[2], "globalThis.throwCleanup=()=>{throw Error('bootstrap cleanup')}", &out) == OS64_JS_OK,
+              "cleanup bootstrap: throwing callback belongs to healthy C");
+        if (abort) {
+            check(realm_execute(f.realm[0], "captureRecord();globalThis.reg=new D.FinalizationRegistry(C.cleanup);"
+                  "let t={};t.self=t;reg.register(t,73);t=null", &out) == OS64_JS_OK,
+                  "cleanup rollback: independent sibling cleanup prepared");
+            finalization_tasks_collect(&f);
+        }
+        check(os64_js_realm_stage(f.runtime, OS64_JS_ABI_ID, 1024, &candidate, &out) == OS64_JS_OK,
+              "cleanup bootstrap: candidate staged");
+        if (!candidate) { finalization_close(&f); continue; }
+        JSContext *candidate_ctx = os64_js_realm_context(candidate, OS64_JS_ABI_ID, &out);
+        RealmReports executable = {.context=f.ctx[2]}, registry_host = {.context=candidate_ctx};
+        realm_host(f.realm[2], &executable); realm_host(candidate, &registry_host);
+        check(os64_js_realm_setup(candidate, OS64_JS_ABI_ID, finalization_bootstrap_install,
+              abort ? &f : NULL, &out) == (abort ? OS64_JS_BAD_ARGUMENT : OS64_JS_OK),
+              "cleanup bootstrap: installation result preserved");
+        if (abort) {
+            check(finalization_releases == 1 && out.jobs_discarded == 2 && !JS_IsJobPending(JS_GetRuntime(f.ctx[0])),
+                  "cleanup rollback: finalizer-enqueued transaction microtask is discarded too");
+            check(os64_js_drain_jobs(f.runtime, 64, &out) == OS64_JS_OK && finalization_task_markers == 0,
+                  "cleanup rollback: later drain cannot execute aborted transaction work");
+            check(os64_js_run_finalization_task(f.runtime, OS64_JS_ABI_ID, &out) == OS64_JS_OK &&
+                  f.calls == 1 && finalization_task_markers == 1,
+                  "cleanup rollback: independent sibling task and its microtask survive");
+        } else {
+            JSContext *entry=NULL, *incumbent=NULL, *report=NULL;
+            check(!JS_PeekFinalizationTaskSettings(JS_GetRuntime(f.ctx[0]), NULL, &entry, &incumbent, &report) &&
+                  !entry && !incumbent && report == candidate_ctx,
+                  "cleanup bootstrap: registry reporting does not require captured settings");
+            check(os64_js_realm_activate(candidate, OS64_JS_ABI_ID, &out) == OS64_JS_OK,
+                  "cleanup bootstrap: registry realm activated");
+            check(os64_js_run_finalization_task(f.runtime, OS64_JS_ABI_ID, &out) == OS64_JS_EXCEPTION &&
+                  registry_host.exceptions == 1 && executable.exceptions == 0,
+                  "cleanup bootstrap: throwing foreign callback reports to registry host");
+        }
+        check(!os64_js_finalization_task_pending(f.runtime, OS64_JS_ABI_ID),
+              "cleanup bootstrap: transaction and sibling queues consumed");
+        finalization_close(&f);
+    }
+}
+
 static void finalization_task_cases(void)
 {
+    finalization_task_bootstrap_cases();
     finalization_task_staging_cases();
     finalization_task_release_cases();
     finalization_task_budget_cases();

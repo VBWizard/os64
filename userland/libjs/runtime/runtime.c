@@ -1827,8 +1827,11 @@ JS_PUBLIC os64_js_status_t os64_js_realm_setup(os64_js_realm_t *realm,
         status(outcome, OS64_JS_REALM_RETIRED, "candidate retired during installation");
     if (outcome->status != OS64_JS_OK) {
         realm->retired = true;
-        while (JS_DiscardJobGroup(runtime->engine, &realm->setup_jobs)) runtime->discarded_jobs++;
-        while (JS_DiscardFinalizationTask(runtime->engine, &realm->setup_jobs)) runtime->discarded_jobs++;
+        /* Releasing either lane can enqueue transaction work through native
+         * finalizers. Keep the group selected until both lanes are empty. */
+        while (JS_DiscardJobGroup(runtime->engine, &realm->setup_jobs) ||
+               JS_DiscardFinalizationTask(runtime->engine, &realm->setup_jobs))
+            runtime->discarded_jobs++;
     } else {
         realm->setup_complete = true;
     }

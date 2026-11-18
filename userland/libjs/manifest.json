@@ -287,7 +287,7 @@
     },
     {
       "path": "patches/0042-finalization-tasks.patch",
-      "sha256": "c0097607a9ba84345d05d880d60a8016393932f03f928a2a971b6c857d39e127"
+      "sha256": "c374567f59fa10cc8cdbaa7249d85d46de52edbc7266955f9514482fb88abe59"
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
