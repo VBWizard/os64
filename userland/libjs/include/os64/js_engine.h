@@ -330,9 +330,10 @@ os64_js_status_t os64_js_realm_create_with_headroom(os64_js_runtime_t *runtime,
  * Return OK, ADMISSION_REFUSED (local native refusal), or EXCEPTION with a
  * pending engine exception. Engine resource failures remain runtime-wide.
  * Setup borrows an enclosing turn's deadline/job count and preserves sibling
- * queues; standalone setup requires no prior pending turn. Its own queued
- * work is drained before success, discarded on failure (including neutral
- * jobs). Refusal before guard entry leaves the candidate unchanged; failure
+ * queues; standalone setup requires no prior pending turn. Candidate microtasks
+ * drain before success; deferred registry cleanup waits for activation and host
+ * task selection. Failure discards both candidate lanes, including neutral jobs.
+ * Refusal before guard entry leaves the candidate unchanged; failure
  * after entry retires its slot. Native backing cleanup belongs to the caller.
  * Installers use separate outcomes for nested API calls. Activate enables ordinary entry after successful setup; it does
  * not open a new budget or checkpoint siblings. */

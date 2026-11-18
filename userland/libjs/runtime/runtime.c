@@ -77,6 +77,11 @@ typedef struct {
     size_t requested_bytes, charged_bytes, wrapper_bytes;
     OwnerBinding *bindings;
 } OwnerMetadata;
+struct JSOwnerRuntimeScope {
+    os64_js_runtime_t *runtime;
+    os64_js_realm_t *realm;
+    JSOwnerLoan loan;
+};
 struct os64_js_runtime {
     JSRuntime *engine;
     JSPortAllocator allocator;
@@ -1836,6 +1841,29 @@ JS_PUBLIC os64_js_status_t os64_js_realm_stage(os64_js_runtime_t *runtime,
     return result;
 }
 
+os64_js_status_t js_owner_runtime_stage(os64_js_runtime_t *runtime, const char *caller_abi,
+    size_t required_headroom, JSOwnerTicket *out, os64_js_outcome_t *outcome)
+{
+    os64_js_realm_t *realm;
+    os64_js_status_t result = realm_create(runtime, caller_abi, &realm, out, required_headroom, true, outcome);
+    if (result == OS64_JS_OK) {
+        realm->staged = true;
+        JS_InitJobGroup(&realm->setup_jobs, realm->context);
+    }
+    return result;
+}
+
+static os64_js_status_t owner_operation_realm(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket ticket, os64_js_realm_t **realm, os64_js_outcome_t *outcome)
+{
+    if (!outcome) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    if (!realm_context(primary(runtime), caller_abi, outcome, false)) return outcome->status;
+    if (owner_ticket_realm(runtime, ticket, realm) != JS_OWNER_OK)
+        return status(outcome, OS64_JS_ADMISSION_REFUSED, "owner ticket does not resolve");
+    return OS64_JS_OK;
+}
+
 /* Candidate rejections are private installation failures, not host reports.
  * Releasing them must not consume a sibling's pending rejection record. */
 static void setup_rejections(os64_js_realm_t *realm, os64_js_outcome_t *out)
@@ -1858,31 +1886,53 @@ static void setup_rejections(os64_js_realm_t *realm, os64_js_outcome_t *out)
     }
 }
 
-JS_PUBLIC os64_js_status_t os64_js_realm_setup(os64_js_realm_t *realm,
+static os64_js_status_t realm_setup(os64_js_realm_t *realm,
                                               const char *caller_abi,
                                               os64_js_realm_setup_fn installer,
+                                              JSOwnerSetupBody *scoped_installer,
+                                              const JSOwnerTicket *ticket,
                                               void *opaque,
                                               os64_js_outcome_t *outcome)
 {
     os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
     if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
     if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
-    if (os64_js_realm_context(realm, caller_abi, outcome) == NULL) return outcome->status;
+    if (realm_context(realm, caller_abi, outcome, ticket == NULL) == NULL) return outcome->status;
     if (realm->retired) return status(outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
-    if (!realm->staged || realm->setup_complete || installer == NULL)
+    if (!realm->staged || realm->setup_complete || (installer == NULL && scoped_installer == NULL))
         return status(outcome, OS64_JS_BAD_ARGUMENT, "unused staged realm and installer are required");
     if (runtime->setup_realm != NULL)
         return status(outcome, OS64_JS_BUSY, "realm installation is executing");
+    /* A local loan refusal must not disguise a raw allocator failure that
+     * native code caught before the wrapper observed its terminal signal. */
+    if (ticket && runtime->allocator.failures)
+        return status(outcome, OS64_JS_FAILED_RUNTIME, "engine allocator has failed");
     runtime->setup_realm = realm;
     SetupCall call;
     os64_js_status_t result = setup_enter(realm, outcome, true, &call);
     if (result != OS64_JS_OK) { runtime->setup_realm = NULL; return result; }
+    JSOwnerRuntimeScope scope = {.runtime=runtime, .realm=realm};
+    if (ticket && js_owner_loan_begin(&runtime->owner.metadata->table, runtime->owner.metadata->incarnation,
+            *ticket, &scope.loan) != JS_OWNER_OK) {
+        result = setup_refuse(&call, OS64_JS_ADMISSION_REFUSED, "owner setup invocation capacity exhausted");
+        runtime->setup_realm = NULL;
+        return result;
+    }
     result = setup_prepare(&call, false, 0, "<staged realm setup>");
-    if (result != OS64_JS_OK) { runtime->setup_realm = NULL; return result; }
+    if (result != OS64_JS_OK) {
+        runtime->setup_realm = NULL;
+        if (scope.loan.serial && js_owner_loan_end(&runtime->owner.metadata->table,
+                runtime->owner.metadata->incarnation, scope.loan) != JS_OWNER_OK)
+            jsport_fatal("owner setup preparation unwind", __FILE__, __LINE__);
+        return result;
+    }
     JSJobGroup *previous = JS_SetJobGroup(runtime->engine, &realm->setup_jobs);
     if (!observe(runtime)) {
-        owner_legacy_escape(runtime);
-        result = installer(realm, realm->context, opaque);
+        if (ticket) result = scoped_installer(&scope, realm->context, opaque);
+        else {
+            owner_legacy_escape(runtime);
+            result = installer(realm, realm->context, opaque);
+        }
         if (result == OS64_JS_EXCEPTION) {
             JSValue error = JS_GetException(realm->context);
             outcome->status = result;
@@ -1920,17 +1970,36 @@ JS_PUBLIC os64_js_status_t os64_js_realm_setup(os64_js_realm_t *realm,
     }
     JS_SetJobGroup(runtime->engine, previous);
     runtime->setup_realm = NULL;
-    return setup_leave(&call);
+    result = setup_leave(&call);
+    /* Candidate cleanup, group restoration and guard unwind precede loan end. */
+    if (scope.loan.serial && js_owner_loan_end(&runtime->owner.metadata->table,
+            runtime->owner.metadata->incarnation, scope.loan) != JS_OWNER_OK)
+        jsport_fatal("owner setup invocation unwind", __FILE__, __LINE__);
+    return result;
 }
 
-JS_PUBLIC os64_js_status_t os64_js_realm_activate(os64_js_realm_t *realm,
+JS_PUBLIC os64_js_status_t os64_js_realm_setup(os64_js_realm_t *realm, const char *caller_abi,
+    os64_js_realm_setup_fn installer, void *opaque, os64_js_outcome_t *outcome)
+{
+    return realm_setup(realm, caller_abi, installer, NULL, NULL, opaque, outcome);
+}
+os64_js_status_t js_owner_runtime_setup(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket ticket, JSOwnerSetupBody *installer, void *opaque, os64_js_outcome_t *outcome)
+{
+    os64_js_realm_t *realm;
+    os64_js_status_t result = owner_operation_realm(runtime, caller_abi, ticket, &realm, outcome);
+    if (result != OS64_JS_OK) return result;
+    return realm_setup(realm, caller_abi, NULL, installer, &ticket, opaque, outcome);
+}
+
+static os64_js_status_t realm_activate(os64_js_realm_t *realm,
                                                  const char *caller_abi,
-                                                 os64_js_outcome_t *outcome)
+                                                 os64_js_outcome_t *outcome, bool exported)
 {
     os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
     if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
     if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
-    if (os64_js_realm_context(realm, caller_abi, outcome) == NULL) return outcome->status;
+    if (realm_context(realm, caller_abi, outcome, exported) == NULL) return outcome->status;
     if (realm->retired) return status(outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (!realm->staged || !realm->setup_complete || runtime->setup_realm != NULL)
         return status(outcome, OS64_JS_BAD_ARGUMENT, "candidate setup has not completed");
@@ -1940,6 +2009,20 @@ JS_PUBLIC os64_js_status_t os64_js_realm_activate(os64_js_realm_t *realm,
     if (observe(runtime)) { sticky(runtime, outcome); return outcome->status; }
     realm->staged = false;
     return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_activate(os64_js_realm_t *realm, const char *caller_abi,
+    os64_js_outcome_t *outcome)
+{
+    return realm_activate(realm, caller_abi, outcome, true);
+}
+os64_js_status_t js_owner_runtime_activate(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket ticket, os64_js_outcome_t *outcome)
+{
+    os64_js_realm_t *realm;
+    os64_js_status_t result = owner_operation_realm(runtime, caller_abi, ticket, &realm, outcome);
+    if (result != OS64_JS_OK) return result;
+    return realm_activate(realm, caller_abi, outcome, false);
 }
 
 JS_PUBLIC os64_js_status_t os64_js_check_budget(os64_js_runtime_t *runtime,
@@ -2380,11 +2463,6 @@ os64_js_status_t js_owner_runtime_run(os64_js_runtime_t *runtime, const char *ca
     return result;
 }
 
-struct JSOwnerRuntimeScope {
-    os64_js_runtime_t *runtime;
-    os64_js_realm_t *realm;
-    JSOwnerLoan loan;
-};
 JSOwnerStatus js_owner_scope_owner(const JSOwnerRuntimeScope *scope, JSOwnerId *out)
 {
     if (!scope) return JS_OWNER_INVALID;
