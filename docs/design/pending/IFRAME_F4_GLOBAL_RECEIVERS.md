@@ -1,5 +1,8 @@
 # F.4d — global property callback receivers
 
+Implementation: [PR #656](https://github.com/VBWizard/os64/pull/656), based on
+merged #654/#655 (`15f050e5`). F4 remains in progress.
+
 The embedding global-this primitive separated script receivers from storage,
 but a global accessor or an inherited Proxy trap could still receive the raw
 global. GroupBy also passed raw storage to its callback. These routes bypass
