@@ -197,6 +197,97 @@ check(media_exports and all(e.startswith('os64_media_') for e in media_exports),
 for program in ('play', 'tests/mediatest'):
     check('libmedia.so' in needed(USERLAND / 'bin' / program), f'{program} does not load libmedia.so')
 
+# A PICTURE IS RELEASED ON ANY THREAD AND RETURNED ON THE DECODING THREAD
+# (libmedia/media.c § THREADS): FFmpeg's pools and reference counts have no
+# lock of their own in a build without threads, so nothing that may run off
+# the decoding thread may reach libav.so except the scaler's own calls on
+# memory no decoder shares. The test follows every call and jump within
+# libmedia.so from each such entry point, and names what it reaches of
+# libav.so:
+#   os64_media_picture_release   nothing (it only pushes onto a locked list)
+#   os64_media_scaler_convert    sws_scale_frame, which on a dynamic context
+#                                with the caller's buffers takes no
+#                                reference to the source (pinned below)
+#   os64_media_scaler_create     the scaler's context and its own canvas
+#   os64_media_scaler_destroy    frame, which holds no pool buffer
+# The convert entry must reach exactly what it names (so a change in how
+# the disassembly spells a call cannot pass by finding nothing), and no
+# entry may reach an indirect call or jump, whose target the test cannot
+# follow.
+media_disasm = run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', MEDIA)
+media_calls, media_indirect, routine = {}, set(), None
+for line in media_disasm.splitlines():
+    label = re.match(r'^[0-9a-f]+ <([^>@+]+)>:$', line)
+    if label:
+        routine = label.group(1)
+        media_calls[routine] = set()
+        continue
+    if routine and re.search(r'\t(?:call|jmp)\s+\*', line):
+        media_indirect.add(routine)
+    target = re.search(r'\t(?:call|jmp)\s+[0-9a-f]+ <([^>+]+)', line)
+    if routine and target and target.group(1) != routine:
+        media_calls[routine].add(target.group(1))
+libav_exports = dynamic
+
+
+def libav_reached(entry):
+    seen, todo, reached = set(), [entry], set()
+    while todo:
+        f = todo.pop()
+        if f in seen:
+            continue
+        seen.add(f)
+        check(f not in media_indirect, f'{entry} reaches an indirect call or jump in {f}, which the thread rule\'s '
+              'test cannot follow (libmedia/media.c § THREADS)')
+        for t in media_calls.get(f, ()):
+            name = t.removesuffix('@plt')
+            if t.endswith('@plt'):
+                if name in libav_exports:
+                    reached.add(name)
+            else:
+                todo.append(name)
+    return reached
+
+
+check('os64_media_picture_release' in media_calls and 'os64_media_scaler_convert' in media_calls,
+      'libmedia.so lacks the picture entry points the thread rule names')
+for entry, allowed in (('os64_media_picture_release', set()),
+                       ('os64_media_scaler_create', {'sws_alloc_context', 'av_frame_alloc', 'sws_free_context',
+                                                     'av_frame_free'}),
+                       ('os64_media_scaler_destroy', {'sws_free_context', 'av_frame_free'})):
+    reached = libav_reached(entry)
+    check(reached <= allowed, f'{entry} reaches {sorted(reached - allowed)} of libav.so, off the decoding thread '
+          '(libmedia/media.c § THREADS)')
+convert_reaches = libav_reached('os64_media_scaler_convert')
+check(convert_reaches == {'sws_scale_frame'},
+      f'os64_media_scaler_convert reaches {sorted(convert_reaches)} of libav.so, not exactly the scaler\'s own calls '
+      '(libmedia/media.c § THREADS)')
+
+# The FFmpeg half: sws_scale_frame, given a dynamic context and a
+# destination with buffers of its own, references nothing of the source;
+# its only frame_ref is in the branch where the destination has no
+# buffers, and the legacy path (sws_frame_start, which does) is taken only
+# for a context sws_init_context made, which libmedia never makes for
+# converting. Pinned by the function's text, so a release that changes it
+# fails here until it has been read again for that.
+swscale_c = (upstream / 'libswscale/swscale.c').read_text()
+body = re.search(r'^int sws_scale_frame\(SwsContext \*sws, AVFrame \*dst, const AVFrame \*src\)\n\{\n.*?^\}\n',
+                 swscale_c, re.M | re.S)
+check(body is not None, 'libswscale/swscale.c has no sws_scale_frame to read')
+SWS_SCALE_FRAME_SHA = '82cc34d051ee3d068ea34e3f9627c9802c8b2128de6141fa7d6f37d446e4b9e1'
+check(hashlib.sha256(body.group(0).encode()).hexdigest() == SWS_SCALE_FRAME_SHA,
+      'sws_scale_frame changed: read it again for a reference to the source frame (libmedia/media_scale.c), '
+      'then update SWS_SCALE_FRAME_SHA')
+# THE UNSCALED EDGE (libmedia/media_scale.c): the unscaled YUV-to-RGB
+# converter's x86 form writes whole groups of eight pixels across when the
+# pitch has room for them, which is the bound the bounce buffer's pitch is
+# sized for. Pinned by its two lines.
+yuv2rgb_x86 = (upstream / 'libswscale/x86/yuv2rgb.c').read_text()
+check('h_size = (c->opts.dst_w + 7) & ~7;' in yuv2rgb_x86 and
+      'if (h_size * depth > FFABS(dstStride[0]))' in yuv2rgb_x86,
+      'libswscale/x86/yuv2rgb.c no longer rounds a row to whole groups of eight: read THE UNSCALED EDGE in '
+      'libmedia/media_scale.c again')
+
 # CODE THE SCALER WRITES AT RUN TIME (README.md § The x86 assembly):
 # libswscale's fast bilinear writes an x86 horizontal filter of its own
 # and runs it, in memory from mmap and mprotect where it has them and from
