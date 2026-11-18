@@ -461,7 +461,7 @@ static JSValue intrinsics(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (JS_IsException(prototype)) goto fail;
     if (JS_DefinePropertyValueStr(ctx, object, "AsyncIteratorPrototype", prototype, JS_PROP_C_W_E) < 0) goto fail;
     if (d_method(dom, ctx, object, "RequireCallback", require_callback, 1, 0) < 0) goto fail;
-    bool prepared = dom->cluster && dom->cluster->stream_callback_settings;
+    bool prepared = d_settings(dom, stream_callback);
     if (JS_DefinePropertyValueStr(ctx, object, "CallbackSettings", JS_NewBool(ctx, prepared), JS_PROP_C_W_E) < 0) goto fail;
     if (prepared) {
         static const JSClassDef callback_class = {.class_name = "StreamCallback",
@@ -509,7 +509,7 @@ static const char *const kInterfaces[] = {
 
 int d_streams_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
-    JSValue factory = streams_factory(ctx, dom->cluster && dom->cluster->stream_callback_settings);
+    JSValue factory = streams_factory(ctx, d_settings(dom, stream_callback));
     if (JS_IsException(factory)) return -1;
     JSValue captured = intrinsics(dom, ctx, global);
     if (JS_IsException(captured)) {

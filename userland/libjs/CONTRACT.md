@@ -331,13 +331,16 @@ an installed DOM binding.
 slot. It exposes a native handle for private installation, but ordinary
 source/module/task entry returns non-sticky REALM_INSTALLING. Keep its objects
 unexposed until `os64_js_realm_activate` succeeds. Activation requires a
-successful `os64_js_realm_setup` and no pending candidate work; it does not
+successful `os64_js_realm_setup` and no pending candidate microtasks; deferred
+registry cleanup remains on its separate task lane. Activation does not
 open a turn or change the budget. A slot remains consumed if setup fails. Refusal before guard entry (such as
 BUSY or invalid input) leaves the private candidate unchanged for retry or
 explicit retirement. Once the guard starts, failure retires it.
 
 `os64_js_realm_setup` calls a trusted native installer, permits its private
-bootstrap, and drains its candidate-tagged jobs before returning success.
+bootstrap, and drains its candidate-tagged microtasks before returning success.
+With deferred registry task selection enabled, candidate cleanup tasks wait for
+activation and host dispatch; rollback discards both candidate lanes.
 The callback returns OK, ADMISSION_REFUSED with no pending engine exception,
 or EXCEPTION with a pending exception. An ordinary exception/native refusal
 retires the candidate without poisoning healthy siblings; engine memory,
@@ -1424,6 +1427,16 @@ realm. The existing bounded engine queue remains in use; browser task-source
 scheduling is a separate integration gate. Ownership, bootstrap refusal and
 validation are in the [finalization chapter](../../docs/design/pending/IFRAME_F4_FINALIZATION_SETTINGS.md).
 
+`os64_js_enable_finalization_tasks` additionally separates cleanup from ordinary
+microtasks. Hosts poll `os64_js_finalization_task_pending` and call
+`os64_js_run_finalization_task` between ordinary tasks. Each dispatch visits one
+cleanup and checkpoints its microtasks under one budget. Pending cleanup keeps
+its registry alive and cells remain unregisterable until delivery. Microtask
+outcomes retain their existing meaning; quiescence and recovery inspect both
+queues. The DOM constructor composes this with Streams settings; the default
+Yonder configuration stays unchanged. See the
+[task contract and proof](../../docs/design/pending/IFRAME_F4_FINALIZATION_TASKS.md).
+
 `os64_js_callback_call(report, entry, abi, record, this, argc, argv, out)` requires
 an open task. `report` selects exception/script-host reporting; `entry` is the
 binding's independently proven associated realm. The owned record supplies the
@@ -1535,5 +1548,14 @@ exist. Actual current/incumbent queries retain lifecycle checks. The raw engine
 scope borrows execution contexts, adds no roots, and restores enclosing settings.
 It shares existing cancellation and job caps and does not authorize child-local
 recovery. Custom-capability throws retain queue-context diagnostic reporting,
-not a new HTML reporting-global claim. The unresolved browser policy and DOM
+not a new HTML reporting-global claim. The unresolved HTML case and DOM
 integration proof are in the [neutral Promise chapter](../../docs/design/pending/IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md).
+
+The explicit `os64_js_enable_browser_jobs` composition keeps prepared neutral
+job exceptions in host outcomes without selecting a realm exception hook when
+entry/reporting settings are absent. Diagnostic context does not supply a
+reporting global. Other opt-ins keep their policy; generic raw jobs and registry
+tasks keep their destinations. Split `os64_js_finalization_task_begin` lets a
+host settle its reporting obligations before `os64_js_task_end`, under the
+original cleanup budget. See the [browser job chapter](../../docs/design/pending/IFRAME_F4_BROWSER_JOBS.md)
+for task selection and the unresolved HTML reporting case.

@@ -2,8 +2,8 @@
 """Stage the private runtime-identity oracle and observe its parent in QEMU.
 
 This consumer links the production runtime and engine objects directly.
-It proves actual realm owner assignment and checked source access, not a public
-checked profile or reclamation.
+It proves checked realm-owner, scoped execution and rejection-consumption
+lifetimes, not a public checked profile or reclamation.
 
 Inputs are a bootable TESTRUN/NONET ISO and matching FAT disk image containing
 /tests and /lib. Source images and existing output directories are preserved.
@@ -78,7 +78,7 @@ def main():
         "source_head": subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
         "working_diff_sha256": hashlib.sha256(subprocess.check_output(
             ["git", "-C", str(root), "diff", "--binary", "HEAD"])).hexdigest(),
-        "scope": "Private metadata only: actual runtime/engine objects; actual realm assignment and checked source access, no public profile or reclamation",
+        "scope": "Private checked lifetimes: actual runtime/engine objects; scoped setup, execution and rejection consumption; no public profile or reclamation",
         "consumer_source_sha256": digest(root / "userland/obj/js/owner-runtime-test"),
         "consumer_debug_stripped": True,
         "runtime_object_sha256": digest(root / "userland/obj/js/runtime/runtime.o"),
@@ -91,10 +91,14 @@ def main():
             "userland/libjs/manifest.json",
             "userland/libjs/runtime/owner_tickets.h", "userland/libjs/runtime/owner_tickets.c",
             "userland/libjs/tests/owner_admission_cases.h", "userland/libjs/tests/owner_realm_cases.h",
-            "userland/libjs/runtime/recovery.inc",
+            "userland/libjs/tests/owner_scope_cases.h", "userland/libjs/tests/owner_failure_cases.h",
+            "userland/libjs/tests/owner_setup_cases.h", "userland/libjs/tests/owner_rejection_cases.h",
+            "userland/libjs/runtime/recovery.inc", "userland/libjs/runtime/failure.inc",
+            "userland/libjs/include/os64/js_failure.h",
             "userland/libjs/tests/owner_runtime_cases.h", "userland/libjs/tests/owner_runtime.c",
             "userland/libjs/tests/owner_runtime_parent.c", "userland/libjs/shared.mk",
-            "userland/libjs/include/os64/js.h", "userland/libjs/core.mk", "userland/GNUmakefile",
+            "userland/libjs/include/os64/js.h", "userland/libjs/include/os64/js_engine.h",
+            "userland/libjs/core.mk", "userland/GNUmakefile",
             "tools/test_js_runtime_host.sh", "tools/test_js_runtime_host.c",
             "tools/test_js_owner_runtime_guest.py"]},
         "boot_sha256": digest(output / "boot.iso"),

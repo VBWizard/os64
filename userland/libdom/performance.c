@@ -919,14 +919,14 @@ static JSValue frozen_empty_array(JSContext *ctx)
 static JSValue performance_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                                   JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     if (magic == M_WINDOW) {
         /* window.performance is [Replaceable]. */
         if (set) {
-            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue global = d_binding_global(dom, ctx);
             int done = JS_DefinePropertyValueStr(ctx, global, "performance",
                                                  JS_DupValue(ctx, argc > 0 ? argv[0] : JS_UNDEFINED), JS_PROP_C_W_E);
             JS_FreeValue(ctx, global);

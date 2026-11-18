@@ -1689,6 +1689,12 @@ int d_custom_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     return 0;
 }
 
+JSValue d_custom_registry(os64_dom_t *dom, JSContext *ctx)
+{
+    return dom->custom && dom->custom->registry ? JS_DupValue(ctx, dom->custom->registry->value)
+        : JS_ThrowTypeError(ctx, "Window has no custom element registry");
+}
+
 /* ── The host's side ─────────────────────────────────────────────────── */
 
 bool os64_dom_reactions_owed(const os64_dom_t *dom)

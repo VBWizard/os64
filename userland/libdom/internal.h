@@ -2,6 +2,8 @@
 #define DOM_INTERNAL_H
 
 #include "dom/dom.h"
+#include "browsing_context.h"
+#include "navigation_authority.h"
 #include "os64/js_engine.h"
 #include "os64/js_callbacks.h"
 #include "way/origin.h"
@@ -11,6 +13,9 @@
 
 #define D_BUCKETS 256
 #define D_SET 0x1000
+/* Function-data magic is signed 16-bit; member policy occupies positive bits. */
+#define D_WINDOW_MEMBER 0x4000
+#define D_WINDOW_CROSS 0x2000
 /* The intrinsics the structured clone holds (clone.c's H_COUNT). */
 #define D_CLONE_HELD 34
 #include <canvas/canvas.h>
@@ -383,6 +388,20 @@ os64_dom_t *d_create_in_realm(os64_js_runtime_t *, os64_js_realm_t *,
     os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
 
 #define D_REALMS 65
+/* Stable native identity; descendant links describe the published tree.
+ * Discard keeps ancestry and the copied name, but removes the live child link. */
+struct DBrowsingContext {
+    os64_dom_cluster_t *cluster;
+    DBrowsingContext *registry_next, *parent, *first_child, *last_child;
+    DBrowsingContext *previous_sibling, *next_sibling;
+    os64_dom_t *active;
+    uint64_t generation;
+    size_t charged_bytes;
+    bool discarded;
+    DNavigationRequest *navigation;
+    char name[];
+};
+
 struct os64_dom_cluster {
     os64_js_runtime_t *runtime;
     os64_html_group_t *html;
@@ -390,12 +409,16 @@ struct os64_dom_cluster {
     os64_dom_cluster_limits_t limits;
     size_t bytes, kept_bytes, canvas_bytes, count;
     os64_dom_t *members[D_REALMS];
+    DBrowsingContext *contexts;
+    size_t context_count;
+    struct DNavigationAuthority *navigation_authority;
     DValue *buckets[D_BUCKETS];
     struct DObservers *observers;
     struct DCustomAgent *custom_agent;
     size_t dispatching;
     size_t provider_borrows;
     uint64_t effect_generation, animation_serial;
+    uint64_t opaque_origin_serial;
     bool sweep_pending;
     bool poisoned, drained;
     bool timer_settings, listener_settings, scheduled_settings, handler_settings, observer_settings, custom_settings, synchronous_settings;
@@ -416,6 +439,9 @@ struct os64_dom {
     size_t bytes, retained;
     /* `bytes` by kind; the kinds sum to it. */
     os64_dom_mem_t memory[OS64_DOM_MEM_KINDS];
+    DBrowsingContext *browsing_context; /* Retained across document departure. */
+    way_origin_t *binding_origin; /* Private immutable authority, separate from mutable URL/base. */
+    bool browser_jobs; /* Standalone opt-in to the composed callback settings. */
     bool closed;
     bool departure_finishing, departure_finished;
     bool installing;
@@ -843,6 +869,15 @@ typedef struct { char *data; size_t length; } DString;
 /* The caller passes its own compiled ABI identity, including callback units.
  * Native state is carried by private function data, never opaque host slots. */
 os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi);
+/* Guard an annotated Window member and resolve its actual receiver binding. */
+os64_dom_t *d_member_callback(JSContext *, JSValueConst, int *, JSValueConst *, const char *);
+bool d_member_access(os64_dom_t *, JSContext *, bool);
+JSValue d_binding_global(os64_dom_t *, JSContext *);
+JSValue d_custom_registry(os64_dom_t *, JSContext *);
+int d_window_member_magic(os64_dom_t *, JSContext *, JSValueConst, const char *, int, int);
+
+os64_js_status_t d_browsing_quiescent(os64_dom_cluster_t *, os64_js_outcome_t *);
+void d_navigation_authority_free(os64_dom_cluster_t *);
 bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
 /* Scheduling eligibility is separate from retained-object usability. */
 bool d_activity_eligible(const os64_dom_t *dom);
@@ -2250,4 +2285,8 @@ size_t d_reactions_rows(void);
 bool d_reactions_row_name(size_t i, char *out, size_t cap);
 const char *d_reactions_row_state(const os64_dom_t *dom, size_t i);
 size_t d_reactions_wrapped(const os64_dom_t *dom);
+
+/* Callback policy is shared by explicit clusters and standalone browser hosts. */
+#define d_settings(dom, family) ((dom)->browser_jobs || ((dom)->cluster && (dom)->cluster->family##_settings))
+
 #endif

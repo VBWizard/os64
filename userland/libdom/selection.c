@@ -294,7 +294,7 @@ static JSClassID selection_slot;
 static JSValue selection_member(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv,
                                 int magic, JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, this_value, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     if (magic == W_GET) return JS_DupValue(ctx, dom->selection->value);
     if (JS_GetOpaque(this_value, os64_js_class_id(&selection_slot)) == NULL)

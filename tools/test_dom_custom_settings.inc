@@ -114,7 +114,9 @@ static bool ce_open(CeFixture *f,int policy,unsigned tracked)
     os64_js_outcome_t out;
     if(os64_js_create_with_teardown(&config,policy,OS64_JS_ABI_ID,&ce_runtime,&out)!=OS64_JS_OK)return false;
     os64_dom_cluster_limits_t limits={64u<<20,16u<<20,8u<<20,256u<<20,128u<<20};
-    f->cluster=tracked==7?os64_dom_cluster_create_with_stream_callback_settings(ce_runtime,&limits,&out)
+    f->cluster=tracked==9?os64_dom_cluster_create_with_browser_jobs(ce_runtime,&limits,&out)
+                      :tracked==8?os64_dom_cluster_create_with_finalization_tasks(ce_runtime,&limits,&out)
+                      :tracked==7?os64_dom_cluster_create_with_stream_callback_settings(ce_runtime,&limits,&out)
                       :tracked==6?os64_dom_cluster_create_with_synchronous_settings(ce_runtime,&limits,&out)
                       :tracked==5?os64_dom_cluster_create_with_neutral_promise_settings(ce_runtime,&limits,&out)
                       :tracked==4?os64_dom_cluster_create_with_import_settings(ce_runtime,&limits,&out)

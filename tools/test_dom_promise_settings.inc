@@ -62,8 +62,9 @@ static void dom_promise_settings_cases(void)
  * Promise callback, after the registry has retained its source through GC. */
 static void dom_finalization_settings_cases(void)
 {
-    for(int policy=OS64_JS_TEARDOWN_FATAL;policy<=OS64_JS_TEARDOWN_RECLAIM;policy++) {
-        CeFixture f;if(!ce_open(&f,policy,3)){ce_close(&f);continue;}
+    for(int policy=OS64_JS_TEARDOWN_FATAL;policy<=OS64_JS_TEARDOWN_RECLAIM;policy++)
+    for(unsigned tasks=0;tasks<3;tasks++) {
+        CeFixture f;if(!ce_open(&f,policy,tasks==2?9:tasks?8:3)){ce_close(&f);continue;}
         JSValue global=JS_GetGlobalObject(ce_contexts[2]);
         check(JS_SetPropertyStr(ce_contexts[2],global,"cleanupDefine",
               JS_NewCFunctionData(ce_contexts[2],promise_dom_define,1,0,0,NULL))>=0,
@@ -86,7 +87,16 @@ static void dom_finalization_settings_cases(void)
         JS_RunGC(JS_GetRuntime(ce_contexts[0]));
         JS_RunGC(JS_GetRuntime(ce_contexts[0]));
         check(os64_js_task_end(ce_runtime,OS64_JS_ABI_ID,&out)==OS64_JS_OK,
-              "Finalization DOM: cleanup converts the custom-element callback");
+              "Finalization DOM: collection task closes");
+        if(tasks) {
+            check(os64_js_finalization_task_pending(ce_runtime,OS64_JS_ABI_ID),
+                  "Finalization DOM: registry cleanup survives the ordinary checkpoint");
+            realm_script(ce_realms[3],"assert(customElements.get('x-probe')===undefined)",
+                         "Finalization DOM: cleanup has not defined the element yet");
+            check(os64_js_run_finalization_task(ce_runtime,OS64_JS_ABI_ID,&out)==OS64_JS_OK &&
+                  !os64_js_finalization_task_pending(ce_runtime,OS64_JS_ABI_ID),
+                  "Finalization DOM: host dispatch converts the custom-element callback");
+        }
         realm_script(ce_realms[3],
             "globalThis.target=document.createElement('x-probe');document.body.appendChild(target);target.setAttribute('data-x','cleanup');",
             "Finalization DOM: custom callbacks deliver after cleanup ends");

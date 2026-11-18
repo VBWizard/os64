@@ -562,7 +562,7 @@ static JSValue handler_assign(os64_dom_t *dom, JSContext *ctx, DValue *entry,
 {
     os64_js_callback_t captured = OS64_JS_CALLBACK_INIT;
     os64_js_realm_t *associated = NULL;
-    bool tracked = dom->cluster && dom->cluster->handler_settings;
+    bool tracked = d_settings(dom, handler);
     if (tracked && JS_IsObject(value) && !handler_capture(dom, ctx, value, &captured, &associated))
         return JS_EXCEPTION;
     JSValue result = JS_EXCEPTION;
@@ -659,7 +659,7 @@ static int slot_compile_body(os64_dom_t *dom, JSContext *ctx, DValue *entry, DLi
         slot_state(dom, slot, D_SLOT_ERROR);
         return -1;
     }
-    if (!dom->cluster || !dom->cluster->handler_settings) {
+    if (!d_settings(dom, handler)) {
         d_free(dom, source);
         source = NULL;
     }
@@ -685,7 +685,7 @@ static int slot_compile_body(os64_dom_t *dom, JSContext *ctx, DValue *entry, DLi
     }
     os64_js_callback_t captured = OS64_JS_CALLBACK_INIT;
     os64_js_realm_t *associated = NULL;
-    if (dom->cluster && dom->cluster->handler_settings) {
+    if (d_settings(dom, handler)) {
         size_t start = sizeof(head) - 1 - (sizeof("function on") - 1);
         if (!JS_ClearFunctionScriptProvenance(function, source + start, at - 2 - start)) {
             d_free(dom, source);
@@ -725,7 +725,7 @@ static JSValue compile_handler(JSContext *ctx, void *opaque)
 
 static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListener *slot)
 {
-    if (!dom->cluster || !dom->cluster->handler_settings) return slot_compile_body(dom, ctx, entry, slot);
+    if (!d_settings(dom, handler)) return slot_compile_body(dom, ctx, entry, slot);
     HandlerCompile call = {dom, entry, slot};
     JSValue result = JS_UNDEFINED;
     os64_js_outcome_t out;
@@ -1870,6 +1870,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
     DValue *entry;
     if (target_entry(dom, ctx, self, magic != M_REMOVE, &entry) < 0) return JS_EXCEPTION;
     if (entry != NULL) dom = entry->node ? d_owner(dom, entry->node) : entry->dom;
+    if (entry == dom->window && !d_member_access(dom, ctx, false)) return JS_EXCEPTION;
     if (magic == M_DISPATCH) {
         if (argc < 1) return JS_ThrowTypeError(ctx, "dispatchEvent needs an event");
         DEvent *event = event_of(dom, ctx, argv[0]);
@@ -1885,7 +1886,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
         return result < 0 ? JS_EXCEPTION : JS_NewBool(ctx, result != 0);
     }
     if (argc < 2) return JS_ThrowTypeError(ctx, "Listener methods need a type and a callback");
-    bool tracked = registration->cluster && registration->cluster->listener_settings;
+    bool tracked = d_settings(registration, listener);
     bool capture, once;
     DString type = {0};
     os64_js_callback_t captured = OS64_JS_CALLBACK_INIT;
@@ -1977,7 +1978,7 @@ static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValu
 static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                                 int magic, JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
     int kind = magic & ~D_SET;
@@ -1990,6 +1991,7 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     int target = entry != dom->window ? reflected(dom, entry->node, kind) : 0;
     if (target < 0) return set ? JS_UNDEFINED : JS_NULL;
     if (target > 0) entry = dom->window;
+    if (entry == dom->window && !d_member_access(dom, ctx, false)) return JS_EXCEPTION;
     if (!set) {
         DListener *slot = slot_find(entry, kinds[kind]);
         if (slot == NULL) {

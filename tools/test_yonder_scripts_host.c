@@ -6175,6 +6175,15 @@ static void geometry_failure_cases(void)
     probe_drop();
 }
 
+static bool fixture_browser_jobs;
+yonder_scripts_t *__real_yonder_scripts_new(os64_html_document_t *, os64_page_state_t *, const yonder_scripts_options_t *);
+yonder_scripts_t *__wrap_yonder_scripts_new(os64_html_document_t *doc, os64_page_state_t *state,
+                                            const yonder_scripts_options_t *options)
+{
+    yonder_scripts_options_t selected = *options;
+    selected.browser_jobs = fixture_browser_jobs;
+    return __real_yonder_scripts_new(doc, state, &selected);
+}
 static os64_js_runtime_t *teardown_fixture_runtime;
 os64_js_status_t __wrap_os64_js_create_with_teardown(const os64_js_config_t *config,
     os64_js_teardown_policy_t policy, const char *abi, os64_js_runtime_t **out,
@@ -11952,6 +11961,7 @@ static void clipped_control_cases(void) {
 #include "test_yonder_requests.inc"
 #include "test_yonder_modules.inc"
 #include "test_yonder_window.inc"
+#include "test_yonder_browser_jobs.inc"
 #include "test_yonder_document.inc"
 #include "test_yonder_load_events.inc"
 
@@ -12663,6 +12673,16 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    if (getenv("YONDER_BROWSER_JOBS_ONLY")) {
+        browser_jobs_window_cases();
+        window_microtask_case(); window_rejection_case();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"browser jobs: text released");
+        check(live==0,"browser jobs: host heap empty");
+        printf("Yonder browser jobs: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    browser_jobs_window_cases();
     sheet_worker_cases();
     style_preload_cases();
     style_preload_pages();

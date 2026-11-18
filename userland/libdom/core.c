@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "binding_authority.h"
 #include "os64/proc.h"
 #include "os64/js_failure.h"
 #include "dom/retention.h"
@@ -291,6 +292,77 @@ os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi)
     return dom;
 }
 
+/* HTML's IDL check observes the caller before this native member became
+ * current. The data-function ctx and the task/entry realm are not that caller.
+ * This private opt-in requires explicit origin-bearing settings on both sides;
+ * the default binding has no new security policy. */
+bool d_member_access(os64_dom_t *target, JSContext *ctx, bool cross_origin)
+{
+    if (!target->binding_origin) return true;
+    os64_js_outcome_t out;
+    os64_js_realm_t *realm = os64_js_settings_realm(target->runtime, OS64_JS_ABI_ID,
+        OS64_JS_SETTINGS_NATIVE_CALLER, &out);
+    os64_dom_t *source = NULL;
+    for (size_t i = 0; realm && i < target->cluster->count; ++i)
+        if (target->cluster->members[i]->realm == realm) source = target->cluster->members[i];
+    if (!d_delivery_active(target) || !d_delivery_active(source) || !source->binding_origin ||
+        (!cross_origin && !way_origin_same(source->binding_origin, target->binding_origin))) {
+        d_error(ctx, "SecurityError", "Member settings do not permit access");
+        return false;
+    }
+    return true;
+}
+
+/* Null/undefined receivers use the function's defining global. Object identity
+ * selects other Windows without getters, coercion or a new settings scope. */
+os64_dom_t *d_member_callback(JSContext *ctx, JSValueConst self, int *magic,
+    JSValueConst *data, const char *abi)
+{
+    os64_dom_t *owner = d_callback(ctx, data, abi);
+    if (!owner || !(*magic & D_WINDOW_MEMBER)) return owner;
+    bool cross = (*magic & D_WINDOW_CROSS) != 0;
+    *magic &= ~(D_WINDOW_MEMBER | D_WINDOW_CROSS);
+    os64_dom_t *target = NULL;
+    if (JS_IsNull(self) || JS_IsUndefined(self)) target = owner;
+    else if (owner->cluster)
+        for (size_t i = 0; i < owner->cluster->count; ++i)
+            if (d_same_object(self, owner->cluster->members[i]->window))
+                target = owner->cluster->members[i];
+    if (!target) { JS_ThrowTypeError(ctx, "Expected a Window receiver"); return NULL; }
+    if (!target->binding_origin) {
+        d_error(ctx, "SecurityError", "Window receiver has no authority settings");
+        return NULL;
+    }
+    return d_member_access(target, ctx, cross) ? target : NULL;
+}
+
+JSValue d_binding_global(os64_dom_t *dom, JSContext *ctx)
+{
+    return dom->binding_origin ? JS_DupValue(ctx, dom->window->value) : JS_GetGlobalObject(ctx);
+}
+
+/* HTML CrossOriginProperties applies separately to method/getter/setter. The
+ * bits travel with the original native function; renaming it grants nothing. */
+int d_window_member_magic(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
+    const char *name, int magic, int kind)
+{
+    if (!dom->binding_origin) return magic;
+    JSValue global = JS_GetGlobalObject(ctx);
+    bool window = JS_IsObject(target) && JS_VALUE_GET_PTR(target) == JS_VALUE_GET_PTR(global);
+    JS_FreeValue(ctx, global);
+    if (!window) return magic;
+    bool cross = false;
+    if (kind == 0)
+        cross = !os64_strcmp(name, "close") || !os64_strcmp(name, "focus") ||
+            !os64_strcmp(name, "blur") || !os64_strcmp(name, "postMessage");
+    else if (kind == 1) {
+        static const char *const getters[] = {"window", "self", "location", "closed", "frames", "length", "top", "opener", "parent"};
+        for (size_t i = 0; i < sizeof(getters) / sizeof(getters[0]); ++i)
+            if (!os64_strcmp(name, getters[i])) cross = true;
+    } else cross = !os64_strcmp(name, "location");
+    return magic | D_WINDOW_MEMBER | (cross ? D_WINDOW_CROSS : 0);
+}
+
 DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value)
 {
     if (JS_IsException(value)) return NULL;
@@ -352,6 +424,7 @@ DValue *d_intrinsic(os64_dom_t *dom, JSContext *ctx, JSValueConst from, const ch
 int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
              const char *name, JSCFunctionData *fn, int argc, int magic)
 {
+    magic = d_window_member_magic(dom, ctx, target, name, magic, 0);
     JSValue function = JS_NewCFunctionData(ctx, fn, argc, magic, 1, &dom->anchor->value);
     if (JS_IsException(function)) return -1;
     return JS_DefinePropertyValueStr(ctx, target, name, function, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
@@ -360,6 +433,7 @@ int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
 int d_method_named(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
                    const char *name, JSCFunctionData *fn, int argc, int magic)
 {
+    magic = d_window_member_magic(dom, ctx, target, name, magic, 0);
     JSValue function = JS_NewCFunctionData(ctx, fn, argc, magic, 1, &dom->anchor->value);
     if (JS_IsException(function)) return -1;
     JSValue text = JS_NewString(ctx, name);
@@ -376,10 +450,10 @@ int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
 {
     JSAtom atom = JS_NewAtom(ctx, name);
     if (atom == JS_ATOM_NULL) return -1;
-    JSValue get = JS_NewCFunctionData(ctx, fn, 0, magic, 1, &dom->anchor->value);
+    JSValue get = JS_NewCFunctionData(ctx, fn, 0, d_window_member_magic(dom, ctx, target, name, magic, 1), 1, &dom->anchor->value);
     JSValue set = JS_UNDEFINED;
     if (!JS_IsException(get) && writable)
-        set = JS_NewCFunctionData(ctx, fn, 1, magic | D_SET, 1, &dom->anchor->value);
+        set = JS_NewCFunctionData(ctx, fn, 1, d_window_member_magic(dom, ctx, target, name, magic | D_SET, 2), 1, &dom->anchor->value);
     if (JS_IsException(get) || JS_IsException(set)) {
         JS_FreeValue(ctx, get);
         JS_FreeValue(ctx, set);
@@ -404,7 +478,7 @@ static JSValue dialog(JSContext *ctx, JSValueConst self, int argc,
                       JSValueConst *argv, int magic, JSValue *data)
 {
     (void)self;
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     DString message = {0};
     if (argc > 0 && !d_string(dom, ctx, argv[0], &message)) return JS_EXCEPTION;
@@ -432,9 +506,8 @@ static JSValue dialog(JSContext *ctx, JSValueConst self, int argc,
  * and an assignment is ignored outside strict mode (a TypeError in it), as
  * browsers ignore one. This is the binding's one definition of each.
  *
- * They are read on nearly every line of a page's script, so each getter is
- * as short as a getter can be: window's answers the global, and
- * document's answers the document's wrapper it holds (d_held_getter). */
+ * Legacy getters return their retained values directly. Origin-bearing
+ * bindings select and authorize the actual Window receiver first. */
 static JSValue window_get(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
 {
     (void)self;
@@ -443,23 +516,37 @@ static JSValue window_get(JSContext *ctx, JSValueConst self, int argc, JSValueCo
     return JS_GetGlobalObject(ctx);
 }
 
-static int unforgeable_window(JSContext *ctx, JSValueConst global)
+/* Private Window aliases use the receiver chosen by the common boundary. */
+static JSValue window_alias(JSContext *ctx, JSValueConst self, int argc,
+    JSValueConst *argv, int magic, JSValue *data)
+{
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
+    if (!dom) return JS_EXCEPTION;
+    if (!(magic & D_SET)) return d_binding_global(dom, ctx);
+    const char *name = (magic & ~D_SET) == 1 ? "self" : "frames";
+    JSValue global = d_binding_global(dom, ctx);
+    int result = JS_DefinePropertyValueStr(ctx, global, name,
+        JS_DupValue(ctx, argc ? argv[0] : JS_UNDEFINED), JS_PROP_C_W_E);
+    JS_FreeValue(ctx, global);
+    return result < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+}
+
+static int unforgeable_window(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSAtom atom = JS_NewAtom(ctx, "window");
     if (atom == JS_ATOM_NULL) return -1;
-    JSValue get = JS_NewCFunction2(ctx, window_get, "get window", 0, JS_CFUNC_generic, 0);
+    JSValue get = dom->binding_origin
+        ? JS_NewCFunctionData(ctx, window_alias, 0, D_WINDOW_MEMBER | D_WINDOW_CROSS, 1, &dom->anchor->value)
+        : JS_NewCFunction2(ctx, window_get, "get window", 0, JS_CFUNC_generic, 0);
     int result = JS_IsException(get)
         ? -1 : JS_DefinePropertyGetSet(ctx, global, atom, get, JS_UNDEFINED, JS_PROP_ENUMERABLE);
     JS_FreeAtom(ctx, atom);
     return result;
 }
 
-/* A getter that answers the value it holds (its data[1]) once the binding
- * is open, the one check every binding member makes first. It reads no
- * native state and enters nothing, so d_context's ABI identity, which
- * guards an entry into the engine, is not asked. The value is held by
- * the function, so it lives as long as the property does; after drain the
- * closed binding refuses it, as d_context refuses every member. */
+/* Legacy getters duplicate data[1] while their binding is open. Private
+ * Window getters select the receiver's retained value after authorization.
+ * The data root keeps the original value alive until the function is freed. */
 static JSValue held_get(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                         JSValue *data)
 {
@@ -470,6 +557,14 @@ static JSValue held_get(JSContext *ctx, JSValueConst self, int argc, JSValueCons
     JSClassID id;
     os64_dom_t *dom = JS_GetAnyOpaque(data[0], &id);
     if (dom == NULL || dom->closed) return d_error(ctx, "InvalidStateError", "DOM binding is closed");
+    if (magic & D_WINDOW_MEMBER) {
+        dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
+        if (!dom) return JS_EXCEPTION;
+        if (magic == 1) return d_wrap(dom, ctx, dom->document->document);
+        if (magic == 2) return JS_DupValue(ctx, dom->history->value);
+        if (magic == 3) return d_custom_registry(dom, ctx);
+        return JS_ThrowTypeError(ctx, "Unknown Window value getter");
+    }
     return JS_DupValue(ctx, data[1]);
 }
 
@@ -479,7 +574,18 @@ int d_held_getter(os64_dom_t *dom, JSContext *ctx, JSValueConst target, const ch
     JSAtom atom = JS_NewAtom(ctx, name);
     if (atom == JS_ATOM_NULL) return -1;
     JSValueConst data[2] = {dom->anchor->value, held};
-    JSValue get = JS_NewCFunctionData(ctx, held_get, 0, 0, 2, data);
+    int magic = d_window_member_magic(dom, ctx, target, name, 0, 1);
+    if (magic & D_WINDOW_MEMBER) {
+        int member = !os64_strcmp(name, "document") ? 1 : !os64_strcmp(name, "history") ? 2
+            : !os64_strcmp(name, "customElements") ? 3 : 0;
+        if (!member) {
+            JS_FreeAtom(ctx, atom);
+            JS_ThrowTypeError(ctx, "Window value getter needs a receiver mapping");
+            return -1;
+        }
+        magic |= member;
+    }
+    JSValue get = JS_NewCFunctionData(ctx, held_get, 0, magic, 2, data);
     int result = JS_IsException(get) ? -1 : JS_DefinePropertyGetSet(ctx, target, atom, get, JS_UNDEFINED, flags);
     JS_FreeAtom(ctx, atom);
     return result;
@@ -524,13 +630,22 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
 
 static os64_dom_t *create_binding(os64_js_runtime_t *, os64_js_realm_t *,
     os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *,
-    os64_js_outcome_t *, os64_dom_cluster_t *, bool *);
+    os64_js_outcome_t *, os64_dom_cluster_t *, bool *, bool, const way_origin_t *);
 
 os64_dom_t *d_create_in_realm(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
     os64_html_document_t *document, os64_page_state_t *state,
     const os64_dom_options_t *options, os64_js_outcome_t *outcome)
 {
-    return create_binding(runtime, realm, document, state, options, outcome, NULL, NULL);
+    return create_binding(runtime, realm, document, state, options, outcome, NULL, NULL, false, NULL);
+}
+
+os64_dom_t *os64_dom_create_with_browser_jobs(os64_js_runtime_t *runtime,
+    os64_html_document_t *document, os64_page_state_t *state,
+    const os64_dom_options_t *options, os64_js_outcome_t *outcome)
+{
+    if (os64_js_enable_browser_jobs(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) return NULL;
+    os64_js_realm_t *realm = os64_js_primary_realm(runtime, OS64_JS_ABI_ID, outcome);
+    return realm ? create_binding(runtime, realm, document, state, options, outcome, NULL, NULL, true, NULL) : NULL;
 }
 
 os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *cluster, os64_js_realm_t *realm,
@@ -541,7 +656,54 @@ os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *cluster, os64_
     if (!outcome) return admission;
     if (!cluster) { outcome->status = OS64_JS_BAD_ARGUMENT; return admission; }
     admission.binding = create_binding(cluster->runtime, realm, document, state,
-        options, outcome, cluster, &admission.consumed);
+        options, outcome, cluster, &admission.consumed, false, NULL);
+    return admission;
+}
+
+/* Origin tokens belong to this cluster's namespace. A copied token supports
+ * inherited origins; consuming a token does not reserve a binding or a realm. */
+bool d_next_opaque_origin(uint64_t *serial, way_origin_t *out)
+{
+    if (!serial || !out || *serial == UINT64_MAX) return false;
+    *out = (way_origin_t){.opaque=true, .id=++*serial};
+    return true;
+}
+
+bool d_cluster_opaque_origin(os64_dom_cluster_t *cluster, way_origin_t *out)
+{
+    return cluster && !cluster->poisoned && !cluster->drained &&
+        d_next_opaque_origin(&cluster->opaque_origin_serial, out);
+}
+
+static bool binding_origin_valid(const os64_dom_cluster_t *cluster, const way_origin_t *origin)
+{
+    if (!origin) return false;
+    if (origin->opaque)
+        return origin->id && origin->id <= cluster->opaque_origin_serial &&
+            !origin->scheme[0] && !origin->host[0] && !origin->port;
+    if (origin->id || !os64_memchr(origin->scheme, 0, sizeof(origin->scheme)) ||
+        !os64_memchr(origin->host, 0, sizeof(origin->host))) return false;
+    /* Round-trip a tuple through the shared parser before ownership changes.
+     * Invalid/noncanonical input and parser allocation refusal grant no origin. */
+    char text[OS64_URL_SCHEME_MAX + OS64_URL_HOST_MAX + 32];
+    way_origin_t parsed;
+    if (!way_origin_serialize(origin, text, sizeof(text))) return false;
+    way_origin_of(text, 0, &parsed);
+    return !parsed.opaque && way_origin_same(origin, &parsed);
+}
+
+os64_dom_admission_t d_create_in_realm_with_origin(os64_dom_cluster_t *cluster,
+    os64_js_realm_t *realm, os64_html_document_t *document, os64_page_state_t *state,
+    const os64_dom_options_t *options, const way_origin_t *origin, os64_js_outcome_t *outcome)
+{
+    os64_dom_admission_t admission = {0};
+    if (!outcome) return admission;
+    if (!cluster || !binding_origin_valid(cluster, origin)) {
+        outcome->status = OS64_JS_BAD_ARGUMENT;
+        return admission;
+    }
+    admission.binding = create_binding(cluster->runtime, realm, document, state,
+        options, outcome, cluster, &admission.consumed, false, origin);
     return admission;
 }
 
@@ -728,6 +890,20 @@ os64_dom_cluster_t *os64_dom_cluster_create_with_stream_callback_settings(os64_j
     return cluster;
 }
 
+os64_dom_cluster_t *os64_dom_cluster_create_with_finalization_tasks(os64_js_runtime_t *runtime,
+    const os64_dom_cluster_limits_t *limits, os64_js_outcome_t *outcome)
+{
+    if (os64_js_enable_finalization_tasks(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) return NULL;
+    return os64_dom_cluster_create_with_stream_callback_settings(runtime, limits, outcome);
+}
+
+os64_dom_cluster_t *os64_dom_cluster_create_with_browser_jobs(os64_js_runtime_t *runtime,
+    const os64_dom_cluster_limits_t *limits, os64_js_outcome_t *outcome)
+{
+    if (os64_js_enable_browser_jobs(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) return NULL;
+    return os64_dom_cluster_create_with_stream_callback_settings(runtime, limits, outcome);
+}
+
 static JSValue import_base(JSContext *ctx, void *opaque)
 {
     os64_dom_t *dom = opaque;
@@ -804,7 +980,7 @@ static int install_binding(os64_dom_t *dom, JSContext *ctx)
      * the wrapper table keeps one wrapper per node for the page's life, so
      * the one made here is the one every read answers. */
     JSValue doc = d_wrap(dom, ctx, document->document);
-    int installed = JS_IsException(doc) ? -1 : unforgeable_window(ctx, global);
+    int installed = JS_IsException(doc) ? -1 : unforgeable_window(dom, ctx, global);
     if (installed >= 0) installed = d_held_getter(dom, ctx, global, "document", doc, JS_PROP_ENUMERABLE);
     JS_FreeValue(ctx, doc);
     /* The window is its own self and frames (HTML § Window), both
@@ -812,8 +988,12 @@ static int install_binding(os64_dom_t *dom, JSContext *ctx)
      * length are its browsing context's answers, asked as P1-W's members
      * are (browsing.c, d_browsing_classic): for a window with no frames,
      * itself, itself and 0. */
-    if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "self", JS_DupValue(ctx, global), JS_PROP_C_W_E);
-    if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "frames", JS_DupValue(ctx, global), JS_PROP_C_W_E);
+    if (installed >= 0) installed = dom->binding_origin
+        ? d_accessor(dom, ctx, global, "self", window_alias, 1, true)
+        : JS_DefinePropertyValueStr(ctx, global, "self", JS_DupValue(ctx, global), JS_PROP_C_W_E);
+    if (installed >= 0) installed = dom->binding_origin
+        ? d_accessor(dom, ctx, global, "frames", window_alias, 2, true)
+        : JS_DefinePropertyValueStr(ctx, global, "frames", JS_DupValue(ctx, global), JS_PROP_C_W_E);
     if (installed >= 0) installed = d_browsing_classic(dom, ctx, global);
     if (installed >= 0) installed = d_method(dom, ctx, global, "alert", dialog, 1, 0);
     if (installed >= 0) installed = d_method(dom, ctx, global, "confirm", dialog, 1, 1);
@@ -866,7 +1046,7 @@ static os64_dom_t *allocate_binding(os64_js_runtime_t *runtime, os64_js_realm_t 
 static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
                               os64_html_document_t *document, os64_page_state_t *state,
                               const os64_dom_options_t *options, os64_js_outcome_t *outcome,
-                              os64_dom_cluster_t *cluster, bool *consumed)
+                              os64_dom_cluster_t *cluster, bool *consumed, bool browser_jobs, const way_origin_t *origin)
 {
     if (outcome == NULL) return NULL;
     JSContext *ctx = os64_js_realm_context(realm, OS64_JS_ABI_ID, outcome);
@@ -888,7 +1068,8 @@ static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *r
             }
         if (os64_html_group_check(cluster->html, document) != OS64_HTML_OK ||
             !os64_page_state_group_check(cluster->page, state) ||
-            sizeof(os64_dom_t) > cluster->limits.dom_bytes - cluster->bytes) {
+            sizeof(os64_dom_t) + (origin ? sizeof(DBlock) + sizeof(*origin) : 0) >
+                cluster->limits.dom_bytes - cluster->bytes) {
             outcome->status = OS64_JS_HOST_FAILURE;
             return NULL;
         }
@@ -904,10 +1085,21 @@ static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *r
     }
     os64_dom_t *dom = allocate_binding(runtime, realm, ctx, document, state, selected, cluster, outcome);
     if (!dom) return NULL;
+    dom->browser_jobs = browser_jobs;
+    if (origin) {
+        dom->binding_origin = d_alloc(dom, sizeof(*origin));
+        if (!dom->binding_origin) {
+            os64_free(dom);
+            outcome->status = OS64_JS_HOST_FAILURE;
+            return NULL;
+        }
+        *dom->binding_origin = *origin;
+    }
     if (cluster) {
         /* Both ledgers were preflighted and no script has run since then.
          * Admission itself allocates nothing; ownership changes as one pair. */
         if (os64_js_realm_task_begin(realm, OS64_JS_ABI_ID, "DOM installation", outcome) != OS64_JS_OK) {
+            d_free(dom, dom->binding_origin);
             os64_free(dom);
             return NULL;
         }
@@ -918,7 +1110,14 @@ static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *r
         cluster->bytes += sizeof(*dom);
         *consumed = true;
     }
+    if (browser_jobs && os64_js_realm_task_begin(realm, OS64_JS_ABI_ID, "DOM installation", outcome) != OS64_JS_OK) {
+        os64_free(dom);
+        return NULL;
+    }
     if (install_binding(dom, ctx) < 0) goto fail;
+    if (browser_jobs) {
+        if (os64_js_task_end(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) goto standalone_cleanup;
+    }
     if (cluster) {
         if (os64_js_task_end(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) {
             cluster->poisoned = true;
@@ -943,6 +1142,12 @@ fail:
      * Only the binding's own classes carry an opaque slot: JS_SetOpaque writes
      * any object's union, and the registry also holds engine functions. */
     construction_error(ctx, outcome);
+    if (browser_jobs) {
+        os64_js_outcome_t ended;
+        os64_js_status_t status = os64_js_task_end(runtime, OS64_JS_ABI_ID, &ended);
+        if (status != OS64_JS_OK) *outcome = ended;
+    }
+standalone_cleanup:
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
         JSClassID id = JS_GetClassID(entry->value);
         if (id == dom->anchor_class || id == dom->node_class || id == dom->collection_class ||
@@ -1047,10 +1252,10 @@ static void child_abort(os64_dom_t *dom, struct DObservers *observers, struct DC
     dom->installing = false;
 }
 
-os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
+static os64_dom_child_t create_child(os64_dom_cluster_t *cluster,
     os64_html_document_t *document, os64_page_state_t *state,
     const os64_dom_options_t *options, const os64_dom_installation_t *installation,
-    os64_js_outcome_t *outcome)
+    const way_origin_t *origin, os64_js_outcome_t *outcome)
 {
     os64_dom_child_t child = {0};
     os64_js_runtime_t *runtime = cluster ? cluster->runtime : NULL;
@@ -1067,11 +1272,13 @@ os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
         outcome->status = OS64_JS_BAD_ARGUMENT;
         return child;
     }
+    if (origin && !binding_origin_valid(cluster, origin)) { outcome->status = OS64_JS_BAD_ARGUMENT; return child; }
     if (cluster->provider_borrows) { outcome->status = OS64_JS_BUSY; return child; }
     if (cluster->count == D_REALMS) { outcome->status = OS64_JS_REALM_LIMIT; return child; }
     os64_dom_options_t selected = options ? *options : os64_dom_default_options();
     if (selected.max_bytes < sizeof(os64_dom_t) ||
-        sizeof(os64_dom_t) > cluster->limits.dom_bytes - cluster->bytes ||
+        sizeof(os64_dom_t) + (origin ? sizeof(DBlock) + sizeof(*origin) : 0) >
+            cluster->limits.dom_bytes - cluster->bytes ||
         os64_html_group_check(cluster->html, document) != OS64_HTML_OK ||
         !os64_page_state_group_check(cluster->page, state)) {
         outcome->status = OS64_JS_ADMISSION_REFUSED;
@@ -1081,9 +1288,19 @@ os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
     if (!ctx) { child.state = OS64_DOM_CHILD_RUNTIME_FAILED; return child; }
     os64_dom_t *dom = allocate_binding(runtime, NULL, ctx, document, state, selected, cluster, outcome);
     if (!dom) { outcome->status = OS64_JS_ADMISSION_REFUSED; return child; }
+    if (origin) {
+        dom->binding_origin = d_alloc(dom, sizeof(*origin));
+        if (!dom->binding_origin) {
+            os64_free(dom);
+            outcome->status = OS64_JS_ADMISSION_REFUSED;
+            return child;
+        }
+        *dom->binding_origin = *origin;
+    }
     status = os64_js_realm_stage(runtime, OS64_JS_ABI_ID, installation->engine_headroom,
                                  &child.realm, outcome);
     if (status != OS64_JS_OK) {
+        d_free(dom, dom->binding_origin);
         os64_free(dom);
         if (child_runtime_failed(status)) child.state = OS64_DOM_CHILD_RUNTIME_FAILED;
         return child;
@@ -1117,6 +1334,29 @@ os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
         child.state = child_runtime_failed(status) ? OS64_DOM_CHILD_RUNTIME_FAILED : OS64_DOM_CHILD_FAILED;
     }
     return child;
+}
+
+os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
+    os64_html_document_t *document, os64_page_state_t *state,
+    const os64_dom_options_t *options, const os64_dom_installation_t *installation,
+    os64_js_outcome_t *outcome)
+{
+    return create_child(cluster, document, state, options, installation, NULL, outcome);
+}
+
+os64_dom_child_t d_create_child_with_origin(os64_dom_cluster_t *cluster,
+    os64_html_document_t *document, os64_page_state_t *state,
+    const os64_dom_options_t *options, const os64_dom_installation_t *installation,
+    const way_origin_t *origin, os64_js_outcome_t *outcome)
+{
+    /* The common preflight protects an outcome borrowed by a running call. */
+    if (!origin) {
+        os64_js_status_t status = os64_js_quiescent(cluster ? cluster->runtime : NULL,
+            OS64_JS_ABI_ID, outcome);
+        if (status == OS64_JS_OK) outcome->status = OS64_JS_BAD_ARGUMENT;
+        return (os64_dom_child_t){0};
+    }
+    return create_child(cluster, document, state, options, installation, origin, outcome);
 }
 
 /* Quiescent activity shutdown retains exported values, registration identity
@@ -1181,6 +1421,7 @@ done:
     return status;
 }
 
+#include "browsing_context.inc"
 #include "recovery.inc"
 
 static void binding_drain(os64_dom_t *dom)
@@ -1246,6 +1487,7 @@ static void binding_free(os64_dom_t *dom)
     d_ranges_free(dom);
     if (dom->body_context != NULL) os64_html_release(dom->document, dom->body_context);
     d_performance_free(dom);
+    d_free(dom, dom->binding_origin);
     d_kept_free_all(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
@@ -1296,6 +1538,17 @@ void os64_dom_cluster_free(os64_dom_cluster_t *cluster)
      * Keep all ledger descriptors until the native sweeps are finished. */
     for (size_t i = 0; i < cluster->count; ++i) binding_free(cluster->members[i]);
     for (size_t i = 0; i < cluster->count; ++i) os64_free(cluster->members[i]);
+    d_navigation_authority_free(cluster);
+    for (DBrowsingContext *context = cluster->contexts; context;) {
+        DBrowsingContext *next = context->registry_next;
+        if (context->navigation) {
+            cluster->bytes -= sizeof(*context->navigation);
+            os64_free(context->navigation);
+        }
+        cluster->bytes -= context->charged_bytes;
+        os64_free(context);
+        context = next;
+    }
     os64_page_state_group_free(cluster->page);
     os64_html_group_free(cluster->html);
     os64_free(cluster);
