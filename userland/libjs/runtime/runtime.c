@@ -619,7 +619,7 @@ static void module_owed_fold(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
 
 /* The engine's tracker: a promise rejected with no handler, or a handler
  * added to one. A handler for a promise this table no longer holds, which a
- * host took (os64_js_take_rejection), is the host's to hear of. A module's
+ * host claimed, is the host's to hear of. A module's
  * evaluation never comes here as one: one that fails at once is taken back
  * by os64_js_module_run as the module's failure, and one still pending is
  * watched (module_watch), so it has a handler. */
@@ -2290,9 +2290,28 @@ static JSValue eval_body(JSContext *context, void *opaque)
     return value;
 }
 
-/* Source and scoped native execution share the turn, settings and returned
- * value/exception cleanup. The caller retains its admission through leave
- * and the complete-run drain. */
+/* Invoke under the caller's admitted guard and budget. The returned value
+ * and diagnostics finish before the caller releases its temporary roots. */
+static void invoke_body(os64_js_realm_t *realm, os64_js_settings_body_t *body,
+    void *opaque, bool scoped, os64_js_outcome_t *outcome)
+{
+    os64_js_runtime_t *runtime = realm->runtime;
+    realm->evaluated = true;
+    JSValue value = runtime->host_settings_enabled
+        ? host_settings_dispatch(realm, NULL, body, opaque, outcome, scoped)
+        : body(realm->context, opaque);
+    if (JS_IsException(value)) {
+        JSValue error = JS_GetException(realm->context);
+        caught(runtime, realm->context, error);
+        outcome->status = OS64_JS_EXCEPTION;
+        diagnostic(runtime, realm->context, error, outcome);
+        JS_FreeValue(realm->context, error);
+    }
+    JS_FreeValue(realm->context, value);
+}
+
+/* Source and scoped native execution open a fresh turn. Task borrowers use
+ * invoke_body directly, preserving the open task's deadline and counters. */
 static os64_js_status_t execute_body(os64_js_realm_t *realm, const char *source_name,
     os64_js_settings_body_t *body, void *opaque, bool scoped, os64_js_outcome_t *outcome)
 {
@@ -2308,18 +2327,7 @@ static os64_js_status_t execute_body(os64_js_realm_t *realm, const char *source_
         runtime->deadline = now + (int64_t)(runtime->limits.execution_ms * 1000);
         runtime->turn = true;
         runtime->turn_owner = realm;
-        realm->evaluated = true;
-        JSValue value = runtime->host_settings_enabled
-            ? host_settings_dispatch(realm, NULL, body, opaque, outcome, scoped)
-            : body(realm->context, opaque);
-        if (JS_IsException(value)) {
-            JSValue error = JS_GetException(realm->context);
-            caught(runtime, realm->context, error);
-            outcome->status = OS64_JS_EXCEPTION;
-            diagnostic(runtime, realm->context, error, outcome);
-            JS_FreeValue(realm->context, error);
-        }
-        JS_FreeValue(realm->context, value);
+        invoke_body(realm, body, opaque, scoped, outcome);
     }
     return OS64_JS_OK;
 }
@@ -2989,6 +2997,106 @@ JS_PUBLIC os64_js_status_t os64_js_realm_set_script_host(os64_js_realm_t *realm,
     if (host != NULL) realm->host = *host;
     else os64_memset(&realm->host, 0, sizeof(realm->host));
     return OS64_JS_OK;
+}
+
+/* Resolve without getter/health admission: detachment remains possible after
+ * failure or retirement, before the host's opaque storage goes away. */
+os64_js_status_t js_owner_runtime_set_script_host(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket ticket, const os64_js_script_host_t *host, os64_js_outcome_t *outcome)
+{
+    if (!outcome) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (!runtime || !caller_abi)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "runtime and ABI are required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID))
+        return status(outcome, OS64_JS_ABI_MISMATCH, "owner header ABI mismatch");
+    os64_js_realm_t *realm;
+    if (owner_ticket_realm(runtime, ticket, &realm) != JS_OWNER_OK)
+        return status(outcome, OS64_JS_ADMISSION_REFUSED, "owner ticket does not resolve");
+    return os64_js_realm_set_script_host(realm, caller_abi, host, outcome);
+}
+
+typedef struct {
+    JSOwnerRuntimeScope scope;
+    JSOwnerRejectionBody *body;
+    void *opaque;
+    Rejection *item;
+    bool *consumed;
+} OwnerRejectionCall;
+
+static Rejection *owner_rejection_first(os64_js_realm_t *realm)
+{
+    Rejection *item = realm->runtime->rejections;
+    while (item && &realm->runtime->realms[item->realm_index] != realm) item = item->next;
+    return item;
+}
+
+static JSValue owner_rejection_body(JSContext *context, void *opaque)
+{
+    OwnerRejectionCall *call = opaque;
+    os64_js_runtime_t *runtime = call->scope.runtime;
+    if (observe(runtime)) return JS_UNDEFINED;
+    /* Settings admission precedes selection. No queue node crosses a
+     * potentially reentrant preparation; the detached node is ours to free. */
+    Rejection *item = owner_rejection_first(call->scope.realm);
+    if (!item) return JS_UNDEFINED;
+    rejection_unlink(runtime, rejection_place(runtime, JS_VALUE_GET_PTR(item->promise)));
+    call->item = item;
+    *call->consumed = true;
+    return call->body(&call->scope, context, item->promise, item->reason, item->tag, call->opaque);
+}
+
+os64_js_status_t js_owner_runtime_consume_rejection(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket ticket, const char *name, JSOwnerRejectionBody *body, void *opaque,
+    bool *consumed, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (!caller_abi) return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "owner ABI is required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID))
+        return refuse(runtime, outcome, OS64_JS_ABI_MISMATCH, "owner header ABI mismatch");
+    os64_js_realm_t *realm;
+    if (owner_ticket_realm(runtime, ticket, &realm) != JS_OWNER_OK)
+        return refuse(runtime, outcome, OS64_JS_ADMISSION_REFUSED, "owner ticket does not resolve");
+    if (realm->retired)
+        return refuse(runtime, outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->staged)
+        return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
+    if (!name || !body || !consumed)
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "rejection name, body and consumed output are required");
+    if (!realm->hosted) return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "realm has no script host");
+    if (JS_IsJobPending(runtime->engine) || (runtime->turn && !runtime->task))
+        return refuse(runtime, outcome, OS64_JS_BUSY, "the previous turn has queued jobs");
+    if (observe(runtime)) return leave(runtime, outcome);
+    if (!owner_rejection_first(realm)) {
+        *consumed = false;
+        return leave(runtime, outcome);
+    }
+    OwnerRejectionCall call = {.scope={.runtime=runtime, .realm=realm}, .body=body,
+                              .opaque=opaque, .consumed=consumed};
+    if (js_owner_loan_begin(&runtime->owner.metadata->table, runtime->owner.metadata->incarnation,
+            ticket, &call.scope.loan) != JS_OWNER_OK)
+        return refuse(runtime, outcome, OS64_JS_ADMISSION_REFUSED, "owner invocation capacity exhausted");
+    bool borrowed = runtime->task;
+    if (borrowed) invoke_body(realm, owner_rejection_body, &call, true, outcome);
+    else result = execute_body(realm, name, owner_rejection_body, &call, true, outcome);
+    bool claimed = call.item != NULL;
+    /* Returned-value and exception cleanup completed with these roots alive.
+     * Their release can run native finalizers, still under guard and loan. */
+    if (call.item) {
+        JS_FreeValueRT(runtime->engine, call.item->promise);
+        JS_FreeValueRT(runtime->engine, call.item->reason);
+        js_free_rt(runtime->engine, call.item);
+    }
+    result = result == OS64_JS_BAD_ARGUMENT
+        ? refuse(runtime, outcome, result, "deadline is not representable") : leave(runtime, outcome);
+    if (!borrowed) result = complete_run(runtime, result, outcome);
+    if (!claimed && result == OS64_JS_OK) *consumed = false;
+    if (js_owner_loan_end(&runtime->owner.metadata->table, runtime->owner.metadata->incarnation,
+            call.scope.loan) != JS_OWNER_OK)
+        jsport_fatal("owner rejection invocation unwind", __FILE__, __LINE__);
+    return result;
 }
 
 JS_PUBLIC bool os64_js_realm_take_rejection(os64_js_realm_t *realm, const char *caller_abi,
