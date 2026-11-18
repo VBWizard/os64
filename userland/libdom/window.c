@@ -285,6 +285,27 @@ static bool history_active(os64_dom_t *dom, JSContext *ctx)
     return false;
 }
 
+/* HTML's IDL check observes the caller before this native member became
+ * current. The data-function ctx and the task/entry realm are not that caller.
+ * This private opt-in requires explicit origin-bearing settings on both sides;
+ * the default binding has no new security policy. */
+static bool location_access(os64_dom_t *target, JSContext *ctx, bool cross_origin)
+{
+    if (!target->binding_origin) return true;
+    os64_js_outcome_t out;
+    os64_js_realm_t *realm = os64_js_settings_realm(target->runtime, OS64_JS_ABI_ID,
+        OS64_JS_SETTINGS_NATIVE_CALLER, &out);
+    os64_dom_t *source = NULL;
+    for (size_t i = 0; realm && i < target->cluster->count; ++i)
+        if (target->cluster->members[i]->realm == realm) source = target->cluster->members[i];
+    if (!d_delivery_active(target) || !d_delivery_active(source) || !source->binding_origin ||
+        (!cross_origin && !way_origin_same(source->binding_origin, target->binding_origin))) {
+        d_error(ctx, "SecurityError", "Location member settings do not permit access");
+        return false;
+    }
+    return true;
+}
+
 static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                              int magic, JSValue *data)
 {
@@ -298,6 +319,10 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     if ((magic <= L_TO_STRING && !d_same_object(self, dom->location)) ||
         (magic >= H_BACK && magic <= H_LENGTH && !d_same_object(self, dom->history)))
         return JS_ThrowTypeError(ctx, "Illegal invocation");
+    /* href's setter and replace are the Location IDL cross-origin exceptions.
+     * Navigation policy and exotic property access remain separate gates. */
+    if (magic <= L_TO_STRING && !location_access(dom, ctx,
+            (magic == L_HREF && set) || magic == L_REPLACE)) return JS_EXCEPTION;
     switch (magic) {
     case L_HREF:
         return set ? ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, false) : location_part(dom, ctx, magic);
@@ -380,6 +405,7 @@ static JSValue location_property(JSContext *ctx, JSValueConst self, int argc, JS
     if (dom == NULL) return JS_EXCEPTION;
     if (windowless(dom, self))
         return magic & D_SET ? JS_ThrowTypeError(ctx, "This document has no location") : JS_NULL;
+    if (!location_access(dom, ctx, true)) return JS_EXCEPTION;
     if (magic & D_SET) return ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, argc > 0 ? argv[0] : JS_UNDEFINED, false);
     return JS_DupValue(ctx, dom->location->value);
 }

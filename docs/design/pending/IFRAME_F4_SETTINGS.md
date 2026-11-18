@@ -295,8 +295,10 @@ Before publishing browser settings queries, implement and prove:
   gated on the binding/security acceptance here; the
   [neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md) supplies actual
   capability current/script incumbent without inventing entry or backup settings.
-- A pre-member-check boundary that refuses missing settings, with no guessed
-  bootstrap caller. Security/lifetime review precedes browser publication.
+- The private [Location member boundary](IFRAME_F4_BINDING_AUTHORITY.md)
+  refuses missing settings and checks explicit origin-bearing bindings before
+  conversion. Other Window members, property exotics and navigation authorization
+  remain; security/lifetime review precedes browser publication.
 
 These remain F.4b completion gates and prerequisites for F.4d. The raw APIs
 are not security checks. No binding may substitute native dispatch facts or

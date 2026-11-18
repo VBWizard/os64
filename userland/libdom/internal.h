@@ -396,6 +396,7 @@ struct os64_dom_cluster {
     size_t dispatching;
     size_t provider_borrows;
     uint64_t effect_generation, animation_serial;
+    uint64_t opaque_origin_serial;
     bool sweep_pending;
     bool poisoned, drained;
     bool timer_settings, listener_settings, scheduled_settings, handler_settings, observer_settings, custom_settings, synchronous_settings;
@@ -416,6 +417,7 @@ struct os64_dom {
     size_t bytes, retained;
     /* `bytes` by kind; the kinds sum to it. */
     os64_dom_mem_t memory[OS64_DOM_MEM_KINDS];
+    way_origin_t *binding_origin; /* Private immutable authority, separate from mutable URL/base. */
     bool browser_jobs; /* Standalone opt-in to the composed callback settings. */
     bool closed;
     bool departure_finishing, departure_finished;

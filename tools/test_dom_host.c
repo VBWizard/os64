@@ -316,6 +316,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_recovery_host.inc"
 #include "test_dom_retention.inc"
 #include "test_dom_browser_jobs.inc"
+#include "test_dom_binding_authority.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -690,6 +691,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--synchronous-settings")){dom_synchronous_settings_cases();dom_synchronous_failure_cases();printf("DOM synchronous settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--neutral-promise-settings")){dom_neutral_promise_cases();printf("DOM neutral Promise: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--import-settings")){dom_import_settings_cases();printf("DOM import settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--binding-authority")){dom_binding_authority_cases();printf("DOM binding authority: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--browser-jobs")){dom_browser_jobs_cases();dom_browser_jobs_budget_case();dom_finalization_settings_cases();printf("DOM browser jobs: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--finalization-settings")){dom_finalization_settings_cases();printf("DOM finalization settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--promise-settings")){dom_promise_settings_cases();printf("DOM Promise settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -722,7 +724,7 @@ int main(int argc, char **argv)
     dom_observer_settings_cases();
     dom_custom_settings_cases();
     dom_promise_settings_cases();
-    dom_finalization_settings_cases(); dom_browser_jobs_cases();dom_browser_jobs_budget_case();
+    dom_finalization_settings_cases(); dom_browser_jobs_cases();dom_browser_jobs_budget_case();dom_binding_authority_cases();
     dom_import_settings_cases();
     dom_neutral_promise_cases();
     dom_stream_callback_settings_cases();dom_stream_callback_failure_cases();
