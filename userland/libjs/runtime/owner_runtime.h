@@ -68,6 +68,22 @@ os64_js_status_t js_owner_runtime_scoped_run(os64_js_runtime_t *, const char *ca
  * Export uses ABI 5 getter admission and records sticky compatibility retention
  * before publishing its runtime-lived context; it does not clear other gates. */
 JSOwnerStatus js_owner_scope_owner(const JSOwnerRuntimeScope *, JSOwnerId *);
+typedef enum {
+    JS_OWNER_SETTINGS_ABSENT, JS_OWNER_SETTINGS_MAPPED, JS_OWNER_SETTINGS_UNMAPPED
+} JSOwnerSettingsKind;
+typedef struct {
+    JSOwnerId admitting_owner;
+    JSOwnerRealmSnapshot realm;
+    JSOwnerSettingsKind kind;
+} JSOwnerSettingsSnapshot;
+/* Live-scope scalar observation under an active wrapper settings frame. The
+ * admitting owner is independent of the selected role's original realm.
+ * Non-mapped realm fields are zero. No allocation, health polling, raw view,
+ * holder or authority is supplied; lifecycle facts do not grant eligibility.
+ * Output is distinct caller storage outside runtime/scope/active outcomes;
+ * refusal leaves it unchanged. Copied facts survive scope/root teardown. */
+JSOwnerStatus js_owner_scope_settings(const JSOwnerRuntimeScope *,
+    os64_js_settings_role_t, JSOwnerSettingsSnapshot *);
 JSOwnerStatus js_owner_scope_promote(JSOwnerRuntimeScope *, JSOwnerTicket *);
 JSOwnerStatus js_owner_scope_export(JSOwnerRuntimeScope *, JSContext **);
 /* Explicit private diagnostic selection before runtime publication. This
