@@ -92,7 +92,7 @@ def main():
             "userland/libjs/runtime/owner_tickets.h", "userland/libjs/runtime/owner_tickets.c",
             "userland/libjs/tests/owner_admission_cases.h", "userland/libjs/tests/owner_realm_cases.h",
             "userland/libjs/tests/owner_scope_cases.h", "userland/libjs/tests/owner_failure_cases.h",
-            "userland/libjs/tests/owner_setup_cases.h",
+            "userland/libjs/tests/owner_setup_cases.h", "userland/libjs/tests/owner_rejection_cases.h",
             "userland/libjs/runtime/recovery.inc", "userland/libjs/runtime/failure.inc",
             "userland/libjs/include/os64/js_failure.h",
             "userland/libjs/tests/owner_runtime_cases.h", "userland/libjs/tests/owner_runtime.c",
