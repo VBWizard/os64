@@ -958,7 +958,7 @@ mutants = [
      '    if (pointer_next() == YONDER_NEVER) return false;', WINDOW),
     ('due-work-asks-for-no-frame', YONDER,
      '    if (frame.ask)\n        frame_ask();',
-     '    (void)frame;', WINDOW),
+     '    if (frame.ask && false)\n        frame_ask();', WINDOW),
     ('an-answer-is-not-heard', YONDER,
      '    if (ev.type == OS64_GUI_EVENT_FRAME) {\n        frame_answered(&ev);',
      '    if (ev.type == OS64_GUI_EVENT_FRAME) {\n        (void)0;', WINDOW),

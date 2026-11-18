@@ -1669,8 +1669,11 @@ static void tick_cases(void) {
     motion_painted();
     check(g.tick_us==3000 && g.tick_ended==603 && !g.tick_painting && tick_next()==606,
         "ticks: a tick costs its arithmetic and its paint, and the next waits as long again after it ends");
+    /* A frame answered at 616 whose tick runs at 619 ticks at 616: one
+     * time a frame, the blank's, not the moment the work runs. */
     now_ms=616;
-    frame_tick();
+    host_frame(); now_ms=619; motion_tick(); frame_close();
+    check(g.tick_began==616,"ticks: a tick in a frame is sampled at the frame's time, not when it runs");
     clock_us+=30000; now_ms=646;
     motion_painted();
     check(tick_next()==676,"ticks: a costlier tick waits as long again after it ends");

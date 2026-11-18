@@ -38,8 +38,9 @@ mutants = [
     ('asks-while-a-frame-is-open', '    if (p->asked || p->open)\n        return step;', '    if (p->asked)\n        return step;'),
     ('an-ask-is-not-out', '    step.ask = true;\n    p->asked = true;', '    step.ask = true;'),
     ('an-ask-is-not-counted', '    p->asks++;\n', ''),
-    ('never-chained', '    p->chained = closed_now;', '    p->chained = false;'),
-    ('always-chained', '    p->chained = closed_now;', '    p->chained = true;'),
+    # (Each break keeps every variable used: the suite builds with -Werror.)
+    ('never-chained', '    p->chained = closed_now;', '    p->chained = closed_now && false;'),
+    ('always-chained', '    p->chained = closed_now;', '    p->chained = closed_now || true;'),
     ('a-look-keeps-the-close', '    p->closed_now = false;\n    if (due_ms == FRAME_PLAN_NEVER)', '    if (due_ms == FRAME_PLAN_NEVER)'),
     # A refusal.
     ('a-refusal-leaves-one-out', '    p->asked = false;\n    p->chained = false;\n    p->asks--;', '    p->chained = false;\n    p->asks--;'),
@@ -68,13 +69,13 @@ mutants = [
     ('the-blank-now-is-next', '    uint64_t periods = (now_us - p->blank_us) / p->period_us + 1;', '    uint64_t periods = (now_us - p->blank_us) / p->period_us;'),
     ('the-last-blank-is-passed-over', '    if (now_us < p->blank_us)\n        return p->blank_us;', '    if (now_us < p->blank_us)\n        return p->blank_us + p->period_us;'),
     # The cost rule's rests.
-    ('the-limit-stops-nothing', '    if (due_ms == FRAME_PLAN_NEVER || cost_us > stop_us)', '    if (due_ms == FRAME_PLAN_NEVER)'),
+    ('the-limit-stops-nothing', '    if (due_ms == FRAME_PLAN_NEVER || cost_us > stop_us)', '    if (due_ms == FRAME_PLAN_NEVER || (cost_us > stop_us && false))'),
     ('the-limit-itself-stops', '    if (due_ms == FRAME_PLAN_NEVER || cost_us > stop_us)', '    if (due_ms == FRAME_PLAN_NEVER || cost_us >= stop_us)'),
-    ('a-first-frame-rests', '    if (!had)\n        return due_ms;\n', ''),
+    ('a-first-frame-rests', '    if (!had)\n        return due_ms;\n', '    if (!had && false)\n        return due_ms;\n'),
     ('the-rest-truncates', '    uint64_t cost_ms = cost_us / 1000 + (cost_us % 1000 != 0);', '    uint64_t cost_ms = cost_us / 1000;'),
     ('the-rest-is-one-cost', ': sum(ended_ms, cost_ms * rest);', ': sum(ended_ms, cost_ms);'),
     ('the-rest-overrides-the-due', '    return later(due_ms, rested);', '    return rested;'),
-    ('the-due-overrides-the-rest', '    return later(due_ms, rested);', '    return due_ms;'),
+    ('the-due-overrides-the-rest', '    return later(due_ms, rested);', '    return rested != 0 ? due_ms : due_ms;'),
     ('the-rest-wraps', ': sum(ended_ms, cost_ms * rest);', ': ended_ms + cost_ms * rest;'),
 ]
 
