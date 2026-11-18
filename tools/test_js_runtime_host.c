@@ -3215,6 +3215,12 @@ int main(int argc, char **argv)
         printf("libjs native call contexts: %u checks, %u failures\n", checks, failures);
         return failures != 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--global-receiver")) {
+        global_receiver_cases();
+        check(live == 0, "global receiver cases release allocations");
+        printf("libjs global receiver: %u checks, %u failures\n", checks, failures);
+        return failures != 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--global-this")) {
         global_this_cases();
         check(live == 0, "global this cases release allocations");

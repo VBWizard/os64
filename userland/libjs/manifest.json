@@ -288,6 +288,11 @@
     {
       "path": "patches/0042-finalization-tasks.patch",
       "sha256": "c374567f59fa10cc8cdbaa7249d85d46de52edbc7266955f9514482fb88abe59"
+    },
+    {
+      "path": "patches/0043-global-property-receivers.patch",
+      "sha256": "9106f33cce0ee208614e80245af0b283a6615f65261a32218eaaaff7462d858d",
+      "reason": "Trace the configured global receiver context and substitute property callback receivers across direct, reference and prototype paths; GroupBy supplies undefined to callbacks."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

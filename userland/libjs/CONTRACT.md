@@ -92,7 +92,11 @@ contract; the engine does not discover their runtime from an arbitrary object.
 Non-objects return false without changing the receiver or pending exception.
 Success duplicates the reference before releasing the old hold, which may
 invoke native finalizers. The context marks the hold during GC and releases
-it on destruction. No extra reference is held for the unconfigured default.
+it on destruction. A configured global object also retains and traces its
+context so property callbacks can select that object's receiver across realms
+and after the caller releases its context handle. The global finalizer releases
+that context edge. The unconfigured default adds no hold. This is retained
+reachability, not permission to execute a departed realm.
 
 Global name/lexical storage and `JS_GetGlobalObject` keep their meaning.
 The setter does not rewrite `globalThis` or DOM aliases. Script evaluation,
@@ -101,11 +105,19 @@ selection use the receiver; explicit `JS_EvalThis` and strict/module semantics
 remain separate. The prepared-engine identity changes with this hook; public
 wrapper layouts and ABI 5 are unchanged.
 
-This primitive does not install a WindowProxy, protect a global object or
-complete browser receiver semantics. Global-property accessor/reference paths
-and the engine's `groupBy` callback receiver also need the F.4 security audit
-before a proxy can be exposed. Existing consumers do not opt in. See
-[the F.4 brief](../../docs/design/pending/IFRAME_F4_SECURITY.md).
+Property getters, setters and inherited exotic get/set callbacks substitute
+a configured global receiver without changing the underlying property storage.
+Selection follows the receiver's global, including a foreign accessor invoked
+in another realm. Alternate non-global receivers pass through. Bytecode global
+reference operations reach these shared property paths. `Object.groupBy` and
+`Map.groupBy` pass undefined to callbacks; sloppy functions then select their
+own realm's global receiver, while strict and native functions see undefined.
+
+This primitive does not install a WindowProxy, protect exported global values,
+or implement browser property security. DOM aliases, event values and proxy
+publication still need the F.4 integration. Existing consumers do not opt in.
+See [receiver evidence](../../docs/design/pending/IFRAME_F4_GLOBAL_RECEIVERS.md)
+and [the F.4 brief](../../docs/design/pending/IFRAME_F4_SECURITY.md).
 
 ## Dormant engine execution observations
 

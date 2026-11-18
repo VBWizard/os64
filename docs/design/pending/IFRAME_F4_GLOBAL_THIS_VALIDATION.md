@@ -85,15 +85,19 @@ implementation passes both focused builds with leak detection enabled.
 
 ## Exposure blockers and integration limits
 
-This is not proof that author code cannot receive the real global. The
-prepared engine audit also found global-property accessor/reference paths
+The follow-up [global receiver milestone](IFRAME_F4_GLOBAL_RECEIVERS.md)
+closes the engine property-callback and GroupBy routes identified below.
+DOM alias/event integration and proxy publication remain separate gates.
+
+This initial cut did not prove that author code cannot receive the real global.
+Its prepared engine audit also found global-property accessor/reference paths
 (`JS_GetGlobalVarRef`, `OP_get_var`, `OP_put_var`, `OP_put_ref_value`) and the
-`groupBy` callback receiver using global storage. F.4d must resolve their
-browser semantics and test for escape before publishing a WindowProxy.
-The shared GroupBy implementation passes the real global as callback this;
+`groupBy` callback receiver using global storage. The follow-up records their
+receiver semantics and escape tests before WindowProxy publication.
+At that baseline the shared GroupBy implementation passed the real global as callback this;
 [ECMAScript GroupBy](https://tc39.es/ecma262/multipage/keyed-collections.html#sec-groupby)
-requires an undefined receiver. That existing behavior is not changed by
-the dormant hook. Function-constructor parsing also evaluates its generated
+requires an undefined receiver. That behavior was not changed by
+the initial dormant hook. Function-constructor parsing also evaluates its generated
 function expression against global storage; the resulting callable's receiver
 is selected on invocation, as exercised by this cut.
 
