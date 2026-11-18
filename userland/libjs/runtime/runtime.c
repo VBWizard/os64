@@ -2818,6 +2818,43 @@ static void checkpoint(os64_js_runtime_t *runtime, os64_js_outcome_t *outcome)
     runtime->checkpointing = true;
 }
 
+/* One checked native invocation owns this task and its ordinary checkpoint.
+ * Its loan outlives value/job/rejection cleanup and the final guard unwind. */
+os64_js_status_t js_owner_runtime_task_run(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket ticket, const char *name, JSOwnerScopedBody *body, void *opaque,
+    os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter_task(runtime, caller_abi, false, outcome);
+    if (result != OS64_JS_OK) return result;
+    os64_js_realm_t *realm;
+    if (owner_ticket_realm(runtime, ticket, &realm) != JS_OWNER_OK)
+        return refuse(runtime, outcome, OS64_JS_ADMISSION_REFUSED, "owner ticket does not resolve");
+    if (realm->retired)
+        return refuse(runtime, outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->staged)
+        return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
+    if (!name || !body) return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "task name and body are required");
+    if (runtime->turn || JS_IsJobPending(runtime->engine))
+        return refuse(runtime, outcome, OS64_JS_BUSY, "the previous turn has queued jobs");
+    if (observe(runtime)) return leave(runtime, outcome);
+    OwnerScopedCall call = {.scope={.runtime=runtime, .realm=realm}, .body=body, .opaque=opaque};
+    if (js_owner_loan_begin(&runtime->owner.metadata->table, runtime->owner.metadata->incarnation,
+            ticket, &call.scope.loan) != JS_OWNER_OK)
+        return refuse(runtime, outcome, OS64_JS_ADMISSION_REFUSED, "owner invocation capacity exhausted");
+    result = begin_task(runtime, realm, name, outcome);
+    if (result == OS64_JS_OK) {
+        invoke_body(realm, owner_scoped_body, &call, true, outcome);
+        checkpoint(runtime, outcome);
+        runtime->task = false;
+        result = leave(runtime, outcome);
+        runtime->checkpointing = false;
+    }
+    if (js_owner_loan_end(&runtime->owner.metadata->table, runtime->owner.metadata->incarnation,
+            call.scope.loan) != JS_OWNER_OK)
+        jsport_fatal("owner task invocation unwind", __FILE__, __LINE__);
+    return result;
+}
+
 JS_PUBLIC os64_js_status_t os64_js_checkpoint(os64_js_runtime_t *runtime, const char *caller_abi,
                                             os64_js_outcome_t *outcome)
 {

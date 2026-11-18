@@ -140,4 +140,13 @@ typedef JSValue JSOwnerRejectionBody(JSOwnerRuntimeScope *, JSContext *,
     JSValueConst promise, JSValueConst reason, uint32_t tag, void *);
 os64_js_status_t js_owner_runtime_consume_rejection(os64_js_runtime_t *, const char *caller_abi,
     JSOwnerTicket, const char *name, JSOwnerRejectionBody *, void *, bool *consumed, os64_js_outcome_t *);
+/* Own one idle native task and checkpoint its ordinary jobs to exhaustion,
+ * preserving the first exception diagnostic. The independent loan spans
+ * body/result/job/rejection cleanup and task/guard closure. Sticky failure
+ * closes the task without resetting its verdict or budget. Open-task/nested
+ * use refuses; this is not a persistent task handle or deferred-task scope.
+ * JSOwnerScopedBody's borrowing/export contract applies throughout cleanup.
+ * No F4 authority, public activation or reclamation certificate is created. */
+os64_js_status_t js_owner_runtime_task_run(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket, const char *name, JSOwnerScopedBody *, void *, os64_js_outcome_t *);
 #endif
