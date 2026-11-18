@@ -2616,6 +2616,126 @@ static void finalization_task_recovery_cases(void)
 #include "../userland/libjs/tests/owner_admission_cases.h"
 #include "../userland/libjs/tests/owner_realm_cases.h"
 #include "../userland/libjs/tests/owner_scope_cases.h"
+#include "../userland/libjs/tests/owner_failure_cases.h"
+
+static void owner_runtime_assert(bool,const char *);
+static size_t owner_failure_attempts(void) { return attempts; }
+static os64_js_runtime_t *owner_failure_host_runtime;
+static JSOwnerFailureSnapshot owner_failure_host_inside;
+static JSValue owner_failure_host_budget(JSContext *context,JSValueConst self,int argc,JSValueConst *argv)
+{
+    (void)context;(void)self;(void)argc;(void)argv;monotonic+=10000;
+    os64_js_outcome_t out;
+    check(os64_js_check_budget(owner_failure_host_runtime,OS64_JS_ABI_ID,&out)==OS64_JS_LIMIT,
+        "checked failures: native job callback observes execution timeout");
+    size_t before=attempts;
+    check(js_owner_runtime_observe_failure(owner_failure_host_runtime,OS64_JS_ABI_ID,&owner_failure_host_inside)==OS64_JS_OK && attempts==before,
+        "checked failures: first in-job observation allocates nothing");
+    return JS_UNDEFINED;
+}
+static JSValue owner_failure_host_job(JSContext *context,int argc,JSValueConst *argv)
+{ return argc?JS_Call(context,argv[0],JS_UNDEFINED,0,NULL):JS_UNDEFINED; }
+static void owner_failure_host_cases(void)
+{
+    owner_failure_cases(owner_runtime_assert,owner_failure_attempts);
+    os64_js_config_t config=fixture_config();config.limits.execution_ms=5;
+    for(unsigned policy=0;policy<2;policy++) {
+        for(unsigned neutral=0;neutral<2;neutral++) {
+            size_t baseline=live,bytes=live_bytes;os64_js_runtime_t *runtime=NULL;os64_js_outcome_t out;
+            os64_js_realm_t *realm[3];JSContext *context[3];JSOwnerTicket ticket[3];
+            check(js_owner_runtime_create_with_failure_records(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+                (JSOwnerLimits){3,4,2},&runtime,&out)==OS64_JS_OK,"checked failures: three-realm provenance fixture");
+            realm[0]=os64_js_primary_realm(runtime,OS64_JS_ABI_ID,&out);
+            for(unsigned i=1;i<3;i++)check(os64_js_realm_create(runtime,OS64_JS_ABI_ID,&realm[i],&out)==OS64_JS_OK,
+                "checked failures: admit real provenance child");
+            for(unsigned i=0;i<3;i++) {
+                context[i]=os64_js_realm_context(realm[i],OS64_JS_ABI_ID,&out);
+                check(context[i] && js_owner_runtime_realm_ticket(runtime,realm[i],&ticket[i])==JS_OWNER_OK,
+                    "checked failures: provenance fixture associates actual stable owners");
+            }
+            JSValue global=JS_GetGlobalObject(context[1]);
+            check(JS_SetPropertyStr(context[1],global,"nativeBudget",JS_NewCFunction(context[2],owner_failure_host_budget,"nativeBudget",0))==1,
+                "checked failures: native definition in C is callable from B");JS_FreeValue(context[1],global);
+            const char *code="(()=>{nativeBudget();return 0})";
+            JSValue function=JS_Eval(context[1],code,strlen(code),"failure-code-B.js",JS_EVAL_TYPE_GLOBAL);
+            check(JS_IsFunction(context[1],function),"checked failures: compile author callback in B");
+            check(os64_js_realm_task_begin(realm[0],OS64_JS_ABI_ID,"task-A",&out)==OS64_JS_OK &&
+                JS_EnqueueJobOwned(context[2],neutral?NULL:context[1],neutral?NULL:context[0],owner_failure_host_job,1,&function)==0,
+                "checked failures: task A admits job execution C with separate callback/activity roles");
+            owner_failure_host_runtime=runtime;
+            check(os64_js_checkpoint(runtime,OS64_JS_ABI_ID,&out)==OS64_JS_LIMIT && out.limit==OS64_JS_LIMIT_EXECUTION,
+                "checked failures: job interruption keeps terminal deadline policy");
+            JSOwnerFailureSnapshot snapshot;
+            check(js_owner_runtime_observe_failure(runtime,OS64_JS_ABI_ID,&snapshot)==OS64_JS_OK &&
+                snapshot.task_owner.kind==JS_OWNER_FAILURE_ASSIGNED && owner_failure_id(snapshot.task_owner.owner,ticket[0].owner) &&
+                snapshot.job_execution.kind==JS_OWNER_FAILURE_ASSIGNED && owner_failure_id(snapshot.job_execution.owner,ticket[2].owner) &&
+                snapshot.job_callback.kind==(neutral?JS_OWNER_FAILURE_NONE:JS_OWNER_FAILURE_ASSIGNED) &&
+                snapshot.job_activity.kind==(neutral?JS_OWNER_FAILURE_NONE:JS_OWNER_FAILURE_ASSIGNED) &&
+                (neutral ? !snapshot.job_callback.owner.serial && !snapshot.job_activity.owner.serial :
+                    owner_failure_id(snapshot.job_callback.owner,ticket[1].owner) && owner_failure_id(snapshot.job_activity.owner,ticket[0].owner)),
+                "checked failures: immutable IDs preserve task execution callback and activity roles including neutral absence");
+            check(snapshot.realm_count==1 && owner_failure_id(snapshot.realms[0].owner,ticket[1].owner) &&
+                snapshot.realms[0].kind==JS_OWNER_FAILURE_ASSIGNED && snapshot.owners_mapped && !snapshot.scopes_classified &&
+                (snapshot.scope_issues&OS64_JS_FAILURE_JOB_SCOPE),
+                "checked failures: author-code B stays distinct from native definition C and incomplete job scopes");
+            owner_failure_original_same(owner_runtime_assert,&owner_failure_host_inside,&snapshot);
+            JSOwnerFailureSnapshot unchanged={.incarnation=91};int64_t saved_clock=monotonic;clock_error=-83;
+            check(js_owner_runtime_observe_failure(runtime,"wrong ABI",&unchanged)==OS64_JS_ABI_MISMATCH &&
+                unchanged.incarnation==91 && monotonic==saved_clock,"checked failures: invalid observation does not poll late health");
+            check(js_owner_runtime_observe_failure(runtime,OS64_JS_ABI_ID,&snapshot)==OS64_JS_OK &&
+                snapshot.global.status==OS64_JS_HOST_FAILURE && snapshot.global.host_error==-83,
+                "checked failures: late clock failure remains global without replacing original timeout");clock_error=0;
+            owner_failure_original_same(owner_runtime_assert,&owner_failure_host_inside,&snapshot);
+            check(os64_js_task_end(runtime,OS64_JS_ABI_ID,&out)==OS64_JS_LIMIT,"checked failures: failed task closes without renewing deadline");
+            JS_FreeValue(context[1],function);os64_js_teardown_report_t report;os64_js_destroy_report(runtime,&report);
+            check(!report.leaked && live==baseline && live_bytes==bytes,"checked failures: provenance and late-failure fixtures balance roots");
+        }
+        os64_js_runtime_t *runtime=NULL;os64_js_outcome_t out;JSOwnerTicket primary,child={{91,92},93};
+        check(js_owner_runtime_create_with_failure_records(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+            (JSOwnerLimits){1,2,1},&runtime,&out)==OS64_JS_OK && js_owner_runtime_primary_ticket(runtime,&primary)==JS_OWNER_OK,
+            "checked failures: no unreserved child slot identity fixture");clock_step=10000;
+        check(js_owner_runtime_child(runtime,OS64_JS_ABI_ID,1,&child,&out)==OS64_JS_LIMIT && out.limit==OS64_JS_LIMIT_EXECUTION,
+            "checked failures: full owner admission expires before any row is reserved");clock_step=0;
+        JSOwnerFailureSnapshot snapshot;
+        check(js_owner_runtime_observe_failure(runtime,OS64_JS_ABI_ID,&snapshot)==OS64_JS_OK &&
+            snapshot.task_owner.kind==JS_OWNER_FAILURE_UNMAPPED && !snapshot.task_owner.owner.serial &&
+            !snapshot.task_owner.owner.incarnation && !snapshot.owners_mapped && child.serial==93,
+            "checked failures: unreserved setup slot stays explicitly unmapped without invented owner");
+        check(js_owner_runtime_child(runtime,OS64_JS_ABI_ID,1,&child,&out)==OS64_JS_FAILED_RUNTIME && child.serial==93,
+            "checked failures: terminal diagnostic runtime cannot later assign captured slot");os64_js_destroy(runtime);
+
+        size_t baseline=live,bytes=live_bytes;
+        check(js_owner_runtime_create_with_failure_records(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+            (JSOwnerLimits){3,3,1},&runtime,&out)==OS64_JS_OK,"checked failures: count child admission allocations");
+        size_t before=attempts;
+        check(js_owner_runtime_child(runtime,OS64_JS_ABI_ID,1,&child,&out)==OS64_JS_OK,"checked failures: successful child admission baseline");
+        size_t cuts=attempts-before;os64_js_destroy(runtime);
+        for(size_t cut=1;cut<=cuts;cut++) {
+            check(js_owner_runtime_create_with_failure_records(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+                (JSOwnerLimits){3,3,1},&runtime,&out)==OS64_JS_OK &&
+                js_owner_runtime_primary_ticket(runtime,&primary)==JS_OWNER_OK,"checked failures: reserved child failure fixture");
+            child=(JSOwnerTicket){{91,92},93};fail_at=attempts+cut;
+            os64_js_status_t result=js_owner_runtime_child(runtime,OS64_JS_ABI_ID,1,&child,&out);fail_at=0;
+            check(js_owner_runtime_observe_failure(runtime,OS64_JS_ABI_ID,&snapshot)==OS64_JS_OK,
+                "checked failures: allocation refusal still permits scalar diagnostics");
+            if(result==OS64_JS_OK)check(snapshot.original.status==OS64_JS_OK,"checked failures: successful allocation cut invents no failure");
+            else check(child.serial==93 && snapshot.original.status!=OS64_JS_OK &&
+                snapshot.task_owner.kind==JS_OWNER_FAILURE_UNPUBLISHED && snapshot.task_owner.owner.incarnation==primary.owner.incarnation &&
+                snapshot.task_owner.owner.serial!=primary.owner.serial && snapshot.task_owner.owner.serial && snapshot.owners_mapped,
+                "checked failures: consumed failed row remains unpublished with stable diagnostic identity");
+            os64_js_teardown_report_t report;os64_js_destroy_report(runtime,&report);
+            check(!report.leaked && live==baseline && live_bytes==bytes,"checked failures: selected diagnostic child allocation cuts balance roots and metadata");
+        }
+        printf("checked failures: policy%u %zu child allocation cuts balanced\n",policy,cuts);
+        for(size_t cut=1;cut<=3;cut++) {
+            runtime=(void *)1;fail_at=attempts+cut;
+            check(js_owner_runtime_create_with_failure_records(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+                (JSOwnerLimits){3,3,1},&runtime,&out)==OS64_JS_HOST_FAILURE && !runtime,
+                "checked failures: wrapper metadata and engine construction refusal publish no runtime");fail_at=0;
+            check(live==baseline && live_bytes==bytes,"checked failures: explicit diagnostic construction refusal balances storage");
+        }
+    }
+}
 
 static bool owner_runtime_issuer_exhausted;
 JSOwnerStatus js_owner_observed_incarnation_next(uint64_t *out)
@@ -2842,6 +2962,12 @@ static void owner_runtime_failure_cases(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--owner-failures")) {
+        owner_failure_host_cases();
+        check(live==0,"checked failures: native and engine allocations balance");
+        printf("checked failures: %u checks, %u failures\n",checks,failures);
+        return failures?1:0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--owner-scopes")) {
         owner_scope_failure_cases();
         check(live==0,"owner scopes: native and engine allocations balance");
@@ -3051,7 +3177,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
-    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases(); owner_scope_failure_cases();
+    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases(); owner_scope_failure_cases(); owner_failure_host_cases();
     realm_cases(); finalization_task_recovery_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
 
     task_cases();

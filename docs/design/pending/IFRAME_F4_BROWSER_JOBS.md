@@ -106,3 +106,11 @@ and LeakSanitizer remain enabled. No guest execution or P5 acceptance is claimed
 
 Implementation and evidence land in PR #650. Source, executed host binaries,
 compiled consumers, commands and logs are frozen with a SHA-256 manifest.
+
+Integration with merged #649 (`userland` 4ffcd887) preserves both focused
+runtime selectors. Combined full runtime passes **39,171 shipping / 132,821
+instrumented checks**, with zero failures or live allocations; browser-job
+focus passes **4,459 each**, and checked-failure focus passes **401 / 4,745**.
+Leak detection stays enabled. Shipping consumers, the **235 / 89** export
+audit and the **13,080-byte** layout check pass again. These integration
+receipts supplement the original DOM/browser evidence above.

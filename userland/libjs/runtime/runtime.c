@@ -1165,6 +1165,18 @@ os64_js_status_t js_owner_runtime_create(const os64_js_config_t *config,
     return create_with_teardown(config, policy, caller_abi, out, outcome, &metadata_limits);
 }
 
+os64_js_status_t js_owner_runtime_create_with_failure_records(const os64_js_config_t *config,
+    os64_js_teardown_policy_t policy, const char *caller_abi, JSOwnerLimits limits,
+    os64_js_runtime_t **out, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = js_owner_runtime_create(config, policy, caller_abi, limits, out, outcome);
+    if (result == OS64_JS_OK) {
+        (*out)->failure_records_enabled = true;
+        JS_EnableExecutionScopeTracking((*out)->engine);
+    }
+    return result;
+}
+
 JS_PUBLIC os64_js_status_t os64_js_create(const os64_js_config_t *config,
                                          const char *caller_abi,
                                          os64_js_runtime_t **out,
@@ -1195,6 +1207,62 @@ JS_PUBLIC os64_js_status_t os64_js_observe_failure(os64_js_runtime_t *runtime,
     observe(runtime);
     owner_legacy_escape(runtime);
     *record = runtime->failure_record;
+    return OS64_JS_OK;
+}
+
+/* Terminal diagnostic runtimes cannot admit/rebind slots after capture. The
+ * cumulative map also retains unpublished construction reservations. Compare
+ * addresses without dereferencing a record's borrowed realm pointer. */
+static JSOwnerFailureRef owner_failure_ref(const os64_js_runtime_t *runtime,
+    const os64_js_realm_t *realm, bool *mapped)
+{
+    JSOwnerFailureRef result = {0};
+    if (!realm) return result;
+    const OwnerMetadata *metadata = runtime->owner.metadata;
+    const OwnerBinding *found = NULL;
+    for (size_t i = 0; i < metadata->table._limits.owners; i++) {
+        const OwnerBinding *binding = &metadata->bindings[i];
+        if (binding->owner.serial && binding->realm_index < OS64_JS_MAX_REALMS &&
+            &runtime->realms[binding->realm_index] == realm) {
+            if (found) { found = NULL; break; }
+            found = binding;
+        }
+    }
+    if (found) {
+        result.owner = found->owner;
+        result.kind = found->assigned ? JS_OWNER_FAILURE_ASSIGNED : JS_OWNER_FAILURE_UNPUBLISHED;
+    } else {
+        result.kind = JS_OWNER_FAILURE_UNMAPPED;
+        *mapped = false;
+    }
+    return result;
+}
+
+os64_js_status_t js_owner_runtime_observe_failure(os64_js_runtime_t *runtime,
+    const char *caller_abi, JSOwnerFailureSnapshot *out)
+{
+    if (!runtime || !caller_abi || !out) return OS64_JS_BAD_ARGUMENT;
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID)) return OS64_JS_ABI_MISMATCH;
+    if (!runtime->metadata_selected || !runtime->failure_records_enabled || runtime->recovery_enabled)
+        return OS64_JS_ADMISSION_REFUSED;
+    if (runtime->destroying) return OS64_JS_FAILED_RUNTIME;
+    observe(runtime);
+    const os64_js_failure_record_t *record = &runtime->failure_record;
+    JSOwnerFailureSnapshot snapshot = {
+        .incarnation=runtime->owner.metadata->incarnation,
+        .original=record->original, .global=record->global, .deadline=record->deadline,
+        .jobs_executed=record->jobs_executed, .jobs_discarded=record->jobs_discarded,
+        .realm_count=record->realm_count, .scope_issues=record->scope_issues,
+        .turn_open=record->turn_open, .explicit_task=record->explicit_task,
+        .scopes_classified=record->scopes_classified, .owners_mapped=true
+    };
+    snapshot.task_owner = owner_failure_ref(runtime, record->task_owner, &snapshot.owners_mapped);
+    for (size_t i = 0; i < snapshot.realm_count; i++)
+        snapshot.realms[i] = owner_failure_ref(runtime, record->realms[i], &snapshot.owners_mapped);
+    snapshot.job_execution = owner_failure_ref(runtime, record->job_execution, &snapshot.owners_mapped);
+    snapshot.job_callback = owner_failure_ref(runtime, record->job_callback, &snapshot.owners_mapped);
+    snapshot.job_activity = owner_failure_ref(runtime, record->job_activity, &snapshot.owners_mapped);
+    *out = snapshot;
     return OS64_JS_OK;
 }
 
