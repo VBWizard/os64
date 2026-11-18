@@ -1,6 +1,7 @@
 # F15 checked rejection consumption
 
-Private C1/C2/C4 milestone after checked setup (#654), based on userland
+Implementation PR **#657**, runtime commit `a8ab9f4f`. Private C1/C2/C4
+milestone after checked setup (#654), based on userland
 15f050e5. C3, public checked activation, graph migration, reclamation and
 slot reuse remain gated. Quinn owns engine patch 0043; this milestone changes
 no engine patch, manifest, DOM layout or job-dispatch policy.

@@ -2,8 +2,8 @@
 """Stage the private runtime-identity oracle and observe its parent in QEMU.
 
 This consumer links the production runtime and engine objects directly.
-It proves actual realm owner assignment and checked source access, not a public
-checked profile or reclamation.
+It proves checked realm-owner, scoped execution and rejection-consumption
+lifetimes, not a public checked profile or reclamation.
 
 Inputs are a bootable TESTRUN/NONET ISO and matching FAT disk image containing
 /tests and /lib. Source images and existing output directories are preserved.
@@ -78,7 +78,7 @@ def main():
         "source_head": subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
         "working_diff_sha256": hashlib.sha256(subprocess.check_output(
             ["git", "-C", str(root), "diff", "--binary", "HEAD"])).hexdigest(),
-        "scope": "Private metadata only: actual runtime/engine objects; checked staged admission, scoped installation and activation, no public profile or reclamation",
+        "scope": "Private checked lifetimes: actual runtime/engine objects; scoped setup, execution and rejection consumption; no public profile or reclamation",
         "consumer_source_sha256": digest(root / "userland/obj/js/owner-runtime-test"),
         "consumer_debug_stripped": True,
         "runtime_object_sha256": digest(root / "userland/obj/js/runtime/runtime.o"),
