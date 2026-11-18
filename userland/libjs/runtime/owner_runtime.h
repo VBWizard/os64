@@ -2,6 +2,7 @@
 #define JS_OWNER_RUNTIME_H
 #include "owner_incarnation.h"
 #include "os64/js_engine.h"
+#include "os64/js_failure.h"
 
 /* Private numeric inspection. The caller supplies a live runtime on its
  * owner thread, including synchronous finalizer unwind before destroy frees
@@ -68,4 +69,38 @@ os64_js_status_t js_owner_runtime_scoped_run(os64_js_runtime_t *, const char *ca
 JSOwnerStatus js_owner_scope_owner(const JSOwnerRuntimeScope *, JSOwnerId *);
 JSOwnerStatus js_owner_scope_promote(JSOwnerRuntimeScope *, JSOwnerTicket *);
 JSOwnerStatus js_owner_scope_export(JSOwnerRuntimeScope *, JSContext **);
+/* Explicit private diagnostic selection before runtime publication. This
+ * composes charged owner admission with existing terminal failure recording;
+ * no recovery/reset or public checked profile is enabled. */
+os64_js_status_t js_owner_runtime_create_with_failure_records(const os64_js_config_t *,
+    os64_js_teardown_policy_t, const char *caller_abi, JSOwnerLimits,
+    os64_js_runtime_t **out, os64_js_outcome_t *);
+typedef enum {
+    JS_OWNER_FAILURE_NONE, JS_OWNER_FAILURE_ASSIGNED,
+    JS_OWNER_FAILURE_UNPUBLISHED, JS_OWNER_FAILURE_UNMAPPED
+} JSOwnerFailureRefKind;
+typedef struct {
+    JSOwnerId owner;
+    JSOwnerFailureRefKind kind;
+} JSOwnerFailureRef;
+typedef struct {
+    uint64_t incarnation;
+    os64_js_failure_cause_t original, global;
+    int64_t deadline;
+    uint64_t jobs_executed, jobs_discarded;
+    JSOwnerFailureRef task_owner, realms[OS64_JS_MAX_REALMS];
+    size_t realm_count;
+    unsigned scope_issues;
+    bool turn_open, explicit_task, scopes_classified, owners_mapped;
+    JSOwnerFailureRef job_execution, job_callback, job_activity;
+} JSOwnerFailureSnapshot;
+/* Owner-thread, live-runtime observation. Output is distinct caller storage
+ * outside runtime/metadata/active outcomes; refusal leaves it unchanged and
+ * polls no health. Successful observation follows existing health precedence,
+ * without exporting pointers, acquiring holders or changing legacy retention.
+ * Copied scalar facts survive close/destruction. Mapping completeness is
+ * separate from engine scope classification; neither grants recovery/release.
+ * Unmapped/absent references carry zero IDs, not reusable address keys. */
+os64_js_status_t js_owner_runtime_observe_failure(os64_js_runtime_t *,
+    const char *caller_abi, JSOwnerFailureSnapshot *);
 #endif
