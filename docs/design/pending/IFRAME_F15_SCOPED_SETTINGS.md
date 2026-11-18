@@ -1,5 +1,6 @@
 # F15 scoped settings-owner observations
 
+Implementation PR **#665**, source `eef717bf`.
 Private C1/C2/C4 milestone after checked module providers (#662), on merged
 userland `c9aa57c3` (#661/#662 plus debt documentation). C3, public activation,
 reclamation, provider release and slot reuse remain gated. Engine identity is
