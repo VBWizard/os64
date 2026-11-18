@@ -9,7 +9,8 @@
 #include "owner_task_cases.h"
 #include "owner_provider_cases.h"
 #include "owner_settings_cases.h"
-#define OWNER_RUNTIME_OK ((int32_t)0x4f520b00)
+#include "owner_invocation_cases.h"
+#define OWNER_RUNTIME_OK ((int32_t)0x4f520c00)
 static size_t checks;
 static void require(bool ok, const char *what)
 {
@@ -30,6 +31,7 @@ int main(void)
     owner_task_cases(require);
     owner_provider_cases(require);
     owner_settings_cases(require);
+    owner_invocation_cases(require);
     require(os64_heap_verify()==0,"owner runtime: target heap integrity");
     os64_heap_report_copy(&after);
     require(after.bytes_live==before.bytes_live && after.blocks_live==before.blocks_live,
@@ -37,7 +39,7 @@ int main(void)
     require(after.bytes_mapped==after.bytes_live+after.bytes_free+after.bytes_overhead+after.bytes_virgin,
         "owner runtime: target allocator accounting identity");
     char line[160];
-    os64_snprintf(line,sizeof line,"owner runtime: %lu checks, target heap PASS (scoped settings observations; no public profile/reclamation)\n",(unsigned long)checks);
+    os64_snprintf(line,sizeof line,"owner runtime: %lu checks, target heap PASS (checked settings invocation; no public profile/reclamation)\n",(unsigned long)checks);
     os64_serial_log(line);
     return OWNER_RUNTIME_OK;
 }

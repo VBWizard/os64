@@ -62,6 +62,18 @@ typedef struct JSOwnerRuntimeScope JSOwnerRuntimeScope;
 typedef JSValue JSOwnerScopedBody(JSOwnerRuntimeScope *, JSContext *, void *);
 os64_js_status_t js_owner_runtime_scoped_run(os64_js_runtime_t *, const char *caller_abi,
     JSOwnerTicket, const char *name, JSOwnerScopedBody *, void *, os64_js_outcome_t *);
+/* Explicit settings invocation borrowing an active guard or open task. Entry
+ * and a supplied incumbent each reserve an independent loan, including when
+ * their tickets name the same owner. NULL incumbent supplies no replacement
+ * backup; incumbent selection follows the existing engine settings rules.
+ * JSOwnerScopedBody's invocation-only contract applies; result/exception
+ * diagnostics and value cleanup finish inside the selected settings frame.
+ * It returns no value and selects no exception-reporting hook. It runs no
+ * checkpoint and preserves the task budget. The caller supplies original
+ * eligible realms, not F4 authority.
+ * Existing setup/failure/lifecycle and outcome-alias refusal rules apply. */
+os64_js_status_t js_owner_runtime_with_settings(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket entry, const JSOwnerTicket *incumbent, JSOwnerScopedBody *, void *, os64_js_outcome_t *);
 /* Live-scope metadata operations. Promotion creates an independent ticket
  * even after the admitting holder closes. Capacity/exhaustion leaves output
  * and loan unchanged. Outputs are distinct caller storage outside the scope.
