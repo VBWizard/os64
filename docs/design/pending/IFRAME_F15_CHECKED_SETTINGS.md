@@ -1,5 +1,7 @@
 # F15 checked settings invocation
 
+Implementation PR **#667**, source `e84cea26`.
+
 Private C1/C2/C4 milestone after scoped settings observations (#665), on merged
 userland `9e929a38` including WindowProxy methods (#664). Engine identity is
 `038c999a4588e07b30691d4848af28df7d2c530e42fb8cb864bb551cccb696ce`,
