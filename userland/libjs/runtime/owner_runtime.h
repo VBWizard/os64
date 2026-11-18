@@ -120,4 +120,24 @@ os64_js_status_t js_owner_runtime_setup(os64_js_runtime_t *, const char *caller_
     JSOwnerTicket, JSOwnerSetupBody *, void *, os64_js_outcome_t *);
 os64_js_status_t js_owner_runtime_activate(os64_js_runtime_t *, const char *caller_abi,
     JSOwnerTicket, os64_js_outcome_t *);
+/* Status-only registration preserves the legacy host/opaque lifetime and
+ * detach-after-failure rules. Hold a ticket until successful detach or root
+ * shutdown. Closing a holder does not detach the host. Legacy host callbacks
+ * retain their raw ABI 5 views and record compatibility retention on delivery. */
+os64_js_status_t js_owner_runtime_set_script_host(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket, const os64_js_script_host_t *, os64_js_outcome_t *);
+/* Borrow promise/reason/tag for one invocation and synchronous cleanup. Return
+ * one owned value or JS_EXCEPTION, as for scoped_run; no persistent value or
+ * native borrower may escape without explicit compatibility export. The loan
+ * spans fresh-turn draining; an existing explicit task retains its budget and
+ * queued work for its own checkpoint/end. Pending microtasks refuse admission.
+ * consumed is distinct caller storage outside runtime/scope/outcome. Refusal
+ * before claim preserves it and the record; healthy empty polling sets false
+ * without opening a turn or loan. Claim sets true even if later work fails.
+ * Queue roots are released under guard/loan after callback/value diagnostics.
+ * This consumes queue ownership, not an owner/provider reclamation proof. */
+typedef JSValue JSOwnerRejectionBody(JSOwnerRuntimeScope *, JSContext *,
+    JSValueConst promise, JSValueConst reason, uint32_t tag, void *);
+os64_js_status_t js_owner_runtime_consume_rejection(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket, const char *name, JSOwnerRejectionBody *, void *, bool *consumed, os64_js_outcome_t *);
 #endif
