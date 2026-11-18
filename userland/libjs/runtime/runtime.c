@@ -3037,9 +3037,9 @@ JS_PUBLIC os64_js_status_t os64_js_realm_set_script_host(os64_js_realm_t *realm,
 }
 
 /* Resolve without getter/health admission: detachment remains possible after
- * failure or retirement, before the host's opaque storage goes away. */
-os64_js_status_t js_owner_runtime_set_script_host(os64_js_runtime_t *runtime, const char *caller_abi,
-    JSOwnerTicket ticket, const os64_js_script_host_t *host, os64_js_outcome_t *outcome)
+ * failure or retirement, before native opaque storage goes away. */
+static os64_js_status_t owner_registration_realm(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket ticket, os64_js_realm_t **realm, os64_js_outcome_t *outcome)
 {
     if (!outcome) return OS64_JS_BAD_ARGUMENT;
     if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
@@ -3048,10 +3048,17 @@ os64_js_status_t js_owner_runtime_set_script_host(os64_js_runtime_t *runtime, co
         return status(outcome, OS64_JS_BAD_ARGUMENT, "runtime and ABI are required");
     if (os64_strcmp(caller_abi, OS64_JS_ABI_ID))
         return status(outcome, OS64_JS_ABI_MISMATCH, "owner header ABI mismatch");
-    os64_js_realm_t *realm;
-    if (owner_ticket_realm(runtime, ticket, &realm) != JS_OWNER_OK)
+    if (owner_ticket_realm(runtime, ticket, realm) != JS_OWNER_OK)
         return status(outcome, OS64_JS_ADMISSION_REFUSED, "owner ticket does not resolve");
-    return os64_js_realm_set_script_host(realm, caller_abi, host, outcome);
+    return OS64_JS_OK;
+}
+
+os64_js_status_t js_owner_runtime_set_script_host(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket ticket, const os64_js_script_host_t *host, os64_js_outcome_t *outcome)
+{
+    os64_js_realm_t *realm;
+    os64_js_status_t result = owner_registration_realm(runtime, caller_abi, ticket, &realm, outcome);
+    return result == OS64_JS_OK ? os64_js_realm_set_script_host(realm, caller_abi, host, outcome) : result;
 }
 
 typedef struct {
@@ -3926,6 +3933,24 @@ JS_PUBLIC os64_js_status_t os64_js_realm_set_import_base(os64_js_realm_t *realm,
     realm->import_base_opaque = opaque;
     realm->import_base_configured |= base != NULL;
     return OS64_JS_OK;
+}
+
+/* Provider storage keeps its native lifetime until successful detach/root
+ * shutdown; resolving a holder neither publishes a view nor starts a turn. */
+os64_js_status_t js_owner_runtime_set_module_loader(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket ticket, const os64_js_module_loader_t *loader, os64_js_outcome_t *outcome)
+{
+    os64_js_realm_t *realm;
+    os64_js_status_t result = owner_registration_realm(runtime, caller_abi, ticket, &realm, outcome);
+    return result == OS64_JS_OK ? os64_js_realm_set_module_loader(realm, caller_abi, loader, outcome) : result;
+}
+
+os64_js_status_t js_owner_runtime_set_import_base(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket ticket, os64_js_import_base_t *base, void *opaque, os64_js_outcome_t *outcome)
+{
+    os64_js_realm_t *realm;
+    os64_js_status_t result = owner_registration_realm(runtime, caller_abi, ticket, &realm, outcome);
+    return result == OS64_JS_OK ? os64_js_realm_set_import_base(realm, caller_abi, base, opaque, outcome) : result;
 }
 
 /* A module compiled, or read from its blob when `bytecode` gives one framed

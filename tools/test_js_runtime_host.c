@@ -2620,6 +2620,7 @@ static void finalization_task_recovery_cases(void)
 #include "../userland/libjs/tests/owner_setup_cases.h"
 #include "../userland/libjs/tests/owner_rejection_cases.h"
 #include "../userland/libjs/tests/owner_task_cases.h"
+#include "../userland/libjs/tests/owner_provider_cases.h"
 
 static void owner_runtime_assert(bool,const char *);
 static size_t owner_failure_attempts(void) { return attempts; }
@@ -2769,6 +2770,75 @@ static void owner_task_assert(bool ok,const char *message)
     check(ok,message);
     if(!ok && owner_task_controls)exit(1);
 }
+static bool owner_provider_controls;
+static void owner_provider_assert(bool ok,const char *message)
+{check(ok,message);if(!ok && owner_provider_controls)exit(1);}
+static void owner_provider_fail_next(void *opaque)
+{OwnerProviderCase *s=opaque;JS_SetMemoryLimit(JS_GetRuntime(s->context),1);}
+static void owner_provider_host_cases(void)
+{
+    owner_provider_cases(owner_provider_assert);
+    os64_js_config_t config={.limits=os64_js_default_limits()};config.limits.memory_bytes=8*1024*1024;config.limits.execution_ms=1000;
+    for(unsigned policy=0;policy<2;policy++) {
+        os64_js_runtime_t *runtime;os64_js_outcome_t out;JSOwnerTicket ticket;
+        owner_provider_assert(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,(JSOwnerLimits){1,2,1},&runtime,&out)==OS64_JS_OK &&
+            js_owner_runtime_primary_ticket(runtime,&ticket)==JS_OWNER_OK,"checked providers: status-only registration fixture");
+        OwnerProviderCase s=owner_provider_state(runtime,ticket,&out,owner_provider_assert);size_t before=attempts;
+        clock_error=-97;owner_realm_loan_fault=1;owner_provider_register(&s);
+        owner_provider_assert(attempts==before && !s.resolves && !s.loads && !s.bases,
+            "checked providers: status-only registration allocates no storage acquires no loan and polls no clock");clock_error=0;owner_realm_loan_fault=0;
+        os64_js_cancel(runtime);
+        owner_provider_assert(owner_provider_invoke(&s)==OS64_JS_CANCELLED &&
+            js_owner_runtime_set_module_loader(runtime,OS64_JS_ABI_ID,ticket,NULL,&out)==OS64_JS_OK &&
+            js_owner_runtime_set_import_base(runtime,OS64_JS_ABI_ID,ticket,NULL,NULL,&out)==OS64_JS_OK,
+            "checked providers: terminal cancellation preserves detached-host cleanup admission");os64_js_destroy(runtime);
+        size_t baseline=live,bytes=live_bytes;
+        owner_provider_assert(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,(JSOwnerLimits){1,2,1},&runtime,&out)==OS64_JS_OK &&
+            js_owner_runtime_primary_ticket(runtime,&ticket)==JS_OWNER_OK,"checked providers: allocation-count fixture");
+        s=owner_provider_state(runtime,ticket,&out,owner_provider_assert);owner_provider_register(&s);
+        const char *cached="globalThis.providerImporter=()=>import('entry');providerImporter().then(ns=>{globalThis.observed=ns.answer})";
+        s.command=cached;owner_provider_assert(owner_provider_invoke(&s)==OS64_JS_OK && s.loads==2,
+            "checked providers: compile dependency graph before cached-call allocation sweep");s.mode=7;s.command=NULL;before=attempts;
+        owner_provider_assert(owner_provider_invoke(&s)==OS64_JS_OK,"checked providers: successful cached graph provider allocation count");
+        size_t cuts=attempts-before;os64_js_destroy(runtime);
+        for(size_t cut=1;cut<=cuts;cut++) {
+            owner_provider_assert(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,(JSOwnerLimits){1,2,1},&runtime,&out)==OS64_JS_OK &&
+                js_owner_runtime_primary_ticket(runtime,&ticket)==JS_OWNER_OK,"checked providers: actual graph allocation failure fixture");
+            s=owner_provider_state(runtime,ticket,&out,owner_provider_assert);owner_provider_register(&s);s.command=cached;
+            owner_provider_assert(owner_provider_invoke(&s)==OS64_JS_OK && s.loads==2,
+                "checked providers: graph compiles uncut before runtime provider fault");s.mode=7;s.command=NULL;
+            fail_at=attempts+cut;os64_js_status_t result=owner_provider_invoke(&s);fail_at=0;JSOwnerRuntimeMetadata m;
+            owner_provider_assert((result==OS64_JS_OK || result==OS64_JS_EXCEPTION || result==OS64_JS_UNHANDLED_REJECTION || result==OS64_JS_HOST_FAILURE || result==OS64_JS_LIMIT) &&
+                s.calls==2 && s.loads==2 && js_owner_runtime_metadata(runtime,&m) && !m.summary.loans && !m.summary.unknown_escape,
+                "checked providers: allocation faults preserve task cleanup and pure provider export boundary");
+            owner_provider_assert(js_owner_runtime_set_module_loader(runtime,OS64_JS_ABI_ID,ticket,NULL,&out)==OS64_JS_OK &&
+                js_owner_runtime_set_import_base(runtime,OS64_JS_ABI_ID,ticket,NULL,NULL,&out)==OS64_JS_OK,
+                "checked providers: allocating graph failure permits native storage detach");
+            os64_js_teardown_report_t report;os64_js_destroy_report(runtime,&report);
+            owner_provider_assert(!report.leaked && live==baseline && live_bytes==bytes,
+                "checked providers: native resolver strings engine graph and metadata return to baseline");
+        }
+        for(unsigned phase=0;phase<2;phase++) {
+            owner_provider_assert(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,(JSOwnerLimits){1,2,1},&runtime,&out)==OS64_JS_OK &&
+                js_owner_runtime_primary_ticket(runtime,&ticket)==JS_OWNER_OK && (phase?os64_js_enable_import_settings:os64_js_enable_host_settings)(runtime,OS64_JS_ABI_ID,&out)==OS64_JS_OK,
+                "checked providers: source-copy and base-return allocation failure fixture");
+            s=owner_provider_state(runtime,ticket,&out,owner_provider_assert);owner_provider_register(&s);
+            if(phase){s.mode=3;s.before_base=owner_provider_fail_next;}else s.after_source=owner_provider_fail_next;
+            os64_js_status_t result=owner_provider_invoke(&s);fail_at=0;JSOwnerRuntimeMetadata m;
+            owner_provider_assert(result==OS64_JS_LIMIT && (phase?s.bases==1:s.loads==1) &&
+                js_owner_runtime_metadata(runtime,&m) && !m.summary.loans && m.summary.unknown_escape==(phase!=0),
+                "checked providers: native source-copy or raw base-return failure retains global verdict and export classification");
+            owner_provider_assert(js_owner_runtime_set_module_loader(runtime,OS64_JS_ABI_ID,ticket,NULL,&out)==OS64_JS_OK &&
+                js_owner_runtime_set_import_base(runtime,OS64_JS_ABI_ID,ticket,NULL,NULL,&out)==OS64_JS_OK,
+                "checked providers: native allocation failure retains provider cleanup admission");
+            os64_js_teardown_report_t report;os64_js_destroy_report(runtime,&report);
+            owner_provider_assert(!report.leaked && live==baseline && live_bytes==bytes,
+                "checked providers: source-copy and base-return failure release all roots");
+        }
+        printf("checked providers: policy%u %zu cached graph allocation cuts balanced\n",policy,cuts);
+    }
+}
+
 static JSValue owner_task_export(JSOwnerRuntimeScope *scope,JSContext *context,void *opaque)
 {
     JSContext **out=opaque;owner_task_assert(js_owner_scope_export(scope,out)==JS_OWNER_OK && *out==context,
@@ -3302,6 +3372,11 @@ static void owner_runtime_failure_cases(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && (!strcmp(argv[1], "--owner-providers") || !strcmp(argv[1], "--owner-provider-controls"))) {
+        owner_provider_controls=!strcmp(argv[1], "--owner-provider-controls");owner_provider_host_cases();
+        check(live==0,"checked providers: native and engine allocations balance");
+        printf("checked providers: %u checks, %u failures\n",checks,failures);return failures?1:0;
+    }
     if (argc == 2 && (!strcmp(argv[1], "--owner-tasks") || !strcmp(argv[1], "--owner-task-controls"))) {
         owner_task_controls=!strcmp(argv[1], "--owner-task-controls");
         owner_task_host_cases();
@@ -3541,7 +3616,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
-    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases(); owner_scope_failure_cases(); owner_failure_host_cases(); owner_setup_failure_cases(); owner_rejection_host_cases(); owner_task_host_cases();
+    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases(); owner_scope_failure_cases(); owner_failure_host_cases(); owner_setup_failure_cases(); owner_rejection_host_cases(); owner_task_host_cases(); owner_provider_host_cases();
     realm_cases(); finalization_task_recovery_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
 
     task_cases();

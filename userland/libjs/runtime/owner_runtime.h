@@ -2,6 +2,7 @@
 #define JS_OWNER_RUNTIME_H
 #include "owner_incarnation.h"
 #include "os64/js_engine.h"
+#include "os64/js_callbacks.h"
 #include "os64/js_failure.h"
 
 /* Private numeric inspection. The caller supplies a live runtime on its
@@ -149,4 +150,15 @@ os64_js_status_t js_owner_runtime_consume_rejection(os64_js_runtime_t *, const c
  * No F4 authority, public activation or reclamation certificate is created. */
 os64_js_status_t js_owner_runtime_task_run(os64_js_runtime_t *, const char *caller_abi,
     JSOwnerTicket, const char *name, JSOwnerScopedBody *, void *, os64_js_outcome_t *);
+/* Status-only module-provider registration/detachment. Keep native opaque and
+ * source storage alive until successful detach or root shutdown, and retain a
+ * holder for cleanup: closing a ticket does not detach a provider. Existing
+ * private-setup/active-call/failure/retirement rules apply. Loader callbacks
+ * keep their string/borrowed-byte contracts; legacy import-base callback
+ * delivery retains its raw-view compatibility veto. No persistent module
+ * handle, provider reclamation or F4 authority is supplied. */
+os64_js_status_t js_owner_runtime_set_module_loader(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket, const os64_js_module_loader_t *, os64_js_outcome_t *);
+os64_js_status_t js_owner_runtime_set_import_base(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket, os64_js_import_base_t *, void *, os64_js_outcome_t *);
 #endif
