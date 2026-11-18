@@ -105,6 +105,24 @@ static bool s_animations = true;
 static bool s_shadow_dom;
 // yonder.conf's `ranges` developer key (settings.h), read at start.
 static bool s_ranges;
+// yonder.conf's `ledger` developer key (settings.h), read at start, and the
+// counter and clock at start, which the ledger's sample period is worked
+// out from (ledger_sample_ticks).
+static yonder_ledger_t s_ledger;
+static uint64_t s_started_cycles;
+static int64_t s_started_us;
+// The profile's sample period: a millisecond of the ledger's counter, its
+// rate read from the counter and the clock since start (a few milliseconds
+// at least by the time a page's runtime is made); 0 while the ledger is off.
+static uint64_t ledger_sample_ticks(void)
+{
+    if (s_ledger == YONDER_LEDGER_OFF)
+        return 0;
+    int64_t us = os64_micros() - s_started_us;
+    uint64_t ticks = os64_js_ledger_now() - s_started_cycles;
+    uint64_t per_ms = us > 0 ? ticks / (uint64_t)us * 1000 : 0;
+    return per_ms != 0 ? per_ms : 1000000;
+}
 
 // PAGE STORAGE (storage.h): the window's store over the profile folder
 // (yonder.conf's `profile`), which every page's localStorage and
@@ -8257,6 +8275,228 @@ static bool whole_lines(DiagText *w)
     return true;
 }
 
+// ── Where a page's script time goes (the JS ledger, `ledger` in yonder.conf)
+//
+// libjs's ledger (os64_js_ledger_*) splits the time script tasks take into
+// the interpreter (with the engine's own builtins: sort, regular
+// expressions, JSON, string work), compiling, the collector, libdom's calls
+// by callee and the layout script forced, each its own time; its counter is
+// the TSC, as `cycles()` is, and a tick is turned into time with the rate
+// since yonder started (ledger_sample_ticks). The record's lines count from
+// the page's runtime's start, through the page arriving and being shown;
+// a `d` reading counts from the last `d`, when the paint counts start again
+// too, so it can split the whole span (diag_ledger_reading).
+
+// Ticks in tenths of a millisecond, and a pair for "%lu.%lu".
+static uint64_t ledger_tenths(uint64_t ticks, uint64_t per_ms)
+{
+    return per_ms != 0 ? ticks * 10 / per_ms : 0;
+}
+#define LEDGER_MS(v) (unsigned long)((v) / 10), (unsigned long)((v) % 10)
+
+static void ledger_kinds(DiagText *t, const os64_js_ledger_totals_t *k, uint64_t per_ms)
+{
+    dt_put(t, "the interpreter %lu.%lu ms (and the engine's own builtins), compiling %lu.%lu, the collector %lu.%lu, "
+           "libdom's calls %lu.%lu, layout script forced %lu.%lu",
+           LEDGER_MS(ledger_tenths(k->self[OS64_JS_LEDGER_ENGINE], per_ms)),
+           LEDGER_MS(ledger_tenths(k->self[OS64_JS_LEDGER_COMPILE], per_ms)),
+           LEDGER_MS(ledger_tenths(k->self[OS64_JS_LEDGER_COLLECTOR], per_ms)),
+           LEDGER_MS(ledger_tenths(k->self[OS64_JS_LEDGER_NATIVE], per_ms)),
+           LEDGER_MS(ledger_tenths(k->self[OS64_JS_LEDGER_LAYOUT], per_ms)));
+    dt_put(t, " (%lu compiles, %lu collections, %lu calls, %lu layouts)",
+           (unsigned long)k->count[OS64_JS_LEDGER_COMPILE], (unsigned long)k->count[OS64_JS_LEDGER_COLLECTOR],
+           (unsigned long)k->count[OS64_JS_LEDGER_NATIVE], (unsigned long)k->count[OS64_JS_LEDGER_LAYOUT]);
+    if (k->frames_lost != 0 || k->callees_lost != 0 || k->samples_lost != 0)
+        dt_put(t, "; not counted apart: %lu frames nested too deep, %lu calls past the callee table, "
+               "%lu samples past the profile's table",
+               (unsigned long)k->frames_lost, (unsigned long)k->callees_lost, (unsigned long)k->samples_lost);
+}
+
+static uint64_t ledger_sum(const os64_js_ledger_totals_t *k)
+{
+    uint64_t sum = 0;
+    for (int i = 0; i < OS64_JS_LEDGER_KINDS; i++)
+        sum += k->self[i];
+    return sum;
+}
+
+// The first `shown` rows put in order, most first, by their weight (a
+// partial selection: the lines show a handful of hundreds).
+static uint64_t ledger_callee_weight(const os64_js_ledger_callee_t *c) { return c->self + c->forced_ticks; }
+
+static void ledger_callees_top(os64_js_ledger_callee_t *rows, size_t n, size_t shown)
+{
+    for (size_t i = 0; i < n && i < shown; i++) {
+        size_t most = i;
+        for (size_t j = i + 1; j < n; j++)
+            if (ledger_callee_weight(&rows[j]) > ledger_callee_weight(&rows[most]))
+                most = j;
+        os64_js_ledger_callee_t swap = rows[i];
+        rows[i] = rows[most];
+        rows[most] = swap;
+    }
+}
+
+static void ledger_samples_top(os64_js_ledger_sample_t *rows, size_t n, size_t shown)
+{
+    for (size_t i = 0; i < n && i < shown; i++) {
+        size_t most = i;
+        for (size_t j = i + 1; j < n; j++)
+            if (rows[j].ticks > rows[most].ticks)
+                most = j;
+        os64_js_ledger_sample_t swap = rows[i];
+        rows[i] = rows[most];
+        rows[most] = swap;
+    }
+}
+
+// A file as the profile names it: its last part, an address's path being
+// long and its host the same for every row.
+static const char *ledger_file(const char *file)
+{
+    const char *slash = os64_strrchr(file, '/');
+    return slash != NULL && slash[1] != '\0' ? slash + 1 : file;
+}
+
+#define LEDGER_CALLEES_SHOWN 10
+#define LEDGER_SAMPLES_SHOWN 20
+
+// The libdom calls that cost most, their own time and the layouts they
+// forced, and the profile's functions that cost most, each where it is
+// defined and the function it was called from.
+static void ledger_rows(Page *p, const os64_js_runtime_t *rt, uint64_t per_ms)
+{
+    os64_js_ledger_callee_t *callees = os64_malloc(sizeof(*callees) * 1024);
+    size_t n = 0, cursor = 0;
+    if (callees != NULL)
+        while (n < 1024 && os64_js_ledger_callee(rt, &cursor, &callees[n]))
+            n++;
+    DiagText t = {0};
+    if (callees != NULL && n != 0) {
+        ledger_callees_top(callees, n, LEDGER_CALLEES_SHOWN);
+        for (size_t i = 0; i < n && i < LEDGER_CALLEES_SHOWN; i++) {
+            const os64_js_ledger_callee_t *c = &callees[i];
+            const char *name = os64_dom_host_function_name(c->function, c->magic);
+            char unnamed[48];
+            if (name == NULL) {
+                os64_snprintf(unnamed, sizeof(unnamed), "a host function (magic %d)", c->magic);
+                name = unnamed;
+            }
+            dt_put(&t, "%s%s: %lu calls, %lu.%lu ms", i ? "; " : "", name, (unsigned long)c->calls,
+                   LEDGER_MS(ledger_tenths(c->self, per_ms)));
+            if (c->forced != 0)
+                dt_put(&t, ", forcing %lu layouts in %lu.%lu ms", (unsigned long)c->forced,
+                       LEDGER_MS(ledger_tenths(c->forced_ticks, per_ms)));
+        }
+        if (n > LEDGER_CALLEES_SHOWN)
+            dt_put(&t, "; and %lu more", (unsigned long)(n - LEDGER_CALLEES_SHOWN));
+        yonder_diag_fact(p->diag, "script ledger calls", dt_text(&t));
+    }
+    os64_free(callees);
+    os64_free(t.s);
+    os64_js_ledger_totals_t k;
+    if (!os64_js_ledger_totals(rt, &k) || k.samples == 0)
+        return;
+    os64_js_ledger_sample_t *samples = os64_malloc(sizeof(*samples) * 512);
+    n = 0;
+    cursor = 0;
+    if (samples != NULL)
+        while (n < 512 && os64_js_ledger_sample(rt, &cursor, &samples[n]))
+            n++;
+    DiagText u = {0};
+    if (samples != NULL && n != 0) {
+        ledger_samples_top(samples, n, LEDGER_SAMPLES_SHOWN);
+        dt_put(&u, "%lu samples", (unsigned long)k.samples);
+        for (size_t i = 0; i < n && i < LEDGER_SAMPLES_SHOWN; i++) {
+            const os64_js_ledger_sample_t *s = &samples[i];
+            dt_put(&u, "; %s at %s:%d:%d", s->at.name, ledger_file(s->at.file), s->at.line, s->at.column);
+            if (s->caller.function != NULL)
+                dt_put(&u, " from %s at %s:%d:%d", s->caller.name, ledger_file(s->caller.file), s->caller.line,
+                       s->caller.column);
+            else if (s->caller.name[0] != '\0')
+                dt_put(&u, " from %s", s->caller.name);
+            dt_put(&u, ": %lu.%lu ms, %lu samples", LEDGER_MS(ledger_tenths(s->ticks, per_ms)),
+                   (unsigned long)s->samples);
+        }
+        yonder_diag_fact(p->diag, "script profile", dt_text(&u));
+    }
+    os64_free(samples);
+    os64_free(u.s);
+}
+
+// The record's ledger lines: the kinds since the page's runtime began (or
+// the last `d`), against the time since then; what is not script is
+// yonder's own work and waiting, which a `d` reading splits.
+static void diag_ledger(Page *p)
+{
+    const os64_js_runtime_t *rt = yonder_scripts_ledger(page_scripts(p));
+    os64_js_ledger_totals_t k;
+    if (rt == NULL || !os64_js_ledger_totals(rt, &k))
+        return;
+    uint64_t per_ms = ledger_sample_ticks();
+    uint64_t now = os64_js_ledger_now(), span = now > k.since ? now - k.since : 0, script = ledger_sum(&k);
+    DiagText t = {0};
+    dt_put(&t, "%lu.%lu ms since %s: script %lu.%lu ms: ", LEDGER_MS(ledger_tenths(span, per_ms)),
+           s_cost_readings ? "the last reading" : "the page's script began", LEDGER_MS(ledger_tenths(script, per_ms)));
+    ledger_kinds(&t, &k, per_ms);
+    dt_put(&t, "; not script %lu.%lu ms (yonder's own work and waiting: a reading with d splits them)",
+           LEDGER_MS(ledger_tenths(span > script ? span - script : 0, per_ms)));
+    yonder_diag_fact(p->diag, "script ledger", dt_text(&t));
+    os64_free(t.s);
+    ledger_rows(p, rt, per_ms);
+}
+
+// A `d` reading's ledger line: the whole span since the last `d` split into
+// the ledger's kinds, yonder's own work (s_cost: the render, the publish,
+// the ticks and the layouts no task forced) and waiting, and what none of
+// them holds (the stream's parse, events, the loop itself), so the parts
+// add up to the span. Read before the paint counts start again.
+static void diag_ledger_reading(Page *p, uint32_t n)
+{
+    const os64_js_runtime_t *rt = yonder_scripts_ledger(page_scripts(p));
+    os64_js_ledger_totals_t k;
+    if (rt == NULL || !os64_js_ledger_totals(rt, &k))
+        return;
+    uint64_t per_ms = ledger_sample_ticks();
+    char key[40];
+    os64_snprintf(key, sizeof(key), "script ledger reading %u", (unsigned)n);
+    if (k.since < s_cost.from_cycles) {
+        // The paint counts began when the page was shown, the ledger with
+        // its script: their spans differ until a `d` starts both at once.
+        DiagText t = {0};
+        uint64_t now = os64_js_ledger_now(), since = now > k.since ? now - k.since : 0;
+        dt_put(&t, "%lu.%lu ms since the page's script began: script %lu.%lu ms: ",
+               LEDGER_MS(ledger_tenths(since, per_ms)), LEDGER_MS(ledger_tenths(ledger_sum(&k), per_ms)));
+        ledger_kinds(&t, &k, per_ms);
+        dt_put(&t, "; the next reading splits the whole span, its counts and the ledger starting together");
+        yonder_diag_fact(p->diag, key, dt_text(&t));
+        os64_free(t.s);
+        return;
+    }
+    uint64_t span = cycles_since(s_cost.from_cycles);
+    uint64_t render = s_cost.total[PS_RENDER] + s_cost.now[PS_RENDER];
+    uint64_t publish = s_cost.total[PS_PUBLISH] + s_cost.now[PS_PUBLISH];
+    uint64_t ticks = s_cost.total[PS_TICKS] + s_cost.now[PS_TICKS];
+    uint64_t layouts = s_cost.total[PS_LAYOUTS] + s_cost.now[PS_LAYOUTS];
+    uint64_t forced = k.self[OS64_JS_LEDGER_LAYOUT];
+    uint64_t own_layouts = layouts > forced ? layouts - forced : 0;
+    uint64_t script = ledger_sum(&k);
+    uint64_t accounted = script + render + publish + ticks + own_layouts + s_cost.waited;
+    DiagText t = {0};
+    dt_put(&t, "%lu.%lu ms: script %lu.%lu ms: ", LEDGER_MS(ledger_tenths(span, per_ms)),
+           LEDGER_MS(ledger_tenths(script, per_ms)));
+    ledger_kinds(&t, &k, per_ms);
+    dt_put(&t, "; yonder: render %lu.%lu ms, publish %lu.%lu, ticks %lu.%lu, layouts no task forced %lu.%lu; "
+           "waiting %lu.%lu ms; %s %lu.%lu ms",
+           LEDGER_MS(ledger_tenths(render, per_ms)), LEDGER_MS(ledger_tenths(publish, per_ms)),
+           LEDGER_MS(ledger_tenths(ticks, per_ms)), LEDGER_MS(ledger_tenths(own_layouts, per_ms)),
+           LEDGER_MS(ledger_tenths(s_cost.waited, per_ms)),
+           span >= accounted ? "unaccounted" : "counted twice (stages that nest)",
+           LEDGER_MS(ledger_tenths(span >= accounted ? span - accounted : accounted - span, per_ms)));
+    yonder_diag_fact(p->diag, key, dt_text(&t));
+    os64_free(t.s);
+}
+
 static void diag_paint(Page *p)
 {
     DiagText t = {0}, u = {0}, w = {0};
@@ -8273,6 +8513,7 @@ static void diag_paint(Page *p)
     os64_free(t.s);
     os64_free(u.s);
     os64_free(w.s);
+    diag_ledger(p);
 }
 
 // The counts kept as reading `n` of the page, with where the page was
@@ -8287,6 +8528,7 @@ static void diag_paint_reading(Page *p, uint32_t n)
     char key[32];
     os64_snprintf(key, sizeof(key), "paint reading %u", (unsigned)n);
     yonder_diag_fact(p->diag, key, dt_text(&v));
+    diag_ledger_reading(p, n);
     os64_free(t.s);
     os64_free(u.s);
     os64_free(v.s);
@@ -11137,7 +11379,9 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .diag = diag, .encrypted = encrypted, .modern = modern, .shadow_trees = s_shadow_dom, .ranges = s_ranges,
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
         .request = script_request, .run = script_run, .release = script_release, .more = script_more,
-        .referrer = referrer, .last_modified = modified, .focus = script_focus};
+        .referrer = referrer, .last_modified = modified, .focus = script_focus,
+        .ledger = s_ledger != YONDER_LEDGER_OFF, .ledger_profile = s_ledger == YONDER_LEDGER_PROFILE,
+        .ledger_sample_ticks = ledger_sample_ticks()};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host, script_cookies_enabled};
@@ -11214,6 +11458,7 @@ static uint64_t s_task_began;
 static int64_t task_begin(yonder_scripts_t *host)
 {
     (void)yonder_scripts_geometry_stats(host, true);
+    yonder_scripts_ledger_task(host, true);
     s_task_began = cycles();
     return s_script_audit ? os64_micros() : 0;
 }
@@ -11241,6 +11486,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
     task_cost(what);
+    yonder_scripts_ledger_task(host, false);
     os64_dom_geometry_stats_t forced = yonder_scripts_geometry_stats(host, false);
     if (s_script_audit) {
         char line[OS64_JS_SOURCE_NAME_CAP + 160];
@@ -12395,6 +12641,10 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
 {
     const os64_html_document_t *doc = opaque;
     if (!os64_html_owns_node(doc, node)) return false;
+    // A layout this forces is a frame on the asking page's ledger.
+    Page *asking = page_of_doc(doc);
+    yonder_scripts_t *ledger = asking != NULL ? page_scripts(asking) : NULL;
+    yonder_scripts_ledger_layout(ledger, true);
     int64_t began = os64_micros();
     uint64_t before = geometry_layout_total;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
@@ -12418,6 +12668,7 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
     int64_t ended = os64_micros();
     out->layouts = geometry_layout_total - before;
     out->elapsed_us = out->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    yonder_scripts_ledger_layout(ledger, false);
     return ready && ended >= began;
 }
 
@@ -13491,7 +13742,11 @@ static bool script_computed(void *opaque, const os64_html_node_t *element, os64_
         return false;
     flow_env_t env;
     uint64_t layouts = 0, elapsed_us = 0;
+    Page *asking = page_of_doc(doc);
+    yonder_scripts_t *ledger = asking != NULL ? page_scripts(asking) : NULL;
+    yonder_scripts_ledger_layout(ledger, true);
     const flow_tree_t *tree = layout_current(doc, &env, &layouts, &elapsed_us);
+    yonder_scripts_ledger_layout(ledger, false);
     os64_dom_computed_cost(out, layouts, elapsed_us);
     if (tree == NULL)
         return false;
@@ -16788,6 +17043,7 @@ static void diag_asked(void)
         return;
     }
     cost_reset();
+    yonder_scripts_ledger_reset(page_scripts(&g.page));
     char said[96];
     os64_snprintf(said, sizeof(said), "Paint reading %u written; the counts start again.", (unsigned)s_cost_readings);
     status_rest(said);
@@ -19146,6 +19402,12 @@ int main(int argc, char **argv)
     s_reduce_motion = yonder_settings_saved_reduce_motion();
     s_shadow_dom = yonder_settings_saved_shadow_dom();
     s_ranges = yonder_settings_saved_ranges();
+    s_ledger = yonder_settings_saved_ledger();
+    s_started_cycles = os64_js_ledger_now();
+    s_started_us = os64_micros();
+    // A callee's name is kept as its binding installs, so before any page.
+    if (s_ledger != YONDER_LEDGER_OFF)
+        os64_dom_name_host_functions(true);
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
     g.script_memory = (size_t)yonder_settings_saved_script_memory_mb() << 20;
     page_memory_set(yonder_page_memory_split(yonder_settings_saved_page_memory_mb()));

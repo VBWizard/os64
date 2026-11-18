@@ -138,6 +138,7 @@ typedef struct {
     uint64_t frames_lost, callees_lost;    /* nested too deep; past a full callee table */
     uint64_t samples, samples_lost;        /* profile samples taken; past a full table */
     unsigned open;                         /* frames open now */
+    uint64_t since;                        /* the clock when it was enabled or last reset */
 } os64_js_ledger_totals_t;
 typedef struct {
     const void *function;                  /* the host function, as registered */
@@ -168,6 +169,9 @@ void os64_js_ledger_reset(os64_js_runtime_t *runtime);
 /* A host's frame, of kind ENGINE or LAYOUT; nothing when the ledger is off. */
 void os64_js_ledger_push(os64_js_runtime_t *runtime, os64_js_ledger_kind_t kind);
 void os64_js_ledger_pop(os64_js_runtime_t *runtime);
+/* Closes the host's innermost frame charging nothing: for a frame pushed
+ * for work that never came, whose open time stays in the frame below. */
+void os64_js_ledger_drop(os64_js_runtime_t *runtime);
 /* The totals; false (and zeroed) when the ledger is off. */
 bool os64_js_ledger_totals(const os64_js_runtime_t *runtime, os64_js_ledger_totals_t *out);
 /* The next callee row or sample after *cursor (start it at 0); false at

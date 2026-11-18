@@ -124,6 +124,12 @@ bool yonder_settings_saved_shadow_dom(void);
 // unless `ranges = off` says otherwise; anything else, or no key, leaves it
 // on. Read at start.
 bool yonder_settings_saved_ranges(void);
+// yonder.conf's `ledger` developer key: where each page's script time goes,
+// written to its record beside the paint counts (`on`), and with a sampling
+// profile of the script itself (`profile`); anything else, or no key, is
+// off (libjs's os64_js_ledger_*, JS_SPEED measurement). Read at start.
+typedef enum { YONDER_LEDGER_OFF, YONDER_LEDGER_ON, YONDER_LEDGER_PROFILE } yonder_ledger_t;
+yonder_ledger_t yonder_settings_saved_ledger(void);
 // THE COOKIES' SWITCH (cookies.h): `cookies = on | session | off`, without
 // case. Absent it is on; a value that is none of the three is read as on,
 // and `*refused` (may be NULL) says so for the status line; otherwise it

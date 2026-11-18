@@ -101,6 +101,10 @@ typedef struct {
 void ledger_reset(ledger_t *l, uint64_t now);
 void ledger_push(ledger_t *l, ledger_kind_t kind, uint64_t now, const void *function, int magic);
 void ledger_pop(ledger_t *l, uint64_t now);
+/* Closes the innermost frame charging nothing, to it or its parent: for a
+ * host frame opened for work that never came (the time it was open stays
+ * in the frame below, as if it had not been pushed). */
+void ledger_drop(ledger_t *l);
 /* Interpreter time so far, the open ENGINE frames' share included. */
 uint64_t ledger_engine_live(const ledger_t *l, uint64_t now);
 /* One profile sample at `now`: charged the interpreter time since the

@@ -205,6 +205,11 @@ typedef struct {
     // page has the focus (yonder's: whether it is the page on screen).
     // NULL: nothing has, and neither has it.
     bool (*focus)(void *opaque, const os64_html_node_t **focused);
+    // The JS ledger (yonder.conf's `ledger`, os64_js_ledger_*): started on
+    // the runtime when it is made, with a profile sampled every
+    // ledger_sample_ticks of its clock when asked.
+    bool ledger, ledger_profile;
+    uint64_t ledger_sample_ticks;
 } yonder_scripts_options_t;
 
 // The script engine's stack, out of yonder's window thread's `stack` bytes
@@ -427,6 +432,16 @@ size_t yonder_scripts_heap_peak(const yonder_scripts_t *scripts);
 void yonder_scripts_census(yonder_scripts_t *scripts, yonder_census_sheet_t *sheet, bool detail);
 // False once a sticky outcome retired the runtime: nothing runs again.
 bool yonder_scripts_alive(const yonder_scripts_t *scripts);
+// The JS ledger's frames on this page's runtime (os64_js_ledger_*), each
+// nothing while the ledger is off or there is no runtime: a task's (begin
+// at task_begin, end at task_said; a second begin with no end between drops
+// the first, a task begun that found nothing to run) and a layout script
+// forced (around the work, inside the task). Reset zeroes it; the getter
+// answers the runtime to read, NULL while off.
+void yonder_scripts_ledger_task(yonder_scripts_t *s, bool begin);
+void yonder_scripts_ledger_layout(yonder_scripts_t *s, bool begin);
+void yonder_scripts_ledger_reset(yonder_scripts_t *s);
+const os64_js_runtime_t *yonder_scripts_ledger(const yonder_scripts_t *s);
 // The whole address of the `src` script the last task ran, which a task's
 // source name (OS64_JS_SOURCE_NAME_CAP) may cut short; NULL when the task
 // was an inline script, an event or a timer. Good until the host is freed.

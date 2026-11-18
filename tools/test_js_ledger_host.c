@@ -144,6 +144,23 @@ static void reset_case(void)
     free(l);
 }
 
+static void drop_case(void)
+{
+    ledger_t *l = fresh();
+    ledger_push(l, LEDGER_ENGINE, 0, NULL, 0);
+    ledger_push(l, LEDGER_ENGINE, 10, NULL, 0);   /* a task begun that never ran */
+    ledger_drop(l);
+    ledger_push(l, LEDGER_NATIVE, 30, &f1, 0);
+    ledger_pop(l, 40);
+    ledger_pop(l, 50);
+    check(l->depth == 0 && l->self[LEDGER_ENGINE] == 40 && l->self[LEDGER_NATIVE] == 10 && total(l) == 50,
+          "drop: a dropped frame charges nothing; its time stays in the frame below");
+    check(l->count[LEDGER_ENGINE] == 1, "drop: a dropped frame is not counted");
+    ledger_drop(l);
+    check(l->depth == 0, "drop: with nothing open, nothing");
+    free(l);
+}
+
 static ledger_place_t place(const void *fn, const char *name)
 {
     ledger_place_t p;
@@ -244,6 +261,7 @@ int main(void)
     layout_outside_native_case();
     lost_cases();
     reset_case();
+    drop_case();
     profile_cases();
     random_sum_case();
     printf("JS ledger: %d checks, %d failed\n", checks, failures);

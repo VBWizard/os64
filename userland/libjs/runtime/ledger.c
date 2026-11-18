@@ -109,6 +109,12 @@ void ledger_pop(ledger_t *l, uint64_t now)
         l->stack[l->depth - 1].children += elapsed;
 }
 
+void ledger_drop(ledger_t *l)
+{
+    if (l->depth > 0)
+        l->depth--;
+}
+
 uint64_t ledger_engine_live(const ledger_t *l, uint64_t now)
 {
     uint64_t total = l->self[LEDGER_ENGINE];

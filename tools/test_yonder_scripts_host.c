@@ -12349,6 +12349,56 @@ static void file_reader_case(void)
     loop_drop();
 }
 
+/* The JS ledger in yonder (`ledger` in yonder.conf): a page's script tasks
+ * are frames on its runtime's ledger and all of them close; a size script
+ * reads after changing the page forces a layout, which the ledger charges
+ * to the callee that read it, named as libdom installed it; and the
+ * record's ledger lines are written. Off, the next page has no ledger. */
+static void ledger_case(void)
+{
+    fake_fetch_reset();
+    s_ledger = YONDER_LEDGER_ON;
+    os64_dom_name_host_functions(true);
+    loop_page("<div id=box style='width:50px'>x</div><p id=out></p><script>var w=0,b=document.getElementById('box');"
+              "for(var i=0;i<5;i++){b.style.width=(10+i)+'px';w+=b.offsetWidth;}"
+              "document.getElementById('out').textContent='read '+w;</script>");
+    bool settled = loop_settle();
+    yonder_scripts_t *host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
+    const os64_js_runtime_t *rt = yonder_scripts_ledger(host);
+    os64_js_ledger_totals_t k;
+    check(settled && rt != NULL && os64_js_ledger_totals(rt, &k), "ledger: the page's runtime keeps one");
+    check(k.open == 0, "ledger: every task's frame closed");
+    check(k.count[OS64_JS_LEDGER_ENGINE] >= 1 && k.count[OS64_JS_LEDGER_COMPILE] >= 1 &&
+          k.count[OS64_JS_LEDGER_NATIVE] >= 10, "ledger: the script's task, its compile and its libdom calls");
+    size_t cursor = 0;
+    os64_js_ledger_callee_t c;
+    uint64_t forced = 0;
+    bool named = false;
+    while (os64_js_ledger_callee(rt, &cursor, &c)) {
+        const char *name = os64_dom_host_function_name(c.function, c.magic);
+        if (name != NULL && !strcmp(name, "get offsetWidth")) {
+            named = true;
+            forced = c.forced;
+        }
+    }
+    check(named && forced == 5, "ledger: each offsetWidth read after a change forced a layout, charged to it by name");
+    check(k.count[OS64_JS_LEDGER_LAYOUT] >= 5, "ledger: the forced layouts are frames of their own");
+    Page *p = page_of_host(host);
+    if (p != NULL && p->diag != NULL) {
+        diag_ledger(p);
+        check(yonder_diag_fact_value(p->diag, "script ledger") != NULL && yonder_diag_fact_value(p->diag, "script ledger calls") != NULL,
+              "ledger: the record's ledger lines are written");
+    }
+    loop_drop();
+    s_ledger = YONDER_LEDGER_OFF;
+    os64_dom_name_host_functions(false);
+    loop_page("<p id=out>off</p><script>document.getElementById('out').textContent='ran';</script>");
+    loop_settle();
+    host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
+    check(yonder_scripts_ledger(host) == NULL, "ledger: off, a page's runtime keeps none");
+    loop_drop();
+}
+
 /* The one download job blob_download_case hands the pool. */
 static yonder_download_job_t *door_download;
 static os64_work_id_t door_submit(const os64_work_t *work) {
@@ -12831,6 +12881,7 @@ int main(void)
     blob_download_case();
     blob_picture_sweep();
     file_reader_case();
+    ledger_case();
     style_preload_pages();
     style_preload_limits();
     if(getenv("YONDER_STYLES_ONLY")) {

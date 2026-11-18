@@ -123,7 +123,7 @@ struct os64_js_runtime {
      * ledger_period ticks once ledger_profile, the last at ledger_sampled. */
     ledger_t *ledger;
     bool ledger_profile;
-    uint64_t ledger_period, ledger_sampled;
+    uint64_t ledger_period, ledger_sampled, ledger_since;
 };
 
 uint64_t js_owner_runtime_incarnation(const os64_js_runtime_t *runtime)
@@ -3087,6 +3087,7 @@ JS_PUBLIC os64_js_status_t os64_js_ledger_enable(os64_js_runtime_t *runtime, uns
             return OS64_JS_HOST_FAILURE;
         os64_memset(runtime->ledger, 0, sizeof(*runtime->ledger));
         JS_SetLedgerHooks(runtime->engine, &ledger_hooks, runtime);
+        runtime->ledger_since = os64_js_ledger_now();
     }
     runtime->ledger_profile = (flags & OS64_JS_LEDGER_PROFILE) != 0;
     runtime->ledger_period = sample_ticks;
@@ -3107,8 +3108,10 @@ JS_PUBLIC void os64_js_ledger_disable(os64_js_runtime_t *runtime)
 
 JS_PUBLIC void os64_js_ledger_reset(os64_js_runtime_t *runtime)
 {
-    if (runtime != NULL && runtime->ledger != NULL)
-        ledger_reset(runtime->ledger, os64_js_ledger_now());
+    if (runtime != NULL && runtime->ledger != NULL) {
+        runtime->ledger_since = os64_js_ledger_now();
+        ledger_reset(runtime->ledger, runtime->ledger_since);
+    }
 }
 
 JS_PUBLIC void os64_js_ledger_push(os64_js_runtime_t *runtime, os64_js_ledger_kind_t kind)
@@ -3122,6 +3125,12 @@ JS_PUBLIC void os64_js_ledger_pop(os64_js_runtime_t *runtime)
 {
     if (runtime != NULL && runtime->ledger != NULL)
         ledger_pop(runtime->ledger, os64_js_ledger_now());
+}
+
+JS_PUBLIC void os64_js_ledger_drop(os64_js_runtime_t *runtime)
+{
+    if (runtime != NULL && runtime->ledger != NULL)
+        ledger_drop(runtime->ledger);
 }
 
 JS_PUBLIC bool os64_js_ledger_totals(const os64_js_runtime_t *runtime, os64_js_ledger_totals_t *out)
@@ -3141,6 +3150,7 @@ JS_PUBLIC bool os64_js_ledger_totals(const os64_js_runtime_t *runtime, os64_js_l
     out->samples = l->samples;
     out->samples_lost = l->samples_lost;
     out->open = l->depth;
+    out->since = runtime->ledger_since;
     return true;
 }
 

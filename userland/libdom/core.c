@@ -1,6 +1,7 @@
 #include "internal.h"
 #include "binding_authority.h"
 #include "os64/proc.h"
+#include "os64/fmt.h"
 #include "os64/js_failure.h"
 #include "dom/retention.h"
 
@@ -433,12 +434,66 @@ DValue *d_intrinsic(os64_dom_t *dom, JSContext *ctx, JSValueConst from, const ch
     return d_retain(dom, ctx, value);
 }
 
+/* HOST FUNCTION NAMES, for the JS ledger's callee rows (os64_dom_host_
+ * function_name): each function d_method, d_method_named and d_accessor
+ * make, by the C function and magic it is made with (the ledger's key), as
+ * its member's name. Kept only while a host asked (os64_dom_name_host_
+ * functions), so ordinary browsing pays nothing; names are copied, since a
+ * caller's may be a buffer. One table for every binding, written on the
+ * owner thread as bindings install; a member a full table cannot hold, or a
+ * function made some other way, has no name. */
+#define D_HOST_NAMES 4096u
+#define D_HOST_NAME_CAP 56u
+static bool s_keep_host_names;
+static struct { const void *function; int magic; bool used; char name[D_HOST_NAME_CAP]; } s_host_names[D_HOST_NAMES];
+
+void os64_dom_name_host_functions(bool keep)
+{
+    s_keep_host_names = keep;
+}
+
+static unsigned host_name_slot(const void *function, int magic)
+{
+    uint64_t h = ((uint64_t)(uintptr_t)function ^ (uint64_t)(unsigned)magic * 0x9E3779B97F4A7C15ull)
+                 * 0x9E3779B97F4A7C15ull;
+    return (unsigned)(h >> 40) % D_HOST_NAMES;
+}
+
+static void name_host_function(const void *function, int magic, const char *prefix, const char *name)
+{
+    if (!s_keep_host_names || name == NULL)
+        return;
+    for (unsigned probe = 0, i = host_name_slot(function, magic); probe < D_HOST_NAMES;
+         probe++, i = (i + 1) % D_HOST_NAMES) {
+        if (s_host_names[i].used && (s_host_names[i].function != function || s_host_names[i].magic != magic))
+            continue;
+        s_host_names[i].used = true;
+        s_host_names[i].function = function;
+        s_host_names[i].magic = magic;
+        os64_snprintf(s_host_names[i].name, D_HOST_NAME_CAP, "%s%s", prefix, name);
+        return;
+    }
+}
+
+const char *os64_dom_host_function_name(const void *function, int magic)
+{
+    for (unsigned probe = 0, i = host_name_slot(function, magic); probe < D_HOST_NAMES;
+         probe++, i = (i + 1) % D_HOST_NAMES) {
+        if (!s_host_names[i].used)
+            return NULL;
+        if (s_host_names[i].function == function && s_host_names[i].magic == magic)
+            return s_host_names[i].name;
+    }
+    return NULL;
+}
+
 int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
              const char *name, JSCFunctionData *fn, int argc, int magic)
 {
     magic = d_window_member_magic(dom, ctx, target, name, magic, 0);
     JSValue function = JS_NewCFunctionData(ctx, fn, argc, magic, 1, &dom->anchor->value);
     if (JS_IsException(function)) return -1;
+    name_host_function((const void *)fn, magic, "", name);
     return JS_DefinePropertyValueStr(ctx, target, name, function, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
@@ -448,6 +503,7 @@ int d_method_named(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
     magic = d_window_member_magic(dom, ctx, target, name, magic, 0);
     JSValue function = JS_NewCFunctionData(ctx, fn, argc, magic, 1, &dom->anchor->value);
     if (JS_IsException(function)) return -1;
+    name_host_function((const void *)fn, magic, "", name);
     JSValue text = JS_NewString(ctx, name);
     if (JS_IsException(text) ||
         JS_DefinePropertyValueStr(ctx, function, "name", text, JS_PROP_CONFIGURABLE) < 0) {
@@ -462,16 +518,23 @@ int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
 {
     JSAtom atom = JS_NewAtom(ctx, name);
     if (atom == JS_ATOM_NULL) return -1;
-    JSValue get = JS_NewCFunctionData(ctx, fn, 0, d_window_member_magic(dom, ctx, target, name, magic, 1), 1, &dom->anchor->value);
+    int get_magic = d_window_member_magic(dom, ctx, target, name, magic, 1);
+    JSValue get = JS_NewCFunctionData(ctx, fn, 0, get_magic, 1, &dom->anchor->value);
     JSValue set = JS_UNDEFINED;
-    if (!JS_IsException(get) && writable)
-        set = JS_NewCFunctionData(ctx, fn, 1, d_window_member_magic(dom, ctx, target, name, magic | D_SET, 2), 1, &dom->anchor->value);
+    int set_magic = 0;
+    if (!JS_IsException(get) && writable) {
+        set_magic = d_window_member_magic(dom, ctx, target, name, magic | D_SET, 2);
+        set = JS_NewCFunctionData(ctx, fn, 1, set_magic, 1, &dom->anchor->value);
+    }
     if (JS_IsException(get) || JS_IsException(set)) {
         JS_FreeValue(ctx, get);
         JS_FreeValue(ctx, set);
         JS_FreeAtom(ctx, atom);
         return -1;
     }
+    name_host_function((const void *)fn, get_magic, "get ", name);
+    if (writable)
+        name_host_function((const void *)fn, set_magic, "set ", name);
     int result = JS_DefinePropertyGetSet(ctx, target, atom, get, set,
                                        JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
     JS_FreeAtom(ctx, atom);
