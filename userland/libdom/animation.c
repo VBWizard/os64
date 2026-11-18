@@ -34,7 +34,7 @@ static JSValue animation_method(JSContext *ctx,JSValueConst self,int argc,
                                 JSValueConst *argv,int magic,JSValue *data)
 {
     (void)self;
-    os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);
+    os64_dom_t *dom=d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if(!dom)return JS_EXCEPTION;
     if(magic) {
         if(argc<1)return JS_ThrowTypeError(ctx,"cancelAnimationFrame needs a handle");

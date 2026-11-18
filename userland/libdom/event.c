@@ -1870,6 +1870,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
     DValue *entry;
     if (target_entry(dom, ctx, self, magic != M_REMOVE, &entry) < 0) return JS_EXCEPTION;
     if (entry != NULL) dom = entry->node ? d_owner(dom, entry->node) : entry->dom;
+    if (entry == dom->window && !d_member_access(dom, ctx, false)) return JS_EXCEPTION;
     if (magic == M_DISPATCH) {
         if (argc < 1) return JS_ThrowTypeError(ctx, "dispatchEvent needs an event");
         DEvent *event = event_of(dom, ctx, argv[0]);
@@ -1977,7 +1978,7 @@ static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValu
 static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                                 int magic, JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
     int kind = magic & ~D_SET;
@@ -1990,6 +1991,7 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     int target = entry != dom->window ? reflected(dom, entry->node, kind) : 0;
     if (target < 0) return set ? JS_UNDEFINED : JS_NULL;
     if (target > 0) entry = dom->window;
+    if (entry == dom->window && !d_member_access(dom, ctx, false)) return JS_EXCEPTION;
     if (!set) {
         DListener *slot = slot_find(entry, kinds[kind]);
         if (slot == NULL) {

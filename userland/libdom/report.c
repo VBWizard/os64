@@ -1160,7 +1160,7 @@ static JSValue report_error(JSContext *ctx, JSValueConst self, int argc, JSValue
                             JSValue *data)
 {
     (void)self; (void)magic;
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     if (argc < 1) return JS_ThrowTypeError(ctx, "reportError needs the error to report");
     /* The script that called it is the one reporting (HTML's "report an

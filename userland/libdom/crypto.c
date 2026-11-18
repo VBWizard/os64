@@ -146,7 +146,7 @@ static JSValue random_uuid(os64_dom_t *dom, JSContext *ctx)
 static JSValue crypto_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                              JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     if (magic == W_CRYPTO) return JS_DupValue(ctx, dom->crypto->value);
     if (JS_GetOpaque(self, os64_js_class_id(&crypto_slot)) == NULL)

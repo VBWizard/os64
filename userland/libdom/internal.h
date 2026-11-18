@@ -11,6 +11,9 @@
 
 #define D_BUCKETS 256
 #define D_SET 0x1000
+/* Function-data magic is signed 16-bit; member policy occupies positive bits. */
+#define D_WINDOW_MEMBER 0x4000
+#define D_WINDOW_CROSS 0x2000
 /* The intrinsics the structured clone holds (clone.c's H_COUNT). */
 #define D_CLONE_HELD 34
 #include <canvas/canvas.h>
@@ -845,6 +848,13 @@ typedef struct { char *data; size_t length; } DString;
 /* The caller passes its own compiled ABI identity, including callback units.
  * Native state is carried by private function data, never opaque host slots. */
 os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi);
+/* Guard an annotated Window member and resolve its actual receiver binding. */
+os64_dom_t *d_member_callback(JSContext *, JSValueConst, int *, JSValueConst *, const char *);
+bool d_member_access(os64_dom_t *, JSContext *, bool);
+JSValue d_binding_global(os64_dom_t *, JSContext *);
+JSValue d_custom_registry(os64_dom_t *, JSContext *);
+int d_window_member_magic(os64_dom_t *, JSContext *, JSValueConst, const char *, int, int);
+
 bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
 /* Scheduling eligibility is separate from retained-object usability. */
 bool d_activity_eligible(const os64_dom_t *dom);

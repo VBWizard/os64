@@ -666,7 +666,7 @@ static JSValue get_computed_style(JSContext *ctx, JSValueConst self, int argc, J
                                   int magic, JSValue *data)
 {
     (void)self; (void)magic;
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     if (argc < 1) return JS_ThrowTypeError(ctx, "getComputedStyle needs an element");
     const os64_html_node_t *node = d_node(dom, ctx, argv[0]);
@@ -1026,13 +1026,13 @@ int d_element_scroll_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
 static JSValue view_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                            int magic, JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     if (set) {
         // [Replaceable]: the page's own property takes the name's place.
-        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue global = d_binding_global(dom, ctx);
         int done = JS_DefinePropertyValueStr(ctx, global, kViewNames[magic],
                                              JS_DupValue(ctx, argc > 0 ? argv[0] : JS_UNDEFINED),
                                              JS_PROP_C_W_E);
@@ -1250,7 +1250,7 @@ enum { M_MEDIA, M_MATCHES, M_ADD_LISTENER, M_REMOVE_LISTENER, M_MATCH_MEDIA };
 static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                             int magic, JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     if (magic == M_MATCH_MEDIA) {
         if (argc < 1) return JS_ThrowTypeError(ctx, "matchMedia needs a query");

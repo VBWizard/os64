@@ -344,7 +344,7 @@ static JSValue agent_member(os64_dom_t *dom, JSContext *ctx, int magic)
 static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
                         JSValueConst *argv, int magic, JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
