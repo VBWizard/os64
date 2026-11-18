@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Frames - CSS in motion</title>
+<style>
+body{margin:0;background:#e8eef1;color:#22303a;font:17px sans-serif}
+main{max-width:900px;margin:24px auto;padding:0 24px}
+h1{font-size:34px;margin:6px 0 10px}.eyebrow{color:#4f6a7a;font-size:13px;letter-spacing:3px}
+.row{display:flex;gap:20px;align-items:center;margin:14px 0}
+.track{position:relative;width:520px;height:60px;background:#cfdbe2;border:1px solid #7f9aab;overflow:hidden}
+.slider{position:absolute;top:10px;left:0;width:40px;height:40px;background:#2f6db5;border-radius:6px;
+ animation:slide 3s linear infinite alternate}
+@keyframes slide{from{transform:translateX(0)}to{transform:translateX(478px)}}
+.spinner{width:56px;height:56px;border:8px solid #cfdbe2;border-top-color:#b5562f;border-radius:50%;
+ animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.swap{width:120px;height:56px;background:#4f8a5b;border-radius:8px;transition:transform .8s ease-in-out,background-color .8s}
+.swap.on{transform:translateX(300px);background:#c48a2a}
+</style>
+<main>
+<p class="eyebrow">YONDER / FRAMES / CSS</p>
+<h1>CSS in motion</h1>
+<p>An animation that slides, one that turns, a transition that a timer flips
+every two seconds, and a GIF, whose pictures keep their own time. The first
+three come on the display's frames; the GIF does not.</p>
+<div class="row"><div class="track"><div class="slider"></div></div></div>
+<div class="row"><div class="spinner"></div><img src="twinkle.gif" alt="a twinkling GIF"></div>
+<div class="row"><div class="swap" id="swap"></div></div>
+<p id="status">The transition flips with scripts on; the rest runs without them.</p>
+</main>
+<script>
+var on=false;setInterval(function(){on=!on;document.getElementById('swap').className=on?'swap on':'swap';},2000);
+document.getElementById('status').textContent='Scripts on: the transition flips every two seconds.';
+</script>

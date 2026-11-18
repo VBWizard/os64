@@ -304,7 +304,7 @@ static void dom_recovery_success_cases(void)
               os64_dom_timer_fire(f.binding[2], p2b_ms, &out) && out.status == OS64_JS_OK &&
               os64_dom_timer_fire(f.binding[0], p2b_ms, &out) && out.status == OS64_JS_OK,
               "DOM recovery: independent sibling and primary timers retain their native order");
-        if (modern) check(os64_dom_animation_fire(f.binding[2], p2b_ms, &out) && out.status == OS64_JS_OK,
+        if (modern) check(os64_dom_animation_fire(f.binding[2], p2b_ms, OS64_DOM_FRAME_NOW, &out) && out.status == OS64_JS_OK,
               "DOM recovery: frame batch skips sealed callback and continues healthy sibling work");
         if (modern) check(os64_dom_idle_run(f.binding[2], &out) && out.status == OS64_JS_OK &&
               os64_dom_idle_run(f.binding[2], &out) && out.status == OS64_JS_OK,

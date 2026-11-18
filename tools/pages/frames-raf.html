@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Frames - requestAnimationFrame</title>
+<style>
+body{margin:0;background:#f1ede4;color:#2b2a26;font:17px sans-serif}
+main{max-width:900px;margin:24px auto;padding:0 24px}
+h1{font-size:34px;margin:6px 0 10px}.eyebrow{color:#7a6a4f;font-size:13px;letter-spacing:3px}
+table{border-collapse:collapse;margin:10px 0}td{padding:4px 14px 4px 0}td.v{font:bold 18px monospace}
+.track{position:relative;height:60px;background:#ddd5c4;border:1px solid #a89878;overflow:hidden}
+#dot{position:absolute;top:10px;left:0;width:40px;height:40px;border-radius:20px;background:#b5562f}
+button{padding:8px 14px;margin:8px 8px 8px 0;font-size:15px}
+input{font-size:16px;padding:6px;width:320px}
+.tall{height:1600px;background:linear-gradient(#f1ede4,#c9bfa8)}
+.bad{color:#b0201a}
+</style>
+<main>
+<p class="eyebrow">YONDER / FRAMES / REQUESTANIMATIONFRAME</p>
+<h1>A frame counter</h1>
+<p id="status">Enable Scripts and Modern Web, then reload.</p>
+<div class="track"><div id="dot"></div></div>
+<table>
+<tr><td>frames</td><td class="v" id="frames">0</td><td>callbacks sharing a frame's time</td><td class="v" id="shared">-</td></tr>
+<tr><td>between frames (last 120) min / avg / max ms</td><td class="v" id="deltas">-</td><td>largest gap ever, ms</td><td class="v" id="gap">-</td></tr>
+<tr><td>argument later than performance.now()</td><td class="v" id="ahead">0</td><td>time went backward</td><td class="v" id="back">0</td></tr>
+<tr><td>last timestamps</td><td class="v" colspan="3" id="last">-</td></tr>
+<tr><td>timer ticks (100 ms)</td><td class="v" id="timers">0</td><td>work in each callback, ms</td><td class="v" id="work">0</td></tr>
+</table>
+<button id="slow0">No extra work</button><button id="slow30">30 ms of work a frame</button><button id="stop">Stop / start</button>
+<p>Type here while it runs: <input id="typing" placeholder="each key should appear at once"></p>
+<p>Cover the window, or switch to a text terminal, then come back: the counter
+stops while hidden, the largest gap shows how long, and the dot is where the
+time says it should be. Scroll the page while it runs, too.</p>
+<div class="tall"></div>
+</main>
+<script>
+(function(){
+ var q=new URLSearchParams(location.search),work=+(q.get('slow')||0),running=true;
+ var frames=0,shared=0,split=0,ahead=0,back=0,gap=0,last=null,deltas=[],timers=0,stamps=[];
+ var el=function(id){return document.getElementById(id)};
+ var dot=el('dot');
+ function first(t){
+  var now=performance.now();
+  if(t>now)ahead++;
+  if(last!==null){
+   if(t<last)back++;
+   var d=t-last;deltas.push(d);if(deltas.length>120)deltas.shift();if(d>gap)gap=d;
+  }
+  last=t;frames++;stamps.push(t.toFixed(1));if(stamps.length>4)stamps.shift();
+  var x=(t/4)%520;dot.style.left=x+'px';
+  if(work>0){var until=now+work;while(performance.now()<until){}}
+ }
+ function loop(t){
+  if(!running)return;
+  first(t);
+  requestAnimationFrame(loop);
+ }
+ /* Two callbacks a frame: the loop, and a twin asked for beside it, which
+  * runs after it in the same frame and must see the loop's time. */
+ function twin(t){if(running){if(t===last)shared++;else split++;requestAnimationFrame(twin);}}
+ requestAnimationFrame(loop);requestAnimationFrame(twin);
+ setInterval(function(){
+  timers++;
+  var mn=Infinity,mx=0,sum=0;for(var i=0;i<deltas.length;i++){var d=deltas[i];if(d<mn)mn=d;if(d>mx)mx=d;sum+=d;}
+  el('frames').textContent=frames;
+  el('shared').textContent=shared+(split?' ('+split+' did not)':'');
+  el('shared').className=split?'v bad':'v';
+  el('deltas').textContent=deltas.length?mn.toFixed(1)+' / '+(sum/deltas.length).toFixed(1)+' / '+mx.toFixed(1):'-';
+  el('gap').textContent=gap.toFixed(1);
+  el('ahead').textContent=ahead;el('ahead').className=ahead?'v bad':'v';
+  el('back').textContent=back;el('back').className=back?'v bad':'v';
+  el('last').textContent=stamps.join('  ');
+  el('timers').textContent=timers;el('work').textContent=work;
+ },100);
+ el('slow0').onclick=function(){work=0};
+ el('slow30').onclick=function(){work=30};
+ el('stop').onclick=function(){running=!running;if(running){requestAnimationFrame(loop);requestAnimationFrame(twin);}};
+ el('status').textContent='Running: one loop and its twin, every frame.';
+})();
+</script>

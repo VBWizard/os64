@@ -1155,10 +1155,15 @@ static RpEnd rp_settle(uint64_t budget_ms, uint32_t next) {
     uint64_t waited=0; unsigned busy=0;
     for(;;) {
         rp_answer();
+        /* The display's frame, answered at once at the window's time in a
+         * turn that finds frame work due, and closed when the turn is done
+         * (REPLAY.md § 3, the window's frames). */
+        if(frame_work_due()<=yonder_now_ms()) host_frame();
         bool more=stream_turn();
         more=coming_turn() || more;
         more=script_turn() || more;
         more=bodies_turn() || more;
+        frame_close();
         pictures_settle();
         if(g.coming.active && yonder_now_ms()>=g.coming.due) { coming_show(); more=true; }
         if(!rp_navigated && s_diag.next!=next) {

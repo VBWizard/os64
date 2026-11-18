@@ -403,7 +403,7 @@ static void dom_retirement_cases(void)
                   os64_dom_animation_next(bindings[1]) == UINT64_MAX &&
                   os64_dom_idle_next(bindings[1]) == UINT64_MAX &&
                   !os64_dom_timer_fire(bindings[1], 1000, &out) &&
-                  !os64_dom_animation_fire(bindings[1], 1000, &out) &&
+                  !os64_dom_animation_fire(bindings[1], 1000, OS64_DOM_FRAME_NOW, &out) &&
                   !os64_dom_idle_run(bindings[1], &out),
                   "retirement tasks: inactive B has no host scheduler opportunity");
             unsigned fired = 0;
@@ -447,7 +447,7 @@ static void dom_retirement_cases(void)
             realm_script(retirement_realms[0],
                 "assert(renderLog.join()==='performance,resize,intersection,resize');retainedResize.disconnect();",
                 "retirement observers: adopted retained target receives its first eligible resize");
-            check(os64_dom_animation_fire(bindings[0], 1000, &out) && out.status == OS64_JS_OK,
+            check(os64_dom_animation_fire(bindings[0], 1000, OS64_DOM_FRAME_NOW, &out) && out.status == OS64_JS_OK,
                   "retirement tasks: live rAF follows a dead callback in the same batch");
             for (int i = 0; i < 2; ++i)
                 check(os64_dom_idle_run(bindings[0], &out) && out.status == OS64_JS_OK,

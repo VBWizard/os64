@@ -229,9 +229,10 @@ Keep this in PE1: the new event interface is page-wide, not limited to the
 captured Canvas targets. The obligation and permitted delay are in
 [PE3 §4.1.4](https://www.w3.org/TR/pointerevents3/#boundary-events-caused-by-layout-changes).
 
-Yonder owns `rehit_owed`, the document generation, a last published hit-test
-revision and `next_rehit_ms`. Publishing layout, CSS hit-test/transform
-changes, scroll or zoom sets owed when a physical cursor location is known.
+Yonder owns the re-hit owed (`s_pointer_rehit`), the document generation
+and a last published hit-test revision; when a re-hit runs is the display's
+frame's to say (below). Publishing layout, CSS hit-test/transform changes,
+scroll or zoom sets owed when a physical cursor location is known.
 An ordinary sample that hit-tests that same published revision can discharge
 it. Presence snapshots update the physical-location validity separately.
 Keep the original screen/content sample: recompute CSS positions against the
@@ -244,9 +245,12 @@ boundary dispatch for that document. This is a post-layout input task, not
 a callback from the painter. It emits no synthetic pointermove/mousemove.
 Capture keeps its effective target while physical hit state is refreshed.
 Callback edits may set owed again; they cannot cause another re-hit in the
-same opportunity. Fold `next_rehit_ms` into the existing ticker deadline with
-a minimum 16 ms interval. This work wakes the ticker even if there are no
-rAF callbacks, and uses the existing covered-window suspension policy.
+same opportunity. The rendering opportunity is a frame of the display: a
+re-hit owed is frame work, which asks for the display's next frame and runs
+in it, at most one a frame (PILE3.md § The animations' frames, on the
+display's beat), even if there are no rAF callbacks, and uses the existing
+covered-window suspension policy. A cancel owed is not frame work: it runs
+at the loop's next turn, before any later packet.
 Uncover schedules one reconciliation. Navigation/close clears the debt.
 
 Thus a boundary listener that moves its own target can cause another
@@ -337,7 +341,7 @@ active pointer in a replacement document until that document receives input.
 | Current capture | Process pending transitions; clear on implicit release. | Keep until pending processing. | Keep until pending processing. | Replace disconnected current target with held document fallback; owe lost capture. | Keep effective capture despite changed physical hit. |
 | Compatibility suppression | Set from canceled pointerdown; reset after up/cancel mapping. | Keep. | Keep. | Keep; removal alone is not cancellation. | Keep. |
 | Cancel owed | Service before later packets; do not dispatch abandoned tail. | Do not permit rearming while End/drain is in progress. | Keep; clearing capture cannot retract cancellation. | Keep unless host also abandons the stream. | Keep. |
-| Re-hit owed / revision / deadline | Clear only for a hit-test of the current published revision. | Preserve owed work; capture affects effective targeting. | Reconcile from current physical hit or keep owed if stale. | Set owed for the live document. | Set owed/revision; share the ticker with a 16 ms minimum interval. |
+| Re-hit owed / revision / deadline | Clear only for a hit-test of the current published revision. | Preserve owed work; capture affects effective targeting. | Reconcile from current physical hit or keep owed if stale. | Set owed for the live document. | Set owed/revision; ask for the display's next frame, one re-hit a frame. |
 
 ### Ending and failure transitions
 

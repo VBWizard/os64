@@ -64,7 +64,7 @@ static void dom_realm_cases(void)
         check(os64_dom_timer_fire(f.binding, p2b_ms, &out) && out.status == OS64_JS_OK,
               "realm: string timer evaluates in secondary");
         p2b_advance(20);
-        check(os64_dom_animation_fire(f.binding, p2b_ms, &out) && out.status == OS64_JS_OK,
+        check(os64_dom_animation_fire(f.binding, p2b_ms, OS64_DOM_FRAME_NOW, &out) && out.status == OS64_JS_OK,
               "realm: host animation enters secondary");
         check(os64_dom_idle_run(f.binding, &out) && out.status == OS64_JS_OK,
               "realm: host idle enters secondary");
@@ -624,7 +624,7 @@ static void dom_cluster_cases(void)
                 for (size_t j = 0; j < 3; ++j) {
                     size_t i = order[j];
                     if (os64_dom_web_animations_next(bindings[i]) <= p2b_ms)
-                        check(os64_dom_web_animations_update(bindings[i], p2b_ms, &out) && out.status == OS64_JS_OK,
+                        check(os64_dom_web_animations_update(bindings[i], p2b_ms, OS64_DOM_FRAME_NOW, &out) && out.status == OS64_JS_OK,
                               "cluster round5: replacement and removal events update in their owning bindings");
                 }
             }

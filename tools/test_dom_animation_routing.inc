@@ -66,10 +66,10 @@ static void dom_animation_routing_cases(void)
                     "var idle=new B.Animation(null,B.document.timeline);refused=false;"
                     "try{idle.play()}catch(e){refused=e.name==='InvalidStateError'}assert(refused);",
                     "animation routing: explicit departed timeline cannot be revived");
-                check(os64_dom_web_animations_update(bindings[0],p2b_ms,&out)&&out.status==OS64_JS_OK,
+                check(os64_dom_web_animations_update(bindings[0],p2b_ms,OS64_DOM_FRAME_NOW,&out)&&out.status==OS64_JS_OK,
                       "animation routing: live timeline starts foreign animation");
                 p2b_ms+=40;p2b_us+=40000;
-                check(os64_dom_web_animations_update(bindings[0],p2b_ms,&out)&&out.status==OS64_JS_OK,
+                check(os64_dom_web_animations_update(bindings[0],p2b_ms,OS64_DOM_FRAME_NOW,&out)&&out.status==OS64_JS_OK,
                       "animation routing: live timeline advances foreign animation");
                 realm_script(realms[0],"assert(anim.currentTime===40&&!anim.pending);"
                     "assert(Object.getOwnPropertyDescriptor(B.AnimationTimeline.prototype,'currentTime').get.call(document.timeline)===40);"
@@ -79,7 +79,7 @@ static void dom_animation_routing_cases(void)
                 realm_script(realms[0],"assert(finished===1);",
                     "animation routing: finish job belongs to live timeline");
                 p2b_ms+=20;p2b_us+=20000;
-                check(os64_dom_web_animations_update(bindings[0],p2b_ms,&out)&&out.status==OS64_JS_OK,
+                check(os64_dom_web_animations_update(bindings[0],p2b_ms,OS64_DOM_FRAME_NOW,&out)&&out.status==OS64_JS_OK,
                       "animation routing: live timeline delivers finish event");
                 realm_script(realms[0],"assert(events===1);Animation.prototype.pause.call(anim);"
                     "assert(anim.ready instanceof B.Promise);anim.currentTime=50;"

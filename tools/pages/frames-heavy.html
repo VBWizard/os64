@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Frames - a heavy callback</title>
+<style>
+body{margin:0;background:#f3e9e4;color:#2f2522;font:17px sans-serif}
+main{max-width:900px;margin:24px auto;padding:0 24px}
+h1{font-size:34px;margin:6px 0 10px}.eyebrow{color:#7a5a4f;font-size:13px;letter-spacing:3px}
+td{padding:4px 14px 4px 0}td.v{font:bold 18px monospace}
+input{font-size:16px;padding:6px;width:320px}
+.tall{height:1600px;background:linear-gradient(#f3e9e4,#c9a8a0)}
+</style>
+<main>
+<p class="eyebrow">YONDER / FRAMES / A HEAVY CALLBACK</p>
+<h1>30 ms of work a frame</h1>
+<p>Every <code>requestAnimationFrame</code> callback here works for 30 ms, so
+it is answered every second or third refresh. Type into the field and scroll
+the page: both must answer as they do on a still page, and the timer below
+keeps its ten ticks a second.</p>
+<p>Type here: <input id="typing" placeholder="this field has the focus"></p>
+<table>
+<tr><td>frames</td><td class="v" id="frames">0</td><td>between frames, avg ms</td><td class="v" id="avg">-</td></tr>
+<tr><td>timer ticks (100 ms)</td><td class="v" id="timers">0</td><td>keys typed</td><td class="v" id="keys">0</td></tr>
+</table>
+<div class="tall"></div>
+</main>
+<script>
+(function(){
+ var frames=0,last=null,sum=0,n=0,timers=0,keys=0,el=function(id){return document.getElementById(id)};
+ function loop(t){
+  if(last!==null){sum+=t-last;n++;}
+  last=t;frames++;
+  var until=performance.now()+30;while(performance.now()<until){}
+  requestAnimationFrame(loop);
+ }
+ requestAnimationFrame(loop);
+ el('typing').addEventListener('input',function(){keys++;});
+ setInterval(function(){
+  timers++;
+  el('frames').textContent=frames;el('avg').textContent=n?(sum/n).toFixed(1):'-';
+  el('timers').textContent=timers;el('keys').textContent=keys;
+ },100);
+ el('typing').focus();
+})();
+</script>

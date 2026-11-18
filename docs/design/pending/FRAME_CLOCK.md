@@ -179,8 +179,10 @@ through the event wait a GUI program already blocks in.
   gmandel) sleeps as before. The helper runs inside a program's own loop,
   so it must not take the program's events, and a peek-wait cannot say
   which kind is waiting: it takes the answer alone with
-  `os64_gui_frame_take` (syscall 70), which moves no other event. yonder's
-  ticker is to take its animation frames from it, in a slice of its own.
+  `os64_gui_frame_take` (syscall 70), which moves no other event. yonder
+  asks for frames itself, from its main loop, and takes the answer among
+  its window's events (PILE3.md § The animations' frames, on the display's
+  beat).
 - `/tests/glassbench` gains it as a third pacer, `-p frame`.
 
 **A window's frame request, its states** (*written for slice F3, before
@@ -450,7 +452,8 @@ is everyone's again.
 |---|---|---|---|
 | F1 | the beam seam, the AMD driver, `frame_clock.c` and its host test; `/sys/gui` reports the beam and, at each of today's copies, where the sweep was | no: it measures | here, one cold read |
 | F2 | the compositor's frame: pin, timer, lead, aim, strips, late and torn, the damage wake, `NOFRAMECLOCK` | yes | Codex: scheduler timer, pinning, an interrupt from under `kGuiLock` |
-| F3 | the ring-3 frame; `os64_frame_wait` on it; glassbench's pacer (yonder's ticker is briefed after it) | yes | Codex for the kernel half |
+| F3 | the ring-3 frame; `os64_frame_wait` on it; glassbench's pacer | yes | Codex for the kernel half |
+| yonder's frames | CSS animations, Web Animations, `requestAnimationFrame` and the resize and pointer steps asked for and run on the display's frames, at one time a frame (PILE3.md § The animations' frames, on the display's beat); no kernel change | yes | here, one cold read, then Codex |
 | F4 | later, if wanted: the compositor parks between frames | | |
 
 F1's second half is worth having by itself: a histogram of where the sweep
