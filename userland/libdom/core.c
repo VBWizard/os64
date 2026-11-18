@@ -1252,10 +1252,10 @@ static void child_abort(os64_dom_t *dom, struct DObservers *observers, struct DC
     dom->installing = false;
 }
 
-os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
+static os64_dom_child_t create_child(os64_dom_cluster_t *cluster,
     os64_html_document_t *document, os64_page_state_t *state,
     const os64_dom_options_t *options, const os64_dom_installation_t *installation,
-    os64_js_outcome_t *outcome)
+    const way_origin_t *origin, os64_js_outcome_t *outcome)
 {
     os64_dom_child_t child = {0};
     os64_js_runtime_t *runtime = cluster ? cluster->runtime : NULL;
@@ -1272,11 +1272,13 @@ os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
         outcome->status = OS64_JS_BAD_ARGUMENT;
         return child;
     }
+    if (origin && !binding_origin_valid(cluster, origin)) { outcome->status = OS64_JS_BAD_ARGUMENT; return child; }
     if (cluster->provider_borrows) { outcome->status = OS64_JS_BUSY; return child; }
     if (cluster->count == D_REALMS) { outcome->status = OS64_JS_REALM_LIMIT; return child; }
     os64_dom_options_t selected = options ? *options : os64_dom_default_options();
     if (selected.max_bytes < sizeof(os64_dom_t) ||
-        sizeof(os64_dom_t) > cluster->limits.dom_bytes - cluster->bytes ||
+        sizeof(os64_dom_t) + (origin ? sizeof(DBlock) + sizeof(*origin) : 0) >
+            cluster->limits.dom_bytes - cluster->bytes ||
         os64_html_group_check(cluster->html, document) != OS64_HTML_OK ||
         !os64_page_state_group_check(cluster->page, state)) {
         outcome->status = OS64_JS_ADMISSION_REFUSED;
@@ -1286,9 +1288,19 @@ os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
     if (!ctx) { child.state = OS64_DOM_CHILD_RUNTIME_FAILED; return child; }
     os64_dom_t *dom = allocate_binding(runtime, NULL, ctx, document, state, selected, cluster, outcome);
     if (!dom) { outcome->status = OS64_JS_ADMISSION_REFUSED; return child; }
+    if (origin) {
+        dom->binding_origin = d_alloc(dom, sizeof(*origin));
+        if (!dom->binding_origin) {
+            os64_free(dom);
+            outcome->status = OS64_JS_ADMISSION_REFUSED;
+            return child;
+        }
+        *dom->binding_origin = *origin;
+    }
     status = os64_js_realm_stage(runtime, OS64_JS_ABI_ID, installation->engine_headroom,
                                  &child.realm, outcome);
     if (status != OS64_JS_OK) {
+        d_free(dom, dom->binding_origin);
         os64_free(dom);
         if (child_runtime_failed(status)) child.state = OS64_DOM_CHILD_RUNTIME_FAILED;
         return child;
@@ -1322,6 +1334,29 @@ os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
         child.state = child_runtime_failed(status) ? OS64_DOM_CHILD_RUNTIME_FAILED : OS64_DOM_CHILD_FAILED;
     }
     return child;
+}
+
+os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
+    os64_html_document_t *document, os64_page_state_t *state,
+    const os64_dom_options_t *options, const os64_dom_installation_t *installation,
+    os64_js_outcome_t *outcome)
+{
+    return create_child(cluster, document, state, options, installation, NULL, outcome);
+}
+
+os64_dom_child_t d_create_child_with_origin(os64_dom_cluster_t *cluster,
+    os64_html_document_t *document, os64_page_state_t *state,
+    const os64_dom_options_t *options, const os64_dom_installation_t *installation,
+    const way_origin_t *origin, os64_js_outcome_t *outcome)
+{
+    /* The common preflight protects an outcome borrowed by a running call. */
+    if (!origin) {
+        os64_js_status_t status = os64_js_quiescent(cluster ? cluster->runtime : NULL,
+            OS64_JS_ABI_ID, outcome);
+        if (status == OS64_JS_OK) outcome->status = OS64_JS_BAD_ARGUMENT;
+        return (os64_dom_child_t){0};
+    }
+    return create_child(cluster, document, state, options, installation, origin, outcome);
 }
 
 /* Quiescent activity shutdown retains exported values, registration identity
@@ -1386,6 +1421,7 @@ done:
     return status;
 }
 
+#include "browsing_context.inc"
 #include "recovery.inc"
 
 static void binding_drain(os64_dom_t *dom)
@@ -1502,6 +1538,12 @@ void os64_dom_cluster_free(os64_dom_cluster_t *cluster)
      * Keep all ledger descriptors until the native sweeps are finished. */
     for (size_t i = 0; i < cluster->count; ++i) binding_free(cluster->members[i]);
     for (size_t i = 0; i < cluster->count; ++i) os64_free(cluster->members[i]);
+    for (DBrowsingContext *context = cluster->contexts; context;) {
+        DBrowsingContext *next = context->registry_next;
+        cluster->bytes -= context->charged_bytes;
+        os64_free(context);
+        context = next;
+    }
     os64_page_state_group_free(cluster->page);
     os64_html_group_free(cluster->html);
     os64_free(cluster);

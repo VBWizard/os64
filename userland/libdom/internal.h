@@ -2,6 +2,7 @@
 #define DOM_INTERNAL_H
 
 #include "dom/dom.h"
+#include "browsing_context.h"
 #include "os64/js_engine.h"
 #include "os64/js_callbacks.h"
 #include "way/origin.h"
@@ -386,6 +387,19 @@ os64_dom_t *d_create_in_realm(os64_js_runtime_t *, os64_js_realm_t *,
     os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
 
 #define D_REALMS 65
+/* Stable native identity; descendant links describe the published tree.
+ * Discard keeps ancestry and the copied name, but removes the live child link. */
+struct DBrowsingContext {
+    os64_dom_cluster_t *cluster;
+    DBrowsingContext *registry_next, *parent, *first_child, *last_child;
+    DBrowsingContext *previous_sibling, *next_sibling;
+    os64_dom_t *active;
+    uint64_t generation;
+    size_t charged_bytes;
+    bool discarded;
+    char name[];
+};
+
 struct os64_dom_cluster {
     os64_js_runtime_t *runtime;
     os64_html_group_t *html;
@@ -393,6 +407,8 @@ struct os64_dom_cluster {
     os64_dom_cluster_limits_t limits;
     size_t bytes, kept_bytes, canvas_bytes, count;
     os64_dom_t *members[D_REALMS];
+    DBrowsingContext *contexts;
+    size_t context_count;
     DValue *buckets[D_BUCKETS];
     struct DObservers *observers;
     struct DCustomAgent *custom_agent;
@@ -420,6 +436,7 @@ struct os64_dom {
     size_t bytes, retained;
     /* `bytes` by kind; the kinds sum to it. */
     os64_dom_mem_t memory[OS64_DOM_MEM_KINDS];
+    DBrowsingContext *browsing_context; /* Retained across document departure. */
     way_origin_t *binding_origin; /* Private immutable authority, separate from mutable URL/base. */
     bool browser_jobs; /* Standalone opt-in to the composed callback settings. */
     bool closed;
