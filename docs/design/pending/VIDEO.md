@@ -120,7 +120,7 @@ timeline as sound. yonder, and any other player, see no FFmpeg type.
   experimental "ops" backend is built and never used (DEBTS: 9.0.2 does
   not link without it). `avbench -x WxH` times decode and conversion on
   the call path libmedia uses; on the 3900X that path costs what the
-  table above measured.
+  table above measured, and on the P5 what its own table (§ 1) says.
 - **The header** (`os64/media.h` § THE PICTURE SIDE): `os64_media_open_for`
   with WANT_SOUND and/or WANT_PICTURE. An unwanted stream is discarded at
   the demuxer, so a sound-only probe makes and decodes none of the
