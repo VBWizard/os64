@@ -125,6 +125,8 @@ static void dom_navigation_authority_cases(void)
         unsigned deliveries=n.deliveries;
         check(!d_navigation_dispatch(c[1],navigation_consume,&n,&out)&&n.deliveries==deliveries,
               "navigation: old generation never dispatches to replacement");
+        realm_script(ce_realms[0],"Object.getOwnPropertyDescriptor(E.loc,'href')",
+              "navigation: prepare descriptor before measuring request-slot charge");
         size_t charge=f.cluster->bytes;
         realm_script(ce_realms[0],"E.loc.href='https://destination.test/one'","navigation: first slot on independent target");
         check(f.cluster->bytes==charge+sizeof(DNavigationRequest),"navigation: slot is charged to aggregate budget");
@@ -148,6 +150,8 @@ static void dom_navigation_authority_cases(void)
         if(mode==2){n.retire_snapshot=1;realm_script(ce_realms[0],"denied(()=>B.loc.href='next')","navigation: snapshot retirement rechecked");}
         if(mode==3){n.retire_allow=0;realm_script(ce_realms[0],"denied(()=>B.loc.href='next')","navigation: authorization retirement rechecked");}
         if(mode==7) {
+            realm_script(ce_realms[0],"Object.getOwnPropertyDescriptor(B.loc,'href')",
+                "navigation: prepare descriptor before request allocation refusal");
             size_t before=f.cluster->bytes;dom_fail_at=dom_attempts+2;
             realm_script(ce_realms[0],"let e;try{B.loc.href='next'}catch(x){e=x}assert(e&&e.name==='QuotaExceededError')",
                 "navigation: request allocation refusal");dom_fail_at=0;

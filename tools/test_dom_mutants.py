@@ -305,7 +305,7 @@ with tempfile.TemporaryDirectory(prefix='os64-dom-mutants.') as directory:
             if result.returncode: print(f'COMPILE ERROR {name}');continue
             replaced=f'userland_libpage_{page_unit}.c.o' if page_unit else f'dom-{unit}.o'
             selected=[p for p in objects if p.name!=replaced]
-            result=subprocess.run(['cc','-fsanitize=address,undefined','-pthread','-Wl,-z,noexecstack',*maths,*map(str,selected),str(obj),'-o',str(binary)],cwd=root,stdout=log,stderr=log)
+            result=subprocess.run(['cc','-fsanitize=address,undefined','-pthread','-Wl,-z,noexecstack','-Wl,--wrap=d_location_exotic_install',*maths,*map(str,selected),str(obj),'-o',str(binary)],cwd=root,stdout=log,stderr=log)
             if result.returncode: print(f'LINK ERROR {name}');continue
             compiled+=1
             try: result=subprocess.run([str(binary),run_mode],stdout=log,stderr=log,timeout=45,preexec_fn=child_limits)

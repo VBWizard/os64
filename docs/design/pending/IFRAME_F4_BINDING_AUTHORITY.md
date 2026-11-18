@@ -2,8 +2,9 @@
 
 This milestone connects checked pre-native caller attribution to actual Location
 members. It also supplies private origin-bearing DOM admission as groundwork
-for F.4c. It does not publish WindowProxy objects, complete cross-origin property
-exotics, or enable the policy in Yonder. Ordinary bindings retain their behavior.
+for native contexts. The [Location property layer](IFRAME_F4_LOCATION_EXOTIC.md)
+builds on these member checks. WindowProxy publication and Yonder policy
+activation remain gated; ordinary bindings retain their behavior.
 
 ## Immutable target settings
 

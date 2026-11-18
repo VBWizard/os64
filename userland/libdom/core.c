@@ -1014,6 +1014,7 @@ static int install_binding(os64_dom_t *dom, JSContext *ctx)
     if (installed >= 0) installed = d_timer_install(dom, ctx, global);
     if (installed >= 0) installed = d_window_install(dom, ctx, global);
     if (installed >= 0) installed = d_modern_install(dom, ctx, global);
+    if (installed >= 0) installed = d_location_exotic_install(dom, ctx, global);
     JS_FreeValue(ctx, global);
     if (installed < 0 || !d_report_host(dom)) goto fail;
     /* Publish the base provider after fallible installation: a failed standalone
@@ -1242,6 +1243,7 @@ static void child_abort(os64_dom_t *dom, struct DObservers *observers, struct DC
 {
     os64_dom_cluster_t *cluster = dom->cluster;
     dom->closed = true;
+    d_location_exotic_drain(dom);
     d_mutation_stop(dom);
     departure_detach(dom);
     dom->options.url = dom->options.referrer = NULL;
@@ -1440,6 +1442,7 @@ static void binding_drain(os64_dom_t *dom)
 {
     if (dom == NULL || dom->closed) return;
     dom->closed = true;
+    d_location_exotic_drain(dom);
     d_mutation_stop(dom);
     /* What the page changed in its storage and has not committed goes to
      * the store before the binding is gone: the last of its commits. */

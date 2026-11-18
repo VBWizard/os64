@@ -4,9 +4,9 @@
 #include <dom/dom.h>
 #include <way/origin.h>
 
-/* Private native preparation for Window/Location member checks. No WindowProxy or
- * cross-origin object publication is provided by this interface. Use a settings-
- * enabled cluster and keep the normal grouped admission/teardown obligations.
+/* Private native preparation for Window/Location member checks and the Location
+ * property layer. WindowProxy/browser publication is a separate gated interface.
+ * Use a settings-enabled cluster and keep grouped admission/teardown obligations.
  * Tuple origins must be canonical; opaque origins must be issued by this
  * cluster (or copied from a token it issued). Tokens are not URL strings.
  * Successful admission copies the origin before installation and charges its

@@ -153,8 +153,10 @@ must resolve the appropriate active document through the context, including
 additional method-level checks; an old Location cannot simply keep reading
 the retired binding's URL. Preserve relevant-global identity for security and
 descriptor caches. The [retained Location milestone](IFRAME_F4_LOCATION_CONTEXT.md)
-implements private receiver/current-document routing; exotic publication remains
-subject to the full acceptance below. Cover old Location/new document and discarded-context cases.
+implements private receiver/current-document routing. The
+[Location property layer](IFRAME_F4_LOCATION_EXOTIC.md) supplies private native
+exotics and descriptor caching; public proxy publication remains subject to the
+full acceptance below. Cover old Location/new document and discarded-context cases.
 
 ## Exotics and binding integration
 

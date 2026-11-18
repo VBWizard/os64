@@ -36,7 +36,7 @@ void d_navigation_authority_free(os64_dom_cluster_t *cluster)
     cluster->navigation_authority = NULL;
 }
 
-static os64_dom_t *navigation_settings(os64_dom_t *target, os64_js_settings_role_t role)
+static os64_dom_t *origin_settings(os64_dom_t *target, os64_js_settings_role_t role)
 {
     os64_js_outcome_t out;
     os64_js_realm_t *realm = os64_js_settings_realm(target->runtime, OS64_JS_ABI_ID, role, &out);
@@ -80,8 +80,8 @@ static JSValue context_navigate(os64_dom_t *target, JSContext *ctx, JSValueConst
 {
     os64_dom_cluster_t *cluster = target->cluster;
     struct DNavigationAuthority *authority = cluster->navigation_authority;
-    os64_dom_t *entry = navigation_settings(target, OS64_JS_SETTINGS_ENTRY);
-    os64_dom_t *source = action == D_NAV_RELOAD ? target : navigation_settings(target, OS64_JS_SETTINGS_INCUMBENT);
+    os64_dom_t *entry = origin_settings(target, OS64_JS_SETTINGS_ENTRY);
+    os64_dom_t *source = action == D_NAV_RELOAD ? target : origin_settings(target, OS64_JS_SETTINGS_INCUMBENT);
     if (!authority || authority->busy || !entry || !source) return navigation_denied(ctx);
     DNavigationRequest request = {.source=source, .entry=entry, .target=target,
         .source_context=source->browsing_context, .entry_context=entry->browsing_context,
@@ -132,8 +132,8 @@ static JSValue context_navigate(os64_dom_t *target, JSContext *ctx, JSValueConst
     os64_js_outcome_t out;
     if (os64_js_check_budget(target->runtime, OS64_JS_ABI_ID, &out) != OS64_JS_OK) return JS_EXCEPTION;
     if (!permitted || !navigation_current(&request) ||
-        navigation_settings(target, OS64_JS_SETTINGS_ENTRY) != entry ||
-        (action != D_NAV_RELOAD && navigation_settings(target, OS64_JS_SETTINGS_INCUMBENT) != source)) return navigation_denied(ctx);
+        origin_settings(target, OS64_JS_SETTINGS_ENTRY) != entry ||
+        (action != D_NAV_RELOAD && origin_settings(target, OS64_JS_SETTINGS_INCUMBENT) != source)) return navigation_denied(ctx);
     DBrowsingContext *context = request.target_context;
     if (!context->navigation) {
         if (sizeof(request) > cluster->limits.dom_bytes - cluster->bytes)

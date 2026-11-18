@@ -540,6 +540,7 @@ struct os64_dom {
      * which the map's named properties then do not answer (attr.c). */
     bool attr_ordinary;
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
+    struct DLocationExotic *location_exotic;
     DValue *invoke, *navigator, *style_prototype, *static_list;
     /* navigator.languages, plugins and mimeTypes, each [SameObject]; made by
      * the Modern Web's window objects row (window.c), NULL without it. */
@@ -875,6 +876,8 @@ os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi);
 os64_dom_t *d_member_callback(JSContext *, JSValueConst, int *, JSValueConst *, const char *);
 bool d_member_access(os64_dom_t *, JSContext *, bool);
 bool d_location_access(os64_dom_t *, JSContext *, bool);
+int d_location_exotic_install(os64_dom_t *, JSContext *, JSValueConst);
+void d_location_exotic_drain(os64_dom_t *);
 JSValue d_binding_global(os64_dom_t *, JSContext *);
 JSValue d_custom_registry(os64_dom_t *, JSContext *);
 int d_window_member_magic(os64_dom_t *, JSContext *, JSValueConst, const char *, int, int);
