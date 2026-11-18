@@ -76,3 +76,6 @@ Four named negative controls are rejected by behavioral assertions: substitute
 entry for pre-native caller, omit the origin comparison, equate distinct opaque
 origins, and let IDL exceptions bypass missing settings. These controls run on
 the shipping-engine host profile with sanitizers/leak detection retained.
+
+Implementation: PR #651. Matching source, executed host probes, compiled
+consumers, commands and logs are frozen with a verified SHA-256 manifest.
