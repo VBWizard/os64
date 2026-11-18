@@ -735,6 +735,42 @@ static void test_plan(void)
 	}
 }
 
+// The instant a frame answer reports: when the most recent blank began.
+static void test_blank_began(void)
+{
+	fc_frame_t f = frame_of(&P5);
+	CHECK(frame_clock_blank_began_us(&f, 1478, 5000000) == 5000000, "on the blank's first line, now");
+	uint64_t one_line = f.period_ns / 1481;
+	uint64_t b = frame_clock_blank_began_us(&f, 1478 + 10 - 1481, 5000000);   // line 7: ten lines in
+	CHECK(b + 1 >= 5000000 - 10 * one_line / 1000 && b <= 5000000 - 10 * one_line / 1000,
+	      "ten lines into the blank, ten lines ago: %lu", b);
+	b = frame_clock_blank_began_us(&f, 700, 5000000);
+	CHECK(b < 5000000 && 5000000 - b < f.period_ns / 1000, "mid-screen: within the last frame: %lu", b);
+	fc_frame_t bad = { 0, 0, 0, 0 };
+	CHECK(frame_clock_blank_began_us(&bad, 5, 777) == 777, "a frame that is not valid: now");
+	CHECK(frame_clock_blank_began_us(&f, 1477, 100) == 0, "early in boot it cannot go below zero");
+
+	// Against the model: the last model line at or before now that showed
+	// the blank's first line.
+	for (int round = 0; round < 3000; round++) {
+		display_t d = { (uint32_t)rnd_in(20, 3000), 0, 0, (uint64_t)rnd_in(2000, 40000), (uint64_t)rnd_in(0, 100000) };
+		d.blank_start = (uint32_t)rnd_in(0, d.lines - 1);
+		d.blank_end = (d.blank_start + (uint32_t)rnd_in(1, d.lines / 3 + 1)) % d.lines;
+		if (d.blank_end == d.blank_start)
+			d.blank_end = (d.blank_start + 1) % d.lines;
+		fc_frame_t g = frame_of(&d);
+		uint64_t n = (uint64_t)rnd_in((int64_t)d.lines, 100000);
+		uint64_t now_us = n * d.line_ns / 1000;
+		uint64_t m = n;
+		while (counter_at_line(&d, m) != d.blank_start)
+			m--;
+		uint64_t exact_us = m * d.line_ns / 1000;
+		uint64_t got = frame_clock_blank_began_us(&g, counter_at_line(&d, n), now_us);
+		CHECK(got + 2 >= exact_us && got <= exact_us + 1,
+		      "round %d: began %lu, model %lu", round, got, exact_us);
+	}
+}
+
 static void test_aim(void)
 {
 	fc_frame_t f = frame_of(&P5);
@@ -899,6 +935,7 @@ int main(int argc, char **argv)
 	test_keep_running();
 	test_measure();
 	test_plan();
+	test_blank_began();
 	test_aim();
 	test_late_cause();
 	test_wake_bucket_and_free();

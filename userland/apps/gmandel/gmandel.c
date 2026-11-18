@@ -311,7 +311,7 @@ static void render(os64_draw_ctx_t *ctx, const view_t *v, const target_t *t, flo
 }
 
 #define NAP_MS    100   // covered or unusable: how often to look again
-#define PAUSED_MS 33    // paused: poll keys at about thirty a second
+#define PAUSED_MS 33    // paused: poll keys at about thirty a second (os64_frame_wait)
 
 // THE FLAG IS THE TRUTH (gui.h § OS64_GUI_WINDOW_COVERED): the COVERED and
 // UNCOVERED events are only nudges, and a full queue can drop them.
@@ -362,7 +362,13 @@ static int64_t run_view(void *arg)
 	int64_t last_frame_us = 0;
 	int drawn_target = -1;
 	float drawn_zoom = -1.0f;
-	char line[128];
+	char line[128], shown[128] = "";
+	// Paused, the wait is the frame clock's helper; it is never bound, since
+	// covered is handled above with a nap of its own (a bound clock would
+	// sleep on THIS window's events, and a quit from the other window must
+	// end it). Unbound, the helper sleeps its budget.
+	os64_frame_clock_t clock;
+	os64_frame_clock_init(&clock);
 	while (!s_tour.quit)
 	{
 		os64_gui_event_t ev;
@@ -410,7 +416,8 @@ static int64_t run_view(void *arg)
 		// rate stays what it was while the race was on. Running, every pass
 		// renders, even through the hold at the bottom of a dive where the
 		// view stands still: the rates measure rendering, not change.
-		if (!paused || target != drawn_target || log2zoom != drawn_zoom)
+		bool rendered = !paused || target != drawn_target || log2zoom != drawn_zoom;
+		if (rendered)
 		{
 			int64_t t0 = os64_micros();
 			render(&ctx, v, &kTargets[target], log2zoom, max_iter);
@@ -448,11 +455,19 @@ static int64_t run_view(void *arg)
 			os64_snprintf(line + n, sizeof(line) - (size_t)n, "  %d.%dx SSE2",
 			              ratio_x10 / 10, ratio_x10 % 10);
 		}
-		status(&ctx, line);
-		os64_draw_publish(&ctx, NULL);
-		// Racing, no pause between frames: the race is how fast each can go.
+		// Publish only what changed: paused, the picture and the line stand
+		// still, and a window that publishes nothing new keeps neither the
+		// compositor nor the display's clock busy.
+		if (rendered || !os64_streq(line, shown))
+		{
+			status(&ctx, line);
+			os64_draw_publish(&ctx, NULL);
+			os64_strcopy(shown, sizeof(shown), line);
+		}
+		// Racing, no pause between frames: the race is how fast each can go,
+		// so it is not paced by the display (its rates are the measurement).
 		if (paused)
-			os64_sleep(PAUSED_MS);
+			os64_frame_wait(&clock, PAUSED_MS);
 	}
 	os64_gui_window_destroy(win);
 	return 0;

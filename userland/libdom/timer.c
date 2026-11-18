@@ -93,7 +93,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
                             int magic, JSValue *data)
 {
     (void)self;
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     if (magic == T_CLEAR) {
         uint32_t id = 0;
@@ -110,7 +110,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
     bool function = JS_IsFunction(ctx, handler);
     os64_js_callback_t captured = OS64_JS_CALLBACK_INIT;
     os64_js_realm_t *entry = NULL;
-    if (function && dom->cluster && dom->cluster->timer_settings) {
+    if (function && d_settings(dom, timer)) {
         os64_js_outcome_t out;
         JSContext *associated = JS_GetCallbackRealm(ctx, handler);
         entry = associated ? os64_js_realm_from_context(dom->runtime, associated, OS64_JS_ABI_ID, &out) : NULL;

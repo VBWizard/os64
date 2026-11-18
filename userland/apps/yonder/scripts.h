@@ -26,6 +26,10 @@
 #include "storage.h"
 
 typedef struct yonder_scripts yonder_scripts_t;
+bool yonder_scripts_finalization_pending(const yonder_scripts_t *);
+// Try one cleanup; idle permits consecutive cleanup when no ordinary task is
+// ready. Otherwise alternate sources. Each cleanup includes its checkpoint.
+bool yonder_scripts_finalization_fire(yonder_scripts_t *, bool idle, os64_js_outcome_t *);
 bool yonder_scripts_images_pending(const yonder_scripts_t *);
 bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
 // The page's media elements (dom/media.h): the turn that brings them up to
@@ -80,6 +84,9 @@ void yonder_scripts_canvas_visit_damage(yonder_scripts_t *,os64_dom_canvas_damag
 void yonder_scripts_canvas_painted(yonder_scripts_t *, const os64_html_node_t *);
 
 typedef struct {
+    // Native host opt-in for the composed callback and browser job policy.
+    // Normal Yonder configuration leaves this false pending F4 acceptance.
+    bool browser_jobs;
     const char *url;                // the page's address: names, location, a src's base
     uint64_t execution_ms;          // each task's budget (Settings' script time limit)
     size_t memory_bytes;            // the page's script heap (yonder.conf's script_memory_mb); 0: libjs's own

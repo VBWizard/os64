@@ -80,7 +80,7 @@ static JSValue refused(JSContext *ctx)
 static JSValue screen_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                              JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
@@ -89,7 +89,7 @@ static JSValue screen_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         const char *name = magic == W_SCREEN ? "screen" : "devicePixelRatio";
         /* [Replaceable]: the assignment becomes window's own property. */
         if (set) {
-            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue global = d_binding_global(dom, ctx);
             int done = JS_DefinePropertyValueStr(ctx, global, name, JS_DupValue(ctx, argc > 0 ? argv[0] : JS_UNDEFINED),
                                                  JS_PROP_C_W_E);
             JS_FreeValue(ctx, global);

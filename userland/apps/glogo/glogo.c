@@ -56,10 +56,11 @@ int main(int argc, char **argv)
 	int32_t w = (int32_t)ctx.surf.width;
 	int32_t h = (int32_t)ctx.surf.height;
 
-	// [3] The frame clock. frame_wait anchors to the last frame BOUNDARY and
-	//     sleeps only the remainder of the budget, so the cadence is honest
-	//     regardless of how long drawing took — and it returns the REAL
-	//     elapsed ms, which is what all animation advances by.
+	// [3] The frame clock. Bound to the window and drawing every frame, as
+	//     the sweep is, frame_wait is paced by the display's frames (draw.h),
+	//     so the cadence is honest regardless of how long drawing took — and
+	//     it returns the REAL elapsed ms, which is what all animation
+	//     advances by.
 	os64_frame_clock_t tick;
 	os64_frame_clock_init(&tick);
 	os64_frame_clock_bind(&tick, win);   // sleep while nobody can see the sweep

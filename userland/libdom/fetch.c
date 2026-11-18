@@ -2662,8 +2662,9 @@ static void host_request(const DReq *q, const char *headers, size_t headers_leng
 static JSValue fetch_function(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
 {
     (void)self; (void)magic;
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
-    if (dom == NULL) return JS_EXCEPTION;
+    bool guarded = (magic & D_WINDOW_MEMBER) != 0;
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return guarded ? d_promise_settled(ctx, JS_EXCEPTION) : JS_EXCEPTION;
     /* § 5.6: a Request made from the arguments, as `new Request` makes
      * one; whatever that throws rejects. */
     JSValue prototype = JS_GetClassProto(ctx, os64_js_class_id(&request_slot));

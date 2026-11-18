@@ -25,31 +25,22 @@ algorithms, with nested callback preparation and restoration.
 
 ## Ordinary Promise adoption is a separate lifetime boundary
 
-A callback throwing after implementation realm D retires exposes the distinction
-between a private continuation and ordinary Promise work. WebIDL's post-cleanup
-exception conversion creates a rejected Promise, then converts it through a
-fresh Promise capability. That conversion reads `then`; a queued adoption using
-D's intrinsic `then` is still D-owned under the existing runtime contract.
-Retirement discards that job without settling its Promise. A live B callback can
-therefore run once and throw correctly while the resulting stream operation
-remains pending, with no runnable jobs. This is the current embedding's retirement
-limitation, not a claim that WebIDL requires pending completion.
+WebIDL's post-cleanup exception conversion creates a rejected Promise, then
+converts it through a fresh Promise capability. Ordinary adoption follows the
+observed `then` function's owner; retirement discards that job without settling
+its Promise. Private microtask admission alone does not change this rule.
 
-The proof checks both sides: without retirement the identical callback rejects
-with its original error; with D retired it records one discarded job, no queued
-work and no error misreported into the live caller. Changing `then` to a live E
-function or E's native intrinsic follows E's ordinary job ownership and completes.
-A departed D function or native intrinsic is discarded. The `then` getter is
-read once after callback cleanup; getter exceptions and mutable species effects
-remain observable. No private wrapper bypasses those properties, and no broad
-neutrality is assigned to native Promise functions.
+The [host capability milestone](IFRAME_F4_HOST_PROMISE_LIFETIME.md) supplies
+explicit admission for native adoption and its private forwarding reactions.
+The Streams callback opt-in uses it for return conversion, including the
+post-cleanup thrown-callback path. A direct native intrinsic can complete after
+implementation departure; author replacements, bound functions and proxies
+retain ordinary ownership. Observable `then` and species lookups remain.
 
-Full retained error-path completion requires a separately reviewed lifetime
-policy. It remains an F.4 gate alongside the other settings/security and browser
-job policies. This cut does not complete F.4b or authorize WindowProxy publication.
-The underlying rules are in `userland/libjs/CONTRACT.md` (realm-owned jobs and
-discard), WebIDL's [callback invocation](https://webidl.spec.whatwg.org/#invoke-a-callback-function)
-and [Promise conversion](https://webidl.spec.whatwg.org/#js-promise).
+The current continuation fixtures assert completion for private native adoption
+and retain ordinary discard controls. The validation counts below record the
+original microtask cut; the host capability milestone records its updated proof.
+This does not complete the remaining F.4b browser/security gates.
 
 ## Validation
 
@@ -64,8 +55,8 @@ release their queue/value/context holds.
 abort, encoding transforms, Response consumption and async iteration after D
 retires. It adds the live/departed thrown-callback controls and mutable then,
 foreign-native then, throwing getter and species observations described above.
-These are seven completion families plus an explicit ordinary-adoption boundary,
-not a claim that every retained operation completes.
+The private capability milestone adds retained thrown-callback completion
+across the callback families; ordinary author adoption remains a boundary.
 
 ASan/UBSan and normal-exit LeakSanitizer remain enabled. The engine uses the
 harness's ASan instrumentation. Target compilation is not guest/P5 acceptance.

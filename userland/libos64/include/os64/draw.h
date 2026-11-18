@@ -179,11 +179,13 @@ static inline int64_t os64_draw_publish(os64_draw_ctx_t *ctx,
 
 typedef struct os64_frame_clock
 {
-    uint64_t last_ms;          // real time at the last frame boundary
+    uint64_t last_us;          // real time (micros) at the last frame boundary
     int64_t  window;           // bound window, or -1: the clock does not know
                                // whether anyone is watching
-    uint32_t immediate_wakes;  // covered waits in a row that returned at once
+    uint32_t immediate_wakes;  // waits in a row that returned at once
                                // (library bookkeeping; see os64_frame_wait)
+    uint32_t period_ns;        // the display's period, as its frames last said
+    bool     asked;            // a frame request of ours is unanswered
 } os64_frame_clock_t;
 
 void os64_frame_clock_init(os64_frame_clock_t *clock);
@@ -199,11 +201,23 @@ void os64_frame_clock_init(os64_frame_clock_t *clock);
 // the clock paces regardless.
 void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window);
 
-// Sleep out the remainder of `budget_ms` since the last frame boundary
-// (0 = don't sleep, just measure), then advance the boundary. Returns the
-// REAL elapsed ms since the previous call — the dt to advance state by.
-// Never 0 while your window is visible: the floor of 1ms is honest about
-// the tick clock's granularity, and a zero would freeze integrators.
+// Wait out `budget_ms` (0 = don't wait, just measure), then advance the
+// boundary. Returns the REAL elapsed ms since the previous call — the dt to
+// advance state by. Never 0 while your window is visible: the floor of 1ms
+// is honest about the clock's granularity, and a zero would freeze
+// integrators.
+//
+// HOW IT WAITS (FRAME_CLOCK.md § 6). Bound to a window, with a budget of
+// OS64_FRAME_PACE_MAX_MS or less, while your window has PUBLISHED since the
+// clock last asked, it is paced by the DISPLAY: the budget becomes a whole
+// number of frames, rounded to the nearest and at least one (16 and 20 ms
+// are every frame, 33 every second, 100 every sixth), and the call returns
+// when that many frames have been shown. It returns sooner when your window
+// has another event to service, leaving the event for your poll. A program
+// with nothing new to draw is not the display's customer: it sleeps out its
+// budget as before, so an idle window never keeps the display's clock
+// running; the first wait after a publish is paced again. A longer budget,
+// or no bound window, always sleeps.
 //
 // While your window is COVERED (a bound clock only): the call sleeps until
 // the window has an event to service and then returns — ONE BUDGET if the
@@ -218,6 +232,7 @@ void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window);
 // you leave there wakes it again at once (a caller that does not drain is
 // held to a nap per pass rather than allowed to spin, but that is a floor,
 // not the design).
+#define OS64_FRAME_PACE_MAX_MS 100
 uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms);
 
 #endif // OS64_DRAW_H

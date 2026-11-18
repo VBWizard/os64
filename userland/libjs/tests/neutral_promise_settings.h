@@ -73,7 +73,7 @@ static JSValue neutral_probe(JSContext *ctx, JSValueConst self, int argc,
     return JS_UNDEFINED;
 }
 
-static bool neutral_open(NeutralPromise *f,int policy,bool enabled,bool script)
+static bool neutral_open(NeutralPromise *f,int policy,int enabled,bool script)
 {
     *f=(NeutralPromise){.enabled=enabled,.script=script};neutral_promise=f;
     os64_js_config_t config=fixture_config();os64_js_outcome_t out;
@@ -81,7 +81,8 @@ static bool neutral_open(NeutralPromise *f,int policy,bool enabled,bool script)
           "neutral Promise: runtime created");if(!f->runtime)return false;
     check(os64_js_enable_neutral_promise_settings(f->runtime,"wrong-abi",&out)==OS64_JS_ABI_MISMATCH,
           "neutral Promise: configuration checks ABI");
-    check((enabled?os64_js_enable_neutral_promise_settings(f->runtime,OS64_JS_ABI_ID,&out):
+    check((enabled==2?os64_js_enable_browser_jobs(f->runtime,OS64_JS_ABI_ID,&out):
+           enabled?os64_js_enable_neutral_promise_settings(f->runtime,OS64_JS_ABI_ID,&out):
                    os64_js_enable_import_settings(f->runtime,OS64_JS_ABI_ID,&out))==OS64_JS_OK,
           "neutral Promise: explicit configuration selected before execution");
     f->realm[0]=os64_js_primary_realm(f->runtime,OS64_JS_ABI_ID,&out);
@@ -232,4 +233,52 @@ static void neutral_promise_settings_cases(void)
     }
 
 }
+
+static JSValue browser_raw_throw(JSContext *ctx,int argc,JSValueConst *argv)
+{
+    (void)argc; (void)argv;
+    return JS_ThrowTypeError(ctx,"raw sibling");
+}
+
+/* Policy must apply at each host checkpoint entry, without changing the
+ * exception value or assigning authority to the realm used for diagnostics. */
+static void browser_job_reporting_cases(void)
+{
+    for (int policy=OS64_JS_TEARDOWN_FATAL; policy<=OS64_JS_TEARDOWN_RECLAIM; policy++)
+    for (int mode=0; mode<3; mode++) {
+        NeutralPromise f;
+        if (!neutral_open(&f,policy,2,true)) { neutral_close(&f); continue; }
+        os64_js_outcome_t out;
+        RealmReports hosts[4] = {0};
+        for (int i=0;i<4;i++) { hosts[i].context=f.ctx[i]; realm_host(f.realm[i],&hosts[i]); }
+        check(realm_execute(f.realm[2],"globalThis.error=new Error('neutral-capability');"
+              "cap=x=>{probe(x);throw error}",&out)==OS64_JS_OK,"browser jobs: throwing capability prepared");
+        check(realm_execute(f.realm[0],"pending.then()",&out)==OS64_JS_OK,"browser jobs: absent handler registered");
+        if(mode)check(os64_js_realm_task_begin(f.realm[3],OS64_JS_ABI_ID,"settlement",&out)==OS64_JS_OK,
+                      "browser jobs: explicit task opens");
+        check((mode ? promise_settings_eval(f.realm[3],"resolve(73)",&out) :
+              os64_js_eval(f.runtime,"D.resolve(73)",13,"settlement",&out))==OS64_JS_OK,
+              "browser jobs: foreign resolver settles without an implicit checkpoint");
+        os64_js_status_t result=mode==0?os64_js_drain_jobs(f.runtime,64,&out):
+            mode==1?os64_js_checkpoint(f.runtime,OS64_JS_ABI_ID,&out):
+                    os64_js_task_end(f.runtime,OS64_JS_ABI_ID,&out);
+        check(result==OS64_JS_EXCEPTION && fixture_contains(out.message,"neutral-capability"),
+              "browser jobs: abrupt neutral job keeps host diagnostic");
+        check(f.calls==1 && hosts[0].exceptions+hosts[1].exceptions+hosts[2].exceptions+hosts[3].exceptions==0,
+              "browser jobs: no guessed window receives a neutral error");
+        if(mode==1)check(os64_js_task_end(f.runtime,OS64_JS_ABI_ID,&out)==OS64_JS_OK,
+                         "browser jobs: checkpoint does not close task");
+        check(os64_js_enable_browser_jobs(f.runtime,OS64_JS_ABI_ID,&out)==OS64_JS_BUSY,
+              "browser jobs: policy cannot change after execution");
+        /* Generic native jobs are not neutral Promise reactions: retain their
+         * original reporting destination even when preparation is absent. */
+        check(os64_js_realm_task_begin(f.realm[3],OS64_JS_ABI_ID,"raw sibling",&out)==OS64_JS_OK,
+              "browser jobs: raw sibling task begins");
+        check(JS_EnqueueJob(f.ctx[3], browser_raw_throw, 0, NULL)==0,"browser jobs: raw sibling queued");
+        check(os64_js_task_end(f.runtime,OS64_JS_ABI_ID,&out)==OS64_JS_EXCEPTION && hosts[3].exceptions==1,
+              "browser jobs: raw job report policy preserved");
+        neutral_close(&f);
+    }
+}
+
 #endif

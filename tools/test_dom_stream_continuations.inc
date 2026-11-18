@@ -48,8 +48,6 @@ static void dom_stream_continuation_cases(void)
             "globalThis.done=0;globalThis.failure=undefined;A.sink.abort().then(()=>done++,e=>{failure=e;done++})"};
         check(os64_js_realm_run(ce_realms[4],run[family],strlen(run[family]),"stream-consume",&out)==OS64_JS_OK,
               "stream continuations: E consumes retained data and schedules algorithms");
-        if(mode==7)check(out.jobs_discarded==1&&!out.jobs_pending&&!JS_IsJobPending(JS_GetRuntime(ce_contexts[0])),
-                        "stream continuations: ordinary D-owned adoption is discarded with no runnable jobs");
         static const char *const verify[]={
             "assert(values.length===2&&values[0]===7&&values[1]===7)",
             "assert(values.length===2&&values.includes(7)&&values.includes(8))",
@@ -60,7 +58,7 @@ static void dom_stream_continuation_cases(void)
             "assert(value===7)",
             "assert(done===1&&failure===B.error)"};
         char label[128];snprintf(label,sizeof(label),"stream continuations: departure completion policy=%d family=%u",policy,mode);
-        realm_script(ce_realms[4],mode==7?"assert(done===0&&failure===undefined&&errors.length===0)":verify[family],label);
+        realm_script(ce_realms[4],verify[family],label);
         if(family==7)check(flow_calls==1,"stream continuations: live B throws once in both lifetime controls");
         if(mode!=4)check(flow_calls>0,"stream continuations: author callbacks reached checked scope");
         check(!JS_GetEntryContext(JS_GetRuntime(ce_contexts[0]))&&!JS_GetIncumbentContext(JS_GetRuntime(ce_contexts[0])),
@@ -124,14 +122,37 @@ static void dom_stream_conversion_observation_cases(void)
         const char *source="globalThis.done=0;globalThis.failure=undefined;Promise.prototype.savedThen.call(A.sink.abort(),()=>done++,e=>{failure=e;done++})";
         check(os64_js_realm_run(ce_realms[4],source,strlen(source),"stream-observe",&out)==OS64_JS_OK,
               "stream conversion: result observed through live intrinsic without rereading D.then");
-        bool discarded=mode==2||mode==4;
+        bool discarded=mode==2;
         check(out.jobs_discarded==(unsigned)discarded&&!out.jobs_pending,
-              "stream conversion: actual then owner decides retirement, including native functions");
+              "stream conversion: author then retains retirement; explicit native adoption completes");
         realm_script(ce_realms[4],discarded?"assert(done===0&&failure===undefined&&errors.length===0)":"assert(done===1&&failure===B.error)",
                      "stream conversion: throws and replacement then preserve error identity; dead jobs remain pending");
         check(flow_calls==1&&flow_gets==(unsigned)(mode!=6)&&flow_then_calls==(unsigned)(mode==0||mode==5),
               "stream conversion: callback and observable then getter run once; departed then does not run");
         if(mode==6)check(flow_species_calls>0,"stream conversion: species getter effects preserved");
+        ce_close(&f);
+    }
+}
+
+/* A retained operation must complete both successful callback conversion and
+ * thrown-callback conversion after its implementation document departs. */
+static void dom_stream_retained_error_cases(void)
+{
+    for(int policy=OS64_JS_TEARDOWN_FATAL;policy<=OS64_JS_TEARDOWN_RECLAIM;policy++)
+    for(unsigned family=0;family<4;family++)for(unsigned operation=0;operation<2;operation++) {
+        CeFixture f;if(!sc_open(&f,policy,family,true)){ce_close(&f);continue;}
+        sc_construct(family);os64_js_outcome_t out;
+        check(os64_js_realm_retire(ce_realms[3],OS64_JS_ABI_ID,&out)==OS64_JS_OK,
+              "retained stream errors: implementation departs before callback throws");
+        sc_throw=true;JS_RunGC(JS_GetRuntime(ce_contexts[0]));
+        char source[768];snprintf(source,sizeof(source),
+            "globalThis.done=0;globalThis.failure=undefined;%s.then(()=>done++,e=>{done++;failure=e})",
+            sc_operation(family,operation!=0));
+        realm_script(ce_realms[4],source,"retained stream errors: live E invokes live B callback on D data");
+        realm_script(ce_realms[4],"assert(done===1&&failure===C.error)",
+                     "retained stream errors: throw rejects exactly once with original identity");
+        check(sc_calls[operation?2:1]==1,"retained stream errors: author callback runs once");
+        check(!JS_IsJobPending(JS_GetRuntime(ce_contexts[0])),"retained stream errors: conversion leaves no queued work");
         ce_close(&f);
     }
 }

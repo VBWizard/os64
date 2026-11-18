@@ -62,6 +62,9 @@ typedef enum input_event_type
     INPUT_EVENT_INPUT_LOST,
     INPUT_EVENT_WINDOW_PLACEMENT,
     INPUT_EVENT_WINDOW_PIN_CHANGED,
+    // The answer to a frame request (FRAME_CLOCK.md § 6); coalesced outside
+    // the ring, as the doorbell is.
+    INPUT_EVENT_FRAME,
 } input_event_type_t;
 
 _Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
@@ -78,6 +81,7 @@ _Static_assert(INPUT_EVENT_INPUT_LOST == OS64_GUI_EVENT_INPUT_LOST, "event ABI: 
 _Static_assert(INPUT_EVENT_DOORBELL == OS64_GUI_EVENT_DOORBELL, "event ABI: doorbell");
 _Static_assert(INPUT_EVENT_WINDOW_PLACEMENT == OS64_GUI_EVENT_WINDOW_PLACEMENT, "event ABI: placement");
 _Static_assert(INPUT_EVENT_WINDOW_PIN_CHANGED == OS64_GUI_EVENT_WINDOW_PIN_CHANGED, "event ABI: pin state");
+_Static_assert(INPUT_EVENT_FRAME == OS64_GUI_EVENT_FRAME, "event ABI: frame");
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
 // BUTTON_DOWN/UP events). These numbers are ABI — they ride out to ring 3 in
@@ -139,6 +143,13 @@ typedef struct input_event
             int32_t x, y;
             uint32_t width, height, changed;
         } placement;
+        struct {
+            // Split words, as appearance's (OS64_GUI_EVENT_FRAME says what
+            // each means).
+            uint32_t number_lo, number_hi;
+            uint32_t blank_lo, blank_hi;
+            uint32_t period_ns;
+        } frame;
     };
     uint64_t tick;  // enqueue ticks; zero for synthesized INPUT_LOST
 } input_event_t;

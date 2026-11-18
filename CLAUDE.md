@@ -1463,6 +1463,23 @@ is the expected number; `echo stall 1500 > /sys/gui` proves it on any
 machine). `NOFRAMECLOCK` turns it off for a boot, as do one CPU,
 `SCHED=periodic` and `NOBACKSTOP` (the frame wake shares the CPU's timer
 by the lease's discipline).
+**Ring 3 gets the display's frame** (FRAME_CLOCK.md § 6, the request's
+states): `os64_gui_frame_request` (syscall 69) asks for an owned window's
+next frame, one-shot, and the answer is `OS64_GUI_EVENT_FRAME` in its queue,
+coalesced outside the ring (one waits unread at most), with the frame's
+number (a count of the display's refreshes, so a rise of more than one
+means refreshes went by unanswered), when its blank began and the period.
+A frame answers only requests made before its pass. A covered window is
+answered nothing, and only shown waiters keep the clock running; with the
+clock off, answers ride the tick-driven passes, a period apart at least.
+`OS64_GUI_FRAME_IF_DRAWN` asks only if the window has published since it
+last asked (the kernel keeps the mark: every publish passes through it), so
+an idle program is never the clock's customer. `os64_gui_frame_take` (70)
+takes the answer alone, leaving every other event, for a pacer inside a
+program's own loop: **`os64_frame_wait` is built on both**, paced by frames
+for a bound window, a budget of 100 ms or less, while it draws; sleeping
+otherwise. `/sys/gui`'s `frame requests:` line; fixture `/tests/frametest`;
+`glassbench -p frame`.
 
 **Failure fingerprints (logging):**
 

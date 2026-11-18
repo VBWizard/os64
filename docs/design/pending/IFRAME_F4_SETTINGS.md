@@ -259,6 +259,8 @@ DOM conversion are recorded in
 FinalizationRegistry capture, cleanup scopes, lifecycle gates and registry-realm
 exception reporting have a separate opt-in described in
 [IFRAME_F4_FINALIZATION_SETTINGS.md](IFRAME_F4_FINALIZATION_SETTINGS.md).
+Separate host task dispatch, delayed unregister and transactional queue ownership
+are described in [IFRAME_F4_FINALIZATION_TASKS.md](IFRAME_F4_FINALIZATION_TASKS.md).
 
 Current-settings base capture for imports without a source record is described in
 [IFRAME_F4_IMPORT_SETTINGS.md](IFRAME_F4_IMPORT_SETTINGS.md).
@@ -285,15 +287,18 @@ Before publishing browser settings queries, implement and prove:
   to the remaining WebIDL conversion and invocation sites and Streams continuation boundaries,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.
-- Resolve retained Streams error-path completion where ordinary realm-owned
-  Promise adoption is discarded after implementation departure. Do not grant
-  neutral lifetime authority by treating mutable Promise methods as private work.
-- Complete browser finalization task scheduling and the unresolved neutral-job
-  exception-reporting policy. The [neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md)
-  supplies actual capability current/script incumbent without inventing entry or
-  backup settings; it does not complete those remaining browser host algorithms.
-- A pre-member-check boundary that refuses missing settings, with no guessed
-  bootstrap caller. Security/lifetime review precedes browser publication.
+- Retained Streams native error conversion uses the explicit
+  [host capability policy](IFRAME_F4_HOST_PROMISE_LIFETIME.md). Author replacement
+  adoption retains ordinary retirement discard; it is not private continuation work.
+- The [browser job policy](IFRAME_F4_BROWSER_JOBS.md) connects opt-in task
+  selection and neutral-job diagnostics. Default browser activation remains
+  gated on the binding/security acceptance here; the
+  [neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md) supplies actual
+  capability current/script incumbent without inventing entry or backup settings.
+- The private [Location member boundary](IFRAME_F4_BINDING_AUTHORITY.md)
+  refuses missing settings and checks explicit origin-bearing bindings before
+  conversion. Other Window members, property exotics and navigation authorization
+  remain; security/lifetime review precedes browser publication.
 
 These remain F.4b completion gates and prerequisites for F.4d. The raw APIs
 are not security checks. No binding may substitute native dispatch facts or
