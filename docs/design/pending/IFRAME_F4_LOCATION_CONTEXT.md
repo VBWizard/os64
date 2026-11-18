@@ -2,8 +2,9 @@
 
 This milestone separates three identities: the Location receiver's original
 binding, its context's active document, and the calling operation's settings.
-It uses the private origin-bearing context seam; it does not publish a
-WindowProxy or a cross-origin Location exotic.
+It uses the private origin-bearing context seam. The
+[Location property layer](IFRAME_F4_LOCATION_EXOTIC.md) supplies private exotics;
+WindowProxy publication remains gated.
 
 ## Behavior and boundaries
 
@@ -42,8 +43,9 @@ remain open. F.4 remains in progress, and F.15 reclamation remains gated.
 ## Ownership and validation
 
 Lookup is allocation-free and uses the existing bounded context and binding
-registries. No new object holds, fields, public API, engine patch or ABI change
-are needed. The retained relevant binding owns the Location; context publication
+registries. The routing change itself needs no new object holds, fields, public API, engine
+patch or ABI change. The companion property layer owns separate backing/cache
+holds under its own contract. The retained relevant binding owns the Location; context publication
 chooses the document independently. Reclaiming either registry before root
 teardown remains outside this contract.
 

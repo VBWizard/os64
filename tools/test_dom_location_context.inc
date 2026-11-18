@@ -88,6 +88,8 @@ static void dom_location_context_cases(void)
             "Location: same-cross-same preserves old identity and current data");
         check(d_browsing_context_discard(c[2],4,&out)==OS64_JS_OK,"Location: discard context");
         check(!d_navigation_dispatch(c[2],navigation_consume,&n,&out),"Location: discard invalidates pending navigation");
+        realm_script(ce_realms[1],"void C.loc.replace;Object.getOwnPropertyDescriptor(C.loc,'href')",
+            "Location: prepare cross-origin descriptors before measuring tombstone calls");
         calls=n.snapshots;charge=f.cluster->bytes;
         realm_script(ce_realms[0],
             "assert(oldLoc.href==='about:blank'&&String(oldLoc)==='about:blank');"

@@ -358,7 +358,7 @@ static JSValue location_member(os64_dom_t *owner, JSContext *ctx, JSValueConst s
     }
     if (context && !cross_origin && (reads_url || member == L_RELOAD ||
             (set && member != L_HASH))) {
-        os64_dom_t *entry = navigation_settings(document, OS64_JS_SETTINGS_ENTRY);
+        os64_dom_t *entry = origin_settings(document, OS64_JS_SETTINGS_ENTRY);
         if (!entry || !way_origin_same(entry->binding_origin, document->binding_origin))
             return navigation_denied(ctx);
     }
@@ -1911,8 +1911,12 @@ void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts,
     }
 }
 
+
+#include "location_exotic.inc"
+
 void d_window_free(os64_dom_t *dom)
 {
+    location_exotic_free(dom);
     d_navigate(dom, OS64_DOM_NAVIGATE_NONE, NULL, NULL, NULL, 0);
     for (size_t i = 0; i < sizeof(dom->scripts) / sizeof(dom->scripts[0]); i++)
         while (dom->scripts[i] != NULL) {

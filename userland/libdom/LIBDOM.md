@@ -658,6 +658,11 @@ pre-WebIDL caller and the active document against entry settings, and routes
 navigation through native policy. Discarded contexts supply the blank URL and
 no navigation; inactive targets without committed discard refuse. See
 [retained Location](../../docs/design/pending/IFRAME_F4_LOCATION_CONTEXT.md).
+Origin-bearing bootstrap also installs the private
+[Location property layer](../../docs/design/pending/IFRAME_F4_LOCATION_EXOTIC.md):
+current-origin property checks, reflective defaults, immutable prototype and
+bounded descriptor caches. Cached cross-origin operations retain their original
+Location target while invocation rechecks navigation authority.
 Taking an inactive document's legacy pending ask discards its node holds.
 WindowProxy publication remains gated. History uses its specified SecurityError
 inactive behavior, described below.
