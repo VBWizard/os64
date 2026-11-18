@@ -1,6 +1,7 @@
 // download_job.c — a download, on a worker (download_job.h).
 
 #include "download_job.h"
+#include "dom/dom.h"
 
 #include "os64/fmt.h"
 #include "os64/gui.h"
@@ -73,12 +74,45 @@ static int64_t staging_open(yonder_download_job_t *j)
     return -1;
 }
 
+static int64_t publish(yonder_download_job_t *j, int64_t h, bool whole, bool stopped,
+                       bool (*cancelled)(void *ctx), void *ctx);
+
+// A blob: address's download (BLOB_URLS.md): its entry's bytes written
+// from where they are, a chunk at a time so the meter moves.
+static int64_t blob_run(yonder_download_job_t *j, bool (*cancelled)(void *ctx), void *ctx)
+{
+    const uint8_t *bytes = os64_dom_blob_bytes(j->blob);
+    size_t len = os64_dom_blob_length(j->blob), at = 0;
+    __atomic_store_n(&j->total, (uint64_t)len, __ATOMIC_RELAXED);
+    int64_t h = staging_open(j);
+    if (h < 0)
+        return 0;
+    uint64_t rang = yonder_now_ms();
+    bool written = true;
+    while (written && at < len && !cancelled(ctx)) {
+        size_t n = len - at < YONDER_DOWNLOAD_CHUNK ? len - at : YONDER_DOWNLOAD_CHUNK;
+        written = write_all((int32_t)h, bytes + at, n);
+        at += n;
+        __atomic_store_n(&j->got, (uint64_t)at, __ATOMIC_RELAXED);
+        if (yonder_now_ms() - rang >= RING_MS) {
+            rang = yonder_now_ms();
+            (void)os64_gui_event_ring(j->window, j->bell);
+        }
+    }
+    bool stopped = cancelled(ctx);
+    if (!written)
+        fail(j, "the disk would not take more: full, or past its largest file");
+    return publish(j, h, written && !stopped && at == len, stopped, cancelled, ctx);
+}
+
 int64_t yonder_download_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out)
 {
     yonder_download_job_t *j = job;
     (void)out;                          // no product: the job is its own record
     if (cancelled(ctx))
         return -1;
+    if (j->blob != NULL)
+        return blob_run(j, cancelled, ctx);
     os64_fetch_options_t opt = {0};
     opt.user_agent = j->agent;
     opt.accept = "*/*";
@@ -133,6 +167,14 @@ int64_t yonder_download_run(void *job, bool (*cancelled)(void *ctx), void *ctx, 
     else if (!stopped && !whole)
         fail(j, os64_fetch_reason(f));
     os64_fetch_close(f);
+    return publish(j, h, whole, stopped, cancelled, ctx);
+}
+
+// The staging file `h` made the download, or removed: synced, closed and
+// renamed under its name when `whole` held, and the window told either way.
+static int64_t publish(yonder_download_job_t *j, int64_t h, bool whole, bool stopped,
+                       bool (*cancelled)(void *ctx), void *ctx)
+{
     if (whole && os64_sync((int32_t)h) < 0) {
         whole = false;
         fail(j, "the disk would not take it (is it full?)");
@@ -168,5 +210,7 @@ void yonder_download_release(void *job, void *product)
     (void)product;
     // Nothing to remove: a run cancelled before it began wrote nothing, and
     // one that ran published or removed its own staging file before returning.
+    if (job != NULL)
+        os64_dom_blob_release(((yonder_download_job_t *)job)->blob);
     os64_free(job);
 }

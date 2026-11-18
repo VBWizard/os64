@@ -101,6 +101,9 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"XMLHttpRequest", "XMLHttpRequestEventTarget", "XMLHttpRequestUpload", "ProgressEvent",
                            NULL},
      d_xhr_install},
+    /* After the blob row, whose Blobs it reads; its events are the XHR
+     * row's ProgressEvents. */
+    {(const char *const[]){"FileReader", NULL}, d_file_reader_install},
     {(const char *const[]){"opener", "closed", "clientInformation", "isSecureContext", "frameElement", "origin",
                            "crossOriginIsolated", "originAgentCluster", "close", "moveTo", "moveBy", "resizeTo",
                            "resizeBy", "captureEvents", "releaseEvents", "queueMicrotask", "ononline",

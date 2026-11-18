@@ -146,6 +146,13 @@ static void url_absolute(void)
         {"http://host/a.css", "https://other:443/c.css", "https://other/c.css"},
         {"mailto:x@y", "a.css", NULL},
         {"http://host/a.css", "", NULL},
+        // An opaque reference is its own answer; against an opaque base (a
+        // blob: sheet's), an absolute reference resolves and a relative
+        // one does not.
+        {"http://host/a.css", "BLOB:null/1234", "blob:null/1234"},
+        {"blob:http://host/1234", "https://cdn:443/f.woff", "https://cdn/f.woff"},
+        {"blob:http://host/1234", "blob:http://host/5678", "blob:http://host/5678"},
+        {"blob:http://host/1234", "pic.png", NULL},
     };
     for (int32_t i = 0; i < (int32_t)(sizeof(k) / sizeof(k[0])); i++) {
         char out[512];

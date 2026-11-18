@@ -85,9 +85,16 @@ typedef struct {
     int64_t submitted_us;
     // Where a body from the network is streamed (fetch_pipe.h), the job
     // one of its two holders, which the job's release lets go; NULL
-    // answers whole. A body the cache or a data: URL gives is whole
-    // either way.
+    // answers whole. A body the cache, a data: URL or a blob: URL gives is
+    // whole either way.
     yonder_fetch_pipe_t *pipe;
+    // A blob: URL's entry (BLOB_URLS.md), taken where the standard parsed
+    // the URL and held: the run answers from it and never from the wire,
+    // and yonder_fetch_release lets it go. A job built to borrow another's
+    // fields (a sheet's) borrows this too, and is freed without the
+    // release. NULL for any other address, and for a blob: URL
+    // that named nothing, which is a network error.
+    struct os64_dom_blob *blob;
 } yonder_fetch_job_t;
 
 typedef struct {

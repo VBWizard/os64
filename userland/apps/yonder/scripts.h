@@ -372,11 +372,14 @@ void yonder_scripts_tree_gone(const void *tree);
 bool yonder_scripts_reactions_owed(const yonder_scripts_t *scripts);
 bool yonder_scripts_reactions_run(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 bool yonder_scripts_custom_failure(const yonder_scripts_t *scripts, const char *name, char *out, size_t cap);
-// The page's posted messages (os64_dom_message_next/_fire): when the oldest
-// was posted, on yonder_now_ms' clock (UINT64_MAX for none), and the oldest
-// run as one task. False when nothing ran.
+// The page's posted messages and the binding's own tasks on their queue
+// (os64_dom_message_next/_fire/_kind): when the oldest was queued, on
+// yonder_now_ms' clock (UINT64_MAX for none), the oldest run as one task
+// (false when nothing ran), and the source of the task the last fire ran,
+// for the record ("message" before any).
 uint64_t yonder_scripts_message_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_message_fire(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+const char *yonder_scripts_message_kind(const yonder_scripts_t *scripts);
 // The page's idle callbacks (os64_dom_idle_next/_run): when one may run,
 // on yonder_now_ms' clock (0: now; UINT64_MAX: none), and one run as one
 // task, which the binding refuses while the page has a task of its own
@@ -405,6 +408,9 @@ bool yonder_scripts_piece(yonder_scripts_t *scripts, uint32_t token, const uint8
 bool yonder_scripts_end(yonder_scripts_t *scripts, uint32_t token, bool ok, os64_js_outcome_t *outcome);
 // The navigation the last task asked for; nodes arrive held.
 bool yonder_scripts_take_navigation(yonder_scripts_t *scripts, os64_dom_navigation_t *ask);
+// The page's blob URL store (BLOB_URLS.md): what its doors take a blob:
+// address's entry from; NULL for none (no scripts host, or no memory).
+os64_dom_blob_store_t *yonder_scripts_blobs(const yonder_scripts_t *scripts);
 // A new task budget, from the next task on, and the budget tasks have.
 void yonder_scripts_set_execution_ms(yonder_scripts_t *scripts, uint64_t ms);
 uint64_t yonder_scripts_execution_ms(const yonder_scripts_t *scripts);

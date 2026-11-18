@@ -1433,7 +1433,9 @@ int d_url_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JSValue url_interface = d_interface_new(ctx, "URL", 1, url_constructor, url->value, JS_UNDEFINED);
     if (JS_IsException(url_interface)) return -1;
     if (d_method(dom, ctx, url_interface, "canParse", url_member, 1, D_URL_CAN_PARSE) < 0 ||
-        d_method(dom, ctx, url_interface, "parse", url_member, 1, D_URL_PARSE) < 0) {
+        d_method(dom, ctx, url_interface, "parse", url_member, 1, D_URL_PARSE) < 0 ||
+        d_method(dom, ctx, url_interface, "createObjectURL", d_blob_url_member, 1, D_BLOB_URL_CREATE) < 0 ||
+        d_method(dom, ctx, url_interface, "revokeObjectURL", d_blob_url_member, 1, D_BLOB_URL_REVOKE) < 0) {
         JS_FreeValue(ctx, url_interface);
         return -1;
     }

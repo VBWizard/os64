@@ -274,6 +274,8 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_implementation.inc"
 #include "test_dom_attributes.inc"
 #include "test_dom_fetch.inc"
+#include "test_dom_blob.inc"
+#include "test_dom_file_reader.inc"
 #include "test_dom_window.inc"
 #include "test_dom_report.inc"
 #include "test_dom_document.inc"
@@ -669,6 +671,8 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--scroll")){dom_geometry_cases();dom_element_scroll_cases();dom_view_cases();printf("DOM scroll probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--intersection")){dom_intersection_cases();printf("DOM intersection probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--resize")){dom_resize_cases();printf("DOM resize probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--blob")){dom_blob_cases();printf("DOM blob probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--file-reader")){dom_file_reader_cases();printf("DOM file reader probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--media")){dom_media_cases();printf("DOM media probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}    if(argc==2&&!strcmp(argv[1],"--walker")){dom_walker_cases();printf("DOM walker probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--performance")){dom_performance_cases();dom_performance_observer_cases();printf("DOM performance probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -773,6 +777,8 @@ int main(int argc, char **argv)
     dom_intersection_cases();
     dom_resize_cases();
     dom_media_cases();
+    dom_blob_cases();
+    dom_file_reader_cases();
     dom_walker_cases();
     dom_import_map_cases();
     dom_geometry_cases();

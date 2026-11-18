@@ -2,6 +2,7 @@
 // (webfont.h).
 
 #include "webfont.h"
+#include "dom/dom.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/slurp.h"
@@ -52,6 +53,16 @@ int64_t yonder_webfont_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         return -1;
     *out = f;
     f->container = YONDER_FONT_UNKNOWN;
+    // A blob: address's font is its entry's bytes, read in place
+    // (BLOB_URLS.md); make_sfnt keeps its own copy of a face it takes.
+    if (j->blob != NULL) {
+        size_t len = os64_dom_blob_length(j->blob);
+        if (len > 0 && len <= OS64_FONT_FILE_MAX)
+            make_sfnt(os64_dom_blob_bytes(j->blob), len, f);
+        else
+            os64_strcopy(f->why, sizeof(f->why), len == 0 ? "its blob: entry is empty" : "past the font file cap");
+        return f->ok ? 1 : 0;
+    }
     // A font on a page read from disk is a file beside it.
     if (os64_strlen(j->url) > 7 && os64_memcmp(j->url, "file://", 7) == 0) {
         size_t len = 0;
@@ -95,5 +106,7 @@ void yonder_webfont_release(void *job, void *product)
         os64_free(f->sfnt);
         os64_free(f);
     }
+    if (job != NULL)
+        os64_dom_blob_release(((yonder_webfont_job_t *)job)->blob);
     os64_free(job);
 }

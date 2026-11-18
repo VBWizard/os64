@@ -285,9 +285,11 @@ Event-defaultPrevented.html	returnValue should change defaultPrevented if cancel
 Event-defaultPrevented.html	returnValue should not change defaultPrevented if cancelable is false.
 Event-dispatch-bubble-canceled.html	Setting cancelBubble=true prior to dispatchEvent()
 Event-dispatch-bubbles-false.html	In DOMImplementation.createHTMLDocument()
+Event-dispatch-bubbles-false.html	In new Document()
 Event-dispatch-bubbles-false.html	In window.document with click event
 Event-dispatch-bubbles-false.html	In window.document with load event
 Event-dispatch-bubbles-true.html	In DOMImplementation.createHTMLDocument()
+Event-dispatch-bubbles-true.html	In new Document()
 Event-dispatch-bubbles-true.html	In window.document with click event
 Event-dispatch-bubbles-true.html	In window.document with load event
 Event-dispatch-click.tentative.html	checkbox morphed into another type should not mutate checked state
@@ -534,6 +536,12 @@ EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an In
 EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (UIEvent).
 EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (UIEvents).
 EventTarget-removeEventListener.any.html	removing a null event listener should succeed
+EventTarget-this-of-listener.html	addEventListener should not require handleEvent to be defined on object listeners
+EventTarget-this-of-listener.html	dispatchEvent should invoke the current handleEvent method of the object
+EventTarget-this-of-listener.html	handleEvent properties added to a function after addEventListener are not reached
+EventTarget-this-of-listener.html	handleEvent properties added to a function before addEventListener are not reached
+EventTarget-this-of-listener.html	the this value inside the event listener callback should be the node
+EventTarget-this-of-listener.html	the this value inside the event listener object handleEvent should be the object
 EventTarget-window-constructor.html	Modifying window.constructor does not affect event dispatch
 KeyEvent-initKeyEvent.html	KeyboardEvent.initKeyEvent shouldn't be defined (created by constructor)
 KeyEvent-initKeyEvent.html	KeyboardEvent.initKeyEvent shouldn't be defined (created by createEvent("KeyboardEvent")
@@ -545,6 +553,7 @@ event-disabled-dynamic.html	disabled is honored properly in presence of dynamic 
 event-global-event-targets.html	An event target's _document property does not affect window.event
 event-global-event-targets.html	window.event is set when dispatching on AbortSignal
 event-global-event-targets.html	window.event is set when dispatching on EventTarget
+event-global-event-targets.html	window.event is set when dispatching on FileReader
 event-global-event-targets.html	window.event is set when dispatching on Performance
 event-global-set-before-handleEvent-lookup.window.html	window.event is set before 'handleEvent' lookup
 event-global.html	event exists on window, which is initially set to undefined

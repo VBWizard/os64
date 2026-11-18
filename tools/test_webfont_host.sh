@@ -33,8 +33,10 @@ cc -std=c11 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-
    -fno-builtin -fno-tree-loop-distribute-patterns \
    -I userland/apps/yonder -I userland/libgzip/include -I userland/libway/include \
    -I userland/libfetch/include -I userland/libtls/include -I userland/libhtml/include \
-   -I userland/libpage/include -I userland/libos64/include -I abi/include \
+   -I userland/libpage/include -I userland/libos64/include -I userland/libdom/include \
+   -I userland/libjs/include -I abi/include \
    userland/apps/yonder/webfont.c userland/apps/yonder/font_unwrap.c userland/libgzip/zlib.c \
    userland/libgzip/inflate.c userland/libos64/str.c userland/libos64/fmt.c tools/test_webfont_host.c \
+   tools/host_blob_stub.c \
    -o "$work/webfont"
 "$work/webfont" "$ttf" "$work/a.woff"

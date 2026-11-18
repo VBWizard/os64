@@ -77,6 +77,7 @@ WPT_DIRS=(
     html/webappapis/structured-clone
     requestidlecallback
     webmessaging/without-ports
+    FileAPI
     webmessaging/message-channels
     selection
     domparsing

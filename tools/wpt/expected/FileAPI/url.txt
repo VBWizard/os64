@@ -1,0 +1,89 @@
+# WPT's FileAPI/url in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh FileAPI/url --update
+# rewrites [passing].
+[required]
+# BLOB_URLS.md, B1: a blob URL's form and origin, and fetch() and
+# XMLHttpRequest answered from its entry: taken where the URL is parsed
+# (fetch, the Request constructor, open()), so a revocation after it does
+# not reach the request; a revoked or altered URL failing; GET alone.
+url-format.any.html	Blob URL parses correctly
+url-format.any.html	Blob URL starts with "blob:"
+url-format.any.html	Blob URL starts with "blob:" for Files
+url-format.any.html	Generated Blob URLs are unique
+url-format.any.html	Origin of Blob URL matches our origin
+url-format.any.html	Origin of Blob URL matches our origin for Files
+url-with-fetch.any.html	Appending a path should cause fetch to fail
+url-with-fetch.any.html	Appending a query string should cause fetch to fail
+url-with-fetch.any.html	Blob URLs can be used in fetch
+url-with-fetch.any.html	Only exact matches should revoke URLs, using fetch
+url-with-fetch.any.html	Revoke blob URL after calling fetch, fetch should succeed
+url-with-fetch.any.html	Revoke blob URL after creating Request, then clone Request, will fetch
+url-with-fetch.any.html	Revoke blob URL after creating Request, will fetch
+url-with-fetch.any.html	fetch of a revoked URL should fail
+url-with-fetch.any.html	fetch should return Content-Type from Blob
+url-with-fetch.any.html	fetch with a fragment should succeed
+url-with-fetch.any.html	fetch with method "CUSTOM" should fail
+url-with-fetch.any.html	fetch with method "DELETE" should fail
+url-with-fetch.any.html	fetch with method "HEAD" should fail
+url-with-fetch.any.html	fetch with method "OPTIONS" should fail
+url-with-fetch.any.html	fetch with method "POST" should fail
+url-with-fetch.any.html	fetch with method "PUT" should fail
+url-with-xhr.any.html	Appending a path should cause XHR to fail
+url-with-xhr.any.html	Appending a query string should cause XHR to fail
+url-with-xhr.any.html	Blob URLs can be used in XHR
+url-with-xhr.any.html	Only exact matches should revoke URLs, using XHR
+url-with-xhr.any.html	Revoke blob URL after open(), will fetch
+url-with-xhr.any.html	XHR of a revoked URL should fail
+url-with-xhr.any.html	XHR should return Content-Type from Blob
+url-with-xhr.any.html	XHR with a fragment should succeed
+url-with-xhr.any.html	XHR with method "CUSTOM" should fail
+url-with-xhr.any.html	XHR with method "DELETE" should fail
+url-with-xhr.any.html	XHR with method "HEAD" should fail
+url-with-xhr.any.html	XHR with method "OPTIONS" should fail
+url-with-xhr.any.html	XHR with method "POST" should fail
+url-with-xhr.any.html	XHR with method "PUT" should fail
+[excluded]
+cross-global-revoke.sub.html	needs Worker (WORKERS.md W1)
+multi-global-origin-serialization.sub.html	needs frames (IFRAME.md)
+sandboxed-iframe.html	needs frames (IFRAME.md)
+url-charset.window.html	needs window.open
+url-lifetime.html	needs frames (IFRAME.md)
+url-reload.window.html	needs frames (IFRAME.md)
+[passing]
+url-format.any.html	Blob URL parses correctly
+url-format.any.html	Blob URL starts with "blob:"
+url-format.any.html	Blob URL starts with "blob:" for Files
+url-format.any.html	Generated Blob URLs are unique
+url-format.any.html	Origin of Blob URL matches our origin
+url-format.any.html	Origin of Blob URL matches our origin for Files
+url-with-fetch.any.html	Appending a path should cause fetch to fail
+url-with-fetch.any.html	Appending a query string should cause fetch to fail
+url-with-fetch.any.html	Blob URLs can be used in fetch
+url-with-fetch.any.html	Only exact matches should revoke URLs, using fetch
+url-with-fetch.any.html	Revoke blob URL after calling fetch, fetch should succeed
+url-with-fetch.any.html	Revoke blob URL after creating Request, then clone Request, will fetch
+url-with-fetch.any.html	Revoke blob URL after creating Request, will fetch
+url-with-fetch.any.html	fetch of a revoked URL should fail
+url-with-fetch.any.html	fetch should return Content-Type from Blob
+url-with-fetch.any.html	fetch with a fragment should succeed
+url-with-fetch.any.html	fetch with method "CUSTOM" should fail
+url-with-fetch.any.html	fetch with method "DELETE" should fail
+url-with-fetch.any.html	fetch with method "HEAD" should fail
+url-with-fetch.any.html	fetch with method "OPTIONS" should fail
+url-with-fetch.any.html	fetch with method "POST" should fail
+url-with-fetch.any.html	fetch with method "PUT" should fail
+url-with-xhr.any.html	Appending a path should cause XHR to fail
+url-with-xhr.any.html	Appending a query string should cause XHR to fail
+url-with-xhr.any.html	Blob URLs can be used in XHR
+url-with-xhr.any.html	Only exact matches should revoke URLs, using XHR
+url-with-xhr.any.html	Revoke blob URL after open(), will fetch
+url-with-xhr.any.html	XHR of a revoked URL should fail
+url-with-xhr.any.html	XHR should return Content-Type from Blob
+url-with-xhr.any.html	XHR with a fragment should succeed
+url-with-xhr.any.html	XHR with method "CUSTOM" should fail
+url-with-xhr.any.html	XHR with method "DELETE" should fail
+url-with-xhr.any.html	XHR with method "HEAD" should fail
+url-with-xhr.any.html	XHR with method "OPTIONS" should fail
+url-with-xhr.any.html	XHR with method "POST" should fail
+url-with-xhr.any.html	XHR with method "PUT" should fail

@@ -104,6 +104,12 @@ struct yonder_scripts {
     char *entry_state;
     os64_js_runtime_t *runtime;
     os64_dom_t *dom;
+    // The page's blob URL store (BLOB_URLS.md), handed to every binding the
+    // page makes and to the doors that take its entries; NULL when there
+    // was no memory for it, and URL.createObjectURL then refuses. How many
+    // of its refusals at the bound the record has a line for.
+    os64_dom_blob_store_t *blobs;
+    size_t blob_refused_said;
     // The layout counts a retired binding had, kept for the report that
     // asks after its task.
     const char *(*user_agent)(void *);
@@ -632,6 +638,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.last_modified = s->options.last_modified != 0 ? s->options.last_modified : OS64_DOM_NO_DATE;
     options.focus = s->options.focus != NULL ? focus : NULL;
     options.host_opaque = s;
+    options.blobs = s->blobs;
     s->dom = (s->options.browser_jobs ? os64_dom_create_with_browser_jobs : os64_dom_create)
         (s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
@@ -710,6 +717,7 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
     s->living_next = s_living;
     s_living = s;
     s->options = *options;
+    s->blobs = os64_dom_blob_store_new(0);
     s->options.url = NULL;
     s->options.timing = NULL;
     s->options.referrer = NULL;
@@ -788,7 +796,16 @@ void yonder_scripts_free(yonder_scripts_t *s)
     yonder_modules_free(s->modules);
     os64_free(s->entry_state);
     os64_free(s->referrer);
+    // After the binding, whose finalizers release the entries its objects
+    // held; a retired binding kept for a standing tree only ever releases
+    // entries, which outlive the store, and never names or takes one.
+    os64_dom_blob_store_free(s->blobs);
     os64_free(s);
+}
+
+os64_dom_blob_store_t *yonder_scripts_blobs(const yonder_scripts_t *s)
+{
+    return s != NULL ? s->blobs : NULL;
 }
 
 // A copy of `text`, NULL for none or no memory: the address is for the
@@ -933,12 +950,18 @@ static void module_request(yonder_scripts_t *s, const char *url, os64_dom_reques
                               .referrer = referrer != NULL ? referrer : ""};
 }
 
+// A module's blob: address is taken when its graph asks for it, the
+// standard's "fetch a module script" (BLOB_URLS.md § 1.8); the request
+// holds its own reference, and this one goes when it is made.
 static uint64_t module_start(void *opaque, const char *url, uint32_t token)
 {
     yonder_scripts_t *s = opaque;
     os64_dom_request_t q;
     module_request(s, url, &q);
-    return s->options.request != NULL ? s->options.request(s->options.opaque, s->options.serial, token, &q) : 0;
+    q.blob = os64_dom_blob_url_take(s->blobs, url);
+    uint64_t id = s->options.request != NULL ? s->options.request(s->options.opaque, s->options.serial, token, &q) : 0;
+    os64_dom_blob_release(q.blob);
+    return id;
 }
 
 // A dynamic import's fetch stops when the task that asked runs out of its
@@ -955,8 +978,11 @@ static bool module_run_now(void *opaque, const char *url, os64_dom_response_t *r
     yonder_scripts_t *s = opaque;
     os64_dom_request_t q;
     module_request(s, url, &q);
-    return s->options.run != NULL &&
-           s->options.run(s->options.opaque, s->options.serial, &q, module_stop, s, response);
+    q.blob = os64_dom_blob_url_take(s->blobs, url);
+    bool ran = s->options.run != NULL &&
+               s->options.run(s->options.opaque, s->options.serial, &q, module_stop, s, response);
+    os64_dom_blob_release(q.blob);
+    return ran;
 }
 
 static bool module_document_base(void *opaque, char *out, size_t cap)
@@ -2033,6 +2059,12 @@ uint64_t yonder_scripts_message_next(const yonder_scripts_t *s)
     return s != NULL && !s->dead ? os64_dom_message_next(s->dom) : UINT64_MAX;
 }
 
+const char *yonder_scripts_message_kind(const yonder_scripts_t *s)
+{
+    const char *kind = s != NULL ? os64_dom_message_kind(s->dom) : NULL;
+    return kind != NULL ? kind : "message";
+}
+
 bool yonder_scripts_message_fire(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
@@ -2173,6 +2205,19 @@ void yonder_scripts_census(yonder_scripts_t *s, yonder_census_sheet_t *sheet, bo
     os64_dom_body_stats(s->dom, &held, NULL);
     yonder_census_owner(sheet, "bodies", held, 0, NULL);
     yonder_census_owner(sheet, "script", os64_js_heap_bytes(s->runtime), 0, NULL);
+    // The blob URL store's named bytes (BLOB_URLS.md § 1.6): bytes the page
+    // copied out of its Blobs, outside the script heap.
+    os64_dom_blob_usage_t blobs = os64_dom_blob_store_usage(s->blobs);
+    yonder_census_owner(sheet, "blob urls", blobs.bytes, blobs.entries, "entries");
+    // Each createObjectURL refused at the bound gets its FAILED line: other
+    // browsers do not throw there, so a page that does not catch it stops
+    // without a word, and the record is where the word is.
+    for (; s->blob_refused_said < blobs.refused; s->blob_refused_said++) {
+        char line[128];
+        os64_snprintf(line, sizeof(line), "URL.createObjectURL refused: the page's blob URLs would hold more than %zu MiB",
+                      (size_t)(OS64_DOM_BLOB_STORE_MAX >> 20));
+        yonder_diag_failed_seen(s->options.diag, "blob url", line);
+    }
     if (!detail) return;
     for (int k = 0; k < OS64_DOM_MEM_KINDS; k++) {
         os64_dom_mem_t m = os64_dom_memory(s->dom, (os64_dom_mem_kind_t)k);
