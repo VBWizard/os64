@@ -7,9 +7,10 @@ property security and detached relation answers. This builds on native context
 publication and [Location exotics](IFRAME_F4_LOCATION_EXOTIC.md).
 
 This is an incomplete private integration, not a browser publication API.
-Global-this installation, `globalThis` and document/event/callback identity
-closure, same-origin Window named-property integration and the complete F.4
-security/lifetime acceptance remain gated. The host tests deliberately exchange
+[Private Window identity integration](IFRAME_F4_WINDOW_IDENTITY.md) connects
+global-this, document/event values and callbacks. Same-origin Window named
+properties, remaining descriptor integration and complete F.4 security/lifetime
+acceptance remain gated. The host tests deliberately exchange
 raw globals alongside proxies as independent oracles. Such raw globals must
 not be exposed by a production frame adapter. F.4 remains in progress.
 
@@ -81,8 +82,10 @@ this milestone supplies no C3 evidence or slot reuse.
 Measured x86-64 layout: context 112 bytes (+16), proxy record 96, cache node 40,
 DValue 112 and allocator header 16. Initial proxy native record/root storage
 charges 240 bytes; a cached descriptor charges 184 native bytes plus its engine
-array/functions. The binding gains a pointer but remains 17,488 bytes because
-of layout padding; affected objects must still be rebuilt. With at most 65
+array/functions. At this property-boundary milestone the binding gained a pointer
+but stayed 17,488 bytes because of layout padding. The
+[identity integration](IFRAME_F4_WINDOW_IDENTITY.md) records the larger current
+binding layout; affected objects must be rebuilt. With at most 65
 retained bindings, 13 cached property keys and each target binding associated
 with one context, a conservative cluster-wide ceiling is 65 × 65 × 13 entries.
 The configured aggregate budgets can refuse well before that ceiling.

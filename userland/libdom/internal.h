@@ -543,6 +543,8 @@ struct os64_dom {
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
     struct DLocationExotic *location_exotic;
     struct DWindowProxy *window_proxy_state;
+    /* Borrowed cluster root; also identifies a prepared replacement candidate. */
+    DValue *window_identity;
     DValue *invoke, *navigator, *style_prototype, *static_list;
     /* navigator.languages, plugins and mimeTypes, each [SameObject]; made by
      * the Modern Web's window objects row (window.c), NULL without it. */
@@ -880,11 +882,13 @@ bool d_member_access(os64_dom_t *, JSContext *, bool);
 bool d_location_access(os64_dom_t *, JSContext *, bool);
 int d_location_exotic_install(os64_dom_t *, JSContext *, JSValueConst);
 void d_location_exotic_drain(os64_dom_t *);
-/* Private test seam; global-this and event publication remain gated. */
+/* Private host seams. Prepare identity before author execution/publication. */
 JSValue d_window_proxy(JSContext *, DBrowsingContext *);
 void d_window_proxy_drain(os64_dom_t *);
 os64_dom_t *d_window_proxy_target(JSValueConst);
 JSValue d_window_identity(os64_dom_t *, JSContext *);
+JSValueConst d_window_this(os64_dom_t *);
+int d_window_identity_prepare(JSContext *, os64_dom_t *, DBrowsingContext *);
 JSValue d_binding_global(os64_dom_t *, JSContext *);
 JSValue d_custom_registry(os64_dom_t *, JSContext *);
 int d_window_member_magic(os64_dom_t *, JSContext *, JSValueConst, const char *, int, int);

@@ -1,7 +1,7 @@
 /* Real Location members with host-selected origins deliberately unrelated to URL. */
 #include "../userland/libdom/binding_authority.h"
 
-static bool authority_open(CeFixture *f, int policy, unsigned mode)
+static bool authority_bindings_open(CeFixture *f, int policy, unsigned mode)
 {
     *f=(CeFixture){0};
     os64_js_config_t config=fixture_config();config.limits.memory_bytes=64u<<20;
@@ -31,6 +31,12 @@ static bool authority_open(CeFixture *f, int policy, unsigned mode)
         if(!a.binding)return false;
         memset(&origins[i],0,sizeof(origins[i])); /* Published binding must own its copy. */
     }
+    return true;
+}
+
+static bool authority_open(CeFixture *f, int policy, unsigned mode)
+{
+    if (!authority_bindings_open(f, policy, mode)) return false;
     for(unsigned i=0;i<5;i++) {
         JSContext *ctx=ce_contexts[i];JSValue global=JS_GetGlobalObject(ctx);
         for(unsigned j=0;j<5;j++) {
