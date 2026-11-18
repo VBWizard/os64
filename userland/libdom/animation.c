@@ -85,8 +85,7 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,uint64_t frame_us,os64
     uint32_t last=dom->animation_handle;
     uint64_t at=d_frame_instant(dom,frame_us);
     if(!d_delivery_active(dom))return false;
-    double timestamp=d_performance_at(dom,at);
-    d_web_animations_sample(dom,at);
+    double timestamp=d_web_animations_sample(dom,at);
     if(!d_delivery_active(dom))return false;
     dom->animation_running=true;
     if(os64_js_realm_task_begin(dom->realm,OS64_JS_ABI_ID,name,out)==OS64_JS_OK) {

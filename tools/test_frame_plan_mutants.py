@@ -32,8 +32,15 @@ CASES = 'bash tools/test_frame_plan_host.sh'
 
 mutants = [
     # A look.
-    ('work-due-soon-asks-now', '    if (due_ms > now_ms) {', '    if (due_ms > now_ms + 5) {'),
-    ('work-due-later-wakes-nothing', '        step.wake_ms = due_ms;', '        step.wake_ms = FRAME_PLAN_NEVER;'),
+    ('work-due-by-the-blank-waits', '    if (due_us > frame_plan_next_blank_us(p, now_us)) {', '    if (due_us > now_us) {'),
+    ('work-due-later-wakes-nothing', '        step.wake_ms = (wake_us + 999) / 1000;', '        (void)wake_us;\n        step.wake_ms = FRAME_PLAN_NEVER;'),
+    ('wakes-at-the-blank-not-before-it', '- period_of(p);\n        step.wake_ms', ';\n        step.wake_ms'),
+    ('the-grid-forgets-the-last-answer', '    uint64_t period = period_of(p), base = p->number != 0 && p->period_us != 0 ? p->blank_us : now_us;',
+     '    uint64_t period = period_of(p), base = now_us;'),
+    ('the-blank-before-not-after', '    uint64_t periods = (at_us - base + period - 1) / period;', '    uint64_t periods = (at_us - base) / period;'),
+    # The wake's millisecond rounds up so the loop never wakes before the
+    # moment to ask; rounding down wakes it at most a millisecond early,
+    # and that step only computes the same wake again, so no rule breaks.
     ('asks-while-one-is-out', '    if (p->asked || p->open)\n        return step;', '    if (p->open)\n        return step;'),
     ('asks-while-a-frame-is-open', '    if (p->asked || p->open)\n        return step;', '    if (p->asked)\n        return step;'),
     ('an-ask-is-not-out', '    step.ask = true;\n    p->asked = true;', '    step.ask = true;'),

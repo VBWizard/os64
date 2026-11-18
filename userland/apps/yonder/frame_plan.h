@@ -8,13 +8,13 @@
 // re-hit — and the work runs when the answer arrives, at one time for all of
 // it: the answer's blank instant. Work due at a time of its own waits for
 // the ticker; frame work whose time is still to come is waited for there
-// too, and asks for its frame once the time has come, so a `steps()`
-// animation or a long delay asks for no frame nobody needs.
+// too, and asks in time for the blank that will carry it, so a long delay
+// or a costly frame's rest asks for no frame nobody needs.
 //
-// Pure: no os64 headers, so tools/test_frame_plan_host.sh runs it beside a
-// model. yonder's clock is milliseconds (yonder_now_ms) and the answer's is
-// microseconds; both are os64_micros', so a millisecond is the microsecond
-// time divided by a thousand.
+// Pure: no os64 headers, so tools/test_frame_plan_host.sh runs it, by cases
+// and a random walk held to its invariants. yonder's clock is milliseconds
+// (yonder_now_ms) and the answer's is microseconds; both are os64_micros',
+// so a millisecond is the microsecond time divided by a thousand.
 
 #ifndef YONDER_FRAME_PLAN_H
 #define YONDER_FRAME_PLAN_H
@@ -48,10 +48,14 @@ typedef struct {
 } frame_plan_step_t;
 
 // A look, given the earliest frame work's "not before" time (`due_ms`,
-// FRAME_PLAN_NEVER for none) and now. Work due now asks, unless a request
-// is out or a frame is open (the frame in hand meets it, or the look after
-// it closes asks); work due later is the ticker's wake. An ask is counted
-// as made: say so if the request was refused (frame_plan_refused).
+// FRAME_PLAN_NEVER for none) and now. A frame asked for now is answered at
+// the next blank, so work due by that blank asks now, unless a request is
+// out or a frame is open (the frame in hand meets it, or the look after it
+// closes asks). Work due later is the ticker's wake, a period before the
+// blank that will carry it (on the last answer's grid), where that look
+// asks: so a rest or a delay costs no refresh beyond its own, whatever the
+// ticker's wake rounds to. An ask is counted as made: say so if the
+// request was refused (frame_plan_refused).
 frame_plan_step_t frame_plan_step(frame_plan_t *p, uint64_t due_ms, uint64_t now_ms);
 
 // The request a look asked for was refused: none is out.
@@ -79,8 +83,9 @@ uint64_t frame_plan_next_blank_us(const frame_plan_t *p, uint64_t now_us);
 // A half of the CSS animations held to its cost rule: the time its work is
 // next due (`due_ms`, its own answer), no sooner than `rest` times its last
 // frame's cost after that frame ended, and never once that cost passed
-// `stop_us` (UINT64_MAX is a frame that failed, past every limit). `had` is
-// whether the half has had a frame.
+// `stop_us` (a cost of UINT64_MAX, a frame that failed, passes any lower
+// limit; a `stop_us` of UINT64_MAX stops nothing, for a caller that holds
+// its half to the rule itself). `had` is whether the half has had a frame.
 uint64_t frame_plan_half_due(uint64_t due_ms, bool had, uint64_t ended_ms, uint64_t cost_us, uint32_t rest,
                              uint64_t stop_us);
 

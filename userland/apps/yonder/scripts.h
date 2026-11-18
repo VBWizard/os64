@@ -376,7 +376,10 @@ bool yonder_scripts_message_fire(yonder_scripts_t *scripts, os64_js_outcome_t *o
 // due. False when nothing ran.
 uint64_t yonder_scripts_idle_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_idle_run(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
-bool yonder_scripts_idle_before(yonder_scripts_t *scripts, uint64_t render_due, os64_js_outcome_t *outcome);
+// _before: bounded by the host's rendering deadline, and by its next frame
+// should a callback ask for one (os64_dom_idle_before).
+bool yonder_scripts_idle_before(yonder_scripts_t *scripts, uint64_t render_due, uint64_t next_frame,
+                                os64_js_outcome_t *outcome);
 // The answer to the page's request `token` (os64_dom_fetched), as one
 // task. False when nothing ran: the runtime is gone, or never was, or the
 // answer was a module's (YONDER_MODULE_TOKEN), which the page's module map

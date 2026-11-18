@@ -1896,8 +1896,9 @@ of view, nor for one of nothing that can show: no property it sets is
 drawn (animatable, its list not dropped) or has a side effect, or each
 one is replaced by a later animation in effect, which is due for its
 own end. It is FRAME WORK (§ The animations' frames, on the display's
-beat, below): due now, it asks for the display's next frame; due later,
-the ticker (`pictures_schedule`) wakes the loop then, and that look asks.
+beat, below): due by the display's next blank, it asks for that frame;
+due later, the ticker (`pictures_schedule`) wakes the loop in time to ask
+for the frame that will carry it.
 When the frame's answer comes the page is laid out again, quietly, at the
 frame's time: the scroll kept as any
 relayout keeps it, the controls placed, the cascade reused — the
@@ -1961,10 +1962,14 @@ loop; the turn's usual order runs the work — the Web Animations step and
 the callbacks (`script_turn`), the CSS layout or tick (`motion_tick`), the
 resize step — and the paint closes it (`frame_close`), after which a look
 asks again if work is still due. Asking is the main loop's, once per answer,
-never the ticker thread's. Frame work whose time is still to come (a
-`steps()` flip, a delay's end, a rest after a costly frame) is the ticker's
-to wait for, and asks when its time comes, so a two-second delay asks for
-no frames nobody needs. A covered window asks for none, and a request
+never the ticker thread's. A frame asked for is answered at the next
+blank, so frame work due by then asks now; work whose time comes later (a
+delay's end, a phase's end, a rest after a costly frame) is the ticker's to
+wait for, and its wake is set a period before the blank that will carry it,
+on the last answer's grid (`frame_plan_step`), so the ticker's own rounding
+to the system tick costs no refresh and a two-second delay asks for no
+frames nobody needs. (A `steps()` animation is not one of these: libflow
+answers a running one as due now, so it asks every frame; DEBTS.) A covered window asks for none, and a request
 already out is answered when the window is shown again, its animations
 sampled where they should be by then. With the frame clock off the
 answers ride the tick-driven passes, so every boot has this one path.

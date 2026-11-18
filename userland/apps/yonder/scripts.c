@@ -2023,10 +2023,11 @@ uint64_t yonder_scripts_idle_next(const yonder_scripts_t *s)
 
 bool yonder_scripts_idle_run(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
-    return yonder_scripts_idle_before(s, UINT64_MAX, out);
+    return yonder_scripts_idle_before(s, UINT64_MAX, UINT64_MAX, out);
 }
 
-bool yonder_scripts_idle_before(yonder_scripts_t *s, uint64_t render_due, os64_js_outcome_t *out)
+bool yonder_scripts_idle_before(yonder_scripts_t *s, uint64_t render_due, uint64_t next_frame,
+                                os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
     if (s == NULL || s->dead)
@@ -2034,7 +2035,7 @@ bool yonder_scripts_idle_before(yonder_scripts_t *s, uint64_t render_due, os64_j
     s->written = 0;
     s->task_address = NULL;
     s->task_us = -1;
-    if (!os64_dom_idle_before(s->dom, render_due, out))
+    if (!os64_dom_idle_before(s->dom, render_due, next_frame, out))
         return false;
     judged(s, out);
     return true;

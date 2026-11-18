@@ -1140,18 +1140,21 @@ bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* A FRAME'S TIME, for the two frame steps below: the instant the host's frame
  * is for (its display's blank) on the host's microsecond clock (now_us).
  * One later than the clock reads now is taken as now, so a frame's time
- * never passes what performance.now() reads inside it; OS64_DOM_FRAME_NOW
- * asks for the clock now. That one frame's times never go back is the
- * host's to keep. */
+ * never passes what performance.now() reads inside it, and one before the
+ * document's time origin is taken as the origin; OS64_DOM_FRAME_NOW asks
+ * for the clock now. The document timeline never goes back: a frame
+ * earlier than the time it holds (a script read it first) keeps that time,
+ * and the callbacks' timestamp is the timeline's. That the host's frames
+ * never go back is the host's to keep. */
 #define OS64_DOM_FRAME_NOW UINT64_MAX
 
 /* Animation callbacks: next is when the oldest waiting request was made, on
  * the host's millisecond clock (UINT64_MAX when empty): a request is ready
  * for the host's next frame, and the host paces, one batch to a frame of
  * its display. fire runs one due snapshot in request order, with one shared
- * timestamp — performance.now() at the frame's time (`frame_us`, above) —
- * and runtime budget, checkpointing after each callback. Requests made
- * during it wait for another frame, ready from the batch's end;
+ * timestamp — the document timeline's time at the frame (`frame_us`,
+ * above) — and runtime budget, checkpointing after each callback. Requests
+ * made during it wait for another frame, ready from the batch's end;
  * cancellations apply immediately. A late or long batch makes one
  * successor ready, never a debt of missed frames. The host calls between
  * tasks on its rendering step, suppresses frames while covered, and
@@ -1387,8 +1390,13 @@ uint64_t os64_dom_idle_next(const os64_dom_t *dom);
 bool os64_dom_idle_run(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* As idle_run, with a host rendering deadline in monotonic milliseconds.
  * The grant and IdleDeadline.timeRemaining stop at that deadline. UINT64_MAX
- * leaves the grant bounded by timers, pending frames and its 50 ms period. */
-bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_t *outcome);
+ * leaves the grant bounded by timers, pending frames and its 50 ms period.
+ * `next_frame` is when the host's next frame comes, should one be asked for
+ * now: a callback that asks for an animation frame during the grant ends it
+ * there (HTML's next rendering deadline); UINT64_MAX, when the host cannot
+ * say, ends it at the request. */
+bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, uint64_t next_frame,
+                          os64_js_outcome_t *outcome);
 
 /* A script navigation request or native activation since the last take: the last
  * ask wins, but with the Modern Web switch on history.go()s in a row add

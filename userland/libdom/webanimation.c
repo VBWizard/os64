@@ -205,7 +205,10 @@ static const os64_html_node_t *wa_target(const DWaAnimation *a)
  * batch sampled (HTML gives both one time: the host's frame, as a
  * d_frame_instant), and the face's clock at that same instant — read now,
  * less how long ago the instant was — so an effect's start can be told on
- * the face's clock (wa_publish). The first read samples it. */
+ * the face's clock (wa_publish). The first read samples it. The time never
+ * goes back: a script that read the timeline before the host's frame
+ * sampled it at that moment, and the frame's instant may be earlier, so a
+ * sample earlier than the one held keeps the one held. */
 static void wa_sample_at(os64_dom_t *dom, uint64_t at_us)
 {
     if (!d_delivery_active(dom)) return;
@@ -214,8 +217,10 @@ static void wa_sample_at(os64_dom_t *dom, uint64_t at_us)
     uint64_t now_us = d_host_now_us(dom);
     if (!d_delivery_active(dom)) return;
     if (at_us > now_us) at_us = now_us;
+    double time = d_performance_at(dom, at_us);
+    if (dom->wa_sampled && time <= dom->wa_time) return;
     uint64_t ago = (now_us - at_us) / 1000;
-    dom->wa_time = d_performance_at(dom, at_us);
+    dom->wa_time = time;
     dom->wa_face = (double)(face > ago ? face - ago : 0) - dom->wa_time;
     dom->wa_sampled = true;
 }
@@ -225,9 +230,10 @@ static void wa_sample(os64_dom_t *dom)
     wa_sample_at(dom, OS64_DOM_FRAME_NOW);
 }
 
-void d_web_animations_sample(os64_dom_t *dom, uint64_t at_us)
+double d_web_animations_sample(os64_dom_t *dom, uint64_t at_us)
 {
     wa_sample_at(dom, at_us);
+    return dom->wa_time;
 }
 
 static double wa_now(os64_dom_t *dom)
@@ -3384,9 +3390,14 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, uint64_t fram
     if (!d_delivery_active(dom)) return false;
     wa_sample_at(dom, at);
     if (!d_delivery_active(dom)) return false;
+    /* The step is the frame's: what the CSS animations crossed is judged up
+     * to the frame's time on the face's clock, which is the time the
+     * frame's layout shows them at, not the moment the step runs. */
+    double face = dom->wa_time + dom->wa_face;
+    uint64_t step_ms = face <= 0 ? 0 : face >= (double)now ? now : (uint64_t)face;
     dom->wa_wanted = false;
     dom->wa_stepped = true;
-    dom->wa_last_step = now;
+    dom->wa_last_step = step_ms;
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name, sizeof(name), "%.*s#web-animations", (int)(sizeof(name) - 20),
                   dom->url ? dom->url : "about:blank");
@@ -3410,7 +3421,7 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, uint64_t fram
         }
         /* After the pending tasks: a pause or play the style asks for now
          * waits for the next step, as a script's does. */
-        if (ctx != NULL) css_step(ctx, dom, (double)now, since);
+        if (ctx != NULL) css_step(ctx, dom, (double)step_ms, since);
         if (ctx != NULL && d_delivery_active(dom)) remove_replaced(ctx, dom);
         if (ctx != NULL) d_task_settle(dom, out);
         DWaEvent *events = events_sorted(dom->wa_events);

@@ -101,8 +101,8 @@ static void dom_animation_cases(void)
         "requestAnimationFrame(()=>frames.push('pending at teardown'));",
         "frame: bounded queue, cancellation frees capacity, teardown owns pending callbacks");
     p2b_script(&f,"requestIdleCallback(d=>{globalThis.remaining=d.timeRemaining()})", "frame: idle grant setup");
-    check(!os64_dom_idle_before(f.binding,p2b_ms,&out),"frame: no idle grant over due rendering");
-    check(os64_dom_idle_before(f.binding,p2b_ms+7,&out),"frame: idle time before rendering");
+    check(!os64_dom_idle_before(f.binding,p2b_ms,UINT64_MAX,&out),"frame: no idle grant over due rendering");
+    check(os64_dom_idle_before(f.binding,p2b_ms+7,UINT64_MAX,&out),"frame: idle time before rendering");
     p2b_script(&f,"assert(remaining>0&&remaining<=7,String(remaining))","frame: idle deadline respects rendering");
     fixture_free(&f);
 
@@ -127,16 +127,50 @@ static void dom_animation_cases(void)
                "frame time: taken as the clock, never past performance.now()");
     fixture_free(&f);
 
-    /* A frame asked for inside an idle period ends the grant at the
-     * request; one asked for before it was the host's to bound (above). */
-    animation_elapsed_ms=5;options.alert=animation_clock_spend;
+    /* The timeline never goes back: a script's first read samples it now,
+     * and a frame whose instant came before that read keeps the time read,
+     * which the callbacks' timestamp follows. And a frame from before the
+     * document's own origin (a navigation began after it) is the origin. */
     f=fixture_new(&options);
     if(!fixture_ready(&f))return;
-    p2b_script(&f,"requestIdleCallback(d=>{alert('work');globalThis.before=d.timeRemaining();"
-               "requestAnimationFrame(()=>{});globalThis.after=d.timeRemaining()})","idle frame: setup");
-    check(os64_dom_idle_before(f.binding,UINT64_MAX,&out),"idle frame: a grant with no rendering due");
-    p2b_script(&f,"assert(before>0&&after===0,before+' '+after)","idle frame: a frame asked for inside the grant ends it");
-    fixture_free(&f);options.alert=NULL;
+    p2b_advance(40);
+    p2b_script(&f,"globalThis.tl0=document.timeline.currentTime;globalThis.got=[];"
+               "requestAnimationFrame(t=>got.push(t,document.timeline.currentTime))","frame time: a first read");
+    check(os64_dom_animation_fire(f.binding,p2b_ms,p2b_us-5000,&out)&&out.status==OS64_JS_OK,
+          "frame time: a frame from before the first read");
+    p2b_script(&f,"assert(got[0]===tl0&&got[1]===tl0,tl0+' '+String(got))",
+               "frame time: the timeline keeps the later time read, and the timestamp is the timeline's");
+    fixture_free(&f);
+    f=fixture_new(&options);
+    if(!fixture_ready(&f))return;
+    p2b_script(&f,"globalThis.early=[];requestAnimationFrame(t=>early.push(t,document.timeline.currentTime))",
+               "frame time: before the origin");
+    check(os64_dom_animation_fire(f.binding,p2b_ms,1,&out)&&out.status==OS64_JS_OK,
+          "frame time: a frame named before the document began");
+    p2b_script(&f,"assert(early[0]===0&&early[1]===0,String(early))",
+               "frame time: a frame before the document's origin is its origin, never a negative time");
+    fixture_free(&f);
+
+    /* A frame asked for inside an idle period ends the grant at the host's
+     * next frame, or at the request when the host cannot say when that is;
+     * one asked for before it was the host's to bound (above). */
+    animation_elapsed_ms=5;options.alert=animation_clock_spend;
+    for(int said=0;said<2;said++) {
+        f=fixture_new(&options);
+        if(!fixture_ready(&f))return;
+        p2b_script(&f,"requestIdleCallback(d=>{alert('work');globalThis.before=d.timeRemaining();"
+                   "requestAnimationFrame(()=>{});globalThis.after=d.timeRemaining()})","idle frame: setup");
+        check(os64_dom_idle_before(f.binding,UINT64_MAX,said?p2b_ms+12:UINT64_MAX,&out),
+              "idle frame: a grant with no rendering due");
+        if(said)
+            p2b_script(&f,"assert(before>after&&after>0&&after<=7,before+' '+after)",
+                       "idle frame: a frame asked for inside the grant ends it at the host's next frame");
+        else
+            p2b_script(&f,"assert(before>0&&after===0,before+' '+after)",
+                       "idle frame: with no next frame said, a frame asked for inside the grant ends it at once");
+        fixture_free(&f);
+    }
+    options.alert=NULL;
 
     f=fixture_new(&options);
     if(!fixture_ready(&f))return;

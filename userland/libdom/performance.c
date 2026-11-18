@@ -118,7 +118,8 @@ double d_performance_at(const os64_dom_t *dom, uint64_t at_us)
 uint64_t d_frame_instant(const os64_dom_t *dom, uint64_t frame_us)
 {
     uint64_t now = now_us(dom);
-    return frame_us < now ? frame_us : now;
+    uint64_t at = frame_us < now ? frame_us : now;
+    return at > dom->time_origin_us ? at : dom->time_origin_us;
 }
 
 static void timing_read(const os64_dom_t *dom, os64_dom_timing_t *t)

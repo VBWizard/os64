@@ -13522,13 +13522,15 @@ static bool script_turn(void)
     // (pictures_schedule). Tasks that keep coming leave none idle, which
     // HTML allows: an idle period starts only when the loop is idle. Its
     // deadline is the next frame work's, which for work waiting on a frame
-    // is the display's next blank (idle_render_due); none starts in an open
-    // frame whose work is due, which comes first.
+    // is the display's next blank (idle_render_due), and a callback that
+    // asks for an animation frame ends it at that blank too; none starts in
+    // an open frame whose work is due, which comes first.
     if (!ran && !(s_frames.open && frame_work_due() <= yonder_now_ms())) {
         uint64_t due = idle_render_due();
         if (due > yonder_now_ms()) {
             what = "idle";
-            ran = yonder_scripts_idle_before(g.page.scripts, due, &out);
+            ran = yonder_scripts_idle_before(g.page.scripts, due,
+                                             frame_plan_next_blank_us(&s_frames, yonder_now_us()) / 1000, &out);
         }
     }
     if (ran)
@@ -13538,8 +13540,10 @@ static bool script_turn(void)
     // callbacks (the entry guard), not the task's fresh mutations.
     uint64_t now = yonder_now_ms();
     // In an open frame of the display, at its time: HTML's "update
-    // animations and send events", then the frame callbacks.
-    uint64_t frame_us = animation_time_us();
+    // animations and send events", then the frame callbacks. The time is
+    // read only for a frame: a sample is a time handed to the animations,
+    // which a later frame may never go back past (frame_plan_sample).
+    uint64_t frame_us = s_frames.open ? animation_time_us() : 0;
     if (s_frames.open && !g.covered && !g.raf_painting &&
         yonder_scripts_web_animations_next(g.page.scripts) <= now) {
         int64_t step_began = task_begin(g.page.scripts);

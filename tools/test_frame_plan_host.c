@@ -28,7 +28,12 @@ static void look_cases(void)
     frame_plan_step_t s = frame_plan_step(&p, FRAME_PLAN_NEVER, 100);
     check(!s.ask && s.wake_ms == FRAME_PLAN_NEVER && p.asks == 0, "look: nothing due asks nothing, wakes nothing");
     s = frame_plan_step(&p, 150, 100);
-    check(!s.ask && s.wake_ms == 150 && !p.asked, "look: work due later is the ticker's wake, no ask");
+    check(!s.ask && s.wake_ms == 134 && !p.asked,
+          "look: work due past the next blank wakes the loop a period before the blank that carries it");
+    s = frame_plan_step(&p, 110, 100);
+    check(s.ask && p.asked, "look: work due by the next blank asks now");
+    frame_plan_refused(&p);
+    p.refused = 0;
     s = frame_plan_step(&p, 100, 100);
     check(s.ask && s.wake_ms == FRAME_PLAN_NEVER && p.asked && p.asks == 1, "look: work due now asks");
     s = frame_plan_step(&p, 90, 101);
@@ -39,7 +44,8 @@ static void look_cases(void)
     s = frame_plan_step(&p, 50, 102);
     check(!s.ask && p.asks == 1, "look: no ask while a frame is open");
     s = frame_plan_step(&p, 200, 102);
-    check(!s.ask && s.wake_ms == 200, "look: an open frame still hands a later time to the ticker");
+    check(!s.ask && s.wake_ms == 184,
+          "look: an open frame still hands a later time to the ticker, on the answer's grid");
     frame_plan_close(&p);
     check(!p.open && p.closed_now, "close: the frame closes");
     s = frame_plan_step(&p, 102, 103);
@@ -177,15 +183,25 @@ static void walk_cases(void)
         switch (rnd(6)) {
         case 0:
         case 1: {
-            uint64_t due = rnd(4) == 0 ? FRAME_PLAN_NEVER : now_ms + rnd(40) - 20;
+            uint64_t due = rnd(4) == 0 ? FRAME_PLAN_NEVER : now_ms + rnd(80) - 20;
             int was_asked = p.asked, was_open = p.open;
+            uint64_t next_blank = frame_plan_next_blank_us(&p, now_ms * 1000);
             frame_plan_step_t s = frame_plan_step(&p, due, now_ms);
             if (s.ask && (was_asked || was_open))
                 ok_no_ask_open = 0;
-            if (s.ask && due > now_ms)
+            // An ask is for work due by the next blank; a wake comes before
+            // the work is due, after now, and the look then would ask.
+            if (s.ask && due * 1000 > next_blank)
                 ok_wake = 0;
-            if (s.wake_ms != FRAME_PLAN_NEVER && s.wake_ms != due)
+            if (due != FRAME_PLAN_NEVER && due * 1000 > next_blank &&
+                (s.wake_ms == FRAME_PLAN_NEVER || s.wake_ms > due || s.wake_ms <= now_ms))
                 ok_wake = 0;
+            if (s.wake_ms != FRAME_PLAN_NEVER && due * 1000 > next_blank) {
+                frame_plan_t later = p;
+                later.closed_now = false;
+                if (due * 1000 > frame_plan_next_blank_us(&later, s.wake_ms * 1000))
+                    ok_wake = 0;
+            }
             if (s.ask && rnd(10) == 0) {
                 frame_plan_refused(&p);
                 refused++;
@@ -233,7 +249,8 @@ static void walk_cases(void)
     check(ok_monotonic, "walk: the time handed never goes back, and a frame is never before its blank");
     check(ok_counts, "walk: asks are answers plus the one out; refusals and answers counted");
     check(ok_skips, "walk: skips are the refreshes between chained answers");
-    check(ok_wake, "walk: a wake is the due when it is later, and an ask only when due");
+    check(ok_wake, "walk: an ask only for work due by the next blank; a wake before the work, after now, "
+                   "and at it the work is due by the next blank");
 }
 
 int main(void)

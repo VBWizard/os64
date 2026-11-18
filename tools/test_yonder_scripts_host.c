@@ -1962,13 +1962,16 @@ static void motion_cases(void) {
         "motion: a frame waiting for its paint is the only frame, of either half");
     motion_painted();
     pictures_schedule();
-    check(motion_next()==610 && ticker_due==610,
-        "motion: the next waits twice its cost after it ended, and the ticker wakes the loop then to ask for its frame");
+    check(motion_next()==610 && s_frames.asked,
+        "motion: the next waits twice its cost after it ended, and, due by the next blank, asks for that frame now");
     geometry_layout_delay=40000; now_ms=616;
     frame_tick();
     motion_painted();
     check(motion_x("a")==52 && motion_next()==696,
         "motion: a costlier layout (51.6 px, at the nearest pixel) waits twice its cost after it ends");
+    pictures_schedule();
+    check(ticker_due==683 && !s_frames.asked,
+        "motion: a rest past the next blank wakes the loop a period before the blank that carries it (699.3 ms)");
     now_ms=650;
     frame_tick();
     check(g.motion_began==616,"motion: a ring before an animation's layout is due lays nothing out");
