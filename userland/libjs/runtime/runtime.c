@@ -110,6 +110,7 @@ struct os64_js_runtime {
     unsigned cancelled;
     bool active, turn, task, checkpointing, source_truncated, destroying;
     bool ran_jobs, host_settings_enabled, metadata_selected;
+    bool finalization_tasks_enabled;
     uint64_t owed_count;
     char source_name[OS64_JS_SOURCE_NAME_CAP];
 };
@@ -807,14 +808,15 @@ static bool job_context_eligible(os64_js_runtime_t *runtime, JSContext *context)
     return !realm->failed && !realm->retired && (!realm->staged || runtime->setup_realm == realm);
 }
 
-static bool job_eligible(os64_js_runtime_t *runtime, const JSJobInfo *info, JSJobGroup *group)
+static bool job_eligible(os64_js_runtime_t *runtime, const JSJobInfo *info, JSJobGroup *group, bool task)
 {
     if (realm_for_context(runtime, info->context) == NULL)
         jsport_fatal("job execution context membership", __FILE__, __LINE__);
     bool owner = job_context_eligible(runtime, info->owner);
     bool activity = job_context_eligible(runtime, info->activity);
     JSContext *entry, *incumbent;
-    if (JS_PeekJobCallbackSettings(runtime->engine, group, &entry, &incumbent, NULL))
+    if ((task ? JS_PeekFinalizationTaskSettings : JS_PeekJobCallbackSettings)
+            (runtime->engine, group, &entry, &incumbent, NULL))
         return owner && activity && job_context_eligible(runtime, entry) &&
                job_context_eligible(runtime, incumbent);
     return owner && activity;
@@ -822,12 +824,12 @@ static bool job_eligible(os64_js_runtime_t *runtime, const JSJobInfo *info, JSJo
 
 /* One visit: 2 discarded, 1 executed, -1 exception, 0 empty/limited.
  * Manual, task and candidate drains charge live execution after eligibility. */
-static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSContext **context)
+static int step_job(os64_js_runtime_t *runtime, JSJobGroup *group, bool task, JSContext **context)
 {
     JSJobInfo info;
-    if (!JS_PeekJobGroup(runtime->engine, group, &info)) return 0;
-    if (!job_eligible(runtime, &info, group)) {
-        JS_DiscardJobGroup(runtime->engine, group);
+    if (!(task ? JS_PeekFinalizationTask : JS_PeekJobGroup)(runtime->engine, group, &info)) return 0;
+    if (!job_eligible(runtime, &info, group, task)) {
+        (task ? JS_DiscardFinalizationTask : JS_DiscardJobGroup)(runtime->engine, group);
         runtime->discarded_jobs++;
         return 2;
     }
@@ -841,20 +843,26 @@ static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSConte
     if (runtime->failure_records_enabled) runtime->failure_job = &info;
     JSContext *entry, *incumbent;
     JSContext *report = NULL;
-    bool prepared = JS_PeekJobCallbackSettings(runtime->engine, group, &entry, &incumbent, &report);
+    bool prepared = (task ? JS_PeekFinalizationTaskSettings : JS_PeekJobCallbackSettings)
+        (runtime->engine, group, &entry, &incumbent, &report);
     SettingsCall settings = {runtime->settings_calls, prepared && entry ? realm_for_context(runtime, entry) : NULL,
                              runtime->active_outcome, NULL, NULL};
     /* Admit queries under the existing job guard. Prepared neutral reactions
      * have no entry; their invoked code can still supply current/incumbent. */
     if (prepared) runtime->settings_calls = &settings;
-    int result = JS_ExecuteJobGroup(runtime->engine, group, NULL);
+    int result = (task ? JS_ExecuteFinalizationTask : JS_ExecuteJobGroup)(runtime->engine, group, NULL);
     if (prepared) runtime->settings_calls = settings.previous;
     if (runtime->failure_records_enabled) runtime->failure_job = previous;
     *context = report ? report : info.owner != NULL ? info.owner : info.context;
     return result;
 }
 
-/* A turn ends at queue exhaustion, except that an open task keeps its turn
+static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSContext **context)
+{
+    return step_job(runtime, group, false, context);
+}
+
+/* A turn ends at microtask queue exhaustion, except that an open task keeps its turn
  * (and so its deadline and job count) until os64_js_task_end closes it.
  * Without a script host, that is where rejections are judged; with one,
  * they wait for the host to take them. */
@@ -863,7 +871,7 @@ static os64_js_status_t leave(os64_js_runtime_t *runtime, os64_js_outcome_t *out
     bool pending = JS_IsJobPending(runtime->engine);
     if (pending && runtime->jobs == runtime->limits.jobs_per_turn) {
         JSJobInfo info;
-        if (JS_PeekPendingJob(runtime->engine, &info) && job_eligible(runtime, &info, NULL))
+        if (JS_PeekPendingJob(runtime->engine, &info) && job_eligible(runtime, &info, NULL, false))
             latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_JOBS, 0);
     }
     if (!observe(runtime) && !pending && runtime->turn &&
@@ -1445,7 +1453,8 @@ JS_PUBLIC os64_js_status_t os64_js_enable_host_settings(os64_js_runtime_t *runti
 {
     os64_js_status_t result = settings_ready(runtime, caller_abi, outcome);
     if (result != OS64_JS_OK) return result;
-    if (runtime->active || runtime->turn || JS_IsJobPending(runtime->engine))
+    if (runtime->active || runtime->turn || JS_IsJobPending(runtime->engine) ||
+        JS_IsFinalizationTaskPending(runtime->engine))
         return status(outcome, OS64_JS_BUSY, "settings configuration requires an idle runtime");
     for (size_t i = 0; i < runtime->realm_count; i++)
         if (runtime->realms[i].evaluated)
@@ -1486,6 +1495,23 @@ JS_PUBLIC os64_js_status_t os64_js_enable_finalization_settings(os64_js_runtime_
     if (result != OS64_JS_OK) return result;
     JS_SetHostFinalizationRegistryIncumbent(runtime->engine, job_incumbent_capture, runtime);
     return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_enable_finalization_tasks(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = os64_js_enable_finalization_settings(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    JS_SetFinalizationTaskQueue(runtime->engine, true);
+    runtime->finalization_tasks_enabled = true;
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC bool os64_js_finalization_task_pending(os64_js_runtime_t *runtime, const char *caller_abi)
+{
+    return runtime && caller_abi && os64_strcmp(caller_abi, OS64_JS_ABI_ID) == 0 &&
+        !runtime->destroying && runtime->finalization_tasks_enabled &&
+        JS_IsFinalizationTaskPending(runtime->engine);
 }
 
 static JSValue import_base_current(JSContext *context, void *opaque)
@@ -1671,7 +1697,8 @@ JS_PUBLIC os64_js_status_t os64_js_quiescent(os64_js_runtime_t *runtime,
         __atomic_load_n(&runtime->cancelled, __ATOMIC_ACQUIRE))
         return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime requires root cleanup");
     if (runtime->active || runtime->turn || runtime->task || runtime->checkpointing ||
-        runtime->setup_calls || runtime->settings_calls || runtime->setup_realm || JS_IsJobPending(runtime->engine))
+        runtime->setup_calls || runtime->settings_calls || runtime->setup_realm ||
+        JS_IsJobPending(runtime->engine) || JS_IsFinalizationTaskPending(runtime->engine))
         return status(outcome, OS64_JS_BUSY, "runtime has unfinished engine work");
     return OS64_JS_OK;
 }
@@ -1800,7 +1827,11 @@ JS_PUBLIC os64_js_status_t os64_js_realm_setup(os64_js_realm_t *realm,
         status(outcome, OS64_JS_REALM_RETIRED, "candidate retired during installation");
     if (outcome->status != OS64_JS_OK) {
         realm->retired = true;
-        while (JS_DiscardJobGroup(runtime->engine, &realm->setup_jobs)) runtime->discarded_jobs++;
+        /* Releasing either lane can enqueue transaction work through native
+         * finalizers. Keep the group selected until both lanes are empty. */
+        while (JS_DiscardJobGroup(runtime->engine, &realm->setup_jobs) ||
+               JS_DiscardFinalizationTask(runtime->engine, &realm->setup_jobs))
+            runtime->discarded_jobs++;
     } else {
         realm->setup_complete = true;
     }
@@ -2462,20 +2493,11 @@ static os64_js_status_t enter_task(os64_js_runtime_t *runtime, const char *calle
     return OS64_JS_OK;
 }
 
-JS_PUBLIC os64_js_status_t os64_js_realm_task_begin(os64_js_realm_t *realm, const char *caller_abi,
-                                            const char *source_name, os64_js_outcome_t *outcome)
+/* Requires enter_task admission. Finalization and ordinary host tasks share
+ * the same deadline and microtask budget initialization. */
+static os64_js_status_t begin_task(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
+    const char *source_name, os64_js_outcome_t *outcome)
 {
-    os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
-    os64_js_status_t result = enter_task(runtime, caller_abi, false, outcome);
-    if (result != OS64_JS_OK) return result;
-    if (realm->retired)
-        return refuse(runtime, outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
-    if (realm->staged)
-        return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
-    if (source_name == NULL)
-        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "task name is required");
-    if (runtime->turn || JS_IsJobPending(runtime->engine))
-        return refuse(runtime, outcome, OS64_JS_BUSY, "the previous turn has queued jobs");
     if (observe(runtime)) return leave(runtime, outcome);
     int64_t now = os64_micros();
     if (now < 0) {
@@ -2492,7 +2514,25 @@ JS_PUBLIC os64_js_status_t os64_js_realm_task_begin(os64_js_realm_t *realm, cons
     runtime->turn_owner = realm;
     runtime->task = true;
     realm->evaluated = true;
-    return leave(runtime, outcome);
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_task_begin(os64_js_realm_t *realm, const char *caller_abi,
+                                            const char *source_name, os64_js_outcome_t *outcome)
+{
+    os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
+    os64_js_status_t result = enter_task(runtime, caller_abi, false, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (realm->retired)
+        return refuse(runtime, outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->staged)
+        return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
+    if (source_name == NULL)
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "task name is required");
+    if (runtime->turn || JS_IsJobPending(runtime->engine))
+        return refuse(runtime, outcome, OS64_JS_BUSY, "the previous turn has queued jobs");
+    result = begin_task(runtime, realm, source_name, outcome);
+    return result == OS64_JS_OK ? leave(runtime, outcome) : result;
 }
 
 typedef struct {
@@ -2641,6 +2681,44 @@ JS_PUBLIC os64_js_status_t os64_js_task_end(os64_js_runtime_t *runtime, const ch
     }
     os64_js_status_t result = enter_task(runtime, caller_abi, true, outcome);
     if (result != OS64_JS_OK) return result;
+    checkpoint(runtime, outcome);
+    runtime->task = false;
+    result = leave(runtime, outcome);
+    runtime->checkpointing = false;
+    return result;
+}
+
+/* The host selects one JavaScript-engine task between ordinary tasks. A
+ * cleanup cannot borrow an open task or jump ahead of its microtasks. */
+JS_PUBLIC os64_js_status_t os64_js_run_finalization_task(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter_task(runtime, caller_abi, false, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (!runtime->finalization_tasks_enabled)
+        return refuse(runtime, outcome, OS64_JS_ADMISSION_REFUSED, "finalization tasks are not configured");
+    if (runtime->turn || JS_IsJobPending(runtime->engine))
+        return refuse(runtime, outcome, OS64_JS_BUSY, "the previous turn has queued jobs");
+    runtime->jobs = runtime->discarded_jobs = 0;
+    if (observe(runtime)) return leave(runtime, outcome);
+    JSJobInfo info;
+    if (!JS_PeekFinalizationTask(runtime->engine, NULL, &info)) return leave(runtime, outcome);
+    os64_js_realm_t *realm = realm_for_context(runtime, info.activity);
+    if (!realm) jsport_fatal("finalization task global", __FILE__, __LINE__);
+    if (realm->staged && !realm->retired)
+        return refuse(runtime, outcome, OS64_JS_BUSY, "finalization task awaits candidate activation");
+    /* Discard may release native finalizers. Keep that release and any jobs
+     * it enqueues inside the same bounded task, even for a retired owner. */
+    result = begin_task(runtime, realm, "<FinalizationRegistry cleanup>", outcome);
+    if (result != OS64_JS_OK) return result;
+    JSContext *context = NULL;
+    if (step_job(runtime, NULL, true, &context) < 0) {
+        JSValue error = JS_GetException(context);
+        caught(runtime, context, error);
+        outcome->status = OS64_JS_EXCEPTION;
+        diagnostic(runtime, context, error, outcome);
+        JS_FreeValue(context, error);
+    }
     checkpoint(runtime, outcome);
     runtime->task = false;
     result = leave(runtime, outcome);

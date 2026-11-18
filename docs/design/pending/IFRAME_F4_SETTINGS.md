@@ -259,6 +259,8 @@ DOM conversion are recorded in
 FinalizationRegistry capture, cleanup scopes, lifecycle gates and registry-realm
 exception reporting have a separate opt-in described in
 [IFRAME_F4_FINALIZATION_SETTINGS.md](IFRAME_F4_FINALIZATION_SETTINGS.md).
+Separate host task dispatch, delayed unregister and transactional queue ownership
+are described in [IFRAME_F4_FINALIZATION_TASKS.md](IFRAME_F4_FINALIZATION_TASKS.md).
 
 Current-settings base capture for imports without a source record is described in
 [IFRAME_F4_IMPORT_SETTINGS.md](IFRAME_F4_IMPORT_SETTINGS.md).
@@ -288,7 +290,8 @@ Before publishing browser settings queries, implement and prove:
 - Retained Streams native error conversion uses the explicit
   [host capability policy](IFRAME_F4_HOST_PROMISE_LIFETIME.md). Author replacement
   adoption retains ordinary retirement discard; it is not private continuation work.
-- Complete browser finalization task scheduling and the unresolved neutral-job
+- Integrate the opt-in finalization task source into browser host selection and
+  resolve the neutral-job
   exception-reporting policy. The [neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md)
   supplies actual capability current/script incumbent without inventing entry or
   backup settings; it does not complete those remaining browser host algorithms.

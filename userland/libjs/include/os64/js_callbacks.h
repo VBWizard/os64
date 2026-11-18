@@ -65,6 +65,24 @@ os64_js_status_t os64_js_enable_promise_settings(os64_js_runtime_t *runtime,
 os64_js_status_t os64_js_enable_finalization_settings(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_outcome_t *outcome);
 
+/* Extends registry settings with a separate host task queue. Configure before
+ * execution. Promise checkpoints do not run cleanup; the host polls and calls
+ * run_finalization_task between ordinary tasks. Each call visits one queued
+ * cleanup (one cleared cell), then checkpoints its microtasks. Pending tasks
+ * retain the registry and cells remain unregisterable until delivery. */
+os64_js_status_t os64_js_enable_finalization_tasks(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome);
+/* Owner-thread, allocation-free presence query; false for invalid ABI/runtime
+ * or absent opt-in. Includes ineligible entries that dispatch will discard. */
+bool os64_js_finalization_task_pending(os64_js_runtime_t *runtime, const char *caller_abi);
+/* Requires idle execution with no open task or microtasks. Empty queue is OK.
+ * Uses registry activity as task owner and callback realm as settings entry;
+ * exceptions report to the registry host. Outcome jobs_pending describes only
+ * microtasks; use the separate presence query for remaining cleanup tasks.
+ * Ineligible entries are discarded before budget consumption. */
+os64_js_status_t os64_js_run_finalization_task(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome);
+
 /* Extends finalization/Promise settings to current-realm import base fallback.
  * Configure before execution. A realm with no provider refuses null-record
  * imports; imports with active script records keep their source identity. */
