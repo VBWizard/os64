@@ -1719,7 +1719,7 @@ bool os64_dom_reactions_run(os64_dom_t *dom, os64_js_outcome_t *outcome)
     /* One call, so the wrapper bounds and reports it as any task's call;
      * the reactions inside it are the binding's own raw calls. */
     os64_js_outcome_t call;
-    os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, dom->custom->runner->value, dom->window->value, 0, NULL, NULL,
+    os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, dom->custom->runner->value, d_window_this(dom), 0, NULL, NULL,
                  &call);
     d_outcome_fold(outcome, &call);
     if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, outcome);

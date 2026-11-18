@@ -320,9 +320,9 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
             DScripts before = d_script_enter(report_owner, script);
             if (captured.runtime)
                 os64_js_callback_call(report_owner->realm, entry, OS64_JS_ABI_ID, &captured,
-                                      dom->window->value, argc, args, &call);
+                                      d_window_this(dom), argc, args, &call);
             else
-                os64_js_realm_call(report_owner->realm, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
+                os64_js_realm_call(report_owner->realm, OS64_JS_ABI_ID, held, d_window_this(dom), argc, args, NULL, &call);
             if (call.status == OS64_JS_REALM_RETIRED || call.status == OS64_JS_REALM_FAILED) {
                 /* The callback cannot become eligible again. In particular,
                  * do not leave its interval waking the live document. */

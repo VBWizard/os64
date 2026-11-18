@@ -228,7 +228,7 @@ static JSValue idle_timeout(JSContext *ctx, JSValueConst self, int argc, JSValue
         return JS_EXCEPTION;
     }
     DScripts before = d_script_enter(report_owner, script);
-    JSValue result = d_scheduled_invoke(dom, ctx, &callback, callback.captured.runtime ? JS_UNDEFINED : dom->window->value, 1, &deadline);
+    JSValue result = d_scheduled_invoke(dom, ctx, &callback, callback.captured.runtime ? JS_UNDEFINED : d_window_this(dom), 1, &deadline);
     d_script_leave(report_owner, &before, false);
     JS_FreeValue(ctx, deadline);
     d_scheduled_clear(dom, &callback);
@@ -380,7 +380,7 @@ bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, uint64_t next_fr
             /* What the callback throws is its script's (report.c). */
             dom->idle_running = true;
             DScripts before = d_script_enter(report_owner, script);
-            d_scheduled_call(report_owner, &callback, callback.captured.runtime ? JS_UNDEFINED : dom->window->value, 1, &deadline, &call);
+            d_scheduled_call(report_owner, &callback, callback.captured.runtime ? JS_UNDEFINED : d_window_this(dom), 1, &deadline, &call);
             d_script_leave(report_owner, &before, true);
             dom->idle_running = false;
             JS_FreeValue(ctx, deadline);

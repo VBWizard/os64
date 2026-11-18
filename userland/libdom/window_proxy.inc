@@ -29,10 +29,70 @@ os64_dom_t *d_window_proxy_target(JSValueConst value)
     return proxy ? proxy->context->window : NULL;
 }
 
+JSValueConst d_window_this(os64_dom_t *dom)
+{
+    if (dom->window_identity) return dom->window_identity->value;
+    DBrowsingContext *context = dom->browsing_context;
+    return context && context->proxy ? context->proxy->value : dom->window->value;
+}
+
 JSValue d_window_identity(os64_dom_t *dom, JSContext *ctx)
 {
-    DBrowsingContext *context = dom->browsing_context;
-    return context && context->proxy ? JS_DupValue(ctx, context->proxy->value) : d_binding_global(dom, ctx);
+    return JS_DupValue(ctx, d_window_this(dom));
+}
+
+/* Trusted preparation, under checked context access and before author code.
+ * A prepared candidate must not execute until native context publication:
+ * the stable proxy still forwards to the outgoing document until that commit.
+ * Storage stays on the raw global; the engine hook changes script receivers. */
+int d_window_identity_prepare(JSContext *ctx, os64_dom_t *dom, DBrowsingContext *context)
+{
+    if (!dom || !context || context->cluster != dom->cluster || context->discarded ||
+        !dom->binding_origin || !d_delivery_active(dom) ||
+        (dom->browsing_context && (dom->browsing_context != context || context->active != dom))) {
+        JS_ThrowTypeError(ctx, "Invalid Window identity preparation");
+        return -1;
+    }
+    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return -1;
+    JSValue global = JS_GetGlobalObject(ctx);
+    bool own = JS_VALUE_GET_PTR(global) == JS_VALUE_GET_PTR(dom->window->value);
+    JS_FreeValue(ctx, global);
+    if (!own || (dom->window_identity && dom->window_identity != context->proxy)) {
+        JS_ThrowTypeError(ctx, "Window identity belongs to another context");
+        return -1;
+    }
+    if (dom->window_identity) return 0;
+    JSAtom key = JS_NewAtom(ctx, "globalThis");
+    if (key == JS_ATOM_NULL) return -1;
+    JSPropertyDescriptor descriptor = {0};
+    int found = JS_GetOwnProperty(ctx, &descriptor, dom->window->value, key);
+    bool pristine = found > 0 && !(descriptor.flags & JS_PROP_GETSET) &&
+        (descriptor.flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)) ==
+            (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE) &&
+        JS_IsObject(descriptor.value) &&
+        JS_VALUE_GET_PTR(descriptor.value) == JS_VALUE_GET_PTR(dom->window->value);
+    if (found > 0) {
+        JS_FreeValue(ctx, descriptor.value);
+        JS_FreeValue(ctx, descriptor.getter);
+        JS_FreeValue(ctx, descriptor.setter);
+    }
+    if (!pristine) {
+        JS_FreeAtom(ctx, key);
+        if (found >= 0) JS_ThrowTypeError(ctx, "Window identity requires pristine globalThis");
+        return -1;
+    }
+    JSValue proxy = d_window_proxy(ctx, context);
+    if (JS_IsException(proxy)) { JS_FreeAtom(ctx, key); return -1; }
+    int result = JS_DefinePropertyValue(ctx, dom->window->value, key, JS_DupValue(ctx, proxy),
+        JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE | JS_PROP_THROW);
+    JS_FreeAtom(ctx, key);
+    if (result < 0) { JS_FreeValue(ctx, proxy); return -1; }
+    /* The object-only hook retains without allocation. The old raw global is
+     * rooted by the binding, so releasing the old value cannot run a finalizer. */
+    JS_SetGlobalThis(ctx, proxy);
+    dom->window_identity = context->proxy;
+    JS_FreeValue(ctx, proxy);
+    return 0;
 }
 
 static JSValue window_denied(JSContext *ctx)

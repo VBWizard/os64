@@ -102,7 +102,7 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,uint64_t frame_us,os64
             JSValue arg=JS_NewFloat64(ctx,timestamp);
             os64_js_outcome_t call;
             DScripts before=d_script_enter(report_owner,script);
-            d_scheduled_call(report_owner,&callback,callback.captured.runtime?JS_UNDEFINED:dom->window->value,1,&arg,&call);
+            d_scheduled_call(report_owner,&callback,callback.captured.runtime?JS_UNDEFINED:d_window_this(dom),1,&arg,&call);
             d_script_leave(report_owner,&before,true);
             d_scheduled_clear(dom,&callback);
             d_outcome_fold(out,&call);
