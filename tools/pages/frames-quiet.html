@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Frames - a quiet page</title>
+<style>
+body{margin:0;background:#efece6;color:#2f2b25;font:17px sans-serif}
+main{max-width:900px;margin:24px auto;padding:0 24px}
+h1{font-size:34px;margin:6px 0 10px}.eyebrow{color:#7a6f5c;font-size:13px;letter-spacing:3px}
+.late{display:inline-block;width:60px;height:60px;background:#5a8a9a;
+ animation:grow 1s ease-out 4s forwards}
+@keyframes grow{to{width:240px}}
+</style>
+<main>
+<p class="eyebrow">YONDER / FRAMES / A QUIET PAGE</p>
+<h1>Almost still</h1>
+<p>A bar that waits four seconds and then grows for one, and a GIF. The GIF
+keeps its own time and asks for no frame; the bar asks for none while it
+waits, about a second's worth while it grows, and none once it has grown.
+So <code>/sys/gui</code>'s frame requests stand still here, apart from that
+one second after the page arrives.</p>
+<p><span class="late"></span> <img src="twinkle.gif" alt="a twinkling GIF"></p>
+</main>

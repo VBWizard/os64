@@ -88,15 +88,23 @@ static uint64_t deadline_us(const os64_dom_t *dom, uint64_t start_us, uint64_t u
         if (at < deadline) deadline = at;
     }
     /* A callback may request a frame after the host granted this idle
-     * period. Shorten that grant immediately. A frame already overdue when
-     * this period began may belong to a covered window; the host's deadline
-     * decides whether such a frame prevents a new idle period. */
+     * period: the grant then ends at the host's next frame, HTML's next
+     * rendering deadline (computeDeadline's pending renders), or at the
+     * request when the host did not say when that is. A frame asked for
+     * before the period began is the host's to bound (the rendering
+     * deadline it granted the period to), whether or not it can run (a
+     * covered window's). A request is known by its time on the millisecond
+     * clock, so one made in the millisecond the period began counts as
+     * before it. */
     uint64_t frame = os64_dom_animation_next(dom);
     if (frame != UINT64_MAX) {
-        uint64_t ms = now_ms(dom), at;
-        if (frame >= ms) at = us + (frame - ms) * 1000;
-        else at = ms - frame > us / 1000 ? 0 : us - (ms - frame) * 1000;
-        if (at >= start_us && at < deadline) deadline = at;
+        uint64_t ms = now_ms(dom), since = us > start_us ? (us - start_us) / 1000 : 0;
+        uint64_t start_ms = ms > since ? ms - since : 0;
+        if (frame > start_ms) {
+            uint64_t ends = dom->idle_next_frame != UINT64_MAX ? dom->idle_next_frame : frame;
+            uint64_t at = ends >= ms ? us + (ends - ms) * 1000 : us;  /* already past: ends now */
+            if (at < deadline) deadline = at;
+        }
     }
     return deadline;
 }
@@ -326,14 +334,15 @@ uint64_t os64_dom_idle_next(const os64_dom_t *dom)
 
 bool os64_dom_idle_run(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
-    return os64_dom_idle_before(dom, UINT64_MAX, outcome);
+    return os64_dom_idle_before(dom, UINT64_MAX, UINT64_MAX, outcome);
 }
 
-bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_t *outcome)
+bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, uint64_t next_frame, os64_js_outcome_t *outcome)
 {
     if (outcome != NULL) os64_memset(outcome, 0, sizeof(*outcome));
     if (outcome == NULL || !d_delivery_active(dom) || dom->idle_live == 0) return false;
     dom->idle_render_due = render_due;
+    dom->idle_next_frame = next_frame;
     uint64_t ms = now_ms(dom);
     if (!d_delivery_active(dom)) return false;
     if (render_due <= ms) return false;
@@ -403,6 +412,7 @@ void d_idle_free(os64_dom_t *dom)
 int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     dom->idle_render_due = UINT64_MAX;
+    dom->idle_next_frame = UINT64_MAX;
     static const JSClassDef deadline_class = {.class_name = "IdleDeadline", .finalizer = deadline_finalizer};
     JSValue prototype;
     if (d_interface_class(dom, ctx, global, os64_js_class_id(&deadline_slot), &deadline_class, &prototype) < 0 ||

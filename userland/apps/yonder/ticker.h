@@ -14,7 +14,12 @@
 
 typedef struct yonder_ticker yonder_ticker_t;
 
-// Milliseconds on the monotonic clock: the deadlines' unit.
+// YONDER'S CLOCK, os64_micros: everything that times the page reads it —
+// the deadlines (in milliseconds), the animations, performance.now() and
+// the navigation's timing (in microseconds) — and a display frame's blank
+// instant (os64_gui_frame_blank_us) is on it too, so no conversion stands
+// between a frame's time and the page's.
+uint64_t yonder_now_us(void);
 uint64_t yonder_now_ms(void);
 
 // A sleeping ticker for `window`, ringing `bell`. NULL when it could not be

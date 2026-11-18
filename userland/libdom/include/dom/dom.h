@@ -1175,30 +1175,43 @@ uint64_t os64_dom_message_next(const os64_dom_t *dom);
 bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 const char *os64_dom_message_kind(const os64_dom_t *dom);
 
-/* Animation callbacks: next is a monotonic millisecond deadline (UINT64_MAX
- * when empty). fire runs one due snapshot in request order, with one shared
- * performance-clock timestamp and runtime budget, checkpointing after each
- * callback. Requests made during it wait for another frame; cancellations
- * apply immediately. The successor's deadline counts from this batch's now,
- * clamped to completion on overrun; missed intervals do not accumulate. The
- * host calls between tasks on its rendering step, suppresses frames while
- * covered, and presents once after the batch, yielding to input before another. */
+/* A FRAME'S TIME, for the two frame steps below: the instant the host's frame
+ * is for (its display's blank) on the host's microsecond clock (now_us).
+ * One later than the clock reads now is taken as now, so a frame's time
+ * never passes what performance.now() reads inside it, and one before the
+ * document's time origin is taken as the origin; OS64_DOM_FRAME_NOW asks
+ * for the clock now. The document timeline never goes back: a frame
+ * earlier than the time it holds (a script read it first) keeps that time,
+ * and the callbacks' timestamp is the timeline's. That the host's frames
+ * never go back is the host's to keep. */
+#define OS64_DOM_FRAME_NOW UINT64_MAX
+
+/* Animation callbacks: next is when the oldest waiting request was made, on
+ * the host's millisecond clock (UINT64_MAX when empty): a request is ready
+ * for the host's next frame, and the host paces, one batch to a frame of
+ * its display. fire runs one due snapshot in request order, with one shared
+ * timestamp — the document timeline's time at the frame (`frame_us`,
+ * above) — and runtime budget, checkpointing after each callback. Requests
+ * made during it wait for another frame, ready from the batch's end;
+ * cancellations apply immediately. A late or long batch makes one
+ * successor ready, never a debt of missed frames. The host calls between
+ * tasks on its rendering step, suppresses frames while covered, and
+ * presents once after the batch, yielding to input before another. */
 uint64_t os64_dom_animation_next(const os64_dom_t *dom);
-bool os64_dom_animation_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
+bool os64_dom_animation_fire(os64_dom_t *dom, uint64_t now, uint64_t frame_us, os64_js_outcome_t *outcome);
 
 /* WEB ANIMATIONS (Web Animations 1; WEB_ANIMATIONS.md). The update step is
  * HTML's "update animations and send events": it samples the document
- * timeline's time, runs each animation's pending play and pause tasks,
+ * timeline's time at the frame's (`frame_us`, above), runs each animation's pending play and pause tasks,
  * updates their finished states, brings each CSSAnimation the style's
  * changes and cancels one whose CSS animation went, works out the CSS
  * animation events owed (os64_dom_set_css_animations), removes the
  * filling animations later ones replace (Web Animations 1 § 5.5),
  * dispatches the playback and CSS animation events queued since the last
  * step in the order they happened, as one task, and lets go of the
- * animations that can change nothing more. next answers when a step is
- * due on the host's clock — at once for the first, then no sooner than a
- * frame after the last: at once while a script animation or CSSAnimation
- * has work (a pending task, running, an event, a script that read the
+ * animations that can change nothing more. next answers when a step is due
+ * on the host's clock, which paces one step to a frame of its display: at
+ * once while a script animation or CSSAnimation has work (a pending task, running, an event, a script that read the
  * timeline, something to let go of, one that finished since the last look
  * for replaced ones), or the host's CSS animations moved while a
  * CSSAnimation or a CSS animation event's listener cares, or such a
@@ -1207,7 +1220,8 @@ bool os64_dom_animation_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *o
  * on its rendering step, before the frame callbacks; update answers
  * whether it ran (outcome filled). Owner thread, between tasks. */
 uint64_t os64_dom_web_animations_next(os64_dom_t *dom);
-bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
+bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, uint64_t frame_us,
+                                    os64_js_outcome_t *outcome);
 
 /* What libflow reads (its env's script_effects, flow.h): the effects whose
  * target is `node` in composite order, `*out` pointing at their count of
@@ -1414,8 +1428,13 @@ uint64_t os64_dom_idle_next(const os64_dom_t *dom);
 bool os64_dom_idle_run(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* As idle_run, with a host rendering deadline in monotonic milliseconds.
  * The grant and IdleDeadline.timeRemaining stop at that deadline. UINT64_MAX
- * leaves the grant bounded by timers, pending frames and its 50 ms period. */
-bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_t *outcome);
+ * leaves the grant bounded by timers, pending frames and its 50 ms period.
+ * `next_frame` is when the host's next frame comes, should one be asked for
+ * now: a callback that asks for an animation frame during the grant ends it
+ * there (HTML's next rendering deadline); UINT64_MAX, when the host cannot
+ * say, ends it at the request. */
+bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, uint64_t next_frame,
+                          os64_js_outcome_t *outcome);
 
 /* A script navigation request or native activation since the last take: the last
  * ask wins, but with the Modern Web switch on history.go()s in a row add

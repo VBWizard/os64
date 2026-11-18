@@ -213,7 +213,9 @@ static void pointer_window_cases(void)
     script_turn();pointer_move(10,10,0);
     check(probe_text_is("out","entered"),"pointer: native entry");
     now_ms+=200; for (int i=0;i<6;i++) { script_turn(); now_ms+=20; }
-    check(probe_text_is("out","left"),"pointer: moving layout under a stationary cursor dispatches leave");
+    check(probe_text_is("out","entered"),"pointer: the re-hit a moved layout owes waits for a frame");
+    for (int i=0;i<6;i++) { host_frame(); script_turn(); frame_close(); now_ms+=20; }
+    check(probe_text_is("out","left"),"pointer: moving layout under a stationary cursor dispatches leave (in a frame)");
     probe_drop();
     probe_page("<!doctype html><style>body{margin:0}#pad{width:100px;height:80px}</style>"
         "<div id=pad></div><p id=out></p><script>var p=document.getElementById('pad');"
