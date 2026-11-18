@@ -150,9 +150,9 @@ os64_js_status_t js_owner_runtime_consume_rejection(os64_js_runtime_t *, const c
  * No F4 authority, public activation or reclamation certificate is created. */
 os64_js_status_t js_owner_runtime_task_run(os64_js_runtime_t *, const char *caller_abi,
     JSOwnerTicket, const char *name, JSOwnerScopedBody *, void *, os64_js_outcome_t *);
-/* Status-only module-provider registration/detachment. Keep native opaque and
- * source storage alive until successful detach or root shutdown, and retain a
- * holder for cleanup: closing a ticket does not detach a provider. Existing
+/* Status-only module-provider registration/detachment. Keep native opaque until
+ * detach/root shutdown, and returned source bytes until the enclosing call ends.
+ * Retain a holder for cleanup: closing it does not detach a provider. Existing
  * private-setup/active-call/failure/retirement rules apply. Loader callbacks
  * keep their string/borrowed-byte contracts; legacy import-base callback
  * delivery retains its raw-view compatibility veto. No persistent module

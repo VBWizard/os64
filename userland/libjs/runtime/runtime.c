@@ -3935,8 +3935,8 @@ JS_PUBLIC os64_js_status_t os64_js_realm_set_import_base(os64_js_realm_t *realm,
     return OS64_JS_OK;
 }
 
-/* Provider storage keeps its native lifetime until successful detach/root
- * shutdown; resolving a holder neither publishes a view nor starts a turn. */
+/* Registered opaque lives until detach/root shutdown; returned source bytes
+ * keep their enclosing-call loan. Resolving a holder publishes no view. */
 os64_js_status_t js_owner_runtime_set_module_loader(os64_js_runtime_t *runtime, const char *caller_abi,
     JSOwnerTicket ticket, const os64_js_module_loader_t *loader, os64_js_outcome_t *outcome)
 {

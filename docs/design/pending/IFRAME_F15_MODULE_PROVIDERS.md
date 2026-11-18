@@ -1,5 +1,6 @@
 # F15 checked module-provider bootstrap
 
+Implementation PR **#662**, runtime implementation `600403a1`.
 Private C1/C2/C4 milestone after checked native tasks (#660), on merged
 userland `c9fe984b` (#659/#660). Engine remains
 `bcc933c20d304c1d5be5b1cb0e703b9d0f198bc7dc59fdf374050f48f190ca5f`,
@@ -13,8 +14,9 @@ status-only helper, also used by checked script-host registration. Delegate
 existing setter rules: no execution/health admission or raw context getter,
 no new allocation, no native pointer/value export, and cleanup after
 failure/retirement remains possible with a valid retained holder. Closing a
-ticket does not detach a provider. Native opaque/source storage stays alive
-until successful detach or root shutdown, independently of holder counts.
+ticket does not detach a provider. Native opaque storage stays alive until successful detach or root shutdown;
+returned source bytes stay borrowed until the enclosing call ends. Neither
+lifetime is shortened by holder close.
 
 Module resolve/source callbacks retain their existing string/byte contracts:
 resolve transfers an os64 allocation, source lends bytes until the enclosing
@@ -118,3 +120,9 @@ providers detach and their source storage is poisoned. Existing late-failure
 module watchers, provider opaque lifetime obligations, foreign/native graph
 classification and the C3/reachability/teardown/reuse exit are unchanged.
 No P5, visible-frame or public checked-profile acceptance is claimed.
+
+Final lifetime wording distinguishes registered opaque storage from returned
+source-byte borrowing. The before/after preprocessed runtime is byte-identical
+(SHA-256 `2ca3ed6cf18a9f0a7c4967b8801180b97b7cb6a07c1b43312ced38138ab954b8`);
+the clarification changes no delegated behavior. The final guest receipt
+matches the clarified source hashes and production objects.
