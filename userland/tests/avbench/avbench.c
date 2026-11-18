@@ -326,6 +326,10 @@ static int convert(SwsContext *bilinear, SwsContext *fast, AVFrame *canvas, AVFr
     // neither (THE COLOURS).
     canvas->color_primaries = decoded->color_primaries;
     canvas->color_trc = decoded->color_trc;
+    // An interlaced frame (H.264 says so per frame) is converted field by
+    // field; the scaler refuses a source and destination that disagree
+    // (libswscale/swscale.c, sws_frame_setup), and it does not deinterlace.
+    canvas->flags = (canvas->flags & ~AV_FRAME_FLAG_INTERLACED) | (decoded->flags & AV_FRAME_FLAG_INTERLACED);
     int64_t t0 = os64_micros();
     int r = sws_scale_frame(bilinear, canvas, decoded);
     *bilinear_us = os64_micros() - t0;
