@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "binding_authority.h"
 #include "os64/proc.h"
 #include "os64/js_failure.h"
 #include "dom/retention.h"
@@ -524,13 +525,13 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
 
 static os64_dom_t *create_binding(os64_js_runtime_t *, os64_js_realm_t *,
     os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *,
-    os64_js_outcome_t *, os64_dom_cluster_t *, bool *, bool);
+    os64_js_outcome_t *, os64_dom_cluster_t *, bool *, bool, const way_origin_t *);
 
 os64_dom_t *d_create_in_realm(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
     os64_html_document_t *document, os64_page_state_t *state,
     const os64_dom_options_t *options, os64_js_outcome_t *outcome)
 {
-    return create_binding(runtime, realm, document, state, options, outcome, NULL, NULL, false);
+    return create_binding(runtime, realm, document, state, options, outcome, NULL, NULL, false, NULL);
 }
 
 os64_dom_t *os64_dom_create_with_browser_jobs(os64_js_runtime_t *runtime,
@@ -539,7 +540,7 @@ os64_dom_t *os64_dom_create_with_browser_jobs(os64_js_runtime_t *runtime,
 {
     if (os64_js_enable_browser_jobs(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) return NULL;
     os64_js_realm_t *realm = os64_js_primary_realm(runtime, OS64_JS_ABI_ID, outcome);
-    return realm ? create_binding(runtime, realm, document, state, options, outcome, NULL, NULL, true) : NULL;
+    return realm ? create_binding(runtime, realm, document, state, options, outcome, NULL, NULL, true, NULL) : NULL;
 }
 
 os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *cluster, os64_js_realm_t *realm,
@@ -550,7 +551,54 @@ os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *cluster, os64_
     if (!outcome) return admission;
     if (!cluster) { outcome->status = OS64_JS_BAD_ARGUMENT; return admission; }
     admission.binding = create_binding(cluster->runtime, realm, document, state,
-        options, outcome, cluster, &admission.consumed, false);
+        options, outcome, cluster, &admission.consumed, false, NULL);
+    return admission;
+}
+
+/* Origin tokens belong to this cluster's namespace. A copied token supports
+ * inherited origins; consuming a token does not reserve a binding or a realm. */
+bool d_next_opaque_origin(uint64_t *serial, way_origin_t *out)
+{
+    if (!serial || !out || *serial == UINT64_MAX) return false;
+    *out = (way_origin_t){.opaque=true, .id=++*serial};
+    return true;
+}
+
+bool d_cluster_opaque_origin(os64_dom_cluster_t *cluster, way_origin_t *out)
+{
+    return cluster && !cluster->poisoned && !cluster->drained &&
+        d_next_opaque_origin(&cluster->opaque_origin_serial, out);
+}
+
+static bool binding_origin_valid(const os64_dom_cluster_t *cluster, const way_origin_t *origin)
+{
+    if (!origin) return false;
+    if (origin->opaque)
+        return origin->id && origin->id <= cluster->opaque_origin_serial &&
+            !origin->scheme[0] && !origin->host[0] && !origin->port;
+    if (origin->id || !os64_memchr(origin->scheme, 0, sizeof(origin->scheme)) ||
+        !os64_memchr(origin->host, 0, sizeof(origin->host))) return false;
+    /* Round-trip a tuple through the shared parser before ownership changes.
+     * Invalid/noncanonical input and parser allocation refusal grant no origin. */
+    char text[OS64_URL_SCHEME_MAX + OS64_URL_HOST_MAX + 32];
+    way_origin_t parsed;
+    if (!way_origin_serialize(origin, text, sizeof(text))) return false;
+    way_origin_of(text, 0, &parsed);
+    return !parsed.opaque && way_origin_same(origin, &parsed);
+}
+
+os64_dom_admission_t d_create_in_realm_with_origin(os64_dom_cluster_t *cluster,
+    os64_js_realm_t *realm, os64_html_document_t *document, os64_page_state_t *state,
+    const os64_dom_options_t *options, const way_origin_t *origin, os64_js_outcome_t *outcome)
+{
+    os64_dom_admission_t admission = {0};
+    if (!outcome) return admission;
+    if (!cluster || !binding_origin_valid(cluster, origin)) {
+        outcome->status = OS64_JS_BAD_ARGUMENT;
+        return admission;
+    }
+    admission.binding = create_binding(cluster->runtime, realm, document, state,
+        options, outcome, cluster, &admission.consumed, false, origin);
     return admission;
 }
 
@@ -889,7 +937,7 @@ static os64_dom_t *allocate_binding(os64_js_runtime_t *runtime, os64_js_realm_t 
 static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
                               os64_html_document_t *document, os64_page_state_t *state,
                               const os64_dom_options_t *options, os64_js_outcome_t *outcome,
-                              os64_dom_cluster_t *cluster, bool *consumed, bool browser_jobs)
+                              os64_dom_cluster_t *cluster, bool *consumed, bool browser_jobs, const way_origin_t *origin)
 {
     if (outcome == NULL) return NULL;
     JSContext *ctx = os64_js_realm_context(realm, OS64_JS_ABI_ID, outcome);
@@ -911,7 +959,8 @@ static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *r
             }
         if (os64_html_group_check(cluster->html, document) != OS64_HTML_OK ||
             !os64_page_state_group_check(cluster->page, state) ||
-            sizeof(os64_dom_t) > cluster->limits.dom_bytes - cluster->bytes) {
+            sizeof(os64_dom_t) + (origin ? sizeof(DBlock) + sizeof(*origin) : 0) >
+                cluster->limits.dom_bytes - cluster->bytes) {
             outcome->status = OS64_JS_HOST_FAILURE;
             return NULL;
         }
@@ -928,10 +977,20 @@ static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *r
     os64_dom_t *dom = allocate_binding(runtime, realm, ctx, document, state, selected, cluster, outcome);
     if (!dom) return NULL;
     dom->browser_jobs = browser_jobs;
+    if (origin) {
+        dom->binding_origin = d_alloc(dom, sizeof(*origin));
+        if (!dom->binding_origin) {
+            os64_free(dom);
+            outcome->status = OS64_JS_HOST_FAILURE;
+            return NULL;
+        }
+        *dom->binding_origin = *origin;
+    }
     if (cluster) {
         /* Both ledgers were preflighted and no script has run since then.
          * Admission itself allocates nothing; ownership changes as one pair. */
         if (os64_js_realm_task_begin(realm, OS64_JS_ABI_ID, "DOM installation", outcome) != OS64_JS_OK) {
+            d_free(dom, dom->binding_origin);
             os64_free(dom);
             return NULL;
         }
@@ -1283,6 +1342,7 @@ static void binding_free(os64_dom_t *dom)
     d_ranges_free(dom);
     if (dom->body_context != NULL) os64_html_release(dom->document, dom->body_context);
     d_performance_free(dom);
+    d_free(dom, dom->binding_origin);
     d_kept_free_all(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
