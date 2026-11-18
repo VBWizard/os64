@@ -873,6 +873,7 @@ os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi);
 /* Guard an annotated Window member and resolve its actual receiver binding. */
 os64_dom_t *d_member_callback(JSContext *, JSValueConst, int *, JSValueConst *, const char *);
 bool d_member_access(os64_dom_t *, JSContext *, bool);
+bool d_location_access(os64_dom_t *, JSContext *, bool);
 JSValue d_binding_global(os64_dom_t *, JSContext *);
 JSValue d_custom_registry(os64_dom_t *, JSContext *);
 int d_window_member_magic(os64_dom_t *, JSContext *, JSValueConst, const char *, int, int);

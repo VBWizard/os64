@@ -650,12 +650,17 @@ reads back the last string a script set, as HTML keeps it, and
 `defaultStatus`, which no standard has, accepts an assignment and reads
 empty; the status line itself is the browser's and shows neither.
 
-Inactive document services cannot enqueue navigation. Location requests refuse
-with InvalidStateError; retained Location data still names the binding's saved
-address. Taking an inactive document's pending ask discards its node holds.
-Stable WindowProxy/Location routing across replacement documents belongs to
-the iframe proxy slice. History uses its specified SecurityError inactive
-behavior, described below.
+Inactive document services cannot enqueue navigation. Default Location requests
+refuse with InvalidStateError; retained data names the binding's saved address.
+The private origin-bearing context path instead resolves retained Locations
+through the active document, checks the original relevant global against the
+pre-WebIDL caller and the active document against entry settings, and routes
+navigation through native policy. Discarded contexts supply the blank URL and
+no navigation; inactive targets without committed discard refuse. See
+[retained Location](../../docs/design/pending/IFRAME_F4_LOCATION_CONTEXT.md).
+Taking an inactive document's legacy pending ask discards its node holds.
+WindowProxy publication remains gated. History uses its specified SecurityError
+inactive behavior, described below.
 
 **Element actions.** `click()` is a synthetic click: the event, then the
 element's activation unless a listener cancelled it; with the switch on the

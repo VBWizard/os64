@@ -310,6 +310,73 @@ static bool history_active(os64_dom_t *dom, JSContext *ctx)
     return false;
 }
 
+/* The receiver, not the borrowed function's creation realm, owns a Location.
+ * Registry identity checks do not execute author code or inspect prototypes. */
+static os64_dom_t *location_receiver(os64_dom_t *owner, JSValueConst self)
+{
+    if (owner->binding_origin) {
+        for (size_t i = 0; i < owner->cluster->count; ++i) {
+            os64_dom_t *binding = owner->cluster->members[i];
+            if (binding->binding_origin && d_same_object(self, binding->location)) return binding;
+        }
+        return NULL;
+    }
+    return d_same_object(self, owner->location) ? owner : NULL;
+}
+
+static JSValue location_member(os64_dom_t *owner, JSContext *ctx, JSValueConst self,
+    JSValueConst value, int member, bool set)
+{
+    os64_dom_t *relevant = location_receiver(owner, self);
+    if (!relevant) return JS_ThrowTypeError(ctx, "Illegal invocation");
+    bool cross_origin = (member == L_HREF && set) || member == L_REPLACE;
+    if (!d_location_access(relevant, ctx, cross_origin)) return JS_EXCEPTION;
+    os64_dom_t *document = relevant;
+    DBrowsingContext *context = relevant->browsing_context;
+    if (context) {
+        document = d_browsing_context_target(context, d_browsing_context_generation(context));
+        /* A tombstone has no document. An uncommitted departure still has a
+         * target but cannot supply services or be treated as a blank document. */
+        if (!document && !context->discarded) return navigation_denied(ctx);
+    }
+    bool reads_url = !set && (member <= L_ORIGIN || member == L_TO_STRING);
+    if (!document) {
+        if (reads_url) {
+            const char *blank = member == L_HREF || member == L_TO_STRING ? "about:blank" :
+                member == L_PROTOCOL ? "about:" : member == L_PATHNAME ? "blank" :
+                member == L_ORIGIN ? "null" : "";
+            return JS_NewString(ctx, blank);
+        }
+        /* WebIDL string conversion precedes the null-document algorithm exit.
+         * It may throw, but cannot enqueue a navigation on the tombstone. */
+        if (set || member == L_ASSIGN || member == L_REPLACE) {
+            DString text;
+            if (!d_string(relevant, ctx, value, &text)) return JS_EXCEPTION;
+            d_string_free(relevant, &text);
+        }
+        return JS_UNDEFINED;
+    }
+    if (context && !cross_origin && (reads_url || member == L_RELOAD ||
+            (set && member != L_HASH))) {
+        os64_dom_t *entry = navigation_settings(document, OS64_JS_SETTINGS_ENTRY);
+        if (!entry || !way_origin_same(entry->binding_origin, document->binding_origin))
+            return navigation_denied(ctx);
+    }
+    if (reads_url) return location_part(document, ctx, member == L_TO_STRING ? L_HREF : member);
+    switch (member) {
+    case L_HREF: return ask_url(document, ctx, OS64_DOM_NAVIGATE_URL, value, false, false);
+    case L_HASH: return ask_url(document, ctx, OS64_DOM_NAVIGATE_URL, value, true, false);
+    case L_ASSIGN: return ask_url(document, ctx, OS64_DOM_NAVIGATE_URL, value, false, true);
+    case L_REPLACE: return ask_url(document, ctx, OS64_DOM_NAVIGATE_REPLACE, value, false, false);
+    case L_RELOAD:
+        if (context) return context_navigate(document, ctx, JS_UNDEFINED, D_NAV_RELOAD);
+        if (!d_require_active(document, ctx)) return JS_EXCEPTION;
+        d_navigate(document, OS64_DOM_NAVIGATE_RELOAD, NULL, NULL, page_url(document), 0);
+        return JS_UNDEFINED;
+    default: return JS_UNDEFINED;
+    }
+}
+
 static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                              int magic, JSValue *data)
 {
@@ -318,31 +385,10 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
-    /* A Location's member is the location's, a History's the history
-     * object's: called on anything else, WebIDL's brand check refuses it. */
-    if ((magic <= L_TO_STRING && !d_same_object(self, dom->location)) ||
-        (magic >= H_BACK && magic <= H_LENGTH && !d_same_object(self, dom->history)))
+    if (magic <= L_TO_STRING) return location_member(dom, ctx, self, value, magic, set);
+    if (magic >= H_BACK && magic <= H_LENGTH && !d_same_object(self, dom->history))
         return JS_ThrowTypeError(ctx, "Illegal invocation");
-    /* href's setter and replace are the Location IDL cross-origin exceptions.
-     * Navigation policy and exotic property access remain separate gates. */
-    if (magic <= L_TO_STRING && !d_member_access(dom, ctx,
-            (magic == L_HREF && set) || magic == L_REPLACE)) return JS_EXCEPTION;
     switch (magic) {
-    case L_HREF:
-        return set ? ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, false, false) : location_part(dom, ctx, magic);
-    case L_HASH:
-        return set ? ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, true, false) : location_part(dom, ctx, magic);
-    case L_PROTOCOL: case L_HOST: case L_HOSTNAME: case L_PORT: case L_PATHNAME:
-    case L_SEARCH: case L_ORIGIN:
-        return set ? JS_UNDEFINED : location_part(dom, ctx, magic);
-    case L_ASSIGN: return ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, false, true);
-    case L_REPLACE: return ask_url(dom, ctx, OS64_DOM_NAVIGATE_REPLACE, value, false, false);
-    case L_RELOAD:
-        if (dom->browsing_context) return context_navigate(dom, ctx, JS_UNDEFINED, D_NAV_RELOAD);
-        if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
-        d_navigate(dom, OS64_DOM_NAVIGATE_RELOAD, NULL, NULL, page_url(dom), 0);
-        return JS_UNDEFINED;
-    case L_TO_STRING: return location_part(dom, ctx, L_HREF);
     case H_BACK: case H_FORWARD: case H_GO: {
         int32_t delta = magic == H_BACK ? -1 : 1;
         if (magic == H_GO) {
