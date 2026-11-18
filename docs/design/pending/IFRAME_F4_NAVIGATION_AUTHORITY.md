@@ -111,3 +111,5 @@ DOM realm consumer compile. Public headers, wrapper ABI, prepared engine and
 shared exports remain unchanged. Tracker and stale-reference checks pass.
 Matching source, probes, consumers, recipes and logs are frozen with a verified
 SHA-256 manifest.
+
+Implementation: PR #655.
