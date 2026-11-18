@@ -290,7 +290,9 @@ void os64_media_counts(const os64_media_t *m, os64_media_counts_t *out);
 // be the decoding thread, and to no media.
 //   EXACT: the same pixels on every CPU, whichever routines FFmpeg chose
 //          (its bit-exact mode; slower): for proofs, never for playing
-//   FAST:  FFmpeg's fast bilinear (cheaper, coarser)
+//   FAST:  FFmpeg's fast bilinear when shrinking (cheaper, coarser);
+//          bilinear when enlarging, where FFmpeg's fast path would run
+//          code it writes into memory os64 does not let execute
 // Neither flag: bilinear.
 typedef struct os64_media_scaler os64_media_scaler_t;
 #define OS64_MEDIA_SCALE_EXACT  (1u << 0)

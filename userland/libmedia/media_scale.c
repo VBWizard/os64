@@ -45,9 +45,19 @@
 // (tools/test_media_picture_host.sh checks both, interlaced included,
 // against guard words, which ASan cannot do for writes FFmpeg's assembly
 // makes).
+// FAST IS FAST ONLY WHEN SHRINKING. Enlarging, libswscale's fast bilinear
+// writes an x86 horizontal filter of its own and runs it
+// (libswscale/utils.c, ff_init_hscaler_mmxext); with no mmap or mprotect
+// in this build it writes that code into av_malloc's memory, which os64
+// does not let execute, and the jump into it is a no-execute fault (the
+// P5's first `avbench -x 2560x1440`). So OS64_MEDIA_SCALE_FAST asks for
+// SWS_FAST_BILINEAR only for a picture wider than the destination, and
+// enlarges with plain bilinear (tools/test_av_audit.py pins when the
+// scaler writes code; libav/README.md § The x86 assembly).
 struct os64_media_scaler {
     SwsContext *sws;
     AVFrame *canvas;
+    bool fast;                       // OS64_MEDIA_SCALE_FAST: SWS_FAST_BILINEAR when shrinking
     uint32_t *bounce;                // NULL until a conversion keeps a width not a multiple of 8
     size_t bounce_pixels;
 };
@@ -74,9 +84,8 @@ int os64_media_scaler_create(uint32_t dst_width, uint32_t dst_height, uint32_t f
         os64_media_scaler_destroy(s);
         return OS64_MEDIA_NO_MEMORY;
     }
-    s->sws->flags = flags & OS64_MEDIA_SCALE_FAST ? SWS_FAST_BILINEAR
-                  : flags & OS64_MEDIA_SCALE_EXACT ? SWS_BILINEAR | SWS_BITEXACT | SWS_ACCURATE_RND
-                  : SWS_BILINEAR;
+    s->fast = (flags & OS64_MEDIA_SCALE_FAST) != 0;
+    s->sws->flags = flags & OS64_MEDIA_SCALE_EXACT ? SWS_BILINEAR | SWS_BITEXACT | SWS_ACCURATE_RND : SWS_BILINEAR;
     s->sws->threads = 1;                 // starts no threads (libav is built without them)
     // BGRA in memory is XRGB8888 in a 32-bit word, and a source without
     // alpha gives an opaque 0xFF X byte.
@@ -123,6 +132,12 @@ int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t
     // and a destination that disagree (libswscale/swscale.c,
     // sws_frame_setup), and it does not deinterlace.
     s->canvas->flags = (s->canvas->flags & ~AV_FRAME_FLAG_INTERLACED) | (source->flags & AV_FRAME_FLAG_INTERLACED);
+    if (s->fast) {
+        // FAST IS FAST ONLY WHEN SHRINKING, above. A change rebuilds the
+        // scaler's graph, which it does whenever its options change.
+        unsigned want = source->width > (int)width ? SWS_FAST_BILINEAR : SWS_BILINEAR;
+        if (s->sws->flags != want) s->sws->flags = want;
+    }
     int r = sws_scale_frame(s->sws, s->canvas, source);
     s->canvas->data[0] = NULL;
     if (r < 0) return r == AVERROR(ENOMEM) ? OS64_MEDIA_NO_MEMORY : OS64_MEDIA_UNSUPPORTED;

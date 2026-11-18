@@ -132,6 +132,9 @@ timeline as sound. yonder, and any other player, see no FFmpeg type.
   buffer of the scaler's own: FFmpeg's unscaled converter works eight
   pixels at a time and would otherwise write past the row (media_scale.c,
   THE UNSCALED EDGE).
+  FAST is FFmpeg's fast bilinear only when shrinking. Enlarging, that
+  path runs x86 code it writes into the heap, and os64's data memory does
+  not execute: it was the P5's first fault, `avbench -x 2560x1440`.
 - **Cover art** (an attached picture) is never the media's picture, nor
   part of its zero.
 - **`canPlayType`**: `video/mp4` naming `avc1` or `avc3` answers

@@ -61,6 +61,11 @@
 //  22  the picture-only clip (bbb-480p-3s.mp4): open for both or for the
 //      picture, it opens with the sound absent; open for the sound, it is
 //      refused, NO_SOUND
+//  23  a FAST scaler enlarging /tests/pages/video-tiny.mp4's 16-wide
+//      pictures to 64x64 and 128x96: the case where FFmpeg's fast bilinear
+//      would run code it writes into the heap, which os64 ends with a
+//      no-execute fault (media_scale.c, FAST IS FAST ONLY WHEN SHRINKING).
+//      Passing is surviving, with every conversion answered 0
 //
 // Exit codes: 0x3ED10000 success, 0x3ED100NN the step that failed.
 
@@ -782,6 +787,37 @@ static int step_handoff(void)
     return 0;
 }
 
+static int step_fast_enlarge(void)
+{
+    static const uint32_t kSizes[2][2] = { { 64, 64 }, { 128, 96 } };
+    static uint32_t pixels[128 * 96];
+    for (int z = 0; z < 2; z++) {
+        Clip c;
+        clip_open(&c, "/tests/pages/video-tiny.mp4", OS64_MEDIA_WANT_PICTURE);
+        os64_media_scaler_t *s = NULL;
+        if (c.result != 0 || os64_media_scaler_create(kSizes[z][0], kSizes[z][1], OS64_MEDIA_SCALE_FAST, &s) != 0) {
+            say("fast enlarge: open (result)", c.result, 0);
+            clip_close(&c);
+            return FAIL(23);
+        }
+        long converted = 0, refused = 0;
+        for (;;) {
+            os64_media_got_t got;
+            if (os64_media_next(c.m, NULL, 0, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
+            if (os64_media_scaler_convert(s, got.picture, pixels, kSizes[z][0] * 4) == 0) converted++;
+            else refused++;
+            os64_media_picture_release(c.m, got.picture);
+        }
+        os64_media_scaler_destroy(s);
+        clip_close(&c);
+        if (converted == 0 || refused != 0) {
+            say("fast enlarge (converted, refused)", converted, refused);
+            return FAIL(23);
+        }
+    }
+    return 0;
+}
+
 static int step_picture_only(void)
 {
     Clip c;
@@ -819,6 +855,7 @@ int main(void)
     if (!failed) failed = steps_pictures();
     if (!failed) failed = step_handoff();
     if (!failed) failed = step_picture_only();
+    if (!failed) failed = step_fast_enlarge();
     if (failed) {
         os64_printf("mediatest: FAIL step %d\n", failed & 0xFF);
         return failed;
