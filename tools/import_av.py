@@ -20,9 +20,12 @@ is committed:
   is what os64 has and keeps --check from depending on what this machine
   has installed), the other files configure generates that the build
   compiles or includes, and the few FFmpeg's makefiles make (MADE, below),
-  asked of make by name. What it records about the C COMPILER (INT128,
-  inline-asm abilities) is the host gcc's, which answers as the cross gcc
-  does; a host whose cc is not gcc may see --check differ there.
+  asked of make by name. What it records about the C COMPILER (its
+  inline-asm abilities; INT128 is overridden, because dividing one needs
+  libgcc) is the host gcc's, which answers as the cross gcc does, and the
+  scaler's assembly macros (MADE) are the host compiler's preprocessor
+  output, whose spacing is that preprocessor's; a host whose cc is not gcc
+  may see --check differ in either.
 - sources.mk: the objects FFmpeg's own makefiles would build (its
   lib*.a.objs lists), as source paths: C, and the x86 assembly as a list of
   its own.

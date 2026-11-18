@@ -22,7 +22,7 @@ product video, or a link straight to the file.
 | `poster`, `videoWidth`/`videoHeight`, `object-fit` | captions drawn over the picture |
 | `<video controls>` over the picture; a page for a linked video file | `drawImage(video)` into a canvas, `requestVideoFrameCallback` |
 | silent files and muted clips, at their true cost | picture-in-picture, 10-bit and HDR |
-| full screen (**GAP**: this arc or the next, § 9) | protected (DRM) streams: not planned |
+| full screen (§ 9; its last slice, Rulings 4) | protected (DRM) streams: not planned |
 
 Nothing here may make the later column harder. Where a choice bears on it,
 the section says so.
@@ -146,7 +146,9 @@ measured: DEBTS). The first player is where it is measured.
 1. Layout gives the video box a content size in device pixels. The page
    tells the session that size and the `object-fit` rectangle inside it.
 2. The picture thread converts each decoded picture straight to XRGB at
-   that size (libswscale's `bgr0` is the window canvas's format).
+   that size (the window canvas's XRGB8888 is libswscale's `bgra` in
+   memory, its X byte written 0xFF; `bgr0` is the same bytes with that
+   byte undefined).
 3. When a ready frame comes due, the main loop marks the box's visible
    part dirty, as a GIF's frame does today. No layout.
 4. The paint copies that frame's rows into the window canvas, clipped.
@@ -244,14 +246,14 @@ interrupts off is heard.
   With ranges, the open fetches the tail; without, the file must arrive
   whole. Needs a fixture; nothing in the tree exercises it.
 
-## 9. Full screen (**GAP**: scope)
+## 9. Full screen (this arc's last slice, V8)
 
 There is no full-screen window in os64: no client call to drop the
 decorations or cover the screen after creation, and no `requestFullscreen`
 in libdom. It needs a small window-manager call plus the DOM's Fullscreen
-API. Lean: a late slice of THIS arc, since a video player without it is
-not one, and since 2560x1440 full screen is the worst case everything
-above was sized for.
+API. Ruled into THIS arc, as its last slice (Rulings 4): a video player
+without it is not one, and 2560x1440 full screen is the worst case
+everything above was sized for.
 
 ## 10. Slices (a first cut, to be argued)
 

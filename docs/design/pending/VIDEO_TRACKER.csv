@@ -7,6 +7,7 @@ Q5,"Muted sound: decode it and hold no voice, or do not decode it",,open,,"VIDEO
 Q6,Pictures while the video is out of view: keep decoding or stop,,open,,"VIDEO.md § 5 GAP. Lean: keep decoding in this arc, book the saving"
 Q7,The budget for many videos on one page,,open,,VIDEO.md § 6 GAP: numbers from the P5
 Q8,One copy fewer on the path to the glass,,open,,"VIDEO.md § 7 GAP: weighed after the frame clock, with sound playing"
+Q9,The controls over the picture hide when idle?,,open,,"VIDEO.md § 8 GAP: as other browsers do"
 
 V.0,"V0. libav: the H.264 decoder and parser, FFmpeg's x86 assembly chosen at run time, /tests/avbench; os64_malloc_aligned beneath it",,done,#629 #630,"The P5 point: one thread carries 1440p60 at 2.8x real time with assembly (VIDEO.md § 1)"
 V.1,"V1. The glass fixture and its measurement: /sys/gui's publish-to-glass wait, /tests/glassbench",,done,#628,VIDEO.md § 7's P5 figures

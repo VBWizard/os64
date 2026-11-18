@@ -153,16 +153,19 @@ they stay off.
   own**, and FFmpeg's configure warns that such a build must not be used
   from several threads. What it shares between callers is set up on first
   use (`ff_thread_once`: the registries, a decoder's tables, which run
-  when a format is probed or a decoder opened) and its default log
+  when a format is probed or a decoder opened, and the scaler's rgb2rgb
+  tables, which run at a scaler's first conversion) and its default log
   callback, which keeps state. So a program that uses libav from more than
-  one thread does every open and close under one lock of its own and
+  one thread does every open and close, and every scaler's first
+  conversion, under one lock of its own, or makes those tables first, and
   installs a log callback that is safe from any thread. libmedia keeps a
   narrower form (its lock spans `avformat_find_stream_info` and the
   decoder's open, where this build's decoders set up, and it makes the
   CRC and AES tables itself at its first open, since a demuxer can ask
   for those while reading); `libmedia/media.c`
   § THREADS says why it is enough, and `tools/test_av_audit.py` pins the
-  one-time setups it rests on. The scaler asks for worker threads
+  one-time setups it rests on. A scaler set to one thread (the default)
+  starts none; set to more, it asks for worker threads
   (`avpriv_slicethread_create`), is told there are none, and works on the
   caller's thread. Turning threads on means a pthread shim (mutex, condition, once)
   over `os64_thread`, the lock and bells.
@@ -189,7 +192,9 @@ x86-64.
   could never be chosen, and leaving them out keeps FFmpeg's `ALIGN` at 32.
   One is assembled anyway: the scaler's experimental backend
   (`libswscale/x86/ops_common.asm`) instantiates `packed_shuffle64_64`
-  for AVX-512 without the guard its siblings carry. Nothing can select it
+  for AVX-512 with no guard (the scaler's other AVX-512 routines, in
+  `x86/rgb_2_rgb.asm`, sit behind `HAVE_AVX512ICL_EXTERNAL`). Nothing can
+  select it
   (`x86/ops.c` reaches it only through a 64-byte vector, which it picks
   only under `EXTERNAL_AVX512`, false at compile time here), and the audit
   allows a `zmm` register in that routine alone.
@@ -278,7 +283,7 @@ link error, not a function it cannot reach.
   since the host's FFmpeg is another release with another scaler. By
   hand, `avbench [-s|-c] [-x WxH|natural] file` measures (with `-x`, the
   conversion too, bilinear and fast), and `avbench all <dir> [runs]
-  [-x WxH]` runs a directory of clips in every mode into
+  [-x WxH|natural]` runs a directory of clips in every mode into
   `/home/avbench.txt`.
 - `tools/test_av_libc_host.sh`: the shims against glibc.
 - `tools/test_av_audit.py`: the pin, the licence, the surface, the imports.

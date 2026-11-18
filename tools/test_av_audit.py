@@ -74,7 +74,7 @@ for name in ('HAVE_X86ASM', 'HAVE_INLINE_ASM', 'CONFIG_RUNTIME_CPUDETECT', 'CONF
 # 32, which os64_malloc_aligned's dedicated blocks exceed.
 for flag in ('--disable-avx512', '--disable-avx512icl'):
     check(flag in args, f'configure_args lacks {flag}')
-for name in ('HAVE_AVX512', 'HAVE_AVX512ICL'):
+for name in ('HAVE_AVX512', 'HAVE_AVX512ICL', 'HAVE_AVX512_EXTERNAL', 'HAVE_AVX512ICL_EXTERNAL'):
     check(config.get(name) == '0', f'config.h has {name} {config.get(name)}: AVX-512 must be absent')
 
 # Every translation unit sources.mk builds is vendored.
@@ -114,8 +114,9 @@ disasm = run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', SO)
 check(not re.search(r'\t(syscall|sysenter|int)\b', disasm), 'libav.so contains a system call')
 # No AVX-512 code that can run. One routine is assembled anyway: the scaler's
 # experimental backend (libswscale/x86/ops_common.asm) instantiates
-# packed_shuffle64_64 for AVX-512 without the HAVE_AVX512_EXTERNAL guard its
-# siblings carry. Nothing can select it: x86/ops.c reaches it only with a
+# packed_shuffle64_64 for AVX-512 with no guard, where the scaler's other
+# AVX-512 routines (x86/rgb_2_rgb.asm) sit behind HAVE_AVX512ICL_EXTERNAL.
+# Nothing can select it: x86/ops.c reaches it only with a
 # 64-byte vector, which compile() picks only when EXTERNAL_AVX512 holds, and
 # with HAVE_AVX512_EXTERNAL 0 (pinned above) that is false at compile time.
 # Any other routine holding a zmm register fails here.
