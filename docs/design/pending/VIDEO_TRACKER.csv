@@ -1,0 +1,22 @@
+id,task,depends_on,status,done_in,notes
+Q1,What the arc plays first,,ruled,,"RULED 2026-11-16 by Chris: files with H.264 first; streams (Media Source Extensions) are a later arc (VIDEO.md, Rulings 1)"
+Q2,FFmpeg's scaler or one of our own,,ruled,,"RULED 2026-11-17 by Chris: libswscale in libav (VIDEO.md, Rulings 2)"
+Q3,A standalone player before the browser work,,ruled,,"RULED 2026-11-17 by Chris: yes, V4 (VIDEO.md, Rulings 3)"
+Q4,Full screen in this arc,,ruled,,"RULED 2026-11-17 by Chris: yes, as its last slice, V8 (VIDEO.md, Rulings 4)"
+Q5,"Muted sound: decode it and hold no voice, or do not decode it",,open,,"VIDEO.md § 4 GAP. Lean: decode it but hold no voice, and measure"
+Q6,Pictures while the video is out of view: keep decoding or stop,,open,,"VIDEO.md § 5 GAP. Lean: keep decoding in this arc, book the saving"
+Q7,The budget for many videos on one page,,open,,VIDEO.md § 6 GAP: numbers from the P5
+Q8,One copy fewer on the path to the glass,,open,,"VIDEO.md § 7 GAP: weighed after the frame clock, with sound playing"
+
+V.0,"V0. libav: the H.264 decoder and parser, FFmpeg's x86 assembly chosen at run time, /tests/avbench; os64_malloc_aligned beneath it",,done,#629 #630,"The P5 point: one thread carries 1440p60 at 2.8x real time with assembly (VIDEO.md § 1)"
+V.1,"V1. The glass fixture and its measurement: /sys/gui's publish-to-glass wait, /tests/glassbench",,done,#628,VIDEO.md § 7's P5 figures
+V.2,"V2. The frame clock: the beam, the compositor paced by the display, ring 3 asks for the frame",,done,#631 #632 #644,"FRAME_CLOCK.md and its slices F1 to F3; yonder's animations took the frame in #658"
+V.3,"V3. libswscale in libav; libmedia's picture side; the pure cores (picture queue, what to show and when late, the clock)",V.0 V.2,code,,"Brief: BRIEF_VIDEO_V3.md (Fable, 2026-11-17); the header and the release rule agreed 2026-11-18. Two pull requests, stacked"
+V.3.1,"libav gains libswscale (its x86 routines chosen at run time); the import, the audit, the README; /tests/avbench -x times decode, convert-and-scale and both, bilinear and fast; the bit-exact conversion's CRC agrees in every CPU mode",,doing,,"First pull request. The P5's figures (avbench -x 2560x1440, and at natural size) go into VIDEO.md § 1"
+V.3.2,"libmedia's picture side: open for sound, picture or both; one next call; pictures released from any thread (deferred to the decoding thread, the audit pins it); the scaler; seeking both; skipping when late; canPlayType for video/mp4",V.3.1,todo,,"Second pull request, with V.3.3. A host harness builds the pinned FFmpeg and runs the two-thread release test under ThreadSanitizer"
+V.3.3,"The pure cores, host-tested with mutants: the picture queue, what to show and what to do when late, the clock",V.3.1,todo,,"Their state tables go to VIDEO.md and to Fable before the code"
+V.4,"V4. A standalone player: a window, a file, picture and sound in step",V.3,todo,,"The whole pipeline on the P5 before any page code (VIDEO.md § 10)"
+V.5,"V5. yonder: the picture in the box, the clock, silent files, videoWidth",V.4,todo,,
+V.6,"V6. Poster, controls over the picture, the video page, a file whose index is at the end",V.5,todo,,
+V.7,"V7. Visibility, the budget for many videos, the muted-clip debt",V.5 Q5 Q6 Q7,todo,,
+V.8,V8. Full screen,V.5 Q4,todo,,

@@ -220,6 +220,7 @@ AV_UPSTREAM_SRCS := \
     upstream/libavutil/float_dsp.c \
     upstream/libavutil/float_scalarproduct.c \
     upstream/libavutil/frame.c \
+    upstream/libavutil/half2float.c \
     upstream/libavutil/hash.c \
     upstream/libavutil/hdr_dynamic_metadata.c \
     upstream/libavutil/hdr_dynamic_vivid_metadata.c \
@@ -285,6 +286,41 @@ AV_UPSTREAM_SRCS := \
     upstream/libavutil/x86/tx_float_init.c \
     upstream/libavutil/xga_font_data.c \
     upstream/libavutil/xtea.c \
+    upstream/libswscale/alphablend.c \
+    upstream/libswscale/cms.c \
+    upstream/libswscale/csputils.c \
+    upstream/libswscale/filters.c \
+    upstream/libswscale/format.c \
+    upstream/libswscale/framepool.c \
+    upstream/libswscale/gamma.c \
+    upstream/libswscale/graph.c \
+    upstream/libswscale/hscale.c \
+    upstream/libswscale/hscale_fast_bilinear.c \
+    upstream/libswscale/input.c \
+    upstream/libswscale/lut3d.c \
+    upstream/libswscale/ops.c \
+    upstream/libswscale/ops_chain.c \
+    upstream/libswscale/ops_dispatch.c \
+    upstream/libswscale/ops_memcpy.c \
+    upstream/libswscale/ops_optimizer.c \
+    upstream/libswscale/options.c \
+    upstream/libswscale/output.c \
+    upstream/libswscale/rational64.c \
+    upstream/libswscale/rgb2rgb.c \
+    upstream/libswscale/slice.c \
+    upstream/libswscale/swscale.c \
+    upstream/libswscale/swscale_unscaled.c \
+    upstream/libswscale/uops.c \
+    upstream/libswscale/uops_backend.c \
+    upstream/libswscale/utils.c \
+    upstream/libswscale/version.c \
+    upstream/libswscale/vscale.c \
+    upstream/libswscale/x86/hscale_fast_bilinear_simd.c \
+    upstream/libswscale/x86/ops.c \
+    upstream/libswscale/x86/rgb2rgb.c \
+    upstream/libswscale/x86/swscale.c \
+    upstream/libswscale/x86/yuv2rgb.c \
+    upstream/libswscale/yuv2rgb.c \
 
 AV_UPSTREAM_ASM := \
     upstream/libavcodec/x86/aacpsdsp.asm \
@@ -317,5 +353,16 @@ AV_UPSTREAM_ASM := \
     upstream/libavutil/x86/imgutils.asm \
     upstream/libavutil/x86/lls.asm \
     upstream/libavutil/x86/tx_float.asm \
+    upstream/libswscale/x86/input.asm \
+    upstream/libswscale/x86/ops_common.asm \
+    upstream/libswscale/x86/ops_float.asm \
+    upstream/libswscale/x86/ops_int.asm \
+    upstream/libswscale/x86/output.asm \
+    upstream/libswscale/x86/range_convert.asm \
+    upstream/libswscale/x86/rgb_2_rgb.asm \
+    upstream/libswscale/x86/scale.asm \
+    upstream/libswscale/x86/scale_avx2.asm \
+    upstream/libswscale/x86/yuv2yuvX.asm \
+    upstream/libswscale/x86/yuv_2_rgb.asm \
 
 AV_PORT_SRCS := port/av_libc.c port/av_format.c port/av_port.c

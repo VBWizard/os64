@@ -271,7 +271,9 @@ V4 is the lean worth arguing: a player outside the browser lets sync,
 pacing and the glass be judged with nothing else in the way, and gives
 os64 a video player in its own right.
 
-A tracker (CSV and its page) once the slices are ratified, as for sound.
+`VIDEO_TRACKER.csv` beside this file is the state of each slice and of
+the GAPs, as questions (`tools/tracker.sh video` renders it). Its ids put
+a dot in the slice names (`V.3` is V3), as the tracker format asks.
 
 ## Rulings (Chris)
 

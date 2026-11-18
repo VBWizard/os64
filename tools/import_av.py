@@ -18,8 +18,9 @@ is committed:
   about a C library is replaced by what libos64 and the port's shims
   provide, and every answer about a tool, perl or makeinfo, by "no", which
   is what os64 has and keeps --check from depending on what this machine
-  has installed), and the other files configure generates that the build
-  compiles or includes. What it records about the C COMPILER (INT128,
+  has installed), the other files configure generates that the build
+  compiles or includes, and the few FFmpeg's makefiles make (MADE, below),
+  asked of make by name. What it records about the C COMPILER (INT128,
   inline-asm abilities) is the host gcc's, which answers as the cross gcc
   does; a host whose cc is not gcc may see --check differ there.
 - sources.mk: the objects FFmpeg's own makefiles would build (its
@@ -69,7 +70,6 @@ GENERATED = [
     'config_components.asm',
     'config_components.h',
     'libavutil/avconfig.h',
-    'libavutil/ffversion.h',
     # The registries: #included by allcodecs.c, parsers.c, allformats.c,
     # protocols.c and bitstream_filters.c, never compiled on their own.
     'libavcodec/codec_list.c',
@@ -79,10 +79,19 @@ GENERATED = [
     'libavformat/muxer_list.c',
     'libavformat/protocol_list.c',
 ]
+# Made by FFmpeg's makefiles, not by configure, so each is asked of make by
+# name. ffversion.h is written from VERSION; the scaler's operation macros
+# are C preprocessed into assembly
+# (libswscale/x86/Makefile: the host compiler's -E -P over
+# uops_macros.asm.h), %included by its ops_*.asm sources.
+MADE = [
+    'libavutil/ffversion.h',
+    'libswscale/x86/uops_macros.gen.asm',
+]
 # Shipped whole whatever the configuration: the licence the library is
 # distributed under, and the files that say which release this is.
 ALWAYS = ['COPYING.LGPLv2.1', 'LICENSE.md', 'VERSION', 'RELEASE', 'CREDITS']
-LIBRARIES = ['libavutil', 'libavcodec', 'libavformat']
+LIBRARIES = ['libavutil', 'libavcodec', 'libavformat', 'libswscale']
 
 
 def sha256(path):
@@ -120,14 +129,18 @@ def produce(archive, manifest, out):
         build = tmp / 'build'
         build.mkdir()
         run([str(src / 'configure')] + manifest['configure_args'], build)
-        # ffversion.h is made by FFmpeg's makefile (from VERSION), not by
-        # configure, and the lib*.a.objs lists are written while make reads
-        # the archive rules, which a dry run of the three archives does.
-        run(['make', 'libavutil/ffversion.h'], build)
+        # MADE is made by FFmpeg's makefile, not by configure, and the
+        # lib*.a.objs lists are written while make reads the archive rules,
+        # which a dry run of the archives does. FFmpeg's makefiles make a
+        # directory on the way to an object in it, so a file asked for by
+        # name needs its directory made first.
+        for name in MADE:
+            (build / name).parent.mkdir(parents=True, exist_ok=True)
+        run(['make'] + MADE, build)
         run(['make', '-n'] + [f'{lib}/{lib}.a' for lib in LIBRARIES], build)
 
         config = out / 'port' / 'config'
-        for name in GENERATED:
+        for name in GENERATED + MADE:
             target = config / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(build / name, target)
