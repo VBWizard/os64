@@ -2590,6 +2590,7 @@ static void module_bytecode_cases(void)
 #include "../userland/libjs/tests/owner_runtime_cases.h"
 #include "../userland/libjs/tests/owner_admission_cases.h"
 #include "../userland/libjs/tests/owner_realm_cases.h"
+#include "../userland/libjs/tests/owner_scope_cases.h"
 
 static bool owner_runtime_issuer_exhausted;
 JSOwnerStatus js_owner_observed_incarnation_next(uint64_t *out)
@@ -2612,6 +2613,79 @@ JSOwnerStatus js_owner_observed_loan_begin(JSOwnerTickets *table,uint64_t incarn
     if(owner_realm_loan_fault==2)table->_last_token=UINT64_MAX;
     return js_owner_loan_begin(table,incarnation,ticket,out);
 }
+static JSValue owner_scope_failure_body(JSOwnerRuntimeScope *scope,JSContext *context,void *opaque)
+{
+    OwnerScopeCase *s=opaque;JSOwnerId id;s->calls++;
+    check(js_owner_scope_owner(scope,&id)==JS_OWNER_OK && id.serial==s->owner.serial &&
+        js_owner_runtime_close(s->runtime,s->ticket)==JS_OWNER_OK,
+        "owner scopes: failure body closes holder while its real loan stays admitted");
+    const char *code="({value:[1,2,3],label:'scoped allocation'})";
+    return JS_Eval(context,code,strlen(code),"scope-alloc.js",JS_EVAL_TYPE_GLOBAL);
+}
+static void owner_scope_failure_cases(void)
+{
+    owner_scope_cases(owner_runtime_assert);
+    os64_js_config_t config={.limits=os64_js_default_limits()};
+    config.limits.memory_bytes=8*1024*1024;config.limits.execution_ms=1000;
+    for(unsigned policy=0;policy<2;policy++) {
+        os64_js_runtime_t *runtime=NULL;os64_js_outcome_t out;JSOwnerTicket ticket;
+        size_t baseline=live,bytes=live_bytes;
+        check(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+            (JSOwnerLimits){1,2,1},&runtime,&out)==OS64_JS_OK &&
+            js_owner_runtime_primary_ticket(runtime,&ticket)==JS_OWNER_OK,"owner scopes: allocation-count fixture");
+        OwnerScopeCase state={.runtime=runtime,.ticket=ticket,.owner=ticket.owner};
+        size_t before=attempts;
+        check(js_owner_runtime_scoped_run(runtime,OS64_JS_ABI_ID,ticket,"scope-alloc.js",
+            owner_scope_failure_body,&state,&out)==OS64_JS_OK,"owner scopes: successful allocation-count body");
+        size_t cuts=attempts-before;os64_js_destroy(runtime);
+        for(size_t cut=1;cut<=cuts;cut++) {
+            runtime=NULL;
+            check(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+                (JSOwnerLimits){1,2,1},&runtime,&out)==OS64_JS_OK &&
+                js_owner_runtime_primary_ticket(runtime,&ticket)==JS_OWNER_OK,"owner scopes: allocation-refusal fixture");
+            state=(OwnerScopeCase){.runtime=runtime,.ticket=ticket,.owner=ticket.owner};
+            fail_at=attempts+cut;
+            os64_js_status_t result=js_owner_runtime_scoped_run(runtime,OS64_JS_ABI_ID,ticket,"scope-alloc.js",
+                owner_scope_failure_body,&state,&out);fail_at=0;
+            JSOwnerRuntimeMetadata m;
+            check(state.calls==1 && (result==OS64_JS_HOST_FAILURE || result==OS64_JS_LIMIT || result==OS64_JS_EXCEPTION) &&
+                js_owner_runtime_metadata(runtime,&m) && !m.summary.loans && !m.summary.tickets &&
+                m.summary.owners==1 && m.assigned_owners==1 && !m.summary.unknown_escape,
+                "owner scopes: callback allocation refusal retains owner and unwinds its closed-holder loan");
+            os64_js_teardown_report_t report;os64_js_destroy_report(runtime,&report);
+            check(!report.leaked && live==baseline && live_bytes==bytes,
+                "owner scopes: allocation cuts balance returned roots and native metadata");
+        }
+        printf("owner scopes: policy%u %zu callback allocation cuts balanced\n",policy,cuts);
+        check(js_owner_runtime_create(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+            (JSOwnerLimits){1,2,1},&runtime,&out)==OS64_JS_OK &&
+            js_owner_runtime_primary_ticket(runtime,&ticket)==JS_OWNER_OK,"owner scopes: loan refusal fixture");
+        state=(OwnerScopeCase){.runtime=runtime,.ticket=ticket,.owner=ticket.owner};
+        for(unsigned fault=1;fault<=2;fault++) {
+            owner_realm_loan_fault=fault;
+            check(js_owner_runtime_scoped_run(runtime,OS64_JS_ABI_ID,ticket,"loan refusal",owner_scope_failure_body,&state,&out)==
+                OS64_JS_ADMISSION_REFUSED && !state.calls,"owner scopes: actual loan capacity/issuer refusal exposes no context");
+        }
+        owner_realm_loan_fault=0;
+        check(js_owner_runtime_close(runtime,ticket)==JS_OWNER_OK,"owner scopes: exhausted loan fixture closes existing holder");
+        os64_js_destroy(runtime);
+        JSOwnerRuntimeMetadata m;
+        os64_js_config_t timed=config;timed.limits.execution_ms=5;
+        check(js_owner_runtime_create(&timed,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+            (JSOwnerLimits){1,2,1},&runtime,&out)==OS64_JS_OK &&
+            js_owner_runtime_primary_ticket(runtime,&ticket)==JS_OWNER_OK,"owner scopes: execution budget fixture");
+        state=(OwnerScopeCase){.runtime=runtime,.ticket=ticket,.owner=ticket.owner,.outer=&out,
+            .check=owner_runtime_assert,.source="for(;;){}"};clock_step=1000;
+        check(owner_scope_invoke(&state)==OS64_JS_LIMIT && out.limit==OS64_JS_LIMIT_EXECUTION,
+            "owner scopes: direct native evaluation borrows guarded execution deadline");clock_step=0;
+        check(js_owner_runtime_metadata(runtime,&m) && !m.summary.loans && !m.summary.unknown_escape,
+            "owner scopes: interrupted native execution unwinds its loan without implicit export");
+        check(js_owner_runtime_close(runtime,ticket)==JS_OWNER_OK,"owner scopes: failed runtime still closes metadata holder");
+        os64_js_destroy(runtime);
+
+    }
+}
+
 static void owner_realm_failure_cases(void)
 {
     owner_realm_cases(owner_runtime_assert);
@@ -2743,6 +2817,12 @@ static void owner_runtime_failure_cases(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--owner-scopes")) {
+        owner_scope_failure_cases();
+        check(live==0,"owner scopes: native and engine allocations balance");
+        printf("owner scopes: %u checks, %u failures\n",checks,failures);
+        return failures?1:0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--owner-realms")) {
         owner_realm_failure_cases();
         printf("realm owners: %u checks, %u failures\n",checks,failures);
@@ -2934,7 +3014,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
-    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases();
+    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases(); owner_scope_failure_cases();
     realm_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
     task_cases();
     script_host_cases();
