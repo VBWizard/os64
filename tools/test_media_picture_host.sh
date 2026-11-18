@@ -90,6 +90,7 @@ cat > "$work/shim/os64/mem.h" <<'EOF'
 #define os64_calloc calloc
 #define os64_realloc realloc
 #define os64_free free
+#define os64_malloc_aligned(size, alignment) aligned_alloc((alignment), ((size) + (alignment) - 1) / (alignment) * (alignment))
 #define os64_memcpy memcpy
 #define os64_memmove memmove
 #define os64_memset memset
@@ -155,6 +156,10 @@ gen -display_rotation 90 -i "$work/upright.mp4" -c copy "$work/rotated_ccw90.mp4
 gen "${V[@]}" -vf tinterlace=4 -map 0:v -c:v libx264 -preset ultrafast -flags +ildct+ilme -x264-params tff=1 \
     -pix_fmt yuv420p "$work/interlaced.mp4"
 gen "${V[@]}" "${A[@]}" -map 0:v -map 1:a -c:v mpeg4 -c:a aac "$work/picture_mpeg4.mp4"
+# A sound with cover art (an attached picture), and the same sound without.
+gen -f lavfi -i testsrc=size=64x64:rate=1:duration=1 -frames:v 1 "$work/cover.png"
+gen "${A[@]}" -c:a aac "$work/sound.m4a"
+gen -i "$work/sound.m4a" -i "$work/cover.png" -map 0:a -map 1:v -c copy -disposition:v attached_pic "$work/sound_cover.m4a"
 gen "${V[@]}" "${A[@]}" -map 0:v -map 1:a "${X264[@]}" -c:a ac3 "$work/sound_ac3.mp4"
 # What each offset file's streams start at, as the container says, for the
 # test to compare with.

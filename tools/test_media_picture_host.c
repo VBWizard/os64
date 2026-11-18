@@ -24,13 +24,25 @@
 //     built (AC-3) plays its picture; each kind is named and said
 //     unplayable; an open for that kind alone is UNSUPPORTED.
 //  5  FALLING BEHIND: skipping the pictures nothing depends on gives fewer
-//     pictures than all, each exact; a resync after ten pictures gives a
+//     pictures than all, but some; a resync after ten pictures gives a
 //     keyframe next and counts what it dropped.
 //  6  SEEKING: each of a spread of targets gives first the picture showing
 //     at it (at <= target < at + duration) and the sound from it.
 //  7  INTERLACED pictures (H.264 marks each frame) convert, field by field:
 //     the scaler refuses a source and destination whose interlacing
 //     differs, so the scaler's destination takes each picture's.
+//  8  THE UNSCALED EDGE (media_scale.c): bbb's 854-wide pictures at their
+//     own size and scaled to widths that are and are not multiples of
+//     eight, with each scaler kind, into a buffer of exactly as many rows
+//     of a pitch of the width, the width + 2 and the width + 10 pixels,
+//     followed by a guard: every pixel of every row is written, and nothing
+//     past the width or the buffer is. (ASan cannot see these writes, which
+//     FFmpeg's assembly makes; the guard and the row tails are checked by
+//     hand.)
+//  9  COVER ART is no picture: a sound with an attached picture opens for
+//     both with the picture ABSENT, is refused NO_PICTURE for the picture
+//     alone, and decodes the same sound, from the same zero, as the file
+//     without it.
 
 #include <pthread.h>
 #include <sched.h>
@@ -344,6 +356,7 @@ static void test_skip_and_seek(const char *dir)
                 os64_media_picture_release(c.m, got.picture);
             }
         }
+        CHECK(first_picture >= 0, "seek %lld: no picture came at all", (long long)target);
         CHECK(first_sound == target, "seek %lld: first sound at %lld", (long long)target, (long long)first_sound);
         seeks++;
     }
@@ -379,6 +392,80 @@ static void test_interlaced(const char *dir)
     printf("  7 interlaced: %ld pictures converted, %ld refused\n", converted, refused);
 }
 
+static void test_edge(const char *clip)
+{
+    static const uint32_t kSizes[][2] = { { 854, 480 }, { 853, 480 }, { 641, 361 }, { 1279, 719 }, { 640, 360 } };
+    static const uint32_t kSlack[3] = { 0, 2, 10 };
+    static const uint32_t kKinds[3] = { 0, OS64_MEDIA_SCALE_FAST, OS64_MEDIA_SCALE_EXACT };
+    enum { GUARD = 64, BLANK = 0x11111111u };
+    static uint32_t buffer[1289 * 719 + GUARD];
+    long checked = 0;
+    for (int z = 0; z < 5; z++)
+    for (int k = 0; k < 3; k++)
+        for (int pi = 0; pi < 3; pi++) {
+            const uint32_t W = kSizes[z][0], H = kSizes[z][1];
+            Clip c;
+            clip_open(&c, clip, OS64_MEDIA_WANT_PICTURE);
+            os64_media_scaler_t *s;
+            if (c.result != 0 || os64_media_scaler_create(W, H, kKinds[k], &s) != 0) {
+                CHECK(0, "edge: open %d", c.result);
+                clip_close(&c);
+                return;
+            }
+            uint32_t pitch = W + kSlack[pi];
+            for (int n = 0; n < 3; n++) {
+                os64_media_got_t got;
+                if (os64_media_next(c.m, NULL, 0, &got) != 0 || got.kind != OS64_MEDIA_GOT_PICTURE) break;
+                for (size_t i = 0; i < (size_t)pitch * H + GUARD; i++) buffer[i] = BLANK;
+                CHECK(os64_media_scaler_convert(s, got.picture, buffer, pitch * 4) == 0, "edge: convert");
+                os64_media_picture_release(c.m, got.picture);
+                long unwritten = 0, past_width = 0, past_end = 0;
+                for (uint32_t y = 0; y < H; y++)
+                    for (uint32_t x = 0; x < pitch; x++) {
+                        bool blank = buffer[(size_t)y * pitch + x] == BLANK;
+                        if (x < W && blank) unwritten++;
+                        if (x >= W && !blank) past_width++;
+                    }
+                for (size_t i = (size_t)pitch * H; i < (size_t)pitch * H + GUARD; i++) past_end += buffer[i] != BLANK;
+                CHECK(unwritten == 0 && past_width == 0 && past_end == 0,
+                      "edge: %ux%u kind %u pitch %u: %ld unwritten, %ld past the width, %ld past the buffer", W, H,
+                      kKinds[k], pitch, unwritten, past_width, past_end);
+                checked++;
+            }
+            os64_media_scaler_destroy(s);
+            clip_close(&c);
+        }
+    printf("  8 the unscaled edge: %ld conversions, at the picture's own size and scaled, every pixel written and "
+           "none past\n", checked);
+}
+
+static void test_cover(const char *dir)
+{
+    char with[512], without[512];
+    snprintf(with, sizeof(with), "%s/sound_cover.m4a", dir);
+    snprintf(without, sizeof(without), "%s/sound.m4a", dir);
+    Clip c;
+    clip_open(&c, with, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE);
+    CHECK(c.result == 0 && c.info.picture == OS64_MEDIA_ABSENT && c.info.sound == OS64_MEDIA_PLAYABLE,
+          "cover: open for both %d, picture %u", c.result, c.info.picture);
+    clip_close(&c);
+    clip_open(&c, with, OS64_MEDIA_WANT_PICTURE);
+    CHECK(c.result == OS64_MEDIA_NO_PICTURE, "cover: open for the picture %d", c.result);
+    clip_close(&c);
+    Pull a, b;
+    int64_t frames_a = 0, frames_b = 0;
+    clip_open(&c, with, OS64_MEDIA_WANT_SOUND);
+    if (c.result == 0) { pull(c.m, true, &a); frames_a = c.info.frames; }
+    clip_close(&c);
+    clip_open(&c, without, OS64_MEDIA_WANT_SOUND);
+    if (c.result == 0) { pull(c.m, true, &b); frames_b = c.info.frames; }
+    clip_close(&c);
+    CHECK(a.sound_frames == b.sound_frames && a.sound_sum == b.sound_sum && a.first_sound == b.first_sound &&
+          frames_a == frames_b, "cover: the sound differs with the cover (%lld against %lld frames)",
+          (long long)a.sound_frames, (long long)b.sound_frames);
+    printf("  9 cover art: no picture, and the same sound as without it\n");
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 3) {
@@ -390,6 +477,8 @@ int main(int argc, char **argv)
     test_info(argv[2]);
     test_skip_and_seek(argv[2]);
     test_interlaced(argv[2]);
+    test_edge(argv[1]);
+    test_cover(argv[2]);
     if (s_failed) {
         printf("FAIL %d checks\n", s_failed);
         return 1;

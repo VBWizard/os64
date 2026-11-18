@@ -124,7 +124,14 @@ timeline as sound. yonder, and any other player, see no FFmpeg type.
 - **The scaler** converts and scales in one step into the caller's
   pixels. The X byte is written 0xFF. Colours follow mpv's matrix rule
   where the stream is silent. The primaries and transfer are not
-  converted. An interlaced picture is converted field by field.
+  converted. An interlaced picture is converted field by field. It writes
+  exactly the pixels asked for. A conversion at the picture's own size,
+  at a width that is not a multiple of eight, goes through a padded
+  buffer of the scaler's own: FFmpeg's unscaled converter works eight
+  pixels at a time and would otherwise write past the row (media_scale.c,
+  THE UNSCALED EDGE).
+- **Cover art** (an attached picture) is never the media's picture, nor
+  part of its zero.
 - **`canPlayType`**: `video/mp4` naming `avc1` or `avc3` answers
   probably, and a codec string that does not parse answers no.
 

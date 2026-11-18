@@ -28,7 +28,12 @@
 //              shallow copy of the decoded frame with its colours filled
 //              in (below). Each frame is converted twice, bilinear and
 //              fast bilinear, each by its own scaler and timed apart.
-//              `natural` is the picture's own size: conversion, no scaling
+//              `natural` is the picture's own size: conversion, no scaling.
+//              At a natural width that is not a multiple of eight, FFmpeg's
+//              unscaled converter leaves the last few pixels of each row
+//              unwritten (libmedia's scaler goes round it, media_scale.c
+//              THE UNSCALED EDGE; avbench times FFmpeg's call alone, so its
+//              times stand and its picture does not, -e's CRC included)
 //   -e         with -x: the bilinear conversion in FFmpeg's bit-exact mode,
 //              whose pixels do not depend on which routines FFmpeg chose,
 //              and a CRC-32 over them (every byte of every row)

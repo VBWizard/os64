@@ -27,10 +27,32 @@
 
 #include "media_picture.h"
 
+// THE UNSCALED EDGE. A conversion with no scaling does not write exactly
+// the width it is given when that width is not a multiple of eight. From
+// 4:2:0 or 4:2:2 at an even height it takes libswscale's unscaled
+// converter, whose x86 form works in whole groups of eight pixels across
+// (x86/yuv2rgb.c, YUV2RGB_LOOP): with no room in the pitch for the last
+// group it leaves the row's last few pixels unwritten; with room, it
+// writes past the width, and on the last row past the end of the caller's
+// buffer. The accurate path (SWS_ACCURATE_RND) writes past the width too,
+// by fewer. So such a conversion is made into `bounce`, the scaler's own
+// buffer with room past the width and a row to spare, and the width of
+// each row is copied to the caller. A scaled conversion writes exactly
+// its width (tools/test_media_picture_host.sh checks both, against guard
+// words, which ASan cannot do for writes FFmpeg's assembly makes).
 struct os64_media_scaler {
     SwsContext *sws;
     AVFrame *canvas;
+    uint32_t *bounce;                // NULL until an unscaled conversion at a width not a multiple of 8
+    size_t bounce_pixels;
 };
+
+// Pixels between the bounce buffer's rows for `width`: room for the last
+// group of eight and as much again.
+static uint32_t bounce_pitch(uint32_t width)
+{
+    return ((width + 15) & ~15u) + 16;
+}
 
 int os64_media_scaler_create(uint32_t dst_width, uint32_t dst_height, uint32_t flags, os64_media_scaler_t **out)
 {
@@ -68,8 +90,24 @@ int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t
     if (s == NULL || p == NULL || pixels == NULL || pitch < (uint32_t)s->canvas->width * 4 || pitch > INT32_MAX)
         return OS64_MEDIA_BAD_ARGS;
     const AVFrame *source = media_picture_frame(p);
-    s->canvas->data[0] = (uint8_t *)pixels;
-    s->canvas->linesize[0] = (int)pitch;
+    uint32_t width = (uint32_t)s->canvas->width, height = (uint32_t)s->canvas->height;
+    bool edge = source->width == (int)width && source->height == (int)height && (width & 7) != 0;
+    if (edge) {
+        // THE UNSCALED EDGE, above.
+        size_t need = (size_t)bounce_pitch(width) * (height + 1);
+        if (need > s->bounce_pixels) {
+            uint32_t *bigger = os64_malloc_aligned(need * 4, 64);
+            if (bigger == NULL) return OS64_MEDIA_NO_MEMORY;
+            if (s->bounce != NULL) os64_free(s->bounce);
+            s->bounce = bigger;
+            s->bounce_pixels = need;
+        }
+        s->canvas->data[0] = (uint8_t *)s->bounce;
+        s->canvas->linesize[0] = (int)(bounce_pitch(width) * 4);
+    } else {
+        s->canvas->data[0] = (uint8_t *)pixels;
+        s->canvas->linesize[0] = (int)pitch;
+    }
     // Primaries and transfer the same on both sides, so the scaler converts
     // neither (left unspecified, FFmpeg maps a wide gamut, PQ or HLG to
     // BT.709: libswscale/format.c, ff_infer_colors).
@@ -82,8 +120,12 @@ int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t
     s->canvas->flags = (s->canvas->flags & ~AV_FRAME_FLAG_INTERLACED) | (source->flags & AV_FRAME_FLAG_INTERLACED);
     int r = sws_scale_frame(s->sws, s->canvas, source);
     s->canvas->data[0] = NULL;
-    if (r >= 0) return 0;
-    return r == AVERROR(ENOMEM) ? OS64_MEDIA_NO_MEMORY : OS64_MEDIA_UNSUPPORTED;
+    if (r < 0) return r == AVERROR(ENOMEM) ? OS64_MEDIA_NO_MEMORY : OS64_MEDIA_UNSUPPORTED;
+    if (edge)
+        for (uint32_t y = 0; y < height; y++)
+            os64_memcpy((uint8_t *)pixels + (size_t)y * pitch, s->bounce + (size_t)y * bounce_pitch(width),
+                        (size_t)width * 4);
+    return 0;
 }
 
 void os64_media_scaler_destroy(os64_media_scaler_t *s)
@@ -91,5 +133,6 @@ void os64_media_scaler_destroy(os64_media_scaler_t *s)
     if (s == NULL) return;
     sws_free_context(&s->sws);
     av_frame_free(&s->canvas);       // holds no buffer of FFmpeg's
+    if (s->bounce != NULL) os64_free(s->bounce);
     os64_free(s);
 }

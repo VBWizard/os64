@@ -210,14 +210,20 @@ for program in ('play', 'tests/mediatest'):
 #                                reference to the source (pinned below)
 #   os64_media_scaler_create     the scaler's context and its own canvas
 #   os64_media_scaler_destroy    frame, which holds no pool buffer
+# The convert entry must reach exactly what it names (so a change in how
+# the disassembly spells a call cannot pass by finding nothing), and no
+# entry may reach an indirect call or jump, whose target the test cannot
+# follow.
 media_disasm = run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', MEDIA)
-media_calls, routine = {}, None
+media_calls, media_indirect, routine = {}, set(), None
 for line in media_disasm.splitlines():
     label = re.match(r'^[0-9a-f]+ <([^>@+]+)>:$', line)
     if label:
         routine = label.group(1)
         media_calls[routine] = set()
         continue
+    if routine and re.search(r'\t(?:call|jmp)\s+\*', line):
+        media_indirect.add(routine)
     target = re.search(r'\t(?:call|jmp)\s+[0-9a-f]+ <([^>+]+)', line)
     if routine and target and target.group(1) != routine:
         media_calls[routine].add(target.group(1))
@@ -231,6 +237,8 @@ def libav_reached(entry):
         if f in seen:
             continue
         seen.add(f)
+        check(f not in media_indirect, f'{entry} reaches an indirect call or jump in {f}, which the thread rule\'s '
+              'test cannot follow (libmedia/media.c § THREADS)')
         for t in media_calls.get(f, ()):
             name = t.removesuffix('@plt')
             if t.endswith('@plt'):
@@ -244,13 +252,16 @@ def libav_reached(entry):
 check('os64_media_picture_release' in media_calls and 'os64_media_scaler_convert' in media_calls,
       'libmedia.so lacks the picture entry points the thread rule names')
 for entry, allowed in (('os64_media_picture_release', set()),
-                       ('os64_media_scaler_convert', {'sws_scale_frame'}),
                        ('os64_media_scaler_create', {'sws_alloc_context', 'av_frame_alloc', 'sws_free_context',
                                                      'av_frame_free'}),
                        ('os64_media_scaler_destroy', {'sws_free_context', 'av_frame_free'})):
     reached = libav_reached(entry)
     check(reached <= allowed, f'{entry} reaches {sorted(reached - allowed)} of libav.so, off the decoding thread '
           '(libmedia/media.c § THREADS)')
+convert_reaches = libav_reached('os64_media_scaler_convert')
+check(convert_reaches == {'sws_scale_frame'},
+      f'os64_media_scaler_convert reaches {sorted(convert_reaches)} of libav.so, not exactly the scaler\'s own calls '
+      '(libmedia/media.c § THREADS)')
 
 # The FFmpeg half: sws_scale_frame, given a dynamic context and a
 # destination with buffers of its own, references nothing of the source;
@@ -267,6 +278,15 @@ SWS_SCALE_FRAME_SHA = '82cc34d051ee3d068ea34e3f9627c9802c8b2128de6141fa7d6f37d44
 check(hashlib.sha256(body.group(0).encode()).hexdigest() == SWS_SCALE_FRAME_SHA,
       'sws_scale_frame changed: read it again for a reference to the source frame (libmedia/media_scale.c), '
       'then update SWS_SCALE_FRAME_SHA')
+# THE UNSCALED EDGE (libmedia/media_scale.c): the unscaled YUV-to-RGB
+# converter's x86 form writes whole groups of eight pixels across when the
+# pitch has room for them, which is the bound the bounce buffer's pitch is
+# sized for. Pinned by its two lines.
+yuv2rgb_x86 = (upstream / 'libswscale/x86/yuv2rgb.c').read_text()
+check('h_size = (c->opts.dst_w + 7) & ~7;' in yuv2rgb_x86 and
+      'if (h_size * depth > FFABS(dstStride[0]))' in yuv2rgb_x86,
+      'libswscale/x86/yuv2rgb.c no longer rounds a row to whole groups of eight: read THE UNSCALED EDGE in '
+      'libmedia/media_scale.c again')
 
 # FFmpeg's ONE-TIME SETUPS, which a build without threads leaves unlocked
 # (README.md § Switched off). Every ff_thread_once in every vendored file,

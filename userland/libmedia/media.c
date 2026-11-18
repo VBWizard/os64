@@ -50,9 +50,11 @@
 // (`s_lock`) across find_stream_info and the decoders' opens. Opening the
 // input and its header, reading packets, decoding and converting take no
 // lock. The cost: two media probing at once take turns at
-// find_stream_info, which reads a few packets of a sound. (A sound-only
-// open discards the picture's stream before it, so none of its pictures
-// is read or decoded.) tools/test_av_audit.py pins every one-time setup in
+// find_stream_info, which reads a few packets of a sound and, for an open
+// that wants the picture, decodes its first pictures too (up to some
+// twenty of an MP4's), from the source, across the network for a page's.
+// A sound-only open discards the picture's stream before it, so none of
+// its packets is made or decoded. tools/test_av_audit.py pins every one-time setup in
 // the build, so a configuration that adds one fails until it has been
 // looked at here.
 //
@@ -383,6 +385,7 @@ static int read_packet(os64_media_t *m)
             if (!(m->packet->flags & AV_PKT_FLAG_KEY)) {
                 m->counts.pictures_resync++;
                 av_packet_unref(m->packet);
+                m->packet_waiting = false;   // it was the waiting one, if one waited: gone now
                 return 0;
             }
             // The keyframe: what the decoder holds is from before it.
@@ -768,19 +771,44 @@ static int probe_error(int averror)
     return OS64_MEDIA_NOT_MEDIA;
 }
 
-// The best stream of a type: the best this build can decode, or, when it
-// decodes none, the best there is (so the info can name it, and the zero
-// is found from the same streams whatever was wanted). -1 when the file
-// has none; *decoder NULL when it cannot be decoded.
-static int best_stream(AVFormatContext *f, enum AVMediaType type, const AVCodec **decoder)
+// The sound stream: the best this build can decode, or, when it decodes
+// none, the best there is (so the info can name it, and the zero is found
+// from the same streams whatever was wanted). -1 when the file has none;
+// *decoder NULL when it cannot be decoded.
+static int sound_stream(AVFormatContext *f, const AVCodec **decoder)
 {
     *decoder = NULL;
-    int s = av_find_best_stream(f, type, -1, -1, decoder, 0);
+    int s = av_find_best_stream(f, AVMEDIA_TYPE_AUDIO, -1, -1, decoder, 0);
     if (s == AVERROR_DECODER_NOT_FOUND) {
         *decoder = NULL;
-        s = av_find_best_stream(f, type, -1, -1, NULL, 0);
+        s = av_find_best_stream(f, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
     }
     return s < 0 ? -1 : s;
+}
+
+// The picture stream: the first this build decodes, a default one before
+// the rest, else the first there is. Cover art (an attached picture, an
+// MP3's or an M4A's) is no picture of the media's and is passed over, as
+// it must be for the zero too. Chosen from what the headers say alone, so
+// every open of a file chooses the same stream: av_find_best_stream also
+// ranks by the frames FFmpeg's probe read, and a sound-only open reads none
+// of the picture's.
+static int picture_stream(AVFormatContext *f, const AVCodec **decoder)
+{
+    int best = -1, best_rank = -1;
+    for (unsigned i = 0; i < f->nb_streams; i++) {
+        const AVStream *st = f->streams[i];
+        if (st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO || (st->disposition & AV_DISPOSITION_ATTACHED_PIC))
+            continue;
+        int rank = (avcodec_find_decoder(st->codecpar->codec_id) != NULL) * 2 +
+                   ((st->disposition & AV_DISPOSITION_DEFAULT) != 0);
+        if (rank > best_rank) {
+            best = (int)i;
+            best_rank = rank;
+        }
+    }
+    *decoder = best >= 0 ? avcodec_find_decoder(f->streams[best]->codecpar->codec_id) : NULL;
+    return best;
 }
 
 // A decoder for stream `s`, opened (under s_lock, § THREADS). 0, or a
@@ -827,8 +855,8 @@ static int streams_and_decoders_locked(os64_media_t *m, os64_media_info_t *info)
     if (r < 0) return probe_error(r);
 
     const AVCodec *sound_decoder = NULL, *picture_decoder = NULL;
-    int sound = best_stream(m->format, AVMEDIA_TYPE_AUDIO, &sound_decoder);
-    int picture = best_stream(m->format, AVMEDIA_TYPE_VIDEO, &picture_decoder);
+    int sound = sound_stream(m->format, &sound_decoder);
+    int picture = picture_stream(m->format, &picture_decoder);
     find_zero(m, sound, picture);
     m->found[0] = sound;
     m->found[1] = picture;
@@ -899,11 +927,15 @@ static int streams_and_decoders_locked(os64_media_t *m, os64_media_info_t *info)
                                                                      st->codecpar->nb_coded_side_data,
                                                                      AV_PKT_DATA_DISPLAYMATRIX);
             if (matrix != NULL && matrix->size >= 9 * sizeof(int32_t)) {
-                // av_display_rotation_get answers counterclockwise degrees.
+                // av_display_rotation_get answers counterclockwise degrees,
+                // and NaN for a matrix that turns nothing (a damaged one),
+                // which is no angle.
                 double turn = -av_display_rotation_get((const int32_t *)matrix->data);
-                long whole = (long)(turn < 0 ? turn - 0.5 : turn + 0.5);
-                whole = ((whole % 360) + 360) % 360;
-                if (whole == 90 || whole == 180 || whole == 270) info->rotation = (uint32_t)whole;
+                if (turn == turn && turn > -1e6 && turn < 1e6) {
+                    long whole = (long)(turn < 0 ? turn - 0.5 : turn + 0.5);
+                    whole = ((whole % 360) + 360) % 360;
+                    if (whole == 90 || whole == 180 || whole == 270) info->rotation = (uint32_t)whole;
+                }
             }
         } else {
             st->discard = AVDISCARD_ALL;

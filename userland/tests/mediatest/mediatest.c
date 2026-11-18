@@ -54,7 +54,8 @@
 //      and then the 46 after it, and the sound from 72,800
 //  19  after the end, a seek to 0 makes it decode again from picture 0
 //  20  a sound-only open of the same file reads no picture packet, says
-//      the picture is absent, and decodes the same sound
+//      the picture is absent, and decodes as many frames of sound as the
+//      open for both (the host harness compares the samples themselves)
 //  21  a second thread converts and releases every picture while the
 //      first decodes; once the decoder has run again, none is held
 //  22  the picture-only clip (bbb-480p-3s.mp4): open for both or for the
@@ -687,6 +688,7 @@ static struct {
     os64_media_picture_t *ring[HANDOFF];
     uint32_t head, count;
     bool ended;
+    bool gone;                         // the converter could not start: nothing will empty the ring
     os64_media_t *m;
     long converted, failed;
 } s_handoff;
@@ -696,7 +698,12 @@ static int64_t convert_thread(void *arg)
     (void)arg;
     os64_media_scaler_t *s;
     static uint32_t pixels[320 * 180];
-    if (os64_media_scaler_create(320, 180, OS64_MEDIA_SCALE_FAST, &s) != 0) return -1;
+    if (os64_media_scaler_create(320, 180, OS64_MEDIA_SCALE_FAST, &s) != 0) {
+        os64_lock_acquire(&s_handoff.lock);
+        s_handoff.gone = true;
+        os64_lock_release(&s_handoff.lock);
+        return -1;
+    }
     for (;;) {
         os64_lock_acquire(&s_handoff.lock);
         os64_media_picture_t *p = NULL;
@@ -728,25 +735,33 @@ static int step_handoff(void)
     os64_memset(&s_handoff, 0, sizeof(s_handoff));
     s_handoff.m = c.m;
     int64_t tid = os64_thread(convert_thread, NULL);
+    if (tid < 0) {
+        clip_close(&c);
+        say("handoff: no second thread (result)", (long)tid, 0);
+        return FAIL(21);
+    }
     static int16_t pcm[4096 * 2];
     long given = 0;
     int r = 0;
-    for (;;) {
+    bool gone = false;
+    while (!gone) {
         os64_media_got_t got;
         if ((r = os64_media_next(c.m, pcm, 4096, &got)) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
         if (got.kind != OS64_MEDIA_GOT_PICTURE) continue;
         for (;;) {
             os64_lock_acquire(&s_handoff.lock);
             bool room = s_handoff.count < HANDOFF;
-            if (room) {
+            gone = s_handoff.gone;
+            if (room && !gone) {
                 s_handoff.ring[(s_handoff.head + s_handoff.count) % HANDOFF] = got.picture;
                 s_handoff.count++;
             }
             os64_lock_release(&s_handoff.lock);
-            if (room) break;
+            if (gone) os64_media_picture_release(c.m, got.picture);
+            if (room || gone) break;
             os64_yield();
         }
-        given++;
+        given += !gone;
     }
     os64_lock_acquire(&s_handoff.lock);
     s_handoff.ended = true;

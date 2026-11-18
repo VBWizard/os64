@@ -33,7 +33,8 @@
 // clock (/dev/audiopos's `heard`) is measured in too, and a picture whose
 // time is N is shown with that frame. The resampler's start-up delay is
 // removed, so a seek to a frame returns that frame first and a whole
-// decode returns the media's length.
+// decode returns the sound to its own end: the media's length, unless the
+// picture outlasts it.
 //
 // THE START IS THE FILE'S: the earliest start of its sound and its picture
 // streams, as the container states them (an MP4's edit lists applied),
@@ -102,7 +103,7 @@ typedef struct {
 
 // Results. 0 is success; each refusal has its own number because a player
 // says different things for them.
-#define OS64_MEDIA_BAD_ARGS     (-1)   // a NULL where something was needed, or a call this media was not opened for
+#define OS64_MEDIA_BAD_ARGS     (-1)   // a NULL where something was needed, or a call this media cannot take (each call says when)
 #define OS64_MEDIA_NOT_MEDIA    (-2)   // not a format libav.so reads
 #define OS64_MEDIA_UNSUPPORTED  (-3)   // a format it reads, holding what was wanted in a form it cannot decode
 #define OS64_MEDIA_NO_SOUND     (-4)   // media with no sound in it, when sound was all that was wanted
@@ -115,8 +116,9 @@ typedef struct {
 
 // Probe the source, find its sound, and get ready to decode it. On success
 // *out is the media and *info (if not NULL) describes it. The picture, if
-// the file has one, is discarded at the demuxer: its packets are never
-// read into memory or decoded. os64_media_open_for(src, OS64_MEDIA_WANT_SOUND, ...).
+// the file has one, is discarded at the demuxer: no packet of it is made or
+// decoded (its bytes may still pass through the reading buffer, interleaved
+// with the sound's). os64_media_open_for(src, OS64_MEDIA_WANT_SOUND, ...).
 int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_media_info_t *info);
 
 // Up to `frames` frames of stereo 48 kHz sound into `out` (2 * frames
@@ -144,8 +146,9 @@ const char *os64_media_error_text(const os64_media_t *m);
 
 // Frees the media. Every picture it gave is released first; one still held
 // is the caller's bug, and close never frees its memory, which a holder may
-// still read (os64_media_counts' `pictures_held` says, before the close,
-// how many are out). A release after close is undefined.
+// still read (os64_media_counts' `pictures_held`, read after a last call on
+// the decoding thread, says how many are out). A release after close is
+// undefined.
 void os64_media_close(os64_media_t *m);
 
 // A result's name, for messages: "not a media file this can read", ...
@@ -199,7 +202,7 @@ void os64_media_file_source(int32_t handle, os64_media_source_t *out);
 // by generation and releases them.
 
 // What a media is opened for. Whatever is not wanted is discarded at the
-// demuxer: its packets are never read into memory or decoded.
+// demuxer: no packet of it is made or decoded.
 #define OS64_MEDIA_WANT_SOUND    (1u << 0)
 #define OS64_MEDIA_WANT_PICTURE  (1u << 1)
 
@@ -260,17 +263,21 @@ int os64_media_picture_skip(os64_media_t *m, int level);
 
 // Drops pictures, undecoded, until the next keyframe, which is the next
 // picture out; the sound goes on as before. For a decoder far behind.
+// Both answer 0, or BAD_ARGS for a media that decodes no picture.
 int os64_media_picture_resync(os64_media_t *m);
 
 // What the media has done, for a player's own report and for tests. On
 // the decoding thread.
 typedef struct {
-    uint64_t sound_packets;          // read from the demuxer and sent to the sound decoder
-    uint64_t picture_packets;        // read and sent to the picture decoder (0 when it was not wanted)
+    uint64_t sound_packets;          // read from the demuxer for the sound decoder
+    uint64_t picture_packets;        // read for the picture decoder, those a resync then dropped
+                                     // included (0 when the picture was not wanted)
     uint64_t pictures_out;           // given by os64_media_next
-    uint64_t pictures_held;          // given and not yet back with the decoder
+    uint64_t pictures_held;          // given and not yet back with the decoder: those still out,
+                                     // and those released since the last call on the decoding thread
     uint64_t pictures_run_in;        // dropped inside a seek's run-in, before its target
-    uint64_t pictures_resync;        // dropped by a resync: packets left undecoded, pictures not given
+    uint64_t pictures_resync;        // dropped by a resync: packets left undecoded, pictures made and
+                                     // not given (not those inside the decoder, which the keyframe flushes)
     uint64_t pictures_before_zero;   // dropped: timed before the file's start
 } os64_media_counts_t;
 void os64_media_counts(const os64_media_t *m, os64_media_counts_t *out);
@@ -299,8 +306,10 @@ int os64_media_scaler_create(uint32_t dst_width, uint32_t dst_height, uint32_t f
 // BT.709 for a picture 1280 or more wide or taller than 576, else BT.601
 // (mpv's rule: standard definition was 601's); with no range, limited
 // ("TV"). The full-range JPEG pixel kinds say full range themselves. No
-// primaries or transfer conversion: the pixels keep the stream's gamut
-// and transfer, a wide one (BT.2020, PQ, HLG) included.
+// primaries or transfer conversion is asked for: the pixels keep the
+// stream's gamut and transfer, a wide one (BT.2020, PQ, HLG) included. (A
+// picture carrying HDR mastering metadata is the exception the scaler
+// makes: it maps that picture's luminance range, libswscale/format.c.)
 int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t *p, uint32_t *pixels,
                               uint32_t pitch);
 
