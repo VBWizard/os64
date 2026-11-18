@@ -42,7 +42,7 @@ bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask)
 {
     if (ask != NULL) os64_memset(ask, 0, sizeof(*ask));
     if (dom == NULL || ask == NULL || dom->navigation.kind == OS64_DOM_NAVIGATE_NONE) return false;
-    if (!d_delivery_active(dom)) {
+    if (dom->browsing_context || !d_delivery_active(dom)) {
         d_navigate(dom, OS64_DOM_NAVIGATE_NONE, NULL, NULL, NULL, 0);
         return false;
     }
@@ -224,9 +224,14 @@ static bool fragment_encoded(const char *name, char *out, size_t cap)
     return true;
 }
 
+#include "navigation_authority.inc"
+
 static JSValue ask_url(os64_dom_t *dom, JSContext *ctx, os64_dom_navigation_kind_t kind, JSValueConst value,
-                       bool fragment)
+                       bool fragment, bool assign)
 {
+    if (dom->browsing_context)
+        return context_navigate(dom, ctx, value, fragment ? D_NAV_HASH :
+            kind == OS64_DOM_NAVIGATE_REPLACE ? D_NAV_REPLACE : assign ? D_NAV_ASSIGN : D_NAV_HREF);
     DString text = {0};
     if (!d_string(dom, ctx, value, &text)) return JS_EXCEPTION;
     if (!d_require_active(dom, ctx)) { d_string_free(dom, &text); return JS_EXCEPTION; }
@@ -304,15 +309,16 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
             (magic == L_HREF && set) || magic == L_REPLACE)) return JS_EXCEPTION;
     switch (magic) {
     case L_HREF:
-        return set ? ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, false) : location_part(dom, ctx, magic);
+        return set ? ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, false, false) : location_part(dom, ctx, magic);
     case L_HASH:
-        return set ? ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, true) : location_part(dom, ctx, magic);
+        return set ? ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, true, false) : location_part(dom, ctx, magic);
     case L_PROTOCOL: case L_HOST: case L_HOSTNAME: case L_PORT: case L_PATHNAME:
     case L_SEARCH: case L_ORIGIN:
         return set ? JS_UNDEFINED : location_part(dom, ctx, magic);
-    case L_ASSIGN: return ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, false);
-    case L_REPLACE: return ask_url(dom, ctx, OS64_DOM_NAVIGATE_REPLACE, value, false);
+    case L_ASSIGN: return ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, false, true);
+    case L_REPLACE: return ask_url(dom, ctx, OS64_DOM_NAVIGATE_REPLACE, value, false, false);
     case L_RELOAD:
+        if (dom->browsing_context) return context_navigate(dom, ctx, JS_UNDEFINED, D_NAV_RELOAD);
         if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
         d_navigate(dom, OS64_DOM_NAVIGATE_RELOAD, NULL, NULL, page_url(dom), 0);
         return JS_UNDEFINED;
@@ -385,7 +391,7 @@ static JSValue location_property(JSContext *ctx, JSValueConst self, int argc, JS
     if (windowless(dom, self))
         return magic & D_SET ? JS_ThrowTypeError(ctx, "This document has no location") : JS_NULL;
     if (!d_member_access(dom, ctx, true)) return JS_EXCEPTION;
-    if (magic & D_SET) return ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, argc > 0 ? argv[0] : JS_UNDEFINED, false);
+    if (magic & D_SET) return ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, argc > 0 ? argv[0] : JS_UNDEFINED, false, false);
     return JS_DupValue(ctx, dom->location->value);
 }
 
