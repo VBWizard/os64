@@ -84,6 +84,19 @@ static void global_receiver_cases(void)
     if (holder) JS_FreeContext(holder);
     if (raw_runtime) JS_FreeRuntime(raw_runtime);
     static const struct { const char *name, *source; } cases[] = {
+        {"readonly global definitions preserve SameValue",
+         "Object.defineProperty(raw,'fixed',{value:7});"
+         "if(Reflect.defineProperty(raw,'fixed',{value:8})||raw.fixed!==7)throw 1;"
+         "if(!Reflect.defineProperty(raw,'fixed',{value:7}))throw 2;"
+         "var caught=false;try{Object.defineProperty(raw,'fixed',{value:8})}catch(e){caught=e instanceof TypeError}if(!caught)throw 3;"
+         "Object.defineProperty(raw,'nanFixed',{value:NaN});if(!Reflect.defineProperty(raw,'nanFixed',{value:NaN}))throw 4;"
+         "Object.defineProperty(raw,'zeroFixed',{value:0});if(Reflect.defineProperty(raw,'zeroFixed',{value:-0}))throw 5;"
+         "var obj={};Object.defineProperty(raw,'objectFixed',{value:obj});"
+         "if(!Reflect.defineProperty(raw,'objectFixed',{value:obj})||Reflect.defineProperty(raw,'objectFixed',{value:{}}))throw 6;"
+         "Object.defineProperty(raw,'configurableFixed',{value:1,configurable:true});"
+         "if(!Reflect.defineProperty(raw,'configurableFixed',{value:2})||raw.configurableFixed!==2)throw 7;"
+         "Object.defineProperty(raw,'writableFixed',{value:1,writable:true});"
+         "if(!Reflect.defineProperty(raw,'writableFixed',{value:2})||raw.writableFixed!==2)throw 8;"},
         {"global accessors keep storage and substitute strict receivers",
          "var seen, count=0;"
          "Object.defineProperty(raw,'accessor',{configurable:true,"

@@ -296,7 +296,7 @@ os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi)
  * current. The data-function ctx and the task/entry realm are not that caller.
  * This private opt-in requires explicit origin-bearing settings on both sides;
  * the default binding has no new security policy. */
-static bool member_access(os64_dom_t *target, JSContext *ctx, bool cross_origin, bool retained_location)
+static bool member_access(os64_dom_t *target, JSContext *ctx, bool cross_origin, bool retained_relevant)
 {
     if (!target->binding_origin) return true;
     os64_js_outcome_t out;
@@ -305,7 +305,7 @@ static bool member_access(os64_dom_t *target, JSContext *ctx, bool cross_origin,
     os64_dom_t *source = NULL;
     for (size_t i = 0; realm && i < target->cluster->count; ++i)
         if (target->cluster->members[i]->realm == realm) source = target->cluster->members[i];
-    if ((!retained_location && !d_delivery_active(target)) || !d_delivery_active(source) || !source->binding_origin ||
+    if ((!retained_relevant && !d_delivery_active(target)) || !d_delivery_active(source) || !source->binding_origin ||
         (!cross_origin && !way_origin_same(source->binding_origin, target->binding_origin))) {
         d_error(ctx, "SecurityError", "Member settings do not permit access");
         return false;
@@ -315,7 +315,8 @@ static bool member_access(os64_dom_t *target, JSContext *ctx, bool cross_origin,
 
 bool d_member_access(os64_dom_t *target, JSContext *ctx, bool cross_origin)
 {
-    return member_access(target, ctx, cross_origin, false);
+    return member_access(target, ctx, cross_origin, cross_origin &&
+        target->browsing_context && target->browsing_context->proxy);
 }
 
 bool d_location_access(os64_dom_t *relevant, JSContext *ctx, bool cross_origin)
@@ -325,8 +326,9 @@ bool d_location_access(os64_dom_t *relevant, JSContext *ctx, bool cross_origin)
     return member_access(relevant, ctx, cross_origin, relevant->browsing_context != NULL);
 }
 
-/* Null/undefined receivers use the function's defining global. Object identity
- * selects other Windows without getters, coercion or a new settings scope. */
+/* Null/undefined receivers use the function's defining global. Raw Window
+ * identity or a private proxy's current target selects other Windows without
+ * getters, coercion or a new settings scope. */
 os64_dom_t *d_member_callback(JSContext *ctx, JSValueConst self, int *magic,
     JSValueConst *data, const char *abi)
 {
@@ -334,7 +336,8 @@ os64_dom_t *d_member_callback(JSContext *ctx, JSValueConst self, int *magic,
     if (!owner || !(*magic & D_WINDOW_MEMBER)) return owner;
     bool cross = (*magic & D_WINDOW_CROSS) != 0;
     *magic &= ~(D_WINDOW_MEMBER | D_WINDOW_CROSS);
-    os64_dom_t *target = NULL;
+    os64_dom_t *target = d_window_proxy_target(self);
+    if (target && target->cluster != owner->cluster) target = NULL;
     if (JS_IsNull(self) || JS_IsUndefined(self)) target = owner;
     else if (owner->cluster)
         for (size_t i = 0; i < owner->cluster->count; ++i)
@@ -534,7 +537,7 @@ static JSValue window_alias(JSContext *ctx, JSValueConst self, int argc,
 {
     os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (!dom) return JS_EXCEPTION;
-    if (!(magic & D_SET)) return d_binding_global(dom, ctx);
+    if (!(magic & D_SET)) return d_window_identity(dom, ctx);
     const char *name = (magic & ~D_SET) == 1 ? "self" : "frames";
     JSValue global = d_binding_global(dom, ctx);
     int result = JS_DefinePropertyValueStr(ctx, global, name,
@@ -1244,6 +1247,7 @@ static void child_abort(os64_dom_t *dom, struct DObservers *observers, struct DC
     os64_dom_cluster_t *cluster = dom->cluster;
     dom->closed = true;
     d_location_exotic_drain(dom);
+    d_window_proxy_drain(dom);
     d_mutation_stop(dom);
     departure_detach(dom);
     dom->options.url = dom->options.referrer = NULL;
@@ -1443,6 +1447,7 @@ static void binding_drain(os64_dom_t *dom)
     if (dom == NULL || dom->closed) return;
     dom->closed = true;
     d_location_exotic_drain(dom);
+    d_window_proxy_drain(dom);
     d_mutation_stop(dom);
     /* What the page changed in its storage and has not committed goes to
      * the store before the binding is gone: the last of its commits. */

@@ -1,0 +1,19 @@
+# Nonconfigurable, nonwritable global VARREF properties must retain SameValue.
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -11313,7 +11313,14 @@
+                         pr->u.value = JS_UNDEFINED;
+                     }
+                 } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
+-                    /* Note: JS_PROP_VARREF is always writable */
++                    /* Global storage uses variable references for read-only
++                       properties too; module namespace references are writable
++                       descriptors with a separate value check below. */
++                    if (p->class_id == JS_CLASS_GLOBAL_OBJECT &&
++                        (prs->flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)) == 0 &&
++                        (flags & JS_PROP_HAS_VALUE) &&
++                        !js_same_value(ctx, val, *pr->u.var_ref->pvalue))
++                        goto not_configurable;
+                 } else {
+                     if ((prs->flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)) == 0 &&
+                         (flags & JS_PROP_HAS_VALUE)) {
