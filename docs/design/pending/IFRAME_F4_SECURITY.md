@@ -156,7 +156,9 @@ descriptor caches. The [retained Location milestone](IFRAME_F4_LOCATION_CONTEXT.
 implements private receiver/current-document routing. The
 [Location property layer](IFRAME_F4_LOCATION_EXOTIC.md) supplies private native
 exotics and descriptor caching; public proxy publication remains subject to the
-full acceptance below. Cover old Location/new document and discarded-context cases.
+full acceptance below. The [private WindowProxy boundary](IFRAME_F4_WINDOW_PROXY.md)
+adds stable proxy identity and property forwarding; global/event exposure closure
+remains open. Cover old Location/new document and discarded-context cases.
 
 ## Exotics and binding integration
 

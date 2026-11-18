@@ -395,7 +395,8 @@ struct DBrowsingContext {
     os64_dom_cluster_t *cluster;
     DBrowsingContext *registry_next, *parent, *first_child, *last_child;
     DBrowsingContext *previous_sibling, *next_sibling;
-    os64_dom_t *active;
+    os64_dom_t *active, *window; /* Last Window survives context discard. */
+    DValue *proxy;
     uint64_t generation;
     size_t charged_bytes;
     bool discarded;
@@ -541,6 +542,7 @@ struct os64_dom {
     bool attr_ordinary;
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
     struct DLocationExotic *location_exotic;
+    struct DWindowProxy *window_proxy_state;
     DValue *invoke, *navigator, *style_prototype, *static_list;
     /* navigator.languages, plugins and mimeTypes, each [SameObject]; made by
      * the Modern Web's window objects row (window.c), NULL without it. */
@@ -878,6 +880,11 @@ bool d_member_access(os64_dom_t *, JSContext *, bool);
 bool d_location_access(os64_dom_t *, JSContext *, bool);
 int d_location_exotic_install(os64_dom_t *, JSContext *, JSValueConst);
 void d_location_exotic_drain(os64_dom_t *);
+/* Private test seam; global-this and event publication remain gated. */
+JSValue d_window_proxy(JSContext *, DBrowsingContext *);
+void d_window_proxy_drain(os64_dom_t *);
+os64_dom_t *d_window_proxy_target(JSValueConst);
+JSValue d_window_identity(os64_dom_t *, JSContext *);
 JSValue d_binding_global(os64_dom_t *, JSContext *);
 JSValue d_custom_registry(os64_dom_t *, JSContext *);
 int d_window_member_magic(os64_dom_t *, JSContext *, JSValueConst, const char *, int, int);

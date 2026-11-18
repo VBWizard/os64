@@ -6,7 +6,8 @@
  * rows of the Modern Web table. Every yonder page is the one document of a
  * top-level window that the person opened, never a frame and never a
  * window a script opened, and each answer below is what HTML gives such a
- * window:
+ * window. Private proxy-bearing contexts instead answer length/top/parent
+ * and closed from their retained native context record:
  *
  *   - opener reads null (no script opened it); assigning null keeps it
  *     null, and assigning anything else makes it window's own data
@@ -178,10 +179,10 @@ static const char *page_address(const os64_dom_t *dom)
  * isSecureContext and originAgentCluster, every one asked here and none
  * installed as a constant, so the frame slice teaches this one function
  * what a frame's context answers instead of reshaping seven members.
- * `context` is the binding whose window is asked; today every binding's
- * window is the root of its tree, with no frame element, no child frames
- * and itself for top and parent; its address stands for HTML's top-level
- * creation URL, which for a root it is. */
+ * `context` is the binding whose window is asked. Private proxy-bearing
+ * contexts use their native tree for length/top/parent; ordinary bindings
+ * keep the standalone answers. Frame elements and ancestor-based secure
+ * context calculation remain part of the browser tree integration. */
 /* A SECURE CONTEXT: a page whose address is potentially trustworthy
  * (libway's one judgement, way_url_trustworthy, which counts about:blank,
  * what a binding with no address is), or a page read from disk. Secure
@@ -200,6 +201,21 @@ bool d_secure_context(const os64_dom_t *context)
 
 static JSValue context_answer(os64_dom_t *context, JSContext *ctx, int question)
 {
+    DBrowsingContext *browsing = context->browsing_context;
+    if (browsing && browsing->proxy) {
+        bool attached = !browsing->discarded && browsing->active == context;
+        if (question == C_LENGTH) {
+            uint32_t count = 0;
+            if (attached) for (DBrowsingContext *at = browsing->first_child; at; at = at->next_sibling) ++count;
+            return JS_NewUint32(ctx, count);
+        }
+        if (question == C_TOP || question == C_PARENT) {
+            if (!attached) return JS_NULL;
+            DBrowsingContext *related = question == C_TOP ? d_browsing_context_top(browsing)
+                : browsing->parent ? browsing->parent : browsing;
+            return d_window_proxy(ctx, related);
+        }
+    }
     switch (question) {
     case C_FRAME_ELEMENT: return JS_NULL;
     case C_LENGTH: return JS_NewInt32(ctx, 0);
@@ -225,7 +241,9 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     case B_OPENER:
         if (!set) return JS_NULL;
         return argc > 0 && JS_IsNull(argv[0]) ? JS_UNDEFINED : own_property(dom, ctx, "opener", argc, argv);
-    case B_CLOSED: return JS_FALSE;
+    case B_CLOSED:
+        return JS_NewBool(ctx, dom->browsing_context && dom->browsing_context->proxy &&
+            (dom->browsing_context->discarded || dom->browsing_context->active != dom));
     case B_CLOSE: case B_CAPTURE_EVENTS: case B_RELEASE_EVENTS: return JS_UNDEFINED;
     case B_CLIENT_INFORMATION:
         return set ? own_property(dom, ctx, "clientInformation", argc, argv) : JS_DupValue(ctx, dom->navigator->value);

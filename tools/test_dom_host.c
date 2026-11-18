@@ -324,6 +324,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_navigation_authority.inc"
 #include "test_dom_location_context.inc"
 #include "test_dom_location_exotic.inc"
+#include "test_dom_window_proxy.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -700,6 +701,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--synchronous-settings")){dom_synchronous_settings_cases();dom_synchronous_failure_cases();printf("DOM synchronous settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--neutral-promise-settings")){dom_neutral_promise_cases();printf("DOM neutral Promise: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--import-settings")){dom_import_settings_cases();printf("DOM import settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--window-proxy")){dom_window_proxy_cases();window_proxy_allocation_cases();printf("DOM WindowProxy: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--location-exotic")){dom_location_exotic_cases();printf("DOM Location exotic: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--location-context")){dom_location_context_cases();printf("DOM Location context: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--navigation-authority")){dom_navigation_authority_cases();printf("DOM navigation authority: %u checks, %u failed\n",checks,failures);return failures?1:0;}

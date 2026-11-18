@@ -12,14 +12,18 @@ magic. No JavaScript wrapper, nested call, or settings scope is inserted. The
 callback resolves the actual Window receiver by object identity in the defining
 binding's cluster, then checks the wrapper's pre-native `NATIVE_CALLER` settings
 against that receiver's immutable origin. A plain object, primitive or Proxy
-receiver fails the Window brand without invoking a trap. Null and undefined use
+receiver fails the Window brand without invoking a trap. A private native
+[WindowProxy](IFRAME_F4_WINDOW_PROXY.md) selects its current Window. Null and undefined use
 the function's defining Window, as specified by
 [Web IDL operations](https://webidl.spec.whatwg.org/#es-operations).
 
 A borrowed member can therefore operate on a same-origin receiver even if the
 function was created in a different-origin Window. Conversely, a same-origin
-function cannot authorize a different-origin receiver. Departed source or target,
-missing source/target origin settings and unprepared host invocation refuse.
+function cannot authorize a different-origin receiver. Departed sources, missing
+source/target origin settings and unprepared host invocation refuse. Targets
+require active membership except for cross-origin-allowed operations on a
+proxy-bearing retained Window, whose detached answers are described by the
+WindowProxy companion.
 The defining binding's retained function need not be an active document when the
 source and actual receiver remain usable. Native state is still retained until
 the grouped teardown; this adds no independent reclamation path.
@@ -30,7 +34,7 @@ runs before argument conversion. Its
 exceptions are recorded separately for methods, getters and setters: close,
 focus, blur and postMessage; the window/self/location/closed/frames/length/top/
 opener/parent getters; and the location setter. Exemptions skip origin equality,
-not the private live-settings requirement. Renaming or copying a function does
+not the private live-caller requirement or operation-specific lifecycle checks. Renaming or copying a function does
 not change its policy. Fetch converts a boundary error into a rejected promise,
 following Web IDL's promise-returning operation rule.
 

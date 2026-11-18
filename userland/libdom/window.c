@@ -1913,10 +1913,12 @@ void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts,
 
 
 #include "location_exotic.inc"
+#include "window_proxy.inc"
 
 void d_window_free(os64_dom_t *dom)
 {
     location_exotic_free(dom);
+    window_proxy_free(dom);
     d_navigate(dom, OS64_DOM_NAVIGATE_NONE, NULL, NULL, NULL, 0);
     for (size_t i = 0; i < sizeof(dom->scripts) / sizeof(dom->scripts[0]); i++)
         while (dom->scripts[i] != NULL) {

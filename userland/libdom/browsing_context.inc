@@ -53,7 +53,7 @@ DBrowsingContext *d_browsing_context_create(os64_dom_cluster_t *cluster, DBrowsi
     if (!context) { outcome->status = OS64_JS_ADMISSION_REFUSED; return NULL; }
     context->cluster = cluster;
     context->parent = parent;
-    context->active = initial;
+    context->active = context->window = initial;
     context->generation = 1;
     context->charged_bytes = bytes;
     os64_memcpy(context->name, name, length + 1);
@@ -126,7 +126,10 @@ static os64_js_status_t context_change(DBrowsingContext *context, uint64_t expec
     if (discard) {
         context_unlink(context);
         context->discarded = true;
-    } else candidate->browsing_context = context;
+    } else {
+        context->window = candidate;
+        candidate->browsing_context = context;
+    }
     return OS64_JS_OK;
 }
 
