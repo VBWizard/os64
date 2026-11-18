@@ -364,8 +364,8 @@ bool yonder_scripts_custom_failure(const yonder_scripts_t *scripts, const char *
 // The page's posted messages and the binding's own tasks on their queue
 // (os64_dom_message_next/_fire/_kind): when the oldest was queued, on
 // yonder_now_ms' clock (UINT64_MAX for none), the oldest run as one task
-// (false when nothing ran), and the oldest's source for the record
-// ("message" when there is none).
+// (false when nothing ran), and the source of the task the last fire ran,
+// for the record ("message" before any).
 uint64_t yonder_scripts_message_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_message_fire(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 const char *yonder_scripts_message_kind(const yonder_scripts_t *scripts);

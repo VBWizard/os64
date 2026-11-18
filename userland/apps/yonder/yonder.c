@@ -12227,21 +12227,25 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
 // timer. True when one ran. `shown` decides whether its asks may reach the page on screen.
 static bool page_event_run(Page *p, bool shown);
 
-// A page's queued task (MODERN_WEB.md § P2b): its oldest posted message or
-// its next due timer, whichever was queued first — a message when it was
-// posted, a timer when it fell due — the timer first when both were queued
-// at once, so a page whose every message posts another still has its
-// timers run. `what` names the one tried. True when one ran.
+// A page's queued task (MODERN_WEB.md § P2b): the oldest on its message
+// queue (a posted message, or a task of the binding's own such as a
+// FileReader's read) or its next due timer, whichever was queued first —
+// a message when it was posted, a timer when it fell due — the timer first
+// when both were queued at once, so a page whose every message posts
+// another still has its timers run. `what` names the one tried, by the
+// source of the task that ran. True when one ran.
 static bool queued_task(yonder_scripts_t *host, const char **what, os64_js_outcome_t *out)
 {
     uint64_t now = yonder_now_ms(), timer = yonder_scripts_timer_next(host);
     uint64_t message = yonder_scripts_message_next(host);
     if (message <= now && (timer > now || message < timer)) {
-        // A posted message, or a task of the binding's own that rides the
-        // same queue (a FileReader's read), by its source.
-        *what = yonder_scripts_message_kind(host);
-        if (yonder_scripts_message_fire(host, out))
+        *what = "message";
+        if (yonder_scripts_message_fire(host, out)) {
+            // Named after it ran: the queue may drop a message nobody
+            // hears and run what follows it.
+            *what = yonder_scripts_message_kind(host);
             return true;
+        }
     }
     *what = "timer";
     return yonder_scripts_timer_fire(host, now, out);

@@ -534,8 +534,8 @@ struct os64_dom {
     DActiveEvent *current_event;
     /* The classes of plain event targets (d_event_target), and each one's
      * resolver, NULL for a class whose opaque is its entry. */
-    JSClassID target_classes[12];
-    int (*target_resolvers[12])(os64_dom_t *, JSContext *, JSValueConst, bool, DValue **);
+    JSClassID target_classes[16];
+    int (*target_resolvers[16])(os64_dom_t *, JSContext *, JSValueConst, bool, DValue **);
     unsigned target_class_count;
     /* EventTarget.prototype, which holds the listener methods every target
      * inherits, and Window.prototype, between the global and it (event.c,
@@ -733,6 +733,7 @@ struct os64_dom {
     DValue *clone_held[D_CLONE_HELD];
     bool clone_classes;
     DMessage *messages, *messages_last;
+    const char *message_ran;    /* the source of the task the last fire ran (os64_dom_message_kind) */
     size_t messages_held;
     DValue *message_prototype;
     DAnimation *animations, *animation_last;

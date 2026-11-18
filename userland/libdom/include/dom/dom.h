@@ -1150,8 +1150,8 @@ uint64_t os64_dom_custom_visits(const os64_dom_t *dom);
  * posted after the page's next timer fell due (a timer queued first, whose
  * task may add a listener for it): then fire answers false and leaves it.
  * A message a message's task posts is queued behind it. kind names the
- * oldest's task source for the host's record ("message", "file reading"),
- * NULL with none. Owner thread, between tasks. */
+ * source of the task the last fire ran, for the host's record ("message",
+ * "file reading"), NULL before any. Owner thread, between tasks. */
 uint64_t os64_dom_message_next(const os64_dom_t *dom);
 bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 const char *os64_dom_message_kind(const os64_dom_t *dom);

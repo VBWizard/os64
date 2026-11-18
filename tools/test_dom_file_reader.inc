@@ -34,9 +34,9 @@ static void dom_file_reader_cases(void)
         "assert(r.readyState===1&&r.result===null&&log.length===0,'LOADING, and nothing fired yet');"
         "throws('InvalidStateError',()=>r.readAsArrayBuffer(new Blob([])));",
         "file reader: a read begun");
-    const char *kind = os64_dom_message_kind(f.binding);
-    check(kind != NULL && !strcmp(kind, "file reading"), "file reader: its task's source is named");
     check(reader_task(&f), "file reader: one task");
+    const char *kind = os64_dom_message_kind(f.binding);
+    check(kind != NULL && !strcmp(kind, "file reading"), "file reader: the task that ran is named by its source");
     check(!os64_dom_message_fire(f.binding, &(os64_js_outcome_t){0}), "file reader: and only one");
     dom_script(&f, STORAGE_ASSERT
         "assert(log.join()==='loadstart:0/6:1,progress:6/6:1,load:6/6:2,loadend:6/6:2',log.join());"

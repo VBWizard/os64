@@ -15,9 +15,9 @@
  *
  * `generation` names the read under way: the queued task carries it, and
  * abort() and each new read move it, so a task that finds another
- * generation does nothing. abort() during LOADING fires abort then
- * loadend at once, inside the call; in EMPTY or DONE it only clears the
- * result. A reader is a collectable plain event target (event.c); the
+ * generation does nothing. abort() during LOADING fires abort at once,
+ * inside the call, then loadend unless an abort handler started another
+ * read; in EMPTY or DONE it only clears the result. A reader is a collectable plain event target (event.c); the
  * queued task holds it until it runs, as the standard keeps an object with
  * pending activity, and the Blob it reads is held until the read ends. */
 
@@ -86,16 +86,28 @@ static void read_end(JSContext *ctx, DReader *r)
 
 /* A ProgressEvent `type` at the reader: from the read's task (`outcome`),
  * each listener the task's call; from a page's own call (abort()), a
- * nested one. -1 when the runtime is finished with. */
+ * nested one. -1 with an exception pending. In the task, a refusal a
+ * script could catch (the page at its DOM quota) is reported as the page's
+ * error and answers 0, so the read still reaches DONE; -1 there is the
+ * runtime finished with. */
 static int fire(os64_dom_t *dom, JSContext *ctx, DReader *r, const char *type, double loaded, double total,
                 os64_js_outcome_t *outcome)
 {
     JSValue event = d_progress_event_new(dom, ctx, type, true, loaded, total, true);
-    if (JS_IsException(event)) return -1;
-    int result = outcome != NULL ? d_dispatch_plain_task(dom, ctx, event, &r->target, outcome)
+    int result = -1;
+    if (!JS_IsException(event)) {
+        result = outcome != NULL ? d_dispatch_plain_task(dom, ctx, event, &r->target, outcome)
                                  : d_dispatch_plain(dom, ctx, event, &r->target);
-    JS_FreeValue(ctx, event);
-    return result < 0 ? -1 : 0;
+        JS_FreeValue(ctx, event);
+    }
+    if (result >= 0) return 0;
+    if (outcome != NULL && JS_HasException(ctx) && d_exception_catchable(ctx)) {
+        JSValue error = JS_GetException(ctx);
+        d_report(dom, ctx, error);
+        JS_FreeValue(ctx, error);
+        return 0;
+    }
+    return -1;
 }
 
 /* `length` bytes as a string of as many code units, each a byte's value
@@ -122,11 +134,11 @@ static JSValue binary_string(JSContext *ctx, const uint8_t *bytes, size_t length
  * no type. */
 static JSValue data_url(JSContext *ctx, const uint8_t *bytes, size_t length, const char *type)
 {
-    const char *essence = type != NULL && type[0] != '\0' ? type : "application/octet-stream";
-    size_t head = 5 + os64_strlen(essence) + 8, body = (length + 2) / 3 * 4;
+    const char *media = type != NULL && type[0] != '\0' ? type : "application/octet-stream";
+    size_t head = 5 + os64_strlen(media) + 8, body = (length + 2) / 3 * 4;
     char *out = js_malloc(ctx, head + body + 1);
     if (out == NULL) return JS_EXCEPTION;
-    os64_snprintf(out, head + 1, "data:%s;base64,", essence);
+    os64_snprintf(out, head + 1, "data:%s;base64,", media);
     size_t used = head + d_base64_write(bytes, length, out + head);
     JSValue url = JS_NewStringLen(ctx, out, used);
     js_free(ctx, out);
@@ -202,8 +214,13 @@ static void read_task(os64_dom_t *dom, JSValueConst self, uint32_t token, os64_j
             read_end(ctx, r);
             const char *event = "load";
             if (JS_IsNull(result)) {
-                slot_set(ctx, &r->error, d_dom_exception_new(dom, ctx, "NotReadableError",
-                                                             "The Blob is too large to read as that"));
+                JSValue error = d_dom_exception_new(dom, ctx, "NotReadableError", "The Blob is too large to read as that");
+                if (JS_IsException(error)) {
+                    // No memory for the error itself: the event says it.
+                    if (d_exception_catchable(ctx)) JS_FreeValue(ctx, JS_GetException(ctx));
+                    error = JS_NULL;
+                }
+                slot_set(ctx, &r->error, error);
                 event = "error";
             } else {
                 slot_set(ctx, &r->result, result);

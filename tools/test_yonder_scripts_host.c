@@ -12288,11 +12288,10 @@ static void file_reader_case(void)
               "r.readAsText(new Blob(['read here']));</script>");
     bool settled = loop_settle();
     yonder_scripts_t *host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
-    check(settled && yonder_scripts_message_next(host) != UINT64_MAX &&
-          !strcmp(yonder_scripts_message_kind(host), "file reading"),
-          "file reader: its read is queued, its source named");
+    check(settled && yonder_scripts_message_next(host) != UINT64_MAX, "file reader: its read is queued");
     for (int i = 0; i < 4 && !probe_text_is("out", "read here"); i++) script_turn();
     check(probe_text_is("out", "read here"), "file reader: the page's loop runs the read and the result arrives");
+    check(!strcmp(yonder_scripts_message_kind(host), "file reading"), "file reader: the task that ran is named");
     loop_drop();
 }
 
