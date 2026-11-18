@@ -336,14 +336,18 @@ void yonder_scripts_set_note(yonder_scripts_t *scripts, const char *line);
 const char *yonder_scripts_note(const yonder_scripts_t *scripts);
 uint64_t yonder_scripts_timer_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_timer_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
-// One rendering opportunity's ordered callback batch; the host owns visibility,
+// One rendering opportunity's ordered callback batch, its timestamp the
+// frame's time (`frame_us`, os64_micros' clock); the host owns visibility,
 // pacing and the rendering step after it (os64_dom_animation_fire).
 uint64_t yonder_scripts_animation_next(const yonder_scripts_t *scripts);
-bool yonder_scripts_animation_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+bool yonder_scripts_animation_fire(yonder_scripts_t *scripts, uint64_t now, uint64_t frame_us,
+                                   os64_js_outcome_t *outcome);
 // Web Animations' update step (os64_dom_web_animations_update), run on the
-// rendering step before the frame callbacks, as HTML orders them.
+// rendering step before the frame callbacks, as HTML orders them, and
+// sampled at the same frame's time.
 uint64_t yonder_scripts_web_animations_next(const yonder_scripts_t *scripts);
-bool yonder_scripts_web_animations_update(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+bool yonder_scripts_web_animations_update(yonder_scripts_t *scripts, uint64_t now, uint64_t frame_us,
+                                          os64_js_outcome_t *outcome);
 // The page's script effects on `node` for a layout (os64_dom_script_effects;
 // none once the scripts are dead), and how long they live. A tree keeps the
 // effects it was laid out with for its ticks, its paints and its computed
@@ -382,7 +386,10 @@ const char *yonder_scripts_message_kind(const yonder_scripts_t *scripts);
 // due. False when nothing ran.
 uint64_t yonder_scripts_idle_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_idle_run(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
-bool yonder_scripts_idle_before(yonder_scripts_t *scripts, uint64_t render_due, os64_js_outcome_t *outcome);
+// _before: bounded by the host's rendering deadline, and by its next frame
+// should a callback ask for one (os64_dom_idle_before).
+bool yonder_scripts_idle_before(yonder_scripts_t *scripts, uint64_t render_due, uint64_t next_frame,
+                                os64_js_outcome_t *outcome);
 // The answer to the page's request `token` (os64_dom_fetched), as one
 // task. False when nothing ran: the runtime is gone, or never was, or the
 // answer was a module's (YONDER_MODULE_TOKEN), which the page's module map

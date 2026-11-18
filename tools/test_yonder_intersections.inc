@@ -4,16 +4,23 @@
  * writes what its observers saw into #out, which is fixed at the top so
  * it moves nothing it is written about. */
 
-/* The window loop's turns for scripts and observations: a task (the
- * delivery among them), then the step, then the frame's end; until a turn
- * runs nothing and queues nothing. */
+/* The window loop's turns for scripts and observations: a frame of the
+ * display answered when frame work is due and a period of the window's
+ * time has passed since the last (a display answers no oftener), a task
+ * (the delivery among them), then the step, then the frame's end; until a
+ * turn runs nothing and queues nothing. */
+#define IO_PERIOD_MS 17
 static bool io_turns(void) {
     for(int i=0;i<64;i++) {
+        bool framed=frame_work_due()<=yonder_now_ms() &&
+                    (s_frames.number==0 || yonder_now_us()>=s_frames.blank_us+IO_PERIOD_MS*1000);
+        if(framed) host_frame();
         bool ran=script_turn();
         bool resized=resizes_turn();
         bool queued=intersections_turn() || resized;
         motion_painted();
-        if(!ran && !queued) return true;
+        frame_close();
+        if(!ran && !queued && !framed) return true;
     }
     return false;
 }
@@ -278,7 +285,7 @@ static void ro_real_layout(void) {
     snprintf(sized,sizeof(sized),"%d",(int)g.view.bounds.w/2);
     check(probe_text_is("out",sized),"ro: the first report is half the view");
     g.view.bounds.w=600;
-    now_ms+=10;
+    now_ms+=IO_PERIOD_MS;
     snprintf(sized+strlen(sized),sizeof(sized)-strlen(sized),",300");
     bool window=io_turns() && probe_text_is("out",sized);
     if(!window) fprintf(stderr,"window resize said: %s\n",probe_text_of("out"));
@@ -301,9 +308,9 @@ static void ro_real_layout(void) {
     check(settled && probe_text_is("out","a,error"),
           "ro: a callback that resizes its own target is the loop error, whose listener may read geometry");
     check(io_turns() && probe_text_is("out","a,error"),"ro: and what it passed over waits for the next frame");
-    now_ms+=10;
+    now_ms+=IO_PERIOD_MS;
     check(io_turns() && probe_text_is("out","a,error,a,error"),"ro: the next frame's step reports it");
-    now_ms+=10;
+    now_ms+=IO_PERIOD_MS;
     check(io_turns() && probe_text_is("out","a,error,a,error,a"),"ro: one step a frame until it settles");
     loop_drop();
     /* What a callback asks for is done after its step, as after any task:

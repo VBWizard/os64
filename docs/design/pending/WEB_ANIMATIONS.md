@@ -138,8 +138,9 @@ for CSS animations too, before A's own code is written on top of it.
 element, in creation order, each effect's keyframes, its timing, and
 its clock as a start time, a hold time and a rate. The clock is enough
 for libflow to work the effect's local time at any `now` itself, so a
-running script animation ticks on the face's ticker exactly as a CSS
-one does, with no call into script per frame. (Those three fields are
+running script animation ticks on the display's frames exactly as a CSS
+one does (PILE3.md § The animations' frames, on the display's beat),
+with no call into script per frame. (Those three fields are
 the whole contract between the two halves: a change to them is a change
 to this sentence.) `animate()` in style.c
 appends them after the element's CSS animations: Web Animations 1 §

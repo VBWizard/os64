@@ -546,9 +546,9 @@ static void provider_native_retirement_cases(void)
             } else if (kind == RP_CLOCK_IDLE_NATIVE) {
                 check(!os64_dom_idle_run(p[1].binding, &out), "provider retirement: native idle clock stops delivery");
             } else if (kind == RP_CLOCK_RAF_NATIVE) {
-                check(!os64_dom_animation_fire(p[1].binding, 2000, &out), "provider retirement: native frame clock stops delivery");
+                check(!os64_dom_animation_fire(p[1].binding, 2000, OS64_DOM_FRAME_NOW, &out), "provider retirement: native frame clock stops delivery");
             } else if (kind == RP_CLOCK_WA_NATIVE) {
-                check(!os64_dom_web_animations_update(p[1].binding, 2000, &out),
+                check(!os64_dom_web_animations_update(p[1].binding, 2000, OS64_DOM_FRAME_NOW, &out),
                       "provider retirement: native animation clock stops update");
             } else if (kind == RP_STORAGE_COMMIT || kind == RP_STORAGE_CLOCK || kind == RP_STORAGE_COMMIT_CLOCK) {
                 os64_dom_storage_settle(p[1].binding);

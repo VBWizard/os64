@@ -2,6 +2,7 @@
 #include "bytecode.h"
 #include "modules.h"
 #include "importmap.h"
+#include "ticker.h"
 #include "page/page.h"
 #include "os64/js_engine.h"
 #include "os64/date.h"
@@ -392,13 +393,12 @@ static uint64_t now_ms(void *opaque)
     return s->options.now_ms != NULL ? s->options.now_ms(s->options.opaque) : 0;
 }
 
-// performance.now()'s clock: os64_micros, the clock the timing's
-// milestones are marked on.
+// performance.now()'s clock: yonder's (yonder_now_us), the clock the
+// timing's milestones are marked on and a display frame's time is told in.
 static uint64_t now_us(void *opaque)
 {
     (void)opaque;
-    int64_t now = os64_micros();
-    return now > 0 ? (uint64_t)now : 0;
+    return yonder_now_us();
 }
 
 static void timing(void *opaque, os64_dom_timing_t *out)
@@ -1952,7 +1952,7 @@ uint64_t yonder_scripts_animation_next(const yonder_scripts_t *s)
     return s != NULL && !s->dead ? os64_dom_animation_next(s->dom) : UINT64_MAX;
 }
 
-bool yonder_scripts_animation_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
+bool yonder_scripts_animation_fire(yonder_scripts_t *s, uint64_t now, uint64_t frame_us, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
     if (s != NULL) {
@@ -1960,7 +1960,7 @@ bool yonder_scripts_animation_fire(yonder_scripts_t *s, uint64_t now, os64_js_ou
         s->task_address = NULL;
         s->task_us = -1;
     }
-    if (s == NULL || s->dead || !os64_dom_animation_fire(s->dom, now, out))
+    if (s == NULL || s->dead || !os64_dom_animation_fire(s->dom, now, frame_us, out))
         return false;
     judged(s, out);
     return true;
@@ -1971,7 +1971,8 @@ uint64_t yonder_scripts_web_animations_next(const yonder_scripts_t *s)
     return s != NULL && !s->dead ? os64_dom_web_animations_next(s->dom) : UINT64_MAX;
 }
 
-bool yonder_scripts_web_animations_update(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
+bool yonder_scripts_web_animations_update(yonder_scripts_t *s, uint64_t now, uint64_t frame_us,
+                                          os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
     if (s != NULL) {
@@ -1979,7 +1980,7 @@ bool yonder_scripts_web_animations_update(yonder_scripts_t *s, uint64_t now, os6
         s->task_address = NULL;
         s->task_us = -1;
     }
-    if (s == NULL || s->dead || !os64_dom_web_animations_update(s->dom, now, out))
+    if (s == NULL || s->dead || !os64_dom_web_animations_update(s->dom, now, frame_us, out))
         return false;
     judged(s, out);
     return true;
@@ -2085,10 +2086,11 @@ uint64_t yonder_scripts_idle_next(const yonder_scripts_t *s)
 
 bool yonder_scripts_idle_run(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
-    return yonder_scripts_idle_before(s, UINT64_MAX, out);
+    return yonder_scripts_idle_before(s, UINT64_MAX, UINT64_MAX, out);
 }
 
-bool yonder_scripts_idle_before(yonder_scripts_t *s, uint64_t render_due, os64_js_outcome_t *out)
+bool yonder_scripts_idle_before(yonder_scripts_t *s, uint64_t render_due, uint64_t next_frame,
+                                os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
     if (s == NULL || s->dead)
@@ -2096,7 +2098,7 @@ bool yonder_scripts_idle_before(yonder_scripts_t *s, uint64_t render_due, os64_j
     s->written = 0;
     s->task_address = NULL;
     s->task_us = -1;
-    if (!os64_dom_idle_before(s->dom, render_due, out))
+    if (!os64_dom_idle_before(s->dom, render_due, next_frame, out))
         return false;
     judged(s, out);
     return true;

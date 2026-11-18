@@ -125,7 +125,7 @@ static void dom_animation_retirement_cases(void)
             if (retained) {
                 realm_script(realms[1],"globalThis.css=document.getAnimations();globalThis.cssEffect=css[0].effect;",
                              "animation retirement: CSS identities retained");
-                check(os64_dom_web_animations_update(bindings[1],1000,&out),
+                check(os64_dom_web_animations_update(bindings[1],1000,OS64_DOM_FRAME_NOW,&out),
                       "animation retirement: initial CSS bookkeeping settles");
             }
             const struct garb_effect *borrowed=NULL;const struct garb_effect *const *effects=NULL;
@@ -134,8 +134,8 @@ static void dom_animation_retirement_cases(void)
                 realm_script(realms[1],"globalThis.moving=document.createElement('div');moving.id='motion';"
                     "document.body.appendChild(moving);globalThis.motion=moving.animate({opacity:[0,1]},1000);"
                     "globalThis.effect=motion.effect;", "animation retirement: running script effect exported");
-                p2b_ms+=20;p2b_us+=20000;os64_dom_web_animations_update(bindings[1],p2b_ms,&out);
-                p2b_ms+=40;p2b_us+=40000;os64_dom_web_animations_update(bindings[1],p2b_ms,&out);
+                p2b_ms+=20;p2b_us+=20000;os64_dom_web_animations_update(bindings[1],p2b_ms,OS64_DOM_FRAME_NOW,&out);
+                p2b_ms+=40;p2b_us+=40000;os64_dom_web_animations_update(bindings[1],p2b_ms,OS64_DOM_FRAME_NOW,&out);
                 moving=native_id(documents[1]->document,"motion");
                 check(os64_dom_script_effects(bindings[1],moving,&effects)==1,"animation retirement: source layout borrows effect");
                 borrowed=effects?effects[0]:NULL;mark=os64_dom_effects_mark(bindings[1]);
@@ -150,7 +150,7 @@ static void dom_animation_retirement_cases(void)
             else if (mode<=AR_STEP_AT) {
                 realm_script(realms[1],"addEventListener('animationstart',()=>{throw Error('late CSS event')});",
                              "animation retirement: CSS event listener installed");
-                check(os64_dom_web_animations_update(bindings[1],1000,&out)&&out.status==OS64_JS_OK,
+                check(os64_dom_web_animations_update(bindings[1],1000,OS64_DOM_FRAME_NOW,&out)&&out.status==OS64_JS_OK,
                       "animation retirement: CSS step stops after callback mark");
             } else if (mode==AR_DUE_VERSION)
                 check(os64_dom_web_animations_next(bindings[1])==UINT64_MAX,"animation retirement: version retirement leaves no scheduled work");
@@ -193,7 +193,7 @@ static void dom_animation_retirement_cases(void)
                       "animation retirement: late cancellation retains no event payloads");
             }
             check(os64_dom_web_animations_next(bindings[1])==UINT64_MAX&&
-                  !os64_dom_web_animations_update(bindings[1],2000,&out),"animation retirement: no departed scheduler entry");
+                  !os64_dom_web_animations_update(bindings[1],2000,OS64_DOM_FRAME_NOW,&out),"animation retirement: no departed scheduler entry");
             unsigned after=0;for(unsigned i=0;i<4;++i)after+=p.calls[i];
             check(after==before,"animation retirement: late methods never touch detached CSS provider");
             if(mode==AR_EFFECTS) {

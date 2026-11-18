@@ -11,6 +11,14 @@ static int64_t pointer_host_rect(int64_t handle, os64_gui_rect_t *rect)
     (void)handle; *rect = (os64_gui_rect_t){60,80,800,600}; return 0;
 }
 #define os64_gui_window_get_content_rect pointer_host_rect
+/* The display's frames, hosted: a request is counted and answered by no
+ * compositor; a case opens a frame itself (host_frame, below). */
+static unsigned host_frame_requests;
+static int64_t host_frame_request(int64_t handle, uint32_t flags)
+{
+    (void)handle; (void)flags; host_frame_requests++; return 0;
+}
+#define os64_gui_frame_request host_frame_request
 #define main yonder_fixture_main
 #include "../userland/apps/yonder/yonder.c"
 #include "paint_cache.h"
@@ -307,6 +315,22 @@ void os64_ui_theme_current(os64_ui_theme_t *theme, uint64_t *installed) {
 int64_t os64_ticks(os64_ticks_t *ticks) { *ticks=(os64_ticks_t){.ticks=100,.per_second=1000}; return 0; }
 static uint64_t now_ms=100;
 uint64_t yonder_now_ms(void) { return now_ms; }
+/* yonder's clock in microseconds is the same clock (ticker.h): the window's
+ * milliseconds a case sets. */
+uint64_t yonder_now_us(void) { return now_ms*1000; }
+/* A frame of the display, as the compositor answers the window's request:
+ * the frame before closes, and this one opens at the window's time now
+ * (frame_answered), for the case's next turn of frame work. */
+static void host_frame(void)
+{
+    frame_close();
+    s_frames.asked = true;
+    uint64_t number = s_frames.number + 1, blank = yonder_now_us();
+    os64_gui_event_t ev = {.type = OS64_GUI_EVENT_FRAME,
+        .frame = {.number_lo = (uint32_t)number, .number_hi = (uint32_t)(number >> 32),
+                  .blank_lo = (uint32_t)blank, .blank_hi = (uint32_t)(blank >> 32), .period_ns = 16666667}};
+    frame_answered(&ev);
+}
 /* The ticker's deadline, as the window last handed it over. */
 static uint64_t ticker_due=YONDER_NEVER;
 void yonder_ticker_set(yonder_ticker_t *ticker, uint64_t due) { (void)ticker; ticker_due=due; }
@@ -702,7 +726,8 @@ const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t 
  * string's when that is zero; and the fake disk's files (page storage
  * reads its stores this way), whole. fake_slurp_fail makes every read of
  * a fake file fail, as a disk that cannot be read does; reading the case's
- * file takes slurp_us on the clock. */
+ * file takes slurp_us on both clocks: the micros, and the window's, which
+ * the navigation's timing reads (yonder_now_us). */
 static const char *slurp_path, *slurp_bytes;
 static size_t slurp_length;
 static int64_t slurp_us;
@@ -720,7 +745,7 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, si
         return OS64_SLURP_OK;
     }
     if(slurp_path==NULL || !os64_streq(path,slurp_path)) return OS64_SLURP_NO_FILE;
-    clock_us+=slurp_us;
+    clock_us+=slurp_us; now_ms+=(uint64_t)slurp_us/1000;
     *length=slurp_length!=0 ? slurp_length : strlen(slurp_bytes);
     if(*length>cap) return OS64_SLURP_TOO_BIG;
     *bytes=os64_malloc(*length+1); if(!*bytes) return OS64_SLURP_NO_MEMORY;
@@ -904,6 +929,10 @@ static yonder_page_memory_t probe_page_memory;  /* the next probe_page's documen
 static const way_identity_t s_window_identity={.hints="sec-ch-ua: \"Window\";v=\"1\"\r\n",.language="en"};
 static void probe_page(const char *html, bool scripts) {
     os64_memset(&g,0,sizeof(g));
+    /* A new page, a new window: the cases set the window's clock back
+     * between pages, which a real clock never does, so the frames start
+     * afresh too (frame_plan_sample never hands an earlier time). */
+    os64_memset(&s_frames,0,sizeof(s_frames));
     g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.way.identity=&s_window_identity; g.settle_due=YONDER_NEVER;
     g.modern=g.page.modern=!probe_modern_off;
     g.script_memory=probe_script_memory;
@@ -1583,7 +1612,14 @@ static void switch_cases(void) {
  * is laid out again when what the view shows next changes — quietly, held
  * to what its layouts cost, never for a covered window or with animations
  * off — on a timeline it keeps across its layouts. The fake clocks stand
- * still: now_ms is the window's, and a layout costs geometry_layout_delay. */
+ * still: now_ms is the window's, and a layout costs geometry_layout_delay.
+ * The layouts and ticks run in frames of the display: frame_tick is one,
+ * answered now, its CSS work run, closed. */
+static void frame_tick(void) {
+    host_frame();
+    motion_tick();
+    frame_close();
+}
 static int32_t motion_x(const char *id) {
     const flow_box_t *b=flow_box_for(g.page.tree,probe_id(id));
     return b!=NULL ? b->rect.x : -1;
@@ -1616,13 +1652,13 @@ static void tick_cases(void) {
     now_ms=100;
     probe_page(kTickPage,false);
     relayout(true);
-    check(motion_next()==YONDER_NEVER && tick_next()==100 && ticker_due==101,
-        "ticks: what only painting reads is due for a tick, not a layout");
+    check(motion_next()==YONDER_NEVER && tick_next()==100 && s_frames.asked,
+        "ticks: what only painting reads is due for a tick, not a layout, and asks for a frame");
     int32_t field_was=g.nfw==1 ? g.fw[0]->w->bounds.x : -1;
     uint64_t laid_began=g.motion_began;
     g.ui.any_dirty=false;
     now_ms=600;
-    motion_tick();
+    frame_tick();
     check(tick_x("t")==50 && g.ticked && g.tick_painting && g.tick_began==600 && g.motion_began==laid_began,
         "ticks: a tick moves its element at its moment and lays nothing out");
     check(g.nfw==1 && g.fw[0]->w->bounds.x==field_was+50,
@@ -1633,24 +1669,27 @@ static void tick_cases(void) {
         "ticks: a tick marks where its element was and is, cut to the view, and none of what is out of it");
     clock_us+=3000; now_ms=603;
     motion_painted();
-    check(g.tick_us==3000 && g.tick_ended==603 && !g.tick_painting && tick_next()==616,
-        "ticks: a tick costs its arithmetic and its paint, and the next comes a frame after it began");
+    check(g.tick_us==3000 && g.tick_ended==603 && !g.tick_painting && tick_next()==606,
+        "ticks: a tick costs its arithmetic and its paint, and the next waits as long again after it ends");
+    /* A frame answered at 616 whose tick runs at 619 ticks at 616: one
+     * time a frame, the blank's, not the moment the work runs. */
     now_ms=616;
-    motion_tick();
+    host_frame(); now_ms=619; motion_tick(); frame_close();
+    check(g.tick_began==616,"ticks: a tick in a frame is sampled at the frame's time, not when it runs");
     clock_us+=30000; now_ms=646;
     motion_painted();
     check(tick_next()==676,"ticks: a costlier tick waits as long again after it ends");
     /* A tick not taken is a layout instead, which is that tick's frame. */
     tick_refuse=true; geometry_layout_delay=4000; now_ms=676;
     uint64_t laid_was=g.motion_began, for_motion=s_cost.layouts_motion;
-    motion_tick();
+    frame_tick();
     tick_refuse=false; geometry_layout_delay=0;
     check(s_cost.layouts_motion==for_motion+1,
         "ticks: the record counts a tick's layout as one for animations");
     clock_us+=2000; now_ms=678;
     motion_painted();
     check(g.motion_began==laid_was && tick_x("t")==58 && g.tick_began==676 && g.tick_us==6000 &&
-          tick_next()==692,
+          tick_next()==684,
         "ticks: a tick not taken lays the page out instead, which with its paint is the tick's frame");
     /* A whole view marked for any reason — a box's scroll among them —
      * brings what it shows to now before it is painted; and a tick before
@@ -1669,7 +1708,7 @@ static void tick_cases(void) {
     motion_painted();
     g.page.diag=diag_new_claimed("http://t.test/",1);
     now_ms=710;
-    motion_tick();
+    frame_tick();
     clock_us+=201000; now_ms=911;
     motion_painted();
     bool said=motion_pause_said();
@@ -1692,7 +1731,7 @@ static void tick_cases(void) {
     relayout(true);
     g.ui.any_dirty=false;
     now_ms=700;
-    motion_tick();
+    frame_tick();
     d=g.ui.dirty; v=g.view.bounds;
     check(g.ui.any_dirty && d.y>=v.y && d.y+d.h<=v.y+v.h && d.w<v.w,
         "ticks: a mark that reaches past the view is cut to it");
@@ -1706,7 +1745,7 @@ static void tick_cases(void) {
     g.ui.any_dirty=false;
     s_whole_by=WHOLE_PARTS;
     now_ms=900;
-    motion_tick();
+    frame_tick();
     d=g.ui.dirty; v=g.view.bounds;
     check(g.ui.any_dirty && d.y<=v.y && d.y+d.h>=v.y+v.h && d.x<=v.x && d.x+d.w>=v.x+v.w,
         "ticks: the canvas's owner, shorter than the view, repaints the whole view");
@@ -1728,12 +1767,12 @@ static void tick_cases(void) {
     relayout(true);
     check(motion_next()==1000 && tick_next()==1000,"ticks: a page of both is due for both");
     now_ms=1100;
-    motion_tick();
+    frame_tick();
     check(g.motion_began==1100 && !g.tick_painting && tick_x("t")==10,
         "ticks: a layout due by then wins, and brings what ticks to its time");
     motion_painted();
     geometry_layout_delay=201000; now_ms=1200;
-    motion_tick();
+    frame_tick();
     clock_us+=1000;
     motion_painted();
     geometry_layout_delay=0;
@@ -1746,7 +1785,7 @@ static void tick_cases(void) {
         "ticks: layouts stopped by what they cost while ticks move are said as some");
     g.ui.any_dirty=false;
     now_ms=1500;
-    motion_tick();
+    frame_tick();
     check(tick_x("t")==50 && g.tick_began==1500,
         "ticks: a page whose layouts cost too much keeps its ticking animations moving");
     check(!motion_pause_said() && strstr(g.status_text,"SOME ANIMATIONS PAUSED")!=NULL,
@@ -1783,7 +1822,7 @@ static void tick_cases(void) {
     /* With the layouts stopped, a tick not taken stops the ticks, said
      * where it failed. */
     tick_refuse=true; now_ms=1800;
-    motion_tick();
+    frame_tick();
     tick_refuse=false;
     yonder_diag_render(g.page.diag,record,sizeof(record));
     check(tick_next()==YONDER_NEVER && g.motion_began==1200 &&
@@ -1826,7 +1865,7 @@ static void motion_part_cases(void) {
         uint64_t refused_was[REFUSED_COUNT];
         memcpy(refused_was,s_cost.refused,sizeof(refused_was));
         now_ms=400;
-        motion_tick();
+        frame_tick();
         os64_gui_rect_t d=g.ui.dirty, v=g.view.bounds;
         bool whole=d.x<=v.x && d.y<=v.y && d.x+d.w>=v.x+v.w && d.y+d.h>=v.y+v.h;
         if(!grow)
@@ -1848,7 +1887,7 @@ static void motion_part_cases(void) {
             memcpy(refused_was,s_cost.refused,sizeof(refused_was));
             snprintf(s_cost.refused_what,sizeof(s_cost.refused_what),"stale");
             now_ms=700;
-            motion_tick();
+            frame_tick();
             check(s_cost.refused[FLOW_PARTS_MOVED]==refused_was[FLOW_PARTS_MOVED]+1 &&
                   s_cost.refused_what[0]=='\0',
                 "layout parts: without diagnostics a refusal is counted, and what refused is not named");
@@ -1863,7 +1902,7 @@ static void motion_part_cases(void) {
             parts_was=s_cost.layouts_parts;
             memcpy(refused_was,s_cost.refused,sizeof(refused_was));
             now_ms=700;
-            motion_tick();
+            frame_tick();
             d=g.ui.dirty;
             whole=d.x<=v.x && d.y<=v.y && d.x+d.w>=v.x+v.w && d.y+d.h>=v.y+v.h;
             check(g.ui.any_dirty && whole && s_cost.layouts_parts==parts_was &&
@@ -1880,7 +1919,7 @@ static void motion_part_cases(void) {
                 parts_was=s_cost.layouts_parts;
                 memcpy(refused_was,s_cost.refused,sizeof(refused_was));
                 now_ms=1000+300*(uint64_t)k;
-                motion_tick();
+                frame_tick();
                 d=g.ui.dirty;
                 whole=d.x<=v.x && d.y<=v.y && d.x+d.w>=v.x+v.w && d.y+d.h>=v.y+v.h;
                 check(g.ui.any_dirty && whole && s_cost.layouts_parts==parts_was &&
@@ -1907,15 +1946,15 @@ static void motion_cases(void) {
         "motion: a layout not made to be shown starts nothing, and nothing is due");
     uint64_t for_motion=s_cost.layouts_motion;
     relayout(true);
-    check(g.page.timeline!=NULL && motion_x("a")==0 && motion_next()==100 && ticker_due==101,
-        "motion: the shown page's layout starts its animations, and one moving is due at once");
+    check(g.page.timeline!=NULL && motion_x("a")==0 && motion_next()==100 && s_frames.asked,
+        "motion: the shown page's layout starts its animations, and one moving is due at once: it asks for a frame");
     check(s_cost.layouts_motion==for_motion,
         "motion: the record does not count the page's own layout as one for animations");
     char status[sizeof(g.status_text)];
     os64_strcopy(status,sizeof(status),g.status_text);
     now_ms=600; geometry_layout_delay=5000;
     g.laid_ms=37;
-    motion_tick();
+    frame_tick();
     check(motion_x("a")==50 && g.motion_laid && g.motion_began==600 && g.motion_us==5000 &&
           os64_streq(status,g.status_text) && g.laid_ms==37,
         "motion: a tick lays the page out at its moment, quietly, and keeps what it cost apart");
@@ -1925,21 +1964,24 @@ static void motion_cases(void) {
         "motion: a frame waiting for its paint is the only frame, of either half");
     motion_painted();
     pictures_schedule();
-    check(motion_next()==616 && ticker_due==616,
-        "motion: the next comes a frame after the last began when twice its cost is sooner");
+    check(motion_next()==610 && s_frames.asked,
+        "motion: the next waits twice its cost after it ended, and, due by the next blank, asks for that frame now");
     geometry_layout_delay=40000; now_ms=616;
-    motion_tick();
+    frame_tick();
     motion_painted();
     check(motion_x("a")==52 && motion_next()==696,
         "motion: a costlier layout (51.6 px, at the nearest pixel) waits twice its cost after it ends");
+    pictures_schedule();
+    check(ticker_due==683 && !s_frames.asked,
+        "motion: a rest past the next blank wakes the loop a period before the blank that carries it (699.3 ms)");
     now_ms=650;
-    motion_tick();
+    frame_tick();
     check(g.motion_began==616,"motion: a ring before an animation's layout is due lays nothing out");
     /* A frame's paint is part of its cost: a layout of 5 ms at 700 whose
      * paint ends at 730, 30 ms of micros later, costs 35 ms and ends at
      * 730, so the next waits until 800. */
     geometry_layout_delay=5000; now_ms=700;
-    motion_tick();
+    frame_tick();
     clock_us+=30000; now_ms=730;
     motion_painted();
     check(g.motion_began==700 && g.motion_us==35000 && g.motion_ended==730 && !g.motion_painting &&
@@ -1955,7 +1997,7 @@ static void motion_cases(void) {
     g.covered=false;
     geometry_layout_delay=201000; now_ms=800;
     g.page.diag=diag_new_claimed("http://m.test/",1);
-    motion_tick();
+    frame_tick();
     check(g.motion_began==800 && motion_next()==YONDER_NEVER,
         "motion: a page whose frame for an animation took more than MOTION_COST_MS lays out for none");
     say_laid_out(g.laid_ms);
@@ -2000,7 +2042,7 @@ static void motion_cases(void) {
     s_animations=true;
     say_laid_out(MOTION_COST_MS);
     geometry_refuse_layout=true;
-    motion_tick();
+    frame_tick();
     geometry_refuse_layout=false;
     check(g.page.tree!=NULL && g.motion_us==UINT64_MAX && motion_next()==YONDER_NEVER,
         "motion: a layout for an animation that fails keeps the page and is its last");
@@ -2179,7 +2221,7 @@ static void motion_cases(void) {
           motion_next()==YONDER_NEVER,
         "motion: while a script's change waits for its rebuild, nothing is due");
     now_ms=3100;
-    motion_tick();
+    frame_tick();
     check(script_rebuild() && g.motion_us!=UINT64_MAX && motion_next()==YONDER_NEVER,
         "motion: the rebuilt frame waits for paint");
     motion_painted();
@@ -3397,6 +3439,7 @@ static void input_cases(void) {
  * arrive() a worker's page used to take. */
 static void stream_window(void) {
     os64_memset(&g,0,sizeof(g));
+    os64_memset(&s_frames,0,sizeof(s_frames));      /* as probe_page's: the clock goes back between windows */
     g.scripts_on=false; g.way.agent=YONDER_AGENT; g.way.identity=&s_window_identity; g.way.name="yonder";
     g.settle_due=YONDER_NEVER;
     g.modern=true;
@@ -8230,8 +8273,9 @@ static void picture_tick_cases(void) {
           "picture ticks: a tick advances the pictures due and on screen, not one scrolled away");
     check(g.page.pics[a].due==1110 && g.page.pics[c].due==1110,
           "picture ticks: each next frame is due its delay after the tick that showed it");
-    /* A past moment the loop meets itself waits for the clock's next tick,
-     * unless a picture is due at the same moment: then it is rung for now. */
+    /* A past moment the loop meets itself waits a tick of the system clock
+     * (DEADLINE_RETRY_MS), unless a picture is due at the same moment: then
+     * it is rung for now. */
     {
         uint64_t settle=g.settle_due;
         for(int32_t k=0;k<g.page.npics;k++) g.page.pics[k].playing=(k==a);
@@ -8240,7 +8284,7 @@ static void picture_tick_cases(void) {
         check(ticker_due==1500,"picture ticks: a picture due with the settle is rung for at once");
         g.page.pics[a].due=1600;
         pictures_schedule();
-        check(ticker_due==2001,"picture ticks: the settle alone waits for the clock's next tick");
+        check(ticker_due==2000+DEADLINE_RETRY_MS,"picture ticks: the settle alone waits a tick of the system clock");
         g.settle_due=settle;
     }
     for(int32_t k=0;k<g.page.npics;k++) { g.page.pics[k].moving=NULL; g.page.pics[k].playing=false; }
@@ -9284,8 +9328,8 @@ static void paint_cost_cases(void) {
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
-                     "the main loop busy 75%; 3 layouts, 2 of them for animations, 1 of those repainting only what they changed; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; no kept drawings; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 canvas marks, 0 form control marks; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
-                     "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0, frames 0, downloads 0\n")!=NULL &&
+                     "the main loop busy 75%; 3 layouts, 2 of them for animations, 1 of those repainting only what they changed; frames late at most 0 ms, 0 more than 30 ms; the display's frames: 0 asked for, 0 answered, 0 refreshes skipped; the longest wait 0 ms; no paint cache; no kept drawings; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 canvas marks, 0 form control marks; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
+                     "arrival 0, stream 0, timers 0, pictures 0, frames 0, downloads 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
           strstr(rec,", text 2.0 (0.0)")!=NULL && strstr(rec,", ticks (a tick) 2.0 (0.0)")!=NULL &&
@@ -9437,7 +9481,7 @@ static void paint_cost_cases(void) {
     now_ms+=10;
     check(script_turn() && s_cost.timers==1 && probe_text_is("out","y"),"paint counts: a timer is counted as a timer task");
     pictures_schedule();
-    check(ticker_due==now_ms+1 && s_cost.past[PAST_TIMERS]>=1,
+    check(ticker_due==now_ms+DEADLINE_RETRY_MS && s_cost.past[PAST_TIMERS]>=1,
           "timer ring: a due timer is handed to the ticker as the next tick, not the past");
     check(script_turn() && s_cost.timers==2,"timer ring: and the loop's turn runs it");
     check(!script_turn() && s_cost.scripts+s_cost.timers==3,"paint counts: a turn with no task counts none");
@@ -9472,7 +9516,7 @@ static void cascade_swap_case(void) {
     bool partial=false;
     for(int i=0;i<7;i++) {
         now_ms+=150;
-        motion_tick(); motion_painted();
+        frame_tick(); motion_painted();
         const garb_cascade_t *was=g.page.cascade;
         g.view.bounds.w=800-i*40;
         if(i==4) geometry_refuse_layout=true;           /* refused: the new cascade goes, the old tree stays */
@@ -9480,7 +9524,7 @@ static void cascade_swap_case(void) {
         relayout(true);
         if(i==5) partial=g.page.tree!=NULL && flow_incomplete(g.page.tree);
         geometry_refuse_layout=false; s_env.max_arena_bytes=0;
-        now_ms+=50; motion_tick(); motion_painted();
+        now_ms+=50; frame_tick(); motion_painted();
         if(i==1) { (void)os64_html_set_attr(g.page.way.doc,probe_id("t"),"title","y",1); (void)script_rebuild(); }
         if(i==2) { (void)font_land("w.ttf",NULL,"HTTP 404"); pictures_settle(); }
         if(i==3) { (void)font_land("w2.ttf","A",NULL); pictures_settle(); }
@@ -9488,7 +9532,7 @@ static void cascade_swap_case(void) {
         steps+=g.page.tree!=NULL && g.page.cascade!=NULL && g.page.timeline!=NULL;
     }
     relayout(true);
-    motion_tick(); motion_painted();
+    frame_tick(); motion_painted();
     diag_fonts(&g.page);
     char record[8192]; yonder_diag_render(g.page.diag,record,sizeof(record));
     check(steps==7 && swapped>=5 && partial && g.page.tree!=NULL && !flow_incomplete(g.page.tree) &&

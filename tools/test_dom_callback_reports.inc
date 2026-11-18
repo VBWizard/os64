@@ -91,7 +91,7 @@ static void dom_callback_report_cases(void)
             bool fired = true;
             if (mode == CR_TIMER || mode == CR_IDLE_TIMEOUT || mode == CR_PERFORMANCE || mode >= CR_TIMER_JOB)
                 fired = os64_dom_timer_fire(bindings[1], 1000, &out);
-            else if (mode == CR_FRAME) fired = os64_dom_animation_fire(bindings[1], 1000, &out);
+            else if (mode == CR_FRAME) fired = os64_dom_animation_fire(bindings[1], 1000, OS64_DOM_FRAME_NOW, &out);
             else if (mode == CR_IDLE) fired = os64_dom_idle_run(bindings[1], &out);
             else if (mode == CR_RESIZE) fired = os64_dom_resizes_step(bindings[1], &out);
             else if (mode == CR_INTERSECTION)

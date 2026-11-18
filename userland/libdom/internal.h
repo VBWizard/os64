@@ -802,6 +802,7 @@ struct os64_dom {
     bool idle_open, idle_fresh, idle_running;
     uint64_t idle_start_ms, idle_start_us, idle_rested_ms;
     uint64_t idle_render_due; /* host rendering deadline, UINT64_MAX when unbounded */
+    uint64_t idle_next_frame; /* the host's next frame, UINT64_MAX when it does not say */
     /* 0f's P8: each UI event interface's prototype (event.c), indexed by
      * D_UI_*; all NULL with the switch off. */
     DValue *ui_prototypes[D_UI_KINDS];
@@ -2059,6 +2060,14 @@ int d_clone_objects(JSContext *ctx, const JSValue *list, size_t count);
 int d_clone_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_message_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 double d_performance_now(const os64_dom_t *dom);
+/* performance.now() at `at_us` on the host's microsecond clock. */
+double d_performance_at(const os64_dom_t *dom, uint64_t at_us);
+/* The instant a frame the host names is sampled at: `frame_us` on the
+ * host's microsecond clock, or the clock now if that is earlier
+ * (OS64_DOM_FRAME_NOW is always later), so a frame's time never passes
+ * what performance.now() reads inside it; and never before the document's
+ * time origin, which a frame begun before a navigation's start precedes. */
+uint64_t d_frame_instant(const os64_dom_t *dom, uint64_t frame_us);
 int d_animation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_animation_drain(os64_dom_t *dom);
 /* Web Animations (webanimation.c): the row; the drain, which lets go of
@@ -2068,10 +2077,11 @@ int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
 void d_web_animations_drain(os64_dom_t *dom);
 void d_web_animations_cancel(os64_dom_t *dom);
 void d_web_animations_free(os64_dom_t *dom);
-/* The document timeline sampled at `now` (performance.now()'s clock): a
- * frame-callback batch's timestamp is the timeline's time in its
+/* The document timeline sampled at `at_us` (a d_frame_instant), and its
+ * time, which never goes back (a time held that is later stands): a
+ * frame-callback batch's timestamp is that time, the timeline's in its
  * callbacks (animation.c). */
-void d_web_animations_sample(os64_dom_t *dom, double now);
+double d_web_animations_sample(os64_dom_t *dom, uint64_t at_us);
 int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* What os64_dom_drain releases (the messages' values and clones, the idle
  * callbacks), and what os64_dom_free frees (the idle entries). */
