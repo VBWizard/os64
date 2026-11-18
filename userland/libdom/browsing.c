@@ -77,9 +77,9 @@ static const char *const kBars[6] = {"locationbar", "menubar", "personalbar", "s
 
 /* An assignment to a [Replaceable] member or to opener: window's own data
  * property from now on, which shadows the accessor for good. */
-static JSValue own_property(JSContext *ctx, const char *name, int argc, JSValueConst *argv)
+static JSValue own_property(os64_dom_t *dom, JSContext *ctx, const char *name, int argc, JSValueConst *argv)
 {
-    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue global = d_binding_global(dom, ctx);
     int done = JS_DefinePropertyValueStr(ctx, global, name, JS_DupValue(ctx, argc > 0 ? argv[0] : JS_UNDEFINED),
                                          JS_PROP_C_W_E);
     JS_FreeValue(ctx, global);
@@ -203,7 +203,7 @@ static JSValue context_answer(os64_dom_t *context, JSContext *ctx, int question)
     switch (question) {
     case C_FRAME_ELEMENT: return JS_NULL;
     case C_LENGTH: return JS_NewInt32(ctx, 0);
-    case C_TOP: case C_PARENT: return JS_GetGlobalObject(ctx);
+    case C_TOP: case C_PARENT: return d_binding_global(context, ctx);
     case C_ORIGIN: {
         char origin[WAY_ORIGIN_TEXT_MAX];
         return JS_NewString(ctx, d_origin(page_address(context), origin, sizeof(origin)) ? origin : "null");
@@ -217,18 +217,18 @@ static JSValue context_answer(os64_dom_t *context, JSContext *ctx, int question)
 static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                                JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     switch (magic) {
     case B_OPENER:
         if (!set) return JS_NULL;
-        return argc > 0 && JS_IsNull(argv[0]) ? JS_UNDEFINED : own_property(ctx, "opener", argc, argv);
+        return argc > 0 && JS_IsNull(argv[0]) ? JS_UNDEFINED : own_property(dom, ctx, "opener", argc, argv);
     case B_CLOSED: return JS_FALSE;
     case B_CLOSE: case B_CAPTURE_EVENTS: case B_RELEASE_EVENTS: return JS_UNDEFINED;
     case B_CLIENT_INFORMATION:
-        return set ? own_property(ctx, "clientInformation", argc, argv) : JS_DupValue(ctx, dom->navigator->value);
+        return set ? own_property(dom, ctx, "clientInformation", argc, argv) : JS_DupValue(ctx, dom->navigator->value);
     case B_MOVE_TO: case B_MOVE_BY: case B_RESIZE_TO: case B_RESIZE_BY: {
         if (argc < 2) return JS_ThrowTypeError(ctx, "This needs two numbers");
         int32_t x, y;
@@ -238,7 +238,7 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     case B_QUEUE_MICROTASK: {
         if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
             return JS_ThrowTypeError(ctx, "queueMicrotask needs a function");
-        if (dom->cluster && dom->cluster->scheduled_settings) return queue_callback(dom, ctx, argv[0]);
+        if (d_settings(dom, scheduled)) return queue_callback(dom, ctx, argv[0]);
         if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
         os64_dom_t *report_owner;
         uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
@@ -263,7 +263,7 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     }
     case B_ISOLATED: return JS_FALSE;
     case B_EXTERNAL:
-        return set ? own_property(ctx, "external", argc, argv) : JS_DupValue(ctx, dom->external->value);
+        return set ? own_property(dom, ctx, "external", argc, argv) : JS_DupValue(ctx, dom->external->value);
     case B_SEARCH_PROVIDER:
         if (JS_GetOpaque(self, os64_js_class_id(&external_slot)) == NULL)
             return JS_ThrowTypeError(ctx, "Expected an External");
@@ -280,13 +280,13 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
                 [C_LENGTH] = "length", [C_PARENT] = "parent", [C_ORIGIN] = "origin"};
             int question = magic - B_CONTEXT;
             if (set)
-                return kReplaceable[question] != NULL ? own_property(ctx, kReplaceable[question], argc, argv)
+                return kReplaceable[question] != NULL ? own_property(dom, ctx, kReplaceable[question], argc, argv)
                                                       : JS_UNDEFINED;
             return context_answer(dom, ctx, question);
         }
         int bar = magic - B_BAR;
         if (bar < 0 || bar >= 6) return JS_ThrowTypeError(ctx, "Unknown window member");
-        return set ? own_property(ctx, kBars[bar], argc, argv) : JS_DupValue(ctx, dom->bars[bar]->value);
+        return set ? own_property(dom, ctx, kBars[bar], argc, argv) : JS_DupValue(ctx, dom->bars[bar]->value);
     }
 }
 
@@ -300,7 +300,7 @@ int d_browsing_classic(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         return -1;
     JSAtom atom = JS_NewAtom(ctx, "top");
     if (atom == JS_ATOM_NULL) return -1;
-    JSValue get = JS_NewCFunctionData(ctx, browsing_member, 0, B_CONTEXT + C_TOP, 1, &dom->anchor->value);
+    JSValue get = JS_NewCFunctionData(ctx, browsing_member, 0, d_window_member_magic(dom, ctx, global, "top", B_CONTEXT + C_TOP, 1), 1, &dom->anchor->value);
     int result = JS_IsException(get) ? -1 : JS_DefinePropertyGetSet(ctx, global, atom, get, JS_UNDEFINED,
                                                                      JS_PROP_ENUMERABLE);
     JS_FreeAtom(ctx, atom);
@@ -309,7 +309,7 @@ int d_browsing_classic(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 
 int d_browsing_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
-    if (dom->cluster && dom->cluster->scheduled_settings) {
+    if (d_settings(dom, scheduled)) {
         JSClassID id = os64_js_class_id(&scheduled_job_slot);
         const JSClassDef definition = {.class_name = "ScheduledMicrotask",
             .finalizer = scheduled_job_free, .gc_mark = scheduled_job_mark};

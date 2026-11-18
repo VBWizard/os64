@@ -31,7 +31,7 @@ static bool recovery_engine_idle(os64_js_runtime_t *runtime, bool fenced)
 
 static bool recovery_bookkeeping_clear(os64_js_runtime_t *runtime)
 {
-    if (JS_IsJobPending(runtime->engine) || runtime->rejections != NULL) return false;
+    if ((JS_IsJobPending(runtime->engine) || JS_IsFinalizationTaskPending(runtime->engine)) || runtime->rejections != NULL) return false;
     for (size_t i = 0; i < runtime->realm_count; i++)
         if (runtime->realms[i].modules != NULL) return false;
     return true;
@@ -45,7 +45,7 @@ static os64_js_status_t recovery_global(os64_js_runtime_t *runtime, os64_js_outc
     out->host_error = runtime->failure_record.global.host_error;
     out->jobs_executed = runtime->jobs;
     out->jobs_discarded = runtime->discarded_jobs;
-    out->jobs_pending = JS_IsJobPending(runtime->engine);
+    out->jobs_pending = (JS_IsJobPending(runtime->engine) || JS_IsFinalizationTaskPending(runtime->engine));
     return status(out, runtime->failure_record.global.status == OS64_JS_OK
                   ? OS64_JS_ADMISSION_REFUSED : runtime->failure_record.global.status, message);
 }
@@ -83,7 +83,7 @@ JS_PUBLIC os64_js_status_t os64_js_recovery_inspect(os64_js_runtime_t *runtime,
         .jobs_discarded = runtime->recovery_finalized ? runtime->recovery_final_discarded :
             runtime->failure_record.turn_open ? runtime->discarded_jobs : 0,
         .task_open = runtime->task,
-        .turn_open = runtime->turn, .jobs_pending = JS_IsJobPending(runtime->engine)
+        .turn_open = runtime->turn, .jobs_pending = (JS_IsJobPending(runtime->engine) || JS_IsFinalizationTaskPending(runtime->engine))
     };
     return OS64_JS_OK;
 }
@@ -132,6 +132,7 @@ JS_PUBLIC os64_js_status_t os64_js_recovery_prepare(os64_js_runtime_t *runtime,
     runtime->active = true;
     runtime->active_outcome = outcome;
     int64_t error = 0;
+    owner_legacy_escape(runtime);
     os64_js_status_t native = runtime->recovery_host.prepare(runtime->recovery_host.opaque, &prepared, &failure, &error);
     runtime->active_outcome = NULL;
     runtime->active = false;

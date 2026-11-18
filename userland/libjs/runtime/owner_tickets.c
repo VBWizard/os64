@@ -128,6 +128,28 @@ JSOwnerStatus js_owner_ticket_duplicate(JSOwnerTickets *table, uint64_t incarnat
     JSOwnerStatus status = token_at(table, incarnation, ticket.owner, ticket.serial, false, &owner, &at);
     return status == JS_OWNER_OK ? issue_ticket(table, owner, out) : status;
 }
+JSOwnerStatus js_owner_reserve(JSOwnerTickets *table, uint64_t incarnation, JSOwnerId *out)
+{
+    if (!out) return JS_OWNER_INVALID;
+    JSOwnerStatus status = live(table, incarnation);
+    if (status != JS_OWNER_OK) return status;
+    size_t at = table->_owners_used;
+    if (at == table->_limits.owners) return JS_OWNER_CAPACITY;
+    if (table->_last_owner == UINT64_MAX) return JS_OWNER_EXHAUSTED;
+    uint64_t serial = ++table->_last_owner;
+    table->_owners[at] = (JSOwnerCell){.serial=serial};
+    table->_owners_used++;
+    *out = (JSOwnerId){incarnation, serial};
+    return JS_OWNER_OK;
+}
+JSOwnerStatus js_owner_ticket_open(JSOwnerTickets *table, uint64_t incarnation,
+    JSOwnerId key, JSOwnerTicket *out)
+{
+    if (!out) return JS_OWNER_INVALID;
+    size_t owner;
+    JSOwnerStatus status = owner_at(table, incarnation, key, &owner);
+    return status == JS_OWNER_OK ? issue_ticket(table, owner, out) : status;
+}
 JSOwnerStatus js_owner_ticket_resolve(const JSOwnerTickets *table, uint64_t incarnation,
     JSOwnerTicket ticket, JSOwnerId *out)
 {

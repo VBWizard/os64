@@ -1022,7 +1022,7 @@ enum { S_LENGTH, S_KEY, S_GET, S_SET, S_REMOVE, S_CLEAR, S_LOCAL, S_SESSION };
 static JSValue storage_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                               JSValue *data)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     magic &= ~D_SET;
     if (magic == S_LOCAL || magic == S_SESSION) {

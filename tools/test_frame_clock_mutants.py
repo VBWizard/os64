@@ -135,6 +135,13 @@ mutants = [
     ('the-free-clock-starts-now', '		return now_ns + FC_FREE_PERIOD_NS;', '		return now_ns;'),
     ('a-late-free-frame-leaves-the-grid', '		next += ((now_ns - next) / FC_FREE_PERIOD_NS + 1) * FC_FREE_PERIOD_NS;', '		next = now_ns + FC_FREE_PERIOD_NS;'),
     ('a-boundary-is-not-past', '	if (next <= now_ns)', '	if (next < now_ns)'),
+    # When the last blank began (the frame answer's instant).
+    ('began-counts-from-the-blank-end', 'uint64_t lines_since = (line % f->lines + f->lines - f->blank_start) % f->lines;',
+     'uint64_t lines_since = (line % f->lines + f->lines - f->blank_end) % f->lines;'),
+    ('began-is-now', '	return ago_us < now_us ? now_us - ago_us : 0;\n}', '	(void)ago_us;\n	return now_us;\n}'),
+    ('began-can-wrap', '	return ago_us < now_us ? now_us - ago_us : 0;\n}', '	return now_us - ago_us;\n}'),
+    ('began-a-bad-frame-is-zero', 'uint64_t frame_clock_blank_began_us(const fc_frame_t *f, uint32_t line, uint64_t now_us)\n{\n	if (!frame_clock_frame_valid(f))\n		return now_us;',
+     'uint64_t frame_clock_blank_began_us(const fc_frame_t *f, uint32_t line, uint64_t now_us)\n{\n	if (!frame_clock_frame_valid(f))\n		return 0;'),
     # The wake's timer count.
     ('the-wake-rounds-down', '(ticks_per_second * wake_in_us + 999999) / 1000000', 'ticks_per_second * wake_in_us / 1000000'),
     ('a-due-wake-stops-the-timer', '	if (wake == 0)\n		wake = 1;\n', ''),

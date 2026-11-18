@@ -120,6 +120,7 @@ struct yonder_scripts {
     // When the view's events were last asked for (yonder_scripts_view_step),
     // on the now_ms clock: what yonder_scripts_view_due measures against.
     uint64_t view_asked_ms;
+    bool cleanup_yield;             // alternate cleanup with ordinary ready work
     bool dead;                      // a sticky outcome retired the runtime
     bool parse_ended;
     Item *items;
@@ -291,8 +292,8 @@ static bool sticky(os64_js_status_t status)
 // do, the runtime refuses every next task as busy: the page's `load`
 // went undelivered on google.com. The script's own failure stays the
 // task's; a job that throws, or a module's late failure a job surfaces, is
-// passed over as the next job runs (the task keeps one failure, and the
-// window's error event has heard it), and a sticky outcome (the time
+// passed over as the next job runs (the task keeps one failure; realm-directed
+// errors also reach the window reporting path), and a sticky outcome (the time
 // limit, memory) replaces it, so the runtime is retired.
 static void drain_after_exception(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
@@ -605,6 +606,12 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     if (os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID,
                                      &s->runtime, out) != OS64_JS_OK)
         return false;
+    /* The browser-settings constructor opens an installation task. Facilities
+     * requiring an unused realm must be installed before that task begins. */
+    if (s->options.browser_jobs &&
+        (os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE, out) != OS64_JS_OK ||
+         (s->options.modern && os64_js_install_intl(s->runtime, OS64_JS_LOCALE, out) != OS64_JS_OK)))
+        return false;
     os64_dom_options_t options = os64_dom_default_options();
     if (s->options.dom_bytes != 0)
         options.max_bytes = s->options.dom_bytes;
@@ -632,7 +639,8 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.focus = s->options.focus != NULL ? focus : NULL;
     options.host_opaque = s;
     options.blobs = s->blobs;
-    s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
+    s->dom = (s->options.browser_jobs ? os64_dom_create_with_browser_jobs : os64_dom_create)
+        (s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
     os64_dom_set_svg_hit(s->dom, s->options.svg_hit, s->options.opaque);
     os64_dom_set_hit(s->dom, s->options.hit, s->options.opaque);
@@ -674,14 +682,15 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
         const os64_dom_network_t network = {net_start, net_cancel, net_run, net_release, s, net_more};
         os64_dom_set_network(s->dom, &network);
     }
-    if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE, out) != OS64_JS_OK) {
+    if (s->dom == NULL || (!s->options.browser_jobs &&
+        os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE, out) != OS64_JS_OK)) {
         // A runtime a binding could not be built in is not evaluated again.
         out->status = OS64_JS_HOST_FAILURE;
         return false;
     }
     // ECMA-402 is the Modern Web's (INTL.md § 9.4): a classic page keeps
     // the engine it was written against, with no Intl at all.
-    if (s->options.modern && os64_js_install_intl(s->runtime, OS64_JS_LOCALE, out) != OS64_JS_OK) {
+    if (!s->options.browser_jobs && s->options.modern && os64_js_install_intl(s->runtime, OS64_JS_LOCALE, out) != OS64_JS_OK) {
         out->status = OS64_JS_HOST_FAILURE;
         return false;
     }
@@ -1895,6 +1904,28 @@ void yonder_scripts_set_note(yonder_scripts_t *s, const char *line)
 const char *yonder_scripts_note(const yonder_scripts_t *s)
 {
     return s != NULL && s->note[0] != '\0' ? s->note : NULL;
+}
+
+bool yonder_scripts_finalization_pending(const yonder_scripts_t *s)
+{
+    return s && !s->dead && os64_dom_finalization_task_pending(s->dom);
+}
+
+bool yonder_scripts_finalization_fire(yonder_scripts_t *s, bool idle, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (!yonder_scripts_finalization_pending(s)) return false;
+    if (s->cleanup_yield && !idle) {
+        s->cleanup_yield = false;
+        return false;
+    }
+    s->written = 0;
+    s->task_address = NULL;
+    s->task_us = -1;
+    if (!os64_dom_finalization_task_fire(s->dom, out)) return false;
+    s->cleanup_yield = true;
+    judged(s, out);
+    return true;
 }
 
 uint64_t yonder_scripts_timer_next(const yonder_scripts_t *s)

@@ -30,6 +30,16 @@ uint64_t gui_compositor_affinity(void);
 // call takes the flag that says the compositor is halted).
 void gui_frame_nudge(void);
 
+// A frame request arrived (gui_frame_request, under kGuiLock): the
+// compositor counts it among its work until its next pass has seen the
+// waiters, so a stopped compositor starts its clock, and nudges it.
+void gui_frame_request_arrived(void);
+
+// The compositor's pass epoch, under kGuiLock: it moves on at each pass's
+// count of waiters, and a request is stamped with it, so a frame answers
+// only requests made before its pass (wm_frame_answer_locked).
+uint64_t gui_frame_epoch_locked(void);
+
 // What the frame clock is doing, for /sys/gui. `restart` starts the
 // since-read times again. The counts live with the compositor's
 // (gui_lock_counts); this is the clock's state, place and times.
@@ -47,6 +57,11 @@ typedef struct {
 	uint64_t running_since_read_us, stopped_since_read_us, starts_since_read;
 	uint64_t frame_wake_fires, cut_fires, lease_fires;   // timer fires on its CPU, since boot
 	uint64_t stalls, stall_longest_us;        // the stall tripwire's episodes, since boot
+	// Frame requests (FRAME_CLOCK.md § 6), clock on or off: made, answered,
+	// and held back (a frame that ended while a waiting window was covered,
+	// one per window per frame); the frame number; who waits now.
+	uint64_t fr_requests, fr_answered, fr_held_back, fr_number;
+	uint32_t fr_waiting_shown, fr_waiting_covered;
 } gui_frame_clock_status_t;
 void gui_frame_clock_status(gui_frame_clock_status_t *out, bool restart);
 

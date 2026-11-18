@@ -298,7 +298,7 @@ bool os64_js_realm_is_retired(const os64_js_realm_t *realm);
 
 /* Owner-thread, allocation-free safe-point snapshot. OK means the runtime is
  * healthy with no active call, open task/turn, installer, checkpoint or queued
- * job. BUSY preserves those operations; FAILED_RUNTIME requires root cleanup.
+ * microtask or finalization task. BUSY preserves those operations; FAILED_RUNTIME requires root cleanup.
  * Does not run jobs, sample time, reset budgets, latch failures or detach hosts.
  * An aliased active outcome is refused without writing it. Native bindings
  * must also exclude their own dispatch/reaction/provider borrows, and must
@@ -330,9 +330,10 @@ os64_js_status_t os64_js_realm_create_with_headroom(os64_js_runtime_t *runtime,
  * Return OK, ADMISSION_REFUSED (local native refusal), or EXCEPTION with a
  * pending engine exception. Engine resource failures remain runtime-wide.
  * Setup borrows an enclosing turn's deadline/job count and preserves sibling
- * queues; standalone setup requires no prior pending turn. Its own queued
- * work is drained before success, discarded on failure (including neutral
- * jobs). Refusal before guard entry leaves the candidate unchanged; failure
+ * queues; standalone setup requires no prior pending turn. Candidate microtasks
+ * drain before success; deferred registry cleanup waits for activation and host
+ * task selection. Failure discards both candidate lanes, including neutral jobs.
+ * Refusal before guard entry leaves the candidate unchanged; failure
  * after entry retires its slot. Native backing cleanup belongs to the caller.
  * Installers use separate outcomes for nested API calls. Activate enables ordinary entry after successful setup; it does
  * not open a new budget or checkpoint siblings. */

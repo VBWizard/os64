@@ -37,6 +37,7 @@ def main():
     flags=['cc','-O2','-g','-std=gnu11','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin',
         '-fno-tree-loop-distribute-patterns','-fno-stack-protector','-DOS64_JS_TARGET',
         '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+        '-Djs_owner_loan_begin=js_owner_observed_loan_begin',
         '-DJS_Call=js_realm_observed_call','-Djs_owner_incarnation_next=js_owner_observed_incarnation_next']
     for path in ['libmath/include','libjs/port','libjs/include','libjs/runtime','libos64/include']:
         flags+=['-I'+str(root/'userland'/path)]

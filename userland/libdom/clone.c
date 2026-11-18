@@ -1308,7 +1308,7 @@ static JSValue clone_method(JSContext *ctx, JSValueConst self, int argc, JSValue
                             JSValue *data)
 {
     (void)self; (void)magic;
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     if (argc < 1) return JS_ThrowTypeError(ctx, "structuredClone needs a value");
     JSValue *transfer;

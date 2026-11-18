@@ -135,7 +135,7 @@ static JSValue base64(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
                       JSValue *data)
 {
     (void)self;
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    os64_dom_t *dom = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     if (argc < 1) return JS_ThrowTypeError(ctx, "%s needs one argument", magic == 0 ? "btoa" : "atob");
     return magic == 0 ? encode(dom, ctx, argv[0]) : decode(dom, ctx, argv[0]);

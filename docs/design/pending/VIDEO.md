@@ -273,14 +273,20 @@ os64 a video player in its own right.
 
 A tracker (CSV and its page) once the slices are ratified, as for sound.
 
-## For Chris (so far)
+## Rulings (Chris)
 
-1. **Scope:** files with H.264 first, streams a later arc. (Ruled in
-   conversation; set down here.)
-2. **FFmpeg's scaler** in libav rather than one of our own. Lean: yes.
-3. **A standalone player before the browser work** (V4). Lean: yes.
-4. **Full screen in this arc**, as its last slice. Lean: yes.
-5. **H.264 and patents.** FFmpeg's decoder is LGPL code and freely
+1. **Scope:** files with H.264 first, streams a later arc (2026-11-16).
+2. **FFmpeg's scaler** (libswscale) in libav, rather than one of our own
+   (2026-11-17).
+3. **A standalone player before the browser work**, V4 (2026-11-17).
+4. **Full screen in this arc**, as its last slice (2026-11-17).
+
+Still open: the GAPs marked above (muted sound, pictures while out of
+view, the budget for many videos, one copy fewer).
+
+## For Chris to know
+
+- **H.264 and patents.** FFmpeg's decoder is LGPL code and freely
    usable; the format itself is covered by patents in some countries,
    many now expired. For a personal operating system I see no obstacle,
    but it is yours to know about.

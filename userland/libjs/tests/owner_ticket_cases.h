@@ -347,5 +347,30 @@ static void owner_ticket_cases(const OwnerTestHost *h)
     owner_ticket_storage_and_incarnation(h);
     owner_ticket_churn(h);
     owner_ticket_model(h);
+    OwnerFixture f={0}; owner_fixture_open(&f,h,(JSOwnerLimits){3,1,1},61);
+    JSOwnerId primary,child,unused={91,92}; JSOwnerTicket ticket,sentinel={{81,82},83},out=sentinel;
+    h->check(js_owner_reserve(&f.table,61,&primary)==JS_OWNER_OK && f.table._last_token==0,
+        "owners: row-only reservation consumes no holder identity");
+    h->check(js_owner_ticket_open(&f.table,61,primary,&ticket)==JS_OWNER_OK &&
+        js_owner_reserve(&f.table,61,&child)==JS_OWNER_OK && !owner_id_equal(primary,child),
+        "owners: native owner reservation is independent of a full holder pool");
+    h->check(js_owner_ticket_open(&f.table,61,child,&out)==JS_OWNER_CAPACITY && owner_ticket_equal(out,sentinel),
+        "owners: opening known owner refuses atomically when holders are full");
+    h->check(js_owner_ticket_close(&f.table,61,ticket)==JS_OWNER_OK &&
+        js_owner_ticket_open(&f.table,61,child,&out)==JS_OWNER_OK && owner_id_equal(out.owner,child),
+        "owners: known owner opens a fresh independent holder after cell reuse");
+    h->check(js_owner_ticket_close(&f.table,61,out)==JS_OWNER_OK,
+        "owners: explicitly close known-owner holder");
+    out=sentinel;
+    h->check(js_owner_ticket_open(&f.table,61,unused,&out)==JS_OWNER_FOREIGN && owner_ticket_equal(out,sentinel) &&
+        js_owner_ticket_open(&f.table,61,(JSOwnerId){61,999},&out)==JS_OWNER_STALE &&
+        js_owner_reserve(&f.table,61,NULL)==JS_OWNER_INVALID,
+        "owners: row-only and known-owner refusals preserve outputs");
+    uint64_t last_token=f.table._last_token;
+    f.table._last_owner=UINT64_MAX;
+    h->check(js_owner_reserve(&f.table,61,&unused)==JS_OWNER_EXHAUSTED && unused.serial==92 &&
+        f.table._owners_used==2 && f.table._last_token==last_token,
+        "owners: row-only issuer exhaustion leaves existing owners intact");
+    owner_fixture_close(&f,h);
 }
 #endif

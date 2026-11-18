@@ -9,7 +9,11 @@
 // starvation while a client continuously receives pointer motion.
 // Doorbells and explicit placement edits coalesce outside the ring. A service
 // cursor shares turns with ring/loss; appearance priority and pointer-after-
-// drain are ordering constraints, not participants in that rotation.
+// drain are ordering constraints, not participants in that rotation. A frame
+// answer coalesces too (the newest replaces an unread one) and is served
+// right after appearance: it comes at most once per request, so it cannot
+// starve the ring, and a program pacing itself by it must not wait behind a
+// full one.
 typedef struct gui_event_queue {
     input_event_t events[GUI_WINDOW_EVENTS_MAX];
     uint32_t head, tail;
@@ -17,6 +21,8 @@ typedef struct gui_event_queue {
     bool pointer_pending;
     input_event_t appearance;
     bool appearance_pending;
+    input_event_t frame;
+    bool frame_pending;
     uint32_t doorbell_mask;
     uint64_t doorbell_tick;
     bool doorbell_pending;
@@ -37,6 +43,7 @@ bool gui_event_queue_pop(gui_event_queue_t *q, input_event_t *out);
 static inline bool gui_event_queue_pending(const gui_event_queue_t *q)
 {
     return q->head != q->tail || q->pointer_pending || q->appearance_pending ||
-           q->doorbell_pending || q->placement_pending || q->lost_pending;
+           q->frame_pending || q->doorbell_pending || q->placement_pending ||
+           q->lost_pending;
 }
 #endif

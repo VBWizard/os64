@@ -422,9 +422,9 @@ from the outside. The difference is WHEN, and on top of WHAT:
   That is why "which libos64 functions may be called from a handler" is a real
   open question (SIGNALS.md books it).
 
-So: keys, mouse, resize, focus, appearance changes, and polite close requests
-are EVENTS. Further window facts such as publish acknowledgments follow the
-same pattern. Every windowing
+So: keys, mouse, resize, focus, appearance changes, polite close requests
+and the display's frame (FRAME_CLOCK.md § 6) are EVENTS, and further window
+facts follow the same pattern. Every windowing
 system converged here independently (X11's queue, the Mac's `GetNextEvent`,
 Win32's message pump, all mid-80s); nobody has ever delivered mouse-moves by
 signal. **os64 could not even if it wanted to**: the pending set is
@@ -460,12 +460,13 @@ Who acts on it:
   cell snapshot and the paint stop, and the first uncovered frame repaints.
 - **libui apps** block in `gui_event_wait` already and were quiet before.
 
-What this is not: the publish-acknowledgment (Wayland's frame callback)
-the occlusion row in DEBTS sketched, which makes idle the default for apps
-with their own loops instead of asking them to look at a flag. The flag
-covers every consumer that exists; the callback stays the more general
-design if one outgrows it. Also still single-window containment — two
-windows that jointly cover a third do not count.
+The frame callback the occlusion row in DEBTS sketched exists now, as the
+display's frame (FRAME_CLOCK.md § 6, `os64_gui_frame_request`): a covered
+window is answered nothing, so a program paced by its frames idles behind a
+cover with no flag to look at, and `os64_frame_wait` is built on it. The
+flag stays, for programs with loops of their own that must keep working
+unseen (gterm). Also still single-window containment — two windows that
+jointly cover a third do not count.
 
 Signals get process-lifecycle and stream-world facts: INT, TERM, HUP, PIPE,
 SEGV — and WINCH, for the program whose whole world is a byte stream.
