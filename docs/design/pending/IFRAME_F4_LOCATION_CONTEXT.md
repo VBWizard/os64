@@ -58,7 +58,8 @@ the local native caller; a foreign function's own `Function.prototype.call`
 executes in that foreign realm. The fixture proves these distinct outcomes,
 including rejection when that intermediate caller has departed.
 
-Validation on base `5a67b444` (merged #656 and #647):
+Validation after integrating base `da7ca2c2` (including merged #658):
+implementation `e46e9d67`, integration `bea6ea7e`.
 
 | Host fixture | Shipping engine | Instrumented engine |
 |---|---:|---:|
@@ -69,7 +70,7 @@ Validation on base `5a67b444` (merged #656 and #647):
 | Binding authority | 526 | 526 |
 | Window invocation authority | 304 | 304 |
 | Browser jobs | 801 | 801 |
-| Realm/provider retirement | 9770 | 9770 |
+| Realm/provider retirement | 9768 | 9768 |
 | Realm routing | 678 | 678 |
 | Blob | 61 | 61 |
 
@@ -89,14 +90,16 @@ engine with the same final fixture and unchanged companion objects.
 
 Preparation's six tests, source manifest, cross-header checks, target allocation
 and export audit, tracker and stale-reference checks pass. Yonder, JS CLI,
-runtime-core-test and DOM-realms consumers compile. No engine or public ABI
+runtime-core-test and DOM-realms consumers compile. The Location change adds no engine or public ABI
 change; the new internal helper is absent from the dynamic exports. Engine ID:
 `bcc933c20d304c1d5be5b1cb0e703b9d0f198bc7dc59fdf374050f48f190ca5f`.
 
-The host cohort was built from this base; subsequent iteration rebuilt the
-changed core/window and host-fixture objects with the official script's flags
-and link inputs. The adjacent regression run used the same production objects
-before adding the final allocation-refusal fixture; those suites did not change.
+The initial host cohort was built from `5a67b444`. Integrating #658 required
+rebuilding the host fixture and every DOM translation unit for its new private
+layout and animation signatures. Both engines, runtime and lower-level objects
+were unchanged and reused; those sources do not include the changed DOM headers.
+Focused Location, adjacent regressions and controls were then rerun on the
+combined cohort. Shipping consumers rebuilt against the new public signatures.
 Frozen evidence records sources, both host binaries, controls, logs and hashes.
 No new guest, full DOM suite, runtime suite, WPT or P5 acceptance is claimed;
 this is a private routing milestone, not final F.4 acceptance.
