@@ -152,7 +152,9 @@ context-wide object reused on navigation. Its document-dependent operations
 must resolve the appropriate active document through the context, including
 additional method-level checks; an old Location cannot simply keep reading
 the retired binding's URL. Preserve relevant-global identity for security and
-descriptor caches. Cover old Location/new document and discarded-context cases.
+descriptor caches. The [retained Location milestone](IFRAME_F4_LOCATION_CONTEXT.md)
+implements private receiver/current-document routing; exotic publication remains
+subject to the full acceptance below. Cover old Location/new document and discarded-context cases.
 
 ## Exotics and binding integration
 

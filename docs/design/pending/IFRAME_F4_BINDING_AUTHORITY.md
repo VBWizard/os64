@@ -32,8 +32,12 @@ The native implementation uses the wrapper's checked `NATIVE_CALLER` snapshot
 at that boundary, not the data function's context argument, defining realm,
 entry, incumbent, or task owner. It resolves that realm to a binding in the same
 cluster and compares its immutable origin with the target's origin using libway.
-Missing origin-bearing settings, unprepared raw entry and inactive source or
-target refuse with `SecurityError`. Brand validation still precedes this check;
+Missing origin-bearing settings, unprepared raw entry and inactive sources
+refuse with `SecurityError`. Targets without a native context must also remain
+active. Context-bound Location lifetime follows the
+[retained Location contract](IFRAME_F4_LOCATION_CONTEXT.md): original-global
+identity survives replacement while document access resolves the current target.
+Brand validation still precedes this check;
 argument conversion follows it, so rejected access cannot execute coercion code.
 
 The policy covers Location methods/accessors and the Window/Document `location`

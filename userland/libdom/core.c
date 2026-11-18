@@ -296,7 +296,7 @@ os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi)
  * current. The data-function ctx and the task/entry realm are not that caller.
  * This private opt-in requires explicit origin-bearing settings on both sides;
  * the default binding has no new security policy. */
-bool d_member_access(os64_dom_t *target, JSContext *ctx, bool cross_origin)
+static bool member_access(os64_dom_t *target, JSContext *ctx, bool cross_origin, bool retained_location)
 {
     if (!target->binding_origin) return true;
     os64_js_outcome_t out;
@@ -305,12 +305,24 @@ bool d_member_access(os64_dom_t *target, JSContext *ctx, bool cross_origin)
     os64_dom_t *source = NULL;
     for (size_t i = 0; realm && i < target->cluster->count; ++i)
         if (target->cluster->members[i]->realm == realm) source = target->cluster->members[i];
-    if (!d_delivery_active(target) || !d_delivery_active(source) || !source->binding_origin ||
+    if ((!retained_location && !d_delivery_active(target)) || !d_delivery_active(source) || !source->binding_origin ||
         (!cross_origin && !way_origin_same(source->binding_origin, target->binding_origin))) {
         d_error(ctx, "SecurityError", "Member settings do not permit access");
         return false;
     }
     return true;
+}
+
+bool d_member_access(os64_dom_t *target, JSContext *ctx, bool cross_origin)
+{
+    return member_access(target, ctx, cross_origin, false);
+}
+
+bool d_location_access(os64_dom_t *relevant, JSContext *ctx, bool cross_origin)
+{
+    /* A retained Location keeps its relevant global's origin after replacement.
+     * Its document is selected separately through the stable native context. */
+    return member_access(relevant, ctx, cross_origin, relevant->browsing_context != NULL);
 }
 
 /* Null/undefined receivers use the function's defining global. Object identity
