@@ -197,6 +197,22 @@ check(media_exports and all(e.startswith('os64_media_') for e in media_exports),
 for program in ('play', 'tests/mediatest'):
     check('libmedia.so' in needed(USERLAND / 'bin' / program), f'{program} does not load libmedia.so')
 
+# CODE THE SCALER WRITES AT RUN TIME (README.md § The x86 assembly):
+# libswscale's fast bilinear writes an x86 horizontal filter of its own
+# and runs it, in memory from mmap and mprotect where it has them and from
+# av_malloc where, as here, it has not (HAVE_MMAP 0); os64's data memory
+# does not execute, so running it is a no-execute fault. It does so only
+# for SWS_FAST_BILINEAR and only when enlarging (canMMXEXTBeUsed needs
+# dstW >= srcW), which is why os64's callers ask for fast bilinear only
+# when shrinking. A release that changes either fails here until it has
+# been read again.
+utils_c = (upstream / 'libswscale/utils.c').read_text()
+check(config.get('HAVE_MMAP') == '0' and config.get('HAVE_MPROTECT') == '0',
+      'config.h has mmap or mprotect: the scaler would write its code where it can execute, read this again')
+check('c->canMMXEXTBeUsed = dstW >= srcW &&' in utils_c and
+      'if (c->canMMXEXTBeUsed && (flags & SWS_FAST_BILINEAR)) {' in utils_c,
+      'libswscale/utils.c changed when the scaler writes code at run time: read README.md § The x86 assembly again')
+
 # FFmpeg's ONE-TIME SETUPS, which a build without threads leaves unlocked
 # (README.md § Switched off). Every ff_thread_once in every vendored file,
 # templates and headers included (a decoder's setup can live in a template
