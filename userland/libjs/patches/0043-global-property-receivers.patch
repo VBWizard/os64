@@ -3,12 +3,10 @@
 # GroupBy supplies undefined, leaving sloppy-this selection to the callback realm.
 --- a/quickjs.c
 +++ b/quickjs.c
-@@ -842,7 +842,8 @@
- } JSTypedArray;
+@@ -843,6 +843,7 @@
  
  typedef struct JSGlobalObject {
--    JSValue uninitialized_vars; /* hidden object containing the list of uninitialized variables */
-+    JSValue uninitialized_vars; /* hidden object containing the list of uninitialized variables */
+     JSValue uninitialized_vars; /* hidden object containing the list of uninitialized variables */
 +    JSContext *receiver_context; /* retained when an embedding receiver is configured */
  } JSGlobalObject;
  
@@ -21,7 +19,7 @@
          break;
      default:
      set_exotic:
-@@ -8112,8 +8114,20 @@
+@@ -8112,8 +8114,28 @@
      return JS_DupValue(ctx, ctx->global_obj);
  }
  
@@ -41,10 +39,18 @@
 +    return receiver;
 +}
 +
++/* Proxy exotics also implement trapless internal forwarding. Keep their
++   storage receiver until an author trap is invoked; other native exotics
++   are embedding callbacks. */
++static JSValueConst js_exotic_receiver(JSObject *object, JSValueConst receiver)
++{
++    return object->class_id == JS_CLASS_PROXY ? receiver : js_global_receiver(receiver);
++}
++
  static JSValueConst js_global_this(JSContext *ctx)
  {
      return JS_IsUndefined(ctx->global_this) ? ctx->global_obj : ctx->global_this;
-@@ -8123,6 +8137,9 @@
+@@ -8123,6 +8145,9 @@
  {
      if (!JS_IsObject(value))
          return FALSE;
@@ -54,7 +60,7 @@
      set_value(ctx, &ctx->global_this, JS_DupValue(ctx, value));
      return TRUE;
  }
-@@ -9082,7 +9099,7 @@
+@@ -9082,7 +9107,7 @@
                          JSValue func = JS_MKPTR(JS_TAG_OBJECT, pr->u.getset.getter);
                          /* Note: the field could be removed in the getter */
                          func = JS_DupValue(ctx, func);
@@ -63,16 +69,16 @@
                      }
                  } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
                      JSValue val = *pr->u.var_ref->pvalue;
-@@ -9130,7 +9147,7 @@
+@@ -9130,7 +9155,7 @@
                          /* Note: if 'p' is a prototype, it can be
                             freed in the called function */
                          obj1 = JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
 -                        retval = JS_ENGINE_CALLBACK(ctx->rt, em->get_property(ctx, obj1, prop, this_obj));
-+                        retval = JS_ENGINE_CALLBACK(ctx->rt, em->get_property(ctx, obj1, prop, js_global_receiver(this_obj)));
++                        retval = JS_ENGINE_CALLBACK(ctx->rt, em->get_property(ctx, obj1, prop, js_exotic_receiver(p, this_obj)));
                          JS_FreeValue(ctx, obj1);
                          return retval;
                      }
-@@ -9149,7 +9166,7 @@
+@@ -9149,7 +9174,7 @@
                          if (ret) {
                              if (desc.flags & JS_PROP_GETSET) {
                                  JS_FreeValue(ctx, desc.setter);
@@ -81,7 +87,7 @@
                              } else {
                                  return desc.value;
                              }
-@@ -10220,7 +10237,7 @@
+@@ -10220,7 +10245,7 @@
          func = JS_MKPTR(JS_TAG_OBJECT, setter);
          /* Note: the field could be removed in the setter */
          func = JS_DupValue(ctx, func);
@@ -90,16 +96,16 @@
          JS_FreeValue(ctx, val);
          if (JS_IsException(ret))
              return -1;
-@@ -10594,7 +10611,7 @@
+@@ -10594,7 +10619,7 @@
                          /* set_property can free the prototype */
                          obj1 = JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, p1));
                          ret = JS_ENGINE_CALLBACK(ctx->rt, em->set_property(ctx, obj1, prop,
 -                                               val, this_obj, flags));
-+                                               val, js_global_receiver(this_obj), flags));
++                                               val, js_exotic_receiver(p1, this_obj), flags));
                          JS_FreeValue(ctx, obj1);
                          JS_FreeValue(ctx, val);
                          return ret;
-@@ -17945,6 +17962,8 @@
+@@ -17945,6 +17970,8 @@
  {
      JSObject *p = JS_VALUE_GET_OBJ(obj);
      JS_FreeValueRT(rt, p->u.global_object.uninitialized_vars);
@@ -108,7 +114,7 @@
  }
  
  static void js_global_object_mark(JSRuntime *rt, JSValueConst val,
-@@ -17952,6 +17971,8 @@
+@@ -17952,6 +17979,8 @@
  {
      JSObject *p = JS_VALUE_GET_OBJ(val);
      JS_MarkValue(rt, p->u.global_object.uninitialized_vars, mark_func);
@@ -117,7 +123,25 @@
  }
  
  static JSVarRef *js_global_object_get_uninitialized_var(JSContext *ctx, JSObject *p1, 
-@@ -53839,7 +53860,7 @@
+@@ -52278,7 +52307,7 @@
+     }
+     args[0] = s->target;
+     args[1] = atom_val;
+-    args[2] = receiver;
++    args[2] = js_global_receiver(receiver);
+     ret = JS_CallFree(ctx, method, s->handler, 3, args);
+     JS_FreeValue(ctx, atom_val);
+     if (JS_IsException(ret))
+@@ -52330,7 +52359,7 @@
+     args[0] = s->target;
+     args[1] = atom_val;
+     args[2] = value;
+-    args[3] = receiver;
++    args[3] = js_global_receiver(receiver);
+     ret1 = JS_CallFree(ctx, method, s->handler, 4, args);
+     JS_FreeValue(ctx, atom_val);
+     if (JS_IsException(ret1))
+@@ -53839,7 +53868,7 @@
  
          args[0] = v;
          args[1] = JS_NewInt64(ctx, idx);

@@ -40,6 +40,22 @@ static int receiver_descriptor(JSContext *ctx, JSPropertyDescriptor *desc, JSVal
     return 1;
 }
 
+static JSValue receiver_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver)
+{
+    (void)obj; (void)atom;
+    return JS_DupValue(ctx, receiver);
+}
+
+static int receiver_exotic_set(JSContext *ctx, JSValueConst obj, JSAtom atom,
+                              JSValueConst value, JSValueConst receiver, int flags)
+{
+    (void)obj; (void)atom; (void)flags;
+    JSValue result = receiver_native_set(ctx, receiver, 1, &value);
+    bool failed = JS_IsException(result);
+    JS_FreeValue(ctx, result);
+    return failed ? -1 : 1;
+}
+
 static void global_receiver_cases(void)
 {
     /* The exported global can outlive its context. Its receiver context
@@ -131,6 +147,41 @@ static void global_receiver_cases(void)
          "var closed=0;var iterable={[Symbol.iterator](){return {next(){return {value:1,done:false}},return(){closed++;return {}}}}};"
          "try{group(iterable,function(){'use strict';if(this!==undefined)throw 6;throw sentinel})}catch(e){if(e!==sentinel)throw e}"
          "if(closed!==1)throw 7;}"},
+        {"trapless Proxy prototypes preserve global storage and inherited accessors",
+         "var savedProto=Object.getPrototypeOf(raw);"
+         "var traplessTarget=Object.create(savedProto), alternateStorage={};"
+         "Object.defineProperty(traplessTarget,'inheritedData',{value:12,writable:true,configurable:true});"
+         "Object.defineProperty(traplessTarget,'forwardedAccessor',{configurable:true,"
+         "get:function(){'use strict';return this},set:function(v){'use strict';seen=[this,v]}});"
+         "var trapless=new Proxy(new Proxy(traplessTarget,{}),{});"
+         "Object.setPrototypeOf(raw,trapless);"
+         "try{raw.traplessDot=42;raw['traplessComputed']=43;implicitThroughProxy=44;"
+         "with({}){implicitProxyReference=45}"
+         "raw.inheritedData=46;"
+         "if(!Object.hasOwn(raw,'traplessDot')||!Object.hasOwn(raw,'traplessComputed')||"
+         "!Object.hasOwn(raw,'implicitThroughProxy')||!Object.hasOwn(raw,'implicitProxyReference')||"
+         "!Object.hasOwn(raw,'inheritedData'))throw 1;"
+         "if(traplessDot!==42||traplessComputed!==43||implicitThroughProxy!==44||implicitProxyReference!==45||inheritedData!==46)throw 2;"
+         "if('traplessDot' in expected||'traplessComputed' in expected||'implicitThroughProxy' in expected||"
+         "'implicitProxyReference' in expected||'inheritedData' in expected||traplessTarget.inheritedData!==12)throw 3;"
+         "if(forwardedAccessor!==expected)throw 4;forwardedAccessor=47;"
+         "if(seen[0]!==expected||seen[1]!==47)throw 5;"
+         "if(Reflect.get(raw,'forwardedAccessor',alternateStorage)!==alternateStorage)throw 6;"
+         "Reflect.set(raw,'forwardedAccessor',48,alternateStorage);if(seen[0]!==alternateStorage)throw 7;"
+         "if(!Reflect.set(raw,'alternateSlot',49,alternateStorage)||alternateStorage.alternateSlot!==49||"
+         "Object.hasOwn(raw,'alternateSlot')||'alternateSlot' in expected)throw 8;"
+         "}finally{Object.setPrototypeOf(raw,savedProto)}"},
+        {"nested Proxy forwarding substitutes only when a trap is called",
+         "var proxyBase=Object.getPrototypeOf(raw), trapCalls=0, deepTrapReceiver;"
+         "var trapped=new Proxy(proxyBase,{get(t,p,r){if(p==='deepReceiver')return r;return Reflect.get(t,p,r)},"
+         "set(t,p,v,r){if(p==='deepReceiver'){trapCalls++;deepTrapReceiver=r;return true}return Reflect.set(t,p,v,r)},"
+         "has(t,p){return p==='deepReceiver'||Reflect.has(t,p)}});"
+         "Object.setPrototypeOf(raw,new Proxy(new Proxy(trapped,{}),{}));"
+         "try{if(deepReceiver!==expected)throw 1;deepReceiver=50;"
+         "if(trapCalls!==1||deepTrapReceiver!==expected)throw 2;"
+         "Reflect.set(raw,'deepReceiver',51,alternateStorage);"
+         "if(trapCalls!==2||deepTrapReceiver!==alternateStorage||Reflect.get(raw,'deepReceiver',alternateStorage)!==alternateStorage)throw 3;"
+         "}finally{Object.setPrototypeOf(raw,proxyBase)}"},
         {"prototype Proxy callbacks cannot see global storage receiver",
          "var originalProto=Object.getPrototypeOf(raw), received;"
          "var exoticProto=new Proxy(originalProto,{get(t,p,r){if(p==='trapReceiver')return r;return Reflect.get(t,p,r)},"
@@ -188,6 +239,20 @@ static void global_receiver_cases(void)
             check(realm_execute(realms[i],"if(descriptorReceiver!==expected)throw 1;descriptorReceiver=1;if(nativeSeen!==expected)throw 2",&out)==OS64_JS_OK,
                   "native exotic descriptor getter and setter receive embedding object");
             check(JS_SetPrototype(ctx,global,proto)==1,"descriptor prototype restored");
+            JS_FreeValue(ctx,custom);
+            JSClassID direct_id=0;JS_NewClassID(&direct_id);
+            static JSClassExoticMethods direct_exotic={.get_own_property=receiver_descriptor,
+                .get_property=receiver_exotic_get,.set_property=receiver_exotic_set};
+            JSClassDef direct_def={.class_name="ReceiverCallbacks",.exotic=&direct_exotic};
+            check(JS_NewClass(JS_GetRuntime(ctx),direct_id,&direct_def)==0,"native exotic callbacks registered");
+            custom=JS_NewObjectProtoClass(ctx,JS_NULL,direct_id);
+            check(JS_SetPrototype(ctx,global,custom)==1,"native callback prototype installed");
+            check(realm_execute(realms[i],
+                  "if(descriptorReceiver!==expected)throw 1;descriptorReceiver=1;if(nativeSeen!==expected)throw 2;"
+                  "if(Reflect.get(raw,'descriptorReceiver',alt)!==alt)throw 3;"
+                  "Reflect.set(raw,'descriptorReceiver',2,alt);if(nativeSeen!==alt)throw 4;",&out)==OS64_JS_OK,
+                  "native exotic callback boundary still substitutes globals and preserves alternate receivers");
+            check(JS_SetPrototype(ctx,global,proto)==1,"native callback prototype restored");
             JS_FreeValue(ctx,custom);JS_FreeValue(ctx,proto);JS_FreeValue(ctx,global);
         }
         realm_share(contexts[1],contexts[0],"raw");

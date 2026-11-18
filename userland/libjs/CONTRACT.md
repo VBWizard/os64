@@ -105,8 +105,10 @@ selection use the receiver; explicit `JS_EvalThis` and strict/module semantics
 remain separate. The prepared-engine identity changes with this hook; public
 wrapper layouts and ABI 5 are unchanged.
 
-Property getters, setters and inherited exotic get/set callbacks substitute
-a configured global receiver without changing the underlying property storage.
+Property getters, setters, native exotic callbacks and author Proxy traps
+substitute a configured global receiver. Stock Proxy internal forwarding keeps
+the original storage receiver when no trap is present; substitution happens
+when invoking an actual trap or accessor, preserving ordinary global writes.
 Selection follows the receiver's global, including a foreign accessor invoked
 in another realm. Alternate non-global receivers pass through. Bytecode global
 reference operations reach these shared property paths. `Object.groupBy` and

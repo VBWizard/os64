@@ -1,7 +1,8 @@
 # F.4d — global property callback receivers
 
 Implementation: [PR #656](https://github.com/VBWizard/os64/pull/656), based on
-merged #654/#655 (`15f050e5`). F4 remains in progress.
+merged #654/#655 (`15f050e5`), with merged #657 (`8197ad05`) integrated
+for review correction. F4 remains in progress.
 
 The embedding global-this primitive separated script receivers from storage,
 but a global accessor or an inherited Proxy trap could still receive the raw
@@ -12,8 +13,9 @@ the engine callback routes; it installs no browser proxy.
 ## Contract
 
 Patch `0043-global-property-receivers.patch` substitutes a configured global's
-embedding receiver immediately before invoking property getters, setters and
-exotic get/set callbacks. It covers own/inherited properties, native exotic
+embedding receiver at property getters, setters, native exotic callbacks and
+author Proxy traps. A stock Proxy without a trap forwards the original storage
+receiver internally; it does not substitute before that forwarding. It covers own/inherited properties, native exotic
 descriptors, prototype Proxies, global identifiers and dynamic reference
 operations. Optimized data-property paths need no substitution: they invoke no
 author callback. `JS_GetGlobalVarRef` and the global bytecodes keep their storage
@@ -53,7 +55,8 @@ raw globals deliberately exported only as native test oracles. Named cases:
   increment, compound/destructuring assignment and `with` references.
 - Data and lexical storage, implicit global creation, Reflect alternate
   receivers, native accessors, bound functions and Proxy apply traps.
-- Prototype Proxy get/set and native exotic descriptor callbacks.
+- Prototype Proxy get/set and native exotic descriptor/direct callbacks;
+  nested trapless forwarding, implicit global writes and inherited writable data.
 - Getter/setter self-deletion and exceptions; direct/indirect eval and Function;
   writable globalThis poisoning; compiled and cached global references.
 - Foreign getters with a receiver in another realm; foreign strict/sloppy
@@ -68,7 +71,10 @@ WindowProxy/Location exotics, retained Location active-document behavior,
 DOM alias/event raw-global closure and integrated security/lifetime acceptance
 remain. No visible frames, F15 collection or P5 acceptance is claimed.
 
-## Validation
+## Initial validation
+
+These receipts describe the initial head before the review correction below.
+They did not cover trapless Proxy storage forwarding.
 
 Prepared engine:
 `a04a8148d20bd795e688ca17a18951107b7b36dcc006213c65c0625de7b95afb`.
@@ -118,3 +124,43 @@ Reproduction uses `tools/test_js_runtime_host.sh` (full), or
 `--navigation-authority`, `--browsing-context`, `--window-authority`,
 `--binding-authority`, `--browser-jobs`, `--realm-retirement` and `--realms`.
 No full DOM suite or new WPT/guest/P5 execution is claimed.
+
+## Review correction: trapless Proxy forwarding
+
+[Review finding](https://github.com/VBWizard/os64/pull/656#discussion_r4608937505)
+identified a storage regression: a configured global inheriting a Proxy with no
+`set` trap created new properties on its embedding receiver. Global-name reads
+could then miss a just-assigned value. The earlier boundary incorrectly treated
+stock Proxy internal forwarding as a callback.
+
+`js_exotic_receiver` preserves the storage receiver for stock Proxies.
+`js_proxy_get` and `js_proxy_set` substitute the receiver when invoking an actual
+trap. Native embedding callbacks and accessors retain substitution. The read
+sibling follows the same boundary, including nested trapless forwarding.
+
+The final shared fixture adds direct/computed/implicit writes, dynamic references,
+inherited writable data and accessors, alternate receivers, nested Proxies and
+native direct callbacks. It reports 121 checks per profile with zero failures.
+The reviewed engine fails the final fixture's storage case four times (both
+realms and teardown policies); the corrected engine passes. Four additional
+controls independently restore premature set substitution, omit get/set trap
+substitution or omit native callback substitution. All five controls fail
+behavioral assertions, with no sanitizer reports.
+
+Merged #657 is integrated; the selector conflict retains both `--global-receiver`
+and `--owner-rejections`. Checked rejection tests pass 785 / 3,005 checks with
+8 / 119 allocation cuts per teardown policy. The combined runtime and engine
+are validated together; no C3, collection or public activation gate is lifted.
+
+Corrected prepared engine:
+`bcc933c20d304c1d5be5b1cb0e703b9d0f198bc7dc59fdf374050f48f190ca5f`.
+
+The corrected, integrated full runtime passes **40,415 shipping / 137,575
+instrumented checks**, zero failures and zero live allocations, including the
+compile-failure and fatal-invariant paths. Both DOM profiles retain the Window,
+navigation, context, authority, browser-job, retirement and realm-routing counts
+in the table above. ASan/UBSan/LeakSanitizer remain enabled outside the sandbox.
+Preparation, headers, target allocation/export audit, tracker and stale-reference
+checks pass. Shipping Yonder/JS and runtime/DOM consumers compile. A new frozen
+review-correction cohort preserves the final source, binaries, five controls,
+logs and SHA-256 manifest; the original cohort remains historical evidence.

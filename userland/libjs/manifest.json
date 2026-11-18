@@ -291,7 +291,7 @@
     },
     {
       "path": "patches/0043-global-property-receivers.patch",
-      "sha256": "9106f33cce0ee208614e80245af0b283a6615f65261a32218eaaaff7462d858d",
+      "sha256": "5b67819cea76db23076251fdf8af1cdd50e6df3cdba9ddf87f0bbb1223d39202",
       "reason": "Trace the configured global receiver context and substitute property callback receivers across direct, reference and prototype paths; GroupBy supplies undefined to callbacks."
     }
   ],
