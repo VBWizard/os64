@@ -70,7 +70,27 @@ int main(void)
             else assert(out.type==INPUT_EVENT_INPUT_LOST);
         }
         assert(controls==GUI_WINDOW_EVENTS_MAX-1 && bells>0);
+
+        // Frame answers coalesce outside the ring: a full ring cannot drop
+        // one, a program that never reads holds at most one (the newest),
+        // and it comes before the ring once read.
+        q=(gui_event_queue_t){.head=offset,.tail=offset};
+        for(unsigned i=0;i<GUI_WINDOW_EVENTS_MAX-1;++i)
+            assert(gui_event_queue_push(&q,&move)==1);
+        for(uint32_t n=1;n<=1000;++n){
+            input_event_t fr={.type=INPUT_EVENT_FRAME,.frame={.number_lo=n,.period_ns=16666667}};
+            assert(gui_event_queue_push(&q,&fr)==1);
+        }
+        assert(!q.lost_pending);
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_FRAME && out.frame.number_lo==1000);
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_MOUSE_MOVE);
+        input_event_t fr2={.type=INPUT_EVENT_FRAME,.frame={.number_lo=7}};
+        assert(gui_event_queue_push(&q,&fr2)==1);
+        assert(gui_event_queue_pending(&q));
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_FRAME && out.frame.number_lo==7);
+        input_event_t look=(input_event_t){0};
+        assert(gui_event_queue_pop(&q,&look) && look.type==INPUT_EVENT_MOUSE_MOVE);
     }
-    puts("gui queue: 64 wrap positions; drop/eviction reset, control order and overflow fairness passed");
+    puts("gui queue: 64 wrap positions; drop/eviction reset, control order, overflow fairness and frame answers passed");
     return 0;
 }

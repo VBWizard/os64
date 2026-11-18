@@ -1392,12 +1392,17 @@ static os64_js_status_t settings_eligible(os64_js_runtime_t *runtime, os64_js_re
     return OS64_JS_OK;
 }
 
-static JSValue settings_body(JSContext *context, void *opaque)
+static JSValue scoped_settings_body(JSContext *context, void *opaque)
 {
     SettingsCall *call = opaque;
     call->entry->evaluated = true;
-    owner_legacy_escape(call->entry->runtime);
     return call->body(context, call->opaque);
+}
+static JSValue settings_body(JSContext *context, void *opaque)
+{
+    SettingsCall *call = opaque;
+    owner_legacy_escape(call->entry->runtime);
+    return scoped_settings_body(context, opaque);
 }
 
 JS_PUBLIC os64_js_status_t os64_js_realm_with_settings(os64_js_realm_t *entry,
@@ -1546,19 +1551,25 @@ JS_PUBLIC os64_js_status_t os64_js_enable_neutral_promise_settings(os64_js_runti
 
 /* Called inside an admitted wrapper entry. It keeps the same guard, task and
  * deadline; the scope also makes checked queries available to native bindings. */
-static JSValue host_settings(os64_js_realm_t *entry, os64_js_realm_t *incumbent,
-    os64_js_settings_body_t *body, void *opaque, os64_js_outcome_t *outcome)
+static JSValue host_settings_dispatch(os64_js_realm_t *entry, os64_js_realm_t *incumbent,
+    os64_js_settings_body_t *body, void *opaque, os64_js_outcome_t *outcome, bool scoped)
 {
     os64_js_runtime_t *runtime = entry->runtime;
     SettingsCall call = {runtime->settings_calls, entry, outcome, body, opaque};
     JSValue value = JS_UNDEFINED;
     runtime->settings_calls = &call;
     bool admitted = JS_RunWithSettings(entry->context, incumbent ? incumbent->context : NULL,
-                                      settings_body, &call, &value);
+                                      scoped ? scoped_settings_body : settings_body, &call, &value);
     runtime->settings_calls = call.previous;
     if (!admitted)
         return JS_ThrowInternalError(entry->context, "settings scope nesting limit reached");
     return value;
+}
+
+static JSValue host_settings(os64_js_realm_t *entry, os64_js_realm_t *incumbent,
+    os64_js_settings_body_t *body, void *opaque, os64_js_outcome_t *outcome)
+{
+    return host_settings_dispatch(entry, incumbent, body, opaque, outcome, false);
 }
 
 JS_PUBLIC os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
@@ -2110,12 +2121,11 @@ static JSValue eval_body(JSContext *context, void *opaque)
     return value;
 }
 
-/* Both buffer and file entry points own an accounted, terminated source here.
- * Loading and source copying finish before the execution deadline starts; a
- * blob's read and a compile are inside it, as the compile always was. */
-static os64_js_status_t evaluate(os64_js_realm_t *realm, const char *source,
-                                size_t length, const char *source_name,
-                                os64_js_bytecode_t *bytecode, os64_js_outcome_t *outcome)
+/* Source and scoped native execution share the turn, settings and returned
+ * value/exception cleanup. The caller retains its admission through leave
+ * and the complete-run drain. */
+static os64_js_status_t execute_body(os64_js_realm_t *realm, const char *source_name,
+    os64_js_settings_body_t *body, void *opaque, bool scoped, os64_js_outcome_t *outcome)
 {
     os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
     int64_t now = os64_micros();
@@ -2130,10 +2140,9 @@ static os64_js_status_t evaluate(os64_js_realm_t *realm, const char *source,
         runtime->turn = true;
         runtime->turn_owner = realm;
         realm->evaluated = true;
-        EvalBody call = {realm, source, source_name, length, bytecode};
         JSValue value = runtime->host_settings_enabled
-            ? host_settings(realm, NULL, eval_body, &call, outcome)
-            : eval_body(realm->context, &call);
+            ? host_settings_dispatch(realm, NULL, body, opaque, outcome, scoped)
+            : body(realm->context, opaque);
         if (JS_IsException(value)) {
             JSValue error = JS_GetException(realm->context);
             caught(runtime, realm->context, error);
@@ -2144,6 +2153,16 @@ static os64_js_status_t evaluate(os64_js_realm_t *realm, const char *source,
         JS_FreeValue(realm->context, value);
     }
     return OS64_JS_OK;
+}
+
+/* Both buffer and file entry points own an accounted, terminated source here.
+ * Loading and source copying finish before the execution deadline starts; a
+ * blob's read and a compile are inside it, as the compile always was. */
+static os64_js_status_t evaluate(os64_js_realm_t *realm, const char *source,
+    size_t length, const char *source_name, os64_js_bytecode_t *bytecode, os64_js_outcome_t *outcome)
+{
+    EvalBody call = {realm, source, source_name, length, bytecode};
+    return execute_body(realm, source_name, eval_body, &call, false, outcome);
 }
 
 static os64_js_status_t eval_text_owner(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
@@ -2272,6 +2291,79 @@ os64_js_status_t js_owner_runtime_run(os64_js_runtime_t *runtime, const char *ca
     if (loan.serial && js_owner_loan_end(&runtime->owner.metadata->table,
             runtime->owner.metadata->incarnation, loan) != JS_OWNER_OK)
         jsport_fatal("owner invocation unwind", __FILE__, __LINE__);
+    return result;
+}
+
+struct JSOwnerRuntimeScope {
+    os64_js_runtime_t *runtime;
+    os64_js_realm_t *realm;
+    JSOwnerLoan loan;
+};
+JSOwnerStatus js_owner_scope_owner(const JSOwnerRuntimeScope *scope, JSOwnerId *out)
+{
+    if (!scope) return JS_OWNER_INVALID;
+    OwnerMetadata *metadata = scope->runtime->owner.metadata;
+    return js_owner_loan_owner(&metadata->table, metadata->incarnation, scope->loan, out);
+}
+JSOwnerStatus js_owner_scope_promote(JSOwnerRuntimeScope *scope, JSOwnerTicket *out)
+{
+    if (!scope) return JS_OWNER_INVALID;
+    OwnerMetadata *metadata = scope->runtime->owner.metadata;
+    return js_owner_loan_promote(&metadata->table, metadata->incarnation, scope->loan, out);
+}
+JSOwnerStatus js_owner_scope_export(JSOwnerRuntimeScope *scope, JSContext **out)
+{
+    if (!out) return JS_OWNER_INVALID;
+    JSOwnerId owner;
+    JSOwnerStatus result = js_owner_scope_owner(scope, &owner);
+    if (result != JS_OWNER_OK) return result;
+    os64_js_outcome_t outcome;
+    JSContext *context = realm_context(scope->realm, OS64_JS_ABI_ID, &outcome, true);
+    if (!context) return JS_OWNER_INVALID;
+    *out = context;
+    return JS_OWNER_OK;
+}
+typedef struct {
+    JSOwnerRuntimeScope scope;
+    JSOwnerScopedBody *body;
+    void *opaque;
+} OwnerScopedCall;
+static JSValue owner_scoped_body(JSContext *context, void *opaque)
+{
+    OwnerScopedCall *call = opaque;
+    return call->body(&call->scope, context, call->opaque);
+}
+os64_js_status_t js_owner_runtime_scoped_run(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket ticket, const char *name, JSOwnerScopedBody *body, void *opaque, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (!caller_abi) return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "owner ABI is required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID))
+        return refuse(runtime, outcome, OS64_JS_ABI_MISMATCH, "owner header ABI mismatch");
+    os64_js_realm_t *realm;
+    if (owner_ticket_realm(runtime, ticket, &realm) != JS_OWNER_OK)
+        return refuse(runtime, outcome, OS64_JS_ADMISSION_REFUSED, "owner ticket does not resolve");
+    if (realm->retired)
+        return refuse(runtime, outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->staged)
+        return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
+    if (!name || !body) return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "scope name and body are required");
+    if (runtime->turn || JS_IsJobPending(runtime->engine))
+        return refuse(runtime, outcome, OS64_JS_BUSY, "the previous turn has queued jobs");
+    if (observe(runtime)) return leave(runtime, outcome);
+    OwnerScopedCall call = {.scope={.runtime=runtime, .realm=realm}, .body=body, .opaque=opaque};
+    if (js_owner_loan_begin(&runtime->owner.metadata->table, runtime->owner.metadata->incarnation,
+            ticket, &call.scope.loan) != JS_OWNER_OK)
+        return refuse(runtime, outcome, OS64_JS_ADMISSION_REFUSED, "owner invocation capacity exhausted");
+    result = execute_body(realm, name, owner_scoped_body, &call, true, outcome);
+    result = result == OS64_JS_BAD_ARGUMENT
+        ? refuse(runtime, outcome, result, "deadline is not representable") : leave(runtime, outcome);
+    result = complete_run(runtime, result, outcome);
+    /* The scope's view and returned value cleanup precede its loan's end. */
+    if (js_owner_loan_end(&runtime->owner.metadata->table, runtime->owner.metadata->incarnation,
+            call.scope.loan) != JS_OWNER_OK)
+        jsport_fatal("owner scoped invocation unwind", __FILE__, __LINE__);
     return result;
 }
 

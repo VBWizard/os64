@@ -265,6 +265,17 @@ typedef struct window
     // follow it, independently of ring capacity.
     gui_event_queue_t event_queue;
 
+    // The frame request (FRAME_CLOCK.md § 6, its states), under kGuiLock:
+    // `frame_wanted` is set by gui_frame_request and cleared by the answer
+    // (wm_frame_answer_locked); `frame_drawn` is set by every publish and
+    // cleared by every request, so a request can ask "has this window drawn
+    // since it last asked?"; `frame_epoch` is the compositor's pass epoch
+    // when the request was made (gui_frame_epoch_locked), so a frame
+    // answers only requests made before its pass.
+    bool      frame_wanted;
+    bool      frame_drawn;
+    uint64_t  frame_epoch;
+
     // The thread parked in gui_event_wait on this window, or NULL. Owned by
     // the WAITER (it registers and unregisters itself, console_read's
     // discipline — a stale slot is a spurious wake later); the deliverer
@@ -443,6 +454,15 @@ bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
 // a COVERED/UNCOVERED event. kGuiLock held. Cheap enough to run every
 // compositor frame (a dozen windows, each asked about the ones above it).
 void wm_cover_sweep_locked(void);
+
+// Frame requests (FRAME_CLOCK.md § 6), kGuiLock held, both judged by the
+// cover sweep's last verdict. How many windows want a frame, shown and
+// covered; and the answer: `answer` delivered to every shown window whose
+// request was made before epoch `before` (the frame's pass), its request
+// cleared; a covered one is left wanting (counted in *held_back), and a
+// later request waits for the next frame. Returns how many were answered.
+void wm_frame_waiters_locked(uint32_t *shown, uint32_t *covered);
+uint32_t wm_frame_answer_locked(const input_event_t *answer, uint64_t before, uint32_t *held_back);
 
 // Four-sided geometry is derived from the current immutable decoration.
 // Call under kGuiLock, including sizing at the client boundary.

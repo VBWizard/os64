@@ -760,6 +760,12 @@ typedef enum os64_shutdown_mode
 #define SYSCALL_GUI_WINDOW_SET_PINNED 66
 // Exact owned-window content size; arg0 handle, arg1 width, arg2 height.
 #define SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE 68
+// Ask for the display's next frame: arg0 handle, arg1 OS64_GUI_FRAME_*
+// flags. Scalars only; never blocks (the answer is an event). See os64/gui.h.
+#define SYSCALL_GUI_FRAME_REQUEST 69
+// Take the window's frame answer if one waits: arg0 handle, arg1 event out.
+// Never blocks, never touches any other event. See os64/gui.h.
+#define SYSCALL_GUI_FRAME_TAKE 70
 
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.
