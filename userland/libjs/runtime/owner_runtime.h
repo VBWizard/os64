@@ -103,4 +103,21 @@ typedef struct {
  * Unmapped/absent references carry zero IDs, not reusable address keys. */
 os64_js_status_t js_owner_runtime_observe_failure(os64_js_runtime_t *,
     const char *caller_abi, JSOwnerFailureSnapshot *);
+/* Trusted native bootstrap with the same invocation-only borrowed scope as
+ * scoped_run. Free temporary values before returning. Return OK or
+ * ADMISSION_REFUSED without an exception, or EXCEPTION with its pending engine
+ * exception for wrapper diagnostics. No persistent raw view or
+ * borrower escapes unless explicit compatibility export precedes it. */
+typedef os64_js_status_t JSOwnerSetupBody(JSOwnerRuntimeScope *, JSContext *, void *);
+os64_js_status_t js_owner_runtime_stage(os64_js_runtime_t *, const char *caller_abi,
+    size_t required_headroom, JSOwnerTicket *out, os64_js_outcome_t *);
+/* Metadata refusal precedes installation and preserves the staged candidate.
+ * An admitted loan spans installation, candidate jobs/rejections, transaction
+ * rollback and setup unwind, including close of the admitting ticket. Setup
+ * success alone does not activate the realm. Neither operation publishes an
+ * F4 target or grants authority, root release or slot reuse. */
+os64_js_status_t js_owner_runtime_setup(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket, JSOwnerSetupBody *, void *, os64_js_outcome_t *);
+os64_js_status_t js_owner_runtime_activate(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket, os64_js_outcome_t *);
 #endif

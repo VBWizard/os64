@@ -331,13 +331,16 @@ an installed DOM binding.
 slot. It exposes a native handle for private installation, but ordinary
 source/module/task entry returns non-sticky REALM_INSTALLING. Keep its objects
 unexposed until `os64_js_realm_activate` succeeds. Activation requires a
-successful `os64_js_realm_setup` and no pending candidate work; it does not
+successful `os64_js_realm_setup` and no pending candidate microtasks; deferred
+registry cleanup remains on its separate task lane. Activation does not
 open a turn or change the budget. A slot remains consumed if setup fails. Refusal before guard entry (such as
 BUSY or invalid input) leaves the private candidate unchanged for retry or
 explicit retirement. Once the guard starts, failure retires it.
 
 `os64_js_realm_setup` calls a trusted native installer, permits its private
-bootstrap, and drains its candidate-tagged jobs before returning success.
+bootstrap, and drains its candidate-tagged microtasks before returning success.
+With deferred registry task selection enabled, candidate cleanup tasks wait for
+activation and host dispatch; rollback discards both candidate lanes.
 The callback returns OK, ADMISSION_REFUSED with no pending engine exception,
 or EXCEPTION with a pending exception. An ordinary exception/native refusal
 retires the candidate without poisoning healthy siblings; engine memory,
