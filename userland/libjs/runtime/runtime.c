@@ -12,6 +12,7 @@
 #include "os64_js_engine_id.h"
 #include "../intl/intl.h"
 #include "owner_runtime.h"
+#include "ledger.h"
 #include <limits.h>
 
 #define JS_PUBLIC __attribute__((visibility("default")))
@@ -118,6 +119,11 @@ struct os64_js_runtime {
     bool finalization_tasks_enabled, browser_jobs_enabled;
     uint64_t owed_count;
     char source_name[OS64_JS_SOURCE_NAME_CAP];
+    /* The ledger (os64_js_ledger_*), NULL while off; samples every
+     * ledger_period ticks once ledger_profile, the last at ledger_sampled. */
+    ledger_t *ledger;
+    bool ledger_profile;
+    uint64_t ledger_period, ledger_sampled;
 };
 
 uint64_t js_owner_runtime_incarnation(const os64_js_runtime_t *runtime)
@@ -398,10 +404,92 @@ static bool observe(os64_js_runtime_t *runtime)
     return runtime->failure != OS64_JS_OK;
 }
 
+/* ── The ledger's doors (os64_js_ledger_*, js_engine.h) ─────────────────
+ * The engine's hooks (patch 0044) and the runtime's own compile frames
+ * each push a frame on the clock below and pop it when the work ends. */
+JS_PUBLIC uint64_t os64_js_ledger_now(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static void ledger_native_enter(void *opaque, JSCFunctionData *function, int magic)
+{
+    os64_js_runtime_t *runtime = opaque;
+    ledger_push(runtime->ledger, LEDGER_NATIVE, os64_js_ledger_now(), (const void *)function, magic);
+}
+
+static void ledger_script_enter(void *opaque)
+{
+    os64_js_runtime_t *runtime = opaque;
+    ledger_push(runtime->ledger, LEDGER_ENGINE, os64_js_ledger_now(), NULL, 0);
+}
+
+static void ledger_collector_enter(void *opaque)
+{
+    os64_js_runtime_t *runtime = opaque;
+    ledger_push(runtime->ledger, LEDGER_COLLECTOR, os64_js_ledger_now(), NULL, 0);
+}
+
+static void ledger_leave(void *opaque)
+{
+    os64_js_runtime_t *runtime = opaque;
+    ledger_pop(runtime->ledger, os64_js_ledger_now());
+}
+
+static const JSLedgerHooks ledger_hooks = {
+    ledger_native_enter, ledger_leave, ledger_script_enter, ledger_leave,
+    ledger_collector_enter, ledger_leave,
+};
+
+/* A frame the runtime itself opens (a compile); nothing while off. */
+static void ledger_begin(os64_js_runtime_t *runtime, ledger_kind_t kind)
+{
+    if (runtime != NULL && runtime->ledger != NULL)
+        ledger_push(runtime->ledger, kind, os64_js_ledger_now(), NULL, 0);
+}
+
+static void ledger_end(os64_js_runtime_t *runtime)
+{
+    if (runtime != NULL && runtime->ledger != NULL)
+        ledger_pop(runtime->ledger, os64_js_ledger_now());
+}
+
+static void ledger_place_of(const JSFrameLocation *from, ledger_place_t *to)
+{
+    to->function = from->function;
+    os64_strcopy(to->name, sizeof(to->name), from->name);
+    os64_strcopy(to->file, sizeof(to->file), from->file);
+    to->line = from->line;
+    to->column = from->column;
+}
+
+/* The profile's sample, from the interrupt handler, which the engine calls
+ * only while it interprets bytecode: the running function and its caller,
+ * once a period has passed since the last. */
+static void ledger_profile_sample(os64_js_runtime_t *runtime)
+{
+    uint64_t now = os64_js_ledger_now();
+    if (now - runtime->ledger_sampled < runtime->ledger_period || runtime->realm_count == 0)
+        return;
+    runtime->ledger_sampled = now;
+    JSFrameLocation at, caller;
+    ledger_place_t here = {0}, from = {0};
+    if (!JS_GetFrameLocation(runtime->realms[0].context, 0, &at))
+        return;
+    ledger_place_of(&at, &here);
+    if (JS_GetFrameLocation(runtime->realms[0].context, 1, &caller))
+        ledger_place_of(&caller, &from);
+    ledger_sample(runtime->ledger, now, &here, &from);
+}
+
 static int interrupt(JSRuntime *engine, void *opaque)
 {
     (void)engine;
     os64_js_runtime_t *runtime = opaque;
+    if (runtime->ledger != NULL && runtime->ledger_profile)
+        ledger_profile_sample(runtime);
     bool previous = runtime->interrupt_observation;
     runtime->interrupt_observation = true;
     int result = observe(runtime);
@@ -2280,11 +2368,20 @@ static JSValue eval_body(JSContext *context, void *opaque)
         if (!JS_IsException(value)) value = JS_EvalFunction(context, value);
     } else {
 #else
-    if (bytecode == NULL) {
+    if (bytecode == NULL && realm->runtime->ledger == NULL) {
         value = JS_Eval(context, source, length, source_name, JS_EVAL_TYPE_GLOBAL);
+    } else if (bytecode == NULL) {
+        /* Measured: the compile and the run JS_Eval would make as one, made
+         * apart so the ledger can tell them apart. */
+        ledger_begin(realm->runtime, LEDGER_COMPILE);
+        value = JS_Eval(context, source, length, source_name, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+        ledger_end(realm->runtime);
+        if (!JS_IsException(value)) value = JS_EvalFunction(context, value);
     } else {
 #endif
+        ledger_begin(realm->runtime, LEDGER_COMPILE);
         value = prepare(realm, source, length, source_name, bytecode);
+        ledger_end(realm->runtime);
         if (!JS_IsException(value)) value = JS_EvalFunction(context, value);
     }
     return value;
@@ -2969,6 +3066,124 @@ JS_PUBLIC size_t os64_js_heap_peak(const os64_js_runtime_t *runtime)
 JS_PUBLIC size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime)
 {
     return runtime != NULL ? runtime->allocator.charged_bytes : 0;
+}
+
+/* The public kinds are the ledger's, one for one. */
+_Static_assert((int)OS64_JS_LEDGER_ENGINE == (int)LEDGER_ENGINE && (int)OS64_JS_LEDGER_COMPILE == (int)LEDGER_COMPILE &&
+               (int)OS64_JS_LEDGER_COLLECTOR == (int)LEDGER_COLLECTOR && (int)OS64_JS_LEDGER_NATIVE == (int)LEDGER_NATIVE &&
+               (int)OS64_JS_LEDGER_LAYOUT == (int)LEDGER_LAYOUT && (int)OS64_JS_LEDGER_KINDS == (int)LEDGER_KINDS,
+               "os64_js_ledger_kind_t and ledger_kind_t disagree");
+
+JS_PUBLIC os64_js_status_t os64_js_ledger_enable(os64_js_runtime_t *runtime, unsigned flags, uint64_t sample_ticks)
+{
+    if (runtime == NULL || runtime->engine == NULL || (flags & ~OS64_JS_LEDGER_PROFILE) != 0 ||
+        ((flags & OS64_JS_LEDGER_PROFILE) && sample_ticks == 0))
+        return OS64_JS_BAD_ARGUMENT;
+    if (runtime->ledger == NULL) {
+        /* The host's own memory: the ledger measures the engine's heap, so
+         * it is not charged to it. */
+        runtime->ledger = os64_malloc(sizeof(*runtime->ledger));
+        if (runtime->ledger == NULL)
+            return OS64_JS_HOST_FAILURE;
+        os64_memset(runtime->ledger, 0, sizeof(*runtime->ledger));
+        JS_SetLedgerHooks(runtime->engine, &ledger_hooks, runtime);
+    }
+    runtime->ledger_profile = (flags & OS64_JS_LEDGER_PROFILE) != 0;
+    runtime->ledger_period = sample_ticks;
+    runtime->ledger_sampled = os64_js_ledger_now();
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC void os64_js_ledger_disable(os64_js_runtime_t *runtime)
+{
+    if (runtime == NULL || runtime->ledger == NULL)
+        return;
+    if (runtime->engine != NULL)
+        JS_SetLedgerHooks(runtime->engine, NULL, NULL);
+    os64_free(runtime->ledger);
+    runtime->ledger = NULL;
+    runtime->ledger_profile = false;
+}
+
+JS_PUBLIC void os64_js_ledger_reset(os64_js_runtime_t *runtime)
+{
+    if (runtime != NULL && runtime->ledger != NULL)
+        ledger_reset(runtime->ledger, os64_js_ledger_now());
+}
+
+JS_PUBLIC void os64_js_ledger_push(os64_js_runtime_t *runtime, os64_js_ledger_kind_t kind)
+{
+    if (runtime != NULL && runtime->ledger != NULL &&
+        (kind == OS64_JS_LEDGER_ENGINE || kind == OS64_JS_LEDGER_LAYOUT))
+        ledger_push(runtime->ledger, (ledger_kind_t)kind, os64_js_ledger_now(), NULL, 0);
+}
+
+JS_PUBLIC void os64_js_ledger_pop(os64_js_runtime_t *runtime)
+{
+    if (runtime != NULL && runtime->ledger != NULL)
+        ledger_pop(runtime->ledger, os64_js_ledger_now());
+}
+
+JS_PUBLIC bool os64_js_ledger_totals(const os64_js_runtime_t *runtime, os64_js_ledger_totals_t *out)
+{
+    if (out == NULL)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    if (runtime == NULL || runtime->ledger == NULL)
+        return false;
+    const ledger_t *l = runtime->ledger;
+    for (int k = 0; k < LEDGER_KINDS; k++) {
+        out->self[k] = l->self[k];
+        out->count[k] = l->count[k];
+    }
+    out->frames_lost = l->frames_lost;
+    out->callees_lost = l->callees_lost;
+    out->samples = l->samples;
+    out->samples_lost = l->samples_lost;
+    out->open = l->depth;
+    return true;
+}
+
+JS_PUBLIC bool os64_js_ledger_callee(const os64_js_runtime_t *runtime, size_t *cursor, os64_js_ledger_callee_t *out)
+{
+    if (runtime == NULL || runtime->ledger == NULL || cursor == NULL || out == NULL)
+        return false;
+    for (; *cursor < LEDGER_CALLEES; (*cursor)++) {
+        const ledger_callee_t *c = &runtime->ledger->callees[*cursor];
+        if (!c->used || c->calls == 0)
+            continue;
+        *out = (os64_js_ledger_callee_t){c->function, c->magic, c->calls, c->self, c->forced, c->forced_ticks};
+        (*cursor)++;
+        return true;
+    }
+    return false;
+}
+
+static void ledger_place_out(const ledger_place_t *from, os64_js_ledger_place_t *to)
+{
+    to->function = from->function;
+    os64_strcopy(to->name, sizeof(to->name), from->name);
+    os64_strcopy(to->file, sizeof(to->file), from->file);
+    to->line = from->line;
+    to->column = from->column;
+}
+
+JS_PUBLIC bool os64_js_ledger_sample(const os64_js_runtime_t *runtime, size_t *cursor, os64_js_ledger_sample_t *out)
+{
+    if (runtime == NULL || runtime->ledger == NULL || cursor == NULL || out == NULL)
+        return false;
+    for (; *cursor < LEDGER_SAMPLES; (*cursor)++) {
+        const ledger_sample_t *s = &runtime->ledger->profile[*cursor];
+        if (!s->used)
+            continue;
+        ledger_place_out(&s->at, &out->at);
+        ledger_place_out(&s->caller, &out->caller);
+        out->samples = s->samples;
+        out->ticks = s->ticks;
+        (*cursor)++;
+        return true;
+    }
+    return false;
 }
 
 JS_PUBLIC size_t os64_js_heap_headroom(const os64_js_runtime_t *runtime)
@@ -3874,7 +4089,9 @@ static JSModuleDef *module_load(JSContext *context, const char *name, void *opaq
     if (copy == NULL) return NULL;
     if (length != 0) os64_memcpy(copy, bytes, length);
     copy[length] = 0;
+    ledger_begin(runtime, LEDGER_COMPILE);
     JSValue value = JS_Eval(context, copy, length, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    ledger_end(runtime);
     js_free(context, copy);
     if (JS_IsException(value)) return NULL;
     JSModuleDef *m = JS_VALUE_GET_PTR(value);
@@ -4023,6 +4240,7 @@ static os64_js_status_t module_compile(os64_js_realm_t *realm, const char *calle
     const uint8_t *payload = bytecode != NULL ? blob_payload(bytecode->blob, bytecode->blob_length, BLOB_KIND_MODULE,
                                                              name, &payload_length)
                                               : NULL;
+    ledger_begin(runtime, LEDGER_COMPILE);
     if (payload != NULL) {
         value = JS_ReadObject(realm->context, payload, payload_length, JS_READ_OBJ_BYTECODE);
         if (JS_VALUE_GET_TAG(value) == JS_TAG_MODULE) {
@@ -4041,6 +4259,7 @@ static os64_js_status_t module_compile(os64_js_realm_t *realm, const char *calle
         if (!JS_IsException(value) && bytecode != NULL && bytecode->keep)
             blob_keep(realm, value, bytecode, BLOB_KIND_MODULE, name);
     }
+    ledger_end(runtime);
     js_free_rt(runtime->engine, copy);
     if (!JS_IsException(value) &&
         module_meta(realm->context, JS_VALUE_GET_PTR(value), url != NULL ? url : name) < 0) {
@@ -4241,6 +4460,9 @@ JS_PUBLIC void os64_js_destroy_report(os64_js_runtime_t *runtime,
     runtime->active = true;
     runtime->destroying = true;
     runtime->failure = OS64_JS_FAILED_RUNTIME;
+    /* Off before anything is freed: freeing the engine runs a collection,
+     * which would otherwise call the ledger's hook. */
+    os64_js_ledger_disable(runtime);
     for (size_t i = 0; i < runtime->realm_count; i++) runtime->realms[i].hosted = false;
     runtime->router = (os64_js_rejection_router_t){0};
     JS_SetHostPromiseRejectionTracker(runtime->engine, NULL, NULL);

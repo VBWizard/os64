@@ -1,5 +1,5 @@
 include libjs/core.mk
-LIBJS_RUNTIME_OBJS := $(OBJ)/js/runtime/runtime.o $(OBJ)/js/runtime/owner_tickets.o $(OBJ)/js/runtime/owner_incarnation.o $(OBJ)/js/intl/intl.o
+LIBJS_RUNTIME_OBJS := $(OBJ)/js/runtime/runtime.o $(OBJ)/js/runtime/ledger.o $(OBJ)/js/runtime/owner_tickets.o $(OBJ)/js/runtime/owner_incarnation.o $(OBJ)/js/intl/intl.o
 # This private metadata unit needs no prepared engine headers. The standalone
 # target oracle links the same hidden object without loading libjs/QuickJS.
 $(OBJ)/js/runtime/owner_tickets.o: libjs/runtime/owner_tickets.c libjs/runtime/owner_tickets.h \

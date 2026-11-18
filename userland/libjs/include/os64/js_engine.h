@@ -105,6 +105,75 @@ size_t os64_js_heap_peak(const os64_js_runtime_t *runtime);
 /* What the heap holds now, in the same bytes. Readable from a runtime that
  * has failed. 0 for NULL. No engine entry. */
 size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime);
+
+/* THE LEDGER: where the runtime's script time goes, for measuring a page
+ * (JS_SPEED measurement; runtime/ledger.h holds the arithmetic). Off unless
+ * enabled, when it costs the engine one pointer test at each native call,
+ * call into script from C and collection. On, each of those is a frame
+ * timed by os64_js_ledger_now()'s clock, and so is each compile or bytecode
+ * read the runtime makes; a host adds frames of its own with push and pop:
+ * ENGINE around a task it runs, LAYOUT around style and layout script
+ * forced. A frame's own time (its elapsed less its children's) is charged
+ * to its kind, so the kinds add up to the outermost frames' elapsed.
+ * ENGINE is the interpreter and the engine's own C builtins (sort, regular
+ * expressions, JSON, string work), which pass no door; NATIVE is a host
+ * function (libdom's), also charged by callee (function, magic), with the
+ * layouts it forced. With OS64_JS_LEDGER_PROFILE, the interrupt handler
+ * samples the running function and its caller every `sample_ticks` of the
+ * clock, charging each sample the interpreter time since the previous one
+ * and never time inside another kind. Everything here is owner thread and
+ * enters no engine code. */
+typedef enum {
+    OS64_JS_LEDGER_ENGINE,
+    OS64_JS_LEDGER_COMPILE,
+    OS64_JS_LEDGER_COLLECTOR,
+    OS64_JS_LEDGER_NATIVE,
+    OS64_JS_LEDGER_LAYOUT,
+    OS64_JS_LEDGER_KINDS
+} os64_js_ledger_kind_t;
+#define OS64_JS_LEDGER_PROFILE 0x1u
+typedef struct {
+    uint64_t self[OS64_JS_LEDGER_KINDS];   /* own time, in the clock's ticks */
+    uint64_t count[OS64_JS_LEDGER_KINDS];  /* frames closed */
+    uint64_t frames_lost, callees_lost;    /* nested too deep; past a full callee table */
+    uint64_t samples, samples_lost;        /* profile samples taken; past a full table */
+    unsigned open;                         /* frames open now */
+} os64_js_ledger_totals_t;
+typedef struct {
+    const void *function;                  /* the host function, as registered */
+    int magic;
+    uint64_t calls, self, forced, forced_ticks;
+} os64_js_ledger_callee_t;
+typedef struct {
+    const void *function;                  /* identity only; NULL for a native frame */
+    char name[64];
+    char file[128];
+    int line, column;                      /* where the function is defined */
+} os64_js_ledger_place_t;
+typedef struct {
+    os64_js_ledger_place_t at, caller;
+    uint64_t samples, ticks;               /* interpreter time charged */
+} os64_js_ledger_sample_t;
+/* The ledger's clock: the CPU's time-stamp counter. */
+uint64_t os64_js_ledger_now(void);
+/* Starts the ledger (zeroed), or changes its flags and sample period if it
+ * runs. HOST_FAILURE when its memory (the host's, not the engine's heap)
+ * cannot be had; BAD_ARGUMENT for NULL, an unknown flag, or PROFILE with a
+ * zero period. */
+os64_js_status_t os64_js_ledger_enable(os64_js_runtime_t *runtime, unsigned flags, uint64_t sample_ticks);
+/* Stops and frees it. Frames a host left open are dropped. */
+void os64_js_ledger_disable(os64_js_runtime_t *runtime);
+/* Zeroes the totals, rows and samples; frames open stay open from now. */
+void os64_js_ledger_reset(os64_js_runtime_t *runtime);
+/* A host's frame, of kind ENGINE or LAYOUT; nothing when the ledger is off. */
+void os64_js_ledger_push(os64_js_runtime_t *runtime, os64_js_ledger_kind_t kind);
+void os64_js_ledger_pop(os64_js_runtime_t *runtime);
+/* The totals; false (and zeroed) when the ledger is off. */
+bool os64_js_ledger_totals(const os64_js_runtime_t *runtime, os64_js_ledger_totals_t *out);
+/* The next callee row or sample after *cursor (start it at 0); false at
+ * the end or when the ledger is off. Rows come in table order. */
+bool os64_js_ledger_callee(const os64_js_runtime_t *runtime, size_t *cursor, os64_js_ledger_callee_t *out);
+bool os64_js_ledger_sample(const os64_js_runtime_t *runtime, size_t *cursor, os64_js_ledger_sample_t *out);
 /* Remaining engine allowance after the runtime wrapper's storage and current
  * allocator charge. Owner thread, including callbacks; no allocation, GC or
  * failure observation. Readable after failure, but not evidence of health.

@@ -2582,6 +2582,7 @@ static void module_bytecode_cases(void)
 #include "test_js_native_job_failures.inc"
 #include "test_js_host_promise_failures.inc"
 #include "test_js_execution_scopes.inc"
+#include "test_js_ledger.inc"
 #include "test_js_failed_code.inc"
 #include "test_js_failure_records.inc"
 #include "test_js_recovery_barrier.inc"
@@ -3432,6 +3433,11 @@ int main(int argc, char **argv)
         printf("libjs failed code: %u checks, %u failures\n", checks, failures);
         return failures != 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--ledger")) {
+        ledger_cases();
+        printf("libjs ledger: %u checks, %u failures\n", checks, failures);
+        return failures != 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--execution-scopes-only")) {
         execution_scope_cases();
         printf("libjs execution scopes: %u checks, %u failures\n", checks, failures);
@@ -3616,7 +3622,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
-    execution_scope_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases(); owner_scope_failure_cases(); owner_failure_host_cases(); owner_setup_failure_cases(); owner_rejection_host_cases(); owner_task_host_cases(); owner_provider_host_cases();
+    execution_scope_cases(); ledger_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases(); owner_scope_failure_cases(); owner_failure_host_cases(); owner_setup_failure_cases(); owner_rejection_host_cases(); owner_task_host_cases(); owner_provider_host_cases();
     realm_cases(); finalization_task_recovery_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
 
     task_cases();

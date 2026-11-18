@@ -293,6 +293,16 @@
       "path": "patches/0043-global-property-receivers.patch",
       "sha256": "5b67819cea76db23076251fdf8af1cdd50e6df3cdba9ddf87f0bbb1223d39202",
       "reason": "Trace the configured global receiver context and substitute property callback receivers across direct, reference and prototype paths; GroupBy supplies undefined to callbacks."
+    },
+    {
+      "path": "patches/0044-ledger-observers.patch",
+      "sha256": "cc4f689052fe98c4d628f372b0f5b79d3a5138cf598201fdec131bec1562fc83",
+      "reason": "Bracket native invocations, script entered from C, and cycle collection with optional ledger hooks for the JS speed measurement; one pointer test per site when unobserved."
+    },
+    {
+      "path": "patches/0045-frame-location.patch",
+      "sha256": "7e69ef4c4b5d5b88a9d13b2f8defa34331f5db907ff6528935d3f879cc9a7fc4",
+      "reason": "Report the bytecode function at a stack depth (identity, name, defining file/line/column) without allocation, for a sampling profile taken in the interrupt handler."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
