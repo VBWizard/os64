@@ -23,25 +23,22 @@
 //              window canvas's format) at W x H, the way a player will:
 //              sws_scale_frame on a dynamic context (never the legacy
 //              API), threads 1, into a destination avbench owns (64-byte
-//              aligned, more than FFmpeg's routines ask of a buffer, and
-//              rows W * 4 bytes apart, as a canvas's are), from the
-//              decoded frame with its colours filled in (below). Each
-//              frame is converted twice, bilinear and fast, each by its
-//              own scaler and timed apart. FAST is FFmpeg's fast
-//              bilinear only when shrinking: enlarging, libswscale's fast
-//              path writes x86 code of its own into the heap and runs it
+//              aligned, more than FFmpeg's routines ask of a buffer, with
+//              rows padded past W so FFmpeg's unscaled converter, which
+//              works eight pixels at a time, writes every pixel of a row:
+//              canvas_pitch), from the decoded frame with its colours
+//              filled in (below). Each frame is converted twice, bilinear
+//              and fast, each by its own scaler and timed apart. FAST is
+//              FFmpeg's fast bilinear only for a frame wider than W x H,
+//              chosen frame by frame: enlarging, libswscale's fast path
+//              writes x86 code of its own into the heap and runs it
 //              (utils.c, ff_init_hscaler_mmxext), which os64, keeping data
-//              memory unexecutable, ends with a no-execute fault. Enlarged,
-//              the "fast" column is bilinear, and says so (fast=bilinear).
-//              `natural` is the picture's own size: conversion, no scaling.
-//              At a natural width that is not a multiple of eight, FFmpeg's
-//              unscaled converter leaves the last few pixels of each row
-//              unwritten (libmedia's scaler goes round it, media_scale.c
-//              THE UNSCALED EDGE; avbench times FFmpeg's call alone, so its
-//              times stand and its picture does not, -e's CRC included)
+//              memory unexecutable, ends with a no-execute fault. When any
+//              frame enlarged, the "fast" column says fast=bilinear.
+//              `natural` is the picture's own size: conversion, no scaling
 //   -e         with -x: the bilinear conversion in FFmpeg's bit-exact mode,
 //              whose pixels do not depend on which routines FFmpeg chose,
-//              and a CRC-32 over them (every byte of every row)
+//              and a CRC-32 over them (every pixel of every row)
 //   -K crc     with -e: the CRC the converted pixels must give; a different
 //              one exits 4
 //
@@ -293,10 +290,21 @@ static SwsContext *scaler_new(unsigned flags)
     return c;
 }
 
+// The destination's pitch in pixels for `width`: room for a whole last
+// group of eight and as much again. libswscale's unscaled converter
+// (x86/yuv2rgb.c, YUV2RGB_LOOP) works in groups of eight across: given a
+// pitch of exactly the width, it skips the last group, leaving up to seven
+// pixels of a row unwritten; given room, it writes them, and a little past.
+static int canvas_pitch(int width)
+{
+    return ((width + 15) & ~15) + 16;
+}
+
 // The destination: memory avbench owns, in an AVFrame from av_frame_alloc
 // (AVFrame's size is not FFmpeg's ABI, so a frame FFmpeg reads is always
-// one it allocated) that holds no buffer of FFmpeg's. NULL when memory ran
-// out. Its primaries and transfer are set to each source's before each
+// one it allocated) that holds no buffer of FFmpeg's, with rows
+// canvas_pitch apart and room for one row more. NULL when memory ran out.
+// Its primaries and transfer are set to each source's before each
 // conversion (convert).
 static AVFrame *canvas_frame(uint8_t *pixels, int width, int height)
 {
@@ -306,7 +314,7 @@ static AVFrame *canvas_frame(uint8_t *pixels, int width, int height)
     f->height = height;
     f->format = AV_PIX_FMT_BGRA;
     f->data[0] = pixels;
-    f->linesize[0] = width * 4;
+    f->linesize[0] = canvas_pitch(width) * 4;
     f->colorspace = AVCOL_SPC_RGB;
     f->color_range = AVCOL_RANGE_JPEG;
     return f;
@@ -322,16 +330,22 @@ typedef struct {
     // -x
     int scale_width, scale_height;
     bool scale_exact;        // the bilinear figures are the bit-exact scaler's
-    bool fast_is_bilinear;   // enlarging: the fast scaler is bilinear (-x's text)
+    bool fast_is_bilinear;   // some frame enlarged: the fast scaler was bilinear for it (-x's text)
     Cost decode, bilinear, fast, with_bilinear, with_fast;
     uint32_t scale_crc;      // -e
 } Result;
 
 // Both conversions of one decoded frame, timed apart; the bit-exact one's
-// CRC folded in between the clocks. 0, or -1 when the scaler refused.
+// CRC folded in between the clocks. The fast scaler is fast bilinear only
+// for a frame wider than the canvas (-x's text), chosen for each frame, as
+// a stream may change its size (a change of flags rebuilds the scaler's
+// graph); *enlarged says when it was not. 0, or -1 when the scaler refused.
 static int convert(SwsContext *bilinear, SwsContext *fast, AVFrame *canvas, AVFrame *decoded, bool crc_it,
-                   uint32_t *crc, int64_t *bilinear_us, int64_t *fast_us)
+                   uint32_t *crc, int64_t *bilinear_us, int64_t *fast_us, bool *enlarged)
 {
+    unsigned fast_flags = decoded->width > canvas->width ? SWS_FAST_BILINEAR : SWS_BILINEAR;
+    if (fast->flags != fast_flags) fast->flags = fast_flags;
+    if (fast_flags == SWS_BILINEAR) *enlarged = true;
     colour_rule(decoded);
     // Primaries and transfer the same on both sides: the scaler converts
     // neither (THE COLOURS).
@@ -421,13 +435,11 @@ static int bench(const char *path, int mode, long limit, const Scale *scale, Res
         res->scale_width = scale->natural ? dec->width : scale->width;
         res->scale_height = scale->natural ? dec->height : scale->height;
         res->scale_exact = scale->exact;
-        size_t bytes = (size_t)res->scale_width * 4 * (size_t)res->scale_height;
+        size_t bytes = (size_t)canvas_pitch(res->scale_width) * 4 * ((size_t)res->scale_height + 1);
         pixels = os64_malloc_aligned(bytes, 64);
         bilinear = scaler_new(SWS_BILINEAR | (scale->exact ? SWS_BITEXACT | SWS_ACCURATE_RND : 0));
-        // FAST only when shrinking (-x's text: enlarged, FFmpeg's fast path
-        // runs code it writes into the heap).
-        res->fast_is_bilinear = res->scale_width >= dec->width;
-        fast = scaler_new(res->fast_is_bilinear ? SWS_BILINEAR : SWS_FAST_BILINEAR);
+        // Its flags are chosen for each frame (convert).
+        fast = scaler_new(SWS_BILINEAR);
         canvas = pixels ? canvas_frame(pixels, res->scale_width, res->scale_height) : NULL;
         if (!canvas || !bilinear || !fast) { os64_printf("avbench: no memory for the conversion\n"); goto out; }
         os64_memset(pixels, 0, bytes);    // first touches out of the timings
@@ -472,14 +484,14 @@ static int bench(const char *path, int mode, long limit, const Scale *scale, Res
                     // conversion is made untimed, then the frame is timed.
                     if (!warmed) {
                         uint32_t unused = 0;
-                        if (convert(bilinear, fast, canvas, frame, false, &unused, &b_us, &f_us) < 0) {
+                        if (convert(bilinear, fast, canvas, frame, false, &unused, &b_us, &f_us, &res->fast_is_bilinear) < 0) {
                             os64_printf("avbench: the scaler refused %s\n",
                                         av_get_pix_fmt_name((enum AVPixelFormat)frame->format));
                             goto out;
                         }
                         warmed = true;
                     }
-                    if (convert(bilinear, fast, canvas, frame, scale->exact, &scale_crc, &b_us, &f_us) < 0) {
+                    if (convert(bilinear, fast, canvas, frame, scale->exact, &scale_crc, &b_us, &f_us, &res->fast_is_bilinear) < 0) {
                         os64_printf("avbench: conversion failed partway\n");
                         goto out;
                     }
