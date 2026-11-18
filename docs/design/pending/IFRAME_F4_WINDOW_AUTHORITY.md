@@ -96,3 +96,5 @@ export list matches the predecessor, public headers are unchanged, and tracker
 and stale-reference checks pass. No full DOM suite, guest execution or P5
 acceptance is claimed. Executed probes, compiled consumers, mutation recipes,
 source and logs are frozen with a verified SHA-256 manifest.
+
+Implementation: PR #652.
