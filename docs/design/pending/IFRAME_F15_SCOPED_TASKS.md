@@ -1,6 +1,7 @@
 # F15 checked native tasks
 
-Private C1/C2/C4 milestone after scoped rejection consumption (#657).
+Implementation PR **#660**. Private C1/C2/C4 milestone after scoped rejection
+consumption (#657).
 Implementation `abf2606a`; merged-base integration `fe375b1f`.
 Baseline userland `5a67b444` includes the reviewed Proxy receiver correction
 (#656, engine `bcc933c20d304c1d5be5b1cb0e703b9d0f198bc7dc59fdf374050f48f190ca5f`)
