@@ -663,11 +663,17 @@ virtio because its drain waits for the tick.
   (which picture to show, what to skip, when to resync)
   (`os64/media_pictures.h`, `media_clock.h`, `media_pace.h`; VIDEO.md
   §§ 4 and 5 are their tables; `tools/test_media_cores_host.sh` and its
-  mutants). **`gplay file`** is the video player built on them (VIDEO.md
-  § 3, as built in V4): a window, picture and sound in step, paced by
-  the display's frames; `i` shows its readout (the clock, the pace, the
-  queues), and the same numbers print at exit. `/tests/gplaytest` drives
-  it in `testrun` (`gplay --check`, a covered window, a key script);
+  mutants). **libmedia's player** (`os64/media_player.h`, VIDEO.md § 3,
+  as built in V.5.2) runs one media on them: its decoding and picture
+  threads, its queues, its clock and pace, its sound a voice of the
+  program's output; the caller asks at each display frame for the picture
+  due at that blank, and the sound never waits on the caller's thread (a
+  caller that stops asking has its overdue pictures retired by the
+  player). **`gplay file`** is the window over it: picture and sound in
+  step, paced by the display's frames; `i` shows its readout (the clock,
+  the pace, the queues), and the same numbers print at exit.
+  `/tests/gplaytest` drives it in `testrun` (`gplay --check`, a covered
+  window, covered and muted, a key script);
   `tools/pages/sync-720p60.mp4` is the flash-and-beep clip for its sync
   dial (`[` and `]`).
   **yonder plays a page's `<audio>`**, and a

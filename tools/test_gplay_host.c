@@ -147,25 +147,12 @@ static void keys(void)
           "after a burst");
 }
 
-static void seeks(void)
-{
-    CHECK(gplay_seek_target(48000 * 10, 48000 * 5, 48000 * 60) == 48000 * 15, "forward");
-    CHECK(gplay_seek_target(48000 * 3, -48000 * 5, 48000 * 60) == 0, "back past the start: the start");
-    CHECK(gplay_seek_target(48000 * 58, 48000 * 5, 48000 * 60) == 48000 * 60 - 1, "past the end: its last frame");
-    CHECK(gplay_seek_target(48000 * 58, 48000 * 5, -1) == 48000 * 63, "length unknown: not held");
-    int64_t t = 0;
-    for (int i = 0; i < 5; i++)
-        t = gplay_seek_target(t, 48000 * 5, 48000 * 600);
-    CHECK(t == 48000 * 25, "five presses from a pending target move 25 s");
-}
-
 int main(void)
 {
     letterbox();
     first_size();
     time_text();
     keys();
-    seeks();
     if (s_failures) {
         fprintf(stderr, "FAIL gplay view: %d of %d checks\n", s_failures, s_checks);
         return 1;

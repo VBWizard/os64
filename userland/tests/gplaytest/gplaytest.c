@@ -13,7 +13,18 @@
 //      way, mute and unmute, a resize, the readout, the sync dial both ways;
 //   6. the sync clip with /dev/audio held by `play` at the start: gplay is
 //      refused, plays on the monotonic clock, tries again and gets it
-//      (--expect-refusal).
+//      (--expect-refusal);
+//   7. the sync clip covered and muted for its ten seconds: nobody asks
+//      for a frame and nothing is heard, yet the player retires every
+//      picture by the clock and drains its sound, and the end comes;
+//   8. the file with no sound covered: the end comes on the clock alone;
+//   9. a file that opens but is not media (a page) is refused with
+//      exit 2: the player fails its probe and stays gplay's until closed.
+//
+// Steps 2, 7 and 8 are the player's promise that a caller who never asks
+// for a frame does not stop it (os64/media_player.h § A picture nobody asks
+// for): with no frame call there is no other thread of the caller's to
+// keep the queues moving.
 //
 // Timing is no result here: under QEMU's emulation the pictures fall behind
 // and are dropped, skipped and resynced, which is the late policy working.
@@ -115,7 +126,13 @@ static int steps(void)
     r = expect(6, (char *[]){"/bin/gplay", "--check", "--expect-refusal", SYNC, 0}, 0);
     int32_t code = 0;
     os64_wait(holder, &code);
-    return r;
+    if (r != 0)
+        return r;
+    if ((r = expect(7, (char *[]){"/bin/gplay", "--check", "--cover", "--script", "100:mute", SYNC, 0}, 0)) != 0)
+        return r;
+    if ((r = expect(8, (char *[]){"/bin/gplay", "--check", "--cover", PICTURE_ONLY, 0}, 0)) != 0)
+        return r;
+    return expect(9, (char *[]){"/bin/gplay", "--check", "/tests/pages/audio.html", 0}, 2);
 }
 
 int main(void)
