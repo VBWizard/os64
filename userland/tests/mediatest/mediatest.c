@@ -588,7 +588,7 @@ static void pull_all(os64_media_t *m, os64_media_scaler_t *exact, uint32_t *pixe
     int64_t expect_at = -1;
     for (;;) {
         os64_media_got_t got;
-        int r = os64_media_next(m, pcm, 4096, &got);
+        int r = os64_media_next(m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, pcm, 4096, &got);
         if (r != 0) { p->result = r; return; }
         if (got.kind == OS64_MEDIA_GOT_END) return;
         if (got.kind == OS64_MEDIA_GOT_SOUND) {
@@ -751,7 +751,7 @@ static int step_handoff(void)
     bool gone = false;
     while (!gone) {
         os64_media_got_t got;
-        if ((r = os64_media_next(c.m, pcm, 4096, &got)) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
+        if ((r = os64_media_next(c.m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, pcm, 4096, &got)) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
         if (got.kind != OS64_MEDIA_GOT_PICTURE) continue;
         for (;;) {
             os64_lock_acquire(&s_handoff.lock);
@@ -775,7 +775,7 @@ static int step_handoff(void)
     if (tid >= 0) os64_thread_join((int32_t)tid, &joined);
     // The released pictures go back to the decoder at its next call.
     os64_media_got_t got;
-    int again = os64_media_next(c.m, pcm, 4096, &got);
+    int again = os64_media_next(c.m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, pcm, 4096, &got);
     os64_media_counts_t counts;
     os64_media_counts(c.m, &counts);
     clip_close(&c);
@@ -803,7 +803,7 @@ static int step_fast_enlarge(void)
         long converted = 0, refused = 0;
         for (;;) {
             os64_media_got_t got;
-            if (os64_media_next(c.m, NULL, 0, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
+            if (os64_media_next(c.m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, NULL, 0, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
             if (os64_media_scaler_convert(s, got.picture, pixels, kSizes[z][0] * 4) == 0) converted++;
             else refused++;
             os64_media_picture_release(c.m, got.picture);
@@ -840,6 +840,45 @@ static int step_picture_only(void)
     return 0;
 }
 
+// 24: `accept`. The sound taken alone runs to its end, every picture packet
+// read on the way kept undecoded (the clip is far under the bound); then the
+// pictures taken alone are every one, in order, and then the end.
+static int step_accept(void)
+{
+    static int16_t pcm[4096 * 2];
+    Clip c;
+    clip_open(&c, CLIP_AV, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE);
+    long sound = 0, pictures = 0, gaps = 0;
+    int64_t sound_next = 0, expect_at = 0;
+    int r = c.result, sound_end = -1, picture_end = -1;
+    os64_media_got_t got;
+    while (r == 0) {
+        r = os64_media_next(c.m, OS64_MEDIA_WANT_SOUND, pcm, 4096, &got);
+        if (r != 0 || got.kind != OS64_MEDIA_GOT_SOUND) { sound_end = got.kind; break; }
+        if (got.at != sound_next) gaps++;
+        sound_next = got.at + got.frames;
+        sound += got.frames;
+    }
+    os64_media_counts_t counts;
+    os64_media_counts(c.m, &counts);
+    uint32_t kept = counts.picture_listed;
+    while (r == 0) {
+        r = os64_media_next(c.m, OS64_MEDIA_WANT_PICTURE, NULL, 0, &got);
+        if (r != 0 || got.kind != OS64_MEDIA_GOT_PICTURE) { picture_end = got.kind; break; }
+        if (got.picture->at != expect_at) gaps++;
+        expect_at = got.picture->at + PERIOD;
+        pictures++;
+        os64_media_picture_release(c.m, got.picture);
+    }
+    clip_close(&c);
+    if (r != 0 || sound_end != OS64_MEDIA_GOT_END || picture_end != OS64_MEDIA_GOT_END || gaps != 0 ||
+        kept != (uint32_t)PICTURES || pictures != PICTURES || sound < CLIP_SOUND - 1024 || sound > CLIP_SOUND + 1024) {
+        say("accept (pictures kept, pictures)", (long)kept, pictures);
+        return FAIL(24);
+    }
+    return 0;
+}
+
 int main(void)
 {
     int failed = step_threads();      // first: see step 10 above
@@ -856,12 +895,13 @@ int main(void)
     if (!failed) failed = step_handoff();
     if (!failed) failed = step_picture_only();
     if (!failed) failed = step_fast_enlarge();
+    if (!failed) failed = step_accept();
     if (failed) {
         os64_printf("mediatest: FAIL step %d\n", failed & 0xFF);
         return failed;
     }
     os64_printf("mediatest: MP3, WAV and AAC in MP4 to 48 kHz stereo, seeks, a 5.1 fold, two threads; "
-                "H.264 pictures beside their sound, converted, seeked, handed to another thread; "
+                "H.264 pictures beside their sound, converted, seeked, handed to another thread, one kind taken at a time; "
                 "all steps passed\n");
     return PASS;
 }

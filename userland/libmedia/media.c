@@ -10,8 +10,10 @@
 //                                   a picture handle --> the caller
 //
 // One demuxer serves both decoders, because an MP4 interleaves them: each
-// packet read goes to the decoder of its stream, and a stream that was not
-// wanted is discarded at the demuxer, so its packets are never read.
+// packet read goes onto the list of its stream's kind, and each decoder
+// takes its input from its own list (THE PACKET LISTS), so a caller taking
+// one kind for a while is not starved of it by the other. A stream that
+// was not wanted is discarded at the demuxer, so no packet of it is made.
 //
 // THE OUTPUT TIMELINE (os64/media.h) is kept here. Its zero is the FILE'S
 // start: the earliest start of the sound and picture streams (`zero_ts`,
@@ -99,14 +101,28 @@
 
 static const AVRational kOut = { 1, OS64_AUDIO_RATE };
 
+enum { KIND_SOUND = 0, KIND_PICTURE = 1 };   // the packet lists' indices
+
+typedef struct listed {
+    AVPacket *packet;
+    struct listed *next;
+} listed_t;
+
+typedef struct {
+    listed_t *head, *tail;
+    uint32_t packets;
+    uint64_t bytes;
+} packet_list_t;
+
 struct os64_media {
     os64_media_source_t src;
     uint32_t want;                   // OS64_MEDIA_WANT_*
     AVIOContext *io;
     AVFormatContext *format;
-    AVPacket *packet;
+    AVPacket *packet;                // the demuxer's, for one read
     bool reading_done;               // the demuxer has nothing more
-    bool packet_waiting;             // `packet` was refused with EAGAIN and is sent again
+    packet_list_t list[2];           // THE PACKET LISTS, by KIND_*
+    bool flushed[2];                 // that decoder has been told the input ended
 
     int64_t zero_ts;                 // the file's start, in zero_tb
     AVRational zero_tb;
@@ -350,64 +366,138 @@ static void find_zero(os64_media_t *m, int sound, int picture)
 
 // ---------------------------------------------------------------- the demuxer
 
-// One packet from the demuxer to the decoder of its stream: 0 when one was
-// sent (or dropped: a stream nothing decodes, a damaged packet, a picture
-// before a resync's keyframe), or the demuxer's end reached; negative on
-// an error. A packet a decoder refuses with EAGAIN waits in `packet` and
-// goes first next time, after the decoder's output has been received.
+// THE PACKET LISTS. Every packet read is put on the list of its kind, and
+// each decoder takes its input from its own list, in the file's order. So
+// a caller that takes only one kind for a while (os64_media_next's
+// `accept`: its picture queue is full, say) is not starved of it by the
+// other: the demuxer reads on past the other kind's packets, which wait on
+// their list, undecoded, until that kind is taken again. Once a list's
+// packet data reaches LIST_BYTES, the kind not being taken must be taken
+// before the demuxer reads on (OS64_MEDIA_GOT_FULL), so a list passes the
+// bound by one packet at most; the bookkeeping beside each packet is not
+// counted. Eight MiB is some five seconds of a 1440p60 H.264 picture and
+// minutes of any sound. A packet a decoder refuses
+// (EAGAIN) goes back to the front of its list, to be sent again after the
+// decoder's output has been received. At the demuxer's end each decoder is
+// told the input has ended once its list is empty.
+#define LIST_BYTES (8u << 20)
+
+static int list_push(packet_list_t *l, AVPacket *owned, bool front)
+{
+    listed_t *e = os64_malloc(sizeof(*e));
+    if (e == NULL) return OS64_MEDIA_NO_MEMORY;
+    e->packet = owned;
+    e->next = NULL;
+    if (front) {
+        e->next = l->head;
+        l->head = e;
+        if (l->tail == NULL) l->tail = e;
+    } else {
+        if (l->tail != NULL) l->tail->next = e;
+        else l->head = e;
+        l->tail = e;
+    }
+    l->packets++;
+    l->bytes += (uint64_t)owned->size;
+    return 0;
+}
+
+// The front packet, now the caller's (av_packet_free), or NULL.
+static AVPacket *list_pop(packet_list_t *l)
+{
+    listed_t *e = l->head;
+    if (e == NULL) return NULL;
+    l->head = e->next;
+    if (l->head == NULL) l->tail = NULL;
+    l->packets--;
+    l->bytes -= (uint64_t)e->packet->size;
+    AVPacket *p = e->packet;
+    os64_free(e);
+    return p;
+}
+
+static void list_clear(packet_list_t *l)
+{
+    AVPacket *p;
+    while ((p = list_pop(l)) != NULL) av_packet_free(&p);
+}
+
+// One packet from the demuxer onto the list of its kind: 0 when one was
+// listed, or dropped (a stream nothing decodes, a picture before a
+// resync's keyframe), or the demuxer's end was reached; negative on an
+// error.
 static int read_packet(os64_media_t *m)
 {
-    if (!m->packet_waiting) {
-        int r = av_read_frame(m->format, m->packet);
-        if (r == AVERROR_EOF) {
-            m->reading_done = true;
-            // Each decoder is told the input has ended, and gives what it
-            // still holds.
-            if (m->codec != NULL) {
-                r = avcodec_send_packet(m->codec, NULL);
-                if (r < 0 && r != AVERROR_EOF) return OS64_MEDIA_DECODE;
-            }
-            if (m->pcodec != NULL) {
-                r = avcodec_send_packet(m->pcodec, NULL);
-                if (r < 0 && r != AVERROR_EOF) return OS64_MEDIA_DECODE;
-            }
-            return 0;
-        }
-        if (r < 0) return r == AVERROR(EIO) ? OS64_MEDIA_IO : OS64_MEDIA_DECODE;
+    int r = av_read_frame(m->format, m->packet);
+    if (r == AVERROR_EOF) {
+        m->reading_done = true;
+        return 0;
     }
-    AVCodecContext *to = NULL;
+    if (r < 0) return r == AVERROR(EIO) ? OS64_MEDIA_IO : OS64_MEDIA_DECODE;
+    int kind;
     if (m->codec != NULL && m->packet->stream_index == m->stream) {
-        if (!m->packet_waiting) m->counts.sound_packets++;
-        to = m->codec;
+        m->counts.sound_packets++;
+        kind = KIND_SOUND;
     } else if (m->pcodec != NULL && m->packet->stream_index == m->pstream) {
-        if (!m->packet_waiting) m->counts.picture_packets++;
+        m->counts.picture_packets++;
+        kind = KIND_PICTURE;
         if (m->resync) {
             if (!(m->packet->flags & AV_PKT_FLAG_KEY)) {
                 m->counts.pictures_resync++;
                 av_packet_unref(m->packet);
-                m->packet_waiting = false;   // it was the waiting one, if one waited: gone now
                 return 0;
             }
-            // The keyframe: what the decoder holds is from before it.
-            avcodec_flush_buffers(m->pcodec);
+            // The keyframe: decoding starts again from it (the decoder was
+            // flushed when the resync was asked for).
             m->resync = false;
         }
-        to = m->pcodec;
     } else {
         av_packet_unref(m->packet);
         return 0;
     }
-    int r = avcodec_send_packet(to, m->packet);
-    if (r == AVERROR(EAGAIN)) {
-        m->packet_waiting = true;    // receive what it has, then this packet again
-        return 0;
+    AVPacket *owned = av_packet_alloc();
+    if (owned == NULL) {
+        av_packet_unref(m->packet);
+        return OS64_MEDIA_NO_MEMORY;
     }
-    m->packet_waiting = false;
-    av_packet_unref(m->packet);
+    av_packet_move_ref(owned, m->packet);
+    if ((r = list_push(&m->list[kind], owned, false)) < 0) av_packet_free(&owned);
+    return r;
+}
+
+// Input for the decoder of `kind`, which wants it: its next listed packet,
+// or, its list empty at the demuxer's end, the news that the input has
+// ended. 0 when the decoder was given something, or has already been given
+// everything (its step then sees the end); NEED_INPUT when its list is
+// empty and the demuxer must be read; negative on an error.
+static int feed(os64_media_t *m, int kind)
+{
+    AVCodecContext *c = kind == KIND_SOUND ? m->codec : m->pcodec;
+    AVPacket *p = list_pop(&m->list[kind]);
+    if (p == NULL) {
+        if (!m->reading_done) return NEED_INPUT;
+        if (m->flushed[kind]) return 0;     // nothing more to give; the step sees the end
+        m->flushed[kind] = true;
+        int r = avcodec_send_packet(c, NULL);
+        return r < 0 && r != AVERROR_EOF ? OS64_MEDIA_DECODE : 0;
+    }
+    int r = avcodec_send_packet(c, p);
+    if (r == AVERROR(EAGAIN)) {
+        // Sent again after the decoder's output has been received.
+        if ((r = list_push(&m->list[kind], p, true)) < 0) av_packet_free(&p);
+        return r;
+    }
+    av_packet_free(&p);
     // Damaged media is skipped, as players do (the decoder says so in the
     // error text); only a refusal of a different kind ends the decode.
     if (r < 0 && r != AVERROR_INVALIDDATA) return OS64_MEDIA_DECODE;
     return 0;
+}
+
+// Whether the decoder of `kind` has been given everything it ever will.
+static bool input_ended(const os64_media_t *m, int kind)
+{
+    return m->flushed[kind] && m->list[kind].head == NULL;
 }
 
 // ---------------------------------------------------------------- the sound
@@ -488,7 +578,7 @@ static int sound_step(os64_media_t *m)
         // finds it: in a packet it was sent, or in the rest of one it was
         // still working through. It says so in the error text.
         if (r == AVERROR_INVALIDDATA) return 1;
-        if (r == AVERROR(EAGAIN) && !m->reading_done) return NEED_INPUT;
+        if (r == AVERROR(EAGAIN) && !input_ended(m, KIND_SOUND)) return NEED_INPUT;
         // The end, or a decoder that never reports its end once its input has.
         if (r != AVERROR_EOF && r != AVERROR(EAGAIN)) return OS64_MEDIA_DECODE;
         m->decoding_done = true;
@@ -510,8 +600,11 @@ static int refill(os64_media_t *m)
     m->out_at = m->out_len = 0;
     while (m->out_len == 0) {
         int r = sound_step(m);
-        if (r == NEED_INPUT) r = read_packet(m);
-        else if (r == 0) return 0;
+        if (r == 0) return 0;
+        if (r == NEED_INPUT) {
+            r = feed(m, KIND_SOUND);
+            if (r == NEED_INPUT) r = read_packet(m);
+        }
         if (r < 0) return r;
     }
     return 1;
@@ -620,7 +713,7 @@ static int picture_step(os64_media_t *m)
 {
     int r = avcodec_receive_frame(m->pcodec, m->pframe);
     if (r == AVERROR_INVALIDDATA) return 1;
-    if (r == AVERROR(EAGAIN) && !m->reading_done) return NEED_INPUT;
+    if (r == AVERROR(EAGAIN) && !input_ended(m, KIND_PICTURE)) return NEED_INPUT;
     if (r == AVERROR_EOF || r == AVERROR(EAGAIN)) {
         // The end: a seek's held picture is the one showing at a target
         // past the last picture.
@@ -664,13 +757,18 @@ static int picture_step(os64_media_t *m)
 
 // ---------------------------------------------------------------- one puller
 
-int os64_media_next(os64_media_t *m, int16_t *pcm, uint32_t cap, os64_media_got_t *got)
+int os64_media_next(os64_media_t *m, uint32_t accept, int16_t *pcm, uint32_t cap, os64_media_got_t *got)
 {
-    if (m == NULL || got == NULL || (m->codec != NULL && (pcm == NULL || cap == 0))) return OS64_MEDIA_BAD_ARGS;
+    if (m == NULL || got == NULL || accept == 0 ||
+        (accept & ~(OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE)) != 0)
+        return OS64_MEDIA_BAD_ARGS;
+    bool sound = m->codec != NULL && (accept & OS64_MEDIA_WANT_SOUND);
+    bool picture = m->pcodec != NULL && (accept & OS64_MEDIA_WANT_PICTURE);
+    if (sound && (pcm == NULL || cap == 0)) return OS64_MEDIA_BAD_ARGS;
     os64_memset(got, 0, sizeof(*got));
     drain_released(m);
     for (;;) {
-        if (m->ready[0] != NULL) {
+        if (picture && m->ready[0] != NULL) {
             got->kind = OS64_MEDIA_GOT_PICTURE;
             got->picture = &m->ready[0]->pub;
             m->ready[0] = m->ready[1];
@@ -679,7 +777,7 @@ int os64_media_next(os64_media_t *m, int16_t *pcm, uint32_t cap, os64_media_got_
             m->counts.pictures_out++;
             return 0;
         }
-        if (m->out_at < m->out_len) {
+        if (sound && m->out_at < m->out_len) {
             uint32_t n = m->out_len - m->out_at;
             if (n > cap) n = cap;
             os64_memcpy(pcm, m->out + 2 * m->out_at, (size_t)n * 4);
@@ -690,27 +788,46 @@ int os64_media_next(os64_media_t *m, int16_t *pcm, uint32_t cap, os64_media_got_
             m->position += n;
             return 0;
         }
-        m->out_at = m->out_len = 0;
-        // Each decoder in turn gives what it has; a packet is read only when
-        // every one still decoding wants input.
-        bool want_input = false, moved = false;
-        if (m->pcodec != NULL && !m->picture_done) {
+        if (m->out_at == m->out_len) m->out_at = m->out_len = 0;
+        // Each decoder taken in turn gives what it has, fed from its own
+        // list; the demuxer is read only when one of them wants input and
+        // its list is empty.
+        bool want_read = false, moved = false;
+        if (picture && !m->picture_done) {
             int r = picture_step(m);
-            if (r == NEED_INPUT) want_input = true;
+            if (r == NEED_INPUT && (r = feed(m, KIND_PICTURE)) == NEED_INPUT) want_read = true;
             else if (r < 0) return r;
             else moved = true;
             if (m->ready[0] != NULL) continue;
         }
-        if (m->codec != NULL) {
+        if (sound) {
             int r = sound_step(m);
-            if (r == NEED_INPUT) want_input = true;
-            else if (r < 0) return r;
-            else if (r == 1) moved = true;
+            if (r == NEED_INPUT) {
+                if ((r = feed(m, KIND_SOUND)) == NEED_INPUT) want_read = true;
+                else if (r < 0) return r;
+                else moved = true;
+            } else if (r < 0) {
+                return r;
+            } else if (r == 1) {
+                moved = true;
+            }
             if (m->out_len > 0) continue;
         }
         if (moved) continue;
-        if (!want_input) {
+        if (!want_read) {
             got->kind = OS64_MEDIA_GOT_END;
+            return 0;
+        }
+        // A kind not being taken whose list is full must be taken before the
+        // demuxer reads on (THE PACKET LISTS).
+        if (!sound && m->codec != NULL && m->list[KIND_SOUND].bytes >= LIST_BYTES) {
+            got->kind = OS64_MEDIA_GOT_FULL;
+            got->full = OS64_MEDIA_WANT_SOUND;
+            return 0;
+        }
+        if (!picture && m->pcodec != NULL && m->list[KIND_PICTURE].bytes >= LIST_BYTES) {
+            got->kind = OS64_MEDIA_GOT_FULL;
+            got->full = OS64_MEDIA_WANT_PICTURE;
             return 0;
         }
         int r = read_packet(m);
@@ -755,7 +872,17 @@ int os64_media_picture_resync(os64_media_t *m)
     m->seek_held = NULL;
     m->seek_picture = -1;
     avcodec_flush_buffers(m->pcodec);
-    m->resync = true;
+    // Picture packets already read and listed (THE PACKET LISTS) are
+    // dropped, undecoded, up to the first keyframe among them, which is
+    // where decoding starts again; with none listed, the resync waits for
+    // one from the demuxer (read_packet).
+    packet_list_t *l = &m->list[KIND_PICTURE];
+    while (l->head != NULL && !(l->head->packet->flags & AV_PKT_FLAG_KEY)) {
+        AVPacket *p = list_pop(l);
+        av_packet_free(&p);
+        m->counts.pictures_resync++;
+    }
+    m->resync = l->head == NULL;
     return 0;
 }
 
@@ -766,6 +893,10 @@ void os64_media_counts(const os64_media_t *m, os64_media_counts_t *out)
     if (m == NULL) return;
     *out = m->counts;
     out->pictures_held = m->pictures_given - m->pictures_returned;
+    out->sound_listed = m->list[KIND_SOUND].packets;
+    out->sound_listed_bytes = m->list[KIND_SOUND].bytes;
+    out->picture_listed = m->list[KIND_PICTURE].packets;
+    out->picture_listed_bytes = m->list[KIND_PICTURE].bytes;
 }
 
 // ---------------------------------------------------------------- open, seek, close
@@ -1131,7 +1262,10 @@ int os64_media_seek(os64_media_t *m, int64_t frame)
         return OS64_MEDIA_CANNOT_SEEK;
     }
     av_packet_unref(m->packet);
-    m->packet_waiting = m->reading_done = false;
+    // What the lists hold is from the old place.
+    list_clear(&m->list[KIND_SOUND]);
+    list_clear(&m->list[KIND_PICTURE]);
+    m->reading_done = m->flushed[KIND_SOUND] = m->flushed[KIND_PICTURE] = false;
     if (m->codec != NULL) {
         avcodec_flush_buffers(m->codec);
         m->decoding_done = m->tail_done = false;
@@ -1167,6 +1301,8 @@ void os64_media_close(os64_media_t *m)
     // keeps its buffer alive after the decoder is gone).
     drain_released(m);
     drop_unready(m);
+    list_clear(&m->list[KIND_SOUND]);
+    list_clear(&m->list[KIND_PICTURE]);
     avcodec_free_context(&m->codec);
     avcodec_free_context(&m->pcodec);
     avformat_close_input(&m->format);     // NULL already when open_input failed
