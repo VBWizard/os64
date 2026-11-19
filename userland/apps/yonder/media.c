@@ -1169,6 +1169,9 @@ void yonder_media_play(yonder_media_t *m)
     os64_lock_acquire(&m->lock);
     m->play = true;
     voice_asks_locked(m);
+    // A tail heard through while paused (it played out under other sounds)
+    // is an end the output will not tell again: it is read now.
+    voice_look(m);
     ring_decoder_locked(m);
     os64_lock_release(&m->lock);
     ring_audio();
