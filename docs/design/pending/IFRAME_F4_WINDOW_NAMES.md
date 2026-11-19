@@ -1,5 +1,7 @@
 # F4d — Window names and descriptor integration
 
+Implementation PR **#676**, based on merged userland `92dcdc0e`.
+
 Private origin-bearing bindings expose live Window named properties through a
 `WindowProperties` object between `Window.prototype` and
 `EventTarget.prototype`. The raw global remains the ordinary storage object;
@@ -74,7 +76,7 @@ structure field is introduced. Engine identity and public ABI stay unchanged.
 
 ## Added obligation
 
-**ADDED 2026-11-19 — F.4.41:** this audit found no `Window.name` member or
+**ADDED 2026-11-19 in #676 — F.4.41:** this audit found no `Window.name` member or
 native context rename path. F.4c explicitly admits immutable names with a
 255-byte cap. Script-facing mutable names need their own charged ownership,
 conversion/security, rollback and duplicate-lookup proofs. They remain a
@@ -115,3 +117,7 @@ Matching target libdom, Yonder, js and DOM realm-fixture builds pass, as do
 source manifest/header, target allocator/global/visibility, tracker and
 stale-reference checks. The dynamic function export set remains 153 public
 DOM functions; the two linker base/slot symbols are not API functions.
+
+The final rebase includes video PR #674. Its media-clock/player changes do not
+alter the DOM/runtime/host-fixture sources used by the sanitizer receipts;
+the matching target builds pass again on that base.
