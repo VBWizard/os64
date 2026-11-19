@@ -907,6 +907,7 @@ typedef struct {
     uint32_t canvas_layout;               // the layout serial it was drawn under
     bool frame_asked;
     bool dirty;                           // the canvas needs drawing and publishing
+    uint8_t key_seq;                      // an arrow's burst, part read (gplay_key)
 } view_t;
 
 static void readout_lines(player_t *p, char lines[][96], uint32_t *count, int64_t now)
@@ -1360,7 +1361,9 @@ static int run(player_t *p, view_t *v, const char *name)
             }
             break;
         case OS64_GUI_EVENT_KEY_DOWN:
-            do_key(p, v, gplay_key(ev.key.ascii, ev.key.scancode, (ev.key.modifiers & OS64_GUI_MOD_SHIFT) != 0),
+            do_key(p, v,
+                   gplay_key(&v->key_seq, ev.key.ascii, ev.key.scancode,
+                             (ev.key.modifiers & OS64_GUI_MOD_SHIFT) != 0),
                    false, &c);
             break;
         case OS64_GUI_EVENT_WINDOW_RESIZE:

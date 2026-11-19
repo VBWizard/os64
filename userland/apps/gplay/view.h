@@ -47,8 +47,13 @@ typedef enum {
     GPLAY_KEY_QUIT,          // q, Escape
 } gplay_key_t;
 
-// From a key-down's character, PS/2 set-1 make code and Shift.
-gplay_key_t gplay_key(char ascii, uint8_t scancode, bool shift);
+// From a key-down's character, its key's code and Shift. An arrow arrives as
+// three key-downs, ESC '[' and a letter (the VT100's bytes, from a PS/2 and
+// a USB keyboard alike, each carrying the arrow's own code and modifiers),
+// so what has been seen of a burst is kept in `*seq` between calls, zero to
+// begin with. The Escape key itself is told from a burst's ESC by its code:
+// PS/2 set 1's make code 0x01, or USB's usage 0x29.
+gplay_key_t gplay_key(uint8_t *seq, char ascii, uint8_t scancode, bool shift);
 
 // Where a relative seek of `delta` frames lands: from `base` (the pending
 // target while a seek is under way, else the clock), held to 0 and, when the

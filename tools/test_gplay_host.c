@@ -84,20 +84,67 @@ static void time_text(void)
     CHECK(gplay_time_text(48000, small, 0) == 0, "no room at all");
 }
 
+// One key press as the keyboard sends it: an arrow (`final` a letter) is
+// three key-downs, ESC '[' final, each with the arrow's own code; any other
+// key is one. Answers what the press asked for, and that nothing before its
+// last key-down asked for anything.
+static gplay_key_t press(uint8_t *seq, const char *keys, uint8_t code, bool shift)
+{
+    gplay_key_t k = GPLAY_KEY_NONE;
+    for (const char *c = keys; *c; c++) {
+        if (k != GPLAY_KEY_NONE)
+            return (gplay_key_t)-1;           // asked before the press ended
+        k = gplay_key(seq, *c, code, shift);
+    }
+    return k;
+}
+
 static void keys(void)
 {
-    CHECK(gplay_key(' ', 0x39, false) == GPLAY_KEY_PAUSE, "space");
-    CHECK(gplay_key(0, 0x4B, false) == GPLAY_KEY_BACK && gplay_key(0, 0x4B, true) == GPLAY_KEY_BACK_FAR, "left");
-    CHECK(gplay_key(0, 0x4D, false) == GPLAY_KEY_FORWARD && gplay_key(0, 0x4D, true) == GPLAY_KEY_FORWARD_FAR,
-          "right");
-    CHECK(gplay_key(0, 0x48, false) == GPLAY_KEY_LOUDER && gplay_key(0, 0x50, false) == GPLAY_KEY_SOFTER, "up, down");
-    CHECK(gplay_key('m', 0x32, false) == GPLAY_KEY_MUTE && gplay_key('M', 0x32, true) == GPLAY_KEY_MUTE, "m");
-    CHECK(gplay_key('i', 0x17, false) == GPLAY_KEY_READOUT, "i");
-    CHECK(gplay_key('[', 0x1A, false) == GPLAY_KEY_SOUND_EARLIER && gplay_key(']', 0x1B, false) == GPLAY_KEY_SOUND_LATER,
+    uint8_t s = 0;
+    CHECK(gplay_key(&s, ' ', 0x39, false) == GPLAY_KEY_PAUSE, "space");
+    CHECK(gplay_key(&s, 'm', 0x32, false) == GPLAY_KEY_MUTE && gplay_key(&s, 'M', 0x32, true) == GPLAY_KEY_MUTE, "m");
+    CHECK(gplay_key(&s, 'i', 0x17, false) == GPLAY_KEY_READOUT, "i");
+    CHECK(gplay_key(&s, '[', 0x1A, false) == GPLAY_KEY_SOUND_EARLIER &&
+              gplay_key(&s, ']', 0x1B, false) == GPLAY_KEY_SOUND_LATER,
           "the sync dial");
-    CHECK(gplay_key('q', 0x10, false) == GPLAY_KEY_QUIT && gplay_key(27, 0x01, false) == GPLAY_KEY_QUIT &&
-          gplay_key(0, 0x01, false) == GPLAY_KEY_QUIT, "q and Escape");
-    CHECK(gplay_key('x', 0x2D, false) == GPLAY_KEY_NONE && gplay_key(0, 0x3B, false) == GPLAY_KEY_NONE, "others");
+    CHECK(gplay_key(&s, 'q', 0x10, false) == GPLAY_KEY_QUIT, "q");
+    CHECK(gplay_key(&s, 27, 0x01, false) == GPLAY_KEY_QUIT && s == 0, "Escape, PS/2");
+    CHECK(gplay_key(&s, 27, 0x29, false) == GPLAY_KEY_QUIT && s == 0, "Escape, USB");
+    CHECK(gplay_key(&s, 'x', 0x2D, false) == GPLAY_KEY_NONE && gplay_key(&s, 0, 0x3B, false) == GPLAY_KEY_NONE,
+          "others");
+
+    // The arrows, as both keyboards send them: PS/2 make codes, then USB
+    // usages (whose Left, 0x50, is PS/2's Down, and Down's 0x51 PS/2's
+    // Page Down: the code must never decide an arrow).
+    static const struct { uint8_t ps2, usb; char final; gplay_key_t plain, shifted; } arrows[] = {
+        {0x4B, 0x50, 'D', GPLAY_KEY_BACK, GPLAY_KEY_BACK_FAR},
+        {0x4D, 0x4F, 'C', GPLAY_KEY_FORWARD, GPLAY_KEY_FORWARD_FAR},
+        {0x48, 0x52, 'A', GPLAY_KEY_LOUDER, GPLAY_KEY_LOUDER},
+        {0x50, 0x51, 'B', GPLAY_KEY_SOFTER, GPLAY_KEY_SOFTER},
+    };
+    for (size_t i = 0; i < sizeof(arrows) / sizeof(arrows[0]); i++) {
+        char burst[4] = {27, '[', arrows[i].final, 0};
+        for (int kbd = 0; kbd < 2; kbd++) {
+            uint8_t code = kbd ? arrows[i].usb : arrows[i].ps2;
+            CHECK(press(&s, burst, code, false) == arrows[i].plain && s == 0, "an arrow");
+            CHECK(press(&s, burst, code, true) == arrows[i].shifted && s == 0, "an arrow with Shift");
+        }
+    }
+    // Keys with bursts gplay has no use for leave nothing behind.
+    CHECK(press(&s, "\x1b[H", 0x47, false) == GPLAY_KEY_NONE && s == 0, "Home");
+    CHECK(press(&s, "\x1b[5~", 0x49, false) == GPLAY_KEY_NONE && s == 0, "Page Up");
+    CHECK(press(&s, "\x1b[3~", 0x4C, false) == GPLAY_KEY_NONE && s == 0, "Delete (USB)");
+    // The '[' of a burst is not the sync dial, nor its 'D' anything else.
+    CHECK(press(&s, "\x1b[D", 0x1A, false) == GPLAY_KEY_BACK, "a burst whose code is '[''s");
+    // An ESC with a key's code that is not Escape, followed by something
+    // other than '[': that key is read on its own.
+    CHECK(gplay_key(&s, 27, 0x4B, false) == GPLAY_KEY_NONE && gplay_key(&s, 'q', 0x10, false) == GPLAY_KEY_QUIT &&
+              s == 0,
+          "a stray ESC");
+    // After a press, the next key is read fresh.
+    CHECK(press(&s, "\x1b[C", 0x4D, false) == GPLAY_KEY_FORWARD && gplay_key(&s, ' ', 0x39, false) == GPLAY_KEY_PAUSE,
+          "after a burst");
 }
 
 static void seeks(void)

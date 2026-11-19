@@ -85,8 +85,43 @@ size_t gplay_time_text(int64_t frames, char *out, size_t cap)
     return len;
 }
 
-gplay_key_t gplay_key(char ascii, uint8_t scancode, bool shift)
+#define SEQ_IDLE 0
+#define SEQ_ESC 1                             // a burst's ESC seen
+#define SEQ_CSI 2                             // ESC '[' seen
+#define ESC_KEY_PS2 0x01
+#define ESC_KEY_USB 0x29
+
+gplay_key_t gplay_key(uint8_t *seq, char ascii, uint8_t scancode, bool shift)
 {
+    if (*seq == SEQ_CSI) {
+        *seq = SEQ_IDLE;
+        switch (ascii) {
+        case 'A':
+            return GPLAY_KEY_LOUDER;
+        case 'B':
+            return GPLAY_KEY_SOFTER;
+        case 'C':
+            return shift ? GPLAY_KEY_FORWARD_FAR : GPLAY_KEY_FORWARD;
+        case 'D':
+            return shift ? GPLAY_KEY_BACK_FAR : GPLAY_KEY_BACK;
+        default:
+            // A key gplay has no use for (Home, End, or the digit of
+            // ESC [ n ~, whose '~' then reads as a key of no use either).
+            return GPLAY_KEY_NONE;
+        }
+    }
+    if (*seq == SEQ_ESC) {
+        *seq = ascii == '[' ? SEQ_CSI : SEQ_IDLE;
+        if (*seq == SEQ_CSI)
+            return GPLAY_KEY_NONE;
+        // Not a burst after all: this key is read on its own.
+    }
+    if (ascii == 27) {
+        if (scancode == ESC_KEY_PS2 || scancode == ESC_KEY_USB)
+            return GPLAY_KEY_QUIT;
+        *seq = SEQ_ESC;
+        return GPLAY_KEY_NONE;
+    }
     switch (ascii) {
     case ' ':
         return GPLAY_KEY_PAUSE;
@@ -98,26 +133,11 @@ gplay_key_t gplay_key(char ascii, uint8_t scancode, bool shift)
         return GPLAY_KEY_READOUT;
     case 'q':
     case 'Q':
-    case 27:
         return GPLAY_KEY_QUIT;
     case '[':
         return GPLAY_KEY_SOUND_EARLIER;
     case ']':
         return GPLAY_KEY_SOUND_LATER;
-    default:
-        break;
-    }
-    switch (scancode) {
-    case 0x01:
-        return GPLAY_KEY_QUIT;
-    case 0x4B:
-        return shift ? GPLAY_KEY_BACK_FAR : GPLAY_KEY_BACK;
-    case 0x4D:
-        return shift ? GPLAY_KEY_FORWARD_FAR : GPLAY_KEY_FORWARD;
-    case 0x48:
-        return GPLAY_KEY_LOUDER;
-    case 0x50:
-        return GPLAY_KEY_SOFTER;
     default:
         return GPLAY_KEY_NONE;
     }
