@@ -103,9 +103,10 @@ typedef struct os64_media_output_voice {
                                     // that flushes its queue clears it (what it said is of the old queue)
     bool unwritten;                 // frames taken from the queue are not yet in the device (an end waits)
     int64_t position;               // with no clock: the media frame the ear is at, -1 until known
-    bool rewind;                    // with no clock: frames of this voice still in the device were lost (a
-    int64_t rewind_to;              // long pause gave it back, or the voice was put out of a full mix); the
-                                    // owner may go back to `rewind_to` and clear it
+    bool rewind;                    // frames of this voice still in the device were let go by the output's
+    int64_t rewind_to;              // choice (a long pause's close, a resume's flush, a full mix); the owner
+                                    // clears it and may go back: with no clock to `rewind_to` (where the ear
+                                    // was), with a clock to where its clock stands
     uint32_t delay_us;              // the sink's reported delay, from the last position read
     bool delay_known;
     uint64_t written, dropped;      // frames written to the device; frames let go unheard

@@ -273,10 +273,32 @@ static void carry_done(round_t *r, uint32_t n)
 // The device's counters begin again (an open, a flush, a lost generation,
 // a close): no voice has a frame in the stream, and a carry is let go, each
 // voice's part of it counted dropped rather than written.
-static void voices_restart(device_t *d, round_t *r, uint32_t n, int64_t now)
+// The output is about to let go of a voice's frames still in the device by
+// its own choice (a long pause's close, a resume's flush, a full mix): the
+// owner is told, so the frames can be had again (`rewind`). The voice's lock
+// held.
+static void tell_rewind_locked(os64_media_output_voice_t *v)
+{
+    if (v->remove || v->priv.anchors.anchors == 0 || (v->clock == NULL && v->position < 0))
+        return;
+    v->rewind = true;
+    v->rewind_to = v->position;
+    look(v);
+}
+
+// `told`: the output chose to let go of what the device held, and each voice
+// not playing is told to rewind (a playing one's frames there were heard, or
+// are from before its own flush); otherwise it was lost (a refusal, a
+// failure, a sink that changed) or nobody's.
+static void voices_restart(device_t *d, round_t *r, uint32_t n, int64_t now, bool told)
 {
     for (uint32_t i = 0; i < n; i++) {
         os64_media_output_voice_t *v = r[i].v;
+        if (told && !r[i].plays) {
+            os64_lock_acquire(v->lock);
+            tell_rewind_locked(v);
+            os64_lock_release(v->lock);
+        }
         uint32_t lost = d->carry_frames > 0 ? carried(d, v) : 0;
         v->priv.pieces = 0;
         v->priv.stale = false;
@@ -398,14 +420,7 @@ static uint32_t members_locked(os64_media_output_t *o, round_t *r)
                 v->sounding = false;
                 look(v);
             }
-            // Its frames still in the device are lost with its anchors: a
-            // voice with no clock is told where its ear was, as at a long
-            // pause's close. (One with a clock goes on from its clock.)
-            if (v->clock == NULL && !v->remove && v->position >= 0 && v->priv.anchors.anchors > 0) {
-                v->rewind = true;
-                v->rewind_to = v->position;
-                look(v);
-            }
+            tell_rewind_locked(v);   // its frames still in the device go with its anchors
             v->unwritten = false;
             v->position = -1;
             os64_lock_release(v->lock);
@@ -458,7 +473,7 @@ static void refuse(os64_media_output_t *o, device_t *d, const char *why, bool st
                    int64_t now)
 {
     device_close(d, true);
-    voices_restart(d, r, n, now);
+    voices_restart(d, r, n, now, false);
     d->refused = true;
     d->refused_why = why;
     d->tried_at = now;
@@ -564,7 +579,7 @@ static bool device_open(os64_media_output_t *o, device_t *d, round_t *r, uint32_
     d->position = p >= 0 ? p : -1;
     d->ctl = c >= 0 ? c : -1;
     d->tried_at = 0;
-    voices_restart(d, r, n, now);
+    voices_restart(d, r, n, now, false);
     bool was = d->refused;
     d->refused = false;
     d->refused_why = NULL;
@@ -673,24 +688,8 @@ static int64_t audio_main(void *arg)
             }
             bool close = d.audio < 0 || now - d.paused_since >= (int64_t)OS64_MEDIA_OUTPUT_PAUSE_KEEP_MS * 1000;
             if (close && d.audio >= 0) {
-                // A paused voice with no clock whose last frames are still in
-                // the device would lose them: its owner is told where its
-                // ear was, to go back there when it plays again. (One with a
-                // clock goes on from its clock.)
-                for (uint32_t i = 0; i < n; i++) {
-                    os64_media_output_voice_t *v = r[i].v;
-                    if (v->clock != NULL || v->priv.anchors.anchors == 0)
-                        continue;
-                    os64_lock_acquire(v->lock);
-                    if (!v->remove && v->position >= 0) {
-                        v->rewind = true;
-                        v->rewind_to = v->position;
-                        look(v);
-                    }
-                    os64_lock_release(v->lock);
-                }
                 device_close(&d, false);
-                voices_restart(&d, r, n, now);
+                voices_restart(&d, r, n, now, true);
                 os64_lock_acquire(&o->lock);
                 o->facts.open = false;
                 os64_lock_release(&o->lock);
@@ -733,7 +732,7 @@ static int64_t audio_main(void *arg)
             // What the device held is gone; each voice carries on from its
             // queue (a voice with a clock drops what the clock has passed
             // before its next write).
-            voices_restart(&d, r, n, now);
+            voices_restart(&d, r, n, now, false);
             continue;
         }
         if (d.paused) {
@@ -750,7 +749,7 @@ static int64_t audio_main(void *arg)
             }
             if (!owned) {
                 control(&d, "flush\n");
-                voices_restart(&d, r, n, now);
+                voices_restart(&d, r, n, now, true);
             }
             control(&d, "resume\n");
             d.paused = false;
@@ -778,7 +777,7 @@ static int64_t audio_main(void *arg)
                 others |= j != i && unheard(r[j].v, &ear);
             if (!others && unheard(v, &ear)) {
                 control(&d, "flush\n");
-                voices_restart(&d, r, n, now);
+                voices_restart(&d, r, n, now, false);
             }
             v->priv.generation = generation;
             v->priv.clock_generation = clock_generation;
@@ -884,7 +883,7 @@ static int64_t audio_main(void *arg)
 
         device_heard(&d, &ear, &lost);
         if (lost) {
-            voices_restart(&d, r, n, now);
+            voices_restart(&d, r, n, now, false);
             continue;
         }
         hear(o, &d, r, n, &ear, now);

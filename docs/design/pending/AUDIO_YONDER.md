@@ -795,11 +795,13 @@ above:
   - A generation the output did not start (a sink attached or detached
     mid-song) is a flush: the sound carries on from its queue. Before, the
     decoder sought back to where the ear was (D2).
-  - A long pause that gives the device back, or a full mix that puts a
-    paused element out for another, still sends the decoder back to where
-    the ear was when it plays again (the output's `rewind`), as the old
-    thread's resync did: those frames were the element's own, not lost to
-    a sink.
+  - Whenever the output itself lets go of an element's frames still in
+    the device (a long pause gives the device back, another sound resumes
+    the stream while it is paused, a full mix puts it out), the decoder
+    goes back to where the ear was before it plays again (the output's
+    `rewind`), as the old thread's resync did: those frames were the
+    element's own, not lost to a sink. gplay, whose voice has a clock,
+    seeks to where its clock stands.
   - A write waits at most 20 ms (D5).
   - A failed write is a refusal, retried, not a failure of the voices
     that were sounding (D3).

@@ -1032,6 +1032,14 @@ static int run(player_t *p, view_t *v, const char *name)
         int64_t now = now_us();
         os64_lock_acquire(&p->lock);
         service(p, now);
+        if (p->voice.rewind) {
+            // The output let go of sound of ours still in the device (a long
+            // pause, another sound starting): a seek to where the clock
+            // stands queues it again.
+            p->voice.rewind = false;
+            if (p->state == ST_PAUSED || p->state == ST_BUFFERING)
+                seek_to(p, os64_media_clock_read(&p->clock, now), &c, now, p->state == ST_BUFFERING);
+        }
         voice_asks(p);
         bool ring = p->ring_output;
         p->ring_output = false;
