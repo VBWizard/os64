@@ -659,7 +659,7 @@ virtio because its drain waits for the tick.
   can reach). `tools/test_media_picture_host.sh <archive>` runs the glue
   on the host over the pinned FFmpeg, under ThreadSanitizer and ASan.
   A video player's rules are three pure cores beside it: the picture
-  queue, the clock (heard or monotonic, never stepping) and the pace
+  queue, the clock (heard or monotonic, never stepping back) and the pace
   (which picture to show, what to skip, when to resync)
   (`os64/media_pictures.h`, `media_clock.h`, `media_pace.h`; VIDEO.md
   §§ 4 and 5 are their tables; `tools/test_media_cores_host.sh` and its
