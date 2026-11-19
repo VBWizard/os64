@@ -12,11 +12,16 @@
 //   PAUSED, STARVED   base
 //   RUNNING, AWAITING base + run(t - since)
 //   STARTING          base until hold_until, then base + run(t - hold_until)
-//   FOLLOWING         heard + run(t - heard_wall) + drift worked toward 0
-//                     since `since`: by 6 units a microsecond down to 10 ms,
-//                     then by one unit every 4 microseconds
-// Every event but a seek first takes the reading at its `now`, so the next
-// state carries on from it: that is what keeps a reading from stepping.
+//   FOLLOWING         heard + run(f - heard_wall) + drift worked toward 0
+//                     since `slew_since`: by 6 units a microsecond down to
+//                     10 ms, then by one unit every 4 microseconds; `f` is
+//                     `t` held at heard_wall + still_us (the ear stopped),
+//                     and before `slew_since` the reading is `base` (it was
+//                     ahead of the ear by more than the bound)
+// Every event first takes the reading at its `now`, so the next state
+// carries on from it: that is what keeps a reading from stepping. A seek
+// goes where it is told instead, and a report finding the reading more than
+// the bound behind the ear steps it forward to the bound.
 
 #include "os64/media_clock.h"
 
@@ -34,6 +39,7 @@ enum { MODE_PAUSED, MODE_RUNNING, MODE_STARTING, MODE_AWAITING, MODE_FOLLOWING, 
 // following the headphones, six muted). Slowly, the scatter averages out.
 #define NEAR_UNITS (480 * UNITS_PER_FRAME)    // 10 ms
 #define NEAR_US_PER_UNIT 4
+#define BOUND_UNITS ((int64_t)OS64_MEDIA_CLOCK_BOUND_US * UNITS_PER_US)
 
 // Real time `us` long, as media time. The playback rate is this one place.
 static int64_t run(int64_t us)
@@ -80,6 +86,23 @@ static int64_t heard_view(const os64_media_clock_t *c, int64_t t)
     return c->heard + run(t - c->heard_wall);
 }
 
+// FOLLOWING: the time the reading is taken at. The ear's last report is
+// trusted for still_us past the moment it describes; after that the ear is
+// taken as stopped, and the reading holds where that left it, drift and
+// all, until a report says the ear moved. (Never before the last event.)
+static int64_t follow_t(const os64_media_clock_t *c, int64_t t)
+{
+    int64_t until = c->heard_wall + c->still_us;
+    if (t > until)
+        t = until;
+    return at_or_after(c, t);
+}
+
+static bool ear_stopped(const os64_media_clock_t *c, int64_t t)
+{
+    return t > c->heard_wall + c->still_us;
+}
+
 static int64_t reading(const os64_media_clock_t *c, int64_t t)
 {
     t = at_or_after(c, t);
@@ -89,8 +112,14 @@ static int64_t reading(const os64_media_clock_t *c, int64_t t)
         return c->base + run(t - c->since);
     case MODE_STARTING:
         return t < c->hold_until ? c->base : c->base + run(t - c->hold_until);
-    case MODE_FOLLOWING:
-        return heard_view(c, t) + slewed(c->drift, t - c->since);
+    case MODE_FOLLOWING: {
+        int64_t f = follow_t(c, t);
+        // Ahead of the ear by more than the bound at the last report: held
+        // at `base` while the ear closes the gap (BOUND, in the header).
+        if (f < c->slew_since)
+            return c->base;
+        return heard_view(c, f) + slewed(c->drift, f - c->slew_since);
+    }
     default:
         return c->base;
     }
@@ -122,11 +151,27 @@ void os64_media_clock_init(os64_media_clock_t *c, int source)
     c->mode = MODE_PAUSED;
     c->source = source == OS64_MEDIA_CLOCK_HEARD ? OS64_MEDIA_CLOCK_HEARD : OS64_MEDIA_CLOCK_MONOTONIC;
     c->hold_us = OS64_MEDIA_CLOCK_START_HOLD_US;
+    c->still_us = OS64_MEDIA_CLOCK_STILL_US;
 }
 
 void os64_media_clock_hold(os64_media_clock_t *c, int64_t us)
 {
     c->hold_us = us > 0 ? us : 1;
+}
+
+void os64_media_clock_still(os64_media_clock_t *c, int64_t us)
+{
+    c->still_us = us > 0 ? us : 1;
+}
+
+// How old the last report had grown when the next replaced it, by bucket.
+static void count_age(os64_media_clock_t *c, int64_t age)
+{
+    static const int64_t edges[OS64_MEDIA_CLOCK_AGE_BUCKETS - 1] = {20000, 40000, 60000, 80000, 120000};
+    int i = 0;
+    while (i < OS64_MEDIA_CLOCK_AGE_BUCKETS - 1 && age > edges[i])
+        i++;
+    c->report_ages[i]++;
 }
 
 void os64_media_clock_play(os64_media_clock_t *c, int64_t now)
@@ -202,12 +247,37 @@ bool os64_media_clock_heard(os64_media_clock_t *c, uint32_t generation, int64_t 
         }
         return true;
     }
+    if (c->mode == MODE_STARTING)
+        c->start_wait_us = now - c->since;
+    bool holding = c->mode == MODE_FOLLOWING && now < c->slew_since;
+    if (c->mode == MODE_FOLLOWING) {
+        count_age(c, now - c->heard_wall);
+        if (ear_stopped(c, now))
+            c->stills++;
+    }
     leave_start(c, now);
     int64_t was = reading(c, now);
     c->heard = frame * UNITS_PER_FRAME;
     c->heard_wall = frame_wall;
-    c->drift = was - heard_view(c, now);
+    int64_t d = was - heard_view(c, now);
+    c->base = was;
     c->since = now;
+    c->slew_since = now;
+    if (d > BOUND_UNITS) {
+        // Ahead by more than the bound: the reading holds until the ear is
+        // within it (the ear's view rises a unit of drift per unit of real
+        // time while the reading stands), then the slew takes the rest.
+        c->slew_since = now + (d - BOUND_UNITS + UNITS_PER_US - 1) / UNITS_PER_US;
+        d = BOUND_UNITS;
+        if (!holding)
+            c->held_ahead++;          // a hold, counted once however many reports it spans
+    } else if (d < -BOUND_UNITS) {
+        // Behind by more: a step forward to the bound (the pace drops what
+        // it passes); the slew takes the rest.
+        d = -BOUND_UNITS;
+        c->jumped_behind++;
+    }
+    c->drift = d;
     c->mode = MODE_FOLLOWING;
     return true;
 }
@@ -232,7 +302,7 @@ int os64_media_clock_state(const os64_media_clock_t *c, int64_t t)
     case MODE_AWAITING:
         return OS64_MEDIA_CLOCK_AWAITING;
     case MODE_FOLLOWING:
-        return OS64_MEDIA_CLOCK_FOLLOWING;
+        return ear_stopped(c, at_or_after(c, t)) ? OS64_MEDIA_CLOCK_STARVED : OS64_MEDIA_CLOCK_FOLLOWING;
     case MODE_STARVED:
         return OS64_MEDIA_CLOCK_STARVED;
     default:
@@ -244,5 +314,6 @@ int64_t os64_media_clock_drift(const os64_media_clock_t *c, int64_t t)
 {
     if (c->mode != MODE_FOLLOWING)
         return 0;
-    return frames(slewed(c->drift, at_or_after(c, t) - c->since));
+    t = at_or_after(c, t);
+    return frames(reading(c, t) - heard_view(c, follow_t(c, t)));
 }

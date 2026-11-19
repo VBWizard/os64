@@ -232,10 +232,17 @@ tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
 - **A report is advancing only when the ear has moved.** The stream says
   PLAYING once its ring holds sound, but `heard` stays put until the
   sink's delay has passed (after a start, a seek's flush, a resume), so
-  a PLAYING stream whose ear has not moved sends the clock nothing,
-  until an ear that was moving has stood still for 200 ms: that is a
-  sink that stopped pulling, reported as stopped (a wait refuses it, so
-  a start keeps its protection). Buffering also waits until the sink's
+  a PLAYING stream whose ear has not moved sends the clock nothing, and
+  any other state is reported as stopped at once (a wait refuses it, so
+  a start keeps its protection). An ear that stops while PLAYING (a sink
+  no longer pulling, or pulling late) is the clock's to notice, by the
+  report's trust (§ 4): gplay derives it as the pump's packet (13.3 ms),
+  its pass up to a tick late (10 ms), the audio thread's write (20 ms)
+  and the period main reads ahead (16.7 ms), plus 20 ms: 80 ms at 60 Hz.
+  The readout's `ear:` and `report ages:` lines say how often it held,
+  how often the bound fired, how long the start's first report took, and
+  how old reports grew, so the trust can be checked against a P5 run.
+  Buffering also waits until the sink's
   delay has been read, since the start's hold bound is made from it. A
   stream generation the player did not start (a sink attached or
   detached) is treated as a flush: the player begins again from the
@@ -262,9 +269,9 @@ question, the media frame showing at wall time `t`, and the player asks
 it for the blank its publish will be shown at. Its sources: HEARD (the
 player reports "frame H reached the EAR at wall Th", the sink's delay
 already taken off; the clock does no delay arithmetic) and MONOTONIC.
-A reading never moves backward and never steps, a seek excepted: it
-rises with `t`, an event leaves it where it was at the event's moment,
-and where the two views disagree the DRIFT is worked off by running a
+A reading never moves backward and never steps, but for a seek and the
+bound's one step forward (below): it rises with `t`, an event leaves it
+where it was at the event's moment, and where the two views disagree the DRIFT is worked off by running a
 twentieth fast or slow (50 ms in a second) down to the last 10 ms, which
 go at a 480th (4.8 s). The P5 set the second rate: the headphones'
 reports scatter by up to a tick (each is stamped at the sink's pull,
@@ -287,13 +294,36 @@ at its own moment); a picture taken on it is simply gone.
 | running | source → heard (unmute) | unchanged, and keeps running: a picture already moving does not stop | **awaiting** |
 | awaiting | advancing report | unchanged; the difference becomes drift | following |
 | **following** | (reading) | the ear's view (`H` + the wall time since `Th`) plus the drift, worked toward 0 | |
-| following | advancing report | unchanged at that moment; drift recomputed against the new report | following |
+| following | (the last report older than its trust, still_us past `Th`) | holds where that left it, drift and all: the ear is taken as stopped; the state reads starved | following |
+| following | advancing report, the reading within the bound of the new view | unchanged at that moment; drift recomputed against the new report | following |
+| following | advancing report, the reading more than the bound AHEAD | holds until the ear is within the bound, then the slew (counted once a hold) | following |
+| following | advancing report, the reading more than the bound BEHIND | steps forward to the bound behind (the pace drops what it passes; counted) | following |
 | following | report not advancing (the sound ran dry, or was held) | frozen, drift and all: the sound is the master | **starved** |
 | starved | advancing report | carries on from where it froze; the difference becomes drift | following |
 | starved | source → monotonic | carries on from where it froze, at real time | running |
 | any heard | source → monotonic (mute, sound refused or ended) | unchanged | running |
 | paused | source → either | unchanged; takes effect at play | paused |
 | any | report from an earlier generation | refused, counted | same |
+
+**THE BOUND** (`OS64_MEDIA_CLOCK_BOUND_US`, 100 ms, about where lip sync
+becomes visible): following, the reading is never more than the bound
+from the ear's view at a report, whatever the sound does. The slew
+bounds how fast drift is corrected; this bounds how much there can be.
+The P5's round 2 is why: its A2DP pump slipped 211 times in a burst, most
+gaps under the old 200 ms still-ear rule, so the clock ran through each
+and slewed back at 50 ms a second, and they came faster than that: a
+maximised run's picture ended 9 s ahead of its sound. Fable's ruling:
+hold a still ear sooner (THE TRUST, `os64_media_clock_still`, the
+player's own arithmetic, `OS64_MEDIA_CLOCK_STILL_US` = 80 ms by
+default), and bound the error. Between reports a gap can still carry the
+reading the trust past where the ear actually stopped, so inside a hold
+it is ahead by at most the bound plus the trust, shrinking at real time.
+`tools/test_media_cores_host.c`'s storm (a 150 ms gap every 3 s for a
+minute, then every second for a minute, reports scattered as the pump's
+are): never more than 124 ms ahead of the true ear, the picture's end
+within a millisecond of the sound's, every gap held through; the bound
+fired 68 times, in the once-a-second minute, where each gap leaves 80 ms
+and the slew takes 50 a second.
 
 **The hold's bound is the player's** (`os64_media_clock_hold`): the first
 advancing report cannot come before the sink's delay has passed, so the

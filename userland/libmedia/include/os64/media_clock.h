@@ -16,24 +16,25 @@
 // no sound, sound muted, sound refused or sound ended before the picture.
 // The player chooses the source; the clock never chooses for it.
 //
-// A READING NEVER MOVES BACKWARD AND NEVER STEPS (a seek excepted, which is
-// told where to go): it rises with `t`, and an event leaves the reading at
-// its own `now` where it was. A reading taken AHEAD, for a `t` past the
-// next event, is a forecast that event may revise down (a starve freezes
-// the reading at the starve's moment; a report may turn the slew from
-// fast to slow); a picture taken on the forecast is simply gone, which is
+// A READING NEVER MOVES BACKWARD AND NEVER STEPS, except where it is moved
+// on purpose: a seek is told where to go, and a report that finds it behind
+// the ear by more than THE BOUND (below) steps it forward. Otherwise it
+// rises with `t`, and an event leaves the reading at its own `now` where it
+// was. A reading taken AHEAD, for a `t` past the next event, is a forecast
+// that event may revise down (a starve freezes the reading at the starve's
+// moment; a report may turn the slew from fast to slow, or hold it); a picture taken on the forecast is simply gone, which is
 // why the forecast is never more than a blank or a conversion ahead.
 // Each source has its own view of the time, and where
 // they disagree (a change of source, a report that says the ear is
 // elsewhere) the difference, the DRIFT, is worked off by running a
 // twentieth fast or slow (the SLEW: 50 ms of disagreement takes a second),
-// never by a jump, down to the last 10 ms, which go at a 480th (4.8 s).
+// down to the last 10 ms, which go at a 480th (4.8 s).
 // A twentieth is under the pitch change anyone hears and under a picture's
 // worth of drift a second at 60 pictures a second. The last 10 ms are the
 // size of a sink's report scatter, which at a twentieth swung the reading
 // enough from report to report to leave pictures unshown.
 //
-// HOLDS. The reading stands still in two places, and each has an end:
+// HOLDS. The reading stands still in four places, and each has an end:
 // - STARTING: after play or seek with the heard source, the reading holds
 //   until the first ADVANCING report of the current generation, so the
 //   picture does not run ahead of a sound the device has not yet made
@@ -50,6 +51,20 @@
 //   the sound is the master. IT HOLDS FOR AS LONG AS IT IS TOLD: a fresh
 //   advancing report or os64_media_clock_source(MONOTONIC) ends it, and
 //   the PLAYER owns the rule that a starved hold does not last for ever.
+// - A STILL EAR: following, a report is trusted for the player's still_us
+//   past the moment it describes; with no newer one by then the ear is
+//   taken as stopped, the reading holds where that left it, and the state
+//   reads STARVED, until a report says the ear moved. A sound gap of any
+//   length is then a picture held for it, less still_us: nothing was lost,
+//   the sound is later by the gap, and so is the picture.
+// - AHEAD BY MORE THAN THE BOUND: a report finding the reading more than
+//   OS64_MEDIA_CLOCK_BOUND_US ahead of the ear holds the reading until the
+//   ear is within it; the slew takes the rest. One finding it more than
+//   the bound BEHIND steps it forward to the bound, the one step forward a
+//   report may make (the pace drops what it passes). So following, a
+//   reading never strays further from the ear than the bound, whatever the
+//   sound does: the slew bounds how fast drift is corrected, this bounds
+//   how much there can be.
 //
 // GENERATIONS. A seek starts a new generation and forgets every report. A
 // report names the generation of the sound it measured, and one from
@@ -79,6 +94,22 @@
 // has, to tune on the P5.
 #define OS64_MEDIA_CLOCK_START_HOLD_US 250000
 
+// How long past the moment a report describes the ear is trusted to be
+// moving, until the player says otherwise (os64_media_clock_still). It is
+// not a taste: it is longer than the oldest a healthy report can be when
+// the reading is taken, which is the player's arithmetic (its sink's pull,
+// the pass that pull waits for, its own round, how far ahead it reads).
+// 80 ms is gplay's on the headphones.
+#define OS64_MEDIA_CLOCK_STILL_US 80000
+
+// THE BOUND: following, the reading is never more than this from the ear's
+// view at a report (the view held where the ear stopped): about where lip
+// sync becomes visible.
+#define OS64_MEDIA_CLOCK_BOUND_US 100000
+
+// Report ages, for a readout: up to 20, 40, 60, 80 and 120 ms, and over.
+#define OS64_MEDIA_CLOCK_AGE_BUCKETS 6
+
 // What the clock is doing at a wall time (os64_media_clock_state).
 #define OS64_MEDIA_CLOCK_PAUSED         0
 #define OS64_MEDIA_CLOCK_RUNNING        1   // monotonic
@@ -94,17 +125,25 @@ typedef struct {
     uint32_t generation;
     int64_t since;          // wall: the last event
     int64_t base;           // the reading at `since`, drift included (units of media_clock.c);
-                            // unused while following
+                            // following, what it holds at while ahead by more than the bound
     int64_t hold_until;     // STARTING: wall when the hold ends
     int64_t hold_us;        // the bound a start's hold is given (os64_media_clock_hold)
+    int64_t still_us;       // a report's trust (os64_media_clock_still)
     int64_t heard;          // FOLLOWING: the reported frame (units) ...
     int64_t heard_wall;     // ... and when it reached the ear
-    int64_t drift;          // FOLLOWING: the reading minus the heard view, at `since` (units)
+    int64_t drift;          // FOLLOWING: the reading minus the heard view, at `slew_since` (units),
+                            // never more than the bound either way
+    int64_t slew_since;     // FOLLOWING: wall when the drift starts being worked off
     // For a readout; never reset.
     uint64_t reports;       // taken
     uint64_t reports_stale; // refused: from an earlier generation
     uint64_t starts_late;   // starts whose hold ran out before an advancing report
     uint64_t starves;       // times a report held the reading
+    uint64_t stills;        // reports that came after the ear had been taken as stopped
+    uint64_t held_ahead;    // reports after which the reading held, ahead by more than the bound
+    uint64_t jumped_behind; // reports after which it stepped forward, behind by more
+    int64_t start_wait_us;  // the last start's wait for its first advancing report
+    uint64_t report_ages[OS64_MEDIA_CLOCK_AGE_BUCKETS]; // following: the last report's age when replaced
 } os64_media_clock_t;
 
 // Paused at frame 0, generation 0, on `source`.
@@ -124,6 +163,10 @@ void os64_media_clock_source(os64_media_clock_t *c, int source, int64_t now);
 // The bound the next start's hold is given, in microseconds (a value
 // below 1 is taken as 1). A start already holding keeps its own.
 void os64_media_clock_hold(os64_media_clock_t *c, int64_t us);
+// How long past the moment it describes a report is trusted, in
+// microseconds (a value below 1 is taken as 1): OS64_MEDIA_CLOCK_STILL_US.
+// It applies to every reading from now on.
+void os64_media_clock_still(os64_media_clock_t *c, int64_t us);
 
 // Frame `frame` of `generation` reached the ear at wall `frame_wall`,
 // reported at `now`; `advancing` false when the ear's position has stopped.
@@ -136,11 +179,12 @@ bool os64_media_clock_heard(os64_media_clock_t *c, uint32_t generation, int64_t 
 // The media frame showing at wall time `t`.
 int64_t os64_media_clock_read(const os64_media_clock_t *c, int64_t t);
 uint32_t os64_media_clock_generation(const os64_media_clock_t *c);
-// OS64_MEDIA_CLOCK_PAUSED and the rest, at wall time `t`.
+// OS64_MEDIA_CLOCK_PAUSED and the rest, at wall time `t`. Following, with
+// the last report older than its trust, it is STARVED.
 int os64_media_clock_state(const os64_media_clock_t *c, int64_t t);
 // The drift still to be worked off at `t`, in frames rounded down: the reading minus
-// what the reports alone say (positive: the reading is ahead of the ear).
-// 0 when not following reports.
+// what the reports alone say, both held where the ear stopped (positive:
+// the reading is ahead of the ear). 0 when not following reports.
 int64_t os64_media_clock_drift(const os64_media_clock_t *c, int64_t t);
 
 #pragma GCC visibility pop

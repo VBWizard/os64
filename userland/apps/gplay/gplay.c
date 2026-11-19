@@ -99,7 +99,16 @@
 #define BUFFER_SOUND (RATE / 2u)          // buffering ends with this much sound queued
 #define SOUND_FLOOR (RATE / 4u)           // under it is far behind (the pace's twin door)
 #define STALL_US 1000000                  // a sink not advancing with sound queued: refused
-#define EAR_STILL_US 200000               // a moving ear this still while PLAYING has stopped
+// A report's trust (os64_media_clock_still): longer than the oldest a
+// healthy report can be when main reads the clock. The A2DP pump pulls a
+// packet (640 frames, 13.3 ms; the null sink pulls each tick, less) in
+// kusb's pass, which may come a tick late; the audio thread reads the
+// position after a write that waits up to WRITE_PATIENCE_MS; main reads
+// for the blank a period ahead; and a margin.
+#define PULL_US 14000
+#define PASS_LATE_US 10000
+#define STILL_MARGIN_US 20000
+#define PERIOD_GUESS_US 16667             // before the first frame answer: 60 Hz
 #define RETRY_US 2000000                  // a refused device is tried again this often
 #define TICK_US 100000                    // no frame answer this long while playing: retire by the clock
 #define HOLD_MIN_US OS64_MEDIA_CLOCK_START_HOLD_US
@@ -258,6 +267,12 @@ static int64_t hold_bound(const player_t *p)
 {
     int64_t past = (int64_t)p->delay_us + HOLD_PAST_DELAY_US;
     return past > HOLD_MIN_US ? past : HOLD_MIN_US;
+}
+
+static int64_t still_bound(const player_t *p)
+{
+    int64_t period = p->period_us > 0 ? p->period_us : PERIOD_GUESS_US;
+    return PULL_US + PASS_LATE_US + (int64_t)WRITE_PATIENCE_MS * 1000 + period + STILL_MARGIN_US;
 }
 
 static bool audible(const player_t *p)
@@ -522,7 +537,6 @@ typedef struct {
     uint32_t generation;
     bool generation_known;
     uint64_t last_heard;                  // the ear's stream frame at the last read
-    int64_t moved_at;                     // wall when it last moved
     bool paused;                          // `pause` sent
     bool fresh;                           // just opened or begun again: start from the clock's reading
     int16_t carry[2 * WRITE_FRAMES];      // a write's untaken tail, first next time
@@ -542,7 +556,6 @@ static void device_restart(device_t *d)
     d->written = 0;
     d->generation_known = false;
     d->last_heard = 0;
-    d->moved_at = 0;
     d->carry_frames = 0;
 }
 
@@ -744,17 +757,16 @@ static int64_t audio_thread(void *arg)
                     // passed (after a start, a seek's flush or a resume). So
                     // a report is advancing only when the ear has moved, and
                     // a PLAYING stream whose ear has not moved says nothing
-                    // (neither ending a wait nor starving the clock) until
-                    // the ear, once moving, has stood still for EAR_STILL_US:
-                    // then it is an ear that has stopped (a sink no longer
-                    // pulling), as is any state but PLAYING. A wait refuses
-                    // such a report, so a start's protection holds.
+                    // (neither ending a wait nor starving the clock). An ear
+                    // that stops while PLAYING (a sink no longer pulling, or
+                    // pulling late) is the clock's to notice, by the report's
+                    // trust (os64_media_clock_still); any state but PLAYING
+                    // is said at once. A wait refuses such a report, so a
+                    // start's protection holds.
                     int64_t t = now_us();
                     bool playing = pos.state == OS64_AUDIO_PLAYING;
                     bool moved = pos.heard > d.last_heard;
-                    if (moved)
-                        d.moved_at = t;
-                    bool stopped = !playing || (!moved && d.last_heard > 0 && t - d.moved_at >= EAR_STILL_US);
+                    bool stopped = !playing;
                     d.last_heard = pos.heard;
                     if (moved || stopped) {
                         int64_t heard = os64_media_voice_heard(&d.voice, pos.heard);
@@ -934,6 +946,9 @@ static void readout_lines(player_t *p, char lines[][96], uint32_t *count, int64_
     os64_snprintf(lines[n++], 96, "queues: decoded %u/%u ready %u/%u sound %lu ms", os64_media_pictures_count(&p->decoded),
                   DECODED_DEPTH, os64_media_pictures_count(&p->ready), READY_DEPTH,
                   (unsigned long)(os64_media_queue_count(&p->pcm) * 1000ull / RATE));
+    os64_snprintf(lines[n++], 96, "ear: stills %lu, held ahead %lu, stepped behind %lu",
+                  (unsigned long)p->clock.stills, (unsigned long)p->clock.held_ahead,
+                  (unsigned long)p->clock.jumped_behind);
     os64_snprintf(lines[n++], 96, "sync %ld ms  sink delay %u ms%s%s%s", (long)(p->sync_offset * 1000 / RATE),
                   p->delay_us / 1000, p->muted ? "  muted" : "", p->refused ? "  sound: " : "",
                   p->refused && p->refused_why ? p->refused_why : "");
@@ -1022,6 +1037,7 @@ static void seek_to(player_t *p, int64_t target, collect_t *c, int64_t now, bool
 static void start_playing(player_t *p, int64_t now)
 {
     os64_media_clock_hold(&p->clock, hold_bound(p));
+    os64_media_clock_still(&p->clock, still_bound(p));
     os64_media_clock_play(&p->clock, now);
     p->state = ST_PLAYING;
     p->stall_since = 0;
@@ -1317,6 +1333,7 @@ static int run(player_t *p, view_t *v, const char *name)
             p->last_frame_number = number;
             p->last_blank = blank;
             p->period_us = period;
+            os64_media_clock_still(&p->clock, still_bound(p));   // main reads a period ahead
             p->last_answer = now;
             int64_t clock = os64_media_clock_read(&p->clock, blank);
             bool judging = p->state == ST_PLAYING && !os64_media_pictures_ended(&p->decoded);
@@ -1414,6 +1431,14 @@ static void say_counts(player_t *p, const char *name)
                 (unsigned long)p->clock.reports, (unsigned long)p->clock.reports_stale,
                 (unsigned long)p->clock.starts_late, (unsigned long)p->clock.starves, p->delay_us / 1000,
                 (long)(p->sync_offset * 1000 / RATE));
+    const uint64_t *age = p->clock.report_ages;
+    os64_printf("  ear: first heard after %ld ms; stills %lu, held ahead %lu, stepped behind %lu (trust %ld ms)\n",
+                (long)(p->clock.start_wait_us / 1000), (unsigned long)p->clock.stills,
+                (unsigned long)p->clock.held_ahead, (unsigned long)p->clock.jumped_behind,
+                (long)(p->clock.still_us / 1000));
+    os64_printf("  report ages: to 20 ms %lu, 40 %lu, 60 %lu, 80 %lu, 120 %lu, over %lu\n", (unsigned long)age[0],
+                (unsigned long)age[1], (unsigned long)age[2], (unsigned long)age[3], (unsigned long)age[4],
+                (unsigned long)age[5]);
     os64_printf("  media: picture packets %lu, run-in %lu, resync-dropped %lu\n", (unsigned long)mc.picture_packets,
                 (unsigned long)mc.pictures_run_in, (unsigned long)mc.pictures_resync);
 }

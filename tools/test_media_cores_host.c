@@ -141,6 +141,14 @@ static void pictures_edges(void)
 
 static int64_t frames_in(int64_t us) { return us * FRAMES_PER_SEC / SEC; }
 
+// An ear moving at real time from `frame` at `wall`: a report every 10 ms
+// from `from` to `to`, each made at the moment it describes.
+static void ear_reports(os64_media_clock_t *c, int64_t frame, int64_t wall, int64_t from, int64_t to)
+{
+    for (int64_t t = from; t <= to; t += 10 * MS)
+        os64_media_clock_heard(c, os64_media_clock_generation(c), frame + frames_in(t - wall), t, true, t);
+}
+
 static void clock_cases(void)
 {
     os64_media_clock_t c;
@@ -189,6 +197,10 @@ static void clock_cases(void)
     CHECK(os64_media_clock_read(&c, 1 * SEC + 220 * MS) == 96000, "taking it does not step the reading");
     CHECK(os64_media_clock_drift(&c, 1 * SEC + 220 * MS) == -960, "the difference is drift, behind the ear");
     CHECK(os64_media_clock_drift(&c, 1 * SEC + 220 * MS + 1) == -960, "drift in frames is rounded down");
+    CHECK(c.start_wait_us == 220 * MS, "the start's wait for its first report, kept");
+    // A report is trusted for still_us; the slew's own arithmetic below
+    // reads seconds past this one report, so it is trusted for longer here.
+    os64_media_clock_still(&c, 10 * SEC);
     // 960 frames of drift (20 ms) at a twentieth down to 10 ms: 480 frames
     // worked off in 200 ms. The last 480 go at a 480th, in 4.8 s.
     CHECK(os64_media_clock_read(&c, 1 * SEC + 420 * MS) == 96000 + frames_in(200 * MS) * 21 / 20,
@@ -201,6 +213,9 @@ static void clock_cases(void)
     CHECK(os64_media_clock_read(&c, 6 * SEC + 220 * MS) == 96960 + frames_in(5 * SEC) &&
               os64_media_clock_drift(&c, 6 * SEC + 220 * MS) == 0,
           "until the drift is gone, then the reading is the ear's");
+    CHECK(os64_media_clock_drift(&c, 9 * SEC) == 0 &&
+              os64_media_clock_read(&c, 9 * SEC) == 96480 + frames_in(7 * SEC + 790 * MS),
+          "and it does not swing past the ear");
 
     // A start whose device says nothing runs after the bound.
     os64_media_clock_init(&c, OS64_MEDIA_CLOCK_HEARD);
@@ -284,23 +299,186 @@ static void clock_cases(void)
     os64_media_clock_play(&c, 1 * SEC);
     CHECK(os64_media_clock_state(&c, 1 * SEC) == OS64_MEDIA_CLOCK_STARTING, "a play on the new source holds");
 
-    // A large disagreement is worked off at the slew, never jumped: a whole
-    // second ahead of the ear is half a second after ten seconds.
+    // THE STILL EAR. A report is trusted for still_us past the moment it
+    // describes; then the reading holds where that left it and the state
+    // reads starved, until a report says the ear moved.
+    os64_media_clock_init(&c, OS64_MEDIA_CLOCK_MONOTONIC);
+    CHECK(c.still_us == OS64_MEDIA_CLOCK_STILL_US, "a new clock's trust");
+    os64_media_clock_still(&c, 0);
+    CHECK(c.still_us == 1, "a trust below 1 is 1");
+    os64_media_clock_still(&c, 80 * MS);
+    os64_media_clock_play(&c, 0);
+    os64_media_clock_source(&c, OS64_MEDIA_CLOCK_HEARD, 1 * SEC);
+    os64_media_clock_heard(&c, 0, 48000, 1 * SEC, true, 1 * SEC);
+    CHECK(os64_media_clock_state(&c, 1 * SEC + 80 * MS) == OS64_MEDIA_CLOCK_FOLLOWING &&
+              os64_media_clock_read(&c, 1 * SEC + 80 * MS) == 48000 + frames_in(80 * MS),
+          "within its trust: following, at real time");
+    CHECK(os64_media_clock_state(&c, 1 * SEC + 80 * MS + 1) == OS64_MEDIA_CLOCK_STARVED &&
+              os64_media_clock_read(&c, 1 * SEC + 500 * MS) == 48000 + frames_in(80 * MS),
+          "past it: the ear is taken as stopped, the reading holds");
+    // The ear moved again at 1.3 s, from where it stopped at 1.0 s: the
+    // reading is 80 ms ahead, inside the bound, so the slew takes it.
+    os64_media_clock_heard(&c, 0, 48000 + frames_in(10 * MS), 1 * SEC + 310 * MS, true, 1 * SEC + 310 * MS);
+    CHECK(c.stills == 1 && c.held_ahead == 0, "a report after the trust ran out: a still, counted");
+    CHECK(os64_media_clock_state(&c, 1 * SEC + 310 * MS) == OS64_MEDIA_CLOCK_FOLLOWING &&
+              os64_media_clock_read(&c, 1 * SEC + 310 * MS) == 48000 + frames_in(80 * MS) &&
+              os64_media_clock_drift(&c, 1 * SEC + 310 * MS) == frames_in(70 * MS),
+          "following again from where it held: 70 ms ahead of the ear");
+    CHECK(c.report_ages[5] == 1, "the report it replaced was 310 ms old: over 120 ms");
+    // A trust set while following applies at once.
+    os64_media_clock_still(&c, 10 * MS);
+    CHECK(os64_media_clock_state(&c, 1 * SEC + 321 * MS) == OS64_MEDIA_CLOCK_STARVED, "a new trust applies at once");
+
+    // A whole second ahead of the ear: the reading holds until the ear is
+    // within the bound (0.9 s), then the slew takes the last 100 ms.
     os64_media_clock_init(&c, OS64_MEDIA_CLOCK_MONOTONIC);
     os64_media_clock_play(&c, 0);
     os64_media_clock_source(&c, OS64_MEDIA_CLOCK_HEARD, 10 * SEC);
     os64_media_clock_heard(&c, 0, 9 * FRAMES_PER_SEC, 10 * SEC, true, 10 * SEC);
+    CHECK(c.held_ahead == 1 && c.jumped_behind == 0, "held ahead, counted");
     CHECK(os64_media_clock_drift(&c, 10 * SEC) == 48000, "a second ahead");
-    CHECK(os64_media_clock_drift(&c, 20 * SEC) == 24000, "half worked off after ten seconds");
-    CHECK(os64_media_clock_read(&c, 20 * SEC) == 19 * FRAMES_PER_SEC + 24000, "the reading runs slow meanwhile");
-    // 47,520 frames at the slew take 19.8 s; the last 480 then take 4.8 s.
-    CHECK(os64_media_clock_drift(&c, 29 * SEC + 800 * MS) == 480, "at 10 ms after 19.8 s");
-    CHECK(os64_media_clock_drift(&c, 30 * SEC) == 460, "then slowly");
-    CHECK(os64_media_clock_drift(&c, 34 * SEC + 600 * MS) == 0 &&
-              os64_media_clock_read(&c, 34 * SEC + 600 * MS) == 33 * FRAMES_PER_SEC + frames_in(600 * MS),
-          "gone after 24.6 s");
-    CHECK(os64_media_clock_drift(&c, 40 * SEC) == 0 && os64_media_clock_read(&c, 40 * SEC) == 39 * FRAMES_PER_SEC,
-          "and it does not swing past the ear");
+    ear_reports(&c, 9 * FRAMES_PER_SEC, 10 * SEC, 10 * SEC + 10 * MS, 10 * SEC + 890 * MS);
+    CHECK(os64_media_clock_read(&c, 10 * SEC + 890 * MS) == 10 * FRAMES_PER_SEC, "the reading holds meanwhile");
+    ear_reports(&c, 9 * FRAMES_PER_SEC, 10 * SEC, 10 * SEC + 900 * MS, 10 * SEC + 900 * MS);
+    CHECK(os64_media_clock_drift(&c, 10 * SEC + 900 * MS) == 4800, "until the ear is within the bound");
+    // 4,320 frames at the slew take 1.8 s; the last 480 then take 4.8 s.
+    ear_reports(&c, 9 * FRAMES_PER_SEC, 10 * SEC, 10 * SEC + 910 * MS, 12 * SEC + 700 * MS);
+    CHECK(os64_media_clock_drift(&c, 12 * SEC + 700 * MS) == 480, "the slew to 10 ms");
+    ear_reports(&c, 9 * FRAMES_PER_SEC, 10 * SEC, 12 * SEC + 710 * MS, 17 * SEC + 500 * MS);
+    CHECK(os64_media_clock_drift(&c, 17 * SEC + 500 * MS) == 0 &&
+              os64_media_clock_read(&c, 17 * SEC + 500 * MS) == 16 * FRAMES_PER_SEC + frames_in(500 * MS),
+          "gone after 7.5 s, and the reading is the ear's");
+    CHECK(c.held_ahead == 1, "held once");
+
+    // A second BEHIND: one step forward to the bound, then the slew.
+    os64_media_clock_init(&c, OS64_MEDIA_CLOCK_MONOTONIC);
+    os64_media_clock_play(&c, 0);
+    os64_media_clock_source(&c, OS64_MEDIA_CLOCK_HEARD, 10 * SEC);
+    os64_media_clock_heard(&c, 0, 11 * FRAMES_PER_SEC, 10 * SEC, true, 10 * SEC);
+    CHECK(c.jumped_behind == 1 && c.held_ahead == 0, "jumped, counted");
+    CHECK(os64_media_clock_read(&c, 10 * SEC) == 11 * FRAMES_PER_SEC - 4800 &&
+              os64_media_clock_drift(&c, 10 * SEC) == -4800,
+          "stepped forward to the bound behind");
+}
+
+// ------------------------------------------------------------ the storm
+
+#define STILL (80 * MS)
+#define BOUND_FRAMES 4800 // OS64_MEDIA_CLOCK_BOUND_US
+
+// A sound with gaps: it plays at real time from `start` except during each
+// gap [gap_at[i], gap_at[i] + gap), when it stands still.
+typedef struct {
+    int64_t start;
+    const int64_t *gap_at;
+    int gaps;
+    int64_t gap;
+} sound_t;
+
+// Where the ear is at wall `t`, in frames.
+static int64_t ear_at(const sound_t *s, int64_t t)
+{
+    int64_t played = t - s->start;
+    for (int i = 0; i < s->gaps; i++) {
+        if (t <= s->gap_at[i])
+            break;
+        int64_t in = t - s->gap_at[i];
+        played -= in < s->gap ? in : s->gap;
+    }
+    return frames_in(played);
+}
+
+static bool in_gap(const sound_t *s, int64_t t)
+{
+    for (int i = 0; i < s->gaps; i++)
+        if (t >= s->gap_at[i] && t < s->gap_at[i] + s->gap)
+            return true;
+    return false;
+}
+
+// Plays `s` to its end at `end_frame` against a clock started at its
+// start, reporting as gplay does: every 10 ms while the ear moves, each
+// report describing the ear up to 10 ms before it was made (the pull's
+// stamp); none in a gap. Checks every millisecond that the reading stays
+// within the bound of the ear's view, and returns the worst it got ahead
+// of the true ear and the reading when the sound ended.
+static void play_storm(const sound_t *s, int64_t end_frame, int64_t *worst_ahead, int64_t *at_end,
+                       os64_media_clock_t *c)
+{
+    os64_media_clock_init(c, OS64_MEDIA_CLOCK_HEARD);
+    os64_media_clock_still(c, STILL);
+    os64_media_clock_play(c, s->start);
+    *worst_ahead = 0;
+    *at_end = -1;
+    int64_t last_frame = -1;
+    for (int64_t t = s->start; ; t += MS) {
+        if ((t - s->start) % (10 * MS) == 0 && !in_gap(s, t)) {
+            int64_t stamp = t - (int64_t)(rnd() % (10 * MS));
+            if (stamp < s->start)
+                stamp = s->start;
+            int64_t frame = ear_at(s, stamp);
+            if (frame > last_frame && stamp >= s->start + 1)
+                os64_media_clock_heard(c, 0, frame, stamp, true, t);
+            if (frame > last_frame)
+                last_frame = frame;
+        }
+        int64_t r = os64_media_clock_read(c, t);
+        int64_t ear = ear_at(s, t);
+        if (r - ear > *worst_ahead)
+            *worst_ahead = r - ear;
+        if (os64_media_clock_state(c, t) == OS64_MEDIA_CLOCK_FOLLOWING ||
+            os64_media_clock_state(c, t) == OS64_MEDIA_CLOCK_STARVED) {
+            // Within the bound, except while held ahead after a gap let the
+            // reading run the trust past where the ear stopped.
+            int64_t d = os64_media_clock_drift(c, t);
+            int64_t over = t < c->slew_since ? frames_in(STILL + 20 * MS) : 1;
+            CHECK(d <= BOUND_FRAMES + over && d >= -BOUND_FRAMES - 1, "%lld us: %lld frames from the ear's view",
+                  (long long)t, (long long)d);
+        }
+        if (ear >= end_frame) {
+            *at_end = r;
+            return;
+        }
+    }
+}
+
+static void clock_storm(void)
+{
+    os64_media_clock_t c;
+    int64_t worst, at_end;
+
+    // One 150 ms gap: the picture holds through it (after the reading's
+    // trust in the last report runs out) and heals.
+    static const int64_t one[] = {5 * SEC};
+    sound_t s1 = {.start = 0, .gap_at = one, .gaps = 1, .gap = 150 * MS};
+    play_storm(&s1, frames_in(20 * SEC), &worst, &at_end, &c);
+    CHECK(c.stills >= 1, "the gap was held through (%llu)", (unsigned long long)c.stills);
+    CHECK(worst <= frames_in(STILL + 20 * MS), "ahead by at most the trust and a report's scatter (%lld)",
+          (long long)worst);
+    CHECK(at_end - frames_in(20 * SEC) <= frames_in(20 * MS) && at_end - frames_in(20 * SEC) >= -frames_in(20 * MS),
+          "healed by the end (%lld frames off)", (long long)(at_end - frames_in(20 * SEC)));
+    CHECK(c.held_ahead == 0 && c.jumped_behind == 0, "one gap needs no bound");
+
+    // The P5's storm: a 150 ms gap every 3 s for a minute, then one every
+    // second for a minute.
+    static int64_t storm[80];
+    int n = 0;
+    for (int64_t t = 3 * SEC; t < 60 * SEC; t += 3 * SEC)
+        storm[n++] = t;
+    for (int64_t t = 60 * SEC; t < 120 * SEC; t += SEC)
+        storm[n++] = t;
+    sound_t s2 = {.start = 0, .gap_at = storm, .gaps = n, .gap = 150 * MS};
+    int64_t end = frames_in(130 * SEC) - frames_in((int64_t)n * 150 * MS);
+    play_storm(&s2, end, &worst, &at_end, &c);
+    CHECK(worst <= BOUND_FRAMES + frames_in(STILL + 20 * MS),
+          "the storm: never further ahead of the true ear than the bound and the trust (%lld)", (long long)worst);
+    CHECK(at_end - end <= BOUND_FRAMES && at_end - end >= -BOUND_FRAMES,
+          "the picture ends within the bound of the sound (%lld frames)", (long long)(at_end - end));
+    CHECK(c.stills >= (uint64_t)n - 2, "every gap held through (%llu of %d)", (unsigned long long)c.stills, n);
+    printf("  the storm (%d gaps of 150 ms): ahead of the true ear by %lld ms at worst, the picture's end %lld ms "
+           "from the sound's; %llu stills, %llu holds ahead, %llu steps behind\n",
+           n, (long long)(worst * 1000 / FRAMES_PER_SEC), (long long)((at_end - end) * 1000 / FRAMES_PER_SEC),
+           (unsigned long long)c.stills, (unsigned long long)c.held_ahead, (unsigned long long)c.jumped_behind);
 }
 
 // Random events, with readings checked at random times between them.
@@ -313,8 +491,12 @@ static void clock_random(int rounds)
         int64_t step = (int64_t)(rnd() % (300 * MS)) + 1;
         // Between events: readings never fall back, and run at most a
         // twentieth fast and, while not holding, at least a twentieth slow.
+        // Following, a reading holds past the last report's trust and while
+        // ahead by more than the bound, and is never further from the
+        // ear's view than the bound.
         int64_t t0 = now, r0 = os64_media_clock_read(&c, t0);
         int state = os64_media_clock_state(&c, t0);
+        int64_t trusted_until = c.heard_wall + c.still_us, slewing_from = c.slew_since;
         for (int i = 0; i < 4; i++) {
             int64_t t = t0 + (int64_t)(rnd() % (uint64_t)step) + 1;
             int64_t r = os64_media_clock_read(&c, t);
@@ -324,14 +506,20 @@ static void clock_random(int rounds)
                   (long long)(r - r0), (long long)real);
             if (state == OS64_MEDIA_CLOCK_RUNNING || state == OS64_MEDIA_CLOCK_AWAITING)
                 CHECK(r - r0 >= real - 1 && r - r0 <= real + 1, "round %d: monotonic is real time", round);
-            if (state == OS64_MEDIA_CLOCK_FOLLOWING)
+            if (state == OS64_MEDIA_CLOCK_FOLLOWING && t <= trusted_until && t0 >= slewing_from)
                 CHECK(r - r0 >= real - real / 20 - 2, "round %d: ran slower than the slew", round);
+            if (state == OS64_MEDIA_CLOCK_FOLLOWING || state == OS64_MEDIA_CLOCK_STARVED) {
+                int64_t d = os64_media_clock_drift(&c, t);
+                CHECK(d >= -4801 && (d <= 4801 || t < slewing_from), "round %d: %lld frames from the ear's view",
+                      round, (long long)d);
+            }
             if (state == OS64_MEDIA_CLOCK_PAUSED || state == OS64_MEDIA_CLOCK_STARVED)
                 CHECK(r == r0, "round %d: a hold moved", round);
         }
         now += step;
         ear += frames_in(step) + (int64_t)(rnd() % 200) - 100;
         int64_t before = os64_media_clock_read(&c, now);
+        uint64_t jumps = c.jumped_behind;
         uint64_t op = rnd() % 100;
         uint32_t generation = os64_media_clock_generation(&c);
         if (op < 50) {
@@ -355,8 +543,12 @@ static void clock_random(int rounds)
         } else {
             continue;
         }
-        CHECK(os64_media_clock_read(&c, now) == before, "round %d: an event stepped the reading (%lld to %lld)",
-              round, (long long)before, (long long)os64_media_clock_read(&c, now));
+        if (c.jumped_behind != jumps)
+            CHECK(os64_media_clock_read(&c, now) >= before && os64_media_clock_drift(&c, now) == -4800,
+                  "round %d: a report behind by more than the bound steps forward to it", round);
+        else
+            CHECK(os64_media_clock_read(&c, now) == before, "round %d: an event stepped the reading (%lld to %lld)",
+                  round, (long long)before, (long long)os64_media_clock_read(&c, now));
     }
 }
 
@@ -571,6 +763,7 @@ int main(void)
     for (size_t i = 0; i < sizeof(capacities) / sizeof(capacities[0]); i++)
         pictures_run(capacities[i], 20000);
     clock_cases();
+    clock_storm();
     for (int i = 0; i < 40; i++)
         clock_random(2000);
     pace_pick_cases();
