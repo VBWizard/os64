@@ -22,8 +22,9 @@
 //   has stopped; and with no clock, keeps `position` itself;
 // - drops, from a voice with a clock that is not being heard (it does not
 //   want sound, or the device is refused), the frames its clock has passed,
-//   and does the same for every voice after a gap in the device, so time
-//   keeps moving and its queue keeps draining;
+//   and from a voice with a clock that writes again after a gap in the
+//   device, what its clock passed meanwhile, so time keeps moving and its
+//   queue keeps draining;
 // - takes a stream generation it did not start (a sink attached or
 //   detached, a flush from elsewhere) as a flush: what the device held is
 //   gone, each voice carries on from its queue;
@@ -37,8 +38,9 @@
 //   write, keeping what was not taken for next time, so it always sees a
 //   quit or a change of voices;
 // - REFUSED: the device would not open, a write failed, or the sink
-//   STALLED (the ear has not moved for OS64_MEDIA_OUTPUT_STALL_US past the
-//   start's hold bound, with sound written and the stream not paused). It
+//   STALLED (the stream says it plays and the ear has not moved for
+//   OS64_MEDIA_OUTPUT_STALL_US past the start's hold bound, with sound
+//   written; a stream someone else paused holds, and is no stall). It
 //   is closed and tried again every OS64_MEDIA_OUTPUT_RETRY_MS. Meanwhile a
 //   voice WAITs (`busy`, its clock held) or PLAYs ON (its clock monotonic)
 //   as its owner chose.
@@ -117,6 +119,7 @@ typedef struct os64_media_output_voice {
             uint32_t offset, frames;
         } piece[8];                 // where its frames lie in the block last written
         uint32_t pieces;            // 0 once that block is all in the device
+        bool stale;                 // a clock voice stopped wanting sound: its frames in the device are from before
     } priv;
 } os64_media_output_voice_t;
 

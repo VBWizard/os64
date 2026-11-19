@@ -65,6 +65,7 @@ typedef struct {
 
 // What the stream says of the ear, read once a round.
 typedef struct {
+    bool read;                          // a position record was read (its delay holds)
     bool known;                         // the position could say
     uint64_t raw;                       // `heard` as the device stamped it
     int64_t micros;                     // when
@@ -141,6 +142,7 @@ static void device_heard(device_t *d, ear_t *ear, bool *lost)
     os64_audio_position_t pos;
     if (os64_read((int32_t)d->position, &pos, sizeof(pos)) < (int64_t)sizeof(pos))
         return;
+    ear->read = true;
     d->delay_us = pos.delay_us;
     if (!d->generation_known) {
         d->generation = pos.generation;
@@ -189,10 +191,9 @@ static bool device_write(device_t *d, const int16_t *pcm, uint32_t frames)
                                    OS64_MEDIA_OUTPUT_WRITE_PATIENCE_MS);
         if (n == OS64_INTERRUPTED)
             continue;
-        if (n == OS64_AUDIO_FLUSHED) {
-            d->carry_frames = 0;
-            break;
-        }
+        if (n == OS64_AUDIO_FLUSHED)
+            break;   // a flush from elsewhere: the next position read finds the generation lost,
+                     // and the restart counts the carry dropped
         if (n == OS64_ERR_TIMEOUT)
             break;
         if (n < 0)
@@ -276,12 +277,14 @@ static void voices_restart(device_t *d, round_t *r, uint32_t n, int64_t now)
         os64_media_output_voice_t *v = r[i].v;
         uint32_t lost = d->carry_frames > 0 ? carried(d, v) : 0;
         v->priv.pieces = 0;
+        v->priv.stale = false;
         os64_media_voice_reset(&v->priv.anchors);
         v->priv.last_heard = 0;
         os64_lock_acquire(v->lock);
         v->written -= lost;
         v->dropped += lost;
         v->unwritten = false;
+        v->position = -1;   // until the ear reaches its next frames; the owner keeps the last
         if (v->sounding) {
             v->sounding = false;
             look(v);
@@ -336,6 +339,8 @@ static void tell_voices_locked(os64_media_output_t *o, device_t *d, int64_t now)
                 v->sounding = false;
             look(v);
         }
+        if (!v->priv.mixed)
+            v->heard_all = false;   // out of the mix it hears nothing, and what it heard is history
         if (v->clock != NULL) {
             bool heard = wants && !(d->refused && v->refused == OS64_MEDIA_VOICE_PLAY_ON);
             int source = heard ? OS64_MEDIA_CLOCK_HEARD : OS64_MEDIA_CLOCK_MONOTONIC;
@@ -386,7 +391,16 @@ static uint32_t members_locked(os64_media_output_t *o, round_t *r)
                 r[kept++] = r[i];
                 continue;
             }
+            os64_lock_acquire(v->lock);
+            if (v->sounding) {
+                v->sounding = false;
+                look(v);
+            }
+            v->unwritten = false;
+            v->position = -1;
+            os64_lock_release(v->lock);
             os64_media_voice_reset(&v->priv.anchors);
+            v->priv.pieces = 0;
             v->priv.mixed = false;
         }
         n = kept;
@@ -404,6 +418,8 @@ static uint32_t members_locked(os64_media_output_t *o, round_t *r)
         if (!wants)
             continue;
         v->priv.mixed = true;
+        v->priv.stale = false;
+        v->priv.pieces = 0;
         os64_media_voice_reset(&v->priv.anchors);
         v->priv.last_heard = 0;
         r[n++] = (round_t){.v = v};
@@ -411,7 +427,8 @@ static uint32_t members_locked(os64_media_output_t *o, round_t *r)
     return n;
 }
 
-// A voice leaves the mix: from then on only a removal touches it.
+// A voice leaves the mix: its facts settle, and it joins again when it next
+// wants sound.
 static void release(os64_media_output_t *o, os64_media_output_voice_t *v)
 {
     os64_lock_acquire(&o->lock);
@@ -557,7 +574,7 @@ static void tell_delay(device_t *d, round_t *r, uint32_t n)
     ear_t ear;
     bool lost;
     device_heard(d, &ear, &lost);
-    if (d->position < 0)
+    if (!ear.read)
         return;
     for (uint32_t i = 0; i < n; i++) {
         os64_media_output_voice_t *v = r[i].v;
@@ -601,6 +618,11 @@ static int64_t audio_main(void *arg)
             r[i].plays = r[i].wants && (v->clock == NULL || v->runs);
             r[i].gain = v->gain;
             os64_lock_release(v->lock);
+            // A voice with a clock that stops wanting sound (muted) goes on
+            // by its clock, dropping what it passes: what the device holds
+            // of it is from before, not a tail to play out later.
+            if (v->clock != NULL && !r[i].wants)
+                v->priv.stale = true;
             if (r[i].plays)
                 playing++;
         }
@@ -698,7 +720,7 @@ static int64_t audio_main(void *arg)
                 os64_lock_acquire(r[i].v->lock);
                 bool current = r[i].v->queue->generation == r[i].v->priv.generation;
                 os64_lock_release(r[i].v->lock);
-                owned |= r[i].plays && current && unheard(r[i].v, &ear);
+                owned |= r[i].plays && current && !r[i].v->priv.stale && unheard(r[i].v, &ear);
             }
             if (!owned) {
                 control(&d, "flush\n");
@@ -718,6 +740,10 @@ static int64_t audio_main(void *arg)
             os64_lock_acquire(v->lock);
             uint32_t generation = v->queue->generation;
             uint32_t clock_generation = v->clock != NULL ? os64_media_clock_generation(v->clock) : 0;
+            if (generation != v->priv.generation) {
+                v->position = -1;   // the seek's owner says where it landed
+                v->heard_all = false;
+            }
             os64_lock_release(v->lock);
             if (generation == v->priv.generation)
                 continue;
@@ -730,6 +756,7 @@ static int64_t audio_main(void *arg)
             }
             v->priv.generation = generation;
             v->priv.clock_generation = clock_generation;
+            v->priv.stale = false;
             os64_media_voice_reset(&v->priv.anchors);
             v->priv.last_heard = 0;
         }
@@ -839,11 +866,13 @@ static int64_t audio_main(void *arg)
         os64_lock_release(&o->lock);
 
         // THE STALL: sound written that the ear has not reached, the stream
-        // not paused, and the ear still for the stall's time past the
-        // start's hold bound. It covers a sink that stops pulling mid-play,
-        // one that never starts, one that does not start again after the
-        // device returns, and one that reports itself stopped with sound
-        // still in it: in each the ear does not move.
+        // playing (not paused, by this thread or anyone else), and the ear
+        // still for the stall's time past the start's hold bound. It covers
+        // a sink that stops pulling mid-play, one that never starts, and one
+        // that does not start again after the device returns: in each the
+        // stream says it plays and the ear does not move. A stream someone
+        // else paused is not a stall: the sound is the master, and a clock
+        // that follows it holds until it resumes.
         if (!d.paused && ear.known && d.written > ear.raw &&
             now - d.moved_at >= os64_media_output_hold_bound(d.delay_us) + OS64_MEDIA_OUTPUT_STALL_US) {
             refuse(o, &d, "the sink stopped", true, r, n, now);

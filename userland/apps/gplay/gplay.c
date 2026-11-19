@@ -282,7 +282,7 @@ static bool audible(const player_t *p)
 // rung once the lock is let go. Under the lock.
 static void voice_asks(player_t *p)
 {
-    bool wants = p->has_sound && !p->muted && !p->sound_over && !p->quit;
+    bool wants = p->has_sound && !p->muted && !p->sound_over;
     bool runs = p->state == ST_PLAYING || p->state == ST_ENDED;
     if (wants != p->voice.wants || runs != p->voice.runs || p->sync_offset != p->voice.sync)
         p->ring_output = true;
@@ -987,9 +987,10 @@ static void service(player_t *p, int64_t now)
         return;
     // A sound that stopped, said by the device (starved): at its end the
     // picture goes on monotonic; with the queue run dry the decoder fell
-    // behind and a hold is buffering. A sink that stalls, never starts or
-    // stops with sound in it is the output's to refuse (its stall rule), and
-    // a still ear (not heard to move) is waited out until it does.
+    // behind and a hold is buffering. A sink that stops pulling, never
+    // starts, or does not start again is the output's to refuse (its stall
+    // rule); a still ear (not heard to move) is waited out until it moves,
+    // and a stream someone else paused holds the picture until it resumes.
     if (os64_media_clock_state(&p->clock, now) == OS64_MEDIA_CLOCK_STARVED) {
         if (os64_media_queue_finished(&p->pcm)) {
             p->sound_over = true;
@@ -1347,17 +1348,32 @@ int main(int argc, char **argv)
 
     os64_lock_acquire(&p->lock);
     p->quit = true;
-    p->voice.wants = false;
-    p->voice.remove = true;
     os64_bell_ring(&p->decode_bell);
     os64_bell_ring(&p->picture_bell);
     os64_lock_release(&p->lock);
     for (int i = 0; i < 3; i++)
         if (s_threads[i] > 0)
             os64_thread_join((int32_t)s_threads[i], 0);
-    // The output lets go of the voice within a round; then it can end. What
-    // the device holds plays out (a close never cuts the sound).
+    // At the end the sound still in the device plays out (up to a second),
+    // as a close never cuts it; a person who left early is not made to wait.
+    // Then the voice goes, the output lets go of it within a round, and the
+    // output ends. An output that will not let go keeps the player's memory
+    // (it may still be touching the voice and the queue) and the program
+    // leaves without freeing it.
+    bool kept = false;
     if (p->output != 0) {
+        for (int waited = 0; voiced && waited < 100; waited++) {
+            os64_lock_acquire(&p->lock);
+            bool tail = p->state == ST_ENDED && p->voice.wants && !p->voice.heard_all;
+            os64_lock_release(&p->lock);
+            if (!tail)
+                break;
+            os64_sleep(10);
+        }
+        os64_lock_acquire(&p->lock);
+        p->voice.wants = false;
+        p->voice.remove = true;
+        os64_lock_release(&p->lock);
         os64_media_output_ring(p->output);
         for (int waited = 0; voiced && waited < 200; waited++) {
             os64_lock_acquire(&p->lock);
@@ -1367,7 +1383,8 @@ int main(int argc, char **argv)
                 break;
             os64_sleep(10);
         }
-        if (os64_media_output_destroy(p->output) != 0)
+        kept = os64_media_output_destroy(p->output) != 0;
+        if (kept)
             os64_printf("gplay: the sound device's thread did not let go\n");
     }
 
@@ -1390,13 +1407,15 @@ int main(int argc, char **argv)
         os64_free(p->frame[i].pixels);
     os64_media_close(p->media);
     os64_close((int32_t)file);
-    os64_bell_close(&p->decode_bell);
     os64_bell_close(&p->picture_bell);
     if (cover > 0)
         os64_gui_window_destroy(cover);
     os64_gui_window_destroy(p->win);
-    os64_free(pcm_storage);
     int code = p->failure != 0 || !checked ? 3 : 0;
-    os64_free(p);
+    if (!kept) {
+        os64_bell_close(&p->decode_bell);
+        os64_free(pcm_storage);
+        os64_free(p);
+    }
     return code;
 }
