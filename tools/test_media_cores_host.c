@@ -189,13 +189,18 @@ static void clock_cases(void)
     CHECK(os64_media_clock_read(&c, 1 * SEC + 220 * MS) == 96000, "taking it does not step the reading");
     CHECK(os64_media_clock_drift(&c, 1 * SEC + 220 * MS) == -960, "the difference is drift, behind the ear");
     CHECK(os64_media_clock_drift(&c, 1 * SEC + 220 * MS + 1) == -960, "drift in frames is rounded down");
-    // 960 frames of drift at a twentieth: 400 ms of reading per 20 ms of drift,
-    // so 960 frames (20 ms) are worked off in 400 ms.
+    // 960 frames of drift (20 ms) at a twentieth down to 10 ms: 480 frames
+    // worked off in 200 ms. The last 480 go at a 480th, in 4.8 s.
     CHECK(os64_media_clock_read(&c, 1 * SEC + 420 * MS) == 96000 + frames_in(200 * MS) * 21 / 20,
           "the slew runs a twentieth fast");
-    CHECK(os64_media_clock_read(&c, 1 * SEC + 620 * MS) == 96960 + frames_in(400 * MS),
+    CHECK(os64_media_clock_drift(&c, 1 * SEC + 420 * MS) == -480, "down to 10 ms at the slew");
+    CHECK(os64_media_clock_drift(&c, 1 * SEC + 620 * MS) == -460 &&
+              os64_media_clock_read(&c, 1 * SEC + 620 * MS) == 96960 + frames_in(400 * MS) - 460,
+          "the last 10 ms at a 480th: 20 frames in 200 ms");
+    CHECK(os64_media_clock_drift(&c, 6 * SEC + 219 * MS) == -1, "a frame short of done");
+    CHECK(os64_media_clock_read(&c, 6 * SEC + 220 * MS) == 96960 + frames_in(5 * SEC) &&
+              os64_media_clock_drift(&c, 6 * SEC + 220 * MS) == 0,
           "until the drift is gone, then the reading is the ear's");
-    CHECK(os64_media_clock_drift(&c, 1 * SEC + 620 * MS) == 0, "no drift left");
 
     // A start whose device says nothing runs after the bound.
     os64_media_clock_init(&c, OS64_MEDIA_CLOCK_HEARD);
@@ -288,8 +293,12 @@ static void clock_cases(void)
     CHECK(os64_media_clock_drift(&c, 10 * SEC) == 48000, "a second ahead");
     CHECK(os64_media_clock_drift(&c, 20 * SEC) == 24000, "half worked off after ten seconds");
     CHECK(os64_media_clock_read(&c, 20 * SEC) == 19 * FRAMES_PER_SEC + 24000, "the reading runs slow meanwhile");
-    CHECK(os64_media_clock_drift(&c, 30 * SEC) == 0 && os64_media_clock_read(&c, 30 * SEC) == 29 * FRAMES_PER_SEC,
-          "gone after twenty seconds");
+    // 47,520 frames at the slew take 19.8 s; the last 480 then take 4.8 s.
+    CHECK(os64_media_clock_drift(&c, 29 * SEC + 800 * MS) == 480, "at 10 ms after 19.8 s");
+    CHECK(os64_media_clock_drift(&c, 30 * SEC) == 460, "then slowly");
+    CHECK(os64_media_clock_drift(&c, 34 * SEC + 600 * MS) == 0 &&
+              os64_media_clock_read(&c, 34 * SEC + 600 * MS) == 33 * FRAMES_PER_SEC + frames_in(600 * MS),
+          "gone after 24.6 s");
     CHECK(os64_media_clock_drift(&c, 40 * SEC) == 0 && os64_media_clock_read(&c, 40 * SEC) == 39 * FRAMES_PER_SEC,
           "and it does not swing past the ear");
 }

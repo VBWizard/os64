@@ -27,8 +27,11 @@
 // they disagree (a change of source, a report that says the ear is
 // elsewhere) the difference, the DRIFT, is worked off by running a
 // twentieth fast or slow (the SLEW: 50 ms of disagreement takes a second),
-// never by a jump. A twentieth is under the pitch change anyone hears and
-// under a picture's worth of drift a second at 60 pictures a second.
+// never by a jump, down to the last 10 ms, which go at a 480th (4.8 s).
+// A twentieth is under the pitch change anyone hears and under a picture's
+// worth of drift a second at 60 pictures a second. The last 10 ms are the
+// size of a sink's report scatter, which at a twentieth swung the reading
+// enough from report to report to leave pictures unshown.
 //
 // HOLDS. The reading stands still in two places, and each has an end:
 // - STARTING: after play or seek with the heard source, the reading holds

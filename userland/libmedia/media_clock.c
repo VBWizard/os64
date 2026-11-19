@@ -13,7 +13,8 @@
 //   RUNNING, AWAITING base + run(t - since)
 //   STARTING          base until hold_until, then base + run(t - hold_until)
 //   FOLLOWING         heard + run(t - heard_wall) + drift worked toward 0
-//                     by 6 units for every microsecond since `since`
+//                     since `since`: by 6 units a microsecond down to 10 ms,
+//                     then by one unit every 4 microseconds
 // Every event but a seek first takes the reading at its `now`, so the next
 // state carries on from it: that is what keeps a reading from stepping.
 
@@ -24,6 +25,15 @@ enum { MODE_PAUSED, MODE_RUNNING, MODE_STARTING, MODE_AWAITING, MODE_FOLLOWING, 
 #define UNITS_PER_FRAME 2500                  // a frame
 #define UNITS_PER_US 120                      // 48000 frames a second, in units a microsecond
 #define SLEW_UNITS_PER_US (UNITS_PER_US / 20) // a twentieth of real time
+// Drift within NEAR of nothing is worked off at a 480th (a unit every 4 us).
+// A sink's reports are stamped when it pulls, and it pulls at its own pass,
+// up to a tick late: drift that small is the reports' scatter, and working it
+// off at a twentieth swung the reading a twentieth fast and slow from one
+// report to the next, enough to show two pictures' worth of time in one
+// refresh, so a picture went unshown (the P5 dropped a hundred a minute
+// following the headphones, six muted). Slowly, the scatter averages out.
+#define NEAR_UNITS (480 * UNITS_PER_FRAME)    // 10 ms
+#define NEAR_US_PER_UNIT 4
 
 // Real time `us` long, as media time. The playback rate is this one place.
 static int64_t run(int64_t us)
@@ -31,13 +41,24 @@ static int64_t run(int64_t us)
     return us * UNITS_PER_US;
 }
 
+// Drift of size `a` (> 0) after `us` of being worked toward 0: at the slew
+// down to NEAR, then at the near rate. The fast part lasts the whole
+// microseconds that leave at least NEAR, so the size never rises.
+static int64_t worked_size(int64_t a, int64_t us)
+{
+    if (a - us * SLEW_UNITS_PER_US >= NEAR_UNITS)
+        return a - us * SLEW_UNITS_PER_US;
+    int64_t fast_us = a > NEAR_UNITS ? (a - NEAR_UNITS) / SLEW_UNITS_PER_US : 0;
+    int64_t left = a - fast_us * SLEW_UNITS_PER_US - (us - fast_us) / NEAR_US_PER_UNIT;
+    return left > 0 ? left : 0;
+}
+
 // Drift `d` after `us` of being worked toward 0.
 static int64_t slewed(int64_t d, int64_t us)
 {
-    int64_t worked = us * SLEW_UNITS_PER_US;
     if (d > 0)
-        return d > worked ? d - worked : 0;
-    return -d > worked ? d + worked : 0;
+        return worked_size(d, us);
+    return d < 0 ? -worked_size(-d, us) : 0;
 }
 
 // Units to frames, rounded down (a reading may be below 0: a report of a

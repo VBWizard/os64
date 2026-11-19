@@ -265,8 +265,13 @@ already taken off; the clock does no delay arithmetic) and MONOTONIC.
 A reading never moves backward and never steps, a seek excepted: it
 rises with `t`, an event leaves it where it was at the event's moment,
 and where the two views disagree the DRIFT is worked off by running a
-twentieth fast or slow (50 ms in a second), a constant to tune on the
-P5. A reading taken ahead, for a blank or a conversion's reach past the
+twentieth fast or slow (50 ms in a second) down to the last 10 ms, which
+go at a 480th (4.8 s). The P5 set the second rate: the headphones'
+reports scatter by up to a tick (each is stamped at the sink's pull,
+which waits for kusb's pass), and at a twentieth the reading swung with
+them enough to leave a hundred pictures a minute unshown at 1080p60,
+against six muted; a model of the scatter gave 114 and 5, and 6 to 10
+with the near rate. A reading taken ahead, for a blank or a conversion's reach past the
 next event, is a forecast that event may revise down (a starve freezes
 at its own moment); a picture taken on it is simply gone.
 

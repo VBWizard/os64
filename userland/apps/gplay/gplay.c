@@ -1025,6 +1025,7 @@ static void start_playing(player_t *p, int64_t now)
     os64_media_clock_play(&p->clock, now);
     p->state = ST_PLAYING;
     p->stall_since = 0;
+    p->last_frame_number = 0;             // refreshes while not playing are not missed
     os64_bell_ring(&p->audio_bell);
 }
 
