@@ -217,8 +217,9 @@ tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
   sound queue running dry, the clock is paused and nothing is written,
   until a picture is ready and half a second of sound is queued (twice
   the pace's floor, so leaving buffering never opens the far-behind door
-  at once). A sink that stops advancing with sound queued for a second is
-  a refused device instead: monotonic, retried every two seconds.
+  at once). A sink stalled for a second (it stops advancing with sound
+  queued, or a start hears nothing within its hold's bound) is a refused
+  device instead: monotonic, retried every two seconds.
   Monotonic is for sound that cannot be had, never for sound that is late.
 - **A resize while paused or ended converts the shown picture again**:
   each converted frame keeps its decoded picture until it is retired, so

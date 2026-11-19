@@ -154,6 +154,7 @@ typedef struct {
     frame_t *free_frames;
     frame_t *shown;                       // main's: the picture on the screen (or the last retired)
     frame_t *reconverted;                 // the shown one converted again at a new size, for main
+    uint32_t shown_serial;                // moved each time `shown` changes
 
     // The state and the requests.
     int state;
@@ -898,7 +899,10 @@ static int64_t keys_thread(void *arg)
 typedef struct {
     os64_draw_ctx_t ctx;
     bool readout;
-    frame_t *on_canvas;                   // the frame the canvas holds, NULL when none
+    // What the canvas holds, by the shown picture's serial and not its
+    // frame's address: frames are reused, so a later picture can sit at the
+    // address of the one drawn last.
+    uint32_t canvas_shown;
     uint32_t canvas_layout;               // the layout serial it was drawn under
     bool frame_asked;
     bool dirty;                           // the canvas needs drawing and publishing
@@ -956,7 +960,6 @@ static void draw_canvas(player_t *p, view_t *v, frame_t *f, int64_t now)
         for (uint32_t i = 0; i < count; i++)
             os64_draw_text(s, 8, 8 + 16 * (int32_t)i, lines[i], os64_strlen(lines[i]), 0xFFFFFFFFu, 0xFF000000u);
     }
-    v->on_canvas = f;
     os64_draw_publish(&v->ctx, 0);
 }
 
@@ -1131,6 +1134,7 @@ static frame_t *pick(player_t *p, int64_t clock, bool judging, collect_t *c, int
 {
     if (p->reconverted != 0 && !p->owed) {
         frame_t *old = p->shown;
+        p->shown_serial++;
         p->shown = p->reconverted;
         p->reconverted = 0;
         frame_retire(p, old, c);
@@ -1155,6 +1159,7 @@ static frame_t *pick(player_t *p, int64_t clock, bool judging, collect_t *c, int
     os64_media_pictures_entry_t e;
     os64_media_pictures_take(&p->ready, &e);
     frame_t *old = p->shown;
+    p->shown_serial++;
     p->shown = e.handle;
     if (old != 0)
         frame_retire(p, old, c);
@@ -1204,6 +1209,10 @@ static void service(player_t *p, int64_t now)
     if (p->state != ST_PLAYING)
         return;
     int cs = os64_media_clock_state(&p->clock, now);
+    // A STALLED sink: sound queued and the ear not advancing (starved), or a
+    // start whose hold ran out with nothing heard at all (starting late:
+    // its bound was already the sink's delay plus a margin).
+    bool stalled = false;
     if (cs == OS64_MEDIA_CLOCK_STARVED) {
         if (os64_media_queue_finished(&p->pcm)) {
             // The sound has ended and the picture goes on.
@@ -1214,20 +1223,25 @@ static void service(player_t *p, int64_t now)
             p->state = ST_BUFFERING;
             p->buffering_since = now;
             p->buffers++;
-        } else if (p->stall_since == 0) {
-            p->stall_since = now;
-        } else if (now - p->stall_since >= STALL_US) {
-            // Sound queued and the sink not advancing: the device is refused.
-            p->refused = true;
-            p->refused_why = "the sink stopped";
-            p->retry_at = now + RETRY_US;
-            p->stalls++;
-            p->stall_since = 0;
-            os64_media_clock_source(&p->clock, OS64_MEDIA_CLOCK_MONOTONIC, now);
-            os64_bell_ring(&p->audio_bell);
+        } else {
+            stalled = true;
         }
-    } else {
+    } else if (cs == OS64_MEDIA_CLOCK_STARTING_LATE) {
+        stalled = true;
+    }
+    if (!stalled) {
         p->stall_since = 0;
+    } else if (p->stall_since == 0) {
+        p->stall_since = now;
+    } else if (now - p->stall_since >= STALL_US) {
+        // A sink stalled for a second is a refused device.
+        p->refused = true;
+        p->refused_why = "the sink stopped";
+        p->retry_at = now + RETRY_US;
+        p->stalls++;
+        p->stall_since = 0;
+        os64_media_clock_source(&p->clock, OS64_MEDIA_CLOCK_MONOTONIC, now);
+        os64_bell_ring(&p->audio_bell);
     }
     // The end: every picture shown (none in a queue or being converted) and
     // every frame of sound given to the device (none in a write's tail).
@@ -1260,7 +1274,7 @@ static int run(player_t *p, view_t *v, const char *name)
         bool quit = p->quit || (s_exit_at_end && (p->state == ST_ENDED || p->state == ST_FAILED));
         bool want_frame = p->state == ST_PLAYING || (p->owed && os64_media_pictures_count(&p->ready) > 0) ||
                           (p->reconverted != 0 && !p->owed) ||
-                          v->dirty || v->on_canvas != p->shown || v->canvas_layout != p->layout_serial;
+                          v->dirty || v->canvas_shown != p->shown_serial || v->canvas_layout != p->layout_serial;
         bool title = p->state != last_state || p->refused != last_refused || p->muted != last_muted;
         last_state = p->state;
         last_refused = p->refused;
@@ -1299,11 +1313,13 @@ static int run(player_t *p, view_t *v, const char *name)
             if (p->state == ST_PLAYING)
                 judge(p, clock, now);
             frame_t *f = show != 0 ? show : p->shown;
-            bool draw = show != 0 || v->dirty || v->on_canvas != p->shown || v->canvas_layout != p->layout_serial;
-            uint32_t layout_serial = p->layout_serial;
+            bool draw = show != 0 || v->dirty || v->canvas_shown != p->shown_serial ||
+                        v->canvas_layout != p->layout_serial;
+            uint32_t layout_serial = p->layout_serial, shown_serial = p->shown_serial;
             os64_lock_release(&p->lock);
             if (draw) {
                 draw_canvas(p, v, f, now);
+                v->canvas_shown = shown_serial;
                 v->canvas_layout = layout_serial;
                 v->dirty = false;
             }
