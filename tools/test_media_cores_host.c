@@ -89,8 +89,11 @@ static void pictures_run(uint32_t capacity, int rounds)
             s_held = 0;
             ended = 0;
         } else {
-            os64_media_pictures_end(&q);
-            ended = 1;
+            int stale = rnd() % 4 == 0;
+            bool took = os64_media_pictures_end(&q, stale ? generation - 1 : generation);
+            CHECK(took == !stale, "round %d: an end names its generation", round);
+            if (!stale)
+                ended = 1;
         }
         CHECK(os64_media_pictures_count(&q) == s_held, "round %d: count %u, want %u", round,
               os64_media_pictures_count(&q), s_held);
@@ -120,12 +123,14 @@ static void pictures_edges(void)
     CHECK(os64_media_pictures_newest(&q) == -1 && !os64_media_pictures_take(&q, NULL), "no slots holds nothing");
     os64_media_pictures_entry_t slot[2];
     os64_media_pictures_init(&q, slot, 2);
-    os64_media_pictures_end(&q);
+    os64_media_pictures_end(&q, 0);
     CHECK(os64_media_pictures_finished(&q), "ended and empty is finished");
     CHECK(os64_media_pictures_push(&q, 0, (void *)1, 0, 0) == OS64_MEDIA_PICTURES_REFUSED, "a push after the end");
     CHECK(os64_media_pictures_flush(&q, NULL, NULL) == 1 && !os64_media_pictures_ended(&q), "a flush forgets the end");
     CHECK(os64_media_pictures_push(&q, 0, (void *)1, 0, 0) == OS64_MEDIA_PICTURES_REFUSED,
           "a push made before a flush is refused after it");
+    CHECK(!os64_media_pictures_end(&q, 0) && !os64_media_pictures_ended(&q),
+          "an end decided before a flush does not end the generation after it");
 }
 
 // ------------------------------------------------------------ the clock
@@ -172,6 +177,9 @@ static void clock_cases(void)
           os64_media_clock_read(&c, 1 * SEC + 200 * MS) == 96000, "a report not advancing does not end the hold");
     CHECK(!os64_media_clock_heard(&c, g - 1, 99000, 1 * SEC, true, 1 * SEC + 100 * MS) && c.reports_stale == 1,
           "a report from an earlier generation is refused");
+    CHECK(!os64_media_clock_heard(&c, g, 96480, 1 * SEC - 1, true, 1 * SEC + 150 * MS) &&
+          os64_media_clock_state(&c, 1 * SEC + 150 * MS) == OS64_MEDIA_CLOCK_STARTING,
+          "a report of sound heard before the play does not end its hold");
     // Frame 96000 + 480 heard at 1.21 s, reported at 1.22 s: the ear is 10 ms
     // past it then, so the reports say 96960 while the reading held 96000.
     CHECK(os64_media_clock_heard(&c, g, 96480, 1 * SEC + 210 * MS, true, 1 * SEC + 220 * MS),
@@ -180,6 +188,7 @@ static void clock_cases(void)
           "and the clock follows, in time");
     CHECK(os64_media_clock_read(&c, 1 * SEC + 220 * MS) == 96000, "taking it does not step the reading");
     CHECK(os64_media_clock_drift(&c, 1 * SEC + 220 * MS) == -960, "the difference is drift, behind the ear");
+    CHECK(os64_media_clock_drift(&c, 1 * SEC + 220 * MS + 1) == -960, "drift in frames is rounded down");
     // 960 frames of drift at a twentieth: 400 ms of reading per 20 ms of drift,
     // so 960 frames (20 ms) are worked off in 400 ms.
     CHECK(os64_media_clock_read(&c, 1 * SEC + 420 * MS) == 96000 + frames_in(200 * MS) * 21 / 20,
@@ -483,6 +492,48 @@ static void pace_door_cases(void)
     m.sound_frames = 0;
     m.sound_floor = 0;
     CHECK(os64_media_pace_judge(&p, &m) == OS64_MEDIA_PACE_ON_TIME, "no floor: the sound protects nothing");
+
+    // The sound's door fires once, and re-arms only when the sound has been
+    // back at its floor.
+    os64_media_pace_init(&p, DEPTH, PERIOD);
+    os64_media_pace_measure_t s = {0, 1000000, true, 1000000 + 9000, 100, 4800};
+    CHECK(os64_media_pace_judge(&p, &s) == OS64_MEDIA_PACE_FAR_BEHIND && p.resyncs == 1, "short of sound: far");
+    os64_media_pace_resynced(&p, 100 * MS);
+    s.now = 200 * MS;
+    CHECK(os64_media_pace_judge(&p, &s) == OS64_MEDIA_PACE_DECODING_LATE && p.resyncs == 1,
+          "still short after the resync: no second resync");
+    s.now = 300 * MS;
+    s.sound_frames = 4800;
+    os64_media_pace_judge(&p, &s);
+    s.now = 400 * MS;
+    s.sound_frames = 100;
+    CHECK(os64_media_pace_judge(&p, &s) == OS64_MEDIA_PACE_FAR_BEHIND && p.resyncs == 2 && p.far_by_sound == 2,
+          "back at its floor, then short again: far again, from decoding late");
+    os64_media_pace_init(&p, DEPTH, 0);
+    os64_media_pace_measure_t q = {0, 1000000, true, -1, 100, 4800};
+    CHECK(os64_media_pace_judge(&p, &q) == OS64_MEDIA_PACE_FAR_BEHIND,
+          "the sound's door needs no period and no picture decoded");
+    q.judging = false;
+    os64_media_pace_init(&p, DEPTH, PERIOD);
+    CHECK(os64_media_pace_judge(&p, &q) == OS64_MEDIA_PACE_ON_TIME, "nor does it move while not judging");
+
+    // A resync is asked, then taken; a reset withdraws one not taken.
+    os64_media_pace_init(&p, DEPTH, PERIOD);
+    CHECK(!os64_media_pace_resync_take(&p), "nothing asked");
+    judge(&p, 0, -1000000, true);
+    CHECK(os64_media_pace_resync_take(&p) && !os64_media_pace_resync_take(&p), "asked once, taken once");
+    os64_media_pace_reset(&p, 1);
+    judge(&p, 2, -1000000, true);
+    os64_media_pace_reset(&p, 3);
+    CHECK(!os64_media_pace_resync_take(&p) && p.resyncs == 2, "a reset withdraws a resync not taken; still counted");
+    os64_media_pace_init(&p, DEPTH, PERIOD);
+    s.now = 0;
+    s.sound_frames = 100;
+    os64_media_pace_judge(&p, &s);
+    os64_media_pace_reset(&p, 1);
+    s.now = 2;
+    CHECK(os64_media_pace_judge(&p, &s) == OS64_MEDIA_PACE_FAR_BEHIND && p.far_by_sound == 2,
+          "a reset arms the sound's door again");
 
     // The doors scale with the depth.
     os64_media_pace_init(&p, 16, PERIOD);

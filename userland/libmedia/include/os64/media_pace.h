@@ -42,8 +42,18 @@
 // and the long hold are what keep it from flapping after a burst of cheap
 // pictures). Far behind is at once: the lead more than
 // OS64_MEDIA_PACE_FAR_PERIODS periods behind, or the sound queue under the
-// player's floor, because the sound is what is protected. Every hold is
-// wall time, so a covered window, which paints nothing, holds nothing.
+// player's floor, because the sound is what is protected. The sound's door
+// fires once, then re-arms only when the sound has been back at its floor:
+// a shortfall a resync did not cure is not the picture decoder's, and
+// another resync would only cost the pictures again. It needs no period
+// and no picture decoded, which the lead's doors do. Every hold is wall
+// time, so a covered window, which paints nothing, holds nothing.
+//
+// A RESYNC IS ASKED, THEN TAKEN. Entering far behind sets `resync_asked`;
+// the decoding thread, under the player's lock, calls
+// os64_media_pace_resync_take, and resyncs when it answers true. A reset
+// (a seek) withdraws one not yet taken, so a resync asked before a seek is
+// never carried out after it.
 //
 // NO VERDICT WITHOUT SOMETHING TO JUDGE. The lead also falls to nothing at
 // the end of the media (the newest decoded picture is the last), while the
@@ -79,15 +89,17 @@
 typedef struct {
     int state;              // OS64_MEDIA_PACE_*
     uint32_t depth;         // the decoded queue's capacity
-    int64_t period;         // output frames a picture; 0 when not known (no door moves)
+    int64_t period;         // output frames a picture; 0 when not known (only the sound's door moves)
     int64_t in_since;       // wall when the lead went under the in door; -1 when not under
     int64_t out_since;      // the same for the out door
     int64_t far_since;      // wall when far behind began
+    bool sound_armed;       // the sound's door may fire
     // What the decoding thread is to do, read under the player's lock.
     bool skip_unused;       // leave out the pictures nothing depends on
-    uint32_t resyncs;       // asked: the decoding thread resyncs when this passes its own count
+    bool resync_asked;      // os64_media_pace_resync_take takes it
     // For a readout; reset by nothing.
     int64_t lead;           // the last judged, in output frames
+    uint64_t resyncs;       // asked
     uint64_t shown, dropped, skipped, starved;
     uint64_t entered[3];    // entries into each state, by OS64_MEDIA_PACE_*
     uint64_t far_by_sound;  // far-behind entries the sound's floor caused
@@ -99,8 +111,11 @@ typedef struct {
 // gives it later).
 void os64_media_pace_init(os64_media_pace_t *p, uint32_t depth, int64_t period);
 void os64_media_pace_period(os64_media_pace_t *p, int64_t period);
-// A seek or a new media: on time, nothing skipped; the counters stay.
+// A seek or a new media: on time, nothing skipped, a resync not yet taken
+// withdrawn, the sound's door armed; the counters stay.
 void os64_media_pace_reset(os64_media_pace_t *p, int64_t now);
+// Whether the decoding thread is to resync now; the ask is taken with it.
+bool os64_media_pace_resync_take(os64_media_pace_t *p);
 
 typedef struct {
     bool show;              // take `drop` from the front, unshown, then show the next one

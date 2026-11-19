@@ -37,9 +37,11 @@
 // before a seek is never shown after it. A refused handle is still the
 // producer's to release.
 //
-// THE END. The producer says when its media has no more pictures this
-// generation (os64_media_pictures_end); once what is queued has been taken,
-// os64_media_pictures_finished is true. A flush clears it.
+// THE END. The producer says when its media has no more pictures, naming
+// the generation it saw end as a push does (os64_media_pictures_end), so
+// an end decided before a seek does not end the generation after it; once
+// what is queued has been taken, os64_media_pictures_finished is true. A
+// flush clears it.
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -94,8 +96,9 @@ bool os64_media_pictures_take(os64_media_pictures_t *q, os64_media_pictures_entr
 uint32_t os64_media_pictures_flush(os64_media_pictures_t *q, void (*release)(void *context, void *handle),
                                    void *context);
 
-// No more will be pushed this generation.
-void os64_media_pictures_end(os64_media_pictures_t *q);
+// No more will be pushed in `generation`; false (and nothing ended) when it
+// is not the queue's.
+bool os64_media_pictures_end(os64_media_pictures_t *q, uint32_t generation);
 bool os64_media_pictures_ended(const os64_media_pictures_t *q);
 // Ended, and everything pushed has been taken.
 bool os64_media_pictures_finished(const os64_media_pictures_t *q);

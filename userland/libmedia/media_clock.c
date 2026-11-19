@@ -3,8 +3,8 @@
 // UNITS. Inside, a media time is counted in 2500ths of an output frame,
 // because then one microsecond of real time is exactly 120 units and the
 // slew's twentieth of it exactly 6: every reading is exact integer
-// arithmetic, and a reading's rise over one microsecond is 114, 120 or 126
-// units, never less. With whole frames the rounding of the run and of the
+// arithmetic, and a reading's rise over one microsecond is between 114 and
+// 126 units, never less. With whole frames the rounding of the run and of the
 // slew could disagree and a reading could fall back by one frame. Readings
 // leave as whole frames, rounded down.
 //
@@ -159,7 +159,10 @@ bool os64_media_clock_heard(os64_media_clock_t *c, uint32_t generation, int64_t 
     if (c->mode == MODE_PAUSED || c->mode == MODE_RUNNING)
         return false;
     bool waiting = c->mode == MODE_STARTING || c->mode == MODE_AWAITING;
-    if (!advancing && waiting)
+    // A wait ends on a report of sound heard since it began: one measured
+    // before a pause and delivered after the play would end a start's hold
+    // before the device has made anything heard.
+    if (waiting && (!advancing || frame_wall < c->since))
         return false;
     now = at_or_after(c, now);
     c->reports++;
@@ -214,6 +217,5 @@ int64_t os64_media_clock_drift(const os64_media_clock_t *c, int64_t t)
 {
     if (c->mode != MODE_FOLLOWING)
         return 0;
-    int64_t d = slewed(c->drift, at_or_after(c, t) - c->since);
-    return d / UNITS_PER_FRAME;
+    return frames(slewed(c->drift, at_or_after(c, t) - c->since));
 }

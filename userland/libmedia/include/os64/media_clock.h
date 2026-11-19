@@ -17,7 +17,13 @@
 // The player chooses the source; the clock never chooses for it.
 //
 // A READING NEVER MOVES BACKWARD AND NEVER STEPS (a seek excepted, which is
-// told where to go). Each source has its own view of the time, and where
+// told where to go): it rises with `t`, and an event leaves the reading at
+// its own `now` where it was. A reading taken AHEAD, for a `t` past the
+// next event, is a forecast that event may revise down (a starve freezes
+// the reading at the starve's moment; a report may turn the slew from
+// fast to slow); a picture taken on the forecast is simply gone, which is
+// why the forecast is never more than a blank or a conversion ahead.
+// Each source has its own view of the time, and where
 // they disagree (a change of source, a report that says the ear is
 // elsewhere) the difference, the DRIFT, is worked off by running a
 // twentieth fast or slow (the SLEW: 50 ms of disagreement takes a second),
@@ -111,8 +117,8 @@ void os64_media_clock_source(os64_media_clock_t *c, int source, int64_t now);
 // Frame `frame` of `generation` reached the ear at wall `frame_wall`,
 // reported at `now`; `advancing` false when the ear's position has stopped.
 // True when the report was taken; false for one from another generation,
-// one while paused or on the monotonic source, and a report that is not
-// advancing before the first that is.
+// one while paused or on the monotonic source, and, while starting or
+// awaiting, one not advancing or heard before the wait began.
 bool os64_media_clock_heard(os64_media_clock_t *c, uint32_t generation, int64_t frame, int64_t frame_wall,
                             bool advancing, int64_t now);
 
@@ -121,7 +127,7 @@ int64_t os64_media_clock_read(const os64_media_clock_t *c, int64_t t);
 uint32_t os64_media_clock_generation(const os64_media_clock_t *c);
 // OS64_MEDIA_CLOCK_PAUSED and the rest, at wall time `t`.
 int os64_media_clock_state(const os64_media_clock_t *c, int64_t t);
-// The drift still to be worked off at `t`, in frames: the reading minus
+// The drift still to be worked off at `t`, in frames rounded down: the reading minus
 // what the reports alone say (positive: the reading is ahead of the ear).
 // 0 when not following reports.
 int64_t os64_media_clock_drift(const os64_media_clock_t *c, int64_t t);

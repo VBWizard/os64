@@ -10,6 +10,7 @@ void os64_media_pace_init(os64_media_pace_t *p, uint32_t depth, int64_t period)
     p->period = period > 0 ? period : 0;
     p->in_since = p->out_since = -1;
     p->state = OS64_MEDIA_PACE_ON_TIME;
+    p->sound_armed = true;
 }
 
 void os64_media_pace_period(os64_media_pace_t *p, int64_t period)
@@ -28,6 +29,7 @@ static void enter(os64_media_pace_t *p, int state, int64_t now)
     p->skip_unused = state != OS64_MEDIA_PACE_ON_TIME;
     if (state == OS64_MEDIA_PACE_FAR_BEHIND) {
         p->far_since = now;
+        p->resync_asked = true;
         p->resyncs++;
     }
 }
@@ -38,7 +40,16 @@ void os64_media_pace_reset(os64_media_pace_t *p, int64_t now)
         p->far_behind_us += (uint64_t)(now - p->far_since);
     p->state = OS64_MEDIA_PACE_ON_TIME;
     p->skip_unused = false;
+    p->resync_asked = false;
+    p->sound_armed = true;
     p->in_since = p->out_since = -1;
+}
+
+bool os64_media_pace_resync_take(os64_media_pace_t *p)
+{
+    bool asked = p->resync_asked;
+    p->resync_asked = false;
+    return asked;
 }
 
 os64_media_pace_pick_t os64_media_pace_pick(os64_media_pace_t *p, const os64_media_pictures_t *ready, int64_t clock,
@@ -88,22 +99,36 @@ bool os64_media_pace_skip(os64_media_pace_t *p, const os64_media_pictures_t *dec
 
 int os64_media_pace_judge(os64_media_pace_t *p, const os64_media_pace_measure_t *m)
 {
-    if (!m->judging || p->period == 0 || m->newest < 0) {
+    if (!m->judging) {
         p->in_since = p->out_since = -1;
         return p->state;
     }
-    int64_t lead = m->newest - m->clock;
-    p->lead = lead;
+    // The sound's door re-arms once the sound is back at its floor: a
+    // shortfall a resync did not cure is not the picture decoder's, and
+    // another resync would only cost the pictures again.
+    bool short_of_sound = m->sound_floor > 0 && m->sound_frames < m->sound_floor;
+    if (!short_of_sound)
+        p->sound_armed = true;
+    bool lead_known = p->period > 0 && m->newest >= 0;
+    if (lead_known)
+        p->lead = m->newest - m->clock;
     if (p->state == OS64_MEDIA_PACE_FAR_BEHIND)
         return p->state;
-    bool by_sound = m->sound_floor > 0 && m->sound_frames < m->sound_floor;
-    if (lead < -(int64_t)OS64_MEDIA_PACE_FAR_PERIODS * p->period || by_sound) {
-        if (by_sound)
+    bool by_sound = short_of_sound && p->sound_armed;
+    if (by_sound || (lead_known && p->lead < -(int64_t)OS64_MEDIA_PACE_FAR_PERIODS * p->period)) {
+        if (by_sound) {
             p->far_by_sound++;
+            p->sound_armed = false;
+        }
         enter(p, OS64_MEDIA_PACE_FAR_BEHIND, m->now);
         return p->state;
     }
-    int64_t depth = (int64_t)p->depth * p->period;   // the most the queue can lead by
+    if (!lead_known) {
+        p->in_since = p->out_since = -1;
+        return p->state;
+    }
+    int64_t lead = p->lead;
+    int64_t depth = (int64_t)p->depth * p->period;   // the queue's depth in media time
     if (p->state == OS64_MEDIA_PACE_ON_TIME) {
         if (lead * 8 < OS64_MEDIA_PACE_IN_EIGHTHS * depth) {
             if (p->in_since < 0)

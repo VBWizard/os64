@@ -78,9 +78,12 @@ uint32_t os64_media_pictures_flush(os64_media_pictures_t *q, void (*release)(voi
     return ++q->generation;
 }
 
-void os64_media_pictures_end(os64_media_pictures_t *q)
+bool os64_media_pictures_end(os64_media_pictures_t *q, uint32_t generation)
 {
+    if (generation != q->generation)
+        return false;
     q->ended = true;
+    return true;
 }
 
 bool os64_media_pictures_ended(const os64_media_pictures_t *q)

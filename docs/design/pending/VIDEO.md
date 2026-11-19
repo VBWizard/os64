@@ -218,9 +218,13 @@ question, the media frame showing at wall time `t`, and the player asks
 it for the blank its publish will be shown at. Its sources: HEARD (the
 player reports "frame H reached the EAR at wall Th", the sink's delay
 already taken off; the clock does no delay arithmetic) and MONOTONIC.
-A reading never moves backward and never steps, a seek excepted: where
-the two views disagree, the DRIFT is worked off by running a twentieth
-fast or slow (50 ms in a second), a constant to tune on the P5.
+A reading never moves backward and never steps, a seek excepted: it
+rises with `t`, an event leaves it where it was at the event's moment,
+and where the two views disagree the DRIFT is worked off by running a
+twentieth fast or slow (50 ms in a second), a constant to tune on the
+P5. A reading taken ahead, for a blank or a conversion's reach past the
+next event, is a forecast that event may revise down (a starve freezes
+at its own moment); a picture taken on it is simply gone.
 
 | State | Event | The reading | Next |
 |---|---|---|---|
@@ -230,7 +234,7 @@ fast or slow (50 ms in a second), a constant to tune on the P5.
 | any | seek to `m` | `m` exactly; generation + 1, reports forgotten | paused stays paused; else starting (heard) or running |
 | **starting** | (a quarter second passes, no advancing report) | runs at real time from where it held, so a silent device never freezes the picture | starting, late (counted at its end) |
 | **starting** | advancing report, current generation | unchanged; the difference from the ear becomes drift | following |
-| starting, awaiting | report not advancing | unchanged (refused) | same |
+| starting, awaiting | report not advancing, or of sound heard before the wait began | unchanged (refused) | same |
 | running | source → heard (unmute) | unchanged, and keeps running: a picture already moving does not stop | **awaiting** |
 | awaiting | advancing report | unchanged; the difference becomes drift | following |
 | **following** | (reading) | the ear's view (`H` + the wall time since `Th`) plus the drift, worked toward 0 | |
@@ -308,9 +312,9 @@ answers:
 |---|---|---|---|
 | on time | lead below 3/8 of the depth, for 125 ms | leave out the pictures nothing depends on (skip UNUSED) | decoding late |
 | decoding late | lead 3/4 of the depth or more, for 1 s | decode every picture (skip NONE) | on time |
-| on time, decoding late | lead more than 30 periods behind, or the sound queue under the player's floor, at once | resync: drop to the next keyframe, the sound running on | far behind |
+| on time, decoding late | lead more than 30 periods behind, or the sound queue under the player's floor (its door armed), at once | a resync asked: drop to the next keyframe, the sound running on | far behind |
 | far behind | the first picture after the resync is decoded | (UNUSED stays) | decoding late |
-| any | a seek, or a new media | skip NONE; the counters kept | on time |
+| any | a seek, or a new media | skip NONE; a resync not yet taken withdrawn; the counters kept | on time |
 
 The gap between the doors and the out door's long hold keep a burst of
 cheap pictures after a keyframe from flapping it. Every hold is WALL
@@ -321,6 +325,11 @@ buffering after a seek, and while paused, so the player says `judging`
 false then, no door moves, no hold runs, and no paint counts as starved.
 The sound's floor is the twin of the 30 periods because the sound is
 what is protected; the player passes 0 when there is none to protect.
+Its door fires once and re-arms only when the sound has been back at
+its floor: a shortfall a resync did not cure is not the picture
+decoder's, and another would only cost the pictures again. A resync is
+ASKED by the pace and TAKEN by the decoding thread under the player's
+lock, so a seek between the two withdraws it.
 **What a resync costs:** the screen holds its last picture until the next
 keyframe, commonly two to five seconds away on the web. That is the
 design, not a defect, and `far_behind_us` with the entries counted says
