@@ -99,6 +99,7 @@
 #define BUFFER_SOUND (RATE / 2u)          // buffering ends with this much sound queued
 #define SOUND_FLOOR (RATE / 4u)           // under it is far behind (the pace's twin door)
 #define STALL_US 1000000                  // a sink not advancing with sound queued: refused
+#define EAR_STILL_US 200000               // a moving ear this still while PLAYING has stopped
 #define RETRY_US 2000000                  // a refused device is tried again this often
 #define TICK_US 100000                    // no frame answer this long while playing: retire by the clock
 #define HOLD_MIN_US OS64_MEDIA_CLOCK_START_HOLD_US
@@ -182,6 +183,7 @@ typedef struct {
     int64_t last_tick;                    // wall of the audio thread's last tick ring
     int64_t conversion_us;                // what the last conversion took
     uint32_t delay_us;                    // the sink's reported delay
+    bool delay_known;                     // read from the device at least once
     uint32_t carry_frames;                // the audio thread's write tail not yet taken
     bool converting;                      // a decoded picture is out with the picture thread
     int64_t buffering_since;
@@ -518,6 +520,7 @@ typedef struct {
     uint32_t generation;
     bool generation_known;
     uint64_t last_heard;                  // the ear's stream frame at the last read
+    int64_t moved_at;                     // wall when it last moved
     bool paused;                          // `pause` sent
     bool fresh;                           // just opened or begun again: start from the clock's reading
     int16_t carry[2 * WRITE_FRAMES];      // a write's untaken tail, first next time
@@ -537,6 +540,7 @@ static void device_restart(device_t *d)
     d->written = 0;
     d->generation_known = false;
     d->last_heard = 0;
+    d->moved_at = 0;
     d->carry_frames = 0;
 }
 
@@ -662,7 +666,10 @@ static int64_t audio_thread(void *arg)
                     drop_behind(p, os64_media_clock_read(&p->clock, now_us()));
                     d.fresh = false;
                 }
-                n = os64_media_queue_take(&p->pcm, buf, WRITE_FRAMES, &at);
+                // A seek or a pause since this round looked: take nothing,
+                // so the device is flushed before any sound after it goes in.
+                bool still = p->seek_serial == served && (p->state == ST_PLAYING || p->state == ST_ENDED);
+                n = still ? os64_media_queue_take(&p->pcm, buf, WRITE_FRAMES, &at) : 0;
                 if (n > 0)
                     os64_bell_ring(&p->decode_bell);
                 p->carry_frames = n;          // in flight from the take: the end waits for it
@@ -706,6 +713,16 @@ static int64_t audio_thread(void *arg)
         if (d.position >= 0) {
             os64_audio_position_t pos;
             if (os64_read(d.position, &pos, sizeof(pos)) == (int64_t)sizeof(pos)) {
+                // The sink's delay, from every read: a start's hold bound
+                // needs it before anything is written (buffering waits).
+                os64_lock_acquire(&p->lock);
+                p->delay_us = pos.delay_us;
+                if (!p->delay_known) {
+                    p->delay_known = true;
+                    if (p->state == ST_BUFFERING)
+                        os64_gui_event_ring(p->win, RING_LOOK);   // buffering waited on it
+                }
+                os64_lock_release(&p->lock);
                 if (!d.generation_known) {
                     d.generation = pos.generation;
                     d.generation_known = true;
@@ -723,19 +740,25 @@ static int64_t audio_thread(void *arg)
                     // PLAYING says the ring holds sound, not that the ear has
                     // heard it: `heard` stays put until the sink's delay has
                     // passed (after a start, a seek's flush or a resume). So
-                    // a report is advancing only when the ear has moved, a
-                    // PLAYING stream whose ear has not moved says nothing
-                    // (neither ending a wait nor starving the clock), and any
-                    // other state is a report of an ear that has stopped.
+                    // a report is advancing only when the ear has moved, and
+                    // a PLAYING stream whose ear has not moved says nothing
+                    // (neither ending a wait nor starving the clock) until
+                    // the ear, once moving, has stood still for EAR_STILL_US:
+                    // then it is an ear that has stopped (a sink no longer
+                    // pulling), as is any state but PLAYING. A wait refuses
+                    // such a report, so a start's protection holds.
+                    int64_t t = now_us();
                     bool playing = pos.state == OS64_AUDIO_PLAYING;
                     bool moved = pos.heard > d.last_heard;
+                    if (moved)
+                        d.moved_at = t;
+                    bool stopped = !playing || (!moved && d.last_heard > 0 && t - d.moved_at >= EAR_STILL_US);
                     d.last_heard = pos.heard;
-                    if (moved || !playing) {
+                    if (moved || stopped) {
                         int64_t heard = os64_media_voice_heard(&d.voice, pos.heard);
                         os64_lock_acquire(&p->lock);
-                        p->delay_us = pos.delay_us;
                         os64_media_clock_heard(&p->clock, clock_gen, heard + p->sync_offset, (int64_t)pos.micros,
-                                               playing && moved, now_us());
+                                               moved && playing, t);
                         os64_lock_release(&p->lock);
                     }
                     os64_media_voice_prune(&d.voice, pos.heard);
@@ -1169,8 +1192,11 @@ static void service(player_t *p, int64_t now)
     if (p->state == ST_BUFFERING) {
         bool picture = os64_media_pictures_count(&p->ready) > 0 || (p->shown != 0 && !p->owed) ||
                        os64_media_pictures_finished(&p->decoded);
-        bool sound = !audible(p) || os64_media_queue_count(&p->pcm) >= BUFFER_SOUND ||
-                     os64_media_queue_ended(&p->pcm);
+        // The sound is ready with its depth queued (or its end), and once the
+        // sink's delay is known, which the start's hold bound is made from.
+        bool sound = !audible(p) || ((os64_media_queue_count(&p->pcm) >= BUFFER_SOUND ||
+                                      os64_media_queue_ended(&p->pcm)) &&
+                                     p->delay_known);
         if (picture && sound)
             start_playing(p, now);
         return;

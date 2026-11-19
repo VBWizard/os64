@@ -230,7 +230,11 @@ tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
 - **A report is advancing only when the ear has moved.** The stream says
   PLAYING once its ring holds sound, but `heard` stays put until the
   sink's delay has passed (after a start, a seek's flush, a resume), so
-  a PLAYING stream whose ear has not moved sends the clock nothing. A
+  a PLAYING stream whose ear has not moved sends the clock nothing,
+  until an ear that was moving has stood still for 200 ms: that is a
+  sink that stopped pulling, reported as stopped (a wait refuses it, so
+  a start keeps its protection). Buffering also waits until the sink's
+  delay has been read, since the start's hold bound is made from it. A
   stream generation the player did not start (a sink attached or
   detached) is treated as a flush: the player begins again from the
   clock's reading.
