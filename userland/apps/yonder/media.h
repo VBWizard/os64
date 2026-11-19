@@ -11,8 +11,9 @@
 // happens on threads of its own. Each session has a DECODER thread
 // (libmedia: the bytes, the decode, the PCM queue) and, for any address
 // but a file: one, a LOADER thread (the fetch job, its body streamed down
-// a pipe to the decoder). One AUDIO thread for the whole of yonder owns
-// /dev/audio and writes one session's sound at a time.
+// a pipe to the decoder). Its sound is a voice of yonder's one output
+// (os64/media_output.h): libmedia's audio thread owns /dev/audio and mixes
+// every session that plays.
 
 #include <stdbool.h>
 #include <stdint.h>
