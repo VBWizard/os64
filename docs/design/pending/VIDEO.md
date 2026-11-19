@@ -281,7 +281,7 @@ sound never waits on the caller's thread.** What that rule moved:
 - The player frees itself: close returns at once, and `finished` says
   when the source will never be read again.
 - When the output lets go of the player's sound still in the device (a
-  long pause, another sound starting while paused), the picture thread
+  long pause, another sound starting while paused), the decoding thread
   seeks to where the clock stands, so the sound is queued again.
 
 gplay is the window, the letterbox, the keys, the title and the readout.

@@ -17,7 +17,9 @@
 //   7. the sync clip covered and muted for its ten seconds: nobody asks
 //      for a frame and nothing is heard, yet the player retires every
 //      picture by the clock and drains its sound, and the end comes;
-//   8. the file with no sound covered: the end comes on the clock alone.
+//   8. the file with no sound covered: the end comes on the clock alone;
+//   9. a file that opens but is not media (a page) is refused with
+//      exit 2: the player fails its probe and stays gplay's until closed.
 //
 // Steps 2, 7 and 8 are the player's promise that a caller who never asks
 // for a frame does not stop it (os64/media_player.h § A picture nobody asks
@@ -128,7 +130,9 @@ static int steps(void)
         return r;
     if ((r = expect(7, (char *[]){"/bin/gplay", "--check", "--cover", "--script", "100:mute", SYNC, 0}, 0)) != 0)
         return r;
-    return expect(8, (char *[]){"/bin/gplay", "--check", "--cover", PICTURE_ONLY, 0}, 0);
+    if ((r = expect(8, (char *[]){"/bin/gplay", "--check", "--cover", PICTURE_ONLY, 0}, 0)) != 0)
+        return r;
+    return expect(9, (char *[]){"/bin/gplay", "--check", "/tests/pages/audio.html", 0}, 2);
 }
 
 int main(void)

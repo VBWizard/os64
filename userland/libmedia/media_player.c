@@ -104,7 +104,6 @@ struct os64_media_player {
     int failure;
     int64_t last_blank, period_us, last_frame_call, conversion_us;
     bool converting;
-    bool picture_done;                    // the picture thread's last touch
     int64_t picture_thread;
 
     os64_bell_t decode_bell, picture_bell;
@@ -313,7 +312,7 @@ static void voice_look(void *ctx)
     os64_media_player_t *p = ctx;
     service(p, now_us());
     if (p->voice.rewind)
-        (void)os64_bell_ring(&p->picture_bell);   // the picture thread carries it out
+        (void)os64_bell_ring(&p->decode_bell);   // the decoding thread carries it out
     look(p);
 }
 
@@ -358,6 +357,9 @@ static void pick(os64_media_player_t *p, int64_t clock, bool judging, collect_t 
     p->shown = e.handle;
     if (old != NULL)
         frame_retire(p, old, c);
+    // A reconversion is of the picture shown before: it goes with it.
+    frame_retire(p, p->reconverted, c);
+    p->reconverted = NULL;
     if (p->owed) {
         p->owed = false;
         p->seek_pending = false;
@@ -439,15 +441,6 @@ static int64_t picture_thread(void *arg)
     os64_lock_acquire(&p->lock);
     while (!p->quit) {
         int64_t now = now_us();
-        if (p->voice.rewind) {
-            // The output let go of sound of ours still in the device (a long
-            // pause, another sound starting): a seek to where the clock
-            // stands queues it again. Done here, not on the caller's thread.
-            p->voice.rewind = false;
-            if (p->state == OS64_MEDIA_PLAYER_PAUSED || p->state == OS64_MEDIA_PLAYER_BUFFERING)
-                (void)seek_to(p, os64_media_clock_read(&p->clock, now), &c, now,
-                              p->state == OS64_MEDIA_PLAYER_BUFFERING);
-        }
         retire_unasked(p, now, &c);
         service(p, now);
         // A resize while not playing: the shown picture again, at the new
@@ -532,7 +525,7 @@ static int64_t picture_thread(void *arg)
             // shown; otherwise (a seek or a play moved on) the source goes
             // back to it if it is still shown, or is released with this one.
             p->reconversions++;
-            if (made && p->shown == shown_from && p->state != OS64_MEDIA_PLAYER_PLAYING &&
+            if (made && p->shown == shown_from && p->state != OS64_MEDIA_PLAYER_PLAYING && !p->owed &&
                 gen == os64_media_pictures_generation(&p->ready)) {
                 frame_retire(p, p->reconverted, &c);
                 p->reconverted = f;
@@ -556,7 +549,6 @@ static int64_t picture_thread(void *arg)
                 look(p);
         }
     }
-    p->picture_done = true;
     (void)os64_bell_ring(&p->decode_bell);
     unlock(p);
     collect_release(p, &c);
@@ -575,9 +567,13 @@ static void opened(os64_media_player_t *p)
     bool picture = p->info.picture == OS64_MEDIA_PLAYABLE && (p->cfg.want & OS64_MEDIA_WANT_PICTURE) != 0;
     bool voiced = false;
     if (sound && p->cfg.output != NULL) {
+        // Built under the lock (the picture thread reads it), keeping a gain
+        // asked while opening; added outside it (the output's lock first).
+        os64_lock_acquire(&p->lock);
         p->voice = (os64_media_output_voice_t){.lock = &p->lock, .queue = &p->pcm, .clock = &p->clock,
                                                .refused = p->cfg.refused, .look = voice_look, .room = voice_room,
-                                               .ctx = p, .gain = 1.0, .position = -1};
+                                               .ctx = p, .gain = p->voice.gain, .position = -1};
+        os64_lock_release(&p->lock);
         voiced = os64_media_output_add(p->cfg.output, &p->voice) == 0;
     }
     os64_lock_acquire(&p->lock);
@@ -589,7 +585,8 @@ static void opened(os64_media_player_t *p)
     p->length = p->info.frames;
     int64_t period = p->info.rate_num > 0 ? (int64_t)RATE * p->info.rate_den / p->info.rate_num : 0;
     os64_media_pace_period(&p->pace, period);
-    os64_media_clock_source(&p->clock, voiced ? OS64_MEDIA_CLOCK_HEARD : OS64_MEDIA_CLOCK_MONOTONIC, now_us());
+    // A mute asked while opening holds: the clock is heard only if the sound is.
+    os64_media_clock_source(&p->clock, audible(p) ? OS64_MEDIA_CLOCK_HEARD : OS64_MEDIA_CLOCK_MONOTONIC, now_us());
     p->probed = true;
     p->state = p->want_play ? OS64_MEDIA_PLAYER_BUFFERING : OS64_MEDIA_PLAYER_PAUSED;
     voice_asks(p);
@@ -658,7 +655,31 @@ static int64_t decoding_thread(void *arg)
     uint32_t full = 0;                    // GOT_FULL's kind: park until it has room
     collect_t c = {0};
     os64_lock_acquire(&p->lock);
-    while (!p->quit && pcm != NULL && p->media != NULL) {
+    if (pcm == NULL && p->failure == 0) {
+        p->failure = OS64_MEDIA_NO_MEMORY;
+        service(p, now_us());
+        look(p);
+    }
+    // Only a close ends this loop: the player is the caller's until then,
+    // failed or not.
+    while (!p->quit) {
+        if (p->failure != 0 || p->media == NULL) {
+            unlock(p);
+            collect_release(p, &c);
+            (void)os64_bell_wait(&p->decode_bell, 200);
+            os64_lock_acquire(&p->lock);
+            continue;
+        }
+        if (p->voice.rewind) {
+            // The output let go of sound of ours still in the device (a long
+            // pause, another sound starting): a seek to where the clock
+            // stands queues it again. Done here, never on the caller's thread.
+            p->voice.rewind = false;
+            int64_t now = now_us();
+            if (p->state == OS64_MEDIA_PLAYER_PAUSED || p->state == OS64_MEDIA_PLAYER_BUFFERING)
+                (void)seek_to(p, os64_media_clock_read(&p->clock, now), &c, now,
+                              p->state == OS64_MEDIA_PLAYER_BUFFERING);
+        }
         if (p->seek_serial != served) {
             served = p->seek_serial;
             int64_t target = p->seek_target;
@@ -797,6 +818,7 @@ int os64_media_player_create(const os64_media_player_config_t *cfg, os64_media_p
     p->cfg = *cfg;
     p->decode_bell = (os64_bell_t)OS64_BELL_NONE;
     p->picture_bell = (os64_bell_t)OS64_BELL_NONE;
+    p->voice.gain = 1.0;                  // until os64_media_player_gain; the voice keeps it
     p->pcm_storage = os64_malloc(sizeof(int16_t) * 2 * PCM_FRAMES);
     if (p->pcm_storage == NULL || os64_bell_make(&p->decode_bell) < 0 || os64_bell_make(&p->picture_bell) < 0) {
         os64_bell_close(&p->decode_bell);
@@ -851,10 +873,9 @@ void os64_media_player_play(os64_media_player_t *p)
     os64_lock_acquire(&p->lock);
     p->want_play = true;
     if (p->state == OS64_MEDIA_PLAYER_PAUSED) {
-        if (p->seek_pending || (p->has_picture && os64_media_pictures_count(&p->ready) == 0 && p->shown == NULL))
-            p->state = OS64_MEDIA_PLAYER_BUFFERING;
-        else
-            start_playing(p, now);
+        // Through buffering, whose exit (a picture, half a second of sound,
+        // the sink's delay) service decides below, at once when it holds.
+        p->state = OS64_MEDIA_PLAYER_BUFFERING;
     } else if (p->state == OS64_MEDIA_PLAYER_ENDED) {
         (void)seek_to(p, 0, &c, now, true);
     }

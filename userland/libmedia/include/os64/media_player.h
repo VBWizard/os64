@@ -39,7 +39,7 @@
 //
 // A SEEK NOBODY ASKED FOR: when the output lets go of the player's sound
 // still in the device (os64/media_output.h's `rewind`) while it is paused or
-// buffering, the picture thread seeks to where the clock stands, so the
+// buffering, the decoding thread seeks to where the clock stands, so the
 // sound is queued again; that seek moves the generation facts.seeked takes,
 // as any seek does.
 //
@@ -88,9 +88,10 @@ typedef struct {
 
 // Starts the decoding thread, which opens the source (a probe may read the
 // network, so it is never done on the caller's thread). The player is
-// OPENING, then PAUSED at frame 0 (BUFFERING if play was asked meanwhile).
-// Returns 0, or OS64_MEDIA_BAD_ARGS / OS64_MEDIA_NO_MEMORY with nothing
-// started.
+// OPENING, then PAUSED at frame 0 (BUFFERING if play was asked meanwhile),
+// or FAILED with facts.failure saying why; failed or not, it is the
+// caller's until os64_media_player_close. Returns 0, or
+// OS64_MEDIA_BAD_ARGS / OS64_MEDIA_NO_MEMORY with nothing started.
 int os64_media_player_create(const os64_media_player_config_t *cfg, os64_media_player_t **out);
 
 // Returns at once; the pointer is dead on return. The player stops its
@@ -101,9 +102,9 @@ int os64_media_player_create(const os64_media_player_config_t *cfg, os64_media_p
 // itself).
 void os64_media_player_close(os64_media_player_t *p);
 
-// From PAUSED: playing (through buffering when no picture is ready or a seek
-// is pending); from ENDED: from the start. Asked while OPENING, it is
-// carried out once the media is open.
+// From PAUSED: through buffering, which ends at once when its exit holds;
+// from ENDED: from the start. Asked while OPENING, it is carried out once
+// the media is open.
 void os64_media_player_play(os64_media_player_t *p);
 void os64_media_player_pause(os64_media_player_t *p);
 // To `frame` (output frames), held to the media, playing on if it was.
