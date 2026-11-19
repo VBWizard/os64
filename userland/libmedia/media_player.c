@@ -194,13 +194,15 @@ static void voice_asks(os64_media_player_t *p)
 }
 
 // Lets go of the lock, and rings the output if the voice's asks changed.
+// Everything is read before the release: once it is down, a close may let
+// the decoding thread free the player.
 static void unlock(os64_media_player_t *p)
 {
-    bool ring = p->ring_output;
+    os64_media_output_t *ring = p->ring_output ? p->cfg.output : NULL;
     p->ring_output = false;
     os64_lock_release(&p->lock);
-    if (ring)
-        os64_media_output_ring(p->cfg.output);
+    if (ring != NULL)
+        os64_media_output_ring(ring);
 }
 
 static void start_playing(os64_media_player_t *p, int64_t now)
@@ -310,6 +312,8 @@ static void voice_look(void *ctx)
 {
     os64_media_player_t *p = ctx;
     service(p, now_us());
+    if (p->voice.rewind)
+        (void)os64_bell_ring(&p->picture_bell);   // the picture thread carries it out
     look(p);
 }
 
@@ -435,6 +439,15 @@ static int64_t picture_thread(void *arg)
     os64_lock_acquire(&p->lock);
     while (!p->quit) {
         int64_t now = now_us();
+        if (p->voice.rewind) {
+            // The output let go of sound of ours still in the device (a long
+            // pause, another sound starting): a seek to where the clock
+            // stands queues it again. Done here, not on the caller's thread.
+            p->voice.rewind = false;
+            if (p->state == OS64_MEDIA_PLAYER_PAUSED || p->state == OS64_MEDIA_PLAYER_BUFFERING)
+                (void)seek_to(p, os64_media_clock_read(&p->clock, now), &c, now,
+                              p->state == OS64_MEDIA_PLAYER_BUFFERING);
+        }
         retire_unasked(p, now, &c);
         service(p, now);
         // A resize while not playing: the shown picture again, at the new

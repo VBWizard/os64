@@ -207,9 +207,10 @@ table, most of it proven by `/tests/gplaytest` (Fable's changes to the
 tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
 
 - **A covered window keeps the sound playing.** It is answered no frames,
-  so with no answer for 100 ms the keys thread rings the window and main
-  retires overdue pictures by the clock without publishing; the queues
-  keep moving. Their conversions are wasted (DEBTS).
+  so with no frame call for 100 ms the player's picture thread retires
+  overdue pictures by the clock (V.5.2's S1; it was main's, rung by
+  another thread, in V4); the queues keep moving. Their conversions are
+  wasted (DEBTS).
 - **Nothing reaches the device before the clock plays**: after an open or
   a seek the picture's run-in from a keyframe can take most of a second,
   and sound heard against a held picture would be a lip-sync error.
@@ -254,6 +255,36 @@ tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
   in V.5.1); when the output itself lets go of sound still in the device
   (a long pause, another sound starting while paused), the player seeks
   to where its clock stands (the output's `rewind`).
+
+**In the library (V.5.2, `os64/media_player.h`).** Everything above but
+the window is libmedia's player now, which gplay and yonder share: the
+decoding and picture threads, the queues, the clock, the pace, the state
+and its moves, its sound a voice of the program's output
+(`os64/media_output.h`, V.5.1). The caller (gplay's main, a page's
+window thread) asks at each display frame for the picture due at that
+blank, reads the facts when told to look, and does nothing else: **the
+sound never waits on the caller's thread.** What that rule moved:
+
+- The state moves where it changes (S2): buffering's end, a stalled
+  sink and the end are decided under the player's lock by whichever
+  thread made them true, and again in each of the caller's calls.
+- A caller that stops asking for frames for 100 ms (a covered window, a
+  box out of view, a page busy laying out) has the clock's overdue
+  pictures retired by the picture thread, on a timed wait while playing
+  (S1); a picture owed after a seek or the open lands unshown, and at the
+  end the last picture goes once its time is over, so the end comes with
+  nobody watching. `/tests/gplaytest` steps 2, 7 (covered and muted) and
+  8 (covered, no sound) are the proof.
+- The media is opened on the decoding thread, never the caller's (a
+  probe may read the network); the player is OPENING until it has
+  probed.
+- The player frees itself: close returns at once, and `finished` says
+  when the source will never be read again.
+- When the output lets go of the player's sound still in the device (a
+  long pause, another sound starting while paused), the picture thread
+  seeks to where the clock stands, so the sound is queued again.
+
+gplay is the window, the letterbox, the keys, the title and the readout.
 
 ## 4. The clock
 

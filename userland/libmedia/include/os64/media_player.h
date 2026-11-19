@@ -18,7 +18,8 @@
 // or the DOM.
 //
 // THE RULES are the cores' (os64/media_pictures.h, media_clock.h,
-// media_pace.h) and VIDEO.md § 3, as built in gplay:
+// media_pace.h) and VIDEO.md § 3's (as built in V4's gplay, in the library
+// since V.5.2):
 // - buffering until a picture is ready and half a second of sound is
 //   queued (and the sink's delay known), then a start's hold;
 // - the clock's trust and bound;
@@ -35,6 +36,12 @@
 // them true (a push, a report, a conversion, the picture thread's timed
 // wake), and again in each of the caller's calls. `look` then says only
 // "the facts changed, come and read".
+//
+// A SEEK NOBODY ASKED FOR: when the output lets go of the player's sound
+// still in the device (os64/media_output.h's `rewind`) while it is paused or
+// buffering, the picture thread seeks to where the clock stands, so the
+// sound is queued again; that seek moves the generation facts.seeked takes,
+// as any seek does.
 //
 // A PICTURE NOBODY ASKS FOR: while playing with no `frame` call for
 // OS64_MEDIA_PLAYER_TICK_US (a covered window, a box out of view, a caller

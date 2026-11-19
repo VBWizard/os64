@@ -20,61 +20,17 @@
 // buttons (/dev/mediakeys): Play and Pause toggle, Previous goes to the
 // start, Stop leaves. Every number the readout shows prints at exit.
 //
-// THE DESIGN is VIDEO.md §§ 3 to 6 (the threads, the clock, the late
-// policy, the queues) with ~/os64-opus-kit's VIDEO_V4_TABLES.md as agreed;
-// the rules that decide are libmedia's pure cores (os64/media_pictures.h,
-// media_clock.h, media_pace.h), and this program obeys them.
+// THE PLAYER is libmedia's (os64/media_player.h): its threads decode,
+// convert and keep the state, and its sound is a voice of the program's
+// output (os64/media_output.h). gplay is the window over it: the letterbox,
+// the canvas, the keys, the title and the readout. VIDEO.md § 3 is the
+// design.
 //
-// THE THREADS AND THE LOCK.
-//
-//   main      the window and its canvas, the keys, the player's STATE, the
-//             frame requests, and at each frame answer the pace's pick and
-//             judge; the picture on the screen (`shown`).
-//   decoding  every libmedia call but release and the scaler: pulls with
-//             os64_media_next, asking only for the kinds its queues have
-//             room for, and pushes into the decoded queue and the sound
-//             queue; carries out seeks and the pace's skip and resync.
-//   picture   the scaler and the frames (converted pixels): takes from the
-//             decoded queue, skips what the pace says is overdue, converts
-//             to the window's picture size, pushes into the ready queue.
-//   keys      the media-key session, and a --script's timed actions; hands
-//             each to main through the window's doorbell; and while playing
-//             with no frame answer for TICK_US, rings the window for one.
-//
-// THE SOUND is the program's output's (os64/media_output.h): one audio
-// thread in libmedia owns the device, takes from the sound queue as this
-// player's VOICE, writes nothing before the clock plays, reports what the
-// ear heard to the clock, drops what the clock passed while the sound is
-// not heard, and refuses a busy, failed or stalled device and tries it
-// again, the clock playing on monotonic meanwhile. gplay says what it
-// wants (`voice.wants`, `voice.runs`) and reads what it is told.
-//
-// ONE LOCK, the player's, guards everything two threads touch: the three
-// queues, the clock, the pace, the voice, the requests, the shared facts and
-// the free frames. It is never held across a libmedia call, a conversion, a
-// call into the output or a window call that draws, waits or asks. The
-// output's audio thread takes it after the output's own lock, so gplay
-// never calls the output while holding it (a change for the output to see
-// is flagged, `ring_output`, and rung after). Pictures to give back to
-// libmedia are COLLECTED under it and released after
-// (os64_media_picture_release takes a lock of its own). Bells, and the
-// window's doorbell (os64_gui_event_ring, which never blocks), are rung with
-// it held (os64/bell.h's rule).
-//
-// THE STATES (VIDEO_V4_TABLES.md § 2): buffering (after the open, a seek
-// while playing, or the sound running dry: the clock paused, NOTHING written
-// to the device, until a picture is ready and half a second of sound is
-// queued), playing, paused, ended, failed. A picture is OWED after a seek:
-// the next frame answer shows the first one ready, whatever its time. A
-// resize while not playing converts the SHOWN picture again at the new size
-// (each frame keeps the decoded picture it came from until it is retired),
-// and hands it to main directly, past the ready queue.
-//
-// A COVERED WINDOW is answered no frames, so while playing the keys thread
-// rings the window when none has come for TICK_US, and main retires the
-// overdue pictures by the clock without publishing: the queues keep moving
-// and the sound plays on. The conversions that nobody sees are wasted
-// (DEBTS: a covered video converts for nobody).
+// THE THREADS. main: the window, the frame requests, and at each frame
+// answer the player's picture for that blank; every player call. keys: the
+// media-key session and a --script's timed actions, handed to main through
+// the window's doorbell. The app's lock guards only what the two share (the
+// actions, whether it is playing).
 //
 // Exit codes: 0 played (or left); 1 usage, or no desktop on this boot; 2 the
 // file would not open, has no picture, or is not media; 3 the media failed
@@ -86,62 +42,27 @@
 #include "os64/draw.h"
 #include "os64/lock.h"
 #include "os64/media.h"
-#include "os64/media_clock.h"
-#include "os64/media_mix.h"
 #include "os64/media_output.h"
-#include "os64/media_pace.h"
-#include "os64/media_pictures.h"
-#include "os64/media_queue.h"
+#include "os64/media_player.h"
 #include "os64/mediakeys.h"
 #include "os64/thread.h"
 
 #include "view.h"
 
 #define RATE OS64_AUDIO_RATE
-#define DECODED_DEPTH 8
-#define READY_DEPTH 3
-#define FRAMES (READY_DEPTH + 3)          // the ready ones, the one shown, one being converted, one reconverted
-#define PCM_FRAMES (2u * RATE)            // two seconds of sound queued
-#define CHUNK_FRAMES 4096u                // what the decoding thread asks for at once
-#define BUFFER_SOUND (RATE / 2u)          // buffering ends with this much sound queued
-#define SOUND_FLOOR (RATE / 4u)           // under it is far behind (the pace's twin door)
-// A report's trust (os64_media_clock_still): longer than the oldest a
-// healthy report can be when main reads the clock. The A2DP pump pulls a
-// packet (640 frames, 13.3 ms; the null sink pulls each tick, less) in
-// kusb's pass, which may come a tick late; the audio thread reads the
-// position after a write that waits up to OS64_MEDIA_OUTPUT_WRITE_PATIENCE_MS; main reads
-// for the blank a period ahead; and a margin.
-#define PULL_US 14000
-#define PASS_LATE_US 10000
-#define STILL_MARGIN_US 20000
-#define PERIOD_GUESS_US 16667             // before the first frame answer: 60 Hz
-#define TICK_US 100000                    // no frame answer this long while playing: retire by the clock
 #define SEEK_STEP (5 * (int64_t)RATE)
 #define SEEK_FAR (60 * (int64_t)RATE)
 #define SYNC_STEP ((int64_t)RATE / 100)   // 10 ms (signed: it is negated)
 #define MARGIN 48                         // the first window leaves this much of the screen
 #define ACTIONS 16
+#define OPEN_WAIT_MS 30000                // a probe that says nothing for this long fails the open
+#define TAIL_WAIT_MS 1000                 // at the end, the sound still in the device plays out this long
 
 // The window's doorbell (os64_gui_event_ring): why main is to look.
-#define RING_LOOK 1u                      // a picture owed is ready, a failure, the end of decoding
+#define RING_LOOK 1u                      // the player's facts changed
 #define RING_ACTION 2u                    // a key or a script action is waiting
-#define RING_TICK 4u                      // no frame answer for TICK_US while playing
 
-enum { ST_BUFFERING, ST_PLAYING, ST_PAUSED, ST_ENDED, ST_FAILED };
-
-static const char *const kStateName[] = {"buffering", "playing", "paused", "ended", "failed"};
-
-// A converted picture: its pixels, at the size it was converted to, and the
-// decoded picture it came from, kept so a resize while paused or ended can
-// convert the shown one again (released when the frame is retired).
-typedef struct frame {
-    uint32_t *pixels;
-    size_t capacity;                      // pixels allocated
-    uint32_t w, h;
-    int64_t at, duration;
-    os64_media_picture_t *source;
-    struct frame *next_free;
-} frame_t;
+static const char *const kStateName[] = {"opening", "buffering", "playing", "paused", "ended", "failed"};
 
 // A script's action, or a key's, waiting for main.
 typedef struct {
@@ -150,416 +71,56 @@ typedef struct {
 } action_t;
 
 typedef struct {
-    os64_lock_t lock;
-    os64_media_t *media;
-    os64_media_info_t info;
-    bool has_sound;                       // a sound this media decodes
-    int64_t length;                       // output frames, -1 when not known
-
-    // The queues and the cores.
-    os64_media_pictures_entry_t decoded_slot[DECODED_DEPTH], ready_slot[READY_DEPTH];
-    os64_media_pictures_t decoded, ready;
-    os64_media_queue_t pcm;
-    os64_media_clock_t clock;
-    os64_media_pace_t pace;
-    frame_t frame[FRAMES];
-    frame_t *free_frames;
-    frame_t *shown;                       // main's: the picture on the screen (or the last retired)
-    frame_t *reconverted;                 // the shown one converted again at a new size, for main
-    uint32_t shown_serial;                // moved each time `shown` changes
-
-    // The state and the requests.
-    int state;
-    bool owed;                            // show the first ready picture at the next frame answer
-    bool quit;
-    int exit_code;
-    uint32_t seek_serial;                 // moved by main at each seek
-    int64_t seek_target;
-    bool seek_pending;                    // until the first picture after it is shown
-    bool muted;                           // the person's
-    bool sound_over;                      // the sound has ended and been heard: the clock goes on monotonic
-    bool ring_output;                     // the voice's asks changed: ring the output once the lock is let go
-    int64_t sync_offset;                  // frames added to every heard report
-    uint32_t pic_w, pic_h;                // the size the picture thread converts to
-    uint32_t layout_serial;               // moved by every resize
-    bool reconvert;                       // convert the shown picture again at the new size
+    os64_lock_t lock;                     // the actions and `playing`, which the keys thread shares
+    os64_media_player_t *player;
+    os64_media_output_t *output;
+    int64_t win;                          // 0 until the window exists; `look` rings it then
+    os64_bell_t bell;                     // `look` and `finished` ring it before the window exists
+    bool finished, quit, playing;
     action_t action[ACTIONS];
     uint32_t actions;
-
-    // Facts.
-    int64_t newest;                       // the newest picture the decoder pushed, -1 none
-    int failure;                          // a libmedia result, 0 none
-    int64_t last_blank, period_us;        // the last frame answer's blank and period
-    int64_t last_answer;                  // wall of the last frame answer
-    int64_t last_tick;                    // wall of the keys thread's last tick ring
-    int64_t conversion_us;                // what the last conversion took
-    bool converting;                      // a decoded picture is out with the picture thread
-    int64_t buffering_since;
-
-    // Bells.
-    os64_bell_t decode_bell, picture_bell;
-    os64_media_output_t *output;
-    os64_media_output_voice_t voice;      // the sound, the output's to play (os64/media_output.h)
-    int64_t win;
-
-    // Counts, for the readout and the exit.
-    uint64_t pcm_pushed, pcm_dropped, pictures_pushed;  // dropped: flushed by a seek (the voice counts its own)
-    uint64_t buffers, display_missed, conversions, reconversions;
-    uint64_t last_frame_number;
-} player_t;
+    // main's own
+    bool muted;
+    int64_t sync;
+    uint64_t display_missed, last_frame_number;
+} app_t;
 
 static bool s_exit_at_end, s_check, s_cover, s_maximized, s_expect_refusal;
 static const char *s_script;
-
-// ---------------------------------------------------------------- collecting releases
-
-#define COLLECT 64                        // a seek's flush plus a paint's drops, with room
-typedef struct {
-    os64_media_picture_t *picture[COLLECT];
-    uint32_t n;
-} collect_t;
-
-static void collect_add(collect_t *c, os64_media_picture_t *p)
-{
-    if (p != 0 && c->n < COLLECT)
-        c->picture[c->n++] = p;
-}
-
-static void collect_release(player_t *pl, collect_t *c)
-{
-    for (uint32_t i = 0; i < c->n; i++)
-        os64_media_picture_release(pl->media, c->picture[i]);
-    c->n = 0;
-}
-
-static void release_decoded(void *context, void *handle)
-{
-    collect_add(context, handle);
-}
-
-// A frame back on the free list, its source collected. Under the lock.
-static void frame_retire(player_t *p, frame_t *f, collect_t *c)
-{
-    if (f == 0)
-        return;
-    collect_add(c, f->source);
-    f->source = 0;
-    f->next_free = p->free_frames;
-    p->free_frames = f;
-    os64_bell_ring(&p->picture_bell);
-}
-
-static void release_ready(void *context, void *handle)
-{
-    player_t *p = ((void **)context)[0];
-    frame_retire(p, handle, ((void **)context)[1]);
-}
 
 static int64_t now_us(void)
 {
     return os64_micros();
 }
 
-// The bound a start on the heard source holds for (Fable's C): the first
-// report cannot come before the sink's delay has passed.
-static int64_t hold_bound(const player_t *p)
+// The player's facts changed: called by its threads (and its output's) under
+// the player's lock, so it only rings.
+static void on_look(void *ctx)
 {
-    return os64_media_output_hold_bound(p->voice.delay_us);
+    app_t *a = ctx;
+    (void)os64_bell_ring(&a->bell);
+    if (a->win > 0)
+        os64_gui_event_ring(a->win, RING_LOOK);
 }
 
-static int64_t still_bound(const player_t *p)
+static void on_finished(void *ctx)
 {
-    int64_t period = p->period_us > 0 ? p->period_us : PERIOD_GUESS_US;
-    return PULL_US + PASS_LATE_US + (int64_t)OS64_MEDIA_OUTPUT_WRITE_PATIENCE_MS * 1000 + period + STILL_MARGIN_US;
-}
-
-static bool audible(const player_t *p)
-{
-    return p->has_sound && !p->muted && !p->sound_over && !p->voice.refused_device;
-}
-
-// What the voice asks of the output, from the player's state; a change is
-// rung once the lock is let go. Under the lock.
-static void voice_asks(player_t *p)
-{
-    bool wants = p->has_sound && !p->muted && !p->sound_over;
-    bool runs = p->state == ST_PLAYING || p->state == ST_ENDED;
-    if (wants != p->voice.wants || runs != p->voice.runs || p->sync_offset != p->voice.sync)
-        p->ring_output = true;
-    p->voice.wants = wants;
-    p->voice.runs = runs;
-    p->voice.sync = p->sync_offset;
-}
-
-// The voice's facts moved, or frames were taken: called by the output's
-// audio thread under the lock.
-static void voice_look(void *ctx)
-{
-    player_t *p = ctx;
-    os64_gui_event_ring(p->win, RING_LOOK);
-}
-
-static void voice_room(void *ctx)
-{
-    player_t *p = ctx;
-    os64_bell_ring(&p->decode_bell);
-}
-
-// ---------------------------------------------------------------- the decoding thread
-
-static int64_t decoding_thread(void *arg)
-{
-    player_t *p = arg;
-    int16_t *pcm = os64_malloc(sizeof(int16_t) * 2 * CHUNK_FRAMES);
-    uint32_t served = 0, gen_decoded = 0, gen_pcm = 0;
-    int applied_skip = OS64_MEDIA_SKIP_NONE;
-    // GOT_END is the end of the kinds ASKED for: asked for sound alone, the
-    // sound has ended and pictures may still be listed. Each kind ends on
-    // its own, and the media when both have.
-    bool resync_waiting = false, sound_done = false, pictures_done = false;
-    uint32_t full = 0;                    // GOT_FULL's kind: park until it has room
-    collect_t c = {0};
-    os64_lock_acquire(&p->lock);
-    while (!p->quit && pcm != 0) {
-        if (p->seek_serial != served) {
-            served = p->seek_serial;
-            int64_t target = p->seek_target;
-            gen_decoded = os64_media_pictures_generation(&p->decoded);
-            gen_pcm = p->pcm.generation;
-            sound_done = pictures_done = false;
-            full = 0;
-            resync_waiting = false;
-            os64_lock_release(&p->lock);
-            int r = os64_media_seek(p->media, target);
-            os64_lock_acquire(&p->lock);
-            if (r < 0 && p->failure == 0) {
-                p->failure = r;
-                os64_gui_event_ring(p->win, RING_LOOK);
-            }
-            continue;
-        }
-        int want_skip = p->pace.skip_unused ? OS64_MEDIA_SKIP_UNUSED : OS64_MEDIA_SKIP_NONE;
-        bool resync = os64_media_pace_resync_take(&p->pace);
-        if (want_skip != applied_skip || resync) {
-            os64_lock_release(&p->lock);
-            if (want_skip != applied_skip)
-                os64_media_picture_skip(p->media, want_skip);
-            if (resync)
-                os64_media_picture_resync(p->media);
-            os64_lock_acquire(&p->lock);
-            applied_skip = want_skip;
-            resync_waiting |= resync;
-            continue;
-        }
-        uint32_t accept = 0;
-        if (p->has_sound && !sound_done && os64_media_queue_room(&p->pcm) >= CHUNK_FRAMES)
-            accept |= OS64_MEDIA_WANT_SOUND;
-        if (!pictures_done && !os64_media_pictures_full(&p->decoded))
-            accept |= OS64_MEDIA_WANT_PICTURE;
-        if (full != 0 && (accept & full) == 0)
-            accept = 0;                   // park until the kind libmedia named has room
-        if (accept == 0 || p->failure != 0) {
-            os64_lock_release(&p->lock);
-            os64_bell_wait(&p->decode_bell, 200);
-            os64_lock_acquire(&p->lock);
-            continue;
-        }
-        full = 0;
-        os64_lock_release(&p->lock);
-        os64_media_got_t got = {0};
-        int r = os64_media_next(p->media, accept, pcm, CHUNK_FRAMES, &got);
-        os64_lock_acquire(&p->lock);
-        if (r < 0) {
-            if (got.kind == OS64_MEDIA_GOT_PICTURE && got.picture != 0)
-                collect_add(&c, got.picture);
-            if (p->failure == 0)
-                p->failure = r;
-            os64_gui_event_ring(p->win, RING_LOOK);
-        } else if (got.kind == OS64_MEDIA_GOT_SOUND) {
-            uint32_t n = os64_media_queue_push(&p->pcm, gen_pcm, pcm, got.frames, got.at);
-            if (n > 0) {
-                p->pcm_pushed += n;
-                // Buffering ends on the sound's depth too, and main looks
-                // only when told.
-                if (p->state == ST_BUFFERING)
-                    os64_gui_event_ring(p->win, RING_LOOK);
-            }
-        } else if (got.kind == OS64_MEDIA_GOT_PICTURE) {
-            int pushed = os64_media_pictures_push(&p->decoded, gen_decoded, got.picture, got.picture->at,
-                                                  got.picture->duration);
-            if (pushed == OS64_MEDIA_PICTURES_TAKEN) {
-                p->pictures_pushed++;
-                p->newest = got.picture->at;
-                if (resync_waiting) {
-                    os64_media_pace_resynced(&p->pace, now_us());
-                    resync_waiting = false;
-                }
-                os64_bell_ring(&p->picture_bell);
-            } else {
-                collect_add(&c, got.picture);   // REFUSED: a seek came between
-            }
-        } else if (got.kind == OS64_MEDIA_GOT_FULL) {
-            full = got.full;
-        } else {
-            if ((accept & OS64_MEDIA_WANT_SOUND) != 0) {
-                sound_done = true;
-                if (gen_pcm == p->pcm.generation)
-                    os64_media_queue_end(&p->pcm);
-            }
-            if ((accept & OS64_MEDIA_WANT_PICTURE) != 0) {
-                pictures_done = true;
-                os64_media_pictures_end(&p->decoded, gen_decoded);
-            }
-            os64_bell_ring(&p->picture_bell);
-            os64_gui_event_ring(p->win, RING_LOOK);
-        }
-        if (c.n > 0) {
-            os64_lock_release(&p->lock);
-            collect_release(p, &c);
-            os64_lock_acquire(&p->lock);
-        }
-    }
-    os64_lock_release(&p->lock);
-    os64_free(pcm);
-    return 0;
-}
-
-// ---------------------------------------------------------------- the picture thread
-
-static bool frame_fit(frame_t *f, uint32_t w, uint32_t h)
-{
-    size_t need = (size_t)w * h;
-    if (need <= f->capacity)
-        return true;
-    os64_free(f->pixels);
-    f->pixels = os64_malloc_aligned(need * sizeof(uint32_t), 64);
-    f->capacity = f->pixels != 0 ? need : 0;
-    return f->pixels != 0;
-}
-
-static int64_t picture_thread(void *arg)
-{
-    player_t *p = arg;
-    os64_media_scaler_t *scaler = 0;
-    uint32_t scaler_w = 0, scaler_h = 0;
-    collect_t c = {0};
-    os64_lock_acquire(&p->lock);
-    while (!p->quit) {
-        // A resize while not playing: the shown picture again, at the new size.
-        // A shown frame whose source is out (a reconversion in flight, its
-        // result not yet taken by main) waits: the newest size is converted
-        // once main has swapped the result in.
-        bool again = p->reconvert && p->shown != 0 && p->shown->source != 0 && p->free_frames != 0;
-        if (p->reconvert && p->shown == 0)
-            p->reconvert = false;
-        const os64_media_pictures_entry_t *front = os64_media_pictures_peek(&p->decoded, 0);
-        if (!again && (front == 0 || os64_media_pictures_full(&p->ready) || p->free_frames == 0)) {
-            os64_lock_release(&p->lock);
-            collect_release(p, &c);
-            os64_bell_wait(&p->picture_bell, 200);
-            os64_lock_acquire(&p->lock);
-            continue;
-        }
-        os64_media_picture_t *source;
-        int64_t at, duration;
-        frame_t *shown_from = 0;
-        if (again) {
-            // The source goes with the conversion, so a retire of the shown
-            // frame meanwhile cannot release it under the scaler.
-            p->reconvert = false;
-            shown_from = p->shown;
-            source = shown_from->source;
-            shown_from->source = 0;
-            at = shown_from->at;
-            duration = shown_from->duration;
-        } else {
-            // Skip what is overdue at the blank this conversion could reach.
-            int64_t now = now_us();
-            int64_t reach = os64_media_pace_reach(now, p->conversion_us, p->last_blank, p->period_us);
-            int64_t clock = os64_media_clock_read(&p->clock, reach);
-            while (os64_media_pace_skip(&p->pace, &p->decoded, clock)) {
-                os64_media_pictures_entry_t e;
-                os64_media_pictures_take(&p->decoded, &e);
-                collect_add(&c, e.handle);
-                os64_bell_ring(&p->decode_bell);
-            }
-            os64_media_pictures_entry_t e;
-            os64_media_pictures_take(&p->decoded, &e);
-            os64_bell_ring(&p->decode_bell);
-            source = e.handle;
-            at = e.at;
-            duration = e.duration;
-        }
-        frame_t *f = p->free_frames;
-        p->free_frames = f->next_free;
-        uint32_t w = p->pic_w, h = p->pic_h, gen = os64_media_pictures_generation(&p->ready);
-        p->converting = true;
-        os64_lock_release(&p->lock);
-
-        collect_release(p, &c);
-        bool made = false;
-        int64_t t0 = now_us();
-        if (w != scaler_w || h != scaler_h || scaler == 0) {
-            os64_media_scaler_destroy(scaler);
-            scaler = 0;
-            if (os64_media_scaler_create(w, h, OS64_MEDIA_SCALE_FAST, &scaler) == 0) {
-                scaler_w = w;
-                scaler_h = h;
-            }
-        }
-        if (scaler != 0 && frame_fit(f, w, h))
-            made = os64_media_scaler_convert(scaler, source, f->pixels, w * 4) == 0;
-        int64_t cost = now_us() - t0;
-
-        os64_lock_acquire(&p->lock);
-        p->converting = false;
-        p->conversion_us = cost;
-        f->w = w;
-        f->h = h;
-        f->at = at;
-        f->duration = duration;
-        f->source = source;
-        if (shown_from != 0) {
-            // To main directly while the frame it replaces is still shown;
-            // otherwise (a seek or a play moved on) the source goes back to
-            // it if it is still shown, or is released with this frame.
-            p->reconversions++;
-            if (made && p->shown == shown_from && p->state != ST_PLAYING &&
-                gen == os64_media_pictures_generation(&p->ready)) {
-                frame_retire(p, p->reconverted, &c);
-                p->reconverted = f;
-                os64_gui_event_ring(p->win, RING_LOOK);
-            } else {
-                if (p->shown == shown_from && shown_from->source == 0) {
-                    shown_from->source = source;
-                    f->source = 0;
-                }
-                frame_retire(p, f, &c);
-            }
-            continue;
-        }
-        p->conversions++;
-        int pushed = made ? os64_media_pictures_push(&p->ready, gen, f, at, duration) : OS64_MEDIA_PICTURES_REFUSED;
-        if (pushed != OS64_MEDIA_PICTURES_TAKEN)
-            frame_retire(p, f, &c);
-        if (pushed == OS64_MEDIA_PICTURES_TAKEN && (p->owed || p->state != ST_PLAYING))
-            os64_gui_event_ring(p->win, RING_LOOK);
-    }
-    os64_lock_release(&p->lock);
-    collect_release(p, &c);
-    os64_media_scaler_destroy(scaler);
-    return 0;
+    app_t *a = ctx;
+    os64_lock_acquire(&a->lock);
+    a->finished = true;
+    (void)os64_bell_ring(&a->bell);
+    os64_lock_release(&a->lock);
 }
 
 // ---------------------------------------------------------------- the keys thread
 
-static void post_action(player_t *p, action_t a)
+static void post_action(app_t *a, action_t act)
 {
-    os64_lock_acquire(&p->lock);
-    if (p->actions < ACTIONS)
-        p->action[p->actions++] = a;
-    os64_gui_event_ring(p->win, RING_ACTION);
-    os64_lock_release(&p->lock);
+    os64_lock_acquire(&a->lock);
+    if (a->actions < ACTIONS)
+        a->action[a->actions++] = act;
+    os64_gui_event_ring(a->win, RING_ACTION);
+    os64_lock_release(&a->lock);
 }
 
 // One `--script` step: "<ms>:<action>", the actions gplay_key's names
@@ -610,7 +171,7 @@ static bool script_step(const char **cursor, int64_t *ms, action_t *a)
 
 static int64_t keys_thread(void *arg)
 {
-    player_t *p = arg;
+    app_t *a = arg;
     int64_t session = os64_open("/dev/mediakeys", "u");
     const char *script = s_script;
     int64_t start = now_us(), when = -1;
@@ -619,17 +180,10 @@ static int64_t keys_thread(void *arg)
         script = 0;
     int said = -1;
     for (;;) {
-        int64_t now = now_us();
-        os64_lock_acquire(&p->lock);
-        bool quit = p->quit;
-        int say = p->state == ST_PLAYING || p->state == ST_BUFFERING ? 0 : 1;
-        // A covered window is answered no frames: tick it, so main retires
-        // the overdue pictures by the clock (A).
-        if (p->state == ST_PLAYING && now - p->last_answer >= TICK_US && now - p->last_tick >= TICK_US) {
-            p->last_tick = now;
-            os64_gui_event_ring(p->win, RING_TICK);
-        }
-        os64_lock_release(&p->lock);
+        os64_lock_acquire(&a->lock);
+        bool quit = a->quit;
+        int say = a->playing ? 0 : 1;
+        os64_lock_release(&a->lock);
         if (quit)
             break;
         if (session >= 0 && say != said) {
@@ -638,7 +192,7 @@ static int64_t keys_thread(void *arg)
             said = say;
         }
         if (script != 0 && now_us() - start >= when * 1000) {
-            post_action(p, next);
+            post_action(a, next);
             if (!script_step(&script, &when, &next))
                 script = 0;
         }
@@ -653,7 +207,7 @@ static int64_t keys_thread(void *arg)
                                                                                                : GPLAY_KEY_NONE;
                 // Previous goes to the start: BACK_FAR with w = 1 says so.
                 if (key != GPLAY_KEY_NONE)
-                    post_action(p, (action_t){key, k.key == OS64_MEDIA_KEY_PREVIOUS ? 1u : 0u, 0});
+                    post_action(a, (action_t){key, k.key == OS64_MEDIA_KEY_PREVIOUS ? 1u : 0u, 0});
             }
         } else {
             os64_sleep(50);
@@ -669,137 +223,85 @@ static int64_t keys_thread(void *arg)
 typedef struct {
     os64_draw_ctx_t ctx;
     bool readout;
-    // What the canvas holds, by the shown picture's serial and not its
-    // frame's address: frames are reused, so a later picture can sit at the
-    // address of the one drawn last.
-    uint32_t canvas_shown;
-    uint32_t canvas_layout;               // the layout serial it was drawn under
     bool frame_asked;
     bool dirty;                           // the canvas needs drawing and publishing
+    bool poked;                           // the player said look: ask for a frame even while not playing
     uint8_t key_seq;                      // an arrow's burst, part read (gplay_key)
+    os64_media_player_frame_t shown;      // the picture on the canvas (the player's pixels)
 } view_t;
 
-static void readout_lines(player_t *p, char lines[][96], uint32_t *count, int64_t now)
+static void readout_lines(app_t *a, const os64_media_player_facts_t *f, char lines[][96], uint32_t *count)
 {
     char t[16], len[16];
-    int64_t at = os64_media_clock_read(&p->clock, now);
-    gplay_time_text(at, t, sizeof(t));
-    gplay_time_text(p->length, len, sizeof(len));
+    gplay_time_text(f->position, t, sizeof(t));
+    gplay_time_text(f->length, len, sizeof(len));
     static const char *const clock_name[] = {"paused", "monotonic", "starting", "starting late", "awaiting",
                                              "following", "starved", "still"};
     static const char *const pace_name[] = {"on time", "decoding late", "far behind"};
-    int cs = os64_media_clock_state(&p->clock, now);
-    int64_t drift = os64_media_clock_drift(&p->clock, now);
     uint32_t n = 0;
-    os64_snprintf(lines[n++], 96, "%s / %s  %s  clock %s, drift %ld ms", t, p->length >= 0 ? len : "?",
-                  kStateName[p->state], clock_name[cs], (long)(drift * 1000 / RATE));
-    os64_snprintf(lines[n++], 96, "pace %s, lead %ld ms", pace_name[p->pace.state],
-                  (long)(p->pace.lead * 1000 / RATE));
-    os64_snprintf(lines[n++], 96, "shown %lu dropped %lu skipped %lu starved %lu", (unsigned long)p->pace.shown,
-                  (unsigned long)p->pace.dropped, (unsigned long)p->pace.skipped, (unsigned long)p->pace.starved);
+    os64_snprintf(lines[n++], 96, "%s / %s  %s  clock %s, drift %ld ms", t, f->length >= 0 ? len : "?",
+                  kStateName[f->state], clock_name[f->clock_state], (long)(f->drift * 1000 / RATE));
+    os64_snprintf(lines[n++], 96, "pace %s, lead %ld ms", pace_name[f->pace.state],
+                  (long)(f->pace.lead * 1000 / RATE));
+    os64_snprintf(lines[n++], 96, "shown %lu dropped %lu skipped %lu starved %lu", (unsigned long)f->pace.shown,
+                  (unsigned long)f->pace.dropped, (unsigned long)f->pace.skipped, (unsigned long)f->pace.starved);
     os64_snprintf(lines[n++], 96, "resyncs %lu (%lu ms holding), display missed %lu",
-                  (unsigned long)p->pace.resyncs, (unsigned long)(p->pace.far_behind_us / 1000),
-                  (unsigned long)p->display_missed);
-    os64_snprintf(lines[n++], 96, "queues: decoded %u/%u ready %u/%u sound %lu ms", os64_media_pictures_count(&p->decoded),
-                  DECODED_DEPTH, os64_media_pictures_count(&p->ready), READY_DEPTH,
-                  (unsigned long)(os64_media_queue_count(&p->pcm) * 1000ull / RATE));
+                  (unsigned long)f->pace.resyncs, (unsigned long)(f->pace.far_behind_us / 1000),
+                  (unsigned long)a->display_missed);
+    os64_snprintf(lines[n++], 96, "queues: decoded %u/%u ready %u/%u sound %lu ms", f->decoded, f->decoded_depth,
+                  f->ready, f->ready_depth, (unsigned long)(f->sound_queued * 1000ull / RATE));
     os64_snprintf(lines[n++], 96, "ear: stills %lu, held ahead %lu, stepped behind %lu",
-                  (unsigned long)p->clock.stills, (unsigned long)p->clock.held_ahead,
-                  (unsigned long)p->clock.jumped_behind);
-    os64_snprintf(lines[n++], 96, "sync %ld ms  sink delay %u ms%s%s%s", (long)(p->sync_offset * 1000 / RATE),
-                  p->voice.delay_us / 1000, p->muted ? "  muted" : "", p->voice.refused_device ? "  sound: " : "",
-                  p->voice.refused_device && p->voice.refused_why ? p->voice.refused_why : "");
+                  (unsigned long)f->clock.stills, (unsigned long)f->clock.held_ahead,
+                  (unsigned long)f->clock.jumped_behind);
+    os64_snprintf(lines[n++], 96, "sync %ld ms  sink delay %u ms%s%s%s", (long)(f->sync * 1000 / RATE),
+                  f->delay_us / 1000, f->muted ? "  muted" : "", f->refused ? "  sound: " : "",
+                  f->refused && f->refused_why ? f->refused_why : "");
     *count = n;
 }
 
-// The canvas: black, the frame at its own size centred in the window (a
-// frame converted before a resize is drawn at its size until the next
-// arrives), and the readout over it.
-static void draw_canvas(player_t *p, view_t *v, frame_t *f, int64_t now)
+// The canvas: black, the picture at its own size centred in the window (one
+// converted before a resize is drawn at its size until the next arrives),
+// and the readout over it.
+static void draw_canvas(app_t *a, view_t *v)
 {
     os64_gui_surface_t *s = &v->ctx.surf;
     os64_gui_rect_t all = {0, 0, (int32_t)s->width, (int32_t)s->height};
     os64_draw_fill_rect(s, all, 0xFF000000u);
-    if (f != 0 && f->w > 0) {
-        int32_t x = ((int32_t)s->width - (int32_t)f->w) / 2;
-        int32_t y = ((int32_t)s->height - (int32_t)f->h) / 2;
-        os64_draw_blit(s, x, y, f->pixels, f->w, f->h, f->w);
+    if (v->shown.pixels != 0 && v->shown.w > 0) {
+        int32_t x = ((int32_t)s->width - (int32_t)v->shown.w) / 2;
+        int32_t y = ((int32_t)s->height - (int32_t)v->shown.h) / 2;
+        os64_draw_blit(s, x, y, v->shown.pixels, v->shown.w, v->shown.h, v->shown.w);
     }
     if (v->readout) {
+        os64_media_player_facts_t f;
+        os64_media_player_facts(a->player, &f);
         char lines[8][96];
         uint32_t count = 0;
-        os64_lock_acquire(&p->lock);
-        readout_lines(p, lines, &count, now);
-        os64_lock_release(&p->lock);
+        readout_lines(a, &f, lines, &count);
         for (uint32_t i = 0; i < count; i++)
             os64_draw_text(s, 8, 8 + 16 * (int32_t)i, lines[i], os64_strlen(lines[i]), 0xFFFFFFFFu, 0xFF000000u);
     }
     os64_draw_publish(&v->ctx, 0);
 }
 
-static void set_title(player_t *p, const char *name)
+static void set_title(app_t *a, const os64_media_player_facts_t *f, const char *name)
 {
     char title[160];
-    bool refused = p->voice.refused_device;
-    const char *sound = !p->has_sound ? "" : p->muted ? " (muted)" : refused ? " (sound not playing: " : "";
-    os64_snprintf(title, sizeof(title), "%s - %s%s%s%s%s", name, kStateName[p->state], sound,
-                  refused && !p->muted && p->has_sound && p->voice.refused_why ? p->voice.refused_why : "",
-                  refused && !p->muted && p->has_sound ? ")" : "",
-                  p->info.rotation != 0 ? " (rotated, shown as stored)" : "");
-    os64_gui_window_set_title(p->win, title, OS64_GUI_WINDOW_TITLE_UTF8);
+    bool refused = f->refused;
+    const char *sound = !f->has_sound ? "" : f->muted ? " (muted)" : refused ? " (sound not playing: " : "";
+    os64_snprintf(title, sizeof(title), "%s - %s%s%s%s%s", name, kStateName[f->state], sound,
+                  refused && !f->muted && f->has_sound && f->refused_why ? f->refused_why : "",
+                  refused && !f->muted && f->has_sound ? ")" : "",
+                  f->info.rotation != 0 ? " (rotated, shown as stored)" : "");
+    os64_gui_window_set_title(a->win, title, OS64_GUI_WINDOW_TITLE_UTF8);
 }
 
-// The picture size inside the window's content. Under the lock.
-static void layout(player_t *p, uint32_t content_w, uint32_t content_h)
+// The picture's size inside the window's content: the letterbox, to the
+// player.
+static void layout(app_t *a, const os64_media_info_t *info, uint32_t content_w, uint32_t content_h)
 {
-    gplay_rect_t r = gplay_letterbox(p->info.width, p->info.height, content_w, content_h);
-    p->pic_w = r.w > 0 ? r.w : 1;
-    p->pic_h = r.h > 0 ? r.h : 1;
-    p->layout_serial++;
-    if (p->state != ST_PLAYING)
-        p->reconvert = true;
-    os64_bell_ring(&p->picture_bell);
-}
-
-// A seek to `target`: every queue flushed, the clock and the pace told, the
-// decoding thread asked. Under the lock; the pictures to release go to `c`.
-static void seek_to(player_t *p, int64_t target, collect_t *c, int64_t now, bool play)
-{
-    void *ready_context[2] = {p, c};
-    os64_media_pictures_flush(&p->decoded, release_decoded, c);
-    os64_media_pictures_flush(&p->ready, release_ready, ready_context);
-    p->pcm_dropped += os64_media_queue_count(&p->pcm);
-    os64_media_queue_flush(&p->pcm);
-    if (os64_media_clock_state(&p->clock, now) != OS64_MEDIA_CLOCK_PAUSED)
-        os64_media_clock_pause(&p->clock, now);
-    os64_media_clock_seek(&p->clock, target, now);
-    os64_media_pace_reset(&p->pace, now);
-    p->seek_target = target;
-    p->seek_serial++;
-    p->seek_pending = true;
-    p->newest = -1;
-    p->owed = true;
-    p->sound_over = false;
-    // A reconversion of the picture from before the seek is not shown after it.
-    frame_retire(p, p->reconverted, c);
-    p->reconverted = 0;
-    p->reconvert = false;
-    p->state = play ? ST_BUFFERING : ST_PAUSED;
-    if (play)
-        p->buffering_since = now;
-    os64_bell_ring(&p->decode_bell);
-    os64_bell_ring(&p->picture_bell);
-    voice_asks(p);
-}
-
-static void start_playing(player_t *p, int64_t now)
-{
-    os64_media_clock_hold(&p->clock, hold_bound(p));
-    os64_media_clock_still(&p->clock, still_bound(p));
-    os64_media_clock_play(&p->clock, now);
-    p->state = ST_PLAYING;
-    p->last_frame_number = 0;             // refreshes while not playing are not missed
-    voice_asks(p);
+    gplay_rect_t r = gplay_letterbox(info->width, info->height, content_w, content_h);
+    os64_media_player_size(a->player, r.w > 0 ? r.w : 1, r.h > 0 ? r.h : 1);
 }
 
 static void volume_step(int delta)
@@ -825,67 +327,42 @@ static void volume_step(int delta)
     }
 }
 
-// One key's ask. Under no lock; takes it.
-static void do_key(player_t *p, view_t *v, gplay_key_t key, bool to_start, collect_t *c)
+// One key's ask, as a player call.
+static void do_key(app_t *a, view_t *v, gplay_key_t key, bool to_start, int state)
 {
-    int64_t now = now_us();
     switch (key) {
     case GPLAY_KEY_QUIT:
-        os64_lock_acquire(&p->lock);
-        p->quit = true;
-        os64_lock_release(&p->lock);
-        return;
+        a->quit = true;
+        break;
     case GPLAY_KEY_READOUT:
         v->readout = !v->readout;
         v->dirty = true;
-        return;
+        break;
     case GPLAY_KEY_LOUDER:
     case GPLAY_KEY_SOFTER:
         volume_step(key == GPLAY_KEY_LOUDER ? 5 : -5);
-        return;
-    default:
         break;
-    }
-    os64_lock_acquire(&p->lock);
-    switch (key) {
     case GPLAY_KEY_PAUSE:
-        if (p->state == ST_PLAYING) {
-            os64_media_clock_pause(&p->clock, now);
-            p->state = ST_PAUSED;
-        } else if (p->state == ST_BUFFERING) {
-            p->state = ST_PAUSED;
-        } else if (p->state == ST_PAUSED) {
-            if (p->seek_pending || os64_media_pictures_count(&p->ready) == 0) {
-                p->state = ST_BUFFERING;
-                p->buffering_since = now;
-            } else {
-                start_playing(p, now);
-            }
-        } else if (p->state == ST_ENDED) {
-            seek_to(p, 0, c, now, true);
-        }
-        voice_asks(p);
+        if (state == OS64_MEDIA_PLAYER_PLAYING || state == OS64_MEDIA_PLAYER_BUFFERING)
+            os64_media_player_pause(a->player);
+        else
+            os64_media_player_play(a->player);
         break;
     case GPLAY_KEY_BACK:
     case GPLAY_KEY_FORWARD:
     case GPLAY_KEY_BACK_FAR:
     case GPLAY_KEY_FORWARD_FAR:
-        if (p->state != ST_FAILED) {
-            int64_t step = key == GPLAY_KEY_BACK ? -SEEK_STEP : key == GPLAY_KEY_FORWARD ? SEEK_STEP
-                           : key == GPLAY_KEY_BACK_FAR                                  ? -SEEK_FAR
-                                                                                        : SEEK_FAR;
-            int64_t base = p->seek_pending ? p->seek_target : os64_media_clock_read(&p->clock, now);
-            int64_t target = to_start ? 0 : gplay_seek_target(base, step, p->length);
-            bool play = p->state == ST_PLAYING || p->state == ST_BUFFERING || p->state == ST_ENDED;
-            seek_to(p, target, c, now, play);
-        }
+        if (to_start)
+            (void)os64_media_player_seek(a->player, 0);
+        else
+            (void)os64_media_player_seek_by(a->player, key == GPLAY_KEY_BACK      ? -SEEK_STEP
+                                                       : key == GPLAY_KEY_FORWARD ? SEEK_STEP
+                                                       : key == GPLAY_KEY_BACK_FAR ? -SEEK_FAR
+                                                                                   : SEEK_FAR);
         break;
     case GPLAY_KEY_MUTE:
-        p->muted = !p->muted;
-        if (p->has_sound)
-            os64_media_clock_source(&p->clock, audible(p) ? OS64_MEDIA_CLOCK_HEARD : OS64_MEDIA_CLOCK_MONOTONIC,
-                                    now);
-        voice_asks(p);
+        a->muted = !a->muted;
+        os64_media_player_mute(a->player, a->muted);
         break;
     case GPLAY_KEY_SOUND_LATER:
     case GPLAY_KEY_SOUND_EARLIER:
@@ -893,344 +370,207 @@ static void do_key(player_t *p, view_t *v, gplay_key_t key, bool to_start, colle
         // and the pictures come later: the sound then lands EARLIER against
         // them. A beep heard after its flash wants `[`; the dial's value is
         // then how much the sink's reported delay falls short of the truth.
-        p->sync_offset += key == GPLAY_KEY_SOUND_LATER ? SYNC_STEP : -SYNC_STEP;
-        voice_asks(p);
+        a->sync += key == GPLAY_KEY_SOUND_LATER ? SYNC_STEP : -SYNC_STEP;
+        os64_media_player_sync(a->player, a->sync);
         break;
     default:
         break;
     }
-    os64_lock_release(&p->lock);
     v->dirty = true;
 }
 
-// Which picture the paint shows at `clock`: the pace's pick (forced to the
-// first ready one when a picture is owed), the dropped ones collected. The
-// frame to show comes back, NULL when the screen keeps what it has. Under
-// the lock.
-static frame_t *pick(player_t *p, int64_t clock, bool judging, collect_t *c, int64_t now)
-{
-    if (p->reconverted != 0 && !p->owed) {
-        frame_t *old = p->shown;
-        p->shown_serial++;
-        p->shown = p->reconverted;
-        p->reconverted = 0;
-        frame_retire(p, old, c);
-        return p->shown;
-    }
-    os64_media_pictures_entry_t shown_entry;
-    const os64_media_pictures_entry_t *shown = 0;
-    if (p->shown != 0) {
-        shown_entry = (os64_media_pictures_entry_t){p->shown, p->shown->at, p->shown->duration};
-        shown = &shown_entry;
-    }
-    os64_media_pace_pick_t k = os64_media_pace_pick(&p->pace, &p->ready, clock, shown, judging);
-    if (!k.show && p->owed && os64_media_pictures_count(&p->ready) > 0)
-        k = (os64_media_pace_pick_t){true, 0, false};
-    if (!k.show)
-        return 0;
-    for (uint32_t i = 0; i < k.drop; i++) {
-        os64_media_pictures_entry_t e;
-        os64_media_pictures_take(&p->ready, &e);
-        frame_retire(p, e.handle, c);
-    }
-    os64_media_pictures_entry_t e;
-    os64_media_pictures_take(&p->ready, &e);
-    frame_t *old = p->shown;
-    p->shown_serial++;
-    p->shown = e.handle;
-    if (old != 0)
-        frame_retire(p, old, c);
-    p->owed = false;
-    p->seek_pending = false;
-    (void)now;
-    return p->shown;
-}
-
-// The producers' state, once a paint. Under the lock.
-static void judge(player_t *p, int64_t clock, int64_t now)
-{
-    bool judging = p->state == ST_PLAYING && !os64_media_pictures_ended(&p->decoded);
-    bool sound_counts = audible(p) && !os64_media_queue_ended(&p->pcm) && !os64_media_pictures_ended(&p->decoded);
-    os64_media_pace_measure_t m = {now, clock, judging, p->newest, os64_media_queue_count(&p->pcm),
-                                   p->state == ST_PLAYING && sound_counts ? SOUND_FLOOR : 0};
-    bool skip_was = p->pace.skip_unused;
-    os64_media_pace_judge(&p->pace, &m);
-    if (p->pace.skip_unused != skip_was || p->pace.resync_asked)
-        os64_bell_ring(&p->decode_bell);
-}
-
-// The moves between states no event makes: buffering's end, a sound that
-// ran dry or a sink that stalled, the sound's end, the media's end. Under
-// the lock.
-static void service(player_t *p, int64_t now)
-{
-    if (p->failure != 0 && p->state != ST_FAILED) {
-        if (os64_media_clock_state(&p->clock, now) != OS64_MEDIA_CLOCK_PAUSED)
-            os64_media_clock_pause(&p->clock, now);
-        p->state = ST_FAILED;
-        voice_asks(p);
-        return;
-    }
-    if (p->state == ST_BUFFERING) {
-        bool picture = os64_media_pictures_count(&p->ready) > 0 || (p->shown != 0 && !p->owed) ||
-                       os64_media_pictures_finished(&p->decoded);
-        // The sound is ready with its depth queued (or its end), and once the
-        // sink's delay is known, which the start's hold bound is made from.
-        bool sound = !audible(p) || ((os64_media_queue_count(&p->pcm) >= BUFFER_SOUND ||
-                                      os64_media_queue_ended(&p->pcm)) &&
-                                     p->voice.delay_known);
-        if (picture && sound)
-            start_playing(p, now);
-        return;
-    }
-    if (p->state != ST_PLAYING)
-        return;
-    // A sound that stopped, said by the device (starved): at its end the
-    // picture goes on monotonic; with the queue run dry the decoder fell
-    // behind and a hold is buffering. A sink that stops pulling, never
-    // starts, or does not start again is the output's to refuse (its stall
-    // rule); a still ear (not heard to move) is waited out until it moves,
-    // and a stream someone else paused holds the picture until it resumes.
-    if (os64_media_clock_state(&p->clock, now) == OS64_MEDIA_CLOCK_STARVED) {
-        if (os64_media_queue_finished(&p->pcm)) {
-            p->sound_over = true;
-            os64_media_clock_source(&p->clock, OS64_MEDIA_CLOCK_MONOTONIC, now);
-            voice_asks(p);
-        } else if (os64_media_queue_count(&p->pcm) == 0) {
-            os64_media_clock_pause(&p->clock, now);
-            p->state = ST_BUFFERING;
-            p->buffering_since = now;
-            p->buffers++;
-            voice_asks(p);
-        }
-    }
-    // The end: every picture shown (none in a queue or being converted) and
-    // every frame of sound given to the device (none in a write's tail).
-    bool pictures_done = os64_media_pictures_finished(&p->decoded) && os64_media_pictures_count(&p->ready) == 0 &&
-                         !p->converting;
-    bool sound_done = !p->has_sound || (os64_media_queue_finished(&p->pcm) && !p->voice.unwritten);
-    if (pictures_done && sound_done) {
-        int64_t end = -1;
-        if (p->shown != 0) {
-            int64_t lasts = p->shown->duration > 0 ? p->shown->duration : p->pace.period;
-            end = p->shown->at + lasts;
-        }
-        if (end < 0 || os64_media_clock_read(&p->clock, now) >= end) {
-            os64_media_clock_pause(&p->clock, now);
-            p->state = ST_ENDED;
-            voice_asks(p);
-        }
-    }
-}
-
-static int run(player_t *p, view_t *v, const char *name)
+static void run(app_t *a, view_t *v, const os64_media_info_t *info, const char *name)
 {
     int last_state = -1;
     bool last_refused = false, last_muted = false;
-    collect_t c = {0};
     for (;;) {
-        int64_t now = now_us();
-        os64_lock_acquire(&p->lock);
-        service(p, now);
-        if (p->voice.rewind) {
-            // The output let go of sound of ours still in the device (a long
-            // pause, another sound starting): a seek to where the clock
-            // stands queues it again.
-            p->voice.rewind = false;
-            if (p->state == ST_PAUSED || p->state == ST_BUFFERING)
-                seek_to(p, os64_media_clock_read(&p->clock, now), &c, now, p->state == ST_BUFFERING);
+        os64_media_player_facts_t f;
+        os64_media_player_facts(a->player, &f);
+        os64_lock_acquire(&a->lock);
+        a->playing = f.state == OS64_MEDIA_PLAYER_PLAYING || f.state == OS64_MEDIA_PLAYER_BUFFERING;
+        os64_lock_release(&a->lock);
+        bool quit = a->quit || (s_exit_at_end && (f.state == OS64_MEDIA_PLAYER_ENDED ||
+                                                  f.state == OS64_MEDIA_PLAYER_FAILED));
+        if (f.state != last_state || f.refused != last_refused || f.muted != last_muted) {
+            set_title(a, &f, name);
+            last_state = f.state;
+            last_refused = f.refused;
+            last_muted = f.muted;
         }
-        voice_asks(p);
-        bool ring = p->ring_output;
-        p->ring_output = false;
-        bool quit = p->quit || (s_exit_at_end && (p->state == ST_ENDED || p->state == ST_FAILED));
-        bool want_frame = p->state == ST_PLAYING || (p->owed && os64_media_pictures_count(&p->ready) > 0) ||
-                          (p->reconverted != 0 && !p->owed) ||
-                          v->dirty || v->canvas_shown != p->shown_serial || v->canvas_layout != p->layout_serial;
-        bool title = p->state != last_state || p->voice.refused_device != last_refused || p->muted != last_muted;
-        last_state = p->state;
-        last_refused = p->voice.refused_device;
-        last_muted = p->muted;
-        os64_lock_release(&p->lock);
-        if (ring)
-            os64_media_output_ring(p->output);
-        if (title)
-            set_title(p, name);
-        collect_release(p, &c);
         if (quit)
             break;
+        bool want_frame = f.state == OS64_MEDIA_PLAYER_PLAYING || v->poked || v->dirty;
         if (want_frame && !v->frame_asked) {
-            if (os64_gui_frame_request(p->win, 0) == 0)
+            if (os64_gui_frame_request(a->win, 0) == 0)
                 v->frame_asked = true;
         }
         os64_gui_event_t ev;
-        if (os64_gui_event_wait(p->win, &ev) != 1)
+        if (os64_gui_event_wait(a->win, &ev) != 1)
             break;
-        now = now_us();
         switch (ev.type) {
         case OS64_GUI_EVENT_FRAME: {
             v->frame_asked = false;
+            v->poked = false;
             uint64_t number = os64_gui_frame_number(&ev);
             int64_t period = (int64_t)ev.frame.period_ns / 1000;
             // A publish reaches the glass one refresh after the answer's blank.
             int64_t blank = (int64_t)os64_gui_frame_blank_us(&ev) + period;
-            os64_lock_acquire(&p->lock);
-            if (p->last_frame_number != 0 && number > p->last_frame_number + 1 && p->state == ST_PLAYING)
-                p->display_missed += number - p->last_frame_number - 1;
-            p->last_frame_number = number;
-            p->last_blank = blank;
-            p->period_us = period;
-            os64_media_clock_still(&p->clock, still_bound(p));   // main reads a period ahead
-            p->last_answer = now;
-            int64_t clock = os64_media_clock_read(&p->clock, blank);
-            bool judging = p->state == ST_PLAYING && !os64_media_pictures_ended(&p->decoded);
-            frame_t *show = pick(p, clock, judging, &c, now);
-            if (p->state == ST_PLAYING)
-                judge(p, clock, now);
-            frame_t *f = show != 0 ? show : p->shown;
-            bool draw = show != 0 || v->dirty || v->canvas_shown != p->shown_serial ||
-                        v->canvas_layout != p->layout_serial;
-            uint32_t layout_serial = p->layout_serial, shown_serial = p->shown_serial;
-            os64_lock_release(&p->lock);
-            if (draw) {
-                draw_canvas(p, v, f, now);
-                v->canvas_shown = shown_serial;
-                v->canvas_layout = layout_serial;
+            if (a->last_frame_number != 0 && number > a->last_frame_number + 1 &&
+                f.state == OS64_MEDIA_PLAYER_PLAYING)
+                a->display_missed += number - a->last_frame_number - 1;
+            a->last_frame_number = f.state == OS64_MEDIA_PLAYER_PLAYING ? number : 0;
+            os64_media_player_frame_t fr;
+            (void)os64_media_player_frame(a->player, blank, period, &fr);
+            if (fr.changed)
+                v->shown = fr;
+            if (fr.changed || v->dirty) {
+                draw_canvas(a, v);
                 v->dirty = false;
             }
             break;
         }
         case OS64_GUI_EVENT_DOORBELL:
-            if (ev.doorbell.mask & RING_TICK) {
-                // No frame answer for a while: retire by the clock, unseen (A).
-                os64_lock_acquire(&p->lock);
-                if (p->state == ST_PLAYING && now - p->last_answer >= TICK_US)
-                    pick(p, os64_media_clock_read(&p->clock, now), false, &c, now);
-                os64_lock_release(&p->lock);
-            }
+            if (ev.doorbell.mask & RING_LOOK)
+                v->poked = true;
             if (ev.doorbell.mask & RING_ACTION) {
-                action_t a[ACTIONS];
-                os64_lock_acquire(&p->lock);
-                uint32_t n = p->actions;
+                action_t act[ACTIONS];
+                os64_lock_acquire(&a->lock);
+                uint32_t n = a->actions;
                 for (uint32_t i = 0; i < n; i++)
-                    a[i] = p->action[i];
-                p->actions = 0;
-                os64_lock_release(&p->lock);
+                    act[i] = a->action[i];
+                a->actions = 0;
+                os64_lock_release(&a->lock);
                 for (uint32_t i = 0; i < n; i++) {
-                    if (a[i].key == GPLAY_KEY_NONE && a[i].w > 0 && a[i].h > 0)
-                        os64_gui_window_set_content_size(p->win, a[i].w, a[i].h);
-                    else if (a[i].key != GPLAY_KEY_NONE)
-                        do_key(p, v, a[i].key, a[i].key == GPLAY_KEY_BACK_FAR && a[i].w == 1, &c);
-                    collect_release(p, &c);
+                    if (act[i].key == GPLAY_KEY_NONE && act[i].w > 0 && act[i].h > 0)
+                        os64_gui_window_set_content_size(a->win, act[i].w, act[i].h);
+                    else if (act[i].key != GPLAY_KEY_NONE) {
+                        os64_media_player_facts(a->player, &f);
+                        do_key(a, v, act[i].key, act[i].key == GPLAY_KEY_BACK_FAR && act[i].w == 1, f.state);
+                    }
                 }
             }
             break;
         case OS64_GUI_EVENT_KEY_DOWN:
-            do_key(p, v,
+            do_key(a, v,
                    gplay_key(&v->key_seq, ev.key.ascii, ev.key.scancode,
                              (ev.key.modifiers & OS64_GUI_MOD_SHIFT) != 0),
-                   false, &c);
+                   false, f.state);
             break;
         case OS64_GUI_EVENT_WINDOW_RESIZE:
             os64_draw_ctx_refresh(&v->ctx);
-            os64_lock_acquire(&p->lock);
-            layout(p, v->ctx.surf.width, v->ctx.surf.height);
-            os64_lock_release(&p->lock);
+            layout(a, info, v->ctx.surf.width, v->ctx.surf.height);
             v->dirty = true;
             break;
         case OS64_GUI_EVENT_WINDOW_CLOSE:
-            os64_lock_acquire(&p->lock);
-            p->quit = true;
-            os64_lock_release(&p->lock);
+            a->quit = true;
             break;
         default:
             break;
         }
     }
-    collect_release(p, &c);
-    return 0;
 }
 
 // ---------------------------------------------------------------- start and end
 
-static void say_counts(player_t *p, const char *name)
+static void say_counts(app_t *a, const os64_media_player_facts_t *f, const char *name)
 {
-    os64_media_counts_t mc;
-    os64_media_counts(p->media, &mc);
     char at[16];
-    gplay_time_text(os64_media_clock_read(&p->clock, now_us()), at, sizeof(at));
-    os64_printf("gplay: %s: %s at %s\n", name, kStateName[p->state], at);
+    gplay_time_text(f->position, at, sizeof(at));
+    os64_printf("gplay: %s: %s at %s\n", name, kStateName[f->state], at);
     os64_printf("  pictures: decoded %lu, converted %lu (again %lu), shown %lu, dropped %lu, skipped %lu, "
                 "starved %lu\n",
-                (unsigned long)p->pictures_pushed, (unsigned long)p->conversions, (unsigned long)p->reconversions,
-                (unsigned long)p->pace.shown, (unsigned long)p->pace.dropped, (unsigned long)p->pace.skipped,
-                (unsigned long)p->pace.starved);
+                (unsigned long)f->pictures_decoded, (unsigned long)f->conversions, (unsigned long)f->reconversions,
+                (unsigned long)f->pace.shown, (unsigned long)f->pace.dropped, (unsigned long)f->pace.skipped,
+                (unsigned long)f->pace.starved);
     os64_printf("  late: resyncs %lu (%lu ms holding), into decoding late %lu, far by sound %lu, display missed "
                 "%lu\n",
-                (unsigned long)p->pace.resyncs, (unsigned long)(p->pace.far_behind_us / 1000),
-                (unsigned long)p->pace.entered[OS64_MEDIA_PACE_DECODING_LATE], (unsigned long)p->pace.far_by_sound,
-                (unsigned long)p->display_missed);
+                (unsigned long)f->pace.resyncs, (unsigned long)(f->pace.far_behind_us / 1000),
+                (unsigned long)f->pace.entered[OS64_MEDIA_PACE_DECODING_LATE], (unsigned long)f->pace.far_by_sound,
+                (unsigned long)a->display_missed);
     os64_printf("  sound: decoded %lu frames, written %lu, let go unheard %lu; buffering %lu, stalls %lu, "
                 "refusals %lu\n",
-                (unsigned long)p->pcm_pushed, (unsigned long)p->voice.written,
-                (unsigned long)(p->voice.dropped + p->pcm_dropped), (unsigned long)p->buffers,
-                (unsigned long)p->voice.stalls, (unsigned long)p->voice.refusals);
+                (unsigned long)f->sound_decoded, (unsigned long)f->sound_written, (unsigned long)f->sound_dropped,
+                (unsigned long)f->buffers, (unsigned long)f->stalls, (unsigned long)f->refusals);
     os64_printf("  clock: reports %lu, stale %lu, starts late %lu, starves %lu; sink delay %u ms, sync %ld ms\n",
-                (unsigned long)p->clock.reports, (unsigned long)p->clock.reports_stale,
-                (unsigned long)p->clock.starts_late, (unsigned long)p->clock.starves, p->voice.delay_us / 1000,
-                (long)(p->sync_offset * 1000 / RATE));
-    const uint64_t *age = p->clock.report_ages;
+                (unsigned long)f->clock.reports, (unsigned long)f->clock.reports_stale,
+                (unsigned long)f->clock.starts_late, (unsigned long)f->clock.starves, f->delay_us / 1000,
+                (long)(f->sync * 1000 / RATE));
+    const uint64_t *age = f->clock.report_ages;
     os64_printf("  ear: first heard after %ld ms; stills %lu, held ahead %lu, stepped behind %lu (trust %ld ms)\n",
-                (long)(p->clock.start_wait_us / 1000), (unsigned long)p->clock.stills,
-                (unsigned long)p->clock.held_ahead, (unsigned long)p->clock.jumped_behind,
-                (long)(p->clock.still_us / 1000));
+                (long)(f->clock.start_wait_us / 1000), (unsigned long)f->clock.stills,
+                (unsigned long)f->clock.held_ahead, (unsigned long)f->clock.jumped_behind,
+                (long)(f->clock.still_us / 1000));
     os64_printf("  report ages: to 20 ms %lu, 40 %lu, 60 %lu, 80 %lu, 120 %lu, over %lu\n", (unsigned long)age[0],
                 (unsigned long)age[1], (unsigned long)age[2], (unsigned long)age[3], (unsigned long)age[4],
                 (unsigned long)age[5]);
-    os64_printf("  media: picture packets %lu, run-in %lu, resync-dropped %lu\n", (unsigned long)mc.picture_packets,
-                (unsigned long)mc.pictures_run_in, (unsigned long)mc.pictures_resync);
+    os64_printf("  media: picture packets %lu, run-in %lu, resync-dropped %lu\n",
+                (unsigned long)f->media.picture_packets, (unsigned long)f->media.pictures_run_in,
+                (unsigned long)f->media.pictures_resync);
 }
 
 // --check: the counts a run that played to its end must have.
-static bool counts_hold(player_t *p, const char *name)
+static bool counts_hold(const os64_media_player_facts_t *f, const char *name)
 {
     bool ok = true;
-    if (p->state != ST_ENDED) {
-        os64_printf("gplay: check: %s did not end (%s)\n", name, kStateName[p->state]);
+    if (f->state != OS64_MEDIA_PLAYER_ENDED) {
+        os64_printf("gplay: check: %s did not end (%s)\n", name, kStateName[f->state]);
         ok = false;
     }
-    if (p->pace.shown == 0 || p->shown == 0) {
-        os64_printf("gplay: check: no picture was shown\n");
-        ok = false;
-    } else if (p->length > 0 && p->pace.period > 0) {
-        // The pictures reached the end: the last one shown ends within
-        // three periods of the media's length (a clip whose picture runs
-        // as long as its sound, as the shipped ones do).
-        int64_t lasts = p->shown->duration > 0 ? p->shown->duration : p->pace.period;
-        int64_t end = p->shown->at + lasts;
-        if (end < p->length - 3 * p->pace.period) {
-            os64_printf("gplay: check: the last picture shown ends at frame %ld of %ld\n", (long)end,
-                        (long)p->length);
+    if (s_cover) {
+        // Covered, nobody asks for a frame and none is shown: the player
+        // retires every picture by the clock, so each decoded one was shown,
+        // dropped or skipped, and the end came all the same.
+        uint64_t gone = f->pace.shown + f->pace.dropped + f->pace.skipped;
+        if (gone != f->pictures_decoded) {
+            os64_printf("gplay: check: covered, %lu pictures decoded and %lu shown, dropped or skipped\n",
+                        (unsigned long)f->pictures_decoded, (unsigned long)gone);
             ok = false;
         }
+    } else if (f->pace.shown == 0 || f->shown_at < 0) {
+        os64_printf("gplay: check: no picture was shown\n");
+        ok = false;
+    } else if (f->length > 0 && f->pace.period > 0 && f->pace.resyncs == 0 &&
+               f->shown_end < f->length - 3 * f->pace.period) {
+        // The pictures reached the end: the last one shown ends within three
+        // periods of the media's length (a clip whose picture runs as long
+        // as its sound, as the shipped ones do). After a resync the late
+        // policy may have let the tail go (the decoder skips to a keyframe
+        // the tail does not have), so only the end itself is asked for.
+        os64_printf("gplay: check: the last picture shown ends at frame %ld of %ld\n", (long)f->shown_end,
+                    (long)f->length);
+        ok = false;
     }
     // Every frame of sound decoded was written or let go for a reason that
     // counted it (a seek, a mute, a refusal, a failed write, a tail).
-    if (p->has_sound && p->voice.written + p->voice.dropped + p->pcm_dropped != p->pcm_pushed) {
-        os64_printf("gplay: check: sound decoded %lu, written %lu, let go %lu\n", (unsigned long)p->pcm_pushed,
-                    (unsigned long)p->voice.written, (unsigned long)(p->voice.dropped + p->pcm_dropped));
+    if (f->has_sound && f->sound_written + f->sound_dropped != f->sound_decoded) {
+        os64_printf("gplay: check: sound decoded %lu, written %lu, let go %lu\n", (unsigned long)f->sound_decoded,
+                    (unsigned long)f->sound_written, (unsigned long)f->sound_dropped);
         ok = false;
     }
-    if (s_expect_refusal && (p->voice.refusals == 0 || p->voice.refused_device || p->voice.written == 0)) {
+    if (s_expect_refusal && (f->refusals == 0 || f->refused || f->sound_written == 0)) {
         os64_printf("gplay: check: wanted the device refused and then regained (refusals %lu, refused now %d, "
                     "written %lu)\n",
-                    (unsigned long)p->voice.refusals, p->voice.refused_device, (unsigned long)p->voice.written);
+                    (unsigned long)f->refusals, f->refused, (unsigned long)f->sound_written);
         ok = false;
     }
     return ok;
 }
 
-static int64_t s_threads[3];
+// Closes the player and waits for its `finished` (bounded: an output that
+// never lets go keeps the player, and the program leaves without it).
+static bool close_player(app_t *a)
+{
+    os64_media_player_close(a->player);
+    for (int waited = 0; waited < 300; waited++) {
+        os64_lock_acquire(&a->lock);
+        bool done = a->finished;
+        os64_lock_release(&a->lock);
+        if (done)
+            return true;
+        (void)os64_bell_wait(&a->bell, 10);
+    }
+    return false;
+}
 
 int main(int argc, char **argv)
 {
@@ -1268,43 +608,69 @@ int main(int argc, char **argv)
         os64_printf("gplay: %s: cannot open\n", path);
         return 2;
     }
-    player_t *p = os64_calloc(1, sizeof(player_t));
+    app_t *a = os64_calloc(1, sizeof(app_t));
     view_t v = {0};
-    os64_media_source_t src;
-    os64_media_file_source((int32_t)file, &src);
-    int r = os64_media_open_for(&src, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, &p->media, &p->info);
-    if (r == 0 && p->info.picture != OS64_MEDIA_PLAYABLE) {
-        os64_media_close(p->media);
-        r = OS64_MEDIA_NO_PICTURE;
+    a->bell = (os64_bell_t)OS64_BELL_NONE;
+    os64_bell_make(&a->bell);
+    if (os64_media_output_create(&a->output) != 0) {
+        os64_printf("gplay: the sound device's thread would not start\n");
+        return 3;
     }
-    if (r != 0) {
-        if (r == OS64_MEDIA_NO_PICTURE)
+    os64_media_player_config_t cfg = {.want = OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE,
+                                      .output = a->output, .refused = OS64_MEDIA_VOICE_PLAY_ON, .loaded = true,
+                                      .look = on_look, .finished = on_finished, .ctx = a};
+    os64_media_file_source((int32_t)file, &cfg.source);
+    if (os64_media_player_create(&cfg, &a->player) != 0) {
+        os64_printf("gplay: %s: the player would not start\n", path);
+        return 3;
+    }
+    os64_media_player_play(a->player);
+
+    // The probe is the player's: wait for it, then the window takes the
+    // picture's shape.
+    os64_media_player_facts_t f;
+    for (int waited = 0;; waited += 50) {
+        os64_media_player_facts(a->player, &f);
+        if (f.probed || waited >= OPEN_WAIT_MS)
+            break;
+        (void)os64_bell_wait(&a->bell, 50);
+    }
+    int refused_open = !f.probed ? OS64_MEDIA_IO : f.failure != 0 ? f.failure
+                       : f.info.picture != OS64_MEDIA_PLAYABLE   ? OS64_MEDIA_NO_PICTURE
+                                                                 : 0;
+    if (refused_open != 0) {
+        if (refused_open == OS64_MEDIA_NO_PICTURE)
             os64_printf("gplay: %s has no picture; `play %s` plays its sound\n", path, path);
         else
-            os64_printf("gplay: %s: %s\n", path, os64_media_strerror(r));
-        os64_close((int32_t)file);
-        os64_free(p);
+            os64_printf("gplay: %s: %s\n", path, os64_media_strerror(refused_open));
+        if (close_player(a)) {
+            if (a->output != 0)
+                (void)os64_media_output_destroy(a->output);
+            os64_close((int32_t)file);
+        }
         return 2;
     }
-    p->has_sound = p->info.sound == OS64_MEDIA_PLAYABLE;
-    p->length = p->info.frames;
+    os64_media_info_t info = f.info;
 
     uint32_t sw = 0, sh = 0;
     os64_gui_screen_info(&sw, &sh);
     uint32_t w, h;
-    gplay_first_size(p->info.width, p->info.height, sw, sh, MARGIN, &w, &h);
+    gplay_first_size(info.width, info.height, sw, sh, MARGIN, &w, &h);
     int32_t x = sw > w ? (int32_t)(sw - w) / 2 : 0, y = sh > h ? (int32_t)(sh - h) / 2 : 0;
-    p->win = os64_gui_window_create_content(name, x, y, w, h,
-                                            OS64_GUI_CREATE_FIT_SCREEN |
-                                                (s_maximized ? OS64_GUI_CREATE_MAXIMIZED : 0));
-    if (p->win <= 0 || os64_draw_ctx_init(&v.ctx, p->win) != 0) {
-        os64_printf(p->win == OS64_GUI_ERR_NOT_RUNNING ? "gplay: no desktop on this boot\n"
-                                                       : "gplay: the window would not open\n");
-        os64_media_close(p->media);
-        os64_close((int32_t)file);
-        os64_free(p);
+    int64_t win = os64_gui_window_create_content(name, x, y, w, h,
+                                                 OS64_GUI_CREATE_FIT_SCREEN |
+                                                     (s_maximized ? OS64_GUI_CREATE_MAXIMIZED : 0));
+    if (win <= 0 || os64_draw_ctx_init(&v.ctx, win) != 0) {
+        os64_printf(win == OS64_GUI_ERR_NOT_RUNNING ? "gplay: no desktop on this boot\n"
+                                                    : "gplay: the window would not open\n");
+        if (close_player(a)) {
+            if (a->output != 0)
+                (void)os64_media_output_destroy(a->output);
+            os64_close((int32_t)file);
+        }
         return 1;
     }
+    a->win = win;
     int64_t cover = -1;
     if (s_cover) {
         // A window of its own over its own, the whole screen: gplay's is
@@ -1317,123 +683,44 @@ int main(int argc, char **argv)
             os64_draw_publish(&cc, 0);
         }
     }
+    layout(a, &info, v.ctx.surf.width, v.ctx.surf.height);
+    draw_canvas(a, &v);
 
-    os64_media_pictures_init(&p->decoded, p->decoded_slot, DECODED_DEPTH);
-    os64_media_pictures_init(&p->ready, p->ready_slot, READY_DEPTH);
-    int16_t *pcm_storage = os64_malloc(sizeof(int16_t) * 2 * PCM_FRAMES);
-    os64_media_queue_init(&p->pcm, pcm_storage, pcm_storage != 0 ? PCM_FRAMES : 0);
-    os64_media_clock_init(&p->clock, p->has_sound ? OS64_MEDIA_CLOCK_HEARD : OS64_MEDIA_CLOCK_MONOTONIC);
-    int64_t period = p->info.rate_num > 0 ? (int64_t)RATE * p->info.rate_den / p->info.rate_num : 0;
-    os64_media_pace_init(&p->pace, DECODED_DEPTH, period);
-    for (int i = 0; i < FRAMES; i++) {
-        p->frame[i].next_free = p->free_frames;
-        p->free_frames = &p->frame[i];
-    }
-    p->newest = -1;
-    p->state = ST_BUFFERING;
-    p->owed = true;
-    p->buffering_since = now_us();
-    layout(p, v.ctx.surf.width, v.ctx.surf.height);
-    os64_bell_make(&p->decode_bell);
-    os64_bell_make(&p->picture_bell);
-    draw_canvas(p, &v, 0, now_us());
+    int64_t keys = os64_thread(keys_thread, a);
+    run(a, &v, &info, name);
 
-    // The sound is the output's: this player's voice, added once, removed at
-    // the end (the output lets go of it, then says `gone`).
-    // The sound needs the output: with none, nothing would drain its queue,
-    // and the decoder would park on it with the pictures behind.
-    if (p->has_sound && os64_media_output_create(&p->output) != 0) {
-        os64_printf("gplay: the sound device's thread would not start\n");
-        os64_gui_window_destroy(p->win);
-        return 3;
-    }
-    bool voiced = false;
-    if (p->has_sound) {
-        p->voice = (os64_media_output_voice_t){.lock = &p->lock, .queue = &p->pcm, .clock = &p->clock,
-                                               .refused = OS64_MEDIA_VOICE_PLAY_ON, .look = voice_look,
-                                               .room = voice_room, .ctx = p, .gain = 1.0, .position = -1};
-        voiced = os64_media_output_add(p->output, &p->voice) == 0;
-    }
-    if (p->has_sound && !voiced) {
-        os64_printf("gplay: the sound device would not take the sound\n");
-        os64_gui_window_destroy(p->win);
-        return 3;
-    }
-    s_threads[0] = os64_thread(decoding_thread, p);
-    s_threads[1] = os64_thread(picture_thread, p);
-    s_threads[2] = os64_thread(keys_thread, p);
-    run(p, &v, name);
-
-    os64_lock_acquire(&p->lock);
-    p->quit = true;
-    os64_bell_ring(&p->decode_bell);
-    os64_bell_ring(&p->picture_bell);
-    os64_lock_release(&p->lock);
-    for (int i = 0; i < 3; i++)
-        if (s_threads[i] > 0)
-            os64_thread_join((int32_t)s_threads[i], 0);
     // At the end the sound still in the device plays out (up to a second),
     // as a close never cuts it; a person who left early is not made to wait.
-    // Then the voice goes, the output lets go of it within a round, and the
-    // output ends. An output that will not let go keeps the player's memory
-    // (it may still be touching the voice and the queue) and the program
-    // leaves without freeing it.
-    bool kept = false;
-    if (p->output != 0) {
-        for (int waited = 0; voiced && waited < 100; waited++) {
-            os64_lock_acquire(&p->lock);
-            bool tail = p->state == ST_ENDED && p->voice.wants && !p->voice.heard_all;
-            os64_lock_release(&p->lock);
-            if (!tail)
-                break;
-            os64_sleep(10);
-        }
-        os64_lock_acquire(&p->lock);
-        p->voice.wants = false;
-        p->voice.remove = true;
-        os64_lock_release(&p->lock);
-        os64_media_output_ring(p->output);
-        for (int waited = 0; voiced && waited < 200; waited++) {
-            os64_lock_acquire(&p->lock);
-            bool gone = p->voice.gone;
-            os64_lock_release(&p->lock);
-            if (gone)
-                break;
-            os64_sleep(10);
-        }
-        kept = os64_media_output_destroy(p->output) != 0;
-        if (kept)
-            os64_printf("gplay: the sound device's thread did not let go\n");
+    for (int waited = 0; waited < TAIL_WAIT_MS; waited += 10) {
+        os64_media_player_facts(a->player, &f);
+        if (f.state != OS64_MEDIA_PLAYER_ENDED || !f.sounding)
+            break;
+        os64_sleep(10);
     }
+    os64_media_player_facts(a->player, &f);
+    os64_lock_acquire(&a->lock);
+    a->quit = true;
+    os64_lock_release(&a->lock);
+    if (keys > 0)
+        os64_thread_join((int32_t)keys, 0);
+    if (f.failure != 0)
+        os64_printf("gplay: %s: %s\n", path, os64_media_strerror(f.failure));
+    say_counts(a, &f, name);
+    bool checked = !s_check || counts_hold(&f, name);
+    int code = f.failure != 0 || !checked ? 3 : 0;
 
-    if (p->failure != 0)
-        os64_printf("gplay: %s: %s\n", path, os64_media_strerror(p->failure));
-    say_counts(p, name);
-    bool checked = !s_check || counts_hold(p, name);
-
-    // Every picture back before the media closes.
-    collect_t c = {0};
-    void *ready_context[2] = {p, &c};
-    os64_media_pictures_flush(&p->decoded, release_decoded, &c);
-    collect_release(p, &c);
-    os64_media_pictures_flush(&p->ready, release_ready, ready_context);
-    collect_release(p, &c);
-    frame_retire(p, p->shown, &c);
-    frame_retire(p, p->reconverted, &c);
-    collect_release(p, &c);
-    for (int i = 0; i < FRAMES; i++)
-        os64_free(p->frame[i].pixels);
-    os64_media_close(p->media);
-    os64_close((int32_t)file);
-    os64_bell_close(&p->picture_bell);
+    bool closed = close_player(a);
     if (cover > 0)
         os64_gui_window_destroy(cover);
-    os64_gui_window_destroy(p->win);
-    int code = p->failure != 0 || !checked ? 3 : 0;
-    if (!kept) {
-        os64_bell_close(&p->decode_bell);
-        os64_free(pcm_storage);
-        os64_free(p);
+    os64_gui_window_destroy(win);
+    if (closed) {
+        if (a->output != 0 && os64_media_output_destroy(a->output) != 0)
+            os64_printf("gplay: the sound device's thread did not let go\n");
+        os64_close((int32_t)file);
+        os64_bell_close(&a->bell);
+        os64_free(a);
+    } else {
+        os64_printf("gplay: the player did not let go\n");
     }
     return code;
 }
