@@ -169,7 +169,9 @@ static void ring_audio(void)
 // lock held.
 static void voice_asks_locked(yonder_media_t *m)
 {
-    m->voice.wants = m->play && !m->stop && !m->facts.ended;
+    // A rewind not yet carried out keeps the voice out of the mix: its queue
+    // is from after what the device lost, and its end there is not the end.
+    m->voice.wants = m->play && !m->stop && !m->facts.ended && !m->rewind;
     m->voice.gain = m->gain;
     m->voice.remove = m->closed;
 }
@@ -188,6 +190,7 @@ static void voice_look(void *ctx)
         m->voice.rewind = false;
         m->rewind = true;
         m->rewind_to = (double)m->voice.rewind_to / RATE;
+        voice_asks_locked(m);
         (void)os64_bell_ring(&m->bell);
     }
     if (m->voice.heard_all && m->voice.wants && !m->facts.ended) {

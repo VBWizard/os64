@@ -1332,15 +1332,25 @@ int main(int argc, char **argv)
 
     // The sound is the output's: this player's voice, added once, removed at
     // the end (the output lets go of it, then says `gone`).
+    // The sound needs the output: with none, nothing would drain its queue,
+    // and the decoder would park on it with the pictures behind.
+    if (p->has_sound && os64_media_output_create(&p->output) != 0) {
+        os64_printf("gplay: the sound device's thread would not start\n");
+        os64_gui_window_destroy(p->win);
+        return 3;
+    }
     bool voiced = false;
-    if (os64_media_output_create(&p->output) == 0 && p->has_sound) {
+    if (p->has_sound) {
         p->voice = (os64_media_output_voice_t){.lock = &p->lock, .queue = &p->pcm, .clock = &p->clock,
                                                .refused = OS64_MEDIA_VOICE_PLAY_ON, .look = voice_look,
                                                .room = voice_room, .ctx = p, .gain = 1.0, .position = -1};
         voiced = os64_media_output_add(p->output, &p->voice) == 0;
     }
-    if (!voiced)
-        p->voice.refused_device = p->has_sound;  // no output: the sound is never heard, the clock monotonic
+    if (p->has_sound && !voiced) {
+        os64_printf("gplay: the sound device would not take the sound\n");
+        os64_gui_window_destroy(p->win);
+        return 3;
+    }
     s_threads[0] = os64_thread(decoding_thread, p);
     s_threads[1] = os64_thread(picture_thread, p);
     s_threads[2] = os64_thread(keys_thread, p);
