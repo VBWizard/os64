@@ -99,7 +99,8 @@ typedef struct os64_media_output_voice {
     bool busy;                      // it wants sound and cannot have it (a WAIT voice refused, or the mix full)
     bool refused_device;            // the device is refused (for every voice, whatever its setting)
     const char *refused_why;        // a string literal, or NULL
-    bool heard_all;                 // the queue has finished and the ear has heard its last frame
+    bool heard_all;                 // the queue has finished and the ear has heard its last frame; an owner
+                                    // that flushes its queue clears it (what it said is of the old queue)
     bool unwritten;                 // frames taken from the queue are not yet in the device (an end waits)
     int64_t position;               // with no clock: the media frame the ear is at, -1 until known
     bool rewind;                    // with no clock: a long pause gave the device back with frames of this

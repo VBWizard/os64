@@ -909,6 +909,7 @@ static int64_t decoder_main(void *arg)
             run_frames = 0;
             m->facts.ended = false;
             m->facts.position = (double)os64_media_position(media) / RATE;
+            m->voice.heard_all = false;   // the old queue's end; the output tells the new one's
             voice_asks_locked(m);
             (void)readiness_locked(m, false);
             os64_lock_release(&m->lock);
