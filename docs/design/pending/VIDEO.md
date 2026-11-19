@@ -327,7 +327,10 @@ minute, then every second for a minute, reports scattered as the pump's
 are): never more than 124 ms ahead of the true ear, the picture's end
 within a millisecond of the sound's, every gap held through; the bound
 fired 68 times, in the once-a-second minute, where each gap leaves 80 ms
-and the slew takes 50 a second.
+and the slew takes 50 a second. **In a dense storm the bound is the
+mechanism, not a guard:** with gaps closer than about 1.6 s it fires at
+nearly every one, so a nonzero `held ahead` count is the clock doing its
+job, not a fault. Below that density it does not fire.
 
 **The hold's bound is the player's** (`os64_media_clock_hold`): the first
 advancing report cannot come before the sink's delay has passed, so the
