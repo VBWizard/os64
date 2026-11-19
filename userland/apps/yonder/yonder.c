@@ -8375,7 +8375,10 @@ static const char *ledger_file(const char *file)
 
 // The libdom calls that cost most, their own time and the layouts they
 // forced, and the profile's functions that cost most, each where it is
-// defined and the function it was called from.
+// defined and the function it was called from. Each line is rewritten at
+// every reading, "none" or "0 samples" included: a fact stands until it is
+// replaced, so a window with nothing to show would otherwise carry the last
+// window's rows.
 static void ledger_rows(Page *p, const os64_js_runtime_t *rt, uint64_t per_ms)
 {
     os64_js_ledger_callee_t *callees = os64_malloc(sizeof(*callees) * 1024);
@@ -8384,7 +8387,11 @@ static void ledger_rows(Page *p, const os64_js_runtime_t *rt, uint64_t per_ms)
         while (n < 1024 && os64_js_ledger_callee(rt, &cursor, &callees[n]))
             n++;
     DiagText t = {0};
-    if (callees != NULL && n != 0) {
+    if (callees == NULL)
+        yonder_diag_forget(p->diag, "script ledger calls");
+    else if (n == 0)
+        yonder_diag_fact(p->diag, "script ledger calls", "none");
+    else {
         ledger_callees_top(callees, n, LEDGER_CALLEES_SHOWN);
         for (size_t i = 0; i < n && i < LEDGER_CALLEES_SHOWN; i++) {
             const os64_js_ledger_callee_t *c = &callees[i];
@@ -8407,7 +8414,7 @@ static void ledger_rows(Page *p, const os64_js_runtime_t *rt, uint64_t per_ms)
     os64_free(callees);
     os64_free(t.s);
     os64_js_ledger_totals_t k;
-    if (!os64_js_ledger_totals(rt, &k) || k.samples == 0)
+    if (s_ledger != YONDER_LEDGER_PROFILE || !os64_js_ledger_totals(rt, &k))
         return;
     os64_js_ledger_sample_t *samples = os64_malloc(sizeof(*samples) * 512);
     n = 0;
@@ -8416,7 +8423,12 @@ static void ledger_rows(Page *p, const os64_js_runtime_t *rt, uint64_t per_ms)
         while (n < 512 && os64_js_ledger_sample(rt, &cursor, &samples[n]))
             n++;
     DiagText u = {0};
-    if (samples != NULL && n != 0) {
+    if (samples == NULL)
+        yonder_diag_forget(p->diag, "script profile");
+    else if (n == 0) {
+        dt_put(&u, "%lu samples", (unsigned long)k.samples);
+        yonder_diag_fact(p->diag, "script profile", dt_text(&u));
+    } else {
         ledger_samples_top(samples, n, LEDGER_SAMPLES_SHOWN);
         dt_put(&u, "%lu samples", (unsigned long)k.samples);
         for (size_t i = 0; i < n && i < LEDGER_SAMPLES_SHOWN; i++) {

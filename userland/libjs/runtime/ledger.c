@@ -136,9 +136,23 @@ uint64_t ledger_engine_live(const ledger_t *l, uint64_t now)
     return total;
 }
 
+static bool same_text(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/* A freed function's address can be reused by another, so the pointer
+ * alone would charge the new function's samples to the old one's row. A
+ * row is the pointer and the definition it reports: a reused address with
+ * the same name and place is the same source evaluated again, and merges. */
 static bool same_function(const ledger_place_t *a, const ledger_place_t *b)
 {
-    return a->function == b->function;
+    return a->function == b->function && a->line == b->line && a->column == b->column
+           && same_text(a->name, b->name) && same_text(a->file, b->file);
 }
 
 bool ledger_sample(ledger_t *l, uint64_t now, const ledger_place_t *at, const ledger_place_t *caller)

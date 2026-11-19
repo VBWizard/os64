@@ -159,7 +159,9 @@ typedef struct {
     uint64_t calls, self, forced, forced_ticks;
 } os64_js_ledger_callee_t;
 typedef struct {
-    const void *function;                  /* identity only; NULL for a native frame */
+    /* Compared, never followed, and with the place below: a freed function's
+     * address can be another's later. NULL for a native frame. */
+    const void *function;
     char name[64];
     char file[128];
     int line, column;                      /* where the function is defined */

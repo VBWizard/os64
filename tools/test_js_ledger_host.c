@@ -220,6 +220,30 @@ static void profile_cases(void)
     }
     check(l->samples_lost == 4 && l->samples == LEDGER_SAMPLES + 4, "profile: samples past a full table counted");
     free(l);
+
+    /* a freed function's address reused by another */
+    l = fresh();
+    ledger_push(l, LEDGER_ENGINE, 0, NULL, 0);
+    ledger_place_t old = place(&g1, "func0"), reused = place(&g1, "func1"), again = place(&g1, "func0");
+    reused.line = 2;
+    ledger_sample(l, 10, &old, NULL);
+    ledger_sample(l, 20, &reused, NULL);
+    ledger_sample(l, 30, &again, NULL);
+    unsigned rows = 0;
+    const ledger_sample_t *first = NULL, *second = NULL;
+    for (unsigned i = 0; i < LEDGER_SAMPLES; i++)
+        if (l->profile[i].used) {
+            rows++;
+            if (strcmp(l->profile[i].at.name, "func0") == 0)
+                first = &l->profile[i];
+            else if (strcmp(l->profile[i].at.name, "func1") == 0)
+                second = &l->profile[i];
+        }
+    check(rows == 2 && second != NULL && second->samples == 1 && second->at.line == 2,
+          "profile: a reused address with another definition is a row of its own");
+    check(first != NULL && first->samples == 2 && first->ticks == 20,
+          "profile: the same definition at the same address merges");
+    free(l);
 }
 
 /* For any nesting, the kinds add up to the outermost frames' elapsed. */

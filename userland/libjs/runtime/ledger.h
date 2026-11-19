@@ -60,7 +60,8 @@ typedef struct {
 } ledger_callee_t;
 
 /* Where a sample found the interpreter: the running function and its
- * caller, each as identity (a key only) and its definition's place. */
+ * caller, each as a pointer (compared, never followed) and its definition's
+ * place. A profile row is both, since a freed function's address can be reused. */
 typedef struct {
     const void *function;
     char name[LEDGER_NAME];
