@@ -55,9 +55,4 @@ typedef enum {
 // PS/2 set 1's make code 0x01, or USB's usage 0x29.
 gplay_key_t gplay_key(uint8_t *seq, char ascii, uint8_t scancode, bool shift);
 
-// Where a relative seek of `delta` frames lands: from `base` (the pending
-// target while a seek is under way, else the clock), held to 0 and, when the
-// length is known (`length` >= 0), to one frame before its end.
-int64_t gplay_seek_target(int64_t base, int64_t delta, int64_t length);
-
 #endif // GPLAY_VIEW_H

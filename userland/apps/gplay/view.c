@@ -142,13 +142,3 @@ gplay_key_t gplay_key(uint8_t *seq, char ascii, uint8_t scancode, bool shift)
         return GPLAY_KEY_NONE;
     }
 }
-
-int64_t gplay_seek_target(int64_t base, int64_t delta, int64_t length)
-{
-    int64_t t = base + delta;
-    if (length >= 0 && t > length - 1)
-        t = length - 1;
-    if (t < 0)
-        t = 0;
-    return t;
-}
