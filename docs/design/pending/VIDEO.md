@@ -197,6 +197,35 @@ the SOUND dry. `tools/test_media_picture_host.sh` check 12 is the proof.
 shim) replace nothing here; they would live inside the decoder thread's
 calls.
 
+**As built in the standalone player (V4, `/bin/gplay`).** The four threads
+above, plus a keys thread owning the `/dev/mediakeys` session, under ONE
+lock never held across a libmedia call, a conversion, a device call or a
+window call; pictures to release are collected under it and released
+after. What the player adds to the table, each proven by `/tests/gplaytest`
+(Fable's changes to the tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
+
+- **A covered window keeps the sound playing.** It is answered no frames,
+  so with no answer for 100 ms the audio thread rings the window and main
+  retires overdue pictures by the clock without publishing; the queues
+  keep moving. Their conversions are wasted (DEBTS).
+- **Nothing reaches the device before the clock plays**: after an open or
+  a seek the picture's run-in from a keyframe can take most of a second,
+  and sound heard against a held picture would be a lip-sync error.
+- **Buffering is a state**: after the open, a seek while playing, or the
+  sound queue running dry, the clock is paused and nothing is written,
+  until a picture is ready and half a second of sound is queued (twice
+  the pace's floor, so leaving buffering never opens the far-behind door
+  at once). A sink that stops advancing with sound queued for a second is
+  a refused device instead: monotonic, retried every two seconds.
+  Monotonic is for sound that cannot be had, never for sound that is late.
+- **A resize while paused or ended converts the shown picture again**:
+  each converted frame keeps its decoded picture until it is retired, so
+  up to 12 decoded pictures are held where the queue alone would hold 8.
+  Mid-play, frames already converted are drawn at their own size,
+  centred, until the new size arrives (at most three).
+- **GOT_END ends the kinds asked for**: asked for sound alone, the end of
+  the sound leaves pictures listed, so each kind ends on its own.
+
 ## 4. The clock
 
 An element's time comes from the audio position today, and a file with no
@@ -232,7 +261,7 @@ at its own moment); a picture taken on it is simply gone.
 | paused | play, monotonic | runs at real time from where it was | running |
 | any running | pause | frozen at its reading then | paused |
 | any | seek to `m` | `m` exactly; generation + 1, reports forgotten | paused stays paused; else starting (heard) or running |
-| **starting** | (a quarter second passes, no advancing report) | runs at real time from where it held, so a silent device never freezes the picture | starting, late (counted at its end) |
+| **starting** | (the hold's bound passes, no advancing report) | runs at real time from where it held, so a silent device never freezes the picture | starting, late (counted at its end) |
 | **starting** | advancing report, current generation | unchanged; the difference from the ear becomes drift | following |
 | starting, awaiting | report not advancing, or of sound heard before the wait began | unchanged (refused) | same |
 | running | source → heard (unmute) | unchanged, and keeps running: a picture already moving does not stop | **awaiting** |
@@ -245,6 +274,12 @@ at its own moment); a picture taken on it is simply gone.
 | any heard | source → monotonic (mute, sound refused or ended) | unchanged | running |
 | paused | source → either | unchanged; takes effect at play | paused |
 | any | report from an earlier generation | refused, counted | same |
+
+**The hold's bound is the player's** (`os64_media_clock_hold`): the first
+advancing report cannot come before the sink's delay has passed, so the
+bound is the larger of a quarter second and that delay plus 150 ms. The
+headphones' delay is about 150 ms and unmeasured, which a fixed quarter
+second would cut too close.
 
 **A starved hold lasts as long as the clock is told**: a fresh advancing
 report or the monotonic source ends it, and the PLAYER owns the rule
