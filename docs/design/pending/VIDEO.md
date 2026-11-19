@@ -248,9 +248,12 @@ tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
   how old reports grew, so the trust can be checked against a P5 run.
   Buffering also waits until the sink's
   delay has been read, since the start's hold bound is made from it. A
-  stream generation the player did not start (a sink attached or
-  detached) is treated as a flush: the player begins again from the
-  clock's reading.
+  stream generation the output did not start (a sink attached or
+  detached) loses what the device held, and the sound carries on from
+  its queue, the output dropping what the clock has passed (D2, as built
+  in V.5.1); when the output itself lets go of sound still in the device
+  (a long pause, another sound starting while paused), the player seeks
+  to where its clock stands (the output's `rewind`).
 
 ## 4. The clock
 
