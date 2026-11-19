@@ -168,7 +168,8 @@ typedef struct {
     bool refused;                         // the device's: busy, stalled, or failed
     const char *refused_why;
     int64_t retry_at;                     // wall: when the audio thread tries the device again
-    int64_t stall_since;                  // wall: the clock starved with sound queued, since
+    int64_t stall_since;                  // wall: the sink stalled (service's rule), since
+    int64_t awaiting_since;               // wall: the clock has awaited a first report, since
     int64_t sync_offset;                  // frames added to every heard report
     uint32_t pic_w, pic_h;                // the size the picture thread converts to
     uint32_t layout_serial;               // moved by every resize
@@ -1229,6 +1230,14 @@ static void service(player_t *p, int64_t now)
     } else if (cs == OS64_MEDIA_CLOCK_STARTING_LATE) {
         stalled = true;
     }
+    // Awaiting (an unmute, a regained device) has no hold of its own to run
+    // out: a wait longer than a start's bound is a stalled sink as well.
+    if (cs != OS64_MEDIA_CLOCK_AWAITING)
+        p->awaiting_since = 0;
+    else if (p->awaiting_since == 0)
+        p->awaiting_since = now;
+    else if (now - p->awaiting_since >= hold_bound(p))
+        stalled = true;
     if (!stalled) {
         p->stall_since = 0;
     } else if (p->stall_since == 0) {
