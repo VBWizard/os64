@@ -398,6 +398,14 @@ static uint32_t members_locked(os64_media_output_t *o, round_t *r)
                 v->sounding = false;
                 look(v);
             }
+            // Its frames still in the device are lost with its anchors: a
+            // voice with no clock is told where its ear was, as at a long
+            // pause's close. (One with a clock goes on from its clock.)
+            if (v->clock == NULL && !v->remove && v->position >= 0 && v->priv.anchors.anchors > 0) {
+                v->rewind = true;
+                v->rewind_to = v->position;
+                look(v);
+            }
             v->unwritten = false;
             v->position = -1;
             os64_lock_release(v->lock);
