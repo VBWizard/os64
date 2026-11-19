@@ -212,6 +212,48 @@ sound is refused. Video needs a clock that does not depend on sound.
 Moving between rows (mute, unmute) must not jump the time: the new clock
 is anchored at the old one's reading.
 
+**The clock as built** (`os64/media_clock.h`, a pure core;
+`tools/test_media_cores_host.sh` and its mutants). It answers one
+question, the media frame showing at wall time `t`, and the player asks
+it for the blank its publish will be shown at. Its sources: HEARD (the
+player reports "frame H reached the EAR at wall Th", the sink's delay
+already taken off; the clock does no delay arithmetic) and MONOTONIC.
+A reading never moves backward and never steps, a seek excepted: it
+rises with `t`, an event leaves it where it was at the event's moment,
+and where the two views disagree the DRIFT is worked off by running a
+twentieth fast or slow (50 ms in a second), a constant to tune on the
+P5. A reading taken ahead, for a blank or a conversion's reach past the
+next event, is a forecast that event may revise down (a starve freezes
+at its own moment); a picture taken on it is simply gone.
+
+| State | Event | The reading | Next |
+|---|---|---|---|
+| paused | play, heard source | holds where it was | **starting** |
+| paused | play, monotonic | runs at real time from where it was | running |
+| any running | pause | frozen at its reading then | paused |
+| any | seek to `m` | `m` exactly; generation + 1, reports forgotten | paused stays paused; else starting (heard) or running |
+| **starting** | (a quarter second passes, no advancing report) | runs at real time from where it held, so a silent device never freezes the picture | starting, late (counted at its end) |
+| **starting** | advancing report, current generation | unchanged; the difference from the ear becomes drift | following |
+| starting, awaiting | report not advancing, or of sound heard before the wait began | unchanged (refused) | same |
+| running | source → heard (unmute) | unchanged, and keeps running: a picture already moving does not stop | **awaiting** |
+| awaiting | advancing report | unchanged; the difference becomes drift | following |
+| **following** | (reading) | the ear's view (`H` + the wall time since `Th`) plus the drift, worked toward 0 | |
+| following | advancing report | unchanged at that moment; drift recomputed against the new report | following |
+| following | report not advancing (the sound ran dry, or was held) | frozen, drift and all: the sound is the master | **starved** |
+| starved | advancing report | carries on from where it froze; the difference becomes drift | following |
+| starved | source → monotonic | carries on from where it froze, at real time | running |
+| any heard | source → monotonic (mute, sound refused or ended) | unchanged | running |
+| paused | source → either | unchanged; takes effect at play | paused |
+| any | report from an earlier generation | refused, counted | same |
+
+**A starved hold lasts as long as the clock is told**: a fresh advancing
+report or the monotonic source ends it, and the PLAYER owns the rule
+that it does not last for ever (V4 answers it). Inside, a media time is
+counted in 2500ths of a frame, so a microsecond is exactly 120 units and
+the slew exactly 6: a reading's rise over any microsecond is 114 to 126
+units, never less, where whole frames could round it back by one. The
+playback rate is one, in one place (`media_clock.c`'s `run`; DEBTS).
+
 **GAP (muted sound).** Decoding sound nobody hears is cheap, and keeps
 unmute instant; not decoding it is what the booked debt asks for. Lean:
 decode it but hold no voice, and measure.
@@ -246,11 +288,53 @@ whether the decoder also stops decoding pictures then (it must resume at a
 keyframe, so the picture returns late) or keeps going (a steady cost for
 nothing seen). Lean: keep decoding in this arc, book the saving.
 
-**Late policy** (to become a lifecycle table before code): a ready frame
-whose time has passed is skipped, never shown late; a picture thread that
-is behind skips conversion of pictures already due; a decoder that is
-behind asks FFmpeg to skip pictures nothing depends on; a decoder far
-behind lets the sound run and resumes the picture at the next keyframe.
+**The late policy as built** (`os64/media_pace.h`, a pure core beside
+the clock, reading `os64/media_pictures.h`'s queues: bounded by count,
+in the order pushed, a generation per seek so a picture made before a
+seek is refused after it, and an end; same suite and mutants). Three
+answers:
+
+- **At each paint**: with `C` the clock's reading for the paint's blank,
+  SHOW the latest ready picture due (`at <= C`) and DROP every ready one
+  before it, unshown and counted: a late picture is never shown late.
+  Nothing due: the screen keeps what it has. Nothing ready and the shown
+  picture past its end (its duration, else a period): STARVED, counted.
+- **Before each conversion**: SKIP the front decoded picture, counted,
+  when the one after it is due at the blank this conversion could reach,
+  which is the first blank at or after now plus the last conversion's
+  cost, read on the clock. The successor decides, not the duration, which
+  a file may not state; with no successor decoded it is converted.
+- **The producers' state**, judged once a paint from the decoder's LEAD
+  (the newest decoded picture's time minus `C`), against the decoded
+  queue's DEPTH in periods:
+
+| State | Condition | Action on entry | Next |
+|---|---|---|---|
+| on time | lead below 3/8 of the depth, for 125 ms | leave out the pictures nothing depends on (skip UNUSED) | decoding late |
+| decoding late | lead 3/4 of the depth or more, for 1 s | decode every picture (skip NONE) | on time |
+| on time, decoding late | lead more than 30 periods behind, or the sound queue under the player's floor (its door armed), at once | a resync asked: drop to the next keyframe, the sound running on | far behind |
+| far behind | the first picture after the resync is decoded | (UNUSED stays) | decoding late |
+| any | a seek, or a new media | skip NONE; a resync not yet taken withdrawn; the counters kept | on time |
+
+The gap between the doors and the out door's long hold keep a burst of
+cheap pictures after a keyframe from flapping it. Every hold is WALL
+time, so it means the same at 60 Hz and 144, and a covered window, which
+paints nothing, holds nothing. **No verdict without something to
+judge:** the lead also falls to nothing at the end of the media, while
+buffering after a seek, and while paused, so the player says `judging`
+false then, no door moves, no hold runs, and no paint counts as starved.
+The sound's floor is the twin of the 30 periods because the sound is
+what is protected; the player passes 0 when there is none to protect.
+Its door fires once and re-arms only when the sound has been back at
+its floor: a shortfall a resync did not cure is not the picture
+decoder's, and another would only cost the pictures again. A resync is
+ASKED by the pace and TAKEN by the decoding thread under the player's
+lock, so a seek between the two withdraws it.
+**What a resync costs:** the screen holds its last picture until the next
+keyframe, commonly two to five seconds away on the web. That is the
+design, not a defect, and `far_behind_us` with the entries counted says
+how often V4 sees it. The constants (3/8, 3/4, 125 ms, 1 s, 30 periods)
+are to tune on the P5.
 
 ## 6. Queues and memory
 
