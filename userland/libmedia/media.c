@@ -1,41 +1,75 @@
 // media.c — os64/media.h over libav.so (FFmpeg) and libsound.so.
 //
-// A media object is a small pipeline, pulled by os64_media_decode:
+// A media object is a small pipeline, pulled by os64_media_decode or
+// os64_media_next:
 //
-//   source --AVIOContext--> demuxer --packets--> decoder --frames-->
+//   source --AVIOContext--> demuxer --packets--> sound decoder --frames-->
 //   media_pcm (to 16-bit stereo at the media's rate) --> resampler (to
 //   48 kHz) --> the output buffer --> the caller
+//                                 \--packets--> picture decoder --frames-->
+//                                   a picture handle --> the caller
 //
-// THE OUTPUT TIMELINE (os64/media.h) is kept here. The resampler delays
-// its output by its latency, so the first output frames of a fresh
-// resampler are silence that is not the media's; they are counted off
-// (`skip_out`), and at the end of the media the same latency is drawn out
-// of it with silence (`tail`), so what comes out is the media's length.
-// After a seek the decoder starts a little before the target, so the
-// fresh resampler has the song to work from (os64_media_seek says how
-// much); media frames before that start (`seek_target`) are dropped, and
-// the output before the target is counted off with the delay, so the
-// first frame out is the target, as an unbroken decode would give it.
+// One demuxer serves both decoders, because an MP4 interleaves them: each
+// packet read goes to the decoder of its stream, and a stream that was not
+// wanted is discarded at the demuxer, so its packets are never read.
+//
+// THE OUTPUT TIMELINE (os64/media.h) is kept here. Its zero is the FILE'S
+// start: the earliest start of the sound and picture streams (`zero_ts`,
+// in the time base of the stream that has it), found the same way for
+// every open of a file. Each stream's LEAD is how far after that zero it
+// starts, in output frames; the stream that starts first has none. The
+// sound's lead comes out first as silence, so the sound is contiguous from
+// frame 0; a picture's time is its own offset from its stream's start plus
+// its stream's lead.
+//
+// The resampler delays its output by its latency, so the first output
+// frames of a fresh resampler are silence that is not the media's; they
+// are counted off (`skip_out`), and at the end of the media the same
+// latency is drawn out of it with silence (`tail`), so what comes out is
+// the media's length. After a seek the decoder starts a little before the
+// target, so the fresh resampler has the song to work from (os64_media_seek
+// says how much); media frames before that start (`seek_target`) are
+// dropped, and the output before the target is counted off with the delay,
+// so the first frame out is the target, as an unbroken decode would give
+// it. Pictures before a seek's target are dropped too, but for the last of
+// them (`seek_held`), which is the one showing AT the target.
 //
 // THREADS. libav is built without threads, so what it shares between
 // callers must be set up by one thread at a time (libav/README.md
 // § Switched off). In this configuration that is libavutil's CRC tables,
 // which a demuxer can first ask for while reading a header, its AES
 // tables, which the MP4 reader asks for while reading a packet of a file
-// with an `adrm` atom, and the decoders' static tables, made when a
-// decoder opens: by this media's own open, and by
-// avformat_find_stream_info, which opens decoders of its own to learn the
-// sample format. (AAC's SBR asks for transform tables again while
-// decoding, but only ones its decoder's open already made.) So libmedia
-// makes every CRC table and the AES tables at its first open, and takes
-// one lock (`s_lock`) across find_stream_info and the decoder's open.
-// Opening the input and its header, reading packets and decoding take no
+// with an `adrm` atom, the decoders' static tables, made when a decoder
+// opens: by this media's own opens, and by avformat_find_stream_info,
+// which opens decoders of its own to learn the sample format, and the
+// scaler's rgb2rgb tables, made when a scaler first builds its graph,
+// which media_scale.c's scalers do on whatever thread converts. (AAC's SBR
+// asks for transform tables again while decoding, but only ones its
+// decoder's open already made.) So libmedia makes every CRC table, the AES
+// tables and the scaler's tables at its first open, and takes one lock
+// (`s_lock`) across find_stream_info and the decoders' opens. Opening the
+// input and its header, reading packets, decoding and converting take no
 // lock. The cost: two media probing at once take turns at
-// find_stream_info, which reads a few packets of a sound, and of an MP4
-// video up to some twenty of its picture's frames, from the source,
-// across the network for a page's. tools/test_av_audit.py pins every
-// one-time setup in the build, so a configuration that adds one fails
-// until it has been looked at here.
+// find_stream_info, which reads a few packets of a sound and, for an open
+// that wants the picture, decodes its first pictures too (up to some
+// twenty of an MP4's), from the source, across the network for a page's.
+// A sound-only open discards the picture's stream before it, so none of
+// its packets is made or decoded. tools/test_av_audit.py pins every one-time setup in
+// the build, so a configuration that adds one fails until it has been
+// looked at here.
+//
+// A PICTURE'S MEMORY belongs to its decoder's frame pool, and FFmpeg's
+// pools and reference counts are shared with the decoder without a lock
+// of their own in this build (AVBufferPool's mutex is an empty function
+// without threads). So a picture is RELEASED from any thread onto the
+// media's `released` list, under `release_lock`, and the list is freed
+// with av_frame_free on the decoding thread, at the top of every call that
+// touches the decoder (`drain_released`). Every call that can touch an
+// FFmpeg reference count or pool therefore runs on the decoding thread,
+// and the converting thread only reads a picture's planes
+// (media_scale.c). tools/test_av_audit.py holds both halves: no call into
+// libav.so is reachable from os64_media_picture_release, and from
+// os64_media_scaler_convert only the scaler's own.
 
 #include "os64/media.h"
 
@@ -51,31 +85,46 @@
 #include "libavutil/aes.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/crc.h"
+#include "libavutil/display.h"
 #include "libavutil/log.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/mem.h"
+#include "libswscale/swscale.h"
 
 #include "media_pcm.h"
+#include "media_picture.h"
 
 #define IO_BUFFER 32768
+#define NEED_INPUT 1000                  // a step's answer: its decoder wants a packet
+
+static const AVRational kOut = { 1, OS64_AUDIO_RATE };
 
 struct os64_media {
     os64_media_source_t src;
+    uint32_t want;                   // OS64_MEDIA_WANT_*
     AVIOContext *io;
     AVFormatContext *format;
-    AVCodecContext *codec;
     AVPacket *packet;
+    bool reading_done;               // the demuxer has nothing more
+    bool packet_waiting;             // `packet` was refused with EAGAIN and is sent again
+
+    int64_t zero_ts;                 // the file's start, in zero_tb
+    AVRational zero_tb;
+    int found[2];                    // the file's sound and picture streams, decoded or not; -1 for none
+
+    // The sound: active when `codec` is open.
+    AVCodecContext *codec;
     AVFrame *frame;
-    int stream;
+    int stream;                      // -1 for none
+    int64_t sound_lead;              // output frames from the zero to the sound's start
     uint32_t rate;
     media_role_t roles[MEDIA_PCM_MAX_CHANNELS];
 
     os64_resampler_t *resampler;     // NULL when the media is already 48 kHz
     uint32_t skip_out;               // output frames still to count off: the delay, and a seek's run-in
-    bool reading_done;               // the demuxer has nothing more
+    int64_t silence;                 // output frames of silence still owed before the sound (its lead)
     bool decoding_done;              // the decoder has given its last frame
     bool tail_done;                  // the resampler's held frames have been drawn out
-    bool packet_waiting;             // `packet` was refused with EAGAIN and is sent again
     int64_t seek_target;             // media frame wanted after a seek, -1 for none
 
     int16_t *stereo;                 // one decoded frame, stereo at the media's rate
@@ -84,6 +133,22 @@ struct os64_media {
     uint32_t out_cap, out_at, out_len;
     int64_t position;                // output frame of out[out_at]
 
+    // The picture: active when `pcodec` is open.
+    AVCodecContext *pcodec;
+    AVFrame *pframe;
+    int pstream;                     // -1 for none
+    int64_t picture_lead;            // output frames from the zero to the picture's start
+    AVRational picture_rate;         // as the file states it; 0/0 when not
+    bool picture_done;               // the picture decoder has given its last frame
+    bool resync;                     // dropping picture packets until a keyframe
+    int64_t seek_picture;            // output frame a seek wants the picture for, -1 for none
+    media_picture_t *seek_held;      // the last picture at or before it, so far
+    media_picture_t *ready[2];       // made, not yet given: ready[0] goes first
+    os64_lock_t release_lock;        // guards `released`, which any thread may push
+    media_picture_t *released;
+    uint64_t pictures_given, pictures_returned;
+
+    os64_media_counts_t counts;
     char error[160];
 };
 
@@ -108,10 +173,13 @@ static void on_log(void *avcl, int level, const char *fmt, va_list vl)
     while (n > 0 && (m->error[n - 1] == '\n' || m->error[n - 1] == '\r')) m->error[--n] = 0;
 }
 
-// Once per program, under s_lock: the log callback, every CRC table, and
-// the AES tables, so no demuxer makes one while another thread does (the
-// MP4 reader runs AES over each packet of a file with an `adrm` atom,
-// inside av_read_frame, which takes no lock).
+// Once per program, under s_lock: the log callback, every CRC table, the
+// AES tables, and the scaler's rgb2rgb tables, so no demuxer makes one
+// while another thread does (the MP4 reader runs AES over each packet of a
+// file with an `adrm` atom, inside av_read_frame, which takes no lock) and
+// no two scalers make the scaler's at their first conversions at once.
+// The scaler makes its tables in sws_init_context, which one small context
+// initialised here reaches.
 static void ready_locked(void)
 {
     if (s_ready) return;
@@ -123,6 +191,9 @@ static void ready_locked(void)
         (void)av_aes_init(aes, kZeroKey, 128, 0);
         av_free(aes);
     }
+    SwsContext *sws = sws_getContext(16, 16, AV_PIX_FMT_YUV420P, 16, 16, AV_PIX_FMT_BGRA, SWS_BILINEAR, NULL, NULL,
+                                     NULL);
+    sws_freeContext(sws);
     s_ready = true;
 }
 
@@ -244,53 +315,105 @@ static int resampler_drain(os64_media_t *m)
     return resample_into_out(m, m->stereo, tail);
 }
 
-// ---------------------------------------------------------------- decoding
+// ---------------------------------------------------------------- the timeline
 
-// One decoded frame, or the decoder's end. 1: `m->frame` holds sound; 0:
-// the decoder has ended; negative: an error.
-static int next_frame(os64_media_t *m)
+static int64_t start_of(const AVStream *s)
 {
-    for (;;) {
-        int r = avcodec_receive_frame(m->codec, m->frame);
-        if (r == 0) return 1;
-        if (r == AVERROR_EOF) return 0;
-        // Damaged sound is skipped, as players do, wherever the decoder
-        // finds it: in a packet it was sent, or in the rest of one it was
-        // still working through. It says so in the error text.
-        if (r == AVERROR_INVALIDDATA) continue;
-        if (r != AVERROR(EAGAIN)) return OS64_MEDIA_DECODE;
+    return s->start_time == AV_NOPTS_VALUE ? 0 : s->start_time;
+}
 
-        // The decoder wants input: the packet it refused, or the next.
-        if (!m->packet_waiting) {
-            if (m->reading_done) return 0;   // a decoder that never reports its end
-            r = av_read_frame(m->format, m->packet);
-            if (r == AVERROR_EOF) {
-                m->reading_done = true;
-                r = avcodec_send_packet(m->codec, NULL);
-                if (r < 0 && r != AVERROR_EOF) return OS64_MEDIA_DECODE;
-                continue;
-            }
-            if (r < 0) return r == AVERROR(EIO) ? OS64_MEDIA_IO : OS64_MEDIA_DECODE;
-            if (m->packet->stream_index != m->stream) {
-                av_packet_unref(m->packet);
-                continue;
-            }
+// Output frames from the file's zero to `s`'s start.
+static int64_t lead_of(const os64_media_t *m, const AVStream *s)
+{
+    return av_rescale_q(start_of(s), s->time_base, kOut) - av_rescale_q(m->zero_ts, m->zero_tb, kOut);
+}
+
+// The zero: the earlier start of the sound stream and the picture stream
+// (either may be -1), in the time base of the stream that has it, so the
+// stream that starts first has a lead of exactly 0.
+static void find_zero(os64_media_t *m, int sound, int picture)
+{
+    m->zero_ts = 0;
+    m->zero_tb = (AVRational){ 1, 1 };
+    bool have = false;
+    int streams[2] = { sound, picture };
+    for (int i = 0; i < 2; i++) {
+        if (streams[i] < 0) continue;
+        const AVStream *s = m->format->streams[streams[i]];
+        if (!have || av_compare_ts(start_of(s), s->time_base, m->zero_ts, m->zero_tb) < 0) {
+            m->zero_ts = start_of(s);
+            m->zero_tb = s->time_base;
+            have = true;
         }
-        r = avcodec_send_packet(m->codec, m->packet);
-        if (r == AVERROR(EAGAIN)) {
-            m->packet_waiting = true;    // receive what it has, then this packet again
-            continue;
-        }
-        m->packet_waiting = false;
-        av_packet_unref(m->packet);
-        // A damaged packet is skipped (as above); only a refusal of a
-        // different kind ends the decode.
-        if (r < 0 && r != AVERROR_INVALIDDATA) return OS64_MEDIA_DECODE;
     }
 }
 
+// ---------------------------------------------------------------- the demuxer
+
+// One packet from the demuxer to the decoder of its stream: 0 when one was
+// sent (or dropped: a stream nothing decodes, a damaged packet, a picture
+// before a resync's keyframe), or the demuxer's end reached; negative on
+// an error. A packet a decoder refuses with EAGAIN waits in `packet` and
+// goes first next time, after the decoder's output has been received.
+static int read_packet(os64_media_t *m)
+{
+    if (!m->packet_waiting) {
+        int r = av_read_frame(m->format, m->packet);
+        if (r == AVERROR_EOF) {
+            m->reading_done = true;
+            // Each decoder is told the input has ended, and gives what it
+            // still holds.
+            if (m->codec != NULL) {
+                r = avcodec_send_packet(m->codec, NULL);
+                if (r < 0 && r != AVERROR_EOF) return OS64_MEDIA_DECODE;
+            }
+            if (m->pcodec != NULL) {
+                r = avcodec_send_packet(m->pcodec, NULL);
+                if (r < 0 && r != AVERROR_EOF) return OS64_MEDIA_DECODE;
+            }
+            return 0;
+        }
+        if (r < 0) return r == AVERROR(EIO) ? OS64_MEDIA_IO : OS64_MEDIA_DECODE;
+    }
+    AVCodecContext *to = NULL;
+    if (m->codec != NULL && m->packet->stream_index == m->stream) {
+        if (!m->packet_waiting) m->counts.sound_packets++;
+        to = m->codec;
+    } else if (m->pcodec != NULL && m->packet->stream_index == m->pstream) {
+        if (!m->packet_waiting) m->counts.picture_packets++;
+        if (m->resync) {
+            if (!(m->packet->flags & AV_PKT_FLAG_KEY)) {
+                m->counts.pictures_resync++;
+                av_packet_unref(m->packet);
+                m->packet_waiting = false;   // it was the waiting one, if one waited: gone now
+                return 0;
+            }
+            // The keyframe: what the decoder holds is from before it.
+            avcodec_flush_buffers(m->pcodec);
+            m->resync = false;
+        }
+        to = m->pcodec;
+    } else {
+        av_packet_unref(m->packet);
+        return 0;
+    }
+    int r = avcodec_send_packet(to, m->packet);
+    if (r == AVERROR(EAGAIN)) {
+        m->packet_waiting = true;    // receive what it has, then this packet again
+        return 0;
+    }
+    m->packet_waiting = false;
+    av_packet_unref(m->packet);
+    // Damaged media is skipped, as players do (the decoder says so in the
+    // error text); only a refusal of a different kind ends the decode.
+    if (r < 0 && r != AVERROR_INVALIDDATA) return OS64_MEDIA_DECODE;
+    return 0;
+}
+
+// ---------------------------------------------------------------- the sound
+
 // The media frame index of the decoded frame's first sample, from its
-// timestamp, or -1 when it has none.
+// timestamp and its stream's own start, or -1 when it has none.
 static int64_t frame_index(os64_media_t *m)
 {
     int64_t pts = m->frame->best_effort_timestamp;
@@ -300,72 +423,104 @@ static int64_t frame_index(os64_media_t *m)
     return av_rescale_q(pts, s->time_base, (AVRational){ 1, (int)m->rate });
 }
 
-// Makes more output, or learns there is none. 1: output was made; 0: the
-// media has ended; negative: an error.
+// The decoded sound frame in `m->frame` into the output buffer.
+static int sound_frame_into_out(os64_media_t *m)
+{
+    const AVFrame *f = m->frame;
+    // A stream may change rate partway (two MP3s joined): what the old
+    // resampler holds is drawn out, and a new one starts.
+    if (f->sample_rate > 0 && (uint32_t)f->sample_rate != m->rate) {
+        int r = resampler_drain(m);
+        if (r < 0) return r;
+        m->rate = (uint32_t)f->sample_rate;
+        if ((r = resampler_start(m)) < 0) return r;
+    }
+    // The roles come from each frame's own layout, which may change with
+    // the rate. A frame that does not name its channels (a plain PCM WAV of
+    // six) is read as the usual layout for that count, 5.1 for six, as
+    // FFmpeg's own resampler reads it.
+    int channels = f->ch_layout.nb_channels;
+    if (channels < 1 || channels > MEDIA_PCM_MAX_CHANNELS) return OS64_MEDIA_UNSUPPORTED;
+    AVChannelLayout layout = f->ch_layout;
+    if (layout.order == AV_CHANNEL_ORDER_UNSPEC) av_channel_layout_default(&layout, channels);
+    for (int c = 0; c < channels; c++)
+        m->roles[c] = role_of(av_channel_layout_channel_from_index(&layout, (unsigned)c));
+    media_pcm_in_t in = { .channels = (uint32_t)channels,
+                          .planes = (const uint8_t *const *)f->extended_data,
+                          .frames = (uint32_t)f->nb_samples, .roles = m->roles };
+    if (!sample_of(f->format, &in.format, &in.planar)) return OS64_MEDIA_UNSUPPORTED;
+    if (!grow(&m->stereo, &m->stereo_cap, in.frames)) return OS64_MEDIA_NO_MEMORY;
+    if (!media_pcm_to_stereo(&in, m->stereo)) return OS64_MEDIA_UNSUPPORTED;
+    uint32_t first = 0;
+    if (m->seek_target >= 0) {
+        int64_t at = frame_index(m);
+        if (at >= 0 && at < m->seek_target) {
+            int64_t drop = m->seek_target - at;
+            first = drop >= in.frames ? in.frames : (uint32_t)drop;
+        }
+        if (first < in.frames) m->seek_target = -1;   // the target is in this frame
+    }
+    av_frame_unref(m->frame);
+    return resample_into_out(m, m->stereo + 2 * first, in.frames - first);
+}
+
+// One step of the sound: 1 when it moved (the output may have grown; a
+// damaged frame skipped counts), 0 when the sound has ended and its tail is
+// out, NEED_INPUT when its decoder wants a packet, or an error.
+static int sound_step(os64_media_t *m)
+{
+    if (m->silence > 0) {
+        // The sound's lead, before its first frame: silence, a block at a time.
+        uint32_t n = m->silence > 4096 ? 4096 : (uint32_t)m->silence;
+        if (!grow(&m->out, &m->out_cap, m->out_len + n)) return OS64_MEDIA_NO_MEMORY;
+        os64_memset(m->out + 2 * m->out_len, 0, (size_t)n * 4);
+        m->out_len += n;
+        m->silence -= n;
+        return 1;
+    }
+    if (!m->decoding_done) {
+        int r = avcodec_receive_frame(m->codec, m->frame);
+        if (r == 0) {
+            r = sound_frame_into_out(m);
+            return r < 0 ? r : 1;
+        }
+        // Damaged sound is skipped, as players do, wherever the decoder
+        // finds it: in a packet it was sent, or in the rest of one it was
+        // still working through. It says so in the error text.
+        if (r == AVERROR_INVALIDDATA) return 1;
+        if (r == AVERROR(EAGAIN) && !m->reading_done) return NEED_INPUT;
+        // The end, or a decoder that never reports its end once its input has.
+        if (r != AVERROR_EOF && r != AVERROR(EAGAIN)) return OS64_MEDIA_DECODE;
+        m->decoding_done = true;
+        return 1;
+    }
+    if (!m->tail_done) {
+        m->tail_done = true;     // the song is in: what the resampler holds comes out
+        int r = resampler_drain(m);
+        return r < 0 ? r : 1;
+    }
+    return 0;
+}
+
+// Makes more output, or learns there is none: the sound alone, for
+// os64_media_decode, whose media has no picture to read. 1: output was
+// made; 0: the media has ended; negative: an error.
 static int refill(os64_media_t *m)
 {
     m->out_at = m->out_len = 0;
     while (m->out_len == 0) {
-        if (!m->decoding_done) {
-            int r = next_frame(m);
-            if (r < 0) return r;
-            if (r == 0) {
-                m->decoding_done = true;
-                continue;
-            }
-            const AVFrame *f = m->frame;
-            // A stream may change rate partway (two MP3s joined): what the
-            // old resampler holds is drawn out, and a new one starts.
-            if (f->sample_rate > 0 && (uint32_t)f->sample_rate != m->rate) {
-                int r2 = resampler_drain(m);
-                if (r2 < 0) return r2;
-                m->rate = (uint32_t)f->sample_rate;
-                if ((r2 = resampler_start(m)) < 0) return r2;
-            }
-            // The roles come from each frame's own layout, which may change
-            // with the rate. A frame that does not name its channels (a
-            // plain PCM WAV of six) is read as the usual layout for that
-            // count, 5.1 for six, as FFmpeg's own resampler reads it.
-            int channels = f->ch_layout.nb_channels;
-            if (channels < 1 || channels > MEDIA_PCM_MAX_CHANNELS) return OS64_MEDIA_UNSUPPORTED;
-            AVChannelLayout layout = f->ch_layout;
-            if (layout.order == AV_CHANNEL_ORDER_UNSPEC) av_channel_layout_default(&layout, channels);
-            for (int c = 0; c < channels; c++)
-                m->roles[c] = role_of(av_channel_layout_channel_from_index(&layout, (unsigned)c));
-            media_pcm_in_t in = { .channels = (uint32_t)channels,
-                                  .planes = (const uint8_t *const *)f->extended_data,
-                                  .frames = (uint32_t)f->nb_samples, .roles = m->roles };
-            if (!sample_of(f->format, &in.format, &in.planar)) return OS64_MEDIA_UNSUPPORTED;
-            if (!grow(&m->stereo, &m->stereo_cap, in.frames)) return OS64_MEDIA_NO_MEMORY;
-            if (!media_pcm_to_stereo(&in, m->stereo)) return OS64_MEDIA_UNSUPPORTED;
-            uint32_t first = 0;
-            if (m->seek_target >= 0) {
-                int64_t at = frame_index(m);
-                if (at >= 0 && at < m->seek_target) {
-                    int64_t drop = m->seek_target - at;
-                    first = drop >= in.frames ? in.frames : (uint32_t)drop;
-                }
-                if (first < in.frames) m->seek_target = -1;   // the target is in this frame
-            }
-            av_frame_unref(m->frame);
-            int r2 = resample_into_out(m, m->stereo + 2 * first, in.frames - first);
-            if (r2 < 0) return r2;
-            continue;
-        }
-        if (!m->tail_done) {
-            m->tail_done = true;     // the song is in: what the resampler holds comes out
-            int r = resampler_drain(m);
-            if (r < 0) return r;
-            continue;
-        }
-        return 0;
+        int r = sound_step(m);
+        if (r == NEED_INPUT) r = read_packet(m);
+        else if (r == 0) return 0;
+        if (r < 0) return r;
     }
     return 1;
 }
 
 int64_t os64_media_decode(os64_media_t *m, int16_t *out, uint32_t frames)
 {
-    if (m == NULL || (out == NULL && frames > 0)) return OS64_MEDIA_BAD_ARGS;
+    if (m == NULL || m->codec == NULL || m->want != OS64_MEDIA_WANT_SOUND || (out == NULL && frames > 0))
+        return OS64_MEDIA_BAD_ARGS;
     uint32_t given = 0;
     while (given < frames) {
         if (m->out_at == m->out_len) {
@@ -383,6 +538,236 @@ int64_t os64_media_decode(os64_media_t *m, int16_t *out, uint32_t frames)
     return given;
 }
 
+// ---------------------------------------------------------------- the picture
+
+static void picture_free(media_picture_t *p)
+{
+    if (p == NULL) return;
+    av_frame_free(&p->frame);
+    os64_free(p);
+}
+
+// What any thread released, back to the decoder's pool: on the decoding
+// thread only (§ THREADS).
+static void drain_released(os64_media_t *m)
+{
+    os64_lock_acquire(&m->release_lock);
+    media_picture_t *list = m->released;
+    m->released = NULL;
+    os64_lock_release(&m->release_lock);
+    while (list != NULL) {
+        media_picture_t *next = list->next;
+        picture_free(list);
+        m->pictures_returned++;
+        list = next;
+    }
+}
+
+// Pictures made and not given: a seek's or a close's to drop.
+static void drop_unready(os64_media_t *m)
+{
+    picture_free(m->seek_held);
+    m->seek_held = NULL;
+    for (int i = 0; i < 2; i++) {
+        picture_free(m->ready[i]);
+        m->ready[i] = NULL;
+    }
+}
+
+static void make_ready(os64_media_t *m, media_picture_t *p)
+{
+    if (m->ready[0] == NULL) m->ready[0] = p;
+    else m->ready[1] = p;
+}
+
+// The decoded frame in `m->pframe` as a picture, timed; NULL when memory
+// ran out.
+static media_picture_t *picture_from_frame(os64_media_t *m)
+{
+    media_picture_t *p = os64_calloc(1, sizeof(*p));
+    if (p == NULL) return NULL;
+    p->frame = av_frame_alloc();
+    if (p->frame == NULL) {
+        os64_free(p);
+        return NULL;
+    }
+    av_frame_move_ref(p->frame, m->pframe);
+    const AVStream *s = m->format->streams[m->pstream];
+    int64_t pts = p->frame->best_effort_timestamp;
+    if (pts == AV_NOPTS_VALUE) pts = start_of(s);
+    p->pub.at = av_rescale_q(pts - start_of(s), s->time_base, kOut) + m->picture_lead;
+    if (p->frame->duration > 0)
+        p->pub.duration = av_rescale_q(p->frame->duration, s->time_base, kOut);
+    else if (m->picture_rate.num > 0 && m->picture_rate.den > 0)
+        p->pub.duration = av_rescale(OS64_AUDIO_RATE, m->picture_rate.den, m->picture_rate.num);
+    p->pub.width = (uint32_t)p->frame->width;
+    p->pub.height = (uint32_t)p->frame->height;
+    p->pub.keyframe = (p->frame->flags & AV_FRAME_FLAG_KEY) != 0;
+    // The colours it is converted from (os64/media.h, THE COLOURS), written
+    // into its frame here, on the decoding thread, so a scaler only reads it.
+    AVFrame *f = p->frame;
+    if (f->colorspace == AVCOL_SPC_UNSPECIFIED)
+        f->colorspace = (f->width >= 1280 || f->height > 576) ? AVCOL_SPC_BT709 : AVCOL_SPC_SMPTE170M;
+    if (f->color_range == AVCOL_RANGE_UNSPECIFIED)
+        f->color_range = AVCOL_RANGE_MPEG;
+    return p;
+}
+
+// One step of the picture: 1 when it moved (a picture may be ready), 0
+// when the picture has ended, NEED_INPUT when its decoder wants a packet,
+// or an error.
+static int picture_step(os64_media_t *m)
+{
+    int r = avcodec_receive_frame(m->pcodec, m->pframe);
+    if (r == AVERROR_INVALIDDATA) return 1;
+    if (r == AVERROR(EAGAIN) && !m->reading_done) return NEED_INPUT;
+    if (r == AVERROR_EOF || r == AVERROR(EAGAIN)) {
+        // The end: a seek's held picture is the one showing at a target
+        // past the last picture.
+        m->picture_done = true;
+        if (m->seek_held != NULL) {
+            make_ready(m, m->seek_held);
+            m->seek_held = NULL;
+        }
+        m->seek_picture = -1;
+        return 1;
+    }
+    if (r < 0) return OS64_MEDIA_DECODE;
+    media_picture_t *p = picture_from_frame(m);
+    if (p == NULL) {
+        av_frame_unref(m->pframe);
+        return OS64_MEDIA_NO_MEMORY;
+    }
+    // A picture the container times before the file's start should not
+    // exist (the zero is the earliest stream's start); it is dropped.
+    if (p->pub.at < 0) {
+        m->counts.pictures_before_zero++;
+        picture_free(p);
+        return 1;
+    }
+    if (m->seek_picture >= 0) {
+        if (p->pub.at <= m->seek_picture) {
+            // Before the target, or at it: the latest so far is kept, the
+            // one before it dropped.
+            if (m->seek_held != NULL) m->counts.pictures_run_in++;
+            picture_free(m->seek_held);
+            m->seek_held = p;
+            return 1;
+        }
+        m->seek_picture = -1;
+        if (m->seek_held != NULL) make_ready(m, m->seek_held);
+        m->seek_held = NULL;
+    }
+    make_ready(m, p);
+    return 1;
+}
+
+// ---------------------------------------------------------------- one puller
+
+int os64_media_next(os64_media_t *m, int16_t *pcm, uint32_t cap, os64_media_got_t *got)
+{
+    if (m == NULL || got == NULL || (m->codec != NULL && (pcm == NULL || cap == 0))) return OS64_MEDIA_BAD_ARGS;
+    os64_memset(got, 0, sizeof(*got));
+    drain_released(m);
+    for (;;) {
+        if (m->ready[0] != NULL) {
+            got->kind = OS64_MEDIA_GOT_PICTURE;
+            got->picture = &m->ready[0]->pub;
+            m->ready[0] = m->ready[1];
+            m->ready[1] = NULL;
+            m->pictures_given++;
+            m->counts.pictures_out++;
+            return 0;
+        }
+        if (m->out_at < m->out_len) {
+            uint32_t n = m->out_len - m->out_at;
+            if (n > cap) n = cap;
+            os64_memcpy(pcm, m->out + 2 * m->out_at, (size_t)n * 4);
+            got->kind = OS64_MEDIA_GOT_SOUND;
+            got->frames = n;
+            got->at = m->position;
+            m->out_at += n;
+            m->position += n;
+            return 0;
+        }
+        m->out_at = m->out_len = 0;
+        // Each decoder in turn gives what it has; a packet is read only when
+        // every one still decoding wants input.
+        bool want_input = false, moved = false;
+        if (m->pcodec != NULL && !m->picture_done) {
+            int r = picture_step(m);
+            if (r == NEED_INPUT) want_input = true;
+            else if (r < 0) return r;
+            else moved = true;
+            if (m->ready[0] != NULL) continue;
+        }
+        if (m->codec != NULL) {
+            int r = sound_step(m);
+            if (r == NEED_INPUT) want_input = true;
+            else if (r < 0) return r;
+            else if (r == 1) moved = true;
+            if (m->out_len > 0) continue;
+        }
+        if (moved) continue;
+        if (!want_input) {
+            got->kind = OS64_MEDIA_GOT_END;
+            return 0;
+        }
+        int r = read_packet(m);
+        if (r < 0) return r;
+    }
+}
+
+void os64_media_picture_release(os64_media_t *m, os64_media_picture_t *p)
+{
+    if (m == NULL || p == NULL) return;
+    media_picture_t *own = (media_picture_t *)p;
+    os64_lock_acquire(&m->release_lock);
+    own->next = m->released;
+    m->released = own;
+    os64_lock_release(&m->release_lock);
+}
+
+int os64_media_picture_skip(os64_media_t *m, int level)
+{
+    if (m == NULL || m->pcodec == NULL || (level != OS64_MEDIA_SKIP_NONE && level != OS64_MEDIA_SKIP_UNUSED))
+        return OS64_MEDIA_BAD_ARGS;
+    drain_released(m);
+    m->pcodec->skip_frame = level == OS64_MEDIA_SKIP_UNUSED ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
+    return 0;
+}
+
+int os64_media_picture_resync(os64_media_t *m)
+{
+    if (m == NULL || m->pcodec == NULL) return OS64_MEDIA_BAD_ARGS;
+    drain_released(m);
+    // What is made and not given is from before the keyframe too, and so
+    // is what the decoder holds (H.264 delays pictures it has decoded): it
+    // is flushed now, or the end of the stream, arriving before another
+    // keyframe, would drain those pictures out after the resync.
+    for (int i = 0; i < 2; i++) {
+        if (m->ready[i] != NULL) m->counts.pictures_resync++;
+        picture_free(m->ready[i]);
+        m->ready[i] = NULL;
+    }
+    if (m->seek_held != NULL) m->counts.pictures_resync++;
+    picture_free(m->seek_held);
+    m->seek_held = NULL;
+    m->seek_picture = -1;
+    avcodec_flush_buffers(m->pcodec);
+    m->resync = true;
+    return 0;
+}
+
+void os64_media_counts(const os64_media_t *m, os64_media_counts_t *out)
+{
+    if (out == NULL) return;
+    os64_memset(out, 0, sizeof(*out));
+    if (m == NULL) return;
+    *out = m->counts;
+    out->pictures_held = m->pictures_given - m->pictures_returned;
+}
+
 // ---------------------------------------------------------------- open, seek, close
 
 // What a failed probe means to a player: the source failed, memory ran
@@ -394,41 +779,213 @@ static int probe_error(int averror)
     return OS64_MEDIA_NOT_MEDIA;
 }
 
-// Under s_lock (§ THREADS): learn the streams, which opens decoders of
-// FFmpeg's own, and open the one this media decodes with.
-static int streams_and_decoder_locked(os64_media_t *m, const AVCodec **out)
+// The sound stream: the best this build can decode, or, when it decodes
+// none, the best there is (so the info can name it, and the zero is found
+// from the same streams whatever was wanted). -1 when the file has none;
+// *decoder NULL when it cannot be decoded.
+static int sound_stream(AVFormatContext *f, const AVCodec **decoder)
 {
-    int r = avformat_find_stream_info(m->format, NULL);
-    if (r < 0) return probe_error(r);
-    const AVCodec *decoder = NULL;
-    // The best audio stream THIS build can decode: one it cannot is passed
-    // over for one it can, and none at all is UNSUPPORTED, not NO_SOUND.
-    m->stream = av_find_best_stream(m->format, AVMEDIA_TYPE_AUDIO, -1, -1, &decoder, 0);
-    if (m->stream == AVERROR_DECODER_NOT_FOUND) return OS64_MEDIA_UNSUPPORTED;
-    if (m->stream < 0) return OS64_MEDIA_NO_SOUND;
-    AVStream *stream = m->format->streams[m->stream];
-    m->codec = avcodec_alloc_context3(decoder);
-    if (m->codec == NULL) return OS64_MEDIA_NO_MEMORY;
-    m->codec->opaque = m;
-    if (avcodec_parameters_to_context(m->codec, stream->codecpar) < 0) return OS64_MEDIA_UNSUPPORTED;
+    *decoder = NULL;
+    int s = av_find_best_stream(f, AVMEDIA_TYPE_AUDIO, -1, -1, decoder, 0);
+    if (s == AVERROR_DECODER_NOT_FOUND) {
+        *decoder = NULL;
+        s = av_find_best_stream(f, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+    }
+    return s < 0 ? -1 : s;
+}
+
+// The picture stream: the first this build decodes, a default one before
+// the rest, else the first there is. Cover art (an attached picture, an
+// MP3's or an M4A's) is no picture of the media's and is passed over, as
+// it must be for the zero too. Chosen from what the headers say alone, so
+// every open of a file chooses the same stream: av_find_best_stream also
+// ranks by the frames FFmpeg's probe read, and a sound-only open reads none
+// of the picture's.
+static int picture_stream(AVFormatContext *f, const AVCodec **decoder)
+{
+    int best = -1, best_rank = -1;
+    for (unsigned i = 0; i < f->nb_streams; i++) {
+        const AVStream *st = f->streams[i];
+        if (st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO || (st->disposition & AV_DISPOSITION_ATTACHED_PIC))
+            continue;
+        int rank = (avcodec_find_decoder(st->codecpar->codec_id) != NULL) * 2 +
+                   ((st->disposition & AV_DISPOSITION_DEFAULT) != 0);
+        if (rank > best_rank) {
+            best = (int)i;
+            best_rank = rank;
+        }
+    }
+    *decoder = best >= 0 ? avcodec_find_decoder(f->streams[best]->codecpar->codec_id) : NULL;
+    return best;
+}
+
+// A decoder for stream `s`, opened (under s_lock, § THREADS). 0, or a
+// result.
+static int open_decoder(os64_media_t *m, int s, const AVCodec *decoder, AVCodecContext **out)
+{
+    AVStream *stream = m->format->streams[s];
+    AVCodecContext *c = avcodec_alloc_context3(decoder);
+    if (c == NULL) return OS64_MEDIA_NO_MEMORY;
+    c->opaque = m;
+    if (avcodec_parameters_to_context(c, stream->codecpar) < 0) {
+        avcodec_free_context(&c);
+        return OS64_MEDIA_UNSUPPORTED;
+    }
     // The packets' clock: without it the decoder cannot move a frame's
     // timestamp past samples it discards (an MP3's start padding), and a
     // seek near the start would drop too little.
-    m->codec->pkt_timebase = stream->time_base;
-    r = avcodec_open2(m->codec, decoder, NULL);
-    if (r < 0) return r == AVERROR(ENOMEM) ? OS64_MEDIA_NO_MEMORY : OS64_MEDIA_UNSUPPORTED;
-    *out = decoder;
+    c->pkt_timebase = stream->time_base;
+    c->thread_count = 1;
+    int r = avcodec_open2(c, decoder, NULL);
+    if (r < 0) {
+        avcodec_free_context(&c);
+        return r == AVERROR(ENOMEM) ? OS64_MEDIA_NO_MEMORY : OS64_MEDIA_UNSUPPORTED;
+    }
+    *out = c;
     return 0;
 }
 
-int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_media_info_t *info)
+// Under s_lock (§ THREADS): learn the streams, which opens decoders of
+// FFmpeg's own, and open the ones this media decodes with. A picture the
+// media does not want is discarded BEFORE find_stream_info, so it reads
+// none of its packets (its start is in the MP4's headers, so the zero does
+// not move); an unwanted sound only after, because a sound's start is
+// learnt from its first packets. Every other stream is discarded too.
+//
+// FFmpeg's probe asks every stream, discarded or not, for what only its
+// packets can tell (a picture's pixel format, its first timestamp), so a
+// discarded picture would keep it reading the sound until its analysis
+// limit, five seconds by default, inside s_lock and across the network for
+// a page's: about twice the bytes the probe read before the picture was
+// discarded. With a picture discarded the probe's analysis is held to a
+// tenth of a second, which reads what an undiscarded probe did and decodes
+// none of the picture (an MP4's sound is described by its header and its
+// decoder's open).
+static int streams_and_decoders_locked(os64_media_t *m, os64_media_info_t *info)
 {
-    if (src == NULL || src->read == NULL || out == NULL) return OS64_MEDIA_BAD_ARGS;
+    bool want_sound = m->want & OS64_MEDIA_WANT_SOUND, want_picture = m->want & OS64_MEDIA_WANT_PICTURE;
+    bool picture_discarded = false;
+    for (unsigned i = 0; i < m->format->nb_streams; i++) {
+        AVStream *st = m->format->streams[i];
+        if (st->codecpar->codec_type != AVMEDIA_TYPE_AUDIO && (st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO || !want_picture)) {
+            st->discard = AVDISCARD_ALL;
+            picture_discarded |= st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO;
+        }
+    }
+    if (picture_discarded) m->format->max_analyze_duration = AV_TIME_BASE / 10;
+    int r = avformat_find_stream_info(m->format, NULL);
+    if (r < 0) return probe_error(r);
+
+    const AVCodec *sound_decoder = NULL, *picture_decoder = NULL;
+    int sound = sound_stream(m->format, &sound_decoder);
+    int picture = picture_stream(m->format, &picture_decoder);
+    find_zero(m, sound, picture);
+    m->found[0] = sound;
+    m->found[1] = picture;
+    for (unsigned i = 0; i < m->format->nb_streams; i++)
+        if ((int)i != sound && (int)i != picture) m->format->streams[i]->discard = AVDISCARD_ALL;
+
+    // The sound, only when wanted (unwanted, the info says ABSENT, and the
+    // stream is discarded from here on).
+    int sound_refusal = 0;
+    if (sound >= 0 && want_sound) {
+        AVStream *st = m->format->streams[sound];
+        const AVCodecDescriptor *d = avcodec_descriptor_get(st->codecpar->codec_id);
+        os64_strcopy(info->codec, sizeof(info->codec), sound_decoder ? sound_decoder->name : d ? d->name : "");
+        info->sound = OS64_MEDIA_UNPLAYABLE;
+        if (sound_decoder != NULL) {
+            sound_refusal = open_decoder(m, sound, sound_decoder, &m->codec);
+            int channels = m->codec ? m->codec->ch_layout.nb_channels : 0;
+            if (sound_refusal == 0 && (m->codec->sample_rate <= 0 || channels < 1 || channels > MEDIA_PCM_MAX_CHANNELS)) {
+                avcodec_free_context(&m->codec);
+                sound_refusal = OS64_MEDIA_UNSUPPORTED;
+            }
+        } else {
+            sound_refusal = OS64_MEDIA_UNSUPPORTED;
+        }
+        if (m->codec != NULL) {
+            info->sound = OS64_MEDIA_PLAYABLE;
+            m->stream = sound;
+            m->rate = (uint32_t)m->codec->sample_rate;
+            info->rate = m->rate;
+            info->channels = (uint32_t)m->codec->ch_layout.nb_channels;
+            m->sound_lead = lead_of(m, st);
+        }
+    }
+    if (sound >= 0 && m->codec == NULL) m->format->streams[sound]->discard = AVDISCARD_ALL;
+
+    // The picture, only when wanted (unwanted, the info says ABSENT and the
+    // stream was never read).
+    int picture_refusal = 0;
+    if (picture >= 0 && want_picture) {
+        AVStream *st = m->format->streams[picture];
+        const AVCodecDescriptor *d = avcodec_descriptor_get(st->codecpar->codec_id);
+        os64_strcopy(info->picture_codec, sizeof(info->picture_codec),
+                     picture_decoder ? picture_decoder->name : d ? d->name : "");
+        info->picture = OS64_MEDIA_UNPLAYABLE;
+        // A picture the scaler cannot read is refused here, never at the
+        // first conversion.
+        enum AVPixelFormat pixels = (enum AVPixelFormat)st->codecpar->format;
+        if (picture_decoder == NULL || pixels == AV_PIX_FMT_NONE || !sws_test_format(pixels, 0))
+            picture_refusal = OS64_MEDIA_UNSUPPORTED;
+        else
+            picture_refusal = open_decoder(m, picture, picture_decoder, &m->pcodec);
+        if (m->pcodec != NULL) {
+            info->picture = OS64_MEDIA_PLAYABLE;
+            m->pstream = picture;
+            m->picture_lead = lead_of(m, st);
+            if (st->avg_frame_rate.num > 0 && st->avg_frame_rate.den > 0) m->picture_rate = st->avg_frame_rate;
+            info->rate_num = (uint32_t)m->picture_rate.num;
+            info->rate_den = (uint32_t)m->picture_rate.den;
+            info->coded_width = (uint32_t)st->codecpar->width;
+            info->coded_height = (uint32_t)st->codecpar->height;
+            AVRational aspect = st->sample_aspect_ratio.num > 0 ? st->sample_aspect_ratio
+                              : st->codecpar->sample_aspect_ratio;
+            info->width = info->coded_width;
+            if (aspect.num > 0 && aspect.den > 0)
+                info->width = (uint32_t)av_rescale(info->coded_width, aspect.num, aspect.den);
+            info->height = info->coded_height;
+            const AVPacketSideData *matrix = av_packet_side_data_get(st->codecpar->coded_side_data,
+                                                                     st->codecpar->nb_coded_side_data,
+                                                                     AV_PKT_DATA_DISPLAYMATRIX);
+            if (matrix != NULL && matrix->size >= 9 * sizeof(int32_t)) {
+                // av_display_rotation_get answers counterclockwise degrees,
+                // and NaN for a matrix that turns nothing (a damaged one),
+                // which is no angle.
+                double turn = -av_display_rotation_get((const int32_t *)matrix->data);
+                if (turn == turn && turn > -1e6 && turn < 1e6) {
+                    long whole = (long)(turn < 0 ? turn - 0.5 : turn + 0.5);
+                    whole = ((whole % 360) + 360) % 360;
+                    if (whole == 90 || whole == 180 || whole == 270) info->rotation = (uint32_t)whole;
+                }
+            }
+        } else {
+            st->discard = AVDISCARD_ALL;
+        }
+    }
+
+    // The open fails only when nothing wanted can be decoded.
+    if (m->codec != NULL || m->pcodec != NULL) return 0;
+    if (sound_refusal == OS64_MEDIA_NO_MEMORY || picture_refusal == OS64_MEDIA_NO_MEMORY) return OS64_MEDIA_NO_MEMORY;
+    if (sound_refusal != 0 || picture_refusal != 0) return OS64_MEDIA_UNSUPPORTED;
+    return want_picture ? OS64_MEDIA_NO_PICTURE : OS64_MEDIA_NO_SOUND;
+}
+
+int os64_media_open_for(const os64_media_source_t *src, uint32_t want, os64_media_t **out, os64_media_info_t *info)
+{
+    if (src == NULL || src->read == NULL || out == NULL || want == 0 ||
+        (want & ~(OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE)) != 0)
+        return OS64_MEDIA_BAD_ARGS;
     *out = NULL;
     os64_media_t *m = os64_calloc(1, sizeof(*m));
     if (m == NULL) return OS64_MEDIA_NO_MEMORY;
     m->src = *src;
-    m->seek_target = -1;
+    m->want = want;
+    m->stream = m->pstream = m->found[0] = m->found[1] = -1;
+    m->seek_target = m->seek_picture = -1;
+    os64_media_info_t local;
+    if (info == NULL) info = &local;
+    os64_memset(info, 0, sizeof(*info));
 
     os64_lock_acquire(&s_lock);
     ready_locked();
@@ -446,7 +1003,8 @@ int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_med
     m->format = avformat_alloc_context();
     m->packet = av_packet_alloc();
     m->frame = av_frame_alloc();
-    if (m->format == NULL || m->packet == NULL || m->frame == NULL) goto fail;
+    m->pframe = av_frame_alloc();
+    if (m->format == NULL || m->packet == NULL || m->frame == NULL || m->pframe == NULL) goto fail;
     m->format->pb = m->io;
     m->format->opaque = m;
     m->format->flags |= AVFMT_FLAG_CUSTOM_IO;
@@ -458,42 +1016,46 @@ int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_med
         result = probe_error(r);   // and avformat_open_input freed the context
         goto fail;
     }
-    const AVCodec *decoder = NULL;
     os64_lock_acquire(&s_lock);
-    result = streams_and_decoder_locked(m, &decoder);
+    result = streams_and_decoders_locked(m, info);
     os64_lock_release(&s_lock);
     if (result < 0) goto fail;
+    if (m->codec != NULL && (result = resampler_start(m)) < 0) goto fail;
+    m->silence = m->sound_lead;
 
-    int channels = m->codec->ch_layout.nb_channels;
-    if (m->codec->sample_rate <= 0 || channels < 1 || channels > MEDIA_PCM_MAX_CHANNELS) {
-        result = OS64_MEDIA_UNSUPPORTED;
-        goto fail;
+    // A reader of several kinds names them all ("mov,mp4,m4a,..."): its
+    // first name is the container's.
+    const char *name = m->format->iformat->name;
+    size_t first = 0;
+    while (name[first] != '\0' && name[first] != ',' && first + 1 < sizeof(info->format)) first++;
+    os64_memcpy(info->format, name, first);
+    info->format[first] = '\0';
+    info->seekable = src->seek != NULL;
+    // The length runs from the zero to the later end of the sound and the
+    // picture, decoded or not (so every open of a file agrees); with neither
+    // end known, the container's own length.
+    info->frames = -1;
+    for (int i = 0; i < 2; i++) {
+        if (m->found[i] < 0) continue;
+        const AVStream *s = m->format->streams[m->found[i]];
+        if (s->duration == AV_NOPTS_VALUE) continue;
+        int64_t end = av_rescale_q(s->duration, s->time_base, kOut) + lead_of(m, s);
+        if (end > info->frames) info->frames = end;
     }
-    m->rate = (uint32_t)m->codec->sample_rate;
-    if ((result = resampler_start(m)) < 0) goto fail;
-
-    if (info != NULL) {
-        os64_memset(info, 0, sizeof(*info));
-        // A reader of several kinds names them all ("mov,mp4,m4a,..."):
-        // its first name is the container's.
-        const char *name = m->format->iformat->name;
-        size_t first = 0;
-        while (name[first] != '\0' && name[first] != ',' && first + 1 < sizeof(info->format)) first++;
-        os64_memcpy(info->format, name, first);
-        info->format[first] = '\0';
-        os64_strcopy(info->codec, sizeof(info->codec), decoder->name);
-        info->rate = m->rate;
-        info->channels = (uint32_t)channels;
-        info->frames = m->format->duration == AV_NOPTS_VALUE ? -1
-                     : av_rescale(m->format->duration, OS64_AUDIO_RATE, AV_TIME_BASE);
-        info->seekable = src->seek != NULL;
-    }
+    if (info->frames < 0 && m->format->duration != AV_NOPTS_VALUE)
+        info->frames = av_rescale(m->format->duration, OS64_AUDIO_RATE, AV_TIME_BASE);
     *out = m;
     return 0;
 
 fail:
     os64_media_close(m);
+    if (info != NULL) os64_memset(info, 0, sizeof(*info));
     return result;
+}
+
+int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_media_info_t *info)
+{
+    return os64_media_open_for(src, OS64_MEDIA_WANT_SOUND, out, info);
 }
 
 static uint64_t gcd(uint64_t a, uint64_t b)
@@ -517,35 +1079,72 @@ static uint64_t gcd(uint64_t a, uint64_t b)
 //   a boundary of the ratio's cycle (147 media frames for 44.1 kHz, which
 //   make exactly 160 output frames), so what comes out is sampled at the
 //   same instants as an unbroken decode, and equals it.
+//
+// A target inside the sound's lead is its silence's: the rest of the lead
+// comes out first and the sound starts from its own first frame.
+//
+// With a picture, the demuxer is moved by the picture's stream to the
+// keyframe before both the sound's decoding start and the target (an MP4
+// moves every stream to that keyframe's time), and the picture decoder
+// runs from it; pictures before the target are dropped as they come, but
+// for the last, which is held and given first (`seek_held`).
 int os64_media_seek(os64_media_t *m, int64_t frame)
 {
     if (m == NULL || frame < 0) return OS64_MEDIA_BAD_ARGS;
     if (m->src.seek == NULL) return OS64_MEDIA_CANNOT_SEEK;
-    int r = resampler_start(m);
-    if (r < 0) return r;
-    uint64_t cycle_in = m->rate / gcd(m->rate, OS64_AUDIO_RATE);
-    uint64_t cycle_out = OS64_AUDIO_RATE / gcd(m->rate, OS64_AUDIO_RATE);
-    int64_t preroll = m->resampler ? 2 * (int64_t)os64_resampler_latency(m->resampler) : 0;
-    int64_t target = av_rescale(frame, m->rate, OS64_AUDIO_RATE);         // in media frames
-    int64_t start = target - preroll;
-    start = start < 0 ? 0 : start / (int64_t)cycle_in * (int64_t)cycle_in;
-    int64_t start_out = start / (int64_t)cycle_in * (int64_t)cycle_out;  // exact: a whole number of cycles
+    drain_released(m);
 
-    AVStream *s = m->format->streams[m->stream];
-    const AVCodecDescriptor *codec = avcodec_descriptor_get(s->codecpar->codec_id);
-    int64_t decoder_preroll = s->codecpar->seek_preroll;
-    if (codec != NULL && (codec->props & AV_CODEC_PROP_LOSSY))
-        decoder_preroll += s->codecpar->frame_size > 0 ? 10 * (int64_t)s->codecpar->frame_size : m->rate / 2;
-    int64_t decode_from = start - decoder_preroll < 0 ? 0 : start - decoder_preroll;
-    int64_t ts = av_rescale_q(decode_from, (AVRational){ 1, (int)m->rate }, s->time_base);
-    if (s->start_time != AV_NOPTS_VALUE) ts += s->start_time;
-    if (av_seek_frame(m->format, m->stream, ts, AVSEEK_FLAG_BACKWARD) < 0) return OS64_MEDIA_CANNOT_SEEK;
-    avcodec_flush_buffers(m->codec);
+    int64_t sound_frame = frame - m->sound_lead;      // output frames from the sound's own start
+    int64_t silence = sound_frame < 0 ? -sound_frame : 0;
+    if (sound_frame < 0) sound_frame = 0;
+    int64_t start = 0, start_out = 0, sound_ts = 0;
+    AVStream *s = m->codec ? m->format->streams[m->stream] : NULL;
+    if (m->codec != NULL) {
+        int r = resampler_start(m);
+        if (r < 0) return r;
+        uint64_t cycle_in = m->rate / gcd(m->rate, OS64_AUDIO_RATE);
+        uint64_t cycle_out = OS64_AUDIO_RATE / gcd(m->rate, OS64_AUDIO_RATE);
+        int64_t preroll = m->resampler ? 2 * (int64_t)os64_resampler_latency(m->resampler) : 0;
+        int64_t target = av_rescale(sound_frame, m->rate, OS64_AUDIO_RATE);   // in media frames
+        start = target - preroll;
+        start = start < 0 ? 0 : start / (int64_t)cycle_in * (int64_t)cycle_in;
+        start_out = start / (int64_t)cycle_in * (int64_t)cycle_out;          // exact: a whole number of cycles
+
+        const AVCodecDescriptor *codec = avcodec_descriptor_get(s->codecpar->codec_id);
+        int64_t decoder_preroll = s->codecpar->seek_preroll;
+        if (codec != NULL && (codec->props & AV_CODEC_PROP_LOSSY))
+            decoder_preroll += s->codecpar->frame_size > 0 ? 10 * (int64_t)s->codecpar->frame_size : m->rate / 2;
+        int64_t decode_from = start - decoder_preroll < 0 ? 0 : start - decoder_preroll;
+        sound_ts = av_rescale_q(decode_from, (AVRational){ 1, (int)m->rate }, s->time_base);
+        if (s->start_time != AV_NOPTS_VALUE) sound_ts += s->start_time;
+    }
+    if (m->pcodec != NULL) {
+        AVStream *p = m->format->streams[m->pstream];
+        int64_t ts = av_rescale_q(frame, kOut, p->time_base) + av_rescale_q(m->zero_ts, m->zero_tb, p->time_base);
+        if (s != NULL) {
+            int64_t from = av_rescale_q(sound_ts, s->time_base, p->time_base);
+            if (from < ts) ts = from;
+        }
+        if (av_seek_frame(m->format, m->pstream, ts, AVSEEK_FLAG_BACKWARD) < 0) return OS64_MEDIA_CANNOT_SEEK;
+        avcodec_flush_buffers(m->pcodec);
+    } else if (av_seek_frame(m->format, m->stream, sound_ts, AVSEEK_FLAG_BACKWARD) < 0) {
+        return OS64_MEDIA_CANNOT_SEEK;
+    }
     av_packet_unref(m->packet);
-    m->packet_waiting = m->reading_done = m->decoding_done = m->tail_done = false;
+    m->packet_waiting = m->reading_done = false;
+    if (m->codec != NULL) {
+        avcodec_flush_buffers(m->codec);
+        m->decoding_done = m->tail_done = false;
+        m->seek_target = start;                    // media frames before it (the decoder's run-in) are dropped
+        if (sound_frame > start_out) m->skip_out += (uint32_t)(sound_frame - start_out);   // the run-in, with the delay
+        m->silence = silence;
+    }
     m->out_at = m->out_len = 0;
-    m->seek_target = start;                       // media frames before it (the decoder's run-in) are dropped
-    if (frame > start_out) m->skip_out += (uint32_t)(frame - start_out);   // the run-in, with the delay
+    if (m->pcodec != NULL) {
+        drop_unready(m);
+        m->picture_done = m->resync = false;
+        m->seek_picture = frame;
+    }
     m->position = frame;
     return 0;
 }
@@ -563,7 +1162,13 @@ const char *os64_media_error_text(const os64_media_t *m)
 void os64_media_close(os64_media_t *m)
 {
     if (m == NULL) return;
+    // Pictures released go back first; one still held is the caller's bug,
+    // and its memory is left alone (its frame holds its own reference, which
+    // keeps its buffer alive after the decoder is gone).
+    drain_released(m);
+    drop_unready(m);
     avcodec_free_context(&m->codec);
+    avcodec_free_context(&m->pcodec);
     avformat_close_input(&m->format);     // NULL already when open_input failed
     if (m->io) {
         av_freep(&m->io->buffer);
@@ -571,6 +1176,7 @@ void os64_media_close(os64_media_t *m)
     }
     av_packet_free(&m->packet);
     av_frame_free(&m->frame);
+    av_frame_free(&m->pframe);
     os64_resampler_destroy(m->resampler);
     if (m->stereo) os64_free(m->stereo);
     if (m->out) os64_free(m->out);
@@ -582,13 +1188,14 @@ const char *os64_media_strerror(int result)
     switch (result) {
     case 0:                      return "no error";
     case OS64_MEDIA_BAD_ARGS:    return "called wrongly";
-    case OS64_MEDIA_NOT_MEDIA:   return "not a sound file this can read";
-    case OS64_MEDIA_UNSUPPORTED: return "sound in a form this cannot decode";
+    case OS64_MEDIA_NOT_MEDIA:   return "not a media file this can read";
+    case OS64_MEDIA_UNSUPPORTED: return "media in a form this cannot decode";
     case OS64_MEDIA_NO_SOUND:    return "no sound in it";
     case OS64_MEDIA_DECODE:      return "damaged past decoding";
     case OS64_MEDIA_IO:          return "the file could not be read";
     case OS64_MEDIA_NO_MEMORY:   return "not enough memory";
     case OS64_MEDIA_CANNOT_SEEK: return "cannot seek there";
+    case OS64_MEDIA_NO_PICTURE:  return "no picture in it";
     default:                     return "an error with no name";
     }
 }
@@ -598,10 +1205,7 @@ const char *os64_media_strerror(int result)
 // Each MIME type other browsers answer for, as the libav reader that reads
 // it and, where the type implies its codec, that codec. Which of them play
 // is libav.so's answer (av_find_input_format, avcodec_find_decoder_by_name),
-// so a type whose reader or decoder is not built answers NO. A video type
-// is here for its SOUND, which is what libmedia plays of it (a <video>
-// plays a file's sound and no picture, AUDIO_YONDER.md § Y.4); a codecs
-// parameter naming a video codec still answers NO, since none is decoded.
+// so a type whose reader or decoder is not built answers NO.
 static const struct { const char *type, *demuxer, *implied; } kTypes[] = {
     {"video/mp4", "mov", NULL},
     {"audio/mpeg", "mp3", "mp3"}, {"audio/mp3", "mp3", "mp3"}, {"audio/mpeg3", "mp3", "mp3"},
@@ -621,10 +1225,36 @@ static const struct { const char *codec, *decoders[3]; } kCodecs[] = {
     {"aac", {"aac"}}, {"mp4a.40.2", {"aac"}}, {"mp4a.40.5", {"aac"}}, {"mp4a.40.29", {"aac"}},
     {"mp4a.40", {"aac"}}, {"mp4a.67", {"aac"}},
     {"opus", {"opus", "libopus"}}, {"vorbis", {"vorbis", "libvorbis"}}, {"flac", {"flac"}},
+    {"avc1", {"h264"}}, {"avc3", {"h264"}},
 };
+
+static bool hex_digit(char c)
+{
+    return (c >= '0' && c <= '9') || ((c | 0x20) >= 'a' && (c | 0x20) <= 'f');
+}
+
+// H.264's codec string (RFC 6381 § 3.3): `avc1` or `avc3`, alone or with a
+// dot and six hexadecimal digits (profile, constraints, level), as the
+// table's own entry name. NULL for anything else, which does not parse.
+static const char *avc_name(const char *codec)
+{
+    if (!((codec[0] | 0x20) == 'a' && (codec[1] | 0x20) == 'v' && (codec[2] | 0x20) == 'c' &&
+          (codec[3] == '1' || codec[3] == '3')))
+        return NULL;
+    const char *name = codec[3] == '1' ? "avc1" : "avc3";
+    if (codec[4] == '\0') return name;
+    if (codec[4] != '.') return NULL;
+    for (int i = 5; i < 11; i++)
+        if (!hex_digit(codec[i])) return NULL;
+    return codec[11] == '\0' ? name : NULL;
+}
 
 static bool decodes(const char *codec)
 {
+    const char *avc = avc_name(codec);
+    if (avc != NULL) codec = avc;
+    else if ((codec[0] | 0x20) == 'a' && (codec[1] | 0x20) == 'v' && (codec[2] | 0x20) == 'c')
+        return false;            // an H.264 name that does not parse
     for (size_t i = 0; i < sizeof(kCodecs) / sizeof(kCodecs[0]); i++) {
         if (!os64_streq_nocase(kCodecs[i].codec, codec))
             continue;
@@ -740,8 +1370,8 @@ size_t os64_media_type_list(char *out, size_t cap)
     size_t need = 0, kept = 0;
     bool whole = true;
     for (size_t i = 0; i < sizeof(kTypes) / sizeof(kTypes[0]); i++) {
-        // A video type plays only its sound here, so it is no SOUND type:
-        // a link to a video is not offered as a sound's page.
+        // A link to a video is not offered as a sound's page: a video type
+        // is no SOUND type.
         if (os64_memcmp(kTypes[i].type, "video/", 6) == 0 ||
             os64_media_type_supported(kTypes[i].type) == OS64_MEDIA_TYPE_NO)
             continue;

@@ -1,8 +1,8 @@
-// avbench — how fast libav.so decodes video on this machine, and whether it
-// decodes the right pictures.
+// avbench — how fast libav.so decodes video on this machine, and converts
+// it to a window's pixels, and whether it decodes the right pictures.
 //
-//   avbench [-c | -s] [-n frames] [-k crc] file
-//   avbench all <directory> [runs]
+//   avbench [-c | -s] [-n frames] [-k crc] [-x WxH|natural [-e] [-K crc]] file
+//   avbench all <directory> [runs] [-x WxH|natural]
 //
 // The file is read whole into memory first, so the disk is not in the
 // figure, and FFmpeg gets its bytes through the read and seek callbacks, as
@@ -19,6 +19,28 @@
 //              chooses at compile time stays in, and the output says so
 //   -n frames  stop after that many frames
 //   -k crc     the CRC the frames must give (hex); a different one exits 4
+//   -x WxH     also convert every frame to XRGB8888 (BGRA in memory, the
+//              window canvas's format) at W x H, the way a player will:
+//              sws_scale_frame on a dynamic context (never the legacy
+//              API), threads 1, into a destination avbench owns (64-byte
+//              aligned, more than FFmpeg's routines ask of a buffer, with
+//              rows padded past W so FFmpeg's unscaled converter, which
+//              works eight pixels at a time, writes every pixel of a row:
+//              canvas_pitch), from the decoded frame with its colours
+//              filled in (below). Each frame is converted twice, bilinear
+//              and fast, each by its own scaler and timed apart. FAST is
+//              FFmpeg's fast bilinear only for a frame wider than W x H,
+//              chosen frame by frame: enlarging, libswscale's fast path
+//              writes x86 code of its own into the heap and runs it
+//              (utils.c, ff_init_hscaler_mmxext), which os64, keeping data
+//              memory unexecutable, ends with a no-execute fault. When any
+//              frame enlarged, the "fast" column says fast=bilinear.
+//              `natural` is the picture's own size: conversion, no scaling
+//   -e         with -x: the bilinear conversion in FFmpeg's bit-exact mode,
+//              whose pixels do not depend on which routines FFmpeg chose,
+//              and a CRC-32 over them (every pixel of every row)
+//   -K crc     with -e: the CRC the converted pixels must give; a different
+//              one exits 4
 //
 // It prints the picture size and rate, the CPU flags FFmpeg reports it is
 // using, frames decoded, frames per second and that as a multiple of the
@@ -26,17 +48,33 @@
 // and a CRC-32 (zlib's) over every decoded frame's planes, visible rows and
 // columns only. H.264 decoding is bit-exact, so the CRC is the same for
 // every mode, on every machine, and on the host (the host's tool computes
-// exactly this).
+// exactly this). With -x, a second line gives, average and worst, a
+// frame's conversion with each filter, and per packet that gave frames
+// (the flush's included) its decode alone and its decode with the
+// conversions of what it gave, so `decode+bilinear` is `decode` plus that
+// packet's `bilinear`. With -e the bilinear figures are the bit-exact
+// scaler's, labelled so, and slower than a player's. Each scaler's first
+// conversion builds its graph, once, and is made untimed before the first
+// frame is timed.
+//
+// THE COLOURS: the matrix and range the stream states; with no matrix,
+// BT.709 for a picture 1280 or more wide or taller than 576 and BT.601
+// below (mpv's rule: standard definition was 601's); with no range,
+// limited. The destination takes the source's primaries and transfer, so
+// the scaler converts neither (left unspecified, it would map a wider
+// gamut, BT.2020, PQ or HLG, to BT.709).
 //
 // `all` runs every .mp4 in the directory in each of the three modes, `runs`
 // times each (3 if absent), and appends one line a run to /home/avbench.txt,
-// which is the file to send back.
+// which is the file to send back; with -x, each line carries the
+// conversion's figures too.
 //
 // Exit: 0 decoded to the end, 1 usage, 2 cannot read or open the file,
-// 3 reading or decoding failed partway, 4 CRC differs from -k. With -k, a
-// match exits AVBENCH_CRC_OK instead of 0: testrun's badge, a word spelled
-// in hex, so a program that ended for any other reason cannot pass for this
-// one.
+// 3 reading, decoding or converting failed partway, or the conversion
+// could not be set up (its memory, its scalers), 4 a CRC differs from
+// -k or -K. With -k or -K, a match exits AVBENCH_CRC_OK instead of 0:
+// testrun's badge, a word spelled in hex, so a program that ended for any
+// other reason cannot pass for this one.
 
 #include "os64/os64.h"
 
@@ -46,6 +84,7 @@
 #include "libavutil/imgutils.h"
 #include "libavutil/mem.h"
 #include "libavutil/pixdesc.h"
+#include "libswscale/swscale.h"
 
 #define RESULTS "/home/avbench.txt"
 #define AVBENCH_CRC_OK 0xAB0C0000   // "AB OK": -k matched
@@ -181,6 +220,106 @@ static void sort_us(int64_t *a, size_t n)
         }
 }
 
+// ------------------------------------------------------------ the conversion
+
+// Times, one a frame or one a packet, grown as they come.
+typedef struct {
+    int64_t *v;
+    size_t n, cap;
+} Series;
+
+static int series_push(Series *s, int64_t us)
+{
+    if (s->n == s->cap) {
+        size_t cap = s->cap ? s->cap * 2 : 1024;
+        int64_t *bigger = os64_realloc(s->v, cap * sizeof(int64_t));
+        if (!bigger) return -1;
+        s->v = bigger;
+        s->cap = cap;
+    }
+    s->v[s->n++] = us;
+    return 0;
+}
+
+typedef struct {
+    int64_t avg_us, worst_us;
+} Cost;
+
+static Cost series_cost(const Series *s)
+{
+    Cost c = { 0, 0 };
+    int64_t sum = 0;
+    for (size_t i = 0; i < s->n; i++) {
+        sum += s->v[i];
+        if (s->v[i] > c.worst_us) c.worst_us = s->v[i];
+    }
+    c.avg_us = s->n ? sum / (int64_t)s->n : 0;
+    return c;
+}
+
+// What -x, -e and -K asked for.
+typedef struct {
+    bool on;
+    bool natural;      // the picture's own size
+    int width, height;
+    bool exact;
+    bool have_crc;
+    uint32_t want_crc;
+} Scale;
+
+// The colours a decoded frame is converted from, written into the frame
+// itself (avbench's own after avcodec_receive_frame): THE COLOURS in the
+// header.
+static void colour_rule(AVFrame *f)
+{
+    if (f->colorspace == AVCOL_SPC_UNSPECIFIED)
+        f->colorspace = (f->width >= 1280 || f->height > 576) ? AVCOL_SPC_BT709 : AVCOL_SPC_SMPTE170M;
+    if (f->color_range == AVCOL_RANGE_UNSPECIFIED)
+        f->color_range = AVCOL_RANGE_MPEG;
+}
+
+// A dynamic context (sws_scale_frame builds its graph from the frames it is
+// given), one thread.
+static SwsContext *scaler_new(unsigned flags)
+{
+    SwsContext *c = sws_alloc_context();
+    if (c) {
+        c->flags = flags;
+        c->threads = 1;
+    }
+    return c;
+}
+
+// The destination's pitch in pixels for `width`: room for a whole last
+// group of eight and as much again. libswscale's unscaled converter
+// (x86/yuv2rgb.c, YUV2RGB_LOOP) works in groups of eight across: given a
+// pitch of exactly the width, it skips the last group, leaving up to seven
+// pixels of a row unwritten; given room, it writes them, and a little past.
+static int canvas_pitch(int width)
+{
+    return ((width + 15) & ~15) + 16;
+}
+
+// The destination: memory avbench owns, in an AVFrame from av_frame_alloc
+// (AVFrame's size is not FFmpeg's ABI, so a frame FFmpeg reads is always
+// one it allocated) that holds no buffer of FFmpeg's, with rows
+// canvas_pitch apart and room for one row more. NULL when memory ran out.
+// Its primaries and transfer are set to each source's before each
+// conversion (convert).
+static AVFrame *canvas_frame(uint8_t *pixels, int width, int height)
+{
+    AVFrame *f = av_frame_alloc();
+    if (f == NULL) return NULL;
+    f->width = width;
+    f->height = height;
+    f->format = AV_PIX_FMT_BGRA;
+    f->data[0] = pixels;
+    f->linesize[0] = canvas_pitch(width) * 4;
+    f->colorspace = AVCOL_SPC_RGB;
+    f->color_range = AVCOL_RANGE_JPEG;
+    return f;
+}
+
 typedef struct {
     int width, height;
     double clip_fps, fps;
@@ -188,10 +327,50 @@ typedef struct {
     int64_t worst_us, p99_us;
     uint32_t crc;
     char flags[160];
+    // -x
+    int scale_width, scale_height;
+    bool scale_exact;        // the bilinear figures are the bit-exact scaler's
+    bool fast_is_bilinear;   // some frame enlarged: the fast scaler was bilinear for it (-x's text)
+    Cost decode, bilinear, fast, with_bilinear, with_fast;
+    uint32_t scale_crc;      // -e
 } Result;
 
-// Decodes `path`'s first video stream in `mode`. Returns 0 or the exit code.
-static int bench(const char *path, int mode, long limit, Result *res)
+// Both conversions of one decoded frame, timed apart; the bit-exact one's
+// CRC folded in between the clocks. The fast scaler is fast bilinear only
+// for a frame wider than the canvas (-x's text), chosen for each frame, as
+// a stream may change its size (a change of flags rebuilds the scaler's
+// graph); *enlarged says when it was not. 0, or -1 when the scaler refused.
+static int convert(SwsContext *bilinear, SwsContext *fast, AVFrame *canvas, AVFrame *decoded, bool crc_it,
+                   uint32_t *crc, int64_t *bilinear_us, int64_t *fast_us, bool *enlarged)
+{
+    unsigned fast_flags = decoded->width > canvas->width ? SWS_FAST_BILINEAR : SWS_BILINEAR;
+    if (fast->flags != fast_flags) fast->flags = fast_flags;
+    if (fast_flags == SWS_BILINEAR) *enlarged = true;
+    colour_rule(decoded);
+    // Primaries and transfer the same on both sides: the scaler converts
+    // neither (THE COLOURS).
+    canvas->color_primaries = decoded->color_primaries;
+    canvas->color_trc = decoded->color_trc;
+    // An interlaced frame (H.264 says so per frame) is converted field by
+    // field; the scaler refuses a source and destination that disagree
+    // (libswscale/swscale.c, sws_frame_setup), and it does not deinterlace.
+    canvas->flags = (canvas->flags & ~AV_FRAME_FLAG_INTERLACED) | (decoded->flags & AV_FRAME_FLAG_INTERLACED);
+    int64_t t0 = os64_micros();
+    int r = sws_scale_frame(bilinear, canvas, decoded);
+    *bilinear_us = os64_micros() - t0;
+    if (r < 0) return -1;
+    if (crc_it)
+        for (int y = 0; y < canvas->height; y++)
+            *crc = crc_update(*crc, canvas->data[0] + (ptrdiff_t)y * canvas->linesize[0], (size_t)canvas->width * 4);
+    t0 = os64_micros();
+    r = sws_scale_frame(fast, canvas, decoded);
+    *fast_us = os64_micros() - t0;
+    return r < 0 ? -1 : 0;
+}
+
+// Decodes `path`'s first video stream in `mode`, converting each frame as
+// `scale` says. Returns 0 or the exit code.
+static int bench(const char *path, int mode, long limit, const Scale *scale, Result *res)
 {
     os64_memset(res, 0, sizeof(*res));
     int64_t size = 0;
@@ -219,6 +398,12 @@ static int bench(const char *path, int mode, long limit, Result *res)
     AVFrame *frame = av_frame_alloc();
     size_t cap = 4096, n = 0;
     int64_t *times = os64_malloc(cap * sizeof(int64_t));
+    SwsContext *bilinear = NULL, *fast = NULL;
+    uint8_t *pixels = NULL;
+    AVFrame *canvas = NULL;
+    Series s_bilinear = { 0 }, s_fast = { 0 }, s_decode = { 0 }, s_with_bilinear = { 0 }, s_with_fast = { 0 };
+    bool warmed = false;
+    uint32_t scale_crc = 0xFFFFFFFFu;
     enum { IO_BUFFER = 65536 };
     uint8_t *iobuf = av_malloc(IO_BUFFER);
     if (!pkt || !frame || !times || !iobuf) goto out;
@@ -242,11 +427,28 @@ static int bench(const char *path, int mode, long limit, Result *res)
     res->height = dec->height;
     res->clip_fps = av_q2d(fmt->streams[stream]->avg_frame_rate);
 
+    rc = 3;
+    if (scale->on) {
+        // The scalers are made after the tier is set, as the decoder is: the
+        // scaler chooses its routines from the flags in force when its graph
+        // is built.
+        res->scale_width = scale->natural ? dec->width : scale->width;
+        res->scale_height = scale->natural ? dec->height : scale->height;
+        res->scale_exact = scale->exact;
+        size_t bytes = (size_t)canvas_pitch(res->scale_width) * 4 * ((size_t)res->scale_height + 1);
+        pixels = os64_malloc_aligned(bytes, 64);
+        bilinear = scaler_new(SWS_BILINEAR | (scale->exact ? SWS_BITEXACT | SWS_ACCURATE_RND : 0));
+        // Its flags are chosen for each frame (convert).
+        fast = scaler_new(SWS_BILINEAR);
+        canvas = pixels ? canvas_frame(pixels, res->scale_width, res->scale_height) : NULL;
+        if (!canvas || !bilinear || !fast) { os64_printf("avbench: no memory for the conversion\n"); goto out; }
+        os64_memset(pixels, 0, bytes);    // first touches out of the timings
+    }
+
     crc_init();
     uint32_t crc = 0xFFFFFFFFu;
     int64_t total = 0;
     int flushing = 0;
-    rc = 3;
     for (;;) {
         if (!flushing) {
             // Only the end of the file ends a run normally: any other read
@@ -263,6 +465,7 @@ static int bench(const char *path, int mode, long limit, Result *res)
         int64_t t0 = os64_micros();
         int s = avcodec_send_packet(dec, flushing ? NULL : pkt);
         int64_t dt = os64_micros() - t0;
+        int64_t packet_bilinear = 0, packet_fast = 0;
         int got = 0;
         int r;
         for (;;) {
@@ -275,10 +478,42 @@ static int bench(const char *path, int mode, long limit, Result *res)
             if (limit <= 0 || res->frames < limit) {
                 crc = crc_frame(crc, frame);
                 res->frames++;
+                if (scale->on) {
+                    int64_t b_us, f_us;
+                    // A scaler builds its graph at its first frame, once: that
+                    // conversion is made untimed, then the frame is timed.
+                    if (!warmed) {
+                        uint32_t unused = 0;
+                        if (convert(bilinear, fast, canvas, frame, false, &unused, &b_us, &f_us, &res->fast_is_bilinear) < 0) {
+                            os64_printf("avbench: the scaler refused %s\n",
+                                        av_get_pix_fmt_name((enum AVPixelFormat)frame->format));
+                            goto out;
+                        }
+                        warmed = true;
+                    }
+                    if (convert(bilinear, fast, canvas, frame, scale->exact, &scale_crc, &b_us, &f_us, &res->fast_is_bilinear) < 0) {
+                        os64_printf("avbench: conversion failed partway\n");
+                        goto out;
+                    }
+                    if (series_push(&s_bilinear, b_us) < 0 || series_push(&s_fast, f_us) < 0) {
+                        os64_printf("avbench: no memory for the times\n");
+                        goto out;
+                    }
+                    packet_bilinear += b_us;
+                    packet_fast += f_us;
+                }
             }
             av_frame_unref(frame);
         }
         total += dt;
+        // The packets that gave frames, the flush's included: each one's
+        // decode alone, and with the conversions of what it gave.
+        if (scale->on && got && (series_push(&s_decode, dt) < 0 ||
+                                 series_push(&s_with_bilinear, dt + packet_bilinear) < 0 ||
+                                 series_push(&s_with_fast, dt + packet_fast) < 0)) {
+            os64_printf("avbench: no memory for the times\n");
+            goto out;
+        }
         // A decoder error fails the run before anything may end it normally,
         // the flush included (draining H.264's delayed pictures can fail):
         // EAGAIN (send more) and EOF (drained) are the decoder's two normal
@@ -302,10 +537,27 @@ static int bench(const char *path, int mode, long limit, Result *res)
     res->fps = total > 0 ? res->frames * 1e6 / (double)total : 0;
     res->worst_us = n ? times[n - 1] : 0;
     res->p99_us = n ? times[(size_t)(n * 0.99)] : 0;
+    if (scale->on) {
+        res->decode = series_cost(&s_decode);
+        res->bilinear = series_cost(&s_bilinear);
+        res->fast = series_cost(&s_fast);
+        res->with_bilinear = series_cost(&s_with_bilinear);
+        res->with_fast = series_cost(&s_with_fast);
+        res->scale_crc = scale_crc ^ 0xFFFFFFFFu;
+    }
     rc = 0;
 
 out:
     os64_free(times);
+    os64_free(s_bilinear.v);
+    os64_free(s_fast.v);
+    os64_free(s_decode.v);
+    os64_free(s_with_bilinear.v);
+    os64_free(s_with_fast.v);
+    sws_free_context(&bilinear);
+    sws_free_context(&fast);
+    av_frame_free(&canvas);          // holds no buffer of FFmpeg's: the pixels are freed next
+    if (pixels) os64_free(pixels);
     av_frame_free(&frame);
     av_packet_free(&pkt);
     avcodec_free_context(&dec);
@@ -336,6 +588,66 @@ static void report(const char *path, int mode, const Result *r)
     if (mode == MODE_C)
         os64_printf("avbench: -c forces FFmpeg's C routines; inline assembly chosen at compile time stays in\n");
     os64_serial_log(line);
+    if (r->scale_width == 0)
+        return;
+    // Average/worst, in ms: a frame's conversions; a packet's decode, alone
+    // and with them (the header says which packets).
+#define MS(c) (long)((c).avg_us / 1000), (long)((c).avg_us % 1000), (long)((c).worst_us / 1000), (long)((c).worst_us % 1000)
+    const char *bilinear = r->scale_exact ? "bilinear-exact" : "bilinear";
+    const char *fast = r->fast_is_bilinear ? "fast=bilinear" : "fast";
+    os64_snprintf(line, sizeof(line),
+                  "avbench %s to %dx%d mode %s ms avg/worst: decode %ld.%03ld/%ld.%03ld "
+                  "%s %ld.%03ld/%ld.%03ld %s %ld.%03ld/%ld.%03ld "
+                  "decode+%s %ld.%03ld/%ld.%03ld decode+%s %ld.%03ld/%ld.%03ld",
+                  path, r->scale_width, r->scale_height, k_mode_name[mode], MS(r->decode), bilinear,
+                  MS(r->bilinear), fast, MS(r->fast), bilinear, MS(r->with_bilinear), fast, MS(r->with_fast));
+#undef MS
+    os64_printf("%s\n", line);
+    os64_serial_log(line);
+}
+
+static void report_exact(const Result *r)
+{
+    char line[96];
+    os64_snprintf(line, sizeof(line), "avbench: bit-exact bilinear to %dx%d crc32 %08x", r->scale_width,
+                  r->scale_height, r->scale_crc);
+    os64_printf("%s\n", line);
+    os64_serial_log(line);
+}
+
+// A number of 1 to 16384 at *s, which is moved past it; -1 when there is
+// none or it is out of range (checked as each digit arrives, so a long
+// run of digits cannot overflow).
+static long parse_side(const char **s)
+{
+    long v = 0;
+    const char *p = *s;
+    if (*p < '0' || *p > '9') return -1;
+    while (*p >= '0' && *p <= '9') {
+        v = v * 10 + (*p++ - '0');
+        if (v > 16384) return -1;
+    }
+    *s = p;
+    return v < 1 ? -1 : v;
+}
+
+// "WxH" or "natural" into `scale`, the last one given winning. -1 when it
+// is neither.
+static int parse_size(const char *s, Scale *scale)
+{
+    scale->on = true;
+    if (os64_streq(s, "natural")) {
+        scale->natural = true;
+        return 0;
+    }
+    long w = parse_side(&s);
+    if (w < 0 || *s++ != 'x') return -1;
+    long h = parse_side(&s);
+    if (h < 0 || *s != '\0') return -1;
+    scale->natural = false;
+    scale->width = (int)w;
+    scale->height = (int)h;
+    return 0;
 }
 
 static int parse_hex(const char *s, uint32_t *out)
@@ -359,9 +671,10 @@ static int ends_with_mp4(const char *name)
     return n > 4 && os64_strcmp(name + n - 4, ".mp4") == 0;
 }
 
-// Every .mp4 in `dir`, every mode, `runs` times; one line a run appended to
-// RESULTS. Names are sorted so two machines' files line up.
-static int bench_all(const char *dir, int runs)
+// Every .mp4 in `dir`, every mode, `runs` times, converted as `scale` says;
+// one line a run appended to RESULTS. Names are sorted so two machines'
+// files line up.
+static int bench_all(const char *dir, int runs, const Scale *scale)
 {
     enum { MAX_FILES = 64 };
     static char names[MAX_FILES][OS64_DIRENT_NAME_MAX + 1];
@@ -391,17 +704,30 @@ static int bench_all(const char *dir, int runs)
                 char path[512];
                 os64_snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
                 Result r;
-                int rc = bench(path, mode, 0, &r);
+                int rc = bench(path, mode, 0, scale, &r);
                 if (rc) { worst = rc; continue; }
                 report(path, mode, &r);
                 if (out >= 0) {
-                    char line[600];
+                    char line[800];
                     long fps10 = (long)(r.fps * 10 + 0.5);
                     int len = os64_snprintf(line, sizeof(line),
-                                            "%s %dx%d mode %s run %d frames %ld fps %ld.%ld worst_us %ld p99_us %ld crc32 %08x flags [%s]\n",
+                                            "%s %dx%d mode %s run %d frames %ld fps %ld.%ld worst_us %ld p99_us %ld crc32 %08x flags [%s]",
                                             names[i], r.width, r.height, k_mode_name[mode], run, r.frames,
                                             fps10 / 10, fps10 % 10, (long)r.worst_us, (long)r.p99_us, r.crc, r.flags);
-                    os64_write((int32_t)out, line, (size_t)len);
+                    if (r.scale_width && len > 0 && (size_t)len < sizeof(line))
+                        len += os64_snprintf(line + len, sizeof(line) - (size_t)len,
+                                             " to %dx%d us avg/worst bilinear %ld/%ld %s %ld/%ld "
+                                             "decode+bilinear %ld/%ld decode+%s %ld/%ld",
+                                             r.scale_width, r.scale_height, (long)r.bilinear.avg_us,
+                                             (long)r.bilinear.worst_us, r.fast_is_bilinear ? "fast=bilinear" : "fast",
+                                             (long)r.fast.avg_us, (long)r.fast.worst_us,
+                                             (long)r.with_bilinear.avg_us, (long)r.with_bilinear.worst_us,
+                                             r.fast_is_bilinear ? "fast=bilinear" : "fast",
+                                             (long)r.with_fast.avg_us, (long)r.with_fast.worst_us);
+                    if (len > 0 && (size_t)len < sizeof(line) - 1) {
+                        line[len++] = '\n';
+                        os64_write((int32_t)out, line, (size_t)len);
+                    }
                 }
             }
     if (out >= 0) {
@@ -413,17 +739,27 @@ static int bench_all(const char *dir, int runs)
 
 static int usage(void)
 {
-    os64_printf("usage: avbench [-c | -s] [-n frames] [-k crc] file\n"
-                "       avbench all <directory> [runs]\n");
+    os64_printf("usage: avbench [-c | -s] [-n frames] [-k crc] [-x WxH|natural [-e] [-K crc]] file\n"
+                "       avbench all <directory> [runs] [-x WxH|natural]\n");
     return 1;
 }
 
 int main(int argc, char **argv)
 {
     av_log_set_callback(on_log);
+    Scale scale = { 0 };
     if (argc >= 3 && os64_streq(argv[1], "all")) {
-        int runs = argc >= 4 ? (int)os64_atoi(argv[3]) : 3;
-        return bench_all(argv[2], runs > 0 ? runs : 3);
+        int runs = 3;
+        for (int i = 3; i < argc; i++) {
+            if (os64_streq(argv[i], "-x") && i + 1 < argc) {
+                if (parse_size(argv[++i], &scale) < 0) return usage();
+            } else if (argv[i][0] != '-') {
+                runs = (int)os64_atoi(argv[i]);
+            } else {
+                return usage();
+            }
+        }
+        return bench_all(argv[2], runs > 0 ? runs : 3, &scale);
     }
     int mode = MODE_AUTO;
     long limit = 0;
@@ -437,17 +773,29 @@ int main(int argc, char **argv)
         else if (os64_streq(argv[i], "-k") && i + 1 < argc) {
             if (parse_hex(argv[++i], &want) < 0) return usage();
             have_crc = 1;
+        } else if (os64_streq(argv[i], "-x") && i + 1 < argc) {
+            if (parse_size(argv[++i], &scale) < 0) return usage();
+        } else if (os64_streq(argv[i], "-e")) {
+            scale.exact = true;
+        } else if (os64_streq(argv[i], "-K") && i + 1 < argc) {
+            if (parse_hex(argv[++i], &scale.want_crc) < 0) return usage();
+            scale.have_crc = true;
         } else if (argv[i][0] != '-' && !path) path = argv[i];
         else return usage();
     }
-    if (!path) return usage();
+    if (!path || ((scale.exact || scale.have_crc) && !scale.on) || (scale.have_crc && !scale.exact)) return usage();
     Result r;
-    int rc = bench(path, mode, limit, &r);
+    int rc = bench(path, mode, limit, &scale, &r);
     if (rc) return rc;
     report(path, mode, &r);
+    if (scale.exact) report_exact(&r);
     if (have_crc && r.crc != want) {
         os64_printf("avbench: crc32 %08x, expected %08x\n", r.crc, want);
         return 4;
     }
-    return have_crc ? (int)AVBENCH_CRC_OK : 0;
+    if (scale.have_crc && r.scale_crc != scale.want_crc) {
+        os64_printf("avbench: converted crc32 %08x, expected %08x\n", r.scale_crc, scale.want_crc);
+        return 4;
+    }
+    return have_crc || scale.have_crc ? (int)AVBENCH_CRC_OK : 0;
 }

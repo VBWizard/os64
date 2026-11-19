@@ -1,7 +1,9 @@
 # libav: FFmpeg, ported
 
-`libav.so` is FFmpeg's libavutil, libavcodec and libavformat: it reads a
-media file (the format, its tags, its timeline) and decodes what is inside.
+`libav.so` is FFmpeg's libavutil, libavcodec, libavformat and libswscale:
+it reads a media file (the format, its tags, its timeline), decodes what is
+inside, and converts and scales decoded pictures into other pixel formats
+and sizes.
 The interface is FFmpeg's own, unchanged (`avformat_open_input`,
 `avcodec_send_packet` and the rest), so FFmpeg's documentation is this
 library's. Its first user is `/tests/avtest`; libmedia, which yonder's
@@ -28,11 +30,16 @@ disabled and then, by name:
 | decoders | `mp3float`, `aac`, `pcm_s16le`, `pcm_s24le`, `pcm_s32le`, `pcm_u8`, `pcm_f32le`, `pcm_alaw`, `pcm_mulaw`, `h264` (video) |
 | parsers | `mpegaudio`, `aac`, `h264` |
 | protocols | none: bytes arrive through the caller's `AVIOContext`, never FFmpeg's own I/O |
+| libraries | libswscale, the picture converter and scaler (`--enable-swscale`); not libavfilter, libswresample or libavdevice |
 
 `tools/import_av.py --write <archive>` runs that `configure` on the host
 (os64 cannot run it), and writes:
 
-- `port/config/`: `config.h` and the other files `configure` generates.
+- `port/config/`: `config.h` and the other files `configure` generates,
+  and the two FFmpeg's makefiles make, asked of make by name:
+  `libavutil/ffversion.h`, and `libswscale/x86/uops_macros.gen.asm`, the
+  scaler's operation macros, C preprocessed into assembly that its
+  `ops_*.asm` sources include.
 - `sources.mk`: the translation units FFmpeg's own makefiles build for
   this configuration (its `lib*.a.objs` lists).
 - `upstream/`: those sources and every FFmpeg header they include, found by
@@ -52,7 +59,13 @@ is what FFmpeg does with it: `port/compat/stdlib.h`), and the float maths
 libmath does not export (`expf`, `sinf`, `exp2`, `lrintf`…), which
 FFmpeg's own `libavutil/libm.h` then supplies from the double functions.
 The few it calls with no `HAVE_` to answer (`sqrtf`, `fabsf`, `ldexp`,
-the AAC decoder's) are `port/compat/math.h`'s, over libmath's own.
+the AAC decoder's; `floorf`, `fmaxf`, `fminf`, the scaler's) are
+`port/compat/math.h`'s, over libmath's own. It also DECLARES `j1`, which
+nothing defines: the scaler names it only in a filter kernel nothing calls,
+so no reference reaches the link, and a release that calls it fails the
+link by name. `HAVE_INT128` is answered 0: the compiler has `__int128`, but
+dividing one calls libgcc, which os64 does not link, so the one user (the
+scaler's 64-bit rationals) takes FFmpeg's own software integer instead.
 `CC_IDENT` is overridden too, so the file does not record the host's
 compiler. An override that matches no line fails the import.
 
@@ -140,16 +153,21 @@ they stay off.
   own**, and FFmpeg's configure warns that such a build must not be used
   from several threads. What it shares between callers is set up on first
   use (`ff_thread_once`: the registries, a decoder's tables, which run
-  when a format is probed or a decoder opened) and its default log
+  when a format is probed or a decoder opened, and the scaler's rgb2rgb
+  tables, which run at a scaler's first conversion) and its default log
   callback, which keeps state. So a program that uses libav from more than
-  one thread does every open and close under one lock of its own and
+  one thread does every open and close, and every scaler's first
+  conversion, under one lock of its own, or makes those tables first, and
   installs a log callback that is safe from any thread. libmedia keeps a
   narrower form (its lock spans `avformat_find_stream_info` and the
   decoder's open, where this build's decoders set up, and it makes the
   CRC and AES tables itself at its first open, since a demuxer can ask
   for those while reading); `libmedia/media.c`
   § THREADS says why it is enough, and `tools/test_av_audit.py` pins the
-  one-time setups it rests on. Turning threads on means a pthread shim (mutex, condition, once)
+  one-time setups it rests on. A scaler set to one thread (the default)
+  starts none; set to more, it asks for worker threads
+  (`avpriv_slicethread_create`), is told there are none, and works on the
+  caller's thread. Turning threads on means a pthread shim (mutex, condition, once)
   over `os64_thread`, the lock and bells.
 
 ## The x86 assembly
@@ -172,13 +190,37 @@ x86-64.
 - **AVX-512 is configured out** (`--disable-avx512`,
   `--disable-avx512icl`): os64 never enables its state, so those routines
   could never be chosen, and leaving them out keeps FFmpeg's `ALIGN` at 32.
+  One is assembled anyway: the scaler's experimental backend
+  (`libswscale/x86/ops_common.asm`) instantiates `packed_shuffle64_64`
+  for AVX-512 with no guard (the scaler's other AVX-512 routines, in
+  `x86/rgb_2_rgb.asm`, sit behind `HAVE_AVX512ICL_EXTERNAL`). Nothing can
+  select it
+  (`x86/ops.c` reaches it only through a 64-byte vector, which it picks
+  only under `EXTERNAL_AVX512`, false at compile time here), and the audit
+  allows a `zmm` register in that routine alone.
+- **The scaler's fast bilinear enlarges with code it writes itself.**
+  libswscale generates an x86 horizontal filter at run time
+  (`ff_init_hscaler_mmxext`) when asked for `SWS_FAST_BILINEAR` on an
+  enlargement. Where it has `mmap` and `mprotect` it makes that memory
+  executable. Here it has neither (`HAVE_MMAP 0`), so it writes the code
+  into `av_malloc`'s memory, which os64 does not let execute: running it
+  ends the program with a no-execute fault. So os64's callers (libmedia's
+  scaler, `avbench -x`) ask for fast bilinear only when shrinking, and
+  enlarge with plain bilinear. The audit pins both halves of that rule.
+- **The scaler's experimental backend is built but not used.** FFmpeg 9's
+  libswscale has two: the legacy one, which converts every 8-bit format,
+  and an "ops" backend it prefers only for float formats or when a caller
+  asks with `SWS_UNSTABLE`. `--disable-unstable` would leave the second
+  out, but in 9.0.2 that build does not link (`graph.c` calls
+  `ff_sws_chroma_pos`, which `format.c` defines only under
+  `CONFIG_UNSTABLE`), and the port is unpatched.
 - **FFmpeg's buffers are `ALIGN`-aligned** through `posix_memalign`
   (libos64's `os64_malloc_aligned`), because its AVX routines load them
   with aligned instructions.
 - **The C stays `-mno-avx`**, so the only AVX in the library is the
   assembly FFmpeg chooses at run time. The audit holds that: no
-  VEX-encoded instruction in any C object, no `zmm` register anywhere, and
-  no text relocation (the link is `-z text`).
+  VEX-encoded instruction in any C object, no `zmm` register outside the
+  one routine above, and no text relocation (the link is `-z text`).
 
 ## How it is built (`shared.mk`)
 
@@ -216,7 +258,7 @@ unchanged. `port/` is os64's code and keeps userland's full alarm.
 The library is linked `--no-undefined --gc-sections` against `libos64.so`
 and `libmath.so` only, exports FFmpeg's public prefixes (`exports.map`:
 `av_*`, `avcodec_*`, `avformat_*`, `avio_*`, `avutil_*`,
-`avsubtitle_free`), and has no
+`avsubtitle_free`, and the scaler's `sws_*` and `swscale_*`), and has no
 initialisers, no thread-local storage and no system call: the audit checks
 each.
 
@@ -244,8 +286,13 @@ link error, not a function it cannot reach.
   (`/tests/pages/bbb-480p-3s.mp4`) decode to the CRC the host's FFmpeg
   gives, with the routines FFmpeg chose and with its C ones, and a 16x16
   clip decodes whole to its CRC. H.264 is bit-exact, so the assembly and
-  the C must agree. By hand, `avbench [-s|-c] file` measures, and
-  `avbench all <dir>` runs a directory of clips in every mode into
+  the C must agree. The same 30 frames, converted to 640x360 window
+  pixels by the scaler's bit-exact bilinear, give one CRC with the
+  routines FFmpeg chose and with its C ones: the port's own measurement,
+  since the host's FFmpeg is another release with another scaler. By
+  hand, `avbench [-s|-c] [-x WxH|natural] file` measures (with `-x`, the
+  conversion too, bilinear and fast), and `avbench all <dir> [runs]
+  [-x WxH|natural]` runs a directory of clips in every mode into
   `/home/avbench.txt`.
 - `tools/test_av_libc_host.sh`: the shims against glibc.
 - `tools/test_av_audit.py`: the pin, the licence, the surface, the imports.

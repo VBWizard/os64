@@ -67,6 +67,20 @@ static char *const argv_avbench_c[]    = { "/tests/avbench", "-c", "-n", "30", "
                                            "/tests/pages/bbb-480p-3s.mp4", NULL };
 static char *const argv_avbench_tiny[] = { "/tests/avbench", "-k", "fa7a3f20",
                                            "/tests/pages/video-tiny.mp4", NULL };
+// The same 30 frames converted to a window's pixels at 640x360 by the
+// scaler's bit-exact bilinear, whose pixels do not depend on the routines
+// FFmpeg chose: one CRC with the CPU's routines and with the C ones. It is
+// the port's own measurement (the host's FFmpeg is another release, whose
+// scaler differs), taken in QEMU with every tier agreeing.
+static char *const argv_avbench_x_auto[] = { "/tests/avbench", "-n", "30", "-k", "96e43679", "-x", "640x360", "-e",
+                                             "-K", "a434a9b9", "/tests/pages/bbb-480p-3s.mp4", NULL };
+static char *const argv_avbench_x_c[]    = { "/tests/avbench", "-c", "-n", "30", "-k", "96e43679", "-x", "640x360",
+                                             "-e", "-K", "a434a9b9", "/tests/pages/bbb-480p-3s.mp4", NULL };
+// Enlarging a 16-wide picture to 64: the case where libswscale's fast
+// bilinear would write code into the heap and run it (avbench.c, -x),
+// which os64's no-execute data memory ends with exit 139.
+static char *const argv_avbench_x_enlarge[] = { "/tests/avbench", "-k", "fa7a3f20", "-x", "64x64",
+                                                "/tests/pages/video-tiny.mp4", NULL };
 
 // The crime fixtures that PASS BY DYING: each commits a deliberate offense
 // and the pass code is the badge the enforcement kills with. A crime that
@@ -117,6 +131,9 @@ static const fixture_t kFixtures[] = {
     { "/tests/avbench",         argv_avbench_auto, 0xAB0C0000, 0, "libav.so's H.264 decoder: 30 frames of Big Buck Bunny give the host's CRC with the routines FFmpeg chose for this CPU" },
     { "/tests/avbench",         argv_avbench_c,    0xAB0C0000, 0, "libav.so's H.264 decoder: the same 30 frames give the same CRC with FFmpeg's C routines" },
     { "/tests/avbench",         argv_avbench_tiny, 0xAB0C0000, 0, "libav.so's H.264 decoder: the 16x16 clip decodes whole to the host's CRC" },
+    { "/tests/avbench",         argv_avbench_x_auto, 0xAB0C0000, 0, "libav.so's scaler: the 30 frames, converted bit-exact to 640x360 window pixels with the routines FFmpeg chose, give the port's CRC" },
+    { "/tests/avbench",         argv_avbench_x_c,    0xAB0C0000, 0, "libav.so's scaler: the same conversion with FFmpeg's C routines gives the same CRC" },
+    { "/tests/avbench",         argv_avbench_x_enlarge, 0xAB0C0000, 0, "libav.so's scaler: enlarging, the fast scaler runs no code written into data memory (it is bilinear there)" },
     { "/tests/titletest",       NULL, 0x711E0000,  0x711E0002, "GUI rename: the owner retitles and sets the encoding; create's title refusals, another task's NOT_OWNER" },
     { "/tests/frametest",       NULL, 0xF4A30000,  0xF4A30002, "the display's frame: a request is answered, numbers rise, twice is once, if-drawn waits for a publish, take leaves other events, an unread answer is one, an asker dying unanswered breaks nothing" },
     { "/tests/pintest",         NULL, 0x91A70000,  0,          "a handle closed by a sibling thread under a parked read: pipe, pty master, thread handle" },

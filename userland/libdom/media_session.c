@@ -554,7 +554,7 @@ bool os64_dom_media_session_action(os64_dom_t *dom, os64_dom_media_session_actio
             if (!JS_IsException(details)) {
                 os64_js_outcome_t call;
                 DScripts before = d_script_enter(owner, script);
-                d_scheduled_call(owner, &callback, callback.captured.runtime ? JS_UNDEFINED : dom->window->value, 1,
+                d_scheduled_call(owner, &callback, callback.captured.runtime ? JS_UNDEFINED : d_window_this(dom), 1,
                                  &details, &call);
                 d_script_leave(owner, &before, true);
                 JS_FreeValue(ctx, details);

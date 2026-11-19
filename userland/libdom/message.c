@@ -170,6 +170,8 @@ static JSValue post_message(JSContext *ctx, JSValueConst self, int argc, JSValue
     (void)self; (void)magic;
     os64_dom_t *target = d_member_callback(ctx, self, &magic, data, OS64_JS_ABI_ID);
     if (target == NULL) return JS_EXCEPTION;
+    if (target->browsing_context && target->browsing_context->proxy)
+        return d_error(ctx, "NotSupportedError", "Frame messaging requires the cross-realm message adapter");
     os64_dom_t *poster = target;
     if (argc < 1) return JS_ThrowTypeError(ctx, "postMessage needs a message");
     bool string_form = argc >= 3 ||

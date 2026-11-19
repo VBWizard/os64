@@ -190,7 +190,7 @@ preserves its size; the additional queue argument is charged only to private
 adoption. See `docs/design/pending/IFRAME_F4_HOST_PROMISE_LIFETIME.md` for the
 embedding policy and evidence; this is not blanket native-function neutrality.
 
-Patch 0044 lets a profiler's ledger observe the engine (the JS speed
+Patch 0045 lets a profiler's ledger observe the engine (the JS speed
 measurement; `os64_js_ledger_*` in `js_engine.h`). `JS_SetLedgerHooks` installs
 an optional owner-thread hook pair for each of: a C-function-with-data
 invocation (given the function and magic it was made with), a call into
@@ -203,7 +203,7 @@ constructor has one observed door. The runtime removes the hooks before it
 frees the engine, whose last collection would otherwise call them. Covered by
 the runtime host suite's ledger case.
 
-Patch 0045 reports the bytecode function at a depth of the stack (identity,
+Patch 0046 reports the bytecode function at a depth of the stack (identity,
 name, defining file, line and column) without allocation, exception or
 refcount change, so the profile can sample it from the interrupt handler; a
 native frame reports `[native]`. `JS_AtomGetStrRT` answers an ASCII atom with

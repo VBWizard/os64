@@ -407,7 +407,7 @@ static bool observe(os64_js_runtime_t *runtime)
 }
 
 /* ── The ledger's doors (os64_js_ledger_*, js_engine.h) ─────────────────
- * The engine's hooks (patch 0044) and the runtime's own frames (its
+ * The engine's hooks (patch 0045) and the runtime's own frames (its
  * activation, its compiles) each push a frame on the clock below and pop it
  * when the work ends. The engine keeps the hooks it opened a bracket with
  * until the bracket closes, so a hook finds the ledger gone if it was
@@ -1784,12 +1784,28 @@ static JSValue host_settings(os64_js_realm_t *entry, os64_js_realm_t *incumbent,
     return host_settings_dispatch(entry, incumbent, body, opaque, outcome, false);
 }
 
+/* Callers validate their admission before reading engine settings frames. */
+static bool settings_role_valid(os64_js_settings_role_t role)
+{
+    return role == OS64_JS_SETTINGS_ENTRY || role == OS64_JS_SETTINGS_INCUMBENT ||
+        role == OS64_JS_SETTINGS_CURRENT || role == OS64_JS_SETTINGS_NATIVE_CALLER;
+}
+static JSContext *settings_context(os64_js_runtime_t *runtime, os64_js_settings_role_t role)
+{
+    switch (role) {
+    case OS64_JS_SETTINGS_ENTRY: return JS_GetEntryContext(runtime->engine);
+    case OS64_JS_SETTINGS_INCUMBENT: return JS_GetIncumbentContext(runtime->engine);
+    case OS64_JS_SETTINGS_CURRENT: return JS_GetCurrentContext(runtime->engine);
+    case OS64_JS_SETTINGS_NATIVE_CALLER: return JS_GetNativeCallerContext(runtime->engine);
+    default: return NULL;
+    }
+}
+
 JS_PUBLIC os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_settings_role_t role, os64_js_outcome_t *outcome)
 {
     if (settings_ready(runtime, caller_abi, outcome) != OS64_JS_OK) return NULL;
-    if (role != OS64_JS_SETTINGS_ENTRY && role != OS64_JS_SETTINGS_INCUMBENT &&
-        role != OS64_JS_SETTINGS_CURRENT && role != OS64_JS_SETTINGS_NATIVE_CALLER) {
+    if (!settings_role_valid(role)) {
         status(outcome, OS64_JS_BAD_ARGUMENT, "unknown settings role");
         return NULL;
     }
@@ -1797,14 +1813,7 @@ JS_PUBLIC os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
         status(outcome, OS64_JS_ADMISSION_REFUSED, "no checked settings scope is active");
         return NULL;
     }
-    JSContext *context;
-    switch (role) {
-    case OS64_JS_SETTINGS_ENTRY: context = JS_GetEntryContext(runtime->engine); break;
-    case OS64_JS_SETTINGS_INCUMBENT: context = JS_GetIncumbentContext(runtime->engine); break;
-    case OS64_JS_SETTINGS_CURRENT: context = JS_GetCurrentContext(runtime->engine); break;
-    case OS64_JS_SETTINGS_NATIVE_CALLER: context = JS_GetNativeCallerContext(runtime->engine); break;
-    default: return NULL; /* Invalid roles were refused before scope inspection. */
-    }
+    JSContext *context = settings_context(runtime, role);
     os64_js_realm_t *realm = realm_for_context(runtime, context);
     if (settings_eligible(runtime, realm, outcome) != OS64_JS_OK) return NULL;
     owner_legacy_escape(runtime);
@@ -2610,6 +2619,31 @@ JSOwnerStatus js_owner_scope_owner(const JSOwnerRuntimeScope *scope, JSOwnerId *
     OwnerMetadata *metadata = scope->runtime->owner.metadata;
     return js_owner_loan_owner(&metadata->table, metadata->incarnation, scope->loan, out);
 }
+JSOwnerStatus js_owner_scope_settings(const JSOwnerRuntimeScope *scope,
+    os64_js_settings_role_t role, JSOwnerSettingsSnapshot *out)
+{
+    if (!scope || !out || !settings_role_valid(role)) return JS_OWNER_INVALID;
+    JSOwnerId admitting;
+    JSOwnerStatus result = js_owner_scope_owner(scope, &admitting);
+    if (result != JS_OWNER_OK) return result;
+    os64_js_runtime_t *runtime = scope->runtime;
+    if (runtime->destroying || !runtime->active || !runtime->turn || !runtime->settings_calls)
+        return JS_OWNER_INVALID;
+    JSContext *context = settings_context(runtime, role);
+    JSOwnerSettingsSnapshot snapshot = {.admitting_owner=admitting, .kind=JS_OWNER_SETTINGS_ABSENT};
+    if (context) {
+        snapshot.kind = JS_OWNER_SETTINGS_UNMAPPED;
+        os64_js_realm_t *realm = realm_for_context(runtime, context);
+        OwnerBinding *binding = owner_realm_binding(runtime, realm);
+        if (binding) {
+            snapshot.kind = JS_OWNER_SETTINGS_MAPPED;
+            snapshot.realm = (JSOwnerRealmSnapshot){.owner=binding->owner, .primary=realm == primary(runtime),
+                .staged=realm->staged, .retired=realm->retired, .failed=realm->failed};
+        }
+    }
+    *out = snapshot;
+    return JS_OWNER_OK;
+}
 JSOwnerStatus js_owner_scope_promote(JSOwnerRuntimeScope *scope, JSOwnerTicket *out)
 {
     if (!scope) return JS_OWNER_INVALID;
@@ -2637,6 +2671,82 @@ static JSValue owner_scoped_body(JSContext *context, void *opaque)
 {
     OwnerScopedCall *call = opaque;
     return call->body(&call->scope, context, call->opaque);
+}
+typedef struct {
+    OwnerScopedCall call;
+    os64_js_outcome_t *outcome;
+} OwnerSettingsInvocation;
+static JSValue owner_settings_invoke(JSContext *context, void *opaque)
+{
+    OwnerSettingsInvocation *invocation = opaque;
+    JSValue value = owner_scoped_body(context, &invocation->call);
+    if (JS_IsException(value)) {
+        JSValue error = JS_GetException(context);
+        invocation->outcome->status = OS64_JS_EXCEPTION;
+        diagnostic(invocation->call.scope.runtime, context, error, invocation->outcome);
+        JS_FreeValue(context, error);
+    }
+    JS_FreeValue(context, value);
+    return JS_UNDEFINED;
+}
+os64_js_status_t js_owner_runtime_with_settings(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket entry_ticket, const JSOwnerTicket *incumbent_ticket,
+    JSOwnerScopedBody *body, void *opaque, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = settings_ready(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (!body) return status(outcome, OS64_JS_BAD_ARGUMENT, "settings body is required");
+    os64_js_realm_t *entry, *incumbent = NULL;
+    if (owner_ticket_realm(runtime, entry_ticket, &entry) != JS_OWNER_OK)
+        return status(outcome, OS64_JS_ADMISSION_REFUSED, "entry ticket does not resolve");
+    result = settings_eligible(runtime, entry, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (incumbent_ticket) {
+        if (owner_ticket_realm(runtime, *incumbent_ticket, &incumbent) != JS_OWNER_OK)
+            return status(outcome, OS64_JS_ADMISSION_REFUSED, "incumbent ticket does not resolve");
+        result = settings_eligible(runtime, incumbent, outcome);
+        if (result != OS64_JS_OK) return result;
+    }
+    bool borrowed = runtime->active;
+    if (!runtime->turn || (!borrowed && !runtime->task))
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "settings require an active turn or open task");
+    if (observe(runtime)) { sticky(runtime, outcome); return outcome->status; }
+    OwnerSettingsInvocation invocation = {
+        .call={.scope={.runtime=runtime, .realm=entry}, .body=body, .opaque=opaque}, .outcome=outcome};
+    JSOwnerLoan incumbent_loan = {0};
+    OwnerMetadata *metadata = runtime->owner.metadata;
+    if (js_owner_loan_begin(&metadata->table, metadata->incarnation,
+            entry_ticket, &invocation.call.scope.loan) != JS_OWNER_OK)
+        return status(outcome, OS64_JS_ADMISSION_REFUSED, "entry invocation capacity exhausted");
+    if (incumbent && js_owner_loan_begin(&metadata->table, metadata->incarnation,
+            *incumbent_ticket, &incumbent_loan) != JS_OWNER_OK) {
+        status(outcome, OS64_JS_ADMISSION_REFUSED, "incumbent invocation capacity exhausted");
+    } else if (borrowed || enter(runtime, outcome) == OS64_JS_OK) {
+        SettingsCall call = {runtime->settings_calls, entry, outcome, owner_settings_invoke, &invocation};
+        runtime->settings_calls = &call;
+        JSValue value = JS_UNDEFINED;
+        bool admitted = JS_RunWithSettings(entry->context, incumbent ? incumbent->context : NULL,
+                                          scoped_settings_body, &call, &value);
+        JS_FreeValue(entry->context, value);
+        runtime->settings_calls = call.previous;
+        if (!admitted) status(outcome, OS64_JS_ADMISSION_REFUSED, "settings scope nesting limit reached");
+        if (observe(runtime)) sticky(runtime, outcome);
+        outcome->jobs_pending = JS_IsJobPending(runtime->engine);
+        outcome->jobs_executed = runtime->jobs;
+        outcome->jobs_discarded = runtime->discarded_jobs;
+        if (!borrowed) {
+            runtime->active_outcome = NULL;
+            ledger_deactivate(runtime);
+            runtime->active = false;
+        }
+    }
+    /* End role loans after settings/value cleanup and any guard opened here. */
+    if (incumbent_loan.serial && js_owner_loan_end(&metadata->table, metadata->incarnation,
+            incumbent_loan) != JS_OWNER_OK)
+        jsport_fatal("owner incumbent settings unwind", __FILE__, __LINE__);
+    if (js_owner_loan_end(&metadata->table, metadata->incarnation, invocation.call.scope.loan) != JS_OWNER_OK)
+        jsport_fatal("owner entry settings unwind", __FILE__, __LINE__);
+    return outcome->status;
 }
 os64_js_status_t js_owner_runtime_scoped_run(os64_js_runtime_t *runtime, const char *caller_abi,
     JSOwnerTicket ticket, const char *name, JSOwnerScopedBody *body, void *opaque, os64_js_outcome_t *outcome)

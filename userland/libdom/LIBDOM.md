@@ -2161,3 +2161,9 @@ Pair iteration retains its live-list behavior and releases the callback record
 on each exit. See the [synchronous settings contract](../../docs/design/pending/IFRAME_F4_SYNCHRONOUS_SETTINGS.md)
 for lifecycle boundaries and validation. Ordinary constructors and Yonder keep
 their existing behavior.
+
+The private [WindowProxy property boundary](../../docs/design/pending/IFRAME_F4_WINDOW_PROXY.md)
+adds stable native proxy identity, current-Window forwarding, restricted child
+lookup and cross-origin descriptor caching. It remains an internal host seam:
+global-this, document/event exposure and browser publication are separate gates.
+Proxy-bearing Windows reject postMessage until the cross-realm adapter exists.

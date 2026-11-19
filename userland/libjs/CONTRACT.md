@@ -115,6 +115,12 @@ reference operations reach these shared property paths. `Object.groupBy` and
 `Map.groupBy` pass undefined to callbacks; sloppy functions then select their
 own realm's global receiver, while strict and native functions see undefined.
 
+Patch 0044 preserves nonconfigurable, nonwritable global data properties when
+JS_DefineProperty reaches their variable-reference storage. Changed values refuse;
+SameValue redefinitions, writable properties and configurable properties retain
+their ordinary behavior. The global receiver host/guest fixture covers this
+independently of the private DOM WindowProxy consumer.
+
 This primitive does not install a WindowProxy, protect exported global values,
 or implement browser property security. DOM aliases, event values and proxy
 publication still need the F.4 integration. Existing consumers do not opt in.

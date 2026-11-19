@@ -62,12 +62,40 @@ typedef struct JSOwnerRuntimeScope JSOwnerRuntimeScope;
 typedef JSValue JSOwnerScopedBody(JSOwnerRuntimeScope *, JSContext *, void *);
 os64_js_status_t js_owner_runtime_scoped_run(os64_js_runtime_t *, const char *caller_abi,
     JSOwnerTicket, const char *name, JSOwnerScopedBody *, void *, os64_js_outcome_t *);
+/* Explicit settings invocation borrowing an active guard or open task. Entry
+ * and a supplied incumbent each reserve an independent loan, including when
+ * their tickets name the same owner. NULL incumbent supplies no replacement
+ * backup; incumbent selection follows the existing engine settings rules.
+ * JSOwnerScopedBody's invocation-only contract applies; result/exception
+ * diagnostics and value cleanup finish inside the selected settings frame.
+ * It returns no value and selects no exception-reporting hook. It runs no
+ * checkpoint and preserves the task budget. The caller supplies original
+ * eligible realms, not F4 authority.
+ * Existing setup/failure/lifecycle and outcome-alias refusal rules apply. */
+os64_js_status_t js_owner_runtime_with_settings(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerTicket entry, const JSOwnerTicket *incumbent, JSOwnerScopedBody *, void *, os64_js_outcome_t *);
 /* Live-scope metadata operations. Promotion creates an independent ticket
  * even after the admitting holder closes. Capacity/exhaustion leaves output
  * and loan unchanged. Outputs are distinct caller storage outside the scope.
  * Export uses ABI 5 getter admission and records sticky compatibility retention
  * before publishing its runtime-lived context; it does not clear other gates. */
 JSOwnerStatus js_owner_scope_owner(const JSOwnerRuntimeScope *, JSOwnerId *);
+typedef enum {
+    JS_OWNER_SETTINGS_ABSENT, JS_OWNER_SETTINGS_MAPPED, JS_OWNER_SETTINGS_UNMAPPED
+} JSOwnerSettingsKind;
+typedef struct {
+    JSOwnerId admitting_owner;
+    JSOwnerRealmSnapshot realm;
+    JSOwnerSettingsKind kind;
+} JSOwnerSettingsSnapshot;
+/* Live-scope scalar observation under an active wrapper settings frame. The
+ * admitting owner is independent of the selected role's original realm.
+ * Non-mapped realm fields are zero. No allocation, health polling, raw view,
+ * holder or authority is supplied; lifecycle facts do not grant eligibility.
+ * Output is distinct caller storage outside runtime/scope/active outcomes;
+ * refusal leaves it unchanged. Copied facts survive scope/root teardown. */
+JSOwnerStatus js_owner_scope_settings(const JSOwnerRuntimeScope *,
+    os64_js_settings_role_t, JSOwnerSettingsSnapshot *);
 JSOwnerStatus js_owner_scope_promote(JSOwnerRuntimeScope *, JSOwnerTicket *);
 JSOwnerStatus js_owner_scope_export(JSOwnerRuntimeScope *, JSContext **);
 /* Explicit private diagnostic selection before runtime publication. This

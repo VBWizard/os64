@@ -10,7 +10,8 @@ typedef struct DBrowsingContext DBrowsingContext;
  * live until cluster teardown. Binding admission and context publication are
  * separate: prepare an origin-bearing child, then publish it at a safe point.
  * Refusal does not consume that candidate; the host may retry or depart it.
- * No WindowProxy or script-visible tree is supplied by this interface. */
+ * This interface supplies native identity. Private WindowProxy preparation
+ * uses a separate internal seam; browser publication remains gated. */
 __attribute__((visibility("hidden")))
 DBrowsingContext *d_browsing_context_create(os64_dom_cluster_t *, DBrowsingContext *parent,
     os64_dom_t *initial, const char *name, os64_js_outcome_t *);

@@ -726,8 +726,9 @@ static JSValue default_view(JSContext *ctx, JSValueConst self, int argc, JSValue
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
     if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "Expected a document");
-    if (node != dom->document->document) return JS_NULL;
-    return JS_DupValue(ctx, dom->window->value);
+    os64_dom_t *owner = d_owner(dom, node);
+    if (!owner || node != owner->document->document) return JS_NULL;
+    return d_window_identity(owner, ctx);
 }
 
 int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

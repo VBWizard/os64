@@ -22,7 +22,7 @@ product video, or a link straight to the file.
 | `poster`, `videoWidth`/`videoHeight`, `object-fit` | captions drawn over the picture |
 | `<video controls>` over the picture; a page for a linked video file | `drawImage(video)` into a canvas, `requestVideoFrameCallback` |
 | silent files and muted clips, at their true cost | picture-in-picture, 10-bit and HDR |
-| full screen (**GAP**: this arc or the next, § 9) | protected (DRM) streams: not planned |
+| full screen (§ 9; its last slice, Rulings 4) | protected (DRM) streams: not planned |
 
 Nothing here may make the later column harder. Where a choice bears on it,
 the section says so.
@@ -75,7 +75,29 @@ The P5 is about one and a half times the 3900X per thread; assembly buys
 2.2 to 2.3 times over C, as on the host; AVX and SSE are equal for H.264.
 So § 3's shape stands, **one decoder thread carries 1440p60**, and § 6's
 eight decoded pictures cover the worst frame (under four frame times).
-The scaling figures above are still the host's.
+
+**The conversion on os64, on the P5** (`avbench -x`, one pinned thread,
+2026-11-18; evidence `~/os64-opus-kit/video-v3/p5_avbench.txt`). The
+call is libmedia's: `sws_scale_frame` on a dynamic context into the
+caller's pixels. Milliseconds a frame, average / worst, with FFmpeg's own
+choice of routines (AVX2); SSE is the same within a percent.
+
+| source | at its own size | to 2560x1440, bilinear | the same, C routines | 3900X, SSE (above) |
+|---|---|---|---|---|
+| 480p | 0.09 / 0.13 | 2.78 / 5.25 | 10.1 | 3.74 |
+| 720p | 0.21 / 0.28 | 3.10 / 5.82 | 11.5 | 4.32 |
+| 1080p | 0.52 / 0.75 | 3.55 / 6.58 | 13.6 | 4.72 |
+| 1440p | 1.14 / 1.51 (is 2560x1440) | | 2.54 | 1.45 |
+
+The P5 converts about 1.3 times as fast as the 3900X, and assembly is
+worth 3.8 times over C there too: § 1's conclusion 1 holds on the
+machine. **1080p60 shown at 2560x1440 costs 6.8 ms a frame, decode and
+conversion together, on one thread** (worst decode 34 ms, which the
+queue absorbs); 1440p60 at its own size 7.2 ms. A conversion's worst
+runs to about twice its average in every row, though its work does not
+vary: that is the thread being kept from the CPU, which V4's pacing
+should watch. Fast bilinear is not in the table: enlarging, it is plain
+bilinear on os64 (§ 2, As built).
 
 ## 2. The libraries
 
@@ -91,6 +113,54 @@ beside the sound side: what the picture is (size, frame rate, the pixel
 aspect), "give me the next decoded picture and its time", and "convert
 this picture into these pixels at this size". Times are on the same output
 timeline as sound. yonder, and any other player, see no FFmpeg type.
+
+**As built (V3).** What the outline left open, settled:
+
+- **libswscale is in libav.so**, its routines chosen at run time. Its
+  experimental "ops" backend is built and never used (DEBTS: 9.0.2 does
+  not link without it). `avbench -x WxH` times decode and conversion on
+  the call path libmedia uses; on the 3900X that path costs what the
+  table above measured, and on the P5 what its own table (§ 1) says.
+- **The header** (`os64/media.h` § THE PICTURE SIDE): `os64_media_open_for`
+  with WANT_SOUND and/or WANT_PICTURE. An unwanted stream is discarded at
+  the demuxer, so a sound-only probe makes and decodes none of the
+  picture's packets (and its analysis is held short, or FFmpeg would read
+  the sound for seconds waiting on the discarded picture).
+  The open succeeds with whatever wanted kind can be decoded, and the
+  info says of each kind whether it is absent, playable or unplayable.
+  It also gives the shown size (the pixel aspect applied), the coded size
+  (cropped), the stated rate, and the rotation, which is reported but not
+  yet honoured (DEBTS). One `os64_media_next` gives sound, a picture or
+  the end. A picture is a handle with its time, duration, size and
+  keyframe flag. There are `os64_media_picture_skip` (the unused pictures),
+  `os64_media_picture_resync` (to the next keyframe) and
+  `os64_media_counts`.
+- **The timeline's zero is the FILE's start**, the earlier of the sound's
+  and the picture's starts, the same for every open. A sound that starts
+  later is preceded by silence, so it is contiguous from frame 0.
+- **A picture is released from any thread and returned on the decoding
+  thread**, because FFmpeg's pools have empty locks in this build
+  (media.c § THREADS). `tools/test_av_audit.py` follows the calls from
+  each off-thread entry point. `tools/test_media_picture_host.sh` runs
+  the glue on the host over the pinned FFmpeg, under ThreadSanitizer and
+  ASan. Freeing on the wrong thread is caught there, as a race in
+  `av_buffer_pool_get`.
+- **The scaler** converts and scales in one step into the caller's
+  pixels. The X byte is written 0xFF. Colours follow mpv's matrix rule
+  where the stream is silent. The primaries and transfer are not
+  converted. An interlaced picture is converted field by field. It writes
+  exactly the pixels asked for. A conversion at the picture's own size,
+  at a width that is not a multiple of eight, goes through a padded
+  buffer of the scaler's own: FFmpeg's unscaled converter works eight
+  pixels at a time and would otherwise write past the row (media_scale.c,
+  THE UNSCALED EDGE).
+  FAST is FFmpeg's fast bilinear only when shrinking. Enlarging, that
+  path runs x86 code it writes into the heap, and os64's data memory does
+  not execute: it was the P5's first fault, `avbench -x 2560x1440`.
+- **Cover art** (an attached picture) is never the media's picture, nor
+  part of its zero.
+- **`canPlayType`**: `video/mp4` naming `avc1` or `avc3` answers
+  probably, and a codec string that does not parse answers no.
 
 **Pure cores, host-tested with mutants**, in the pattern of
 `media_queue.h` and `media_mix.h`:
@@ -146,7 +216,9 @@ measured: DEBTS). The first player is where it is measured.
 1. Layout gives the video box a content size in device pixels. The page
    tells the session that size and the `object-fit` rectangle inside it.
 2. The picture thread converts each decoded picture straight to XRGB at
-   that size (libswscale's `bgr0` is the window canvas's format).
+   that size (the window canvas's XRGB8888 is libswscale's `bgra` in
+   memory, its X byte written 0xFF; `bgr0` is the same bytes with that
+   byte undefined).
 3. When a ready frame comes due, the main loop marks the box's visible
    part dirty, as a GIF's frame does today. No layout.
 4. The paint copies that frame's rows into the window canvas, clipped.
@@ -244,14 +316,14 @@ interrupts off is heard.
   With ranges, the open fetches the tail; without, the file must arrive
   whole. Needs a fixture; nothing in the tree exercises it.
 
-## 9. Full screen (**GAP**: scope)
+## 9. Full screen (this arc's last slice, V8)
 
 There is no full-screen window in os64: no client call to drop the
 decorations or cover the screen after creation, and no `requestFullscreen`
 in libdom. It needs a small window-manager call plus the DOM's Fullscreen
-API. Lean: a late slice of THIS arc, since a video player without it is
-not one, and since 2560x1440 full screen is the worst case everything
-above was sized for.
+API. Ruled into THIS arc, as its last slice (Rulings 4): a video player
+without it is not one, and 2560x1440 full screen is the worst case
+everything above was sized for.
 
 ## 10. Slices (a first cut, to be argued)
 
@@ -271,7 +343,9 @@ V4 is the lean worth arguing: a player outside the browser lets sync,
 pacing and the glass be judged with nothing else in the way, and gives
 os64 a video player in its own right.
 
-A tracker (CSV and its page) once the slices are ratified, as for sound.
+`VIDEO_TRACKER.csv` beside this file is the state of each slice and of
+the GAPs, as questions (`tools/tracker.sh video` renders it). Its ids put
+a dot in the slice names (`V.3` is V3), as the tracker format asks.
 
 ## Rulings (Chris)
 

@@ -35,7 +35,7 @@ DBrowsingContext *d_browsing_context_create(os64_dom_cluster_t *cluster, DBrowsi
     os64_dom_t *initial, const char *name, os64_js_outcome_t *outcome)
 {
     if (d_browsing_quiescent(cluster, outcome) != OS64_JS_OK) return NULL;
-    if (!name || !context_candidate(cluster, initial) ||
+    if (!name || !context_candidate(cluster, initial) || initial->window_identity ||
         (parent && (!context_member(cluster, parent) || parent->discarded || !d_delivery_active(parent->active)))) {
         outcome->status = OS64_JS_BAD_ARGUMENT;
         return NULL;
@@ -53,7 +53,7 @@ DBrowsingContext *d_browsing_context_create(os64_dom_cluster_t *cluster, DBrowsi
     if (!context) { outcome->status = OS64_JS_ADMISSION_REFUSED; return NULL; }
     context->cluster = cluster;
     context->parent = parent;
-    context->active = initial;
+    context->active = context->window = initial;
     context->generation = 1;
     context->charged_bytes = bytes;
     os64_memcpy(context->name, name, length + 1);
@@ -106,6 +106,12 @@ static os64_js_status_t context_change(DBrowsingContext *context, uint64_t expec
     if (!context_member(cluster, context) || context->discarded ||
         expected != context->generation || (!discard && !context_candidate(cluster, candidate)))
         return outcome->status = OS64_JS_BAD_ARGUMENT;
+    /* Identity preparation is fallible and precedes this transaction. Refuse
+     * an unprepared replacement, or one prepared for a different context,
+     * before retiring the outgoing document or any descendant. */
+    if (!discard && ((context->window->window_identity && !candidate->window_identity) ||
+        (candidate->window_identity && candidate->window_identity != context->proxy)))
+        return outcome->status = OS64_JS_BAD_ARGUMENT;
     if (context->generation == UINT64_MAX) return outcome->status = OS64_JS_ADMISSION_REFUSED;
     /* Check the complete descendant set before retiring any document. A name
      * or script-facing cache is not consulted while selecting these records. */
@@ -126,7 +132,10 @@ static os64_js_status_t context_change(DBrowsingContext *context, uint64_t expec
     if (discard) {
         context_unlink(context);
         context->discarded = true;
-    } else candidate->browsing_context = context;
+    } else {
+        context->window = candidate;
+        candidate->browsing_context = context;
+    }
     return OS64_JS_OK;
 }
 

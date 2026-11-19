@@ -776,6 +776,13 @@ static os64_dom_t *listener_activity(os64_dom_t *dom, const DValue *entry)
     return entry->node ? d_owner(dom, entry->node) : entry->dom;
 }
 
+/* Listener ownership stays on the document's raw Window record. Only the
+ * script-facing value follows that document's stable browsing-context identity. */
+static JSValueConst event_target_value(const DValue *entry)
+{
+    return entry == entry->dom->window ? d_window_this(entry->dom) : entry->value;
+}
+
 /* A listener is a function, or an object whose handleEvent is one. */
 static JSValue call_callback(os64_dom_t *dom, JSContext *ctx, DValue *entry,
                              JSValueConst callback, JSValueConst event, os64_dom_t *counter)
@@ -784,7 +791,7 @@ static JSValue call_callback(os64_dom_t *dom, JSContext *ctx, DValue *entry,
         int eligible = d_delivery_eligible(listener_activity(dom, entry), ctx, callback);
         if (eligible <= 0) return eligible < 0 ? JS_EXCEPTION : JS_UNDEFINED;
         if (counter) counter->listener_calls++;
-        return JS_Call(ctx, callback, entry->value, 1, &event);
+        return JS_Call(ctx, callback, event_target_value(entry), 1, &event);
     }
     JSValue method = JS_GetPropertyStr(ctx, callback, "handleEvent");
     if (JS_IsException(method)) return method;
@@ -866,8 +873,8 @@ static JSValue prepared_handler(JSContext *ctx, JSValueConst callback, void *opa
     DEvent *state = JS_GetOpaque(call->event, call->dom->event_class);
     if (call->target == call->target->dom->window && state && state->error_event &&
         os64_strcmp(state->type, "error") == 0)
-        return call_error_handler(ctx, callback, call->target->value, state);
-    return JS_Call(ctx, callback, call->target->value, 1, &call->event);
+        return call_error_handler(ctx, callback, event_target_value(call->target), state);
+    return JS_Call(ctx, callback, event_target_value(call->target), 1, &call->event);
 }
 
 static bool sticky(os64_js_status_t status)
@@ -910,7 +917,7 @@ static JSValue run_record(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListe
         int eligible = d_delivery_eligible(listener_activity(dom, entry), ctx, callback);
         if (eligible > 0 && counter) counter->listener_calls++;
         result = eligible < 0 ? JS_EXCEPTION : eligible == 0 ? JS_UNDEFINED
-            : call_error_handler(ctx, callback, entry->value, state);
+            : call_error_handler(ctx, callback, event_target_value(entry), state);
     } else if (captured && captured->runtime) {
         ListenerCall call = {dom, counter, entry, event, captured, callback_entry};
         os64_js_outcome_t out;
@@ -1022,7 +1029,7 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
     DListener *last = entry->last_listener;
     if (last == NULL) return 0;
     JS_FreeValue(d->ctx, event->current);
-    event->current = JS_DupValue(d->ctx, entry->value);
+    event->current = JS_DupValue(d->ctx, event_target_value(entry));
     event->phase = phase;
     int result = 0;
     for (DListener *listener = entry->listeners; listener != NULL; listener = listener->next) {
@@ -1078,7 +1085,7 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                 driver->invoking_entry = entry;
                 driver->invoking_capture = &captured;
                 driver->invoking_realm = callback_entry;
-                os64_js_realm_call(driver->realm, OS64_JS_ABI_ID, driver->invoke->value, entry->value, 2, args,
+                os64_js_realm_call(driver->realm, OS64_JS_ABI_ID, driver->invoke->value, event_target_value(entry), 2, args,
                              NULL, &call);
                 driver->invoking = NULL;
                 driver->invoking_entry = NULL;
@@ -1401,7 +1408,7 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     if (failed) target = JS_EXCEPTION;
     else if (d->plain != NULL) target = JS_DupValue(ctx, d->plain->value);
     else if (node == NULL)
-        target = d->document_target ? d_wrap(dom, ctx, document_node(dom)) : JS_DupValue(ctx, dom->window->value);
+        target = d->document_target ? d_wrap(dom, ctx, document_node(dom)) : d_window_identity(dom, ctx);
     else target = JS_DupValue(ctx, steps[0]);
     if (JS_IsException(target)) { steps_free(d, steps, values); d_free(dom, steps); return -1; }
     size_t count = 0;
@@ -1806,6 +1813,8 @@ static int target_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst self, bool
             DValue *window = dom->cluster->members[i]->window;
             if (window && JS_VALUE_GET_PTR(self) == JS_VALUE_GET_PTR(window->value)) { *out = window; return 0; }
         }
+    os64_dom_t *window = d_window_proxy_target(self);
+    if (d_same_cluster(dom, window)) { *out = window->window; return 0; }
     int found = plain_entry(dom, ctx, self, make, out);
     if (found != 0) return found > 0 ? 0 : -1;
     const os64_html_node_t *node = d_node(dom, ctx, self);
@@ -2476,7 +2485,7 @@ static JSValue composed_path(JSContext *ctx, JSValueConst self, int argc, JSValu
     for (uint32_t i = 0; status >= 0 && i < steps; i++) {
         if (!keep[i]) continue;
         JSValue value = i < event->path_count ? d_wrap(dom, ctx, event->path_nodes[i])
-                                              : JS_DupValue(ctx, dom->window->value);
+                                              : d_window_identity(dom, ctx);
         status = JS_IsException(value) ? -1 : JS_DefinePropertyValueUint32(ctx, array, at++, value, JS_PROP_C_W_E);
     }
     d_free(dom, keep);
@@ -3035,17 +3044,31 @@ static JSValue message_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
     return string;
 }
 
-/* source: a MessageEventSource (a window, and this one is the only window
- * a page here can name; a MessagePort or a ServiceWorker, which this
- * browser does not have) or null, its default. */
-static JSValue message_source(JSContext *ctx, JSValueConst value)
+/* Web IDL Window conversion checks native identity without invoking getters
+ * or applying an origin check; a foreign Window is a valid view too. */
+static os64_dom_t *ui_window(os64_dom_t *dom, JSValueConst value)
+{
+    os64_dom_t *window = d_window_proxy_target(value);
+    if (d_same_cluster(dom, window)) return window;
+    if (!JS_IsObject(value)) return NULL;
+    if (JS_VALUE_GET_PTR(value) == JS_VALUE_GET_PTR(dom->window->value)) return dom;
+    if (dom->cluster)
+        for (size_t i = 0; i < dom->cluster->count; ++i) {
+            window = dom->cluster->members[i];
+            if (window->window && JS_VALUE_GET_PTR(value) == JS_VALUE_GET_PTR(window->window->value))
+                return window;
+        }
+    return NULL;
+}
+
+/* MessageEventSource accepts a native Window identity. MessagePort and
+ * ServiceWorker sources require their own adapters. */
+static JSValue message_source(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
 {
     if (JS_IsUndefined(value) || JS_IsNull(value)) return JS_NULL;
-    JSValue global = JS_GetGlobalObject(ctx);
-    bool window = JS_IsObject(value) && JS_VALUE_GET_PTR(global) == JS_VALUE_GET_PTR(value);
-    JS_FreeValue(ctx, global);
-    if (!window) return JS_ThrowTypeError(ctx, "A MessageEvent's source is a window, a MessagePort or null");
-    return JS_DupValue(ctx, value);
+    os64_dom_t *window = ui_window(dom, value);
+    if (!window) return JS_ThrowTypeError(ctx, "A MessageEvent's source is a Window or null");
+    return d_window_identity(window, ctx);
 }
 
 /* ports: a sequence of MessagePorts, which must therefore be empty, as a
@@ -3070,7 +3093,7 @@ static int message_members(os64_dom_t *dom, JSContext *ctx, JSValueConst origin,
 {
     out[0] = message_text(dom, ctx, origin, true);
     out[1] = JS_IsException(out[0]) ? JS_EXCEPTION : message_text(dom, ctx, last_event_id, false);
-    out[2] = JS_IsException(out[1]) ? JS_EXCEPTION : message_source(ctx, source);
+    out[2] = JS_IsException(out[1]) ? JS_EXCEPTION : message_source(dom, ctx, source);
     out[3] = JS_IsException(out[2]) ? JS_EXCEPTION : message_ports(dom, ctx, ports);
     if (!JS_IsException(out[3])) return 0;
     for (int i = 0; i < 4; i++) JS_FreeValue(ctx, out[i]);
@@ -3155,7 +3178,7 @@ static JSValue message_event_constructor(JSContext *ctx, JSValueConst new_target
         got[i] = i == 0 ? (JS_IsUndefined(value) ? JS_NULL : JS_DupValue(ctx, value))
                : i == 1 ? message_text(dom, ctx, value, false)
                : i == 2 ? message_text(dom, ctx, value, true)
-               : i == 3 ? message_ports(dom, ctx, value) : message_source(ctx, value);
+               : i == 3 ? message_ports(dom, ctx, value) : message_source(dom, ctx, value);
         JS_FreeValue(ctx, value);
         failed = JS_IsException(got[i]);
     }
@@ -3321,12 +3344,12 @@ static int ui_defaults(os64_dom_t *dom, JSContext *ctx, DEvent *event, int kind)
     return 0;
 }
 
-/* Window? (a view): the window, or null for undefined and null. */
+/* Window? (a view): a Window identity, or null for undefined and null. */
 static JSValue ui_view(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
 {
     if (JS_IsUndefined(value) || JS_IsNull(value)) return JS_NULL;
-    if (JS_IsObject(value) && JS_VALUE_GET_PTR(value) == JS_VALUE_GET_PTR(dom->window->value))
-        return JS_DupValue(ctx, value);
+    os64_dom_t *window = ui_window(dom, value);
+    if (window) return d_window_identity(window, ctx);
     return JS_ThrowTypeError(ctx, "A view is a Window or null");
 }
 
@@ -3335,12 +3358,13 @@ static JSValue ui_view(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
 static JSValue ui_target(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
 {
     if (JS_IsUndefined(value) || JS_IsNull(value)) return JS_NULL;
+    os64_dom_t *window = ui_window(dom, value);
+    if (window) return d_window_identity(window, ctx);
     DValue *entry = NULL;
     int plain = plain_entry(dom, ctx, value, false, &entry);
     if (plain < 0) return JS_EXCEPTION;
     bool target = plain > 0 ||
-        (JS_IsObject(value) && (JS_VALUE_GET_PTR(value) == JS_VALUE_GET_PTR(dom->window->value) ||
-                                JS_GetOpaque(value, dom->node_class) != NULL || d_is_attr(dom, value)));
+        (JS_IsObject(value) && (JS_GetOpaque(value, dom->node_class) != NULL || d_is_attr(dom, value)));
     if (!target) return JS_ThrowTypeError(ctx, "A relatedTarget is an EventTarget or null");
     return JS_DupValue(ctx, value);
 }
@@ -3753,7 +3777,7 @@ static JSValue ui_host_event(os64_dom_t *dom, JSContext *ctx, const os64_dom_eve
         JS_FreeValue(ctx, object);
         return JS_EXCEPTION;
     }
-    if (kind != D_UI_SUBMIT) ui_set(ctx, event, U_VIEW, JS_DupValue(ctx, dom->window->value));
+    if (kind != D_UI_SUBMIT) ui_set(ctx, event, U_VIEW, d_window_identity(dom, ctx));
     ui_set(ctx, event, U_RELATED, related);
     event->ui_detail = ev->detail;
     if (kind == D_UI_MOUSE || kind == D_UI_POINTER || kind == D_UI_KEYBOARD)
@@ -3800,7 +3824,7 @@ JSValue d_click_event_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
     event->pointer_id = -1;
     /* HTML's synthetic pointer event is composed. */
     event->composed = true;
-    if (d_window_document(dom, node)) ui_set(ctx, event, U_VIEW, JS_DupValue(ctx, dom->window->value));
+    if (d_window_document(dom, node)) ui_set(ctx, event, U_VIEW, d_window_identity(dom, ctx));
     return object;
 }
 
