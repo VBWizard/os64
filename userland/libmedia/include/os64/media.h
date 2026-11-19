@@ -254,16 +254,17 @@ typedef struct {
 //
 // A kind not accepted is not decoded: its packets, read on the way to what
 // was, are kept, undecoded, and are what that kind's decoder takes first
-// when it is accepted again. They are kept up to eight MiB a kind (some
-// seconds of a high-definition picture, minutes of any sound); past that
+// when it is accepted again. Once a kind's kept packet data reaches eight
+// MiB (some seconds of a high-definition picture, minutes of any sound)
 // the answer is GOT_FULL, naming the kind to take before the others can
 // go on, and the caller makes room for that kind (or parks) and asks
 // again. GOT_END means nothing more will come of the kinds accepted; one
 // not accepted may still have more. A kind the media does not decode may
-// be in `accept` and is passed over. 0, or a negative result above (BAD_ARGS
-// for an empty or unknown `accept`, or for accepted sound with no `pcm`).
-// Any media may be pulled this way (`pcm` NULL and `cap` 0 when sound is
-// not accepted). After GOT_END, a seek makes it decode again.
+// be in `accept` and is passed over. 0, or a negative result above
+// (BAD_ARGS for an empty or unknown `accept`, or for no `pcm` when sound
+// is accepted and the media decodes it). Any media may be pulled this way
+// (`pcm` NULL and `cap` 0 when sound is not accepted or the media decodes
+// none). After GOT_END, a seek makes it decode again.
 int os64_media_next(os64_media_t *m, uint32_t accept, int16_t *pcm, uint32_t cap, os64_media_got_t *got);
 
 // The picture back to libmedia. ANY thread, any time after it was handed

@@ -185,9 +185,9 @@ sound is never hostage to the picture decoder**: the decoder thread asks
 `os64_media_next` only for the kinds it has room for (`accept`), and
 libmedia reads on past the other kind, keeping its packets undecoded on
 a list of their own (media.c § THE PACKET LISTS), so the sound queue
-fills to its own depth whatever the pictures are doing. A list holds at
-most eight MiB (some five seconds of a 1440p60 picture); past that the
-answer is `GOT_FULL`, naming the kind to take first, and the thread
+fills to its own depth whatever the pictures are doing. Once a list's
+packet data reaches eight MiB (some five seconds of a 1440p60 picture)
+the answer is `GOT_FULL`, naming the kind to take first, and the thread
 parks on that kind's queue. It parks when both queues are full, too.
 Without this the sound queue never held more than the picture queue's
 lead plus one interleave chunk, so a picture decoder falling behind ran

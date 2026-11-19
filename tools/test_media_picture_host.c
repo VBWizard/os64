@@ -605,12 +605,19 @@ static void test_accept(const char *dir)
           counts.picture_listed, counts.sound_listed);
     r.sound_next = 5 * 48000 + 800;
     run_accept(c.m, S | P, 1, &r);
-    CHECK(r.result == 0 && r.first_picture_at == 5 * 48000 && r.sound_gaps == 0,
-          "accept c: first picture at %lld after the seek", (long long)r.first_picture_at);
+    int64_t first_after_seek = r.first_picture_at;
+    long sound_after_seek = r.sound_frames, sound_gaps = r.sound_gaps;
+    run_accept(c.m, S | P, 30, &r);            // on a second, so some sound has come
+    CHECK(r.result == 0 && first_after_seek == 5 * 48000 && sound_after_seek + r.sound_frames > 0 &&
+          sound_gaps + r.sound_gaps == 0 && r.picture_gaps == 0,
+          "accept c: first picture at %lld after the seek; %ld sound frames from the target",
+          (long long)first_after_seek, sound_after_seek + r.sound_frames);
     clip_close(&c);
 
     // d: a resync with packets kept. Ten pictures taken, then sound alone for
-    // a while, so the kept pictures start part way through a group.
+    // a while, so the kept pictures start part way through the first group
+    // (one a second), and the first keyframe kept is the second group's:
+    // the resync stops there, with the rest still kept.
     clip_open(&c, path, S | P);
     r.sound_next = 0;
     run_accept(c.m, S | P, 10, &r);
@@ -621,8 +628,8 @@ static void test_accept(const char *dir)
     CHECK(os64_media_picture_resync(c.m) == 0, "accept d: resync");
     os64_media_counts(c.m, &counts);
     run_accept(c.m, P, 1, &r);
-    CHECK(r.result == 0 && r.pictures == 1 && r.first_key && r.first_picture_at % (30 * 1600) == 0 &&
-          r.first_picture_at > 0 && counts.picture_listed < before && counts.pictures_resync > dropped_before,
+    CHECK(r.result == 0 && r.pictures == 1 && r.first_key && r.first_picture_at == 30 * 1600 &&
+          counts.picture_listed > 0 && counts.picture_listed < before && counts.pictures_resync > dropped_before,
           "accept d: next picture at %lld key %d; kept %u -> %u", (long long)r.first_picture_at, r.first_key, before,
           counts.picture_listed);
     clip_close(&c);

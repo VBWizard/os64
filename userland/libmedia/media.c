@@ -371,10 +371,12 @@ static void find_zero(os64_media_t *m, int sound, int picture)
 // a caller that takes only one kind for a while (os64_media_next's
 // `accept`: its picture queue is full, say) is not starved of it by the
 // other: the demuxer reads on past the other kind's packets, which wait on
-// their list, undecoded, until that kind is taken again. A list holds at
-// most LIST_BYTES of packets before the kind not being taken must be taken
-// (OS64_MEDIA_GOT_FULL): eight MiB is some five seconds of a 1440p60
-// H.264 picture and minutes of any sound. A packet a decoder refuses
+// their list, undecoded, until that kind is taken again. Once a list's
+// packet data reaches LIST_BYTES, the kind not being taken must be taken
+// before the demuxer reads on (OS64_MEDIA_GOT_FULL), so a list passes the
+// bound by one packet at most; the bookkeeping beside each packet is not
+// counted. Eight MiB is some five seconds of a 1440p60 H.264 picture and
+// minutes of any sound. A packet a decoder refuses
 // (EAGAIN) goes back to the front of its list, to be sent again after the
 // decoder's output has been received. At the demuxer's end each decoder is
 // told the input has ended once its list is empty.
@@ -480,7 +482,11 @@ static int feed(os64_media_t *m, int kind)
         return r < 0 && r != AVERROR_EOF ? OS64_MEDIA_DECODE : 0;
     }
     int r = avcodec_send_packet(c, p);
-    if (r == AVERROR(EAGAIN)) return list_push(&m->list[kind], p, true);   // after its output
+    if (r == AVERROR(EAGAIN)) {
+        // Sent again after the decoder's output has been received.
+        if ((r = list_push(&m->list[kind], p, true)) < 0) av_packet_free(&p);
+        return r;
+    }
     av_packet_free(&p);
     // Damaged media is skipped, as players do (the decoder says so in the
     // error text); only a refusal of a different kind ends the decode.
