@@ -675,8 +675,9 @@ virtio because its drain waits for the tick.
   AUDIO_YONDER.md § Y.4), through it
   (`apps/yonder/media.c`: a decoder thread per element feeding libmedia's
   PCM queue, `os64/media_queue.h`, a loader thread for a network address,
-  one audio thread owning `/dev/audio` and mixing every element that
-  plays, `os64/media_mix.h`), while libdom keeps the element's
+  and a VOICE each on libmedia's output, `os64/media_output.h`: one audio
+  thread per program owning `/dev/audio` and mixing every voice,
+  `os64/media_mix.h`, which gplay's sound is a voice of too), while libdom keeps the element's
   HTML states, events and promises (`libdom/media.c`, `dom/media.h`'s
   provider). `<audio controls>` is a player widget over the element's
   box (`apps/yonder/player.c`), and a link straight to a sound plays it on

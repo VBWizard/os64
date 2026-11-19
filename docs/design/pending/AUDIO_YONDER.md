@@ -781,6 +781,33 @@ above:
   sound exits 0. The one-element pages behave as before
   (`audio-controls.html`: play, `ended`, the `canplay` buttons).
 
+## As built (V.5.1, the output: VIDEO.md's V5)
+
+- **The audio thread is libmedia's now** (`os64/media_output.h`,
+  `media_output.c`), one per program, and gplay's sound is a voice of it
+  too. A session embeds its voice and says what it wants (`wants`,
+  `gain`); the output's `look` copies its position, `sounding`, `busy` and
+  its last frame heard into the session's facts, and an end heard is the
+  element's end. The reap waits for the output to say the voice is
+  `gone`, where it waited on `voiced`.
+- **What changed for a page, each Fable's ruling (VIDEO_V5_DESIGN.md
+  § 4):**
+  - A generation the output did not start (a sink attached or detached
+    mid-song) is a flush: the sound carries on from its queue. Before, the
+    decoder sought back to where the ear was (D2).
+  - A write waits at most 20 ms (D5).
+  - A failed write is a refusal, retried, not a failure of the voices
+    that were sounding (D3).
+  - The stall rule now covers yonder too (D4): a sink that stops pulling
+    is refused and retried.
+  - A muted element is still gain 0 (libdom folds `muted` into the gain);
+    mute as its own fact, holding no device, comes with V.5.4's player.
+- **Proven** in QEMU by a page of three muted elements that play at once
+  (two looping, one to its end): both loops' clocks move, a pause holds
+  one while the other plays, a seek lands, the third ends with `pause`
+  and `ended`, and the events come as the old thread gave them, B's short
+  WAV loop flapping between `waiting` and `playing` exactly as before.
+
 ## Slices
 
 `YAUDIO_TRACKER.csv` beside this file is the state of each one

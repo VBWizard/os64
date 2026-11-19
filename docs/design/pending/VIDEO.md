@@ -207,7 +207,7 @@ table, most of it proven by `/tests/gplaytest` (Fable's changes to the
 tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
 
 - **A covered window keeps the sound playing.** It is answered no frames,
-  so with no answer for 100 ms the audio thread rings the window and main
+  so with no answer for 100 ms the keys thread rings the window and main
   retires overdue pictures by the clock without publishing; the queues
   keep moving. Their conversions are wasted (DEBTS).
 - **Nothing reaches the device before the clock plays**: after an open or
@@ -241,7 +241,7 @@ tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
   the end the sound the device still holds is still to come, so the clock
   goes monotonic only on a device that has said it stopped (starved).
   gplay derives the trust as the pump's packet (13.3 ms), its pass up to
-  a tick late (10 ms), the audio thread's write (20 ms) and the period
+  a tick late (10 ms), the output's write (20 ms) and the period
   main reads ahead (16.7 ms), plus 20 ms: 80 ms at 60 Hz.
   The readout's `ear:` and `report ages:` lines say how often it held,
   how often the bound fired, how long the start's first report took, and
