@@ -6,7 +6,7 @@
 # behind it can change without a caller changing. tools/test_av_audit.py
 # holds that line. It resamples with libsound.so.
 # The programs that call it: yonder for a page's media elements.
-LIBMEDIA_PROGRAMS := play mediatest yonder
+LIBMEDIA_PROGRAMS := play gplay mediatest yonder
 LIBMEDIA_SRCS := libmedia/media.c libmedia/media_scale.c libmedia/media_pcm.c libmedia/media_queue.c libmedia/media_mix.c \
                  libmedia/media_pictures.c libmedia/media_clock.c libmedia/media_pace.c
 LIBMEDIA_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBMEDIA_SRCS))

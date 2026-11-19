@@ -211,6 +211,19 @@ static void clock_cases(void)
     CHECK(os64_media_clock_read(&c, 1300 * MS) == 50400 && os64_media_clock_drift(&c, 1300 * MS) == -2400,
           "and becomes drift without a step");
 
+    // The bound is the player's: a sink with a long delay holds longer.
+    os64_media_clock_init(&c, OS64_MEDIA_CLOCK_HEARD);
+    os64_media_clock_hold(&c, 300 * MS);
+    os64_media_clock_play(&c, 0);
+    CHECK(os64_media_clock_read(&c, 300 * MS - 1) == 0 &&
+          os64_media_clock_state(&c, 299 * MS) == OS64_MEDIA_CLOCK_STARTING,
+          "a bound of 300 ms holds past the quarter second");
+    CHECK(os64_media_clock_read(&c, 1300 * MS) == 48000, "and runs from its end");
+    os64_media_clock_hold(&c, -5 * SEC);
+    os64_media_clock_seek(&c, 0, 2 * SEC);
+    CHECK(os64_media_clock_read(&c, 2 * SEC) == 0 && os64_media_clock_read(&c, 3 * SEC + 1) == 48000,
+          "a bound below 1 is 1 microsecond: a start never begins already run");
+
     // Unmute while running: no hold, real time until the first report.
     os64_media_clock_init(&c, OS64_MEDIA_CLOCK_MONOTONIC);
     os64_media_clock_play(&c, 0);

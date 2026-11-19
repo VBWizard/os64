@@ -34,9 +34,12 @@
 // - STARTING: after play or seek with the heard source, the reading holds
 //   until the first ADVANCING report of the current generation, so the
 //   picture does not run ahead of a sound the device has not yet made
-//   heard. If none has come within OS64_MEDIA_CLOCK_START_HOLD_US it runs
-//   at real time from where it held, so a silent device never freezes the
-//   picture; the first advancing report then becomes drift. A change to
+//   heard. If none has come within the hold's BOUND it runs at real time
+//   from where it held, so a silent device never freezes the picture; the
+//   first advancing report then becomes drift. The bound is the player's
+//   (os64_media_clock_hold), because the first report cannot come before
+//   the sink's delay has passed: the larger of
+//   OS64_MEDIA_CLOCK_START_HOLD_US and that delay plus 150 ms. A change to
 //   the heard source while running (unmute) does NOT hold: a picture
 //   already moving keeps moving, at real time, until the first report.
 // - STARVED: a report that says the ear is not advancing (the sound ran
@@ -68,8 +71,9 @@
 #define OS64_MEDIA_CLOCK_MONOTONIC  0
 #define OS64_MEDIA_CLOCK_HEARD      1
 
-// How long a start on the heard source holds for its first advancing
-// report before running anyway: a quarter second, to tune on the P5.
+// The least a start on the heard source holds for its first advancing
+// report before running anyway: a quarter second, the bound a new clock
+// has, to tune on the P5.
 #define OS64_MEDIA_CLOCK_START_HOLD_US 250000
 
 // What the clock is doing at a wall time (os64_media_clock_state).
@@ -89,6 +93,7 @@ typedef struct {
     int64_t base;           // the reading at `since`, drift included (units of media_clock.c);
                             // unused while following
     int64_t hold_until;     // STARTING: wall when the hold ends
+    int64_t hold_us;        // the bound a start's hold is given (os64_media_clock_hold)
     int64_t heard;          // FOLLOWING: the reported frame (units) ...
     int64_t heard_wall;     // ... and when it reached the ear
     int64_t drift;          // FOLLOWING: the reading minus the heard view, at `since` (units)
@@ -113,6 +118,9 @@ uint32_t os64_media_clock_seek(os64_media_clock_t *c, int64_t frame, int64_t now
 // Changes the source without moving the reading. Paused, it takes effect
 // at play.
 void os64_media_clock_source(os64_media_clock_t *c, int source, int64_t now);
+// The bound the next start's hold is given, in microseconds (a value
+// below 1 is taken as 1). A start already holding keeps its own.
+void os64_media_clock_hold(os64_media_clock_t *c, int64_t us);
 
 // Frame `frame` of `generation` reached the ear at wall `frame_wall`,
 // reported at `now`; `advancing` false when the ear's position has stopped.

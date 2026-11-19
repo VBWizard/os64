@@ -89,7 +89,7 @@ static void start(os64_media_clock_t *c, int64_t value, int64_t now)
     c->since = now;
     if (c->source == OS64_MEDIA_CLOCK_HEARD) {
         c->mode = MODE_STARTING;
-        c->hold_until = now + OS64_MEDIA_CLOCK_START_HOLD_US;
+        c->hold_until = now + c->hold_us;
     } else {
         c->mode = MODE_RUNNING;
     }
@@ -100,6 +100,12 @@ void os64_media_clock_init(os64_media_clock_t *c, int source)
     *c = (os64_media_clock_t){0};
     c->mode = MODE_PAUSED;
     c->source = source == OS64_MEDIA_CLOCK_HEARD ? OS64_MEDIA_CLOCK_HEARD : OS64_MEDIA_CLOCK_MONOTONIC;
+    c->hold_us = OS64_MEDIA_CLOCK_START_HOLD_US;
+}
+
+void os64_media_clock_hold(os64_media_clock_t *c, int64_t us)
+{
+    c->hold_us = us > 0 ? us : 1;
 }
 
 void os64_media_clock_play(os64_media_clock_t *c, int64_t now)

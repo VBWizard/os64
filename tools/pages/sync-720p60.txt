@@ -1,0 +1,6 @@
+sync-720p60.mp4: ten seconds of black 1280x720 at 60 pictures a second,
+the first two pictures of every second white, with a 1 kHz tone for the
+same 33 ms of every second; for judging whether a player's sound and
+picture are in step (gplay's [ and ] move one against the other). Made
+from FFmpeg's own test sources by tools/gen_sync_clip.py; os64's own,
+no third party's content.
