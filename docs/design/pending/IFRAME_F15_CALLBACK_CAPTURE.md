@@ -18,6 +18,8 @@ and reason. Completing F.15.20 does not implement F.15.21 or close F15.
 
 ## Scope
 
+Contract PR **#675**, audit source `76eba995`.
+
 Contract/audit only, based on merged userland `2816491f`, including #667/#668,
 tracker #669. No runtime, engine, native
 layout, public API or ABI changes are part of this task. C3/public activation,
