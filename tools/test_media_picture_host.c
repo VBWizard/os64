@@ -45,6 +45,18 @@
 //     still in the decoder: no picture comes after it, since the stream
 //     ends before another keyframe (os64_media_picture_resync flushes the
 //     decoder, which the end would otherwise drain).
+// 12  ACCEPT (os64_media_next's mask), on a 20-second file whose pictures
+//     pass the eight MiB of kept packets about 15 seconds in:
+//     a. a consumer whose picture queue is full (sound only accepted) keeps
+//        getting sound, contiguous, until the kept pictures reach the
+//        bound, and is then told GOT_FULL naming the picture;
+//     b. then the pictures come, in the file's order from the first, and
+//        taking both to the end gives all 600 pictures and the whole sound,
+//        each kind contiguous;
+//     c. a seek with packets kept empties the lists, and lands as a seek
+//        does (the picture showing at the target, the sound from it);
+//     d. a resync with packets kept drops them up to the first keyframe
+//        among them, which is the next picture out.
 // 11  WHAT A SOUND-ONLY OPEN READS: no more of a 30-second MP4 than an
 //     open for both does (FFmpeg's probe would otherwise read the sound for
 //     five seconds waiting on the discarded picture; media.c holds its
@@ -145,7 +157,7 @@ static void test_release(const char *clip)
     unsigned x = 12345;
     while (given < 3000) {
         os64_media_got_t got;
-        int r = os64_media_next(c.m, pcm, 4096, &got);
+        int r = os64_media_next(c.m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, pcm, 4096, &got);
         CHECK(r == 0, "release: next %d", r);
         if (r != 0) break;
         if (got.kind == OS64_MEDIA_GOT_END) { os64_media_seek(c.m, 0); continue; }
@@ -196,7 +208,7 @@ static void pull(os64_media_t *m, bool has_sound, Pull *p)
     p->first_picture_at = p->first_sound = -1;
     for (;;) {
         os64_media_got_t got;
-        int r = os64_media_next(m, has_sound ? pcm : NULL, has_sound ? 4096 : 0, &got);
+        int r = os64_media_next(m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, has_sound ? pcm : NULL, has_sound ? 4096 : 0, &got);
         if (r != 0) { p->result = r; return; }
         if (got.kind == OS64_MEDIA_GOT_END) return;
         if (got.kind == OS64_MEDIA_GOT_SOUND) {
@@ -334,7 +346,7 @@ static void test_skip_and_seek(const char *dir)
     bool key_next = false, resynced = false;
     for (;;) {
         os64_media_got_t got;
-        if (os64_media_next(c.m, pcm, 4096, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
+        if (os64_media_next(c.m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, pcm, 4096, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
         if (got.kind != OS64_MEDIA_GOT_PICTURE) continue;
         if (resynced && !key_next) {
             key_next = true;
@@ -355,7 +367,7 @@ static void test_skip_and_seek(const char *dir)
         int64_t first_picture = -1, first_sound = -1;
         while (first_picture < 0 || first_sound < 0) {
             os64_media_got_t got;
-            if (os64_media_next(c.m, pcm, 4096, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
+            if (os64_media_next(c.m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, pcm, 4096, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
             if (got.kind == OS64_MEDIA_GOT_SOUND && first_sound < 0) first_sound = got.at;
             if (got.kind == OS64_MEDIA_GOT_PICTURE) {
                 if (first_picture < 0) {
@@ -390,7 +402,7 @@ static void test_interlaced(const char *dir)
     long converted = 0, refused = 0;
     for (;;) {
         os64_media_got_t got;
-        if (os64_media_next(c.m, NULL, 0, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
+        if (os64_media_next(c.m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, NULL, 0, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
         if (os64_media_scaler_convert(s, got.picture, pixels, 80 * 4) == 0) converted++;
         else refused++;
         os64_media_picture_release(c.m, got.picture);
@@ -424,7 +436,7 @@ static void test_edge(const char *clip, const char *what, const uint32_t (*sizes
             uint32_t pitch = W + kSlack[pi];
             for (int n = 0; n < 3; n++) {
                 os64_media_got_t got;
-                if (os64_media_next(c.m, NULL, 0, &got) != 0 || got.kind != OS64_MEDIA_GOT_PICTURE) break;
+                if (os64_media_next(c.m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, NULL, 0, &got) != 0 || got.kind != OS64_MEDIA_GOT_PICTURE) break;
                 for (size_t i = 0; i < (size_t)pitch * H + GUARD; i++) buffer[i] = BLANK;
                 CHECK(os64_media_scaler_convert(s, got.picture, buffer, pitch * 4) == 0, "edge: convert");
                 os64_media_picture_release(c.m, got.picture);
@@ -488,7 +500,7 @@ static void test_resync_at_end(const char *dir)
     long before = 0, after = 0;
     for (;;) {
         os64_media_got_t got;
-        if (os64_media_next(c.m, NULL, 0, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
+        if (os64_media_next(c.m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, NULL, 0, &got) != 0 || got.kind == OS64_MEDIA_GOT_END) break;
         os64_media_picture_release(c.m, got.picture);
         if (before < 0) after++;
         else if (++before == 2) {
@@ -499,6 +511,123 @@ static void test_resync_at_end(const char *dir)
     clip_close(&c);
     CHECK(before == -1 && after == 0, "resync at end: %ld pictures after the resync", after);
     printf(" 10 a resync in the last group: %ld pictures after it\n", after);
+}
+
+// What a run of os64_media_next with one `accept` gave.
+typedef struct {
+    long pictures, sound_frames, picture_gaps, sound_gaps;
+    int64_t first_picture_at, last_picture_at, sound_next;
+    bool first_key;
+    int ended_by;                  // OS64_MEDIA_GOT_END, _FULL, or -1: the limit
+    uint32_t full;
+    int result;
+} Run;
+
+// Pulls with `accept` until the end, a FULL, or `pictures` pictures; the
+// sound's continuity is judged against r->sound_next, carried across runs.
+static void run_accept(os64_media_t *m, uint32_t accept, long pictures, Run *r)
+{
+    static int16_t pcm[4096 * 2];
+    r->pictures = r->sound_frames = r->picture_gaps = r->sound_gaps = 0;
+    r->first_picture_at = -1;
+    r->first_key = false;
+    r->ended_by = -1;
+    r->result = 0;
+    while (r->pictures < pictures) {
+        os64_media_got_t got;
+        int e = os64_media_next(m, accept, (accept & OS64_MEDIA_WANT_SOUND) ? pcm : NULL,
+                                (accept & OS64_MEDIA_WANT_SOUND) ? 4096 : 0, &got);
+        if (e != 0) { r->result = e; return; }
+        if (got.kind == OS64_MEDIA_GOT_END || got.kind == OS64_MEDIA_GOT_FULL) {
+            r->ended_by = got.kind;
+            r->full = got.full;
+            return;
+        }
+        if (got.kind == OS64_MEDIA_GOT_SOUND) {
+            if (got.at != r->sound_next) r->sound_gaps++;
+            r->sound_next = got.at + got.frames;
+            r->sound_frames += got.frames;
+            continue;
+        }
+        if (r->first_picture_at < 0) {
+            r->first_picture_at = got.picture->at;
+            r->first_key = got.picture->keyframe;
+        } else if (got.picture->at != r->last_picture_at + 1600) {
+            r->picture_gaps++;
+        }
+        r->last_picture_at = got.picture->at;
+        r->pictures++;
+        os64_media_picture_release(m, got.picture);
+    }
+}
+
+static void test_accept(const char *dir)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/dense.mp4", dir);
+    const uint32_t S = OS64_MEDIA_WANT_SOUND, P = OS64_MEDIA_WANT_PICTURE;
+    Clip c;
+    Run r = { 0 };
+    os64_media_counts_t counts;
+
+    // a and b.
+    clip_open(&c, path, S | P);
+    CHECK(c.result == 0, "accept: open %d", c.result);
+    if (c.result != 0) return;
+    run_accept(c.m, S, 1, &r);
+    os64_media_counts(c.m, &counts);
+    long sound_before_full = r.sound_frames;
+    CHECK(r.result == 0 && r.ended_by == OS64_MEDIA_GOT_FULL && r.full == P && r.pictures == 0 && r.sound_gaps == 0 &&
+          counts.picture_listed_bytes >= (8u << 20) && sound_before_full > 10 * 48000 &&
+          sound_before_full < 20 * 48000, "accept a: ended by %d full %u, %ld sound frames, %lu bytes kept",
+          r.ended_by, r.full, sound_before_full, (unsigned long)counts.picture_listed_bytes);
+    run_accept(c.m, P, 60, &r);
+    CHECK(r.result == 0 && r.pictures == 60 && r.first_picture_at == 0 && r.picture_gaps == 0 && r.sound_frames == 0,
+          "accept b: %ld pictures from %lld, %ld gaps", r.pictures, (long long)r.first_picture_at, r.picture_gaps);
+    long pictures = r.pictures, sound = sound_before_full;
+    int64_t last_picture = r.last_picture_at;
+    run_accept(c.m, S | P, 100000, &r);
+    CHECK(r.result == 0 && r.ended_by == OS64_MEDIA_GOT_END && r.first_picture_at == last_picture + 1600 &&
+          r.picture_gaps == 0 && r.sound_gaps == 0 && pictures + r.pictures == 600 &&
+          sound + r.sound_frames >= 20 * 48000 - 2048 && sound + r.sound_frames <= 20 * 48000 + 2048,
+          "accept b: %ld pictures in all, %ld sound frames", pictures + r.pictures, sound + r.sound_frames);
+    clip_close(&c);
+
+    // c: a seek with packets kept.
+    clip_open(&c, path, S | P);
+    r.sound_next = 0;
+    run_accept(c.m, S, 1, &r);                 // to the bound
+    os64_media_counts(c.m, &counts);
+    bool kept = counts.picture_listed > 0;
+    CHECK(os64_media_seek(c.m, 5 * 48000 + 800) == 0, "accept c: seek");
+    os64_media_counts(c.m, &counts);
+    CHECK(kept && counts.picture_listed == 0 && counts.sound_listed == 0, "accept c: lists after the seek %u %u",
+          counts.picture_listed, counts.sound_listed);
+    r.sound_next = 5 * 48000 + 800;
+    run_accept(c.m, S | P, 1, &r);
+    CHECK(r.result == 0 && r.first_picture_at == 5 * 48000 && r.sound_gaps == 0,
+          "accept c: first picture at %lld after the seek", (long long)r.first_picture_at);
+    clip_close(&c);
+
+    // d: a resync with packets kept. Ten pictures taken, then sound alone for
+    // a while, so the kept pictures start part way through a group.
+    clip_open(&c, path, S | P);
+    r.sound_next = 0;
+    run_accept(c.m, S | P, 10, &r);
+    run_accept(c.m, S, 1, &r);
+    os64_media_counts(c.m, &counts);
+    uint32_t before = counts.picture_listed;
+    uint64_t dropped_before = counts.pictures_resync;
+    CHECK(os64_media_picture_resync(c.m) == 0, "accept d: resync");
+    os64_media_counts(c.m, &counts);
+    run_accept(c.m, P, 1, &r);
+    CHECK(r.result == 0 && r.pictures == 1 && r.first_key && r.first_picture_at % (30 * 1600) == 0 &&
+          r.first_picture_at > 0 && counts.picture_listed < before && counts.pictures_resync > dropped_before,
+          "accept d: next picture at %lld key %d; kept %u -> %u", (long long)r.first_picture_at, r.first_key, before,
+          counts.picture_listed);
+    clip_close(&c);
+    printf(" 12 accept: %ld sound frames before the bound, then the pictures in order; a seek and a resync with "
+           "packets kept\n", sound_before_full);
 }
 
 typedef struct {
@@ -564,6 +693,7 @@ int main(int argc, char **argv)
     test_cover(argv[2]);
     test_resync_at_end(argv[2]);
     test_open_reads(argv[2]);
+    test_accept(argv[2]);
     if (s_failed) {
         printf("FAIL %d checks\n", s_failed);
         return 1;

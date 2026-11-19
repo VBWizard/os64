@@ -131,7 +131,7 @@ timeline as sound. yonder, and any other player, see no FFmpeg type.
   It also gives the shown size (the pixel aspect applied), the coded size
   (cropped), the stated rate, and the rotation, which is reported but not
   yet honoured (DEBTS). One `os64_media_next` gives sound, a picture or
-  the end. A picture is a handle with its time, duration, size and
+  the end, of the kinds the caller accepts (§ 3). A picture is a handle with its time, duration, size and
   keyframe flag. There are `os64_media_picture_skip` (the unused pictures),
   `os64_media_picture_resync` (to the next keyframe) and
   `os64_media_counts`.
@@ -175,14 +175,23 @@ timeline as sound. yonder, and any other player, see no FFmpeg type.
 
 | Thread | Owns | Parks when |
 |---|---|---|
-| **decoder** (the session's existing one) | the demuxer, the sound decoder, the picture decoder; fills the PCM queue and the decoded-picture queue | both queues are full, or the media is decoded to its end |
+| **decoder** (the session's existing one) | the demuxer, the sound decoder, the picture decoder; fills the PCM queue and the decoded-picture queue | both queues are full; or one is full and libmedia answers `GOT_FULL` for that kind; or the media is decoded to its end |
 | **picture** (new, one per playing video) | conversion and scaling into ready frames at the box's size | the ready queue is full, the video is not visible, or nothing is due |
 | **audio** (the one for all of yonder) | `/dev/audio`, the mix, the heard position | as today |
 | **main** (yonder's loop) | choosing the frame that is due, painting it, the page | as today |
 
-One demuxer feeds both decoders, because an MP4 interleaves them. The
-decoder thread parks on whichever queue fills first only when BOTH have
-enough, or a starved one deadlocks the other.
+One demuxer feeds both decoders, because an MP4 interleaves them. **The
+sound is never hostage to the picture decoder**: the decoder thread asks
+`os64_media_next` only for the kinds it has room for (`accept`), and
+libmedia reads on past the other kind, keeping its packets undecoded on
+a list of their own (media.c § THE PACKET LISTS), so the sound queue
+fills to its own depth whatever the pictures are doing. A list holds at
+most eight MiB (some five seconds of a 1440p60 picture); past that the
+answer is `GOT_FULL`, naming the kind to take first, and the thread
+parks on that kind's queue. It parks when both queues are full, too.
+Without this the sound queue never held more than the picture queue's
+lead plus one interleave chunk, so a picture decoder falling behind ran
+the SOUND dry. `tools/test_media_picture_host.sh` check 12 is the proof.
 
 **A door left open for later:** FFmpeg's frame threads (needs a pthread
 shim) replace nothing here; they would live inside the decoder thread's

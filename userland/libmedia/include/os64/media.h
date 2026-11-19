@@ -188,7 +188,12 @@ void os64_media_file_source(int32_t handle, os64_media_source_t *out);
 // something comes out and says what it was: some sound, a picture, or the
 // end. The player routes each to its queue (os64/media_queue.h for the
 // sound). An MP4 interleaves its sound and its pictures, so one demuxer
-// serves both, and the order things come out is the file's.
+// serves both. The player says each time which kinds it has room for
+// (`accept`): one queue full does not stop the other filling, because
+// libmedia reads on past the kind not taken and keeps its packets,
+// undecoded, until it is taken again, up to a bound (OS64_MEDIA_GOT_FULL).
+// So the sound never runs dry because the pictures fell behind, which is
+// what a player must protect.
 //
 // A PICTURE is a handle the player holds from os64_media_next until it
 // releases it. It may be handed to another thread through the player's own
@@ -227,26 +232,39 @@ typedef struct os64_media_picture {
     bool keyframe;
 } os64_media_picture_t;
 
-#define OS64_MEDIA_GOT_END      0   // nothing more of anything wanted
+#define OS64_MEDIA_GOT_END      0   // nothing more of any kind accepted
 #define OS64_MEDIA_GOT_SOUND    1
 #define OS64_MEDIA_GOT_PICTURE  2
+#define OS64_MEDIA_GOT_FULL     3   // a kind not accepted must be taken first (`full`)
 
 typedef struct {
     int kind;                         // OS64_MEDIA_GOT_*
     uint32_t frames;                  // SOUND: how many frames were put in `pcm`
     int64_t at;                       // SOUND: the output frame of the first
     os64_media_picture_t *picture;    // PICTURE: now the caller's, to release
+    uint32_t full;                    // FULL: the kind (OS64_MEDIA_WANT_*) to take before more of
+                                      // the others can be read
 } os64_media_got_t;
 
-// Reads and decodes until something comes out: up to `cap` frames of
-// stereo 48 kHz sound into `pcm` (2 * cap samples), or one picture, or the
-// end, and says which in *got. Sound comes out in pieces, contiguous; a
-// picture comes out whole. 0, or a negative result above. The caller that
-// waits for room in one queue while the other has room must be able to
-// hold what comes next: a player parks only when both are full. Any media
-// may be pulled this way (with `pcm` NULL and `cap` 0 when it decodes no
-// sound). After GOT_END, a seek makes it decode again.
-int os64_media_next(os64_media_t *m, int16_t *pcm, uint32_t cap, os64_media_got_t *got);
+// Reads and decodes until something of a kind in `accept` comes out (a mask
+// of OS64_MEDIA_WANT_*: the kinds the caller has room for now): up to `cap`
+// frames of stereo 48 kHz sound into `pcm` (2 * cap samples), or one
+// picture, or the end, and says which in *got. Sound comes out in pieces,
+// contiguous; a picture comes out whole; each kind in the file's order.
+//
+// A kind not accepted is not decoded: its packets, read on the way to what
+// was, are kept, undecoded, and are what that kind's decoder takes first
+// when it is accepted again. They are kept up to eight MiB a kind (some
+// seconds of a high-definition picture, minutes of any sound); past that
+// the answer is GOT_FULL, naming the kind to take before the others can
+// go on, and the caller makes room for that kind (or parks) and asks
+// again. GOT_END means nothing more will come of the kinds accepted; one
+// not accepted may still have more. A kind the media does not decode may
+// be in `accept` and is passed over. 0, or a negative result above (BAD_ARGS
+// for an empty or unknown `accept`, or for accepted sound with no `pcm`).
+// Any media may be pulled this way (`pcm` NULL and `cap` 0 when sound is
+// not accepted). After GOT_END, a seek makes it decode again.
+int os64_media_next(os64_media_t *m, uint32_t accept, int16_t *pcm, uint32_t cap, os64_media_got_t *got);
 
 // The picture back to libmedia. ANY thread, any time after it was handed
 // out, exactly once, and not while a conversion of it is running. It costs
@@ -263,7 +281,9 @@ int os64_media_picture_skip(os64_media_t *m, int level);
 
 // Drops pictures, undecoded, until the next keyframe, which is the next
 // picture out (none at all if the stream ends first); the sound goes on as
-// before. For a decoder far behind.
+// before. For a decoder far behind. Picture packets already kept (`accept`
+// above) are dropped up to the first keyframe among them, where decoding
+// starts again; with none kept, the resync waits for one from the file.
 // Both answer 0, or BAD_ARGS for a media that decodes no picture.
 int os64_media_picture_resync(os64_media_t *m);
 
@@ -280,6 +300,8 @@ typedef struct {
     uint64_t pictures_resync;        // dropped by a resync: packets left undecoded, pictures made and
                                      // not given (not those inside the decoder, which the resync flushes)
     uint64_t pictures_before_zero;   // dropped: timed before the file's start
+    uint32_t sound_listed, picture_listed;  // packets kept, read and not yet decoded (`accept`)
+    uint64_t sound_listed_bytes, picture_listed_bytes;
 } os64_media_counts_t;
 void os64_media_counts(const os64_media_t *m, os64_media_counts_t *out);
 
