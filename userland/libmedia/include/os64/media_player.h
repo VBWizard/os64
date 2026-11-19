@@ -35,7 +35,9 @@
 // and the end are decided under the player's lock by the thread that made
 // them true (a push, a report, a conversion, the picture thread's timed
 // wake), and again in each of the caller's calls. `look` then says only
-// "the facts changed, come and read".
+// "the facts changed, come and read": it is rung for a new state and for
+// readiness moving (current, future, enough), so a caller that reads the
+// facts only when told misses neither.
 //
 // A SEEK NOBODY ASKED FOR: when the output lets go of the player's sound
 // still in the device (os64/media_output.h's `rewind`) while it is paused or

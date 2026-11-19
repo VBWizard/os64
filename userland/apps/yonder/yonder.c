@@ -1440,6 +1440,9 @@ static void mark_part(os64_gui_rect_t r);
 // says a mark is one.
 static uint64_t s_face_stamp;
 static bool s_tick_marking;
+// A video's new picture marks its box: no group holding a video is kept
+// (paint.c spoil), so no kept drawing changed and the stamp holds.
+static bool s_video_marking;
 // What the kept drawings may hold (keep.h), sheets and all: a lit
 // Lamplighter, its beam and eight lamps' rays at 150%, keeps about 16 MiB.
 #define KEEPS_BUDGET ((size_t)64 << 20)
@@ -2691,6 +2694,37 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
         *w = 48;
 }
 
+// The <video>s yonder draws (the Videos section, below, says how).
+#define VIDEOS_MAX 32
+
+typedef struct {
+    const os64_html_node_t *node;       // NULL: a free slot
+    yonder_media_t *session;
+    uint32_t width, height;             // the picture's size as shown, CSS pixels; 0 not yet known
+    bool playing;                       // its clock runs
+    bool poked;                         // its facts moved: one frame is asked for even while paused
+    uint32_t asked_w, asked_h;          // the size its player converts to
+    os64_dom_media_facts_t seen;        // the facts at the last turn, to see them move
+    os64_media_player_frame_t frame;    // the picture to draw: pixels valid until the next frame
+                                        // call answering changed (os64/media_player.h)
+} Video;
+
+static Video s_videos[VIDEOS_MAX];
+
+static Video *video_of(const os64_html_node_t *node)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        if (s_videos[i].node == node && node != NULL)
+            return &s_videos[i];
+    return NULL;
+}
+
+static bool is_video_node(const os64_html_node_t *node)
+{
+    return node != NULL && node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML &&
+           node->tag == OS64_HTML_TAG_VIDEO;
+}
+
 // The size libflow asks of a replaced box. A picture: the one that
 // arrived, or unknown. A control yonder draws as a widget: the size that
 // widget needs, since libflow's own guess is a text field's for every
@@ -2703,6 +2737,14 @@ static bool replaced_size(void *ctx, const os64_html_node_t *node, int32_t *w, i
     const Page *p = ctx;
     if (p->modern && yonder_svg_size(node, w, h))
         return true;
+    // A video's picture, once its size is known (videos_turn); until then
+    // libflow's 300x150.
+    const Video *video = video_of(node);
+    if (video != NULL && video->width > 0 && video->height > 0) {
+        *w = (int32_t)video->width;
+        *h = (int32_t)video->height;
+        return true;
+    }
     // An audio's controls (player.h): the size Chrome gives its player.
     if (node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_AUDIO) {
         *w = YONDER_PLAYER_WIDTH;
@@ -3342,6 +3384,10 @@ static struct {
     os64_gui_rect_t mark_most, paint_most;
     char mark_who[96];
     uint64_t canvas_marks, control_marks;
+    // The videos' (videos_tick, pane_video): pictures asked for and
+    // answered changed, and each paint of one by the plain path (rows
+    // copied to the window) or the general one (drawn as a picture is).
+    uint64_t video_frames, video_pictures, video_plain, video_general;
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
@@ -8199,6 +8245,10 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (int)s_cost.mark_most.y, s_cost.mark_who, (int)s_cost.paint_most.w, (int)s_cost.paint_most.h);
     dt_put(t, "; %lu canvas marks, %lu form control marks", (unsigned long)s_cost.canvas_marks,
            (unsigned long)s_cost.control_marks);
+    if (s_cost.video_frames > 0)
+        dt_put(t, "; videos: %lu frames asked, %lu new pictures, painted %lu plain and %lu general",
+               (unsigned long)s_cost.video_frames, (unsigned long)s_cost.video_pictures,
+               (unsigned long)s_cost.video_plain, (unsigned long)s_cost.video_general);
 
     // The bells the loop took, then the ticker's own counts: its rings —
     // more than the bells when rings were made before the loop took one —
@@ -8697,7 +8747,7 @@ static uint64_t frame_delay(const Picture *pic)
 // parts that reached across it.
 static void mark_part(os64_gui_rect_t r)
 {
-    if (!s_tick_marking)
+    if (!s_tick_marking && !s_video_marking)
         s_face_stamp++;
     os64_ui_widget_t part = {0};
     part.bounds = (os64_gui_rect_t){g.view.bounds.x + r.x - g.sx, g.view.bounds.y + r.y - g.sy,
@@ -9127,14 +9177,18 @@ typedef struct {
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
 static uint64_t resizes_next(void);
 static uint64_t resizes_due(void);
+static uint64_t videos_next(void);
 
 // The earliest frame work the shown page has: a layout or a tick for its
 // CSS animations, the Web Animations step and requestAnimationFrame's
-// callbacks, a ResizeObserver step, the pointer's re-hit. Each runs only in
+// callbacks, a ResizeObserver step, the pointer's re-hit, a video's
+// picture. Each runs only in
 // an open frame of the display; FRAME_PLAN_NEVER for none.
 static uint64_t frame_work_due(void)
 {
     uint64_t due = motion_next(), next;
+    if ((next = videos_next()) < due)
+        due = next;
     if ((next = tick_next()) < due)
         due = next;
     if ((next = animation_next()) < due)
@@ -10724,6 +10778,116 @@ static void keys_turn(void)
     yonder_keys_say(session.state);
 }
 
+// ── Videos: the picture in a <video>'s box (VIDEO.md § 5) ──────────────
+//
+// A <video>'s session is a picture session (media.h): its player decodes,
+// converts to the size asked and keeps time on its own threads, and the
+// sound plays without the window. The window's part is the picture: the
+// box takes the picture's ratio once it is known (replaced_size), the
+// paint draws the latest picture into it (pane_video), and while it plays
+// and can be seen, each frame of the display asks the player for the
+// picture at that frame's blank and marks the box when it changed
+// (videos_tick). One that cannot be seen is not asked: its player retires
+// what the clock passes, and its sound plays on.
+// A video's session opened (media_open): one past VIDEOS_MAX plays its
+// sound and draws no picture.
+static void video_add(const os64_html_node_t *node, yonder_media_t *session)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        if (s_videos[i].node == NULL) {
+            s_videos[i] = (Video){.node = node, .session = session, .poked = true};
+            return;
+        }
+}
+
+// Its session closed: the slot, and the pixels the session's player held,
+// go with it.
+static void video_remove(const yonder_media_t *session)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        if (s_videos[i].node != NULL && s_videos[i].session == session)
+            s_videos[i] = (Video){0};
+}
+
+// The part of the shown page's view `v`'s box shows, page coordinates;
+// false when none (not laid out on the shown page, hidden, scrolled away).
+static bool video_on_view(const Video *v, os64_gui_rect_t *out)
+{
+    const flow_box_t *b = g.page.tree != NULL ? flow_box_for(g.page.tree, v->node) : NULL;
+    if (b == NULL || !b->replaced || b->style->visibility != FLOW_VISIBLE || b->unpainted)
+        return false;
+    os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
+    return os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, out);
+}
+
+// Whether `v` wants the display's frames: playing, or its facts moved while
+// paused (a seek's picture, the first one, a new size), and seen.
+static bool video_wants_frames(const Video *v)
+{
+    os64_gui_rect_t part;
+    return v->node != NULL && (v->playing || v->poked) && !g.covered && video_on_view(v, &part);
+}
+
+// The media turn's follow-up: each shown video's facts read for the size
+// (the box takes it by a layout) and whether it plays.
+static void videos_turn(void)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL || g.page.tree == NULL || flow_box_for(g.page.tree, v->node) == NULL)
+            continue;
+        os64_dom_media_facts_t f;
+        yonder_media_facts(v->session, &f);
+        if (f.picture && f.width > 0 && f.height > 0 && (f.width != v->width || f.height != v->height)) {
+            v->width = f.width;
+            v->height = f.height;
+            layout_revision(&s_layout_resources.pictures);
+            g.relayout_due = true;
+        }
+        v->playing = f.running;
+        v->poked |= f.seeked != v->seen.seeked || f.current != v->seen.current || f.probed != v->seen.probed ||
+                    f.ended != v->seen.ended || f.running != v->seen.running;
+        v->seen = f;
+    }
+}
+
+// The earliest a video wants a frame: now, or never.
+static uint64_t videos_next(void)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        if (video_wants_frames(&s_videos[i]))
+            return yonder_now_ms();
+    return FRAME_PLAN_NEVER;
+}
+
+// In an open frame of the display: each video that wants it is asked for
+// the picture shown at the blank a publish now is seen at (the answer's
+// blank plus one period), and its box marked when the picture changed.
+static void videos_tick(void)
+{
+    if (!s_frames.open)
+        return;
+    int64_t period = s_frames.period_us > 0 ? (int64_t)s_frames.period_us : 16667;
+    int64_t blank = (int64_t)s_frames.blank_us + period;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        os64_gui_rect_t part;
+        if (v->node == NULL || !(v->playing || v->poked) || g.covered || !video_on_view(v, &part))
+            continue;
+        v->poked = false;
+        os64_media_player_frame_t fr;
+        s_cost.video_frames++;
+        (void)yonder_media_frame(v->session, blank, period, &fr);
+        if (!fr.changed)
+            continue;
+        v->frame = fr;
+        s_cost.video_pictures++;
+        s_video_marking = true;
+        mark_part(part);
+        s_video_marking = false;
+    }
+}
+
 // Each player shows its element as it stands now.
 static void players_show(void)
 {
@@ -11331,7 +11495,6 @@ static bool media_file_scheme(const char *url)
 static void *media_open(void *opaque, const os64_html_node_t *node, const char *url, os64_dom_media_cors_t cors,
                         os64_dom_media_preload_t preload)
 {
-    (void)node;
     (void)preload;
     uint64_t serial = (uint64_t)(uintptr_t)opaque;
     yonder_scripts_t *host = scripts_for(serial);
@@ -11346,12 +11509,20 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     // turn, which is where the standard parses the element's URL too
     // (BLOB_URLS.md § 1.8).
     os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(host), url);
-    yonder_media_request_t r = {url, page, serial, cors, g.way.agent, g.way.identity, blob};
+    bool picture = is_video_node(node);
+    yonder_media_request_t r = {url, page, serial, cors, g.way.agent, g.way.identity, blob, picture};
     yonder_media_t *session = yonder_media_open(&r);
     os64_dom_blob_release(blob);
+    if (session != NULL && picture)
+        video_add(node, session);
     return session;
 }
-static void media_close(void *opaque, void *session) { (void)opaque; yonder_media_close(session); }
+static void media_close(void *opaque, void *session)
+{
+    (void)opaque;
+    video_remove(session);
+    yonder_media_close(session);
+}
 static void media_play(void *opaque, void *session) { (void)opaque; yonder_media_play(session); }
 static void media_pause(void *opaque, void *session) { (void)opaque; yonder_media_pause(session); }
 static void media_seek(void *opaque, void *session, double seconds, uint64_t generation)
@@ -11360,13 +11531,13 @@ static void media_seek(void *opaque, void *session, double seconds, uint64_t gen
     yonder_media_seek(session, seconds, generation);
 }
 // `all` (and open's preload) are HTML's hint of how much to read before
-// play: every session decodes its queue's worth whatever the hint says,
-// because pages start their sound from canplay (media.c, decoder_main).
-static void media_settings(void *opaque, void *session, double gain, bool loop, bool all)
+// play: every session reads its queue's worth whatever the hint says,
+// because pages start their sound from canplay (media.c).
+static void media_settings(void *opaque, void *session, double gain, bool muted, bool loop, bool all)
 {
     (void)opaque;
     (void)all;
-    yonder_media_settings(session, gain, loop);
+    yonder_media_settings(session, gain, muted, loop);
 }
 static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out)
 {
@@ -16331,9 +16502,60 @@ static void pane_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_g
         glass_image(gp->now[k], b, c, clip);
 }
 
+// The paint of a video's box (the painter's retained-pixels verb): the
+// latest picture, fitted by object-fit and object-position, the rest of the
+// box the element's own background, and nothing before the first picture.
+// THE PLAIN PATH copies the picture's rows into the window: taken when the
+// pane paints straight to the window (no group's sheets: no opacity,
+// transform, filter, mask or blend above the box) and the picture was
+// converted at the fitted size. Otherwise THE GENERAL PATH draws it as a
+// picture is, scaled (a picture from before a resize, at its old size, is
+// drawn so until the new one comes). The size the player converts to is
+// told here, where the fitted rectangle is known.
+static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    Video *v = video_of(b->node);
+    if (v == NULL || v->width == 0 || v->height == 0)
+        return;
+    os64_gui_rect_t at = yonder_object_rect(b->style, c, zoomed_px(v->width, g.page.laid_zoom),
+                                            zoomed_px(v->height, g.page.laid_zoom));
+    if (at.w > 0 && at.h > 0 && ((uint32_t)at.w != v->asked_w || (uint32_t)at.h != v->asked_h)) {
+        v->asked_w = (uint32_t)at.w;
+        v->asked_h = (uint32_t)at.h;
+        yonder_media_size(v->session, v->asked_w, v->asked_h);
+        v->poked = true;            // a paused picture is converted again: ask for it
+    }
+    const os64_media_player_frame_t *fr = &v->frame;
+    if (fr->pixels == NULL || fr->w == 0 || fr->h == 0)
+        return;
+    bool fits = fr->w == (uint32_t)at.w && fr->h == (uint32_t)at.h;
+    for (int32_t k = 0; k < gp->n; ++k) {
+        Glass *gl = gp->now[k];
+        os64_gui_rect_t cut = on_glass(gl, clip);
+        os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
+        os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
+        if (!os64_rect_intersect(cut, content, &cut) || !os64_rect_intersect(cut, box, &cut))
+            continue;
+        if (fits && gp->n == 1 && gl->whole.w > 0) {
+            s_cost.video_plain++;
+            for (int32_t y = cut.y; y < cut.y + cut.h; y++)
+                os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + cut.x,
+                            fr->pixels + (size_t)(y - box.y) * fr->w + (cut.x - box.x), (size_t)cut.w * 4);
+        } else {
+            s_cost.video_general++;
+            yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated, fr->pixels,
+                                fr->w, fr->h);
+        }
+    }
+}
+
 static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     GlassPane *gp = ctx;
+    if (is_video_node(b->node)) {
+        pane_video(gp, b, c, clip);
+        return;
+    }
     canvas_bitmap_t bitmap;
     if (!yonder_scripts_canvas_bitmap(g.page.scripts, b->node, &bitmap)) return;
     draw2d_surface_t source = {(void *)bitmap.pixels, bitmap.width, bitmap.height,
@@ -19666,9 +19888,11 @@ int main(int argc, char **argv)
         bodies_turn();
         players_ask_run();
         bool media_more = media_turn();
+        videos_turn();
         keys_turn();
         players_show();
         motion_tick();
+        videos_tick();
         storage_turn();
         cookies_turn();
         census_turn();

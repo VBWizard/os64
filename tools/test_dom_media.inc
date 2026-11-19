@@ -20,7 +20,7 @@ typedef struct {
     os64_dom_media_preload_t preload;
     bool playing;
     double gain;
-    bool loop, all;
+    bool muted, loop, all;
     double seek_to;
     uint64_t seek_generation;
     os64_dom_media_facts_t facts;
@@ -54,10 +54,11 @@ static void media_seek(void *opaque, void *session, double t, uint64_t generatio
     s->seek_to = t;
     s->seek_generation = generation;
 }
-static void media_settings(void *opaque, void *session, double gain, bool loop, bool all)
+static void media_settings(void *opaque, void *session, double gain, bool muted, bool loop, bool all)
 {
     (void)opaque;
     ((MediaSession *)session)->gain = gain;
+    ((MediaSession *)session)->muted = muted;
     ((MediaSession *)session)->loop = loop;
     ((MediaSession *)session)->all = all;
 }

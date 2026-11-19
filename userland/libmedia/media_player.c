@@ -100,6 +100,7 @@ struct os64_media_player {
     int64_t sync;
     uint32_t pic_w, pic_h;
     bool reconvert;
+    uint32_t told_readiness;              // readiness() when `look` was last rung for it
     int64_t newest;
     int failure;
     int64_t last_blank, period_us, last_frame_call, conversion_us;
@@ -247,6 +248,22 @@ static uint32_t seek_to(os64_media_player_t *p, int64_t target, collect_t *c, in
 // The moves between states no call makes: buffering's end, a sound that
 // stopped, the end. Run under the lock by every thread that may have made
 // one true, and in every public call; `look` when the state moved.
+// Readiness at the position (facts' current, future, enough), as bits 0 to
+// 2. Under the lock.
+static uint32_t readiness(const os64_media_player_t *p)
+{
+    bool queued = os64_media_queue_count(&p->pcm) > 0 || os64_media_queue_ended(&p->pcm);
+    bool current = p->probed && p->failure == 0 &&
+                   (p->has_picture ? p->shown != NULL || os64_media_pictures_count(&p->ready) > 0 : queued);
+    bool future = current &&
+                  (!p->has_picture || os64_media_pictures_count(&p->ready) > 0 ||
+                   os64_media_pictures_finished(&p->decoded)) &&
+                  (!p->has_sound || os64_media_queue_count(&p->pcm) >= BUFFER_SOUND || os64_media_queue_ended(&p->pcm));
+    bool enough = future && (p->loaded || ((!p->has_sound || os64_media_queue_room(&p->pcm) < CHUNK_FRAMES) &&
+                                           (!p->has_picture || os64_media_pictures_full(&p->decoded))));
+    return (current ? 1u : 0u) | (future ? 2u : 0u) | (enough ? 4u : 0u);
+}
+
 static void service(os64_media_player_t *p, int64_t now)
 {
     int was = p->state;
@@ -302,8 +319,12 @@ static void service(os64_media_player_t *p, int64_t now)
             }
         }
     }
-    if (p->state != was)
+    // A caller that reads the facts only when told (a page's element) hears
+    // readiness move as it does a state.
+    uint32_t ready = readiness(p);
+    if (p->state != was || ready != p->told_readiness)
         look(p);
+    p->told_readiness = ready;
 }
 
 // The output's audio thread: the voice's facts moved. Under the lock.
@@ -1027,14 +1048,10 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.muted = p->muted;
     f.length = p->length;
     f.position = os64_media_clock_read(&p->clock, now);
-    bool queued = os64_media_queue_count(&p->pcm) > 0 || os64_media_queue_ended(&p->pcm);
-    f.current = p->probed && p->failure == 0 &&
-                (p->has_picture ? p->shown != NULL || os64_media_pictures_count(&p->ready) > 0 : queued);
-    f.future = f.current &&
-               (!p->has_picture || os64_media_pictures_count(&p->ready) > 0 || os64_media_pictures_finished(&p->decoded)) &&
-               (!p->has_sound || os64_media_queue_count(&p->pcm) >= BUFFER_SOUND || os64_media_queue_ended(&p->pcm));
-    f.enough = f.future && (p->loaded || ((!p->has_sound || os64_media_queue_room(&p->pcm) < CHUNK_FRAMES) &&
-                                          (!p->has_picture || os64_media_pictures_full(&p->decoded))));
+    uint32_t ready = readiness(p);
+    f.current = (ready & 1u) != 0;
+    f.future = (ready & 2u) != 0;
+    f.enough = (ready & 4u) != 0;
     f.seeked = p->seeked;
     f.busy = p->voice.busy;
     f.sounding = p->voice.sounding;
