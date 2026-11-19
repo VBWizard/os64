@@ -4,7 +4,8 @@
  * compile is COMPILE, its host calls are NATIVE by callee, a layout pushed
  * inside a host call is charged to that callee, script a host call runs is
  * ENGINE again, the kinds add up inside the host's own frame, and the
- * profile samples the running function by name; reset and disable; and a
+ * profile samples the running function by name; not started from inside a
+ * call; reset and disable; and a
  * runtime destroyed with the ledger on and a frame left open. */
 
 static os64_js_runtime_t *ledger_fixture;
@@ -18,7 +19,8 @@ static void ledger_spin(unsigned n)
 }
 
 /* magic 1 works, 2 forces a "layout" (a host LAYOUT frame), 3 calls its
- * argument back. */
+ * argument back, 4 tries to start the ledger from inside the call. */
+static os64_js_status_t ledger_inner_enable = OS64_JS_OK;
 static JSValue ledger_native(JSContext *context, JSValueConst self, int argc, JSValueConst *argv,
                              int magic, JSValue *data)
 {
@@ -29,6 +31,8 @@ static JSValue ledger_native(JSContext *context, JSValueConst self, int argc, JS
         ledger_spin(50000);
         os64_js_ledger_pop(ledger_fixture);
     }
+    if (magic == 4)
+        ledger_inner_enable = os64_js_ledger_enable(ledger_fixture, 0, 0);
     if (magic == 3 && argc > 0) {
         JSValue r = JS_Call(context, argv[0], JS_UNDEFINED, 0, NULL);
         if (JS_IsException(r)) return r;
@@ -68,10 +72,13 @@ static void ledger_cases(void)
         return;
     }
     ledger_fixture = runtime;
-    check(ledger_install(runtime, "work", 1) == 1 && ledger_install(runtime, "layout", 2) == 1 &&
-          ledger_install(runtime, "callback", 3) == 1, "ledger: host functions installed");
-
     os64_js_ledger_totals_t t;
+    check(ledger_install(runtime, "work", 1) == 1 && ledger_install(runtime, "layout", 2) == 1 &&
+          ledger_install(runtime, "callback", 3) == 1 && ledger_install(runtime, "starter", 4) == 1,
+          "ledger: host functions installed");
+    check(execute_fixture(runtime, "starter();1", &outcome) == OS64_JS_OK && ledger_inner_enable == OS64_JS_BUSY &&
+          !os64_js_ledger_totals(runtime, &t), "ledger: not started from inside a call");
+
     size_t cursor = 0;
     os64_js_ledger_callee_t c;
     os64_js_ledger_push(runtime, OS64_JS_LEDGER_ENGINE);

@@ -12349,11 +12349,11 @@ static void file_reader_case(void)
     loop_drop();
 }
 
-/* The JS ledger in yonder (`ledger` in yonder.conf): a page's script tasks
- * are frames on its runtime's ledger and all of them close; a size script
- * reads after changing the page forces a layout, which the ledger charges
- * to the callee that read it, named as libdom installed it; and the
- * record's ledger lines are written. Off, the next page has no ledger. */
+/* The JS ledger in yonder (`ledger` in yonder.conf): each run of a page's
+ * script is a frame on its runtime's ledger and all of them close; a size
+ * script reads after changing the page forces a layout, which the ledger
+ * charges to the callee that read it, named as libdom installed it; and
+ * the record's ledger lines are written. Off, the next page has no ledger. */
 static void ledger_case(void)
 {
     fake_fetch_reset();
@@ -12367,9 +12367,9 @@ static void ledger_case(void)
     const os64_js_runtime_t *rt = yonder_scripts_ledger(host);
     os64_js_ledger_totals_t k;
     check(settled && rt != NULL && os64_js_ledger_totals(rt, &k), "ledger: the page's runtime keeps one");
-    check(k.open == 0, "ledger: every task's frame closed");
+    check(k.open == 0, "ledger: every frame closed once the script has run");
     check(k.count[OS64_JS_LEDGER_ENGINE] >= 1 && k.count[OS64_JS_LEDGER_COMPILE] >= 1 &&
-          k.count[OS64_JS_LEDGER_NATIVE] >= 10, "ledger: the script's task, its compile and its libdom calls");
+          k.count[OS64_JS_LEDGER_NATIVE] >= 10, "ledger: the script's run, its compile and its libdom calls");
     size_t cursor = 0;
     os64_js_ledger_callee_t c;
     uint64_t forced = 0;

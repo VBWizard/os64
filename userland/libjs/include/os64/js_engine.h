@@ -171,9 +171,10 @@ typedef struct {
 /* The ledger's clock: the CPU's time-stamp counter. */
 uint64_t os64_js_ledger_now(void);
 /* Starts the ledger (zeroed), or changes its flags and sample period if it
- * runs. HOST_FAILURE when its memory (the host's, not the engine's heap)
- * cannot be had; BAD_ARGUMENT for NULL, an unknown flag, or PROFILE with a
- * zero period. */
+ * runs. Started only between calls into the runtime: BUSY from inside one.
+ * HOST_FAILURE when its memory (the host's, not the engine's heap) cannot be
+ * had; BAD_ARGUMENT for NULL, an unknown flag, or PROFILE with a zero
+ * period. */
 os64_js_status_t os64_js_ledger_enable(os64_js_runtime_t *runtime, unsigned flags, uint64_t sample_ticks);
 /* Stops and frees it, frames still open with it; a bracket the engine
  * opened before is closed into nothing. */

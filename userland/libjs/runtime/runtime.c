@@ -468,8 +468,8 @@ static void ledger_end(os64_js_runtime_t *runtime)
 /* The runtime's own ENGINE frame, from the moment a call makes it active
  * (enter) to the moment it is not: so script time is the runtime's time,
  * the host's own work around a call is not, and "a frame is open" means
- * "script is running". A ledger enabled during a call opens nothing until
- * the next; one disabled during a call has nothing to close. */
+ * "script is running". A ledger cannot be started during a call
+ * (os64_js_ledger_enable); one disabled during a call has nothing to close. */
 static void ledger_activate(os64_js_runtime_t *runtime)
 {
     if (runtime->ledger != NULL && !runtime->ledger_entered) {
@@ -3115,6 +3115,10 @@ JS_PUBLIC os64_js_status_t os64_js_ledger_enable(os64_js_runtime_t *runtime, uns
     if (runtime == NULL || runtime->engine == NULL || (flags & ~OS64_JS_LEDGER_PROFILE) != 0 ||
         ((flags & OS64_JS_LEDGER_PROFILE) && sample_ticks == 0))
         return OS64_JS_BAD_ARGUMENT;
+    if (runtime->ledger == NULL && runtime->active)
+        /* A ledger started inside a call would see the engine close brackets
+         * it never saw open. */
+        return OS64_JS_BUSY;
     if (runtime->ledger == NULL) {
         /* The host's own memory: the ledger measures the engine's heap, so
          * it is not charged to it. */
@@ -3139,6 +3143,7 @@ JS_PUBLIC void os64_js_ledger_disable(os64_js_runtime_t *runtime)
         JS_SetLedgerHooks(runtime->engine, NULL, NULL);
     os64_free(runtime->ledger);
     runtime->ledger = NULL;
+    runtime->ledger_entered = false;
     runtime->ledger_profile = false;
 }
 
