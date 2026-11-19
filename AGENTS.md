@@ -42,6 +42,15 @@ hazard-hunting. So when you are REVIEWING rather than authoring:
 The test: what breaks if a reader believes this? If the answer is nothing, it
 is not a finding.
 
+### Track tasks beneath their slice
+When a tracked slice contains multiple tasks or more work is discovered,
+add visible child tasks beneath the parent using that tracker's supported
+format. Keep completed tasks and remaining tasks visible with their own
+statuses and implementing PR references. Keep the parent's notes concise;
+do not accumulate the task history there. Update this breakdown as work is
+identified, not only at slice closeout. A completed task does not complete
+the parent until the slice's full acceptance requirements are met.
+
 ### Regression-First Debugging
 IMPORTANT: When a new crash, hang, fault, or behavioral regression appears after recent edits, first assume the most recent relevant change may have caused it.
 
@@ -69,11 +78,15 @@ before a push. Those upkeep rules apply to HTTP/2.
 
 ### Working an iframe slice
 `docs/design/pending/IFRAME_TRACKER.md` defines the slice map and upkeep
-rules for `IFRAME_TRACKER.csv`. Update the implementing slice's row with
-its work; prepare its `done` flip and PR number in that PR's final commit.
+rules for `IFRAME_TRACKER.csv`. Keep the parent slice's status and acceptance
+summary current. Add a child task row (`F.n.m`) when work within a slice is
+identified or split; show completed tasks and remaining tasks beneath the
+parent instead of accumulating milestone history in its notes. Update the
+implementing task's status and prepare its `done` flip and PR number in that
+PR's final commit. Mark the parent done only when its full acceptance is met.
 Run `python3 -I tools/tracker.py --csv docs/design/pending/IFRAME_TRACKER.csv --prefix F --quiet`
 before committing or pushing tracker changes. Slice briefs carry detailed
-tasks and proofs; the board tracks mergeable slices.
+tasks and proofs; the board exposes the slice and task lifecycle.
 
 ## Project Overview
 

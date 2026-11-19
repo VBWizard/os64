@@ -3,8 +3,9 @@
 [IFRAME_TRACKER.csv](IFRAME_TRACKER.csv) records the implementation of
 [IFRAME.md](IFRAME.md), initially as **14 proposed mergeable slices**.
 F1/F2/F3 remain dependency stages; `F.1` through `F.14` identify individual
-PR-sized cuts. The design refresh is already merged as PR #528; it is not
-an implemented slice. The initial implementation rows are `todo`.
+implementation slices. Child tasks use `F.n.m` (for example `F.4.1`) and
+appear beneath their parent. The design refresh merged as PR #528; design
+approval does not complete implementation.
 
 | Stage | Slices | Scope |
 |---|---|---|
@@ -28,21 +29,37 @@ must not expose an intermediate path that ignores restrictions.
 
 ## Upkeep
 
-- Keep one row per mergeable slice. Use the task column for scope and notes
-  for the acceptance boundary, evidence location or a blocker. Detailed
-  implementation steps belong in the slice brief; optional sub-task rows
-  are supported by the tool but are not required for this arc.
+- Keep one parent row per slice, with a short scope/acceptance summary.
+  When a slice contains multiple tasks or additional work is discovered,
+  add child rows immediately beneath it using stable `F.n.m` IDs. Record
+  both completed work and known remaining work; do not hide new obligations
+  in a growing parent note. Familiar brief labels such as F4a–d may appear
+  in task names without changing the numeric IDs supported by the renderer.
+- Give each child a concrete result, status, dependencies where needed,
+  implementing PR references and a concise evidence/qualification note.
+  Child statuses are `todo`, `doing`, `done` and `dropped`; use `doing` for
+  active design/code/review and state the phase in notes when useful. Mark
+  design tasks as design work; completing them does not complete the
+  corresponding implementation. Detailed proofs remain in the slice briefs.
+- Keep completed tasks visible. Append newly discovered tasks without
+  renumbering existing IDs. Split a broad remaining task when concrete work
+  emerges, preserving its acceptance obligations and dependency references.
+  Tasks may span multiple coherent PRs; this breakdown does not prescribe
+  smaller PRs. Task counts measure listed results, not effort percentages,
+  fixed PR counts or estimates of remaining time.
 - The builder updates its slice through `todo`, `design`, `design-review`,
   `code`, `review`, `p5` where hardware acceptance applies, and `done`.
   `todo` means a proposed cut without a completed implementation brief.
   Record a blocked state in notes while retaining the current lifecycle
   status. Retired plans become `dropped` with a reason rather than vanishing.
-- A branch changes its own slice's row. A planned split or dependency change
+- A branch changes its own slice and child rows. A planned split or dependency change
   may update the affected plan rows together, with the reason documented.
   Carry forward predecessor updates when stacking or rebasing; do not reset
   another slice's status to an older snapshot.
-- As with HTTP/2, prepare the `done` flip and `done_in` PR number in the
-  implementing PR's final commit after its required checks and acceptance.
+- Prepare each implementing task's `done` flip and `done_in` PR number in
+  its final commit after its required checks and acceptance. The parent
+  retains its lifecycle status until the full slice contract is satisfied;
+  completed foundations do not close remaining acceptance tasks.
   On `userland`, `done` therefore means merged. A board rendered from a
   worktree describes that branch, including its prepared completion flips;
   use the merged tree for the accepted project status.
@@ -61,19 +78,17 @@ Render/open the board with `tools/tracker.sh iframe [worktree]`.
 and launcher. The iframe rows do not modify HTTP/2's tracker or its upkeep
 rules. Workers and the remaining browser roadmap are separate arcs.
 
-F.2 uses two implementation PRs under one row, as adopted in its design
-review: F.2a for native ownership and F.2b for bindings. Keep the row in
-progress after F.2a and name its evidence in notes. F.2b's completion flip
-records both PRs; merging the brief or the native half alone does not finish
-the slice.
+F.2's accepted implementation comprises F.2a native ownership and F.2b
+bindings. F.3's [retirement brief](IFRAME_F3_RETIREMENT.md) separates F.3a
+libjs lifecycle/job ownership and F.3b DOM departure/failed-child isolation.
+Their completed parent rows retain the implementing PRs and acceptance
+receipts. The F.3 contract retains bounded slots and the runtime-wide overrun
+fallback; it does not enable frame loading or independent reclamation.
 
-F.3's [retirement brief](IFRAME_F3_RETIREMENT.md) proposes two implementation
-PRs under its row: F.3a for libjs lifecycle/job ownership and F.3b for DOM
-departure and failed-child isolation. Keep the row in progress between them;
-its final completion records both implementation PRs. The brief selects
-bounded retained slots and the design's runtime-wide overrun fallback, with
-explicit proof obligations for a future recovery extension. It enables no
-frame loading or independent reclamation of departed contexts.
+F.4 and F.15 have task-level histories and remaining-work rows. Their parents
+retain the slice lifecycle until full acceptance is met. Cross-slice dependencies
+refer to the specific required task where possible; a task must not depend
+on its own parent's completion.
 
 F.15 and F.16 track the retained-realm reclamation and child-local overrun
 recovery follow-ups. They are not prerequisites for F.3. F.11 has explicit
