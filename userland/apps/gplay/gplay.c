@@ -517,8 +517,9 @@ typedef struct {
     uint64_t written;                     // stream frames written this device generation
     uint32_t generation;
     bool generation_known;
+    uint64_t last_heard;                  // the ear's stream frame at the last read
     bool paused;                          // `pause` sent
-    bool fresh;                           // just opened: start from the clock's reading
+    bool fresh;                           // just opened or begun again: start from the clock's reading
     int16_t carry[2 * WRITE_FRAMES];      // a write's untaken tail, first next time
     uint32_t carry_frames;
     int64_t carry_at;
@@ -535,6 +536,7 @@ static void device_restart(device_t *d)
     os64_media_voice_reset(&d->voice);
     d->written = 0;
     d->generation_known = false;
+    d->last_heard = 0;
     d->carry_frames = 0;
 }
 
@@ -663,6 +665,7 @@ static int64_t audio_thread(void *arg)
                 n = os64_media_queue_take(&p->pcm, buf, WRITE_FRAMES, &at);
                 if (n > 0)
                     os64_bell_ring(&p->decode_bell);
+                p->carry_frames = n;          // in flight from the take: the end waits for it
                 os64_lock_release(&p->lock);
             } else {
                 os64_memcpy(buf, d.carry, (size_t)n * 4);
@@ -706,15 +709,35 @@ static int64_t audio_thread(void *arg)
                 if (!d.generation_known) {
                     d.generation = pos.generation;
                     d.generation_known = true;
+                } else if (pos.generation != d.generation) {
+                    // A generation this thread did not start: a sink attached
+                    // or detached, or a flush from elsewhere, threw away what
+                    // the stream held. Begin again from the clock's reading.
+                    os64_lock_acquire(&p->lock);
+                    p->pcm_dropped += d.carry_frames;
+                    os64_lock_release(&p->lock);
+                    device_restart(&d);
+                    d.fresh = true;
                 }
                 if (pos.generation == d.generation && pos.accepted <= d.written && d.voice.anchors > 0) {
-                    int64_t heard = os64_media_voice_heard(&d.voice, pos.heard);
-                    bool advancing = pos.state == OS64_AUDIO_PLAYING;
-                    os64_lock_acquire(&p->lock);
-                    p->delay_us = pos.delay_us;
-                    os64_media_clock_heard(&p->clock, clock_gen, heard + p->sync_offset, (int64_t)pos.micros,
-                                           advancing, now_us());
-                    os64_lock_release(&p->lock);
+                    // PLAYING says the ring holds sound, not that the ear has
+                    // heard it: `heard` stays put until the sink's delay has
+                    // passed (after a start, a seek's flush or a resume). So
+                    // a report is advancing only when the ear has moved, a
+                    // PLAYING stream whose ear has not moved says nothing
+                    // (neither ending a wait nor starving the clock), and any
+                    // other state is a report of an ear that has stopped.
+                    bool playing = pos.state == OS64_AUDIO_PLAYING;
+                    bool moved = pos.heard > d.last_heard;
+                    d.last_heard = pos.heard;
+                    if (moved || !playing) {
+                        int64_t heard = os64_media_voice_heard(&d.voice, pos.heard);
+                        os64_lock_acquire(&p->lock);
+                        p->delay_us = pos.delay_us;
+                        os64_media_clock_heard(&p->clock, clock_gen, heard + p->sync_offset, (int64_t)pos.micros,
+                                               playing && moved, now_us());
+                        os64_lock_release(&p->lock);
+                    }
                     os64_media_voice_prune(&d.voice, pos.heard);
                 }
             }
@@ -1210,6 +1233,7 @@ static int run(player_t *p, view_t *v, const char *name)
         service(p, now);
         bool quit = p->quit || (s_exit_at_end && (p->state == ST_ENDED || p->state == ST_FAILED));
         bool want_frame = p->state == ST_PLAYING || (p->owed && os64_media_pictures_count(&p->ready) > 0) ||
+                          (p->reconverted != 0 && !p->owed) ||
                           v->dirty || v->on_canvas != p->shown || v->canvas_layout != p->layout_serial;
         bool title = p->state != last_state || p->refused != last_refused || p->muted != last_muted;
         last_state = p->state;
