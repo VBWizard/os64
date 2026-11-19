@@ -69,7 +69,7 @@ typedef struct os64_media_player os64_media_player_t;
 typedef struct {
     os64_media_source_t source;     // read on the decoding thread only; see os64_media_player_close
     uint32_t want;                  // OS64_MEDIA_WANT_SOUND and/or _PICTURE
-    os64_media_output_t *output;    // NULL: no voice (the sound decoded and let go, the clock monotonic)
+    os64_media_output_t *output;    // NULL: the sound is not opened (the clock monotonic)
     int refused;                    // OS64_MEDIA_VOICE_WAIT or _PLAY_ON (os64/media_output.h)
     bool loaded;                    // the whole source is at hand (a file); else os64_media_player_loaded says
     void (*look)(void *ctx);        // the facts changed; called by the player's threads and its output's,

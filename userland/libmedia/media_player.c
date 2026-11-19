@@ -377,12 +377,22 @@ static void judge(os64_media_player_t *p, int64_t clock, int64_t now)
 
 // Nobody has asked for a frame for a while: what the clock passed is retired
 // from the ready queue (counted dropped), the latest one due kept for the
-// next frame call, the shown picture left alone. Under the lock.
+// next frame call, the shown picture left alone; at the end of the pictures
+// the last one goes too once its time is over, or the end would never come.
+// Under the lock.
 static void retire_unasked(os64_media_player_t *p, int64_t now, collect_t *c)
 {
-    if (p->state != OS64_MEDIA_PLAYER_PLAYING || p->owed || now - p->last_frame_call < OS64_MEDIA_PLAYER_TICK_US)
+    if (p->state != OS64_MEDIA_PLAYER_PLAYING || now - p->last_frame_call < OS64_MEDIA_PLAYER_TICK_US)
         return;
     int64_t clock = os64_media_clock_read(&p->clock, now);
+    if (p->owed && os64_media_pictures_count(&p->ready) > 0) {
+        // The picture owed after a seek (or the open) has nobody to show it:
+        // the seek has landed all the same, and the pictures go by the clock.
+        p->owed = false;
+        p->seek_pending = false;
+        p->seeked = p->seek_generation;
+        look(p);
+    }
     const os64_media_pictures_entry_t *next;
     while (os64_media_pictures_count(&p->ready) > 1 && (next = os64_media_pictures_peek(&p->ready, 1)) != NULL &&
            next->at <= clock) {
@@ -390,6 +400,16 @@ static void retire_unasked(os64_media_player_t *p, int64_t now, collect_t *c)
         os64_media_pictures_take(&p->ready, &e);
         frame_retire(p, e.handle, c);
         p->pace.dropped++;
+    }
+    const os64_media_pictures_entry_t *last = os64_media_pictures_peek(&p->ready, 0);
+    if (last != NULL && os64_media_pictures_count(&p->ready) == 1 && os64_media_pictures_finished(&p->decoded)) {
+        int64_t lasts = last->duration > 0 ? last->duration : p->pace.period;
+        if (last->at + lasts <= clock) {
+            os64_media_pictures_entry_t e;
+            os64_media_pictures_take(&p->ready, &e);
+            frame_retire(p, e.handle, c);
+            p->pace.dropped++;
+        }
     }
 }
 
@@ -537,7 +557,8 @@ static int64_t picture_thread(void *arg)
 // and the state leaves OPENING. Not under the lock.
 static void opened(os64_media_player_t *p)
 {
-    bool sound = p->info.sound == OS64_MEDIA_PLAYABLE && (p->cfg.want & OS64_MEDIA_WANT_SOUND) != 0;
+    bool sound = p->info.sound == OS64_MEDIA_PLAYABLE && (p->cfg.want & OS64_MEDIA_WANT_SOUND) != 0 &&
+                 p->cfg.output != NULL;
     bool picture = p->info.picture == OS64_MEDIA_PLAYABLE && (p->cfg.want & OS64_MEDIA_WANT_PICTURE) != 0;
     bool voiced = false;
     if (sound && p->cfg.output != NULL) {
@@ -547,6 +568,8 @@ static void opened(os64_media_player_t *p)
         voiced = os64_media_output_add(p->cfg.output, &p->voice) == 0;
     }
     os64_lock_acquire(&p->lock);
+    if (sound && !voiced && p->failure == 0)
+        p->failure = OS64_MEDIA_NO_MEMORY;   // its queue would fill with nothing to drain it
     p->has_sound = sound;
     p->has_picture = picture;
     p->voiced = voiced;
@@ -596,7 +619,9 @@ static void finish(os64_media_player_t *p)
 static int64_t decoding_thread(void *arg)
 {
     os64_media_player_t *p = arg;
-    int r = os64_media_open_for(&p->cfg.source, p->cfg.want, &p->media, &p->info);
+    // With no output the sound is not opened: nothing would drain its queue.
+    uint32_t want = p->cfg.output != NULL ? p->cfg.want : p->cfg.want & ~OS64_MEDIA_WANT_SOUND;
+    int r = want != 0 ? os64_media_open_for(&p->cfg.source, want, &p->media, &p->info) : OS64_MEDIA_BAD_ARGS;
     if (r == 0 && (p->cfg.want & OS64_MEDIA_WANT_PICTURE) != 0)
         p->picture_thread = os64_thread(picture_thread, p);
     if (r != 0) {
