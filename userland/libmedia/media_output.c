@@ -42,6 +42,8 @@ struct os64_media_output {
     os64_bell_t bell;
     bool quit;
     int64_t thread;
+    int16_t *buf, *carry;               // the audio thread's: a take, and a write's untaken tail
+    int32_t *acc;                       // the mix
     os64_media_output_voice_t *voices;  // linked through priv.next, under `lock`
     os64_media_output_facts_t facts;    // under `lock`
 };
@@ -592,9 +594,9 @@ static int64_t audio_main(void *arg)
 {
     os64_media_output_t *o = arg;
     device_t d = {.audio = -1, .position = -1, .ctl = -1};
-    int16_t *buf = os64_malloc(sizeof(int16_t) * 2 * WRITE_FRAMES);
-    int32_t *acc = os64_malloc(sizeof(int32_t) * 2 * WRITE_FRAMES);
-    d.carry = os64_malloc(sizeof(int16_t) * 2 * WRITE_FRAMES);
+    int16_t *buf = o->buf;
+    int32_t *acc = o->acc;
+    d.carry = o->carry;
     round_t r[OS64_MEDIA_OUTPUT_VOICES];
     d.idle_since = now_us();
     for (;;) {
@@ -663,6 +665,22 @@ static int64_t audio_main(void *arg)
             }
             bool close = d.audio < 0 || now - d.paused_since >= (int64_t)OS64_MEDIA_OUTPUT_PAUSE_KEEP_MS * 1000;
             if (close && d.audio >= 0) {
+                // A paused voice with no clock whose last frames are still in
+                // the device would lose them: its owner is told where its
+                // ear was, to go back there when it plays again. (One with a
+                // clock goes on from its clock.)
+                for (uint32_t i = 0; i < n; i++) {
+                    os64_media_output_voice_t *v = r[i].v;
+                    if (v->clock != NULL || v->priv.anchors.anchors == 0)
+                        continue;
+                    os64_lock_acquire(v->lock);
+                    if (!v->remove && v->position >= 0) {
+                        v->rewind = true;
+                        v->rewind_to = v->position;
+                        look(v);
+                    }
+                    os64_lock_release(v->lock);
+                }
                 device_close(&d, false);
                 voices_restart(&d, r, n, now);
                 os64_lock_acquire(&o->lock);
@@ -778,7 +796,7 @@ static int64_t audio_main(void *arg)
         // would fall silent for the rest of a block another voice filled, so
         // the block is cut to what it can give (never below BLOCK_FLOOR).
         uint32_t block = 0;
-        if (!failed && d.carry_frames == 0 && buf != NULL && acc != NULL) {
+        if (!failed && d.carry_frames == 0) {
             uint32_t limit = WRITE_FRAMES;
             for (uint32_t i = 0; i < n; i++) {
                 os64_media_output_voice_t *v = r[i].v;
@@ -805,7 +823,8 @@ static int64_t audio_main(void *arg)
                 // Taken under the same lock as the look at its generation, so
                 // a flush between the two cannot slip a frame of the new
                 // generation in under the old one's anchors.
-                bool can = r[i].plays && v->wants && !v->remove && v->queue->generation == v->priv.generation;
+                bool can = r[i].plays && v->wants && !v->remove && (v->clock == NULL || v->runs) &&
+                           v->queue->generation == v->priv.generation;
                 if (can && v->clock != NULL && v->priv.anchors.anchors == 0)
                     drop_behind(v, now);   // a start, or after a gap: from the clock's reading
                 uint32_t filled = 0;
@@ -882,9 +901,6 @@ static int64_t audio_main(void *arg)
             (void)os64_bell_wait(&o->bell, 10);
     }
     device_close(&d, false);
-    os64_free(buf);
-    os64_free(acc);
-    os64_free(d.carry);
     return 0;
 }
 
@@ -897,14 +913,21 @@ int os64_media_output_create(os64_media_output_t **out)
     if (o == NULL)
         return OS64_MEDIA_NO_MEMORY;
     *o = (os64_media_output_t){.bell = OS64_BELL_NONE};
-    if (os64_bell_make(&o->bell) < 0) {
+    o->buf = os64_malloc(sizeof(int16_t) * 2 * WRITE_FRAMES);
+    o->carry = os64_malloc(sizeof(int16_t) * 2 * WRITE_FRAMES);
+    o->acc = os64_malloc(sizeof(int32_t) * 2 * WRITE_FRAMES);
+    if (o->buf == NULL || o->carry == NULL || o->acc == NULL || os64_bell_make(&o->bell) < 0) {
+        os64_free(o->buf);
+        os64_free(o->carry);
+        os64_free(o->acc);
         os64_free(o);
         return OS64_MEDIA_NO_MEMORY;
     }
     o->thread = os64_thread(audio_main, o);
     if (o->thread < 0) {
-        os64_bell_close(&o->bell);
-        os64_free(o);
+        // A start that reports failure may still be running (the kernel,
+        // out of handles, starts it detached): it keeps the output, which is
+        // never freed here.
         return OS64_MEDIA_NO_MEMORY;
     }
     *out = o;
@@ -925,6 +948,9 @@ int os64_media_output_destroy(os64_media_output_t *o)
     os64_lock_release(&o->lock);
     (void)os64_thread_join((int32_t)o->thread, NULL);
     os64_bell_close(&o->bell);
+    os64_free(o->buf);
+    os64_free(o->carry);
+    os64_free(o->acc);
     os64_free(o);
     return 0;
 }

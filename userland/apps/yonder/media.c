@@ -95,6 +95,8 @@ struct yonder_media {
     bool seek_asked;
     double seek_to;
     uint64_t seek_generation;
+    bool rewind;                    // a long pause gave the device back with its tail unheard:
+    double rewind_to;               // go back to where its ear was (the output's `rewind`)
     // Told, under `lock`.
     os64_dom_media_facts_t facts;
     os64_media_queue_t queue;
@@ -182,6 +184,12 @@ static void voice_look(void *ctx)
     m->facts.sounding = m->voice.sounding;
     if (m->voice.position >= 0)
         m->facts.position = (double)m->voice.position / RATE;
+    if (m->voice.rewind) {
+        m->voice.rewind = false;
+        m->rewind = true;
+        m->rewind_to = (double)m->voice.rewind_to / RATE;
+        (void)os64_bell_ring(&m->bell);
+    }
     if (m->voice.heard_all && m->voice.wants && !m->facts.ended) {
         m->facts.ended = true;
         m->facts.sounding = false;
@@ -864,14 +872,15 @@ static int64_t decoder_main(void *arg)
             os64_lock_release(&m->lock);
             break;
         }
-        bool dom_seek = m->seek_asked;
-        double to = m->seek_to;
+        bool dom_seek = m->seek_asked, rewind = m->rewind;
+        double to = dom_seek ? m->seek_to : m->rewind_to;
         uint64_t asked = m->seek_generation;
         m->seek_asked = false;
+        m->rewind = false;
         bool full = queue_full_locked(m);
         bool loop = m->loop;
         os64_lock_release(&m->lock);
-        if (dom_seek) {
+        if (dom_seek || rewind) {
             // A time past any media's length (a stream's duration is
             // infinite, so libdom clamps nothing) is held to one the frame
             // count can hold; libmedia answers a frame past the end with
@@ -885,7 +894,8 @@ static int64_t decoder_main(void *arg)
                 // Refused: nothing moved, so what is queued stays, and the
                 // seek lands at once where the media still is.
                 os64_lock_acquire(&m->lock);
-                m->facts.seeked = asked;
+                if (dom_seek)
+                    m->facts.seeked = asked;
                 os64_lock_release(&m->lock);
                 ring_window();
                 continue;
@@ -901,8 +911,10 @@ static int64_t decoder_main(void *arg)
             os64_lock_release(&m->lock);
             // The seek has landed once sound from the new place is queued
             // (below), so the element's seeked comes with data to play.
-            landing = true;
-            landing_generation = asked;
+            if (dom_seek) {
+                landing = true;
+                landing_generation = asked;
+            }
             ring_audio();
             continue;
         }
@@ -969,9 +981,9 @@ static int64_t decoder_main(void *arg)
                     landing = false;
                     changed = true;
                 }
-                // A seek asked meanwhile flushes what is left anyway: give
-                // way to it.
-                bool giving_way = m->seek_asked;
+                // A seek or a rewind asked meanwhile flushes what is left
+                // anyway: give way to it.
+                bool giving_way = m->seek_asked || m->rewind;
                 os64_lock_release(&m->lock);
                 if (was_empty)
                     ring_audio();

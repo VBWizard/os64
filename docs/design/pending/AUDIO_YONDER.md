@@ -795,6 +795,10 @@ above:
   - A generation the output did not start (a sink attached or detached
     mid-song) is a flush: the sound carries on from its queue. Before, the
     decoder sought back to where the ear was (D2).
+  - A long pause that gives the device back still sends the decoder back
+    to where the ear was when it plays again (the output's `rewind`), as
+    the old thread's resync did: those frames were the element's own, not
+    lost to a sink.
   - A write waits at most 20 ms (D5).
   - A failed write is a refusal, retried, not a failure of the voices
     that were sounding (D3).
