@@ -4,8 +4,9 @@ The private `d_window_identity_prepare` host seam connects the native
 [WindowProxy boundary](IFRAME_F4_WINDOW_PROXY.md) to the engine and DOM values
 that expose a Window. Raw globals continue to own properties and document
 listener records. This is preparation for the frame adapter, not public iframe
-activation. F.4 remains in progress: same-origin Window named properties,
-remaining descriptor integration, and the complete security/lifetime acceptance
+activation. [Window names and descriptors](IFRAME_F4_WINDOW_NAMES.md) adds
+same-origin named lookup and private prototype/unforgeable integration.
+F.4 remains in progress: mutable target names and complete security/lifetime acceptance
 in [the F.4 brief](IFRAME_F4_SECURITY.md) remain gates. Cross-frame message
 posting remains explicitly unsupported pending F.5; accepting a Window as a
 synthetic MessageEvent source does not enable delivery.

@@ -889,6 +889,10 @@ os64_dom_t *d_window_proxy_target(JSValueConst);
 JSValue d_window_identity(os64_dom_t *, JSContext *);
 JSValueConst d_window_this(os64_dom_t *);
 int d_window_identity_prepare(JSContext *, os64_dom_t *, DBrowsingContext *);
+/* Bootstrap prototypes for private origin-bearing Windows; undefined selects
+ * Object.prototype for the EventTarget prototype's parent. */
+JSValue d_global_prototype(os64_dom_t *, JSContext *, JSValueConst);
+JSValue d_window_named_prototype(os64_dom_t *, JSContext *, JSValueConst);
 JSValue d_binding_global(os64_dom_t *, JSContext *);
 JSValue d_custom_registry(os64_dom_t *, JSContext *);
 int d_window_member_magic(os64_dom_t *, JSContext *, JSValueConst, const char *, int, int);
@@ -1272,7 +1276,7 @@ enum {
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_LINKS, D_QUERY_SCRIPTS, D_QUERY_CONTROLS,
        D_QUERY_DOCUMENT_NAMES,
        D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS, D_QUERY_LABELS,
-       D_QUERY_FIELDSET, D_QUERY_SHEETS, D_QUERY_TBODIES, D_QUERY_TABLE_ROWS, D_QUERY_SECTION_ROWS,
+       D_QUERY_FIELDSET, D_QUERY_SHEETS, D_QUERY_WINDOW_NAMES, D_QUERY_TBODIES, D_QUERY_TABLE_ROWS, D_QUERY_SECTION_ROWS,
        D_QUERY_CELLS, D_QUERY_AREAS };
 /* The live HTMLCollection of a table kind (above) that `owner` has,
  * made once ([SameObject]) and kept on its entry; NULL with an exception
@@ -1282,6 +1286,7 @@ DQuery *d_table_query(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *o
  * next refresh. False with an exception pending. */
 bool d_query_items(DQuery *query, JSContext *ctx, const os64_html_node_t *const **nodes, size_t *count);
 bool d_named_match(const os64_html_node_t *node, const char *name);
+bool d_window_named_match(const os64_html_node_t *node, const char *name);
 bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
 /* One of HTML § 4.10.2's listed elements, which a fieldset's `elements`
  * lists, and a form's all but an image button: button, fieldset, input,
