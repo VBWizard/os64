@@ -2,6 +2,15 @@
 //
 //     gplay film.mp4                 play it; q or Escape leaves
 //     gplay --exit-at-end film.mp4   and leave when it has played
+//     gplay --maximized film.mp4     start with the window maximised
+//
+// For tests (/tests/gplaytest): --check plays to the end and judges the
+// counts (exit 3 when one is wrong), and with --expect-refusal also that the
+// device was refused and then regained; --cover opens a window of its own over
+// the whole screen, so gplay's is answered no frames; --script "ms:action,..."
+// performs keys at times from the start (pause, back, forward, backfar,
+// forwardfar, mute, louder, softer, later, earlier, readout, quit, or
+// resize=WxH).
 //
 // Keys: space pauses and resumes; left and right seek five seconds, with
 // Shift a minute (presses while a seek is under way count from its target);
@@ -37,10 +46,12 @@
 // ONE LOCK, the player's, guards everything two threads touch: the three
 // queues, the clock, the pace, the requests, the shared facts and the free
 // frames. It is never held across a libmedia call, a conversion, a device
-// call or a window call, and every core call is made under it, so there is
-// no order to keep. Pictures to give back to libmedia are COLLECTED under it
-// and released after (os64_media_picture_release takes a lock of its own).
-// Bells are rung with it held (os64/bell.h's rule).
+// call or a window call that draws, waits or asks, and every core call is
+// made under it, so there is no order to keep. Pictures to give back to
+// libmedia are COLLECTED under it and released after
+// (os64_media_picture_release takes a lock of its own). Bells, and the
+// window's doorbell (os64_gui_event_ring, which never blocks), are rung with
+// it held (os64/bell.h's rule).
 //
 // THE STATES (VIDEO_V4_TABLES.md § 2): buffering (after the open, a seek
 // while playing, or the sound running dry: the clock paused, NOTHING written
@@ -171,6 +182,8 @@ typedef struct {
     int64_t last_tick;                    // wall of the audio thread's last tick ring
     int64_t conversion_us;                // what the last conversion took
     uint32_t delay_us;                    // the sink's reported delay
+    uint32_t carry_frames;                // the audio thread's write tail not yet taken
+    bool converting;                      // a decoded picture is out with the picture thread
     int64_t buffering_since;
 
     // Bells.
@@ -183,7 +196,7 @@ typedef struct {
     uint64_t last_frame_number;
 } player_t;
 
-static bool s_exit_at_end, s_check, s_cover;
+static bool s_exit_at_end, s_check, s_cover, s_maximized, s_expect_refusal;
 static const char *s_script;
 
 // ---------------------------------------------------------------- collecting releases
@@ -275,8 +288,10 @@ static int64_t decoding_thread(void *arg)
             os64_lock_release(&p->lock);
             int r = os64_media_seek(p->media, target);
             os64_lock_acquire(&p->lock);
-            if (r < 0 && p->failure == 0)
+            if (r < 0 && p->failure == 0) {
                 p->failure = r;
+                os64_gui_event_ring(p->win, RING_LOOK);
+            }
             continue;
         }
         int want_skip = p->pace.skip_unused ? OS64_MEDIA_SKIP_UNUSED : OS64_MEDIA_SKIP_NONE;
@@ -436,6 +451,7 @@ static int64_t picture_thread(void *arg)
         frame_t *f = p->free_frames;
         p->free_frames = f->next_free;
         uint32_t w = p->pic_w, h = p->pic_h, gen = os64_media_pictures_generation(&p->ready);
+        p->converting = true;
         os64_lock_release(&p->lock);
 
         collect_release(p, &c);
@@ -454,6 +470,7 @@ static int64_t picture_thread(void *arg)
         int64_t cost = now_us() - t0;
 
         os64_lock_acquire(&p->lock);
+        p->converting = false;
         p->conversion_us = cost;
         f->w = w;
         f->h = h;
@@ -465,7 +482,8 @@ static int64_t picture_thread(void *arg)
             // otherwise (a seek or a play moved on) the source goes back to
             // it if it is still shown, or is released with this frame.
             p->reconversions++;
-            if (made && p->shown == shown_from && p->state != ST_PLAYING) {
+            if (made && p->shown == shown_from && p->state != ST_PLAYING &&
+                gen == os64_media_pictures_generation(&p->ready)) {
                 frame_retire(p, p->reconverted, &c);
                 p->reconverted = f;
                 os64_gui_event_ring(p->win, RING_LOOK);
@@ -567,11 +585,14 @@ static int64_t audio_thread(void *arg)
             clock_gen = os64_media_clock_generation(&p->clock);
         }
         bool hear = audible(p);
+        // The device is wanted whenever the person has not muted a media
+        // with sound; a refused one is tried again at retry_at.
+        bool wanted = p->has_sound && !p->muted;
         // Writing: playing, or ended with a write's tail still to go;
         // nothing before the clock plays (Fable's B).
         bool run = p->state == ST_PLAYING || p->state == ST_ENDED;
         bool hold = p->state == ST_PAUSED;    // ended: the tail plays out
-        bool try_open = hear && d.audio < 0 && now >= p->retry_at;
+        bool try_open = wanted && d.audio < 0 && (!p->refused || now >= p->retry_at);
         int64_t clock_now = os64_media_clock_read(&p->clock, now);
         if (!hear && os64_media_clock_state(&p->clock, now) != OS64_MEDIA_CLOCK_PAUSED)
             drop_behind(p, clock_now);
@@ -655,6 +676,7 @@ static int64_t audio_thread(void *arg)
                     p->refused_why = "the device failed";
                     p->retry_at = now + RETRY_US;
                     os64_media_clock_source(&p->clock, OS64_MEDIA_CLOCK_MONOTONIC, now);
+                    p->pcm_dropped += n;      // what the failed write held, counted
                     os64_lock_release(&p->lock);
                     took = 0;
                     n = 0;
@@ -673,6 +695,9 @@ static int64_t audio_thread(void *arg)
                     os64_memcpy(d.carry, buf + 2 * took, (size_t)d.carry_frames * 4);
             }
         }
+        os64_lock_acquire(&p->lock);
+        p->carry_frames = d.carry_frames;     // the end waits for it (service)
+        os64_lock_release(&p->lock);
 
         // What the ear heard, to the clock.
         if (d.position >= 0) {
@@ -698,6 +723,7 @@ static int64_t audio_thread(void *arg)
             os64_bell_wait(&p->audio_bell, 10);
         os64_lock_acquire(&p->lock);
     }
+    p->pcm_dropped += d.carry_frames;         // a tail never written, counted
     os64_lock_release(&p->lock);
     if (d.audio >= 0) {
         // Leaving: what is queued plays out (a close never cuts the sound),
@@ -930,6 +956,10 @@ static void seek_to(player_t *p, int64_t target, collect_t *c, int64_t now, bool
     p->newest = -1;
     p->owed = true;
     p->stall_since = 0;
+    // A reconversion of the picture from before the seek is not shown after it.
+    frame_retire(p, p->reconverted, c);
+    p->reconverted = 0;
+    p->reconvert = false;
     p->state = play ? ST_BUFFERING : ST_PAUSED;
     if (play)
         p->buffering_since = now;
@@ -1034,9 +1064,11 @@ static void do_key(player_t *p, view_t *v, gplay_key_t key, bool to_start, colle
         break;
     case GPLAY_KEY_SOUND_LATER:
     case GPLAY_KEY_SOUND_EARLIER:
-        // Reporting the ear EARLIER than it is (an offset below 0) holds the
-        // pictures back: the sound then lands later against them.
-        p->sync_offset += key == GPLAY_KEY_SOUND_LATER ? -SYNC_STEP : SYNC_STEP;
+        // An offset below 0 reports the ear behind where it is, so the clock
+        // and the pictures come later: the sound then lands EARLIER against
+        // them. A beep heard after its flash wants `[`; the dial's value is
+        // then how much the sink's reported delay falls short of the truth.
+        p->sync_offset += key == GPLAY_KEY_SOUND_LATER ? SYNC_STEP : -SYNC_STEP;
         break;
     default:
         break;
@@ -1148,8 +1180,11 @@ static void service(player_t *p, int64_t now)
     } else {
         p->stall_since = 0;
     }
-    bool pictures_done = os64_media_pictures_finished(&p->decoded) && os64_media_pictures_count(&p->ready) == 0;
-    bool sound_done = !p->has_sound || os64_media_queue_finished(&p->pcm);
+    // The end: every picture shown (none in a queue or being converted) and
+    // every frame of sound given to the device (none in a write's tail).
+    bool pictures_done = os64_media_pictures_finished(&p->decoded) && os64_media_pictures_count(&p->ready) == 0 &&
+                         !p->converting;
+    bool sound_done = !p->has_sound || (os64_media_queue_finished(&p->pcm) && p->carry_frames == 0);
     if (pictures_done && sound_done) {
         int64_t end = -1;
         if (p->shown != 0) {
@@ -1327,9 +1362,17 @@ static bool counts_hold(player_t *p, const char *name)
             ok = false;
         }
     }
-    if (p->has_sound && !p->muted && !p->refused && p->pcm_written + p->pcm_dropped != p->pcm_pushed) {
+    // Every frame of sound decoded was written or let go for a reason that
+    // counted it (a seek, a mute, a refusal, a failed write, a tail).
+    if (p->has_sound && p->pcm_written + p->pcm_dropped != p->pcm_pushed) {
         os64_printf("gplay: check: sound decoded %lu, written %lu, let go %lu\n", (unsigned long)p->pcm_pushed,
                     (unsigned long)p->pcm_written, (unsigned long)p->pcm_dropped);
+        ok = false;
+    }
+    if (s_expect_refusal && (p->refusals == 0 || p->refused || p->pcm_written == 0)) {
+        os64_printf("gplay: check: wanted the device refused and then regained (refusals %lu, refused now %d, "
+                    "written %lu)\n",
+                    (unsigned long)p->refusals, p->refused, (unsigned long)p->pcm_written);
         ok = false;
     }
     return ok;
@@ -1345,6 +1388,10 @@ int main(int argc, char **argv)
             s_exit_at_end = true;
         else if (os64_strcmp(argv[first], "--check") == 0)
             s_check = s_exit_at_end = true;
+        else if (os64_strcmp(argv[first], "--expect-refusal") == 0)
+            s_expect_refusal = true;
+        else if (os64_strcmp(argv[first], "--maximized") == 0)
+            s_maximized = true;
         else if (os64_strcmp(argv[first], "--cover") == 0)
             s_cover = true;
         else if (os64_strcmp(argv[first], "--script") == 0 && first + 1 < argc)
@@ -1354,7 +1401,8 @@ int main(int argc, char **argv)
         first++;
     }
     if (first != argc - 1) {
-        os64_printf("usage: gplay [--exit-at-end] [--check] [--cover] [--script steps] file\n");
+        os64_printf("usage: gplay [--exit-at-end] [--maximized] [--check [--expect-refusal]] [--cover] "
+                    "[--script steps] file\n");
         return 1;
     }
     const char *path = argv[first];
@@ -1394,7 +1442,9 @@ int main(int argc, char **argv)
     uint32_t w, h;
     gplay_first_size(p->info.width, p->info.height, sw, sh, MARGIN, &w, &h);
     int32_t x = sw > w ? (int32_t)(sw - w) / 2 : 0, y = sh > h ? (int32_t)(sh - h) / 2 : 0;
-    p->win = os64_gui_window_create_content(name, x, y, w, h, OS64_GUI_CREATE_FIT_SCREEN);
+    p->win = os64_gui_window_create_content(name, x, y, w, h,
+                                            OS64_GUI_CREATE_FIT_SCREEN |
+                                                (s_maximized ? OS64_GUI_CREATE_MAXIMIZED : 0));
     if (p->win <= 0 || os64_draw_ctx_init(&v.ctx, p->win) != 0) {
         os64_printf(p->win == OS64_GUI_ERR_NOT_RUNNING ? "gplay: no desktop on this boot\n"
                                                        : "gplay: the window would not open\n");

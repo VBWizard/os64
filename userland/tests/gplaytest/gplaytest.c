@@ -10,7 +10,10 @@
 //   3. a file with no sound (bbb-480p-3s.mp4) plays on the monotonic clock;
 //   4. a file with no picture (audio-tone.mp3) is refused with exit 2;
 //   5. the sync clip with a script of keys: pause and resume, a seek each
-//      way, mute and unmute, a resize, the readout, the sync dial both ways.
+//      way, mute and unmute, a resize, the readout, the sync dial both ways;
+//   6. the sync clip with /dev/audio held by `play` at the start: gplay is
+//      refused, plays on the monotonic clock, tries again and gets it
+//      (--expect-refusal).
 //
 // Timing is no result here: under QEMU's emulation the pictures fall behind
 // and are dropped, skipped and resynced, which is the late policy working.
@@ -95,7 +98,24 @@ static int steps(void)
         return r;
     char *script = "300:pause,900:pause,1500:forward,2200:back,2700:mute,3300:mute,3800:resize=480x270,"
                    "4300:readout,4600:later,4700:earlier,5200:pause,5500:resize=640x360,5900:pause";
-    return expect(5, (char *[]){"/bin/gplay", "--check", "--script", script, SYNC, 0}, 0);
+    if ((r = expect(5, (char *[]){"/bin/gplay", "--check", "--script", script, SYNC, 0}, 0)) != 0)
+        return r;
+    // The device busy at the start: play holds it for its two seconds, and
+    // gplay plays on the monotonic clock, tries again, and gets it.
+    int64_t quiet = os64_open("/dev/null", "w");
+    int64_t holder = os64_spawn_redirected("/bin/play", (char *[]){"/bin/play", SOUND_ONLY, 0}, -1,
+                                           (int32_t)quiet, (int32_t)quiet, 0);
+    if (quiet >= 0)
+        os64_close((int32_t)quiet);
+    if (holder < 0) {
+        os64_printf("gplaytest: FAIL step 6: play would not start\n");
+        return (int)STEP(6);
+    }
+    os64_sleep(300);   // play has the device
+    r = expect(6, (char *[]){"/bin/gplay", "--check", "--expect-refusal", SYNC, 0}, 0);
+    int32_t code = 0;
+    os64_wait(holder, &code);
+    return r;
 }
 
 int main(void)

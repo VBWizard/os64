@@ -200,9 +200,11 @@ calls.
 **As built in the standalone player (V4, `/bin/gplay`).** The four threads
 above, plus a keys thread owning the `/dev/mediakeys` session, under ONE
 lock never held across a libmedia call, a conversion, a device call or a
-window call; pictures to release are collected under it and released
-after. What the player adds to the table, each proven by `/tests/gplaytest`
-(Fable's changes to the tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
+window call that draws or waits (the window's doorbell, which never
+blocks, is rung under it, as bells are); pictures to release are
+collected under it and released after. What the player adds to the
+table, most of it proven by `/tests/gplaytest` (Fable's changes to the
+tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
 
 - **A covered window keeps the sound playing.** It is answered no frames,
   so with no answer for 100 ms the audio thread rings the window and main
