@@ -1,0 +1,163 @@
+# Let a profiler's ledger observe the engine: an optional owner-thread hook pair around
+# each C-function-with-data invocation, each call into script from C (JS_Call,
+# JS_CallConstructor(2), JS_EvalFunction) and each cycle collection. Unobserved, one
+# pointer test per site. JS_CallConstructor shares JS_CallConstructor2's door.
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -489,6 +489,23 @@
+     JSContext *defining;
+ } JSNativeCallContexts;
+ JS_BOOL JS_GetNativeCallContexts(JSRuntime *rt, JSNativeCallContexts *out);
++/* Owner-thread timing observer, for a profiler's ledger. Each pair brackets:
++   native, a C-function-with-data invocation (the function and magic it was
++   made with); script, a call into script from C through JS_Call,
++   JS_CallConstructor, JS_CallConstructor2 or JS_EvalFunction; collector, a
++   cycle collection. Pairs nest and always close in order, also when the
++   bracketed work throws. A hook must not call into the engine. A null hooks
++   pointer removes the observer; hooks and opaque must outlive its
++   installation. Unobserved, each site costs one pointer test. */
++typedef struct JSLedgerHooks {
++    void (*native_enter)(void *opaque, JSCFunctionData *func, int magic);
++    void (*native_leave)(void *opaque);
++    void (*script_enter)(void *opaque);
++    void (*script_leave)(void *opaque);
++    void (*collector_enter)(void *opaque);
++    void (*collector_leave)(void *opaque);
++} JSLedgerHooks;
++void JS_SetLedgerHooks(JSRuntime *rt, const JSLedgerHooks *hooks, void *opaque);
+ /* Trusted owner-thread scope. entry and optional callback incumbent must stay
+    alive through body and belong to the same runtime. A non-null incumbent
+    selects callback preparation (including suppression of the caller's script
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -405,6 +405,8 @@
+     JSShape **shape_hash;
+     void *user_opaque;
+     const JSNativeCallContexts *native_call_contexts;
++    const JSLedgerHooks *ledger_hooks;
++    void *ledger_opaque;
+     struct JSSettingsFrame *settings_script_frame;
+     JSContext *settings_entry;
+     JSContext *settings_backup;
+@@ -3351,6 +3353,12 @@
+     return ctx->rt;
+ }
+ 
++void JS_SetLedgerHooks(JSRuntime *rt, const JSLedgerHooks *hooks, void *opaque)
++{
++    rt->ledger_hooks = hooks;
++    rt->ledger_opaque = hooks ? opaque : NULL;
++}
++
+ JS_BOOL JS_GetNativeCallContexts(JSRuntime *rt, JSNativeCallContexts *out)
+ {
+     if (!out)
+@@ -6775,7 +6783,15 @@
+     rt->native_call_contexts = &contexts;
+     rt->native_caller_context = previous_current;
+     rt->settings_current = s->realm;
+-    result = s->func(ctx, this_val, argc, arg_buf, s->magic, s->data);
++    if (unlikely(rt->ledger_hooks != NULL)) {
++        const JSLedgerHooks *hooks = rt->ledger_hooks;
++        void *opaque = rt->ledger_opaque;
++        hooks->native_enter(opaque, s->func, s->magic);
++        result = s->func(ctx, this_val, argc, arg_buf, s->magic, s->data);
++        hooks->native_leave(opaque);
++    } else {
++        result = s->func(ctx, this_val, argc, arg_buf, s->magic, s->data);
++    }
+     rt->settings_current = previous_current;
+     rt->native_caller_context = previous_caller;
+     rt->native_call_contexts = previous;
+@@ -7573,6 +7589,10 @@
+ static void JS_RunGCInternal(JSRuntime *rt, BOOL remove_weak_objects)
+ {
+     const BOOL tracking = rt->execution_scope_tracking;
++    const JSLedgerHooks *hooks = rt->ledger_hooks;
++    void *opaque = rt->ledger_opaque;
++    if (unlikely(hooks != NULL))
++        hooks->collector_enter(opaque);
+     if (tracking)
+         rt->recovery_gc_depth++;
+     if (remove_weak_objects) {
+@@ -7593,6 +7613,8 @@
+     gc_free_cycles(rt);
+     if (tracking)
+         rt->recovery_gc_depth--;
++    if (unlikely(hooks != NULL))
++        hooks->collector_leave(opaque);
+ }
+ 
+ void JS_RunGC(JSRuntime *rt)
+@@ -21750,8 +21772,18 @@
+ JSValue JS_Call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_obj,
+                 int argc, JSValueConst *argv)
+ {
+-    return JS_CallInternal(ctx, func_obj, this_obj, JS_UNDEFINED,
+-                           argc, (JSValue *)argv, JS_CALL_FLAG_COPY_ARGV);
++    JSRuntime *rt = ctx->rt;
++    const JSLedgerHooks *hooks = rt->ledger_hooks;
++    void *opaque = rt->ledger_opaque;
++    JSValue result;
++    if (likely(hooks == NULL))
++        return JS_CallInternal(ctx, func_obj, this_obj, JS_UNDEFINED,
++                               argc, (JSValue *)argv, JS_CALL_FLAG_COPY_ARGV);
++    hooks->script_enter(opaque);
++    result = JS_CallInternal(ctx, func_obj, this_obj, JS_UNDEFINED,
++                             argc, (JSValue *)argv, JS_CALL_FLAG_COPY_ARGV);
++    hooks->script_leave(opaque);
++    return result;
+ }
+ 
+ static JSValue JS_CallFree(JSContext *ctx, JSValue func_obj, JSValueConst this_obj,
+@@ -21998,17 +22030,26 @@
+                             JSValueConst new_target,
+                             int argc, JSValueConst *argv)
+ {
+-    return JS_CallConstructorInternal(ctx, func_obj, new_target,
+-                                      argc, (JSValue *)argv,
+-                                      JS_CALL_FLAG_COPY_ARGV);
++    JSRuntime *rt = ctx->rt;
++    const JSLedgerHooks *hooks = rt->ledger_hooks;
++    void *opaque = rt->ledger_opaque;
++    JSValue result;
++    if (likely(hooks == NULL))
++        return JS_CallConstructorInternal(ctx, func_obj, new_target,
++                                          argc, (JSValue *)argv,
++                                          JS_CALL_FLAG_COPY_ARGV);
++    hooks->script_enter(opaque);
++    result = JS_CallConstructorInternal(ctx, func_obj, new_target,
++                                        argc, (JSValue *)argv,
++                                        JS_CALL_FLAG_COPY_ARGV);
++    hooks->script_leave(opaque);
++    return result;
+ }
+ 
+ JSValue JS_CallConstructor(JSContext *ctx, JSValueConst func_obj,
+                            int argc, JSValueConst *argv)
+ {
+-    return JS_CallConstructorInternal(ctx, func_obj, func_obj,
+-                                      argc, (JSValue *)argv,
+-                                      JS_CALL_FLAG_COPY_ARGV);
++    return JS_CallConstructor2(ctx, func_obj, func_obj, argc, argv);
+ }
+ 
+ JSValue JS_Invoke(JSContext *ctx, JSValueConst this_val, JSAtom atom,
+@@ -38655,7 +38696,16 @@
+ 
+ JSValue JS_EvalFunction(JSContext *ctx, JSValue fun_obj)
+ {
+-    return JS_EvalFunctionInternal(ctx, fun_obj, js_global_this(ctx), NULL, NULL);
++    JSRuntime *rt = ctx->rt;
++    const JSLedgerHooks *hooks = rt->ledger_hooks;
++    void *opaque = rt->ledger_opaque;
++    JSValue result;
++    if (likely(hooks == NULL))
++        return JS_EvalFunctionInternal(ctx, fun_obj, js_global_this(ctx), NULL, NULL);
++    hooks->script_enter(opaque);
++    result = JS_EvalFunctionInternal(ctx, fun_obj, js_global_this(ctx), NULL, NULL);
++    hooks->script_leave(opaque);
++    return result;
+ }
+ 
+ /* 'input' must be zero terminated i.e. input[input_len] = '\0'. */

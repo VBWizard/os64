@@ -1,0 +1,79 @@
+# Report the bytecode function at a depth of the stack (identity, name, defining file,
+# line and column) without allocating, for a sampling profiler inside the interrupt
+# handler; a native frame reports "[native]".
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -506,6 +506,21 @@
+     void (*collector_leave)(void *opaque);
+ } JSLedgerHooks;
+ void JS_SetLedgerHooks(JSRuntime *rt, const JSLedgerHooks *hooks, void *opaque);
++/* What runs at a depth of the stack, for a sampling profiler: depth 0 is the
++   innermost frame, each step its caller. A bytecode function is reported by
++   its identity (valid only while it lives, and only as a table key), its
++   name and the file, line and column it was defined at; a native frame by
++   function NULL and name "[native]". Owner thread; no allocation, exception
++   or refcount change, so it may run inside the interrupt handler. Returns
++   false and clears out past the outermost frame or for a null argument. */
++typedef struct JSFrameLocation {
++    const void *function;
++    char name[64];
++    char file[128];
++    int line;
++    int column;
++} JSFrameLocation;
++JS_BOOL JS_GetFrameLocation(JSContext *ctx, int depth, JSFrameLocation *out);
+ /* Trusted owner-thread scope. entry and optional callback incumbent must stay
+    alive through body and belong to the same runtime. A non-null incumbent
+    selects callback preparation (including suppression of the caller's script
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -8322,6 +8322,49 @@
+     return 0;
+ }
+ 
++/* An atom's text into buf: JS_AtomGetStrRT answers an ASCII atom with its
++   own bytes and writes buf only otherwise. */
++static void js_frame_location_text(JSRuntime *rt, char *buf, int buf_size, JSAtom atom)
++{
++    const char *text = JS_AtomGetStrRT(rt, buf, buf_size, atom);
++    if (text != buf)
++        pstrcpy(buf, buf_size, text);
++}
++
++JS_BOOL JS_GetFrameLocation(JSContext *ctx, int depth, JSFrameLocation *out)
++{
++    JSStackFrame *sf;
++    if (!out)
++        return FALSE;
++    memset(out, 0, sizeof(*out));
++    if (!ctx || depth < 0)
++        return FALSE;
++    sf = ctx->rt->current_stack_frame;
++    while (sf != NULL && depth-- > 0)
++        sf = sf->prev_frame;
++    if (sf == NULL)
++        return FALSE;
++    if (JS_VALUE_GET_TAG(sf->cur_func) == JS_TAG_OBJECT) {
++        JSObject *p = JS_VALUE_GET_OBJ(sf->cur_func);
++        if (js_class_has_bytecode(p->class_id)) {
++            JSFunctionBytecode *b = p->u.func.function_bytecode;
++            int column = 0;
++            out->function = b;
++            if (b->func_name != JS_ATOM_NULL)
++                js_frame_location_text(ctx->rt, out->name, sizeof(out->name), b->func_name);
++            else
++                snprintf(out->name, sizeof(out->name), "<anonymous>");
++            js_frame_location_text(ctx->rt, out->file, sizeof(out->file),
++                                   b->has_debug ? b->debug.filename : b->source_name);
++            out->line = find_line_num(ctx, b, -1, &column);
++            out->column = column;
++            return TRUE;
++        }
++    }
++    snprintf(out->name, sizeof(out->name), "[native]");
++    return TRUE;
++}
++
+ /* return a string property without executing arbitrary JS code (used
+    when dumping the stack trace or in debug print). */
+ static const char *get_prop_string(JSContext *ctx, JSValueConst obj, JSAtom prop)

@@ -44,7 +44,7 @@ real_flags=(-std=gnu11 -O1 -g -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -I userland/libmath/include -I userland/libjs/port -I userland/libjs/include
     -I userland/libos64/include -I abi/include -isystem userland/obj/js/upstream
     -fsanitize=address,undefined -fno-sanitize-recover=all -DLIBJS_INTL_DIR='"userland/libjs/intl/"')
-for source in userland/libjs/runtime/runtime.c userland/libjs/runtime/owner_incarnation.c userland/libjs/runtime/owner_tickets.c userland/libjs/intl/intl.c userland/apps/js/js.c \
+for source in userland/libjs/runtime/runtime.c userland/libjs/runtime/ledger.c userland/libjs/runtime/owner_incarnation.c userland/libjs/runtime/owner_tickets.c userland/libjs/intl/intl.c userland/apps/js/js.c \
     userland/libos64/args.c userland/libos64/fmt.c userland/libos64/str.c \
     tools/test_js_port_calendar.c tools/test_js_cli_real.c; do
     extra=()

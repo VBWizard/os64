@@ -35,6 +35,7 @@
 #define CONF_MODERN "modern"
 #define CONF_SHADOW_DOM "shadow_dom"
 #define CONF_RANGES "ranges"
+#define CONF_LEDGER "ledger"
 #define CONF_PROFILE "profile"
 #define CONF_DOWNLOADS "downloads"
 #define CONF_COOKIES "cookies"
@@ -194,6 +195,15 @@ bool yonder_settings_saved_scripts(void)
     char value[8];
     return os64_conf_get(CONF_NAME, CONF_SCRIPTS, value, sizeof(value)) == 0 &&
            os64_streq(value, "on");
+}
+
+yonder_ledger_t yonder_settings_saved_ledger(void)
+{
+    char value[16];
+    if (os64_conf_get(CONF_NAME, CONF_LEDGER, value, sizeof(value)) != 0)
+        return YONDER_LEDGER_OFF;
+    return os64_streq_nocase(value, "profile") ? YONDER_LEDGER_PROFILE
+         : os64_streq_nocase(value, "on") ? YONDER_LEDGER_ON : YONDER_LEDGER_OFF;
 }
 
 uint32_t yonder_settings_saved_script_seconds(void)

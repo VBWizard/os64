@@ -606,6 +606,11 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     if (os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID,
                                      &s->runtime, out) != OS64_JS_OK)
         return false;
+    // The ledger from the first compile on; one that cannot be had leaves
+    // the page unmeasured, never unrun.
+    if (s->options.ledger)
+        (void)os64_js_ledger_enable(s->runtime, s->options.ledger_profile ? OS64_JS_LEDGER_PROFILE : 0,
+                                    s->options.ledger_sample_ticks);
     /* The browser-settings constructor opens an installation task. Facilities
      * requiring an unused realm must be installed before that task begins. */
     if (s->options.browser_jobs &&
@@ -2226,6 +2231,34 @@ void yonder_scripts_census(yonder_scripts_t *s, yonder_census_sheet_t *sheet, bo
     int64_t began = os64_micros();
     sheet->script_known = os64_js_heap_census(s->runtime, &sheet->script);
     sheet->cost_us += (uint64_t)(os64_micros() - began);
+}
+
+bool yonder_scripts_ledger_running(const yonder_scripts_t *s)
+{
+    os64_js_ledger_totals_t totals;
+    return s != NULL && s->runtime != NULL && os64_js_ledger_totals(s->runtime, &totals) && totals.open != 0;
+}
+
+void yonder_scripts_ledger_layout(yonder_scripts_t *s, bool begin)
+{
+    if (s == NULL || s->runtime == NULL)
+        return;
+    if (begin)
+        os64_js_ledger_push(s->runtime, OS64_JS_LEDGER_LAYOUT);
+    else
+        os64_js_ledger_pop(s->runtime);
+}
+
+void yonder_scripts_ledger_reset(yonder_scripts_t *s)
+{
+    if (s != NULL && s->runtime != NULL)
+        os64_js_ledger_reset(s->runtime);
+}
+
+const os64_js_runtime_t *yonder_scripts_ledger(const yonder_scripts_t *s)
+{
+    os64_js_ledger_totals_t totals;
+    return s != NULL && s->runtime != NULL && os64_js_ledger_totals(s->runtime, &totals) ? s->runtime : NULL;
 }
 
 bool yonder_scripts_alive(const yonder_scripts_t *s)
