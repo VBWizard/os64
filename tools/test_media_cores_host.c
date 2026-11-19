@@ -188,6 +188,9 @@ static void clock_cases(void)
     CHECK(!os64_media_clock_heard(&c, g, 96480, 1 * SEC - 1, true, 1 * SEC + 150 * MS) &&
           os64_media_clock_state(&c, 1 * SEC + 150 * MS) == OS64_MEDIA_CLOCK_STARTING,
           "a report of sound heard before the play does not end its hold");
+    // A report is trusted for still_us; the slew's own arithmetic below
+    // reads seconds past one report, so it is trusted for longer here.
+    os64_media_clock_still(&c, 10 * SEC);
     // Frame 96000 + 480 heard at 1.21 s, reported at 1.22 s: the ear is 10 ms
     // past it then, so the reports say 96960 while the reading held 96000.
     CHECK(os64_media_clock_heard(&c, g, 96480, 1 * SEC + 210 * MS, true, 1 * SEC + 220 * MS),
@@ -198,9 +201,6 @@ static void clock_cases(void)
     CHECK(os64_media_clock_drift(&c, 1 * SEC + 220 * MS) == -960, "the difference is drift, behind the ear");
     CHECK(os64_media_clock_drift(&c, 1 * SEC + 220 * MS + 1) == -960, "drift in frames is rounded down");
     CHECK(c.start_wait_us == 220 * MS, "the start's wait for its first report, kept");
-    // A report is trusted for still_us; the slew's own arithmetic below
-    // reads seconds past this one report, so it is trusted for longer here.
-    os64_media_clock_still(&c, 10 * SEC);
     // 960 frames of drift (20 ms) at a twentieth down to 10 ms: 480 frames
     // worked off in 200 ms. The last 480 go at a 480th, in 4.8 s.
     CHECK(os64_media_clock_read(&c, 1 * SEC + 420 * MS) == 96000 + frames_in(200 * MS) * 21 / 20,
@@ -305,7 +305,7 @@ static void clock_cases(void)
     os64_media_clock_init(&c, OS64_MEDIA_CLOCK_MONOTONIC);
     CHECK(c.still_us == OS64_MEDIA_CLOCK_STILL_US, "a new clock's trust");
     os64_media_clock_still(&c, 0);
-    CHECK(c.still_us == 1, "a trust below 1 is 1");
+    CHECK(c.still_next == 1, "a trust below 1 is 1");
     os64_media_clock_still(&c, 80 * MS);
     os64_media_clock_play(&c, 0);
     os64_media_clock_source(&c, OS64_MEDIA_CLOCK_HEARD, 1 * SEC);
@@ -313,7 +313,7 @@ static void clock_cases(void)
     CHECK(os64_media_clock_state(&c, 1 * SEC + 80 * MS) == OS64_MEDIA_CLOCK_FOLLOWING &&
               os64_media_clock_read(&c, 1 * SEC + 80 * MS) == 48000 + frames_in(80 * MS),
           "within its trust: following, at real time");
-    CHECK(os64_media_clock_state(&c, 1 * SEC + 80 * MS + 1) == OS64_MEDIA_CLOCK_STARVED &&
+    CHECK(os64_media_clock_state(&c, 1 * SEC + 80 * MS + 1) == OS64_MEDIA_CLOCK_STILL &&
               os64_media_clock_read(&c, 1 * SEC + 500 * MS) == 48000 + frames_in(80 * MS),
           "past it: the ear is taken as stopped, the reading holds");
     // The ear moved again at 1.3 s, from where it stopped at 1.0 s: the
@@ -325,9 +325,15 @@ static void clock_cases(void)
               os64_media_clock_drift(&c, 1 * SEC + 310 * MS) == frames_in(70 * MS),
           "following again from where it held: 70 ms ahead of the ear");
     CHECK(c.report_ages[5] == 1, "the report it replaced was 310 ms old: over 120 ms");
-    // A trust set while following applies at once.
+    // A trust set while following applies from the next report: a shorter
+    // one applied to a reading already held would move it back.
+    int64_t still_held = os64_media_clock_read(&c, 1 * SEC + 500 * MS);
     os64_media_clock_still(&c, 10 * MS);
-    CHECK(os64_media_clock_state(&c, 1 * SEC + 321 * MS) == OS64_MEDIA_CLOCK_STARVED, "a new trust applies at once");
+    CHECK(os64_media_clock_read(&c, 1 * SEC + 500 * MS) == still_held && c.still_us == 80 * MS,
+          "a new trust does not move a held reading");
+    os64_media_clock_heard(&c, 0, 48000 + frames_in(200 * MS), 1 * SEC + 500 * MS, true, 1 * SEC + 500 * MS);
+    CHECK(c.still_us == 10 * MS && os64_media_clock_state(&c, 1 * SEC + 511 * MS) == OS64_MEDIA_CLOCK_STILL,
+          "the next report takes it");
 
     // A whole second ahead of the ear: the reading holds until the ear is
     // within the bound (0.9 s), then the slew takes the last 100 ms.
@@ -427,7 +433,7 @@ static void play_storm(const sound_t *s, int64_t end_frame, int64_t *worst_ahead
         if (r - ear > *worst_ahead)
             *worst_ahead = r - ear;
         if (os64_media_clock_state(c, t) == OS64_MEDIA_CLOCK_FOLLOWING ||
-            os64_media_clock_state(c, t) == OS64_MEDIA_CLOCK_STARVED) {
+            os64_media_clock_state(c, t) == OS64_MEDIA_CLOCK_STILL) {
             // Within the bound, except while held ahead after a gap let the
             // reading run the trust past where the ear stopped.
             int64_t d = os64_media_clock_drift(c, t);
@@ -508,12 +514,13 @@ static void clock_random(int rounds)
                 CHECK(r - r0 >= real - 1 && r - r0 <= real + 1, "round %d: monotonic is real time", round);
             if (state == OS64_MEDIA_CLOCK_FOLLOWING && t <= trusted_until && t0 >= slewing_from)
                 CHECK(r - r0 >= real - real / 20 - 2, "round %d: ran slower than the slew", round);
-            if (state == OS64_MEDIA_CLOCK_FOLLOWING || state == OS64_MEDIA_CLOCK_STARVED) {
+            if (state == OS64_MEDIA_CLOCK_FOLLOWING || state == OS64_MEDIA_CLOCK_STILL) {
                 int64_t d = os64_media_clock_drift(&c, t);
                 CHECK(d >= -4801 && (d <= 4801 || t < slewing_from), "round %d: %lld frames from the ear's view",
                       round, (long long)d);
             }
-            if (state == OS64_MEDIA_CLOCK_PAUSED || state == OS64_MEDIA_CLOCK_STARVED)
+            if (state == OS64_MEDIA_CLOCK_PAUSED || state == OS64_MEDIA_CLOCK_STARVED ||
+                state == OS64_MEDIA_CLOCK_STILL)
                 CHECK(r == r0, "round %d: a hold moved", round);
         }
         now += step;

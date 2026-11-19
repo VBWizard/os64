@@ -236,9 +236,13 @@ tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
   any other state is reported as stopped at once (a wait refuses it, so
   a start keeps its protection). An ear that stops while PLAYING (a sink
   no longer pulling, or pulling late) is the clock's to notice, by the
-  report's trust (§ 4): gplay derives it as the pump's packet (13.3 ms),
-  its pass up to a tick late (10 ms), the audio thread's write (20 ms)
-  and the period main reads ahead (16.7 ms), plus 20 ms: 80 ms at 60 Hz.
+  report's trust (§ 4), whose state is STILL. gplay counts a still ear as
+  a stalled sink (refused after a second), whatever its queues hold: at
+  the end the sound the device still holds is still to come, so the clock
+  goes monotonic only on a device that has said it stopped (starved).
+  gplay derives the trust as the pump's packet (13.3 ms), its pass up to
+  a tick late (10 ms), the audio thread's write (20 ms) and the period
+  main reads ahead (16.7 ms), plus 20 ms: 80 ms at 60 Hz.
   The readout's `ear:` and `report ages:` lines say how often it held,
   how often the bound fired, how long the start's first report took, and
   how old reports grew, so the trust can be checked against a P5 run.
@@ -289,17 +293,17 @@ at its own moment); a picture taken on it is simply gone.
 | any running | pause | frozen at its reading then | paused |
 | any | seek to `m` | `m` exactly; generation + 1, reports forgotten | paused stays paused; else starting (heard) or running |
 | **starting** | (the hold's bound passes, no advancing report) | runs at real time from where it held, so a silent device never freezes the picture | starting, late (counted at its end) |
-| **starting** | advancing report, current generation | unchanged; the difference from the ear becomes drift | following |
+| **starting** | advancing report, current generation | unchanged; the difference from the ear becomes drift, the bound applied (rows below) | following |
 | starting, awaiting | report not advancing, or of sound heard before the wait began | unchanged (refused) | same |
 | running | source → heard (unmute) | unchanged, and keeps running: a picture already moving does not stop | **awaiting** |
-| awaiting | advancing report | unchanged; the difference becomes drift | following |
+| awaiting | advancing report | unchanged; the difference becomes drift, the bound applied | following |
 | **following** | (reading) | the ear's view (`H` + the wall time since `Th`) plus the drift, worked toward 0 | |
-| following | (the last report older than its trust, still_us past `Th`) | holds where that left it, drift and all: the ear is taken as stopped; the state reads starved | following |
+| following | (the last report older than its trust, still_us past `Th`) | holds where that left it, drift and all: the ear is taken as stopped; the state reads **still** (a device that stopped says so at once, and is starved) | following |
 | following | advancing report, the reading within the bound of the new view | unchanged at that moment; drift recomputed against the new report | following |
 | following | advancing report, the reading more than the bound AHEAD | holds until the ear is within the bound, then the slew (counted once a hold) | following |
 | following | advancing report, the reading more than the bound BEHIND | steps forward to the bound behind (the pace drops what it passes; counted) | following |
 | following | report not advancing (the sound ran dry, or was held) | frozen, drift and all: the sound is the master | **starved** |
-| starved | advancing report | carries on from where it froze; the difference becomes drift | following |
+| starved | advancing report | carries on from where it froze; the difference becomes drift, the bound applied | following |
 | starved | source → monotonic | carries on from where it froze, at real time | running |
 | any heard | source → monotonic (mute, sound refused or ended) | unchanged | running |
 | paused | source → either | unchanged; takes effect at play | paused |

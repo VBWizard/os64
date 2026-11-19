@@ -929,7 +929,7 @@ static void readout_lines(player_t *p, char lines[][96], uint32_t *count, int64_
     gplay_time_text(at, t, sizeof(t));
     gplay_time_text(p->length, len, sizeof(len));
     static const char *const clock_name[] = {"paused", "monotonic", "starting", "starting late", "awaiting",
-                                             "following", "starved"};
+                                             "following", "starved", "still"};
     static const char *const pace_name[] = {"on time", "decoding late", "far behind"};
     int cs = os64_media_clock_state(&p->clock, now);
     int64_t drift = os64_media_clock_drift(&p->clock, now);
@@ -1228,11 +1228,17 @@ static void service(player_t *p, int64_t now)
     if (p->state != ST_PLAYING)
         return;
     int cs = os64_media_clock_state(&p->clock, now);
-    // A STALLED sink: sound queued and the ear not advancing (starved), or a
-    // start whose hold ran out with nothing heard at all (starting late:
-    // its bound was already the sink's delay plus a margin).
+    // A STALLED sink: sound queued and the ear not advancing (starved), an
+    // ear not heard to move past its report's trust (still: a stopped device
+    // reports itself starved at once, so a still ear is a sink pulling late
+    // or not at all, whatever the queues hold, and at the end the sound the
+    // device still holds is still to come), or a start whose hold ran out
+    // with nothing heard at all (starting late: its bound was already the
+    // sink's delay plus a margin).
     bool stalled = false;
-    if (cs == OS64_MEDIA_CLOCK_STARVED) {
+    if (cs == OS64_MEDIA_CLOCK_STILL) {
+        stalled = true;
+    } else if (cs == OS64_MEDIA_CLOCK_STARVED) {
         if (os64_media_queue_finished(&p->pcm)) {
             // The sound has ended and the picture goes on.
             os64_media_clock_source(&p->clock, OS64_MEDIA_CLOCK_MONOTONIC, now);

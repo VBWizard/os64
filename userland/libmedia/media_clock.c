@@ -152,6 +152,7 @@ void os64_media_clock_init(os64_media_clock_t *c, int source)
     c->source = source == OS64_MEDIA_CLOCK_HEARD ? OS64_MEDIA_CLOCK_HEARD : OS64_MEDIA_CLOCK_MONOTONIC;
     c->hold_us = OS64_MEDIA_CLOCK_START_HOLD_US;
     c->still_us = OS64_MEDIA_CLOCK_STILL_US;
+    c->still_next = OS64_MEDIA_CLOCK_STILL_US;
 }
 
 void os64_media_clock_hold(os64_media_clock_t *c, int64_t us)
@@ -161,7 +162,7 @@ void os64_media_clock_hold(os64_media_clock_t *c, int64_t us)
 
 void os64_media_clock_still(os64_media_clock_t *c, int64_t us)
 {
-    c->still_us = us > 0 ? us : 1;
+    c->still_next = us > 0 ? us : 1;
 }
 
 // How old the last report had grown when the next replaced it, by bucket.
@@ -257,6 +258,9 @@ bool os64_media_clock_heard(os64_media_clock_t *c, uint32_t generation, int64_t 
     }
     leave_start(c, now);
     int64_t was = reading(c, now);
+    // A new trust starts with a new report: applied to the old one, a
+    // shorter trust would move a reading already held back in time.
+    c->still_us = c->still_next;
     c->heard = frame * UNITS_PER_FRAME;
     c->heard_wall = frame_wall;
     int64_t d = was - heard_view(c, now);
@@ -302,7 +306,7 @@ int os64_media_clock_state(const os64_media_clock_t *c, int64_t t)
     case MODE_AWAITING:
         return OS64_MEDIA_CLOCK_AWAITING;
     case MODE_FOLLOWING:
-        return ear_stopped(c, at_or_after(c, t)) ? OS64_MEDIA_CLOCK_STARVED : OS64_MEDIA_CLOCK_FOLLOWING;
+        return ear_stopped(c, at_or_after(c, t)) ? OS64_MEDIA_CLOCK_STILL : OS64_MEDIA_CLOCK_FOLLOWING;
     case MODE_STARVED:
         return OS64_MEDIA_CLOCK_STARVED;
     default:
