@@ -126,6 +126,9 @@ static const fixture_t kFixtures[] = {
     { "/tests/mediakeystest",   NULL, 0x3E4B0000,  0x3E4B00FE,        "the media keys: the rule (playing, most recently active, the toggle), a full ring passed over, BUSY, a press, a signal and a close end a parked read, the kernel's answer, a killed session, the wall" },
     { "/tests/resampletest",    NULL, 0x5A3E0000,  0,          "libsound's resampler: a sine at 44.1 kHz comes out the same sine at 48, and back, and mono" },
     { "/tests/playtest",        NULL, 0x91A10000,  0x91A100FE,        "/bin/play end to end at the tap: a 44.1 kHz mono WAV is the same sine at 48, a 48 kHz one arrives sample for sample, bad files are refused, an MP3 is heard whole" },
+    // gplaytest reports 0x6F1A00FE on a boot with no desktop, or with a
+    // sink that can be heard: the line it prints says which.
+    { "/tests/gplaytest",       NULL, 0x6F1A0000,  0x6F1A00FE,        "/bin/gplay end to end: a video plays to its end with every frame of sound accounted for, covered for the whole clip too, a silent file, a soundless one refused, a script of keys (pause, seeks, mute, resizes, the readout, the sync dial)" },
     { "/tests/avtest",          NULL, 0xA7E50000,  0,          "libav.so (FFmpeg): an MP3 in memory probes, its tag reads, it decodes to one second of the same sine and seeks; a WAV decodes sample for sample; noise is refused; an MP4 with a picture yields its AAC sound" },
     { "/tests/mediatest",       NULL, 0x3ED10000,  0,          "libmedia.so: MP3 and WAV to 48 kHz stereo on the media's timeline, exact seeks, a 5.1 fold, an unseekable source, noise refused, two threads at once; its type answers; an MP4's sound" },
     { "/tests/avbench",         argv_avbench_auto, 0xAB0C0000, 0, "libav.so's H.264 decoder: 30 frames of Big Buck Bunny give the host's CRC with the routines FFmpeg chose for this CPU" },

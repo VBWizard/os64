@@ -197,6 +197,50 @@ the SOUND dry. `tools/test_media_picture_host.sh` check 12 is the proof.
 shim) replace nothing here; they would live inside the decoder thread's
 calls.
 
+**As built in the standalone player (V4, `/bin/gplay`).** The four threads
+above, plus a keys thread owning the `/dev/mediakeys` session, under ONE
+lock never held across a libmedia call, a conversion, a device call or a
+window call that draws or waits (the window's doorbell, which never
+blocks, is rung under it, as bells are); pictures to release are
+collected under it and released after. What the player adds to the
+table, most of it proven by `/tests/gplaytest` (Fable's changes to the
+tables sent, `~/os64-opus-kit/VIDEO_V4_TABLES.md`):
+
+- **A covered window keeps the sound playing.** It is answered no frames,
+  so with no answer for 100 ms the audio thread rings the window and main
+  retires overdue pictures by the clock without publishing; the queues
+  keep moving. Their conversions are wasted (DEBTS).
+- **Nothing reaches the device before the clock plays**: after an open or
+  a seek the picture's run-in from a keyframe can take most of a second,
+  and sound heard against a held picture would be a lip-sync error.
+- **Buffering is a state**: after the open, a seek while playing, or the
+  sound queue running dry, the clock is paused and nothing is written,
+  until a picture is ready and half a second of sound is queued (twice
+  the pace's floor, so leaving buffering never opens the far-behind door
+  at once). A sink stalled for a second (it stops advancing with sound
+  queued, or a start, an unmute or a regained device hears nothing
+  within a start's hold bound) is a refused device instead: monotonic,
+  retried every two seconds.
+  Monotonic is for sound that cannot be had, never for sound that is late.
+- **A resize while paused or ended converts the shown picture again**:
+  each converted frame keeps its decoded picture until it is retired, so
+  up to 12 decoded pictures are held where the queue alone would hold 8.
+  Mid-play, frames already converted are drawn at their own size,
+  centred, until the new size arrives (at most three).
+- **GOT_END ends the kinds asked for**: asked for sound alone, the end of
+  the sound leaves pictures listed, so each kind ends on its own.
+- **A report is advancing only when the ear has moved.** The stream says
+  PLAYING once its ring holds sound, but `heard` stays put until the
+  sink's delay has passed (after a start, a seek's flush, a resume), so
+  a PLAYING stream whose ear has not moved sends the clock nothing,
+  until an ear that was moving has stood still for 200 ms: that is a
+  sink that stopped pulling, reported as stopped (a wait refuses it, so
+  a start keeps its protection). Buffering also waits until the sink's
+  delay has been read, since the start's hold bound is made from it. A
+  stream generation the player did not start (a sink attached or
+  detached) is treated as a flush: the player begins again from the
+  clock's reading.
+
 ## 4. The clock
 
 An element's time comes from the audio position today, and a file with no
@@ -221,8 +265,13 @@ already taken off; the clock does no delay arithmetic) and MONOTONIC.
 A reading never moves backward and never steps, a seek excepted: it
 rises with `t`, an event leaves it where it was at the event's moment,
 and where the two views disagree the DRIFT is worked off by running a
-twentieth fast or slow (50 ms in a second), a constant to tune on the
-P5. A reading taken ahead, for a blank or a conversion's reach past the
+twentieth fast or slow (50 ms in a second) down to the last 10 ms, which
+go at a 480th (4.8 s). The P5 set the second rate: the headphones'
+reports scatter by up to a tick (each is stamped at the sink's pull,
+which waits for kusb's pass), and at a twentieth the reading swung with
+them enough to leave a hundred pictures a minute unshown at 1080p60,
+against six muted; a model of the scatter gave 114 and 5, and 6 to 10
+with the near rate. A reading taken ahead, for a blank or a conversion's reach past the
 next event, is a forecast that event may revise down (a starve freezes
 at its own moment); a picture taken on it is simply gone.
 
@@ -232,7 +281,7 @@ at its own moment); a picture taken on it is simply gone.
 | paused | play, monotonic | runs at real time from where it was | running |
 | any running | pause | frozen at its reading then | paused |
 | any | seek to `m` | `m` exactly; generation + 1, reports forgotten | paused stays paused; else starting (heard) or running |
-| **starting** | (a quarter second passes, no advancing report) | runs at real time from where it held, so a silent device never freezes the picture | starting, late (counted at its end) |
+| **starting** | (the hold's bound passes, no advancing report) | runs at real time from where it held, so a silent device never freezes the picture | starting, late (counted at its end) |
 | **starting** | advancing report, current generation | unchanged; the difference from the ear becomes drift | following |
 | starting, awaiting | report not advancing, or of sound heard before the wait began | unchanged (refused) | same |
 | running | source → heard (unmute) | unchanged, and keeps running: a picture already moving does not stop | **awaiting** |
@@ -245,6 +294,12 @@ at its own moment); a picture taken on it is simply gone.
 | any heard | source → monotonic (mute, sound refused or ended) | unchanged | running |
 | paused | source → either | unchanged; takes effect at play | paused |
 | any | report from an earlier generation | refused, counted | same |
+
+**The hold's bound is the player's** (`os64_media_clock_hold`): the first
+advancing report cannot come before the sink's delay has passed, so the
+bound is the larger of a quarter second and that delay plus 150 ms. The
+headphones' delay is about 150 ms and unmeasured, which a fixed quarter
+second would cut too close.
 
 **A starved hold lasts as long as the clock is told**: a fresh advancing
 report or the monotonic source ends it, and the PLAYER owns the rule
