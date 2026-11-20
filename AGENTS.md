@@ -43,9 +43,10 @@ The test: what breaks if a reader believes this? If the answer is nothing, it
 is not a finding.
 
 ### Track tasks beneath their slice
-When a tracked slice contains multiple tasks or more work is discovered,
-add visible child tasks beneath the parent using that tracker's supported
-format. Keep completed tasks and remaining tasks visible with their own
+When beginning a tracked slice, record its initial child task list beneath
+the parent using that tracker's supported format. When more work is discovered,
+add child tasks with an `ADDED YYYY-MM-DD` note explaining why they were added;
+do not present them as part of the original list. Keep completed tasks and remaining tasks visible with their own
 statuses and implementing PR references. Keep the parent's notes concise;
 do not accumulate the task history there. Update this breakdown as work is
 identified, not only at slice closeout. A completed task does not complete

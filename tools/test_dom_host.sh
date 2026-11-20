@@ -100,7 +100,7 @@ for line in sys.stdin:
     if line.startswith("MATH_OBJS="):
         print("\n".join(shlex.split(line.split("=",1)[1])[0].split()))
 ')
-cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack -Wl,--wrap=d_location_exotic_install userland/obj/js/core.o \
+cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack -Wl,--wrap=d_location_exotic_install -Wl,--wrap=d_window_named_prototype userland/obj/js/core.o \
     "${maths[@]}" "${objects[@]}" -o "$work/target-core-probe"
 engine_flags=("${flags[@]}" -U__linux__ -Iuserland/libjs/port/compat
     '-DCONFIG_VERSION="2026-06-04"' -Wno-unused-parameter -Wno-sign-compare
@@ -116,7 +116,7 @@ for name in allocator platform format; do
     cc "${flags[@]}" -c "userland/libjs/port/$name.c" -o "$object"
     engine+=("$object")
 done
-cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack -Wl,--wrap=d_location_exotic_install "${engine[@]}" \
+cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack -Wl,--wrap=d_location_exotic_install -Wl,--wrap=d_window_named_prototype "${engine[@]}" \
     "${maths[@]}" "${objects[@]}" -o "$work/sanitized-core-probe"
 for probe in target-core-probe sanitized-core-probe; do
     echo "DOM profile: $probe"

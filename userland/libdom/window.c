@@ -858,6 +858,16 @@ int d_window_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_method(dom, ctx, form_prototype, "submit", element_method, 0, A_SUBMIT) < 0 ||
         d_method(dom, ctx, form_prototype, "requestSubmit", element_method, 0, A_REQUEST_SUBMIT) < 0)
         return -1;
+    /* The private Window's [LegacyUnforgeable] Location accessor retains its
+     * PutForwards setter, but cannot be deleted or replaced by an author. */
+    if (dom->binding_origin) {
+        JSAtom key = JS_NewAtom(ctx, "location");
+        if (key == JS_ATOM_NULL) return -1;
+        int result = JS_DefineProperty(ctx, global, key, JS_UNDEFINED,
+            JS_UNDEFINED, JS_UNDEFINED, JS_PROP_HAS_CONFIGURABLE | JS_PROP_THROW);
+        JS_FreeAtom(ctx, key);
+        if (result < 0) return -1;
+    }
     if (d_method(dom, ctx, form_prototype, "reset", element_method, 0, A_RESET) < 0) return -1;
     return d_classic_install(dom, ctx, global);
 }
@@ -1914,6 +1924,7 @@ void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts,
 
 #include "location_exotic.inc"
 #include "window_proxy.inc"
+#include "window_names.inc"
 
 void d_window_free(os64_dom_t *dom)
 {
