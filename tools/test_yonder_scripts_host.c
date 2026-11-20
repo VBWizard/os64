@@ -51,6 +51,8 @@ void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height) { (vo
 bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out)
 { (void)m; memset(out, 0, sizeof(*out)); return false; }
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out) { (void)m; memset(out, 0, sizeof(*out)); }
+bool yonder_media_report(uint32_t i, char *out, size_t cap) { (void)i; (void)out; (void)cap; return false; }
+size_t yonder_media_seconds(double s, char *out, size_t cap) { (void)s; if (cap > 0) out[0] = '\0'; return 0; }
 int yonder_media_can_play(const char *type) { (void)type; return 0; }
 void yonder_media_reap(void) {}
 #ifdef OS64_JS_BYTECODE_ROUND_TRIP
