@@ -22,23 +22,33 @@
  *            it goes (layout drops the spaces at a line's ends)
  *
  * A row's last cell and a table's last row write no separator: the
- * separator is written after every one, and taken back when the row or
- * the table closes while it is still the last thing written (EDGEs aside).
- * So the walk needs no look-ahead, and costs what the subtree costs. */
+ * separator is written after every one, carrying the row or table it
+ * belongs to, and when that row or table closes its last separator is
+ * taken back. "Last" is a fact about boxes, not about what is visible: a
+ * cell or row that is rendered but hidden writes a SILENT separator, which
+ * counts as last and writes nothing, so the visible one before it keeps
+ * its own. A row or table marks where it opened, which bounds the search
+ * for its separator, so the walk needs no look-ahead and costs what the
+ * subtree costs (a caption after the rows sits between, and is passed
+ * over). */
 
 typedef enum { I_TEXT, I_SPACE, I_COUNT, I_BREAK, I_TAB, I_EDGE } ItemKind;
 
 typedef struct {
     uint8_t kind;
-    /* I_BREAK: whether it is a row's separator, which its table may take
-     * back. */
-    bool row;
+    /* I_TAB and a row's I_BREAK: writes nothing (a hidden cell's or row's,
+     * which still counts as last). */
+    bool silent;
     uint32_t count;                 /* I_COUNT */
     const char *text;               /* I_TEXT */
     size_t length;
+    /* A separator's row (I_TAB) or table (a row's I_BREAK), and an I_EDGE
+     * that marks where a row or table opened; NULL for any other item. */
+    const os64_html_node_t *owner;
 } Item;
 
 typedef struct {
+    const os64_html_document_t *doc;
     os64_dom_text_style_provider_t facts;
     void *opaque;
     const d_inner_text_memory_t *memory;
@@ -81,17 +91,34 @@ static void push(Walk *w, Item item)
     w->items[w->count++] = item;
 }
 
-/* Takes back the separator a closing row (a TAB) or table (a row's BREAK)
- * wrote last, EDGEs aside, which are nothing to the text. */
-static void take_back(Walk *w, ItemKind kind)
+/* Takes back `owner`'s last separator (a row's last TAB, a table's last
+ * row BREAK), searching back no further than the mark `owner` left when
+ * it opened (all the way, for an owner opened outside the walk). */
+static void take_back(Walk *w, ItemKind kind, const os64_html_node_t *owner)
 {
-    size_t at = w->count;
-    while (at > 0 && w->items[at - 1].kind == I_EDGE) at--;
-    if (at == 0) return;
-    const Item *last = &w->items[at - 1];
-    if (last->kind != kind || (kind == I_BREAK && !last->row)) return;
-    os64_memmove(&w->items[at - 1], &w->items[at], (w->count - at) * sizeof(Item));
-    w->count--;
+    if (owner == NULL) return;          /* a row with no table: no separator is its */
+    for (size_t at = w->count; at > 0; at--) {
+        const Item *item = &w->items[at - 1];
+        if (item->owner != owner) continue;
+        if (item->kind == I_EDGE) return;
+        if (item->kind != kind) continue;
+        os64_memmove(&w->items[at - 1], &w->items[at], (w->count - at) * sizeof(Item));
+        w->count--;
+        return;
+    }
+}
+
+/* The nearest ancestor of `node` whose display is `display`: a cell's row,
+ * a row's table. NULL when there is none (a box CSS would wrap in an
+ * anonymous one, which slice D's layout answers). */
+static const os64_html_node_t *enclosing(Walk *w, const os64_html_node_t *node, uint8_t display)
+{
+    for (const os64_html_node_t *up = node->parent; up != NULL && up->kind == OS64_HTML_ELEMENT; up = up->parent) {
+        os64_dom_text_style_t s;
+        if (!facts_of(w, up, &s)) return NULL;
+        if (s.display == display) return up;
+    }
+    return NULL;
 }
 
 static bool html_tag(const os64_html_node_t *node, os64_html_tag_t tag)
@@ -126,11 +153,11 @@ static bool line_feed(char c)
     return c == '\n' || c == '\r';
 }
 
-/* The required line break count an element's box writes at both edges, 0
- * for none. */
+/* The required line break count an element writes at both edges, 0 for
+ * none: a `p`'s 2 whatever its display (the standard's step 8), a
+ * block-level or table-caption box's 1. */
 static uint32_t edge_count(const os64_html_node_t *node, const os64_dom_text_style_t *s)
 {
-    if (s->display == OS64_DOM_TEXT_INLINE || s->display == OS64_DOM_TEXT_CONTENTS) return 0;
     if (html_tag(node, OS64_HTML_TAG_P)) return 2;
     return s->display == OS64_DOM_TEXT_BLOCK || s->display == OS64_DOM_TEXT_TABLE ||
         s->display == OS64_DOM_TEXT_TABLE_CAPTION ? 1 : 0;
@@ -141,25 +168,30 @@ static bool boxed(const os64_dom_text_style_t *s)
     return s->display != OS64_DOM_TEXT_INLINE && s->display != OS64_DOM_TEXT_CONTENTS;
 }
 
-/* A Text node under `parent`, as its white space says (§ 3.3). */
-static void text_items(Walk *w, const os64_html_node_t *text, const os64_html_node_t *parent)
+/* A Text node, as its white space says (§ 3.3). Its facts are its parent
+ * in the flat tree's, the element whose box holds it: a host's Text child
+ * that a slot takes inherits from the slot, and one no slot takes is in no
+ * flat tree and gives nothing. */
+static void text_items(Walk *w, const os64_html_node_t *text)
 {
     if (text->text_len == 0) return;
+    const os64_html_node_t *parent = os64_html_flat_parent(w->doc, text);
     os64_dom_text_style_t s;
     if (parent == NULL || parent->kind != OS64_HTML_ELEMENT || !facts_of(w, parent, &s)) return;
     if (!s.rendered || !s.visible) return;
     const char *at = text->text, *end = text->text + text->text_len;
-    if (s.white_space == OS64_DOM_SPACE_PRESERVE) {
-        push(w, (Item){.kind = I_TEXT, .text = at, .length = text->text_len});
-        return;
-    }
-    /* White space alone inside a table's own boxes is dropped (CSS 2.1
-     * § 17.2.1), so it never sits between a cell's tab and its row's end. */
+    /* White space alone inside a table's own boxes is dropped whatever
+     * `white-space` says (CSS 2.1 § 17.2.1), so it never sits between a
+     * cell's tab and its row's end. */
     if (s.display == OS64_DOM_TEXT_TABLE || s.display == OS64_DOM_TEXT_TABLE_PART ||
         s.display == OS64_DOM_TEXT_TABLE_ROW) {
         const char *p = at;
         while (p < end && space_byte(*p)) p++;
         if (p == end) return;
+    }
+    if (s.white_space == OS64_DOM_SPACE_PRESERVE) {
+        push(w, (Item){.kind = I_TEXT, .text = at, .length = text->text_len});
+        return;
     }
     bool pre_line = s.white_space == OS64_DOM_SPACE_PRE_LINE;
     while (at < end && !w->failed) {
@@ -196,32 +228,42 @@ static bool element_open(Walk *w, const os64_html_node_t *node, os64_dom_text_st
         if (s->visible) push(w, (Item){.kind = I_BREAK});
         return false;
     }
-    if (boxed(s)) push(w, (Item){.kind = I_EDGE});
+    /* A row's and a table's opening edge is the mark its take_back stops
+     * at. */
+    bool marks = s->display == OS64_DOM_TEXT_TABLE_ROW || s->display == OS64_DOM_TEXT_TABLE;
+    if (boxed(s)) push(w, (Item){.kind = I_EDGE, .owner = marks ? node : NULL});
     uint32_t count = edge_count(node, s);
     if (count != 0 && s->visible) push(w, (Item){.kind = I_COUNT, .count = count});
     return !childless(node);
 }
 
-/* Leaving an element whose open answered true (or that has no children). */
+/* Leaving an element whose open answered true and that was gone into, or
+ * that turned out to have no children. An element whose open answered
+ * false (not rendered, a `br`, a childless one) is never closed. */
 static void element_close(Walk *w, const os64_html_node_t *node)
 {
     os64_dom_text_style_t s;
     if (!facts_of(w, node, &s)) return;
-    if (s.visible) {
-        if (s.display == OS64_DOM_TEXT_TABLE_ROW) take_back(w, I_TAB);
-        if (s.display == OS64_DOM_TEXT_TABLE) take_back(w, I_BREAK);
-        uint32_t count = edge_count(node, &s);
-        if (count != 0) push(w, (Item){.kind = I_COUNT, .count = count});
-    }
+    if (s.display == OS64_DOM_TEXT_TABLE_ROW) take_back(w, I_TAB, node);
+    if (s.display == OS64_DOM_TEXT_TABLE) take_back(w, I_BREAK, node);
+    uint32_t count = edge_count(node, &s);
+    if (count != 0 && s.visible) push(w, (Item){.kind = I_COUNT, .count = count});
     if (boxed(&s)) push(w, (Item){.kind = I_EDGE});
-    if (!s.visible) return;
-    if (s.display == OS64_DOM_TEXT_TABLE_CELL) push(w, (Item){.kind = I_TAB});
-    if (s.display == OS64_DOM_TEXT_TABLE_ROW) push(w, (Item){.kind = I_BREAK, .row = true});
+    if (s.display == OS64_DOM_TEXT_TABLE_CELL)
+        push(w, (Item){.kind = I_TAB, .silent = !s.visible,
+                       .owner = enclosing(w, node, OS64_DOM_TEXT_TABLE_ROW)});
+    if (s.display == OS64_DOM_TEXT_TABLE_ROW)
+        push(w, (Item){.kind = I_BREAK, .silent = !s.visible,
+                       .owner = enclosing(w, node, OS64_DOM_TEXT_TABLE)});
 }
 
-/* Whether an item ends a line for a collapsible space beside it. */
-static bool line_edge(const Item *item)
+/* Whether an item ends a line for a collapsible space beside it: a count,
+ * a break, a tab or an edge; or preserved text that begins (`after`
+ * false) or ends (`after` true) with a line feed. */
+static bool line_edge(const Item *item, bool after)
 {
+    if (item->kind == I_TEXT)
+        return item->length != 0 && line_feed(after ? item->text[item->length - 1] : item->text[0]);
     return item->kind == I_COUNT || item->kind == I_BREAK || item->kind == I_TAB || item->kind == I_EDGE;
 }
 
@@ -248,16 +290,21 @@ static size_t assemble(const Walk *w, char *out)
         case I_SPACE: {
             if (!line_open || spaced) break;
             /* A space with a line's end after it (the next thing that is
-             * not a space) goes, and so does one at the very end. */
+             * not a space) goes, and so does one at the very end; the
+             * spaces after it in the run go with it, unvisited. */
             size_t j = i + 1;
             while (j < w->count && w->items[j].kind == I_SPACE) j++;
-            if (j == w->count || line_edge(&w->items[j])) break;
+            if (j == w->count || line_edge(&w->items[j], false)) {
+                i = j - 1;
+                break;
+            }
             if (out != NULL) out[n] = ' ';
             n++;
             spaced = true;
             break;
         }
         default: {                  /* I_TEXT, I_BREAK, I_TAB */
+            if (item->silent) break;
             if (pending != 0 && wrote) {
                 if (out != NULL) for (uint32_t k = 0; k < pending; k++) out[n + k] = '\n';
                 n += pending;
@@ -269,7 +316,7 @@ static size_t assemble(const Walk *w, char *out)
             n += length;
             wrote = true;
             spaced = false;
-            line_open = item->kind == I_TEXT;
+            line_open = item->kind == I_TEXT && !line_edge(item, true);
             break;
         }
         }
@@ -277,14 +324,33 @@ static size_t assemble(const Walk *w, char *out)
     return n;
 }
 
-d_inner_text_status_t d_inner_text(const os64_html_node_t *root, os64_dom_text_style_provider_t facts, void *opaque,
+/* Whether a row group read as the root holds its table's last row: no
+ * rendered row or row group follows it in the table. */
+static bool last_row_group(Walk *w, const os64_html_node_t *group)
+{
+    for (const os64_html_node_t *n = group->next; n != NULL; n = n->next) {
+        os64_dom_text_style_t s;
+        if (n->kind != OS64_HTML_ELEMENT) continue;
+        if (!facts_of(w, n, &s)) return false;
+        if (s.rendered && (s.display == OS64_DOM_TEXT_TABLE_PART || s.display == OS64_DOM_TEXT_TABLE_ROW))
+            return false;
+    }
+    return true;
+}
+
+d_inner_text_status_t d_inner_text(const os64_html_document_t *doc, const os64_html_node_t *root,
+                                   os64_dom_text_style_provider_t facts, void *opaque,
                                    const d_inner_text_memory_t *memory, char **out, size_t *length)
 {
     *out = NULL;
     *length = 0;
-    if (root == NULL || root->kind != OS64_HTML_ELEMENT || facts == NULL) return D_INNER_TEXT_NOT_RENDERED;
-    Walk w = {.facts = facts, .opaque = opaque, .memory = memory};
+    if (doc == NULL || root == NULL || root->kind != OS64_HTML_ELEMENT || facts == NULL)
+        return D_INNER_TEXT_NOT_RENDERED;
+    /* The provider makes its style current once, before any element is
+     * asked about (dom/text_style.h). */
     os64_dom_text_style_t s;
+    if (!facts(opaque, NULL, &s)) return D_INNER_TEXT_NOT_RENDERED;
+    Walk w = {.doc = doc, .facts = facts, .opaque = opaque, .memory = memory};
     if (!facts_of(&w, root, &s) || !s.rendered) return D_INNER_TEXT_NOT_RENDERED;
     /* The walk is the standard's: the root's children in tree order, a
      * shadow root's contents no part of it (a host's children are walked,
@@ -296,7 +362,7 @@ d_inner_text_status_t d_inner_text(const os64_html_node_t *root, os64_dom_text_s
     while (node != NULL && !w.failed && !w.refused) {
         bool down = false;
         if (node->kind == OS64_HTML_TEXT) {
-            text_items(&w, node, node->parent);
+            text_items(&w, node);
         } else if (node->kind == OS64_HTML_ELEMENT) {
             os64_dom_text_style_t es;
             if (element_open(&w, node, &es)) {
@@ -326,9 +392,12 @@ d_inner_text_status_t d_inner_text(const os64_html_node_t *root, os64_dom_text_s
     }
     /* The root is not closed (its own steps are not the standard's to run),
      * but its last row and last cell are still last: a table or a row read
-     * alone takes back its separator as its close would have. */
-    if (s.visible && s.display == OS64_DOM_TEXT_TABLE_ROW) take_back(&w, I_TAB);
-    if (s.visible && s.display == OS64_DOM_TEXT_TABLE) take_back(&w, I_BREAK);
+     * alone takes back its separator as its close would have, and so does
+     * a row group holding its table's last row. */
+    if (s.display == OS64_DOM_TEXT_TABLE_ROW) take_back(&w, I_TAB, root);
+    if (s.display == OS64_DOM_TEXT_TABLE) take_back(&w, I_BREAK, root);
+    if (s.display == OS64_DOM_TEXT_TABLE_PART && last_row_group(&w, root))
+        take_back(&w, I_BREAK, enclosing(&w, root, OS64_DOM_TEXT_TABLE));
     d_inner_text_status_t status = w.refused ? D_INNER_TEXT_NOT_RENDERED : w.failed ? D_INNER_TEXT_NO_MEMORY
                                                                                      : D_INNER_TEXT_OK;
     char *text = NULL;

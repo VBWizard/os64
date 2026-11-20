@@ -33,12 +33,14 @@ typedef enum {
     D_INNER_TEXT_NO_MEMORY,
 } d_inner_text_status_t;
 
-/* `root`'s innerText, as UTF-8 in a block from `memory` (`*out`, `*length`
- * bytes and a NUL after them), on OK only. The walk climbs the tree by its
- * parent links and keeps no stack, so a tree of any depth costs the same
- * memory. `facts` answers each element; its false is NOT_RENDERED for the
- * whole read. */
-d_inner_text_status_t d_inner_text(const os64_html_node_t *root, os64_dom_text_style_provider_t facts, void *opaque,
+/* `root`'s innerText, in `doc`, as UTF-8 in a block from `memory` (`*out`,
+ * `*length` bytes and a NUL after them), on OK only. The walk climbs the
+ * tree by its parent links and keeps no stack, so a tree of any depth costs
+ * the same memory. `facts` is asked once with no element, then about each
+ * element (dom/text_style.h); a false from it is NOT_RENDERED for the whole
+ * read. */
+d_inner_text_status_t d_inner_text(const os64_html_document_t *doc, const os64_html_node_t *root,
+                                   os64_dom_text_style_provider_t facts, void *opaque,
                                    const d_inner_text_memory_t *memory, char **out, size_t *length);
 
 #endif

@@ -231,13 +231,27 @@ static void rendered_release(void *ctx, void *block)
     if (block != NULL) d_free(ctx, block);
 }
 
+/* The host's provider, called as every host service is: the binding held
+ * across the call, and no answer once the document's host service is
+ * inactive (a departure, perhaps one the call itself caused), which the
+ * walk takes as "not rendered", the standard's answer for a document no
+ * longer shown. */
+static bool rendered_facts(void *opaque, const os64_html_node_t *element, os64_dom_text_style_t *out)
+{
+    os64_dom_t *dom = opaque;
+    if (dom->text_style == NULL || !d_provider_enter(dom)) return false;
+    bool answered = dom->text_style(dom->text_style_opaque, element, out);
+    d_provider_leave(dom);
+    return answered && d_delivery_active(dom);
+}
+
 static JSValue rendered_text(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
     if (dom->text_style != NULL && d_in_window_tree(dom, node)) {
         d_inner_text_memory_t memory = {rendered_grow, rendered_release, dom};
         char *text = NULL;
         size_t length = 0;
-        d_inner_text_status_t status = d_inner_text(node, dom->text_style, dom->text_style_opaque, &memory, &text,
+        d_inner_text_status_t status = d_inner_text(dom->document, node, rendered_facts, dom, &memory, &text,
                                                     &length);
         if (status == D_INNER_TEXT_NO_MEMORY) return d_error(ctx, "QuotaExceededError", "DOM text quota exceeded");
         if (status == D_INNER_TEXT_OK) {

@@ -13,9 +13,9 @@
 
 /* An element's `display`, as innerText reads it. BLOCK is any block-level
  * box that is not a table's: block, flow-root, list-item, flex and grid.
- * TABLE_PART is a row group, a column or a column group. INLINE is every
- * inline-level box, the atomic ones (inline-block, inline-flex,
- * inline-grid, inline-table) among them. */
+ * TABLE is a table's box. TABLE_PART is a row group, a column or a column
+ * group. INLINE is every other inline-level box: inline, and the atomic
+ * inline-block, inline-flex and inline-grid. */
 typedef enum {
     OS64_DOM_TEXT_INLINE = 0,
     OS64_DOM_TEXT_BLOCK,
@@ -46,10 +46,13 @@ typedef struct {
     uint8_t white_space;        /* os64_dom_text_space_t */
 } os64_dom_text_style_t;
 
-/* The host makes the style current (a layout, when it is stale), fills
- * `out` for `element` and answers true; false when no current style could
- * be made, which makes innerText answer textContent. Must not enter JS or
- * pump events. Borrowed nodes expire on return. */
+/* A read of innerText asks first with `element` NULL: the host makes its
+ * style current (a layout, when it is stale) and answers whether it could;
+ * `out` is not read. Then it asks about each element it passes, with no
+ * script run between, so the host may answer from what that first call
+ * made current: it fills `out` and answers true. Any false makes innerText
+ * answer textContent. Must not enter JS or pump events. Borrowed nodes
+ * expire on return. */
 typedef bool (*os64_dom_text_style_provider_t)(void *opaque, const os64_html_node_t *element,
                                                os64_dom_text_style_t *out);
 

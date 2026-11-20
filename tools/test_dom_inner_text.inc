@@ -30,6 +30,7 @@ static bool inner_fake(void *opaque, const os64_html_node_t *element, os64_dom_t
     InnerFake *f = opaque;
     f->calls++;
     if (f->refuse) return false;
+    if (element == NULL) return true;       /* the read's first call */
     memset(out, 0, sizeof(*out));
     out->rendered = true;
     out->visible = true;

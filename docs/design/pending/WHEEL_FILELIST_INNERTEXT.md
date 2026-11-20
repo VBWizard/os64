@@ -310,13 +310,16 @@ These do not depend on rendering, so B builds them fully.
   And `innerText` read ON a `<script>` gives its source, because the
   element is not rendered, so its `textContent` is the answer.
 - **WPT.** `html/dom/elements/the-innertext-and-outertext-properties/` was
-  excluded ("not P1-W's oracle"); B runs it, 1,363 passes in all.
-  `getter.html` passes 241 of its 274, and its 33 failures are D's list
-  almost to the line: `text-transform` (and `::first-line`,
-  `::first-letter`), the spaces beside an atomic inline or a replaced
-  element (which layout does not collapse across), SVG `<text>`, closed
-  `<details>`, a `<select>`'s own text, anonymous table boxes (cells with no
-  row, inline tables), and `visibility: collapse`. The setters pass all but
+  excluded ("not P1-W's oracle"); B runs it, 1,368 passes in all.
+  `getter.html` passes 246 of its 274, and its 28 failures are D's list:
+  `text-transform` (and `::first-line`, `::first-letter`), the spaces
+  beside an atomic inline or a replaced element (which layout does not
+  collapse across), SVG `<text>`, closed `<details>`, a `<select>`'s own
+  text, and anonymous table boxes (cells with no row, inline tables). Five
+  of the 33 it failed at first were the walker's own, found by a cold
+  review and fixed in B: table white space under `pre`, a caption after
+  the rows, a hidden row's or table's last separator, a `p` that is not
+  block-level, and a row group read alone. The setters pass all but
   "Null characters preserved": libdom turns a NUL into U+FFFD at the
   boundary of every string a script hands it, `textContent` included. The
   `innertext-with-white-spaces` variants pass all 948; `dynamic-getter`

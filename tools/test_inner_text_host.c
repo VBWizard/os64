@@ -97,6 +97,7 @@ static bool facts(void *opaque, const os64_html_node_t *element, os64_dom_text_s
     Facts *f = opaque;
     f->calls++;
     if (f->refuse) return false;
+    if (element == NULL) return true;       /* the read's first call: nothing to make current */
     memset(out, 0, sizeof(*out));
     out->rendered = true;
     out->visible = true;
@@ -184,7 +185,7 @@ static d_inner_text_status_t read_text(os64_html_document_t *doc, const os64_htm
 {
     d_inner_text_memory_t memory = {grow, release, b};
     f->doc = doc;
-    return d_inner_text(root, facts, f, &memory, out, len);
+    return d_inner_text(doc, root, facts, f, &memory, out, len);
 }
 
 static void show(const char *s)
@@ -251,6 +252,28 @@ static void shadow_case(void)
     check(ok, "shadow: a host's children, not its shadow root's");
     release(&b, text);
     check(b.live == 0, "shadow: nothing kept");
+    os64_html_document_free(doc);
+}
+
+/* A host's Text child that no slot takes is in no flat tree: the review's
+ * case, where the walk once read it from the host's facts. */
+static void shadow_text_case(void)
+{
+    os64_html_document_t *doc = parse("<div id=r>a<span id=h>unslotted</span>z</div>", 0);
+    os64_html_node_t *host = (os64_html_node_t *)by_id((const os64_html_node_t *)doc->document, "h");
+    int64_t status = 0;
+    os64_html_node_t *shadow = os64_html_attach_shadow(doc, host, OS64_HTML_SHADOW_OPEN, &status);
+    os64_html_insert(doc, shadow, os64_html_create_text(doc, "S", 1, &status), NULL);
+    const os64_html_node_t *root = by_id((const os64_html_node_t *)doc->document, "r");
+    Facts f = {0};
+    Budget b = {-1, 0};
+    char *text = NULL;
+    size_t len = 0;
+    read_text(doc, root, &f, &b, &text, &len);
+    int ok = text != NULL && strcmp(text, "az") == 0;
+    if (!ok && text) { printf("  shadow text: got \""); show(text); printf("\"\n"); }
+    check(ok, "shadow: an unslotted Text child gives nothing");
+    release(&b, text);
     os64_html_document_free(doc);
 }
 
@@ -363,7 +386,26 @@ int main(int argc, char **argv)
     expect("a list", "<ul id=r><li>one</li> <li>two</li></ul>", "one\ntwo");
     expect("svg's text is no HTML text", "<div id=r>a<svg><text>s</text></svg>b</div>", "ab");
     expect("utf-8 passes through", "<div id=r>caf\xc3\xa9 <b>\xe2\x82\xac</b></div>", "caf\xc3\xa9 \xe2\x82\xac");
+    /* The cold review's cases (each WPT's or the standard's answer). */
+    expect("table white space goes under pre too", "<div id=r><table data-ws=p>  <tr><td>abc</td>  </tr>  </table></div>",
+           "abc");
+    expect("a pre around a table", "<pre id=r><table><tr><td>a</td> <td>b</td></tr></table></pre>", "a\tb");
+    expect("a caption after the rows", "<div id=r><table><tr><td>abc<caption>def</caption></table></div>", "abc\ndef");
+    expect("a hidden row's visible cell is still its last", "<table id=r><tr data-v=h><td data-v=v>abc</td></tr></table>",
+           "abc");
+    expect("a hidden table's visible rows: the last is last",
+           "<div id=r><table data-v=h><tr data-v=v><td>a</td></tr><tr data-v=v><td>b</td></tr></table></div>", "a\nb");
+    expect("a hidden last cell is still last, so the one before keeps its tab",
+           "<table id=r><tr><td>a</td><td data-v=h>b</td></tr></table>", "a\t");
+    expect("a p's two whatever its display", "<div id=r>a<p data-t=i>b</p>c</div>", "a\n\nb\n\nc");
+    expect("a row group read alone, the table's last", "<table><tbody id=r><tr><td>a</td></tr><tr><td>b</td></tr></tbody></table>",
+           "a\nb");
+    expect("a row group read alone, rows after it", "<table><tbody id=r><tr><td>a</td></tr></tbody><tbody><tr><td>b</td></tr></tbody></table>",
+           "a\n");
+    expect("a preserved line feed ends a line (before)", "<div id=r>a <span data-ws=p>\nb</span></div>", "a\nb");
+    expect("a preserved line feed ends a line (after)", "<div id=r><span data-ws=p>a\n</span> b</div>", "a\nb");
     shadow_case();
+    shadow_text_case();
     deep_case(depth);
     memory_case();
     refusal_case();

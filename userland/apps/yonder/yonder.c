@@ -14003,19 +14003,26 @@ static bool script_computed(void *opaque, const os64_html_node_t *element, os64_
 // innerText's provider (os64_dom_set_text_style): four facts read from
 // the style pass 1 gave the element in the page's current layout, with no
 // serialising (getComputedStyle's provider writes every property as text).
-// An element pass 1 never styled is inside `display: none`, or is a child
-// layout does not render, so it is not rendered. A read makes the layout
-// current when the page changed since the last one, as getComputedStyle's
-// does: the style alone would do, and that split is booked (DEBTS.md).
+// A read asks first with no element, and that call makes the layout
+// current, as getComputedStyle's does when the page changed since the last
+// one (the style alone would do; that split is booked in DEBTS.md); the
+// tree it made answers every element after it, since no script runs in
+// between (dom/text_style.h). An element pass 1 never styled is inside
+// `display: none`, or is a child layout does not render, so it is not
+// rendered.
+static const flow_tree_t *s_text_style_tree;
+
 static bool script_text_style(void *opaque, const os64_html_node_t *element, os64_dom_text_style_t *out)
 {
     const os64_html_document_t *doc = opaque;
-    if (!os64_html_owns_node(doc, element))
-        return false;
-    flow_env_t env;
-    uint64_t layouts = 0, elapsed_us = 0;
-    const flow_tree_t *tree = layout_current(doc, &env, &layouts, &elapsed_us);
-    if (tree == NULL)
+    if (element == NULL) {
+        flow_env_t env;
+        uint64_t layouts = 0, elapsed_us = 0;
+        s_text_style_tree = layout_current(doc, &env, &layouts, &elapsed_us);
+        return s_text_style_tree != NULL;
+    }
+    const flow_tree_t *tree = s_text_style_tree;
+    if (tree == NULL || !os64_html_owns_node(doc, element))
         return false;
     os64_memset(out, 0, sizeof(*out));
     const flow_style_t *s = flow_style_for(tree, element);
