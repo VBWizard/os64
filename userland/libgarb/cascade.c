@@ -3256,8 +3256,8 @@ static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
     Slot *s = slot_for(c, a, false);
     if (!s) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
     anchor_bits(c, a, c->has_scratch);
-    // The marks below may grow the table, which moves the rows: the turned
-    // bits are taken into the scratch row first, the slot's row stored.
+    // The answers are asked into the scratch row; the slot's row takes
+    // them, and the scratch row is left holding what turned, for the marks.
     uint64_t *row = has_row(c, s);
     for (uint32_t k = 0; k < c->has_width; k++) {
         uint64_t turned = c->has_scratch[k] ^ row[k];

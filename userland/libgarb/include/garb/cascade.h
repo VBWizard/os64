@@ -215,8 +215,9 @@ const char *garb_update_refusal_name(garb_update_refusal_t reason);
 // history loss, dirty breadth and storage budgets still require fallback.
 bool garb_cascade_tracks_changes(const garb_cascade_t *c);
 // How many anchored :has() compounds (garb_anchor_t) the cascade's rules
-// hold, and how many of those are bare; each is a bit in every element's
-// record, tested at every element the cascade styles.
+// hold, and how many of those are bare. While the cascade takes updates,
+// each is a bit in every element's record, asked at every element it
+// styles; a bare one keeps it from taking them.
 void garb_cascade_anchors(const garb_cascade_t *c, int32_t *anchors, int32_t *bare);
 uint64_t garb_cascade_generation(const garb_cascade_t *c);
 uint64_t garb_cascade_updates(const garb_cascade_t *c);

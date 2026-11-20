@@ -96,9 +96,9 @@ static bool s_dark;
 static bool s_layout_profile;
 // --cascade-check[=N] checks every Nth cascade update (10 when no N is
 // given) against a cascade built fresh beside it (garb_cascade_compare);
-// a difference is printed on the terminal yonder was started from and kept
-// in the page's record as `cascade check`. A measuring switch: each check
-// costs a whole cascade.
+// a difference is printed on the terminal yonder was started from and, when
+// the page has a record, kept in it as `cascade check`. A measuring switch:
+// each check costs a whole cascade.
 static uint32_t s_cascade_check, s_cascade_checked, s_cascade_differed;
 
 // THE PERSON'S MOTION SETTINGS (yonder.conf): `motion = reduce` has pages
