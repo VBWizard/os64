@@ -1,5 +1,9 @@
 # F.4d — Private WindowProxy property boundary
 
+Current mutable-name storage, lookup and reset rules are specified in
+[Window.name](IFRAME_F4_WINDOW_NAME.md); layout and immutable-name statements
+below describe this brief's original milestone.
+
 The internal host seam `d_window_proxy` prepares one native proxy per retained
 browsing context. Property operations follow that context's current Window;
 replacement keeps proxy identity, while discard retains the last Window for

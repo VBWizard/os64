@@ -6,7 +6,7 @@
 typedef struct DBrowsingContext DBrowsingContext;
 #define D_CONTEXT_NAME_MAX 255
 
-/* Private owner-thread context registry. Records, copied names and tombstones
+/* Private owner-thread context registry. Records, reserved names and tombstones
  * live until cluster teardown. Binding admission and context publication are
  * separate: prepare an origin-bearing child, then publish it at a safe point.
  * Refusal does not consume that candidate; the host may retry or depart it.
@@ -37,7 +37,11 @@ __attribute__((visibility("hidden")))
 DBrowsingContext *d_browsing_context_top(const DBrowsingContext *);
 __attribute__((visibility("hidden")))
 DBrowsingContext *d_browsing_context_child(const DBrowsingContext *, size_t index);
+/* Borrowed bytes until the next rename/publication or teardown. Use the length:
+ * a script-supplied DOMString can contain embedded NULs. */
 __attribute__((visibility("hidden")))
 const char *d_browsing_context_name(const DBrowsingContext *);
+__attribute__((visibility("hidden")))
+size_t d_browsing_context_name_length(const DBrowsingContext *);
 
 #endif

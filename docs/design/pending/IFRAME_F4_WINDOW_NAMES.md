@@ -1,5 +1,9 @@
 # F4d — Window names and descriptor integration
 
+Current mutable-name storage, lookup and reset rules are specified in
+[Window.name](IFRAME_F4_WINDOW_NAME.md); layout and immutable-name statements
+below describe this brief's original milestone.
+
 Implementation PR **#676**, based on merged userland `92dcdc0e`.
 
 Private origin-bearing bindings expose live Window named properties through a

@@ -34,8 +34,8 @@ static void dom_browsing_context_cases(void)
         char name[]="root";
         DBrowsingContext *root=d_browsing_context_create(f.cluster,NULL,f.bindings[0],name,&out);
         name[0]='X';
-        check(root&&out.status==OS64_JS_OK&&f.cluster->bytes==before+sizeof(*root)+5,
-              "contexts: record and copied name charged exactly once");
+        check(root&&out.status==OS64_JS_OK&&f.cluster->bytes==before+sizeof(*root),
+              "contexts: record and bounded mutable name storage charged exactly once");
         if(!root){ce_close(&f);continue;}
         DBrowsingContext *left=d_browsing_context_create(f.cluster,root,f.bindings[1],"duplicate",&out);
         DBrowsingContext *right=d_browsing_context_create(f.cluster,root,f.bindings[2],"duplicate",&out);

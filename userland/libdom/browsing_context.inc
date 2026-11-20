@@ -44,7 +44,7 @@ DBrowsingContext *d_browsing_context_create(os64_dom_cluster_t *cluster, DBrowsi
     size_t length = 0;
     while (length <= D_CONTEXT_NAME_MAX && name[length]) ++length;
     if (length > D_CONTEXT_NAME_MAX) { outcome->status = OS64_JS_BAD_ARGUMENT; return NULL; }
-    size_t bytes = sizeof(DBrowsingContext) + length + 1;
+    size_t bytes = sizeof(DBrowsingContext);
     if (bytes > cluster->limits.dom_bytes - cluster->bytes) {
         outcome->status = OS64_JS_ADMISSION_REFUSED;
         return NULL;
@@ -56,6 +56,7 @@ DBrowsingContext *d_browsing_context_create(os64_dom_cluster_t *cluster, DBrowsi
     context->active = context->window = initial;
     context->generation = 1;
     context->charged_bytes = bytes;
+    context->name_length = length;
     os64_memcpy(context->name, name, length + 1);
     context->registry_next = cluster->contexts;
     cluster->contexts = context;
@@ -69,6 +70,20 @@ DBrowsingContext *d_browsing_context_create(os64_dom_cluster_t *cluster, DBrowsi
     }
     initial->browsing_context = context;
     return context;
+}
+
+/* Owner-thread commit after conversion. Original target and publication
+ * generation must still match; the name is not publication identity. Storage
+ * was charged at admission, so failure cannot leave a partial reservation. */
+bool d_browsing_context_rename(DBrowsingContext *context, uint64_t expected,
+    os64_dom_t *target, const char *name, size_t length)
+{
+    if (!context || !name || length > D_CONTEXT_NAME_MAX || context->discarded ||
+        context->generation != expected || context->active != target || !d_delivery_active(target)) return false;
+    os64_memmove(context->name, name, length);
+    context->name[length] = 0;
+    context->name_length = length;
+    return true;
 }
 
 static bool context_descendant(const DBrowsingContext *context, const DBrowsingContext *ancestor)
@@ -133,6 +148,12 @@ static os64_js_status_t context_change(DBrowsingContext *context, uint64_t expec
         context_unlink(context);
         context->discarded = true;
     } else {
+        /* Private roots have no opener. HTML clears a top-level target name
+         * on an origin-changing document commit; nested names persist. */
+        if (!context->parent && !way_origin_same(context->window->binding_origin, candidate->binding_origin)) {
+            context->name_length = 0;
+            context->name[0] = 0;
+        }
         context->window = candidate;
         candidate->browsing_context = context;
     }
@@ -184,4 +205,9 @@ DBrowsingContext *d_browsing_context_child(const DBrowsingContext *context, size
 const char *d_browsing_context_name(const DBrowsingContext *context)
 {
     return context ? context->name : NULL;
+}
+
+size_t d_browsing_context_name_length(const DBrowsingContext *context)
+{
+    return context ? context->name_length : 0;
 }
