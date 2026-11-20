@@ -69,6 +69,7 @@ struct DMediaElement {
     bool paused, seeking, autoplaying, connected, seen;
     bool select_pending;            /* resource selection is due at the next turn */
     bool deferred;                  /* preload=none: selected, waiting for play() or load() */
+    bool show_poster;               /* HTML's show poster flag: set at each load, cleared by a play or a seek */
     bool wanted;                    /* play() or load() asked: preload=none no longer defers */
     bool dormant;                   /* gave its session back; play() or a seek wakes it (session_wake) */
     bool from_children;             /* the resource is a <source>'s */
@@ -182,6 +183,7 @@ static DMediaElement *record_of(os64_dom_t *dom, const os64_html_node_t *node, b
     os64_html_hold(dom->document, node);
     m->node = node;
     m->paused = true;
+    m->show_poster = true;
     m->autoplaying = true;
     m->volume = 1;
     m->rate = m->default_rate = 1;
@@ -281,6 +283,7 @@ static void seek(os64_dom_t *dom, DMediaElement *m, double t)
     m->seek_to = t;
     m->position = t;
     m->ended = false;
+    m->show_poster = false;
     m->seek_generation++;
     queue(dom, m, "seeking", SETTLE_NONE);
     if (m->session != NULL && dom->media_provider.seek != NULL)
@@ -348,6 +351,11 @@ static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
         m->position = 0;
         m->duration = NAN;
     }
+    /* The poster again for the new resource, unless the element plays: a
+     * play() before the turn's first look at src leaves it unpaused with
+     * nothing to pause (network still empty), and the poster must not come
+     * back over its picture. */
+    m->show_poster = m->paused;
     m->played_end = 0;              /* played is the resource's, and this is another */
     d_free(dom, m->current_src);    /* none is selected until the selection says (currentSrc "") */
     m->current_src = NULL;
@@ -548,6 +556,7 @@ static void ready_to(os64_dom_t *dom, DMediaElement *m, uint8_t want)
          * through, if it may (§ Autoplay). */
         if (m->autoplaying && m->paused && os64_html_attr(m->node, "autoplay") != NULL && allowed(dom, m)) {
             m->paused = false;
+            m->show_poster = false;
             m->played_seq = ++dom->media_elements->play_seq;
             m->autoplaying = false;
             queue(dom, m, "play", SETTLE_NONE);
@@ -1096,6 +1105,7 @@ static JSValue play(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
     if (m->ended) seek(dom, m, 0);
     if (m->paused) {
         m->paused = false;
+        m->show_poster = false;
         m->played_seq = ++dom->media_elements->play_seq;
         queue(dom, m, "play", SETTLE_NONE);
         if (m->ready <= R_CURRENT) queue(dom, m, "waiting", SETTLE_NONE);
@@ -1371,6 +1381,7 @@ bool os64_dom_media_view(os64_dom_t *dom, const os64_html_node_t *node, os64_dom
     out->volume = m->volume;
     out->muted = m->muted;
     out->error = m->error;
+    out->show_poster = m->show_poster;
     return true;
 }
 
