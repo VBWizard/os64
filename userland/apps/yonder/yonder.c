@@ -819,7 +819,7 @@ typedef struct {
     char *url;                      // it resolved against the page; NULL for none or no address
     int32_t pic;                    // url's picture in the page's table, -1 none or not yet asked
     bool asked;                     // url's picture has been asked for (pic is url's)
-    bool shown;                     // a poster was shown at the last turn (posters_turn's alone)
+    int32_t shown;                  // the picture shown at the last turn, -1 none (posters_turn's alone)
     bool flag;                      // libdom's show poster flag at the last turn (true with no scripts)
 } PosterSlot;
 
@@ -6455,6 +6455,14 @@ static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t 
         os64_gui_rect_t at = picture_object_rect(p, &p->pics[k], b, yonder_box_edge(b, b->rect, FLOW_EDGE_CONTENT));
         picture_drawn_at(p, k, at.w, at.h, b->style->pixelated);
     }
+    // A video's poster is a use of its picture too, at its fitted size, so
+    // a picture it shares with a smaller use is kept large enough for it.
+    for (int32_t i = 0; is_video_node(b->node) && i < POSTERS_MAX; i++)
+        if (p->posters[i].node == b->node && p->posters[i].pic >= 0) {
+            int32_t k = p->posters[i].pic;
+            os64_gui_rect_t at = picture_object_rect(p, &p->pics[k], b, yonder_box_edge(b, b->rect, FLOW_EDGE_CONTENT));
+            picture_drawn_at(p, k, at.w, at.h, b->style->pixelated);
+        }
     m = model != NULL && p->bg_of != NULL ? os64_page_background_for(model, b->node) : -1;
     if (m >= 0 && m < p->nbackground_map && p->bg_of[m] >= 0) {
         yonder_tile_t tile;
@@ -10908,7 +10916,7 @@ static PosterSlot *poster_seen(Page *p, const os64_html_node_t *node)
         if (free_slot == NULL || raw == NULL)
             return NULL;
         slot = free_slot;
-        *slot = (PosterSlot){.node = node, .pic = -1, .flag = true};
+        *slot = (PosterSlot){.node = node, .pic = -1, .shown = -1, .flag = true};
         os64_html_hold(page_doc(p), node);
     } else if (raw == NULL ? slot->raw == NULL : slot->raw != NULL && os64_streq(raw, slot->raw)) {
         return slot;
@@ -10923,6 +10931,9 @@ static PosterSlot *poster_seen(Page *p, const os64_html_node_t *node)
     char resolved[OS64_FETCH_URL_MAX];
     if (raw != NULL && os64_dom_resolve(page_doc(p), p->way.url, raw, resolved, sizeof(resolved)))
         slot->url = copy_text(resolved);
+    // Layout or paint may meet it after this turn's posters_turn ran: the
+    // loop turns again to ask for it, whatever else is quiet.
+    (void)os64_gui_event_ring(g.win, BELL_MEDIA);
     return slot;
 }
 
@@ -10958,7 +10969,7 @@ static void posters_turn(void)
             os64_html_release(page_doc(p), slot->node);
             os64_free(slot->raw);
             os64_free(slot->url);
-            *slot = (PosterSlot){.pic = -1};
+            *slot = (PosterSlot){.pic = -1, .shown = -1};
             continue;
         }
         if (slot->url != NULL && !slot->asked) {
@@ -10969,7 +10980,9 @@ static void posters_turn(void)
                 fed = true;
             }
         }
-        bool shown = slot->pic >= 0 && p->pics[slot->pic].state == PIC_SHOWN;
+        // Which picture is shown, not only whether one is: a poster switched
+        // to another address already had can be another size.
+        int32_t shown = slot->pic >= 0 && p->pics[slot->pic].state == PIC_SHOWN ? slot->pic : -1;
         os64_dom_media_view_t view;
         bool flag = !yonder_scripts_media_view(p->scripts, slot->node, &view) || view.show_poster;
         if (shown != slot->shown || flag != slot->flag) {
@@ -10989,7 +11002,7 @@ static void posters_turn(void)
             // goes), and the slot with it.
             os64_html_release(page_doc(p), slot->node);
             os64_free(slot->url);
-            *slot = (PosterSlot){.pic = -1};
+            *slot = (PosterSlot){.pic = -1, .shown = -1};
         }
     }
     if (fed)
