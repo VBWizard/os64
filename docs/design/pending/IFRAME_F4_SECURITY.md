@@ -229,6 +229,14 @@ quietly route a foreign `postMessage` through the old same-binding implementatio
 Define the unavailable operation explicitly and keep production frame exposure
 disabled. Messaging completion remains a separate dependency of F.11.
 
+## F15 retained target and exposure contract
+
+[F4/F15 C3](IFRAME_F4_C3_LIFETIMES.md) specifies the retained identities,
+cache/root inventory, unavailable states, generation checks and grouped
+storage lifetimes consumed by F.15.22. Owner tickets do not grant property
+or navigation authority. Numeric adapter registration is explicit bounded
+preparation, not an existing F4 ID or permission to release a target.
+
 ## Required proof and acceptance
 
 | Area | Counterexample and observation |
