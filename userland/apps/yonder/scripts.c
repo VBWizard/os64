@@ -655,6 +655,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     if (s->options.view.read != NULL)
         os64_dom_set_view(s->dom, &s->options.view);
     os64_dom_set_computed(s->dom, s->options.computed, s->options.opaque);
+    os64_dom_set_text_style(s->dom, s->options.text_style, s->options.opaque);
     os64_dom_set_images(s->dom,&s->options.images);
     os64_dom_set_media(s->dom, &s->options.media);
     os64_dom_set_text(s->dom,&s->options.canvas_text);

@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>innerText</title>
+<style>
+  body { font: 16px sans-serif; margin: 24px; max-width: 720px; }
+  li { margin: 4px 0; }
+  .ok { color: #070; } .bad { color: #b00; }
+  #samples { border: 1px solid #888; padding: 8px; }
+  .gone { display: none; }
+  .hid { visibility: hidden; }
+  .pl { white-space: pre-line; }
+  .ib { display: inline-block; }
+  td { border: 1px solid #ccc; }
+</style>
+
+<h2>innerText, as rendered</h2>
+<p>Each line reads <code>innerText</code> from one of the samples below and
+compares it with what the standard's steps give (and WPT expects). A line
+turns green when they agree; a red line shows both. The samples are drawn
+so you can see what each one renders.</p>
+<ul id="out"></ul>
+
+<div id="samples">
+  <div id="inline">one <b> two</b>   three</div>
+  <div id="hidden">shown<span class="gone">gone</span> <span class="hid">hidden<span style="visibility:visible">back</span></span> end</div>
+  <div id="breaks">line<br>next<p>para</p>after</div>
+  <div id="blocks"><div>a</div><div>b</div><div><div>c</div></div></div>
+  <table id="table"><tr><td>1</td> <td>2</td></tr> <tr><td>3</td><td>4</td></tr></table>
+  <div id="preline" class="pl">a   b
+   c</div>
+  <div id="pre"><pre>  kept   as
+  written</pre></div>
+  <div id="noscript">a<script>void 0</script><style>.x{}</style>b</div>
+  <div id="atomic">x <span class="ib">y</span> z</div>
+  <div id="replaced">a<video>fallback</video>b<textarea>t</textarea>c</div>
+  <div id="list"><ul><li>first</li><li>second</li></ul></div>
+</div>
+
+<p id="setter"></p>
+<p id="outer">left<span id="outerchild">old</span>right</p>
+
+<script>
+  const out = document.getElementById('out');
+  const show = s => JSON.stringify(s);
+  function say(what, got, want) {
+    const li = document.createElement('li');
+    li.textContent = what + (got === want ? ' ' + show(got) : ': got ' + show(got) + ', want ' + show(want));
+    li.className = got === want ? 'ok' : 'bad';
+    out.appendChild(li);
+  }
+  const it = id => document.getElementById(id).innerText;
+  say('inline spaces collapse', it('inline'), 'one two three');
+  say('display:none and visibility:hidden left out', it('hidden'), 'shown back end');
+  say('a br, then a paragraph\'s two', it('breaks'), 'line\nnext\n\npara\n\nafter');
+  say('block edges', it('blocks'), 'a\nb\nc');
+  say('a table', it('table'), '1\t2\n3\t4');
+  say('white-space: pre-line', it('preline'), 'a b\nc');
+  say('pre', it('pre'), '  kept   as\n  written');
+  say('script and style give nothing', it('noscript'), 'ab');
+  say('an inline-block is inline', it('atomic'), 'x y z');
+  say('replaced elements\' children are no text', it('replaced'), 'abc');
+  say('a list', it('list'), 'first\nsecond');
+  const detached = document.createElement('div');
+  detached.innerHTML = '<p>p</p><span class="gone">q</span>';
+  say('detached: its textContent', detached.innerText, 'pq');
+  const s = document.getElementById('setter');
+  s.innerText = 'set\nby\ninnerText';
+  say('the setter makes br', s.innerHTML, 'set<br>by<br>innerText');
+  document.getElementById('outerchild').outerText = '-new-';
+  const o = document.getElementById('outer');
+  say('outerText merges its neighbours', o.childNodes.length + ' ' + o.textContent, '1 left-new-right');
+</script>

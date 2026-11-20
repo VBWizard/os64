@@ -1,6 +1,6 @@
 # libdom binds the script-visible document to libhtml and persistent libpage
 # control state. Consumers acquire these edges through this shared library.
-LIBDOM_SRCS := libdom/core.c libdom/node.c libdom/collection.c libdom/content.c \
+LIBDOM_SRCS := libdom/core.c libdom/node.c libdom/collection.c libdom/content.c libdom/inner_text.c \
     libdom/event.c libdom/timer.c libdom/window.c libdom/geometry.c libdom/classic.c libdom/style.c \
     libdom/mixin.c libdom/modern.c libdom/view.c
 # The Modern Web's slice 1a: storage, performance, URL, encoding, screen, base64.

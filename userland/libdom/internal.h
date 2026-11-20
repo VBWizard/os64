@@ -2,6 +2,7 @@
 #define DOM_INTERNAL_H
 
 #include "dom/dom.h"
+#include "inner_text.h"
 #include "browsing_context.h"
 #include "lifetime.h"
 #include "navigation_authority.h"
@@ -616,6 +617,9 @@ struct os64_dom {
      * at the first read and reused. */
     os64_dom_computed_provider_t computed;
     void *computed_opaque;
+    /* innerText's provider (os64_dom_set_text_style), and its opaque. */
+    os64_dom_text_style_provider_t text_style;
+    void *text_style_opaque;
     struct os64_dom_computed *snapshot;
     JSClassID computed_class, media_class;
     DValue *computed_prototype, *media_prototype, *media_event_prototype;
@@ -1247,6 +1251,9 @@ JSValue d_content_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
                       int property);
 JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
                       int property, JSValueConst value);
+/* innerText (`outer` false) and outerText, read or set (content.c). */
+JSValue d_rendered_text_member(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool outer, bool set,
+                               JSValueConst value);
 
 enum {
     D_PARENT, D_FIRST, D_LAST, D_PREV, D_NEXT, D_OWNER, D_CHILD_NODES, D_CHILDREN,

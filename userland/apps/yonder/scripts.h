@@ -140,6 +140,8 @@ typedef struct {
     // a page's view reads as zeros and its history is its own.
     os64_dom_view_provider_t view;
     os64_dom_computed_provider_t computed;
+    // innerText's facts (given `opaque`); zeroed, innerText is textContent.
+    os64_dom_text_style_provider_t text_style;
     os64_dom_image_provider_t images;
     // The media elements' host (dom/media.h), with its own opaque; zeroed,
     // a media element plays nothing.
