@@ -1,0 +1,14 @@
+# WPT's FileAPI/filelist-section in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh FileAPI/filelist-section --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+filelist.html	Check if FileList.length is 0
+filelist.html	Check if item is a instanceof Function
+filelist.html	Check if item is a method of fileList
+filelist.html	Check if length is fileList's attribute
+filelist.html	Check if the fileList length is 0 when no file selected
+filelist.html	Check if the item method returns null when no file selected
+filelist.html	Check if window has a FileList property
