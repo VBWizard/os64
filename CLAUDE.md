@@ -742,7 +742,8 @@ virtio because its drain waits for the tick.
   are libav's alone, so a caller of FFmpeg's headers sees only names
   libos64 exports). Built WITHOUT threads, so a program using it
   from several threads does every open and close under one lock of its
-  own (libmedia keeps a narrower form the audit pins: media.c § THREADS).
+  own (libmedia's spans every open and close and nothing else, held across
+  an open's source reads: media.c § THREADS, which the audit pins).
   Built WITH FFmpeg's x86 assembly (nasm), whose routines FFmpeg chooses
   at run time from what the CPU and os64 offer, AVX2 included, AVX-512
   configured out; its buffers come from `os64_malloc_aligned` (README

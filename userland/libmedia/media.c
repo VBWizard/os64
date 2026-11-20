@@ -49,15 +49,24 @@
 // asks for transform tables again while decoding, but only ones its
 // decoder's open already made.) So libmedia makes every CRC table, the AES
 // tables and the scaler's tables at its first open, and takes one lock
-// (`s_lock`) across opening the input (its header read) and across
-// find_stream_info and the decoders' opens. Opening the input is under it
-// too because two opened at once were seen to hang (a page's two videos,
-// VIDEO.md § 5), by state libav shares there that the audit below has not
-// named. Reading packets, decoding and converting take no lock. The cost:
-// two media opening at once take turns at the header and at
+// (`s_lock`) across the whole of an open (the input, its header,
+// find_stream_info and the decoders' opens) and the whole of a close:
+// libav's rule for a build without threads (README.md), which libmedia
+// had once narrowed to find_stream_info and the decoders' opens. Two
+// inputs opened at once were seen to hang (a page's two videos, 2 of 4
+// QEMU boots); what they share is not named (DEBTS), so the lock stays
+// wide. Reading packets, decoding and converting take no lock.
+//
+// WHAT IS HELD ACROSS A BYTE-SOURCE READ: an open reads its source (a
+// page's comes across the network) under `s_lock`, so `s_lock` is taken by
+// os64_media_open_for and os64_media_close alone, never by a release,
+// os64_media_next, the scaler or anything a player's audio or main thread
+// calls; tools/test_av_audit.py holds that. The cost: two media opening at
+// once take turns, one waiting out the other's header and
 // find_stream_info, which reads a few packets of a sound and, for an open
 // that wants the picture, decodes its first pictures too (up to some
-// twenty of an MP4's), from the source, across the network for a page's.
+// twenty of an MP4's), from the source; and a close waits for an open in
+// flight, on the thread that closes (a player's decoding thread).
 // A sound-only open discards the picture's stream before it, so none of
 // its packets is made or decoded. tools/test_av_audit.py pins every one-time setup in
 // the build, so a configuration that adds one fails until it has been
@@ -1121,9 +1130,10 @@ int os64_media_open_for(const os64_media_source_t *src, uint32_t want, os64_medi
     if (info == NULL) info = &local;
     os64_memset(info, 0, sizeof(*info));
 
+    // § THREADS: the whole open is under s_lock, released before any
+    // return (a failure's close takes it again).
     os64_lock_acquire(&s_lock);
     ready_locked();
-    os64_lock_release(&s_lock);
 
     int result = OS64_MEDIA_NO_MEMORY;
     uint8_t *buffer = av_malloc(IO_BUFFER);
@@ -1145,16 +1155,12 @@ int os64_media_open_for(const os64_media_source_t *src, uint32_t want, os64_medi
     if (src->remote)
         m->format->flags |= AVFMT_FLAG_FAST_SEEK;   // os64_media_source_t's `remote`
 
-    os64_lock_acquire(&s_lock);
     int r = avformat_open_input(&m->format, NULL, NULL, NULL);
-    os64_lock_release(&s_lock);
     if (r < 0) {
         result = probe_error(r);   // and avformat_open_input freed the context
         goto fail;
     }
-    os64_lock_acquire(&s_lock);
     result = streams_and_decoders_locked(m, info);
-    os64_lock_release(&s_lock);
     if (result < 0) goto fail;
     if (m->codec != NULL && (result = resampler_start(m)) < 0) goto fail;
     m->silence = m->sound_lead;
@@ -1180,10 +1186,12 @@ int os64_media_open_for(const os64_media_source_t *src, uint32_t want, os64_medi
     }
     if (info->frames < 0 && m->format->duration != AV_NOPTS_VALUE)
         info->frames = av_rescale(m->format->duration, OS64_AUDIO_RATE, AV_TIME_BASE);
+    os64_lock_release(&s_lock);
     *out = m;
     return 0;
 
 fail:
+    os64_lock_release(&s_lock);
     os64_media_close(m);
     if (info != NULL) os64_memset(info, 0, sizeof(*info));
     return result;
@@ -1301,6 +1309,7 @@ const char *os64_media_error_text(const os64_media_t *m)
 void os64_media_close(os64_media_t *m)
 {
     if (m == NULL) return;
+    os64_lock_acquire(&s_lock);          // § THREADS: the whole close
     // Pictures released go back first; one still held is the caller's bug,
     // and its memory is left alone (its frame holds its own reference, which
     // keeps its buffer alive after the decoder is gone).
@@ -1322,6 +1331,7 @@ void os64_media_close(os64_media_t *m)
     if (m->stereo) os64_free(m->stereo);
     if (m->out) os64_free(m->out);
     os64_free(m);
+    os64_lock_release(&s_lock);
 }
 
 const char *os64_media_strerror(int result)

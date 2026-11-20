@@ -107,6 +107,56 @@ static void clip_close(Clip *c)
     c->fd = -1;
 }
 
+// ------------------------------------------------------------ concurrent opens
+//
+// Programs open media on several threads at once (a page's two videos, two
+// sounds mixed): each opens, decodes a little and closes, over and over, on
+// its own thread. ThreadSanitizer is the judge (media.c § THREADS).
+
+#define OPENERS 4
+#define OPENS 6
+
+static const char *s_open_path;
+static int s_opened[OPENERS];
+
+static void *opener(void *arg)
+{
+    int me = (int)(intptr_t)arg;
+    static int16_t pcm[OPENERS][4096 * 2];
+    for (int round = 0; round < OPENS; round++) {
+        Clip c;
+        clip_open(&c, s_open_path, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE);
+        if (c.result == 0) {
+            s_opened[me]++;
+            for (int i = 0; i < 24; i++) {
+                os64_media_got_t got;
+                if (os64_media_next(c.m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, pcm[me], 4096, &got) != 0 ||
+                    got.kind == OS64_MEDIA_GOT_END)
+                    break;
+                if (got.kind == OS64_MEDIA_GOT_PICTURE)
+                    os64_media_picture_release(c.m, got.picture);
+            }
+        }
+        clip_close(&c);
+    }
+    return NULL;
+}
+
+static void test_concurrent_opens(const char *clip)
+{
+    s_open_path = clip;
+    pthread_t t[OPENERS];
+    for (int i = 0; i < OPENERS; i++)
+        pthread_create(&t[i], NULL, opener, (void *)(intptr_t)i);
+    int opened = 0;
+    for (int i = 0; i < OPENERS; i++) {
+        pthread_join(t[i], NULL);
+        opened += s_opened[i];
+    }
+    CHECK(opened == OPENERS * OPENS, "concurrent opens: %d of %d opened", opened, OPENERS * OPENS);
+    printf("  concurrent opens: %d threads opened, decoded and closed %d media at once\n", OPENERS, opened);
+}
+
 // ------------------------------------------------------------ 1. the release rule
 
 #define QUEUE 8
@@ -685,6 +735,7 @@ int main(int argc, char **argv)
         return 2;
     }
     test_release(argv[1]);
+    test_concurrent_opens(argv[1]);
     test_timeline(argv[2]);
     test_info(argv[2]);
     test_skip_and_seek(argv[2]);
