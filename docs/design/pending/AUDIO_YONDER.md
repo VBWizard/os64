@@ -842,6 +842,9 @@ above:
     finite with a `durationchange`, as before.
   - The player rings yonder every quarter second while a sound alone
     plays, as the old voice did, for `timeupdate` and the controls.
+  - A seek asked before the player exists, or while it is still opening,
+    is kept and carried out once it is open, as the old decoder kept it
+    (`/tests/playertest` step 7).
   - The device refused (another program has the stream): the voice WAITs
     and the clock, which is the ear, stands still; the sound plays from
     where it was when the device comes back (`/tests/playertest` step 3).

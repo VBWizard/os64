@@ -33,6 +33,9 @@
 //      drop)
 //   6. an MP3 of no stated length from a source of unknown size: the probe
 //      cannot say, and the end does (as an element's duration does)
+//   7. a seek asked while the player is still OPENING (its source's reads
+//      held back) is carried out once it is open, under the generation it
+//      answered: it plays from there
 //   (2 also counts `look`: a sound alone playing on rings it for its
 //   position)
 //
@@ -87,11 +90,14 @@ static void make_wav(void)
 typedef struct {
     uint64_t at;
     volatile uint32_t idles;
+    volatile bool gated;            // reads wait until it opens (step 7: a seek while OPENING)
 } memory_t;
 
 static int64_t memory_read(void *ctx, uint8_t *out, size_t cap)
 {
     memory_t *m = ctx;
+    while (__atomic_load_n(&m->gated, __ATOMIC_ACQUIRE))
+        os64_sleep(1);
     size_t left = sizeof(s_wav) - m->at, n = cap < left ? cap : left;
     os64_memcpy(out, s_wav + m->at, n);
     m->at += n;
@@ -190,9 +196,10 @@ typedef struct {
     memory_t source;
 } rig_t;
 
-static bool rig_open(rig_t *r)
+static bool rig_open_gated(rig_t *r, bool gated)
 {
     os64_memset(r, 0, sizeof(*r));
+    r->source.gated = gated;
     s_finished = false;
     if (os64_media_output_create(&r->output) != 0)
         return false;
@@ -206,6 +213,11 @@ static bool rig_open(rig_t *r)
         .finished = finished,
         .ctx = r};
     return os64_media_player_create(&cfg, &r->player) == 0;
+}
+
+static bool rig_open(rig_t *r)
+{
+    return rig_open_gated(r, false);
 }
 
 static void rig_close(rig_t *r)
@@ -535,6 +547,45 @@ static int step_length_at_end(void)
     return 0;
 }
 
+static int step_seek_while_opening(void)
+{
+    rig_t r;
+    if (!rig_open_gated(&r, true))
+        return die(7, "the output or the player would not start", 0);
+    int state = facts(&r).state;
+    uint32_t g = os64_media_player_seek(r.player, 12000);
+    __atomic_store_n(&r.source.gated, false, __ATOMIC_RELEASE);
+    if (state != OS64_MEDIA_PLAYER_OPENING) {
+        rig_close(&r);
+        return die(7, "the player was not OPENING with its reads held back (the state)", state);
+    }
+    uint64_t end = (uint64_t)os64_micros() + 3000000;
+    os64_media_player_facts_t f = facts(&r);
+    while ((uint64_t)os64_micros() < end && (int32_t)(f.seeked - g) < 0) {
+        os64_sleep(10);
+        f = facts(&r);
+    }
+    s_heard_n = 0;
+    s_dropped = false;
+    os64_media_player_play(r.player);
+    bool ended = wait_state(&r, OS64_MEDIA_PLAYER_ENDED, 5000);
+    listen_for(300);
+    rig_close(&r);
+    int64_t start = heard_start();
+    os64_printf("playertest: a seek while opening: generation %u, landed %u at frame %ld; heard %u frames\n", g,
+                f.seeked, f.position, s_heard_n);
+    if ((int32_t)(f.seeked - g) < 0 || f.position != 12000)
+        return die(7, "a seek asked while opening did not land where it was asked (the frame)", f.position);
+    // Frame 12,000 is a crossing (250 whole cycles), so heard_start finds it.
+    uint32_t heard = start < 0 ? 0 : s_heard_n - (uint32_t)start;
+    if (!ended || s_dropped || heard < FRAMES - 12000)
+        return die(7, "it did not play on from the seek to the end (frames heard)", heard);
+    for (uint32_t i = 0; i < FRAMES - 12000; i++)
+        if (s_heard[(start + i) * 2] != s_samples[(12000 + i) * 2])
+            return die(7, "what was heard is not the file from the seek (the frame)", i);
+    return 0;
+}
+
 int main(void)
 {
     char sink[32];
@@ -565,6 +616,8 @@ int main(void)
         code = step_picture_loop("/tests/pages/loop-sound-near.mp4");
     if (code == 0)
         code = step_length_at_end();
+    if (code == 0)
+        code = step_seek_while_opening();
     if (s_tap >= 0)
         os64_close(s_tap);
     if (volume >= 0)

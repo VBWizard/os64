@@ -108,6 +108,8 @@ struct os64_media_player {
     double gain;                          // os64_media_player_gain's; the voice's is 0 for a muted sound alone
     int64_t loop_len;                     // a run's length once the media has looped, 0 before
     bool loop_restart;                    // looping, the end came with no next run queued: from the start
+    bool open_seek;                       // a seek asked while OPENING, to `open_seek_target` once open
+    int64_t open_seek_target;
     // Looping, the kind whose run has ended while the other's goes on: it
     // is treated as over for this run (its queue is left open for the
     // next), so a sound that runs dry is no buffering and pictures that
@@ -313,6 +315,8 @@ static uint32_t readiness(const os64_media_player_t *p)
 }
 
 static const int16_t kSilence[2 * CHUNK_FRAMES];
+
+static uint32_t seek_locked(os64_media_player_t *p, int64_t target, collect_t *c, int64_t now);
 
 // The moves between states no call makes: buffering's end, a sound that
 // stopped, the end. Run under the lock by every thread that may have made
@@ -703,10 +707,16 @@ static void opened(os64_media_player_t *p)
     os64_media_clock_source(&p->clock, audible(p) ? OS64_MEDIA_CLOCK_HEARD : OS64_MEDIA_CLOCK_MONOTONIC, now_us());
     p->probed = true;
     p->state = p->want_play ? OS64_MEDIA_PLAYER_BUFFERING : OS64_MEDIA_PLAYER_PAUSED;
+    collect_t c = {0};
+    if (p->open_seek && p->failure == 0) {
+        p->open_seek = false;
+        (void)seek_locked(p, p->open_seek_target, &c, now_us());   // nothing is queued yet
+    }
     voice_asks(p);
     look(p);
     (void)os64_bell_ring(&p->picture_bell);
     unlock(p);
+    collect_release(p, &c);
 }
 
 // The last out frees everything: every picture back before the media
@@ -1145,9 +1155,16 @@ uint32_t os64_media_player_seek(os64_media_player_t *p, int64_t frame)
     collect_t c = {0};
     int64_t now = now_us();
     os64_lock_acquire(&p->lock);
-    uint32_t g = p->state == OS64_MEDIA_PLAYER_OPENING || p->state == OS64_MEDIA_PLAYER_FAILED
-                     ? p->seek_generation
-                     : seek_locked(p, frame, &c, now);
+    uint32_t g = p->seek_generation;
+    if (p->state == OS64_MEDIA_PLAYER_OPENING) {
+        // Carried out once the media is open (opened), under the next
+        // generation, which is the one answered now.
+        p->open_seek = true;
+        p->open_seek_target = frame;
+        g = p->seek_generation + 1;
+    } else if (p->state != OS64_MEDIA_PLAYER_FAILED) {
+        g = seek_locked(p, frame, &c, now);
+    }
     unlock(p);
     collect_release(p, &c);
     return g;

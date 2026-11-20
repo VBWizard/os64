@@ -121,7 +121,9 @@ void os64_media_player_play(os64_media_player_t *p);
 void os64_media_player_pause(os64_media_player_t *p);
 // To `frame` (output frames), held to the media, playing on if it was.
 // Returns the seek's generation, which facts.seeked takes once the picture
-// owed is shown (or, with no picture, sound from there is queued).
+// owed is shown (or, with no picture, sound from there is queued). Asked
+// while OPENING, it is carried out once the media is open, under the
+// generation returned; the last one asked wins.
 uint32_t os64_media_player_seek(os64_media_player_t *p, int64_t frame);
 // By `delta` frames from where a seek under way is going, or else from the
 // clock.

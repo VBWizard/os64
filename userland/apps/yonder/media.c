@@ -940,7 +940,8 @@ static void player_tell(yonder_media_t *m)
         m->player_told = true;
     bool play = m->play, muted = m->muted, seek = m->seek_asked, loop = m->loop;
     double gain = m->gain, to = m->seek_to;
-    m->seek_asked = false;
+    if (p != NULL)
+        m->seek_asked = false;      // kept for the player until there is one
     os64_lock_release(&m->lock);
     if (p == NULL)
         return;
