@@ -14,8 +14,9 @@
   window's title carries them as one letter each (the QEMU proof reads it).
 
   For the P5: "The 1080p60 clip" plays /home/clips/h264_1080p60_av.mp4 in
-  the box instead, and "A large box" makes the box 1600 pixels wide (its
-  height follows the picture's ratio).
+  the box instead, "The flash and beep" plays sync-720p60.mp4 (unmute it
+  to hear the beep against the flash), and "A large box" makes the box
+  1600 pixels wide (its height follows the picture's ratio).
 -->
 <style>
   body { font: 16px sans-serif; margin: 16px; }
@@ -33,6 +34,7 @@
   <input type="button" id="small" value="Half size">
   <input type="button" id="big" value="Full size">
   <input type="button" id="clip" value="The 1080p60 clip">
+  <input type="button" id="sync" value="The flash and beep">
   <input type="button" id="large" value="A large box">
 </p>
 <pre id="log"></pre>
@@ -67,6 +69,7 @@
   document.getElementById('small').onclick = () => { v.style.width = '427px'; v.style.height = '300px'; };
   document.getElementById('big').onclick = () => { v.style.width = ''; v.style.height = ''; };
   document.getElementById('clip').onclick = () => { v.src = 'file:///home/clips/h264_1080p60_av.mp4'; };
+  document.getElementById('sync').onclick = () => { v.src = 'sync-720p60.mp4'; v.loop = true; };
   document.getElementById('large').onclick = () => { v.style.width = '1600px'; v.style.height = ''; };
   say();
 </script>

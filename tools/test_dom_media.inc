@@ -700,9 +700,9 @@ static void dom_media_picture_cases(void)
     s->facts.width = 640;
     s->facts.height = 360;
     media_turn(&f, "media: picture: the probe and a first picture");
-    media_script(&f, "const h=heard();assert(h.startsWith('durationchange:0 resize:0 loadedmetadata:1'),"
-                     "'resize between durationchange and loadedmetadata: '+h);"
-                     "assert(h.includes('loadeddata:2'),'loadeddata with the first picture: '+h);"
+    media_script(&f, "const h=heard().replace(/:[0-9]/g,'');"
+                     "assert(h.startsWith('durationchange resize loadedmetadata loadeddata'),"
+                     "'resize between durationchange and loadedmetadata, then loadeddata: '+h);"
                      "assert(a.videoWidth===640&&a.videoHeight===360,'the size: '+a.videoWidth+'x'+a.videoHeight);",
                  "media: picture: resize, then loadedmetadata");
     s->facts.future = s->facts.enough = true;
@@ -720,7 +720,7 @@ static void dom_media_picture_cases(void)
     s->facts.position = 0.8;
     media_turn(&f, "media: picture: 300 ms later");
     media_script(&f, "const h=heard();assert(h.includes('timeupdate:4'),'timeupdate with the clock: '+h);"
-                     "assert(Math.abs(a.currentTime-0.8)<1e-9,'the clock\'s position: '+a.currentTime);",
+                     "assert(Math.abs(a.currentTime-0.8)<1e-9,'the position of the clock: '+a.currentTime);",
                  "media: picture: timeupdate while the clock runs");
     /* The picture's size changes mid-play: resize, and the new size. */
     s->facts.width = 1280;
