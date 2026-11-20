@@ -8,6 +8,9 @@
      C: no known end: audio-tone.mp3 served by
         `tools/pages_serve.py --no-length --port 8732` (a sound, so the box is
         the strip on white): its strip has no bar.
+     D: for the P5, empty until "The 1080p60 clip" puts
+        /home/clips/h264_1080p60_av.mp4 in it (960x540, looping, with its
+        sound), to measure the strip shown against hidden.
      The title says each one's state: P paused, p playing; the duration
      (inf for no known end, nan for not yet known); B's clicks. -->
 <title>video controls</title>
@@ -17,7 +20,14 @@
 <video id=b controls loop muted src="bbb-480p-3s.mp4" width=320 height=180></video>
 <video id=c controls muted src="http://10.0.2.2:8732/audio-tone.mp3" width=320 height=180></video>
 </div>
+<div style="padding:0 12px"><input type="button" id="clip" value="The 1080p60 clip"></div>
+<video id=d controls loop width=960 height=540 style="margin:12px"></video>
 <script>
+document.getElementById("clip").addEventListener("click", function () {
+  var d = document.getElementById("d");
+  d.src = "file:///home/clips/h264_1080p60_av.mp4";
+  d.play();
+});
 var clicks = 0;
 document.getElementById("b").addEventListener("click", function (e) { e.preventDefault(); clicks++; });
 function say(v) {
