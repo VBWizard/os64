@@ -510,6 +510,8 @@ static void dom_modern_cases(void)
         "var t=document.createElement('input');assert(t.files===null,'a text field has none');"
         "t.type='checkbox';assert(t.files===null);"
         "fi.files=null;assert(fi.files===l,'null does nothing');"
+        "fi.files=undefined;assert(fi.files===l,'nor does undefined, a FileList?\\'s null too');"
+        "throws(()=>Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'files').set.call(fi),'a setter needs a value');"
         "throws(()=>{fi.files={}},'a plain object is no FileList');throws(()=>{fi.files=[]});"
         "throws(()=>{t.files={}},'converted before the type is asked');"
         "var other=document.createElement('input');other.type='file';var l2=other.files;"

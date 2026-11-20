@@ -653,8 +653,8 @@ static int reset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form)
  * back (legacy-canceled-activation), and one nobody cancelled runs the
  * activation behaviour: a changed box's input and change, a link
  * followed, a form submitted or reset (not by a disabled button). Both
- * element.click() and script-dispatched MouseEvent/PointerEvent clicks come
- * here, as do native pointer clicks. Legacy host clicks retain host defaults. */
+ * element.click() and script-dispatched clicks of MouseEvent and its heirs
+ * come here, as do native pointer clicks. Legacy host clicks retain host defaults. */
 bool d_activation_has(const os64_html_node_t *node)
 {
     if (html_element(node, OS64_HTML_TAG_A) || html_element(node, OS64_HTML_TAG_AREA))

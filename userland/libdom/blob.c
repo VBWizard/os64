@@ -14,11 +14,9 @@
  * here is a container a page can reach: a FormData's entries are a C array,
  * read by index and looked up again after anything that can run page code.
  *
- * FileList (File API § 5.2) is the list of files a file field holds. No
- * file can be picked yet (DEBTS.md), so every list is empty: `length` is 0,
- * `item` answers null, and there are no indexed properties to serve. The
- * picker's slice gives a list its Files, and its indices the way a
- * NodeList's are served (collection.c). */
+ * FileList (File API § 5.2) is the list of files a file field holds.
+ * There is no file picker (DEBTS.md), so every list is empty: `length` is
+ * 0, `item` answers null, and there are no indexed properties to serve. */
 
 static JSClassID blob_slot, form_slot, form_iterator_slot, file_list_slot;
 

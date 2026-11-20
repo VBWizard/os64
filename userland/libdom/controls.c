@@ -428,13 +428,16 @@ static bool file_upload(const os64_html_node_t *node)
 
 /* HTMLInputElement's files (HTML § 4.10.5.1.18). Read, a file field's
  * FileList, the same object every read until a script sets another; null
- * for any other type. Set, null does nothing, a value that is no FileList
- * is a TypeError (WebIDL's FileList?), and a FileList becomes a file
- * field's own; any other type keeps nothing. */
+ * for any other type. Set, null and undefined do nothing (WebIDL converts
+ * both to a FileList?'s null), a value that is no FileList is a TypeError,
+ * and a FileList becomes a file field's own; any other type keeps nothing.
+ * A setter called with no argument at all is a TypeError, as WebIDL's
+ * setters are. */
 static JSValue input_files(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool set,
-                           JSValueConst value)
+                           int argc, JSValueConst value)
 {
-    if (set && JS_IsNull(value)) return JS_UNDEFINED;
+    if (set && argc < 1) return JS_ThrowTypeError(ctx, "files needs a value");
+    if (set && (JS_IsNull(value) || JS_IsUndefined(value))) return JS_UNDEFINED;
     if (set && !d_file_list_is(value)) return JS_ThrowTypeError(ctx, "files is a FileList or null");
     if (!file_upload(node)) return set ? JS_UNDEFINED : JS_NULL;
     dom = d_owner(dom, node);
@@ -586,7 +589,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
     }
     case M_FILES:
         if (kind != IN) return JS_ThrowTypeError(ctx, "Illegal invocation");
-        return input_files(dom, ctx, node, set, value);
+        return input_files(dom, ctx, node, set, argc, value);
     case M_FORM:
         if ((kind & (IN | TA | SE | BU | FS | OU)) == 0) return JS_ThrowTypeError(ctx, "Illegal invocation");
         return d_wrap(dom, ctx, d_form_owner(node));
