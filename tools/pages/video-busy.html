@@ -8,7 +8,8 @@
   own thread, must not care).
 
   The buttons: "The 1080p60 clip" plays /home/clips/h264_1080p60_av.mp4
-  (the bunny by default); "Animate" runs a CSS animation that moves a box
+  (the bunny by default) with its sound (the click is the person's, which
+  sound needs); "Sound" mutes and unmutes whatever plays; "Animate" runs a CSS animation that moves a box
   beside it, which lays the page out each frame; "Hold" holds the main
   thread for 100 ms every second with a script. Each toggles. The page is
   long: scroll it while the video plays (the video stays at the top,
@@ -29,6 +30,7 @@
 <h1>A video beside a busy page</h1>
 <video id="v" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
 <p><input type="button" id="clip" value="The 1080p60 clip">
+   <input type="button" id="sound" value="Sound">
    <input type="button" id="animate" value="Animate">
    <input type="button" id="hold" value="Hold"></p>
 <div id="mover"></div>
@@ -37,7 +39,12 @@
 <script>
   const v = document.getElementById('v');
   let animating = false, holding = false, holds = 0, holder = 0;
-  document.getElementById('clip').onclick = () => { v.src = 'file:///home/clips/h264_1080p60_av.mp4'; };
+  document.getElementById('clip').onclick = () => {
+    v.src = 'file:///home/clips/h264_1080p60_av.mp4';
+    v.muted = false;
+    v.play();
+  };
+  document.getElementById('sound').onclick = () => { v.muted = !v.muted; };
   document.getElementById('animate').onclick = () => {
     animating = !animating;
     document.body.className = animating ? 'on' : '';
@@ -58,6 +65,7 @@
   }
   setInterval(() => {
     document.getElementById('state').textContent = 'time ' + v.currentTime.toFixed(1) + (v.paused ? ' paused' : '') +
+      (v.muted ? ', muted' : ', sound on') +
       (animating ? ', animating' : '') + (holding ? ', held ' + holds + ' times' : '');
     document.title = 'busy t' + v.currentTime.toFixed(1) + (v.paused ? ' p' : ' P');
   }, 500);
