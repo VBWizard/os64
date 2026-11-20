@@ -1,6 +1,6 @@
 # F4/F15 C3 — retained target and exposure lifetimes
 
-F.4.37 supplies F4's lifetime inputs to F.15.22. This contract describes the
+Contract PR **#682**. F.4.37 supplies F4's lifetime inputs to F.15.22. This contract describes the
 private implementation; it does not enable early destruction, slot reuse,
 public frame publication or a complete release certificate. ABI 5 pointer
 handles retain their existing meanings until runtime destruction.
