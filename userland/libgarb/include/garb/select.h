@@ -100,7 +100,8 @@ garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t 
 // answers, so an anchor tested filters first loses nothing. At most
 // GARB_ANCHOR_FILTERS enclosing compounds are kept; keeping fewer is weaker,
 // never wrong. `bare` says it has no filter at all, so testing it at an
-// element always costs its :has() walk (what a bare anchor costs a
+// element costs up to its :has() walk; only a pseudo-class tried before
+// the :has() can turn the element away sooner (what a bare anchor costs a
 // cascade's update, and its bound: cascade.c has_visit). `compound` and
 // `outer` are the selector's own, valid while the list is.
 #define GARB_ANCHOR_FILTERS 4

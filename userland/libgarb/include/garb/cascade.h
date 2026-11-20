@@ -216,13 +216,15 @@ bool garb_cascade_tracks_changes(const garb_cascade_t *c);
 // How many anchored :has() compounds (garb_anchor_t) the cascade's rules
 // hold, and how many of those are bare. While the cascade takes updates,
 // each is a bit in every element's record, asked at every element it
-// styles; a bare one costs a walk each time it is asked, and nothing more.
+// styles; a bare one costs up to a walk each time it is asked (its bound:
+// cascade.c has_visit), and never keeps the cascade from updates.
 void garb_cascade_anchors(const garb_cascade_t *c, int32_t *anchors, int32_t *bare);
 // What the bare anchors cost the latest update that read the document's
 // changes: how many times one was asked again at an element a change could
 // have turned it on (not its asks at restyled elements), how many of those
-// answers turned, and how many elements the turns marked for restyling.
-// Zeros before any update.
+// answers turned, and how many elements the turns newly marked for
+// restyling (a reach the change had already marked adds nothing, though it
+// is restyled all the same). Zeros before any update.
 typedef struct {
     uint64_t tested, turned, marked;
 } garb_bare_work_t;

@@ -3,11 +3,12 @@
  * property by property. A seeded random walk makes the changes a page makes
  * (elements added, removed and moved; class, id and other attributes, the
  * ones libgarb's state pseudo-classes read among them: checked, open,
- * disabled; style attributes; text) in batches, on a generated tree, under
- * generated sheets that favour :has() in every form the update follows
- * (subject and anchored, filtered and bare; descendant, child and sibling
- * arguments; inside :not(), :is() and :where(); a state inside the
- * argument). A difference
+ * disabled, lang, dir; style attributes; text) in batches, on a generated
+ * tree, under generated sheets that favour :has() in the forms the update
+ * follows (subject and anchored, filtered and bare; descendant, child and
+ * sibling arguments; inside :not(), :is() and :where(); a state inside the
+ * argument; an anchor's own compound holding a pseudo-class that reads its
+ * place, its children, a fieldset or an ancestor's lang or dir). A difference
  * fails, naming the seed, the step, the element, the property and the batch
  * that led there. The walk keeps a padding of elements no rule reaches, so
  * a batch reaches less than half the elements and the update is not merely
@@ -25,16 +26,28 @@ static int oracle_pick(OracleRng *r, int n) { return (int)(oracle_next(r) % (uin
 
 static const char *const kOracleTags[]={"div","p","span","section","i","input","fieldset","details","legend"};
 static const char *const kOracleClasses[]={"a","b","x","k"};
-// An element's own compound: always filtered (a type, a class or an
-// attribute), as an anchor's must be to be tracked. Few names, so rules
-// match often and a turn shows.
+// A pseudo-class an anchor's own compound may hold, one that reads more
+// than the element's attributes (its place among its siblings, its
+// children, an ancestor fieldset's `disabled`, an ancestor's `lang` or
+// `dir`); or nothing, half the time. No filter: an anchor holding only
+// this is bare.
+static const char *oracle_pseudo(OracleRng *r)
+{
+    static const char *const kPseudo[]={":first-child",":last-child",":nth-child(2)",":empty",":disabled",
+                                        ":lang(fr)",":dir(rtl)"};
+    return oracle_pick(r, 2) ? kPseudo[oracle_pick(r, 7)] : "";
+}
+// An element's own compound: filtered (a type, a class or an attribute),
+// sometimes with a pseudo-class beside. Few names, so rules match often
+// and a turn shows.
 static void oracle_compound(OracleRng *r, char *out, size_t cap)
 {
+    const char *pseudo = oracle_pick(r, 2) ? oracle_pseudo(r) : "";
     switch (oracle_pick(r, 5)) {
-    case 0: snprintf(out, cap, "%s", kOracleTags[oracle_pick(r, 4)]); break;
-    case 1: case 2: snprintf(out, cap, ".%s", kOracleClasses[oracle_pick(r, 4)]); break;
-    case 3: snprintf(out, cap, "[data-x]"); break;
-    default: snprintf(out, cap, "%s.%s", kOracleTags[oracle_pick(r, 4)], kOracleClasses[oracle_pick(r, 4)]); break;
+    case 0: snprintf(out, cap, "%s%s", kOracleTags[oracle_pick(r, 4)], pseudo); break;
+    case 1: case 2: snprintf(out, cap, ".%s%s", kOracleClasses[oracle_pick(r, 4)], pseudo); break;
+    case 3: snprintf(out, cap, "[data-x]%s", pseudo); break;
+    default: snprintf(out, cap, "%s.%s%s", kOracleTags[oracle_pick(r, 4)], kOracleClasses[oracle_pick(r, 4)], pseudo); break;
     }
 }
 // What a :has() argument looks for, state pseudo-classes among it.
@@ -75,7 +88,8 @@ static void oracle_sheet(OracleRng *r, char *out, size_t cap)
         oracle_compound(r, d, sizeof(d));
         oracle_argument(r, a, sizeof(a));
         oracle_declarations(r, i, decl, sizeof(decl));
-        switch (oracle_pick(r, 21)) {
+        const char *p = oracle_pseudo(r);
+        switch (oracle_pick(r, 24)) {
         case 0: len += (size_t)snprintf(out + len, cap - len, "%s:has(%s) %s{%s}", f, a, d, decl); break;
         case 1: len += (size_t)snprintf(out + len, cap - len, "%s:has(> %s) > %s{%s}", f, a, d, decl); break;
         case 2: len += (size_t)snprintf(out + len, cap - len, "%s:has(+ %s) ~ %s{%s}", f, a, d, decl); break;
@@ -94,11 +108,15 @@ static void oracle_sheet(OracleRng *r, char *out, size_t cap)
         // The anchor left of a combinator inside the :is(): `.k` names
         // another element, so it is no filter of the anchor's.
         case 15: len += (size_t)snprintf(out + len, cap - len, ".k:is(%s:has(%s) > %s) %s{%s}", f, a, d, d, decl); break;
-        // Bare anchors: nothing filters them, and the cascade still tracks.
-        case 16: len += (size_t)snprintf(out + len, cap - len, ":has(%s) %s{%s}", a, d, decl); break;
-        case 17: len += (size_t)snprintf(out + len, cap - len, ":has(> %s) > %s{%s}", a, d, decl); break;
-        case 18: len += (size_t)snprintf(out + len, cap - len, ":has(+ %s) ~ %s{%s}", a, d, decl); break;
-        case 19: len += (size_t)snprintf(out + len, cap - len, ":not(:has(%s)) %s{%s}", a, d, decl); break;
+        // Bare anchors: nothing filters them (a pseudo-class beside is no
+        // filter), and the cascade still tracks.
+        case 16: len += (size_t)snprintf(out + len, cap - len, "%s:has(%s) %s{%s}", p, a, d, decl); break;
+        case 17: len += (size_t)snprintf(out + len, cap - len, "%s:has(> %s) > %s{%s}", p, a, d, decl); break;
+        case 18: len += (size_t)snprintf(out + len, cap - len, "%s:has(+ %s) ~ %s{%s}", p, a, d, decl); break;
+        case 19: len += (size_t)snprintf(out + len, cap - len, "%s:not(:has(%s)) %s{%s}", p, a, d, decl); break;
+        case 20: len += (size_t)snprintf(out + len, cap - len, "%s:has(~ %s) + %s{%s}", p, a, d, decl); break;
+        case 21: len += (size_t)snprintf(out + len, cap - len, "%s:is(.k, :has(%s)) > %s{%s}", p, a, d, decl); break;
+        case 22: len += (size_t)snprintf(out + len, cap - len, ":where(%s:has(%s)) ~ %s{%s}", p, a, d, decl); break;
         default: len += (size_t)snprintf(out + len, cap - len, "input:checked ~ %s{%s}", d, decl); break;
         }
     }
@@ -210,10 +228,12 @@ static void oracle_change(OracleRng *r, os64_html_document_t *doc, os64_html_nod
         break;
     }
     case 5: {
-        static const char *const kAttrs[]={"checked","open","disabled","data-x","title","hidden"};
-        const char *a = kAttrs[oracle_pick(r, 6)];
+        static const char *const kAttrs[]={"checked","open","disabled","data-x","title","hidden","lang","dir"};
+        static const char *const kValues[]={"","","","","","","fr","rtl"};
+        int which = oracle_pick(r, 8);
+        const char *a = kAttrs[which];
         if (os64_html_attr(e, a)) os64_html_remove_attr(doc, e, a);
-        else os64_html_set_attr(doc, e, a, "", 0);
+        else os64_html_set_attr(doc, e, a, kValues[which], strlen(kValues[which]));
         snprintf(log, cap, "toggle %s on %s", a, path);
         break;
     }

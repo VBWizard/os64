@@ -3254,14 +3254,17 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
 // (where it happened and its ancestors, with `+`/`~` arguments their
 // previous siblings too), and at each element a restyle recomputes. A
 // filtered anchor's ask is a compare wherever its filters fail; a bare
-// one's costs up to its :has() walk, of the element's children for
-// `:has(> …)`, of its following siblings (and, for `~ a b`, under them)
-// for `+`/`~`, and of its whole subtree for a descendant argument. So an
-// update pays (elements visited) x (bare anchors) such walks, plus one at
-// each restyled element, plus the restyle of the reach of each anchor that
-// really turned, and nothing beyond: the cascade keeps tracking.
-// bare_work counts the asks made here, the turns and what they marked,
-// for the record.
+// one's costs up to its :has() walk (has_matches): the element's whole
+// subtree for a descendant or a `>` argument (the walk does not stop at
+// the children), and each following sibling's subtree for `+` and `~`.
+// So an update pays (elements visited) x (bare anchors) such walks, plus
+// (restyled elements) x (bare anchors) more, plus the restyle of the reach
+// of each anchor that really turned; the cascade keeps tracking. Matching
+// a restyled element against a rule whose :has() stands left of a
+// combinator walks again at each of its ancestors, whether the anchor is
+// bare or not: that cost is the matcher's (DEBTS, Browser layout,
+// "Matching asks a `:has()` again"). bare_work counts the asks made here,
+// the turns, and the elements their marks added, for the record.
 static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
 {
     if (!connected(c, a)) return true;

@@ -103,7 +103,8 @@ typedef struct {
     uint64_t metadata_peak; // Maximum new snapshot/match/staging bytes, not a sum.
     // The most anchored :has() compounds a layout's cascade held, and the
     // most of them bare (maxima, not sums); and what the bare ones cost the
-    // updates (garb_bare_work_t, sums): asked again, turned, elements marked.
+    // updates (garb_bare_work_t, sums): asked again, turned, elements newly
+    // marked.
     uint64_t anchors_peak, anchors_bare_peak;
     uint64_t bare_tested, bare_turned, bare_marked;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
