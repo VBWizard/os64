@@ -72,11 +72,23 @@ typedef struct {
     size_t realm_index;
     bool assigned;
 } OwnerBinding;
+typedef enum { OWNER_CALLBACK_FREE, OWNER_CALLBACK_LIVE,
+    OWNER_CALLBACK_QUEUED, OWNER_CALLBACK_CLEARING } OwnerCallbackState;
+typedef struct {
+    uint64_t serial;
+    JSOwnerTicket incumbent;
+    JSValue value;
+    OwnerCallbackState state;
+} OwnerCallback;
 typedef struct {
     _Alignas(max_align_t) JSOwnerTickets table;
     uint64_t incarnation;
     size_t requested_bytes, charged_bytes, wrapper_bytes;
     OwnerBinding *bindings;
+    OwnerCallback *callbacks;
+    size_t callback_capacity, callback_invocations;
+    uint64_t callback_serial;
+    bool callback_cleaning;
 } OwnerMetadata;
 struct JSOwnerRuntimeScope {
     os64_js_runtime_t *runtime;
@@ -151,7 +163,8 @@ bool js_owner_runtime_metadata(const os64_js_runtime_t *runtime, JSOwnerRuntimeM
 
 /* The map is charged in the selected arena. A consumed reservation keeps
  * its ID even if construction never assigns a usable realm. */
-static bool owner_metadata_size(JSOwnerLimits limits, size_t *bytes, size_t *pool_offset)
+static bool owner_metadata_size(JSOwnerLimits limits, size_t callbacks,
+    size_t *bytes, size_t *pool_offset, size_t *callback_offset)
 {
     size_t pool;
     if (js_owner_tickets_size(limits, &pool) != JS_OWNER_OK ||
@@ -161,10 +174,21 @@ static bool owner_metadata_size(JSOwnerLimits limits, size_t *bytes, size_t *poo
     size_t padding = remainder ? _Alignof(max_align_t) - remainder : 0;
     if (padding > SIZE_MAX - prefix) return false;
     prefix += padding;
+    *callback_offset = prefix;
+    if (callbacks > (SIZE_MAX - prefix) / sizeof(OwnerCallback)) return false;
+    prefix += callbacks * sizeof(OwnerCallback);
+    remainder = prefix % _Alignof(max_align_t);
+    padding = remainder ? _Alignof(max_align_t) - remainder : 0;
+    if (padding > SIZE_MAX - prefix) return false;
+    prefix += padding;
     if (pool > SIZE_MAX - prefix) return false;
     *pool_offset = prefix;
     *bytes = prefix + pool;
     return true;
+}
+static bool owner_callback_cleanup_active(const os64_js_runtime_t *runtime)
+{
+    return runtime && runtime->metadata_selected && runtime->owner.metadata->callback_cleaning;
 }
 static void owner_legacy_escape(os64_js_runtime_t *runtime)
 {
@@ -1069,6 +1093,8 @@ static os64_js_status_t setup_enter(os64_js_realm_t *realm, os64_js_outcome_t *o
     if (outcome_in_use(runtime, out)) return OS64_JS_BUSY;
     os64_memset(out, 0, sizeof(*out));
     if (runtime == NULL) return status(out, OS64_JS_BAD_ARGUMENT, "realm is required");
+    if (owner_callback_cleanup_active(runtime))
+        return status(out, OS64_JS_BUSY, "callback cleanup is executing");
     if (runtime->destroying || runtime->failure != OS64_JS_OK)
         return status(out, OS64_JS_FAILED_RUNTIME, "runtime has failed");
     if (realm->retired)
@@ -1154,7 +1180,8 @@ static os64_js_status_t create_with_teardown(const os64_js_config_t *config,
                                         const char *caller_abi,
                                         os64_js_runtime_t **out,
                                         os64_js_outcome_t *outcome,
-                                        const JSOwnerLimits *metadata_limits)
+                                        const JSOwnerLimits *metadata_limits,
+                                        const size_t *callback_capacity)
 {
     if (out != NULL) *out = NULL;
     if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
@@ -1186,8 +1213,12 @@ static os64_js_status_t create_with_teardown(const os64_js_config_t *config,
         outcome->limit = OS64_JS_LIMIT_MEMORY;
         return status(outcome, OS64_JS_LIMIT, "runtime storage exceeds memory limit");
     }
-    size_t metadata_bytes = 0, metadata_pool = 0;
-    if (metadata_limits && !owner_metadata_size(*metadata_limits, &metadata_bytes, &metadata_pool))
+    size_t metadata_bytes = 0, metadata_pool = 0, callback_offset = 0;
+    size_t callbacks = callback_capacity ? *callback_capacity : 0;
+    if (callback_capacity && (!callbacks || !metadata_limits))
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "callback capacity must be positive");
+    if (metadata_limits && !owner_metadata_size(*metadata_limits, callbacks,
+            &metadata_bytes, &metadata_pool, &callback_offset))
         return status(outcome, OS64_JS_BAD_ARGUMENT, "invalid owner metadata capacities");
     uint64_t incarnation;
     if (js_owner_incarnation_next(&incarnation) != JS_OWNER_OK)
@@ -1227,6 +1258,8 @@ static os64_js_status_t create_with_teardown(const os64_js_config_t *config,
         metadata->charged_bytes = charge;
         metadata->wrapper_bytes = storage;
         metadata->bindings = (OwnerBinding *)((unsigned char *)metadata + sizeof(*metadata));
+        metadata->callback_capacity = callbacks;
+        metadata->callbacks = callbacks ? (OwnerCallback *)((unsigned char *)metadata + callback_offset) : NULL;
         if (js_owner_tickets_init(&metadata->table, incarnation, *metadata_limits,
                 (unsigned char *)metadata + metadata_pool, metadata_bytes - metadata_pool) != JS_OWNER_OK)
             jsport_fatal("owner metadata initialization", __FILE__, __LINE__);
@@ -1283,14 +1316,21 @@ JS_PUBLIC os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *
     os64_js_teardown_policy_t policy, const char *caller_abi,
     os64_js_runtime_t **out, os64_js_outcome_t *outcome)
 {
-    return create_with_teardown(config, policy, caller_abi, out, outcome, NULL);
+    return create_with_teardown(config, policy, caller_abi, out, outcome, NULL, NULL);
 }
 
 os64_js_status_t js_owner_runtime_create(const os64_js_config_t *config,
     os64_js_teardown_policy_t policy, const char *caller_abi, JSOwnerLimits metadata_limits,
     os64_js_runtime_t **out, os64_js_outcome_t *outcome)
 {
-    return create_with_teardown(config, policy, caller_abi, out, outcome, &metadata_limits);
+    return create_with_teardown(config, policy, caller_abi, out, outcome, &metadata_limits, NULL);
+}
+
+os64_js_status_t js_owner_runtime_create_with_callbacks(const os64_js_config_t *config,
+    os64_js_teardown_policy_t policy, const char *caller_abi, JSOwnerLimits limits,
+    size_t capacity, os64_js_runtime_t **out, os64_js_outcome_t *outcome)
+{
+    return create_with_teardown(config, policy, caller_abi, out, outcome, &limits, &capacity);
 }
 
 os64_js_status_t js_owner_runtime_create_with_failure_records(const os64_js_config_t *config,
@@ -1573,6 +1613,8 @@ static os64_js_status_t settings_ready(os64_js_runtime_t *runtime, const char *a
         return status(out, OS64_JS_BAD_ARGUMENT, "runtime and ABI are required");
     if (os64_strcmp(abi, OS64_JS_ABI_ID) != 0)
         return status(out, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
+    if (owner_callback_cleanup_active(runtime))
+        return status(out, OS64_JS_BUSY, "callback cleanup is executing");
     if (runtime->destroying || runtime->failure != OS64_JS_OK || runtime->allocator.failures ||
         __atomic_load_n(&runtime->cancelled, __ATOMIC_ACQUIRE))
         return status(out, OS64_JS_FAILED_RUNTIME, "runtime requires root cleanup");
@@ -2662,6 +2704,126 @@ JSOwnerStatus js_owner_scope_export(JSOwnerRuntimeScope *scope, JSContext **out)
     *out = context;
     return JS_OWNER_OK;
 }
+
+bool js_owner_callback_summary(const os64_js_runtime_t *runtime, JSOwnerCallbackSummary *out)
+{
+    if (!runtime || !out || !runtime->metadata_selected) return false;
+    const OwnerMetadata *metadata = runtime->owner.metadata;
+    if (!metadata->callback_capacity) return false;
+    JSOwnerCallbackSummary summary = {.incarnation=metadata->incarnation,
+        .capacity=metadata->callback_capacity, .invocations=metadata->callback_invocations};
+    for (size_t i = 0; i < metadata->callback_capacity; i++) {
+        OwnerCallbackState state = metadata->callbacks[i].state;
+        summary.live += state == OWNER_CALLBACK_LIVE;
+        summary.closing += state == OWNER_CALLBACK_QUEUED || state == OWNER_CALLBACK_CLEARING;
+    }
+    *out = summary;
+    return true;
+}
+static JSOwnerStatus owner_callback_find(os64_js_runtime_t *runtime, JSOwnerCallbackKey key,
+    OwnerCallback **out)
+{
+    if (!runtime || !runtime->metadata_selected || !runtime->owner.metadata->callback_capacity ||
+        !key.incarnation || !key.serial) return JS_OWNER_INVALID;
+    OwnerMetadata *metadata = runtime->owner.metadata;
+    if (key.incarnation != metadata->incarnation) return JS_OWNER_FOREIGN;
+    for (size_t i = 0; i < metadata->callback_capacity; i++) {
+        OwnerCallback *cell = &metadata->callbacks[i];
+        if (cell->state == OWNER_CALLBACK_LIVE && cell->serial == key.serial) {
+            *out = cell;
+            return JS_OWNER_OK;
+        }
+    }
+    return JS_OWNER_STALE;
+}
+/* Native finalizers may invalidate another key; the outer cleanup releases
+ * queued payloads. Capture is blocked until the loop ends, bounding its work
+ * by the reserved cells without another native cleanup recursion layer. */
+static void owner_callbacks_cleanup(os64_js_runtime_t *runtime, JSValue value)
+{
+    OwnerMetadata *metadata = runtime->owner.metadata;
+    bool nested = metadata->callback_cleaning, borrowed = runtime->active;
+    if (!borrowed) {
+        runtime->active = true;
+        JS_UpdateStackTop(runtime->engine);
+    }
+    metadata->callback_cleaning = true;
+    JS_FreeValueRT(runtime->engine, value);
+    if (!nested) {
+        for (;;) {
+            OwnerCallback *cell = NULL;
+            for (size_t i = 0; i < metadata->callback_capacity; i++) {
+                if (metadata->callbacks[i].state == OWNER_CALLBACK_QUEUED) {
+                    cell = &metadata->callbacks[i];
+                    break;
+                }
+            }
+            if (!cell) break;
+            cell->state = OWNER_CALLBACK_CLEARING;
+            JSValue held = cell->value;
+            cell->value = JS_UNDEFINED;
+            JS_FreeValueRT(runtime->engine, held);
+            if (js_owner_ticket_close(&metadata->table, metadata->incarnation, cell->incumbent) != JS_OWNER_OK)
+                jsport_fatal("callback incumbent cleanup", __FILE__, __LINE__);
+            *cell = (OwnerCallback){.value=JS_UNDEFINED};
+        }
+        metadata->callback_cleaning = false;
+    }
+    if (!borrowed) runtime->active = false;
+}
+JSOwnerStatus js_owner_callback_close(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerCallbackKey key)
+{
+    if (!caller_abi || os64_strcmp(caller_abi, OS64_JS_ABI_ID)) return JS_OWNER_INVALID;
+    OwnerCallback *cell;
+    JSOwnerStatus result = owner_callback_find(runtime, key, &cell);
+    if (result != JS_OWNER_OK) return result;
+    cell->serial = 0;
+    cell->state = OWNER_CALLBACK_QUEUED;
+    owner_callbacks_cleanup(runtime, JS_UNDEFINED);
+    return JS_OWNER_OK;
+}
+JSOwnerStatus js_owner_callback_capture(JSOwnerRuntimeScope *scope, const char *caller_abi,
+    JSValueConst callback, JSOwnerCallbackKey *out)
+{
+    if (!scope || !caller_abi || os64_strcmp(caller_abi, OS64_JS_ABI_ID) ||
+        !out || !JS_IsObject(callback)) return JS_OWNER_INVALID;
+    os64_js_runtime_t *runtime = scope->runtime;
+    OwnerMetadata *metadata = runtime->owner.metadata;
+    if (!metadata->callback_capacity || metadata->callback_cleaning || runtime->destroying ||
+        runtime->setup_realm || runtime->failure != OS64_JS_OK || runtime->allocator.failures ||
+        __atomic_load_n(&runtime->cancelled, __ATOMIC_ACQUIRE)) return JS_OWNER_INVALID;
+    JSOwnerSettingsSnapshot facts;
+    if (js_owner_scope_settings(scope, OS64_JS_SETTINGS_INCUMBENT, &facts) != JS_OWNER_OK ||
+        facts.kind != JS_OWNER_SETTINGS_MAPPED || facts.realm.retired || facts.realm.failed || facts.realm.staged)
+        return JS_OWNER_INVALID;
+    size_t index = 0;
+    while (index < metadata->callback_capacity && metadata->callbacks[index].state != OWNER_CALLBACK_FREE) index++;
+    if (index == metadata->callback_capacity) return JS_OWNER_CAPACITY;
+    uint64_t serial;
+    JSOwnerStatus result = js_owner_callback_serial_next(&metadata->callback_serial, &serial);
+    if (result != JS_OWNER_OK) return result;
+    JSOwnerTicket incumbent;
+    result = js_owner_ticket_open(&metadata->table, metadata->incarnation, facts.realm.owner, &incumbent);
+    if (result != JS_OWNER_OK) return result;
+    metadata->callbacks[index] = (OwnerCallback){.serial=serial, .incumbent=incumbent,
+        .value=JS_DupValueRT(runtime->engine, callback), .state=OWNER_CALLBACK_LIVE};
+    *out = (JSOwnerCallbackKey){metadata->incarnation, serial};
+    return JS_OWNER_OK;
+}
+static void owner_callbacks_shutdown(os64_js_runtime_t *runtime)
+{
+    if (!runtime->metadata_selected || !runtime->owner.metadata->callback_capacity) return;
+    OwnerMetadata *metadata = runtime->owner.metadata;
+    for (size_t i = 0; i < metadata->callback_capacity; i++) {
+        OwnerCallback *cell = &metadata->callbacks[i];
+        if (cell->state == OWNER_CALLBACK_LIVE) {
+            cell->serial = 0;
+            cell->state = OWNER_CALLBACK_QUEUED;
+        }
+    }
+    owner_callbacks_cleanup(runtime, JS_UNDEFINED);
+}
 typedef struct {
     JSOwnerRuntimeScope scope;
     JSOwnerScopedBody *body;
@@ -2675,27 +2837,50 @@ static JSValue owner_scoped_body(JSContext *context, void *opaque)
 typedef struct {
     OwnerScopedCall call;
     os64_js_outcome_t *outcome;
+    JSOwnerCallbackBody *callback_body;
+    JSValue callback;
+    bool callback_held;
 } OwnerSettingsInvocation;
 static JSValue owner_settings_invoke(JSContext *context, void *opaque)
 {
     OwnerSettingsInvocation *invocation = opaque;
-    JSValue value = owner_scoped_body(context, &invocation->call);
+    os64_js_runtime_t *runtime = invocation->call.scope.runtime;
+    JSValue value = invocation->callback_body
+        ? invocation->callback_body(&invocation->call.scope, context, invocation->callback, invocation->call.opaque)
+        : owner_scoped_body(context, &invocation->call);
     if (JS_IsException(value)) {
         JSValue error = JS_GetException(context);
         invocation->outcome->status = OS64_JS_EXCEPTION;
         diagnostic(invocation->call.scope.runtime, context, error, invocation->outcome);
-        JS_FreeValue(context, error);
+        if (invocation->callback_body) owner_callbacks_cleanup(runtime, error);
+        else JS_FreeValue(context, error);
     }
-    JS_FreeValue(context, value);
+    if (invocation->callback_body) owner_callbacks_cleanup(runtime, value);
+    else JS_FreeValue(context, value);
+    if (invocation->callback_held) {
+        invocation->callback_held = false;
+        owner_callbacks_cleanup(runtime, invocation->callback);
+        runtime->owner.metadata->callback_invocations--;
+    }
     return JS_UNDEFINED;
 }
-os64_js_status_t js_owner_runtime_with_settings(os64_js_runtime_t *runtime, const char *caller_abi,
+static os64_js_status_t owner_with_settings(os64_js_runtime_t *runtime, const char *caller_abi,
     JSOwnerTicket entry_ticket, const JSOwnerTicket *incumbent_ticket,
-    JSOwnerScopedBody *body, void *opaque, os64_js_outcome_t *outcome)
+    JSOwnerScopedBody *body, void *opaque, os64_js_outcome_t *outcome,
+    const JSOwnerCallbackKey *callback_key, JSOwnerCallbackBody *callback_body)
 {
     os64_js_status_t result = settings_ready(runtime, caller_abi, outcome);
     if (result != OS64_JS_OK) return result;
-    if (!body) return status(outcome, OS64_JS_BAD_ARGUMENT, "settings body is required");
+    if ((!callback_key && !body) || (callback_key && !callback_body))
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "settings body is required");
+    OwnerCallback *callback = NULL;
+    JSOwnerTicket captured_incumbent;
+    if (callback_key) {
+        if (owner_callback_find(runtime, *callback_key, &callback) != JS_OWNER_OK)
+            return status(outcome, OS64_JS_ADMISSION_REFUSED, "callback key does not resolve");
+        captured_incumbent = callback->incumbent;
+        incumbent_ticket = &captured_incumbent;
+    }
     os64_js_realm_t *entry, *incumbent = NULL;
     if (owner_ticket_realm(runtime, entry_ticket, &entry) != JS_OWNER_OK)
         return status(outcome, OS64_JS_ADMISSION_REFUSED, "entry ticket does not resolve");
@@ -2712,7 +2897,8 @@ os64_js_status_t js_owner_runtime_with_settings(os64_js_runtime_t *runtime, cons
         return status(outcome, OS64_JS_BAD_ARGUMENT, "settings require an active turn or open task");
     if (observe(runtime)) { sticky(runtime, outcome); return outcome->status; }
     OwnerSettingsInvocation invocation = {
-        .call={.scope={.runtime=runtime, .realm=entry}, .body=body, .opaque=opaque}, .outcome=outcome};
+        .call={.scope={.runtime=runtime, .realm=entry}, .body=body, .opaque=opaque},
+        .outcome=outcome, .callback_body=callback_body};
     JSOwnerLoan incumbent_loan = {0};
     OwnerMetadata *metadata = runtime->owner.metadata;
     if (js_owner_loan_begin(&metadata->table, metadata->incarnation,
@@ -2722,12 +2908,22 @@ os64_js_status_t js_owner_runtime_with_settings(os64_js_runtime_t *runtime, cons
             *incumbent_ticket, &incumbent_loan) != JS_OWNER_OK) {
         status(outcome, OS64_JS_ADMISSION_REFUSED, "incumbent invocation capacity exhausted");
     } else if (borrowed || enter(runtime, outcome) == OS64_JS_OK) {
+        if (callback) {
+            invocation.callback = JS_DupValueRT(runtime->engine, callback->value);
+            invocation.callback_held = true;
+            metadata->callback_invocations++;
+        }
         SettingsCall call = {runtime->settings_calls, entry, outcome, owner_settings_invoke, &invocation};
         runtime->settings_calls = &call;
         JSValue value = JS_UNDEFINED;
         bool admitted = JS_RunWithSettings(entry->context, incumbent ? incumbent->context : NULL,
                                           scoped_settings_body, &call, &value);
         JS_FreeValue(entry->context, value);
+        if (invocation.callback_held) {
+            invocation.callback_held = false;
+            owner_callbacks_cleanup(runtime, invocation.callback);
+            metadata->callback_invocations--;
+        }
         runtime->settings_calls = call.previous;
         if (!admitted) status(outcome, OS64_JS_ADMISSION_REFUSED, "settings scope nesting limit reached");
         if (observe(runtime)) sticky(runtime, outcome);
@@ -2747,6 +2943,18 @@ os64_js_status_t js_owner_runtime_with_settings(os64_js_runtime_t *runtime, cons
     if (js_owner_loan_end(&metadata->table, metadata->incarnation, invocation.call.scope.loan) != JS_OWNER_OK)
         jsport_fatal("owner entry settings unwind", __FILE__, __LINE__);
     return outcome->status;
+}
+os64_js_status_t js_owner_runtime_with_settings(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerTicket entry, const JSOwnerTicket *incumbent, JSOwnerScopedBody *body,
+    void *opaque, os64_js_outcome_t *outcome)
+{
+    return owner_with_settings(runtime, caller_abi, entry, incumbent, body, opaque, outcome, NULL, NULL);
+}
+os64_js_status_t js_owner_callback_invoke(os64_js_runtime_t *runtime, const char *caller_abi,
+    JSOwnerCallbackKey key, JSOwnerTicket entry, JSOwnerCallbackBody *body,
+    void *opaque, os64_js_outcome_t *outcome)
+{
+    return owner_with_settings(runtime, caller_abi, entry, NULL, NULL, opaque, outcome, &key, body);
 }
 os64_js_status_t js_owner_runtime_scoped_run(os64_js_runtime_t *runtime, const char *caller_abi,
     JSOwnerTicket ticket, const char *name, JSOwnerScopedBody *body, void *opaque, os64_js_outcome_t *outcome)
@@ -4619,6 +4827,7 @@ JS_PUBLIC void os64_js_destroy_report(os64_js_runtime_t *runtime,
     /* Off before anything is freed: freeing the engine runs a collection,
      * which would otherwise call the ledger's hook. */
     os64_js_ledger_disable(runtime);
+    owner_callbacks_shutdown(runtime);
     for (size_t i = 0; i < runtime->realm_count; i++) runtime->realms[i].hosted = false;
     runtime->router = (os64_js_rejection_router_t){0};
     JS_SetHostPromiseRejectionTracker(runtime->engine, NULL, NULL);

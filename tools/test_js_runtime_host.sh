@@ -21,7 +21,7 @@ for source in userland/libjs/runtime/runtime.c userland/libjs/runtime/ledger.c u
     tools/test_js_port_calendar.c tools/test_js_runtime_host.c; do
     observe_call=()
     if [ "$source" = userland/libjs/runtime/runtime.c ]; then
-        observe_call=(-DJS_Call=js_realm_observed_call -Djs_owner_incarnation_next=js_owner_observed_incarnation_next -Djs_owner_loan_begin=js_owner_observed_loan_begin)
+        observe_call=(-DJS_Call=js_realm_observed_call -Djs_owner_incarnation_next=js_owner_observed_incarnation_next -Djs_owner_loan_begin=js_owner_observed_loan_begin -Djs_owner_callback_serial_next=js_owner_observed_callback_serial_next -Dos64_malloc=js_owner_observed_malloc -Dos64_free=js_owner_observed_free -DJS_FreeContext=js_owner_observed_context_free)
     fi
     cc "${flags[@]}" "${observe_call[@]}" -c "$source" -o "$js_runtime_work/$(basename "$source" .c).o"
 done
@@ -72,7 +72,7 @@ if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" = --host-promise-capabilities ] ||
 fi
 if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" != "" ]; then
     case "$JS_RUNTIME_FOCUSED_SELECTOR" in
-        --browser-jobs|--owner-invocations|--owner-settings|--owner-providers|--owner-tasks|--owner-rejections|--owner-setup|--owner-failures|--owner-scopes|--owner-realms|--owner-admission|--owner-runtime|--retention|--failed-code-only|--failure-records|--recovery-barrier|--child-recovery|--execution-scopes-only|--native-call-contexts|--settings-scopes|--settings-bridge|--callback-settings|--current-settings|--promise-settings|--active-script|--finalization-tasks|--finalization-settings|--import-settings|--neutral-promise-settings|--global-receiver|--global-this|--realms-only|--quiescence) ;;
+        --browser-jobs|--owner-callbacks|--owner-invocations|--owner-settings|--owner-providers|--owner-tasks|--owner-rejections|--owner-setup|--owner-failures|--owner-scopes|--owner-realms|--owner-admission|--owner-runtime|--retention|--failed-code-only|--failure-records|--recovery-barrier|--child-recovery|--execution-scopes-only|--native-call-contexts|--settings-scopes|--settings-bridge|--callback-settings|--current-settings|--promise-settings|--active-script|--finalization-tasks|--finalization-settings|--import-settings|--neutral-promise-settings|--global-receiver|--global-this|--realms-only|--quiescence) ;;
 
         *) printf 'Unsupported focused runtime selector\n' >&2; exit 2 ;;
     esac

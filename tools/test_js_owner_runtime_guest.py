@@ -78,7 +78,7 @@ def main():
         "source_head": subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
         "working_diff_sha256": hashlib.sha256(subprocess.check_output(
             ["git", "-C", str(root), "diff", "--binary", "HEAD"])).hexdigest(),
-        "scope": "Private checked lifetimes: actual runtime/engine objects; scoped setup, execution, rejection consumption, native tasks, module providers, settings observations and checked settings invocation; no public profile or reclamation",
+        "scope": "Private checked lifetimes: actual runtime/engine objects; scoped setup, execution, rejection consumption, native tasks, module providers, settings observations, checked settings invocation and managed callbacks; no public profile or reclamation",
         "consumer_source_sha256": digest(root / "userland/obj/js/owner-runtime-test"),
         "consumer_debug_stripped": True,
         "runtime_object_sha256": digest(root / "userland/obj/js/runtime/runtime.o"),
@@ -92,7 +92,7 @@ def main():
             "userland/libjs/runtime/owner_tickets.h", "userland/libjs/runtime/owner_tickets.c",
             "userland/libjs/tests/owner_admission_cases.h", "userland/libjs/tests/owner_realm_cases.h",
             "userland/libjs/tests/owner_scope_cases.h", "userland/libjs/tests/owner_failure_cases.h",
-            "userland/libjs/tests/owner_setup_cases.h", "userland/libjs/tests/owner_rejection_cases.h", "userland/libjs/tests/owner_task_cases.h", "userland/libjs/tests/owner_provider_cases.h", "userland/libjs/tests/owner_settings_cases.h", "userland/libjs/tests/owner_invocation_cases.h",
+            "userland/libjs/tests/owner_setup_cases.h", "userland/libjs/tests/owner_rejection_cases.h", "userland/libjs/tests/owner_task_cases.h", "userland/libjs/tests/owner_provider_cases.h", "userland/libjs/tests/owner_settings_cases.h", "userland/libjs/tests/owner_invocation_cases.h", "userland/libjs/tests/owner_callback_cases.h",
             "userland/libjs/runtime/recovery.inc", "userland/libjs/runtime/failure.inc",
             "userland/libjs/include/os64/js_failure.h",
             "userland/libjs/tests/owner_runtime_cases.h", "userland/libjs/tests/owner_runtime.c",

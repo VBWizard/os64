@@ -56,8 +56,10 @@ os64_js_status_t js_owner_runtime_retire(os64_js_runtime_t *, const char *caller
 /* This private callback lends a context and temporary values through the
  * admitted invocation and its synchronous cleanup. The opaque scope/view
  * must not outlive that invocation. Return one owned value (or JS_EXCEPTION)
- * for wrapper cleanup; retain no context/value/native borrower unless an
- * explicit compatibility export precedes it. This is no persistent root API. */
+ * for wrapper cleanup; retain no context/value/native borrower in untracked
+ * storage unless an explicit compatibility export precedes it. An explicit
+ * checked capture owns its separately bounded C root; the scope and context
+ * remain invocation-only views. */
 typedef struct JSOwnerRuntimeScope JSOwnerRuntimeScope;
 typedef JSValue JSOwnerScopedBody(JSOwnerRuntimeScope *, JSContext *, void *);
 os64_js_status_t js_owner_runtime_scoped_run(os64_js_runtime_t *, const char *caller_abi,
@@ -74,6 +76,41 @@ os64_js_status_t js_owner_runtime_scoped_run(os64_js_runtime_t *, const char *ca
  * Existing setup/failure/lifecycle and outcome-alias refusal rules apply. */
 os64_js_status_t js_owner_runtime_with_settings(os64_js_runtime_t *, const char *caller_abi,
     JSOwnerTicket entry, const JSOwnerTicket *incumbent, JSOwnerScopedBody *, void *, os64_js_outcome_t *);
+typedef struct { uint64_t incarnation, serial; } JSOwnerCallbackKey;
+typedef struct {
+    uint64_t incarnation;
+    size_t capacity, live, closing, invocations;
+} JSOwnerCallbackSummary;
+/* Private C-root family selected before publication. The finite record pool
+ * joins the charged owner arena; other constructors select no callback cells.
+ * Keys alias one record and contain no native pointer. They do not keep the
+ * supplied runtime alive, establish an associated entry or grant authority. */
+os64_js_status_t js_owner_runtime_create_with_callbacks(const os64_js_config_t *,
+    os64_js_teardown_policy_t, const char *caller_abi, JSOwnerLimits, size_t callback_capacity,
+    os64_js_runtime_t **out, os64_js_outcome_t *);
+/* Numeric owner-thread inspection, including live finalizer unwind. Refusal
+ * leaves output unchanged. Zero counts are not a graph/release certificate. */
+bool js_owner_callback_summary(const os64_js_runtime_t *, JSOwnerCallbackSummary *);
+/* Caller validates its callback type and lends a live same-engine object.
+ * Capture owns that C root and an independent actual-incumbent holder. It
+ * allocates/polls nothing and preserves exception/output on refusal. Scope
+ * remains invocation-only; numeric output uses distinct caller storage. */
+JSOwnerStatus js_owner_callback_capture(JSOwnerRuntimeScope *, const char *caller_abi,
+    JSValueConst callback, JSOwnerCallbackKey *out);
+/* No-result invocation borrows callback/context/scope through synchronous
+ * cleanup. The host separately retains and validates associated entry.
+ * Body/export rules match JSOwnerScopedBody. Closing/reusing the key during
+ * reentry leaves the admitted value and original role loans alive. */
+typedef JSValue JSOwnerCallbackBody(JSOwnerRuntimeScope *, JSContext *, JSValueConst, void *);
+os64_js_status_t js_owner_callback_invoke(os64_js_runtime_t *, const char *caller_abi,
+    JSOwnerCallbackKey, JSOwnerTicket entry, JSOwnerCallbackBody *, void *, os64_js_outcome_t *);
+/* Invalidate before value release. Clear/drain keeps incumbent and cell
+ * storage through native finalizers. Its bookkeeping reserves no new loans,
+ * allocates no cleanup records and polls no clock; value finalizers still run.
+ * Nested closes queue bounded cleanup; the outermost cleanup drains it.
+ * New capture/invocation refuses during cleanup. Stale aliases cannot close
+ * a replacement. Root shutdown drains owned records before contexts/engine. */
+JSOwnerStatus js_owner_callback_close(os64_js_runtime_t *, const char *caller_abi, JSOwnerCallbackKey);
 /* Live-scope metadata operations. Promotion creates an independent ticket
  * even after the admitting holder closes. Capacity/exhaustion leaves output
  * and loan unchanged. Outputs are distinct caller storage outside the scope.
