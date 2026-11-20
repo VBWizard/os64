@@ -2099,6 +2099,12 @@ static bool is_canvas(const flow_box_t *b)
            b->node->ns == OS64_HTML_NS_HTML && b->node->tag == OS64_HTML_TAG_CANVAS;
 }
 
+static bool is_video(const flow_box_t *b)
+{
+    return b->replaced && b->node != NULL && b->node->kind == OS64_HTML_ELEMENT &&
+           b->node->ns == OS64_HTML_NS_HTML && b->node->tag == OS64_HTML_TAG_VIDEO;
+}
+
 // ── The ellipsis (CSS Overflow 4 § 4.1) ─────────────────────────────────
 //
 // Where a line ends in its block's ellipsis, and what of each box on it is
@@ -2276,7 +2282,7 @@ static void paint_box(void *ctx, const flow_box_t *b)
         } else if (is_picture(b) || (b->replaced && flow_svg_root(b->node))) {
             spoil(p);
             p->v->image(p->v->ctx, b, on_page(p, yonder_content_rect(b)), on_page(p, p->view));
-        } else if (is_canvas(b) && p->v->canvas != NULL) {
+        } else if ((is_canvas(b) || is_video(b)) && p->v->canvas != NULL) {
             spoil(p);
             p->v->canvas(p->v->ctx, b, on_page(p, yonder_content_rect(b)), on_page(p, p->view));
         } else if ((is_frame(b) || is_canvas(b)) && p->v->stand_in != NULL) {

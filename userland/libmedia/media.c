@@ -49,9 +49,12 @@
 // asks for transform tables again while decoding, but only ones its
 // decoder's open already made.) So libmedia makes every CRC table, the AES
 // tables and the scaler's tables at its first open, and takes one lock
-// (`s_lock`) across find_stream_info and the decoders' opens. Opening the
-// input and its header, reading packets, decoding and converting take no
-// lock. The cost: two media probing at once take turns at
+// (`s_lock`) across opening the input (its header read) and across
+// find_stream_info and the decoders' opens. Opening the input is under it
+// too because two opened at once were seen to hang (a page's two videos,
+// VIDEO.md § 5), by state libav shares there that the audit below has not
+// named. Reading packets, decoding and converting take no lock. The cost:
+// two media opening at once take turns at the header and at
 // find_stream_info, which reads a few packets of a sound and, for an open
 // that wants the picture, decodes its first pictures too (up to some
 // twenty of an MP4's), from the source, across the network for a page's.
@@ -1142,7 +1145,9 @@ int os64_media_open_for(const os64_media_source_t *src, uint32_t want, os64_medi
     if (src->remote)
         m->format->flags |= AVFMT_FLAG_FAST_SEEK;   // os64_media_source_t's `remote`
 
+    os64_lock_acquire(&s_lock);
     int r = avformat_open_input(&m->format, NULL, NULL, NULL);
+    os64_lock_release(&s_lock);
     if (r < 0) {
         result = probe_error(r);   // and avformat_open_input freed the context
         goto fail;

@@ -1,0 +1,75 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A video</title>
+<!--
+  VIDEO.md § 5 (V.5.3): a <video> plays its picture in its box.
+
+  What to look for. The clip plays in the box below at its own size
+  (854x480), muted, from the start, by itself (a muted video may always
+  autoplay). The buttons play, pause, seek back to the start or two
+  seconds on, unmute and mute, and make the box half and full size again:
+  the picture follows each at once, letterboxed in the element's own grey
+  background when the box's shape is not the picture's. The log below
+  lists the element's events in order with the time they came at, and the
+  window's title carries them as one letter each (the QEMU proof reads it).
+
+  For the P5: "The 1080p60 clip" plays /home/clips/h264_1080p60_av.mp4 in
+  the box instead, "The flash and beep" plays sync-720p60.mp4 (unmute it
+  to hear the beep against the flash), and "A large box" makes the box
+  1600 pixels wide (its height follows the picture's ratio).
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; min-height: 6em; white-space: pre-wrap; }
+</style>
+<h1>A video</h1>
+<video id="v" src="bbb-480p-3s-av.mp4" autoplay muted></video>
+<p>
+  <input type="button" id="play" value="Play">
+  <input type="button" id="pause" value="Pause">
+  <input type="button" id="start" value="To the start">
+  <input type="button" id="on" value="On two seconds">
+  <input type="button" id="mute" value="Mute / unmute">
+  <input type="button" id="small" value="Half size">
+  <input type="button" id="big" value="Full size">
+  <input type="button" id="clip" value="The 1080p60 clip">
+  <input type="button" id="sync" value="The flash and beep">
+  <input type="button" id="large" value="A large box">
+</p>
+<pre id="log"></pre>
+<script>
+  const v = document.getElementById('v');
+  const log = document.getElementById('log');
+  const seen = [];
+  // The title: one letter an event, in order (the QEMU proof reads it), then
+  // the readyState, the size and the time.
+  const letter = {loadstart: 'L', durationchange: 'D', resize: 'R', loadedmetadata: 'M', loadeddata: 'd',
+                  canplay: 'c', canplaythrough: 'C', play: 'p', playing: 'P', waiting: 'w', pause: 'z',
+                  seeking: 's', seeked: 'S', ended: 'E', volumechange: 'v', error: 'X'};
+  function say() {
+    document.title = seen.map(t => letter[t]).join('') + ' r' + v.readyState + ' ' + v.videoWidth + 'x' +
+      v.videoHeight + ' t' + v.currentTime.toFixed(1);
+  }
+  for (const t of ['loadstart', 'durationchange', 'resize', 'loadedmetadata', 'loadeddata', 'canplay',
+                   'canplaythrough', 'play', 'playing', 'waiting', 'pause', 'seeking', 'seeked', 'ended',
+                   'volumechange', 'error'])
+    v.addEventListener(t, () => {
+      seen.push(t);
+      log.textContent += t + ' t=' + v.currentTime.toFixed(2) + ' ' + v.videoWidth + 'x' + v.videoHeight +
+        ' r' + v.readyState + '\n';
+      say();
+    });
+  v.addEventListener('timeupdate', say);
+  document.getElementById('play').onclick = () => v.play();
+  document.getElementById('pause').onclick = () => v.pause();
+  document.getElementById('start').onclick = () => { v.currentTime = 0; };
+  document.getElementById('on').onclick = () => { v.currentTime = v.currentTime + 2; };
+  document.getElementById('mute').onclick = () => { v.muted = !v.muted; };
+  document.getElementById('small').onclick = () => { v.style.width = '427px'; v.style.height = '300px'; };
+  document.getElementById('big').onclick = () => { v.style.width = ''; v.style.height = ''; };
+  document.getElementById('clip').onclick = () => { v.src = 'file:///home/clips/h264_1080p60_av.mp4'; };
+  document.getElementById('sync').onclick = () => { v.src = 'sync-720p60.mp4'; v.loop = true; };
+  document.getElementById('large').onclick = () => { v.style.width = '1600px'; v.style.height = ''; };
+  say();
+</script>

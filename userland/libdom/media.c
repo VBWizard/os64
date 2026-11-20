@@ -84,6 +84,7 @@ struct DMediaElement {
     double position;                /* the official playback position */
     double default_start;           /* a seek asked for before metadata */
     double duration;                /* NaN until known */
+    uint32_t video_width, video_height; /* the picture's size as shown, 0 until metadata (a video's) */
     double played_end;              /* the furthest heard, for played */
     double seek_to;
     uint64_t seek_generation;
@@ -156,7 +157,8 @@ static void tell_settings(os64_dom_t *dom, DMediaElement *m)
     m->loop_seen = loops(m);
     m->all_seen = wants_all(m);
     if (m->session != NULL && dom->media_provider.settings != NULL)
-        dom->media_provider.settings(dom->media_provider.opaque, m->session, gain_of(m), m->loop_seen, m->all_seen);
+        dom->media_provider.settings(dom->media_provider.opaque, m->session, gain_of(m), m->muted, m->loop_seen,
+                                     m->all_seen);
 }
 
 static void session_close(os64_dom_t *dom, DMediaElement *m)
@@ -351,6 +353,7 @@ static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
     m->current_src = NULL;
     m->loadeddata = false;
     m->ended = false;
+    m->video_width = m->video_height = 0;   /* HTML: 0 until HAVE_METADATA */
     m->error_seen = false;
     m->settings_applied = false;
     m->default_start = 0;
@@ -578,12 +581,25 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
     if (f.probed && m->ready == R_NOTHING) {
         m->duration = f.duration;
         queue(dom, m, "durationchange", SETTLE_NONE);
+        /* A video's size is set and resize queued before HAVE_METADATA's
+         * loadedmetadata (HTML § 4.8.9); again at each later change. */
+        if (f.picture && f.width > 0 && f.height > 0) {
+            m->video_width = f.width;
+            m->video_height = f.height;
+            queue(dom, m, "resize", SETTLE_NONE);
+        }
         m->ready = R_METADATA;
         queue(dom, m, "loadedmetadata", SETTLE_NONE);
         if (m->default_start > 0) seek(dom, m, m->default_start);
     } else if (f.probed && !isnan(f.duration) && !(f.duration == m->duration)) {
         m->duration = f.duration;
         queue(dom, m, "durationchange", SETTLE_NONE);
+    }
+    if (m->ready >= R_METADATA && f.picture && f.width > 0 && f.height > 0 &&
+        (f.width != m->video_width || f.height != m->video_height)) {
+        m->video_width = f.width;
+        m->video_height = f.height;
+        queue(dom, m, "resize", SETTLE_NONE);
     }
     if (m->network == N_LOADING) {
         if (f.arrived != m->last_arrived && now - m->last_progress_ms >= 350) {
@@ -618,7 +634,7 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
     if (!m->paused && !m->seeking) {
         m->position = f.position;
         if (f.position > m->played_end) m->played_end = f.position;
-        if (f.sounding && now - m->last_timeupdate_ms >= 250) {
+        if ((f.sounding || f.running) && now - m->last_timeupdate_ms >= 250) {
             m->last_timeupdate_ms = now;
             queue(dom, m, "timeupdate", SETTLE_NONE);
         }
@@ -1416,6 +1432,13 @@ bool os64_dom_media_control(os64_dom_t *dom, const os64_html_node_t *node, os64_
 static bool audible(const DMediaElement *m)
 {
     return !m->muted && m->volume > 0 && m->error == 0;
+}
+
+void d_media_video_size(os64_dom_t *dom, const os64_html_node_t *node, uint32_t *width, uint32_t *height)
+{
+    DMediaElement *m = record_of(dom, node, false);
+    *width = m != NULL && m->ready >= R_METADATA ? m->video_width : 0;
+    *height = m != NULL && m->ready >= R_METADATA ? m->video_height : 0;
 }
 
 void d_media_session_facts(os64_dom_t *dom, bool *playing, bool *paused_after_play, bool *played)

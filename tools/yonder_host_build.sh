@@ -32,7 +32,7 @@ yonder_host_build() {
         -Iuserland/libfetch/include -Iuserland/libimage/include -Iuserland/libwebp/include -Iuserland/libgzip/include
         -Iuserland/libtls/include -Iuserland/libtls/upstream/inc -Iuserland/libflow -Iuserland/apps/yonder
         -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iuserland/libos64
-        -Iabi/include -Itools -Itools/fonts
+        -Iuserland/libmedia/include -Iabi/include -Itools -Itools/fonts
         -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all)
     # JS_ROUND_TRIP=1 builds libjs's round trip (BYTECODE_CACHE.md § 8):
     # every classic script compiled under a name of its own, written, read

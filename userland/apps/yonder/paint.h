@@ -127,7 +127,9 @@ typedef struct {
     bool (*clip_open)(void *ctx, os64_gui_rect_t bounds);
     void (*clip_fill)(void *ctx);
     void (*clip_close)(void *ctx);
-    // Optional retained Canvas pixels; absent, the stand-in route applies.
+    // Optional retained pixels: a <canvas>'s drawing, or a <video>'s
+    // latest picture (the face tells them by the box's node). Absent, a
+    // canvas takes the stand-in route and a video draws nothing.
     void (*canvas)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip);
     // A LAYER: a filtered, masked or blended group (flow_style_t.filter,
     // .masks, .mix_blend; FILTER.md, MASKS.md, MIX_BLEND.md). Everything

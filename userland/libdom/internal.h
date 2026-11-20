@@ -1389,6 +1389,9 @@ void d_media_elements_free(os64_dom_t *dom);
  * the browser's own answer to a press of play (`play`) or pause, inside an
  * open task, which acts on audible elements alone. */
 void d_media_session_facts(os64_dom_t *dom, bool *playing, bool *paused_after_play, bool *played);
+/* A video element's picture size as shown (videoWidth, videoHeight): 0
+ * before HAVE_METADATA, with no picture, or with no record yet. */
+void d_media_video_size(os64_dom_t *dom, const os64_html_node_t *node, uint32_t *width, uint32_t *height);
 void d_media_session_default(os64_dom_t *dom, JSContext *ctx, bool play);
 /* The MediaSession row (modern.c), after the one that makes
  * Navigator.prototype, which navigator.mediaSession joins. */

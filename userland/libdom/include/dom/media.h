@@ -26,6 +26,11 @@ typedef struct {
     bool enough;            /* as much as the host holds: HAVE_ENOUGH_DATA */
     bool busy;              /* play was asked, and the sound device is another program's */
     bool sounding;          /* its sound is going to the device: the position moves */
+    bool running;           /* its clock runs (sounding, or a picture's clock with no sound heard):
+                             * the position moves, and timeupdate follows it */
+    bool picture;           /* it has a picture (a video's), read once probed */
+    uint32_t width, height; /* the picture's size as shown (videoWidth and videoHeight), 0 with none;
+                             * it may change while it plays */
     bool ended;             /* it played to its end (with loop off) and all of it was heard */
     double position;        /* where in the media the ear is, seconds */
     uint64_t seeked;        /* the last seek's generation the host has landed */
@@ -64,10 +69,12 @@ typedef struct {
     void (*pause)(void *opaque, void *session);
     /* Move to `seconds`; facts.seeked is `generation` once it has. */
     void (*seek)(void *opaque, void *session, double seconds, uint64_t generation);
-    /* The gain the element's volume and muted make (0 to 1), loop, and
-     * whether the whole resource is wanted now (preload became auto, or
-     * autoplay was set): a host that reads less before play may read on. */
-    void (*settings)(void *opaque, void *session, double gain, bool loop, bool all);
+    /* The gain the element's volume and muted make (0 to 1), whether it is
+     * muted (a gain of 0 with muted off is a silent sound, still playing),
+     * loop, and whether the whole resource is wanted now (preload became
+     * auto, or autoplay was set): a host that reads less before play may
+     * read on. */
+    void (*settings)(void *opaque, void *session, double gain, bool muted, bool loop, bool all);
     void (*facts)(void *opaque, void *session, os64_dom_media_facts_t *out);
     /* Whether the person has interacted with this page (HTML's sticky
      * activation), which play() with sound needs (§ Autoplay). */

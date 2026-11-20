@@ -1,19 +1,16 @@
 #include "internal.h"
 
-/* HTMLVideoElement (HTML § 4.8.9) AS A STAND-IN THAT PLAYS NO VIDEO
- * (AUDIO_YONDER.md § Y.4, which says what the video arc changes).
+/* HTMLVideoElement (HTML § 4.8.9; VIDEO.md § 5 for how yonder shows it).
  *
  * A video element is a media element, and everything HTMLMediaElement is
  * (media.c) it is too: the same records, sessions, events and promises,
- * so a sound given to a <video> plays as it would in an <audio>. Players
- * do that: JW Player makes a <video> for an MP3 and asks it canPlayType.
- * What a video element has that an audio element lacks is here: its
- * size, poster and inline playback reflected, and the picture's size,
- * which is 0 because no picture is ever decoded. canPlayType is the
- * host's: yonder's answers for the video types whose sound it plays (an
- * MP4, § Y.5) and "" for the rest, so a player with a choice takes
- * another, and a file given anyway that it cannot read fails as one not
- * supported. */
+ * so a sound given to a <video> plays as it would in an <audio>. What a
+ * video element has that an audio element lacks is here: its size, poster
+ * and inline playback reflected, and the picture's size as shown, which
+ * the host's facts give once the resource is probed (media.c keeps it,
+ * with the resize event). canPlayType is the host's, which counts the
+ * picture (yonder answers "probably" for an MP4 with avc1). The picture
+ * itself is the host's to draw. */
 
 enum { V_VIDEO_WIDTH = 16, V_VIDEO_HEIGHT };
 
@@ -36,9 +33,12 @@ static JSValue video_member(JSContext *ctx, JSValueConst this_value, int argc, J
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     if (d_node_kind(node) != D_PROTO_VIDEO) return JS_ThrowTypeError(ctx, "Illegal invocation");
-    /* The picture's size: 0 while there is no picture (HTML § 4.8.9),
-     * which here is always. */
-    if (magic == V_VIDEO_WIDTH || magic == V_VIDEO_HEIGHT) return JS_NewUint32(ctx, 0);
+    /* The picture's size: 0 while there is no picture (HTML § 4.8.9). */
+    if (magic == V_VIDEO_WIDTH || magic == V_VIDEO_HEIGHT) {
+        uint32_t width, height;
+        d_media_video_size(dom, node, &width, &height);
+        return JS_NewUint32(ctx, magic == V_VIDEO_WIDTH ? width : height);
+    }
     return set ? d_reflection_set(dom, ctx, node, &kRows[magic], argc > 0 ? argv[0] : JS_UNDEFINED)
                : d_reflection_get(dom, ctx, node, &kRows[magic]);
 }

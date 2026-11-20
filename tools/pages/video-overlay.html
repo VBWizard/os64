@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Over a video</title>
+<!--
+  VIDEO.md § 5: what lies over a <video> is painted after it, and a video
+  inside an effect takes the general path.
+
+  The first video has a caption over it (text, then a half-transparent
+  dark box behind it), positioned over the picture: both must stay over
+  the moving picture. The second has a border-radius (yonder does not
+  round a replaced box's content, so the corners stay square: the plain
+  path). The third is rotated 3 degrees (a transform: the general path),
+  the fourth half transparent (opacity 0.5: the general path).
+
+  What to look for: every picture moves; the caption is always on top;
+  the rotated one is drawn rotated, the transparent one shows the stripes
+  through it. yonder's `d` reading counts the paints by each path.
+-->
+<style>
+  body { font: 14px sans-serif; margin: 12px; }
+  .wrap { position: relative; display: inline-block; margin: 8px; }
+  video { width: 360px; background: #888; display: block; }
+  .caption { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 6px;
+             background: rgba(0, 0, 0, 0.55); color: white; font-size: 18px; }
+  .stripes { background: repeating-linear-gradient(45deg, #fc0 0 12px, #fff 12px 24px); display: inline-block; }
+</style>
+<h1>Over a video</h1>
+<div class="wrap"><video src="bbb-480p-3s.mp4" autoplay muted loop></video>
+  <div class="caption">A caption over the picture</div></div>
+<div class="wrap"><video src="bbb-480p-3s.mp4" autoplay muted loop style="border-radius: 24px"></video></div>
+<div class="wrap"><video src="bbb-480p-3s.mp4" autoplay muted loop style="transform: rotate(3deg)"></video></div>
+<div class="wrap stripes"><video src="bbb-480p-3s.mp4" autoplay muted loop style="opacity: 0.5"></video></div>

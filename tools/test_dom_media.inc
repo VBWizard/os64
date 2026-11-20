@@ -9,7 +9,7 @@
     "globalThis.L=globalThis.L||[];" \
     "function hear(a){for(const t of ['loadstart','progress','suspend','abort','error','emptied','stalled'," \
     "'loadedmetadata','loadeddata','canplay','canplaythrough','playing','waiting','seeking','seeked','ended'," \
-    "'durationchange','timeupdate','play','pause','ratechange','volumechange'])" \
+    "'durationchange','timeupdate','play','pause','ratechange','volumechange','resize'])" \
     "a.addEventListener(t,()=>L.push(t+':'+a.readyState));}" \
     "function heard(){const s=L.join(' ');L.length=0;return s}"
 
@@ -20,7 +20,7 @@ typedef struct {
     os64_dom_media_preload_t preload;
     bool playing;
     double gain;
-    bool loop, all;
+    bool muted, loop, all;
     double seek_to;
     uint64_t seek_generation;
     os64_dom_media_facts_t facts;
@@ -54,10 +54,11 @@ static void media_seek(void *opaque, void *session, double t, uint64_t generatio
     s->seek_to = t;
     s->seek_generation = generation;
 }
-static void media_settings(void *opaque, void *session, double gain, bool loop, bool all)
+static void media_settings(void *opaque, void *session, double gain, bool muted, bool loop, bool all)
 {
     (void)opaque;
     ((MediaSession *)session)->gain = gain;
+    ((MediaSession *)session)->muted = muted;
     ((MediaSession *)session)->loop = loop;
     ((MediaSession *)session)->all = all;
 }
@@ -673,6 +674,70 @@ static void dom_media_video_cases(void)
     fixture_free(&f);
 }
 
+/* A video's picture (VIDEO.md § 5's element table): its size is set and
+ * resize queued before loadedmetadata, again at each change, 0 before
+ * metadata and again at a new load; time moves with the clock even with
+ * nothing sounding; muted reaches the host apart from the gain. */
+static void dom_media_picture_cases(void)
+{
+    DomFixture f;
+    media_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    media_script(&f, "globalThis.a=document.createElement('video');hear(a);a.src='clip.mp4';a.muted=true;"
+                     "document.body.append(a);",
+                 "media: picture: a video in the document");
+    media_turn(&f, "media: picture: the turn opens it");
+    MediaSession *s = &media_sessions[0];
+    check(media_opened == 1 && s->open && s->muted && s->gain == 0,
+          "media: picture: the session, told muted apart from its gain");
+    media_script(&f, "heard();assert(a.videoWidth===0&&a.videoHeight===0,'no size before metadata');",
+                 "media: picture: no size yet");
+    s->facts.probed = true;
+    s->facts.duration = 3;
+    s->facts.seekable = true;
+    s->facts.current = true;
+    s->facts.picture = true;
+    s->facts.width = 640;
+    s->facts.height = 360;
+    media_turn(&f, "media: picture: the probe and a first picture");
+    media_script(&f, "const h=heard().replace(/:[0-9]/g,'');"
+                     "assert(h.startsWith('durationchange resize loadedmetadata loadeddata'),"
+                     "'resize between durationchange and loadedmetadata, then loadeddata: '+h);"
+                     "assert(a.videoWidth===640&&a.videoHeight===360,'the size: '+a.videoWidth+'x'+a.videoHeight);",
+                 "media: picture: resize, then loadedmetadata");
+    s->facts.future = s->facts.enough = true;
+    media_turn(&f, "media: picture: ready");
+    media_script(&f, "heard();globalThis.R=[];a.play().then(()=>R.push('ok'),e=>R.push(e.name));",
+                 "media: picture: a muted video plays without the person");
+    check(s->playing, "media: picture: the host plays it");
+    media_turn(&f, "media: picture: play's tasks");
+    media_script(&f, "assert(R.join()==='ok','the promise: '+R.join());heard();", "media: picture: playing");
+    /* Its clock runs with nothing sounding (muted): timeupdate follows. */
+    s->facts.running = true;
+    s->facts.position = 0.5;
+    media_turn(&f, "media: picture: the clock runs");
+    p2b_advance(300);
+    s->facts.position = 0.8;
+    media_turn(&f, "media: picture: 300 ms later");
+    media_script(&f, "const h=heard();assert(h.includes('timeupdate:4'),'timeupdate with the clock: '+h);"
+                     "assert(Math.abs(a.currentTime-0.8)<1e-9,'the position of the clock: '+a.currentTime);",
+                 "media: picture: timeupdate while the clock runs");
+    /* The picture's size changes mid-play: resize, and the new size. */
+    s->facts.width = 1280;
+    s->facts.height = 720;
+    media_turn(&f, "media: picture: a new size");
+    media_script(&f, "const h=heard();assert(h==='resize:4','resize again: '+h);"
+                     "assert(a.videoWidth===1280&&a.videoHeight===720);",
+                 "media: picture: resize on a change");
+    media_turn(&f, "media: picture: the same size again");
+    media_script(&f, "assert(heard().indexOf('resize')<0,'no resize when nothing changed');",
+                 "media: picture: no resize without a change");
+    /* A new load: 0 until its metadata. */
+    media_script(&f, "a.src='other.mp4';assert(a.videoWidth===0&&a.videoHeight===0,'0 at a new load');",
+                 "media: picture: a new load");
+    fixture_free(&f);
+}
+
 /* THE MEDIA SESSION (libdom/media_session.c; AUDIO_YONDER.md § Y.6): the
  * interface and its TypeErrors, MediaMetadata, the window's state the host
  * reads, a press done (the page's handler, or the browser's own answer),
@@ -849,6 +914,7 @@ static void dom_media_cases(void)
 {
     dom_media_session_cases();
     dom_media_video_cases();
+    dom_media_picture_cases();
     dom_media_controls_cases();
     dom_media_rule_cases();
     dom_media_interface_cases();
