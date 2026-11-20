@@ -48,6 +48,13 @@ struct yonder_player {
     uint8_t seq;                    // an arrow key's escape burst, part way
     void *time_run;                 // the time's text, laid out (libui's run slot)
     void *note_run;                 // the line said instead of the bar: busy, or cannot play
+    // A video's strip lies over its picture: a dark translucent band, light
+    // ink, the text on small dark pills (a run paints its own paper), and no
+    // bar for a length not known. An audio's is the opaque panel.
+    bool over_picture;
+    // Its focus is the keyboard's: the last input it took was a key, not a
+    // press (a press focuses it too, and must not pin a video's strip).
+    bool keyed;
 };
 
 // Where each part is drawn in `bounds`; a part with no room has width 0.
@@ -66,6 +73,9 @@ void yonder_player(yonder_player_t *p, yonder_player_act_t act,
 bool yonder_player_show(os64_ui_t *ui, yonder_player_t *p, const os64_dom_media_view_t *view);
 // Its text runs let go, as a page's widget is when the page leaves.
 void yonder_player_release(yonder_player_t *p);
+// Play if paused or ended, else pause: its play button's press, asked of
+// the element and shown at once (a click on a video's picture is this).
+void yonder_player_toggle(os64_ui_t *ui, yonder_player_t *p);
 
 // The arithmetic, pure: the parts of a box, "1:12 / 3:45" (with hours when
 // the length has them, and "--:--" for a length not known), and the value
