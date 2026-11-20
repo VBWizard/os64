@@ -76,9 +76,11 @@ static void graft_browser_cases(void)
     s_layout_resources.pictures=revision;s_layout_resources.exhausted=false;
     probe_drop();
 
-    /* A bare anchored :has() keeps the cascade from tracking changes
-     * (garb_anchor_t.bare), so these layouts have no snapshot to graft. */
-    probe_page("<!doctype html><style>div{width:40px}div:has(.on){width:90px}:has(.never) i{color:red}</style>"
+    /* A :has() inside :nth-child(… of S) keeps the cascade from tracking
+     * changes (GARB_UPDATE_COUNTED_HAS), so these layouts have no snapshot
+     * to graft. */
+    probe_page("<!doctype html><style>div{width:40px}div:has(.on){width:90px}"
+               "i:nth-child(1 of :has(.never)){color:red}</style>"
                "<div id=box><p id=child>text</p></div>",true);
     doc=g.page.way.doc;
     state=os64_page_shared_state(page_model(&g.page));

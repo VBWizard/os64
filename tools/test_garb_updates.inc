@@ -307,21 +307,65 @@ static void update_has(void)
     update_check(garb_style_updated_since(h.c,has_el(&h,"cy"),was),"an enclosing filter going restyles what it reached");
     has_close(&h);
     /* A compound left of a combinator in the anchor's own complex names
-     * another element, and a pseudo-class is no filter: both bare. */
+     * another element, a pseudo-class is no filter, and a sibling branch of
+     * a list is none either: each is bare, and the cascade still tracks. */
     {
-        const char *bare_css[]={":is(.a :has(.x)) .z{color:red}",":not(.a):has(.x) i{color:red}"};
-        for(size_t i=0;i<2;++i) {
+        const char *bare_css[]={":is(.a :has(.x)) .z{color:red}",":not(.a):has(.x) i{color:red}",
+                                ":is(.x, :has(p)) i{color:red}"};
+        for(size_t i=0;i<3;++i) {
             os64_html_document_t *doc=update_doc("<!doctype html><div class=a><p>t</p></div>");
             garb_parsed_t sheet;garb_parse_sheet_text(bare_css[i],strlen(bare_css[i]),&sheet);
             garb_sheet_in_t in={.sheet=&sheet};
             garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
             int32_t anchors=0,bare=0;
             garb_cascade_anchors(c,&anchors,&bare);
-            update_check(anchors==1 && bare==1 && !garb_cascade_tracks_changes(c),
-                         "an ancestor's compound or a :not() is no filter: bare");
+            update_check(anchors==1 && bare==1 && garb_cascade_tracks_changes(c),
+                         "an ancestor's compound, a :not() or a sibling branch is no filter: bare, and tracked");
             garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
         }
     }
+    /* A bare anchor pays for itself: asked again where a change could turn
+     * it, its reach restyled where it turned and nowhere else, and what it
+     * cost counted. A descendant, a child and a sibling argument, and one
+     * inside :not(). */
+    has_open(&h,":has(> .x) > .y{color:red}:has(.deep) .z{color:blue}:has(+ .s) ~ .w{opacity:.5}"
+                ":not(:has(.n)) > .m{background:green}",
+             "<!doctype html><div id=c><p id=cy class=y>y</p><p id=cw>w</p></div>"
+             "<div id=d><section><p id=dp>p</p></section><i id=dz class=z>z</i></div>"
+             "<div><p id=sp>p</p><p id=sq>q</p><p id=sw class=w>w</p></div>"
+             "<div id=n><p id=nm class=m>m</p><p id=nn>n</p></div>"
+             "<div id=far><p id=fy class=y>y</p><b class=deep></b><i class=n></i></div>");
+    /* (The page holds a .deep and a .n from the start, so the root's
+     * ancestors already answer the descendant arguments yes: one arriving
+     * turns the anchors between it and them, not the root, whose reach is
+     * most of the page and would be a fresh cascade, rightly.) */
+    {
+        int32_t anchors=0,bare=0;
+        garb_cascade_anchors(h.c,&anchors,&bare);
+        update_check(anchors==4 && bare==4,"bare anchors: four, all bare, and the cascade tracks");
+    }
+    os64_html_set_attr(h.doc,has_el(&h,"cw"),"class","x",1);
+    was=has_update(&h,"bare :has(> …): a child argument arriving updates incrementally");
+    garb_bare_work_t work=garb_cascade_bare_work(h.c);
+    update_check(garb_style_updated_since(h.c,has_el(&h,"cy"),was) && !garb_style_updated_since(h.c,has_el(&h,"fy"),was),
+                 "bare :has(> …): the turned anchor's reach is restyled, another subtree's is not");
+    update_check(work.tested>0 && work.turned>=1 && work.marked>=1,"bare :has(> …): what it cost is counted");
+    os64_html_set_attr(h.doc,has_el(&h,"dp"),"class","deep",4);
+    was=has_update(&h,"bare :has(…): a descendant argument arriving updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"dz"),was),"bare :has(…): what it reaches is restyled");
+    os64_html_set_attr(h.doc,has_el(&h,"sq"),"class","s",1);
+    was=has_update(&h,"bare :has(+ …): a sibling argument arriving updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"sw"),was),"bare :has(+ …): the sibling after is restyled");
+    os64_html_set_attr(h.doc,has_el(&h,"nn"),"class","n",1);
+    was=has_update(&h,"bare :not(:has(…)): the argument arriving updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"nm"),was),"bare :not(:has(…)): what it reached is restyled");
+    os64_html_set_attr(h.doc,has_el(&h,"fy"),"title","t",1);
+    was=has_update(&h,"bare anchors: a change that turns none updates incrementally");
+    work=garb_cascade_bare_work(h.c);
+    update_check(work.tested>0 && work.turned==0 && work.marked==0 &&
+                 !garb_style_updated_since(h.c,has_el(&h,"cy"),was),
+                 "bare anchors: asked again, nothing turned, nothing marked for them");
+    has_close(&h);
     /* More anchors than one word of bits: the 70th (bit 5 of the second
      * word) turns at an element where the 6th (bit 5 of the first) holds,
      * and its reach is restyled; the cascade tracks. */
@@ -517,14 +561,11 @@ static int cascade_updates(void)
         garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
         update_check(live==baseline,"updates release allocations and node holds");
     }
-    /* What still keeps a cascade from tracking changes: an anchored :has()
-     * with nothing to test before it (a subtree walk on every element),
-     * even inside an :is() whose other branch is filtered, and a :has()
-     * inside :nth-child(… of S), whose turn moves which sibling the count
-     * picks, which nothing follows. Each is named. */
-    const char *broad[]={":has(p) i{color:red}",":is(.x, :has(p)) i{color:red}",
-                         "p:nth-child(1 of .a:has(.x)){color:red}"};
-    const garb_update_refusal_t why[]={GARB_UPDATE_BARE_ANCHOR,GARB_UPDATE_BARE_ANCHOR,GARB_UPDATE_COUNTED_HAS};
+    /* What still keeps a cascade from tracking changes: a :has() inside
+     * :nth-child(… of S), whose turn moves which sibling the count picks,
+     * which nothing follows. It is named. */
+    const char *broad[]={"p:nth-child(1 of .a:has(.x)){color:red}"};
+    const garb_update_refusal_t why[]={GARB_UPDATE_COUNTED_HAS};
     for(size_t i=0;i<sizeof(broad)/sizeof(*broad);++i) {
         os64_html_document_t *doc=update_doc("<!doctype html><div id=a><p>text</p></div>");
         garb_parsed_t sheet;garb_parse_sheet_text(broad[i],strlen(broad[i]),&sheet);garb_sheet_in_t in={.sheet=&sheet};

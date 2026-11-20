@@ -373,12 +373,18 @@ other, so their pages keep style and geometry reuse across a mutation.
   type, id, class and attributes, and those of a compound enclosing it
   through `:not()`, `:is()` or `:where()` that must match the same
   element (`.c:not(:has(.x)) > p`).
-- An anchor with no such filter at all (a subtree walk on every
-  element), or a `:has()` inside `:nth-child(… of S)` (whose turn moves
-  which sibling the count picks), keeps the cascade from a change reader,
-  as every `:has()` cascade was before; `garb_cascade_update_refusal` names it, and so does the
-  profile's `layout cascade` line, which also says how many anchors the
-  cascade held and how many were bare. A turn that marks more than half the
+- An anchor with no such filter at all is BARE: each time it is asked it
+  walks (the element's children, following siblings or subtree, as its
+  argument looks), and it is asked only where a change could have turned
+  it and at each element restyled, so it costs its own walks and the
+  cascade keeps tracking (`has_visit` states the bound). The profile's
+  `layout cascade` line says how many anchors the cascade held, how many
+  were bare, and how often the bare ones were asked again, turned, and
+  marked elements for restyling.
+- A `:has()` inside `:nth-child(… of S)` (whose turn moves which sibling
+  the count picks) keeps the cascade from a change reader, as every
+  `:has()` cascade was before; `garb_cascade_update_refusal` names it, and
+  so does the profile's `layout cascade` line. A turn that marks more than half the
   elements asks for a fresh cascade (`broad`), which is right when it
   really restyles most of the page.
 

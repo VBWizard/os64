@@ -192,7 +192,6 @@ typedef enum {
     GARB_UPDATE_INCOMPLETE,     // the cascade came up short, when built or since
     GARB_UPDATE_FAILED_BEFORE,  // an earlier update failed: a fresh cascade is owed
     GARB_UPDATE_NO_READER,      // no change reader: there was no memory for one
-    GARB_UPDATE_BARE_ANCHOR,    // an anchored :has() with nothing cheaper to test first
     GARB_UPDATE_COUNTED_HAS,    // a :has() inside :nth-child(… of S) (has_filtered)
     GARB_UPDATE_SHADOW_ROOT,    // the document's first shadow root arrived
     GARB_UPDATE_CAP,            // as many updates as one cascade takes
@@ -207,7 +206,7 @@ typedef enum {
     GARB_UPDATE_REASONS
 } garb_update_refusal_t;
 garb_update_refusal_t garb_cascade_update_refusal(const garb_cascade_t *c);
-// A reason's name for a record ("broad", "bare anchor"); "?" past the enum.
+// A reason's name for a record ("broad", "counted has"); "?" past the enum.
 const char *garb_update_refusal_name(garb_update_refusal_t reason);
 // Whether this cascade keeps a change reader for incremental updates. False
 // lets hosts skip speculative geometry snapshots whose generation cannot
@@ -217,8 +216,16 @@ bool garb_cascade_tracks_changes(const garb_cascade_t *c);
 // How many anchored :has() compounds (garb_anchor_t) the cascade's rules
 // hold, and how many of those are bare. While the cascade takes updates,
 // each is a bit in every element's record, asked at every element it
-// styles; a bare one keeps it from taking them.
+// styles; a bare one costs a walk each time it is asked, and nothing more.
 void garb_cascade_anchors(const garb_cascade_t *c, int32_t *anchors, int32_t *bare);
+// What the bare anchors cost the latest update: how many times one was
+// asked again (at each element a change could have turned it on), how
+// many of those answers turned, and how many elements the turns marked
+// for restyling. Zeros before any update.
+typedef struct {
+    uint64_t tested, turned, marked;
+} garb_bare_work_t;
+garb_bare_work_t garb_cascade_bare_work(const garb_cascade_t *c);
 uint64_t garb_cascade_generation(const garb_cascade_t *c);
 uint64_t garb_cascade_updates(const garb_cascade_t *c);
 uint64_t garb_cascade_version(const garb_cascade_t *c);

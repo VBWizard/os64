@@ -5,8 +5,9 @@
  * ones libgarb's state pseudo-classes read among them: checked, open,
  * disabled; style attributes; text) in batches, on a generated tree, under
  * generated sheets that favour :has() in every form the update follows
- * (subject and anchored; descendant, child and sibling arguments; inside
- * :not(), :is() and :where(); a state inside the argument). A difference
+ * (subject and anchored, filtered and bare; descendant, child and sibling
+ * arguments; inside :not(), :is() and :where(); a state inside the
+ * argument). A difference
  * fails, naming the seed, the step, the element, the property and the batch
  * that led there. The walk keeps a padding of elements no rule reaches, so
  * a batch reaches less than half the elements and the update is not merely
@@ -74,7 +75,7 @@ static void oracle_sheet(OracleRng *r, char *out, size_t cap)
         oracle_compound(r, d, sizeof(d));
         oracle_argument(r, a, sizeof(a));
         oracle_declarations(r, i, decl, sizeof(decl));
-        switch (oracle_pick(r, 17)) {
+        switch (oracle_pick(r, 21)) {
         case 0: len += (size_t)snprintf(out + len, cap - len, "%s:has(%s) %s{%s}", f, a, d, decl); break;
         case 1: len += (size_t)snprintf(out + len, cap - len, "%s:has(> %s) > %s{%s}", f, a, d, decl); break;
         case 2: len += (size_t)snprintf(out + len, cap - len, "%s:has(+ %s) ~ %s{%s}", f, a, d, decl); break;
@@ -93,6 +94,11 @@ static void oracle_sheet(OracleRng *r, char *out, size_t cap)
         // The anchor left of a combinator inside the :is(): `.k` names
         // another element, so it is no filter of the anchor's.
         case 15: len += (size_t)snprintf(out + len, cap - len, ".k:is(%s:has(%s) > %s) %s{%s}", f, a, d, d, decl); break;
+        // Bare anchors: nothing filters them, and the cascade still tracks.
+        case 16: len += (size_t)snprintf(out + len, cap - len, ":has(%s) %s{%s}", a, d, decl); break;
+        case 17: len += (size_t)snprintf(out + len, cap - len, ":has(> %s) > %s{%s}", a, d, decl); break;
+        case 18: len += (size_t)snprintf(out + len, cap - len, ":has(+ %s) ~ %s{%s}", a, d, decl); break;
+        case 19: len += (size_t)snprintf(out + len, cap - len, ":not(:has(%s)) %s{%s}", a, d, decl); break;
         default: len += (size_t)snprintf(out + len, cap - len, "input:checked ~ %s{%s}", d, decl); break;
         }
     }
