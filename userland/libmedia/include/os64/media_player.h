@@ -85,8 +85,9 @@ typedef struct {
                                     // for a media with a picture to show: one with sound alone WAITs,
                                     // its clock the ear, standing still until the device comes back
     bool loaded;                    // the whole source is at hand (a file); else os64_media_player_loaded says
-    void (*look)(void *ctx);        // the facts changed; called by the player's threads and its output's,
-                                    // under the player's lock: rings the caller's bell, nothing more
+    void (*look)(void *ctx);        // the facts changed (and, while a sound alone plays, a quarter second
+                                    // went by: its position moved); called by the player's threads and its
+                                    // output's, under the player's lock: rings the caller's bell, nothing more
     void (*finished)(void *ctx);    // after close: the source will never be read again and the player is
                                     // freed; called from a player thread, rings a bell, may not touch it
     void *ctx;
@@ -172,7 +173,7 @@ typedef struct {
     os64_media_info_t info;
     bool has_sound;                 // a sound this player decodes (playable and wanted)
     bool muted;
-    int64_t length;                 // output frames, -1 when not known
+    int64_t length;                 // output frames, -1 when not known (known at the end if not before)
     int64_t position;               // the clock's reading now; the length once ENDED, when known
     // Readiness at the position, each implying the one before.
     bool current;                   // a picture for now is converted (with no picture: sound queued)

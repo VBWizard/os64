@@ -24,7 +24,17 @@
 //      each looped for five seconds while frames are asked for as a display
 //      would: it keeps playing through every run, never buffering for half
 //      a second, and the pace never asks a resync (made with ffmpeg's
-//      testsrc and sine: 320x240 H.264 at 30 a second, AAC at 48 kHz)
+//      testsrc and sine: 320x240 H.264 at 30 a second, AAC at 48 kHz);
+//      and with a fifth of a second of sound (loop-sound-tiny.mp4: it must
+//      not wait in buffering for half a second of sound that never
+//      comes), and with 1.9 seconds (loop-sound-near.mp4: the next run is
+//      queued before the sound drains, and its sound must wait out the
+//      silence to the pictures' end, or the ear runs ahead and pictures
+//      drop)
+//   6. an MP3 of no stated length from a source of unknown size: the probe
+//      cannot say, and the end does (as an element's duration does)
+//   (2 also counts `look`: a sound alone playing on rings it for its
+//   position)
 //
 // Exit codes: 0x91A50000 success, 0x91A500NN the step that failed.
 // 0x91A500FE: skipped because something can be heard (sound_guard.h).
@@ -35,6 +45,7 @@
 #include "os64/media_output.h"
 #include "os64/media_player.h"
 #include "os64/thread.h"
+#include "../avtest/sine_mp3.h"
 
 #include <math.h>
 
@@ -102,7 +113,10 @@ static void memory_idle(void *ctx)
     __atomic_add_fetch(&m->idles, 1, __ATOMIC_RELAXED);
 }
 
-static void nothing(void *ctx) { (void)ctx; }
+// The player's `look`: counted, so a sound alone's steady play can be seen
+// to ring it (for a page's timeupdate).
+static volatile uint32_t s_looks;
+static void counted_look(void *ctx) { (void)ctx; __atomic_add_fetch(&s_looks, 1, __ATOMIC_RELAXED); }
 
 static volatile bool s_finished;
 static void finished(void *ctx) { (void)ctx; __atomic_store_n(&s_finished, true, __ATOMIC_RELEASE); }
@@ -188,7 +202,7 @@ static bool rig_open(rig_t *r)
         .output = r->output,
         .refused = OS64_MEDIA_VOICE_WAIT,
         .loaded = true,
-        .look = nothing,
+        .look = counted_look,
         .finished = finished,
         .ctx = r};
     return os64_media_player_create(&cfg, &r->player) == 0;
@@ -272,21 +286,33 @@ static int step_loop(void)
     s_heard_n = 0;
     s_dropped = false;
     os64_media_player_play(r.player);
-    // Two and a half runs and more.
+    // Two and a half runs and more, the looks counted from a second in
+    // (past buffering's moves): a quarter second apart, so six or so.
     uint64_t end = (uint64_t)os64_micros() + 1600000;
+    uint64_t counted_from = (uint64_t)os64_micros() + 400000;
+    uint32_t looks_at = 0;
+    bool counting = false;
     while ((uint64_t)os64_micros() < end) {
         os64_media_player_facts_t f = facts(&r);
         if (f.state == OS64_MEDIA_PLAYER_ENDED)
             return die(2, "a looping sound ended", f.position);
         if (f.position < 0 || f.position > FRAMES)
             return die(2, "the position was not folded into the length", f.position);
+        if (!counting && (uint64_t)os64_micros() >= counted_from) {
+            counting = true;
+            looks_at = __atomic_load_n(&s_looks, __ATOMIC_RELAXED);
+        }
         listen(10);
     }
+    uint32_t looks = __atomic_load_n(&s_looks, __ATOMIC_RELAXED) - looks_at;
     if (s_dropped)
         return die(2, "the tap dropped records: held off too long to judge", 0);
     int64_t start = heard_start();
     uint32_t heard = start < 0 ? 0 : s_heard_n - (uint32_t)start;
-    os64_printf("playertest: looping, heard %u frames (%u runs and more)\n", heard, heard / FRAMES);
+    os64_printf("playertest: looping, heard %u frames (%u runs and more), %u looks in 1.2 s\n", heard, heard / FRAMES,
+                looks);
+    if (looks < 3)
+        return die(2, "a sound alone playing on did not ring look for its position", looks);
     if (heard < 2 * FRAMES + FRAMES / 2)
         return die(2, "it did not run on past its end", heard);
     for (uint32_t i = 0; i < heard; i++)
@@ -404,7 +430,7 @@ static int step_picture_loop(const char *path)
         .output = r.output,
         .refused = OS64_MEDIA_VOICE_PLAY_ON,
         .loaded = true,
-        .look = nothing,
+        .look = counted_look,
         .finished = finished,
         .ctx = &r};
     if (os64_media_player_create(&cfg, &r.player) != 0)
@@ -453,6 +479,59 @@ static int step_picture_loop(const char *path)
         return die(5, "a looping clip did not run on past its end (runs)", wraps);
     if (f.pace.resyncs != 0)
         return die(5, "the pace asked a resync as a run's pictures ended", (int64_t)f.pace.resyncs);
+    if (f.pace.dropped > 3)
+        return die(5, "a looping clip dropped pictures (the ear ran ahead?)", (int64_t)f.pace.dropped);
+    return 0;
+}
+
+// An MP3 with no header naming its length, from a source that does not
+// know its size: the probe cannot say how long it is, and the end does.
+typedef struct {
+    size_t at;
+} mp3_t;
+
+static int64_t mp3_read(void *ctx, uint8_t *out, size_t cap)
+{
+    mp3_t *m = ctx;
+    size_t left = sizeof(kSineMp3) - m->at, n = cap < left ? cap : left;
+    os64_memcpy(out, kSineMp3 + m->at, n);
+    m->at += n;
+    return (int64_t)n;
+}
+
+static int step_length_at_end(void)
+{
+    mp3_t mp3 = {0};
+    rig_t r;
+    os64_memset(&r, 0, sizeof(r));
+    s_finished = false;
+    if (os64_media_output_create(&r.output) != 0)
+        return die(6, "the output would not start", 0);
+    os64_media_player_config_t cfg = {
+        .source = {&mp3, mp3_read, NULL, -1, false, NULL},
+        .want = OS64_MEDIA_WANT_SOUND,
+        .output = r.output,
+        .refused = OS64_MEDIA_VOICE_WAIT,
+        .loaded = true,
+        .look = counted_look,
+        .finished = finished,
+        .ctx = &r};
+    if (os64_media_player_create(&cfg, &r.player) != 0)
+        return die(6, "the player would not start", 0);
+    if (!wait_state(&r, OS64_MEDIA_PLAYER_PAUSED, 3000))
+        return die(6, "the player did not open the MP3", facts(&r).state);
+    int64_t probed = facts(&r).length;
+    os64_media_player_play(r.player);
+    bool ended = wait_state(&r, OS64_MEDIA_PLAYER_ENDED, 5000);
+    os64_media_player_facts_t f = facts(&r);
+    rig_close(&r);
+    os64_printf("playertest: an MP3 of no stated length: %ld at the probe, %ld at the end\n", probed, f.length);
+    if (!ended)
+        return die(6, "it did not end", f.state);
+    if (probed >= 0)
+        return die(6, "the probe knew the length, so this proves nothing (the length)", probed);
+    if (f.length < 48000 - 1200 || f.length > 48000 + 1200 || f.position != f.length)
+        return die(6, "the end did not say the length (frames)", f.length);
     return 0;
 }
 
@@ -480,6 +559,12 @@ int main(void)
         code = step_picture_loop("/tests/pages/loop-sound-short.mp4");
     if (code == 0)
         code = step_picture_loop("/tests/pages/loop-picture-short.mp4");
+    if (code == 0)
+        code = step_picture_loop("/tests/pages/loop-sound-tiny.mp4");
+    if (code == 0)
+        code = step_picture_loop("/tests/pages/loop-sound-near.mp4");
+    if (code == 0)
+        code = step_length_at_end();
     if (s_tap >= 0)
         os64_close(s_tap);
     if (volume >= 0)

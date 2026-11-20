@@ -1010,6 +1010,13 @@ static void session_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
         tell_size = m->picture && !m->size_told && f.info.picture == OS64_MEDIA_PLAYABLE && f.info.width > 0;
         m->size_told |= tell_size;
     }
+    if (m->probe_told && f.length >= 0 && isinf(m->facts.duration)) {
+        // A length the probe could not say, learned at the end (libdom
+        // fires durationchange; seekable follows).
+        m->facts.duration = (double)f.length / RATE;
+        if (m->file >= 0)
+            arrival_locked(m);
+    }
     if (m->seek_landing && (int32_t)(f.seeked - m->seek_player_generation) >= 0) {
         m->seek_landing = false;
         m->facts.seeked = m->seek_generation;

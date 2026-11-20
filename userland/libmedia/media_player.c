@@ -43,6 +43,7 @@
 #define PCM_FRAMES (2u * RATE)            // two seconds of sound queued
 #define CHUNK_FRAMES 4096u                // what the decoding thread asks for at once
 #define BUFFER_SOUND (RATE / 2u)          // buffering ends with this much sound queued
+#define POSITION_LOOK_US 250000           // a sound alone rings `look` this often while it plays
 #define SOUND_FLOOR (RATE / 4u)           // under it is far behind (the pace's twin door)
 #define COLLECT 64                        // a seek's flush plus a paint's drops, with room
 // A report's trust (os64_media_clock_still): longer than the oldest a
@@ -288,21 +289,30 @@ static int64_t folded(const os64_media_player_t *p, int64_t at)
     return at - ((at - 1) / p->loop_len) * p->loop_len;
 }
 
+// No more sound is coming in this run: the queue told its end, or a loop's
+// run ended it while its pictures go on. Under the lock.
+static bool sound_all_queued(const os64_media_player_t *p)
+{
+    return os64_media_queue_ended(&p->pcm) || p->run_sound_done;
+}
+
 // Readiness at the position (facts' current, future, enough), as bits 0 to
 // 2. Under the lock.
 static uint32_t readiness(const os64_media_player_t *p)
 {
-    bool queued = os64_media_queue_count(&p->pcm) > 0 || os64_media_queue_ended(&p->pcm);
+    bool queued = os64_media_queue_count(&p->pcm) > 0 || sound_all_queued(p);
     bool current = p->probed && p->failure == 0 &&
                    (p->has_picture ? p->shown != NULL || os64_media_pictures_count(&p->ready) > 0 : queued);
     bool future = current &&
                   (!p->has_picture || os64_media_pictures_count(&p->ready) > 0 ||
                    os64_media_pictures_finished(&p->decoded)) &&
-                  (!p->has_sound || os64_media_queue_count(&p->pcm) >= BUFFER_SOUND || os64_media_queue_ended(&p->pcm));
+                  (!p->has_sound || os64_media_queue_count(&p->pcm) >= BUFFER_SOUND || sound_all_queued(p));
     bool enough = future && (p->loaded || ((!p->has_sound || os64_media_queue_room(&p->pcm) < CHUNK_FRAMES) &&
                                            (!p->has_picture || os64_media_pictures_full(&p->decoded))));
     return (current ? 1u : 0u) | (future ? 2u : 0u) | (enough ? 4u : 0u);
 }
+
+static const int16_t kSilence[2 * CHUNK_FRAMES];
 
 // The moves between states no call makes: buffering's end, a sound that
 // stopped, the end. Run under the lock by every thread that may have made
@@ -321,8 +331,7 @@ static void service(os64_media_player_t *p, int64_t now)
         // The sound is ready with its depth queued (or its end), and once the
         // sink's delay is known, which the start's hold bound is made from.
         bool sound = !audible(p) ||
-                     ((os64_media_queue_count(&p->pcm) >= BUFFER_SOUND || os64_media_queue_ended(&p->pcm)) &&
-                      p->voice.delay_known);
+                     ((os64_media_queue_count(&p->pcm) >= BUFFER_SOUND || sound_all_queued(p)) && p->voice.delay_known);
         if (picture && sound)
             start_playing(p, now);
     } else if (p->state == OS64_MEDIA_PLAYER_PLAYING) {
@@ -345,9 +354,14 @@ static void service(os64_media_player_t *p, int64_t now)
         if (os64_media_clock_state(&p->clock, now) == OS64_MEDIA_CLOCK_STARVED) {
             if (os64_media_queue_finished(&p->pcm) ||
                 (p->run_sound_done && os64_media_queue_count(&p->pcm) == 0)) {
-                p->sound_over = true;
-                os64_media_clock_source(&p->clock, OS64_MEDIA_CLOCK_MONOTONIC, now);
-                voice_asks(p);
+                // A sound alone waits for its tail to be HEARD (heard_all,
+                // below): a starved ear may still have the device's delay
+                // to play, and a voice no longer wanted is not told it.
+                if (p->has_picture) {
+                    p->sound_over = true;
+                    os64_media_clock_source(&p->clock, OS64_MEDIA_CLOCK_MONOTONIC, now);
+                    voice_asks(p);
+                }
             } else if (os64_media_queue_count(&p->pcm) == 0) {
                 os64_media_clock_pause(&p->clock, now);
                 p->state = OS64_MEDIA_PLAYER_BUFFERING;
@@ -363,7 +377,7 @@ static void service(os64_media_player_t *p, int64_t now)
         // clock is the ear, and the end is the length (a picture's end is
         // its last picture's).
         bool sound_done = !p->has_sound || (os64_media_queue_finished(&p->pcm) && !p->voice.unwritten &&
-                                            (p->has_picture || !audible(p) || p->voice.heard_all));
+                                            (p->has_picture || !p->voiced || p->voice.heard_all));
         if (p->state == OS64_MEDIA_PLAYER_PLAYING && pictures_done && sound_done) {
             int64_t end = -1;
             if (p->shown != NULL) {
@@ -757,8 +771,12 @@ static int64_t decoding_thread(void *arg)
     // A loop's timeline (os64_media_player_loop): each run is queued after
     // the last, `base` frames on, and `run_end` is where this run reached.
     // `ended_queued`: the end was told to the queues with loop off.
-    int64_t base = 0, run_end = 0;
+    // `run_sound_end` is where this run's sound reached: when the pictures
+    // outlast it, the next run waits behind `pad` frames of silence from
+    // `pad_at`, since the output plays queued sound back to back.
+    int64_t base = 0, run_end = 0, run_sound_end = 0, pad_at = 0, pad = 0;
     bool ended_queued = false;
+    int64_t position_looked = 0;          // a sound alone's last periodic `look`
     collect_t c = {0};
     os64_lock_acquire(&p->lock);
     if (pcm == NULL && p->failure == 0) {
@@ -810,7 +828,7 @@ static int64_t decoding_thread(void *arg)
             sound_done = pictures_done = false;
             full = 0;
             resync_waiting = false;
-            base = run_end = 0;           // a seek's place is the media's own
+            base = run_end = run_sound_end = pad = 0;   // a seek's place is the media's own
             ended_queued = false;
             unlock(p);
             int sought = os64_media_seek(p->media, target);
@@ -834,8 +852,30 @@ static int64_t decoding_thread(void *arg)
             resync_waiting |= resync;
             continue;
         }
+        if (!p->has_picture && p->state == OS64_MEDIA_PLAYER_PLAYING) {
+            // A sound alone's position moves with nothing else to say so
+            // (a picture's caller asks at every frame): `look`, for a
+            // page's timeupdate and its controls' time.
+            int64_t now = now_us();
+            if (now - position_looked >= POSITION_LOOK_US) {
+                position_looked = now;
+                look(p);
+            }
+        }
+        if (pad > 0) {
+            uint32_t room = os64_media_queue_room(&p->pcm);
+            if (room > 0) {
+                int64_t n = pad < (int64_t)room ? pad : (int64_t)room;
+                if (n > (int64_t)CHUNK_FRAMES)
+                    n = CHUNK_FRAMES;
+                uint32_t pushed = os64_media_queue_push(&p->pcm, gen_pcm, kSilence, (uint32_t)n, pad_at);
+                pad = pushed == 0 ? 0 : pad - pushed;   // none taken: a seek came between
+                pad_at += pushed;
+                continue;
+            }
+        }
         uint32_t accept = 0;
-        if (p->has_sound && !sound_done && os64_media_queue_room(&p->pcm) >= CHUNK_FRAMES)
+        if (p->has_sound && !sound_done && pad == 0 && os64_media_queue_room(&p->pcm) >= CHUNK_FRAMES)
             accept |= OS64_MEDIA_WANT_SOUND;
         if (p->has_picture && !pictures_done && !os64_media_pictures_full(&p->decoded))
             accept |= OS64_MEDIA_WANT_PICTURE;
@@ -868,6 +908,8 @@ static int64_t decoding_thread(void *arg)
             p->pcm_pushed += os64_media_queue_push(&p->pcm, gen_pcm, pcm, got.frames, got.at + base);
             if (got.at + (int64_t)got.frames > run_end)
                 run_end = got.at + (int64_t)got.frames;
+            if (got.at + (int64_t)got.frames > run_sound_end)
+                run_sound_end = got.at + (int64_t)got.frames;
             if (!p->has_picture && p->seek_pending && os64_media_queue_count(&p->pcm) > 0) {
                 // With no picture, a seek has landed once sound from there is queued.
                 p->seek_pending = false;
@@ -900,6 +942,12 @@ static int64_t decoding_thread(void *arg)
             if ((accept & OS64_MEDIA_WANT_PICTURE) != 0)
                 pictures_done = true;
             bool all_done = (!p->has_sound || sound_done) && (!p->has_picture || pictures_done);
+            if (all_done && run_end > 0 && p->length < 0) {
+                // A media whose length the probe could not say has one now
+                // (an MP3 with no header served with no length).
+                p->length = run_end;
+                look(p);
+            }
             if (!all_done && p->loop && run_end > 0) {
                 // Looping, a kind that is done waits for the other: the run
                 // starts again only once both have reached its end.
@@ -920,13 +968,19 @@ static int64_t decoding_thread(void *arg)
                 if (sought == 0) {
                     if (p->has_sound && gen_pcm == p->pcm.generation)
                         os64_media_queue_reopen(&p->pcm);
+                    // Pictures that outlast the sound: silence to the run's
+                    // end, so the next run's sound is heard at its time. A
+                    // sound already run dry waits for the clock instead
+                    // (sound_over; service).
+                    pad = p->has_sound && !p->sound_over && run_sound_end < run_end ? run_end - run_sound_end : 0;
+                    pad_at = base + run_sound_end;
                     // A sound that ran dry before the pictures ended stays
                     // over (the clock monotonic) until the clock reaches the
                     // next run's first frame (service).
                     p->run_sound_done = p->run_pictures_done = false;
                     p->loop_len = run_end;
                     base += run_end;
-                    run_end = 0;
+                    run_end = run_sound_end = 0;
                     sound_done = pictures_done = false;
                     service(p, now_us());
                     continue;

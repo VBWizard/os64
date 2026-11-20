@@ -837,6 +837,11 @@ above:
     time stays its ear's; a muted `<video>`'s voice goes (VIDEO.md § 4).
   - An `<audio>` ends when its last frame is heard, as the old decoder's
     did (the output's `heard_all`), and its position is then its length.
+  - A sound whose length the probe could not say (an MP3 with no header,
+    served with no length) gets one at its end, so `duration` turns
+    finite with a `durationchange`, as before.
+  - The player rings yonder every quarter second while a sound alone
+    plays, as the old voice did, for `timeupdate` and the controls.
   - The device refused (another program has the stream): the voice WAITs
     and the clock, which is the ear, stands still; the sound plays from
     where it was when the device comes back (`/tests/playertest` step 3).

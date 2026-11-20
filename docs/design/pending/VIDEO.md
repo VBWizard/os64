@@ -304,14 +304,23 @@ what yonder's own decoder loop did moved into it or beside it:
   plays on from the start after a gap, with no end. While one kind's run
   is over and the other's goes on, the first is treated as ended for that
   run: sound run dry is no buffering, pictures that stop are not late,
-  and the next run's sound is heard from when the clock reaches it
-  (`/tests/playertest` step 5, a clip each way round).
+  and the next run's sound is heard from when the clock reaches it: the
+  queue carries silence from the sound's end to the pictures' end, since
+  the output plays queued sound back to back (`/tests/playertest` step 5,
+  four clips: sound a fifth of a second, one second and 1.9 seconds
+  beside two of pictures, and the other way round).
 - The source has an **`idle`** hook (`os64/media.h`), called by the
   decoding thread at each wake while it waits with nothing to read: it is
   where yonder keeps a network transfer moving and lets a fetch go when
   nothing has played for ten seconds (step 4).
-- It ends when its last frame is HEARD, not written, and its position
-  at the end is its length (step 1).
+- It ends when its last frame is HEARD, not written (a starved ear may
+  still have the device's delay to play), and its position at the end is
+  its length (step 1). A length the probe could not say is known at the
+  end (step 6), as the old decoder's was.
+- While it plays it rings `look` every quarter second, its position
+  having moved with nothing else to say so (a picture's caller asks at
+  every frame); a page's `timeupdate` and its controls' time hang on it
+  (step 2).
 - It may wait on its caller's bell (the config's `bell`) and makes no
   picture bell, so a page's `<audio>` costs one handle, the session's,
   as the old decoder did: a page may hold dozens.
