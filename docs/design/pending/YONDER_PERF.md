@@ -836,6 +836,25 @@ complexity:
   paint, the compositor's hold of kGuiLock 2.6% of a core, every wait on
   the lock together under half a percent. Nothing is left here to take.
 - What the instrument says next: scaled frames kept, warps.
+- **A script's forced layouts, and the memory each one maps.** A lead,
+  not yet a reading: YouTube's watch page on the P5 (2026-11-20, the
+  `WheelEvent` slice installed). yonder kept one core busy for minutes,
+  its status line saying "Script forced 5-6 layouts in" 3 to over 20
+  seconds a task (0.6 to 4 s a whole layout), the video's picture mostly
+  still while its sound never broke. `top` counted 26,652,035 minor and
+  2,101 major faults in 19:31 of CPU, about 22,800 minor faults a second
+  of CPU. The guess, to be measured before anything is built: a whole
+  layout builds its style and box arenas in fresh memory and frees them,
+  and every block of 128 KB or more is a region of its own, mapped,
+  touched page by page and unmapped (perf-5's shape, in the layout this
+  time). The cost of that is perf-5's numbers, not a guess: ~660 µs an
+  unmap on the P5, and a fault and a zeroed page for each page touched.
+  What to read first: faults and unmaps per forced layout, and the share
+  of a layout's time they take. If they are a large share, reusing a
+  layout's arenas from one layout to the next removes them, as
+  `yonder_scratch_t` did for the painter; the layouts themselves (a whole
+  rebuild each time a script asks a size) are the bigger bill either way,
+  and the YouTube arc's (DEBTS.md § The YouTube page).
 
 Also owed to this slice (PILE3.md): the paused-animation test, "throttle,
 not freeze", and the frame-timing switch.
