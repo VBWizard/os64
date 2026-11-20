@@ -2098,10 +2098,13 @@ typedef struct {
     // the strip hid while it held the focus, which libui lets go from a
     // hidden widget; a key comes to it while nothing else is focused
     // (strip_key), and brings it back.
+    // `placed_drawn` is the strip's drawn state players_place last applied,
+    // which a move made outside strips_turn (player_act) can leave behind.
     bool video;
     bool played;
     bool had_focus;
     bool kept_focus;
+    bool placed_drawn;
     uint64_t src_hash;
     yonder_strip_t strip;
 } Player;
@@ -11142,6 +11145,7 @@ static void videos_tick(void)
 }
 
 static void strips_turn(bool moved);
+static const os64_html_node_t *strip_kept_node(void);
 
 // Whether (x, y), window coordinates, is on a drawn player as it is seen
 // (its bounds within its clip).
@@ -11237,19 +11241,32 @@ static void strips_turn(bool moved)
         // Waiting is buffering unless it waits for the sound device.
         st->buffering = v->waiting && !v->busy;
         bool marked = st->mark == YONDER_MARK_SHOWN;
-        bool drawn = yonder_strip_drawn(st);
         if (moved && st->over_box)
             yonder_strip_moved(st, now);
-        if (!yonder_strip_settle(st, now) && drawn == yonder_strip_drawn(st))
-            continue;
-        place |= drawn != yonder_strip_drawn(st);
-        if (drawn && !yonder_strip_drawn(st) && w->focused)
+        (void)yonder_strip_settle(st, now);
+        // Against what was last placed, not the state before this settle:
+        // a key's move (player_act) shows a strip between two turns.
+        bool drawn = yonder_strip_drawn(st);
+        place |= drawn != pl->placed_drawn;
+        if (pl->placed_drawn && !drawn && w->focused)
             pl->kept_focus = true;
         if (marked != (st->mark == YONDER_MARK_SHOWN) && box_on_view(pl->node, &part))
             mark_part(part);
     }
     if (place)
         players_place();
+}
+
+// The element of the video whose strip keeps the keys (kept_focus), or NULL:
+// a key while nothing is focused is that element's, for the page too.
+static const os64_html_node_t *strip_kept_node(void)
+{
+    if (g.ui.focus != NULL)
+        return NULL;
+    for (int32_t i = 0; i < g.nplayers; i++)
+        if (g.players[i]->kept_focus)
+            return g.players[i]->node;
+    return NULL;
 }
 
 // A key while nothing is focused, for a video whose strip hid while it held
@@ -11326,6 +11343,7 @@ static void players_place(void)
                       !flow_box_covered_at(g.page.tree, b, (int32_t)((int64_t)at.x + at.w / 2),
                                            (int32_t)((int64_t)at.y + at.h / 2), scroll_now());
         bool shown = placed && (!g.players[i]->video || yonder_strip_drawn(&g.players[i]->strip));
+        g.players[i]->placed_drawn = yonder_strip_drawn(&g.players[i]->strip);
         if (cls != NULL && cls != w->cls) {
             w->cls = cls;
             os64_ui_mark_dirty(&g.ui, w);
@@ -15213,6 +15231,8 @@ static bool key_event(const os64_gui_event_t *ev)
     const os64_html_node_t *target = page_widget_node(g.ui.focus);
     if (target == NULL && g.ui.focus != NULL && g.ui.focus != &g.view)
         return false;
+    if (target == NULL)
+        target = strip_kept_node();     // a hidden strip's keys are its video's
     if (target == NULL)
         target = page_doc(&g.page)->body != NULL ? page_doc(&g.page)->body : page_doc(&g.page)->document;
     char name[8];
