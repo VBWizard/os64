@@ -4142,6 +4142,7 @@ static void sync_bars(void)
 static void hover(int32_t x, int32_t y);
 static void forms_place(void);
 static void players_build(void);
+static void posters_register(void);
 static void players_place(void);
 static void players_drop(void);
 static void players_show(void);
@@ -10583,11 +10584,13 @@ static void forms_build(void)
     forms_place();
     forms_sync_from_model(true);
     players_build();
+    posters_register();
     return;
 refused:
     say_failed(g.page.diag, "controls", "Out of memory making this page's controls; existing controls are kept.");
     forms_sync_from_model(true);
     players_build();
+    posters_register();
 }
 
 // Every control's widget at its box on the glass, clipped to the page view
@@ -10899,7 +10902,8 @@ static void video_remove(const yonder_media_t *session)
 // ── Posters (VIDEO.md § 8, V.6.2) ───────────────────────────────────────
 
 // `node`'s poster slot on page `p`. On the shown page it is made the first
-// time the box is laid out or painted with a `poster`, and the attribute
+// time the box is laid out, published (posters_register) or painted with a
+// `poster`, and the attribute
 // read as it stands: a changed one is resolved again and its picture asked
 // for at the next turn (posters_turn). Any other page (a copy laid out for a
 // rebuild or a measurement, which shares the shown page's strings) only
@@ -10939,13 +10943,26 @@ static PosterSlot *poster_seen(Page *p, const os64_html_node_t *node)
     slot->url = NULL;
     slot->pic = -1;
     slot->asked = false;            // `shown` stays the turn's: it marks the box when it moves
-    char resolved[OS64_FETCH_URL_MAX];
-    if (raw != NULL && os64_dom_resolve(page_doc(p), p->way.url, raw, resolved, sizeof(resolved)))
-        slot->url = copy_text(resolved);
+    // An image source's resolver: a data: URL resolves at any length.
+    if (raw != NULL)
+        slot->url = os64_page_resolve_in_alloc(page_doc(p), p->way.url, raw);
     // Layout or paint may meet it after this turn's posters_turn ran: the
     // loop turns again to ask for it, whatever else is quiet.
     (void)os64_gui_event_ring(g.win, BELL_MEDIA);
     return slot;
+}
+
+// After a layout is published: a slot for each laid-out video with a
+// poster, on the view or not, so a poster below the fold is asked for and
+// gives its box its size before anyone scrolls to it (paint meets only
+// what is on the view).
+static void posters_register(void)
+{
+    const os64_html_document_t *doc = page_doc(&g.page);
+    const os64_html_node_t *top = doc != NULL && g.page.tree != NULL ? doc->document : NULL;
+    for (const os64_html_node_t *x = top; x != NULL; x = os64_html_shadow_including_next(top, x))
+        if (is_video_node(x) && os64_html_attr(x, "poster") != NULL && flow_box_for(g.page.tree, x) != NULL)
+            (void)poster_seen(&g.page, x);
 }
 
 // The part of a box the shown page's view shows, page coordinates; false
