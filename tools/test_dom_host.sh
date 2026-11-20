@@ -48,7 +48,11 @@ for source in userland/libjs/runtime/runtime.c userland/libjs/runtime/ledger.c u
     userland/libsvg/{core,path,geometry,bounds,hit,stroke,scene,paint,gradient,cache}.c \
     userland/libway/origin.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libcanvas/shadow.c userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libdraw2d/blur.c userland/libpng/encode.c userland/libos64/crc32.c; do
     object="$work/${source//\//_}.o"
-    cc "${flags[@]}" -c "$source" -o "$object"
+    observer=()
+    if [ "$source" = userland/libjs/runtime/runtime.c ]; then
+        observer=(-Djs_owner_incarnation_reserve=d_lifetime_observed_context_reserve)
+    fi
+    cc "${flags[@]}" "${observer[@]}" -c "$source" -o "$object"
     if [ "$source" = userland/libos64/str.c ]; then
         objcopy --localize-symbol=memcpy --localize-symbol=memmove --localize-symbol=memset \
             --localize-symbol=memcmp "$object" "$object-local"

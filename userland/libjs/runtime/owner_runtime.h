@@ -30,6 +30,13 @@ typedef struct {
     JSOwnerId owner;
     bool primary, staged, retired, failed;
 } JSOwnerRealmSnapshot;
+typedef struct { uint64_t incarnation, serial; } JSOwnerContextId;
+/* Private scalar identity, not a holder. Read original retained realm facts
+ * without allocation, raw export or health polling. Context IDs come from a
+ * separate monotonic namespace in the charged runtime arena. No wrap/reuse;
+ * admission may burn IDs. Both outputs remain unchanged on refusal. */
+JSOwnerStatus js_owner_runtime_owner_snapshot(const os64_js_runtime_t *, JSOwnerId, JSOwnerRealmSnapshot *);
+JSOwnerStatus js_owner_runtime_context_id(os64_js_runtime_t *, JSOwnerContextId *);
 /* Private checked native operations. Ticket/snapshot outputs are distinct
  * caller storage outside runtime/metadata and execution outcomes, unchanged
  * on refusal. Execution outcomes follow the existing ABI 5 call rules. IDs refer

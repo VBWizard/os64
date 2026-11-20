@@ -3,6 +3,7 @@
 
 #include "dom/dom.h"
 #include "browsing_context.h"
+#include "lifetime.h"
 #include "navigation_authority.h"
 #include "os64/js_engine.h"
 #include "os64/js_callbacks.h"
@@ -415,6 +416,7 @@ struct os64_dom_cluster {
     size_t bytes, kept_bytes, canvas_bytes, count;
     os64_dom_t *members[D_REALMS];
     DBrowsingContext *contexts;
+    struct DLifetimeAdapter *lifetime;
     size_t context_count;
     struct DNavigationAuthority *navigation_authority;
     DValue *buckets[D_BUCKETS];
@@ -885,6 +887,7 @@ bool d_member_access(os64_dom_t *, JSContext *, bool);
 bool d_location_access(os64_dom_t *, JSContext *, bool);
 int d_location_exotic_install(os64_dom_t *, JSContext *, JSValueConst);
 void d_location_exotic_drain(os64_dom_t *);
+void d_exposure_counts(const os64_dom_t *, DExposureCounts *);
 /* Private host seams. Prepare identity before author execution/publication. */
 JSValue d_window_proxy(JSContext *, DBrowsingContext *);
 void d_window_proxy_drain(os64_dom_t *);
