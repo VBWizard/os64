@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WheelEvent and FileList</title>
+<style>
+  body { font: 16px sans-serif; margin: 24px; max-width: 640px; }
+  li { margin: 4px 0; }
+  .ok { color: #070; } .bad { color: #b00; }
+</style>
+
+<h2>Two names pages mention</h2>
+<p>A page that only names <code>WheelEvent</code> or <code>FileList</code>
+used to stop with a ReferenceError. Each line turns green when its check
+holds. yonder dispatches no <code>wheel</code> of its own (DEBTS.md), so
+scrolling here prints nothing.</p>
+<ul id="out"></ul>
+<p><input id="file" type="file"> <input id="text"></p>
+
+<script>
+  const out = document.getElementById('out');
+  function say(text, good) {
+    const li = document.createElement('li');
+    li.textContent = text;
+    li.className = good ? 'ok' : 'bad';
+    out.appendChild(li);
+  }
+  function tries(f) { try { return f(); } catch (e) { return e.name; } }
+  say('WheelEvent is a MouseEvent', typeof WheelEvent === 'function' &&
+      Object.getPrototypeOf(WheelEvent) === MouseEvent);
+  const w = new WheelEvent('wheel', {deltaY: 120, deltaMode: WheelEvent.DOM_DELTA_PIXEL, bubbles: true});
+  say('new WheelEvent: deltaY ' + w.deltaY + ', deltaMode ' + w.deltaMode, w.deltaY === 120 && w.deltaMode === 0);
+  let heard = 0;
+  document.body.addEventListener('wheel', e => { heard += e.deltaY; });
+  document.body.dispatchEvent(w);
+  say('a page dispatches its own wheel', heard === 120);
+  say('FileList exists, and is not constructible', typeof FileList === 'function' &&
+      tries(() => new FileList()) === 'TypeError');
+  const file = document.getElementById('file'), text = document.getElementById('text');
+  say('a file field\'s files: an empty FileList, the same each read',
+      file.files instanceof FileList && file.files.length === 0 && file.files === file.files);
+  say('a text field\'s files: null', text.files === null);
+  // The form library's copy, which ended in a ReferenceError before.
+  const value = file.files;
+  say('value instanceof Blob || value instanceof FileList', value instanceof Blob || value instanceof FileList);
+</script>
