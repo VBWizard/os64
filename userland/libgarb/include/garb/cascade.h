@@ -185,11 +185,6 @@ bool garb_cascade_retain(garb_cascade_t *cascade);
  * Reader storage is optional: its absence disables updates, not full builds.
  * The caller serializes updates with queries on its window thread. */
 bool garb_cascade_update(garb_cascade_t *c);
-// The most anchored :has() compounds (garb_anchor_t) a cascade tracks: each
-// is a bit every element's record keeps, what the compound answered there
-// when last asked, so an update can tell where the answer turned. A cascade
-// whose rules hold more is built without a change reader.
-#define GARB_ANCHORS_MAX 64
 // Why the latest garb_cascade_update answered false; GARB_UPDATE_DONE
 // before any and after one that answered true.
 typedef enum {
@@ -197,7 +192,6 @@ typedef enum {
     GARB_UPDATE_INCOMPLETE,     // the cascade came up short, when built or since
     GARB_UPDATE_FAILED_BEFORE,  // an earlier update failed: a fresh cascade is owed
     GARB_UPDATE_NO_READER,      // no change reader: there was no memory for one
-    GARB_UPDATE_ANCHORS,        // more anchored :has() compounds than GARB_ANCHORS_MAX
     GARB_UPDATE_BARE_ANCHOR,    // an anchored :has() with nothing cheaper to test first
     GARB_UPDATE_COUNTED_HAS,    // a :has() inside :nth-child(… of S) (has_filtered)
     GARB_UPDATE_SHADOW_ROOT,    // the document's first shadow root arrived
@@ -213,13 +207,18 @@ typedef enum {
     GARB_UPDATE_REASONS
 } garb_update_refusal_t;
 garb_update_refusal_t garb_cascade_update_refusal(const garb_cascade_t *c);
-// A reason's name for a record ("broad", "anchors"); "?" past the enum.
+// A reason's name for a record ("broad", "bare anchor"); "?" past the enum.
 const char *garb_update_refusal_name(garb_update_refusal_t reason);
 // Whether this cascade keeps a change reader for incremental updates. False
 // lets hosts skip speculative geometry snapshots whose generation cannot
 // survive a DOM change. True is not a promise that an update will succeed:
 // history loss, dirty breadth and storage budgets still require fallback.
 bool garb_cascade_tracks_changes(const garb_cascade_t *c);
+// How many anchored :has() compounds (garb_anchor_t) the cascade's rules
+// hold, and how many of those are bare. While the cascade takes updates,
+// each is a bit in every element's record, asked at every element it
+// styles; a bare one keeps it from taking them.
+void garb_cascade_anchors(const garb_cascade_t *c, int32_t *anchors, int32_t *bare);
 uint64_t garb_cascade_generation(const garb_cascade_t *c);
 uint64_t garb_cascade_updates(const garb_cascade_t *c);
 uint64_t garb_cascade_version(const garb_cascade_t *c);
@@ -278,14 +277,15 @@ void garb_cascade_free(garb_cascade_t *c);
 /* What a cascade holds (MEMORY_CENSUS.md § 3), in bytes reserved: its own
  * arena (its rules, entries, keyframes, attribute table and selector
  * indexes), the arena of what it read from the sheets, each `style`
- * attribute's parse, and the slot table and dirty list it keeps on the
- * heap, at their capacity. Scratch a call frees before it returns is not
+ * attribute's parse, and the slot table (with its rows of anchor bits) and
+ * dirty list it keeps on the heap, at their capacity. Scratch a call frees before it returns is not
  * held, and not counted. NULL answers 0. Cheap: a pass over the style
  * attributes, no walk of the rules. The sum of garb_cascade_parts. */
 size_t garb_cascade_bytes(const garb_cascade_t *c);
 /* The same, by part: `state` is the cascade's own arena and the record
  * itself, `reads` what it read from the sheets, `attributes` the `style`
- * attributes' parses, `tables` the slot table and dirty list on the heap.
+ * attributes' parses, `tables` the slot table, its rows of anchor bits and
+ * the dirty list on the heap.
  * The first two are held to ceilings of their own and each attribute's
  * parse to another (garb_cascade_limits_t), which is why they are told
  * apart. NULL answers zeros. */
@@ -415,6 +415,15 @@ char *garb_media_text_serialized(const char *text, size_t *length, garb_grow_t g
 // ...`), for the harness and a probe. Like snprintf.
 size_t garb_cascade_dump(const garb_cascade_t *c, const os64_html_document_t *doc, char *out,
                          size_t cap);
+// Whether two cascades of `doc` give every element, and its ::before and
+// ::after, the same winners: a diagnostic, for checking an updated cascade
+// against one built fresh. Where they differ, `why` says where first (like
+// snprintf): the element's path, the property, the value in `c` against
+// the value in `other`, and up to three rules of `other` that match there
+// and set it, as written. Those are read from the sheets `other` was built
+// from, which must still be alive.
+bool garb_cascade_compare(const garb_cascade_t *c, const garb_cascade_t *other, const os64_html_document_t *doc,
+                          char *why, size_t cap);
 
 #pragma GCC visibility pop
 

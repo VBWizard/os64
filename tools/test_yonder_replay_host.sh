@@ -8,7 +8,11 @@
 #       with tools/yonder_corpus_diff.py. A corpus kept before its records
 #       said their window (version 1, REPLAY.md § 3) needs `--window` to
 #       state it, and both replays a diff compares must be run with the
-#       same statement, or the diff judges none of those pages
+#       same statement, or the diff judges none of those pages.
+#       `--layout-profile` and `--cascade-check N` are yonder's measuring
+#       switches, set as its command line sets them; `--measure` replays a
+#       page whose kept record lost lines too, to measure yonder on it, so
+#       compare it only with replays made the same way
 #   tools/test_yonder_replay_host.sh --mutants [WORKERS]
 #       the proof's own proof (REPLAY.md § 7): every mutant in
 #       tools/test_yonder_replay_mutants.py, each breaking one rule, run

@@ -1,5 +1,7 @@
 #!/bin/bash
 # libgarb's parser on the host, under the sanitizers (GARB.md § Slices, G1):
+# the cascade's updates, by hand and against a fresh cascade on a seeded
+# random walk (`--oracle [seed steps]`, test_garb_oracle.inc), then
 # css-parsing-tests through the driver, then every allocation failed in turn
 # over a real 2026 sheet and through every entry point, then a million
 # nested ( on a small stack, numbers past int64_t's reach, and what a parse
@@ -47,6 +49,7 @@ cc -fsanitize=address,undefined,float-cast-overflow "${host_objs[@]}" -lm -o "$w
 if [ -n "${GARB_DRIVER:-}" ]; then cp "$work/garb_driver" "$GARB_DRIVER"; fi
 if [ "$#" -gt 0 ]; then "$work/garb_driver" "$@"; exit; fi
 "$work/garb_driver" --updates
+"$work/garb_driver" --oracle
 "$work/garb_driver" --shadow
 python3 tools/test_garb_suite.py "$work/garb_driver"
 "$work/garb_driver" --media-depth

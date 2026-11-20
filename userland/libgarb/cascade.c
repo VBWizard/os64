@@ -27,6 +27,7 @@
 #include "values_internal.h"
 #include "garb/cascade.h"
 #include "garb/select.h"
+#include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/str.h"
 
@@ -52,6 +53,10 @@ typedef struct {
 
 typedef struct {
     garb_selectors_t *sel;
+    // Its selector as written: the sheet's, read only while the sheets
+    // the cascade was built from are alive (garb_cascade_compare).
+    const garb_value_t *prelude;
+    int32_t nprelude;
     Decl *decls;
     int32_t ndecls;
     uint32_t order;
@@ -170,9 +175,6 @@ typedef struct {
     // (restyle).
     bool element_only;
     uint64_t changed, removed_children;
-    // What each of the cascade's anchors (bit i, anchors[i]) answered here
-    // when last asked.
-    uint64_t has_bits;
     // A digest of the rules that matched the element itself (match_digest).
     uint64_t matched;
 } Slot;
@@ -258,12 +260,22 @@ struct garb_cascade {
     // Whether the document has had a shadow root: the walks cross into
     // shadow trees and an update recomputes in one ordered walk.
     bool shadowed;
-    // The anchored :has() compounds of its rules, each a bit of every
-    // slot's has_bits. `untrackable` names what kept the cascade from a
-    // change reader at birth (too many of them, or a bare one), and
-    // `refusal` why the latest update answered false.
-    garb_anchor_t anchors[GARB_ANCHORS_MAX];
-    int32_t nanchors;
+    // The anchored :has() compounds of its rules (`nbare` of them bare).
+    // What each answered at an element when last asked is bit i of that
+    // element's row of `has_words`: `has_width` words a slot, the row at the
+    // slot's own index, moved with it when the table grows or a removal
+    // backshifts, so a slot's record can be rebuilt (restyle) without
+    // touching its bits. None when its rules keep it from updates at birth
+    // (`untrackable`); a cascade that comes up short later, or has no
+    // reader, keeps rows it will never compare.
+    // `has_scratch` is one row, for an update's compare. `untrackable`
+    // names what kept the cascade from a change reader at birth (a bare
+    // anchor, a counted :has()), and `refusal` why the latest update
+    // answered false.
+    garb_anchor_t *anchors;
+    int32_t nanchors, nbare;
+    uint32_t has_width;
+    uint64_t *has_words, *has_scratch;
     garb_update_refusal_t untrackable, refusal;
 };
 
@@ -1044,6 +1056,8 @@ static void add_style_rule(garb_cascade_t *c, garb_parsed_t *owner, const garb_r
     Rule *rule = &c->rules[c->nrules];
     os64_memset(rule, 0, sizeof(*rule));
     rule->sel = sel;
+    rule->prelude = r->prelude;
+    rule->nprelude = r->nprelude;
     rule->order = (*order)++;
     rule->sheet = sheet;
     rule->decls = alloc(c, (size_t)(nitems > 0 ? nitems : 1) * sizeof(Decl));
@@ -1602,14 +1616,24 @@ static bool slots_grow(garb_cascade_t *c)
     uint32_t cap = c->slotcap ? c->slotcap * 2 : 64;
     Slot *slots = os64_calloc(cap, sizeof(*slots));
     if (!slots) return false;
+    uint32_t w = c->has_width;
+    uint64_t *words = w ? os64_calloc((size_t)cap * w, sizeof(*words)) : NULL;
+    if (w && !words) { os64_free(slots); return false; }
     for (uint32_t i = 0; i < c->slotcap; ++i) if (c->slots[i].node) {
         uint32_t at = hash_ptr(c->slots[i].node) & (cap - 1);
         while (slots[at].node) at = (at + 1) & (cap - 1);
         slots[at] = c->slots[i];
+        for (uint32_t k = 0; k < w; k++) words[(size_t)at * w + k] = c->has_words[(size_t)i * w + k];
     }
     os64_free(c->slots);
-    c->slots = slots; c->slotcap = cap;
+    os64_free(c->has_words);
+    c->slots = slots; c->slotcap = cap; c->has_words = words;
     return true;
+}
+// The slot's row of anchor bits (has_words); NULL while there is none.
+static uint64_t *has_row(const garb_cascade_t *c, const Slot *s)
+{
+    return c->has_width ? c->has_words + (size_t)(s - c->slots) * c->has_width : NULL;
 }
 static Slot *slot_for(const garb_cascade_t *c, const os64_html_node_t *node, bool create)
 {
@@ -1640,25 +1664,29 @@ static void slot_remove(garb_cascade_t *c, const os64_html_node_t *node)
     for (uint32_t at = (hole + 1) & mask; c->slots[at].node; at = (at + 1) & mask) {
         uint32_t home = hash_ptr(c->slots[at].node) & mask;
         if (((at - home) & mask) >= ((at - hole) & mask)) {
-            c->slots[hole] = c->slots[at]; hole = at;
+            c->slots[hole] = c->slots[at];
+            for (uint32_t k = 0; k < c->has_width; k++)
+                c->has_words[(size_t)hole * c->has_width + k] = c->has_words[(size_t)at * c->has_width + k];
+            hole = at;
         }
     }
     c->slots[hole] = (Slot){0}; --c->slotcount;
+    for (uint32_t k = 0; k < c->has_width; k++) c->has_words[(size_t)hole * c->has_width + k] = 0;
 }
 
-// What each anchor answers at `x` (bit i for anchors[i]); nothing for a
-// cascade that will take no update (untrackable, or short), which never
-// compares them. Filled
-// in for every element when it is styled, which is why
-// garb_anchor_matches tries a compound's type, id, class and attributes
-// before its :has().
-static uint64_t anchor_bits(const garb_cascade_t *c, const os64_html_node_t *x)
+// What each anchor answers at `x`, into `out` (bit i % 64 of word i / 64
+// for anchors[i]); nothing for a cascade that will take no update (no row
+// of bits, or short), which never compares them. Filled in for every
+// element when it is styled, one test per anchor, which is why
+// garb_anchor_matches tries an anchor's filters before its :has(): a test
+// costs a compare at an element its filters turn away (DEBTS: indexing the
+// anchors by their filters, for sheets with thousands).
+static void anchor_bits(const garb_cascade_t *c, const os64_html_node_t *x, uint64_t *out)
 {
-    if (c->untrackable != GARB_UPDATE_DONE || c->incomplete) return 0;
-    uint64_t bits = 0;
+    if (out == NULL || c->incomplete) return;
+    for (uint32_t k = 0; k < c->has_width; k++) out[k] = 0;
     for (int32_t i = 0; i < c->nanchors; i++)
-        if (garb_anchor_matches(&c->anchors[i], x)) bits |= (uint64_t)1 << i;
-    return bits;
+        if (garb_anchor_matches(&c->anchors[i], x)) out[i / 64] |= (uint64_t)1 << (i % 64);
 }
 
 // ── var() and env() (Custom Properties 1 § 3, Environment Variables 1) ─
@@ -2961,6 +2989,9 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
             c->incomplete = true;
         add_rules(c, into, sheet->items, sheet->nitems, &order, 0, s);
     }
+    int32_t anchors = 0;
+    for (int32_t i = 0; i < c->nrules; ++i) anchors += garb_selectors_anchors(c->rules[i].sel, NULL, 0);
+    c->anchors = anchors ? alloc(c, (size_t)anchors * sizeof(*c->anchors)) : NULL;
     for (int32_t i = 0; i < c->nrules; ++i) {
         garb_selector_dependencies_t d = garb_selectors_dependencies(c->rules[i].sel);
         c->dependencies.following |= d.following;
@@ -2971,17 +3002,18 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
         c->dependencies.ancestors |= d.ancestors;
         c->dependencies.ancestors_preceding |= d.ancestors_preceding;
         if (d.has_filtered) c->untrackable = GARB_UPDATE_COUNTED_HAS;
-        int32_t room = c->nanchors < GARB_ANCHORS_MAX ? GARB_ANCHORS_MAX - c->nanchors : 0;
-        int32_t held = garb_selectors_anchors(c->rules[i].sel, c->anchors + (GARB_ANCHORS_MAX - room), room);
-        for (int32_t a = 0; a < held && a < room; a++)
-            if (c->anchors[GARB_ANCHORS_MAX - room + a].bare)
+        if (c->anchors == NULL) continue;
+        int32_t held = garb_selectors_anchors(c->rules[i].sel, c->anchors + c->nanchors, anchors - c->nanchors);
+        for (int32_t a = 0; a < held; a++)
+            if (c->anchors[c->nanchors + a].bare) {
                 c->untrackable = GARB_UPDATE_BARE_ANCHOR;
+                c->nbare++;
+            }
         c->nanchors += held;
     }
-    if (c->nanchors > GARB_ANCHORS_MAX) {
-        c->untrackable = GARB_UPDATE_ANCHORS;
-        c->nanchors = GARB_ANCHORS_MAX;
-    }
+    // A row of bits a slot while the cascade will take updates.
+    if (c->untrackable == GARB_UPDATE_DONE && c->nanchors > 0)
+        c->has_width = (uint32_t)(c->nanchors + 63) / 64;
     keyframes_settle(c);
     // Each @keyframes read for no element: what an element shares.
     for (int32_t k = 0; k < c->nkeyframes; k++)
@@ -2995,7 +3027,16 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
     while (c->slotcap < elements * 2 + 2)
         c->slotcap *= 2;
     c->slots = os64_calloc(c->slotcap, sizeof(Slot));
-    if (c->slots == NULL) {
+    if (c->has_width) {
+        c->has_words = os64_calloc((size_t)c->slotcap * c->has_width, sizeof(*c->has_words));
+        c->has_scratch = alloc(c, c->has_width * sizeof(*c->has_scratch));
+    }
+    if (c->slots == NULL || (c->has_width && (c->has_words == NULL || c->has_scratch == NULL))) {
+        os64_free(c->slots);
+        os64_free(c->has_words);
+        c->slots = NULL;
+        c->has_words = NULL;
+        c->has_width = 0;
         c->slotcap = 0;
         c->incomplete = true;
         return c;
@@ -3007,7 +3048,7 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
         if (is_el(x)) {
             cascade_whole(c, x, &m, &mcap, &scratch);
             Slot *s = slot_for(c, x, false);
-            if (s != NULL) s->has_bits = anchor_bits(c, x);
+            if (s != NULL) anchor_bits(c, x, has_row(c, s));
         }
     os64_free(scratch.items);
     // What the cascade read ran short wherever it was read: a sheet's own
@@ -3213,13 +3254,20 @@ static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
 {
     if (!connected(c, a)) return true;
     if (c->dependencies.ancestors && !mark_element(c, a)) return false;
-    if (c->nanchors == 0) return true;
+    if (c->has_width == 0) return true;
     Slot *s = slot_for(c, a, false);
     if (!s) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
-    uint64_t bits = anchor_bits(c, a), turned = bits ^ s->has_bits;
-    s->has_bits = bits;
-    for (int32_t i = 0; turned != 0 && i < c->nanchors; i++) {
-        if (!(turned >> i & 1)) continue;
+    anchor_bits(c, a, c->has_scratch);
+    // The answers are asked into the scratch row; the slot's row takes
+    // them, and the scratch row is left holding what turned, for the marks.
+    uint64_t *row = has_row(c, s);
+    for (uint32_t k = 0; k < c->has_width; k++) {
+        uint64_t turned = c->has_scratch[k] ^ row[k];
+        row[k] = c->has_scratch[k];
+        c->has_scratch[k] = turned;
+    }
+    for (int32_t i = 0; i < c->nanchors; i++) {
+        if (!(c->has_scratch[i / 64] >> (i % 64) & 1)) continue;
         if (c->anchors[i].down && !mark_subtree(c, a)) return false;
         if (c->anchors[i].siblings && !mark_siblings(c, a->next)) return false;
     }
@@ -3263,6 +3311,11 @@ bool garb_style_updated_since(const garb_cascade_t *c, const os64_html_node_t *n
 bool garb_cascade_tracks_changes(const garb_cascade_t *c)
 {
     return c && c->reader && !c->incomplete && !c->update_failed;
+}
+void garb_cascade_anchors(const garb_cascade_t *c, int32_t *anchors, int32_t *bare)
+{
+    if (anchors) *anchors = c ? c->nanchors : 0;
+    if (bare) *bare = c ? c->nbare : 0;
 }
 
 // Whether two values say the same, by content: a winner read through
@@ -3324,15 +3377,23 @@ static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match
     cascade_whole(c, x, m, mcap, scratch);
     if (c->incomplete || c->self.incomplete) { c->refusal = GARB_UPDATE_SHORT; return false; }
     s = slot_for(c, x, false);
-    s->has_bits = anchor_bits(c, x);
+    // Its anchor bits are asked again and stored, never compared. The walk
+    // is sound because whatever turned a bit here was a logged change that
+    // already marked all the bit's reach: a change at the element itself or
+    // under it, or a sibling's for a `+`/`~` argument, visits it (mark_has)
+    // and compares there; and anything else its compound reads (an
+    // ancestor fieldset's `disabled`, `lang` or `dir`, its place among its
+    // siblings) changed at an ancestor or a sibling whose mark covers its
+    // subtree or the siblings after it, which is the reach of any anchor at
+    // the element. A new kind of mark that restyles an element alone must
+    // keep that true, or compare here.
+    anchor_bits(c, x, has_row(c, s));
     if (!old.element_only) return true;
     bool same = old.matched == s->matched && styles_same(&old.style, &s->style);
     bool pseudo_same = true;
     for (int32_t t = 0; t < TARGET_AFTER; t++) pseudo_same &= styles_same(&old.pseudo[t], &s->pseudo[t]);
     if (same && pseudo_same) {
-        uint64_t bits = s->has_bits;
         *s = old;
-        s->has_bits = bits;
         s->dirty = s->dirty_suffix = s->element_only = false;
         s->removed_children = 0;
         return true;
@@ -3347,7 +3408,7 @@ garb_update_refusal_t garb_cascade_update_refusal(const garb_cascade_t *c)
 const char *garb_update_refusal_name(garb_update_refusal_t reason)
 {
     static const char *const kNames[GARB_UPDATE_REASONS] = {
-        "done", "incomplete", "failed before", "no reader", "anchors", "bare anchor", "counted has", "shadow root",
+        "done", "incomplete", "failed before", "no reader", "bare anchor", "counted has", "shadow root",
         "cap", "retained", "attributes", "history", "body hint", "slot left", "broad", "short",
         "no memory"};
     return reason >= 0 && reason < GARB_UPDATE_REASONS ? kNames[reason] : "?";
@@ -3625,12 +3686,13 @@ garb_cascade_parts_t garb_cascade_parts(const garb_cascade_t *c)
     garb_cascade_parts_t parts = {0};
     if (c == NULL) return parts;
     // The rule, entry, keyframe and attribute tables and the selector
-    // indexes all come from `self`'s arena (grow, alloc); only the slot
-    // table and the dirty list are the heap's.
+    // indexes all come from `self`'s arena (grow, alloc); the slot table,
+    // its rows of anchor bits and the dirty list are the heap's.
     parts.state = sizeof(*c) + os64_arena_stats(c->self.arena).reserved_bytes;
     parts.reads = os64_arena_stats(c->reads.arena).reserved_bytes;
     for (int32_t i = 0; i < c->nattrs; i++) parts.attributes += os64_arena_stats(c->attrs[i].arena).reserved_bytes;
-    parts.tables = (size_t)c->slotcap * sizeof(*c->slots) + c->dirtycap * sizeof(*c->dirty_nodes);
+    parts.tables = (size_t)c->slotcap * (sizeof(*c->slots) + c->has_width * sizeof(*c->has_words)) +
+                   c->dirtycap * sizeof(*c->dirty_nodes);
     return parts;
 }
 
@@ -3649,6 +3711,7 @@ void garb_cascade_free(garb_cascade_t *c)
         garb_free(&c->attrs[i]);
     garb_free(&c->reads);
     os64_free(c->slots);
+    os64_free(c->has_words);
     os64_free(c->dirty_nodes);
     garb_free(&c->self);
     os64_html_reader_free(c->reader);
@@ -3701,6 +3764,92 @@ static void dump_winners(Out *o, const os64_html_node_t *x, const char *pseudo, 
         puts_(o, v);
     }
     puts_(o, "\n");
+}
+
+// `x` as a path of names from its tree's top, each with its place among
+// its element siblings, and its id.
+static void compare_path(Out *o, const os64_html_node_t *x)
+{
+    const os64_html_node_t *chain[48];
+    int32_t n = 0;
+    for (const os64_html_node_t *up = x; up != NULL && is_el(up) && n < 48; up = up->parent) chain[n++] = up;
+    while (n-- > 0) {
+        int32_t place = 0;
+        for (const os64_html_node_t *s = chain[n]->prev; s != NULL; s = s->prev) place += is_el(s);
+        char at[16];
+        os64_snprintf(at, sizeof(at), "[%d]", place);
+        puts_(o, chain[n]->name != NULL ? chain[n]->name : "?");
+        puts_(o, at);
+        if (n > 0) puts_(o, ">");
+    }
+    const os64_html_attr_t *id = os64_html_attr(x, "id");
+    if (id != NULL && id->value != NULL) {
+        puts_(o, "#");
+        puts_(o, id->value);
+    }
+}
+// The first property at which two records differ (-1: none), and its
+// index in each (-1 where absent): its value by content, its sheet and its
+// importance, as styles_same compares them.
+static int32_t compare_styles(garb_style_t a, garb_style_t b, int32_t *ia, int32_t *ib)
+{
+    for (int32_t k = 0; k < a.n || k < b.n; k++) {
+        if (k < a.n && k < b.n && a.sets[k].prop == b.sets[k].prop && val_same(&a.sets[k].value, &b.sets[k].value) &&
+            a.sheet[k] == b.sheet[k] && a.important[k] == b.important[k])
+            continue;
+        garb_prop_t prop = k < a.n ? a.sets[k].prop : b.sets[k].prop;
+        *ia = *ib = -1;
+        for (int32_t i = 0; i < a.n; i++) if (a.sets[i].prop == prop) *ia = i;
+        for (int32_t i = 0; i < b.n; i++) if (b.sets[i].prop == prop) *ib = i;
+        return (int32_t)prop;
+    }
+    return -1;
+}
+bool garb_cascade_compare(const garb_cascade_t *c, const garb_cascade_t *other, const os64_html_document_t *doc,
+                          char *why, size_t cap)
+{
+    Out o = {why, cap, 0};
+    if (cap > 0) why[0] = '\0';
+    for (const os64_html_node_t *x = doc->document; x != NULL; x = si_next(x, doc->document, true)) {
+        if (!is_el(x)) continue;
+        for (int32_t t = 0; t < 3; t++) {
+            garb_pseudo_t pseudo = t == 0 ? GARB_PSEUDO_NONE : t == 1 ? GARB_PSEUDO_BEFORE : GARB_PSEUDO_AFTER;
+            garb_style_t a = t ? garb_style_for_pseudo(c, x, pseudo) : garb_style_for(c, x);
+            garb_style_t b = t ? garb_style_for_pseudo(other, x, pseudo) : garb_style_for(other, x);
+            int32_t ia, ib, prop = compare_styles(a, b, &ia, &ib);
+            if (prop < 0) continue;
+            char va[256] = "(none)", vb[256] = "(none)";
+            if (ia >= 0) garb_val_dump(&a.sets[ia].value, va, sizeof(va));
+            if (ib >= 0) garb_val_dump(&b.sets[ib].value, vb, sizeof(vb));
+            compare_path(&o, x);
+            puts_(&o, t == 1 ? "::before " : t == 2 ? "::after " : " ");
+            puts_(&o, garb_prop_name((garb_prop_t)prop));
+            puts_(&o, ": ");
+            puts_(&o, va);
+            puts_(&o, " against ");
+            puts_(&o, vb);
+            // The rules that match there and set it, as the other cascade
+            // reads them (a value read through var() is not seen here).
+            int32_t named = 0;
+            for (int32_t r = 0; r < other->nrules && named < 3; r++) {
+                const Rule *rule = &other->rules[r];
+                bool sets = false;
+                for (int32_t d = 0; d < rule->ndecls && !sets; d++)
+                    for (int32_t k = 0; k < rule->decls[d].nsets && !sets; k++)
+                        sets = rule->decls[d].sets[k].prop == (garb_prop_t)prop;
+                bool matches = false;
+                for (int32_t s = 0; sets && !matches && s < garb_selectors_count(rule->sel); s++)
+                    matches = garb_selector_pseudo(rule->sel, s) == pseudo && garb_selector_matches(rule->sel, s, x);
+                if (!matches) continue;
+                char text[512];
+                garb_dump_values(rule->prelude, rule->nprelude, text, sizeof(text));
+                puts_(&o, named++ ? " | " : "; rules setting it there: ");
+                puts_(&o, text);
+            }
+            return false;
+        }
+    }
+    return true;
 }
 
 size_t garb_cascade_dump(const garb_cascade_t *c, const os64_html_document_t *doc, char *out,

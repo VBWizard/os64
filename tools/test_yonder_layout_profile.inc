@@ -76,13 +76,15 @@ static void layout_profile_cases(void)
     check(line && strstr(line,"model rebuild 17 us") && strstr(line,"1 model rebuilds"),
           "layout profile: model cost remains separate from layout");
     const char *cascade=yonder_diag_fact_value(g.page.diag,"layout cascade");
-    check(cascade && !strcmp(cascade,"updated 0, built fresh 1: sheets changed 1"),
+    check(cascade && !strcmp(cascade,"updated 0, built fresh 1: sheets changed 1; anchors held 0, bare 0; "
+                                     "built fresh for a bare anchor 0.0 ms"),
           "layout profile: a cascade built fresh says why");
     g.page.sheets_changed=false;
     check(!os64_html_set_attr(g.page.way.doc,probe_id("p"),"title","t",1) && script_rebuild(),
           "layout profile: a change published");
     cascade=yonder_diag_fact_value(g.page.diag,"layout cascade");
-    check(cascade && !strcmp(cascade,"updated 1, built fresh 1: sheets changed 1"),
+    check(cascade && !strcmp(cascade,"updated 1, built fresh 1: sheets changed 1; anchors held 0, bare 0; "
+                                     "built fresh for a bare anchor 0.0 ms"),
           "layout profile: and the cascade it updated is counted");
     /* Each layout whole: what became of its cascade sorts the counts, and
      * the slowest says its phases, its cascade's fate and its attempts. */
@@ -104,10 +106,36 @@ static void layout_profile_cases(void)
     check(!os64_html_set_attr(g.page.way.doc,probe_id("i"),"class","b",1) && script_rebuild(),
           "layout profile: a :has() page's change published");
     cascade=yonder_diag_fact_value(g.page.diag,"layout cascade");
-    check(cascade && !strcmp(cascade,"updated 1, built fresh 0"),
-          "layout profile: a :has() page's cascade is updated, not built fresh");
-    if(!cascade || strcmp(cascade,"updated 1, built fresh 0")) printf("  layout cascade: %s\n",cascade?cascade:"(none)");
+    const char *kept_has="updated 1, built fresh 0; anchors held 1, bare 0; built fresh for a bare anchor 0.0 ms";
+    check(cascade && !strcmp(cascade,kept_has),
+          "layout profile: a :has() page's cascade is updated, not built fresh, and says its anchor");
+    if(!cascade || strcmp(cascade,kept_has)) printf("  layout cascade: %s\n",cascade?cascade:"(none)");
+    /* --cascade-check: each update checked against a fresh cascade, which
+     * agrees, so the record says nothing of it. */
+    s_cascade_check=1;
+    uint32_t checked=s_cascade_checked;
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("i"),"class","",0) && script_rebuild(),
+          "cascade check: a change published");
+    check(s_cascade_checked==checked+1 && s_cascade_differed==0 &&
+          yonder_diag_fact_value(g.page.diag,"cascade check")==NULL,
+          "cascade check: the update was checked, and agreed with a fresh cascade");
+    s_cascade_check=0;
     s_layout_profile=false;
+    probe_drop();
+    /* A bare anchor keeps the cascade from tracking: each layout's cascade
+     * is built fresh for it, and the record says what that cost. */
+    probe_page("<style>:has(> .x) p{color:red}</style><div><p id=p>t</p></div>",false);
+    g.page.diag=diag_new_claimed("https://fixture.test/profile-bare",1);
+    /* A clock that moves a quarter second a read, so the cost shows in ms. */
+    s_layout_profile=true;clock_step=250000;
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("p"),"class","y",1) && script_rebuild(),
+          "layout profile: a bare anchor's page's change published");
+    cascade=yonder_diag_fact_value(g.page.diag,"layout cascade");
+    check(cascade && strstr(cascade,"updated 0, built fresh 1: bare anchor 1; anchors held 1, bare 1; ") &&
+          !strstr(cascade,"built fresh for a bare anchor 0.0 ms"),
+          "layout profile: a cascade built fresh for a bare anchor says so, and what it cost");
+    if(!cascade || !strstr(cascade,"bare anchor 1")) printf("  layout cascade: %s\n",cascade?cascade:"(none)");
+    s_layout_profile=false;clock_step=saved_step;
     probe_drop();
     layout_profile_stream_cases();
 }

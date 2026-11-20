@@ -85,21 +85,37 @@ garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t 
 // that does (`.group:has(.x) .y`, `:is(.p:has(.x)) ~ .z`). When its match
 // turns on an element, what changes is not that element's winners but its
 // descendants' (`down`) or its following siblings' and theirs
-// (`siblings`). `bare` says the compound has no type, id, class or
-// attribute to turn most elements away before its :has() is tried, so
-// testing it on every element costs a subtree walk each. `compound` is the
+// (`siblings`).
+//
+// Its FILTERS are the simples that turn most elements away for the price
+// of a compare: a type, an id, a class, an attribute (never a pseudo-class:
+// a `:not(.a)` is as conjunctive but passes nearly everything). They are
+// the compound's own and those of `outer`, the compounds that enclose it
+// through :not(), :is() and :where() and must match the same element: in
+// `.c:not(:has(.x)) > p` the anchor `:has(.x)` is filtered by `.c`. A
+// sibling branch of a list is not a filter (`:is(.x, :has(.y))` has only
+// what stands outside the :is()), and nor is a compound the anchor's own
+// complex names left of a combinator, which is another element. Where an
+// enclosing filter fails the enclosing compound fails, whatever the :has()
+// answers, so an anchor tested filters first loses nothing. At most
+// GARB_ANCHOR_FILTERS enclosing compounds are kept; keeping fewer is weaker,
+// never wrong. `bare` says it has no filter at all, so testing it on every
+// element costs a subtree walk each. `compound` and `outer` are the
 // selector's own, valid while the list is.
+#define GARB_ANCHOR_FILTERS 4
 typedef struct {
     const garb_selectors_t *list;
     const void *compound;
+    const void *outer[GARB_ANCHOR_FILTERS];
+    int32_t nouter;
     bool down, siblings, bare;
 } garb_anchor_t;
 // Writes the list's anchored :has() compounds to out[0..cap) and answers
 // how many the list holds; more than `cap` means the rest were not written.
 int32_t garb_selectors_anchors(const garb_selectors_t *list, garb_anchor_t *out, int32_t cap);
-// Whether the anchor's compound matches `element`: its other simple
-// selectors first, its :has() and the rest of its pseudo-classes only when
-// they pass.
+// Whether the anchor's enclosing filters pass at `element` and its compound
+// matches there: the filters and the compound's other simple selectors
+// first, its :has() and the rest of its pseudo-classes only when they pass.
 bool garb_anchor_matches(const garb_anchor_t *anchor, const os64_html_node_t *element);
 
 int32_t garb_selectors_count(const garb_selectors_t *list);
