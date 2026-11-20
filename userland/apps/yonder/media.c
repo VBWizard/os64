@@ -122,6 +122,8 @@ struct yonder_media {
     bool seek_landing;              // a DOM seek waits for the player's generation below
     uint32_t seek_player_generation;
     bool enough_held;               // HAVE_ENOUGH_DATA reached while it plays: held until it buffers
+    uint32_t ready_held;            // the readiness as a DOM seek was asked (bits: current, future,
+                                    // enough), told until it lands; the window's alone
     // Told, under `lock`.
     os64_dom_media_facts_t facts;
     os64_media_queue_t queue;
@@ -1282,6 +1284,23 @@ static void picture_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
     out->current = f.current || playing;
     out->future = playing || (f.future && f.state != OS64_MEDIA_PLAYER_BUFFERING);
     out->enough = m->enough_held || (f.enough && f.state != OS64_MEDIA_PLAYER_BUFFERING);
+    // A seek leaves readyState as it was until it lands (the table's "as
+    // is"); then the readiness is the new place's.
+    os64_lock_acquire(&m->lock);
+    bool landing = m->seek_landing;
+    os64_lock_release(&m->lock);
+    if (landing) {
+        out->current = (m->ready_held & 1u) != 0;
+        out->future = (m->ready_held & 2u) != 0;
+        out->enough = (m->ready_held & 4u) != 0;
+    }
+    // The facts kept are what libdom was told (a seek's held readiness
+    // is taken from them).
+    os64_lock_acquire(&m->lock);
+    m->facts.current = out->current;
+    m->facts.future = out->future;
+    m->facts.enough = out->enough;
+    os64_lock_release(&m->lock);
     out->busy = f.busy;
     out->sounding = f.sounding;
     out->running = f.state == OS64_MEDIA_PLAYER_PLAYING;
@@ -1467,6 +1486,9 @@ void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation)
             seconds = 1e9;
         os64_media_player_t *p = player_of(m);
         os64_lock_acquire(&m->lock);
+        if (!m->seek_landing)
+            m->ready_held = (m->facts.current ? 1u : 0u) | (m->facts.future ? 2u : 0u) |
+                            (m->facts.enough ? 4u : 0u);
         m->seek_landing = true;
         m->seek_generation = generation;
         m->seek_to = seconds;

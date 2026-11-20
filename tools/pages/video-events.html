@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A video's events</title>
+<!--
+  VIDEO.md § 5's element table, played by a script: the events a <video>
+  fires, in order, as it loads, plays, pauses, seeks while paused, has its
+  box resized, has its volume changed, plays on, is sought while playing
+  and ends.
+
+  The script, from the first `playing` (the clip autoplays muted):
+    +500 ms   pause                       pause
+    +900 ms   currentTime = 0.5 (paused)  seeking, seeked
+    +1300 ms  the box half its size       (no event: the box is not the picture)
+    +1700 ms  volume 0.5 (still muted)    volumechange
+    +1900 ms  play                        play, playing
+    +2500 ms  currentTime = 2             seeking, seeked (playing on)
+  then it plays to its end                pause, ended
+
+  The window's title is one letter an event (the key is below), then the
+  readyState and the picture's size; once ended came, "done" and the
+  letters after the first playing. The log below lists them with times.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+<h1>A video's events</h1>
+<video id="v" src="bbb-480p-3s-av.mp4" autoplay muted></video>
+<p>Key: L loadstart, D durationchange, R resize, M loadedmetadata, d loadeddata, c canplay,
+   C canplaythrough, p play, P playing, w waiting, z pause, s seeking, S seeked, E ended,
+   v volumechange, X error.</p>
+<pre id="log"></pre>
+<script>
+  const v = document.getElementById('v');
+  const log = document.getElementById('log');
+  const letter = {loadstart: 'L', durationchange: 'D', resize: 'R', loadedmetadata: 'M', loadeddata: 'd',
+                  canplay: 'c', canplaythrough: 'C', play: 'p', playing: 'P', waiting: 'w', pause: 'z',
+                  seeking: 's', seeked: 'S', ended: 'E', volumechange: 'v', error: 'X'};
+  let seen = '', done = false, started = false;
+  function say() {
+    // Once ended came, only what followed the first playing, so a short
+    // title still shows the end.
+    document.title = done ? 'done ' + seen.slice(seen.indexOf('P') + 1)
+                          : seen + ' r' + v.readyState + ' ' + v.videoWidth + 'x' + v.videoHeight;
+  }
+  for (const t in letter)
+    v.addEventListener(t, () => {
+      seen += letter[t];
+      if (t === 'ended') done = true;
+      log.textContent += t + ' t=' + v.currentTime.toFixed(2) + ' r' + v.readyState + ' ' + v.videoWidth +
+        'x' + v.videoHeight + (v.paused ? ' paused' : '') + '\n';
+      say();
+      if (t === 'playing' && !started) {
+        started = true;
+        setTimeout(() => v.pause(), 500);
+        setTimeout(() => { v.currentTime = 0.5; }, 900);
+        setTimeout(() => { v.style.width = '427px'; v.style.height = '300px'; }, 1300);
+        setTimeout(() => { v.volume = 0.5; }, 1700);
+        setTimeout(() => v.play(), 1900);
+        setTimeout(() => { v.currentTime = 2; }, 2500);
+      }
+    });
+  say();
+</script>

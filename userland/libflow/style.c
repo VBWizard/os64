@@ -887,6 +887,11 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         if (n->tag == OS64_HTML_TAG_BUTTON)
             s->text_align = FLOW_ALIGN_CENTER;
         break;
+    // §15.4.1: a video's picture is contained in its box (`object-fit:
+    // contain`), its display the inline one every element starts with.
+    case OS64_HTML_TAG_VIDEO:
+        s->object_fit = FLOW_OBJECT_CONTAIN;
+        break;
     // §15.5.13: a marquee that does not move (booked) is the box it moves in.
     case OS64_HTML_TAG_MARQUEE:
         s->display = FLOW_DISPLAY_INLINE_BLOCK;

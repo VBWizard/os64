@@ -409,17 +409,22 @@ static void judge(os64_media_player_t *p, int64_t clock, int64_t now)
 // Under the lock.
 static void retire_unasked(os64_media_player_t *p, int64_t now, collect_t *c)
 {
-    if (p->state != OS64_MEDIA_PLAYER_PLAYING || now - p->last_frame_call < OS64_MEDIA_PLAYER_TICK_US)
+    if (now - p->last_frame_call < OS64_MEDIA_PLAYER_TICK_US || p->state == OS64_MEDIA_PLAYER_OPENING ||
+        p->state == OS64_MEDIA_PLAYER_FAILED)
         return;
-    int64_t clock = os64_media_clock_read(&p->clock, now);
     if (p->owed && os64_media_pictures_count(&p->ready) > 0) {
-        // The picture owed after a seek (or the open) has nobody to show it:
-        // the seek has landed all the same, and the pictures go by the clock.
+        // The picture owed after a seek (or the open) has nobody to show it,
+        // playing or paused: the seek has landed all the same, and the
+        // pictures go by the clock (a paused one is shown, at the clock's
+        // reading, at the next frame call).
         p->owed = false;
         p->seek_pending = false;
         p->seeked = p->seek_generation;
         look(p);
     }
+    if (p->state != OS64_MEDIA_PLAYER_PLAYING)
+        return;
+    int64_t clock = os64_media_clock_read(&p->clock, now);
     const os64_media_pictures_entry_t *next;
     while (os64_media_pictures_count(&p->ready) > 1 && (next = os64_media_pictures_peek(&p->ready, 1)) != NULL &&
            next->at <= clock) {
@@ -592,7 +597,8 @@ static void opened(os64_media_player_t *p)
         // asked while opening; added outside it (the output's lock first).
         os64_lock_acquire(&p->lock);
         p->voice = (os64_media_output_voice_t){.lock = &p->lock, .queue = &p->pcm, .clock = &p->clock,
-                                               .refused = p->cfg.refused, .look = voice_look, .room = voice_room,
+                                               .refused = picture ? p->cfg.refused : OS64_MEDIA_VOICE_WAIT,
+                                               .look = voice_look, .room = voice_room,
                                                .ctx = p, .gain = p->voice.gain, .position = -1};
         os64_lock_release(&p->lock);
         voiced = os64_media_output_add(p->cfg.output, &p->voice) == 0;

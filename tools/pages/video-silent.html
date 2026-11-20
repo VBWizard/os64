@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A silent video</title>
+<!--
+  VIDEO.md § 4 and § 5: a <video> whose file has no sound plays on the
+  monotonic clock, autoplays (it has no sound to need the person for, and
+  it is muted besides), and ends on time.
+
+  What to look for: the picture moves and stops at the end, three seconds
+  in. The title carries the events as one letter each (P playing, E
+  ended), the readyState and the time.
+-->
+<style>
+  body { font: 14px sans-serif; margin: 12px; }
+  video { background: #888; display: block; }
+</style>
+<h1>A silent video</h1>
+<video id="v" src="bbb-480p-3s.mp4" autoplay muted></video>
+<script>
+  const v = document.getElementById('v');
+  let seen = '';
+  const letter = {loadedmetadata: 'M', loadeddata: 'd', canplay: 'c', playing: 'P', waiting: 'w', pause: 'z',
+                  ended: 'E', error: 'X'};
+  function say() { document.title = 'silent ' + seen + ' r' + v.readyState + ' t' + v.currentTime.toFixed(1); }
+  for (const t in letter) v.addEventListener(t, () => { seen += letter[t]; say(); });
+  v.addEventListener('timeupdate', say);
+  say();
+</script>

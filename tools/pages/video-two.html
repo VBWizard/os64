@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Two videos</title>
+<!--
+  VIDEO.md § 5: two <video>s playing at once, each with its own player,
+  both sounding through yonder's one output. The first is the flash and
+  beep clip, the second the bunny with its sound; the first starts muted
+  (it may autoplay), the second waits for its play button, which unmutes
+  it too. Click "Unmute the first" to hear both mixed.
+
+  What to look for: both pictures move together; with both unmuted, both
+  sounds at once. The title says each one's state (P playing, p paused)
+  and time.
+-->
+<style>
+  body { font: 14px sans-serif; margin: 12px; }
+  video { width: 420px; background: #888; display: inline-block; vertical-align: top; margin: 4px; }
+</style>
+<h1>Two videos</h1>
+<video id="a" src="sync-720p60.mp4" autoplay muted loop></video>
+<video id="b" src="bbb-480p-3s-av.mp4" loop></video>
+<p>
+  <input type="button" id="pa" value="Unmute the first">
+  <input type="button" id="pb" value="Play the second">
+</p>
+<script>
+  const a = document.getElementById('a'), b = document.getElementById('b');
+  function one(v) { return (v.paused ? 'p' : 'P') + v.currentTime.toFixed(1) + (v.muted ? 'm' : ''); }
+  function say() { document.title = 'two ' + one(a) + ' ' + one(b); }
+  for (const v of [a, b])
+    for (const t of ['playing', 'pause', 'timeupdate', 'volumechange']) v.addEventListener(t, say);
+  document.getElementById('pa').onclick = () => { a.muted = false; };
+  document.getElementById('pb').onclick = () => { b.muted = false; b.play(); };
+  say();
+</script>

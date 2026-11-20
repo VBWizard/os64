@@ -847,8 +847,8 @@ thread, which is threads meeting the window too: Codex.
 
 ## What this arc leaves out, on purpose
 
-`<video>`'s picture (the element plays sound since Y.4, and nothing
-more); Media Source Extensions; WebM, Ogg; Opus, Vorbis (each a
+`<video>`'s picture (the element played sound alone from Y.4; the video
+arc draws its picture since V.5.3, VIDEO.md § 5); Media Source Extensions; WebM, Ogg; Opus, Vorbis (each a
 configure switch when a page asks; MP4 and AAC were the first, § Y.5); text tracks; Web Audio
 (`AudioContext`); a playback rate other than 1; picture-in-picture;
 DRM (EME), which os64 will never have: a licensed decryption module is
@@ -879,12 +879,13 @@ else in the pipeline asks which tag it has. Its own members: `width` and
 browsers for a resource with no picture, and here for every resource.
 Behind the Modern Web switch, in the media row.
 
-**What makes it a stand-in, and what the video arc changes:**
+**What made it a stand-in, and what the video arc changed** (the right
+column as built in V.5.3, VIDEO.md §§ 5 and 8, but for the poster, V6):
 
 | | Y.4 | The video arc |
 |---|---|---|
 | A sound file | plays, as in `<audio>` | the same |
-| A video file | an MP4 plays its sound and `canPlayType("video/mp4")` is "maybe" for it (§ Y.5); one naming a video codec (`codecs="avc1…"`) is `""`, and so is every other video type, so a player that has a choice takes another; one given anyway fails as a source not supported (`MEDIA_ERR_SRC_NOT_SUPPORTED`), as `<audio>` does | its picture is decoded and drawn, its sound plays |
+| A video file | an MP4 plays its sound and `canPlayType("video/mp4")` is "maybe" for it (§ Y.5); one naming a video codec (`codecs="avc1…"`) is `""`, and so is every other video type, so a player that has a choice takes another; one given anyway fails as a source not supported (`MEDIA_ERR_SRC_NOT_SUPPORTED`), as `<audio>` does | its picture is decoded and drawn, its sound plays; `canPlayType` with `avc1` is "probably" (libmedia's answer since V3, which counts the picture) |
 | `videoWidth`, `videoHeight` | 0 | the picture's size |
 | The box | 300 by 150 by default, `width` and `height` as its size and, both given, its ratio (`aspect-ratio: auto w / h`, HTML § 15.4.3), its own background and border, nothing drawn inside | the frames, and the poster before the first; the picture's own ratio |
 | `poster` | reflected, not drawn (DEBTS.md) | drawn |
@@ -896,9 +897,10 @@ inline element showing its fallback), since nothing on such a page can
 play it. **`<video controls>`** puts the audio player along the bottom of
 the box, the place other browsers draw theirs.
 
-**The record** still counts `video` as a MISSING element: its picture is
-missing, and that is what a record is for. An `audio` is no longer
-counted when the Modern Web surface plays it.
+**The record** counted `video` as a MISSING element while its picture was
+missing, which is what a record is for; since V.5.3 draws the picture,
+neither an `audio` nor a `video` is counted when the Modern Web surface
+plays it.
 
 **Proven** (as Y.4 stood; § Y.5 changed what an MP4 does) by libdom's
 media cases for the interface, its members and a video element playing through the same session path as an audio

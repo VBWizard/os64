@@ -294,7 +294,8 @@ sound is refused. Video needs a clock that does not depend on sound.
 | The element | Its clock | Sound decoded? | Holds a mixer voice? |
 |---|---|---|---|
 | has sound, audible | the heard position (as today) | yes | yes |
-| has sound, muted or volume 0 | the monotonic clock (`micros()`), anchored at play | **GAP** | no |
+| has sound, muted | the monotonic clock (`micros()`), anchored at play | **GAP** | no |
+| has sound, volume 0, not muted | the heard position: a silent voice, still mixed | yes | yes |
 | has no sound track | the monotonic clock | n/a | no |
 | sound refused (`/dev/audio` busy) | as today: waits | | |
 
@@ -407,6 +408,41 @@ the box is drawn plainly. A video under a transform, an opacity, a rounded
 clip or a filter is drawn by the existing picture path from the same
 frame (per-pixel, slower, correct). Same for the moment between a resize
 and the first frame at the new size.
+
+**As built (V.5.3).** A `<video>`'s session is a picture session over
+libmedia's player (`apps/yonder/media.c`): an opener thread makes the
+bytes ready as a sound session's decoder does (`source_prepare`, one
+function for both), then the player, whose decoding thread reads them
+through `store_read` and `store_seek`; the window drives the player.
+`apps/yonder/yonder.c`'s videos section is the rest:
+
+1. `videos_turn` reads each shown video's facts after the media turn: the
+   picture's size once known sets the box's natural size
+   (`replaced_size`) and lays the page out once; whether it plays.
+2. `videos_next` makes a video that plays (or whose facts moved while
+   paused) and can be seen a customer of the frame planner;
+   `videos_tick`, in each open frame, asks the player for the picture at
+   the answer's blank plus one period and marks the box's visible part
+   when it changed, leaving the kept drawings' stamp alone (no group
+   holding a video is kept).
+3. The paint reaches the box through the painter's retained-pixels verb
+   (`paint.h` `canvas`, which names both), and `pane_video` draws the
+   latest picture fitted by `yonder_object_rect` (object-fit and
+   object-position, as an image's), the rest of the box the element's
+   own background, nothing before the first picture. The fitted size is
+   told to the player there, where it is known.
+4. **The test that picks the path:** the pane draws straight to the
+   window (one target, not a group's sheets: no opacity, transform,
+   filter, mask or blend above the box) and the picture was converted at
+   the fitted size: the rows are copied (`video_plain`). Otherwise it is
+   drawn as a picture is, scaled (`video_general`). yonder's `d` reading
+   prints both, with the frames asked and the new pictures. A
+   border-radius does not take a video off the plain path: yonder does
+   not round a replaced box's content.
+5. **Not seen** (the window covered, the box hidden or scrolled away, a
+   page not shown): no frame is asked, so the player retires what the
+   clock passes and the sound plays on (its S1). The pictures are still
+   converted (V7's saving, DEBTS).
 
 **What is not shown is not converted.** Covered window, scrolled out of
 view, a page that is not the shown one: the picture thread parks. **GAP:**
@@ -534,6 +570,29 @@ interrupts off is heard.
   the web): today's loader refuses the seek FFmpeg makes while opening.
   With ranges, the open fetches the tail; without, the file must arrive
   whole. Needs a fixture; nothing in the tree exercises it.
+
+**As built (V.5.3).** The element's table is VIDEO_V5_DESIGN.md § 3,
+with Fable's answers, in libdom (`media.c`, `video.c`) over the host's
+facts, which gained the picture (`picture`, `width`, `height`) and
+`running`:
+
+- `resize` is queued between `durationchange` and `loadedmetadata`, and
+  again whenever the size changes; `videoWidth` and `videoHeight` are 0
+  until metadata and again at a new load.
+- `timeupdate` follows the clock while it runs, sounding or not.
+- The host reports readyState from the player: its queues' readiness
+  while paused; at least FUTURE while it plays (queues that drain and
+  refill as it plays are no wait), and ENOUGH held once reached until it
+  buffers; a buffering player is CURRENT, which is libdom's `waiting`. A
+  seek leaves readyState as it was until it lands.
+- `loop` is a seek to the start inside the host, playing on, with no
+  `ended` and no seek events (as a sound session's decoder loops).
+- Muted is told to the host apart from the gain: the voice goes and the
+  clock is monotonic; a volume of 0 unmuted is a silent voice.
+- The device refused: a `<video>`'s player plays on, unheard, and retries.
+- `/tests/pages/video.html`, `video-events.html` (the table's events in
+  order, by a script), `video-fit.html`, `video-two.html`,
+  `video-overlay.html` and `video-silent.html` are the pages.
 
 ## 9. Full screen (this arc's last slice, V8)
 

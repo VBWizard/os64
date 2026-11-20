@@ -2696,6 +2696,7 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
 
 // The <video>s yonder draws (the Videos section, below, says how).
 #define VIDEOS_MAX 32
+#define VIDEO_CONVERT_MAX 4096u
 
 typedef struct {
     const os64_html_node_t *node;       // NULL: a free slot
@@ -3195,9 +3196,8 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, con
     // link instead), and an embed makes no box: both are asked for and not
     // shown. An object shows its fallback, as a browser does for what it
     // cannot play, and is not counted. The Modern Web surface draws a
-    // canvas and an svg, and with scripts on plays an audio; a video it
-    // plays shows no picture (AUDIO_YONDER.md § Y.4), so it is counted
-    // either way.
+    // canvas and an svg, and with scripts on plays an audio and a video
+    // (its picture too, VIDEO.md § 5).
     static const char *const kNothing[] = {"canvas", "video", "audio", "svg", "iframe", "frame", "embed"};
     enum { NOTHING = sizeof(kNothing) / sizeof(kNothing[0]) };
     uint32_t nothing[NOTHING] = {0}, canvases = 0;
@@ -3209,7 +3209,8 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, con
         if (n->kind == OS64_HTML_ELEMENT && n->name != NULL) {
             for (int k = 0; k < NOTHING; k++) {
                 bool shown = modern && (os64_streq(kNothing[k], "svg") || os64_streq(kNothing[k], "canvas") ||
-                                        (scripting && os64_streq(kNothing[k], "audio")));
+                                        (scripting && (os64_streq(kNothing[k], "audio") ||
+                                                       os64_streq(kNothing[k], "video"))));
                 nothing[k] += os64_streq(n->name, kNothing[k]) && !shown;
             }
             canvases += n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_CANVAS;
@@ -10841,8 +10842,10 @@ static void videos_turn(void)
         if (f.picture && f.width > 0 && f.height > 0 && (f.width != v->width || f.height != v->height)) {
             v->width = f.width;
             v->height = f.height;
+            // As a picture that arrives moving the page: this turn's
+            // pictures_settle lays it out again, the box's size asked anew.
             layout_revision(&s_layout_resources.pictures);
-            g.relayout_due = true;
+            g.pictures_moved = true;
         }
         v->playing = f.running;
         v->poked |= f.seeked != v->seen.seeked || f.current != v->seen.current || f.probed != v->seen.probed ||
@@ -16519,9 +16522,18 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
         return;
     os64_gui_rect_t at = yonder_object_rect(b->style, c, zoomed_px(v->width, g.page.laid_zoom),
                                             zoomed_px(v->height, g.page.laid_zoom));
-    if (at.w > 0 && at.h > 0 && ((uint32_t)at.w != v->asked_w || (uint32_t)at.h != v->asked_h)) {
-        v->asked_w = (uint32_t)at.w;
-        v->asked_h = (uint32_t)at.h;
+    // Converted at most VIDEO_CONVERT_MAX a side (each of the player's
+    // frames is that large); a bigger fitted rectangle takes the general
+    // path, scaled up.
+    uint32_t want_w = (uint32_t)(at.w > 0 ? at.w : 0), want_h = (uint32_t)(at.h > 0 ? at.h : 0);
+    if (want_w > VIDEO_CONVERT_MAX || want_h > VIDEO_CONVERT_MAX) {
+        double scale = (double)VIDEO_CONVERT_MAX / (want_w > want_h ? want_w : want_h);
+        want_w = (uint32_t)(want_w * scale);
+        want_h = (uint32_t)(want_h * scale);
+    }
+    if (want_w > 0 && want_h > 0 && (want_w != v->asked_w || want_h != v->asked_h)) {
+        v->asked_w = want_w;
+        v->asked_h = want_h;
         yonder_media_size(v->session, v->asked_w, v->asked_h);
         v->poked = true;            // a paused picture is converted again: ask for it
     }

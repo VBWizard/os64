@@ -49,7 +49,8 @@
 // OS64_MEDIA_PLAYER_TICK_US (a covered window, a box out of view, a caller
 // held by a page's layout), the picture thread retires what the clock has
 // passed, leaving the shown picture alone, so the queues keep moving and
-// the sound plays on.
+// the sound plays on. Playing or paused, a picture owed after a seek (or
+// the open) lands unshown then, so facts.seeked moves with nobody watching.
 //
 // LOCKS: the player's lock is taken after its output's, never before; the
 // player never calls into the output while holding it.
@@ -79,7 +80,8 @@ typedef struct {
     os64_media_source_t source;     // read on the decoding thread only; see os64_media_player_close
     uint32_t want;                  // OS64_MEDIA_WANT_SOUND and/or _PICTURE
     os64_media_output_t *output;    // NULL: the sound is not opened (the clock monotonic)
-    int refused;                    // OS64_MEDIA_VOICE_WAIT or _PLAY_ON (os64/media_output.h)
+    int refused;                    // OS64_MEDIA_VOICE_WAIT or _PLAY_ON (os64/media_output.h); PLAY_ON is
+                                    // for a media with a picture to show: one with sound alone WAITs
     bool loaded;                    // the whole source is at hand (a file); else os64_media_player_loaded says
     void (*look)(void *ctx);        // the facts changed; called by the player's threads and its output's,
                                     // under the player's lock: rings the caller's bell, nothing more
