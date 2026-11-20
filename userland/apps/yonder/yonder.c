@@ -10941,10 +10941,11 @@ static PosterSlot *poster_seen(Page *p, const os64_html_node_t *node)
     return slot;
 }
 
-// After a layout is published: a slot for each laid-out video with a
-// poster, on the view or not, so a poster below the fold is asked for and
-// gives its box its size before anyone scrolls to it (paint meets only
-// what is on the view).
+// After a layout is published: each laid-out video's poster read as it
+// stands, on the view or not (paint meets only what is on the view). A
+// video with a poster gets its slot, so a poster below the fold is asked
+// for and gives its box its size before anyone scrolls to it; a slot whose
+// poster was taken away is cleared, so its box lays out at its own size.
 static void posters_register(void)
 {
     const os64_html_document_t *doc = page_doc(&g.page);
@@ -10952,6 +10953,11 @@ static void posters_register(void)
     for (const os64_html_node_t *x = top; x != NULL; x = os64_html_shadow_including_next(top, x))
         if (is_video_node(x) && os64_html_attr(x, "poster") != NULL && flow_box_for(g.page.tree, x) != NULL)
             (void)poster_seen(&g.page, x);
+    for (int32_t i = 0; top != NULL && i < POSTERS_MAX; i++) {
+        const os64_html_node_t *node = g.page.posters[i].node;
+        if (node != NULL && os64_html_attr(node, "poster") == NULL && flow_box_for(g.page.tree, node) != NULL)
+            (void)poster_seen(&g.page, node);
+    }
 }
 
 // The part of a box the shown page's view shows, page coordinates; false
