@@ -312,7 +312,6 @@ static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
     m->dormant = false;
     m->awaiting_source = false;
     m->candidate = 0;
-    m->show_poster = true;
     if (ctx != NULL) {
         DMediaTask **link = &s->head, *last = NULL;
         while (*link != NULL) {
@@ -352,6 +351,11 @@ static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
         m->position = 0;
         m->duration = NAN;
     }
+    /* The poster again for the new resource, unless the element plays: a
+     * play() before the turn's first look at src leaves it unpaused with
+     * nothing to pause (network still empty), and the poster must not come
+     * back over its picture. */
+    m->show_poster = m->paused;
     m->played_end = 0;              /* played is the resource's, and this is another */
     d_free(dom, m->current_src);    /* none is selected until the selection says (currentSrc "") */
     m->current_src = NULL;

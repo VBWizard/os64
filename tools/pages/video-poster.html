@@ -19,9 +19,11 @@
     E  autoplay, muted, with a red poster: the picture once it plays, and
        red only until there is a picture
     F  a blue poster and no source, no size given: a 200x200 box, blue
+    G  a red poster and no source, its poster taken away at 2.5 s: the box
+       goes to 300x150 and its own green
 
   The title is A's paused (z) or playing (p) state and time, E's state,
-  and F's box size, every half second; the boxes' colours say the rest
+  and F's and G's box sizes, every half second; the boxes' colours say the rest
   (the box's own background is green, which no clip picture is).
 -->
 <style>
@@ -33,6 +35,7 @@
   #d { left: 10px; top: 160px; width: 240px; height: 135px; }
   #e { left: 260px; top: 160px; width: 240px; height: 135px; }
   #f { left: 510px; top: 160px; }
+  #g { left: 10px; top: 310px; }
 </style>
 <video id="a" poster="poster-red.png" src="bbb-480p-3s-av.mp4" muted preload="auto"></video>
 <video id="b" poster="missing-poster.png" src="bbb-480p-3s-av.mp4" muted preload="auto"></video>
@@ -40,15 +43,18 @@
 <video id="d" src="bbb-480p-3s-av.mp4" muted preload="auto"></video>
 <video id="e" poster="poster-red.png" src="bbb-480p-3s-av.mp4" muted autoplay loop></video>
 <video id="f" poster="poster-blue-square.png"></video>
+<video id="g" poster="poster-red.png"></video>
 <script>
   const $ = id => document.getElementById(id);
   let step = 0;
   setInterval(() => {
     step++;
     if (step === 3) $('d').poster = 'poster-red.png';
+    if (step === 5) $('g').removeAttribute('poster');
     if (step === 10) $('a').play();
     if (step === 14) $('a').pause();
     document.title = 'S' + step + ' a' + ($('a').paused ? 'z' : 'p') + $('a').currentTime.toFixed(1) +
-      ' e' + ($('e').paused ? 'z' : 'p') + ' f' + $('f').clientWidth + 'x' + $('f').clientHeight;
+      ' e' + ($('e').paused ? 'z' : 'p') + ' f' + $('f').clientWidth + 'x' + $('f').clientHeight +
+      ' g' + $('g').clientWidth + 'x' + $('g').clientHeight;
   }, 500);
 </script>

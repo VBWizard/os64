@@ -959,6 +959,14 @@ static void dom_media_poster_cases(void)
     media_ready(&media_sessions[2], 2);
     media_turn(&f, "poster: it can play through");
     check(!poster_flag(&f, "pw"), "poster: autoplay's start clears it");
+
+    /* A play before the source: the load that follows leaves it playing,
+     * and the poster does not come back. */
+    media_script(&f, "globalThis.x=document.createElement('video');x.id='px';x.poster='r.png';"
+                     "document.body.appendChild(x);x.play();x.src='d.mp4';",
+                 "poster: play before the source");
+    media_turn(&f, "poster: its load");
+    check(!poster_flag(&f, "px"), "poster: a load under a play leaves the flag cleared");
     fixture_free(&f);
 }
 
