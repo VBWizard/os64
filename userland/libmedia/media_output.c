@@ -930,11 +930,14 @@ int os64_media_output_create(os64_media_output_t **out)
         os64_free(o);
         return OS64_MEDIA_NO_MEMORY;
     }
-    o->thread = os64_thread(audio_main, o);
+    o->thread = os64_thread_or_nothing(audio_main, o);
     if (o->thread < 0) {
-        // A start that reports failure may still be running (the kernel,
-        // out of handles, starts it detached): it keeps the output, which is
-        // never freed here.
+        // audio_main never runs (os64/thread.h): nothing to wait for.
+        os64_bell_close(&o->bell);
+        os64_free(o->buf);
+        os64_free(o->carry);
+        os64_free(o->acc);
+        os64_free(o);
         return OS64_MEDIA_NO_MEMORY;
     }
     *out = o;

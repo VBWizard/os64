@@ -7,7 +7,7 @@ Q5,"Muted sound: decode it and hold no voice, or do not decode it",,open,,"VIDEO
 Q6,Pictures while the video is out of view: keep decoding or stop,,open,,"VIDEO.md § 5 GAP. Lean: keep decoding in this arc, book the saving"
 Q7,The budget for many videos on one page,,open,,VIDEO.md § 6 GAP: numbers from the P5
 Q8,One copy fewer on the path to the glass,,open,,"VIDEO.md § 7 GAP: weighed after the frame clock, with sound playing"
-Q9,The controls over the picture hide when idle?,,open,,"VIDEO.md § 8 GAP: as other browsers do"
+Q9,The controls over the picture hide when idle?,,ruled,,"RULED 2026-11-20 (Fable, told to Chris): yes, they hide (BRIEF_VIDEO_V6.md, V.6.3; the states in VIDEO_V6_DESIGN.md)"
 
 V.0,"V0. libav: the H.264 decoder and parser, FFmpeg's x86 assembly chosen at run time, /tests/avbench; os64_malloc_aligned beneath it",,done,#629 #630,"The P5 point: one thread carries 1440p60 at 2.8x real time with assembly (VIDEO.md § 1)"
 V.1,"V1. The glass fixture and its measurement: /sys/gui's publish-to-glass wait, /tests/glassbench",,done,#628,VIDEO.md § 7's P5 figures
@@ -23,6 +23,10 @@ V.5.1,"The output: one audio thread in libmedia, owning /dev/audio and mixing vo
 V.5.2,"The player: the decoding and picture threads, the queues, the clock, the pace and service in libmedia; gplay a window, keys and readout over it",V.5.1,done,#678,"os64/media_player.h; gplaytest steps 7 to 9. P5 2026-11-19: drops 9/22/15/15 of 3600, sync held through a long pause, headphone buttons, yonder page"
 V.5.3,"A video on a page: yonder's video element is a player, the picture in its box",V.5.2,done,#679,"VIDEO.md §§ 5 and 8 as built; /tests/pages/video*.html; the element table in tools/test_dom_media.inc. P5 2026-11-19: 1080p60 in a page 9-27 dropped a minute, a held main thread 245; sound never broke; YouTube embeds play"
 V.5.4,"<audio> on the player too: yonder's own decoder loop retired",V.5.3,done,#686,"VIDEO.md § 3 (for a sound alone) and AUDIO_YONDER.md § As built (V.5.4); the player gains loop, the source's idle hook and a lent bell; /tests/playertest. P5 2026-11-20: loops seamless, a busy device waited out from the start, headphone buttons, a real page's pause and resume"
-V.6,"V6. Poster, controls over the picture, the video page, a file whose index is at the end",V.5,todo,,
+V.6,"V6. Poster, controls over the picture, the video page, a file whose index is at the end",V.5,code,,"Brief BRIEF_VIDEO_V6.md (Fable); the before-code tables VIDEO_V6_DESIGN.md, accepted 2026-11-20 with Fable's changes"
+V.6.1,"A file from the network, whole: the length that reaches the element, an index at the end, the opener thread gone, the thread starts against a close",V.6,doing,,"VIDEO.md § 5 as built (V.6.1); the record's media lines; tools/pages/tail-index.mp4, video-tail.html, video-tail-whole.html; /tests/playertest steps 5 to 9"
+V.6.2,"The poster",V.6.1,todo,,"VIDEO_V6_DESIGN.md § 3"
+V.6.3,"Controls over the picture, hiding when idle",V.6.2,todo,,"VIDEO_V6_DESIGN.md § 2; Chris: the P5"
+V.6.4,"The video page: a link straight to a video plays it on a page of its own",V.6.3,todo,,"Chris: the P5, short"
 V.7,"V7. Visibility, the budget for many videos, the muted-clip debt",V.5 Q5 Q6 Q7,todo,,
 V.8,V8. Full screen,V.5 Q4,todo,,

@@ -94,6 +94,15 @@ void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height);
 // A session's player's own facts (its pace, clock and counts), for the
 // record's reading; false for one with no player yet.
 bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out);
+// The `i`th open session's line for the record's reading, on how its length
+// travelled: its source (file, network or blob, the size, whether ranges
+// were answered, the fetches begun), the player's length and when it was set, whether a
+// `look` followed, the duration told to libdom and when, and when libdom
+// last read it. False past the last session. Window.
+bool yonder_media_report(uint32_t i, char *out, size_t cap);
+// A time for the record: seconds to the millisecond, "unknown" for NaN,
+// "no end" for infinity (libos64's printf has no floating point).
+size_t yonder_media_seconds(double s, char *out, size_t cap);
 // canPlayType's answer (0, 1 or 2; dom/media.h), libmedia's.
 int yonder_media_can_play(const char *type);
 // The window's turn: frees the closed sessions whose threads have ended.
