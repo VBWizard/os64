@@ -374,10 +374,13 @@ other, so their pages keep style and geometry reuse across a mutation.
   through `:not()`, `:is()` or `:where()` that must match the same
   element (`.c:not(:has(.x)) > p`).
 - An anchor with no such filter at all is BARE: each time it is asked it
-  walks (the element's subtree, or for a `+`/`~` argument its following
-  siblings' subtrees), and it is asked only where a change could have turned
-  it and at each element restyled, so it costs its own walks and the
-  cascade keeps tracking (`has_visit` states the bound). The profile's
+  walks (the element's subtree for a descendant argument; for a `>`, `+`
+  or `~` one whose later compounds go down, from the children or siblings
+  its first compound matches; otherwise the subtree or the following
+  siblings' subtrees),
+  and it is asked only where a change could have turned it, each element
+  once an update, and at each element restyled, so it costs its own walks
+  and the cascade keeps tracking (`has_visit` states the bound). The profile's
   `layout cascade` line says how many anchors the cascade held, how many
   were bare, and how often the bare ones were asked again, turned, and
   marked elements for restyling.

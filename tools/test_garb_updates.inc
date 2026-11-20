@@ -359,6 +359,31 @@ static void update_has(void)
     os64_html_set_attr(h.doc,has_el(&h,"nn"),"class","n",1);
     was=has_update(&h,"bare :not(:has(…)): the argument arriving updates incrementally");
     update_check(garb_style_updated_since(h.c,has_el(&h,"nm"),was),"bare :not(:has(…)): what it reached is restyled");
+    /* Fifty changes in one batch under one deep chain: each element is
+     * visited once an update, not once a change, so the asks are the
+     * elements visited (fifty leaves, the chain above them and, since a
+     * `+` argument is in the sheet, the chain's previous siblings: about
+     * seventy), not fifty times the chain (thousands). */
+    {
+        os64_html_node_t *at=has_el(&h,"far");
+        for(int i=0;i<10;++i) {
+            os64_html_node_t *d=os64_html_create_element(h.doc,OS64_HTML_NS_HTML,"div",NULL);
+            os64_html_insert(h.doc,at,d,NULL);
+            at=d;
+        }
+        os64_html_node_t *leaves[50];
+        for(int i=0;i<50;++i) {
+            leaves[i]=os64_html_create_element(h.doc,OS64_HTML_NS_HTML,"u",NULL);
+            os64_html_insert(h.doc,at,leaves[i],NULL);
+        }
+        has_update(&h,"bare anchors: a deep chain added updates incrementally");
+        for(int i=0;i<50;++i) os64_html_set_attr(h.doc,leaves[i],"title","t",1);
+        has_update(&h,"bare anchors: fifty changes under one chain update incrementally");
+        work=garb_cascade_bare_work(h.c);
+        update_check(work.tested>=4u*50 && work.tested<=4u*80,
+                     "bare anchors: each element visited once an update, not once a change");
+        if(work.tested>4u*80) fprintf(stderr,"  asked %llu times\n",(unsigned long long)work.tested);
+    }
     os64_html_set_attr(h.doc,has_el(&h,"fy"),"title","t",1);
     was=has_update(&h,"bare anchors: a change that turns none updates incrementally");
     work=garb_cascade_bare_work(h.c);
