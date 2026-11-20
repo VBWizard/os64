@@ -1,6 +1,6 @@
 # F4d — mutable Window target names
 
-F.4.41 implements mutable names for private origin-bearing Windows. Baseline:
+Implementation PR **#680**. F.4.41 implements mutable names for private origin-bearing Windows. Baseline:
 merged userland `4602ef25`, including #676. Ordinary Yonder bindings retain
 existing behavior; frame-container synchronization belongs to F.6.
 
