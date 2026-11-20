@@ -57,6 +57,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "os64/bell.h"
 #include "os64/media.h"
 #include "os64/media_clock.h"
 #include "os64/media_output.h"
@@ -81,13 +82,20 @@ typedef struct {
     uint32_t want;                  // OS64_MEDIA_WANT_SOUND and/or _PICTURE
     os64_media_output_t *output;    // NULL: the sound is not opened (the clock monotonic)
     int refused;                    // OS64_MEDIA_VOICE_WAIT or _PLAY_ON (os64/media_output.h); PLAY_ON is
-                                    // for a media with a picture to show: one with sound alone WAITs
+                                    // for a media with a picture to show: one with sound alone WAITs,
+                                    // its clock the ear, standing still until the device comes back
     bool loaded;                    // the whole source is at hand (a file); else os64_media_player_loaded says
-    void (*look)(void *ctx);        // the facts changed; called by the player's threads and its output's,
-                                    // under the player's lock: rings the caller's bell, nothing more
+    void (*look)(void *ctx);        // the facts changed (and, while a sound alone plays, a quarter second
+                                    // went by: its position moved); called by the player's threads and its
+                                    // output's, under the player's lock: rings the caller's bell, nothing more
     void (*finished)(void *ctx);    // after close: the source will never be read again and the player is
                                     // freed; called from a player thread, rings a bell, may not touch it
     void *ctx;
+    os64_bell_t *bell;              // NULL, or the caller's bell for the decoding thread to wait on (its
+                                    // source's read may wait on it too: one waiter, the same thread). The
+                                    // player rings it as its own and never closes it; it must stay open
+                                    // until `finished`. One handle fewer per player, where a page holds
+                                    // dozens
 } os64_media_player_config_t;
 
 // Starts the decoding thread, which opens the source (a probe may read the
@@ -113,14 +121,32 @@ void os64_media_player_play(os64_media_player_t *p);
 void os64_media_player_pause(os64_media_player_t *p);
 // To `frame` (output frames), held to the media, playing on if it was.
 // Returns the seek's generation, which facts.seeked takes once the picture
-// owed is shown (or, with no picture, sound from there is queued).
+// owed is shown (or, with no picture, sound from there is queued). Asked
+// while OPENING, it is carried out once the media is open, under the
+// generation returned; the last one asked wins.
 uint32_t os64_media_player_seek(os64_media_player_t *p, int64_t frame);
 // By `delta` frames from where a seek under way is going, or else from the
 // clock.
 uint32_t os64_media_player_seek_by(os64_media_player_t *p, int64_t delta);
-void os64_media_player_mute(os64_media_player_t *p, bool muted);   // the voice goes; the clock monotonic
+// With a picture the voice goes and the clock is monotonic; a sound alone
+// is muted by a gain of 0, a silent voice still mixed, its clock the ear
+// (with no ear its queue would never drain).
+void os64_media_player_mute(os64_media_player_t *p, bool muted);
 void os64_media_player_gain(os64_media_player_t *p, double gain);   // 0 to 1; 0 a silent voice, still mixed
 void os64_media_player_sync(os64_media_player_t *p, int64_t frames); // added to every heard report
+// At the end, from the start again and playing on, without a gap: the
+// decoding thread seeks the media to its start as it reaches the end and
+// goes on queueing, on one timeline that does not turn back (each run's
+// frames come after the last's), so the sound and the pictures run on and
+// the clock never steps; facts.position is folded into the media's length.
+// A run that gave nothing ends the media, as with loop off. Turned on once
+// the end can no longer be taken back (a picture queue told it, or the
+// output has taken the sound's last frame from its queue), the media plays
+// on from its start after a
+// gap, still with no end. Turned off, the last run queued ends the media:
+// runs already queued after the one being heard (as many as the sound
+// queue's two seconds hold) play first.
+void os64_media_player_loop(os64_media_player_t *p, bool loop);
 // The source is all at hand from now on (HTML's HAVE_ENOUGH_DATA needs it).
 void os64_media_player_loaded(os64_media_player_t *p, bool loaded);
 
@@ -149,8 +175,8 @@ typedef struct {
     os64_media_info_t info;
     bool has_sound;                 // a sound this player decodes (playable and wanted)
     bool muted;
-    int64_t length;                 // output frames, -1 when not known
-    int64_t position;               // the clock's reading now
+    int64_t length;                 // output frames, -1 when not known (known at the end if not before)
+    int64_t position;               // the clock's reading now; the length once ENDED, when known
     // Readiness at the position, each implying the one before.
     bool current;                   // a picture for now is converted (with no picture: sound queued)
     bool future;                    // buffering's exit holds

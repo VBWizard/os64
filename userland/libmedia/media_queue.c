@@ -102,6 +102,11 @@ void os64_media_queue_end(os64_media_queue_t *q)
     q->ended = true;
 }
 
+void os64_media_queue_reopen(os64_media_queue_t *q)
+{
+    q->ended = false;
+}
+
 bool os64_media_queue_ended(const os64_media_queue_t *q)
 {
     return q->ended;

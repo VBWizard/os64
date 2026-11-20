@@ -65,12 +65,19 @@ typedef struct os64_media os64_media_t;
 // time is estimated at (a format's table, or its bit rate), as other
 // browsers' do, where a local one reads its way to the exact frame (an
 // MP3 has no index, so that read is everything before the target).
+// `idle` (NULL for none) is never called by libmedia's own reads; it is for
+// a caller that reads on the source's behalf: os64/media_player.h's decoding
+// thread calls it, on its own thread, at each wake while it waits with
+// nothing to read (its queues full, or paused; 200 ms apart at most), so a
+// source fetched from the network may keep its transfer moving, or let its
+// fetch go and take it up again at its next read.
 typedef struct {
     void *ctx;
     int64_t (*read)(void *ctx, uint8_t *out, size_t cap);
     int64_t (*seek)(void *ctx, uint64_t offset);
     int64_t size;
     bool remote;
+    void (*idle)(void *ctx);
 } os64_media_source_t;
 
 // What the media holds of one kind (os64_media_info_t's `sound` and

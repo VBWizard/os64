@@ -10799,7 +10799,7 @@ static void keys_turn(void)
 
 // ── Videos: the picture in a <video>'s box (VIDEO.md § 5) ──────────────
 //
-// A <video>'s session is a picture session (media.h): its player decodes,
+// A <video>'s session (media.h) asks its player for the picture too: it decodes,
 // converts to the size asked and keeps time on its own threads, and the
 // sound plays without the window. The window's part is the picture: the
 // box takes the picture's ratio once it is known (replaced_size), the

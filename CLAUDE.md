@@ -669,21 +669,23 @@ virtio because its drain waits for the tick.
   program's output; the caller asks at each display frame for the picture
   due at that blank, and the sound never waits on the caller's thread (a
   caller that stops asking has its overdue pictures retired by the
-  player). **`gplay file`** is the window over it: picture and sound in
+  player). A sound alone runs on it too (V.5.4: no picture thread, a
+  loop with no seam, the source's `idle` hook, a bell the caller may
+  lend; `/tests/playertest`). **`gplay file`** is the window over it: picture and sound in
   step, paced by the display's frames; `i` shows its readout (the clock,
   the pace, the queues), and the same numbers print at exit.
   `/tests/gplaytest` drives it in `testrun` (`gplay --check`, a covered
   window, covered and muted, a key script);
   `tools/pages/sync-720p60.mp4` is the flash-and-beep clip for its sync
   dial (`[` and `]`).
-  **yonder plays a page's `<audio>`** through it, and a `<video>`
-  through libmedia's player, its picture drawn in the box (VIDEO.md § 5,
-  as built in V.5.3: `apps/yonder/yonder.c`'s videos section feeds the
-  frame planner and paints the plain path or the general one, counted in
-  yonder's `d` reading; `/tests/pages/video*.html`)
-  (`apps/yonder/media.c`: a decoder thread per `<audio>` feeding libmedia's
-  PCM queue, `os64/media_queue.h`, an opener thread and a player per
-  `<video>`, a loader thread for a network address,
+  **yonder plays a page's `<audio>` and `<video>`** through libmedia's
+  player, a sound alone or a sound and its picture, the picture drawn in
+  the box (VIDEO.md § 5, as built in V.5.3 and V.5.4:
+  `apps/yonder/yonder.c`'s videos section feeds the frame planner and
+  paints the plain path or the general one, counted in yonder's `d`
+  reading; `/tests/pages/video*.html`)
+  (`apps/yonder/media.c`: an opener thread and a player per element, a
+  loader thread for a network address,
   and a VOICE each on libmedia's output, `os64/media_output.h`: one audio
   thread per program owning `/dev/audio` and mixing every voice,
   `os64/media_mix.h`, which gplay's sound is a voice of too), while libdom keeps the element's
@@ -742,7 +744,8 @@ virtio because its drain waits for the tick.
   are libav's alone, so a caller of FFmpeg's headers sees only names
   libos64 exports). Built WITHOUT threads, so a program using it
   from several threads does every open and close under one lock of its
-  own (libmedia keeps a narrower form the audit pins: media.c § THREADS).
+  own (libmedia's spans every open and close and nothing else, held across
+  an open's source reads: media.c § THREADS, which the audit pins).
   Built WITH FFmpeg's x86 assembly (nasm), whose routines FFmpeg chooses
   at run time from what the CPU and os64 offer, AVX2 included, AVX-512
   configured out; its buffers come from `os64_malloc_aligned` (README

@@ -158,13 +158,15 @@ they stay off.
   callback, which keeps state. So a program that uses libav from more than
   one thread does every open and close, and every scaler's first
   conversion, under one lock of its own, or makes those tables first, and
-  installs a log callback that is safe from any thread. libmedia keeps a
-  narrower form (its lock spans `avformat_find_stream_info` and the
-  decoder's open, where this build's decoders set up, and it makes the
-  CRC and AES tables itself at its first open, since a demuxer can ask
-  for those while reading); `libmedia/media.c`
-  § THREADS says why it is enough, and `tools/test_av_audit.py` pins the
-  one-time setups it rests on. A scaler set to one thread (the default)
+  installs a log callback that is safe from any thread. libmedia takes
+  that rule whole: its lock spans every open (the input and its header,
+  `avformat_find_stream_info` and the decoders' opens) and every close,
+  and it makes the CRC, AES and scaler tables itself at its first open,
+  since a demuxer can ask for those while reading. It once narrowed the
+  lock to the stream info and the decoders' opens, and two inputs opened
+  at once hung; `libmedia/media.c` § THREADS says what the lock may be
+  held across, and `tools/test_av_audit.py` pins the one-time setups and
+  who takes the lock. A scaler set to one thread (the default)
   starts none; set to more, it asks for worker threads
   (`avpriv_slicethread_create`), is told there are none, and works on the
   caller's thread. Turning threads on means a pthread shim (mutex, condition, once)

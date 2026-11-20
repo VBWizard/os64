@@ -808,12 +808,54 @@ above:
   - The stall rule now covers yonder too (D4): a sink that stops pulling
     is refused and retried.
   - A muted element is still gain 0 (libdom folds `muted` into the gain);
-    mute as its own fact, holding no device, comes with V.5.4's player.
+    V.5.4 kept that for an `<audio>` (below).
 - **Proven** in QEMU by a page of three muted elements that play at once
   (two looping, one to its end): both loops' clocks move, a pause holds
   one while the other plays, a seek lands, the third ends with `pause`
   and `ended`, and the events come as the old thread gave them, B's short
   WAV loop flapping between `waiting` and `playing` exactly as before.
+
+## As built (V.5.4, the player: VIDEO.md's V5)
+
+- **An `<audio>` is libmedia's player now, for its sound alone**
+  (`os64/media_player.h`; VIDEO.md § 3, "For a sound alone"), as a
+  `<video>` has been since V.5.3. yonder's decoder thread is gone, and
+  with it the session's own PCM queue and voice: the opener readies the
+  bytes and makes the player, whose decoding thread reads them. One
+  decoder loop is left in the tree; `play`'s writing loop is its own
+  (DEBTS).
+- **What moved where:**
+  - `loop` is the player's: it runs on from the start with no seam, where
+    the old decoder sought at the end and the queue carried the seam.
+  - The ten-second hold of an idle fetch (`HOLD_MS`) is yonder's still,
+    run from the source's `idle` hook, which the player's decoding thread
+    calls while it waits; a `<video>`'s fetch is let go the same way now.
+  - Dropping the loader's copy of the body (`product_trim`) is still done
+    as the bytes arrive.
+  - A gain per element is the player's voice on the output's mix.
+  - A muted `<audio>` is a gain of 0, a silent voice still mixed, so its
+    time stays its ear's; a muted `<video>`'s voice goes (VIDEO.md § 4).
+  - An `<audio>` ends when its last frame is heard, as the old decoder's
+    did (the output's `heard_all`), and its position is then its length.
+  - A sound whose length the probe could not say (an MP3 with no header,
+    served with no length) gets one at its end, so `duration` turns
+    finite with a `durationchange`, as before.
+  - The player rings yonder every quarter second while a sound alone
+    plays, as the old voice did, for `timeupdate` and the controls.
+  - A seek asked before the player exists, or while it is still opening,
+    is kept and carried out once it is open, as the old decoder kept it
+    (`/tests/playertest` step 7).
+  - The device refused (another program has the stream): the voice WAITs
+    and the clock, which is the ear, stands still; the sound plays from
+    where it was when the device comes back (`/tests/playertest` step 3).
+- **What it costs:** per element, one decoding thread running (the old
+  decoder's count), a two-second sound queue (the old one's), one handle
+  (the session's bell, lent to the player), and no picture thread, scaler
+  or converted pictures; 24 players load over the network and 19 over
+  `file:`, as before. And one thread more that has ENDED, the opener,
+  whose stack (about 2.2 MB) yonder keeps until it exits, because os64
+  has no per-thread teardown (DEBTS.md); a `<video>` has paid it since
+  V.5.3.
 
 ## Slices
 

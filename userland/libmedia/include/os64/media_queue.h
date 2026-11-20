@@ -33,7 +33,8 @@
 //
 // THE END. The decoder says when the media has no more (os64_media_queue_end);
 // once what is queued has been taken, os64_media_queue_finished is true. A
-// flush clears it.
+// flush clears it, and so does a reopen (a loop turned on after the end was
+// queued: there is more after all).
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -89,6 +90,9 @@ uint32_t os64_media_queue_flush(os64_media_queue_t *q);
 
 // No more will be pushed this generation.
 void os64_media_queue_end(os64_media_queue_t *q);
+// The end taken back: pushes are taken again, this generation, after what
+// is queued.
+void os64_media_queue_reopen(os64_media_queue_t *q);
 bool os64_media_queue_ended(const os64_media_queue_t *q);
 // Ended, and everything pushed has been taken.
 bool os64_media_queue_finished(const os64_media_queue_t *q);

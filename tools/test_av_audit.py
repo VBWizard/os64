@@ -258,6 +258,43 @@ for entry, allowed in (('os64_media_picture_release', set()),
     reached = libav_reached(entry)
     check(reached <= allowed, f'{entry} reaches {sorted(reached - allowed)} of libav.so, off the decoding thread '
           '(libmedia/media.c § THREADS)')
+# WHO TAKES libmedia's LOCK (libmedia/media.c § THREADS): s_lock is held
+# across an open's reads of its source, a page's across the network, so it
+# is taken by the open and the close alone, and nothing a player's audio,
+# picture or main thread calls may reach either: a release, next, decode,
+# a seek, the scaler's calls.
+lock_users = set()
+routine = None
+for line in media_disasm.splitlines():
+    label = re.match(r'^[0-9a-f]+ <([^>@+]+)>:$', line)
+    if label:
+        routine = label.group(1)
+        continue
+    if routine and re.search(r'<s_lock(?:\+0x[0-9a-f]+)?>', line):
+        lock_users.add(routine)
+check(lock_users == {'os64_media_open_for', 'os64_media_close'},
+      f's_lock is taken by {sorted(lock_users)}, not exactly os64_media_open_for and os64_media_close '
+      '(libmedia/media.c § THREADS)')
+
+
+def media_reached(entry):
+    seen, todo = set(), [entry]
+    while todo:
+        f = todo.pop()
+        if f in seen:
+            continue
+        seen.add(f)
+        todo.extend(t for t in media_calls.get(f, ()) if not t.endswith('@plt'))
+    return seen
+
+
+for entry in ('os64_media_picture_release', 'os64_media_next', 'os64_media_decode', 'os64_media_seek',
+              'os64_media_scaler_convert', 'os64_media_scaler_create', 'os64_media_scaler_destroy'):
+    if entry in media_calls:
+        reach = media_reached(entry) & lock_users
+        check(not reach, f'{entry} reaches {sorted(reach)}, which takes s_lock: a lock held across a source\'s '
+              'reads (libmedia/media.c § THREADS)')
+
 convert_reaches = libav_reached('os64_media_scaler_convert')
 check(convert_reaches == {'sws_scale_frame'},
       f'os64_media_scaler_convert reaches {sorted(convert_reaches)} of libav.so, not exactly the scaler\'s own calls '
