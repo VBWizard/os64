@@ -167,15 +167,20 @@ item is taken back. Rows inside their table are handled the same way with
 `"\n"`. The work stays proportional to the size of the subtree, even for
 a large table.
 
-**The walk is the flat tree.** That means a shadow host's shadow tree and
-its slots' assigned nodes, which is the tree yonder styles
-(`f_flat_parent`). Other browsers build `innerText` from their layout
-trees, and those follow the flat tree. B starts with a Chrome capture and
-a Firefox capture of one shadow host's `innerText`, and builds to what the
-captures show rather than to memory.
+**The walk is the DOM tree, not the flat tree.** The design first said
+the flat tree, from memory of how browsers build `innerText` from their
+layout trees, and promised captures before building on it. No Chromium
+was at hand, so WPT's getter (`getter-tests.js`, "Shadow DOM contents
+ignored") was the check, and it says the opposite: a host's shadow root
+contributes nothing, and the walk is the element's own children, as the
+standard's steps are written. A host's light children that a slot takes
+are rendered and read; those no slot takes are in no flat tree, layout
+gives them no style, and the provider calls them not rendered.
 
 **Left to slice D:** `text-transform` (D takes the text as layout shaped
-it, with the Unicode case mapping layout already does); the
+it, with the Unicode case mapping layout already does); spaces beside an
+atomic inline or a replaced element, which layout keeps and the first
+cut's collapsing does not; SVG `<text>`, which WPT reads; the
 `select`/`option`/`optgroup` exception; replaced elements and form controls,
 whose children layout does not render (B skips the children of `img`,
 `video`, `audio`, `canvas`, `iframe`, `object`, `embed`, `input`,
@@ -220,11 +225,12 @@ libflow cannot give that today: pass 1 runs only inside `flow_layout*`
 builds. A styles-only door means a public `f_style_build_reusing`, an
 `FStyles` that yonder keeps beside the tree and invalidates as the page is
 edited, and a provider that prefers it. That is a perf slice of its own,
-and B does not include it. B measures what one read costs on a large page
-(the layouts it caused and their time, from `os64_dom_computed_cost`'s
-sibling) and books the split under the JavaScript speed arc with that
-number. A page that reads `innerText` once (YouTube's description does)
-pays at most one layout, which `getComputedStyle` costs too. An element pass 1 never styled is
+and B does not include it: it is booked under DEBTS.md § Browser layout
+("A read of `innerText` lays the page out when only its styles are
+needed"), with the measurement it waits for. That number has to come from
+the P5, since a QEMU timing under TCG measures the emulator. A page that
+reads `innerText` once (YouTube's description does) pays at most one
+layout, which `getComputedStyle` costs too. An element pass 1 never styled is
 inside `display: none`, or is a child that layout does not render, so it
 is not rendered. B confirms that in libflow before relying on it. A
 provider that answers false (no current layout could be made) makes the
@@ -266,8 +272,10 @@ These do not depend on rendering, so B builds them fully.
 - **`innerText = value`:** the value is split at CRLF, CR and LF. Each
   piece that is not empty becomes a Text node, and each break becomes a
   `<br>` in the element's node document. The children are then replaced
-  with that fragment in one "replace all", so a MutationObserver sees one
-  record, as it does for `textContent`.
+  with that fragment in one "replace all", so a MutationObserver sees the
+  records `textContent`'s setter makes. Those are several records where
+  DOM queues one, which is an older row (DEBTS.md: "A replace all is
+  several mutation records, not one") that now names `innerText` too.
 - **`outerText`, the getter** returns what `innerText` returns.
 - **`outerText = value`:** with no parent it throws
   `NoModificationAllowedError`. Otherwise it builds the same fragment, adds
@@ -283,14 +291,14 @@ These do not depend on rendering, so B builds them fully.
 
 ### 3.5 Shape and proof
 
-- **The walk does not recurse.** It steps through the flat tree with
-  libhtml's `os64_html_flat_first_child`, `_next_sibling` and `_parent`,
-  closing each element (its trailing breaks, its taken-back tab) as it
-  climbs out. Its memory stays constant however deep the tree is. That
-  matters because the DOM verbs cap a document at twice the parse's
-  `max_depth` (512 by default, so 1,024 levels), but each shadow tree
-  starts that count again, so a flat tree has no depth bound of its own
-  (Fable's review, finding 4). A host case walks a 50,000-level tree.
+- **The walk does not recurse.** It steps through the tree by its
+  `first_child`, `next` and `parent` links, closing each element (its
+  trailing breaks, its taken-back tab) as it climbs out, so its memory is
+  the same whatever the depth (Fable's review, finding 4). It leans on no
+  cap: the DOM verbs hold a document to twice its parse's `max_depth`
+  (512 by default, so 1,024 levels), but `max_depth` is a parse option, and
+  a walk that needed it would break the day a caller raised it. A host case
+  walks a 50,000-level tree in a fifth of a second under ASan.
 - **`libdom/inner_text.c` is pure C** over `os64_html_node_t`, a facts
   callback and an output buffer, with no QuickJS. `tools/test_inner_text_host.sh`
   drives it under ASan with libhtml parsing the input and a fake provider
@@ -301,17 +309,37 @@ These do not depend on rendering, so B builds them fully.
   checked in QEMU, because the host suite's fake provider has no UA sheet.
   And `innerText` read ON a `<script>` gives its source, because the
   element is not rendered, so its `textContent` is the answer.
-- **WPT.** `html/dom/elements/the-innertext-and-outertext-properties/` is
-  excluded today ("not P1-W's oracle"). B runs it. `getter.html` counts the first cut's passes, and D is judged by how many
-  more it passes. `innertext-setter.html`, `outertext-setter.html` and the
-  `innertext-with-white-spaces` variants are expected to pass in B.
+- **WPT.** `html/dom/elements/the-innertext-and-outertext-properties/` was
+  excluded ("not P1-W's oracle"); B runs it, 1,368 passes in all.
+  `getter.html` passes 246 of its 274, and its 28 failures are D's list:
+  `text-transform` (and `::first-line`, `::first-letter`), the spaces
+  beside an atomic inline or a replaced element (which layout does not
+  collapse across), SVG `<text>`, closed `<details>`, a `<select>`'s own
+  text, and anonymous table boxes (cells with no row, inline tables). Five
+  of the 33 it failed at first were the walker's own, found by a cold
+  review and fixed in B: table white space under `pre`, a caption after
+  the rows, a hidden row's or table's last separator, a `p` that is not
+  block-level, and a row group read alone. The setters pass all but
+  "Null characters preserved": libdom turns a NUL into U+FFFD at the
+  boundary of every string a script hands it, `textContent` included. The
+  `innertext-with-white-spaces` variants pass all 948; `dynamic-getter`
+  fails only its two `text-transform` cases; `innertext-whitespace-pre-line`
+  fails on a window named-access global (`'a' is not defined`) before it
+  reaches innerText.
 - **QEMU:** a page with a hidden span, a `<br>`, two paragraphs, a table, a
   `<script>` and a `<style>` shows `innerText` next to `textContent`.
 - **The host replay installs no provider**, so in a replay `innerText` is
   `textContent` (Fable's review, finding 2). A replay of the YouTube watch
   page proves only that the `TypeError` has gone, not that hidden text is
-  left out. REPLAY.md's known differences gain that line. The real check of
-  the description is a P5 run, which is Chris's.
+  left out. The replay's known differences in DEBTS.md (§ The replay
+  corpus) gain that row. The real check of the description is a P5 run,
+  which is Chris's.
+- **libdom's own suite** (`tools/test_dom_inner_text.inc`, run alone with
+  `tools/test_dom_host.sh --inner-text`) proves the door with a fake
+  provider: `textContent` without one, the provider's answers with one, a
+  provider that refuses, a detached element, a read on a `<script>`, and
+  both setters (line breaks, `null`, markup kept as text, `outerText`'s
+  merges and its empty Text node, `NoModificationAllowedError`).
 
 ---
 

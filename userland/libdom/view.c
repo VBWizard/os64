@@ -237,6 +237,13 @@ void os64_dom_set_computed(os64_dom_t *dom, os64_dom_computed_provider_t provide
     dom->computed_opaque = opaque;
 }
 
+void os64_dom_set_text_style(os64_dom_t *dom, os64_dom_text_style_provider_t provider, void *opaque)
+{
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
+    dom->text_style = provider;
+    dom->text_style_opaque = opaque;
+}
+
 // The provider's answer for `element` in the snapshot: 1 when it made
 // one, 0 when it could not make the style current, -1 with an exception
 // pending (the budget, or no room for the snapshot).

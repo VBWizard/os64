@@ -11451,6 +11451,7 @@ static size_t script_text_rects(void *, const os64_html_node_t *, size_t, size_t
 static os64_geometry_status_t script_svg_hit(void *, const os64_html_node_t *, double, double,
     const os64_geometry_memory_t *, bool (*)(void *), void *, bool *, os64_dom_geometry_stats_t *);
 static bool script_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out);
+static bool script_text_style(void *opaque, const os64_html_node_t *element, os64_dom_text_style_t *out);
 static int32_t css_animations_count(void *opaque, bool current);
 static bool css_animations_at(void *opaque, int32_t i, os64_dom_css_animation_t *out);
 static bool css_animations_drive(void *opaque, uint64_t id, bool paused, bool canceled, double start_ms,
@@ -11601,7 +11602,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .kept_module = script_kept_module,
         .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit, .hit = script_hit, .text_rects = script_text_rects,
         .intersections = script_intersections, .resizes = script_resizes, .opaque = doc,
-        .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed,
+        .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed, .text_style = script_text_style,
         .images={canvas_source,canvas_source_release,doc,image_sources_update},
         .media = {(void *)(uintptr_t)serial, media_open, media_close, media_play, media_pause, media_seek,
                   media_settings, media_facts, media_activated, media_can_play},
@@ -13997,6 +13998,56 @@ static bool script_computed(void *opaque, const os64_html_node_t *element, os64_
     }
     flow_computed_free(c);
     return kept;
+}
+
+// innerText's provider (os64_dom_set_text_style): four facts read from
+// the style pass 1 gave the element in the page's current layout, with no
+// serialising (getComputedStyle's provider writes every property as text).
+// A read asks first with no element, and that call makes the layout
+// current, as getComputedStyle's does when the page changed since the last
+// one (the style alone would do; that split is booked in DEBTS.md); the
+// tree it made answers every element after it, since no script runs in
+// between (dom/text_style.h). An element pass 1 never styled is inside
+// `display: none`, or is a child layout does not render, so it is not
+// rendered.
+static const flow_tree_t *s_text_style_tree;
+
+static bool script_text_style(void *opaque, const os64_html_node_t *element, os64_dom_text_style_t *out)
+{
+    const os64_html_document_t *doc = opaque;
+    if (element == NULL) {
+        flow_env_t env;
+        uint64_t layouts = 0, elapsed_us = 0;
+        s_text_style_tree = layout_current(doc, &env, &layouts, &elapsed_us);
+        return s_text_style_tree != NULL;
+    }
+    const flow_tree_t *tree = s_text_style_tree;
+    if (tree == NULL || !os64_html_owns_node(doc, element))
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    const flow_style_t *s = flow_style_for(tree, element);
+    if (s == NULL || s->display == FLOW_DISPLAY_NONE)
+        return true;
+    out->rendered = true;
+    out->visible = s->visibility == FLOW_VISIBLE;
+    switch (s->display) {
+    case FLOW_DISPLAY_BLOCK: case FLOW_DISPLAY_LIST_ITEM: case FLOW_DISPLAY_FLEX: case FLOW_DISPLAY_GRID:
+        out->display = OS64_DOM_TEXT_BLOCK;
+        break;
+    case FLOW_DISPLAY_TABLE: out->display = OS64_DOM_TEXT_TABLE; break;
+    case FLOW_DISPLAY_TABLE_CAPTION: out->display = OS64_DOM_TEXT_TABLE_CAPTION; break;
+    case FLOW_DISPLAY_TABLE_ROW_GROUP: case FLOW_DISPLAY_TABLE_HEADER_GROUP: case FLOW_DISPLAY_TABLE_FOOTER_GROUP:
+    case FLOW_DISPLAY_TABLE_COLUMN_GROUP: case FLOW_DISPLAY_TABLE_COLUMN:
+        out->display = OS64_DOM_TEXT_TABLE_PART;
+        break;
+    case FLOW_DISPLAY_TABLE_ROW: out->display = OS64_DOM_TEXT_TABLE_ROW; break;
+    case FLOW_DISPLAY_TABLE_CELL: out->display = OS64_DOM_TEXT_TABLE_CELL; break;
+    case FLOW_DISPLAY_CONTENTS: out->display = OS64_DOM_TEXT_CONTENTS; break;
+    default: out->display = OS64_DOM_TEXT_INLINE; break;      // inline, and the atomic inlines
+    }
+    out->white_space = s->white_space == FLOW_WS_PRE || s->white_space == FLOW_WS_PRE_WRAP ? OS64_DOM_SPACE_PRESERVE
+                     : s->white_space == FLOW_WS_PRE_LINE ? OS64_DOM_SPACE_PRE_LINE : OS64_DOM_SPACE_COLLAPSE;
+    return true;
 }
 
 // A page's CSS animations as its scripts see them (os64_dom_set_css_animations):

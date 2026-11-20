@@ -1886,6 +1886,12 @@ const FStyles *f_tree_styles(const flow_tree_t *tree)
     return tree != NULL ? tree->styles : NULL;
 }
 
+const flow_style_t *flow_style_for(const flow_tree_t *tree, const os64_html_node_t *element)
+{
+    const FStyled *styled = tree != NULL && element != NULL ? f_style_of(tree->styles, element) : NULL;
+    return styled != NULL ? &styled->style : NULL;
+}
+
 // ── Stacking (CSS 2.1 Appendix E, § 9.9.1) ───────────────────────────────
 //
 // A STACKING CONTEXT is the root, a positioned box with a z-index, a fixed

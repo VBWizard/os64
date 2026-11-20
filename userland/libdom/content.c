@@ -205,3 +205,153 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
     d_string_free(dom, &string);
     return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
 }
+
+/* ── innerText and outerText (HTML § 3.2.7) ─────────────────────────────
+ * The getter is the element's text as rendered: inner_text.c's walk over
+ * the host's four facts per element (os64_dom_set_text_style). With no
+ * host to ask, an element outside a window's document, or one the walk
+ * finds is not being rendered, the answer is its textContent, which is the
+ * standard's for an element not rendered and for a browser without CSS.
+ * The setters turn text into Text nodes and a `br` for each line break. */
+
+static void *rendered_grow(void *ctx, void *old, size_t old_size, size_t size)
+{
+    os64_dom_t *dom = ctx;
+    void *block = d_alloc(dom, size);
+    if (block == NULL) return NULL;
+    if (old != NULL) {
+        os64_memcpy(block, old, old_size);
+        d_free(dom, old);
+    }
+    return block;
+}
+
+static void rendered_release(void *ctx, void *block)
+{
+    if (block != NULL) d_free(ctx, block);
+}
+
+/* The host's provider, called as every host service is: the binding held
+ * across the call, and no answer once the document's host service is
+ * inactive (a departure, perhaps one the call itself caused), which the
+ * walk takes as "not rendered", the standard's answer for a document no
+ * longer shown. */
+static bool rendered_facts(void *opaque, const os64_html_node_t *element, os64_dom_text_style_t *out)
+{
+    os64_dom_t *dom = opaque;
+    if (dom->text_style == NULL || !d_provider_enter(dom)) return false;
+    bool answered = dom->text_style(dom->text_style_opaque, element, out);
+    d_provider_leave(dom);
+    return answered && d_delivery_active(dom);
+}
+
+static JSValue rendered_text(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
+{
+    if (dom->text_style != NULL && d_in_window_tree(dom, node)) {
+        d_inner_text_memory_t memory = {rendered_grow, rendered_release, dom};
+        char *text = NULL;
+        size_t length = 0;
+        d_inner_text_status_t status = d_inner_text(dom->document, node, rendered_facts, dom, &memory, &text,
+                                                    &length);
+        if (status == D_INNER_TEXT_NO_MEMORY) return d_error(ctx, "QuotaExceededError", "DOM text quota exceeded");
+        if (status == D_INNER_TEXT_OK) {
+            JSValue result = JS_NewStringLen(ctx, text, length);
+            d_free(dom, text);
+            return result;
+        }
+    }
+    return d_content_get(dom, ctx, node, D_TEXT_CONTENT);
+}
+
+/* The standard's "rendered text fragment": a Text node for each run
+ * between line breaks that is not empty, and a `br` for each break (CR LF
+ * one). NULL in `*out` for no nodes at all. */
+static int64_t rendered_fragment(os64_dom_t *dom, const char *text, size_t length, os64_html_node_t **out)
+{
+    *out = NULL;
+    int64_t status = OS64_HTML_OK;
+    os64_html_node_t *fragment = NULL;
+    for (size_t at = 0; at < length && status >= 0;) {
+        if (fragment == NULL) {
+            fragment = os64_html_create_fragment(dom->document, &status);
+            if (fragment == NULL) break;
+        }
+        size_t end = at;
+        while (end < length && text[end] != '\n' && text[end] != '\r') end++;
+        os64_html_node_t *piece = end > at
+            ? os64_html_create_text(dom->document, text + at, end - at, &status)
+            : os64_html_create_element(dom->document, OS64_HTML_NS_HTML, "br", &status);
+        if (piece == NULL) break;
+        status = os64_html_insert(dom->document, fragment, piece, NULL);
+        if (end == at) at += text[at] == '\r' && at + 1 < length && text[at + 1] == '\n' ? 2 : 1;
+        else at = end;
+    }
+    if (status < 0) return status;
+    *out = fragment;
+    return OS64_HTML_OK;
+}
+
+/* DOM's "merge with the next text node": `node`'s next sibling joins it
+ * when both are Text, by replace data (live ranges move as they would for
+ * appendData), and is removed. */
+static int merge_next_text(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
+{
+    if (node == NULL || node->kind != OS64_HTML_TEXT) return 0;
+    const os64_html_node_t *next = node->next;
+    if (next == NULL || next->kind != OS64_HTML_TEXT) return 0;
+    int64_t status = os64_page_node_replace_data(dom->state, (os64_html_node_t *)node, os64_html_node_length(node), 0,
+                                                 next->text, next->text_len);
+    if (status < 0) { d_html_error(ctx, status); return -1; }
+    return d_tree_change(dom, ctx, D_REMOVE, NULL, next, NULL);
+}
+
+static JSValue rendered_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, JSValueConst value,
+                            bool outer)
+{
+    /* [LegacyNullToEmptyString]: null is "", anything else a string. */
+    JSValue text = JS_IsNull(value) ? JS_NewString(ctx, "") : JS_ToString(ctx, value);
+    if (JS_IsException(text)) return text;
+    DString string = {0};
+    bool converted = d_string(dom, ctx, text, &string);
+    JS_FreeValue(ctx, text);
+    if (!converted) return JS_EXCEPTION;
+    /* The conversion ran the page's script, which may have moved the
+     * element into another document: the fragment, the replacement and the
+     * merges are that document's, so its owner is found again here (as
+     * d_content_set does). The string stays the converting binding's. */
+    os64_dom_t *converted_by = dom;
+    dom = d_owner(dom, node);
+    const os64_html_node_t *parent = node->parent;
+    if (outer && parent == NULL) {
+        d_string_free(converted_by, &string);
+        return d_error(ctx, "NoModificationAllowedError", "outerText needs the element to have a parent");
+    }
+    os64_html_node_t *fragment = NULL;
+    int64_t status = rendered_fragment(dom, string.data, string.length, &fragment);
+    d_string_free(converted_by, &string);
+    /* outerText leaves something in the element's place: an empty Text
+     * node when the value made none. */
+    if (status >= 0 && outer && fragment == NULL) {
+        fragment = os64_html_create_text(dom->document, "", 0, &status);
+    }
+    if (status < 0) return d_html_error(ctx, status);
+    if (!outer) return d_tree_change(dom, ctx, D_REPLACE_CHILDREN, node, fragment, NULL) < 0 ? JS_EXCEPTION
+                                                                                             : JS_UNDEFINED;
+    /* The neighbours the merges join, held across the replacement. */
+    const os64_html_node_t *previous = node->prev, *next = node->next;
+    if (previous != NULL) os64_html_hold(dom->document, previous);
+    if (next != NULL) os64_html_hold(dom->document, next);
+    int result = d_tree_change(dom, ctx, D_REPLACE, parent, fragment, node);
+    if (result == 0 && next != NULL && next->parent == parent) result = merge_next_text(dom, ctx, next->prev);
+    if (result == 0 && previous != NULL && previous->parent == parent) result = merge_next_text(dom, ctx, previous);
+    if (previous != NULL) os64_html_release(dom->document, previous);
+    if (next != NULL) os64_html_release(dom->document, next);
+    return result < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+}
+
+JSValue d_rendered_text_member(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool outer, bool set,
+                               JSValueConst value)
+{
+    dom = d_owner(dom, node);
+    return set ? rendered_set(dom, ctx, node, value, outer) : rendered_text(dom, ctx, node);
+}

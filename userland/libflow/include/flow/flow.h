@@ -1994,6 +1994,12 @@ const flow_box_t *flow_positioned(const flow_tree_t *tree, int32_t i);
 // node with none (hidden, display none, or past where an incomplete layout
 // stopped).
 const flow_box_t *flow_box_for(const flow_tree_t *tree, const os64_html_node_t *node);
+// The style pass 1 gave `element` in `tree`: what a reader of the style
+// alone wants, with no box position (innerText's facts, yonder's
+// script_text_style). NULL for a node with none: not an element, inside a
+// `display: none` subtree (which pass 1 does not descend into), or not
+// reached by the layout.
+const flow_style_t *flow_style_for(const flow_tree_t *tree, const os64_html_node_t *element);
 // The element whose box clips `node`'s box (POSITION.md: clips follow
 // containing blocks): in the flow, its parent element; an absolute box's
 // containing block, the nearest element that can contain one (a position

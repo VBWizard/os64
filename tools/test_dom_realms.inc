@@ -443,6 +443,17 @@ static void dom_cluster_cases(void)
                 "movedFrameset.onload=()=>{};assert(movedFrameset.onload===null&&C.onload===bodyCallback,'windowless ignores assignment');"
                 "C.onload=null;",
                 "cluster round3: adopted body and frameset reflect destination window handlers");
+            /* outerText's value converted by a script that moves the element
+             * into B's document: the replacement and the merges are B's
+             * binding's, not the one the setter began in. */
+            realm_script(realms[0],
+                "globalThis.textHost=document.createElement('div');document.body.appendChild(textHost);"
+                "textHost.innerHTML='x<span>old</span>y';"
+                "textHost.children[0].outerText={toString(){B.document.body.appendChild(textHost);return 'new'}};"
+                "assert(textHost.ownerDocument===B.document&&textHost.childNodes.length===1&&"
+                "textHost.firstChild.data==='xnewy','replaced and merged in the document it moved to: '+textHost.innerHTML);"
+                "textHost.remove();",
+                "cluster round3: outerText follows an element its value's conversion moved");
             realm_script(realms[0],
                 "globalThis.paintCanvas=document.createElement('canvas');globalThis.paint=paintCanvas.getContext('2d');"
                 "globalThis.paintPeer=B.document.createElement('canvas').getContext('2d');"

@@ -1155,8 +1155,33 @@ int d_form_rel_install(os64_dom_t *dom, JSContext *ctx)
            d_accessor(dom, ctx, form, "relList", reflect, R_REL_LIST, true) < 0 ? -1 : 0;
 }
 
+/* innerText and outerText (HTML § 3.2.7), HTMLElement's in both modes, as
+ * textContent is every page's: content.c reads and writes them. */
+enum { T_INNER, T_OUTER };
+
+static JSValue rendered_text_accessor(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv,
+                                      int magic, JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *self = d_node(dom, ctx, this_value);
+    if (self == NULL) return JS_EXCEPTION;
+    if (!is_element(self) || self->ns != OS64_HTML_NS_HTML)
+        return JS_ThrowTypeError(ctx, "innerText requires an HTML element");
+    bool set = (magic & D_SET) != 0;
+    magic &= ~D_SET;
+    /* A setter called with no value at all is a TypeError (WebIDL); an
+     * undefined passed is converted like any other value. */
+    if (set && argc < 1) return JS_ThrowTypeError(ctx, "innerText needs a value");
+    return d_rendered_text_member(dom, ctx, self, magic == T_OUTER, set, set ? argv[0] : JS_UNDEFINED);
+}
+
 int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
 {
+    JSValueConst html_element = dom->prototypes[D_PROTO_HTML_ELEMENT]->value;
+    if (d_accessor(dom, ctx, html_element, "innerText", rendered_text_accessor, T_INNER, true) < 0 ||
+        d_accessor(dom, ctx, html_element, "outerText", rendered_text_accessor, T_OUTER, true) < 0)
+        return -1;
     static const struct { const char *name; int magic, argc; d_kinds_t on; } methods[] = {
         {"append", D_APPEND_NODES, 0, PARENTS}, {"prepend", D_PREPEND, 0, PARENTS},
         {"replaceChildren", D_REPLACE_CHILDREN, 0, PARENTS},

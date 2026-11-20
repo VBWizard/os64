@@ -7,6 +7,7 @@
 #include <os64/geometry_backend.h>
 #include <os64/url.h>
 #include <way/origin.h>
+#include <dom/text_style.h>
 
 typedef struct os64_dom os64_dom_t;
 
@@ -877,6 +878,14 @@ void os64_dom_computed_cost(os64_dom_computed_t *out, uint64_t layouts, uint64_t
  * an element in the document, and reads "" for a pseudo-element or an
  * element outside it. Install outside callbacks. */
 void os64_dom_set_computed(os64_dom_t *dom, os64_dom_computed_provider_t provider, void *opaque);
+
+/* INNERTEXT'S FACTS (HTML § 3.2.7; dom/text_style.h): four facts about an
+ * element's style, which innerText's walk asks of every element it passes.
+ * getComputedStyle's provider would answer, but writes every property as
+ * text; this one writes four numbers. NULL removes it, and innerText then
+ * answers textContent, as a browser without CSS does. Install outside
+ * callbacks. */
+void os64_dom_set_text_style(os64_dom_t *dom, os64_dom_text_style_provider_t provider, void *opaque);
 
 /* HISTORY (HTML § The History interface; MODERN_WEB.md § Slice 1b): the
  * session's entries are the host's, and a script reaches them through

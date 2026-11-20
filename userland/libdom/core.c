@@ -1282,6 +1282,7 @@ static void departure_detach(os64_dom_t *dom)
     os64_memset(&dom->cookies, 0, sizeof(dom->cookies));
     os64_memset(&dom->view, 0, sizeof(dom->view));
     dom->computed = NULL; dom->computed_opaque = NULL;
+    dom->text_style = NULL; dom->text_style_opaque = NULL;
     os64_memset(&dom->history_host, 0, sizeof(dom->history_host));
     dom->intersections_provider = NULL; dom->intersections_opaque = NULL;
     dom->resizes_provider = NULL; dom->resizes_opaque = NULL;

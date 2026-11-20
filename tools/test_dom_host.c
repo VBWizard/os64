@@ -271,6 +271,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_observer.inc"
 #include "test_dom_platform.inc"
 #include "test_dom_view.inc"
+#include "test_dom_inner_text.inc"
 #include "test_dom_implementation.inc"
 #include "test_dom_attributes.inc"
 #include "test_dom_fetch.inc"
@@ -678,6 +679,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--scroll")){dom_geometry_cases();dom_element_scroll_cases();dom_view_cases();printf("DOM scroll probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--intersection")){dom_intersection_cases();printf("DOM intersection probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--resize")){dom_resize_cases();printf("DOM resize probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--inner-text")){dom_inner_text_cases();printf("DOM inner text probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--blob")){dom_blob_cases();printf("DOM blob probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--file-reader")){dom_file_reader_cases();printf("DOM file reader probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--media")){dom_media_cases();printf("DOM media probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}    if(argc==2&&!strcmp(argv[1],"--walker")){dom_walker_cases();printf("DOM walker probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -773,6 +775,7 @@ int main(int argc, char **argv)
     dom_custom_cases();
     dom_observer_cases();
     dom_view_cases();
+    dom_inner_text_cases();
     dom_storage_cases();
     dom_base64_cases();
     dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();
