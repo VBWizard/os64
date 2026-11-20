@@ -12,6 +12,10 @@
   background when the box's shape is not the picture's. The log below
   lists the element's events in order with the time they came at, and the
   window's title carries them as one letter each (the QEMU proof reads it).
+
+  For the P5: "The 1080p60 clip" plays /home/clips/h264_1080p60_av.mp4 in
+  the box instead, and "A large box" makes the box 1600 pixels wide (its
+  height follows the picture's ratio).
 -->
 <style>
   body { font: 16px sans-serif; margin: 16px; }
@@ -28,6 +32,8 @@
   <input type="button" id="mute" value="Mute / unmute">
   <input type="button" id="small" value="Half size">
   <input type="button" id="big" value="Full size">
+  <input type="button" id="clip" value="The 1080p60 clip">
+  <input type="button" id="large" value="A large box">
 </p>
 <pre id="log"></pre>
 <script>
@@ -60,5 +66,7 @@
   document.getElementById('mute').onclick = () => { v.muted = !v.muted; };
   document.getElementById('small').onclick = () => { v.style.width = '427px'; v.style.height = '300px'; };
   document.getElementById('big').onclick = () => { v.style.width = ''; v.style.height = ''; };
+  document.getElementById('clip').onclick = () => { v.src = 'file:///home/clips/h264_1080p60_av.mp4'; };
+  document.getElementById('large').onclick = () => { v.style.width = '1600px'; v.style.height = ''; };
   say();
 </script>

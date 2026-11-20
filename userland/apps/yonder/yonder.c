@@ -2704,6 +2704,8 @@ typedef struct {
     uint32_t width, height;             // the picture's size as shown, CSS pixels; 0 not yet known
     bool playing;                       // its clock runs
     bool poked;                         // its facts moved: one frame is asked for even while paused
+    uint32_t sizing;                    // a new size was told: frames are asked for until the picture
+                                        // at it comes (counted down, so a size never answered ends)
     uint32_t asked_w, asked_h;          // the size its player converts to
     os64_dom_media_facts_t seen;        // the facts at the last turn, to see them move
     os64_media_player_frame_t frame;    // the picture to draw: pixels valid until the next frame
@@ -3387,8 +3389,10 @@ static struct {
     uint64_t canvas_marks, control_marks;
     // The videos' (videos_tick, pane_video): pictures asked for and
     // answered changed, and each paint of one by the plain path (rows
-    // copied to the window) or the general one (drawn as a picture is).
+    // copied to the window) or the general one (drawn as a picture is);
+    // the main thread's time asking (the pick) and drawing them.
     uint64_t video_frames, video_pictures, video_plain, video_general;
+    uint64_t video_ask_us, video_draw_us;
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
@@ -8247,9 +8251,23 @@ static bool paint_lines(DiagText *t, DiagText *u)
     dt_put(t, "; %lu canvas marks, %lu form control marks", (unsigned long)s_cost.canvas_marks,
            (unsigned long)s_cost.control_marks);
     if (s_cost.video_frames > 0)
-        dt_put(t, "; videos: %lu frames asked, %lu new pictures, painted %lu plain and %lu general",
-               (unsigned long)s_cost.video_frames, (unsigned long)s_cost.video_pictures,
-               (unsigned long)s_cost.video_plain, (unsigned long)s_cost.video_general);
+        dt_put(t, "; videos: %lu frames asked (%lu us), %lu new pictures, painted %lu plain and %lu general "
+               "(%lu us)",
+               (unsigned long)s_cost.video_frames, (unsigned long)s_cost.video_ask_us,
+               (unsigned long)s_cost.video_pictures, (unsigned long)s_cost.video_plain,
+               (unsigned long)s_cost.video_general, (unsigned long)s_cost.video_draw_us);
+    // Each video's player, as gplay's readout counts it.
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        os64_media_player_facts_t vf;
+        if (s_videos[i].node == NULL || !yonder_media_player_facts(s_videos[i].session, &vf))
+            continue;
+        dt_put(t, "; video %d %ux%u: shown %lu, dropped %lu, skipped %lu, starved %lu, resyncs %lu, "
+               "sound written %lu let go %lu, buffering %lu",
+               (int)i, vf.info.width, vf.info.height, (unsigned long)vf.pace.shown,
+               (unsigned long)vf.pace.dropped, (unsigned long)vf.pace.skipped, (unsigned long)vf.pace.starved,
+               (unsigned long)vf.pace.resyncs, (unsigned long)vf.sound_written, (unsigned long)vf.sound_dropped,
+               (unsigned long)vf.buffers);
+    }
 
     // The bells the loop took, then the ticker's own counts: its rings —
     // more than the bells when rings were made before the loop took one —
@@ -10790,8 +10808,9 @@ static void keys_turn(void)
 // picture at that frame's blank and marks the box when it changed
 // (videos_tick). One that cannot be seen is not asked: its player retires
 // what the clock passes, and its sound plays on.
-// A video's session opened (media_open): one past VIDEOS_MAX plays its
-// sound and draws no picture.
+// A video's session opened (media_open): one past VIDEOS_MAX plays (its
+// player converts at the picture's own size until a paint tells another,
+// media.c) and draws no picture.
 static void video_add(const os64_html_node_t *node, yonder_media_t *session)
 {
     for (int32_t i = 0; i < VIDEOS_MAX; i++)
@@ -10821,12 +10840,15 @@ static bool video_on_view(const Video *v, os64_gui_rect_t *out)
     return os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, out);
 }
 
-// Whether `v` wants the display's frames: playing, or its facts moved while
-// paused (a seek's picture, the first one, a new size), and seen.
+// Whether `v` wants the display's frames: it has a picture, plays or its
+// facts moved while paused (a seek's picture, the first one) or a new size
+// waits for its picture, and is seen. A sound given to a <video> has no
+// picture to ask for.
 static bool video_wants_frames(const Video *v)
 {
     os64_gui_rect_t part;
-    return v->node != NULL && (v->playing || v->poked) && !g.covered && video_on_view(v, &part);
+    return v->node != NULL && v->seen.picture && (v->playing || v->poked || v->sizing > 0) && !g.covered &&
+           video_on_view(v, &part);
 }
 
 // The media turn's follow-up: each shown video's facts read for the size
@@ -10875,14 +10897,20 @@ static void videos_tick(void)
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         Video *v = &s_videos[i];
         os64_gui_rect_t part;
-        if (v->node == NULL || !(v->playing || v->poked) || g.covered || !video_on_view(v, &part))
+        if (!video_wants_frames(v) || !video_on_view(v, &part))
             continue;
         v->poked = false;
+        if (v->sizing > 0)
+            v->sizing--;
         os64_media_player_frame_t fr;
         s_cost.video_frames++;
+        int64_t began = os64_micros();
         (void)yonder_media_frame(v->session, blank, period, &fr);
+        s_cost.video_ask_us += (uint64_t)(os64_micros() - began);
         if (!fr.changed)
             continue;
+        if (fr.w == v->asked_w && fr.h == v->asked_h)
+            v->sizing = 0;          // the picture at the size told
         v->frame = fr;
         s_cost.video_pictures++;
         s_video_marking = true;
@@ -16535,12 +16563,15 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
         v->asked_w = want_w;
         v->asked_h = want_h;
         yonder_media_size(v->session, v->asked_w, v->asked_h);
-        v->poked = true;            // a paused picture is converted again: ask for it
+        // A paused picture is converted again: frames are asked for until
+        // it comes, a second's worth at most.
+        v->sizing = 60;
     }
     const os64_media_player_frame_t *fr = &v->frame;
     if (fr->pixels == NULL || fr->w == 0 || fr->h == 0)
         return;
     bool fits = fr->w == (uint32_t)at.w && fr->h == (uint32_t)at.h;
+    int64_t began = os64_micros();
     for (int32_t k = 0; k < gp->n; ++k) {
         Glass *gl = gp->now[k];
         os64_gui_rect_t cut = on_glass(gl, clip);
@@ -16559,6 +16590,7 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
                                 fr->w, fr->h);
         }
     }
+    s_cost.video_draw_us += (uint64_t)(os64_micros() - began);
 }
 
 static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)

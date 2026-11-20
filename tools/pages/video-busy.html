@@ -1,0 +1,64 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A video beside a busy page</title>
+<!--
+  VIDEO.md § 5, the question V5 measures and does not cure: yonder's main
+  thread picks and paints the picture, so a page that lays out, animates
+  or runs script beside a video holds the picture back (the sound, on its
+  own thread, must not care).
+
+  The buttons: "The 1080p60 clip" plays /home/clips/h264_1080p60_av.mp4
+  (the bunny by default); "Animate" runs a CSS animation that moves a box
+  beside it, which lays the page out each frame; "Hold" holds the main
+  thread for 100 ms every second with a script. Each toggles. The page is
+  long: scroll it while the video plays (the video stays at the top,
+  fixed, so it can be seen while the text moves).
+
+  What to measure: press `d` after a minute; the record's `video` line
+  counts pictures shown, dropped, skipped and starved, and `/sys/audio`'s
+  underruns say whether the sound was touched.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { position: fixed; top: 8px; right: 8px; width: 480px; background: #888; z-index: 1; }
+  #mover { width: 120px; height: 60px; background: #c33; margin: 8px 0; }
+  .on #mover { animation: slide 2s linear infinite alternate; }
+  @keyframes slide { from { margin-left: 0; width: 120px; } to { margin-left: 400px; width: 200px; } }
+  p { max-width: 600px; }
+</style>
+<h1>A video beside a busy page</h1>
+<video id="v" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+<p><input type="button" id="clip" value="The 1080p60 clip">
+   <input type="button" id="animate" value="Animate">
+   <input type="button" id="hold" value="Hold"></p>
+<div id="mover"></div>
+<p id="state"></p>
+<div id="text"></div>
+<script>
+  const v = document.getElementById('v');
+  let animating = false, holding = false, holds = 0, holder = 0;
+  document.getElementById('clip').onclick = () => { v.src = 'file:///home/clips/h264_1080p60_av.mp4'; };
+  document.getElementById('animate').onclick = () => {
+    animating = !animating;
+    document.body.className = animating ? 'on' : '';
+  };
+  document.getElementById('hold').onclick = () => {
+    holding = !holding;
+    if (holding)
+      holder = setInterval(() => { const end = Date.now() + 100; while (Date.now() < end) {} holds++; }, 1000);
+    else
+      clearInterval(holder);
+  };
+  const text = document.getElementById('text');
+  for (let i = 1; i <= 200; i++) {
+    const p = document.createElement('p');
+    p.textContent = 'Paragraph ' + i + ': words to scroll past while the video plays, ' +
+      'long enough to wrap onto a second line in most windows, so that a scroll moves real text.';
+    text.appendChild(p);
+  }
+  setInterval(() => {
+    document.getElementById('state').textContent = 'time ' + v.currentTime.toFixed(1) + (v.paused ? ' paused' : '') +
+      (animating ? ', animating' : '') + (holding ? ', held ' + holds + ' times' : '');
+    document.title = 'busy t' + v.currentTime.toFixed(1) + (v.paused ? ' p' : ' P');
+  }, 500);
+</script>

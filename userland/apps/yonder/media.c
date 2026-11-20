@@ -3,8 +3,10 @@
 // THREADS AND WHAT EACH OWNS.
 //
 //   window    opens, closes, plays, pauses, seeks; reads facts; reaps; for
-//             a picture session, every call into its player, which it
-//             drives (os64/media_player.h).
+//             a picture session, every call into its player once it is
+//             made (os64/media_player.h): the opener makes it, and closes
+//             it itself only when the window's close came first (then the
+//             window never calls it, `player_closed`).
 //   decoder   one per sound session: the bytes kept (`bytes` and its
 //             window, its alone), libmedia's object, and the pushes into
 //             the PCM queue.
@@ -93,6 +95,9 @@
 // page's other fetches from that host need one left (DEBTS.md § A page's
 // sound).
 #define LOADERS_MAX 4u
+// The size a picture session's pictures are converted to before any paint
+// tells the fitted one: the picture's own, held to this a side.
+#define PICTURE_NATURAL_MAX 1920u
 // How often yonder's end looks for the threads to have let go.
 #define STOP_POLL_MS 10u
 
@@ -119,6 +124,11 @@ struct yonder_media {
     bool player_finished;           // its `finished`: it reads no byte again
     bool player_told;               // the asks made before it existed have been given to it
     bool player_loaded;             // os64_media_player_loaded told
+    bool player_unknown;            // its create failed with its thread perhaps running: never freed
+    bool size_told;                 // a conversion size was told (yonder_media_size, or the natural one)
+    bool probe_told;                // the window has put the probe's length into `facts`
+    bool bytes_failed;              // the bytes' failure (`failed`, `why`), copied under `lock` by
+    char bytes_why[96];             // the thread that owns them, for the window to read
     bool seek_landing;              // a DOM seek waits for the player's generation below
     uint32_t seek_player_generation;
     bool enough_held;               // HAVE_ENOUGH_DATA reached while it plays: held until it buffers
@@ -832,6 +842,10 @@ static void picture_arrival(yonder_media_t *m)
         return;
     os64_lock_acquire(&m->lock);
     arrival_locked(m);
+    if (m->failed && !m->bytes_failed) {
+        m->bytes_failed = true;
+        os64_strcopy(m->bytes_why, sizeof(m->bytes_why), m->why);
+    }
     os64_lock_release(&m->lock);
     product_trim(m);
 }
@@ -1131,9 +1145,16 @@ static int64_t decoder_main(void *arg)
 // ── A picture session's opener and its player ──────────────────────────
 
 // The player's facts changed: under the player's lock, so it only rings.
+// Its first look is its open's end (the state leaves OPENING, or it
+// fails): the bytes' reader no longer opens, so a seek past the window may
+// wait for its bytes (store_seek). Under the player's lock, which is taken
+// before a session's.
 static void player_look(void *ctx)
 {
-    (void)ctx;
+    yonder_media_t *m = ctx;
+    os64_lock_acquire(&m->lock);
+    m->opening = false;
+    os64_lock_release(&m->lock);
     ring_window();
 }
 
@@ -1164,6 +1185,12 @@ static int64_t opener_main(void *arg)
                                           .ctx = m};
         os64_media_player_t *player = NULL;
         if (os64_media_player_create(&cfg, &player) != 0) {
+            // A create that failed may have left its decoding thread running
+            // detached (os64_media_player_create), reading these bytes: the
+            // session is never freed, the price that start names.
+            os64_lock_acquire(&m->lock);
+            m->player_unknown = true;
+            os64_lock_release(&m->lock);
             fail(m, OS64_DOM_MEDIA_ERR_NETWORK, "No memory for the video");
         } else {
             // Published under the lock the window's close reads it under: a
@@ -1234,24 +1261,46 @@ static void picture_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
     os64_media_player_facts(p, &f);
     bool probed = f.probed && f.failure == 0;
     if (f.failure != 0 && out->error == 0) {
-        out->error = !f.probed || f.state == OS64_MEDIA_PLAYER_OPENING ? OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED
-                                                                         : OS64_DOM_MEDIA_ERR_DECODE;
-        if (m->failed)
+        // A failed open leaves no kind playable (the info is the open's):
+        // it fails as a sound session's open does (open_error); a failure
+        // after it is a decode's; the bytes' own failure is the network's.
+        bool opened = f.info.sound == OS64_MEDIA_PLAYABLE || f.info.picture == OS64_MEDIA_PLAYABLE;
+        out->error = opened ? OS64_DOM_MEDIA_ERR_DECODE : open_error(f.failure);
+        os64_lock_acquire(&m->lock);
+        bool network = m->bytes_failed;
+        if (network) {
             out->error = OS64_DOM_MEDIA_ERR_NETWORK;
-        os64_strcopy(out->message, sizeof(out->message), m->failed ? m->why : os64_media_strerror(f.failure));
+            os64_strcopy(out->message, sizeof(out->message), m->bytes_why);
+        } else {
+            os64_strcopy(out->message, sizeof(out->message), os64_media_strerror(f.failure));
+        }
+        os64_lock_release(&m->lock);
     }
     // Loop: the end is a seek to the start, playing on, and never an end
     // libdom hears (as a sound session's decoder loops by itself).
-    if (loop && f.state == OS64_MEDIA_PLAYER_ENDED && f.failure == 0) {
+    os64_lock_acquire(&m->lock);
+    bool wants_play = m->play;
+    os64_lock_release(&m->lock);
+    if (loop && wants_play && f.state == OS64_MEDIA_PLAYER_ENDED && f.failure == 0) {
         (void)os64_media_player_seek(p, 0);
         os64_media_player_facts(p, &f);
     }
     os64_lock_acquire(&m->lock);
-    if (f.probed && m->opening) {
-        m->opening = false;
+    bool tell_size = false;
+    if (f.probed && !m->probe_told) {
+        m->probe_told = true;
         m->facts.probed = probed;
         m->facts.duration = f.length >= 0 ? (double)f.length / RATE : INFINITY;
-        arrival_locked(m);          // buffered's range is a share of the duration
+        // Buffered's range is a share of the duration: a file's is all of
+        // it, which the window may say; a fetch's is told by the thread
+        // that owns its bytes, at its next read (picture_arrival).
+        if (m->file >= 0)
+            arrival_locked(m);
+        // A picture is converted at some size even before a paint tells
+        // the fitted one, or one never painted (below the fold, hidden, not
+        // in the document) would never have a picture to be ready with.
+        tell_size = !m->size_told && f.info.picture == OS64_MEDIA_PLAYABLE && f.info.width > 0;
+        m->size_told |= tell_size;
     }
     if (m->seek_landing && (int32_t)(f.seeked - m->seek_player_generation) >= 0) {
         m->seek_landing = false;
@@ -1270,6 +1319,15 @@ static void picture_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
     os64_lock_release(&m->lock);
     if (tell_loaded)
         os64_media_player_loaded(p, true);
+    if (tell_size) {
+        uint32_t w = f.info.width, h = f.info.height;
+        if (w > PICTURE_NATURAL_MAX || h > PICTURE_NATURAL_MAX) {
+            double scale = (double)PICTURE_NATURAL_MAX / (w > h ? w : h);
+            w = (uint32_t)(w * scale);
+            h = (uint32_t)(h * scale);
+        }
+        os64_media_player_size(p, w > 0 ? w : 1, h > 0 ? h : 1);
+    }
     out->probed = probed;
     out->seekable = f.info.seekable;
     // The readiness libdom's readyState is made from (VIDEO.md § 5's table):
@@ -1335,7 +1393,8 @@ static bool audio_running(void)
 // included. Its lock held.
 static bool threads_done_locked(const yonder_media_t *m)
 {
-    return m->decoder_done && (!m->loader_started || m->loader_done) && (m->player == NULL || m->player_finished);
+    return m->decoder_done && (!m->loader_started || m->loader_done) &&
+           (m->player == NULL ? !m->player_unknown : m->player_finished);
 }
 
 // Frees a session no thread is using any more (threads_done_locked).
@@ -1498,7 +1557,12 @@ void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation)
             uint32_t g = os64_media_player_seek(p, (int64_t)(seconds * RATE + 0.5));
             os64_lock_acquire(&m->lock);
             m->seek_player_generation = g;
+            bool play = m->play;
             os64_lock_release(&m->lock);
+            // A player sought from its end plays on (os64/media_player.h); an
+            // element that is paused stays paused (libdom paused it there).
+            if (!play)
+                os64_media_player_pause(p);
         }
         return;
     }
@@ -1559,8 +1623,20 @@ bool yonder_media_frame(yonder_media_t *m, int64_t blank, int64_t period, os64_m
     return os64_media_player_frame(p, blank, period, out);
 }
 
+bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out)
+{
+    os64_media_player_t *p = m->picture ? player_of(m) : NULL;
+    if (p == NULL)
+        return false;
+    os64_media_player_facts(p, out);
+    return true;
+}
+
 void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height)
 {
+    os64_lock_acquire(&m->lock);
+    m->size_told = true;
+    os64_lock_release(&m->lock);
     os64_media_player_t *p = m->picture ? player_of(m) : NULL;
     if (p != NULL)
         os64_media_player_size(p, width, height);

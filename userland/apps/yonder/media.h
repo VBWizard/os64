@@ -91,6 +91,9 @@ bool yonder_media_frame(yonder_media_t *m, int64_t blank, int64_t period, os64_m
 // The size a picture session's pictures are converted to (the fitted
 // rectangle, device pixels). Nothing for a sound session.
 void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height);
+// A picture session's player's own facts (its pace, clock and counts), for
+// the record's reading; false for a sound session or one with no player.
+bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out);
 // canPlayType's answer (0, 1 or 2; dom/media.h), libmedia's.
 int yonder_media_can_play(const char *type);
 // The window's turn: frees the closed sessions whose threads have ended.

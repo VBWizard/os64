@@ -430,7 +430,11 @@ through `store_read` and `store_seek`; the window drives the player.
    latest picture fitted by `yonder_object_rect` (object-fit and
    object-position, as an image's), the rest of the box the element's
    own background, nothing before the first picture. The fitted size is
-   told to the player there, where it is known.
+   told to the player there, where it is known; until a paint tells one,
+   the player converts at the picture's own size (held to 1920 a side),
+   so a video never painted (below the fold, hidden, not in the document,
+   past the registry's 32) still has pictures to be ready with, plays and
+   ends.
 4. **The test that picks the path:** the pane draws straight to the
    window (one target, not a group's sheets: no opacity, transform,
    filter, mask or blend above the box) and the picture was converted at
