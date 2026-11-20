@@ -30,8 +30,8 @@ must not expose an intermediate path that ignores restrictions.
 ## Upkeep
 
 - Keep one parent row per slice, with a short scope/acceptance summary.
-  When a slice contains multiple tasks or additional work is discovered,
-  add child rows immediately beneath it using stable `F.n.m` IDs. Record
+  At the start of a slice, record its initial child task list immediately
+  beneath it using stable `F.n.m` IDs. Record
   both completed work and known remaining work; do not hide new obligations
   in a growing parent note. Familiar brief labels such as F4a–d may appear
   in task names without changing the numeric IDs supported by the renderer.
@@ -41,6 +41,11 @@ must not expose an intermediate path that ignores restrictions.
   active design/code/review and state the phase in notes when useful. Mark
   design tasks as design work; completing them does not complete the
   corresponding implementation. Detailed proofs remain in the slice briefs.
+- Mark tasks discovered after the initial list with an `ADDED YYYY-MM-DD`
+  note giving the reason and the introducing PR when known. Preserve that
+  marker after completion. The F.4/F.15 lists reconstructed in #669 are a
+  retrospective baseline, not a claim that those tasks were all known when
+  the slices began. New discoveries after that baseline use the ADDED marker.
 - Keep completed tasks visible. Append newly discovered tasks without
   renumbering existing IDs. Split a broad remaining task when concrete work
   emerges, preserving its acceptance obligations and dependency references.

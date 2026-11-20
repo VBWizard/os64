@@ -321,11 +321,14 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_binding_authority.inc"
 #include "test_dom_window_authority.inc"
 #include "test_dom_browsing_context.inc"
+#include "test_dom_lifetime.inc"
 #include "test_dom_navigation_authority.inc"
 #include "test_dom_location_context.inc"
 #include "test_dom_location_exotic.inc"
 #include "test_dom_window_proxy.inc"
 #include "test_dom_window_identity.inc"
+#include "test_dom_window_names.inc"
+#include "test_dom_window_name.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -703,11 +706,14 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--neutral-promise-settings")){dom_neutral_promise_cases();printf("DOM neutral Promise: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--import-settings")){dom_import_settings_cases();printf("DOM import settings: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--window-identity")){dom_window_identity_cases();printf("DOM Window identity: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--window-names")){dom_window_names_cases();printf("DOM Window names: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--window-name")){dom_window_name_cases();printf("DOM Window.name: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--window-proxy")){dom_window_proxy_cases();window_proxy_allocation_cases();printf("DOM WindowProxy: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--location-exotic")){dom_location_exotic_cases();printf("DOM Location exotic: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--location-context")){dom_location_context_cases();printf("DOM Location context: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--navigation-authority")){dom_navigation_authority_cases();printf("DOM navigation authority: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--browsing-context")){dom_browsing_context_cases();printf("DOM browsing contexts: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&(!strcmp(argv[1],"--c3-lifetimes")||!strcmp(argv[1],"--c3-lifetimes-controls"))){lifetime_controls=!strcmp(argv[1],"--c3-lifetimes-controls");dom_lifetime_cases();printf("DOM C3 lifetimes: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--window-authority")){dom_window_authority_cases();printf("DOM Window authority: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--binding-authority")){dom_binding_authority_cases();printf("DOM binding authority: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--browser-jobs")){dom_browser_jobs_cases();dom_browser_jobs_budget_case();dom_finalization_settings_cases();printf("DOM browser jobs: %u checks, %u failed\n",checks,failures);return failures?1:0;}

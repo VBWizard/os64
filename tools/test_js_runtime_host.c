@@ -2624,6 +2624,7 @@ static void finalization_task_recovery_cases(void)
 #include "../userland/libjs/tests/owner_provider_cases.h"
 #include "../userland/libjs/tests/owner_settings_cases.h"
 #include "../userland/libjs/tests/owner_invocation_cases.h"
+#include "../userland/libjs/tests/owner_callback_cases.h"
 
 static void owner_runtime_assert(bool,const char *);
 static size_t owner_failure_attempts(void) { return attempts; }
@@ -2777,6 +2778,219 @@ static void owner_task_assert(bool ok,const char *message)
     check(ok,message);
     if(!ok && owner_task_controls)exit(1);
 }
+static bool owner_callback_reuse_enabled,owner_callback_reuse_busy;
+static void *owner_callback_reuse_block;
+static size_t owner_callback_reuse_size;
+void *js_owner_observed_malloc(size_t size)
+{
+    if(owner_callback_reuse_enabled) {
+        if(!owner_callback_reuse_block) {
+            owner_callback_reuse_block=os64_malloc(size);owner_callback_reuse_size=size;
+            owner_callback_reuse_busy=owner_callback_reuse_block!=NULL;return owner_callback_reuse_block;
+        }
+        if(size==owner_callback_reuse_size && !owner_callback_reuse_busy) {
+            owner_callback_reuse_busy=true;return owner_callback_reuse_block;
+        }
+    }
+    return os64_malloc(size);
+}
+void js_owner_observed_free(void *pointer)
+{
+    if(owner_callback_reuse_enabled && pointer && pointer==owner_callback_reuse_block) {
+        check(owner_callback_reuse_busy,"checked callbacks: fixed runtime slab is consumed once before reuse");owner_callback_reuse_busy=false;return;
+    }
+    os64_free(pointer);
+}
+static bool owner_callback_exhaust_serial;
+JSOwnerStatus js_owner_observed_callback_serial_next(uint64_t *issuer,uint64_t *out)
+{
+    if(owner_callback_exhaust_serial)*issuer=UINT64_MAX;
+    return js_owner_callback_serial_next(issuer,out);
+}
+static bool owner_callback_controls;
+static void owner_callback_assert(bool ok,const char *message)
+{check(ok,message);if(!ok && owner_callback_controls)exit(1);}
+static os64_js_runtime_t *owner_callback_teardown_runtime;
+static void owner_callback_teardown_mark(os64_js_runtime_t *runtime)
+{owner_callback_teardown_runtime=runtime;}
+void js_owner_observed_context_free(JSContext *context)
+{
+    if(owner_callback_teardown_runtime) {
+        JSOwnerCallbackSummary counts;
+        owner_callback_assert(js_owner_callback_summary(owner_callback_teardown_runtime,&counts) &&
+            !counts.live && !counts.closing && !counts.invocations,
+            "checked callbacks: managed roots drain before any wrapper context release");
+    }
+    JS_FreeContext(context);
+}
+static void owner_callback_actual_loans(OwnerCallbackCase *s)
+{
+    JSOwnerCounts entry,incumbent;
+    owner_callback_assert(owner_invocation_table &&
+        js_owner_counts(owner_invocation_table,s->entry.owner.incarnation,s->entry.owner,&entry)==JS_OWNER_OK && entry.loans==1 &&
+        js_owner_counts(owner_invocation_table,s->incumbent.owner.incarnation,s->incumbent.owner,&incumbent)==JS_OWNER_OK && incumbent.loans==1,
+        "checked callbacks: actual entry and captured-incumbent rows each retain one independent loan");
+}
+typedef struct {
+    os64_js_runtime_t *runtime;JSOwnerTicket ticket;JSOwnerCallbackKey key;
+    unsigned mode,calls;bool allocating;
+} OwnerCallbackHost;
+static JSValue owner_callback_host_capture(JSOwnerRuntimeScope *scope,JSContext *context,void *opaque)
+{
+    OwnerCallbackHost *s=opaque;s->calls++;
+    JSValue value=JS_NewObject(context);if(JS_IsException(value))return value;
+    if(s->allocating) {
+        char text[1024];memset(text,'q',sizeof text);JSValue payload=JS_NewStringLen(context,text,sizeof text);
+        if(JS_IsException(payload)){JS_FreeValue(context,value);return payload;}
+        if(JS_SetPropertyStr(context,value,"payload",payload)<0){JS_FreeValue(context,value);return JS_EXCEPTION;}
+    }
+    if(s->mode==3)owner_invocation_table->_last_token=UINT64_MAX;
+    size_t initial=attempts;JSOwnerCallbackKey key={91,92};JSOwnerRuntimeMetadata before,after;
+    owner_callback_assert(js_owner_runtime_metadata(s->runtime,&before),"checked callbacks: passive capture metadata baseline");
+    if(!s->allocating){clock_error=-97;fail_at=attempts+1;}
+    JSOwnerStatus result=js_owner_callback_capture(scope,OS64_JS_ABI_ID,value,&key);
+    if(!s->allocating){clock_error=0;fail_at=0;}
+    if(s->mode==2 || s->mode==3) {
+        owner_callback_assert(result==JS_OWNER_EXHAUSTED && key.incarnation==91 && key.serial==92 &&
+            js_owner_runtime_metadata(s->runtime,&after) && before.summary.tickets==after.summary.tickets && before.summary.unknown_escape==after.summary.unknown_escape,
+            "checked callbacks: real record or holder issuer exhaustion publishes no partial capture");
+    } else if(!s->allocating) {
+        owner_callback_assert(result==JS_OWNER_OK && attempts==initial && js_owner_runtime_metadata(s->runtime,&after) &&
+            after.summary.tickets==before.summary.tickets+1 && after.summary.unknown_escape==before.summary.unknown_escape,
+            "checked callbacks: capture allocates no storage polls no clock and keeps compatibility state");s->key=key;
+    } else if(result==JS_OWNER_OK)s->key=key;
+    JS_FreeValue(context,value);return JS_UNDEFINED;
+}
+static JSValue owner_callback_host_allocate(JSOwnerRuntimeScope *scope,JSContext *context,JSValueConst callback,void *opaque)
+{
+    (void)scope;(void)callback;OwnerCallbackHost *s=opaque;s->calls++;
+    JSValue value=JS_NewObject(context);if(JS_IsException(value))return value;
+    char text[1024];memset(text,'x',sizeof text);JSValue payload=JS_NewStringLen(context,text,sizeof text);
+    if(JS_IsException(payload)){JS_FreeValue(context,value);return payload;}
+    if(JS_SetPropertyStr(context,value,"result",payload)<0){JS_FreeValue(context,value);return JS_EXCEPTION;}
+    return value;
+}
+static void owner_callback_host_create(OwnerCallbackHost *s,const os64_js_config_t *config,unsigned policy,size_t capacity)
+{
+    os64_js_outcome_t out;
+    owner_callback_assert(js_owner_runtime_create_with_callbacks(config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,
+        (JSOwnerLimits){1,4,2},capacity,&s->runtime,&out)==OS64_JS_OK && js_owner_runtime_primary_ticket(s->runtime,&s->ticket)==JS_OWNER_OK &&
+        os64_js_task_begin(s->runtime,OS64_JS_ABI_ID,"callback fault cohort",&out)==OS64_JS_OK,
+        "checked callbacks: native fault fixture owns existing task");
+}
+static void owner_callback_host_cases(void)
+{
+    owner_callback_loan_probe=owner_callback_actual_loans;owner_callback_teardown_probe=owner_callback_teardown_mark;owner_invocation_observe=true;
+    owner_callback_cases(owner_callback_assert);
+    owner_callback_loan_probe=NULL;owner_callback_teardown_probe=NULL;owner_invocation_observe=false;owner_invocation_table=NULL;
+    os64_js_config_t config={.limits=os64_js_default_limits()};config.limits.memory_bytes=8*1024*1024;config.limits.execution_ms=1000;
+    for(unsigned policy=0;policy<2;policy++) {
+        size_t baseline=live,bytes=live_bytes;os64_js_outcome_t out;JSOwnerCallbackSummary counts;
+        OwnerCallbackHost quiet={0};owner_callback_host_create(&quiet,&config,policy,2);
+        owner_callback_assert(js_owner_runtime_with_settings(quiet.runtime,OS64_JS_ABI_ID,quiet.ticket,&quiet.ticket,
+            owner_callback_host_capture,&quiet,&out)==OS64_JS_OK && quiet.key.serial,
+            "checked callbacks: passive capture leaves task healthy");
+        owner_callback_assert(os64_js_context(quiet.runtime,OS64_JS_ABI_ID,&out)!=NULL,"checked callbacks: incidental legacy getter retains its raw compatibility veto");
+        quiet.mode=2;owner_callback_exhaust_serial=true;
+        owner_callback_assert(js_owner_runtime_with_settings(quiet.runtime,OS64_JS_ABI_ID,quiet.ticket,&quiet.ticket,
+            owner_callback_host_capture,&quiet,&out)==OS64_JS_OK,"checked callbacks: exhausted callback issuer is local refusal");owner_callback_exhaust_serial=false;
+        unsigned calls=0;
+        owner_callback_assert(js_owner_callback_invoke(quiet.runtime,OS64_JS_ABI_ID,quiet.key,quiet.ticket,owner_callback_never,&calls,&out)==OS64_JS_OK && calls==1,
+            "checked callbacks: earlier live record survives callback namespace exhaustion");
+        size_t initial=attempts;clock_error=-97;fail_at=attempts+1;owner_realm_loan_fault=1;
+        JSOwnerStatus closed=js_owner_callback_close(quiet.runtime,OS64_JS_ABI_ID,quiet.key);
+        clock_error=0;fail_at=0;owner_realm_loan_fault=0;
+        owner_callback_assert(closed==JS_OWNER_OK && attempts==initial && js_owner_callback_summary(quiet.runtime,&counts) && !counts.live && !counts.closing,
+            "checked callbacks: idle close uses reserved storage and no clock allocation or extra loan");
+        os64_js_teardown_report_t report;os64_js_destroy_report(quiet.runtime,&report);
+        owner_callback_assert(!report.leaked && live==baseline && live_bytes==bytes,"checked callbacks: exhausted callback issuer root cleanup balances");
+        quiet=(OwnerCallbackHost){0};owner_callback_host_create(&quiet,&config,policy,1);
+        owner_invocation_observe=true;quiet.mode=3;
+        owner_callback_assert(js_owner_runtime_with_settings(quiet.runtime,OS64_JS_ABI_ID,quiet.ticket,&quiet.ticket,
+            owner_callback_host_capture,&quiet,&out)==OS64_JS_OK,"checked callbacks: actual owner issuer exhaustion unwinds admitted role loans");
+        owner_invocation_observe=false;owner_invocation_table=NULL;
+        os64_js_destroy_report(quiet.runtime,&report);
+        owner_callback_assert(!report.leaked && live==baseline && live_bytes==bytes,"checked callbacks: passive and issuer-fault cohort balances all storage");
+        for(unsigned fault=0;fault<4;fault++) {
+            OwnerCallbackHost state={0};owner_callback_host_create(&state,&config,policy,1);
+            owner_callback_assert(js_owner_runtime_with_settings(state.runtime,OS64_JS_ABI_ID,state.ticket,&state.ticket,
+                owner_callback_host_capture,&state,&out)==OS64_JS_OK,"checked callbacks: capture precedes invocation fault injection");
+            if(fault==0)clock_error=-41;
+            else if(fault==1)owner_realm_loan_fault=1;
+            else if(fault==2)os64_js_cancel(state.runtime);
+            else monotonic+=1000001;
+            calls=0;os64_js_status_t result=js_owner_callback_invoke(state.runtime,OS64_JS_ABI_ID,state.key,state.ticket,owner_callback_never,&calls,&out);
+            clock_error=0;owner_realm_loan_fault=0;JSOwnerRuntimeMetadata m;
+            owner_callback_assert(result==(fault==0?OS64_JS_HOST_FAILURE:fault==1?OS64_JS_ADMISSION_REFUSED:fault==2?OS64_JS_FAILED_RUNTIME:OS64_JS_LIMIT) &&
+                !calls && js_owner_callback_summary(state.runtime,&counts) && counts.live==1 && !counts.invocations &&
+                js_owner_runtime_metadata(state.runtime,&m) && !m.summary.loans,
+                "checked callbacks: health and partial role-loan refusal preserve record and expose no body");
+            owner_callback_assert(js_owner_callback_close(state.runtime,OS64_JS_ABI_ID,state.key)==JS_OWNER_OK,
+                "checked callbacks: retained record closes after global or local admission refusal");
+            os64_js_destroy_report(state.runtime,&report);
+            owner_callback_assert(!report.leaked && live==baseline && live_bytes==bytes,"checked callbacks: faulted invocation and shutdown balance native and engine storage");
+        }
+        for(unsigned phase=0;phase<2;phase++) {
+            OwnerCallbackHost count={0};owner_callback_host_create(&count,&config,policy,1);
+            if(phase)owner_callback_assert(js_owner_runtime_with_settings(count.runtime,OS64_JS_ABI_ID,count.ticket,&count.ticket,
+                owner_callback_host_capture,&count,&out)==OS64_JS_OK,"checked callbacks: existing record for invocation allocation inventory");
+            count.allocating=true;initial=attempts;
+            os64_js_status_t result=phase?js_owner_callback_invoke(count.runtime,OS64_JS_ABI_ID,count.key,count.ticket,owner_callback_host_allocate,&count,&out):
+                js_owner_runtime_with_settings(count.runtime,OS64_JS_ABI_ID,count.ticket,&count.ticket,owner_callback_host_capture,&count,&out);
+            owner_callback_assert(result==OS64_JS_OK,"checked callbacks: native allocating capture or invocation baseline");
+            size_t cuts=attempts-initial;os64_js_destroy_report(count.runtime,&report);owner_callback_assert(!report.leaked,"checked callbacks: allocation inventory root cleanup");
+            for(size_t cut=1;cut<=cuts;cut++) {
+                OwnerCallbackHost state={0};owner_callback_host_create(&state,&config,policy,1);
+                if(phase)owner_callback_assert(js_owner_runtime_with_settings(state.runtime,OS64_JS_ABI_ID,state.ticket,&state.ticket,
+                    owner_callback_host_capture,&state,&out)==OS64_JS_OK,"checked callbacks: real capture before invocation allocation cut");
+                state.allocating=true;fail_at=attempts+cut;
+                result=phase?js_owner_callback_invoke(state.runtime,OS64_JS_ABI_ID,state.key,state.ticket,owner_callback_host_allocate,&state,&out):
+                    js_owner_runtime_with_settings(state.runtime,OS64_JS_ABI_ID,state.ticket,&state.ticket,owner_callback_host_capture,&state,&out);fail_at=0;
+                JSOwnerRuntimeMetadata m;
+                owner_callback_assert((result==OS64_JS_OK || result==OS64_JS_EXCEPTION || result==OS64_JS_LIMIT || result==OS64_JS_HOST_FAILURE) &&
+                    js_owner_callback_summary(state.runtime,&counts) && !counts.closing && !counts.invocations &&
+                    js_owner_runtime_metadata(state.runtime,&m) && !m.summary.loans && !m.summary.unknown_escape,
+                    "checked callbacks: real native allocation cuts unwind temporary values and role loans without raw escape");
+                os64_js_destroy_report(state.runtime,&report);
+                owner_callback_assert(!report.leaked && live==baseline && live_bytes==bytes,"checked callbacks: capture and invocation allocation cuts leave no native or engine leak");
+            }
+            printf("checked callbacks: policy%u phase%u %zu allocation cuts balanced\n",policy,phase,cuts);
+        }
+        owner_callback_reuse_enabled=true;OwnerCallbackHost old={0};owner_callback_host_create(&old,&config,policy,1);
+        owner_callback_assert(js_owner_runtime_with_settings(old.runtime,OS64_JS_ABI_ID,old.ticket,&old.ticket,owner_callback_host_capture,&old,&out)==OS64_JS_OK,
+            "checked callbacks: record captured before forced runtime address reuse");
+        void *old_address=old.runtime;JSOwnerCallbackKey old_key=old.key;os64_js_destroy_report(old.runtime,&report);
+        owner_callback_assert(!report.leaked && !owner_callback_reuse_busy,"checked callbacks: original runtime ends before its slab is reused");
+        OwnerCallbackHost fresh={0};owner_callback_host_create(&fresh,&config,policy,1);
+        owner_callback_assert(fresh.runtime==old_address && js_owner_callback_close(fresh.runtime,OS64_JS_ABI_ID,old_key)==JS_OWNER_FOREIGN &&
+            js_owner_callback_summary(fresh.runtime,&counts) && !counts.live,
+            "checked callbacks: actual reused runtime address cannot rebind obsolete callback incarnation");
+        os64_js_destroy_report(fresh.runtime,&report);owner_callback_reuse_enabled=false;os64_free(owner_callback_reuse_block);
+        owner_callback_reuse_block=NULL;owner_callback_reuse_size=0;
+        owner_callback_assert(!report.leaked && live==baseline && live_bytes==bytes,"checked callbacks: forced wrapper-slab cohort balances after both engine lifetimes");
+        for(unsigned cut=1;cut<=3;cut++) {
+            os64_js_runtime_t *runtime=(void *)1;fail_at=attempts+cut;
+            os64_js_status_t result=js_owner_runtime_create_with_callbacks(&config,(os64_js_teardown_policy_t)policy,OS64_JS_ABI_ID,(JSOwnerLimits){1,2,2},64,&runtime,&out);fail_at=0;
+            owner_callback_assert(result==OS64_JS_HOST_FAILURE && !runtime && live==baseline && live_bytes==bytes,
+                "checked callbacks: wrapper metadata and initial engine allocation refusals publish no runtime");
+        }
+    }
+}
+
+static int owner_callback_raw_leak_case(void)
+{
+    size_t baseline=live,bytes=live_bytes;os64_js_config_t config={.limits=os64_js_default_limits()};config.limits.memory_bytes=8*1024*1024;
+    OwnerCallbackHost s={0};owner_callback_host_create(&s,&config,OS64_JS_TEARDOWN_RECLAIM,1);os64_js_outcome_t out;
+    owner_callback_assert(js_owner_runtime_with_settings(s.runtime,OS64_JS_ABI_ID,s.ticket,&s.ticket,owner_callback_host_capture,&s,&out)==OS64_JS_OK,
+        "checked callbacks: managed record present during deliberate unrelated raw-root leak fixture");
+    JSContext *context=os64_js_context(s.runtime,OS64_JS_ABI_ID,&out);JSValue leaked=JS_NewObject(context);
+    owner_callback_assert(!JS_IsException(leaked),"checked callbacks: deliberate unrelated raw-root fixture allocated");
+    os64_js_teardown_report_t report;os64_js_destroy_report(s.runtime,&report);
+    owner_callback_assert(report.leaked && report.reclaimed_blocks && live==baseline && live_bytes==bytes,
+        "checked callbacks: managed-root drain still reports deliberate legacy external-root leak");
+    puts("Deliberate legacy-root leak: detected (negative fixture, not positive teardown evidence)");return failures?1:0;
+}
+
 static bool owner_invocation_controls;
 static void owner_invocation_assert(bool ok,const char *message)
 {check(ok,message);if(!ok && owner_invocation_controls)exit(1);}
@@ -3491,6 +3705,12 @@ static void owner_runtime_failure_cases(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--owner-callback-raw-leak"))return owner_callback_raw_leak_case();
+    if (argc == 2 && (!strcmp(argv[1], "--owner-callbacks") || !strcmp(argv[1], "--owner-callbacks-controls"))) {
+        owner_callback_controls=!strcmp(argv[1], "--owner-callbacks-controls");owner_callback_host_cases();
+        check(live==0,"checked callbacks: native engine and metadata allocations balance");
+        printf("checked callbacks: %zu checks, %zu failures\n",checks,failures);return failures?1:0;
+    }
     if (argc == 2 && (!strcmp(argv[1], "--owner-invocations") || !strcmp(argv[1], "--owner-invocations-controls"))) {
         owner_invocation_controls=!strcmp(argv[1], "--owner-invocations-controls");owner_invocation_host_cases();
         check(live==0,"checked invocation: native and engine allocations balance");
@@ -3749,7 +3969,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
-    execution_scope_cases(); ledger_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases(); owner_scope_failure_cases(); owner_failure_host_cases(); owner_setup_failure_cases(); owner_rejection_host_cases(); owner_task_host_cases(); owner_provider_host_cases(); owner_settings_host_cases(); owner_invocation_host_cases();
+    execution_scope_cases(); ledger_cases(); failed_code_cases(); failure_record_cases(); recovery_barrier_cases(); child_recovery_cases(); retention_cases(); owner_runtime_failure_cases(); owner_admission_failure_cases(); owner_realm_failure_cases(); owner_scope_failure_cases(); owner_failure_host_cases(); owner_setup_failure_cases(); owner_rejection_host_cases(); owner_task_host_cases(); owner_provider_host_cases(); owner_settings_host_cases(); owner_invocation_host_cases(); owner_callback_host_cases();
     realm_cases(); finalization_task_recovery_cases(); realm_host_cases(); promise_failure_cases(); finalization_failure_cases(); import_failure_cases(); neutral_promise_failure_cases();
 
     task_cases();

@@ -1,5 +1,9 @@
 # F.4d — Private WindowProxy property boundary
 
+Current mutable-name storage, lookup and reset rules are specified in
+[Window.name](IFRAME_F4_WINDOW_NAME.md); layout and immutable-name statements
+below describe this brief's original milestone.
+
 The internal host seam `d_window_proxy` prepares one native proxy per retained
 browsing context. Property operations follow that context's current Window;
 replacement keeps proxy identity, while discard retains the last Window for
@@ -8,9 +12,10 @@ publication and [Location exotics](IFRAME_F4_LOCATION_EXOTIC.md).
 
 This is an incomplete private integration, not a browser publication API.
 [Private Window identity integration](IFRAME_F4_WINDOW_IDENTITY.md) connects
-global-this, document/event values and callbacks. Same-origin Window named
-properties, remaining descriptor integration and complete F.4 security/lifetime
-acceptance remain gated. The host tests deliberately exchange
+global-this, document/event values and callbacks. [Window names and descriptors](IFRAME_F4_WINDOW_NAMES.md)
+adds same-origin named lookup and private prototype/unforgeable integration.
+Mutable target names and complete F.4 security/lifetime acceptance remain
+gated. The host tests deliberately exchange
 raw globals alongside proxies as independent oracles. Such raw globals must
 not be exposed by a production frame adapter. F.4 remains in progress.
 

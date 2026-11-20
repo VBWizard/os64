@@ -67,7 +67,7 @@ enum { C_FRAME_ELEMENT, C_LENGTH, C_TOP, C_PARENT, C_ORIGIN, C_SECURE, C_AGENT_C
 enum {
     B_OPENER, B_CLOSED, B_CLOSE, B_CLIENT_INFORMATION, B_MOVE_TO, B_MOVE_BY, B_RESIZE_TO, B_RESIZE_BY,
     B_CAPTURE_EVENTS, B_RELEASE_EVENTS, B_QUEUE_MICROTASK, B_ISOLATED, B_EXTERNAL, B_SEARCH_PROVIDER,
-    B_VISIBLE,
+    B_VISIBLE, B_NAME,
     /* window's members that ask the browsing context, each B_CONTEXT + its
      * C_ question. */
     B_CONTEXT, B_BAR = B_CONTEXT + C_AGENT_CLUSTER + 1
@@ -238,6 +238,26 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     switch (magic) {
+    case B_NAME: {
+        DBrowsingContext *context = dom->browsing_context;
+        if (!set) return context && !context->discarded && context->active == dom
+            ? JS_NewStringLen(ctx, context->name, context->name_length) : JS_NewString(ctx, "");
+        uint64_t generation = context ? context->generation : 0;
+        /* WebIDL conversion follows receiver/security validation, even when
+         * no context is associated. Reentry cannot authorize a stale commit. */
+        size_t length;
+        const char *name = JS_ToCStringLen(ctx, &length, argc ? argv[0] : JS_UNDEFINED);
+        if (!name) return JS_EXCEPTION;
+        JSValue result = JS_UNDEFINED;
+        if (!d_member_access(dom, ctx, false))
+            result = JS_EXCEPTION;
+        else if (context && length > D_CONTEXT_NAME_MAX)
+            result = d_error(ctx, "QuotaExceededError", "Window target name exceeds the private context limit");
+        else if (context && !d_browsing_context_rename(context, generation, dom, name, length))
+            result = d_error(ctx, "InvalidStateError", "Window name target changed during conversion");
+        JS_FreeCString(ctx, name);
+        return result;
+    }
     case B_OPENER:
         if (!set) return JS_NULL;
         return argc > 0 && JS_IsNull(argv[0]) ? JS_UNDEFINED : own_property(dom, ctx, "opener", argc, argv);
@@ -313,6 +333,8 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
  * top is [LegacyUnforgeable], so its accessor is not configurable. */
 int d_browsing_classic(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
+    if (dom->binding_origin && d_accessor(dom, ctx, global, "name", browsing_member, B_NAME, true) < 0)
+        return -1;
     if (d_accessor(dom, ctx, global, "parent", browsing_member, B_CONTEXT + C_PARENT, true) < 0 ||
         d_accessor(dom, ctx, global, "length", browsing_member, B_CONTEXT + C_LENGTH, true) < 0)
         return -1;

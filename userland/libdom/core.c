@@ -1503,6 +1503,7 @@ done:
 }
 
 #include "browsing_context.inc"
+#include "lifetime.inc"
 #include "recovery.inc"
 
 static void binding_drain(os64_dom_t *dom)
@@ -1606,6 +1607,7 @@ void os64_dom_free(os64_dom_t *dom)
 void os64_dom_cluster_drain(os64_dom_cluster_t *cluster)
 {
     if (!cluster || cluster->drained) return;
+    lifetime_stop(cluster);
     cluster->drained = true;
     /* Close every entry door before releasing callbacks in any member. */
     for (size_t i = 0; i < cluster->count; ++i)
@@ -1617,6 +1619,7 @@ void os64_dom_cluster_drain(os64_dom_cluster_t *cluster)
 void os64_dom_cluster_free(os64_dom_cluster_t *cluster)
 {
     if (!cluster) return;
+    lifetime_free(cluster);
     /* A later member may release storage charged to an earlier member.
      * Keep all ledger descriptors until the native sweeps are finished. */
     for (size_t i = 0; i < cluster->count; ++i) binding_free(cluster->members[i]);

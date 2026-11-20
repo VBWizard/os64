@@ -248,8 +248,8 @@ static int window_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCon
     /* A disallowed first duplicate suppresses later same-origin children.
      * This compares target names only, never document IDs or arbitrary nodes. */
     for (DBrowsingContext *child = proxy->context->first_child; child; child = child->next_sibling) {
-        if (!child->name[0]) continue;
-        JSAtom name = JS_NewAtom(ctx, child->name);
+        if (!child->name_length) continue;
+        JSAtom name = JS_NewAtomLen(ctx, child->name, child->name_length);
         if (name == JS_ATOM_NULL) return -1;
         bool match = name == key;
         JS_FreeAtom(ctx, name);

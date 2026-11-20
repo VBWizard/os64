@@ -3,6 +3,7 @@
 
 #include "dom/dom.h"
 #include "browsing_context.h"
+#include "lifetime.h"
 #include "navigation_authority.h"
 #include "os64/js_engine.h"
 #include "os64/js_callbacks.h"
@@ -401,7 +402,10 @@ struct DBrowsingContext {
     size_t charged_bytes;
     bool discarded;
     DNavigationRequest *navigation;
-    char name[];
+    size_t name_length;
+    /* Reserved at admission: conversion may allocate, native rename does not.
+     * Length preserves embedded NULs in script-supplied DOMStrings. */
+    char name[D_CONTEXT_NAME_MAX + 1];
 };
 
 struct os64_dom_cluster {
@@ -412,6 +416,7 @@ struct os64_dom_cluster {
     size_t bytes, kept_bytes, canvas_bytes, count;
     os64_dom_t *members[D_REALMS];
     DBrowsingContext *contexts;
+    struct DLifetimeAdapter *lifetime;
     size_t context_count;
     struct DNavigationAuthority *navigation_authority;
     DValue *buckets[D_BUCKETS];
@@ -882,6 +887,7 @@ bool d_member_access(os64_dom_t *, JSContext *, bool);
 bool d_location_access(os64_dom_t *, JSContext *, bool);
 int d_location_exotic_install(os64_dom_t *, JSContext *, JSValueConst);
 void d_location_exotic_drain(os64_dom_t *);
+void d_exposure_counts(const os64_dom_t *, DExposureCounts *);
 /* Private host seams. Prepare identity before author execution/publication. */
 JSValue d_window_proxy(JSContext *, DBrowsingContext *);
 void d_window_proxy_drain(os64_dom_t *);
@@ -889,6 +895,11 @@ os64_dom_t *d_window_proxy_target(JSValueConst);
 JSValue d_window_identity(os64_dom_t *, JSContext *);
 JSValueConst d_window_this(os64_dom_t *);
 int d_window_identity_prepare(JSContext *, os64_dom_t *, DBrowsingContext *);
+bool d_browsing_context_rename(DBrowsingContext *, uint64_t, os64_dom_t *, const char *, size_t);
+/* Bootstrap prototypes for private origin-bearing Windows; undefined selects
+ * Object.prototype for the EventTarget prototype's parent. */
+JSValue d_global_prototype(os64_dom_t *, JSContext *, JSValueConst);
+JSValue d_window_named_prototype(os64_dom_t *, JSContext *, JSValueConst);
 JSValue d_binding_global(os64_dom_t *, JSContext *);
 JSValue d_custom_registry(os64_dom_t *, JSContext *);
 int d_window_member_magic(os64_dom_t *, JSContext *, JSValueConst, const char *, int, int);
@@ -1272,7 +1283,7 @@ enum {
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_LINKS, D_QUERY_SCRIPTS, D_QUERY_CONTROLS,
        D_QUERY_DOCUMENT_NAMES,
        D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS, D_QUERY_LABELS,
-       D_QUERY_FIELDSET, D_QUERY_SHEETS, D_QUERY_TBODIES, D_QUERY_TABLE_ROWS, D_QUERY_SECTION_ROWS,
+       D_QUERY_FIELDSET, D_QUERY_SHEETS, D_QUERY_WINDOW_NAMES, D_QUERY_TBODIES, D_QUERY_TABLE_ROWS, D_QUERY_SECTION_ROWS,
        D_QUERY_CELLS, D_QUERY_AREAS };
 /* The live HTMLCollection of a table kind (above) that `owner` has,
  * made once ([SameObject]) and kept on its entry; NULL with an exception
@@ -1282,6 +1293,7 @@ DQuery *d_table_query(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *o
  * next refresh. False with an exception pending. */
 bool d_query_items(DQuery *query, JSContext *ctx, const os64_html_node_t *const **nodes, size_t *count);
 bool d_named_match(const os64_html_node_t *node, const char *name);
+bool d_window_named_match(const os64_html_node_t *node, const char *name);
 bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
 /* One of HTML § 4.10.2's listed elements, which a fieldset's `elements`
  * lists, and a form's all but an image button: button, fieldset, input,

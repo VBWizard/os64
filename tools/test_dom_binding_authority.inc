@@ -23,6 +23,7 @@ static bool authority_bindings_open(CeFixture *f, int policy, unsigned mode)
         ce_contexts[i]=os64_js_realm_context(ce_realms[i],OS64_JS_ABI_ID,&out);
         DomFixture source=fixture_configured(0,0,&config);os64_js_destroy(source.runtime);
         os64_dom_options_t options=p2b_options("https://authority-b.test/document");
+        options.shadow_trees = mode == 3;
         os64_dom_admission_t a=mode==2&&i==4
             ?os64_dom_create_in_realm(f->cluster,ce_realms[i],source.document,source.state,&options,&out)
             :d_create_in_realm_with_origin(f->cluster,ce_realms[i],source.document,source.state,&options,&origins[i],&out);

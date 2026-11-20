@@ -2344,9 +2344,10 @@ int d_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     /* EVENTTARGET.PROTOTYPE (DOM § 2.7) holds the listener methods once,
      * and every target inherits them: Node.prototype, each plain target's
      * prototype (d_event_target), and the global through Window.prototype
-     * (HTML § 7.2), which sits between them. The methods tell the target by
+     * (HTML § 7.2). Private Windows also interpose WindowProperties and use
+     * immutable prototype links along that chain. The methods tell the target by
      * `this`, the global's included when a bare call gives none. */
-    dom->event_target_prototype = d_retain(dom, ctx, JS_NewObject(ctx));
+    dom->event_target_prototype = d_retain(dom, ctx, d_global_prototype(dom, ctx, JS_UNDEFINED));
     if (dom->event_target_prototype == NULL) return -1;
     JSValueConst target = dom->event_target_prototype->value;
     static const struct { const char *name; int magic, argc; } targets[] = {
@@ -2355,7 +2356,7 @@ int d_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     for (size_t i = 0; i < sizeof(targets) / sizeof(targets[0]); i++)
         if (d_method(dom, ctx, target, targets[i].name, target_method, targets[i].argc, targets[i].magic) < 0)
             return -1;
-    dom->window_prototype = d_retain(dom, ctx, JS_NewObjectProto(ctx, target));
+    dom->window_prototype = d_retain(dom, ctx, d_window_named_prototype(dom, ctx, target));
     if (dom->window_prototype == NULL ||
         JS_SetPrototype(ctx, dom->prototypes[D_PROTO_NODE]->value, target) < 0 ||
         JS_SetPrototype(ctx, global, dom->window_prototype->value) < 0)

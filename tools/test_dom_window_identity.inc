@@ -1,8 +1,8 @@
 /* Prepare before the first script. Raw globals exchanged by the trusted host
  * are independent identity oracles, not a browser publication surface. */
-static bool identity_open(CeFixture *f, int policy, DBrowsingContext **contexts)
+static bool identity_open_mode(CeFixture *f, int policy, DBrowsingContext **contexts, unsigned mode)
 {
-    if (!authority_bindings_open(f, policy, 0)) return false;
+    if (!authority_bindings_open(f, policy, mode)) return false;
     os64_js_outcome_t out;
     for (unsigned i = 0; i < 5; i++) {
         contexts[i] = d_browsing_context_create(f->cluster, i ? contexts[0] : NULL,
@@ -28,6 +28,11 @@ static bool identity_open(CeFixture *f, int policy, DBrowsingContext **contexts)
             "identity: first script setup");
     }
     return true;
+}
+
+static bool identity_open(CeFixture *f, int policy, DBrowsingContext **contexts)
+{
+    return identity_open_mode(f, policy, contexts, 0);
 }
 
 static void identity_failure_cases(void)

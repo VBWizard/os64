@@ -68,4 +68,8 @@ JSOwnerStatus js_owner_summary(const JSOwnerTickets *, uint64_t, JSOwnerSummary 
 /* Sticky retention metadata, not engine failure/activity/F16 state. Zero
  * holders or absence of this flag is not a release certificate. */
 JSOwnerStatus js_owner_note_unknown_escape(JSOwnerTickets *, uint64_t);
+/* Owner-thread callback-record issuer in the charged runtime arena. This
+ * namespace is separate from owner/holder/loan tokens and refuses wrap.
+ * Refusal leaves issuer/output unchanged; it issues no runtime incarnation. */
+JSOwnerStatus js_owner_callback_serial_next(uint64_t *issuer, uint64_t *out);
 #endif

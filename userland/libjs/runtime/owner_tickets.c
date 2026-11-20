@@ -1,5 +1,13 @@
 #include "owner_tickets.h"
 
+JSOwnerStatus js_owner_callback_serial_next(uint64_t *issuer, uint64_t *out)
+{
+    if (!issuer || !out) return JS_OWNER_INVALID;
+    if (*issuer == UINT64_MAX) return JS_OWNER_EXHAUSTED;
+    *out = ++*issuer;
+    return JS_OWNER_OK;
+}
+
 struct JSOwnerCell { uint64_t serial; size_t tickets, loans; };
 struct JSOwnerTokenCell { uint64_t serial, owner; };
 typedef struct { size_t tickets, loans, bytes; } OwnerLayout;

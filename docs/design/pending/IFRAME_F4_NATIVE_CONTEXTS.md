@@ -1,5 +1,9 @@
 # F.4c — native context identity and document publication
 
+Current mutable-name storage, lookup and reset rules are specified in
+[Window.name](IFRAME_F4_WINDOW_NAME.md); layout and immutable-name statements
+below describe this brief's original milestone.
+
 This milestone gives the trusted host a stable, cluster-owned context record
 whose active document can change. It builds on private origin-bearing Window
 and Location admission. It does not create a WindowProxy, change script-visible

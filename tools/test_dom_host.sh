@@ -48,7 +48,11 @@ for source in userland/libjs/runtime/runtime.c userland/libjs/runtime/ledger.c u
     userland/libsvg/{core,path,geometry,bounds,hit,stroke,scene,paint,gradient,cache}.c \
     userland/libway/origin.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libcanvas/shadow.c userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libdraw2d/blur.c userland/libpng/encode.c userland/libos64/crc32.c; do
     object="$work/${source//\//_}.o"
-    cc "${flags[@]}" -c "$source" -o "$object"
+    observer=()
+    if [ "$source" = userland/libjs/runtime/runtime.c ]; then
+        observer=(-Djs_owner_incarnation_reserve=d_lifetime_observed_context_reserve)
+    fi
+    cc "${flags[@]}" "${observer[@]}" -c "$source" -o "$object"
     if [ "$source" = userland/libos64/str.c ]; then
         objcopy --localize-symbol=memcpy --localize-symbol=memmove --localize-symbol=memset \
             --localize-symbol=memcmp "$object" "$object-local"
@@ -100,7 +104,7 @@ for line in sys.stdin:
     if line.startswith("MATH_OBJS="):
         print("\n".join(shlex.split(line.split("=",1)[1])[0].split()))
 ')
-cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack -Wl,--wrap=d_location_exotic_install userland/obj/js/core.o \
+cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack -Wl,--wrap=d_location_exotic_install -Wl,--wrap=d_window_named_prototype userland/obj/js/core.o \
     "${maths[@]}" "${objects[@]}" -o "$work/target-core-probe"
 engine_flags=("${flags[@]}" -U__linux__ -Iuserland/libjs/port/compat
     '-DCONFIG_VERSION="2026-06-04"' -Wno-unused-parameter -Wno-sign-compare
@@ -116,7 +120,7 @@ for name in allocator platform format; do
     cc "${flags[@]}" -c "userland/libjs/port/$name.c" -o "$object"
     engine+=("$object")
 done
-cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack -Wl,--wrap=d_location_exotic_install "${engine[@]}" \
+cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack -Wl,--wrap=d_location_exotic_install -Wl,--wrap=d_window_named_prototype "${engine[@]}" \
     "${maths[@]}" "${objects[@]}" -o "$work/sanitized-core-probe"
 for probe in target-core-probe sanitized-core-probe; do
     echo "DOM profile: $probe"
