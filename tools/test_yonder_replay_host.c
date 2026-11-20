@@ -9,7 +9,7 @@
  * meets it.
  *
  *     test_yonder_replay_host KEPT-DIR OUT-DIR [--seconds N] [--only TEXT] [--window KEY=VALUE,...]
- *                             [--crash-page NAME]
+ *                             [--crash-page NAME] [--layout-profile] [--cascade-check N] [--measure]
  *     test_yonder_replay_host --self-test WORK-DIR
  *
  * A whole replay is written into an OUT-DIR with no records in it, and is
@@ -239,6 +239,12 @@ typedef struct {
     char *said;             /* what its `REPLAY unjudged:` line says, which `unjudged` may point at */
     bool ended;             /* its last line is YONDER_DIAG_END */
 } RpRecord;
+/* Why a record that says it lost lines is unjudged; --measure (rp_measure)
+ * replays such a page anyway, to measure yonder on it: its replay is then
+ * judged as any other, so it is compared only with replays made the same
+ * way. */
+static const char kLostLines[]="its record lost lines it could not keep";
+static bool rp_measure;
 
 static void rp_record_free(RpRecord *r) {
     free(r->address); free(r->said);
@@ -662,7 +668,7 @@ static const char *rp_record_read(const char *text, size_t size, RpRecord *r) {
         } else if(!strcmp(l.kind,"marked")) {
             /* The first reason it gives stands. */
             if(r->unjudged==NULL) {
-                if(rp_is(l.a,l.alen,"lines lost")) r->unjudged="its record lost lines it could not keep";
+                if(rp_is(l.a,l.alen,"lines lost")) r->unjudged=kLostLines;
                 else {
                     char *text=rp_unescape(l.a,l.alen,true);
                     size_t n=strlen(text)+32;
@@ -1675,7 +1681,11 @@ static int rp_replay_page(const char *kept, const char *out, const char *name, u
     free(path);
     if(got!=RP_FS_OK) { unjudged=got==RP_FS_FAULT ? fault.why : "it is gone"; goto judge; }
     if((unjudged=rp_record_read(text,size,&r))!=NULL) goto judge;
-    if((unjudged=r.unjudged)!=NULL) goto judge;
+    /* A record that lost lines is replayed anyway under --measure: what
+     * it lost is lines of its own record, not the inputs a replay reads
+     * (each of those is still required below). */
+    if((unjudged=r.unjudged)!=NULL && !(rp_measure && !strcmp(r.unjudged,kLostLines))) goto judge;
+    unjudged=NULL;
     if(rp_cut_short(&r)) { unjudged="its record has no `end`: it was cut short"; goto judge; }
     if(rp_is_kept(base,&r,&is_kept,&from.assumed,&fault)==RP_FS_FAULT) { unjudged=fault.why; goto judge; }
     if(!is_kept) { unjudged="it is not a kept page (its record does not say `kept:`)"; goto judge; }
@@ -3537,12 +3547,19 @@ int main(int argc, char **argv) {
             }
             else if(!strcmp(argv[i],"--only") && i+1<argc) only=argv[++i];
             else if(!strcmp(argv[i],"--crash-page") && i+1<argc) rp_crash_page=argv[++i];
+            /* yonder's own measuring switches, as its command line sets them:
+             * the record gains the layout lines, and every Nth cascade
+             * update is checked against a fresh cascade. */
+            else if(!strcmp(argv[i],"--layout-profile")) s_layout_profile=true;
+            else if(!strcmp(argv[i],"--measure")) rp_measure=true;
+            else if(!strcmp(argv[i],"--cascade-check") && i+1<argc) s_cascade_check=(uint32_t)atoi(argv[++i]);
             else { fprintf(stderr,"replay: what is %s?\n",argv[i]); return 2; }
         }
         RpTally t={0};
         rc=rp_replay_dir(argv[1],argv[2],(uint64_t)seconds*1000,only,&t);
     } else {
         fprintf(stderr,"usage: %s KEPT-DIR OUT-DIR [--seconds N] [--only TEXT] [--window KEY=VALUE,...] [--crash-page NAME]\n"
+                       "           [--layout-profile] [--cascade-check N] [--measure]\n"
                        "       %s --self-test WORK-DIR\n",argv[0],argv[0]);
         return 2;
     }

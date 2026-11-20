@@ -28,7 +28,10 @@ args.logs.mkdir(parents=True, exist_ok=True)
 
 PARSE = 'userland/libgarb/parse.c'
 CASCADE = 'userland/libgarb/cascade.c'
+SELECT = 'userland/libgarb/select.c'
 GARB = 'tools/test_garb_host.sh'
+# The cascade's updates by hand, then against a fresh cascade on the walk.
+UPDATES = 'tools/test_garb_host.sh --updates && tools/test_garb_host.sh --oracle'
 PROPS = 'userland/libgarb/props.c'
 STYLE = 'userland/libflow/style.c'
 COMPUTED = 'userland/libflow/computed.c'
@@ -266,6 +269,36 @@ mutants = [
     ('the-canvas-owner-is-not-marked', FLOWC,
      '        if (e->nboxes > 0 && !e->boxes[0]->unpainted && may_own_canvas(t, e->boxes[0]->node))',
      '        if (false && e->nboxes > 0 && !e->boxes[0]->unpainted && may_own_canvas(t, e->boxes[0]->node))', FLOW),
+    # An anchored :has() under change tracking (select.h § AN ANCHORED
+    # :has(); the oracle, test_garb_oracle.inc): where an anchor turned its
+    # reach is marked; its bits are stored at every restyle and travel with
+    # its record; its filters are the enclosing compounds' that must match
+    # the same element, and type, id, class and attribute alone.
+    ('a-turned-anchor-marks-no-subtree', CASCADE,
+     '        if (c->anchors[i].down && !mark_subtree(c, a)) return false;\n',
+     '', UPDATES),
+    ('a-turned-anchor-marks-no-siblings', CASCADE,
+     '        if (c->anchors[i].siblings && !mark_siblings(c, a->next)) return false;\n',
+     '', UPDATES),
+    ('a-restyle-stores-no-bits', CASCADE,
+     '    anchor_bits(c, x, has_row(c, s));\n    if (!old.element_only) return true;',
+     '    if (!old.element_only) return true;', UPDATES),
+    ('growth-drops-the-bits', CASCADE,
+     'for (uint32_t k = 0; k < w; k++) words[(size_t)at * w + k] = c->has_words[(size_t)i * w + k];',
+     '', UPDATES),
+    ('a-backshift-leaves-the-bits', CASCADE,
+     '                c->has_words[(size_t)hole * c->has_width + k] = c->has_words[(size_t)at * c->has_width + k];',
+     '                ;', UPDATES),
+    ('the-second-word-folds-into-the-first', CASCADE,
+     'out[i / 64] |= (uint64_t)1 << (i % 64);',
+     'out[0] |= (uint64_t)1 << (i % 64);', UPDATES),
+    ('filters-pass-into-a-non-subject', SELECT,
+     'int32_t nmine = j == x->n - 1 ? nouter : 0;',
+     'int32_t nmine = nouter;', UPDATES),
+    ('a-pseudo-class-filters', SELECT,
+     '    return s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS || s->kind == S_ATTR;',
+     '    return s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS || s->kind == S_ATTR || s->kind == S_PSEUDO;',
+     UPDATES),
 ]
 
 caught, missed, unbuilt = [], [], []

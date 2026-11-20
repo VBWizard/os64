@@ -413,6 +413,15 @@ char *garb_media_text_serialized(const char *text, size_t *length, garb_grow_t g
 // ...`), for the harness and a probe. Like snprintf.
 size_t garb_cascade_dump(const garb_cascade_t *c, const os64_html_document_t *doc, char *out,
                          size_t cap);
+// Whether two cascades of `doc` give every element, and its ::before and
+// ::after, the same winners: a diagnostic, for checking an updated cascade
+// against one built fresh. Where they differ, `why` says where first (like
+// snprintf): the element's path, the property, the value in `c` against
+// the value in `other`, and up to three rules of `other` that match there
+// and set it, as written. Those are read from the sheets `other` was built
+// from, which must still be alive.
+bool garb_cascade_compare(const garb_cascade_t *c, const garb_cascade_t *other, const os64_html_document_t *doc,
+                          char *why, size_t cap);
 
 #pragma GCC visibility pop
 

@@ -236,8 +236,9 @@ static void oracle_change(OracleRng *r, os64_html_document_t *doc, os64_html_nod
     }
     }
 }
-// Every element's winners and pseudo-elements' against a fresh cascade's:
-// false, with the first difference printed, when they differ.
+// Every element's winners and pseudo-elements' against a fresh cascade's
+// (garb_cascade_compare, the check yonder's --cascade-check makes): false,
+// with the first difference printed, when they differ.
 static bool oracle_compare(garb_cascade_t *c, garb_sheet_in_t *in, os64_html_document_t *doc,
                            uint64_t seed, int step, const char *batch, const char *sheet)
 {
@@ -247,35 +248,11 @@ static bool oracle_compare(garb_cascade_t *c, garb_sheet_in_t *in, os64_html_doc
         garb_cascade_free(fresh);
         return false;
     }
-    bool same = true;
-    os64_html_node_t *els[1024];
-    int n = oracle_elements(doc->document, els, 1024);
-    for (int i = 0; i < n && same; i++)
-        for (int t = 0; t < 3 && same; t++) {
-            garb_pseudo_t p = t == 0 ? GARB_PSEUDO_NONE : t == 1 ? GARB_PSEUDO_BEFORE : GARB_PSEUDO_AFTER;
-            garb_style_t a = t ? garb_style_for_pseudo(c, els[i], p) : garb_style_for(c, els[i]);
-            garb_style_t b = t ? garb_style_for_pseudo(fresh, els[i], p) : garb_style_for(fresh, els[i]);
-            for (int32_t k = 0; same && k < (a.n > b.n ? a.n : b.n); k++) {
-                char va[256] = "(none)", vb[256] = "(none)";
-                const char *name = k < a.n ? garb_prop_name(a.sets[k].prop) : garb_prop_name(b.sets[k].prop);
-                if (k < a.n) garb_val_dump(&a.sets[k].value, va, sizeof(va));
-                if (k < b.n) garb_val_dump(&b.sets[k].value, vb, sizeof(vb));
-                if (k < a.n && k < b.n && a.sets[k].prop != b.sets[k].prop) {
-                    snprintf(va, sizeof(va), "%s", garb_prop_name(a.sets[k].prop));
-                    snprintf(vb, sizeof(vb), "%s", garb_prop_name(b.sets[k].prop));
-                    name = "(property order)";
-                }
-                if (strcmp(va, vb) != 0 || (k < a.n) != (k < b.n)) {
-                    char path[256];
-                    oracle_path(els[i], path, sizeof(path));
-                    fprintf(stderr, "FAIL oracle seed %llu step %d: %s%s %s: updated %s, fresh %s\n"
-                                    "  batch: %s\n  sheet: %s\n",
-                            (unsigned long long)seed, step, path, t == 1 ? "::before" : t == 2 ? "::after" : "",
-                            name, va, vb, batch, sheet);
-                    same = false;
-                }
-            }
-        }
+    char why[2048];
+    bool same = garb_cascade_compare(c, fresh, doc, why, sizeof(why));
+    if (!same)
+        fprintf(stderr, "FAIL oracle seed %llu step %d: %s (updated against fresh)\n  batch: %s\n  sheet: %s\n",
+                (unsigned long long)seed, step, why, batch, sheet);
     garb_cascade_free(fresh);
     return same;
 }
@@ -333,9 +310,34 @@ static bool oracle_walk(uint64_t seed, int steps, unsigned *taken, unsigned *ref
     return ok;
 }
 
+// The compare itself says where two cascades differ, and nothing where
+// they do not.
+static bool oracle_compare_says(void)
+{
+    os64_html_document_t *doc = update_doc("<!doctype html><div class=a><p id=q class=b>t</p></div>");
+    const char *one = ".a .b{color:red}", *two = ".a .b{color:blue}";
+    garb_parsed_t s1, s2;
+    garb_parse_sheet_text(one, strlen(one), &s1);
+    garb_parse_sheet_text(two, strlen(two), &s2);
+    garb_sheet_in_t i1 = {.sheet = &s1}, i2 = {.sheet = &s2};
+    garb_env_t env = {.width = 800, .height = 600};
+    garb_cascade_t *a = garb_cascade(&i1, 1, doc, env), *a2 = garb_cascade(&i1, 1, doc, env),
+                   *b = garb_cascade(&i2, 1, doc, env);
+    char why[512];
+    bool ok = garb_cascade_compare(a, a2, doc, why, sizeof(why)) && why[0] == '\0' &&
+              !garb_cascade_compare(a, b, doc, why, sizeof(why)) &&
+              strstr(why, "p[0]#q color: ") != NULL && strstr(why, "rules setting it there: ") != NULL;
+    if (!ok) fprintf(stderr, "FAIL oracle: the compare says '%s'\n", why);
+    garb_cascade_free(a); garb_cascade_free(a2); garb_cascade_free(b);
+    garb_free(&s1); garb_free(&s2);
+    os64_html_document_free(doc);
+    return ok;
+}
+
 static int cascade_oracle(int argc, char **argv)
 {
     size_t baseline = live;
+    if (!oracle_compare_says()) return 1;
     uint64_t first = argc > 2 ? strtoull(argv[2], NULL, 10) : 1;
     int seeds = argc > 2 ? 1 : 8;
     int steps = argc > 3 ? atoi(argv[3]) : 400;

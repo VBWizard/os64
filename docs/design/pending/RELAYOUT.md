@@ -365,17 +365,20 @@ other, so their pages keep style and geometry reuse across a mutation.
   marks its descendants for their inherited values.
 - **An anchored `:has()`**, left of a combinator (`.group:has(.x) .y`,
   `body:has(...) .panel`), changes its descendants' or following siblings'
-  winners rather than its own. Each such compound (`garb_anchor_t`, at
-  most `GARB_ANCHORS_MAX`) is a bit in every element's record: what it
+  winners rather than its own. Each such compound (`garb_anchor_t`, as
+  many as the rules hold) is a bit in every element's record: what it
   answered there when last asked. An update asks again on the same
   elements and marks the subtree, or the following siblings', where the
-  answer turned.
-- A cascade with more anchors than that, an anchor with no type, id,
-  class or attribute to test before its `:has()` (a subtree walk on every
+  answer turned. An anchor is tested filters first: its own compound's
+  type, id, class and attributes, and those of a compound enclosing it
+  through `:not()`, `:is()` or `:where()` that must match the same
+  element (`.c:not(:has(.x)) > p`).
+- An anchor with no such filter at all (a subtree walk on every
   element), or a `:has()` inside `:nth-child(… of S)` (whose turn moves
-  which sibling the count picks) is built without a change reader, as
-  every `:has()` cascade was before; `garb_cascade_update_refusal` names it, and so does the
-  profile's `layout cascade` line. A turn that marks more than half the
+  which sibling the count picks), keeps the cascade from a change reader,
+  as every `:has()` cascade was before; `garb_cascade_update_refusal` names it, and so does the
+  profile's `layout cascade` line, which also says how many anchors the
+  cascade held and how many were bare. A turn that marks more than half the
   elements asks for a fresh cascade (`broad`), which is right when it
   really restyles most of the page.
 

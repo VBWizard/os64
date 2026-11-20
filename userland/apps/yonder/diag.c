@@ -1370,6 +1370,7 @@ static uint64_t layout_sum(uint64_t a, uint64_t b)
 {
     return b > UINT64_MAX - a ? UINT64_MAX : a + b;
 }
+static void ms_text(uint64_t us, char *out, size_t cap);
 static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
                        yonder_layout_stats_t *total, const char *key)
 {
@@ -1380,6 +1381,9 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     ADD(styles_reused); ADD(cascade_updates);
     ADD(intrinsic_hits); ADD(marker_measures);
     if (sample->metadata_peak > total->metadata_peak) total->metadata_peak = sample->metadata_peak;
+    if (sample->anchors_peak > total->anchors_peak) total->anchors_peak = sample->anchors_peak;
+    if (sample->anchors_bare_peak > total->anchors_bare_peak) total->anchors_bare_peak = sample->anchors_bare_peak;
+    ADD(bare_fresh_us);
     for (size_t i = 0; i < YONDER_LAYOUT_REUSE_REASONS; ++i)
         total->reuse_refused[i] = layout_sum(total->reuse_refused[i], sample->reuse_refused[i]);
     bool cascade_sampled = sample->cascade_reason_names != NULL;
@@ -1412,7 +1416,8 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
                            (unsigned long)s->reuse_refused[r]);
     yonder_diag_fact(d, graft_key, line);
     // `<key> cascade`: how many cascades were updated and how many built
-    // fresh, by reason, the reasons that never happened left out.
+    // fresh, by reason, the reasons that never happened left out; then the
+    // anchored :has() compounds its cascades held and what bare ones cost.
     if (!cascade_sampled) return;
     char cascade_key[64];
     os64_snprintf(cascade_key, sizeof(cascade_key), "%s cascade", key);
@@ -1431,6 +1436,11 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         at += (size_t)n;
         first = 0;
     }
+    char part[160], cost[32];
+    ms_text(s->bare_fresh_us, cost, sizeof(cost));
+    n = os64_snprintf(part, sizeof(part), "; anchors held %lu, bare %lu; built fresh for a bare anchor %s ms",
+                      (unsigned long)s->anchors_peak, (unsigned long)s->anchors_bare_peak, cost);
+    if (n > 0 && (size_t)n < sizeof(part) && at + (size_t)n < sizeof(line)) os64_memcpy(line + at, part, (size_t)n + 1);
     yonder_diag_fact(d, cascade_key, line);
 }
 

@@ -426,9 +426,13 @@ named on the terminal it was started from, and the shipped faces are used.
 
 ## For measuring
 
-Three switches before the address are for measuring yonder and are of no
-use for browsing: `--script-audit`, `--layout-profile` and
-`--exit-when-loaded`.
+Four switches before the address are for measuring yonder and are of no
+use for browsing: `--script-audit`, `--layout-profile`,
+`--exit-when-loaded`, and `--cascade-check` (or `--cascade-check=N`), which
+checks every Nth update of a page's styles (every 10th unless N is given)
+against the styles worked out afresh, and prints any difference, with the
+element, the property and the rule, on the terminal yonder was started
+from; each check costs a whole restyle of the page.
 
 ## What it does not do yet
 

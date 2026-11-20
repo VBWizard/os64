@@ -101,6 +101,11 @@ typedef struct {
     uint64_t model_calls, layouts, refusals, clock_errors;
     uint64_t intrinsic_hits, marker_measures;
     uint64_t metadata_peak; // Maximum new snapshot/match/staging bytes, not a sum.
+    // The most anchored :has() compounds a layout's cascade held, and the
+    // most of them bare (maxima, not sums); and the cascade time of the
+    // layouts whose cascade was built fresh for a bare anchor, which is
+    // what a bare anchor costs while it keeps the cascade from tracking.
+    uint64_t anchors_peak, anchors_bare_peak, bare_fresh_us;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
     const char *const *cascade_reason_names;

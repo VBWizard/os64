@@ -27,6 +27,7 @@
 #include "values_internal.h"
 #include "garb/cascade.h"
 #include "garb/select.h"
+#include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/str.h"
 
@@ -52,6 +53,10 @@ typedef struct {
 
 typedef struct {
     garb_selectors_t *sel;
+    // Its selector as written: the sheet's, read only while the sheets
+    // the cascade was built from are alive (garb_cascade_compare).
+    const garb_value_t *prelude;
+    int32_t nprelude;
     Decl *decls;
     int32_t ndecls;
     uint32_t order;
@@ -1049,6 +1054,8 @@ static void add_style_rule(garb_cascade_t *c, garb_parsed_t *owner, const garb_r
     Rule *rule = &c->rules[c->nrules];
     os64_memset(rule, 0, sizeof(*rule));
     rule->sel = sel;
+    rule->prelude = r->prelude;
+    rule->nprelude = r->nprelude;
     rule->order = (*order)++;
     rule->sheet = sheet;
     rule->decls = alloc(c, (size_t)(nitems > 0 ? nitems : 1) * sizeof(Decl));
@@ -3750,6 +3757,95 @@ static void dump_winners(Out *o, const os64_html_node_t *x, const char *pseudo, 
         puts_(o, v);
     }
     puts_(o, "\n");
+}
+
+// `x` as a path of names from its tree's top, each with its place among
+// its element siblings, and its id.
+static void compare_path(Out *o, const os64_html_node_t *x)
+{
+    const os64_html_node_t *chain[48];
+    int32_t n = 0;
+    for (const os64_html_node_t *up = x; up != NULL && is_el(up) && n < 48; up = up->parent) chain[n++] = up;
+    while (n-- > 0) {
+        int32_t place = 0;
+        for (const os64_html_node_t *s = chain[n]->prev; s != NULL; s = s->prev) place += is_el(s);
+        char at[16];
+        os64_snprintf(at, sizeof(at), "[%d]", place);
+        puts_(o, chain[n]->name != NULL ? chain[n]->name : "?");
+        puts_(o, at);
+        if (n > 0) puts_(o, ">");
+    }
+    const os64_html_attr_t *id = os64_html_attr(x, "id");
+    if (id != NULL && id->value != NULL) {
+        puts_(o, "#");
+        puts_(o, id->value);
+    }
+}
+// The first property at which two records differ (-1: none), and its
+// index in each (-1 where absent).
+static int32_t compare_styles(garb_style_t a, garb_style_t b, int32_t *ia, int32_t *ib)
+{
+    char va[512], vb[512];
+    for (int32_t k = 0; k < a.n || k < b.n; k++) {
+        bool both = k < a.n && k < b.n;
+        if (both && a.sets[k].prop == b.sets[k].prop) {
+            garb_val_dump(&a.sets[k].value, va, sizeof(va));
+            garb_val_dump(&b.sets[k].value, vb, sizeof(vb));
+            if (os64_streq(va, vb)) continue;
+        }
+        garb_prop_t prop = k < a.n ? a.sets[k].prop : b.sets[k].prop;
+        *ia = *ib = -1;
+        for (int32_t i = 0; i < a.n; i++) if (a.sets[i].prop == prop) *ia = i;
+        for (int32_t i = 0; i < b.n; i++) if (b.sets[i].prop == prop) *ib = i;
+        return (int32_t)prop;
+    }
+    return -1;
+}
+bool garb_cascade_compare(const garb_cascade_t *c, const garb_cascade_t *other, const os64_html_document_t *doc,
+                          char *why, size_t cap)
+{
+    Out o = {why, cap, 0};
+    if (cap > 0) why[0] = '\0';
+    for (const os64_html_node_t *x = doc->document; x != NULL; x = si_next(x, doc->document, true)) {
+        if (!is_el(x)) continue;
+        for (int32_t t = 0; t < 3; t++) {
+            garb_pseudo_t pseudo = t == 0 ? GARB_PSEUDO_NONE : t == 1 ? GARB_PSEUDO_BEFORE : GARB_PSEUDO_AFTER;
+            garb_style_t a = t ? garb_style_for_pseudo(c, x, pseudo) : garb_style_for(c, x);
+            garb_style_t b = t ? garb_style_for_pseudo(other, x, pseudo) : garb_style_for(other, x);
+            int32_t ia, ib, prop = compare_styles(a, b, &ia, &ib);
+            if (prop < 0) continue;
+            char va[256] = "(none)", vb[256] = "(none)";
+            if (ia >= 0) garb_val_dump(&a.sets[ia].value, va, sizeof(va));
+            if (ib >= 0) garb_val_dump(&b.sets[ib].value, vb, sizeof(vb));
+            compare_path(&o, x);
+            puts_(&o, t == 1 ? "::before " : t == 2 ? "::after " : " ");
+            puts_(&o, garb_prop_name((garb_prop_t)prop));
+            puts_(&o, ": ");
+            puts_(&o, va);
+            puts_(&o, " against ");
+            puts_(&o, vb);
+            // The rules that match there and set it, as the other cascade
+            // reads them (a value read through var() is not seen here).
+            int32_t named = 0;
+            for (int32_t r = 0; r < other->nrules && named < 3; r++) {
+                const Rule *rule = &other->rules[r];
+                bool sets = false;
+                for (int32_t d = 0; d < rule->ndecls && !sets; d++)
+                    for (int32_t k = 0; k < rule->decls[d].nsets && !sets; k++)
+                        sets = rule->decls[d].sets[k].prop == (garb_prop_t)prop;
+                bool matches = false;
+                for (int32_t s = 0; sets && !matches && s < garb_selectors_count(rule->sel); s++)
+                    matches = garb_selector_pseudo(rule->sel, s) == pseudo && garb_selector_matches(rule->sel, s, x);
+                if (!matches) continue;
+                char text[512];
+                garb_dump_values(rule->prelude, rule->nprelude, text, sizeof(text));
+                puts_(&o, named++ ? " | " : "; rules setting it there: ");
+                puts_(&o, text);
+            }
+            return false;
+        }
+    }
+    return true;
 }
 
 size_t garb_cascade_dump(const garb_cascade_t *c, const os64_html_document_t *doc, char *out,
