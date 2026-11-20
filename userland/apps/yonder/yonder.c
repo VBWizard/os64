@@ -52,6 +52,7 @@
 #include "media.h"
 #include "paint.h"
 #include "player.h"
+#include "strip.h"
 #include "keep.h"
 #include "picture.h"
 #include "svg.h"
@@ -2089,6 +2090,23 @@ typedef struct {
         double value;
     } asks[PLAYER_ASKS];
     int32_t nasks;
+    // A video's strip over its picture (strip.h): whether it is drawn and
+    // its buffering mark, settled by strips_turn. `played` is the element
+    // seen playing once since its `src` (`src_hash`) last changed, so an
+    // autoplay that has not begun is not pinned. `had_focus` is the strip's
+    // focus at the last settle, so a focus arriving is seen. `kept_focus`:
+    // the strip hid while it held the focus, which libui lets go from a
+    // hidden widget; a key comes to it while nothing else is focused
+    // (strip_key), and brings it back.
+    // `placed_drawn` is the strip's drawn state players_place last applied,
+    // which a move made outside strips_turn (player_act) can leave behind.
+    bool video;
+    bool played;
+    bool had_focus;
+    bool kept_focus;
+    bool placed_drawn;
+    uint64_t src_hash;
+    yonder_strip_t strip;
 } Player;
 
 // A person's input waiting to be dispatched as a DOM event (inputs_run).
@@ -9254,6 +9272,7 @@ static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
 static uint64_t resizes_next(void);
 static uint64_t resizes_due(void);
 static uint64_t videos_next(void);
+static uint64_t strips_next(void);
 
 // The earliest frame work the shown page has: a layout or a tick for its
 // CSS animations, the Web Animations step and requestAnimationFrame's
@@ -9415,6 +9434,9 @@ static void pictures_schedule(void)
     deadline_offer(&d, exit_due(), PAST_TIMERS);
     // A held Back or Forward's list, which the loop opens (step_hold_turn).
     deadline_offer(&d, step_hold_due(), PAST_TIMERS);
+    // A video strip's hiding or its buffering mark's showing, which the
+    // loop settles (players_show).
+    deadline_offer(&d, strips_next(), PAST_TIMERS);
     // The shown page's next idle period, when only an idle callback that
     // asked for another waits for it (script_turn runs it).
     uint64_t idle = yonder_scripts_idle_next(g.page.scripts);
@@ -10746,6 +10768,10 @@ static void player_act(yonder_player_t *p, os64_dom_media_control_t what, double
 {
     (void)p;
     Player *pl = user;
+    // Whatever the strip was asked (a press on it, or a key it handled while
+    // focused, drawn or not) is a move for it.
+    if (pl->video)
+        yonder_strip_moved(&pl->strip, yonder_now_ms());
     if (pl->nasks > 0 && pl->asks[pl->nasks - 1].what == what) {
         pl->asks[pl->nasks - 1].value = value;
         return;
@@ -11118,7 +11144,45 @@ static void videos_tick(void)
     }
 }
 
-// Each player shows its element as it stands now.
+static void strips_turn(bool moved);
+static const os64_html_node_t *strip_kept_node(void);
+
+// Whether (x, y), window coordinates, is on a drawn player as it is seen
+// (its bounds within its clip).
+static bool player_holds(const Player *pl, int32_t x, int32_t y)
+{
+    const os64_ui_widget_t *w = &pl->p.w;
+    os64_gui_rect_t r = w->bounds;
+    if (w->hidden || (w->clipped && !os64_rect_intersect(r, w->clip, &r)))
+        return false;
+    return x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
+}
+
+// A click at (x, y), window coordinates, that reached a video: on its
+// picture, its play or pause, and a move for its strip, from which a
+// pause pins it and a play is timed. On a drawn strip it is the strip's
+// own press (with pointer events the strip is handed the press, and the
+// click still names the video), and nothing more is done. False when no
+// <video controls> with a player is under it.
+static bool player_click(const os64_html_node_t *node, int32_t x, int32_t y)
+{
+    for (int32_t i = 0; i < g.nplayers; i++)
+        if (g.players[i]->video && player_holds(g.players[i], x, y))
+            return true;
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        Player *pl = g.players[i];
+        if (pl->node != node || !pl->video)
+            continue;
+        yonder_player_toggle(&g.ui, &pl->p);
+        yonder_strip_moved(&pl->strip, yonder_now_ms());
+        strips_turn(false);
+        return true;
+    }
+    return false;
+}
+
+// Each player shows its element as it stands now, and each video's strip
+// is settled against it.
 static void players_show(void)
 {
     for (int32_t i = 0; i < g.nplayers; i++) {
@@ -11126,6 +11190,124 @@ static void players_show(void)
         if (yonder_scripts_media_view(g.page.scripts, g.players[i]->node, &view))
             (void)yonder_player_show(&g.ui, &g.players[i]->p, &view);
     }
+    strips_turn(false);
+}
+
+// Each video's strip settled (strip.h) from its element's view as the
+// player shows it, the pointer, the strip's focus and drag; `moved` when
+// the pointer moved, which is a move for the strip whose box it is over.
+// A strip shown or hidden is placed again (players_place); a mark shown or
+// gone marks the box, since the mark is painted with the picture.
+static void strips_turn(bool moved)
+{
+    uint64_t now = yonder_now_ms();
+    bool place = false;
+    int32_t px = g.pointer_x - g.view.bounds.x + g.sx, py = g.pointer_y - g.view.bounds.y + g.sy;
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        Player *pl = g.players[i];
+        if (!pl->video)
+            continue;
+        const os64_dom_media_view_t *v = &pl->p.view;
+        const os64_html_attr_t *src = os64_html_attr(pl->node, "src");
+        uint64_t hash = 1469598103934665603ull;          // FNV-1a of `src`
+        for (const char *c = src != NULL ? src->value : ""; *c != '\0'; c++)
+            hash = (hash ^ (uint8_t)*c) * 1099511628211ull;
+        if (hash != pl->src_hash) {
+            pl->src_hash = hash;
+            pl->played = false;
+        }
+        if (!v->paused)
+            pl->played = true;
+        yonder_strip_t *st = &pl->strip;
+        // Paused, ended, or never played; an autoplay is asked to play, so
+        // it is not pinned before it begins (VIDEO_V6_DESIGN.md § 2).
+        st->paused = (v->paused || v->ended) && (pl->played || os64_html_attr(pl->node, "autoplay") == NULL);
+        os64_gui_rect_t part;
+        st->over_box = box_on_view(pl->node, &part) && px >= part.x && py >= part.y && px < part.x + part.w &&
+                       py < part.y + part.h;
+        os64_ui_widget_t *w = &pl->p.w;
+        if (pl->kept_focus && g.ui.focus != NULL && g.ui.focus != w)
+            pl->kept_focus = false;     // the person focused something else
+        st->over_strip = player_holds(pl, g.pointer_x, g.pointer_y);
+        // A focus that arrived without a press is the keyboard's.
+        if (w->focused && !pl->had_focus && pl->p.keyed != !pl->p.by_press) {
+            pl->p.keyed = !pl->p.by_press;
+            os64_ui_mark_dirty(&g.ui, w);           // its focus ring
+        }
+        pl->had_focus = w->focused;
+        pl->p.by_press = false;
+        st->focused = w->focused && pl->p.keyed;
+        st->dragging = pl->p.drag != YONDER_PLAYER_DRAG_NONE;
+        // Waiting is buffering unless it waits for the sound device.
+        st->buffering = v->waiting && !v->busy;
+        bool marked = st->mark == YONDER_MARK_SHOWN;
+        if (moved && st->over_box)
+            yonder_strip_moved(st, now);
+        (void)yonder_strip_settle(st, now);
+        // Against what was last placed, not the state before this settle:
+        // a key's move (player_act) shows a strip between two turns.
+        bool drawn = yonder_strip_drawn(st);
+        place |= drawn != pl->placed_drawn;
+        if (pl->placed_drawn && !drawn && w->focused)
+            pl->kept_focus = true;
+        if (marked != (st->mark == YONDER_MARK_SHOWN) && box_on_view(pl->node, &part))
+            mark_part(part);
+    }
+    if (place)
+        players_place();
+}
+
+// The element of the video whose strip keeps the keys (kept_focus), or NULL:
+// a key while nothing is focused is that element's, for the page too.
+static const os64_html_node_t *strip_kept_node(void)
+{
+    if (g.ui.focus != NULL)
+        return NULL;
+    for (int32_t i = 0; i < g.nplayers; i++)
+        if (g.players[i]->kept_focus)
+            return g.players[i]->node;
+    return NULL;
+}
+
+// A key while nothing is focused, for a video whose strip hid while it held
+// the focus: the strip's, as if still focused. One it handles is a move
+// (player_act), so the strip shows again and takes its focus back. False
+// for a key nobody kept.
+static bool strip_key(const os64_gui_event_t *ev)
+{
+    if ((ev->type != OS64_GUI_EVENT_KEY_DOWN && ev->type != OS64_GUI_EVENT_KEY_UP) || g.ui.focus != NULL)
+        return false;
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        Player *pl = g.players[i];
+        if (!pl->kept_focus)
+            continue;
+        if (ev->type == OS64_GUI_EVENT_KEY_UP)
+            return true;
+        os64_ui_widget_t *w = &pl->p.w;
+        bool handled = w->cls->event != NULL && w->cls->event(w, &g.ui, ev);
+        strips_turn(false);
+        if (!w->hidden) {
+            pl->had_focus = true;       // given back, not arrived: not the keyboard's
+            pl->kept_focus = false;
+            os64_ui_set_focus(&g.ui, w);
+        }
+        return handled;
+    }
+    return false;
+}
+
+// The earliest time a strip's rules change with no new input: a shown
+// strip's hiding, a mark's showing. YONDER_NEVER for none, so a page whose
+// strips are hidden arms nothing.
+static uint64_t strips_next(void)
+{
+    uint64_t next = YONDER_NEVER;
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        uint64_t due = g.players[i]->video ? yonder_strip_next(&g.players[i]->strip) : UINT64_MAX;
+        if (due != UINT64_MAX && due < next)
+            next = due;
+    }
+    return next;
 }
 
 // Each player at its element's box, as forms_place puts a control at its:
@@ -11136,7 +11318,8 @@ static void players_show(void)
 // A video's player is the strip along the bottom of its box, a player's
 // height at the zoom it was laid out at, or the whole box when shorter;
 // what covers it is asked at the strip's centre, not the box's, since a
-// page's own badge in the middle of the video leaves the strip clear.
+// page's own badge in the middle of the video leaves the strip clear. A
+// strip its rules hide (strips_turn) is hidden here, and takes no clicks.
 static void players_place(void)
 {
     const os64_gui_rect_t v = g.view.bounds;
@@ -11154,11 +11337,13 @@ static void players_place(void)
         int64_t x = (int64_t)v.x + at.x - g.sx, y = (int64_t)v.y + at.y - g.sy;
         const os64_ui_class_t *cls = b != NULL && b->unpainted ? unpainted_class(&yonder_player_class)
                                                                : &yonder_player_class;
-        bool shown = b != NULL && b->replaced && b->style->visibility == FLOW_VISIBLE && cls != NULL &&
-                     at.w > 0 && at.h > 0 && x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h &&
-                     x + at.w > v.x && y + at.h > v.y &&
-                     !flow_box_covered_at(g.page.tree, b, (int32_t)((int64_t)at.x + at.w / 2),
-                                          (int32_t)((int64_t)at.y + at.h / 2), scroll_now());
+        bool placed = b != NULL && b->replaced && b->style->visibility == FLOW_VISIBLE && cls != NULL &&
+                      at.w > 0 && at.h > 0 && x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h &&
+                      x + at.w > v.x && y + at.h > v.y &&
+                      !flow_box_covered_at(g.page.tree, b, (int32_t)((int64_t)at.x + at.w / 2),
+                                           (int32_t)((int64_t)at.y + at.h / 2), scroll_now());
+        bool shown = placed && (!g.players[i]->video || yonder_strip_drawn(&g.players[i]->strip));
+        g.players[i]->placed_drawn = yonder_strip_drawn(&g.players[i]->strip);
         if (cls != NULL && cls != w->cls) {
             w->cls = cls;
             os64_ui_mark_dirty(&g.ui, w);
@@ -11170,10 +11355,21 @@ static void players_place(void)
         if (moved && !w->hidden)
             os64_ui_mark_dirty(&g.ui, w);
         w->bounds = r;
-        if (shown == w->hidden)
-            os64_ui_set_hidden(&g.ui, w, !shown);
-        else if (moved && shown)
+        // Hidden by the strip's own rules alone: only its rectangle repaints
+        // (libui's set_hidden would repaint the whole window). Its focus
+        // goes at libui's next event either way; strips_turn keeps it for
+        // the strip (kept_focus).
+        bool ruled = g.players[i]->video && !yonder_strip_drawn(&g.players[i]->strip);
+        if (shown == w->hidden && (shown || ruled) && placed) {
+            w->hidden = !shown;
             os64_ui_mark_dirty(&g.ui, w);
+            if (!shown && g.ui.hover == w)
+                os64_ui_clear_hover(&g.ui);
+        } else if (shown == w->hidden) {
+            os64_ui_set_hidden(&g.ui, w, !shown);
+        } else if (moved && shown) {
+            os64_ui_mark_dirty(&g.ui, w);
+        }
     }
 }
 
@@ -11214,6 +11410,9 @@ static void players_build(void)
                 break;
             }
             yonder_player(&pl->p, player_act, player_pass, pl);
+            pl->video = video;
+            pl->p.over_picture = video;
+            yonder_strip_init(&pl->strip);
             pl->node = x;
             pl->document = doc;
             os64_html_hold(doc, x);
@@ -14883,6 +15082,10 @@ static void inputs_run(void)
             os64_dom_event_t ev = mouse_event("click", true, &in);
             if (page_event(&ev, in.node))
                 break;
+            // A click on a <video controls>' picture plays or pauses it,
+            // unless a listener prevented it.
+            if (player_click(in.node, in.x, in.y))
+                break;
             // The listeners may have rebuilt the page: the image is found
             // again, and is gone if they took it away.
             control = os64_page_control_for(page_model(&g.page), in.node);
@@ -15028,6 +15231,8 @@ static bool key_event(const os64_gui_event_t *ev)
     const os64_html_node_t *target = page_widget_node(g.ui.focus);
     if (target == NULL && g.ui.focus != NULL && g.ui.focus != &g.view)
         return false;
+    if (target == NULL)
+        target = strip_kept_node();     // a hidden strip's keys are its video's
     if (target == NULL)
         target = page_doc(&g.page)->body != NULL ? page_doc(&g.page)->body : page_doc(&g.page)->document;
     char name[8];
@@ -16789,9 +16994,39 @@ static void pane_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_g
         glass_image(gp->now[k], b, c, clip);
 }
 
+// A <video controls>' buffering mark shown (strip.h), painted in the middle
+// of its box after the picture or the poster: a dark square with three
+// light dots, at the zoom the page was laid out at.
+static void video_mark(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    bool marked = false;
+    for (int32_t i = 0; i < g.nplayers && !marked; i++)
+        marked = g.players[i]->node == b->node && g.players[i]->video &&
+                 g.players[i]->strip.mark == YONDER_MARK_SHOWN;
+    if (!marked)
+        return;
+    int32_t side = (int32_t)zoomed_px(56, g.page.laid_zoom), dot = (int32_t)zoomed_px(8, g.page.laid_zoom);
+    if (side > c.w || side > c.h || dot <= 0)
+        return;
+    for (int32_t k = 0; k < gp->n; ++k) {
+        Glass *gl = gp->now[k];
+        os64_gui_rect_t cut = on_glass(gl, clip), part;
+        os64_gui_rect_t square = {c.x + gl->dx + (c.w - side) / 2, c.y + gl->dy + (c.h - side) / 2, side, side};
+        if (os64_rect_intersect(cut, square, &part))
+            os64_draw_fill_rect_alpha(gl->surf, part, 0x000000u, 160);
+        for (int32_t d = 0; d < 3; d++) {
+            os64_gui_rect_t spot = {square.x + side / 2 - dot / 2 + (d - 1) * dot * 2, square.y + (side - dot) / 2,
+                                    dot, dot};
+            if (os64_rect_intersect(cut, spot, &part))
+                os64_draw_fill_rect(gl->surf, part, 0xfff2f2f2u);
+        }
+    }
+}
+
 // The paint of a video's box (the painter's retained-pixels verb): the
 // latest picture, fitted by object-fit and object-position, the rest of the
-// box the element's own background, and nothing before the first picture.
+// box the element's own background; the poster in its place while the show
+// poster flag is set, and until the first picture (nothing before either).
 // THE PLAIN PATH copies the picture's rows into the window: taken when the
 // pane paints straight to the window (no group's sheets: no opacity,
 // transform, filter, mask or blend above the box) and the picture was
@@ -16871,6 +17106,7 @@ static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
     GlassPane *gp = ctx;
     if (is_video_node(b->node)) {
         pane_video(gp, b, c, clip);
+        video_mark(gp, b, c, clip);
         return;
     }
     canvas_bitmap_t bitmap;
@@ -18990,11 +19226,17 @@ static const os64_ui_class_t kViewClass = {
     .paints_part = true,   // view_paint paints what g.ui.dirty covers of it
 };
 
+// The pointer itself moved, not the page under it (a scroll's re-hit): a
+// move for a video's strip. Set by the event, taken by hover.
+static bool s_pointer_moved;
+
 // Which link, if any, is under the pointer, said on the status line.
 static void hover(int32_t x, int32_t y)
 {
     g.pointer_x = x;
     g.pointer_y = y;
+    strips_turn(s_pointer_moved);
+    s_pointer_moved = false;
     // The element under the pointer, for mouseover and mouseout: hover
     // tracks the node now, not only the link (DOM_D7.md § Input events).
     if (scripts_live() && !g.modern) {
@@ -19893,8 +20135,10 @@ static void window_event(void *user, const os64_gui_event_t *event)
         pointer_cancel_run();
     }
     if (ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED) pointer_geometry_changed();
-    if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
+    if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE) {
+        s_pointer_moved = true;
         hover(ev.mouse.x, ev.mouse.y);
+    }
     else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
         hover(ev.pointer.inside ? ev.pointer.x : -1, ev.pointer.inside ? ev.pointer.y : -1);
     else if (ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
@@ -19909,7 +20153,7 @@ static void window_event(void *user, const os64_gui_event_t *event)
                              cookies_use);
     else if (!((s_pointer_draining || yonder_scripts_pointer_active(g.page.scripts)) && pointer_route(&ev)) &&
              !bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
-             !password_key(&ev) && !pointer_route(&ev))
+             !password_key(&ev) && !pointer_route(&ev) && !strip_key(&ev))
         ui_dispatch(&ev);
     pointer_cancel_run();
     if (s_pointer_menu) {
