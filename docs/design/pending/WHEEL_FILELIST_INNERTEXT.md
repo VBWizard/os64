@@ -178,7 +178,9 @@ are rendered and read; those no slot takes are in no flat tree, layout
 gives them no style, and the provider calls them not rendered.
 
 **Left to slice D:** `text-transform` (D takes the text as layout shaped
-it, with the Unicode case mapping layout already does); the
+it, with the Unicode case mapping layout already does); spaces beside an
+atomic inline or a replaced element, which layout keeps and the first
+cut's collapsing does not; SVG `<text>`, which WPT reads; the
 `select`/`option`/`optgroup` exception; replaced elements and form controls,
 whose children layout does not render (B skips the children of `img`,
 `video`, `audio`, `canvas`, `iframe`, `object`, `embed`, `input`,
@@ -307,10 +309,20 @@ These do not depend on rendering, so B builds them fully.
   checked in QEMU, because the host suite's fake provider has no UA sheet.
   And `innerText` read ON a `<script>` gives its source, because the
   element is not rendered, so its `textContent` is the answer.
-- **WPT.** `html/dom/elements/the-innertext-and-outertext-properties/` is
-  excluded today ("not P1-W's oracle"). B runs it. `getter.html` counts the first cut's passes, and D is judged by how many
-  more it passes. `innertext-setter.html`, `outertext-setter.html` and the
-  `innertext-with-white-spaces` variants are expected to pass in B.
+- **WPT.** `html/dom/elements/the-innertext-and-outertext-properties/` was
+  excluded ("not P1-W's oracle"); B runs it, 1,363 passes in all.
+  `getter.html` passes 241 of its 274, and its 33 failures are D's list
+  almost to the line: `text-transform` (and `::first-line`,
+  `::first-letter`), the spaces beside an atomic inline or a replaced
+  element (which layout does not collapse across), SVG `<text>`, closed
+  `<details>`, a `<select>`'s own text, anonymous table boxes (cells with no
+  row, inline tables), and `visibility: collapse`. The setters pass all but
+  "Null characters preserved": libdom turns a NUL into U+FFFD at the
+  boundary of every string a script hands it, `textContent` included. The
+  `innertext-with-white-spaces` variants pass all 948; `dynamic-getter`
+  fails only its two `text-transform` cases; `innertext-whitespace-pre-line`
+  fails on a window named-access global (`'a' is not defined`) before it
+  reaches innerText.
 - **QEMU:** a page with a hidden span, a `<br>`, two paragraphs, a table, a
   `<script>` and a `<style>` shows `innerText` next to `textContent`.
 - **The host replay installs no provider**, so in a replay `innerText` is
