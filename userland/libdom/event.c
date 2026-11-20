@@ -104,7 +104,10 @@ typedef struct {
     double altitude, azimuth;
     bool is_primary;
     double width, height, pressure, tangential_pressure;
-
+    /* A WheelEvent's (UI Events § 3.6): its deltas and their unit
+     * (DOM_DELTA_*). */
+    double delta_x, delta_y, delta_z;
+    uint32_t delta_mode;
 } DEvent;
 
 int d_event_kind(const char *type)
@@ -1179,20 +1182,28 @@ static int invoke_at(Dispatch *d, DValue **path, const os64_html_node_t *const *
     return invoke_target(d, path[i], phase, capture);
 }
 
-/* MouseEvent and PointerEvent clicks run DOM activation, at a step of the
+/* Whether a UI kind is MouseEvent or an interface that inherits it. The
+ * questions MouseEvent's heirs answer as MouseEvent does ask this, so a new
+ * heir is one line here and not a hunt for `== D_UI_POINTER`. */
+static bool ui_is_mouse(int kind)
+{
+    return kind == D_UI_MOUSE || kind == D_UI_POINTER || kind == D_UI_WHEEL;
+}
+
+/* MouseEvent clicks (and its heirs') run DOM activation, at a step of the
  * path path_walk chooses. Native pointer packets opt in here; legacy host
  * clicks still perform their defaults in the browser. */
 static bool activates(const Dispatch *d)
 {
     return !(d->host != NULL && !d->event->native_activation) &&
-        (d->event->ui == D_UI_MOUSE || d->event->ui == D_UI_POINTER) && os64_strcmp(d->event->type, "click") == 0;
+        ui_is_mouse(d->event->ui) && os64_strcmp(d->event->type, "click") == 0;
 }
 
 /* The events whose detail[U_RELATED] is a relatedTarget, which retargets
  * (a SubmitEvent's submitter there does not). */
 static bool has_related(const DEvent *event)
 {
-    return event->ui == D_UI_MOUSE || event->ui == D_UI_POINTER || event->ui == D_UI_FOCUS;
+    return ui_is_mouse(event->ui) || event->ui == D_UI_FOCUS;
 }
 
 static const os64_html_node_t *tree_root(const os64_html_node_t *node)
@@ -3218,12 +3229,16 @@ int d_message_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global
  * SubmitEvent, which inherits Event. Their attributes are the Event's own
  * record, so dispatch needs nothing new. A Modern Web row: with the switch
  * off none of them exists, and a host's mouse and key events carry their
- * fields as data (event_fields). PointerEvent inherits MouseEvent and shares
- * its coordinate/modifier record. Native dispatch and capture are provided
- * by pointer.c; WheelEvent, DragEvent and TextEvent remain absent. */
+ * fields as data (event_fields). PointerEvent and WheelEvent inherit
+ * MouseEvent and share its coordinate/modifier record. Native pointer
+ * dispatch and capture are provided by pointer.c. No host event is a
+ * WheelEvent: yonder scrolls a page itself and dispatches no `wheel`
+ * (DEBTS.md), so a page has the interface to name, construct and dispatch.
+ * DragEvent and TextEvent remain absent. */
 
 static const char *const kUINames[D_UI_KINDS] = {
-    "", "UIEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "InputEvent", "CompositionEvent", "SubmitEvent", "PointerEvent"
+    "", "UIEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "InputEvent", "CompositionEvent", "SubmitEvent",
+    "PointerEvent", "WheelEvent"
 };
 
 /* EventModifierInit's members in its order, which is the order WebIDL reads
@@ -3249,7 +3264,8 @@ enum {
     UM_KEY, UM_CODE, UM_LOCATION, UM_REPEAT, UM_COMPOSING, UM_CHAR_CODE, UM_KEY_CODE, UM_INIT_KEYBOARD,
     UM_DATA, UM_INPUT_TYPE, UM_DATA_TRANSFER, UM_TARGET_RANGES, UM_INIT_COMPOSITION,
     UM_POINTER_ID, UM_POINTER_TYPE, UM_PRIMARY, UM_WIDTH, UM_HEIGHT, UM_PRESSURE,
-    UM_TANGENTIAL_PRESSURE, UM_TILT_X, UM_TILT_Y, UM_TWIST, UM_ALTITUDE, UM_AZIMUTH
+    UM_TANGENTIAL_PRESSURE, UM_TILT_X, UM_TILT_Y, UM_TWIST, UM_ALTITUDE, UM_AZIMUTH,
+    UM_DELTA_X, UM_DELTA_Y, UM_DELTA_Z, UM_DELTA_MODE
 };
 
 /* What a dictionary member or an init method's argument sets, each
@@ -3261,7 +3277,8 @@ enum {
     F_CHAR_CODE, F_CODE, F_COMPOSING, F_KEY, F_KEY_CODE, F_LOCATION, F_REPEAT,
     F_INPUT_DATA, F_DATA_TRANSFER, F_INPUT_TYPE, F_TARGET_RANGES, F_DATA, F_SUBMITTER,
     F_POINTER_ID, F_POINTER_TYPE, F_PRIMARY, F_WIDTH, F_HEIGHT, F_PRESSURE,
-    F_TANGENTIAL_PRESSURE, F_TILT_X, F_TILT_Y, F_TWIST, F_ALTITUDE, F_AZIMUTH
+    F_TANGENTIAL_PRESSURE, F_TILT_X, F_TILT_Y, F_TWIST, F_ALTITUDE, F_AZIMUTH,
+    F_DELTA_X, F_DELTA_Y, F_DELTA_Z, F_DELTA_MODE
 };
 typedef struct { const char *name; uint8_t field, bit; } DUIMember;
 
@@ -3280,6 +3297,9 @@ static const DUIMember kPointerInit[] = {
     {"pointerType", F_POINTER_TYPE, 0}, {"pressure", F_PRESSURE, 0},
     {"tangentialPressure", F_TANGENTIAL_PRESSURE, 0}, {"tiltX", F_TILT_X, 0},
     {"tiltY", F_TILT_Y, 0}, {"twist", F_TWIST, 0}, {"width", F_WIDTH, 0}
+};
+static const DUIMember kWheelInit[] = {
+    {"deltaMode", F_DELTA_MODE, 0}, {"deltaX", F_DELTA_X, 0}, {"deltaY", F_DELTA_Y, 0}, {"deltaZ", F_DELTA_Z, 0}
 };
 static const DUIMember kKeyboardInit[] = {
     {"charCode", F_CHAR_CODE, 0}, {"code", F_CODE, 0}, {"isComposing", F_COMPOSING, 0}, {"key", F_KEY, 0},
@@ -3307,13 +3327,21 @@ static const DUIMember kKeyboardArgs[] = {
 };
 static const DUIMember kCompositionArgs[] = {{NULL, F_VIEW, 0}, {NULL, F_DATA, 0}};
 
-/* Interface membership follows inheritance, including PointerEvent through MouseEvent. */
+/* Interface membership follows inheritance, MouseEvent's heirs through
+ * MouseEvent: every UI kind but SubmitEvent is a UIEvent. */
 static bool ui_implements(const DEvent *event, int kind)
 {
-    if (kind == D_UI_EVENT) return (event->ui >= D_UI_EVENT && event->ui <= D_UI_COMPOSITION) ||
-                                    event->ui == D_UI_POINTER;
-    if (kind == D_UI_MOUSE && event->ui == D_UI_POINTER) return true;
+    if (kind == D_UI_EVENT) return event->ui != D_UI_NONE && event->ui != D_UI_SUBMIT;
+    if (kind == D_UI_MOUSE) return ui_is_mouse(event->ui);
     return event->ui == kind;
+}
+
+/* The UI kind whose prototype and interface `kind`'s inherit; D_UI_NONE
+ * for Event's (UIEvent's and SubmitEvent's). */
+static int ui_parent(int kind)
+{
+    if (kind == D_UI_EVENT || kind == D_UI_SUBMIT) return D_UI_NONE;
+    return kind != D_UI_MOUSE && ui_is_mouse(kind) ? D_UI_MOUSE : D_UI_EVENT;
 }
 
 static void ui_set(JSContext *ctx, DEvent *event, int slot, JSValue value)
@@ -3409,6 +3437,10 @@ static int ui_field(os64_dom_t *dom, JSContext *ctx, DEvent *event, int field, i
     case F_TWIST: return JS_ToInt32(ctx, &event->twist, value);
     case F_ALTITUDE: event->orientation_given |= 2; return ui_double(ctx, value, &event->altitude);
     case F_AZIMUTH: event->orientation_given |= 2; return ui_double(ctx, value, &event->azimuth);
+    case F_DELTA_X: return ui_double(ctx, value, &event->delta_x);
+    case F_DELTA_Y: return ui_double(ctx, value, &event->delta_y);
+    case F_DELTA_Z: return ui_double(ctx, value, &event->delta_z);
+    case F_DELTA_MODE: return JS_ToUint32(ctx, &event->delta_mode, value);
     case F_WIDTH: return ui_double(ctx, value, &event->width);
     case F_HEIGHT: return ui_double(ctx, value, &event->height);
     case F_PRESSURE: case F_TANGENTIAL_PRESSURE: {
@@ -3495,7 +3527,7 @@ static int ui_read_init(os64_dom_t *dom, JSContext *ctx, DEvent *event, JSValueC
 {
     if (kind != D_UI_SUBMIT && ui_read(dom, ctx, event, init, kUIInit, sizeof(kUIInit) / sizeof(kUIInit[0])) < 0)
         return -1;
-    for (size_t i = 0; (kind == D_UI_MOUSE || kind == D_UI_POINTER || kind == D_UI_KEYBOARD) && i < sizeof(kModifiers) / sizeof(kModifiers[0]);
+    for (size_t i = 0; (ui_is_mouse(kind) || kind == D_UI_KEYBOARD) && i < sizeof(kModifiers) / sizeof(kModifiers[0]);
          i++) {
         const DUIMember modifier = {kModifiers[i].init, F_MODIFIER, (uint8_t)i};
         if (ui_read(dom, ctx, event, init, &modifier, 1) < 0) return -1;
@@ -3504,6 +3536,9 @@ static int ui_read_init(os64_dom_t *dom, JSContext *ctx, DEvent *event, JSValueC
     case D_UI_POINTER:
         if (ui_read(dom, ctx, event, init, kMouseInit, sizeof(kMouseInit) / sizeof(kMouseInit[0])) < 0) return -1;
         return ui_read(dom, ctx, event, init, kPointerInit, sizeof(kPointerInit) / sizeof(kPointerInit[0]));
+    case D_UI_WHEEL:
+        if (ui_read(dom, ctx, event, init, kMouseInit, sizeof(kMouseInit) / sizeof(kMouseInit[0])) < 0) return -1;
+        return ui_read(dom, ctx, event, init, kWheelInit, sizeof(kWheelInit) / sizeof(kWheelInit[0]));
     case D_UI_MOUSE: return ui_read(dom, ctx, event, init, kMouseInit, sizeof(kMouseInit) / sizeof(kMouseInit[0]));
     case D_UI_KEYBOARD:
         return ui_read(dom, ctx, event, init, kKeyboardInit, sizeof(kKeyboardInit) / sizeof(kKeyboardInit[0]));
@@ -3585,6 +3620,10 @@ static JSValue mouse_event_constructor(JSContext *ctx, JSValueConst new_target, 
 static JSValue pointer_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
     return ui_construct(ctx, new_target, argc, argv, D_UI_POINTER);
+}
+static JSValue wheel_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    return ui_construct(ctx, new_target, argc, argv, D_UI_WHEEL);
 }
 static JSValue keyboard_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
@@ -3710,6 +3749,10 @@ static JSValue ui_member(JSContext *ctx, JSValueConst self, int argc, JSValueCon
     case UM_TILT_X: return JS_NewInt32(ctx, event->tilt_x);
     case UM_TILT_Y: return JS_NewInt32(ctx, event->tilt_y);
     case UM_TWIST: return JS_NewInt32(ctx, event->twist);
+    case UM_DELTA_X: return JS_NewFloat64(ctx, event->delta_x);
+    case UM_DELTA_Y: return JS_NewFloat64(ctx, event->delta_y);
+    case UM_DELTA_Z: return JS_NewFloat64(ctx, event->delta_z);
+    case UM_DELTA_MODE: return JS_NewUint32(ctx, event->delta_mode);
     case UM_VIEW: return JS_DupValue(ctx, event->detail[U_VIEW]);
     case UM_DETAIL: return JS_NewInt32(ctx, event->ui_detail);
     case UM_WHICH: return JS_NewUint32(ctx, event->which);
@@ -3781,10 +3824,10 @@ static JSValue ui_host_event(os64_dom_t *dom, JSContext *ctx, const os64_dom_eve
     if (kind != D_UI_SUBMIT) ui_set(ctx, event, U_VIEW, d_window_identity(dom, ctx));
     ui_set(ctx, event, U_RELATED, related);
     event->ui_detail = ev->detail;
-    if (kind == D_UI_MOUSE || kind == D_UI_POINTER || kind == D_UI_KEYBOARD)
+    if (ui_is_mouse(kind) || kind == D_UI_KEYBOARD)
         event->modifiers = (uint16_t)((ev->alt ? 1u << MOD_ALT : 0) | (ev->ctrl ? 1u << MOD_CTRL : 0) |
                                       (ev->meta ? 1u << MOD_META : 0) | (ev->shift ? 1u << MOD_SHIFT : 0));
-    if (kind == D_UI_MOUSE || kind == D_UI_POINTER) {
+    if (ui_is_mouse(kind)) {
         event->screen_x = ev->screen_x;
         event->screen_y = ev->screen_y;
         event->client_x = ev->client_x;
@@ -3881,15 +3924,20 @@ int d_ui_events_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {D_UI_POINTER, UM_TANGENTIAL_PRESSURE, "tangentialPressure", -1},
         {D_UI_POINTER, UM_TILT_X, "tiltX", -1}, {D_UI_POINTER, UM_TILT_Y, "tiltY", -1},
         {D_UI_POINTER, UM_TWIST, "twist", -1},
+        {D_UI_WHEEL, UM_DELTA_X, "deltaX", -1}, {D_UI_WHEEL, UM_DELTA_Y, "deltaY", -1},
+        {D_UI_WHEEL, UM_DELTA_Z, "deltaZ", -1}, {D_UI_WHEEL, UM_DELTA_MODE, "deltaMode", -1},
     };
     static JSCFunction *const kConstructors[D_UI_KINDS] = {
         NULL, ui_event_constructor, mouse_event_constructor, keyboard_event_constructor, focus_event_constructor,
-        input_event_constructor, composition_event_constructor, submit_event_constructor, pointer_event_constructor
+        input_event_constructor, composition_event_constructor, submit_event_constructor, pointer_event_constructor,
+        wheel_event_constructor
     };
     JSValue event_prototype = JS_GetClassProto(ctx, dom->event_class);
+    /* A parent comes before its heirs in D_UI_*'s order, so its prototype
+     * is made first. */
     for (int kind = D_UI_EVENT; kind < D_UI_KINDS; kind++) {
-        JSValueConst parent = kind == D_UI_EVENT || kind == D_UI_SUBMIT ? (JSValueConst)event_prototype
-                                                                          : dom->ui_prototypes[kind == D_UI_POINTER ? D_UI_MOUSE : D_UI_EVENT]->value;
+        JSValueConst parent = ui_parent(kind) == D_UI_NONE ? (JSValueConst)event_prototype
+                                                           : dom->ui_prototypes[ui_parent(kind)]->value;
         dom->ui_prototypes[kind] = d_retain(dom, ctx, JS_NewObjectProto(ctx, parent));
         if (dom->ui_prototypes[kind] == NULL) {
             JS_FreeValue(ctx, event_prototype);
@@ -3912,7 +3960,7 @@ int d_ui_events_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     interfaces[D_UI_NONE] = JS_GetPropertyStr(ctx, global, "Event");
     int result = JS_IsException(interfaces[D_UI_NONE]) ? -1 : 0;
     for (int kind = D_UI_EVENT; result == 0 && kind < D_UI_KINDS; kind++) {
-        JSValueConst parent = kind == D_UI_EVENT || kind == D_UI_SUBMIT ? interfaces[D_UI_NONE] : interfaces[kind == D_UI_POINTER ? D_UI_MOUSE : D_UI_EVENT];
+        JSValueConst parent = interfaces[ui_parent(kind)];
         interfaces[kind] = d_interface_new(ctx, kUINames[kind], 1, kConstructors[kind],
                                            dom->ui_prototypes[kind]->value, parent);
         if (JS_IsException(interfaces[kind]) ||
@@ -3928,6 +3976,14 @@ int d_ui_events_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     for (int i = 0; result == 0 && i < 4; i++)
         for (int h = 0; result == 0 && h < 2; h++)
             if (JS_DefinePropertyValueStr(ctx, holders[h], kLocations[i], JS_NewInt32(ctx, i), JS_PROP_ENUMERABLE) < 0)
+                result = -1;
+    /* WheelEvent's delta units, the same way. */
+    static const char *const kDeltaModes[] = {"DOM_DELTA_PIXEL", "DOM_DELTA_LINE", "DOM_DELTA_PAGE"};
+    JSValueConst wheel_holders[] = {interfaces[D_UI_WHEEL], dom->ui_prototypes[D_UI_WHEEL]->value};
+    for (int i = 0; result == 0 && i < 3; i++)
+        for (int h = 0; result == 0 && h < 2; h++)
+            if (JS_DefinePropertyValueStr(ctx, wheel_holders[h], kDeltaModes[i], JS_NewInt32(ctx, i),
+                                          JS_PROP_ENUMERABLE) < 0)
                 result = -1;
     for (int kind = 0; kind < D_UI_KINDS; kind++) JS_FreeValue(ctx, interfaces[kind]);
     return result;

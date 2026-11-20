@@ -169,6 +169,8 @@ getModifierState.html	getModifierState Control true
 getModifierState.html	getModifierState false
 getModifierState.html	getModifierState invalid modifier
 getModifierState.html	getModifierState true
+historical.html	WheelEvent#initWebKitWheelEvent
+historical.html	WheelEvent#initWheelEvent
 idlharness.window.html	CompositionEvent interface object length
 idlharness.window.html	CompositionEvent interface object name
 idlharness.window.html	CompositionEvent interface: calling initCompositionEvent(DOMString, optional boolean, optional boolean, optional WindowProxy?, optional DOMString) on new CompositionEvent("event") with too few arguments must throw TypeError
@@ -291,6 +293,7 @@ idlharness.window.html	Window includes WindowOrWorkerGlobalScope: member names a
 idlharness.window.html	Window includes WindowSessionStorage: member names are unique
 idlharness.window.html	idl_test setup
 idlharness.window.html	idl_test validation
+interface/click-event.htm	synthetic click event is a PointerEvent
 keyboard/keyboardevent-legacy.html	KeyboardEvent constructor should initialize legacy keyCode and charCode
 legacy-domevents-tests/approved/dispatchEvent.click.checkbox.html	Checkbox state is unchanged before the synthetic click event is dispatched
 legacy-domevents-tests/approved/dispatchEvent.click.checkbox.html	Test Description: MouseEvent: Default action is performed when a synthetic click event is dispatched on a checkbox element

@@ -187,12 +187,13 @@ enum {
     D_EVENT_PLAY, D_EVENT_PAUSE, D_EVENT_RATECHANGE, D_EVENT_VOLUMECHANGE, D_EVENT_COUNT
 };
 /* The UI event interfaces (event.c, 0f's P8): UI Events' UIEvent and the
- * five that inherit it, then HTML's SubmitEvent, which inherits Event. An
+ * interfaces that inherit it, HTML's SubmitEvent, which inherits Event,
+ * and the two that inherit MouseEvent, PointerEvent and WheelEvent. An
  * event's record says which one it is (D_UI_NONE: none of them), and each
  * has a prototype on the binding with the Modern Web switch on. */
 enum {
     D_UI_NONE, D_UI_EVENT, D_UI_MOUSE, D_UI_KEYBOARD, D_UI_FOCUS, D_UI_INPUT, D_UI_COMPOSITION,
-    D_UI_SUBMIT, D_UI_POINTER, D_UI_KINDS
+    D_UI_SUBMIT, D_UI_POINTER, D_UI_WHEEL, D_UI_KINDS
 };
 /* What a DValue carries that most never need: an element's views, a
  * document's collections, canvas state and the rest of what one kind of
@@ -227,6 +228,10 @@ typedef struct DValueMore {
     /* A control's, fieldset's or output's ValidityState, made once
      * ([SameObject], validity.c). */
     DValue *validity;
+    /* A file input's FileList (controls.c): made at the first read of
+     * `files`, or the one a script set, and every read until it is set
+     * again answers it. */
+    DValue *files;
     /* A form's RadioNodeLists, one a name, each made once
      * (d_radio_list), as browsers answer `form.r === form.r`. */
     DQuery *radio_lists;
@@ -693,7 +698,7 @@ struct os64_dom {
     /* A script's requests (slice 2): DOMException's prototype, the host's
      * network, the requests out with the next token, and how many engine
      * values they hold (the registry's fourth list). */
-    DValue *exception_prototype, *file_prototype, *form_prototype, *progress_prototype;
+    DValue *exception_prototype, *file_prototype, *form_prototype, *progress_prototype, *file_list_prototype;
     os64_dom_network_t network;
     DRequest *requests;
     uint32_t request_token;
@@ -1771,6 +1776,10 @@ void d_kept_free_all(os64_dom_t *dom);
  * caller's) with `type` (taken). */
 JSValue d_blob_new_kept(JSContext *ctx, DKept *body, char *type);
 bool d_form_data_is(JSValueConst value);
+/* A FileList (blob.c): a new, empty one, and whether a value is one. A
+ * document with no FileList interface throws TypeError. */
+JSValue d_file_list_new(os64_dom_t *dom, JSContext *ctx);
+bool d_file_list_is(JSValueConst value);
 /* A FormData as multipart/form-data (HTML § 4.10.21.8), its type naming
  * the boundary. -1 with an exception pending. */
 int d_form_data_encode(os64_dom_t *dom, JSContext *ctx, JSValueConst form, DBytes *out);
