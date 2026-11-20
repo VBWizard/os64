@@ -400,6 +400,8 @@ int main(int argc, char **argv)
     expect("a p's two whatever its display", "<div id=r>a<p data-t=i>b</p>c</div>", "a\n\nb\n\nc");
     expect("a row group read alone, the table's last", "<table><tbody id=r><tr><td>a</td></tr><tr><td>b</td></tr></tbody></table>",
            "a\nb");
+    expect("a row group read alone, an empty group after it",
+           "<table><tbody id=r><tr><td>a</td></tr></tbody><tbody></tbody></table>", "a");
     expect("a row group read alone, rows after it", "<table><tbody id=r><tr><td>a</td></tr></tbody><tbody><tr><td>b</td></tr></tbody></table>",
            "a\n");
     expect("a preserved line feed ends a line (before)", "<div id=r>a <span data-ws=p>\nb</span></div>", "a\nb");

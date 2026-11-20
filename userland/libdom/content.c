@@ -315,14 +315,20 @@ static JSValue rendered_set(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
     bool converted = d_string(dom, ctx, text, &string);
     JS_FreeValue(ctx, text);
     if (!converted) return JS_EXCEPTION;
+    /* The conversion ran the page's script, which may have moved the
+     * element into another document: the fragment, the replacement and the
+     * merges are that document's, so its owner is found again here (as
+     * d_content_set does). The string stays the converting binding's. */
+    os64_dom_t *converted_by = dom;
+    dom = d_owner(dom, node);
     const os64_html_node_t *parent = node->parent;
     if (outer && parent == NULL) {
-        d_string_free(dom, &string);
+        d_string_free(converted_by, &string);
         return d_error(ctx, "NoModificationAllowedError", "outerText needs the element to have a parent");
     }
     os64_html_node_t *fragment = NULL;
     int64_t status = rendered_fragment(dom, string.data, string.length, &fragment);
-    d_string_free(dom, &string);
+    d_string_free(converted_by, &string);
     /* outerText leaves something in the element's place: an empty Text
      * node when the value made none. */
     if (status >= 0 && outer && fragment == NULL) {

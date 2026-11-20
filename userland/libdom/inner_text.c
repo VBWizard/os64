@@ -324,16 +324,25 @@ static size_t assemble(const Walk *w, char *out)
     return n;
 }
 
+/* Whether `n` is a rendered table row. */
+static bool rendered_row(Walk *w, const os64_html_node_t *n)
+{
+    os64_dom_text_style_t s;
+    return n->kind == OS64_HTML_ELEMENT && facts_of(w, n, &s) && s.rendered && s.display == OS64_DOM_TEXT_TABLE_ROW;
+}
+
 /* Whether a row group read as the root holds its table's last row: no
- * rendered row or row group follows it in the table. */
+ * rendered row follows it in the table, whether as a sibling or inside a
+ * later row group (an empty group holds none). */
 static bool last_row_group(Walk *w, const os64_html_node_t *group)
 {
     for (const os64_html_node_t *n = group->next; n != NULL; n = n->next) {
         os64_dom_text_style_t s;
         if (n->kind != OS64_HTML_ELEMENT) continue;
-        if (!facts_of(w, n, &s)) return false;
-        if (s.rendered && (s.display == OS64_DOM_TEXT_TABLE_PART || s.display == OS64_DOM_TEXT_TABLE_ROW))
-            return false;
+        if (rendered_row(w, n)) return false;
+        if (!facts_of(w, n, &s) || !s.rendered || s.display != OS64_DOM_TEXT_TABLE_PART) continue;
+        for (const os64_html_node_t *row = n->first_child; row != NULL; row = row->next)
+            if (rendered_row(w, row)) return false;
     }
     return true;
 }
