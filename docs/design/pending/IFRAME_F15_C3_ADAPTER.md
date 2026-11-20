@@ -1,14 +1,16 @@
 # F15.22 — selected scalar C3 lifetime adapter
 
+Implementation PR **#684**.
+
 ## Baseline task list — 2026-11-19
 
-- [ ] Consume F4's reviewed #682 contract; keep original owner, stable context and publication generation separate.
-- [ ] Select a bounded charged cluster-owned registry and a runtime-scoped monotonic context issuer.
-- [ ] Separate fallible original-owner/context registration from scalar read-only observation.
-- [ ] Enumerate known proxy/cache/Location roots and aliases, retaining explicit unknown exposure/graph/borrow categories.
-- [ ] Close live observation before cluster drain and detach native references before storage end.
-- [ ] Prove publication, lifecycle, capacity, issuer, mapping, reentry and teardown counterexamples.
-- [ ] Freeze matching integration evidence, publish a stacked PR and address Codex findings; Chris merges.
+- [x] Consume F4's reviewed #682 contract; keep original owner, stable context and publication generation separate.
+- [x] Select a bounded charged cluster-owned registry and a runtime-scoped monotonic context issuer.
+- [x] Separate fallible original-owner/context registration from scalar read-only observation.
+- [x] Enumerate known proxy/cache/Location roots and aliases, retaining explicit unknown exposure/graph/borrow categories.
+- [x] Close live observation before cluster drain and detach native references before storage end.
+- [x] Prove publication, lifecycle, capacity, issuer, mapping, reentry and teardown counterexamples.
+- [x] Freeze matching integration evidence and publish #684 for Codex review; address findings without merging.
 
 Depends on F4 contract [#682](https://github.com/VBWizard/os64/pull/682), final
 `b375b5fb`, and the callback milestone #683. This implementation consumes the
@@ -72,3 +74,56 @@ engine context edges, escaped references and all-native-borrow counts are not
 inferred from them. Entry/incumbent/current/native-caller roles remain the
 checked scoped runtime observations from #665/#667, separate from these idle
 publication snapshots; quiescent observation invents no settings role.
+
+## Implemented proof boundary
+
+The adapter is selected only by a private native host. ABI 5 default constructors
+and the public browser remain unchanged. The selected owner metadata gains a
+separate context issuer; the target wrapper remains **13,128 bytes**. The real
+libjs/libdom shared-library link passes `--no-undefined`; **335 / 155** public
+symbols contain no private owner/adapter export, and libdom imports no hidden
+owner helper. No engine patch is added. Prepared engine ID remains
+`0e34fab233ca0a3e3dfc4f8fabd76774231359899c8134892a4318e8232ac1a0`.
+
+- `DOM_HOST_KEEP=1 ASAN_OPTIONS=detect_leaks=1 bash tools/test_dom_host.sh --c3-lifetimes`:
+  **298 checks per profile**, both teardown policies, shipping and instrumented
+  engines. The final `--c3-lifetimes-controls` selector passes the same cases.
+  Adapter allocation/aggregate capacity, missing mapping, full map, actual
+  runtime issuer exhaustion, stale publication, lifecycle, native/task barriers,
+  native finalizers and drain during each bridge phase are covered. A closed
+  adapter safely refuses select/register/observe after engine destruction while
+  its summary shell remains available.
+- Seven targeted mutations in the retained compile/link recipes produce
+  **14 named behavioral failures** across the two profiles. Controls reject
+  generation-as-context-ID, stale publication acceptance, pointer-as-eligibility,
+  missing quiescence, missing pre-drain gate, alias-as-root counting and serial
+  reuse. Compiler/sanitizer/invariant failures do not count as detections.
+- Fresh combined source, local integration `36f3385c0c84c66fc33375e1df993d289e9df076`,
+  merges F4 #682 `b375b5fb` with this implementation `c0b28e9a` (and #683).
+  `DOM_C3_F4_NAMES` adds the actual mutable-name/root-origin reset cases:
+  **302 checks per profile**, both policies, leak-enabled ASan/UBSan outside the
+  sandbox. These receipts use fresh coherent DOM objects and do not mix F4's
+  different native name layout into the standalone cohort.
+- The runtime metadata extension passes **1,053 / 1,125** focused callback
+  checks and **42,794 / 143,262** full runtime checks with zero live allocations,
+  including raw construction, compiler cuts and five full invariant badges.
+  The deliberate unrelated raw-root leak remains detected as a separate
+  negative witness. Seven prepared engine inputs and eight reused instrumented
+  engine/port objects match #683's retained hashes; target core is freshly built.
+- Header, teardown/visibility, tracker, diff and stale-reference audits pass.
+  Selected adapter/source and actual shared-library objects are retained with
+  their matching host recipes. Leak detection stays enabled outside the sandbox.
+
+Known exposure counts belong to the **original registered binding**; Window
+identity is an alias, not an extra strong root. Closed summary counts describe
+retained registration cells, not live native borrows. Scalar copied origins and
+owner snapshots grant no origin/member/navigation permission. Unknown escaped
+roots, engine graph reachability and complete native borrowing remain unknown.
+No selected-adapter guest or P5 acceptance is claimed; this milestone is a
+native-host implementation and source/shared-library integration proof.
+
+Combined adjacent regressions also pass in both profiles: Window.name
+**582 / 686**, browsing contexts **1,078 / 1,078**, WindowProxy **1,426 / 3,726**,
+Location context **424 / 424**, Location exotics **1,932 / 3,052** and browser
+jobs **801 / 801**. Standalone browser jobs also pass **801 / 801**. The two
+native cohorts and exact combined source/recipe are retained separately.
