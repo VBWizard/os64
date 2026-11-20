@@ -1,5 +1,7 @@
 # F15.30 — bounded checked module-handle family contract
 
+Contract PR **#685**.
+
 ## Baseline task list — 2026-11-19
 
 - [x] Reconcile remaining persistent export families into visible F15 child tasks.
@@ -7,7 +9,7 @@
 - [x] Select a bounded numeric module family with explicit owner, root and loan obligations.
 - [x] Specify rollback, asynchronous evaluation, retirement and guarded root teardown.
 - [x] Record implementing counterexamples and preserve independent raw/traced/native gates.
-- [ ] Validate source references, tracker and contract; publish a separate stacked PR for Codex review.
+- [x] Validate source references, tracker and contract; publish #685 for Codex review.
 
 This is a **contract and source audit**, following the selected callback family
 #683 and F15.22's scalar C3 adapter. F.15.31 implements and proves this family
@@ -225,5 +227,5 @@ source against `c0b28e9a`. Local file links, the tracker and the exact owned-row
 comparison pass; existing IDs and unrelated slices remain unchanged. The eight
 ADDED rows make completed contract work and pending implementation visible;
 F.15.23 stays `doing`, and F.15.31–F.15.37 stay `todo`. A separate F4 boundary
-read found no blocking contract mismatch. Codex review remains the next review
-step. No implementation or new runtime acceptance is attributed to this PR.
+read found no blocking contract mismatch. PR #685 carries the contract for Codex
+review. No implementation or new runtime acceptance is attributed to this PR.
