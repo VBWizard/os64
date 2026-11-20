@@ -3323,9 +3323,10 @@ static bool mark_has(garb_cascade_t *c, const os64_html_node_t *from, bool child
         for (const os64_html_node_t *k = from->first_child; k; k = k->next)
             if (is_el(k) && !has_visit(c, k)) return false;
     for (const os64_html_node_t *a = from; is_el(a) && connected(c, a); a = a->parent) {
-        // An element this update has visited already had its ancestors
-        // (and with `+`/`~` their previous siblings) visited after it, in
-        // the same walk: the rest of this one is done.
+        // An element this update has visited already has had the rest of
+        // this climb visited too (its previous siblings, its ancestors and,
+        // with `+`/`~`, theirs), by the walk that visited it or an earlier
+        // one: every walk completes its climb before the next begins.
         const Slot *seen = slot_for(c, a, false);
         if (seen && seen->visited == c->updates + 1) break;
         if (!has_visit(c, a)) return false;

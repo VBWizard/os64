@@ -351,10 +351,11 @@ static bool oracle_has_walks(void)
         "<div id=d><div id=d1></div><div id=d2><a id=da></a></div></div>"
         "<div id=e><p id=e1><span id=e2></span></p></div>"
         "<h1 id=h></h1><p id=hp><span id=hs></span></p><div id=hd></div>"
-        "<h2 id=k></h2><div id=kd><a id=ka></a></div><p id=kp><a id=kpa></a></p>";
+        "<h2 id=k></h2><div id=kd><a id=ka></a></div><p id=kp><a id=kpa></a></p>"
+        "<section id=t>text first<a id=ta></a></section>";
     static const struct { const char *sel, *want; } kCases[] = {
         {"div:has(> p ~ span)", "a"}, {"div:has(> p + span)", "a"}, {"div:has(> p span)", "e"},
-        {"div:has(> div a)", "c d"}, {"div:has(> div ~ div a)", "d"}, {":has(> a)", "c1 d2 kd kp"},
+        {"div:has(> div a)", "c d"}, {"div:has(> div ~ div a)", "d"}, {":has(> a)", "c1 d2 kd kp t"},
         {"h1:has(+ p span)", "h"}, {"h1:has(+ p ~ div)", "h"}, {"h1:has(+ div)", ""},
         {"h2:has(+ div)", "k"}, {"h2:has(~ p > a)", "k"}, {"h2:has(~ div a)", "k"},
     };

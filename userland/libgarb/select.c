@@ -1371,7 +1371,7 @@ static bool reached_from(const garb_selectors_t *sel, const Complex *x, const os
 // A leading `>`, `+` or `~` whose selector goes down is walked from the
 // children, the next sibling or the following siblings its first compound
 // matches, and under those alone; any other walks every element it could
-// reach (has_visit, cascade.c, is where that cost is bounded).
+// reach.
 static bool has_matches(const garb_selectors_t *sel, const List *l, const os64_html_node_t *el)
 {
     for (int32_t i = 0; l != NULL && i < l->n; i++) {
