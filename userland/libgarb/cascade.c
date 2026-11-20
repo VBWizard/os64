@@ -265,7 +265,9 @@ struct garb_cascade {
     // element's row of `has_words`: `has_width` words a slot, the row at the
     // slot's own index, moved with it when the table grows or a removal
     // backshifts, so a slot's record can be rebuilt (restyle) without
-    // touching its bits. None while the cascade takes no update.
+    // touching its bits. None when its rules keep it from updates at birth
+    // (`untrackable`); a cascade that comes up short later, or has no
+    // reader, keeps rows it will never compare.
     // `has_scratch` is one row, for an update's compare. `untrackable`
     // names what kept the cascade from a change reader at birth (a bare
     // anchor, a counted :has()), and `refusal` why the latest update
@@ -3375,12 +3377,16 @@ static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match
     cascade_whole(c, x, m, mcap, scratch);
     if (c->incomplete || c->self.incomplete) { c->refusal = GARB_UPDATE_SHORT; return false; }
     s = slot_for(c, x, false);
-    // Its anchor bits are asked again and stored, never compared. A bit
-    // depends on the element's own attributes, its descendants and, for
-    // `+`/`~` arguments, its siblings; a restyle that came from an
-    // inherited value or a re-match changes none of those, and a change to
-    // any of them was logged and visited (mark_has) where it happened. The
-    // walk is sound because of this: a new kind of mark must keep it true.
+    // Its anchor bits are asked again and stored, never compared. The walk
+    // is sound because whatever turned a bit here was a logged change that
+    // already marked all the bit's reach: a change at the element itself or
+    // under it, or a sibling's for a `+`/`~` argument, visits it (mark_has)
+    // and compares there; and anything else its compound reads (an
+    // ancestor fieldset's `disabled`, `lang` or `dir`, its place among its
+    // siblings) changed at an ancestor or a sibling whose mark covers its
+    // subtree or the siblings after it, which is the reach of any anchor at
+    // the element. A new kind of mark that restyles an element alone must
+    // keep that true, or compare here.
     anchor_bits(c, x, has_row(c, s));
     if (!old.element_only) return true;
     bool same = old.matched == s->matched && styles_same(&old.style, &s->style);
@@ -3680,12 +3686,13 @@ garb_cascade_parts_t garb_cascade_parts(const garb_cascade_t *c)
     garb_cascade_parts_t parts = {0};
     if (c == NULL) return parts;
     // The rule, entry, keyframe and attribute tables and the selector
-    // indexes all come from `self`'s arena (grow, alloc); only the slot
-    // table and the dirty list are the heap's.
+    // indexes all come from `self`'s arena (grow, alloc); the slot table,
+    // its rows of anchor bits and the dirty list are the heap's.
     parts.state = sizeof(*c) + os64_arena_stats(c->self.arena).reserved_bytes;
     parts.reads = os64_arena_stats(c->reads.arena).reserved_bytes;
     for (int32_t i = 0; i < c->nattrs; i++) parts.attributes += os64_arena_stats(c->attrs[i].arena).reserved_bytes;
-    parts.tables = (size_t)c->slotcap * sizeof(*c->slots) + c->dirtycap * sizeof(*c->dirty_nodes);
+    parts.tables = (size_t)c->slotcap * (sizeof(*c->slots) + c->has_width * sizeof(*c->has_words)) +
+                   c->dirtycap * sizeof(*c->dirty_nodes);
     return parts;
 }
 
@@ -3782,17 +3789,14 @@ static void compare_path(Out *o, const os64_html_node_t *x)
     }
 }
 // The first property at which two records differ (-1: none), and its
-// index in each (-1 where absent).
+// index in each (-1 where absent): its value by content, its sheet and its
+// importance, as styles_same compares them.
 static int32_t compare_styles(garb_style_t a, garb_style_t b, int32_t *ia, int32_t *ib)
 {
-    char va[512], vb[512];
     for (int32_t k = 0; k < a.n || k < b.n; k++) {
-        bool both = k < a.n && k < b.n;
-        if (both && a.sets[k].prop == b.sets[k].prop) {
-            garb_val_dump(&a.sets[k].value, va, sizeof(va));
-            garb_val_dump(&b.sets[k].value, vb, sizeof(vb));
-            if (os64_streq(va, vb)) continue;
-        }
+        if (k < a.n && k < b.n && a.sets[k].prop == b.sets[k].prop && val_same(&a.sets[k].value, &b.sets[k].value) &&
+            a.sheet[k] == b.sheet[k] && a.important[k] == b.important[k])
+            continue;
         garb_prop_t prop = k < a.n ? a.sets[k].prop : b.sets[k].prop;
         *ia = *ib = -1;
         for (int32_t i = 0; i < a.n; i++) if (a.sets[i].prop == prop) *ia = i;

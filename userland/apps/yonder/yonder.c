@@ -94,11 +94,13 @@ static const yonder_dark_t kDark = {.paper = 0x101010u};
 static bool s_dark;
 // --layout-profile enables phase clocks and the page record's layout totals.
 static bool s_layout_profile;
-// --cascade-check[=N] checks every Nth cascade update (10 when no N is
-// given) against a cascade built fresh beside it (garb_cascade_compare);
-// a difference is printed on the terminal yonder was started from and, when
+// --cascade-check[=N] checks every Nth cascade update that changed
+// something (10 when no N is given), counted across every page this yonder
+// shows, against a cascade built fresh beside it (garb_cascade_compare); a
+// difference is printed on the terminal yonder was started from and, when
 // the page has a record, kept in it as `cascade check`. A measuring switch:
-// each check costs a whole cascade.
+// each check costs a whole cascade, which the layout profile leaves out of
+// the layout's own time.
 static uint32_t s_cascade_check, s_cascade_checked, s_cascade_differed;
 
 // THE PERSON'S MOTION SETTINGS (yonder.conf): `motion = reduce` has pages
@@ -1756,11 +1758,15 @@ static void cascade_check(const Page *p, const garb_cascade_t *updated, const ga
     bool same = garb_cascade_compare(updated, fresh, page_doc(p), why, sizeof(why));
     garb_cascade_free(fresh);
     if (same) return;
+    // The page's own bytes (an id, a value, a selector) reach a terminal
+    // that obeys escape sequences: a control byte is shown as `?`.
+    for (char *c = why; *c != '\0'; c++)
+        if ((unsigned char)*c < 0x20 || (unsigned char)*c == 0x7f) *c = '?';
     s_cascade_differed++;
     os64_printf("yonder: cascade check: update %u differs from a fresh cascade at %s\n", s_cascade_checked, why);
     char line[1200];
-    os64_snprintf(line, sizeof(line), "%u differed of %u checked; the latest at %s", s_cascade_differed,
-                  s_cascade_checked / s_cascade_check, why);
+    os64_snprintf(line, sizeof(line), "this yonder's checks: %u of %u differed; the latest, on this page, at %s",
+                  s_cascade_differed, s_cascade_checked / s_cascade_check, why);
     yonder_diag_fact(layout_profile_diag(p), "cascade check", line);
 }
 
@@ -1834,8 +1840,13 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX};
         cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view,
                                                s_page_memory.cascade != 0 ? &limits : NULL) : NULL;
-    } else if (s_cascade_check != 0 && ++s_cascade_checked % s_cascade_check == 0) {
+    } else if (s_cascade_check != 0 && garb_cascade_updates(cascade) != prior_updates &&
+               ++s_cascade_checked % s_cascade_check == 0) {
+        // The check's own time is no part of this layout's: the profile's
+        // clock is moved on past it.
+        int64_t checked_at = began >= 0 ? os64_micros() : -1;
         cascade_check(p, cascade, in, n, &ps, view);
+        if (began >= 0) began += os64_micros() - checked_at;
     }
     page_scopes_free(&ps);
     if (s_layout_profile && layout_profile_diag(p)) {
