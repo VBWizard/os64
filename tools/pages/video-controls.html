@@ -1,0 +1,31 @@
+<!doctype html>
+<!-- V.6.3's page: a <video controls>' strip over its picture (VIDEO.md § 8).
+     A: plain, looping. Its strip is drawn while paused, and hides 3 s after
+        the last pointer move once playing; a click on the picture plays or
+        pauses it.
+     B: the same, with a click listener that prevents the default: a click on
+        the picture does nothing but count (the title's B).
+     C: no known end: audio-tone.mp3 served by
+        `tools/pages_serve.py --no-length --port 8732` (a sound, so the box is
+        the strip on white): its strip has no bar.
+     The title says each one's state: P paused, p playing; the duration
+     (inf for no known end, nan for not yet known); B's clicks. -->
+<title>video controls</title>
+<body style="margin:0;background:#fff;font:14px sans-serif">
+<div style="display:flex;gap:12px;padding:12px">
+<video id=a controls loop muted src="bbb-480p-3s.mp4" width=320 height=180></video>
+<video id=b controls loop muted src="bbb-480p-3s.mp4" width=320 height=180></video>
+<video id=c controls muted src="http://10.0.2.2:8732/audio-tone.mp3" width=320 height=180></video>
+</div>
+<script>
+var clicks = 0;
+document.getElementById("b").addEventListener("click", function (e) { e.preventDefault(); clicks++; });
+function say(v) {
+  var d = v.duration;
+  return (v.paused ? "P" : "p") + (d === Infinity ? "inf" : d !== d ? "nan" : d.toFixed(1));
+}
+setInterval(function () {
+  document.title = "A" + say(document.getElementById("a")) + " B" + say(document.getElementById("b")) + clicks +
+                   " C" + say(document.getElementById("c"));
+}, 500);
+</script>

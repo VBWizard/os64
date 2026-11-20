@@ -38,6 +38,10 @@ static bool pointer_default(void *opaque, const os64_html_node_t *node,
             os64_html_hold(page_doc(&g.page), node);
             p->frame = node;
         }
+        // A click on a <video controls>' picture plays or pauses it; the
+        // player only queues the ask, which runs at the loop's next turn.
+        if (!prevented && node != NULL)
+            (void)player_click(node);
         return true;
     }
     if (os64_streq(event->type, "auxclick")) return true;

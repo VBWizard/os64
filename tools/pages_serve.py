@@ -4,11 +4,15 @@ answering Range requests as a web server does, which python3 -m http.server
 does not.
 
     tools/pages_serve.py [--port 8731] [--root DIR] [--rate BYTES_PER_S] [--no-ranges] [--part BYTES]
+                         [--no-length]
 
 --rate sends every body at most that fast, so a seek in a sound can land past
 what has arrived; --no-ranges answers every request whole and says nothing of
 ranges, as a server that has none; --part answers a Range request with at most
-that many bytes, as servers that cut ranges into pieces do. Each request is
+that many bytes, as servers that cut ranges into pieces do; --no-length
+answers whole with no Content-Length and no ranges, the body ended by closing
+the connection (HTTP/1.0's way), so the size is not known until the end, as a
+stream's is. Each request is
 logged on stdout with its
 Range header and what was answered, which is what a test reads back.
 The guest reaches it at 10.0.2.2:<port>.
@@ -35,7 +39,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         size = os.path.getsize(path)
         asked = self.headers.get('Range')
         first, last, status = 0, size - 1, 200
-        if asked and not ARGS.no_ranges:
+        if asked and not ARGS.no_ranges and not ARGS.no_length:
             m = re.fullmatch(r'bytes=(\d+)-(\d*)', asked.strip())
             if m is None or int(m.group(1)) >= size:
                 self.send_response(416)
@@ -52,8 +56,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             status = 206
         self.send_response(status)
         self.send_header('Content-Type', self.guess_type(path))
-        self.send_header('Content-Length', str(last - first + 1))
-        if not ARGS.no_ranges:
+        if ARGS.no_length:
+            self.close_connection = True
+        else:
+            self.send_header('Content-Length', str(last - first + 1))
+        if not ARGS.no_ranges and not ARGS.no_length:
             self.send_header('Accept-Ranges', 'bytes')
         if status == 206:
             self.send_header('Content-Range', f'bytes {first}-{last}/{size}')
@@ -89,6 +96,7 @@ def main():
     p.add_argument('--rate', type=int, default=0)
     p.add_argument('--no-ranges', action='store_true')
     p.add_argument('--part', type=int, default=0)
+    p.add_argument('--no-length', action='store_true')
     ARGS = p.parse_args()
     os.chdir(ARGS.root)
     http.server.ThreadingHTTPServer.daemon_threads = True
