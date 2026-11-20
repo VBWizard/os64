@@ -160,8 +160,11 @@ full acceptance below. The [private WindowProxy boundary](IFRAME_F4_WINDOW_PROXY
 adds stable proxy identity and property forwarding.
 [Private Window identity integration](IFRAME_F4_WINDOW_IDENTITY.md) connects
 engine global-this, document/event values and callback receivers, with prepared
-replacement checks. Same-origin named properties, remaining descriptor
-integration and full publication acceptance remain open. Cover old Location/new
+replacement checks. Same-origin named properties and descriptor integration are implemented in
+[Window names](IFRAME_F4_WINDOW_NAMES.md), with mutable target names in
+[Window.name](IFRAME_F4_WINDOW_NAME.md). The
+[coverage audit](IFRAME_F4_COVERAGE_AUDIT.md), C3 contract and integrated
+security/lifetime acceptance precede public activation. Cover old Location/new
 document and discarded-context cases.
 
 ## Exotics and binding integration
