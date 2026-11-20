@@ -1480,8 +1480,27 @@ static int reach_of(Comb comb)
     return comb == C_DESCENDANT || comb == C_CHILD ? REACH_DOWN
            : comb == C_NEXT || comb == C_SUBSEQUENT ? REACH_SIBLINGS : 0;
 }
-static void anchors(const garb_selectors_t *sel, const List *list, int around, garb_anchor_t *out,
-                    int32_t cap, int32_t *n)
+// The simples that turn most elements away for the price of a compare: a
+// type, an id, a class, an attribute (select.h § AN ANCHORED :has()).
+static bool filters(const Simple *s)
+{
+    return s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS || s->kind == S_ATTR;
+}
+static bool has_filter(const Compound *c)
+{
+    for (int32_t k = 0; k < c->n; ++k)
+        if (filters(&c->s[k])) return true;
+    return false;
+}
+// `outer[0..nouter)`: the enclosing compounds whose filters the SUBJECT
+// compound of each complex in `list` must pass too, gathered on the way in
+// through :not(), :is() and :where(), whose argument must match the very
+// element their compound does. A compound left of a combinator in its
+// complex names another element (an ancestor or a sibling of the subject),
+// so the enclosing filters are not its; nor are they for nth-child's `of S`,
+// :host()'s or ::slotted()'s argument, which name other elements too.
+static void anchors(const garb_selectors_t *sel, const List *list, int around, const Compound *const *outer,
+                    int32_t nouter, garb_anchor_t *out, int32_t cap, int32_t *n)
 {
     for (int32_t i = 0; i < list->n; ++i) {
         const Complex *x = &list->v[i];
@@ -1489,19 +1508,30 @@ static void anchors(const garb_selectors_t *sel, const List *list, int around, g
             const Compound *c = &x->c[j];
             int reach = around;
             for (int32_t r = j + 1; r < x->n; r++) reach |= reach_of(x->c[r].left);
-            bool has = false, filtered = false;
+            int32_t nmine = j == x->n - 1 ? nouter : 0;
+            bool filtered = has_filter(c);
+            // What a :not(), :is() or :where() in this compound passes in.
+            const Compound *inner[GARB_ANCHOR_FILTERS];
+            int32_t ninner = 0;
+            for (int32_t o = 0; o < nmine; o++) inner[ninner++] = outer[o];
+            if (filtered && ninner < GARB_ANCHOR_FILTERS) inner[ninner++] = c;
+            bool has = false;
             for (int32_t k = 0; k < c->n; ++k) {
                 const Simple *s = &c->s[k];
                 has |= s->kind == S_PSEUDO && s->pseudo == P_HAS;
-                filtered |= s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS || s->kind == S_ATTR;
                 // A :has() inside a :has() argument is refused when parsed.
-                if (s->list && !(s->kind == S_PSEUDO && s->pseudo == P_HAS))
-                    anchors(sel, s->list, reach, out, cap, n);
+                if (s->list == NULL || (s->kind == S_PSEUDO && s->pseudo == P_HAS)) continue;
+                bool same = s->kind == S_PSEUDO && (s->pseudo == P_NOT || s->pseudo == P_IS || s->pseudo == P_WHERE);
+                anchors(sel, s->list, reach, inner, same ? ninner : 0, out, cap, n);
             }
             if (has && reach != 0) {
-                if (*n < cap)
-                    out[*n] = (garb_anchor_t){sel, c, (reach & REACH_DOWN) != 0, (reach & REACH_SIBLINGS) != 0,
-                                              !filtered};
+                if (*n < cap) {
+                    garb_anchor_t *a = &out[*n];
+                    *a = (garb_anchor_t){sel, c, .down = (reach & REACH_DOWN) != 0,
+                                         .siblings = (reach & REACH_SIBLINGS) != 0};
+                    for (int32_t o = 0; o < nmine; o++) a->outer[a->nouter++] = outer[o];
+                    a->bare = !filtered && a->nouter == 0;
+                }
                 ++*n;
             }
         }
@@ -1510,13 +1540,19 @@ static void anchors(const garb_selectors_t *sel, const List *list, int around, g
 int32_t garb_selectors_anchors(const garb_selectors_t *list, garb_anchor_t *out, int32_t cap)
 {
     int32_t n = 0;
-    if (list) anchors(list, &list->list, 0, out, cap, &n);
+    if (list) anchors(list, &list->list, 0, NULL, 0, out, cap, &n);
     return n;
 }
 bool garb_anchor_matches(const garb_anchor_t *anchor, const os64_html_node_t *element)
 {
     const Compound *c = anchor->compound;
     if (!is_el(element)) return false;
+    for (int32_t o = 0; o < anchor->nouter; o++) {
+        const Compound *around = anchor->outer[o];
+        for (int32_t k = 0; k < around->n; ++k)
+            if (filters(&around->s[k]) && !simple_matches(anchor->list, &around->s[k], element, NULL))
+                return false;
+    }
     for (int32_t pass = 0; pass < 2; pass++)
         for (int32_t k = 0; k < c->n; ++k)
             if ((c->s[k].kind == S_PSEUDO) == (pass == 1) &&

@@ -1,0 +1,356 @@
+/* THE ORACLE (BRIEF_CASCADE_TRACKING § Proof): after an update the cascade
+ * must equal one built fresh from the same document, element by element and
+ * property by property. A seeded random walk makes the changes a page makes
+ * (elements added, removed and moved; class, id and other attributes, the
+ * ones libgarb's state pseudo-classes read among them: checked, open,
+ * disabled; style attributes; text) in batches, on a generated tree, under
+ * generated sheets that favour :has() in every form the update follows
+ * (subject and anchored; descendant, child and sibling arguments; inside
+ * :not(), :is() and :where(); a state inside the argument). A difference
+ * fails, naming the seed, the step, the element, the property and the batch
+ * that led there. The walk keeps a padding of elements no rule reaches, so
+ * a batch reaches less than half the elements and the update is not merely
+ * refused as broad; the counts at the end say how many updates took. */
+
+typedef struct {
+    uint64_t state;
+} OracleRng;
+static uint64_t oracle_next(OracleRng *r)
+{
+    r->state ^= r->state << 13; r->state ^= r->state >> 7; r->state ^= r->state << 17;
+    return r->state;
+}
+static int oracle_pick(OracleRng *r, int n) { return (int)(oracle_next(r) % (uint64_t)n); }
+
+static const char *const kOracleTags[]={"div","p","span","section","i","input","fieldset","details","legend"};
+static const char *const kOracleClasses[]={"a","b","x","k"};
+// An element's own compound: always filtered (a type, a class or an
+// attribute), as an anchor's must be to be tracked. Few names, so rules
+// match often and a turn shows.
+static void oracle_compound(OracleRng *r, char *out, size_t cap)
+{
+    switch (oracle_pick(r, 5)) {
+    case 0: snprintf(out, cap, "%s", kOracleTags[oracle_pick(r, 4)]); break;
+    case 1: case 2: snprintf(out, cap, ".%s", kOracleClasses[oracle_pick(r, 4)]); break;
+    case 3: snprintf(out, cap, "[data-x]"); break;
+    default: snprintf(out, cap, "%s.%s", kOracleTags[oracle_pick(r, 4)], kOracleClasses[oracle_pick(r, 4)]); break;
+    }
+}
+// What a :has() argument looks for, state pseudo-classes among it.
+static void oracle_argument(OracleRng *r, char *out, size_t cap)
+{
+    static const char *const kStates[]={"input:checked","fieldset:disabled","input:disabled","p:empty",
+                                        "details[open]",":focus-visible","[data-x]"};
+    char c[64];
+    if (oracle_pick(r, 3) == 0) { snprintf(out, cap, "%s", kStates[oracle_pick(r, 7)]); return; }
+    oracle_compound(r, c, sizeof(c));
+    snprintf(out, cap, "%s", c);
+}
+// Rule `i`'s declarations: a property of its own as far as the list goes,
+// its value the rule's number, so which rules match an element shows in its
+// winners and an inherited one in its descendants'; sometimes a custom
+// property read through var() too.
+static void oracle_declarations(OracleRng *r, int i, char *out, size_t cap)
+{
+    static const char *const kProps[]={"margin-left","margin-top","padding-left","padding-top","width","height",
+                                       "min-width","max-width","top","left","z-index","order","flex-grow",
+                                       "letter-spacing","word-spacing","text-indent","line-height","border-left-width"};
+    const char *prop = kProps[i % 18];
+    bool unitless = !strcmp(prop, "z-index") || !strcmp(prop, "order") || !strcmp(prop, "flex-grow") ||
+                    !strcmp(prop, "line-height");
+    int n = snprintf(out, cap, "%s:%d%s", prop, i + 1, unitless ? "" : "px");
+    if (oracle_pick(r, 4) == 0) snprintf(out + n, cap - (size_t)n, ";--v:%d", i + 1);
+    else if (oracle_pick(r, 4) == 0) snprintf(out + n, cap - (size_t)n, ";outline-width:var(--v,0px)");
+}
+// One sheet in four is large, past one word of anchor bits a slot.
+static void oracle_sheet(OracleRng *r, char *out, size_t cap)
+{
+    size_t len = 0;
+    out[0] = '\0';
+    int rules = oracle_pick(r, 4) == 0 ? 110 + oracle_pick(r, 40) : 8 + oracle_pick(r, 10);
+    for (int i = 0; i < rules && len + 512 < cap; i++) {
+        char f[64], d[64], a[64], decl[128];
+        oracle_compound(r, f, sizeof(f));
+        oracle_compound(r, d, sizeof(d));
+        oracle_argument(r, a, sizeof(a));
+        oracle_declarations(r, i, decl, sizeof(decl));
+        switch (oracle_pick(r, 17)) {
+        case 0: len += (size_t)snprintf(out + len, cap - len, "%s:has(%s) %s{%s}", f, a, d, decl); break;
+        case 1: len += (size_t)snprintf(out + len, cap - len, "%s:has(> %s) > %s{%s}", f, a, d, decl); break;
+        case 2: len += (size_t)snprintf(out + len, cap - len, "%s:has(+ %s) ~ %s{%s}", f, a, d, decl); break;
+        case 3: len += (size_t)snprintf(out + len, cap - len, "%s:has(~ %s) + %s{%s}", f, a, d, decl); break;
+        case 4: len += (size_t)snprintf(out + len, cap - len, "%s:not(:has(%s)) %s{%s}", f, a, d, decl); break;
+        case 5: len += (size_t)snprintf(out + len, cap - len, "%s:is(.k, :has(%s)) > %s{%s}", f, a, d, decl); break;
+        case 6: len += (size_t)snprintf(out + len, cap - len, ":where(%s:has(%s)) ~ %s{%s}", f, a, d, decl); break;
+        case 7: len += (size_t)snprintf(out + len, cap - len, "%s:has(%s){%s}", f, a, decl); break;
+        case 8: len += (size_t)snprintf(out + len, cap - len, "%s:has(+ %s){%s}", f, a, decl); break;
+        case 9: len += (size_t)snprintf(out + len, cap - len, "%s:not(:hover, :has(%s)) %s{%s}", f, a, d, decl); break;
+        case 10: len += (size_t)snprintf(out + len, cap - len, "%s{%s}", d, decl); break;
+        case 11: len += (size_t)snprintf(out + len, cap - len, "%s > %s{%s}", f, d, decl); break;
+        case 12: len += (size_t)snprintf(out + len, cap - len, "%s + %s{%s}", f, d, decl); break;
+        case 13: len += (size_t)snprintf(out + len, cap - len, "%s:first-child{%s}", d, decl); break;
+        case 14: len += (size_t)snprintf(out + len, cap - len, "%s %s{%s}", f, d, decl); break;
+        // The anchor left of a combinator inside the :is(): `.k` names
+        // another element, so it is no filter of the anchor's.
+        case 15: len += (size_t)snprintf(out + len, cap - len, ".k:is(%s:has(%s) > %s) %s{%s}", f, a, d, d, decl); break;
+        default: len += (size_t)snprintf(out + len, cap - len, "input:checked ~ %s{%s}", d, decl); break;
+        }
+    }
+}
+
+// Every element under `root`, in tree order.
+static int oracle_elements(os64_html_node_t *root, os64_html_node_t **out, int cap)
+{
+    int n = 0;
+    for (os64_html_node_t *x = root; x != NULL;) {
+        if (x->kind == OS64_HTML_ELEMENT && n < cap) out[n++] = x;
+        if (x->first_child) { x = x->first_child; continue; }
+        while (x != root && x->next == NULL) x = x->parent;
+        if (x == root) break;
+        x = x->next;
+    }
+    return n;
+}
+static bool oracle_inside(const os64_html_node_t *x, const os64_html_node_t *ancestor)
+{
+    for (; x != NULL; x = x->parent) if (x == ancestor) return true;
+    return false;
+}
+static os64_html_node_t *oracle_make(OracleRng *r, os64_html_document_t *doc)
+{
+    os64_html_node_t *e = os64_html_create_element(doc, OS64_HTML_NS_HTML, kOracleTags[oracle_pick(r, 9)], NULL);
+    if (e == NULL) return NULL;
+    if (oracle_pick(r, 2)) os64_html_set_attr(doc, e, "class", kOracleClasses[oracle_pick(r, 4)], 1);
+    if (!strcmp(e->name, "input")) os64_html_set_attr(doc, e, "type", "checkbox", 8);
+    if (oracle_pick(r, 5) == 0) os64_html_set_attr(doc, e, "checked", "", 0);
+    return e;
+}
+static void oracle_path(const os64_html_node_t *x, char *out, size_t cap)
+{
+    const os64_html_node_t *chain[64];
+    int n = 0;
+    for (; x != NULL && x->kind == OS64_HTML_ELEMENT && n < 64; x = x->parent) chain[n++] = x;
+    size_t len = 0;
+    out[0] = '\0';
+    while (n-- > 0 && len + 32 < cap) {
+        int index = 0;
+        for (const os64_html_node_t *s = chain[n]->prev; s; s = s->prev) index += s->kind == OS64_HTML_ELEMENT;
+        len += (size_t)snprintf(out + len, cap - len, "%s%s[%d]", len ? ">" : "", chain[n]->name, index);
+    }
+}
+// One change, described into `log`. `growing`: mostly additions, of
+// several elements at once. `*recent`: what the change before this one
+// added or moved, if it did. Two times in three this change is made inside it (a
+// removal, a class, an attribute): an element's anchor bits are first asked
+// when it is styled, and the change that next visits it is the first to
+// compare them, so a bit stored wrong at birth shows only then.
+static void oracle_change(OracleRng *r, os64_html_document_t *doc, os64_html_node_t *root, bool growing,
+                          os64_html_node_t **recent, char *log, size_t cap)
+{
+    os64_html_node_t *els[512];
+    int n = oracle_elements(root, els, 512);
+    os64_html_node_t *e = els[oracle_pick(r, n)];
+    int op = oracle_pick(r, 10);
+    if (*recent != NULL && oracle_pick(r, 3) != 0) {
+        os64_html_node_t *in[64];
+        int m = oracle_elements(*recent, in, 64);
+        static const int kInside[] = {1, 3, 5};
+        if (m > 1) { e = in[1 + oracle_pick(r, m - 1)]; op = kInside[oracle_pick(r, 3)]; }
+    }
+    *recent = NULL;
+    char path[256];
+    oracle_path(e, path, sizeof(path));
+    if (growing && oracle_pick(r, 2)) op = 0;
+    if (op == 1 && (n < 12 || growing)) op = 0;
+    // Room to grow past the slot table's first size, which moves every
+    // slot's row of bits.
+    if (op == 0 && n > 400) op = 1;
+    switch (op) {
+    case 0: {
+        os64_html_node_t *k = oracle_make(r, doc);
+        for (int more = growing ? 1 + oracle_pick(r, 6) : oracle_pick(r, 2) ? 1 + oracle_pick(r, 2) : 0; k && more > 0;
+             more--) {
+            os64_html_node_t *g = oracle_make(r, doc);
+            if (g) os64_html_insert(doc, k, g, NULL);
+        }
+        os64_html_node_t *before = e->first_child;
+        for (int skip = oracle_pick(r, 4); before && skip > 0; skip--) before = before->next;
+        if (k) os64_html_insert(doc, e, k, before);
+        *recent = k;
+        snprintf(log, cap, "add %s under %s", k ? k->name : "?", path);
+        break;
+    }
+    case 1:
+        if (e == root) { snprintf(log, cap, "nothing"); break; }
+        os64_html_remove(doc, e);
+        snprintf(log, cap, "remove %s", path);
+        break;
+    case 2: {
+        os64_html_node_t *to = els[oracle_pick(r, n)];
+        if (e == root || oracle_inside(to, e)) { snprintf(log, cap, "nothing"); break; }
+        os64_html_node_t *before = oracle_pick(r, 2) ? to->first_child : NULL;
+        char where[256];
+        oracle_path(to, where, sizeof(where));
+        os64_html_insert(doc, to, e, before == e ? NULL : before);
+        *recent = e;
+        snprintf(log, cap, "move %s under %s", path, where);
+        break;
+    }
+    case 3: case 4: {
+        const char *c = kOracleClasses[oracle_pick(r, 4)];
+        if (oracle_pick(r, 4) == 0) os64_html_remove_attr(doc, e, "class");
+        else os64_html_set_attr(doc, e, "class", c, strlen(c));
+        snprintf(log, cap, "class of %s", path);
+        break;
+    }
+    case 5: {
+        static const char *const kAttrs[]={"checked","open","disabled","data-x","title","hidden"};
+        const char *a = kAttrs[oracle_pick(r, 6)];
+        if (os64_html_attr(e, a)) os64_html_remove_attr(doc, e, a);
+        else os64_html_set_attr(doc, e, a, "", 0);
+        snprintf(log, cap, "toggle %s on %s", a, path);
+        break;
+    }
+    case 6: {
+        static const char *const kIds[]={"m","n","o"};
+        if (oracle_pick(r, 3) == 0) os64_html_remove_attr(doc, e, "id");
+        else os64_html_set_attr(doc, e, "id", kIds[oracle_pick(r, 3)], 1);
+        snprintf(log, cap, "id of %s", path);
+        break;
+    }
+    case 7: {
+        static const char *const kStyles[]={"color:purple","--v:3","margin-left:1px"};
+        if (oracle_pick(r, 3) == 0) os64_html_remove_attr(doc, e, "style");
+        else { const char *s = kStyles[oracle_pick(r, 3)]; os64_html_set_attr(doc, e, "style", s, strlen(s)); }
+        snprintf(log, cap, "style of %s", path);
+        break;
+    }
+    default: {
+        os64_html_node_t *t = e->first_child;
+        while (t && t->kind != OS64_HTML_TEXT) t = t->next;
+        bool empty = oracle_pick(r, 2);
+        if (t && oracle_pick(r, 2)) os64_html_set_text(doc, t, empty ? "" : "w", empty ? 0 : 1);
+        else { os64_html_node_t *k = os64_html_create_text(doc, "t", 1, NULL); if (k) os64_html_insert(doc, e, k, e->first_child); }
+        snprintf(log, cap, "text in %s", path);
+        break;
+    }
+    }
+}
+// Every element's winners and pseudo-elements' against a fresh cascade's:
+// false, with the first difference printed, when they differ.
+static bool oracle_compare(garb_cascade_t *c, garb_sheet_in_t *in, os64_html_document_t *doc,
+                           uint64_t seed, int step, const char *batch, const char *sheet)
+{
+    garb_cascade_t *fresh = garb_cascade(in, 1, doc, garb_cascade_env(c));
+    if (fresh == NULL || garb_cascade_incomplete(fresh)) {
+        fprintf(stderr, "FAIL oracle seed %llu step %d: no fresh cascade\n", (unsigned long long)seed, step);
+        garb_cascade_free(fresh);
+        return false;
+    }
+    bool same = true;
+    os64_html_node_t *els[1024];
+    int n = oracle_elements(doc->document, els, 1024);
+    for (int i = 0; i < n && same; i++)
+        for (int t = 0; t < 3 && same; t++) {
+            garb_pseudo_t p = t == 0 ? GARB_PSEUDO_NONE : t == 1 ? GARB_PSEUDO_BEFORE : GARB_PSEUDO_AFTER;
+            garb_style_t a = t ? garb_style_for_pseudo(c, els[i], p) : garb_style_for(c, els[i]);
+            garb_style_t b = t ? garb_style_for_pseudo(fresh, els[i], p) : garb_style_for(fresh, els[i]);
+            for (int32_t k = 0; same && k < (a.n > b.n ? a.n : b.n); k++) {
+                char va[256] = "(none)", vb[256] = "(none)";
+                const char *name = k < a.n ? garb_prop_name(a.sets[k].prop) : garb_prop_name(b.sets[k].prop);
+                if (k < a.n) garb_val_dump(&a.sets[k].value, va, sizeof(va));
+                if (k < b.n) garb_val_dump(&b.sets[k].value, vb, sizeof(vb));
+                if (k < a.n && k < b.n && a.sets[k].prop != b.sets[k].prop) {
+                    snprintf(va, sizeof(va), "%s", garb_prop_name(a.sets[k].prop));
+                    snprintf(vb, sizeof(vb), "%s", garb_prop_name(b.sets[k].prop));
+                    name = "(property order)";
+                }
+                if (strcmp(va, vb) != 0 || (k < a.n) != (k < b.n)) {
+                    char path[256];
+                    oracle_path(els[i], path, sizeof(path));
+                    fprintf(stderr, "FAIL oracle seed %llu step %d: %s%s %s: updated %s, fresh %s\n"
+                                    "  batch: %s\n  sheet: %s\n",
+                            (unsigned long long)seed, step, path, t == 1 ? "::before" : t == 2 ? "::after" : "",
+                            name, va, vb, batch, sheet);
+                    same = false;
+                }
+            }
+        }
+    garb_cascade_free(fresh);
+    return same;
+}
+
+// One walk: `steps` batches on one seed, a new sheet every 50.
+static bool oracle_walk(uint64_t seed, int steps, unsigned *taken, unsigned *refused)
+{
+    OracleRng r = {seed * 0x9E3779B97F4A7C15ull + 1};
+    char html[16384] = "<!doctype html><body><aside>";
+    for (int i = 0; i < 300; ++i) strcat(html, "<u></u>");
+    strcat(html, "</aside><div id=root>");
+    for (int i = 0; i < 40; ++i) {
+        const char *tag = kOracleTags[oracle_pick(&r, 5)];
+        char one[96];
+        snprintf(one, sizeof(one), "<%s class=%s>%s</%s>", tag, kOracleClasses[oracle_pick(&r, 4)],
+                 oracle_pick(&r, 2) ? "t" : "", tag);
+        strcat(html, one);
+    }
+    strcat(html, "</div>");
+    os64_html_document_t *doc = update_doc(html);
+    os64_html_node_t *root = (os64_html_node_t *)by_id(doc->document, "root");
+    os64_html_node_t *recent = NULL;
+    bool ok = true;
+    char sheet_text[8192];
+    garb_parsed_t sheet = {0};
+    garb_sheet_in_t in = {.sheet = &sheet};
+    garb_cascade_t *c = NULL;
+    for (int step = 0; step < steps && ok; step++) {
+        if (step % 50 == 0) {
+            garb_cascade_free(c);
+            garb_free(&sheet);
+            oracle_sheet(&r, sheet_text, sizeof(sheet_text));
+            garb_parse_sheet_text(sheet_text, strlen(sheet_text), &sheet);
+            c = garb_cascade(&in, 1, doc, (garb_env_t){.width = 800, .height = 600});
+        }
+        char batch[2048] = "", one[600];
+        for (int k = 0, changes = 1 + oracle_pick(&r, 3); k < changes; k++) {
+            // Each second sheet's life grows the tree, the first half of it.
+            oracle_change(&r, doc, root, step % 100 >= 50 && step % 100 < 75, &recent, one, sizeof(one));
+            if (strlen(batch) + strlen(one) + 3 < sizeof(batch)) { if (k) strcat(batch, "; "); strcat(batch, one); }
+        }
+        if (garb_cascade_update(c)) ++*taken;
+        else {
+            refused[garb_cascade_update_refusal(c)]++;
+            garb_cascade_t *fresh = garb_cascade(&in, 1, doc, garb_cascade_env(c));
+            garb_cascade_free(c);
+            c = fresh;
+            continue;
+        }
+        ok = oracle_compare(c, &in, doc, seed, step, batch, sheet_text);
+    }
+    garb_cascade_free(c);
+    garb_free(&sheet);
+    os64_html_document_free(doc);
+    return ok;
+}
+
+static int cascade_oracle(int argc, char **argv)
+{
+    size_t baseline = live;
+    uint64_t first = argc > 2 ? strtoull(argv[2], NULL, 10) : 1;
+    int seeds = argc > 2 ? 1 : 8;
+    int steps = argc > 3 ? atoi(argv[3]) : 400;
+    unsigned taken = 0, refused[GARB_UPDATE_REASONS] = {0};
+    bool ok = true;
+    for (int s = 0; s < seeds && ok; s++) ok = oracle_walk(first + (uint64_t)s, steps, &taken, refused);
+    printf("libgarb oracle: %d seed(s) from %llu, %d steps each: %u updates equal a fresh cascade",
+           seeds, (unsigned long long)first, steps, taken);
+    for (int i = 1; i < GARB_UPDATE_REASONS; i++)
+        if (refused[i]) printf("; %u refused %s", refused[i], garb_update_refusal_name((garb_update_refusal_t)i));
+    printf("\n");
+    if (ok && taken < (unsigned)(seeds * steps) / 2) {
+        fprintf(stderr, "FAIL oracle: fewer than half the updates took, so the walk proves little\n");
+        ok = false;
+    }
+    if (live != baseline) { fprintf(stderr, "FAIL oracle: allocations outlive the walk\n"); ok = false; }
+    return ok ? 0 : 1;
+}

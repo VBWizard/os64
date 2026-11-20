@@ -93,7 +93,7 @@ typedef struct yonder_diag yonder_diag_t;
 // reasons, then libgarb's refusals (garb_update_refusal_t past DONE). The
 // names come with the sample (`cascade_reason_names`), from the code that
 // knows them; the layout wrapper checks the count at compile time.
-#define YONDER_LAYOUT_CASCADE_REASONS 20
+#define YONDER_LAYOUT_CASCADE_REASONS 19
 typedef struct {
     uint64_t model_us, cascade_us, style_us, boxes_us, layout_us, public_us;
     uint64_t elements, boxes, measures, reused;

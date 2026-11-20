@@ -185,11 +185,6 @@ bool garb_cascade_retain(garb_cascade_t *cascade);
  * Reader storage is optional: its absence disables updates, not full builds.
  * The caller serializes updates with queries on its window thread. */
 bool garb_cascade_update(garb_cascade_t *c);
-// The most anchored :has() compounds (garb_anchor_t) a cascade tracks: each
-// is a bit every element's record keeps, what the compound answered there
-// when last asked, so an update can tell where the answer turned. A cascade
-// whose rules hold more is built without a change reader.
-#define GARB_ANCHORS_MAX 64
 // Why the latest garb_cascade_update answered false; GARB_UPDATE_DONE
 // before any and after one that answered true.
 typedef enum {
@@ -197,7 +192,6 @@ typedef enum {
     GARB_UPDATE_INCOMPLETE,     // the cascade came up short, when built or since
     GARB_UPDATE_FAILED_BEFORE,  // an earlier update failed: a fresh cascade is owed
     GARB_UPDATE_NO_READER,      // no change reader: there was no memory for one
-    GARB_UPDATE_ANCHORS,        // more anchored :has() compounds than GARB_ANCHORS_MAX
     GARB_UPDATE_BARE_ANCHOR,    // an anchored :has() with nothing cheaper to test first
     GARB_UPDATE_COUNTED_HAS,    // a :has() inside :nth-child(… of S) (has_filtered)
     GARB_UPDATE_SHADOW_ROOT,    // the document's first shadow root arrived
@@ -213,13 +207,17 @@ typedef enum {
     GARB_UPDATE_REASONS
 } garb_update_refusal_t;
 garb_update_refusal_t garb_cascade_update_refusal(const garb_cascade_t *c);
-// A reason's name for a record ("broad", "anchors"); "?" past the enum.
+// A reason's name for a record ("broad", "bare anchor"); "?" past the enum.
 const char *garb_update_refusal_name(garb_update_refusal_t reason);
 // Whether this cascade keeps a change reader for incremental updates. False
 // lets hosts skip speculative geometry snapshots whose generation cannot
 // survive a DOM change. True is not a promise that an update will succeed:
 // history loss, dirty breadth and storage budgets still require fallback.
 bool garb_cascade_tracks_changes(const garb_cascade_t *c);
+// How many anchored :has() compounds (garb_anchor_t) the cascade's rules
+// hold, and how many of those are bare; each is a bit in every element's
+// record, tested at every element the cascade styles.
+void garb_cascade_anchors(const garb_cascade_t *c, int32_t *anchors, int32_t *bare);
 uint64_t garb_cascade_generation(const garb_cascade_t *c);
 uint64_t garb_cascade_updates(const garb_cascade_t *c);
 uint64_t garb_cascade_version(const garb_cascade_t *c);

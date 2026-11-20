@@ -270,6 +270,140 @@ static void update_has(void)
     was=has_update(&h,"anchored through :is(): an argument inserted updates incrementally");
     update_check(garb_style_updated_since(h.c,has_el(&h,"ky"),was),"anchored through :is(): what it reaches is restyled");
     has_close(&h);
+    /* Anchors filtered by the compound around them (select.h § AN ANCHORED
+     * :has()): inside :not(), :is() and :where(); a descendant, a child and
+     * a sibling argument; a state inside the argument, which libgarb
+     * answers false (P_USER_ACTION), so the :not() always holds. Each case
+     * tracks, and each turn restyles what the anchor reaches. */
+    has_open(&h,".c:not(:has(.x)) > .y{color:red}"
+                ".d:is(.e, :has(> .x)) .y{color:blue}"
+                "section:where(:has(.x)) ~ .z{opacity:.5}"
+                ".f:not(:hover, :has(:focus-visible)) .y{background:green}",
+             "<!doctype html><div id=c class=c><p id=cy class=y>y</p><p id=cw>w</p></div>"
+             "<div id=d class=d><p id=dy class=y>y</p></div>"
+             "<div><section id=wd><i id=wi></i></section><p id=z class=z>z</p></div>"
+             "<div id=f class=f><p id=fy class=y>y</p></div>");
+    {
+        int32_t anchors=0,bare=-1;
+        garb_cascade_anchors(h.c,&anchors,&bare);
+        update_check(anchors==4 && bare==0,"enclosing filters: four anchors, none bare");
+    }
+    os64_html_set_attr(h.doc,has_el(&h,"cw"),"class","x",1);
+    was=has_update(&h,"inside :not(): the argument arriving updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"cy"),was),"inside :not(): what the anchor reaches is restyled");
+    update_check(!garb_style_updated_since(h.c,has_el(&h,"dy"),was),"inside :not(): another anchor's subtree is not");
+    os64_html_node_t *dx=os64_html_create_element(h.doc,OS64_HTML_NS_HTML,"b",NULL);
+    os64_html_set_attr(h.doc,dx,"class","x",1);
+    os64_html_insert(h.doc,has_el(&h,"d"),dx,NULL);
+    was=has_update(&h,"inside :is() with >: a child argument inserted updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"dy"),was),"inside :is() with >: what it reaches is restyled");
+    os64_html_set_attr(h.doc,has_el(&h,"wi"),"class","x",1);
+    was=has_update(&h,"inside :where() with ~: the argument arriving updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"z"),was),"inside :where() with ~: the sibling is restyled");
+    os64_html_set_attr(h.doc,has_el(&h,"fy"),"title","t",1);
+    has_update(&h,"a state inside :not(:has()): a change updates incrementally");
+    os64_html_set_attr(h.doc,has_el(&h,"c"),"class","",0);
+    was=has_update(&h,"an enclosing filter going updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"cy"),was),"an enclosing filter going restyles what it reached");
+    has_close(&h);
+    /* A compound left of a combinator in the anchor's own complex names
+     * another element, and a pseudo-class is no filter: both bare. */
+    {
+        const char *bare_css[]={":is(.a :has(.x)) .z{color:red}",":not(.a):has(.x) i{color:red}"};
+        for(size_t i=0;i<2;++i) {
+            os64_html_document_t *doc=update_doc("<!doctype html><div class=a><p>t</p></div>");
+            garb_parsed_t sheet;garb_parse_sheet_text(bare_css[i],strlen(bare_css[i]),&sheet);
+            garb_sheet_in_t in={.sheet=&sheet};
+            garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+            int32_t anchors=0,bare=0;
+            garb_cascade_anchors(c,&anchors,&bare);
+            update_check(anchors==1 && bare==1 && !garb_cascade_tracks_changes(c),
+                         "an ancestor's compound or a :not() is no filter: bare");
+            garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+        }
+    }
+    /* More anchors than one word of bits: the 70th (bit 5 of the second
+     * word) turns at an element where the 6th (bit 5 of the first) holds,
+     * and its reach is restyled; the cascade tracks. */
+    {
+        char css[8192]; size_t len=0;
+        for(int i=0;i<70;++i) len+=(size_t)sprintf(css+len,".g%d:has(.x%d) .y{z-index:%d}",i,i,i);
+        has_open(&h,css,"<!doctype html><div id=g class='g5 g69'><i class=x5></i><p id=y class=y>y</p><p id=w>w</p></div>"
+                        "<div id=o class=g3><p id=oy class=y>y</p></div>");
+        int32_t anchors=0,bare=-1;
+        garb_cascade_anchors(h.c,&anchors,&bare);
+        update_check(anchors==70 && bare==0,"seventy anchors, none bare");
+        os64_html_set_attr(h.doc,has_el(&h,"w"),"class","x69",3);
+        was=has_update(&h,"seventy anchors: the seventieth turning updates incrementally");
+        update_check(garb_style_updated_since(h.c,has_el(&h,"y"),was) && !garb_style_updated_since(h.c,has_el(&h,"oy"),was),
+                     "seventy anchors: its reach is restyled, another anchor's is not");
+        has_close(&h);
+    }
+    /* An anchor's bits survive the record table growing: the table is
+     * sized at the build, a few additions past half of it grow it, and the
+     * anchor's answer turning back afterwards is still seen. */
+    {
+        char html[16384]="<!doctype html><aside id=aside>";
+        for(int i=0;i<493;++i) strcat(html,"<i></i>");
+        strcat(html,"</aside><div id=g class=g><p id=y class=y>y</p><i id=x class=x></i></div>");
+        HasCase big;
+        big.doc=update_doc(html);
+        const char *css=".g:has(.x) .y{color:red}";
+        garb_parse_sheet_text(css,strlen(css),&big.sheet);
+        big.in=(garb_sheet_in_t){.sheet=&big.sheet};
+        big.c=garb_cascade(&big.in,1,big.doc,(garb_env_t){.width=800,.height=600});
+        for(int i=0;i<40;++i)
+            os64_html_insert(big.doc,has_el(&big,"aside"),os64_html_create_element(big.doc,OS64_HTML_NS_HTML,"b",NULL),NULL);
+        has_update(&big,"growing the record table updates incrementally");
+        os64_html_remove(big.doc,has_el(&big,"x"));
+        was=has_update(&big,"an anchor's argument removed after the table grew updates incrementally");
+        update_check(garb_style_updated_since(big.c,has_el(&big,"y"),was),"and the anchor's reach is restyled");
+        has_close(&big);
+    }
+    /* An anchor's bits survive removals around it: many records removed
+     * at once shift others back in the table, and thirty anchors whose
+     * answers then turn are each seen. */
+    {
+        char html[16384]="<!doctype html><aside id=aside>";
+        for(int i=0;i<100;++i) strcat(html,"<b></b>");
+        strcat(html,"</aside>");
+        for(int i=0;i<30;++i) {
+            char one[160];
+            sprintf(one,"<div class=g><p id=y%d class=y>y</p><i id=x%d class=x></i></div>",i,i);
+            strcat(html,one);
+        }
+        has_open(&h,".g:has(.x) .y{color:red}",html);
+        while(has_el(&h,"aside")->first_child) os64_html_remove(h.doc,has_el(&h,"aside")->first_child);
+        has_update(&h,"a hundred records removed updates incrementally");
+        for(int i=0;i<30;++i) { char id[16]; sprintf(id,"x%d",i); os64_html_remove(h.doc,has_el(&h,id)); }
+        was=has_update(&h,"thirty anchors turning after the removals updates incrementally");
+        bool all=true;
+        for(int i=0;i<30;++i) { char id[16]; sprintf(id,"y%d",i); all&=garb_style_updated_since(h.c,has_el(&h,id),was); }
+        update_check(all,"and each anchor's reach is restyled");
+        has_close(&h);
+    }
+    /* An anchor left of a combinator inside an :is(): the compound around
+     * the :is() names another element, so it is no filter of the anchor's,
+     * and the anchor turning where that compound does not match is seen. */
+    has_open(&h,".k:is(.f:has(.x) > .d) .z{color:red}",
+             "<!doctype html><div id=f class=f><p class='d k'><i id=z class=z>z</i></p><b id=b></b></div>");
+    os64_html_set_attr(h.doc,has_el(&h,"b"),"class","x",1);
+    was=has_update(&h,"an anchor inside :is(), not its subject: the argument arriving updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"z"),was),"and what it reaches is restyled");
+    has_close(&h);
+    /* An anchor moved with its argument inside: the move drops its record
+     * and makes a new one, whose bits are first asked when it is styled, and
+     * the next change under it is the first to compare them, so what was
+     * stored then must be its answer. (Building it detached would not do:
+     * each insert under it is logged, and the update visits it.) */
+    has_open(&h,".g:has(.x) .y{color:red}",
+             "<!doctype html><div id=host></div><div id=g class=g><p id=y class=y>y</p><i id=x class=x></i></div>");
+    os64_html_insert(h.doc,has_el(&h,"host"),has_el(&h,"g"),NULL);
+    has_update(&h,"an anchor moved with its argument updates incrementally");
+    os64_html_remove(h.doc,has_el(&h,"x"));
+    was=has_update(&h,"its argument then removed updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"y"),was),"and what the anchor reached is restyled back");
+    has_close(&h);
     /* An element both marked alone (a subject :has() in the sheets) and an
      * anchor whose answer turned owes its whole subtree. */
     has_open(&h,".g:has(.x) .y{color:red}.q:has(.r){margin:1px}",
@@ -385,13 +519,12 @@ static int cascade_updates(void)
     }
     /* What still keeps a cascade from tracking changes: an anchored :has()
      * with nothing to test before it (a subtree walk on every element),
-     * and more anchors than a record remembers. Each is named. */
-    char many[8192]; size_t mlen=0;
-    for(int i=0;i<=GARB_ANCHORS_MAX;++i) mlen+=(size_t)sprintf(many+mlen,".g%d:has(.x) i{color:red}",i);
-    /* And a :has() inside :nth-child(… of S): its turn moves which sibling
-     * the count picks, which nothing follows. */
-    const char *broad[]={":has(p) i{color:red}",many,"p:nth-child(1 of .a:has(.x)){color:red}"};
-    const garb_update_refusal_t why[]={GARB_UPDATE_BARE_ANCHOR,GARB_UPDATE_ANCHORS,GARB_UPDATE_COUNTED_HAS};
+     * even inside an :is() whose other branch is filtered, and a :has()
+     * inside :nth-child(… of S), whose turn moves which sibling the count
+     * picks, which nothing follows. Each is named. */
+    const char *broad[]={":has(p) i{color:red}",":is(.x, :has(p)) i{color:red}",
+                         "p:nth-child(1 of .a:has(.x)){color:red}"};
+    const garb_update_refusal_t why[]={GARB_UPDATE_BARE_ANCHOR,GARB_UPDATE_BARE_ANCHOR,GARB_UPDATE_COUNTED_HAS};
     for(size_t i=0;i<sizeof(broad)/sizeof(*broad);++i) {
         os64_html_document_t *doc=update_doc("<!doctype html><div id=a><p>text</p></div>");
         garb_parsed_t sheet;garb_parse_sheet_text(broad[i],strlen(broad[i]),&sheet);garb_sheet_in_t in={.sheet=&sheet};
