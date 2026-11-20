@@ -1,5 +1,7 @@
 # F15.22 — selected scalar C3 lifetime adapter
 
+Implementation PR **#684**.
+
 ## Baseline task list — 2026-11-19
 
 - [x] Consume F4's reviewed #682 contract; keep original owner, stable context and publication generation separate.
@@ -8,7 +10,7 @@
 - [x] Enumerate known proxy/cache/Location roots and aliases, retaining explicit unknown exposure/graph/borrow categories.
 - [x] Close live observation before cluster drain and detach native references before storage end.
 - [x] Prove publication, lifecycle, capacity, issuer, mapping, reentry and teardown counterexamples.
-- [ ] Freeze matching integration evidence, publish a stacked PR and address Codex findings; Chris merges.
+- [x] Freeze matching integration evidence and publish #684 for Codex review; address findings without merging.
 
 Depends on F4 contract [#682](https://github.com/VBWizard/os64/pull/682), final
 `b375b5fb`, and the callback milestone #683. This implementation consumes the
@@ -119,3 +121,9 @@ owner snapshots grant no origin/member/navigation permission. Unknown escaped
 roots, engine graph reachability and complete native borrowing remain unknown.
 No selected-adapter guest or P5 acceptance is claimed; this milestone is a
 native-host implementation and source/shared-library integration proof.
+
+Combined adjacent regressions also pass in both profiles: Window.name
+**582 / 686**, browsing contexts **1,078 / 1,078**, WindowProxy **1,426 / 3,726**,
+Location context **424 / 424**, Location exotics **1,932 / 3,052** and browser
+jobs **801 / 801**. Standalone browser jobs also pass **801 / 801**. The two
+native cohorts and exact combined source/recipe are retained separately.
