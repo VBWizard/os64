@@ -1,5 +1,9 @@
 # F.4b — settings attribution interfaces
 
+The [coverage audit](IFRAME_F4_COVERAGE_AUDIT.md) is the current consumer and
+remaining-task inventory. The sections below retain the interfaces and evidence
+from their individual milestones.
+
 F.4b supplies raw native call facts (#571) and explicit engine entry/incumbent
 scopes. The wrapper adds lifecycle-checked queries and scopes, with native
 callback ownership and current/pre-native-entry attribution. The opt-in
@@ -279,30 +283,17 @@ in [IFRAME_F4_STREAM_CONTINUATIONS.md](IFRAME_F4_STREAM_CONTINUATIONS.md).
 
 ## Remaining F.4b interfaces and acceptance gates
 
-Before publishing browser settings queries, implement and prove:
+The [F.4.36 audit](IFRAME_F4_COVERAGE_AUDIT.md) reconciles the implemented
+callback families, job policies, Window/Location authority and associated-object
+ownership. It identifies two added obligations: F.4.42's MediaSession settings
+proof and F.4.43's adoptedStyleSheets implementation provenance. Their shared
+helpers and existing ordinary behavior tests do not complete those proofs.
 
-- DOM integration of checked entry/lifecycle scopes and role-specific
-  attribution, including relevant settings from the target binding.
-- Extend timer/listener/scheduled/handler/observer/custom-element/synchronous integration
-  to the remaining WebIDL conversion and invocation sites and Streams continuation boundaries,
-  proving associated-object entry realm and callback activity/security checks.
-  Preserve captured incumbent independently of callable realm and task owner.
-- Retained Streams native error conversion uses the explicit
-  [host capability policy](IFRAME_F4_HOST_PROMISE_LIFETIME.md). Author replacement
-  adoption retains ordinary retirement discard; it is not private continuation work.
-- The [browser job policy](IFRAME_F4_BROWSER_JOBS.md) connects opt-in task
-  selection and neutral-job diagnostics. Default browser activation remains
-  gated on the binding/security acceptance here; the
-  [neutral Promise opt-in](IFRAME_F4_NEUTRAL_PROMISE_SETTINGS.md) supplies actual
-  capability current/script incumbent without inventing entry or backup settings.
-- The private [Location member boundary](IFRAME_F4_BINDING_AUTHORITY.md)
-  refuses missing settings and checks explicit origin-bearing bindings before
-  conversion. Other Window members, property exotics and navigation authorization
-  remain; security/lifetime review precedes browser publication.
-
-These remain F.4b completion gates and prerequisites for F.4d. The raw APIs
-are not security checks. No binding may substitute native dispatch facts or
-an entry/incumbent context for the operation-specific attribution algorithm.
+F.4.37 supplies F15's retained target/exposure contract. F.4.38 retains integrated
+role, security, lifecycle, conversion/reentry and failure evidence across the
+composed private profile. F.4.39–40 retain acceptance and browser publication.
+The raw settings APIs are not security checks: native dispatch, entry/incumbent
+and operation-specific authority remain distinct.
 
 ## Proof and limits
 
