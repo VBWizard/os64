@@ -19,7 +19,8 @@
  * flag with no attribute, libpage's, which yonder's checkbox draws), its
  * autocomplete and its width and height, and its value as a number:
  * valueAsNumber, valueAsDate, stepUp and stepDown (0f's P5), libpage's
- * conversions both ways; and the form owner (`form`) of each
+ * conversions both ways; its `files` (a FileList for a file field, null
+ * for any other); and the form owner (`form`) of each
  * control, fieldset and output, and the labels of each control and output.
  * The other members of a form, label, fieldset, legend and output are
  * forms.c's.
@@ -91,7 +92,7 @@ static const DReflection kReflections[] = {
 
 /* The members that are no plain reflection, numbered after the rows. */
 enum { M_TEXT_DEFAULT = 256, M_TEXT_LENGTH, M_INDETERMINATE, M_AUTOCOMPLETE, M_WIDTH, M_HEIGHT, M_FORM, M_LABELS,
-       M_AS_NUMBER, M_AS_DATE, M_STEP_UP, M_STEP_DOWN };
+       M_AS_NUMBER, M_AS_DATE, M_STEP_UP, M_STEP_DOWN, M_FILES };
 
 static bool html(const os64_html_node_t *node, os64_html_tag_t tag)
 {
@@ -418,6 +419,50 @@ const os64_html_node_t *d_label_control(const os64_html_node_t *label)
     return NULL;
 }
 
+/* An input in the File Upload state: `type` is "file" in any case. */
+static bool file_upload(const os64_html_node_t *node)
+{
+    const os64_html_attr_t *type = html(node, OS64_HTML_TAG_INPUT) ? os64_html_attr(node, "type") : NULL;
+    return type != NULL && os64_strlen(type->value) == 4 && same_folded(type->value, "file", 4);
+}
+
+/* HTMLInputElement's files (HTML § 4.10.5.1.18). Read, a file field's
+ * FileList, the same object every read until a script sets another; null
+ * for any other type. Set, null does nothing, a value that is no FileList
+ * is a TypeError (WebIDL's FileList?), and a FileList becomes a file
+ * field's own; any other type keeps nothing. */
+static JSValue input_files(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool set,
+                           JSValueConst value)
+{
+    if (set && JS_IsNull(value)) return JS_UNDEFINED;
+    if (set && !d_file_list_is(value)) return JS_ThrowTypeError(ctx, "files is a FileList or null");
+    if (!file_upload(node)) return set ? JS_UNDEFINED : JS_NULL;
+    dom = d_owner(dom, node);
+    DValue *owner = d_find(dom, node);
+    if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
+    if (!set && d_more_peek(owner)->files != NULL) return JS_DupValue(ctx, d_more_peek(owner)->files->value);
+    DValueMore *more = d_more(dom, ctx, owner);
+    if (more == NULL) return JS_EXCEPTION;
+    JSValue list = set ? JS_DupValue(ctx, value) : d_file_list_new(dom, ctx);
+    if (JS_IsException(list)) return list;
+    /* The list is held strongly, as the binding holds every [SameObject]
+     * answer; a list set over another takes the old one's place in the
+     * same hold, so setting `files` again and again holds one list. */
+    if (more->files != NULL) {
+        JS_FreeValue(ctx, more->files->value);
+        more->files->value = JS_DupValue(ctx, list);
+    } else {
+        more->files = d_retain(dom, ctx, JS_DupValue(ctx, list));
+        if (more->files == NULL) {
+            JS_FreeValue(ctx, list);
+            return JS_EXCEPTION;
+        }
+    }
+    if (!set) return list;
+    JS_FreeValue(ctx, list);
+    return JS_UNDEFINED;
+}
+
 static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv, int magic,
                               JSValue *data)
 {
@@ -539,6 +584,9 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
         return applies ? JS_UNDEFINED
                        : d_error(ctx, "InvalidStateError", "This input has no allowed value step to step by");
     }
+    case M_FILES:
+        if (kind != IN) return JS_ThrowTypeError(ctx, "Illegal invocation");
+        return input_files(dom, ctx, node, set, value);
     case M_FORM:
         if ((kind & (IN | TA | SE | BU | FS | OU)) == 0) return JS_ThrowTypeError(ctx, "Illegal invocation");
         return d_wrap(dom, ctx, d_form_owner(node));
@@ -564,6 +612,7 @@ int d_controls_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"indeterminate", M_INDETERMINATE, true, IN}, {"autocomplete", M_AUTOCOMPLETE, true, IN | TA | SE},
         {"width", M_WIDTH, true, IN}, {"height", M_HEIGHT, true, IN},
         {"valueAsNumber", M_AS_NUMBER, true, IN}, {"valueAsDate", M_AS_DATE, true, IN},
+        {"files", M_FILES, true, IN},
         {"form", M_FORM, false, IN | TA | SE | BU | FS | OU}, {"labels", M_LABELS, false, IN | TA | SE | BU | OU},
     };
     static const int kinds[] = {D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT, D_PROTO_BUTTON, D_PROTO_FORM,

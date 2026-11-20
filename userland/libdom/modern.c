@@ -96,7 +96,7 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"DOMImplementation", "DOMParser", "XMLSerializer", NULL}, d_implementation_install},
     {(const char *const[]){"DOMException", NULL}, d_exception_install},
     {(const char *const[]){"AbortController", "AbortSignal", NULL}, d_abort_install},
-    {(const char *const[]){"Blob", "File", "FormData", NULL}, d_blob_install},
+    {(const char *const[]){"Blob", "File", "FormData", "FileList", NULL}, d_blob_install},
     {(const char *const[]){"fetch", "Headers", "Request", "Response", NULL}, d_fetch_install},
     {(const char *const[]){"XMLHttpRequest", "XMLHttpRequestEventTarget", "XMLHttpRequestUpload", "ProgressEvent",
                            NULL},
@@ -209,7 +209,7 @@ static const DModernRow kModern[] = {
     {(const char *const[]){NULL}, d_import_map_install},
     /* 0f's P8: the UI event interfaces, which inherit Event. */
     {(const char *const[]){"UIEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "InputEvent", "CompositionEvent",
-                           "SubmitEvent", "PointerEvent", NULL},
+                           "SubmitEvent", "PointerEvent", "WheelEvent", NULL},
      d_ui_events_install},
     {(const char *const[]){"onpointerdown", "onpointerup", "onpointermove", "onpointerover", "onpointerout",
         "onpointerenter", "onpointerleave", "onpointercancel", "ongotpointercapture", "onlostpointercapture",

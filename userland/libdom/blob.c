@@ -12,9 +12,15 @@
  * its slices, own engine memory, counted against the runtime's memory limit
  * as anything else a script makes is, and freed with the object. Nothing
  * here is a container a page can reach: a FormData's entries are a C array,
- * read by index and looked up again after anything that can run page code. */
+ * read by index and looked up again after anything that can run page code.
+ *
+ * FileList (File API § 5.2) is the list of files a file field holds. No
+ * file can be picked yet (DEBTS.md), so every list is empty: `length` is 0,
+ * `item` answers null, and there are no indexed properties to serve. The
+ * picker's slice gives a list its Files, and its indices the way a
+ * NodeList's are served (collection.c). */
 
-static JSClassID blob_slot, form_slot, form_iterator_slot;
+static JSClassID blob_slot, form_slot, form_iterator_slot, file_list_slot;
 
 typedef struct {
     /* Owned engine memory, or, with `kept`, the kept bytes, borrowed for as
@@ -1558,6 +1564,55 @@ JSValue d_form_data_parse(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes,
 
 /* ── Installation ────────────────────────────────────────────────────── */
 
+/* ── FileList ─────────────────────────────────────────────────────────── */
+
+enum { L_LENGTH, L_ITEM };
+
+bool d_file_list_is(JSValueConst value)
+{
+    return JS_IsObject(value) && JS_GetClassID(value) == os64_js_class_id(&file_list_slot);
+}
+
+JSValue d_file_list_new(os64_dom_t *dom, JSContext *ctx)
+{
+    if (dom->file_list_prototype == NULL) return JS_ThrowTypeError(ctx, "This document has no FileList");
+    return JS_NewObjectProtoClass(ctx, dom->file_list_prototype->value, os64_js_class_id(&file_list_slot));
+}
+
+static JSValue file_list_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                                JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (!d_file_list_is(self)) return JS_ThrowTypeError(ctx, "Expected a FileList");
+    if (magic == L_LENGTH) return JS_NewUint32(ctx, 0);
+    /* item(unsigned long index): the argument converted, and no file at
+     * any index of an empty list. */
+    if (argc < 1) return JS_ThrowTypeError(ctx, "item needs an index");
+    uint32_t index;
+    if (JS_ToUint32(ctx, &index, argv[0]) < 0) return JS_EXCEPTION;
+    return JS_NULL;
+}
+
+static int file_list_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    static const JSClassDef definition = {.class_name = "FileList"};
+    JSClassID id = os64_js_class_id(&file_list_slot);
+    if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &definition) < 0) return -1;
+    JSValue prototype = JS_NewObject(ctx);
+    if (JS_IsException(prototype)) return -1;
+    dom->file_list_prototype = d_retain(dom, ctx, prototype);
+    if (dom->file_list_prototype == NULL ||
+        d_accessor(dom, ctx, prototype, "length", file_list_member, L_LENGTH, false) < 0 ||
+        d_method(dom, ctx, prototype, "item", file_list_member, 1, L_ITEM) < 0 ||
+        d_iterable(ctx, prototype, false) < 0)
+        return -1;
+    JS_SetClassProto(ctx, id, JS_DupValue(ctx, prototype));
+    JSValue interface = d_interface_new(ctx, "FileList", 0, NULL, prototype, JS_UNDEFINED);
+    if (JS_IsException(interface)) return -1;
+    return JS_DefinePropertyValueStr(ctx, global, "FileList", interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
 int d_blob_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     static const JSClassDef blob_class = {.class_name = "Blob", .finalizer = blob_finalizer};
@@ -1633,5 +1688,7 @@ int d_blob_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         return -1;
     JSValue form_interface = d_interface_new(ctx, "FormData", 0, form_constructor, dp, JS_UNDEFINED);
     if (JS_IsException(form_interface)) return -1;
-    return JS_DefinePropertyValueStr(ctx, global, "FormData", form_interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+    if (JS_DefinePropertyValueStr(ctx, global, "FormData", form_interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+        return -1;
+    return file_list_install(dom, ctx, global);
 }
