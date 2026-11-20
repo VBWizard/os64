@@ -1170,7 +1170,10 @@ static JSValue rendered_text_accessor(JSContext *ctx, JSValueConst this_value, i
         return JS_ThrowTypeError(ctx, "innerText requires an HTML element");
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
-    return d_rendered_text_member(dom, ctx, self, magic == T_OUTER, set, argc > 0 ? argv[0] : JS_UNDEFINED);
+    /* A setter called with no value at all is a TypeError (WebIDL); an
+     * undefined passed is converted like any other value. */
+    if (set && argc < 1) return JS_ThrowTypeError(ctx, "innerText needs a value");
+    return d_rendered_text_member(dom, ctx, self, magic == T_OUTER, set, set ? argv[0] : JS_UNDEFINED);
 }
 
 int d_mixin_install(os64_dom_t *dom, JSContext *ctx)

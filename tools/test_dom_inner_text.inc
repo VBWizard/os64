@@ -57,7 +57,13 @@ static void dom_inner_text_cases(void)
         "assert(Object.getOwnPropertyDescriptor(HTMLElement.prototype,'outerText').set,'outerText too');"
         "assert(!('innerText' in document.createElementNS('http://www.w3.org/2000/svg','svg')),'not an SVG element\\'s');"
         "throws('TypeError',()=>d.get.call(new Text('t')));throws('TypeError',()=>d.get.call({}));"
-        "throws('TypeError',()=>d.get.call(document.createElementNS('http://www.w3.org/2000/svg','g')));",
+        "throws('TypeError',()=>d.get.call(document.createElementNS('http://www.w3.org/2000/svg','g')));"
+        /* A setter called with no value throws; an undefined passed is a value. */
+        "var probe=document.createElement('p');probe.textContent='kept';host.append(probe);"
+        "throws('TypeError',()=>d.set.call(probe));assert(probe.textContent==='kept','no value, nothing replaced');"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(HTMLElement.prototype,'outerText').set.call(probe));"
+        "assert(probe.parentNode===host,'nor is the element');"
+        "d.set.call(probe,undefined);assert(probe.textContent==='undefined','undefined is converted');probe.remove();",
         "innerText: textContent without a provider");
     InnerFake fake = {0};
     os64_dom_set_text_style(f.binding, inner_fake, &fake);
