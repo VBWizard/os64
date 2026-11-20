@@ -11129,7 +11129,6 @@ static void videos_tick(void)
     }
 }
 
-// Each player shows its element as it stands now.
 static void strips_turn(bool moved);
 
 // A click that reached a video's picture: its play or pause, and a move
@@ -16890,16 +16889,6 @@ static void pane_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_g
         glass_image(gp->now[k], b, c, clip);
 }
 
-// The paint of a video's box (the painter's retained-pixels verb): the
-// latest picture, fitted by object-fit and object-position, the rest of the
-// box the element's own background, and nothing before the first picture.
-// THE PLAIN PATH copies the picture's rows into the window: taken when the
-// pane paints straight to the window (no group's sheets: no opacity,
-// transform, filter, mask or blend above the box) and the picture was
-// converted at the fitted size. Otherwise THE GENERAL PATH draws it as a
-// picture is, scaled (a picture from before a resize, at its old size, is
-// drawn so until the new one comes). The size the player converts to is
-// told here, where the fitted rectangle is known.
 // A <video controls>' buffering mark shown (strip.h), painted in the middle
 // of its box after the picture or the poster: a dark square with three
 // light dots, at the zoom the page was laid out at.
@@ -16929,6 +16918,17 @@ static void video_mark(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
     }
 }
 
+// The paint of a video's box (the painter's retained-pixels verb): the
+// latest picture, fitted by object-fit and object-position, the rest of the
+// box the element's own background; the poster in its place while the show
+// poster flag is set, and until the first picture (nothing before either).
+// THE PLAIN PATH copies the picture's rows into the window: taken when the
+// pane paints straight to the window (no group's sheets: no opacity,
+// transform, filter, mask or blend above the box) and the picture was
+// converted at the fitted size. Otherwise THE GENERAL PATH draws it as a
+// picture is, scaled (a picture from before a resize, at its old size, is
+// drawn so until the new one comes). The size the player converts to is
+// told here, where the fitted rectangle is known.
 static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     Video *v = video_of(b->node);
@@ -19121,11 +19121,11 @@ static const os64_ui_class_t kViewClass = {
     .paints_part = true,   // view_paint paints what g.ui.dirty covers of it
 };
 
-// Which link, if any, is under the pointer, said on the status line.
 // The pointer itself moved, not the page under it (a scroll's re-hit): a
 // move for a video's strip. Set by the event, taken by hover.
 static bool s_pointer_moved;
 
+// Which link, if any, is under the pointer, said on the status line.
 static void hover(int32_t x, int32_t y)
 {
     g.pointer_x = x;
