@@ -8,9 +8,9 @@
 - [x] Implement guarded close bookkeeping and pre-context managed-root shutdown.
 - [x] Prove roles, rollback, stale identity, reentry and bounded cleanup with shared host/guest cases.
 - [x] Run both engine/root profiles, leak-enabled failure controls, affected integration and audits.
-- [ ] Freeze matching evidence, request Codex review and address findings without merging.
+- [x] Freeze matching evidence and publish #683 for Codex review; address findings without merging.
 
-Based on merged userland `4602ef25` and reviewed contract #675
+Implementation PR **#683**. Based on merged userland `4602ef25` and reviewed contract #675
 ([IFRAME_F15_CALLBACK_CAPTURE.md](IFRAME_F15_CALLBACK_CAPTURE.md)). The child
 F.15.21 is independent of the later F4 C3 input consumed by F.15.22; no C3
 representation, public activation, DOM migration, physical owner release or
