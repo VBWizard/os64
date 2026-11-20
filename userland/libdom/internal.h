@@ -401,7 +401,10 @@ struct DBrowsingContext {
     size_t charged_bytes;
     bool discarded;
     DNavigationRequest *navigation;
-    char name[];
+    size_t name_length;
+    /* Reserved at admission: conversion may allocate, native rename does not.
+     * Length preserves embedded NULs in script-supplied DOMStrings. */
+    char name[D_CONTEXT_NAME_MAX + 1];
 };
 
 struct os64_dom_cluster {
@@ -889,6 +892,7 @@ os64_dom_t *d_window_proxy_target(JSValueConst);
 JSValue d_window_identity(os64_dom_t *, JSContext *);
 JSValueConst d_window_this(os64_dom_t *);
 int d_window_identity_prepare(JSContext *, os64_dom_t *, DBrowsingContext *);
+bool d_browsing_context_rename(DBrowsingContext *, uint64_t, os64_dom_t *, const char *, size_t);
 /* Bootstrap prototypes for private origin-bearing Windows; undefined selects
  * Object.prototype for the EventTarget prototype's parent. */
 JSValue d_global_prototype(os64_dom_t *, JSContext *, JSValueConst);

@@ -1,5 +1,9 @@
 # F.4d — Private Window identity integration
 
+Current mutable-name storage, lookup and reset rules are specified in
+[Window.name](IFRAME_F4_WINDOW_NAME.md); layout and immutable-name statements
+below describe this brief's original milestone.
+
 The private `d_window_identity_prepare` host seam connects the native
 [WindowProxy boundary](IFRAME_F4_WINDOW_PROXY.md) to the engine and DOM values
 that expose a Window. Raw globals continue to own properties and document

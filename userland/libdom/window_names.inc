@@ -27,20 +27,23 @@ static int window_names_poll(os64_dom_t *dom, JSContext *ctx, size_t *steps)
 
 /* The first child with a name decides whether that name is supported. A
  * later same-origin duplicate cannot make an earlier foreign child visible. */
-static DBrowsingContext *window_named_child(os64_dom_t *dom, const char *name)
+static DBrowsingContext *window_named_child(os64_dom_t *dom, const char *name, size_t length)
 {
     DBrowsingContext *context = window_document_context(dom);
     for (DBrowsingContext *at = context ? context->first_child : NULL; at; at = at->next_sibling)
-        if (os64_streq(at->name, name)) return at;
+        if (at->name_length == length && !os64_memcmp(at->name, name, length)) return at;
     return NULL;
 }
 
-static int window_named_elements(os64_dom_t *dom, JSContext *ctx, const char *name,
+static int window_named_elements(os64_dom_t *dom, JSContext *ctx, const char *name, size_t length,
     const os64_html_node_t **first, bool *multiple)
 {
     const os64_html_node_t *root = dom->document->document;
     size_t steps = 0;
     *first = NULL; *multiple = false;
+    /* Native DOM attribute storage is NUL-terminated. A key with an embedded
+     * NUL may match a context name, but must not alias an attribute prefix. */
+    if (os64_strlen(name) != length) return 0;
     for (const os64_html_node_t *at = root->first_child; at; at = d_walk_next(root, at)) {
         if (window_names_poll(dom, ctx, &steps) < 0) return -1;
         if (!d_window_named_match(at, name)) continue;
@@ -87,21 +90,21 @@ static int window_names_get_own(JSContext *ctx, JSPropertyDescriptor *desc,
     const char *name = JS_ToCStringLen(ctx, &length, text);
     JS_FreeValue(ctx, text);
     if (!name) return -1;
-    if (!length || os64_strlen(name) != length) { JS_FreeCString(ctx, name); return 0; }
+    if (!length) { JS_FreeCString(ctx, name); return 0; }
     os64_dom_t *dom = backing->dom;
     const os64_html_node_t *first;
     bool multiple;
-    int result = window_named_elements(dom, ctx, name, &first, &multiple);
+    int result = window_named_elements(dom, ctx, name, length, &first, &multiple);
     if (result < 0) goto done;
-    DBrowsingContext *child = window_named_child(dom, name);
+    DBrowsingContext *child = window_named_child(dom, name, length);
     if (!first && (!child || !way_origin_same(dom->binding_origin, child->window->binding_origin))) goto done;
     result = window_name_visible(dom, ctx, key);
     if (result <= 0) goto done;
     /* Descriptor/prototype traps can change membership. Re-resolve before
      * wrapping a node or returning a context's stable proxy. */
-    result = window_named_elements(dom, ctx, name, &first, &multiple);
+    result = window_named_elements(dom, ctx, name, length, &first, &multiple);
     if (result < 0) goto done;
-    child = window_named_child(dom, name);
+    child = window_named_child(dom, name, length);
     if (!first && (!child || !way_origin_same(dom->binding_origin, child->window->binding_origin))) goto done;
     result = 1;
     if (desc) {
