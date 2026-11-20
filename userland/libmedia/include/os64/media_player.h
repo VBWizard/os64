@@ -182,9 +182,9 @@ typedef struct {
     bool has_sound;                 // a sound this player decodes (playable and wanted)
     bool muted;
     int64_t length;                 // output frames, -1 when not known; the end sets it if it was not
-                                    // known, and for a sound alone corrects it when more than a tenth of
-                                    // a second away (with a picture the end is no evidence: see the
-                                    // decoding thread)
+                                    // known, and for a sound alone played from its start corrects it
+                                    // when more than a tenth of a second away (with a picture, or after
+                                    // a seek, the end is no evidence: see the decoding thread)
     int64_t length_us, looked_us;   // micros() when `length` was last set, and `look` last rung
     int64_t position;               // the clock's reading now; the length once ENDED, when known
     // Readiness at the position, each implying the one before.

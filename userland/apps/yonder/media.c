@@ -560,10 +560,11 @@ static int64_t store_read(void *ctx, uint8_t *out, size_t cap)
 // there when the server answers ranges; one a little past it, or past it
 // on a server that does not, moves the reader there and the next read
 // waits for the bytes (media_bytes.h; the reader's place is what lets
-// pump take them past KEPT_AHEAD). None ever waits or asks while the media
-// is being opened: a reader probing the file's end, as the MP3 reader does
-// for its tags, carries on without them. Nothing past the resource's known
-// length is asked for.
+// pump take them past KEPT_AHEAD). While the media is being opened none
+// waits or asks, so a reader probing the file's end, as the MP3 reader does
+// for its tags, carries on without them; an ISO BMFF reader's seeks inside
+// a known length are the exception (store_seek). Nothing past the
+// resource's known length is asked for.
 static int64_t store_seek(void *ctx, uint64_t offset)
 {
     yonder_media_t *m = ctx;
@@ -579,10 +580,15 @@ static int64_t store_seek(void *ctx, uint64_t offset)
     // (`ftyp` at byte 4: MP4, M4A) cannot: a file not written for the web
     // keeps its index (`moov`) after its data, and the open seeks there. Its
     // seeks while opening are any reader's: a Range request with ranges,
-    // and without them a wait for the bytes, the window keeping the front.
+    // and without them a wait for the bytes, the window keeping the front
+    // up to KEPT_MAX (past it the seek back is refused: DEBTS).
     if (m->random_open < 0 && m->window.base == 0 && m->window.have >= 8)
         m->random_open = os64_memcmp(m->bytes + 4, "ftyp", 4) == 0;
-    if (m->random_open > 0)
+    // Only inside a known length: the reader also skips past `mdat` to the
+    // end while opening a file whose `moov` came first, and with no length
+    // to refuse it by, that skip would be a request past the end (a 416
+    // fails the bytes for good) or, with no ranges, a wait for the whole.
+    if (m->random_open > 0 && m->size >= 0 && offset < (uint64_t)m->size)
         opening = false;
     yonder_media_seek_state_t s = {opening, m->ranges, fetch_running(m) && !m->held, m->held, m->arrived};
     yonder_media_seek_t plan = yonder_media_seek_plan(&m->window, offset, &s);
@@ -697,9 +703,9 @@ static bool is_scheme(const char *url, const char *scheme)
 
 // The fetch job for a network address, its body from byte `from` on (a
 // Range request past 0; the cache answers none) streamed to the reader,
-// once a loader slot is free. False when the fetch could not begin; then
-// `loader_started` says whether a loader may be running all the same, and
-// the job and the pipe stay the session's until it is freed.
+// once a loader slot is free. False when the fetch could not begin; then no
+// loader runs, and only the session's side of a pipe already made remains
+// (fetch_stop, session_free let it go).
 static bool loader_start(yonder_media_t *m, uint64_t from)
 {
     if (!loader_slot_take(m))
@@ -756,8 +762,9 @@ static bool loader_start(yonder_media_t *m, uint64_t from)
     // Before the start: the loader may finish before thread_start returns,
     // and the session must not look free of it in between. Its slot is the
     // loader's to let go once it runs; a start that failed never runs it,
-    // so the job, its side of the pipe and the slot are let go here (the
-    // session's side goes as ever: fetch_stop, session_free).
+    // so the job (which lets go of its side of the pipe) and the slot are
+    // let go here, and the session's side goes as ever (fetch_stop,
+    // session_free).
     os64_lock_acquire(&m->lock);
     m->loader_started = true;
     os64_lock_release(&m->lock);
@@ -766,8 +773,7 @@ static bool loader_start(yonder_media_t *m, uint64_t from)
         m->loader_started = false;
         m->job = NULL;
         os64_lock_release(&m->lock);
-        yonder_fetch_pipe_release(job->pipe);
-        yonder_fetch_release(job, NULL);
+        yonder_fetch_release(job, NULL);   // and the job's side of the pipe
         loader_slot_release();
         return false;
     }
@@ -832,8 +838,8 @@ static bool source_prepare(yonder_media_t *m, os64_media_source_t *out)
     bool stopped = m->stop;
     os64_lock_release(&m->lock);
     if (stopped) {
-        // Closed before it ran (a start that answered an error): nothing
-        // to set up.
+        // The window closed it before the player's prepare ran: nothing to
+        // set up.
     } else if (!network) {
         char path[OS64_URL_REF_MAX];
         int64_t h = os64_open(file_path(m->url, path, sizeof(path)), "r");
@@ -1303,13 +1309,19 @@ bool yonder_media_report(uint32_t i, char *out, size_t cap)
     os64_lock_release(&s_audio.lock);
     if (m == NULL)
         return false;
-    os64_media_player_t *p = player_of(m);
+    // The player as the window holds it (player_of would give it pending
+    // asks: a record is no reason to).
+    os64_lock_acquire(&m->lock);
+    os64_media_player_t *p = m->player_closed ? NULL : m->player;
+    double told = m->facts.duration;
+    os64_lock_release(&m->lock);
     os64_media_player_facts_t f = {0};
     if (p != NULL)
         os64_media_player_facts(p, &f);
-    os64_lock_acquire(&m->lock);
     const char *kind = m->blob != NULL ? "blob" : is_scheme(m->url, "file:") ? "file" : "network";
-    double told = m->facts.duration;
+    // The bytes' scalars belong to the decoding thread, which writes them
+    // without a lock: read as they stand, for a record, nothing decided
+    // on them.
     int64_t size = m->size;
     bool ranges = m->ranges, arrived = m->arrived;
     unsigned requests = m->requests;
@@ -1317,13 +1329,12 @@ bool yonder_media_report(uint32_t i, char *out, size_t cap)
     if (m->refused_back > 0)
         os64_snprintf(refused, sizeof(refused), ", refused a seek back to byte %lu (let go, and no ranges)",
                       (unsigned long)(m->refused_back - 1));
-    os64_lock_release(&m->lock);
     char told_text[24], told_at[24], read_at[24];
     yonder_media_seconds(told, told_text, sizeof(told_text));
     since_open(m, m->told_us, told_at, sizeof(told_at));
     since_open(m, m->read_us, read_at, sizeof(read_at));
     if (p == NULL) {
-        os64_snprintf(out, cap, "%s %s, %ld bytes%s, %u requests%s: no player yet, told %s at %s, read at %s",
+        os64_snprintf(out, cap, "%s %s, %ld bytes%s, %u requests%s: no player (its create failed, or closed), told %s at %s, read at %s",
                       m->picture ? "video" : "audio", kind, (long)size, ranges ? ", ranges" : "", requests, refused,
                       told_text, told_at, read_at);
         return true;
@@ -1433,9 +1444,8 @@ void yonder_media_stop(void)
     // session to be freed, as its threads say they are done and its player
     // says `finished` (the output has let go of its voice), because the
     // environment they use is freed after it; then the output ends. A
-    // fetch notices the stop at its next
-    // look (a hop, the pipe's room, libfetch's queue); a start that truly
-    // failed would wait forever, which is the price thread_start names.
+    // fetch notices the stop at its next look (a hop, the pipe's room,
+    // libfetch's queue).
     for (;;) {
         yonder_media_reap();
         os64_lock_acquire(&s_audio.lock);

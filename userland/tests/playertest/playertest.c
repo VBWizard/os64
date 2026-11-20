@@ -658,6 +658,32 @@ static int step_length_corrected(void)
         return die(8, "the end did not correct the length to what was heard", f.length);
     if (f.looked_us < f.length_us)
         return die(8, "no look followed the corrected length", 0);
+    // Sought near the end and played out, the same file keeps its stated
+    // length: a run that began at a seek may have landed by estimate.
+    s_mp3_bytes = bytes;
+    mp3_t again = {0};
+    cfg.source.ctx = &again;
+    os64_memset(&r, 0, sizeof(r));
+    cfg.ctx = &r;
+    s_finished = false;
+    if (os64_media_output_create(&r.output) != 0)
+        return die(8, "the output would not start again", 0);
+    cfg.output = r.output;
+    if (os64_media_player_create(&cfg, &r.player) != 0)
+        return die(8, "the player would not start again", 0);
+    if (!wait_state(&r, OS64_MEDIA_PLAYER_PAUSED, 3000))
+        return die(8, "the player did not open the MP3 again", facts(&r).state);
+    (void)os64_media_player_seek(r.player, 40000);
+    os64_media_player_play(r.player);
+    ended = wait_state(&r, OS64_MEDIA_PLAYER_ENDED, 6000);
+    os64_media_player_facts_t sought = facts(&r);
+    rig_close(&r);
+    s_mp3_bytes = kSineMp3;
+    os64_printf("playertest: the same, sought to 40,000 and played out: %ld\n", sought.length);
+    if (!ended)
+        return die(8, "sought near its end, it did not end", sought.state);
+    if (sought.length != before.length)
+        return die(8, "a run that began at a seek corrected the length", sought.length);
     return 0;
 }
 

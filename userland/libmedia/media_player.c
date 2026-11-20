@@ -803,6 +803,10 @@ static int64_t decoding_thread(void *arg)
     // `pad_at`, since the output plays queued sound back to back.
     int64_t base = 0, run_end = 0, run_sound_end = 0, pad_at = 0, pad = 0;
     bool ended_queued = false;
+    // The run began at frame 0 (the open, a loop's start, a seek to 0): only
+    // such a run's end measures the media, since a seek elsewhere may land
+    // by estimate in exactly the files whose header is wrong.
+    bool from_start = true;
     int64_t position_looked = 0;          // a sound alone's last periodic `look`
     collect_t c = {0};
     os64_lock_acquire(&p->lock);
@@ -857,6 +861,7 @@ static int64_t decoding_thread(void *arg)
             resync_waiting = false;
             base = run_end = run_sound_end = pad = 0;   // a seek's place is the media's own
             ended_queued = false;
+            from_start = target == 0;
             unlock(p);
             int sought = os64_media_seek(p->media, target);
             os64_lock_acquire(&p->lock);
@@ -972,15 +977,15 @@ static int64_t decoding_thread(void *arg)
             // The end says how long the media is: a length the probe could
             // not say (an MP3 with no header served with no length) is the
             // run's end; one its header stated wrong (an MP3 whose Info
-            // frame count is wrong) is corrected for a SOUND ALONE, whose
-            // end is decoded whole. With a picture the end is no evidence
+            // frame count is wrong) is corrected for a SOUND ALONE whose
+            // run began at frame 0 (from_start), its end decoded whole. With a picture the end is no evidence
             // against the header: the sound may end before the pictures,
             // and a decoder held behind resyncs to the next keyframe,
             // which at the end of a file there is none of, so its last
             // pictures are never decoded. Within the slack the stated
             // length stands (streams end a frame or two from their
             // container).
-            int64_t heard_end = p->has_sound && !p->has_picture ? run_sound_end : -1;
+            int64_t heard_end = p->has_sound && !p->has_picture && from_start ? run_sound_end : -1;
             bool corrected = heard_end > 0 && p->length >= 0 &&
                              (heard_end - p->length > LENGTH_SLACK || p->length - heard_end > LENGTH_SLACK);
             if (all_done && run_end > 0 && (p->length < 0 || corrected)) {
