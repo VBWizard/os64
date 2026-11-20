@@ -300,8 +300,12 @@ what yonder's own decoder loop did moved into it or beside it:
   the clock never steps back; the position is folded into the length.
   Turned off, the last run queued ends it (step 2). A `<video>` loops the
   same way. Turned on too late for that (a picture queue already told its
-  end, or the last frame heard), it plays on from the start after a gap,
-  with no end.
+  end, or the output already took the last frame from the sound queue), it
+  plays on from the start after a gap, with no end. While one kind's run
+  is over and the other's goes on, the first is treated as ended for that
+  run: sound run dry is no buffering, pictures that stop are not late,
+  and the next run's sound is heard from when the clock reaches it
+  (`/tests/playertest` step 5, a clip each way round).
 - The source has an **`idle`** hook (`os64/media.h`), called by the
   decoding thread at each wake while it waits with nothing to read: it is
   where yonder keeps a network transfer moving and lets a fetch go when

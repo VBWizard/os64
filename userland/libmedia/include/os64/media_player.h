@@ -138,7 +138,8 @@ void os64_media_player_sync(os64_media_player_t *p, int64_t frames); // added to
 // the clock never steps; facts.position is folded into the media's length.
 // A run that gave nothing ends the media, as with loop off. Turned on once
 // the end can no longer be taken back (a picture queue told it, or the
-// sound's last frame was heard), the media plays on from its start after a
+// output has taken the sound's last frame from its queue), the media plays
+// on from its start after a
 // gap, still with no end. Turned off, the last run queued ends the media:
 // runs already queued after the one being heard (as many as the sound
 // queue's two seconds hold) play first.

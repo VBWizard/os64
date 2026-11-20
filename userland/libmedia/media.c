@@ -66,7 +66,8 @@
 // find_stream_info, which reads a few packets of a sound and, for an open
 // that wants the picture, decodes its first pictures too (up to some
 // twenty of an MP4's), from the source; and a close waits for an open in
-// flight, on the thread that closes (a player's decoding thread).
+// flight, on whichever thread closes (a player's decoding thread, or a
+// program's own), spinning and yielding as os64_lock does (DEBTS.md).
 // A sound-only open discards the picture's stream before it, so none of
 // its packets is made or decoded. tools/test_av_audit.py pins every one-time setup in
 // the build, so a configuration that adds one fails until it has been

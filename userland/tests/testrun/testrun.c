@@ -126,7 +126,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/mediakeystest",   NULL, 0x3E4B0000,  0x3E4B00FE,        "the media keys: the rule (playing, most recently active, the toggle), a full ring passed over, BUSY, a press, a signal and a close end a parked read, the kernel's answer, a killed session, the wall" },
     { "/tests/resampletest",    NULL, 0x5A3E0000,  0,          "libsound's resampler: a sine at 44.1 kHz comes out the same sine at 48, and back, and mono" },
     { "/tests/playtest",        NULL, 0x91A10000,  0x91A100FE,        "/bin/play end to end at the tap: a 44.1 kHz mono WAV is the same sine at 48, a 48 kHz one arrives sample for sample, bad files are refused, an MP3 is heard whole" },
-    { "/tests/playertest",      NULL, 0x91A50000,  0x91A500FE,        "libmedia's player for a sound alone, at the tap: heard whole at a gain, three threads, a loop with no seam, a refused device waited out from the first frame, the source's idle hook" },
+    { "/tests/playertest",      NULL, 0x91A50000,  0x91A500FE,        "libmedia's player for a sound alone, at the tap: heard whole at a gain, three threads, a loop with no seam, a refused device waited out from the first frame, the source's idle hook, a picture's loop whose kinds end apart" },
     // gplaytest reports 0x6F1A00FE on a boot with no desktop, or with a
     // sink that can be heard: the line it prints says which.
     { "/tests/gplaytest",       NULL, 0x6F1A0000,  0x6F1A00FE,        "/bin/gplay end to end: a video plays to its end with every frame of sound accounted for, covered for the whole clip too, a silent file, a soundless one refused, a script of keys (pause, seeks, mute, resizes, the readout, the sync dial)" },

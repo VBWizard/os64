@@ -18,6 +18,13 @@
 //      from its first frame
 //   4. IDLE: paused, the decoding thread calls the source's idle hook while
 //      it waits; libmedia's own reads never do
+//   5. A PICTURE'S LOOP whose sound and pictures end apart: two clips in
+//      /tests/pages, one with two seconds of pictures and one of sound
+//      (loop-sound-short.mp4), one the other way (loop-picture-short.mp4),
+//      each looped for five seconds while frames are asked for as a display
+//      would: it keeps playing through every run, never buffering for half
+//      a second, and the pace never asks a resync (made with ffmpeg's
+//      testsrc and sine: 320x240 H.264 at 30 a second, AAC at 48 kHz)
 //
 // Exit codes: 0x91A50000 success, 0x91A500NN the step that failed.
 // 0x91A500FE: skipped because something can be heard (sound_guard.h).
@@ -363,6 +370,92 @@ static int step_idle(void)
     return 0;
 }
 
+typedef struct {
+    int32_t file;
+} clip_t;
+
+static int64_t clip_read(void *ctx, uint8_t *out, size_t cap)
+{
+    clip_t *c = ctx;
+    return os64_read(c->file, out, cap);
+}
+
+static int64_t clip_seek(void *ctx, uint64_t offset)
+{
+    clip_t *c = ctx;
+    return os64_seek(c->file, (int64_t)offset, OS64_SEEK_SET);
+}
+
+static int step_picture_loop(const char *path)
+{
+    clip_t clip = {(int32_t)os64_open(path, "r")};
+    if (clip.file < 0)
+        return die(5, "the clip would not open", clip.file);
+    int64_t size = os64_seek(clip.file, 0, OS64_SEEK_END);
+    os64_seek(clip.file, 0, OS64_SEEK_SET);
+    rig_t r;
+    os64_memset(&r, 0, sizeof(r));
+    s_finished = false;
+    if (os64_media_output_create(&r.output) != 0)
+        return die(5, "the output would not start", 0);
+    os64_media_player_config_t cfg = {
+        .source = {&clip, clip_read, clip_seek, size, false, NULL},
+        .want = OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE,
+        .output = r.output,
+        .refused = OS64_MEDIA_VOICE_PLAY_ON,
+        .loaded = true,
+        .look = nothing,
+        .finished = finished,
+        .ctx = &r};
+    if (os64_media_player_create(&cfg, &r.player) != 0)
+        return die(5, "the player would not start", 0);
+    os64_media_player_size(r.player, 320, 240);
+    os64_media_player_loop(r.player, true);
+    os64_media_player_play(r.player);
+    const int64_t period = 16667;
+    int64_t start = os64_micros(), buffering_since = -1, longest = 0, last = -1;
+    int wraps = 0, code = 0;
+    bool played = false;
+    while (os64_micros() - start < 5000000) {
+        os64_media_player_frame_t fr;
+        (void)os64_media_player_frame(r.player, os64_micros() + period, period, &fr);
+        os64_media_player_facts_t f = facts(&r);
+        int64_t now = os64_micros();
+        if (f.state == OS64_MEDIA_PLAYER_PLAYING)
+            played = true;
+        if (f.state == OS64_MEDIA_PLAYER_ENDED || f.state == OS64_MEDIA_PLAYER_FAILED) {
+            code = die(5, "a looping clip ended or failed (the state)", f.state);
+            break;
+        }
+        if (played && f.state == OS64_MEDIA_PLAYER_BUFFERING) {
+            if (buffering_since < 0)
+                buffering_since = now;
+            if (now - buffering_since > longest)
+                longest = now - buffering_since;
+        } else {
+            buffering_since = -1;
+        }
+        if (last >= 0 && f.position < last - 24000)
+            wraps++;
+        last = f.position;
+        os64_sleep(16);
+    }
+    os64_media_player_facts_t f = facts(&r);
+    rig_close(&r);
+    os64_close(clip.file);
+    if (code != 0)
+        return code;
+    os64_printf("playertest: %s looped %d times; longest buffering %ld ms, resyncs %lu, dropped %lu\n", path, wraps,
+                longest / 1000, (unsigned long)f.pace.resyncs, (unsigned long)f.pace.dropped);
+    if (!played || longest > 500000)
+        return die(5, "a looping clip stuck buffering (ms)", longest / 1000);
+    if (wraps < 2)
+        return die(5, "a looping clip did not run on past its end (runs)", wraps);
+    if (f.pace.resyncs != 0)
+        return die(5, "the pace asked a resync as a run's pictures ended", (int64_t)f.pace.resyncs);
+    return 0;
+}
+
 int main(void)
 {
     char sink[32];
@@ -383,6 +476,10 @@ int main(void)
         code = step_wait();
     if (code == 0)
         code = step_idle();
+    if (code == 0)
+        code = step_picture_loop("/tests/pages/loop-sound-short.mp4");
+    if (code == 0)
+        code = step_picture_loop("/tests/pages/loop-picture-short.mp4");
     if (s_tap >= 0)
         os64_close(s_tap);
     if (volume >= 0)
