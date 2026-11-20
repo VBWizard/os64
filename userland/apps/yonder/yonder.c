@@ -809,6 +809,21 @@ typedef struct {
 // A page as the window holds it: libway's page (the tree, what it means,
 // the reader's flips) and its layout at the size it was laid out at. A
 // text/plain page has no tree of its own, so it is given one.
+// A <video>'s poster (VIDEO.md § 5, V.6.2). Layout and paint register and
+// read a slot (poster_seen), which never touches the page's picture table:
+// the media turn's posters_turn asks for a new address's picture, and marks
+// the box when the picture arrives or the show poster flag moves.
+#define POSTERS_MAX 32
+typedef struct {
+    const os64_html_node_t *node;   // held while the slot is (os64_html_hold); NULL a free slot
+    char *raw;                      // the `poster` attribute as last read, NULL for none
+    char *url;                      // it resolved against the page; NULL for none or no address
+    int32_t pic;                    // url's picture in the page's table, -1 none or not yet asked
+    bool asked;                     // url's picture has been asked for (pic is url's)
+    bool shown;                     // that picture was shown at the last turn
+    bool flag;                      // libdom's show poster flag at the last turn (true with no scripts)
+} PosterSlot;
+
 typedef struct Page {
     way_page_t way;
     struct Page *reuse_sheets;   // source of immutable parses during a rebuild
@@ -969,6 +984,7 @@ typedef struct Page {
     bool census_decided, censused, census_left;
     uint64_t census_began;
     yonder_census_timeline_t census;
+    PosterSlot posters[POSTERS_MAX];
 } Page;
 
 static yonder_scripts_t *page_scripts(const Page *p);
@@ -1206,6 +1222,12 @@ static void page_clear(Page *p)
     os64_free(p->bg_of);
     for (int32_t i = 0; i < p->nbox_scrolls; i++)
         os64_html_release(page_doc(p), p->box_scrolls[i].node);
+    for (int32_t i = 0; i < POSTERS_MAX; i++)
+        if (p->posters[i].node != NULL) {
+            os64_html_release(page_doc(p), p->posters[i].node);
+            os64_free(p->posters[i].raw);
+            os64_free(p->posters[i].url);
+        }
     tree_free(p->tree);
     flow_timeline_free(p->timeline);
     garb_cascade_free(p->cascade);
@@ -2713,6 +2735,7 @@ typedef struct {
 } Video;
 
 static Video s_videos[VIDEOS_MAX];
+static PosterSlot *poster_seen(Page *p, const os64_html_node_t *node);
 
 static Video *video_of(const os64_html_node_t *node)
 {
@@ -2747,6 +2770,19 @@ static bool replaced_size(void *ctx, const os64_html_node_t *node, int32_t *w, i
         *w = (int32_t)video->width;
         *h = (int32_t)video->height;
         return true;
+    }
+    // Before the video's size is known, its poster's once it has arrived
+    // (never the poster's once the video's is: videoWidth never comes from
+    // the poster). The slot is registered here, never the picture table.
+    const PosterSlot *poster = is_video_node(node) ? poster_seen((Page *)p, node) : NULL;
+    if (poster != NULL && poster->pic >= 0 && p->pics[poster->pic].state == PIC_SHOWN) {
+        uint32_t pw, ph;
+        picture_natural(&p->pics[poster->pic], &pw, &ph);
+        if (pw > 0 && ph > 0) {
+            *w = (int32_t)pw;
+            *h = (int32_t)ph;
+            return true;
+        }
     }
     // An audio's controls (player.h): the size Chrome gives its player.
     if (node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_AUDIO) {
@@ -10839,15 +10875,105 @@ static void video_remove(const yonder_media_t *session)
             s_videos[i] = (Video){0};
 }
 
-// The part of the shown page's view `v`'s box shows, page coordinates;
-// false when none (not laid out on the shown page, hidden, scrolled away).
-static bool video_on_view(const Video *v, os64_gui_rect_t *out)
+// ── Posters (VIDEO.md § 5, V.6.2) ───────────────────────────────────────
+
+// `node`'s poster slot on page `p`, made the first time the box is laid
+// out or painted, and its `poster` attribute read as it stands: a changed
+// one is resolved again and its picture asked for at the next turn
+// (posters_turn). The page's picture table is not touched here, since layout
+// and paint call it. NULL when every slot is taken (the poster is not
+// shown) or there is no memory.
+static PosterSlot *poster_seen(Page *p, const os64_html_node_t *node)
 {
-    const flow_box_t *b = g.page.tree != NULL ? flow_box_for(g.page.tree, v->node) : NULL;
+    PosterSlot *slot = NULL, *free_slot = NULL;
+    for (int32_t i = 0; i < POSTERS_MAX && slot == NULL; i++) {
+        if (p->posters[i].node == node)
+            slot = &p->posters[i];
+        else if (p->posters[i].node == NULL && free_slot == NULL)
+            free_slot = &p->posters[i];
+    }
+    const os64_html_attr_t *a = os64_html_attr(node, "poster");
+    const char *raw = a != NULL && a->value[0] != '\0' ? a->value : NULL;
+    if (slot == NULL) {
+        if (free_slot == NULL)
+            return NULL;
+        slot = free_slot;
+        *slot = (PosterSlot){.node = node, .pic = -1, .flag = true};
+        os64_html_hold(page_doc(p), node);
+    } else if (raw == NULL ? slot->raw == NULL : slot->raw != NULL && os64_streq(raw, slot->raw)) {
+        return slot;
+    }
+    // A new address (or none): what was asked for goes with the old one.
+    os64_free(slot->raw);
+    os64_free(slot->url);
+    slot->raw = raw != NULL ? copy_text(raw) : NULL;
+    slot->url = NULL;
+    slot->pic = -1;
+    slot->asked = slot->shown = false;
+    char resolved[OS64_FETCH_URL_MAX];
+    if (raw != NULL && os64_dom_resolve(page_doc(p), p->way.url, raw, resolved, sizeof(resolved)))
+        slot->url = copy_text(resolved);
+    return slot;
+}
+
+// The part of a box the shown page's view shows, page coordinates; false
+// when none (not laid out on the shown page, hidden, scrolled away).
+static bool box_on_view(const os64_html_node_t *node, os64_gui_rect_t *out)
+{
+    const flow_box_t *b = g.page.tree != NULL ? flow_box_for(g.page.tree, node) : NULL;
     if (b == NULL || !b->replaced || b->style->visibility != FLOW_VISIBLE || b->unpainted)
         return false;
     os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
     return os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, out);
+}
+
+// The media turn's poster pass: a new address's picture asked for and fed
+// to the pool; a poster that arrived, and a show poster flag that moved
+// (libdom's, which a play or a seek clears), each mark the box, so the
+// picture takes over from the poster at the next paint. A poster that
+// arrives before the video's size is known lays the page out once, unless
+// the page fixed the box's size.
+static void posters_turn(void)
+{
+    Page *p = &g.page;
+    bool fed = false;
+    for (int32_t i = 0; i < POSTERS_MAX; i++) {
+        PosterSlot *slot = &p->posters[i];
+        if (slot->node == NULL || p->tree == NULL || flow_box_for(p->tree, slot->node) == NULL)
+            continue;
+        if (slot->url != NULL && !slot->asked) {
+            slot->asked = true;
+            slot->pic = picture_for(p, slot->url);
+            if (slot->pic >= 0 && p->pics[slot->pic].state == PIC_QUEUED) {
+                p->pics[slot->pic].cover_whole = true;
+                fed = true;
+            }
+        }
+        bool shown = slot->pic >= 0 && p->pics[slot->pic].state == PIC_SHOWN;
+        os64_dom_media_view_t view;
+        bool flag = !yonder_scripts_media_view(p->scripts, slot->node, &view) || view.show_poster;
+        if (shown == slot->shown && flag == slot->flag)
+            continue;
+        const Video *v = video_of(slot->node);
+        if (shown && !slot->shown && (v == NULL || v->width == 0) && !picture_sized(p, slot->node)) {
+            layout_revision(&s_layout_resources.pictures);
+            g.pictures_moved = true;
+        }
+        slot->shown = shown;
+        slot->flag = flag;
+        os64_gui_rect_t part;
+        if (box_on_view(slot->node, &part))
+            mark_part(part);
+    }
+    if (fed)
+        pictures_feed(p);
+}
+
+// The part of the shown page's view `v`'s box shows, page coordinates;
+// false when none (not laid out on the shown page, hidden, scrolled away).
+static bool video_on_view(const Video *v, os64_gui_rect_t *out)
+{
+    return box_on_view(v->node, out);
 }
 
 // Whether `v` wants the display's frames: it has a picture, plays or its
@@ -16230,6 +16356,34 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
 // A picture that arrived is drawn where object-fit and object-position put
 // it in its box, scaled and blended (scale.c), and cut to the box; one on
 // its way, or that will not come, keeps its frame.
+// Draws the page's shown picture `k` in box `b` (content `c`) on glass
+// `gl`, cut to `cut` (glass coordinates): placed by object-fit and
+// object-position, cut to the content box, the pixels kept, whatever their
+// size, scaled to it. False when there is nothing to draw (an SVG that
+// would not rasterize).
+static bool glass_picture(const Glass *gl, const Page *p, int32_t k, const flow_box_t *b, os64_gui_rect_t c,
+                          os64_gui_rect_t cut)
+{
+    uint32_t w, h;
+    const uint32_t *px = picture_pixels(&p->pics[k], &w, &h);
+    os64_gui_rect_t at = picture_object_rect(p, &p->pics[k], b, c);
+    os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
+    os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
+    if (!os64_rect_intersect(cut, content, &cut))
+        return true;
+    yonder_svg_pixels_t vector_pixels = {0};
+    if (p->pics[k].kind == YONDER_PICTURE_SVG) {
+        if (!svg_picture_pixels(&p->pics[k], at, &vector_pixels))
+            return false;
+        px = vector_pixels.pixels;
+        w = (uint32_t)vector_pixels.rect.w;
+        h = (uint32_t)vector_pixels.rect.h;
+    }
+    yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated, px, w, h);
+    svg_picture_pixels_free(&vector_pixels);
+    return true;
+}
+
 static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     const Glass *gl = ctx;
@@ -16238,30 +16392,9 @@ static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
         return;
     const Page *p = &g.page;
     int32_t i = p->pic_of != NULL ? os64_page_image_for(page_model(p), b->node) : -1;
-    if (i >= 0 && i < p->nimage_map && p->pic_of[i] >= 0 && p->pics[p->pic_of[i]].state == PIC_SHOWN) {
-        uint32_t w, h;
-        const uint32_t *px = picture_pixels(&p->pics[p->pic_of[i]], &w, &h);
-        // Placed by object-fit and object-position, and cut to its content
-        // box; the pixels kept, whatever their size, are scaled to it.
-        os64_gui_rect_t at = picture_object_rect(p, &p->pics[p->pic_of[i]], b, c);
-        os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
-        os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
-        if (!os64_rect_intersect(cut, content, &cut))
-            return;
-        yonder_svg_pixels_t vector_pixels = {0};
-        if (p->pics[p->pic_of[i]].kind == YONDER_PICTURE_SVG) {
-            if (!svg_picture_pixels(&p->pics[p->pic_of[i]], at, &vector_pixels))
-                goto frame;
-            px = vector_pixels.pixels;
-            w = (uint32_t)vector_pixels.rect.w;
-            h = (uint32_t)vector_pixels.rect.h;
-        }
-        yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated,
-                            px, w, h);
-        svg_picture_pixels_free(&vector_pixels);
+    if (i >= 0 && i < p->nimage_map && p->pic_of[i] >= 0 && p->pics[p->pic_of[i]].state == PIC_SHOWN &&
+        glass_picture(gl, p, p->pic_of[i], b, c, cut))
         return;
-    }
-frame:
     // The frame of one still coming, cut the same way.
     Glass narrow = *gl;
     narrow.clip = cut;
@@ -16607,6 +16740,23 @@ static void pane_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_g
 static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     Video *v = video_of(b->node);
+    // The poster while the show poster flag is set, and after it until the
+    // first picture (an autoplay shows no gap between them): drawn as a
+    // picture is, on the general path.
+    const PosterSlot *poster = poster_seen(&g.page, b->node);
+    bool poster_ready = poster != NULL && poster->pic >= 0 && g.page.pics[poster->pic].state == PIC_SHOWN;
+    bool picture_ready = v != NULL && v->width > 0 && v->frame.pixels != NULL && v->frame.w > 0 && v->frame.h > 0;
+    bool showing_poster = poster_ready && (poster->flag || !picture_ready);
+    if (showing_poster) {
+        for (int32_t k = 0; k < gp->n; ++k) {
+            Glass *gl = gp->now[k];
+            os64_gui_rect_t cut = on_glass(gl, clip);
+            if (cut.w > 0 && cut.h > 0)
+                (void)glass_picture(gl, &g.page, poster->pic, b, c, cut);
+        }
+    }
+    // The player is told its size whatever is shown, so the first picture
+    // comes converted to fit.
     if (v == NULL || v->width == 0 || v->height == 0)
         return;
     os64_gui_rect_t at = yonder_object_rect(b->style, c, zoomed_px(v->width, g.page.laid_zoom),
@@ -16629,7 +16779,7 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
         v->sizing = 60;
     }
     const os64_media_player_frame_t *fr = &v->frame;
-    if (fr->pixels == NULL || fr->w == 0 || fr->h == 0)
+    if (fr->pixels == NULL || fr->w == 0 || fr->h == 0 || showing_poster)
         return;
     bool fits = fr->w == (uint32_t)at.w && fr->h == (uint32_t)at.h;
     int64_t began = os64_micros();
@@ -19994,6 +20144,7 @@ int main(int argc, char **argv)
         players_ask_run();
         bool media_more = media_turn();
         videos_turn();
+        posters_turn();
         keys_turn();
         players_show();
         motion_tick();
