@@ -419,6 +419,7 @@ static bool player_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_even
         if (ev->mouse.button != OS64_GUI_MOUSE_LEFT)
             return false;
         p->keyed = false;
+        p->by_press = true;
         os64_ui_set_focus(ui, w);
         int32_t x = ev->mouse.x, y = ev->mouse.y;
         if (in(parts.play, x, y)) {
@@ -456,10 +457,6 @@ static bool player_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_even
         return true;
     }
     case OS64_GUI_EVENT_KEY_DOWN:
-        if (!p->keyed) {
-            p->keyed = true;
-            os64_ui_mark_dirty(ui, w);
-        }
         return player_key(p, ui, ev);
     default:
         return false;

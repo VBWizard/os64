@@ -40,10 +40,11 @@ mutants = [
     # (A move that set PINNED would change nothing: every move meets a settle
     # before anything reads the state, and the settle decides PINNED itself.)
     # Timed.
-    ('timed-ignores-the-deadline', '(!s->over_box || now >= s->deadline)', '(!s->over_box)'),
-    ('timed-ignores-the-box', '(!s->over_box || now >= s->deadline)', '(now >= s->deadline)'),
+    ('timed-ignores-the-deadline', 'if (!s->over_box || (!s->buffering && now >= s->deadline))', 'if (!s->over_box)'),
+    ('timed-ignores-the-box', 'if (!s->over_box || (!s->buffering && now >= s->deadline))', 'if (!s->buffering && now >= s->deadline)'),
     ('the-deadline-is-exclusive', 'now >= s->deadline', 'now > s->deadline'),
-    ('buffering-does-not-hold', 'if (!s->buffering && (!s->over_box', 'if ((!s->over_box'),
+    ('buffering-does-not-hold', '(!s->buffering && now >= s->deadline)', '(now >= s->deadline)'),
+    ('buffering-holds-the-box', 'if (!s->over_box || (!s->buffering && now >= s->deadline))', 'if (!s->buffering && (!s->over_box || now >= s->deadline))'),
     ('hidden-comes-back-by-itself', '    } else if (s->state != YONDER_STRIP_HIDDEN) {', '    } else {'),
     # The mark.
     ('the-mark-outlives-buffering', '    if (!s->buffering) {\n        s->mark = YONDER_MARK_NONE;\n    } else if', '    if (!s->buffering) {\n    } else if'),

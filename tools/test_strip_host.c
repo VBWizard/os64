@@ -57,11 +57,15 @@ static void cases(void)
     s.buffering = true;
     CHECK(!yonder_strip_settle(&s, YONDER_STRIP_IDLE_MS + 50) && yonder_strip_drawn(&s), "buffering holds it past its deadline");
     CHECK(yonder_strip_next(&s) == YONDER_STRIP_IDLE_MS + 50 + YONDER_STRIP_MARK_MS, "while buffering only the mark is armed");
-    s.over_box = false;
-    CHECK(yonder_strip_drawn(&s) && (yonder_strip_settle(&s, YONDER_STRIP_IDLE_MS + 60), yonder_strip_drawn(&s)),
-          "buffering holds it even with the pointer gone");
     s.buffering = false;
     CHECK(yonder_strip_settle(&s, YONDER_STRIP_IDLE_MS + 70) && !yonder_strip_drawn(&s), "buffering over: hidden");
+    s = fresh();
+    s.over_box = true;
+    yonder_strip_moved(&s, 0);
+    yonder_strip_settle(&s, 0);
+    s.buffering = true;
+    s.over_box = false;
+    CHECK(yonder_strip_settle(&s, 10) && !yonder_strip_drawn(&s), "leaving the box hides it, buffering or not");
     s.buffering = true;
     yonder_strip_settle(&s, 9000);
     CHECK(!yonder_strip_drawn(&s), "buffering never shows a hidden strip");
@@ -136,7 +140,7 @@ static void model_settle(model_t *m, const yonder_strip_t *in, uint64_t now)
         m->state = 2;
     else if (m->state != 0) {
         bool expired = !m->moved || now >= m->last_move + YONDER_STRIP_IDLE_MS;
-        m->state = (!in->buffering && (!in->over_box || expired)) ? 0 : 1;
+        m->state = (!in->over_box || (!in->buffering && expired)) ? 0 : 1;
     }
     if (!in->buffering)
         m->mark = 0;

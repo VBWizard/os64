@@ -54,9 +54,12 @@ struct yonder_player {
     // ink, the text on small dark pills (a run paints its own paper), and no
     // bar for a length not known. An audio's is the opaque panel.
     bool over_picture;
-    // Its focus is the keyboard's: the last input it took was a key, not a
-    // press (a press focuses it too, and must not pin a video's strip).
+    // Its focus is the keyboard's: it arrived without a press (Tab). A
+    // press focuses it too, and must not pin a video's strip; the press
+    // sets `by_press`, and the window, seeing the focus arrive, sets
+    // `keyed` from it (strips_turn).
     bool keyed;
+    bool by_press;
 };
 
 // Where each part is drawn in `bounds`; a part with no room has width 0.

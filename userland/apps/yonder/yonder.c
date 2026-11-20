@@ -2092,9 +2092,17 @@ typedef struct {
     int32_t nasks;
     // A video's strip over its picture (strip.h): whether it is drawn and
     // its buffering mark, settled by strips_turn. `played` is the element
-    // seen playing once, so an autoplay that has not begun is not pinned.
+    // seen playing once since its `src` (`src_hash`) last changed, so an
+    // autoplay that has not begun is not pinned. `had_focus` is the strip's
+    // focus at the last settle, so a focus arriving is seen. `kept_focus`:
+    // the strip hid while it held the focus, which libui lets go from a
+    // hidden widget; a key comes to it while nothing else is focused
+    // (strip_key), and brings it back.
     bool video;
     bool played;
+    bool had_focus;
+    bool kept_focus;
+    uint64_t src_hash;
     yonder_strip_t strip;
 } Player;
 
@@ -10757,6 +10765,10 @@ static void player_act(yonder_player_t *p, os64_dom_media_control_t what, double
 {
     (void)p;
     Player *pl = user;
+    // Whatever the strip was asked (a press on it, or a key it handled while
+    // focused, drawn or not) is a move for it.
+    if (pl->video)
+        yonder_strip_moved(&pl->strip, yonder_now_ms());
     if (pl->nasks > 0 && pl->asks[pl->nasks - 1].what == what) {
         pl->asks[pl->nasks - 1].value = value;
         return;
@@ -11131,11 +11143,28 @@ static void videos_tick(void)
 
 static void strips_turn(bool moved);
 
-// A click that reached a video's picture: its play or pause, and a move
-// for its strip, from which a pause pins it and a play is timed. False
-// when the node is no <video controls> with a player.
-static bool player_click(const os64_html_node_t *node)
+// Whether (x, y), window coordinates, is on a drawn player as it is seen
+// (its bounds within its clip).
+static bool player_holds(const Player *pl, int32_t x, int32_t y)
 {
+    const os64_ui_widget_t *w = &pl->p.w;
+    os64_gui_rect_t r = w->bounds;
+    if (w->hidden || (w->clipped && !os64_rect_intersect(r, w->clip, &r)))
+        return false;
+    return x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
+}
+
+// A click at (x, y), window coordinates, that reached a video: on its
+// picture, its play or pause, and a move for its strip, from which a
+// pause pins it and a play is timed. On a drawn strip it is the strip's
+// own press (with pointer events the strip is handed the press, and the
+// click still names the video), and nothing more is done. False when no
+// <video controls> with a player is under it.
+static bool player_click(const os64_html_node_t *node, int32_t x, int32_t y)
+{
+    for (int32_t i = 0; i < g.nplayers; i++)
+        if (g.players[i]->video && player_holds(g.players[i], x, y))
+            return true;
     for (int32_t i = 0; i < g.nplayers; i++) {
         Player *pl = g.players[i];
         if (pl->node != node || !pl->video)
@@ -11175,6 +11204,14 @@ static void strips_turn(bool moved)
         if (!pl->video)
             continue;
         const os64_dom_media_view_t *v = &pl->p.view;
+        const os64_html_attr_t *src = os64_html_attr(pl->node, "src");
+        uint64_t hash = 1469598103934665603ull;          // FNV-1a of `src`
+        for (const char *c = src != NULL ? src->value : ""; *c != '\0'; c++)
+            hash = (hash ^ (uint8_t)*c) * 1099511628211ull;
+        if (hash != pl->src_hash) {
+            pl->src_hash = hash;
+            pl->played = false;
+        }
         if (!v->paused)
             pl->played = true;
         yonder_strip_t *st = &pl->strip;
@@ -11184,9 +11221,17 @@ static void strips_turn(bool moved)
         os64_gui_rect_t part;
         st->over_box = box_on_view(pl->node, &part) && px >= part.x && py >= part.y && px < part.x + part.w &&
                        py < part.y + part.h;
-        const os64_ui_widget_t *w = &pl->p.w;
-        st->over_strip = !w->hidden && g.pointer_x >= w->bounds.x && g.pointer_y >= w->bounds.y &&
-                         g.pointer_x < w->bounds.x + w->bounds.w && g.pointer_y < w->bounds.y + w->bounds.h;
+        os64_ui_widget_t *w = &pl->p.w;
+        if (pl->kept_focus && g.ui.focus != NULL && g.ui.focus != w)
+            pl->kept_focus = false;     // the person focused something else
+        st->over_strip = player_holds(pl, g.pointer_x, g.pointer_y);
+        // A focus that arrived without a press is the keyboard's.
+        if (w->focused && !pl->had_focus && pl->p.keyed != !pl->p.by_press) {
+            pl->p.keyed = !pl->p.by_press;
+            os64_ui_mark_dirty(&g.ui, w);           // its focus ring
+        }
+        pl->had_focus = w->focused;
+        pl->p.by_press = false;
         st->focused = w->focused && pl->p.keyed;
         st->dragging = pl->p.drag != YONDER_PLAYER_DRAG_NONE;
         // Waiting is buffering unless it waits for the sound device.
@@ -11198,11 +11243,40 @@ static void strips_turn(bool moved)
         if (!yonder_strip_settle(st, now) && drawn == yonder_strip_drawn(st))
             continue;
         place |= drawn != yonder_strip_drawn(st);
+        if (drawn && !yonder_strip_drawn(st) && w->focused)
+            pl->kept_focus = true;
         if (marked != (st->mark == YONDER_MARK_SHOWN) && box_on_view(pl->node, &part))
             mark_part(part);
     }
     if (place)
         players_place();
+}
+
+// A key while nothing is focused, for a video whose strip hid while it held
+// the focus: the strip's, as if still focused. One it handles is a move
+// (player_act), so the strip shows again and takes its focus back. False
+// for a key nobody kept.
+static bool strip_key(const os64_gui_event_t *ev)
+{
+    if ((ev->type != OS64_GUI_EVENT_KEY_DOWN && ev->type != OS64_GUI_EVENT_KEY_UP) || g.ui.focus != NULL)
+        return false;
+    for (int32_t i = 0; i < g.nplayers; i++) {
+        Player *pl = g.players[i];
+        if (!pl->kept_focus)
+            continue;
+        if (ev->type == OS64_GUI_EVENT_KEY_UP)
+            return true;
+        os64_ui_widget_t *w = &pl->p.w;
+        bool handled = w->cls->event != NULL && w->cls->event(w, &g.ui, ev);
+        strips_turn(false);
+        if (!w->hidden) {
+            pl->had_focus = true;       // given back, not arrived: not the keyboard's
+            pl->kept_focus = false;
+            os64_ui_set_focus(&g.ui, w);
+        }
+        return handled;
+    }
+    return false;
 }
 
 // The earliest time a strip's rules change with no new input: a shown
@@ -11246,12 +11320,12 @@ static void players_place(void)
         int64_t x = (int64_t)v.x + at.x - g.sx, y = (int64_t)v.y + at.y - g.sy;
         const os64_ui_class_t *cls = b != NULL && b->unpainted ? unpainted_class(&yonder_player_class)
                                                                : &yonder_player_class;
-        bool shown = b != NULL && b->replaced && b->style->visibility == FLOW_VISIBLE && cls != NULL &&
-                     (!g.players[i]->video || yonder_strip_drawn(&g.players[i]->strip)) &&
-                     at.w > 0 && at.h > 0 && x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h &&
-                     x + at.w > v.x && y + at.h > v.y &&
-                     !flow_box_covered_at(g.page.tree, b, (int32_t)((int64_t)at.x + at.w / 2),
-                                          (int32_t)((int64_t)at.y + at.h / 2), scroll_now());
+        bool placed = b != NULL && b->replaced && b->style->visibility == FLOW_VISIBLE && cls != NULL &&
+                      at.w > 0 && at.h > 0 && x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h &&
+                      x + at.w > v.x && y + at.h > v.y &&
+                      !flow_box_covered_at(g.page.tree, b, (int32_t)((int64_t)at.x + at.w / 2),
+                                           (int32_t)((int64_t)at.y + at.h / 2), scroll_now());
+        bool shown = placed && (!g.players[i]->video || yonder_strip_drawn(&g.players[i]->strip));
         if (cls != NULL && cls != w->cls) {
             w->cls = cls;
             os64_ui_mark_dirty(&g.ui, w);
@@ -11263,10 +11337,21 @@ static void players_place(void)
         if (moved && !w->hidden)
             os64_ui_mark_dirty(&g.ui, w);
         w->bounds = r;
-        if (shown == w->hidden)
-            os64_ui_set_hidden(&g.ui, w, !shown);
-        else if (moved && shown)
+        // Hidden by the strip's own rules alone: only its rectangle repaints
+        // (libui's set_hidden would repaint the whole window). Its focus
+        // goes at libui's next event either way; strips_turn keeps it for
+        // the strip (kept_focus).
+        bool ruled = g.players[i]->video && !yonder_strip_drawn(&g.players[i]->strip);
+        if (shown == w->hidden && (shown || ruled) && placed) {
+            w->hidden = !shown;
             os64_ui_mark_dirty(&g.ui, w);
+            if (!shown && g.ui.hover == w)
+                os64_ui_clear_hover(&g.ui);
+        } else if (shown == w->hidden) {
+            os64_ui_set_hidden(&g.ui, w, !shown);
+        } else if (moved && shown) {
+            os64_ui_mark_dirty(&g.ui, w);
+        }
     }
 }
 
@@ -14979,9 +15064,9 @@ static void inputs_run(void)
             os64_dom_event_t ev = mouse_event("click", true, &in);
             if (page_event(&ev, in.node))
                 break;
-            // A click on a <video controls>' picture (a drawn strip takes its
-            // own clicks) plays or pauses it, unless a listener prevented it.
-            if (player_click(in.node))
+            // A click on a <video controls>' picture plays or pauses it,
+            // unless a listener prevented it.
+            if (player_click(in.node, in.x, in.y))
                 break;
             // The listeners may have rebuilt the page: the image is found
             // again, and is gone if they took it away.
@@ -20048,7 +20133,7 @@ static void window_event(void *user, const os64_gui_event_t *event)
                              cookies_use);
     else if (!((s_pointer_draining || yonder_scripts_pointer_active(g.page.scripts)) && pointer_route(&ev)) &&
              !bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
-             !password_key(&ev) && !pointer_route(&ev))
+             !password_key(&ev) && !pointer_route(&ev) && !strip_key(&ev))
         ui_dispatch(&ev);
     pointer_cancel_run();
     if (s_pointer_menu) {

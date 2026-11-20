@@ -15,8 +15,8 @@
 //           focus, or a drag on its bar or volume is under way (one that
 //           leaves the box stays pinned until the button is released).
 //   TIMED   drawn, takes clicks: until the last move over the box + 3 s,
-//           or the pointer leaving the box. Buffering holds it: the
-//           deadline does not pass while the player buffers.
+//           or the pointer leaving the box. Buffering holds the deadline:
+//           it does not pass while the player buffers (leaving still hides).
 //   HIDDEN  not drawn, takes no clicks (a click on the box is a click on
 //           the picture). Buffering never shows it: the mark speaks.
 // A pointer move over the box, a click on the picture and a key the

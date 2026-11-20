@@ -658,15 +658,21 @@ interrupts off is heard.
   it is drawn is `apps/yonder/strip.c` (pure, `tools/test_strip_host.sh`
   beside a model, `tools/test_strip_mutants.py`): PINNED while the element
   is paused or ended (an autoplay, asked to play, is not pinned before it
-  begins), the pointer is over the strip, the strip has the keyboard's
-  focus (a press focuses it too, and does not pin it) or a drag is under
-  way; TIMED for 3 s after the last move over the box, held while the
-  player buffers; HIDDEN otherwise, drawn not at all and taking no clicks.
-  A real pointer move, a click on the picture and a handled key are moves;
-  a scroll's re-hit is not, and the pointer leaving the window is leaving
-  the box. A click on the picture plays or pauses after the page's
-  listeners, unless one prevented it (both pointer paths: `inputs_run`'s
-  and `pointer_default`'s). The buffering mark, a dark square with three
+  begins; a new `src` starts that over), the pointer is over the strip,
+  the strip has the keyboard's focus (one that arrived without a press,
+  by Tab; a press focuses it too, and does not pin it) or a drag is under
+  way; TIMED for 3 s after the last move over the box, the deadline held
+  while the player buffers; HIDDEN when the deadline passes or the pointer
+  leaves the box, drawn not at all and taking no clicks, only its
+  rectangle repainted. A real pointer move, a click on the picture and a
+  key the strip handles are moves; a scroll's re-hit is not, and the
+  pointer leaving the window is leaving the box. A strip that hides while
+  focused keeps the keys while nothing else is focused (libui lets a
+  hidden widget's focus go; yonder's `strip_key` keeps it), and a key it
+  handles brings it back. A click on the picture plays or pauses after the
+  page's listeners, unless one prevented it (both pointer paths:
+  `inputs_run`'s and `pointer_default`'s); one on a drawn strip is the
+  strip's own. The buffering mark, a dark square with three
   dots in the box's middle, shows after half a second of the view's
   `waiting` (DEBTS: a video stalled on its bytes did not raise it in
   QEMU). One deadline for the loop, armed only while a strip is TIMED with

@@ -27,10 +27,10 @@ bool yonder_strip_settle(yonder_strip_t *s, uint64_t now)
         s->state = YONDER_STRIP_PINNED;
     } else if (s->state != YONDER_STRIP_HIDDEN) {
         // PINNED lets go into TIMED from the last move (a deadline already
-        // past hides it at once); TIMED hides at its deadline or when the
-        // pointer leaves the box, but never while the player buffers.
+        // past hides it at once); TIMED hides when the pointer leaves the
+        // box, and at its deadline unless the player buffers.
         s->state = YONDER_STRIP_TIMED;
-        if (!s->buffering && (!s->over_box || now >= s->deadline))
+        if (!s->over_box || (!s->buffering && now >= s->deadline))
             s->state = YONDER_STRIP_HIDDEN;
     }
     if (!s->buffering) {
