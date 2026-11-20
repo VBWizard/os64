@@ -88,6 +88,7 @@ typedef struct {
     OwnerCallback *callbacks;
     size_t callback_capacity, callback_invocations;
     uint64_t callback_serial;
+    JSOwnerIncarnationIssuer context_issuer;
     bool callback_cleaning;
 } OwnerMetadata;
 struct JSOwnerRuntimeScope {
@@ -308,6 +309,29 @@ JSOwnerStatus js_owner_runtime_owner(const os64_js_runtime_t *runtime, JSOwnerTi
     if (result != JS_OWNER_OK) return result;
     *out = (JSOwnerRealmSnapshot){ticket.owner, realm == &runtime->realms[0],
         realm->staged, realm->retired, realm->failed};
+    return JS_OWNER_OK;
+}
+
+JSOwnerStatus js_owner_runtime_owner_snapshot(const os64_js_runtime_t *runtime, JSOwnerId owner,
+    JSOwnerRealmSnapshot *out)
+{
+    if (!out || !owner.incarnation || !owner.serial) return JS_OWNER_INVALID;
+    OwnerBinding *binding = owner_binding(runtime, owner);
+    if (!binding || !binding->assigned || binding->realm_index >= runtime->realm_count) return JS_OWNER_STALE;
+    const os64_js_realm_t *realm = &runtime->realms[binding->realm_index];
+    *out = (JSOwnerRealmSnapshot){owner, binding->realm_index == 0,
+        realm->staged, realm->retired, realm->failed};
+    return JS_OWNER_OK;
+}
+
+JSOwnerStatus js_owner_runtime_context_id(os64_js_runtime_t *runtime, JSOwnerContextId *out)
+{
+    if (!runtime || !runtime->metadata_selected || runtime->destroying || !out) return JS_OWNER_INVALID;
+    OwnerMetadata *metadata = runtime->owner.metadata;
+    uint64_t serial;
+    JSOwnerStatus result = js_owner_incarnation_reserve(&metadata->context_issuer, &serial);
+    if (result != JS_OWNER_OK) return result;
+    *out = (JSOwnerContextId){metadata->incarnation, serial};
     return JS_OWNER_OK;
 }
 

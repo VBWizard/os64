@@ -1924,6 +1924,23 @@ void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts,
 
 #include "location_exotic.inc"
 #include "window_proxy.inc"
+
+void d_exposure_counts(const os64_dom_t *dom, DExposureCounts *out)
+{
+    DExposureCounts counts = {.window_identity_aliases=dom->window_identity != NULL};
+    if (dom->window_proxy_state) {
+        DWindowProxy *proxy = dom->window_proxy_state;
+        counts.window_proxy_roots = proxy->context->proxy != NULL;
+        for (DWindowDescriptor *at = proxy->cache; at; at = at->next)
+            counts.window_descriptor_roots += at->parts != NULL;
+    }
+    if (dom->location_exotic) {
+        counts.location_backing_roots = dom->location_exotic->backing != NULL;
+        for (DLocationDescriptor *at = dom->location_exotic->cache; at; at = at->next)
+            counts.location_descriptor_roots += at->function != NULL;
+    }
+    *out = counts;
+}
 #include "window_names.inc"
 
 void d_window_free(os64_dom_t *dom)
