@@ -117,7 +117,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/stat_test",       NULL, 0x57A7600D,  0x57A70007, "stat is readdir for exactly one name" },
     { "/tests/sleep_test",      NULL, 0x51EE600D,  0,          "sleep parks at least as long as asked" },
     { "/tests/memory_test",     NULL, 0xF3EE600D,  0,          "the memory syscall's snapshot" },
-    { "/tests/threadtest",      NULL, 0x1B2EAD00,  0,          "threads: create, argument, join, shared address space" },
+    { "/tests/threadtest",      NULL, 0x1B2EAD00,  0,          "threads: create, argument, join, shared address space; a start out of handles runs anyway, and os64_thread_or_nothing's does not" },
     { "/tests/worktest",        NULL, 0x600C0000,  0x600C0002, "Worker pool: ownership, admission, cancellation, shutdown" },
     { "/tests/doorbelltest",    NULL, 0x600B0000,  0x600B0002, "GUI doorbell: owner, coalescing, overflow, worker wake, libui" },
     { "/tests/guiwake",         NULL, 0x60E00000,  0x60E00002, "GUI event wait: a ring landing mid-park wakes the waiter, not its backstop" },

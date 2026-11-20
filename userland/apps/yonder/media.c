@@ -108,7 +108,6 @@ struct yonder_media {
     bool player_finished;           // its `finished`: it reads no byte again
     bool player_told;               // the asks made before it existed have been given to it
     bool player_loaded;             // os64_media_player_loaded told
-    bool player_unknown;            // its create failed with its thread perhaps running: never freed
     bool size_told;                 // a conversion size was told (yonder_media_size, or the natural one)
     bool probe_told;                // the window has put the probe's length into `facts`
     bool bytes_failed;              // the bytes' failure (`failed`, `why`), copied under `lock` by
@@ -191,13 +190,11 @@ static void ring_reader_locked(yonder_media_t *m)
 
 // Starts a thread that is never joined: its handle is let go at once, so a
 // page with many players does not spend the program's handles on them. A
-// failure does NOT mean the thread is not running: out of handles, the
-// kernel starts it detached and still answers an error. So the caller of a
-// failed start keeps alive everything the thread may touch, and waits for
-// its done flag as it would for a started one.
+// failure means fn never runs (os64_thread_or_nothing), so the caller may
+// unwind at once.
 static bool thread_start(int64_t (*fn)(void *), void *arg)
 {
-    int64_t handle = os64_thread(fn, arg);
+    int64_t handle = os64_thread_or_nothing(fn, arg);
     if (handle < 0)
         return false;
     os64_close((int32_t)handle);
@@ -756,19 +753,22 @@ static bool loader_start(yonder_media_t *m, uint64_t from)
     m->pipe = job->pipe;
     m->job = job;
     job->submitted_us = os64_micros();
-    // Before the start: the loader may finish before os64_thread returns,
+    // Before the start: the loader may finish before thread_start returns,
     // and the session must not look free of it in between. Its slot is the
-    // loader's to let go from here on, whatever the start answers; a start
-    // that truly failed (the kernel out of memory) keeps the slot and the
-    // session for the rest of the program, and yonder's end waits on it,
-    // the price of not guessing.
+    // loader's to let go once it runs; a start that failed never runs it,
+    // so the job, its side of the pipe and the slot are let go here (the
+    // session's side goes as ever: fetch_stop, session_free).
     os64_lock_acquire(&m->lock);
     m->loader_started = true;
     os64_lock_release(&m->lock);
     if (!thread_start(loader_main, m)) {
         os64_lock_acquire(&m->lock);
-        m->loader_quit = true;
+        m->loader_started = false;
+        m->job = NULL;
         os64_lock_release(&m->lock);
+        yonder_fetch_pipe_release(job->pipe);
+        yonder_fetch_release(job, NULL);
+        loader_slot_release();
         return false;
     }
     return true;
@@ -1096,8 +1096,7 @@ static bool audio_running(void)
 // included. Its lock held.
 static bool threads_done_locked(const yonder_media_t *m)
 {
-    return (!m->loader_started || m->loader_done) &&
-           (m->player == NULL ? !m->player_unknown : m->player_finished);
+    return (!m->loader_started || m->loader_done) && (m->player == NULL || m->player_finished);
 }
 
 // Frees a session no thread is using any more (threads_done_locked).
@@ -1163,15 +1162,11 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
         .bell = &m->bell};
     os64_media_player_t *player = NULL;
     if (os64_media_player_create(&cfg, &player) != 0) {
-        // A create that failed may have left its decoding thread running
-        // detached (os64_media_player_create), preparing these bytes: the
-        // session is closed and left on the list, never freed, the price
-        // that start names.
+        // Nothing started (os64_media_player_create): the session is closed
+        // and left on the list for the reap to free.
         os64_lock_acquire(&m->lock);
-        m->player_unknown = true;
         m->stop = true;
         m->closed = true;
-        ring_reader_locked(m);
         os64_lock_release(&m->lock);
         return NULL;
     }

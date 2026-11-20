@@ -767,8 +767,15 @@ static int64_t decoding_thread(void *arg)
             : p->cfg.prepare != NULL && !p->cfg.prepare(p->cfg.ctx, &p->cfg.source) ? OS64_MEDIA_IO
             : p->cfg.source.read == NULL ? OS64_MEDIA_BAD_ARGS
                                          : os64_media_open_for(&p->cfg.source, want, &p->media, &p->info);
-    if (r == 0 && (p->cfg.want & OS64_MEDIA_WANT_PICTURE) != 0)
-        p->picture_thread = os64_thread(picture_thread, p);
+    if (r == 0 && (p->cfg.want & OS64_MEDIA_WANT_PICTURE) != 0) {
+        // A start that failed never runs picture_thread (os64/thread.h), so
+        // finish's join may skip it: no picture, no player.
+        p->picture_thread = os64_thread_or_nothing(picture_thread, p);
+        if (p->picture_thread < 0) {
+            os64_media_close(p->media);
+            r = OS64_MEDIA_NO_MEMORY;
+        }
+    }
     if (r != 0) {
         p->media = NULL;
         os64_lock_acquire(&p->lock);
@@ -1105,12 +1112,17 @@ int os64_media_player_create(const os64_media_player_config_t *cfg, os64_media_p
     p->loaded = cfg->loaded;
     p->last_frame_call = now_us();
     // The decoding thread is never joined: it frees the player as its last
-    // act. A start that reports failure may still be running (the kernel,
-    // out of handles, starts it detached): the player is then left to it,
-    // never freed here.
-    int64_t h = os64_thread(decoding_thread, p);
-    if (h < 0)
+    // act. A start that failed never runs it (os64/thread.h): the player is
+    // freed here, nothing started.
+    int64_t h = os64_thread_or_nothing(decoding_thread, p);
+    if (h < 0) {
+        if (!p->bell_borrowed)
+            os64_bell_close(&p->decode_bell);
+        os64_bell_close(&p->picture_bell);
+        os64_free(p->pcm_storage);
+        os64_free(p);
         return OS64_MEDIA_NO_MEMORY;
+    }
     os64_close((int32_t)h);
     *out = p;
     return 0;

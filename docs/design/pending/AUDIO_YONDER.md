@@ -855,7 +855,8 @@ above:
   `file:`, as before. And one thread more that has ENDED, the opener,
   whose stack (about 2.2 MB) yonder keeps until it exits, because os64
   has no per-thread teardown (DEBTS.md); a `<video>` has paid it since
-  V.5.3.
+  V.5.3. V.6.1 removed the opener: the player's decoding thread now does
+  its work (VIDEO.md § 5), and 19 players hold 36 threads again.
 
 ## Slices
 

@@ -328,6 +328,24 @@ what yonder's own decoder loop did moved into it or beside it:
   of 0, a silent voice still mixed, because with no ear its queue would
   never drain (a muted `<video>`'s voice goes, its clock monotonic).
 
+**The thread starts, against a close (V.6.1).** Every thread the player,
+the output and yonder's media host start, what it reads first, and what
+keeps that alive:
+
+| Thread | Started by | Reads first | Freed by, and when | Why its reads come first |
+|---|---|---|---|---|
+| decoding | `os64_media_player_create`, the player built | its config; calls `prepare` (yonder's `session_prepare`) | the player by itself (`finish`); yonder's session only after `finished`, the thread's last act | a close only sets `quit` and rings |
+| picture | the decoding thread, once open | the player's lock and `quit` | `finish`, after joining it | the join |
+| audio (the output) | `os64_media_output_create`, the output built | the output's buffers, its lock, the voices | `destroy`, after joining it; a voice by its owner only once `gone` | the join; `gone` |
+| loader (yonder) | `loader_start`, the job and pipe set | the session's job | the job after `loader_done`; the pipe has two holders | `loader_done` |
+
+Each is started with `os64_thread_or_nothing` (libos64): a start that
+fails never runs its function. `os64_thread`'s failure meant "maybe
+running" (out of handles, the kernel starts the thread detached), which
+left a picture thread unjoined under a freed player, and a failed create's
+session never freed, holding yonder's exit. `/tests/threadtest` proves
+both halves. None of this is the address-0 crash (DEBTS, Video).
+
 gplay is the window, the letterbox, the keys, the title and the readout.
 
 ## 4. The clock
@@ -453,12 +471,15 @@ clip or a filter is drawn by the existing picture path from the same
 frame (per-pixel, slower, correct). Same for the moment between a resize
 and the first frame at the new size.
 
-**As built (V.5.3, V.5.4).** Every media element's session is libmedia's
-player (`apps/yonder/media.c`): an opener thread makes the bytes ready
-(the file opened, or the fetch begun and its head waited for), then the
-player, whose decoding thread reads them through `store_read` and
-`store_seek` and lets an idle fetch go through `store_idle`; the window
-drives the player. A `<video>`'s asks for the picture too.
+**As built (V.5.3 to V.6.1).** Every media element's session is
+libmedia's player (`apps/yonder/media.c`), made by the window as the
+session opens and driven by it. Its decoding thread makes the bytes ready
+first, as the player's `prepare` (`session_prepare`: the file opened, or
+the fetch begun and its head waited for), then reads them through
+`store_read` and `store_seek` and lets an idle fetch go through
+`store_idle`. A `<video>`'s asks for the picture too. (Until V.6.1 an
+opener thread did the first step and made the player, and each one's
+ended stack stayed with yonder until it exited.)
 `apps/yonder/yonder.c`'s videos section is the rest:
 
 1. `videos_turn` reads each shown video's facts after the media turn: the
@@ -616,9 +637,26 @@ interrupts off is heard.
 - A link straight to a video file opens a page showing it
   (`WAY_BODY_MEDIA`'s video twin).
 - **A file whose index is at the END** (common for MP4s not prepared for
-  the web): today's loader refuses the seek FFmpeg makes while opening.
-  With ranges, the open fetches the tail; without, the file must arrive
-  whole. Needs a fixture; nothing in the tree exercises it.
+  the web). **As built (V.6.1):** the window refuses a far seek while a
+  media opens (the MP3 reader probes the end for tags and carries on),
+  except for an ISO BMFF file (`ftyp` at byte 4), whose reader seeks to
+  its `moov`. With ranges the open costs three requests: the file from 0,
+  a `Range` for the tail, and the front again (`tools/pages/tail-index.mp4`,
+  555 KB: 9,391 bytes of tail). Without ranges the file arrives whole
+  before it opens, the element waiting at `loadstart` and `progress`. A
+  file whose index lies past the bytes yonder keeps (`KEPT_MAX`, DEBTS)
+  fails to open, and the record's `media` line says the seek back it was
+  refused. `video-tail.html` and `video-tail-whole.html` are the pages
+  (`tools/pages_serve.py`, with and without `--no-ranges`).
+- **The length reaches the element when it is learned (V.6.1).** yonder
+  passes on any change of the player's length after the probe, and libdom
+  fires `durationchange` for it either way. The player's end fills in a
+  length the probe could not say, and corrects a stated one for a sound
+  alone (`/tests/playertest` steps 6 and 8). The record's reading (`d`)
+  prints, per media session, the source, the length and when it was set,
+  whether a `look` followed, the duration told and when libdom read it,
+  and each video's line the element's own duration: the trail for a
+  length that goes missing on its way to the page.
 
 **As built (V.5.3).** The element's table is VIDEO_V5_DESIGN.md § 3,
 with Fable's answers, in libdom (`media.c`, `video.c`) over the host's
