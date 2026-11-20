@@ -1,8 +1,8 @@
 // test_media_queue_host.c — libmedia's PCM queue (userland/libmedia/media_queue.c)
 // against a model kept a frame at a time, under ASan and UBSan: random
 // pushes that continue the last or jump (a loop), takes of random sizes,
-// flushes with stale-generation pushes after them, the end, a full queue,
-// and a queue out of segments.
+// flushes with stale-generation pushes after them, the end and its reopen,
+// a full queue, and a queue out of segments.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -100,9 +100,12 @@ static void run(uint32_t capacity, int rounds)
             s_held = 0;
             s_ended = 0;
             next_at = (int64_t)(rnd() % 5000);
-        } else {
+        } else if (op < 97) {
             os64_media_queue_end(&q);
             s_ended = 1;
+        } else {
+            os64_media_queue_reopen(&q);
+            s_ended = 0;
         }
         CHECK(os64_media_queue_count(&q) == s_held, "round %d: count %u, want %u", round,
               os64_media_queue_count(&q), s_held);

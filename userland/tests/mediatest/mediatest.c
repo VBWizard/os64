@@ -115,7 +115,7 @@ static os64_media_source_t source_of(Memory *m, const uint8_t *data, size_t size
     *m = (Memory){ data, size, 0, 0 };
     // The size is given either way, as a download that cannot seek still
     // knows its length.
-    os64_media_source_t s = { m, memory_read, seekable ? memory_seek : NULL, (int64_t)size, false };
+    os64_media_source_t s = { m, memory_read, seekable ? memory_seek : NULL, (int64_t)size, false, NULL };
     return s;
 }
 

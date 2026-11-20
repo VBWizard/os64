@@ -709,7 +709,7 @@ static int64_t counted_seek(void *ctx, uint64_t at)
 static long open_reads(const char *path, uint32_t want)
 {
     Counted c = { open(path, O_RDONLY), 0 };
-    os64_media_source_t src = { &c, counted_read, counted_seek, lseek(c.fd, 0, SEEK_END), false };
+    os64_media_source_t src = { &c, counted_read, counted_seek, lseek(c.fd, 0, SEEK_END), false, NULL };
     lseek(c.fd, 0, SEEK_SET);
     os64_media_t *m;
     int r = os64_media_open_for(&src, want, &m, NULL);

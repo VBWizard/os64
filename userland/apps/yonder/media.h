@@ -8,14 +8,14 @@
 //
 // A SESSION is one element's resource: the window opens it, plays,
 // pauses, seeks and closes it, and reads its facts; everything slow
-// happens on threads of its own. A SOUND session (an <audio>) has a
-// DECODER thread (libmedia: the bytes, the decode, the PCM queue); a
-// PICTURE session (a <video>) has libmedia's player (os64/media_player.h),
-// which the window drives and asks for the picture to show. Either has,
-// for any address but a file: one, a LOADER thread (the fetch job, its
-// body streamed down a pipe to whichever thread reads the bytes). Its
-// sound is a voice of yonder's one output (os64/media_output.h): libmedia's
-// audio thread owns /dev/audio and mixes every session that plays.
+// happens on threads of its own. Every session is libmedia's player
+// (os64/media_player.h) over the session's bytes, which the window drives:
+// for an <audio> the sound alone, for a <video> the sound and the picture,
+// which the window asks for at each frame of the display. For any address
+// but a file: one, a LOADER thread runs the fetch job, its body streamed
+// down a pipe to the player's decoding thread. Its sound is a voice of
+// yonder's one output (os64/media_output.h): libmedia's audio thread owns
+// /dev/audio and mixes every session that plays.
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -48,7 +48,7 @@ typedef struct {
 // life as a script's request borrows them; and a blob: address's entry,
 // taken by the caller (BLOB_URLS.md) and borrowed for the call: the
 // session holds its own, and NULL is none. `picture`: the element is a
-// <video>, and the session a picture session.
+// <video>, whose player decodes the picture too.
 typedef struct {
     const char *url;
     const char *page_url;
@@ -83,16 +83,16 @@ void yonder_media_pause(yonder_media_t *m);
 void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation);
 void yonder_media_settings(yonder_media_t *m, double gain, bool muted, bool loop);
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out);
-// A picture session's picture to show at `blank` (wall microseconds, the
-// blank a publish now is seen at), `period` the display's: its player's
+// A <video>'s picture to show at `blank` (wall microseconds, the blank a
+// publish now is seen at), `period` the display's: its player's
 // (os64_media_player_frame, whose rule the pixels keep). False with `out`
-// empty for a sound session, or with no picture yet.
+// empty for an <audio>, or with no picture yet.
 bool yonder_media_frame(yonder_media_t *m, int64_t blank, int64_t period, os64_media_player_frame_t *out);
-// The size a picture session's pictures are converted to (the fitted
-// rectangle, device pixels). Nothing for a sound session.
+// The size a <video>'s pictures are converted to (the fitted rectangle,
+// device pixels). Nothing for an <audio>.
 void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height);
-// A picture session's player's own facts (its pace, clock and counts), for
-// the record's reading; false for a sound session or one with no player.
+// A session's player's own facts (its pace, clock and counts), for the
+// record's reading; false for one with no player yet.
 bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out);
 // canPlayType's answer (0, 1 or 2; dom/media.h), libmedia's.
 int yonder_media_can_play(const char *type);

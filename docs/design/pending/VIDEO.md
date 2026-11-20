@@ -284,6 +284,37 @@ sound never waits on the caller's thread.** What that rule moved:
   long pause, another sound starting while paused), the decoding thread
   seeks to where the clock stands, so the sound is queued again.
 
+**For a sound alone (V.5.4).** The player runs a page's `<audio>` too, and
+what yonder's own decoder loop did moved into it or beside it:
+
+- A sound alone starts no picture thread and makes no scaler: its
+  program's threads are the caller's, the output's audio thread and the
+  decoding thread (`/tests/playertest` step 1 counts them).
+- Its voice WAITs while the device is refused (another program has the
+  stream) whatever the caller asked, and its clock stays the ear, which
+  stands still: the sound plays from where it was when the device comes
+  back (step 3).
+- **Loop** is the player's (`os64_media_player_loop`): at the end the
+  decoding thread seeks the media to its start and queues on, each run
+  after the last on one timeline, so the sound runs on with no seam and
+  the clock never steps back; the position is folded into the length.
+  Turned off, the last run queued ends it (step 2). A `<video>` loops the
+  same way. Turned on too late for that (a picture queue already told its
+  end, or the last frame heard), it plays on from the start after a gap,
+  with no end.
+- The source has an **`idle`** hook (`os64/media.h`), called by the
+  decoding thread at each wake while it waits with nothing to read: it is
+  where yonder keeps a network transfer moving and lets a fetch go when
+  nothing has played for ten seconds (step 4).
+- It ends when its last frame is HEARD, not written, and its position
+  at the end is its length (step 1).
+- It may wait on its caller's bell (the config's `bell`) and makes no
+  picture bell, so a page's `<audio>` costs one handle, the session's,
+  as the old decoder did: a page may hold dozens.
+- A gain per player is the output's mix. Muted, a sound alone is a gain
+  of 0, a silent voice still mixed, because with no ear its queue would
+  never drain (a muted `<video>`'s voice goes, its clock monotonic).
+
 gplay is the window, the letterbox, the keys, the title and the readout.
 
 ## 4. The clock
@@ -409,11 +440,12 @@ clip or a filter is drawn by the existing picture path from the same
 frame (per-pixel, slower, correct). Same for the moment between a resize
 and the first frame at the new size.
 
-**As built (V.5.3).** A `<video>`'s session is a picture session over
-libmedia's player (`apps/yonder/media.c`): an opener thread makes the
-bytes ready as a sound session's decoder does (`source_prepare`, one
-function for both), then the player, whose decoding thread reads them
-through `store_read` and `store_seek`; the window drives the player.
+**As built (V.5.3, V.5.4).** Every media element's session is libmedia's
+player (`apps/yonder/media.c`): an opener thread makes the bytes ready
+(the file opened, or the fetch begun and its head waited for), then the
+player, whose decoding thread reads them through `store_read` and
+`store_seek` and lets an idle fetch go through `store_idle`; the window
+drives the player. A `<video>`'s asks for the picture too.
 `apps/yonder/yonder.c`'s videos section is the rest:
 
 1. `videos_turn` reads each shown video's facts after the media turn: the
@@ -589,8 +621,8 @@ facts, which gained the picture (`picture`, `width`, `height`) and
   refill as it plays are no wait), and ENOUGH held once reached until it
   buffers; a buffering player is CURRENT, which is libdom's `waiting`. A
   seek leaves readyState as it was until it lands.
-- `loop` is a seek to the start inside the host, playing on, with no
-  `ended` and no seek events (as a sound session's decoder loops).
+- `loop` is the player's (§ 3, for a sound alone): it runs on from its
+  start without a seam, with no `ended` and no seek events.
 - Muted is told to the host apart from the gain: the voice goes and the
   clock is monotonic; a volume of 0 unmuted is a silent voice.
 - The device refused: a `<video>`'s player plays on, unheard, and retries.
