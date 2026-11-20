@@ -218,10 +218,11 @@ bool garb_cascade_tracks_changes(const garb_cascade_t *c);
 // each is a bit in every element's record, asked at every element it
 // styles; a bare one costs a walk each time it is asked, and nothing more.
 void garb_cascade_anchors(const garb_cascade_t *c, int32_t *anchors, int32_t *bare);
-// What the bare anchors cost the latest update: how many times one was
-// asked again (at each element a change could have turned it on), how
-// many of those answers turned, and how many elements the turns marked
-// for restyling. Zeros before any update.
+// What the bare anchors cost the latest update that read the document's
+// changes: how many times one was asked again at an element a change could
+// have turned it on (not its asks at restyled elements), how many of those
+// answers turned, and how many elements the turns marked for restyling.
+// Zeros before any update.
 typedef struct {
     uint64_t tested, turned, marked;
 } garb_bare_work_t;

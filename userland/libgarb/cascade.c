@@ -3249,19 +3249,19 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
 // rules hold a :has() in a subject, and each anchor asked again, its
 // subtree or its following siblings' marked where the answer turned.
 //
-// WHAT A BARE ANCHOR COSTS, and why it may cost no more: an anchor is
-// asked again only here, at the elements mark_has visits for a change
+// WHAT A BARE ANCHOR COSTS, and why it may cost no more: in an update an
+// anchor is asked again here, at the elements mark_has visits for a change
 // (where it happened and its ancestors, with `+`/`~` arguments their
 // previous siblings too), and at each element a restyle recomputes. A
 // filtered anchor's ask is a compare wherever its filters fail; a bare
-// one's is its :has() walk, of the element's children for `:has(> …)`,
-// of its following siblings (and, for `~ a b`, under them) for `+`/`~`,
-// and of its whole subtree for a descendant argument. So an update pays
-// (elements visited) x (bare anchors) such walks, plus a walk at each
-// restyled element, plus the restyle of the reach of each anchor that
-// really turned; nothing else about the page changes, and the cascade
-// keeps tracking. bare_work counts the asks, the turns and what they
-// marked, for the record.
+// one's costs up to its :has() walk, of the element's children for
+// `:has(> …)`, of its following siblings (and, for `~ a b`, under them)
+// for `+`/`~`, and of its whole subtree for a descendant argument. So an
+// update pays (elements visited) x (bare anchors) such walks, plus one at
+// each restyled element, plus the restyle of the reach of each anchor that
+// really turned, and nothing beyond: the cascade keeps tracking.
+// bare_work counts the asks made here, the turns and what they marked,
+// for the record.
 static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
 {
     if (!connected(c, a)) return true;
