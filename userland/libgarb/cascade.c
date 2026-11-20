@@ -268,14 +268,15 @@ struct garb_cascade {
     // touching its bits. None when its rules keep it from updates at birth
     // (`untrackable`); a cascade that comes up short later, or has no
     // reader, keeps rows it will never compare.
-    // `has_scratch` is one row, for an update's compare. `untrackable`
-    // names what kept the cascade from a change reader at birth (a bare
-    // anchor, a counted :has()), and `refusal` why the latest update
-    // answered false.
+    // `has_scratch` is one row, for an update's compare; `bare_work` what
+    // the bare anchors cost the latest update. `untrackable` names what
+    // kept the cascade from a change reader at birth (a counted :has()),
+    // and `refusal` why the latest update answered false.
     garb_anchor_t *anchors;
     int32_t nanchors, nbare;
     uint32_t has_width;
     uint64_t *has_words, *has_scratch;
+    garb_bare_work_t bare_work;
     garb_update_refusal_t untrackable, refusal;
 };
 
@@ -3005,10 +3006,7 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
         if (c->anchors == NULL) continue;
         int32_t held = garb_selectors_anchors(c->rules[i].sel, c->anchors + c->nanchors, anchors - c->nanchors);
         for (int32_t a = 0; a < held; a++)
-            if (c->anchors[c->nanchors + a].bare) {
-                c->untrackable = GARB_UPDATE_BARE_ANCHOR;
-                c->nbare++;
-            }
+            c->nbare += c->anchors[c->nanchors + a].bare;
         c->nanchors += held;
     }
     // A row of bits a slot while the cascade will take updates.
@@ -3250,6 +3248,23 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
 // One element a change may have turned a :has() on: marked alone when the
 // rules hold a :has() in a subject, and each anchor asked again, its
 // subtree or its following siblings' marked where the answer turned.
+//
+// WHAT A BARE ANCHOR COSTS, and why it may cost no more: in an update an
+// anchor is asked again here, at the elements mark_has visits for a change
+// (where it happened and its ancestors, with `+`/`~` arguments their
+// previous siblings too), and at each element a restyle recomputes. A
+// filtered anchor's ask is a compare wherever its filters fail; a bare
+// one's costs up to its :has() walk (has_matches): the element's whole
+// subtree for a descendant or a `>` argument (the walk does not stop at
+// the children), and each following sibling's subtree for `+` and `~`.
+// So an update pays (elements visited) x (bare anchors) such walks, plus
+// (restyled elements) x (bare anchors) more, plus the restyle of the reach
+// of each anchor that really turned; the cascade keeps tracking. Matching
+// a restyled element against a rule whose :has() stands left of a
+// combinator walks again at each of its ancestors, whether the anchor is
+// bare or not: that cost is the matcher's (DEBTS, Browser layout,
+// "Matching asks a `:has()` again"). bare_work counts the asks made here,
+// the turns, and the elements their marks added, for the record.
 static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
 {
     if (!connected(c, a)) return true;
@@ -3257,6 +3272,7 @@ static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
     if (c->has_width == 0) return true;
     Slot *s = slot_for(c, a, false);
     if (!s) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
+    c->bare_work.tested += (uint64_t)c->nbare;
     anchor_bits(c, a, c->has_scratch);
     // The answers are asked into the scratch row; the slot's row takes
     // them, and the scratch row is left holding what turned, for the marks.
@@ -3268,8 +3284,13 @@ static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
     }
     for (int32_t i = 0; i < c->nanchors; i++) {
         if (!(c->has_scratch[i / 64] >> (i % 64) & 1)) continue;
+        size_t before = c->ndirty;
         if (c->anchors[i].down && !mark_subtree(c, a)) return false;
         if (c->anchors[i].siblings && !mark_siblings(c, a->next)) return false;
+        if (c->anchors[i].bare) {
+            c->bare_work.turned++;
+            c->bare_work.marked += c->ndirty - before;
+        }
     }
     return true;
 }
@@ -3316,6 +3337,10 @@ void garb_cascade_anchors(const garb_cascade_t *c, int32_t *anchors, int32_t *ba
 {
     if (anchors) *anchors = c ? c->nanchors : 0;
     if (bare) *bare = c ? c->nbare : 0;
+}
+garb_bare_work_t garb_cascade_bare_work(const garb_cascade_t *c)
+{
+    return c ? c->bare_work : (garb_bare_work_t){0};
 }
 
 // Whether two values say the same, by content: a winner read through
@@ -3408,7 +3433,7 @@ garb_update_refusal_t garb_cascade_update_refusal(const garb_cascade_t *c)
 const char *garb_update_refusal_name(garb_update_refusal_t reason)
 {
     static const char *const kNames[GARB_UPDATE_REASONS] = {
-        "done", "incomplete", "failed before", "no reader", "bare anchor", "counted has", "shadow root",
+        "done", "incomplete", "failed before", "no reader", "counted has", "shadow root",
         "cap", "retained", "attributes", "history", "body hint", "slot left", "broad", "short",
         "no memory"};
     return reason >= 0 && reason < GARB_UPDATE_REASONS ? kNames[reason] : "?";
@@ -3438,6 +3463,7 @@ static bool update(garb_cascade_t *c)
     const os64_html_change_entry_t *changes = NULL;
     int64_t count = os64_html_changes(c->reader, &changes);
     c->update_failed = true;
+    c->bare_work = (garb_bare_work_t){0};
     if (count < 0) { c->refusal = GARB_UPDATE_HISTORY; return false; }
     // Process removals before additions: a node may have moved several
     // times since the last read, and entry arrays preserve its identity.

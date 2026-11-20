@@ -295,6 +295,18 @@ mutants = [
     ('filters-pass-into-a-non-subject', SELECT,
      'int32_t nmine = j == x->n - 1 ? nouter : 0;',
      'int32_t nmine = nouter;', UPDATES),
+    # A bare anchor pays for itself: it is asked again where a change could
+    # turn it, its turns mark its reach, and what it cost is counted.
+    ('a-bare-anchor-marks-nothing', CASCADE,
+     '        size_t before = c->ndirty;\n',
+     '        size_t before = c->ndirty;\n        if (c->anchors[i].bare) continue;\n', UPDATES),
+    ('a-bare-anchor-is-never-asked', CASCADE,
+     '        if (garb_anchor_matches(&c->anchors[i], x)) out[i / 64] |= (uint64_t)1 << (i % 64);',
+     '        if (!c->anchors[i].bare && garb_anchor_matches(&c->anchors[i], x)) out[i / 64] |= (uint64_t)1 << (i % 64);',
+     UPDATES),
+    ('a-bare-turn-is-not-counted', CASCADE,
+     '            c->bare_work.turned++;\n',
+     '', UPDATES),
     ('a-pseudo-class-filters', SELECT,
      '    return s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS || s->kind == S_ATTR;',
      '    return s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS || s->kind == S_ATTR || s->kind == S_PSEUDO;',

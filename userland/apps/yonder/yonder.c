@@ -1859,7 +1859,12 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         garb_cascade_anchors(cascade, &anchors, &bare);
         sample.anchors_peak = (uint64_t)anchors;
         sample.anchors_bare_peak = (uint64_t)bare;
-        if (why == 3 + (int32_t)GARB_UPDATE_BARE_ANCHOR) sample.bare_fresh_us = sample.cascade_us;
+        if (sample.cascade_updates) {
+            garb_bare_work_t work = garb_cascade_bare_work(cascade);
+            sample.bare_tested = work.tested;
+            sample.bare_turned = work.turned;
+            sample.bare_marked = work.marked;
+        }
         layout_profile_add(p, &sample);
         if (s_one_open) {
             s_one.cascade_us = sample.cascade_us;

@@ -2,8 +2,8 @@
  * (select.h § AN ANCHORED :has()): for each sheet file named, every rule
  * holding one, and each anchor's reach (down, siblings) and verdict:
  * filtered by its own compound, filtered by an enclosing one, or BARE
- * (nothing to turn most elements away before its :has() is tried, which
- * keeps a cascade holding it from tracking changes). Then the sheet's
+ * (nothing to turn most elements away before its :has() is tried, so every
+ * ask of it is a walk: cascade.c has_visit). Then the sheet's
  * counts, and with more than one sheet their sum, which is what a cascade
  * applying them all holds. `-q` prints the counts alone.
  *

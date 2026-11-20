@@ -93,7 +93,7 @@ typedef struct yonder_diag yonder_diag_t;
 // reasons, then libgarb's refusals (garb_update_refusal_t past DONE). The
 // names come with the sample (`cascade_reason_names`), from the code that
 // knows them; the layout wrapper checks the count at compile time.
-#define YONDER_LAYOUT_CASCADE_REASONS 19
+#define YONDER_LAYOUT_CASCADE_REASONS 18
 typedef struct {
     uint64_t model_us, cascade_us, style_us, boxes_us, layout_us, public_us;
     uint64_t elements, boxes, measures, reused;
@@ -102,10 +102,11 @@ typedef struct {
     uint64_t intrinsic_hits, marker_measures;
     uint64_t metadata_peak; // Maximum new snapshot/match/staging bytes, not a sum.
     // The most anchored :has() compounds a layout's cascade held, and the
-    // most of them bare (maxima, not sums); and the cascade time of the
-    // layouts whose cascade was built fresh for a bare anchor, which is
-    // what a bare anchor costs while it keeps the cascade from tracking.
-    uint64_t anchors_peak, anchors_bare_peak, bare_fresh_us;
+    // most of them bare (maxima, not sums); and what the bare ones cost the
+    // updates (garb_bare_work_t, sums): asked again, turned, elements newly
+    // marked.
+    uint64_t anchors_peak, anchors_bare_peak;
+    uint64_t bare_tested, bare_turned, bare_marked;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
     const char *const *cascade_reason_names;
