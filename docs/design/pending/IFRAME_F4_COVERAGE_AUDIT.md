@@ -1,6 +1,6 @@
 # F4 — settings and associated-object coverage audit
 
-F.4.36 reconciles the settings plan with merged consumers plus F.4.41. This is
+Audit PR **#681**. F.4.36 reconciles the settings plan with merged consumers plus F.4.41. This is
 an inventory and disposition, not a claim that F4 acceptance is complete.
 The initial task list is: enumerate call/conversion families, distinguish their
 associated/relevant owners, reconcile their evidence, and expose uncovered
