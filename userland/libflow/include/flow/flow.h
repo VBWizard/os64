@@ -1435,9 +1435,9 @@ typedef enum {
     FLOW_RESTYLE_STYLES,        /* the styles could not be built whole */
     FLOW_RESTYLE_MEMBERSHIP,    /* an element came to have a style, or lost it */
     FLOW_RESTYLE_GEOMETRY,      /* a style placement reads changed, or what boxes are built from */
-    FLOW_RESTYLE_MOTION,        /* an animated element, or a change that starts one */
+    FLOW_RESTYLE_MOTION,        /* an element an animation runs on, before or after */
     FLOW_RESTYLE_STACKING,      /* opacity across 0 or 1, blending, masks, visibility */
-    FLOW_RESTYLE_DECORATION,    /* a decoration or its colours, which fragments copy */
+    FLOW_RESTYLE_DECORATION,    /* a decoration, or its colours where a line is drawn, which fragments copy */
     FLOW_RESTYLE_ROOM,          /* the restyle arena's room, or memory */
     FLOW_RESTYLE_NREASONS
 } flow_restyle_reason_t;

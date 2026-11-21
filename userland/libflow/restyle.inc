@@ -14,7 +14,7 @@
 // the ink and the drawn stamps follow as they do there.
 
 // Whether the derived parts of two records of one element agree, but for
-// the decoration, which keep_decoration judges: what boxes, lists, links,
+// the decoration, which keep_judge judges apart: what boxes, lists, links,
 // anchors and pseudo-elements were built from.
 static bool keep_derived_equal(const FStyled *o, const FStyled *n)
 {
@@ -39,7 +39,8 @@ static bool keep_stacking_same(const flow_style_t *a, const flow_style_t *b)
            a->visibility == b->visibility;
 }
 
-// A pseudo-element's content text, NULL for none.
+// Whether two pseudo-elements' nodes hold the same content text (or both
+// none): a different text is a different box, which is placement's.
 static bool keep_same_text(const os64_html_node_t *a, const os64_html_node_t *b)
 {
     const os64_html_node_t *x = a != NULL ? a->first_child : NULL, *y = b != NULL ? b->first_child : NULL;
@@ -188,7 +189,8 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
         return out;
     }
     // Every value first, into the restyle arena, before any is written: a
-    // room that runs out leaves the tree as it was.
+    // room that runs out leaves the tree's styles as they were, and marks
+    // the room spent, so that no later restyle is kept in this tree.
     flow_style_t *values = k.n > 0 ? os64_malloc((size_t)k.n * sizeof(*values)) : NULL;
     bool room = k.n == 0 || values != NULL;
     for (int32_t i = 0; room && i < k.n; i++) {
