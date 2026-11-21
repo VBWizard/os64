@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to the restyle kept in the tree
-(userland/libflow/restyle.inc, flow_restyle_in_place, and the snapshot's
-`structural` mark in reuse_snapshot.inc), against the scripts host's profile
+(userland/libflow/restyle.inc, flow_restyle_in_place, the snapshot's
+`structural` mark in reuse_snapshot.inc, ink_grown's outlines in flow.c, and
+the geometry check's scrolls in yonder.c), against the scripts host's profile
 cases (tools/test_yonder_scripts_host.sh with YONDER_PROFILE_ONLY, which run
 restyle_kept_cases with every kept tree laid out whole beside it) and
 libflow's own (tools/test_libflow_host.sh --restyle, restyle_in_place_cases,
@@ -33,6 +34,8 @@ args.logs.mkdir(parents=True, exist_ok=True)
 
 RESTYLE = 'userland/libflow/restyle.inc'
 SNAPSHOT = 'userland/libflow/reuse_snapshot.inc'
+FLOW = 'userland/libflow/flow.c'
+YONDER = 'userland/apps/yonder/yonder.c'
 CASES = 'bash tools/test_yonder_scripts_host.sh && bash tools/test_libflow_host.sh --restyle'
 
 mutants = [
@@ -65,6 +68,20 @@ mutants = [
      '        if (0) {'),
     ('the-reach-not-worked-again', RESTYLE, '        reach_stacked(tree);\n        sticky_reach_scrolled(tree);\n        // A range',
      '        (void)0;\n        // A range'),
+    # Codex's round 1.
+    ('groups-and-contexts-not-asked', RESTYLE,
+     '        bool layers_same = is_group(&tried_box) == is_group(box) && makes_context(&tried_box) == makes_context(box);',
+     '        bool layers_same = is_group(&tried_box) == is_group(&tried_box) && makes_context(&tried_box) == makes_context(box);'),
+    ('a-motion-base-not-asked', RESTYLE,
+     '                                 !f_style_equal(&was->motion->base, &is->motion->base)))) {',
+     '                                 0))) {'),
+    ('the-outline-not-handed-past-stacked', FLOW,
+     '    for (; c->holds_outline && c->parent != NULL && !c->parent->holds_outline; c = c->parent)',
+     '    for (; 0 && c->holds_outline && c->parent != NULL && !c->parent->holds_outline; c = c->parent)'),
+    ('the-check-not-scrolled-alike', YONDER, '                flow_scroll_set(whole, s, flow_scroll_at(g.page.tree, i));',
+     '                (void)0;'),
+    ('the-check-ignores-outlines', RESTYLE, '                            : y->holds_outline && !x->holds_outline ? "an outline not held"',
+     '                            : 0 ? "an outline not held"'),
     # The check (--geometry-check).
     ('the-check-ignores-styles', RESTYLE, '                            : x->style != NULL && !f_style_equal(x->style, y->style) ? "a style"',
      '                            : 0 ? "a style"'),

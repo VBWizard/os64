@@ -378,4 +378,50 @@ static void restyle_in_place_cases(void)
     expect("restyle: a padding is declined as geometry",
            kept.kind==FLOW_RESTYLE_DECLINED && kept.why==FLOW_RESTYLE_GEOMETRY,NULL);
     flow_free(whole);flow_free(old);sheeted_close(&p);
+    // One change to element `id` of `html`, restyled in the tree laid out
+    // before it: what the restyle answered, and whether the kept tree then
+    // answers as a whole layout of the changed document does.
+    static const struct {
+        const char *name, *html, *id, *style;
+        flow_restyle_kind_t kind;
+        flow_restyle_reason_t why;
+    } one[] = {
+        // An outline on a positioned box that makes no context is its
+        // context's to paint, which must learn that it holds one.
+        {"restyle: an outline on a positioned box is kept, and held where a whole layout holds it",
+         "<!doctype html><div id=r style='position:relative'>ringed</div>", "r", "position:relative;outline:2px solid red",
+         FLOW_RESTYLE_PAINT, FLOW_RESTYLE_NONE},
+        // plus-darker is drawn as normal, with no group; multiply needs one.
+        {"restyle: a blend that comes to need a group is declined as stacking",
+         "<!doctype html><div id=m style='mix-blend-mode:plus-darker'>blended</div>", "m", "mix-blend-mode:multiply",
+         FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_STACKING},
+        // The child's colour at the animation's start is red either way, but
+        // its `inherit` endpoint follows the parent's.
+        {"restyle: an animation's inherited endpoint moving is declined as motion",
+         "<!doctype html><style>@keyframes k{from{color:red}to{color:inherit}}#c{animation:k 10s linear}</style>"
+         "<div id=a style='color:red'><span id=c>moving</span></div>", "a", "color:blue",
+         FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_MOTION},
+    };
+    // Laid out as a face lays out a page that animates: on a timeline, its
+    // animations ticking, from time 0.
+    for (size_t i = 0; i < sizeof(one) / sizeof(one[0]); i++) {
+        sheeted_open(&p, one[i].html, 800, 600);
+        flow_timeline_t *tl = flow_timeline_new(p.doc);
+        p.env.ticks = true;
+        p.env.timeline = tl;
+        p.env.now_ms = 0;
+        old = graft_layout(&p, NULL, NULL, NULL);
+        flow_timeline_commit(&tl, old);
+        p.env.timeline = tl;
+        os64_html_set_attr(p.doc, graft_node(&p, one[i].id), "style", one[i].style, strlen(one[i].style));
+        graft_update(&p);
+        whole = graft_layout(&p, NULL, NULL, NULL);
+        kept = restyle_keep(&p, old);
+        bool ok = old && whole && kept.kind == one[i].kind && kept.why == one[i].why &&
+                  (kept.kind == FLOW_RESTYLE_DECLINED || restyle_check_says(old, whole, NULL, NULL));
+        char said[96];
+        snprintf(said, sizeof(said), "kind %d why %d", (int)kept.kind, (int)kept.why);
+        expect(one[i].name, ok, ok ? NULL : said);
+        flow_free(whole); flow_free(old); flow_timeline_free(tl); sheeted_close(&p);
+    }
 }

@@ -1457,8 +1457,8 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
  * document does (the caller's check, `--geometry-check`): the same boxes in
  * order, each of the same kind, node, border box, overflow, clip and
  * stacking flags, its style equal in every field, its decoration the same
- * where it draws one, and its ink covering the whole layout's (a kept
- * tree's ink only grows); the same paint layers; the same page extent and
+ * where it draws one, and its ink and outlines covering the whole layout's
+ * (a kept tree's only grow); the same paint layers; the same page extent and
  * scroll containers' ranges and scrolls. Hit testing reads what this
  * compares. False names the first difference: the node (an anonymous box's
  * element) when a box is to blame, and what differed. */

@@ -65,7 +65,8 @@ static void restyle_kept_cases(void)
                "<p id=p class=far>text <b>bold</b></p><p id=q>more</p><div id=mix>loose <p>block</p> tail</div>"
                "<p><u id=u>under</u></p><canvas id=cv width=100 height=20></canvas>"
                "<div id=sc class=big style=width:20px;height:20px></div>"
-               "<div id=far class=near1 style=position:absolute;left:0;top:0;width:8px;height:8px></div>",false);
+               "<div id=far class=near1 style=position:absolute;left:0;top:0;width:8px;height:8px></div>"
+               "<div id=scroller style=height:20px;overflow:auto><p>one</p><p>two</p><p>three</p></div>",false);
     g.page.diag=diag_new_claimed("https://fixture.test/restyle-kept",1);
     s_layout_profile=true;
     s_geometry_check=1;      /* every kept tree laid out whole beside it and compared */
@@ -185,6 +186,12 @@ static void restyle_kept_cases(void)
     if(!kept || !strstr(kept,"stacking 2")) printf("  layout kept: %s\n",kept?kept:"(none)");
     /* A transform that moves a positioned box far out moves the page's
      * extent: kept, and the extent reached again (the check compares it). */
+    /* Scrolled first: the check's whole layout is scrolled where the kept
+     * tree is before the two are compared, as a layout's scrolls are set
+     * again. */
+    int32_t scroller=flow_scroller_for(g.page.tree,probe_id("scroller"));
+    check(scroller>=0 && flow_scroll_set(g.page.tree,scroller,(flow_point_t){0,10}).y==10,
+          "kept: a scroll container scrolled before the change");
     int32_t extent=flow_width(g.page.tree);
     check(!os64_html_set_attr(g.page.way.doc,probe_id("far"),"class","away",4) && script_rebuild(),
           "kept: a transform moving a box far out published");

@@ -3665,6 +3665,13 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
     // first that differed, with the element and what differed.
     if (s_geometry_check != 0 && ++s_geometry_checked % s_geometry_check == 0) {
         flow_tree_t *whole = flow_layout_restyled(page_doc(p), page_model(p), width, &s_env, NULL, NULL, NULL, NULL);
+        // Scrolled where the kept tree is, as a layout's scrolls are set
+        // again by element, each held to the whole layout's own range.
+        for (int32_t i = 0; whole != NULL && i < flow_nscrollers(g.page.tree); i++) {
+            int32_t s = flow_scroller_for(whole, flow_scroller(g.page.tree, i)->node);
+            if (s >= 0)
+                flow_scroll_set(whole, s, flow_scroll_at(g.page.tree, i));
+        }
         const os64_html_node_t *node = NULL;
         const char *what = "no whole layout could be made";
         bool same = whole != NULL && flow_restyle_check(g.page.tree, whole, &node, &what);

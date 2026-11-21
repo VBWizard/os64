@@ -4295,7 +4295,9 @@ static const FResolved *tick_resolved(void *ctx, int32_t a, int32_t frame, const
 
 // A box's ink with its shadows as they are now, MERGED into what it was —
 // a box's ink only grows while its tree lives — and handed up as ink_reach
-// hands it.
+// hands it: the ink to the stacked box that holds it, and whether an
+// outline is held past it too, to every ancestor, as ink_up hands that
+// (visit_outlines walks into stacked boxes that are not contexts).
 static void ink_grown(flow_box_t *b)
 {
     int32_t was[4];
@@ -4303,8 +4305,11 @@ static void ink_grown(flow_box_t *b)
     own_ink(b);
     for (int k = 0; k < 4; k++)
         b->ink[k] = b->ink[k] > was[k] ? b->ink[k] : was[k];
-    for (const flow_box_t *c = b; c->parent != NULL && !c->stacked; c = c->parent)
+    const flow_box_t *c = b;
+    for (; c->parent != NULL && !c->stacked; c = c->parent)
         ink_up(c);
+    for (; c->holds_outline && c->parent != NULL && !c->parent->holds_outline; c = c->parent)
+        ((flow_box_t *)c->parent)->holds_outline = true;
 }
 
 // A change to a box a filter draws repaints all that filter spreads it

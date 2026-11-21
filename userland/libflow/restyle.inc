@@ -73,6 +73,17 @@ static bool keep_judge(FKeeps *k, FStyled *was, const FStyled *is)
         k->why = FLOW_RESTYLE_MEMBERSHIP;
         return false;
     }
+    // An animated element's sampled style may come out the same while what
+    // its keyframes resolve against moved: an `inherit` endpoint, or an
+    // implicit keyframe's underlying value. It is kept only when its
+    // underlying style (the motion's `base`, which inherited values reach)
+    // came out the same as well.
+    if ((was->motion != NULL) != (is->motion != NULL) ||
+        (was->motion != NULL && (was->motion->nanims != is->motion->nanims ||
+                                 !f_style_equal(&was->motion->base, &is->motion->base)))) {
+        k->why = FLOW_RESTYLE_MOTION;
+        return false;
+    }
     bool same_style = f_style_equal(&was->style, &is->style);
     bool same_decoration = was->decoration == is->decoration &&
                            (was->decoration == 0 || os64_memcmp(&was->decoration_colors, &is->decoration_colors,
@@ -223,20 +234,33 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
         f_style_free(b);
         return out;
     }
-    // A transform drawn through its matrix is a group of its own (is_group)
-    // with layers opened and closed round it, and one drawn upright or moved
-    // is not: a new value that crosses between them changes the public
-    // tree's layers, which no restyle in place rebuilds. Judged by filling a
-    // copy of each frame from its new value, before anything is written.
+    // A box that is a group (is_group) has layers opened and closed round
+    // it, and one that makes a context (makes_context) paints its own: a
+    // new value that changes either changes the public tree's layers, which
+    // no restyle in place rebuilds. So does a transform crossing between
+    // drawn through its matrix (a group) and drawn upright or moved. Judged
+    // on a copy of each written box with its new value, and of its frame
+    // filled from it, before anything is written.
     bool transformed = false;
     for (const flow_box_t *box = tree->root; k.n > 0 && box != NULL; box = box_after(box)) {
-        const flow_frame_t *f = box->frame;
-        FKeep *kp = f != NULL && f->box == box && f->kind == F_FRAME_TRANSFORM ? f_map_get(&written, box->style) : NULL;
+        FKeep *kp = f_map_get(&written, box->style);
         if (kp == NULL)
             continue;
-        flow_frame_t tried = *f;
-        transform_fill(&tried, &values[kp - k.pairs]);
-        if (tried.through != f->through || tried.upright != f->upright) {
+        // The copy's own frame is a copy too, naming the copy as its box, as
+        // makes_context and own_through ask of a box's own frame.
+        const flow_style_t *value = &values[kp - k.pairs];
+        const flow_frame_t *f = box->frame;
+        bool framed = f != NULL && f->box == box && f->kind == F_FRAME_TRANSFORM;
+        flow_frame_t tried = framed ? *f : (flow_frame_t){0};
+        flow_box_t tried_box = *box;
+        tried_box.style = value;
+        if (framed) {
+            transform_fill(&tried, value);
+            tried.box = &tried_box;
+            tried_box.frame = &tried;
+        }
+        bool layers_same = is_group(&tried_box) == is_group(box) && makes_context(&tried_box) == makes_context(box);
+        if (!layers_same || (framed && (tried.through != f->through || tried.upright != f->upright))) {
             f_map_free(&written);
             out.why = FLOW_RESTYLE_STACKING;
             os64_free(values);
@@ -244,7 +268,7 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
             f_style_free(b);
             return out;
         }
-        transformed = true;
+        transformed = transformed || framed;
     }
     // A transform moves how far the page and its scroll containers reach,
     // which is worked again from where placement left them.
@@ -323,7 +347,8 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
 // - the same decoration lines and, where there are lines, the same colours
 //   (a box with none keeps colours it never draws, which a kept tree does
 //   not refresh);
-// - ink that covers the whole layout's (a kept tree's ink only grows,
+// - ink that covers the whole layout's, and an outline held wherever the
+//   whole layout holds one (a kept tree's ink and outlines only grow,
 //   ink_grown);
 // - the same paint layers, in order, by box and part;
 // - the same page extent, and each scroll container's range and scroll.
@@ -355,6 +380,7 @@ bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_h
                                                       x->line_through_color != y->line_through_color))
                                   ? "a decoration"
                             : !ink_covers ? "an ink that does not cover the whole layout's"
+                            : y->holds_outline && !x->holds_outline ? "an outline not held"
                             : NULL;
         if (differs != NULL) {
             *node = box_named(x);
