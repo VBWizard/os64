@@ -16,15 +16,19 @@ struct FReuseSnapshot {
     flow_reuse_inputs_t inputs;
     flow_env_t env;
     const os64_html_document_t *doc;
+    // The tree's styles, which live as long as it does (reuse_hidden).
+    const FStyles *styles;
     uint64_t generation, version;
     size_t count, slots, bytes, ncalls, nitems;
     int32_t width;
     bool lost;
     // A change was read since the snapshot's version that adds or removes
     // nodes, changes a text, changes a tree's adopted sheets, or sets an
-    // attribute boxes may read (reuse_attr_styled_only): boxes or their
-    // text may differ, whatever the styles say, so a tree kept by a
-    // restyle in place (flow_restyle_in_place) cannot answer for it.
+    // attribute boxes may read (reuse_attr_styled_only), where the tree has
+    // or may have boxes: boxes or their text may differ, whatever the styles
+    // say, so a tree kept by a restyle in place (flow_restyle_in_place)
+    // cannot answer for it. A change at or under an element the tree's
+    // styles show as `display: none` is not one (reuse_hidden).
     // `structural_at` and `structural_what`: the first such change's target
     // and what it was, for the record (flow_restyle_t.at, .detail).
     bool structural;
@@ -139,6 +143,24 @@ static bool reuse_attr_styled_only(const os64_html_change_entry_t *e)
            reuse_name_begins(n, "data-") || reuse_name_begins(n, "aria-");
 }
 
+// Whether a change at `n` is in a part of the page the tree made nothing
+// for: at or under an element whose record says `display: none`. The style
+// pass styles such an element and nothing beneath it, so below it there is
+// no record, no box and no text; climbing the flat tree, the first record
+// met answers. A change that un-hides it changes that element's own style,
+// which the restyle judges (flow_restyle_in_place).
+static bool reuse_hidden(const FReuseSnapshot *r, const os64_html_node_t *n)
+{
+    for (; r->styles != NULL && n != NULL; n = f_flat_parent(r->doc, n)) {
+        if (n->kind != OS64_HTML_ELEMENT)
+            continue;
+        const FStyled *rec = f_style_of(r->styles, n);
+        if (rec != NULL)
+            return rec->style.display == FLOW_DISPLAY_NONE;
+    }
+    return false;
+}
+
 static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
 {
     if (r->lost) return false;
@@ -153,11 +175,13 @@ static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
     for (; entry; entry = entry->next) {
         // An element's custom state is the cascade's to read; a STATE change
         // on a document or a shadow root is its adopted sheets. An attribute
-        // is structural unless only the cascade reads it.
-        if (entry->kind == OS64_HTML_CHANGE_CHILDREN || entry->kind == OS64_HTML_CHANGE_TEXT ||
-            (entry->kind == OS64_HTML_CHANGE_STATE && entry->target != NULL &&
-             entry->target->kind != OS64_HTML_ELEMENT) ||
-            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry))) {
+        // is structural unless only the cascade reads it. None is, in a part
+        // of the page the tree made nothing for.
+        if ((entry->kind == OS64_HTML_CHANGE_CHILDREN || entry->kind == OS64_HTML_CHANGE_TEXT ||
+             (entry->kind == OS64_HTML_CHANGE_STATE && entry->target != NULL &&
+              entry->target->kind != OS64_HTML_ELEMENT) ||
+             (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry))) &&
+            !reuse_hidden(r, entry->target)) {
             if (!r->structural) {
                 r->structural_at = entry->target;
                 const char *what = entry->kind == OS64_HTML_CHANGE_CHILDREN ? "children"
@@ -271,7 +295,7 @@ static FReuseSnapshot *reuse_snapshot_new(flow_tree_t *tree, int32_t width,
     bytes += tree->boxes->count * sizeof(FReuseCall);
     FReuseSnapshot *r = os64_calloc(1, bytes);
     if (!r) { stats->refused[FLOW_REUSE_NO_MEMORY]++; return NULL; }
-    *r = (FReuseSnapshot){.inputs = *inputs, .env = *env, .doc = tree->doc,
+    *r = (FReuseSnapshot){.inputs = *inputs, .env = *env, .doc = tree->doc, .styles = tree->styles,
         .generation = tree->styles->cascade_generation, .version = os64_html_version(tree->doc),
         .count = count, .slots = slots, .bytes = bytes, .width = width};
     // These borrowed context pointers are not comparison inputs. Keep no

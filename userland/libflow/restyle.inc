@@ -146,6 +146,35 @@ static bool keep_is_pseudo(const FStyles *b, const os64_html_node_t *key)
     return up != NULL && (up->pseudo[0] == key || up->pseudo[1] == key);
 }
 
+// A decline found at `node` because its anchor moved is a descendant's
+// echo of an ancestor that came to make a containing block, or ceased to;
+// the elements are met in the map's order, not the tree's. The record is
+// told the nearest ancestor whose own style changed, with that ancestor's
+// own verdict, so that it names the cause rather than the echo.
+static void keep_explain_anchor(FKeeps *k, FStyles *old, const FStyles *b, const os64_html_node_t *node)
+{
+    for (const os64_html_node_t *a = node != NULL ? node->parent : NULL; a != NULL; a = a->parent) {
+        FStyled *was = f_map_get(&old->map, a);
+        const FStyled *is = f_style_of(b, a);
+        if (was == NULL || is == NULL || f_style_equal(&was->style, &is->style))
+            continue;
+        FKeeps scratch = {NULL, 0, 0, FLOW_RESTYLE_NONE, NULL, ""};
+        if (!keep_judge(&scratch, a, was, is)) {
+            k->why = scratch.why;
+            k->at = scratch.at;
+            os64_strcopy(k->detail, sizeof(k->detail), scratch.detail);
+        } else {
+            k->at = a;
+            os64_strcopy(k->detail, sizeof(k->detail), "derived anchor, from a paint-only change here");
+        }
+        os64_free(scratch.pairs);
+        return;
+    }
+    // No ancestor's style changed, yet the anchor did: the two builds
+    // computed it otherwise, which is the builder's to explain.
+    os64_strcopy(k->detail, sizeof(k->detail), "derived anchor, no ancestor changed");
+}
+
 // The pairs to write for every element and pseudo-element of the new build
 // `b` against the tree's `old`, or false with the reason.
 static bool keep_collect(FKeeps *k, FStyles *old, const FStyles *b)
@@ -158,8 +187,11 @@ static bool keep_collect(FKeeps *k, FStyles *old, const FStyles *b)
             continue;
         FStyled *was = f_map_get(&old->map, node);
         const FStyled *is = b->map.vals[i];
-        if (!keep_judge(k, node, was, is))
+        if (!keep_judge(k, node, was, is)) {
+            if (k->why == FLOW_RESTYLE_GEOMETRY && os64_streq(k->detail, "derived anchor"))
+                keep_explain_anchor(k, old, b, node);
             return false;
+        }
         for (int p = 0; p < 2; p++) {
             if (is->pseudo[p] == NULL)
                 continue;
@@ -202,6 +234,16 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
     if (r->structural) {
         out.at = r->structural_at;
         os64_strcopy(out.detail, sizeof(out.detail), r->structural_what);
+        // Whether the change was where the tree has a box: its node's, or a
+        // text's element's. One with none is in a part of the page no box
+        // was made for (`display: none` above it), which the record says.
+        const os64_html_node_t *e = out.at;
+        while (e != NULL && e->kind != OS64_HTML_ELEMENT)
+            e = e->parent;
+        if (e != NULL && flow_box_for(tree, e) == NULL) {
+            size_t n = os64_strlen(out.detail);
+            os64_strcopy(out.detail + n, sizeof(out.detail) - n, ", no box");
+        }
         return out;
     }
     out.why = FLOW_RESTYLE_INPUTS;
