@@ -137,6 +137,9 @@ static bool pointer_turn(void)
 {
     if (pointer_cancel_due() != YONDER_NEVER) { pointer_cancel_run(); return true; }
     if (!s_frames.open || pointer_next() == YONDER_NEVER) return false;
+    // The hit sees transforms, visibility and pointer-events: a rebuild a
+    // covered window left owed (script_rendering_step) is made first.
+    if (page_rebuild_owed(&g.page) && !script_rebuild()) return false;
     uint64_t revision = s_pointer_revision;
     s_pointer_rehit = false;
     os64_dom_pointer_sample_t sample = {.action = OS64_DOM_POINTER_BOUNDARY,

@@ -322,10 +322,24 @@ typedef enum {
     OS64_DOM_SCRIPT_IMPORTMAP   /* the host registers it (yonder's importmap.c) */
 } os64_dom_script_kind_t;
 
+/* What a geometry read will take from the snapshot, which the binding sets
+ * before it calls the provider (`need`): BOXES, the offset and client
+ * members and offset_parent, which no transform and no paint-only style
+ * moves; REACH, the scroll members as well, which a transform's reach can
+ * move; ALL, any member (the rectangles see through transforms). A provider
+ * may make current only what the need reads, or ignore it and make
+ * everything current. */
+typedef enum {
+    OS64_DOM_NEED_ALL = 0,
+    OS64_DOM_NEED_BOXES,
+    OS64_DOM_NEED_REACH
+} os64_dom_geometry_need_t;
+
 /* Numeric snapshot in CSS pixels. Offset/client members are integer pixels;
  * rect members can be fractional after device-pixel layout is unzoomed.
  * offset_parent is borrowed from the provider's live document. */
 typedef struct {
+    os64_dom_geometry_need_t need;  /* in: what the read takes */
     double x, y, width, height;
     int32_t offset_left, offset_top, offset_width, offset_height;
     int32_t client_left, client_top, client_width, client_height;

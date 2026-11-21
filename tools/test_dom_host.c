@@ -336,6 +336,7 @@ static char *native_serialized(const os64_html_node_t *node)
 typedef struct {
     DomFixture *fixture;
     unsigned calls;
+    unsigned needs[3];      // the provider asked for each os64_dom_geometry_need_t
     bool refuse, slow, unboxed;
 } GeometryFixture;
 
@@ -344,6 +345,7 @@ static bool fake_geometry(void *opaque, const os64_html_node_t *node, os64_dom_g
     GeometryFixture *fixture=opaque;
     check(node->kind==OS64_HTML_ELEMENT, "geometry provider receives a native element");
     fixture->calls++;
+    if((unsigned)out->need<3) fixture->needs[out->need]++;
     *out=(os64_dom_geometry_t){.x=1.25,.y=-3.5,.width=20.5,.height=30.25,
         .offset_left=2,.offset_top=3,.offset_width=21,.offset_height=30,
         .client_left=1,.client_top=2,.client_width=19,.client_height=27,
@@ -389,6 +391,29 @@ static void dom_geometry_cases(void)
     os64_dom_geometry_stats_t stats=os64_dom_geometry_stats(f.binding,true);
     check(stats.layouts==11&&stats.elapsed_us==2750&&os64_dom_geometry_stats(f.binding,false).layouts==0,
           "geometry telemetry counts provider work and resets independently");
+    /* What each read asks the provider for (os64_dom_geometry_need_t): the
+     * offset and client members and offsetParent BOXES, the scroll members
+     * REACH, the rectangles ALL. */
+    memset(provider.needs,0,sizeof(provider.needs));
+    dom_script(&f,GEOMETRY_ASSERT
+        "var n=document.getElementById('one');"
+        "n.offsetLeft;n.offsetWidth;n.offsetParent;n.clientWidth;n.clientTop;",
+        "geometry-needs-boxes");
+    check(provider.needs[OS64_DOM_NEED_BOXES]==5&&provider.needs[OS64_DOM_NEED_REACH]==0&&provider.needs[OS64_DOM_NEED_ALL]==0,
+          "geometry: offset and client reads ask for boxes");
+    memset(provider.needs,0,sizeof(provider.needs));
+    dom_script(&f,GEOMETRY_ASSERT
+        "var n=document.getElementById('one');n.scrollTop;n.scrollLeft;n.scrollWidth;n.scrollHeight;",
+        "geometry-needs-reach");
+    check(provider.needs[OS64_DOM_NEED_REACH]==4&&provider.needs[OS64_DOM_NEED_BOXES]==0&&provider.needs[OS64_DOM_NEED_ALL]==0,
+          "geometry: scroll reads ask for the reach");
+    memset(provider.needs,0,sizeof(provider.needs));
+    dom_script(&f,GEOMETRY_ASSERT
+        "var n=document.getElementById('one');n.getBoundingClientRect();n.getClientRects();",
+        "geometry-needs-all");
+    check(provider.needs[OS64_DOM_NEED_ALL]==2&&provider.needs[OS64_DOM_NEED_BOXES]==0&&provider.needs[OS64_DOM_NEED_REACH]==0,
+          "geometry: rectangles ask for everything");
+    os64_dom_geometry_stats(f.binding,true);
     /* getClientRects (CSSOM View § 6.1): the border box an element with a
      * box has, in a DOMRectList; empty for one with none. */
     dom_script(&f,GEOMETRY_ASSERT

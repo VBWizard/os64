@@ -97,6 +97,10 @@ typedef struct yonder_diag yonder_diag_t;
 // Why a restyle kept in the shown tree was declined (flow_restyle_reason_t
 // order); the layout wrapper checks the count at compile time.
 #define YONDER_LAYOUT_RESTYLE_REASONS 12
+// The reads that met only paint-only writes pending and still made the page
+// current (yonder.c, reads_counted): rectangles, scroll members with a
+// transform pending, computed styles, hit tests.
+#define YONDER_LAYOUT_READ_KINDS 4
 // WHAT A LAYOUT NEEDED, from what came out different (flow_profile_t),
 // for a layout that finished: no style changed and no box moved, came or
 // went (a repaint at most); only paint styles changed and no box moved;
@@ -136,6 +140,12 @@ typedef struct {
     uint64_t kept_nothing, kept_paint;
     uint64_t kept_declined[YONDER_LAYOUT_RESTYLE_REASONS];
     const char *const *restyle_reason_names;
+    // The geometry reads answered from the shown tree with no work (N2);
+    // the reads that met only paint-only writes and still made the page
+    // current, by kind (names with the sample); and the rendering steps a
+    // covered window owed instead of rebuilding.
+    uint64_t reads_kept, reads_laid[YONDER_LAYOUT_READ_KINDS], owed_covered;
+    const char *const *read_kind_names;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
     const char *const *cascade_reason_names;

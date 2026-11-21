@@ -868,6 +868,9 @@ typedef struct Page {
     flow_timeline_t *timeline;
     int32_t laid_width, laid_height;    // device pixels
     uint32_t laid_zoom;                 // thousandths (flow_env_t.zoom)
+    // The form state's version the tree was laid out with (layout_inputs):
+    // a control's state moves without the document's version.
+    uint64_t laid_state;
     // The page's sheets, and their cascade at the size the tree was laid
     // out at; it is judged again when the size or the sheets change. The
     // tree points into both. `serial` names the page to a sheet's job.
@@ -1912,6 +1915,35 @@ static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node
 static bool s_restyle_in_place = true;
 static uint32_t s_geometry_check, s_geometry_checked;
 static uint64_t s_geometry_compared, s_geometry_differed;
+// A GEOMETRY READ ANSWERED FROM THE SHOWN TREE (BRIEF_LAYOUT_NEEDS.md N2,
+// libflow's pending.inc), on unless `--kept-reads=off`: an offset or client
+// read, or a scroll read with no transform pending, whose page has only
+// paint-only inline style writes pending, read with no model refresh, no
+// cascade update and no restyle (script_geometry). `--geometry-check[=N]`
+// answers every Nth such read the old way too and compares
+// (s_reads_compared, s_reads_differed).
+static bool s_kept_reads = true;
+static uint32_t s_reads_checked;
+static uint64_t s_reads_compared, s_reads_differed;
+// What N2's verdict is for the page on screen, its tree standing for a
+// layout at the view's size; RESTYLE when it cannot stand.
+static flow_pending_t shown_pending(void);
+// A read that met only paint-only writes pending and made the page current
+// all the same, by kind (reads_counted).
+enum { READ_RECTS, READ_SCROLL, READ_STYLES, READ_HITS };
+// One of N2's events, counted in the record's `layout reads` line while the
+// profile is on: a read answered from the kept tree, a read of kind `laid`
+// that made the page current with PAINT pending (-1 for none), or a
+// rendering step a covered window owed.
+static void reads_counted(const Page *p, int laid, bool kept, bool owed)
+{
+    static const char *const names[YONDER_LAYOUT_READ_KINDS] = {"rects", "scroll", "styles", "hits"};
+    if (!s_layout_profile || layout_profile_diag(p) == NULL)
+        return;
+    yonder_layout_stats_t sample = {.read_kind_names = names, .reads_kept = kept, .owed_covered = owed};
+    if (laid >= 0 && laid < YONDER_LAYOUT_READ_KINDS) sample.reads_laid[laid] = 1;
+    layout_profile_add(p, &sample);
+}
 
 // The shown tree, when `p` is a staged rebuild of the page on screen at its
 // own sizes and the restyle kept in that tree took the change; NULL when it
@@ -2264,6 +2296,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     p->laid_width = width;
     p->laid_height = height;
     p->laid_zoom = zoom;
+    p->laid_state = os64_page_state_version(os64_page_shared_state(page_model(p)));
     p->sheets_changed = false;
     return true;
 }
@@ -3797,6 +3830,27 @@ static bool page_records_shown(const Page *p)
 {
     return p->diag != NULL && p->diag == g.page.diag;
 }
+static flow_pending_t shown_pending(void)
+{
+    flow_pending_t restyle = {FLOW_PENDING_RESTYLE, true};
+    Page *p = &g.page;
+    int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
+    int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
+    // What a layout would read besides the document: the view's size and
+    // zoom, the sheets, the pictures and the fonts (script_geometry's own
+    // conditions for a relayout), and the form state the graft's inputs
+    // carry, which moves without the document's version: the tree's must be
+    // the state's now.
+    if (!s_kept_reads || p->tree == NULL || flow_incomplete(p->tree) || p->cascade == NULL ||
+        p->laid_width != width || p->laid_height != height || p->laid_zoom != g.zoom || p->sheets_changed ||
+        g.pictures_moved || s_web.moved)
+        return restyle;
+    os64_page_state_t *state = os64_page_shared_state(page_model(p));
+    if (state == NULL || os64_page_state_version(state) != p->laid_state)
+        return restyle;
+    return flow_pending(p->tree, page_doc(p), p->cascade);
+}
+
 static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, int32_t height, uint32_t zoom)
 {
     if (!s_restyle_in_place || reclaim != &g.page || p == &g.page || g.page.tree == NULL ||
@@ -10392,12 +10446,15 @@ static void frame_follow(void)
 }
 
 // The window was covered or uncovered. The flag is the truth and the event
-// only the nudge, since a full queue drops events.
+// only the nudge, since a full queue drops events. Seen again, it pays the
+// rebuild a covered window owed (script_rendering_step) before its paint.
 static void window_seen(void)
 {
     os64_gui_window_state_t st;
     if (os64_gui_window_get_state(g.win, &st) == 0)
         g.covered = (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
+    if (!g.covered && page_rebuild_owed(&g.page))
+        (void)script_rebuild();
     pictures_schedule();
 }
 
@@ -12052,6 +12109,7 @@ static bool script_rebuild(void)
         p->laid_width = next.laid_width;
         p->laid_height = next.laid_height;
         p->laid_zoom = next.laid_zoom;
+        p->laid_state = next.laid_state;
         p->cascade = next.cascade;
         p->sheets = next.sheets;
         p->nsheets = next.nsheets;
@@ -12098,6 +12156,22 @@ static bool script_rebuild(void)
     // damage; resets and effects retain the conservative viewport fallback.
     yonder_scripts_canvas_visit_damage(p->scripts,canvas_damage_mark,p);
     return true;
+}
+
+// The rendering step at a script task's end: the page made current for its
+// paint. A window nobody can see (g.covered: minimized, entirely behind
+// another, or a text terminal on the glass) owes it while only paint-only
+// writes are pending (shown_pending, N2): they cost nothing until something
+// reads what they change, or the window is seen again (window_seen pays
+// it). Anything else pending is rebuilt as before, seen or not, since
+// observers and timers may read it.
+static bool script_rendering_step(void)
+{
+    if (g.covered && page_rebuild_owed(&g.page) && shown_pending().verdict == FLOW_PENDING_PAINT) {
+        reads_counted(&g.page, -1, false, true);
+        return true;
+    }
+    return script_rebuild();
 }
 
 // ── Scripts ─────────────────────────────────────────────────────────────
@@ -13677,11 +13751,95 @@ static bool measured_for(const os64_html_document_t *doc, int32_t width, int32_t
     return measured_layout(stream_page(), g.stream.state, g.stream.head.url, width, height);
 }
 
+// The page on screen made current for a read of its geometry: its pending
+// rebuild, then a layout owed at the view's size, zoom, sheets, pictures or
+// fonts.
+static bool script_current(int32_t width, int32_t height)
+{
+    bool ready = script_rebuild();
+    if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
+                  g.page.laid_height != height || g.page.laid_zoom != g.zoom ||
+                  g.page.sheets_changed || g.pictures_moved || s_web.moved))
+        ready = relayout(true);
+    return ready;
+}
+
+// Whether a snapshot member a read takes differs between the kept tree's
+// answer and the current one, said at `out` when it does.
+static bool read_member_differs(char *out, size_t cap, const char *name, int64_t kept, int64_t current)
+{
+    if (kept == current)
+        return false;
+    os64_snprintf(out, cap, "%s (%ld kept, %ld current)", name, (long)kept, (long)current);
+    return true;
+}
+// The first member a read of `need` takes that differs, or "".
+static void read_difference(const os64_dom_geometry_t *a, const os64_dom_geometry_t *b,
+                            os64_dom_geometry_need_t need, char *out, size_t cap)
+{
+    out[0] = '\0';
+    if (read_member_differs(out, cap, "offsetLeft", a->offset_left, b->offset_left) ||
+        read_member_differs(out, cap, "offsetTop", a->offset_top, b->offset_top) ||
+        read_member_differs(out, cap, "offsetWidth", a->offset_width, b->offset_width) ||
+        read_member_differs(out, cap, "offsetHeight", a->offset_height, b->offset_height) ||
+        read_member_differs(out, cap, "clientLeft", a->client_left, b->client_left) ||
+        read_member_differs(out, cap, "clientTop", a->client_top, b->client_top) ||
+        read_member_differs(out, cap, "clientWidth", a->client_width, b->client_width) ||
+        read_member_differs(out, cap, "clientHeight", a->client_height, b->client_height) ||
+        read_member_differs(out, cap, "a box", a->boxed, b->boxed))
+        return;
+    if (a->offset_parent != b->offset_parent) {
+        os64_snprintf(out, cap, "offsetParent");
+        return;
+    }
+    if (need == OS64_DOM_NEED_REACH &&
+        (read_member_differs(out, cap, "scrollLeft", a->scroll_left, b->scroll_left) ||
+         read_member_differs(out, cap, "scrollTop", a->scroll_top, b->scroll_top) ||
+         read_member_differs(out, cap, "scrollWidth", a->scroll_width, b->scroll_width) ||
+         read_member_differs(out, cap, "scrollHeight", a->scroll_height, b->scroll_height)))
+        return;
+}
+
+// `--geometry-check` for a read the kept tree answered: the page made
+// current and read again, and the two compared on what the read takes. A
+// difference is said with the element and the member. The current answer
+// is the one given either way.
+static bool read_checked(const os64_html_document_t *doc, const os64_html_node_t *node,
+                         os64_dom_geometry_need_t need, int32_t width, int32_t height, os64_dom_geometry_t *out)
+{
+    os64_dom_geometry_t kept = *out;
+    bool ready = script_current(width, height) &&
+                 yonder_geometry_snapshot(doc, g.page.tree, node, width, height, g.zoom,
+                                          (flow_point_t){g.sx, g.sy}, out);
+    char member[128], named[96] = "", line[256];
+    if (ready)
+        read_difference(&kept, out, need, member, sizeof(member));
+    else
+        os64_snprintf(member, sizeof(member), "no current layout");
+    s_reads_compared++;
+    if (member[0] != '\0') {
+        s_reads_differed++;
+        if (node->kind == OS64_HTML_ELEMENT)
+            element_named(named, sizeof(named), "", node);
+        os64_snprintf(line, sizeof(line), "a read answered from the kept tree differs from the current in %s at %s",
+                      member, named[0] != '\0' ? named : "the page");
+        yonder_diag_failed_seen(g.page.diag, "read check", line);
+        os64_debug_log(line);
+    }
+    char said[96];
+    os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)s_reads_compared,
+                  (unsigned long)s_reads_differed);
+    yonder_diag_fact(g.page.diag, "read check", said);
+    return ready;
+}
+
 // A script host's current-layout provider (DOM.md § Geometry), whose opaque
-// is its page's document. The page on screen has its pending rebuild and an
-// owed layout done now and published; a page not on screen is measured
-// beside itself (measured_layout). Either way the work is charged to the
-// asking script, and the box is read from the layout that results.
+// is its page's document. The page on screen answers from its tree as it
+// stands when the read's need allows and only paint-only writes are pending
+// (N2: shown_pending); otherwise it has its pending rebuild and an owed
+// layout done now and published (script_current). A page not on screen is
+// measured beside itself (measured_layout). Any work is charged to the
+// asking script, and the box is read from the tree that results.
 static bool script_geometry(void *opaque, const os64_html_node_t *node,
                             os64_dom_geometry_t *out)
 {
@@ -13698,14 +13856,29 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
             ready = yonder_geometry_snapshot(doc, s_measured.tree, node, width, height, g.zoom,
                                              (flow_point_t){0, 0}, out);
     } else {
-        ready = ready && script_rebuild();
-        if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
-                      g.page.laid_height != height || g.page.laid_zoom != g.zoom ||
-                      g.page.sheets_changed || g.pictures_moved || s_web.moved))
-            ready = relayout(true);
-        if (ready)
-            ready = yonder_geometry_snapshot(doc, g.page.tree, node,
-                        width, height, g.zoom, (flow_point_t){g.sx, g.sy}, out);
+        // An offset or client read, or a scroll read with no transform
+        // pending, whose page has only paint-only writes pending: the tree
+        // on screen answers (N2, shown_pending), and the writes wait for
+        // the next asker that needs styles.
+        os64_dom_geometry_need_t need = out->need;
+        flow_pending_t pending = need != OS64_DOM_NEED_ALL || s_layout_profile
+                                     ? shown_pending() : (flow_pending_t){FLOW_PENDING_RESTYLE, true};
+        bool kept = ready && pending.verdict != FLOW_PENDING_RESTYLE &&
+                    (need == OS64_DOM_NEED_BOXES || (need == OS64_DOM_NEED_REACH && !pending.transforms));
+        if (kept) {
+            ready = yonder_geometry_snapshot(doc, g.page.tree, node, width, height, g.zoom,
+                                             (flow_point_t){g.sx, g.sy}, out);
+            reads_counted(&g.page, -1, true, false);
+            if (ready && s_geometry_check != 0 && ++s_reads_checked % s_geometry_check == 0)
+                ready = read_checked(doc, node, need, width, height, out);
+        } else {
+            if (pending.verdict == FLOW_PENDING_PAINT)
+                reads_counted(&g.page, need == OS64_DOM_NEED_ALL ? READ_RECTS : READ_SCROLL, false, false);
+            ready = ready && script_current(width, height);
+            if (ready)
+                ready = yonder_geometry_snapshot(doc, g.page.tree, node,
+                            width, height, g.zoom, (flow_point_t){g.sx, g.sy}, out);
+        }
     }
     int64_t ended = os64_micros();
     out->layouts = geometry_layout_total - before;
@@ -13746,10 +13919,12 @@ static size_t script_hit(void *opaque, double x, double y, const os64_html_node_
     bool ready = false;
     const os64_html_node_t *hit = NULL;
     if (inside && doc == page_doc(&g.page)) {
-        ready = script_rebuild();
-        if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
-                      g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed || g.pictures_moved || s_web.moved))
-            ready = relayout(true);
+        // A hit sees transforms, visibility and pointer-events, so styles
+        // are made current whatever is pending; with the profile on, the
+        // record counts those that met only paint-only writes.
+        if (s_layout_profile && shown_pending().verdict == FLOW_PENDING_PAINT)
+            reads_counted(&g.page, READ_HITS, false, false);
+        ready = script_current(width, height);
         if (ready)
             hit = element_hit(g.view.bounds.x + (int32_t)dx, g.view.bounds.y + (int32_t)dy, NULL, NULL);
     } else if (inside && measured_for(doc, width, height)) {
@@ -14653,10 +14828,12 @@ static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_e
     env->timeline = NULL;
     env->ticks = false;
     if (p == &g.page) {
-        bool ready = script_rebuild();
-        if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
-                      g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed || g.pictures_moved || s_web.moved))
-            ready = relayout(true);
+        // Its answers are read from the tree's styles, made current whatever
+        // is pending; with the profile on, the record counts those that met
+        // only paint-only writes (the cut of BRIEF_LAYOUT_NEEDS.md N2).
+        if (s_layout_profile && shown_pending().verdict == FLOW_PENDING_PAINT)
+            reads_counted(&g.page, READ_STYLES, false, false);
+        bool ready = script_current(width, height);
         if (ready && g.page.tree != NULL) {
             tree = g.page.tree;
             env->ctx = &g.page;
@@ -14998,8 +15175,9 @@ static bool script_turn(void)
     if (g.page.tree == NULL && (page_doc(&g.page) == NULL ||
         g.page.rendered_version == os64_html_version(page_doc(&g.page))))
         return false;
-    // A failed native rebuild is retried before another script can run.
-    if (!script_rebuild())
+    // A failed native rebuild is retried before another script can run, or
+    // owed while the window is covered (script_rendering_step).
+    if (!script_rendering_step())
         return false;
     if (!g.scripts_on || g.page.scripts == NULL)
         return false;
@@ -15077,8 +15255,9 @@ static bool script_turn(void)
     if (!ran)
         return pointer_turn();
     // The rendering step before the asks: a form a script sent is read
-    // from a model as current as its tree.
-    bool rendered = script_rebuild();
+    // from a model as current as its tree (an owed step leaves both as they
+    // were, and a style write changes nothing a form sends).
+    bool rendered = script_rendering_step();
     if (rendered) {
         asks_perform(g.page.scripts, doc, true);
         if (page_doc(&g.page) == doc) (void)pointer_turn();
@@ -21023,6 +21202,8 @@ int main(int argc, char **argv)
             s_layout_profile = true;
         else if (os64_streq(argv[arg], "--restyle-in-place=off"))
             s_restyle_in_place = false;
+        else if (os64_streq(argv[arg], "--kept-reads=off"))
+            s_kept_reads = false;
         else if (os64_streq(argv[arg], "--geometry-check"))
             s_geometry_check = 10;
         else if (os64_strlen(argv[arg]) > 17 && os64_memcmp(argv[arg], "--geometry-check=", 17) == 0) {

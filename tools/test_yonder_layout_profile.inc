@@ -275,9 +275,131 @@ static void restyle_kept_cases(void)
     s_ledger=YONDER_LEDGER_OFF;
 }
 
+/* The number after `label` in a record line, 0 for none. */
+static unsigned record_number(const char *line, const char *label)
+{
+    const char *at=line?strstr(line,label):NULL;
+    unsigned n=0;
+    if(at) sscanf(at+strlen(label),"%u",&n);
+    return n;
+}
+
+/* A GEOMETRY READ ANSWERED FROM THE SHOWN TREE (N2, shown_pending): a page
+ * whose script writes on a bar's twelve parts and reads them back, the
+ * writes and reads by the id of the button clicked. */
+static const char kKeptReadsPage[]=
+    "<!doctype html><style>#bar{display:flex;width:600px}.part{flex:1;height:12px;transform:scaleX(1)}"
+    "#box{width:300px;height:40px;overflow:auto}#tall{height:200px}%s</style>"
+    "<div id=bar></div><div id=box><div id=tall></div></div><p id=out>-</p>"
+    "<button id=transform>t</button><button id=colour>c</button><button id=klass>k</button>"
+    "<button id=scroll>s</button><button id=scrollmove>m</button><button id=rect>r</button>"
+    "<button id=quiet>q</button><script>"
+    "const bar=document.getElementById('bar'),box=document.getElementById('box');"
+    "for(let i=0;i<12;i++){const d=document.createElement('div');d.className='part';bar.appendChild(d)}let t=0;"
+    "document.onclick=e=>{t++;const m=e.target.id,parts=bar.children;let sum=0;"
+    "if(m==='quiet'){for(const p of parts)p.style.transform='scaleX('+(t/10)+')';return}"
+    "if(m==='scroll'){bar.style.backgroundColor='rgb(0,'+t+',0)';sum=box.scrollHeight}"
+    "else if(m==='scrollmove'){parts[0].style.transform='scaleX('+(t/10)+')';sum=box.scrollHeight}"
+    "else for(const p of parts){"
+    "if(m==='transform')p.style.transform='scaleX('+(t/10)+')';"
+    "else if(m==='colour')p.style.backgroundColor='rgb('+t+',0,0)';"
+    "else if(m==='klass')p.className='part k'+t;"
+    "else if(m==='rect'){p.style.transform='scaleX('+(t/10)+')';sum+=Math.round(p.getBoundingClientRect().width);continue}"
+    "sum+=p.clientWidth}"
+    "document.getElementById('out').textContent=sum}</script>";
+static void kept_reads_click(const char *id)
+{
+    os64_dom_event_t click={.type="click",.bubbles=true,.cancelable=true};
+    os64_js_outcome_t out;
+    yonder_scripts_dispatch(g.page.scripts,probe_id(id),&click,NULL,&out);
+}
+static void kept_reads_cases(void)
+{
+    char html[4096];
+    snprintf(html,sizeof(html),kKeptReadsPage,"");
+    s_ledger=YONDER_LEDGER_ON;
+    probe_page(html,true);
+    script_turn();
+    g.page.diag=diag_new_claimed("https://fixture.test/kept-reads",1);
+    s_layout_profile=true;
+    uint64_t layouts=geometry_layout_total;
+    kept_reads_click("transform");
+    const char *reads=yonder_diag_fact_value(g.page.diag,"layout reads");
+    check(record_number(reads,"from the kept tree ")==12 && geometry_layout_total==layouts,
+          "kept reads: twelve transforms written and read back are answered from the tree, with no layout");
+    if(record_number(reads,"from the kept tree ")!=12 || geometry_layout_total!=layouts)
+        printf("  layout reads: %s (layouts %lu)\n",reads?reads:"(none)",(unsigned long)(geometry_layout_total-layouts));
+    check(probe_text_is("out","600"),"kept reads: and they answer as a layout would (twelve parts of 50 px)");
+    script_turn();
+    kept_reads_click("colour");
+    reads=yonder_diag_fact_value(g.page.diag,"layout reads");
+    check(record_number(reads,"from the kept tree ")==24,"kept reads: a colour written is answered from the tree");
+    script_turn();
+    kept_reads_click("klass");
+    reads=yonder_diag_fact_value(g.page.diag,"layout reads");
+    check(record_number(reads,"from the kept tree ")==24,"kept reads: a class written is not");
+    script_turn();
+    kept_reads_click("scroll");
+    reads=yonder_diag_fact_value(g.page.diag,"layout reads");
+    check(record_number(reads,"from the kept tree ")==25 && probe_text_is("out","200"),
+          "kept reads: a scroll read with a colour pending is answered from the tree");
+    script_turn();
+    kept_reads_click("scrollmove");
+    reads=yonder_diag_fact_value(g.page.diag,"layout reads");
+    check(record_number(reads,"from the kept tree ")==25 && record_number(reads,"scroll ")==1,
+          "kept reads: a scroll read with a transform pending makes the page current, and is counted");
+    script_turn();
+    kept_reads_click("rect");
+    reads=yonder_diag_fact_value(g.page.diag,"layout reads");
+    check(record_number(reads,"rects ")==12,"kept reads: a rectangle read with a transform pending makes the page current, and is counted");
+    if(record_number(reads,"rects ")!=12) printf("  layout reads: %s\n",reads?reads:"(none)");
+    script_turn();
+    // --geometry-check: every read the tree answered, answered the old way
+    // too, and none differs.
+    s_geometry_check=1;
+    s_reads_checked=0;
+    s_reads_compared=s_reads_differed=0;
+    kept_reads_click("transform");
+    const char *checked=yonder_diag_fact_value(g.page.diag,"read check");
+    check(checked && !strncmp(checked,"12 compared, 0 differed",23),
+          "kept reads: --geometry-check answers each the old way too, and none differs");
+    if(!checked || strncmp(checked,"12 compared, 0 differed",23)) printf("  read check: %s\n",checked?checked:"(none)");
+    s_geometry_check=s_reads_checked=0;
+    s_reads_compared=s_reads_differed=0;
+    script_turn();
+    // A covered window owes its rendering step while only paint-only writes
+    // are pending, and pays it once seen. (The other clicks end by writing
+    // a text, which no covered window may owe.)
+    kept_reads_click("quiet");
+    check(page_rebuild_owed(&g.page),"covered: the writes are pending");
+    g.covered=true;
+    check(script_rendering_step() && page_rebuild_owed(&g.page),"covered: the rendering step is owed, not run");
+    reads=yonder_diag_fact_value(g.page.diag,"layout reads");
+    check(record_number(reads,"rebuilds owed while covered ")==1,"covered: and counted");
+    g.covered=false;
+    check(script_rendering_step() && !page_rebuild_owed(&g.page),"covered: seen again, the step is run");
+    s_layout_profile=false;
+    probe_drop();
+    // A selector that reads the style attribute: nothing is answered from
+    // the tree.
+    snprintf(html,sizeof(html),kKeptReadsPage,"[style*=zzz]{width:1px}");
+    probe_page(html,true);
+    script_turn();
+    g.page.diag=diag_new_claimed("https://fixture.test/kept-reads-style",1);
+    s_layout_profile=true;
+    kept_reads_click("transform");
+    reads=yonder_diag_fact_value(g.page.diag,"layout reads");
+    check(record_number(reads,"from the kept tree ")==0 && probe_text_is("out","600"),
+          "kept reads: a selector reading the style attribute makes every read current");
+    s_layout_profile=false;
+    probe_drop();
+    s_ledger=YONDER_LEDGER_OFF;
+}
+
 static void layout_profile_cases(void)
 {
     restyle_kept_cases();
+    kept_reads_cases();
     /* The cases below measure what a layout needed, so every change is laid
      * out (the restyle kept in the tree would answer the paint-only ones
      * itself). */

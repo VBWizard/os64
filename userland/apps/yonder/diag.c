@@ -1412,6 +1412,10 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     for (size_t i = 0; i < YONDER_LAYOUT_RESTYLE_REASONS; ++i)
         total->kept_declined[i] = layout_sum(total->kept_declined[i], sample->kept_declined[i]);
     if (sample->restyle_reason_names != NULL) total->restyle_reason_names = sample->restyle_reason_names;
+    ADD(reads_kept); ADD(owed_covered);
+    for (size_t i = 0; i < YONDER_LAYOUT_READ_KINDS; ++i)
+        total->reads_laid[i] = layout_sum(total->reads_laid[i], sample->reads_laid[i]);
+    if (sample->read_kind_names != NULL) total->read_kind_names = sample->read_kind_names;
     ADD(model_calls); ADD(layouts); ADD(refusals); ADD(clock_errors);
 #undef ADD
     const yonder_layout_stats_t *s = total;
@@ -1461,6 +1465,26 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         }
         if (sep[0] == ':' && at + 5 < sizeof(line)) os64_memcpy(line + at, " none", 6);
         yonder_diag_fact(d, kept_key, line);
+    }
+    // `<key> reads`: the geometry reads the shown tree answered with no
+    // work, those that met only paint-only writes and made the page current
+    // all the same, by kind, and the rendering steps a covered window owed.
+    if (s->read_kind_names != NULL) {
+        char reads_key[64];
+        os64_snprintf(reads_key, sizeof(reads_key), "%s reads", key);
+        int k = os64_snprintf(line, sizeof(line), "from the kept tree %lu; paint pending, made current:",
+                              (unsigned long)s->reads_kept);
+        size_t at = k > 0 && (size_t)k < sizeof(line) ? (size_t)k : 0;
+        for (size_t i = 0; i < YONDER_LAYOUT_READ_KINDS; ++i) {
+            k = os64_snprintf(line + at, sizeof(line) - at, "%s %s %lu", i ? "," : "", s->read_kind_names[i],
+                              (unsigned long)s->reads_laid[i]);
+            if (k < 0 || (size_t)k >= sizeof(line) - at) break;
+            at += (size_t)k;
+        }
+        if (at < sizeof(line))
+            os64_snprintf(line + at, sizeof(line) - at, "; rebuilds owed while covered %lu",
+                          (unsigned long)s->owed_covered);
+        yonder_diag_fact(d, reads_key, line);
     }
     // `<key> cascade`: how many cascades were updated and how many built
     // fresh, by reason, the reasons that never happened left out; then the
