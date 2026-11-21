@@ -8833,6 +8833,22 @@ static void diag_keep_cases(void) {
               !has(big,YONDER_DIAG_LINES_LOST) && strlen(big)>4 && !strcmp(big+strlen(big)-4,YONDER_DIAG_END "\n"),
               "keep: 512 ordinary facts and the head's together lose nothing, and the record ends with `end`");
         free(big); yonder_diag_free(d);
+        /* A page whose scripts fill the ordinary room still keeps its `d`
+         * readings, which come late, and forgetting one gives its place
+         * back to the readings' room, not the ordinary one. */
+        d=yonder_diag_new("http://fixture.test/readings",1,0);
+        for(unsigned i=0;i<YONDER_DIAG_FACTS_MAX+5;i++) { char k[16]; snprintf(k,sizeof(k),"script %u",i); yonder_diag_fact(d,k,"ran"); }
+        for(unsigned i=1;i<=YONDER_DIAG_READING_FACTS;i++) { char k[32]; snprintf(k,sizeof(k),"paint reading %u",i); yonder_diag_reading_fact(d,k,"at y 0"); }
+        yonder_diag_reading_fact(d,"paint reading past","at y 0");
+        yonder_diag_forget(d,"paint reading 1");
+        yonder_diag_fact(d,"late ordinary","x");
+        yonder_diag_reading_fact(d,"paint reading again","at y 0");
+        big=malloc(1<<17); yonder_diag_render(d,big,1<<17);
+        check(has(big,"\npaint reading 2: at y 0\n") && has(big,"\npaint reading 64: at y 0\n") &&
+              has(big,"\npaint reading again: at y 0\n") && !has(big,"\npaint reading past:") &&
+              !has(big,"\nlate ordinary:") && !has(big,"\nscript 512:"),
+              "keep: readings have a room of their own, which a full ordinary room leaves them");
+        free(big); yonder_diag_free(d);
     }
 
     /* THE NAME IS CLAIMED: another yonder's record at the next number, a

@@ -10,8 +10,12 @@
 typedef struct {
     char *a, *b;            // MISSING: kind, name; FAILED: what, message; fact: key, value
     uint32_t count;         // a fact's: 1 when its latest value had no memory to keep
-    bool head;              // a fact's: set by yonder_diag_head_fact, in the head's own room
+    uint8_t room;           // a fact's: which room it took its place in (FactRoom)
 } Line;
+// The rooms a fact takes its place in, each with its own quota: the
+// ordinary facts', the head's (yonder_diag_head_fact) and the readings'
+// (yonder_diag_reading_fact).
+typedef enum { ROOM_FACTS, ROOM_HEAD, ROOM_READINGS, ROOMS } FactRoom;
 
 // The lines that met no room are counted as distinct lines, as the file
 // says them: each is kept by its key (`gone`) so a line asked for again —
@@ -72,9 +76,9 @@ struct yonder_diag {
     int64_t began_us;
     uint64_t marks[YONDER_DIAG_MARKS];
     Table missing, failed, facts;
-    // The facts that are the head's (Line.head): they have room of their
-    // own, so they are counted apart from the ordinary facts' quota.
-    uint32_t head_facts;
+    // The facts in each room (Line.room): each room's quota is its own,
+    // so neither the head's nor the readings' facts take an ordinary place.
+    uint32_t room_facts[ROOMS];
     // A line went with no memory even to name it (yonder_diag_short).
     bool short_of_memory;
     // Why the record says it cannot be judged, besides lost lines (a
@@ -330,7 +334,7 @@ static Line *table_line_shown(Table *t, const char *a, const char *b, bool both,
         t->lines = next;
         t->cap = bigger;
     }
-    Line one = {copy(a), copy(b), 0, false};
+    Line one = {copy(a), copy(b), 0, ROOM_FACTS};
     if (one.a == NULL || one.b == NULL) {
         os64_free(one.a);
         os64_free(one.b);
@@ -549,10 +553,13 @@ void yonder_diag_failed(yonder_diag_t *d, const char *what, const char *message)
 }
 
 // A plain line set. A new one takes a place in its own room: the head's
-// YONDER_DIAG_HEAD_FACTS (`head`), or the ordinary facts'
-// YONDER_DIAG_FACTS_MAX, counted apart so neither eats the other's.
-static void fact_set(yonder_diag_t *d, const char *key, const char *value, bool head)
+// YONDER_DIAG_HEAD_FACTS, the readings' YONDER_DIAG_READING_FACTS, or the
+// ordinary facts' YONDER_DIAG_FACTS_MAX, counted apart so none eats
+// another's.
+static void fact_set(yonder_diag_t *d, const char *key, const char *value, FactRoom where)
 {
+    static const uint32_t kQuota[ROOMS] = {YONDER_DIAG_FACTS_MAX, YONDER_DIAG_HEAD_FACTS,
+                                           YONDER_DIAG_READING_FACTS};
     if (d == NULL)
         return;
     Table *t = &d->facts;
@@ -562,11 +569,11 @@ static void fact_set(yonder_diag_t *d, const char *key, const char *value, bool 
     int64_t at = list_find(&t->by_line, t->lines, t->n, key, "", false);
     Line *l = at >= 0 ? &t->lines[at] : NULL;
     if (l == NULL) {
-        bool room = head ? d->head_facts < YONDER_DIAG_HEAD_FACTS : t->n - d->head_facts < YONDER_DIAG_FACTS_MAX;
+        bool room = d->room_facts[where] < kQuota[where];
         l = table_line_shown(t, key, "", false, room ? UINT32_MAX : 0);
-        if (l != NULL && head) {
-            l->head = true;
-            d->head_facts++;
+        if (l != NULL) {
+            l->room = (uint8_t)where;
+            d->room_facts[where]++;
         }
     }
     // A value with no memory to keep is not left empty, nor the one before
@@ -584,12 +591,17 @@ static void fact_set(yonder_diag_t *d, const char *key, const char *value, bool 
 
 void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value)
 {
-    fact_set(d, key, value, false);
+    fact_set(d, key, value, ROOM_FACTS);
 }
 
 void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value)
 {
-    fact_set(d, key, value, true);
+    fact_set(d, key, value, ROOM_HEAD);
+}
+
+void yonder_diag_reading_fact(yonder_diag_t *d, const char *key, const char *value)
+{
+    fact_set(d, key, value, ROOM_READINGS);
 }
 
 void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
@@ -606,8 +618,8 @@ void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
         for (uint32_t i = 0; i < *counts[k]; i++) {
             Line *l = &lists[k][i];
             if (os64_strlen(l->a) >= len && os64_memcmp(l->a, prefix, len) == 0) {
-                if (k == 0 && l->head)
-                    d->head_facts--;
+                if (k == 0)
+                    d->room_facts[l->room]--;
                 os64_free(l->a);
                 os64_free(l->b);
             } else {

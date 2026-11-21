@@ -8774,7 +8774,7 @@ static void diag_ledger_reading(Page *p, uint32_t n)
                LEDGER_MS(ledger_tenths(since, per_ms)), LEDGER_MS(ledger_tenths(ledger_sum(&k), per_ms)));
         ledger_kinds(&t, &k, per_ms);
         dt_put(&t, "; the next reading splits the whole span, its counts and the ledger starting together");
-        yonder_diag_fact(p->diag, key, dt_text(&t));
+        yonder_diag_reading_fact(p->diag, key, dt_text(&t));
         os64_free(t.s);
         return;
     }
@@ -8799,7 +8799,7 @@ static void diag_ledger_reading(Page *p, uint32_t n)
            LEDGER_MS(ledger_tenths(s_cost.waited, per_ms)),
            span >= accounted ? "the rest (parsing, events, the loop)" : "counted twice",
            LEDGER_MS(ledger_tenths(span >= accounted ? span - accounted : accounted - span, per_ms)));
-    yonder_diag_fact(p->diag, key, dt_text(&t));
+    yonder_diag_reading_fact(p->diag, key, dt_text(&t));
     os64_free(t.s);
 }
 
@@ -8833,13 +8833,13 @@ static void diag_paint_reading(Page *p, uint32_t n)
            whole ? " | whole views: " : "", whole ? dt_text(&w) : "");
     char key[32];
     os64_snprintf(key, sizeof(key), "paint reading %u", (unsigned)n);
-    yonder_diag_fact(p->diag, key, dt_text(&v));
+    yonder_diag_reading_fact(p->diag, key, dt_text(&v));
     diag_ledger_reading(p, n);
     if (s_layout_profile) {
         char needed[768], nkey[40];
         yonder_diag_needed_text(&s_needed_reading, needed, sizeof(needed));
         os64_snprintf(nkey, sizeof(nkey), "layout needed reading %u", (unsigned)n);
-        yonder_diag_fact(p->diag, nkey, needed);
+        yonder_diag_reading_fact(p->diag, nkey, needed);
     }
     os64_free(t.s);
     os64_free(u.s);
