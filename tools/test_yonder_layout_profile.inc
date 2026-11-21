@@ -396,10 +396,246 @@ static void kept_reads_cases(void)
     s_ledger=YONDER_LEDGER_OFF;
 }
 
+/* THE N2 TABLE'S TEST (libflow pending.inc, kPending): every longhand the
+ * table admits, on each side its rule admits, set alone on every element of
+ * a page made to vary what a box can be (positioned, fixed and absolute
+ * under a transform and a filter, flex, inline, inline-block, a table cell,
+ * a scroll container, a picture). Where N2 judges the write PAINT, a layout
+ * after it must answer every offset, client and scroll member and
+ * offsetParent as the layout before it did (and the rectangles, but for
+ * the families a transform's reach and matrix move). A longhand in the
+ * table with no sample here, or admitted on no element, fails. */
+static const struct { const char *prop; const char *pairs[3][2]; } kTableSamples[]={
+    {"color",{{"red","blue"}}},
+    {"background-color",{{"red","blue"}}},
+    {"background-image",{{"none","linear-gradient(red,blue)"}}},
+    {"background-repeat",{{"repeat","no-repeat"}}},
+    {"background-position-x",{{"0px","5px"}}},
+    {"background-position-y",{{"0px","5px"}}},
+    {"background-size",{{"auto","10px 10px"}}},
+    {"background-origin",{{"padding-box","content-box"}}},
+    {"background-clip",{{"border-box","content-box"}}},
+    {"border-top-color",{{"red","blue"}}},
+    {"border-right-color",{{"red","blue"}}},
+    {"border-bottom-color",{{"red","blue"}}},
+    {"border-left-color",{{"red","blue"}}},
+    {"border-top-left-radius",{{"0px","5px"}}},
+    {"border-top-right-radius",{{"0px","5px"}}},
+    {"border-bottom-right-radius",{{"0px","5px"}}},
+    {"border-bottom-left-radius",{{"0px","5px"}}},
+    {"box-shadow",{{"none","0 0 5px red"}}},
+    {"text-shadow",{{"none","1px 1px red"}}},
+    {"outline-width",{{"1px","5px"}}},
+    {"outline-style",{{"none","solid"}}},
+    {"outline-color",{{"red","blue"}}},
+    {"outline-offset",{{"0px","3px"}}},
+    {"opacity",{{"1","0.5"},{"0.5","0"}}},
+    {"z-index",{{"auto","5"}}},
+    {"isolation",{{"auto","isolate"}}},
+    {"mix-blend-mode",{{"normal","multiply"}}},
+    {"mask-image",{{"none","linear-gradient(red,blue)"}}},
+    {"mask-repeat",{{"repeat","no-repeat"}}},
+    {"mask-position-x",{{"0px","5px"}}},
+    {"mask-position-y",{{"0px","5px"}}},
+    {"mask-size",{{"auto","10px"}}},
+    {"mask-origin",{{"border-box","content-box"}}},
+    {"mask-clip",{{"border-box","content-box"}}},
+    {"mask-composite",{{"add","subtract"}}},
+    {"mask-mode",{{"match-source","alpha"}}},
+    {"clip-path",{{"none","url(#clip)"}}},  // libgarb reads url() and none
+    {"object-fit",{{"fill","contain"}}},
+    {"object-position",{{"50% 50%","0 0"}}},
+    {"image-rendering",{{"auto","pixelated"}}},
+    {"cursor",{{"auto","pointer"}}},
+    {"pointer-events",{{"auto","none"}}},
+    {"transform-origin",{{"50% 50%","0 0"}}},
+    {"fill",{{"black","red"}}},
+    // The side of none: both values drawn (a plain inline, which no
+    // transform reaches, is admitted either way).
+    {"transform",{{"translateX(3px)","scale(2)"}}},
+    {"translate",{{"3px","5px 2px"}}},
+    {"rotate",{{"10deg","45deg"}}},
+    {"scale",{{"2","0.5"}}},
+    {"filter",{{"blur(1px)","grayscale(1)"}}},
+    {"backdrop-filter",{{"blur(1px)","blur(3px)"}}},
+    {"visibility",{{"visible","hidden"},{"hidden","visible"}}},
+};
+static const char kTablePage[]=
+    "<!doctype html><style>body{margin:0}#row{display:flex}#row>div{flex:1;height:10px}</style>"
+    "<div id=rel style='position:relative;padding:3px'><div id=fx style='position:fixed;top:5px;left:5px;width:10px;height:10px'></div>"
+    "<div id=ab style='position:absolute;top:2px;right:3px;width:6px;height:6px'></div>text</div>"
+    "<div id=tf style='transform:translateX(2px);height:20px'><div id=tfab style='position:absolute;top:3px;left:4px;width:8px;height:8px'></div></div>"
+    "<div id=fl style='filter:blur(1px);height:20px'><div id=flfx style='position:fixed;bottom:3px;left:4px;width:8px;height:8px'></div></div>"
+    "<div id=row><div id=item1></div><div id=item2></div></div>"
+    "<p id=para>a <span id=inl>plain inline</span> and <span id=ib style='display:inline-block;width:30px'>block</span></p>"
+    "<table><tr><td id=cell>cell</td><td>other</td></tr></table>"
+    "<div id=sc style='overflow:auto;height:30px;width:100px'><div id=sccontent style='height:100px;width:200px'>x</div></div>"
+    "<img id=pic width=20 height=10 alt=''>";
+static const char *const kTableIds[]={"rel","fx","ab","tf","tfab","fl","flfx","row","item1","para","inl","ib","cell","sc","sccontent","pic"};
+#define TABLE_NIDS (sizeof(kTableIds)/sizeof(kTableIds[0]))
+/* Every element's answers in the shown tree, in kTableIds' order. */
+static void table_answers(os64_dom_geometry_t *out)
+{
+    for(size_t i=0;i<TABLE_NIDS;i++){
+        memset(&out[i],0,sizeof(out[i]));
+        yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id(kTableIds[i]),800,600,g.zoom,(flow_point_t){0,0},&out[i]);
+    }
+}
+/* The first difference a write of a longhand of `kind` must not make, or
+ * NULL. */
+static const char *table_difference(const os64_dom_geometry_t *a, const os64_dom_geometry_t *b, int kind)
+{
+    if(a->offset_left!=b->offset_left || a->offset_top!=b->offset_top) return "offsetLeft/Top";
+    if(a->offset_width!=b->offset_width || a->offset_height!=b->offset_height) return "offsetWidth/Height";
+    if(a->client_left!=b->client_left || a->client_top!=b->client_top) return "clientLeft/Top";
+    if(a->client_width!=b->client_width || a->client_height!=b->client_height) return "clientWidth/Height";
+    if(a->offset_parent!=b->offset_parent) return "offsetParent";
+    if(a->boxed!=b->boxed) return "a box";
+    if(a->scroll_left!=b->scroll_left || a->scroll_top!=b->scroll_top) return "scrollLeft/Top";
+    bool reach=kind==2;     // pending.inc's PENDING_TRANSFORM: its reach and matrix move
+    if(!reach && (a->scroll_width!=b->scroll_width || a->scroll_height!=b->scroll_height)) return "scrollWidth/Height";
+    bool drawn=kind==2 || kind==3;  // and a filter's bounds
+    if(!drawn && (a->x!=b->x || a->y!=b->y || a->width!=b->width || a->height!=b->height)) return "the rectangle";
+    return NULL;
+}
+static void pending_table_cases(void)
+{
+    bool restyle=s_restyle_in_place;
+    s_restyle_in_place=false;   // every change laid out whole
+    // Every longhand the table admits has a sample.
+    for(int prop=0;prop<GARB_NPROPS;prop++){
+        if(!flow_pending_longhand(prop)) continue;
+        bool sampled=false;
+        for(size_t k=0;k<sizeof(kTableSamples)/sizeof(kTableSamples[0]) && !sampled;k++)
+            sampled=!strcmp(kTableSamples[k].prop,garb_prop_name((garb_prop_t)prop));
+        if(!sampled) printf("  the N2 table admits %s, which has no sample here\n",garb_prop_name((garb_prop_t)prop));
+        check(sampled,"table: every longhand the N2 table admits has a sample");
+    }
+    probe_page(kTablePage,false);
+    static os64_dom_geometry_t before[TABLE_NIDS],after[TABLE_NIDS];
+    unsigned admitted_total=0,differed=0;
+    for(size_t k=0;k<sizeof(kTableSamples)/sizeof(kTableSamples[0]);k++){
+        int prop=-1;
+        for(int q=0;q<GARB_NPROPS && prop<0;q++) if(!strcmp(garb_prop_name((garb_prop_t)q),kTableSamples[k].prop)) prop=q;
+        int kind=prop>=0?flow_pending_longhand(prop):0;
+        check(kind!=0,"table: each sample names a longhand the table admits");
+        unsigned admitted=0;
+        for(int pair=0;pair<3 && kTableSamples[k].pairs[pair][0];pair++)
+            for(size_t e=0;e<TABLE_NIDS;e++){
+                os64_html_node_t *el=probe_id(kTableIds[e]);
+                // The element's own style, copied: a write replaces the
+                // attribute it lives in.
+                const os64_html_attr_t *had=os64_html_attr(el,"style");
+                bool styled=had && had->value;
+                char base[256]="",value[512];
+                if(styled) snprintf(base,sizeof(base),"%s;",had->value);
+                snprintf(value,sizeof(value),"%s%s:%s",base,kTableSamples[k].prop,kTableSamples[k].pairs[pair][0]);
+                os64_html_set_attr(g.page.way.doc,el,"style",value,strlen(value));
+                script_rebuild();
+                table_answers(before);
+                snprintf(value,sizeof(value),"%s%s:%s",base,kTableSamples[k].prop,kTableSamples[k].pairs[pair][1]);
+                os64_html_set_attr(g.page.way.doc,el,"style",value,strlen(value));
+                if(shown_pending().verdict==FLOW_PENDING_PAINT){
+                    admitted++;
+                    script_rebuild();
+                    table_answers(after);
+                    for(size_t i=0;i<TABLE_NIDS;i++){
+                        const char *what=table_difference(&before[i],&after[i],kind);
+                        if(what){
+                            differed++;
+                            printf("  %s:%s -> %s on #%s moved %s of #%s\n",kTableSamples[k].prop,
+                                   kTableSamples[k].pairs[pair][0],kTableSamples[k].pairs[pair][1],
+                                   kTableIds[e],what,kTableIds[i]);
+                            break;
+                        }
+                    }
+                }
+                if(styled) os64_html_set_attr(g.page.way.doc,el,"style",base,strlen(base)-1);
+                else os64_html_remove_attr(g.page.way.doc,el,"style");
+                script_rebuild();
+            }
+        if(!admitted) printf("  %s was admitted on no element\n",kTableSamples[k].prop);
+        check(admitted>0,"table: each longhand is admitted somewhere, so the test reaches it");
+        admitted_total+=admitted;
+    }
+    check(differed==0,"table: no write the N2 table admits moves a box, a client, offset or scroll answer, or an offset parent");
+    printf("  N2 table: %u writes admitted, %u moved something\n",admitted_total,differed);
+    probe_drop();
+    s_restyle_in_place=restyle;
+}
+
+/* THE RANDOM WALK (N2): a page whose script, from a fixed seed, makes
+ * random writes of every kind (paint-only longhands by style.x, cssText and
+ * setAttribute; geometry; classes; text; custom properties) between random
+ * reads of every kind. With --geometry-check at every read the tree
+ * answers, each is answered the old way too: none may differ, and the tree
+ * must have answered some. */
+static const char kWalkPage[]=
+    "<!doctype html><style>.t{transform:translateX(2px)}.wide{width:120px}#sc{overflow:auto;height:40px}"
+    "#sc>div{height:120px}.pos{position:relative}.f{filter:blur(1px)}</style>"
+    "<div id=sc><div id=in></div></div>"
+    "<div id=a class=t>alpha</div><div id=b class=pos>beta<span id=c>gamma</span></div>"
+    "<p id=d class=f>delta</p><div id=e style='display:flex'><div id=e1>x</div><div id=e2>y</div></div>"
+    "<span id=g>inline</span><button id=go>go</button><p id=out>-</p><script>"
+    "let seed=0x5eed;function r(n){seed=(Math.imul(seed,1103515245)+12345)&0x7fffffff;return (seed>>>16)%n}"
+    "const els=['a','b','c','d','e','e1','e2','g','sc','in'].map(i=>document.getElementById(i));"
+    "const paint=[['color',['red','blue','green']],['backgroundColor',['red','blue']],['opacity',['1','0.5','0']],"
+    "['visibility',['visible','hidden']],['boxShadow',['none','0 0 3px red']],['outlineWidth',['1px','4px']],"
+    "['transform',['translateX(3px)','scale(1.5)','rotate(5deg)','none']],['zIndex',['auto','3']],"
+    "['filter',['blur(1px)','grayscale(1)','none']]];"
+    "let sum=0;"
+    "document.onclick=()=>{for(let i=0;i<300;i++){const el=els[r(els.length)],k=r(16);"
+    "if(k<6){const p=paint[r(paint.length)];el.style[p[0]]=p[1][r(p[1].length)]}"
+    "else if(k==6){el.style.cssText=el.style.cssText+';color:'+['red','blue'][r(2)]}"
+    "else if(k==7){el.setAttribute('style','color:'+['red','blue'][r(2)]+';opacity:0.5')}"
+    "else if(k==8){el.style.width=r(2)?'':(50+r(100))+'px'}"
+    "else if(k==9){el.classList.toggle(['t','wide','pos','f'][r(4)])}"
+    "else if(k==10&&r(4)==0){el.firstChild&&el.firstChild.nodeType==3?el.firstChild.data='t'+r(9):0}"
+    "else if(k==11&&r(4)==0){el.style.setProperty('--v',''+r(9))}"
+    "else{const q=r(9);"
+    "sum+=q==0?el.clientWidth:q==1?el.clientHeight:q==2?el.offsetLeft:q==3?el.offsetTop:q==4?el.offsetWidth:"
+    "q==5?(el.offsetParent?1:0):q==6?el.scrollTop:q==7?el.scrollHeight:Math.round(el.getBoundingClientRect().width)}}"
+    "document.getElementById('out').textContent='walked'};"
+    "document.getElementById('out').textContent='ready'"
+    "</script>";
+static void random_walk_cases(void)
+{
+    s_ledger=YONDER_LEDGER_ON;
+    probe_page(kWalkPage,true);
+    script_turn();
+    check(probe_text_is("out","ready"),"random walk: the page's script ran");
+    g.page.diag=diag_new_claimed("https://fixture.test/random-walk",1);
+    s_layout_profile=true;
+    s_geometry_check=1;
+    s_reads_checked=0;
+    s_reads_compared=s_reads_differed=0;
+    for(int round=0;round<10;round++){
+        os64_dom_event_t click={.type="click",.bubbles=true,.cancelable=true};
+        os64_js_outcome_t out={0};
+        os64_js_status_t status=yonder_scripts_dispatch(g.page.scripts,probe_id("go"),&click,NULL,&out);
+        if(status!=OS64_JS_OK) printf("  random walk round %d: %s (line %u)\n",round,out.message,out.line);
+        script_turn();
+    }
+    check(probe_text_is("out","walked"),"random walk: the walk ran to its end");
+    const char *checked=yonder_diag_fact_value(g.page.diag,"read check");
+    const char *reads=yonder_diag_fact_value(g.page.diag,"layout reads");
+    unsigned compared=record_number(checked,""),kept=record_number(reads,"from the kept tree ");
+    check(checked && strstr(checked," 0 differed") && compared>50 && kept==compared,
+          "random walk: every read the tree answered is answered the old way too, and none differs");
+    printf("  random walk: %s; %s\n",checked?checked:"(no read check)",reads?reads:"(no reads line)");
+    s_geometry_check=s_reads_checked=0;
+    s_reads_compared=s_reads_differed=0;
+    s_layout_profile=false;
+    probe_drop();
+    s_ledger=YONDER_LEDGER_OFF;
+}
+
 static void layout_profile_cases(void)
 {
     restyle_kept_cases();
     kept_reads_cases();
+    pending_table_cases();
+    random_walk_cases();
     /* The cases below measure what a layout needed, so every change is laid
      * out (the restyle kept in the tree would answer the paint-only ones
      * itself). */
