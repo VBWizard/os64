@@ -62,6 +62,11 @@ mutants = [
     # yonder's split, acknowledgment and check.
     ('a-piece-of-the-rest-left-unpainted', YONDER, '        if (rest[i].w <= 0 || rest[i].h <= 0)\n            continue;',
      '        if (rest[i].w <= 0 || rest[i].h <= 0 || i == 1)\n            continue;'),
+    ('a-backdrop-reader-split-across', YONDER, '         backdrop_read_meets(view))) {',
+     '         backdrop_read_meets(view) && 0)) {'),
+    ('a-backdrop-reader-left-reading-an-old-frame', YONDER,
+     '        os64_rect_intersect(covered, part, &covered) && !backdrop_read_meets(part))',
+     '        os64_rect_intersect(covered, part, &covered) && (!backdrop_read_meets(part) || 1))'),
     ('the-canvases-not-acknowledged', YONDER, '    canvases_acknowledge();\n    return refused;',
      '    (void)canvases_acknowledge;\n    return refused;'),
 ]
@@ -76,6 +81,14 @@ mutants = [
 # - the line-cut refusal (an ellipsis cutting the video's line): no fixture
 #   puts a video on a cut line, and the refusal is a guard on a case the
 #   painter's own paint_box draws partly, which the check would show.
+# - a canvas the paint drew acknowledged all the same (canvases_acknowledge's
+#   `drawn` skip): it matters only for a draw the canvas verb did not
+#   consume (no target, or a draw that failed for memory), which no fixture
+#   can make; the skip keeps such a canvas's damage pending, as without a
+#   cover.
+# - the walk never handing the video over (view_paint_parts' painting again
+#   whole): yonder's cover is a box the walk paints, so no fixture reaches
+#   it; libflow's cover cases hold `found` false for a box no part paints.
 # - the check finding no difference (view_paint_parts' compare): every break
 #   it exists to see is seen too by the cases' counts or by the window
 #   painted whole with covers and without, so no case fails for the check

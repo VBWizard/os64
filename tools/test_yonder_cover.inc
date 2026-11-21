@@ -28,8 +28,9 @@ typedef struct {
 } CoverCounts;
 
 /* The window painted whole, then `dirty` (window coordinates) painted, with
- * every covered paint checked when `checked`: what the counts moved by. */
-static CoverCounts cover_run_checked(os64_gui_rect_t dirty, bool checked)
+ * every covered paint checked when `checked` (and `between`, when not NULL,
+ * run between the two): what the counts moved by. */
+static CoverCounts cover_run_checked(os64_gui_rect_t dirty, bool checked, void (*between)(void))
 {
     os64_draw_ctx_t screen = {0};
     screen.surf.width = screen.surf.pitch_px = 800;
@@ -43,6 +44,8 @@ static CoverCounts cover_run_checked(os64_gui_rect_t dirty, bool checked)
                        s_paint_differed};
     s_paint_check = checked ? 1 : 0;
     s_paint_checked = 0;
+    if (between != NULL)
+        between();
     g.ui.dirty = dirty;
     view_paint(&g.view, &screen, NULL);
     s_paint_check = 0;
@@ -59,7 +62,7 @@ static CoverCounts cover_run_checked(os64_gui_rect_t dirty, bool checked)
 
 static CoverCounts cover_run(os64_gui_rect_t dirty)
 {
-    return cover_run_checked(dirty, true);
+    return cover_run_checked(dirty, true, NULL);
 }
 
 static void cover_said(const char *what, CoverCounts c)
@@ -134,6 +137,22 @@ static void cover_count_damage(void *opaque, const os64_html_node_t *node, uint3
     cover_pending++;
 }
 
+/* The page's canvas drawn again (its click handler) and the damage marked,
+ * as a script turn's end marks it, and how many were pending then. */
+static uint32_t cover_marked;
+static void cover_mark_canvases(void)
+{
+    os64_dom_event_t click = {.type = "click", .bubbles = true, .cancelable = true};
+    os64_js_outcome_t out;
+    yonder_scripts_dispatch(g.page.scripts, NULL, &click, NULL, &out);
+    while (yonder_scripts_pending(g.page.scripts))
+        script_turn();
+    yonder_scripts_canvas_visit_damage(g.page.scripts, canvas_damage_mark, &g.page);
+    cover_pending = 0;
+    yonder_scripts_canvas_visit_damage(g.page.scripts, cover_count_damage, NULL);
+    cover_marked = cover_pending;
+}
+
 static void cover_cases(void)
 {
     static const char *const style =
@@ -155,12 +174,21 @@ static void cover_cases(void)
     cover_expect("cover: a frame's paint begins at the video, beneath it a scaled and blurred glow, over it a "
                  "caption, a blend and a backdrop filter, and agrees with the ordinary paint",
                  cover_run((os64_gui_rect_t){20, 20, 320, 180}), 0);
-    /* The paint a little past the picture: the rest the ordinary way. */
+    /* The paint a little past the picture would be split, and the page's
+     * backdrop filter and blend may read across the split: not split. */
+    cover_refused("cover: with a backdrop reader over the picture, a paint past it is not split",
+                  cover_run((os64_gui_rect_t){20, 20, 321, 180}));
+    cover_whole_same("cover: the measured page's shape, the window painted whole with covers and without is the same");
+    cover_drop();
+    /* The same page with no backdrop reader: split, the rest the ordinary way. */
+    snprintf(html, sizeof(html), "%s<div id=glow></div><video id=v></video><div id=cap>caption</div>", style);
+    probe_page(html, true);
+    cover_video("v", 320, 180, 320, 180);
     cover_expect("cover: a paint a pixel past the picture paints that pixel's strip the ordinary way",
                  cover_run((os64_gui_rect_t){20, 20, 321, 180}), 1);
     cover_expect("cover: a paint of the whole window is the picture's part and four pieces about it",
                  cover_run(g.view.bounds), 4);
-    cover_whole_same("cover: the measured page's shape, the window painted whole with covers and without is the same");
+    cover_whole_same("cover: with no backdrop reader, the window painted whole with covers and without is the same");
     /* A resize in flight: the frame is not the fitted size. */
     s_videos[0].frame.w = 300;
     cover_refused("cover: a frame not at the fitted size is no cover", cover_run((os64_gui_rect_t){20, 20, 320, 180}));
@@ -189,6 +217,11 @@ static void cover_cases(void)
              style);
     probe_page(html, true);
     cover_video("v", 320, 180, 320, 180);
+    {
+        os64_gui_rect_t m = video_frame_mark(&s_videos[0], (os64_gui_rect_t){20, 20, 320, 240});
+        check(m.x == 20 && m.y == 50 && m.w == 320 && m.h == 180,
+              "cover: with no backdrop reader, a letterboxed frame marks only its picture's band");
+    }
     cover_expect("cover: a letterboxed picture covers its band, and its bars are painted the ordinary way",
                  cover_run((os64_gui_rect_t){20, 20, 320, 240}), 2);
     cover_whole_same("cover: a letterboxed picture, the window painted whole with covers and without is the same");
@@ -232,24 +265,48 @@ static void cover_cases(void)
      * acknowledges its damage, which would otherwise mark it again. */
     snprintf(html, sizeof(html), "%s<canvas id=c width=320 height=180 style='position:absolute;left:20px;"
              "top:20px'></canvas><video id=v></video><script>const x=document.getElementById('c')"
-             ".getContext('2d');x.fillStyle='red';x.fillRect(0,0,50,50);</script>", style);
+             ".getContext('2d');x.fillStyle='red';x.fillRect(0,0,50,50);window.onclick=()=>{x.fillStyle='blue';"
+             "x.fillRect(10,10,60,60)};</script>", style);
     probe_page(html, true);
     while (yonder_scripts_pending(g.page.scripts))
         script_turn();
     cover_video("v", 320, 180, 320, 180);
-    yonder_scripts_canvas_visit_damage(g.page.scripts, canvas_damage_mark, &g.page);
+    /* Marked between the whole paint (whose list is then empty, so it
+     * acknowledges nothing) and the paint of the picture's part, which is
+     * the one held to acknowledging it; without the check, whose ordinary
+     * paint would draw the canvas. */
+    CoverCounts c = cover_run_checked((os64_gui_rect_t){20, 20, 320, 180}, false, cover_mark_canvases);
     cover_pending = 0;
     yonder_scripts_canvas_visit_damage(g.page.scripts, cover_count_damage, NULL);
-    uint32_t before = cover_pending;
-    /* Without the check, whose ordinary paint would draw the canvas. */
-    CoverCounts c = cover_run_checked((os64_gui_rect_t){20, 20, 320, 180}, false);
-    cover_pending = 0;
-    yonder_scripts_canvas_visit_damage(g.page.scripts, cover_count_damage, NULL);
-    check(before == 1 && c.covered == 1 && cover_pending == 0,
+    check(cover_marked == 1 && c.covered == 1 && cover_pending == 0,
           "cover: a canvas beneath the picture, marked for the paint, is acknowledged by the covered paint");
-    if (!(before == 1 && c.covered == 1 && cover_pending == 0)) {
-        printf("  canvas: pending before %u, after %u\n", before, cover_pending);
+    if (!(cover_marked == 1 && c.covered == 1 && cover_pending == 0)) {
+        printf("  canvas: pending when marked %u, after %u\n", cover_marked, cover_pending);
         cover_said("canvas", c);
     }
+    cover_drop();
+
+    /* A backdrop filter across the edge of a letterboxed picture's band
+     * reads pixels a split there would paint in another piece: the paint is
+     * not split (the ordinary way whole), and the window is the same with
+     * covers and without. */
+    snprintf(html, sizeof(html), "%s<div id=glow></div><video id=v style='height:240px'></video>"
+             "<div style='position:absolute;left:40px;top:40px;width:200px;height:40px;"
+             "background:rgba(0,0,0,.3);backdrop-filter:blur(4px)'></div>", style);
+    probe_page(html, true);
+    cover_video("v", 320, 180, 320, 180);
+    uint64_t refused = s_cost.covered_refused;
+    /* And a frame marks the box's part, which the reader reads, not only
+     * the picture's band. */
+    os64_gui_rect_t box_part = {20, 20, 320, 240}, marked = video_frame_mark(&s_videos[0], box_part);
+    check(marked.x == 20 && marked.y == 20 && marked.w == 320 && marked.h == 240,
+          "cover: with a backdrop reader near, a frame marks its box's part");
+    CoverCounts r = cover_run((os64_gui_rect_t){20, 20, 320, 240});
+    check(r.covered == 0 && s_cost.covered_refused > refused,
+          "cover: a backdrop filter across the covered part's edge keeps the paint whole");
+    if (!(r.covered == 0 && s_cost.covered_refused > refused))
+        cover_said("backdrop across the edge", r);
+    cover_whole_same("cover: a backdrop filter across the covered part's edge, the window painted whole with covers "
+                     "and without is the same");
     cover_drop();
 }

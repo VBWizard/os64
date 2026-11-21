@@ -2026,13 +2026,15 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
 // (a cover, VIDEO.md § 5, The paint beneath the picture): nothing emitted
 // before `from` itself is handed over. Every part of the paint order
 // before the one that paints `from` (flow_paint_path) is culled as a part
-// outside the view is; a group's open and close come exactly when the
-// group holds `from` — when `from` is handed over between them — and every
-// other group before it is culled whole, its opens, closes and boxes
-// alike; inside the part that paints it, no box is handed over until
-// `from` is. From there the walk is flow_visit_groups'. Whether `from` was
-// handed over is written to `*found` (when not NULL): a face told false
-// has drawn only what came after a box it never saw.
+// outside the view is; a group's open and close come exactly when they
+// span that part — the groups `from` is handed over inside, when it is —
+// with the open's bounds the group's whole, and every other group before
+// it is culled whole, its opens, closes and boxes alike; inside the part
+// that paints it, no box is handed over until `from` is. From there the
+// walk is flow_visit_groups'. Whether `from` was handed over is written to
+// `*found` (when not NULL): a face told false has drawn only what came
+// after a box it never saw, the spanning groups' opens and closes among
+// it.
 void flow_visit_groups_from(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                             const flow_visitor_t *visitor, const flow_box_t *from, bool *found);
 
