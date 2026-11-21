@@ -75,7 +75,7 @@ mutants = [
      '        bool layers_same = is_group(&tried_box) == is_group(&tried_box) && makes_context(&tried_box) == makes_context(box);'),
     ('a-motion-base-not-asked', RESTYLE,
      '                                 !f_style_equal(&was->motion->base, &is->motion->base))))',
-     '                                 0))))'),
+     '                                 0)))'),
     ('the-outline-not-handed-past-stacked', FLOW,
      '    for (; c->holds_outline && c->parent != NULL && !c->parent->holds_outline; c = c->parent)',
      '    for (; 0 && c->holds_outline && c->parent != NULL && !c->parent->holds_outline; c = c->parent)'),
