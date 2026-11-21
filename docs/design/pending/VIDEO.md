@@ -549,83 +549,140 @@ are to tune on the P5.
 
 ### The paint beneath the picture (V.7.1)
 
+Reviewed by Fable (2026-11-21): accepted with the changes folded in
+below — the walk's own door for what is skipped, the rule stated in the
+order draws are emitted and checked there, R split rather than refused,
+the side effects listed, where the time goes, and a checking mode.
+
 **Measured** (the P5, 2026-11-21, a video page played in a maximized
-window, the record's `paint effects`): 157 of a minute's 183 paints were
-the video's box alone, 1780x1002, at about 270 ms each, about 3 frames
-a second. Step 4's "ordinary walk of the dirty part" draws everything
-under the box first: the page's backgrounds, the page's glow behind the
-player (a canvas scaled, a warp of 33 ms, and blurred, 47 ms), a blurred
-layer the size of the box (69 ms) and the rest of the view (about
-114 ms). Then the frame is copied over all of it, and the frame's own
-part of the cost is about 1 ms. A quarter-size window plays at 10 frames
-a second, so the cost goes with the pixels.
+window, the record's `paint effects` with what is drawn after the video
+counted apart). 157 of a minute's 183 paints were the video's box alone,
+1780x1002, at about 265 ms each: about 3 frames a second. In a paint,
+everything costly is drawn BEFORE the video, beneath it: two canvases
+the size of the box drawn scaled (the page's glow, about 112 ms), a
+blurred layer the size of the box (64 ms), a blurred layer the player's
+size and the warp it is drawn through (about 77 ms), and fills (about
+1 ms). The walk itself is cheap: 132 boxes a paint. After the video, its
+controls' small blurs, masks and fills: about 0.2 ms. The frame's own
+copy: about 0.9 ms. A quarter-size window plays at 10 frames a second,
+so the cost goes with the pixels.
 
-**The rule.** A paint whose rectangle R lies wholly inside the part of a
-video's picture that is shown, with the picture opaque and drawn plain,
-draws nothing that comes before that video in paint order: the walk
-begins drawing at the video. Whatever comes after it (its controls,
-captions, the page's overlay, outlines) is drawn as now.
+**Predicted:** a paint the video covers costs the copy, what is drawn
+over it and the walk, about 2 to 3 ms in place of about 265; the
+maximized frame rate is then bounded by the video's own (30) and the
+page's scripts. The P5 run is judged against at least 20 frames a
+second, maximized, and at a quarter.
 
-**When a video covers R** — every one of these, or the ordinary walk:
+**The rule, stated in the order draws are emitted.** For a paint of
+rectangle R and a cover (below), no draw is emitted until the cover's
+own: everything the walk would have emitted before it is culled as a
+box or a group wholly outside R is culled, and the walk goes on as now
+from the cover's draw. A group HOLDS the cover exactly when the cover's
+draw is emitted between its open and its close; such a group opens and
+closes as now, every other group before the cover is culled whole.
+Everything emitted before the cover is laid under it, so inside the
+pixels the cover writes, **R's pixels come out the same either way**:
+the invariant the tests and the checking mode hold.
 
-1. **Plain.** The video has a picture converted at the fitted size, and
-   nothing takes it off the plain path (step 4 as built, (4)): no
+**The cover** is a video and the set of device pixels the paint's own
+plain copy writes in this paint — computed by the function that copy
+uses, not reckoned beside it, rounded inward (a pixel the copy blends or
+does not write is not covered). A video is a cover for this paint when:
+
+1. **The frame in hand is drawn plain.** The frame this paint will copy
+   is converted at the fitted size (a resize in flight, drawn through
+   the general path, is not; nor is a poster, nor no picture at this
+   blank), and the walk opens no group around the video's draw (no
    opacity below 1, transform, filter, backdrop filter, mask or blend on
-   the box or on any ancestor between it and the window.
-2. **Opaque.** A video's picture is XRGB, every pixel opaque. A poster,
-   or a box with no picture yet, covers nothing.
-3. **Shown over all of R.** R lies inside the fitted picture
-   (`yonder_object_rect`: object-fit and object-position; the bars of a
-   letterboxed picture are the box's background and do not count),
-   inside the box's clip (`flow_box_doc_clip`: an ancestor's overflow
-   that cuts the picture leaves what is beneath showing there), and
-   inside the box's content rectangle. A border-radius changes nothing:
-   yonder does not round a replaced box's content (step 4 as built).
-4. **Painted at all.** The box is visible and not `unpainted`.
+   the box or an ancestor: the plain path's test, step 4 as built, (4)),
+   and no `clip-path` or `clip: rect()` cuts it, where yonder draws them.
+2. **Opaque.** A frame is XRGB, every pixel opaque.
+3. **Painted at all.** The box is visible and not `unpainted`.
 
-Any video that meets all four will do; paint order decides nothing about
-correctness, only how much is skipped, and two videos over one another
-are rare enough not to choose between.
+The covered pixels are the copy's rectangle met with the box's clip
+(`flow_box_doc_clip`); an ancestor's ROUNDED clip (overflow with a
+border-radius, which players often are) takes the square of each radius
+out of the covered part at its corner. A letterboxed picture's bars are
+the box's background, not the copy's.
 
-**How the walk skips.** `yonder_paint` is given the cover (a box, or
-none). Until the walk reaches it:
+**R split, not refused.** Where R is more than the covered part, the
+covered part is painted by the rule and the rest of R, at most eight
+rectangles (the corner squares, the bars, the edge past the picture),
+by the ordinary walk; past eight, R is painted the ordinary way whole.
+And a new frame changes only the pixels the copy writes, so a frame's
+damage is the picture's shown part, not the box (today it is the box's
+visible part, step 3 as built): narrowing it is part of this slice.
 
-- the canvas's fill and the root's background layers are not drawn;
-- `paint_box` draws nothing;
-- a group that does not hold the cover opens and closes as bookkeeping:
-  its depth, its view and its shift kept, nothing laid — no layer, no
-  warp, no filter, no clip drawn, and no kept drawing made, used or
-  spoiled;
-- a group that holds the cover opens as now; by rule 1 it lays no layer
-  and no warp, and its clip is what rule 3 already reckoned.
+**The door: libflow's walk.** `flow_visit_groups` walks the tree's
+layers, the parts of Appendix E's paint order (each stacking context's
+self, body, members, outlines, a group's open and close) in emission
+order, culling each against the view. It is told the cover box and
+finds the part that paints it: the WHOLE or BODY part of the cover's
+nearest stacked ancestor or itself. Every part before that one is culled
+as a part outside the view is; a group's open and close are kept exactly
+when they span it; within that part, no box is handed over until the
+cover is. A box or group culled this way is handed to the painter not at
+all, as one outside R is not, so the painter has no second kind of
+half-open group: its layers' budget, its kept drawings (made, used,
+spoiled) and the walk's `inside` answers are those of a smaller R.
+`flow_paint_path` names the groups that hold a box (outermost first),
+which rule 1 reads (none may lay a layer) and the checking mode tests.
 
-At the cover, drawing resumes, for it and for everything after it. Paint
-order is the order things are laid one over another, so everything
-skipped lies under the picture inside R, where the picture is opaque:
-**R's pixels come out the same either way**, which is the invariant the
-tests hold. A paint draws only inside R, so nothing skipped could have
-shown outside it. A backdrop filter or a blend after the cover reads
-the window's pixels inside R, and those are the picture's either way.
+**What painting a box does besides drawing**, each skipped for a box the
+walk culls exactly as for a box outside R, because neither is handed to
+the painter: a picture's verb draws an SVG and may say it failed; a
+video's draw tells its player the fitted size; a box that changes
+between paints spoils its group's kept drawing; a canvas's draw
+acknowledges its damage (`os64_dom_canvas_painted`). That last needs a
+decision, since the page's glow is a canvas redrawn every frame, wholly
+under the video: left unacknowledged, its damage would mark the picture
+again at every turn. **Ruled here:** a canvas's damage whose shown part
+lies wholly inside a cover is acknowledged without a paint. Its bitmap
+is always current; damage only schedules a repaint, and whatever later
+uncovers the canvas (the video moved, resized, ended) repaints that
+part from the bitmap.
 
 **What it is not.** It is not occlusion culling in general (an opaque
-image, an opaque background over the page). The measured case is a
-video's frame, where the plain path's test already exists and every
-frame pays. A general rule is a question for later, if a measurement
-asks.
+image, an opaque background over the page): that wants "is this box
+opaque over this rectangle", a table of its own, later if a measurement
+asks. Fable agreed (2026-11-21).
+
+**The checking mode** (`--paint-check N`, diagnostics only, as the
+cascade and geometry checks are). Every Nth covered paint is also
+painted the ordinary way into a scratch surface and R compared to the
+pixel; and the ordinary paint records the groups open at the cover's
+draw, which must be what `flow_paint_path` predicted. A difference logs
+the box, R, the first differing pixel and both group stacks. Chris plays
+videos with it on before the rule is trusted.
 
 **The proof.** On the host, each fixture is painted over R twice, given
-the cover and given none, into two surfaces, and R must be the same to
-the pixel: the measured page's shape (a video over a scaled canvas and a
-blurred layer); controls and a translucent caption over the picture; an
-ancestor's overflow cutting the picture (not a cover); a letterboxed
-picture with R taking in its bars (not a cover); a video under an
-opacity, a transform, a filter (not a cover); two videos over one
-another; R one pixel past the picture (not a cover). Mutants break each
-condition and each skip. On the P5, `paint effects` and `--video-rate`
-before and after.
+the cover and given none, into two surfaces, R the same to the pixel: the
+measured page's shape (a video over two scaled canvases and two blurred
+layers); controls and a translucent caption over the picture; a blend
+and a backdrop filter after the video inside R; a rounded ancestor
+(split: the corners ordinary); an ancestor's rectangular overflow
+cutting the picture; a letterboxed picture with R taking in its bars
+(split); R a pixel past the picture (split); a video under an opacity,
+a transform, a filter (not a cover); an absolutely positioned video
+whose box ancestor clips or groups and whose containing block is outside
+it (the emission rule, not ancestry); a negative z-index sibling and a
+positive one; a video in a scroller scrolled so the picture is partly
+cut; 150% zoom with a fractional edge; a frame arriving during a resize
+(not a cover for that paint); two videos over one another. libflow's own
+test: the walk told a cover hands over exactly the ordinary walk's
+sequence with everything before the cover's draw removed, but the opens
+and closes of the groups that hold it. Mutants: each condition, the
+inward rounding, the split, the emission rule, the canvas
+acknowledgment. On the P5: `paint effects` and `--video-rate` before
+and after, maximized and at a quarter.
 
 **The record.** The `paint` line counts the paints that began at a
-video, so a run says whether the rule took.
+video and the pieces split off, so a run says whether the rule took.
+
+**Order.** Its own PR. N3 (the parts machinery's damage) rebases on it:
+a progress bar's tick over a playing video is then both at once, R the
+bar's rectangle, covered by the video, and the paint the video's rows
+and the bar.
 
 ## 6. Queues and memory
 
