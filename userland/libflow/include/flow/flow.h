@@ -1434,7 +1434,8 @@ typedef enum {
     FLOW_RESTYLE_NONE = 0,
     FLOW_RESTYLE_NO_TREE,       /* no tree, another document's, incomplete, or its room spent */
     FLOW_RESTYLE_NO_HISTORY,    /* no change history for it, or the history was lost */
-    FLOW_RESTYLE_STRUCTURE,     /* nodes added or removed, a text, adopted sheets, an attribute boxes read */
+    FLOW_RESTYLE_STRUCTURE,     /* in the page: nodes added or removed, a text, adopted sheets, an
+                                   attribute boxes read */
     FLOW_RESTYLE_INPUTS,        /* another width, cascade, env or resource */
     FLOW_RESTYLE_STYLES,        /* the styles could not be built whole */
     FLOW_RESTYLE_MEMBERSHIP,    /* an element came to have a style, or lost it */

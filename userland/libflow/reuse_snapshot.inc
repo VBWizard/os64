@@ -24,12 +24,13 @@ struct FReuseSnapshot {
     bool lost;
     // A change was read since the snapshot's version that adds or removes
     // nodes, changes a text, changes a tree's adopted sheets, or sets an
-    // attribute boxes may read (reuse_attr_styled_only): boxes or their
-    // text may differ, whatever the styles say, so a tree kept by a restyle
-    // in place (flow_restyle_in_place) cannot answer for it. One under an
-    // element styled `display: none` is no exception: what a select's
-    // options say, a picture's sources, a slot's assignments and more are
-    // read there by others than the boxes.
+    // attribute boxes may read (reuse_attr_styled_only), to a node in the
+    // page (reuse_in_page): boxes or their text may differ, whatever the
+    // styles say, so a tree kept by a restyle in place
+    // (flow_restyle_in_place) cannot answer for it. One under an element
+    // styled `display: none` is no exception: what a select's options say,
+    // a picture's sources, a slot's assignments and more are read there by
+    // others than the boxes.
     // `structural_at` and `structural_what`: the element the first such
     // change is told at (reuse_told_at) and what it was, for the record
     // (flow_restyle_t.at, .detail).
@@ -145,12 +146,26 @@ static bool reuse_attr_styled_only(const os64_html_change_entry_t *e)
            reuse_name_begins(n, "data-") || reuse_name_begins(n, "aria-");
 }
 
+// Whether a change at `n` is in the document the tree lays out: `n`'s
+// shadow-including root is that document (a shadow root reaching it
+// through its host). No box reads a node outside it, a fragment a script
+// builds or a node it removed, and such a node comes into the page only by
+// an insertion and leaves it only by a removal, each a change of a node in
+// it. Read after the fact, a change to a node that has since left was one
+// before a removal, and one to a node that has since come in was one before
+// an insertion: either way the page's own change is in the log. NULL is
+// taken as in it.
+static bool reuse_in_page(const FReuseSnapshot *r, const os64_html_node_t *n)
+{
+    return n == NULL || os64_html_shadow_including_root(n) == r->doc->document;
+}
+
 // The element a change at `n` is told at: `n` or its nearest flat-tree
-// ancestor with a record in the tree's styles, or NULL for none (a node
-// outside the page). A change's own target may be a node made since the
-// tree pinned its document, which may be reclaimed once the change is
-// read; an element with a record was styled under that pin, and lives as
-// long as the tree.
+// ancestor with a record in the tree's styles, or NULL for none (a node in
+// no slot, say). A change's own target may be a node made since the tree
+// pinned its document, which may be reclaimed once the change is read; an
+// element with a record was styled under that pin, and lives as long as
+// the tree.
 static const os64_html_node_t *reuse_told_at(const FReuseSnapshot *r, const os64_html_node_t *n)
 {
     for (; r->styles != NULL && n != NULL; n = f_flat_parent(r->doc, n))
@@ -173,11 +188,13 @@ static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
     for (; entry; entry = entry->next) {
         // An element's custom state is the cascade's to read; a STATE change
         // on a document or a shadow root is its adopted sheets. An attribute
-        // is structural unless only the cascade reads it.
-        if (entry->kind == OS64_HTML_CHANGE_CHILDREN || entry->kind == OS64_HTML_CHANGE_TEXT ||
-            (entry->kind == OS64_HTML_CHANGE_STATE && entry->target != NULL &&
-             entry->target->kind != OS64_HTML_ELEMENT) ||
-            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry))) {
+        // is structural unless only the cascade reads it. None is, to a node
+        // outside the page (reuse_in_page).
+        if ((entry->kind == OS64_HTML_CHANGE_CHILDREN || entry->kind == OS64_HTML_CHANGE_TEXT ||
+             (entry->kind == OS64_HTML_CHANGE_STATE && entry->target != NULL &&
+              entry->target->kind != OS64_HTML_ELEMENT) ||
+             (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry))) &&
+            reuse_in_page(r, entry->target)) {
             if (!r->structural) {
                 r->structural_at = reuse_told_at(r, entry->target);
                 const char *what = entry->kind == OS64_HTML_CHANGE_CHILDREN ? "children"

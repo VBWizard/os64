@@ -42,6 +42,12 @@ mutants = [
     # What changed since the tree.
     ('a-text-is-not-structure', SNAPSHOT, '            r->structural = true;', '            (void)0;'),
     ('structure-not-asked', RESTYLE, '    if (r->structural) {', '    if (0) {'),
+    ('every-change-in-the-page', SNAPSHOT,
+     '    return n == NULL || os64_html_shadow_including_root(n) == r->doc->document;',
+     '    return n == NULL || os64_html_shadow_including_root(n) == r->doc->document || 1;'),
+    ('no-change-in-the-page', SNAPSHOT,
+     '    return n == NULL || os64_html_shadow_including_root(n) == r->doc->document;',
+     '    return (n == NULL || os64_html_shadow_including_root(n) == r->doc->document) && 0;'),
     ('a-change-told-at-its-own-node', SNAPSHOT, '                r->structural_at = reuse_told_at(r, entry->target);',
      '                r->structural_at = reuse_told_at(r, entry->target) ? entry->target : entry->target;'),
     ('another-cascade-kept', RESTYLE, '                      : r->generation != garb_cascade_generation(env->cascade) ? "another cascade"',

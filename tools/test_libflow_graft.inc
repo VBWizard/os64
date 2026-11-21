@@ -454,23 +454,72 @@ static void restyle_in_place_cases(void)
                said);
     }
     flow_free(old); sheeted_close(&p);
-    // A change to a node outside the page (made since the tree, and never
-    // inserted) is told at no element: the node may be reclaimed, and the
-    // decline must not point at it.
+    // Changes to a node outside the page (a fragment a script builds: its
+    // children, a text, an attribute boxes read) are read by no box: beside
+    // a colour in the page they keep the restyle, and the kept tree answers
+    // as a whole layout does. The fragment's insertion is then structure.
     sheeted_open(&p, "<!doctype html><p id=c>c</p>", 800, 600);
     old = graft_layout(&p, NULL, NULL, NULL);
     {
         int64_t why = 0;
-        os64_html_node_t *loose = os64_html_create_element(p.doc, OS64_HTML_NS_HTML, "a", &why);
-        bool changed = loose != NULL && !os64_html_set_attr(p.doc, loose, "href", "x", 1);
+        os64_html_node_t *frag = os64_html_create_element(p.doc, OS64_HTML_NS_HTML, "div", &why);
+        os64_html_node_t *link = os64_html_create_element(p.doc, OS64_HTML_NS_HTML, "a", &why);
+        os64_html_node_t *words = os64_html_create_text(p.doc, "built", 5, &why);
+        bool changed = frag && link && words && !os64_html_insert(p.doc, frag, link, NULL) &&
+                       !os64_html_insert(p.doc, link, words, NULL) && !os64_html_set_attr(p.doc, link, "href", "x", 1) &&
+                       !os64_html_set_text(p.doc, words, "built again", 11) &&
+                       !os64_html_set_attr(p.doc, graft_node(&p, "c"), "style", "color:green", 11);
         graft_update(&p);
+        whole = graft_layout(&p, NULL, NULL, NULL);
         kept = restyle_keep(&p, old);
-        expect("restyle: a change to a node outside the page is told at no element",
-               changed && kept.why == FLOW_RESTYLE_STRUCTURE && kept.at == NULL &&
-                   strcmp(kept.detail, "attribute href") == 0,
+        char said[96];
+        snprintf(said, sizeof(said), "kind %d why %d (%s)", (int)kept.kind, (int)kept.why, kept.detail);
+        expect("restyle: changes to a fragment outside the page keep a colour beside them, as a whole layout",
+               changed && kept.kind == FLOW_RESTYLE_PAINT && restyle_check_says(old, whole, NULL, NULL), said);
+        flow_free(whole);
+        bool inserted = changed && !os64_html_insert(p.doc, p.doc->body, frag, NULL);
+        (void)garb_cascade_update(p.cascade); /* structure is asked before the cascade */
+        kept = restyle_keep(&p, old);
+        expect("restyle: the fragment's insertion is structure, told at the element it went into",
+               inserted && kept.why == FLOW_RESTYLE_STRUCTURE && kept.at == p.doc->body &&
+                   strcmp(kept.detail, "children") == 0,
                kept.detail);
     }
     flow_free(old); sheeted_close(&p);
+    // A node removed from the page and changed after: the removal is in the
+    // log, and is structure.
+    sheeted_open(&p, "<!doctype html><p id=r>gone</p><p id=c>c</p>", 800, 600);
+    old = graft_layout(&p, NULL, NULL, NULL);
+    {
+        os64_html_node_t *r = graft_node(&p, "r");
+        bool changed = r != NULL && !os64_html_remove(p.doc, r) && !os64_html_set_text(p.doc, r->first_child, "x", 1);
+        (void)garb_cascade_update(p.cascade); /* structure is asked before the cascade */
+        kept = restyle_keep(&p, old);
+        expect("restyle: a node removed then changed is declined for its removal",
+               changed && kept.why == FLOW_RESTYLE_STRUCTURE && strcmp(kept.detail, "children") == 0, kept.detail);
+    }
+    flow_free(old); sheeted_close(&p);
+    // A host's child in no slot is in the page, though no box is made for
+    // it: its `slot` attribute set to a slot's name puts it on screen, and
+    // is structure.
+    sheeted_open(&p, "<!doctype html><div id=h><span id=u>unassigned</span></div><p id=c>c</p>", 800, 600);
+    {
+        int64_t why = 0;
+        os64_html_node_t *host = graft_node(&p, "h"), *u = graft_node(&p, "u");
+        os64_html_node_t *root = host != NULL ? os64_html_attach_shadow(p.doc, host, OS64_HTML_SHADOW_OPEN, NULL) : NULL;
+        os64_html_node_t *slot = root != NULL ? os64_html_create_element(p.doc, OS64_HTML_NS_HTML, "slot", &why) : NULL;
+        bool built = slot && !os64_html_set_attr(p.doc, slot, "name", "x", 1) && !os64_html_insert(p.doc, root, slot, NULL);
+        (void)garb_cascade_update(p.cascade); /* a shadow root may cost a fresh build */
+        old = graft_layout(&p, NULL, NULL, NULL);
+        bool unshown = built && old != NULL && flow_box_for(old, u) == NULL;
+        bool changed = unshown && !os64_html_set_attr(p.doc, u, "slot", "x", 1);
+        (void)garb_cascade_update(p.cascade); /* structure is asked before the cascade */
+        kept = restyle_keep(&p, old);
+        expect("restyle: a host's child in no slot given a slot's name is structure",
+               changed && kept.why == FLOW_RESTYLE_STRUCTURE && strncmp(kept.detail, "attribute slot", 14) == 0, kept.detail);
+        flow_free(old);
+    }
+    sheeted_close(&p);
     // A tree's records point into the cascade it was laid out in (a
     // family's names are its strings), which a host frees with the tree: a
     // colour changed under a cascade built fresh is declined, not kept in a
