@@ -20172,37 +20172,46 @@ int main(int argc, char **argv)
     // The window is named after the page (title_follow). A FILE given on
     // the command line is read before the window exists, so the window is
     // born with that page's name rather than taking it a moment later.
-    // The switches come before the address, in any order.
-    int address_arg = 1;
-    for (; address_arg < argc && argv[address_arg][0] == '-' && argv[address_arg][1] == '-'; address_arg++) {
-        if (os64_streq(argv[address_arg], "--script-audit"))
+    // The switches and the address go in any order: a word beginning `--`
+    // is a switch (one yonder does not know is said and passed over), and
+    // the first that does not is the address (another is said and passed
+    // over). An address holds no space, so it is always one word.
+    int address_arg = 0;
+    for (int arg = 1; arg < argc; arg++) {
+        if (argv[arg][0] != '-' || argv[arg][1] != '-') {
+            if (address_arg == 0)
+                address_arg = arg;
+            else
+                os64_printf("yonder: one address at a time; %s is passed over\n", argv[arg]);
+        }
+        else if (os64_streq(argv[arg], "--script-audit"))
             s_script_audit = true;
-        else if (os64_streq(argv[address_arg], "--layout-profile"))
+        else if (os64_streq(argv[arg], "--layout-profile"))
             s_layout_profile = true;
-        else if (os64_streq(argv[address_arg], "--restyle-in-place=off"))
+        else if (os64_streq(argv[arg], "--restyle-in-place=off"))
             s_restyle_in_place = false;
-        else if (os64_streq(argv[address_arg], "--geometry-check"))
+        else if (os64_streq(argv[arg], "--geometry-check"))
             s_geometry_check = 10;
-        else if (os64_strlen(argv[address_arg]) > 17 && os64_memcmp(argv[address_arg], "--geometry-check=", 17) == 0) {
-            int64_t every = os64_atoi(argv[address_arg] + 17);
+        else if (os64_strlen(argv[arg]) > 17 && os64_memcmp(argv[arg], "--geometry-check=", 17) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 17);
             s_geometry_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
         }
-        else if (os64_streq(argv[address_arg], "--cascade-check"))
+        else if (os64_streq(argv[arg], "--cascade-check"))
             s_cascade_check = 10;
-        else if (os64_strlen(argv[address_arg]) > 16 && os64_memcmp(argv[address_arg], "--cascade-check=", 16) == 0) {
-            int64_t every = os64_atoi(argv[address_arg] + 16);
+        else if (os64_strlen(argv[arg]) > 16 && os64_memcmp(argv[arg], "--cascade-check=", 16) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 16);
             s_cascade_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
         }
-        else if (os64_streq(argv[address_arg], "--video-rate"))
+        else if (os64_streq(argv[arg], "--video-rate"))
             s_video_rate_s = 5;
-        else if (os64_strlen(argv[address_arg]) > 13 && os64_memcmp(argv[address_arg], "--video-rate=", 13) == 0) {
-            int64_t every = os64_atoi(argv[address_arg] + 13);
+        else if (os64_strlen(argv[arg]) > 13 && os64_memcmp(argv[arg], "--video-rate=", 13) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 13);
             s_video_rate_s = every < 1 ? 1 : every > 3600 ? 3600 : (uint32_t)every;
         }
-        else if (os64_streq(argv[address_arg], "--exit-when-loaded"))
+        else if (os64_streq(argv[arg], "--exit-when-loaded"))
             s_exit_when_loaded = true;
         else
-            break;
+            os64_printf("yonder: no switch %s; it is passed over\n", argv[arg]);
     }
     s_exit_started = s_exit_quiet_from = yonder_now_ms();
     g.scripts_on = yonder_settings_saved_scripts();
@@ -20228,7 +20237,7 @@ int main(int argc, char **argv)
     s_storage = yonder_storage_new(profile);    // NULL keeps each page's storage for its own life
     s_preflight = way_preflight_new();          // NULL sends every preflight
     yonder_settings_on_clear_storage(storage_clear);
-    const char *first = argc > address_arg ? argv[address_arg] : NULL;
+    const char *first = address_arg != 0 ? argv[address_arg] : NULL;
     char title[OS64_GUI_TITLE_MAX] = "yonder";
     if (first != NULL && first[0] == '/') {
         uint8_t *bytes = NULL;
