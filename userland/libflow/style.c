@@ -5633,6 +5633,14 @@ const FStyled *f_style_beyond(const FStyles *styles, FStyles *extra, const os64_
     return f_map_get(&extra->map, element);
 }
 
+bool f_style_copy_lists(flow_style_t *s, FArena *arena)
+{
+    FStyleCopy c = {.arena = arena};
+    bool ok = style_copy_value(&c, s) && !c.budget;
+    f_map_free(&c.slices);
+    return ok;
+}
+
 void f_style_free(FStyles *styles)
 {
     if (styles == NULL)

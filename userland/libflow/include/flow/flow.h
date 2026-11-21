@@ -1409,6 +1409,46 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
                                     flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx);
 /* NULL supplies zero statistics. The answer is copied, not borrowed. */
 flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
+
+/* A RESTYLE KEPT IN THE TREE (BRIEF_LAYOUT_NEEDS.md N1): the styles rebuilt
+ * for the document as it stands, and, when every element whose style came
+ * out different differs only in what the painter reads and moves nothing
+ * else, those values written into `tree` in place, with no box built or
+ * placed. The tree must be the one laid out last for this document, at
+ * `width`, with the env and inputs of the layout that would follow (the
+ * graft's own source test). A kept tree is the same tree: its boxes and
+ * their places stand, its styles, transforms' frames, ink and drawn stamps
+ * follow the new values. Declined, the tree is as it was unless `why` is
+ * FLOW_RESTYLE_ROOM, which may have written part of it; either way the
+ * caller lays out afresh. The cascade must be current. */
+typedef enum {
+    FLOW_RESTYLE_DECLINED = 0,
+    FLOW_RESTYLE_NOTHING,       /* no style came out different */
+    FLOW_RESTYLE_PAINT          /* written: paint only */
+} flow_restyle_kind_t;
+typedef enum {
+    FLOW_RESTYLE_NONE = 0,
+    FLOW_RESTYLE_NO_TREE,       /* no tree, another document's, incomplete, or its room spent */
+    FLOW_RESTYLE_NO_HISTORY,    /* no change history for it, or the history was lost */
+    FLOW_RESTYLE_STRUCTURE,     /* nodes added or removed, a text changed, or adopted sheets */
+    FLOW_RESTYLE_INPUTS,        /* another width, env, cascade generation or resource */
+    FLOW_RESTYLE_STYLES,        /* the styles could not be built whole */
+    FLOW_RESTYLE_MEMBERSHIP,    /* an element came to have a style, or lost it */
+    FLOW_RESTYLE_GEOMETRY,      /* a style placement reads changed, or what boxes are built from */
+    FLOW_RESTYLE_MOTION,        /* an animated element, or a change that starts one */
+    FLOW_RESTYLE_STACKING,      /* opacity across 0 or 1, blending, masks, visibility */
+    FLOW_RESTYLE_DECORATION,    /* a decoration or its colours, which fragments copy */
+    FLOW_RESTYLE_ROOM,          /* the restyle arena's room, or memory */
+    FLOW_RESTYLE_NREASONS
+} flow_restyle_reason_t;
+typedef struct {
+    flow_restyle_kind_t kind;
+    flow_restyle_reason_t why;  /* when declined */
+    uint64_t written;           /* elements and pseudo-elements whose style was written */
+} flow_restyle_t;
+flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
+                                     const os64_page_t *model, const flow_env_t *env,
+                                     const flow_reuse_inputs_t *inputs, int32_t width);
 /* WHAT A TREE HOLDS (MEMORY_CENSUS.md § 3): the bytes each of its arenas
  * has reserved — the computed styles, the boxes, the lines and fragments,
  * and the public boxes — and how many boxes it built, anonymous ones

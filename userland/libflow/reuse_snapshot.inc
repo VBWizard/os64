@@ -20,6 +20,11 @@ struct FReuseSnapshot {
     size_t count, slots, bytes, ncalls, nitems;
     int32_t width;
     bool lost;
+    // A change was read since the snapshot's version that adds or removes
+    // nodes, changes a text, or changes a tree's adopted sheets: boxes or
+    // their text may differ, whatever the styles say, so a tree kept by a
+    // restyle in place (flow_restyle_in_place) cannot answer for it.
+    bool structural;
     // Nodes, hash slots and per-box call records share this allocation.
 };
 
@@ -119,6 +124,12 @@ static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
     }
     bool shadows = os64_html_has_shadow_roots(r->doc);
     for (; entry; entry = entry->next) {
+        // An element's custom state is the cascade's to read; a STATE change
+        // on a document or a shadow root is its adopted sheets.
+        if (entry->kind == OS64_HTML_CHANGE_CHILDREN || entry->kind == OS64_HTML_CHANGE_TEXT ||
+            (entry->kind == OS64_HTML_CHANGE_STATE && entry->target != NULL &&
+             entry->target->kind != OS64_HTML_ELEMENT))
+            r->structural = true;
         reuse_mark(r, entry->target);
         for (size_t i = 0; i < entry->nadded; ++i) reuse_mark(r, entry->added[i]);
         for (size_t i = 0; i < entry->nremoved; ++i) reuse_mark(r, entry->removed[i]);

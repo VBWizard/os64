@@ -113,7 +113,13 @@ struct flow_tree {
     uint64_t tick_ms;
     // flow_tree_serial's number, and the last stamp handed a box's `drawn`.
     uint64_t serial, drawn;
+    // The lists the restyles kept in this tree have copied (restyle.inc),
+    // at most F_RESTYLE_ROOM, and whether that room ran out, after which
+    // none is kept and the next layout makes the tree afresh.
+    FArena restyle;
+    bool restyle_spent;
 };
+#define F_RESTYLE_ROOM ((size_t)1 << 20)
 
 // The serials handed out so far: trees are laid out on more than one
 // thread.
@@ -1855,6 +1861,7 @@ void flow_free(flow_tree_t *tree)
     f_arena_free(&tree->arena);
     f_arena_free(&tree->tick_lists[0]);
     f_arena_free(&tree->tick_lists[1]);
+    f_arena_free(&tree->restyle);
     os64_free(tree->images);
     os64_free(tree->controls);
     os64_free(tree->positioned);
@@ -2298,6 +2305,7 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
     // fragment, so the budgeted arenas already bound them: no cap of their
     // own, which would turn a page the budget cut short into no page.
     tree->arena.cap = SIZE_MAX;
+    tree->restyle.cap = F_RESTYLE_ROOM;
     tree->now_ms = env->now_ms;
     tree->tick_ms = env->now_ms;
     tree->live = -1;
@@ -4768,3 +4776,5 @@ bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_poin
     os64_free(changes);
     return said->why == FLOW_PARTS_MARKED;
 }
+
+#include "restyle.inc"
