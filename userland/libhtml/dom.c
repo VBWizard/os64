@@ -697,6 +697,7 @@ static void log_drop(HDoc *d)
     if (!c) return;
     d->log_head = (HChange *)c->entry.next;
     if (!d->log_head) d->log_tail = NULL;
+    if (d->log_barrier == c) d->log_barrier = NULL;
     if (c->entry.version > d->log_floor) d->log_floor = c->entry.version;
     d->log_bytes -= c->bytes;
     log_refs(d, &c->entry, false);
@@ -779,10 +780,47 @@ static char *log_string(char **at, const char *s)
     *at += n;
     return result;
 }
+/* MERGING. An attribute set again, or a text replaced again, says nothing a
+ * reader of invalidations needs the first entry for: the entry already in
+ * the log for the same target (and, for an attribute, the same name) is
+ * taken out, and the new one goes to the tail with the new version. A
+ * reader that had read the old entry reads the same change once more; a
+ * reader behind it reads one entry where there were two. The versions stay
+ * in order, which is what os64_html_changes walks by. An entry at or before
+ * the newest CHILDREN entry keeps its place, so that a change to a node
+ * and the move of that node are read in the order they were made. So a
+ * page that writes one attribute sixty times a second with nobody reading
+ * holds one entry for it, and only structural changes can grow the log to
+ * its cap, where it is lost for the whole document (log_lost), as before. */
+static bool log_same(const os64_html_change_entry_t *e, const os64_html_change_t *c)
+{
+    if (e->kind != c->kind || e->target != c->target) return false;
+    if (c->kind == OS64_HTML_CHANGE_TEXT) return true;
+    const char *a[] = {e->attr_name, e->attr_ns, e->attr_local}, *b[] = {c->attr_name, c->attr_ns, c->attr_local};
+    for (size_t i = 0; i < H_ARRAY(a); ++i) {
+        if ((a[i] == NULL) != (b[i] == NULL)) return false;
+        if (a[i] && !h_eq(a[i], b[i])) return false;
+    }
+    return true;
+}
+static void log_merge(HDoc *d, const os64_html_change_t *c)
+{
+    if (c->kind != OS64_HTML_CHANGE_ATTR && c->kind != OS64_HTML_CHANGE_TEXT) return;
+    HChange *prev = d->log_barrier;
+    HChange *at = prev ? (HChange *)prev->entry.next : d->log_head;
+    for (; at && !log_same(&at->entry, c); prev = at, at = (HChange *)at->entry.next) {}
+    if (!at) return;
+    if (prev) prev->entry.next = at->entry.next; else d->log_head = (HChange *)at->entry.next;
+    if (d->log_tail == at) d->log_tail = prev;
+    d->log_bytes -= at->bytes;
+    log_refs(d, &at->entry, false);
+    h_free(d, at);
+}
 static void log_change(HDoc *d, const os64_html_change_t *c)
 {
     if (!d->readers) return;
     log_prune(d);
+    log_merge(d, c);
     size_t cap = log_limit(d), bytes = sizeof(HChange);
     if (c->nadded > (SIZE_MAX - bytes) / sizeof(HNode *)) { log_lost(d); return; }
     bytes += c->nadded * sizeof(HNode *);
@@ -822,6 +860,7 @@ static void log_change(HDoc *d, const os64_html_change_t *c)
     log_refs(d, e, true);
     if (d->log_tail) d->log_tail->entry.next = e; else d->log_head = copy;
     d->log_tail = copy; d->log_bytes += copy->bytes;
+    if (c->kind == OS64_HTML_CHANGE_CHILDREN) d->log_barrier = copy;
 }
 
 /* ── The listener (html.h, THE LISTENER) ─────────────────────────────── */

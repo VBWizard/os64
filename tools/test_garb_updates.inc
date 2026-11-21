@@ -538,9 +538,80 @@ static void update_has(void)
     update_check(live==baseline,":has() updates release what they made");
 }
 
+/* WHAT AN INLINE STYLE WRITE CHANGED (garb_cascade_inline_changes), asked
+ * before the update, and whether a selector reads the `style` attribute. */
+static bool inline_listed(const garb_inline_change_t *out, int32_t n, garb_prop_t prop, garb_inline_change_t *got)
+{
+    for(int32_t i=0;i<n;i++) if(out[i].prop==prop){ if(got) *got=out[i]; return true; }
+    return false;
+}
+static void inline_set(HasCase *h, os64_html_node_t *el, const char *style)
+{
+    os64_html_set_attr(h->doc,el,"style",style,strlen(style));
+}
+static void update_inline_changes(void)
+{
+    size_t baseline=live;
+    HasCase h;
+    has_open(&h,"p{margin:0}","<!doctype html><p id=p style='color:red;transform:translateX(5px)'>x</p><p id=q>y</p>");
+    os64_html_node_t *p=has_el(&h,"p"),*q=has_el(&h,"q");
+    garb_inline_change_t out[64],got;
+    int32_t n=garb_cascade_inline_changes(h.c,p,out,64);
+    update_check(n==0,"inline: the attribute as parsed lists nothing");
+    os64_html_set_attr(h.doc,p,"style","color:blue;transform:translateX(5px)",36);
+    n=garb_cascade_inline_changes(h.c,p,out,64);
+    update_check(n==1 && inline_listed(out,n,GARB_COLOR,&got) && got.declared && !strcmp(got.keyword,"blue") && !got.var,
+                 "inline: a colour changed is listed alone");
+    os64_html_set_attr(h.doc,p,"style","color:red;transform:none",24);
+    n=garb_cascade_inline_changes(h.c,p,out,64);
+    update_check(n==1 && inline_listed(out,n,GARB_TRANSFORM,&got) && got.declared && !strcmp(got.keyword,"none"),
+                 "inline: a transform to none says none");
+    inline_set(&h,p,"color:red;transform:translateX(5px);visibility:COLLAPSE");
+    n=garb_cascade_inline_changes(h.c,p,out,64);
+    update_check(n==1 && inline_listed(out,n,GARB_VISIBILITY,&got) && !strcmp(got.keyword,"collapse"),
+                 "inline: a keyword is given lowercased");
+    os64_html_set_attr(h.doc,p,"style","color:red",9);
+    n=garb_cascade_inline_changes(h.c,p,out,64);
+    update_check(n==1 && inline_listed(out,n,GARB_TRANSFORM,&got) && !got.declared,
+                 "inline: a declaration removed is listed as no longer declared");
+    os64_html_set_attr(h.doc,p,"style","color:red!important;transform:translateX(5px)",45);
+    n=garb_cascade_inline_changes(h.c,p,out,64);
+    update_check(n==1 && inline_listed(out,n,GARB_COLOR,NULL),"inline: importance is a change");
+    os64_html_set_attr(h.doc,p,"style","color:red;transform:var(--t)",28);
+    n=garb_cascade_inline_changes(h.c,p,out,64);
+    update_check(n==1 && inline_listed(out,n,GARB_TRANSFORM,&got) && got.var,"inline: var() says so");
+    os64_html_set_attr(h.doc,p,"style","color:red;transform:translateX(5px);--t:1px",43);
+    update_check(garb_cascade_inline_changes(h.c,p,out,64)==-1,"inline: a custom property cannot be said");
+    os64_html_set_attr(h.doc,p,"style","color:red;transform:translateX(5px);background:blue",51);
+    n=garb_cascade_inline_changes(h.c,p,out,64);
+    update_check(n>1 && inline_listed(out,n,GARB_BACKGROUND_COLOR,NULL) && !inline_listed(out,n,GARB_COLOR,NULL),
+                 "inline: a shorthand lists each longhand it sets");
+    update_check(garb_cascade_inline_changes(h.c,p,out,1)==-1,"inline: more than the cap cannot be said");
+    os64_html_set_attr(h.doc,p,"style","color:red;transform:translateX(5px)",35);
+    update_check(garb_cascade_inline_changes(h.c,p,out,64)==0,"inline: written back as parsed lists nothing");
+    os64_html_set_attr(h.doc,q,"style","width:10px",10);
+    n=garb_cascade_inline_changes(h.c,q,out,64);
+    update_check(n==1 && inline_listed(out,n,GARB_WIDTH,&got) && got.declared,"inline: a style where there was none");
+    has_update(&h,"inline: the update for it");
+    update_check(garb_cascade_inline_changes(h.c,q,out,64)==0,"inline: after the update, its parse is the baseline");
+    int64_t why=0;
+    os64_html_node_t *loose=os64_html_create_element(h.doc,OS64_HTML_NS_HTML,"p",&why);
+    update_check(loose && garb_cascade_inline_changes(h.c,loose,out,64)==-1,"inline: an element never styled cannot be said");
+    update_check(!garb_cascade_reads_style_attribute(h.c),"inline: no selector reads the style attribute");
+    has_close(&h);
+    const char *readers[]={"[style*=x]{color:red}","p:is([STYLE]){color:red}","div:has(> [style]){color:red}"};
+    for(size_t i=0;i<sizeof(readers)/sizeof(*readers);i++){
+        has_open(&h,readers[i],"<!doctype html><div><p style=color:red>x</p></div>");
+        update_check(garb_cascade_reads_style_attribute(h.c),"inline: a selector that reads the style attribute is known");
+        has_close(&h);
+    }
+    update_check(live==baseline,"inline: nothing retained");
+}
+
 static int cascade_updates(void)
 {
     update_dependencies();
+    update_inline_changes();
     update_has();
     update_scratch_cost();
     size_t baseline=live;

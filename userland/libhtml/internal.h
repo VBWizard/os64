@@ -100,6 +100,9 @@ struct HDoc {
     void *changed_opaque;
     os64_html_reader_t *readers;
     HChange *log_head, *log_tail;
+    /* The newest CHILDREN entry in the log, or NULL: an entry at or before
+     * it keeps its place (log_merge). */
+    HChange *log_barrier;
     size_t log_bytes, log_limit;
     uint64_t log_floor;
     bool log_limited;

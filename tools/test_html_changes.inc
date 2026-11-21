@@ -67,6 +67,56 @@ static void t_change_log(void)
     check(live==start_live,"log: identities and payloads released");
 }
 
+/* MERGING (dom.c, log_merge): an attribute set again or a text replaced
+ * again takes the place of its entry, moved to the tail, unless a CHILDREN
+ * entry lies after it. */
+static void t_change_log_merge(void)
+{
+    size_t start_live = live;
+    os64_html_document_t *d = parse("<body><div id=a>text</div><p id=c></p>");
+    HNode *a=id_in(d,"a"), *c=id_in(d,"c");
+    uint64_t version=os64_html_version(d);
+    os64_html_reader_t *r=os64_html_reader_new(d,version), *early=os64_html_reader_new(d,version);
+    check(r && early,"merge: readers");
+    char value[16];
+    for(int i=0;i<60;i++){
+        int n=snprintf(value,sizeof(value),"v%d",i);
+        os64_html_set_attr(d,a,"style",value,(size_t)n);
+    }
+    const os64_html_change_entry_t *entries=NULL;
+    check(os64_html_changes(r,&entries)==1 && entries->target==a && entries->version==os64_html_version(d),
+          "merge: sixty writes of one attribute hold one entry, at the newest version");
+    for(int i=0;i<12;i++){
+        int n=snprintf(value,sizeof(value),"w%d",i);
+        os64_html_set_attr(d,i%2?c:a,"style",value,(size_t)n);
+        os64_html_set_attr(d,a,"class",value,(size_t)n);
+    }
+    check(os64_html_changes(r,&entries)==3,"merge: interleaved writes merge per element and attribute");
+    os64_html_set_text(d,a->first_child,"one",3);
+    os64_html_set_text(d,a->first_child,"two",3);
+    check(os64_html_changes(r,&entries)==1 && entries->kind==OS64_HTML_CHANGE_TEXT,"merge: a text replaced twice holds one entry");
+    os64_html_set_attr(d,a,"title","x",1);
+    int64_t why=0;
+    HNode *span=os64_html_create_element(d,OS64_HTML_NS_HTML,"span",&why);
+    check(span && !os64_html_insert(d,a,span,NULL),"merge: a child added");
+    os64_html_set_attr(d,a,"title","y",1);
+    check(os64_html_changes(r,&entries)==3 && entries->kind==OS64_HTML_CHANGE_ATTR &&
+          entries->next->kind==OS64_HTML_CHANGE_CHILDREN && entries->next->next->kind==OS64_HTML_CHANGE_ATTR,
+          "merge: an entry before a CHILDREN entry keeps its place");
+    // The early reader has read none of it: one entry for each target and
+    // attribute (style on a and c, class on a, the text, title before and
+    // after the child, the child).
+    check(os64_html_changes(early,&entries)==7,"merge: a reader behind reads one entry where there were several");
+    os64_html_set_attr(d,a,"title","z",1);
+    check(os64_html_changes(early,&entries)==1 && entries->target==a && !strcmp(entries->attr_name,"title"),
+          "merge: a change read once is read again once merged");
+    (void)os64_html_changes(r,&entries);
+    os64_html_reader_free(r); os64_html_reader_free(early);
+    check(os64_html_changes_bytes(d)==0,"merge: storage released");
+    os64_html_document_free(d);
+    check(live==start_live,"merge: identities and payloads released");
+}
+
 static void t_change_log_loss(void)
 {
     size_t start_live=live;
@@ -79,7 +129,9 @@ static void t_change_log_loss(void)
     size_t single=os64_html_changes_bytes(d);
     os64_html_changes_limit(d,single);
     check(os64_html_changes(fast,&entries)==1,"log loss: fast reader current");
-    check(!os64_html_set_attr(d,a,"x","b",1) && os64_html_changes_bytes(d)<=single,
+    // Another attribute, so that the first entry is evicted and not merged
+    // (log_merge): a merged entry loses no reader anything.
+    check(!os64_html_set_attr(d,a,"w","b",1) && os64_html_changes_bytes(d)<=single,
           "log loss: cap includes allocation overhead");
     check(os64_html_changes(fast,&entries)==1 && os64_html_changes(slow,&entries)==-1 && !entries,
           "log loss: only reader behind eviction reports gap");

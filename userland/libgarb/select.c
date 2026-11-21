@@ -1470,6 +1470,8 @@ static void dependencies(const List *list, bool anchored, bool counted, garb_sel
             out->following |= c->left == C_NEXT || c->left == C_SUBSEQUENT;
             for (int32_t k = 0; k < c->n; ++k) {
                 const Simple *s = &c->s[k];
+                if (s->kind == S_ATTR && ascii_ieq(s->name, s->len, "style"))
+                    out->style_attribute = true;
                 if (s->kind != S_PSEUDO) continue;
                 switch (s->pseudo) {
                 case P_FIRST_CHILD: case P_FIRST_OF_TYPE:

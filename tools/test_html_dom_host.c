@@ -3230,6 +3230,7 @@ int main(int argc, char **argv)
         t_slotchange();
         t_shadow_more();
         t_change_log();
+        t_change_log_merge();
         t_change_log_loss();
         t_change_log_parser();
     }

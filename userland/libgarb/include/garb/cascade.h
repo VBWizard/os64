@@ -236,6 +236,31 @@ uint64_t garb_cascade_version(const garb_cascade_t *c);
 bool garb_style_updated_since(const garb_cascade_t *c, const os64_html_node_t *node,
                               uint64_t update);
 
+// WHAT AN INLINE STYLE WRITE CHANGED, asked before the cascade is updated
+// for it: the element's `style` attribute as it is now against the cascade's
+// own parse of it, the one its winners were computed from. Each longhand
+// whose winning inline declaration (an `!important` one over the rest, then
+// the last written) was added, removed, or changed in name, tokens or
+// importance is listed once. A value equal in meaning but written otherwise
+// counts as changed. `declared`: a declaration sets it now; `keyword`: that
+// declaration's value when it is one identifier of fewer than 16 bytes,
+// lowercased (`none`, `collapse`), else empty; `var`: it holds var() or
+// env(), so its value is not known until it is substituted. The answer is
+// how many were listed, or -1 when it cannot be said: no element the
+// cascade styled, a custom property changed (var() can reach any longhand),
+// a parse that failed or was cut short, or more than `cap`.
+typedef struct {
+    garb_prop_t prop;
+    bool declared, var;
+    char keyword[16];
+} garb_inline_change_t;
+int32_t garb_cascade_inline_changes(const garb_cascade_t *c, const os64_html_node_t *el,
+                                    garb_inline_change_t *out, int32_t cap);
+// Whether a selector of the cascade's sheets tests the `style` attribute
+// (inside :is(), :where(), :not() and :has() as well): then a write of an
+// inline style can change which rules match, whatever it declares.
+bool garb_cascade_reads_style_attribute(const garb_cascade_t *c);
+
 // The viewport the cascade was judged against: what a `vw` or `vh` in its
 // winners is a hundredth of.
 garb_env_t garb_cascade_env(const garb_cascade_t *c);

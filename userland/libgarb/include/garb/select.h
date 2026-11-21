@@ -73,10 +73,12 @@ garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t 
 // `ancestors_preceding` counts both kinds. `has_filtered`: a :has() inside
 // :nth-child(… of S) or :nth-last-child(… of S), whose turning on one
 // element moves which of its siblings the count picks, which neither kind
-// follows.
+// follows. `style_attribute`: an attribute selector naming `style`, so a
+// write of an inline style can change what matches
+// (garb_cascade_reads_style_attribute).
 typedef struct {
     bool following, position_front, position_back, parent_state, filtered;
-    bool ancestors, ancestors_preceding, has_filtered;
+    bool ancestors, ancestors_preceding, has_filtered, style_attribute;
 } garb_selector_dependencies_t;
 garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list);
 
