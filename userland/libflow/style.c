@@ -5386,6 +5386,7 @@ static bool generates(const Ctx *c, const os64_html_node_t *el, const flow_style
 // an element that makes no box (f_boxless), or anything inside an element
 // pass 2 draws nothing inside (f_draws_inside: a replaced element's
 // fallback). False when memory ran out.
+static void pseudo_changed(Ctx *c, const os64_html_node_t *el, const FStyled *of, int bit);
 static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
 {
     if (of->style.display == FLOW_DISPLAY_NONE || c->inert != NULL)
@@ -5404,7 +5405,40 @@ static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
         c->inert = el;
     else if (generates(c, el, &of->style) && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
         return false;
+    if (c->inert != el)
+        pseudo_changed(c, el, of, 0);
     return !c->counters_failed;
+}
+
+// What came out different for `el`'s pseudo-element `bit` (FStyles.
+// changed_paint), when asked: its node is made anew by every layout, so the
+// one before is found through `el`'s record there. One coming or going, or
+// its text changing, is placement's; animated ones are left out, as an
+// element's are.
+static void pseudo_changed(Ctx *c, const os64_html_node_t *el, const FStyled *of, int bit)
+{
+    if (c->compare == NULL || of == NULL)
+        return;
+    const FStyled *had = f_style_of(c->compare, el);
+    const os64_html_node_t *then = had != NULL ? had->pseudo[bit] : NULL, *now = of->pseudo[bit];
+    if (then == NULL && now == NULL)
+        return;
+    const FStyled *was = then != NULL ? f_style_of(c->compare, then) : NULL;
+    const FStyled *is = now != NULL ? f_style_of(c->out, now) : NULL;
+    if ((was != NULL && was->motion) || (is != NULL && is->motion))
+        return;
+    if (was != NULL && is != NULL) {
+        const os64_html_node_t *a = then->first_child, *b = now->first_child;
+        bool same_text = (a == NULL) == (b == NULL) &&
+                         (a == NULL || (a->text_len == b->text_len && !os64_memcmp(a->text, b->text, a->text_len)));
+        if (same_text && f_style_equal(&was->style, &is->style))
+            return;
+        if (same_text && f_style_paint_only(&was->style, &is->style)) {
+            ++c->out->changed_paint;
+            return;
+        }
+    }
+    ++c->out->changed_layout;
 }
 
 // Steps 4 and 5, once everything under `el` is styled: its ::after (a `q`'s
@@ -5417,6 +5451,7 @@ static bool close_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
     if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el, &of->style) &&
         !style_pseudo(c, el, of, GARB_PSEUDO_AFTER))
         return false;
+    pseudo_changed(c, el, of, 1);
     while (c->ncounters > 0 && c->counters[c->ncounters - 1].scope == el)
         c->ncounters--;
     return !c->counters_failed;

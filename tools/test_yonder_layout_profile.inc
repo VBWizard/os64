@@ -159,6 +159,25 @@ static void layout_profile_cases(void)
     if(!needed || !strstr(needed,"one node's boxes moved 2 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
     s_layout_profile=false;
     probe_drop();
+    /* A pseudo-element's own change counts, though its node is new at every
+     * layout: a colour is paint only; longer content moves its box and the
+     * text after it. */
+    probe_page("<!doctype html><style>#p::before{content:'X';color:red}#p.on::before{color:blue}"
+        "#p.long::before{content:'XXXX'}</style><p id=p>text</p>",false);
+    g.page.diag=diag_new_claimed("https://fixture.test/profile-pseudo",1);
+    s_layout_profile=true;
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("p"),"class","on",2) && script_rebuild(),
+          "layout needed: a ::before's colour published");
+    needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && strstr(needed,"paint only 1 ("),"layout needed: and it was paint only");
+    if(!needed || !strstr(needed,"paint only 1 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("p"),"class","long",4) && script_rebuild(),
+          "layout needed: a ::before's longer content published");
+    needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && strstr(needed,"more moved 1 ("),"layout needed: and its box and the text after it moved");
+    if(!needed || !strstr(needed,"more moved 1 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    s_layout_profile=false;
+    probe_drop();
     /* A read made by the shown page's own script forces its layout there:
      * that is the forced column (its ledger says so), and the `d` reading
      * counts it. */

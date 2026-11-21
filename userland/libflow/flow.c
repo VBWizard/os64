@@ -2185,28 +2185,62 @@ flow_tree_t *flow_layout_profiled(const os64_html_document_t *doc, const os64_pa
 {
     return flow_layout_restyled(doc, model, width, env, NULL, profile, clock, clock_ctx);
 }
-// The nodes of `of` whose first box has no box in `other`, or (`rects`)
-// another border box than its first box there.
-static int64_t nodes_unmatched(const flow_tree_t *of, const flow_tree_t *other, bool rects)
+// The next box after `b` in tree order.
+static const flow_box_t *box_after(const flow_box_t *b)
+{
+    if (b->first != NULL) return b->first;
+    while (b != NULL && b->next == NULL) b = b->parent;
+    return b != NULL ? b->next : NULL;
+}
+// Each pseudo-element's first box in `tree`, by its node (box_styled_node):
+// a pseudo-element's node is made anew by every layout, so across two trees
+// it is matched by its originating element and which it is. False on no
+// memory.
+static bool pseudo_firsts(const flow_tree_t *tree, FMap *out)
+{
+    for (const flow_box_t *b = tree->root; b != NULL; b = box_after(b)) {
+        const os64_html_node_t *gen = b->pseudo != GARB_PSEUDO_NONE ? box_styled_node(tree->styles, b) : NULL;
+        if (gen != NULL && f_map_get(out, gen) == NULL && !f_map_put(out, gen, (void *)b))
+            return false;
+    }
+    return true;
+}
+// The nodes and pseudo-elements of `of` whose first box has no box in
+// `other`, or (`rects`) another border box than its first box there.
+static int64_t nodes_unmatched(const flow_tree_t *of, const FMap *of_pseudo, const flow_tree_t *other,
+                               const FMap *other_pseudo, bool rects)
 {
     int64_t n = 0;
-    for (const flow_box_t *b = of->root; b != NULL;) {
-        if (b->node != NULL && b->pseudo == 0 && flow_box_for(of, b->node) == b) {
-            const flow_box_t *was = flow_box_for(other, b->node);
-            if (was == NULL || (rects && (was->rect.x != b->rect.x || was->rect.y != b->rect.y ||
-                                          was->rect.w != b->rect.w || was->rect.h != b->rect.h)))
-                n++;
+    for (const flow_box_t *b = of->root; b != NULL; b = box_after(b)) {
+        if (b->node == NULL)
+            continue;
+        const flow_box_t *was;
+        if (b->pseudo == GARB_PSEUDO_NONE) {
+            if (flow_box_for(of, b->node) != b) continue;
+            was = flow_box_for(other, b->node);
+        } else {
+            const os64_html_node_t *gen = box_styled_node(of->styles, b);
+            if (gen == NULL || f_map_get(of_pseudo, gen) != b) continue;
+            const os64_html_node_t *there = box_styled_node(other->styles, b);
+            was = there != NULL ? f_map_get(other_pseudo, there) : NULL;
         }
-        if (b->first != NULL) { b = b->first; continue; }
-        while (b != NULL && b->next == NULL) b = b->parent;
-        b = b != NULL ? b->next : NULL;
+        if (was == NULL || (rects && (was->rect.x != b->rect.x || was->rect.y != b->rect.y ||
+                                      was->rect.w != b->rect.w || was->rect.h != b->rect.h)))
+            n++;
     }
     return n;
 }
-// The nodes whose boxes moved, came or went (flow_profile_t.nodes_moved).
+// The nodes and pseudo-elements whose boxes moved, came or went
+// (flow_profile_t.nodes_moved); -1 on no memory.
 static int64_t nodes_moved(const flow_tree_t *tree, const flow_tree_t *previous)
 {
-    return nodes_unmatched(tree, previous, true) + nodes_unmatched(previous, tree, false);
+    FMap now = {0}, was = {0};
+    int64_t n = -1;
+    if (pseudo_firsts(tree, &now) && pseudo_firsts(previous, &was))
+        n = nodes_unmatched(tree, &now, previous, &was, true) + nodes_unmatched(previous, &was, tree, &now, false);
+    f_map_free(&now);
+    f_map_free(&was);
+    return n;
 }
 uint64_t flow_styles_reused(const flow_tree_t *tree)
 {
