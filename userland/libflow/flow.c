@@ -3689,6 +3689,80 @@ int32_t flow_paint_path(const flow_tree_t *tree, const flow_box_t *box, const fl
     return depth;
 }
 
+static int64_t area_of(os64_gui_rect_t r)
+{
+    return r.w > 0 && r.h > 0 ? (int64_t)r.w * r.h : 0;
+}
+
+// Whether a box is drawn through an ancestor's matrix (own_through), so
+// that what it charges is counted in that ancestor's own pixels.
+static bool under_through(const flow_box_t *b)
+{
+    for (const flow_box_t *p = b != NULL ? b->parent : NULL; p != NULL; p = p->parent)
+        if (own_through(p))
+            return true;
+    return false;
+}
+
+int64_t flow_layer_area_bound(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll)
+{
+    if (tree == NULL || tree->root == NULL)
+        return 0;
+    const int64_t unbounded = INT64_MAX / 4;
+    os64_gui_rect_t *bounds = all_group_bounds(tree, scroll);
+    int64_t sum = 0;
+    // The groups open, innermost last: whether each, or one outside it, is
+    // drawn through a matrix (past the stack's depth, taken as so).
+    bool through[64];
+    int32_t depth = 0;
+    for (int32_t i = 0; i < tree->nlayers && sum < unbounded; i++) {
+        const Layer *l = &tree->layers[i];
+        if (l->part == PART_CLOSE) {
+            if (depth > 0)
+                depth--;
+            continue;
+        }
+        if (l->part != PART_OPEN)
+            continue;
+        const flow_box_t *b = l->box;
+        bool inside = depth > 0 && (depth > 64 || through[depth - 1]);
+        bool own = own_through(b);
+        int32_t end;
+        os64_gui_rect_t bd = bounds != NULL ? bounds[i] : group_bounds(tree, i, scroll, &end);
+        bool layered = f_group_filter(b->style, f_atom(b)) || flow_masked(b) || b->style->mix_blend != FLOW_BLEND_NORMAL;
+        if (layered) {
+            int64_t a;
+            if (inside) {
+                a = area_of(bd);    // in the matrix's own pixels, which the group's bounds are in
+            } else if (own) {
+                double m[6];
+                (void)flow_box_through(b, scroll, m, NULL, NULL);
+                double det = fabs(m[0] * m[3] - m[1] * m[2]);
+                os64_gui_rect_t met = meet(bd, viewport);
+                a = area_of(met) == 0 ? 0
+                    : det < 1.0 / 1024 ? unbounded
+                    : (int64_t)((double)(met.w + 2) * (double)(met.h + 2) / det) + 1;
+            } else {
+                a = area_of(meet(bd, viewport));
+            }
+            int64_t layers = flow_masked(b) ? 1 + flow_mask_layers(b->style) : 1;
+            sum = a >= unbounded / layers ? unbounded : sum + a * layers;
+        }
+        if (depth < 64)
+            through[depth] = inside || own;
+        depth++;
+    }
+    // A backdrop filter charges its box's part in the view, in the pixels it
+    // is drawn in.
+    for (const flow_box_t *b = tree->root; b != NULL && sum < unbounded; b = box_after(b)) {
+        if (b->style == NULL || b->style->nbackdrop_filter <= 0)
+            continue;
+        sum += under_through(b) ? area_of(b->rect) : area_of(meet(flow_box_doc_rect(b, scroll), viewport));
+    }
+    os64_free(bounds);
+    return sum < unbounded ? sum : unbounded;
+}
+
 // The layer index of the close of the group opened at `i`.
 static int32_t close_of(const flow_tree_t *tree, int32_t i)
 {

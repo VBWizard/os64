@@ -194,6 +194,48 @@ static void cover_cases(void)
     cover_refused("cover: a frame not at the fitted size is no cover", cover_run((os64_gui_rect_t){20, 20, 320, 180}));
     cover_drop();
 
+    /* A blur with no transform beneath an inset video, a paint of the whole
+     * window split about the picture: a piece's layer is grown past its
+     * view by the blur's reach, and must not be laid over the picture
+     * (Codex, #698). */
+    probe_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#g2{position:absolute;left:0;top:0;width:420px;height:260px;background:linear-gradient(red,blue);"
+               "filter:blur(8px)}#v{position:absolute;left:40px;top:40px;width:320px;height:180px}</style>"
+               "<div id=g2></div><video id=v></video>", true);
+    cover_video("v", 320, 180, 320, 180);
+    cover_expect("cover: an untransformed blur beneath, the whole window split about the picture",
+                 cover_run(g.view.bounds), 4);
+    cover_whole_same("cover: an untransformed blur beneath, the window painted whole with covers and without is "
+                     "the same");
+    cover_drop();
+
+    /* Layers beneath the video enough to run the ordinary paint out of its
+     * budget, and one over it: the ordinary paint draws that one plain, so
+     * the paint is not covered, and the window is the same (Codex, #698). */
+    probe_page("<!doctype html><style>body{margin:0;background:#123}"
+               ".b{position:absolute;left:0;top:0;width:800px;height:600px;filter:blur(2px);"
+               "background:rgba(200,100,50,.2)}#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#over{position:absolute;left:60px;top:60px;width:100px;height:60px;background:#fff;"
+               "filter:blur(3px)}</style><div class=b></div><div class=b></div><div class=b></div>"
+               "<div class=b></div><video id=v></video><div id=over></div>", true);
+    cover_video("v", 320, 180, 320, 180);
+    {
+        /* The picture's part alone: each layer charges only that part, the
+         * budget cannot run out, and the paint is covered. */
+        cover_expect("cover: layers that cannot run the budget out over the picture's part, covered",
+                     cover_run((os64_gui_rect_t){40, 40, 320, 180}), 0);
+        /* The whole window: five layers of it pass four views' budget. */
+        uint64_t budget = s_cost.covered_budget;
+        CoverCounts b = cover_run(g.view.bounds);
+        check(b.covered == 0 && s_cost.covered_budget > budget,
+              "cover: layers that might run the budget out keep the paint the ordinary way");
+        if (!(b.covered == 0 && s_cost.covered_budget > budget))
+            cover_said("the layers' budget", b);
+    }
+    cover_whole_same("cover: layers that might run the budget out, the window painted whole with covers and without "
+                     "is the same");
+    cover_drop();
+
     /* A video in a group is drawn on its sheets, never plain. */
     snprintf(html, sizeof(html), "%s<div id=glow></div><div style='opacity:.9'><video id=v></video></div>", style);
     probe_page(html, true);

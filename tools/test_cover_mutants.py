@@ -67,6 +67,11 @@ mutants = [
     ('a-backdrop-reader-left-reading-an-old-frame', YONDER,
      '        os64_rect_intersect(covered, part, &covered) && !backdrop_read_meets(part))',
      '        os64_rect_intersect(covered, part, &covered) && (!backdrop_read_meets(part) || 1))'),
+    ('a-piece-not-clipped-to-itself', YONDER, '    const yonder_dark_t *dark = s_dark ? &kDark : NULL;\n    bool found = true;',
+     '    gl->clip = was;\n    const yonder_dark_t *dark = s_dark ? &kDark : NULL;\n    bool found = true;'),
+    ('the-layers-budget-not-asked', YONDER,
+     '    if (flow_layer_area_bound(g.page.tree, view, scroll) > (int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h) {',
+     '    if (flow_layer_area_bound(g.page.tree, view, scroll) > (int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h && 0) {'),
     ('the-canvases-not-acknowledged', YONDER, '    canvases_acknowledge();\n    return refused;',
      '    (void)canvases_acknowledge;\n    return refused;'),
 ]

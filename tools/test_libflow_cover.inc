@@ -149,6 +149,29 @@ static void cover_cases(void)
         flow_free(t);
         sheeted_close(&p);
     }
+    // The layers' bound: two blurred boxes count at least their pixels in
+    // the view; one drawn at half its size counts its own pixels, four times
+    // what it covers; a view meeting none counts nothing.
+    {
+        Sheeted q;
+        sheeted_open(&q, "<!doctype html><style>body{margin:0} div{position:absolute;width:100px;height:100px;"
+                         "filter:blur(1px)}</style><div style='left:0;top:0'></div><div style='left:200px;top:0'>"
+                         "</div><div style='left:0;top:300px;width:200px;height:200px;transform:scale(.5);"
+                         "transform-origin:0 0'></div>", 400, 600);
+        flow_tree_t *qt = flow_layout(q.doc, q.page, 400, &q.env);
+        flow_point_t at = {0, 0};
+        int64_t two = flow_layer_area_bound(qt, (os64_gui_rect_t){0, 0, 400, 150}, at);
+        int64_t half = flow_layer_area_bound(qt, (os64_gui_rect_t){0, 290, 400, 200}, at);
+        int64_t none = flow_layer_area_bound(qt, (os64_gui_rect_t){0, 520, 400, 60}, at);
+        char said[96];
+        snprintf(said, sizeof(said), "two %ld, half %ld, none %ld", (long)two, (long)half, (long)none);
+        expect("cover: the layers' bound counts each blurred box's pixels in the view", two >= 20000 && two < 40000,
+               said);
+        expect("cover: a box drawn at half its size counts its own pixels", half >= 40000, said);
+        expect("cover: a view meeting no layer counts nothing", none == 0, said);
+        flow_free(qt);
+        sheeted_close(&q);
+    }
     // A box no part paints, and none at all.
     Sheeted p;
     sheeted_open(&p, "<!doctype html><p>x</p>", 400, 600);

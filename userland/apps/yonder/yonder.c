@@ -3639,8 +3639,9 @@ static struct {
     // video, the pieces of their rest painted the ordinary way, and those
     // painted again because the walk never handed the video over, and those
     // painted the ordinary way because a backdrop reader may read across the
-    // edge a split would cut (backdrop_read_meets).
-    uint64_t covered_paints, covered_pieces, covered_again, covered_refused;
+    // edge a split would cut (backdrop_read_meets), or because the layers'
+    // budget might run out (flow_layer_area_bound).
+    uint64_t covered_paints, covered_pieces, covered_again, covered_refused, covered_budget;
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
@@ -8748,11 +8749,13 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (unsigned long)s_cost.video_frames, (unsigned long)s_cost.video_ask_us,
                (unsigned long)s_cost.video_pictures, (unsigned long)s_cost.video_plain,
                (unsigned long)s_cost.video_general, (unsigned long)s_cost.video_draw_us);
-    if (s_cost.covered_paints > 0 || s_cost.covered_refused > 0)
+    if (s_cost.covered_paints > 0 || s_cost.covered_refused > 0 || s_cost.covered_budget > 0)
         dt_put(t, "; paints a video covered %lu (from the video up), %lu pieces of their rest painted the ordinary way, %lu "
-               "painted again, %lu not split for a backdrop reader",
+               "painted again, %lu not split for a backdrop reader, %lu painted the ordinary way for the layers' "
+               "budget",
                (unsigned long)s_cost.covered_paints, (unsigned long)s_cost.covered_pieces,
-               (unsigned long)s_cost.covered_again, (unsigned long)s_cost.covered_refused);
+               (unsigned long)s_cost.covered_again, (unsigned long)s_cost.covered_refused,
+               (unsigned long)s_cost.covered_budget);
     // Each video's player, as gplay's readout counts it.
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         os64_media_player_facts_t vf;
@@ -18157,6 +18160,31 @@ static void canvases_acknowledge(void)
     }
 }
 
+// One paint of `part` (document coordinates) of a split view, the window's
+// clip narrowed to it for the paint's length: a filtered layer is grown
+// past its view by the filter's reach and laid through that clip, which
+// must not let it over a part another of the split's paints has drawn
+// (Codex, #698). `cover` as yonder_paint_from's, NULL for the ordinary
+// way; false when the walk never handed the cover over.
+static bool paint_part(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t part, os64_gui_rect_t whole,
+                       const flow_box_t *cover)
+{
+    os64_gui_rect_t was = gl->clip, win = {part.x + gl->dx, part.y + gl->dy, part.w, part.h};
+    if (!os64_rect_intersect(win, was, &gl->clip)) {
+        gl->clip = was;
+        return true;
+    }
+    const yonder_dark_t *dark = s_dark ? &kDark : NULL;
+    bool found = true;
+    if (cover != NULL)
+        found = yonder_paint_from(g.page.tree, part, whole, scroll_now(), PAGE_PAPER, dark, g.paint_cache,
+                                  g.paint_scratch, v, cover);
+    else
+        yonder_paint(g.page.tree, part, whole, scroll_now(), PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+    gl->clip = was;
+    return found;
+}
+
 // `view` (document coordinates) painted: through the cover a video gives it
 // when there is one — the covered part from the video up, the rest of
 // `view`, at most four rectangles, the ordinary way — or the ordinary way
@@ -18178,6 +18206,15 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
         yonder_paint(g.page.tree, view, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
         return yonder_paint_layers_refused;
     }
+    // Every paint of `view`, covered or a piece, must decide each layer as
+    // the ordinary paint of it would: one whose layers might run out of the
+    // budget (YONDER_FILTER_AREA_VIEWS of the whole view) is painted the
+    // ordinary way (flow_layer_area_bound; Codex, #698).
+    if (flow_layer_area_bound(g.page.tree, view, scroll) > (int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h) {
+        s_cost.covered_budget++;
+        yonder_paint(g.page.tree, view, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        return yonder_paint_layers_refused;
+    }
     uint32_t refused = 0;
     bool wanted = s_paint_check != 0 && ++s_paint_checked % s_paint_check == 0, check = wanted;
     // Under the check, the window's pixels of the covered part as they
@@ -18192,13 +18229,12 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
         for (int32_t y = 0; y < win.h; y++)
             os64_memcpy(before + (size_t)y * inner.w, gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x,
                         (size_t)inner.w * sizeof(uint32_t));
-    bool found = yonder_paint_from(g.page.tree, inner, whole, scroll, PAGE_PAPER, dark, g.paint_cache,
-                                   g.paint_scratch, v, box);
+    bool found = paint_part(gl, v, inner, whole, box);
     refused = yonder_paint_layers_refused;
     s_cost.covered_paints++;
     if (!found) {
         s_cost.covered_again++;
-        yonder_paint(g.page.tree, inner, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        (void)paint_part(gl, v, inner, whole, NULL);
         refused = yonder_paint_layers_refused > refused ? yonder_paint_layers_refused : refused;
         check = false;
     }
@@ -18210,7 +18246,7 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
         }
         s_paint_check_box = box;
         s_paint_check_groups = -1;
-        yonder_paint(g.page.tree, inner, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        (void)paint_part(gl, v, inner, whole, NULL);
         s_paint_check_box = NULL;
         int64_t first = -1;
         for (int32_t y = 0; y < win.h && first < 0; y++) {
@@ -18262,7 +18298,7 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
             continue;
         s_cost.covered_pieces++;
         s_effects_past_video = false;
-        yonder_paint(g.page.tree, rest[i], whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        (void)paint_part(gl, v, rest[i], whole, NULL);
         refused = yonder_paint_layers_refused > refused ? yonder_paint_layers_refused : refused;
     }
     canvases_acknowledge();

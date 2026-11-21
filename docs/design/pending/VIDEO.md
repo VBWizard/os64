@@ -645,8 +645,24 @@ no second kind of half-open group: its kept drawings (made, used,
 spoiled) and the walk's `inside` answers are those of a paint that never
 met them. (A group kept around the cover is opened with its whole
 bounds, the culled parts' included, which changes nothing it lays.)
-Each piece of a split R is a paint of its own, with its own layers'
-budget, as every paint of a part already is (paint.h, yonder_paint).
+Each piece of a split R, and the covered part, is a paint of its own
+with the window's clip narrowed to its rectangle (`paint_part`): a
+filtered layer is grown past its view by the filter's reach and laid
+through that clip, and must not be laid over a part another of the
+split's paints has drawn (Codex, #698).
+
+**The layers' budget decides alike.** A paint charges each layer it takes
+and each backdrop filter against a budget of YONDER_FILTER_AREA_VIEWS
+whole views, and past it draws the rest plain; a paint culled beneath a
+cover charges nothing for what it culled, and each piece of a split has
+a budget of its own, so either could take a layer the ordinary paint of R
+would draw plain, over the picture or beside it (Codex, #698). So the
+cover is used only when `flow_layer_area_bound` — at least what any paint
+of R or a part of it can charge (each layer's bounds met with R, in its
+own pixels through a matrix; each backdrop filter's part) — fits the
+budget: then no paint of R refuses a layer, and every one decides them
+as the ordinary paint does. One past it is painted the ordinary way,
+counted in the record.
 `flow_paint_path` names the groups that hold a box (outermost first),
 which rule 1 reads (none may lay a layer) and the checking mode tests.
 
