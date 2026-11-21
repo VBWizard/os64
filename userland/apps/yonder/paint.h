@@ -273,6 +273,23 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_re
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
                   yonder_scratch_t *scratch, const yonder_verbs_t *verbs);
 
+// The same paint of a `viewport` that `cover` draws over (VIDEO.md § 5, The
+// paint beneath the picture): nothing before the cover is drawn — not the
+// canvas, not the root's backgrounds, nothing the walk emits before it
+// (flow_visit_groups_from) — and from the cover on, all as yonder_paint
+// draws it. The caller's to have found a cover whose pixels fill the
+// viewport. False when the walk never handed the cover over: the viewport
+// then holds only what came after it, and the caller paints it again with
+// yonder_paint.
+bool yonder_paint_from(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_rect_t whole,
+                       flow_point_t scroll, uint32_t paper, const yonder_dark_t *dark,
+                       yonder_paint_cache_t *cache, yonder_scratch_t *scratch, const yonder_verbs_t *verbs,
+                       const flow_box_t *cover);
+
+// How many groups the painter has open now: read by a verb as it draws, so
+// a check can hold it to flow_paint_path's groups for the box it is drawing.
+extern int32_t yonder_paint_groups_open;
+
 // One of `box`'s boxes — its border box `rect` (in any coordinates), or
 // the padding or content box inside it. A percentage padding counts as
 // none, as content_of's does; TEXT is the border box.

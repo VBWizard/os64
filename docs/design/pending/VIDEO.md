@@ -639,12 +639,16 @@ video's draw tells its player the fitted size; a box that changes
 between paints spoils its group's kept drawing; a canvas's draw
 acknowledges its damage (`os64_dom_canvas_painted`). That last needs a
 decision, since the page's glow is a canvas redrawn every frame, wholly
-under the video: left unacknowledged, its damage would mark the picture
-again at every turn. **Ruled here:** a canvas's damage whose shown part
-lies wholly inside a cover is acknowledged without a paint. Its bitmap
-is always current; damage only schedules a repaint, and whatever later
-uncovers the canvas (the video moved, resized, ended) repaints that
-part from the bitmap.
+under the video, and a canvas inside a group marks the whole view when
+it changes: left unacknowledged, its damage would mark the view again at
+every turn, video paused or not. **Ruled here:** after a covered paint,
+every canvas marked for it is looked up and acknowledged
+(`yonder_scripts_canvas_bitmap`, which applies a pending reset, then
+`yonder_scripts_canvas_painted`, no script between, as libdom's contract
+asks). The paint covered every mark (R is the dirty part's bounds), so
+wherever the canvas can be seen it was drawn, and under the cover it
+cannot be; its bitmap is current, and whatever later uncovers it (the
+video moved, resized, ended) repaints that part from the bitmap.
 
 **What it is not.** It is not occlusion culling in general (an opaque
 image, an opaque background over the page): that wants "is this box

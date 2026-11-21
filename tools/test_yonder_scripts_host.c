@@ -6705,6 +6705,7 @@ static uint32_t *stand_in_shot(void) {
     yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
     return screen.surf.pixels;
 }
+#include "test_yonder_cover.inc"
 #include "test_yonder_svg_images.inc"
 #include "test_yonder_canvas.inc"
 #include "test_yonder_animation.inc"
@@ -13148,6 +13149,14 @@ int main(void)
         printf("yonder restyle: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
+    if(getenv("YONDER_COVER_ONLY")) {
+        cover_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"cover: text released");
+        check(live==0,"cover: heap empty");
+        printf("yonder cover: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_FAIRNESS_ONLY")) {
         fairness_cases();
         os64_text_font_release(probe_font);
@@ -13180,6 +13189,7 @@ int main(void)
     svg_gradient_window_cases();
     svg_radial_window_cases();
     svg_partial_window_cases();
+    cover_cases();
     custom_census_cases();
     custom_element_parse_case();
     svg_cache_window_cases();

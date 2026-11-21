@@ -1197,6 +1197,7 @@ static bool shadow_kept(const Painter *p, const Round *shape, const Round *times
 void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 uint64_t yonder_paint_cuts;
 uint64_t yonder_paint_boxes;
+int32_t yonder_paint_groups_open;
 uint32_t yonder_paint_layers_refused;
 
 static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
@@ -2897,6 +2898,7 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
     Painter *p = ctx;
     PaintGroups *gs = p->groups;
     int32_t d = gs->depth++;
+    yonder_paint_groups_open = gs->depth;
     if (d >= PAINT_GROUPS) {
         if (gs->hidden != 0)
             return;
@@ -3010,6 +3012,7 @@ static void group_close(void *ctx, const flow_box_t *box)
     Painter *p = ctx;
     PaintGroups *gs = p->groups;
     int32_t d = --gs->depth;
+    yonder_paint_groups_open = gs->depth;
     uint8_t alpha = (uint8_t)(((uint32_t)box->style->opacity * 255 + 500) / 1000);
     if (d >= PAINT_GROUPS) {
         if (gs->hidden != 0) {
@@ -3085,8 +3088,17 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_re
                   flow_point_t scroll, uint32_t paper, const yonder_dark_t *dark,
                   yonder_paint_cache_t *cache, yonder_scratch_t *scratch, const yonder_verbs_t *verbs)
 {
+    (void)yonder_paint_from(tree, viewport, whole, scroll, paper, dark, cache, scratch, verbs, NULL);
+}
+
+bool yonder_paint_from(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_rect_t whole,
+                       flow_point_t scroll, uint32_t paper, const yonder_dark_t *dark,
+                       yonder_paint_cache_t *cache, yonder_scratch_t *scratch, const yonder_verbs_t *verbs,
+                       const flow_box_t *cover)
+{
     PaintGroups groups = {.depth = 0,
                           .filter_left = (int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h};
+    yonder_paint_groups_open = 0;
     flow_cut_memo_t cuts;
     flow_cut_memo_open(&cuts, tree);
     Painter p = {.v = verbs, .tree = tree, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,
@@ -3105,9 +3117,12 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_re
     // there is nothing else.
     uint32_t canvas = owner != NULL && owner->style->has_background ? paper_of(&p, owner->style->background)
                                                                     : paper;
-    if (flow_alpha(canvas) != 255)
+    // Under a cover the canvas and its layers are beneath it, as everything
+    // the walk would emit before it is.
+    if (cover == NULL && flow_alpha(canvas) != 255)
         fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, paper);
-    fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, canvas);
+    if (cover == NULL)
+        fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, canvas);
     // The canvas's layers, from the bottom up, across the whole view, each
     // placed in the ROOT's origin box, whichever element they came from
     // (Backgrounds 3 § 2.11.2: the body's background is drawn as if the
@@ -3117,7 +3132,7 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_re
     // view whatever each layer's background-clip says, `text` included: the
     // canvas's painting area IS the canvas (§ 2.11.1), and Chrome fills it.
     bool sheet = owner != NULL && flow_background_has_image(owner->style);
-    for (int32_t i = owner != NULL ? flow_background_layers(owner->style) - 1 : -1; i >= 0; i--) {
+    for (int32_t i = owner != NULL && cover == NULL ? flow_background_layers(owner->style) - 1 : -1; i >= 0; i--) {
         flow_layer_t l = flow_background_layer(owner->style, i);
         os64_gui_rect_t origin = yonder_box_edge(root, root->rect, l.origin);
         yonder_tile_t tile;
@@ -3129,10 +3144,15 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_re
                                   viewport);
         }
     }
+    bool found = cover == NULL;
     if (root != NULL) {
         flow_visitor_t v = {paint_box, group_open, group_close, &p, paint_outline, group_inside};
-        flow_visit_groups(tree, viewport, scroll, &v);
+        if (cover == NULL)
+            flow_visit_groups(tree, viewport, scroll, &v);
+        else
+            flow_visit_groups_from(tree, viewport, scroll, &v, cover, &found);
     }
     yonder_paint_cuts += cuts.worked;
     flow_cut_memo_close(&cuts);
+    return found;
 }

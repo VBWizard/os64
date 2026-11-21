@@ -3635,6 +3635,10 @@ static struct {
     // the main thread's time asking (the pick) and drawing them.
     uint64_t video_frames, video_pictures, video_plain, video_general;
     uint64_t video_ask_us, video_draw_us;
+    // The paints a video covered (view_paint_parts): those that began at the
+    // video, the pieces of their rest painted the ordinary way, and those
+    // painted again because the walk never handed the video over.
+    uint64_t covered_paints, covered_pieces, covered_again;
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
@@ -3783,6 +3787,26 @@ static uint64_t s_effects_boxes_from;
 // counted after it was drawn over the video, and says so — what is before
 // it is what a paint inside the picture would not need (VIDEO.md V.7.1).
 static bool s_effects_past_video;
+
+// `--paint-check[=N]`: every Nth covered paint (10 unless said) is painted
+// the ordinary way too and the two compared to the pixel, with the groups
+// open at the cover's draw held to flow_paint_path's (none, for a cover);
+// the record says how many were compared and the first that differed
+// (view_paint_parts).
+static uint32_t s_paint_check, s_paint_checked;
+static uint64_t s_paint_compared, s_paint_differed;
+// The box an ordinary paint under the check records the groups open at
+// (timed_canvas), and what it found: -1 while not drawn.
+static const flow_box_t *s_paint_check_box;
+static int32_t s_paint_check_groups = -1;
+
+// The canvases whose damage was marked since the last paint
+// (canvas_damage_mark), which a covered paint acknowledges
+// (canvases_acknowledge); past the room, none is, as without a cover.
+#define MARKED_CANVASES 16
+static const os64_html_node_t *s_marked_canvases[MARKED_CANVASES];
+static int32_t s_nmarked_canvases;
+static bool s_marked_canvases_lost;
 
 static void effects_reset(void)
 {
@@ -8711,6 +8735,11 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (unsigned long)s_cost.video_frames, (unsigned long)s_cost.video_ask_us,
                (unsigned long)s_cost.video_pictures, (unsigned long)s_cost.video_plain,
                (unsigned long)s_cost.video_general, (unsigned long)s_cost.video_draw_us);
+    if (s_cost.covered_paints > 0)
+        dt_put(t, "; paints a video covered %lu (from the video up), %lu pieces of their rest painted the ordinary way, %lu "
+               "painted again",
+               (unsigned long)s_cost.covered_paints, (unsigned long)s_cost.covered_pieces,
+               (unsigned long)s_cost.covered_again);
     // Each video's player, as gplay's readout counts it.
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         os64_media_player_facts_t vf;
@@ -11422,9 +11451,12 @@ static void video_rate_say(void)
     }
 }
 
+static bool video_cover_rect(const Video *v, const flow_box_t *b, os64_gui_rect_t *out);
+
 // In an open frame of the display: each video that wants it is asked for
 // the picture shown at the blank a publish now is seen at (the answer's
-// blank plus one period), and its box marked when the picture changed.
+// blank plus one period), and its box marked when the picture changed —
+// only the part its copy writes, when the video is a cover.
 static void videos_tick(void)
 {
     if (!s_frames.open)
@@ -11452,6 +11484,13 @@ static void videos_tick(void)
             v->sizing = 0;          // the picture at the size told
         v->frame = fr;
         s_cost.video_pictures++;
+        // A new frame changes only the pixels its copy writes: a cover's
+        // part is marked, not the box (VIDEO.md § 5, The paint beneath the
+        // picture).
+        os64_gui_rect_t covered;
+        if (video_cover_rect(v, flow_box_for(g.page.tree, v->node), &covered) &&
+            os64_rect_intersect(covered, part, &covered))
+            part = covered;
         s_video_marking = true;
         mark_part(part);
         s_video_marking = false;
@@ -11677,6 +11716,11 @@ static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_
     const flow_box_t *box=p->tree?flow_box_for(p->tree,node):NULL;
     if(!box || !box->replaced || box->style->visibility!=FLOW_VISIBLE)return;
     s_cost.canvas_marks++;
+    // The shown page's, which a covered paint acknowledges (canvases_acknowledge).
+    if(p==&g.page){
+        if(s_nmarked_canvases<MARKED_CANVASES)s_marked_canvases[s_nmarked_canvases++]=node;
+        else s_marked_canvases_lost=true;
+    }
     s_marking_canvas=node;
     canvas_damage_part(p,box,width,height,damage);
     s_marking_canvas=NULL;
@@ -17183,13 +17227,25 @@ static void pane_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_g
 // picture is, scaled (a picture from before a resize, at its old size, is
 // drawn so until the new one comes). The size the player converts to is
 // told here, where the fitted rectangle is known.
+// The fitted picture of `v` in `b`'s content rectangle `c` (in any one
+// coordinate space), and whether the frame in hand is converted at its
+// size, which is when the plain copy writes it (pane_video; the cover a
+// video gives a paint, video_cover_rect, asks the same).
+static bool video_fitted(const Video *v, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t *at)
+{
+    *at = yonder_object_rect(b->style, c, zoomed_px(v->width, g.page.laid_zoom),
+                             zoomed_px(v->height, g.page.laid_zoom));
+    const os64_media_player_frame_t *fr = &v->frame;
+    return fr->pixels != NULL && fr->w > 0 && fr->h > 0 && fr->w == (uint32_t)at->w && fr->h == (uint32_t)at->h;
+}
+
 static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     Video *v = video_of(b->node);
     if (v == NULL || v->width == 0 || v->height == 0)
         return;
-    os64_gui_rect_t at = yonder_object_rect(b->style, c, zoomed_px(v->width, g.page.laid_zoom),
-                                            zoomed_px(v->height, g.page.laid_zoom));
+    os64_gui_rect_t at;
+    bool fits = video_fitted(v, b, c, &at);
     // Converted at most VIDEO_CONVERT_MAX a side (each of the player's
     // frames is that large); a bigger fitted rectangle takes the general
     // path, scaled up.
@@ -17210,7 +17266,6 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
     const os64_media_player_frame_t *fr = &v->frame;
     if (fr->pixels == NULL || fr->w == 0 || fr->h == 0)
         return;
-    bool fits = fr->w == (uint32_t)at.w && fr->h == (uint32_t)at.h;
     int64_t began = os64_micros();
     for (int32_t k = 0; k < gp->n; ++k) {
         Glass *gl = gp->now[k];
@@ -17897,6 +17952,8 @@ static void timed_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
 static void timed_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     uint64_t began = cycles();
+    if (b == s_paint_check_box)
+        s_paint_check_groups = yonder_paint_groups_open;
     pane_canvas(ctx, b, c, clip);
     bool video = b->node != NULL && b->node->kind == OS64_HTML_ELEMENT && b->node->tag == OS64_HTML_TAG_VIDEO;
     char what[48];
@@ -17957,6 +18014,171 @@ static void timed_pixels(void *ctx, os64_gui_rect_t rect, const uint32_t *argb)
     cost_end(PS_LAID);
 }
 
+// THE PAINT BENEATH THE PICTURE (VIDEO.md § 5, V.7.1). The cover `v` gives
+// a paint: in document coordinates, the pixels its plain copy writes of
+// the frame in hand — the fitted picture met with its content box and its
+// clip, as pane_video cuts them — when that frame is converted at the
+// fitted size, the walk opens no group around its draw (flow_paint_path),
+// the page draws videos at all (modern), the box is drawn, and no line's
+// ellipsis cuts it. False otherwise.
+static bool video_cover_rect(const Video *v, const flow_box_t *b, os64_gui_rect_t *out)
+{
+    if (!g.page.modern || g.page.tree == NULL || b == NULL || !b->replaced || b->unpainted ||
+        b->style->visibility != FLOW_VISIBLE || v->width == 0 || v->height == 0 ||
+        flow_paint_path(g.page.tree, b, NULL, 0) != 0)
+        return false;
+    flow_cut_memo_t cuts;
+    flow_cut_memo_open(&cuts, g.page.tree);
+    bool cut = false;
+    for (const flow_box_t *a = b->parent; a != NULL && !cut; a = a->parent)
+        cut = a->kind == FLOW_BOX_LINE && flow_cut_memo_get(&cuts, a).on;
+    flow_cut_memo_close(&cuts);
+    if (cut)
+        return false;
+    flow_point_t scroll = scroll_now();
+    os64_gui_rect_t content = yonder_content_rect(b);
+    flow_point_t off = flow_box_doc_offset(b, scroll);
+    content.x += off.x;
+    content.y += off.y;
+    os64_gui_rect_t at;
+    if (!video_fitted(v, b, content, &at) || !os64_rect_intersect(at, content, out))
+        return false;
+    return !b->clipped || os64_rect_intersect(*out, flow_box_doc_clip(b, scroll), out);
+}
+
+// The cover for a paint of `view` (document coordinates): the video whose
+// cover meets it most, its box in `*box` and its cover in `*covered`; NULL
+// for none.
+static const Video *video_cover(os64_gui_rect_t view, const flow_box_t **box, os64_gui_rect_t *covered)
+{
+    const Video *best = NULL;
+    int64_t most = 0;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        const Video *v = &s_videos[i];
+        const flow_box_t *b = v->node != NULL && g.page.tree != NULL ? flow_box_for(g.page.tree, v->node) : NULL;
+        os64_gui_rect_t c, met;
+        if (b == NULL || !video_cover_rect(v, b, &c) || !os64_rect_intersect(c, view, &met))
+            continue;
+        if ((int64_t)met.w * met.h > most) {
+            most = (int64_t)met.w * met.h;
+            best = v;
+            *box = b;
+            *covered = c;
+        }
+    }
+    return best;
+}
+
+// After a covered paint: each canvas marked for it is looked up (which
+// applies a pending reset) and acknowledged, no script between. Wherever
+// it can be seen it was drawn, and under the cover it cannot be (VIDEO.md
+// § 5, the side effects).
+static void canvases_acknowledge(void)
+{
+    for (int32_t i = 0; !s_marked_canvases_lost && i < s_nmarked_canvases; i++) {
+        canvas_bitmap_t bitmap;
+        if (yonder_scripts_canvas_bitmap(g.page.scripts, s_marked_canvases[i], &bitmap))
+            yonder_scripts_canvas_painted(g.page.scripts, s_marked_canvases[i]);
+    }
+}
+
+// `view` (document coordinates) painted: through the cover a video gives it
+// when there is one — the covered part from the video up, the rest of
+// `view`, at most four rectangles, the ordinary way — or the ordinary way
+// whole. The layers drawn plain, the most of any of its paints.
+static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t view, os64_gui_rect_t whole)
+{
+    flow_point_t scroll = scroll_now();
+    const yonder_dark_t *dark = s_dark ? &kDark : NULL;
+    const flow_box_t *box = NULL;
+    os64_gui_rect_t covered, inner;
+    if (video_cover(view, &box, &covered) == NULL || !os64_rect_intersect(covered, view, &inner)) {
+        yonder_paint(g.page.tree, view, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        return yonder_paint_layers_refused;
+    }
+    uint32_t refused = 0;
+    bool check = s_paint_check != 0 && ++s_paint_checked % s_paint_check == 0;
+    // Under the check, the window's pixels of the covered part as they
+    // were, then as the covered paint leaves them.
+    os64_gui_rect_t win = {inner.x + gl->dx, inner.y + gl->dy, inner.w, inner.h};
+    size_t n = (size_t)inner.w * (size_t)inner.h;
+    uint32_t *before = check ? os64_malloc(n * sizeof(uint32_t)) : NULL;
+    uint32_t *after = check ? os64_malloc(n * sizeof(uint32_t)) : NULL;
+    check = check && before != NULL && after != NULL && win.x >= 0 && win.y >= 0 &&
+            (uint32_t)(win.x + win.w) <= gl->surf->width && (uint32_t)(win.y + win.h) <= gl->surf->height;
+    if (check)
+        for (int32_t y = 0; y < win.h; y++)
+            os64_memcpy(before + (size_t)y * inner.w, gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x,
+                        (size_t)inner.w * sizeof(uint32_t));
+    bool found = yonder_paint_from(g.page.tree, inner, whole, scroll, PAGE_PAPER, dark, g.paint_cache,
+                                   g.paint_scratch, v, box);
+    refused = yonder_paint_layers_refused;
+    s_cost.covered_paints++;
+    if (!found) {
+        s_cost.covered_again++;
+        yonder_paint(g.page.tree, inner, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        refused = yonder_paint_layers_refused > refused ? yonder_paint_layers_refused : refused;
+        check = false;
+    }
+    if (check) {
+        for (int32_t y = 0; y < win.h; y++) {
+            uint32_t *row = gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x;
+            os64_memcpy(after + (size_t)y * inner.w, row, (size_t)inner.w * sizeof(uint32_t));
+            os64_memcpy(row, before + (size_t)y * inner.w, (size_t)inner.w * sizeof(uint32_t));
+        }
+        s_paint_check_box = box;
+        s_paint_check_groups = -1;
+        yonder_paint(g.page.tree, inner, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        s_paint_check_box = NULL;
+        int64_t first = -1;
+        for (int32_t y = 0; y < win.h && first < 0; y++) {
+            const uint32_t *row = gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x;
+            for (int32_t x = 0; x < win.w && first < 0; x++)
+                if ((row[x] ^ after[(size_t)y * inner.w + x]) & 0x00ffffffu)
+                    first = (int64_t)y * inner.w + x;
+        }
+        s_paint_compared++;
+        if (first >= 0 || s_paint_check_groups != 0) {
+            s_paint_differed++;
+            char named[96] = "", line[256];
+            if (box->node != NULL && box->node->kind == OS64_HTML_ELEMENT)
+                element_named(named, sizeof(named), "", box->node);
+            os64_snprintf(line, sizeof(line),
+                          "a covered paint differs from the ordinary one: %s, R %d,%d %dx%d, first pixel %s%ld,%ld, "
+                          "groups predicted 0, found %d",
+                          named[0] ? named : "a video", (int)inner.x, (int)inner.y, (int)inner.w, (int)inner.h,
+                          first >= 0 ? "" : "none ", first >= 0 ? (long)(inner.x + first % inner.w) : 0L,
+                          first >= 0 ? (long)(inner.y + first / inner.w) : 0L, (int)s_paint_check_groups);
+            yonder_diag_failed_seen(g.page.diag, "paint check", line);
+            os64_debug_log(line);
+        }
+        char said[96];
+        os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)s_paint_compared,
+                      (unsigned long)s_paint_differed);
+        yonder_diag_fact(g.page.diag, "paint check", said);
+    }
+    os64_free(before);
+    os64_free(after);
+    // The rest of `view`, the ordinary way: above and below the covered
+    // part across the whole width, then left and right of it in its rows.
+    os64_gui_rect_t rest[4] = {
+        {view.x, view.y, view.w, inner.y - view.y},
+        {view.x, inner.y + inner.h, view.w, view.y + view.h - (inner.y + inner.h)},
+        {view.x, inner.y, inner.x - view.x, inner.h},
+        {inner.x + inner.w, inner.y, view.x + view.w - (inner.x + inner.w), inner.h},
+    };
+    for (int32_t i = 0; i < 4; i++) {
+        if (rest[i].w <= 0 || rest[i].h <= 0)
+            continue;
+        s_cost.covered_pieces++;
+        s_effects_past_video = false;
+        yonder_paint(g.page.tree, rest[i], whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        refused = yonder_paint_layers_refused > refused ? yonder_paint_layers_refused : refused;
+    }
+    canvases_acknowledge();
+    return refused;
+}
+
 static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
 {
     (void)t;
@@ -17992,13 +18214,13 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         g.paint_scratch = yonder_scratch_new();
     os64_gui_rect_t whole = {w->bounds.x - gl.dx, w->bounds.y - gl.dy, w->bounds.w, w->bounds.h};
     s_effects_past_video = false;
-    yonder_paint(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL,
-                 g.paint_cache, g.paint_scratch, &v);
+    uint32_t refused = view_paint_parts(&gl, &v, view, whole);
+    s_nmarked_canvases = 0;
+    s_marked_canvases_lost = false;
     // Filtered and blended groups, and backdrops, painted plain (FILTER.md
     // § 6, MIX_BLEND.md § 4), the most any one paint did.
-    if (yonder_paint_layers_refused > 0 && g.page.diag != NULL)
-        yonder_diag_missing_seen(g.page.diag, "css-value", "layer: drawn plain",
-                                 yonder_paint_layers_refused);
+    if (refused > 0 && g.page.diag != NULL)
+        yonder_diag_missing_seen(g.page.diag, "css-value", "layer: drawn plain", refused);
     if (pane.canvas_label.run != NULL)
         os64_text_run_release(pane.canvas_label.run);
     yonder_paint_stage = NULL;
@@ -20446,6 +20668,12 @@ int main(int argc, char **argv)
         else if (os64_strlen(argv[arg]) > 16 && os64_memcmp(argv[arg], "--cascade-check=", 16) == 0) {
             int64_t every = os64_atoi(argv[arg] + 16);
             s_cascade_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
+        }
+        else if (os64_streq(argv[arg], "--paint-check"))
+            s_paint_check = 10;
+        else if (os64_strlen(argv[arg]) > 14 && os64_memcmp(argv[arg], "--paint-check=", 14) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 14);
+            s_paint_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
         }
         else if (os64_streq(argv[arg], "--video-rate"))
             s_video_rate_s = 5;
