@@ -39,7 +39,18 @@ extern os64_image_status_t fixture_gif_sequence_next(os64_image_sequence_t *);
  * (tools/test_dom_media.inc) plays the element against a fake host. */
 void yonder_media_start(const yonder_media_env_t *env) { (void)env; }
 void yonder_media_stop(void) {}
-yonder_media_t *yonder_media_open(const yonder_media_request_t *r) { (void)r; return NULL; }
+/* Unless `fake_media_on`: then a session opens and plays, a long clip
+ * whose position follows yonder's clock from `fake_media_began`, for the
+ * loop's fairness case (a media event always ready). */
+static bool fake_media_on;
+static uint64_t fake_media_began;
+static int fake_media_session;
+uint64_t yonder_now_ms(void);
+yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
+{
+    (void)r;
+    return fake_media_on ? (yonder_media_t *)&fake_media_session : NULL;
+}
 void yonder_media_close(yonder_media_t *m) { (void)m; }
 void yonder_media_play(yonder_media_t *m) { (void)m; }
 void yonder_media_pause(yonder_media_t *m) { (void)m; }
@@ -50,7 +61,16 @@ bool yonder_media_frame(yonder_media_t *m, int64_t blank, int64_t period, os64_m
 void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height) { (void)m; (void)width; (void)height; }
 bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out)
 { (void)m; memset(out, 0, sizeof(*out)); return false; }
-void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out) { (void)m; memset(out, 0, sizeof(*out)); }
+void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (m != (yonder_media_t *)&fake_media_session)
+        return;
+    out->probed = out->seekable = out->current = out->future = out->enough = out->loaded = true;
+    out->duration = out->arrived = 3600;
+    out->sounding = true;
+    out->position = (double)(yonder_now_ms() - fake_media_began) / 1000.0;
+}
 int yonder_media_can_play(const char *type) { (void)type; return 0; }
 void yonder_media_reap(void) {}
 #ifdef OS64_JS_BYTECODE_ROUND_TRIP
@@ -12953,6 +12973,37 @@ static void sheet_worker_cases(void)
  * its own main. */
 #ifndef YONDER_HOST_FAKES_ONLY
 #include "test_yonder_svg_hit.inc"
+/* THE LOOP'S FAIRNESS (task_order.h, ordinary_task): a video playing
+ * while every turn takes 300 ms keeps a media event always ready, since
+ * each turn is past timeupdate's 250 ms. A timer must still run, the old
+ * going ahead of the young; and the media events must still come, one at
+ * a time (they coalesce). */
+static void fairness_cases(void)
+{
+    fake_media_on = true;
+    fake_media_began = now_ms;
+    probe_page("<!doctype html><video id=v src=clip.mp4 autoplay muted loop></video><p id=out>-</p><script>"
+               "let ticks=0,updates=0;const say=()=>document.getElementById('out').textContent=ticks+' '+updates;"
+               "document.getElementById('v').ontimeupdate=()=>{updates++;say()};"
+               "setInterval(()=>{ticks++;say()},250);</script>", true);
+    for (int i = 0; i < 80; i++) {
+        now_ms += 300;
+        script_turn();
+        players_ask_run();
+        media_turn();
+    }
+    const os64_html_node_t *p = probe_id("out");
+    const char *text = p && p->first_child ? p->first_child->text : "";
+    unsigned ticks = 0, updates = 0;
+    sscanf(text, "%u %u", &ticks, &updates);
+    check(ticks >= 20, "fairness: a timer runs while a media event is always ready");
+    check(updates >= 20, "fairness: and the media events still come");
+    if (ticks < 20 || updates < 20) printf("  ticks %u, timeupdates %u in 80 turns of 300 ms\n", ticks, updates);
+    check(updates <= 80, "fairness: one timeupdate a delivery at most, never a backlog");
+    probe_drop();
+    fake_media_on = false;
+}
+
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -13059,6 +13110,14 @@ int main(void)
         printf("yonder restyle: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
+    if(getenv("YONDER_FAIRNESS_ONLY")) {
+        fairness_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"fairness: text released");
+        check(live==0,"fairness: heap empty");
+        printf("yonder fairness: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_PROFILE_ONLY")) {
         layout_profile_cases();
         os64_text_font_release(probe_font);
@@ -13075,6 +13134,7 @@ int main(void)
     inserted_frame_cases();
     stand_in_paint_cases();
     canvas_window_cases();
+    fairness_cases();
     layout_profile_cases();
     graft_browser_cases();graft_base_cases();
     restyle_browser_cases();
