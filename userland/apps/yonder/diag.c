@@ -1408,6 +1408,10 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     for (size_t i = 0; i < YONDER_LAYOUT_CASCADE_REASONS; ++i)
         total->cascade_refused[i] = layout_sum(total->cascade_refused[i], sample->cascade_refused[i]);
     if (cascade_sampled) total->cascade_reason_names = sample->cascade_reason_names;
+    ADD(kept_nothing); ADD(kept_paint);
+    for (size_t i = 0; i < YONDER_LAYOUT_RESTYLE_REASONS; ++i)
+        total->kept_declined[i] = layout_sum(total->kept_declined[i], sample->kept_declined[i]);
+    if (sample->restyle_reason_names != NULL) total->restyle_reason_names = sample->restyle_reason_names;
     ADD(model_calls); ADD(layouts); ADD(refusals); ADD(clock_errors);
 #undef ADD
     const yonder_layout_stats_t *s = total;
@@ -1438,6 +1442,26 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     os64_snprintf(needed_key, sizeof(needed_key), "%s needed", key);
     yonder_diag_needed_text(&s->needed, line, sizeof(line));
     yonder_diag_fact(d, needed_key, line);
+    // `<key> kept`: the restyles kept in the shown tree, and the declined
+    // by reason, the reasons that never happened left out.
+    if (s->restyle_reason_names != NULL) {
+        char kept_key[64];
+        os64_snprintf(kept_key, sizeof(kept_key), "%s kept", key);
+        int k = os64_snprintf(line, sizeof(line), "nothing changed %lu, paint only %lu; declined",
+                              (unsigned long)s->kept_nothing, (unsigned long)s->kept_paint);
+        size_t at = k > 0 && (size_t)k < sizeof(line) ? (size_t)k : 0;
+        const char *sep = ": ";
+        for (size_t i = 1; i < YONDER_LAYOUT_RESTYLE_REASONS; ++i) {
+            if (s->kept_declined[i] == 0) continue;
+            k = os64_snprintf(line + at, sizeof(line) - at, "%s%s %lu", sep, s->restyle_reason_names[i],
+                              (unsigned long)s->kept_declined[i]);
+            if (k < 0 || (size_t)k >= sizeof(line) - at) break;
+            at += (size_t)k;
+            sep = ", ";
+        }
+        if (sep[0] == ':' && at + 5 < sizeof(line)) os64_memcpy(line + at, " none", 6);
+        yonder_diag_fact(d, kept_key, line);
+    }
     // `<key> cascade`: how many cascades were updated and how many built
     // fresh, by reason, the reasons that never happened left out; then the
     // anchored :has() compounds its cascades held and what bare ones cost.

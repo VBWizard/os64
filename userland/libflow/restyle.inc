@@ -28,13 +28,15 @@ static bool keep_derived_equal(const FStyled *o, const FStyled *n)
 
 // Whether a paint-only change leaves the public tree's stacking as it was:
 // an opacity that stays on its side of 1 (a group) and of 0 (unpainted, by
-// `transparent`), and blending, masks and visibility untouched. The stacking
-// is rebuilt by no restyle in place, so a change to it is declined.
+// `transparent`), a box blended and masked as before (as the public tree
+// asks, for an atom and for a box that is none), and its visibility. The
+// stacking is rebuilt by no restyle in place, so a change to it is declined.
 static bool keep_stacking_same(const flow_style_t *a, const flow_style_t *b)
 {
     return (a->opacity < 1000) == (b->opacity < 1000) && (a->opacity == 0) == (b->opacity == 0) &&
-           a->mix_blend == b->mix_blend && a->visibility == b->visibility &&
-           os64_memcmp(&a->masks, &b->masks, sizeof(a->masks)) == 0;
+           f_blended(a, false) == f_blended(b, false) && f_blended(a, true) == f_blended(b, true) &&
+           f_masked(a, false) == f_masked(b, false) && f_masked(a, true) == f_masked(b, true) &&
+           a->visibility == b->visibility;
 }
 
 // A pseudo-element's content text, NULL for none.

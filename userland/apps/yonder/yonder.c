@@ -1455,7 +1455,11 @@ static uint64_t s_trees_given, s_ticks_moved;
 // into the timeline they replace.
 static void page_show(Page *p, flow_tree_t *tree)
 {
-    tree_free(p->tree);
+    // A restyle kept in the tree shows the tree it was kept in
+    // (flow_restyle_in_place): the same tree again, not one to free. It is
+    // still a tree given, which the observers read as something moved.
+    if (p->tree != tree)
+        tree_free(p->tree);
     p->tree = tree;
     s_trees_given++;
     flow_timeline_commit(&p->timeline, tree);
@@ -1818,6 +1822,31 @@ static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node
 // yonder's own (none yet, no memory for the scopes, sheets changed, sheets
 // that no longer match), then libgarb's refusals in their order, by
 // libgarb's own names.
+// THE RESTYLE KEPT IN THE SHOWN TREE (flow_restyle_in_place), on unless
+// `--restyle-in-place=off` asks for every change to be laid out, to compare.
+static bool s_restyle_in_place = true;
+
+// The shown tree, when `p` is a staged rebuild of the page on screen at its
+// own sizes and the restyle kept in that tree took the change; NULL when it
+// is no such layout or the restyle declined.
+static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, int32_t height, uint32_t zoom);
+// A restyle kept or declined, counted in the record's `layout kept` line
+// while the profile is on.
+static void restyle_counted(const Page *p, flow_restyle_t kept)
+{
+    static const char *const names[YONDER_LAYOUT_RESTYLE_REASONS] = {
+        "none", "no tree", "no history", "structure", "inputs", "styles", "membership",
+        "geometry", "motion", "stacking", "decoration", "room"};
+    _Static_assert(YONDER_LAYOUT_RESTYLE_REASONS == FLOW_RESTYLE_NREASONS, "restyle refusal diagnostics");
+    if (!s_layout_profile || layout_profile_diag(p) == NULL)
+        return;
+    yonder_layout_stats_t sample = {.restyle_reason_names = names};
+    if (kept.kind == FLOW_RESTYLE_NOTHING) sample.kept_nothing = 1;
+    else if (kept.kind == FLOW_RESTYLE_PAINT) sample.kept_paint = 1;
+    else if ((unsigned)kept.why < YONDER_LAYOUT_RESTYLE_REASONS) sample.kept_declined[kept.why] = 1;
+    layout_profile_add(p, &sample);
+}
+
 static const char *const *cascade_reason_names(void)
 {
     _Static_assert(4 + GARB_UPDATE_REASONS - 1 == YONDER_LAYOUT_CASCADE_REASONS, "cascade refusal diagnostics");
@@ -1994,7 +2023,14 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     s_env.now_ms = animation_time_ms();
     geometry_layout_total++;
     webfonts_layout_begins(p);
-    flow_tree_t *fresh = profile_flow_layout(p, width);
+    // A script's change to the page on screen, staged beside it at its own
+    // sizes: first the restyle kept in the shown tree (BRIEF_LAYOUT_NEEDS.md
+    // N1), which writes paint-only changes into that tree and builds no
+    // box; the same tree then stands for the new layout (page_show keeps
+    // it). Declined, the page is laid out as before.
+    flow_tree_t *fresh = restyle_kept_shown(p, reclaim, width, height, zoom);
+    if (fresh == NULL)
+        fresh = profile_flow_layout(p, width);
     // The tree on screen holds the faces its runs were shaped in until it
     // is freed — each one a size of a file, counted against the text
     // engine's budget and its face limit — so a layout at new sizes (a
@@ -3601,6 +3637,21 @@ static bool page_records_shown(const Page *p)
 {
     return p->diag != NULL && p->diag == g.page.diag;
 }
+static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, int32_t height, uint32_t zoom)
+{
+    if (!s_restyle_in_place || reclaim != &g.page || p == &g.page || g.page.tree == NULL ||
+        p->restyle_from != g.page.tree || width != g.page.laid_width || height != g.page.laid_height ||
+        zoom != g.page.laid_zoom)
+        return NULL;
+    // The inputs the layout that follows would graft with, the fonts'
+    // revision brought up to date first, as profile_flow_layout does.
+    layout_font_dependencies(p);
+    flow_reuse_inputs_t inputs = layout_inputs(p, NULL);
+    flow_restyle_t kept = flow_restyle_in_place(g.page.tree, page_doc(p), page_model(p), &s_env, &inputs, width);
+    restyle_counted(p, kept);
+    return kept.kind != FLOW_RESTYLE_DECLINED ? g.page.tree : NULL;
+}
+
 static void cost_reset(void)
 {
     os64_memset(&s_cost, 0, sizeof(s_cost));
@@ -19999,6 +20050,8 @@ int main(int argc, char **argv)
             s_script_audit = true;
         else if (os64_streq(argv[address_arg], "--layout-profile"))
             s_layout_profile = true;
+        else if (os64_streq(argv[address_arg], "--restyle-in-place=off"))
+            s_restyle_in_place = false;
         else if (os64_streq(argv[address_arg], "--cascade-check"))
             s_cascade_check = 10;
         else if (os64_strlen(argv[address_arg]) > 16 && os64_memcmp(argv[address_arg], "--cascade-check=", 16) == 0) {
