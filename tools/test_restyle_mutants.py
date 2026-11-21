@@ -45,10 +45,6 @@ mutants = [
     # The verdict.
     ('geometry-kept', RESTYLE, '    if (!keep_derived_equal(was, is) || !f_style_paint_only(&was->style, &is->style)) {',
      '    if (!keep_derived_equal(was, is)) {'),
-    ('stacking-kept', RESTYLE, '    if (!keep_stacking_same(&was->style, &is->style)) {',
-     '    if (!keep_stacking_same(&was->style, &is->style) && 0) {'),
-    ('opacity-across-one-kept', RESTYLE, '    return (a->opacity < 1000) == (b->opacity < 1000) &&\n',
-     '    return\n'),
     ('motion-kept', RESTYLE, '    if (was->motion != NULL || is->motion != NULL) {', '    if (0) {'),
     ('decoration-kept', RESTYLE, '    if (!same_decoration) {', '    if (0) {'),
     # The writes.
@@ -64,8 +60,9 @@ mutants = [
     # Attributes, matrices and reach (the cold read's three).
     ('every-attribute-styled-only', SNAPSHOT, '            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry)))',
      '            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry) && 0))'),
-    ('a-matrix-crossing-kept', RESTYLE, '        if (tried.through != f->through || tried.upright != f->upright) {',
-     '        if (0) {'),
+    ('a-matrix-crossing-kept', RESTYLE,
+     '        if (!layers_same || (framed && (tried.through != f->through || tried.upright != f->upright))) {',
+     '        if (!layers_same) {'),
     ('the-reach-not-worked-again', RESTYLE, '        reach_stacked(tree);\n        sticky_reach_scrolled(tree);\n        // A range',
      '        (void)0;\n        // A range'),
     # Codex's round 1.

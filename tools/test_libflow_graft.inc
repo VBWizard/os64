@@ -385,22 +385,29 @@ static void restyle_in_place_cases(void)
         const char *name, *html, *id, *style;
         flow_restyle_kind_t kind;
         flow_restyle_reason_t why;
+        uint64_t later;     // the change's time, ms after the first layout's
     } one[] = {
+        // Another element's colour, with the animated one's sample moved on:
+        // the animation's own clock is the tick's, not a restyle's.
+        {"restyle: an animated element whose sample moved is declined as motion",
+         "<!doctype html><style>@keyframes k{to{color:blue}}#c{animation:k 10s linear;color:red}</style>"
+         "<span id=c>moving</span><p id=o>other</p>", "o", "color:green",
+         FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_MOTION, 5000},
         // An outline on a positioned box that makes no context is its
         // context's to paint, which must learn that it holds one.
         {"restyle: an outline on a positioned box is kept, and held where a whole layout holds it",
          "<!doctype html><div id=r style='position:relative'>ringed</div>", "r", "position:relative;outline:2px solid red",
-         FLOW_RESTYLE_PAINT, FLOW_RESTYLE_NONE},
+         FLOW_RESTYLE_PAINT, FLOW_RESTYLE_NONE, 0},
         // plus-darker is drawn as normal, with no group; multiply needs one.
         {"restyle: a blend that comes to need a group is declined as stacking",
          "<!doctype html><div id=m style='mix-blend-mode:plus-darker'>blended</div>", "m", "mix-blend-mode:multiply",
-         FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_STACKING},
+         FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_STACKING, 0},
         // The child's colour at the animation's start is red either way, but
         // its `inherit` endpoint follows the parent's.
         {"restyle: an animation's inherited endpoint moving is declined as motion",
          "<!doctype html><style>@keyframes k{from{color:red}to{color:inherit}}#c{animation:k 10s linear}</style>"
          "<div id=a style='color:red'><span id=c>moving</span></div>", "a", "color:blue",
-         FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_MOTION},
+         FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_MOTION, 0},
     };
     // Laid out as a face lays out a page that animates: on a timeline, its
     // animations ticking, from time 0.
@@ -415,6 +422,7 @@ static void restyle_in_place_cases(void)
         p.env.timeline = tl;
         os64_html_set_attr(p.doc, graft_node(&p, one[i].id), "style", one[i].style, strlen(one[i].style));
         graft_update(&p);
+        p.env.now_ms = one[i].later;
         whole = graft_layout(&p, NULL, NULL, NULL);
         kept = restyle_keep(&p, old);
         bool ok = old && whole && kept.kind == one[i].kind && kept.why == one[i].why &&
@@ -424,4 +432,17 @@ static void restyle_in_place_cases(void)
         expect(one[i].name, ok, ok ? NULL : said);
         flow_free(whole); flow_free(old); flow_timeline_free(tl); sheeted_close(&p);
     }
+    // The check names an outline a kept tree does not hold where a whole
+    // layout holds one: two layouts of one document, one with the root's
+    // mark cleared, as a restyle that did not hand an outline up would
+    // leave it.
+    sheeted_open(&p, "<!doctype html><div style='position:relative;outline:2px solid red'>ringed</div>", 800, 600);
+    old = graft_layout(&p, NULL, NULL, NULL);
+    whole = graft_layout(&p, NULL, NULL, NULL);
+    if (old != NULL)
+        ((flow_box_t *)flow_root(old))->holds_outline = false;
+    expect("restyle: the check names an outline not held",
+           old && whole && flow_root(whole)->holds_outline &&
+           restyle_check_says(old, whole, "an outline not held", flow_root(old)->node), NULL);
+    flow_free(whole); flow_free(old); sheeted_close(&p);
 }

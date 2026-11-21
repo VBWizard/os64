@@ -29,21 +29,6 @@ static bool keep_derived_equal(const FStyled *o, const FStyled *n)
            (o->pseudo[0] != NULL) == (n->pseudo[0] != NULL) && (o->pseudo[1] != NULL) == (n->pseudo[1] != NULL);
 }
 
-// Whether a paint-only change leaves the public tree's stacking as it was:
-// an opacity that stays on its side of 1 (a group), a box blended and
-// masked as before (as the public tree asks, for an atom and for a box that
-// is none), and its visibility. The stacking is rebuilt by no restyle in
-// place, so a change to it is declined. An opacity's side of 0 is the
-// record's `transparent` (an unpainted box), which keep_derived_equal
-// compares.
-static bool keep_stacking_same(const flow_style_t *a, const flow_style_t *b)
-{
-    return (a->opacity < 1000) == (b->opacity < 1000) &&
-           f_blended(a, false) == f_blended(b, false) && f_blended(a, true) == f_blended(b, true) &&
-           f_masked(a, false) == f_masked(b, false) && f_masked(a, true) == f_masked(b, true) &&
-           a->visibility == b->visibility;
-}
-
 // Whether two pseudo-elements' nodes hold the same content text (or both
 // none): a different text is a different box, which is placement's.
 static bool keep_same_text(const os64_html_node_t *a, const os64_html_node_t *b)
@@ -98,10 +83,10 @@ static bool keep_judge(FKeeps *k, FStyled *was, const FStyled *is)
         k->why = FLOW_RESTYLE_GEOMETRY;
         return false;
     }
-    if (!keep_stacking_same(&was->style, &is->style)) {
-        k->why = FLOW_RESTYLE_STACKING;
-        return false;
-    }
+    // Whether a box comes to be a group or a context, which changes the
+    // layers, is asked of the boxes themselves before anything is written
+    // (flow_restyle_in_place). An opacity's side of 0 is the record's
+    // `transparent` (an unpainted box), which keep_derived_equal compares.
     // The fragments hold a copy of their element's decoration and its
     // colours (layout.c), which no restyle in place refreshes.
     if (!same_decoration) {
