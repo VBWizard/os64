@@ -25,7 +25,11 @@ struct FReuseSnapshot {
     // attribute boxes may read (reuse_attr_styled_only): boxes or their
     // text may differ, whatever the styles say, so a tree kept by a
     // restyle in place (flow_restyle_in_place) cannot answer for it.
+    // `structural_at` and `structural_what`: the first such change's target
+    // and what it was, for the record (flow_restyle_t.at, .detail).
     bool structural;
+    const os64_html_node_t *structural_at;
+    char structural_what[40];
     // Nodes, hash slots and per-box call records share this allocation.
 };
 
@@ -153,8 +157,21 @@ static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
         if (entry->kind == OS64_HTML_CHANGE_CHILDREN || entry->kind == OS64_HTML_CHANGE_TEXT ||
             (entry->kind == OS64_HTML_CHANGE_STATE && entry->target != NULL &&
              entry->target->kind != OS64_HTML_ELEMENT) ||
-            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry)))
+            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry))) {
+            if (!r->structural) {
+                r->structural_at = entry->target;
+                const char *what = entry->kind == OS64_HTML_CHANGE_CHILDREN ? "children"
+                                 : entry->kind == OS64_HTML_CHANGE_TEXT ? "text"
+                                 : entry->kind == OS64_HTML_CHANGE_STATE ? "adopted sheets" : "attribute ";
+                size_t n = os64_strlen(what);
+                os64_memcpy(r->structural_what, what, n);
+                if (entry->kind == OS64_HTML_CHANGE_ATTR && entry->attr_name != NULL)
+                    for (const char *a = entry->attr_name; *a != '\0' && n + 1 < sizeof(r->structural_what); a++)
+                        r->structural_what[n++] = *a;
+                r->structural_what[n] = '\0';
+            }
             r->structural = true;
+        }
         reuse_mark(r, entry->target);
         for (size_t i = 0; i < entry->nadded; ++i) reuse_mark(r, entry->added[i]);
         for (size_t i = 0; i < entry->nremoved; ++i) reuse_mark(r, entry->removed[i]);

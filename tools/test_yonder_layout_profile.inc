@@ -170,6 +170,12 @@ static void restyle_kept_cases(void)
     kept=yonder_diag_fact_value(g.page.diag,"layout kept");
     check(kept && strstr(kept,"structure 2"),"kept: a text is declined as structure");
     if(!kept || !strstr(kept,"structure 2")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    /* The record says what each decline found, and where. */
+    const char *declined=yonder_diag_fact_value(g.page.diag,"layout kept, declined at");
+    check(declined && strstr(declined,"structure 1: text (at p#q") && strstr(declined,"geometry 1: placement byte ") &&
+          strstr(declined,"stacking 1: a group came or went"),
+          "kept: the record names what each decline found, and where");
+    if(!declined || !strstr(declined,"structure 1: text (at p#q")) printf("  declined at: %s\n",declined?declined:"(none)");
     /* An attribute box generation or placement read themselves (a canvas's
      * size) is structural, whatever the styles say. */
     check(!os64_html_set_attr(g.page.way.doc,probe_id("cv"),"width","400",3) && script_rebuild(),

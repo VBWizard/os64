@@ -1449,6 +1449,11 @@ typedef struct {
     flow_restyle_kind_t kind;
     flow_restyle_reason_t why;  /* when declined */
     uint64_t written;           /* elements and pseudo-elements whose style was written */
+    /* When declined, for the record: the node it was declined at (NULL for
+     * none, as for another width) and what was found there, in words
+     * ("text", "attribute title", "derived quotes", "placement byte 212"). */
+    const os64_html_node_t *at;
+    char detail[48];
 } flow_restyle_t;
 flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
                                      const os64_page_t *model, const flow_env_t *env,

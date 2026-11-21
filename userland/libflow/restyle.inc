@@ -16,17 +16,24 @@
 // are reached again from where placement left them, which the tick does
 // not do.
 
-// Whether the derived parts of two records of one element agree, but for
-// the decoration, which keep_judge judges apart: what boxes, lists, links,
-// anchors and pseudo-elements were built from.
-static bool keep_derived_equal(const FStyled *o, const FStyled *n)
+// The first derived part of two records of one element that differs, by
+// name, or NULL when they agree (the decoration is keep_judge's to judge
+// apart): what boxes, lists, links, anchors and pseudo-elements were built
+// from.
+static const char *keep_derived_differs(const FStyled *o, const FStyled *n)
 {
-    return o->holds_block == n->holds_block && o->link == n->link && o->lists == n->lists &&
-           o->lists_or_dls == n->lists_or_dls && o->items == n->items && o->in_nobr == n->in_nobr &&
-           o->quotes == n->quotes && o->has_rp == n->has_rp && o->anchor == n->anchor &&
-           o->fixed_anchor == n->fixed_anchor && o->transparent == n->transparent &&
-           o->lays_out_items == n->lays_out_items && o->pseudo_declared == n->pseudo_declared &&
-           (o->pseudo[0] != NULL) == (n->pseudo[0] != NULL) && (o->pseudo[1] != NULL) == (n->pseudo[1] != NULL);
+    return o->holds_block != n->holds_block ? "holds_block"
+         : o->link != n->link ? "link"
+         : o->lists != n->lists || o->lists_or_dls != n->lists_or_dls || o->items != n->items ? "lists"
+         : o->in_nobr != n->in_nobr ? "in_nobr"
+         : o->quotes != n->quotes ? "quotes"
+         : o->has_rp != n->has_rp ? "has_rp"
+         : o->anchor != n->anchor || o->fixed_anchor != n->fixed_anchor ? "anchor"
+         : o->transparent != n->transparent ? "transparent"
+         : o->lays_out_items != n->lays_out_items ? "lays_out_items"
+         : o->pseudo_declared != n->pseudo_declared || (o->pseudo[0] != NULL) != (n->pseudo[0] != NULL) ||
+           (o->pseudo[1] != NULL) != (n->pseudo[1] != NULL) ? "pseudo-elements"
+         : NULL;
 }
 
 // Whether two pseudo-elements' nodes hold the same content text (or both
@@ -48,16 +55,29 @@ typedef struct {
     FKeep *pairs;
     int32_t n, cap;
     flow_restyle_reason_t why;
+    // Where the restyle declined, and what was found there (flow_restyle_t).
+    const os64_html_node_t *at;
+    char detail[48];
 } FKeeps;
+
+// A decline at `node`, said in `what`.
+static bool keep_declined(FKeeps *k, flow_restyle_reason_t why, const os64_html_node_t *node, const char *what)
+{
+    k->why = why;
+    k->at = node;
+    size_t n = 0;
+    for (; what != NULL && what[n] != '\0' && n + 1 < sizeof(k->detail); n++)
+        k->detail[n] = what[n];
+    k->detail[n] = '\0';
+    return false;
+}
 
 // Judges one element's (or pseudo-element's) two records: nothing to do,
 // one more pair to write, or the reason the restyle declines.
-static bool keep_judge(FKeeps *k, FStyled *was, const FStyled *is)
+static bool keep_judge(FKeeps *k, const os64_html_node_t *node, FStyled *was, const FStyled *is)
 {
-    if (was == NULL || is == NULL) {
-        k->why = FLOW_RESTYLE_MEMBERSHIP;
-        return false;
-    }
+    if (was == NULL || is == NULL)
+        return keep_declined(k, FLOW_RESTYLE_MEMBERSHIP, node, was == NULL ? "no record before" : "no record after");
     // An animated element's sampled style may come out the same while what
     // its keyframes resolve against moved: an `inherit` endpoint, or an
     // implicit keyframe's underlying value. It is kept only when its
@@ -65,41 +85,52 @@ static bool keep_judge(FKeeps *k, FStyled *was, const FStyled *is)
     // came out the same as well.
     if ((was->motion != NULL) != (is->motion != NULL) ||
         (was->motion != NULL && (was->motion->nanims != is->motion->nanims ||
-                                 !f_style_equal(&was->motion->base, &is->motion->base)))) {
-        k->why = FLOW_RESTYLE_MOTION;
-        return false;
-    }
+                                 !f_style_equal(&was->motion->base, &is->motion->base))))
+        return keep_declined(k, FLOW_RESTYLE_MOTION, node, "an animation's underlying style");
     bool same_style = f_style_equal(&was->style, &is->style);
     bool same_decoration = was->decoration == is->decoration &&
                            (was->decoration == 0 || os64_memcmp(&was->decoration_colors, &is->decoration_colors,
                                                                 sizeof(was->decoration_colors)) == 0);
-    if (same_style && same_decoration && keep_derived_equal(was, is))
+    const char *derived = keep_derived_differs(was, is);
+    if (same_style && same_decoration && derived == NULL)
         return true;
-    if (was->motion != NULL || is->motion != NULL) {
-        k->why = FLOW_RESTYLE_MOTION;
-        return false;
+    if (was->motion != NULL || is->motion != NULL)
+        return keep_declined(k, FLOW_RESTYLE_MOTION, node, "an animated element");
+    if (derived != NULL) {
+        char said[48] = "derived ";
+        os64_strcopy(said + 8, sizeof(said) - 8, derived);
+        return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node, said);
     }
-    if (!keep_derived_equal(was, is) || !f_style_paint_only(&was->style, &is->style)) {
-        k->why = FLOW_RESTYLE_GEOMETRY;
-        return false;
+    if (!f_style_paint_only(&was->style, &is->style)) {
+        int64_t at = f_style_placement_byte(&was->style, &is->style);
+        if (at < 0)
+            return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node,
+                                 at == -2 ? "a transform or filter came or went" : "a placement list");
+        // "placement byte N", N in decimal (the offset in flow_style_t).
+        char said[48] = "placement byte ", digits[24];
+        size_t n = 0, used = os64_strlen(said);
+        do {
+            digits[n++] = (char)('0' + at % 10);
+            at /= 10;
+        } while (at > 0 && n < sizeof(digits));
+        while (n > 0 && used + 1 < sizeof(said))
+            said[used++] = digits[--n];
+        said[used] = '\0';
+        return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node, said);
     }
     // Whether a box comes to be a group or a context, which changes the
     // layers, is asked of the boxes themselves before anything is written
     // (flow_restyle_in_place). An opacity's side of 0 is the record's
-    // `transparent` (an unpainted box), which keep_derived_equal compares.
+    // `transparent` (an unpainted box), which keep_derived_differs compares.
     // The fragments hold a copy of their element's decoration and its
     // colours (layout.c), which no restyle in place refreshes.
-    if (!same_decoration) {
-        k->why = FLOW_RESTYLE_DECORATION;
-        return false;
-    }
+    if (!same_decoration)
+        return keep_declined(k, FLOW_RESTYLE_DECORATION, node, "a decoration or its colours");
     if (k->n == k->cap) {
         int32_t cap = k->cap != 0 ? k->cap * 2 : 16;
         FKeep *grown = os64_realloc(k->pairs, (size_t)cap * sizeof(*grown));
-        if (grown == NULL) {
-            k->why = FLOW_RESTYLE_ROOM;
-            return false;
-        }
+        if (grown == NULL)
+            return keep_declined(k, FLOW_RESTYLE_ROOM, node, "no memory for the pairs");
         k->pairs = grown;
         k->cap = cap;
     }
@@ -119,26 +150,22 @@ static bool keep_is_pseudo(const FStyles *b, const os64_html_node_t *key)
 // `b` against the tree's `old`, or false with the reason.
 static bool keep_collect(FKeeps *k, FStyles *old, const FStyles *b)
 {
-    if (b->map.count != old->map.count) {
-        k->why = FLOW_RESTYLE_MEMBERSHIP;
-        return false;
-    }
+    if (b->map.count != old->map.count)
+        return keep_declined(k, FLOW_RESTYLE_MEMBERSHIP, NULL, "the number of records");
     for (size_t i = 0; i < b->map.cap; i++) {
         const os64_html_node_t *node = b->map.keys[i];
         if (node == NULL || keep_is_pseudo(b, node))
             continue;
         FStyled *was = f_map_get(&old->map, node);
         const FStyled *is = b->map.vals[i];
-        if (!keep_judge(k, was, is))
+        if (!keep_judge(k, node, was, is))
             return false;
         for (int p = 0; p < 2; p++) {
             if (is->pseudo[p] == NULL)
                 continue;
-            if (!keep_same_text(was->pseudo[p], is->pseudo[p])) {
-                k->why = FLOW_RESTYLE_GEOMETRY;
-                return false;
-            }
-            if (!keep_judge(k, f_map_get(&old->map, was->pseudo[p]), f_style_of(b, is->pseudo[p])))
+            if (!keep_same_text(was->pseudo[p], is->pseudo[p]))
+                return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node, p ? "::after's text" : "::before's text");
+            if (!keep_judge(k, node, f_map_get(&old->map, was->pseudo[p]), f_style_of(b, is->pseudo[p])))
                 return false;
         }
     }
@@ -157,7 +184,7 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
                                      const os64_page_t *model, const flow_env_t *env,
                                      const flow_reuse_inputs_t *inputs, int32_t width)
 {
-    flow_restyle_t out = {FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_NO_TREE, 0};
+    flow_restyle_t out = {FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_NO_TREE, 0, NULL, ""};
     if (tree == NULL || doc == NULL || env == NULL || inputs == NULL || tree->doc != doc || tree->incomplete ||
         tree->styles == NULL || tree->restyle_spent)
         return out;
@@ -172,21 +199,31 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
     if (r == NULL || !inputs->resource_owner || !reuse_read(r, &ignored))
         return out;
     out.why = FLOW_RESTYLE_STRUCTURE;
-    if (r->structural)
+    if (r->structural) {
+        out.at = r->structural_at;
+        os64_strcopy(out.detail, sizeof(out.detail), r->structural_what);
         return out;
+    }
     out.why = FLOW_RESTYLE_INPUTS;
-    if (r->width != width || r->doc != doc || doc->quirks == OS64_HTML_QUIRKS ||
-        !reuse_inputs_equal(&r->inputs, inputs) || !reuse_environment_equal(&r->env, env))
+    const char *input = r->width != width || r->doc != doc ? "another width"
+                      : doc->quirks == OS64_HTML_QUIRKS ? "a quirks-mode page"
+                      : !reuse_inputs_equal(&r->inputs, inputs) ? "fonts, pictures or form state"
+                      : !reuse_environment_equal(&r->env, env) ? "the environment" : NULL;
+    if (input != NULL) {
+        os64_strcopy(out.detail, sizeof(out.detail), input);
         return out;
+    }
     FStyles *b = f_style_build_reusing(doc, model, env, tree->styles, false);
     out.why = FLOW_RESTYLE_STYLES;
     if (b == NULL || b->lists_refused) {
         f_style_free(b);
         return out;
     }
-    FKeeps k = {NULL, 0, 0, FLOW_RESTYLE_NONE};
+    FKeeps k = {NULL, 0, 0, FLOW_RESTYLE_NONE, NULL, ""};
     if (!keep_collect(&k, tree->styles, b)) {
         out.why = k.why;
+        out.at = k.at;
+        os64_strcopy(out.detail, sizeof(out.detail), k.detail);
         os64_free(k.pairs);
         f_style_free(b);
         return out;
@@ -249,6 +286,9 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
         if (!layers_same) {
             f_map_free(&written);
             out.why = FLOW_RESTYLE_STACKING;
+            out.at = box->node;
+            os64_strcopy(out.detail, sizeof(out.detail),
+                         is_group(&tried_box) != is_group(box) ? "a group came or went" : "a context came or went");
             os64_free(values);
             os64_free(k.pairs);
             f_style_free(b);
@@ -314,10 +354,10 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
         }
     }
     tree->styles->cascade_updates = b->cascade_updates;
-    out = (flow_restyle_t){k.n > 0 ? FLOW_RESTYLE_PAINT : FLOW_RESTYLE_NOTHING, FLOW_RESTYLE_NONE, (uint64_t)k.n};
+    out = (flow_restyle_t){k.n > 0 ? FLOW_RESTYLE_PAINT : FLOW_RESTYLE_NOTHING, FLOW_RESTYLE_NONE, (uint64_t)k.n, NULL, ""};
     if (!whole) {
         tree->restyle_spent = true;
-        out = (flow_restyle_t){FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_ROOM, (uint64_t)k.n};
+        out = (flow_restyle_t){FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_ROOM, (uint64_t)k.n, NULL, "an anonymous box past the map's room"};
     }
     os64_free(values);
     os64_free(k.pairs);

@@ -1848,6 +1848,44 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
     else if (kept.kind == FLOW_RESTYLE_PAINT) sample.kept_paint = 1;
     else if ((unsigned)kept.why < YONDER_LAYOUT_RESTYLE_REASONS) sample.kept_declined[kept.why] = 1;
     layout_profile_add(p, &sample);
+    if (kept.kind != FLOW_RESTYLE_DECLINED || (unsigned)kept.why >= YONDER_LAYOUT_RESTYLE_REASONS)
+        return;
+    // `layout kept, declined at`: the declines by reason and what was found,
+    // counted, each with the element of the latest, the most counted first.
+    static struct { uint8_t why; char detail[48], at[96]; uint64_t n; } seen[16];
+    static int nseen;
+    int i = 0;
+    for (; i < nseen && (seen[i].why != kept.why || !os64_streq(seen[i].detail, kept.detail)); i++) {}
+    if (i == nseen && nseen < (int)(sizeof(seen) / sizeof(seen[0]))) {
+        seen[nseen].why = (uint8_t)kept.why;
+        os64_strcopy(seen[nseen].detail, sizeof(seen[nseen].detail), kept.detail);
+        seen[nseen].n = 0;
+        nseen++;
+    }
+    if (i == nseen)
+        return;
+    seen[i].n++;
+    const os64_html_node_t *at = kept.at;
+    if (at != NULL && at->kind != OS64_HTML_ELEMENT)
+        at = os64_html_flat_parent(page_doc(p), at);
+    seen[i].at[0] = '\0';
+    if (at != NULL && at->kind == OS64_HTML_ELEMENT)
+        element_named(seen[i].at, sizeof(seen[i].at), "", at);
+    for (; i > 0 && seen[i].n > seen[i - 1].n; i--) {
+        __typeof__(seen[0]) swap = seen[i];
+        seen[i] = seen[i - 1];
+        seen[i - 1] = swap;
+    }
+    char line[768];
+    size_t used = 0;
+    for (int k = 0; k < nseen && used + 1 < sizeof(line); k++) {
+        int w = os64_snprintf(line + used, sizeof(line) - used, "%s%s %lu: %s%s%s%s", k ? "; " : "",
+                              names[seen[k].why], (unsigned long)seen[k].n, seen[k].detail[0] ? seen[k].detail : "-",
+                              seen[k].at[0] ? " (at " : "", seen[k].at, seen[k].at[0] ? ")" : "");
+        if (w < 0 || (size_t)w >= sizeof(line) - used) break;
+        used += (size_t)w;
+    }
+    yonder_diag_fact(layout_profile_diag(p), "layout kept, declined at", line);
 }
 
 // The reasons a layout's cascade is built fresh, by the profile's index:
