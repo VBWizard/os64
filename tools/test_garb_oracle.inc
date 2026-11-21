@@ -336,6 +336,54 @@ static bool oracle_walk(uint64_t seed, int steps, unsigned *taken, unsigned *ref
     return ok;
 }
 
+// The oracle cannot see the matcher's own mistakes (a fresh cascade makes
+// them too), so the :has() walks has_matches narrows are held to answers
+// worked out by hand: a leading `>`, `+` or `~` with the compounds after it
+// going down, and with a sibling combinator among them, which it must not
+// narrow. (tools/test_garb_select.py holds the same forms to cssselect2.)
+static bool oracle_has_walks(void)
+{
+    static const char kPage[] =
+        "<!doctype html><body>"
+        "<div id=a><p id=a1>x</p><span id=a2><i>y</i></span></div>"
+        "<div id=b><span id=b1></span><p id=b2></p></div>"
+        "<div id=c><div id=c1><a id=ca></a></div></div>"
+        "<div id=d><div id=d1></div><div id=d2><a id=da></a></div></div>"
+        "<div id=e><p id=e1><span id=e2></span></p></div>"
+        "<h1 id=h></h1><p id=hp><span id=hs></span></p><div id=hd></div>"
+        "<h2 id=k></h2><div id=kd><a id=ka></a></div><p id=kp><a id=kpa></a></p>"
+        "<section id=t>text first<a id=ta></a></section>";
+    static const struct { const char *sel, *want; } kCases[] = {
+        {"div:has(> p ~ span)", "a"}, {"div:has(> p + span)", "a"}, {"div:has(> p span)", "e"},
+        {"div:has(> div a)", "c d"}, {"div:has(> div ~ div a)", "d"}, {":has(> a)", "c1 d2 kd kp t"},
+        {"h1:has(+ p span)", "h"}, {"h1:has(+ p ~ div)", "h"}, {"h1:has(+ div)", ""},
+        {"h2:has(+ div)", "k"}, {"h2:has(~ p > a)", "k"}, {"h2:has(~ div a)", "k"},
+    };
+    os64_html_document_t *doc = update_doc(kPage);
+    bool ok = true;
+    for (size_t i = 0; i < sizeof(kCases) / sizeof(*kCases); i++) {
+        garb_parsed_t r;
+        garb_parse_values(kCases[i].sel, strlen(kCases[i].sel), &r);
+        garb_selectors_t *sel = garb_selectors_parse(&r, r.values, r.nvalues, OS64_HTML_NO_QUIRKS, false);
+        char got[256] = "";
+        os64_html_node_t *els[64];
+        int n = oracle_elements(doc->document, els, 64);
+        for (int k = 0; sel != NULL && k < n; k++) {
+            const os64_html_attr_t *id = os64_html_attr(els[k], "id");
+            if (id == NULL || !garb_selector_matches(sel, 0, els[k])) continue;
+            if (got[0]) strcat(got, " ");
+            strcat(got, id->value);
+        }
+        if (sel == NULL || strcmp(got, kCases[i].want) != 0) {
+            fprintf(stderr, "FAIL oracle: %s matches '%s', not '%s'\n", kCases[i].sel, got, kCases[i].want);
+            ok = false;
+        }
+        garb_free(&r);
+    }
+    os64_html_document_free(doc);
+    return ok;
+}
+
 // The compare itself says where two cascades differ, and nothing where
 // they do not.
 static bool oracle_compare_says(void)
@@ -363,7 +411,7 @@ static bool oracle_compare_says(void)
 static int cascade_oracle(int argc, char **argv)
 {
     size_t baseline = live;
-    if (!oracle_compare_says()) return 1;
+    if (!oracle_compare_says() || !oracle_has_walks()) return 1;
     uint64_t first = argc > 2 ? strtoull(argv[2], NULL, 10) : 1;
     int seeds = argc > 2 ? 1 : 8;
     int steps = argc > 3 ? atoi(argv[3]) : 400;

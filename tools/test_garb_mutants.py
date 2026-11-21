@@ -307,6 +307,18 @@ mutants = [
     ('a-bare-turn-is-not-counted', CASCADE,
      '            c->bare_work.turned++;\n',
      '', UPDATES),
+    # A :has() walk is narrowed only where all it reaches lies under what
+    # its leading `>`, `+` or `~` places, from what that compound matches;
+    # an update visits each element once.
+    ('a-sideways-walk-is-narrowed', SELECT,
+     '        if (x->c[j].left != C_DESCENDANT && x->c[j].left != C_CHILD)\n            return false;',
+     '        if (false)\n            return false;', UPDATES),
+    ('a-narrowed-walk-skips-its-first-compound', SELECT,
+     '    if (!compound_matches(sel, &x->c[0], start, el))\n        return false;',
+     '', UPDATES),
+    ('a-visit-repeats-in-an-update', CASCADE,
+     '    if (s->visited == c->updates + 1) return true;',
+     '    if (false && s->visited == c->updates + 1) return true;', UPDATES),
     ('a-pseudo-class-filters', SELECT,
      '    return s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS || s->kind == S_ATTR;',
      '    return s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS || s->kind == S_ATTR || s->kind == S_PSEUDO;',

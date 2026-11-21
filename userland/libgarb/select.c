@@ -1323,7 +1323,8 @@ static bool match_complex(const garb_selectors_t *sel, const Complex *x,
 
 // :has(): some element the relative selector reaches from `el` — its
 // subtree for a descendant or child, its following siblings and their
-// subtrees for a sibling — matches with `el` as the anchor. Brute force,
+// subtrees for a sibling — matches with `el` as the anchor. A walk of every
+// element under `root` (has_matches narrows where it starts when it can),
 // which is what makes :has() costly and why GARB.md watches it.
 static bool subtree_has(const garb_selectors_t *sel, const Complex *x, const os64_html_node_t *root,
                         const os64_html_node_t *scope, bool include_root)
@@ -1346,13 +1347,48 @@ static bool subtree_has(const garb_selectors_t *sel, const Complex *x, const os6
     return false;
 }
 
+// Whether every combinator in a relative selector after its first compound
+// goes down (descendant or child): then all it reaches lies in the subtree
+// of the element its first compound matched.
+static bool goes_down(const Complex *x)
+{
+    for (int32_t j = 1; j < x->n; j++)
+        if (x->c[j].left != C_DESCENDANT && x->c[j].left != C_CHILD)
+            return false;
+    return true;
+}
+// Whether the relative selector reaches a match from `start`, an element
+// its leading `>`, `+` or `~` puts its first compound on, when it goes down
+// from there: that compound first, then (with more compounds) start's
+// subtree.
+static bool reached_from(const garb_selectors_t *sel, const Complex *x, const os64_html_node_t *start,
+                         const os64_html_node_t *el)
+{
+    if (!compound_matches(sel, &x->c[0], start, el))
+        return false;
+    return x->n == 1 || subtree_has(sel, x, start, el, false);
+}
+// A leading `>`, `+` or `~` whose selector goes down is walked from the
+// children, the next sibling or the following siblings its first compound
+// matches, and under those alone; any other walks every element it could
+// reach.
 static bool has_matches(const garb_selectors_t *sel, const List *l, const os64_html_node_t *el)
 {
     for (int32_t i = 0; l != NULL && i < l->n; i++) {
         const Complex *x = &l->v[i];
+        bool down = goes_down(x);
         if (x->relative == C_NEXT || x->relative == C_SUBSEQUENT) {
-            for (const os64_html_node_t *s = next_el(el); s != NULL; s = next_el(s))
-                if (subtree_has(sel, x, s, el, true))
+            for (const os64_html_node_t *s = next_el(el); s != NULL; s = next_el(s)) {
+                if (down ? reached_from(sel, x, s, el) : subtree_has(sel, x, s, el, true))
+                    return true;
+                if (down && x->relative == C_NEXT)
+                    break;
+            }
+        } else if (x->relative == C_CHILD && down) {
+            const os64_html_node_t *k = el->first_child;
+            if (k != NULL && !is_el(k)) k = next_el(k);
+            for (; k != NULL; k = next_el(k))
+                if (reached_from(sel, x, k, el))
                     return true;
         } else if (subtree_has(sel, x, el, el, false)) {
             return true;

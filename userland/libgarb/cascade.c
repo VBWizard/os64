@@ -175,6 +175,8 @@ typedef struct {
     // (restyle).
     bool element_only;
     uint64_t changed, removed_children;
+    // The update that last visited it for its :has() answers (has_visit).
+    uint64_t visited;
     // A digest of the rules that matched the element itself (match_digest).
     uint64_t matched;
 } Slot;
@@ -3254,10 +3256,13 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
 // (where it happened and its ancestors, with `+`/`~` arguments their
 // previous siblings too), and at each element a restyle recomputes. A
 // filtered anchor's ask is a compare wherever its filters fail; a bare
-// one's costs up to its :has() walk (has_matches): the element's whole
-// subtree for a descendant or a `>` argument (the walk does not stop at
-// the children), and each following sibling's subtree for `+` and `~`.
-// So an update pays (elements visited) x (bare anchors) such walks, plus
+// one's costs up to its :has() walk (has_matches): the element's subtree
+// for a descendant argument; for a `>`, `+` or `~` one that goes down, the
+// children or following siblings its first compound matches and what is
+// under those; for one that turns sideways (`> a ~ b`), the subtree or
+// each following sibling's subtree.
+// So an update pays (elements visited, each at most once an update) x
+// (bare anchors) such walks, plus
 // (restyled elements) x (bare anchors) more, plus the restyle of the reach
 // of each anchor that really turned; the cascade keeps tracking. Matching
 // a restyled element against a rule whose :has() stands left of a
@@ -3268,10 +3273,15 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
 static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
 {
     if (!connected(c, a)) return true;
-    if (c->dependencies.ancestors && !mark_element(c, a)) return false;
-    if (c->has_width == 0) return true;
     Slot *s = slot_for(c, a, false);
     if (!s) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
+    // Once an update: its marking reads the document as the batch left it,
+    // so a second visit would ask the same questions and get the same
+    // answers, and what they turned is marked already.
+    if (s->visited == c->updates + 1) return true;
+    s->visited = c->updates + 1;
+    if (c->dependencies.ancestors && !mark_element(c, a)) return false;
+    if (c->has_width == 0) return true;
     c->bare_work.tested += (uint64_t)c->nbare;
     anchor_bits(c, a, c->has_scratch);
     // The answers are asked into the scratch row; the slot's row takes
@@ -3313,6 +3323,12 @@ static bool mark_has(garb_cascade_t *c, const os64_html_node_t *from, bool child
         for (const os64_html_node_t *k = from->first_child; k; k = k->next)
             if (is_el(k) && !has_visit(c, k)) return false;
     for (const os64_html_node_t *a = from; is_el(a) && connected(c, a); a = a->parent) {
+        // An element this update has visited already has had the rest of
+        // this climb visited too (its previous siblings, its ancestors and,
+        // with `+`/`~`, theirs), by the walk that visited it or an earlier
+        // one: every walk completes its climb before the next begins.
+        const Slot *seen = slot_for(c, a, false);
+        if (seen && seen->visited == c->updates + 1) break;
         if (!has_visit(c, a)) return false;
         for (const os64_html_node_t *p = preceding ? a->prev : NULL; p; p = p->prev)
             if (is_el(p) && !has_visit(c, p)) return false;
