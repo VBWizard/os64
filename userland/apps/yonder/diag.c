@@ -1482,7 +1482,7 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
             at += (size_t)k;
         }
         if (at < sizeof(line))
-            os64_snprintf(line + at, sizeof(line) - at, "; rebuilds owed while covered %lu",
+            os64_snprintf(line + at, sizeof(line) - at, "; steps owed while covered %lu",
                           (unsigned long)s->owed_covered);
         yonder_diag_fact(d, reads_key, line);
     }

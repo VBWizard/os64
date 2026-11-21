@@ -1000,9 +1000,38 @@ static bool supports(garb_reading_t how, garb_parsed_t *owner, const garb_value_
 
 // Reads one declaration for a rule: kept raw when custom or pending, else
 // its longhands, else dropped (invalid, or a property not read here).
+// Whether a value reads the `style` attribute's text: attr(style) anywhere
+// in it, a function's arguments included.
+static bool values_read_style(const garb_value_t *v, int32_t n)
+{
+    for (int32_t i = 0; i < n; i++) {
+        if (v[i].kind == GARB_FUNCTION && v[i].len == 4 && (v[i].text[0] | 0x20) == 'a' &&
+            (v[i].text[1] | 0x20) == 't' && (v[i].text[2] | 0x20) == 't' && (v[i].text[3] | 0x20) == 'r') {
+            const garb_value_t *a = v[i].children;
+            int32_t k = 0;
+            while (k < v[i].nchildren && a[k].kind == GARB_WHITESPACE)
+                k++;
+            if (k < v[i].nchildren && a[k].kind == GARB_IDENT && a[k].len == 5) {
+                bool style = true;
+                for (int32_t j = 0; j < 5; j++)
+                    style = style && (a[k].text[j] | 0x20) == "style"[j];
+                if (style)
+                    return true;
+            }
+        }
+        if (values_read_style(v[i].children, v[i].nchildren))
+            return true;
+    }
+    return false;
+}
+
 static bool read_decl(garb_cascade_t *c, garb_parsed_t *owner, const garb_decl_t *d, Decl *out)
 {
     os64_memset(out, 0, sizeof(*out));
+    // `content: attr(style)` reads the attribute an inline style write
+    // changes (garb_cascade_reads_style_attribute).
+    if (values_read_style(d->value, d->nvalue))
+        c->dependencies.style_attribute = true;
     out->decl = *d;
     out->important = d->important;
     if (garb_decl_is_custom(d)) {

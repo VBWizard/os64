@@ -46,10 +46,11 @@ SCRIPTS = 'bash tools/test_yonder_scripts_host.sh'
 
 mutants = [
     # The log merged (libhtml).
-    ('no-merge', DOM_C, '    log_merge(d, c);', '    (void)0;', [HTML]),
-    ('merge-past-children', DOM_C, '    HChange *prev = d->log_barrier;', '    HChange *prev = NULL;', [HTML]),
+    ('no-merge', DOM_C, '    log_merge(d, c);', '    if (0) log_merge(d, c);', [HTML]),
+    ('merge-past-children', DOM_C, '        d->log_barrier = copy;\n        log_index_clear(d);', '        d->log_barrier = copy;',
+     [HTML]),
     ('merge-across-attributes', DOM_C, '    if (c->kind == OS64_HTML_CHANGE_TEXT) return true;', '    return true;', [HTML]),
-    ('barrier-not-set', DOM_C, '    if (c->kind == OS64_HTML_CHANGE_CHILDREN) d->log_barrier = copy;', '    (void)0;', [HTML]),
+    ('merged-entry-left-in-the-index', DOM_C, '    if (!at) return;\n    log_index_drop(d, at);', '    if (!at) return;', [HTML]),
     # What an inline write changed (libgarb).
     ('importance-not-compared', CASCADE,
      '    return a->len == b->len && os64_memcmp(a->name, b->name, a->len) == 0 && a->important == b->important &&',
@@ -65,11 +66,15 @@ mutants = [
     ('the-table-admits-padding', PENDING, '    [GARB_FILL] = PENDING_PLAIN,',
      '    [GARB_FILL] = PENDING_PLAIN,\n    [GARB_PADDING_TOP] = PENDING_PLAIN,', [FLOW, SCRIPTS]),
     ('transform-side-not-judged', PENDING,
-     '            if (none ? f_transformed(s) : f_transformed(s) != (s->display != FLOW_DISPLAY_INLINE))',
-     '            if (0)', [FLOW]),
+     '            if (wide || (none ? f_transformed(s) : f_transformed(s) != (s->display != FLOW_DISPLAY_INLINE)))',
+     '            if (wide)', [FLOW]),
     ('filter-side-not-judged', PENDING,
-     '            if (s->display == FLOW_DISPLAY_INLINE || (none ? f_filtered(s, false) : !f_filtered(s, false)))',
-     '            if (0)', [FLOW]),
+     '            if (wide || s->display == FLOW_DISPLAY_INLINE ||\n                (none ? f_filtered(s, false) : !f_filtered(s, false)))',
+     '            if (wide)', [FLOW]),
+    ('css-wide-keywords-admitted', PENDING, '        bool wide = os64_streq(c->keyword, "initial") ||',
+     '        bool wide = false && os64_streq(c->keyword, "initial") ||', [FLOW]),
+    ('origin-says-nothing', PENDING, '        case PENDING_ORIGIN:\n            tree->pending_transforms = true;',
+     '        case PENDING_ORIGIN:\n            (void)0;', [FLOW]),
     ('collapse-admitted', PENDING, '            if (s->visibility == FLOW_COLLAPSE ||', '            if (0 &&', [FLOW]),
     ('removal-and-var-admitted', PENDING, '        if (kind == 0 || !c->declared || c->var)', '        if (kind == 0)', [FLOW]),
     ('motion-admitted', PENDING, '    if (rec == NULL || rec->motion != NULL)', '    if (rec == NULL)', [FLOW]),
@@ -79,7 +84,8 @@ mutants = [
     ('style-attribute-switch-not-asked', PENDING, '        garb_cascade_reads_style_attribute(cascade))', '        0)',
      [FLOW, SCRIPTS]),
     ('verdict-falls-back', PENDING, '            if (v > tree->pending_verdict)', '            if (1)', [FLOW]),
-    ('transforms-not-said', PENDING, '            tree->pending_transforms = true;', '            (void)0;', [FLOW, SCRIPTS]),
+    ('transforms-not-said', PENDING, '            tree->pending_transforms = true;\n            if (wide ||',
+     '            (void)0;\n            if (wide ||', [FLOW, SCRIPTS]),
     ('not-current-after-a-kept-restyle', RESTYLE, '        pending_open(tree);', '        (void)0;', [FLOW]),
     # What a read takes (libdom) and who answers it (yonder).
     ('scroll-reads-ask-for-boxes', GEOMETRY,
@@ -93,11 +99,14 @@ mutants = [
      '(need == OS64_DOM_NEED_BOXES || (need == OS64_DOM_NEED_REACH && !pending.transforms));',
      '(need != 99);', [SCRIPTS]),
     ('covered-not-owed', YONDER,
-     '    if (g.covered && page_rebuild_owed(&g.page) && shown_pending().verdict == FLOW_PENDING_PAINT) {',
+     '    if (g.covered && page_rebuild_owed(&g.page) && shown_pending().verdict != FLOW_PENDING_RESTYLE) {',
      '    if (0) {', [SCRIPTS]),
     ('owed-while-seen', YONDER,
-     '    if (g.covered && page_rebuild_owed(&g.page) && shown_pending().verdict == FLOW_PENDING_PAINT) {',
-     '    if (page_rebuild_owed(&g.page) && shown_pending().verdict == FLOW_PENDING_PAINT) {', [SCRIPTS]),
+     '    if (g.covered && page_rebuild_owed(&g.page) && shown_pending().verdict != FLOW_PENDING_RESTYLE) {',
+     '    if (page_rebuild_owed(&g.page) && shown_pending().verdict != FLOW_PENDING_RESTYLE) {', [SCRIPTS]),
+    ('owed-not-paid-before-a-layout', YONDER,
+     '    if (page_rebuild_owed(&g.page) && !script_rebuild())\n        return false;\n    int32_t offset = 0;',
+     '    int32_t offset = 0;', [SCRIPTS]),
 ]
 
 # Not run, because no host case can tell:
@@ -107,6 +116,12 @@ mutants = [
 # - window_seen paying the owed rebuild, and pointer_turn's owed rebuild
 #   before a re-hit: both need the window system's events, which the scripts
 #   host does not drive. script_rendering_step's two sides are tested.
+# - script_turn making the page current when asks wait (g.nasks): an ask a
+#   covered page's script makes, which the scripts host's cases do not.
+# - The log's barrier and its walk (log_find with the index broken): the
+#   walk is the fallback for an index that could not grow, which the hosts
+#   do not reach; with the index, the barrier's work is the index's clear,
+#   which `merge-past-children` breaks.
 
 env = dict(os.environ, YONDER_PROFILE_ONLY='1')
 caught, missed, unbuilt = [], [], []

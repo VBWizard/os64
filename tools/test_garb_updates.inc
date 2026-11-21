@@ -577,6 +577,9 @@ static void update_inline_changes(void)
     os64_html_set_attr(h.doc,p,"style","color:red!important;transform:translateX(5px)",45);
     n=garb_cascade_inline_changes(h.c,p,out,64);
     update_check(n==1 && inline_listed(out,n,GARB_COLOR,NULL),"inline: importance is a change");
+    inline_set(&h,p,"color:red;transform:translateX(6px)");
+    n=garb_cascade_inline_changes(h.c,p,out,64);
+    update_check(n==1 && inline_listed(out,n,GARB_TRANSFORM,NULL),"inline: a change inside a function's arguments is listed");
     os64_html_set_attr(h.doc,p,"style","color:red;transform:var(--t)",28);
     n=garb_cascade_inline_changes(h.c,p,out,64);
     update_check(n==1 && inline_listed(out,n,GARB_TRANSFORM,&got) && got.var,"inline: var() says so");
@@ -599,7 +602,8 @@ static void update_inline_changes(void)
     update_check(loose && garb_cascade_inline_changes(h.c,loose,out,64)==-1,"inline: an element never styled cannot be said");
     update_check(!garb_cascade_reads_style_attribute(h.c),"inline: no selector reads the style attribute");
     has_close(&h);
-    const char *readers[]={"[style*=x]{color:red}","p:is([STYLE]){color:red}","div:has(> [style]){color:red}"};
+    const char *readers[]={"[style*=x]{color:red}","p:is([STYLE]){color:red}","div:has(> [style]){color:red}",
+                           "p::after{content:attr(style)}","p::before{content:\"(\" ATTR( style ) \")\"}"};
     for(size_t i=0;i<sizeof(readers)/sizeof(*readers);i++){
         has_open(&h,readers[i],"<!doctype html><div><p style=color:red>x</p></div>");
         update_check(garb_cascade_reads_style_attribute(h.c),"inline: a selector that reads the style attribute is known");

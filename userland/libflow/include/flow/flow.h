@@ -1479,10 +1479,12 @@ bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_h
  * generation never read (flow_pending_longhand), on the same side of `none`
  * where the side makes a containing block; so every border box, padding
  * box, offset parent and scroll position the tree holds is the one a
- * layout would give. `transforms`: a longhand of the transform family is
- * pending, which moves what a transform reaches (scroll ranges, the page's
- * extent, a transformed box's rectangles). NONE says nothing changed, and
- * RESTYLE anything else, or that it cannot be said: `cascade` must be the
+ * layout would give. `transforms`: a longhand of the transform family or its
+ * origin is pending, which moves what a transform reaches (scroll ranges,
+ * the page's extent, a transformed box's rectangles). NONE says nothing the
+ * tree was styled from changed (inline styles may have been written back to
+ * what the cascade parsed), and RESTYLE anything else, or that it cannot be
+ * said: `cascade` must be the
  * page's, at the version the tree is current at. The verdict only rises
  * until the tree is made current again. A read answered from the tree is a
  * style change event that did not happen, which CSS transitions would see

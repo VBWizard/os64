@@ -662,7 +662,10 @@ static void moved(HDoc *d)
 struct HChange {
     os64_html_change_entry_t entry;
     size_t bytes;
+    HChange *prev;              /* the entry before it in the log, for log_merge's unlink */
 };
+static void log_index_drop(HDoc *d, const HChange *c);
+static void log_index_clear(HDoc *d);
 struct os64_html_reader {
     HDoc *doc;
     os64_html_reader_t *next;
@@ -695,8 +698,16 @@ static void log_drop(HDoc *d)
 {
     HChange *c = d->log_head;
     if (!c) return;
+    log_index_drop(d, c);
     d->log_head = (HChange *)c->entry.next;
-    if (!d->log_head) d->log_tail = NULL;
+    if (d->log_head) {
+        d->log_head->prev = NULL;
+    } else {
+        // An empty log has nothing to index, and the index may grow again.
+        d->log_tail = NULL;
+        log_index_clear(d);
+        d->log_index_broken = false;
+    }
     if (d->log_barrier == c) d->log_barrier = NULL;
     if (c->entry.version > d->log_floor) d->log_floor = c->entry.version;
     d->log_bytes -= c->bytes;
@@ -791,7 +802,10 @@ static char *log_string(char **at, const char *s)
  * and the move of that node are read in the order they were made. So a
  * page that writes one attribute sixty times a second with nobody reading
  * holds one entry for it, and only structural changes can grow the log to
- * its cap, where it is lost for the whole document (log_lost), as before. */
+ * its cap, where it is lost for the whole document (log_lost), as before.
+ * The entry is found through an index of the entries after the barrier
+ * (HDoc.log_index) and unlinked through its `prev`, so a merge costs a probe
+ * and not a walk of the log. */
 static bool log_same(const os64_html_change_entry_t *e, const os64_html_change_t *c)
 {
     if (e->kind != c->kind || e->target != c->target) return false;
@@ -803,15 +817,92 @@ static bool log_same(const os64_html_change_entry_t *e, const os64_html_change_t
     }
     return true;
 }
+/* THE INDEX of the entries after the barrier (HDoc.log_index), so that a
+ * merge costs a probe and not a walk of the log. */
+#define LOG_GONE ((HChange *)1)
+static size_t log_key(const HNode *target, const char *name)
+{
+    uint64_t h = (uint64_t)(uintptr_t)target * 0x9E3779B97F4A7C15ull;
+    for (; name && *name; name++) h = (h ^ (unsigned char)*name) * 0x100000001B3ull;
+    return (size_t)(h ^ (h >> 29));
+}
+static size_t log_entry_key(const HChange *c)
+{
+    return log_key(c->entry.target, c->entry.kind == OS64_HTML_CHANGE_ATTR ? c->entry.attr_name : NULL);
+}
+static void log_index_drop(HDoc *d, const HChange *c)
+{
+    if (d->log_index_used == 0 || (c->entry.kind != OS64_HTML_CHANGE_ATTR && c->entry.kind != OS64_HTML_CHANGE_TEXT))
+        return;
+    size_t mask = d->log_index_cap - 1;
+    for (size_t i = log_entry_key(c) & mask; d->log_index[i] != NULL; i = (i + 1) & mask)
+        if (d->log_index[i] == c) { d->log_index[i] = LOG_GONE; return; }
+}
+/* Every entry before a CHILDREN entry keeps its place, so none is in the
+ * index any longer. */
+static void log_index_clear(HDoc *d)
+{
+    for (size_t i = 0; d->log_index_used != 0 && i < d->log_index_cap; i++) d->log_index[i] = NULL;
+    d->log_index_used = 0;
+}
+static bool log_index_grow(HDoc *d)
+{
+    size_t live = 0;
+    for (size_t i = 0; i < d->log_index_cap; i++) live += d->log_index[i] != NULL && d->log_index[i] != LOG_GONE;
+    size_t cap = 64;
+    while (cap < 4 * (live + 1)) cap *= 2;
+    int64_t why = OS64_HTML_OK;
+    HChange **grown = d_alloc(d, cap * sizeof(*grown), &why);
+    if (!grown) return false;
+    for (size_t i = 0; i < cap; i++) grown[i] = NULL;
+    for (size_t i = 0; i < d->log_index_cap; i++) {
+        HChange *c = d->log_index[i];
+        if (c == NULL || c == LOG_GONE) continue;
+        size_t at = log_entry_key(c) & (cap - 1);
+        while (grown[at]) at = (at + 1) & (cap - 1);
+        grown[at] = c;
+    }
+    if (d->log_index) h_free(d, d->log_index);
+    d->log_index = grown; d->log_index_cap = cap; d->log_index_used = live;
+    return true;
+}
+static void log_index_put(HDoc *d, HChange *c)
+{
+    if (d->log_index_broken) return;
+    if ((d->log_index_used + 1) * 2 > d->log_index_cap && !log_index_grow(d)) {
+        d->log_index_broken = true;
+        return;
+    }
+    size_t mask = d->log_index_cap - 1, i = log_entry_key(c) & mask;
+    while (d->log_index[i] != NULL && d->log_index[i] != LOG_GONE) i = (i + 1) & mask;
+    if (d->log_index[i] == NULL) d->log_index_used++;
+    d->log_index[i] = c;
+}
+/* The entry after the barrier a change takes the place of, or NULL: by the
+ * index, or by walking the log when the index could not grow. */
+static HChange *log_find(HDoc *d, const os64_html_change_t *c)
+{
+    if (!d->log_index_broken) {
+        if (d->log_index_used == 0) return NULL;
+        size_t mask = d->log_index_cap - 1;
+        size_t i = log_key(c->target, c->kind == OS64_HTML_CHANGE_ATTR ? c->attr_name : NULL) & mask;
+        for (; d->log_index[i] != NULL; i = (i + 1) & mask)
+            if (d->log_index[i] != LOG_GONE && log_same(&d->log_index[i]->entry, c)) return d->log_index[i];
+        return NULL;
+    }
+    HChange *at = d->log_barrier ? (HChange *)d->log_barrier->entry.next : d->log_head;
+    for (; at && !log_same(&at->entry, c); at = (HChange *)at->entry.next) {}
+    return at;
+}
 static void log_merge(HDoc *d, const os64_html_change_t *c)
 {
     if (c->kind != OS64_HTML_CHANGE_ATTR && c->kind != OS64_HTML_CHANGE_TEXT) return;
-    HChange *prev = d->log_barrier;
-    HChange *at = prev ? (HChange *)prev->entry.next : d->log_head;
-    for (; at && !log_same(&at->entry, c); prev = at, at = (HChange *)at->entry.next) {}
+    HChange *at = log_find(d, c);
     if (!at) return;
-    if (prev) prev->entry.next = at->entry.next; else d->log_head = (HChange *)at->entry.next;
-    if (d->log_tail == at) d->log_tail = prev;
+    log_index_drop(d, at);
+    HChange *prev = at->prev, *next = (HChange *)at->entry.next;
+    if (prev) prev->entry.next = next ? &next->entry : NULL; else d->log_head = next;
+    if (next) next->prev = prev; else d->log_tail = prev;
     d->log_bytes -= at->bytes;
     log_refs(d, &at->entry, false);
     h_free(d, at);
@@ -858,9 +949,15 @@ static void log_change(HDoc *d, const os64_html_change_t *c)
     e->attr_ns = log_string(&strings, c->attr_ns);
     e->attr_local = log_string(&strings, c->attr_local);
     log_refs(d, e, true);
+    copy->prev = d->log_tail;
     if (d->log_tail) d->log_tail->entry.next = e; else d->log_head = copy;
     d->log_tail = copy; d->log_bytes += copy->bytes;
-    if (c->kind == OS64_HTML_CHANGE_CHILDREN) d->log_barrier = copy;
+    if (c->kind == OS64_HTML_CHANGE_CHILDREN) {
+        d->log_barrier = copy;
+        log_index_clear(d);
+    } else if (c->kind == OS64_HTML_CHANGE_ATTR || c->kind == OS64_HTML_CHANGE_TEXT) {
+        log_index_put(d, copy);
+    }
 }
 
 /* ── The listener (html.h, THE LISTENER) ─────────────────────────────── */

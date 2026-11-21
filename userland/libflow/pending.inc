@@ -5,11 +5,14 @@
 // out, or when a restyle was last kept in it (flow_restyle_in_place). Its
 // pending reader is opened at that version, and the verdict says what the
 // changes since then can have moved:
-// - NONE: nothing has changed;
+// - NONE: nothing the tree was styled from has changed (no change at all,
+//   or inline styles written back to what the cascade parsed);
 // - PAINT: only inline style writes, each of whose changed longhands is one
 //   placement and box generation never read (kPending), on the same side of
 //   `none` where the side makes a containing block. A border box, a padding
-//   box, an offset parent and a scroll range are as the tree has them;
+//   box, an offset parent and a scroll position are as the tree has them,
+//   and so is a scroll range unless a longhand that moves a transform's
+//   reach is pending (flow_pending_t.transforms);
 // - RESTYLE: anything else, or anything that cannot be said.
 // The verdict only rises until the tree is made current again: a write that
 // undoes an earlier one leaves RESTYLE standing, which costs a restyle and
@@ -31,6 +34,7 @@ enum {
     PENDING_TRANSFORM,          // as PLAIN on its side of `none` (f_transformed)
     PENDING_FILTER,             // as PLAIN on its side of `none` (f_filtered)
     PENDING_VISIBILITY,         // as PLAIN between `visible` and `hidden`
+    PENDING_ORIGIN,             // as PLAIN, but it moves a transform's matrix and so its reach
 };
 
 // The longhands placement and box generation never read
@@ -81,7 +85,7 @@ static const uint8_t kPending[GARB_NPROPS] = {
     [GARB_IMAGE_RENDERING] = PENDING_PLAIN,
     [GARB_CURSOR] = PENDING_PLAIN,
     [GARB_POINTER_EVENTS] = PENDING_PLAIN,
-    [GARB_TRANSFORM_ORIGIN] = PENDING_PLAIN,
+    [GARB_TRANSFORM_ORIGIN] = PENDING_ORIGIN,
     [GARB_FILL] = PENDING_PLAIN,
     [GARB_TRANSFORM] = PENDING_TRANSFORM,
     [GARB_TRANSLATE] = PENDING_TRANSFORM,
@@ -130,22 +134,35 @@ static flow_pending_verdict_t pending_judge(flow_tree_t *tree, const garb_cascad
         if (kind == 0 || !c->declared || c->var)
             return FLOW_PENDING_RESTYLE;
         bool none = os64_streq(c->keyword, "none");
+        // A CSS-wide keyword's value is the initial one, the parent's or the
+        // sheets', none of which the record says: its side of `none` is not
+        // known (any value of a PLAIN longhand is still PLAIN).
+        bool wide = os64_streq(c->keyword, "initial") || os64_streq(c->keyword, "inherit") ||
+                    os64_streq(c->keyword, "unset") || os64_streq(c->keyword, "revert") ||
+                    os64_streq(c->keyword, "revert-layer");
         switch (kind) {
         case PENDING_TRANSFORM:
             // Drawn is a containing block for absolute and fixed boxes, so
-            // the side must hold: a value other than none is drawn unless
-            // the box is a plain inline, which no transform reaches; none
-            // is judged only where nothing was drawn, since another
-            // longhand of the family might keep it drawn.
+            // the side must hold. A value other than none makes a box
+            // transformed (f_transformed) unless its display is a plain
+            // inline, which f_transformed never grants, so no containing
+            // block can come or go there (an inline atom is still drawn
+            // through a frame, whose reach `transforms` carries). None is
+            // judged only where nothing was transformed, since another
+            // longhand of the family might keep it so.
             tree->pending_transforms = true;
-            if (none ? f_transformed(s) : f_transformed(s) != (s->display != FLOW_DISPLAY_INLINE))
+            if (wide || (none ? f_transformed(s) : f_transformed(s) != (s->display != FLOW_DISPLAY_INLINE)))
                 return FLOW_PENDING_RESTYLE;
             break;
         case PENDING_FILTER:
             // A plain inline's filter is granted to an atom and not to a
             // box of lines, which a record cannot tell apart.
-            if (s->display == FLOW_DISPLAY_INLINE || (none ? f_filtered(s, false) : !f_filtered(s, false)))
+            if (wide || s->display == FLOW_DISPLAY_INLINE ||
+                (none ? f_filtered(s, false) : !f_filtered(s, false)))
                 return FLOW_PENDING_RESTYLE;
+            break;
+        case PENDING_ORIGIN:
+            tree->pending_transforms = true;
             break;
         case PENDING_VISIBILITY:
             if (s->visibility == FLOW_COLLAPSE ||

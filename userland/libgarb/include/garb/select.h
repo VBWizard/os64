@@ -74,8 +74,8 @@ garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t 
 // :nth-child(… of S) or :nth-last-child(… of S), whose turning on one
 // element moves which of its siblings the count picks, which neither kind
 // follows. `style_attribute`: an attribute selector naming `style`, so a
-// write of an inline style can change what matches
-// (garb_cascade_reads_style_attribute).
+// write of an inline style can change what matches (the cascade adds what
+// its declarations read, garb_cascade_reads_style_attribute).
 typedef struct {
     bool following, position_front, position_back, parent_state, filtered;
     bool ancestors, ancestors_preceding, has_filtered, style_attribute;

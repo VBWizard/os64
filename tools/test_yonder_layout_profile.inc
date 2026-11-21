@@ -396,9 +396,16 @@ static void kept_reads_cases(void)
     g.covered=true;
     check(script_rendering_step() && page_rebuild_owed(&g.page),"covered: the rendering step is owed, not run");
     reads=yonder_diag_fact_value(g.page.diag,"layout reads");
-    check(record_number(reads,"rebuilds owed while covered ")==1,"covered: and counted");
+    check(record_number(reads,"steps owed while covered ")==1,"covered: and counted");
     g.covered=false;
     check(script_rendering_step() && !page_rebuild_owed(&g.page),"covered: seen again, the step is run");
+    // A layout asked while a step is owed (a picture arriving, a resize)
+    // pays the step first, where it used to be refused as out of memory.
+    kept_reads_click("quiet");
+    g.covered=true;
+    check(script_rendering_step() && page_rebuild_owed(&g.page),"covered: owed again");
+    check(relayout(true) && !page_rebuild_owed(&g.page),"covered: a layout asked while it is owed pays it first");
+    g.covered=false;
     s_layout_profile=false;
     probe_drop();
     // A selector that reads the style attribute: nothing is answered from
@@ -513,9 +520,11 @@ static const char *table_difference(const os64_dom_geometry_t *a, const os64_dom
     if(a->offset_parent!=b->offset_parent) return "offsetParent";
     if(a->boxed!=b->boxed) return "a box";
     if(a->scroll_left!=b->scroll_left || a->scroll_top!=b->scroll_top) return "scrollLeft/Top";
-    bool reach=kind==2;     // pending.inc's PENDING_TRANSFORM: its reach and matrix move
+    // pending.inc's PENDING_TRANSFORM (2) and PENDING_ORIGIN (5) move a
+    // transform's matrix and reach; PENDING_FILTER (3) a filter's bounds.
+    bool reach=kind==2 || kind==5;
     if(!reach && (a->scroll_width!=b->scroll_width || a->scroll_height!=b->scroll_height)) return "scrollWidth/Height";
-    bool drawn=kind==2 || kind==3;  // and a filter's bounds
+    bool drawn=kind==2 || kind==3 || kind==5;
     if(!drawn && (a->x!=b->x || a->y!=b->y || a->width!=b->width || a->height!=b->height)) return "the rectangle";
     return NULL;
 }
@@ -588,9 +597,11 @@ static void pending_table_cases(void)
 /* THE RANDOM WALK (N2): a page whose script, from a fixed seed, makes
  * random writes of every kind (paint-only longhands by style.x, cssText and
  * setAttribute; geometry; classes; text; custom properties) between random
- * reads of every kind. With --geometry-check at every read the tree
- * answers, each is answered the old way too: none may differ, and the tree
- * must have answered some. */
+ * reads of every kind. With --geometry-check, every Nth read the tree
+ * answers is answered the old way too, which makes the page current: N is 1
+ * (only the writes since the last read pending), then 3 and 7 (writes on
+ * many elements, judged and merged, pile up between checks). None may
+ * differ, and the tree must have answered some. */
 static const char kWalkPage[]=
     "<!doctype html><style>.t{transform:translateX(2px)}.wide{width:120px}#sc{overflow:auto;height:40px}"
     "#sc>div{height:120px}.pos{position:relative}.f{filter:blur(1px)}</style>"
@@ -619,7 +630,7 @@ static const char kWalkPage[]=
     "document.getElementById('out').textContent='walked'};"
     "document.getElementById('out').textContent='ready'"
     "</script>";
-static void random_walk_cases(void)
+static void random_walk(uint32_t every)
 {
     s_ledger=YONDER_LEDGER_ON;
     probe_page(kWalkPage,true);
@@ -627,7 +638,7 @@ static void random_walk_cases(void)
     check(probe_text_is("out","ready"),"random walk: the page's script ran");
     g.page.diag=diag_new_claimed("https://fixture.test/random-walk",1);
     s_layout_profile=true;
-    s_geometry_check=1;
+    s_geometry_check=every;
     s_reads_checked=0;
     s_reads_compared=s_reads_differed=0;
     for(int round=0;round<10;round++){
@@ -641,14 +652,20 @@ static void random_walk_cases(void)
     const char *checked=yonder_diag_fact_value(g.page.diag,"read check");
     const char *reads=yonder_diag_fact_value(g.page.diag,"layout reads");
     unsigned compared=record_number(checked,""),kept=record_number(reads,"from the kept tree ");
-    check(checked && strstr(checked," 0 differed") && compared>50 && kept==compared,
-          "random walk: every read the tree answered is answered the old way too, and none differs");
-    printf("  random walk: %s; %s\n",checked?checked:"(no read check)",reads?reads:"(no reads line)");
+    check(checked && strstr(checked," 0 differed") && compared>30 && kept>=compared && kept<compared*every+every,
+          "random walk: every Nth read the tree answered is answered the old way too, and none differs");
+    printf("  random walk, every %u: %s; %s\n",every,checked?checked:"(no read check)",reads?reads:"(no reads line)");
     s_geometry_check=s_reads_checked=0;
     s_reads_compared=s_reads_differed=0;
     s_layout_profile=false;
     probe_drop();
     s_ledger=YONDER_LEDGER_OFF;
+}
+static void random_walk_cases(void)
+{
+    random_walk(1);
+    random_walk(3);
+    random_walk(7);
 }
 
 static void layout_profile_cases(void)

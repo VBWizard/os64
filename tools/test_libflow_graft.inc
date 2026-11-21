@@ -613,7 +613,15 @@ static void pending_cases(void)
     expect("pending: a filter from none is RESTYLE (a containing block appears), on a plain inline too",
            pending_after(page,"n","style","color:red;filter:blur(1px)",NULL)==FLOW_PENDING_RESTYLE &&
            pending_after(page,"i","style","color:red;filter:blur(1px)",NULL)==FLOW_PENDING_RESTYLE,NULL);
-    expect("pending: a transform on a plain inline is PAINT (no transform reaches it)",
+    expect("pending: a CSS-wide keyword on the transform or filter family is RESTYLE (its side is not known)",
+           pending_after(page,"t","style","transform:initial;color:red",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"t","style","transform:unset;color:red",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"t","style","transform:inherit;color:red",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: a CSS-wide keyword on a plain longhand is PAINT",
+           pending_after(page,"n","style","color:inherit",NULL)==FLOW_PENDING_PAINT,NULL);
+    expect("pending: a transform's origin is PAINT, and says transforms (it moves the reach)",
+           pending_after(page,"t","style","transform:translateX(5px);color:red;transform-origin:0 0",&tf)==FLOW_PENDING_PAINT && tf,NULL);
+    expect("pending: a transform on a plain inline is PAINT (no containing block can come or go)",
            pending_after(page,"i","style","color:red;transform:scale(2)",NULL)==FLOW_PENDING_PAINT,NULL);
     expect("pending: a padding is RESTYLE",
            pending_after(page,"n","style","color:red;padding:4px",NULL)==FLOW_PENDING_RESTYLE,NULL);
@@ -645,7 +653,12 @@ static void pending_cases(void)
     expect("pending: a restyle kept makes the tree current",
            kept.kind!=FLOW_RESTYLE_DECLINED && flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_NONE,NULL);
     os64_html_set_attr(p.doc,n,"style","color:green",11);
-    expect("pending: and a write after it is judged from there",
+    // In the same batch, another element's style written back to what the
+    // cascade parsed (the text differs, the declarations do not): that one
+    // is NONE, and the verdict stays PAINT.
+    const char *again="transform:translateX(5px);color:red;";
+    os64_html_set_attr(p.doc,graft_node(&p,"t"),"style",again,strlen(again));
+    expect("pending: and a write after it is judged from there, a NONE beside it leaving it PAINT",
            flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_PAINT,NULL);
     os64_html_set_text(p.doc,n->first_child,"x",1);
     expect("pending: a text change is RESTYLE",flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE,NULL);

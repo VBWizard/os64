@@ -1435,6 +1435,7 @@ static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_e
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
 static void page_timeline(Page *p);
 static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim);
+static bool script_rebuild(void);
 
 // Window-owner count: a provider takes its delta to include layout retries.
 static uint64_t geometry_layout_total;
@@ -1919,9 +1920,10 @@ static uint64_t s_geometry_compared, s_geometry_differed;
 // libflow's pending.inc), on unless `--kept-reads=off`: an offset or client
 // read, or a scroll read with no transform pending, whose page has only
 // paint-only inline style writes pending, read with no model refresh, no
-// cascade update and no restyle (script_geometry). `--geometry-check[=N]`
-// answers every Nth such read the old way too and compares
-// (s_reads_compared, s_reads_differed).
+// cascade update and no restyle (script_geometry). The same switch lets a
+// covered window owe its rendering step (script_rendering_step).
+// `--geometry-check[=N]` answers every Nth such read the old way too and
+// compares (s_reads_compared, s_reads_differed).
 static bool s_kept_reads = true;
 static uint32_t s_reads_checked;
 static uint64_t s_reads_compared, s_reads_differed;
@@ -4913,6 +4915,11 @@ static bool lay_out_shown(bool again, LaidFor laid_for)
     if (!again && g.page.tree != NULL && width == g.page.laid_width &&
          g.zoom == g.page.laid_zoom && (!height_matters || height == g.page.laid_height))
         return !flow_incomplete(g.page.tree);
+    // A rebuild owed (a covered window's rendering step, or a failed one) is
+    // paid first: a layout of the shown Page is refused while its DOM
+    // version is owed to the staged rebuild (page_lay_out_run).
+    if (page_rebuild_owed(&g.page) && !script_rebuild())
+        return false;
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
     // How far into the anchor the view starts, and how far across the page
@@ -5047,7 +5054,6 @@ static void downloads_follow(void);
 static void downloads_orphaned(void);
 static void downloads_heard(void);
 static uint64_t downloads_due(void);
-static bool script_rebuild(void);
 static void stream_drop(void);
 static void stream_sheets(void);
 static int64_t task_begin(yonder_scripts_t *host);
@@ -12158,16 +12164,18 @@ static bool script_rebuild(void)
     return true;
 }
 
-// The rendering step at a script task's end: the page made current for its
+// The rendering step around a script task: the page made current for its
 // paint. A window nobody can see (g.covered: minimized, entirely behind
 // another, or a text terminal on the glass) owes it while only paint-only
-// writes are pending (shown_pending, N2): they cost nothing until something
-// reads what they change, or the window is seen again (window_seen pays
-// it). Anything else pending is rebuilt as before, seen or not, since
-// observers and timers may read it.
+// writes, or writes back to what the cascade parsed, are pending
+// (shown_pending, N2): they cost nothing until something reads what they
+// change, a layout is asked (lay_out_shown pays first), or the window is
+// seen again (window_seen pays it). Anything else pending is rebuilt as
+// before, seen or not, since observers and timers may read it. Each step
+// owed is counted, so a turn may count two.
 static bool script_rendering_step(void)
 {
-    if (g.covered && page_rebuild_owed(&g.page) && shown_pending().verdict == FLOW_PENDING_PAINT) {
+    if (g.covered && page_rebuild_owed(&g.page) && shown_pending().verdict != FLOW_PENDING_RESTYLE) {
         reads_counted(&g.page, -1, false, true);
         return true;
     }
@@ -15255,9 +15263,10 @@ static bool script_turn(void)
     if (!ran)
         return pointer_turn();
     // The rendering step before the asks: a form a script sent is read
-    // from a model as current as its tree (an owed step leaves both as they
-    // were, and a style write changes nothing a form sends).
-    bool rendered = script_rendering_step();
+    // from a model as current as its tree, and a focus or a scroll acts on
+    // the tree, so with asks waiting the page is made current even where a
+    // covered window could owe the step.
+    bool rendered = g.nasks > 0 ? script_rebuild() : script_rendering_step();
     if (rendered) {
         asks_perform(g.page.scripts, doc, true);
         if (page_doc(&g.page) == doc) (void)pointer_turn();

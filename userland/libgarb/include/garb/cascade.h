@@ -256,9 +256,11 @@ typedef struct {
 } garb_inline_change_t;
 int32_t garb_cascade_inline_changes(const garb_cascade_t *c, const os64_html_node_t *el,
                                     garb_inline_change_t *out, int32_t cap);
-// Whether a selector of the cascade's sheets tests the `style` attribute
-// (inside :is(), :where(), :not() and :has() as well): then a write of an
-// inline style can change which rules match, whatever it declares.
+// Whether the cascade reads the `style` attribute's text itself: a selector
+// of its sheets tests the attribute (inside :is(), :where(), :not() and
+// :has() as well), or a declaration it has read holds attr(style) (generated
+// content's text). Then a write of an inline style can change which rules
+// match, or a box's text, whatever it declares.
 bool garb_cascade_reads_style_attribute(const garb_cascade_t *c);
 
 // The viewport the cascade was judged against: what a `vw` or `vh` in its

@@ -103,6 +103,15 @@ struct HDoc {
     /* The newest CHILDREN entry in the log, or NULL: an entry at or before
      * it keeps its place (log_merge). */
     HChange *log_barrier;
+    /* The ATTR and TEXT entries after log_barrier, by target and attribute
+     * name, so that log_merge finds the one a change takes the place of
+     * without walking the log: open addressing, NULL a free slot, LOG_GONE
+     * (dom.c) a deleted one; `log_index_used` counts the slots not free.
+     * `log_index_broken`: it could not grow, and log_merge walks the log
+     * until the log is next empty. */
+    HChange **log_index;
+    size_t log_index_cap, log_index_used;
+    bool log_index_broken;
     size_t log_bytes, log_limit;
     uint64_t log_floor;
     bool log_limited;

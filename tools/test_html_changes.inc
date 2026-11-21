@@ -115,6 +115,27 @@ static void t_change_log_merge(void)
     check(os64_html_changes_bytes(d)==0,"merge: storage released");
     os64_html_document_free(d);
     check(live==start_live,"merge: identities and payloads released");
+    /* At scale, through the index (log_index): three hundred elements each
+     * written twice, interleaved, and a CHILDREN entry between two rounds. */
+    static char many[300*16+64];
+    size_t at=(size_t)snprintf(many,sizeof(many),"<body>");
+    for(int i=0;i<300;i++) at+=(size_t)snprintf(many+at,sizeof(many)-at,"<p id=m%d></p>",i);
+    d=parse(many);
+    r=os64_html_reader_new(d,os64_html_version(d));
+    HNode *els[300];
+    for(int i=0;i<300;i++){ char id[8]; snprintf(id,sizeof(id),"m%d",i); els[i]=id_in(d,id); }
+    for(int round=0;round<2;round++)
+        for(int i=0;i<300;i++){ int n=snprintf(value,sizeof(value),"r%d",round); os64_html_set_attr(d,els[i],"style",value,(size_t)n); }
+    check(os64_html_changes(r,&entries)==300,"merge: three hundred elements written twice hold three hundred entries");
+    for(int i=0;i<300;i++) os64_html_set_attr(d,els[i],"class","a",1);
+    int64_t why2=0;
+    HNode *child=os64_html_create_element(d,OS64_HTML_NS_HTML,"i",&why2);
+    check(child && !os64_html_insert(d,els[0],child,NULL),"merge: a child added between rounds");
+    for(int i=0;i<300;i++) os64_html_set_attr(d,els[i],"class","b",1);
+    check(os64_html_changes(r,&entries)==601,"merge: entries before the CHILDREN entry keep their place, those after merge");
+    os64_html_reader_free(r);
+    os64_html_document_free(d);
+    check(live==start_live,"merge: at scale, nothing retained");
 }
 
 static void t_change_log_loss(void)
