@@ -50,7 +50,7 @@ mutants = [
      '    LayerPart split = e == box ? PART_BODY : PART_BODY;'),
     # yonder's cover: each condition.
     ('a-group-around-the-video-ignored', YONDER, '        flow_paint_path(g.page.tree, b, NULL, 0) != 0)',
-     '        flow_paint_path(g.page.tree, b, NULL, 0) != 0 && 0)'),
+     '        (flow_paint_path(g.page.tree, b, NULL, 0) != 0 && 0))'),
     ('a-frame-of-another-size-covers', YONDER,
      '    return fr->pixels != NULL && fr->w > 0 && fr->h > 0 && fr->w == (uint32_t)at->w && fr->h == (uint32_t)at->h;',
      '    return fr->pixels != NULL && fr->w > 0 && fr->h > 0;'),
