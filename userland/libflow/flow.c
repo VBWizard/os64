@@ -2185,6 +2185,24 @@ flow_tree_t *flow_layout_profiled(const os64_html_document_t *doc, const os64_pa
 {
     return flow_layout_restyled(doc, model, width, env, NULL, profile, clock, clock_ctx);
 }
+// The nodes whose first box in `tree` has another border box than its
+// first box in `previous`, or none there (flow_profile_t.nodes_moved).
+static int64_t nodes_moved(const flow_tree_t *tree, const flow_tree_t *previous)
+{
+    int64_t moved = 0;
+    for (const flow_box_t *b = tree->root; b != NULL;) {
+        if (b->node != NULL && b->pseudo == 0 && flow_box_for(tree, b->node) == b) {
+            const flow_box_t *was = flow_box_for(previous, b->node);
+            if (was == NULL || was->rect.x != b->rect.x || was->rect.y != b->rect.y ||
+                was->rect.w != b->rect.w || was->rect.h != b->rect.h)
+                moved++;
+        }
+        if (b->first != NULL) { b = b->first; continue; }
+        while (b != NULL && b->next == NULL) b = b->parent;
+        b = b != NULL ? b->next : NULL;
+    }
+    return moved;
+}
 uint64_t flow_styles_reused(const flow_tree_t *tree)
 {
     return tree && tree->styles ? tree->styles->reused : 0;
@@ -2316,6 +2334,12 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
         began = profile_clock(&timing);
         reuse_snapshot_finish(tree);
         if (profile) profile_elapsed(&timing, began, &profile->layout_us);
+    }
+    if (profile) {
+        bool compared = tree->styles->compared;
+        profile->styles_paint = compared ? tree->styles->changed_paint : 0;
+        profile->styles_layout = compared ? tree->styles->changed_layout : tree->styles->map.count;
+        profile->nodes_moved = clock != NULL && compared ? nodes_moved(tree, previous) : -1;
     }
     return tree;
 }

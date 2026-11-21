@@ -80,6 +80,10 @@ typedef struct {
     const flow_env_t *env;
     FStyles *out;
     const FStyles *previous;
+    // The previous tree's styles of the same document, kept whether or not
+    // they may be reused (`previous`): what came out different is told
+    // against them (FStyles.changed_paint), which reuses nothing.
+    const FStyles *compare;
     FStyleCopy copies;
     bool quirks;                // full quirks mode
     // `body link=` recolours every link, and the body is styled before any
@@ -4914,6 +4918,14 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->list_cost = before_lists - c->out->lists_left;
     out->steady = copied || (old && !old->motion && !motion &&
                              f_style_equal(&old->style, &out->style));
+    const FStyled *was = old != NULL ? old : c->compare ? f_style_of(c->compare, n) : NULL;
+    if (c->compare != NULL && !copied && !motion && (was == NULL || !was->motion) &&
+        (was == NULL || !f_style_equal(&was->style, &out->style))) {
+        if (was != NULL && f_style_paint_only(&was->style, &out->style))
+            ++c->out->changed_paint;
+        else
+            ++c->out->changed_layout;
+    }
     out->subtree_steady = out->steady;
     out->reuse_safe = untouched && ancestry && out->steady;
     if (motion != NULL && !list_animated(c->out, n))
@@ -5429,6 +5441,7 @@ FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_
 {
     if (doc == NULL || env == NULL)
         return NULL;
+    const FStyles *compare = previous != NULL && previous->doc == doc ? previous : NULL;
     if (previous) {
         const flow_env_t *had = &previous->inputs;
         if (previous->doc != doc || previous->lists_refused || doc->quirks == OS64_HTML_QUIRKS ||
@@ -5462,7 +5475,8 @@ FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_
         f_style_free(out);
         return NULL;
     }
-    Ctx c = {.doc = doc, .model = model, .env = env, .out = out, .previous = previous,
+    out->compared = compare != NULL;
+    Ctx c = {.doc = doc, .model = model, .env = env, .out = out, .previous = previous, .compare = compare,
              .copies = {.arena = &out->arena},
              .quirks = doc->quirks == OS64_HTML_QUIRKS,
              .zoom = env->zoom != 0 ? env->zoom / 1000.0 : 1.0};

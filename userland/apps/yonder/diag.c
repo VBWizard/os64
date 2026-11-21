@@ -1383,6 +1383,13 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     if (sample->anchors_peak > total->anchors_peak) total->anchors_peak = sample->anchors_peak;
     if (sample->anchors_bare_peak > total->anchors_bare_peak) total->anchors_bare_peak = sample->anchors_bare_peak;
     ADD(bare_tested); ADD(bare_turned); ADD(bare_marked);
+    for (int f = 0; f < 2; f++) {
+        total->needed.restyled[f] = layout_sum(total->needed.restyled[f], sample->needed.restyled[f]);
+        for (int k = 0; k < YONDER_NEEDED_KINDS; k++) {
+            total->needed.count[f][k] = layout_sum(total->needed.count[f][k], sample->needed.count[f][k]);
+            total->needed.us[f][k] = layout_sum(total->needed.us[f][k], sample->needed.us[f][k]);
+        }
+    }
     for (size_t i = 0; i < YONDER_LAYOUT_REUSE_REASONS; ++i)
         total->reuse_refused[i] = layout_sum(total->reuse_refused[i], sample->reuse_refused[i]);
     bool cascade_sampled = sample->cascade_reason_names != NULL;
@@ -1414,6 +1421,11 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         g += os64_snprintf(line + g, sizeof(line) - (size_t)g, "%s%lu", r ? " " : "]: ",
                            (unsigned long)s->reuse_refused[r]);
     yonder_diag_fact(d, graft_key, line);
+    // `<key> needed`: what each layout needed (yonder_needed_t).
+    char needed_key[64];
+    os64_snprintf(needed_key, sizeof(needed_key), "%s needed", key);
+    yonder_diag_needed_text(&s->needed, line, sizeof(line));
+    yonder_diag_fact(d, needed_key, line);
     // `<key> cascade`: how many cascades were updated and how many built
     // fresh, by reason, the reasons that never happened left out; then the
     // anchored :has() compounds its cascades held and what bare ones cost.
@@ -1447,6 +1459,28 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
 static void ms_text(uint64_t us, char *out, size_t cap)
 {
     os64_snprintf(out, cap, "%lu.%lu", (unsigned long)(us / 1000), (unsigned long)(us % 1000 / 100));
+}
+void yonder_diag_needed_text(const yonder_layout_needed_t *n, char *out, size_t cap)
+{
+    static const char *const kNames[YONDER_NEEDED_KINDS] = {
+        "nothing moved", "paint only", "one node's boxes moved", "more moved", "not compared"};
+    size_t at = 0;
+    out[0] = '\0';
+    for (int f = 0; f < 2; f++) {
+        int w = os64_snprintf(out + at, cap - at, "%s", f ? "; forced by a read: " : "");
+        if (w > 0 && (size_t)w < cap - at) at += (size_t)w;
+        for (int k = 0; k < YONDER_NEEDED_KINDS && at < cap; k++) {
+            char ms[32];
+            ms_text(n->us[f][k], ms, sizeof(ms));
+            w = os64_snprintf(out + at, cap - at, "%s%s %lu (%s ms)", k ? ", " : "", kNames[k],
+                              (unsigned long)n->count[f][k], ms);
+            if (w < 0 || (size_t)w >= cap - at) return;
+            at += (size_t)w;
+        }
+        w = os64_snprintf(out + at, cap - at, "; elements restyled different %lu", (unsigned long)n->restyled[f]);
+        if (w < 0 || (size_t)w >= cap - at) return;
+        at += (size_t)w;
+    }
 }
 
 static void layout_one(yonder_diag_t *d, const yonder_layout_one_t *one, LayoutOnes *ones, const char *key)

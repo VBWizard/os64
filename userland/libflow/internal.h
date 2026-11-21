@@ -727,6 +727,13 @@ typedef struct {
     const flow_env_t *env;
     flow_env_t inputs;
     uint64_t cascade_generation, cascade_updates, reused;
+    // Against the previous tree's styles of the same document (`compared`
+    // when there were any), reusable or not: of the elements whose style
+    // came out different, outside an animation, how many differ only in
+    // paint (f_style_paint_only) and how many otherwise; an element the
+    // previous tree had not styled counts with the second.
+    bool compared;
+    uint64_t changed_paint, changed_layout;
     bool lists_refused;
     FArena arena;
     FMap map;               // element node -> FStyled
@@ -778,6 +785,13 @@ bool f_style_numeric(const flow_env_t *env, flow_unit_t font, flow_unit_t root_f
 uint32_t f_style_colour(garb_color_t color);
 // Compare scalar and pointed-to style values, independent of their arenas.
 bool f_style_equal(const flow_style_t *a, const flow_style_t *b);
+// Whether two styles differ only in what the painter reads and placement
+// does not: colours, backgrounds, borders' colours, shadows, opacity,
+// visibility, outlines, decorations, blending, masks, the cursor, and a
+// transform or a filter changed while present on both sides (one coming or
+// going makes a containing block, which is placement's). A field it does
+// not name counts as placement's: the answer errs toward "it moves".
+bool f_style_paint_only(const flow_style_t *a, const flow_style_t *b);
 void f_style_free(FStyles *styles);
 // The styles pass 1 made for a tree, which live as long as it does.
 const FStyles *f_tree_styles(const flow_tree_t *tree);

@@ -123,6 +123,30 @@ static void layout_profile_cases(void)
     s_cascade_check=0;
     s_layout_profile=false;
     probe_drop();
+    /* What each layout needed (yonder_needed_t): an attribute no rule reads
+     * changes nothing; a colour is paint only; padding that moves the text
+     * inside a block moves one node's boxes. */
+    probe_page("<!doctype html><style>.on{color:red}.pad{padding-left:40px}</style><p id=p>text</p><p id=q>more</p>",false);
+    g.page.diag=diag_new_claimed("https://fixture.test/profile-needed",1);
+    s_layout_profile=true;
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"title","t",1) && script_rebuild(),
+          "layout needed: an attribute no rule reads published");
+    const char *needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && strstr(needed,"nothing moved 1 (") && strstr(needed,"paint only 0 ("),
+          "layout needed: and it needed nothing");
+    if(!needed || !strstr(needed,"nothing moved 1 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("p"),"class","on",2) && script_rebuild(),
+          "layout needed: a colour published");
+    needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && strstr(needed,"paint only 1 ("),"layout needed: and it was paint only");
+    if(!needed || !strstr(needed,"paint only 1 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("p"),"class","pad",3) && script_rebuild(),
+          "layout needed: a padding published");
+    needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && strstr(needed,"one node's boxes moved 1 ("),"layout needed: and it moved one node's boxes");
+    if(!needed || !strstr(needed,"one node's boxes moved 1 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    s_layout_profile=false;
+    probe_drop();
     /* A bare anchor keeps the cascade tracking: the change that turns it is
      * an update, and the record says what the anchor cost it. */
     probe_page("<style>:has(> .x) p{color:red}</style><div><p id=p>t</p></div>",false);

@@ -94,6 +94,20 @@ typedef struct yonder_diag yonder_diag_t;
 // names come with the sample (`cascade_reason_names`), from the code that
 // knows them; the layout wrapper checks the count at compile time.
 #define YONDER_LAYOUT_CASCADE_REASONS 18
+// WHAT A LAYOUT NEEDED, from what came out different (flow_profile_t): no
+// style changed and no box moved (a repaint at most); only paint styles
+// changed and no box moved; the boxes of one node moved; more than that;
+// not compared (no previous tree, or no clock). Each for the layouts a
+// script's read forced (a measured layout) and the rest, with the elements
+// whose style came out different across those layouts (`restyled`).
+typedef enum {
+    YONDER_NEEDED_NOTHING, YONDER_NEEDED_PAINT, YONDER_NEEDED_ONE, YONDER_NEEDED_MORE,
+    YONDER_NEEDED_UNCOMPARED, YONDER_NEEDED_KINDS
+} yonder_needed_t;
+typedef struct {
+    uint64_t count[2][YONDER_NEEDED_KINDS], us[2][YONDER_NEEDED_KINDS];
+    uint64_t restyled[2];
+} yonder_layout_needed_t;
 typedef struct {
     uint64_t model_us, cascade_us, style_us, boxes_us, layout_us, public_us;
     uint64_t elements, boxes, measures, reused;
@@ -107,11 +121,17 @@ typedef struct {
     // marked.
     uint64_t anchors_peak, anchors_bare_peak;
     uint64_t bare_tested, bare_turned, bare_marked;
+    // What each layout needed, its count and its time (style, boxes,
+    // placement and the public tree), forced by a read ([1]) or not ([0]).
+    yonder_layout_needed_t needed;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
     const char *const *cascade_reason_names;
 } yonder_layout_stats_t;
 void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
+// What layouts needed, as a record's line (`layout needed` and its
+// readings): each kind's count and time, the forced ones apart.
+void yonder_diag_needed_text(const yonder_layout_needed_t *n, char *out, size_t cap);
 /* ONE LAYOUT, whole: its wall time (`total_us`, everything
  * page_lay_out_run did) and what it went on: the cascade and what became
  * of it (its time includes gathering the page's sheets for it), then the

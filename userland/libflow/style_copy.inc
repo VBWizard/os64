@@ -212,6 +212,33 @@ static bool style_layers_equal(const flow_backgrounds_t *a,const flow_background
     }
     return true;
 }
+static bool style_transformed(const flow_style_t *s)
+{
+    return s->ntransform>0 || s->translate || s->rotate || s->scale;
+}
+bool f_style_paint_only(const flow_style_t *a,const flow_style_t *b)
+{
+    if(style_transformed(a)!=style_transformed(b) || (a->nfilter>0)!=(b->nfilter>0) ||
+       (a->nbackdrop_filter>0)!=(b->nbackdrop_filter>0))return false;
+    flow_style_t y=*b;
+    y.color=a->color;y.fill=a->fill;y.current_colours=a->current_colours;
+    y.has_background=a->has_background;y.background=a->background;
+    y.backgrounds=a->backgrounds;
+    for(int i=0;i<4;i++)y.border_color[i]=a->border_color[i];
+    y.box_shadows=a->box_shadows;y.nbox_shadows=a->nbox_shadows;
+    y.text_shadows=a->text_shadows;y.ntext_shadows=a->ntext_shadows;
+    y.filter=a->filter;y.nfilter=a->nfilter;
+    y.backdrop_filter=a->backdrop_filter;y.nbackdrop_filter=a->nbackdrop_filter;
+    y.mix_blend=a->mix_blend;y.masks=a->masks;y.text_decoration=a->text_decoration;
+    y.visibility=a->visibility;y.opacity=a->opacity;
+    y.transform=a->transform;y.translate=a->translate;y.rotate=a->rotate;y.scale=a->scale;
+    y.ntransform=a->ntransform;
+    y.transform_origin[0]=a->transform_origin[0];y.transform_origin[1]=a->transform_origin[1];
+    y.transform_origin_z=a->transform_origin_z;y.cursor=a->cursor;
+    y.outline_width=a->outline_width;y.outline_offset=a->outline_offset;y.outline_style=a->outline_style;
+    y.outline_auto=a->outline_auto;y.outline_color=a->outline_color;
+    return f_style_equal(a,&y);
+}
 bool f_style_equal(const flow_style_t *a,const flow_style_t *b)
 {
     flow_style_t x=*a,y=*b;

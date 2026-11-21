@@ -9132,6 +9132,21 @@ static uint64_t first_text_font(void) {
     }
     return 0;
 }
+/* The font the first text box under the element `id` was drawn in, 0 for
+ * none. */
+static uint64_t text_font_of(const char *id) {
+    const flow_box_t *top=g.page.tree!=NULL ? flow_box_for(g.page.tree,probe_id(id)) : NULL;
+    for(const flow_box_t *b=top;b!=NULL;) {
+        if(b->kind==FLOW_BOX_TEXT && b->run!=NULL) {
+            os64_text_run_view_t v;
+            if(os64_text_run_view(b->run,&v)==OS64_FONT_OK && v.glyph_count>0) return v.glyphs[0].font_identity;
+        }
+        if(b->first) { b=b->first; continue; }
+        while(b!=NULL && b!=top && b->next==NULL) b=b->parent;
+        b=b!=NULL && b!=top ? b->next : NULL;
+    }
+    return 0;
+}
 static int32_t web_file(const char *url) {
     for(int32_t i=0;i<s_web.nfiles;i++) if(!strcmp(s_web.files[i].url,url)) return i;
     return -1;
@@ -10863,10 +10878,58 @@ static void webfont_cases(void) {
         reported |= !strcmp(s_web.families.f[i].name,"Web") && s_web.families.f[i].served==WF_SERVED_PAGE;
     check(reported && (s_web.face_use[0]&WF_USE_LISTED),
           "graft fonts: copied text retains current family and face-use reporting");
+    /* A DOM change with @font-face present moves no font answer: its text
+     * is laid out afresh in the dirty part, and the rest is grafted. */
     uint64_t revision=s_layout_resources.fonts;
     os64_html_set_text(g.page.way.doc,probe_id("font-changed")->first_child,"new characters",14);
+    check(script_rebuild() && s_layout_resources.fonts==revision && last_graft_profile.reused>0,
+          "graft fonts: a DOM change with @font-face present grafts");
+    web_drop();
+    /* A face arriving refuses the graft once and its text is drawn in it;
+     * the next change grafts again. */
+    web_page("<!doctype html><style>@font-face{font-family:Web;src:url(web.ttf)}p{font-family:Web}</style>"
+        "<p id=arrive-a>first text</p><p id=arrive-b>second text</p><p>padding</p><p>padding</p>");
+    uint64_t fallback=text_font_of("arrive-a");
+    revision=s_layout_resources.fonts;
+    check(font_land("web.ttf","A",NULL) && s_layout_resources.fonts>revision,
+          "graft fonts: a face arriving moves the fonts revision");
+    pictures_settle();
+    check(!last_graft_profile.reused && text_font_of("arrive-a")!=fallback && text_font_of("arrive-a")!=0,
+          "graft fonts: and the layout after it is whole, its text drawn in the face");
+    os64_html_set_text(g.page.way.doc,probe_id("arrive-b")->first_child,"other text",10);
+    check(script_rebuild() && last_graft_profile.reused>0,"graft fonts: the next change grafts again");
+    web_drop();
+    /* Late text whose characters meet a ranged face nothing met before:
+     * the revision moves (a face newly listed changes the lists of text it
+     * does not draw), the face is asked for, and the text takes it when it
+     * lands. Taking the text away moves nothing (met stays met); a face
+     * yonder cannot read moves nothing when met. */
+    web_page("<!doctype html><style>"
+        "@font-face{font-family:Web;src:url(cjk.ttf);unicode-range:U+4E00-9FFF}"
+        "@font-face{font-family:Web;src:url(cyr.woff2) format(\"woff2\");unicode-range:U+0400-04FF}"
+        "p{font-family:Web}</style>"
+        "<p id=late>latin only</p><p id=still>still here</p><p>padding</p><p>padding</p>");
+    check(web_file("https://fixture.test/cjk.ttf")<0 && nfont_jobs==0,
+          "graft fonts: a ranged face the text does not meet is not asked for");
+    revision=s_layout_resources.fonts;
+    os64_html_set_text(g.page.way.doc,probe_id("late")->first_child,"\xe4\xb8\xad",3);
     check(script_rebuild() && s_layout_resources.fonts>revision && !last_graft_profile.reused,
-          "graft fonts: document character changes invalidate unicode-range-dependent answers");
+          "graft fonts: late text meeting a loadable face moves the revision and lays out whole");
+    webfonts_feed(true);
+    check(web_file("https://fixture.test/cjk.ttf")>=0 && nfont_jobs==1,"graft fonts: and the face is asked for");
+    check(font_land("cjk.ttf","A",NULL),"graft fonts: the late face lands");
+    pictures_settle();
+    /* (Listed, as the record tells it: the fixture's one-byte face draws no
+     * glyph for the character, so the box itself cannot say.) */
+    check((s_web.face_use[0]&WF_USE_LISTED) && !(s_web.face_use[1]&WF_USE_LISTED),
+          "graft fonts: the late text takes the face, and the unreadable one stays out");
+    revision=s_layout_resources.fonts;
+    os64_html_set_text(g.page.way.doc,probe_id("late")->first_child,"latin again",11);
+    check(script_rebuild() && s_layout_resources.fonts==revision && last_graft_profile.reused>0,
+          "graft fonts: taking the text away moves nothing, and grafts");
+    os64_html_set_text(g.page.way.doc,probe_id("still")->first_child,"\xd0\x96",2);
+    check(script_rebuild() && s_layout_resources.fonts==revision && last_graft_profile.reused>0,
+          "graft fonts: meeting a face yonder cannot read moves nothing, and grafts");
     web_drop();
     web_page("<!doctype html><style>@font-face{font-family:Web;src:url(web.ttf)}</style>"
         "<p>text<span id=metric-only style='font-family:Web'></span></p><p>padding</p>");
