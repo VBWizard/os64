@@ -1418,7 +1418,9 @@ flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
  * `width`, with the env and inputs of the layout that would follow (the
  * graft's own source test). A kept tree is the same tree: its boxes and
  * their places stand, its styles, transforms' frames, ink and drawn stamps
- * follow the new values. Declined, the tree is as it was unless `why` is
+ * follow the new values, and so, where a transform moved, do the page's
+ * extent and the scroll containers' ranges (a scroll past a range that
+ * shrank is held within it). Declined, the tree is as it was unless `why` is
  * FLOW_RESTYLE_ROOM, which may have written part of it; either way the
  * caller lays out afresh. The cascade must be current. */
 typedef enum {

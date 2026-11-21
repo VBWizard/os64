@@ -11,7 +11,10 @@
 // are copied into the tree's restyle arena first, so that nothing points
 // into the build, which is freed. The animation tick is the precedent: it
 // writes a ticking element's style in place the same way, and the frames,
-// the ink and the drawn stamps follow as they do there.
+// the ink and the drawn stamps follow as they do there. Where a transform
+// took a new value, the page's extent and the scroll containers' ranges
+// are reached again from where placement left them, which the tick does
+// not do.
 
 // Whether the derived parts of two records of one element agree, but for
 // the decoration, which keep_judge judges apart: what boxes, lists, links,

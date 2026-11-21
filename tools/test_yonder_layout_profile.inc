@@ -89,9 +89,10 @@ static void restyle_kept_cases(void)
     kept=yonder_diag_fact_value(g.page.diag,"layout kept");
     check(g.page.tree==shown && kept && strstr(kept,"paint only 2"),"kept: a transform's value is kept");
     if(!kept || !strstr(kept,"paint only 2")) printf("  layout kept: %s\n",kept?kept:"(none)");
-    /* What the kept tree answers is what a whole layout answers: every box
-     * and style, and what a script's getBoundingClientRect sees through the
-     * transform (the frame the restyle filled again). */
+    /* What the kept tree answers is what a whole layout answers: what
+     * tree_answers takes of every box, and what a script's
+     * getBoundingClientRect sees through the transform (the frame the
+     * restyle filled again). The geometry check compares the rest. */
     static int64_t kept_answers[4096], fresh_answers[4096];
     size_t nk=tree_answers(g.page.tree,kept_answers,4096);
     os64_dom_geometry_t kept_rect,fresh_rect;
