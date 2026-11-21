@@ -1472,6 +1472,35 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
  * element) when a box is to blame, and what differed. */
 bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_html_node_t **node,
                         const char **what);
+
+/* WHAT IS PENDING since `tree` was made current (BRIEF_LAYOUT_NEEDS.md N2):
+ * laid out, or a restyle kept in it. PAINT says every change since then is
+ * an inline style write whose changed longhands placement and box
+ * generation never read (flow_pending_longhand), on the same side of `none`
+ * where the side makes a containing block; so every border box, padding
+ * box, offset parent and scroll position the tree holds is the one a
+ * layout would give. `transforms`: a longhand of the transform family is
+ * pending, which moves what a transform reaches (scroll ranges, the page's
+ * extent, a transformed box's rectangles). NONE says nothing changed, and
+ * RESTYLE anything else, or that it cannot be said: `cascade` must be the
+ * page's, at the version the tree is current at. The verdict only rises
+ * until the tree is made current again. A read answered from the tree is a
+ * style change event that did not happen, which CSS transitions would see
+ * (pending.inc says what they will owe). */
+typedef enum {
+    FLOW_PENDING_NONE = 0,
+    FLOW_PENDING_PAINT,
+    FLOW_PENDING_RESTYLE
+} flow_pending_verdict_t;
+typedef struct {
+    flow_pending_verdict_t verdict;
+    bool transforms;
+} flow_pending_t;
+flow_pending_t flow_pending(flow_tree_t *tree, const os64_html_document_t *doc, const struct garb_cascade *cascade);
+/* How a pending write of libgarb's longhand `prop` (a garb_prop_t) is judged:
+ * 0 when placement or boxes may read it, else the kind of judgement
+ * (pending.inc). For the table's test. */
+int flow_pending_longhand(int prop);
 /* WHAT A TREE HOLDS (MEMORY_CENSUS.md § 3): the bytes each of its arenas
  * has reserved — the computed styles, the boxes, the lines and fragments,
  * and the public boxes — and how many boxes it built, anonymous ones
