@@ -71,6 +71,7 @@
 #include "geometry.h"
 #include "events.h"
 #include "frame_plan.h"
+#include "task_order.h"
 #include "ticker.h"
 #include "trip.h"
 #include "download.h"
@@ -825,6 +826,12 @@ typedef struct {
     uint64_t entry;
 } PageEvent;
 
+// A page's ordinary task sources, in the order of priority among the young
+// (task_order.h; ordinary_task chooses among them).
+typedef enum {
+    TS_SCRIPT, TS_IMAGE, TS_MEDIA, TS_SHEET, TS_INTERSECTION, TS_QUEUED, TS_VIEW, TS_CLEANUP, TS_COUNT
+} TaskSource;
+
 // A page as the window holds it: libway's page (the tree, what it means,
 // the reader's flips) and its layout at the size it was laid out at. A
 // text/plain page has no tree of its own, so it is given one.
@@ -988,6 +995,10 @@ typedef struct Page {
     bool census_decided, censused, census_left;
     uint64_t census_began;
     yonder_census_timeline_t census;
+    // What the loop keeps of each of its task sources (task_order.h's
+    // task_age_t: since when its head has been ready, and its last run),
+    // by TaskSource.
+    task_age_t task_ages[TS_COUNT];
 } Page;
 
 static yonder_scripts_t *page_scripts(const Page *p);
@@ -13011,32 +13022,34 @@ static bool queued_task(yonder_scripts_t *host, const char **what, os64_js_outco
     return yonder_scripts_timer_fire(host, now, out);
 }
 
+static bool ordinary_task(yonder_scripts_t *host, task_age_t *ages, bool shown, const char **what,
+                          os64_js_outcome_t *out);
+// The ages of a host no page holds (page_of_host): a page's are its own.
+static task_age_t s_hostless_ages[TS_COUNT];
+
 static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown)
 {
     if (host == NULL || !yonder_scripts_alive(host))
         return false;
     os64_js_outcome_t cleanup;
     int64_t cleanup_began = task_begin(host);
+    Page *p = page_of_host(host);
+    task_age_t *ages = p != NULL ? p->task_ages : s_hostless_ages;
     if (yonder_scripts_finalization_fire(host, false, &cleanup)) {
+        // Cleanup's turn, as if ordinary_task had chosen it: its next head
+        // is aged from now.
+        task_age_ran(&ages[TS_CLEANUP], yonder_scripts_finalization_pending(host), yonder_now_ms());
         task_said(host, true, "cleanup", &cleanup, cleanup_began);
         asks_perform(host, doc, shown);
         return true;
     }
     // History events retain their order within the ordinary task sources.
-    Page *p = page_of_host(host);
     if (p != NULL && page_event_run(p, shown))
         return true;
     os64_js_outcome_t out;
     int64_t began = task_begin(host);
     const char *what = "script";
-    bool ran = yonder_scripts_step(host, &out);
-    if (!ran) { what="image"; ran=yonder_scripts_image_fire(host,&out); }
-    if (!ran) { what="media"; ran=yonder_scripts_media_fire(host,&out); }
-    if (!ran) { what="sheet"; ran=yonder_scripts_owed_fire(host,&out); }
-    if (!ran)
-        ran = queued_task(host, &what, &out);
-    if (!ran) { what = "cleanup"; ran = yonder_scripts_finalization_fire(host, true, &out); }
-    if (!ran)
+    if (!ordinary_task(host, ages, false, &what, &out))
         return false;
     task_said(host, true, what, &out, began);
     asks_perform(host, doc, shown);
@@ -14321,6 +14334,75 @@ static uint64_t css_animations_version(void *opaque)
 // Whether the turn just ran one of the view's events: more may be owed.
 static bool s_view_ran;
 
+// Whether source `k` of `host` has a task ready now, as far as the source
+// says; for the timed ones, ordinary_task reads the times instead.
+static bool task_source_ready(yonder_scripts_t *host, TaskSource k, bool shown)
+{
+    switch (k) {
+    case TS_SCRIPT: return yonder_scripts_pending(host);
+    case TS_IMAGE: return yonder_scripts_images_pending(host);
+    case TS_MEDIA: return yonder_scripts_media_pending(host);
+    case TS_SHEET: return yonder_scripts_owed_pending(host);
+    case TS_INTERSECTION: return shown && yonder_scripts_intersections_due(host);
+    case TS_CLEANUP: return yonder_scripts_finalization_pending(host);
+    default: return false;
+    }
+}
+
+// ONE ORDINARY TASK of a host's (task_order.h): a script ready to run, an
+// image's, a media element's or a sheet's event, the intersection
+// observers' delivery and the view's events (`shown`: the page on screen's
+// alone), a message or a timer (queued_task, the older first), opted-in
+// engine cleanup. A task ready less than TASK_ORDER_BOUND_MS keeps to that
+// order; one ready longer goes ahead of all of those, the oldest first.
+// Messages and timers say when they were ready (posted, fell due), counted
+// no older than their source's last run (task_age_stamped); the others are
+// aged here. Both are kept in `ages`. The view's events are never old: the
+// view's due events run ahead of every ordinary source at their own
+// cadence (script_turn). True when one ran; `what` names its source.
+static bool ordinary_task(yonder_scripts_t *host, task_age_t *ages, bool shown, const char **what,
+                          os64_js_outcome_t *out)
+{
+    uint64_t now = yonder_now_ms();
+    task_source_t src[TS_COUNT];
+    for (int k = 0; k < TS_COUNT; k++)
+        src[k] = task_age_observe(&ages[k], task_source_ready(host, (TaskSource)k, shown), now);
+    // A timer's next of 0 is custom element reactions owed (libdom's
+    // timer.c), which run in a timer's place: ready now, so they keep that
+    // place among the young.
+    uint64_t message = yonder_scripts_message_next(host), timer = yonder_scripts_timer_next(host);
+    if (timer == 0)
+        timer = now;
+    uint64_t queued = message <= now ? message : UINT64_MAX;
+    if (timer <= now && timer < queued)
+        queued = timer;
+    src[TS_QUEUED] = task_age_stamped(&ages[TS_QUEUED], queued != UINT64_MAX, queued);
+    src[TS_VIEW] = (task_source_t){shown, now};
+    int order[TS_COUNT];
+    int n = task_order(src, TS_COUNT, now, order);
+    for (int i = 0; i < n; i++) {
+        TaskSource k = (TaskSource)order[i];
+        bool ran = false;
+        switch (k) {
+        case TS_SCRIPT: *what = "script"; ran = yonder_scripts_step(host, out); break;
+        case TS_IMAGE: *what = "image"; ran = yonder_scripts_image_fire(host, out); break;
+        case TS_MEDIA: *what = "media"; ran = yonder_scripts_media_fire(host, out); break;
+        case TS_SHEET: *what = "sheet"; ran = yonder_scripts_owed_fire(host, out); break;
+        // The delivery task the last rendering step queued (intersections_turn).
+        case TS_INTERSECTION: *what = "intersection-observer"; ran = yonder_scripts_intersections_fire(host, out); break;
+        case TS_QUEUED: ran = queued_task(host, what, out); break;
+        case TS_VIEW: *what = "view"; ran = s_view_ran = yonder_scripts_view_step(host, out); break;
+        case TS_CLEANUP: *what = "cleanup"; ran = yonder_scripts_finalization_fire(host, true, out); break;
+        default: break;
+        }
+        if (ran) {
+            task_age_ran(&ages[k], task_source_ready(host, k, shown), yonder_now_ms());
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool script_turn(void)
 {
     // A font-capacity retry may have released the old tree. Keep retrying
@@ -14338,6 +14420,9 @@ static bool script_turn(void)
     os64_js_outcome_t out;
     int64_t began = task_begin(g.page.scripts);
     bool ran = yonder_scripts_finalization_fire(g.page.scripts, false, &out);
+    if (ran)        // its next head aged from now, as ordinary_task would age it
+        task_age_ran(&g.page.task_ages[TS_CLEANUP], yonder_scripts_finalization_pending(g.page.scripts),
+                     yonder_now_ms());
     // History precedes the other ordinary sources, preserving event order.
     if (!ran && page_event_run(&g.page, true))
         return true;
@@ -14352,38 +14437,10 @@ static bool script_turn(void)
     const char *what = ran ? "cleanup" : "view";
     if (!ran) ran = yonder_scripts_view_due(g.page.scripts) &&
                    (s_view_ran = yonder_scripts_view_step(g.page.scripts, &out));
-    if (!ran) {
-        what = "script";
-        ran = yonder_scripts_step(g.page.scripts, &out);
-    }
-    if (!ran) {
-        what = "image";
-        ran = yonder_scripts_image_fire(g.page.scripts, &out);
-    }
-    if (!ran) {
-        what = "media";
-        ran = yonder_scripts_media_fire(g.page.scripts, &out);
-    }
-    if (!ran) {
-        what = "sheet";
-        ran = yonder_scripts_owed_fire(g.page.scripts, &out);
-    }
-    // The intersection observers' delivery task, which the last rendering
-    // step queued (intersections_turn).
-    if (!ran) {
-        what = "intersection-observer";
-        ran = yonder_scripts_intersections_fire(g.page.scripts, &out);
-    }
+    // The rest of the page's ordinary tasks, the young by their sources'
+    // order and the old by age (ordinary_task).
     if (!ran)
-        ran = queued_task(g.page.scripts, &what, &out);
-    if (!ran) {
-        what = "view";
-        ran = s_view_ran = yonder_scripts_view_step(g.page.scripts, &out);
-    }
-    if (!ran) {
-        what = "cleanup";
-        ran = yonder_scripts_finalization_fire(g.page.scripts, true, &out);
-    }
+        ran = ordinary_task(g.page.scripts, g.page.task_ages, true, &what, &out);
     // And when the turn found nothing else, an idle callback (MODERN_WEB.md
     // § P2b): the loop is idle. The loop comes back for the next while one
     // is due (main's bell), and the ticker wakes it for one that waits
@@ -15283,6 +15340,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     os64_memset(&fresh, 0, sizeof(fresh));
     fresh.scripting = g.stream.scripting;
     fresh.modern = g.stream.modern;
+    // Its scripts go on with the same host, so their tasks keep their ages.
+    os64_memcpy(fresh.task_ages, g.stream.page.task_ages, sizeof(fresh.task_ages));
     os64_html_document_t *doc = os64_html_parser_finish(g.stream.parser);
     g.stream.parser = NULL;
     if (doc == NULL) {

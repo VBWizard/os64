@@ -910,8 +910,52 @@ static void dom_media_session_cases(void)
     fixture_free(&f);
 }
 
+/* The clocked events coalesce: a page slower than the clock hears one
+ * timeupdate and one progress when it gets there, not a backlog, and the
+ * next is queued once that one is delivered. */
+static void dom_media_clocked_cases(void)
+{
+    DomFixture f;
+    media_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    media_script(&f, "globalThis.a=new Audio('song.mp3');hear(a);", "media: clocked: new Audio(src)");
+    media_turn(&f, "media: clocked: the turn opens it");
+    MediaSession *s = &media_sessions[0];
+    s->facts.probed = true;
+    s->facts.duration = 30;
+    s->facts.seekable = true;
+    s->facts.current = s->facts.future = s->facts.enough = true;
+    s->facts.arrived = 1;
+    media_turn(&f, "media: clocked: the probe");
+    media_activated = true;
+    media_script(&f, "a.play();heard();", "media: clocked: play");
+    media_turn(&f, "media: clocked: play's tasks");
+    media_script(&f, "heard();", "media: clocked: start clean");
+    s->facts.sounding = true;
+    /* Three turns, each past both clocks, with nothing delivered. */
+    for (int i = 1; i <= 3; i++) {
+        p2b_advance(400);
+        s->facts.position = 0.4 * i;
+        s->facts.arrived = 1 + i;
+        os64_dom_media_turn(f.binding);
+    }
+    media_turn(&f, "media: clocked: delivered at last");
+    media_script(&f, "const h=heard();assert(h==='progress:4 timeupdate:4','one of each, not three: '+h);"
+                     "assert(Math.abs(a.currentTime-1.2)<1e-9,'the time when it is delivered: '+a.currentTime);",
+                 "media: clocked: a backlog is one of each");
+    /* Delivered, the next is queued at its time. */
+    p2b_advance(400);
+    s->facts.position = 1.6;
+    s->facts.arrived = 5;
+    media_turn(&f, "media: clocked: the next turn");
+    media_script(&f, "const h=heard();assert(h==='progress:4 timeupdate:4','the clock goes on: '+h);",
+                 "media: clocked: the next of each after delivery");
+    fixture_free(&f);
+}
+
 static void dom_media_cases(void)
 {
+    dom_media_clocked_cases();
     dom_media_session_cases();
     dom_media_video_cases();
     dom_media_picture_cases();
