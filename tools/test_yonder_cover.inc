@@ -5,7 +5,7 @@
  * the ordinary one must agree to the pixel, and the cover must be taken,
  * or refused, as the case says. */
 
-static uint32_t cover_frame[480 * 360];
+static uint32_t cover_frame[800 * 600];
 
 /* The video `id` given a frame of w by h (its natural size too), the size
  * its player was told, so no paint asks the (absent) player for another. */
@@ -234,6 +234,29 @@ static void cover_cases(void)
     }
     cover_whole_same("cover: layers that might run the budget out, the window painted whole with covers and without "
                      "is the same");
+    cover_drop();
+
+    /* The same with the layers beneath drawn through a matrix that moves and
+     * halves them: their bounds are in the matrix's own pixels, met with
+     * the view taken back through it (Codex, #698 round 2). */
+    probe_page("<!doctype html><style>body{margin:0;background:#123}"
+               ".t{position:absolute;left:1000px;top:0;width:1580px;height:1180px;filter:blur(2px);"
+               "background:rgba(200,100,50,.2);transform:translateX(-1000px) scale(.5);transform-origin:0 0}"
+               "#v{position:absolute;left:0;top:0;width:800px;height:600px}"
+               "#over{position:absolute;left:60px;top:60px;width:200px;height:200px;background:#fff;"
+               "filter:blur(3px)}</style><div class=t></div><div class=t></div><div class=t></div>"
+               "<div class=t></div><video id=v></video><div id=over></div>", true);
+    cover_video("v", 800, 600, 800, 600);
+    {
+        uint64_t budget = s_cost.covered_budget;
+        CoverCounts b = cover_run(g.view.bounds);
+        check(b.covered == 0 && s_cost.covered_budget > budget,
+              "cover: transformed layers that might run the budget out keep the paint the ordinary way");
+        if (!(b.covered == 0 && s_cost.covered_budget > budget))
+            cover_said("transformed layers' budget", b);
+    }
+    cover_whole_same("cover: transformed layers that might run the budget out, the window painted whole with covers "
+                     "and without is the same");
     cover_drop();
 
     /* A video in a group is drawn on its sheets, never plain. */

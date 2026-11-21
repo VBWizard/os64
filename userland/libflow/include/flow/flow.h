@@ -2051,15 +2051,15 @@ int32_t flow_paint_path(const flow_tree_t *tree, const flow_box_t *box, const fl
 // At least as many pixels as any paint of `viewport` (or of a part of it)
 // at `scroll` can charge a face's budget for layers and backdrops: each
 // group that may take a layer (a filter, a mask — once and once a mask
-// layer — or a blend other than normal), its bounds met with the viewport,
-// counted in its own pixels when it is drawn through a matrix (the met
-// part over the matrix's determinant, a pixel grown each way) or inside
-// one (its bounds whole); and each box with a backdrop filter, its part in
-// the viewport (its own rect, inside a matrix). A face whose budget holds
-// this refuses no layer in any such paint, which is what lets a paint
-// split into parts, or culled beneath a cover, decide every layer as the
-// whole paint would (VIDEO.md § 5, The paint beneath the picture).
-// INT64_MAX / 4 for a matrix nearly edge-on.
+// layer — or a blend other than normal), its bounds met with the viewport
+// — when it is drawn through a matrix, its bounds (in the matrix's own
+// pixels) met with the viewport taken back through the matrix, grown a
+// pixel each way, and with its upright place, as the walk takes the view
+// in; inside one, its bounds whole — and each box with a backdrop filter,
+// its part in the viewport (its own rect, inside a matrix). A face whose
+// budget holds this refuses no layer in any such paint, which is what lets
+// a paint split into parts, or culled beneath a cover, decide every layer
+// as the whole paint would (VIDEO.md § 5, The paint beneath the picture).
 int64_t flow_layer_area_bound(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll);
 
 // The deepest box whose OWN rect holds (x, y), the last painted winning —

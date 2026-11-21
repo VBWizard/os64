@@ -72,6 +72,9 @@ mutants = [
     ('the-layers-budget-not-asked', YONDER,
      '    if (flow_layer_area_bound(g.page.tree, view, scroll) > (int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h) {',
      '    if (flow_layer_area_bound(g.page.tree, view, scroll) > (int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h && 0) {'),
+    ('a-transformed-layer-met-in-the-wrong-space', FLOW,
+     '                a = area_of(meet(bd, upright)) + (back.w > 0 && back.h > 0 ? area_of(meet(bd, back)) : 0);',
+     '                a = area_of(meet(bd, viewport)) + 0 * area_of(meet(bd, upright)) * area_of(back);'),
     ('the-canvases-not-acknowledged', YONDER, '    canvases_acknowledge();\n    return refused;',
      '    (void)canvases_acknowledge;\n    return refused;'),
 ]

@@ -3735,13 +3735,18 @@ int64_t flow_layer_area_bound(const flow_tree_t *tree, os64_gui_rect_t viewport,
             if (inside) {
                 a = area_of(bd);    // in the matrix's own pixels, which the group's bounds are in
             } else if (own) {
+                // Its bounds are in the matrix's own pixels: met with the
+                // view taken back through the matrix, a pixel grown each way
+                // for the painter's sampling, joined with where an upright
+                // drawing puts it, as the walk takes it in.
                 double m[6];
-                (void)flow_box_through(b, scroll, m, NULL, NULL);
-                double det = fabs(m[0] * m[3] - m[1] * m[2]);
-                os64_gui_rect_t met = meet(bd, viewport);
-                a = area_of(met) == 0 ? 0
-                    : det < 1.0 / 1024 ? unbounded
-                    : (int64_t)((double)(met.w + 2) * (double)(met.h + 2) / det) + 1;
+                flow_point_t up;
+                (void)flow_box_through(b, scroll, m, NULL, &up);
+                os64_gui_rect_t back = affine_back(m, viewport);
+                if (back.w > 0 && back.h > 0)
+                    back = grown(back, (const int32_t[4]){1, 1, 1, 1});
+                os64_gui_rect_t upright = moved(viewport, -(int64_t)up.x, -(int64_t)up.y);
+                a = area_of(meet(bd, upright)) + (back.w > 0 && back.h > 0 ? area_of(meet(bd, back)) : 0);
             } else {
                 a = area_of(meet(bd, viewport));
             }
