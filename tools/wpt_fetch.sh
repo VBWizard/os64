@@ -107,6 +107,7 @@ WPT_DIRS=(
     intersection-observer
     css/geometry
     resize-observer
+    css/selectors
 )
 
 top=$(git rev-parse --show-toplevel)
