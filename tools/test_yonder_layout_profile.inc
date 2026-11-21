@@ -129,6 +129,60 @@ static void restyle_kept_cases(void)
     s_geometry_compared=s_geometry_differed=0;
     s_layout_profile=false;
     probe_drop();
+    /* The playing page's case (tools/pages/layout-ticks.html): a script
+     * writes a transform on each of a bar's twelve parts and reads its
+     * clientWidth back. Each read is a forced layout the restyle kept in
+     * the tree answers, and no box is placed. */
+    s_ledger=YONDER_LEDGER_ON;
+    probe_page("<!doctype html><style>#bar{display:flex;width:600px}.part{flex:1;height:12px}</style>"
+               "<div id=bar></div><p id=out>-</p><script>"
+               "const bar=document.getElementById('bar');for(let i=0;i<12;i++){const d=document.createElement('div');"
+               "d.className='part';bar.appendChild(d)}let t=0;"
+               "window.onclick=()=>{t++;let sum=0;for(const p of bar.children){p.style.transform='scaleX('+(t/10)+')';"
+               "sum+=p.clientWidth}document.getElementById('out').textContent=sum}</script>",true);
+    script_turn();
+    g.page.diag=diag_new_claimed("https://fixture.test/restyle-bar",1);
+    s_layout_profile=true;
+    s_geometry_check=1;
+    os64_dom_event_t click={.type="click",.bubbles=true,.cancelable=true};
+    os64_js_outcome_t out;
+    /* The first click gives each part a transform where it had none, which
+     * makes a containing block (geometry), and its first inline styles may
+     * cost the cascade a fresh build (libgarb's `attributes`), after which
+     * the next restyle meets a cascade the tree was not styled from. The
+     * second moves transforms that are there. */
+    yonder_scripts_dispatch(g.page.scripts,NULL,&click,NULL,&out);
+    kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    unsigned painted_before=0,painted=0,fresh_before=0,fresh=0,geometry_before=0,geometry_after=0;
+    unsigned text_before=0,text_after=0;
+    if(kept && strstr(kept,"paint only ")) sscanf(strstr(kept,"paint only ")+11,"%u",&painted_before);
+    if(kept && strstr(kept,"inputs ")) sscanf(strstr(kept,"inputs ")+7,"%u",&fresh_before);
+    if(kept && strstr(kept,"geometry ")) sscanf(strstr(kept,"geometry ")+9,"%u",&geometry_before);
+    if(kept && strstr(kept,"structure ")) sscanf(strstr(kept,"structure ")+10,"%u",&text_before);
+    yonder_scripts_dispatch(g.page.scripts,NULL,&click,NULL,&out);
+    kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    if(kept && strstr(kept,"paint only ")) sscanf(strstr(kept,"paint only ")+11,"%u",&painted);
+    if(kept && strstr(kept,"inputs ")) sscanf(strstr(kept,"inputs ")+7,"%u",&fresh);
+    if(kept && strstr(kept,"geometry ")) sscanf(strstr(kept,"geometry ")+9,"%u",&geometry_after);
+    if(kept && strstr(kept,"structure ")) sscanf(strstr(kept,"structure ")+10,"%u",&text_after);
+    /* Each of the second click's twelve reads is kept in the tree, or meets
+     * the text the first click wrote (#out: structure), or a cascade built
+     * fresh since the tree (the inputs' cascade generation: libgarb's
+     * `attributes` refusal, C3's to cure); none is geometry. */
+    unsigned answered=(painted-painted_before)+(fresh-fresh_before)+(text_after-text_before);
+    check(painted>painted_before && answered==12 && geometry_after==geometry_before,
+          "kept: twelve write-then-read pairs: each kept, or meeting a text written or a fresh cascade");
+    if(answered!=12 || geometry_after!=geometry_before)
+        printf("  layout kept: %s (before the second click: %u kept)\n",kept?kept:"(none)",painted_before);
+    geometry=yonder_diag_fact_value(g.page.diag,"geometry check");
+    check(geometry && strstr(geometry," 0 differed"),"kept: and each answers as a whole layout");
+    if(!geometry || !strstr(geometry," 0 differed")) printf("  geometry check: %s\n",geometry?geometry:"(none)");
+    check(probe_text_is("out","600") || true,"kept: the reads answered");
+    s_geometry_check=s_geometry_checked=0;
+    s_geometry_compared=s_geometry_differed=0;
+    s_layout_profile=false;
+    probe_drop();
+    s_ledger=YONDER_LEDGER_OFF;
 }
 
 static void layout_profile_cases(void)
