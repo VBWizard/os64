@@ -3759,7 +3759,8 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
 // size drawn. Beside them the verbs no stage times (fills, videos and
 // canvases, form controls, stand-ins, text clips), so that what is left of
 // the view's rest is the painter's and the walk's own; and the boxes the
-// walk handed the painter. Each with how many times and its time in all,
+// walk handed the painter. What a paint draws after a video is counted
+// apart, `over the video`. Each with how many times and its time in all,
 // in the counter's cycles (cycles(), as the stages count), the costliest
 // first. As the stages time them: a layer's or a warp's open and close,
 // not the drawing between. What the table has no room for is counted
@@ -3767,7 +3768,7 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
 #define EFFECTS_MAX 32
 #define EFFECTS_DEPTH 32
 typedef struct {
-    char what[64];
+    char what[80];
     uint64_t n, cycles;
 } PaintEffect;
 static PaintEffect s_effects[EFFECTS_MAX];
@@ -3778,6 +3779,10 @@ static struct { int32_t w, h; uint64_t cycles; } s_layers_open[EFFECTS_DEPTH], s
 static int32_t s_nlayers_open, s_nwarps_open;
 // The painter's count of boxes when the effects' counting began.
 static uint64_t s_effects_boxes_from;
+// Whether the paint under way has drawn a video yet (timed_canvas): what is
+// counted after it was drawn over the video, and says so — what is before
+// it is what a paint inside the picture would not need (VIDEO.md V.7.1).
+static bool s_effects_past_video;
 
 static void effects_reset(void)
 {
@@ -3785,10 +3790,17 @@ static void effects_reset(void)
     s_effects_rest_n = s_effects_rest_cycles = 0;
     s_nlayers_open = s_nwarps_open = 0;
     s_effects_boxes_from = yonder_paint_boxes;
+    s_effects_past_video = false;
 }
 
-static void effect_counted(const char *what, uint64_t spent)
+static void effect_counted(const char *named, uint64_t spent)
 {
+    char over[80];
+    const char *what = named;
+    if (s_effects_past_video) {
+        os64_snprintf(over, sizeof(over), "%s over the video", named);
+        what = over;
+    }
     int32_t i = 0;
     for (; i < s_neffects && !os64_streq(s_effects[i].what, what); i++) {}
     if (i == s_neffects) {
@@ -17886,7 +17898,12 @@ static void timed_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64
 {
     uint64_t began = cycles();
     pane_canvas(ctx, b, c, clip);
-    effect_counted("videos and canvases", cycles_since(began));
+    bool video = b->node != NULL && b->node->kind == OS64_HTML_ELEMENT && b->node->tag == OS64_HTML_TAG_VIDEO;
+    char what[48];
+    os64_snprintf(what, sizeof(what), "%s %dx%d", video ? "video" : "canvas", (int)c.w, (int)c.h);
+    effect_counted(what, cycles_since(began));
+    if (video)
+        s_effects_past_video = true;
 }
 
 static void timed_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
@@ -17974,6 +17991,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     if (g.paint_scratch == NULL)
         g.paint_scratch = yonder_scratch_new();
     os64_gui_rect_t whole = {w->bounds.x - gl.dx, w->bounds.y - gl.dy, w->bounds.w, w->bounds.h};
+    s_effects_past_video = false;
     yonder_paint(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL,
                  g.paint_cache, g.paint_scratch, &v);
     // Filtered and blended groups, and backdrops, painted plain (FILTER.md

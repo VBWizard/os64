@@ -9420,7 +9420,17 @@ static void paint_cost_cases(void) {
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"; the rest: 25, 0.0 ms; boxes handed the painter ")!=NULL,
           "paint effects: past the twelve said and the table's room, the rest counted together");
+    /* What a paint draws after a video is counted apart. */
     effects_reset();
+    effect_counted("fills",3000000);
+    s_effects_past_video=true;
+    effect_counted("fills",1000000);
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint effects: fills: 1, 3.0 ms (3000 us each); fills over the video: 1, 1.0 ms (1000 us each);")!=NULL,
+          "paint effects: what is drawn after a video, counted apart");
+    effects_reset();
+    check(!s_effects_past_video,"paint effects: the count starting again starts before any video");
     /* The biggest part marked and by what, the biggest painted, and the
      * marks of the canvases and the form controls (YONDER_DIAGNOSTICS.md §
      * What paints cost). */
