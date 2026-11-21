@@ -207,8 +207,41 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
     }
     FMap written = {0};
     for (int32_t i = 0; room && i < k.n; i++)
-        room = f_map_put(&written, &k.pairs[i].was->style, k.pairs[i].was);
+        room = f_map_put(&written, &k.pairs[i].was->style, &k.pairs[i]);
     if (!room) {
+        f_map_free(&written);
+        out.why = FLOW_RESTYLE_ROOM;
+        os64_free(values);
+        os64_free(k.pairs);
+        f_style_free(b);
+        return out;
+    }
+    // A transform drawn through its matrix is a group of its own (is_group)
+    // with layers opened and closed round it, and one drawn upright or moved
+    // is not: a new value that crosses between them changes the public
+    // tree's layers, which no restyle in place rebuilds. Judged by filling a
+    // copy of each frame from its new value, before anything is written.
+    bool transformed = false;
+    for (const flow_box_t *box = tree->root; k.n > 0 && box != NULL; box = box_after(box)) {
+        const flow_frame_t *f = box->frame;
+        FKeep *kp = f != NULL && f->box == box && f->kind == F_FRAME_TRANSFORM ? f_map_get(&written, box->style) : NULL;
+        if (kp == NULL)
+            continue;
+        flow_frame_t tried = *f;
+        transform_fill(&tried, &values[kp - k.pairs]);
+        if (tried.through != f->through || tried.upright != f->upright) {
+            f_map_free(&written);
+            out.why = FLOW_RESTYLE_STACKING;
+            os64_free(values);
+            os64_free(k.pairs);
+            f_style_free(b);
+            return out;
+        }
+        transformed = true;
+    }
+    // A transform moves how far the page and its scroll containers reach,
+    // which is worked again from where placement left them.
+    if (transformed && tree->nscrollers > 0 && tree->reach_base_ranges == NULL) {
         f_map_free(&written);
         out.why = FLOW_RESTYLE_ROOM;
         os64_free(values);
@@ -246,6 +279,23 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
         drawn_changed(box, true, stamp);
     }
     f_map_free(&written);
+    // The page's extent and the scroll containers' ranges reached again,
+    // from where placement left them, now the transforms draw elsewhere.
+    if (transformed) {
+        tree->layout->width = tree->reach_base_w;
+        tree->layout->height = tree->reach_base_h;
+        for (int32_t i = 0; i < tree->nscrollers; i++)
+            tree->scrollers[i]->range = tree->reach_base_ranges[i];
+        reach_stacked(tree);
+        sticky_reach_scrolled(tree);
+        // A range that shrank holds its scroll within it, as a layout's
+        // restored scroll is held (flow_scroll_set).
+        for (int32_t i = 0; i < tree->nscrollers; i++) {
+            flow_frame_t *s = tree->scrollers[i];
+            if (s->at.x > s->range.x) s->at.x = s->range.x;
+            if (s->at.y > s->range.y) s->at.y = s->range.y;
+        }
+    }
     tree->styles->cascade_updates = b->cascade_updates;
     out = (flow_restyle_t){k.n > 0 ? FLOW_RESTYLE_PAINT : FLOW_RESTYLE_NOTHING, FLOW_RESTYLE_NONE, (uint64_t)k.n};
     if (!whole) {
@@ -260,24 +310,37 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
 
 // Whether the kept tree `a` answers as the whole layout `b` of the same
 // document does, for what a restyle kept in place may write or must leave:
-// the same boxes in the same order, each of the same kind, node and border
-// box, drawing styles equal in every field (f_style_equal), the same
-// decoration lines and, where there are lines, the same colours (a box with
-// none keeps colours it never draws, which a kept tree does not refresh),
-// and ink that covers the whole layout's (a kept tree's ink only grows,
-// ink_grown). The first box that differs is named at `node` (its
-// element's, for an anonymous box) with what differed at `what`.
+// - the same boxes in the same order, each of the same kind and node, with
+//   the same border box, overflow, clip, and stacking and painting flags;
+// - drawing styles equal in every field (f_style_equal);
+// - the same decoration lines and, where there are lines, the same colours
+//   (a box with none keeps colours it never draws, which a kept tree does
+//   not refresh);
+// - ink that covers the whole layout's (a kept tree's ink only grows,
+//   ink_grown);
+// - the same paint layers, in order, by box and part;
+// - the same page extent, and each scroll container's range and scroll.
+// The first difference is named: a box's at `node` (its element's, for an
+// anonymous box), and what differed at `what`.
 bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_html_node_t **node, const char **what)
 {
     *node = NULL;
     *what = NULL;
-    const flow_box_t *x = a != NULL ? a->root : NULL, *y = b != NULL ? b->root : NULL;
+    if (a == NULL || b == NULL) {
+        *what = "a tree";
+        return false;
+    }
+    const flow_box_t *x = a->root, *y = b->root;
     for (; x != NULL && y != NULL; x = box_after(x), y = box_after(y)) {
         bool ink_covers = true;
         for (int k = 0; k < 4; k++)
             ink_covers = ink_covers && x->ink[k] >= y->ink[k];
         const char *differs = x->kind != y->kind || x->node != y->node ? "the boxes"
                             : !same_rect(x->rect, y->rect) ? "a border box"
+                            : !same_rect(x->overflow, y->overflow) ? "an overflow"
+                            : x->clipped != y->clipped || (x->clipped && !same_rect(x->clip, y->clip)) ? "a clip"
+                            : x->stacked != y->stacked || x->positioned != y->positioned || x->fixed != y->fixed ||
+                              x->unpainted != y->unpainted || x->scroller != y->scroller ? "a box's stacking"
                             : (x->style == NULL) != (y->style == NULL) ? "a style"
                             : x->style != NULL && !f_style_equal(x->style, y->style) ? "a style"
                             : x->decoration != y->decoration ||
@@ -295,6 +358,33 @@ bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_h
     if (x != NULL || y != NULL) {
         *what = "the number of boxes";
         return false;
+    }
+    if (a->nlayers != b->nlayers) {
+        *what = "the paint layers";
+        return false;
+    }
+    for (int32_t i = 0; i < a->nlayers; i++)
+        if (a->layers[i].part != b->layers[i].part || a->layers[i].box->kind != b->layers[i].box->kind ||
+            a->layers[i].box->node != b->layers[i].box->node) {
+            *node = box_named(a->layers[i].box);
+            *what = "the paint layers";
+            return false;
+        }
+    if (a->layout->width != b->layout->width || a->layout->height != b->layout->height) {
+        *what = "the page's extent";
+        return false;
+    }
+    if (a->nscrollers != b->nscrollers) {
+        *what = "the scroll containers";
+        return false;
+    }
+    for (int32_t i = 0; i < a->nscrollers; i++) {
+        const flow_frame_t *s = a->scrollers[i], *t = b->scrollers[i];
+        if (s->range.x != t->range.x || s->range.y != t->range.y || s->at.x != t->at.x || s->at.y != t->at.y) {
+            *node = box_named(s->box);
+            *what = "a scroll container's range";
+            return false;
+        }
     }
     return true;
 }

@@ -118,6 +118,13 @@ struct flow_tree {
     // none is kept and the next layout makes the tree afresh.
     FArena restyle;
     bool restyle_spent;
+    // The page's extent and each scroll container's range as placement
+    // left them, before the stacked and transformed boxes reached past them
+    // (reach_stacked, which only grows them): what a restyle kept in place
+    // starts from to reach again when a transform moved. NULL ranges with
+    // scrollers: none could be kept, and no transform is restyled in place.
+    int64_t reach_base_w, reach_base_h;
+    flow_point_t *reach_base_ranges;
 };
 #define F_RESTYLE_ROOM ((size_t)1 << 20)
 
@@ -1862,6 +1869,7 @@ void flow_free(flow_tree_t *tree)
     f_arena_free(&tree->tick_lists[0]);
     f_arena_free(&tree->tick_lists[1]);
     f_arena_free(&tree->restyle);
+    os64_free(tree->reach_base_ranges);
     os64_free(tree->images);
     os64_free(tree->controls);
     os64_free(tree->positioned);
@@ -2368,6 +2376,12 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
             flow_free(tree);
             return NULL;
         }
+        tree->reach_base_w = tree->layout->width;
+        tree->reach_base_h = tree->layout->height;
+        tree->reach_base_ranges = tree->nscrollers > 0
+            ? os64_malloc((size_t)tree->nscrollers * sizeof(*tree->reach_base_ranges)) : NULL;
+        for (int32_t i = 0; tree->reach_base_ranges != NULL && i < tree->nscrollers; i++)
+            tree->reach_base_ranges[i] = tree->scrollers[i]->range;
         reach_stacked(tree);
         sticky_reach_scrolled(tree);
         ink_reach(tree->root);

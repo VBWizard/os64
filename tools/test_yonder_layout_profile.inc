@@ -59,14 +59,19 @@ static void restyle_kept_cases(void)
 {
     probe_page("<!doctype html><style>.on{color:red}.far{transform:translateX(5px)}.near{transform:translateX(9px)}"
                ".pad{padding-left:40px}.dim{opacity:.5}.gone{opacity:0}.blue{color:blue}"
-               ".shadow{box-shadow:0 0 20px red}@keyframes pulse{to{opacity:.5}}.spin{animation:pulse 1s infinite}</style>"
+               ".shadow{box-shadow:0 0 20px red}@keyframes pulse{to{opacity:.5}}.spin{animation:pulse 1s infinite}"
+               ".big{transform:scale(1)}.small{transform:scale(.5)}"
+               ".near1{transform:translateX(1px)}.away{transform:translateX(3000px)}</style>"
                "<p id=p class=far>text <b>bold</b></p><p id=q>more</p><div id=mix>loose <p>block</p> tail</div>"
-               "<p><u id=u>under</u></p>",false);
+               "<p><u id=u>under</u></p><canvas id=cv width=100 height=20></canvas>"
+               "<div id=sc class=big style=width:20px;height:20px></div>"
+               "<div id=far class=near1 style=position:absolute;left:0;top:0;width:8px;height:8px></div>",false);
     g.page.diag=diag_new_claimed("https://fixture.test/restyle-kept",1);
     s_layout_profile=true;
     s_geometry_check=1;      /* every kept tree laid out whole beside it and compared */
     /* The first change after the page arrived meets inputs its first layout
-     * left moving (the fonts' revision); a change after it is the case
+     * left moving (the fonts' revision), and a title is an attribute the
+     * restyle does not judge (structure); a change after it is the case
      * under test. */
     check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"title","t",1) && script_rebuild(),"kept: a first change");
     const flow_tree_t *shown=g.page.tree;
@@ -100,7 +105,7 @@ static void restyle_kept_cases(void)
           "kept: and in the whole layout");
     s_restyle_in_place=true;
     check(nk==nf && nk>0 && !memcmp(kept_answers,fresh_answers,nk*sizeof(int64_t)),
-          "kept: every box and style as a whole layout has them");
+          "kept: every box's border box, colour, transforms and opacity as a whole layout has them");
     check(kept_rect.x==fresh_rect.x && kept_rect.y==fresh_rect.y && kept_rect.width==fresh_rect.width &&
           kept_rect.height==fresh_rect.height,
           "kept: a script measures the transformed element as in a whole layout");
@@ -156,20 +161,45 @@ static void restyle_kept_cases(void)
     check(!os64_html_set_text(g.page.way.doc,probe_id("q")->first_child,"changed",7) && script_rebuild(),
           "kept: a text published");
     kept=yonder_diag_fact_value(g.page.diag,"layout kept");
-    check(kept && strstr(kept,"structure 1"),"kept: a text is declined as structure");
-    if(!kept || !strstr(kept,"structure 1")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    check(kept && strstr(kept,"structure 2"),"kept: a text is declined as structure");
+    if(!kept || !strstr(kept,"structure 2")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    /* An attribute box generation or placement read themselves (a canvas's
+     * size) is structural, whatever the styles say. */
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("cv"),"width","400",3) && script_rebuild(),
+          "kept: a canvas's width attribute published");
+    kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    check(kept && strstr(kept,"structure 3"),"kept: an attribute boxes read is declined as structure");
+    if(!kept || !strstr(kept,"structure 3")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    /* A transform that comes to be drawn through its matrix becomes a group
+     * of its own, with layers round it: declined as stacking. */
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("sc"),"class","small",5) && script_rebuild(),
+          "kept: a scale(1) to scale(.5) published");
+    kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    check(kept && strstr(kept,"stacking 2"),"kept: a transform crossing into its matrix is declined as stacking");
+    if(!kept || !strstr(kept,"stacking 2")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    /* A transform that moves a positioned box far out moves the page's
+     * extent: kept, and the extent reached again (the check compares it). */
+    int32_t extent=flow_width(g.page.tree);
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("far"),"class","away",4) && script_rebuild(),
+          "kept: a transform moving a box far out published");
+    kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    check(kept && strstr(kept,"paint only 5") && flow_width(g.page.tree)>extent+2000,
+          "kept: a transform far out is kept, and the page reaches it");
+    if(!kept || !strstr(kept,"paint only 5")) printf("  layout kept: %s (extent %d -> %d)\n",kept?kept:"(none)",
+                                                       extent,flow_width(g.page.tree));
     const char *geometry=yonder_diag_fact_value(g.page.diag,"geometry check");
-    check(geometry && !strncmp(geometry,"4 compared, 0 differed",22),
+    check(geometry && !strncmp(geometry,"5 compared, 0 differed",22),
           "kept: --geometry-check laid each kept tree out whole beside it, and none differed");
-    if(!geometry || strncmp(geometry,"4 compared, 0 differed",22)) printf("  geometry check: %s\n",geometry?geometry:"(none)");
+    if(!geometry || strncmp(geometry,"5 compared, 0 differed",22)) printf("  geometry check: %s\n",geometry?geometry:"(none)");
     s_geometry_check=s_geometry_checked=0;
     s_geometry_compared=s_geometry_differed=0;
     s_layout_profile=false;
     probe_drop();
     /* The playing page's case (tools/pages/layout-ticks.html): a script
      * writes a transform on each of a bar's twelve parts and reads its
-     * clientWidth back. Each read is a forced layout the restyle kept in
-     * the tree answers, and no box is placed. */
+     * clientWidth back, each read a forced layout the restyle kept in the
+     * tree may answer (the cases below say which do and why the others
+     * do not). */
     s_ledger=YONDER_LEDGER_ON;
     probe_page("<!doctype html><style>#bar{display:flex;width:600px}.part{flex:1;height:12px}</style>"
                "<div id=bar></div><p id=out>-</p><script>"
@@ -214,7 +244,7 @@ static void restyle_kept_cases(void)
     geometry=yonder_diag_fact_value(g.page.diag,"geometry check");
     check(geometry && strstr(geometry," 0 differed"),"kept: and each answers as a whole layout");
     if(!geometry || !strstr(geometry," 0 differed")) printf("  geometry check: %s\n",geometry?geometry:"(none)");
-    check(probe_text_is("out","600") || true,"kept: the reads answered");
+    check(probe_text_is("out","600"),"kept: the reads answered, twelve parts of 50 px");
     s_geometry_check=s_geometry_checked=0;
     s_geometry_compared=s_geometry_differed=0;
     s_layout_profile=false;

@@ -1818,14 +1818,13 @@ static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node
     return n < *cap ? n : *cap;
 }
 
-// The reasons a layout's cascade is built fresh, by the profile's index:
-// yonder's own (none yet, no memory for the scopes, sheets changed, sheets
-// that no longer match), then libgarb's refusals in their order, by
-// libgarb's own names.
 // THE RESTYLE KEPT IN THE SHOWN TREE (flow_restyle_in_place), on unless
 // `--restyle-in-place=off` asks for every change to be laid out, to compare.
 // `--geometry-check[=N]` lays every Nth kept tree out whole beside itself
 // and compares (restyle_kept_shown), counting the compared and the differed.
+// That whole layout is a layout of the page like any other: it stages the
+// web fonts it meets, whose arrival moves the fonts' revision, so a run
+// with the check on keeps a little less than one without it.
 static bool s_restyle_in_place = true;
 static uint32_t s_geometry_check, s_geometry_checked;
 static uint64_t s_geometry_compared, s_geometry_differed;
@@ -1851,6 +1850,10 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
     layout_profile_add(p, &sample);
 }
 
+// The reasons a layout's cascade is built fresh, by the profile's index:
+// yonder's own (none yet, no memory for the scopes, sheets changed, sheets
+// that no longer match), then libgarb's refusals in their order, by
+// libgarb's own names.
 static const char *const *cascade_reason_names(void)
 {
     _Static_assert(4 + GARB_UPDATE_REASONS - 1 == YONDER_LAYOUT_CASCADE_REASONS, "cascade refusal diagnostics");
@@ -2026,15 +2029,17 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // An open frame's time, which the frame's other samples share.
     s_env.now_ms = animation_time_ms();
     geometry_layout_total++;
-    webfonts_layout_begins(p);
     // A script's change to the page on screen, staged beside it at its own
     // sizes: first the restyle kept in the shown tree (BRIEF_LAYOUT_NEEDS.md
     // N1), which writes paint-only changes into that tree and builds no
     // box; the same tree then stands for the new layout (page_show keeps
-    // it). Declined, the page is laid out as before.
+    // it, and the families its fonts were staged for). Declined, the page
+    // is laid out as before, its fonts' record begun for that layout.
     flow_tree_t *fresh = restyle_kept_shown(p, reclaim, width, height, zoom);
-    if (fresh == NULL)
+    if (fresh == NULL) {
+        webfonts_layout_begins(p);
         fresh = profile_flow_layout(p, width);
+    }
     // The tree on screen holds the faces its runs were shaped in until it
     // is freed — each one a size of a file, counted against the text
     // engine's budget and its face limit — so a layout at new sizes (a

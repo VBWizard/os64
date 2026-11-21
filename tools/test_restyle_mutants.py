@@ -59,6 +59,13 @@ mutants = [
      '            (void)0;'),
     ('the-lists-left-in-the-build', RESTYLE, '        room = f_style_copy_lists(&values[i], &tree->restyle);',
      '        room = true;'),
+    # Attributes, matrices and reach (the cold read's three).
+    ('every-attribute-styled-only', SNAPSHOT, '            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry)))',
+     '            (entry->kind == OS64_HTML_CHANGE_ATTR && 0))'),
+    ('a-matrix-crossing-kept', RESTYLE, '        if (tried.through != f->through || tried.upright != f->upright) {',
+     '        if (0) {'),
+    ('the-reach-not-worked-again', RESTYLE, '        reach_stacked(tree);\n        sticky_reach_scrolled(tree);\n        // A range',
+     '        (void)0;\n        // A range'),
     # The check (--geometry-check).
     ('the-check-ignores-styles', RESTYLE, '                            : x->style != NULL && !f_style_equal(x->style, y->style) ? "a style"',
      '                            : 0 ? "a style"'),

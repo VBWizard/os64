@@ -1430,7 +1430,7 @@ typedef enum {
     FLOW_RESTYLE_NONE = 0,
     FLOW_RESTYLE_NO_TREE,       /* no tree, another document's, incomplete, or its room spent */
     FLOW_RESTYLE_NO_HISTORY,    /* no change history for it, or the history was lost */
-    FLOW_RESTYLE_STRUCTURE,     /* nodes added or removed, a text changed, or adopted sheets */
+    FLOW_RESTYLE_STRUCTURE,     /* nodes added or removed, a text, adopted sheets, an attribute boxes read */
     FLOW_RESTYLE_INPUTS,        /* another width, env, cascade generation or resource */
     FLOW_RESTYLE_STYLES,        /* the styles could not be built whole */
     FLOW_RESTYLE_MEMBERSHIP,    /* an element came to have a style, or lost it */
@@ -1451,11 +1451,13 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
                                      const flow_reuse_inputs_t *inputs, int32_t width);
 /* Whether the kept tree `a` answers as the whole layout `b` of the same
  * document does (the caller's check, `--geometry-check`): the same boxes in
- * order, each of the same kind, node and border box, its style equal in
- * every field, its decoration the same where it draws one, and its ink
- * covering the whole layout's (a kept tree's ink only grows). False names
- * the first difference: the node (an anonymous box's element) and what
- * differed. */
+ * order, each of the same kind, node, border box, overflow, clip and
+ * stacking flags, its style equal in every field, its decoration the same
+ * where it draws one, and its ink covering the whole layout's (a kept
+ * tree's ink only grows); the same paint layers; the same page extent and
+ * scroll containers' ranges and scrolls. Hit testing reads what this
+ * compares. False names the first difference: the node (an anonymous box's
+ * element) when a box is to blame, and what differed. */
 bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_html_node_t **node,
                         const char **what);
 /* WHAT A TREE HOLDS (MEMORY_CENSUS.md § 3): the bytes each of its arenas

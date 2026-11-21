@@ -21,8 +21,9 @@ struct FReuseSnapshot {
     int32_t width;
     bool lost;
     // A change was read since the snapshot's version that adds or removes
-    // nodes, changes a text, or changes a tree's adopted sheets: boxes or
-    // their text may differ, whatever the styles say, so a tree kept by a
+    // nodes, changes a text, changes a tree's adopted sheets, or sets an
+    // attribute boxes may read (reuse_attr_styled_only): boxes or their
+    // text may differ, whatever the styles say, so a tree kept by a
     // restyle in place (flow_restyle_in_place) cannot answer for it.
     bool structural;
     // Nodes, hash slots and per-box call records share this allocation.
@@ -112,6 +113,28 @@ static void reuse_slot_rule(FReuseSnapshot *r, const os64_html_node_t *target)
     while (root->parent) root = root->parent;
     reuse_mark_host(r, os64_html_shadow_host(root));
 }
+// Whether an attribute change is one only the cascade reads, so that the
+// styles it makes say everything it can change: `class`, `style` and `id`,
+// and the `data-` and `aria-` attributes, which no box reads. Every other
+// attribute may be read by box generation or placement themselves (a
+// canvas's or an image's size, `colspan`, a list's `start`, an image's
+// `src` or `alt`, an input's `type`), and is counted as structural.
+static bool reuse_name_begins(const char *n, const char *prefix)
+{
+    for (; *prefix != '\0'; n++, prefix++)
+        if (*n != *prefix)
+            return false;
+    return true;
+}
+static bool reuse_attr_styled_only(const os64_html_change_entry_t *e)
+{
+    const char *n = e->attr_ns == NULL ? e->attr_name : NULL;
+    if (n == NULL)
+        return false;
+    return os64_streq(n, "class") || os64_streq(n, "style") || os64_streq(n, "id") ||
+           reuse_name_begins(n, "data-") || reuse_name_begins(n, "aria-");
+}
+
 static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
 {
     if (r->lost) return false;
@@ -125,10 +148,12 @@ static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
     bool shadows = os64_html_has_shadow_roots(r->doc);
     for (; entry; entry = entry->next) {
         // An element's custom state is the cascade's to read; a STATE change
-        // on a document or a shadow root is its adopted sheets.
+        // on a document or a shadow root is its adopted sheets. An attribute
+        // is structural unless only the cascade reads it.
         if (entry->kind == OS64_HTML_CHANGE_CHILDREN || entry->kind == OS64_HTML_CHANGE_TEXT ||
             (entry->kind == OS64_HTML_CHANGE_STATE && entry->target != NULL &&
-             entry->target->kind != OS64_HTML_ELEMENT))
+             entry->target->kind != OS64_HTML_ELEMENT) ||
+            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry)))
             r->structural = true;
         reuse_mark(r, entry->target);
         for (size_t i = 0; i < entry->nadded; ++i) reuse_mark(r, entry->added[i]);
