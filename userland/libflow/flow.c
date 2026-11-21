@@ -3648,13 +3648,100 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
     flow_visit_groups(tree, viewport, scroll, &v);
 }
 
+// The layer that paints `box` (flow_paint_path), of its nearest stacked
+// ancestor, or of itself when it is stacked, or of the root: that box's
+// WHOLE, or, where members of negative z-index split it, its SELF for the
+// box itself (its own background and borders) and its BODY for a box
+// inside it; -1 for none.
+static int32_t paint_part_of(const flow_tree_t *tree, const flow_box_t *box)
+{
+    if (tree == NULL || box == NULL)
+        return -1;
+    const flow_box_t *e = box;
+    while (e != NULL && !e->stacked && e != tree->root)
+        e = e->parent;
+    if (e == NULL)
+        return -1;
+    LayerPart split = e == box ? PART_SELF : PART_BODY;
+    for (int32_t i = 0; i < tree->nlayers; i++)
+        if (tree->layers[i].box == e && (tree->layers[i].part == PART_WHOLE || tree->layers[i].part == split))
+            return i;
+    return -1;
+}
+
+int32_t flow_paint_path(const flow_tree_t *tree, const flow_box_t *box, const flow_box_t **out, int32_t cap)
+{
+    int32_t k = paint_part_of(tree, box);
+    if (k < 0)
+        return -1;
+    // The opens not yet closed when the walk comes to `k`, outermost first:
+    // a close always ends the innermost open.
+    int32_t depth = 0;
+    for (int32_t i = 0; i < k; i++) {
+        if (tree->layers[i].part == PART_OPEN) {
+            if (depth < cap && out != NULL)
+                out[depth] = tree->layers[i].box;
+            depth++;
+        } else if (tree->layers[i].part == PART_CLOSE && depth > 0) {
+            depth--;
+        }
+    }
+    return depth;
+}
+
+// The layer index of the close of the group opened at `i`.
+static int32_t close_of(const flow_tree_t *tree, int32_t i)
+{
+    int32_t depth = 0;
+    for (int32_t k = i + 1; k < tree->nlayers; k++) {
+        if (tree->layers[k].part == PART_OPEN)
+            depth++;
+        else if (tree->layers[k].part == PART_CLOSE && depth-- == 0)
+            return k;
+    }
+    return tree->nlayers;
+}
+
+// The part that paints the cover (flow_visit_groups_from's `from`), walked
+// with each box passed through this gate: none handed over until the
+// cover is.
+typedef struct {
+    void (*visit)(void *ctx, const flow_box_t *box);
+    void *ctx;
+    const flow_box_t *from;
+    bool found;
+} FromGate;
+
+static void from_gate(void *ctx, const flow_box_t *box)
+{
+    FromGate *g = ctx;
+    if (!g->found) {
+        if (box != g->from)
+            return;
+        g->found = true;
+    }
+    g->visit(g->ctx, box);
+}
+
 void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                        const flow_visitor_t *visitor)
 {
+    flow_visit_groups_from(tree, viewport, scroll, visitor, NULL, NULL);
+}
+
+void flow_visit_groups_from(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                            const flow_visitor_t *visitor, const flow_box_t *from, bool *found)
+{
+    if (found != NULL)
+        *found = false;
     if (tree == NULL || tree->root == NULL || visitor == NULL || visitor->visit == NULL)
         return;
     void (*visit)(void *, const flow_box_t *) = visitor->visit;
     void *ctx = visitor->ctx;
+    // The cover: the part that paints it, and the gate its own part's boxes
+    // pass through.
+    int32_t from_part = from != NULL ? paint_part_of(tree, from) : -1;
+    FromGate gate = {visit, ctx, from, false};
     os64_gui_rect_t *bounds = visitor->open != NULL ? all_group_bounds(tree, scroll) : NULL;
     // The view in the coordinates each open group drawn through its matrix
     // is painted in: the one outside taken back through the matrix and
@@ -3675,6 +3762,18 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
     int32_t depth = 0;
     for (int32_t i = 0; i < tree->nlayers; i++) {
         const flow_box_t *b = tree->layers[i].box;
+        // Before the cover's part: a group that closes before it is culled
+        // whole, and every part is culled; the open of a group that holds
+        // it comes as ever.
+        if (i < from_part && tree->layers[i].part != PART_CLOSE) {
+            if (tree->layers[i].part != PART_OPEN)
+                continue;
+            int32_t end = close_of(tree, i);
+            if (end < from_part) {
+                i = end;
+                continue;
+            }
+        }
         os64_gui_rect_t view = depth == 0 ? viewport : depth <= F_VIEWS ? views[depth - 1]
                                                                         : kWholePlane;
         if (tree->layers[i].part == PART_OPEN) {
@@ -3721,6 +3820,10 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
         }
         flow_point_t o = flow_box_doc_offset(b, scroll);
         Visit v = {tree, moved(view, -(int64_t)o.x, -(int64_t)o.y), visit, ctx};
+        if (i == from_part) {
+            v.visit = from_gate;
+            v.ctx = &gate;
+        }
         switch (tree->layers[i].part) {
         case PART_WHOLE:
             if (b->kind != FLOW_BOX_ATOMIC)
@@ -3730,7 +3833,7 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
             break;
         case PART_SELF:
             if (!b->unpainted && meets(b->overflow, v.view))
-                visit(ctx, b);
+                v.visit(v.ctx, b);
             break;
         case PART_BODY: {
             if (b->unpainted || !meets(b->overflow, v.view))
@@ -3755,6 +3858,8 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
         case PART_OPEN: case PART_CLOSE: break;     // heard above
         }
     }
+    if (found != NULL)
+        *found = from != NULL && gate.found;
     os64_free(bounds);
 }
 

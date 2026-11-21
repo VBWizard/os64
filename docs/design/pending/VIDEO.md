@@ -600,10 +600,14 @@ does not write is not covered). A video is a cover for this paint when:
 3. **Painted at all.** The box is visible and not `unpainted`.
 
 The covered pixels are the copy's rectangle met with the box's clip
-(`flow_box_doc_clip`); an ancestor's ROUNDED clip (overflow with a
-border-radius, which players often are) takes the square of each radius
-out of the covered part at its corner. A letterboxed picture's bars are
-the box's background, not the copy's.
+(`flow_box_doc_clip`), which is the clip the painter draws it in
+(`box_painter`): a rectangle. yonder draws neither an ancestor's rounded
+clip (overflow with a border-radius, which players often are) nor
+`clip-path`, so today a rounded player's picture is drawn square and its
+corners are covered; the day either is drawn, each cut corner comes out
+of the cover and is split off, and the rounded-ancestor fixture, painted
+both ways, is what says so. A letterboxed picture's bars are the box's
+background, not the copy's.
 
 **R split, not refused.** Where R is more than the covered part, the
 covered part is painted by the rule and the rest of R, at most eight

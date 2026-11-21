@@ -2022,6 +2022,30 @@ typedef struct {
 void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                        const flow_visitor_t *visitor);
 
+// The same walk for a face that will draw `from` over everything before it
+// (a cover, VIDEO.md § 5, The paint beneath the picture): nothing emitted
+// before `from` itself is handed over. Every part of the paint order
+// before the one that paints `from` (flow_paint_path) is culled as a part
+// outside the view is; a group's open and close come exactly when the
+// group holds `from` — when `from` is handed over between them — and every
+// other group before it is culled whole, its opens, closes and boxes
+// alike; inside the part that paints it, no box is handed over until
+// `from` is. From there the walk is flow_visit_groups'. Whether `from` was
+// handed over is written to `*found` (when not NULL): a face told false
+// has drawn only what came after a box it never saw.
+void flow_visit_groups_from(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                            const flow_visitor_t *visitor, const flow_box_t *from, bool *found);
+
+// The groups that hold `box` in the paint order — those whose open comes
+// before the part that paints it and whose close after — outermost first,
+// at most `cap` of them written to `out`; the count, or -1 when no part
+// paints it (no tree, or a box of none). The part that paints a box is of
+// its nearest stacked ancestor, or of itself when it is stacked, or of the
+// root: that box's whole walk, or, where members of negative z-index split
+// it, its own background and borders for the box itself and the rest of it
+// for a box inside.
+int32_t flow_paint_path(const flow_tree_t *tree, const flow_box_t *box, const flow_box_t **out, int32_t cap);
+
 // The deepest box whose OWN rect holds (x, y), the last painted winning —
 // the stacked boxes backwards, then the ordinary tree — whose clip holds
 // the point, and that is drawn (`visibility: visible`) and not
