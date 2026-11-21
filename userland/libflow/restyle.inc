@@ -30,13 +30,15 @@ static bool keep_derived_equal(const FStyled *o, const FStyled *n)
 }
 
 // Whether a paint-only change leaves the public tree's stacking as it was:
-// an opacity that stays on its side of 1 (a group) and of 0 (unpainted, by
-// `transparent`), a box blended and masked as before (as the public tree
-// asks, for an atom and for a box that is none), and its visibility. The
-// stacking is rebuilt by no restyle in place, so a change to it is declined.
+// an opacity that stays on its side of 1 (a group), a box blended and
+// masked as before (as the public tree asks, for an atom and for a box that
+// is none), and its visibility. The stacking is rebuilt by no restyle in
+// place, so a change to it is declined. An opacity's side of 0 is the
+// record's `transparent` (an unpainted box), which keep_derived_equal
+// compares.
 static bool keep_stacking_same(const flow_style_t *a, const flow_style_t *b)
 {
-    return (a->opacity < 1000) == (b->opacity < 1000) && (a->opacity == 0) == (b->opacity == 0) &&
+    return (a->opacity < 1000) == (b->opacity < 1000) &&
            f_blended(a, false) == f_blended(b, false) && f_blended(a, true) == f_blended(b, true) &&
            f_masked(a, false) == f_masked(b, false) && f_masked(a, true) == f_masked(b, true) &&
            a->visibility == b->visibility;
@@ -164,7 +166,10 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
         tree->styles == NULL || tree->restyle_spent)
         return out;
     // What changed since the tree, and whether it was laid out as this
-    // layout would be: the graft's own source test.
+    // layout would be: the graft's own source test, but for the cascade's
+    // generation. A cascade built fresh since the tree is no reason to
+    // decline: the styles are then built whole (f_style_build_reusing
+    // reuses nothing across a generation) and judged like any others.
     FReuseSnapshot *r = tree->reuse;
     flow_reuse_stats_t ignored = {0};
     out.why = FLOW_RESTYLE_NO_HISTORY;
@@ -174,8 +179,7 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
     if (r->structural)
         return out;
     out.why = FLOW_RESTYLE_INPUTS;
-    if (r->width != width || r->doc != doc ||
-        r->generation != garb_cascade_generation(env->cascade) || doc->quirks == OS64_HTML_QUIRKS ||
+    if (r->width != width || r->doc != doc || doc->quirks == OS64_HTML_QUIRKS ||
         !reuse_inputs_equal(&r->inputs, inputs) || !reuse_environment_equal(&r->env, env))
         return out;
     FStyles *b = f_style_build_reusing(doc, model, env, tree->styles, false);

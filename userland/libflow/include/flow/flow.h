@@ -1416,8 +1416,10 @@ flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
  * else, those values written into `tree` in place, with no box built or
  * placed. The tree must be the one laid out last for this document, at
  * `width`, with the env and inputs of the layout that would follow (the
- * graft's own source test). A kept tree is the same tree: its boxes and
- * their places stand, its styles, transforms' frames, ink and drawn stamps
+ * graft's own source test, which also asks for the cascade's generation;
+ * this does not, building every style afresh when it moved). A kept tree is
+ * the same tree: its boxes and their places stand, its styles, transforms'
+ * frames, ink and drawn stamps
  * follow the new values, and so, where a transform moved, do the page's
  * extent and the scroll containers' ranges (a scroll past a range that
  * shrank is held within it). Declined, the tree is as it was unless `why` is
@@ -1433,12 +1435,12 @@ typedef enum {
     FLOW_RESTYLE_NO_TREE,       /* no tree, another document's, incomplete, or its room spent */
     FLOW_RESTYLE_NO_HISTORY,    /* no change history for it, or the history was lost */
     FLOW_RESTYLE_STRUCTURE,     /* nodes added or removed, a text, adopted sheets, an attribute boxes read */
-    FLOW_RESTYLE_INPUTS,        /* another width, env, cascade generation or resource */
+    FLOW_RESTYLE_INPUTS,        /* another width, env or resource */
     FLOW_RESTYLE_STYLES,        /* the styles could not be built whole */
     FLOW_RESTYLE_MEMBERSHIP,    /* an element came to have a style, or lost it */
     FLOW_RESTYLE_GEOMETRY,      /* a style placement reads changed, or what boxes are built from */
     FLOW_RESTYLE_MOTION,        /* an element an animation runs on, before or after */
-    FLOW_RESTYLE_STACKING,      /* opacity across 0 or 1, blending, masks, visibility */
+    FLOW_RESTYLE_STACKING,      /* opacity across 1, blending, masks, visibility, a matrix */
     FLOW_RESTYLE_DECORATION,    /* a decoration, or its colours where a line is drawn, which fragments copy */
     FLOW_RESTYLE_ROOM,          /* the restyle arena's room, or memory */
     FLOW_RESTYLE_NREASONS

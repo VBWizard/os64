@@ -146,19 +146,24 @@ static void restyle_kept_cases(void)
     check(kept && strstr(kept,"decoration 1"),"kept: an underlined colour is declined as decoration");
     if(!kept || !strstr(kept,"decoration 1")) printf("  layout kept: %s\n",kept?kept:"(none)");
     shown=g.page.tree;
-    /* Declined: padding moves boxes; opacity across 0 changes the stacking;
-     * a text changes the boxes' text. */
+    /* Declined: padding moves boxes; an opacity across 1 makes or ends a
+     * group (stacking), and across 0 paints the box or not (geometry: the
+     * record's `transparent`); a text changes the boxes' text. */
     check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"class","pad",3) && script_rebuild(),
           "kept: a padding published");
     kept=yonder_diag_fact_value(g.page.diag,"layout kept");
     check(g.page.tree!=shown && kept && strstr(kept,"geometry 1"),"kept: a padding is declined as geometry");
     if(!kept || !strstr(kept,"geometry 1")) printf("  layout kept: %s\n",kept?kept:"(none)");
-    check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"class","pad dim",7) && script_rebuild() &&
-          !os64_html_set_attr(g.page.way.doc,probe_id("q"),"class","pad gone",8) && script_rebuild(),
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"class","pad dim",7) && script_rebuild(),
+          "kept: an opacity below 1 published");
+    kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    check(kept && strstr(kept,"stacking 1"),"kept: an opacity across 1 is declined as stacking");
+    if(!kept || !strstr(kept,"stacking 1")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"class","pad gone",8) && script_rebuild(),
           "kept: an opacity to 0 published");
     kept=yonder_diag_fact_value(g.page.diag,"layout kept");
-    check(kept && strstr(kept,"stacking 1"),"kept: an opacity across 0 is declined as stacking");
-    if(!kept || !strstr(kept,"stacking 1")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    check(kept && strstr(kept,"geometry 2"),"kept: an opacity across 0 is declined as geometry (unpainted)");
+    if(!kept || !strstr(kept,"geometry 2")) printf("  layout kept: %s\n",kept?kept:"(none)");
     check(!os64_html_set_text(g.page.way.doc,probe_id("q")->first_child,"changed",7) && script_rebuild(),
           "kept: a text published");
     kept=yonder_diag_fact_value(g.page.diag,"layout kept");
@@ -215,10 +220,10 @@ static void restyle_kept_cases(void)
     os64_dom_event_t click={.type="click",.bubbles=true,.cancelable=true};
     os64_js_outcome_t out;
     /* The first click gives each part a transform where it had none, which
-     * makes a containing block (geometry), and its first inline styles may
-     * cost the cascade a fresh build (libgarb's `attributes`), after which
-     * the next restyle meets a cascade the tree was not styled from. The
-     * second moves transforms that are there. */
+     * makes a containing block (geometry). The second moves transforms that
+     * are there, and its inline styles may cost the cascade a fresh build
+     * (libgarb's `attributes`), which the restyle meets with styles built
+     * whole. */
     yonder_scripts_dispatch(g.page.scripts,NULL,&click,NULL,&out);
     kept=yonder_diag_fact_value(g.page.diag,"layout kept");
     unsigned painted_before=0,painted=0,fresh_before=0,fresh=0,geometry_before=0,geometry_after=0;
@@ -233,14 +238,13 @@ static void restyle_kept_cases(void)
     if(kept && strstr(kept,"inputs ")) sscanf(strstr(kept,"inputs ")+7,"%u",&fresh);
     if(kept && strstr(kept,"geometry ")) sscanf(strstr(kept,"geometry ")+9,"%u",&geometry_after);
     if(kept && strstr(kept,"structure ")) sscanf(strstr(kept,"structure ")+10,"%u",&text_after);
-    /* Each of the second click's twelve reads is kept in the tree, or meets
-     * the text the first click wrote (#out: structure), or a cascade built
-     * fresh since the tree (the inputs' cascade generation: libgarb's
-     * `attributes` refusal, C3's to cure); none is geometry. */
-    unsigned answered=(painted-painted_before)+(fresh-fresh_before)+(text_after-text_before);
-    check(painted>painted_before && answered==12 && geometry_after==geometry_before,
-          "kept: twelve write-then-read pairs: each kept, or meeting a text written or a fresh cascade");
-    if(answered!=12 || geometry_after!=geometry_before)
+    /* Of the second click's twelve reads, the first meets the text the first
+     * click wrote (#out: structure) and the other eleven are kept in the
+     * tree; none is geometry, and none is declined for a fresh cascade. */
+    bool answered=painted-painted_before==11 && text_after-text_before==1 && fresh==fresh_before &&
+                  geometry_after==geometry_before;
+    check(answered,"kept: twelve write-then-read pairs: eleven kept, one meeting the text written");
+    if(!answered)
         printf("  layout kept: %s (before the second click: %u kept)\n",kept?kept:"(none)",painted_before);
     geometry=yonder_diag_fact_value(g.page.diag,"geometry check");
     check(geometry && strstr(geometry," 0 differed"),"kept: and each answers as a whole layout");

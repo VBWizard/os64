@@ -330,3 +330,52 @@ static void graft_retain_failure(void)
     flow_tree_t *next=graft_layout(&p,old,NULL,NULL);
     flow_free(old);graft_oracle(&p,next);flow_free(next);sheeted_close(&p);
 }
+
+// THE RESTYLE KEPT IN THE TREE (flow_restyle_in_place) beside the check that
+// judges it (flow_restyle_check). A paint-only change is written into the
+// tree laid out before it, which then answers as a whole layout of the
+// changed document does; before the write, the check tells the two apart and
+// names the element. A change placement reads is declined, the tree left as
+// it was, and the check names what moved (in a box of fixed height, so that
+// no box before it in tree order moves first).
+static bool restyle_check_says(const flow_tree_t *a, const flow_tree_t *b, const char *want,
+                               const os64_html_node_t *at)
+{
+    const os64_html_node_t *node = NULL;
+    const char *what = NULL;
+    bool same = flow_restyle_check(a, b, &node, &what);
+    if (want == NULL)
+        return same && what == NULL;
+    return !same && what != NULL && strcmp(what, want) == 0 && node == at;
+}
+static flow_restyle_t restyle_keep(Sheeted *p, flow_tree_t *tree)
+{
+    flow_reuse_inputs_t inputs = {.resource_owner = p->doc};
+    os64_page_t *model = os64_page_rebuild(p->page);
+    flow_restyle_t kept = flow_restyle_in_place(tree, p->doc, model, &p->env, &inputs, 800);
+    os64_page_free(model);
+    return kept;
+}
+static void restyle_in_place_cases(void)
+{
+    Sheeted p;sheeted_open(&p,"<!doctype html><style>p{margin:4px}</style><p id=a>first <b>bold</b></p>"
+        "<div style='height:60px'><p id=q>second</p></div><p>tail</p>",800,600);
+    os64_html_node_t *q=graft_node(&p,"q");
+    flow_tree_t *old=graft_layout(&p,NULL,NULL,NULL);
+    os64_html_set_attr(p.doc,q,"style","color:green",11);graft_update(&p);
+    flow_tree_t *whole=graft_layout(&p,NULL,NULL,NULL);
+    expect("restyle: before the write the check tells a colour apart, at its element",
+           old && whole && restyle_check_says(old,whole,"a style",q),NULL);
+    flow_restyle_t kept=restyle_keep(&p,old);
+    expect("restyle: a colour is written in place",kept.kind==FLOW_RESTYLE_PAINT && kept.written==1,NULL);
+    expect("restyle: and the kept tree answers as a whole layout",restyle_check_says(old,whole,NULL,NULL),NULL);
+    flow_free(whole);
+    os64_html_set_attr(p.doc,q,"style","color:green;padding-top:7px",27);graft_update(&p);
+    whole=graft_layout(&p,NULL,NULL,NULL);
+    expect("restyle: the check tells a padding apart, at its element",
+           whole && restyle_check_says(old,whole,"a border box",q),NULL);
+    kept=restyle_keep(&p,old);
+    expect("restyle: a padding is declined as geometry",
+           kept.kind==FLOW_RESTYLE_DECLINED && kept.why==FLOW_RESTYLE_GEOMETRY,NULL);
+    flow_free(whole);flow_free(old);sheeted_close(&p);
+}

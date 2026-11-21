@@ -3,7 +3,9 @@
 (userland/libflow/restyle.inc, flow_restyle_in_place, and the snapshot's
 `structural` mark in reuse_snapshot.inc), against the scripts host's profile
 cases (tools/test_yonder_scripts_host.sh with YONDER_PROFILE_ONLY, which run
-restyle_kept_cases with every kept tree laid out whole beside it): a mutant
+restyle_kept_cases with every kept tree laid out whole beside it) and
+libflow's own (tools/test_libflow_host.sh --restyle, restyle_in_place_cases,
+which also hand the check trees that differ): a mutant
 is CAUGHT when the cases fail, MISSED when they pass, which means a test is
 missing and gets written. A break that changes nothing a rule promises is
 not in the list; the comment after it says which and why. A build failure
@@ -31,22 +33,19 @@ args.logs.mkdir(parents=True, exist_ok=True)
 
 RESTYLE = 'userland/libflow/restyle.inc'
 SNAPSHOT = 'userland/libflow/reuse_snapshot.inc'
-CASES = 'bash tools/test_yonder_scripts_host.sh'
+CASES = 'bash tools/test_yonder_scripts_host.sh && bash tools/test_libflow_host.sh --restyle'
 
 mutants = [
     # What changed since the tree.
     ('a-text-is-not-structure', SNAPSHOT, '            r->structural = true;', '            (void)0;'),
     ('structure-not-asked', RESTYLE, '    if (r->structural)\n        return out;', '    if (0)\n        return out;'),
-    ('another-generation-kept', RESTYLE,
-     '        r->generation != garb_cascade_generation(env->cascade) || doc->quirks == OS64_HTML_QUIRKS ||',
-     '        doc->quirks == OS64_HTML_QUIRKS ||'),
     # The verdict.
     ('geometry-kept', RESTYLE, '    if (!keep_derived_equal(was, is) || !f_style_paint_only(&was->style, &is->style)) {',
      '    if (!keep_derived_equal(was, is)) {'),
-    ('stacking-kept', RESTYLE, '    if (!keep_stacking_same(&was->style, &is->style)) {', '    if (0) {'),
-    ('opacity-across-zero-kept', RESTYLE,
-     '    return (a->opacity < 1000) == (b->opacity < 1000) && (a->opacity == 0) == (b->opacity == 0) &&',
-     '    return (a->opacity < 1000) == (b->opacity < 1000) &&'),
+    ('stacking-kept', RESTYLE, '    if (!keep_stacking_same(&was->style, &is->style)) {',
+     '    if (!keep_stacking_same(&was->style, &is->style) && 0) {'),
+    ('opacity-across-one-kept', RESTYLE, '    return (a->opacity < 1000) == (b->opacity < 1000) &&\n',
+     '    return\n'),
     ('motion-kept', RESTYLE, '    if (was->motion != NULL || is->motion != NULL) {', '    if (0) {'),
     ('decoration-kept', RESTYLE, '    if (!same_decoration) {', '    if (0) {'),
     # The writes.
@@ -61,7 +60,7 @@ mutants = [
      '        room = true;'),
     # Attributes, matrices and reach (the cold read's three).
     ('every-attribute-styled-only', SNAPSHOT, '            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry)))',
-     '            (entry->kind == OS64_HTML_CHANGE_ATTR && 0))'),
+     '            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry) && 0))'),
     ('a-matrix-crossing-kept', RESTYLE, '        if (tried.through != f->through || tried.upright != f->upright) {',
      '        if (0) {'),
     ('the-reach-not-worked-again', RESTYLE, '        reach_stacked(tree);\n        sticky_reach_scrolled(tree);\n        // A range',
@@ -69,6 +68,8 @@ mutants = [
     # The check (--geometry-check).
     ('the-check-ignores-styles', RESTYLE, '                            : x->style != NULL && !f_style_equal(x->style, y->style) ? "a style"',
      '                            : 0 ? "a style"'),
+    ('the-check-ignores-border-boxes', RESTYLE, '                            : !same_rect(x->rect, y->rect) ? "a border box"',
+     '                            : 0 ? "a border box"'),
 ]
 
 # Not run, because it changes nothing a rule promises:
@@ -78,6 +79,8 @@ mutants = [
 # - `tree->styles->cascade_updates = b->cascade_updates`: without it the next
 #   build restyles elements the cascade did not touch, which costs a build's
 #   work and changes no answer.
+# A break that does not build (a function left unused, which -Werror
+# refuses) is written to keep the function called, `&& 0` after it.
 
 env = dict(os.environ, YONDER_PROFILE_ONLY='1')
 caught, missed, unbuilt = [], [], []
