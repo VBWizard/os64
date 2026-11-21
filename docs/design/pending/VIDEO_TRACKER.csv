@@ -25,4 +25,5 @@ V.5.3,"A video on a page: yonder's video element is a player, the picture in its
 V.5.4,"<audio> on the player too: yonder's own decoder loop retired",V.5.3,done,#686,"VIDEO.md § 3 (for a sound alone) and AUDIO_YONDER.md § As built (V.5.4); the player gains loop, the source's idle hook and a lent bell; /tests/playertest. P5 2026-11-20: loops seamless, a busy device waited out from the start, headphone buttons, a real page's pause and resume"
 V.6,"V6. Poster, controls over the picture, the video page, a file whose index is at the end",V.5,todo,,
 V.7,"V7. Visibility, the budget for many videos, the muted-clip debt",V.5 Q5 Q6 Q7,todo,,
+V.7.1,"A frame paints from the picture up: a paint wholly inside an opaque video picture drawn plain draws nothing beneath it",V.5,doing,,"VIDEO.md § 5, The paint beneath the picture. Measured on the P5 2026-11-21: 157 of 183 paints were the video box, ~270 ms each, ~1 ms of it the frame. Before it, in the same branch: the record's paint effects, and the blur's columns in strips (bit-identical, 2.4x on the host)"
 V.8,V8. Full screen,V.5 Q4,todo,,

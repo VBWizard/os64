@@ -547,6 +547,86 @@ design, not a defect, and `far_behind_us` with the entries counted says
 how often V4 sees it. The constants (3/8, 3/4, 125 ms, 1 s, 30 periods)
 are to tune on the P5.
 
+### The paint beneath the picture (V.7.1)
+
+**Measured** (the P5, 2026-11-21, a video page played in a maximized
+window, the record's `paint effects`): 157 of a minute's 183 paints were
+the video's box alone, 1780x1002, at about 270 ms each, about 3 frames
+a second. Step 4's "ordinary walk of the dirty part" draws everything
+under the box first: the page's backgrounds, the page's glow behind the
+player (a canvas scaled, a warp of 33 ms, and blurred, 47 ms), a blurred
+layer the size of the box (69 ms) and the rest of the view (about
+114 ms). Then the frame is copied over all of it, and the frame's own
+part of the cost is about 1 ms. A quarter-size window plays at 10 frames
+a second, so the cost goes with the pixels.
+
+**The rule.** A paint whose rectangle R lies wholly inside the part of a
+video's picture that is shown, with the picture opaque and drawn plain,
+draws nothing that comes before that video in paint order: the walk
+begins drawing at the video. Whatever comes after it (its controls,
+captions, the page's overlay, outlines) is drawn as now.
+
+**When a video covers R** — every one of these, or the ordinary walk:
+
+1. **Plain.** The video has a picture converted at the fitted size, and
+   nothing takes it off the plain path (step 4 as built, (4)): no
+   opacity below 1, transform, filter, backdrop filter, mask or blend on
+   the box or on any ancestor between it and the window.
+2. **Opaque.** A video's picture is XRGB, every pixel opaque. A poster,
+   or a box with no picture yet, covers nothing.
+3. **Shown over all of R.** R lies inside the fitted picture
+   (`yonder_object_rect`: object-fit and object-position; the bars of a
+   letterboxed picture are the box's background and do not count),
+   inside the box's clip (`flow_box_doc_clip`: an ancestor's overflow
+   that cuts the picture leaves what is beneath showing there), and
+   inside the box's content rectangle. A border-radius changes nothing:
+   yonder does not round a replaced box's content (step 4 as built).
+4. **Painted at all.** The box is visible and not `unpainted`.
+
+Any video that meets all four will do; paint order decides nothing about
+correctness, only how much is skipped, and two videos over one another
+are rare enough not to choose between.
+
+**How the walk skips.** `yonder_paint` is given the cover (a box, or
+none). Until the walk reaches it:
+
+- the canvas's fill and the root's background layers are not drawn;
+- `paint_box` draws nothing;
+- a group that does not hold the cover opens and closes as bookkeeping:
+  its depth, its view and its shift kept, nothing laid — no layer, no
+  warp, no filter, no clip drawn, and no kept drawing made, used or
+  spoiled;
+- a group that holds the cover opens as now; by rule 1 it lays no layer
+  and no warp, and its clip is what rule 3 already reckoned.
+
+At the cover, drawing resumes, for it and for everything after it. Paint
+order is the order things are laid one over another, so everything
+skipped lies under the picture inside R, where the picture is opaque:
+**R's pixels come out the same either way**, which is the invariant the
+tests hold. A paint draws only inside R, so nothing skipped could have
+shown outside it. A backdrop filter or a blend after the cover reads
+the window's pixels inside R, and those are the picture's either way.
+
+**What it is not.** It is not occlusion culling in general (an opaque
+image, an opaque background over the page). The measured case is a
+video's frame, where the plain path's test already exists and every
+frame pays. A general rule is a question for later, if a measurement
+asks.
+
+**The proof.** On the host, each fixture is painted over R twice, given
+the cover and given none, into two surfaces, and R must be the same to
+the pixel: the measured page's shape (a video over a scaled canvas and a
+blurred layer); controls and a translucent caption over the picture; an
+ancestor's overflow cutting the picture (not a cover); a letterboxed
+picture with R taking in its bars (not a cover); a video under an
+opacity, a transform, a filter (not a cover); two videos over one
+another; R one pixel past the picture (not a cover). Mutants break each
+condition and each skip. On the P5, `paint effects` and `--video-rate`
+before and after.
+
+**The record.** The `paint` line counts the paints that began at a
+video, so a run says whether the rule took.
+
 ## 6. Queues and memory
 
 | Queue | Holds | Depth (first guess) | At 1080p | At 1440p |
