@@ -313,8 +313,29 @@ static void kept_reads_click(const char *id)
     os64_js_outcome_t out;
     yonder_scripts_dispatch(g.page.scripts,probe_id(id),&click,NULL,&out);
 }
+/* The read check's comparison (read_difference): each member a read takes,
+ * and the scroll members only for a read of the reach. */
+static void read_difference_cases(void)
+{
+    os64_dom_geometry_t a={.client_width=10,.offset_left=3,.scroll_height=50},b=a;
+    char said[128];
+    read_difference(&a,&b,OS64_DOM_NEED_REACH,said,sizeof(said));
+    check(said[0]==0,"read check: the same answers differ in nothing");
+    b.client_width=11;
+    read_difference(&a,&b,OS64_DOM_NEED_BOXES,said,sizeof(said));
+    check(strstr(said,"clientWidth (10 kept, 11 current)")!=NULL,"read check: a client member is named, with both values");
+    b=a; b.offset_parent=(const os64_html_node_t *)&a;
+    read_difference(&a,&b,OS64_DOM_NEED_BOXES,said,sizeof(said));
+    check(!strcmp(said,"offsetParent"),"read check: an offset parent is named");
+    b=a; b.scroll_height=60;
+    read_difference(&a,&b,OS64_DOM_NEED_BOXES,said,sizeof(said));
+    check(said[0]==0,"read check: a read of boxes takes no scroll member");
+    read_difference(&a,&b,OS64_DOM_NEED_REACH,said,sizeof(said));
+    check(strstr(said,"scrollHeight")!=NULL,"read check: a read of the reach does");
+}
 static void kept_reads_cases(void)
 {
+    read_difference_cases();
     char html[4096];
     snprintf(html,sizeof(html),kKeptReadsPage,"");
     s_ledger=YONDER_LEDGER_ON;

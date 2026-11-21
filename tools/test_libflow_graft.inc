@@ -610,6 +610,9 @@ static void pending_cases(void)
            pending_after(page,"n","style","color:red;transform:scale(2)",NULL)==FLOW_PENDING_RESTYLE,NULL);
     expect("pending: a transform to none is RESTYLE",
            pending_after(page,"t","style","transform:none;color:red",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: a filter from none is RESTYLE (a containing block appears), on a plain inline too",
+           pending_after(page,"n","style","color:red;filter:blur(1px)",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"i","style","color:red;filter:blur(1px)",NULL)==FLOW_PENDING_RESTYLE,NULL);
     expect("pending: a transform on a plain inline is PAINT (no transform reaches it)",
            pending_after(page,"i","style","color:red;transform:scale(2)",NULL)==FLOW_PENDING_PAINT,NULL);
     expect("pending: a padding is RESTYLE",
@@ -645,8 +648,18 @@ static void pending_cases(void)
     expect("pending: and a write after it is judged from there",
            flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_PAINT,NULL);
     os64_html_set_text(p.doc,n->first_child,"x",1);
-    expect("pending: a text change is RESTYLE, and stays",
-           flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE &&
+    expect("pending: a text change is RESTYLE",flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE,NULL);
+    os64_html_set_attr(p.doc,n,"style","color:blue",10);
+    expect("pending: and a paint write after it leaves it RESTYLE",
+           flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE,NULL);
+    flow_free(t);sheeted_close(&p);
+    // The cascade brought up to date without the tree: its parse is no
+    // longer the tree's, so nothing can be judged against it.
+    sheeted_open(&p,page,800,600);
+    t=graft_layout(&p,NULL,NULL,NULL);
+    os64_html_set_attr(p.doc,graft_node(&p,"n"),"style","color:blue",10);
+    graft_update(&p);
+    expect("pending: a cascade at another version than the tree's is RESTYLE",
            flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE,NULL);
     flow_free(t);sheeted_close(&p);
 }
