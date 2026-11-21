@@ -60,9 +60,8 @@ mutants = [
     # Attributes, matrices and reach (the cold read's three).
     ('every-attribute-styled-only', SNAPSHOT, '            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry)))',
      '            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry) && 0))'),
-    ('a-matrix-crossing-kept', RESTYLE,
-     '        if (!layers_same || (framed && (tried.through != f->through || tried.upright != f->upright))) {',
-     '        if (!layers_same) {'),
+    ('a-matrix-crossing-not-tried', RESTYLE, '            transform_fill(&tried, value);\n            tried.box = &tried_box;',
+     '            tried.box = &tried_box;'),
     ('the-reach-not-worked-again', RESTYLE, '        reach_stacked(tree);\n        sticky_reach_scrolled(tree);\n        // A range',
      '        (void)0;\n        // A range'),
     # Codex's round 1.

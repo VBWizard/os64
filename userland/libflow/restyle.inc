@@ -222,10 +222,11 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
     // A box that is a group (is_group) has layers opened and closed round
     // it, and one that makes a context (makes_context) paints its own: a
     // new value that changes either changes the public tree's layers, which
-    // no restyle in place rebuilds. So does a transform crossing between
-    // drawn through its matrix (a group) and drawn upright or moved. Judged
-    // on a copy of each written box with its new value, and of its frame
-    // filled from it, before anything is written.
+    // no restyle in place rebuilds. A transform drawn through its matrix is
+    // a group (own_through), and one drawn upright or moved is not, so the
+    // copy's frame is filled from the new value for is_group to ask. Judged
+    // on a copy of each written box with its new value before anything is
+    // written.
     bool transformed = false;
     for (const flow_box_t *box = tree->root; k.n > 0 && box != NULL; box = box_after(box)) {
         FKeep *kp = f_map_get(&written, box->style);
@@ -245,7 +246,7 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
             tried_box.frame = &tried;
         }
         bool layers_same = is_group(&tried_box) == is_group(box) && makes_context(&tried_box) == makes_context(box);
-        if (!layers_same || (framed && (tried.through != f->through || tried.upright != f->upright))) {
+        if (!layers_same) {
             f_map_free(&written);
             out.why = FLOW_RESTYLE_STACKING;
             os64_free(values);
