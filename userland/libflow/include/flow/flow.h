@@ -1449,6 +1449,13 @@ typedef struct {
 flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
                                      const os64_page_t *model, const flow_env_t *env,
                                      const flow_reuse_inputs_t *inputs, int32_t width);
+/* Whether a kept tree and a whole layout of the same document answer alike
+ * (the caller's check, `--geometry-check`): the same boxes in order, each of
+ * the same kind, node and border box, its style equal in every field and its
+ * decoration the same. False names the first difference: the node
+ * (an anonymous box's element) and what differed. */
+bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_html_node_t **node,
+                        const char **what);
 /* WHAT A TREE HOLDS (MEMORY_CENSUS.md § 3): the bytes each of its arenas
  * has reserved — the computed styles, the boxes, the lines and fragments,
  * and the public boxes — and how many boxes it built, anonymous ones

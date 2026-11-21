@@ -62,6 +62,7 @@ static void restyle_kept_cases(void)
                "<p id=p class=far>text <b>bold</b></p><p id=q>more</p>",false);
     g.page.diag=diag_new_claimed("https://fixture.test/restyle-kept",1);
     s_layout_profile=true;
+    s_geometry_check=1;      /* every kept tree laid out whole beside it and compared */
     /* The first change after the page arrived may meet its form state's
      * first version; a change after it is the case under test. */
     check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"title","t",1) && script_rebuild(),"kept: a first change");
@@ -120,6 +121,12 @@ static void restyle_kept_cases(void)
     kept=yonder_diag_fact_value(g.page.diag,"layout kept");
     check(kept && strstr(kept,"structure 1"),"kept: a text is declined as structure");
     if(!kept || !strstr(kept,"structure 1")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    const char *geometry=yonder_diag_fact_value(g.page.diag,"geometry check");
+    check(geometry && !strncmp(geometry,"2 compared, 0 differed",22),
+          "kept: --geometry-check laid each kept tree out whole beside it, and none differed");
+    if(!geometry || strncmp(geometry,"2 compared, 0 differed",22)) printf("  geometry check: %s\n",geometry?geometry:"(none)");
+    s_geometry_check=s_geometry_checked=0;
+    s_geometry_compared=s_geometry_differed=0;
     s_layout_profile=false;
     probe_drop();
 }

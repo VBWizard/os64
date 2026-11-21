@@ -255,3 +255,39 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
     f_style_free(b);
     return out;
 }
+
+// Whether two trees of one document answer alike for what a restyle kept
+// in place may write or must leave: the same boxes in the same order, each
+// of the same kind, node and border box, drawing styles equal in every
+// field (f_style_equal), with the same decoration lines and, where there
+// are lines, the same colours (a box with none keeps colours it never
+// draws, which a kept tree does not refresh). The first box that
+// differs is named at `node` (its element's, for an anonymous box) with
+// what differed at `what`.
+bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_html_node_t **node, const char **what)
+{
+    *node = NULL;
+    *what = NULL;
+    const flow_box_t *x = a != NULL ? a->root : NULL, *y = b != NULL ? b->root : NULL;
+    for (; x != NULL && y != NULL; x = box_after(x), y = box_after(y)) {
+        const char *differs = x->kind != y->kind || x->node != y->node ? "the boxes"
+                            : !same_rect(x->rect, y->rect) ? "a border box"
+                            : (x->style == NULL) != (y->style == NULL) ? "a style"
+                            : x->style != NULL && !f_style_equal(x->style, y->style) ? "a style"
+                            : x->decoration != y->decoration ||
+                              (x->decoration != 0 && (x->underline_color != y->underline_color ||
+                                                      x->line_through_color != y->line_through_color))
+                                  ? "a decoration"
+                            : NULL;
+        if (differs != NULL) {
+            *node = box_named(x);
+            *what = differs;
+            return false;
+        }
+    }
+    if (x != NULL || y != NULL) {
+        *what = "the number of boxes";
+        return false;
+    }
+    return true;
+}

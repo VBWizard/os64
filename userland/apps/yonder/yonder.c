@@ -1824,7 +1824,11 @@ static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node
 // libgarb's own names.
 // THE RESTYLE KEPT IN THE SHOWN TREE (flow_restyle_in_place), on unless
 // `--restyle-in-place=off` asks for every change to be laid out, to compare.
+// `--geometry-check[=N]` lays every Nth kept tree out whole beside itself
+// and compares (restyle_kept_shown), counting the compared and the differed.
 static bool s_restyle_in_place = true;
+static uint32_t s_geometry_check, s_geometry_checked;
+static uint64_t s_geometry_compared, s_geometry_differed;
 
 // The shown tree, when `p` is a staged rebuild of the page on screen at its
 // own sizes and the restyle kept in that tree took the change; NULL when it
@@ -3649,7 +3653,36 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
     flow_reuse_inputs_t inputs = layout_inputs(p, NULL);
     flow_restyle_t kept = flow_restyle_in_place(g.page.tree, page_doc(p), page_model(p), &s_env, &inputs, width);
     restyle_counted(p, kept);
-    return kept.kind != FLOW_RESTYLE_DECLINED ? g.page.tree : NULL;
+    if (kept.kind == FLOW_RESTYLE_DECLINED)
+        return NULL;
+    // `--geometry-check`: every Nth kept tree is laid out whole beside
+    // itself and the two compared; the record says how many were and the
+    // first that differed, with the element and what differed.
+    if (s_geometry_check != 0 && ++s_geometry_checked % s_geometry_check == 0) {
+        flow_tree_t *whole = flow_layout_restyled(page_doc(p), page_model(p), width, &s_env, NULL, NULL, NULL, NULL);
+        const os64_html_node_t *node = NULL;
+        const char *what = "no whole layout could be made";
+        bool same = whole != NULL && flow_restyle_check(g.page.tree, whole, &node, &what);
+        s_geometry_compared++;
+        if (!same) {
+            s_geometry_differed++;
+            char named[96] = "", line[192];
+            if (node != NULL && node->kind != OS64_HTML_ELEMENT)
+                node = os64_html_flat_parent(page_doc(p), node);
+            if (node != NULL && node->kind == OS64_HTML_ELEMENT)
+                element_named(named, sizeof(named), "", node);
+            os64_snprintf(line, sizeof(line), "a kept tree differs from a whole layout in %s at %s", what,
+                          named[0] != '\0' ? named : "the page");
+            yonder_diag_failed_seen(p->diag, "geometry check", line);
+            os64_debug_log(line);
+        }
+        char said[96];
+        os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)s_geometry_compared,
+                      (unsigned long)s_geometry_differed);
+        yonder_diag_fact(p->diag, "geometry check", said);
+        flow_free(whole);
+    }
+    return g.page.tree;
 }
 
 static void cost_reset(void)
@@ -20052,6 +20085,12 @@ int main(int argc, char **argv)
             s_layout_profile = true;
         else if (os64_streq(argv[address_arg], "--restyle-in-place=off"))
             s_restyle_in_place = false;
+        else if (os64_streq(argv[address_arg], "--geometry-check"))
+            s_geometry_check = 10;
+        else if (os64_strlen(argv[address_arg]) > 17 && os64_memcmp(argv[address_arg], "--geometry-check=", 17) == 0) {
+            int64_t every = os64_atoi(argv[address_arg] + 17);
+            s_geometry_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
+        }
         else if (os64_streq(argv[address_arg], "--cascade-check"))
             s_cascade_check = 10;
         else if (os64_strlen(argv[address_arg]) > 16 && os64_memcmp(argv[address_arg], "--cascade-check=", 16) == 0) {
