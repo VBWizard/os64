@@ -799,6 +799,15 @@ bool f_style_equal(const flow_style_t *a, const flow_style_t *b);
 // would still owe. A field it does not name counts as placement's: the
 // answer errs toward "it moves".
 bool f_style_paint_only(const flow_style_t *a, const flow_style_t *b);
+// Where f_style_paint_only finds two styles differ, for the record: the
+// offset of the first byte of a field placement reads that differs, -1
+// when every such flat field agrees and a list differs, -2 when a
+// transform or a filter came or went.
+int64_t f_style_placement_byte(const flow_style_t *a, const flow_style_t *b);
+// Every list `s` points into, copied into `arena`, so that `s` no longer
+// points into the build it came from; false when the room or the lists'
+// budget ran out (part of `s` may then point into either).
+bool f_style_copy_lists(flow_style_t *s, FArena *arena);
 void f_style_free(FStyles *styles);
 // The styles pass 1 made for a tree, which live as long as it does.
 const FStyles *f_tree_styles(const flow_tree_t *tree);

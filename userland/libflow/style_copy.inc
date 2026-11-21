@@ -216,11 +216,11 @@ static bool style_transformed(const flow_style_t *s)
 {
     return s->ntransform>0 || s->translate || s->rotate || s->scale;
 }
-bool f_style_paint_only(const flow_style_t *a,const flow_style_t *b)
+// `a`'s paint fields written over `y`, so that what still differs between
+// `a` and `y` is what placement reads (f_style_paint_only).
+static void style_paint_onto(const flow_style_t *a,flow_style_t *y_)
 {
-    if(style_transformed(a)!=style_transformed(b) || (a->nfilter>0)!=(b->nfilter>0) ||
-       (a->nbackdrop_filter>0)!=(b->nbackdrop_filter>0))return false;
-    flow_style_t y=*b;
+    flow_style_t y=*y_;
     y.color=a->color;y.fill=a->fill;y.current_colours=a->current_colours;
     y.has_background=a->has_background;y.background=a->background;
     y.backgrounds=a->backgrounds;
@@ -237,45 +237,78 @@ bool f_style_paint_only(const flow_style_t *a,const flow_style_t *b)
     y.transform_origin_z=a->transform_origin_z;y.cursor=a->cursor;
     y.outline_width=a->outline_width;y.outline_offset=a->outline_offset;y.outline_style=a->outline_style;
     y.outline_auto=a->outline_auto;y.outline_color=a->outline_color;
+    *y_=y;
+}
+bool f_style_paint_only(const flow_style_t *a,const flow_style_t *b)
+{
+    if(style_transformed(a)!=style_transformed(b) || (a->nfilter>0)!=(b->nfilter>0) ||
+       (a->nbackdrop_filter>0)!=(b->nbackdrop_filter>0))return false;
+    flow_style_t y=*b;
+    style_paint_onto(a,&y);
     return f_style_equal(a,&y);
+}
+static void style_flat(flow_style_t *x,flow_style_t *y);
+static bool style_lists_equal(const flow_style_t *a,const flow_style_t *b);
+int64_t f_style_placement_byte(const flow_style_t *a,const flow_style_t *b)
+{
+    if(style_transformed(a)!=style_transformed(b) || (a->nfilter>0)!=(b->nfilter>0) ||
+       (a->nbackdrop_filter>0)!=(b->nbackdrop_filter>0))return -2;
+    flow_style_t x=*a,y=*b;
+    style_paint_onto(a,&y);
+    style_flat(&x,&y);
+    const unsigned char *p=(const unsigned char *)&x,*q=(const unsigned char *)&y;
+    for(size_t i=0;i<sizeof(x);i++)if(p[i]!=q[i])return (int64_t)i;
+    return -1;
 }
 bool f_style_equal(const flow_style_t *a,const flow_style_t *b)
 {
     flow_style_t x=*a,y=*b;
-    x.family.names=y.family.names=NULL;
-    x.family.written=y.family.written=NULL;
-    style_layers_unaddressed(&x.backgrounds);
-    style_layers_unaddressed(&y.backgrounds);
-    style_layers_unaddressed(&x.masks.layers);
-    style_layers_unaddressed(&y.masks.layers);
-    x.masks.composite=y.masks.composite=NULL;
-    x.masks.mode=y.masks.mode=NULL;
-    x.box_shadows=y.box_shadows=NULL;
-    x.text_shadows=y.text_shadows=NULL;
-    x.filter=y.filter=NULL;
-    x.backdrop_filter=y.backdrop_filter=NULL;
-    x.grid_template_columns.tracks=y.grid_template_columns.tracks=NULL;
-    x.grid_template_rows.tracks=y.grid_template_rows.tracks=NULL;
-    x.grid_auto_columns.tracks=y.grid_auto_columns.tracks=NULL;
-    x.grid_auto_rows.tracks=y.grid_auto_rows.tracks=NULL;
-    x.animations.duration=y.animations.duration=NULL;
-    x.animations.delay=y.animations.delay=NULL;
-    x.animations.easing=y.animations.easing=NULL;
-    x.animations.iterations=y.animations.iterations=NULL;
-    x.animations.direction=y.animations.direction=NULL;
-    x.animations.fill=y.animations.fill=NULL;
-    x.animations.paused=y.animations.paused=NULL;
-    x.animations.name=y.animations.name=NULL;
-    x.grid_areas=y.grid_areas=NULL;
-    x.grid_row_start.name=y.grid_row_start.name=NULL;
-    x.grid_row_end.name=y.grid_row_end.name=NULL;
-    x.grid_column_start.name=y.grid_column_start.name=NULL;
-    x.grid_column_end.name=y.grid_column_end.name=NULL;
-    x.transform=y.transform=NULL;
-    x.translate=y.translate=NULL;
-    x.rotate=y.rotate=NULL;
-    x.scale=y.scale=NULL;
+    style_flat(&x,&y);
     if(os64_memcmp(&x,&y,sizeof(x)))return false;
+    return style_lists_equal(a,b);
+}
+// Two styles' copies with every list's address taken out, so that their
+// bytes compare their flat fields alone (f_style_equal compares the lists
+// apart, by what they hold).
+static void style_flat(flow_style_t *x,flow_style_t *y)
+{
+    x->family.names=y->family.names=NULL;
+    x->family.written=y->family.written=NULL;
+    style_layers_unaddressed(&x->backgrounds);
+    style_layers_unaddressed(&y->backgrounds);
+    style_layers_unaddressed(&x->masks.layers);
+    style_layers_unaddressed(&y->masks.layers);
+    x->masks.composite=y->masks.composite=NULL;
+    x->masks.mode=y->masks.mode=NULL;
+    x->box_shadows=y->box_shadows=NULL;
+    x->text_shadows=y->text_shadows=NULL;
+    x->filter=y->filter=NULL;
+    x->backdrop_filter=y->backdrop_filter=NULL;
+    x->grid_template_columns.tracks=y->grid_template_columns.tracks=NULL;
+    x->grid_template_rows.tracks=y->grid_template_rows.tracks=NULL;
+    x->grid_auto_columns.tracks=y->grid_auto_columns.tracks=NULL;
+    x->grid_auto_rows.tracks=y->grid_auto_rows.tracks=NULL;
+    x->animations.duration=y->animations.duration=NULL;
+    x->animations.delay=y->animations.delay=NULL;
+    x->animations.easing=y->animations.easing=NULL;
+    x->animations.iterations=y->animations.iterations=NULL;
+    x->animations.direction=y->animations.direction=NULL;
+    x->animations.fill=y->animations.fill=NULL;
+    x->animations.paused=y->animations.paused=NULL;
+    x->animations.name=y->animations.name=NULL;
+    x->grid_areas=y->grid_areas=NULL;
+    x->grid_row_start.name=y->grid_row_start.name=NULL;
+    x->grid_row_end.name=y->grid_row_end.name=NULL;
+    x->grid_column_start.name=y->grid_column_start.name=NULL;
+    x->grid_column_end.name=y->grid_column_end.name=NULL;
+    x->transform=y->transform=NULL;
+    x->translate=y->translate=NULL;
+    x->rotate=y->rotate=NULL;
+    x->scale=y->scale=NULL;
+}
+// Whether two styles whose flat fields agree hold the same lists.
+static bool style_lists_equal(const flow_style_t *a,const flow_style_t *b)
+{
     if(!style_filters_equal(a->filter,b->filter,a->nfilter) ||
        !style_filters_equal(a->backdrop_filter,b->backdrop_filter,a->nbackdrop_filter))return false;
     if(!style_layers_equal(&a->backgrounds,&b->backgrounds) ||

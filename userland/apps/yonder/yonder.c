@@ -1455,7 +1455,11 @@ static uint64_t s_trees_given, s_ticks_moved;
 // into the timeline they replace.
 static void page_show(Page *p, flow_tree_t *tree)
 {
-    tree_free(p->tree);
+    // A restyle kept in the tree shows the tree it was kept in
+    // (flow_restyle_in_place): the same tree again, not one to free. It is
+    // still a tree given, which the observers read as something moved.
+    if (p->tree != tree)
+        tree_free(p->tree);
     p->tree = tree;
     s_trees_given++;
     flow_timeline_commit(&p->timeline, tree);
@@ -1814,6 +1818,93 @@ static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node
     return n < *cap ? n : *cap;
 }
 
+// THE RESTYLE KEPT IN THE SHOWN TREE (flow_restyle_in_place), on unless
+// `--restyle-in-place=off` asks for every change to be laid out, to compare.
+// `--geometry-check[=N]` lays every Nth kept tree out whole beside itself
+// and compares (restyle_kept_shown), counting the compared and the differed.
+// That whole layout is a layout of the page like any other: it stages the
+// web fonts it meets, whose arrival moves the fonts' revision, so a run
+// with the check on keeps a little less than one without it.
+static bool s_restyle_in_place = true;
+static uint32_t s_geometry_check, s_geometry_checked;
+static uint64_t s_geometry_compared, s_geometry_differed;
+
+// The shown tree, when `p` is a staged rebuild of the page on screen at its
+// own sizes and the restyle kept in that tree took the change; NULL when it
+// is no such layout or the restyle declined.
+static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, int32_t height, uint32_t zoom);
+// A restyle kept or declined, counted in the record's `layout kept` line
+// while the profile is on.
+static void restyle_counted(const Page *p, flow_restyle_t kept)
+{
+    static const char *const names[YONDER_LAYOUT_RESTYLE_REASONS] = {
+        "none", "no tree", "no history", "structure", "inputs", "styles", "membership",
+        "geometry", "motion", "stacking", "decoration", "room"};
+    _Static_assert(YONDER_LAYOUT_RESTYLE_REASONS == FLOW_RESTYLE_NREASONS, "restyle refusal diagnostics");
+    if (!s_layout_profile || layout_profile_diag(p) == NULL)
+        return;
+    yonder_layout_stats_t sample = {.restyle_reason_names = names};
+    if (kept.kind == FLOW_RESTYLE_NOTHING) sample.kept_nothing = 1;
+    else if (kept.kind == FLOW_RESTYLE_PAINT) sample.kept_paint = 1;
+    else if ((unsigned)kept.why < YONDER_LAYOUT_RESTYLE_REASONS) sample.kept_declined[kept.why] = 1;
+    layout_profile_add(p, &sample);
+    if (kept.kind != FLOW_RESTYLE_DECLINED || (unsigned)kept.why >= YONDER_LAYOUT_RESTYLE_REASONS)
+        return;
+    // `layout kept, declined at`: the declines by reason and what was found,
+    // counted, each with the element of the latest, the most counted first,
+    // for the record being written (a new record starts it again). Those past
+    // the table's room are counted as `others`; entries past the line's room
+    // are left off whole.
+    static struct { uint8_t why; char detail[48], at[96]; uint64_t n; } seen[16];
+    static int nseen;
+    static uint64_t others;
+    static const yonder_diag_t *seen_for;
+    yonder_diag_t *diag = layout_profile_diag(p);
+    if (diag != seen_for) {
+        seen_for = diag;
+        nseen = 0;
+        others = 0;
+    }
+    int i = 0;
+    for (; i < nseen && (seen[i].why != kept.why || !os64_streq(seen[i].detail, kept.detail)); i++) {}
+    if (i == nseen && nseen < (int)(sizeof(seen) / sizeof(seen[0]))) {
+        seen[nseen].why = (uint8_t)kept.why;
+        os64_strcopy(seen[nseen].detail, sizeof(seen[nseen].detail), kept.detail);
+        seen[nseen].n = 0;
+        nseen++;
+    }
+    if (i == nseen) {
+        others++;
+    } else {
+        seen[i].n++;
+        seen[i].at[0] = '\0';
+        if (kept.at != NULL)
+            element_named(seen[i].at, sizeof(seen[i].at), "", kept.at);
+        for (; i > 0 && seen[i].n > seen[i - 1].n; i--) {
+            __typeof__(seen[0]) swap = seen[i];
+            seen[i] = seen[i - 1];
+            seen[i - 1] = swap;
+        }
+    }
+    char line[768] = "";
+    size_t used = 0;
+    for (int k = 0; k <= nseen; k++) {
+        if (k == nseen && others == 0)
+            break;
+        int w = k < nseen
+            ? os64_snprintf(line + used, sizeof(line) - used, "%s%s %lu: %s%s%s%s", k ? "; " : "",
+                            names[seen[k].why], (unsigned long)seen[k].n, seen[k].detail[0] ? seen[k].detail : "-",
+                            seen[k].at[0] ? " (at " : "", seen[k].at, seen[k].at[0] ? ")" : "")
+            : os64_snprintf(line + used, sizeof(line) - used, "%sothers %lu", k ? "; " : "", (unsigned long)others);
+        if (w < 0 || (size_t)w >= sizeof(line) - used) {
+            line[used] = '\0';
+            break;
+        }
+        used += (size_t)w;
+    }
+    yonder_diag_fact(diag, "layout kept, declined at", line);
+}
+
 // The reasons a layout's cascade is built fresh, by the profile's index:
 // yonder's own (none yet, no memory for the scopes, sheets changed, sheets
 // that no longer match), then libgarb's refusals in their order, by
@@ -1993,8 +2084,17 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // An open frame's time, which the frame's other samples share.
     s_env.now_ms = animation_time_ms();
     geometry_layout_total++;
-    webfonts_layout_begins(p);
-    flow_tree_t *fresh = profile_flow_layout(p, width);
+    // A script's change to the page on screen, staged beside it at its own
+    // sizes: first the restyle kept in the shown tree (BRIEF_LAYOUT_NEEDS.md
+    // N1), which writes paint-only changes into that tree and builds no
+    // box; the same tree then stands for the new layout (page_show keeps
+    // it, and the families its fonts were staged for). Declined, the page
+    // is laid out as before, its fonts' record begun for that layout.
+    flow_tree_t *fresh = restyle_kept_shown(p, reclaim, width, height, zoom);
+    if (fresh == NULL) {
+        webfonts_layout_begins(p);
+        fresh = profile_flow_layout(p, width);
+    }
     // The tree on screen holds the faces its runs were shaped in until it
     // is freed — each one a size of a file, counted against the text
     // engine's budget and its face limit — so a layout at new sizes (a
@@ -3601,6 +3701,57 @@ static bool page_records_shown(const Page *p)
 {
     return p->diag != NULL && p->diag == g.page.diag;
 }
+static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, int32_t height, uint32_t zoom)
+{
+    if (!s_restyle_in_place || reclaim != &g.page || p == &g.page || g.page.tree == NULL ||
+        p->restyle_from != g.page.tree || width != g.page.laid_width || height != g.page.laid_height ||
+        zoom != g.page.laid_zoom)
+        return NULL;
+    // The inputs the layout that follows would graft with, the fonts'
+    // revision brought up to date first, as profile_flow_layout does.
+    layout_font_dependencies(p);
+    flow_reuse_inputs_t inputs = layout_inputs(p, NULL);
+    flow_restyle_t kept = flow_restyle_in_place(g.page.tree, page_doc(p), page_model(p), &s_env, &inputs, width);
+    restyle_counted(p, kept);
+    if (kept.kind == FLOW_RESTYLE_DECLINED)
+        return NULL;
+    // `--geometry-check`: every Nth kept tree is laid out whole beside
+    // itself and the two compared; the record says how many were and the
+    // first that differed, with the element and what differed.
+    if (s_geometry_check != 0 && ++s_geometry_checked % s_geometry_check == 0) {
+        flow_tree_t *whole = flow_layout_restyled(page_doc(p), page_model(p), width, &s_env, NULL, NULL, NULL, NULL);
+        // Scrolled where the kept tree is, as a layout's scrolls are set
+        // again by element, each held to the whole layout's own range.
+        for (int32_t i = 0; whole != NULL && i < flow_nscrollers(g.page.tree); i++) {
+            int32_t s = flow_scroller_for(whole, flow_scroller(g.page.tree, i)->node);
+            if (s >= 0)
+                flow_scroll_set(whole, s, flow_scroll_at(g.page.tree, i));
+        }
+        const os64_html_node_t *node = NULL;
+        const char *what = "no whole layout could be made";
+        bool same = whole != NULL && flow_restyle_check(g.page.tree, whole, &node, &what);
+        s_geometry_compared++;
+        if (!same) {
+            s_geometry_differed++;
+            char named[96] = "", line[192];
+            if (node != NULL && node->kind != OS64_HTML_ELEMENT)
+                node = os64_html_flat_parent(page_doc(p), node);
+            if (node != NULL && node->kind == OS64_HTML_ELEMENT)
+                element_named(named, sizeof(named), "", node);
+            os64_snprintf(line, sizeof(line), "a kept tree differs from a whole layout in %s at %s", what,
+                          named[0] != '\0' ? named : "the page");
+            yonder_diag_failed_seen(p->diag, "geometry check", line);
+            os64_debug_log(line);
+        }
+        char said[96];
+        os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)s_geometry_compared,
+                      (unsigned long)s_geometry_differed);
+        yonder_diag_fact(p->diag, "geometry check", said);
+        flow_free(whole);
+    }
+    return g.page.tree;
+}
+
 static void cost_reset(void)
 {
     os64_memset(&s_cost, 0, sizeof(s_cost));
@@ -11109,6 +11260,29 @@ static uint64_t videos_next(void)
     return FRAME_PLAN_NEVER;
 }
 
+// `--video-rate[=S]`: every S seconds (5 unless said) while a video on the
+// view asks for frames, one line on the console per video, comma-separated:
+// `video-rate,<ms since boot>,<video>,<shown>,<dropped>,<painted>`,
+// the player's counts since it began and the plain and general paints of
+// videos since yonder began, so two lines give a rate.
+static uint32_t s_video_rate_s;
+static uint64_t s_video_rate_next_ms, s_video_rate_painted;
+
+static void video_rate_say(void)
+{
+    uint64_t now = yonder_now_ms();
+    if (s_video_rate_s == 0 || now < s_video_rate_next_ms)
+        return;
+    s_video_rate_next_ms = now + (uint64_t)s_video_rate_s * 1000;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        os64_media_player_facts_t vf;
+        if (s_videos[i].node == NULL || !yonder_media_player_facts(s_videos[i].session, &vf))
+            continue;
+        os64_printf("video-rate,%lu,%d,%lu,%lu,%lu\n", (unsigned long)now, (int)i, (unsigned long)vf.pace.shown,
+                    (unsigned long)vf.pace.dropped, (unsigned long)s_video_rate_painted);
+    }
+}
+
 // In an open frame of the display: each video that wants it is asked for
 // the picture shown at the blank a publish now is seen at (the answer's
 // blank plus one period), and its box marked when the picture changed.
@@ -11118,11 +11292,13 @@ static void videos_tick(void)
         return;
     int64_t period = s_frames.period_us > 0 ? (int64_t)s_frames.period_us : 16667;
     int64_t blank = (int64_t)s_frames.blank_us + period;
+    bool asked = false;
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         Video *v = &s_videos[i];
         os64_gui_rect_t part;
         if (!video_wants_frames(v) || !video_on_view(v, &part))
             continue;
+        asked = true;
         v->poked = false;
         if (v->sizing > 0)
             v->sizing--;
@@ -11141,6 +11317,8 @@ static void videos_tick(void)
         mark_part(part);
         s_video_marking = false;
     }
+    if (asked)
+        video_rate_say();
 }
 
 // Each player shows its element as it stands now.
@@ -16904,11 +17082,13 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
             continue;
         if (fits && gp->n == 1 && gl->whole.w > 0) {
             s_cost.video_plain++;
+            s_video_rate_painted++;
             for (int32_t y = cut.y; y < cut.y + cut.h; y++)
                 os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + cut.x,
                             fr->pixels + (size_t)(y - box.y) * fr->w + (cut.x - box.x), (size_t)cut.w * 4);
         } else {
             s_cost.video_general++;
+            s_video_rate_painted++;
             yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated, fr->pixels,
                                 fr->w, fr->h);
         }
@@ -19992,23 +20172,46 @@ int main(int argc, char **argv)
     // The window is named after the page (title_follow). A FILE given on
     // the command line is read before the window exists, so the window is
     // born with that page's name rather than taking it a moment later.
-    // The switches come before the address, in any order.
-    int address_arg = 1;
-    for (; address_arg < argc && argv[address_arg][0] == '-' && argv[address_arg][1] == '-'; address_arg++) {
-        if (os64_streq(argv[address_arg], "--script-audit"))
+    // The switches and the address go in any order: a word beginning `--`
+    // is a switch (one yonder does not know is said and passed over), and
+    // the first that does not is the address (another is said and passed
+    // over). An address holds no space, so it is always one word.
+    int address_arg = 0;
+    for (int arg = 1; arg < argc; arg++) {
+        if (argv[arg][0] != '-' || argv[arg][1] != '-') {
+            if (address_arg == 0)
+                address_arg = arg;
+            else
+                os64_printf("yonder: one address at a time; %s is passed over\n", argv[arg]);
+        }
+        else if (os64_streq(argv[arg], "--script-audit"))
             s_script_audit = true;
-        else if (os64_streq(argv[address_arg], "--layout-profile"))
+        else if (os64_streq(argv[arg], "--layout-profile"))
             s_layout_profile = true;
-        else if (os64_streq(argv[address_arg], "--cascade-check"))
+        else if (os64_streq(argv[arg], "--restyle-in-place=off"))
+            s_restyle_in_place = false;
+        else if (os64_streq(argv[arg], "--geometry-check"))
+            s_geometry_check = 10;
+        else if (os64_strlen(argv[arg]) > 17 && os64_memcmp(argv[arg], "--geometry-check=", 17) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 17);
+            s_geometry_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
+        }
+        else if (os64_streq(argv[arg], "--cascade-check"))
             s_cascade_check = 10;
-        else if (os64_strlen(argv[address_arg]) > 16 && os64_memcmp(argv[address_arg], "--cascade-check=", 16) == 0) {
-            int64_t every = os64_atoi(argv[address_arg] + 16);
+        else if (os64_strlen(argv[arg]) > 16 && os64_memcmp(argv[arg], "--cascade-check=", 16) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 16);
             s_cascade_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
         }
-        else if (os64_streq(argv[address_arg], "--exit-when-loaded"))
+        else if (os64_streq(argv[arg], "--video-rate"))
+            s_video_rate_s = 5;
+        else if (os64_strlen(argv[arg]) > 13 && os64_memcmp(argv[arg], "--video-rate=", 13) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 13);
+            s_video_rate_s = every < 1 ? 1 : every > 3600 ? 3600 : (uint32_t)every;
+        }
+        else if (os64_streq(argv[arg], "--exit-when-loaded"))
             s_exit_when_loaded = true;
         else
-            break;
+            os64_printf("yonder: no switch %s; it is passed over\n", argv[arg]);
     }
     s_exit_started = s_exit_quiet_from = yonder_now_ms();
     g.scripts_on = yonder_settings_saved_scripts();
@@ -20034,7 +20237,7 @@ int main(int argc, char **argv)
     s_storage = yonder_storage_new(profile);    // NULL keeps each page's storage for its own life
     s_preflight = way_preflight_new();          // NULL sends every preflight
     yonder_settings_on_clear_storage(storage_clear);
-    const char *first = argc > address_arg ? argv[address_arg] : NULL;
+    const char *first = address_arg != 0 ? argv[address_arg] : NULL;
     char title[OS64_GUI_TITLE_MAX] = "yonder";
     if (first != NULL && first[0] == '/') {
         uint8_t *bytes = NULL;
