@@ -11260,6 +11260,29 @@ static uint64_t videos_next(void)
     return FRAME_PLAN_NEVER;
 }
 
+// `--video-rate[=S]`: every S seconds (5 unless said) while a video on the
+// view asks for frames, one line on the console per video, comma-separated:
+// `video-rate,<ms since boot>,<video>,<shown>,<dropped>,<painted>`,
+// the player's counts since it began and the plain and general paints of
+// videos since yonder began, so two lines give a rate.
+static uint32_t s_video_rate_s;
+static uint64_t s_video_rate_next_ms, s_video_rate_painted;
+
+static void video_rate_say(void)
+{
+    uint64_t now = yonder_now_ms();
+    if (s_video_rate_s == 0 || now < s_video_rate_next_ms)
+        return;
+    s_video_rate_next_ms = now + (uint64_t)s_video_rate_s * 1000;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        os64_media_player_facts_t vf;
+        if (s_videos[i].node == NULL || !yonder_media_player_facts(s_videos[i].session, &vf))
+            continue;
+        os64_printf("video-rate,%lu,%d,%lu,%lu,%lu\n", (unsigned long)now, (int)i, (unsigned long)vf.pace.shown,
+                    (unsigned long)vf.pace.dropped, (unsigned long)s_video_rate_painted);
+    }
+}
+
 // In an open frame of the display: each video that wants it is asked for
 // the picture shown at the blank a publish now is seen at (the answer's
 // blank plus one period), and its box marked when the picture changed.
@@ -11269,11 +11292,13 @@ static void videos_tick(void)
         return;
     int64_t period = s_frames.period_us > 0 ? (int64_t)s_frames.period_us : 16667;
     int64_t blank = (int64_t)s_frames.blank_us + period;
+    bool asked = false;
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         Video *v = &s_videos[i];
         os64_gui_rect_t part;
         if (!video_wants_frames(v) || !video_on_view(v, &part))
             continue;
+        asked = true;
         v->poked = false;
         if (v->sizing > 0)
             v->sizing--;
@@ -11292,6 +11317,8 @@ static void videos_tick(void)
         mark_part(part);
         s_video_marking = false;
     }
+    if (asked)
+        video_rate_say();
 }
 
 // Each player shows its element as it stands now.
@@ -17055,11 +17082,13 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
             continue;
         if (fits && gp->n == 1 && gl->whole.w > 0) {
             s_cost.video_plain++;
+            s_video_rate_painted++;
             for (int32_t y = cut.y; y < cut.y + cut.h; y++)
                 os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + cut.x,
                             fr->pixels + (size_t)(y - box.y) * fr->w + (cut.x - box.x), (size_t)cut.w * 4);
         } else {
             s_cost.video_general++;
+            s_video_rate_painted++;
             yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated, fr->pixels,
                                 fr->w, fr->h);
         }
@@ -20163,6 +20192,12 @@ int main(int argc, char **argv)
         else if (os64_strlen(argv[address_arg]) > 16 && os64_memcmp(argv[address_arg], "--cascade-check=", 16) == 0) {
             int64_t every = os64_atoi(argv[address_arg] + 16);
             s_cascade_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
+        }
+        else if (os64_streq(argv[address_arg], "--video-rate"))
+            s_video_rate_s = 5;
+        else if (os64_strlen(argv[address_arg]) > 13 && os64_memcmp(argv[address_arg], "--video-rate=", 13) == 0) {
+            int64_t every = os64_atoi(argv[address_arg] + 13);
+            s_video_rate_s = every < 1 ? 1 : every > 3600 ? 3600 : (uint32_t)every;
         }
         else if (os64_streq(argv[address_arg], "--exit-when-loaded"))
             s_exit_when_loaded = true;
