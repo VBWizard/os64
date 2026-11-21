@@ -238,10 +238,11 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
         tree->styles == NULL || tree->restyle_spent)
         return out;
     // What changed since the tree, and whether it was laid out as this
-    // layout would be: the graft's own source test, but for the cascade's
-    // generation. A cascade built fresh since the tree is no reason to
-    // decline: the styles are then built whole (f_style_build_reusing
-    // reuses nothing across a generation) and judged like any others.
+    // layout would be: the graft's own source test. Its cascade's
+    // generation among them: a tree's records point into the cascade they
+    // were computed in (a family's names are that cascade's strings), and a
+    // host frees a cascade with the tree laid out in it, so a tree kept
+    // under another cascade would outlive what its unwritten records read.
     FReuseSnapshot *r = tree->reuse;
     flow_reuse_stats_t ignored = {0};
     out.why = FLOW_RESTYLE_NO_HISTORY;
@@ -265,6 +266,7 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
     }
     out.why = FLOW_RESTYLE_INPUTS;
     const char *input = r->width != width || r->doc != doc ? "another width"
+                      : r->generation != garb_cascade_generation(env->cascade) ? "another cascade"
                       : doc->quirks == OS64_HTML_QUIRKS ? "a quirks-mode page"
                       : !reuse_inputs_equal(&r->inputs, inputs) ? "fonts, pictures or form state"
                       : !reuse_environment_equal(&r->env, env) ? "the environment" : NULL;

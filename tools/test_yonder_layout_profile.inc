@@ -235,8 +235,9 @@ static void restyle_kept_cases(void)
     /* The first click gives each part a transform where it had none, which
      * makes a containing block (geometry). The second moves transforms that
      * are there, and its inline styles may cost the cascade a fresh build
-     * (libgarb's `attributes`), which the restyle meets with styles built
-     * whole. */
+     * (libgarb's `attributes`), which the restyle declines: the tree's
+     * records point into the cascade it was laid out in, which goes with
+     * it (flow_restyle_in_place). */
     yonder_scripts_dispatch(g.page.scripts,NULL,&click,NULL,&out);
     kept=yonder_diag_fact_value(g.page.diag,"layout kept");
     unsigned painted_before=0,painted=0,fresh_before=0,fresh=0,geometry_before=0,geometry_after=0;
@@ -252,11 +253,15 @@ static void restyle_kept_cases(void)
     if(kept && strstr(kept,"geometry ")) sscanf(strstr(kept,"geometry ")+9,"%u",&geometry_after);
     if(kept && strstr(kept,"structure ")) sscanf(strstr(kept,"structure ")+10,"%u",&text_after);
     /* Of the second click's twelve reads, the first meets the text the first
-     * click wrote (#out: structure) and the other eleven are kept in the
-     * tree; none is geometry, and none is declined for a fresh cascade. */
-    bool answered=painted-painted_before==11 && text_after-text_before==1 && fresh==fresh_before &&
-                  geometry_after==geometry_before;
-    check(answered,"kept: twelve write-then-read pairs: eleven kept, one meeting the text written");
+     * click wrote (#out: structure), and each of the other eleven is kept in
+     * the tree or meets a fresh cascade (inputs, which the record names);
+     * some are kept, and none is geometry. */
+    const char *declined_at=yonder_diag_fact_value(g.page.diag,"layout kept, declined at");
+    bool answered=painted>painted_before && painted-painted_before+fresh-fresh_before==11 &&
+                  text_after-text_before==1 && geometry_after==geometry_before &&
+                  (fresh==fresh_before || (declined_at && strstr(declined_at,"another cascade")));
+    check(answered,"kept: twelve write-then-read pairs: eleven kept or meeting a fresh cascade, one the text written");
+    if(!answered && declined_at) printf("  declined at: %s\n",declined_at);
     if(!answered)
         printf("  layout kept: %s (before the second click: %u kept)\n",kept?kept:"(none)",painted_before);
     geometry=yonder_diag_fact_value(g.page.diag,"geometry check");

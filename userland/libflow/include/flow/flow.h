@@ -1415,9 +1415,9 @@ flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
  * out different differs only in what the painter reads and moves nothing
  * else, those values written into `tree` in place, with no box built or
  * placed. The tree must be the one laid out last for this document, at
- * `width`, with the env and inputs of the layout that would follow (the
- * graft's own source test, which also asks for the cascade's generation;
- * this does not, building every style afresh when it moved). A kept tree is
+ * `width`, with the env and inputs of the layout that would follow, the
+ * cascade's generation among them (the graft's own source test: the tree's
+ * records point into the cascade they were computed in). A kept tree is
  * the same tree: its boxes and their places stand, its styles, transforms'
  * frames, ink and drawn stamps
  * follow the new values, and so, where a transform moved, do the page's
@@ -1436,7 +1436,7 @@ typedef enum {
     FLOW_RESTYLE_NO_HISTORY,    /* no change history for it, or the history was lost */
     FLOW_RESTYLE_STRUCTURE,     /* nodes added or removed, a text, adopted sheets, an attribute boxes
                                    read, but not under an element styled `display: none` */
-    FLOW_RESTYLE_INPUTS,        /* another width, env or resource */
+    FLOW_RESTYLE_INPUTS,        /* another width, cascade, env or resource */
     FLOW_RESTYLE_STYLES,        /* the styles could not be built whole */
     FLOW_RESTYLE_MEMBERSHIP,    /* an element came to have a style, or lost it */
     FLOW_RESTYLE_GEOMETRY,      /* a style placement reads changed, or what boxes are built from */

@@ -41,12 +41,17 @@ CASES = 'bash tools/test_yonder_scripts_host.sh && bash tools/test_libflow_host.
 mutants = [
     # What changed since the tree.
     ('a-text-is-not-structure', SNAPSHOT, '            r->structural = true;', '            (void)0;'),
-    ('structure-not-asked', RESTYLE, '    if (r->structural)\n        return out;', '    if (0)\n        return out;'),
+    ('structure-not-asked', RESTYLE, '    if (r->structural) {', '    if (0) {'),
+    ('changes-under-display-none-are-structure', SNAPSHOT,
+     '            return rec->style.display == FLOW_DISPLAY_NONE;', '            return rec->style.display == FLOW_DISPLAY_NONE && 0;'),
+    ('another-cascade-kept', RESTYLE, '                      : r->generation != garb_cascade_generation(env->cascade) ? "another cascade"',
+     '                      : 0 ? "another cascade"'),
     # The verdict.
-    ('geometry-kept', RESTYLE, '    if (!keep_derived_equal(was, is) || !f_style_paint_only(&was->style, &is->style)) {',
-     '    if (!keep_derived_equal(was, is)) {'),
-    ('motion-kept', RESTYLE, '    if (was->motion != NULL || is->motion != NULL) {', '    if (0) {'),
-    ('decoration-kept', RESTYLE, '    if (!same_decoration) {', '    if (0) {'),
+    ('geometry-kept', RESTYLE, '    if (!f_style_paint_only(&was->style, &is->style)) {', '    if (0) {'),
+    ('a-pseudo-element-anchored-to-itself-differs', RESTYLE, '    return o == n || (o == o_self && n == n_self);',
+     '    return o == n || (o == o_self && n == n_self && 0);'),
+    ('motion-kept', RESTYLE, '    if (was->motion != NULL || is->motion != NULL)\n', '    if (0)\n'),
+    ('decoration-kept', RESTYLE, '    if (!same_decoration)\n', '    if (0)\n'),
     # The writes.
     ('the-style-not-written', RESTYLE, '        k.pairs[i].was->style = values[i];', '        (void)values;'),
     ('the-frame-not-filled', RESTYLE, '            transform_fill(f, box->style);', '            (void)0;'),
@@ -69,8 +74,8 @@ mutants = [
      '        bool layers_same = is_group(&tried_box) == is_group(box) && makes_context(&tried_box) == makes_context(box);',
      '        bool layers_same = is_group(&tried_box) == is_group(&tried_box) && makes_context(&tried_box) == makes_context(box);'),
     ('a-motion-base-not-asked', RESTYLE,
-     '                                 !f_style_equal(&was->motion->base, &is->motion->base)))) {',
-     '                                 0))) {'),
+     '                                 !f_style_equal(&was->motion->base, &is->motion->base))))',
+     '                                 0))))'),
     ('the-outline-not-handed-past-stacked', FLOW,
      '    for (; c->holds_outline && c->parent != NULL && !c->parent->holds_outline; c = c->parent)',
      '    for (; 0 && c->holds_outline && c->parent != NULL && !c->parent->holds_outline; c = c->parent)'),

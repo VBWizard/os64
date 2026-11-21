@@ -472,6 +472,31 @@ static void restyle_in_place_cases(void)
         }
         flow_free(old); sheeted_close(&p);
     }
+    // A tree's records point into the cascade it was laid out in (a
+    // family's names are its strings), which a host frees with the tree: a
+    // colour changed under a cascade built fresh is declined, not kept in a
+    // tree that would outlive what its other records read.
+    sheeted_open(&p, "<!doctype html><style>p{font-family:Serif}#c.on{color:red}</style><p id=c>c</p><p>d</p>",
+                 800, 600);
+    old = graft_layout(&p, NULL, NULL, NULL);
+    os64_html_set_attr(p.doc, graft_node(&p, "c"), "class", "on", 2);
+    graft_update(&p);
+    {
+        garb_sheet_in_t sheets[16];
+        for (int32_t i = 0; i < p.n; ++i) sheets[i] = (garb_sheet_in_t){.sheet = &p.sheets[i]};
+        garb_cascade_t *fresh = garb_cascade(sheets, p.n, p.doc, garb_cascade_env(p.cascade));
+        garb_cascade_t *had = p.cascade;
+        p.cascade = fresh;
+        p.env.cascade = fresh;
+        kept = restyle_keep(&p, old);
+        expect("restyle: a colour under a cascade built fresh is declined as another cascade",
+               fresh != NULL && kept.kind == FLOW_RESTYLE_DECLINED && kept.why == FLOW_RESTYLE_INPUTS &&
+                   strcmp(kept.detail, "another cascade") == 0 && kept.written == 0, kept.detail);
+        p.cascade = had;
+        p.env.cascade = had;
+        garb_cascade_free(fresh);
+    }
+    flow_free(old); sheeted_close(&p);
     // A positioned pseudo-element is its own anchor, and its node is made
     // again by every style pass: a colour written beside it is kept, and
     // the kept tree answers as a whole layout does.
