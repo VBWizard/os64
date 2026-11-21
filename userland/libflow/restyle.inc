@@ -16,11 +16,23 @@
 // are reached again from where placement left them, which the tick does
 // not do.
 
+// Whether two records' anchors (or fixed anchors) are the same element:
+// the same node, or each record's own. A pseudo-element that makes a
+// containing block is its own anchor, and its node is the style pass's,
+// made again by every pass, so `o_self` and `n_self` (the node each record
+// is for) are what say its two anchors are one.
+static bool keep_same_anchor(const os64_html_node_t *o, const os64_html_node_t *o_self,
+                             const os64_html_node_t *n, const os64_html_node_t *n_self)
+{
+    return o == n || (o == o_self && n == n_self);
+}
+
 // The first derived part of two records of one element that differs, by
 // name, or NULL when they agree (the decoration is keep_judge's to judge
 // apart): what boxes, lists, links, anchors and pseudo-elements were built
-// from.
-static const char *keep_derived_differs(const FStyled *o, const FStyled *n)
+// from. `o_self` and `n_self`: the node each record is for (keep_same_anchor).
+static const char *keep_derived_differs(const FStyled *o, const os64_html_node_t *o_self,
+                                        const FStyled *n, const os64_html_node_t *n_self)
 {
     return o->holds_block != n->holds_block ? "holds_block"
          : o->link != n->link ? "link"
@@ -28,7 +40,8 @@ static const char *keep_derived_differs(const FStyled *o, const FStyled *n)
          : o->in_nobr != n->in_nobr ? "in_nobr"
          : o->quotes != n->quotes ? "quotes"
          : o->has_rp != n->has_rp ? "has_rp"
-         : o->anchor != n->anchor || o->fixed_anchor != n->fixed_anchor ? "anchor"
+         : !keep_same_anchor(o->anchor, o_self, n->anchor, n_self) ||
+           !keep_same_anchor(o->fixed_anchor, o_self, n->fixed_anchor, n_self) ? "anchor"
          : o->transparent != n->transparent ? "transparent"
          : o->lays_out_items != n->lays_out_items ? "lays_out_items"
          : o->pseudo_declared != n->pseudo_declared || (o->pseudo[0] != NULL) != (n->pseudo[0] != NULL) ||
@@ -73,8 +86,11 @@ static bool keep_declined(FKeeps *k, flow_restyle_reason_t why, const os64_html_
 }
 
 // Judges one element's (or pseudo-element's) two records: nothing to do,
-// one more pair to write, or the reason the restyle declines.
-static bool keep_judge(FKeeps *k, const os64_html_node_t *node, FStyled *was, const FStyled *is)
+// one more pair to write, or the reason the restyle declines. `node` is
+// the element it is told at; `was_self` and `is_self` the nodes the two
+// records are for, which differ for a pseudo-element (keep_same_anchor).
+static bool keep_judge(FKeeps *k, const os64_html_node_t *node, FStyled *was, const FStyled *is,
+                       const os64_html_node_t *was_self, const os64_html_node_t *is_self)
 {
     if (was == NULL || is == NULL)
         return keep_declined(k, FLOW_RESTYLE_MEMBERSHIP, node, was == NULL ? "no record before" : "no record after");
@@ -91,7 +107,7 @@ static bool keep_judge(FKeeps *k, const os64_html_node_t *node, FStyled *was, co
     bool same_decoration = was->decoration == is->decoration &&
                            (was->decoration == 0 || os64_memcmp(&was->decoration_colors, &is->decoration_colors,
                                                                 sizeof(was->decoration_colors)) == 0);
-    const char *derived = keep_derived_differs(was, is);
+    const char *derived = keep_derived_differs(was, was_self, is, is_self);
     if (same_style && same_decoration && derived == NULL)
         return true;
     if (was->motion != NULL || is->motion != NULL)
@@ -159,7 +175,7 @@ static void keep_explain_anchor(FKeeps *k, FStyles *old, const FStyles *b, const
         if (was == NULL || is == NULL || f_style_equal(&was->style, &is->style))
             continue;
         FKeeps scratch = {NULL, 0, 0, FLOW_RESTYLE_NONE, NULL, ""};
-        if (!keep_judge(&scratch, a, was, is)) {
+        if (!keep_judge(&scratch, a, was, is, a, a)) {
             k->why = scratch.why;
             k->at = scratch.at;
             os64_strcopy(k->detail, sizeof(k->detail), scratch.detail);
@@ -187,7 +203,7 @@ static bool keep_collect(FKeeps *k, FStyles *old, const FStyles *b)
             continue;
         FStyled *was = f_map_get(&old->map, node);
         const FStyled *is = b->map.vals[i];
-        if (!keep_judge(k, node, was, is)) {
+        if (!keep_judge(k, node, was, is, node, node)) {
             if (k->why == FLOW_RESTYLE_GEOMETRY && os64_streq(k->detail, "derived anchor"))
                 keep_explain_anchor(k, old, b, node);
             return false;
@@ -197,7 +213,8 @@ static bool keep_collect(FKeeps *k, FStyles *old, const FStyles *b)
                 continue;
             if (!keep_same_text(was->pseudo[p], is->pseudo[p]))
                 return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node, p ? "::after's text" : "::before's text");
-            if (!keep_judge(k, node, f_map_get(&old->map, was->pseudo[p]), f_style_of(b, is->pseudo[p])))
+            if (!keep_judge(k, node, f_map_get(&old->map, was->pseudo[p]), f_style_of(b, is->pseudo[p]),
+                            was->pseudo[p], is->pseudo[p]))
                 return false;
         }
     }

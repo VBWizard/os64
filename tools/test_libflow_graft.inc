@@ -472,6 +472,24 @@ static void restyle_in_place_cases(void)
         }
         flow_free(old); sheeted_close(&p);
     }
+    // A positioned pseudo-element is its own anchor, and its node is made
+    // again by every style pass: a colour written beside it is kept, and
+    // the kept tree answers as a whole layout does.
+    sheeted_open(&p, "<!doctype html><style>#m{position:relative}#m::before{content:'';position:absolute;"
+                     "inset:0}#m.hot{color:red}</style><div id=m>menu</div>",
+                 800, 600);
+    old = graft_layout(&p, NULL, NULL, NULL);
+    os64_html_set_attr(p.doc, graft_node(&p, "m"), "class", "hot", 3);
+    graft_update(&p);
+    whole = graft_layout(&p, NULL, NULL, NULL);
+    kept = restyle_keep(&p, old);
+    {
+        char said[96];
+        snprintf(said, sizeof(said), "kind %d why %d (%s)", (int)kept.kind, (int)kept.why, kept.detail);
+        expect("restyle: a positioned ::before is its own anchor in both builds, and a colour beside it is kept",
+               kept.kind == FLOW_RESTYLE_PAINT && restyle_check_says(old, whole, NULL, NULL), said);
+    }
+    flow_free(whole); flow_free(old); sheeted_close(&p);
     // The check names an outline a kept tree does not hold where a whole
     // layout holds one: two layouts of one document, one with the root's
     // mark cleared, as a restyle that did not hand an outline up would
