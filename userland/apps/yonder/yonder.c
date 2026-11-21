@@ -3788,6 +3788,10 @@ static uint64_t s_effects_boxes_from;
 // it is what a paint inside the picture would not need (VIDEO.md V.7.1).
 static bool s_effects_past_video;
 
+// THE PAINT BENEATH THE PICTURE (VIDEO.md § 5), on unless `--cover=off`
+// asks for every paint to be painted the ordinary way, to compare.
+static bool s_covers = true;
+
 // `--paint-check[=N]`: every Nth covered paint (10 unless said) is painted
 // the ordinary way too and the two compared to the pixel, with the groups
 // open at the cover's draw held to flow_paint_path's (none, for a cover);
@@ -18019,11 +18023,11 @@ static void timed_pixels(void *ctx, os64_gui_rect_t rect, const uint32_t *argb)
 // the frame in hand — the fitted picture met with its content box and its
 // clip, as pane_video cuts them — when that frame is converted at the
 // fitted size, the walk opens no group around its draw (flow_paint_path),
-// the page draws videos at all (modern), the box is drawn, and no line's
-// ellipsis cuts it. False otherwise.
+// the page draws videos at all (modern), the box is drawn, no line's
+// ellipsis cuts it, and covers are on (`--cover=off`). False otherwise.
 static bool video_cover_rect(const Video *v, const flow_box_t *b, os64_gui_rect_t *out)
 {
-    if (!g.page.modern || g.page.tree == NULL || b == NULL || !b->replaced || b->unpainted ||
+    if (!s_covers || !g.page.modern || g.page.tree == NULL || b == NULL || !b->replaced || b->unpainted ||
         b->style->visibility != FLOW_VISIBLE || v->width == 0 || v->height == 0 ||
         flow_paint_path(g.page.tree, b, NULL, 0) != 0)
         return false;
@@ -20669,6 +20673,8 @@ int main(int argc, char **argv)
             int64_t every = os64_atoi(argv[arg] + 16);
             s_cascade_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
         }
+        else if (os64_streq(argv[arg], "--cover=off"))
+            s_covers = false;
         else if (os64_streq(argv[arg], "--paint-check"))
             s_paint_check = 10;
         else if (os64_strlen(argv[arg]) > 14 && os64_memcmp(argv[arg], "--paint-check=", 14) == 0) {

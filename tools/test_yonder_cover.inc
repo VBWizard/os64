@@ -86,6 +86,40 @@ static void cover_refused(const char *what, CoverCounts c)
         cover_said(what, c);
 }
 
+/* The window painted whole with covers on and again with them off: every
+ * pixel the same, the pieces about the covered part included, which the
+ * check (the covered part's own) does not see. */
+static void cover_whole_same(const char *what)
+{
+    uint32_t *shot[2];
+    for (int k = 0; k < 2; k++) {
+        os64_draw_ctx_t screen = {0};
+        screen.surf.width = screen.surf.pitch_px = 800;
+        screen.surf.height = 600;
+        screen.surf.pixels = os64_calloc(800u * 600u, sizeof(uint32_t));
+        g.paint_cache = yonder_paint_cache_new(32u << 20);
+        g.paint_scratch = yonder_scratch_new();
+        s_covers = k == 0;
+        g.ui.dirty = g.view.bounds;
+        view_paint(&g.view, &screen, NULL);
+        s_covers = true;
+        yonder_paint_cache_free(g.paint_cache);
+        g.paint_cache = NULL;
+        yonder_scratch_free(g.paint_scratch);
+        g.paint_scratch = NULL;
+        shot[k] = screen.surf.pixels;
+    }
+    int64_t first = -1;
+    for (int64_t i = 0; i < 800 * 600 && first < 0; i++)
+        if ((shot[0][i] ^ shot[1][i]) & 0x00ffffffu)
+            first = i;
+    check(first < 0, what);
+    if (first >= 0)
+        printf("  %s: first difference at %ld,%ld\n", what, (long)(first % 800), (long)(first / 800));
+    os64_free(shot[0]);
+    os64_free(shot[1]);
+}
+
 static void cover_drop(void)
 {
     os64_memset(&s_videos[0], 0, sizeof(s_videos[0]));
@@ -126,6 +160,7 @@ static void cover_cases(void)
                  cover_run((os64_gui_rect_t){20, 20, 321, 180}), 1);
     cover_expect("cover: a paint of the whole window is the picture's part and four pieces about it",
                  cover_run(g.view.bounds), 4);
+    cover_whole_same("cover: the measured page's shape, the window painted whole with covers and without is the same");
     /* A resize in flight: the frame is not the fitted size. */
     s_videos[0].frame.w = 300;
     cover_refused("cover: a frame not at the fitted size is no cover", cover_run((os64_gui_rect_t){20, 20, 320, 180}));
@@ -156,6 +191,7 @@ static void cover_cases(void)
     cover_video("v", 320, 180, 320, 180);
     cover_expect("cover: a letterboxed picture covers its band, and its bars are painted the ordinary way",
                  cover_run((os64_gui_rect_t){20, 20, 320, 240}), 2);
+    cover_whole_same("cover: a letterboxed picture, the window painted whole with covers and without is the same");
     cover_drop();
 
     /* A negative z-index sibling beneath, a positive one over. */
@@ -166,6 +202,7 @@ static void cover_cases(void)
     cover_video("v", 320, 180, 320, 180);
     cover_expect("cover: a negative z-index beneath and a positive one over agree with the ordinary paint",
                  cover_run((os64_gui_rect_t){20, 20, 320, 180}), 0);
+    cover_whole_same("cover: z-indices both ways, the window painted whole with covers and without is the same");
     cover_drop();
 
     /* In a scroller that cuts the picture: the clip's part is covered, the
@@ -177,6 +214,7 @@ static void cover_cases(void)
     cover_video("v", 320, 180, 320, 180);
     cover_expect("cover: a scroller cutting the picture covers what it shows, and the rest is ordinary",
                  cover_run((os64_gui_rect_t){0, 40, 320, 180}), 2);
+    cover_whole_same("cover: a scroller cutting the picture, the window painted whole with covers and without is the same");
     cover_drop();
 
     /* At 150%, an edge that falls between pixels. */
@@ -187,6 +225,7 @@ static void cover_cases(void)
     cover_video("v", 480, 270, 320, 180);
     cover_expect("cover: at 150% with a fractional edge, the covered paint agrees with the ordinary one",
                  cover_run((os64_gui_rect_t){20, 13, 480, 271}), 1);
+    cover_whole_same("cover: at 150%, the window painted whole with covers and without is the same");
     cover_drop();
 
     /* A canvas beneath the video, drawn by the page: the covered paint
