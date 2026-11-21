@@ -94,15 +94,18 @@ typedef struct yonder_diag yonder_diag_t;
 // names come with the sample (`cascade_reason_names`), from the code that
 // knows them; the layout wrapper checks the count at compile time.
 #define YONDER_LAYOUT_CASCADE_REASONS 18
-// WHAT A LAYOUT NEEDED, from what came out different (flow_profile_t): no
-// style changed and no box moved (a repaint at most); only paint styles
-// changed and no box moved; the boxes of one node moved; more than that;
-// not compared (no previous tree, or no clock). Each for the layouts a
-// script's read forced (a measured layout) and the rest, with the elements
+// WHAT A LAYOUT NEEDED, from what came out different (flow_profile_t),
+// for a layout that finished: no style changed and no box moved, came or
+// went (a repaint at most); only paint styles changed and no box moved;
+// styles placement reads changed and still no box moved; one node's boxes
+// moved, came or went; more than that; not compared (no previous tree of
+// the document). Each for the layouts made while the page's own script ran
+// (its read forced them), which its ledger tells (with yonder's ledger off,
+// every layout counts with the rest), and the rest, with the elements
 // whose style came out different across those layouts (`restyled`).
 typedef enum {
-    YONDER_NEEDED_NOTHING, YONDER_NEEDED_PAINT, YONDER_NEEDED_ONE, YONDER_NEEDED_MORE,
-    YONDER_NEEDED_UNCOMPARED, YONDER_NEEDED_KINDS
+    YONDER_NEEDED_NOTHING, YONDER_NEEDED_PAINT, YONDER_NEEDED_STILL, YONDER_NEEDED_ONE,
+    YONDER_NEEDED_MORE, YONDER_NEEDED_UNCOMPARED, YONDER_NEEDED_KINDS
 } yonder_needed_t;
 typedef struct {
     uint64_t count[2][YONDER_NEEDED_KINDS], us[2][YONDER_NEEDED_KINDS];
@@ -121,8 +124,8 @@ typedef struct {
     // marked.
     uint64_t anchors_peak, anchors_bare_peak;
     uint64_t bare_tested, bare_turned, bare_marked;
-    // What each layout needed, its count and its time (style, boxes,
-    // placement and the public tree), forced by a read ([1]) or not ([0]).
+    // What each finished layout needed, its count and its time (style,
+    // boxes, placement and the public tree), forced by a read ([1]) or not.
     yonder_layout_needed_t needed;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];

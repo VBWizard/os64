@@ -1463,7 +1463,8 @@ static void ms_text(uint64_t us, char *out, size_t cap)
 void yonder_diag_needed_text(const yonder_layout_needed_t *n, char *out, size_t cap)
 {
     static const char *const kNames[YONDER_NEEDED_KINDS] = {
-        "nothing moved", "paint only", "one node's boxes moved", "more moved", "not compared"};
+        "nothing moved", "paint only", "restyled, nothing moved", "one node's boxes moved", "more moved",
+        "not compared"};
     size_t at = 0;
     out[0] = '\0';
     for (int f = 0; f < 2; f++) {

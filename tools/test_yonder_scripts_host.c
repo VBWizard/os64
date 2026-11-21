@@ -10885,6 +10885,16 @@ static void webfont_cases(void) {
     check(script_rebuild() && s_layout_resources.fonts==revision && last_graft_profile.reused>0,
           "graft fonts: a DOM change with @font-face present grafts");
     web_drop();
+    /* Rules that differ only by where an address ends and its format()
+     * begins are different rules: one is readable, the other not. */
+    {
+        garb_face_src_t cut={GARB_FACE_URL,"font.",5,"woff2",5}, whole={GARB_FACE_URL,"font.woff2",10,NULL,0};
+        garb_font_face_t a={.family="F",.family_len=1,.src=&cut,.nsrc=1,.weight_min=400,.weight_max=400};
+        garb_font_face_t b=a;
+        b.src=&whole;
+        check(font_faces_digest(&a,1)!=font_faces_digest(&b,1),
+              "graft fonts: the rules' digest tells where a source's address ends");
+    }
     /* A face arriving refuses the graft once and its text is drawn in it;
      * the next change grafts again. */
     web_page("<!doctype html><style>@font-face{font-family:Web;src:url(web.ttf)}p{font-family:Web}</style>"

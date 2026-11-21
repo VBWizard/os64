@@ -727,8 +727,9 @@ typedef struct {
     const flow_env_t *env;
     flow_env_t inputs;
     uint64_t cascade_generation, cascade_updates, reused;
-    // Against the previous tree's styles of the same document (`compared`
-    // when there were any), reusable or not: of the elements whose style
+    // When asked (f_style_build_reusing's `compare`), against the previous
+    // tree's styles of the same document (`compared` when there were any),
+    // reusable or not: of the elements whose style
     // came out different, outside an animation, how many differ only in
     // paint (f_style_paint_only) and how many otherwise; an element the
     // previous tree had not styled counts with the second.
@@ -760,8 +761,11 @@ typedef struct {
 // differently (LAYOUT.md § Proof, the prefix rule).
 FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model,
                        const flow_env_t *env);
+// `compare`: count what came out different from `previous` (FStyles.
+// changed_paint), which costs a comparison an element and is wanted only
+// by a profile.
 FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_t *model,
-                              const flow_env_t *env, const FStyles *previous);
+                              const flow_env_t *env, const FStyles *previous, bool compare);
 // NULL for a node with no style: not an element, or inside a
 // `display: none` subtree, which pass 1 does not descend into.
 const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node);
@@ -789,8 +793,11 @@ bool f_style_equal(const flow_style_t *a, const flow_style_t *b);
 // does not: colours, backgrounds, borders' colours, shadows, opacity,
 // visibility, outlines, decorations, blending, masks, the cursor, and a
 // transform or a filter changed while present on both sides (one coming or
-// going makes a containing block, which is placement's). A field it does
-// not name counts as placement's: the answer errs toward "it moves".
+// going makes a containing block, which is placement's). No box's place
+// reads any of them, but a transform's value moves a scroller's reach and
+// the page's extent (reach_stacked), which a layout skipped for paint alone
+// would still owe. A field it does not name counts as placement's: the
+// answer errs toward "it moves".
 bool f_style_paint_only(const flow_style_t *a, const flow_style_t *b);
 void f_style_free(FStyles *styles);
 // The styles pass 1 made for a tree, which live as long as it does.

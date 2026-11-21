@@ -408,9 +408,10 @@ static struct {
     uint64_t chars_version, chars_layout;
     uint64_t chars[0x110000 / 64];
     uint16_t chars_upto[0x110000 / 64];
-    // Every character the document `met_doc` has held since its first
-    // layout here, the same way: what a face's ranges are met against
-    // (webfonts_meet), so text taken away never unmeets a face. A face
+    // Every character the document `met_doc` has held across its layouts
+    // since another document's last (webfonts_newly_met), the same way:
+    // what a face's ranges are met against (webfonts_meet), so text taken
+    // away does not unmeet a face. A face
     // newly met changes the lists of text it does not draw (the list's first
     // font gives a line its metrics, and a face coming holds a place), so
     // the layouts' font revision moves then and only then
@@ -1175,18 +1176,23 @@ static bool layout_inputs_same(flow_reuse_inputs_t a, flow_reuse_inputs_t b)
         a.state_owner == b.state_owner && a.state_version == b.state_version;
 }
 // A digest of the `@font-face` rules: everything page_fonts reads of a face
-// to list it (family, style, weights, ranges, sources and the sheet a
-// relative source resolves against). FNV-1a; equal rules give one digest,
-// and a collision would let a graft cross a change of rules.
+// to list it (family, style, weights, ranges, sources, and which sheet a
+// relative source resolves against; the sheet's and the page's addresses
+// refuse a graft by other inputs). Each text goes in with its length,
+// so no two rules differ only by where one text ends. FNV-1a: a collision
+// would let a graft cross a change of rules.
 static uint64_t font_faces_digest(const garb_font_face_t *faces, int32_t n)
 {
     uint64_t h = 1469598103934665603ull;
 #define MIX(ptr, len) do { const unsigned char *b_ = (const unsigned char *)(ptr); \
         for (size_t k_ = 0; k_ < (size_t)(len); k_++) h = (h ^ b_[k_]) * 1099511628211ull; } while (0)
+#define MIX_TEXT(ptr, len) do { size_t l_ = (ptr) != NULL ? (size_t)(len) : SIZE_MAX; MIX(&l_, sizeof(l_)); \
+        if ((ptr) != NULL) MIX(ptr, len); } while (0)
     MIX(&n, sizeof(n));
     for (int32_t i = 0; i < n; i++) {
         const garb_font_face_t *f = &faces[i];
-        MIX(f->family, f->family_len);
+        MIX_TEXT(f->family, f->family_len);
+        MIX(&f->nsrc, sizeof(f->nsrc));
         MIX(&f->weight_min, sizeof(f->weight_min));
         MIX(&f->weight_max, sizeof(f->weight_max));
         MIX(&f->style, sizeof(f->style));
@@ -1195,10 +1201,11 @@ static uint64_t font_faces_digest(const garb_font_face_t *faces, int32_t n)
         MIX(f->ranges, (size_t)f->nranges * sizeof(*f->ranges));
         for (int32_t s = 0; s < f->nsrc; s++) {
             MIX(&f->src[s].kind, sizeof(f->src[s].kind));
-            MIX(f->src[s].text, f->src[s].len);
-            if (f->src[s].format) MIX(f->src[s].format, f->src[s].format_len);
+            MIX_TEXT(f->src[s].text, f->src[s].len);
+            MIX_TEXT(f->src[s].format, f->src[s].format_len);
         }
     }
+#undef MIX_TEXT
 #undef MIX
     return h;
 }
@@ -1596,11 +1603,12 @@ static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
     }
     return model;
 }
-// What the layouts since the last `d` needed (the record's `layout needed
-// reading` lines; diag_paint_reading writes it and starts it again), while
-// the profile is on.
+// What the shown page's layouts needed since its last written `d`, or since
+// it was shown (the record's `layout needed reading` lines), while the
+// profile is on: diag_paint_reading writes it, and cost_reset starts it
+// again with the paint counts.
 static yonder_layout_needed_t s_needed_reading;
-static Page s_measuring;            // measured_layout's copy, defined with it
+static bool page_records_shown(const Page *p);
 // THE LAYOUT BEING TAKEN, whole (yonder_layout_one_t), while the profile
 // is on: page_lay_out opens it and hands it to the record; the cascade and
 // each attempt at the layout add to it.
@@ -1609,7 +1617,7 @@ static bool s_one_open;
 static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
 {
     bool enabled = s_layout_profile && layout_profile_diag(p);
-    flow_profile_t profile = {0};
+    flow_profile_t profile = {.nodes_moved = -1};
     layout_font_dependencies(p);
     flow_reuse_inputs_t inputs = layout_inputs(p, NULL);
     // A cascade without change tracking will replace its generation after a
@@ -1638,21 +1646,27 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
             .refusals = tree == NULL || flow_incomplete(tree)};
         _Static_assert(YONDER_LAYOUT_REUSE_REASONS == FLOW_REUSE_NREASONS, "layout refusal diagnostics");
         os64_memcpy(sample.reuse_refused, reuse.refused, sizeof(sample.reuse_refused));
-        // What it needed (yonder_needed_t): yonder runs the whole pipeline
-        // whatever the answer, so a layout of the first two kinds styled,
-        // built and placed (or grafted) boxes none of which moved.
-        yonder_needed_t need = profile.nodes_moved < 0 ? YONDER_NEEDED_UNCOMPARED
-            : profile.nodes_moved == 0 ? (profile.styles_layout == 0 && profile.styles_paint == 0 ? YONDER_NEEDED_NOTHING
-                                          : profile.styles_layout == 0 ? YONDER_NEEDED_PAINT : YONDER_NEEDED_MORE)
-            : profile.nodes_moved == 1 ? YONDER_NEEDED_ONE : YONDER_NEEDED_MORE;
-        int forced = p == &s_measuring;
-        sample.needed.count[forced][need] = 1;
-        sample.needed.us[forced][need] = profile.style_us + profile.boxes_us + profile.layout_us + profile.public_us;
-        if (need != YONDER_NEEDED_UNCOMPARED)
-            sample.needed.restyled[forced] = profile.styles_paint + profile.styles_layout;
-        s_needed_reading.count[forced][need]++;
-        s_needed_reading.us[forced][need] += sample.needed.us[forced][need];
-        s_needed_reading.restyled[forced] += sample.needed.restyled[forced];
+        // What it needed (yonder_needed_t), if it finished: one that did not
+        // is laid out again or let go, and is no answer. yonder runs the
+        // whole pipeline whatever the answer, so a layout of the first three
+        // kinds styled, built and placed (or grafted) boxes none of which
+        // moved. The shown page's own are its `d` reading's too.
+        if (tree != NULL && !flow_incomplete(tree)) {
+            yonder_needed_t need = profile.nodes_moved < 0 ? YONDER_NEEDED_UNCOMPARED
+                : profile.nodes_moved == 0 ? (profile.styles_layout > 0 ? YONDER_NEEDED_STILL
+                                              : profile.styles_paint > 0 ? YONDER_NEEDED_PAINT : YONDER_NEEDED_NOTHING)
+                : profile.nodes_moved == 1 ? YONDER_NEEDED_ONE : YONDER_NEEDED_MORE;
+            int forced = yonder_scripts_ledger_running(page_scripts(p));
+            sample.needed.count[forced][need] = 1;
+            sample.needed.us[forced][need] = profile.style_us + profile.boxes_us + profile.layout_us + profile.public_us;
+            if (need != YONDER_NEEDED_UNCOMPARED)
+                sample.needed.restyled[forced] = profile.styles_paint + profile.styles_layout;
+            if (page_records_shown(p)) {
+                s_needed_reading.count[forced][need]++;
+                s_needed_reading.us[forced][need] += sample.needed.us[forced][need];
+                s_needed_reading.restyled[forced] += sample.needed.restyled[forced];
+            }
+        }
         layout_profile_add(p, &sample);
         if (s_one_open) {
             s_one.style_us += sample.style_us;
@@ -3570,9 +3584,16 @@ static void cost_fold(PaintStage from, PaintStage to)
 }
 
 // Counting starts again: a page shown, or its record written on asking.
+// Whether a page's layouts go to the shown page's record: the page itself,
+// or the copy a script's rebuild lays out for it.
+static bool page_records_shown(const Page *p)
+{
+    return p->diag != NULL && p->diag == g.page.diag;
+}
 static void cost_reset(void)
 {
     os64_memset(&s_cost, 0, sizeof(s_cost));
+    os64_memset(&s_needed_reading, 0, sizeof(s_needed_reading));
     s_cost.collapses_from = g.ui.damage_collapses;
     s_cost.from_cycles = cycles();
     s_cost.from_us = os64_micros();
@@ -7275,8 +7296,11 @@ static bool webfonts_loadable(const garb_font_face_t *f)
 // except through the list: a face newly met joins its family's list,
 // which gives a line its first font's metrics and keeps a place for a
 // face whose file is coming (page_fonts), so text holding none of its
-// characters can be drawn otherwise. Text taken away unmeets nothing.
-// Another document starts the set again, and is a change.
+// characters can be drawn otherwise. Text taken away unmeets nothing while
+// the document is the one laid out. A layout of another (a page arriving,
+// a measured one) starts the set again for that one, and is a change: the
+// first document's next layout starts from its characters as they stand,
+// and moves the revision.
 static bool webfonts_newly_met(const Page *p, const garb_font_face_t *faces, int32_t nfaces)
 {
     webfonts_chars(p);
@@ -7285,6 +7309,7 @@ static bool webfonts_newly_met(const Page *p, const garb_font_face_t *faces, int
     if (s_web.met_doc != doc) {
         s_web.met_doc = doc;
         os64_memset(s_web.met, 0, sizeof(s_web.met));
+        os64_memset(s_web.met_upto, 0, sizeof(s_web.met_upto));
         grew = true;
     } else {
         for (int32_t i = 0; i < nfaces && !grew; i++)
@@ -8811,11 +8836,10 @@ static void diag_paint_reading(Page *p, uint32_t n)
     yonder_diag_fact(p->diag, key, dt_text(&v));
     diag_ledger_reading(p, n);
     if (s_layout_profile) {
-        char needed[512], nkey[40];
+        char needed[768], nkey[40];
         yonder_diag_needed_text(&s_needed_reading, needed, sizeof(needed));
         os64_snprintf(nkey, sizeof(nkey), "layout needed reading %u", (unsigned)n);
         yonder_diag_fact(p->diag, nkey, needed);
-        os64_memset(&s_needed_reading, 0, sizeof(s_needed_reading));
     }
     os64_free(t.s);
     os64_free(u.s);

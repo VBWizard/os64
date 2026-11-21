@@ -80,9 +80,9 @@ typedef struct {
     const flow_env_t *env;
     FStyles *out;
     const FStyles *previous;
-    // The previous tree's styles of the same document, kept whether or not
-    // they may be reused (`previous`): what came out different is told
-    // against them (FStyles.changed_paint), which reuses nothing.
+    // The previous tree's styles of the same document when the caller asks
+    // what came out different (FStyles.changed_paint), kept whether or not
+    // they may be reused (`previous`): telling it reuses nothing.
     const FStyles *compare;
     FStyleCopy copies;
     bool quirks;                // full quirks mode
@@ -5433,15 +5433,15 @@ static const os64_html_node_t *next_element(const os64_html_document_t *doc, con
 FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model,
                        const flow_env_t *env)
 {
-    return f_style_build_reusing(doc, model, env, NULL);
+    return f_style_build_reusing(doc, model, env, NULL, false);
 }
 
 FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_t *model,
-                              const flow_env_t *env, const FStyles *previous)
+                              const flow_env_t *env, const FStyles *previous, bool compare_wanted)
 {
     if (doc == NULL || env == NULL)
         return NULL;
-    const FStyles *compare = previous != NULL && previous->doc == doc ? previous : NULL;
+    const FStyles *compare = compare_wanted && previous != NULL && previous->doc == doc ? previous : NULL;
     if (previous) {
         const flow_env_t *had = &previous->inputs;
         if (previous->doc != doc || previous->lists_refused || doc->quirks == OS64_HTML_QUIRKS ||

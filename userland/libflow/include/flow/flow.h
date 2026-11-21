@@ -1005,15 +1005,16 @@ typedef struct {
  * Counts come from stages that returned a result; a stage returning NULL
  * has no count. Times include attempted stages, including refused builds.
  * `reused` is zero for a full rebuild. No clock is read without a sink.
- * What came out different from a previous tree of the same document,
- * whether or not its styles could be reused: `styles_paint` elements whose
- * style differs only in paint (colours, opacity, shadows, a transform
- * kept: what placement does not read) and `styles_layout` elements whose
- * style differs otherwise or that had none, animated ones left out (with
- * no such tree, every element is in `styles_layout`); and, only when a
- * clock is given (the walk costs a lookup a box), `nodes_moved`, the nodes
- * whose first box has another border box than in that tree or had none
- * there, -1 when it was not counted. */
+ * Only when a clock is given (the counts cost a comparison an element and a
+ * lookup a box), what came out different from a previous tree of the same
+ * document, whether or not its styles could be reused: `styles_paint`
+ * elements whose style differs only in paint (colours, opacity, shadows, a
+ * transform changed while present: no box's placement reads them, though a
+ * transform moves a scroller's reach) and `styles_layout` elements whose
+ * style differs otherwise or that had none, animated ones left out; and
+ * `nodes_moved`, the nodes whose first box has another border box than in
+ * that tree, had none there, or has none here. Not counted, `nodes_moved`
+ * is -1, and every element is in `styles_layout`. */
 typedef struct {
     uint64_t style_us, boxes_us, layout_us, public_us;
     uint64_t elements, boxes, measures, reused, clock_errors;
