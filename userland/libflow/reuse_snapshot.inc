@@ -16,10 +16,26 @@ struct FReuseSnapshot {
     flow_reuse_inputs_t inputs;
     flow_env_t env;
     const os64_html_document_t *doc;
+    // The tree's styles, which live as long as it does (reuse_told_at).
+    const FStyles *styles;
     uint64_t generation, version;
     size_t count, slots, bytes, ncalls, nitems;
     int32_t width;
     bool lost;
+    // A change was read since the snapshot's version that adds or removes
+    // nodes, changes a text, changes a tree's adopted sheets, or sets an
+    // attribute boxes may read (reuse_attr_styled_only): boxes or their
+    // text may differ, whatever the styles say, so a tree kept by a restyle
+    // in place (flow_restyle_in_place) cannot answer for it. One under an
+    // element styled `display: none` is no exception: what a select's
+    // options say, a picture's sources, a slot's assignments and more are
+    // read there by others than the boxes.
+    // `structural_at` and `structural_what`: the element the first such
+    // change is told at (reuse_told_at) and what it was, for the record
+    // (flow_restyle_t.at, .detail).
+    bool structural;
+    const os64_html_node_t *structural_at;
+    char structural_what[40];
     // Nodes, hash slots and per-box call records share this allocation.
 };
 
@@ -107,6 +123,42 @@ static void reuse_slot_rule(FReuseSnapshot *r, const os64_html_node_t *target)
     while (root->parent) root = root->parent;
     reuse_mark_host(r, os64_html_shadow_host(root));
 }
+// Whether an attribute change is one only the cascade reads, so that the
+// styles it makes say everything it can change: `class`, `style` and `id`,
+// and the `data-` and `aria-` attributes, which no box reads. Every other
+// attribute may be read by box generation or placement themselves (a
+// canvas's or an image's size, `colspan`, a list's `start`, an image's
+// `src` or `alt`, an input's `type`), and is counted as structural.
+static bool reuse_name_begins(const char *n, const char *prefix)
+{
+    for (; *prefix != '\0'; n++, prefix++)
+        if (*n != *prefix)
+            return false;
+    return true;
+}
+static bool reuse_attr_styled_only(const os64_html_change_entry_t *e)
+{
+    const char *n = e->attr_ns == NULL ? e->attr_name : NULL;
+    if (n == NULL)
+        return false;
+    return os64_streq(n, "class") || os64_streq(n, "style") || os64_streq(n, "id") ||
+           reuse_name_begins(n, "data-") || reuse_name_begins(n, "aria-");
+}
+
+// The element a change at `n` is told at: `n` or its nearest flat-tree
+// ancestor with a record in the tree's styles, or NULL for none (a node
+// outside the page). A change's own target may be a node made since the
+// tree pinned its document, which may be reclaimed once the change is
+// read; an element with a record was styled under that pin, and lives as
+// long as the tree.
+static const os64_html_node_t *reuse_told_at(const FReuseSnapshot *r, const os64_html_node_t *n)
+{
+    for (; r->styles != NULL && n != NULL; n = f_flat_parent(r->doc, n))
+        if (n->kind == OS64_HTML_ELEMENT && f_style_of(r->styles, n) != NULL)
+            return n;
+    return NULL;
+}
+
 static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
 {
     if (r->lost) return false;
@@ -119,6 +171,27 @@ static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
     }
     bool shadows = os64_html_has_shadow_roots(r->doc);
     for (; entry; entry = entry->next) {
+        // An element's custom state is the cascade's to read; a STATE change
+        // on a document or a shadow root is its adopted sheets. An attribute
+        // is structural unless only the cascade reads it.
+        if (entry->kind == OS64_HTML_CHANGE_CHILDREN || entry->kind == OS64_HTML_CHANGE_TEXT ||
+            (entry->kind == OS64_HTML_CHANGE_STATE && entry->target != NULL &&
+             entry->target->kind != OS64_HTML_ELEMENT) ||
+            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry))) {
+            if (!r->structural) {
+                r->structural_at = reuse_told_at(r, entry->target);
+                const char *what = entry->kind == OS64_HTML_CHANGE_CHILDREN ? "children"
+                                 : entry->kind == OS64_HTML_CHANGE_TEXT ? "text"
+                                 : entry->kind == OS64_HTML_CHANGE_STATE ? "adopted sheets" : "attribute ";
+                size_t n = os64_strlen(what);
+                os64_memcpy(r->structural_what, what, n);
+                if (entry->kind == OS64_HTML_CHANGE_ATTR && entry->attr_name != NULL)
+                    for (const char *a = entry->attr_name; *a != '\0' && n + 1 < sizeof(r->structural_what); a++)
+                        r->structural_what[n++] = *a;
+                r->structural_what[n] = '\0';
+            }
+            r->structural = true;
+        }
         reuse_mark(r, entry->target);
         for (size_t i = 0; i < entry->nadded; ++i) reuse_mark(r, entry->added[i]);
         for (size_t i = 0; i < entry->nremoved; ++i) reuse_mark(r, entry->removed[i]);
@@ -218,7 +291,7 @@ static FReuseSnapshot *reuse_snapshot_new(flow_tree_t *tree, int32_t width,
     bytes += tree->boxes->count * sizeof(FReuseCall);
     FReuseSnapshot *r = os64_calloc(1, bytes);
     if (!r) { stats->refused[FLOW_REUSE_NO_MEMORY]++; return NULL; }
-    *r = (FReuseSnapshot){.inputs = *inputs, .env = *env, .doc = tree->doc,
+    *r = (FReuseSnapshot){.inputs = *inputs, .env = *env, .doc = tree->doc, .styles = tree->styles,
         .generation = tree->styles->cascade_generation, .version = os64_html_version(tree->doc),
         .count = count, .slots = slots, .bytes = bytes, .width = width};
     // These borrowed context pointers are not comparison inputs. Keep no

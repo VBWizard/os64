@@ -330,3 +330,201 @@ static void graft_retain_failure(void)
     flow_tree_t *next=graft_layout(&p,old,NULL,NULL);
     flow_free(old);graft_oracle(&p,next);flow_free(next);sheeted_close(&p);
 }
+
+// THE RESTYLE KEPT IN THE TREE (flow_restyle_in_place) beside the check that
+// judges it (flow_restyle_check). A paint-only change is written into the
+// tree laid out before it, which then answers as a whole layout of the
+// changed document does; before the write, the check tells the two apart and
+// names the element. A change placement reads is declined, the tree left as
+// it was, and the check names what moved (in a box of fixed height, so that
+// no box before it in tree order moves first).
+static bool restyle_check_says(const flow_tree_t *a, const flow_tree_t *b, const char *want,
+                               const os64_html_node_t *at)
+{
+    const os64_html_node_t *node = NULL;
+    const char *what = NULL;
+    bool same = flow_restyle_check(a, b, &node, &what);
+    if (want == NULL)
+        return same && what == NULL;
+    return !same && what != NULL && strcmp(what, want) == 0 && node == at;
+}
+static flow_restyle_t restyle_keep(Sheeted *p, flow_tree_t *tree)
+{
+    flow_reuse_inputs_t inputs = {.resource_owner = p->doc};
+    os64_page_t *model = os64_page_rebuild(p->page);
+    flow_restyle_t kept = flow_restyle_in_place(tree, p->doc, model, &p->env, &inputs, 800);
+    os64_page_free(model);
+    return kept;
+}
+static void restyle_in_place_cases(void)
+{
+    Sheeted p;sheeted_open(&p,"<!doctype html><style>p{margin:4px}</style><p id=a>first <b>bold</b></p>"
+        "<div style='height:60px'><p id=q>second</p></div><p>tail</p>",800,600);
+    os64_html_node_t *q=graft_node(&p,"q");
+    flow_tree_t *old=graft_layout(&p,NULL,NULL,NULL);
+    os64_html_set_attr(p.doc,q,"style","color:green",11);graft_update(&p);
+    flow_tree_t *whole=graft_layout(&p,NULL,NULL,NULL);
+    expect("restyle: before the write the check tells a colour apart, at its element",
+           old && whole && restyle_check_says(old,whole,"a style",q),NULL);
+    flow_restyle_t kept=restyle_keep(&p,old);
+    expect("restyle: a colour is written in place",kept.kind==FLOW_RESTYLE_PAINT && kept.written==1,NULL);
+    expect("restyle: and the kept tree answers as a whole layout",restyle_check_says(old,whole,NULL,NULL),NULL);
+    flow_free(whole);
+    os64_html_set_attr(p.doc,q,"style","color:green;padding-top:7px",27);graft_update(&p);
+    whole=graft_layout(&p,NULL,NULL,NULL);
+    expect("restyle: the check tells a padding apart, at its element",
+           whole && restyle_check_says(old,whole,"a border box",q),NULL);
+    kept=restyle_keep(&p,old);
+    expect("restyle: a padding is declined as geometry",
+           kept.kind==FLOW_RESTYLE_DECLINED && kept.why==FLOW_RESTYLE_GEOMETRY,NULL);
+    flow_free(whole);flow_free(old);sheeted_close(&p);
+    // One change to element `id` of `html`, restyled in the tree laid out
+    // before it: what the restyle answered, and whether the kept tree then
+    // answers as a whole layout of the changed document does.
+    static const struct {
+        const char *name, *html, *id, *style;
+        flow_restyle_kind_t kind;
+        flow_restyle_reason_t why;
+        uint64_t later;     // the change's time, ms after the first layout's
+    } one[] = {
+        // Another element's colour, with the animated one's sample moved on:
+        // the animation's own clock is the tick's, not a restyle's.
+        {"restyle: an animated element whose sample moved is declined as motion",
+         "<!doctype html><style>@keyframes k{to{color:blue}}#c{animation:k 10s linear;color:red}</style>"
+         "<span id=c>moving</span><p id=o>other</p>", "o", "color:green",
+         FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_MOTION, 5000},
+        // An outline on a positioned box that makes no context is its
+        // context's to paint, which must learn that it holds one.
+        {"restyle: an outline on a positioned box is kept, and held where a whole layout holds it",
+         "<!doctype html><div id=r style='position:relative'>ringed</div>", "r", "position:relative;outline:2px solid red",
+         FLOW_RESTYLE_PAINT, FLOW_RESTYLE_NONE, 0},
+        // plus-darker is drawn as normal, with no group; multiply needs one.
+        {"restyle: a blend that comes to need a group is declined as stacking",
+         "<!doctype html><div id=m style='mix-blend-mode:plus-darker'>blended</div>", "m", "mix-blend-mode:multiply",
+         FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_STACKING, 0},
+        // The child's colour at the animation's start is red either way, but
+        // its `inherit` endpoint follows the parent's.
+        {"restyle: an animation's inherited endpoint moving is declined as motion",
+         "<!doctype html><style>@keyframes k{from{color:red}to{color:inherit}}#c{animation:k 10s linear}</style>"
+         "<div id=a style='color:red'><span id=c>moving</span></div>", "a", "color:blue",
+         FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_MOTION, 0},
+    };
+    // Laid out as a face lays out a page that animates: on a timeline, its
+    // animations ticking, from time 0.
+    for (size_t i = 0; i < sizeof(one) / sizeof(one[0]); i++) {
+        sheeted_open(&p, one[i].html, 800, 600);
+        flow_timeline_t *tl = flow_timeline_new(p.doc);
+        p.env.ticks = true;
+        p.env.timeline = tl;
+        p.env.now_ms = 0;
+        old = graft_layout(&p, NULL, NULL, NULL);
+        flow_timeline_commit(&tl, old);
+        p.env.timeline = tl;
+        os64_html_set_attr(p.doc, graft_node(&p, one[i].id), "style", one[i].style, strlen(one[i].style));
+        graft_update(&p);
+        p.env.now_ms = one[i].later;
+        whole = graft_layout(&p, NULL, NULL, NULL);
+        kept = restyle_keep(&p, old);
+        bool ok = old && whole && kept.kind == one[i].kind && kept.why == one[i].why &&
+                  (kept.kind == FLOW_RESTYLE_DECLINED || restyle_check_says(old, whole, NULL, NULL));
+        char said[96];
+        snprintf(said, sizeof(said), "kind %d why %d", (int)kept.kind, (int)kept.why);
+        expect(one[i].name, ok, ok ? NULL : said);
+        flow_free(whole); flow_free(old); flow_timeline_free(tl); sheeted_close(&p);
+    }
+    // A text under an element styled `display: none` is structure all the
+    // same: a select's hidden option is what its width is measured from.
+    // The decline is told at an element the tree styled.
+    sheeted_open(&p, "<!doctype html><select><option id=o hidden selected>Choose</option><option>A</option>"
+                     "</select><p id=c>c</p>",
+                 800, 600);
+    old = graft_layout(&p, NULL, NULL, NULL);
+    {
+        os64_html_node_t *o = graft_node(&p, "o");
+        bool changed = o != NULL && o->first_child != NULL &&
+                       !os64_html_set_text(p.doc, o->first_child, "Choose one of these, please", 27) &&
+                       !os64_html_set_attr(p.doc, graft_node(&p, "c"), "style", "color:green", 11);
+        graft_update(&p);
+        kept = restyle_keep(&p, old);
+        char said[96];
+        snprintf(said, sizeof(said), "kind %d why %d (%s)", (int)kept.kind, (int)kept.why, kept.detail);
+        expect("restyle: a hidden option's text is structure, told at an element the tree styled",
+               changed && kept.kind == FLOW_RESTYLE_DECLINED && kept.why == FLOW_RESTYLE_STRUCTURE &&
+                   kept.at != NULL && kept.at->kind == OS64_HTML_ELEMENT && strncmp(kept.detail, "text", 4) == 0,
+               said);
+    }
+    flow_free(old); sheeted_close(&p);
+    // A change to a node outside the page (made since the tree, and never
+    // inserted) is told at no element: the node may be reclaimed, and the
+    // decline must not point at it.
+    sheeted_open(&p, "<!doctype html><p id=c>c</p>", 800, 600);
+    old = graft_layout(&p, NULL, NULL, NULL);
+    {
+        int64_t why = 0;
+        os64_html_node_t *loose = os64_html_create_element(p.doc, OS64_HTML_NS_HTML, "a", &why);
+        bool changed = loose != NULL && !os64_html_set_attr(p.doc, loose, "href", "x", 1);
+        graft_update(&p);
+        kept = restyle_keep(&p, old);
+        expect("restyle: a change to a node outside the page is told at no element",
+               changed && kept.why == FLOW_RESTYLE_STRUCTURE && kept.at == NULL &&
+                   strcmp(kept.detail, "attribute href") == 0,
+               kept.detail);
+    }
+    flow_free(old); sheeted_close(&p);
+    // A tree's records point into the cascade it was laid out in (a
+    // family's names are its strings), which a host frees with the tree: a
+    // colour changed under a cascade built fresh is declined, not kept in a
+    // tree that would outlive what its other records read.
+    sheeted_open(&p, "<!doctype html><style>p{font-family:Serif}#c.on{color:red}</style><p id=c>c</p><p>d</p>",
+                 800, 600);
+    old = graft_layout(&p, NULL, NULL, NULL);
+    os64_html_set_attr(p.doc, graft_node(&p, "c"), "class", "on", 2);
+    graft_update(&p);
+    {
+        garb_sheet_in_t sheets[16];
+        for (int32_t i = 0; i < p.n; ++i) sheets[i] = (garb_sheet_in_t){.sheet = &p.sheets[i]};
+        garb_cascade_t *fresh = garb_cascade(sheets, p.n, p.doc, garb_cascade_env(p.cascade));
+        garb_cascade_t *had = p.cascade;
+        p.cascade = fresh;
+        p.env.cascade = fresh;
+        kept = restyle_keep(&p, old);
+        expect("restyle: a colour under a cascade built fresh is declined as another cascade",
+               fresh != NULL && kept.kind == FLOW_RESTYLE_DECLINED && kept.why == FLOW_RESTYLE_INPUTS &&
+                   strcmp(kept.detail, "another cascade") == 0 && kept.written == 0, kept.detail);
+        p.cascade = had;
+        p.env.cascade = had;
+        garb_cascade_free(fresh);
+    }
+    flow_free(old); sheeted_close(&p);
+    // A positioned pseudo-element is its own anchor, and its node is made
+    // again by every style pass: a colour written beside it is kept, and
+    // the kept tree answers as a whole layout does.
+    sheeted_open(&p, "<!doctype html><style>#m{position:relative}#m::before{content:'';position:absolute;"
+                     "inset:0}#m.hot{color:red}</style><div id=m>menu</div>",
+                 800, 600);
+    old = graft_layout(&p, NULL, NULL, NULL);
+    os64_html_set_attr(p.doc, graft_node(&p, "m"), "class", "hot", 3);
+    graft_update(&p);
+    whole = graft_layout(&p, NULL, NULL, NULL);
+    kept = restyle_keep(&p, old);
+    {
+        char said[96];
+        snprintf(said, sizeof(said), "kind %d why %d (%s)", (int)kept.kind, (int)kept.why, kept.detail);
+        expect("restyle: a positioned ::before is its own anchor in both builds, and a colour beside it is kept",
+               kept.kind == FLOW_RESTYLE_PAINT && restyle_check_says(old, whole, NULL, NULL), said);
+    }
+    flow_free(whole); flow_free(old); sheeted_close(&p);
+    // The check names an outline a kept tree does not hold where a whole
+    // layout holds one: two layouts of one document, one with the root's
+    // mark cleared, as a restyle that did not hand an outline up would
+    // leave it.
+    sheeted_open(&p, "<!doctype html><div style='position:relative;outline:2px solid red'>ringed</div>", 800, 600);
+    old = graft_layout(&p, NULL, NULL, NULL);
+    whole = graft_layout(&p, NULL, NULL, NULL);
+    if (old != NULL)
+        ((flow_box_t *)flow_root(old))->holds_outline = false;
+    expect("restyle: the check names an outline not held",
+           old && whole && flow_root(whole)->holds_outline &&
+           restyle_check_says(old, whole, "an outline not held", flow_root(old)->node), NULL);
+    flow_free(whole); flow_free(old); sheeted_close(&p);
+}

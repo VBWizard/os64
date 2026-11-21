@@ -113,7 +113,20 @@ struct flow_tree {
     uint64_t tick_ms;
     // flow_tree_serial's number, and the last stamp handed a box's `drawn`.
     uint64_t serial, drawn;
+    // The lists the restyles kept in this tree have copied (restyle.inc),
+    // at most F_RESTYLE_ROOM, and whether that room ran out, after which
+    // none is kept and the next layout makes the tree afresh.
+    FArena restyle;
+    bool restyle_spent;
+    // The page's extent and each scroll container's range as placement
+    // left them, before the stacked and transformed boxes reached past them
+    // (reach_stacked, which only grows them): what a restyle kept in place
+    // starts from to reach again when a transform moved. NULL ranges with
+    // scrollers: none could be kept, and no transform is restyled in place.
+    int64_t reach_base_w, reach_base_h;
+    flow_point_t *reach_base_ranges;
 };
+#define F_RESTYLE_ROOM ((size_t)1 << 20)
 
 // The serials handed out so far: trees are laid out on more than one
 // thread.
@@ -1855,6 +1868,8 @@ void flow_free(flow_tree_t *tree)
     f_arena_free(&tree->arena);
     f_arena_free(&tree->tick_lists[0]);
     f_arena_free(&tree->tick_lists[1]);
+    f_arena_free(&tree->restyle);
+    os64_free(tree->reach_base_ranges);
     os64_free(tree->images);
     os64_free(tree->controls);
     os64_free(tree->positioned);
@@ -2298,6 +2313,7 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
     // fragment, so the budgeted arenas already bound them: no cap of their
     // own, which would turn a page the budget cut short into no page.
     tree->arena.cap = SIZE_MAX;
+    tree->restyle.cap = F_RESTYLE_ROOM;
     tree->now_ms = env->now_ms;
     tree->tick_ms = env->now_ms;
     tree->live = -1;
@@ -2360,6 +2376,12 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
             flow_free(tree);
             return NULL;
         }
+        tree->reach_base_w = tree->layout->width;
+        tree->reach_base_h = tree->layout->height;
+        tree->reach_base_ranges = tree->nscrollers > 0
+            ? os64_malloc((size_t)tree->nscrollers * sizeof(*tree->reach_base_ranges)) : NULL;
+        for (int32_t i = 0; tree->reach_base_ranges != NULL && i < tree->nscrollers; i++)
+            tree->reach_base_ranges[i] = tree->scrollers[i]->range;
         reach_stacked(tree);
         sticky_reach_scrolled(tree);
         ink_reach(tree->root);
@@ -4273,7 +4295,9 @@ static const FResolved *tick_resolved(void *ctx, int32_t a, int32_t frame, const
 
 // A box's ink with its shadows as they are now, MERGED into what it was —
 // a box's ink only grows while its tree lives — and handed up as ink_reach
-// hands it.
+// hands it: the ink to the stacked box that holds it, and whether an
+// outline is held past it too, to every ancestor, as ink_up hands that
+// (visit_outlines walks into stacked boxes that are not contexts).
 static void ink_grown(flow_box_t *b)
 {
     int32_t was[4];
@@ -4281,8 +4305,11 @@ static void ink_grown(flow_box_t *b)
     own_ink(b);
     for (int k = 0; k < 4; k++)
         b->ink[k] = b->ink[k] > was[k] ? b->ink[k] : was[k];
-    for (const flow_box_t *c = b; c->parent != NULL && !c->stacked; c = c->parent)
+    const flow_box_t *c = b;
+    for (; c->parent != NULL && !c->stacked; c = c->parent)
         ink_up(c);
+    for (; c->holds_outline && c->parent != NULL && !c->parent->holds_outline; c = c->parent)
+        ((flow_box_t *)c->parent)->holds_outline = true;
 }
 
 // A change to a box a filter draws repaints all that filter spreads it
@@ -4768,3 +4795,5 @@ bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_poin
     os64_free(changes);
     return said->why == FLOW_PARTS_MARKED;
 }
+
+#include "restyle.inc"

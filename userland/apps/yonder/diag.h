@@ -94,6 +94,9 @@ typedef struct yonder_diag yonder_diag_t;
 // names come with the sample (`cascade_reason_names`), from the code that
 // knows them; the layout wrapper checks the count at compile time.
 #define YONDER_LAYOUT_CASCADE_REASONS 18
+// Why a restyle kept in the shown tree was declined (flow_restyle_reason_t
+// order); the layout wrapper checks the count at compile time.
+#define YONDER_LAYOUT_RESTYLE_REASONS 12
 // WHAT A LAYOUT NEEDED, from what came out different (flow_profile_t),
 // for a layout that finished: no style changed and no box moved, came or
 // went (a repaint at most); only paint styles changed and no box moved;
@@ -127,6 +130,12 @@ typedef struct {
     // What each finished layout needed, its count and its time (style,
     // boxes, placement and the public tree), forced by a read ([1]) or not.
     yonder_layout_needed_t needed;
+    // The restyles kept in the shown tree (flow_restyle_in_place): those
+    // that found nothing to change, those that wrote paint-only values, and
+    // the declined by reason (names with the sample, as the cascade's).
+    uint64_t kept_nothing, kept_paint;
+    uint64_t kept_declined[YONDER_LAYOUT_RESTYLE_REASONS];
+    const char *const *restyle_reason_names;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
     const char *const *cascade_reason_names;

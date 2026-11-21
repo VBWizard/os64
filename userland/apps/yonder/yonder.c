@@ -1455,7 +1455,11 @@ static uint64_t s_trees_given, s_ticks_moved;
 // into the timeline they replace.
 static void page_show(Page *p, flow_tree_t *tree)
 {
-    tree_free(p->tree);
+    // A restyle kept in the tree shows the tree it was kept in
+    // (flow_restyle_in_place): the same tree again, not one to free. It is
+    // still a tree given, which the observers read as something moved.
+    if (p->tree != tree)
+        tree_free(p->tree);
     p->tree = tree;
     s_trees_given++;
     flow_timeline_commit(&p->timeline, tree);
@@ -1814,6 +1818,93 @@ static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node
     return n < *cap ? n : *cap;
 }
 
+// THE RESTYLE KEPT IN THE SHOWN TREE (flow_restyle_in_place), on unless
+// `--restyle-in-place=off` asks for every change to be laid out, to compare.
+// `--geometry-check[=N]` lays every Nth kept tree out whole beside itself
+// and compares (restyle_kept_shown), counting the compared and the differed.
+// That whole layout is a layout of the page like any other: it stages the
+// web fonts it meets, whose arrival moves the fonts' revision, so a run
+// with the check on keeps a little less than one without it.
+static bool s_restyle_in_place = true;
+static uint32_t s_geometry_check, s_geometry_checked;
+static uint64_t s_geometry_compared, s_geometry_differed;
+
+// The shown tree, when `p` is a staged rebuild of the page on screen at its
+// own sizes and the restyle kept in that tree took the change; NULL when it
+// is no such layout or the restyle declined.
+static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, int32_t height, uint32_t zoom);
+// A restyle kept or declined, counted in the record's `layout kept` line
+// while the profile is on.
+static void restyle_counted(const Page *p, flow_restyle_t kept)
+{
+    static const char *const names[YONDER_LAYOUT_RESTYLE_REASONS] = {
+        "none", "no tree", "no history", "structure", "inputs", "styles", "membership",
+        "geometry", "motion", "stacking", "decoration", "room"};
+    _Static_assert(YONDER_LAYOUT_RESTYLE_REASONS == FLOW_RESTYLE_NREASONS, "restyle refusal diagnostics");
+    if (!s_layout_profile || layout_profile_diag(p) == NULL)
+        return;
+    yonder_layout_stats_t sample = {.restyle_reason_names = names};
+    if (kept.kind == FLOW_RESTYLE_NOTHING) sample.kept_nothing = 1;
+    else if (kept.kind == FLOW_RESTYLE_PAINT) sample.kept_paint = 1;
+    else if ((unsigned)kept.why < YONDER_LAYOUT_RESTYLE_REASONS) sample.kept_declined[kept.why] = 1;
+    layout_profile_add(p, &sample);
+    if (kept.kind != FLOW_RESTYLE_DECLINED || (unsigned)kept.why >= YONDER_LAYOUT_RESTYLE_REASONS)
+        return;
+    // `layout kept, declined at`: the declines by reason and what was found,
+    // counted, each with the element of the latest, the most counted first,
+    // for the record being written (a new record starts it again). Those past
+    // the table's room are counted as `others`; entries past the line's room
+    // are left off whole.
+    static struct { uint8_t why; char detail[48], at[96]; uint64_t n; } seen[16];
+    static int nseen;
+    static uint64_t others;
+    static const yonder_diag_t *seen_for;
+    yonder_diag_t *diag = layout_profile_diag(p);
+    if (diag != seen_for) {
+        seen_for = diag;
+        nseen = 0;
+        others = 0;
+    }
+    int i = 0;
+    for (; i < nseen && (seen[i].why != kept.why || !os64_streq(seen[i].detail, kept.detail)); i++) {}
+    if (i == nseen && nseen < (int)(sizeof(seen) / sizeof(seen[0]))) {
+        seen[nseen].why = (uint8_t)kept.why;
+        os64_strcopy(seen[nseen].detail, sizeof(seen[nseen].detail), kept.detail);
+        seen[nseen].n = 0;
+        nseen++;
+    }
+    if (i == nseen) {
+        others++;
+    } else {
+        seen[i].n++;
+        seen[i].at[0] = '\0';
+        if (kept.at != NULL)
+            element_named(seen[i].at, sizeof(seen[i].at), "", kept.at);
+        for (; i > 0 && seen[i].n > seen[i - 1].n; i--) {
+            __typeof__(seen[0]) swap = seen[i];
+            seen[i] = seen[i - 1];
+            seen[i - 1] = swap;
+        }
+    }
+    char line[768] = "";
+    size_t used = 0;
+    for (int k = 0; k <= nseen; k++) {
+        if (k == nseen && others == 0)
+            break;
+        int w = k < nseen
+            ? os64_snprintf(line + used, sizeof(line) - used, "%s%s %lu: %s%s%s%s", k ? "; " : "",
+                            names[seen[k].why], (unsigned long)seen[k].n, seen[k].detail[0] ? seen[k].detail : "-",
+                            seen[k].at[0] ? " (at " : "", seen[k].at, seen[k].at[0] ? ")" : "")
+            : os64_snprintf(line + used, sizeof(line) - used, "%sothers %lu", k ? "; " : "", (unsigned long)others);
+        if (w < 0 || (size_t)w >= sizeof(line) - used) {
+            line[used] = '\0';
+            break;
+        }
+        used += (size_t)w;
+    }
+    yonder_diag_fact(diag, "layout kept, declined at", line);
+}
+
 // The reasons a layout's cascade is built fresh, by the profile's index:
 // yonder's own (none yet, no memory for the scopes, sheets changed, sheets
 // that no longer match), then libgarb's refusals in their order, by
@@ -1993,8 +2084,17 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // An open frame's time, which the frame's other samples share.
     s_env.now_ms = animation_time_ms();
     geometry_layout_total++;
-    webfonts_layout_begins(p);
-    flow_tree_t *fresh = profile_flow_layout(p, width);
+    // A script's change to the page on screen, staged beside it at its own
+    // sizes: first the restyle kept in the shown tree (BRIEF_LAYOUT_NEEDS.md
+    // N1), which writes paint-only changes into that tree and builds no
+    // box; the same tree then stands for the new layout (page_show keeps
+    // it, and the families its fonts were staged for). Declined, the page
+    // is laid out as before, its fonts' record begun for that layout.
+    flow_tree_t *fresh = restyle_kept_shown(p, reclaim, width, height, zoom);
+    if (fresh == NULL) {
+        webfonts_layout_begins(p);
+        fresh = profile_flow_layout(p, width);
+    }
     // The tree on screen holds the faces its runs were shaped in until it
     // is freed — each one a size of a file, counted against the text
     // engine's budget and its face limit — so a layout at new sizes (a
@@ -3601,6 +3701,57 @@ static bool page_records_shown(const Page *p)
 {
     return p->diag != NULL && p->diag == g.page.diag;
 }
+static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, int32_t height, uint32_t zoom)
+{
+    if (!s_restyle_in_place || reclaim != &g.page || p == &g.page || g.page.tree == NULL ||
+        p->restyle_from != g.page.tree || width != g.page.laid_width || height != g.page.laid_height ||
+        zoom != g.page.laid_zoom)
+        return NULL;
+    // The inputs the layout that follows would graft with, the fonts'
+    // revision brought up to date first, as profile_flow_layout does.
+    layout_font_dependencies(p);
+    flow_reuse_inputs_t inputs = layout_inputs(p, NULL);
+    flow_restyle_t kept = flow_restyle_in_place(g.page.tree, page_doc(p), page_model(p), &s_env, &inputs, width);
+    restyle_counted(p, kept);
+    if (kept.kind == FLOW_RESTYLE_DECLINED)
+        return NULL;
+    // `--geometry-check`: every Nth kept tree is laid out whole beside
+    // itself and the two compared; the record says how many were and the
+    // first that differed, with the element and what differed.
+    if (s_geometry_check != 0 && ++s_geometry_checked % s_geometry_check == 0) {
+        flow_tree_t *whole = flow_layout_restyled(page_doc(p), page_model(p), width, &s_env, NULL, NULL, NULL, NULL);
+        // Scrolled where the kept tree is, as a layout's scrolls are set
+        // again by element, each held to the whole layout's own range.
+        for (int32_t i = 0; whole != NULL && i < flow_nscrollers(g.page.tree); i++) {
+            int32_t s = flow_scroller_for(whole, flow_scroller(g.page.tree, i)->node);
+            if (s >= 0)
+                flow_scroll_set(whole, s, flow_scroll_at(g.page.tree, i));
+        }
+        const os64_html_node_t *node = NULL;
+        const char *what = "no whole layout could be made";
+        bool same = whole != NULL && flow_restyle_check(g.page.tree, whole, &node, &what);
+        s_geometry_compared++;
+        if (!same) {
+            s_geometry_differed++;
+            char named[96] = "", line[192];
+            if (node != NULL && node->kind != OS64_HTML_ELEMENT)
+                node = os64_html_flat_parent(page_doc(p), node);
+            if (node != NULL && node->kind == OS64_HTML_ELEMENT)
+                element_named(named, sizeof(named), "", node);
+            os64_snprintf(line, sizeof(line), "a kept tree differs from a whole layout in %s at %s", what,
+                          named[0] != '\0' ? named : "the page");
+            yonder_diag_failed_seen(p->diag, "geometry check", line);
+            os64_debug_log(line);
+        }
+        char said[96];
+        os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)s_geometry_compared,
+                      (unsigned long)s_geometry_differed);
+        yonder_diag_fact(p->diag, "geometry check", said);
+        flow_free(whole);
+    }
+    return g.page.tree;
+}
+
 static void cost_reset(void)
 {
     os64_memset(&s_cost, 0, sizeof(s_cost));
@@ -19999,6 +20150,14 @@ int main(int argc, char **argv)
             s_script_audit = true;
         else if (os64_streq(argv[address_arg], "--layout-profile"))
             s_layout_profile = true;
+        else if (os64_streq(argv[address_arg], "--restyle-in-place=off"))
+            s_restyle_in_place = false;
+        else if (os64_streq(argv[address_arg], "--geometry-check"))
+            s_geometry_check = 10;
+        else if (os64_strlen(argv[address_arg]) > 17 && os64_memcmp(argv[address_arg], "--geometry-check=", 17) == 0) {
+            int64_t every = os64_atoi(argv[address_arg] + 17);
+            s_geometry_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
+        }
         else if (os64_streq(argv[address_arg], "--cascade-check"))
             s_cascade_check = 10;
         else if (os64_strlen(argv[address_arg]) > 16 && os64_memcmp(argv[address_arg], "--cascade-check=", 16) == 0) {

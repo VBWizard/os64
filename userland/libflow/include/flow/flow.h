@@ -1409,6 +1409,68 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
                                     flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx);
 /* NULL supplies zero statistics. The answer is copied, not borrowed. */
 flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
+
+/* A RESTYLE KEPT IN THE TREE (BRIEF_LAYOUT_NEEDS.md N1): the styles rebuilt
+ * for the document as it stands, and, when every element whose style came
+ * out different differs only in what the painter reads and moves nothing
+ * else, those values written into `tree` in place, with no box built or
+ * placed. The tree must be the one laid out last for this document, at
+ * `width`, with the env and inputs of the layout that would follow, the
+ * cascade's generation among them (the graft's own source test: the tree's
+ * records point into the cascade they were computed in). A kept tree is
+ * the same tree: its boxes and their places stand, its styles, transforms'
+ * frames, ink and drawn stamps
+ * follow the new values, and so, where a transform moved, do the page's
+ * extent and the scroll containers' ranges (a scroll past a range that
+ * shrank is held within it). Declined, the tree is as it was unless `why` is
+ * FLOW_RESTYLE_ROOM, which may have written part of it; either way the
+ * caller lays out afresh. The cascade must be current. */
+typedef enum {
+    FLOW_RESTYLE_DECLINED = 0,
+    FLOW_RESTYLE_NOTHING,       /* no style came out different */
+    FLOW_RESTYLE_PAINT          /* written: paint only */
+} flow_restyle_kind_t;
+typedef enum {
+    FLOW_RESTYLE_NONE = 0,
+    FLOW_RESTYLE_NO_TREE,       /* no tree, another document's, incomplete, or its room spent */
+    FLOW_RESTYLE_NO_HISTORY,    /* no change history for it, or the history was lost */
+    FLOW_RESTYLE_STRUCTURE,     /* nodes added or removed, a text, adopted sheets, an attribute boxes read */
+    FLOW_RESTYLE_INPUTS,        /* another width, cascade, env or resource */
+    FLOW_RESTYLE_STYLES,        /* the styles could not be built whole */
+    FLOW_RESTYLE_MEMBERSHIP,    /* an element came to have a style, or lost it */
+    FLOW_RESTYLE_GEOMETRY,      /* a style placement reads changed, or what boxes are built from */
+    FLOW_RESTYLE_MOTION,        /* an animated element (before or after) whose style or underlying style changed */
+    FLOW_RESTYLE_STACKING,      /* a box comes to be a group or a context or ceases to, or a matrix is crossed */
+    FLOW_RESTYLE_DECORATION,    /* a decoration, or its colours where a line is drawn, which fragments copy */
+    FLOW_RESTYLE_ROOM,          /* the restyle arena's room, or memory */
+    FLOW_RESTYLE_NREASONS
+} flow_restyle_reason_t;
+typedef struct {
+    flow_restyle_kind_t kind;
+    flow_restyle_reason_t why;  /* when declined */
+    uint64_t written;           /* elements and pseudo-elements whose style was written */
+    /* When declined, for the record: the element it was declined at, a
+     * document's element the tree styled (a pseudo-element's is its host's;
+     * NULL for none, as for another width), and what was found there, in
+     * words ("text", "attribute title", "derived quotes", "placement byte
+     * 212"). */
+    const os64_html_node_t *at;
+    char detail[48];
+} flow_restyle_t;
+flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
+                                     const os64_page_t *model, const flow_env_t *env,
+                                     const flow_reuse_inputs_t *inputs, int32_t width);
+/* Whether the kept tree `a` answers as the whole layout `b` of the same
+ * document does (the caller's check, `--geometry-check`): the same boxes in
+ * order, each of the same kind, node, border box, overflow, clip and
+ * stacking flags, its style equal in every field, its decoration the same
+ * where it draws one, and its ink and outlines covering the whole layout's
+ * (a kept tree's only grow); the same paint layers; the same page extent and
+ * scroll containers' ranges and scrolls. Hit testing reads what this
+ * compares. False names the first difference: the node (an anonymous box's
+ * element) when a box is to blame, and what differed. */
+bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_html_node_t **node,
+                        const char **what);
 /* WHAT A TREE HOLDS (MEMORY_CENSUS.md § 3): the bytes each of its arenas
  * has reserved — the computed styles, the boxes, the lines and fragments,
  * and the public boxes — and how many boxes it built, anonymous ones
