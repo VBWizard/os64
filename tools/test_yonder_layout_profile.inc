@@ -58,13 +58,16 @@ static size_t tree_answers(const flow_tree_t *t, int64_t *out, size_t cap)
 static void restyle_kept_cases(void)
 {
     probe_page("<!doctype html><style>.on{color:red}.far{transform:translateX(5px)}.near{transform:translateX(9px)}"
-               ".pad{padding-left:40px}.dim{opacity:.5}.gone{opacity:0}</style>"
-               "<p id=p class=far>text <b>bold</b></p><p id=q>more</p>",false);
+               ".pad{padding-left:40px}.dim{opacity:.5}.gone{opacity:0}.blue{color:blue}"
+               ".shadow{box-shadow:0 0 20px red}@keyframes pulse{to{opacity:.5}}.spin{animation:pulse 1s infinite}</style>"
+               "<p id=p class=far>text <b>bold</b></p><p id=q>more</p><div id=mix>loose <p>block</p> tail</div>"
+               "<p><u id=u>under</u></p>",false);
     g.page.diag=diag_new_claimed("https://fixture.test/restyle-kept",1);
     s_layout_profile=true;
     s_geometry_check=1;      /* every kept tree laid out whole beside it and compared */
-    /* The first change after the page arrived may meet its form state's
-     * first version; a change after it is the case under test. */
+    /* The first change after the page arrived meets inputs its first layout
+     * left moving (the fonts' revision); a change after it is the case
+     * under test. */
     check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"title","t",1) && script_rebuild(),"kept: a first change");
     const flow_tree_t *shown=g.page.tree;
     const flow_style_t *before=flow_style_for(g.page.tree,probe_id("p"));
@@ -103,6 +106,40 @@ static void restyle_kept_cases(void)
           "kept: a script measures the transformed element as in a whole layout");
     if(kept_rect.x!=fresh_rect.x) printf("  kept x %g, whole %g\n",kept_rect.x,fresh_rect.x);
     shown=g.page.tree;
+    /* A colour over anonymous boxes (the loose text round #mix's block):
+     * they take their parent's inherited values again, which the geometry
+     * check compares; the element's boxes are stamped drawn again for the
+     * paint cache. A shadow grows the box's ink. */
+    const flow_box_t *mix=flow_box_for(g.page.tree,probe_id("mix"));
+    uint64_t drawn=mix?mix->drawn:0;
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("mix"),"class","blue",4) && script_rebuild(),
+          "kept: a colour over anonymous boxes published");
+    kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    check(g.page.tree==shown && kept && strstr(kept,"paint only 3"),"kept: a colour over anonymous boxes is kept");
+    if(!kept || !strstr(kept,"paint only 3")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    check(mix && flow_box_for(g.page.tree,probe_id("mix"))==mix && mix->drawn>drawn,
+          "kept: and its box is stamped drawn again");
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"class","shadow",6) && script_rebuild(),
+          "kept: a shadow published");
+    kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    check(g.page.tree==shown && kept && strstr(kept,"paint only 4"),"kept: a shadow is kept, its ink grown");
+    if(!kept || !strstr(kept,"paint only 4")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    /* A colour change on an element an animation runs on is the
+     * animation's to lay out. */
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("mix"),"class","spin",4) && script_rebuild() &&
+          !os64_html_set_attr(g.page.way.doc,probe_id("mix"),"class","spin blue",9) && script_rebuild(),
+          "kept: a colour on an animated element published");
+    kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    check(kept && strstr(kept,"motion "),"kept: a change on an animated element is declined as motion");
+    if(!kept || !strstr(kept,"motion ")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    /* An underline's colour is copied into its fragments, which no restyle
+     * in place refreshes yet: declined as decoration. */
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("u"),"class","on",2) && script_rebuild(),
+          "kept: an underlined colour published");
+    kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    check(kept && strstr(kept,"decoration 1"),"kept: an underlined colour is declined as decoration");
+    if(!kept || !strstr(kept,"decoration 1")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    shown=g.page.tree;
     /* Declined: padding moves boxes; opacity across 0 changes the stacking;
      * a text changes the boxes' text. */
     check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"class","pad",3) && script_rebuild(),
@@ -122,9 +159,9 @@ static void restyle_kept_cases(void)
     check(kept && strstr(kept,"structure 1"),"kept: a text is declined as structure");
     if(!kept || !strstr(kept,"structure 1")) printf("  layout kept: %s\n",kept?kept:"(none)");
     const char *geometry=yonder_diag_fact_value(g.page.diag,"geometry check");
-    check(geometry && !strncmp(geometry,"2 compared, 0 differed",22),
+    check(geometry && !strncmp(geometry,"4 compared, 0 differed",22),
           "kept: --geometry-check laid each kept tree out whole beside it, and none differed");
-    if(!geometry || strncmp(geometry,"2 compared, 0 differed",22)) printf("  geometry check: %s\n",geometry?geometry:"(none)");
+    if(!geometry || strncmp(geometry,"4 compared, 0 differed",22)) printf("  geometry check: %s\n",geometry?geometry:"(none)");
     s_geometry_check=s_geometry_checked=0;
     s_geometry_compared=s_geometry_differed=0;
     s_layout_profile=false;
