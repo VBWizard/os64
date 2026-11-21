@@ -75,21 +75,34 @@ static void cases(void)
     check(!s.ready && a.since_ms == 0, "aged: none ready, no age kept");
     s = task_age_observe(&a, true, 0);
     check(s.ready && s.since_ms != 0, "aged: a head found at time zero is still ready");
+
+    task_age_t st = {0};
+    s = task_age_stamped(&st, true, 100);
+    check(s.ready && s.since_ms == 100, "stamped: never run, its own stamp");
+    task_age_ran(&st, true, 500);
+    s = task_age_stamped(&st, true, 100);
+    check(s.since_ms == 500, "stamped: a stamp before the source's last run counts from the run");
+    s = task_age_stamped(&st, true, 900);
+    check(s.since_ms == 900, "stamped: a stamp after it is its own");
+    s = task_age_stamped(&st, false, 100);
+    check(!s.ready, "stamped: none ready is none ready");
 }
 
-// Two sources: A, first in priority, never empty and aged by the loop, its
-// tasks `dur` long; B second, ready at `ready_at`, with its own time
-// (`stamped`, a timer's due time) or aged by the loop. The wait from B's
-// readiness to the start of its task.
-static uint64_t two_sources(uint64_t ready_at, uint64_t dur, int stamped)
+// Two sources: A, first in priority, never empty, its tasks `dur` long,
+// aged by the loop, or (`backlog`) a stamped source whose every task was
+// stamped at time 1, long before anything else (a flood of messages posted
+// at once); B second, ready at `ready_at`, with its own time (`stamped`, a
+// timer's due time) or aged by the loop. The wait from B's readiness to the
+// start of its task.
+static uint64_t two_sources(uint64_t ready_at, uint64_t dur, int stamped, int backlog)
 {
     task_age_t aa = {0}, ab = {0};
     uint64_t now = 1000;
     for (int turn = 0; turn < 100000; turn++) {
         task_source_t src[2];
-        src[0] = task_age_observe(&aa, true, now);
+        src[0] = backlog ? task_age_stamped(&aa, true, 1) : task_age_observe(&aa, true, now);
         if (stamped)
-            src[1] = (task_source_t){now >= ready_at, ready_at};
+            src[1] = task_age_stamped(&ab, now >= ready_at, ready_at);
         else
             src[1] = task_age_observe(&ab, now >= ready_at, now);
         int order[2];
@@ -108,14 +121,17 @@ static void guarantee(void)
     for (uint64_t dur = 1; dur <= 400; dur += 7)
         for (uint64_t off = 0; off < dur; off += (dur / 5) + 1) {
             uint64_t ready_at = 1000 + 3 * dur + off;
-            uint64_t w = two_sources(ready_at, dur, 1);
-            snprintf(what, sizeof(what), "a never-empty source holds a timed task %lu ms (bound %u, tasks %lu ms)",
-                     (unsigned long)w, TASK_ORDER_BOUND_MS, (unsigned long)dur);
-            check(w <= TASK_ORDER_BOUND_MS + dur, what);
-            w = two_sources(ready_at, dur, 0);
-            snprintf(what, sizeof(what), "a never-empty source holds an aged task %lu ms (bound %u, tasks %lu ms)",
-                     (unsigned long)w, TASK_ORDER_BOUND_MS, (unsigned long)dur);
-            check(w <= TASK_ORDER_BOUND_MS + 2 * dur, what);
+            for (int backlog = 0; backlog < 2; backlog++) {
+                const char *a = backlog ? "a stamped backlog" : "a never-empty source";
+                uint64_t w = two_sources(ready_at, dur, 1, backlog);
+                snprintf(what, sizeof(what), "%s holds a timed task %lu ms (bound %u, tasks %lu ms)", a,
+                         (unsigned long)w, TASK_ORDER_BOUND_MS, (unsigned long)dur);
+                check(w <= TASK_ORDER_BOUND_MS + dur, what);
+                w = two_sources(ready_at, dur, 0, backlog);
+                snprintf(what, sizeof(what), "%s holds an aged task %lu ms (bound %u, tasks %lu ms)", a,
+                         (unsigned long)w, TASK_ORDER_BOUND_MS, (unsigned long)dur);
+                check(w <= TASK_ORDER_BOUND_MS + 2 * dur, what);
+            }
         }
 }
 
@@ -143,7 +159,8 @@ static void walk(unsigned seed)
             }
         task_source_t src[N];
         for (int i = 0; i < N; i++)
-            src[i] = stamped[i] ? (task_source_t){ready[i] != 0, stamp[i]} : task_age_observe(&ages[i], ready[i] != 0, now);
+            src[i] = stamped[i] ? task_age_stamped(&ages[i], ready[i] != 0, stamp[i])
+                                : task_age_observe(&ages[i], ready[i] != 0, now);
         int order[N];
         int c = task_order(src, N, now, order);
         uint64_t dur = (uint64_t)(rand() % 120) + 1;
@@ -156,14 +173,14 @@ static void walk(unsigned seed)
             uint64_t waited = now - found[ran];
             if (waited > worst)
                 worst = waited;
-            // Each source but the never-empty ones empties when it runs.
+            // Each source but the never-empty ones empties when it runs. A
+            // never-empty stamped source is a backlog: its next task keeps
+            // the stamp it was queued with, long ago; its head is the head
+            // from this run on, which is when its wait begins.
             ready[ran] = ran < 2;
-            if (ready[ran]) {
-                stamp[ran] = now + dur;
+            if (ready[ran])
                 found[ran] = now + dur;
-            }
-            if (!stamped[ran])
-                task_age_ran(&ages[ran], ready[ran] != 0, now + dur);
+            task_age_ran(&ages[ran], ready[ran] != 0, now + dur);
         }
         now += dur;
     }

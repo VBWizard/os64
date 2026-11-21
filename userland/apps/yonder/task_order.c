@@ -38,7 +38,14 @@ task_source_t task_age_observe(task_age_t *age, bool ready, uint64_t now_ms)
     return (task_source_t){ready, age->since_ms};
 }
 
+task_source_t task_age_stamped(const task_age_t *age, bool ready, uint64_t stamp_ms)
+{
+    return (task_source_t){ready, stamp_ms > age->ran_ms ? stamp_ms : age->ran_ms};
+}
+
 void task_age_ran(task_age_t *age, bool ready, uint64_t now_ms)
 {
-    age->since_ms = ready ? (now_ms != 0 ? now_ms : 1) : 0;
+    uint64_t at = now_ms != 0 ? now_ms : 1;
+    age->since_ms = ready ? at : 0;
+    age->ran_ms = at;
 }

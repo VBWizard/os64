@@ -56,7 +56,10 @@ mutants = [
     ('a-head-ages-from-every-turn', '    else if (age->since_ms == 0)\n        age->since_ms', '    else\n        age->since_ms'),
     ('none-ready-keeps-its-age', '    if (!ready)\n        age->since_ms = 0;\n    else if', '    if (0)\n        age->since_ms = 0;\n    else if'),
     ('found-at-zero-is-none', '        age->since_ms = now_ms != 0 ? now_ms : 1;\n    return', '        age->since_ms = now_ms;\n    return'),
-    ('a-run-keeps-the-old-age', '    age->since_ms = ready ? (now_ms != 0 ? now_ms : 1) : 0;', '    (void)age; (void)ready; (void)now_ms;'),
+    ('a-stamp-ignores-the-last-run', '    return (task_source_t){ready, stamp_ms > age->ran_ms ? stamp_ms : age->ran_ms};',
+     '    (void)age;\n    return (task_source_t){ready, stamp_ms};'),
+    ('a-run-is-not-remembered', '    age->ran_ms = at;', '    (void)at;'),
+    ('a-run-keeps-the-old-age', '    age->since_ms = ready ? at : 0;', '    (void)ready;'),
 ]
 
 # Not run, because it changes nothing a rule promises: task_age_ran's `: 0`

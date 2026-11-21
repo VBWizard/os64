@@ -12976,8 +12976,8 @@ static void sheet_worker_cases(void)
 /* THE LOOP'S FAIRNESS (task_order.h, ordinary_task): a video playing
  * while every turn takes 300 ms keeps a media event always ready, since
  * each turn is past timeupdate's 250 ms. A timer must still run, the old
- * going ahead of the young; and the media events must still come, one at
- * a time (they coalesce). */
+ * going ahead of the young; and the media events must still come. (That
+ * they coalesce is libdom's case, dom_media_clocked_cases.) */
 static void fairness_cases(void)
 {
     fake_media_on = true;
@@ -12999,7 +12999,6 @@ static void fairness_cases(void)
     check(ticks >= 20, "fairness: a timer runs while a media event is always ready");
     check(updates >= 20, "fairness: and the media events still come");
     if (ticks < 20 || updates < 20) printf("  ticks %u, timeupdates %u in 80 turns of 300 ms\n", ticks, updates);
-    check(updates <= 80, "fairness: one timeupdate a delivery at most, never a backlog");
     probe_drop();
     fake_media_on = false;
 }

@@ -995,8 +995,9 @@ typedef struct Page {
     bool census_decided, censused, census_left;
     uint64_t census_began;
     yonder_census_timeline_t census;
-    // Since when each of its task sources that says only whether it has a
-    // task has had one ready (task_order.h), by TaskSource.
+    // What the loop keeps of each of its task sources (task_order.h's
+    // task_age_t: since when its head has been ready, and its last run),
+    // by TaskSource.
     task_age_t task_ages[TS_COUNT];
 } Page;
 
@@ -13032,19 +13033,23 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
         return false;
     os64_js_outcome_t cleanup;
     int64_t cleanup_began = task_begin(host);
+    Page *p = page_of_host(host);
+    task_age_t *ages = p != NULL ? p->task_ages : s_hostless_ages;
     if (yonder_scripts_finalization_fire(host, false, &cleanup)) {
+        // Cleanup's turn, as if ordinary_task had chosen it: its next head
+        // is aged from now.
+        task_age_ran(&ages[TS_CLEANUP], yonder_scripts_finalization_pending(host), yonder_now_ms());
         task_said(host, true, "cleanup", &cleanup, cleanup_began);
         asks_perform(host, doc, shown);
         return true;
     }
     // History events retain their order within the ordinary task sources.
-    Page *p = page_of_host(host);
     if (p != NULL && page_event_run(p, shown))
         return true;
     os64_js_outcome_t out;
     int64_t began = task_begin(host);
     const char *what = "script";
-    if (!ordinary_task(host, p != NULL ? p->task_ages : s_hostless_ages, false, &what, &out))
+    if (!ordinary_task(host, ages, false, &what, &out))
         return false;
     task_said(host, true, what, &out, began);
     asks_perform(host, doc, shown);
@@ -14350,8 +14355,9 @@ static bool task_source_ready(yonder_scripts_t *host, TaskSource k, bool shown)
 // alone), a message or a timer (queued_task, the older first), opted-in
 // engine cleanup. A task ready less than TASK_ORDER_BOUND_MS keeps to that
 // order; one ready longer goes ahead of all of those, the oldest first.
-// Messages and timers say when they were ready (posted, fell due); the
-// others are aged here, in `ages`. The view's events are never old: the
+// Messages and timers say when they were ready (posted, fell due), counted
+// no older than their source's last run (task_age_stamped); the others are
+// aged here. Both are kept in `ages`. The view's events are never old: the
 // view's due events run ahead of every ordinary source at their own
 // cadence (script_turn). True when one ran; `what` names its source.
 static bool ordinary_task(yonder_scripts_t *host, task_age_t *ages, bool shown, const char **what,
@@ -14361,11 +14367,16 @@ static bool ordinary_task(yonder_scripts_t *host, task_age_t *ages, bool shown, 
     task_source_t src[TS_COUNT];
     for (int k = 0; k < TS_COUNT; k++)
         src[k] = task_age_observe(&ages[k], task_source_ready(host, (TaskSource)k, shown), now);
+    // A timer's next of 0 is custom element reactions owed (libdom's
+    // timer.c), which run in a timer's place: ready now, so they keep that
+    // place among the young.
     uint64_t message = yonder_scripts_message_next(host), timer = yonder_scripts_timer_next(host);
+    if (timer == 0)
+        timer = now;
     uint64_t queued = message <= now ? message : UINT64_MAX;
     if (timer <= now && timer < queued)
         queued = timer;
-    src[TS_QUEUED] = (task_source_t){queued != UINT64_MAX, queued};
+    src[TS_QUEUED] = task_age_stamped(&ages[TS_QUEUED], queued != UINT64_MAX, queued);
     src[TS_VIEW] = (task_source_t){shown, now};
     int order[TS_COUNT];
     int n = task_order(src, TS_COUNT, now, order);
@@ -14409,6 +14420,9 @@ static bool script_turn(void)
     os64_js_outcome_t out;
     int64_t began = task_begin(g.page.scripts);
     bool ran = yonder_scripts_finalization_fire(g.page.scripts, false, &out);
+    if (ran)        // its next head aged from now, as ordinary_task would age it
+        task_age_ran(&g.page.task_ages[TS_CLEANUP], yonder_scripts_finalization_pending(g.page.scripts),
+                     yonder_now_ms());
     // History precedes the other ordinary sources, preserving event order.
     if (!ran && page_event_run(&g.page, true))
         return true;
@@ -15326,6 +15340,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     os64_memset(&fresh, 0, sizeof(fresh));
     fresh.scripting = g.stream.scripting;
     fresh.modern = g.stream.modern;
+    // Its scripts go on with the same host, so their tasks keep their ages.
+    os64_memcpy(fresh.task_ages, g.stream.page.task_ages, sizeof(fresh.task_ages));
     os64_html_document_t *doc = os64_html_parser_finish(g.stream.parser);
     g.stream.parser = NULL;
     if (doc == NULL) {
