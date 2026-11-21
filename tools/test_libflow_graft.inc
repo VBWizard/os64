@@ -432,46 +432,45 @@ static void restyle_in_place_cases(void)
         expect(one[i].name, ok, ok ? NULL : said);
         flow_free(whole); flow_free(old); flow_timeline_free(tl); sheeted_close(&p);
     }
-    // Under an element styled `display: none` the tree has nothing, so a
-    // change there is no structural one: children added, a text replaced
-    // and an attribute boxes read, beside a colour written elsewhere, keep
-    // the restyle, and the kept tree answers as a whole layout does. Shown,
-    // the same changes are structure; un-hidden, the element's own style is
-    // geometry.
-    for (int shown = 0; shown < 2; shown++) {
-        sheeted_open(&p, shown ? "<!doctype html><div id=h><span id=s>hidden</span></div><p id=c>c</p>"
-                               : "<!doctype html><style>#h{display:none}#h.on{display:block}</style>"
-                                 "<div id=h><span id=s>hidden</span></div><p id=c>c</p>",
-                     800, 600);
-        old = graft_layout(&p, NULL, NULL, NULL);
-        int64_t why = 0;
-        os64_html_node_t *h = graft_node(&p, "h"), *s = graft_node(&p, "s");
-        os64_html_node_t *added = os64_html_create_element(p.doc, OS64_HTML_NS_HTML, "b", &why);
-        bool changed = added && !os64_html_insert(p.doc, h, added, NULL) &&
-                       !os64_html_set_text(p.doc, s->first_child, "other", 5) &&
-                       !os64_html_set_attr(p.doc, s, "title", "t", 1) &&
+    // A text under an element styled `display: none` is structure all the
+    // same: a select's hidden option is what its width is measured from.
+    // The decline is told at an element the tree styled.
+    sheeted_open(&p, "<!doctype html><select><option id=o hidden selected>Choose</option><option>A</option>"
+                     "</select><p id=c>c</p>",
+                 800, 600);
+    old = graft_layout(&p, NULL, NULL, NULL);
+    {
+        os64_html_node_t *o = graft_node(&p, "o");
+        bool changed = o != NULL && o->first_child != NULL &&
+                       !os64_html_set_text(p.doc, o->first_child, "Choose one of these, please", 27) &&
                        !os64_html_set_attr(p.doc, graft_node(&p, "c"), "style", "color:green", 11);
         graft_update(&p);
-        whole = graft_layout(&p, NULL, NULL, NULL);
         kept = restyle_keep(&p, old);
-        if (!shown)
-            expect("restyle: changes under display:none are kept beside a colour, and the tree answers as a whole layout",
-                   changed && kept.kind == FLOW_RESTYLE_PAINT && restyle_check_says(old, whole, NULL, NULL), NULL);
-        else
-            expect("restyle: the same changes where boxes are made are structure",
-                   changed && kept.kind == FLOW_RESTYLE_DECLINED && kept.why == FLOW_RESTYLE_STRUCTURE, NULL);
-        flow_free(whole);
-        if (!shown) {
-            os64_html_set_attr(p.doc, h, "class", "on", 2);
-            graft_update(&p);
-            kept = restyle_keep(&p, old);
-            char said[96];
-            snprintf(said, sizeof(said), "kind %d why %d (%s)", (int)kept.kind, (int)kept.why, kept.detail);
-            expect("restyle: the element un-hidden is declined (its children styled for the first time: membership)",
-                   kept.kind == FLOW_RESTYLE_DECLINED && kept.why == FLOW_RESTYLE_MEMBERSHIP, said);
-        }
-        flow_free(old); sheeted_close(&p);
+        char said[96];
+        snprintf(said, sizeof(said), "kind %d why %d (%s)", (int)kept.kind, (int)kept.why, kept.detail);
+        expect("restyle: a hidden option's text is structure, told at an element the tree styled",
+               changed && kept.kind == FLOW_RESTYLE_DECLINED && kept.why == FLOW_RESTYLE_STRUCTURE &&
+                   kept.at != NULL && kept.at->kind == OS64_HTML_ELEMENT && strncmp(kept.detail, "text", 4) == 0,
+               said);
     }
+    flow_free(old); sheeted_close(&p);
+    // A change to a node outside the page (made since the tree, and never
+    // inserted) is told at no element: the node may be reclaimed, and the
+    // decline must not point at it.
+    sheeted_open(&p, "<!doctype html><p id=c>c</p>", 800, 600);
+    old = graft_layout(&p, NULL, NULL, NULL);
+    {
+        int64_t why = 0;
+        os64_html_node_t *loose = os64_html_create_element(p.doc, OS64_HTML_NS_HTML, "a", &why);
+        bool changed = loose != NULL && !os64_html_set_attr(p.doc, loose, "href", "x", 1);
+        graft_update(&p);
+        kept = restyle_keep(&p, old);
+        expect("restyle: a change to a node outside the page is told at no element",
+               changed && kept.why == FLOW_RESTYLE_STRUCTURE && kept.at == NULL &&
+                   strcmp(kept.detail, "attribute href") == 0,
+               kept.detail);
+    }
+    flow_free(old); sheeted_close(&p);
     // A tree's records point into the cascade it was laid out in (a
     // family's names are its strings), which a host frees with the tree: a
     // colour changed under a cascade built fresh is declined, not kept in a

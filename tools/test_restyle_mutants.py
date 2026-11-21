@@ -42,8 +42,8 @@ mutants = [
     # What changed since the tree.
     ('a-text-is-not-structure', SNAPSHOT, '            r->structural = true;', '            (void)0;'),
     ('structure-not-asked', RESTYLE, '    if (r->structural) {', '    if (0) {'),
-    ('changes-under-display-none-are-structure', SNAPSHOT,
-     '            return rec->style.display == FLOW_DISPLAY_NONE;', '            return rec->style.display == FLOW_DISPLAY_NONE && 0;'),
+    ('a-change-told-at-its-own-node', SNAPSHOT, '                r->structural_at = reuse_told_at(r, entry->target);',
+     '                r->structural_at = reuse_told_at(r, entry->target) ? entry->target : entry->target;'),
     ('another-cascade-kept', RESTYLE, '                      : r->generation != garb_cascade_generation(env->cascade) ? "another cascade"',
      '                      : 0 ? "another cascade"'),
     # The verdict.

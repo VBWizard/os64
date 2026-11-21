@@ -1851,9 +1851,20 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
     if (kept.kind != FLOW_RESTYLE_DECLINED || (unsigned)kept.why >= YONDER_LAYOUT_RESTYLE_REASONS)
         return;
     // `layout kept, declined at`: the declines by reason and what was found,
-    // counted, each with the element of the latest, the most counted first.
+    // counted, each with the element of the latest, the most counted first,
+    // for the record being written (a new record starts it again). Those past
+    // the table's room are counted as `others`; entries past the line's room
+    // are left off whole.
     static struct { uint8_t why; char detail[48], at[96]; uint64_t n; } seen[16];
     static int nseen;
+    static uint64_t others;
+    static const yonder_diag_t *seen_for;
+    yonder_diag_t *diag = layout_profile_diag(p);
+    if (diag != seen_for) {
+        seen_for = diag;
+        nseen = 0;
+        others = 0;
+    }
     int i = 0;
     for (; i < nseen && (seen[i].why != kept.why || !os64_streq(seen[i].detail, kept.detail)); i++) {}
     if (i == nseen && nseen < (int)(sizeof(seen) / sizeof(seen[0]))) {
@@ -1862,30 +1873,36 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
         seen[nseen].n = 0;
         nseen++;
     }
-    if (i == nseen)
-        return;
-    seen[i].n++;
-    const os64_html_node_t *at = kept.at;
-    if (at != NULL && at->kind != OS64_HTML_ELEMENT)
-        at = os64_html_flat_parent(page_doc(p), at);
-    seen[i].at[0] = '\0';
-    if (at != NULL && at->kind == OS64_HTML_ELEMENT)
-        element_named(seen[i].at, sizeof(seen[i].at), "", at);
-    for (; i > 0 && seen[i].n > seen[i - 1].n; i--) {
-        __typeof__(seen[0]) swap = seen[i];
-        seen[i] = seen[i - 1];
-        seen[i - 1] = swap;
+    if (i == nseen) {
+        others++;
+    } else {
+        seen[i].n++;
+        seen[i].at[0] = '\0';
+        if (kept.at != NULL)
+            element_named(seen[i].at, sizeof(seen[i].at), "", kept.at);
+        for (; i > 0 && seen[i].n > seen[i - 1].n; i--) {
+            __typeof__(seen[0]) swap = seen[i];
+            seen[i] = seen[i - 1];
+            seen[i - 1] = swap;
+        }
     }
-    char line[768];
+    char line[768] = "";
     size_t used = 0;
-    for (int k = 0; k < nseen && used + 1 < sizeof(line); k++) {
-        int w = os64_snprintf(line + used, sizeof(line) - used, "%s%s %lu: %s%s%s%s", k ? "; " : "",
-                              names[seen[k].why], (unsigned long)seen[k].n, seen[k].detail[0] ? seen[k].detail : "-",
-                              seen[k].at[0] ? " (at " : "", seen[k].at, seen[k].at[0] ? ")" : "");
-        if (w < 0 || (size_t)w >= sizeof(line) - used) break;
+    for (int k = 0; k <= nseen; k++) {
+        if (k == nseen && others == 0)
+            break;
+        int w = k < nseen
+            ? os64_snprintf(line + used, sizeof(line) - used, "%s%s %lu: %s%s%s%s", k ? "; " : "",
+                            names[seen[k].why], (unsigned long)seen[k].n, seen[k].detail[0] ? seen[k].detail : "-",
+                            seen[k].at[0] ? " (at " : "", seen[k].at, seen[k].at[0] ? ")" : "")
+            : os64_snprintf(line + used, sizeof(line) - used, "%sothers %lu", k ? "; " : "", (unsigned long)others);
+        if (w < 0 || (size_t)w >= sizeof(line) - used) {
+            line[used] = '\0';
+            break;
+        }
         used += (size_t)w;
     }
-    yonder_diag_fact(layout_profile_diag(p), "layout kept, declined at", line);
+    yonder_diag_fact(diag, "layout kept, declined at", line);
 }
 
 // The reasons a layout's cascade is built fresh, by the profile's index:

@@ -1434,8 +1434,7 @@ typedef enum {
     FLOW_RESTYLE_NONE = 0,
     FLOW_RESTYLE_NO_TREE,       /* no tree, another document's, incomplete, or its room spent */
     FLOW_RESTYLE_NO_HISTORY,    /* no change history for it, or the history was lost */
-    FLOW_RESTYLE_STRUCTURE,     /* nodes added or removed, a text, adopted sheets, an attribute boxes
-                                   read, but not under an element styled `display: none` */
+    FLOW_RESTYLE_STRUCTURE,     /* nodes added or removed, a text, adopted sheets, an attribute boxes read */
     FLOW_RESTYLE_INPUTS,        /* another width, cascade, env or resource */
     FLOW_RESTYLE_STYLES,        /* the styles could not be built whole */
     FLOW_RESTYLE_MEMBERSHIP,    /* an element came to have a style, or lost it */
@@ -1450,9 +1449,11 @@ typedef struct {
     flow_restyle_kind_t kind;
     flow_restyle_reason_t why;  /* when declined */
     uint64_t written;           /* elements and pseudo-elements whose style was written */
-    /* When declined, for the record: the node it was declined at (NULL for
-     * none, as for another width) and what was found there, in words
-     * ("text", "attribute title", "derived quotes", "placement byte 212"). */
+    /* When declined, for the record: the element it was declined at, a
+     * document's element the tree styled (a pseudo-element's is its host's;
+     * NULL for none, as for another width), and what was found there, in
+     * words ("text", "attribute title", "derived quotes", "placement byte
+     * 212"). */
     const os64_html_node_t *at;
     char detail[48];
 } flow_restyle_t;

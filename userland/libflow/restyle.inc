@@ -163,32 +163,26 @@ static bool keep_is_pseudo(const FStyles *b, const os64_html_node_t *key)
 }
 
 // A decline found at `node` because its anchor moved is a descendant's
-// echo of an ancestor that came to make a containing block, or ceased to;
-// the elements are met in the map's order, not the tree's. The record is
-// told the nearest ancestor whose own style changed, with that ancestor's
-// own verdict, so that it names the cause rather than the echo.
-static void keep_explain_anchor(FKeeps *k, FStyles *old, const FStyles *b, const os64_html_node_t *node)
+// echo of an ancestor that came to make a containing block, or ceased to
+// (the elements are met in the map's order, not the tree's), so the record
+// is told that ancestor, the nearest in the flat tree whose being its own
+// anchor turned, as the cause. The verdict stays the echo's: geometry.
+static void keep_explain_anchor(FKeeps *k, const FStyles *old, const FStyles *b, const os64_html_node_t *node)
 {
-    for (const os64_html_node_t *a = node != NULL ? node->parent : NULL; a != NULL; a = a->parent) {
-        FStyled *was = f_map_get(&old->map, a);
-        const FStyled *is = f_style_of(b, a);
-        if (was == NULL || is == NULL || f_style_equal(&was->style, &is->style))
+    for (const os64_html_node_t *a = node != NULL ? f_flat_parent(old->doc, node) : NULL; a != NULL;
+         a = f_flat_parent(old->doc, a)) {
+        const FStyled *was = f_style_of(old, a), *is = f_style_of(b, a);
+        if (was == NULL || is == NULL)
             continue;
-        FKeeps scratch = {NULL, 0, 0, FLOW_RESTYLE_NONE, NULL, ""};
-        if (!keep_judge(&scratch, a, was, is, a, a)) {
-            k->why = scratch.why;
-            k->at = scratch.at;
-            os64_strcopy(k->detail, sizeof(k->detail), scratch.detail);
-        } else {
+        if ((was->anchor == a) != (is->anchor == a) || (was->fixed_anchor == a) != (is->fixed_anchor == a)) {
             k->at = a;
-            os64_strcopy(k->detail, sizeof(k->detail), "derived anchor, from a paint-only change here");
+            os64_strcopy(k->detail, sizeof(k->detail), "derived anchor, a containing block came or went");
+            return;
         }
-        os64_free(scratch.pairs);
-        return;
     }
-    // No ancestor's style changed, yet the anchor did: the two builds
-    // computed it otherwise, which is the builder's to explain.
-    os64_strcopy(k->detail, sizeof(k->detail), "derived anchor, no ancestor changed");
+    // No ancestor turned, yet the anchor did: the two builds computed it
+    // otherwise, which is the builder's to explain.
+    os64_strcopy(k->detail, sizeof(k->detail), "derived anchor, no ancestor turned");
 }
 
 // The pairs to write for every element and pseudo-element of the new build
@@ -252,13 +246,10 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
     if (r->structural) {
         out.at = r->structural_at;
         os64_strcopy(out.detail, sizeof(out.detail), r->structural_what);
-        // Whether the change was where the tree has a box: its node's, or a
-        // text's element's. One with none is in a part of the page no box
-        // was made for (`display: none` above it), which the record says.
-        const os64_html_node_t *e = out.at;
-        while (e != NULL && e->kind != OS64_HTML_ELEMENT)
-            e = e->parent;
-        if (e != NULL && flow_box_for(tree, e) == NULL) {
+        // Whether the element it is told at has a box: one with none is in a
+        // part of the page no box was made for (`display: none` above it,
+        // say), which the record says.
+        if (out.at != NULL && flow_box_for(tree, out.at) == NULL) {
             size_t n = os64_strlen(out.detail);
             os64_strcopy(out.detail + n, sizeof(out.detail) - n, ", no box");
         }
@@ -347,7 +338,9 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
         if (!layers_same) {
             f_map_free(&written);
             out.why = FLOW_RESTYLE_STACKING;
-            out.at = box->node;
+            // A pseudo-element's box is told at its host: its own node is
+            // the style pass's, which never leaves libflow.
+            out.at = box->node != NULL && f_pseudo_of(box->node) != GARB_PSEUDO_NONE ? box->node->parent : box->node;
             os64_strcopy(out.detail, sizeof(out.detail),
                          is_group(&tried_box) != is_group(box) ? "a group came or went" : "a context came or went");
             os64_free(values);
