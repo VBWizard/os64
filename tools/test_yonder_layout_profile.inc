@@ -123,6 +123,90 @@ static void layout_profile_cases(void)
     s_cascade_check=0;
     s_layout_profile=false;
     probe_drop();
+    /* What each layout needed (yonder_needed_t): an attribute no rule reads
+     * changes nothing; a colour is paint only; padding that moves the text
+     * inside a block moves one node's boxes. */
+    probe_page("<!doctype html><style>.on{color:red}.pad{padding-left:40px}.z{z-index:3}</style><p id=p>text</p><p id=q>more</p><div id=tip style=position:absolute;width:9px;height:9px></div>",false);
+    g.page.diag=diag_new_claimed("https://fixture.test/profile-needed",1);
+    s_layout_profile=true;
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"title","t",1) && script_rebuild(),
+          "layout needed: an attribute no rule reads published");
+    const char *needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && !strncmp(needed,"nothing moved 1 (",17) && strstr(needed,"paint only 0 ("),
+          "layout needed: and it needed nothing");
+    if(!needed || strncmp(needed,"nothing moved 1 (",17)) printf("  layout needed: %s\n",needed?needed:"(none)");
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("p"),"class","on",2) && script_rebuild(),
+          "layout needed: a colour published");
+    needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && strstr(needed,"paint only 1 ("),"layout needed: and it was paint only");
+    if(!needed || !strstr(needed,"paint only 1 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("p"),"class","pad",3) && script_rebuild(),
+          "layout needed: a padding published");
+    needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && strstr(needed,"one node's boxes moved 1 ("),"layout needed: and it moved one node's boxes");
+    if(!needed || !strstr(needed,"one node's boxes moved 1 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    /* A style placement may read that moves nothing is a class of its own;
+     * an empty positioned box taken away moves its own boxes, which went. */
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"class","z",1) && script_rebuild(),
+          "layout needed: a z-index published");
+    needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && strstr(needed,"restyled, nothing moved 1 ("),"layout needed: and it was restyled, nothing moved");
+    if(!needed || !strstr(needed,"restyled, nothing moved 1 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    check(os64_html_remove(g.page.way.doc,probe_id("tip"))==OS64_HTML_OK && script_rebuild(),
+          "layout needed: a positioned box removed");
+    needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && strstr(needed,"one node's boxes moved 2 ("),"layout needed: and its boxes went");
+    if(!needed || !strstr(needed,"one node's boxes moved 2 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    s_layout_profile=false;
+    probe_drop();
+    /* A pseudo-element's own change counts, though its node is new at every
+     * layout: a colour is paint only; longer content moves its box and the
+     * text after it. */
+    probe_page("<!doctype html><style>#p::before{content:'X';color:red}#p.on::before{color:blue}"
+        "#p.long::before{content:'XXXX'}</style><p id=p>text</p>",false);
+    g.page.diag=diag_new_claimed("https://fixture.test/profile-pseudo",1);
+    s_layout_profile=true;
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("p"),"class","on",2) && script_rebuild(),
+          "layout needed: a ::before's colour published");
+    needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && strstr(needed,"paint only 1 ("),"layout needed: and it was paint only");
+    if(!needed || !strstr(needed,"paint only 1 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("p"),"class","long",4) && script_rebuild(),
+          "layout needed: a ::before's longer content published");
+    needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    check(needed && strstr(needed,"more moved 1 ("),"layout needed: and its box and the text after it moved");
+    if(!needed || !strstr(needed,"more moved 1 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    s_layout_profile=false;
+    probe_drop();
+    /* A read made by the shown page's own script forces its layout there:
+     * that is the forced column (its ledger says so), and the `d` reading
+     * counts it. */
+    s_ledger=YONDER_LEDGER_ON;
+    probe_page("<!doctype html><style>.pad{padding-left:40px}</style><p id=p>text</p><script>"
+        "window.onclick=function(){var p=document.getElementById('p');p.className='pad';p.offsetWidth}</script>",true);
+    script_turn();
+    g.page.diag=diag_new_claimed("https://fixture.test/profile-forced",1);
+    s_layout_profile=true;
+    cost_reset();
+    os64_dom_event_t click={.type="click",.bubbles=true,.cancelable=true};
+    os64_js_outcome_t out;
+    yonder_scripts_dispatch(g.page.scripts,NULL,&click,NULL,&out);
+    needed=yonder_diag_fact_value(g.page.diag,"layout needed");
+    const char *forced=needed?strstr(needed,"forced by a read: "):NULL;
+    check(forced && strstr(forced,"one node's boxes moved 1 ("),"layout needed: a read on the shown page is forced");
+    if(!forced || !strstr(forced,"one node's boxes moved 1 (")) printf("  layout needed: %s\n",needed?needed:"(none)");
+    diag_paint_reading(&g.page,1);
+    const char *reading=yonder_diag_fact_value(g.page.diag,"layout needed reading 1");
+    forced=reading?strstr(reading,"forced by a read: "):NULL;
+    check(forced && strstr(forced,"one node's boxes moved 1 ("),"layout needed: and the reading counts it");
+    if(!forced || !strstr(forced,"one node's boxes moved 1 (")) printf("  reading: %s\n",reading?reading:"(none)");
+    cost_reset();
+    diag_paint_reading(&g.page,2);
+    reading=yonder_diag_fact_value(g.page.diag,"layout needed reading 2");
+    check(reading && !strstr(reading," 1 ("),"layout needed: and the next reading starts again");
+    s_layout_profile=false;
+    probe_drop();
+    s_ledger=YONDER_LEDGER_OFF;
     /* A bare anchor keeps the cascade tracking: the change that turns it is
      * an update, and the record says what the anchor cost it. */
     probe_page("<style>:has(> .x) p{color:red}</style><div><p id=p>t</p></div>",false);

@@ -94,6 +94,23 @@ typedef struct yonder_diag yonder_diag_t;
 // names come with the sample (`cascade_reason_names`), from the code that
 // knows them; the layout wrapper checks the count at compile time.
 #define YONDER_LAYOUT_CASCADE_REASONS 18
+// WHAT A LAYOUT NEEDED, from what came out different (flow_profile_t),
+// for a layout that finished: no style changed and no box moved, came or
+// went (a repaint at most); only paint styles changed and no box moved;
+// styles placement reads changed and still no box moved; one node's boxes
+// moved, came or went; more than that; not compared (no previous tree of
+// the document). Each for the layouts made while the page's own script ran
+// (its read forced them), which its ledger tells (with yonder's ledger off,
+// every layout counts with the rest), and the rest, with the elements
+// whose style came out different across those layouts (`restyled`).
+typedef enum {
+    YONDER_NEEDED_NOTHING, YONDER_NEEDED_PAINT, YONDER_NEEDED_STILL, YONDER_NEEDED_ONE,
+    YONDER_NEEDED_MORE, YONDER_NEEDED_UNCOMPARED, YONDER_NEEDED_KINDS
+} yonder_needed_t;
+typedef struct {
+    uint64_t count[2][YONDER_NEEDED_KINDS], us[2][YONDER_NEEDED_KINDS];
+    uint64_t restyled[2];
+} yonder_layout_needed_t;
 typedef struct {
     uint64_t model_us, cascade_us, style_us, boxes_us, layout_us, public_us;
     uint64_t elements, boxes, measures, reused;
@@ -107,11 +124,17 @@ typedef struct {
     // marked.
     uint64_t anchors_peak, anchors_bare_peak;
     uint64_t bare_tested, bare_turned, bare_marked;
+    // What each finished layout needed, its count and its time (style,
+    // boxes, placement and the public tree), forced by a read ([1]) or not.
+    yonder_layout_needed_t needed;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
     const char *const *cascade_reason_names;
 } yonder_layout_stats_t;
 void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
+// What layouts needed, as a record's line (`layout needed` and its
+// readings): each kind's count and time, the forced ones apart.
+void yonder_diag_needed_text(const yonder_layout_needed_t *n, char *out, size_t cap);
 /* ONE LAYOUT, whole: its wall time (`total_us`, everything
  * page_lay_out_run did) and what it went on: the cascade and what became
  * of it (its time includes gathering the page's sheets for it), then the
@@ -177,6 +200,13 @@ void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value);
 // takes a place in the other.
 #define YONDER_DIAG_HEAD_FACTS 24
 void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value);
+// The same line, for a reading a `d` keeps (its paint, its script ledger,
+// what its layouts needed): a reading comes after the page has set its
+// other lines, so a page whose scripts and faces fill the ordinary room
+// would lose every one. They have a room of their own,
+// YONDER_DIAG_READING_FACTS, room for a page's first few dozen readings.
+#define YONDER_DIAG_READING_FACTS 64
+void yonder_diag_reading_fact(yonder_diag_t *d, const char *key, const char *value);
 // The plain lines whose keys begin `prefix` let go, the rest kept in
 // order — and so are those of them that met no room, so a set of lines
 // rewritten whole, when there may be fewer now, is counted once.
