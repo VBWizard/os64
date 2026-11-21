@@ -3756,46 +3756,53 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
 // what was drawn (`paint effects` in the record and in each reading): a
 // filter's layer, a backdrop filter, a layer with no filter (a blend or a
 // mask), a warp; with the first filter function and its amount, and the
-// size drawn; each with how many times and its microseconds in all, the
-// costliest first. As the stages time them: a layer's or a warp's open and
-// close, not the drawing between. What the table has no room for is
-// counted together as `the rest`.
+// size drawn. Beside them the verbs no stage times (fills, videos and
+// canvases, form controls, stand-ins, text clips), so that what is left of
+// the view's rest is the painter's and the walk's own; and the boxes the
+// walk handed the painter. Each with how many times and its time in all,
+// in the counter's cycles (cycles(), as the stages count), the costliest
+// first. As the stages time them: a layer's or a warp's open and close,
+// not the drawing between. What the table has no room for is counted
+// together as `the rest`.
 #define EFFECTS_MAX 32
 #define EFFECTS_DEPTH 32
 typedef struct {
     char what[64];
-    uint64_t n, us;
+    uint64_t n, cycles;
 } PaintEffect;
 static PaintEffect s_effects[EFFECTS_MAX];
 static int32_t s_neffects;
-static uint64_t s_effects_rest_n, s_effects_rest_us;
+static uint64_t s_effects_rest_n, s_effects_rest_cycles;
 // The layers and warps open, innermost last: the size and the open's time.
-static struct { int32_t w, h; uint64_t us; } s_layers_open[EFFECTS_DEPTH], s_warps_open[EFFECTS_DEPTH];
+static struct { int32_t w, h; uint64_t cycles; } s_layers_open[EFFECTS_DEPTH], s_warps_open[EFFECTS_DEPTH];
 static int32_t s_nlayers_open, s_nwarps_open;
+// The painter's count of boxes when the effects' counting began.
+static uint64_t s_effects_boxes_from;
 
 static void effects_reset(void)
 {
     s_neffects = 0;
-    s_effects_rest_n = s_effects_rest_us = 0;
+    s_effects_rest_n = s_effects_rest_cycles = 0;
     s_nlayers_open = s_nwarps_open = 0;
+    s_effects_boxes_from = yonder_paint_boxes;
 }
 
-static void effect_counted(const char *what, uint64_t us)
+static void effect_counted(const char *what, uint64_t spent)
 {
     int32_t i = 0;
     for (; i < s_neffects && !os64_streq(s_effects[i].what, what); i++) {}
     if (i == s_neffects) {
         if (s_neffects == EFFECTS_MAX) {
             s_effects_rest_n++;
-            s_effects_rest_us += us;
+            s_effects_rest_cycles += spent;
             return;
         }
         os64_strcopy(s_effects[i].what, sizeof(s_effects[i].what), what);
-        s_effects[i].n = s_effects[i].us = 0;
+        s_effects[i].n = s_effects[i].cycles = 0;
         s_neffects++;
     }
     s_effects[i].n++;
-    s_effects[i].us += us;
+    s_effects[i].cycles += spent;
 }
 
 // A filter list in a few words: its first function, its amount (a blur's
@@ -9033,32 +9040,42 @@ static void diag_ledger_reading(Page *p, uint32_t n)
 }
 
 // `paint effects`: the costliest first, each as what it was, how many
-// times, its milliseconds in all and its microseconds each. False, with
-// nothing written, when there were none.
+// times, its milliseconds in all and its microseconds each, the counter's
+// cycles turned into time at the rate the paint stages use (paint_lines);
+// then the boxes the walk handed the painter, in all and a paint. False,
+// with nothing written, when there were none or the counter has no rate.
 static bool effects_lines(DiagText *e)
 {
     if (s_neffects == 0 && s_effects_rest_n == 0)
         return false;
+    uint64_t span_us = (uint64_t)(os64_micros() - s_cost.from_us);
+    uint64_t rate = span_us > 0 ? cycles_since(s_cost.from_cycles) / span_us : 0;   // per microsecond
+    if (rate == 0)
+        return false;
     // The table by time, costliest first (a small table, sorted in place).
     for (int32_t i = 1; i < s_neffects; i++)
-        for (int32_t j = i; j > 0 && s_effects[j].us > s_effects[j - 1].us; j--) {
+        for (int32_t j = i; j > 0 && s_effects[j].cycles > s_effects[j - 1].cycles; j--) {
             PaintEffect swap = s_effects[j];
             s_effects[j] = s_effects[j - 1];
             s_effects[j - 1] = swap;
         }
-    for (int32_t i = 0; i < s_neffects && i < 12; i++)
+    for (int32_t i = 0; i < s_neffects && i < 12; i++) {
+        uint64_t us = s_effects[i].cycles / rate;
         dt_put(e, "%s%s: %lu, %lu.%lu ms (%lu us each)", i ? "; " : "", s_effects[i].what,
-               (unsigned long)s_effects[i].n, (unsigned long)(s_effects[i].us / 1000),
-               (unsigned long)(s_effects[i].us % 1000 / 100),
-               (unsigned long)(s_effects[i].n ? s_effects[i].us / s_effects[i].n : 0));
-    uint64_t more_n = s_effects_rest_n, more_us = s_effects_rest_us;
+               (unsigned long)s_effects[i].n, (unsigned long)(us / 1000), (unsigned long)(us % 1000 / 100),
+               (unsigned long)(s_effects[i].n ? us / s_effects[i].n : 0));
+    }
+    uint64_t more_n = s_effects_rest_n, more = s_effects_rest_cycles;
     for (int32_t i = 12; i < s_neffects; i++) {
         more_n += s_effects[i].n;
-        more_us += s_effects[i].us;
+        more += s_effects[i].cycles;
     }
     if (more_n > 0)
         dt_put(e, "%sthe rest: %lu, %lu.%lu ms", s_neffects ? "; " : "", (unsigned long)more_n,
-               (unsigned long)(more_us / 1000), (unsigned long)(more_us % 1000 / 100));
+               (unsigned long)(more / rate / 1000), (unsigned long)(more / rate % 1000 / 100));
+    uint64_t boxes = yonder_paint_boxes - s_effects_boxes_from;
+    dt_put(e, "; boxes handed the painter %lu, %lu a paint", (unsigned long)boxes,
+           (unsigned long)(s_cost.paints > 0 ? boxes / s_cost.paints : 0));
     return true;
 }
 
@@ -17765,11 +17782,11 @@ static bool timed_through_open(void *ctx, os64_gui_rect_t bounds, const double m
                                int keep)
 {
     cost_begin(PS_WARPS);
-    int64_t began = os64_micros();
+    uint64_t began = cycles();
     bool open = pane_through_open(ctx, bounds, m, clip, keep);
     if (open && s_nwarps_open < EFFECTS_DEPTH)
         s_warps_open[s_nwarps_open] = (__typeof__(s_warps_open[0])){bounds.w, bounds.h,
-                                                                     (uint64_t)(os64_micros() - began)};
+                                                                     cycles_since(began)};
     if (open)
         s_nwarps_open++;
     cost_end(PS_WARPS);
@@ -17779,14 +17796,14 @@ static bool timed_through_open(void *ctx, os64_gui_rect_t bounds, const double m
 static void timed_through_close(void *ctx, uint8_t alpha, bool keep)
 {
     cost_begin(PS_WARPS);
-    int64_t began = os64_micros();
+    uint64_t began = cycles();
     pane_through_close(ctx, alpha, keep);
-    uint64_t us = (uint64_t)(os64_micros() - began);
+    uint64_t spent = cycles_since(began);
     if (s_nwarps_open > 0 && --s_nwarps_open < EFFECTS_DEPTH) {
         char what[64];
         os64_snprintf(what, sizeof(what), "warp %dx%d%s", (int)s_warps_open[s_nwarps_open].w,
                       (int)s_warps_open[s_nwarps_open].h, keep ? " kept" : "");
-        effect_counted(what, us + s_warps_open[s_nwarps_open].us);
+        effect_counted(what, spent + s_warps_open[s_nwarps_open].cycles);
     }
     cost_end(PS_WARPS);
 }
@@ -17794,51 +17811,51 @@ static void timed_through_close(void *ctx, uint8_t alpha, bool keep)
 static bool timed_layer_open(void *ctx, os64_gui_rect_t bounds)
 {
     cost_begin(PS_FILTERS);
-    int64_t began = os64_micros();
+    uint64_t began = cycles();
     bool open = pane_layer_open(ctx, bounds);
     if (open && s_nlayers_open < EFFECTS_DEPTH)
         s_layers_open[s_nlayers_open] = (__typeof__(s_layers_open[0])){bounds.w, bounds.h,
-                                                                        (uint64_t)(os64_micros() - began)};
+                                                                        cycles_since(began)};
     if (open)
         s_nlayers_open++;
     cost_end(PS_FILTERS);
     return open;
 }
 
-// The layer open innermost, closed after `us` more: counted as `kind` with
+// The layer open innermost, closed after `spent` more: counted as `kind` with
 // `said`, at the size it was opened.
-static void effect_layer_closed(const char *kind, const char *said, uint64_t us)
+static void effect_layer_closed(const char *kind, const char *said, uint64_t spent)
 {
     if (s_nlayers_open == 0 || --s_nlayers_open >= EFFECTS_DEPTH)
         return;
     char what[64];
     os64_snprintf(what, sizeof(what), "%s %s %dx%d", kind, said, (int)s_layers_open[s_nlayers_open].w,
                   (int)s_layers_open[s_nlayers_open].h);
-    effect_counted(what, us + s_layers_open[s_nlayers_open].us);
+    effect_counted(what, spent + s_layers_open[s_nlayers_open].cycles);
 }
 
 static void timed_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
                               uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
 {
     cost_begin(PS_FILTERS);
-    int64_t began = os64_micros();
+    uint64_t began = cycles();
     pane_layer_close(ctx, filter, n, current, alpha, mode, cover);
-    uint64_t us = (uint64_t)(os64_micros() - began);
+    uint64_t spent = cycles_since(began);
     char said[40];
     if (n > 0)
         effect_filters(said, sizeof(said), filter, n);
     else
         os64_snprintf(said, sizeof(said), "alpha %d blend %d%s", (int)alpha, (int)mode, cover ? " masked" : "");
-    effect_layer_closed(n > 0 ? "filter" : "layer", said, us);
+    effect_layer_closed(n > 0 ? "filter" : "layer", said, spent);
     cost_end(PS_FILTERS);
 }
 
 static void timed_layer_take(void *ctx, uint8_t *out, bool luminance)
 {
     cost_begin(PS_FILTERS);
-    int64_t began = os64_micros();
+    uint64_t began = cycles();
     pane_layer_take(ctx, out, luminance);
-    effect_layer_closed("mask", luminance ? "luminance" : "alpha", (uint64_t)(os64_micros() - began));
+    effect_layer_closed("mask", luminance ? "luminance" : "alpha", cycles_since(began));
     cost_end(PS_FILTERS);
 }
 
@@ -17846,14 +17863,67 @@ static bool timed_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t
                                   const flow_filter_t *filter, int32_t n, uint32_t current)
 {
     cost_begin(PS_FILTERS);
-    int64_t began = os64_micros();
+    uint64_t began = cycles();
     bool drawn = pane_backdrop_filter(ctx, rect, cover, filter, n, current);
     char said[40], what[64];
     effect_filters(said, sizeof(said), filter, n);
     os64_snprintf(what, sizeof(what), "backdrop %s %dx%d", said, (int)rect.w, (int)rect.h);
-    effect_counted(what, (uint64_t)(os64_micros() - began));
+    effect_counted(what, cycles_since(began));
     cost_end(PS_FILTERS);
     return drawn;
+}
+
+// The verbs no paint stage times, into the paint effects by kind: what is
+// left of the view's rest past them is the painter's and the walk's own.
+static void timed_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
+{
+    uint64_t began = cycles();
+    pane_fill(ctx, r, colour);
+    effect_counted("fills", cycles_since(began));
+}
+
+static void timed_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    uint64_t began = cycles();
+    pane_canvas(ctx, b, c, clip);
+    effect_counted("videos and canvases", cycles_since(began));
+}
+
+static void timed_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    uint64_t began = cycles();
+    pane_control(ctx, b, c, clip);
+    effect_counted("form controls", cycles_since(began));
+}
+
+static void timed_stand_in(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip, uint32_t ink,
+                           uint32_t paper)
+{
+    uint64_t began = cycles();
+    pane_stand_in(ctx, b, c, clip, ink, paper);
+    effect_counted("stand-ins", cycles_since(began));
+}
+
+static bool timed_clip_open(void *ctx, os64_gui_rect_t bounds)
+{
+    uint64_t began = cycles();
+    bool open = pane_clip_open(ctx, bounds);
+    effect_counted("text clips", cycles_since(began));
+    return open;
+}
+
+static void timed_clip_fill(void *ctx)
+{
+    uint64_t began = cycles();
+    pane_clip_fill(ctx);
+    effect_counted("text clips", cycles_since(began));
+}
+
+static void timed_clip_close(void *ctx)
+{
+    uint64_t began = cycles();
+    pane_clip_close(ctx);
+    effect_counted("text clips", cycles_since(began));
 }
 
 static void timed_mask(void *ctx, os64_gui_rect_t rect, const uint8_t *alpha, uint32_t colour)
@@ -17883,10 +17953,10 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         return;
     }
     GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false, {0}, 0};
-    yonder_verbs_t v = {&pane,        pane_fill,     timed_text,       timed_image,
-                        pane_control, timed_backdrop, timed_group_open, timed_group_close,
-                        timed_mask,   timed_pixels,  pane_stand_in,   pane_keep, timed_through_open,
-                        timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close, g.page.modern ? pane_canvas : NULL,
+    yonder_verbs_t v = {&pane,        timed_fill,    timed_text,       timed_image,
+                        timed_control, timed_backdrop, timed_group_open, timed_group_close,
+                        timed_mask,   timed_pixels,  timed_stand_in,  pane_keep, timed_through_open,
+                        timed_through_close, timed_clip_open, timed_clip_fill, timed_clip_close, g.page.modern ? timed_canvas : NULL,
                         timed_layer_open, timed_layer_close, timed_backdrop_filter,
                         timed_layer_take};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};

@@ -1196,6 +1196,7 @@ static bool shadow_kept(const Painter *p, const Round *shape, const Round *times
 
 void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 uint64_t yonder_paint_cuts;
+uint64_t yonder_paint_boxes;
 uint32_t yonder_paint_layers_refused;
 
 static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
@@ -2230,6 +2231,7 @@ static void paint_outline(void *ctx, const flow_box_t *b)
 
 static void paint_box(void *ctx, const flow_box_t *b)
 {
+    yonder_paint_boxes++;
     Painter clipped;
     if (!box_painter(ctx, b, &clipped))
         return;

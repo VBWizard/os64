@@ -9397,19 +9397,19 @@ static void paint_cost_cases(void) {
      * closed (its open's time and its close's counted together), the
      * costliest first; what the table has no room for is the rest. */
     effects_reset();
-    effect_counted("backdrop blur(8) 2560x56",5000);
-    effect_counted("backdrop blur(8) 2560x56",5000);
+    effect_counted("backdrop blur(8) 2560x56",5000000);
+    effect_counted("backdrop blur(8) 2560x56",5000000);
     {
         flow_filter_t blur={.fn=FLOW_FILTER_BLUR,.amount=12};
         char said[40];
         effect_filters(said,sizeof(said),&blur,1);
-        s_layers_open[0].w=200; s_layers_open[0].h=100; s_layers_open[0].us=30; s_nlayers_open=1;
-        effect_layer_closed("filter",said,70);
+        s_layers_open[0].w=200; s_layers_open[0].h=100; s_layers_open[0].cycles=30000; s_nlayers_open=1;
+        effect_layer_closed("filter",said,70000);
     }
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint effects: backdrop blur(8) 2560x56: 2, 10.0 ms (5000 us each); "
-                     "filter blur(12) 200x100: 1, 0.1 ms (100 us each)\n")!=NULL && s_nlayers_open==0,
+                     "filter blur(12) 200x100: 1, 0.1 ms (100 us each); boxes handed the painter 0, 0 a paint\n")!=NULL && s_nlayers_open==0,
           "paint effects: each by what it was, the costliest first, a layer's open and close together");
     for(int i=0;i<EFFECTS_MAX+3;i++) {
         char what[24];
@@ -9418,7 +9418,7 @@ static void paint_cost_cases(void) {
     }
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
-    check(strstr(rec,"; the rest: 25, 0.0 ms\n")!=NULL,
+    check(strstr(rec,"; the rest: 25, 0.0 ms; boxes handed the painter ")!=NULL,
           "paint effects: past the twelve said and the table's room, the rest counted together");
     effects_reset();
     /* The biggest part marked and by what, the biggest painted, and the

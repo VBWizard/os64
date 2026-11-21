@@ -255,6 +255,9 @@ extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 // program started: a count the harness holds to the lines painted, not the
 // pieces on them.
 extern uint64_t yonder_paint_cuts;
+// How many boxes the walk has handed the painter, since the program
+// started: the record's measure of the walk's own part of a paint.
+extern uint64_t yonder_paint_boxes;
 // How many filtered, masked or blended groups and backdrops the last
 // yonder_paint drew plain: past its budget for layers —
 // YONDER_FILTER_AREA_VIEWS times the WHOLE view's pixels, each layer (and
