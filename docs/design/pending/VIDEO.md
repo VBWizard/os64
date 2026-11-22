@@ -667,9 +667,14 @@ most SHEET_SIDE a side and SHEET_PIXELS in all, a layer through one of
 FILTER_SHEET_SIDE and FILTER_SHEET_PIXELS, and past those the ordinary
 paint draws the group upright or plain, where a piece, asking for less,
 would be given one (Codex, #698 round 3). `flow_sheets_fit` asks whether
-every sheet a paint of R could ask for fits; a paint of a part asks for
-no larger one, so then all accept alike. R past either is painted the
-ordinary way, counted in the record.
+every sheet a paint of R could ask for fits. Both bounds are worked
+through the views libflow's walk keeps, which hold the painter's at
+every depth: a layer grows the view inside it by what its filter
+spreads, so a transformed group under a blurred one asks for a sheet
+taken from the grown view, not from R (Codex, #698 round 4). Every view
+only grows with R, so a paint of a part asks for no more, and when R
+fits all accept and charge alike. R past either is painted the ordinary
+way, counted in the record.
 `flow_paint_path` names the groups that hold a box (outermost first),
 which rule 1 reads (none may lay a layer) and the checking mode tests.
 

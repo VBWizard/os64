@@ -280,6 +280,30 @@ static void cover_cases(void)
     cover_whole_same("cover: a sheet past its limit, the window painted whole with covers and without is the same");
     cover_drop();
 
+    /* A transformed group inside a blurred parent: the parent's layer grows
+     * the view by its reach, and the child's sheet is taken from that grown
+     * view, past the sheets' limit for the whole window though not for the
+     * picture's part (Codex, #698 round 4). */
+    probe_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#p{position:absolute;left:0;top:0;width:800px;height:600px;filter:blur(100px)}"
+               "#c{position:absolute;left:0;top:0;width:2000px;height:1500px;"
+               "background:linear-gradient(90deg,rgba(255,0,0,.4),rgba(0,0,255,.4));"
+               "transform:scale(.6);transform-origin:0 0}</style><video id=v></video>"
+               "<div id=p><div id=c></div></div>", true);
+    cover_video("v", 320, 180, 320, 180);
+    {
+        uint64_t limited = s_cost.covered_budget;
+        CoverCounts b = cover_run(g.view.bounds);
+        check(b.covered == 0 && s_cost.covered_budget > limited,
+              "cover: a sheet past its limit under a filtered parent keeps the paint the ordinary way");
+        if (!(b.covered == 0 && s_cost.covered_budget > limited))
+            cover_said("a sheet past its limit under a filtered parent", b);
+    }
+    cover_whole_same("cover: a sheet past its limit under a filtered parent, the window painted whole with covers "
+                     "and without is the same");
+    cover_drop();
+
     /* A video in a group is drawn on its sheets, never plain. */
     snprintf(html, sizeof(html), "%s<div id=glow></div><div style='opacity:.9'><video id=v></video></div>", style);
     probe_page(html, true);

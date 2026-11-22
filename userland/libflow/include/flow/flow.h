@@ -2048,30 +2048,33 @@ void flow_visit_groups_from(const flow_tree_t *tree, os64_gui_rect_t viewport, f
 // for a box inside.
 int32_t flow_paint_path(const flow_tree_t *tree, const flow_box_t *box, const flow_box_t **out, int32_t cap);
 
-// At least as many pixels as any paint of `viewport` (or of a part of it)
-// at `scroll` can charge a face's budget for layers and backdrops: each
-// group that may take a layer (a filter, a mask — once and once a mask
-// layer — or a blend other than normal), its bounds met with the viewport
-// — when it is drawn through a matrix, its bounds (in the matrix's own
-// pixels) met with the viewport taken back through the matrix, grown a
-// pixel each way, and with its upright place, as the walk takes the view
-// in; inside one, its bounds whole — and each box with a backdrop filter,
-// its part in the viewport (its own rect, inside a matrix). A face whose
-// budget holds this refuses no layer in any such paint, which is what lets
-// a paint split into parts, or culled beneath a cover, decide every layer
-// as the whole paint would (VIDEO.md § 5, The paint beneath the picture).
+// What a paint of `viewport` at `scroll`, or of a part of it, can ask of a
+// face at most, worked through the views the walk keeps (which hold the
+// painter's at every depth): each layer grows the view inside it by what
+// its filter spreads, and a group drawn through a matrix takes in the view
+// taken back through it, so a group under a filtered one is counted with
+// the grown view. Each view only grows with the viewport, so the
+// viewport's answer bounds a part's. Inside a group drawn through a matrix
+// a group counts its bounds whole.
+//
+// flow_layer_area_bound: at least as many pixels as any such paint can
+// charge the budget for layers and backdrops — each group that may take a
+// layer (a filter, a mask, a blend other than normal), what shows of its
+// bounds met with the view inside it, once and once a mask layer; each box
+// with a backdrop filter, its part in the view. A face whose budget holds
+// it refuses no layer in any such paint.
+//
+// flow_sheets_fit: whether every sheet such a paint could ask for keeps
+// within its limits — what a group drawn through a matrix takes in, at
+// most `through_side` a side and `through_pixels` in all; each layer, and
+// each backdrop filter's part grown by its list's reach, at most
+// `layer_side` and `layer_pixels`.
+//
+// Together they are what lets a paint split into parts, or culled beneath a
+// cover, decide every layer and sheet as the whole paint would (VIDEO.md
+// § 5, The paint beneath the picture). Groups nested past 64 deep ask for
+// more than any budget and fit no limit.
 int64_t flow_layer_area_bound(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll);
-
-// Whether every sheet a paint of `viewport` at `scroll` could ask a face
-// for keeps within its limits: each group drawn through a matrix, what of
-// it the walk takes in (as flow_layer_area_bound meets it), at most
-// `through_side` a side and `through_pixels` in all; each layer (a group
-// that may take one, grown by what its filter spreads; a backdrop filter's
-// part, grown by its list's reach) at most `layer_side` and
-// `layer_pixels`. A paint of a part of the viewport asks for no larger
-// sheet, so when these fit, a split or covered paint accepts and refuses
-// each sheet as the whole paint would (VIDEO.md § 5). Inside a matrix, a
-// group's bounds whole.
 bool flow_sheets_fit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll, int32_t through_side,
                      int64_t through_pixels, int32_t layer_side, int64_t layer_pixels);
 
