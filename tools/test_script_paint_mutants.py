@@ -68,13 +68,11 @@ mutants = [
      '        if ((a == NULL) == (b == NULL) && (a == NULL || f_style_equal(&a->style, &b->style)))\n            continue;',
      '        if (a != b || 1)\n            continue;'),
     ('nothing-draws-a-boxless-element', FLOW,
-     '        return b->kind == FLOW_BOX_REPLACED || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL) ? a : NULL;',
-     '        return NULL;'),
+     '        if (b->kind == FLOW_BOX_REPLACED || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL))\n            *out = a;',
+     '        if (b->kind == FLOW_BOX_REPLACED && 0)\n            *out = a;'),
     ('the-caller-elements-not-marked', FLOW,
      '        if (touched[i] != NULL && !change_drawn(&c, was, touched[i]))',
      '        if (touched[i] != NULL && 0 && !change_drawn(&c, was, touched[i]))'),
-    ('the-canvas-not-refused-in-place', RESTYLE, '    if (may_own_canvas(tree, n))\n        return FLOW_PARTS_CANVAS;',
-     '    if (tree == NULL)\n        return FLOW_PARTS_CANVAS;'),
     ('the-canvas-not-refused-in-a-new-tree', FLOW, '    if (may_own_canvas(c->now, n)) {',
      '    if (c->now == NULL) {'),
     ('an-empty-box-given-children-not-compared', FLOW,
@@ -98,8 +96,8 @@ mutants = [
      '            marked = parts_in(tree, &changed, marks->scroll, marks->mark, marks->ctx, NULL, 0);',
      '        pending_open(tree);'),
     ('a-kept-boxless-element-not-marked', RESTYLE,
-     '            why = keep_change(tree, changed, drawn_by(tree, n), all);',
-     '            why = keep_change(tree, changed, NULL, all);'),
+     '        why = !drawn_by(tree, n, &by) ? FLOW_PARTS_NO_BOX : keep_change(tree, changed, by, all);',
+     '        why = !drawn_by(tree, n, &by) ? FLOW_PARTS_NO_BOX : keep_change(tree, changed, NULL, all);'),
     # yonder's half: what the change log adds.
     ('an-unlisted-attribute-marks-nothing', YONDER,
      '        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) && !drawn : !drawn)',
@@ -115,6 +113,15 @@ mutants = [
     ('parts-past-half-the-view-kept', YONDER,
      '    if (why == NULL && (int64_t)reach.w * reach.h * 2 > (int64_t)s_change.view.w * s_change.view.h)',
      '    if (why == NULL && 0)'),
+    # The svgs the cascade restyled, which yonder's adapter paints from it.
+    ('the-svgs-the-cascade-restyled-not-marked', YONDER,
+     '        else if (!change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED))',
+     '        else if (0 && !change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED))'),
+    ('a-restyled-definition-marks-only-its-own-svg', YONDER,
+     '        all = definition && svg_restyled(c, e, since, fresh);', '        all = definition && 0 && svg_restyled(c, e, since, fresh);'),
+    # The paint walk: a box is culled by all it paints, its ink too.
+    ('a-shadow-past-its-box-culled', FLOW, '    return meets(grown(b->overflow, b->ink), view);',
+     '    return meets(b->overflow, view);'),
     # The check: a rebuild that marked nothing is checked too.
     ('a-rebuild-that-marked-nothing-unchecked', YONDER,
      '        if (whole == NULL && s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {',
@@ -131,6 +138,14 @@ mutants = [
 # - an exempt attribute on a boxless element marked (change_touched's
 #   `!drawn`): a class or style on an svg's shape reaches the paint through
 #   its style, which the boxless elements' compare finds too.
+# - the canvas refused in place (keep_change's may_own_canvas): every change
+#   the cases make to the root's or the body's style is laid out afresh,
+#   N1 keeping none of them, so the guard stands behind the new tree's,
+#   which the-canvas-not-refused-in-a-new-tree breaks.
+# - an svg's ancestors asked whether they were restyled (change_svgs): the
+#   cascade restyles everything under an element whose matching changed,
+#   so an svg under one is found by its own shapes too; the ancestors are
+#   asked for a cascade that one day marks less.
 # - the parts past the room (`over`): 64 parts take more than the fixtures
 #   make, and a part past them refuses, the safe direction.
 # - text or children changed in an element drawn from the document

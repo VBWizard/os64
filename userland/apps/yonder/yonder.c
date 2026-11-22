@@ -1533,6 +1533,10 @@ static struct {
     // (whose removed nodes it may be) is alive.
     bool wrote;
     char named[96];
+    // The shown tree's cascade and how many updates it had taken, for the
+    // svgs' question (change_svgs): which of them its update restyled.
+    const garb_cascade_t *cascade;
+    uint64_t cascade_generation, cascade_updates;
 } s_change;
 
 // A part a script's change painted (flow_change_parts, or a kept restyle's
@@ -12519,6 +12523,91 @@ static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, co
     return n;
 }
 
+// Whether svg element `n` is a definition another svg may draw through a
+// reference (as flow.c's svg_referable asks): a defs, symbol, paint
+// server, clip, mask, marker or filter, or inside one.
+static bool svg_definition(const os64_html_node_t *n)
+{
+    static const char *const kDefinitions[] = {"defs",    "symbol",   "linearGradient", "radialGradient", "pattern",
+                                               "clipPath", "mask",    "marker",         "filter"};
+    for (const os64_html_node_t *a = n; a != NULL && a->ns == OS64_HTML_NS_SVG; a = a->parent)
+        for (size_t i = 0; a->name != NULL && i < sizeof(kDefinitions) / sizeof(kDefinitions[0]); i++)
+            if (os64_streq(a->name, kDefinitions[i]))
+                return true;
+    return false;
+}
+
+// The outer svg element `n` is in, or NULL.
+static const os64_html_node_t *svg_root_of(const os64_html_node_t *n)
+{
+    const os64_html_node_t *root = NULL;
+    for (const os64_html_node_t *a = n; a != NULL && a->ns == OS64_HTML_NS_SVG; a = a->parent)
+        root = a;
+    return root != NULL && flow_svg_root(root) ? root : NULL;
+}
+
+// Whether the cascade `c` recomputed element `n`'s winners since the shown
+// tree's update `since`, or is not that cascade brought up to date
+// (`fresh`), in which case every element's may have changed.
+static bool svg_restyled(const garb_cascade_t *c, const os64_html_node_t *n, uint64_t since, bool fresh)
+{
+    return fresh || garb_style_updated_since(c, n, since);
+}
+
+// THE SVGS THE CASCADE RESTYLED (LAYOUT_NEEDS_N3.md § 8): yonder's svg
+// adapter takes an svg's paint (fill, stroke and the rest) from the live
+// cascade, not from libflow's styles, so no compare of the trees sees a
+// class that recolours a shape. Each inline svg drawn in `now` is added to
+// `out` (`*n` of `cap`) when the cascade `c` recomputed the winners of it,
+// of anything inside it, or of an element it is in (paint is inherited)
+// since the shown tree's update. Every one is added when `c` is not that
+// cascade brought up to date, or when it restyled a definition another svg
+// may draw by reference (a defs, symbol, paint server, clip, mask, marker
+// or filter, or anything in an svg that draws nothing itself, a sprite
+// sheet's): only an svg draws one, and which does is not known here.
+// False past `cap`, for the whole view.
+static bool change_svgs(const Page *p, const flow_tree_t *now, const garb_cascade_t *c, const os64_html_node_t **out,
+                        int32_t *n, int32_t cap)
+{
+    bool fresh = c == NULL || c != s_change.cascade || garb_cascade_generation(c) != s_change.cascade_generation;
+    uint64_t since = s_change.cascade_updates;
+    if (!fresh && garb_cascade_updates(c) == since)
+        return true;
+    // Every svg element of the document, for a definition restyled.
+    const os64_html_node_t *top = page_doc(p)->document;
+    bool all = fresh;
+    for (const os64_html_node_t *e = top; !all && e != NULL; e = next_within(e, top)) {
+        if (e->kind != OS64_HTML_ELEMENT || e->ns != OS64_HTML_NS_SVG)
+            continue;
+        const os64_html_node_t *root = svg_root_of(e);
+        bool definition = svg_definition(e) || root == NULL || flow_box_for(now, root) == NULL;
+        all = definition && svg_restyled(c, e, since, fresh);
+    }
+    for (const flow_box_t *b = flow_root(now); b != NULL;) {
+        const os64_html_node_t *root = b->pseudo == GARB_PSEUDO_NONE ? b->node : NULL;
+        if (root != NULL && flow_svg_root(root) && flow_box_for(now, root) == b) {
+            bool restyled = all;
+            for (const os64_html_node_t *a = root; !restyled && a != NULL; a = a->parent)
+                restyled = a->kind == OS64_HTML_ELEMENT && svg_restyled(c, a, since, fresh);
+            for (const os64_html_node_t *d = root->first_child; !restyled && d != NULL; d = next_within(d, root))
+                restyled = d->kind == OS64_HTML_ELEMENT && svg_restyled(c, d, since, fresh);
+            if (restyled) {
+                if (*n == cap)
+                    return false;
+                out[(*n)++] = root;
+            }
+        }
+        if (b->first != NULL) {
+            b = b->first;
+            continue;
+        }
+        while (b != NULL && b->next == NULL)
+            b = b->parent;
+        b = b != NULL ? b->next : NULL;
+    }
+    return true;
+}
+
 // Whether the change script_rebuild just laid out can be painted in the
 // parts s_change holds (NULL), or why the whole view must be. `next` is
 // the staged page. A link the rebuild puts out (g.hover_link) is not a
@@ -12550,6 +12639,8 @@ static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
         flow_parts_said_t said = {FLOW_PARTS_MARKED, NULL, -1};
         if (ntouched < 0)
             why = "the change log lost, or past its room";
+        else if (!change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED))
+            why = "more restyled svgs than the room";
         else if (!flow_change_parts(p->tree, next->tree, scroll_now(), touched, ntouched, change_mark, NULL,
                                     &said)) {
             why = said.why < FLOW_PARTS_COUNT ? kRefused[said.why] : "?";
@@ -12655,6 +12746,9 @@ static bool script_rebuild(void)
         os64_html_reader_free(s_change.reader);
         s_change = (__typeof__(s_change)){.armed = true, .view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}};
         s_change.reader = os64_html_reader_new((os64_html_document_t *)page_doc(p), p->rendered_version);
+        s_change.cascade = p->cascade;
+        s_change.cascade_generation = p->cascade != NULL ? garb_cascade_generation(p->cascade) : 0;
+        s_change.cascade_updates = p->cascade != NULL ? garb_cascade_updates(p->cascade) : 0;
         // The shown Page holds the old faces; an incomplete staged layout
         // can reclaim its tree and cascade before retrying in that room.
         yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_REBUILD);

@@ -16,8 +16,11 @@ static const char kDamagePage[] =
     "#wrap{width:50px;opacity:.5}#wide{width:200px;background:green}"
     "#posbox{position:relative;height:40px}#abs{position:absolute;left:0;top:0}"
     "#filler{height:900px}#back{position:absolute;left:0;top:0;width:860px;height:420px;z-index:-1}#mover{width:40px;height:16px;background:purple;transform:translateX(200px)}"
-    ".hot circle{opacity:.2}#wrap2{width:50px}#wide2{width:200px;background:green}"
-    "#empty{width:200px;height:18px}</style><body id=bd>"
+    ".hot circle{fill:green}#wrap2{width:50px}#wide2{width:200px;background:green}"
+    "#empty{width:200px;height:18px}.cool stop{stop-color:blue}</style><body id=bd>"
+    "<svg id=gdefs width=4 height=4><defs><linearGradient id=gr><stop offset=0 stop-color=red></stop>"
+    "<stop offset=1 stop-color=red></stop></linearGradient></defs></svg>"
+    "<svg width=40 height=10><rect width=40 height=10 fill=url(#gr)></rect></svg>"
     "<div id=back></div><div id=box>box</div><div id=empty></div><input id=field>"
     "<svg id=defs width=12 height=12><defs><rect id=dr width=6 height=6 fill=red></rect></defs></svg>"
     "<svg width=20 height=20><use href=#dr></use><use href=#hr x=10></use></svg>"
@@ -268,9 +271,8 @@ static void damage_cases(void)
         os64_html_insert(g.page.way.doc, probe_id("empty"), t, NULL);
     }
     damage_expect("damage: an empty box given text is compared, and painted in parts", damage_step(), "in parts");
-    damage_attr("sw", "class", "");
-    damage_text("clock", "0:03");
-    damage_expect("damage: a laid-out tree compares the styles of an svg's shapes too", damage_step(), "in parts");
+    damage_attr("gdefs", "class", "cool");
+    damage_expect("damage: a gradient restyled by a class marks the svgs that may draw it", damage_step(), "in parts");
     damage_attr("dr", "width", "9");
     damage_expect("damage: a shape another svg may draw by reference is the whole view", damage_step(),
                   kRefused[FLOW_PARTS_NO_BOX]);
@@ -310,6 +312,9 @@ static void damage_cases(void)
     damage_attr("sw", "class", "hot");
     damage_expect("damage: a class that restyles an svg's shape marks the svg that draws it", damage_step(),
                   "in parts");
+    damage_attr("sw", "class", "");
+    damage_text("clock", "0:03");
+    damage_expect("damage: a laid-out tree compares the styles of an svg's shapes too", damage_step(), "in parts");
     {
         int64_t status = 0;
         os64_html_node_t *rect = os64_html_create_element(g.page.way.doc, OS64_HTML_NS_SVG, "rect", &status);
@@ -333,9 +338,20 @@ static void damage_cases(void)
     damage_style("b1", "width:80px");
     damage_expect("damage: a flex item that widens moves its sibling inside the bar, painted in parts",
                   damage_step(), "in parts");
+    /* On a page this small an insertion may rebuild the cascade whole,
+     * which marks every svg (change_svgs) and reaches across the view:
+     * what this case holds is that the list's move was marked. */
     damage_insert("list", "div", "two", NULL);
-    damage_expect("damage: a child added inside a box of a set height is painted in parts", damage_step(),
-                  "in parts");
+    {
+        DamageSaid said = damage_step();
+        os64_gui_rect_t list = flow_box_doc_rect(flow_box_for(g.page.tree, probe_id("list")), scroll_now()), met;
+        bool marked = false;
+        for (int32_t i = 0; i < s_change.n && !marked; i++)
+            marked = os64_rect_intersect(s_change.part[i], list, &met) && met.w == list.w;
+        check(marked && said.differed == 0 &&
+                  (os64_streq(said.said, "in parts") || os64_streq(said.said, "parts past half the view")),
+              "damage: a child added inside a box of a set height marks the box");
+    }
     damage_attr("gen", "data-x", "two");
     damage_expect("damage: a data attribute a generated text reads is painted in parts", damage_step(), "in parts");
     damage_style("wrap", "opacity:.8");

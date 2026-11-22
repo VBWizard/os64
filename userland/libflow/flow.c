@@ -3318,6 +3318,16 @@ static bool outside_clips_hold(const flow_box_t *b, int64_t x, int64_t y, flow_p
 
 static void visit_inline(const Visit *v, const flow_box_t *b);
 
+// Whether what box `b` and everything in it paint meets `view`: its
+// overflow grown by its ink (its shadows, its outline, glyphs and markers
+// drawn past it, and the same of everything in it). A walk that prunes on
+// the overflow alone leaves out a shadow reaching into a view its box does
+// not, which a paint of part of the window then draws without.
+static bool paints_into(const flow_box_t *b, os64_gui_rect_t view)
+{
+    return meets(grown(b->overflow, b->ink), view);
+}
+
 // The walk of a box's content: a scroll container's is in its scroll, so
 // the view is where the content stands, `*in` filled; any other box's is
 // the box's own, `v`.
@@ -3336,7 +3346,7 @@ static const Visit *content_view(const Visit *v, const flow_box_t *b, Visit *in)
 // it either.
 static void visit_blocks(const Visit *v, const flow_box_t *b)
 {
-    if (b->unpainted || !meets(b->overflow, v->view))
+    if (b->unpainted || !paints_into(b, v->view))
         return;
     v->visit(v->ctx, b);
     Visit scrolled;
@@ -3365,7 +3375,7 @@ static void visit_whole(const Visit *v, const flow_box_t *b)
 // not the formatting context's.
 static void visit_floats(const Visit *v, const flow_box_t *b)
 {
-    if (!b->holds_float || b->unpainted || !meets(b->overflow, v->view))
+    if (!b->holds_float || b->unpainted || !paints_into(b, v->view))
         return;
     Visit scrolled;
     const Visit *cv = content_view(v, b, &scrolled);
@@ -3392,23 +3402,23 @@ static void visit_piece(const Visit *v, const flow_box_t *f)
 // stacked atom, which is a layer of its own — and the markers.
 static void visit_inline(const Visit *outer, const flow_box_t *b)
 {
-    if (b->unpainted || !meets(b->overflow, outer->view))
+    if (b->unpainted || !paints_into(b, outer->view))
         return;
     Visit scrolled;
     const Visit *v = content_view(outer, b, &scrolled);
     for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
         if (c->kind == FLOW_BOX_LINE) {
-            if (!meets(c->overflow, v->view))
+            if (!paints_into(c, v->view))
                 continue;
             for (const flow_box_t *f = c->first; f != NULL; f = f->next)
-                if (!f->stacked && !f->unpainted && meets(f->overflow, v->view))
+                if (!f->stacked && !f->unpainted && paints_into(f, v->view))
                     visit_piece(v, f);
             // A line that may end in its block's ellipsis, after its
             // pieces, for the painter to draw the ellipsis over them.
             if (b->ellipsis != NULL)
                 v->visit(v->ctx, c);
         } else if (c->kind == FLOW_BOX_MARKER) {
-            if (!c->unpainted && meets(c->overflow, v->view))
+            if (!c->unpainted && paints_into(c, v->view))
                 v->visit(v->ctx, c);
         } else if (in_tree(c) && c->floated == FLOW_FLOAT_NONE) {
             visit_inline(v, c);
@@ -4057,15 +4067,15 @@ void flow_visit_groups_from(const flow_tree_t *tree, os64_gui_rect_t viewport, f
         case PART_WHOLE:
             if (b->kind != FLOW_BOX_ATOMIC)
                 visit_whole(&v, b);
-            else if (!b->unpainted && meets(b->overflow, v.view))
+            else if (!b->unpainted && paints_into(b, v.view))
                 visit_piece(&v, b);
             break;
         case PART_SELF:
-            if (!b->unpainted && meets(b->overflow, v.view))
+            if (!b->unpainted && paints_into(b, v.view))
                 v.visit(v.ctx, b);
             break;
         case PART_BODY: {
-            if (b->unpainted || !meets(b->overflow, v.view))
+            if (b->unpainted || !paints_into(b, v.view))
                 break;
             Visit scrolled;
             const Visit *cv = content_view(&v, b, &scrolled);
