@@ -3764,8 +3764,10 @@ static void asks_over(flow_paint_asks_t *out, flow_asks_over_t over, const flow_
 // viewport's answer bounds a part's. Inside a group drawn through a matrix
 // the painter's view may be the group's whole bounds (a kept drawing is
 // made whole, paint.h), so there a group counts its bounds whole.
-// A group drawn through a matrix asks for a sheet of what it takes in, and
-// what shows of it is that; a group that may take a layer (a filter, a mask,
+// A group drawn through a matrix asks for a sheet of its bounds met with
+// the view taken back through the matrix, a pixel wider (the upright place
+// the walk also takes in is not asked for), and what shows of it is that;
+// a group that may take a layer (a filter, a mask,
 // a blend other than normal) asks for a layer of its bounds met with the
 // view inside it, and is charged what of that shows, once and once a mask
 // layer; a box with a backdrop filter is charged its part in the view, and
@@ -3834,7 +3836,14 @@ bool flow_paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_poi
         os64_gui_rect_t from = inside ? kWholePlane : view;
         os64_gui_rect_t in = inside_view(b, from, through, m, up, FLOW_INSIDE_VIEW);
         if (through) {
-            os64_gui_rect_t sheet = from.w == kWholePlane.w ? bd : meet(bd, taken_in(from, m, up));
+            // The sheet the painter asks for: its bounds met with the view
+            // taken back through the matrix, a pixel wider for the sampling
+            // (paint.c's `own`). The upright place the walk also takes in is
+            // for a face that refuses the sheet, and is no part of it.
+            os64_gui_rect_t back = from.w == kWholePlane.w ? kWholePlane : affine_back(m, from);
+            os64_gui_rect_t sheet = back.w == kWholePlane.w ? bd
+                                    : back.w > 0 && back.h > 0 ? meet(bd, grown(back, (const int32_t[4]){1, 1, 1, 1}))
+                                                               : (os64_gui_rect_t){0, 0, 0, 0};
             if (!sheet_within(sheet, limits->through_side, limits->through_pixels)) {
                 out->sheets_fit = false;
                 asks_over(out, FLOW_ASKS_THROUGH_SHEET, b, sheet, 0, inside);

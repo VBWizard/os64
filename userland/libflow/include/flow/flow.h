@@ -2065,8 +2065,9 @@ int32_t flow_paint_path(const flow_tree_t *tree, const flow_box_t *box, const fl
 // it refuses no layer in any such paint.
 //
 // flow_sheets_fit: whether every sheet such a paint could ask for keeps
-// within its limits — what a group drawn through a matrix takes in, at
-// most `through_side` a side and `through_pixels` in all; each layer, and
+// within its limits — the sheet a group drawn through a matrix is laid
+// through (its bounds met with the view taken back through the matrix, a
+// pixel wider), at most `through_side` a side and `through_pixels` in all; each layer, and
 // each backdrop filter's part grown by its list's reach, at most
 // `layer_side` and `layer_pixels`.
 //

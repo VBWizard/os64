@@ -368,6 +368,28 @@ static void cover_cases(void)
                      "and without is the same");
     cover_drop();
 
+    /* A group drawn through a matrix whose upright place lies far from what
+     * it draws: the sheet the painter asks for is the window taken back
+     * through the matrix (about 200x150 near 800,475 of its 4000x2500),
+     * well within the limit, so the paint is covered. The upright place the
+     * walk also takes in (the window moved by the matrix's translation,
+     * near 3200,1900) is no part of the sheet; counting it, the bound took
+     * the two together, about 3200x2025, and refused the paint, as it
+     * refused every whole repaint of the P5's watch page (WHOLE_REPAINTS.md,
+     * W0's record). */
+    probe_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#far{position:absolute;left:0;top:0;width:4000px;height:2500px;"
+               "background:linear-gradient(135deg,rgba(255,0,0,.4),rgba(0,0,255,.4));"
+               "transform:translate(-3200px,-1900px) scale(4);transform-origin:0 0}</style>"
+               "<video id=v></video><div id=far></div>", true);
+    cover_video("v", 320, 180, 320, 180);
+    cover_expect("cover: a matrix whose upright place lies far from its sheet, the whole window split",
+                 cover_run(g.view.bounds), 4);
+    cover_whole_same("cover: a matrix whose upright place lies far from its sheet, the window painted whole with "
+                     "covers and without is the same");
+    cover_drop();
+
     /* A video in a group is drawn on its sheets, never plain. */
     snprintf(html, sizeof(html), "%s<div id=glow></div><div style='opacity:.9'><video id=v></video></div>", style);
     probe_page(html, true);

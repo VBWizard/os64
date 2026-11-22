@@ -104,6 +104,33 @@ if W0 says this caution is the cause**; if the budget or a sheet is
 really past its limit, the record names what put it over, and that goes
 back to Fable first.
 
+**What W0 found (P5, 2026-11-22), and W1 as built.** The playing
+minute's 23 refused paints were all `a sheet through a matrix` at the
+glow's scaled container: 1916x1190 against 2,097,152 pixels, while the
+budget's bound was 4.7 million of 12.7 and nothing was counted inside a
+matrix. The keep store's caution was not the cause, so the shape above
+is not built. The cause was the sheet's own bound: it met the group's
+bounds with everything the walk takes in, which joins the view taken
+back through the matrix with the upright place (the view moved by the
+matrix's translation, for a face that refuses the sheet). With a large
+scale those two lie far apart and their join spans the group, while the
+painter's sheet (paint.c's `own`: the bounds met with the view taken
+back, a pixel wider) is only the first, 1615x631 here. So the sheet's
+bound is now the painter's: its bounds met with the view taken back
+through the matrix, grown a pixel. That is still an upper bound of what
+the painter asks: it takes the view back through its clip as well,
+which only shrinks it, and its view is the walk's or less. The view
+inside the group keeps the upright place, since the walk culls with it.
+Codex's cases stay refused where they were; a fixture with a scale of 4
+whose upright place lies far from its sheet is covered, and the mutant
+that puts the upright place back in the sheet is caught.
+
+The same record says what the playing minute's script rebuilds changed:
+the progress bar's inline `transform` (`scalex`, 73 writes across its
+three bars), a canvas's state (15, the glow), the chapter bar's width,
+an animation's timing. Every one of them is a PAINT change by N2's
+table, which is N3's case exactly.
+
 **W2. The canvas's `filter`.** `CanvasRenderingContext2D.filter`, the
 web's feature (a string, `none` by default, saved and restored with the
 state; each draw filtered as by the CSS filter of the same text). Blur
@@ -157,7 +184,7 @@ In this order (Fable's, 2026-11-22):
 
 | slice | what | review | proof |
 |---|---|---|---|
-| 1. W0 + W1 | the record's reasons; the keep store asked once, the answer carried | Codex (it moves #698's guards) | #698's fixtures and mutants unchanged; a fixture whose kept group is answered NO and is covered; the two new mutants; the P5 run reads W0's lines |
+| 1. W0 + W1 | the record's reasons; the sheet's bound made the painter's (W0's finding) | Codex (it moves #698's guards) | #698's fixtures and mutants unchanged; the far-upright fixture covered; its mutant caught; the P5 run reads W0's lines |
 | 2. N2 rebased onto today's N1, then N3 | Fable's brief | Fable's design pass, then Codex | the brief's oracle and its fixture page (`layout-ticks.html`) |
 | 3. W2 (ruled in, 2026-11-22) | `context.filter` | Codex | canvas host tests to the pixel against the CSS filter on the same drawing, for every kind of draw; the P5 page takes the in-canvas path (no 40 px layer in the effects) and a line says what it costs per glow update |
 | 4. the primitives | § 4's two booked items first | by risk | pixels unchanged; the effects' times |

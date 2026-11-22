@@ -79,6 +79,9 @@ mutants = [
     ('the-sheets-limits-not-asked', YONDER,
      '                                        SHEET_PIXELS, FILTER_SHEET_SIDE, FILTER_SHEET_PIXELS};',
      '                                        INT64_MAX, INT32_MAX, INT64_MAX};'),
+    ('the-upright-place-counted-in-a-sheet', FLOW,
+     '                                    : back.w > 0 && back.h > 0 ? meet(bd, grown(back, (const int32_t[4]){1, 1, 1, 1}))',
+     '                                    : back.w > 0 && back.h > 0 ? meet(bd, taken_in(from, m, up))'),
     ('the-canvases-not-acknowledged', YONDER, '    canvases_acknowledge();\n    return refused;',
      '    (void)canvases_acknowledge;\n    return refused;'),
 ]
