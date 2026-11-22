@@ -281,6 +281,13 @@ struct garb_cascade {
     // and `refusal` why the latest update answered false.
     garb_anchor_t *anchors;
     int32_t nanchors, nbare;
+    // The style readers of every rule (garb_cascade_style_may_read), up to
+    // GARB_STYLE_READERS; `style_bare`: one narrows to no element, there
+    // were more than that, or a declaration reads attr(style), so any
+    // inline write may change what matches.
+    garb_style_reader_t *style_readers;
+    int32_t nstyle_readers;
+    bool style_bare;
     uint32_t has_width;
     uint64_t *has_words, *has_scratch;
     garb_bare_work_t bare_work;
@@ -998,8 +1005,6 @@ static void add_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t 
 
 static bool supports(garb_reading_t how, garb_parsed_t *owner, const garb_value_t *v, int32_t n);
 
-// Reads one declaration for a rule: kept raw when custom or pending, else
-// its longhands, else dropped (invalid, or a property not read here).
 // Whether a value reads the `style` attribute's text: attr(style) anywhere
 // in it, a function's arguments included.
 static bool values_read_style(const garb_value_t *v, int32_t n)
@@ -1025,13 +1030,17 @@ static bool values_read_style(const garb_value_t *v, int32_t n)
     return false;
 }
 
+// Reads one declaration for a rule: kept raw when custom or pending, else
+// its longhands, else dropped (invalid, or a property not read here).
 static bool read_decl(garb_cascade_t *c, garb_parsed_t *owner, const garb_decl_t *d, Decl *out)
 {
     os64_memset(out, 0, sizeof(*out));
     // `content: attr(style)` reads the attribute an inline style write
     // changes (garb_cascade_reads_style_attribute).
-    if (values_read_style(d->value, d->nvalue))
+    if (values_read_style(d->value, d->nvalue)) {
         c->dependencies.style_attribute = true;
+        c->style_bare = true;
+    }
     out->decl = *d;
     out->important = d->important;
     if (garb_decl_is_custom(d)) {
@@ -3030,6 +3039,19 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
             c->incomplete = true;
         add_rules(c, into, sheet->items, sheet->nitems, &order, 0, s);
     }
+    int32_t readers = 0;
+    for (int32_t i = 0; i < c->nrules; ++i) readers += garb_selectors_style_readers(c->rules[i].sel, NULL, 0);
+    if (readers > GARB_STYLE_READERS)
+        c->style_bare = true;
+    else if (readers > 0 && (c->style_readers = alloc(c, (size_t)readers * sizeof(*c->style_readers))) == NULL)
+        c->style_bare = true;
+    for (int32_t i = 0; i < c->nrules && c->style_readers != NULL && !c->style_bare; ++i) {
+        int32_t held = garb_selectors_style_readers(c->rules[i].sel, c->style_readers + c->nstyle_readers,
+                                                    readers - c->nstyle_readers);
+        for (int32_t r = 0; r < held; r++)
+            c->style_bare |= c->style_readers[c->nstyle_readers + r].bare;
+        c->nstyle_readers += held;
+    }
     int32_t anchors = 0;
     for (int32_t i = 0; i < c->nrules; ++i) anchors += garb_selectors_anchors(c->rules[i].sel, NULL, 0);
     c->anchors = anchors ? alloc(c, (size_t)anchors * sizeof(*c->anchors)) : NULL;
@@ -3505,6 +3527,21 @@ int32_t garb_cascade_inline_changes(const garb_cascade_t *c, const os64_html_nod
     garb_free(&p);
     return listed;
 }
+bool garb_cascade_style_may_read(const garb_cascade_t *c, const os64_html_node_t *element)
+{
+    if (c == NULL || c->style_bare)
+        return c == NULL || c->dependencies.style_attribute;
+    for (int32_t i = 0; i < c->nstyle_readers; i++)
+        if (garb_style_reader_may_match(&c->style_readers[i], element))
+            return true;
+    return false;
+}
+
+bool garb_cascade_style_readers_bare(const garb_cascade_t *c)
+{
+    return c == NULL || (c->dependencies.style_attribute && c->style_bare);
+}
+
 bool garb_cascade_reads_style_attribute(const garb_cascade_t *c)
 {
     return c == NULL || c->dependencies.style_attribute;

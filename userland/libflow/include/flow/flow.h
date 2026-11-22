@@ -1501,12 +1501,14 @@ typedef enum {
  * condition that made it RESTYLE unasked ("restyle: the log was lost",
  * "restyle: no reader", ...); empty for NONE. `lost` says this call found
  * the change log lost, which leaves everything owed until the tree is made
- * current again. */
+ * current again. `style_read` says this call judged a style write RESTYLE
+ * because a selector may read that element's style attribute
+ * (garb_cascade_style_may_read, N2a), the element `style_read_at`. */
 typedef struct {
     flow_pending_verdict_t verdict;
     bool transforms;
-    bool lost;
-    char why[48], at[80];
+    bool lost, style_read;
+    char why[48], at[80], style_read_at[80];
 } flow_pending_t;
 flow_pending_t flow_pending(flow_tree_t *tree, const os64_html_document_t *doc, const struct garb_cascade *cascade);
 /* How a pending write of libgarb's longhand `prop` (a garb_prop_t) is judged:

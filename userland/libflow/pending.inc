@@ -132,6 +132,33 @@ static void pending_named(char *out, size_t cap, const os64_html_node_t *n)
 // One element's inline style, as it is now against the cascade's parse of
 // it, which is what the tree was styled from: PAINT, NONE (nothing listed),
 // or RESTYLE.
+// Whether a box positioned out of flow lies inside `el`'s box (only fixed
+// ones when `fixed_only`), or nothing can be said: the boxes a transform or
+// a filter on `el` may be the containing block of. libflow keeps a
+// transform or a filter it cannot work out as it was (style.c,
+// author_transform), so a value other than `none` may still compute to
+// none, and that changes a read of boxes only through such a containing
+// block: an offset parent follows `position` alone (geometry.c).
+static bool pending_holds_out_of_flow(const flow_tree_t *tree, const os64_html_node_t *el, bool fixed_only)
+{
+    const flow_box_t *top = flow_box_for(tree, el);
+    if (top == NULL)
+        return true;
+    for (const flow_box_t *b = top->first; b != NULL;) {
+        if (b->style != NULL && (b->style->position == FLOW_POSITION_FIXED ||
+                                 (!fixed_only && b->style->position == FLOW_POSITION_ABSOLUTE)))
+            return true;
+        if (b->first != NULL) {
+            b = b->first;
+            continue;
+        }
+        while (b != top && b->next == NULL)
+            b = b->parent;
+        b = b == top ? NULL : b->next;
+    }
+    return false;
+}
+
 static flow_pending_verdict_t pending_judge(flow_tree_t *tree, const garb_cascade_t *cascade,
                                             const os64_html_node_t *el)
 {
@@ -173,11 +200,17 @@ static flow_pending_verdict_t pending_judge(flow_tree_t *tree, const garb_cascad
             tree->pending_transforms = true;
             if (none ? f_transformed(s) : f_transformed(s) != (s->display != FLOW_DISPLAY_INLINE))
                 return FLOW_PENDING_RESTYLE;
+            // A positioned box is a containing block for absolute ones
+            // whatever its transform says; fixed ones need the transform.
+            if (!none && pending_holds_out_of_flow(tree, el, s->position != FLOW_POSITION_STATIC))
+                return FLOW_PENDING_RESTYLE;
             break;
         case PENDING_FILTER:
             // A plain inline's filter is granted to an atom and not to a
             // box of lines, which a record cannot tell apart.
             if (s->display == FLOW_DISPLAY_INLINE || (none ? f_filtered(s, false) : !f_filtered(s, false)))
+                return FLOW_PENDING_RESTYLE;
+            if (!none && pending_holds_out_of_flow(tree, el, s->position != FLOW_POSITION_STATIC))
                 return FLOW_PENDING_RESTYLE;
             break;
         case PENDING_ORIGIN:
@@ -197,17 +230,19 @@ static flow_pending_verdict_t pending_judge(flow_tree_t *tree, const garb_cascad
 
 flow_pending_t flow_pending(flow_tree_t *tree, const os64_html_document_t *doc, const struct garb_cascade *cascade)
 {
-    flow_pending_t out = {FLOW_PENDING_RESTYLE, true, false, "", ""};
+    flow_pending_t out = {FLOW_PENDING_RESTYLE, true, false, false, "", "", ""};
     // The cascade's parse must be the one the tree was styled from, and
-    // complete; a selector that reads the `style` attribute makes any
-    // inline write a change to what matches.
+    // complete. A selector that tests the `style` attribute makes an inline
+    // write a change to what matches: on any element when the readers
+    // narrow to none (garb_cascade_style_readers_bare), else on an element
+    // one may match, judged per write below (N2a).
     const char *unasked = tree == NULL || doc == NULL || tree->doc != doc ? "restyle: no tree"
                           : tree->incomplete || tree->styles == NULL       ? "restyle: an incomplete tree"
                           : tree->pending_reader == NULL                   ? "restyle: no reader"
                           : cascade == NULL || garb_cascade_version(cascade) != tree->pending_version
                               ? "restyle: the cascade moved"
                           : !garb_cascade_tracks_changes(cascade)          ? "restyle: no changes tracked"
-                          : garb_cascade_reads_style_attribute(cascade)   ? "restyle: a selector reads the style attribute"
+                          : garb_cascade_style_readers_bare(cascade)      ? "restyle: a selector reads the style attribute"
                                                                            : NULL;
     if (unasked != NULL) {
         os64_strcopy(out.why, sizeof(out.why), unasked);
@@ -229,11 +264,21 @@ flow_pending_t flow_pending(flow_tree_t *tree, const os64_html_document_t *doc, 
             bool style = e->kind == OS64_HTML_CHANGE_ATTR && e->attr_ns == NULL && e->attr_name != NULL &&
                          os64_streq(e->attr_name, "style") && e->target != NULL &&
                          e->target->kind == OS64_HTML_ELEMENT;
-            if (style)
+            // A selector may test this element's style (N2a): the write may
+            // change what matches, whatever it declares.
+            bool read = style && garb_cascade_style_may_read(cascade, e->target);
+            if (style && !read)
                 v = pending_judge(tree, cascade, e->target);
+            if (read && !out.style_read) {
+                out.style_read = true;
+                pending_named(out.style_read_at, sizeof(out.style_read_at), e->target);
+            }
             if (v > tree->pending_verdict) {
                 tree->pending_verdict = (uint8_t)v;
-                if (style)
+                if (read)
+                    os64_strcopy(tree->pending_why, sizeof(tree->pending_why),
+                                 "restyle: a selector may read its style");
+                else if (style)
                     os64_strcopy(tree->pending_why, sizeof(tree->pending_why),
                                  v == FLOW_PENDING_PAINT ? "paint: a style write" : "restyle: a style write");
                 else if (e->kind == OS64_HTML_CHANGE_ATTR)

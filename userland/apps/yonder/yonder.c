@@ -1578,6 +1578,12 @@ static CountedAt s_not_covered, s_script_changes;
 // the change log lost, each since the last reading or the page shown.
 static CountedAt s_forced;
 static uint64_t s_pending_lost;
+// N2a's: each inline write judged a restyle because a selector may read
+// that element's style attribute, by element, since the last reading.
+static CountedAt s_style_reads;
+// Set while `--geometry-check` makes a page current to compare a read with
+// (read_checked): that layout is the check's, not one the page forced.
+static bool s_read_checking;
 
 static void counted_at_reset(CountedAt *t)
 {
@@ -3867,6 +3873,8 @@ static flow_pending_t shown_pending(void)
     flow_pending_t pending = flow_pending(p->tree, page_doc(p), p->cascade);
     if (pending.lost)
         s_pending_lost++;
+    if (pending.style_read && s_layout_profile)
+        counted_at(&s_style_reads, "a selector may read its style", pending.style_read_at, "");
     return pending;
 }
 
@@ -4053,6 +4061,7 @@ static void cost_reset(void)
     counted_at_reset(&s_not_covered);
     counted_at_reset(&s_script_changes);
     counted_at_reset(&s_forced);
+    counted_at_reset(&s_style_reads);
     s_pending_lost = 0;
 }
 
@@ -9369,6 +9378,7 @@ static void diag_paint_reading(Page *p, uint32_t n)
             {&s_not_covered, "not covered reading %u"},
             {&s_script_changes, "whole views by a script's change reading %u"},
             {&s_forced, "forced layouts by what was pending reading %u"},
+            {&s_style_reads, "style writes restyled for a style selector reading %u"},
         };
         for (size_t k = 0; k < sizeof(w0) / sizeof(w0[0]); k++) {
             if (w0[k].t->nrows > 0 || w0[k].t->others > 0) {
@@ -13792,8 +13802,8 @@ static bool measured_for(const os64_html_document_t *doc, int32_t width, int32_t
 static bool script_current(int32_t width, int32_t height)
 {
     // Under the profile, a layout this forces is noted by what was pending
-    // before it (forced_note).
-    bool noting = s_layout_profile && layout_profile_diag(&g.page) != NULL;
+    // before it (s_forced), unless it is the read check's own.
+    bool noting = s_layout_profile && !s_read_checking && layout_profile_diag(&g.page) != NULL;
     flow_pending_t pending = noting ? shown_pending() : (flow_pending_t){.verdict = FLOW_PENDING_RESTYLE};
     uint64_t before = geometry_layout_total;
     bool ready = script_rebuild();
@@ -13852,9 +13862,13 @@ static bool read_checked(const os64_html_document_t *doc, const os64_html_node_t
                          os64_dom_geometry_need_t need, int32_t width, int32_t height, os64_dom_geometry_t *out)
 {
     os64_dom_geometry_t kept = *out;
-    bool ready = script_current(width, height) &&
-                 yonder_geometry_snapshot(doc, g.page.tree, node, width, height, g.zoom,
-                                          (flow_point_t){g.sx, g.sy}, out);
+    // The check's own layout is no layout the page forced (script_current's
+    // note).
+    s_read_checking = true;
+    bool current = script_current(width, height);
+    s_read_checking = false;
+    bool ready = current && yonder_geometry_snapshot(doc, g.page.tree, node, width, height, g.zoom,
+                                                     (flow_point_t){g.sx, g.sy}, out);
     char member[128], named[96] = "", line[256];
     if (ready)
         read_difference(&kept, out, need, member, sizeof(member));

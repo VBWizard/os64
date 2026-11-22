@@ -643,6 +643,77 @@ static void pending_cases(void)
     snprintf(reads,sizeof(reads),"%s<style>[style*=blue]{width:10px}</style>",page);
     expect("pending: a selector reading the style attribute makes every write RESTYLE",
            pending_after(reads,"n","style","color:blue",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    /* A transform libflow cannot work out keeps its old value, so a value
+     * other than none may compute to none: a write is PAINT only where no
+     * out-of-flow box could have the element as its containing block. */
+    const char *held="<!doctype html><div id=c style='transform:translateX(10px)'>"
+        "<div style='position:absolute;left:0;width:50%'>abs</div></div>"
+        "<div id=e style='transform:translateX(10px)'><p>flow</p></div>"
+        "<div id=r style='position:relative;transform:translateX(10px)'><div style='position:absolute'>a</div></div>"
+        "<div id=f style='position:relative;transform:translateX(10px)'><div style='position:fixed'>f</div></div>"
+        "<div id=g style='filter:blur(1px)'><div style='position:absolute'>g</div></div>";
+    expect("pending: a transform write over an absolute box it holds is RESTYLE (it may compute to none)",
+           pending_after(held,"c","style","transform:translateX(min(50%,100px))",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: and over in-flow boxes alone is PAINT",
+           pending_after(held,"e","style","transform:translateX(min(50%,100px))",NULL)==FLOW_PENDING_PAINT,NULL);
+    expect("pending: a positioned box's absolute ones keep it as their block",
+           pending_after(held,"r","style","position:relative;transform:translateX(20px)",NULL)==FLOW_PENDING_PAINT,NULL);
+    expect("pending: its fixed ones do not",
+           pending_after(held,"f","style","position:relative;transform:translateX(20px)",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: a filter write over an absolute box it holds is RESTYLE too",
+           pending_after(held,"g","style","filter:blur(2px)",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    /* N2a: a style reader narrows to the elements it may match, by its
+     * exact tests (a type, an id, a class, another attribute). */
+    const char *mute="<!doctype html><style>.area:has(>.mute[style*='display: none']){width:9px}"
+        ".cap[style*=red]{margin:3px}</style><div class=area><p id=mu class=mute>m</p></div>"
+        "<p id=cap class=cap>c</p><p id=n style='color:red'>n</p><p id=h class='hov'>h</p>";
+    expect("pending N2a: a write on an element a style reader may match is RESTYLE (inside :has())",
+           pending_after(mute,"mu","style","display:none",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending N2a: and plain",pending_after(mute,"cap","style","color:blue",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending N2a: a write on an element no style reader may match is judged as ever",
+           pending_after(mute,"n","style","color:blue",NULL)==FLOW_PENDING_PAINT,NULL);
+    {
+        Sheeted p;sheeted_open(&p,mute,800,600);
+        flow_tree_t *t=graft_layout(&p,NULL,NULL,NULL);
+        os64_html_set_attr(p.doc,graft_node(&p,"mu"),"style","display:none",12);
+        flow_pending_t said=flow_pending(t,p.doc,p.cascade);
+        expect("pending N2a: says so, and where",
+               said.style_read && !strcmp(said.style_read_at,"p#mu.mute") &&
+               !strcmp(said.why,"restyle: a selector may read its style"),NULL);
+        flow_free(t);sheeted_close(&p);
+    }
+    /* A pseudo-class never narrows: the element is not hovered, and the
+     * reader is still taken to match it. */
+    const char *hover="<!doctype html><style>.hov:hover[style*=red]{width:9px}</style>"
+        "<p id=h class=hov>h</p><p id=n style='color:red'>n</p>";
+    expect("pending N2a: a pseudo-class does not narrow",
+           pending_after(hover,"h","style","color:blue",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(hover,"n","style","color:blue",NULL)==FLOW_PENDING_PAINT,NULL);
+    /* The cascade's own matchers: a quirks-mode document folds a class's
+     * case, and so does the reader. */
+    const char *quirks="<style>.CAP[style*=red]{margin:3px}</style><p id=cap class=cap>c</p><p id=n style='color:red'>n</p>";
+    expect("pending N2a: matched as the cascade matches (quirks folds a class)",
+           pending_after(quirks,"cap","style","color:blue",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(quirks,"n","style","color:blue",NULL)==FLOW_PENDING_PAINT,NULL);
+    /* Bare readers narrow to no element: every write is RESTYLE. */
+    const char *bare_not="<!doctype html><style>.a:not([style*=x]){width:9px}</style><p id=n style='color:red'>n</p>";
+    const char *bare_host="<!doctype html><style>:host([style*=x]){width:9px}</style><p id=n style='color:red'>n</p>";
+    const char *bare_slot="<!doctype html><style>::slotted(.s[style*=x]){width:9px}</style><p id=n style='color:red'>n</p>";
+    expect("pending N2a: a reader inside :not() alone is bare",
+           pending_after(bare_not,"n","style","color:blue",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending N2a: :host() and ::slotted() readers are bare",
+           pending_after(bare_host,"n","style","color:blue",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(bare_slot,"n","style","color:blue",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    {
+        /* Past GARB_STYLE_READERS readers, bare. */
+        static char many[GARB_STYLE_READERS*40+200];
+        size_t at=(size_t)snprintf(many,sizeof(many),"<!doctype html><style>");
+        for(int k=0;k<=GARB_STYLE_READERS;k++)
+            at+=(size_t)snprintf(many+at,sizeof(many)-at,".r%d[style*=x]{width:9px}",k);
+        snprintf(many+at,sizeof(many)-at,"</style><p id=n style='color:red'>n</p>");
+        expect("pending N2a: past the readers' cap, bare",
+               pending_after(many,"n","style","color:blue",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    }
     // Made current again by a restyle kept in the tree: nothing pending,
     // and a write after it judged from there.
     Sheeted p;sheeted_open(&p,page,800,600);

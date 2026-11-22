@@ -630,10 +630,27 @@ static const char kWalkPage[]=
     "document.getElementById('out').textContent='walked'};"
     "document.getElementById('out').textContent='ready'"
     "</script>";
+/* The walk's page with `rules` added to its sheet: style readers in each
+ * position (N2a). Narrowed ones (plain, inside :has()) flip geometry when
+ * the walk's writes match them, so the check sees whether a write they may
+ * read was judged as one; bare ones (inside :not(), with nothing else)
+ * leave no read to the tree. */
+static const char *walk_page_with(const char *rules)
+{
+    static char page[sizeof(kWalkPage)+512];
+    const char *at=strstr(kWalkPage,"<style>")+7;
+    snprintf(page,sizeof(page),"%.*s%s%s",(int)(at-kWalkPage),kWalkPage,rules,at);
+    return page;
+}
+static void random_walk_page(const char *page,uint32_t every,bool kept_any);
 static void random_walk(uint32_t every)
 {
+    random_walk_page(kWalkPage,every,true);
+}
+static void random_walk_page(const char *page,uint32_t every,bool kept_any)
+{
     s_ledger=YONDER_LEDGER_ON;
-    probe_page(kWalkPage,true);
+    probe_page(page,true);
     script_turn();
     check(probe_text_is("out","ready"),"random walk: the page's script ran");
     g.page.diag=diag_new_claimed("https://fixture.test/random-walk",1);
@@ -652,8 +669,11 @@ static void random_walk(uint32_t every)
     const char *checked=yonder_diag_fact_value(g.page.diag,"read check");
     const char *reads=yonder_diag_fact_value(g.page.diag,"layout reads");
     unsigned compared=record_number(checked,""),kept=record_number(reads,"from the kept tree ");
-    check(checked && strstr(checked," 0 differed") && compared>30 && kept>=compared && kept<compared*every+every,
-          "random walk: every Nth read the tree answered is answered the old way too, and none differs");
+    if(kept_any)
+        check(checked && strstr(checked," 0 differed") && compared>30 && kept>=compared && kept<compared*every+every,
+              "random walk: every Nth read the tree answered is answered the old way too, and none differs");
+    else
+        check(kept==0,"random walk: with a bare style reader, the tree answers no read");
     printf("  random walk, every %u: %s; %s\n",every,checked?checked:"(no read check)",reads?reads:"(no reads line)");
     s_geometry_check=s_reads_checked=0;
     s_reads_compared=s_reads_differed=0;
@@ -666,6 +686,12 @@ static void random_walk_cases(void)
     random_walk(1);
     random_walk(3);
     random_walk(7);
+    const char *narrowed=walk_page_with(".t[style*=opacity]{width:90px}#b:has(>#c[style*=red]){padding-left:7px}"
+                                        ".pos[style*=blue] #c{margin-left:4px}");
+    random_walk_page(narrowed,1,true);
+    random_walk_page(narrowed,3,true);
+    random_walk_page(walk_page_with(".wide:not([style*=blue]){margin-left:3px}"),1,false);
+    random_walk_page(walk_page_with("[style*=scale]{padding-top:2px}"),1,false);
 }
 
 static void layout_profile_cases(void)

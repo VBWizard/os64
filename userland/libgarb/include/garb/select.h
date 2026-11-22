@@ -122,6 +122,33 @@ int32_t garb_selectors_anchors(const garb_selectors_t *list, garb_anchor_t *out,
 // first, its :has() and the rest of its pseudo-classes only when they pass.
 bool garb_anchor_matches(const garb_anchor_t *anchor, const os64_html_node_t *element);
 
+// A STYLE READER: a compound that tests the `style` attribute
+// (`[style*="display: none"]`), so an inline style write on an element it
+// may match may change what matches (BRIEF_LAYOUT_NEEDS.md N2a). A compound
+// is a conjunction: where an element fails one of its exact tests it cannot
+// match, whatever the element's style says. The exact tests are a type, an
+// id, a class and an attribute other than `style`, each a function of the
+// element's own state; every pseudo-class, and each :not(), :is(), :where()
+// or :has() the test is not held in, is taken as passing, which only
+// widens the readers' reach, the safe direction. `bare` says it narrows to
+// no element: no exact test, or a compound it does not fully understand
+// (one holding :host or ::slotted, or inside their arguments). A test held
+// inside a pseudo-class's argument is recorded as the compound there that
+// holds it, alone. `compound` is the selector's own, valid while the list
+// is.
+typedef struct {
+    const garb_selectors_t *list;
+    const void *compound;
+    bool bare;
+} garb_style_reader_t;
+// Writes the list's style readers to out[0..cap) and answers how many the
+// list holds; more than `cap` means the rest were not written.
+int32_t garb_selectors_style_readers(const garb_selectors_t *list, garb_style_reader_t *out, int32_t cap);
+// Whether the reader may match `element` for some value of its style: bare,
+// or its exact tests pass there, tried by the matchers the cascade matches
+// with.
+bool garb_style_reader_may_match(const garb_style_reader_t *reader, const os64_html_node_t *element);
+
 int32_t garb_selectors_count(const garb_selectors_t *list);
 // The i-th selector's specificity, (a, b, c) packed as a << 20 | b << 10 | c,
 // each part capped at 1023 — so a larger packed value outranks a smaller.

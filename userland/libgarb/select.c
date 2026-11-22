@@ -1581,6 +1581,60 @@ int32_t garb_selectors_anchors(const garb_selectors_t *list, garb_anchor_t *out,
     if (list) anchors(list, &list->list, 0, NULL, 0, out, cap, &n);
     return n;
 }
+// A simple selector a style reader narrows by (select.h § A STYLE READER):
+// exact, and a function of the element's own unmoved state.
+static bool narrows(const Simple *s)
+{
+    return s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS ||
+           (s->kind == S_ATTR && !ascii_ieq(s->name, s->len, "style"));
+}
+// Every compound in `list` that tests `style` itself, with `unknown` when
+// it sits inside :host()'s or ::slotted()'s argument, which name a shadow
+// host or a slotted element featureless or from another tree.
+static void style_readers(const garb_selectors_t *sel, const List *list, bool unknown, garb_style_reader_t *out,
+                          int32_t cap, int32_t *n)
+{
+    for (int32_t i = 0; i < list->n; ++i) {
+        const Complex *x = &list->v[i];
+        for (int32_t j = 0; j < x->n; ++j) {
+            const Compound *c = &x->c[j];
+            bool reads = false, narrowed = false, odd = unknown;
+            for (int32_t k = 0; k < c->n; ++k) {
+                const Simple *s = &c->s[k];
+                reads |= s->kind == S_ATTR && ascii_ieq(s->name, s->len, "style");
+                narrowed |= narrows(s);
+                bool host = s->kind == S_PSEUDO && (s->pseudo == P_HOST || s->pseudo == P_SLOTTED);
+                odd |= host;
+                if (s->list)
+                    style_readers(sel, s->list, unknown || host, out, cap, n);
+            }
+            if (!reads)
+                continue;
+            if (*n < cap)
+                out[*n] = (garb_style_reader_t){sel, c, odd || !narrowed};
+            ++*n;
+        }
+    }
+}
+int32_t garb_selectors_style_readers(const garb_selectors_t *list, garb_style_reader_t *out, int32_t cap)
+{
+    int32_t n = 0;
+    if (list) style_readers(list, &list->list, false, out, cap, &n);
+    return n;
+}
+bool garb_style_reader_may_match(const garb_style_reader_t *reader, const os64_html_node_t *element)
+{
+    if (reader->bare)
+        return true;
+    if (!is_el(element))
+        return false;
+    const Compound *c = reader->compound;
+    for (int32_t k = 0; k < c->n; ++k)
+        if (narrows(&c->s[k]) && !simple_matches(reader->list, &c->s[k], element, NULL))
+            return false;
+    return true;
+}
+
 bool garb_anchor_matches(const garb_anchor_t *anchor, const os64_html_node_t *element)
 {
     const Compound *c = anchor->compound;
