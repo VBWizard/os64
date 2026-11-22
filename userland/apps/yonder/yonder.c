@@ -1572,6 +1572,12 @@ typedef struct {
 // (cover_refusal_note) and what scripts' rebuilds changed
 // (script_changes_note), each since the last reading or the page shown.
 static CountedAt s_not_covered, s_script_changes;
+// N2's (BRIEF_LAYOUT_NEEDS.md): each layout a script's ask forced, by what
+// was pending before it (`why`: its class and what wrote it, or why
+// nothing could be said) and where; and how often the pending reader found
+// the change log lost, each since the last reading or the page shown.
+static CountedAt s_forced;
+static uint64_t s_pending_lost;
 
 static void counted_at_reset(CountedAt *t)
 {
@@ -3834,7 +3840,7 @@ static bool page_records_shown(const Page *p)
 }
 static flow_pending_t shown_pending(void)
 {
-    flow_pending_t restyle = {FLOW_PENDING_RESTYLE, true};
+    flow_pending_t restyle = {.verdict = FLOW_PENDING_RESTYLE, .transforms = true};
     Page *p = &g.page;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
     int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
@@ -3842,15 +3848,26 @@ static flow_pending_t shown_pending(void)
     // zoom, the sheets, the pictures and the fonts (script_geometry's own
     // conditions for a relayout), and the form state the graft's inputs
     // carry, which moves without the document's version: the tree's must be
-    // the state's now.
-    if (!s_kept_reads || p->tree == NULL || flow_incomplete(p->tree) || p->cascade == NULL ||
-        p->laid_width != width || p->laid_height != height || p->laid_zoom != g.zoom || p->sheets_changed ||
-        g.pictures_moved || s_web.moved)
+    // the state's now. Each says why, for the record.
+    const char *why = !s_kept_reads ? "restyle: kept reads off"
+                      : p->tree == NULL || flow_incomplete(p->tree) || p->cascade == NULL ? "restyle: no tree"
+                      : p->laid_width != width || p->laid_height != height || p->laid_zoom != g.zoom
+                          ? "restyle: the view's size or zoom"
+                      : p->sheets_changed  ? "restyle: the sheets"
+                      : g.pictures_moved   ? "restyle: the pictures"
+                      : s_web.moved        ? "restyle: the fonts"
+                                           : NULL;
+    os64_page_state_t *state = why == NULL ? os64_page_shared_state(page_model(p)) : NULL;
+    if (why == NULL && (state == NULL || os64_page_state_version(state) != p->laid_state))
+        why = "restyle: the form state";
+    if (why != NULL) {
+        os64_strcopy(restyle.why, sizeof(restyle.why), why);
         return restyle;
-    os64_page_state_t *state = os64_page_shared_state(page_model(p));
-    if (state == NULL || os64_page_state_version(state) != p->laid_state)
-        return restyle;
-    return flow_pending(p->tree, page_doc(p), p->cascade);
+    }
+    flow_pending_t pending = flow_pending(p->tree, page_doc(p), p->cascade);
+    if (pending.lost)
+        s_pending_lost++;
+    return pending;
 }
 
 static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, int32_t height, uint32_t zoom)
@@ -4035,6 +4052,8 @@ static void cost_reset(void)
     // so no page's first reading carries the last one's elements.
     counted_at_reset(&s_not_covered);
     counted_at_reset(&s_script_changes);
+    counted_at_reset(&s_forced);
+    s_pending_lost = 0;
 }
 
 // Pointer hit testing follows published geometry, not every drawing operation.
@@ -9349,6 +9368,7 @@ static void diag_paint_reading(Page *p, uint32_t n)
         const struct { CountedAt *t; const char *key; } w0[] = {
             {&s_not_covered, "not covered reading %u"},
             {&s_script_changes, "whole views by a script's change reading %u"},
+            {&s_forced, "forced layouts by what was pending reading %u"},
         };
         for (size_t k = 0; k < sizeof(w0) / sizeof(w0[0]); k++) {
             if (w0[k].t->nrows > 0 || w0[k].t->others > 0) {
@@ -9359,6 +9379,13 @@ static void diag_paint_reading(Page *p, uint32_t n)
             }
             counted_at_reset(w0[k].t);
         }
+        if (s_pending_lost > 0) {
+            char lost[64], lkey[48];
+            os64_snprintf(lost, sizeof(lost), "%lu", (unsigned long)s_pending_lost);
+            os64_snprintf(lkey, sizeof(lkey), "pending reader lost the log reading %u", (unsigned)n);
+            yonder_diag_reading_fact(p->diag, lkey, lost);
+        }
+        s_pending_lost = 0;
     }
     os64_free(t.s);
     os64_free(u.s);
@@ -13764,11 +13791,20 @@ static bool measured_for(const os64_html_document_t *doc, int32_t width, int32_t
 // fonts.
 static bool script_current(int32_t width, int32_t height)
 {
+    // Under the profile, a layout this forces is noted by what was pending
+    // before it (forced_note).
+    bool noting = s_layout_profile && layout_profile_diag(&g.page) != NULL;
+    flow_pending_t pending = noting ? shown_pending() : (flow_pending_t){.verdict = FLOW_PENDING_RESTYLE};
+    uint64_t before = geometry_layout_total;
     bool ready = script_rebuild();
     if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
                   g.page.laid_height != height || g.page.laid_zoom != g.zoom ||
                   g.page.sheets_changed || g.pictures_moved || s_web.moved))
         ready = relayout(true);
+    if (noting && geometry_layout_total != before)
+        counted_at(&s_forced, pending.verdict == FLOW_PENDING_NONE ? "nothing pending"
+                              : pending.why[0] != '\0' ? pending.why : "restyle",
+                   pending.at, "");
     return ready;
 }
 
@@ -13870,7 +13906,7 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
         // the next asker that needs styles.
         os64_dom_geometry_need_t need = out->need;
         flow_pending_t pending = need != OS64_DOM_NEED_ALL || s_layout_profile
-                                     ? shown_pending() : (flow_pending_t){FLOW_PENDING_RESTYLE, true};
+                                     ? shown_pending() : (flow_pending_t){.verdict = FLOW_PENDING_RESTYLE, .transforms = true};
         bool kept = ready && pending.verdict != FLOW_PENDING_RESTYLE &&
                     (need == OS64_DOM_NEED_BOXES || (need == OS64_DOM_NEED_REACH && !pending.transforms));
         if (kept) {

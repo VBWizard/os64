@@ -714,11 +714,24 @@ static void log_drop(HDoc *d)
     log_refs(d, &c->entry, false);
     h_free(d, c);
 }
+/* A reader whose version is below the floor is LOST: its next read answers
+ * -1 whatever the log holds, so it holds nothing back. The entries are kept
+ * for the readers that are not lost, and none are kept for none. */
+static bool log_reader_lost(const HDoc *d, const os64_html_reader_t *r)
+{
+    return r->version < d->log_floor;
+}
+static bool log_any_reader(const HDoc *d)
+{
+    for (const os64_html_reader_t *r = d->readers; r; r = r->next)
+        if (!log_reader_lost(d, r)) return true;
+    return false;
+}
 static void log_prune(HDoc *d)
 {
     uint64_t oldest = d->version;
     for (os64_html_reader_t *r = d->readers; r; r = r->next)
-        if (r->version < oldest) oldest = r->version;
+        if (!log_reader_lost(d, r) && r->version < oldest) oldest = r->version;
     while (d->log_head && d->log_head->entry.version <= oldest) log_drop(d);
 }
 static size_t log_limit(const HDoc *d)
@@ -794,7 +807,12 @@ static char *log_string(char **at, const char *s)
 /* MERGING. An attribute set again, or a text replaced again, says nothing a
  * reader of invalidations needs the first entry for: the entry already in
  * the log for the same target (and, for an attribute, the same name) is
- * taken out, and the new one goes to the tail with the new version. A
+ * taken out, and the new one goes to the tail with the new version. It is
+ * sound because an entry carries no value (the log keeps no old value or
+ * text), so no reader of the log can see an intermediate one: the newest
+ * entry says everything the earlier one did. What must hear every change
+ * in order (mutation records) hears it from the synchronous listener
+ * (os64_html_observe), which merging never touches. A
  * reader that had read the old entry reads the same change once more; a
  * reader behind it reads one entry where there were two. The versions stay
  * in order, which is what os64_html_changes walks by. An entry at or before
@@ -910,6 +928,12 @@ static void log_merge(HDoc *d, const os64_html_change_t *c)
 static void log_change(HDoc *d, const os64_html_change_t *c)
 {
     if (!d->readers) return;
+    // Only lost readers: the change is kept for nobody, and the floor rises
+    // past it, so they stay lost and a reader made later starts after it.
+    if (!log_any_reader(d)) {
+        log_lost(d);
+        return;
+    }
     log_prune(d);
     log_merge(d, c);
     size_t cap = log_limit(d), bytes = sizeof(HChange);

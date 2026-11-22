@@ -92,6 +92,25 @@ static void t_change_log_merge(void)
         os64_html_set_attr(d,a,"class",value,(size_t)n);
     }
     check(os64_html_changes(r,&entries)==3,"merge: interleaved writes merge per element and attribute");
+    /* A hundred names on one element, each written twice: the index's
+     * probe chains certainly share slots at this load, so only the match's
+     * own comparison of the name (log_same) keeps two attributes apart. */
+    for(int round=0;round<2;round++)
+        for(int i=0;i<100;i++){
+            char name[16];
+            snprintf(name,sizeof(name),"data-n%d",i);
+            os64_html_set_attr(d,a,name,round?"y":"x",1);
+        }
+    {
+        int64_t n=os64_html_changes(r,&entries);
+        bool names[100]={false}, distinct=true;
+        for(const os64_html_change_entry_t *e=entries;e;e=e->next){
+            int k=-1;
+            if(e->attr_name && sscanf(e->attr_name,"data-n%d",&k)==1 && k>=0 && k<100 && !names[k]) names[k]=true;
+            else distinct=false;
+        }
+        check(n==100 && distinct,"merge: a hundred attributes of one element, written twice, hold one entry each");
+    }
     os64_html_set_text(d,a->first_child,"one",3);
     os64_html_set_text(d,a->first_child,"two",3);
     check(os64_html_changes(r,&entries)==1 && entries->kind==OS64_HTML_CHANGE_TEXT,"merge: a text replaced twice holds one entry");
@@ -104,9 +123,9 @@ static void t_change_log_merge(void)
           entries->next->kind==OS64_HTML_CHANGE_CHILDREN && entries->next->next->kind==OS64_HTML_CHANGE_ATTR,
           "merge: an entry before a CHILDREN entry keeps its place");
     // The early reader has read none of it: one entry for each target and
-    // attribute (style on a and c, class on a, the text, title before and
-    // after the child, the child).
-    check(os64_html_changes(early,&entries)==7,"merge: a reader behind reads one entry where there were several");
+    // attribute (style on a and c, class on a, the hundred names on a, the
+    // text, title before and after the child, the child).
+    check(os64_html_changes(early,&entries)==107,"merge: a reader behind reads one entry where there were several");
     os64_html_set_attr(d,a,"title","z",1);
     check(os64_html_changes(early,&entries)==1 && entries->target==a && !strcmp(entries->attr_name,"title"),
           "merge: a change read once is read again once merged");
@@ -136,6 +155,50 @@ static void t_change_log_merge(void)
     os64_html_reader_free(r);
     os64_html_document_free(d);
     check(live==start_live,"merge: at scale, nothing retained");
+}
+
+/* A lost reader holds nothing back (dom.c, log_reader_lost): with no
+ * other reader, the changes after its loss keep no entry, and it still
+ * reads -1 once, then follows from where it is. */
+static void t_change_log_lost_reader(void)
+{
+    size_t start_live=live;
+    os64_html_document_t *d=parse("<body><div id=a></div>");
+    HNode *a=id_in(d,"a");
+    os64_html_reader_t *r=os64_html_reader_new(d,os64_html_version(d));
+    const os64_html_change_entry_t *entries=NULL;
+    os64_html_changes_limit(d,0);
+    check(r && !os64_html_set_attr(d,a,"x","a",1),"lost reader: lost");
+    os64_html_changes_limit(d,65536);
+    check(!os64_html_set_attr(d,a,"x","b",1) && !os64_html_set_attr(d,a,"y","c",1) &&
+          os64_html_changes_bytes(d)==0,"lost reader: holds nothing back");
+    check(os64_html_changes(r,&entries)==-1 && !entries,"lost reader: still reads its loss");
+    check(!os64_html_set_attr(d,a,"x","d",1) && os64_html_changes(r,&entries)==1 &&
+          entries && !strcmp(entries->attr_name,"x"),"lost reader: then follows from where it is");
+    /* A reader made while only a lost one is registered starts after what
+     * was not kept, and reads only what follows. */
+    os64_html_changes_limit(d,0);
+    check(!os64_html_set_attr(d,a,"x","e",1),"lost reader: lost again");
+    os64_html_changes_limit(d,65536);
+    check(!os64_html_set_attr(d,a,"y","f",1),"lost reader: a change kept for nobody");
+    os64_html_reader_t *late=os64_html_reader_new(d,os64_html_version(d));
+    check(late && !os64_html_set_attr(d,a,"z","g",1) && os64_html_changes(late,&entries)==1 &&
+          entries && !strcmp(entries->attr_name,"z"),"lost reader: a reader made after reads what follows");
+    /* Beside a reader that is not lost, a lost one holds back nothing the
+     * other has read. */
+    os64_html_changes_limit(d,0);
+    check(!os64_html_set_attr(d,a,"x","h",1),"lost reader: lost once more");
+    os64_html_changes_limit(d,65536);
+    (void)os64_html_changes(late,&entries);
+    // The log is pruned when it is next read: by then the reader that is
+    // not lost has passed every entry, and the lost one holds none back.
+    check(!os64_html_set_attr(d,a,"y","i",1) && os64_html_changes(late,&entries)==1 &&
+          os64_html_changes(late,&entries)==0 && os64_html_changes_bytes(d)==0,
+          "lost reader: beside a reader that read, nothing is held");
+    os64_html_reader_free(late);
+    os64_html_reader_free(r);
+    os64_html_document_free(d);
+    check(live==start_live,"lost reader: nothing retained");
 }
 
 static void t_change_log_loss(void)

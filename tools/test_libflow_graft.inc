@@ -617,8 +617,11 @@ static void pending_cases(void)
            pending_after(page,"t","style","transform:initial;color:red",NULL)==FLOW_PENDING_RESTYLE &&
            pending_after(page,"t","style","transform:unset;color:red",NULL)==FLOW_PENDING_RESTYLE &&
            pending_after(page,"t","style","transform:inherit;color:red",NULL)==FLOW_PENDING_RESTYLE,NULL);
-    expect("pending: a CSS-wide keyword on a plain longhand is PAINT",
-           pending_after(page,"n","style","color:inherit",NULL)==FLOW_PENDING_PAINT,NULL);
+    expect("pending: a CSS-wide keyword on a plain longhand is RESTYLE too (its value comes from elsewhere)",
+           pending_after(page,"n","style","color:inherit",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"n","style","color:initial",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"n","style","color:unset",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"n","style","color:revert",NULL)==FLOW_PENDING_RESTYLE,NULL);
     expect("pending: a transform's origin is PAINT, and says transforms (it moves the reach)",
            pending_after(page,"t","style","transform:translateX(5px);color:red;transform-origin:0 0",&tf)==FLOW_PENDING_PAINT && tf,NULL);
     expect("pending: a transform on a plain inline is PAINT (no containing block can come or go)",
@@ -660,6 +663,29 @@ static void pending_cases(void)
     os64_html_set_attr(p.doc,graft_node(&p,"t"),"style",again,strlen(again));
     expect("pending: and a write after it is judged from there, a NONE beside it leaving it PAINT",
            flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_PAINT,NULL);
+    {
+        flow_pending_t said=flow_pending(t,p.doc,p.cascade);
+        expect("pending: PAINT says it was a style write, and where",
+               !strcmp(said.why,"paint: a style write") && said.at[0]!='\0',NULL);
+    }
+    /* The log lost: everything is owed, never nothing pending, and it stays
+     * so until the tree is made current again, whatever is written after. */
+    graft_update(&p);
+    kept=restyle_keep(&p,t);
+    expect("pending: current again before the loss",
+           kept.kind!=FLOW_RESTYLE_DECLINED && flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_NONE,NULL);
+    os64_html_changes_limit(p.doc,0);
+    os64_html_set_attr(p.doc,n,"style","color:blue",10);
+    os64_html_changes_limit(p.doc,65536);
+    {
+        flow_pending_t lost=flow_pending(t,p.doc,p.cascade);
+        expect("pending: a lost log is RESTYLE, and says so",
+               lost.verdict==FLOW_PENDING_RESTYLE && lost.lost && !strcmp(lost.why,"restyle: the log was lost"),NULL);
+        os64_html_set_attr(p.doc,n,"style","color:green",11);
+        lost=flow_pending(t,p.doc,p.cascade);
+        expect("pending: and stays RESTYLE whatever is written after",
+               lost.verdict==FLOW_PENDING_RESTYLE && !lost.lost,NULL);
+    }
     os64_html_set_text(p.doc,n->first_child,"x",1);
     expect("pending: a text change is RESTYLE",flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE,NULL);
     os64_html_set_attr(p.doc,n,"style","color:blue",10);

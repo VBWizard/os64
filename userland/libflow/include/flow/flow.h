@@ -1485,7 +1485,8 @@ bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_h
  * tree was styled from changed (inline styles may have been written back to
  * what the cascade parsed), and RESTYLE anything else, or that it cannot be
  * said: `cascade` must be the
- * page's, at the version the tree is current at. The verdict only rises
+ * page's, at the version the tree is current at. A change log the tree's
+ * reader found lost is RESTYLE: everything is owed. The verdict only rises
  * until the tree is made current again. A read answered from the tree is a
  * style change event that did not happen, which CSS transitions would see
  * (pending.inc says what they will owe). */
@@ -1494,9 +1495,18 @@ typedef enum {
     FLOW_PENDING_PAINT,
     FLOW_PENDING_RESTYLE
 } flow_pending_verdict_t;
+/* `why` says why the verdict is what it is, for the record: the class and
+ * what wrote it ("paint: a style write", "restyle: attribute class",
+ * "structural: children", ...) at the element `at` (tag#id.class), or the
+ * condition that made it RESTYLE unasked ("restyle: the log was lost",
+ * "restyle: no reader", ...); empty for NONE. `lost` says this call found
+ * the change log lost, which leaves everything owed until the tree is made
+ * current again. */
 typedef struct {
     flow_pending_verdict_t verdict;
     bool transforms;
+    bool lost;
+    char why[48], at[80];
 } flow_pending_t;
 flow_pending_t flow_pending(flow_tree_t *tree, const os64_html_document_t *doc, const struct garb_cascade *cascade);
 /* How a pending write of libgarb's longhand `prop` (a garb_prop_t) is judged:

@@ -28,6 +28,7 @@
 
 #include "internal.h"
 #include "garb/cascade.h"
+#include "os64/fmt.h"
 
 // The public kinds of the block-level boxes are pass 2's, in pass 2's order.
 _Static_assert(FLOW_BOX_BLOCK == (int)FB_BLOCK && FLOW_BOX_REPLACED == (int)FB_REPLACED &&
@@ -134,6 +135,9 @@ struct flow_tree {
     uint64_t pending_version;
     uint8_t pending_verdict;
     bool pending_transforms;
+    // Why the verdict is what it is, and the element whose change made it
+    // so (flow_pending_t's `why` and `at`), kept with it.
+    char pending_why[48], pending_at[80];
 };
 #define F_RESTYLE_ROOM ((size_t)1 << 20)
 // The tree made current at the document's version now (pending.inc).

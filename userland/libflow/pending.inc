@@ -108,6 +108,25 @@ static void pending_open(flow_tree_t *tree)
     tree->pending_reader = os64_html_reader_new((os64_html_document_t *)tree->doc, tree->pending_version);
     tree->pending_verdict = tree->pending_reader != NULL ? FLOW_PENDING_NONE : FLOW_PENDING_RESTYLE;
     tree->pending_transforms = false;
+    os64_strcopy(tree->pending_why, sizeof(tree->pending_why), tree->pending_reader != NULL ? "" : "restyle: no reader");
+    tree->pending_at[0] = '\0';
+}
+
+// An element named for the record: its tag, its id and its first class.
+static void pending_named(char *out, size_t cap, const os64_html_node_t *n)
+{
+    out[0] = '\0';
+    if (n == NULL || n->kind != OS64_HTML_ELEMENT)
+        return;
+    const os64_html_attr_t *id = os64_html_attr(n, "id"), *cls = os64_html_attr(n, "class");
+    char first[32] = "";
+    for (size_t i = 0; cls != NULL && cls->value != NULL && cls->value[i] != '\0' && cls->value[i] != ' ' &&
+                       i + 1 < sizeof(first); i++) {
+        first[i] = cls->value[i];
+        first[i + 1] = '\0';
+    }
+    os64_snprintf(out, cap, "%s%s%s%s%s", n->name != NULL ? n->name : "?", id != NULL && id->value ? "#" : "",
+                  id != NULL && id->value ? id->value : "", first[0] ? "." : "", first);
 }
 
 // One element's inline style, as it is now against the cascade's parse of
@@ -133,13 +152,14 @@ static flow_pending_verdict_t pending_judge(flow_tree_t *tree, const garb_cascad
         // known only once substituted: neither can be judged here.
         if (kind == 0 || !c->declared || c->var)
             return FLOW_PENDING_RESTYLE;
+        // A CSS-wide keyword's value comes from elsewhere (the initial
+        // value, the parent's, the sheets'), which the record does not say,
+        // so it is judged by the restyle whatever the longhand's class.
+        if (os64_streq(c->keyword, "initial") || os64_streq(c->keyword, "inherit") ||
+            os64_streq(c->keyword, "unset") || os64_streq(c->keyword, "revert") ||
+            os64_streq(c->keyword, "revert-layer"))
+            return FLOW_PENDING_RESTYLE;
         bool none = os64_streq(c->keyword, "none");
-        // A CSS-wide keyword's value is the initial one, the parent's or the
-        // sheets', none of which the record says: its side of `none` is not
-        // known (any value of a PLAIN longhand is still PLAIN).
-        bool wide = os64_streq(c->keyword, "initial") || os64_streq(c->keyword, "inherit") ||
-                    os64_streq(c->keyword, "unset") || os64_streq(c->keyword, "revert") ||
-                    os64_streq(c->keyword, "revert-layer");
         switch (kind) {
         case PENDING_TRANSFORM:
             // Drawn is a containing block for absolute and fixed boxes, so
@@ -151,14 +171,13 @@ static flow_pending_verdict_t pending_judge(flow_tree_t *tree, const garb_cascad
             // judged only where nothing was transformed, since another
             // longhand of the family might keep it so.
             tree->pending_transforms = true;
-            if (wide || (none ? f_transformed(s) : f_transformed(s) != (s->display != FLOW_DISPLAY_INLINE)))
+            if (none ? f_transformed(s) : f_transformed(s) != (s->display != FLOW_DISPLAY_INLINE))
                 return FLOW_PENDING_RESTYLE;
             break;
         case PENDING_FILTER:
             // A plain inline's filter is granted to an atom and not to a
             // box of lines, which a record cannot tell apart.
-            if (wide || s->display == FLOW_DISPLAY_INLINE ||
-                (none ? f_filtered(s, false) : !f_filtered(s, false)))
+            if (s->display == FLOW_DISPLAY_INLINE || (none ? f_filtered(s, false) : !f_filtered(s, false)))
                 return FLOW_PENDING_RESTYLE;
             break;
         case PENDING_ORIGIN:
@@ -178,30 +197,63 @@ static flow_pending_verdict_t pending_judge(flow_tree_t *tree, const garb_cascad
 
 flow_pending_t flow_pending(flow_tree_t *tree, const os64_html_document_t *doc, const struct garb_cascade *cascade)
 {
-    flow_pending_t out = {FLOW_PENDING_RESTYLE, true};
+    flow_pending_t out = {FLOW_PENDING_RESTYLE, true, false, "", ""};
     // The cascade's parse must be the one the tree was styled from, and
     // complete; a selector that reads the `style` attribute makes any
     // inline write a change to what matches.
-    if (tree == NULL || doc == NULL || tree->doc != doc || tree->incomplete || tree->styles == NULL ||
-        tree->pending_reader == NULL || cascade == NULL ||
-        garb_cascade_version(cascade) != tree->pending_version || !garb_cascade_tracks_changes(cascade) ||
-        garb_cascade_reads_style_attribute(cascade))
+    const char *unasked = tree == NULL || doc == NULL || tree->doc != doc ? "restyle: no tree"
+                          : tree->incomplete || tree->styles == NULL       ? "restyle: an incomplete tree"
+                          : tree->pending_reader == NULL                   ? "restyle: no reader"
+                          : cascade == NULL || garb_cascade_version(cascade) != tree->pending_version
+                              ? "restyle: the cascade moved"
+                          : !garb_cascade_tracks_changes(cascade)          ? "restyle: no changes tracked"
+                          : garb_cascade_reads_style_attribute(cascade)   ? "restyle: a selector reads the style attribute"
+                                                                           : NULL;
+    if (unasked != NULL) {
+        os64_strcopy(out.why, sizeof(out.why), unasked);
         return out;
+    }
     if (tree->pending_verdict != FLOW_PENDING_RESTYLE) {
         const os64_html_change_entry_t *e = NULL;
         int64_t n = os64_html_changes(tree->pending_reader, &e);
-        if (n < 0)
+        // LOST means everything is owed: RESTYLE until the tree is made
+        // current again (pending_open), never nothing pending.
+        if (n < 0) {
             tree->pending_verdict = FLOW_PENDING_RESTYLE;
+            os64_strcopy(tree->pending_why, sizeof(tree->pending_why), "restyle: the log was lost");
+            tree->pending_at[0] = '\0';
+            out.lost = true;
+        }
         for (; n > 0 && e != NULL && tree->pending_verdict != FLOW_PENDING_RESTYLE; e = e->next) {
             flow_pending_verdict_t v = FLOW_PENDING_RESTYLE;
-            if (e->kind == OS64_HTML_CHANGE_ATTR && e->attr_ns == NULL && e->attr_name != NULL &&
-                os64_streq(e->attr_name, "style") && e->target != NULL && e->target->kind == OS64_HTML_ELEMENT)
+            bool style = e->kind == OS64_HTML_CHANGE_ATTR && e->attr_ns == NULL && e->attr_name != NULL &&
+                         os64_streq(e->attr_name, "style") && e->target != NULL &&
+                         e->target->kind == OS64_HTML_ELEMENT;
+            if (style)
                 v = pending_judge(tree, cascade, e->target);
-            if (v > tree->pending_verdict)
+            if (v > tree->pending_verdict) {
                 tree->pending_verdict = (uint8_t)v;
+                if (style)
+                    os64_strcopy(tree->pending_why, sizeof(tree->pending_why),
+                                 v == FLOW_PENDING_PAINT ? "paint: a style write" : "restyle: a style write");
+                else if (e->kind == OS64_HTML_CHANGE_ATTR)
+                    os64_snprintf(tree->pending_why, sizeof(tree->pending_why), "restyle: attribute %s",
+                                  e->attr_name != NULL ? e->attr_name : "?");
+                else
+                    os64_strcopy(tree->pending_why, sizeof(tree->pending_why),
+                                 e->kind == OS64_HTML_CHANGE_CHILDREN ? "structural: children"
+                                 : e->kind == OS64_HTML_CHANGE_TEXT   ? "structural: text"
+                                                                      : "structural: state");
+                const os64_html_node_t *at = e->target;
+                while (at != NULL && at->kind != OS64_HTML_ELEMENT)
+                    at = at->parent;
+                pending_named(tree->pending_at, sizeof(tree->pending_at), at);
+            }
         }
     }
     out.verdict = (flow_pending_verdict_t)tree->pending_verdict;
     out.transforms = tree->pending_transforms;
+    os64_strcopy(out.why, sizeof(out.why), tree->pending_why);
+    os64_strcopy(out.at, sizeof(out.at), tree->pending_at);
     return out;
 }
