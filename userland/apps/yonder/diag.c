@@ -13,9 +13,10 @@ typedef struct {
     uint8_t room;           // a fact's: which room it took its place in (FactRoom)
 } Line;
 // The rooms a fact takes its place in, each with its own quota: the
-// ordinary facts', the head's (yonder_diag_head_fact) and the readings'
-// (yonder_diag_reading_fact).
-typedef enum { ROOM_FACTS, ROOM_HEAD, ROOM_READINGS, ROOMS } FactRoom;
+// ordinary facts', the head's (yonder_diag_head_fact), the readings'
+// (yonder_diag_reading_fact) and the load timeline's
+// (yonder_diag_timeline_fact).
+typedef enum { ROOM_FACTS, ROOM_HEAD, ROOM_READINGS, ROOM_TIMELINE, ROOMS } FactRoom;
 
 // The lines that met no room are counted as distinct lines, as the file
 // says them: each is kept by its key (`gone`) so a line asked for again —
@@ -553,13 +554,13 @@ void yonder_diag_failed(yonder_diag_t *d, const char *what, const char *message)
 }
 
 // A plain line set. A new one takes a place in its own room: the head's
-// YONDER_DIAG_HEAD_FACTS, the readings' YONDER_DIAG_READING_FACTS, or the
-// ordinary facts' YONDER_DIAG_FACTS_MAX, counted apart so none eats
-// another's.
+// YONDER_DIAG_HEAD_FACTS, the readings' YONDER_DIAG_READING_FACTS, the
+// timeline's YONDER_DIAG_TIMELINE_FACTS, or the ordinary facts'
+// YONDER_DIAG_FACTS_MAX, counted apart so none eats another's.
 static void fact_set(yonder_diag_t *d, const char *key, const char *value, FactRoom where)
 {
     static const uint32_t kQuota[ROOMS] = {YONDER_DIAG_FACTS_MAX, YONDER_DIAG_HEAD_FACTS,
-                                           YONDER_DIAG_READING_FACTS};
+                                           YONDER_DIAG_READING_FACTS, YONDER_DIAG_TIMELINE_FACTS};
     if (d == NULL)
         return;
     Table *t = &d->facts;
@@ -602,6 +603,11 @@ void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value)
 void yonder_diag_reading_fact(yonder_diag_t *d, const char *key, const char *value)
 {
     fact_set(d, key, value, ROOM_READINGS);
+}
+
+void yonder_diag_timeline_fact(yonder_diag_t *d, const char *key, const char *value)
+{
+    fact_set(d, key, value, ROOM_TIMELINE);
 }
 
 void yonder_diag_forget(yonder_diag_t *d, const char *prefix)

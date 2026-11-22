@@ -53,6 +53,7 @@
 #include "paint.h"
 #include "player.h"
 #include "keep.h"
+#include "load_timeline.h"
 #include "picture.h"
 #include "svg.h"
 #include "webfont.h"
@@ -2035,6 +2036,74 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
     yonder_diag_fact(diag, "layout kept, declined at", line);
 }
 
+// THE LOAD'S TIMELINE (load_timeline.h): the latest navigation's first
+// minutes, step by step, kept only while yonder.conf names a diagnostics
+// directory, and written to that navigation's record alone: the one begun
+// at s_lt.began_us (lt_ours). While it runs, its hooks read the clock;
+// once it has stopped, each costs the test of s_lt.on. A fresh cascade
+// built while it runs is handed its clock (lt_clock), which has libgarb
+// keep its measure (the build's parts, a broad refusal's trigger), and
+// keeps it for that cascade's life: each of its updates then counts its
+// changes' marks, a few counters a change, whether or not anyone reads
+// them.
+static yonder_lt_t s_lt;
+
+// WHO ASKED for the layouts made between an lt_why_begin and its
+// lt_why_end (page_lay_out tells the timeline): the outermost asker
+// stands, so a rebuild a script's read asks for is the read's. Set only
+// while the timeline runs; the end puts back what the begin found.
+static yonder_lt_why_t s_lt_why;
+
+static uint64_t lt_clock(void)
+{
+    return (uint64_t)os64_micros();
+}
+
+// An update the cascade refused: when libgarb refused it as broad, what
+// triggered it goes to the timeline (garb_cascade_broad_trigger).
+static void lt_cascade_refused(const garb_cascade_t *c)
+{
+    garb_broad_trigger_t b;
+    if (!garb_cascade_broad_trigger(c, &b))
+        return;
+    static const char *const kKind[] = {"a change", "children", "an attribute", "text", "a state"};
+    const char *kind = b.kind > 0 && b.kind < (int32_t)(sizeof(kKind) / sizeof(kKind[0])) ? kKind[b.kind] : kKind[0];
+    char text[YONDER_LT_BROAD_TEXT];
+    size_t at = 0;
+    int k = os64_snprintf(text, sizeof(text), "%s%s%s of %s at depth %u marked %u of %u elements (", kind,
+                          b.attr[0] ? " " : "", b.attr, b.target, (unsigned)b.depth, (unsigned)b.marked,
+                          (unsigned)b.slots);
+    at = k > 0 && (size_t)k < sizeof(text) ? (size_t)k : sizeof(text) - 1;
+    const char *sep = "";
+    for (int m = 0; m < GARB_MARKS && at < sizeof(text); m++) {
+        if (b.by[m] == 0)
+            continue;
+        k = os64_snprintf(text + at, sizeof(text) - at, "%s%s %u", sep, garb_mark_name((garb_mark_t)m),
+                          (unsigned)b.by[m]);
+        at = k > 0 && (size_t)k < sizeof(text) - at ? at + (size_t)k : sizeof(text) - 1;
+        sep = ", ";
+    }
+    if (at < sizeof(text)) {
+        k = os64_snprintf(text + at, sizeof(text) - at, "); %u of the batch's %u changes had marked %u when refused",
+                          (unsigned)b.marked_changes, (unsigned)b.changes, (unsigned)b.dirty);
+        at = k > 0 && (size_t)k < sizeof(text) - at ? at + (size_t)k : sizeof(text) - 1;
+    }
+    if (b.restyled && at < sizeof(text))
+        os64_snprintf(text + at, sizeof(text) - at, ", restyling then passing the changed style of %s (depth %u) "
+                      "down to %u", b.restyled_from, (unsigned)b.restyled_depth, (unsigned)b.restyled_marked);
+    yonder_lt_broad(&s_lt, os64_micros(), b.marked, text);
+}
+
+// A fresh cascade libgarb timed by part: to the timeline, by who asked.
+static void lt_cascade_built(const garb_cascade_t *c)
+{
+    garb_build_cost_t k = garb_cascade_build_cost(c);
+    if (k.sheets == 0 && k.table == 0 && k.matching == 0)
+        return;
+    yonder_lt_build_t b = {k.sheets, k.table, k.matching, k.rules, k.elements};
+    yonder_lt_build(&s_lt, s_lt_why, &b);
+}
+
 // The reasons a layout's cascade is built fresh, by the profile's index:
 // yonder's own (none yet, no memory for the scopes, sheets changed, sheets
 // that no longer match), then libgarb's refusals in their order, by
@@ -2057,7 +2126,7 @@ static const char *const *cascade_reason_names(void)
 static void cascade_check(const Page *p, const garb_cascade_t *updated, const garb_sheet_in_t *in, int32_t n,
                           const PageScopes *ps, garb_env_t view)
 {
-    garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX};
+    garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX, NULL};
     garb_cascade_t *fresh = garb_cascade_scoped(in, n, ps->scopes, ps->nscopes, page_doc(p), view,
                                                 s_page_memory.cascade != 0 ? &limits : NULL);
     if (fresh == NULL || garb_cascade_incomplete(fresh)) {
@@ -2143,13 +2212,28 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     int32_t why = updated ? -1 : cascade == NULL ? 0 : !scoped ? 1 : fresh_sheets ? 2 : !matches ? 3
                 : 3 + (int32_t)garb_cascade_update_refusal(cascade);
     if (!updated) {
+        // Only an update this layout asked for, refused as broad, has a
+        // trigger to tell.
+        if (s_lt.on && matches && garb_cascade_update_refusal(cascade) == GARB_UPDATE_BROAD)
+            lt_cascade_refused(cascade);
         measured_fallback(p);
         // The cascade's own state is held to its share of page_memory_mb;
         // what it reads of the sheets, and each style attribute's parse,
         // keep libgarb's ceilings (yonder_page_memory_split says why).
-        garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX};
+        // While the load's timeline runs it hands libgarb its clock, with
+        // the state's ceiling libgarb's own when page_memory_mb sets none:
+        // the limits it would have taken given none.
+        garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX,
+                                        NULL};
+        if (s_lt.on) {
+            limits.clock = lt_clock;
+            if (limits.state_bytes == 0)
+                limits.state_bytes = GARB_ARENA_MAX;
+        }
         cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view,
-                                               s_page_memory.cascade != 0 ? &limits : NULL) : NULL;
+                                               s_page_memory.cascade != 0 || s_lt.on ? &limits : NULL) : NULL;
+        if (s_lt.on && cascade != NULL)
+            lt_cascade_built(cascade);
     } else if (s_cascade_check != 0 && garb_cascade_updates(cascade) != prior_updates &&
                ++s_cascade_checked % s_cascade_check == 0) {
         // The check's own time is no part of this layout's: the profile's
@@ -3383,9 +3467,127 @@ static void diag_wire(yonder_diag_t *d)
     yonder_diag_fact(d, "wire cache", v);
 }
 
+// The load's timeline (s_lt): whose record it is, its steps, its marks.
+static bool lt_ours(const yonder_diag_t *d)
+{
+    return d != NULL && s_lt.began_us != 0 && yonder_diag_began(d) == s_lt.began_us;
+}
+
+// The window loop enters `step` now; past the timeline's last slice, the
+// step under way ends and the timeline stops.
+static void lt_step(yonder_lt_step_t step)
+{
+    if (!s_lt.on)
+        return;
+    int64_t now = os64_micros();
+    if (yonder_lt_running(&s_lt, now)) {
+        yonder_lt_step_begin(&s_lt, step, now);
+    } else {
+        yonder_lt_step_end(&s_lt, now);
+        yonder_lt_stop(&s_lt);
+    }
+}
+
+// A milestone of the navigation whose record `d` is, now.
+static void lt_mark(const yonder_diag_t *d, yonder_lt_mark_t mark)
+{
+    if (s_lt.on && lt_ours(d))
+        yonder_lt_mark(&s_lt, mark, os64_micros());
+}
+
+// A parser call of the stream's, begun at `from` (the timeline's clock),
+// to the timeline: `kind` and `bytes` what it was, how far into the page
+// the stream had taken, and the element whose text `parser` is still
+// adding to, if any (a `script`, a `style`). `parser` is NULL after a call
+// that consumed it (the finish), which leaves nothing to ask.
+static void lt_parse(const os64_html_parser_t *parser, const char *kind, size_t bytes, int64_t from)
+{
+    int64_t now = os64_micros();
+    const os64_html_node_t *open = parser != NULL ? os64_html_parser_open_text(parser) : NULL;
+    char text[YONDER_LT_PARSE_TEXT], fed[40] = "";
+    if (bytes != 0)
+        os64_snprintf(fed, sizeof(fed), " of %lu bytes", (unsigned long)bytes);
+    os64_snprintf(text, sizeof(text), "%s%s, %lu KiB into the page%s%s%s", kind, fed,
+                  (unsigned long)(g.stream.bytes / 1024), open != NULL ? ", inside a " : "",
+                  open != NULL && open->name != NULL ? open->name : "", open != NULL ? " still open" : "");
+    yonder_lt_parse(&s_lt, from, now > from ? (uint64_t)(now - from) : 0, text);
+}
+
+// `us` since `from` of `in`, inside the timeline's step under way.
+static void lt_inside(yonder_lt_in_t in, int64_t from)
+{
+    int64_t now = os64_micros();
+    yonder_lt_inside(&s_lt, in, now > from ? (uint64_t)(now - from) : 0);
+}
+
+static yonder_lt_why_t lt_why_begin(yonder_lt_why_t why)
+{
+    yonder_lt_why_t was = s_lt_why;
+    if (s_lt.on && was == YONDER_LT_WHY_OTHER)
+        s_lt_why = why;
+    return was;
+}
+
+static void lt_why_end(yonder_lt_why_t was)
+{
+    s_lt_why = was;
+}
+
+// The timeline's lines on `d`, written whole: the summary, the layouts by
+// who asked and where, each slice up to the last that holds anything, each
+// long step listed, each broad refusal kept, and each slow parser call kept.
+// Written from a snapshot with the step under way ended now (a record is
+// written in the middle of a step, the arrival's inside the stream's), the
+// timeline itself left as it is. Every write of a record comes here
+// (diag_write), so a navigation that never arrives keeps its timeline too.
+static void diag_timeline(yonder_diag_t *d)
+{
+    if (!lt_ours(d))
+        return;
+    static yonder_lt_t snap;
+    yonder_lt_snapshot(&s_lt, os64_micros(), &snap);
+    const yonder_lt_t *t = &snap;
+    char key[40], line[4096];
+    yonder_diag_forget(d, "timeline");
+    yonder_lt_summary(t, line, sizeof(line));
+    yonder_diag_timeline_fact(d, "timeline", line);
+    yonder_lt_layouts_line(t, line, sizeof(line));
+    yonder_diag_timeline_fact(d, "timeline layouts", line);
+    uint32_t used = yonder_lt_slices_used(t);
+    for (uint32_t i = 0; i < used; i++) {
+        os64_snprintf(key, sizeof(key), "timeline %lu-%lu s",
+                      (unsigned long)(i * YONDER_LT_SLICE_US / 1000000),
+                      (unsigned long)((i + 1) * YONDER_LT_SLICE_US / 1000000));
+        yonder_lt_slice_line(t, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
+    for (uint32_t i = 0; i < t->nlongs; i++) {
+        os64_snprintf(key, sizeof(key), "timeline longest %lu", (unsigned long)i + 1);
+        yonder_lt_long_line(t, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
+    for (uint32_t i = 0; i < t->broad_kept; i++) {
+        os64_snprintf(key, sizeof(key), "timeline broad %lu", (unsigned long)i + 1);
+        yonder_lt_broad_line(t, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
+    for (uint32_t i = 0; i < t->parse_kept; i++) {
+        os64_snprintf(key, sizeof(key), "timeline parse %lu", (unsigned long)i + 1);
+        yonder_lt_parse_line(t, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
+}
+_Static_assert(2 + YONDER_LT_SLICES + YONDER_LT_LONG_MAX + YONDER_LT_BROAD_MAX + YONDER_LT_PARSE_MAX <=
+               YONDER_DIAG_TIMELINE_FACTS,
+               "the timeline's lines fit its room in the record");
+
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
+    // A navigation measured from where its record begins, when there are
+    // page files to write it to.
+    if (d != NULL && s_diag.dir[0] != '\0')
+        yonder_lt_begin(&s_lt, yonder_diag_began(d));
     uint64_t marks[YONDER_DIAG_MARKS];
     wire_read(marks);
     yonder_diag_marks_set(d, marks);
@@ -3438,6 +3640,7 @@ static bool diag_write(yonder_diag_t *d)
 {
     if (d == NULL || s_diag.dir[0] == '\0')
         return false;
+    diag_timeline(d);
     // A record is of one window: a setting that is not what the claim
     // wrote makes it a record no replay can read the page again by. (The
     // view is compared once, at arrival, against the claim's: after it,
@@ -4096,6 +4299,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     yonder_scripts_ledger_layout(forcing, true);
     bool in_tick = s_cost.depth[PS_TICKS] != 0;
     uint64_t layout_began = cycles();
+    int64_t lt_began = s_lt.on ? os64_micros() : 0;
     cost_begin(PS_LAYOUTS);
     bool profiled = s_layout_profile && layout_profile_diag(p) && !s_one_open;
     int64_t began = profiled ? os64_micros() : -1;
@@ -4113,6 +4317,13 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
         if (s_one.cascade_us != 0 || s_one.attempts != 0) layout_profile_one(p, &s_one);
     }
     if (laid && p == &g.page) pointer_geometry_changed();
+    if (s_lt.on) {
+        // Its cascade, when the profile timed this layout as its own.
+        yonder_lt_cascade_t cascade = {s_one.cascade_us, s_one.cascade_why >= 0};
+        bool timed = profiled && (s_one.cascade_us != 0 || s_one.attempts != 0);
+        yonder_lt_layout(&s_lt, lt_began, (uint64_t)(os64_micros() - lt_began), s_lt_why,
+                         timed ? &cascade : NULL);
+    }
     cost_end(PS_LAYOUTS);
     if (in_tick && forcing == NULL)
         s_cost.layouts_in_ticks += cycles_since(layout_began);
@@ -4515,6 +4726,7 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);
+    lt_mark(p->diag, YONDER_LT_MARK_ARRIVED);
     diag_wire(p->diag);
     diag_navigation(p);
     os64_snprintf(v, sizeof(v), "%dx%d px in %lu ms", (int)p->laid_width, (int)p->laid_height,
@@ -5183,7 +5395,9 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     if (laid && fresh->model_version != built)
         sheets_restage(fresh);
     page_timeline(fresh);
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_ARRIVAL);
     laid = laid && lay_out_page(fresh, width, height);
+    lt_why_end(why_was);
     os64_ticks(&t1);
     if (!laid) {
         yonder_diag_failed(fresh->diag, "layout",
@@ -5395,7 +5609,10 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     }
     sheets_start(fresh);
     if (fresh->sheets_waiting == 0) {
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
         arrive_now(fresh, kind, crumb, fragment);
+        if (s_lt.on)
+            lt_inside(YONDER_LT_IN_ARRIVING, lt_from);
         return;
     }
     g.coming.active = true;
@@ -6776,7 +6993,10 @@ static void coming_show(void)
     bool has_fragment = g.coming.has_fragment;
     os64_strcopy(fragment, sizeof(fragment), g.coming.fragment);
     os64_memset(&g.coming, 0, sizeof(g.coming));
+    int64_t lt_from = s_lt.on ? os64_micros() : 0;
     arrive_now(&page, kind, &crumb, has_fragment ? fragment : NULL);
+    if (s_lt.on)
+        lt_inside(YONDER_LT_IN_ARRIVING, lt_from);
 }
 
 // The page waiting for its sheets is not wanted after all.
@@ -6844,7 +7064,9 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
         if (p->sheets_waiting == 0)
             coming_show();
     } else if (p == &g.page && p->sheets_changed) {
+        yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_SHEET);
         relayout(true);
+        lt_why_end(why_was);
     }
 }
 
@@ -9500,8 +9722,11 @@ static void pictures_settle(void)
                 due = yonder_now_ms() + (stale - since);
             }
         }
-        if (now_ok)
+        if (now_ok) {
+            yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_PICTURE);
             relayout(true);
+            lt_why_end(why_was);
+        }
     }
     // Pictures that arrived moving nothing are judged at the size they are
     // drawn now; a layout still owed runs the same walk when it comes.
@@ -10271,7 +10496,9 @@ static void tick_page_run(uint64_t now, bool frame)
                        "No room to move the page's animations between layouts; they stop here.");
             return;
         }
+        yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_MOTION);
         (void)lay_out_shown(true, LAID_FOR_TICK);
+        lt_why_end(why_was);
         return;
     }
     if (moved) {
@@ -10315,9 +10542,11 @@ static void motion_tick(void)
     if (!s_frames.open)
         return;
     uint64_t now = yonder_now_ms();
-    if (motion_next() <= now)
+    if (motion_next() <= now) {
+        yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_MOTION);
         (void)lay_out_shown(true, LAID_FOR_MOTION);
-    else if (tick_next() <= now)
+        lt_why_end(why_was);
+    } else if (tick_next() <= now)
         tick_page(animation_time_ms(), true);
 }
 
@@ -10441,6 +10670,9 @@ static void backdrop_damage(void)
 // again here. Each part is first widened to the backdrops it reaches.
 static void glass_paint(void)
 {
+    // The load's timeline times the whole of it as drawing: the backdrops'
+    // marks, the kept drawings, the render and the publish.
+    int64_t drawn_from = s_lt.on ? os64_micros() : 0;
     backdrop_damage();
     os64_gui_rect_t damage[OS64_UI_DAMAGE_MAX];
     WholeBy by = s_whole_by;
@@ -10458,14 +10690,19 @@ static void glass_paint(void)
     cost_end(PS_RENDER);
     if (count == 0) {
         os64_memset(s_cost.now, 0, sizeof(s_cost.now));
+        if (s_lt.on)
+            yonder_lt_inside(&s_lt, YONDER_LT_IN_DRAWING, (uint64_t)(os64_micros() - drawn_from));
         return;
     }
     cost_begin(PS_PUBLISH);
     for (uint32_t i = 0; i < count; i++)
         os64_draw_publish(g.ui.ctx, &damage[i]);
     cost_end(PS_PUBLISH);
+    lt_mark(g.page.diag, YONDER_LT_MARK_PAINT);
     paint_counted(damage, count, by, reach);
     cost_fold(PS_RENDER, PS_PUBLISH);
+    if (s_lt.on)
+        yonder_lt_inside(&s_lt, YONDER_LT_IN_DRAWING, (uint64_t)(os64_micros() - drawn_from));
 }
 
 // What the window loop does before each paint: a whole view's paint shows
@@ -11749,6 +11986,7 @@ static void videos_tick(void)
             v->sizing = 0;          // the picture at the size told
         v->frame = fr;
         s_cost.video_pictures++;
+        lt_mark(g.page.diag, YONDER_LT_MARK_PICTURE);
         part = video_frame_mark(v, part);
         s_video_marking = true;
         mark_part(part);
@@ -12151,8 +12389,11 @@ static bool script_rebuild(void)
         sheets_start(&next);
         // The shown Page holds the old faces; an incomplete staged layout
         // can reclaim its tree and cascade before retrying in that room.
-        if (!lay_out_page_reclaim(&next, g.view.bounds.w > 0 ? g.view.bounds.w : 1,
-                                 g.view.bounds.h > 0 ? g.view.bounds.h : 1, p)) {
+        yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_REBUILD);
+        bool rebuilt = lay_out_page_reclaim(&next, g.view.bounds.w > 0 ? g.view.bounds.w : 1,
+                                            g.view.bounds.h > 0 ? g.view.bounds.h : 1, p);
+        lt_why_end(why_was);
+        if (!rebuilt) {
             sheets_leave(&next);
             tree_free(next.tree);
             garb_cascade_free(next.cascade);
@@ -12628,14 +12869,18 @@ static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, u
 // begun task that finds nothing to run never reaches task_said, and the
 // next task_begin starts it again.
 static uint64_t s_task_began;
+// The same moment on the clock, for the load's timeline while it runs
+// (0 while it does not).
+static int64_t s_lt_task_began;
 
 // A task is about to run: the layouts it forces are counted from zero
-// (DOM.md § Geometry), and the audit's clock starts, and the paint counts'.
-// Every task kind begins here and ends at task_said.
+// (DOM.md § Geometry), and the audit's clock starts, and the paint counts',
+// and the timeline's. Every task kind begins here and ends at task_said.
 static int64_t task_begin(yonder_scripts_t *host)
 {
     (void)yonder_scripts_geometry_stats(host, true);
     s_task_began = cycles();
+    s_lt_task_began = s_lt.on ? os64_micros() : 0;
     return s_script_audit ? os64_micros() : 0;
 }
 
@@ -12657,7 +12902,8 @@ static void task_cost(const char *what)
 // cost, then an error by its script's name, and a runtime its task retired
 // by the sentence that says the page goes on without script. The audit
 // logs every task, what it cost, what it forced and what it wrote: a page
-// that writes its whole body shows as one.
+// that writes its whole body shows as one. The load's timeline, while it
+// runs, hears of each task with its name, its time and what it forced.
 static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
@@ -12665,6 +12911,13 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     task_cost(what);
 
     os64_dom_geometry_stats_t forced = yonder_scripts_geometry_stats(host, false);
+    if (s_lt.on) {
+        char named[YONDER_LT_TASK_MAX];
+        os64_snprintf(named, sizeof(named), "%s%s%s", what, out->source_name[0] ? " " : "", out->source_name);
+        int64_t now = os64_micros();
+        uint64_t us = s_lt_task_began != 0 && now > s_lt_task_began ? (uint64_t)(now - s_lt_task_began) : 0;
+        yonder_lt_task(&s_lt, now, named, us, (uint32_t)forced.layouts, forced.elapsed_us);
+    }
     if (spent > s_cost.task_longest) {
         s_cost.task_longest = spent;
         s_cost.task_longest_layouts = forced.layouts;
@@ -13924,6 +14177,7 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
 {
     const os64_html_document_t *doc = opaque;
     if (!os64_html_owns_node(doc, node)) return false;
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_READ);
     int64_t began = os64_micros();
     uint64_t before = geometry_layout_total;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
@@ -13962,6 +14216,7 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
     int64_t ended = os64_micros();
     out->layouts = geometry_layout_total - before;
     out->elapsed_us = out->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    lt_why_end(why_was);
     return ready && ended >= began;
 }
 
@@ -13989,6 +14244,7 @@ static size_t script_hit(void *opaque, double x, double y, const os64_html_node_
                          os64_dom_geometry_stats_t *cost)
 {
     const os64_html_document_t *doc = opaque;
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_READ);
     int64_t began = os64_micros();
     uint64_t before = geometry_layout_total;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
@@ -14030,6 +14286,7 @@ static size_t script_hit(void *opaque, double x, double y, const os64_html_node_
     int64_t ended = os64_micros();
     cost->layouts = geometry_layout_total - before;
     cost->elapsed_us = cost->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    lt_why_end(why_was);
     return count;
 }
 
@@ -14041,6 +14298,7 @@ static size_t script_text_rects(void *opaque, const os64_html_node_t *node, size
                                 double *out, size_t cap, os64_dom_geometry_stats_t *cost)
 {
     const os64_html_document_t *doc = opaque;
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_READ);
     int64_t began = os64_micros();
     uint64_t before = geometry_layout_total;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
@@ -14062,6 +14320,7 @@ static size_t script_text_rects(void *opaque, const os64_html_node_t *node, size
     int64_t ended = os64_micros();
     cost->layouts = geometry_layout_total - before;
     cost->elapsed_us = cost->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    lt_why_end(why_was);
     return count;
 }
 
@@ -14897,6 +15156,7 @@ static void view_read(void *opaque, os64_dom_view_t *out)
 static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_env_t *env,
                                          uint64_t *layouts, uint64_t *elapsed_us)
 {
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_READ);
     int64_t began = os64_micros();
     uint64_t before = geometry_layout_total;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
@@ -14932,6 +15192,7 @@ static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_e
     int64_t ended = os64_micros();
     *layouts = geometry_layout_total - before;
     *elapsed_us = *layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    lt_why_end(why_was);
     return tree;
 }
 
@@ -16189,7 +16450,10 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     fresh.modern = g.stream.modern;
     // Its scripts go on with the same host, so their tasks keep their ages.
     os64_memcpy(fresh.task_ages, g.stream.page.task_ages, sizeof(fresh.task_ages));
+    int64_t lt_from = s_lt.on ? os64_micros() : 0;
     os64_html_document_t *doc = os64_html_parser_finish(g.stream.parser);
+    if (s_lt.on)
+        lt_parse(NULL, "the parse's finish", 0, lt_from);
     g.stream.parser = NULL;
     if (doc == NULL) {
         stream_failed("Out of memory reading that page.");
@@ -16430,6 +16694,8 @@ static size_t stream_take(uint8_t *chunk, size_t cap)
         g.stream.local_at += n;
     }
     g.stream.bytes += n;
+    if (s_lt.on && n != 0)
+        yonder_lt_bytes(&s_lt, os64_micros(), n);
     if (s_diag.keep && n != 0)
         diag_kept(yonder_diag_keep_bytes(yonder_diag_claimed(g.stream.diag), chunk, n));
     return n;
@@ -16506,7 +16772,10 @@ static int64_t stream_parsed(int64_t r)
             stream_reactions();
             return r;
         }
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
         r = os64_html_parser_resume(g.stream.parser);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "a resume past a script not run", 0, lt_from);
     }
     stream_reactions();
     return r;
@@ -16591,6 +16860,7 @@ static void stream_sheets(void)
     if (g.stream.parser == NULL || g.stream.head.body != WAY_BODY_HTML)
         return;
     Page *p = stream_page();
+    int64_t lt_from = s_lt.on ? os64_micros() : 0;
     preloads_start(p);
     int64_t began = s_script_audit ? os64_micros() : 0;
     int32_t had = p->nsheets;
@@ -16605,6 +16875,8 @@ static void stream_sheets(void)
                       (long)(os64_micros() - began));
         os64_debug_log(line);
     }
+    if (s_lt.on)
+        lt_inside(YONDER_LT_IN_SHEETS, lt_from);
 }
 
 // Whether the script the parse is stopped at waits for the sheets still
@@ -16723,7 +16995,11 @@ static bool stream_turn(void)
         }
         g.stream.ran = false;
         g.stream.stopped = false;
-        int64_t r = stream_parsed(os64_html_parser_resume(g.stream.parser));
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
+        int64_t resumed = os64_html_parser_resume(g.stream.parser);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "a resume after a script", 0, lt_from);
+        int64_t r = stream_parsed(resumed);
         if (r != OS64_HTML_OK && r != OS64_HTML_SCRIPT) {
             stream_cut_short();
             return false;
@@ -16762,7 +17038,11 @@ static bool stream_turn(void)
                 return false;
             }
         }
-        int64_t r = stream_parsed(os64_html_parser_feed(g.stream.parser, chunk + at, n - at));
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
+        int64_t parsed = os64_html_parser_feed(g.stream.parser, chunk + at, n - at);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "a feed", n - at, lt_from);
+        int64_t r = stream_parsed(parsed);
         if (r == OS64_HTML_SCRIPT)
             break;                      // the slice ends at a script the page runs
         if (r != OS64_HTML_OK) {
@@ -16838,7 +17118,11 @@ static bool stream_turn(void)
             return false;
         }
         g.stream.ending = true;
-        int64_t r = stream_parsed(os64_html_parser_end(g.stream.parser));
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
+        int64_t ended = os64_html_parser_end(g.stream.parser);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "the input's end", 0, lt_from);
+        int64_t r = stream_parsed(ended);
         if (r == OS64_HTML_SCRIPT)
             return yonder_scripts_blocking_ready(g.stream.scripts) ||
                    yonder_scripts_connected_pending(g.stream.scripts);
@@ -18938,7 +19222,9 @@ static void diag_asked(void)
 static void toggle_positioning(void)
 {
     s_env.static_only = !s_env.static_only;
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_WINDOW);
     relayout(true);
+    lt_why_end(why_was);
     status_rest(s_env.static_only
                     ? "Positioning off: the page in document order, floats too. p turns it on."
                     : "Positioning on.");
@@ -19091,7 +19377,9 @@ static void dark_use(bool dark)
         return;
     s_dark = dark;
     coming_rejudge();
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_WINDOW);
     (void)relayout(true);
+    lt_why_end(why_was);
     mark_whole(WHOLE_WINDOW, true);
 }
 
@@ -19108,7 +19396,9 @@ static void motion_use(bool run, bool reduce)
     s_animations = run;
     s_reduce_motion = reduce;
     coming_rejudge();
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_WINDOW);
     (void)relayout(true);
+    lt_why_end(why_was);
     mark_whole(WHOLE_WINDOW, true);
 }
 
@@ -21530,6 +21820,7 @@ int main(int argc, char **argv)
         // drain after a window of yonder's was destroyed.
         if (!looking && !g.batch.held && os64_ui_dispatcher_can_create(&g.dispatcher)) {
             int64_t ready = 0;
+            lt_step(YONDER_LT_WAIT);
             uint64_t asleep = cycles();
             woke = os64_gui_event_wait_any(&ready);
             uint64_t slept = cycles_since(asleep);
@@ -21541,6 +21832,7 @@ int main(int argc, char **argv)
         }
         g.batch.consumed = 0;
         g.batch.drained = false;
+        lt_step(YONDER_LT_INPUT);
         int64_t events = os64_ui_dispatcher_turn(&g.dispatcher, false);
         if (events < 0) {
             woke = events;
@@ -21554,23 +21846,32 @@ int main(int argc, char **argv)
             continue;
         }
         if (g.relayout_due) {
+            lt_step(YONDER_LT_RELAYOUT);
             g.relayout_due = false;
             frame_follow();
+            yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_WINDOW);
             relayout(false);
+            lt_why_end(why_was);
         }
         if (!g.running || g.ui.quit)
             break;
+        lt_step(YONDER_LT_STREAM);
         bool stream_more = stream_turn();
+        lt_step(YONDER_LT_COMING);
         bool coming_more = coming_turn();
+        lt_step(YONDER_LT_SCRIPTS);
         bool scripts_ready = script_turn();
+        lt_step(YONDER_LT_MEDIA);
         bodies_turn();
         players_ask_run();
         bool media_more = media_turn();
         videos_turn();
         keys_turn();
         players_show();
+        lt_step(YONDER_LT_MOTION);
         motion_tick();
         videos_tick();
+        lt_step(YONDER_LT_UPKEEP);
         storage_turn();
         cookies_turn();
         census_turn();
@@ -21579,14 +21880,17 @@ int main(int argc, char **argv)
         step_hold_turn();
         pictures_settle();
         title_follow();
+        lt_step(YONDER_LT_OBSERVERS);
         bool observed = resizes_turn();
         before_paint();
         observed = intersections_turn() || observed;
+        lt_step(YONDER_LT_PAINT);
         glass_paint();
         bool painted_frame = frame_unpainted() || g.raf_painting;
         motion_painted();
         if (motion_pause_said())
             glass_paint();
+        lt_step(YONDER_LT_CLOSE);
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (s_bodies_asked)
@@ -21602,6 +21906,8 @@ int main(int argc, char **argv)
         pictures_schedule();
         looking = g.bar.up && !g.bar.armed;
     }
+    if (s_lt.on)
+        yonder_lt_step_end(&s_lt, os64_micros());
 
     left_said(woke);
     if (os64_window_placement_save_state(&g.ui.placement, g.win) != 0)

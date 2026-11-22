@@ -292,6 +292,18 @@ struct garb_cascade {
     uint64_t *has_words, *has_scratch;
     garb_bare_work_t bare_work;
     garb_update_refusal_t untrackable, refusal;
+    // THE CALLER'S MEASURE (limits.clock; garb_cascade_build_cost,
+    // garb_cascade_broad_trigger): the fresh build's parts, and in an
+    // update the mark being made (`mark_now`), what the change being marked
+    // has marked by mark (`mark_by`), and the change that marked the most
+    // (`broad`, kept as the trigger when the update is refused broad).
+    garb_build_cost_t cost;
+    garb_mark_t mark_now;
+    const os64_html_node_t *passing;    // restyle: the element passing its changed style down
+    uint32_t mark_by[GARB_MARKS];
+    garb_broad_trigger_t broad;
+    const os64_html_change_entry_t *broad_best;     // the change marking the most, this update only
+    bool broad_set;
 };
 
 // Whether input `sheet` applies in scope `scope` (-1: none does).
@@ -2961,7 +2973,7 @@ garb_cascade_t *garb_cascade_scoped(const garb_sheet_in_t *sheets, int32_t n,
     return build(sheets, n, scopes, nscopes, doc, env,
                  limits != NULL ? *limits
                                 : (garb_cascade_limits_t){GARB_ARENA_MAX, GARB_CASCADE_READ_MAX,
-                                                          GARB_ARENA_MAX, SIZE_MAX});
+                                                          GARB_ARENA_MAX, SIZE_MAX, NULL});
 }
 
 static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
@@ -2971,6 +2983,10 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
 {
     if (!limits.state_bytes || !limits.read_bytes || !limits.attribute_bytes)
         return NULL;
+    // The caller's measure (garb_cascade_build_cost): the build's parts on
+    // its clock, when it gave one.
+    uint64_t (*clock)(void) = limits.clock;
+    uint64_t began = clock ? clock() : 0;
     garb_cascade_t *c = os64_calloc(1, sizeof(*c));
     if (c == NULL)
         return NULL;
@@ -3080,6 +3096,7 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
     for (int32_t k = 0; k < c->nkeyframes; k++)
         c->keyframes[k].nframes = build_frames(c, &c->keyframes[k], NULL, false,
                                                &c->keyframes[k].frames);
+    uint64_t sheets_read = clock ? clock() : 0;
     // Every element's slot, in every tree: the table is sized for them.
     size_t elements = 0;
     for (const os64_html_node_t *x = doc->document; x != NULL; x = si_next(x, doc->document, true))
@@ -3105,6 +3122,7 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
     Match *m = NULL;
     int32_t mcap = 0;
     AppliedScratch scratch = {0};
+    uint64_t sized = clock ? clock() : 0;
     for (const os64_html_node_t *x = doc->document; x != NULL; x = si_next(x, doc->document, true))
         if (is_el(x)) {
             cascade_whole(c, x, &m, &mcap, &scratch);
@@ -3112,6 +3130,11 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
             if (s != NULL) anchor_bits(c, x, has_row(c, s));
         }
     os64_free(scratch.items);
+    if (clock) {
+        uint64_t matched = clock();
+        c->cost = (garb_build_cost_t){sheets_read - began, sized - sheets_read, matched - sized, (uint32_t)c->nrules,
+                                      (uint32_t)elements};
+    }
     // What the cascade read ran short wherever it was read: a sheet's own
     // parse (taken in above, for the sheets the cascade applied), the rule
     // blocks, selectors and values read from them, which mark this
@@ -3163,6 +3186,7 @@ static bool dirty_add(garb_cascade_t *c, const os64_html_node_t *x, Slot *s)
         c->dirty_nodes = more; c->dirtycap = cap;
     }
     s->dirty = true; c->dirty_nodes[c->ndirty++] = x;
+    if (c->limits.clock) c->mark_by[c->mark_now]++;
     if (c->ndirty > c->slotcount / 2) { c->refusal = GARB_UPDATE_BROAD; return false; }
     return true;
 }
@@ -3248,10 +3272,14 @@ static bool mark_siblings(garb_cascade_t *c, const os64_html_node_t *first)
     }
     return true;
 }
-static bool mark_changed(garb_cascade_t *c, const os64_html_node_t *node)
+// `node`'s subtree, marked as `mark` (for the caller's measure), and the
+// siblings its change can move.
+static bool mark_changed(garb_cascade_t *c, const os64_html_node_t *node, garb_mark_t mark)
 {
     if (!connected(c, node)) return true;
+    c->mark_now = mark;
     if (!mark_subtree(c, node)) return false;
+    c->mark_now = GARB_MARK_SIBLINGS;
     if (c->dependencies.filtered && node->parent)
         return mark_siblings(c, node->parent->first_child);
     return !c->dependencies.following || mark_siblings(c, node->next);
@@ -3280,10 +3308,12 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
     // The UA first-summary/first-legend rules also depend on child order.
     if (c->dependencies.parent_state || (parent->ns == OS64_HTML_NS_HTML &&
         (parent->tag == OS64_HTML_TAG_DETAILS || parent->tag == OS64_HTML_TAG_FIELDSET)))
-        if (!mark_changed(c, parent)) return false;
+        if (!mark_changed(c, parent, GARB_MARK_PARENT)) return false;
+    c->mark_now = GARB_MARK_ADDED;
     for (size_t i = 0; i < e->nadded; ++i)
         if (!mark_subtree(c, e->added[i])) return false;
     if (c->shadowed) {
+        c->mark_now = GARB_MARK_SLOTS;
         // A shadow root attached: libhtml logs it as a change of the host's
         // children with none added or removed, and every child of the host
         // now inherits from a slot, or from nothing.
@@ -3294,6 +3324,7 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
         for (size_t i = 0; i < e->nadded && !slots; ++i) slots = holds_slot(e->added[i]);
         if (slots && !mark_host_children(c, parent)) return false;
     }
+    c->mark_now = GARB_MARK_SIBLINGS;
     if (c->dependencies.position_back || c->dependencies.filtered)
         return mark_siblings(c, parent->first_child);
     if (c->dependencies.position_front || c->dependencies.following) {
@@ -3561,6 +3592,29 @@ garb_bare_work_t garb_cascade_bare_work(const garb_cascade_t *c)
     return c ? c->bare_work : (garb_bare_work_t){0};
 }
 
+garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c)
+{
+    return c ? c->cost : (garb_build_cost_t){0};
+}
+
+bool garb_cascade_broad_trigger(const garb_cascade_t *c, garb_broad_trigger_t *out)
+{
+    if (!c || !c->broad_set) return false;
+    *out = c->broad;
+    return true;
+}
+
+const char *garb_mark_name(garb_mark_t mark)
+{
+    static const char *const kNames[GARB_MARKS] = {
+        [GARB_MARK_SUBTREE] = "its subtree", [GARB_MARK_ADDED] = "added subtrees",
+        [GARB_MARK_SIBLINGS] = "siblings", [GARB_MARK_HAS] = ":has()",
+        [GARB_MARK_PARENT] = "the parent's state", [GARB_MARK_SLOTS] = "slots",
+        [GARB_MARK_INHERITED] = "inherited",
+    };
+    return (unsigned)mark < GARB_MARKS ? kNames[mark] : "?";
+}
+
 // Whether two values say the same, by content: a winner read through
 // var(), or from a style attribute parsed again, is a new copy each time.
 static bool val_same(const garb_val_t *a, const garb_val_t *b);
@@ -3641,6 +3695,7 @@ static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match
         s->removed_children = 0;
         return true;
     }
+    if (!same && c->limits.clock) c->passing = x;
     return same || mark_below(c, x);
 }
 
@@ -3655,6 +3710,60 @@ const char *garb_update_refusal_name(garb_update_refusal_t reason)
         "cap", "retained", "attributes", "history", "body hint", "slot left", "broad", "short",
         "no memory"};
     return reason >= 0 && reason < GARB_UPDATE_REASONS ? kNames[reason] : "?";
+}
+
+// THE CALLER'S MEASURE of a broad refusal (garb_cascade_broad_trigger).
+// An element as a record names it: its name, its #id and its first
+// .class, cut to `cap`.
+static void describe(const os64_html_node_t *x, char *out, size_t cap)
+{
+    const char *id = "", *cls = "";
+    for (const os64_html_attr_t *a = x != NULL ? x->attrs : NULL; a; a = a->next) {
+        if (a->ns || !a->name || !a->value) continue;
+        if (os64_streq(a->name, "id")) id = a->value;
+        else if (os64_streq(a->name, "class")) cls = a->value;
+    }
+    size_t first = 0;
+    while (cls[first] && cls[first] != ' ' && cls[first] != '\t' && cls[first] != '\n') first++;
+    os64_snprintf(out, cap, "%s%s%s%s%.*s", x != NULL && x->name ? x->name : "?", *id ? "#" : "", id,
+                  first ? "." : "", (int)first, cls);
+}
+// A change of the batch has made its marks (c->mark_by): the counts of the
+// most marked so far are kept, and the batch's counts always. Only counts:
+// the change is named once, at a refusal (broad_name), so an update that
+// goes ahead pays for no names.
+static void broad_note(garb_cascade_t *c, const os64_html_change_entry_t *e, uint32_t marked_changes,
+                       uint32_t changes)
+{
+    garb_broad_trigger_t *b = &c->broad;
+    b->changes = changes;
+    b->marked_changes = marked_changes;
+    b->dirty = (uint32_t)c->ndirty;
+    b->slots = (uint32_t)c->slotcount;
+    uint32_t total = 0;
+    for (int k = 0; k < GARB_MARKS; k++) total += c->mark_by[k];
+    if (total <= b->marked && b->marked_changes > 1) return;
+    b->marked = total;
+    os64_memcpy(b->by, c->mark_by, sizeof(b->by));
+    c->broad_best = e;
+}
+// The kept change named, at a broad refusal: its kind, its target, the
+// target's depth and the attribute. The change log's entries live until
+// the reader is read again, which is after this update.
+static void broad_name(garb_cascade_t *c)
+{
+    garb_broad_trigger_t *b = &c->broad;
+    const os64_html_change_entry_t *e = c->broad_best;
+    if (e == NULL) return;
+    b->kind = (int32_t)e->kind;
+    const os64_html_node_t *t = e->target;
+    if (t && !is_el(t)) t = t->parent;
+    describe(t, b->target, sizeof(b->target));
+    uint32_t depth = 0;
+    for (const os64_html_node_t *x = t; x && x->parent; x = x->parent) depth++;
+    b->depth = depth;
+    os64_snprintf(b->attr, sizeof(b->attr), "%s",
+                  e->kind == OS64_HTML_CHANGE_ATTR && e->attr_name ? e->attr_name : "");
 }
 
 static bool update(garb_cascade_t *c)
@@ -3703,22 +3812,49 @@ static bool update(garb_cascade_t *c)
             if (parent) parent->removed_children = c->updates + 1;
         }
     c->ndirty = 0;
+    // The caller's measure: the batch's size, then each change's marks.
+    uint32_t nchanges = 0, nmarked = 0;
+    if (c->limits.clock) {
+        for (const os64_html_change_entry_t *e = changes; e; e = e->next) nchanges++;
+        c->broad = (garb_broad_trigger_t){0};
+        c->broad_best = NULL;
+    }
     for (const os64_html_change_entry_t *e = changes; e; e = e->next) {
         if (body_hint(e, c->doc)) { c->refusal = GARB_UPDATE_BODY_HINT; return false; }
+        if (c->limits.clock) os64_memset(c->mark_by, 0, sizeof(c->mark_by));
+        bool marked;
         if (e->kind == OS64_HTML_CHANGE_CHILDREN) {
-            if (!mark_children(c, e) || !mark_has(c, e->target, true)) return false;
+            marked = mark_children(c, e);
+            c->mark_now = GARB_MARK_HAS;
+            marked = marked && mark_has(c, e->target, true);
         } else {
             const os64_html_node_t *root = e->target;
             if (root && !is_el(root)) root = root->parent;
-            if (!mark_changed(c, root) || (root && !mark_has(c, root, false))) return false;
+            marked = mark_changed(c, root, GARB_MARK_SUBTREE);
+            c->mark_now = GARB_MARK_HAS;
+            marked = marked && (!root || mark_has(c, root, false));
             // A slot renamed moves which of its host's children it takes.
-            if (c->shadowed && e->kind == OS64_HTML_CHANGE_ATTR && e->attr_name &&
-                os64_streq(e->attr_name, "name") && is_slot(e->target) &&
-                !mark_host_children(c, e->target))
-                return false;
+            c->mark_now = GARB_MARK_SLOTS;
+            if (marked && c->shadowed && e->kind == OS64_HTML_CHANGE_ATTR && e->attr_name &&
+                os64_streq(e->attr_name, "name") && is_slot(e->target))
+                marked = mark_host_children(c, e->target);
+        }
+        if (c->limits.clock) broad_note(c, e, ++nmarked, nchanges);
+        if (!marked) {
+            if (c->limits.clock && c->refusal == GARB_UPDATE_BROAD) {
+                broad_name(c);
+                c->broad_set = true;
+            }
+            return false;
         }
     }
     c->updating = true;
+    // The caller's measure: what restyling marks is inherited.
+    if (c->limits.clock) {
+        os64_memset(c->mark_by, 0, sizeof(c->mark_by));
+        c->mark_now = GARB_MARK_INHERITED;
+        c->passing = NULL;
+    }
     int32_t old_nattrs = c->nattrs;
     Match *m = NULL; int32_t mcap = 0;
     AppliedScratch scratch = {0};
@@ -3753,7 +3889,21 @@ static bool update(garb_cascade_t *c)
     }
     os64_free(scratch.items);
     c->updating = false;
-    if (failed) return false;
+    if (failed) {
+        if (c->limits.clock && c->refusal == GARB_UPDATE_BROAD) {
+            garb_broad_trigger_t *b = &c->broad;
+            broad_name(c);
+            b->restyled = true;
+            b->restyled_marked = c->mark_by[GARB_MARK_INHERITED];
+            describe(c->passing, b->restyled_from, sizeof(b->restyled_from));
+            uint32_t depth = 0;
+            for (const os64_html_node_t *x = c->passing; x && x->parent; x = x->parent) depth++;
+            b->restyled_depth = depth;
+            b->dirty = (uint32_t)c->ndirty;
+            c->broad_set = true;
+        }
+        return false;
+    }
     for (int32_t i = old_nattrs; i < c->nattrs; ++i) c->incomplete |= c->attrs[i].incomplete;
     if (c->incomplete || c->self.incomplete) { c->refusal = GARB_UPDATE_SHORT; return false; }
     os64_html_pin_t pin = os64_html_pin(c->doc);
@@ -3767,6 +3917,9 @@ bool garb_cascade_update(garb_cascade_t *c)
 {
     if (!c) return false;
     c->refusal = GARB_UPDATE_DONE;
+    // A trigger is the latest update's alone: one refused before it (or
+    // not run at all) names none.
+    c->broad_set = false;
     return update(c);
 }
 
