@@ -218,6 +218,32 @@ or differently.
     styles, which the compare sees. `g.hover_link`, which a rebuild puts
     out, drives only the status line, so a lit link is not a reason for
     the whole view (the design had it as one).
+- **The svgs the cascade restyled** (yonder.c `change_svgs`). yonder's svg
+  adapter paints an svg's shapes from the live cascade (fill, stroke and
+  the rest), which libflow's styles do not carry, so no compare of the
+  trees can see a class that recolours a shape: on the watch page, the
+  player's icons, recoloured by classes and `aria-*`. Each inline svg
+  drawn whose shapes, itself or an element it is in had their winners
+  recomputed since the shown tree's update (`garb_style_updated_since`)
+  is named to the compare. Every one is, when the cascade was built afresh
+  or a definition another svg may draw was restyled: a defs, symbol, paint
+  server, clip, mask, marker or filter, or anything in an svg that draws
+  nothing itself (a sprite sheet's). A definition that the change log
+  names is NO_BOX in libflow (`drawn_by`): what draws it is not bounded.
+- **A picture's sources** choose what its img draws: a source's attribute,
+  or the picture's children, mark the img; a `base`'s change is the whole
+  view.
+- **What moves the page, refused**: a transform kept in place that moves
+  the page's extent, a scroller's range or a scroll (MOVED, restyle.inc);
+  a restyle that wrote the tree and then declined; and a view the rebuild
+  scrolls with its clamp (script_rebuild), the verdict counted after it.
+- **An empty box given children** is compared: the walk goes into a pair
+  when either has children.
+- **The paint walk prunes on what a box paints**, its overflow grown by
+  its ink (libflow `paints_into`): pruning on the overflow alone left out
+  a shadow reaching into a part of the window its box did not meet. It
+  was older than N3, and N3's parts are what reach it; the random walk
+  found it.
 - **Half the view** is yonder's rule (`change_parts`), on the rectangle
   round every part, because the toolkit repaints one rectangle round
   everything marked.
@@ -226,14 +252,18 @@ or differently.
   the reason for the whole view with the element that refused).
 - **`--damage-check[=N]`** (every rebuild unless N): after the paint of
   the marked parts, the whole view is painted the ordinary way over the
-  window and the two compared, every playing video's box left out; a
-  rebuild that marked nothing marks one pixel so that it has a paint to
-  check. The whole paint stays, being right. Its line is `damage check`
+  window and the two compared, the videos' boxes and the page's widgets
+  (form controls, players: the toolkit paints them over the view) left
+  out; a rebuild that marked nothing marks one pixel so that it has a
+  paint to check. The whole paint stays, being right, but where something
+  was left out the window's pixels are put back. Its line is `damage check`
   in the record's summaries, each difference a `failed` line with where
   and what the rebuild marked.
 - **Proof**: test_yonder_damage.inc (a case for each kind of change and
   refusal, and a 300-step random walk, every rebuild checked), and
-  tools/test_script_paint_mutants.py, a mutant per rule.
+  tools/test_script_paint_mutants.py, a mutant per rule; what has no
+  mutant is listed at its end with why. A cold read before review found
+  six under-marks and two faults in the check; each has its case.
 
 ## 9. Settled at the design pass
 
