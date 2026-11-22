@@ -48,7 +48,7 @@ static void test_off_until_begun(void)
     yonder_lt_step_end(&t, BASE + 9 * S);
     yonder_lt_layout(&t, BASE, 1000, READ, NULL);
     yonder_lt_bytes(&t, BASE, 100);
-    yonder_lt_drawing(&t, 1000);
+    yonder_lt_inside(&t, YONDER_LT_IN_DRAWING, 1000);
     yonder_lt_mark(&t, YONDER_LT_MARK_PAINT, BASE);
     CHECK(yonder_lt_slices_used(&t) == 0);
     CHECK(t.nlongs == 0);
@@ -63,7 +63,7 @@ static void test_spread_across_slices(void)
     // slice 2, and its 3.5 s of tasks and 0.7 s of drawing in the same shares.
     yonder_lt_step_begin(&t, YONDER_LT_SCRIPTS, BASE + 4 * S);
     yonder_lt_task(&t, BASE + 10 * S, "frame", 3500000, 0, 0);
-    yonder_lt_drawing(&t, 700000);
+    yonder_lt_inside(&t, YONDER_LT_IN_DRAWING, 700000);
     yonder_lt_step_end(&t, BASE + 11 * S);
     CHECK(t.slices[0].step_us[YONDER_LT_SCRIPTS] == 1 * S);
     CHECK(t.slices[1].step_us[YONDER_LT_SCRIPTS] == 5 * S);
@@ -76,7 +76,7 @@ static void test_spread_across_slices(void)
     CHECK(t.nlongs == 1 && t.longs[0].at_us == 4 * S && t.longs[0].us == 7 * S);
     // A step inside one slice keeps what was inside it whole.
     yonder_lt_step_begin(&t, YONDER_LT_PAINT, BASE + 12 * S);
-    yonder_lt_drawing(&t, 333333);
+    yonder_lt_inside(&t, YONDER_LT_IN_DRAWING, 333333);
     yonder_lt_step_end(&t, BASE + 13 * S);
     CHECK(t.slices[2].in_us[YONDER_LT_PAINT][YONDER_LT_IN_DRAWING] == 333333);
 }
@@ -142,6 +142,70 @@ static void test_cascades(void)
     CHECK(t.cascades[READ] == 2 && t.cascade_us[READ] == 640000);
     CHECK(t.fresh[READ] == 1 && t.fresh_us[READ] == 600000);
     CHECK(t.cascades[REBUILD] == 0);
+}
+
+static void test_builds_and_broad(void)
+{
+    char line[2048];
+    yonder_lt_begin(&t, BASE);
+    const yonder_lt_build_t a = {100000, 5000, 200000, 20000, 400}, b = {120000, 7000, 300000, 20000, 600};
+    yonder_lt_build(&t, READ, &a);
+    yonder_lt_build(&t, READ, &b);
+    yonder_lt_build(&t, (yonder_lt_why_t)99, &a);              // out of range: no reason told
+    CHECK(t.builds[READ] == 2 && t.build_sheets[READ] == 220000 && t.build_matching[READ] == 500000);
+    CHECK(t.builds[YONDER_LT_WHY_OTHER] == 1);
+    yonder_lt_layouts_line(&t, line, sizeof(line));
+    LINE(line, "by who asked, in the step they ran in, the costliest first: none; fresh cascades by part: a "
+               "script's read 2 in 732.0 ms (reading the sheets 220.0, the table 12.0, matching 500.0; 20000 rules "
+               "and 500 elements a build), no reason told 1 in 305.0 ms (reading the sheets 100.0, the table 5.0, "
+               "matching 200.0; 20000 rules and 400 elements a build); cascades not timed whole (yonder "
+               "--layout-profile times them)");
+    // Broad refusals: counted always, the most marked kept, most first.
+    for (uint32_t i = 0; i < YONDER_LT_BROAD_MAX + 3; i++) {
+        char text[32];
+        snprintf(text, sizeof(text), "trigger %u", i);
+        yonder_lt_broad(&t, BASE + (int64_t)i * S, 100 + i * 10, text);
+    }
+    CHECK(t.nbroad == YONDER_LT_BROAD_MAX + 3 && t.broad_kept == YONDER_LT_BROAD_MAX);
+    for (uint32_t i = 1; i < t.broad_kept; i++)
+        CHECK(t.broad[i - 1].marked >= t.broad[i].marked);
+    yonder_lt_broad_line(&t, 0, line, sizeof(line));
+    LINE(line, "at 10.0 s, trigger 10");
+    yonder_lt_broad_line(&t, YONDER_LT_BROAD_MAX, line, sizeof(line));
+    LINE(line, "");
+    yonder_lt_summary(&t, line, sizeof(line));
+    CHECK(strstr(line, "; updates refused as broad: 11; ") != NULL);
+    // Fewer marked than every one kept: counted, not kept.
+    yonder_lt_broad(&t, BASE, 1, "small");
+    CHECK(t.nbroad == YONDER_LT_BROAD_MAX + 4 && strcmp(t.broad[YONDER_LT_BROAD_MAX - 1].text, "small") != 0);
+}
+
+static void test_parse(void)
+{
+    char line[512];
+    yonder_lt_begin(&t, BASE);
+    yonder_lt_step_begin(&t, YONDER_LT_STREAM, BASE);
+    for (uint32_t i = 0; i < YONDER_LT_PARSE_MAX + 2; i++) {
+        char text[48];
+        snprintf(text, sizeof(text), "a feed %u", i);
+        yonder_lt_parse(&t, BASE + (int64_t)i * 1000, 1000 + i * 100, text);
+    }
+    yonder_lt_inside(&t, YONDER_LT_IN_SHEETS, 500);
+    yonder_lt_inside(&t, (yonder_lt_in_t)99, 500);              // no such part: nothing
+    yonder_lt_step_end(&t, BASE + S);
+    CHECK(t.nparse == YONDER_LT_PARSE_MAX + 2 && t.parse_kept == YONDER_LT_PARSE_MAX);
+    uint64_t sum = 0;
+    for (uint32_t i = 0; i < YONDER_LT_PARSE_MAX + 2; i++)
+        sum += 1000 + i * 100;
+    CHECK(t.parse_us == sum);
+    CHECK(t.slices[0].in_us[YONDER_LT_STREAM][YONDER_LT_IN_PARSING] == sum);
+    CHECK(t.slices[0].in_us[YONDER_LT_STREAM][YONDER_LT_IN_SHEETS] == 500);
+    for (uint32_t i = 1; i < t.parse_kept; i++)
+        CHECK(t.parse[i - 1].us >= t.parse[i].us);
+    yonder_lt_parse_line(&t, 0, line, sizeof(line));
+    LINE(line, "at 0.0 s, 1.9 ms: a feed 9");
+    yonder_lt_parse_line(&t, YONDER_LT_PARSE_MAX, line, sizeof(line));
+    LINE(line, "");
 }
 
 static void test_long_list(void)
@@ -252,10 +316,10 @@ static void test_lines(void)
                "in 120.0 ms");
     yonder_lt_summary(&t, line, sizeof(line));
     LINE(line, "from the navigation's start, in slices of 5 s, the window thread's steps; arrived 2.1 s, "
-               "first paint 2.2 s, the video's first picture -; 2 steps of 200 ms or more");
+               "first paint 2.2 s, the video's first picture -; 0 parser calls in 0.0 ms; updates refused as broad: 0; 2 steps of 200 ms or more");
     yonder_lt_layouts_line(&t, line, sizeof(line));
     LINE(line, "by who asked, in the step they ran in, the costliest first: a sheet arriving in the stream 1 in "
-               "250.0 ms, a script's read in scripts 1 in 120.0 ms; cascades not timed (yonder --layout-profile "
+               "250.0 ms, a script's read in scripts 1 in 120.0 ms; cascades not timed whole (yonder --layout-profile "
                "times them)");
     // With cascades timed, they follow, the costliest first.
     const yonder_lt_cascade_t c = {200000, true};
@@ -269,7 +333,7 @@ static void test_lines(void)
     t.more_longs_us = 900000;
     yonder_lt_summary(&t, line, sizeof(line));
     LINE(line, "from the navigation's start, in slices of 5 s, the window thread's steps; arrived 2.1 s, "
-               "first paint 2.2 s, the video's first picture -; 5 steps of 200 ms or more, the 2 longest "
+               "first paint 2.2 s, the video's first picture -; 0 parser calls in 0.0 ms; updates refused as broad: 0; 5 steps of 200 ms or more, the 2 longest "
                "listed, the other 3 0.9 s in all");
     // An empty slice, and one past the list, write empty or nothing.
     yonder_lt_slice_line(&t, 7, line, sizeof(line));
@@ -285,7 +349,7 @@ static void test_lines(void)
     memset(name, 'n', sizeof(name) - 1);
     name[sizeof(name) - 1] = '\0';
     yonder_lt_step_begin(&t, YONDER_LT_PAINT, BASE + 6 * S);
-    yonder_lt_drawing(&t, 250000);
+    yonder_lt_inside(&t, YONDER_LT_IN_DRAWING, 250000);
     yonder_lt_task(&t, BASE + 6 * S, name, 300000, 0, 0);
     yonder_lt_step_end(&t, BASE + 7 * S);
     // A second long, it lists after the stream's 3.5 s.
@@ -301,6 +365,8 @@ int main(void)
     test_begin_ends_the_step_under_way();
     test_layouts_and_tasks_inside_a_step();
     test_cascades();
+    test_builds_and_broad();
+    test_parse();
     test_long_list();
     test_the_end();
     test_marks();

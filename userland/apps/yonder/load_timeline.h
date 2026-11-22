@@ -25,6 +25,11 @@
 //     waits left out (the slices say how long the loop slept), each with
 //     when it began, the layouts made inside it by who asked, its drawing,
 //     and the longest script task inside it with what that task forced;
+//   - the fresh cascades libgarb timed by part (reading the sheets,
+//     sizing its table, matching the elements), by who asked;
+//   - the updates libgarb refused as broad, and what triggered those whose
+//     trigger marked the most;
+//   - the arriving page's parser calls, and the slowest of them;
 //   - the milestones, each the first time it was told.
 // Past the last slice it takes nothing more (yonder_lt_running is false),
 // so a page left open for an hour costs the loop nothing after.
@@ -41,6 +46,10 @@
 #define YONDER_LT_LONG_US 200000ull
 #define YONDER_LT_LONG_MAX 16
 #define YONDER_LT_TASK_MAX 96
+#define YONDER_LT_BROAD_MAX 8
+#define YONDER_LT_BROAD_TEXT 320
+#define YONDER_LT_PARSE_MAX 8
+#define YONDER_LT_PARSE_TEXT 128
 
 // The window loop's steps, in the order a turn takes them. Each names the
 // loop's calls it brackets (yonder.c's window loop); a script task runs
@@ -63,11 +72,15 @@ typedef enum {
 // The grid's column for a layout made outside any step.
 #define YONDER_LT_OUTSIDE YONDER_LT_STEPS
 
-// What was inside a step: its script tasks, its layouts and its drawing.
-// The parts may overlap: a layout a task forced is inside both the task and
-// the layouts, and one the drawing asked for inside both the drawing and
-// the layouts.
-typedef enum { YONDER_LT_IN_TASKS, YONDER_LT_IN_LAYOUTS, YONDER_LT_IN_DRAWING, YONDER_LT_INS } yonder_lt_in_t;
+// What was inside a step: its script tasks, its layouts, its drawing, the
+// arriving page's parser calls, its looks for new sheets, and a page being
+// made the shown one. The parts may overlap: a layout a task forced is
+// inside both the task and the layouts, and the arrival's own layout inside
+// both the arriving and the layouts.
+typedef enum {
+    YONDER_LT_IN_TASKS, YONDER_LT_IN_LAYOUTS, YONDER_LT_IN_DRAWING, YONDER_LT_IN_PARSING, YONDER_LT_IN_SHEETS,
+    YONDER_LT_IN_ARRIVING, YONDER_LT_INS
+} yonder_lt_in_t;
 
 // WHO ASKED for a layout: the outermost reason told (yonder.c's lt_why),
 // so a rebuild a script's read asked for is the read's.
@@ -132,6 +145,28 @@ typedef struct {
     uint64_t grid_us[YONDER_LT_WHYS][YONDER_LT_STEPS + 1];
     uint32_t cascades[YONDER_LT_WHYS], fresh[YONDER_LT_WHYS];
     uint64_t cascade_us[YONDER_LT_WHYS], fresh_us[YONDER_LT_WHYS];
+    // The fresh cascades libgarb timed by part (yonder_lt_build), by who
+    // asked: how many, their parts' time, and the rules and elements they
+    // read and matched, summed.
+    uint32_t builds[YONDER_LT_WHYS];
+    uint64_t build_sheets[YONDER_LT_WHYS], build_table[YONDER_LT_WHYS], build_matching[YONDER_LT_WHYS];
+    uint64_t build_rules[YONDER_LT_WHYS], build_elements[YONDER_LT_WHYS];
+    // The updates refused as broad (yonder_lt_broad): how many, and the
+    // YONDER_LT_BROAD_MAX whose trigger marked the most, most first.
+    uint32_t nbroad, broad_kept;
+    struct {
+        uint64_t at_us;
+        uint32_t marked;
+        char text[YONDER_LT_BROAD_TEXT];
+    } broad[YONDER_LT_BROAD_MAX];
+    // The arriving page's parser calls (yonder_lt_parse): how many and how
+    // long in all, and the YONDER_LT_PARSE_MAX slowest, slowest first.
+    uint32_t nparse, parse_kept;
+    uint64_t parse_us;
+    struct {
+        uint64_t at_us, us;
+        char text[YONDER_LT_PARSE_TEXT];
+    } parse[YONDER_LT_PARSE_MAX];
     // The step under way (yonder_lt_step_begin), what was made inside it.
     bool in_step;
     yonder_lt_long_t now;
@@ -172,12 +207,29 @@ void yonder_lt_layout(yonder_lt_t *t, int64_t from_us, uint64_t us, yonder_lt_wh
 // and the longest task of a step is the one its long-step line names.
 void yonder_lt_task(yonder_lt_t *t, int64_t at_us, const char *what, uint64_t us, uint32_t layouts,
                     uint64_t layout_us);
-// A drawing of the window that took `us`, inside the step under way.
-void yonder_lt_drawing(yonder_lt_t *t, uint64_t us);
+// `us` of `in` inside the step under way (a drawing, a look for sheets, a
+// page arriving; tasks, layouts and parser calls have calls of their own).
+void yonder_lt_inside(yonder_lt_t *t, yonder_lt_in_t in, uint64_t us);
+// A parser call of the arriving page's begun at `from_us` that took `us`,
+// said by `text` (the caller's words: what call, how many bytes, where in
+// the page, inside what): inside the step under way, counted, and kept
+// when among the slowest.
+void yonder_lt_parse(yonder_lt_t *t, int64_t from_us, uint64_t us, const char *text);
 // `n` bytes of the arriving page parsed at `at_us`.
 void yonder_lt_bytes(yonder_lt_t *t, int64_t at_us, uint64_t n);
 // A milestone at `at_us`: the first one told stands.
 void yonder_lt_mark(yonder_lt_t *t, yonder_lt_mark_t mark, int64_t at_us);
+// A fresh cascade libgarb timed by part (garb_cascade_build_cost, on the
+// timeline's clock), asked for by `why`.
+typedef struct {
+    uint64_t sheets_us, table_us, matching_us;
+    uint32_t rules, elements;
+} yonder_lt_build_t;
+void yonder_lt_build(yonder_lt_t *t, yonder_lt_why_t why, const yonder_lt_build_t *b);
+// An update refused as broad at `at_us`, its trigger marking `marked`
+// elements and said by `text` (the caller's words: libgarb's trigger, cut
+// to fit). Counted always; kept when among the most marked.
+void yonder_lt_broad(yonder_lt_t *t, int64_t at_us, uint32_t marked, const char *text);
 
 // The lines, each written into `out` (cut to `cap`, always terminated).
 // The summary: the slices' size, the milestones, the long steps' count.
@@ -194,6 +246,12 @@ void yonder_lt_slice_line(const yonder_lt_t *t, uint32_t i, char *out, size_t ca
 void yonder_lt_layouts_line(const yonder_lt_t *t, char *out, size_t cap);
 // Long step `i` (0 is the longest), i < t->nlongs.
 void yonder_lt_long_line(const yonder_lt_t *t, uint32_t i, char *out, size_t cap);
+// Broad refusal `i` kept (0 marked the most), i < t->broad_kept: when, and
+// the caller's words.
+void yonder_lt_broad_line(const yonder_lt_t *t, uint32_t i, char *out, size_t cap);
+// Parser call `i` kept (0 the slowest), i < t->parse_kept: when, how long,
+// and the caller's words.
+void yonder_lt_parse_line(const yonder_lt_t *t, uint32_t i, char *out, size_t cap);
 
 const char *yonder_lt_step_name(yonder_lt_step_t step);
 const char *yonder_lt_why_name(yonder_lt_why_t why);

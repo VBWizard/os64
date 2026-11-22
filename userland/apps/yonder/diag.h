@@ -229,8 +229,8 @@ void yonder_diag_reading_fact(yonder_diag_t *d, const char *key, const char *val
 // The same line, for the load's timeline (load_timeline.h), written whole
 // at each write of the record: it comes after a busy page has filled the
 // ordinary room, so it has a room of its own, YONDER_DIAG_TIMELINE_FACTS,
-// room for its summary, every slice and every long step it lists.
-#define YONDER_DIAG_TIMELINE_FACTS 64
+// room for every line it writes (yonder.c checks the sum at compile time).
+#define YONDER_DIAG_TIMELINE_FACTS 80
 void yonder_diag_timeline_fact(yonder_diag_t *d, const char *key, const char *value);
 // The plain lines whose keys begin `prefix` let go, the rest kept in
 // order — and so are those of them that met no room, so a set of lines

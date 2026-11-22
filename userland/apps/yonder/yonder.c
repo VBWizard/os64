@@ -2036,6 +2036,74 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
     yonder_diag_fact(diag, "layout kept, declined at", line);
 }
 
+// THE LOAD'S TIMELINE (load_timeline.h): the latest navigation's first
+// minutes, step by step, kept only while yonder.conf names a diagnostics
+// directory, and written to that navigation's record alone: the one begun
+// at s_lt.began_us (lt_ours). Each step of the window loop costs a reading
+// of the clock while the timeline runs; each layout, task, paint, parser
+// call, look for sheets and arrival two; each piece of the page its parser
+// takes one; and nothing once it has stopped beyond the test of s_lt.on.
+// A fresh cascade is handed its clock (lt_clock) while it runs, which is
+// what has libgarb keep its measure (its build's parts, a broad refusal's
+// trigger).
+static yonder_lt_t s_lt;
+
+// WHO ASKED for the layouts made between an lt_why_begin and its
+// lt_why_end (page_lay_out tells the timeline): the outermost asker
+// stands, so a rebuild a script's read asks for is the read's. Set only
+// while the timeline runs; the end puts back what the begin found.
+static yonder_lt_why_t s_lt_why;
+
+static uint64_t lt_clock(void)
+{
+    return (uint64_t)os64_micros();
+}
+
+// An update the cascade refused: when libgarb refused it as broad, what
+// triggered it goes to the timeline (garb_cascade_broad_trigger).
+static void lt_cascade_refused(const garb_cascade_t *c)
+{
+    garb_broad_trigger_t b;
+    if (!garb_cascade_broad_trigger(c, &b))
+        return;
+    static const char *const kKind[] = {"a change", "children", "an attribute", "text", "a state"};
+    const char *kind = b.kind > 0 && b.kind < (int32_t)(sizeof(kKind) / sizeof(kKind[0])) ? kKind[b.kind] : kKind[0];
+    char text[YONDER_LT_BROAD_TEXT];
+    size_t at = 0;
+    int k = os64_snprintf(text, sizeof(text), "%s%s%s of %s at depth %u marked %u of %u elements (", kind,
+                          b.attr[0] ? " " : "", b.attr, b.target, (unsigned)b.depth, (unsigned)b.marked,
+                          (unsigned)b.slots);
+    at = k > 0 && (size_t)k < sizeof(text) ? (size_t)k : sizeof(text) - 1;
+    const char *sep = "";
+    for (int m = 0; m < GARB_MARKS && at < sizeof(text); m++) {
+        if (b.by[m] == 0)
+            continue;
+        k = os64_snprintf(text + at, sizeof(text) - at, "%s%s %u", sep, garb_mark_name((garb_mark_t)m),
+                          (unsigned)b.by[m]);
+        at = k > 0 && (size_t)k < sizeof(text) - at ? at + (size_t)k : sizeof(text) - 1;
+        sep = ", ";
+    }
+    if (at < sizeof(text)) {
+        k = os64_snprintf(text + at, sizeof(text) - at, "); the batch's change %u of %u, %u marked when refused",
+                          (unsigned)b.marked_changes, (unsigned)b.changes, (unsigned)b.dirty);
+        at = k > 0 && (size_t)k < sizeof(text) - at ? at + (size_t)k : sizeof(text) - 1;
+    }
+    if (b.restyled && at < sizeof(text))
+        os64_snprintf(text + at, sizeof(text) - at, ", restyling having passed %s at depth %u's changed style "
+                      "down to %u", b.restyled_from, (unsigned)b.restyled_depth, (unsigned)b.restyled_marked);
+    yonder_lt_broad(&s_lt, os64_micros(), b.marked, text);
+}
+
+// A fresh cascade libgarb timed by part: to the timeline, by who asked.
+static void lt_cascade_built(const garb_cascade_t *c)
+{
+    garb_build_cost_t k = garb_cascade_build_cost(c);
+    if (k.sheets == 0 && k.table == 0 && k.matching == 0)
+        return;
+    yonder_lt_build_t b = {k.sheets, k.table, k.matching, k.rules, k.elements};
+    yonder_lt_build(&s_lt, s_lt_why, &b);
+}
+
 // The reasons a layout's cascade is built fresh, by the profile's index:
 // yonder's own (none yet, no memory for the scopes, sheets changed, sheets
 // that no longer match), then libgarb's refusals in their order, by
@@ -2058,7 +2126,7 @@ static const char *const *cascade_reason_names(void)
 static void cascade_check(const Page *p, const garb_cascade_t *updated, const garb_sheet_in_t *in, int32_t n,
                           const PageScopes *ps, garb_env_t view)
 {
-    garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX};
+    garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX, NULL};
     garb_cascade_t *fresh = garb_cascade_scoped(in, n, ps->scopes, ps->nscopes, page_doc(p), view,
                                                 s_page_memory.cascade != 0 ? &limits : NULL);
     if (fresh == NULL || garb_cascade_incomplete(fresh)) {
@@ -2144,13 +2212,26 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     int32_t why = updated ? -1 : cascade == NULL ? 0 : !scoped ? 1 : fresh_sheets ? 2 : !matches ? 3
                 : 3 + (int32_t)garb_cascade_update_refusal(cascade);
     if (!updated) {
+        if (s_lt.on)
+            lt_cascade_refused(cascade);
         measured_fallback(p);
         // The cascade's own state is held to its share of page_memory_mb;
         // what it reads of the sheets, and each style attribute's parse,
         // keep libgarb's ceilings (yonder_page_memory_split says why).
-        garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX};
+        // While the load's timeline runs it hands libgarb its clock, with
+        // the state's ceiling libgarb's own when page_memory_mb sets none:
+        // the limits it would have taken given none.
+        garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX,
+                                        NULL};
+        if (s_lt.on) {
+            limits.clock = lt_clock;
+            if (limits.state_bytes == 0)
+                limits.state_bytes = GARB_ARENA_MAX;
+        }
         cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view,
-                                               s_page_memory.cascade != 0 ? &limits : NULL) : NULL;
+                                               s_page_memory.cascade != 0 || s_lt.on ? &limits : NULL) : NULL;
+        if (s_lt.on && cascade != NULL)
+            lt_cascade_built(cascade);
     } else if (s_cascade_check != 0 && garb_cascade_updates(cascade) != prior_updates &&
                ++s_cascade_checked % s_cascade_check == 0) {
         // The check's own time is no part of this layout's: the profile's
@@ -3384,15 +3465,7 @@ static void diag_wire(yonder_diag_t *d)
     yonder_diag_fact(d, "wire cache", v);
 }
 
-// THE LOAD'S TIMELINE (load_timeline.h): the latest navigation's first
-// minutes, step by step, kept only while yonder.conf names a diagnostics
-// directory, and written to that navigation's record alone: the one begun
-// at s_lt.began_us (lt_ours). Each step of the window loop costs a reading
-// of the clock while the timeline runs, each layout, task and paint two,
-// each piece of the page its parser takes one, and nothing once it has
-// stopped beyond the test of s_lt.on.
-static yonder_lt_t s_lt;
-
+// The load's timeline (s_lt): whose record it is, its steps, its marks.
 static bool lt_ours(const yonder_diag_t *d)
 {
     return d != NULL && s_lt.began_us != 0 && yonder_diag_began(d) == s_lt.began_us;
@@ -3420,11 +3493,28 @@ static void lt_mark(const yonder_diag_t *d, yonder_lt_mark_t mark)
         yonder_lt_mark(&s_lt, mark, os64_micros());
 }
 
-// WHO ASKED for the layouts made between an lt_why_begin and its
-// lt_why_end (page_lay_out tells the timeline): the outermost asker
-// stands, so a rebuild a script's read asks for is the read's. Set only
-// while the timeline runs; the end puts back what the begin found.
-static yonder_lt_why_t s_lt_why;
+// A parser call of the stream's, begun at `from` (the timeline's clock),
+// to the timeline: `kind` and `bytes` what it was, how far into the page
+// the stream had taken, and the element whose text `parser` is still
+// adding to, if any (a `script`, a `style`). `parser` is NULL after a call
+// that consumed it (the finish), which leaves nothing to ask.
+static void lt_parse(const os64_html_parser_t *parser, const char *kind, size_t bytes, int64_t from)
+{
+    int64_t now = os64_micros();
+    const os64_html_node_t *open = parser != NULL ? os64_html_parser_open_text(parser) : NULL;
+    char text[YONDER_LT_PARSE_TEXT];
+    os64_snprintf(text, sizeof(text), "%s of %lu bytes, %lu KiB into the page%s%s%s", kind, (unsigned long)bytes,
+                  (unsigned long)(g.stream.bytes / 1024), open != NULL ? ", inside a " : "",
+                  open != NULL && open->name != NULL ? open->name : "", open != NULL ? " still open" : "");
+    yonder_lt_parse(&s_lt, from, now > from ? (uint64_t)(now - from) : 0, text);
+}
+
+// `us` since `from` of `in`, inside the timeline's step under way.
+static void lt_inside(yonder_lt_in_t in, int64_t from)
+{
+    int64_t now = os64_micros();
+    yonder_lt_inside(&s_lt, in, now > from ? (uint64_t)(now - from) : 0);
+}
 
 static yonder_lt_why_t lt_why_begin(yonder_lt_why_t why)
 {
@@ -3440,8 +3530,8 @@ static void lt_why_end(yonder_lt_why_t was)
 }
 
 // The timeline's lines on `d`, written whole: the summary, the layouts by
-// who asked and where, each slice up to the last that holds anything, and
-// each long step listed.
+// who asked and where, each slice up to the last that holds anything, each
+// long step listed, each broad refusal kept, and each slow parser call kept.
 static void diag_timeline(yonder_diag_t *d)
 {
     if (!lt_ours(d))
@@ -3465,8 +3555,19 @@ static void diag_timeline(yonder_diag_t *d)
         yonder_lt_long_line(&s_lt, i, line, sizeof(line));
         yonder_diag_timeline_fact(d, key, line);
     }
+    for (uint32_t i = 0; i < s_lt.broad_kept; i++) {
+        os64_snprintf(key, sizeof(key), "timeline broad %lu", (unsigned long)i + 1);
+        yonder_lt_broad_line(&s_lt, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
+    for (uint32_t i = 0; i < s_lt.parse_kept; i++) {
+        os64_snprintf(key, sizeof(key), "timeline parse %lu", (unsigned long)i + 1);
+        yonder_lt_parse_line(&s_lt, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
 }
-_Static_assert(2 + YONDER_LT_SLICES + YONDER_LT_LONG_MAX <= YONDER_DIAG_TIMELINE_FACTS,
+_Static_assert(2 + YONDER_LT_SLICES + YONDER_LT_LONG_MAX + YONDER_LT_BROAD_MAX + YONDER_LT_PARSE_MAX <=
+               YONDER_DIAG_TIMELINE_FACTS,
                "the timeline's lines fit its room in the record");
 
 static yonder_diag_t *diag_begin(const char *url)
@@ -5497,7 +5598,10 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     }
     sheets_start(fresh);
     if (fresh->sheets_waiting == 0) {
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
         arrive_now(fresh, kind, crumb, fragment);
+        if (s_lt.on)
+            lt_inside(YONDER_LT_IN_ARRIVING, lt_from);
         return;
     }
     g.coming.active = true;
@@ -6878,7 +6982,10 @@ static void coming_show(void)
     bool has_fragment = g.coming.has_fragment;
     os64_strcopy(fragment, sizeof(fragment), g.coming.fragment);
     os64_memset(&g.coming, 0, sizeof(g.coming));
+    int64_t lt_from = s_lt.on ? os64_micros() : 0;
     arrive_now(&page, kind, &crumb, has_fragment ? fragment : NULL);
+    if (s_lt.on)
+        lt_inside(YONDER_LT_IN_ARRIVING, lt_from);
 }
 
 // The page waiting for its sheets is not wanted after all.
@@ -10573,7 +10680,7 @@ static void glass_paint(void)
     if (count == 0) {
         os64_memset(s_cost.now, 0, sizeof(s_cost.now));
         if (s_lt.on)
-            yonder_lt_drawing(&s_lt, (uint64_t)(os64_micros() - drawn_from));
+            yonder_lt_inside(&s_lt, YONDER_LT_IN_DRAWING, (uint64_t)(os64_micros() - drawn_from));
         return;
     }
     cost_begin(PS_PUBLISH);
@@ -10584,7 +10691,7 @@ static void glass_paint(void)
     paint_counted(damage, count, by, reach);
     cost_fold(PS_RENDER, PS_PUBLISH);
     if (s_lt.on)
-        yonder_lt_drawing(&s_lt, (uint64_t)(os64_micros() - drawn_from));
+        yonder_lt_inside(&s_lt, YONDER_LT_IN_DRAWING, (uint64_t)(os64_micros() - drawn_from));
 }
 
 // What the window loop does before each paint: a whole view's paint shows
@@ -16332,7 +16439,10 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     fresh.modern = g.stream.modern;
     // Its scripts go on with the same host, so their tasks keep their ages.
     os64_memcpy(fresh.task_ages, g.stream.page.task_ages, sizeof(fresh.task_ages));
+    int64_t lt_from = s_lt.on ? os64_micros() : 0;
     os64_html_document_t *doc = os64_html_parser_finish(g.stream.parser);
+    if (s_lt.on)
+        lt_parse(NULL, "the parse's finish", 0, lt_from);
     g.stream.parser = NULL;
     if (doc == NULL) {
         stream_failed("Out of memory reading that page.");
@@ -16651,7 +16761,10 @@ static int64_t stream_parsed(int64_t r)
             stream_reactions();
             return r;
         }
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
         r = os64_html_parser_resume(g.stream.parser);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "a resume past a script not run", 0, lt_from);
     }
     stream_reactions();
     return r;
@@ -16736,6 +16849,7 @@ static void stream_sheets(void)
     if (g.stream.parser == NULL || g.stream.head.body != WAY_BODY_HTML)
         return;
     Page *p = stream_page();
+    int64_t lt_from = s_lt.on ? os64_micros() : 0;
     preloads_start(p);
     int64_t began = s_script_audit ? os64_micros() : 0;
     int32_t had = p->nsheets;
@@ -16750,6 +16864,8 @@ static void stream_sheets(void)
                       (long)(os64_micros() - began));
         os64_debug_log(line);
     }
+    if (s_lt.on)
+        lt_inside(YONDER_LT_IN_SHEETS, lt_from);
 }
 
 // Whether the script the parse is stopped at waits for the sheets still
@@ -16868,7 +16984,11 @@ static bool stream_turn(void)
         }
         g.stream.ran = false;
         g.stream.stopped = false;
-        int64_t r = stream_parsed(os64_html_parser_resume(g.stream.parser));
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
+        int64_t resumed = os64_html_parser_resume(g.stream.parser);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "a resume after a script", 0, lt_from);
+        int64_t r = stream_parsed(resumed);
         if (r != OS64_HTML_OK && r != OS64_HTML_SCRIPT) {
             stream_cut_short();
             return false;
@@ -16907,7 +17027,11 @@ static bool stream_turn(void)
                 return false;
             }
         }
-        int64_t r = stream_parsed(os64_html_parser_feed(g.stream.parser, chunk + at, n - at));
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
+        int64_t parsed = os64_html_parser_feed(g.stream.parser, chunk + at, n - at);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "a feed", n - at, lt_from);
+        int64_t r = stream_parsed(parsed);
         if (r == OS64_HTML_SCRIPT)
             break;                      // the slice ends at a script the page runs
         if (r != OS64_HTML_OK) {
@@ -16983,7 +17107,11 @@ static bool stream_turn(void)
             return false;
         }
         g.stream.ending = true;
-        int64_t r = stream_parsed(os64_html_parser_end(g.stream.parser));
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
+        int64_t ended = os64_html_parser_end(g.stream.parser);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "the input's end", 0, lt_from);
+        int64_t r = stream_parsed(ended);
         if (r == OS64_HTML_SCRIPT)
             return yonder_scripts_blocking_ready(g.stream.scripts) ||
                    yonder_scripts_connected_pending(g.stream.scripts);

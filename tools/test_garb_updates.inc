@@ -188,6 +188,13 @@ static uint64_t has_update(HasCase *h, const char *what)
     update_equal(h->c,h->doc,&h->in);
     return before;
 }
+// The caller's clock for the measure's cases: each read a tick later, so
+// every part of a build is at least a tick.
+static uint64_t measure_clock(void)
+{
+    static uint64_t ticks;
+    return ++ticks;
+}
 static void has_close(HasCase *h)
 {
     garb_cascade_free(h->c);garb_free(&h->sheet);os64_html_document_free(h->doc);
@@ -534,6 +541,55 @@ static void update_has(void)
         update_check(update_or_rebuild(&h.c,h.doc,&h.in),"and the fresh cascade builds");
         update_equal(h.c,h.doc,&h.in);
         has_close(&h);
+    }
+    /* THE CALLER'S MEASURE (garb_cascade_limits_t.clock): a cascade made
+     * with a clock says what its fresh build cost by part, and a broad
+     * refusal names the change that marked the most, by which mark; one
+     * made without a clock says nothing of either. */
+    {
+        char html[8192]="<!doctype html><div id=a class=a>";
+        for(int i=0;i<260;++i) strcat(html,"<p>x</p>");
+        strcat(html,"<i id=i></i></div><b id=b></b>");
+        const char *css=".a:has(.b){--ink:red}p{color:var(--ink)}";
+        garb_cascade_limits_t limits={GARB_ARENA_MAX,GARB_CASCADE_READ_MAX,GARB_ARENA_MAX,SIZE_MAX,measure_clock};
+        for(int clocked=1;clocked>=0;--clocked){
+            HasCase m={0};
+            m.doc=update_doc(html);
+            garb_parse_sheet_text(css,strlen(css),&m.sheet);
+            m.in=(garb_sheet_in_t){.sheet=&m.sheet};
+            m.c=garb_cascade_scoped(&m.in,1,NULL,0,m.doc,(garb_env_t){.width=800,.height=600},clocked?&limits:NULL);
+            update_check(m.c && garb_cascade_tracks_changes(m.c),"measure: the cascade tracks changes");
+            garb_build_cost_t k=garb_cascade_build_cost(m.c);
+            garb_broad_trigger_t t;
+            if(clocked)
+                update_check(k.rules==2 && k.elements>=263 && k.sheets>0 && k.table>0 && k.matching>0,
+                             "measure: a clocked build says its parts, its rules and its elements");
+            else
+                update_check(k.rules==0 && k.elements==0 && k.sheets==0 && k.matching==0,
+                             "measure: a build with no clock says nothing");
+            os64_html_set_attr(m.doc,has_el(&m,"b"),"title","t",1);
+            update_check(garb_cascade_update(m.c) && !garb_cascade_broad_trigger(m.c,&t),
+                         "measure: an update that went ahead names no trigger");
+            os64_html_set_attr(m.doc,has_el(&m,"i"),"class","b",1);
+            bool refused=!garb_cascade_update(m.c) && garb_cascade_update_refusal(m.c)==GARB_UPDATE_BROAD;
+            bool named=garb_cascade_broad_trigger(m.c,&t);
+            if(clocked)
+                // The :has() turned at #a: #a is restyled alone, its --ink
+                // comes out different, and passes down to its children,
+                // more than half the page; the batch's change that began
+                // it is the class at i#i.
+                update_check(refused && named && t.kind==OS64_HTML_CHANGE_ATTR && !strcmp(t.attr,"class") &&
+                             !strcmp(t.target,"i#i.b") && t.depth==4 && t.marked>0 &&
+                             t.by[GARB_MARK_SUBTREE]+t.by[GARB_MARK_HAS]==t.marked && t.changes==1 &&
+                             t.marked_changes==1 && t.restyled && !strcmp(t.restyled_from,"div#a.a") &&
+                             t.restyled_depth==3 && t.dirty>t.slots/2 && t.restyled_marked+t.marked==t.dirty,
+                             "measure: a broad refusal names its change, what passed its style down, and the marks");
+            else
+                update_check(refused && !named,"measure: a broad refusal with no clock names nothing");
+            has_close(&m);
+        }
+        update_check(!strcmp(garb_mark_name(GARB_MARK_HAS),":has()") && !strcmp(garb_mark_name(GARB_MARKS),"?"),
+                     "measure: the marks' names");
     }
     update_check(live==baseline,":has() updates release what they made");
 }

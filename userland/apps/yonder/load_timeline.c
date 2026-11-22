@@ -28,6 +28,9 @@ static const char *const kIn[YONDER_LT_INS] = {
     [YONDER_LT_IN_TASKS] = "tasks",
     [YONDER_LT_IN_LAYOUTS] = "layouts",
     [YONDER_LT_IN_DRAWING] = "drawing",
+    [YONDER_LT_IN_PARSING] = "parsing",
+    [YONDER_LT_IN_SHEETS] = "finding sheets",
+    [YONDER_LT_IN_ARRIVING] = "arriving",
 };
 
 static const char *const kWhy[YONDER_LT_WHYS] = {
@@ -231,10 +234,34 @@ void yonder_lt_task(yonder_lt_t *t, int64_t at_us, const char *what, uint64_t us
     }
 }
 
-void yonder_lt_drawing(yonder_lt_t *t, uint64_t us)
+void yonder_lt_inside(yonder_lt_t *t, yonder_lt_in_t in, uint64_t us)
 {
-    if (t->on && t->in_step)
-        t->now.in_us[YONDER_LT_IN_DRAWING] += us;
+    if (t->on && t->in_step && (unsigned)in < YONDER_LT_INS)
+        t->now.in_us[in] += us;
+}
+
+void yonder_lt_parse(yonder_lt_t *t, int64_t from_us, uint64_t us, const char *text)
+{
+    if (!t->on)
+        return;
+    yonder_lt_inside(t, YONDER_LT_IN_PARSING, us);
+    t->nparse++;
+    t->parse_us += us;
+    uint32_t at = t->parse_kept;
+    if (at == YONDER_LT_PARSE_MAX) {
+        if (t->parse[at - 1].us >= us)
+            return;
+        at--;
+    } else {
+        t->parse_kept++;
+    }
+    while (at > 0 && t->parse[at - 1].us < us) {
+        t->parse[at] = t->parse[at - 1];
+        at--;
+    }
+    t->parse[at].at_us = since(t, from_us);
+    t->parse[at].us = us;
+    copy_name(t->parse[at].text, sizeof(t->parse[at].text), text);
 }
 
 void yonder_lt_bytes(yonder_lt_t *t, int64_t at_us, uint64_t n)
@@ -251,6 +278,42 @@ void yonder_lt_mark(yonder_lt_t *t, yonder_lt_mark_t mark, int64_t at_us)
     if (!t->on || (unsigned)mark >= YONDER_LT_MARKS || t->marks[mark] >= 0)
         return;
     t->marks[mark] = (int64_t)since(t, at_us);
+}
+
+void yonder_lt_build(yonder_lt_t *t, yonder_lt_why_t why, const yonder_lt_build_t *b)
+{
+    if (!t->on || b == NULL)
+        return;
+    if ((unsigned)why >= YONDER_LT_WHYS)
+        why = YONDER_LT_WHY_OTHER;
+    t->builds[why]++;
+    t->build_sheets[why] += b->sheets_us;
+    t->build_table[why] += b->table_us;
+    t->build_matching[why] += b->matching_us;
+    t->build_rules[why] += b->rules;
+    t->build_elements[why] += b->elements;
+}
+
+void yonder_lt_broad(yonder_lt_t *t, int64_t at_us, uint32_t marked, const char *text)
+{
+    if (!t->on)
+        return;
+    t->nbroad++;
+    uint32_t at = t->broad_kept;
+    if (at == YONDER_LT_BROAD_MAX) {
+        if (t->broad[at - 1].marked >= marked)
+            return;
+        at--;
+    } else {
+        t->broad_kept++;
+    }
+    while (at > 0 && t->broad[at - 1].marked < marked) {
+        t->broad[at] = t->broad[at - 1];
+        at--;
+    }
+    t->broad[at].at_us = since(t, at_us);
+    t->broad[at].marked = marked;
+    copy_name(t->broad[at].text, sizeof(t->broad[at].text), text);
 }
 
 // ── The lines ────────────────────────────────────────────────────────
@@ -377,6 +440,13 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap)
             put_s(&o, (uint64_t)t->marks[m]);
     }
     put(&o, "; ");
+    put_u(&o, t->nparse);
+    put(&o, " parser calls in ");
+    put_ms(&o, t->parse_us);
+    put(&o, "; ");
+    put(&o, "updates refused as broad: ");
+    put_u(&o, t->nbroad);
+    put(&o, "; ");
     put_u(&o, t->nlongs + t->more_longs);
     put(&o, " steps of ");
     put_u(&o, YONDER_LT_LONG_US / 1000);
@@ -498,11 +568,45 @@ void yonder_lt_layouts_line(const yonder_lt_t *t, char *out, size_t cap)
     }
     if (sep[0] == ':')
         put(&o, ": none");
+    // The fresh builds libgarb timed by part, by who asked, the costliest
+    // first.
+    uint64_t built[YONDER_LT_WHYS];
+    uint32_t nbuilt = 0;
+    for (int w = 0; w < YONDER_LT_WHYS; w++) {
+        built[w] = t->build_sheets[w] + t->build_table[w] + t->build_matching[w];
+        nbuilt += t->builds[w];
+    }
+    if (nbuilt != 0) {
+        put(&o, "; fresh cascades by part");
+        bool done[YONDER_LT_WHYS] = {false};
+        sep = ": ";
+        for (int w; (w = largest(built, t->builds, done, YONDER_LT_WHYS)) >= 0;) {
+            done[w] = true;
+            put(&o, sep);
+            sep = ", ";
+            put(&o, kWhy[w]);
+            put(&o, " ");
+            put_u(&o, t->builds[w]);
+            put(&o, " in ");
+            put_ms(&o, built[w]);
+            put(&o, " (reading the sheets ");
+            put_ms_bare(&o, t->build_sheets[w]);
+            put(&o, ", the table ");
+            put_ms_bare(&o, t->build_table[w]);
+            put(&o, ", matching ");
+            put_ms_bare(&o, t->build_matching[w]);
+            put(&o, "; ");
+            put_u(&o, t->build_rules[w] / t->builds[w]);
+            put(&o, " rules and ");
+            put_u(&o, t->build_elements[w] / t->builds[w]);
+            put(&o, " elements a build)");
+        }
+    }
     uint32_t timed = 0;
     for (int w = 0; w < YONDER_LT_WHYS; w++)
         timed += t->cascades[w];
     if (timed == 0) {
-        put(&o, "; cascades not timed (yonder --layout-profile times them)");
+        put(&o, "; cascades not timed whole (yonder --layout-profile times them)");
         return;
     }
     put(&o, "; cascades the layout profile timed");
@@ -564,4 +668,28 @@ void yonder_lt_long_line(const yonder_lt_t *t, uint32_t i, char *out, size_t cap
         put(&o, " layouts in ");
         put_ms(&o, l->task_layout_us);
     }
+}
+
+void yonder_lt_broad_line(const yonder_lt_t *t, uint32_t i, char *out, size_t cap)
+{
+    Out o = out_of(out, cap);
+    if (i >= t->broad_kept)
+        return;
+    put(&o, "at ");
+    put_s(&o, t->broad[i].at_us);
+    put(&o, ", ");
+    put(&o, t->broad[i].text);
+}
+
+void yonder_lt_parse_line(const yonder_lt_t *t, uint32_t i, char *out, size_t cap)
+{
+    Out o = out_of(out, cap);
+    if (i >= t->parse_kept)
+        return;
+    put(&o, "at ");
+    put_s(&o, t->parse[i].at_us);
+    put(&o, ", ");
+    put_ms(&o, t->parse[i].us);
+    put(&o, ": ");
+    put(&o, t->parse[i].text);
 }

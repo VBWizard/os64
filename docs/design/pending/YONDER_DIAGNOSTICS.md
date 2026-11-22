@@ -455,11 +455,13 @@ minutes, from the moment its record begins:
   across a slice's edge is shared between the slices by time. A slice's
   `busy` is its time not waiting.
 - **What was inside a step**, in parentheses after it: its script tasks,
-  its layouts and its drawing (the whole of a paint: the backdrops' marks,
-  the kept drawings, the render and the publish), shared between slices
+  its layouts, its drawing (the whole of a paint: the backdrops' marks,
+  the kept drawings, the render and the publish), the arriving page's
+  parser calls (`parsing`), its looks for new sheets (`finding sheets`),
+  and a page being made the shown one (`arriving`), shared between slices
   as the step is. The parts may overlap: a layout a task forced is inside
-  the task too. What none of them holds is the step's own work: the
-  stream's parse, the dispatcher's own, and so on.
+  the task too, and the arrival's layout inside the arriving. What none of
+  them holds is the step's own work: the dispatcher's own, and so on.
 - **Who asked for each layout** (`yonder_lt_why_t`): a script's read (a
   box, a hit, text rects, a computed style, a scroll), yonder bringing the
   shown page up to date after a script's changes, a page arriving, a sheet
@@ -476,6 +478,28 @@ minutes, from the moment its record begins:
   `ledger`; its time includes answering the read, so it can exceed the
   layouts' own.
 - **Bytes parsed**: the arriving page's bytes its parser took in the slice.
+- **The slowest parser calls** (`timeline parse N`), eight at most, each
+  with when it began, how long, what call it was (a feed, a resume, the
+  input's end, the finish), the bytes it was handed, how far into the page
+  the stream had taken, and the element whose text was still open (a
+  `script`, a `style`); the summary counts every call and its time.
+- **Fresh cascades by part**, from libgarb itself: while the timeline runs
+  yonder hands a fresh cascade its clock (`garb_cascade_limits_t.clock`),
+  and libgarb keeps what reading the sheets, sizing its table and matching
+  the elements cost (`garb_cascade_build_cost`). `timeline layouts` sums
+  them by asker, with the rules and elements a build. This is Fable's
+  "fresh-cascade split" (BRIEF_CASCADE_TRACKING_C3_ANSWERS § 2), and it
+  needs no `--layout-profile`.
+- **What triggered a broad refusal** (`timeline broad N`, the eight that
+  marked the most; the summary counts all): libgarb keeps, for a cascade
+  given a clock, the change of the batch that marked the most (its kind,
+  its target, the target's depth, the attribute, how many it marked and by
+  which mark: its subtree, added subtrees, siblings, `:has()`, the parent's
+  state, slots), the batch's size, and, when the half was crossed while
+  restyling, the element whose changed style was passing down then and
+  what restyling had marked (`inherited`) (`garb_cascade_broad_trigger`).
+  The refusal itself is unchanged: Fable's ruling (§ 3) keeps it whole and
+  adds only the record.
 - **The longest steps**, sixteen at most, of 200 ms or more, each with when
   it began, the layouts inside it by who asked, its drawing, and the
   longest task inside it. Waits
@@ -492,10 +516,13 @@ minutes, from the moment its record begins:
   each `d`, its leaving. A record written after a later navigation began
   keeps the lines its last write gave it.
 - **What it costs**: a reading of the clock as the loop enters each step,
-  two around each layout, task and paint, and one for each piece of the
-  page its parser takes, only while it runs; past its last slice it
-  stops. Without `diagnostics` it never starts: each hook is then one test
-  of a flag, and a tagged asker one store putting back what it found.
+  two around each layout, task, paint, parser call, look for sheets and
+  arrival, one for each piece of the page its parser takes, and four in
+  each fresh cascade, with libgarb's counts of an update's marks, only
+  while it runs; past its last slice it stops. Without `diagnostics` it
+  never starts: each hook is then one test of a flag, a tagged asker one
+  store putting back what it found, and libgarb, given no clock, counts
+  nothing (a store of which mark is being made, per mark call).
 
 ### Built differently from the brief, and why
 

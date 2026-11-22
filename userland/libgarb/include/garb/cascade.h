@@ -133,8 +133,13 @@ typedef struct {
 // presentation-value parse. attributes bounds their retained count. Scratch,
 // slot tables and selector/match arrays are separate; these are not a unified
 // allocator budget. Zero limits are literal. Input sheets remain caller-owned.
+// `clock`, when not NULL, is the caller's clock (microseconds, or any unit
+// it likes): the cascade then keeps the caller's measure
+// (garb_cascade_build_cost, garb_cascade_broad_trigger), and without it
+// counts nothing for them.
 typedef struct {
     size_t state_bytes, read_bytes, attribute_bytes, attributes;
+    uint64_t (*clock)(void);
 } garb_cascade_limits_t;
 garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *, int32_t,
                                      const os64_html_document_t *, garb_env_t,
@@ -229,6 +234,54 @@ typedef struct {
     uint64_t tested, turned, marked;
 } garb_bare_work_t;
 garb_bare_work_t garb_cascade_bare_work(const garb_cascade_t *c);
+
+// THE CALLER'S MEASURE, kept only when the cascade was made with a clock
+// (garb_cascade_limits_t.clock): a diagnostic, and with no clock nothing is
+// counted. What the fresh build cost by part, on the caller's clock:
+// reading the sheets (their rules, selectors and values into this
+// cascade's reading of them, the index, the dependencies, the anchors and
+// the keyframes), sizing the element table, and matching every element;
+// with the rules read and the elements matched.
+typedef struct {
+    uint64_t sheets, table, matching;
+    uint32_t rules, elements;
+} garb_build_cost_t;
+garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c);
+// Which mark an update made the elements it marked by: for a change, the
+// changed element's subtree (inheritance and descendant selectors), an
+// added subtree, siblings (`+`, `~`, :nth-*), a :has() asked again (its
+// anchors and their reach), the parent's own state (:empty, a <details> or
+// <fieldset>'s first child), a shadow tree's assignments; and while the
+// marked elements are restyled, an element restyled alone whose style came
+// out different passing it down to its children (inherited).
+typedef enum {
+    GARB_MARK_SUBTREE, GARB_MARK_ADDED, GARB_MARK_SIBLINGS, GARB_MARK_HAS, GARB_MARK_PARENT,
+    GARB_MARK_SLOTS, GARB_MARK_INHERITED, GARB_MARKS
+} garb_mark_t;
+const char *garb_mark_name(garb_mark_t mark);
+// When the latest update was refused GARB_UPDATE_BROAD: the change of the
+// batch that marked the most elements (the batch's marking stops at the
+// one that crossed half, so a later change never ran): its kind
+// (os64_html_change_kind_t), its target (tag, #id, first .class, cut to
+// fit) and the target's depth below the document, the attribute for an
+// attribute's change, how many elements it marked and by which mark; with
+// the changes the batch held and had marked, the dirty count at refusal
+// and the elements the cascade holds. When the half was crossed while
+// restyling instead (`restyled`), the element whose changed style was
+// passing down then, its depth, and what the restyling had marked by then
+// (all of it inherited). False when the latest update was not refused so,
+// or no clock was given.
+typedef struct {
+    int32_t kind;
+    char target[64], attr[32];
+    uint32_t depth, marked, by[GARB_MARKS];
+    uint32_t changes, marked_changes, dirty, slots;
+    bool restyled;
+    char restyled_from[64];
+    uint32_t restyled_depth, restyled_marked;
+} garb_broad_trigger_t;
+bool garb_cascade_broad_trigger(const garb_cascade_t *c, garb_broad_trigger_t *out);
+
 uint64_t garb_cascade_generation(const garb_cascade_t *c);
 uint64_t garb_cascade_updates(const garb_cascade_t *c);
 uint64_t garb_cascade_version(const garb_cascade_t *c);
