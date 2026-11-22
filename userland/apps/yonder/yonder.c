@@ -1546,6 +1546,90 @@ static size_t element_named(char *out, size_t cap, const char *before, const os6
     return at;
 }
 
+// A table of things counted by what they were, each with where the latest
+// was (an element) and a note on it, the most counted first, for a
+// reading's line (counted_at_line); the reading starts it again
+// (counted_at_reset). A thing new to the table goes ahead of those
+// counted once. Full, it takes the place of the longest-standing of those
+// counted once, which is counted as `others`, or, when every row has been
+// counted more than once, it is counted as `others` itself: a burst of
+// one-offs (a page loading) cannot push out a thing counted twice, and a
+// thing that comes again before eleven newer ones has its row still.
+typedef struct {
+    struct {
+        char what[48], at[96], note[160];
+        uint64_t n;
+    } row[12];
+    int nrows;
+    uint64_t others;
+} CountedAt;
+
+// W0's tables (WHOLE_REPAINTS.md): the paints the guards would not cover
+// (cover_refusal_note) and what scripts' rebuilds changed
+// (script_changes_note), each since the last reading or the page shown.
+static CountedAt s_not_covered, s_script_changes;
+
+static void counted_at_reset(CountedAt *t)
+{
+    t->nrows = 0;
+    t->others = 0;
+}
+
+static void counted_at(CountedAt *t, const char *what, const char *at, const char *note)
+{
+    const int rows = (int)(sizeof(t->row) / sizeof(t->row[0]));
+    int i = 0;
+    for (; i < t->nrows && (!os64_streq(t->row[i].what, what) || !os64_streq(t->row[i].at, at)); i++) {}
+    if (i == t->nrows) {
+        if (t->nrows == rows && t->row[rows - 1].n > 1) {
+            t->others++;
+            return;
+        }
+        if (t->nrows == rows)
+            t->others += t->row[--t->nrows].n;
+        i = t->nrows++;
+        os64_strcopy(t->row[i].what, sizeof(t->row[i].what), what);
+        os64_strcopy(t->row[i].at, sizeof(t->row[i].at), at);
+        t->row[i].n = 1;
+        os64_strcopy(t->row[i].note, sizeof(t->row[i].note), note);
+        for (; i > 0 && t->row[i - 1].n == 1; i--) {
+            __typeof__(t->row[0]) swap = t->row[i];
+            t->row[i] = t->row[i - 1];
+            t->row[i - 1] = swap;
+        }
+        return;
+    }
+    t->row[i].n++;
+    os64_strcopy(t->row[i].note, sizeof(t->row[i].note), note);
+    for (; i > 0 && t->row[i].n > t->row[i - 1].n; i--) {
+        __typeof__(t->row[0]) swap = t->row[i];
+        t->row[i] = t->row[i - 1];
+        t->row[i - 1] = swap;
+    }
+}
+
+// `what n: at (note); ...`, then `others n`; a row past the line's room is
+// left off whole.
+static void counted_at_line(const CountedAt *t, char *line, size_t cap)
+{
+    size_t used = 0;
+    line[0] = '\0';
+    for (int k = 0; k <= t->nrows; k++) {
+        if (k == t->nrows && t->others == 0)
+            break;
+        int w = k < t->nrows
+            ? os64_snprintf(line + used, cap - used, "%s%s %lu: %s%s%s%s", k ? "; " : "", t->row[k].what,
+                            (unsigned long)t->row[k].n, t->row[k].at[0] ? t->row[k].at : "-",
+                            t->row[k].note[0] ? " (" : "", t->row[k].note, t->row[k].note[0] ? ")" : "")
+            : os64_snprintf(line + used, cap - used, "%sothers %lu", k ? "; " : "", (unsigned long)t->others);
+        if (w < 0 || (size_t)w >= cap - used) {
+            line[used] = '\0';
+            break;
+        }
+        used += (size_t)w;
+    }
+}
+
 // What refused a layout's parts, as the record says it (`out`, empty for
 // none named): the element as a selector would name it (element_named),
 // the element holding it for a text — and the property a layout places,
@@ -3640,9 +3724,13 @@ static struct {
     // painted again because the walk never handed the video over, and those
     // painted the ordinary way because a backdrop reader may read across the
     // edge a split would cut (backdrop_read_meets), or because the layers'
-    // budget might run out or a sheet pass its limit (flow_layer_area_bound,
-    // flow_sheets_fit).
+    // budget might run out or a sheet pass its limit (flow_paint_asks; the
+    // record's `not covered` says which, cover_refusal_note).
     uint64_t covered_paints, covered_pieces, covered_again, covered_refused, covered_budget;
+    // The longest task (task_said): its cycles, what it was (its kind and
+    // its script's name), and the layouts it forced and their time.
+    uint64_t task_longest, task_longest_layouts, task_longest_layout_us;
+    char task_longest_what[96];
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
@@ -3887,6 +3975,10 @@ static void cost_reset(void)
     yonder_ticker_counts_restart(g.ticker);
     yonder_paint_cache_counts_restart(g.paint_cache);
     yonder_keeps_counts_restart(g.keeps);
+    // W0's tables too: a page shown starts them again, as a reading does,
+    // so no page's first reading carries the last one's elements.
+    counted_at_reset(&s_not_covered);
+    counted_at_reset(&s_script_changes);
 }
 
 // Pointer hit testing follows published geometry, not every drawing operation.
@@ -8738,6 +8830,11 @@ static bool paint_lines(DiagText *t, DiagText *u)
     dt_put(t, "; %lu script tasks: %lu scripts, %lu timers, %lu events",
            (unsigned long)(s_cost.scripts + s_cost.timers + s_cost.events), (unsigned long)s_cost.scripts,
            (unsigned long)s_cost.timers, (unsigned long)s_cost.events);
+    if (s_cost.task_longest > 0 && rate != 0)
+        dt_put(t, "; the longest task %s, %lu.%lu ms, forcing %lu layouts in %lu.%lu ms", s_cost.task_longest_what,
+               (unsigned long)(s_cost.task_longest / rate / 1000), (unsigned long)(s_cost.task_longest / rate % 1000 / 100),
+               (unsigned long)s_cost.task_longest_layouts, (unsigned long)(s_cost.task_longest_layout_us / 1000),
+               (unsigned long)(s_cost.task_longest_layout_us % 1000 / 100));
     if (s_cost.mark_most.w > 0)
         dt_put(t, "; the biggest part marked %dx%d at %d,%d by %s, the biggest painted %dx%d",
                (int)s_cost.mark_most.w, (int)s_cost.mark_most.h, (int)s_cost.mark_most.x,
@@ -9187,6 +9284,21 @@ static void diag_paint_reading(Page *p, uint32_t n)
         yonder_diag_needed_text(&s_needed_reading, needed, sizeof(needed));
         os64_snprintf(nkey, sizeof(nkey), "layout needed reading %u", (unsigned)n);
         yonder_diag_reading_fact(p->diag, nkey, needed);
+        // W0's two tables, each written when it holds anything and started
+        // again for the next reading (WHOLE_REPAINTS.md).
+        const struct { CountedAt *t; const char *key; } w0[] = {
+            {&s_not_covered, "not covered reading %u"},
+            {&s_script_changes, "whole views by a script's change reading %u"},
+        };
+        for (size_t k = 0; k < sizeof(w0) / sizeof(w0[0]); k++) {
+            if (w0[k].t->nrows > 0 || w0[k].t->others > 0) {
+                char line[1536], key[64];
+                counted_at_line(w0[k].t, line, sizeof(line));
+                os64_snprintf(key, sizeof(key), w0[k].key, (unsigned)n);
+                yonder_diag_reading_fact(p->diag, key, line);
+            }
+            counted_at_reset(w0[k].t);
+        }
     }
     os64_free(t.s);
     os64_free(u.s);
@@ -11788,6 +11900,86 @@ static void canvas_damage_part(Page *p,const flow_box_t *box,uint32_t width,uint
     if(x1>x0 && y1>y0)mark_part((os64_gui_rect_t){x0,y0,x1-x0,y1-y0});
 }
 
+// `whole views by a script's change reading N` in the record
+// (--layout-profile, written at each reading, diag_paint_reading): at each
+// script rebuild, which repaints the whole view, what changed since the
+// tree on screen, read from the document's change log by a reader of its
+// own, made and freed here: each change by its kind (an attribute by its
+// name, children, text, state) at what it changed (change_target_named),
+// once a rebuild, with the latest's note (an inline style as it now
+// stands, the children put in and taken out). A log that no longer
+// reaches the tree on screen counts as `lost` (WHOLE_REPAINTS.md W0).
+// What a change was made to, named for the record: an element as a
+// selector would name it; a shadow root by its host; the document; a
+// fragment; and any other node (text) by the element holding it.
+static void change_target_named(char *at, size_t cap, const os64_html_node_t *n)
+{
+    const os64_html_node_t *host = n != NULL && n->kind == OS64_HTML_FRAGMENT ? os64_html_shadow_host(n) : NULL;
+    if (n == NULL)
+        os64_strcopy(at, cap, "nothing");
+    else if (n->kind == OS64_HTML_ELEMENT)
+        element_named(at, cap, "", n);
+    else if (host != NULL)
+        element_named(at, cap, "the shadow of ", host);
+    else if (n->kind == OS64_HTML_DOCUMENT)
+        os64_strcopy(at, cap, "the document");
+    else if (n->kind == OS64_HTML_FRAGMENT)
+        os64_strcopy(at, cap, "a fragment");
+    else if (n->parent != NULL && n->parent->kind == OS64_HTML_ELEMENT)
+        element_named(at, cap, "text in ", n->parent);
+    else
+        os64_strcopy(at, cap, "a node");
+}
+
+static void script_changes_note(Page *p)
+{
+    if (!s_layout_profile || layout_profile_diag(p) == NULL)
+        return;
+    os64_html_reader_t *reader = os64_html_reader_new((os64_html_document_t *)page_doc(p), p->rendered_version);
+    const os64_html_change_entry_t *entry = NULL;
+    if (reader == NULL || os64_html_changes(reader, &entry) < 0) {
+        counted_at(&s_script_changes, "lost", "", "the log no longer reaches the tree on screen");
+        entry = NULL;
+    }
+    // As many seen as are read, so each change counts once a rebuild
+    // however many others it does.
+    enum { CHANGES_READ = 256 };
+    struct {
+        const os64_html_node_t *at;
+        const char *attr;
+        os64_html_change_kind_t kind;
+    } seen[CHANGES_READ];
+    int nseen = 0;
+    for (int read = 0; entry != NULL && read < CHANGES_READ; entry = entry->next, read++) {
+        int k = 0;
+        for (; k < nseen && (seen[k].at != entry->target || seen[k].kind != entry->kind ||
+                             !os64_streq(seen[k].attr ? seen[k].attr : "", entry->attr_name ? entry->attr_name : ""));
+             k++) {}
+        if (k < nseen)
+            continue;
+        seen[nseen++] = (__typeof__(seen[0])){entry->target, entry->attr_name, entry->kind};
+        char what[48], at[96] = "", note[160] = "";
+        os64_snprintf(what, sizeof(what), "%s%s",
+                      entry->kind == OS64_HTML_CHANGE_CHILDREN ? "children"
+                      : entry->kind == OS64_HTML_CHANGE_ATTR   ? "attribute "
+                      : entry->kind == OS64_HTML_CHANGE_TEXT   ? "text"
+                                                               : "state",
+                      entry->kind == OS64_HTML_CHANGE_ATTR && entry->attr_name ? entry->attr_name : "");
+        change_target_named(at, sizeof(at), entry->target);
+        if (entry->kind == OS64_HTML_CHANGE_CHILDREN) {
+            os64_snprintf(note, sizeof(note), "+%lu -%lu", (unsigned long)entry->nadded,
+                          (unsigned long)entry->nremoved);
+        } else if (entry->kind == OS64_HTML_CHANGE_ATTR && entry->attr_name != NULL &&
+                   os64_streq(entry->attr_name, "style") && entry->target != NULL &&
+                   entry->target->kind == OS64_HTML_ELEMENT) {
+            const os64_html_attr_t *style = os64_html_attr(entry->target, "style");
+            os64_strcopy(note, sizeof(note), style != NULL && style->value != NULL ? style->value : "removed");
+        }
+        counted_at(&s_script_changes, what, at, note);
+    }
+    os64_html_reader_free(reader);
+}
+
 static bool script_rebuild(void)
 {
     Page *p = &g.page;
@@ -11813,6 +12005,7 @@ static bool script_rebuild(void)
         }
     }
     if (version != p->rendered_version) {
+        script_changes_note(p);
         int64_t began = s_script_audit ? os64_micros() : 0;
         bool zoom_changed = p->laid_zoom != 0 && p->laid_zoom != g.zoom;
         int32_t offset = 0, sx = g.sx;
@@ -12328,9 +12521,17 @@ static void task_cost(const char *what)
 static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
+    uint64_t spent = cycles_since(s_task_began);
     task_cost(what);
 
     os64_dom_geometry_stats_t forced = yonder_scripts_geometry_stats(host, false);
+    if (spent > s_cost.task_longest) {
+        s_cost.task_longest = spent;
+        s_cost.task_longest_layouts = forced.layouts;
+        s_cost.task_longest_layout_us = forced.elapsed_us;
+        os64_snprintf(s_cost.task_longest_what, sizeof(s_cost.task_longest_what), "%s%s%s", what,
+                      out->source_name[0] ? " " : "", out->source_name);
+    }
     if (s_script_audit) {
         char line[OS64_JS_SOURCE_NAME_CAP + 160];
         os64_snprintf(line, sizeof(line), "yonder: task %s %s: status %d in %ld us, wrote %lu bytes, "
@@ -18186,6 +18387,35 @@ static bool paint_part(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t part,
     return found;
 }
 
+// `not covered reading N` in the record (--layout-profile, written at each
+// reading, diag_paint_reading): for each paint a video would have covered
+// that the guards painted the ordinary way, which limit
+// it passed first and the element that passed it, counted, with the latest
+// one's numbers — what of the element was counted and whether inside a
+// matrix (where a group counts its bounds whole), and the bound against
+// the limit (WHOLE_REPAINTS.md W0).
+static void cover_refusal_note(const flow_paint_asks_t *asks, const flow_paint_limits_t *limits, os64_gui_rect_t view)
+{
+    if (!s_layout_profile || layout_profile_diag(&g.page) == NULL)
+        return;
+    static const char *const kOver[] = {"within", "budget", "a sheet through a matrix", "a layer's sheet",
+                                        "a backdrop's sheet", "nested too deep"};
+    _Static_assert(sizeof(kOver) / sizeof(kOver[0]) == FLOW_ASKS_DEEP + 1, "not covered: a name each");
+    char at[96] = "", note[160];
+    if (asks->box != NULL && asks->box->node != NULL)
+        element_named(at, sizeof(at), "", asks->box->node);
+    const char *inside = asks->inside ? " inside a matrix" : "";
+    if (asks->over == FLOW_ASKS_BUDGET)
+        os64_snprintf(note, sizeof(note), "charged %ld for %dx%d%s; the bound %ld of %ld; view %dx%d",
+                      (long)asks->box_charge, (int)asks->rect.w, (int)asks->rect.h, inside, (long)asks->charge,
+                      (long)limits->budget, (int)view.w, (int)view.h);
+    else
+        os64_snprintf(note, sizeof(note), "%dx%d%s; the bound %ld of %ld; view %dx%d", (int)asks->rect.w,
+                      (int)asks->rect.h, inside, (long)asks->charge, (long)limits->budget, (int)view.w,
+                      (int)view.h);
+    counted_at(&s_not_covered, (unsigned)asks->over <= FLOW_ASKS_DEEP ? kOver[asks->over] : "?", at, note);
+}
+
 // `view` (document coordinates) painted: through the cover a video gives it
 // when there is one — the covered part from the video up, the rest of
 // `view`, at most four rectangles, the ordinary way — or the ordinary way
@@ -18209,13 +18439,17 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
     }
     // Every paint of `view`, covered or a piece, must decide each layer and
     // each sheet as the ordinary paint of it would: one whose layers might
-    // run out of the budget (YONDER_FILTER_AREA_VIEWS of the whole view,
-    // flow_layer_area_bound), or that might ask for a sheet past its limit
-    // (a laid group's SHEET_SIDE and SHEET_PIXELS, a layer's FILTER_SHEET_*,
-    // flow_sheets_fit), is painted the ordinary way (Codex, #698).
-    if (flow_layer_area_bound(g.page.tree, view, scroll) > (int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h ||
-        !flow_sheets_fit(g.page.tree, view, scroll, SHEET_SIDE, SHEET_PIXELS, FILTER_SHEET_SIDE, FILTER_SHEET_PIXELS)) {
+    // run out of the budget (YONDER_FILTER_AREA_VIEWS of the whole view), or
+    // that might ask for a sheet past its limit (a laid group's SHEET_SIDE
+    // and SHEET_PIXELS, a layer's FILTER_SHEET_*), is painted the ordinary
+    // way, both asked in one walk (flow_paint_asks; Codex, #698), and the
+    // record says why (cover_refusal_note).
+    const flow_paint_limits_t limits = {(int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h, SHEET_SIDE,
+                                        SHEET_PIXELS, FILTER_SHEET_SIDE, FILTER_SHEET_PIXELS};
+    flow_paint_asks_t asks;
+    if (!flow_paint_asks(g.page.tree, view, scroll, &limits, &asks)) {
         s_cost.covered_budget++;
+        cover_refusal_note(&asks, &limits, view);
         yonder_paint(g.page.tree, view, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
         return yonder_paint_layers_refused;
     }

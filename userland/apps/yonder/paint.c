@@ -2346,13 +2346,6 @@ static os64_gui_rect_t held(int64_t x0, int64_t y0, int64_t x1, int64_t y1)
                              (int32_t)max64(0, y1 - y0)};
 }
 
-// `r` one pixel wider all round, held (above).
-static os64_gui_rect_t widened(os64_gui_rect_t r)
-{
-    return held((int64_t)r.x - 1, (int64_t)r.y - 1, (int64_t)r.x + r.w + 1,
-                (int64_t)r.y + r.h + 1);
-}
-
 // `r` grown by `d` on each side, in CSS's side order.
 static os64_gui_rect_t grown_by(os64_gui_rect_t r, const int32_t d[4])
 {
@@ -2925,18 +2918,16 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
         m[4] += p->shift.x;
         m[5] += p->shift.y;
         clip = cut(shifted(clip, p->shift), p->view);
-        os64_gui_rect_t back = flow_affine_rect_back(m, clip);
-        os64_gui_rect_t own = cut(bounds, back);
-        // Nothing of it shows — a matrix that collapses an axis (scaleX(0),
-        // rotateX(90deg)) draws nothing, and the rest may be out of view —
-        // so nothing is painted: the view is empty until its close.
+        // What shows, one pixel wider all round (flow_through_sheet, the
+        // function flow_paint_asks bounds this sheet with). Nothing of it
+        // shows — a matrix that collapses an axis (scaleX(0), rotateX(90deg))
+        // draws nothing, and the rest may be out of view — so nothing is
+        // painted: the view is empty until its close.
+        os64_gui_rect_t own = flow_through_sheet(bounds, m, clip);
         if (own.w <= 0 || own.h <= 0) {
             p->view = (os64_gui_rect_t){0, 0, 0, 0};
             return;
         }
-        // What shows, one pixel wider all round: a bilinear sample at the
-        // edge of the clip mixes the source pixel beyond it.
-        own = cut(bounds, widened(back));
         // Kept (paint.h, `keep`): made whole, or laid as it was made, with
         // nothing painted inside.
         int keep = YONDER_KEEP_NO;

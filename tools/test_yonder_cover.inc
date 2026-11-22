@@ -209,6 +209,34 @@ static void cover_cases(void)
                      "the same");
     cover_drop();
 
+    /* The counted table (W0's lines): one-offs fill it, a thing that comes
+     * again before eleven newer ones keeps its row, and once counted twice
+     * no burst of one-offs pushes it out. */
+    {
+        CountedAt t;
+        counted_at_reset(&t);
+        char name[16];
+        for (int k = 0; k < 12; k++) {
+            os64_snprintf(name, sizeof(name), "once%d", k);
+            counted_at(&t, name, "", "");
+        }
+        counted_at(&t, "again", "", "");
+        for (int k = 0; k < 10; k++) {
+            os64_snprintf(name, sizeof(name), "later%d", k);
+            counted_at(&t, name, "", "");
+        }
+        counted_at(&t, "again", "", "");
+        for (int k = 0; k < 40; k++) {
+            os64_snprintf(name, sizeof(name), "burst%d", k);
+            counted_at(&t, name, "", "");
+        }
+        uint64_t total = t.others;
+        for (int k = 0; k < t.nrows; k++)
+            total += t.row[k].n;
+        check(t.nrows == 12 && os64_streq(t.row[0].what, "again") && t.row[0].n == 2 && total == 64,
+              "cover: the counted table keeps a thing counted twice through a burst, and loses no count");
+    }
+
     /* Layers beneath the video enough to run the ordinary paint out of its
      * budget, and one over it: the ordinary paint draws that one plain, so
      * the paint is not covered, and the window is the same (Codex, #698). */
@@ -224,13 +252,76 @@ static void cover_cases(void)
          * budget cannot run out, and the paint is covered. */
         cover_expect("cover: layers that cannot run the budget out over the picture's part, covered",
                      cover_run((os64_gui_rect_t){40, 40, 320, 180}), 0);
-        /* The whole window: five layers of it pass four views' budget. */
+        /* The whole window: five layers of it pass four views' budget. Under
+         * --layout-profile the record says which limit and which element:
+         * the four full-window layers charge the budget exactly, and the
+         * overlay's is the charge that passes it (WHOLE_REPAINTS.md W0). */
         uint64_t budget = s_cost.covered_budget;
+        bool profiled = s_layout_profile;
+        yonder_diag_t *was_diag = g.page.diag;
+        g.page.diag = yonder_diag_new("https://fixture.test/not-covered", 3, 0);
+        s_layout_profile = true;
         CoverCounts b = cover_run(g.view.bounds);
         check(b.covered == 0 && s_cost.covered_budget > budget,
               "cover: layers that might run the budget out keep the paint the ordinary way");
         if (!(b.covered == 0 && s_cost.covered_budget > budget))
             cover_said("the layers' budget", b);
+        counted_at_reset(&s_script_changes);
+        diag_paint_reading(&g.page, 1);
+        const char *said = g.page.diag != NULL ? yonder_diag_fact_value(g.page.diag, "not covered reading 1") : NULL;
+        check(said != NULL && strstr(said, "budget ") == said && strstr(said, ": div#over (charged ") != NULL &&
+                  strstr(said, "of 1920000; view 800x600") != NULL,
+              "cover: the record names the budget and the element whose charge passed it");
+        if (said == NULL || strstr(said, ": div#over (charged ") == NULL)
+            fprintf(stderr, "  not covered: %s\n", said != NULL ? said : "(none)");
+        /* A script's change: the record says what it changed and where, the
+         * inline style as it now stands. */
+        os64_html_node_t *over = (os64_html_node_t *)probe_id("over");
+        s_layout_profile = true;
+        check(over != NULL && os64_html_set_attr((os64_html_document_t *)page_doc(&g.page), over, "style",
+                                                 "opacity:.5", 10) == OS64_HTML_OK,
+              "cover: a style written for the change note");
+        script_changes_note(&g.page);
+        script_changes_note(&g.page);
+        diag_paint_reading(&g.page, 2);
+        s_layout_profile = profiled;
+        said = g.page.diag != NULL ? yonder_diag_fact_value(g.page.diag, "whole views by a script's change reading 2")
+                                   : NULL;
+        check(g.page.diag != NULL && yonder_diag_fact_value(g.page.diag, "not covered reading 2") == NULL,
+              "cover: a reading starts the tables again");
+        check(said != NULL && strstr(said, "attribute style 2: div#over (opacity:.5)") == said,
+              "cover: the record names a script's change, once a rebuild, with the style as it stands");
+        if (said == NULL || strstr(said, "attribute style 2: div#over (opacity:.5)") != said)
+            fprintf(stderr, "  whole views by a script's change: %s\n", said != NULL ? said : "(none)");
+        /* Past the first two dozen changes a rebuild still counts each
+         * once: thirty other attributes, then the style written ten times. */
+        s_layout_profile = true;
+        for (int k = 0; k < 30; k++) {
+            char attr[16];
+            os64_snprintf(attr, sizeof(attr), "data-k%d", k);
+            (void)os64_html_set_attr((os64_html_document_t *)page_doc(&g.page), over, attr, "1", 1);
+        }
+        for (int k = 0; k < 10; k++)
+            (void)os64_html_set_attr((os64_html_document_t *)page_doc(&g.page), over, "style",
+                                     k % 2 ? "opacity:.5" : "opacity:.4", 10);
+        counted_at_reset(&s_script_changes);
+        script_changes_note(&g.page);
+        uint64_t counted = s_script_changes.others;
+        for (int k = 0; k < s_script_changes.nrows; k++)
+            counted += s_script_changes.row[k].n;
+        check(counted == 31, "cover: a change past the first two dozen of a rebuild counts once (31 counts)");
+        if (counted != 31)
+            fprintf(stderr, "  counted %lu\n", (unsigned long)counted);
+        /* A page shown starts the tables again (cost_reset). */
+        cover_refusal_note(&(flow_paint_asks_t){.over = FLOW_ASKS_BUDGET}, &(flow_paint_limits_t){0},
+                           g.view.bounds);
+        cost_reset();
+        diag_paint_reading(&g.page, 4);
+        check(yonder_diag_fact_value(g.page.diag, "not covered reading 4") == NULL,
+              "cover: a page shown starts the tables again");
+        s_layout_profile = profiled;
+        yonder_diag_free(g.page.diag);
+        g.page.diag = was_diag;
     }
     cover_whole_same("cover: layers that might run the budget out, the window painted whole with covers and without "
                      "is the same");
@@ -302,6 +393,28 @@ static void cover_cases(void)
     }
     cover_whole_same("cover: a sheet past its limit under a filtered parent, the window painted whole with covers "
                      "and without is the same");
+    cover_drop();
+
+    /* A group drawn through a matrix whose upright place lies far from what
+     * it draws: the sheet the painter asks for is the window taken back
+     * through the matrix (about 200x150 near 800,475 of its 4000x2500),
+     * well within the limit, so the paint is covered. The upright place the
+     * walk also takes in (the window moved by the matrix's translation,
+     * near 3200,1900) is no part of the sheet; counting it, the bound took
+     * the two together, about 3200x2025, and refused the paint, as it
+     * refused every whole repaint of the P5's watch page (WHOLE_REPAINTS.md,
+     * W0's record). */
+    probe_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#far{position:absolute;left:0;top:0;width:4000px;height:2500px;"
+               "background:linear-gradient(135deg,rgba(255,0,0,.4),rgba(0,0,255,.4));"
+               "transform:translate(-3200px,-1900px) scale(4);transform-origin:0 0}</style>"
+               "<video id=v></video><div id=far></div>", true);
+    cover_video("v", 320, 180, 320, 180);
+    cover_expect("cover: a matrix whose upright place lies far from its sheet, the whole window split",
+                 cover_run(g.view.bounds), 4);
+    cover_whole_same("cover: a matrix whose upright place lies far from its sheet, the window painted whole with "
+                     "covers and without is the same");
     cover_drop();
 
     /* A video in a group is drawn on its sheets, never plain. */

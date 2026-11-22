@@ -667,14 +667,20 @@ most SHEET_SIDE a side and SHEET_PIXELS in all, a layer through one of
 FILTER_SHEET_SIDE and FILTER_SHEET_PIXELS, and past those the ordinary
 paint draws the group upright or plain, where a piece, asking for less,
 would be given one (Codex, #698 round 3). `flow_sheets_fit` asks whether
-every sheet a paint of R could ask for fits. Both bounds are worked
+every sheet a paint of R could ask for fits; a group's sheet through its
+matrix is the painter's (its bounds met with the view taken back through
+the matrix, a pixel wider), not everything the walk takes in, whose
+upright place is for a face that refuses the sheet (WHOLE_REPAINTS.md,
+what W0 found). Both bounds are worked
 through the views libflow's walk keeps, which hold the painter's at
 every depth: a layer grows the view inside it by what its filter
 spreads, so a transformed group under a blurred one asks for a sheet
 taken from the grown view, not from R (Codex, #698 round 4). Every view
 only grows with R, so a paint of a part asks for no more, and when R
 fits all accept and charge alike. R past either is painted the ordinary
-way, counted in the record.
+way, counted in the record. yonder asks both in one walk
+(`flow_paint_asks`), which also names the first limit passed and the box
+that passed it, for the record's `not covered` line (WHOLE_REPAINTS.md W0).
 `flow_paint_path` names the groups that hold a box (outermost first),
 which rule 1 reads (none may lay a layer) and the checking mode tests.
 
