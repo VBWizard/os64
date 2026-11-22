@@ -1424,7 +1424,26 @@ flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
  * extent and the scroll containers' ranges (a scroll past a range that
  * shrank is held within it). Declined, the tree is as it was unless `why` is
  * FLOW_RESTYLE_ROOM, which may have written part of it; either way the
- * caller lays out afresh. The cascade must be current. */
+ * caller lays out afresh. The cascade must be current.
+ *
+ * WHAT IT PAINTED (LAYOUT_NEEDS_N3.md § 3 A): with `marks` not NULL, a
+ * written tree hands `marks->mark` what each element whose style it wrote
+ * painted before the write and paints after it, in page coordinates at
+ * `marks->scroll`, as flow_layout_parts hands its parts: each box's reach
+ * (its overflow grown by its ink, so all it holds), a group's bounds, a
+ * filtered group's whole, and each stacked box drawn outside it that takes
+ * from it; an element with no box of its own, the replaced box that draws
+ * it (an inline svg's shape), if one does. `parts` (a flow_parts_why_t) is
+ * FLOW_PARTS_MARKED when that
+ * was all of it, or nothing was written; anything else names why the
+ * caller must take the whole view (the canvas may take a written
+ * element's background, the walks ran too deep, no memory). A declined
+ * restyle hands nothing it can stand by: its `parts` is not MARKED. */
+typedef struct {
+    flow_point_t scroll;
+    void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r);
+    void *ctx;
+} flow_restyle_marks_t;
 typedef enum {
     FLOW_RESTYLE_DECLINED = 0,
     FLOW_RESTYLE_NOTHING,       /* no style came out different */
@@ -1457,10 +1476,12 @@ typedef struct {
      * 212"). */
     const os64_html_node_t *at;
     char detail[48];
+    int32_t parts;              /* a flow_parts_why_t: whether `marks` had all of it */
 } flow_restyle_t;
 flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
                                      const os64_page_t *model, const flow_env_t *env,
-                                     const flow_reuse_inputs_t *inputs, int32_t width);
+                                     const flow_reuse_inputs_t *inputs, int32_t width,
+                                     const flow_restyle_marks_t *marks);
 /* Whether the kept tree `a` answers as the whole layout `b` of the same
  * document does (the caller's check, `--geometry-check`): the same boxes in
  * order, each of the same kind, node, border box, overflow, clip and
@@ -1711,6 +1732,33 @@ typedef struct {
     int32_t prop;               // PLACED: the garb_prop_t a layout places; -1 otherwise
 } flow_parts_said_t;
 bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_point_t scroll,
+                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
+                       flow_parts_said_t *said);
+// The parts of the view a script's change painted, between the tree that
+// was shown (`was`) and the tree laid out after it (`now`), of one
+// document at one width, zoom and cascade environment, handed to `mark`
+// in page coordinates at `scroll` as flow_layout_parts hands them
+// (LAYOUT_NEEDS_N3.md § 3 B). True when they were; false, with why in
+// `said`, for the whole view. Over-marking is its error's direction: what
+// it cannot account for refuses.
+//
+// - The trees must paint the same layers, scroll alike, and reach as far:
+//   the page's extent and each scroller's range (LAYERS, SCROLLED, MOVED).
+// - Walked together, each pair of boxes placed alike in itself is
+//   compared by everything it draws: its whole style, its decorations,
+//   and a text's or marker's bytes. One that differs marks its element.
+// - A pair whose children differ (another list, or a child placed
+//   otherwise) is marked by its own reach in each tree and not gone into,
+//   when everything inside both is in its frame, in flow and in no layer
+//   of its own; otherwise MOVED.
+// - An element with no box in either tree whose style differs marks the
+//   replaced box that draws it, if one does.
+// - `touched` (`ntouched` elements) are what the script changed that no
+//   style says, the face's to name (an attribute a box draws from): each
+//   marks its boxes, or the replaced box that draws it.
+// - A changed element the canvas may take a background from is CANVAS.
+bool flow_change_parts(const flow_tree_t *was, const flow_tree_t *now, flow_point_t scroll,
+                       const os64_html_node_t *const *touched, int32_t ntouched,
                        void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
                        flow_parts_said_t *said);
 // Whether an animation of the tree, wherever its element is, still has a

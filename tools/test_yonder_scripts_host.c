@@ -7215,6 +7215,7 @@ static void classic_browser_cases(void)
  * that includes this file for its fakes (YONDER_HOST_FAKES_ONLY) gets none
  * of it, so the replay runner's every file goes through its own door. */
 #include "test_yonder_layout_profile.inc"
+#include "test_yonder_damage.inc"
 #include "test_yonder_restyle.inc"
 #include "test_yonder_graft.inc"
 
@@ -13177,6 +13178,14 @@ int main(void)
         printf("yonder fairness: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
+    if(getenv("YONDER_DAMAGE_ONLY")) {
+        damage_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"damage: text released");
+        check(live==0,"damage: heap empty");
+        printf("yonder damage: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_PROFILE_ONLY")) {
         layout_profile_cases();
         os64_text_font_release(probe_font);
@@ -13195,6 +13204,7 @@ int main(void)
     canvas_window_cases();
     fairness_cases();
     layout_profile_cases();
+    damage_cases();
     graft_browser_cases();graft_base_cases();
     restyle_browser_cases();
     restyle_fallback_cases();

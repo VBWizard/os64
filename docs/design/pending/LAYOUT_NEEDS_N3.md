@@ -173,7 +173,69 @@ The rest stay whole until N4. So most of the regular pauses should drop
 from 100-300 ms to the size of what changed. That is an estimate until the
 P5 runs it with `--damage-check=1` for a playing minute.
 
-## 8. Settled at the design pass
+## 8. As built
+
+Where the build answers the design, and the four places it went further
+or differently.
+
+- **Case A** (`flow_restyle_in_place`'s `marks`, restyle.inc): each element
+  whose style is written is marked before the write and after it through
+  parts_in, the animation path's marking: a box's reach is its overflow
+  grown by its ink (everything inside it, item [4]), a group's its bounds,
+  a filtered group's its whole, and the stacked boxes drawn outside it that
+  take from it. A written element with no box of its own is marked by the
+  replaced box that draws it (`drawn_by`: an svg's shape restyled by a class
+  on its wrapper). A restyle that declines after writing hands no parts
+  yonder stands by (`parts` not MARKED).
+- **The kept tree is compared with itself** (`flow_change_parts(tree,
+  tree)`): it finds no box that differs, and marks what the change log adds
+  (below). Without it, an svg's attribute on a kept tree marked nothing.
+- **Case B** (`flow_change_parts`, flow.c): as designed. A pair's own
+  compare (`same_own`) leaves out the overflow (what moved inside is found
+  among its children) and the link and control numbers a page renumbers.
+  A contained move is held when everything inside the box, in both trees,
+  shares its frame and is in flow with no layer of its own
+  (`moved_within`); anything else is MOVED. The page's extent and each
+  scroller's range are compared first. Text and markers compare by their
+  bytes, which is also how generated text and a renumbered counter show
+  (item [3]); an element with no box in either tree whose style differs
+  marks the replaced box that draws it.
+- **What the change log adds** (yonder.c `change_touched`): every changed
+  attribute, except `class`, `id`, `style`, `role`, `title`, `tabindex`,
+  `aria-*` and `data-*` on an element with a box of its own in both trees;
+  and text or children changed in an element drawn from the document (no
+  box of its own, or a replaced one). The exemption does not need voiding
+  for `attr()`: what attr() reaches is a style, or a generated text's
+  bytes, and both are compared. The reader is opened BEFORE the layout,
+  because a kept restyle opens the tree's own reader again at the new
+  version, after which the log need not reach back.
+- **Item [5], what paints from neither style nor the log**, by how each
+  reaches the screen:
+  - a control's value, checkedness and choice, its caret and selection:
+    the toolkit's widgets, whose setters mark themselves
+    (`forms_sync_from_model`, `forms_pull_selections`, after the rebuild);
+  - focus, hover and press: the page's `:focus`, `:hover` and `:active`
+    styles, which the compare sees. `g.hover_link`, which a rebuild puts
+    out, drives only the status line, so a lit link is not a reason for
+    the whole view (the design had it as one).
+- **Half the view** is yonder's rule (`change_parts`), on the rectangle
+  round every part, because the toolkit repaints one rectangle round
+  everything marked.
+- **The record**: `script changes painted reading N`, a row per verdict
+  (`in parts` with the parts and the area in all, `nothing to paint`, or
+  the reason for the whole view with the element that refused).
+- **`--damage-check[=N]`** (every rebuild unless N): after the paint of
+  the marked parts, the whole view is painted the ordinary way over the
+  window and the two compared, every playing video's box left out; a
+  rebuild that marked nothing marks one pixel so that it has a paint to
+  check. The whole paint stays, being right. Its line is `damage check`
+  in the record's summaries, each difference a `failed` line with where
+  and what the rebuild marked.
+- **Proof**: test_yonder_damage.inc (a case for each kind of change and
+  refusal, and a 300-step random walk, every rebuild checked), and
+  tools/test_script_paint_mutants.py, a mutant per rule.
+
+## 9. Settled at the design pass
 
 1. Case B compares every styled element, whole styles, rather than
    trusting the cascade's dirty set.
