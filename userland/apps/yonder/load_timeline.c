@@ -163,6 +163,13 @@ void yonder_lt_step_end(yonder_lt_t *t, int64_t to_us)
         keep_long(t, &t->now);
 }
 
+void yonder_lt_snapshot(const yonder_lt_t *t, int64_t now_us, yonder_lt_t *out)
+{
+    *out = *t;
+    if (out->in_step)
+        yonder_lt_step_end(out, now_us);
+}
+
 void yonder_lt_step_begin(yonder_lt_t *t, yonder_lt_step_t step, int64_t from_us)
 {
     if (!t->on || (unsigned)step >= YONDER_LT_STEPS)

@@ -3536,37 +3536,44 @@ static void lt_why_end(yonder_lt_why_t was)
 // The timeline's lines on `d`, written whole: the summary, the layouts by
 // who asked and where, each slice up to the last that holds anything, each
 // long step listed, each broad refusal kept, and each slow parser call kept.
+// Written from a snapshot with the step under way ended now (a record is
+// written in the middle of a step, the arrival's inside the stream's), the
+// timeline itself left as it is. Every write of a record comes here
+// (diag_write), so a navigation that never arrives keeps its timeline too.
 static void diag_timeline(yonder_diag_t *d)
 {
     if (!lt_ours(d))
         return;
+    static yonder_lt_t snap;
+    yonder_lt_snapshot(&s_lt, os64_micros(), &snap);
+    const yonder_lt_t *t = &snap;
     char key[40], line[4096];
     yonder_diag_forget(d, "timeline");
-    yonder_lt_summary(&s_lt, line, sizeof(line));
+    yonder_lt_summary(t, line, sizeof(line));
     yonder_diag_timeline_fact(d, "timeline", line);
-    yonder_lt_layouts_line(&s_lt, line, sizeof(line));
+    yonder_lt_layouts_line(t, line, sizeof(line));
     yonder_diag_timeline_fact(d, "timeline layouts", line);
-    uint32_t used = yonder_lt_slices_used(&s_lt);
+    uint32_t used = yonder_lt_slices_used(t);
     for (uint32_t i = 0; i < used; i++) {
         os64_snprintf(key, sizeof(key), "timeline %lu-%lu s",
                       (unsigned long)(i * YONDER_LT_SLICE_US / 1000000),
                       (unsigned long)((i + 1) * YONDER_LT_SLICE_US / 1000000));
-        yonder_lt_slice_line(&s_lt, i, line, sizeof(line));
+        yonder_lt_slice_line(t, i, line, sizeof(line));
         yonder_diag_timeline_fact(d, key, line);
     }
-    for (uint32_t i = 0; i < s_lt.nlongs; i++) {
+    for (uint32_t i = 0; i < t->nlongs; i++) {
         os64_snprintf(key, sizeof(key), "timeline longest %lu", (unsigned long)i + 1);
-        yonder_lt_long_line(&s_lt, i, line, sizeof(line));
+        yonder_lt_long_line(t, i, line, sizeof(line));
         yonder_diag_timeline_fact(d, key, line);
     }
-    for (uint32_t i = 0; i < s_lt.broad_kept; i++) {
+    for (uint32_t i = 0; i < t->broad_kept; i++) {
         os64_snprintf(key, sizeof(key), "timeline broad %lu", (unsigned long)i + 1);
-        yonder_lt_broad_line(&s_lt, i, line, sizeof(line));
+        yonder_lt_broad_line(t, i, line, sizeof(line));
         yonder_diag_timeline_fact(d, key, line);
     }
-    for (uint32_t i = 0; i < s_lt.parse_kept; i++) {
+    for (uint32_t i = 0; i < t->parse_kept; i++) {
         os64_snprintf(key, sizeof(key), "timeline parse %lu", (unsigned long)i + 1);
-        yonder_lt_parse_line(&s_lt, i, line, sizeof(line));
+        yonder_lt_parse_line(t, i, line, sizeof(line));
         yonder_diag_timeline_fact(d, key, line);
     }
 }
@@ -3633,6 +3640,7 @@ static bool diag_write(yonder_diag_t *d)
 {
     if (d == NULL || s_diag.dir[0] == '\0')
         return false;
+    diag_timeline(d);
     // A record is of one window: a setting that is not what the claim
     // wrote makes it a record no replay can read the page again by. (The
     // view is compared once, at arrival, against the claim's: after it,
@@ -4594,7 +4602,6 @@ static void diag_observe(Page *p, const char *when)
         diag_cascade(d, p->cascade);
     char v[128];
     yonder_diag_fact(d, "written", when);
-    diag_timeline(d);
     diag_wire(d);
     diag_census(p, false);
     if (p->svg_cache) {

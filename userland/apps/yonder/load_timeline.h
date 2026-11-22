@@ -186,6 +186,10 @@ typedef struct {
 void yonder_lt_begin(yonder_lt_t *t, int64_t began_us);
 // No navigation is measured: nothing is taken until the next begin.
 void yonder_lt_stop(yonder_lt_t *t);
+// `out` made the timeline as it would stand if the step under way ended at
+// `now_us`, `t` left as it is: what a record written in the middle of a
+// step (at a page's arrival, inside the stream's step) says of that step.
+void yonder_lt_snapshot(const yonder_lt_t *t, int64_t now_us, yonder_lt_t *out);
 // Whether a time `now_us` is still one the timeline takes.
 bool yonder_lt_running(const yonder_lt_t *t, int64_t now_us);
 

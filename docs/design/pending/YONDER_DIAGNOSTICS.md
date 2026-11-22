@@ -517,8 +517,11 @@ minutes, from the moment its record begins:
   fills the ordinary room long before these are written (one large
   application's record had 1473 lines not kept), and the timeline is written whole
   at each write of its navigation's record — its arrival, its last picture,
-  each `d`, its leaving. A record written after a later navigation began
-  keeps the lines its last write gave it.
+  each `d`, its leaving, and a navigation stopped or failed before it
+  arrived. A write in the middle of a step (the arrival's, inside the
+  stream's) counts that step up to the moment of the write, from a copy,
+  the timeline going on as it was. A record written after a later
+  navigation began keeps the lines its last write gave it.
 - **What it costs**: while it runs, readings of the clock at its hooks;
   past its last slice it stops, and its hooks cost a test of a flag. A
   cascade built while it ran keeps its clock for its life, so its updates

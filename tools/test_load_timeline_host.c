@@ -276,6 +276,26 @@ static void test_the_end(void)
     CHECK(!yonder_lt_running(&t, BASE));
 }
 
+static void test_snapshot(void)
+{
+    // A record written in the middle of a step counts the step up to then,
+    // and the timeline goes on as it was.
+    static yonder_lt_t snap;
+    yonder_lt_begin(&t, BASE);
+    yonder_lt_step_begin(&t, YONDER_LT_STREAM, BASE + 1 * S);
+    yonder_lt_parse(&t, BASE + 1 * S, 300000, "a feed");
+    yonder_lt_snapshot(&t, BASE + 4 * S, &snap);
+    CHECK(snap.slices[0].step_us[YONDER_LT_STREAM] == 3 * S);
+    CHECK(snap.slices[0].in_us[YONDER_LT_STREAM][YONDER_LT_IN_PARSING] == 300000);
+    CHECK(snap.nlongs == 1 && snap.longs[0].us == 3 * S);
+    CHECK(t.in_step && t.slices[0].step_us[YONDER_LT_STREAM] == 0 && t.nlongs == 0);
+    yonder_lt_step_end(&t, BASE + 5 * S);
+    CHECK(t.slices[0].step_us[YONDER_LT_STREAM] == 4 * S && t.nlongs == 1 && t.longs[0].us == 4 * S);
+    // With no step under way the snapshot is the timeline.
+    yonder_lt_snapshot(&t, BASE + 9 * S, &snap);
+    CHECK(memcmp(&snap, &t, sizeof(t)) == 0);
+}
+
 static void test_marks(void)
 {
     yonder_lt_begin(&t, BASE);
@@ -372,6 +392,7 @@ int main(void)
     test_parse();
     test_long_list();
     test_the_end();
+    test_snapshot();
     test_marks();
     test_lines();
     if (s_failed != 0) {
