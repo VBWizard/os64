@@ -15,12 +15,12 @@ static const char kDamagePage[] =
     "#list{height:100px}#ol{height:80px}#gen::before{content:attr(data-x)}"
     "#wrap{width:50px;opacity:.5}#wide{width:200px;background:green}"
     "#posbox{position:relative;height:40px}#abs{position:absolute;left:0;top:0}"
-    "#filler{height:900px}#mover{width:40px;height:16px;background:purple;transform:translateX(200px)}"
+    "#filler{height:900px}#back{position:absolute;left:0;top:0;width:860px;height:420px;z-index:-1}#mover{width:40px;height:16px;background:purple;transform:translateX(200px)}"
     ".hot circle{opacity:.2}#wrap2{width:50px}#wide2{width:200px;background:green}</style>"
-    "<div id=box>box</div>"
+    "<div id=back></div><div id=box>box</div>"
     "<div id=mover></div>"
     "<div id=sw><svg width=40 height=24><circle cx=12 cy=12 r=10 fill=red></circle></svg>"
-    "<svg width=60 height=24><text id=st x=0 y=15>hi</text></svg></div>"
+    "<svg id=sv width=60 height=24><rect x=1 y=1 width=8 height=8 fill=red></rect></svg></div>"
     "<div id=wrap2><div id=wide2>wide wide wide</div></div>"
     "<p>time <span id=clock>0:01</span> left</p>"
     "<div id=bar><div id=b1>a</div><div id=b2>b</div></div>"
@@ -263,8 +263,15 @@ static void damage_cases(void)
     damage_attr("sw", "class", "hot");
     damage_expect("damage: a class that restyles an svg's shape marks the svg that draws it", damage_step(),
                   "in parts");
-    damage_text("st", "bye");
-    damage_expect("damage: an svg text's change marks the svg that draws it", damage_step(), "in parts");
+    {
+        int64_t status = 0;
+        os64_html_node_t *rect = os64_html_create_element(g.page.way.doc, OS64_HTML_NS_SVG, "rect", &status);
+        os64_html_set_attr(g.page.way.doc, rect, "x", "20", 2);
+        os64_html_set_attr(g.page.way.doc, rect, "width", "20", 2);
+        os64_html_set_attr(g.page.way.doc, rect, "height", "20", 2);
+        os64_html_insert(g.page.way.doc, probe_id("sv"), rect, NULL);
+    }
+    damage_expect("damage: a shape added to an svg marks the svg that draws it", damage_step(), "in parts");
     damage_style("wrap2", "overflow:clip");
     damage_expect("damage: a clip that cuts what overflows a box marks all it painted", damage_step(), "in parts");
     damage_text("clock", "0:02");
@@ -292,6 +299,9 @@ static void damage_cases(void)
     damage_insert("ol", "li", "zero", "li1");
     damage_expect("damage: an item put first renumbers the list's markers, painted in parts", damage_step(),
                   "in parts");
+    damage_style("back", "background:#fee");
+    damage_expect("damage: parts that reach across more than half the view are the whole view", damage_step(),
+                  "parts past half the view");
     damage_style("abs", "left:30px");
     damage_expect("damage: a positioned box that moves is the whole view", damage_step(), kRefused[FLOW_PARTS_MOVED]);
     damage_insert("filler", "div", "past the end", NULL);

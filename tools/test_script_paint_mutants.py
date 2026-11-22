@@ -46,7 +46,7 @@ mutants = [
      '    if ((a->style == NULL) != (b->style == NULL))\n        return false;'),
     # The moves inside a box.
     ('a-move-inside-a-box-not-marked', FLOW, '            if (!change_moved(&c, x, y))\n                break;',
-     '            if (0)\n                break;'),
+     '            if (0 && !change_moved(&c, x, y))\n                break;'),
     ('a-positioned-box-inside-a-move-allowed', FLOW,
      '        if (++*visits > CHANGE_WALK_MAX || d->frame != p->frame || d->positioned || d->fixed || d->stacked)',
      '        if (++*visits > CHANGE_WALK_MAX || d->frame != p->frame || d->fixed)'),
@@ -66,7 +66,7 @@ mutants = [
     # An element with no box, drawn by a replaced box.
     ('a-boxless-elements-style-not-compared', FLOW,
      '        if ((a == NULL) == (b == NULL) && (a == NULL || f_style_equal(&a->style, &b->style)))\n            continue;',
-     '        continue;'),
+     '        if (a != b || 1)\n            continue;'),
     ('nothing-draws-a-boxless-element', FLOW,
      '        return b->kind == FLOW_BOX_REPLACED || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL) ? a : NULL;',
      '        return NULL;'),
@@ -74,7 +74,7 @@ mutants = [
      '        if (touched[i] != NULL && !change_drawn(&c, was, touched[i]))',
      '        if (touched[i] != NULL && 0 && !change_drawn(&c, was, touched[i]))'),
     ('the-canvas-not-refused', RESTYLE, '    if (may_own_canvas(tree, n))\n        return FLOW_PARTS_CANVAS;',
-     '    if (0)\n        return FLOW_PARTS_CANVAS;'),
+     '    if (tree == NULL)\n        return FLOW_PARTS_CANVAS;'),
     # The kept restyle's marks: before the write and after it.
     ('a-kept-restyle-marks-nothing-before', RESTYLE,
      '    if (marking && marked == FLOW_PARTS_MARKED)\n'
@@ -92,8 +92,8 @@ mutants = [
     # yonder's half: what the change log adds.
     ('an-unlisted-attribute-marks-nothing', YONDER,
      '        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) && !drawn : !drawn)',
-     '        if (entry->kind == OS64_HTML_CHANGE_ATTR ? 1 : !drawn)'),
-    ('a-text-in-an-svg-marks-nothing', YONDER,
+     '        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) || 1 : !drawn)'),
+    ('children-added-to-an-svg-mark-nothing', YONDER,
      '        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) && !drawn : !drawn)',
      '        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) && !drawn : 1)'),
     ('a-kept-tree-not-compared-with-itself', YONDER,
