@@ -432,6 +432,50 @@ was shown, or since its record was last written on asking:
   last `d` that reached its file: one that did not keeps its reading in
   the record, lets the counts run on, and says so on the status line.
 
+### The load's timeline (load_timeline.h)
+
+The lines above say how much each kind of work cost over a span; none says
+WHEN. A page that takes a minute to load needs the order: the parse in the
+first seconds, the scripts after, the layouts they forced, the first paint,
+the video's first picture. So while yonder.conf names a `diagnostics`
+directory, the latest navigation keeps a timeline for its first three
+minutes, from the moment its record begins:
+
+    timeline: from the navigation's start, in slices of 5 s, the window thread's steps; arrived 2.4 s, first paint 2.4 s, the video's first picture -; 3 steps of 200 ms or more
+    timeline 0-5 s: busy 48% of 5.0 s: waiting 2573.5 ms, the stream 2317.4 ms, paint 45.4 ms, the rest 14.9 ms; layouts 41 in 875.5 ms; script tasks 3, forcing 40 layouts in 1034.0 ms
+    timeline longest 2: at 5.1 s, scripts 1831.2 ms; layouts in it 61 in 1395.2 ms, its script tasks forcing 60 in 1746.9 ms; its longest task timer file:///home/lt.html#timer-1, 1807.6 ms, forcing 60 layouts in 1746.9 ms
+
+- **The steps are the window loop's own** (`yonder_lt_step_t`): waiting,
+  input, the window's layouts, the stream (a slice of the arriving page's
+  parse, or one of its scripts), the page waiting for its sheets, scripts
+  (the shown page's tasks), bodies and media, motion, upkeep, observers,
+  paint. Each is timed by the clock as the loop enters the next, so the
+  steps cover the loop with no gap, and a step running across a slice's
+  edge is shared between the slices by time. A slice's `busy` is its time
+  not waiting.
+- **Layouts** count in the slice they began in, whoever asked for them.
+  **What scripts forced** is each task's own count when it ends (the DOM's
+  geometry statistics, the status line's "Script forced"), so it needs no
+  `ledger`; its time includes answering the read, so it can exceed the
+  layouts' own.
+- **The longest steps**, sixteen at most, of 200 ms or more, each with when
+  it began, the layouts inside it and the longest task inside it. Waits
+  are left out: an idle page's waits would crowd the work off the list.
+  Those past the list are counted with their time on the summary line.
+- **The milestones**: `arrived` (the stream ended and the page is the
+  shown one), the first paint after that (nothing of a streamed page is
+  painted before it arrives), and the first picture a video handed the
+  paint.
+- **Its own room** in the record, `YONDER_DIAG_TIMELINE_FACTS`: a busy page
+  fills the ordinary room long before these are written (a YouTube watch
+  page's record had 1473 lines not kept), and the timeline is written whole
+  at each write of its navigation's record — its arrival, its last picture,
+  each `d`, its leaving. A record written after a later navigation began
+  keeps the lines its last write gave it.
+- **What it costs**: a reading of the clock as the loop enters each step,
+  and two around each layout and each task, only while it runs;
+  past its last slice it stops, and without `diagnostics` it never starts.
+
 ### Built differently from the brief, and why
 
 - **The sequence continues across runs.** A per-run sequence restarts at

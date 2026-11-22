@@ -53,6 +53,7 @@
 #include "paint.h"
 #include "player.h"
 #include "keep.h"
+#include "load_timeline.h"
 #include "picture.h"
 #include "svg.h"
 #include "webfont.h"
@@ -3383,9 +3384,75 @@ static void diag_wire(yonder_diag_t *d)
     yonder_diag_fact(d, "wire cache", v);
 }
 
+// THE LOAD'S TIMELINE (load_timeline.h): the latest navigation's first
+// minutes, step by step, kept only while yonder.conf names a diagnostics
+// directory, and written to that navigation's record alone: the one begun
+// at s_lt.began_us (lt_ours). Each step of the window loop costs a reading
+// of the clock while the timeline runs, each layout and task two, and
+// nothing once it has stopped.
+static yonder_lt_t s_lt;
+
+static bool lt_ours(const yonder_diag_t *d)
+{
+    return d != NULL && s_lt.began_us != 0 && yonder_diag_began(d) == s_lt.began_us;
+}
+
+// The window loop enters `step` now; past the timeline's last slice, the
+// step under way ends and the timeline stops.
+static void lt_step(yonder_lt_step_t step)
+{
+    if (!s_lt.on)
+        return;
+    int64_t now = os64_micros();
+    if (yonder_lt_running(&s_lt, now)) {
+        yonder_lt_step_begin(&s_lt, step, now);
+    } else {
+        yonder_lt_step_end(&s_lt, now);
+        yonder_lt_stop(&s_lt);
+    }
+}
+
+// A milestone of the navigation whose record `d` is, now.
+static void lt_mark(const yonder_diag_t *d, yonder_lt_mark_t mark)
+{
+    if (s_lt.on && lt_ours(d))
+        yonder_lt_mark(&s_lt, mark, os64_micros());
+}
+
+// The timeline's lines on `d`, written whole: the summary, each slice up
+// to the last that holds anything, and each long step listed.
+static void diag_timeline(yonder_diag_t *d)
+{
+    if (!lt_ours(d))
+        return;
+    char key[40], line[1024];
+    yonder_diag_forget(d, "timeline");
+    yonder_lt_summary(&s_lt, line, sizeof(line));
+    yonder_diag_timeline_fact(d, "timeline", line);
+    uint32_t used = yonder_lt_slices_used(&s_lt);
+    for (uint32_t i = 0; i < used; i++) {
+        os64_snprintf(key, sizeof(key), "timeline %lu-%lu s",
+                      (unsigned long)(i * YONDER_LT_SLICE_US / 1000000),
+                      (unsigned long)((i + 1) * YONDER_LT_SLICE_US / 1000000));
+        yonder_lt_slice_line(&s_lt, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
+    for (uint32_t i = 0; i < s_lt.nlongs; i++) {
+        os64_snprintf(key, sizeof(key), "timeline longest %lu", (unsigned long)i + 1);
+        yonder_lt_long_line(&s_lt, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
+}
+_Static_assert(1 + YONDER_LT_SLICES + YONDER_LT_LONG_MAX <= YONDER_DIAG_TIMELINE_FACTS,
+               "the timeline's lines fit its room in the record");
+
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
+    // A navigation measured from where its record begins, when there are
+    // page files to write it to.
+    if (d != NULL && s_diag.dir[0] != '\0')
+        yonder_lt_begin(&s_lt, yonder_diag_began(d));
     uint64_t marks[YONDER_DIAG_MARKS];
     wire_read(marks);
     yonder_diag_marks_set(d, marks);
@@ -4096,6 +4163,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     yonder_scripts_ledger_layout(forcing, true);
     bool in_tick = s_cost.depth[PS_TICKS] != 0;
     uint64_t layout_began = cycles();
+    int64_t lt_began = s_lt.on ? os64_micros() : 0;
     cost_begin(PS_LAYOUTS);
     bool profiled = s_layout_profile && layout_profile_diag(p) && !s_one_open;
     int64_t began = profiled ? os64_micros() : -1;
@@ -4113,6 +4181,8 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
         if (s_one.cascade_us != 0 || s_one.attempts != 0) layout_profile_one(p, &s_one);
     }
     if (laid && p == &g.page) pointer_geometry_changed();
+    if (s_lt.on)
+        yonder_lt_layout(&s_lt, lt_began, (uint64_t)(os64_micros() - lt_began));
     cost_end(PS_LAYOUTS);
     if (in_tick && forcing == NULL)
         s_cost.layouts_in_ticks += cycles_since(layout_began);
@@ -4391,6 +4461,7 @@ static void diag_observe(Page *p, const char *when)
         diag_cascade(d, p->cascade);
     char v[128];
     yonder_diag_fact(d, "written", when);
+    diag_timeline(d);
     diag_wire(d);
     diag_census(p, false);
     if (p->svg_cache) {
@@ -4515,6 +4586,7 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);
+    lt_mark(p->diag, YONDER_LT_MARK_ARRIVED);
     diag_wire(p->diag);
     diag_navigation(p);
     os64_snprintf(v, sizeof(v), "%dx%d px in %lu ms", (int)p->laid_width, (int)p->laid_height,
@@ -10464,6 +10536,7 @@ static void glass_paint(void)
     for (uint32_t i = 0; i < count; i++)
         os64_draw_publish(g.ui.ctx, &damage[i]);
     cost_end(PS_PUBLISH);
+    lt_mark(g.page.diag, YONDER_LT_MARK_PAINT);
     paint_counted(damage, count, by, reach);
     cost_fold(PS_RENDER, PS_PUBLISH);
 }
@@ -11749,6 +11822,7 @@ static void videos_tick(void)
             v->sizing = 0;          // the picture at the size told
         v->frame = fr;
         s_cost.video_pictures++;
+        lt_mark(g.page.diag, YONDER_LT_MARK_PICTURE);
         part = video_frame_mark(v, part);
         s_video_marking = true;
         mark_part(part);
@@ -12628,14 +12702,18 @@ static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, u
 // begun task that finds nothing to run never reaches task_said, and the
 // next task_begin starts it again.
 static uint64_t s_task_began;
+// The same moment on the clock, for the load's timeline while it runs
+// (0 while it does not).
+static int64_t s_lt_task_began;
 
 // A task is about to run: the layouts it forces are counted from zero
-// (DOM.md § Geometry), and the audit's clock starts, and the paint counts'.
-// Every task kind begins here and ends at task_said.
+// (DOM.md § Geometry), and the audit's clock starts, and the paint counts',
+// and the timeline's. Every task kind begins here and ends at task_said.
 static int64_t task_begin(yonder_scripts_t *host)
 {
     (void)yonder_scripts_geometry_stats(host, true);
     s_task_began = cycles();
+    s_lt_task_began = s_lt.on ? os64_micros() : 0;
     return s_script_audit ? os64_micros() : 0;
 }
 
@@ -12657,7 +12735,8 @@ static void task_cost(const char *what)
 // cost, then an error by its script's name, and a runtime its task retired
 // by the sentence that says the page goes on without script. The audit
 // logs every task, what it cost, what it forced and what it wrote: a page
-// that writes its whole body shows as one.
+// that writes its whole body shows as one. The load's timeline, while it
+// runs, hears of each task with its name, its time and what it forced.
 static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
@@ -12665,6 +12744,13 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     task_cost(what);
 
     os64_dom_geometry_stats_t forced = yonder_scripts_geometry_stats(host, false);
+    if (s_lt.on) {
+        char named[YONDER_LT_TASK_MAX];
+        os64_snprintf(named, sizeof(named), "%s%s%s", what, out->source_name[0] ? " " : "", out->source_name);
+        int64_t now = os64_micros();
+        uint64_t us = s_lt_task_began != 0 && now > s_lt_task_began ? (uint64_t)(now - s_lt_task_began) : 0;
+        yonder_lt_task(&s_lt, now, named, us, (uint32_t)forced.layouts, forced.elapsed_us);
+    }
     if (spent > s_cost.task_longest) {
         s_cost.task_longest = spent;
         s_cost.task_longest_layouts = forced.layouts;
@@ -21530,6 +21616,7 @@ int main(int argc, char **argv)
         // drain after a window of yonder's was destroyed.
         if (!looking && !g.batch.held && os64_ui_dispatcher_can_create(&g.dispatcher)) {
             int64_t ready = 0;
+            lt_step(YONDER_LT_WAIT);
             uint64_t asleep = cycles();
             woke = os64_gui_event_wait_any(&ready);
             uint64_t slept = cycles_since(asleep);
@@ -21541,6 +21628,7 @@ int main(int argc, char **argv)
         }
         g.batch.consumed = 0;
         g.batch.drained = false;
+        lt_step(YONDER_LT_INPUT);
         int64_t events = os64_ui_dispatcher_turn(&g.dispatcher, false);
         if (events < 0) {
             woke = events;
@@ -21554,23 +21642,30 @@ int main(int argc, char **argv)
             continue;
         }
         if (g.relayout_due) {
+            lt_step(YONDER_LT_RELAYOUT);
             g.relayout_due = false;
             frame_follow();
             relayout(false);
         }
         if (!g.running || g.ui.quit)
             break;
+        lt_step(YONDER_LT_STREAM);
         bool stream_more = stream_turn();
+        lt_step(YONDER_LT_COMING);
         bool coming_more = coming_turn();
+        lt_step(YONDER_LT_SCRIPTS);
         bool scripts_ready = script_turn();
+        lt_step(YONDER_LT_MEDIA);
         bodies_turn();
         players_ask_run();
         bool media_more = media_turn();
         videos_turn();
         keys_turn();
         players_show();
+        lt_step(YONDER_LT_MOTION);
         motion_tick();
         videos_tick();
+        lt_step(YONDER_LT_UPKEEP);
         storage_turn();
         cookies_turn();
         census_turn();
@@ -21579,9 +21674,11 @@ int main(int argc, char **argv)
         step_hold_turn();
         pictures_settle();
         title_follow();
+        lt_step(YONDER_LT_OBSERVERS);
         bool observed = resizes_turn();
         before_paint();
         observed = intersections_turn() || observed;
+        lt_step(YONDER_LT_PAINT);
         glass_paint();
         bool painted_frame = frame_unpainted() || g.raf_painting;
         motion_painted();
@@ -21602,6 +21699,8 @@ int main(int argc, char **argv)
         pictures_schedule();
         looking = g.bar.up && !g.bar.armed;
     }
+    if (s_lt.on)
+        yonder_lt_step_end(&s_lt, os64_micros());
 
     left_said(woke);
     if (os64_window_placement_save_state(&g.ui.placement, g.win) != 0)
