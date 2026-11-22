@@ -3711,7 +3711,7 @@ static os64_gui_rect_t taken_in(os64_gui_rect_t view, const double m[6], flow_po
 // whole; else what a group drawn through a matrix takes in (taken_in) or
 // the view itself, grown by how far from outside it what its filter draws
 // there can come (filter_sources). The sheet and budget bounds keep the
-// same views (paint_asks).
+// same views (flow_paint_asks).
 static os64_gui_rect_t inside_view(const flow_box_t *b, os64_gui_rect_t view, bool through, const double m[6],
                                    flow_point_t up, flow_inside_t asked)
 {
@@ -3742,14 +3742,19 @@ static bool sheet_within(os64_gui_rect_t r, int32_t side, int64_t pixels)
     return r.w <= 0 || r.h <= 0 || (r.w <= side && r.h <= side && (int64_t)r.w * r.h <= pixels);
 }
 
-// What a paint of `viewport` at `scroll`, or of a part of it, could ask of a
-// face at most: `charge`, the layers' and backdrops' budget, and `fits`,
-// whether every sheet keeps within the limits given (flow_layer_area_bound,
-// flow_sheets_fit).
-typedef struct {
-    int64_t charge;
-    bool fits;
-} PaintAsks;
+// The first limit a paint passes, in paint order, and what passed it
+// (flow_paint_asks); a later pass leaves the first standing.
+static void asks_over(flow_paint_asks_t *out, flow_asks_over_t over, const flow_box_t *b, os64_gui_rect_t rect,
+                      int64_t charge, bool inside)
+{
+    if (out->over != FLOW_ASKS_WITHIN)
+        return;
+    out->over = over;
+    out->box = b;
+    out->rect = rect;
+    out->box_charge = charge;
+    out->inside = inside;
+}
 
 // It follows the views the walk keeps (inside_view), which hold the
 // painter's at every depth — the walk may not cull what the painter draws —
@@ -3766,13 +3771,13 @@ typedef struct {
 // layer; a box with a backdrop filter is charged its part in the view, and
 // asks for that part grown by its list's reach. Groups nested past the
 // stack's depth ask for more than any budget.
-static PaintAsks paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
-                            int32_t through_side, int64_t through_pixels, int32_t layer_side, int64_t layer_pixels)
+bool flow_paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                     const flow_paint_limits_t *limits, flow_paint_asks_t *out)
 {
     const int64_t unbounded = INT64_MAX / 4;
-    PaintAsks asks = {0, true};
+    *out = (flow_paint_asks_t){.sheets_fit = true};
     if (tree == NULL || tree->root == NULL || viewport.w <= 0 || viewport.h <= 0)
-        return asks;
+        return true;
     enum { DEEP = 64 };
     struct {
         os64_gui_rect_t view, shown;
@@ -3782,7 +3787,7 @@ static PaintAsks paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, f
     os64_gui_rect_t view = viewport, shown = viewport;
     bool inside = false;
     int32_t depth = 0;
-    for (int32_t i = 0; i < tree->nlayers && asks.charge < unbounded; i++) {
+    for (int32_t i = 0; i < tree->nlayers && out->charge < unbounded; i++) {
         const Layer *l = &tree->layers[i];
         const flow_box_t *b = l->box;
         if (l->part == PART_CLOSE) {
@@ -3802,14 +3807,19 @@ static PaintAsks paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, f
             os64_gui_rect_t part = inside ? b->rect : meet(flow_box_doc_rect(b, scroll), view);
             int32_t d[4];
             flow_filter_list_reach(b->style->backdrop_filter, b->style->nbackdrop_filter, d);
-            asks.charge += area_of(part);
-            if (part.w > 0 && part.h > 0 && !sheet_within(grown(part, d), layer_side, layer_pixels))
-                asks.fits = false;
+            out->charge += area_of(part);
+            if (out->charge > limits->budget)
+                asks_over(out, FLOW_ASKS_BUDGET, b, part, area_of(part), inside);
+            if (part.w > 0 && part.h > 0 && !sheet_within(grown(part, d), limits->layer_side, limits->layer_pixels)) {
+                out->sheets_fit = false;
+                asks_over(out, FLOW_ASKS_BACKDROP_SHEET, b, grown(part, d), 0, inside);
+            }
             continue;
         }
         if (depth >= DEEP) {
-            asks.charge = unbounded;
-            asks.fits = false;
+            out->charge = unbounded;
+            out->sheets_fit = false;
+            asks_over(out, FLOW_ASKS_DEEP, b, (os64_gui_rect_t){0, 0, 0, 0}, 0, inside);
             break;
         }
         outer[depth].view = view;
@@ -3825,17 +3835,24 @@ static PaintAsks paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, f
         os64_gui_rect_t in = inside_view(b, from, through, m, up, FLOW_INSIDE_VIEW);
         if (through) {
             os64_gui_rect_t sheet = from.w == kWholePlane.w ? bd : meet(bd, taken_in(from, m, up));
-            if (!sheet_within(sheet, through_side, through_pixels))
-                asks.fits = false;
+            if (!sheet_within(sheet, limits->through_side, limits->through_pixels)) {
+                out->sheets_fit = false;
+                asks_over(out, FLOW_ASKS_THROUGH_SHEET, b, sheet, 0, inside);
+            }
             shown = sheet;
         }
         if (f_group_filter(b->style, f_atom(b)) || flow_masked(b) || b->style->mix_blend != FLOW_BLEND_NORMAL) {
             os64_gui_rect_t layer = meet(bd, in);
-            if (!sheet_within(layer, layer_side, layer_pixels))
-                asks.fits = false;
+            if (!sheet_within(layer, limits->layer_side, limits->layer_pixels)) {
+                out->sheets_fit = false;
+                asks_over(out, FLOW_ASKS_LAYER_SHEET, b, layer, 0, inside);
+            }
             int64_t a = area_of(meet(layer, shown));
             int64_t layers = flow_masked(b) ? 1 + flow_mask_layers(b->style) : 1;
-            asks.charge = a >= (unbounded - asks.charge) / layers ? unbounded : asks.charge + a * layers;
+            out->charge = a >= (unbounded - out->charge) / layers ? unbounded : out->charge + a * layers;
+            if (out->charge > limits->budget)
+                asks_over(out, FLOW_ASKS_BUDGET, b, meet(layer, shown), a >= unbounded / layers ? unbounded : a * layers,
+                          inside);
         }
         if (through || f_group_filter(b->style, f_atom(b)))
             view = in;
@@ -3843,31 +3860,42 @@ static PaintAsks paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, f
     }
     // A backdrop filter on a box that makes no context of its own (not
     // granted one) is charged its whole rect, whatever view it is painted in.
-    for (const flow_box_t *b = tree->root; b != NULL && asks.charge < unbounded; b = box_after(b)) {
+    for (const flow_box_t *b = tree->root; b != NULL && out->charge < unbounded; b = box_after(b)) {
         if (b->style == NULL || b->style->nbackdrop_filter <= 0 || makes_context(b))
             continue;
-        os64_gui_rect_t part = under_through(b) ? b->rect : flow_box_doc_rect(b, scroll);
+        bool under = under_through(b);
+        os64_gui_rect_t part = under ? b->rect : flow_box_doc_rect(b, scroll);
         int32_t d[4];
         flow_filter_list_reach(b->style->backdrop_filter, b->style->nbackdrop_filter, d);
-        asks.charge += area_of(part);
-        if (part.w > 0 && part.h > 0 && !sheet_within(grown(part, d), layer_side, layer_pixels))
-            asks.fits = false;
+        out->charge += area_of(part);
+        if (out->charge > limits->budget)
+            asks_over(out, FLOW_ASKS_BUDGET, b, part, area_of(part), under);
+        if (part.w > 0 && part.h > 0 && !sheet_within(grown(part, d), limits->layer_side, limits->layer_pixels)) {
+            out->sheets_fit = false;
+            asks_over(out, FLOW_ASKS_BACKDROP_SHEET, b, grown(part, d), 0, under);
+        }
     }
     os64_free(bounds);
-    if (asks.charge > unbounded)
-        asks.charge = unbounded;
-    return asks;
+    if (out->charge > unbounded)
+        out->charge = unbounded;
+    return out->over == FLOW_ASKS_WITHIN;
 }
 
 int64_t flow_layer_area_bound(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll)
 {
-    return paint_asks(tree, viewport, scroll, INT32_MAX, INT64_MAX, INT32_MAX, INT64_MAX).charge;
+    const flow_paint_limits_t none = {INT64_MAX, INT32_MAX, INT64_MAX, INT32_MAX, INT64_MAX};
+    flow_paint_asks_t asks;
+    (void)flow_paint_asks(tree, viewport, scroll, &none, &asks);
+    return asks.charge;
 }
 
 bool flow_sheets_fit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll, int32_t through_side,
                      int64_t through_pixels, int32_t layer_side, int64_t layer_pixels)
 {
-    return paint_asks(tree, viewport, scroll, through_side, through_pixels, layer_side, layer_pixels).fits;
+    const flow_paint_limits_t limits = {INT64_MAX, through_side, through_pixels, layer_side, layer_pixels};
+    flow_paint_asks_t asks;
+    (void)flow_paint_asks(tree, viewport, scroll, &limits, &asks);
+    return asks.sheets_fit;
 }
 
 // The layer index of the close of the group opened at `i`.

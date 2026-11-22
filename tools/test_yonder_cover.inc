@@ -224,13 +224,44 @@ static void cover_cases(void)
          * budget cannot run out, and the paint is covered. */
         cover_expect("cover: layers that cannot run the budget out over the picture's part, covered",
                      cover_run((os64_gui_rect_t){40, 40, 320, 180}), 0);
-        /* The whole window: five layers of it pass four views' budget. */
+        /* The whole window: five layers of it pass four views' budget. Under
+         * --layout-profile the record says which limit and which element:
+         * the four full-window layers charge the budget exactly, and the
+         * overlay's is the charge that passes it (WHOLE_REPAINTS.md W0). */
         uint64_t budget = s_cost.covered_budget;
+        bool profiled = s_layout_profile;
+        yonder_diag_t *was_diag = g.page.diag;
+        g.page.diag = yonder_diag_new("https://fixture.test/not-covered", 3, 0);
+        s_layout_profile = true;
         CoverCounts b = cover_run(g.view.bounds);
+        s_layout_profile = profiled;
         check(b.covered == 0 && s_cost.covered_budget > budget,
               "cover: layers that might run the budget out keep the paint the ordinary way");
         if (!(b.covered == 0 && s_cost.covered_budget > budget))
             cover_said("the layers' budget", b);
+        const char *said = g.page.diag != NULL ? yonder_diag_fact_value(g.page.diag, "not covered") : NULL;
+        check(said != NULL && strstr(said, "budget ") == said && strstr(said, ": div#over (charged ") != NULL &&
+                  strstr(said, "of 1920000; view 800x600") != NULL,
+              "cover: the record names the budget and the element whose charge passed it");
+        if (said == NULL || strstr(said, ": div#over (charged ") == NULL)
+            fprintf(stderr, "  not covered: %s\n", said != NULL ? said : "(none)");
+        /* A script's change: the record says what it changed and where, the
+         * inline style as it now stands. */
+        os64_html_node_t *over = (os64_html_node_t *)probe_id("over");
+        s_layout_profile = true;
+        check(over != NULL && os64_html_set_attr((os64_html_document_t *)page_doc(&g.page), over, "style",
+                                                 "opacity:.5", 10) == OS64_HTML_OK,
+              "cover: a style written for the change note");
+        script_changes_note(&g.page);
+        script_changes_note(&g.page);
+        s_layout_profile = profiled;
+        said = g.page.diag != NULL ? yonder_diag_fact_value(g.page.diag, "whole views by a script's change") : NULL;
+        check(said != NULL && strstr(said, "attribute style 2: div#over (opacity:.5)") == said,
+              "cover: the record names a script's change, once a rebuild, with the style as it stands");
+        if (said == NULL || strstr(said, "attribute style 2: div#over (opacity:.5)") != said)
+            fprintf(stderr, "  whole views by a script's change: %s\n", said != NULL ? said : "(none)");
+        yonder_diag_free(g.page.diag);
+        g.page.diag = was_diag;
     }
     cover_whole_same("cover: layers that might run the budget out, the window painted whole with covers and without "
                      "is the same");

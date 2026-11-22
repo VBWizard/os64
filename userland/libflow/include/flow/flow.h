@@ -2070,13 +2070,49 @@ int32_t flow_paint_path(const flow_tree_t *tree, const flow_box_t *box, const fl
 // each backdrop filter's part grown by its list's reach, at most
 // `layer_side` and `layer_pixels`.
 //
+// flow_paint_asks: both in one walk against `limits`, true when the
+// charge is within `budget` and every sheet within its limit; `out` says
+// the charge, whether the sheets fit, and the first limit passed in paint
+// order with the box that passed it (what of it was counted, its own
+// charge for the budget, and whether it was counted inside a matrix), for
+// a caller that says why it would not split or cover a paint.
+//
 // Together they are what lets a paint split into parts, or culled beneath a
 // cover, decide every layer and sheet as the whole paint would (VIDEO.md
 // § 5, The paint beneath the picture). Groups nested past 64 deep ask for
 // more than any budget and fit no limit.
+typedef struct {
+    int64_t budget;                         // layers' and backdrops' pixels in all
+    int32_t through_side;                   // a sheet a group is laid through: a side,
+    int64_t through_pixels;                 // and in all
+    int32_t layer_side;                     // a layer's sheet, or a backdrop's
+    int64_t layer_pixels;
+} flow_paint_limits_t;
+
+typedef enum {
+    FLOW_ASKS_WITHIN = 0,                   // no limit passed
+    FLOW_ASKS_BUDGET,                       // the charge passed the budget at `box`
+    FLOW_ASKS_THROUGH_SHEET,                // `box`'s sheet through its matrix
+    FLOW_ASKS_LAYER_SHEET,                  // `box`'s layer
+    FLOW_ASKS_BACKDROP_SHEET,               // `box`'s backdrop, grown by its reach
+    FLOW_ASKS_DEEP,                         // `box` nested past the walk's depth
+} flow_asks_over_t;
+
+typedef struct {
+    int64_t charge;
+    bool sheets_fit;
+    flow_asks_over_t over;
+    const flow_box_t *box;
+    os64_gui_rect_t rect;                   // the sheet, or the part charged
+    int64_t box_charge;                     // its own charge, for the budget
+    bool inside;                            // counted inside a matrix: its bounds whole
+} flow_paint_asks_t;
+
 int64_t flow_layer_area_bound(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll);
 bool flow_sheets_fit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll, int32_t through_side,
                      int64_t through_pixels, int32_t layer_side, int64_t layer_pixels);
+bool flow_paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                     const flow_paint_limits_t *limits, flow_paint_asks_t *out);
 
 // The deepest box whose OWN rect holds (x, y), the last painted winning —
 // the stacked boxes backwards, then the ordinary tree — whose clip holds

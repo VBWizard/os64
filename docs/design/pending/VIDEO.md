@@ -674,7 +674,9 @@ spreads, so a transformed group under a blurred one asks for a sheet
 taken from the grown view, not from R (Codex, #698 round 4). Every view
 only grows with R, so a paint of a part asks for no more, and when R
 fits all accept and charge alike. R past either is painted the ordinary
-way, counted in the record.
+way, counted in the record. yonder asks both in one walk
+(`flow_paint_asks`), which also names the first limit passed and the box
+that passed it, for the record's `not covered` line (WHOLE_REPAINTS.md W0).
 `flow_paint_path` names the groups that hold a box (outermost first),
 which rule 1 reads (none may lay a layer) and the checking mode tests.
 
