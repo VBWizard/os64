@@ -259,6 +259,27 @@ static void cover_cases(void)
                      "and without is the same");
     cover_drop();
 
+    /* A transformed overlay whose sheet for the whole window is past the
+     * sheets' limit, which the ordinary paint draws upright: a split paint
+     * would ask for smaller sheets and lay it through its matrix, so the
+     * paint is the ordinary one (Codex, #698 round 3). */
+    probe_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#big{position:absolute;left:0;top:0;width:2000px;height:1500px;"
+               "background:linear-gradient(90deg,rgba(255,0,0,.4),rgba(0,0,255,.4));"
+               "transform:scale(.4);transform-origin:0 0}</style><video id=v></video><div id=big></div>", true);
+    cover_video("v", 320, 180, 320, 180);
+    {
+        uint64_t limited = s_cost.covered_budget;
+        CoverCounts b = cover_run(g.view.bounds);
+        check(b.covered == 0 && s_cost.covered_budget > limited,
+              "cover: a sheet past its limit keeps the paint the ordinary way");
+        if (!(b.covered == 0 && s_cost.covered_budget > limited))
+            cover_said("a sheet past its limit", b);
+    }
+    cover_whole_same("cover: a sheet past its limit, the window painted whole with covers and without is the same");
+    cover_drop();
+
     /* A video in a group is drawn on its sheets, never plain. */
     snprintf(html, sizeof(html), "%s<div id=glow></div><div style='opacity:.9'><video id=v></video></div>", style);
     probe_page(html, true);

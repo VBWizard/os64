@@ -3640,7 +3640,8 @@ static struct {
     // painted again because the walk never handed the video over, and those
     // painted the ordinary way because a backdrop reader may read across the
     // edge a split would cut (backdrop_read_meets), or because the layers'
-    // budget might run out (flow_layer_area_bound).
+    // budget might run out or a sheet pass its limit (flow_layer_area_bound,
+    // flow_sheets_fit).
     uint64_t covered_paints, covered_pieces, covered_again, covered_refused, covered_budget;
     uint64_t from_cycles;
     int64_t from_us;
@@ -8752,7 +8753,7 @@ static bool paint_lines(DiagText *t, DiagText *u)
     if (s_cost.covered_paints > 0 || s_cost.covered_refused > 0 || s_cost.covered_budget > 0)
         dt_put(t, "; paints a video covered %lu (from the video up), %lu pieces of their rest painted the ordinary way, %lu "
                "painted again, %lu not split for a backdrop reader, %lu painted the ordinary way for the layers' "
-               "budget",
+               "budget or a sheet's size",
                (unsigned long)s_cost.covered_paints, (unsigned long)s_cost.covered_pieces,
                (unsigned long)s_cost.covered_again, (unsigned long)s_cost.covered_refused,
                (unsigned long)s_cost.covered_budget);
@@ -18206,11 +18207,14 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
         yonder_paint(g.page.tree, view, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
         return yonder_paint_layers_refused;
     }
-    // Every paint of `view`, covered or a piece, must decide each layer as
-    // the ordinary paint of it would: one whose layers might run out of the
-    // budget (YONDER_FILTER_AREA_VIEWS of the whole view) is painted the
-    // ordinary way (flow_layer_area_bound; Codex, #698).
-    if (flow_layer_area_bound(g.page.tree, view, scroll) > (int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h) {
+    // Every paint of `view`, covered or a piece, must decide each layer and
+    // each sheet as the ordinary paint of it would: one whose layers might
+    // run out of the budget (YONDER_FILTER_AREA_VIEWS of the whole view,
+    // flow_layer_area_bound), or that might ask for a sheet past its limit
+    // (a laid group's SHEET_SIDE and SHEET_PIXELS, a layer's FILTER_SHEET_*,
+    // flow_sheets_fit), is painted the ordinary way (Codex, #698).
+    if (flow_layer_area_bound(g.page.tree, view, scroll) > (int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h ||
+        !flow_sheets_fit(g.page.tree, view, scroll, SHEET_SIDE, SHEET_PIXELS, FILTER_SHEET_SIDE, FILTER_SHEET_PIXELS)) {
         s_cost.covered_budget++;
         yonder_paint(g.page.tree, view, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
         return yonder_paint_layers_refused;

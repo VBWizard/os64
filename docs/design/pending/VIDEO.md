@@ -661,8 +661,15 @@ cover is used only when `flow_layer_area_bound` — at least what any paint
 of R or a part of it can charge (each layer's bounds met with R, in its
 own pixels through a matrix; each backdrop filter's part) — fits the
 budget: then no paint of R refuses a layer, and every one decides them
-as the ordinary paint does. One past it is painted the ordinary way,
-counted in the record.
+as the ordinary paint does. The sheets the painter asks for are held the
+same way: a group drawn through a matrix is laid through a sheet of at
+most SHEET_SIDE a side and SHEET_PIXELS in all, a layer through one of
+FILTER_SHEET_SIDE and FILTER_SHEET_PIXELS, and past those the ordinary
+paint draws the group upright or plain, where a piece, asking for less,
+would be given one (Codex, #698 round 3). `flow_sheets_fit` asks whether
+every sheet a paint of R could ask for fits; a paint of a part asks for
+no larger one, so then all accept alike. R past either is painted the
+ordinary way, counted in the record.
 `flow_paint_path` names the groups that hold a box (outermost first),
 which rule 1 reads (none may lay a layer) and the checking mode tests.
 

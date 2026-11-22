@@ -2062,6 +2062,19 @@ int32_t flow_paint_path(const flow_tree_t *tree, const flow_box_t *box, const fl
 // as the whole paint would (VIDEO.md § 5, The paint beneath the picture).
 int64_t flow_layer_area_bound(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll);
 
+// Whether every sheet a paint of `viewport` at `scroll` could ask a face
+// for keeps within its limits: each group drawn through a matrix, what of
+// it the walk takes in (as flow_layer_area_bound meets it), at most
+// `through_side` a side and `through_pixels` in all; each layer (a group
+// that may take one, grown by what its filter spreads; a backdrop filter's
+// part, grown by its list's reach) at most `layer_side` and
+// `layer_pixels`. A paint of a part of the viewport asks for no larger
+// sheet, so when these fit, a split or covered paint accepts and refuses
+// each sheet as the whole paint would (VIDEO.md § 5). Inside a matrix, a
+// group's bounds whole.
+bool flow_sheets_fit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll, int32_t through_side,
+                     int64_t through_pixels, int32_t layer_side, int64_t layer_pixels);
+
 // The deepest box whose OWN rect holds (x, y), the last painted winning —
 // the stacked boxes backwards, then the ordinary tree — whose clip holds
 // the point, and that is drawn (`visibility: visible`) and not
