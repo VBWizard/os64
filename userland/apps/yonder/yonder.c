@@ -11659,11 +11659,24 @@ static uint64_t videos_next(void)
 
 // `--video-rate[=S]`: every S seconds (5 unless said) while a video on the
 // view asks for frames, one line on the console per video, comma-separated:
-// `video-rate,<ms since boot>,<video>,<shown>,<dropped>,<painted>`,
+// `video-rate,<ms since boot>,<video>,<shown>,<dropped>,<painted>,<fps>,<dropped a second>`,
 // the player's counts since it began and the plain and general paints of
-// videos since yonder began, so two lines give a rate.
+// videos since yonder began, then the pictures shown and dropped a second
+// since that video's last line, in tenths (`-` on its first line, or when
+// its counts started again).
 static uint32_t s_video_rate_s;
 static uint64_t s_video_rate_next_ms, s_video_rate_painted;
+static struct {
+    uint64_t ms, shown, dropped;
+    bool said;
+} s_video_rate_last[VIDEOS_MAX];
+
+// `n` events over `ms` milliseconds, a second, in tenths: "29.8".
+static void video_rate_tenths(char *out, size_t cap, uint64_t n, uint64_t ms)
+{
+    uint64_t tenths = ms > 0 ? (n * 10000 + ms / 2) / ms : 0;
+    os64_snprintf(out, cap, "%lu.%lu", (unsigned long)(tenths / 10), (unsigned long)(tenths % 10));
+}
 
 static void video_rate_say(void)
 {
@@ -11675,8 +11688,16 @@ static void video_rate_say(void)
         os64_media_player_facts_t vf;
         if (s_videos[i].node == NULL || !yonder_media_player_facts(s_videos[i].session, &vf))
             continue;
-        os64_printf("video-rate,%lu,%d,%lu,%lu,%lu\n", (unsigned long)now, (int)i, (unsigned long)vf.pace.shown,
-                    (unsigned long)vf.pace.dropped, (unsigned long)s_video_rate_painted);
+        char fps[24] = "-", drops[24] = "-";
+        __typeof__(s_video_rate_last[0]) *last = &s_video_rate_last[i];
+        if (last->said && now > last->ms && vf.pace.shown >= last->shown && vf.pace.dropped >= last->dropped) {
+            video_rate_tenths(fps, sizeof(fps), vf.pace.shown - last->shown, now - last->ms);
+            video_rate_tenths(drops, sizeof(drops), vf.pace.dropped - last->dropped, now - last->ms);
+        }
+        *last = (__typeof__(*last)){now, vf.pace.shown, vf.pace.dropped, true};
+        os64_printf("video-rate,%lu,%d,%lu,%lu,%lu,%s,%s\n", (unsigned long)now, (int)i,
+                    (unsigned long)vf.pace.shown, (unsigned long)vf.pace.dropped,
+                    (unsigned long)s_video_rate_painted, fps, drops);
     }
 }
 
