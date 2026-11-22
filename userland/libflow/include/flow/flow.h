@@ -1434,11 +1434,14 @@ flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
  * filtered group's whole, and each stacked box drawn outside it that takes
  * from it; an element with no box of its own, the replaced box that draws
  * it (an inline svg's shape), if one does. `parts` (a flow_parts_why_t) is
- * FLOW_PARTS_MARKED when that
- * was all of it, or nothing was written; anything else names why the
- * caller must take the whole view (the canvas may take a written
- * element's background, the walks ran too deep, no memory). A declined
- * restyle hands nothing it can stand by: its `parts` is not MARKED. */
+ * FLOW_PARTS_MARKED when that was all of it, or nothing was written;
+ * anything else names why the caller must take the whole view: the canvas
+ * may take a written element's background (CANVAS), a transform moved the
+ * page's extent, a scroller's range or a scroll (MOVED), what draws a
+ * boxless element cannot be bounded (NO_BOX), the walks ran too deep, no
+ * memory. A declined restyle hands nothing it can stand by: its `parts` is
+ * not MARKED, and its `written` is not 0 only when it wrote the tree before
+ * declining, which then holds some of the new styles. */
 typedef struct {
     flow_point_t scroll;
     void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r);
@@ -1718,6 +1721,8 @@ typedef enum {
     FLOW_PARTS_DEEP,            // stacked boxes nested so deep that finding which take the
                                 // change would cost more than the repaint
     FLOW_PARTS_MEMORY,          // no memory
+    FLOW_PARTS_LONG,            // flow_change_parts: trees too big to compare for less than
+                                // the repaint
     FLOW_PARTS_COUNT
 } flow_parts_why_t;
 typedef struct {
@@ -1745,14 +1750,20 @@ bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_poin
 // - The trees must paint the same layers, scroll alike, and reach as far:
 //   the page's extent and each scroller's range (LAYERS, SCROLLED, MOVED).
 // - Walked together, each pair of boxes placed alike in itself is
-//   compared by everything it draws: its whole style, its decorations,
-//   and a text's or marker's bytes. One that differs marks its element.
-// - A pair whose children differ (another list, or a child placed
-//   otherwise) is marked by its own reach in each tree and not gone into,
-//   when everything inside both is in its frame, in flow and in no layer
-//   of its own; otherwise MOVED.
+//   compared by what it draws from the tree: its whole style, its
+//   decorations, and a text's or marker's bytes. One that differs marks
+//   its element. What a replaced box draws from the document (a picture,
+//   an svg's shapes) is the caller's `touched` to name.
+// - A pair whose children differ (another list, one of them empty, or a
+//   child placed otherwise) is marked by its own reach in each tree and not
+//   gone into, when everything inside both is in its frame, in flow and in
+//   no layer of its own; otherwise MOVED.
 // - An element with no box in either tree whose style differs marks the
-//   replaced box that draws it, if one does.
+//   replaced box that draws it, if one does; NO_BOX when an svg element is
+//   one another svg may draw through a reference, or sits in an svg that
+//   draws nothing itself (a sprite sheet's), since what draws it then is
+//   not bounded.
+// - A walk past its bound is LONG.
 // - `touched` (`ntouched` elements) are what the script changed that no
 //   style says, the face's to name (an attribute a box draws from): each
 //   marks its boxes, or the replaced box that draws it.

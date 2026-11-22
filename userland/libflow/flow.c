@@ -5210,21 +5210,44 @@ static bool moved_within(const flow_box_t *p, int32_t *visits)
     return true;
 }
 
+// Whether svg element `n`, or one it is in, is what another svg may draw
+// through a reference (`<use href>`, `url(#id)`): a definition, a symbol,
+// a paint server, a clip, a mask, a marker or a filter. libsvg finds a
+// reference's target anywhere in the document, other svg roots included.
+static bool svg_referable(const os64_html_document_t *doc, const os64_html_node_t *n)
+{
+    static const char *const kReferable[] = {"defs",    "symbol",   "linearGradient", "radialGradient", "pattern",
+                                             "clipPath", "mask",    "marker",         "filter"};
+    for (const os64_html_node_t *a = n; a != NULL && a->ns == OS64_HTML_NS_SVG; a = f_flat_parent(doc, a))
+        for (size_t i = 0; a->name != NULL && i < sizeof(kReferable) / sizeof(kReferable[0]); i++)
+            if (os64_streq(a->name, kReferable[i]))
+                return true;
+    return false;
+}
+
 // The box that draws element `n` in `tree` when it has none of its own: a
 // replaced box it is inside (an inline svg's root, a select's widget),
-// which draws what is in it from the document and the styles. Any other
-// box draws nothing of a boxless element (`display: none` under it, or
-// `display: contents`, whose children have boxes of their own): NULL.
-static const os64_html_node_t *drawn_by(const flow_tree_t *tree, const os64_html_node_t *n)
+// which draws what is in it from the document and the styles, into `*out`
+// (true). Any other box draws nothing of a boxless element (`display:
+// none` under it, or `display: contents`, whose children have boxes of
+// their own): NULL, true. False when what draws it cannot be bounded: an
+// svg element another svg may draw through a reference, or one in an svg
+// that draws nothing itself (a sprite sheet's).
+static bool drawn_by(const flow_tree_t *tree, const os64_html_node_t *n, const os64_html_node_t **out)
 {
     const os64_html_document_t *doc = tree_doc(tree);
+    *out = NULL;
+    if (n->ns == OS64_HTML_NS_SVG && svg_referable(doc, n))
+        return false;
     for (const os64_html_node_t *a = f_flat_parent(doc, n); a != NULL; a = f_flat_parent(doc, a)) {
         const flow_box_t *b = f_map_get(&tree->first, a);
         if (b == NULL)
             continue;
-        return b->kind == FLOW_BOX_REPLACED || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL) ? a : NULL;
+        if (b->kind == FLOW_BOX_REPLACED || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL))
+            *out = a;
+        break;
     }
-    return NULL;
+    return *out != NULL || n->ns != OS64_HTML_NS_SVG;
 }
 
 typedef struct {
@@ -5295,12 +5318,18 @@ static bool change_moved(Change *c, const flow_box_t *x, const flow_box_t *y)
 
 // Element `n`, which a script's change reached, marked where it is drawn:
 // by its own boxes in either tree, else by the replaced box either tree
-// draws it in (drawn_by), else nowhere.
+// draws it in (drawn_by), else nowhere; NO_BOX when what draws it cannot
+// be bounded.
 static bool change_drawn(Change *c, const flow_tree_t *was, const os64_html_node_t *n)
 {
     if (f_map_get(&was->first, n) != NULL || f_map_get(&c->now->first, n) != NULL)
         return change_node(c, n);
-    const os64_html_node_t *a = drawn_by(was, n), *b = drawn_by(c->now, n);
+    const os64_html_node_t *a, *b;
+    if (!drawn_by(was, n, &a) || !drawn_by(c->now, n, &b)) {
+        c->said->why = FLOW_PARTS_NO_BOX;
+        c->said->node = n;
+        return false;
+    }
     return (a == NULL || change_node(c, a)) && (b == NULL || change_node(c, b));
 }
 
@@ -5358,15 +5387,15 @@ bool flow_change_parts(const flow_tree_t *was, const flow_tree_t *now, flow_poin
     // differ is marked by its reach, old and new, and not gone into.
     while (said->why == FLOW_PARTS_MARKED && x != NULL) {
         if (++visits > CHANGE_WALK_MAX) {
-            said->why = FLOW_PARTS_DEEP;
+            said->why = FLOW_PARTS_LONG;
             break;
         }
         if (!same_drawn(x, y) && !change_node(&c, box_named(y)))
             break;
-        bool down = x->first != NULL;
+        bool down = x->first != NULL || y->first != NULL;
         if (down && !children_alike(x, y)) {
             if (!moved_within(x, &visits) || !moved_within(y, &visits)) {
-                said->why = visits > CHANGE_WALK_MAX ? FLOW_PARTS_DEEP : FLOW_PARTS_MOVED;
+                said->why = visits > CHANGE_WALK_MAX ? FLOW_PARTS_LONG : FLOW_PARTS_MOVED;
                 said->node = box_named(y);
                 break;
             }
@@ -5396,7 +5425,7 @@ bool flow_change_parts(const flow_tree_t *was, const flow_tree_t *now, flow_poin
     for (const os64_html_node_t *n = top; said->why == FLOW_PARTS_MARKED && n != NULL;
          n = flat_after(doc, top, n, true)) {
         if (++visits > CHANGE_WALK_MAX) {
-            said->why = FLOW_PARTS_DEEP;
+            said->why = FLOW_PARTS_LONG;
             break;
         }
         if (n->kind != OS64_HTML_ELEMENT || f_map_get(&was->first, n) != NULL || f_map_get(&now->first, n) != NULL)

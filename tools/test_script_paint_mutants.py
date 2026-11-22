@@ -73,8 +73,19 @@ mutants = [
     ('the-caller-elements-not-marked', FLOW,
      '        if (touched[i] != NULL && !change_drawn(&c, was, touched[i]))',
      '        if (touched[i] != NULL && 0 && !change_drawn(&c, was, touched[i]))'),
-    ('the-canvas-not-refused', RESTYLE, '    if (may_own_canvas(tree, n))\n        return FLOW_PARTS_CANVAS;',
+    ('the-canvas-not-refused-in-place', RESTYLE, '    if (may_own_canvas(tree, n))\n        return FLOW_PARTS_CANVAS;',
      '    if (tree == NULL)\n        return FLOW_PARTS_CANVAS;'),
+    ('the-canvas-not-refused-in-a-new-tree', FLOW, '    if (may_own_canvas(c->now, n)) {',
+     '    if (c->now == NULL) {'),
+    ('an-empty-box-given-children-not-compared', FLOW,
+     '        bool down = x->first != NULL || y->first != NULL;', '        bool down = x->first != NULL;'),
+    ('a-shape-another-svg-draws-marked-in-its-own', FLOW,
+     '    if (n->ns == OS64_HTML_NS_SVG && svg_referable(doc, n))\n        return false;',
+     '    if (n->ns == OS64_HTML_NS_SVG && svg_referable(doc, n) && 0)\n        return false;'),
+    ('a-shape-in-a-hidden-svg-marks-nothing', FLOW, '    return *out != NULL || n->ns != OS64_HTML_NS_SVG;',
+     '    return true;'),
+    ('a-kept-transform-that-moves-the-page-kept', RESTYLE,
+     '        if (marking && moved && marked == FLOW_PARTS_MARKED)', '        if (marking && moved && 0)'),
     # The kept restyle's marks: before the write and after it.
     ('a-kept-restyle-marks-nothing-before', RESTYLE,
      '    if (marking && marked == FLOW_PARTS_MARKED)\n'
@@ -93,9 +104,11 @@ mutants = [
     ('an-unlisted-attribute-marks-nothing', YONDER,
      '        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) && !drawn : !drawn)',
      '        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) || 1 : !drawn)'),
-    ('children-added-to-an-svg-mark-nothing', YONDER,
-     '        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) && !drawn : !drawn)',
-     '        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) && !drawn : 1)'),
+    ('a-pictures-source-marks-nothing', YONDER,
+     '            at->ns != OS64_HTML_NS_HTML || at->name == NULL                            ? NULL',
+     '            at->ns != OS64_HTML_NS_HTML || at->name == NULL || 1                       ? NULL'),
+    ('a-widget-over-the-view-compared', YONDER, '            if (!g.fw[i]->w->hidden)\n                left_out[nleft++] = g.fw[i]->w->bounds;',
+     '            if (0 && !g.fw[i]->w->hidden)\n                left_out[nleft++] = g.fw[i]->w->bounds;'),
     ('a-kept-tree-not-compared-with-itself', YONDER,
      '    else if (next->tree == p->tree && s_change.kept_parts != FLOW_PARTS_MARKED)',
      '    else if (next->tree == p->tree)'),
@@ -120,6 +133,19 @@ mutants = [
 #   its style, which the boxless elements' compare finds too.
 # - the parts past the room (`over`): 64 parts take more than the fixtures
 #   make, and a part past them refuses, the safe direction.
+# - text or children changed in an element drawn from the document
+#   (change_touched's `!drawn` for them): libsvg draws no text, and a shape
+#   added to an svg is a new style record the boxless elements' compare
+#   finds first; the rule is for what draws from the document later.
+# - a restyle that wrote the tree and then declined (`s_change.wrote`): it
+#   declines so only past an anonymous-box map's room, which no fixture can
+#   fill without running the host out of memory.
+# - the view scrolled with the change (script_rebuild's clamp): what moves
+#   the page's extent is refused before it, in both trees and in place; the
+#   clamp is the guard behind them.
+# - the check run before the pane's canvas label is released: the label is
+#   made only for a page with scripts but without the modern switch, which
+#   the damage cases do not run.
 
 env = dict(os.environ)
 caught, missed, unbuilt = [], [], []

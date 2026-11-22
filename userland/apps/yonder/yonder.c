@@ -1527,6 +1527,12 @@ static struct {
     // tree's own reader again at the new version, after which the log need
     // not reach back (change_touched reads it, and frees it).
     os64_html_reader_t *reader;
+    // A restyle that wrote the shown tree and then declined (`wrote`): the
+    // tree compared after it already holds some of the new styles. And the
+    // element a refusal named, for the record, named while the shown tree
+    // (whose removed nodes it may be) is alive.
+    bool wrote;
+    char named[96];
 } s_change;
 
 // A part a script's change painted (flow_change_parts, or a kept restyle's
@@ -3949,6 +3955,7 @@ static const char *const kRefused[REFUSED_COUNT] = {
     [FLOW_PARTS_CANVAS] = "a background the canvas may take",
     [FLOW_PARTS_DEEP] = "stacked boxes nested too deep",
     [FLOW_PARTS_MEMORY] = "no memory",
+    [FLOW_PARTS_LONG] = "trees too big to compare",
     [REFUSED_LOADS] = "a picture's size or a face laid out with it",
     [REFUSED_CASCADE] = "another cascade",
     [REFUSED_SIZE] = "another width, height or zoom",
@@ -4147,6 +4154,7 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
         if (!s_change.kept) {
             s_change.n = 0;
             s_change.over = false;
+            s_change.wrote = kept.written > 0;
         }
     }
     restyle_counted(p, kept);
@@ -4240,9 +4248,10 @@ static int32_t s_paint_check_groups = -1;
 // `--damage-check[=N]` (LAYOUT_NEEDS_N3.md § 4): every Nth script's rebuild
 // painted in parts (1 unless said), those that marked nothing included, is
 // followed at its paint by the whole view painted the ordinary way and
-// compared with what the window held, to the pixel, a video's box left out
-// (its picture moves by itself). A difference is a part the rebuild should
-// have marked; the record says how many were compared, how many differed,
+// compared with what the window held, to the pixel, the videos' boxes left
+// out (a picture moves by itself) and the page's widgets (the toolkit
+// paints them over the view). A difference is a part the rebuild should
+// have marked, or one something else should have; the record says how many were compared, how many differed,
 // the first with where and what the rebuild had marked, and how many could
 // not be compared (damage_check). A rebuild that marked nothing marks one
 // pixel, so that there is a paint to check. The second paint is charged to
@@ -12450,7 +12459,10 @@ static bool drawn_from_document(const flow_tree_t *t, const os64_html_node_t *n)
 //   what it likes);
 // - text, or children, changed in an element drawn from the document
 //   (`drawn_from_document`): other text and children are boxes the trees'
-//   compare finds.
+//   compare finds;
+// - a picture's source's attribute, or its children: its img, whose
+//   picture the sources choose;
+// - and a base's change refuses (-1): every address resolves against it.
 #define CHANGE_TOUCHED 1024
 // The last rebuild's verdict as the record words it (`in parts`, `nothing
 // to paint`, or why the whole view), which the host's tests read.
@@ -12470,6 +12482,31 @@ static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, co
             at = at->parent;
         if (at == NULL || at->kind != OS64_HTML_ELEMENT || entry->kind == OS64_HTML_CHANGE_STATE)
             continue;
+        // Every address resolves against a base's: the whole view.
+        if (at->ns == OS64_HTML_NS_HTML && at->name != NULL && os64_streq(at->name, "base")) {
+            n = -1;
+            break;
+        }
+        // A picture's sources choose what its img draws (image_sources_sync):
+        // a source's attribute, or the picture's children, mark the img.
+        const os64_html_node_t *picture =
+            at->ns != OS64_HTML_NS_HTML || at->name == NULL                            ? NULL
+            : os64_streq(at->name, "picture") && entry->kind == OS64_HTML_CHANGE_CHILDREN ? at
+            : os64_streq(at->name, "source") && at->parent != NULL && at->parent->name != NULL &&
+                    os64_streq(at->parent->name, "picture")
+                ? at->parent
+                : NULL;
+        for (const os64_html_node_t *c = picture != NULL ? picture->first_child : NULL; n >= 0 && c != NULL;
+             c = c->next) {
+            if (c->kind != OS64_HTML_ELEMENT || c->name == NULL || !os64_streq(c->name, "img"))
+                continue;
+            if (n == cap)
+                n = -1;
+            else
+                out[n++] = c;
+        }
+        if (picture != NULL)
+            continue;
         bool drawn = drawn_from_document(was, at) || drawn_from_document(now, at);
         if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) && !drawn : !drawn)
             continue;
@@ -12486,8 +12523,9 @@ static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, co
 // parts s_change holds (NULL), or why the whole view must be. `next` is
 // the staged page. A link the rebuild puts out (g.hover_link) is not a
 // reason: the number drives the status line, and what a lit link paints
-// is its :hover or :active style, which the trees' compare sees. Each
-// rebuild is counted in the record's `script changes painted`.
+// is its :hover or :active style, which the trees' compare sees. The
+// verdict is counted by change_said, once script_rebuild knows whether the
+// view scrolled with the change.
 static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
 {
     const char *why = NULL;
@@ -12498,6 +12536,8 @@ static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
         why = "no tree shown";
     else if (next->tree == p->tree && !s_change.kept)
         why = "the shown tree written without its marks";
+    else if (s_change.wrote)
+        why = "a restyle that wrote the shown tree, then declined";
     else if (next->tree == p->tree && s_change.kept_parts != FLOW_PARTS_MARKED)
         why = s_change.kept_parts >= 0 && s_change.kept_parts < FLOW_PARTS_COUNT ? kRefused[s_change.kept_parts]
                                                                                  : "a kept restyle's marks";
@@ -12528,25 +12568,37 @@ static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
     // parts reaching across more than half of it are the whole of it.
     if (why == NULL && (int64_t)reach.w * reach.h * 2 > (int64_t)s_change.view.w * s_change.view.h)
         why = "parts past half the view";
+    s_change.named[0] = '\0';
+    if (s_layout_profile && layout_profile_diag(p) != NULL) {
+        if (at != NULL && at->kind != OS64_HTML_ELEMENT)
+            at = os64_html_flat_parent(page_doc(p), at);
+        if (at != NULL && at->kind == OS64_HTML_ELEMENT)
+            element_named(s_change.named, sizeof(s_change.named), "", at);
+    }
+    return why;
+}
+
+// The verdict on a script's rebuild, `why` (NULL: painted in the parts
+// s_change holds), counted in the record's `script changes painted`.
+static void change_said(const Page *p, const char *why)
+{
     s_change_said = why != NULL ? why : s_change.n == 0 ? "nothing to paint" : "in parts";
     if (!s_layout_profile || layout_profile_diag(p) == NULL)
-        return why;
-    char named[96] = "", note[96];
-    if (at != NULL && at->kind != OS64_HTML_ELEMENT)
-        at = os64_html_flat_parent(page_doc(p), at);
-    if (at != NULL && at->kind == OS64_HTML_ELEMENT)
-        element_named(named, sizeof(named), "", at);
+        return;
     if (why != NULL) {
-        counted_at(&s_script_parts, why, named, "");
+        counted_at(&s_script_parts, why, s_change.named, "");
     } else if (s_change.n == 0) {
         counted_at(&s_script_parts, "nothing to paint", "", "");
     } else {
+        os64_gui_rect_t reach = s_change.part[0];
+        for (int32_t i = 1; i < s_change.n; i++)
+            reach = os64_rect_union(reach, s_change.part[i]);
+        char note[96];
         s_script_parts_area += (uint64_t)reach.w * (uint64_t)reach.h;
         os64_snprintf(note, sizeof(note), "%d parts in %dx%d; area in all %lu", (int)s_change.n, (int)reach.w,
                       (int)reach.h, (unsigned long)s_script_parts_area);
         counted_at(&s_script_parts, "in parts", "", note);
     }
-    return why;
 }
 
 static bool script_rebuild(void)
@@ -12657,7 +12709,13 @@ static bool script_rebuild(void)
         css_pictures(p);
         webfonts_feed(true);
         forms_build();
+        // A page that no longer reaches as far scrolls the view back with
+        // it, which moves everything: the whole view.
+        int32_t sx_shown = g.sx, sy_shown = g.sy;
         clamp_scroll();
+        if (whole == NULL && (g.sx != sx_shown || g.sy != sy_shown))
+            whole = "the view scrolled with it";
+        change_said(p, whole);
         sync_bars();
         forms_place();
         pictures_schedule();
@@ -19348,29 +19406,45 @@ static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bou
         yonder_paint(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
         box_bars(gl, view);
         gl->clip = was;
-        // The videos' boxes, in the window.
-        os64_gui_rect_t videos[VIDEOS_MAX];
-        int32_t nvideos = 0;
-        for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        // What the comparison leaves out, in the window: the videos' boxes,
+        // and the page's widgets (form controls and players), which the
+        // toolkit paints over the view after it, so that what the window
+        // held there is theirs and not the page's.
+        enum { LEFT_OUT = 64 };
+        os64_gui_rect_t left_out[LEFT_OUT];
+        int32_t nleft = 0;
+        for (int32_t i = 0; i < VIDEOS_MAX && nleft < LEFT_OUT; i++) {
             const flow_box_t *b = s_videos[i].node != NULL ? flow_box_for(g.page.tree, s_videos[i].node) : NULL;
             if (b == NULL)
                 continue;
             os64_gui_rect_t r = flow_box_doc_rect(b, scroll_now());
-            videos[nvideos++] = (os64_gui_rect_t){r.x + gl->dx, r.y + gl->dy, r.w, r.h};
+            left_out[nleft++] = (os64_gui_rect_t){r.x + gl->dx, r.y + gl->dy, r.w, r.h};
         }
+        for (int32_t i = 0; i < g.nfw && nleft < LEFT_OUT; i++)
+            if (!g.fw[i]->w->hidden)
+                left_out[nleft++] = g.fw[i]->w->bounds;
+        for (int32_t i = 0; i < g.nplayers && nleft < LEFT_OUT; i++)
+            if (!g.players[i]->p.w.hidden)
+                left_out[nleft++] = g.players[i]->p.w.bounds;
+        // Past the room, some are not left out: the comparison is not made.
+        bool room = nleft < LEFT_OUT;
         int64_t first = -1, differ = 0;
         os64_gui_rect_t reach = {0, 0, 0, 0};
-        for (int32_t y = 0; y < win.h; y++) {
+        if (!room) {
+            s_damage_compared--;
+            s_damage_uncompared++;
+        }
+        for (int32_t y = 0; room && y < win.h; y++) {
             const uint32_t *row = gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x;
             for (int32_t x = 0; x < win.w; x++) {
                 if (((row[x] ^ before[(size_t)y * win.w + x]) & 0x00ffffffu) == 0)
                     continue;
                 int32_t px = win.x + x, py = win.y + y;
-                bool video = false;
-                for (int32_t k = 0; k < nvideos && !video; k++)
-                    video = px >= videos[k].x && py >= videos[k].y && px < videos[k].x + videos[k].w &&
-                            py < videos[k].y + videos[k].h;
-                if (video)
+                bool out = false;
+                for (int32_t k = 0; k < nleft && !out; k++)
+                    out = px >= left_out[k].x && py >= left_out[k].y && px < left_out[k].x + left_out[k].w &&
+                          py < left_out[k].y + left_out[k].h;
+                if (out)
                     continue;
                 os64_gui_rect_t dot = {px - gl->dx, py - gl->dy, 1, 1};
                 reach = differ == 0 ? dot : os64_rect_union(reach, dot);
@@ -19378,6 +19452,16 @@ static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bou
                     first = (int64_t)y * win.w + x;
                 differ++;
             }
+        }
+        // What the window held where it was left out is put back: the
+        // widgets are not painted again this frame outside its marks.
+        for (int32_t k = 0; k < nleft; k++) {
+            os64_gui_rect_t r;
+            if (!os64_rect_intersect(left_out[k], win, &r))
+                continue;
+            for (int32_t y = r.y; y < r.y + r.h; y++)
+                os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + r.x,
+                            before + (size_t)(y - win.y) * win.w + (r.x - win.x), (size_t)r.w * sizeof(uint32_t));
         }
         if (differ > 0) {
             s_damage_differed++;
@@ -19442,14 +19526,16 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     // § 6, MIX_BLEND.md § 4), the most any one paint did.
     if (refused > 0 && g.page.diag != NULL)
         yonder_diag_missing_seen(g.page.diag, "css-value", "layer: drawn plain", refused);
-    if (pane.canvas_label.run != NULL)
-        os64_text_run_release(pane.canvas_label.run);
     yonder_paint_stage = NULL;
     box_bars(&gl, view);
+    // Before the pane lets its canvas label go: the check paints through
+    // the same pane.
     if (s_damage_due) {
         s_damage_due = false;
         damage_check(&gl, &v, w->bounds, whole);
     }
+    if (pane.canvas_label.run != NULL)
+        os64_text_run_release(pane.canvas_label.run);
     yonder_scratch_paint_end(g.paint_scratch);
     cost_end(PS_VIEW);
 }

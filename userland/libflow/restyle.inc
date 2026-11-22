@@ -241,7 +241,8 @@ static int32_t keep_change(const flow_tree_t *tree, FMap *changed, const os64_ht
 // to mark (LAYOUT_NEEDS_N3.md § 3 A): by the boxes that draw them
 // (box_named: a pseudo-element's box names its host, an anonymous box the
 // element holding it), and an element with no box by the replaced box that
-// draws it from its style (drawn_by: an inline svg's shapes), if one does.
+// draws it from its style (drawn_by: an inline svg's shapes), if one does;
+// NO_BOX when what draws it cannot be bounded.
 static int32_t keep_changed(const flow_tree_t *tree, const FKeeps *k, const FMap *written, FMap *changed,
                             const FProps *all)
 {
@@ -250,9 +251,10 @@ static int32_t keep_changed(const flow_tree_t *tree, const FKeeps *k, const FMap
         if (keep_written(written, box->style))
             why = keep_change(tree, changed, box_named(box), all);
     for (int32_t i = 0; why == FLOW_PARTS_MARKED && i < k->n; i++) {
-        const os64_html_node_t *n = k->pairs[i].self;
-        if (n != NULL && f_pseudo_of(n) == GARB_PSEUDO_NONE && f_map_get(&tree->first, n) == NULL)
-            why = keep_change(tree, changed, drawn_by(tree, n), all);
+        const os64_html_node_t *n = k->pairs[i].self, *by;
+        if (n == NULL || f_pseudo_of(n) != GARB_PSEUDO_NONE || f_map_get(&tree->first, n) != NULL)
+            continue;
+        why = !drawn_by(tree, n, &by) ? FLOW_PARTS_NO_BOX : keep_change(tree, changed, by, all);
     }
     return why;
 }
@@ -438,6 +440,20 @@ static flow_restyle_t restyle_in_place(flow_tree_t *tree, const os64_html_docume
     f_map_free(&written);
     // The page's extent and the scroll containers' ranges reached again,
     // from where placement left them, now the transforms draw elsewhere.
+    // What the transforms reach is the page's and the scrollers': when it
+    // moves the extent, a range or a scroll (and so a sticky box held to a
+    // range), what is painted moves outside every written element, and the
+    // marks are not the whole of it (LAYOUT_NEEDS_N3.md § 8).
+    int64_t was_w = tree->layout->width, was_h = tree->layout->height;
+    flow_point_t *was_reach = transformed && marking && tree->nscrollers > 0
+                                  ? os64_malloc((size_t)tree->nscrollers * 2 * sizeof(*was_reach))
+                                  : NULL;
+    if (transformed && marking && tree->nscrollers > 0 && was_reach == NULL)
+        marked = FLOW_PARTS_MEMORY;
+    for (int32_t i = 0; was_reach != NULL && i < tree->nscrollers; i++) {
+        was_reach[2 * i] = tree->scrollers[i]->range;
+        was_reach[2 * i + 1] = tree->scrollers[i]->at;
+    }
     if (transformed) {
         tree->layout->width = tree->reach_base_w;
         tree->layout->height = tree->reach_base_h;
@@ -452,7 +468,16 @@ static flow_restyle_t restyle_in_place(flow_tree_t *tree, const os64_html_docume
             if (s->at.x > s->range.x) s->at.x = s->range.x;
             if (s->at.y > s->range.y) s->at.y = s->range.y;
         }
+        bool moved = tree->layout->width != was_w || tree->layout->height != was_h;
+        for (int32_t i = 0; was_reach != NULL && i < tree->nscrollers; i++) {
+            const flow_frame_t *f = tree->scrollers[i];
+            moved = moved || f->range.x != was_reach[2 * i].x || f->range.y != was_reach[2 * i].y ||
+                    f->at.x != was_reach[2 * i + 1].x || f->at.y != was_reach[2 * i + 1].y;
+        }
+        if (marking && moved && marked == FLOW_PARTS_MARKED)
+            marked = FLOW_PARTS_MOVED;
     }
+    os64_free(was_reach);
     tree->styles->cascade_updates = b->cascade_updates;
     out = (flow_restyle_t){k.n > 0 ? FLOW_RESTYLE_PAINT : FLOW_RESTYLE_NOTHING, FLOW_RESTYLE_NONE, (uint64_t)k.n, NULL, "", FLOW_PARTS_INCOMPLETE};
     if (!whole) {

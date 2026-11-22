@@ -16,8 +16,13 @@ static const char kDamagePage[] =
     "#wrap{width:50px;opacity:.5}#wide{width:200px;background:green}"
     "#posbox{position:relative;height:40px}#abs{position:absolute;left:0;top:0}"
     "#filler{height:900px}#back{position:absolute;left:0;top:0;width:860px;height:420px;z-index:-1}#mover{width:40px;height:16px;background:purple;transform:translateX(200px)}"
-    ".hot circle{opacity:.2}#wrap2{width:50px}#wide2{width:200px;background:green}</style>"
-    "<div id=back></div><div id=box>box</div>"
+    ".hot circle{opacity:.2}#wrap2{width:50px}#wide2{width:200px;background:green}"
+    "#empty{width:200px;height:18px}</style><body id=bd>"
+    "<div id=back></div><div id=box>box</div><div id=empty></div><input id=field>"
+    "<svg id=defs width=12 height=12><defs><rect id=dr width=6 height=6 fill=red></rect></defs></svg>"
+    "<svg width=20 height=20><use href=#dr></use><use href=#hr x=10></use></svg>"
+    "<svg style=display:none><rect id=hr width=6 height=6 fill=blue></rect></svg>"
+    "<picture id=pic2><source id=src2 srcset=a.png><img id=img2 alt=pic width=20 height=20></picture>"
     "<div id=mover></div>"
     "<div id=sw><svg width=40 height=24><circle cx=12 cy=12 r=10 fill=red></circle></svg>"
     "<svg id=sv width=60 height=24><rect x=1 y=1 width=8 height=8 fill=red></rect></svg></div>"
@@ -257,6 +262,48 @@ static void damage_cases(void)
     damage_expect("damage: a paint-only style written in place is painted in parts", damage_step(), "in parts");
     damage_attr("box", "class", "on");
     damage_expect("damage: a class that changes a background is painted in parts", damage_step(), "in parts");
+    {
+        int64_t status = 0;
+        os64_html_node_t *t = os64_html_create_text(g.page.way.doc, "saved", 5, &status);
+        os64_html_insert(g.page.way.doc, probe_id("empty"), t, NULL);
+    }
+    damage_expect("damage: an empty box given text is compared, and painted in parts", damage_step(), "in parts");
+    damage_attr("sw", "class", "");
+    damage_text("clock", "0:03");
+    damage_expect("damage: a laid-out tree compares the styles of an svg's shapes too", damage_step(), "in parts");
+    damage_attr("dr", "width", "9");
+    damage_expect("damage: a shape another svg may draw by reference is the whole view", damage_step(),
+                  kRefused[FLOW_PARTS_NO_BOX]);
+    damage_attr("hr", "width", "9");
+    damage_expect("damage: a shape in an svg that draws nothing itself is the whole view", damage_step(),
+                  kRefused[FLOW_PARTS_NO_BOX]);
+    /* A new source starts the picture's fetch, whose arrival marks the
+     * view on its own: the verdict is what this case is for. */
+    damage_attr("src2", "srcset", "b.png");
+    {
+        DamageSaid said = damage_step();
+        check(os64_streq(said.said, "in parts") && said.differed == 0,
+              "damage: a picture's source marks the img it chooses for");
+    }
+    {
+        /* The toolkit's widget over the view, as it would have painted it:
+         * the check leaves it out, and puts it back after its paint. */
+        FormWidget *fw = probe_field("field");
+        os64_gui_rect_t r = fw != NULL ? fw->w->bounds : (os64_gui_rect_t){0, 0, 0, 0};
+        for (int32_t y = r.y; y < r.y + r.h; y++)
+            for (int32_t x = r.x; x < r.x + r.w; x++)
+                damage_screen.surf.pixels[(size_t)y * 900 + x] = 0xff123456u;
+        damage_style("box", "color:#333");
+        damage_expect("damage: a form control's widget over the view is left out of the check", damage_step(),
+                      "in parts");
+        check(fw != NULL && r.w > 0 && damage_screen.surf.pixels[(size_t)(r.y + 1) * 900 + r.x + 1] == 0xff123456u,
+              "damage: the check puts back what the window held under a widget");
+    }
+    damage_style("mover", "transform:translateY(3000px)");
+    damage_expect("damage: a transform kept in place that moves the page's extent is the whole view", damage_step(),
+                  kRefused[FLOW_PARTS_MOVED]);
+    damage_style("mover", "transform:translateX(200px)");
+    (void)damage_step();
     damage_style("mover", "transform:translateX(10px)");
     damage_expect("damage: a transform written in place marks where the box was and where it is", damage_step(),
                   "in parts");
@@ -313,6 +360,9 @@ static void damage_cases(void)
                   "in parts");
     g.hover_link = -1;
     damage_style("box", "");
+    damage_style("bd", "color:#222");
+    damage_expect("damage: a style kept in place on an element whose background the canvas takes is the whole view",
+                  damage_step(), kRefused[FLOW_PARTS_CANVAS]);
     os64_html_set_attr(g.page.way.doc, (os64_html_node_t *)os64_html_document_element(g.page.way.doc), "style",
                        "background:yellow", 17);
     damage_expect("damage: a background the canvas takes is the whole view", damage_step(),
