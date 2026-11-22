@@ -510,8 +510,8 @@ minutes, from the moment its record begins:
   painted before it arrives), and the first picture a video handed the
   paint.
 - **Its own room** in the record, `YONDER_DIAG_TIMELINE_FACTS`: a busy page
-  fills the ordinary room long before these are written (a YouTube watch
-  page's record had 1473 lines not kept), and the timeline is written whole
+  fills the ordinary room long before these are written (one large
+  application's record had 1473 lines not kept), and the timeline is written whole
   at each write of its navigation's record — its arrival, its last picture,
   each `d`, its leaving. A record written after a later navigation began
   keeps the lines its last write gave it.
