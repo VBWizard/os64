@@ -116,8 +116,9 @@ matrix's translation, for a face that refuses the sheet). With a large
 scale those two lie far apart and their join spans the group, while the
 painter's sheet (paint.c's `own`: the bounds met with the view taken
 back, a pixel wider) is only the first, 1615x631 here. So the sheet's
-bound is now the painter's: its bounds met with the view taken back
-through the matrix, grown a pixel. That is still an upper bound of what
+bound is now the painter's, through the one function both ask
+(`flow_through_sheet`: its bounds met with the view taken back through
+the matrix, grown a pixel), so the two cannot drift apart again. That is still an upper bound of what
 the painter asks: it takes the view back through its clip as well,
 which only shrinks it, and its view is the walk's or less. The view
 inside the group keeps the upright place, since the walk culls with it.
@@ -176,7 +177,10 @@ Booked now, with these numbers (Fable, 2026-11-22):
   over a 1735x871 layer is still computed whole to draw a ring. The
   filter should compute the shown part of the damage plus its kernel's
   margin of input. General: any filtered layer mostly hidden or mostly
-  off screen.
+  off screen. The evidence, from the P5 after W1: splitting a whole
+  repaint about the picture saves little for the glow, because each
+  piece's blur margin nearly covers the whole layer (record 0121: the
+  40 px blur drawn as pieces of 1735x337, 1735x277 and 253x743).
 
 ## 5. Slices
 

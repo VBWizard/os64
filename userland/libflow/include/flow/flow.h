@@ -1858,6 +1858,13 @@ bool flow_affine_invert(const double m[6], double inv[6]);
 // empty when `m` cannot be undone.
 os64_gui_rect_t flow_affine_rect(const double m[6], os64_gui_rect_t r);
 os64_gui_rect_t flow_affine_rect_back(const double m[6], os64_gui_rect_t r);
+// The sheet a group of `bounds` drawn through `m` is laid through when
+// `view` is what shows of the page around it: its bounds met with the view
+// taken back through the matrix, a pixel wider all round, since a bilinear
+// sample at the view's edge mixes the source pixel beyond; nothing when no
+// pixel of its bounds shows. The painter asks for this sheet and
+// flow_paint_asks bounds it, through this one function.
+os64_gui_rect_t flow_through_sheet(os64_gui_rect_t bounds, const double m[6], os64_gui_rect_t view);
 // What its corners' radii come to, in whole pixels, in flow_style_t's
 // corner order, horizontal then vertical: a percentage of its border box,
 // and every one scaled down by one factor when the radii along any side
