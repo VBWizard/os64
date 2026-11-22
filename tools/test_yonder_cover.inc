@@ -209,6 +209,34 @@ static void cover_cases(void)
                      "the same");
     cover_drop();
 
+    /* The counted table (W0's lines): one-offs fill it, a thing that comes
+     * again before eleven newer ones keeps its row, and once counted twice
+     * no burst of one-offs pushes it out. */
+    {
+        CountedAt t;
+        counted_at_reset(&t);
+        char name[16];
+        for (int k = 0; k < 12; k++) {
+            os64_snprintf(name, sizeof(name), "once%d", k);
+            counted_at(&t, name, "", "");
+        }
+        counted_at(&t, "again", "", "");
+        for (int k = 0; k < 10; k++) {
+            os64_snprintf(name, sizeof(name), "later%d", k);
+            counted_at(&t, name, "", "");
+        }
+        counted_at(&t, "again", "", "");
+        for (int k = 0; k < 40; k++) {
+            os64_snprintf(name, sizeof(name), "burst%d", k);
+            counted_at(&t, name, "", "");
+        }
+        uint64_t total = t.others;
+        for (int k = 0; k < t.nrows; k++)
+            total += t.row[k].n;
+        check(t.nrows == 12 && os64_streq(t.row[0].what, "again") && t.row[0].n == 2 && total == 64,
+              "cover: the counted table keeps a thing counted twice through a burst, and loses no count");
+    }
+
     /* Layers beneath the video enough to run the ordinary paint out of its
      * budget, and one over it: the ordinary paint draws that one plain, so
      * the paint is not covered, and the window is the same (Codex, #698). */
@@ -234,12 +262,13 @@ static void cover_cases(void)
         g.page.diag = yonder_diag_new("https://fixture.test/not-covered", 3, 0);
         s_layout_profile = true;
         CoverCounts b = cover_run(g.view.bounds);
-        s_layout_profile = profiled;
         check(b.covered == 0 && s_cost.covered_budget > budget,
               "cover: layers that might run the budget out keep the paint the ordinary way");
         if (!(b.covered == 0 && s_cost.covered_budget > budget))
             cover_said("the layers' budget", b);
-        const char *said = g.page.diag != NULL ? yonder_diag_fact_value(g.page.diag, "not covered") : NULL;
+        counted_at_reset(&s_script_changes);
+        diag_paint_reading(&g.page, 1);
+        const char *said = g.page.diag != NULL ? yonder_diag_fact_value(g.page.diag, "not covered reading 1") : NULL;
         check(said != NULL && strstr(said, "budget ") == said && strstr(said, ": div#over (charged ") != NULL &&
                   strstr(said, "of 1920000; view 800x600") != NULL,
               "cover: the record names the budget and the element whose charge passed it");
@@ -254,8 +283,12 @@ static void cover_cases(void)
               "cover: a style written for the change note");
         script_changes_note(&g.page);
         script_changes_note(&g.page);
+        diag_paint_reading(&g.page, 2);
         s_layout_profile = profiled;
-        said = g.page.diag != NULL ? yonder_diag_fact_value(g.page.diag, "whole views by a script's change") : NULL;
+        said = g.page.diag != NULL ? yonder_diag_fact_value(g.page.diag, "whole views by a script's change reading 2")
+                                   : NULL;
+        check(g.page.diag != NULL && yonder_diag_fact_value(g.page.diag, "not covered reading 2") == NULL,
+              "cover: a reading starts the tables again");
         check(said != NULL && strstr(said, "attribute style 2: div#over (opacity:.5)") == said,
               "cover: the record names a script's change, once a rebuild, with the style as it stands");
         if (said == NULL || strstr(said, "attribute style 2: div#over (opacity:.5)") != said)

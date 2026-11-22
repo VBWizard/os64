@@ -1546,10 +1546,15 @@ static size_t element_named(char *out, size_t cap, const char *before, const os6
     return at;
 }
 
-// A record's table of things counted by what they were, each with where
-// the latest was (an element) and a note on it, the most counted first;
-// started again for each record (a new `diag`), and past its rows counted
-// as `others`. The record's line is counted_at_line's.
+// A table of things counted by what they were, each with where the latest
+// was (an element) and a note on it, the most counted first, for a
+// reading's line (counted_at_line); the reading starts it again
+// (counted_at_reset). A thing new to the table goes ahead of those
+// counted once. Full, it takes the place of the longest-standing of those
+// counted once, which is counted as `others`, or, when every row has been
+// counted more than once, it is counted as `others` itself: a burst of
+// one-offs (a page loading) cannot push out a thing counted twice, and a
+// thing that comes again before eleven newer ones has its row still.
 typedef struct {
     struct {
         char what[48], at[96], note[160];
@@ -1557,26 +1562,41 @@ typedef struct {
     } row[12];
     int nrows;
     uint64_t others;
-    const yonder_diag_t *diag;
 } CountedAt;
 
-static void counted_at(CountedAt *t, const yonder_diag_t *diag, const char *what, const char *at, const char *note)
+// W0's tables (WHOLE_REPAINTS.md): the paints the guards would not cover
+// (cover_refusal_note) and what scripts' rebuilds changed
+// (script_changes_note), each since the last reading.
+static CountedAt s_not_covered, s_script_changes;
+
+static void counted_at_reset(CountedAt *t)
 {
-    if (t->diag != diag) {
-        t->diag = diag;
-        t->nrows = 0;
-        t->others = 0;
-    }
+    t->nrows = 0;
+    t->others = 0;
+}
+
+static void counted_at(CountedAt *t, const char *what, const char *at, const char *note)
+{
+    const int rows = (int)(sizeof(t->row) / sizeof(t->row[0]));
     int i = 0;
     for (; i < t->nrows && (!os64_streq(t->row[i].what, what) || !os64_streq(t->row[i].at, at)); i++) {}
-    if (i == t->nrows && t->nrows < (int)(sizeof(t->row) / sizeof(t->row[0]))) {
+    if (i == t->nrows) {
+        if (t->nrows == rows && t->row[rows - 1].n > 1) {
+            t->others++;
+            return;
+        }
+        if (t->nrows == rows)
+            t->others += t->row[--t->nrows].n;
+        i = t->nrows++;
         os64_strcopy(t->row[i].what, sizeof(t->row[i].what), what);
         os64_strcopy(t->row[i].at, sizeof(t->row[i].at), at);
-        t->row[i].n = 0;
-        t->nrows++;
-    }
-    if (i == t->nrows) {
-        t->others++;
+        t->row[i].n = 1;
+        os64_strcopy(t->row[i].note, sizeof(t->row[i].note), note);
+        for (; i > 0 && t->row[i - 1].n == 1; i--) {
+            __typeof__(t->row[0]) swap = t->row[i];
+            t->row[i] = t->row[i - 1];
+            t->row[i - 1] = swap;
+        }
         return;
     }
     t->row[i].n++;
@@ -9260,6 +9280,21 @@ static void diag_paint_reading(Page *p, uint32_t n)
         yonder_diag_needed_text(&s_needed_reading, needed, sizeof(needed));
         os64_snprintf(nkey, sizeof(nkey), "layout needed reading %u", (unsigned)n);
         yonder_diag_reading_fact(p->diag, nkey, needed);
+        // W0's two tables, each written when it holds anything and started
+        // again for the next reading (WHOLE_REPAINTS.md).
+        const struct { CountedAt *t; const char *key; } w0[] = {
+            {&s_not_covered, "not covered reading %u"},
+            {&s_script_changes, "whole views by a script's change reading %u"},
+        };
+        for (size_t k = 0; k < sizeof(w0) / sizeof(w0[0]); k++) {
+            if (w0[k].t->nrows > 0 || w0[k].t->others > 0) {
+                char line[1536], key[64];
+                counted_at_line(w0[k].t, line, sizeof(line));
+                os64_snprintf(key, sizeof(key), w0[k].key, (unsigned)n);
+                yonder_diag_reading_fact(p->diag, key, line);
+            }
+            counted_at_reset(w0[k].t);
+        }
     }
     os64_free(t.s);
     os64_free(u.s);
@@ -11861,24 +11896,45 @@ static void canvas_damage_part(Page *p,const flow_box_t *box,uint32_t width,uint
     if(x1>x0 && y1>y0)mark_part((os64_gui_rect_t){x0,y0,x1-x0,y1-y0});
 }
 
-// `whole views by a script's change` in the record (--layout-profile): at
-// each script rebuild, which repaints the whole view, what changed since
-// the tree on screen, read from the document's change log by a reader of
-// its own, made and freed here: each change by its kind (an attribute by
-// its name, children, text, state) at its element, once a rebuild, with
-// the latest's note (an inline style as it now stands, the children put in
-// and taken out). A log that no longer reaches the tree on screen counts
-// as `lost` (WHOLE_REPAINTS.md W0).
-static CountedAt s_script_changes;
+// `whole views by a script's change reading N` in the record
+// (--layout-profile, written at each reading, diag_paint_reading): at each
+// script rebuild, which repaints the whole view, what changed since the
+// tree on screen, read from the document's change log by a reader of its
+// own, made and freed here: each change by its kind (an attribute by its
+// name, children, text, state) at what it changed (change_target_named),
+// once a rebuild, with the latest's note (an inline style as it now
+// stands, the children put in and taken out). A log that no longer
+// reaches the tree on screen counts as `lost` (WHOLE_REPAINTS.md W0).
+// What a change was made to, named for the record: an element as a
+// selector would name it; a shadow root by its host; the document; a
+// fragment; and any other node (text) by the element holding it.
+static void change_target_named(char *at, size_t cap, const os64_html_node_t *n)
+{
+    const os64_html_node_t *host = n != NULL && n->kind == OS64_HTML_FRAGMENT ? os64_html_shadow_host(n) : NULL;
+    if (n == NULL)
+        os64_strcopy(at, cap, "nothing");
+    else if (n->kind == OS64_HTML_ELEMENT)
+        element_named(at, cap, "", n);
+    else if (host != NULL)
+        element_named(at, cap, "the shadow of ", host);
+    else if (n->kind == OS64_HTML_DOCUMENT)
+        os64_strcopy(at, cap, "the document");
+    else if (n->kind == OS64_HTML_FRAGMENT)
+        os64_strcopy(at, cap, "a fragment");
+    else if (n->parent != NULL && n->parent->kind == OS64_HTML_ELEMENT)
+        element_named(at, cap, "text in ", n->parent);
+    else
+        os64_strcopy(at, cap, "a node");
+}
+
 static void script_changes_note(Page *p)
 {
-    yonder_diag_t *diag = layout_profile_diag(p);
-    if (!s_layout_profile || diag == NULL)
+    if (!s_layout_profile || layout_profile_diag(p) == NULL)
         return;
     os64_html_reader_t *reader = os64_html_reader_new((os64_html_document_t *)page_doc(p), p->rendered_version);
     const os64_html_change_entry_t *entry = NULL;
     if (reader == NULL || os64_html_changes(reader, &entry) < 0) {
-        counted_at(&s_script_changes, diag, "lost", "", "the log no longer reaches the tree on screen");
+        counted_at(&s_script_changes, "lost", "", "the log no longer reaches the tree on screen");
         entry = NULL;
     }
     struct {
@@ -11903,10 +11959,7 @@ static void script_changes_note(Page *p)
                       : entry->kind == OS64_HTML_CHANGE_TEXT   ? "text"
                                                                : "state",
                       entry->kind == OS64_HTML_CHANGE_ATTR && entry->attr_name ? entry->attr_name : "");
-        if (entry->target != NULL && entry->target->kind == OS64_HTML_ELEMENT)
-            element_named(at, sizeof(at), "", entry->target);
-        else
-            os64_strcopy(at, sizeof(at), "a node not an element");
+        change_target_named(at, sizeof(at), entry->target);
         if (entry->kind == OS64_HTML_CHANGE_CHILDREN) {
             os64_snprintf(note, sizeof(note), "+%lu -%lu", (unsigned long)entry->nadded,
                           (unsigned long)entry->nremoved);
@@ -11916,12 +11969,9 @@ static void script_changes_note(Page *p)
             const os64_html_attr_t *style = os64_html_attr(entry->target, "style");
             os64_strcopy(note, sizeof(note), style != NULL && style->value != NULL ? style->value : "removed");
         }
-        counted_at(&s_script_changes, diag, what, at, note);
+        counted_at(&s_script_changes, what, at, note);
     }
     os64_html_reader_free(reader);
-    char line[1536];
-    counted_at_line(&s_script_changes, line, sizeof(line));
-    yonder_diag_fact(diag, "whole views by a script's change", line);
 }
 
 static bool script_rebuild(void)
@@ -18331,23 +18381,16 @@ static bool paint_part(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t part,
     return found;
 }
 
-// `view` (document coordinates) painted: through the cover a video gives it
-// when there is one — the covered part from the video up, the rest of
-// `view`, at most four rectangles, the ordinary way — or the ordinary way
-// whole, which is also how a `view` the cover does not fill is painted when
-// a backdrop reader may read it (backdrop_read_meets). The layers drawn
-// plain, the most of any of its paints.
-// `not covered` in the record (--layout-profile): for each paint a video
-// would have covered that the guards painted the ordinary way, which limit
+// `not covered reading N` in the record (--layout-profile, written at each
+// reading, diag_paint_reading): for each paint a video would have covered
+// that the guards painted the ordinary way, which limit
 // it passed first and the element that passed it, counted, with the latest
 // one's numbers — what of the element was counted and whether inside a
 // matrix (where a group counts its bounds whole), and the bound against
 // the limit (WHOLE_REPAINTS.md W0).
-static CountedAt s_not_covered;
 static void cover_refusal_note(const flow_paint_asks_t *asks, const flow_paint_limits_t *limits, os64_gui_rect_t view)
 {
-    yonder_diag_t *diag = layout_profile_diag(&g.page);
-    if (!s_layout_profile || diag == NULL)
+    if (!s_layout_profile || layout_profile_diag(&g.page) == NULL)
         return;
     static const char *const kOver[] = {"within", "budget", "a sheet through a matrix", "a layer's sheet",
                                         "a backdrop's sheet", "nested too deep"};
@@ -18364,12 +18407,15 @@ static void cover_refusal_note(const flow_paint_asks_t *asks, const flow_paint_l
         os64_snprintf(note, sizeof(note), "%dx%d%s; the bound %ld of %ld; view %dx%d", (int)asks->rect.w,
                       (int)asks->rect.h, inside, (long)asks->charge, (long)limits->budget, (int)view.w,
                       (int)view.h);
-    counted_at(&s_not_covered, diag, (unsigned)asks->over <= FLOW_ASKS_DEEP ? kOver[asks->over] : "?", at, note);
-    char line[1024];
-    counted_at_line(&s_not_covered, line, sizeof(line));
-    yonder_diag_fact(diag, "not covered", line);
+    counted_at(&s_not_covered, (unsigned)asks->over <= FLOW_ASKS_DEEP ? kOver[asks->over] : "?", at, note);
 }
 
+// `view` (document coordinates) painted: through the cover a video gives it
+// when there is one — the covered part from the video up, the rest of
+// `view`, at most four rectangles, the ordinary way — or the ordinary way
+// whole, which is also how a `view` the cover does not fill is painted when
+// a backdrop reader may read it (backdrop_read_meets). The layers drawn
+// plain, the most of any of its paints.
 static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t view, os64_gui_rect_t whole)
 {
     flow_point_t scroll = scroll_now();
