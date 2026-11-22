@@ -64,9 +64,6 @@ mutants = [
      '        if (r.w > 0 && r.h > 0)\n            mark(ctx, l->box, r);\n'
      '        ok = f_map_put(&grouped, l->box->node, (void *)l);'),
     # An element with no box, drawn by a replaced box.
-    ('a-boxless-elements-style-not-compared', FLOW,
-     '        if ((a == NULL) == (b == NULL) && (a == NULL || f_style_equal(&a->style, &b->style)))\n            continue;',
-     '        if (a != b || 1)\n            continue;'),
     ('nothing-draws-a-boxless-element', FLOW,
      '        if (b->kind == FLOW_BOX_REPLACED || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL))\n            *out = a;',
      '        if (b->kind == FLOW_BOX_REPLACED && 0)\n            *out = a;'),
@@ -95,9 +92,6 @@ mutants = [
      '        if (marking && marked == FLOW_PARTS_MARKED)\n'
      '            marked = parts_in(tree, &changed, marks->scroll, marks->mark, marks->ctx, NULL, 0);',
      '        pending_open(tree);'),
-    ('a-kept-boxless-element-not-marked', RESTYLE,
-     '        why = !drawn_by(tree, n, &by) ? FLOW_PARTS_NO_BOX : keep_change(tree, changed, by, all);',
-     '        why = !drawn_by(tree, n, &by) ? FLOW_PARTS_NO_BOX : keep_change(tree, changed, NULL, all);'),
     # yonder's half: what the change log adds.
     ('an-unlisted-attribute-marks-nothing', YONDER,
      '        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) && !drawn : !drawn)',
@@ -142,6 +136,12 @@ mutants = [
 #   the cases make to the root's or the body's style is laid out afresh,
 #   N1 keeping none of them, so the guard stands behind the new tree's,
 #   which the-canvas-not-refused-in-a-new-tree breaks.
+# - a boxless element's style compared, in a new tree and in place
+#   (flow_change_parts' element walk, keep_changed's drawn_by): an svg's
+#   shapes are the only boxless elements a replaced box draws from styles
+#   today, and yonder's change_svgs names every svg whose shapes the
+#   cascade restyled, which is what the svg adapter paints from; the two
+#   rules are libflow's own guard for the next replaced box that does.
 # - an svg's ancestors asked whether they were restyled (change_svgs): the
 #   cascade restyles everything under an element whose matching changed,
 #   so an svg under one is found by its own shapes too; the ancestors are
