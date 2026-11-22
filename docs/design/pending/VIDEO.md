@@ -468,8 +468,9 @@ drives the player. A `<video>`'s asks for the picture too.
    paused) and can be seen a customer of the frame planner;
    `videos_tick`, in each open frame, asks the player for the picture at
    the answer's blank plus one period and marks the box's visible part
-   when it changed, leaving the kept drawings' stamp alone (no group
-   holding a video is kept).
+   when it changed (only the part its copy writes, when the video is a
+   cover and no backdrop reader is near: below, V.7.1), leaving the kept
+   drawings' stamp alone (no group holding a video is kept).
 3. The paint reaches the box through the painter's retained-pixels verb
    (`paint.h` `canvas`, which names both), and `pane_video` draws the
    latest picture fitted by `yonder_object_rect` (object-fit and
@@ -546,6 +547,213 @@ keyframe, commonly two to five seconds away on the web. That is the
 design, not a defect, and `far_behind_us` with the entries counted says
 how often V4 sees it. The constants (3/8, 3/4, 125 ms, 1 s, 30 periods)
 are to tune on the P5.
+
+### The paint beneath the picture (V.7.1)
+
+Reviewed by Fable (2026-11-21): accepted with the changes folded in
+below — the walk's own door for what is skipped, the rule stated in the
+order draws are emitted and checked there, R split rather than refused,
+the side effects listed, where the time goes, and a checking mode.
+
+**Measured** (the P5, 2026-11-21, a video page played in a maximized
+window, the record's `paint effects` with what is drawn after the video
+counted apart). 157 of a minute's 183 paints were the video's box alone,
+1780x1002, at about 265 ms each: about 3 frames a second. In a paint,
+everything costly is drawn BEFORE the video, beneath it: two canvases
+the size of the box drawn scaled (the page's glow, about 112 ms), a
+blurred layer the size of the box (64 ms), a blurred layer the player's
+size and the warp it is drawn through (about 77 ms), and fills (about
+1 ms). The walk itself is cheap: 132 boxes a paint. After the video, its
+controls' small blurs, masks and fills: about 0.2 ms. The frame's own
+copy: about 0.9 ms. A quarter-size window plays at 10 frames a second,
+so the cost goes with the pixels.
+
+**Predicted:** a paint the video covers costs the copy, what is drawn
+over it and the walk, about 2 to 3 ms in place of about 265; the
+maximized frame rate is then bounded by the video's own (30) and the
+page's scripts. The P5 run is judged against at least 20 frames a
+second, maximized, and at a quarter.
+
+**The rule, stated in the order draws are emitted.** For a paint of
+rectangle R and a cover (below), no draw is emitted until the cover's
+own: everything the walk would have emitted before it is culled as a
+box or a group wholly outside R is culled, and the walk goes on as now
+from the cover's draw. A group HOLDS the cover exactly when the cover's
+draw is emitted between its open and its close; such a group opens and
+closes as now, every other group before the cover is culled whole.
+Everything emitted before the cover is laid under it, so inside the
+pixels the cover writes, **R's pixels come out the same either way**:
+the invariant the tests and the checking mode hold.
+
+**The cover** is a video and the set of device pixels the paint's own
+plain copy writes in this paint — computed by the function that copy
+uses, not reckoned beside it, rounded inward (a pixel the copy blends or
+does not write is not covered). A video is a cover for this paint when:
+
+1. **The frame in hand is drawn plain.** The frame this paint will copy
+   is converted at the fitted size (a resize in flight, drawn through
+   the general path, is not; nor is a poster, nor no picture at this
+   blank), and the walk opens no group around the video's draw (no
+   opacity below 1, transform, filter, backdrop filter, mask or blend on
+   the box or an ancestor: the plain path's test, step 4 as built, (4)),
+   and no `clip-path` or `clip: rect()` cuts it, where yonder draws them.
+2. **Opaque.** A frame is XRGB, every pixel opaque.
+3. **Painted at all.** The box is visible and not `unpainted`.
+
+The covered pixels are the copy's rectangle met with the box's clip
+(`flow_box_doc_clip`), which is the clip the painter draws it in
+(`box_painter`): a rectangle. yonder draws neither an ancestor's rounded
+clip (overflow with a border-radius, which players often are) nor
+`clip-path`, so today a rounded player's picture is drawn square and its
+corners are covered; the day either is drawn, each cut corner comes out
+of the cover and is split off, and the rounded-ancestor fixture, painted
+both ways, is what says so. A letterboxed picture's bars are the box's
+background, not the copy's.
+
+**R split, not refused.** Where R is more than the covered part, the
+covered part is painted by the rule and the rest of R, four rectangles at
+most (above and below the covered part across R's width, then left and
+right of it in its rows: the bars, the edge past the picture), by the
+ordinary walk. And a new frame changes only the pixels the copy writes,
+so a frame marks the picture's shown part, not the box's.
+
+**Except where a backdrop reader may read.** A box that reads the
+window's pixels beneath it — a backdrop filter, a blend other than
+normal — reads past its own pixels by its reach, so a split can hand it
+pixels another piece has not painted yet, or has painted with it once
+already; and one beside the picture reads frame pixels a mark of the
+picture alone would leave old. So R is not split, and a frame marks its
+box's part, wherever such a reader's box, grown by the farthest a filter
+reaches (three times FLOW_FILTER_BLUR_MAX), meets R or the box's part
+(`backdrop_read_meets`; the cold read's finding, 2026-11-21). An R the
+cover fills is unaffected: a reader inside it reads what the covered
+paint drew and, outside it, what is on the window, as any paint of a
+part reads.
+
+**The door: libflow's walk.** `flow_visit_groups` walks the tree's
+layers, the parts of Appendix E's paint order (each stacking context's
+self, body, members, outlines, a group's open and close) in emission
+order, culling each against the view. It is told the cover box and
+finds the part that paints it, of the cover's nearest stacked ancestor or
+itself: its WHOLE, or, where members of negative z-index split it, its
+SELF for the box itself and its BODY for a box inside. Every part before
+that one is culled as a part outside the view is; a group's open and
+close are kept exactly when they span it; within that part, no box is
+handed over until the cover is. A box or group culled this way is handed
+to the painter not at all, as one outside R is not, so the painter has
+no second kind of half-open group: its kept drawings (made, used,
+spoiled) and the walk's `inside` answers are those of a paint that never
+met them. (A group kept around the cover is opened with its whole
+bounds, the culled parts' included, which changes nothing it lays.)
+Each piece of a split R, and the covered part, is a paint of its own
+with the window's clip narrowed to its rectangle (`paint_part`): a
+filtered layer is grown past its view by the filter's reach and laid
+through that clip, and must not be laid over a part another of the
+split's paints has drawn (Codex, #698).
+
+**The layers' budget decides alike.** A paint charges each layer it takes
+and each backdrop filter against a budget of YONDER_FILTER_AREA_VIEWS
+whole views, and past it draws the rest plain; a paint culled beneath a
+cover charges nothing for what it culled, and each piece of a split has
+a budget of its own, so either could take a layer the ordinary paint of R
+would draw plain, over the picture or beside it (Codex, #698). So the
+cover is used only when `flow_layer_area_bound` — at least what any paint
+of R or a part of it can charge (each layer's bounds met with R, in its
+own pixels through a matrix; each backdrop filter's part) — fits the
+budget: then no paint of R refuses a layer, and every one decides them
+as the ordinary paint does. The sheets the painter asks for are held the
+same way: a group drawn through a matrix is laid through a sheet of at
+most SHEET_SIDE a side and SHEET_PIXELS in all, a layer through one of
+FILTER_SHEET_SIDE and FILTER_SHEET_PIXELS, and past those the ordinary
+paint draws the group upright or plain, where a piece, asking for less,
+would be given one (Codex, #698 round 3). `flow_sheets_fit` asks whether
+every sheet a paint of R could ask for fits. Both bounds are worked
+through the views libflow's walk keeps, which hold the painter's at
+every depth: a layer grows the view inside it by what its filter
+spreads, so a transformed group under a blurred one asks for a sheet
+taken from the grown view, not from R (Codex, #698 round 4). Every view
+only grows with R, so a paint of a part asks for no more, and when R
+fits all accept and charge alike. R past either is painted the ordinary
+way, counted in the record.
+`flow_paint_path` names the groups that hold a box (outermost first),
+which rule 1 reads (none may lay a layer) and the checking mode tests.
+
+**What painting a box does besides drawing**, each skipped for a box the
+walk culls exactly as for a box outside R, because neither is handed to
+the painter: a picture's verb draws an SVG and may say it failed; a
+video's draw tells its player the fitted size; a box that changes
+between paints spoils its group's kept drawing; a canvas's draw
+acknowledges its damage (`os64_dom_canvas_painted`). That last needs a
+decision, since the page's glow is a canvas redrawn every frame, wholly
+under the video, and a canvas inside a group marks the whole view when
+it changes: left unacknowledged, its damage would mark the view again at
+every turn, video paused or not. **Ruled here:** after a covered paint,
+every canvas marked for it that the paint did not draw is looked up and
+acknowledged (`yonder_scripts_canvas_bitmap`, which applies a pending
+reset, then `yonder_scripts_canvas_painted`, no script between, as
+libdom's contract asks). The paint covered every mark (R is the dirty
+part's bounds), so a canvas it did not draw cannot be seen there; its
+bitmap is current, and whatever later uncovers it (the video moved,
+resized, ended) repaints that part from the bitmap. A canvas the paint
+drew is the canvas verb's to acknowledge, or, its draw not consumed, to
+leave pending, as without a cover.
+
+**What it is not.** It is not occlusion culling in general (an opaque
+image, an opaque background over the page): that wants "is this box
+opaque over this rectangle", a table of its own, later if a measurement
+asks. Fable agreed (2026-11-21).
+
+**The checking mode** (`--paint-check N`, diagnostics only, as the
+cascade and geometry checks are). Every Nth covered paint's pixels are
+kept, the window's pixels from before it put back, and the part painted
+again the ordinary way, which stays on the window; the two are compared
+to the pixel. The ordinary paint counts the groups open at the cover's
+draw, which must be what `flow_paint_path` predicted: none, for a cover.
+A difference logs the box, R, the first differing pixel and the count
+found; the record says how many were compared, how many differed, and
+how many could not be compared (no memory, the part off the window's
+surface). The ordinary paint is a whole paint's cost, so a run with the
+check plays slower, in a beat. Chris plays videos with it on before the
+rule is trusted.
+
+**The proof, as built** (tools/test_yonder_cover.inc,
+tools/test_libflow_cover.inc, tools/test_cover_mutants.py). On the host
+each case's covered paints are checked to the pixel against the ordinary
+paint (the checking mode on every one), and where the cover is taken the
+window is painted whole with covers and without and every pixel held the
+same, the pieces about the covered part included: the measured page's
+shape (a video over a scaled, blurred glow), with a caption, a blend and
+a backdrop filter over the picture (R the picture: covered; R a pixel
+past it: not split, for the readers); the same with no reader (a pixel
+past it: one piece; the whole window: four); a frame not at the fitted
+size (no cover); a video inside an opacity (no cover); an absolutely
+positioned video painted inside an ancestor's group (no cover: the
+emission rule, not ancestry); a transparent letterboxed picture (two
+pieces, the bars painted the ordinary way, and a frame marking only its
+band); a negative z-index beneath and a positive one over; a scroller
+cutting the picture; 150% with a fractional edge; a canvas beneath the
+picture acknowledged by the covered paint; and a backdrop filter across
+a letterboxed band's edge (not split, and a frame marking the box).
+libflow's own test takes every box of three pages as the cover in turn:
+the walk hands over exactly the ordinary walk's events from the cover on,
+preceded only by the opens of the groups open there, which
+flow_paint_path names. Mutants break the walk's culling, the gate, the
+SELF part, each condition of a cover, the split, the backdrop rule's two
+halves and the canvas acknowledgment. Not built: a rounded ancestor (yonder
+draws no rounded clip, above), a transform or filter around the video
+beside the opacity (the same group test), two videos over one another.
+On the P5: `paint effects` and `--video-rate` before and after,
+maximized and at a quarter.
+
+**The record.** The `paint` line counts the paints that began at a
+video, the pieces split off, those painted again, and those not split for
+a backdrop reader, so a run says whether the rule took. `--cover=off`
+paints every paint the ordinary way, to compare.
+
+**Order.** Its own PR. N3 (the parts machinery's damage) rebases on it:
+a progress bar's tick over a playing video is then both at once, R the
+bar's rectangle, covered by the video, and the paint the video's rows
+and the bar.
 
 ## 6. Queues and memory
 

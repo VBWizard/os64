@@ -133,34 +133,90 @@ static void colour_run(uint32_t *px, size_t n, const Colour *c)
 
 // ── The blurs ───────────────────────────────────────────────────────────
 
-// One box blur of radius `r` along rows (or columns), each of a pixel's
-// four 8-bit channels apart, reading nothing (0) past the edges.
-static void box_pass(uint32_t *px, int32_t w, int32_t h, int32_t r, bool rows, uint32_t *tmp)
+// A box's sum of one channel over `span` pixels, averaged to the nearest:
+// (sum + span / 2) / span, as a multiply by the reciprocal `inv`
+// (2^32 / span, rounded up), which is exact for every sum a box of at most
+// 2 * FLOW_FILTER_BLUR_MAX + 1 pixels can hold: the error, sum times
+// (inv * span - 2^32) / 2^32, stays under 1 / span while the sum is below
+// 2^32 / span.
+static inline uint32_t box_mean(uint32_t sum, uint32_t span, uint64_t inv)
 {
-    int32_t lines = rows ? h : w, len = rows ? w : h;
-    size_t step = rows ? 1 : (size_t)w;
+    return (uint32_t)(((uint64_t)(sum + span / 2) * inv) >> 32);
+}
+
+// The columns a column pass carries at once: their pixels share cache
+// lines, where one column at a time reads a whole row's stride apart at
+// every step.
+#define BOX_STRIP 16
+
+// One box blur of radius `r` along every row, each of a pixel's four 8-bit
+// channels apart, reading nothing (0) past the edges. `tmp` holds a row.
+static void box_rows(uint32_t *px, int32_t w, int32_t h, int32_t r, uint32_t *tmp)
+{
     uint32_t span = 2 * (uint32_t)r + 1;
-    for (int32_t l = 0; l < lines; l++) {
-        uint32_t *v = px + (rows ? (size_t)l * (size_t)w : (size_t)l);
+    uint64_t inv = ((1ull << 32) + span - 1) / span;
+    for (int32_t l = 0; l < h; l++) {
+        uint32_t *v = px + (size_t)l * (size_t)w;
         uint32_t sum[4] = {0, 0, 0, 0};
-        for (int32_t i = 0; i <= r && i < len; i++)
+        for (int32_t i = 0; i <= r && i < w; i++)
             for (int c = 0; c < 4; c++)
-                sum[c] += chan(v[(size_t)i * step], 8 * c);
-        for (int32_t i = 0; i < len; i++) {
+                sum[c] += chan(v[i], 8 * c);
+        for (int32_t i = 0; i < w; i++) {
             uint32_t o = 0;
             for (int c = 0; c < 4; c++)
-                o |= ((sum[c] + span / 2) / span) << (8 * c);
+                o |= box_mean(sum[c], span, inv) << (8 * c);
             tmp[i] = o;
             int32_t out = i - r, in = i + r + 1;
             for (int c = 0; c < 4; c++) {
-                if (in < len)
-                    sum[c] += chan(v[(size_t)in * step], 8 * c);
+                if (in < w)
+                    sum[c] += chan(v[in], 8 * c);
                 if (out >= 0)
-                    sum[c] -= chan(v[(size_t)out * step], 8 * c);
+                    sum[c] -= chan(v[out], 8 * c);
             }
         }
-        for (int32_t i = 0; i < len; i++)
-            v[(size_t)i * step] = tmp[i];
+        for (int32_t i = 0; i < w; i++)
+            v[i] = tmp[i];
+    }
+}
+
+// The same down every column, BOX_STRIP columns at a time, row by row
+// within the strip; each column's result is the one a column alone would
+// have. `tmp` holds BOX_STRIP columns of `h`.
+static void box_columns(uint32_t *px, int32_t w, int32_t h, int32_t r, uint32_t *tmp)
+{
+    uint32_t span = 2 * (uint32_t)r + 1;
+    uint64_t inv = ((1ull << 32) + span - 1) / span;
+    for (int32_t x0 = 0; x0 < w; x0 += BOX_STRIP) {
+        int32_t n = w - x0 < BOX_STRIP ? w - x0 : BOX_STRIP;
+        uint32_t sum[BOX_STRIP][4] = {{0}};
+        for (int32_t i = 0; i <= r && i < h; i++) {
+            const uint32_t *row = px + (size_t)i * (size_t)w + (size_t)x0;
+            for (int32_t k = 0; k < n; k++)
+                for (int c = 0; c < 4; c++)
+                    sum[k][c] += chan(row[k], 8 * c);
+        }
+        for (int32_t i = 0; i < h; i++) {
+            uint32_t *out_row = tmp + (size_t)i * BOX_STRIP;
+            for (int32_t k = 0; k < n; k++) {
+                uint32_t o = 0;
+                for (int c = 0; c < 4; c++)
+                    o |= box_mean(sum[k][c], span, inv) << (8 * c);
+                out_row[k] = o;
+            }
+            int32_t out = i - r, in = i + r + 1;
+            const uint32_t *adding = in < h ? px + (size_t)in * (size_t)w + (size_t)x0 : NULL;
+            const uint32_t *leaving = out >= 0 ? px + (size_t)out * (size_t)w + (size_t)x0 : NULL;
+            for (int32_t k = 0; k < n; k++)
+                for (int c = 0; c < 4; c++) {
+                    if (adding != NULL)
+                        sum[k][c] += chan(adding[k], 8 * c);
+                    if (leaving != NULL)
+                        sum[k][c] -= chan(leaving[k], 8 * c);
+                }
+        }
+        for (int32_t i = 0; i < h; i++)
+            for (int32_t k = 0; k < n; k++)
+                px[(size_t)i * (size_t)w + (size_t)x0 + (size_t)k] = tmp[(size_t)i * BOX_STRIP + (size_t)k];
     }
 }
 
@@ -172,8 +228,8 @@ static void blur_run(uint32_t *px, int32_t w, int32_t h, int32_t blur, uint32_t 
     if (r <= 0)
         return;
     for (int k = 0; k < 3; k++) {
-        box_pass(px, w, h, r, true, tmp);
-        box_pass(px, w, h, r, false, tmp);
+        box_rows(px, w, h, r, tmp);
+        box_columns(px, w, h, r, tmp);
     }
 }
 
@@ -207,9 +263,16 @@ static void shadow_run(uint32_t *px, int32_t w, int32_t h, const flow_filter_t *
         }
 }
 
+// The blurs' line: a row (box_rows) or BOX_STRIP columns (box_columns).
+static size_t blur_line(int32_t w, int32_t h)
+{
+    size_t strip = (size_t)BOX_STRIP * (size_t)h;
+    return (size_t)w > strip ? (size_t)w : strip;
+}
+
 size_t yonder_filter_work_bytes(int32_t w, int32_t h, const flow_filter_t *f, int32_t n)
 {
-    size_t bytes = (size_t)(w > h ? w : h) * sizeof(uint32_t);
+    size_t bytes = blur_line(w, h) * sizeof(uint32_t);
     for (int32_t i = 0; i < n; i++)
         if (f[i].fn == FLOW_FILTER_DROP_SHADOW) {
             bytes += (size_t)w * (size_t)h * sizeof(uint32_t);
@@ -224,7 +287,7 @@ void yonder_filter_run(uint32_t *px, int32_t w, int32_t h, const flow_filter_t *
     if (w <= 0 || h <= 0)
         return;
     uint32_t *tmp = work;
-    uint32_t *mask = tmp + (w > h ? w : h);
+    uint32_t *mask = tmp + blur_line(w, h);
     size_t count = (size_t)w * (size_t)h;
     for (int32_t i = 0; i < n; i++) {
         Colour c;

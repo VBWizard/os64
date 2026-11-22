@@ -6705,6 +6705,7 @@ static uint32_t *stand_in_shot(void) {
     yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
     return screen.surf.pixels;
 }
+#include "test_yonder_cover.inc"
 #include "test_yonder_svg_images.inc"
 #include "test_yonder_canvas.inc"
 #include "test_yonder_animation.inc"
@@ -9392,6 +9393,45 @@ static void paint_cost_cases(void) {
           strstr(rec,", laid 1.0 (0.0), publish")!=NULL &&
           strstr(rec,"; window 2.0, the view's rest 8.0\n")!=NULL,
           "paint counts: each stage in milliseconds a paint, the window and the view's rest beside them");
+    /* The effects the filters and warps stages spend, told apart: a
+     * backdrop blur twice, and a filtered layer opened at its size and
+     * closed (its open's time and its close's counted together), the
+     * costliest first; what the table has no room for is the rest. */
+    effects_reset();
+    effect_counted("backdrop blur(8) 2560x56",5000000);
+    effect_counted("backdrop blur(8) 2560x56",5000000);
+    {
+        flow_filter_t blur={.fn=FLOW_FILTER_BLUR,.amount=12};
+        char said[40];
+        effect_filters(said,sizeof(said),&blur,1);
+        s_layers_open[0].w=200; s_layers_open[0].h=100; s_layers_open[0].cycles=30000; s_nlayers_open=1;
+        effect_layer_closed("filter",said,70000);
+    }
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint effects: backdrop blur(8) 2560x56: 2, 10.0 ms (5000 us each); "
+                     "filter blur(12) 200x100: 1, 0.1 ms (100 us each); boxes handed the painter 0, 0 a paint\n")!=NULL && s_nlayers_open==0,
+          "paint effects: each by what it was, the costliest first, a layer's open and close together");
+    for(int i=0;i<EFFECTS_MAX+3;i++) {
+        char what[24];
+        snprintf(what,sizeof(what),"warp %dx1",i);
+        effect_counted(what,1);
+    }
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"; the rest: 25, 0.0 ms; boxes handed the painter ")!=NULL,
+          "paint effects: past the twelve said and the table's room, the rest counted together");
+    /* What a paint draws after a video is counted apart. */
+    effects_reset();
+    effect_counted("fills",3000000);
+    s_effects_past_video=true;
+    effect_counted("fills",1000000);
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint effects: fills: 1, 3.0 ms (3000 us each); fills over the video: 1, 1.0 ms (1000 us each);")!=NULL,
+          "paint effects: what is drawn after a video, counted apart");
+    effects_reset();
+    check(!s_effects_past_video,"paint effects: the count starting again starts before any video");
     /* The biggest part marked and by what, the biggest painted, and the
      * marks of the canvases and the form controls (YONDER_DIAGNOSTICS.md §
      * What paints cost). */
@@ -13109,6 +13149,14 @@ int main(void)
         printf("yonder restyle: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
+    if(getenv("YONDER_COVER_ONLY")) {
+        cover_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"cover: text released");
+        check(live==0,"cover: heap empty");
+        printf("yonder cover: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_FAIRNESS_ONLY")) {
         fairness_cases();
         os64_text_font_release(probe_font);
@@ -13141,6 +13189,7 @@ int main(void)
     svg_gradient_window_cases();
     svg_radial_window_cases();
     svg_partial_window_cases();
+    cover_cases();
     custom_census_cases();
     custom_element_parse_case();
     svg_cache_window_cases();

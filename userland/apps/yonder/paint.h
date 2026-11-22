@@ -255,6 +255,9 @@ extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 // program started: a count the harness holds to the lines painted, not the
 // pieces on them.
 extern uint64_t yonder_paint_cuts;
+// How many boxes the walk has handed the painter, since the program
+// started: the record's measure of the walk's own part of a paint.
+extern uint64_t yonder_paint_boxes;
 // How many filtered, masked or blended groups and backdrops the last
 // yonder_paint drew plain: past its budget for layers —
 // YONDER_FILTER_AREA_VIEWS times the WHOLE view's pixels, each layer (and
@@ -269,6 +272,23 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_re
                   flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
                   yonder_scratch_t *scratch, const yonder_verbs_t *verbs);
+
+// The same paint of a `viewport` that `cover` draws over (VIDEO.md § 5, The
+// paint beneath the picture): nothing before the cover is drawn — not the
+// canvas, not the root's backgrounds, nothing the walk emits before it
+// (flow_visit_groups_from) — and from the cover on, all as yonder_paint
+// draws it. The caller's to have found a cover whose pixels fill the
+// viewport. False when the walk never handed the cover over: the viewport
+// then holds only what came after it, and the caller paints it again with
+// yonder_paint.
+bool yonder_paint_from(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_rect_t whole,
+                       flow_point_t scroll, uint32_t paper, const yonder_dark_t *dark,
+                       yonder_paint_cache_t *cache, yonder_scratch_t *scratch, const yonder_verbs_t *verbs,
+                       const flow_box_t *cover);
+
+// How many groups the painter has open now: read by a verb as it draws, so
+// a check can hold it to flow_paint_path's groups for the box it is drawing.
+extern int32_t yonder_paint_groups_open;
 
 // One of `box`'s boxes — its border box `rect` (in any coordinates), or
 // the padding or content box inside it. A percentage padding counts as

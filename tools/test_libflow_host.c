@@ -1408,6 +1408,7 @@ static void layout_sweep(void)
 #include "test_libflow_grid.inc"
 #include "test_libflow_floats.inc"
 #include "test_libflow_transform.inc"
+#include "test_libflow_cover.inc"
 #include "test_libflow_cliptext.inc"
 #include "test_libflow_motion.inc"
 #include "test_libflow_computed.inc"
@@ -1424,6 +1425,11 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "--restyle") == 0) {
         text_setup(); restyle_in_place_cases(); text_teardown();
         printf("libflow restyle: %d checks, %d failed%s\n", checks, failures, live ? " (AND LEAKED)" : "");
+        return failures != 0 || live != 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--cover") == 0) {
+        text_setup(); cover_cases(); text_teardown();
+        printf("libflow cover: %d checks, %d failed%s\n", checks, failures, live ? " (AND LEAKED)" : "");
         return failures != 0 || live != 0;
     }
     if (argc == 2 && strcmp(argv[1], "--graft") == 0) {
@@ -1598,6 +1604,7 @@ int main(int argc, char **argv)
     position_cases();
     scroll_cases();
     blend_cases();
+    cover_cases();
     radius_cases();
     gradient_style_cases();
     background_box_cases();

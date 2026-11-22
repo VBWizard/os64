@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "filter.h"
 
@@ -374,6 +375,119 @@ static void mask_cases(void)
            px[0] == 0x40404040u && px[1] == 0xff102030u, NULL);
 }
 
+// The blur as it was written one column at a time, with a division a
+// channel: the reference the strip-wise one must equal to the bit.
+static void ref_box_pass(uint32_t *px, int32_t w, int32_t h, int32_t r, int rows, uint32_t *tmp)
+{
+    int32_t lines = rows ? h : w, len = rows ? w : h;
+    size_t step = rows ? 1 : (size_t)w;
+    uint32_t span = 2 * (uint32_t)r + 1;
+    for (int32_t l = 0; l < lines; l++) {
+        uint32_t *v = px + (rows ? (size_t)l * (size_t)w : (size_t)l);
+        uint32_t sum[4] = {0, 0, 0, 0};
+        for (int32_t i = 0; i <= r && i < len; i++)
+            for (int c = 0; c < 4; c++)
+                sum[c] += (v[(size_t)i * step] >> (8 * c)) & 0xffu;
+        for (int32_t i = 0; i < len; i++) {
+            uint32_t o = 0;
+            for (int c = 0; c < 4; c++)
+                o |= ((sum[c] + span / 2) / span) << (8 * c);
+            tmp[i] = o;
+            int32_t out = i - r, in = i + r + 1;
+            for (int c = 0; c < 4; c++) {
+                if (in < len)
+                    sum[c] += (v[(size_t)in * step] >> (8 * c)) & 0xffu;
+                if (out >= 0)
+                    sum[c] -= (v[(size_t)out * step] >> (8 * c)) & 0xffu;
+            }
+        }
+        for (int32_t i = 0; i < len; i++)
+            v[(size_t)i * step] = tmp[i];
+    }
+}
+
+static void ref_blur(uint32_t *px, int32_t w, int32_t h, int32_t blur)
+{
+    int32_t most = 2 * FLOW_FILTER_BLUR_MAX, r = (blur < most ? blur : most) / 2;
+    uint32_t *tmp = malloc((size_t)(w > h ? w : h) * sizeof(*tmp));
+    for (int k = 0; r > 0 && k < 3; k++) {
+        ref_box_pass(px, w, h, r, 1, tmp);
+        ref_box_pass(px, w, h, r, 0, tmp);
+    }
+    free(tmp);
+}
+
+// A premultiplied pixel from the generator: alpha first, each colour at
+// most it.
+static uint32_t random_pixel(uint32_t *state)
+{
+    *state = *state * 1664525u + 1013904223u;
+    uint32_t a = *state >> 24;
+    *state = *state * 1664525u + 1013904223u;
+    uint32_t r = a ? (*state >> 8) % (a + 1) : 0, g = a ? (*state >> 16) % (a + 1) : 0;
+    *state = *state * 1664525u + 1013904223u;
+    uint32_t b = a ? (*state >> 8) % (a + 1) : 0;
+    return a << 24 | r << 16 | g << 8 | b;
+}
+
+// The blur equals the reference on layers of many shapes: a line one pixel
+// thin either way, widths across a strip's edge, a radius past the layer,
+// and the largest radius held; and the big blurs a video page draws, timed.
+static void blur_reference_cases(void)
+{
+    static const int32_t shapes[][2] = {{1, 1}, {1, 37}, {37, 1}, {15, 9}, {16, 16}, {17, 40}, {33, 5},
+                                        {64, 63}, {100, 3}, {3, 100}, {250, 120}};
+    static const int32_t blurs[] = {1, 2, 3, 7, 20, 61, 199, 200, 500};
+    uint32_t state = 12345;
+    int same = 1;
+    char first[96] = "";
+    for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); s++)
+        for (size_t b = 0; b < sizeof(blurs) / sizeof(blurs[0]); b++) {
+            int32_t w = shapes[s][0], h = shapes[s][1];
+            size_t n = (size_t)w * (size_t)h;
+            uint32_t *a = malloc(n * sizeof(*a)), *ref = malloc(n * sizeof(*ref));
+            for (size_t i = 0; i < n; i++)
+                a[i] = ref[i] = random_pixel(&state);
+            flow_filter_t f = fn(FLOW_FILTER_BLUR, blurs[b] / 2.0);
+            f.shadow.blur = blurs[b];
+            void *work = malloc(yonder_filter_work_bytes(w, h, &f, 1));
+            yonder_filter_run(a, w, h, &f, 1, 0, work);
+            ref_blur(ref, w, h, blurs[b]);
+            if (memcmp(a, ref, n * sizeof(*a)) != 0 && same) {
+                same = 0;
+                snprintf(first, sizeof(first), "%dx%d, blur %d", (int)w, (int)h, (int)blurs[b]);
+            }
+            free(work);
+            free(a);
+            free(ref);
+        }
+    expect("blur: the strip-wise blur equals the column-wise reference to the bit", same, first);
+    // The video page's two: blur(15) over 1780x1002 and blur(40) over
+    // 1430x743 (shadow blurs 30 and 80), timed each way.
+    static const int32_t big[][3] = {{1780, 1002, 30}, {1430, 743, 80}};
+    for (int k = 0; k < 2; k++) {
+        int32_t w = big[k][0], h = big[k][1];
+        size_t n = (size_t)w * (size_t)h;
+        uint32_t *a = malloc(n * sizeof(*a)), *ref = malloc(n * sizeof(*ref));
+        for (size_t i = 0; i < n; i++)
+            a[i] = ref[i] = random_pixel(&state);
+        flow_filter_t f = fn(FLOW_FILTER_BLUR, big[k][2] / 2.0);
+        f.shadow.blur = big[k][2];
+        void *work = malloc(yonder_filter_work_bytes(w, h, &f, 1));
+        clock_t t0 = clock();
+        yonder_filter_run(a, w, h, &f, 1, 0, work);
+        clock_t t1 = clock();
+        ref_blur(ref, w, h, big[k][2]);
+        clock_t t2 = clock();
+        expect("blur: the video page's big blurs equal the reference", memcmp(a, ref, n * sizeof(*a)) == 0, NULL);
+        printf("  blur %d over %dx%d: %.1f ms, the reference %.1f ms (host, sanitizers on)\n", (int)big[k][2],
+               (int)w, (int)h, (t1 - t0) * 1000.0 / CLOCKS_PER_SEC, (t2 - t1) * 1000.0 / CLOCKS_PER_SEC);
+        free(work);
+        free(a);
+        free(ref);
+    }
+}
+
 int main(void)
 {
     colour_cases();
@@ -381,6 +495,7 @@ int main(void)
     round_trip_cases();
     lay_cases();
     blur_cases();
+    blur_reference_cases();
     shadow_cases();
     backdrop_cases();
     blend_cases();

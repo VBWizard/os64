@@ -3648,13 +3648,281 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
     flow_visit_groups(tree, viewport, scroll, &v);
 }
 
+// The layer that paints `box` (flow_paint_path), of its nearest stacked
+// ancestor, or of itself when it is stacked, or of the root: that box's
+// WHOLE, or, where members of negative z-index split it, its SELF for the
+// box itself (its own background and borders) and its BODY for a box
+// inside it; -1 for none.
+static int32_t paint_part_of(const flow_tree_t *tree, const flow_box_t *box)
+{
+    if (tree == NULL || box == NULL)
+        return -1;
+    const flow_box_t *e = box;
+    while (e != NULL && !e->stacked && e != tree->root)
+        e = e->parent;
+    if (e == NULL)
+        return -1;
+    LayerPart split = e == box ? PART_SELF : PART_BODY;
+    for (int32_t i = 0; i < tree->nlayers; i++)
+        if (tree->layers[i].box == e && (tree->layers[i].part == PART_WHOLE || tree->layers[i].part == split))
+            return i;
+    return -1;
+}
+
+int32_t flow_paint_path(const flow_tree_t *tree, const flow_box_t *box, const flow_box_t **out, int32_t cap)
+{
+    int32_t k = paint_part_of(tree, box);
+    if (k < 0)
+        return -1;
+    // The opens not yet closed when the walk comes to `k`, outermost first:
+    // a close always ends the innermost open.
+    int32_t depth = 0;
+    for (int32_t i = 0; i < k; i++) {
+        if (tree->layers[i].part == PART_OPEN) {
+            if (depth < cap && out != NULL)
+                out[depth] = tree->layers[i].box;
+            depth++;
+        } else if (tree->layers[i].part == PART_CLOSE && depth > 0) {
+            depth--;
+        }
+    }
+    return depth;
+}
+
+// What a group drawn through matrix `m` takes in of the view outside it, in
+// its own pixels: that view taken back through the matrix, grown a pixel
+// each way, as the painter grows the sheet it fills (a bilinear sample at
+// the view's edge mixes the source pixel beyond), joined with the view
+// moved back to where an upright drawing puts the group (`up`) — the face
+// may refuse to lay it through (flow_box_through's `upright`), and the
+// walk is not told which it did.
+static os64_gui_rect_t taken_in(os64_gui_rect_t view, const double m[6], flow_point_t up)
+{
+    os64_gui_rect_t back = affine_back(m, view);
+    if (back.w > 0 && back.h > 0)
+        back = grown(back, (const int32_t[4]){1, 1, 1, 1});
+    os64_gui_rect_t upright = moved(view, -(int64_t)up.x, -(int64_t)up.y);
+    return back.w > 0 && back.h > 0 ? join(back, upright) : upright;
+}
+
+// The view a group's inside is culled against, the view outside it being
+// `view` (flow_visit_groups): none inside none, or for a group the visitor
+// asked for none of; the whole plane inside it, or for a group asked for
+// whole; else what a group drawn through a matrix takes in (taken_in) or
+// the view itself, grown by how far from outside it what its filter draws
+// there can come (filter_sources). The sheet and budget bounds keep the
+// same views (paint_asks).
+static os64_gui_rect_t inside_view(const flow_box_t *b, os64_gui_rect_t view, bool through, const double m[6],
+                                   flow_point_t up, flow_inside_t asked)
+{
+    if (view.w <= 0 || view.h <= 0 || asked == FLOW_INSIDE_NONE)
+        return (os64_gui_rect_t){0, 0, 0, 0};
+    if (view.w == kWholePlane.w || asked == FLOW_INSIDE_ALL)
+        return kWholePlane;
+    return filter_sources(b, through ? taken_in(view, m, up) : view);
+}
+
+static int64_t area_of(os64_gui_rect_t r)
+{
+    return r.w > 0 && r.h > 0 ? (int64_t)r.w * r.h : 0;
+}
+
+// Whether a box is drawn through an ancestor's matrix (own_through), so
+// that what it charges is counted in that ancestor's own pixels.
+static bool under_through(const flow_box_t *b)
+{
+    for (const flow_box_t *p = b != NULL ? b->parent : NULL; p != NULL; p = p->parent)
+        if (own_through(p))
+            return true;
+    return false;
+}
+
+static bool sheet_within(os64_gui_rect_t r, int32_t side, int64_t pixels)
+{
+    return r.w <= 0 || r.h <= 0 || (r.w <= side && r.h <= side && (int64_t)r.w * r.h <= pixels);
+}
+
+// What a paint of `viewport` at `scroll`, or of a part of it, could ask of a
+// face at most: `charge`, the layers' and backdrops' budget, and `fits`,
+// whether every sheet keeps within the limits given (flow_layer_area_bound,
+// flow_sheets_fit).
+typedef struct {
+    int64_t charge;
+    bool fits;
+} PaintAsks;
+
+// It follows the views the walk keeps (inside_view), which hold the
+// painter's at every depth — the walk may not cull what the painter draws —
+// and grow with every view the painter grows: a filtered group's layer by
+// what its filter spreads, a group drawn through a matrix by the view taken
+// back through it. Each of those only grows with the viewport, so the
+// viewport's answer bounds a part's. Inside a group drawn through a matrix
+// the painter's view may be the group's whole bounds (a kept drawing is
+// made whole, paint.h), so there a group counts its bounds whole.
+// A group drawn through a matrix asks for a sheet of what it takes in, and
+// what shows of it is that; a group that may take a layer (a filter, a mask,
+// a blend other than normal) asks for a layer of its bounds met with the
+// view inside it, and is charged what of that shows, once and once a mask
+// layer; a box with a backdrop filter is charged its part in the view, and
+// asks for that part grown by its list's reach. Groups nested past the
+// stack's depth ask for more than any budget.
+static PaintAsks paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                            int32_t through_side, int64_t through_pixels, int32_t layer_side, int64_t layer_pixels)
+{
+    const int64_t unbounded = INT64_MAX / 4;
+    PaintAsks asks = {0, true};
+    if (tree == NULL || tree->root == NULL || viewport.w <= 0 || viewport.h <= 0)
+        return asks;
+    enum { DEEP = 64 };
+    struct {
+        os64_gui_rect_t view, shown;
+        bool inside;
+    } outer[DEEP];
+    os64_gui_rect_t *bounds = all_group_bounds(tree, scroll);
+    os64_gui_rect_t view = viewport, shown = viewport;
+    bool inside = false;
+    int32_t depth = 0;
+    for (int32_t i = 0; i < tree->nlayers && asks.charge < unbounded; i++) {
+        const Layer *l = &tree->layers[i];
+        const flow_box_t *b = l->box;
+        if (l->part == PART_CLOSE) {
+            if (depth > 0) {
+                depth--;
+                view = outer[depth].view;
+                shown = outer[depth].shown;
+                inside = outer[depth].inside;
+            }
+            continue;
+        }
+        if (l->part != PART_OPEN) {
+            // A backdrop filter's box makes a context of its own, painted
+            // in its whole part or its self part.
+            if ((l->part != PART_WHOLE && l->part != PART_SELF) || b->style == NULL || b->style->nbackdrop_filter <= 0)
+                continue;
+            os64_gui_rect_t part = inside ? b->rect : meet(flow_box_doc_rect(b, scroll), view);
+            int32_t d[4];
+            flow_filter_list_reach(b->style->backdrop_filter, b->style->nbackdrop_filter, d);
+            asks.charge += area_of(part);
+            if (part.w > 0 && part.h > 0 && !sheet_within(grown(part, d), layer_side, layer_pixels))
+                asks.fits = false;
+            continue;
+        }
+        if (depth >= DEEP) {
+            asks.charge = unbounded;
+            asks.fits = false;
+            break;
+        }
+        outer[depth].view = view;
+        outer[depth].shown = shown;
+        outer[depth].inside = inside;
+        depth++;
+        int32_t end;
+        os64_gui_rect_t bd = bounds != NULL ? bounds[i] : group_bounds(tree, i, scroll, &end);
+        double m[6];
+        flow_point_t up;
+        bool through = flow_box_through(b, scroll, m, NULL, &up);
+        os64_gui_rect_t from = inside ? kWholePlane : view;
+        os64_gui_rect_t in = inside_view(b, from, through, m, up, FLOW_INSIDE_VIEW);
+        if (through) {
+            os64_gui_rect_t sheet = from.w == kWholePlane.w ? bd : meet(bd, taken_in(from, m, up));
+            if (!sheet_within(sheet, through_side, through_pixels))
+                asks.fits = false;
+            shown = sheet;
+        }
+        if (f_group_filter(b->style, f_atom(b)) || flow_masked(b) || b->style->mix_blend != FLOW_BLEND_NORMAL) {
+            os64_gui_rect_t layer = meet(bd, in);
+            if (!sheet_within(layer, layer_side, layer_pixels))
+                asks.fits = false;
+            int64_t a = area_of(meet(layer, shown));
+            int64_t layers = flow_masked(b) ? 1 + flow_mask_layers(b->style) : 1;
+            asks.charge = a >= (unbounded - asks.charge) / layers ? unbounded : asks.charge + a * layers;
+        }
+        if (through || f_group_filter(b->style, f_atom(b)))
+            view = in;
+        inside = inside || through;
+    }
+    // A backdrop filter on a box that makes no context of its own (not
+    // granted one) is charged its whole rect, whatever view it is painted in.
+    for (const flow_box_t *b = tree->root; b != NULL && asks.charge < unbounded; b = box_after(b)) {
+        if (b->style == NULL || b->style->nbackdrop_filter <= 0 || makes_context(b))
+            continue;
+        os64_gui_rect_t part = under_through(b) ? b->rect : flow_box_doc_rect(b, scroll);
+        int32_t d[4];
+        flow_filter_list_reach(b->style->backdrop_filter, b->style->nbackdrop_filter, d);
+        asks.charge += area_of(part);
+        if (part.w > 0 && part.h > 0 && !sheet_within(grown(part, d), layer_side, layer_pixels))
+            asks.fits = false;
+    }
+    os64_free(bounds);
+    if (asks.charge > unbounded)
+        asks.charge = unbounded;
+    return asks;
+}
+
+int64_t flow_layer_area_bound(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll)
+{
+    return paint_asks(tree, viewport, scroll, INT32_MAX, INT64_MAX, INT32_MAX, INT64_MAX).charge;
+}
+
+bool flow_sheets_fit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll, int32_t through_side,
+                     int64_t through_pixels, int32_t layer_side, int64_t layer_pixels)
+{
+    return paint_asks(tree, viewport, scroll, through_side, through_pixels, layer_side, layer_pixels).fits;
+}
+
+// The layer index of the close of the group opened at `i`.
+static int32_t close_of(const flow_tree_t *tree, int32_t i)
+{
+    int32_t depth = 0;
+    for (int32_t k = i + 1; k < tree->nlayers; k++) {
+        if (tree->layers[k].part == PART_OPEN)
+            depth++;
+        else if (tree->layers[k].part == PART_CLOSE && depth-- == 0)
+            return k;
+    }
+    return tree->nlayers;
+}
+
+// The part that paints the cover (flow_visit_groups_from's `from`), walked
+// with each box passed through this gate: none handed over until the
+// cover is.
+typedef struct {
+    void (*visit)(void *ctx, const flow_box_t *box);
+    void *ctx;
+    const flow_box_t *from;
+    bool found;
+} FromGate;
+
+static void from_gate(void *ctx, const flow_box_t *box)
+{
+    FromGate *g = ctx;
+    if (!g->found) {
+        if (box != g->from)
+            return;
+        g->found = true;
+    }
+    g->visit(g->ctx, box);
+}
+
 void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                        const flow_visitor_t *visitor)
 {
+    flow_visit_groups_from(tree, viewport, scroll, visitor, NULL, NULL);
+}
+
+void flow_visit_groups_from(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                            const flow_visitor_t *visitor, const flow_box_t *from, bool *found)
+{
+    if (found != NULL)
+        *found = false;
     if (tree == NULL || tree->root == NULL || visitor == NULL || visitor->visit == NULL)
         return;
     void (*visit)(void *, const flow_box_t *) = visitor->visit;
     void *ctx = visitor->ctx;
+    // The cover: the part that paints it, and the gate its own part's boxes
+    // pass through.
+    int32_t from_part = from != NULL ? paint_part_of(tree, from) : -1;
+    FromGate gate = {visit, ctx, from, false};
     os64_gui_rect_t *bounds = visitor->open != NULL ? all_group_bounds(tree, scroll) : NULL;
     // The view in the coordinates each open group drawn through its matrix
     // is painted in: the one outside taken back through the matrix and
@@ -3675,6 +3943,18 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
     int32_t depth = 0;
     for (int32_t i = 0; i < tree->nlayers; i++) {
         const flow_box_t *b = tree->layers[i].box;
+        // Before the cover's part: a group that closes before it is culled
+        // whole, and every part is culled; the open of a group that holds
+        // it comes as ever.
+        if (i < from_part && tree->layers[i].part != PART_CLOSE) {
+            if (tree->layers[i].part != PART_OPEN)
+                continue;
+            int32_t end = close_of(tree, i);
+            if (end < from_part) {
+                i = end;
+                continue;
+            }
+        }
         os64_gui_rect_t view = depth == 0 ? viewport : depth <= F_VIEWS ? views[depth - 1]
                                                                         : kWholePlane;
         if (tree->layers[i].part == PART_OPEN) {
@@ -3692,21 +3972,7 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
                 if (depth < F_VIEWS) {
                     flow_inside_t asked = through && visitor->inside != NULL
                                               ? visitor->inside(ctx, b) : FLOW_INSIDE_VIEW;
-                    os64_gui_rect_t in = view;
-                    if (view.w <= 0 || view.h <= 0 || asked == FLOW_INSIDE_NONE) {
-                        views[depth] = (os64_gui_rect_t){0, 0, 0, 0};
-                    } else if (view.w == kWholePlane.w || asked == FLOW_INSIDE_ALL) {
-                        views[depth] = kWholePlane;
-                    } else {
-                        if (through) {
-                            os64_gui_rect_t back = affine_back(m, view);
-                            if (back.w > 0 && back.h > 0)
-                                back = grown(back, (const int32_t[4]){1, 1, 1, 1});
-                            os64_gui_rect_t upright = moved(view, -(int64_t)up.x, -(int64_t)up.y);
-                            in = back.w > 0 && back.h > 0 ? join(back, upright) : upright;
-                        }
-                        views[depth] = filter_sources(b, in);
-                    }
+                    views[depth] = inside_view(b, view, through, m, up, asked);
                 }
                 depth++;
             }
@@ -3721,6 +3987,10 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
         }
         flow_point_t o = flow_box_doc_offset(b, scroll);
         Visit v = {tree, moved(view, -(int64_t)o.x, -(int64_t)o.y), visit, ctx};
+        if (i == from_part) {
+            v.visit = from_gate;
+            v.ctx = &gate;
+        }
         switch (tree->layers[i].part) {
         case PART_WHOLE:
             if (b->kind != FLOW_BOX_ATOMIC)
@@ -3730,7 +4000,7 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
             break;
         case PART_SELF:
             if (!b->unpainted && meets(b->overflow, v.view))
-                visit(ctx, b);
+                v.visit(v.ctx, b);
             break;
         case PART_BODY: {
             if (b->unpainted || !meets(b->overflow, v.view))
@@ -3755,6 +4025,8 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
         case PART_OPEN: case PART_CLOSE: break;     // heard above
         }
     }
+    if (found != NULL)
+        *found = from != NULL && gate.found;
     os64_free(bounds);
 }
 
