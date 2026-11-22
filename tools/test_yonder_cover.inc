@@ -293,6 +293,33 @@ static void cover_cases(void)
               "cover: the record names a script's change, once a rebuild, with the style as it stands");
         if (said == NULL || strstr(said, "attribute style 2: div#over (opacity:.5)") != said)
             fprintf(stderr, "  whole views by a script's change: %s\n", said != NULL ? said : "(none)");
+        /* Past the first two dozen changes a rebuild still counts each
+         * once: thirty other attributes, then the style written ten times. */
+        s_layout_profile = true;
+        for (int k = 0; k < 30; k++) {
+            char attr[16];
+            os64_snprintf(attr, sizeof(attr), "data-k%d", k);
+            (void)os64_html_set_attr((os64_html_document_t *)page_doc(&g.page), over, attr, "1", 1);
+        }
+        for (int k = 0; k < 10; k++)
+            (void)os64_html_set_attr((os64_html_document_t *)page_doc(&g.page), over, "style",
+                                     k % 2 ? "opacity:.5" : "opacity:.4", 10);
+        counted_at_reset(&s_script_changes);
+        script_changes_note(&g.page);
+        uint64_t counted = s_script_changes.others;
+        for (int k = 0; k < s_script_changes.nrows; k++)
+            counted += s_script_changes.row[k].n;
+        check(counted == 31, "cover: a change past the first two dozen of a rebuild counts once (31 counts)");
+        if (counted != 31)
+            fprintf(stderr, "  counted %lu\n", (unsigned long)counted);
+        /* A page shown starts the tables again (cost_reset). */
+        cover_refusal_note(&(flow_paint_asks_t){.over = FLOW_ASKS_BUDGET}, &(flow_paint_limits_t){0},
+                           g.view.bounds);
+        cost_reset();
+        diag_paint_reading(&g.page, 4);
+        check(yonder_diag_fact_value(g.page.diag, "not covered reading 4") == NULL,
+              "cover: a page shown starts the tables again");
+        s_layout_profile = profiled;
         yonder_diag_free(g.page.diag);
         g.page.diag = was_diag;
     }

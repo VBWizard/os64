@@ -1566,7 +1566,7 @@ typedef struct {
 
 // W0's tables (WHOLE_REPAINTS.md): the paints the guards would not cover
 // (cover_refusal_note) and what scripts' rebuilds changed
-// (script_changes_note), each since the last reading.
+// (script_changes_note), each since the last reading or the page shown.
 static CountedAt s_not_covered, s_script_changes;
 
 static void counted_at_reset(CountedAt *t)
@@ -3975,6 +3975,10 @@ static void cost_reset(void)
     yonder_ticker_counts_restart(g.ticker);
     yonder_paint_cache_counts_restart(g.paint_cache);
     yonder_keeps_counts_restart(g.keeps);
+    // W0's tables too: a page shown starts them again, as a reading does,
+    // so no page's first reading carries the last one's elements.
+    counted_at_reset(&s_not_covered);
+    counted_at_reset(&s_script_changes);
 }
 
 // Pointer hit testing follows published geometry, not every drawing operation.
@@ -11937,21 +11941,23 @@ static void script_changes_note(Page *p)
         counted_at(&s_script_changes, "lost", "", "the log no longer reaches the tree on screen");
         entry = NULL;
     }
+    // As many seen as are read, so each change counts once a rebuild
+    // however many others it does.
+    enum { CHANGES_READ = 256 };
     struct {
         const os64_html_node_t *at;
         const char *attr;
         os64_html_change_kind_t kind;
-    } seen[24];
+    } seen[CHANGES_READ];
     int nseen = 0;
-    for (int read = 0; entry != NULL && read < 256; entry = entry->next, read++) {
+    for (int read = 0; entry != NULL && read < CHANGES_READ; entry = entry->next, read++) {
         int k = 0;
         for (; k < nseen && (seen[k].at != entry->target || seen[k].kind != entry->kind ||
                              !os64_streq(seen[k].attr ? seen[k].attr : "", entry->attr_name ? entry->attr_name : ""));
              k++) {}
         if (k < nseen)
             continue;
-        if (nseen < (int)(sizeof(seen) / sizeof(seen[0])))
-            seen[nseen++] = (__typeof__(seen[0])){entry->target, entry->attr_name, entry->kind};
+        seen[nseen++] = (__typeof__(seen[0])){entry->target, entry->attr_name, entry->kind};
         char what[48], at[96] = "", note[160] = "";
         os64_snprintf(what, sizeof(what), "%s%s",
                       entry->kind == OS64_HTML_CHANGE_CHILDREN ? "children"
