@@ -15,6 +15,30 @@ static const char *const kStep[YONDER_LT_STEPS] = {
     [YONDER_LT_UPKEEP] = "upkeep",
     [YONDER_LT_OBSERVERS] = "observers",
     [YONDER_LT_PAINT] = "paint",
+    [YONDER_LT_CLOSE] = "the turn's close",
+};
+
+// A grid column's name: a step's, or the column past them.
+static const char *column(int s)
+{
+    return s < YONDER_LT_STEPS ? kStep[s] : "no step (before the loop)";
+}
+
+static const char *const kIn[YONDER_LT_INS] = {
+    [YONDER_LT_IN_TASKS] = "tasks",
+    [YONDER_LT_IN_LAYOUTS] = "layouts",
+    [YONDER_LT_IN_DRAWING] = "drawing",
+};
+
+static const char *const kWhy[YONDER_LT_WHYS] = {
+    [YONDER_LT_WHY_OTHER] = "no reason told",
+    [YONDER_LT_WHY_READ] = "a script's read",
+    [YONDER_LT_WHY_REBUILD] = "after a script's changes",
+    [YONDER_LT_WHY_ARRIVAL] = "a page arriving",
+    [YONDER_LT_WHY_SHEET] = "a sheet arriving",
+    [YONDER_LT_WHY_PICTURE] = "sizes arriving",
+    [YONDER_LT_WHY_MOTION] = "the animations",
+    [YONDER_LT_WHY_WINDOW] = "the window",
 };
 
 static const char *const kMark[YONDER_LT_MARKS] = {
@@ -26,6 +50,11 @@ static const char *const kMark[YONDER_LT_MARKS] = {
 const char *yonder_lt_step_name(yonder_lt_step_t step)
 {
     return (unsigned)step < YONDER_LT_STEPS ? kStep[step] : "?";
+}
+
+const char *yonder_lt_why_name(yonder_lt_why_t why)
+{
+    return (unsigned)why < YONDER_LT_WHYS ? kWhy[why] : "?";
 }
 
 static void zero(void *p, size_t n)
@@ -63,15 +92,20 @@ bool yonder_lt_running(const yonder_lt_t *t, int64_t now_us)
     return t->on && since(t, now_us) < LT_END_US;
 }
 
-// The step's time shared between the slices it ran across, by time; what
-// runs past the last slice is not kept.
-static void spread(yonder_lt_t *t, yonder_lt_step_t step, uint64_t from, uint64_t to)
+// The step's time shared between the slices it ran across, by time, and
+// what was inside it in the same shares; what runs past the last slice is
+// not kept.
+static void spread(yonder_lt_t *t, const yonder_lt_long_t *l, uint64_t from, uint64_t to)
 {
+    uint64_t whole = to - from;
     while (from < to && from < LT_END_US) {
         uint64_t i = from / YONDER_LT_SLICE_US;
         uint64_t edge = (i + 1) * YONDER_LT_SLICE_US;
         uint64_t end = to < edge ? to : edge;
-        t->slices[i].step_us[step] += end - from;
+        uint64_t part = end - from;
+        t->slices[i].step_us[l->step] += part;
+        for (int k = 0; k < YONDER_LT_INS; k++)
+            t->slices[i].in_us[l->step][k] += part == whole ? l->in_us[k] : l->in_us[k] * part / whole;
         from = end;
     }
 }
@@ -118,8 +152,8 @@ void yonder_lt_step_end(yonder_lt_t *t, int64_t to_us)
     uint64_t from = t->now.at_us;
     if (to < from)
         to = from;
-    spread(t, (yonder_lt_step_t)t->now.step, from, to);
     t->now.us = to - from;
+    spread(t, &t->now, from, to);
     // A wait is no work: an idle page's waits would crowd the work out of
     // the list, and the slices say how long the loop slept.
     if (t->now.step != YONDER_LT_WAIT && t->now.us >= YONDER_LT_LONG_US && from < LT_END_US)
@@ -138,19 +172,37 @@ void yonder_lt_step_begin(yonder_lt_t *t, yonder_lt_step_t step, int64_t from_us
     t->in_step = true;
 }
 
-void yonder_lt_layout(yonder_lt_t *t, int64_t from_us, uint64_t us)
+void yonder_lt_layout(yonder_lt_t *t, int64_t from_us, uint64_t us, yonder_lt_why_t why,
+                      const yonder_lt_cascade_t *cascade)
 {
     if (!t->on)
         return;
+    if ((unsigned)why >= YONDER_LT_WHYS)
+        why = YONDER_LT_WHY_OTHER;
     uint64_t from = since(t, from_us);
-    if (from < LT_END_US) {
-        yonder_lt_slice_t *s = &t->slices[from / YONDER_LT_SLICE_US];
-        s->layouts++;
-        s->layout_us += us;
+    if (from >= LT_END_US)
+        return;
+    yonder_lt_slice_t *s = &t->slices[from / YONDER_LT_SLICE_US];
+    s->layouts++;
+    s->layout_us += us;
+    s->why_n[why]++;
+    s->why_us[why] += us;
+    uint8_t step = t->in_step ? t->now.step : YONDER_LT_OUTSIDE;
+    t->grid_n[why][step]++;
+    t->grid_us[why][step] += us;
+    if (cascade != NULL) {
+        t->cascades[why]++;
+        t->cascade_us[why] += cascade->us;
+        if (cascade->fresh) {
+            t->fresh[why]++;
+            t->fresh_us[why] += cascade->us;
+        }
     }
     if (t->in_step) {
         t->now.layouts++;
-        t->now.layout_us += us;
+        t->now.why_n[why]++;
+        t->now.why_us[why] += us;
+        t->now.in_us[YONDER_LT_IN_LAYOUTS] += us;
     }
 }
 
@@ -166,16 +218,32 @@ void yonder_lt_task(yonder_lt_t *t, int64_t at_us, const char *what, uint64_t us
         s->forced += layouts;
         s->forced_us += layout_us;
     }
-    if (t->in_step) {
-        t->now.forced += layouts;
-        t->now.forced_us += layout_us;
-    }
-    if (t->in_step && us > t->now.task_us) {
+    if (!t->in_step)
+        return;
+    t->now.in_us[YONDER_LT_IN_TASKS] += us;
+    t->now.forced += layouts;
+    t->now.forced_us += layout_us;
+    if (us > t->now.task_us) {
         copy_name(t->now.task, sizeof(t->now.task), what);
         t->now.task_us = us;
         t->now.task_layouts = layouts;
         t->now.task_layout_us = layout_us;
     }
+}
+
+void yonder_lt_drawing(yonder_lt_t *t, uint64_t us)
+{
+    if (t->on && t->in_step)
+        t->now.in_us[YONDER_LT_IN_DRAWING] += us;
+}
+
+void yonder_lt_bytes(yonder_lt_t *t, int64_t at_us, uint64_t n)
+{
+    if (!t->on)
+        return;
+    uint64_t at = since(t, at_us);
+    if (at < LT_END_US)
+        t->slices[at / YONDER_LT_SLICE_US].bytes += n;
 }
 
 void yonder_lt_mark(yonder_lt_t *t, yonder_lt_mark_t mark, int64_t at_us)
@@ -231,9 +299,15 @@ static void put_s(Out *o, uint64_t us)
     put(o, " s");
 }
 
-static void put_ms(Out *o, uint64_t us)
+// Milliseconds with one decimal, and without the unit: a list says it once.
+static void put_ms_bare(Out *o, uint64_t us)
 {
     put_tenths(o, (us + 50) / 100);
+}
+
+static void put_ms(Out *o, uint64_t us)
+{
+    put_ms_bare(o, us);
     put(o, " ms");
 }
 
@@ -245,12 +319,40 @@ static Out out_of(char *s, size_t cap)
     return o;
 }
 
+// The index of the largest of `v[0..n)` not yet `said` and not zero, or -1.
+static int largest(const uint64_t *v, const uint32_t *nonzero, const bool *said, int n)
+{
+    int best = -1;
+    for (int k = 0; k < n; k++)
+        if (!said[k] && (v[k] != 0 || (nonzero != NULL && nonzero[k] != 0)) && (best < 0 || v[k] > v[best]))
+            best = k;
+    return best;
+}
+
+// Layouts by who asked, the costliest first: "a script's read 5 in 214.4,
+// after a script's changes 18 in 970.0" (milliseconds).
+static void put_whys(Out *o, const uint32_t *n, const uint64_t *us)
+{
+    bool said[YONDER_LT_WHYS] = {false};
+    const char *sep = "";
+    for (int w; (w = largest(us, n, said, YONDER_LT_WHYS)) >= 0;) {
+        said[w] = true;
+        put(o, sep);
+        sep = ", ";
+        put(o, kWhy[w]);
+        put(o, " ");
+        put_u(o, n[w]);
+        put(o, " in ");
+        put_ms_bare(o, us[w]);
+    }
+}
+
 uint32_t yonder_lt_slices_used(const yonder_lt_t *t)
 {
     uint32_t used = 0;
     for (uint32_t i = 0; i < YONDER_LT_SLICES; i++) {
         const yonder_lt_slice_t *s = &t->slices[i];
-        bool any = s->layouts != 0 || s->tasks != 0;
+        bool any = s->layouts != 0 || s->tasks != 0 || s->bytes != 0;
         for (int k = 0; k < YONDER_LT_STEPS && !any; k++)
             any = s->step_us[k] != 0;
         if (any)
@@ -291,8 +393,10 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap)
 }
 
 // A step's share is said when it is at least this much of the slice's
-// time; the rest of the slice is summed.
+// time, and a part inside a step when it is at least a millisecond; the
+// rest of the slice is summed.
 #define LT_SAID_US 10000ull
+#define LT_PART_US 1000ull
 
 void yonder_lt_slice_line(const yonder_lt_t *t, uint32_t i, char *out, size_t cap)
 {
@@ -308,17 +412,11 @@ void yonder_lt_slice_line(const yonder_lt_t *t, uint32_t i, char *out, size_t ca
     put_u(&o, covered != 0 ? (busy * 100 + covered / 2) / covered : 0);
     put(&o, "% of ");
     put_s(&o, covered);
-    // The steps, longest first: an order made by picking, eleven at most.
+    // The steps, longest first, each with what was inside it.
     bool said[YONDER_LT_STEPS] = {false};
     uint64_t rest = 0;
     const char *sep = ": ";
-    for (;;) {
-        int best = -1;
-        for (int k = 0; k < YONDER_LT_STEPS; k++)
-            if (!said[k] && s->step_us[k] != 0 && (best < 0 || s->step_us[k] > s->step_us[best]))
-                best = k;
-        if (best < 0)
-            break;
+    for (int best; (best = largest(s->step_us, NULL, said, YONDER_LT_STEPS)) >= 0;) {
         said[best] = true;
         if (s->step_us[best] < LT_SAID_US) {
             rest += s->step_us[best];
@@ -329,6 +427,18 @@ void yonder_lt_slice_line(const yonder_lt_t *t, uint32_t i, char *out, size_t ca
         put(&o, kStep[best]);
         put(&o, " ");
         put_ms(&o, s->step_us[best]);
+        const char *in = " (";
+        for (int k = 0; k < YONDER_LT_INS; k++) {
+            if (s->in_us[best][k] < LT_PART_US)
+                continue;
+            put(&o, in);
+            in = ", ";
+            put(&o, kIn[k]);
+            put(&o, " ");
+            put_ms_bare(&o, s->in_us[best][k]);
+        }
+        if (in[0] == ',')
+            put(&o, ")");
     }
     if (rest != 0) {
         put(&o, sep);
@@ -339,12 +449,80 @@ void yonder_lt_slice_line(const yonder_lt_t *t, uint32_t i, char *out, size_t ca
     put_u(&o, s->layouts);
     put(&o, " in ");
     put_ms(&o, s->layout_us);
+    if (s->layouts != 0) {
+        put(&o, " (");
+        put_whys(&o, s->why_n, s->why_us);
+        put(&o, ")");
+    }
     put(&o, "; script tasks ");
     put_u(&o, s->tasks);
     put(&o, ", forcing ");
     put_u(&o, s->forced);
     put(&o, " layouts in ");
     put_ms(&o, s->forced_us);
+    if (s->bytes != 0) {
+        put(&o, "; parsed ");
+        put_u(&o, (s->bytes + 512) / 1024);
+        put(&o, " KiB");
+    }
+}
+
+void yonder_lt_layouts_line(const yonder_lt_t *t, char *out, size_t cap)
+{
+    Out o = out_of(out, cap);
+    put(&o, "by who asked, in the step they ran in, the costliest first");
+    // The grid's cells, picked costliest first.
+    bool said[YONDER_LT_WHYS][YONDER_LT_STEPS + 1] = {{false}};
+    const char *sep = ": ";
+    for (;;) {
+        int bw = -1, bs = -1;
+        for (int w = 0; w < YONDER_LT_WHYS; w++)
+            for (int s = 0; s <= YONDER_LT_STEPS; s++)
+                if (!said[w][s] && t->grid_n[w][s] != 0 &&
+                    (bw < 0 || t->grid_us[w][s] > t->grid_us[bw][bs])) {
+                    bw = w;
+                    bs = s;
+                }
+        if (bw < 0)
+            break;
+        said[bw][bs] = true;
+        put(&o, sep);
+        sep = ", ";
+        put(&o, kWhy[bw]);
+        put(&o, " in ");
+        put(&o, column(bs));
+        put(&o, " ");
+        put_u(&o, t->grid_n[bw][bs]);
+        put(&o, " in ");
+        put_ms(&o, t->grid_us[bw][bs]);
+    }
+    if (sep[0] == ':')
+        put(&o, ": none");
+    uint32_t timed = 0;
+    for (int w = 0; w < YONDER_LT_WHYS; w++)
+        timed += t->cascades[w];
+    if (timed == 0) {
+        put(&o, "; cascades not timed (yonder --layout-profile times them)");
+        return;
+    }
+    put(&o, "; cascades the layout profile timed");
+    bool done[YONDER_LT_WHYS] = {false};
+    sep = ": ";
+    for (int w; (w = largest(t->cascade_us, t->cascades, done, YONDER_LT_WHYS)) >= 0;) {
+        done[w] = true;
+        put(&o, sep);
+        sep = ", ";
+        put(&o, kWhy[w]);
+        put(&o, " ");
+        put_u(&o, t->cascades[w]);
+        put(&o, " in ");
+        put_ms(&o, t->cascade_us[w]);
+        put(&o, " (");
+        put_u(&o, t->fresh[w]);
+        put(&o, " built fresh in ");
+        put_ms(&o, t->fresh_us[w]);
+        put(&o, ")");
+    }
 }
 
 void yonder_lt_long_line(const yonder_lt_t *t, uint32_t i, char *out, size_t cap)
@@ -362,11 +540,20 @@ void yonder_lt_long_line(const yonder_lt_t *t, uint32_t i, char *out, size_t cap
     put(&o, "; layouts in it ");
     put_u(&o, l->layouts);
     put(&o, " in ");
-    put_ms(&o, l->layout_us);
+    put_ms(&o, l->in_us[YONDER_LT_IN_LAYOUTS]);
+    if (l->layouts != 0) {
+        put(&o, " (");
+        put_whys(&o, l->why_n, l->why_us);
+        put(&o, ")");
+    }
     put(&o, ", its script tasks forcing ");
     put_u(&o, l->forced);
     put(&o, " in ");
     put_ms(&o, l->forced_us);
+    if (l->in_us[YONDER_LT_IN_DRAWING] >= LT_PART_US) {
+        put(&o, "; drawing ");
+        put_ms(&o, l->in_us[YONDER_LT_IN_DRAWING]);
+    }
     if (l->task[0] != '\0') {
         put(&o, "; its longest task ");
         put(&o, l->task);

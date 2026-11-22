@@ -11,15 +11,20 @@
 //
 // It keeps, from the navigation's start for YONDER_LT_SLICES slices of
 // YONDER_LT_SLICE_US each:
-//   - per slice, the time each STEP of the window loop took (a step that
-//     runs across a slice's edge is shared between the slices by time),
-//     the layouts begun in it, and the layouts its script tasks forced (as
-//     each task says when it ends: the DOM's own count, which needs no
-//     ledger);
+//   - per slice, the time each STEP of the window loop took, and inside
+//     each step the time its script tasks, its layouts and its drawing
+//     took (a step that runs across a slice's edge is shared between the
+//     slices by time, and so is what was inside it);
+//   - per slice, the layouts begun in it by WHO ASKED (yonder_lt_why_t),
+//     what its script tasks forced (as each task says when it ends: the
+//     DOM's own count, which needs no ledger), and the page's bytes parsed;
+//   - for the whole timeline, every layout counted by who asked and the
+//     step it ran in, and, when the layout profile times them, their
+//     cascades: how long, and how many were built fresh;
 //   - the YONDER_LT_LONG_MAX longest steps of YONDER_LT_LONG_US or more,
 //     waits left out (the slices say how long the loop slept), each with
-//     when it began, the layouts made inside it and the longest script task
-//     inside it with what that task forced;
+//     when it began, the layouts made inside it by who asked, its drawing,
+//     and the longest script task inside it with what that task forced;
 //   - the milestones, each the first time it was told.
 // Past the last slice it takes nothing more (yonder_lt_running is false),
 // so a page left open for an hour costs the loop nothing after.
@@ -51,9 +56,32 @@ typedef enum {
     YONDER_LT_MOTION,       // the animations' and the videos' ticks
     YONDER_LT_UPKEEP,       // storage, cookies, census, child frames, downloads, pictures, title
     YONDER_LT_OBSERVERS,    // resize and intersection observers, the work before a paint
-    YONDER_LT_PAINT,        // the paint and the rest of the turn after it
+    YONDER_LT_PAINT,        // the paint, and a second one the animations' cost rule asks for
+    YONDER_LT_CLOSE,        // the turn's close: its bells, the exit, the frame closed, pictures scheduled
     YONDER_LT_STEPS
 } yonder_lt_step_t;
+// The grid's column for a layout made outside any step.
+#define YONDER_LT_OUTSIDE YONDER_LT_STEPS
+
+// What was inside a step: its script tasks, its layouts and its drawing.
+// The parts may overlap: a layout a task forced is inside both the task and
+// the layouts, and one the drawing asked for inside both the drawing and
+// the layouts.
+typedef enum { YONDER_LT_IN_TASKS, YONDER_LT_IN_LAYOUTS, YONDER_LT_IN_DRAWING, YONDER_LT_INS } yonder_lt_in_t;
+
+// WHO ASKED for a layout: the outermost reason told (yonder.c's lt_why),
+// so a rebuild a script's read asked for is the read's.
+typedef enum {
+    YONDER_LT_WHY_OTHER,    // no reason told: a site the tagging does not reach
+    YONDER_LT_WHY_READ,     // a script's read: a box, a hit, text rects, a computed style, a scroll
+    YONDER_LT_WHY_REBUILD,  // yonder bringing the shown page up to date after a script's changes
+    YONDER_LT_WHY_ARRIVAL,  // a page arriving or being shown
+    YONDER_LT_WHY_SHEET,    // a style sheet arriving
+    YONDER_LT_WHY_PICTURE,  // pictures' or faces' sizes arriving
+    YONDER_LT_WHY_MOTION,   // the animations' frames
+    YONDER_LT_WHY_WINDOW,   // the window: its size, its zoom, a setting
+    YONDER_LT_WHYS
+} yonder_lt_why_t;
 
 typedef enum {
     YONDER_LT_MARK_ARRIVED,         // the page arrived whole: its stream ended, it is the shown one
@@ -65,8 +93,10 @@ typedef enum {
 typedef struct {
     uint64_t at_us, us;             // from the navigation's start; how long
     uint8_t step;                   // yonder_lt_step_t
-    uint32_t layouts;               // made inside it
-    uint64_t layout_us;
+    uint64_t in_us[YONDER_LT_INS];  // what was inside it
+    uint32_t layouts;               // made inside it, and by who asked
+    uint32_t why_n[YONDER_LT_WHYS];
+    uint64_t why_us[YONDER_LT_WHYS];
     uint32_t forced;                // what the tasks inside it forced
     uint64_t forced_us;
     char task[YONDER_LT_TASK_MAX];  // the longest task inside it, "" for none
@@ -77,11 +107,15 @@ typedef struct {
 
 typedef struct {
     uint64_t step_us[YONDER_LT_STEPS];
-    uint32_t layouts;               // begun in the slice
+    uint64_t in_us[YONDER_LT_STEPS][YONDER_LT_INS];
+    uint32_t layouts;               // begun in the slice, and by who asked
     uint64_t layout_us;
+    uint32_t why_n[YONDER_LT_WHYS];
+    uint64_t why_us[YONDER_LT_WHYS];
     uint32_t tasks;                 // script tasks that ended in it
     uint32_t forced;                // what those tasks forced
     uint64_t forced_us;
+    uint64_t bytes;                 // the arriving page's bytes parsed in it
 } yonder_lt_slice_t;
 
 typedef struct {
@@ -89,6 +123,15 @@ typedef struct {
     int64_t began_us;
     yonder_lt_slice_t slices[YONDER_LT_SLICES];
     int64_t marks[YONDER_LT_MARKS];             // -1 until told
+    // Every layout of the timeline by who asked and the step it ran in, a
+    // layout outside any step (before the loop's first turn) in the column
+    // past the steps, YONDER_LT_OUTSIDE; and, of those the layout profile
+    // timed, their cascades by who asked: how many, how long, and of them
+    // those built fresh.
+    uint32_t grid_n[YONDER_LT_WHYS][YONDER_LT_STEPS + 1];
+    uint64_t grid_us[YONDER_LT_WHYS][YONDER_LT_STEPS + 1];
+    uint32_t cascades[YONDER_LT_WHYS], fresh[YONDER_LT_WHYS];
+    uint64_t cascade_us[YONDER_LT_WHYS], fresh_us[YONDER_LT_WHYS];
     // The step under way (yonder_lt_step_begin), what was made inside it.
     bool in_step;
     yonder_lt_long_t now;
@@ -111,15 +154,28 @@ bool yonder_lt_running(const yonder_lt_t *t, int64_t now_us);
 // at `from_us` first.
 void yonder_lt_step_begin(yonder_lt_t *t, yonder_lt_step_t step, int64_t from_us);
 void yonder_lt_step_end(yonder_lt_t *t, int64_t to_us);
-// A layout begun at `from_us` that took `us`, whoever asked for it.
-// Counted in the slice it began in, and in the step under way.
-void yonder_lt_layout(yonder_lt_t *t, int64_t from_us, uint64_t us);
+
+// A layout's cascade as the layout profile timed it: how long, and whether
+// it was built fresh rather than updated or kept.
+typedef struct {
+    uint64_t us;
+    bool fresh;
+} yonder_lt_cascade_t;
+// A layout begun at `from_us` that took `us`, asked for by `why`, its
+// cascade `cascade` (NULL when the profile did not time it). Counted in the
+// slice it began in, in the grid, and in the step under way.
+void yonder_lt_layout(yonder_lt_t *t, int64_t from_us, uint64_t us, yonder_lt_why_t why,
+                      const yonder_lt_cascade_t *cascade);
 // A script task ended at `at_us` after `us`, forcing `layouts` in
 // `layout_us`, named `what` (cut to fit). Its forced layouts count in the
-// slice it ended in and in the step under way, and the longest task of a
-// step is the one its long-step line names.
+// slice it ended in and in the step under way, its time inside the step,
+// and the longest task of a step is the one its long-step line names.
 void yonder_lt_task(yonder_lt_t *t, int64_t at_us, const char *what, uint64_t us, uint32_t layouts,
                     uint64_t layout_us);
+// A drawing of the window that took `us`, inside the step under way.
+void yonder_lt_drawing(yonder_lt_t *t, uint64_t us);
+// `n` bytes of the arriving page parsed at `at_us`.
+void yonder_lt_bytes(yonder_lt_t *t, int64_t at_us, uint64_t n);
 // A milestone at `at_us`: the first one told stands.
 void yonder_lt_mark(yonder_lt_t *t, yonder_lt_mark_t mark, int64_t at_us);
 
@@ -129,12 +185,17 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap);
 // The slices from the first through the last that holds anything.
 uint32_t yonder_lt_slices_used(const yonder_lt_t *t);
 // Slice `i`: its busy share (the time not waiting, of the time its steps
-// took), its steps of 10 ms or more, longest first, with the rest summed,
-// its layouts and its script tasks.
+// took), its steps of 10 ms or more, longest first, each with what was
+// inside it, the rest summed; its layouts by who asked; its script tasks;
+// its bytes parsed.
 void yonder_lt_slice_line(const yonder_lt_t *t, uint32_t i, char *out, size_t cap);
+// The grid: every cell that holds a layout, the costliest first, then the
+// cascades by who asked when the profile timed any.
+void yonder_lt_layouts_line(const yonder_lt_t *t, char *out, size_t cap);
 // Long step `i` (0 is the longest), i < t->nlongs.
 void yonder_lt_long_line(const yonder_lt_t *t, uint32_t i, char *out, size_t cap);
 
 const char *yonder_lt_step_name(yonder_lt_step_t step);
+const char *yonder_lt_why_name(yonder_lt_why_t why);
 
 #endif

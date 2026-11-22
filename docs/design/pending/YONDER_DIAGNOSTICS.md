@@ -441,25 +441,44 @@ the video's first picture. So while yonder.conf names a `diagnostics`
 directory, the latest navigation keeps a timeline for its first three
 minutes, from the moment its record begins:
 
-    timeline: from the navigation's start, in slices of 5 s, the window thread's steps; arrived 2.4 s, first paint 2.4 s, the video's first picture -; 3 steps of 200 ms or more
-    timeline 0-5 s: busy 48% of 5.0 s: waiting 2573.5 ms, the stream 2317.4 ms, paint 45.4 ms, the rest 14.9 ms; layouts 41 in 875.5 ms; script tasks 3, forcing 40 layouts in 1034.0 ms
-    timeline longest 2: at 5.1 s, scripts 1831.2 ms; layouts in it 61 in 1395.2 ms, its script tasks forcing 60 in 1746.9 ms; its longest task timer file:///home/lt.html#timer-1, 1807.6 ms, forcing 60 layouts in 1746.9 ms
+    timeline: from the navigation's start, in slices of 5 s, the window thread's steps; arrived 2.6 s, first paint 2.7 s, the video's first picture -; 3 steps of 200 ms or more
+    timeline layouts: by who asked, in the step they ran in, the costliest first: a script's read in scripts 60 in 1582.2 ms, after a script's changes in scripts 41 in 1106.3 ms, a script's read in the stream 40 in 948.4 ms, a page arriving in the stream 1 in 49.3 ms; cascades the layout profile timed: a script's read 100 in 64.0 ms (2 built fresh in 31.4 ms), a page arriving 1 in 12.8 ms (1 built fresh in 12.8 ms), after a script's changes 41 in 11.3 ms (0 built fresh in 0.0 ms)
+    timeline 0-5 s: busy 75% of 4.9 s: the stream 2539.8 ms (tasks 2276.8, layouts 997.7), waiting 1226.2 ms, scripts 791.5 ms (tasks 34.8, layouts 608.3), paint 340.4 ms (drawing 339.2), input 28.0 ms, the turn's close 11.7 ms, the rest 11.7 ms; layouts 64 in 1622.1 ms (a script's read 40 in 948.4, after a script's changes 23 in 624.3, a page arriving 1 in 49.3); script tasks 26, forcing 40 layouts in 1308.8 ms; parsed 1 KiB
+    timeline longest 2: at 5.5 s, scripts 2142.4 ms; layouts in it 61 in 1603.2 ms (a script's read 60 in 1582.2, after a script's changes 1 in 21.0), its script tasks forcing 60 in 2058.8 ms; its longest task timer file:///home/lt.html#timer-1, 2115.0 ms, forcing 60 layouts in 2058.8 ms
 
 - **The steps are the window loop's own** (`yonder_lt_step_t`): waiting,
   input, the window's layouts, the stream (a slice of the arriving page's
   parse, or one of its scripts), the page waiting for its sheets, scripts
   (the shown page's tasks), bodies and media, motion, upkeep, observers,
-  paint. Each is timed by the clock as the loop enters the next, so the
-  steps cover the loop with no gap, and a step running across a slice's
-  edge is shared between the slices by time. A slice's `busy` is its time
-  not waiting.
-- **Layouts** count in the slice they began in, whoever asked for them.
-  **What scripts forced** is each task's own count when it ends (the DOM's
+  paint, the turn's close. Each is timed by the clock as the loop enters
+  the next, so the steps cover the loop with no gap, and a step running
+  across a slice's edge is shared between the slices by time. A slice's
+  `busy` is its time not waiting.
+- **What was inside a step**, in parentheses after it: its script tasks,
+  its layouts and its drawing (the whole of a paint: the backdrops' marks,
+  the kept drawings, the render and the publish), shared between slices
+  as the step is. The parts may overlap: a layout a task forced is inside
+  the task too. What none of them holds is the step's own work: the
+  stream's parse, the dispatcher's own, and so on.
+- **Who asked for each layout** (`yonder_lt_why_t`): a script's read (a
+  box, a hit, text rects, a computed style, a scroll), yonder bringing the
+  shown page up to date after a script's changes, a page arriving, a sheet
+  arriving, sizes arriving, the animations, the window. The outermost
+  asker stands, so a rebuild a read asks for is the read's; a layout no
+  site tagged says `no reason told`, so what the tagging misses shows.
+  Each slice counts its layouts by asker, and `timeline layouts` counts
+  every layout by asker and the step it ran in (`no step (before the
+  loop)` for one made before the loop's first turn). With `yonder
+  --layout-profile`, the same line gives each asker's cascades: their
+  time, and how many were built fresh.
+- **What scripts forced** is each task's own count when it ends (the DOM's
   geometry statistics, the status line's "Script forced"), so it needs no
   `ledger`; its time includes answering the read, so it can exceed the
   layouts' own.
+- **Bytes parsed**: the arriving page's bytes its parser took in the slice.
 - **The longest steps**, sixteen at most, of 200 ms or more, each with when
-  it began, the layouts inside it and the longest task inside it. Waits
+  it began, the layouts inside it by who asked, its drawing, and the
+  longest task inside it. Waits
   are left out: an idle page's waits would crowd the work off the list.
   Those past the list are counted with their time on the summary line.
 - **The milestones**: `arrived` (the stream ended and the page is the
@@ -473,8 +492,10 @@ minutes, from the moment its record begins:
   each `d`, its leaving. A record written after a later navigation began
   keeps the lines its last write gave it.
 - **What it costs**: a reading of the clock as the loop enters each step,
-  and two around each layout and each task, only while it runs;
-  past its last slice it stops, and without `diagnostics` it never starts.
+  two around each layout, task and paint, and one for each piece of the
+  page its parser takes, only while it runs; past its last slice it
+  stops. Without `diagnostics` it never starts: each hook is then one test
+  of a flag, and a tagged asker one store putting back what it found.
 
 ### Built differently from the brief, and why
 
