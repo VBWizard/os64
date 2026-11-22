@@ -5162,11 +5162,34 @@ static bool same_own(const flow_box_t *a, const flow_box_t *b)
            a->fixed == b->fixed && a->scroller == b->scroller && a->unpainted == b->unpainted;
 }
 
+// Whether two text runs place the same glyphs from the same fonts at the
+// same places: a face swapped behind one family name for another of the
+// same metrics (an @font-face rule changed to a file already loaded)
+// leaves the style, the bytes and the boxes alike and draws other glyphs.
+// One run is alike itself; a run that cannot be read is not alike.
+static bool runs_alike(const os64_text_run_t *a, const os64_text_run_t *b)
+{
+    if (a == b)
+        return true;
+    os64_text_run_view_t x, y;
+    if (a == NULL || b == NULL || os64_text_run_view(a, &x) != OS64_FONT_OK ||
+        os64_text_run_view(b, &y) != OS64_FONT_OK || x.glyph_count != y.glyph_count)
+        return false;
+    for (size_t i = 0; i < x.glyph_count; i++) {
+        const os64_text_placement_t *p = &x.glyphs[i], *q = &y.glyphs[i];
+        if (p->font_identity != q->font_identity || p->glyph_index != q->glyph_index || p->x != q->x ||
+            p->y != q->y)
+            return false;
+    }
+    return true;
+}
+
 // Whether two boxes placed alike draw alike: their whole styles (every
 // field, as the trees hold them: the old one's as its last tick left them,
 // the new one's sampled now), what a fragment holds of its decorations and
-// whether it ends in an ellipsis, and a text's or marker's bytes, which is
-// where a script's text, generated content and a renumbered counter show.
+// whether it ends in an ellipsis, and a text's or marker's bytes and the
+// glyphs its run places, which is where a script's text, generated content,
+// a renumbered counter and a face changed behind its name show.
 static bool same_drawn(const flow_box_t *a, const flow_box_t *b)
 {
     if ((a->style == NULL) != (b->style == NULL) || (a->style != NULL && !f_style_equal(a->style, b->style)))
@@ -5176,7 +5199,8 @@ static bool same_drawn(const flow_box_t *a, const flow_box_t *b)
         a->line_clamp_end != b->line_clamp_end)
         return false;
     if (a->kind == FLOW_BOX_TEXT || a->kind == FLOW_BOX_MARKER)
-        return a->length == 0 || (a->text != NULL && b->text != NULL && os64_memcmp(a->text, b->text, a->length) == 0);
+        return (a->length == 0 || (a->text != NULL && b->text != NULL && os64_memcmp(a->text, b->text, a->length) == 0)) &&
+               runs_alike(a->run, b->run);
     return true;
 }
 

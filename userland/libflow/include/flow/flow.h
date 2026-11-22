@@ -1751,8 +1751,8 @@ bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_poin
 //   the page's extent and each scroller's range (LAYERS, SCROLLED, MOVED).
 // - Walked together, each pair of boxes placed alike in itself is
 //   compared by what it draws from the tree: its whole style, its
-//   decorations, and a text's or marker's bytes. One that differs marks
-//   its element. What a replaced box draws from the document (a picture,
+//   decorations, and a text's or marker's bytes and the glyphs its run
+//   places, font by font. One that differs marks its element. What a replaced box draws from the document (a picture,
 //   an svg's shapes) is the caller's `touched` to name.
 // - A pair whose children differ (another list, one of them empty, or a
 //   child placed otherwise) is marked by its own reach in each tree and not

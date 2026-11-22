@@ -24,6 +24,8 @@ static const char kDamagePage[] =
     "<div id=back></div><div id=box>box</div><div id=empty></div><input id=field>"
     "<svg id=defs width=12 height=12><defs><rect id=dr width=6 height=6 fill=red></rect></defs></svg>"
     "<svg width=20 height=20><use href=#dr></use><use href=#hr x=10></use></svg>"
+    "<svg width=12 height=12><rect id=plainr width=4 height=4 fill=green></rect></svg>"
+    "<div style=height:40px></div><svg width=20 height=20><use href=#plainr></use></svg>"
     "<svg style=display:none><rect id=hr width=6 height=6 fill=blue></rect></svg>"
     "<picture id=pic2><source id=src2 srcset=a.png><img id=img2 alt=pic width=20 height=20></picture>"
     "<div id=mover></div>"
@@ -116,6 +118,23 @@ static void damage_expect(const char *what, DamageSaid s, const char *expect)
     if (!ok)
         printf("  %s: said %s, whole %d, compared %lu, differed %lu\n", what, s.said, (int)s.whole,
                (unsigned long)s.compared, (unsigned long)s.differed);
+}
+
+/* The step marked element `id`'s box across its width, and agrees with
+ * the whole view: on a page this small an insertion may rebuild the
+ * cascade whole, which marks every svg (change_svgs) and can reach across
+ * half the view, so the verdict may be either. */
+static void damage_marks(const char *what, DamageSaid said, const char *id)
+{
+    os64_gui_rect_t box = flow_box_doc_rect(flow_box_for(g.page.tree, probe_id(id)), scroll_now()), met;
+    bool marked = false;
+    for (int32_t i = 0; i < s_change.n && !marked; i++)
+        marked = os64_rect_intersect(s_change.part[i], box, &met) && met.w == box.w;
+    bool ok = marked && said.differed == 0 &&
+              (os64_streq(said.said, "in parts") || os64_streq(said.said, "parts past half the view"));
+    check(ok, what);
+    if (!ok)
+        printf("  %s: said %s, marked %d, differed %lu\n", what, said.said, (int)marked, (unsigned long)said.differed);
 }
 
 static void damage_style(const char *id, const char *style)
@@ -273,6 +292,9 @@ static void damage_cases(void)
     damage_expect("damage: an empty box given text is compared, and painted in parts", damage_step(), "in parts");
     damage_attr("gdefs", "class", "cool");
     damage_expect("damage: a gradient restyled by a class marks the svgs that may draw it", damage_step(), "in parts");
+    damage_attr("plainr", "width", "12");
+    damage_expect("damage: a shape another svg draws by its id marks the svgs that hold a use", damage_step(),
+                  "in parts");
     damage_attr("dr", "width", "9");
     damage_expect("damage: a shape another svg may draw by reference is the whole view", damage_step(),
                   kRefused[FLOW_PARTS_NO_BOX]);
@@ -338,20 +360,8 @@ static void damage_cases(void)
     damage_style("b1", "width:80px");
     damage_expect("damage: a flex item that widens moves its sibling inside the bar, painted in parts",
                   damage_step(), "in parts");
-    /* On a page this small an insertion may rebuild the cascade whole,
-     * which marks every svg (change_svgs) and reaches across the view:
-     * what this case holds is that the list's move was marked. */
     damage_insert("list", "div", "two", NULL);
-    {
-        DamageSaid said = damage_step();
-        os64_gui_rect_t list = flow_box_doc_rect(flow_box_for(g.page.tree, probe_id("list")), scroll_now()), met;
-        bool marked = false;
-        for (int32_t i = 0; i < s_change.n && !marked; i++)
-            marked = os64_rect_intersect(s_change.part[i], list, &met) && met.w == list.w;
-        check(marked && said.differed == 0 &&
-                  (os64_streq(said.said, "in parts") || os64_streq(said.said, "parts past half the view")),
-              "damage: a child added inside a box of a set height marks the box");
-    }
+    damage_marks("damage: a child added inside a box of a set height marks the box", damage_step(), "list");
     damage_attr("gen", "data-x", "two");
     damage_expect("damage: a data attribute a generated text reads is painted in parts", damage_step(), "in parts");
     damage_style("wrap", "opacity:.8");
@@ -360,8 +370,7 @@ static void damage_cases(void)
     damage_attr("dot", "fill", "blue");
     damage_expect("damage: an svg shape's attribute marks the svg that draws it", damage_step(), "in parts");
     damage_insert("ol", "li", "zero", "li1");
-    damage_expect("damage: an item put first renumbers the list's markers, painted in parts", damage_step(),
-                  "in parts");
+    damage_marks("damage: an item put first renumbers the list's markers, marking the list", damage_step(), "ol");
     damage_style("back", "background:#fee");
     damage_expect("damage: parts that reach across more than half the view are the whole view", damage_step(),
                   "parts past half the view");

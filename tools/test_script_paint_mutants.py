@@ -39,8 +39,8 @@ CASES = 'YONDER_DAMAGE_ONLY=1 bash tools/test_yonder_scripts_host.sh'
 mutants = [
     # libflow's comparison: what a pair draws.
     ('a-texts-bytes-not-compared', FLOW,
-     '        return a->length == 0 || (a->text != NULL && b->text != NULL && os64_memcmp(a->text, b->text, a->length) == 0);',
-     '        return true;'),
+     '        return (a->length == 0 || (a->text != NULL && b->text != NULL && os64_memcmp(a->text, b->text, a->length) == 0)) &&',
+     '        return true &&'),
     ('a-style-not-compared', FLOW,
      '    if ((a->style == NULL) != (b->style == NULL) || (a->style != NULL && !f_style_equal(a->style, b->style)))\n        return false;',
      '    if ((a->style == NULL) != (b->style == NULL))\n        return false;'),
@@ -113,6 +113,8 @@ mutants = [
      '        else if (0 && !change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED))'),
     ('a-restyled-definition-marks-only-its-own-svg', YONDER,
      '        all = definition && svg_restyled(c, e, since, fresh);', '        all = definition && 0 && svg_restyled(c, e, since, fresh);'),
+    ('an-svg-holding-a-use-not-marked', YONDER, '        if (!svg_touched)\n            break;',
+     '        if (!svg_touched || 1)\n            break;'),
     # The paint walk: a box is culled by all it paints, its ink too.
     ('a-shadow-past-its-box-culled', FLOW, '    return meets(grown(b->overflow, b->ink), view);',
      '    return meets(b->overflow, view);'),
@@ -142,6 +144,11 @@ mutants = [
 #   today, and yonder's change_svgs names every svg whose shapes the
 #   cascade restyled, which is what the svg adapter paints from; the two
 #   rules are libflow's own guard for the next replaced box that does.
+# - a text run's glyphs compared (runs_alike): what makes them differ while
+#   the style, the bytes and the boxes stay alike is a face swapped behind
+#   one family name for another loaded face of the same metrics, which the
+#   scripts host's fonts cannot make; Codex's host probe on #703 is the
+#   evidence that the case is real.
 # - an svg's ancestors asked whether they were restyled (change_svgs): the
 #   cascade restyles everything under an element whose matching changed,
 #   so an svg under one is found by its own shapes too; the ancestors are

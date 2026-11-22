@@ -12564,14 +12564,20 @@ static bool svg_restyled(const garb_cascade_t *c, const os64_html_node_t *n, uin
 // cascade brought up to date, or when it restyled a definition another svg
 // may draw by reference (a defs, symbol, paint server, clip, mask, marker
 // or filter, or anything in an svg that draws nothing itself, a sprite
-// sheet's): only an svg draws one, and which does is not known here.
-// False past `cap`, for the whole view.
+// sheet's): only an svg draws one, and which does is not known here. And
+// whenever anything in an svg changed, by the cascade or in the change log
+// (`svg_touched`: `out` already names an svg element), so is every one
+// that holds a `<use>`, which may draw any svg element of the document by
+// its id. False past `cap`, for the whole view.
 static bool change_svgs(const Page *p, const flow_tree_t *now, const garb_cascade_t *c, const os64_html_node_t **out,
                         int32_t *n, int32_t cap)
 {
     bool fresh = c == NULL || c != s_change.cascade || garb_cascade_generation(c) != s_change.cascade_generation;
     uint64_t since = s_change.cascade_updates;
-    if (!fresh && garb_cascade_updates(c) == since)
+    bool svg_touched = false;
+    for (int32_t i = 0; i < *n && !svg_touched; i++)
+        svg_touched = out[i] != NULL && out[i]->ns == OS64_HTML_NS_SVG;
+    if (!fresh && garb_cascade_updates(c) == since && !svg_touched)
         return true;
     // Every svg element of the document, for a definition restyled.
     const os64_html_node_t *top = page_doc(p)->document;
@@ -12583,27 +12589,40 @@ static bool change_svgs(const Page *p, const flow_tree_t *now, const garb_cascad
         bool definition = svg_definition(e) || root == NULL || flow_box_for(now, root) == NULL;
         all = definition && svg_restyled(c, e, since, fresh);
     }
-    for (const flow_box_t *b = flow_root(now); b != NULL;) {
-        const os64_html_node_t *root = b->pseudo == GARB_PSEUDO_NONE ? b->node : NULL;
-        if (root != NULL && flow_svg_root(root) && flow_box_for(now, root) == b) {
-            bool restyled = all;
-            for (const os64_html_node_t *a = root; !restyled && a != NULL; a = a->parent)
-                restyled = a->kind == OS64_HTML_ELEMENT && svg_restyled(c, a, since, fresh);
-            for (const os64_html_node_t *d = root->first_child; !restyled && d != NULL; d = next_within(d, root))
-                restyled = d->kind == OS64_HTML_ELEMENT && svg_restyled(c, d, since, fresh);
-            if (restyled) {
-                if (*n == cap)
-                    return false;
-                out[(*n)++] = root;
+    // Twice over the svgs drawn: those restyled, then, when anything in an
+    // svg changed, those that hold a `<use>`.
+    for (int pass = 0; pass < 2; pass++) {
+        for (const flow_box_t *b = flow_root(now); b != NULL;) {
+            const os64_html_node_t *root = b->pseudo == GARB_PSEUDO_NONE ? b->node : NULL;
+            if (root != NULL && flow_svg_root(root) && flow_box_for(now, root) == b) {
+                bool named = false;
+                if (pass == 0) {
+                    named = all;
+                    for (const os64_html_node_t *a = root; !named && a != NULL; a = a->parent)
+                        named = a->kind == OS64_HTML_ELEMENT && svg_restyled(c, a, since, fresh);
+                    for (const os64_html_node_t *d = root->first_child; !named && d != NULL; d = next_within(d, root))
+                        named = d->kind == OS64_HTML_ELEMENT && svg_restyled(c, d, since, fresh);
+                    svg_touched = svg_touched || named;
+                } else {
+                    for (const os64_html_node_t *d = root->first_child; !named && d != NULL; d = next_within(d, root))
+                        named = d->kind == OS64_HTML_ELEMENT && d->name != NULL && os64_streq(d->name, "use");
+                }
+                if (named) {
+                    if (*n == cap)
+                        return false;
+                    out[(*n)++] = root;
+                }
             }
+            if (b->first != NULL) {
+                b = b->first;
+                continue;
+            }
+            while (b != NULL && b->next == NULL)
+                b = b->parent;
+            b = b != NULL ? b->next : NULL;
         }
-        if (b->first != NULL) {
-            b = b->first;
-            continue;
-        }
-        while (b != NULL && b->next == NULL)
-            b = b->parent;
-        b = b != NULL ? b->next : NULL;
+        if (!svg_touched)
+            break;
     }
     return true;
 }
