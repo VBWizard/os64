@@ -1044,8 +1044,10 @@ int d_svg_geometry_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_geometry_install(os64_dom_t *dom, JSContext *ctx);
 /* An HTML element's geometry snapshot through the provider, the work
  * charged and the budget checked either side; a foreign element's is all
- * zeros without asking. False with an exception pending. */
-bool d_geometry_read(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, os64_dom_geometry_t *out);
+ * zeros without asking. `need` says which members the caller will read
+ * (os64_dom_geometry_need_t). False with an exception pending. */
+bool d_geometry_read(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element,
+                     os64_dom_geometry_need_t need, os64_dom_geometry_t *out);
 /* The element scroll row (view.c). */
 int d_element_scroll_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_node_install(os64_dom_t *dom, JSContext *ctx);

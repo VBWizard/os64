@@ -812,7 +812,7 @@ static int range_rects(os64_dom_t *dom, JSContext *ctx, const DRange *range, Rec
         } else if (n->kind == OS64_HTML_ELEMENT && contained(&b, n) &&
                    (n->parent == NULL || !contained(&b, n->parent))) {
             os64_dom_geometry_t box;
-            if (!d_geometry_read(dom, ctx, n, &box)) return -1;
+            if (!d_geometry_read(dom, ctx, n, OS64_DOM_NEED_ALL, &box)) return -1;
             if (box.boxed) {
                 if (rects_room(r, 1) < 0) {
                     d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");

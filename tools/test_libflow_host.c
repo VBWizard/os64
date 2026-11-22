@@ -1423,7 +1423,7 @@ static void layout_sweep(void)
 int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "--restyle") == 0) {
-        text_setup(); restyle_in_place_cases(); text_teardown();
+        text_setup(); restyle_in_place_cases(); pending_cases(); text_teardown();
         printf("libflow restyle: %d checks, %d failed%s\n", checks, failures, live ? " (AND LEAKED)" : "");
         return failures != 0 || live != 0;
     }
@@ -1434,7 +1434,7 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && strcmp(argv[1], "--graft") == 0) {
         text_setup(); graft_cases(); graft_stress(); graft_failures(); graft_retain_failure();
-        restyle_in_place_cases(); text_teardown();
+        restyle_in_place_cases(); pending_cases(); text_teardown();
         printf("libflow graft: %d checks, %d failed%s\n", checks, failures, live ? " (AND LEAKED)" : "");
         return failures != 0 || live != 0;
     }
@@ -1625,6 +1625,7 @@ int main(int argc, char **argv)
     graft_failures();
     graft_retain_failure();
     restyle_in_place_cases();
+    pending_cases();
     restyle_mutations();
     computed_cases();
     computed_round1_cases();

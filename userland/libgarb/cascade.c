@@ -179,6 +179,11 @@ typedef struct {
     uint64_t visited;
     // A digest of the rules that matched the element itself (match_digest).
     uint64_t matched;
+    // Its `style` attribute's declarations as last read for its winners
+    // (inline_decls), none for no attribute: what an inline style write is
+    // compared with before the update for it (garb_cascade_inline_changes).
+    const Decl *inl;
+    int32_t ninl;
 } Slot;
 
 typedef struct {
@@ -276,6 +281,13 @@ struct garb_cascade {
     // and `refusal` why the latest update answered false.
     garb_anchor_t *anchors;
     int32_t nanchors, nbare;
+    // The style readers of every rule (garb_cascade_style_may_read), up to
+    // GARB_STYLE_READERS; `style_bare`: one narrows to no element, there
+    // were more than that, or a declaration reads attr(style), so any
+    // inline write may change what matches.
+    garb_style_reader_t *style_readers;
+    int32_t nstyle_readers;
+    bool style_bare;
     uint32_t has_width;
     uint64_t *has_words, *has_scratch;
     garb_bare_work_t bare_work;
@@ -993,11 +1005,42 @@ static void add_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t 
 
 static bool supports(garb_reading_t how, garb_parsed_t *owner, const garb_value_t *v, int32_t n);
 
+// Whether a value reads the `style` attribute's text: attr(style) anywhere
+// in it, a function's arguments included.
+static bool values_read_style(const garb_value_t *v, int32_t n)
+{
+    for (int32_t i = 0; i < n; i++) {
+        if (v[i].kind == GARB_FUNCTION && v[i].len == 4 && (v[i].text[0] | 0x20) == 'a' &&
+            (v[i].text[1] | 0x20) == 't' && (v[i].text[2] | 0x20) == 't' && (v[i].text[3] | 0x20) == 'r') {
+            const garb_value_t *a = v[i].children;
+            int32_t k = 0;
+            while (k < v[i].nchildren && a[k].kind == GARB_WHITESPACE)
+                k++;
+            if (k < v[i].nchildren && a[k].kind == GARB_IDENT && a[k].len == 5) {
+                bool style = true;
+                for (int32_t j = 0; j < 5; j++)
+                    style = style && (a[k].text[j] | 0x20) == "style"[j];
+                if (style)
+                    return true;
+            }
+        }
+        if (values_read_style(v[i].children, v[i].nchildren))
+            return true;
+    }
+    return false;
+}
+
 // Reads one declaration for a rule: kept raw when custom or pending, else
 // its longhands, else dropped (invalid, or a property not read here).
 static bool read_decl(garb_cascade_t *c, garb_parsed_t *owner, const garb_decl_t *d, Decl *out)
 {
     os64_memset(out, 0, sizeof(*out));
+    // `content: attr(style)` reads the attribute an inline style write
+    // changes (garb_cascade_reads_style_attribute).
+    if (values_read_style(d->value, d->nvalue)) {
+        c->dependencies.style_attribute = true;
+        c->style_bare = true;
+    }
     out->decl = *d;
     out->important = d->important;
     if (garb_decl_is_custom(d)) {
@@ -2595,6 +2638,10 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
         slot->matched = match_digest(*m, nm);
     Decl *inl = NULL;
     int32_t ninl = own ? inline_decls(c, el, &inl) : 0;
+    if (own) {
+        slot->inl = inl;
+        slot->ninl = ninl;
+    }
     Decl *attrs = NULL;
     int32_t nattrs = own ? svg_attributes(c, el, &attrs) : 0;
     int32_t total = ninl + nattrs;
@@ -2992,6 +3039,19 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
             c->incomplete = true;
         add_rules(c, into, sheet->items, sheet->nitems, &order, 0, s);
     }
+    int32_t readers = 0;
+    for (int32_t i = 0; i < c->nrules; ++i) readers += garb_selectors_style_readers(c->rules[i].sel, NULL, 0);
+    if (readers > GARB_STYLE_READERS)
+        c->style_bare = true;
+    else if (readers > 0 && (c->style_readers = alloc(c, (size_t)readers * sizeof(*c->style_readers))) == NULL)
+        c->style_bare = true;
+    for (int32_t i = 0; i < c->nrules && c->style_readers != NULL && !c->style_bare; ++i) {
+        int32_t held = garb_selectors_style_readers(c->rules[i].sel, c->style_readers + c->nstyle_readers,
+                                                    readers - c->nstyle_readers);
+        for (int32_t r = 0; r < held; r++)
+            c->style_bare |= c->style_readers[c->nstyle_readers + r].bare;
+        c->nstyle_readers += held;
+    }
     int32_t anchors = 0;
     for (int32_t i = 0; i < c->nrules; ++i) anchors += garb_selectors_anchors(c->rules[i].sel, NULL, 0);
     c->anchors = anchors ? alloc(c, (size_t)anchors * sizeof(*c->anchors)) : NULL;
@@ -3004,6 +3064,7 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
         c->dependencies.filtered |= d.filtered;
         c->dependencies.ancestors |= d.ancestors;
         c->dependencies.ancestors_preceding |= d.ancestors_preceding;
+        c->dependencies.style_attribute |= d.style_attribute;
         if (d.has_filtered) c->untrackable = GARB_UPDATE_COUNTED_HAS;
         if (c->anchors == NULL) continue;
         int32_t held = garb_selectors_anchors(c->rules[i].sel, c->anchors + c->nanchors, anchors - c->nanchors);
@@ -3343,6 +3404,147 @@ bool garb_style_updated_since(const garb_cascade_t *c, const os64_html_node_t *n
 {
     const Slot *s = c ? slot_for(c, node, false) : NULL;
     return !s || s->changed > update;
+}
+
+// Whether two declarations' values are the same tokens: kind, text, number
+// as written, unit, block and arguments.
+static bool values_same(const garb_value_t *a, int32_t na, const garb_value_t *b, int32_t nb)
+{
+    if (na != nb)
+        return false;
+    for (int32_t i = 0; i < na; i++) {
+        const garb_value_t *x = &a[i], *y = &b[i];
+        if (x->kind != y->kind || x->len != y->len || x->unit_len != y->unit_len || x->open != y->open ||
+            (x->len && os64_memcmp(x->text, y->text, x->len) != 0) ||
+            (x->unit_len && os64_memcmp(x->unit, y->unit, x->unit_len) != 0) ||
+            !values_same(x->children, x->nchildren, y->children, y->nchildren))
+            return false;
+    }
+    return true;
+}
+static bool decls_same(const garb_decl_t *a, const garb_decl_t *b)
+{
+    return a->len == b->len && os64_memcmp(a->name, b->name, a->len) == 0 && a->important == b->important &&
+           values_same(a->value, a->nvalue, b->value, b->nvalue);
+}
+// A declaration's value as one lowercased keyword, when it is one
+// identifier short enough for `out`; empty otherwise.
+static void inline_keyword(const garb_decl_t *d, char out[16])
+{
+    out[0] = '\0';
+    if (d == NULL || d->nvalue != 1 || d->value[0].kind != GARB_IDENT || d->value[0].len >= 16)
+        return;
+    for (uint32_t i = 0; i < d->value[0].len; i++) {
+        char ch = d->value[0].text[i];
+        out[i] = ch >= 'A' && ch <= 'Z' ? (char)(ch + 32) : ch;
+    }
+    out[d->value[0].len] = '\0';
+}
+// One declaration's winning turn over the longhands it sets: an
+// `!important` one takes a longhand from the rest, a later one from an
+// earlier of the same weight.
+static void inline_wins(const garb_decl_t **win, garb_prop_t *props, int32_t n, const garb_decl_t *d)
+{
+    for (int32_t k = 0; k < n; k++)
+        if ((uint32_t)props[k] < GARB_NPROPS && (win[props[k]] == NULL || d->important || !win[props[k]]->important))
+            win[props[k]] = d;
+}
+int32_t garb_cascade_inline_changes(const garb_cascade_t *c, const os64_html_node_t *el,
+                                    garb_inline_change_t *out, int32_t cap)
+{
+    const Slot *s = c && el ? slot_for(c, el, false) : NULL;
+    if (s == NULL || !s->placed || c->incomplete)
+        return -1;
+    const garb_decl_t *was[GARB_NPROPS] = {0}, *now[GARB_NPROPS] = {0};
+    garb_prop_t props[GARB_SETS_MAX];
+    int32_t old_custom = 0;
+    for (int32_t i = 0; i < s->ninl; i++) {
+        const Decl *d = &s->inl[i];
+        if (d->custom) { old_custom++; continue; }
+        int32_t n = 0;
+        if (d->pending)
+            n = prop_longhands(d->decl.name, d->decl.len, c->env.modern_off, props);
+        else
+            for (; n < d->nsets && n < GARB_SETS_MAX; n++) props[n] = d->sets[n].prop;
+        inline_wins(was, props, n, &d->decl);
+    }
+    const os64_html_attr_t *a = os64_html_attr(el, "style");
+    garb_parsed_t p = {0};
+    if (a != NULL && a->value != NULL && a->value[0] != '\0' &&
+        (garb_parse_block_limited(a->value, os64_strlen(a->value), c->limits.attribute_bytes, &p) != GARB_OK ||
+         p.incomplete)) {
+        garb_free(&p);
+        return -1;
+    }
+    // The custom properties, in order, as they were: any other answer is
+    // one var() could carry anywhere.
+    int32_t new_custom = 0, matched_custom = 0;
+    bool customs_same = true;
+    for (int32_t i = 0; i < p.nitems; i++) {
+        if (p.items[i].kind != GARB_ITEM_DECL)
+            continue;
+        const garb_decl_t *d = &p.items[i].decl;
+        if (garb_decl_is_custom(d)) {
+            const Decl *o = NULL;
+            for (int32_t j = 0, seen = 0; j < s->ninl && o == NULL; j++)
+                if (s->inl[j].custom && seen++ == new_custom) o = &s->inl[j];
+            customs_same = customs_same && o != NULL && decls_same(&o->decl, d);
+            matched_custom += o != NULL;
+            new_custom++;
+            continue;
+        }
+        int32_t n = 0;
+        if (garb_decl_has_var(d)) {
+            n = prop_longhands(d->name, d->len, c->env.modern_off, props);
+        } else {
+            garb_set_t sets[GARB_SETS_MAX];
+            int32_t got = garb_read_declaration(&p, d, reading(c), sets);
+            for (; n < got && n < GARB_SETS_MAX; n++) props[n] = sets[n].prop;
+        }
+        inline_wins(now, props, n, d);
+    }
+    int32_t listed = 0;
+    if (!customs_same || new_custom != old_custom || matched_custom != old_custom)
+        listed = -1;
+    for (uint32_t prop = 0; listed >= 0 && prop < GARB_NPROPS; prop++) {
+        if (was[prop] == NULL && now[prop] == NULL)
+            continue;
+        if (was[prop] != NULL && now[prop] != NULL && decls_same(was[prop], now[prop]))
+            continue;
+        if (listed == cap) {
+            listed = -1;
+            break;
+        }
+        const garb_decl_t *d = now[prop];
+        out[listed] = (garb_inline_change_t){
+            .prop = (garb_prop_t)prop,
+            .declared = d != NULL,
+            .var = d != NULL && garb_decl_has_var(d),
+        };
+        inline_keyword(d, out[listed].keyword);
+        listed++;
+    }
+    garb_free(&p);
+    return listed;
+}
+bool garb_cascade_style_may_read(const garb_cascade_t *c, const os64_html_node_t *element)
+{
+    if (c == NULL || c->style_bare)
+        return c == NULL || c->dependencies.style_attribute;
+    for (int32_t i = 0; i < c->nstyle_readers; i++)
+        if (garb_style_reader_may_match(&c->style_readers[i], element))
+            return true;
+    return false;
+}
+
+bool garb_cascade_style_readers_bare(const garb_cascade_t *c)
+{
+    return c == NULL || (c->dependencies.style_attribute && c->style_bare);
+}
+
+bool garb_cascade_reads_style_attribute(const garb_cascade_t *c)
+{
+    return c == NULL || c->dependencies.style_attribute;
 }
 
 bool garb_cascade_tracks_changes(const garb_cascade_t *c)

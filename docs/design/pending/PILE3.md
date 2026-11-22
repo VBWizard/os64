@@ -2273,6 +2273,18 @@ arrive is not one — Chrome renders nothing until a page's head sheets
 are in, and yonder shows a page before them when they are slow (G4), so
 a transition there would animate a page into its own style.
 
+**A geometry read answered from the shown tree is a style change event
+too** (BRIEF_LAYOUT_NEEDS.md N2; libflow's `pending.inc`). Other browsers
+recompute style at a `clientWidth` read, and that style is the
+before-change style a transition starts from: `el.style.opacity = 0;
+el.offsetWidth; el.style.opacity = 1` fades from 0, and FLIP (an
+inverting transform written, a read, then a transition and the final
+transform) depends on the same. N2 answers such a read with no restyle,
+and the change log merges the two writes, so the value at the read is
+never a computed style. When transitions are built, a read N2 answers must
+leave a checkpoint of the judged elements' inline styles (or restyle them),
+so that the before-change style is the one at the read.
+
 What starts transitions in yonder today is almost nothing. `:hover`
 never matches (libgarb's `P_USER_ACTION`); scripts are off unless the
 person turns them on; a resize or a zoom remains. The census's

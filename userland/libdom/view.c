@@ -953,7 +953,7 @@ static JSValue element_scroll_member(JSContext *ctx, JSValueConst self, int argc
     magic &= ~D_SET;
     if (magic == E_WIDTH || magic == E_HEIGHT) {
         os64_dom_geometry_t g;
-        if (!d_geometry_read(dom, ctx, element, &g)) return JS_EXCEPTION;
+        if (!d_geometry_read(dom, ctx, element, OS64_DOM_NEED_REACH, &g)) return JS_EXCEPTION;
         return JS_NewInt32(ctx, magic == E_WIDTH ? g.scroll_width : g.scroll_height);
     }
     // The setters and the methods read their arguments before anything

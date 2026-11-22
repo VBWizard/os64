@@ -577,3 +577,199 @@ static void restyle_in_place_cases(void)
            restyle_check_says(old, whole, "an outline not held", flow_root(old)->node), NULL);
     flow_free(whole); flow_free(old); sheeted_close(&p);
 }
+
+// WHAT IS PENDING (flow_pending): a tree laid out as a face lays out a page
+// that animates (on a timeline, ticking), the document written after it
+// with the cascade not brought up to date, and the verdict asked.
+static flow_pending_verdict_t pending_after(const char *html, const char *id, const char *attr, const char *value,
+                                            bool *transforms)
+{
+    Sheeted p;sheeted_open(&p,html,800,600);
+    flow_timeline_t *tl=flow_timeline_new(p.doc);
+    p.env.ticks=true; p.env.timeline=tl; p.env.now_ms=0;
+    flow_tree_t *t=graft_layout(&p,NULL,NULL,NULL);
+    flow_timeline_commit(&tl,t);
+    os64_html_set_attr(p.doc,graft_node(&p,id),attr,value,strlen(value));
+    flow_pending_t after=flow_pending(t,p.doc,p.cascade);
+    if(transforms) *transforms=after.transforms;
+    flow_pending_verdict_t v=t ? after.verdict : (flow_pending_verdict_t)-1;
+    flow_free(t);flow_timeline_free(tl);sheeted_close(&p);
+    return v;
+}
+static void pending_cases(void)
+{
+    const char *page="<!doctype html><style>.m{animation:k 10s}@keyframes k{to{opacity:.5}}</style>"
+        "<div id=box style='position:relative'><p id=t style='transform:translateX(5px);color:red'>moving</p>"
+        "<p id=n style='color:red'>still</p><span id=i style='color:red'>inline</span><p id=m class=m>animated</p></div>";
+    bool tf=false;
+    expect("pending: a colour written is PAINT",
+           pending_after(page,"n","style","color:blue",&tf)==FLOW_PENDING_PAINT && !tf,NULL);
+    expect("pending: a transform moved on its side of none is PAINT, and says transforms",
+           pending_after(page,"t","style","transform:translateX(9px);color:red",&tf)==FLOW_PENDING_PAINT && tf,NULL);
+    expect("pending: a transform from none is RESTYLE (a containing block appears)",
+           pending_after(page,"n","style","color:red;transform:scale(2)",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: a transform to none is RESTYLE",
+           pending_after(page,"t","style","transform:none;color:red",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: a filter from none is RESTYLE (a containing block appears), on a plain inline too",
+           pending_after(page,"n","style","color:red;filter:blur(1px)",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"i","style","color:red;filter:blur(1px)",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: a CSS-wide keyword on the transform or filter family is RESTYLE (its side is not known)",
+           pending_after(page,"t","style","transform:initial;color:red",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"t","style","transform:unset;color:red",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"t","style","transform:inherit;color:red",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: a CSS-wide keyword on a plain longhand is RESTYLE too (its value comes from elsewhere)",
+           pending_after(page,"n","style","color:inherit",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"n","style","color:initial",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"n","style","color:unset",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(page,"n","style","color:revert",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: a transform's origin is PAINT, and says transforms (it moves the reach)",
+           pending_after(page,"t","style","transform:translateX(5px);color:red;transform-origin:0 0",&tf)==FLOW_PENDING_PAINT && tf,NULL);
+    expect("pending: a transform on a plain inline is PAINT (no containing block can come or go)",
+           pending_after(page,"i","style","color:red;transform:scale(2)",NULL)==FLOW_PENDING_PAINT,NULL);
+    expect("pending: a padding is RESTYLE",
+           pending_after(page,"n","style","color:red;padding:4px",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: a declaration removed is RESTYLE (the sheets' value is not known)",
+           pending_after(page,"t","style","color:red",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: var() is RESTYLE",
+           pending_after(page,"n","style","color:var(--x)",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: visibility to hidden is PAINT, to collapse RESTYLE",
+           pending_after(page,"n","style","color:red;visibility:hidden",NULL)==FLOW_PENDING_PAINT &&
+           pending_after(page,"n","style","color:red;visibility:collapse",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: a class written is RESTYLE",
+           pending_after(page,"n","class","on",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: an animated element's style is RESTYLE",
+           pending_after(page,"m","style","color:blue",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    char reads[2048];
+    snprintf(reads,sizeof(reads),"%s<style>[style*=blue]{width:10px}</style>",page);
+    expect("pending: a selector reading the style attribute makes every write RESTYLE",
+           pending_after(reads,"n","style","color:blue",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    /* A transform libflow cannot work out keeps its old value, so a value
+     * other than none may compute to none: a write is PAINT only where no
+     * out-of-flow box could have the element as its containing block. */
+    const char *held="<!doctype html><div id=c style='transform:translateX(10px)'>"
+        "<div style='position:absolute;left:0;width:50%'>abs</div></div>"
+        "<div id=e style='transform:translateX(10px)'><p>flow</p></div>"
+        "<div id=r style='position:relative;transform:translateX(10px)'><div style='position:absolute'>a</div></div>"
+        "<div id=f style='position:relative;transform:translateX(10px)'><div style='position:fixed'>f</div></div>"
+        "<div id=g style='filter:blur(1px)'><div style='position:absolute'>g</div></div>";
+    expect("pending: a transform write over an absolute box it holds is RESTYLE (it may compute to none)",
+           pending_after(held,"c","style","transform:translateX(min(50%,100px))",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: and over in-flow boxes alone is PAINT",
+           pending_after(held,"e","style","transform:translateX(min(50%,100px))",NULL)==FLOW_PENDING_PAINT,NULL);
+    expect("pending: a positioned box's absolute ones keep it as their block",
+           pending_after(held,"r","style","position:relative;transform:translateX(20px)",NULL)==FLOW_PENDING_PAINT,NULL);
+    expect("pending: its fixed ones do not",
+           pending_after(held,"f","style","position:relative;transform:translateX(20px)",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending: a filter write over an absolute box it holds is RESTYLE too",
+           pending_after(held,"g","style","filter:blur(2px)",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    /* N2a: a style reader narrows to the elements it may match, by its
+     * exact tests (a type, an id, a class, another attribute). */
+    const char *mute="<!doctype html><style>.area:has(>.mute[style*='display: none']){width:9px}"
+        ".cap[style*=red]{margin:3px}</style><div class=area><p id=mu class=mute>m</p></div>"
+        "<p id=cap class=cap>c</p><p id=n style='color:red'>n</p><p id=h class='hov'>h</p>";
+    expect("pending N2a: a write on an element a style reader may match is RESTYLE (inside :has())",
+           pending_after(mute,"mu","style","display:none",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending N2a: and plain",pending_after(mute,"cap","style","color:blue",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending N2a: a write on an element no style reader may match is judged as ever",
+           pending_after(mute,"n","style","color:blue",NULL)==FLOW_PENDING_PAINT,NULL);
+    {
+        Sheeted p;sheeted_open(&p,mute,800,600);
+        flow_tree_t *t=graft_layout(&p,NULL,NULL,NULL);
+        os64_html_set_attr(p.doc,graft_node(&p,"mu"),"style","display:none",12);
+        flow_pending_t said=flow_pending(t,p.doc,p.cascade);
+        expect("pending N2a: says so, and where",
+               said.style_read && !strcmp(said.style_read_at,"p#mu.mute") &&
+               !strcmp(said.why,"restyle: a selector may read its style"),NULL);
+        flow_free(t);sheeted_close(&p);
+    }
+    /* A pseudo-class never narrows: the element is not hovered, and the
+     * reader is still taken to match it. */
+    const char *hover="<!doctype html><style>.hov:hover[style*=red]{width:9px}</style>"
+        "<p id=h class=hov>h</p><p id=n style='color:red'>n</p>";
+    expect("pending N2a: a pseudo-class does not narrow",
+           pending_after(hover,"h","style","color:blue",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(hover,"n","style","color:blue",NULL)==FLOW_PENDING_PAINT,NULL);
+    /* The cascade's own matchers: a quirks-mode document folds a class's
+     * case, and so does the reader. */
+    const char *quirks="<style>.CAP[style*=red]{margin:3px}</style><p id=cap class=cap>c</p><p id=n style='color:red'>n</p>";
+    expect("pending N2a: matched as the cascade matches (quirks folds a class)",
+           pending_after(quirks,"cap","style","color:blue",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(quirks,"n","style","color:blue",NULL)==FLOW_PENDING_PAINT,NULL);
+    /* Bare readers narrow to no element: every write is RESTYLE. */
+    const char *bare_not="<!doctype html><style>.a:not([style*=x]){width:9px}</style><p id=n style='color:red'>n</p>";
+    const char *bare_host="<!doctype html><style>:host([style*=x]){width:9px}</style><p id=n style='color:red'>n</p>";
+    const char *bare_slot="<!doctype html><style>::slotted(.s[style*=x]){width:9px}</style><p id=n style='color:red'>n</p>";
+    expect("pending N2a: a reader inside :not() alone is bare",
+           pending_after(bare_not,"n","style","color:blue",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    expect("pending N2a: :host() and ::slotted() readers are bare",
+           pending_after(bare_host,"n","style","color:blue",NULL)==FLOW_PENDING_RESTYLE &&
+           pending_after(bare_slot,"n","style","color:blue",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    {
+        /* Past GARB_STYLE_READERS readers, bare. */
+        static char many[GARB_STYLE_READERS*40+200];
+        size_t at=(size_t)snprintf(many,sizeof(many),"<!doctype html><style>");
+        for(int k=0;k<=GARB_STYLE_READERS;k++)
+            at+=(size_t)snprintf(many+at,sizeof(many)-at,".r%d[style*=x]{width:9px}",k);
+        snprintf(many+at,sizeof(many)-at,"</style><p id=n style='color:red'>n</p>");
+        expect("pending N2a: past the readers' cap, bare",
+               pending_after(many,"n","style","color:blue",NULL)==FLOW_PENDING_RESTYLE,NULL);
+    }
+    // Made current again by a restyle kept in the tree: nothing pending,
+    // and a write after it judged from there.
+    Sheeted p;sheeted_open(&p,page,800,600);
+    flow_tree_t *t=graft_layout(&p,NULL,NULL,NULL);
+    expect("pending: nothing after a layout",t && flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_NONE,NULL);
+    os64_html_node_t *n=graft_node(&p,"n");
+    os64_html_set_attr(p.doc,n,"class","on",2);
+    expect("pending: RESTYLE before the restyle",flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE,NULL);
+    graft_update(&p);
+    flow_restyle_t kept=restyle_keep(&p,t);
+    expect("pending: a restyle kept makes the tree current",
+           kept.kind!=FLOW_RESTYLE_DECLINED && flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_NONE,NULL);
+    os64_html_set_attr(p.doc,n,"style","color:green",11);
+    // In the same batch, another element's style written back to what the
+    // cascade parsed (the text differs, the declarations do not): that one
+    // is NONE, and the verdict stays PAINT.
+    const char *again="transform:translateX(5px);color:red;";
+    os64_html_set_attr(p.doc,graft_node(&p,"t"),"style",again,strlen(again));
+    expect("pending: and a write after it is judged from there, a NONE beside it leaving it PAINT",
+           flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_PAINT,NULL);
+    {
+        flow_pending_t said=flow_pending(t,p.doc,p.cascade);
+        expect("pending: PAINT says it was a style write, and where",
+               !strcmp(said.why,"paint: a style write") && said.at[0]!='\0',NULL);
+    }
+    /* The log lost: everything is owed, never nothing pending, and it stays
+     * so until the tree is made current again, whatever is written after. */
+    graft_update(&p);
+    kept=restyle_keep(&p,t);
+    expect("pending: current again before the loss",
+           kept.kind!=FLOW_RESTYLE_DECLINED && flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_NONE,NULL);
+    os64_html_changes_limit(p.doc,0);
+    os64_html_set_attr(p.doc,n,"style","color:blue",10);
+    os64_html_changes_limit(p.doc,65536);
+    {
+        flow_pending_t lost=flow_pending(t,p.doc,p.cascade);
+        expect("pending: a lost log is RESTYLE, and says so",
+               lost.verdict==FLOW_PENDING_RESTYLE && lost.lost && !strcmp(lost.why,"restyle: the log was lost"),NULL);
+        os64_html_set_attr(p.doc,n,"style","color:green",11);
+        lost=flow_pending(t,p.doc,p.cascade);
+        expect("pending: and stays RESTYLE whatever is written after",
+               lost.verdict==FLOW_PENDING_RESTYLE && !lost.lost,NULL);
+    }
+    os64_html_set_text(p.doc,n->first_child,"x",1);
+    expect("pending: a text change is RESTYLE",flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE,NULL);
+    os64_html_set_attr(p.doc,n,"style","color:blue",10);
+    expect("pending: and a paint write after it leaves it RESTYLE",
+           flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE,NULL);
+    flow_free(t);sheeted_close(&p);
+    // The cascade brought up to date without the tree: its parse is no
+    // longer the tree's, so nothing can be judged against it.
+    sheeted_open(&p,page,800,600);
+    t=graft_layout(&p,NULL,NULL,NULL);
+    os64_html_set_attr(p.doc,graft_node(&p,"n"),"style","color:blue",10);
+    graft_update(&p);
+    expect("pending: a cascade at another version than the tree's is RESTYLE",
+           flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE,NULL);
+    flow_free(t);sheeted_close(&p);
+}

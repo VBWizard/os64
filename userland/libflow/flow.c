@@ -28,6 +28,7 @@
 
 #include "internal.h"
 #include "garb/cascade.h"
+#include "os64/fmt.h"
 
 // The public kinds of the block-level boxes are pass 2's, in pass 2's order.
 _Static_assert(FLOW_BOX_BLOCK == (int)FB_BLOCK && FLOW_BOX_REPLACED == (int)FB_REPLACED &&
@@ -125,8 +126,22 @@ struct flow_tree {
     // scrollers: none could be kept, and no transform is restyled in place.
     int64_t reach_base_w, reach_base_h;
     flow_point_t *reach_base_ranges;
+    // What is pending since the tree was made current (pending.inc,
+    // flow_pending): a change-log reader of its own opened at that version,
+    // the version, the verdict so far, and whether a longhand of the
+    // transform family is among those pending. NULL reader: nothing can be
+    // said, and the verdict is RESTYLE.
+    os64_html_reader_t *pending_reader;
+    uint64_t pending_version;
+    uint8_t pending_verdict;
+    bool pending_transforms;
+    // Why the verdict is what it is, and the element whose change made it
+    // so (flow_pending_t's `why` and `at`), kept with it.
+    char pending_why[48], pending_at[80];
 };
 #define F_RESTYLE_ROOM ((size_t)1 << 20)
+// The tree made current at the document's version now (pending.inc).
+static void pending_open(flow_tree_t *tree);
 
 // The serials handed out so far: trees are laid out on more than one
 // thread.
@@ -1870,6 +1885,7 @@ void flow_free(flow_tree_t *tree)
     f_arena_free(&tree->tick_lists[1]);
     f_arena_free(&tree->restyle);
     os64_free(tree->reach_base_ranges);
+    os64_html_reader_free(tree->pending_reader);
     os64_free(tree->images);
     os64_free(tree->controls);
     os64_free(tree->positioned);
@@ -2395,6 +2411,8 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
     if (inputs) {
         began = profile_clock(&timing);
         reuse_snapshot_finish(tree);
+        if (!tree->incomplete)
+            pending_open(tree);
         if (profile) profile_elapsed(&timing, began, &profile->layout_us);
     }
     if (profile) {
@@ -5113,3 +5131,5 @@ bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_poin
 }
 
 #include "restyle.inc"
+
+#include "pending.inc"

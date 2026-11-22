@@ -412,6 +412,10 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
     if (!whole) {
         tree->restyle_spent = true;
         out = (flow_restyle_t){FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_ROOM, (uint64_t)k.n, NULL, "an anonymous box past the map's room"};
+    } else {
+        // Kept: the tree is current at the document's version, the one the
+        // cascade was brought to before this restyle.
+        pending_open(tree);
     }
     os64_free(values);
     os64_free(k.pairs);

@@ -36,10 +36,12 @@ static bool budget(os64_dom_t *dom, JSContext *ctx)
     return false;
 }
 
-bool d_geometry_read(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, os64_dom_geometry_t *out)
+bool d_geometry_read(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element,
+                     os64_dom_geometry_need_t need, os64_dom_geometry_t *out)
 {
     dom = d_owner(dom, element);
     os64_memset(out, 0, sizeof(*out));
+    out->need = need;
     // Foreign elements share the Element prototype but their geometry is
     // outside the HTML provider contract: the empty snapshot.
     if (element->ns != OS64_HTML_NS_HTML) return budget(dom, ctx);
@@ -72,7 +74,10 @@ static JSValue geometry(JSContext *ctx, JSValueConst self, int argc,
     if (node->kind != OS64_HTML_ELEMENT)
         return JS_ThrowTypeError(ctx, "Geometry requires an element");
     os64_dom_geometry_t snapshot = {0};
-    if (!d_geometry_read(dom, ctx, node, &snapshot)) return JS_EXCEPTION;
+    os64_dom_geometry_need_t need = magic == G_RECT ? OS64_DOM_NEED_ALL
+                                  : magic == G_SCROLL_LEFT || magic == G_SCROLL_TOP ? OS64_DOM_NEED_REACH
+                                  : OS64_DOM_NEED_BOXES;
+    if (!d_geometry_read(dom, ctx, node, need, &snapshot)) return JS_EXCEPTION;
     switch (magic) {
     case G_OFFSET_LEFT: return JS_NewInt32(ctx, snapshot.offset_left);
     case G_OFFSET_TOP: return JS_NewInt32(ctx, snapshot.offset_top);
