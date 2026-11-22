@@ -8870,6 +8870,18 @@ static void diag_keep_cases(void) {
               !has(big,"\nlate ordinary:") && !has(big,"\nscript 512:"),
               "keep: readings have a room of their own, which a full ordinary room leaves them");
         free(big); yonder_diag_free(d);
+        /* So do the measuring switches' summaries, which a page writes as
+         * it runs, after its scripts have filled the ordinary room. */
+        d=yonder_diag_new("http://fixture.test/summaries",1,0);
+        for(unsigned i=0;i<YONDER_DIAG_FACTS_MAX+5;i++) { char k[16]; snprintf(k,sizeof(k),"script %u",i); yonder_diag_fact(d,k,"ran"); }
+        for(unsigned i=1;i<=YONDER_DIAG_SUMMARY_FACTS;i++) { char k[32]; snprintf(k,sizeof(k),"layout line %u",i); yonder_diag_summary_fact(d,k,"x"); }
+        yonder_diag_summary_fact(d,"layout line past","x");
+        yonder_diag_reading_fact(d,"paint reading 1","at y 0");
+        big=malloc(1<<17); yonder_diag_render(d,big,1<<17);
+        check(has(big,"\nlayout line 1: x\n") && has(big,"\nlayout line 32: x\n") && !has(big,"\nlayout line past:") &&
+              has(big,"\npaint reading 1: at y 0\n"),
+              "keep: the measuring switches' summaries have a room of their own, apart from the readings'");
+        free(big); yonder_diag_free(d);
     }
 
     /* THE NAME IS CLAIMED: another yonder's record at the next number, a

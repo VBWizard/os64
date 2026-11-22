@@ -232,6 +232,13 @@ void yonder_diag_reading_fact(yonder_diag_t *d, const char *key, const char *val
 // room for every line it writes (yonder.c checks the sum at compile time).
 #define YONDER_DIAG_TIMELINE_FACTS 80
 void yonder_diag_timeline_fact(yonder_diag_t *d, const char *key, const char *value);
+// The same line, for a measuring switch's summary (`--layout-profile`'s
+// layout lines, `--geometry-check`'s verdicts): written as the page runs,
+// so on a page whose scripts and faces fill the ordinary room first they
+// would be lost, and they are what such a run is for. A room of their own,
+// YONDER_DIAG_SUMMARY_FACTS.
+#define YONDER_DIAG_SUMMARY_FACTS 32
+void yonder_diag_summary_fact(yonder_diag_t *d, const char *key, const char *value);
 // The plain lines whose keys begin `prefix` let go, the rest kept in
 // order — and so are those of them that met no room, so a set of lines
 // rewritten whole, when there may be fewer now, is counted once.

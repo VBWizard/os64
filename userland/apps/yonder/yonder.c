@@ -2033,7 +2033,7 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
         }
         used += (size_t)w;
     }
-    yonder_diag_fact(diag, "layout kept, declined at", line);
+    yonder_diag_summary_fact(diag, "layout kept, declined at", line);
 }
 
 // THE LOAD'S TIMELINE (load_timeline.h): the latest navigation's first
@@ -4126,7 +4126,7 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
         char said[96];
         os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)s_geometry_compared,
                       (unsigned long)s_geometry_differed);
-        yonder_diag_fact(p->diag, "geometry check", said);
+        yonder_diag_summary_fact(p->diag, "geometry check", said);
         flow_free(whole);
     }
     return g.page.tree;
@@ -14161,7 +14161,7 @@ static bool read_checked(const os64_html_document_t *doc, const os64_html_node_t
     char said[96];
     os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)s_reads_compared,
                   (unsigned long)s_reads_differed);
-    yonder_diag_fact(g.page.diag, "read check", said);
+    yonder_diag_summary_fact(g.page.diag, "read check", said);
     return ready;
 }
 

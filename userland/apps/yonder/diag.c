@@ -14,9 +14,10 @@ typedef struct {
 } Line;
 // The rooms a fact takes its place in, each with its own quota: the
 // ordinary facts', the head's (yonder_diag_head_fact), the readings'
-// (yonder_diag_reading_fact) and the load timeline's
-// (yonder_diag_timeline_fact).
-typedef enum { ROOM_FACTS, ROOM_HEAD, ROOM_READINGS, ROOM_TIMELINE, ROOMS } FactRoom;
+// (yonder_diag_reading_fact), the load timeline's
+// (yonder_diag_timeline_fact) and the measuring switches' summaries
+// (yonder_diag_summary_fact).
+typedef enum { ROOM_FACTS, ROOM_HEAD, ROOM_READINGS, ROOM_TIMELINE, ROOM_SUMMARY, ROOMS } FactRoom;
 
 // The lines that met no room are counted as distinct lines, as the file
 // says them: each is kept by its key (`gone`) so a line asked for again —
@@ -560,7 +561,8 @@ void yonder_diag_failed(yonder_diag_t *d, const char *what, const char *message)
 static void fact_set(yonder_diag_t *d, const char *key, const char *value, FactRoom where)
 {
     static const uint32_t kQuota[ROOMS] = {YONDER_DIAG_FACTS_MAX, YONDER_DIAG_HEAD_FACTS,
-                                           YONDER_DIAG_READING_FACTS, YONDER_DIAG_TIMELINE_FACTS};
+                                           YONDER_DIAG_READING_FACTS, YONDER_DIAG_TIMELINE_FACTS,
+                                           YONDER_DIAG_SUMMARY_FACTS};
     if (d == NULL)
         return;
     Table *t = &d->facts;
@@ -608,6 +610,11 @@ void yonder_diag_reading_fact(yonder_diag_t *d, const char *key, const char *val
 void yonder_diag_timeline_fact(yonder_diag_t *d, const char *key, const char *value)
 {
     fact_set(d, key, value, ROOM_TIMELINE);
+}
+
+void yonder_diag_summary_fact(yonder_diag_t *d, const char *key, const char *value)
+{
+    fact_set(d, key, value, ROOM_SUMMARY);
 }
 
 void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
@@ -1436,7 +1443,7 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         (unsigned long)s->elements, (unsigned long)s->boxes, (unsigned long)s->measures, (unsigned long)s->reused,
         (unsigned long)s->model_calls, (unsigned long)s->layouts, (unsigned long)s->refusals,
         (unsigned long)s->clock_errors, (unsigned long)s->styles_reused, (unsigned long)s->cascade_updates);
-    yonder_diag_fact(d, key, line);
+    yonder_diag_summary_fact(d, key, line);
     char graft_key[64];
     os64_snprintf(graft_key, sizeof(graft_key), "%s graft", key);
     int g = os64_snprintf(line, sizeof(line), "intrinsic hits %lu, marker measures %lu, peak new metadata %lu bytes; refused [",
@@ -1446,12 +1453,12 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     for (int r = 0; r < YONDER_LAYOUT_REUSE_REASONS && g > 0 && (size_t)g < sizeof(line); r++)
         g += os64_snprintf(line + g, sizeof(line) - (size_t)g, "%s%lu", r ? " " : "]: ",
                            (unsigned long)s->reuse_refused[r]);
-    yonder_diag_fact(d, graft_key, line);
+    yonder_diag_summary_fact(d, graft_key, line);
     // `<key> needed`: what each layout needed (yonder_needed_t).
     char needed_key[64];
     os64_snprintf(needed_key, sizeof(needed_key), "%s needed", key);
     yonder_diag_needed_text(&s->needed, line, sizeof(line));
-    yonder_diag_fact(d, needed_key, line);
+    yonder_diag_summary_fact(d, needed_key, line);
     // `<key> kept`: the restyles kept in the shown tree, and the declined
     // by reason, the reasons that never happened left out.
     if (s->restyle_reason_names != NULL) {
@@ -1470,7 +1477,7 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
             sep = ", ";
         }
         if (sep[0] == ':' && at + 5 < sizeof(line)) os64_memcpy(line + at, " none", 6);
-        yonder_diag_fact(d, kept_key, line);
+        yonder_diag_summary_fact(d, kept_key, line);
     }
     // `<key> reads`: the geometry reads the shown tree answered with no
     // work, those that met only paint-only writes and made the page current
@@ -1490,7 +1497,7 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         if (at < sizeof(line))
             os64_snprintf(line + at, sizeof(line) - at, "; steps owed while covered %lu",
                           (unsigned long)s->owed_covered);
-        yonder_diag_fact(d, reads_key, line);
+        yonder_diag_summary_fact(d, reads_key, line);
     }
     // `<key> cascade`: how many cascades were updated and how many built
     // fresh, by reason, the reasons that never happened left out; then the
@@ -1518,7 +1525,7 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
                       "marked %lu", (unsigned long)s->anchors_peak, (unsigned long)s->anchors_bare_peak,
                       (unsigned long)s->bare_tested, (unsigned long)s->bare_turned, (unsigned long)s->bare_marked);
     if (n > 0 && (size_t)n < sizeof(part) && at + (size_t)n < sizeof(line)) os64_memcpy(line + at, part, (size_t)n + 1);
-    yonder_diag_fact(d, cascade_key, line);
+    yonder_diag_summary_fact(d, cascade_key, line);
 }
 
 // Microseconds as milliseconds with one decimal, for a line.
@@ -1571,7 +1578,7 @@ static void layout_one(yonder_diag_t *d, const yonder_layout_one_t *one, LayoutO
     }
     char by_key[64];
     os64_snprintf(by_key, sizeof(by_key), "%s by cascade", key);
-    yonder_diag_fact(d, by_key, line);
+    yonder_diag_summary_fact(d, by_key, line);
     if (one->total_us < ones->slowest.total_us) return;
     ones->slowest = *one;
     // `<key> slowest`: the slowest layout, phase by phase; `the rest` is
@@ -1617,7 +1624,7 @@ static void layout_one(yonder_diag_t *d, const yonder_layout_one_t *one, LayoutO
     }
     char slow_key[64];
     os64_snprintf(slow_key, sizeof(slow_key), "%s slowest", key);
-    yonder_diag_fact(d, slow_key, line);
+    yonder_diag_summary_fact(d, slow_key, line);
 }
 void yonder_diag_layout_one(yonder_diag_t *d, const yonder_layout_one_t *one)
 {
