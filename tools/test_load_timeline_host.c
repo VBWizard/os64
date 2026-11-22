@@ -148,18 +148,22 @@ static void test_builds_and_broad(void)
 {
     char line[2048];
     yonder_lt_begin(&t, BASE);
-    const yonder_lt_build_t a = {100000, 5000, 200000, 20000, 400}, b = {120000, 7000, 300000, 20000, 600};
+    const yonder_lt_build_t a = {100000, 5000, 200000, 20000, 400, false, "sheets"},
+                            b = {120000, 7000, 300000, 20000, 600, false, "environment"},
+                            k = {0, 5000, 200000, 20000, 400, true, NULL};
     yonder_lt_build(&t, READ, &a);
     yonder_lt_build(&t, READ, &b);
     yonder_lt_build(&t, (yonder_lt_why_t)99, &a);              // out of range: no reason told
-    CHECK(t.builds[READ] == 2 && t.build_sheets[READ] == 220000 && t.build_matching[READ] == 500000);
+    yonder_lt_build(&t, READ, &k);
+    CHECK(t.kept[READ] == 1 && t.builds[READ] == 3 && t.nagain == 2 && t.again[0].n == 2 && t.again[1].n == 1);
+    CHECK(t.build_sheets[READ] == 220000 && t.build_matching[READ] == 700000);
     CHECK(t.builds[YONDER_LT_WHY_OTHER] == 1);
     yonder_lt_layouts_line(&t, line, sizeof(line));
     LINE(line, "by who asked, in the step they ran in, the costliest first: none; fresh cascades by part: a "
-               "script's read 2 in 732.0 ms (reading the sheets 220.0, the table 12.0, matching 500.0; 20000 rules "
-               "and 500 elements a build), no reason told 1 in 305.0 ms (reading the sheets 100.0, the table 5.0, "
-               "matching 200.0; 20000 rules and 400 elements a build); cascades not timed whole (yonder "
-               "--layout-profile times them)");
+               "script's read 3 in 937.0 ms (1 kept; reading the sheets 220.0, the table 17.0, matching 700.0; 20000 "
+               "rules and 466 elements a build), no reason told 1 in 305.0 ms (0 kept; reading the sheets 100.0, the "
+               "table 5.0, matching 200.0; 20000 rules and 400 elements a build); read again because: sheets 2, "
+               "environment 1; cascades not timed whole (yonder --layout-profile times them)");
     // Broad refusals: counted always, the most marked kept, most first.
     for (uint32_t i = 0; i < YONDER_LT_BROAD_MAX + 3; i++) {
         char text[32];

@@ -227,9 +227,10 @@ void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value)
 #define YONDER_DIAG_READING_FACTS 64
 void yonder_diag_reading_fact(yonder_diag_t *d, const char *key, const char *value);
 // The same line, for the load's timeline (load_timeline.h), written whole
-// at each write of the record: it comes after a busy page has filled the
-// ordinary room, so it has a room of its own, YONDER_DIAG_TIMELINE_FACTS,
-// room for every line it writes (yonder.c checks the sum at compile time).
+// at each write of the record, and for --cascade-check's count of kept
+// reads checked: they come after a busy page has filled the ordinary room,
+// so they have a room of their own, YONDER_DIAG_TIMELINE_FACTS, room for
+// every line they write (yonder.c checks the sum at compile time).
 #define YONDER_DIAG_TIMELINE_FACTS 80
 void yonder_diag_timeline_fact(yonder_diag_t *d, const char *key, const char *value);
 // The plain lines whose keys begin `prefix` let go, the rest kept in

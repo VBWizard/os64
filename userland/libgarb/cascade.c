@@ -61,14 +61,6 @@ typedef struct {
     int32_t ndecls;
     uint32_t order;
     int32_t sheet;              // which input sheet it came from
-    // The element and consultation (Consult: its target and context) this
-    // rule last matched for, and where in the match list — so one rule
-    // matched through two selectors is counted once, for an element and
-    // for its pseudo-element apart, and once in each tree that styles it.
-    const os64_html_node_t *seen;
-    uint64_t seen_update;
-    int32_t seen_pass;
-    int32_t slot;
 } Rule;
 
 // A selector filed in the rule hash. It names its rule by INDEX: the rule
@@ -188,11 +180,84 @@ typedef struct {
 
 typedef struct {
     const garb_parsed_t *sheet;
+    uint64_t serial;            // the sheet's parse (garb_parsed_t.serial), 0 for none: the kept read's key
     const char *media;
     garb_import_t via;
     bool imported;
     int32_t parent;
 } CascadeInput;
+
+// THE READ (KEPT_READ.md; cascade.h § THE KEPT READ): everything build()
+// makes before it touches an element, owned here and shared by every
+// cascade built from it, which copies these fields into its own at build
+// (read_install), and by any caller holding it (garb_cascade_read_hold).
+// Refcounted; NEVER WRITTEN after build() has made it: what
+// a cascade adds later (attribute parses, its own skipped records, its
+// match marks) goes into the cascade's `self` and fields, and an array a
+// cascade may append to is handed over with no spare room, so an append
+// copies. `heap` is its arena for everything but its declarations, which
+// are in `reads` (or in `heap`, when `reads` could not be made: such a
+// read is never taken, `keep` false, nor is one that came up short).
+// `bytes` is its size when made, which a cascade's retained budget counts
+// as before the read had an arena of its own; `digest` its raw hash when
+// made, under `check_read` (0 otherwise), compared when it is taken.
+typedef struct garb_read {
+    uint32_t refs;
+    garb_parsed_t heap, reads;
+    bool keep;
+    size_t bytes;
+    uint64_t digest;
+    // The key, beyond the inputs and scopes below.
+    const os64_html_document_t *doc;
+    garb_env_t env;
+    os64_html_quirks_t quirks;
+    size_t state_bytes, read_bytes;
+    // What it made, as build() left the fields.
+    CascadeInput *inputs;
+    int32_t ninputs;
+    garb_scope_in_t *given;
+    int32_t ngiven;
+    const os64_html_node_t **roots;
+    int32_t nroots;
+    uint8_t *applies;
+    int32_t *root_slots;
+    uint32_t root_slotcap;
+    Rule *rules;
+    int32_t nrules;
+    Keyframes *keyframes;
+    int32_t nkeyframes;
+    bool keyframes_sorted;
+    Entry *entries;
+    int32_t nentries;
+    Index index[TARGETS];
+    garb_skip_t *skips;
+    int32_t nskips;
+    uint32_t skips_lost;
+    garb_font_face_t *faces;
+    int32_t nfaces;
+    uint32_t faces_lost, allocs_failed;
+    garb_anchor_t *anchors;
+    int32_t nanchors, nbare;
+    garb_style_reader_t *style_readers;
+    int32_t nstyle_readers;
+    bool style_bare;
+    garb_selector_dependencies_t dependencies;
+    garb_update_refusal_t untrackable;
+    bool incomplete;
+} Read;
+
+// A cascade's mark on each rule of its read (consider): the element and
+// consultation it last matched for, and where in the match list, so one
+// rule matched through two selectors is counted once, for an element and
+// its pseudo-element apart, and once in each tree that styles it. The
+// cascade's own, indexed as the read's rules are: a mark on the shared rule
+// would be another cascade's to overwrite.
+typedef struct {
+    const os64_html_node_t *seen;
+    uint64_t update;
+    int32_t pass;
+    int32_t slot;
+} RuleSeen;
 
 struct garb_cascade {
     uint32_t refs;
@@ -207,12 +272,16 @@ struct garb_cascade {
     size_t update_attribute_bytes;
     size_t initial_state_bytes, retained_budget;
     garb_parsed_t self;         // the cascade's own arena, in a parse's shape
-    // What it read of the sheets it applied, all of them: one arena held to
-    // the selected read limit, in a parse's shape, so a read that ran short —
-    // of memory or of that budget — says so in `incomplete` as a parse's
-    // does (none where there was no memory for the arena: the reads went
-    // into `self`). Freed with the cascade.
-    garb_parsed_t reads;
+    // Its read (Read), shared, released with the cascade; where alloc and
+    // grow carve (`heap`: the read's arena while build() reads, `self`
+    // after); its marks on the read's rules (RuleSeen); why the build read
+    // again, or that it took a read; and, under `check_read`, whether the
+    // read it took had been written since it was made.
+    Read *read;
+    garb_parsed_t *heap;
+    RuleSeen *seen;
+    garb_read_refusal_t read_refusal;
+    bool read_written;
     garb_env_t env;
     garb_cascade_limits_t limits;
     os64_html_quirks_t quirks;
@@ -322,9 +391,11 @@ static garb_reading_t reading(const garb_cascade_t *c)
     return (garb_reading_t){.quirks = c->quirks == OS64_HTML_QUIRKS, .modern_off = c->env.modern_off};
 }
 
+// Carved from `heap`: the read's arena while build() reads, the
+// cascade's own after (garb_cascade.heap).
 static void *alloc(garb_cascade_t *c, size_t n)
 {
-    void *p = os64_arena_calloc(c->self.arena, 1, n);
+    void *p = os64_arena_calloc(c->heap->arena, 1, n);
     if (p == NULL) {
         c->incomplete = true;
         c->allocs_failed++;
@@ -338,7 +409,7 @@ static bool grow(garb_cascade_t *c, void **list, int32_t n, int32_t *cap, size_t
     if (n < *cap)
         return true;
     int32_t bigger = *cap > 0 ? *cap * 2 : 16;
-    void *next = os64_arena_alloc(c->self.arena, (size_t)bigger * size);
+    void *next = os64_arena_alloc(c->heap->arena, (size_t)bigger * size);
     if (next == NULL) {
         c->incomplete = true;
         c->allocs_failed++;
@@ -503,6 +574,23 @@ static bool prefixed_read(const char *name, size_t len)
     return false;
 }
 
+// The skipped records made the cascade's own before it writes one: while
+// they are still its read's (a count raised, a name added after build()),
+// they are copied into its arena first, so the read is never written.
+static bool skips_own(garb_cascade_t *c)
+{
+    if (c->read == NULL || c->skips == NULL || c->skips != c->read->skips)
+        return true;
+    int32_t cap = c->nskips > 0 ? c->nskips : 1;
+    garb_skip_t *own = os64_arena_alloc(c->heap->arena, (size_t)cap * sizeof(garb_skip_t));
+    if (own == NULL)
+        return false;
+    os64_memcpy(own, c->skips, (size_t)c->nskips * sizeof(garb_skip_t));
+    c->skips = own;
+    c->skipcap = cap;
+    return true;
+}
+
 static void skipped(garb_cascade_t *c, garb_skip_kind_t kind, const char *name, size_t len)
 {
     // Any other prefixed name is one engine's dialect, which every other
@@ -510,6 +598,10 @@ static void skipped(garb_cascade_t *c, garb_skip_kind_t kind, const char *name, 
     // standard name.
     if (len == 0 || (name[0] == '-' && !(kind == GARB_SKIP_PROPERTY && prefixed_read(name, len))))
         return;
+    if (!skips_own(c)) {
+        c->skips_lost++;
+        return;
+    }
     // ieq folds its first argument; the kept copy is already lower case.
     for (int32_t i = 0; i < c->nskips; i++)
         if (c->skips[i].kind == kind && c->skips[i].len == len && ieq(name, len, c->skips[i].name)) {
@@ -520,7 +612,7 @@ static void skipped(garb_cascade_t *c, garb_skip_kind_t kind, const char *name, 
     if (c->nskips == c->skipcap) {
         int32_t bigger = c->skipcap > 0 ? c->skipcap * 2 : 16;
         garb_skip_t *next = bigger <= GARB_SKIPS_MAX
-            ? os64_arena_alloc(c->self.arena, (size_t)bigger * sizeof(garb_skip_t)) : NULL;
+            ? os64_arena_alloc(c->heap->arena, (size_t)bigger * sizeof(garb_skip_t)) : NULL;
         if (next == NULL) {
             c->skips_lost++;
             return;
@@ -530,7 +622,7 @@ static void skipped(garb_cascade_t *c, garb_skip_kind_t kind, const char *name, 
         c->skips = next;
         c->skipcap = bigger;
     }
-    char *copy = os64_arena_alloc(c->self.arena, len + 1);
+    char *copy = os64_arena_alloc(c->heap->arena, len + 1);
     if (copy == NULL) {
         c->skips_lost++;
         return;
@@ -1769,7 +1861,7 @@ static bool push(Sub *s, Vec *out, const garb_value_t *v)
         return false;
     if (out->n == out->cap) {
         int32_t cap = out->cap ? out->cap * 2 : 16;
-        garb_value_t *next = os64_arena_alloc(s->c->self.arena, (size_t)cap * sizeof(*next));
+        garb_value_t *next = os64_arena_alloc(s->c->heap->arena, (size_t)cap * sizeof(*next));
         if (next == NULL) {
             s->c->incomplete = true;
             return false;
@@ -2338,16 +2430,21 @@ static void consider(garb_cascade_t *c, Match **m, int32_t *n, int32_t *cap, Rul
 {
     uint64_t update = c->updates + (c->updating ? 1 : 0);
     int32_t pass = q->target + TARGETS * q->context;
-    if (r->seen == q->styled && r->seen_update == update && r->seen_pass == pass) {
-        if (spec > (*m)[r->slot].spec)
-            (*m)[r->slot].spec = spec;
+    // No marks (no memory for them): the cascade is incomplete already.
+    if (c->seen == NULL)
+        return;
+    RuleSeen *mark = &c->seen[r - c->rules];
+    if (mark->seen == q->styled && mark->update == update && mark->pass == pass) {
+        if (spec > (*m)[mark->slot].spec)
+            (*m)[mark->slot].spec = spec;
         return;
     }
     if (!grow(c, (void **)m, *n, cap, sizeof(Match)))
         return;
-    r->seen = q->styled; r->seen_update = update;
-    r->seen_pass = pass;
-    r->slot = *n;
+    mark->seen = q->styled;
+    mark->update = update;
+    mark->pass = pass;
+    mark->slot = *n;
     (*m)[(*n)++] = (Match){r, spec, q->context};
 }
 
@@ -2973,76 +3070,280 @@ garb_cascade_t *garb_cascade_scoped(const garb_sheet_in_t *sheets, int32_t n,
     return build(sheets, n, scopes, nscopes, doc, env,
                  limits != NULL ? *limits
                                 : (garb_cascade_limits_t){GARB_ARENA_MAX, GARB_CASCADE_READ_MAX,
-                                                          GARB_ARENA_MAX, SIZE_MAX, NULL});
+                                                          GARB_ARENA_MAX, SIZE_MAX, NULL, NULL, false});
 }
 
-static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
-                             const garb_scope_in_t *scopes, int32_t nscopes,
-                             const os64_html_document_t *doc, garb_env_t env,
-                             garb_cascade_limits_t limits)
+// ── The kept read (KEPT_READ.md) ─────────────────────────────────────
+
+static bool env_equal(garb_env_t a, garb_env_t b)
 {
-    if (!limits.state_bytes || !limits.read_bytes || !limits.attribute_bytes)
-        return NULL;
-    // The caller's measure (garb_cascade_build_cost): the build's parts on
-    // its clock, when it gave one.
-    uint64_t (*clock)(void) = limits.clock;
-    uint64_t began = clock ? clock() : 0;
-    garb_cascade_t *c = os64_calloc(1, sizeof(*c));
-    if (c == NULL)
-        return NULL;
-    c->refs = 1;
-    c->limits = limits;
-    c->self.arena_max = limits.state_bytes;
-    c->self.arena = os64_arena_create(0, limits.state_bytes);
-    if (c->self.arena == NULL) {
-        os64_free(c);
-        return NULL;
+    return a.width == b.width && a.height == b.height && a.dark == b.dark &&
+           a.reduced_motion == b.reduced_motion && a.scripting == b.scripting && a.modern_off == b.modern_off &&
+           a.device_width == b.device_width && a.device_height == b.device_height && a.resolution == b.resolution;
+}
+
+static void read_release(Read *r)
+{
+    if (r == NULL || --r->refs != 0)
+        return;
+    garb_free(&r->heap);
+    garb_free(&r->reads);
+    os64_free(r);
+}
+
+// Whether read `r` may be taken for this build, and if not, the first key
+// member that differs (cascade.h § THE KEPT READ). The sheets are compared
+// by their parse serials, the imports and media as garb_cascade_matches_
+// scoped compares them, the scopes' roots by address. A read only ever
+// hashes and compares its roots' addresses (scope_of_root) and never
+// follows one, and a read is taken only when the caller's scopes, whose
+// roots are live now, equal its own root by root: so even an address a
+// freed root handed on maps to the same sheets, and the read is equal by
+// content (KEPT_READ.md, condition 3).
+static garb_read_refusal_t read_key(const Read *r, const garb_sheet_in_t *sheets, int32_t n,
+                                    const garb_scope_in_t *scopes, int32_t nscopes,
+                                    const os64_html_document_t *doc, garb_env_t env,
+                                    garb_cascade_limits_t limits)
+{
+    if (r == NULL) return GARB_READ_NOT_OFFERED;
+    if (!r->keep) return GARB_READ_NOT_KEEPABLE;
+    if (r->doc != doc) return GARB_READ_DOCUMENT;
+    if (r->state_bytes != limits.state_bytes || r->read_bytes != limits.read_bytes) return GARB_READ_LIMITS;
+    if (r->quirks != doc->quirks) return GARB_READ_QUIRKS;
+    if (!env_equal(r->env, env)) return GARB_READ_ENVIRONMENT;
+    if (r->ninputs != n) return GARB_READ_SHEETS;
+    for (int32_t i = 0; i < n; ++i) {
+        const CascadeInput *a = &r->inputs[i];
+        const garb_sheet_in_t *b = &sheets[i];
+        uint64_t serial = b->sheet != NULL ? b->sheet->serial : 0;
+        if (a->serial != serial || a->parent != b->parent || a->imported != (b->via != NULL) ||
+            ((a->media == NULL) != (b->media == NULL)) || (a->media && !os64_streq(a->media, b->media)))
+            return GARB_READ_SHEETS;
+        if (a->imported && (a->via.url != b->via->url || a->via.len != b->via->len ||
+            a->via.media != b->via->media || a->via.nmedia != b->via->nmedia ||
+            a->via.has_supports != b->via->has_supports || a->via.supports != b->via->supports ||
+            a->via.nsupports != b->via->nsupports))
+            return GARB_READ_SHEETS;
     }
-    c->doc = doc;
-    c->pin = os64_html_pin(doc);
-    if (c->pin == 0) {
-        garb_cascade_free(c);
-        return NULL;
+    if (scopes == NULL || nscopes < 0)
+        nscopes = 0;
+    if (r->ngiven != nscopes) return GARB_READ_SCOPES;
+    for (int32_t i = 0; i < nscopes; ++i) {
+        const garb_scope_in_t *a = &r->given[i], *b = &scopes[i];
+        int32_t bn = b->sheets != NULL && b->n > 0 ? b->n : 0;
+        if (a->root != b->root || a->n != bn ||
+            (bn > 0 && os64_memcmp(a->sheets, b->sheets, (size_t)bn * sizeof(*a->sheets)) != 0))
+            return GARB_READ_SCOPES;
     }
-    static uint64_t generation;
-    c->generation = __atomic_add_fetch(&generation, 1, __ATOMIC_RELAXED);
-    c->version = os64_html_version(doc);
-    c->env = env;
-    c->quirks = doc->quirks;
+    return GARB_READ_KEPT;
+}
+
+// The read's fields between it and a cascade. A cascade takes them with no
+// spare room in any array it might append to, so an append copies
+// (skips_own copies the skipped records before any write).
+static void read_install(garb_cascade_t *c, const Read *r)
+{
+    c->inputs = r->inputs; c->ninputs = r->ninputs;
+    c->given = r->given; c->ngiven = r->ngiven;
+    c->roots = r->roots; c->nroots = r->nroots;
+    c->applies = r->applies; c->root_slots = r->root_slots; c->root_slotcap = r->root_slotcap;
+    c->rules = r->rules; c->nrules = c->rulecap = r->nrules;
+    c->keyframes = r->keyframes; c->nkeyframes = c->keyframecap = r->nkeyframes;
+    c->keyframes_sorted = r->keyframes_sorted;
+    c->entries = r->entries; c->nentries = c->entrycap = r->nentries;
+    os64_memcpy(c->index, r->index, sizeof(c->index));
+    c->skips = r->skips; c->nskips = c->skipcap = r->nskips; c->skips_lost = r->skips_lost;
+    c->faces = r->faces; c->nfaces = c->facecap = r->nfaces; c->faces_lost = r->faces_lost;
+    c->allocs_failed = r->allocs_failed;
+    c->anchors = r->anchors; c->nanchors = r->nanchors; c->nbare = r->nbare;
+    c->style_readers = r->style_readers; c->nstyle_readers = r->nstyle_readers; c->style_bare = r->style_bare;
+    c->dependencies = r->dependencies;
+    c->untrackable = r->untrackable;
+    c->incomplete = r->incomplete;
+}
+
+static void read_save(Read *r, const garb_cascade_t *c)
+{
+    r->inputs = c->inputs; r->ninputs = c->ninputs;
+    r->given = c->given; r->ngiven = c->ngiven;
+    r->roots = c->roots; r->nroots = c->nroots;
+    r->applies = c->applies; r->root_slots = c->root_slots; r->root_slotcap = c->root_slotcap;
+    r->rules = c->rules; r->nrules = c->nrules;
+    r->keyframes = c->keyframes; r->nkeyframes = c->nkeyframes; r->keyframes_sorted = c->keyframes_sorted;
+    r->entries = c->entries; r->nentries = c->nentries;
+    os64_memcpy(r->index, c->index, sizeof(r->index));
+    r->skips = c->skips; r->nskips = c->nskips; r->skips_lost = c->skips_lost;
+    r->faces = c->faces; r->nfaces = c->nfaces; r->faces_lost = c->faces_lost;
+    r->allocs_failed = c->allocs_failed;
+    r->anchors = c->anchors; r->nanchors = c->nanchors; r->nbare = c->nbare;
+    r->style_readers = c->style_readers; r->nstyle_readers = c->nstyle_readers; r->style_bare = c->style_bare;
+    r->dependencies = c->dependencies;
+    r->untrackable = c->untrackable;
+}
+
+static uint64_t fnv(uint64_t h, const void *bytes, size_t n)
+{
+    const unsigned char *b = bytes;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ b[i]) * 1099511628211ull;
+    return h;
+}
+#define FNV_START 14695981039346656037ull
+
+static uint64_t table_raw(uint64_t h, const Table *t)
+{
+    return t->b != NULL ? fnv(h, t->b, (size_t)t->cap * sizeof(*t->b)) : h;
+}
+
+// THE READ'S RAW HASH: the bytes of everything it holds that a cascade
+// could reach to write, as they lie (addresses and padding included, all
+// fixed once made), so a write made into it after build() shows as a
+// different hash (check_read; garb_cascade_read_written).
+static uint64_t read_digest(const Read *r)
+{
+    uint64_t h = fnv(FNV_START, r->rules, (size_t)r->nrules * sizeof(*r->rules));
+    for (int32_t i = 0; i < r->nrules; i++) {
+        const Rule *u = &r->rules[i];
+        h = fnv(h, u->decls, (size_t)u->ndecls * sizeof(*u->decls));
+        for (int32_t d = 0; d < u->ndecls; d++)
+            h = fnv(h, u->decls[d].sets, (size_t)u->decls[d].nsets * sizeof(*u->decls[d].sets));
+    }
+    h = fnv(h, r->entries, (size_t)r->nentries * sizeof(*r->entries));
+    h = fnv(h, r->index, sizeof(r->index));
+    for (int t = 0; t < TARGETS; t++)
+        h = table_raw(table_raw(table_raw(h, &r->index[t].ids), &r->index[t].classes), &r->index[t].types);
+    h = fnv(h, r->keyframes, (size_t)r->nkeyframes * sizeof(*r->keyframes));
+    for (int32_t k = 0; k < r->nkeyframes; k++) {
+        h = fnv(h, r->keyframes[k].blocks, (size_t)r->keyframes[k].nblocks * sizeof(*r->keyframes[k].blocks));
+        h = fnv(h, r->keyframes[k].frames, (size_t)r->keyframes[k].nframes * sizeof(*r->keyframes[k].frames));
+    }
+    h = fnv(h, r->skips, (size_t)r->nskips * sizeof(*r->skips));
+    h = fnv(h, r->faces, (size_t)r->nfaces * sizeof(*r->faces));
+    h = fnv(h, r->anchors, (size_t)r->nanchors * sizeof(*r->anchors));
+    h = fnv(h, r->style_readers, (size_t)r->nstyle_readers * sizeof(*r->style_readers));
+    h = fnv(h, r->inputs, (size_t)r->ninputs * sizeof(*r->inputs));
+    h = fnv(h, r->given, (size_t)r->ngiven * sizeof(*r->given));
+    h = fnv(h, r->roots, (size_t)r->nroots * sizeof(*r->roots));
+    h = fnv(h, r->root_slots, (size_t)r->root_slotcap * sizeof(*r->root_slots));
+    h = fnv(h, &r->dependencies, sizeof(r->dependencies));
+    h = fnv(h, &r->untrackable, sizeof(r->untrackable));
+    return fnv(h, &r->style_bare, sizeof(r->style_bare));
+}
+
+static uint64_t text_hash(uint64_t h, const char *s, size_t n)
+{
+    h = fnv(h, &n, sizeof(n));
+    return s != NULL ? fnv(h, s, n) : h;
+}
+
+// THE READ'S CONTENT HASH: what it says, with no address in it: two reads
+// of the same sheets in the same environment hash equal whichever cascade
+// made them (garb_cascade_read_content).
+static uint64_t read_content(const Read *r)
+{
+    uint64_t h = fnv(FNV_START, &r->nrules, sizeof(r->nrules));
+    for (int32_t i = 0; i < r->nrules; i++) {
+        const Rule *u = &r->rules[i];
+        h = fnv(h, &u->order, sizeof(u->order));
+        h = fnv(h, &u->sheet, sizeof(u->sheet));
+        h = fnv(h, &u->nprelude, sizeof(u->nprelude));
+        h = fnv(h, &u->ndecls, sizeof(u->ndecls));
+        for (int32_t d = 0; d < u->ndecls; d++) {
+            const Decl *x = &u->decls[d];
+            h = text_hash(h, x->decl.name, x->decl.len);
+            h = fnv(h, &x->decl.nvalue, sizeof(x->decl.nvalue));
+            uint8_t flags = (uint8_t)(x->important | x->custom << 1 | x->pending << 2);
+            h = fnv(h, &flags, 1);
+            h = fnv(h, &x->nsets, sizeof(x->nsets));
+        }
+    }
+    h = fnv(h, &r->nentries, sizeof(r->nentries));
+    for (int32_t i = 0; i < r->nentries; i++) {
+        h = fnv(h, &r->entries[i].rule, sizeof(r->entries[i].rule));
+        h = fnv(h, &r->entries[i].sel, sizeof(r->entries[i].sel));
+        h = fnv(h, &r->entries[i].next, sizeof(r->entries[i].next));
+    }
+    for (int t = 0; t < TARGETS; t++) {
+        const Table *tables[3] = {&r->index[t].ids, &r->index[t].classes, &r->index[t].types};
+        for (int k = 0; k < 3; k++)
+            for (uint32_t b = 0; b < tables[k]->cap; b++)
+                if (tables[k]->b[b].key != NULL) {
+                    h = text_hash(h, tables[k]->b[b].key, tables[k]->b[b].len);
+                    h = fnv(h, &tables[k]->b[b].head, sizeof(tables[k]->b[b].head));
+                }
+        h = fnv(h, &r->index[t].universal, sizeof(r->index[t].universal));
+    }
+    h = fnv(h, &r->nkeyframes, sizeof(r->nkeyframes));
+    for (int32_t k = 0; k < r->nkeyframes; k++) {
+        h = text_hash(h, r->keyframes[k].name, r->keyframes[k].len);
+        h = fnv(h, &r->keyframes[k].nblocks, sizeof(r->keyframes[k].nblocks));
+        h = fnv(h, &r->keyframes[k].nframes, sizeof(r->keyframes[k].nframes));
+    }
+    for (int32_t i = 0; i < r->nskips; i++) {
+        h = fnv(h, &r->skips[i].kind, sizeof(r->skips[i].kind));
+        h = text_hash(h, r->skips[i].name, r->skips[i].len);
+        h = fnv(h, &r->skips[i].count, sizeof(r->skips[i].count));
+    }
+    h = fnv(h, &r->nfaces, sizeof(r->nfaces));
+    h = fnv(h, &r->nanchors, sizeof(r->nanchors));
+    h = fnv(h, &r->nbare, sizeof(r->nbare));
+    h = fnv(h, &r->nstyle_readers, sizeof(r->nstyle_readers));
+    h = fnv(h, &r->dependencies, sizeof(r->dependencies));
+    h = fnv(h, &r->untrackable, sizeof(r->untrackable));
+    h = fnv(h, &r->style_bare, sizeof(r->style_bare));
+    h = fnv(h, &r->nroots, sizeof(r->nroots));
+    return fnv(h, &r->ngiven, sizeof(r->ngiven));
+}
+
+// THE READ made: the sheets read into a Read of this cascade's own, its
+// arena the heap while it reads (alloc and grow carve from it), its fields
+// then saved into it (read_save). False when there was no memory to begin.
+static bool read_sheets(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_t n,
+                        const garb_scope_in_t *scopes, int32_t nscopes, garb_cascade_limits_t limits)
+{
+    Read *r = os64_calloc(1, sizeof(*r));
+    if (r == NULL)
+        return false;
+    r->refs = 1;
+    c->read = r;
+    r->heap.arena_max = limits.state_bytes;
+    r->heap.arena = os64_arena_create(0, limits.state_bytes);
+    if (r->heap.arena == NULL)
+        return false;
+    c->heap = &r->heap;
     for (int32_t t = 0; t < TARGETS; t++)
         c->index[t].universal = -1;
     // The sheets are only read: their rules' blocks, selectors and values
-    // go into this cascade's reading of them, the whole budget each time —
-    // or, with no memory for that arena, into the cascade's own, which is
-    // the cascade's all the same, and says so when it runs short.
-    garb_parsed_t *into = &c->self;
+    // go into the read's reading of them, the whole budget each time — or,
+    // with no memory for that arena, into the read's own, which is the
+    // read's all the same, says so when it runs short, and is never taken
+    // by another cascade.
+    garb_parsed_t *into = &r->heap;
     if (n > 0) {
-        c->reads.arena = os64_arena_create(0, limits.read_bytes);
-        c->reads.arena_max = limits.read_bytes;
-        if (c->reads.arena != NULL)
-            into = &c->reads;
+        r->reads.arena = os64_arena_create(0, limits.read_bytes);
+        r->reads.arena_max = limits.read_bytes;
+        if (r->reads.arena != NULL)
+            into = &r->reads;
     }
     c->inputs = n > 0 ? alloc(c, (size_t)n * sizeof(*c->inputs)) : NULL;
-    if (n > 0 && !c->inputs) { garb_cascade_free(c); return NULL; }
+    if (n > 0 && !c->inputs) return false;
     c->ninputs = n;
     for (int32_t i = 0; i < n; ++i) {
         c->inputs[i].sheet = sheets[i].sheet;
+        c->inputs[i].serial = sheets[i].sheet != NULL ? sheets[i].sheet->serial : 0;
         c->inputs[i].parent = sheets[i].parent;
         c->inputs[i].imported = sheets[i].via != NULL;
         if (sheets[i].via) c->inputs[i].via = *sheets[i].via;
         if (sheets[i].media) {
             size_t len = os64_strlen(sheets[i].media) + 1;
             char *copy = alloc(c, len);
-            if (!copy) { garb_cascade_free(c); return NULL; }
+            if (!copy) return false;
             os64_memcpy(copy, sheets[i].media, len);
             c->inputs[i].media = copy;
         }
     }
-    if (!scopes_take(c, sheets, n, scopes, nscopes)) {
-        garb_cascade_free(c);
-        return NULL;
-    }
-    c->shadowed = os64_html_has_shadow_roots(doc);
+    if (!scopes_take(c, sheets, n, scopes, nscopes))
+        return false;
     uint32_t order = 0;
     for (int32_t s = 0; s < n; s++) {
         const garb_parsed_t *sheet = sheets[s].sheet;
@@ -3088,14 +3389,79 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
             c->nbare += c->anchors[c->nanchors + a].bare;
         c->nanchors += held;
     }
-    // A row of bits a slot while the cascade will take updates.
-    if (c->untrackable == GARB_UPDATE_DONE && c->nanchors > 0)
-        c->has_width = (uint32_t)(c->nanchors + 63) / 64;
     keyframes_settle(c);
     // Each @keyframes read for no element: what an element shares.
     for (int32_t k = 0; k < c->nkeyframes; k++)
         c->keyframes[k].nframes = build_frames(c, &c->keyframes[k], NULL, false,
                                                &c->keyframes[k].frames);
+    read_save(r, c);
+    r->doc = c->doc;
+    r->env = c->env;
+    r->quirks = c->quirks;
+    r->state_bytes = limits.state_bytes;
+    r->read_bytes = limits.read_bytes;
+    r->incomplete = c->incomplete || r->heap.incomplete || r->reads.incomplete;
+    r->keep = !r->incomplete && (n == 0 || r->reads.arena != NULL);
+    r->bytes = os64_arena_stats(r->heap.arena).used_bytes + os64_arena_stats(r->reads.arena).used_bytes;
+    r->digest = limits.check_read ? read_digest(r) : 0;
+    c->incomplete = r->incomplete;
+    c->heap = &c->self;
+    return true;
+}
+
+static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
+                             const garb_scope_in_t *scopes, int32_t nscopes,
+                             const os64_html_document_t *doc, garb_env_t env,
+                             garb_cascade_limits_t limits)
+{
+    if (!limits.state_bytes || !limits.read_bytes || !limits.attribute_bytes)
+        return NULL;
+    // The caller's measure (garb_cascade_build_cost): the build's parts on
+    // its clock, when it gave one.
+    uint64_t (*clock)(void) = limits.clock;
+    uint64_t began = clock ? clock() : 0;
+    garb_cascade_t *c = os64_calloc(1, sizeof(*c));
+    if (c == NULL)
+        return NULL;
+    c->refs = 1;
+    c->limits = limits;
+    c->limits.read_from = NULL;         // not kept: the caller releases its hold after the build
+    c->self.arena_max = limits.state_bytes;
+    c->self.arena = os64_arena_create(0, limits.state_bytes);
+    if (c->self.arena == NULL) {
+        os64_free(c);
+        return NULL;
+    }
+    c->heap = &c->self;
+    c->doc = doc;
+    c->pin = os64_html_pin(doc);
+    if (c->pin == 0) {
+        garb_cascade_free(c);
+        return NULL;
+    }
+    static uint64_t generation;
+    c->generation = __atomic_add_fetch(&generation, 1, __ATOMIC_RELAXED);
+    c->version = os64_html_version(doc);
+    c->env = env;
+    c->quirks = doc->quirks;
+    c->shadowed = os64_html_has_shadow_roots(doc);
+    // THE READ: the offered one, with a reference of this cascade's own,
+    // when the key is equal (read_key), else read again into a read of
+    // this cascade's own (read_sheets).
+    Read *offered = (Read *)limits.read_from;
+    c->read_refusal = read_key(offered, sheets, n, scopes, nscopes, doc, env, limits);
+    if (c->read_refusal == GARB_READ_KEPT) {
+        offered->refs++;
+        c->read = offered;
+        read_install(c, offered);
+        c->read_written = limits.check_read && offered->digest != 0 && read_digest(offered) != offered->digest;
+    } else if (!read_sheets(c, sheets, n, scopes, nscopes, limits)) {
+        garb_cascade_free(c);
+        return NULL;
+    }
+    // A row of bits a slot while the cascade will take updates.
+    if (c->untrackable == GARB_UPDATE_DONE && c->nanchors > 0)
+        c->has_width = (uint32_t)(c->nanchors + 63) / 64;
     uint64_t sheets_read = clock ? clock() : 0;
     // Every element's slot, in every tree: the table is sized for them.
     size_t elements = 0;
@@ -3119,6 +3485,10 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
         c->incomplete = true;
         return c;
     }
+    // Its marks on the read's rules (RuleSeen): none for want of memory
+    // leaves the cascade short.
+    if (c->nrules > 0 && (c->seen = os64_calloc((size_t)c->nrules, sizeof(*c->seen))) == NULL)
+        c->incomplete = true;
     Match *m = NULL;
     int32_t mcap = 0;
     AppliedScratch scratch = {0};
@@ -3141,13 +3511,17 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
     // cascade's reading of them, and what is read per element, which marks
     // the cascade's own. Any of them short, or a style attribute's parse,
     // and the cascade is short.
-    bool short_read = c->self.incomplete || c->reads.incomplete;
+    bool short_read = c->self.incomplete || c->read->incomplete;
     for (int32_t i = 0; i < c->nattrs; i++)
         short_read |= c->attrs[i].incomplete;
     if (short_read)
         c->incomplete = true;
+    // What updates may retain is held to the initial state's size, the
+    // read's counted in: one state's worth, as before the read had an
+    // arena of its own, whether this cascade made it or took it.
     c->initial_state_bytes = os64_arena_stats(c->self.arena).used_bytes;
-    c->retained_budget = c->initial_state_bytes > 4096 ? c->initial_state_bytes : 4096;
+    size_t whole = c->initial_state_bytes + c->read->bytes;
+    c->retained_budget = whole > 4096 ? whole : 4096;
     // A cascade that must rebuild cannot consume invalidations. Registering
     // it would still make DOM/parser mutations allocate and retain log entries.
     if (!c->incomplete && c->untrackable == GARB_UPDATE_DONE)
@@ -3602,6 +3976,46 @@ bool garb_cascade_broad_trigger(const garb_cascade_t *c, garb_broad_trigger_t *o
     if (!c || !c->broad_set) return false;
     *out = c->broad;
     return true;
+}
+
+garb_read_refusal_t garb_cascade_read_refusal(const garb_cascade_t *c)
+{
+    return c ? c->read_refusal : GARB_READ_NOT_OFFERED;
+}
+
+const char *garb_read_refusal_name(garb_read_refusal_t reason)
+{
+    static const char *const kNames[GARB_READ_REASONS] = {
+        [GARB_READ_KEPT] = "kept", [GARB_READ_NOT_OFFERED] = "none offered",
+        [GARB_READ_NOT_KEEPABLE] = "not keepable", [GARB_READ_DOCUMENT] = "document",
+        [GARB_READ_LIMITS] = "limits", [GARB_READ_QUIRKS] = "quirks",
+        [GARB_READ_ENVIRONMENT] = "environment", [GARB_READ_SHEETS] = "sheets",
+        [GARB_READ_SCOPES] = "scopes",
+    };
+    return (unsigned)reason < GARB_READ_REASONS ? kNames[reason] : "?";
+}
+
+garb_read_t *garb_cascade_read_hold(const garb_cascade_t *c)
+{
+    if (c == NULL || c->read == NULL)
+        return NULL;
+    c->read->refs++;
+    return c->read;
+}
+
+void garb_read_release(garb_read_t *r)
+{
+    read_release(r);
+}
+
+uint64_t garb_cascade_read_content(const garb_cascade_t *c)
+{
+    return c != NULL && c->read != NULL ? read_content(c->read) : 0;
+}
+
+bool garb_cascade_read_written(const garb_cascade_t *c)
+{
+    return c != NULL && c->read_written;
 }
 
 const char *garb_mark_name(garb_mark_t mark)
@@ -4082,11 +4496,15 @@ garb_cascade_parts_t garb_cascade_parts(const garb_cascade_t *c)
 {
     garb_cascade_parts_t parts = {0};
     if (c == NULL) return parts;
-    // The rule, entry, keyframe and attribute tables and the selector
-    // indexes all come from `self`'s arena (grow, alloc); the slot table,
-    // its rows of anchor bits and the dirty list are the heap's.
-    parts.state = sizeof(*c) + os64_arena_stats(c->self.arena).reserved_bytes;
-    parts.reads = os64_arena_stats(c->reads.arena).reserved_bytes;
+    // The rule, entry and keyframe tables and the selector indexes come
+    // from the read's arena, the attribute tables and what updates retain
+    // from `self`'s (grow, alloc); the slot table, its rows of anchor bits,
+    // the dirty list and the marks on the read's rules are the heap's. A
+    // read shared by two cascades is counted in each.
+    parts.state = sizeof(*c) + os64_arena_stats(c->self.arena).reserved_bytes +
+                  (c->read != NULL ? os64_arena_stats(c->read->heap.arena).reserved_bytes : 0) +
+                  (c->seen != NULL ? (size_t)c->nrules * sizeof(*c->seen) : 0);
+    parts.reads = c->read != NULL ? os64_arena_stats(c->read->reads.arena).reserved_bytes : 0;
     for (int32_t i = 0; i < c->nattrs; i++) parts.attributes += os64_arena_stats(c->attrs[i].arena).reserved_bytes;
     parts.tables = (size_t)c->slotcap * (sizeof(*c->slots) + c->has_width * sizeof(*c->has_words)) +
                    c->dirtycap * sizeof(*c->dirty_nodes);
@@ -4106,7 +4524,8 @@ void garb_cascade_free(garb_cascade_t *c)
     if (--c->refs) return;
     for (int32_t i = 0; i < c->nattrs; i++)
         garb_free(&c->attrs[i]);
-    garb_free(&c->reads);
+    read_release(c->read);
+    os64_free(c->seen);
     os64_free(c->slots);
     os64_free(c->has_words);
     os64_free(c->dirty_nodes);

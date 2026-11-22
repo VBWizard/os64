@@ -53,6 +53,7 @@
 #define YONDER_LT_BROAD_MAX 8
 #define YONDER_LT_BROAD_TEXT 320
 #define YONDER_LT_PARSE_MAX 8
+#define YONDER_LT_REASONS 10
 #define YONDER_LT_PARSE_TEXT 128
 
 // The window loop's steps, in the order a turn takes them. Each names the
@@ -153,9 +154,17 @@ typedef struct {
     // The fresh cascades libgarb timed by part (yonder_lt_build), by who
     // asked: how many, their parts' time, and the rules and elements they
     // read and matched, summed.
-    uint32_t builds[YONDER_LT_WHYS];
+    uint32_t builds[YONDER_LT_WHYS], kept[YONDER_LT_WHYS];
     uint64_t build_sheets[YONDER_LT_WHYS], build_table[YONDER_LT_WHYS], build_matching[YONDER_LT_WHYS];
     uint64_t build_rules[YONDER_LT_WHYS], build_elements[YONDER_LT_WHYS];
+    // Why the builds that did not take a kept read read the sheets again,
+    // by the caller's name for the reason, YONDER_LT_REASONS at most (the
+    // rest counted in `again_other`).
+    struct {
+        const char *name;
+        uint32_t n;
+    } again[YONDER_LT_REASONS];
+    uint32_t nagain, again_other;
     // The updates refused as broad (yonder_lt_broad): how many, and the
     // YONDER_LT_BROAD_MAX whose trigger marked the most, most first.
     uint32_t nbroad, broad_kept;
@@ -229,10 +238,14 @@ void yonder_lt_bytes(yonder_lt_t *t, int64_t at_us, uint64_t n);
 // A milestone at `at_us`: the first one told stands.
 void yonder_lt_mark(yonder_lt_t *t, yonder_lt_mark_t mark, int64_t at_us);
 // A fresh cascade libgarb timed by part (garb_cascade_build_cost, on the
-// timeline's clock), asked for by `why`.
+// timeline's clock), asked for by `why`: whether it took a kept read, and
+// if not, why it read the sheets again (`again`, the caller's name for the
+// reason, a string that outlives the timeline; NULL when it took one).
 typedef struct {
     uint64_t sheets_us, table_us, matching_us;
     uint32_t rules, elements;
+    bool kept;
+    const char *again;
 } yonder_lt_build_t;
 void yonder_lt_build(yonder_lt_t *t, yonder_lt_why_t why, const yonder_lt_build_t *b);
 // An update refused as broad at `at_us`, its trigger marking `marked`
