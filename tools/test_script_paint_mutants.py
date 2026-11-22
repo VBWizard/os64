@@ -38,9 +38,10 @@ CASES = 'YONDER_DAMAGE_ONLY=1 bash tools/test_yonder_scripts_host.sh'
 
 mutants = [
     # libflow's comparison: what a pair draws.
-    ('a-texts-bytes-not-compared', FLOW,
-     '        return (a->length == 0 || (a->text != NULL && b->text != NULL && os64_memcmp(a->text, b->text, a->length) == 0)) &&',
-     '        return true &&'),
+    ('a-texts-bytes-and-glyphs-not-compared', FLOW,
+     '        return (a->length == 0 || (a->text != NULL && b->text != NULL && os64_memcmp(a->text, b->text, a->length) == 0)) &&\n'
+     '               runs_alike(a->run, b->run);',
+     '        return true || runs_alike(a->run, b->run);'),
     ('a-style-not-compared', FLOW,
      '    if ((a->style == NULL) != (b->style == NULL) || (a->style != NULL && !f_style_equal(a->style, b->style)))\n        return false;',
      '    if ((a->style == NULL) != (b->style == NULL))\n        return false;'),
