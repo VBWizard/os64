@@ -198,14 +198,15 @@ typedef struct {
 // copies. `heap` is its arena for everything but its declarations, which
 // are in `reads` (or in `heap`, when `reads` could not be made: such a
 // read is never taken, `keep` false, nor is one that came up short).
-// `bytes` is its size when made, which a cascade's retained budget counts
-// as before the read had an arena of its own; `digest` its raw hash when
+// `heap_bytes` is its heap's size when made, which a cascade's retained
+// budget counts as it counted the same bytes when they lay in `self` (the
+// declarations' arena was never counted); `digest` its raw hash when
 // made, under `check_read` (0 otherwise), compared when it is taken.
 typedef struct garb_read {
     uint32_t refs;
     garb_parsed_t heap, reads;
     bool keep;
-    size_t bytes;
+    size_t heap_bytes;
     uint64_t digest;
     // The key, beyond the inputs and scopes below.
     const os64_html_document_t *doc;
@@ -610,7 +611,11 @@ static void skipped(garb_cascade_t *c, garb_skip_kind_t kind, const char *name, 
             return;
         }
     if (c->nskips == c->skipcap) {
+        // Doubled, up to the cap: a copy made from a read has room for
+        // exactly what it held (skips_own), not a power of two.
         int32_t bigger = c->skipcap > 0 ? c->skipcap * 2 : 16;
+        if (bigger > GARB_SKIPS_MAX && c->skipcap < GARB_SKIPS_MAX)
+            bigger = GARB_SKIPS_MAX;
         garb_skip_t *next = bigger <= GARB_SKIPS_MAX
             ? os64_arena_alloc(c->heap->arena, (size_t)bigger * sizeof(garb_skip_t)) : NULL;
         if (next == NULL) {
@@ -2430,7 +2435,7 @@ static void consider(garb_cascade_t *c, Match **m, int32_t *n, int32_t *cap, Rul
 {
     uint64_t update = c->updates + (c->updating ? 1 : 0);
     int32_t pass = q->target + TARGETS * q->context;
-    // No marks (no memory for them): the cascade is incomplete already.
+    // No marks only where nothing is matched (build's failure path).
     if (c->seen == NULL)
         return;
     RuleSeen *mark = &c->seen[r - c->rules];
@@ -3116,7 +3121,10 @@ static garb_read_refusal_t read_key(const Read *r, const garb_sheet_in_t *sheets
         const CascadeInput *a = &r->inputs[i];
         const garb_sheet_in_t *b = &sheets[i];
         uint64_t serial = b->sheet != NULL ? b->sheet->serial : 0;
-        if (a->serial != serial || a->parent != b->parent || a->imported != (b->via != NULL) ||
+        // The serial says the parse is the same one; the address too, since
+        // the read keeps the giver's inputs, which garb_cascade_matches_
+        // scoped compares by address at every later layout.
+        if (a->serial != serial || a->sheet != b->sheet || a->parent != b->parent || a->imported != (b->via != NULL) ||
             ((a->media == NULL) != (b->media == NULL)) || (a->media && !os64_streq(a->media, b->media)))
             return GARB_READ_SHEETS;
         if (a->imported && (a->via.url != b->via->url || a->via.len != b->via->len ||
@@ -3195,10 +3203,18 @@ static uint64_t table_raw(uint64_t h, const Table *t)
     return t->b != NULL ? fnv(h, t->b, (size_t)t->cap * sizeof(*t->b)) : h;
 }
 
-// THE READ'S RAW HASH: the bytes of everything it holds that a cascade
-// could reach to write, as they lie (addresses and padding included, all
-// fixed once made), so a write made into it after build() shows as a
-// different hash (check_read; garb_cascade_read_written).
+static uint64_t text_hash(uint64_t h, const char *s, size_t n)
+{
+    h = fnv(h, &n, sizeof(n));
+    return s != NULL ? fnv(h, s, n) : h;
+}
+
+// THE READ'S RAW HASH: the bytes of every array the read made, as they
+// lie (addresses and padding included, all fixed once made), so a write
+// made into one after build() shows as a different hash (check_read;
+// garb_cascade_read_written). What those arrays point to beyond them, the
+// selectors the anchors and readers name and the text declarations hold,
+// is the sheets' own parse, which the read borrows and does not hash.
 static uint64_t read_digest(const Read *r)
 {
     uint64_t h = fnv(FNV_START, r->rules, (size_t)r->nrules * sizeof(*r->rules));
@@ -3216,13 +3232,31 @@ static uint64_t read_digest(const Read *r)
     for (int32_t k = 0; k < r->nkeyframes; k++) {
         h = fnv(h, r->keyframes[k].blocks, (size_t)r->keyframes[k].nblocks * sizeof(*r->keyframes[k].blocks));
         h = fnv(h, r->keyframes[k].frames, (size_t)r->keyframes[k].nframes * sizeof(*r->keyframes[k].frames));
+        for (int32_t b = 0; b < r->keyframes[k].nblocks; b++) {
+            const KeyBlock *kb = &r->keyframes[k].blocks[b];
+            h = fnv(h, kb->offsets, (size_t)kb->noffsets * sizeof(*kb->offsets));
+            h = fnv(h, kb->decls, (size_t)kb->ndecls * sizeof(*kb->decls));
+            for (int32_t d = 0; d < kb->ndecls; d++)
+                h = fnv(h, kb->decls[d].sets, (size_t)kb->decls[d].nsets * sizeof(*kb->decls[d].sets));
+        }
     }
     h = fnv(h, r->skips, (size_t)r->nskips * sizeof(*r->skips));
     h = fnv(h, r->faces, (size_t)r->nfaces * sizeof(*r->faces));
+    for (int32_t f = 0; f < r->nfaces; f++) {
+        h = fnv(h, r->faces[f].src, (size_t)r->faces[f].nsrc * sizeof(*r->faces[f].src));
+        h = fnv(h, r->faces[f].ranges, (size_t)r->faces[f].nranges * sizeof(*r->faces[f].ranges));
+    }
     h = fnv(h, r->anchors, (size_t)r->nanchors * sizeof(*r->anchors));
     h = fnv(h, r->style_readers, (size_t)r->nstyle_readers * sizeof(*r->style_readers));
     h = fnv(h, r->inputs, (size_t)r->ninputs * sizeof(*r->inputs));
+    for (int32_t i = 0; i < r->ninputs; i++)
+        if (r->inputs[i].media != NULL)
+            h = text_hash(h, r->inputs[i].media, os64_strlen(r->inputs[i].media));
     h = fnv(h, r->given, (size_t)r->ngiven * sizeof(*r->given));
+    for (int32_t i = 0; i < r->ngiven; i++)
+        h = fnv(h, r->given[i].sheets, (size_t)r->given[i].n * sizeof(*r->given[i].sheets));
+    if (r->applies != NULL)
+        h = fnv(h, r->applies, ((size_t)(r->ngiven > 0 ? r->ngiven : 1) * (size_t)(r->ninputs > 0 ? r->ninputs : 1) + 7) / 8);
     h = fnv(h, r->roots, (size_t)r->nroots * sizeof(*r->roots));
     h = fnv(h, r->root_slots, (size_t)r->root_slotcap * sizeof(*r->root_slots));
     h = fnv(h, &r->dependencies, sizeof(r->dependencies));
@@ -3230,15 +3264,12 @@ static uint64_t read_digest(const Read *r)
     return fnv(h, &r->style_bare, sizeof(r->style_bare));
 }
 
-static uint64_t text_hash(uint64_t h, const char *s, size_t n)
-{
-    h = fnv(h, &n, sizeof(n));
-    return s != NULL ? fnv(h, s, n) : h;
-}
-
-// THE READ'S CONTENT HASH: what it says, with no address in it: two reads
-// of the same sheets in the same environment hash equal whichever cascade
-// made them (garb_cascade_read_content).
+// THE READ'S SHAPE HASH, with no address in it: its counts, rule order,
+// declaration names and flags, the index's keys, the keyframes' and faces'
+// names, the skipped records. Two reads of the same sheets in the same
+// environment hash equal whichever cascade made them; a difference in a
+// value or a selector need not show (garb_cascade_compare is the check of
+// what a cascade decides) (garb_cascade_read_content).
 static uint64_t read_content(const Read *r)
 {
     uint64_t h = fnv(FNV_START, &r->nrules, sizeof(r->nrules));
@@ -3402,9 +3433,11 @@ static bool read_sheets(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_
     r->read_bytes = limits.read_bytes;
     r->incomplete = c->incomplete || r->heap.incomplete || r->reads.incomplete;
     r->keep = !r->incomplete && (n == 0 || r->reads.arena != NULL);
-    r->bytes = os64_arena_stats(r->heap.arena).used_bytes + os64_arena_stats(r->reads.arena).used_bytes;
+    r->heap_bytes = os64_arena_stats(r->heap.arena).used_bytes;
     r->digest = limits.check_read ? read_digest(r) : 0;
-    c->incomplete = r->incomplete;
+    // The maker takes the read as a taker does, with no spare room in any
+    // array it might append to, so it too copies before an append.
+    read_install(c, r);
     c->heap = &c->self;
     return true;
 }
@@ -3475,20 +3508,24 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
         c->has_words = os64_calloc((size_t)c->slotcap * c->has_width, sizeof(*c->has_words));
         c->has_scratch = alloc(c, c->has_width * sizeof(*c->has_scratch));
     }
-    if (c->slots == NULL || (c->has_width && (c->has_words == NULL || c->has_scratch == NULL))) {
+    // Its marks on the read's rules (RuleSeen), wanted by every match.
+    if (c->nrules > 0)
+        c->seen = os64_calloc((size_t)c->nrules, sizeof(*c->seen));
+    // Without the table or the marks no element is matched: the cascade is
+    // short, and holds no element's style.
+    if (c->slots == NULL || (c->has_width && (c->has_words == NULL || c->has_scratch == NULL)) ||
+        (c->nrules > 0 && c->seen == NULL)) {
         os64_free(c->slots);
         os64_free(c->has_words);
+        os64_free(c->seen);
         c->slots = NULL;
         c->has_words = NULL;
+        c->seen = NULL;
         c->has_width = 0;
         c->slotcap = 0;
         c->incomplete = true;
         return c;
     }
-    // Its marks on the read's rules (RuleSeen): none for want of memory
-    // leaves the cascade short.
-    if (c->nrules > 0 && (c->seen = os64_calloc((size_t)c->nrules, sizeof(*c->seen))) == NULL)
-        c->incomplete = true;
     Match *m = NULL;
     int32_t mcap = 0;
     AppliedScratch scratch = {0};
@@ -3517,10 +3554,11 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
     if (short_read)
         c->incomplete = true;
     // What updates may retain is held to the initial state's size, the
-    // read's counted in: one state's worth, as before the read had an
-    // arena of its own, whether this cascade made it or took it.
+    // read's heap counted in (what lay in `self` before the read had an
+    // arena of its own; the declarations' arena was never counted),
+    // whether this cascade made the read or took it.
     c->initial_state_bytes = os64_arena_stats(c->self.arena).used_bytes;
-    size_t whole = c->initial_state_bytes + c->read->bytes;
+    size_t whole = c->initial_state_bytes + c->read->heap_bytes;
     c->retained_budget = whole > 4096 ? whole : 4096;
     // A cascade that must rebuild cannot consume invalidations. Registering
     // it would still make DOM/parser mutations allocate and retain log entries.

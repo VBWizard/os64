@@ -33,8 +33,13 @@ page's never trade one slot.
 | the limits | `state_bytes` caps the read's arena, `read_bytes` its declarations | value |
 | quirks mode | declarations and `@supports` are read in it | value |
 | `garb_env_t`, every field | `@media` groups, sheet and import media are decided while reading | value, all fields |
-| each input sheet | its rules are what is read | its parse serial (`garb_parsed_t.serial`), never its address; parent, imported or not, media text, the import's `via` |
+| each input sheet | its rules are what is read | its parse serial (`garb_parsed_t.serial`), so an address re-used by another parse never matches; its address too, since the read keeps the giver's inputs and `garb_cascade_matches_scoped` compares them by address; parent, imported or not, media text, the import's `via` |
 | the scopes | which sheets apply in which tree | as `garb_cascade_matches_scoped`: root address and sheet lists |
+
+**Condition 4's second half is policy here**: a read whose declarations arena could not be made keeps them
+in its own `heap`, which is the read's and lives as long as it does, so taking it would be safe; it is refused
+anyway, as ruled. The allocation sweep (`sweep_kept`) fails each allocation of a build in turn and offers the
+read made: every one taken answers as the whole cascade does.
 
 **The serial has one door** (Fable's condition 1): `start_limited` (parse.c), which every parse passes, so a
 parse into a struct used before takes a new one. The struct's comment says that anything changing a parsed
@@ -61,9 +66,11 @@ Shown not to exist: `anchor_bits()` only reads; `file_selector()`, `add_face()`,
 reading would land in the read's arena, not in the making cascade's.
 
 **Checkable**: with `check_read` (yonder sets it under `--cascade-check`) the read is hashed raw when made
-(`read_digest`: every array a cascade could reach, as its bytes lie) and again when taken; a difference sets
-`garb_cascade_read_written`. Under the same switch yonder compares a taken read with the sheets read again,
-by content (`read_content`, no addresses): the record's `kept read check` counts the checks and those that
+(`read_digest`: every array the read made, as its bytes lie; the selectors and text they point into are
+the sheets' own parse) and again when taken; a difference sets
+`garb_cascade_read_written`. Under the same switch yonder compares a cascade that took a read with one that
+read the sheets again: their reads' shapes (`read_content`, no addresses), then every element's winners
+(`garb_cascade_compare`): the record's `kept read check` counts the checks and those that
 differed, and a difference is printed too.
 
 ## The scopes' roots (condition 3)
@@ -78,8 +85,9 @@ another attached between builds, a read held past its giver's free, under ASan).
 
 ## What it costs, and what it keeps
 
-- The retained budget an update may grow to counts the read's size (`Read.bytes`), so updates behave as
-  they did when the read lay in `self`.
+- The retained budget an update may grow to counts the read's heap (`Read.heap_bytes`): the bytes that lay
+  in `self` before the read had an arena of its own. The declarations' arena was never counted, and still
+  is not, so updates behave as they did.
 - `garb_cascade_parts` counts the read in each cascade holding it, so a read shared for a moment by the
   outgoing and incoming cascades is counted twice.
 - A cascade's state cap (`state_bytes`) now caps two arenas, `self` and the read's `heap`, where it capped

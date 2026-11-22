@@ -2154,9 +2154,12 @@ static void cascade_check(const Page *p, const garb_cascade_t *updated, const ga
 
 // --cascade-check's check of a kept read (KEPT_READ.md): one fresh build in
 // `s_cascade_check` that took its read from the cascade it replaced is
-// compared with the sheets read again, by content
-// (garb_cascade_read_content), and asked whether that read had been
-// written since it was made (garb_cascade_read_written, under check_read).
+// asked whether that read had been written since it was made
+// (garb_cascade_read_written, under check_read), then compared with a
+// cascade that read the sheets again: their reads' shapes
+// (garb_cascade_read_content), then every element's winners
+// (garb_cascade_compare), which is what a key that missed something would
+// change.
 // Every check is counted in the record's `kept read check` fact, so a run
 // whose reads all agreed says so; a difference is also printed. The fact
 // takes the timeline's room: a busy page fills the ordinary one first.
@@ -2171,22 +2174,30 @@ static void kept_read_check(const Page *p, const garb_cascade_t *built, const ga
     limits.clock = NULL;
     garb_cascade_t *fresh = garb_cascade_scoped(in, n, ps->scopes, ps->nscopes, page_doc(p), view, &limits);
     const char *wrong = NULL;
+    char why[512];
     if (garb_cascade_read_written(built))
         wrong = "the kept read had been written since it was made";
     else if (fresh != NULL && !garb_cascade_incomplete(fresh) &&
              garb_cascade_read_content(fresh) != garb_cascade_read_content(built))
         wrong = "the kept read differs from the sheets read again";
+    else if (fresh != NULL && !garb_cascade_incomplete(fresh) &&
+             !garb_cascade_compare(built, fresh, page_doc(p), why, sizeof(why))) {
+        // The page's own bytes reach a terminal that obeys escape
+        // sequences: a control byte is shown as `?`.
+        for (char *x = why; *x != '\0'; x++)
+            if ((unsigned char)*x < 0x20 || (unsigned char)*x == 0x7f) *x = '?';
+        wrong = why;
+    }
     garb_cascade_free(fresh);
-    static const char *latest;
+    static char latest[512];
     if (wrong != NULL) {
         s_read_differed++;
-        latest = wrong;
+        os64_snprintf(latest, sizeof(latest), "%s", wrong);
         os64_printf("yonder: kept read check: %s\n", wrong);
     }
-    char line[256];
+    char line[640];
     os64_snprintf(line, sizeof(line), "this yonder's checks: %u of %u differed%s%s", s_read_differed,
-                  s_read_checked / s_cascade_check, latest != NULL ? "; the latest: " : "",
-                  latest != NULL ? latest : "");
+                  s_read_checked / s_cascade_check, latest[0] != '\0' ? "; the latest: " : "", latest);
     yonder_diag_timeline_fact(layout_profile_diag(p), "kept read check", line);
 }
 

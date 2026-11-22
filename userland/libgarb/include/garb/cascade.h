@@ -315,9 +315,11 @@ const char *garb_read_refusal_name(garb_read_refusal_t reason);
 // later build as `read_from`; it outlives the cascade until released.
 garb_read_t *garb_cascade_read_hold(const garb_cascade_t *c);
 void garb_read_release(garb_read_t *r);
-// The read's contents hashed by what they say, not where they live: two
-// reads of the same sheets in the same environment hash equal, whichever
-// cascade made them (the check of a kept read against one read again).
+// The read's shape hashed, with no address in it (its counts, rule order,
+// declaration names, the index's keys, the keyframes', faces' and skipped
+// names): two reads of the same sheets in the same environment hash equal,
+// whichever cascade made them. A first check only: a different value or
+// selector need not show, which garb_cascade_compare does.
 uint64_t garb_cascade_read_content(const garb_cascade_t *c);
 // With `check_read`: true when the read this cascade took had been written
 // since it was made (its raw hash then and now differ). False without the

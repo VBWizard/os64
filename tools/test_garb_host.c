@@ -1067,6 +1067,68 @@ static char *cascade_answer(const char *text, size_t len, bool *incomplete)
     return out;
 }
 
+// A read made with one allocation failing, offered to a build that fails
+// none (KEPT_READ.md, condition 4): taken only if it is whole, so a build
+// that took it answers as the whole cascade does. Its winners' dump, or
+// NULL when the read was refused; `took` says which.
+static char *kept_answer(const garb_parsed_t *r, size_t at, bool *took)
+{
+    garb_sheet_in_t in = {.sheet = r};
+    garb_env_t env = {.width = 800, .height = 600};
+    allocations = 0;
+    fail_at = at;
+    garb_cascade_t *maker = garb_cascade(&in, 1, s_sweep_doc, env);
+    fail_at = 0;
+    garb_read_t *held = garb_cascade_read_hold(maker);
+    garb_cascade_free(maker);
+    garb_cascade_limits_t limits = {GARB_ARENA_MAX, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX, NULL, held, false};
+    garb_cascade_t *taker = garb_cascade_scoped(&in, 1, NULL, 0, s_sweep_doc, env, &limits);
+    garb_read_release(held);
+    *took = taker != NULL && garb_cascade_read_refusal(taker) == GARB_READ_KEPT;
+    char *out = NULL;
+    if (*took) {
+        size_t need = garb_cascade_dump(taker, s_sweep_doc, NULL, 0) + 1;
+        out = malloc(need);
+        garb_cascade_dump(taker, s_sweep_doc, out, need);
+        if (garb_cascade_incomplete(taker)) out[0] = '!';
+    }
+    garb_cascade_free(taker);
+    return out;
+}
+
+static int sweep_kept(const char *what, const char *text, size_t len)
+{
+    garb_parsed_t r;
+    (void)garb_parse_sheet((const uint8_t *)text, len, NULL, NULL, &r);
+    bool took;
+    char *whole = kept_answer(&r, 0, &took);
+    size_t worst = allocations;
+    int failures = !took;
+    size_t refused = 0;
+    fail_single = true;
+    for (size_t at = 1; at <= worst && whole != NULL; at++) {
+        char *part = kept_answer(&r, at, &took);
+        if (!took) refused++;
+        else if (strcmp(part, whole) != 0) {
+            fprintf(stderr, "FAIL sweep kept %s: a read made with allocation %zu failing was taken, and the "
+                    "taker's answer is not the whole one\n", what, at);
+            failures++;
+        }
+        free(part);
+    }
+    fail_single = false;
+    free(whole);
+    garb_free(&r);
+    if (live != s_live_base) {
+        fprintf(stderr, "FAIL sweep kept %s: %zu leaked\n", what, live - s_live_base);
+        failures++;
+        live = s_live_base;
+    }
+    printf("libgarb sweep, kept reads over %s: each of %zu allocations of a build failed alone, %zu reads "
+           "refused, every one taken whole%s\n", what, worst, refused, failures == 0 ? "" : " -- FAILED");
+    return failures;
+}
+
 static int sweep_cascade(const char *what, const char *text, size_t len)
 {
     allocations = 0;
@@ -1199,6 +1261,7 @@ static int sweep(const char *path)
     failures += sweep_grown_lists();
     failures += sweep_selectors();
     failures += sweep_cascade(path, text, len);
+    failures += sweep_kept(path, text, len);
     os64_html_document_free(s_sweep_doc);
     s_live_base = 0;
     return failures == 0 ? 0 : 1;
