@@ -586,6 +586,10 @@ static void update_has(void)
                              "measure: a broad refusal names its change, what passed its style down, and the marks");
             else
                 update_check(refused && !named,"measure: a broad refusal with no clock names nothing");
+            // The trigger is the latest update's alone: the next ask, refused
+            // before it marks anything, names none.
+            update_check(!garb_cascade_update(m.c) && !garb_cascade_broad_trigger(m.c,&t),
+                         "measure: an update refused after a broad one names no trigger");
             has_close(&m);
         }
         update_check(!strcmp(garb_mark_name(GARB_MARK_HAS),":has()") && !strcmp(garb_mark_name(GARB_MARKS),"?"),

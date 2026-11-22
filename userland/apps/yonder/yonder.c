@@ -2039,13 +2039,13 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
 // THE LOAD'S TIMELINE (load_timeline.h): the latest navigation's first
 // minutes, step by step, kept only while yonder.conf names a diagnostics
 // directory, and written to that navigation's record alone: the one begun
-// at s_lt.began_us (lt_ours). Each step of the window loop costs a reading
-// of the clock while the timeline runs; each layout, task, paint, parser
-// call, look for sheets and arrival two; each piece of the page its parser
-// takes one; and nothing once it has stopped beyond the test of s_lt.on.
-// A fresh cascade is handed its clock (lt_clock) while it runs, which is
-// what has libgarb keep its measure (its build's parts, a broad refusal's
-// trigger).
+// at s_lt.began_us (lt_ours). While it runs, its hooks read the clock;
+// once it has stopped, each costs the test of s_lt.on. A fresh cascade
+// built while it runs is handed its clock (lt_clock), which has libgarb
+// keep its measure (the build's parts, a broad refusal's trigger), and
+// keeps it for that cascade's life: each of its updates then counts its
+// changes' marks, a few counters a change, whether or not anyone reads
+// them.
 static yonder_lt_t s_lt;
 
 // WHO ASKED for the layouts made between an lt_why_begin and its
@@ -2084,12 +2084,12 @@ static void lt_cascade_refused(const garb_cascade_t *c)
         sep = ", ";
     }
     if (at < sizeof(text)) {
-        k = os64_snprintf(text + at, sizeof(text) - at, "); the batch's change %u of %u, %u marked when refused",
+        k = os64_snprintf(text + at, sizeof(text) - at, "); %u of the batch's %u changes had marked %u when refused",
                           (unsigned)b.marked_changes, (unsigned)b.changes, (unsigned)b.dirty);
         at = k > 0 && (size_t)k < sizeof(text) - at ? at + (size_t)k : sizeof(text) - 1;
     }
     if (b.restyled && at < sizeof(text))
-        os64_snprintf(text + at, sizeof(text) - at, ", restyling having passed %s at depth %u's changed style "
+        os64_snprintf(text + at, sizeof(text) - at, ", restyling then passing the changed style of %s (depth %u) "
                       "down to %u", b.restyled_from, (unsigned)b.restyled_depth, (unsigned)b.restyled_marked);
     yonder_lt_broad(&s_lt, os64_micros(), b.marked, text);
 }
@@ -2212,7 +2212,9 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     int32_t why = updated ? -1 : cascade == NULL ? 0 : !scoped ? 1 : fresh_sheets ? 2 : !matches ? 3
                 : 3 + (int32_t)garb_cascade_update_refusal(cascade);
     if (!updated) {
-        if (s_lt.on)
+        // Only an update this layout asked for, refused as broad, has a
+        // trigger to tell.
+        if (s_lt.on && matches && garb_cascade_update_refusal(cascade) == GARB_UPDATE_BROAD)
             lt_cascade_refused(cascade);
         measured_fallback(p);
         // The cascade's own state is held to its share of page_memory_mb;
@@ -3502,8 +3504,10 @@ static void lt_parse(const os64_html_parser_t *parser, const char *kind, size_t 
 {
     int64_t now = os64_micros();
     const os64_html_node_t *open = parser != NULL ? os64_html_parser_open_text(parser) : NULL;
-    char text[YONDER_LT_PARSE_TEXT];
-    os64_snprintf(text, sizeof(text), "%s of %lu bytes, %lu KiB into the page%s%s%s", kind, (unsigned long)bytes,
+    char text[YONDER_LT_PARSE_TEXT], fed[40] = "";
+    if (bytes != 0)
+        os64_snprintf(fed, sizeof(fed), " of %lu bytes", (unsigned long)bytes);
+    os64_snprintf(text, sizeof(text), "%s%s, %lu KiB into the page%s%s%s", kind, fed,
                   (unsigned long)(g.stream.bytes / 1024), open != NULL ? ", inside a " : "",
                   open != NULL && open->name != NULL ? open->name : "", open != NULL ? " still open" : "");
     yonder_lt_parse(&s_lt, from, now > from ? (uint64_t)(now - from) : 0, text);

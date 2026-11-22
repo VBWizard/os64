@@ -302,6 +302,7 @@ struct garb_cascade {
     const os64_html_node_t *passing;    // restyle: the element passing its changed style down
     uint32_t mark_by[GARB_MARKS];
     garb_broad_trigger_t broad;
+    const os64_html_change_entry_t *broad_best;     // the change marking the most, this update only
     bool broad_set;
 };
 
@@ -3727,8 +3728,10 @@ static void describe(const os64_html_node_t *x, char *out, size_t cap)
     os64_snprintf(out, cap, "%s%s%s%s%.*s", x != NULL && x->name ? x->name : "?", *id ? "#" : "", id,
                   first ? "." : "", (int)first, cls);
 }
-// A change of the batch has made its marks (c->mark_by): the most marked
-// so far is kept, and the batch's counts always.
+// A change of the batch has made its marks (c->mark_by): the counts of the
+// most marked so far are kept, and the batch's counts always. Only counts:
+// the change is named once, at a refusal (broad_name), so an update that
+// goes ahead pays for no names.
 static void broad_note(garb_cascade_t *c, const os64_html_change_entry_t *e, uint32_t marked_changes,
                        uint32_t changes)
 {
@@ -3742,6 +3745,16 @@ static void broad_note(garb_cascade_t *c, const os64_html_change_entry_t *e, uin
     if (total <= b->marked && b->marked_changes > 1) return;
     b->marked = total;
     os64_memcpy(b->by, c->mark_by, sizeof(b->by));
+    c->broad_best = e;
+}
+// The kept change named, at a broad refusal: its kind, its target, the
+// target's depth and the attribute. The change log's entries live until
+// the reader is read again, which is after this update.
+static void broad_name(garb_cascade_t *c)
+{
+    garb_broad_trigger_t *b = &c->broad;
+    const os64_html_change_entry_t *e = c->broad_best;
+    if (e == NULL) return;
     b->kind = (int32_t)e->kind;
     const os64_html_node_t *t = e->target;
     if (t && !is_el(t)) t = t->parent;
@@ -3799,12 +3812,12 @@ static bool update(garb_cascade_t *c)
             if (parent) parent->removed_children = c->updates + 1;
         }
     c->ndirty = 0;
-    c->broad_set = false;
     // The caller's measure: the batch's size, then each change's marks.
     uint32_t nchanges = 0, nmarked = 0;
     if (c->limits.clock) {
         for (const os64_html_change_entry_t *e = changes; e; e = e->next) nchanges++;
         c->broad = (garb_broad_trigger_t){0};
+        c->broad_best = NULL;
     }
     for (const os64_html_change_entry_t *e = changes; e; e = e->next) {
         if (body_hint(e, c->doc)) { c->refusal = GARB_UPDATE_BODY_HINT; return false; }
@@ -3828,7 +3841,10 @@ static bool update(garb_cascade_t *c)
         }
         if (c->limits.clock) broad_note(c, e, ++nmarked, nchanges);
         if (!marked) {
-            c->broad_set = c->limits.clock != NULL && c->refusal == GARB_UPDATE_BROAD;
+            if (c->limits.clock && c->refusal == GARB_UPDATE_BROAD) {
+                broad_name(c);
+                c->broad_set = true;
+            }
             return false;
         }
     }
@@ -3876,6 +3892,7 @@ static bool update(garb_cascade_t *c)
     if (failed) {
         if (c->limits.clock && c->refusal == GARB_UPDATE_BROAD) {
             garb_broad_trigger_t *b = &c->broad;
+            broad_name(c);
             b->restyled = true;
             b->restyled_marked = c->mark_by[GARB_MARK_INHERITED];
             describe(c->passing, b->restyled_from, sizeof(b->restyled_from));
@@ -3900,6 +3917,9 @@ bool garb_cascade_update(garb_cascade_t *c)
 {
     if (!c) return false;
     c->refusal = GARB_UPDATE_DONE;
+    // A trigger is the latest update's alone: one refused before it (or
+    // not run at all) names none.
+    c->broad_set = false;
     return update(c);
 }
 

@@ -21,7 +21,7 @@ static const char *const kStep[YONDER_LT_STEPS] = {
 // A grid column's name: a step's, or the column past them.
 static const char *column(int s)
 {
-    return s < YONDER_LT_STEPS ? kStep[s] : "no step (before the loop)";
+    return s < YONDER_LT_STEPS ? kStep[s] : "no step";
 }
 
 static const char *const kIn[YONDER_LT_INS] = {
@@ -215,12 +215,12 @@ void yonder_lt_task(yonder_lt_t *t, int64_t at_us, const char *what, uint64_t us
     if (!t->on)
         return;
     uint64_t at = since(t, at_us);
-    if (at < LT_END_US) {
-        yonder_lt_slice_t *s = &t->slices[at / YONDER_LT_SLICE_US];
-        s->tasks++;
-        s->forced += layouts;
-        s->forced_us += layout_us;
-    }
+    if (at >= LT_END_US)
+        return;
+    yonder_lt_slice_t *s = &t->slices[at / YONDER_LT_SLICE_US];
+    s->tasks++;
+    s->forced += layouts;
+    s->forced_us += layout_us;
     if (!t->in_step)
         return;
     t->now.in_us[YONDER_LT_IN_TASKS] += us;
@@ -242,7 +242,7 @@ void yonder_lt_inside(yonder_lt_t *t, yonder_lt_in_t in, uint64_t us)
 
 void yonder_lt_parse(yonder_lt_t *t, int64_t from_us, uint64_t us, const char *text)
 {
-    if (!t->on)
+    if (!t->on || since(t, from_us) >= LT_END_US)
         return;
     yonder_lt_inside(t, YONDER_LT_IN_PARSING, us);
     t->nparse++;
@@ -296,7 +296,7 @@ void yonder_lt_build(yonder_lt_t *t, yonder_lt_why_t why, const yonder_lt_build_
 
 void yonder_lt_broad(yonder_lt_t *t, int64_t at_us, uint32_t marked, const char *text)
 {
-    if (!t->on)
+    if (!t->on || since(t, at_us) >= LT_END_US)
         return;
     t->nbroad++;
     uint32_t at = t->broad_kept;

@@ -256,6 +256,9 @@ static void test_the_end(void)
     yonder_lt_step_end(&t, end + 9 * S);
     yonder_lt_layout(&t, end + 5 * S, 1000, READ, NULL);
     yonder_lt_task(&t, end + 5 * S, "late", 1000, 0, 0);
+    yonder_lt_parse(&t, end + 5 * S, 1000, "late feed");
+    yonder_lt_broad(&t, end + 5 * S, 99, "late broad");
+    CHECK(t.nparse == 0 && t.parse_us == 0 && t.nbroad == 0 && t.broad_kept == 0);
     yonder_lt_bytes(&t, end + 5 * S, 4096);
     CHECK(t.nlongs == 1);
     uint32_t layouts = 0, tasks = 0, grid = 0;
@@ -326,7 +329,7 @@ static void test_lines(void)
     yonder_lt_layout(&t, BASE + 4700000, 210000, READ, &c);
     yonder_lt_layouts_line(&t, line, sizeof(line));
     LINE(line, "by who asked, in the step they ran in, the costliest first: a sheet arriving in the stream 1 in "
-               "250.0 ms, a script's read in no step (before the loop) 1 in 210.0 ms, a script's read in scripts 1 in 120.0 ms; cascades "
+               "250.0 ms, a script's read in no step 1 in 210.0 ms, a script's read in scripts 1 in 120.0 ms; cascades "
                "the layout profile timed: a script's read 1 in 200.0 ms (1 built fresh in 200.0 ms)");
     // Past the list: the summary says how many and how long.
     t.more_longs = 3;

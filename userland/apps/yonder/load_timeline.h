@@ -31,8 +31,12 @@
 //     trigger marked the most;
 //   - the arriving page's parser calls, and the slowest of them;
 //   - the milestones, each the first time it was told.
-// Past the last slice it takes nothing more (yonder_lt_running is false),
-// so a page left open for an hour costs the loop nothing after.
+// Past the last slice nothing begun after it is taken by what has a time
+// (steps, layouts, tasks, bytes, parser calls, broad refusals); what has
+// none (a part inside a step, a fresh build) is taken until the caller
+// stops the timeline (yonder_lt_stop), which yonder does at the first step
+// past the end (yonder_lt_running false). After that nothing is taken, so
+// a page left open for an hour costs the loop only the caller's test.
 //
 // Pure: no clock (every time is the caller's, in microseconds on one
 // clock), no allocation, no window. tools/test_load_timeline_host.sh.
@@ -137,8 +141,9 @@ typedef struct {
     yonder_lt_slice_t slices[YONDER_LT_SLICES];
     int64_t marks[YONDER_LT_MARKS];             // -1 until told
     // Every layout of the timeline by who asked and the step it ran in, a
-    // layout outside any step (before the loop's first turn) in the column
-    // past the steps, YONDER_LT_OUTSIDE; and, of those the layout profile
+    // layout outside any step in the column past the steps,
+    // YONDER_LT_OUTSIDE ("no step": before the loop's first turn, or after a
+    // navigation that began inside a step, until the loop's next step); and, of those the layout profile
     // timed, their cascades by who asked: how many, how long, and of them
     // those built fresh.
     uint32_t grid_n[YONDER_LT_WHYS][YONDER_LT_STEPS + 1];

@@ -441,19 +441,22 @@ the video's first picture. So while yonder.conf names a `diagnostics`
 directory, the latest navigation keeps a timeline for its first three
 minutes, from the moment its record begins:
 
-    timeline: from the navigation's start, in slices of 5 s, the window thread's steps; arrived 2.6 s, first paint 2.7 s, the video's first picture -; 3 steps of 200 ms or more
-    timeline layouts: by who asked, in the step they ran in, the costliest first: a script's read in scripts 60 in 1582.2 ms, after a script's changes in scripts 41 in 1106.3 ms, a script's read in the stream 40 in 948.4 ms, a page arriving in the stream 1 in 49.3 ms; cascades the layout profile timed: a script's read 100 in 64.0 ms (2 built fresh in 31.4 ms), a page arriving 1 in 12.8 ms (1 built fresh in 12.8 ms), after a script's changes 41 in 11.3 ms (0 built fresh in 0.0 ms)
-    timeline 0-5 s: busy 75% of 4.9 s: the stream 2539.8 ms (tasks 2276.8, layouts 997.7), waiting 1226.2 ms, scripts 791.5 ms (tasks 34.8, layouts 608.3), paint 340.4 ms (drawing 339.2), input 28.0 ms, the turn's close 11.7 ms, the rest 11.7 ms; layouts 64 in 1622.1 ms (a script's read 40 in 948.4, after a script's changes 23 in 624.3, a page arriving 1 in 49.3); script tasks 26, forcing 40 layouts in 1308.8 ms; parsed 1 KiB
-    timeline longest 2: at 5.5 s, scripts 2142.4 ms; layouts in it 61 in 1603.2 ms (a script's read 60 in 1582.2, after a script's changes 1 in 21.0), its script tasks forcing 60 in 2058.8 ms; its longest task timer file:///home/lt.html#timer-1, 2115.0 ms, forcing 60 layouts in 2058.8 ms
+    timeline: from the navigation's start, in slices of 5 s, the window thread's steps; arrived 3.8 s, first paint 3.8 s, the video's first picture -; 39 parser calls in 690.7 ms; updates refused as broad: 1; 3 steps of 200 ms or more
+    timeline layouts: by who asked, in the step they ran in, the costliest first: a script's read in the stream 30 in 971.9 ms, a script's read in scripts 1 in 53.8 ms, a page arriving in the stream 1 in 44.6 ms, after a script's changes in scripts 2 in 35.0 ms; fresh cascades by part: a script's read 2 in 36.9 ms (reading the sheets 11.0, the table 0.9, matching 25.0; 2 rules and 310 elements a build), a page arriving 1 in 12.3 ms (reading the sheets 4.1, the table 0.3, matching 8.0; 2 rules and 310 elements a build); cascades not timed whole (yonder --layout-profile times them)
+    timeline 0-5 s: busy 77% of 4.9 s: the stream 3714.4 ms (tasks 2654.6, layouts 1016.5, parsing 690.7, finding sheets 26.4, arriving 100.9), waiting 1158.4 ms, paint 50.0 ms (drawing 49.6), the rest 24.4 ms; layouts 31 in 1016.5 ms (a script's read 30 in 971.9, a page arriving 1 in 44.6); script tasks 4, forcing 30 layouts in 1117.8 ms; parsed 551 KiB
+    timeline longest 2: at 2.3 s, the stream 1176.1 ms; layouts in it 30 in 971.9 ms (a script's read 30 in 971.9), its script tasks forcing 30 in 1117.8 ms; its longest task script file:///home/lt.html#inline-2, 1174.8 ms, forcing 30 layouts in 1117.8 ms
+    timeline broad 1: at 5.5 s, an attribute class of i#i.b at depth 4 marked 4 of 310 elements (its subtree 1, :has() 3); 1 of the batch's 1 changes had marked 156 when refused, restyling then passing the changed style of div#a.a (depth 3) down to 152
+    timeline parse 1: at 0.7 s, 68.5 ms: a feed of 16384 bytes, 528 KiB into the page, inside a script still open
 
 - **The steps are the window loop's own** (`yonder_lt_step_t`): waiting,
   input, the window's layouts, the stream (a slice of the arriving page's
   parse, or one of its scripts), the page waiting for its sheets, scripts
   (the shown page's tasks), bodies and media, motion, upkeep, observers,
   paint, the turn's close. Each is timed by the clock as the loop enters
-  the next, so the steps cover the loop with no gap, and a step running
-  across a slice's edge is shared between the slices by time. A slice's
-  `busy` is its time not waiting.
+  the next, so from the loop's first step the steps cover it with no gap
+  (a navigation that begins inside a step starts counting at the loop's
+  next step), and a step running across a slice's edge is shared between
+  the slices by time. A slice's `busy` is its time not waiting.
 - **What was inside a step**, in parentheses after it: its script tasks,
   its layouts, its drawing (the whole of a paint: the backdrops' marks,
   the kept drawings, the render and the publish), the arriving page's
@@ -469,8 +472,9 @@ minutes, from the moment its record begins:
   asker stands, so a rebuild a read asks for is the read's; a layout no
   site tagged says `no reason told`, so what the tagging misses shows.
   Each slice counts its layouts by asker, and `timeline layouts` counts
-  every layout by asker and the step it ran in (`no step (before the
-  loop)` for one made before the loop's first turn). With `yonder
+  every layout by asker and the step it ran in (`no step` for one made
+  outside any: before the loop's first turn, or after a navigation that
+  began inside a step, until the next). With `yonder
   --layout-profile`, the same line gives each asker's cascades: their
   time, and how many were built fresh.
 - **What scripts forced** is each task's own count when it ends (the DOM's
@@ -515,14 +519,15 @@ minutes, from the moment its record begins:
   at each write of its navigation's record — its arrival, its last picture,
   each `d`, its leaving. A record written after a later navigation began
   keeps the lines its last write gave it.
-- **What it costs**: a reading of the clock as the loop enters each step,
-  two around each layout, task, paint, parser call, look for sheets and
-  arrival, one for each piece of the page its parser takes, and four in
-  each fresh cascade, with libgarb's counts of an update's marks, only
-  while it runs; past its last slice it stops. Without `diagnostics` it
-  never starts: each hook is then one test of a flag, a tagged asker one
-  store putting back what it found, and libgarb, given no clock, counts
-  nothing (a store of which mark is being made, per mark call).
+- **What it costs**: while it runs, readings of the clock at its hooks;
+  past its last slice it stops, and its hooks cost a test of a flag. A
+  cascade built while it ran keeps its clock for its life, so its updates
+  go on counting their changes' marks (a few counters a change; the change
+  is named only at a broad refusal) after the timeline has stopped.
+  Without `diagnostics` it never starts: each hook is a test of a flag, a
+  tagged asker a store putting back what it found, and libgarb, given no
+  clock, counts nothing (a store of which mark is being made, per mark
+  call).
 
 ### Built differently from the brief, and why
 
