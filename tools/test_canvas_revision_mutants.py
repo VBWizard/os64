@@ -2,8 +2,8 @@
 """One deliberate break at a time to the canvas's revision
 (userland/libcanvas/core.c, c_revised: a value no canvas has had, at every
 reset and every draw that changes a pixel — the kept canvas pictures' key),
-against tools/test_canvas_core.sh's revisions() and the paths suite's
-revisions_drawn() (python3 tools/test_svg_core.py --canvas): a mutant is
+against tools/test_canvas_core.sh's revisions() and
+tools/test_canvas_paths.sh's revisions_drawn(): a mutant is
 CAUGHT when the suites fail, MISSED when they pass, which means a test is
 missing and gets written. A build failure is neither.
 
@@ -27,7 +27,7 @@ root = pathlib.Path(__file__).resolve().parent.parent
 args.logs.mkdir(parents=True, exist_ok=True)
 
 CORE = 'userland/libcanvas/core.c'
-CASES = 'bash tools/test_canvas_core.sh && python3 tools/test_svg_core.py --canvas --output /tmp/canvas-revision-mutants-build'
+CASES = 'bash tools/test_canvas_core.sh && bash tools/test_canvas_paths.sh'
 
 mutants = [
     ('not-revised-at-a-draw', '    if (d.x1 <= d.x0 || d.y1 <= d.y0) return;\n    c_revised(c);\n',
