@@ -231,11 +231,12 @@ or differently.
   nothing itself (a sprite sheet's). A definition that the change log
   names is NO_BOX in libflow (`drawn_by`): what draws it is not bounded.
   An svg's reference by id (a `<use>`, a `url(` in an attribute or among
-  an element's winners in the cascade) finds the document's
+  the winners in the cascade of the svg, anything in it, or, for an
+  inherited property, an element it is in) finds the document's
   first element of that id, of any kind (svg.c `fragment_target`), so
   whenever anything in an svg changed, an id or `xml:base` changed, or an
-  element holding an id was added or removed (or a subtree with one in
-  it), every svg that refers by id
+  element holding an id or an `xml:base` was added or removed (or a
+  subtree with one in it), every svg that refers by id
   is named too.
 - **A picture's sources** choose what its img draws: a source's attribute,
   or the picture's children, mark the img. A `base` changed, added or
@@ -264,7 +265,9 @@ or differently.
   (form controls, players: the toolkit paints them over the view) left
   out; a rebuild that marked nothing marks one pixel so that it has a
   paint to check. The whole paint stays, being right, but where something
-  was left out the window's pixels are put back. Its line is `damage check`
+  was left out the window's pixels are put back; with more to leave out
+  than its room, the check is not made and nothing is painted (`could not
+  be compared`). Its line is `damage check`
   in the record's summaries, each difference a `failed` line with where
   and what the rebuild marked.
 - **Proof**: test_yonder_damage.inc (a case for each kind of change and

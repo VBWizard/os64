@@ -17,11 +17,13 @@ static const char kDamagePage[] =
     "#posbox{position:relative;height:40px}#abs{position:absolute;left:0;top:0}"
     "#filler{height:900px}#back{position:absolute;left:0;top:0;width:860px;height:420px;z-index:-1}#mover{width:40px;height:16px;background:purple;transform:translateX(200px)}"
     ".hot circle{fill:green}#wrap2{width:50px}#wide2{width:200px;background:green}"
-    "#empty{width:200px;height:18px}.cool stop{stop-color:blue}.gfill rect{fill:url(#gr)}.warm rect{fill:orange}</style><body id=bd>"
+    "#empty{width:200px;height:18px}.cool stop{stop-color:blue}.gfill rect{fill:url(#gr)}.warm rect{fill:orange}.gwrap{fill:url(#gr)}</style><body id=bd>"
     "<div id=idswap2 style=height:0></div><svg id=gdefs width=4 height=4><defs><linearGradient id=gr><stop offset=0 stop-color=red></stop>"
     "<stop offset=1 stop-color=red></stop></linearGradient></defs></svg>"
     "<svg width=40 height=10><rect width=40 height=10 fill=url(#gr)></rect></svg>"
     "<svg class=gfill width=40 height=10><rect width=40 height=10></rect></svg>"
+    "<svg fill=url(#gr) width=40 height=10><rect width=40 height=10></rect></svg>"
+    "<span class=gwrap><svg width=40 height=10><rect width=40 height=10></rect></svg></span>"
     "<div id=back></div><div id=box>box</div><div id=empty></div><input id=field>"
     "<svg id=defs width=12 height=12><defs><rect id=dr width=6 height=6 fill=red></rect></defs></svg>"
     "<svg width=20 height=20><use href=#dr></use><use href=#hr x=10></use></svg>"
@@ -247,6 +249,35 @@ static void damage_walk_change(void)
     }
 }
 
+/* More widgets than the check can leave out: it is not made, and nothing
+ * is painted over the widget past the room. */
+static void damage_widget_cases(void)
+{
+    static char html[4096];
+    size_t at = (size_t)snprintf(html, sizeof(html), "%s",
+                                 "<!doctype html><style>body{margin:0}input{width:20px;height:10px}</style>"
+                                 "<body><div id=box>box</div><div id=meter data-v=1>m</div>");
+    for (int i = 0; i < 70 && at + 16 < sizeof(html); i++)
+        at += (size_t)snprintf(html + at, sizeof(html) - at, "<input>");
+    damage_begin(html);
+    damage_attr("meter", "data-v", "0");
+    (void)damage_step();
+    os64_gui_rect_t r = g.nfw > 0 ? g.fw[g.nfw - 1]->w->bounds : (os64_gui_rect_t){0, 0, 0, 0};
+    for (int32_t y = r.y; y < r.y + r.h; y++)
+        for (int32_t x = r.x; x < r.x + r.w; x++)
+            damage_screen.surf.pixels[(size_t)y * 900 + x] = 0xff123456u;
+    uint64_t uncompared = s_damage_uncompared;
+    damage_style("box", "color:blue");
+    DamageSaid said = damage_step();
+    bool kept = r.w > 0 && r.h > 0 &&
+                damage_screen.surf.pixels[(size_t)(r.y + r.h / 2) * 900 + r.x + r.w / 2] == 0xff123456u;
+    check(g.nfw > 64 && said.compared == 0 && s_damage_uncompared == uncompared + 1 && kept,
+          "damage: more widgets than the check's room: not compared, and no widget painted over");
+    if (!kept || said.compared != 0)
+        printf("  widgets %d, compared %lu, kept %d\n", (int)g.nfw, (unsigned long)said.compared, (int)kept);
+    damage_end();
+}
+
 static void damage_walk_cases(void)
 {
     damage_begin(kDamageWalkPage);
@@ -333,6 +364,23 @@ static void damage_cases(void)
     os64_html_remove(g.page.way.doc, probe_id("late")->parent);
     damage_expect("damage: an id inside a subtree taken away marks the svgs that refer by id", damage_step(),
                   "parts past half the view");
+    // An xml:base inside a wrapper with neither an id nor one of its own,
+    // put in and taken out: while it is there svg.c turns every reference
+    // by id away.
+    {
+        int64_t status = 0;
+        os64_html_document_t *doc = g.page.way.doc;
+        os64_html_node_t *wrap = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", &status);
+        os64_html_node_t *span = os64_html_create_element(doc, OS64_HTML_NS_HTML, "span", &status);
+        os64_html_set_attr(doc, span, "xml:base", "elsewhere/", 10);
+        os64_html_insert(doc, wrap, span, NULL);
+        os64_html_insert(doc, probe_id("list"), wrap, NULL);
+        damage_expect("damage: an xml:base inside a subtree put in marks the svgs that refer by id", damage_step(),
+                      "parts past half the view");
+        os64_html_remove(doc, wrap);
+        damage_expect("damage: an xml:base inside a subtree taken away marks the svgs that refer by id",
+                      damage_step(), "parts past half the view");
+    }
     {
         int64_t status = 0;
         os64_html_document_t *doc = g.page.way.doc;
@@ -456,5 +504,6 @@ static void damage_cases(void)
     damage_expect("damage: a background the canvas takes is the whole view", damage_step(),
                   kRefused[FLOW_PARTS_CANVAS]);
     damage_end();
+    damage_widget_cases();
     damage_walk_cases();
 }

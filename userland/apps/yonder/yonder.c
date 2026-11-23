@@ -12474,7 +12474,7 @@ static bool drawn_from_document(const flow_tree_t *t, const os64_html_node_t *n)
 // - a base's change, or a base added or removed, refuses (CHANGE_BASE):
 //   every address resolves against it.
 // `*refs` is set when what an id names may have changed: an id or xml:base
-// attribute, or an element holding an id added or removed, the nodes the
+// attribute, or an element holding either added or removed, the nodes the
 // log lists or anything inside them (the log lists a subtree's root
 // alone). An svg's reference by id finds the document's first element of
 // that id, whatever it is (svg.c's fragment_target), so change_svgs marks
@@ -12520,7 +12520,8 @@ static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, co
             for (size_t i = 0; i < count && !base; i++)
                 for (const os64_html_node_t *d = nodes[i]; d != NULL && !base; d = next_within(d, nodes[i])) {
                     base = html_base(d);
-                    *refs = *refs || (d->kind == OS64_HTML_ELEMENT && os64_html_attr(d, "id") != NULL);
+                    *refs = *refs || (d->kind == OS64_HTML_ELEMENT && os64_html_attr(d, "id") != NULL) ||
+                            (d->kind == OS64_HTML_ELEMENT && os64_html_attr(d, "xml:base") != NULL);
                 }
         }
         if (base) {
@@ -12607,6 +12608,21 @@ static bool svg_refers(const garb_cascade_t *c, const os64_html_node_t *d)
     return false;
 }
 
+// Whether an element svg `root` is in hands it a reference by id among its
+// winners in the cascade `c`: an inherited property naming a `url(`, as a
+// fill set on a wrapper does.
+static bool svg_inherits_reference(const garb_cascade_t *c, const os64_html_node_t *root)
+{
+    for (const os64_html_node_t *a = root->parent; c != NULL && a != NULL && a->kind == OS64_HTML_ELEMENT;
+         a = a->parent) {
+        garb_style_t style = garb_style_for(c, a);
+        for (int32_t j = 0; j < style.n; j++)
+            if (garb_prop_inherited(style.sets[j].prop) && style.sets[j].value.kind == GARB_V_URL)
+                return true;
+    }
+    return false;
+}
+
 // Whether the cascade `c` recomputed element `n`'s winners since the shown
 // tree's update `since`, or is not that cascade brought up to date
 // (`fresh`), in which case every element's may have changed.
@@ -12629,7 +12645,9 @@ static bool svg_restyled(const garb_cascade_t *c, const os64_html_node_t *n, uin
 // whenever anything in an svg changed, by the cascade or in the change log
 // (`svg_touched`: `out` already names an svg element), or what an id names
 // may have changed (`refs`, change_touched), so is every one that refers
-// by id (svg_refers), which may draw any element of the document that way.
+// by id, itself or anything in it (svg_refers) or by what it inherits
+// (svg_inherits_reference), which may draw any element of the document
+// that way.
 // False past `cap`, for the whole view.
 static bool change_svgs(const Page *p, const flow_tree_t *now, const garb_cascade_t *c, const os64_html_node_t **out,
                         int32_t *n, int32_t cap, bool refs)
@@ -12666,8 +12684,9 @@ static bool change_svgs(const Page *p, const flow_tree_t *now, const garb_cascad
                         named = d->kind == OS64_HTML_ELEMENT && svg_restyled(c, d, since, fresh);
                     svg_touched = svg_touched || named;
                 } else {
-                    for (const os64_html_node_t *d = root->first_child; !named && d != NULL; d = next_within(d, root))
+                    for (const os64_html_node_t *d = root; !named && d != NULL; d = next_within(d, root))
                         named = svg_refers(c, d);
+                    named = named || svg_inherits_reference(c, root);
                 }
                 if (named) {
                     if (*n == cap)
@@ -19568,10 +19587,32 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
 // stays, being right.
 static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bounds, os64_gui_rect_t whole)
 {
+    // What the comparison leaves out, in the window: the videos' boxes,
+    // and the page's widgets (form controls and players), which the
+    // toolkit paints over the view after it, so that what the window held
+    // there is theirs and not the page's. Past the room some would not be
+    // left out, and the whole paint would go over them for good: the
+    // comparison is not made, and nothing is painted.
+    enum { LEFT_OUT = 64 };
+    os64_gui_rect_t left_out[LEFT_OUT];
+    int32_t nleft = 0;
+    for (int32_t i = 0; i < VIDEOS_MAX && nleft < LEFT_OUT; i++) {
+        const flow_box_t *b = s_videos[i].node != NULL ? flow_box_for(g.page.tree, s_videos[i].node) : NULL;
+        if (b == NULL)
+            continue;
+        os64_gui_rect_t r = flow_box_doc_rect(b, scroll_now());
+        left_out[nleft++] = (os64_gui_rect_t){r.x + gl->dx, r.y + gl->dy, r.w, r.h};
+    }
+    for (int32_t i = 0; i < g.nfw && nleft < LEFT_OUT; i++)
+        if (!g.fw[i]->w->hidden)
+            left_out[nleft++] = g.fw[i]->w->bounds;
+    for (int32_t i = 0; i < g.nplayers && nleft < LEFT_OUT; i++)
+        if (!g.players[i]->p.w.hidden)
+            left_out[nleft++] = g.players[i]->p.w.bounds;
     os64_gui_rect_t win;
     const os64_gui_rect_t surf = {0, 0, (int32_t)gl->surf->width, (int32_t)gl->surf->height};
     uint32_t *before = NULL;
-    bool check = os64_rect_intersect(bounds, surf, &win);
+    bool check = nleft < LEFT_OUT && os64_rect_intersect(bounds, surf, &win);
     if (check)
         before = os64_malloc((size_t)win.w * (size_t)win.h * sizeof(uint32_t));
     check = check && before != NULL;
@@ -19587,35 +19628,9 @@ static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bou
         yonder_paint(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
         box_bars(gl, view);
         gl->clip = was;
-        // What the comparison leaves out, in the window: the videos' boxes,
-        // and the page's widgets (form controls and players), which the
-        // toolkit paints over the view after it, so that what the window
-        // held there is theirs and not the page's.
-        enum { LEFT_OUT = 64 };
-        os64_gui_rect_t left_out[LEFT_OUT];
-        int32_t nleft = 0;
-        for (int32_t i = 0; i < VIDEOS_MAX && nleft < LEFT_OUT; i++) {
-            const flow_box_t *b = s_videos[i].node != NULL ? flow_box_for(g.page.tree, s_videos[i].node) : NULL;
-            if (b == NULL)
-                continue;
-            os64_gui_rect_t r = flow_box_doc_rect(b, scroll_now());
-            left_out[nleft++] = (os64_gui_rect_t){r.x + gl->dx, r.y + gl->dy, r.w, r.h};
-        }
-        for (int32_t i = 0; i < g.nfw && nleft < LEFT_OUT; i++)
-            if (!g.fw[i]->w->hidden)
-                left_out[nleft++] = g.fw[i]->w->bounds;
-        for (int32_t i = 0; i < g.nplayers && nleft < LEFT_OUT; i++)
-            if (!g.players[i]->p.w.hidden)
-                left_out[nleft++] = g.players[i]->p.w.bounds;
-        // Past the room, some are not left out: the comparison is not made.
-        bool room = nleft < LEFT_OUT;
         int64_t first = -1, differ = 0;
         os64_gui_rect_t reach = {0, 0, 0, 0};
-        if (!room) {
-            s_damage_compared--;
-            s_damage_uncompared++;
-        }
-        for (int32_t y = 0; room && y < win.h; y++) {
+        for (int32_t y = 0; y < win.h; y++) {
             const uint32_t *row = gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x;
             for (int32_t x = 0; x < win.w; x++) {
                 if (((row[x] ^ before[(size_t)y * win.w + x]) & 0x00ffffffu) == 0)
