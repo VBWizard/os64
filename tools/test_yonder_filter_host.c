@@ -634,6 +634,13 @@ static void blur_contract_cases(void)
             }
     }
     expect("blur contract: most of the radii are reduced", reduced >= 7, NULL);
+    // The thresholds are the table's (filter.c's constants): the reduction
+    // steps where the reduced radius would fall below the floor.
+    static const int32_t steps[][2] = {{13, 1}, {14, 2}, {27, 2}, {28, 4}, {55, 4}, {56, 8}, {200, 8}};
+    int at_steps = 1;
+    for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++)
+        at_steps &= yonder_filter_reduction(steps[i][0]) == steps[i][1];
+    expect("blur contract: each reduction begins at the floor's radius", at_steps, NULL);
     expect("blur contract: content a reach inside its layer within 2 of 255", most[0] <= CONTRACT_INSIDE,
            worst[0]);
     expect("blur contract: content touching a cut edge within its measured bound",
