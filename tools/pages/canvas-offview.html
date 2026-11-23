@@ -43,8 +43,11 @@ function paint(id, colour) {
   x.fillStyle = '#fff';
   x.fillRect(20, 5, 6, 25);
 }
-setTimeout(() => { paint('ca', '#c03'); paint('cb', '#c03'); paint('cc', '#000'); }, 1000);
-setTimeout(() => { paint('ca', '#09c'); paint('cb', '#09c'); paint('cc', '#fff'); }, 2000);
+setTimeout(() => { paint('ca', '#c03'); paint('cb', '#c03'); }, 1000);
+setTimeout(() => { paint('ca', '#09c'); paint('cb', '#09c'); }, 2000);
+// C in turns of its own: B's mark is the whole view, which would cover it.
+setTimeout(() => paint('cc', '#000'), 1500);
+setTimeout(() => paint('cc', '#fff'), 2500);
 setTimeout(() => window.scrollTo(0, 1900), 3000);
 setTimeout(() => paint('ca', '#3a3'), 5000);
 let n = 0;
