@@ -134,10 +134,11 @@ lists, including `:is()`, `:not()` and `:where()`.
 Attribute/state changes restyle the target's subtree. Following-sibling
 combinators also mark following siblings' subtrees; filtered positional
 selectors mark all siblings' subtrees. Unfiltered positional selectors alone
-do not widen an attribute change. A text change marks nothing but what
-`:empty` and `:has()` read: no selector reads a text's data except through
-its parent's `:empty`, which is asked again as for a change of children
-(below), and the `:has()` climb from the parent.
+do not widen an attribute change. No selector reads a text's data except
+through its parent's `:empty`, so a text change marks nothing when the
+rules hold no `:empty`; when they do, the parent's `:empty` is asked again
+as for a change of children (below) and the `:has()` climb is made from
+the parent.
 
 Child-list changes mark added subtrees. Front-position selectors and
 following-sibling combinators mark the following suffix of children for a
@@ -146,7 +147,7 @@ all its children: a saved previous-sibling identity can have moved within
 the same parent, so its current links are not a historical boundary.
 Back-position and filtered positional selectors also mark all children.
 `:empty` is ASKED AGAIN: the cascade keeps each element's answer from when
-it last styled it, and a change of children compares the parent's answer
+it last styled or asked it, and a change of children compares the parent's answer
 now with it. Where the answer is the same nothing is marked for `:empty`,
 which is what lets appends to a parent that already has children stay
 small. Where it turned, the parent is marked alone (its changed winners

@@ -804,7 +804,9 @@ static void update_kept_skips(void)
 // (before, its subtree and every following sibling's were marked, and the
 // 61 elements after #box crossed half the page). `garb_style_updated_since`
 // is true of every element a subtree's mark restyles, so "not updated" is
-// "not marked" here. Every step's winners equal a fresh cascade's.
+// "not marked by a subtree's mark" here (an element marked alone whose
+// winners come out the same reads not updated). Every step's winners equal
+// a fresh cascade's.
 static os64_html_node_t *ue_append(os64_html_document_t *doc, os64_html_node_t *parent, const char *tag)
 {
     os64_html_node_t *x=os64_html_create_element(doc,OS64_HTML_NS_HTML,tag,NULL);
@@ -884,19 +886,25 @@ static void update_empty_turns(void)
     doc=update_doc("<!doctype html><aside><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></aside>"
                    "<details id=d><summary id=s1>a</summary><p>x</p></details>"
                    "<fieldset id=f><legend id=l1>a</legend><p>x</p></fieldset>");
-    garb_parse_sheet_text(css,strlen(css),&sheet);
-    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
-    const char *parents[]={"d","f"},*firsts[]={"s1","l1"},*tags[]={"summary","legend"};
-    for(int k=0;k<2;k++) {
-        os64_html_node_t *parent=(void *)by_id(doc->document,parents[k]),*first=(void *)by_id(doc->document,firsts[k]);
-        os64_html_node_t *ahead=os64_html_create_element(doc,OS64_HTML_NS_HTML,tags[k],NULL);
-        u=garb_cascade_updates(c);
-        os64_html_insert(doc,parent,ahead,first);
-        update_check(garb_cascade_update(c) && garb_style_updated_since(c,first,u),
-                     k==0 ? "details: a summary put first marks the one that was first"
-                          : "fieldset: a legend put first marks the one that was first");
+    const char *sheets[]={"p{color:red}b{color:blue}","p:empty{color:red}b{color:blue}"};
+    const char *parents[]={"d","f"},*tags[]={"summary","legend"};
+    for(int r=0;r<2;r++) {
+        garb_parse_sheet_text(sheets[r],strlen(sheets[r]),&sheet);
+        c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+        for(int k=0;k<2;k++) {
+            os64_html_node_t *parent=(void *)by_id(doc->document,parents[k]),*first=parent->first_child;
+            os64_html_node_t *ahead=os64_html_create_element(doc,OS64_HTML_NS_HTML,tags[k],NULL);
+            u=garb_cascade_updates(c);
+            os64_html_insert(doc,parent,ahead,first);
+            update_check(garb_cascade_update(c) && garb_style_updated_since(c,first,u),
+                         k==0 ? (r==0 ? "details: a summary put first marks the one that was first"
+                                      : "details: with :empty in the rules, a summary put first marks the one that was first")
+                              : (r==0 ? "fieldset: a legend put first marks the one that was first"
+                                      : "fieldset: with :empty in the rules, a legend put first marks the one that was first"));
+        }
+        garb_cascade_free(c);garb_free(&sheet);
     }
-    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    os64_html_document_free(doc);
     update_check(live==baseline,":empty: the fixture releases what it holds");
 }
 

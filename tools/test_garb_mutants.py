@@ -84,8 +84,7 @@ mutants = [
     ('empty-a-turn-marks-nothing', CASCADE,
      '    } else if (turned && !mark_turned(c, parent)) {', '    } else if (false && turned) {', UPDATES),
     ('empty-a-text-turn-marks-nothing', CASCADE,
-     '            marked = !element || !c->dependencies.parent_state || !empty_turned(c, parent) ||\n'
-     '                     mark_turned(c, parent);',
+     '            marked = !asked || !empty_turned(c, parent) || mark_turned(c, parent);',
      '            marked = true;', UPDATES),
     ('empty-the-siblings-are-skipped', CASCADE,
      '    if (c->dependencies.filtered && x->parent)\n        return mark_siblings(c, x->parent->first_child);\n'
@@ -93,6 +92,10 @@ mutants = [
      '    return true;\n}\nstatic bool body_hint(', UPDATES),
     ('empty-the-hosts-tree-is-skipped', CASCADE,
      '    if (x->shadow_root || is_slot(x)) return mark_changed(c, x, GARB_MARK_PARENT);\n', '',
+     'tools/test_garb_host.sh --shadow'),
+    ('empty-the-slots-assigned-are-skipped', CASCADE,
+     '    if (x->shadow_root || is_slot(x)) return mark_changed(c, x, GARB_MARK_PARENT);\n',
+     '    if (x->shadow_root) return mark_changed(c, x, GARB_MARK_PARENT);\n',
      'tools/test_garb_host.sh --shadow'),
     ('empty-the-answer-is-kept-from-no-read', CASCADE,
      '        slot->empty = c->dependencies.parent_state && garb_element_empty(el);\n', '', UPDATES),

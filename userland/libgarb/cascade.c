@@ -3730,7 +3730,8 @@ static bool empty_turned(garb_cascade_t *c, const os64_html_node_t *x)
 // WHY NOTHING UNDER IT IS MARKED FOR MATCHING (`p:not(:empty) > x`, `:empty
 // x`): an element that turned from empty has under it only what the batch
 // added, all marked as added; one that turned to empty has no element under
-// it. A text change turns it with no element under it either way. The
+// it. A text change adds no element under it; what the batch added beside
+// it is the first case. The
 // exceptions are elements a selector reaches from it that the batch did not
 // add: a shadow host's tree (`:host(:empty) .inner`) and a slot's assigned
 // nodes, so a host or a slot keeps the whole mark (mark_changed).
@@ -4335,14 +4336,15 @@ static bool update(garb_cascade_t *c)
             marked = marked && mark_has(c, e->target, true);
         } else if (e->kind == OS64_HTML_CHANGE_TEXT) {
             // A text's data is read by no selector but :empty (at its
-            // parent) and a :has() that :empty stands in: the parent's
-            // answer is asked again, and the climb mark_has makes from it.
+            // parent) and a :has() that :empty stands in, so with :empty in
+            // the rules the parent's answer is asked again and the climb
+            // mark_has makes from it is taken, and without it nothing is
+            // marked (`parent_state` counts an :empty inside a :has() too).
             const os64_html_node_t *parent = e->target ? e->target->parent : NULL;
-            bool element = is_el(parent) && connected(c, parent);
-            marked = !element || !c->dependencies.parent_state || !empty_turned(c, parent) ||
-                     mark_turned(c, parent);
+            bool asked = c->dependencies.parent_state && is_el(parent) && connected(c, parent);
+            marked = !asked || !empty_turned(c, parent) || mark_turned(c, parent);
             c->mark_now = GARB_MARK_HAS;
-            marked = marked && (!element || mark_has(c, parent, false));
+            marked = marked && (!asked || mark_has(c, parent, false));
         } else {
             const os64_html_node_t *root = e->target;
             if (root && !is_el(root)) root = root->parent;
