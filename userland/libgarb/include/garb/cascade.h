@@ -259,8 +259,10 @@ typedef struct {
 garb_back_work_t garb_cascade_back_work(const garb_cascade_t *c);
 // What the subject :has() filter (select.h § A SUBJECT :has()) did in the
 // latest garb_cascade_update: the elements a change's :has() climb visited
-// while the rules hold a subject :has(), how many it marked alone for their
-// own match, and how many it turned away because no subject compound's
+// while the rules hold a subject :has(), how many it let through to be
+// marked alone for their own match (those already marked counted too, so
+// this can pass the update's :has() marks), and how many it turned away
+// because no subject compound's
 // filters passed them; and, of the rules, how many subject :has()
 // compounds there are and how many are bare (no filter, so any element may
 // turn). The visits are zeros as garb_cascade_back_work's are.
@@ -284,9 +286,10 @@ garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c);
 // Which mark an update made the elements it marked by: for a change, the
 // changed element's subtree (inheritance and descendant selectors) for a
 // change of an attribute other than `class` and `style` or of a state, an
-// added subtree, siblings after a changed or turned element (`+`, `~`, an
-// `of S`), the siblings a change of children moves (positions, `+`/`~`:
-// the children's siblings), a :has() asked again (its
+// added subtree, the siblings a changed or turned element moves (those
+// after it for `+`/`~`, all of them for an `of S`), the siblings a change
+// of children moves (positions, `+`/`~`, `of S`: the children's siblings),
+// a :has() asked again (its
 // anchors and their reach), the parent's own state (:empty where its
 // answer turned, a <details> or <fieldset>'s first child), a shadow tree's
 // assignments; while the marked elements are restyled, an element

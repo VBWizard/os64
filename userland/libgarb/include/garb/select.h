@@ -151,7 +151,10 @@ bool garb_anchor_filters_pass(const garb_anchor_t *anchor, const os64_html_node_
 // A SUBJECT :has(): a compound holding :has() with nothing to its right,
 // directly or inside the :not(), :is() or :where() of one that has none
 // (`.p > x:has(.y)`, `:is(.a:has(.b), .c)`), whose match turning changes
-// that element's own winners. Recorded as an anchor is (garb_anchor_t,
+// that element's own winners; and one inside the argument of :host(),
+// ::slotted() or an nth-child's `of S` with nothing to its right there,
+// which keeps its own filters only, those arguments naming another
+// element. Recorded as an anchor is (garb_anchor_t,
 // `down` and `siblings` false), with the same filters: `.p > x:has(R)` is
 // filtered by x alone, since .p is another element. A compound inside a
 // :not() keeps its own filters as well as the holder's: where one fails,

@@ -1147,6 +1147,34 @@ static void update_marks_counted(void)
                  "marks: the `+` walk after an insert is counted as the children's siblings");
     update_equal(c,doc,&in);
     garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // With a back form too: the back walk's marks leave their own kind, and
+    // the front suffix after it is still the children's siblings.
+    doc=update_doc("<!doctype html><aside><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></aside>"
+                   "<div id=row><p id=a></p><p id=z></p></div>");
+    css="p:first-child{color:red}p:last-child{opacity:.5}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    row=(void *)by_id(doc->document,"row");
+    os64_html_insert(doc,row,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),(void *)by_id(doc->document,"z"));
+    ok=garb_cascade_update(c);
+    m=garb_cascade_update_marks(c);
+    update_check(ok && m.by[GARB_MARK_SUFFIX]==1 && m.by[GARB_MARK_SIBLINGS]==0,
+                 "marks: after a back walk the front suffix is still counted as the children's siblings");
+    update_equal(c,doc,&in);
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // An unbounded back form marks every child, counted as the children's siblings too.
+    doc=update_doc("<!doctype html><aside><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></aside>"
+                   "<div id=row><p id=a></p><p id=z></p></div>");
+    css="p:nth-last-child(2n+1){color:red}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    ue_append(doc,(void *)by_id(doc->document,"row"),"p");
+    ok=garb_cascade_update(c);
+    m=garb_cascade_update_marks(c);
+    update_check(ok && m.by[GARB_MARK_SUFFIX]==2 && m.by[GARB_MARK_SIBLINGS]==0,
+                 "marks: an unbounded back form's every child is counted as the children's siblings");
+    update_equal(c,doc,&in);
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
     update_check(live==baseline,"marks: the fixture releases what it holds");
 }
 

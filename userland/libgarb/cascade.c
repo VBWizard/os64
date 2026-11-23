@@ -3951,6 +3951,7 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
     if (c->dependencies.back_unbounded || c->dependencies.filtered)
         return mark_siblings(c, parent->first_child);
     if ((c->dependencies.back_child || c->dependencies.back_type) && !back_turns(c, e)) return false;
+    c->mark_now = GARB_MARK_SUFFIX;  // back_turns' marks leave it at their own kinds
     if (c->dependencies.position_front || c->dependencies.following) {
         const os64_html_node_t *previous = e->previous_sibling;
         bool boundary = !previous || previous->parent == parent;
@@ -3963,9 +3964,29 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
     }
     return true;
 }
-// One element a change may have turned a :has() on: marked alone when the
-// rules hold a :has() in a subject, and each anchor asked again, its
-// subtree or its following siblings' marked where the answer turned.
+// Whether a subject :has() of the rules may have turned at `a`, which a
+// change at or below it (or beside it, for `+`/`~`) visits: so `a` is marked
+// alone for its own match (select.h § A SUBJECT :has()). Only where some
+// subject compound's filters pass `a`, or one has none (bare), or the
+// entries could not be kept. A test of `a`'s filters as it stands now is
+// enough: they read only `a`'s own name and attributes, which could have
+// changed in this batch only by a change at `a`, and that change marks `a`
+// itself. `has_subjects` counts what was asked, let through (marked alone,
+// or already marked) and turned away.
+static bool subject_may_turn(garb_cascade_t *c, const os64_html_node_t *a)
+{
+    c->has_subjects.visited++;
+    bool may = c->nbare_subjects > 0 || c->subjects == NULL;
+    for (int32_t i = 0; i < c->nsubjects && !may; i++)
+        may = garb_anchor_filters_pass(&c->subjects[i], a);
+    if (may) c->has_subjects.marked++;
+    else c->has_subjects.turned_away++;
+    return may;
+}
+// One element a change may have turned a :has() on: marked alone where a
+// subject :has() of the rules may have turned there (subject_may_turn), and
+// each anchor asked again, its subtree or its following siblings' marked
+// where the answer turned.
 //
 // WHAT A BARE ANCHOR COSTS, and why it may cost no more: in an update an
 // anchor is asked again here, at the elements mark_has visits for a change
@@ -3986,24 +4007,6 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
 // bare or not: that cost is the matcher's (DEBTS, Browser layout,
 // "Matching asks a `:has()` again"). bare_work counts the asks made here,
 // the turns, and the elements their marks added, for the record.
-// Whether a subject :has() of the rules may have turned at `a`, which a
-// change at or below it (or beside it, for `+`/`~`) visits: so `a` is marked
-// alone for its own match (select.h § A SUBJECT :has()). Only where some
-// subject compound's filters pass `a`, or one has none (bare), or the
-// entries could not be kept. A test of `a`'s filters as it stands now is
-// enough: they read only `a`'s own name and attributes, which could have
-// changed in this batch only by a change at `a`, and that change marks `a`
-// itself. `has_subjects` counts what was asked, marked and turned away.
-static bool subject_may_turn(garb_cascade_t *c, const os64_html_node_t *a)
-{
-    c->has_subjects.visited++;
-    bool may = c->nbare_subjects > 0 || c->subjects == NULL;
-    for (int32_t i = 0; i < c->nsubjects && !may; i++)
-        may = garb_anchor_filters_pass(&c->subjects[i], a);
-    if (may) c->has_subjects.marked++;
-    else c->has_subjects.turned_away++;
-    return may;
-}
 static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
 {
     if (!connected(c, a)) return true;
