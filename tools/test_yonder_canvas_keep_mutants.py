@@ -31,9 +31,10 @@ CASES = 'bash tools/test_yonder_host.sh'
 mutants = [
     ('kept-in-the-first-paint', 'if (s->paint == k->paint)', 'if (s->paint == k->paint && 0)'),
     ('kept-on-the-first-draw',
-     '        *s = (Seen){who, revision, k->paint, k->clock, box.w, box.h, premultiplied, false, 0, 0, 0, 0};\n'
-     '        return yonder_draw_surface(dst, pitch, clip, box, smooth, source);\n',
-     '        *s = (Seen){who, revision, k->paint - 1, k->clock, box.w, box.h, premultiplied, false, 0, 0, 0, 0};\n'),
+     '        s->nkept = 0;\n        return yonder_draw_surface(dst, pitch, clip, box, smooth, source);\n    }\n',
+     '        s->nkept = 0;\n        s->paint = k->paint - 1;\n    }\n'),
+    ('kept-list-never-pruned', '        if (paint_cache_holds(cache, key, n, paint_cache_hash(key, n))) {',
+     '        if (paint_cache_holds(cache, key, n, paint_cache_hash(key, n)) || 1) {'),
     ('not-dropped-when-the-bitmap-changes', '            drop(k, cache, s);', '            (void)drop;'),
     # Each keeps a use of what it leaves out of the key: the build is -Werror.
     ('found-at-another-revision', 'os64_memcpy(key + 4, &revision, 8);',

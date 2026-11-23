@@ -1830,6 +1830,26 @@ static void canvas_keep_cases(void)
                ok && held.kept > was.kept && after.dropped - held.dropped == held.kept - was.kept && spent < 0.5,
                NULL);
     }
+    // A canvas whose blocks the cache keeps letting go for room, drawn
+    // over and over: its list holds what is kept, not every making
+    // (Codex #716).
+    {
+        yonder_paint_cache_t *small_cache = yonder_paint_cache_new(1300);
+        KeepRig tight = {small_cache, yonder_canvas_keeps_new()};
+        uint32_t row[3] = {0xff102030, 0xff405060, 0xff708090};
+        draw2d_surface_t line = {row, 3, 1, 12, 12, DRAW2D_ARGB8_PREMULTIPLIED};
+        os64_gui_rect_t long_box = {0, 0, 384, 1};
+        int panned = 0;
+        bool fine = true;
+        for (int i = 0; fine && i < 3000; i++)
+            fine = keep_draw_on(&tight, 1, got, want, &panned, 9500, (os64_gui_rect_t){(i % 3) * 128, 0, 128, 1},
+                                long_box, true, &line);
+        yonder_canvas_keep_counts_t listed = yonder_canvas_keep_counts(tight.keeps);
+        expect("canvas keep: a list names what the cache can hold, not every time a block was made again",
+               fine && listed.kept > 100 && listed.listed <= 32, NULL);
+        yonder_canvas_keeps_free(tight.keeps);
+        yonder_paint_cache_free(small_cache);
+    }
     // Square pixels, and a bitmap at its own size, keep nothing.
     yonder_canvas_keep_counts_t plain = yonder_canvas_keep_counts(rig.keeps);
     os64_gui_rect_t own = {10, 10, 37, 23};

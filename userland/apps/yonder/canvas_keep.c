@@ -14,7 +14,11 @@
 // at it in (yonder_canvas_keeps_paint), and the blocks it kept there, each
 // by its column and row of the box's blocks (`kept`, `nkept` pairs of
 // `cap`), so a change lets go of exactly those, however far apart, and
-// never walks the blocks between that it did not keep.
+// never walks the blocks between that it did not keep. A block the cache
+// let go for room stays listed until the list is full, which first prunes
+// what the cache no longer holds (kept_room): so the list is bounded by
+// what the cache can hold of the canvas, never by how often its blocks
+// were made again.
 typedef struct {
     const void *who;
     uint64_t revision, paint, last;
@@ -105,9 +109,23 @@ static Seen *slot(yonder_canvas_keeps_t *k, const void *who)
     return oldest;
 }
 
-// Room in `s`'s list for `more` blocks; false for no memory.
-static bool kept_room(Seen *s, int64_t more)
+// Room in `s`'s list for `more` blocks, pruning first what `cache` no
+// longer holds; false for no memory.
+static bool kept_room(Seen *s, yonder_paint_cache_t *cache, int64_t more)
 {
+    if ((int64_t)s->nkept + more <= s->cap)
+        return true;
+    uint8_t key[KEY_BYTES];
+    int32_t held = 0;
+    for (int32_t i = 0; i < s->nkept; i++) {
+        uint32_t n = block_key(key, s->revision, s->w, s->h, s->premultiplied, s->kept[2 * i], s->kept[2 * i + 1]);
+        if (paint_cache_holds(cache, key, n, paint_cache_hash(key, n))) {
+            s->kept[2 * held] = s->kept[2 * i];
+            s->kept[2 * held + 1] = s->kept[2 * i + 1];
+            held++;
+        }
+    }
+    s->nkept = held;
     if ((int64_t)s->nkept + more <= s->cap)
         return true;
     int64_t cap = s->cap > 0 ? s->cap : 16;
@@ -192,7 +210,7 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
     if (!kept)
         paint_cache_refused(cache, false);
     // Every block made is listed (Seen), so its list must have room first.
-    if (kept && missing > 0 && !kept_room(s, missing)) {
+    if (kept && missing > 0 && !kept_room(s, cache, missing)) {
         paint_cache_refused(cache, true);
         kept = false;
     }
@@ -257,7 +275,13 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
 
 yonder_canvas_keep_counts_t yonder_canvas_keep_counts(const yonder_canvas_keeps_t *k)
 {
-    return k != NULL ? k->counts : (yonder_canvas_keep_counts_t){0};
+    if (k == NULL)
+        return (yonder_canvas_keep_counts_t){0};
+    yonder_canvas_keep_counts_t c = k->counts;
+    c.listed = 0;
+    for (int32_t i = 0; i < KEEP_CANVASES; i++)
+        c.listed += (uint64_t)k->seen[i].nkept;
+    return c;
 }
 
 void yonder_canvas_keep_counts_restart(yonder_canvas_keeps_t *k)

@@ -58,8 +58,11 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
 // Since the counts last restarted: blocks kept (made), found, let go
 // because their canvas was drawn at another revision or size, and draws
 // that drew as ever because their blocks did not fit or found no memory.
+// And now: how many blocks the canvases' lists name (kept, or let go by
+// the cache for room and not yet pruned).
 typedef struct {
     uint64_t kept, found, dropped, refused;
+    uint64_t listed;
 } yonder_canvas_keep_counts_t;
 yonder_canvas_keep_counts_t yonder_canvas_keep_counts(const yonder_canvas_keeps_t *k);
 void yonder_canvas_keep_counts_restart(yonder_canvas_keeps_t *k);

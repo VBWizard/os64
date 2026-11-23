@@ -34,6 +34,9 @@ void *paint_cache_make(yonder_paint_cache_t *c, const uint8_t *key, uint32_t kle
 // An entry this paint found or made and cannot use after all: no paint's,
 // and the first to be let go.
 void paint_cache_release(yonder_paint_cache_t *c, void *bytes);
+// Whether an entry is held under `key`, asking only: nothing is counted,
+// stamped or moved.
+bool paint_cache_holds(const yonder_paint_cache_t *c, const uint8_t *key, uint32_t klen, uint64_t hash);
 // The entry under `key`, if there is one, let go now — found by nothing
 // after, its bytes freed, counted neither as found nor as let go for room
 // — for bytes that are wrong (a fill that failed) or can never be wanted
