@@ -24,20 +24,20 @@
       being groups, and a list of layers that changed refuses to the whole
       view */
 body{margin:0;background:#202020;color:#ddd;font:16px sans-serif}
-.cell{position:absolute;top:40px;width:120px;height:80px}
-canvas{display:block;width:120px;height:80px}
+.cell{position:absolute;top:40px;width:100px;height:70px}
+canvas{display:block;width:100px;height:70px}
 #w1{left:10px;opacity:0;animation:show .5s linear 3s both}
 @keyframes show{from{opacity:0}to{opacity:1}}
-#w2{left:150px;opacity:.001}
-#w3{left:290px}
+#w2{left:125px;opacity:.001}
+#w3{left:240px}
 #w3.hide{opacity:.001}
-#w4{left:430px;opacity:.001}
+#w4{left:355px;opacity:.001}
 #w4 div{opacity:.6}
-#w5{left:570px;opacity:0}
-#w6{left:710px;animation:rise 8s linear both}
+#w5{left:470px;opacity:0}
+#w6{left:585px;animation:rise 8s linear both}
 @keyframes rise{0%,30%{opacity:0}50%,100%{opacity:1}}
-#w7{left:850px;opacity:.001}
-#n{position:absolute;left:10px;top:150px}
+#w7{left:700px;opacity:.001}
+#n{position:absolute;left:10px;top:130px}
 </style></head><body>
 <div class=cell id=w1><canvas id=c1 width=60 height=40></canvas></div>
 <div class=cell id=w2><canvas id=c2 width=60 height=40></canvas></div>
@@ -68,6 +68,8 @@ setTimeout(() => {
 }, 3000);
 // In a turn of its own, so no refusal to the whole view stands in for it.
 setTimeout(() => { document.getElementById('w7').style.opacity = '.5'; }, 5000);
+// Drawn once more where every one shows: marked and acknowledged as ever.
+setTimeout(() => paint('#3a3'), 7000);
 let n = 0;
 setInterval(() => { document.getElementById('n').textContent = ++n; }, 250);
 </script>
