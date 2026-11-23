@@ -1780,12 +1780,34 @@ static void canvas_keep_cases(void)
          keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &straight) &&
          keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &straight);
     expect("canvas keep: one alpha convention's picture is never found for the other", ok, NULL);
-    // Two canvases at once keep apart.
+    // Two canvases at once, the same size, other pixels, keep apart.
     int other = 0;
-    ok = keep_draw_same(&rig, got, want, &other, 2000, strip, box, true, &s) &&
+    uint32_t *src2 = malloc(37 * 23 * sizeof(*src2));
+    for (int i = 0; i < 37 * 23; i++)
+        src2[i] = scale_pixel(&state, true);
+    draw2d_surface_t s2 = {src2, 37, 23, 37 * 4, 37 * 23 * 4, DRAW2D_ARGB8_PREMULTIPLIED};
+    ok = keep_draw_same(&rig, got, want, &other, 2000, strip, box, true, &s2) &&
          keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &s) &&
-         keep_draw_same(&rig, got, want, &other, 2000, strip, box, true, &s);
+         keep_draw_same(&rig, got, want, &other, 2000, strip, box, true, &s2) &&
+         keep_draw_same(&rig, got, want, &other, 2000, strip, box, true, &s2);
     expect("canvas keep: two canvases keep apart", ok, NULL);
+    // A canvas forgotten by the keep (more canvases drawn since than it
+    // holds) lets go of nothing: its blocks are found by nothing but their
+    // own size and alpha convention when it comes back changed.
+    os64_gui_rect_t small = {40, 40, 161, 97};
+    int many[40];
+    ok = keep_draw_same(&rig, got, want, &who, 5000, strip, box, true, &s) &&
+         keep_draw_same(&rig, got, want, &who, 5000, strip, box, true, &s);
+    for (int i = 0; ok && i < 40; i++)
+        ok = keep_draw_same(&rig, got, want, &many[i], 6000 + (uint64_t)i, strip, small, true, &s2);
+    ok = ok && keep_draw_same(&rig, got, want, &who, 5000, strip, wider, true, &s) &&
+         keep_draw_same(&rig, got, want, &who, 5000, strip, wider, true, &s);
+    for (int i = 0; ok && i < 40; i++)
+        ok = keep_draw_same(&rig, got, want, &many[i], 7000 + (uint64_t)i, strip, small, true, &s2);
+    ok = ok && keep_draw_same(&rig, got, want, &who, 5000, strip, wider, true, &straight) &&
+         keep_draw_same(&rig, got, want, &who, 5000, strip, wider, true, &straight);
+    expect("canvas keep: a canvas the keep forgot comes back changed and finds nothing of before", ok, NULL);
+    free(src2);
     // Square pixels, and a bitmap at its own size, keep nothing.
     yonder_canvas_keep_counts_t plain = yonder_canvas_keep_counts(rig.keeps);
     os64_gui_rect_t own = {10, 10, 37, 23};
