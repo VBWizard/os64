@@ -38,8 +38,10 @@ typedef struct {
         uint32_t refused;
     } open[PAINT_GROUPS];
     int32_t depth;                  // may pass PAINT_GROUPS; those are not kept
-    // Past the deepest kept, a group drawn through its matrix is not painted
-    // at all: the depth it opened at, plus one, or 0.
+    // The group nothing inside which is painted, its open and close
+    // included: one laid at alpha 0 (group_alpha), at any depth; past the
+    // deepest kept, also one drawn through its matrix or whose mask hides
+    // it whole. The depth it opened at, plus one, or 0.
     int32_t hidden;
     // What is left of the paint's budget for layers (filtered, masked and
     // blended groups', and a mask's captures) and backdrops, in pixels of
@@ -2615,6 +2617,11 @@ static os64_gui_rect_t shifted(os64_gui_rect_t r, flow_point_t by)
     return (os64_gui_rect_t){sum32(r.x, by.x), sum32(r.y, by.y), r.w, r.h};
 }
 
+uint8_t yonder_group_alpha(const flow_box_t *box)
+{
+    return (uint8_t)(((uint32_t)box->style->opacity * 255 + 500) / 1000);
+}
+
 // Whether the verbs composite a group at its opacity: both, or neither.
 static bool opacity_verbs(const Painter *p)
 {
@@ -2875,9 +2882,13 @@ static bool mask_coverage(const Painter *p, const flow_box_t *box, os64_gui_rect
     return made;
 }
 
-// A group (flow_visit_groups) opens. One below full opacity hands the
-// verbs its bounds, cut to what is painted, to remember what was under
-// them. One DRAWN THROUGH its matrix (flow_box_through) is asked of the
+// A group (flow_visit_groups) opens. One laid at alpha 0 (yonder_group_alpha)
+// shows nothing, so nothing of it is painted — no verb is asked, the walk
+// culls its inside whole (group_inside) and its close lays nothing — and a
+// canvas or a video inside is not drawn: the face's marks keep what it
+// owes such a canvas (yonder.c, canvas_damage_mark). One below full
+// opacity hands the verbs its bounds, cut to what is painted, to remember
+// what was under them. One DRAWN THROUGH its matrix (flow_box_through) is asked of the
 // verbs whole: its bounds — in its own coordinates, cut to the view taken
 // back through the matrix, which is all of it that can show — the matrix
 // to the coordinates being painted, and the clip it is laid inside. Laid
@@ -2901,9 +2912,15 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
     PaintGroups *gs = p->groups;
     int32_t d = gs->depth++;
     yonder_paint_groups_open = gs->depth;
+    if (gs->hidden != 0)
+        return;
+    // Laid at alpha 0, it shows nothing: nothing inside is drawn, on any
+    // sheet, decided here once for the group.
+    if (yonder_group_alpha(box) == 0) {
+        gs->hidden = d + 1;
+        return;
+    }
     if (d >= PAINT_GROUPS) {
-        if (gs->hidden != 0)
-            return;
         // A mask that hides its box whole hides it here too (MASKS.md § 10).
         if (flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL) || mask_hides_whole(box))
             gs->hidden = d + 1;
@@ -2989,12 +3006,15 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
 
 // How the walk culls inside the group just opened (flow_inside_t): not at
 // all inside one painted whole to be kept, wholly inside one whose kept
-// drawing is laid, else as it always does.
+// drawing is laid or inside one nothing of which is painted (`hidden`),
+// else as it always does.
 static flow_inside_t group_inside(void *ctx, const flow_box_t *box)
 {
     (void)box;
     const PaintGroups *gs = ((const Painter *)ctx)->groups;
     int32_t d = gs->depth - 1;
+    if (gs->hidden != 0)
+        return FLOW_INSIDE_NONE;
     if (d < 0 || d >= PAINT_GROUPS || gs->open[d].kind != G_THROUGH)
         return FLOW_INSIDE_VIEW;
     return gs->open[d].keep == YONDER_KEEP_MAKE ? FLOW_INSIDE_ALL
@@ -3013,13 +3033,13 @@ static void group_close(void *ctx, const flow_box_t *box)
     PaintGroups *gs = p->groups;
     int32_t d = --gs->depth;
     yonder_paint_groups_open = gs->depth;
-    uint8_t alpha = (uint8_t)(((uint32_t)box->style->opacity * 255 + 500) / 1000);
+    uint8_t alpha = yonder_group_alpha(box);
+    if (gs->hidden != 0) {
+        if (gs->hidden == d + 1)
+            gs->hidden = 0;
+        return;
+    }
     if (d >= PAINT_GROUPS) {
-        if (gs->hidden != 0) {
-            if (gs->hidden == d + 1)
-                gs->hidden = 0;
-            return;
-        }
         if (!flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL) && opacity_verbs(p))
             p->v->group_close(p->v->ctx, alpha);
         return;

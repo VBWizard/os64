@@ -4127,6 +4127,10 @@ static struct {
     os64_gui_rect_t mark_most, paint_most;
     char mark_who[96];
     uint64_t canvas_marks, control_marks;
+    // Canvases whose damage was acknowledged unseen instead of marked
+    // (canvas_damage_mark): under a group laid at alpha 0, and culled as
+    // transparent.
+    uint64_t unseen_alpha0, unseen_culled;
     // The elements the ticks that were frames changed, each with the
     // longhands its animations set, and how many such ticks changed it
     // (tick_named): the first TICKED_MAX met, the rest counted together.
@@ -9383,6 +9387,9 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (int)s_cost.mark_most.y, s_cost.mark_who, (int)s_cost.paint_most.w, (int)s_cost.paint_most.h);
     dt_put(t, "; %lu canvas marks, %lu form control marks", (unsigned long)s_cost.canvas_marks,
            (unsigned long)s_cost.control_marks);
+    if (s_cost.unseen_alpha0 + s_cost.unseen_culled > 0)
+        dt_put(t, "; canvases acknowledged unseen: %lu in a group at alpha 0, %lu culled",
+               (unsigned long)s_cost.unseen_alpha0, (unsigned long)s_cost.unseen_culled);
     for (int32_t i = 0; i < s_cost.nticked; i++)
         dt_put(t, "%s%s %lu", i == 0 ? "; ticks that were frames changed " : ", ", s_cost.ticked[i].what,
                (unsigned long)s_cost.ticked[i].n);
@@ -12524,12 +12531,54 @@ static void sheets_restage(Page *p)
 static void canvas_damage_part(Page *p,const flow_box_t *box,uint32_t width,uint32_t height,
                                const draw2d_damage_t *damage);
 
+// Why a canvas cannot show, whatever its bitmap holds (canvas_unseen):
+// it can, it or an ancestor is culled as transparent (`unpainted`), or a
+// group around it is laid at alpha 0 (yonder_group_alpha).
+typedef enum { CANVAS_SEEN = 0, CANVAS_CULLED, CANVAS_ALPHA0 } CanvasUnseen;
+
+static CanvasUnseen canvas_unseen(const flow_box_t *box)
+{
+    for (const flow_box_t *b = box; b != NULL; b = b->parent)
+        if (b->unpainted)
+            return CANVAS_CULLED;
+    for (const flow_box_t *b = box; b != NULL; b = b->parent)
+        if (b->style->opacity < 1000 && yonder_group_alpha(b) == 0)
+            return CANVAS_ALPHA0;
+    return CANVAS_SEEN;
+}
+
+// The canvases a damage visit found unseen (canvas_damage_mark), to be
+// acknowledged once the visit has returned (canvases_unseen_acknowledge):
+// a visit may not touch a canvas. Past the room, the rest are marked as
+// any canvas is.
+#define UNSEEN_CANVASES 32
+static const os64_html_node_t *s_unseen_canvases[UNSEEN_CANVASES];
+static CanvasUnseen s_unseen_why[UNSEEN_CANVASES];
+static int32_t s_nunseen_canvases;
+
 static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_t width,uint32_t height,
                                const draw2d_damage_t *damage)
 {
     Page *p=opaque;
     const flow_box_t *box=p->tree?flow_box_for(p->tree,node):NULL;
     if(!box || !box->replaced || box->style->visibility!=FLOW_VISIBLE)return;
+    // A canvas that cannot show marks nothing: its damage is acknowledged
+    // instead, as a covered paint acknowledges one it culled. That is
+    // exact because every way it can show again marks where it shows, its
+    // bitmap as it is then: its group's opacity ticked from 0 (the tick
+    // marks the group's bounds, tick_marks) or written (the group's own
+    // change, its whole bounds), a new tree in which the group is no
+    // longer at 0 or no longer a group, or no longer transparent (the
+    // trees' compare marks it by its style), and an enclosing group
+    // leaving 0 (which marks that group's bounds, this one inside). Left
+    // pending, it would be visited again after every script task, and
+    // under a group its mark is the whole view (canvas_damage_part).
+    CanvasUnseen why=canvas_unseen(box);
+    if(why!=CANVAS_SEEN && s_nunseen_canvases<UNSEEN_CANVASES){
+        s_unseen_canvases[s_nunseen_canvases]=node;
+        s_unseen_why[s_nunseen_canvases++]=why;
+        return;
+    }
     s_cost.canvas_marks++;
     // The shown page's, which a covered paint acknowledges (canvases_acknowledge).
     if(p==&g.page){
@@ -12539,6 +12588,21 @@ static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_
     s_marking_canvas=node;
     canvas_damage_part(p,box,width,height,damage);
     s_marking_canvas=NULL;
+}
+
+// The canvases the damage visit just found unseen, each looked up (which
+// applies a pending reset) and acknowledged, no script between, and
+// counted by why.
+static void canvases_unseen_acknowledge(Page *p)
+{
+    for(int32_t i=0;i<s_nunseen_canvases;i++){
+        canvas_bitmap_t bitmap;
+        if(!yonder_scripts_canvas_bitmap(p->scripts,s_unseen_canvases[i],&bitmap))continue;
+        yonder_scripts_canvas_painted(p->scripts,s_unseen_canvases[i]);
+        if(s_unseen_why[i]==CANVAS_ALPHA0)s_cost.unseen_alpha0++;
+        else s_cost.unseen_culled++;
+    }
+    s_nunseen_canvases=0;
 }
 
 // canvas_damage_mark's part: the canvas's changed texels where the
@@ -13184,7 +13248,9 @@ static bool script_rebuild(void)
     forms_pull_selections();
     // Pixel-only changes reuse layout. Plain canvases invalidate mapped pixel
     // damage; resets and effects retain the conservative viewport fallback.
+    s_nunseen_canvases=0;
     yonder_scripts_canvas_visit_damage(p->scripts,canvas_damage_mark,p);
+    canvases_unseen_acknowledge(p);
     return true;
 }
 

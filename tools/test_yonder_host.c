@@ -1094,6 +1094,33 @@ static void atom_group_paint_cases(void)
     free(got);
 }
 
+// A group laid at alpha 0 (yonder_group_alpha) paints nothing — no open,
+// no close, nothing inside, a filtered group there included — and the boxes
+// after it paint as ever; alpha 1 of 255 is a group like any other.
+// Opacity 0.001 is the case: below 1/510 it rounds to 0, and unlike
+// opacity 0 the walk still hands it to the painter.
+static void alpha0_group_paint_cases(void)
+{
+    paint_page_case("alpha 0: a group laid at alpha 0 paints nothing inside, the boxes after it as ever",
+                    "<!doctype html><style>body { margin: 0 }"
+                    " .z { opacity: 0.001; height: 20px; background: #00ff00 }"
+                    " .n { opacity: 0.5; filter: blur(2px); height: 10px; background: #0000ff }"
+                    " .after { height: 10px; background: #ff0000 }</style>"
+                    "<div class=z><div class=n></div></div><div class=after></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 0 20 200 10 #ff0000\n");
+    paint_page_case("alpha 0: alpha 1 of 255 is a group",
+                    "<!doctype html><style>body { margin: 0 }"
+                    " .o { opacity: 0.002; height: 20px; background: #00ff00 }</style>"
+                    "<div class=o></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "group 0 0 200 20\n"
+                    "fill 0 0 200 20 #00ff00\n"
+                    "end group 1\n");
+}
+
 // A backdrop (FILTER.md § 7): asked before the box's own background, with
 // its border box cut to the view; a rounded box hands over its coverage
 // (-1 is none); a list with a reference asks nothing; a refusal is counted.
@@ -3452,6 +3479,7 @@ int main(int argc, char **argv)
         blend_paint_cases();
         mask_paint_cases();
         atom_group_paint_cases();
+        alpha0_group_paint_cases();
         round_picture_cases();
         shadow_split_cases();
         canvas_owner_cases();
