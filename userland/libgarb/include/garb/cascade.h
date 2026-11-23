@@ -137,9 +137,19 @@ typedef struct {
 // it likes): the cascade then keeps the caller's measure
 // (garb_cascade_build_cost, garb_cascade_broad_trigger), and without it
 // counts nothing for them.
+// `read_from`, when not NULL, is a READ this build may take (THE KEPT
+// READ, below; garb_cascade_read_hold): everything a build makes before it
+// touches an element, shared when the key is equal, read again when it is
+// not. The build takes its own reference when it takes the read, and keeps
+// no pointer otherwise. `check_read` hashes a read when it is made and
+// again whenever it is taken, so a write into a read already made is
+// caught (garb_cascade_read_written).
+typedef struct garb_read garb_read_t;
 typedef struct {
     size_t state_bytes, read_bytes, attribute_bytes, attributes;
     uint64_t (*clock)(void);
+    const garb_read_t *read_from;
+    bool check_read;
 } garb_cascade_limits_t;
 garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *, int32_t,
                                      const os64_html_document_t *, garb_env_t,
@@ -281,6 +291,40 @@ typedef struct {
     uint32_t restyled_depth, restyled_marked;
 } garb_broad_trigger_t;
 bool garb_cascade_broad_trigger(const garb_cascade_t *c, garb_broad_trigger_t *out);
+
+// THE KEPT READ (docs/design/pending/KEPT_READ.md). A build's READ is
+// everything it makes before it touches an element: the sheets' rules read
+// with their declarations, the selector index, the keyframes and faces,
+// the anchors and style readers, the dependencies, the scopes. A build
+// handed `read_from` takes that read, refcounted and never
+// written after it was made, when the KEY is equal: the same document, the
+// same sheets by their parse serials (garb_parsed_t.serial) with the same
+// parents, imports and media, the same scopes, every garb_env_t field
+// (`@media` is decided while reading), the same quirks mode and limits.
+// Otherwise it reads again. A read that came up short, or whose
+// declarations had no arena of their own, is never taken.
+// Why the latest build read again, or that it took a read
+// (GARB_READ_KEPT). The first key member found different is named.
+typedef enum {
+    GARB_READ_KEPT, GARB_READ_NOT_OFFERED, GARB_READ_NOT_KEEPABLE, GARB_READ_DOCUMENT, GARB_READ_LIMITS,
+    GARB_READ_QUIRKS, GARB_READ_ENVIRONMENT, GARB_READ_SHEETS, GARB_READ_SCOPES, GARB_READ_REASONS
+} garb_read_refusal_t;
+garb_read_refusal_t garb_cascade_read_refusal(const garb_cascade_t *c);
+const char *garb_read_refusal_name(garb_read_refusal_t reason);
+// A reference to the cascade's read (NULL for none), which a caller hands a
+// later build as `read_from`; it outlives the cascade until released.
+garb_read_t *garb_cascade_read_hold(const garb_cascade_t *c);
+void garb_read_release(garb_read_t *r);
+// The read's shape hashed, with no address in it (its counts, rule order,
+// declaration names, the index's keys, the keyframes', faces' and skipped
+// names): two reads of the same sheets in the same environment hash equal,
+// whichever cascade made them. A first check only: a different value or
+// selector need not show, which garb_cascade_compare does.
+uint64_t garb_cascade_read_content(const garb_cascade_t *c);
+// With `check_read`: true when the read this cascade took had been written
+// since it was made (its raw hash then and now differ). False without the
+// check, or for a read the cascade made itself.
+bool garb_cascade_read_written(const garb_cascade_t *c);
 
 uint64_t garb_cascade_generation(const garb_cascade_t *c);
 uint64_t garb_cascade_updates(const garb_cascade_t *c);

@@ -551,7 +551,7 @@ static void update_has(void)
         for(int i=0;i<260;++i) strcat(html,"<p>x</p>");
         strcat(html,"<i id=i></i></div><b id=b></b>");
         const char *css=".a:has(.b){--ink:red}p{color:var(--ink)}";
-        garb_cascade_limits_t limits={GARB_ARENA_MAX,GARB_CASCADE_READ_MAX,GARB_ARENA_MAX,SIZE_MAX,measure_clock};
+        garb_cascade_limits_t limits={GARB_ARENA_MAX,GARB_CASCADE_READ_MAX,GARB_ARENA_MAX,SIZE_MAX,measure_clock,NULL,false};
         for(int clocked=1;clocked>=0;--clocked){
             HasCase m={0};
             m.doc=update_doc(html);
@@ -672,8 +672,135 @@ static void update_inline_changes(void)
     update_check(live==baseline,"inline: nothing retained");
 }
 
+/* THE KEPT READ (KEPT_READ.md): a build offered a read with an equal key
+ * takes it, matches as one that read the sheets again, and the read
+ * outlives the cascade it came from; each key member different reads again and
+ * names itself; a sheet parsed again has a new serial; and a read taken is
+ * never written, not even by an inline style naming a property the
+ * sheets' own skipped records name (whose count the cascade keeps). The
+ * quirks member is not reached here: it is compared only for one
+ * document, whose mode its doctype fixed. */
+static garb_cascade_t *kept_build(garb_sheet_in_t *in, os64_html_document_t *doc, garb_env_t env,
+                                  const garb_scope_in_t *scopes, int32_t nscopes, const garb_cascade_t *from,
+                                  size_t read_bytes)
+{
+    garb_read_t *held=garb_cascade_read_hold(from);
+    garb_cascade_limits_t l={GARB_ARENA_MAX,read_bytes,GARB_ARENA_MAX,SIZE_MAX,NULL,held,true};
+    garb_cascade_t *c=garb_cascade_scoped(in,1,scopes,nscopes,doc,env,&l);
+    garb_read_release(held);
+    return c;
+}
+static void update_kept_read(void)
+{
+    size_t baseline=live;
+    const char *css=".on p{color:red}p{bogus-prop:1;margin:2px}@keyframes k{from{opacity:0}to{opacity:1}}";
+    garb_parsed_t twice;
+    garb_parse_sheet_text(css,strlen(css),&twice);
+    uint64_t first=twice.serial;
+    garb_free(&twice);
+    garb_parse_sheet_text(css,strlen(css),&twice);
+    update_check(first!=0 && twice.serial!=0 && twice.serial!=first,"kept read: a sheet parsed again into one struct has a new serial");
+    garb_free(&twice);
+    os64_html_document_t *doc=update_doc("<!doctype html><div id=box class=on><p id=a style='bogus-prop:2'>a</p><p>b</p></div>");
+    os64_html_document_t *other=update_doc("<!doctype html><div id=box class=on><p>a</p></div>");
+    garb_parsed_t sheet,same;
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    garb_parse_sheet_text(css,strlen(css),&same);
+    // `moved` is `sheet` copied: the same parse, serial and all, at another
+    // address (never freed: the arena is `sheet`'s).
+    garb_parsed_t moved=sheet;
+    garb_sheet_in_t in={.sheet=&sheet},in_same={.sheet=&same},in_moved={.sheet=&moved};
+    garb_env_t env={.width=800,.height=600},wide={.width=900,.height=600};
+    garb_cascade_t *a=kept_build(&in,doc,env,NULL,0,NULL,GARB_CASCADE_READ_MAX);
+    update_check(a && garb_cascade_read_refusal(a)==GARB_READ_NOT_OFFERED,"kept read: a build offered none reads the sheets");
+    garb_cascade_t *b=kept_build(&in,doc,env,NULL,0,a,GARB_CASCADE_READ_MAX);
+    update_check(b && garb_cascade_read_refusal(b)==GARB_READ_KEPT && !garb_cascade_read_written(b),
+                 "kept read: an equal key takes the read, unwritten though the giver matched an inline style");
+    update_check(garb_cascade_read_content(a)==garb_cascade_read_content(b),"kept read: one read, one content");
+    garb_read_t *outlives=garb_cascade_read_hold(a);
+    garb_cascade_free(a);
+    garb_cascade_limits_t held_limits={GARB_ARENA_MAX,GARB_CASCADE_READ_MAX,GARB_ARENA_MAX,SIZE_MAX,NULL,outlives,true};
+    garb_cascade_t *after=garb_cascade_scoped(&in,1,NULL,0,doc,env,&held_limits);
+    garb_read_release(outlives);
+    update_check(after && garb_cascade_read_refusal(after)==GARB_READ_KEPT && !garb_cascade_read_written(after),
+                 "kept read: a read held past its cascade is taken whole");
+    garb_cascade_free(after);
+    update_equal(b,doc,&in);
+    // Each member of the key, different: read again, and named.
+    struct { garb_cascade_t *c; garb_read_refusal_t want; const char *what; } cases[] = {
+        {kept_build(&in,doc,wide,NULL,0,b,GARB_CASCADE_READ_MAX),GARB_READ_ENVIRONMENT,"kept read: another viewport reads again"},
+        {kept_build(&in_same,doc,env,NULL,0,b,GARB_CASCADE_READ_MAX),GARB_READ_SHEETS,"kept read: the same text parsed again reads again"},
+        {kept_build(&in_moved,doc,env,NULL,0,b,GARB_CASCADE_READ_MAX),GARB_READ_SHEETS,"kept read: the same parse at another address reads again"},
+        {kept_build(&in,doc,env,NULL,0,b,GARB_CASCADE_READ_MAX/2),GARB_READ_LIMITS,"kept read: other limits read again"},
+        {kept_build(&in,other,env,NULL,0,b,GARB_CASCADE_READ_MAX),GARB_READ_DOCUMENT,"kept read: another document reads again"},
+        {kept_build(&in,doc,env,&(garb_scope_in_t){.root=by_id(doc->document,"box"),.sheets=(int32_t[]){0},.n=1},1,b,
+                    GARB_CASCADE_READ_MAX),GARB_READ_SCOPES,"kept read: other scopes read again"},
+    };
+    for(size_t i=0;i<sizeof(cases)/sizeof(*cases);++i) {
+        update_check(cases[i].c && garb_cascade_read_refusal(cases[i].c)==cases[i].want,cases[i].what);
+        garb_cascade_free(cases[i].c);
+    }
+    // A read that came up short is never taken.
+    garb_cascade_t *shortread=kept_build(&in,doc,env,NULL,0,NULL,64);
+    garb_cascade_t *offered=kept_build(&in,doc,env,NULL,0,shortread,64);
+    update_check(offered && garb_cascade_read_refusal(offered)==GARB_READ_NOT_KEEPABLE,"kept read: a short read is not taken");
+    garb_cascade_free(shortread); garb_cascade_free(offered);
+    // Two cascades on one read, updated in turn: each its own marks.
+    garb_cascade_t *c=kept_build(&in,doc,env,NULL,0,b,GARB_CASCADE_READ_MAX);
+    update_check(c && garb_cascade_read_refusal(c)==GARB_READ_KEPT,"kept read: a third cascade takes it too");
+    os64_html_set_attr(doc,(os64_html_node_t *)by_id(doc->document,"a"),"style","bogus-prop:3",12);
+    update_check(garb_cascade_update(b),"kept read: the first updates, on the shared read");
+    update_equal(b,doc,&in);
+    update_check(garb_cascade_update(c),"kept read: the second updates, on the shared read");
+    update_equal(c,doc,&in);
+    garb_cascade_t *d=kept_build(&in,doc,env,NULL,0,c,GARB_CASCADE_READ_MAX);
+    update_check(d && garb_cascade_read_refusal(d)==GARB_READ_KEPT && !garb_cascade_read_written(d),
+                 "kept read: an inline style's skipped property, counted after, leaves the read unwritten");
+    garb_cascade_free(b); garb_cascade_free(c);
+    // The same struct parsed again: one address, a new parse.
+    garb_free(&sheet);
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    garb_cascade_t *e=kept_build(&in,doc,env,NULL,0,d,GARB_CASCADE_READ_MAX);
+    update_check(e && garb_cascade_read_refusal(e)==GARB_READ_SHEETS,
+                 "kept read: a sheet parsed again into the same struct reads again");
+    garb_cascade_free(d); garb_cascade_free(e);
+    garb_free(&sheet); garb_free(&same);
+    os64_html_document_free(doc); os64_html_document_free(other);
+    update_check(live==baseline,"kept read: nothing retained");
+}
+
+// The skipped records copied out of a read hold exactly what the read held,
+// so their growth stops at GARB_SKIPS_MAX, not at the first doubling past
+// it: 150 names from the sheets, then a new one from a style attribute,
+// kept, in the cascade that made the read and in one that took it.
+static void update_kept_skips(void)
+{
+    size_t baseline=live;
+    char css[8192]; size_t at=0;
+    for(int i=0;i<150;i++) at+=(size_t)snprintf(css+at,sizeof(css)-at,"p{zzprop%d:1}",i);
+    os64_html_document_t *doc=update_doc("<!doctype html><p style='zznew:1'>a</p>");
+    garb_parsed_t sheet; garb_parse_sheet_text(css,at,&sheet);
+    garb_sheet_in_t in={.sheet=&sheet};
+    garb_env_t env={.width=800,.height=600};
+    garb_cascade_t *maker=kept_build(&in,doc,env,NULL,0,NULL,GARB_CASCADE_READ_MAX);
+    garb_cascade_t *taker=kept_build(&in,doc,env,NULL,0,maker,GARB_CASCADE_READ_MAX);
+    garb_cascade_t *both[2]={maker,taker};
+    for(int k=0;k<2;k++) {
+        uint32_t lost=99;
+        int32_t n=both[k] ? garb_cascade_skips(both[k],NULL,0,&lost) : -1;
+        update_check(n==151 && lost==0,k==0 ? "kept skips: the maker keeps a 151st name"
+                                             : "kept skips: the taker keeps a 151st name");
+    }
+    update_check(taker && garb_cascade_read_refusal(taker)==GARB_READ_KEPT,"kept skips: the taker took the read");
+    garb_cascade_free(maker); garb_cascade_free(taker);
+    garb_free(&sheet); os64_html_document_free(doc);
+    update_check(live==baseline,"kept skips: nothing retained");
+}
+
 static int cascade_updates(void)
 {
+    update_kept_read();
+    update_kept_skips();
     update_dependencies();
     update_inline_changes();
     update_has();

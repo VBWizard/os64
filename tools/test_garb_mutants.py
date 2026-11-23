@@ -46,6 +46,38 @@ SCRIPTS = 'tools/test_yonder_scripts_host.sh'
 
 # (name, file, old, new, harness). Each breaks one rule the design states.
 mutants = [
+    # The kept read (KEPT_READ.md): its key, its serial, its refcount, and
+    # the copy that keeps it unwritten.
+    ('kept-read-a-reparse-keeps-its-serial', PARSE,
+     '    out->serial = __atomic_add_fetch(&serials, 1, __ATOMIC_RELAXED);',
+     '    out->serial = 1 + 0 * __atomic_add_fetch(&serials, 1, __ATOMIC_RELAXED);', UPDATES),
+    ('kept-read-key-ignores-the-environment', CASCADE,
+     '    if (!env_equal(r->env, env)) return GARB_READ_ENVIRONMENT;',
+     '    if (!env_equal(r->env, env) && false) return GARB_READ_ENVIRONMENT;', UPDATES),
+    ('kept-read-key-ignores-the-serials', CASCADE,
+     '        if (a->serial != serial || a->sheet != b->sheet || a->parent != b->parent',
+     '        if ((a->serial != serial && false) || a->sheet != b->sheet || a->parent != b->parent', UPDATES),
+    ('kept-read-key-ignores-the-address', CASCADE,
+     '        if (a->serial != serial || a->sheet != b->sheet || a->parent != b->parent',
+     '        if (a->serial != serial || a->parent != b->parent', UPDATES),
+    ('kept-read-skips-grow-past-the-cap', CASCADE,
+     '        if (bigger > GARB_SKIPS_MAX && c->skipcap < GARB_SKIPS_MAX)\n            bigger = GARB_SKIPS_MAX;\n',
+     '', UPDATES),
+    ('kept-read-key-ignores-the-limits', CASCADE,
+     '    if (r->state_bytes != limits.state_bytes || r->read_bytes != limits.read_bytes) return GARB_READ_LIMITS;',
+     '    if ((r->state_bytes != limits.state_bytes || r->read_bytes != limits.read_bytes) && false) return GARB_READ_LIMITS;',
+     UPDATES),
+    ('kept-read-key-ignores-the-document', CASCADE,
+     '    if (r->doc != doc) return GARB_READ_DOCUMENT;\n', '', UPDATES),
+    ('kept-read-key-ignores-the-scopes', CASCADE,
+     '    if (r->ngiven != nscopes) return GARB_READ_SCOPES;\n', '', UPDATES),
+    ('kept-read-a-short-read-is-taken', CASCADE,
+     '    if (!r->keep) return GARB_READ_NOT_KEEPABLE;\n', '', UPDATES),
+    ('kept-read-skipped-records-written-in-place', CASCADE,
+     '    if (c->read == NULL || c->skips == NULL || c->skips != c->read->skips)\n        return true;',
+     '    return true;', UPDATES),
+    ('kept-read-taken-without-a-reference', CASCADE,
+     '        offered->refs++;\n        c->read = offered;', '        c->read = offered;', UPDATES),
     # The kept scratch.
     ('a-read-frees-its-scratch', PARSE,
      '    owner->scratch = p.scratch;\n    owner->scratch_cap = p.scratch_cap;',

@@ -441,8 +441,56 @@ static void shadow_scale(void)
     shadow_check(linear, "many scopes: four times the scopes cost about four times as much");
 }
 
+// THE KEPT READ across a shadow host replaced (KEPT_READ.md, condition 3):
+// a read names its scopes' roots by address and never follows them. A build
+// offered a cascade with the same roots takes its read; once the host is
+// removed and another attached, the new root's scopes differ and the build
+// reads again; and a read held past its giver's free is taken whole (ASan).
+static void shadow_kept_read(void)
+{
+    ShadowFixture f;
+    if (!sh_open(&f)) { shadow_check(false, "kept read: the shadow fixture opens"); return; }
+    garb_env_t env = {.width = 800, .height = 600};
+    garb_cascade_limits_t limits = {GARB_ARENA_MAX, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX, NULL, NULL, true};
+    garb_cascade_t *a = garb_cascade_scoped(f.in, 2, f.scopes, 2, f.doc, env, &limits);
+    garb_read_t *held = garb_cascade_read_hold(a);
+    limits.read_from = held;
+    garb_cascade_t *b = garb_cascade_scoped(f.in, 2, f.scopes, 2, f.doc, env, &limits);
+    garb_read_release(held);
+    shadow_check(b && garb_cascade_read_refusal(b) == GARB_READ_KEPT, "kept read: the same roots take the read");
+    // The host removed, another attached: a new root.
+    os64_html_node_t *host = sh_find(f.doc, "h");
+    os64_html_node_t *parent = host != NULL ? (os64_html_node_t *)host->parent : NULL;
+    os64_html_node_t *next = os64_html_create_element(f.doc, OS64_HTML_NS_HTML, "div", NULL);
+    bool moved = parent && next && os64_html_remove(f.doc, host) == 0 &&
+                 os64_html_set_attr(f.doc, next, "id", "h2", 2) == 0 && os64_html_insert(f.doc, parent, next, NULL) == 0;
+    os64_html_node_t *root = moved ? sh_attach(f.doc, "h2", kShadowTree) : NULL;
+    shadow_check(root != NULL, "kept read: a new host takes a shadow tree");
+    if (root == NULL) { garb_cascade_free(a); garb_cascade_free(b); sh_close(&f); return; }
+    f.root = root;
+    f.scopes[1].root = root;
+    held = garb_cascade_read_hold(b);
+    limits.read_from = held;
+    garb_cascade_t *c = garb_cascade_scoped(f.in, 2, f.scopes, 2, f.doc, env, &limits);
+    garb_read_release(held);
+    shadow_check(c && garb_cascade_read_refusal(c) == GARB_READ_SCOPES, "kept read: a new root reads again, and says scopes");
+    garb_cascade_free(a);
+    garb_cascade_free(b);
+    held = garb_cascade_read_hold(c);
+    garb_cascade_free(c);
+    limits.read_from = held;
+    garb_cascade_t *d = garb_cascade_scoped(f.in, 2, f.scopes, 2, f.doc, env, &limits);
+    garb_read_release(held);
+    shadow_check(d && garb_cascade_read_refusal(d) == GARB_READ_KEPT && !garb_cascade_read_written(d),
+                 "kept read: the new root's read, held past its cascade, is taken unwritten");
+    sh_same_as_fresh(d, &f, "kept read: the taker matches as a fresh cascade with its giver gone");
+    garb_cascade_free(d);
+    sh_close(&f);
+}
+
 static int cascade_shadow(void)
 {
+    shadow_kept_read();
     shadow_scale();
     shadow_scoping();
     shadow_imports();

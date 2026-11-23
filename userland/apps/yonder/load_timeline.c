@@ -294,6 +294,19 @@ void yonder_lt_build(yonder_lt_t *t, yonder_lt_why_t why, const yonder_lt_build_
     if ((unsigned)why >= YONDER_LT_WHYS)
         why = YONDER_LT_WHY_OTHER;
     t->builds[why]++;
+    if (b->kept) {
+        t->kept[why]++;
+    } else if (b->again != NULL) {
+        uint32_t i = 0;
+        while (i < t->nagain && t->again[i].name != b->again)
+            i++;
+        if (i == t->nagain && t->nagain < YONDER_LT_REASONS)
+            t->again[t->nagain++].name = b->again;
+        if (i < t->nagain)
+            t->again[i].n++;
+        else
+            t->again_other++;
+    }
     t->build_sheets[why] += b->sheets_us;
     t->build_table[why] += b->table_us;
     t->build_matching[why] += b->matching_us;
@@ -596,7 +609,9 @@ void yonder_lt_layouts_line(const yonder_lt_t *t, char *out, size_t cap)
             put_u(&o, t->builds[w]);
             put(&o, " in ");
             put_ms(&o, built[w]);
-            put(&o, " (reading the sheets ");
+            put(&o, " (");
+            put_u(&o, t->kept[w]);
+            put(&o, " kept; reading the sheets ");
             put_ms_bare(&o, t->build_sheets[w]);
             put(&o, ", the table ");
             put_ms_bare(&o, t->build_table[w]);
@@ -607,6 +622,19 @@ void yonder_lt_layouts_line(const yonder_lt_t *t, char *out, size_t cap)
             put(&o, " rules and ");
             put_u(&o, t->build_elements[w] / t->builds[w]);
             put(&o, " elements a build)");
+        }
+    }
+    if (t->nagain != 0) {
+        put(&o, "; read again because");
+        for (uint32_t i = 0; i < t->nagain; i++) {
+            put(&o, i == 0 ? ": " : ", ");
+            put(&o, t->again[i].name);
+            put(&o, " ");
+            put_u(&o, t->again[i].n);
+        }
+        if (t->again_other != 0) {
+            put(&o, ", other ");
+            put_u(&o, t->again_other);
         }
     }
     uint32_t timed = 0;

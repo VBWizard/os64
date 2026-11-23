@@ -2094,13 +2094,16 @@ static void lt_cascade_refused(const garb_cascade_t *c)
     yonder_lt_broad(&s_lt, os64_micros(), b.marked, text);
 }
 
-// A fresh cascade libgarb timed by part: to the timeline, by who asked.
+// A fresh cascade libgarb timed by part: to the timeline, by who asked,
+// with whether it took a kept read and, if not, why it read again.
 static void lt_cascade_built(const garb_cascade_t *c)
 {
     garb_build_cost_t k = garb_cascade_build_cost(c);
     if (k.sheets == 0 && k.table == 0 && k.matching == 0)
         return;
-    yonder_lt_build_t b = {k.sheets, k.table, k.matching, k.rules, k.elements};
+    garb_read_refusal_t again = garb_cascade_read_refusal(c);
+    yonder_lt_build_t b = {k.sheets, k.table, k.matching, k.rules, k.elements, again == GARB_READ_KEPT,
+                           again == GARB_READ_KEPT ? NULL : garb_read_refusal_name(again)};
     yonder_lt_build(&s_lt, s_lt_why, &b);
 }
 
@@ -2126,7 +2129,7 @@ static const char *const *cascade_reason_names(void)
 static void cascade_check(const Page *p, const garb_cascade_t *updated, const garb_sheet_in_t *in, int32_t n,
                           const PageScopes *ps, garb_env_t view)
 {
-    garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX, NULL};
+    garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX, NULL, NULL, false};
     garb_cascade_t *fresh = garb_cascade_scoped(in, n, ps->scopes, ps->nscopes, page_doc(p), view,
                                                 s_page_memory.cascade != 0 ? &limits : NULL);
     if (fresh == NULL || garb_cascade_incomplete(fresh)) {
@@ -2147,6 +2150,55 @@ static void cascade_check(const Page *p, const garb_cascade_t *updated, const ga
     os64_snprintf(line, sizeof(line), "this yonder's checks: %u of %u differed; the latest, on this page, at %s",
                   s_cascade_differed, s_cascade_checked / s_cascade_check, why);
     yonder_diag_fact(layout_profile_diag(p), "cascade check", line);
+}
+
+// --cascade-check's check of a kept read (KEPT_READ.md): one fresh build in
+// `s_cascade_check` that took its read from the cascade it replaced is
+// asked whether that read had been written since it was made
+// (garb_cascade_read_written, under check_read), then compared with a
+// cascade that read the sheets again: their reads' shapes
+// (garb_cascade_read_content), then every element's winners
+// (garb_cascade_compare), which is what a key that missed something would
+// change.
+// Every check is counted in the record's `kept read check` fact, so a run
+// whose reads all agreed says so; a difference is also printed. The fact
+// takes the timeline's room: a busy page fills the ordinary one first.
+static uint32_t s_read_checked, s_read_differed;
+static void kept_read_check(const Page *p, const garb_cascade_t *built, const garb_sheet_in_t *in, int32_t n,
+                            const PageScopes *ps, garb_env_t view, garb_cascade_limits_t limits)
+{
+    if (++s_read_checked % s_cascade_check != 0)
+        return;
+    limits.read_from = NULL;
+    limits.check_read = false;
+    limits.clock = NULL;
+    garb_cascade_t *fresh = garb_cascade_scoped(in, n, ps->scopes, ps->nscopes, page_doc(p), view, &limits);
+    const char *wrong = NULL;
+    char why[512];
+    if (garb_cascade_read_written(built))
+        wrong = "the kept read had been written since it was made";
+    else if (fresh != NULL && !garb_cascade_incomplete(fresh) &&
+             garb_cascade_read_content(fresh) != garb_cascade_read_content(built))
+        wrong = "the kept read differs from the sheets read again";
+    else if (fresh != NULL && !garb_cascade_incomplete(fresh) &&
+             !garb_cascade_compare(built, fresh, page_doc(p), why, sizeof(why))) {
+        // The page's own bytes reach a terminal that obeys escape
+        // sequences: a control byte is shown as `?`.
+        for (char *x = why; *x != '\0'; x++)
+            if ((unsigned char)*x < 0x20 || (unsigned char)*x == 0x7f) *x = '?';
+        wrong = why;
+    }
+    garb_cascade_free(fresh);
+    static char latest[512];
+    if (wrong != NULL) {
+        s_read_differed++;
+        os64_snprintf(latest, sizeof(latest), "%s", wrong);
+        os64_printf("yonder: kept read check: %s\n", wrong);
+    }
+    char line[640];
+    os64_snprintf(line, sizeof(line), "this yonder's checks: %u of %u differed%s%s", s_read_differed,
+                  s_read_checked / s_cascade_check, latest[0] != '\0' ? "; the latest: " : "", latest);
+    yonder_diag_timeline_fact(layout_profile_diag(p), "kept read check", line);
 }
 
 static void measured_fallback(Page *p);
@@ -2216,24 +2268,28 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         // trigger to tell.
         if (s_lt.on && matches && garb_cascade_update_refusal(cascade) == GARB_UPDATE_BROAD)
             lt_cascade_refused(cascade);
+        // The read is held first: the measuring page's fallback frees the
+        // cascade it replaces before the new one is built.
+        garb_read_t *held = garb_cascade_read_hold(cascade);
         measured_fallback(p);
-        // The cascade's own state is held to its share of page_memory_mb;
-        // what it reads of the sheets, and each style attribute's parse,
-        // keep libgarb's ceilings (yonder_page_memory_split says why).
-        // While the load's timeline runs it hands libgarb its clock, with
-        // the state's ceiling libgarb's own when page_memory_mb sets none:
-        // the limits it would have taken given none.
-        garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX,
-                                        NULL};
-        if (s_lt.on) {
+        // The cascade's own state is held to its share of page_memory_mb
+        // (libgarb's own ceiling when that sets none); what it reads of the
+        // sheets, and each style attribute's parse, keep libgarb's ceilings
+        // (yonder_page_memory_split says why). It may take the read of
+        // the cascade it replaces (KEPT_READ.md: the sheets read again only
+        // when the key differs); --cascade-check checks the read it takes.
+        // While the load's timeline runs it hands libgarb its clock.
+        garb_cascade_limits_t limits = {s_page_memory.cascade != 0 ? s_page_memory.cascade : GARB_ARENA_MAX,
+                                        GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX, NULL, held,
+                                        s_cascade_check != 0};
+        if (s_lt.on)
             limits.clock = lt_clock;
-            if (limits.state_bytes == 0)
-                limits.state_bytes = GARB_ARENA_MAX;
-        }
-        cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view,
-                                               s_page_memory.cascade != 0 || s_lt.on ? &limits : NULL) : NULL;
+        cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view, &limits) : NULL;
+        garb_read_release(held);
         if (s_lt.on && cascade != NULL)
             lt_cascade_built(cascade);
+        if (s_cascade_check != 0 && cascade != NULL && garb_cascade_read_refusal(cascade) == GARB_READ_KEPT)
+            kept_read_check(p, cascade, in, n, &ps, view, limits);
     } else if (s_cascade_check != 0 && garb_cascade_updates(cascade) != prior_updates &&
                ++s_cascade_checked % s_cascade_check == 0) {
         // The check's own time is no part of this layout's: the profile's
@@ -3577,9 +3633,9 @@ static void diag_timeline(yonder_diag_t *d)
         yonder_diag_timeline_fact(d, key, line);
     }
 }
-_Static_assert(2 + YONDER_LT_SLICES + YONDER_LT_LONG_MAX + YONDER_LT_BROAD_MAX + YONDER_LT_PARSE_MAX <=
+_Static_assert(2 + YONDER_LT_SLICES + YONDER_LT_LONG_MAX + YONDER_LT_BROAD_MAX + YONDER_LT_PARSE_MAX + 1 <=
                YONDER_DIAG_TIMELINE_FACTS,
-               "the timeline's lines fit its room in the record");
+               "the timeline's lines and the kept read check fit their room in the record");
 
 static yonder_diag_t *diag_begin(const char *url)
 {

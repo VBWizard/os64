@@ -638,9 +638,14 @@ static void consume_declaration_list(Parse *p, Input *in, List *items)
 
 // ── The entry points (§5.3) ─────────────────────────────────────────────
 
+// Every parse fills its result here, so here is where it takes its serial
+// (garb_parsed_t.serial): a new one each time, whether `out` is a new
+// struct or one parsed into before.
 static bool start_limited(garb_parsed_t *out, Parse *p, size_t max)
 {
+    static uint64_t serials;
     os64_memset(out, 0, sizeof(*out));
+    out->serial = __atomic_add_fetch(&serials, 1, __ATOMIC_RELAXED);
     os64_memset(p, 0, sizeof(*p));
     p->arena = max ? os64_arena_create(0, max) : NULL;
     p->max = max;
