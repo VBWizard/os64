@@ -4374,18 +4374,21 @@ static const flow_box_t *s_paint_check_box;
 static int32_t s_paint_check_groups = -1;
 
 // `--damage-check[=N]` (LAYOUT_NEEDS_N3.md § 4): every Nth script's rebuild
-// painted in parts (1 unless said), those that marked nothing included, is
-// followed, once its render has painted every part, by the whole view
-// painted the ordinary way and compared with what the window held, to the
-// pixel, the videos' boxes left
+// painted in parts or tick that is a frame (1 unless said; one count for
+// both), those that marked nothing included, is followed, once its render
+// has painted every part, by the whole view painted the ordinary way and
+// compared with what the window held, to the pixel, the videos' boxes left
 // out (a picture moves by itself) and the page's widgets (the toolkit
-// paints them over the view). A difference is a part the rebuild should
-// have marked, or one something else should have; the record says how many were compared, how many differed,
-// the first with where and what the rebuild had marked, and how many could
-// not be compared (damage_check). A rebuild that marked nothing marks one
-// pixel, so that there is a paint to check. The second paint is charged to
-// the render's, and anything it counts (effects, a video's paints) counts
-// twice.
+// paints them over the view). A difference is a part the rebuild or the
+// tick should have marked, or one something else should have; the record
+// says how many were compared, how many differed, the first with where and
+// what the rebuild or the tick had marked, and how many could not be
+// compared (damage_check). One that marked nothing marks one pixel, so
+// that there is a paint to check. A tick is checked apart from the next
+// rebuild because that rebuild's compare marks an animated box whose value
+// moved, which would hide a tick that marked too little. The second paint
+// is charged to the render's, and anything it counts (effects, a video's
+// paints) counts twice.
 static uint32_t s_damage_check, s_damage_counted;
 static bool s_damage_due;
 static uint64_t s_damage_compared, s_damage_differed, s_damage_uncompared;
@@ -10701,19 +10704,24 @@ static void pictures_tick(void)
 // so its mark is the whole view, said as the backdrop's (WHOLE_BACKDROP);
 // which box that is is the painter's to say from the styles a tick
 // changes — the root's background may be what moves — so it is asked at
-// each mark, of the styles before the tick and after it.
+// each mark, of the styles before the tick and after it. `s_tick_marks`
+// counts the marks it made, for the damage check's line.
+static uint32_t s_tick_marks;
+
 static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 {
     const os64_gui_rect_t *view = ctx;
     const yonder_verbs_t asking = {.backdrop = glass_backdrop};
     os64_gui_rect_t meet;
     s_tick_marking = true;
-    if (box == yonder_canvas_owner(g.page.tree, &asking))
+    if (box == yonder_canvas_owner(g.page.tree, &asking)) {
         mark_whole(WHOLE_BACKDROP, false);
-    else if (os64_rect_intersect(r, *view, &meet)) {
+        s_tick_marks++;
+    } else if (os64_rect_intersect(r, *view, &meet)) {
         s_marking_box = box;
         mark_part(meet);
         s_marking_box = NULL;
+        s_tick_marks++;
     }
     s_tick_marking = false;
 }
@@ -10801,6 +10809,7 @@ static void tick_page_run(uint64_t now, bool frame)
     int64_t began_us = os64_micros();
     bool moved = false;
     const os64_gui_rect_t most_was = s_cost.mark_most;
+    s_tick_marks = 0;
     if (!flow_motion_tick(g.page.tree, now, scroll_now(), frame ? tick_mark : NULL, &v, &moved)) {
         if (motion_cost_us() > (uint64_t)MOTION_COST_MS * 1000) {
             g.ticked = true;
@@ -10831,6 +10840,18 @@ static void tick_page_run(uint64_t now, bool frame)
         tick_named_done(&k);
         if (k.first[0] != '\0' && os64_memcmp(&most_was, &s_cost.mark_most, sizeof(most_was)) != 0)
             os64_snprintf(s_cost.mark_who, sizeof(s_cost.mark_who), "an animation of %s", k.first);
+        // A check due for the tick, with what it marked for the record's
+        // line (s_damage_check).
+        if (s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {
+            s_damage_due = true;
+            if (s_tick_marks == 0) {
+                os64_strcopy(s_damage_after, sizeof(s_damage_after), "a tick that marked nothing");
+                mark_part((os64_gui_rect_t){g.sx, g.sy, 1, 1});
+            } else {
+                os64_snprintf(s_damage_after, sizeof(s_damage_after), "a tick that marked %u parts",
+                              (unsigned)s_tick_marks);
+            }
+        }
     }
 }
 

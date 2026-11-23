@@ -6,14 +6,23 @@
    counter's text changes every quarter second, so every rebuild compares
    the whole view with the window, and a canvas left stale on the glass is
    a difference. The record says how many were acknowledged, by why
-   ("canvases acknowledged unseen: 8 in a group at alpha 0, 2 culled").
+   ("canvases acknowledged unseen: 12 in a group at alpha 0, 2 culled").
    Opacity 0.001 is a group laid at alpha 0 that the walk still hands the
    painter, where opacity 0 is culled before it (`unpainted`).
-   1: its group's opacity ticked from 0 (an animation held at 0 by its delay)
+   1: its group's animation leaving its delay, held at 0 until then: a phase
+      edge, which the layout for the animations crosses and marks
    2: its group's opacity written by a script
    3: a new tree in which it is no longer a group (its class taken away)
    4: an enclosing group leaving 0, its own group staying at 0.6
-   5: culled as transparent (plain opacity 0), then written to 1 */
+   5: culled as transparent (plain opacity 0), then written to 1
+   6: its group's opacity ticked from 0 inside its animation's active phase,
+      the keyframes holding 0 to 2.4 s and rising to 1 by 4 s; the check
+      follows each tick too, since the next rebuild's compare would mark
+      the box anyway
+   7: its group's opacity written from 0.001 to 0.5 at 5 s, a group still: the
+      trees' compare marks the group by its own change, where 2 to 4 stop
+      being groups, and a list of layers that changed refuses to the whole
+      view */
 body{margin:0;background:#202020;color:#ddd;font:16px sans-serif}
 .cell{position:absolute;top:40px;width:120px;height:80px}
 canvas{display:block;width:120px;height:80px}
@@ -25,6 +34,9 @@ canvas{display:block;width:120px;height:80px}
 #w4{left:430px;opacity:.001}
 #w4 div{opacity:.6}
 #w5{left:570px;opacity:0}
+#w6{left:710px;animation:rise 8s linear both}
+@keyframes rise{0%,30%{opacity:0}50%,100%{opacity:1}}
+#w7{left:850px;opacity:.001}
 #n{position:absolute;left:10px;top:150px}
 </style></head><body>
 <div class=cell id=w1><canvas id=c1 width=60 height=40></canvas></div>
@@ -32,15 +44,17 @@ canvas{display:block;width:120px;height:80px}
 <div class="cell hide" id=w3><canvas id=c3 width=60 height=40></canvas></div>
 <div class=cell id=w4><div><canvas id=c4 width=60 height=40></canvas></div></div>
 <div class=cell id=w5><canvas id=c5 width=60 height=40></canvas></div>
+<div class=cell id=w6><canvas id=c6 width=60 height=40></canvas></div>
+<div class=cell id=w7><canvas id=c7 width=60 height=40></canvas></div>
 <div id=n>0</div>
 <script>
 function paint(colour) {
-  for (let i = 1; i <= 5; i++) {
+  for (let i = 1; i <= 7; i++) {
     const x = document.getElementById('c' + i).getContext('2d');
     x.fillStyle = colour;
     x.fillRect(0, 0, 60, 40);
     x.fillStyle = '#fff';
-    x.fillRect(10 * i, 10, 8, 20);
+    x.fillRect(7 * i, 10, 5, 20);
   }
 }
 // Drawn twice while hidden, the second over the first, then shown.
@@ -52,6 +66,8 @@ setTimeout(() => {
   document.getElementById('w4').style.opacity = '1';
   document.getElementById('w5').style.opacity = '1';
 }, 3000);
+// In a turn of its own, so no refusal to the whole view stands in for it.
+setTimeout(() => { document.getElementById('w7').style.opacity = '.5'; }, 5000);
 let n = 0;
 setInterval(() => { document.getElementById('n').textContent = ++n; }, 250);
 </script>
