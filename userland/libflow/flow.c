@@ -4667,57 +4667,129 @@ static void ink_grown(flow_box_t *b)
         ((flow_box_t *)c->parent)->holds_outline = true;
 }
 
-// A change to a box a filter draws repaints all that filter spreads it
-// over, so it is marked by the bounds of the outermost filtered group it
-// paints in (filter_grown), with the group's box. `FilterMemo` keeps the
-// last group found and the last marked, so the boxes of one changed
-// subtree look for theirs once and mark it once.
+// A CHANGE INSIDE A FILTERED GROUP repaints what the filters it is drawn
+// through spread it over, and no more: what the box paints, at each box
+// from it out to the root, spread by that box's filter when it is a
+// filtered group (flow_filter_reach, which holds a drop shadow's offset,
+// and the farther a blur made on a reduced copy reads,
+// FLOW_FILTER_READS_MORE) and cut to that group's bounds, then taken
+// through that box's matrix when it is drawn through one (nested_reach) —
+// a filter is spread before its own box's matrix, as group_bounds spreads
+// it — so nested filters, a filter inside a matrix and a matrix inside a
+// filter each spread it in the coordinates that filter is drawn in. Every
+// function yonder draws is local — the colour functions touch one pixel, a
+// blur or a shadow no farther than its reach — and a list holding a URL is
+// drawn unfiltered (FILTER.md § 2); a function that were not (filter_local)
+// would repaint its group's whole bounds. `FilterMemo` keeps the OPEN
+// layers of the last few boxes looked up, so the boxes of one changed
+// subtree look each group up once, and the last rect marked, so the same
+// rect is marked once.
+#define FILTER_MEMO 4
+static bool same_rect(os64_gui_rect_t a, os64_gui_rect_t b);
 typedef struct {
-    const flow_box_t *box;      // the last outermost filtered box found
-    int32_t open;               // its OPEN's layer, -1 for none
-    int32_t marked;             // the OPEN's layer last marked, -1 for none
+    const flow_box_t *box[FILTER_MEMO];
+    int32_t open[FILTER_MEMO];
+    int32_t next;
+    bool marked;
+    os64_gui_rect_t last;
 } FilterMemo;
 
-// The OPEN layer of the outermost filtered group `b` paints in, or -1: a
-// filtered box that is a context, and so a group (makes_context, is_group).
-static int32_t filtered_open(const flow_tree_t *t, const flow_box_t *b, FilterMemo *memo)
+// Whether `a` is a filtered group: a filtered box that is a context, and so
+// a group (makes_context, is_group).
+static bool filtered_group(const flow_box_t *a)
 {
-    const flow_box_t *g = NULL;
-    for (const flow_box_t *a = b; a != NULL; a = a->parent)
-        if (f_group_filter(a->style, f_atom(a)) && !a->unpainted && (a->stacked || a->parent == NULL))
-            g = a;
-    if (g == NULL)
-        return -1;
-    if (g != memo->box) {
-        memo->box = g;
-        memo->open = -1;
-        for (int32_t k = 0; k < t->nlayers && memo->open < 0; k++)
-            if (t->layers[k].box == g && t->layers[k].part == PART_OPEN)
-                memo->open = k;
-    }
-    return memo->open;
+    return f_group_filter(a->style, f_atom(a)) && !a->unpainted && (a->stacked || a->parent == NULL);
 }
 
-// Whether `b` is in a filtered group (filtered_open), its bounds handed to
-// `mark` in page coordinates at `scroll` unless they were just now.
-static bool mark_filtered(const flow_tree_t *t, const flow_box_t *b, flow_point_t scroll,
-                          FilterMemo *memo, const os64_gui_rect_t *bounds,
-                          void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r),
-                          void *ctx)
+// The layer of `a`'s OPEN, or -1.
+static int32_t open_of(const flow_tree_t *t, const flow_box_t *a, FilterMemo *memo)
 {
-    int32_t k = filtered_open(t, b, memo);
-    if (k < 0)
+    for (int32_t i = 0; i < FILTER_MEMO; i++)
+        if (memo->box[i] == a)
+            return memo->open[i];
+    int32_t open = -1;
+    for (int32_t k = 0; k < t->nlayers && open < 0; k++)
+        if (t->layers[k].box == a && t->layers[k].part == PART_OPEN)
+            open = k;
+    int32_t slot = memo->next;
+    memo->next = (memo->next + 1) % FILTER_MEMO;
+    memo->box[slot] = a;
+    memo->open[slot] = open;
+    return open;
+}
+
+// Whether every function of `a`'s filter list spreads a pixel no farther
+// than flow_filter_reach says it does.
+static bool filter_local(const flow_box_t *a)
+{
+    for (int32_t i = 0; i < a->style->nfilter; i++)
+        switch (a->style->filter[i].fn) {
+        case FLOW_FILTER_URL:
+        case FLOW_FILTER_BLUR:
+        case FLOW_FILTER_BRIGHTNESS:
+        case FLOW_FILTER_CONTRAST:
+        case FLOW_FILTER_GRAYSCALE:
+        case FLOW_FILTER_INVERT:
+        case FLOW_FILTER_OPACITY:
+        case FLOW_FILTER_SEPIA:
+        case FLOW_FILTER_SATURATE:
+        case FLOW_FILTER_HUE_ROTATE:
+        case FLOW_FILTER_DROP_SHADOW:
+            break;
+        default:
+            return false;
+        }
+    return true;
+}
+
+// `r` spread by `a`'s filter: its reach, and what its blurs read past it.
+static os64_gui_rect_t filter_spread(const flow_box_t *a, os64_gui_rect_t r)
+{
+    int32_t d[4];
+    flow_filter_reach(a, d);
+    int64_t more = 0;
+    for (int32_t i = 0; i < a->style->nfilter; i++)
+        if (a->style->filter[i].fn == FLOW_FILTER_BLUR || a->style->filter[i].fn == FLOW_FILTER_DROP_SHADOW)
+            more += FLOW_FILTER_READS_MORE;
+    if ((d[0] | d[1] | d[2] | d[3]) == 0)
+        return r;
+    for (int k = 0; k < 4; k++)
+        d[k] = (int32_t)((int64_t)d[k] + more < INT32_MAX / 4 ? (int64_t)d[k] + more : INT32_MAX / 4);
+    return grown(r, d);
+}
+
+// When `b` paints in a filtered group: `r`, what it paints in the
+// coordinates it is painted in — its own filter already spread into it
+// when `spread` is false, as a group's bounds have it — spread and cut at
+// each box from `b` out as above, handed to `mark` in page coordinates at
+// `scroll` with `b`, unless it is the rect last marked; true. False, and
+// nothing marked, when no filtered group holds what `b` paints: the caller
+// marks it as it would anyway.
+static bool mark_filtered(const flow_tree_t *t, const flow_box_t *b, os64_gui_rect_t r, bool spread,
+                          flow_point_t scroll, FilterMemo *memo, const os64_gui_rect_t *bounds,
+                          void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
+{
+    bool any = false;
+    for (const flow_box_t *a = spread ? b : b->parent; a != NULL && !any; a = a->parent)
+        any = filtered_group(a);
+    if (!any)
         return false;
-    if (k != memo->marked) {
-        int32_t end;
-        const flow_box_t *g = t->layers[k].box;
-        os64_gui_rect_t r = space_rect(g->frame, bounds != NULL ? bounds[k]
-                                                                : group_bounds(t, k, scroll, &end),
-                                       scroll);
-        if (r.w > 0 && r.h > 0)
-            mark(ctx, g, r);
-        memo->marked = k;
+    for (const flow_box_t *a = b; a != NULL && r.w > 0 && r.h > 0; a = a->parent) {
+        if ((a != b || spread) && filtered_group(a)) {
+            int32_t k = open_of(t, a, memo), end;
+            if (k >= 0) {
+                os64_gui_rect_t whole = bounds != NULL ? bounds[k] : group_bounds(t, k, scroll, &end);
+                r = meet(filter_local(a) ? filter_spread(a, r) : whole, whole);
+            }
+        }
+        if (!nested_reach(a, r, scroll, &r))
+            return true;
     }
+    if (r.w <= 0 || r.h <= 0 || (memo->marked && same_rect(r, memo->last)))
+        return true;
+    memo->marked = true;
+    memo->last = r;
+    mark(ctx, b, r);
     return true;
 }
 
@@ -4726,7 +4798,8 @@ static bool mark_filtered(const flow_tree_t *t, const flow_box_t *b, flow_point_
 // reaches, below): a group's bounds (group_bounds) taken out
 // through every matrix; any other element's boxes' overflow rects grown by
 // their ink and cut to their clips, as a group holds them (layer_reach);
-// either, in a filtered group, by that group's bounds (mark_filtered).
+// either, in a filtered group, spread by the filters it is drawn through
+// (mark_filtered).
 static void tick_marks(const flow_tree_t *t, flow_point_t scroll,
                        void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
 {
@@ -4734,7 +4807,7 @@ static void tick_marks(const flow_tree_t *t, flow_point_t scroll,
     for (int32_t i = 0; i < t->nticking; i++)
         groups |= t->ticking[i].changed && t->ticking[i].open >= 0;
     os64_gui_rect_t *bounds = groups ? all_group_bounds(t, scroll) : NULL;
-    FilterMemo memo = {NULL, -1, -1};
+    FilterMemo memo = {{NULL}, {0}, 0, false, {0, 0, 0, 0}};
     for (int32_t i = 0; i < t->nticking; i++) {
         const FTick *e = &t->ticking[i];
         if (!e->changed)
@@ -4749,11 +4822,10 @@ static void tick_marks(const flow_tree_t *t, flow_point_t scroll,
         if (e->open >= 0) {
             const flow_box_t *g = t->layers[e->open].box;
             int32_t end;
-            if (mark_filtered(t, g, scroll, &memo, bounds, mark, ctx))
+            os64_gui_rect_t own = bounds != NULL ? bounds[e->open] : group_bounds(t, e->open, scroll, &end);
+            if (mark_filtered(t, g, own, false, scroll, &memo, bounds, mark, ctx))
                 continue;
-            os64_gui_rect_t r = space_rect(g->frame, bounds != NULL ? bounds[e->open]
-                                                                    : group_bounds(t, e->open, scroll, &end),
-                                           scroll);
+            os64_gui_rect_t r = space_rect(g->frame, own, scroll);
             if (r.w > 0 && r.h > 0)
                 mark(ctx, g, r);
             continue;
@@ -4761,8 +4833,8 @@ static void tick_marks(const flow_tree_t *t, flow_point_t scroll,
         for (int32_t j = 0; j < e->nboxes; j++) {
             const flow_box_t *b = e->boxes[j];
             os64_gui_rect_t r;
-            if (b->unpainted || mark_filtered(t, b, scroll, &memo, bounds, mark, ctx) ||
-                !layer_reach(&(Layer){b, PART_WHOLE}, scroll, &r))
+            if (b->unpainted || !layer_reach(&(Layer){b, PART_WHOLE}, scroll, &r) ||
+                mark_filtered(t, b, r, true, scroll, &memo, bounds, mark, ctx))
                 continue;
             r = space_rect(b->frame, r, scroll);
             if (r.w > 0 && r.h > 0)
@@ -4975,7 +5047,8 @@ static flow_parts_why_t boxes_differ(const flow_tree_t *a, const flow_tree_t *b,
 // The parts of one tree: each changed element (`changed`, node -> what of it
 // changed) handed to `mark` — a group's bounds, else the reach of each box
 // that stands for its boxes (pieces_holder, the rule motion_due's view asks),
-// either, in a filtered group, by that group's bounds (mark_filtered) — and
+// either, in a filtered group, spread by the filters it is drawn through
+// (mark_filtered) — and
 // each stacked box drawn outside one that takes from it what changed
 // (stacked_from, the rule motion_due asks).
 typedef struct {
@@ -5002,9 +5075,8 @@ static void part_box(Parts *pp, const flow_box_t *b)
 {
     os64_gui_rect_t r;
     b = pieces_holder(b);
-    if (b->unpainted ||
-        mark_filtered(pp->t, b, pp->scroll, &pp->filter, pp->bounds, pp->mark, pp->ctx) ||
-        !layer_reach(&(Layer){b, PART_WHOLE}, pp->scroll, &r))
+    if (b->unpainted || !layer_reach(&(Layer){b, PART_WHOLE}, pp->scroll, &r) ||
+        mark_filtered(pp->t, b, r, true, pp->scroll, &pp->filter, pp->bounds, pp->mark, pp->ctx))
         return;
     r = space_rect(b->frame, r, pp->scroll);
     if (r.w > 0 && r.h > 0)
@@ -5051,7 +5123,7 @@ static flow_parts_why_t parts_in(const flow_tree_t *t, const FMap *changed, flow
                                  void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
                                  const flow_box_t *const *boxes, int32_t nboxes)
 {
-    Parts pp = {t, changed, scroll, mark, ctx, NULL, 0, NULL, {NULL, -1, -1}};
+    Parts pp = {t, changed, scroll, mark, ctx, NULL, 0, NULL, {{NULL}, {0}, 0, false, {0, 0, 0, 0}}};
     FMap grouped = {0};
     bool ok = true;
     // Every group's bounds in one pass (all_group_bounds) when any changed
@@ -5069,11 +5141,11 @@ static flow_parts_why_t parts_in(const flow_tree_t *t, const FMap *changed, flow
             f_map_get(changed, l->box->node) == NULL || f_map_get(&grouped, l->box->node) != NULL)
             continue;
         int32_t end;
-        if (mark_filtered(t, l->box, scroll, &pp.filter, bounds, mark, ctx)) {
+        os64_gui_rect_t in = bounds != NULL ? bounds[k] : group_bounds(t, k, scroll, &end);
+        if (mark_filtered(t, l->box, in, false, scroll, &pp.filter, bounds, mark, ctx)) {
             ok = f_map_put(&grouped, l->box->node, (void *)l);
             continue;
         }
-        os64_gui_rect_t in = bounds != NULL ? bounds[k] : group_bounds(t, k, scroll, &end);
         os64_gui_rect_t r = space_rect(l->box->frame, in, scroll);
         if (r.w > 0 && r.h > 0)
             mark(ctx, l->box, r);
