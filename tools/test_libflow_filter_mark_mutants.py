@@ -31,7 +31,7 @@ CASES = 'bash tools/test_libflow_host.sh'
 
 mutants = [
     ('the-reach-not-grown', 'r = meet(filter_local(a) ? filter_spread(a, r) : whole, whole);',
-     'r = meet(filter_local(a) ? r : whole, whole);'),
+     'r = meet(filter_local(a) ? ((void)filter_spread(a, r), r) : whole, whole);'),
     ('grown-by-the-inner-filter-only',
      '    for (const flow_box_t *a = b; a != NULL && r.w > 0 && r.h > 0; a = a->parent) {\n'
      '        if ((a != b || spread) && filtered_group(a)) {',
