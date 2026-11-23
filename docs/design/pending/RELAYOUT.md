@@ -131,10 +131,13 @@ and `:has()` in a subject, with `+`/`~` arguments, inside an nth-child's
 `:has()` and `:dir()`). Discovery recurses through functional selector
 lists, including `:is()`, `:not()` and `:where()`.
 
-Attribute/state changes restyle the target's subtree; text changes use the
-text's parent. Following-sibling combinators also mark following siblings'
-subtrees; filtered positional selectors mark all siblings' subtrees.
-Unfiltered positional selectors alone do not widen a text/attribute change.
+Attribute/state changes restyle the target's subtree. Following-sibling
+combinators also mark following siblings' subtrees; filtered positional
+selectors mark all siblings' subtrees. Unfiltered positional selectors alone
+do not widen an attribute change. A text change marks nothing but what
+`:empty` and `:has()` read: no selector reads a text's data except through
+its parent's `:empty`, which is asked again as for a change of children
+(below), and the `:has()` climb from the parent.
 
 Child-list changes mark added subtrees. Front-position selectors and
 following-sibling combinators mark the following suffix of children for a
@@ -142,10 +145,19 @@ pure insertion batch. A batch containing a removal under that parent marks
 all its children: a saved previous-sibling identity can have moved within
 the same parent, so its current links are not a historical boundary.
 Back-position and filtered positional selectors also mark all children.
-`:empty` marks the parent and its descendants, with following/filtered
-propagation, since its changed winners can affect inheritance and matches
-outside the parent. The UA first-summary/first-legend behavior likewise
-marks a changed `details`/`fieldset` subtree.
+`:empty` is ASKED AGAIN: the cascade keeps each element's answer from when
+it last styled it, and a change of children compares the parent's answer
+now with it. Where the answer is the same nothing is marked for `:empty`,
+which is what lets appends to a parent that already has children stay
+small. Where it turned, the parent is marked alone (its changed winners
+reach its descendants through restyle, like any element's) with
+following/filtered propagation to its siblings. Nothing under it needs
+marking for matching: a parent that turned from empty has under it only
+what was just added, and one that turned to empty has nothing. A shadow
+host and a slot keep the whole subtree mark, because a host's tree and a
+slot's assigned nodes are under them without being added. The UA
+first-summary/first-legend behavior marks a changed `details`/`fieldset`
+subtree whatever `:empty` answers.
 
 `:has()` widens the set to the elements a change can turn it on, and
 `:dir()` needs nothing beyond the subtree mark (§ Selector invalidation for
@@ -354,8 +366,9 @@ A cascade whose sheets use `:has()` or `:dir()` tracks changes like any
 other, so their pages keep style and geometry reuse across a mutation.
 
 - **`:dir()`** reads the `dir` attribute of the element and the ancestors
-  it inherits from; what a change can turn is in the changed element's
-  subtree, which every change marks. `dir=auto` is not implemented (DEBTS).
+  it inherits from; what a change of `dir` can turn is in the changed
+  element's subtree, which an attribute's change marks. `dir=auto` is not
+  implemented (DEBTS).
 - **A `:has()` in a rule's subject** can turn on an ancestor of the change,
   or for `+`/`~` arguments on a preceding sibling of the change or of an
   ancestor. Those elements are marked alone (`mark_element`) and

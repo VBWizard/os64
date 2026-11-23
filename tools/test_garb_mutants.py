@@ -78,6 +78,27 @@ mutants = [
      '    return true;', UPDATES),
     ('kept-read-taken-without-a-reference', CASCADE,
      '        offered->refs++;\n        c->read = offered;', '        c->read = offered;', UPDATES),
+    # :empty, asked again (cascade.c empty_turned, mark_turned).
+    ('empty-the-answer-is-not-asked-again', CASCADE,
+     '    bool turned = now != s->empty;', '    bool turned = true; (void)now;', UPDATES),
+    ('empty-a-turn-marks-nothing', CASCADE,
+     '    } else if (turned && !mark_turned(c, parent)) {', '    } else if (false && turned) {', UPDATES),
+    ('empty-a-text-turn-marks-nothing', CASCADE,
+     '            marked = !element || !c->dependencies.parent_state || !empty_turned(c, parent) ||\n'
+     '                     mark_turned(c, parent);',
+     '            marked = true;', UPDATES),
+    ('empty-the-siblings-are-skipped', CASCADE,
+     '    if (c->dependencies.filtered && x->parent)\n        return mark_siblings(c, x->parent->first_child);\n'
+     '    return !c->dependencies.following || mark_siblings(c, x->next);\n}\nstatic bool body_hint(',
+     '    return true;\n}\nstatic bool body_hint(', UPDATES),
+    ('empty-the-hosts-tree-is-skipped', CASCADE,
+     '    if (x->shadow_root || is_slot(x)) return mark_changed(c, x, GARB_MARK_PARENT);\n', '',
+     'tools/test_garb_host.sh --shadow'),
+    ('empty-the-answer-is-kept-from-no-read', CASCADE,
+     '        slot->empty = c->dependencies.parent_state && garb_element_empty(el);\n', '', UPDATES),
+    ('empty-details-loses-its-whole-mark', CASCADE,
+     '        if (!mark_changed(c, parent, GARB_MARK_PARENT)) return false;\n    } else if (turned',
+     '        (void)0;\n    } else if (turned', UPDATES),
     # The kept scratch.
     ('a-read-frees-its-scratch', PARSE,
      '    owner->scratch = p.scratch;\n    owner->scratch_cap = p.scratch_cap;',

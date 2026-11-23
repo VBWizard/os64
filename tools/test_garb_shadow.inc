@@ -488,8 +488,49 @@ static void shadow_kept_read(void)
     sh_close(&f);
 }
 
+// :empty AT A SHADOW HOST: `:host(:empty) .x` matches in the host's tree,
+// whose elements were not added and do not inherit what turned, so a host
+// whose :empty turns keeps its whole subtree's mark (cascade.c
+// mark_turned). The host's own winners do not change here, so nothing but
+// that mark reaches #in.
+static void shadow_empty_host(void)
+{
+    size_t baseline = live;
+    os64_html_document_t *doc = update_doc("<!doctype html><body><aside>" SHADOW_PAD SHADOW_PAD SHADOW_PAD
+                                           "</aside><div id=h></div><p id=out></p>");
+    os64_html_node_t *root = doc ? sh_attach(doc, "h", "<p id=in class=x></p>") : NULL;
+    ShadowFixture f = {.doc = doc, .root = root};
+    const char *page = "p{z-index:1}", *tree = ":host(:empty) .x{flex-grow:5}";
+    garb_parse_sheet_text(page, strlen(page), &f.sheets[0]);
+    garb_parse_sheet_text(tree, strlen(tree), &f.sheets[1]);
+    f.in[0] = (garb_sheet_in_t){.sheet = &f.sheets[0], .parent = -1};
+    f.in[1] = (garb_sheet_in_t){.sheet = &f.sheets[1], .parent = -1};
+    f.page_list[0] = 0;
+    f.tree_list[0] = 1;
+    f.scopes[0] = (garb_scope_in_t){doc ? doc->document : NULL, f.page_list, 1};
+    f.scopes[1] = (garb_scope_in_t){root, f.tree_list, 1};
+    garb_cascade_t *c = root ? sh_cascade(&f) : NULL;
+    shadow_check(c != NULL, ":empty host: the fixture cascades");
+    if (c) {
+        sh_expect(c, doc, "in", "flex-grow", "5", ":empty host: an empty host's tree matches :host(:empty)");
+        os64_html_node_t *h = sh_find(doc, "h"), *b = os64_html_create_element(doc, OS64_HTML_NS_HTML, "b", NULL);
+        os64_html_insert(doc, h, b, NULL);
+        shadow_check(garb_cascade_update(c), ":empty host: a child for the host updates");
+        sh_expect(c, doc, "in", "flex-grow", "", ":empty host: the host's tree follows the turn to not empty");
+        sh_same_as_fresh(c, &f, ":empty host: after the turn to not empty");
+        os64_html_remove(doc, b);
+        shadow_check(garb_cascade_update(c), ":empty host: the child removed updates");
+        sh_expect(c, doc, "in", "flex-grow", "5", ":empty host: the host's tree follows the turn to empty");
+        sh_same_as_fresh(c, &f, ":empty host: after the turn to empty");
+    }
+    garb_cascade_free(c);
+    sh_close(&f);
+    shadow_check(live == baseline, ":empty host: the fixture releases what it holds");
+}
+
 static int cascade_shadow(void)
 {
+    shadow_empty_host();
     shadow_kept_read();
     shadow_scale();
     shadow_scoping();
