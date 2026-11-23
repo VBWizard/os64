@@ -244,6 +244,28 @@ typedef struct {
     uint64_t tested, turned, marked;
 } garb_bare_work_t;
 garb_bare_work_t garb_cascade_bare_work(const garb_cascade_t *c);
+// What the back forms (:last-child and its kin, select.h § THE BACK FORMS)
+// cost the latest garb_cascade_update: the walks it made, one for each
+// element whose children changed (a shadow root or the document, which
+// keep no count of their own, one for each change of their children), the
+// children those walks counted, and those whose remembered back index
+// turned and were marked. Zeros before any update, after one that read no
+// changes or was refused before reading them, for rules with no bounded
+// back form, and for rules whose unbounded or `of S` forms mark every child
+// anyway; a count made before a refusal partway stays.
+typedef struct {
+    uint64_t walks, walked, turned;
+} garb_back_work_t;
+garb_back_work_t garb_cascade_back_work(const garb_cascade_t *c);
+// What the latest garb_cascade_update restyled: the elements its changes
+// marked, and those restyling marked below an element whose winners came
+// out changed (mark_below, every one matched again). Zeros before any
+// update, after one that read no changes, and for one refused before it
+// restyled; one refused while restyling says what it had marked by then.
+typedef struct {
+    uint64_t marked, inherited;
+} garb_update_marks_t;
+garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c);
 
 // THE CALLER'S MEASURE, kept only when the cascade was made with a clock
 // (garb_cascade_limits_t.clock): a diagnostic, and with no clock nothing is

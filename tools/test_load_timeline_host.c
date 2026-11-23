@@ -39,6 +39,8 @@ static void check_line(const char *got, const char *want, int line)
 #define REBUILD YONDER_LT_WHY_REBUILD
 
 static yonder_lt_t t;
+// The marks' names, as libgarb's live as long as the timeline: compared by address.
+static const char kSiblings[] = "siblings", kSubtree[] = "its subtree";
 
 static void test_off_until_begun(void)
 {
@@ -168,7 +170,7 @@ static void test_builds_and_broad(void)
     for (uint32_t i = 0; i < YONDER_LT_BROAD_MAX + 3; i++) {
         char text[32];
         snprintf(text, sizeof(text), "trigger %u", i);
-        yonder_lt_broad(&t, BASE + (int64_t)i * S, 100 + i * 10, text);
+        yonder_lt_broad(&t, BASE + (int64_t)i * S, 100 + i * 10, i < 9 ? kSiblings : kSubtree, text);
     }
     CHECK(t.nbroad == YONDER_LT_BROAD_MAX + 3 && t.broad_kept == YONDER_LT_BROAD_MAX);
     for (uint32_t i = 1; i < t.broad_kept; i++)
@@ -178,9 +180,20 @@ static void test_builds_and_broad(void)
     yonder_lt_broad_line(&t, YONDER_LT_BROAD_MAX, line, sizeof(line));
     LINE(line, "");
     yonder_lt_summary(&t, line, sizeof(line));
-    CHECK(strstr(line, "; updates refused as broad: 11; ") != NULL);
+    CHECK(strstr(line, "; updates refused as broad: 11 (by what crossed the half: siblings 9, its subtree 2); ") != NULL);
+    // The back indexes: an update that counted none is not one.
+    yonder_lt_back(&t, BASE, 2, 30, 3);
+    yonder_lt_back(&t, BASE + S, 1, 5, 0);
+    yonder_lt_back(&t, BASE + S, 0, 0, 0);
+    yonder_lt_summary(&t, line, sizeof(line));
+    CHECK(strstr(line, "; back indexes counted again in 2 updates: 3 walks, 35 children counted, 3 turned; ") != NULL);
+    // What the updates restyled.
+    yonder_lt_marks(&t, BASE, 4, 10);
+    yonder_lt_marks(&t, BASE + S, 2, 0);
+    yonder_lt_summary(&t, line, sizeof(line));
+    CHECK(strstr(line, "; 2 updates restyled 6 elements their changes marked and 10 below a changed winner; ") != NULL);
     // Fewer marked than every one kept: counted, not kept.
-    yonder_lt_broad(&t, BASE, 1, "small");
+    yonder_lt_broad(&t, BASE, 1, kSubtree, "small");
     CHECK(t.nbroad == YONDER_LT_BROAD_MAX + 4 && strcmp(t.broad[YONDER_LT_BROAD_MAX - 1].text, "small") != 0);
 }
 
@@ -261,8 +274,11 @@ static void test_the_end(void)
     yonder_lt_layout(&t, end + 5 * S, 1000, READ, NULL);
     yonder_lt_task(&t, end + 5 * S, "late", 1000, 0, 0);
     yonder_lt_parse(&t, end + 5 * S, 1000, "late feed");
-    yonder_lt_broad(&t, end + 5 * S, 99, "late broad");
-    CHECK(t.nparse == 0 && t.parse_us == 0 && t.nbroad == 0 && t.broad_kept == 0);
+    yonder_lt_broad(&t, end + 5 * S, 99, kSubtree, "late broad");
+    yonder_lt_back(&t, end + 5 * S, 1, 1, 1);
+    yonder_lt_marks(&t, end + 5 * S, 1, 1);
+    CHECK(t.nparse == 0 && t.parse_us == 0 && t.nbroad == 0 && t.broad_kept == 0 && t.nbroad_by == 0 &&
+          t.back_updates == 0 && t.marks_updates == 0);
     yonder_lt_bytes(&t, end + 5 * S, 4096);
     CHECK(t.nlongs == 1);
     uint32_t layouts = 0, tasks = 0, grid = 0;

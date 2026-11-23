@@ -165,6 +165,12 @@ typedef struct {
     // What :empty answered at it when the cascade last styled it or asked at
     // a change, kept while the rules hold :empty (empty_turned).
     bool empty;
+    // Its back indexes as the cascade last counted them, saturated at the
+    // bounds the rules need (back_walk): among its element siblings, and
+    // among those of its type; 0 for never counted.
+    uint8_t back, back_type;
+    // The update that last counted its children again (back_turns).
+    uint64_t back_walked;
     // Dirty for its own winners alone (mark_element): whether its
     // descendants are owed a recompute too is known once it has had one
     // (restyle).
@@ -364,6 +370,8 @@ struct garb_cascade {
     uint32_t has_width;
     uint64_t *has_words, *has_scratch;
     garb_bare_work_t bare_work;
+    garb_back_work_t back_work;
+    garb_update_marks_t marks;
     garb_update_refusal_t untrackable, refusal;
     // THE CALLER'S MEASURE (limits.clock; garb_cascade_build_cost,
     // garb_cascade_broad_trigger): the fresh build's parts, and in an
@@ -3411,7 +3419,9 @@ static bool read_sheets(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_
         garb_selector_dependencies_t d = garb_selectors_dependencies(c->rules[i].sel);
         c->dependencies.following |= d.following;
         c->dependencies.position_front |= d.position_front;
-        c->dependencies.position_back |= d.position_back;
+        c->dependencies.back_unbounded |= d.back_unbounded;
+        if (d.back_child > c->dependencies.back_child) c->dependencies.back_child = d.back_child;
+        if (d.back_type > c->dependencies.back_type) c->dependencies.back_type = d.back_type;
         c->dependencies.parent_state |= d.parent_state;
         c->dependencies.filtered |= d.filtered;
         c->dependencies.ancestors |= d.ancestors;
@@ -3445,6 +3455,10 @@ static bool read_sheets(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_
     c->heap = &c->self;
     return true;
 }
+
+typedef enum { BACK_DONE, BACK_STOPPED, BACK_FAILED } BackWalk;
+static const os64_html_node_t *next_element(const os64_html_node_t *x);
+static BackWalk back_walk(garb_cascade_t *c, const os64_html_node_t *last, bool compare);
 
 static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
                              const garb_scope_in_t *scopes, int32_t nscopes,
@@ -3539,6 +3553,10 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
             cascade_whole(c, x, &m, &mcap, &scratch);
             Slot *s = slot_for(c, x, false);
             if (s != NULL) anchor_bits(c, x, has_row(c, s));
+            // The back indexes, one backward pass for each parent from its
+            // last element child, whose siblings are styled by then.
+            if ((c->dependencies.back_child || c->dependencies.back_type) && next_element(x) == NULL)
+                back_walk(c, x, false);
         }
     os64_free(scratch.items);
     if (clock) {
@@ -3745,6 +3763,120 @@ static bool mark_turned(garb_cascade_t *c, const os64_html_node_t *x)
         return mark_siblings(c, x->parent->first_child);
     return !c->dependencies.following || mark_siblings(c, x->next);
 }
+// THE BACK INDEXES, COUNTED AGAIN (select.h § THE BACK FORMS): each styled
+// element's slot keeps its count from the end among its element siblings,
+// and among those of its type, each saturated at one past the largest
+// index a bounded back form in the rules can match (back_bound). Every such
+// form's answer is a function of the saturated number, so where it did not
+// change no back form's answer did. A change of a parent's children counts
+// them again from the last, compares, and marks each child whose number
+// turned as mark_changed marks a changed node: with its subtree
+// (`li:last-child span` moves a descendant whose li's winners stay the
+// same), a host's tree and a slot's assigned nodes among it, and the
+// siblings after it that a `+`/`~` reads (`p:last-of-type ~ span` moves
+// the spans between the p that turned and a p appended after them, whose
+// own counts stay). A child never counted (added in the batch, or past the
+// type table at a build) counts as turned. The walk reads the document as
+// the batch left it, so removals and moves need no rule of their own.
+//
+// WHERE IT STOPS EARLY, with no -of-type form: at the first child whose
+// kept number and new number are both the bound. A child the batch added
+// keeps 0, or a number an earlier walk of this batch counted from the
+// document as the batch left it; so the stop is at a child the batch did
+// not add, or at one that walk passed, which proves the same. The children
+// the batch did not add or move keep their order, so each one before the
+// stop had a larger index both before and after, saturated both times;
+// what the batch added before it is marked as added, and its number, which
+// is the bound for the same reason, is taken here (back_turns). With an
+// -of-type form the walk counts every child. A parent with more types than
+// GARB_BACK_TYPES has all its children marked at a change, and the children
+// past the table, at a change or a build, are left uncounted, so that they
+// count as turned the next time.
+#define GARB_BACK_TYPES 32
+static uint8_t back_bound(uint8_t need) { return need ? (uint8_t)(need + 1) : 0; }
+static const os64_html_node_t *prev_element(const os64_html_node_t *x)
+{
+    for (x = x->prev; x && !is_el(x); x = x->prev) {}
+    return x;
+}
+static const os64_html_node_t *next_element(const os64_html_node_t *x)
+{
+    for (x = x->next; x && !is_el(x); x = x->next) {}
+    return x;
+}
+// Counts the element siblings from `last` back. `compare`: a change's walk,
+// which marks what turned and may stop early; otherwise the numbers are
+// only taken (a build, an added subtree).
+static BackWalk back_walk(garb_cascade_t *c, const os64_html_node_t *last, bool compare)
+{
+    uint8_t kc = back_bound(c->dependencies.back_child), kt = back_bound(c->dependencies.back_type);
+    struct { const os64_html_node_t *type; uint8_t n; } types[GARB_BACK_TYPES];
+    int32_t ntypes = 0;
+    uint8_t n = 0;
+    for (const os64_html_node_t *x = last; x; x = prev_element(x)) {
+        if (compare) c->back_work.walked++;
+        uint8_t t = 0;
+        if (kt) {
+            int32_t i = 0;
+            while (i < ntypes && !garb_element_same_type(types[i].type, x)) i++;
+            if (i == GARB_BACK_TYPES) {
+                for (const os64_html_node_t *y = x; y; y = prev_element(y)) {
+                    Slot *u = slot_for(c, y, false);
+                    if (u) u->back = u->back_type = 0;
+                }
+                if (!compare) return BACK_DONE;
+                return x->parent && mark_siblings(c, x->parent->first_child) ? BACK_DONE : BACK_FAILED;
+            }
+            if (i == ntypes) {
+                types[i].type = x;
+                types[i].n = 0;
+                ntypes++;
+            }
+            if (types[i].n < kt) types[i].n++;
+            t = types[i].n;
+        }
+        if (n < kc) n++;
+        Slot *s = slot_for(c, x, false);
+        if (!s) {
+            if (!compare) continue;
+            c->refusal = GARB_UPDATE_NO_MEMORY;
+            return BACK_FAILED;
+        }
+        if (compare && !kt && s->back == kc && n == kc) return BACK_STOPPED;
+        bool turned = s->back != n || s->back_type != t;
+        s->back = n;
+        s->back_type = t;
+        if (compare && turned) {
+            c->back_work.turned++;
+            if (!mark_changed(c, x, GARB_MARK_SIBLINGS)) return BACK_FAILED;
+        }
+    }
+    return BACK_DONE;
+}
+// A change of `e->target`'s children, counted again (back_walk), once an
+// update for a parent that has a slot: every walk reads the document as the
+// batch left it, so a second walk of the same parent finds nothing to turn.
+// Without an -of-type form, a child the change added that is still
+// uncounted lies before where the walk stopped, so it takes the bound as
+// its number.
+static bool back_turns(garb_cascade_t *c, const os64_html_change_entry_t *e)
+{
+    const os64_html_node_t *last = e->target->last_child;
+    while (last && !is_el(last)) last = last->prev;
+    if (!last) return true;
+    Slot *p = is_el(e->target) ? slot_for(c, e->target, false) : NULL;
+    if (!p || p->back_walked != c->updates + 1) {
+        if (p) p->back_walked = c->updates + 1;
+        c->back_work.walks++;
+        if (back_walk(c, last, true) == BACK_FAILED) return false;
+    }
+    if (!c->dependencies.back_type)
+        for (size_t i = 0; i < e->nadded; ++i) {
+            Slot *s = e->added[i]->parent == e->target ? slot_for(c, e->added[i], false) : NULL;
+            if (s && s->back == 0) s->back = back_bound(c->dependencies.back_child);
+        }
+    return true;
+}
 static bool body_hint(const os64_html_change_entry_t *e, const os64_html_document_t *doc)
 {
     if (e->kind != OS64_HTML_CHANGE_ATTR || e->target != doc->body || !e->attr_name)
@@ -3791,8 +3923,9 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
         if (slots && !mark_host_children(c, parent)) return false;
     }
     c->mark_now = GARB_MARK_SIBLINGS;
-    if (c->dependencies.position_back || c->dependencies.filtered)
+    if (c->dependencies.back_unbounded || c->dependencies.filtered)
         return mark_siblings(c, parent->first_child);
+    if ((c->dependencies.back_child || c->dependencies.back_type) && !back_turns(c, e)) return false;
     if (c->dependencies.position_front || c->dependencies.following) {
         const os64_html_node_t *previous = e->previous_sibling;
         bool boundary = !previous || previous->parent == parent;
@@ -4058,6 +4191,14 @@ garb_bare_work_t garb_cascade_bare_work(const garb_cascade_t *c)
 {
     return c ? c->bare_work : (garb_bare_work_t){0};
 }
+garb_back_work_t garb_cascade_back_work(const garb_cascade_t *c)
+{
+    return c ? c->back_work : (garb_back_work_t){0};
+}
+garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c)
+{
+    return c ? c->marks : (garb_update_marks_t){0};
+}
 
 garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c)
 {
@@ -4177,7 +4318,9 @@ static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match
                     AppliedScratch *scratch)
 {
     Slot old = *s;
-    *s = (Slot){.node = x, .changed = c->updates + 1};
+    // The back indexes are its siblings' count, which styling it does not
+    // take again: they are kept.
+    *s = (Slot){.node = x, .changed = c->updates + 1, .back = old.back, .back_type = old.back_type};
     cascade_whole(c, x, m, mcap, scratch);
     if (c->incomplete || c->self.incomplete) { c->refusal = GARB_UPDATE_SHORT; return false; }
     s = slot_for(c, x, false);
@@ -4189,8 +4332,11 @@ static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match
     // ancestor fieldset's `disabled`, `lang` or `dir`, its place among its
     // siblings) changed at an ancestor or a sibling whose mark covers its
     // subtree or the siblings after it, which is the reach of any anchor at
-    // the element. A new kind of mark that restyles an element alone must
-    // keep that true, or compare here.
+    // the element. Its place counted from the end keeps it so: where the
+    // count turned back_walk marks it as mark_changed marks a changed node,
+    // its subtree and the siblings a `+`/`~` reads after it. A new kind of
+    // mark that restyles an element alone must keep that true, or compare
+    // here.
     anchor_bits(c, x, has_row(c, s));
     if (!old.element_only) return true;
     bool same = old.matched == s->matched && styles_same(&old.style, &s->style);
@@ -4275,6 +4421,8 @@ static void broad_name(garb_cascade_t *c)
 
 static bool update(garb_cascade_t *c)
 {
+    c->back_work = (garb_back_work_t){0};
+    c->marks = (garb_update_marks_t){0};
     if (c->incomplete) { c->refusal = GARB_UPDATE_INCOMPLETE; return false; }
     if (c->update_failed) { c->refusal = GARB_UPDATE_FAILED_BEFORE; return false; }
     uint64_t version = os64_html_version(c->doc);
@@ -4310,8 +4458,15 @@ static bool update(garb_cascade_t *c)
         for (size_t i = 0; i < e->nadded; ++i) {
             const os64_html_node_t *root = e->added[i];
             if (!connected(c, root)) continue;
-            for (const os64_html_node_t *x = root; x; x = si_next(x, root, true))
-                if (is_el(x) && !slot_for(c, x, true)) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
+            for (const os64_html_node_t *x = root; x; x = si_next(x, root, true)) {
+                if (!is_el(x)) continue;
+                if (!slot_for(c, x, true)) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
+                // The back indexes of what came in with the root, whose
+                // parents no change names; the root's own are its parent's
+                // change's to count (back_turns).
+                if ((c->dependencies.back_child || c->dependencies.back_type) && x != root && next_element(x) == NULL)
+                    back_walk(c, x, false);
+            }
         }
     for (const os64_html_change_entry_t *e = changes; e; e = e->next)
         if (e->kind == OS64_HTML_CHANGE_CHILDREN && e->nremoved) {
@@ -4367,6 +4522,7 @@ static bool update(garb_cascade_t *c)
         }
     }
     c->updating = true;
+    c->marks.marked = c->ndirty;
     // The caller's measure: what restyling marks is inherited.
     if (c->limits.clock) {
         os64_memset(c->mark_by, 0, sizeof(c->mark_by));
@@ -4407,6 +4563,7 @@ static bool update(garb_cascade_t *c)
     }
     os64_free(scratch.items);
     c->updating = false;
+    c->marks.inherited = c->ndirty - c->marks.marked;
     if (failed) {
         if (c->limits.clock && c->refusal == GARB_UPDATE_BROAD) {
             garb_broad_trigger_t *b = &c->broad;

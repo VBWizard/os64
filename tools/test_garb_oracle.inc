@@ -34,8 +34,9 @@ static const char *const kOracleClasses[]={"a","b","x","k"};
 static const char *oracle_pseudo(OracleRng *r)
 {
     static const char *const kPseudo[]={":first-child",":last-child",":nth-child(2)",":empty",":disabled",
-                                        ":lang(fr)",":dir(rtl)"};
-    return oracle_pick(r, 2) ? kPseudo[oracle_pick(r, 7)] : "";
+                                        ":lang(fr)",":dir(rtl)",":only-child",":last-of-type",":only-of-type",
+                                        ":nth-last-child(2)",":nth-last-child(-n+3)",":nth-last-of-type(2)"};
+    return oracle_pick(r, 2) ? kPseudo[oracle_pick(r, 13)] : "";
 }
 // An element's own compound: filtered (a type, a class or an attribute),
 // sometimes with a pseudo-class beside. Few names, so rules match often

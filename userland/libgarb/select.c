@@ -856,7 +856,7 @@ static const char *attr(const os64_html_node_t *n, const char *name)
     return a != NULL ? (a->value != NULL ? a->value : "") : NULL;
 }
 
-static bool same_type(const os64_html_node_t *a, const os64_html_node_t *b)
+bool garb_element_same_type(const os64_html_node_t *a, const os64_html_node_t *b)
 {
     const char *au = os64_html_namespace_uri(a), *bu = os64_html_namespace_uri(b);
     bool namespace_equal = au && bu ? os64_streq(au, bu) : au == bu;
@@ -996,7 +996,7 @@ static int32_t position(const garb_selectors_t *sel, const os64_html_node_t *el,
     int32_t pos = 1;
     for (const os64_html_node_t *s = from_end ? next_el(el) : prev_el(el); s != NULL;
          s = from_end ? next_el(s) : prev_el(s)) {
-        if (of_type && !same_type(s, el))
+        if (of_type && !garb_element_same_type(s, el))
             continue;
         if (of != NULL && !match_list(sel, of, s, NULL))
             continue;
@@ -1459,6 +1459,15 @@ bool garb_selector_names_host(const garb_selectors_t *list, int32_t i)
     return false;
 }
 
+// The largest back index an :nth-last's An+B can match (select.h § THE
+// BACK FORMS): B for A <= 0 (it matches B, B + A, ... down to 1), none for
+// B < 1 there, and anywhere for A > 0 or a B past the cap.
+static void back_need(uint8_t *need, garb_selector_dependencies_t *out, int32_t a, int32_t b)
+{
+    if (a > 0 || b > GARB_BACK_INDEX_MAX) out->back_unbounded = true;
+    else if (b >= 1 && b > *need) *need = (uint8_t)b;
+}
+
 // Walk the parsed form, including :is/:not/:where and nth-child's filter.
 // `anchored`: the list sits in a compound left of a combinator, so a
 // :has() anywhere in it is an anchor (garb_selectors_anchors) rather than
@@ -1481,9 +1490,12 @@ static void dependencies(const List *list, bool anchored, bool counted, garb_sel
                 case P_FIRST_CHILD: case P_FIRST_OF_TYPE:
                 case P_NTH_CHILD: case P_NTH_OF_TYPE:
                     out->position_front = true; break;
-                case P_LAST_CHILD: case P_LAST_OF_TYPE: case P_ONLY_CHILD: case P_ONLY_OF_TYPE:
-                case P_NTH_LAST_CHILD: case P_NTH_LAST_OF_TYPE:
-                    out->position_back = true; break;
+                case P_ONLY_CHILD: out->position_front = true; back_need(&out->back_child, out, 0, 1); break;
+                case P_LAST_CHILD: back_need(&out->back_child, out, 0, 1); break;
+                case P_ONLY_OF_TYPE: out->position_front = true; back_need(&out->back_type, out, 0, 1); break;
+                case P_LAST_OF_TYPE: back_need(&out->back_type, out, 0, 1); break;
+                case P_NTH_LAST_CHILD: if (!s->list) back_need(&out->back_child, out, s->a, s->b); break;
+                case P_NTH_LAST_OF_TYPE: back_need(&out->back_type, out, s->a, s->b); break;
                 case P_EMPTY: out->parent_state = true; break;
                 case P_HAS:
                     out->ancestors |= !left;
@@ -1495,8 +1507,9 @@ static void dependencies(const List *list, bool anchored, bool counted, garb_sel
                 // :dir() reads the `dir` attribute of the element and of
                 // the ancestors it inherits from (dir_matches), so what a
                 // change of `dir` can turn is in the changed element's
-                // subtree, which an attribute's change marks. (dir=auto, which would read
-                // descendants' text, is not implemented: DEBTS.md.)
+                // subtree, which an attribute's change marks. (dir=auto,
+                // which would read descendants' text, is not implemented:
+                // DEBTS.md.)
                 default: break;
                 }
                 bool of = (s->pseudo == P_NTH_CHILD || s->pseudo == P_NTH_LAST_CHILD) && s->list;

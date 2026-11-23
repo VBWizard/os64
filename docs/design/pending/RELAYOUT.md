@@ -145,7 +145,24 @@ following-sibling combinators mark the following suffix of children for a
 pure insertion batch. A batch containing a removal under that parent marks
 all its children: a saved previous-sibling identity can have moved within
 the same parent, so its current links are not a historical boundary.
-Back-position and filtered positional selectors also mark all children.
+Filtered positional selectors (`of S`) and an unbounded back-position one
+(an `:nth-last-*` whose An+B has A > 0, or a bound past 16) also mark all
+children. The bounded back-position selectors (`:last-child`,
+`:only-child`, `:last-of-type`, `:only-of-type`, `:nth-last-*` with
+A <= 0) are COUNTED AGAIN: the cascade keeps each element's count from the
+end among its element siblings, and among those of its type, saturated at
+one past the largest index any of them can match, and a change of children
+counts the parent's children again from the last, once an update for each
+parent, and marks each child whose saturated count turned with its subtree
+and, where the sheets have `+`/`~`, the siblings after it. Without an
+-of-type form the count stops at the first child it did not add whose
+count stayed at the bound: the children before it kept their order and
+were past the bound before and after. With one, the count covers every
+child, and a parent with more than 32 types of children has all of them
+marked, those past the table left uncounted so that they count as turned
+next time. A build takes the counts in one backward pass per parent, so it
+stays linear in a parent's children. `:only-child` and `:only-of-type`
+count as front-position selectors too.
 `:empty` is ASKED AGAIN: the cascade keeps each element's answer from when
 it last styled or asked it, and a change of children compares the parent's answer
 now with it. Where the answer is the same nothing is marked for `:empty`,

@@ -908,8 +908,225 @@ static void update_empty_turns(void)
     update_check(live==baseline,":empty: the fixture releases what it holds");
 }
 
+// THE BACK INDEXES, COUNTED AGAIN (cascade.c back_walk): a change of
+// children marks only the children whose count from the end, saturated at
+// the rules' bound, turned. Each case's #box holds 40 paragraphs, each with
+// a span; p20 sits in the middle, where no bounded back form reaches, so
+// it is never marked (before, every child of #box was). Every step's
+// winners equal a fresh cascade's.
+static os64_html_document_t *bi_doc(void)
+{
+    char html[16384]="<!doctype html><aside>";
+    for(int i=0;i<100;++i)strcat(html,"<i></i>");
+    strcat(html,"</aside><div id=box>");
+    for(int i=0;i<40;++i){char p[64];snprintf(p,sizeof(p),"<p id=p%d><span></span></p>",i);strcat(html,p);}
+    strcat(html,"</div><div id=solo><p id=only><span></span></p></div>");
+    return update_doc(html);
+}
+static os64_html_node_t *bi_id(os64_html_document_t *doc, const char *id) { return (void *)by_id(doc->document,id); }
+static void bi_step(garb_cascade_t *c, os64_html_document_t *doc, garb_sheet_in_t *in, uint64_t u,
+                    const char *marked, const char *unmarked, const char *what)
+{
+    char said[200];
+    bool ok=garb_cascade_update(c);
+    if(ok && marked) ok=garb_style_updated_since(c,bi_id(doc,marked),u);
+    if(ok && unmarked) ok=!garb_style_updated_since(c,bi_id(doc,unmarked),u);
+    snprintf(said,sizeof(said),"back index: %s",what);
+    update_check(ok,said);
+    update_equal(c,doc,in);
+}
+static void update_back_index(void)
+{
+    size_t baseline=live;
+    // :last-child, with a descendant reading it.
+    os64_html_document_t *doc=bi_doc();
+    const char *css="p:last-child{color:red}p:last-child span{opacity:.5}";
+    garb_parsed_t sheet;garb_parse_sheet_text(css,strlen(css),&sheet);
+    garb_sheet_in_t in={.sheet=&sheet};
+    garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    os64_html_node_t *box=bi_id(doc,"box");
+    uint64_t u=garb_cascade_updates(c);
+    ue_append(doc,box,"p");
+    bi_step(c,doc,&in,u,"p39","p20","an append marks the child that was last, not the middle");
+    u=garb_cascade_updates(c);
+    os64_html_insert(doc,box,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),box->first_child);
+    bi_step(c,doc,&in,u,NULL,"p39","a prepend leaves the child restyled last time unmarked");
+    u=garb_cascade_updates(c);
+    os64_html_insert(doc,box,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),bi_id(doc,"p20"));
+    bi_step(c,doc,&in,u,NULL,"p30","an insert in the middle marks no child after it");
+    u=garb_cascade_updates(c);
+    os64_html_remove(doc,box->last_child);
+    bi_step(c,doc,&in,u,"p39","p20","removing the last marks the new last");
+    u=garb_cascade_updates(c);
+    os64_html_insert(doc,box,bi_id(doc,"p5"),NULL);
+    bi_step(c,doc,&in,u,"p39","p20","a move to the end marks the child that was last");
+    u=garb_cascade_updates(c);
+    os64_html_node_t *appended=NULL;
+    for(int i=0;i<3;++i)appended=ue_append(doc,box,"p");
+    os64_html_set_attr(doc,appended,"id","zl",2);
+    bi_step(c,doc,&in,u,"p5","p20","three appends in one batch mark the child that was last");
+    u=garb_cascade_updates(c);
+    os64_html_insert(doc,box,os64_html_create_text(doc,"x",1,NULL),NULL);
+    bi_step(c,doc,&in,u,NULL,"zl","a text node put last turns nothing");
+    // What came in with an added root is counted as it comes, so a later
+    // append to it marks only its last. The root is filled while out of the
+    // document and an update passes over that, so the batch that brings it
+    // in names no change of its children.
+    os64_html_node_t *fresh=os64_html_create_element(doc,OS64_HTML_NS_HTML,"div",NULL);
+    for(int i=0;i<5;++i){
+        os64_html_node_t *p=os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL);
+        char id[16];snprintf(id,sizeof(id),"f%d",i);
+        os64_html_set_attr(doc,p,"id",id,strlen(id));
+        os64_html_insert(doc,fresh,p,NULL);
+    }
+    update_check(garb_cascade_update(c),"back index: changes out of the document update");
+    os64_html_insert(doc,bi_id(doc,"solo"),fresh,NULL);
+    u=garb_cascade_updates(c);
+    bi_step(c,doc,&in,u,"f4",NULL,"a subtree comes in");
+    u=garb_cascade_updates(c);
+    ue_append(doc,fresh,"p");
+    bi_step(c,doc,&in,u,"f4","f1","an append to what came in with a root marks its last, not its middle");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // :only-child at both ends: it reads the front too (position_front).
+    doc=bi_doc();
+    css="p:only-child span{opacity:.5}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    os64_html_node_t *solo=bi_id(doc,"solo");
+    u=garb_cascade_updates(c);
+    os64_html_node_t *extra=ue_append(doc,solo,"p");
+    bi_step(c,doc,&in,u,"only",NULL,":only-child turns at an append");
+    os64_html_remove(doc,extra);
+    u=garb_cascade_updates(c);
+    bi_step(c,doc,&in,u,"only",NULL,":only-child turns back at the removal");
+    u=garb_cascade_updates(c);
+    os64_html_insert(doc,solo,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),solo->first_child);
+    bi_step(c,doc,&in,u,"only",NULL,":only-child turns at a prepend");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // A bounded :nth-last-child at its edge: the bound is 4.
+    doc=bi_doc();
+    css="p:nth-last-child(3){color:red}p:nth-last-child(-n+2) span{opacity:.5}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    box=bi_id(doc,"box");
+    u=garb_cascade_updates(c);
+    ue_append(doc,box,"p");
+    bi_step(c,doc,&in,u,"p37","p20","a bounded :nth-last-child marks the third from the end that moved");
+    u=garb_cascade_updates(c);
+    os64_html_remove(doc,box->last_child);
+    bi_step(c,doc,&in,u,"p37","p20","a bounded :nth-last-child marks what moved back at a removal");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // An unbounded one keeps marking every child.
+    doc=bi_doc();
+    css="p:nth-last-child(2n+1){color:red}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    u=garb_cascade_updates(c);
+    ue_append(doc,bi_id(doc,"box"),"p");
+    bi_step(c,doc,&in,u,"p20",NULL,"an unbounded :nth-last-child marks every child");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // -of-type, and a parent past the type table: u's count was never taken
+    // at the build, so when a batch brings the walk back under the cap it
+    // counts as turned (and it did turn: it is the last p now).
+    char html[4096]="<!doctype html><aside>";
+    for(int i=0;i<60;++i)strcat(html,"<i></i>");
+    strcat(html,"</aside><div id=types><p id=u><span></span></p>");
+    for(int i=0;i<32;++i){char x[64];snprintf(x,sizeof(x),"<x-t%d></x-t%d>",i,i);strcat(html,x);}
+    strcat(html,"<p id=l></p></div><div id=kin><em id=e1></em><b id=b1></b><em id=e2></em></div>");
+    doc=update_doc(html);
+    css="p:last-of-type span{opacity:.5}em:last-of-type{color:red}b:only-of-type{color:blue}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    os64_html_node_t *kin=bi_id(doc,"kin");
+    u=garb_cascade_updates(c);
+    ue_append(doc,kin,"b");
+    bi_step(c,doc,&in,u,"b1","e1",":only-of-type turns at an append of its type, its neighbour of another type does not");
+    u=garb_cascade_updates(c);
+    ue_append(doc,kin,"em");
+    bi_step(c,doc,&in,u,"e2","b1",":last-of-type turns at an append of its type");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // The never-counted case alone, with no front form to mark it too.
+    doc=update_doc(html);
+    css="p:last-of-type span{opacity:.5}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    u=garb_cascade_updates(c);
+    os64_html_remove(doc,bi_id(doc,"l"));
+    os64_html_remove(doc,bi_id(doc,"types")->last_child);
+    bi_step(c,doc,&in,u,"u",NULL,"a count the type table never took counts as turned");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // Past the type table at a change: the children the walk did not reach
+    // are left uncounted, so a later batch that brings the parent back
+    // under it counts e as turned (it was restyled not red at the first,
+    // and is the last p again at the second).
+    char wide[4096]="<!doctype html><aside>";
+    for(int i=0;i<100;++i)strcat(wide,"<i></i>");
+    strcat(wide,"</aside><div id=t><p id=e></p>");
+    for(int i=0;i<31;++i){char x[64];snprintf(x,sizeof(x),"<x-t%d></x-t%d>",i,i);strcat(wide,x);}
+    strcat(wide,"</div>");
+    doc=update_doc(wide);
+    css="p:last-of-type{color:red}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    os64_html_node_t *t=bi_id(doc,"t"),*f=ue_append(doc,t,"p");
+    os64_html_node_t *x31=ue_append(doc,t,"x-t31");
+    u=garb_cascade_updates(c);
+    bi_step(c,doc,&in,u,"e",NULL,"a change past the type table marks every child");
+    os64_html_remove(doc,f);
+    os64_html_remove(doc,x31);
+    u=garb_cascade_updates(c);
+    bi_step(c,doc,&in,u,"e",NULL,"what a change past the type table did not count counts as turned after");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // A turn moves the siblings after it that a `~` reads: the span after
+    // the p that was last of its type, whose own count stays, before the p
+    // appended after it.
+    doc=bi_doc();
+    os64_html_node_t *row=bi_id(doc,"solo");
+    os64_html_node_t *s1=ue_append(doc,row,"span");
+    os64_html_set_attr(doc,s1,"id","s1",2);
+    css="p:last-of-type ~ span{color:red}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    u=garb_cascade_updates(c);
+    ue_append(doc,row,"p");
+    bi_step(c,doc,&in,u,"s1",NULL,"a turn marks the siblings after it that a ~ reads");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    update_check(live==baseline,"back index: the fixtures release what they hold");
+}
+
+// What an update restyled (garb_cascade_update_marks): the change marks
+// the <b> it added and, alone, the elements its :has() climb visits (the
+// div, body and html); the div's winners change, and restyling marks the
+// two spans below it, which the change did not.
+static void update_marks_counted(void)
+{
+    size_t baseline=live;
+    char html[2048]="<!doctype html><aside>";
+    for(int i=0;i<20;++i)strcat(html,"<i></i>");
+    strcat(html,"</aside><div id=d><span></span><span></span></div>");
+    os64_html_document_t *doc=update_doc(html);
+    const char *css="div:has(> b){color:red}";
+    garb_parsed_t sheet;garb_parse_sheet_text(css,strlen(css),&sheet);
+    garb_sheet_in_t in={.sheet=&sheet};
+    garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    garb_update_marks_t none=garb_cascade_update_marks(c);
+    ue_append(doc,(void *)by_id(doc->document,"d"),"b");
+    bool ok=garb_cascade_update(c);
+    garb_update_marks_t m=garb_cascade_update_marks(c);
+    update_check(none.marked==0 && none.inherited==0,"marks: zeros before any update");
+    update_check(ok && m.marked==4 && m.inherited==2,"marks: the change's four and the two below a changed winner");
+    update_equal(c,doc,&in);
+    ok=garb_cascade_update(c);
+    m=garb_cascade_update_marks(c);
+    update_check(ok && m.marked==0 && m.inherited==0,"marks: an update that read no changes says zeros");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    update_check(live==baseline,"marks: the fixture releases what it holds");
+}
+
 static int cascade_updates(void)
 {
+    update_marks_counted();
+    update_back_index();
     update_empty_turns();
     update_kept_read();
     update_kept_skips();
