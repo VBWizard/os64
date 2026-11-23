@@ -773,3 +773,300 @@ static void pending_cases(void)
            flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE,NULL);
     flow_free(t);sheeted_close(&p);
 }
+
+// THE INTRINSIC WIDTHS COPIED WHATEVER THE ROLE (RELAYOUT_GRAFT.md §
+// Intrinsic widths have a separate memo; layout.c intrinsic_copy). Each
+// layout is compared with a fresh one (graft_oracle), so a copy of widths a
+// fresh measure would not find shows as a box placed elsewhere.
+static int64_t intr_ticks;
+static int64_t intr_clock(void *ctx) { (void)ctx; return intr_ticks += 3; }
+static flow_tree_t *intr_layout(Sheeted *p, const flow_tree_t *old, bool timed)
+{
+    flow_reuse_inputs_t inputs = {.resource_owner = p->doc};
+    os64_page_t *model = os64_page_rebuild(p->page);
+    flow_profile_t profile;
+    flow_tree_t *t = flow_layout_incremental(p->doc, model, 800, &p->env, old, &inputs, &profile,
+                                            timed ? intr_clock : NULL, NULL);
+    os64_page_free(model);
+    return t;
+}
+// A cascade's update may refuse (a change too broad to mark): the caller
+// then builds it anew, as a page does.
+static void intr_update(Sheeted *p)
+{
+    if (garb_cascade_update(p->cascade)) return;
+    garb_sheet_in_t sheets[16];
+    for (int32_t i = 0; i < p->n; ++i) sheets[i] = (garb_sheet_in_t){.sheet = &p->sheets[i]};
+    garb_cascade_t *fresh = garb_cascade(sheets, p->n, p->doc, garb_cascade_env(p->cascade));
+    garb_cascade_free(p->cascade);
+    p->cascade = fresh;
+    p->env.cascade = fresh;
+}
+static void intr_style(Sheeted *p, const char *id, const char *style)
+{
+    os64_html_set_attr(p->doc, graft_node(p, id), "style", style, strlen(style));
+    intr_update(p);
+}
+typedef struct {
+    char html[24000];
+    size_t n;
+    int ids;
+    char base[64][96];      // each element's own style, a mutation's prefix
+    bool text[64];          // a paragraph whose first child is its text
+    uint32_t rng;
+} IntrWalk;
+static uint32_t intr_rand(IntrWalk *w) { w->rng = w->rng * 1103515245u + 12345u; return w->rng >> 8; }
+static void intr_put(IntrWalk *w, const char *s)
+{
+    size_t k = strlen(s);
+    if (w->n + k < sizeof(w->html)) { memcpy(w->html + w->n, s, k); w->n += k; w->html[w->n] = 0; }
+}
+static const char *const kIntrWords[] = {"alpha", "beta", "gamma delta", "epsilon", "a", "longerword", "zeta eta theta"};
+static void intr_words(IntrWalk *w, char *out, size_t cap)
+{
+    out[0] = 0;
+    int n = 1 + (int)(intr_rand(w) % 5);
+    for (int i = 0; i < n; i++) {
+        if (i) strncat(out, " ", cap - strlen(out) - 1);
+        strncat(out, kIntrWords[intr_rand(w) % 7], cap - strlen(out) - 1);
+    }
+}
+static int intr_open(IntrWalk *w, const char *tag, const char *style)
+{
+    int id = w->ids++;
+    char buf[200];
+    snprintf(w->base[id], sizeof(w->base[id]), "%s", style);
+    snprintf(buf, sizeof(buf), "<%s id=e%d style='%s'>", tag, id, style);
+    intr_put(w, buf);
+    return id;
+}
+static void intr_node(IntrWalk *w, int depth)
+{
+    char words[96], buf[160];
+    unsigned kind = depth >= 3 || w->ids >= 56 ? 0 : intr_rand(w) % 8;
+    switch (kind) {
+    case 0: case 1: {
+        int id = intr_open(w, "p", "margin:0");
+        intr_words(w, words, sizeof(words));
+        intr_put(w, words);
+        if (intr_rand(w) % 3 == 0) intr_put(w, " <img src=known.png style='height:50%'>");
+        intr_put(w, "</p>");
+        w->text[id] = true;
+        return;
+    }
+    case 2: case 3: {
+        static const char *const kFlex[] = {"display:flex", "display:flex;flex-wrap:wrap",
+                                            "display:flex;flex-direction:column", "display:inline-flex"};
+        intr_open(w, "div", kFlex[intr_rand(w) % 4]);
+        if (intr_rand(w) % 3 == 0) { intr_words(w, words, sizeof(words)); intr_put(w, words); }
+        break;
+    }
+    case 4:
+        intr_open(w, "div", intr_rand(w) % 2 ? "display:grid;grid-template-columns:auto auto"
+                                              : "display:grid;grid-template-columns:repeat(2,minmax(0,auto))");
+        break;
+    case 5:
+        intr_open(w, "span", "display:inline-block");
+        break;
+    case 6: {
+        static const char *const kPlaced[] = {"float:left", "position:relative",
+                                              "position:absolute;top:0;left:0", "height:100%"};
+        intr_open(w, "div", kPlaced[intr_rand(w) % 4]);
+        break;
+    }
+    case 7:
+        if (intr_rand(w) % 2) {
+            // A picture: blockified in a flex or grid container, where its
+            // percentage limits are of its containing block's height.
+            int id = w->ids++;
+            snprintf(w->base[id], sizeof(w->base[id]), "min-height:%d%%", 20 + (int)(intr_rand(w) % 60));
+            snprintf(buf, sizeof(buf), "<img id=e%d src=known.png style='%s'>", id, w->base[id]);
+            intr_put(w, buf);
+            return;
+        }
+        intr_open(w, "div", "");
+        break;
+    default:
+        intr_open(w, "div", "");
+        break;
+    }
+    int n = 1 + (int)(intr_rand(w) % 3);
+    for (int i = 0; i < n; i++) intr_node(w, depth + 1);
+    snprintf(buf, sizeof(buf), "</%s>", kind == 5 ? "span" : "div");
+    intr_put(w, buf);
+}
+static const char *const kIntrExtras[] = {
+    "", "min-width:40px", "max-width:90px", "width:130px", "aspect-ratio:2", "aspect-ratio:1;height:30px",
+    "height:50%", "height:70px", "min-height:20px", "flex:1", "padding:3px", "max-width:30%", "min-width:0",
+};
+static void intr_walk(uint32_t seed, int steps, uint64_t *roots, uint64_t *refused)
+{
+    IntrWalk *w = calloc(1, sizeof(*w));
+    w->rng = seed;
+    intr_put(w, "<!doctype html><style>p{margin:0}</style><div id=e0 style='display:flex;height:300px;width:760px'>");
+    int top = w->ids++;
+    snprintf(w->base[top], sizeof(w->base[top]), "display:flex;width:760px");
+    for (int i = 0; i < 3; i++) intr_node(w, 0);
+    intr_put(w, "</div><p id=tail>tail</p>");
+    Sheeted p;
+    sheeted_open(&p, w->html, 800, 600);
+    flow_tree_t *old = intr_layout(&p, NULL, false);
+    for (int step = 0; step < steps; step++) {
+        int changes = 1 + (int)(intr_rand(w) % 2);
+        for (int c = 0; c < changes; c++) {
+            unsigned what = intr_rand(w) % 4;
+            char id[16], style[200], words[96];
+            if (what == 0) {
+                snprintf(style, sizeof(style), "%s;height:%dpx", w->base[top], 40 + (int)(intr_rand(w) % 400));
+                os64_html_set_attr(p.doc, graft_node(&p, "e0"), "style", style, strlen(style));
+                continue;
+            }
+            int e = 1 + (int)(intr_rand(w) % (unsigned)(w->ids > 1 ? w->ids - 1 : 1));
+            snprintf(id, sizeof(id), "e%d", e);
+            if (what == 1 && w->text[e]) {
+                intr_words(w, words, sizeof(words));
+                os64_html_set_text(p.doc, graft_node(&p, id)->first_child, words, strlen(words));
+                continue;
+            }
+            snprintf(style, sizeof(style), "%s;%s", w->base[e], kIntrExtras[intr_rand(w) % 13]);
+            os64_html_set_attr(p.doc, graft_node(&p, id), "style", style, strlen(style));
+        }
+        intr_update(&p);
+        flow_tree_t *next = intr_layout(&p, old, false);
+        flow_reuse_stats_t s = flow_reuse_stats(next);
+        *roots += s.intrinsic_roots;
+        for (int r = 0; r < FLOW_INTRINSIC_NREFUSALS; r++) refused[r] += s.intrinsic_refused[r];
+        flow_free(old);
+        graft_oracle(&p, next);
+        old = next;
+    }
+    flow_free(old);
+    sheeted_close(&p);
+    free(w);
+}
+static void graft_intrinsic_walk(int seeds, int steps)
+{
+    uint64_t roots = 0, refused[FLOW_INTRINSIC_NREFUSALS] = {0};
+    for (int s = 1; s <= seeds; s++) intr_walk((uint32_t)s * 2654435761u, steps, &roots, refused);
+    printf("intrinsic walk: %d seeds, %d steps each: %llu copies; refused: %s %llu, %s %llu, %s %llu, %s %llu\n",
+           seeds, steps, (unsigned long long)roots,
+           flow_intrinsic_refusal_name(FLOW_INTRINSIC_HEIGHT), (unsigned long long)refused[FLOW_INTRINSIC_HEIGHT],
+           flow_intrinsic_refusal_name(FLOW_INTRINSIC_ORDER), (unsigned long long)refused[FLOW_INTRINSIC_ORDER],
+           flow_intrinsic_refusal_name(FLOW_INTRINSIC_KNOWN), (unsigned long long)refused[FLOW_INTRINSIC_KNOWN],
+           flow_intrinsic_refusal_name(FLOW_INTRINSIC_TABLE), (unsigned long long)refused[FLOW_INTRINSIC_TABLE]);
+    expect("intrinsic walk: role subtrees' widths are copied", roots > 0, NULL);
+}
+static void graft_intrinsic_cases(void)
+{
+    char got[96];
+    // A flex container left alone beside a change: its widths and its
+    // items' are copied, counted by the root's role when profiled.
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><div style='display:flex'><div id=f style='display:flex'>"
+                     "<div><p>item one words</p></div><div><p>item two</p></div></div>"
+                     "<div id=grow style='height:10px'></div></div><p>tail</p>", 800, 600);
+    flow_tree_t *old = intr_layout(&p, NULL, false);
+    intr_style(&p, "grow", "height:40px");
+    flow_tree_t *next = intr_layout(&p, old, true);
+    flow_reuse_stats_t s = flow_reuse_stats(next);
+    expect("intrinsic: a flex item's widths are copied with what its measure measured",
+           s.intrinsic_roots >= 1 && s.intrinsic_hits >= 5 && s.intrinsic_role_roots[FLOW_ROLE_ITEM] >= 1, NULL);
+    flow_free(old); graft_oracle(&p, next); old = next;
+    // Its text changed: measured again, and the copy is of what did not.
+    os64_html_set_text(p.doc, graft_node(&p, "f")->first_child->first_child->first_child, "a changed item", 14);
+    intr_update(&p);
+    next = intr_layout(&p, old, false);
+    flow_free(old); graft_oracle(&p, next); flow_free(next); sheeted_close(&p);
+
+    // A block-level picture's measure reads its containing block's height:
+    // its percentage limit carried through its ratio, under a container
+    // that seeds it before measuring it.
+    sheeted_open(&p, "<!doctype html><div id=f style='display:flex;align-items:flex-start;height:400px'>"
+                     "<img src=known.png style='min-height:50%'></div>", 800, 600);
+    old = intr_layout(&p, NULL, false);
+    intr_style(&p, "f", "display:flex;align-items:flex-start;height:600px");
+    next = intr_layout(&p, old, false);
+    s = flow_reuse_stats(next);
+    expect("intrinsic: a picture under its containing block's new height is measured again",
+           s.intrinsic_refused[FLOW_INTRINSIC_HEIGHT] >= 1, NULL);
+    flow_free(old); graft_oracle(&p, next); flow_free(next); sheeted_close(&p);
+
+    // A ratio container's height, made from its width, read by its
+    // anonymous item's line: the container untouched, its parent narrower.
+    sheeted_open(&p, "<!doctype html><div id=p style='width:600px'><div style='display:flex;aspect-ratio:2'>"
+                     "<span><img src=known.png style='height:50%'></span> loose</div></div><p>tail</p>", 800, 600);
+    old = intr_layout(&p, NULL, false);
+    intr_style(&p, "p", "width:400px");
+    next = intr_layout(&p, old, false);
+    s = flow_reuse_stats(next);
+    expect("intrinsic: an item under a ratio container's new height is measured again",
+           s.intrinsic_refused[FLOW_INTRINSIC_HEIGHT] >= 1, NULL);
+    flow_free(old); graft_oracle(&p, next); flow_free(next); sheeted_close(&p);
+
+    // An anonymous item's measure reads its container's definite height,
+    // which the container's percentage of its parent's moves while the
+    // container itself is untouched.
+    sheeted_open(&p, "<!doctype html><div id=p style='height:40px'><div style='display:flex;height:100%'>"
+                     "<span><img src=known.png style='height:100%'></span> loose</div></div><p>tail</p>", 800, 600);
+    old = intr_layout(&p, NULL, false);
+    intr_style(&p, "p", "height:90px");
+    next = intr_layout(&p, old, false);
+    s = flow_reuse_stats(next);
+    snprintf(got, sizeof(got), "roots %llu height %llu", (unsigned long long)s.intrinsic_roots,
+             (unsigned long long)s.intrinsic_refused[FLOW_INTRINSIC_HEIGHT]);
+    expect("intrinsic: an anonymous item under a container's new definite height is measured again",
+           s.intrinsic_refused[FLOW_INTRINSIC_HEIGHT] >= 1, got);
+    flow_free(old); graft_oracle(&p, next); flow_free(next); sheeted_close(&p);
+
+    // An inline-block's content measured with its line's box is copied
+    // with it: a measure avoided each.
+    sheeted_open(&p, "<!doctype html><div style='display:flex'><div><p>a <span style='display:inline-block'>"
+                     "<b style='display:block'>in</b></span> b</p></div><div id=grow style='height:10px'></div></div>",
+                 800, 600);
+    old = intr_layout(&p, NULL, false);
+    intr_style(&p, "grow", "height:30px");
+    next = intr_layout(&p, old, false);
+    s = flow_reuse_stats(next);
+    snprintf(got, sizeof(got), "roots %llu hits %llu", (unsigned long long)s.intrinsic_roots,
+             (unsigned long long)s.intrinsic_hits);
+    expect("intrinsic: an atom's content is copied with the box whose measure measured it",
+           s.intrinsic_roots == 1 && s.intrinsic_hits == 5, got);
+    flow_free(old); graft_oracle(&p, next); flow_free(next); sheeted_close(&p);
+
+    // A box measured after a copy, outside the root's measure, takes a
+    // number past the copy's: the next layout's copy of the root does not
+    // take it with it.
+    // (By class: a style attribute reparsed costs the cascade's retained
+    // budget, which three layouts' updates may spend.)
+    sheeted_open(&p, "<!doctype html><style>.a{height:20px}.b{height:30px}</style><div style='display:flex'>"
+                     "<div style='position:relative'><p>words here</p><div style='position:absolute'>later words</div>"
+                     "</div><div id=grow style='height:10px'></div></div><p>a</p><p>b</p><p>c</p><p>d</p><p>e</p>"
+                     "<p>f</p><p>g</p><p>h</p><p>i</p><p>j</p>", 800, 600);
+    old = intr_layout(&p, NULL, false);
+    os64_html_set_attr(p.doc, graft_node(&p, "grow"), "class", "a", 1);
+    intr_update(&p);
+    next = intr_layout(&p, old, false);
+    uint64_t hits = flow_reuse_stats(next).intrinsic_hits, roots = flow_reuse_stats(next).intrinsic_roots;
+    flow_free(old); graft_oracle(&p, next); old = next;
+    os64_html_set_attr(p.doc, graft_node(&p, "grow"), "class", "b", 1);
+    intr_update(&p);
+    next = intr_layout(&p, old, false);
+    s = flow_reuse_stats(next);
+    snprintf(got, sizeof(got), "hits %llu then %llu, copies %llu then %llu", (unsigned long long)hits,
+             (unsigned long long)s.intrinsic_hits, (unsigned long long)roots, (unsigned long long)s.intrinsic_roots);
+    expect("intrinsic: a copy of a copy takes what the first took, the box measured after it a copy of its own",
+           hits > 0 && roots == 2 && s.intrinsic_hits == hits && s.intrinsic_roots == roots, got);
+    flow_free(old); graft_oracle(&p, next); flow_free(next); sheeted_close(&p);
+
+    // A table in a measured subtree is measured fresh.
+    sheeted_open(&p, "<!doctype html><div style='display:flex'><div><table><tr><td>cell words</td></tr></table></div>"
+                     "<div id=grow style='height:10px'></div></div>", 800, 600);
+    old = intr_layout(&p, NULL, false);
+    intr_style(&p, "grow", "height:30px");
+    next = intr_layout(&p, old, false);
+    s = flow_reuse_stats(next);
+    expect("intrinsic: a table is measured fresh", s.intrinsic_refused[FLOW_INTRINSIC_TABLE] >= 1, NULL);
+    flow_free(old); graft_oracle(&p, next); flow_free(next); sheeted_close(&p);
+
+    graft_intrinsic_walk(12, 24);
+}

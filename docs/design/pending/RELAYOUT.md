@@ -596,7 +596,10 @@ Validation and remaining hardware evidence are recorded in
 successful DOM-version advances within an existing cascade. The existing
 `reused` field counts copied layout boxes; 5c populates it independently of
 style reuse. Intrinsic hits, marker measurements, peak new metadata and the
-refusal histogram are reported on the separate `layout graft` line, and
+refusal histogram are reported on the separate `layout graft` line; the
+boxes whose intrinsic widths were copied, in how many copies, by the root's
+role, and the copies refused by why, on `layout graft widths`
+(RELAYOUT_GRAFT.md § Intrinsic widths have a separate memo); and
 how many cascades were updated and how many built fresh, by reason (yonder's
 own, then `garb_update_refusal_t`), on the `layout cascade` line. Each
 layout is also taken whole: `layout by cascade` gives the count and average

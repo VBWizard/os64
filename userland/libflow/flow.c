@@ -2312,6 +2312,14 @@ const char *flow_role_name(flow_role_t role)
     };
     return role < FLOW_ROLES ? kNames[role] : "?";
 }
+const char *flow_intrinsic_refusal_name(flow_intrinsic_refusal_t why)
+{
+    static const char *const kNames[FLOW_INTRINSIC_NREFUSALS] = {
+        [FLOW_INTRINSIC_HEIGHT] = "another height", [FLOW_INTRINSIC_ORDER] = "measured before it",
+        [FLOW_INTRINSIC_KNOWN] = "other widths here", [FLOW_INTRINSIC_TABLE] = "a table",
+    };
+    return why < FLOW_INTRINSIC_NREFUSALS ? kNames[why] : "?";
+}
 flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64_page_t *model,
                                     int32_t width, const flow_env_t *env,
                                     const flow_tree_t *previous, const flow_reuse_inputs_t *inputs,
