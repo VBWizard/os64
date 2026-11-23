@@ -12572,8 +12572,9 @@ static void canvas_damage_part(Page *p,const flow_box_t *box,uint32_t width,uint
 
 // Why a canvas cannot show, whatever its bitmap holds (canvas_unseen):
 // it can, it or an ancestor is culled as transparent (`unpainted`), a
-// group around it is laid at alpha 0 (yonder_group_alpha), or all it can
-// paint lies outside the view (canvas_reach).
+// group around it is laid at alpha 0 (yonder_group_alpha), or, with no
+// group round it drawn through its matrix, all it can paint lies outside
+// the view (canvas_reach).
 typedef enum { CANVAS_SEEN = 0, CANVAS_CULLED, CANVAS_ALPHA0, CANVAS_OUT_OF_VIEW } CanvasUnseen;
 
 // Where a canvas's bitmap can show, in page coordinates at `scroll`: its
@@ -12583,7 +12584,11 @@ typedef enum { CANVAS_SEEN = 0, CANVAS_CULLED, CANVAS_ALPHA0, CANVAS_OUT_OF_VIEW
 // (flow_filter_reach) and the farther a reduced blur reads
 // (yonder_filter_reads_more), each in page pixels: that reach as a square
 // in the filtered box's own coordinates, taken out through its matrices.
-// What clips it is left out, so the answer is never too small.
+// What clips it is left out, so the answer is never too small — but only
+// where every matrix is one the face lays through: one it refuses (too
+// large a sheet, too deep, no memory) is drawn upright instead, elsewhere
+// (flow_box_through's `upright`), so a canvas inside a group drawn through
+// its matrix is never asked of here (canvas_unseen).
 static os64_gui_rect_t canvas_reach(const flow_box_t *box, flow_point_t scroll)
 {
     os64_gui_rect_t r = flow_box_doc_rect_of(box, yonder_content_rect(box), scroll);
@@ -12604,10 +12609,15 @@ static os64_gui_rect_t canvas_reach(const flow_box_t *box, flow_point_t scroll)
     }
     if (grow > INT32_MAX / 4)
         grow = INT32_MAX / 4;
-    int64_t x = (int64_t)r.x - grow, y = (int64_t)r.y - grow;
-    int64_t w = (int64_t)r.w + 2 * grow, h = (int64_t)r.h + 2 * grow;
-    return (os64_gui_rect_t){(int32_t)(x < INT32_MIN ? INT32_MIN : x), (int32_t)(y < INT32_MIN ? INT32_MIN : y),
-                             (int32_t)(w > INT32_MAX ? INT32_MAX : w), (int32_t)(h > INT32_MAX ? INT32_MAX : h)};
+    // Each edge grown and held to 32 bits on its own, so holding one never
+    // moves the other.
+    int64_t x0 = (int64_t)r.x - grow, y0 = (int64_t)r.y - grow;
+    int64_t x1 = (int64_t)r.x + r.w + grow, y1 = (int64_t)r.y + r.h + grow;
+    x0 = x0 < INT32_MIN ? INT32_MIN : x0, y0 = y0 < INT32_MIN ? INT32_MIN : y0;
+    x1 = x1 > INT32_MAX ? INT32_MAX : x1, y1 = y1 > INT32_MAX ? INT32_MAX : y1;
+    int64_t w = x1 - x0, h = y1 - y0;
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(w > INT32_MAX ? INT32_MAX : w),
+                             (int32_t)(h > INT32_MAX ? INT32_MAX : h)};
 }
 
 // Why the shown page's canvas `box` cannot show (CanvasUnseen); a page not
@@ -12620,7 +12630,12 @@ static CanvasUnseen canvas_unseen(const Page *p, const flow_box_t *box)
     for (const flow_box_t *b = box; b != NULL; b = b->parent)
         if (b->style->opacity < 1000 && yonder_group_alpha(b) == 0)
             return CANVAS_ALPHA0;
-    if (p == &g.page) {
+    // Out of view only where nothing round it may be drawn elsewhere than
+    // its matrix says (canvas_reach).
+    bool through = false;
+    for (const flow_box_t *b = box; b != NULL && !through; b = b->parent)
+        through = flow_box_through(b, scroll_now(), (double[6]){0}, NULL, NULL);
+    if (p == &g.page && !through) {
         os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}, meet;
         if (view.w > 0 && view.h > 0 && !os64_rect_intersect(canvas_reach(box, scroll_now()), view, &meet))
             return CANVAS_OUT_OF_VIEW;

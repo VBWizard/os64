@@ -1,6 +1,7 @@
 <!doctype html><html><head><title>canvas offview</title><style>
-/* Canvases under a group (opacity 0.5, so a drawing into one marks the
-   whole view: canvas_damage_part) drawn into where the view cannot show
+/* Canvases under a group (opacity 0.5, or C's filter, so a drawing into
+   one marks the whole view: canvas_damage_part) drawn into where the view
+   cannot show
    them, then shown. Run with --damage-check: the counter's text
    changes every quarter second, so every rebuild compares the whole view
    with the window, and a canvas left stale on the glass is a difference.
@@ -15,7 +16,11 @@
    C: blurred (40px), its box 5 pixels below the view's foot and its blur
       reaching up into the view: seen, so marked (canvas_reach grows a
       canvas by each filter round it); a reach left ungrown would leave the
-      blur's edge in view stale. */
+      blur's edge in view stale.
+   D: rotated, far below the fold beside A: never taken for out of view,
+      since a face may draw a group upright instead of through its matrix,
+      somewhere the matrix does not say; the record's "out of view" counts
+      A's two drawings and not D's. */
 body{margin:0;height:3000px;background:#202020;color:#ddd;font:16px sans-serif}
 .g{position:absolute;opacity:.5;width:100px;height:70px}
 canvas{display:block;width:100px;height:70px}
@@ -23,11 +28,13 @@ canvas{display:block;width:100px;height:70px}
 #gb{left:150px}
 #gc{left:300px;width:200px;opacity:1;filter:blur(40px)}
 #gc canvas{width:200px}
+#gd{left:150px;top:2000px;transform:rotate(5deg)}
 #n{position:absolute;left:10px;top:10px}
 </style></head><body>
 <div class=g id=ga><canvas id=ca width=50 height=35></canvas></div>
 <div class=g id=gb><canvas id=cb width=50 height=35></canvas></div>
 <div class=g id=gc><canvas id=cc width=50 height=35></canvas></div>
+<div class=g id=gd><canvas id=cd width=50 height=35></canvas></div>
 <div id=n>0</div>
 <script>
 // B's top: 30 pixels above the view's foot, wherever the window puts it
@@ -43,8 +50,8 @@ function paint(id, colour) {
   x.fillStyle = '#fff';
   x.fillRect(20, 5, 6, 25);
 }
-setTimeout(() => { paint('ca', '#c03'); paint('cb', '#c03'); }, 1000);
-setTimeout(() => { paint('ca', '#09c'); paint('cb', '#09c'); }, 2000);
+setTimeout(() => { paint('ca', '#c03'); paint('cb', '#c03'); paint('cd', '#c03'); }, 1000);
+setTimeout(() => { paint('ca', '#09c'); paint('cb', '#09c'); paint('cd', '#09c'); }, 2000);
 // C in turns of its own: B's mark is the whole view, which would cover it.
 setTimeout(() => paint('cc', '#000'), 1500);
 setTimeout(() => paint('cc', '#fff'), 2500);
