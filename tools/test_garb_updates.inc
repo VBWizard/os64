@@ -908,7 +908,7 @@ static void update_empty_turns(void)
     update_check(live==baseline,":empty: the fixture releases what it holds");
 }
 
-// THE BACK INDEXES, COUNTED AGAIN (cascade.c back_walk): a change of
+// THE BACK INDEXES, COUNTED AGAIN (cascade.c index_walk): a change of
 // children marks only the children whose count from the end, saturated at
 // the rules' bound, turned. Each case's #box holds 40 paragraphs, each with
 // a span; p20 sits in the middle, where no bounded back form reaches, so
@@ -989,7 +989,7 @@ static void update_back_index(void)
     ue_append(doc,fresh,"p");
     bi_step(c,doc,&in,u,"f4","f1","an append to what came in with a root marks its last, not its middle");
     garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
-    // :only-child at both ends: it reads the front too (position_front).
+    // :only-child at both ends: it reads the front too (front_child).
     doc=bi_doc();
     css="p:only-child span{opacity:.5}";
     garb_parse_sheet_text(css,strlen(css),&sheet);
@@ -1132,8 +1132,8 @@ static void update_marks_counted(void)
     m=garb_cascade_update_marks(c);
     update_check(ok && m.marked==0 && m.inherited==0,"marks: an update that read no changes says zeros");
     garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
-    // A p put first: the `+` walk marks the two after it, counted as the
-    // children's siblings, not as siblings of a changed element.
+    // A p put first: the pair it made with #a is read by `p + p`, so #a is
+    // marked alone, as a pair of neighbours; #z's neighbour did not move.
     doc=update_doc("<!doctype html><aside><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></aside>"
                    "<div id=row><p id=a></p><p id=z></p></div>");
     css="p + p{color:red}";
@@ -1143,26 +1143,33 @@ static void update_marks_counted(void)
     os64_html_insert(doc,row,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),row->first_child);
     ok=garb_cascade_update(c);
     m=garb_cascade_update_marks(c);
-    update_check(ok && m.by[GARB_MARK_SUFFIX]==2 && m.by[GARB_MARK_SIBLINGS]==0,
-                 "marks: the `+` walk after an insert is counted as the children's siblings");
+    update_check(ok && m.by[GARB_MARK_ADJACENT]==1 && m.by[GARB_MARK_SUFFIX]==0 && m.by[GARB_MARK_SIBLINGS]==0 &&
+                 m.marked==2,"marks: an insert's `+` marks the one pair it made, as a pair of neighbours");
     update_equal(c,doc,&in);
     garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
-    // With a back form too: the back walk's marks leave their own kind, and
-    // the front suffix after it is still the children's siblings.
+    // A p put first: #a's front index turned, marked alone (a subject form)
+    // as a front index's reach; then one appended: #z's back index turned.
     doc=update_doc("<!doctype html><aside><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></aside>"
                    "<div id=row><p id=a></p><p id=z></p></div>");
     css="p:first-child{color:red}p:last-child{opacity:.5}";
     garb_parse_sheet_text(css,strlen(css),&sheet);
     c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
     row=(void *)by_id(doc->document,"row");
-    os64_html_insert(doc,row,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),(void *)by_id(doc->document,"z"));
+    os64_html_insert(doc,row,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),row->first_child);
     ok=garb_cascade_update(c);
     m=garb_cascade_update_marks(c);
-    update_check(ok && m.by[GARB_MARK_SUFFIX]==1 && m.by[GARB_MARK_SIBLINGS]==0,
-                 "marks: after a back walk the front suffix is still counted as the children's siblings");
+    update_check(ok && m.by[GARB_MARK_FRONT]==1 && m.by[GARB_MARK_BACK]==0 && m.by[GARB_MARK_SUFFIX]==0 &&
+                 m.marked==2,"marks: a front index that turned, marked alone as its own kind");
+    update_equal(c,doc,&in);
+    ue_append(doc,row,"p");
+    ok=garb_cascade_update(c);
+    m=garb_cascade_update_marks(c);
+    update_check(ok && m.by[GARB_MARK_BACK]==1 && m.by[GARB_MARK_FRONT]==0 && m.marked==2,
+                 "marks: a back index that turned, marked alone as its own kind");
     update_equal(c,doc,&in);
     garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
-    // An unbounded back form marks every child, counted as the children's siblings too.
+    // An unbounded back form's walk marks the children before the append
+    // that its compound passes, as an unbounded position's walk.
     doc=update_doc("<!doctype html><aside><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></aside>"
                    "<div id=row><p id=a></p><p id=z></p></div>");
     css="p:nth-last-child(2n+1){color:red}";
@@ -1171,8 +1178,22 @@ static void update_marks_counted(void)
     ue_append(doc,(void *)by_id(doc->document,"row"),"p");
     ok=garb_cascade_update(c);
     m=garb_cascade_update_marks(c);
+    update_check(ok && m.by[GARB_MARK_POSITION]==2 && m.by[GARB_MARK_SUFFIX]==0,
+                 "marks: an unbounded back form's walk is counted as its own kind");
+    update_equal(c,doc,&in);
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // An `of S` marks every child at a change of children, as the
+    // children's siblings.
+    doc=update_doc("<!doctype html><aside><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></aside>"
+                   "<div id=row><p id=a></p><p id=z></p></div>");
+    css="p:nth-child(2 of p){color:red}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    ue_append(doc,(void *)by_id(doc->document,"row"),"p");
+    ok=garb_cascade_update(c);
+    m=garb_cascade_update_marks(c);
     update_check(ok && m.by[GARB_MARK_SUFFIX]==2 && m.by[GARB_MARK_SIBLINGS]==0,
-                 "marks: an unbounded back form's every child is counted as the children's siblings");
+                 "marks: an `of S` marks every child, counted as the children's siblings");
     update_equal(c,doc,&in);
     garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
     update_check(live==baseline,"marks: the fixture releases what it holds");
@@ -1208,6 +1229,7 @@ static void update_restyled_twice(void)
 // html); each is marked alone only where some subject compound's filters
 // pass it. `marked`/`away`: what garb_cascade_has_subject_work must say,
 // -1 for "do not check". Every case's winners equal a fresh cascade's.
+static int hs_change=-1;
 static void hs_case(const char *css, bool on_div, bool before_p, int marked, int away, const char *what)
 {
     char html[2048]="<!doctype html><aside>";
@@ -1227,9 +1249,11 @@ static void hs_case(const char *css, bool on_div, bool before_p, int marked, int
     garb_has_subject_work_t w=garb_cascade_has_subject_work(c);
     if(marked>=0) ok=ok && (int)w.marked==marked;
     if(away>=0) ok=ok && (int)w.turned_away==away;
-    if(!ok) fprintf(stderr,"  %s: marked %llu, turned away %llu, entries %llu, bare %llu\n",what,
+    if(hs_change>=0) ok=ok && (int)w.turned_away_change==hs_change;
+    if(!ok) fprintf(stderr,"  %s: marked %llu, turned away %llu (by the change %llu), entries %llu, bare %llu\n",what,
                     (unsigned long long)w.marked,(unsigned long long)w.turned_away,
-                    (unsigned long long)w.entries,(unsigned long long)w.bare);
+                    (unsigned long long)w.turned_away_change,(unsigned long long)w.entries,(unsigned long long)w.bare);
+    hs_change=-1;
     char said[160];snprintf(said,sizeof(said),"subject :has(): %s",what);
     update_check(ok,said);
     update_equal(c,doc,&in);
@@ -1243,7 +1267,13 @@ static void update_has_subjects(void)
     hs_case(".m:has(b){color:red}",false,false,1,5,"a class passes its element alone");
     hs_case("[data-q]:has(b){color:red}",false,false,1,5,"an attribute's presence passes its element alone");
     hs_case("fieldset:has(b){color:red}",false,false,0,6,"a type nothing on the climb has passes none");
-    hs_case("div:has(b){color:red}:has(i){opacity:.5}",false,false,6,0,"a bare holder beside a filtered one marks every visit");
+    hs_change=5;
+    hs_case("div:has(b){color:red}:has(i){opacity:.5}",false,false,1,0,
+            "a bare holder whose argument the change brings nothing of turns nothing");
+    hs_case("div:has(b){color:red}:has(> b){opacity:.5}",false,false,6,0,"a bare holder the change can turn marks every visit");
+    hs_change=6;
+    hs_case(".k :has(> .q){color:red}",false,false,0,0,"the measured bare form, a child argument with a class, turned by the change");
+    hs_case(".k :has(> b){color:red}",false,false,6,0,"the same form whose argument the change brings");
     hs_case(":is(div:has(b), .zz:has(b)){color:red}",false,false,1,5,"each :is() alternative holding a :has() is its own entry");
     hs_case("section:not(.nope:has(b)){color:red}",false,false,0,6,
             "inside :not(), a failing own test means the :has() cannot move the :not()");
@@ -1252,9 +1282,229 @@ static void update_has_subjects(void)
     update_check(live==baseline,"subject :has(): the fixtures release what they hold");
 }
 
+// THE READERS (select.h § A READER; cascade.c § THE READERS, ASKED): a
+// change of a row's children, each case's marks counted exactly (the
+// change's own marks, added elements among them), the elements whose
+// winners the change turned named in `yes` (an element marked alone whose
+// winners come out the same is restored, so it reads as not restyled), and
+// every case's winners equal to a fresh cascade's.
+typedef struct {
+    os64_html_document_t *doc;
+    garb_parsed_t sheet;
+    garb_sheet_in_t in;
+    garb_cascade_t *c;
+    uint64_t prior;
+} RdCase;
+static os64_html_node_t *rd_el(os64_html_document_t *doc, const char *tag, const char *cls)
+{
+    os64_html_node_t *e=os64_html_create_element(doc,OS64_HTML_NS_HTML,tag,NULL);
+    if(e && cls) os64_html_set_attr(doc,e,"class",cls,strlen(cls));
+    return e;
+}
+static os64_html_node_t *rd_id(RdCase *r, const char *id) { return (os64_html_node_t *)by_id(r->doc->document,id); }
+static void rd_begin(RdCase *r, const char *css, const char *body)
+{
+    char html[4096]="<!doctype html><aside>";
+    for(int i=0;i<30;++i) strcat(html,"<i></i>");
+    strcat(html,"</aside>");
+    strcat(html,body);
+    r->doc=update_doc(html);
+    garb_parse_sheet_text(css,strlen(css),&r->sheet);
+    r->in=(garb_sheet_in_t){.sheet=&r->sheet};
+    r->c=garb_cascade(&r->in,1,r->doc,(garb_env_t){.width=800,.height=600});
+    r->prior=garb_cascade_updates(r->c);
+}
+static void rd_end(RdCase *r, const char *what, int marked, const char *yes, int adjacent)
+{
+    bool ok=garb_cascade_update(r->c);
+    garb_update_marks_t m=garb_cascade_update_marks(r->c);
+    bool good=ok && (marked<0 || (int)m.marked==marked) && (adjacent<0 || (int)m.by[GARB_MARK_ADJACENT]==adjacent);
+    char ids[128];snprintf(ids,sizeof(ids),"%s",yes?yes:"");
+    for(char *id=strtok(ids," ");id;id=strtok(NULL," ")) {
+        os64_html_node_t *x=rd_id(r,id);
+        bool turned=x && garb_style_updated_since(r->c,x,r->prior);
+        if(!turned) fprintf(stderr,"  %s: #%s not restyled\n",what,id);
+        good=good && turned;
+    }
+    if(!good) fprintf(stderr,"  %s: updated %d, marked %llu (wanted %d), pairs %llu, refusal %s\n",what,ok,
+                      (unsigned long long)m.marked,marked,(unsigned long long)m.by[GARB_MARK_ADJACENT],
+                      garb_update_refusal_name(garb_cascade_update_refusal(r->c)));
+    char said[200];snprintf(said,sizeof(said),"readers: %s",what);
+    update_check(good,said);
+    update_equal(r->c,r->doc,&r->in);
+    garb_cascade_free(r->c);garb_free(&r->sheet);os64_html_document_free(r->doc);
+}
+#define RD_ROW "<div id=row><p id=a></p><p id=b></p><p id=c></p></div>"
+#define RD_ROW4 "<div id=row><p id=a class=k></p><p id=b></p><p id=c class=k></p><p id=d class=k><span id=s></span></p></div>"
+static void rd_insert(RdCase *r, const char *tag, const char *cls, const char *before)
+{
+    os64_html_insert(r->doc,rd_id(r,"row"),rd_el(r->doc,tag,cls),before?rd_id(r,before):NULL);
+}
+static void update_readers(void)
+{
+    size_t baseline=live;
+    RdCase r;
+    // The front index (index_walk from the start).
+    rd_begin(&r,"p:first-child{color:red}",RD_ROW); rd_insert(&r,"p",NULL,"a");
+    rd_end(&r,"a front index turned marks the child alone",2,"a",-1);
+    rd_begin(&r,"p:first-child{color:red}",RD_ROW); rd_insert(&r,"p",NULL,"b");
+    rd_end(&r,"an insert past the bound turns no front index",1,NULL,-1);
+    rd_begin(&r,"p:nth-child(2){color:red}",RD_ROW); rd_insert(&r,"p",NULL,"a");
+    rd_end(&r,"a bounded nth-child turns the first two and stops at the bound",3,"a b",-1);
+    rd_begin(&r,"p:first-child{color:red}",RD_ROW); os64_html_remove(r.doc,rd_id(&r,"a"));
+    rd_end(&r,"a removal at the front turns the next child's index",1,"b",-1);
+    rd_begin(&r,"p:only-child{color:red}","<div id=row><p id=a></p></div>"); rd_insert(&r,"p",NULL,NULL);
+    rd_end(&r,":only-child reads the back too",2,"a",-1);
+    rd_begin(&r,"p:only-child{color:red}","<div id=row><p id=a></p></div>"); rd_insert(&r,"p",NULL,"a");
+    rd_end(&r,":only-child reads the front too",2,"a",-1);
+    rd_begin(&r,"p:nth-child(n+2){color:red}",RD_ROW); rd_insert(&r,"p",NULL,"a");
+    rd_end(&r,"n+2 settles: only the first child can turn, and the walk stops",2,"a",-1);
+    // The unbounded forms (position_walks).
+    rd_begin(&r,".k:nth-child(3n){color:red}",RD_ROW4); rd_insert(&r,"p",NULL,"a");
+    rd_end(&r,"an unbounded front form marks the moved siblings its filters pass, each alone",4,"c",-1);
+    rd_begin(&r,":nth-child(3n){color:red}",RD_ROW4); rd_insert(&r,"p",NULL,"a");
+    rd_end(&r,"an unbounded front form with no filter marks every moved sibling",5,"c",-1);
+    rd_begin(&r,".k:nth-child(3n){color:red}",RD_ROW4); rd_insert(&r,"p",NULL,"c");
+    rd_end(&r,"an unbounded front walk starts where the change moved the indexes",3,"c",-1);
+    rd_begin(&r,".k:nth-last-child(2n+1){color:red}",RD_ROW4); rd_insert(&r,"p",NULL,NULL);
+    rd_end(&r,"an unbounded back form marks the moved siblings its filters pass",4,"a c d",-1);
+    rd_begin(&r,":nth-last-child(2n+1){color:red}",RD_ROW4); rd_insert(&r,"p",NULL,NULL);
+    rd_end(&r,"an unbounded back form with no filter marks every moved sibling",5,"a c d",-1);
+    rd_begin(&r,".k:nth-last-child(2n+1){color:red}",RD_ROW4); rd_insert(&r,"p",NULL,"b");
+    rd_end(&r,"an unbounded back walk stops at the element after the change",2,"a",-1);
+    rd_begin(&r,"p:not(:nth-child(2n)){color:red}",RD_ROW4); rd_insert(&r,"p",NULL,"a");
+    rd_end(&r,"a form inside :not() is untested: every moved sibling",5,"a b",-1);
+    rd_begin(&r,".k:not(:nth-child(2n)){color:red}",RD_ROW4); rd_insert(&r,"p",NULL,"a");
+    rd_end(&r,"a form inside :not() passes even where the holder's filters fail",5,"a",-1);
+    // `~` and `+` (mark_neighbours).
+    rd_begin(&r,".q ~ p{color:red}",RD_ROW); rd_insert(&r,"p",NULL,"b");
+    rd_end(&r,"`~`: an element brought its filters fail marks nothing",1,NULL,-1);
+    // The element after an insert moved later in the batch: where the
+    // change happened is past finding, so every child is marked.
+    rd_begin(&r,".q ~ p{color:red}",RD_ROW); rd_insert(&r,"p","q","b");
+    os64_html_insert(r.doc,rd_id(&r,"row"),rd_id(&r,"b"),NULL);
+    rd_end(&r,"`~`: the element after an insert moved away, every child",-1,"c b",-1);
+    rd_begin(&r,".q ~ p{color:red}",RD_ROW); rd_insert(&r,"p","q","b");
+    rd_end(&r,"`~`: an element brought its filters pass marks the siblings after it",3,"b c",-1);
+    rd_begin(&r,".q + p{color:red}",RD_ROW); rd_insert(&r,"p","q","b");
+    rd_end(&r,"`+` alone: the pair made reaches one sibling",2,"b",1);
+    // A class set on an element before it is put in is that element's own
+    // business: it is marked as added, and its neighbours are asked of it.
+    rd_begin(&r,"p.q ~ p{color:red}",RD_ROW); rd_insert(&r,"p","z","b");
+    rd_end(&r,"an attribute set on an element the batch brought marks nothing more",1,NULL,-1);
+    rd_begin(&r,".q + p + p{color:red}",RD_ROW); rd_insert(&r,"p","q","b");
+    rd_end(&r,"a `+` chain reaches every sibling after the change",3,"c",-1);
+    rd_begin(&r,".q + p{color:red}","<div id=row><p id=a class=q></p><p id=b></p><p id=c></p></div>");
+    rd_insert(&r,"p",NULL,"b");
+    rd_end(&r,"`+` alone: the pair broken, its left passing, reaches one sibling",2,"b",1);
+    rd_begin(&r,".q + p{color:red}",RD_ROW); rd_insert(&r,"p",NULL,"b");
+    rd_end(&r,"`+` alone: a pair broken and made whose lefts fail marks nothing",1,NULL,0);
+    rd_begin(&r,".q + p + p{color:red}","<div id=row><p id=a class=q></p><p id=b></p><p id=c></p></div>");
+    rd_insert(&r,"p",NULL,"b");
+    rd_end(&r,"a `+` chain: the pair broken reaches every sibling after the change",3,"c",-1);
+    // Two inserts either side of a text node: the second's left neighbour
+    // before the batch is #a, not the element the first brought.
+    rd_begin(&r,".q + p{color:red}","<div id=row><p id=a class=q></p> <p id=b></p></div>");
+    os64_html_insert(r.doc,rd_id(&r,"row"),rd_el(r.doc,"p",NULL),rd_id(&r,"a")->next);
+    rd_insert(&r,"p",NULL,"b");
+    rd_end(&r,"`+`: the pair broken skips what the batch brought",-1,"b",-1);
+    rd_begin(&r,".q ~ p{color:red}","<div id=row><p id=a class=q></p><p id=b></p><p id=c></p></div>");
+    rd_insert(&r,"p",NULL,"b");
+    rd_end(&r,"`~`: a reader passing the element before an insert does nothing",1,NULL,0);
+    rd_begin(&r,".q ~ p{color:red}","<div id=row><p id=a></p><p id=b class=q></p><p id=c></p><p id=d></p></div>");
+    os64_html_remove(r.doc,rd_id(&r,"b"));
+    rd_end(&r,"`~`: a removed element its filters pass marks the siblings after it",2,"c d",-1);
+    rd_begin(&r,".q ~ p{color:red}","<div id=row><p id=a></p><p id=b></p><p id=c></p><p id=d></p></div>");
+    os64_html_remove(r.doc,rd_id(&r,"b"));
+    rd_end(&r,"`~`: a removed element its filters fail marks nothing",0,NULL,-1);
+    rd_begin(&r,".q ~ p{color:red}","<div id=row><p id=a class=q></p><p id=b></p><p id=c></p><p id=d></p></div>");
+    os64_html_node_t *gone=rd_id(&r,"b");
+    os64_html_remove(r.doc,gone);
+    os64_html_remove_attr(r.doc,rd_id(&r,"a"),"class");
+    os64_html_set_attr(r.doc,gone,"class","x",1);
+    rd_end(&r,"`~`: a removed element whose attributes the batch changed passes",3,"c d",-1);
+    // The pair broken stands in for what its left was: a class taken off it
+    // later in the batch passes it (stale), so the pair is marked as such.
+    rd_begin(&r,".q + p{color:red}","<div id=row><p id=a class=q></p><p id=b></p><p id=c></p></div>");
+    rd_insert(&r,"p",NULL,"b");
+    os64_html_remove_attr(r.doc,rd_id(&r,"a"),"class");
+    rd_end(&r,"`+`: the attribute-and-insert batch marks the pair broken",-1,"b",1);
+    rd_begin(&r,".q + p{color:red}","<div id=row><p id=a class=q></p><p id=b></p></div>");
+    os64_html_insert(r.doc,rd_id(&r,"row"),os64_html_create_text(r.doc,"t",1,NULL),rd_id(&r,"b"));
+    rd_end(&r,"a change that moves only text moves no element's place",0,NULL,0);
+    // An element taken and one put in at the next place, across a text
+    // node: the second change's element stands between the text and #c, so
+    // the first change's pair reaches #c, the element it did not bring.
+    rd_begin(&r,".sel + li{color:red}","<ul id=row><li id=a></li> <li id=b class=sel></li> <li id=c></li></ul>");
+    os64_html_remove(r.doc,rd_id(&r,"b"));
+    rd_insert(&r,"li",NULL,"c");
+    rd_end(&r,"`+`: the pair's reach skips an element brought after the change",-1,"c",-1);
+    // An insert across a text node, then the element before it taken and
+    // put back in place: the brought element left of the pair may not have
+    // stood there, so every reader passes.
+    rd_begin(&r,".q + p{color:red}","<div id=row><p id=a></p><p id=m class=q></p> <p id=n></p></div>");
+    rd_insert(&r,"p",NULL,"n");
+    os64_html_node_t *m=rd_id(&r,"m"),*after_m=m->next;
+    os64_html_remove(r.doc,m);
+    os64_html_insert(r.doc,rd_id(&r,"row"),m,after_m);
+    rd_end(&r,"`+`: a left of the pair the batch brought is past finding",-1,"n",-1);
+    rd_begin(&r,"p:empty + p{color:red}","<div id=row><p id=a></p><p id=b></p></div>");
+    ue_append(r.doc,rd_id(&r,"a"),"span");
+    rd_end(&r,":empty turned: its `+` reader reaches the next sibling",3,"b",-1);
+    // A subject :has() and a change of children (garb_has_subject_children_may_turn):
+    // the forms a change turns without bringing a match.
+    rd_begin(&r,"div:has(> .c:last-child){color:red}","<div id=d><p class=c></p></div>");
+    ue_append(r.doc,rd_id(&r,"d"),"span");
+    rd_end(&r,":has() argument with a position form: every change of children passes",-1,"d",-1);
+    rd_begin(&r,"div:has(> .c:empty){color:red}","<div id=d><p id=pc class=c></p></div>");
+    ue_append(r.doc,rd_id(&r,"pc"),"span");
+    rd_end(&r,":has() argument with :empty: every change of children passes",-1,"d",-1);
+    rd_begin(&r,"div:has(> .a + .c){color:red}","<div id=d><p id=pa class=a></p><p class=c></p></div>");
+    os64_html_insert(r.doc,rd_id(&r,"d"),rd_el(r.doc,"span",NULL),rd_id(&r,"pa")->next);
+    rd_end(&r,":has() argument with a sibling combinator: every change of children passes",-1,"d",-1);
+    rd_begin(&r,"div:has(> p:not(:first-child)){color:red}","<div id=d><p id=p1></p></div>");
+    os64_html_insert(r.doc,rd_id(&r,"d"),rd_el(r.doc,"span",NULL),rd_id(&r,"p1"));
+    rd_end(&r,":has() argument with :not(): every change of children passes",-1,"d",-1);
+    rd_begin(&r,"div:has(input:disabled){color:red}",
+             "<div id=d><fieldset id=f disabled><legend id=l1><input></legend></fieldset></div>");
+    os64_html_insert(r.doc,rd_id(&r,"f"),rd_el(r.doc,"legend",NULL),rd_id(&r,"l1"));
+    rd_end(&r,":has() argument reading a fieldset's children: every change of children passes",-1,"d",-1);
+    rd_begin(&r,"p.b:has(+ .k){color:red}","<div id=row><p id=pb class=b></p><span id=mid></span><p class=k></p></div>");
+    os64_html_remove(r.doc,rd_id(&r,"mid"));
+    rd_end(&r,":has(+ ...) and a removal: the neighbours it makes pass",-1,"pb",-1);
+    // A batch whose first change's climb visits #d with nothing it can
+    // turn, and whose second change can: #d is visited again.
+    rd_begin(&r,"div:has(> .q){color:red}","<div id=d></div>");
+    ue_append(r.doc,rd_id(&r,"d"),"span");
+    os64_html_insert(r.doc,rd_id(&r,"d"),rd_el(r.doc,"p","q"),NULL);
+    rd_end(&r,"a compound a later change makes live is asked where an earlier climb went",-1,"d",-1);
+    rd_begin(&r,"div:has(b){color:red}","<div id=d></div><section id=src><span id=sp><b></b></span></section>");
+    os64_html_insert(r.doc,rd_id(&r,"d"),rd_id(&r,"sp"),NULL);
+    rd_end(&r,"a descendant argument asks every element a moved subtree brings",-1,"d",-1);
+    rd_begin(&r,"p.b:has(+ .k){color:red}","<div id=row><p id=pb class=b></p><p class=k></p></div>");
+    os64_html_insert(r.doc,rd_id(&r,"row"),rd_el(r.doc,"span",NULL),rd_id(&r,"pb")->next);
+    rd_end(&r,":has(+ ...) and an insert: the pair it parts passes",-1,"pb",-1);
+    // A subtree taken, changed while out, and put back elsewhere: what it
+    // held when taken is past finding though it ends in the document.
+    rd_begin(&r,"section:has(.k){color:red}",
+             "<section id=s1><div id=p><div id=rr><i id=k class=k></i></div></div></section><div id=q></div>");
+    os64_html_node_t *rr=rd_id(&r,"rr"),*k=rd_id(&r,"k");
+    os64_html_remove(r.doc,rr);
+    os64_html_remove(r.doc,k);
+    os64_html_insert(r.doc,rd_id(&r,"q"),rr,NULL);
+    rd_end(&r,"a subtree changed while out of the document stands for nothing, put back or not",-1,"s1",-1);
+    rd_begin(&r,"div:has(.q){color:red}","<div id=d><section id=s><p id=pq class=q></p></section></div>");
+    os64_html_node_t *pq=rd_id(&r,"pq");
+    os64_html_remove(r.doc,rd_id(&r,"s"));
+    os64_html_remove(r.doc,pq);
+    rd_end(&r,"a removed subtree changed after its removal stands for nothing",-1,"d",-1);
+    update_check(live==baseline,"readers: the fixtures release what they hold");
+}
+
 static int cascade_updates(void)
 {
     update_has_subjects();
+    update_readers();
     update_restyled_twice();
     update_marks_counted();
     update_back_index();
