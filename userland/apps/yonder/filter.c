@@ -247,17 +247,18 @@ static void box_columns(uint32_t *px, int32_t w, int32_t h, int32_t r, uint32_t 
 // (floor 6 held 2 there too, at half the saving on the blurs that cost
 // most; ruled for 3). The two constants are that table's — k = 2 gave 3
 // of 255 inside, and s = 16 gave 3 at r = 59 — so move either only with
-// the table measured again. A radius crossing a threshold (r 13 to 14, 27
-// to 28) changes s between two frames of an animated blur; the step is
-// inside the same contract.
+// the table measured again. A radius crossing a threshold (r 6 to 7, 13
+// to 14, 27 to 28) changes s between two frames of an animated blur; the
+// step is inside the same contract.
 //
 // The squares are counted from the GROUP's origin (`grid`, filter.h), not
 // the layer's, which is cut to what is being painted: a part painted alone
 // and the whole painted at once agree to the pixel, and a group moved by a
 // pixel comes out as the same pixels, moved. A reduced blur reads farther
-// than three boxes of r do (reduced_reads), so the painter cuts the layer
-// that much wider (yonder_filter_reads_more), and every pixel shown reads
-// only pixels painted.
+// than three boxes of r do (reduced_reads), so the painter cuts a filter's
+// layer that much wider (yonder_filter_reads_more), and every pixel shown
+// reads only pixels painted. A backdrop's layer is not grown: it reads
+// nothing past its reach, as its damage needs (pane_backdrop_filter).
 #define BLUR_REDUCED_FLOOR 3
 // At most 8: the enlargement adds two reduced pixels' 8-bit channels
 // weighted by 2s, then two of those weighted by 2s, in 16-bit halves of a
@@ -618,8 +619,8 @@ static void shadow_run(uint32_t *px, int32_t w, int32_t h, const flow_filter_t *
 
 // The blurs' line: a row (box_rows) or BOX_STRIP columns (box_columns) of
 // the layer, or of the reduced copy (extended_line, extended_columns),
-// which is at most two squares longer than the layer either way
-// (reduced_side).
+// whose sides count at most two more pixels than the layer's
+// (reduced_side, at every s).
 static size_t blur_line(int32_t w, int32_t h)
 {
     size_t strip = (size_t)BOX_STRIP * ((size_t)h + 2), row = (size_t)w + 2;

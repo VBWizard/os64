@@ -18461,8 +18461,9 @@ static void box_bars(Glass *gl, os64_gui_rect_t view)
 #define SHEET_SIDE 4096
 #define SHEET_PIXELS 2097152
 // A layer's sheets (a filtered or blended group's) are what the painter
-// has already cut to the view grown by the filter's spread (at most 3 x
-// FLOW_FILTER_BLUR_MAX a side), so they are bounded by the window, not by
+// has already cut to the view grown by the filter's spread and what a
+// large blur's reduced copy reads past it (a few hundred pixels a side for
+// each blur in the list), so they are bounded by the window, not by
 // a matrix: the window's size, its spread, and room for a 4K one, so a
 // page-wide filter (`html { filter: grayscale(1) }`) is drawn.
 #define FILTER_SHEET_SIDE 8192

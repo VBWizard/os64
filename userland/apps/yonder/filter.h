@@ -48,7 +48,8 @@ int32_t yonder_filter_reduction(int32_t blur);
 // blur and a drop shadow's blur are three box blurs of radius blur / 2
 // each (flow_filter_t.shadow), held at FLOW_FILTER_BLUR_MAX, reading
 // nothing past the layer — a large one made on a reduced copy to within
-// 2 of 255 of them (filter.c § A large blur), its squares counted from
+// filter.c § A large blur's contract of them (2 of 255 where the content
+// stays a reach inside the layer, 6 beside a cut edge), its squares counted from
 // `grid`, where the layer's first pixel lies from the group's own origin,
 // so the result does not depend on where the layer was cut; a drop shadow
 // is the layer's coverage blurred, moved by its offsets and laid under the
