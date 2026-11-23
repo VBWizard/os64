@@ -131,10 +131,22 @@ and `:has()` in a subject, with `+`/`~` arguments, inside an nth-child's
 `:has()` and `:dir()`). Discovery recurses through functional selector
 lists, including `:is()`, `:not()` and `:where()`.
 
-Attribute/state changes restyle the target's subtree. Following-sibling
-combinators also mark following siblings' subtrees; filtered positional
-selectors mark all siblings' subtrees. Unfiltered positional selectors alone
-do not widen an attribute change. An element the batch brought (put in,
+A change of an attribute marks its element alone, counted as restyled
+even where its winners come out the same (what it lays out may read the
+attribute), and marks through the READERS by its KEYS (`select.h` § A
+READER's keys): the attribute by its local name; for `class` the classes
+the old value and the new one do not share, and for `id` the old id and
+the new, the old values being the ones the element was last styled with.
+Each reader that names a key, and whose other tests pass at the element
+with the changed keys' tests left out, has its reach marked (its subtree,
+its next sibling, its following ones). At an element the batch changed
+more than once, every change passes every reader of its keys. A key read
+at an ancestor too (`lang`, `dir`, `disabled`, with `:lang()`, `:dir()`,
+`:disabled` and their kin), a change whose old value is past knowing or
+whose keys pass the room, a cascade short of memory for its readers, and a
+change of state mark the subtree and the following siblings as before. Filtered
+positional selectors (`of S`) still mark all siblings' subtrees. An
+element the batch brought (put in,
 or under what it put in) marks nothing for its attributes: it is marked
 whole as added, and the change that brought it asks what is beside and
 above it of it as the batch left it. No selector reads a text's data except
@@ -422,7 +434,8 @@ other, so their pages keep style and geometry reuse across a mutation.
 
 - **`:dir()`** reads the `dir` attribute of the element and the ancestors
   it inherits from; what a change of `dir` can turn is in the changed
-  element's subtree, which an attribute's change marks. `dir=auto` is not
+  element's subtree, which its change marks, `dir` being a key read at an
+  ancestor too. `dir=auto` is not
   implemented (DEBTS).
 - **A `:has()` in a rule's subject** can turn on an ancestor of the change,
   or for `+`/`~` arguments on a preceding sibling of the change or of an
@@ -446,9 +459,12 @@ other, so their pages keep style and geometry reuse across a mutation.
   taken subtree stands for nothing when the batch changed children under
   anything it took out, put back or not. A visit asks with every compound the
   batch's changes so far may turn, and when that set grows the climbs that
-  follow visit again what they pass. One the same rules match as before (a digest of them is kept
-  in its record) and whose winners compare the same by value keeps its old
-  record, so `garb_style_updated_since` reports no change, and any other
+  follow visit again what they pass. A change of an attribute turns only
+  the compounds whose arguments read one of its keys
+  (`garb_has_subject_reads_key`), a bare compound as much as a filtered
+  one. One the same rules match as before (a digest of them is kept
+  in its record) and whose winners and custom properties compare the same
+  by value keeps its old record, so `garb_style_updated_since` reports no change, and any other
   marks its descendants for their inherited values.
 - **An anchored `:has()`**, left of a combinator (`.group:has(.x) .y`,
   `body:has(...) .panel`), changes its descendants' or following siblings'

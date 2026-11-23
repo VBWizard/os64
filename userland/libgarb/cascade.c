@@ -169,6 +169,15 @@ typedef struct {
     // What :empty answered at it when the cascade last styled it or asked at
     // a change, kept while the rules hold :empty (empty_turned).
     bool empty;
+    // Its attributes changed in the update being made (mark_attribute): its
+    // record counts as restyled even where its winners come out the same,
+    // since what it lays out may read the attribute itself.
+    bool attr_touched;
+    // Its `class` and `id` values when the cascade last styled it (the
+    // document's own strings: a change retires the old one, and the
+    // cascade's pin keeps it), NULL when absent: what a change of either is
+    // compared with (attribute_keys).
+    const char *klass, *idv;
     // Its back and front indexes as the cascade last counted them,
     // saturated at the bounds the rules need (index_walk): among
     // its element siblings, and among those of its type; 0 for never
@@ -208,6 +217,23 @@ typedef struct {
     int32_t parent;
 } CascadeInput;
 
+// The most keys one change of an attribute names (attribute_keys).
+#define CHANGE_KEYS 64
+static const char *attr_value(const os64_html_node_t *el, const char *name);
+// A reader's key in the index (reader_keys): sorted by kind, then the
+// folded name's hash, then the folded name, so a change finds the readers
+// of its key by a search. A reader that reads every key is under the kind
+// GARB_KEYS_ANY.
+typedef struct {
+    uint32_t hash;
+    uint8_t kind;
+    const char *name;
+    size_t len;
+    int32_t reader;
+} ReaderKey;
+#define GARB_KEYS_ANY 3
+// The keys read at an ancestor too (garb_key_t.up), a bit each.
+enum { UP_DISABLED = 1, UP_LANG = 2, UP_DIR = 4 };
 // THE READ (KEPT_READ.md; cascade.h § THE KEPT READ): everything build()
 // makes before it touches an element, owned here and shared by every
 // cascade built from it, which copies these fields into its own at build
@@ -266,9 +292,12 @@ typedef struct garb_read {
     int32_t nstyle_readers;
     bool style_bare;
     garb_reader_t *readers;
-    int32_t nreaders, nbare_readers;
-    uint8_t reads_any;
+    int32_t nreaders, nbare_readers, nplace_readers;
+    uint16_t reads_any;
     bool readers_short;
+    ReaderKey *reader_keys;
+    int32_t nreader_keys;
+    uint8_t up_keys;
     garb_selector_dependencies_t dependencies;
     garb_update_refusal_t untrackable;
     bool incomplete;
@@ -392,14 +421,21 @@ struct garb_cascade {
     garb_style_reader_t *style_readers;
     int32_t nstyle_readers;
     bool style_bare;
-    // The readers of every rule (select.h § A READER; asked by readers_at),
-    // `nbare_readers` of them bare, and what any of them reads;
+    // The readers of every rule (select.h § A READER), `nbare_readers` of
+    // them bare, the first `nplace_readers` those reading more than keys
+    // (the ones a change of children asks, readers_at), and what any of
+    // them reads;
     // `readers_short`: there was no memory to keep them, so every ask
     // passes every reader with the widest reach.
     garb_reader_t *readers;
-    int32_t nreaders, nbare_readers;
-    uint8_t reads_any;
+    int32_t nreaders, nbare_readers, nplace_readers;
+    uint16_t reads_any;
     bool readers_short;
+    // The readers' keys, for a change of an attribute (reader_keys), and
+    // the keys some reader reads at an ancestor too (UP_*).
+    ReaderKey *reader_keys;
+    int32_t nreader_keys;
+    uint8_t up_keys;
     // THE BATCH, as an update reads it before it marks (batch_take): the
     // nodes its changes of children took out and put in, and the elements
     // whose attributes it changed, each sorted by address; and whether a
@@ -415,6 +451,12 @@ struct garb_cascade {
     // grows, so the climbs that follow visit again what they pass.
     uint64_t *subjects_union, *subjects_now;
     uint32_t subject_width;
+    // The keys of the change of an attribute being marked (attribute_keys):
+    // `change_unknown` where they cannot be named, `change_up` where one is
+    // read at an ancestor too.
+    garb_key_t change_keys[CHANGE_KEYS];
+    int32_t nchange_keys;
+    bool change_unknown, change_up;
     uint64_t visit_epoch;
     garb_reader_work_t reader_work;
     uint32_t has_width;
@@ -2791,6 +2833,8 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
         slot->scope = tree_place(c, el);
         slot->placed = true;
         slot->empty = c->dependencies.parent_state && garb_element_empty(el);
+        slot->klass = attr_value(el, "class");
+        slot->idv = attr_value(el, "id");
     }
     Consult q = {target, slot->scope, 0, el, el};
     c->match_session++;
@@ -3230,7 +3274,9 @@ static void read_install(garb_cascade_t *c, const Read *r)
     c->subjects = r->subjects; c->nsubjects = r->nsubjects; c->nbare_subjects = r->nbare_subjects;
     c->style_readers = r->style_readers; c->nstyle_readers = r->nstyle_readers; c->style_bare = r->style_bare;
     c->readers = r->readers; c->nreaders = r->nreaders; c->nbare_readers = r->nbare_readers;
+    c->nplace_readers = r->nplace_readers;
     c->reads_any = r->reads_any; c->readers_short = r->readers_short;
+    c->reader_keys = r->reader_keys; c->nreader_keys = r->nreader_keys; c->up_keys = r->up_keys;
     c->dependencies = r->dependencies;
     c->untrackable = r->untrackable;
     c->incomplete = r->incomplete;
@@ -3253,7 +3299,9 @@ static void read_save(Read *r, const garb_cascade_t *c)
     r->subjects = c->subjects; r->nsubjects = c->nsubjects; r->nbare_subjects = c->nbare_subjects;
     r->style_readers = c->style_readers; r->nstyle_readers = c->nstyle_readers; r->style_bare = c->style_bare;
     r->readers = c->readers; r->nreaders = c->nreaders; r->nbare_readers = c->nbare_readers;
+    r->nplace_readers = c->nplace_readers;
     r->reads_any = c->reads_any; r->readers_short = c->readers_short;
+    r->reader_keys = c->reader_keys; r->nreader_keys = c->nreader_keys; r->up_keys = c->up_keys;
     r->dependencies = c->dependencies;
     r->untrackable = c->untrackable;
 }
@@ -3319,6 +3367,8 @@ static uint64_t read_digest(const Read *r)
     h = fnv(h, r->subjects, (size_t)r->nsubjects * sizeof(*r->subjects));
     h = fnv(h, r->style_readers, (size_t)r->nstyle_readers * sizeof(*r->style_readers));
     h = fnv(h, r->readers, (size_t)r->nreaders * sizeof(*r->readers));
+    h = fnv(h, r->reader_keys, (size_t)r->nreader_keys * sizeof(*r->reader_keys));
+    h = fnv(h, &r->up_keys, sizeof(r->up_keys));
     h = fnv(h, &r->reads_any, sizeof(r->reads_any));
     h = fnv(h, &r->readers_short, sizeof(r->readers_short));
     h = fnv(h, r->inputs, (size_t)r->ninputs * sizeof(*r->inputs));
@@ -3395,6 +3445,8 @@ static uint64_t read_content(const Read *r)
     h = fnv(h, &r->nbare, sizeof(r->nbare));
     h = fnv(h, &r->nstyle_readers, sizeof(r->nstyle_readers));
     h = fnv(h, &r->nreaders, sizeof(r->nreaders));
+    h = fnv(h, &r->nreader_keys, sizeof(r->nreader_keys));
+    h = fnv(h, &r->nplace_readers, sizeof(r->nplace_readers));
     h = fnv(h, &r->nbare_readers, sizeof(r->nbare_readers));
     h = fnv(h, &r->reads_any, sizeof(r->reads_any));
     h = fnv(h, &r->dependencies, sizeof(r->dependencies));
@@ -3402,6 +3454,77 @@ static uint64_t read_content(const Read *r)
     h = fnv(h, &r->style_bare, sizeof(r->style_bare));
     h = fnv(h, &r->nroots, sizeof(r->nroots));
     return fnv(h, &r->ngiven, sizeof(r->ngiven));
+}
+
+// THE READERS' KEYS (select.h § A READER's keys), indexed for a change of
+// an attribute: each key of each reader that reads keys, as one entry,
+// sorted by kind, then the hash of the name folded to lower case, then the
+// folded name (key_order), so the readers of one key lie together and a
+// change finds them by a search (keyed_readers). Folded both ways, the
+// search may find a reader whose case the selector holds apart: one asked
+// too many, never one too few. A reader past its keys' room reads every
+// key, under GARB_KEYS_ANY. No room for the index makes every reader
+// short (readers_short), which passes every reader everywhere.
+static uint32_t key_hash(const char *name, size_t len)
+{
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)name[i];
+        h = (h ^ (ch >= 'A' && ch <= 'Z' ? ch + 32 : ch)) * 16777619u;
+    }
+    return h;
+}
+static int key_folded_cmp(const char *a, size_t la, const char *b, size_t lb)
+{
+    for (size_t i = 0; i < la && i < lb; i++) {
+        unsigned char x = (unsigned char)a[i], y = (unsigned char)b[i];
+        x = x >= 'A' && x <= 'Z' ? (unsigned char)(x + 32) : x;
+        y = y >= 'A' && y <= 'Z' ? (unsigned char)(y + 32) : y;
+        if (x != y) return x < y ? -1 : 1;
+    }
+    return la < lb ? -1 : la > lb;
+}
+static int key_order(const void *pa, const void *pb)
+{
+    const ReaderKey *a = pa, *b = pb;
+    if (a->kind != b->kind) return a->kind < b->kind ? -1 : 1;
+    if (a->hash != b->hash) return a->hash < b->hash ? -1 : 1;
+    return key_folded_cmp(a->name, a->len, b->name, b->len);
+}
+static void reader_keys_build(garb_cascade_t *c)
+{
+    int32_t total = 0;
+    for (int32_t r = 0; r < c->nreaders; r++)
+        if (c->readers[r].reads & GARB_READS_KEYS)
+            total += c->readers[r].keys_any ? 1 : garb_reader_keys(&c->readers[r], NULL, 0);
+    if (total == 0) return;
+    ReaderKey *keys = alloc(c, (size_t)total * sizeof(*keys));
+    ReaderKey *tmp = os64_malloc((size_t)total * sizeof(*tmp));
+    garb_key_t *one = os64_malloc(64 * sizeof(*one));
+    if (!keys || !tmp || !one) {
+        os64_free(tmp);
+        os64_free(one);
+        c->readers_short = true;
+        return;
+    }
+    int32_t n = 0;
+    for (int32_t r = 0; r < c->nreaders; r++) {
+        const garb_reader_t *rd = &c->readers[r];
+        if (!(rd->reads & GARB_READS_KEYS)) continue;
+        int32_t m = rd->keys_any ? 65 : garb_reader_keys(rd, one, 64);
+        if (m > 64) {
+            // Past the room for one reader's keys: it reads every key.
+            keys[n++] = (ReaderKey){0, GARB_KEYS_ANY, "", 0, r};
+            continue;
+        }
+        for (int32_t k = 0; k < m && n < total; k++)
+            keys[n++] = (ReaderKey){key_hash(one[k].name, one[k].len), one[k].kind, one[k].name, one[k].len, r};
+    }
+    merge_sort(keys, tmp, n, sizeof(*keys), key_order);
+    os64_free(tmp);
+    os64_free(one);
+    c->reader_keys = keys;
+    c->nreader_keys = n;
 }
 
 // THE READ made: the sheets read into a Read of this cascade's own, its
@@ -3496,10 +3619,18 @@ static bool read_sheets(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_
     c->readers_short = readers_held > 0 && c->readers == NULL;
     for (int32_t i = 0; i < c->nrules && c->readers != NULL; ++i)
         c->nreaders += garb_selectors_readers(c->rules[i].sel, c->readers + c->nreaders, readers_held - c->nreaders);
+    // The readers that read more than keys go first, and a change of
+    // children asks only those (readers_at): the rest it can never ask.
     for (int32_t r = 0; r < c->nreaders; r++) {
         c->nbare_readers += c->readers[r].bare;
         c->reads_any |= c->readers[r].reads;
+        if (c->readers[r].reads & (uint16_t)~GARB_READS_KEYS) {
+            garb_reader_t swap = c->readers[c->nplace_readers];
+            c->readers[c->nplace_readers++] = c->readers[r];
+            c->readers[r] = swap;
+        }
     }
+    reader_keys_build(c);
     for (int32_t i = 0; i < c->nrules; ++i) {
         garb_selector_dependencies_t d = garb_selectors_dependencies(c->rules[i].sel);
         c->dependencies.following |= d.following;
@@ -3514,6 +3645,7 @@ static bool read_sheets(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_
         c->dependencies.ancestors |= d.ancestors;
         c->dependencies.ancestors_preceding |= d.ancestors_preceding;
         c->dependencies.style_attribute |= d.style_attribute;
+        c->up_keys |= (uint8_t)((d.up_lang ? UP_LANG : 0) | (d.up_dir ? UP_DIR : 0) | (d.up_disabled ? UP_DISABLED : 0));
         if (d.has_filtered) c->untrackable = GARB_UPDATE_COUNTED_HAS;
         if (c->anchors == NULL) continue;
         int32_t held = garb_selectors_anchors(c->rules[i].sel, c->anchors + c->nanchors, anchors - c->nanchors);
@@ -4004,7 +4136,7 @@ static Reached readers_at(garb_cascade_t *c, uint8_t key, unsigned kinds, const 
     }
     Reached got = {0};
     bool all = x == NULL || (stand_in && stale(c, x)), any = false;
-    for (int32_t i = 0; i < c->nreaders; i++) {
+    for (int32_t i = 0; i < c->nplace_readers; i++) {
         const garb_reader_t *r = &c->readers[i];
         if (!(r->reads & key) || !(kinds >> r->reach & 1)) continue;
         w->asked[asker]++;
@@ -4356,6 +4488,166 @@ static bool mark_neighbours(garb_cascade_t *c, const os64_html_change_entry_t *e
     return !(pair.next || pair.on) || mark_run(c, after, pair.on, pair.down);
 }
 
+// ── A CHANGE OF AN ATTRIBUTE, by its keys (select.h § A READER's keys) ──
+//
+// What an attribute's change can turn: its element's own match, which it
+// marks alone (and counts as restyled whatever its winners: attr_touched);
+// and through the readers that read one of its keys and whose other tests
+// pass at the element, their reach. Its KEYS: the attribute by its local
+// name; for `class`, the classes the old value and the new one do not
+// share; for `id`, the old id and the new. The old values are the ones the
+// element was last styled with (Slot.klass, idv), the value before the
+// batch however often the batch wrote it. A key read at an ancestor too
+// (`lang`, `dir`, `disabled` with :lang(), :dir(), :disabled and their
+// kin) marks the element's subtree and its siblings as before, as does a
+// change whose old value is past knowing or whose keys pass the room.
+static const char *attr_value(const os64_html_node_t *el, const char *name)
+{
+    const os64_html_attr_t *a = os64_html_attr(el, name);
+    return a == NULL ? NULL : a->value != NULL ? a->value : "";
+}
+static bool space_byte(char ch)
+{
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\f' || ch == '\r';
+}
+// Whether the class token `t` (`tl` bytes) is in the class value `v`.
+static bool class_holds(const char *v, const char *t, size_t tl)
+{
+    for (size_t i = 0, n = v ? os64_strlen(v) : 0; i < n;) {
+        while (i < n && space_byte(v[i])) i++;
+        size_t start = i;
+        while (i < n && !space_byte(v[i])) i++;
+        if (i - start == tl && os64_memcmp(v + start, t, tl) == 0) return true;
+    }
+    return false;
+}
+// The tokens of class value `a` that `b` does not hold, as CLASS keys.
+static int32_t class_difference(const char *a, const char *b, garb_key_t *out, int32_t n)
+{
+    for (size_t i = 0, len = a ? os64_strlen(a) : 0; i < len;) {
+        while (i < len && space_byte(a[i])) i++;
+        size_t start = i;
+        while (i < len && !space_byte(a[i])) i++;
+        if (i > start && !class_holds(b, a + start, i - start)) {
+            if (n < CHANGE_KEYS) out[n] = (garb_key_t){GARB_KEY_CLASS, false, a + start, i - start};
+            n++;
+        }
+    }
+    return n;
+}
+// The keys change `e` moved at `el` into c->change_keys, or
+// c->change_unknown where they cannot be named.
+static void attribute_keys(garb_cascade_t *c, const os64_html_change_entry_t *e, const os64_html_node_t *el)
+{
+    garb_key_t *k = c->change_keys;
+    int32_t n = 0;
+    c->change_unknown = c->readers_short || e->attr_name == NULL;
+    c->change_up = false;
+    if (c->change_unknown) { c->nchange_keys = 0; return; }
+    const char *name = e->attr_local != NULL ? e->attr_local : e->attr_name;
+    size_t len = os64_strlen(name);
+    k[n++] = (garb_key_t){GARB_KEY_ATTR, false, name, len};
+    const Slot *s = slot_for(c, el, false);
+    // A record is matched by its qualified name, whatever its namespace
+    // (os64_html_attr): a `class` or `id` written with one is the class or
+    // the id all the same.
+    if (os64_streq(e->attr_name, "class")) {
+        if (s == NULL || !s->placed) c->change_unknown = true;
+        else {
+            const char *now = attr_value(el, "class");
+            n = class_difference(s->klass, now, k, n);
+            n = class_difference(now, s->klass, k, n);
+        }
+    } else if (os64_streq(e->attr_name, "id")) {
+        if (s == NULL || !s->placed) c->change_unknown = true;
+        else {
+            const char *now = attr_value(el, "id");
+            if (s->idv != NULL) k[n++] = (garb_key_t){GARB_KEY_ID, false, s->idv, os64_strlen(s->idv)};
+            if (now != NULL) k[n++] = (garb_key_t){GARB_KEY_ID, false, now, os64_strlen(now)};
+        }
+    }
+    if (n > CHANGE_KEYS) c->change_unknown = true;
+    c->change_up = (c->up_keys & UP_DISABLED && os64_streq(name, "disabled")) ||
+                   (c->up_keys & UP_LANG && (os64_streq(name, "lang") || os64_streq(name, "xml:lang"))) ||
+                   (c->up_keys & UP_DIR && os64_streq(name, "dir"));
+    c->nchange_keys = n > CHANGE_KEYS ? CHANGE_KEYS : n;
+}
+// The readers of key `k`: the run of the index under it, and every reader
+// under GARB_KEYS_ANY.
+static void key_run(const garb_cascade_t *c, uint8_t kind, uint32_t hash, const char *name, size_t len,
+                    int32_t *from, int32_t *to)
+{
+    ReaderKey probe = {hash, kind, name, len, 0};
+    int32_t lo = 0, hi = c->nreader_keys;
+    while (lo < hi) {
+        int32_t mid = lo + (hi - lo) / 2;
+        if (key_order(&c->reader_keys[mid], &probe) < 0) lo = mid + 1;
+        else hi = mid;
+    }
+    *from = lo;
+    while (lo < c->nreader_keys && key_order(&c->reader_keys[lo], &probe) == 0) lo++;
+    *to = lo;
+}
+// The reach of every reader of a key in c->change_keys whose tests other
+// than the changed keys' pass at `el` (every one, `all`), gathered.
+static Reached keyed_readers(garb_cascade_t *c, const os64_html_node_t *el, bool all, garb_asker_t asker)
+{
+    garb_reader_work_t *w = &c->reader_work;
+    Reached got = {0};
+    bool any = false;
+    for (int32_t i = 0; i <= c->nchange_keys; i++) {
+        int32_t from, to;
+        if (i < c->nchange_keys) {
+            const garb_key_t *k = &c->change_keys[i];
+            key_run(c, k->kind, key_hash(k->name, k->len), k->name, k->len, &from, &to);
+        } else {
+            key_run(c, GARB_KEYS_ANY, 0, "", 0, &from, &to);
+        }
+        for (int32_t j = from; j < to; j++) {
+            const garb_reader_t *r = &c->readers[c->reader_keys[j].reader];
+            w->asked[asker]++;
+            if (!all && !garb_reader_filters_pass_except(r, el, c->change_keys, c->nchange_keys)) continue;
+            w->passed[asker]++;
+            any = true;
+            got.self |= r->reach == GARB_REACH_SELF;
+            got.next |= r->reach == GARB_REACH_NEXT;
+            got.on |= r->reach == GARB_REACH_FOLLOWING || r->reach == GARB_REACH_CHAIN;
+            got.down |= r->down;
+        }
+    }
+    if (any) w->reached[asker]++;
+    return got;
+}
+static bool mark_attribute(garb_cascade_t *c, const os64_html_change_entry_t *e, const os64_html_node_t *el,
+                           garb_mark_t kind)
+{
+    if (!connected(c, el)) return true;
+    if (c->change_unknown || c->change_up) return mark_changed(c, el, kind);
+    c->mark_now = kind;
+    if (!mark_element(c, el)) return false;
+    Slot *s = slot_for(c, el, false);
+    if (s) s->attr_touched = true;
+    c->mark_now = GARB_MARK_SIBLINGS;
+    if (c->dependencies.filtered && el->parent && !mark_siblings(c, el->parent->first_child)) return false;
+    c->mark_now = kind;
+    // An element the batch changed more than once: what each change's other
+    // tests read as the batch left it may not be what they read before it,
+    // so every change there passes every reader of its keys.
+    size_t lo = 0, hi = c->nbatch_attrs;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if ((uintptr_t)c->batch_attrs[mid] < (uintptr_t)el) lo = mid + 1;
+        else hi = mid;
+    }
+    bool twice = lo + 1 < c->nbatch_attrs && c->batch_attrs[lo + 1] == el;
+    garb_asker_t asker = os64_streq(e->attr_name, "class") ? GARB_ASKED_CLASS
+                       : os64_streq(e->attr_name, "id") ? GARB_ASKED_ID
+                       : os64_streq(e->attr_name, "style") ? GARB_ASKED_STYLE
+                       : GARB_ASKED_ATTRIBUTE;
+    Reached got = keyed_readers(c, el, twice, asker);
+    return mark_reached(c, el, got);
+}
+
 static bool body_hint(const os64_html_change_entry_t *e, const os64_html_document_t *doc)
 {
     if (e->kind != OS64_HTML_CHANGE_ATTR || e->target != doc->body || !e->attr_name)
@@ -4412,7 +4704,9 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
 // THE SUBJECT :has() COMPOUNDS A CHANGE MAY TURN (select.h § A SUBJECT
 // :has() AND A CHANGE OF CHILDREN): for a change of children, those whose
 // arguments the elements it brought or took may match, a taken subtree
-// standing in for what it held (stale_removed); for any other change, all.
+// standing in for what it held (stale_removed); for a change of an
+// attribute whose keys are named (attribute_keys), those whose arguments
+// read one of them; for any other change, all.
 // The visits ask with every compound the batch's changes so far may turn
 // (`subjects_union`), so that one visit of an element serves every change
 // that climbs past it; when that set grows, the visit epoch moves on and
@@ -4433,11 +4727,13 @@ static bool subjects_live(garb_cascade_t *c, const os64_html_change_entry_t *e)
     for (int32_t i = 0; i < c->nsubjects && full; i++) full = c->subjects_union[i / 64] >> (i % 64) & 1;
     if (full) return true;
     for (uint32_t k = 0; k < w; k++) c->subjects_now[k] = 0;
+    bool keyed = e->kind == OS64_HTML_CHANGE_ATTR && !c->change_unknown;
     for (int32_t i = 0; i < c->nsubjects; i++) {
         const garb_anchor_t *a = &c->subjects[i];
-        bool may = e->kind != OS64_HTML_CHANGE_CHILDREN ||
-                   garb_has_subject_children_may_turn(a, e->added, e->nadded, NULL, c) ||
-                   garb_has_subject_children_may_turn(a, e->removed, e->nremoved, stale_removed, c);
+        bool may = e->kind == OS64_HTML_CHANGE_CHILDREN
+                       ? garb_has_subject_children_may_turn(a, e->added, e->nadded, NULL, c) ||
+                         garb_has_subject_children_may_turn(a, e->removed, e->nremoved, stale_removed, c)
+                       : !keyed || garb_has_subject_reads_key(a, c->change_keys, c->nchange_keys);
         if (may) c->subjects_now[i / 64] |= (uint64_t)1 << (i % 64);
     }
     bool grew = false;
@@ -4744,7 +5040,9 @@ const char *garb_asker_name(garb_asker_t asker)
         [GARB_ASKED_FRONT] = "a front index turned", [GARB_ASKED_BACK] = "a back index turned",
         [GARB_ASKED_FRONT_WALK] = "an unbounded front walk", [GARB_ASKED_BACK_WALK] = "an unbounded back walk",
         [GARB_ASKED_EMPTY] = ":empty turned", [GARB_ASKED_ADDED_REMOVED] = "an element brought or taken",
-        [GARB_ASKED_PAIRS] = "a pair broken or made",
+        [GARB_ASKED_PAIRS] = "a pair broken or made", [GARB_ASKED_ATTRIBUTE] = "an attribute changed",
+        [GARB_ASKED_CLASS] = "a class changed", [GARB_ASKED_ID] = "an id changed",
+        [GARB_ASKED_STYLE] = "a style changed",
     };
     return asker < GARB_ASKERS ? kNames[asker] : "?";
 }
@@ -4815,11 +5113,11 @@ bool garb_cascade_read_written(const garb_cascade_t *c)
 const char *garb_mark_name(garb_mark_t mark)
 {
     static const char *const kNames[GARB_MARKS] = {
-        [GARB_MARK_SUBTREE] = "its subtree", [GARB_MARK_ADDED] = "added subtrees",
+        [GARB_MARK_CHANGED] = "an attribute or a state", [GARB_MARK_ADDED] = "added subtrees",
         [GARB_MARK_SIBLINGS] = "siblings", [GARB_MARK_HAS] = ":has()",
         [GARB_MARK_PARENT] = "the parent's state", [GARB_MARK_SLOTS] = "slots",
-        [GARB_MARK_INHERITED] = "inherited", [GARB_MARK_CLASS] = "its subtree (class)",
-        [GARB_MARK_STYLE] = "its subtree (style)", [GARB_MARK_BACK] = "a back index's reach",
+        [GARB_MARK_INHERITED] = "inherited", [GARB_MARK_CLASS] = "a class",
+        [GARB_MARK_STYLE] = "a style", [GARB_MARK_BACK] = "a back index's reach",
         [GARB_MARK_SUFFIX] = "the children's siblings", [GARB_MARK_FRONT] = "a front index's reach",
         [GARB_MARK_POSITION] = "an unbounded position's walk", [GARB_MARK_NEIGHBOURS] = "the siblings after a change",
         [GARB_MARK_ADJACENT] = "a pair of neighbours",
@@ -4866,18 +5164,34 @@ static bool styles_same(const garb_style_t *a, const garb_style_t *b)
             return false;
     return true;
 }
+// Whether two custom property maps an element was styled with hold the
+// same: one map, or its own declarations the same by value over the same
+// inherited map.
+static bool customs_same(const CustomMap *a, const CustomMap *b)
+{
+    if (a == b) return true;
+    if (a == NULL || b == NULL || a->parent != b->parent || a->n != b->n) return false;
+    for (int32_t i = 0; i < a->n; i++) {
+        const Custom *x = &a->own[i], *y = &b->own[i];
+        if (x->len != y->len || os64_memcmp(x->name, y->name, x->len) != 0 || x->state != y->state ||
+            (x->value == NULL) != (y->value == NULL) ||
+            (x->value != NULL && !values_same(x->value, x->nvalue, y->value, y->nvalue)))
+            return false;
+    }
+    return true;
+}
 // Recomputes dirty `x`'s winners into a fresh record in its slot `s`. One
 // marked alone (mark_element) keeps its old record when the same rules
-// matched it as before: its attributes and what it inherits are as they
-// were (a change to either marks its subtree, not it alone), so the same
-// rules give it the same winners and custom properties, and
-// garb_style_updated_since says it did not change. Its winners are compared
-// by value as well, should two lists of rules ever fold to one digest.
-// Otherwise it marks what is under it (mark_below), which the update's walk
-// reaches after it, since its descendants inherit from it. A
-// pseudo-element's winners reach no descendant: when they alone differ the
-// fresh record is all they need. False when the recompute or that mark
-// failed.
+// matched it as before and its winners and its custom properties compare
+// the same by value: its own declarations, and the element it inherits
+// from (customs_same compares that too, which a change of its `slot` can
+// move), so nothing under it reads anything new from it, and
+// garb_style_updated_since says it did not change, unless its attributes
+// changed (attr_touched: what it lays out may read them). Otherwise it marks what is under it
+// (mark_below), which the update's walk reaches after it, since its
+// descendants inherit from it. A pseudo-element's winners reach no
+// descendant: when they alone differ the fresh record is all they need.
+// False when the recompute or that mark failed.
 static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match **m, int32_t *mcap,
                     AppliedScratch *scratch)
 {
@@ -4907,12 +5221,18 @@ static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match
     // restyles an element alone must keep that true, or compare here.
     anchor_bits(c, x, has_row(c, s));
     if (!old.element_only) return true;
-    bool same = old.matched == s->matched && styles_same(&old.style, &s->style);
+    bool same = old.matched == s->matched && styles_same(&old.style, &s->style) &&
+                customs_same(old.customs, s->customs);
     bool pseudo_same = true;
     for (int32_t t = 0; t < TARGET_AFTER; t++) pseudo_same &= styles_same(&old.pseudo[t], &s->pseudo[t]);
     if (same && pseudo_same) {
         *s = old;
-        s->dirty = s->dirty_suffix = s->alone_suffix = s->element_only = false;
+        s->dirty = s->dirty_suffix = s->alone_suffix = s->element_only = s->attr_touched = false;
+        // The values it was styled with now; and, where its attributes
+        // changed, a restyle all the same: what it lays out may read them.
+        s->klass = attr_value(x, "class");
+        s->idv = attr_value(x, "id");
+        if (old.attr_touched) s->changed = c->updates + 1;
         return true;
     }
     if (!same && c->limits.clock) c->passing = x;
@@ -5055,6 +5375,11 @@ static bool update(garb_cascade_t *c)
     for (const os64_html_change_entry_t *e = changes; e; e = e->next) {
         if (body_hint(e, c->doc)) { c->refusal = GARB_UPDATE_BODY_HINT; return false; }
         if (c->limits.clock) os64_memset(c->mark_by, 0, sizeof(c->mark_by));
+        if (e->kind == OS64_HTML_CHANGE_ATTR) {
+            const os64_html_node_t *el = e->target;
+            if (el && !is_el(el)) el = el->parent;
+            attribute_keys(c, e, el);
+        }
         if (!subjects_live(c, e)) return false;
         bool marked;
         if (e->kind == OS64_HTML_CHANGE_CHILDREN) {
@@ -5076,10 +5401,10 @@ static bool update(garb_cascade_t *c)
             const os64_html_node_t *root = e->target;
             if (root && !is_el(root)) root = root->parent;
             // By what changed, for the caller's measure (garb_mark_t).
-            garb_mark_t kind = GARB_MARK_SUBTREE;
+            garb_mark_t kind = GARB_MARK_CHANGED;
             if (e->kind == OS64_HTML_CHANGE_ATTR && e->attr_name && !e->attr_ns)
                 kind = os64_streq(e->attr_name, "class") ? GARB_MARK_CLASS
-                     : os64_streq(e->attr_name, "style") ? GARB_MARK_STYLE : GARB_MARK_SUBTREE;
+                     : os64_streq(e->attr_name, "style") ? GARB_MARK_STYLE : GARB_MARK_CHANGED;
             // An element the batch brought (an element it put in, or one
             // under it) is marked whole as added, and what its attributes
             // move beside it and above it is asked of it as the batch left
@@ -5088,7 +5413,8 @@ static bool update(garb_cascade_t *c)
             bool brought = false;
             for (const os64_html_node_t *x = root; x && !brought; x = x->parent)
                 brought = batch_holds(c->batch_added, c->nbatch_added, x);
-            marked = brought || mark_changed(c, root, kind);
+            marked = brought || (e->kind == OS64_HTML_CHANGE_ATTR && root ? mark_attribute(c, e, root, kind)
+                                                                           : mark_changed(c, root, kind));
             c->mark_now = GARB_MARK_HAS;
             marked = marked && (brought || !root || mark_has(c, root, false));
             // A slot renamed moves which of its host's children it takes.

@@ -1121,12 +1121,13 @@ static void update_marks_counted(void)
     update_check(m.by[GARB_MARK_ADDED]==1 && m.by[GARB_MARK_HAS]==1 && m.by[GARB_MARK_INHERITED]==2,
                  "marks: by kind, one added, one by the :has() climb, two inherited");
     update_equal(c,doc,&in);
-    // A class write on the div marks its subtree under its own kind.
+    // A class write on the div no rule reads marks the div alone, under its
+    // own kind.
     os64_html_set_attr(doc,(void *)by_id(doc->document,"d"),"class","k",1);
     ok=garb_cascade_update(c);
     m=garb_cascade_update_marks(c);
-    update_check(ok && m.by[GARB_MARK_CLASS]==4 && m.by[GARB_MARK_SUBTREE]==0,
-                 "marks: a class write's subtree is counted as class");
+    update_check(ok && m.by[GARB_MARK_CLASS]==1 && m.by[GARB_MARK_CHANGED]==0 && m.marked==1,
+                 "marks: a class write is counted as class, its element alone where no reader reaches past it");
     update_equal(c,doc,&in);
     ok=garb_cascade_update(c);
     m=garb_cascade_update_marks(c);
@@ -1529,10 +1530,89 @@ static void update_readers(void)
     update_check(live==baseline,"readers: the fixtures release what they hold");
 }
 
+// A CHANGE OF AN ATTRIBUTE BY ITS KEYS (cascade.c § A CHANGE OF AN
+// ATTRIBUTE): the element marked alone, and the reach of the readers that
+// read a key of the change and pass at the element with the changed tests
+// left out; each case's marks counted exactly and its winners equal to a
+// fresh cascade's.
+#define AT_TREE "<div class=c id=top><div><div><div id=bar><div id=strip></div><p id=after></p></div></div></div></div>"
+static void update_attribute_readers(void)
+{
+    size_t baseline=live;
+    RdCase r;
+    // The progress bar's shape: an inline transform written on a positioned
+    // strip deep in a tree, under sheets that hold the bare subject :has().
+    rd_begin(&r,".c :has(> .q){color:red}#strip{position:absolute}.x .y{opacity:.5}",AT_TREE);
+    os64_html_set_attr(r.doc,rd_id(&r,"strip"),"style","transform:translateX(10px)",26);
+    rd_end(&r,"an inline style write that no reader reads marks the element alone",1,NULL,-1);
+    rd_begin(&r,".c :has(> .q){color:red}#strip{position:absolute}",AT_TREE);
+    os64_html_set_attr(r.doc,rd_id(&r,"bar"),"aria-valuenow","42",2);
+    rd_end(&r,"an attribute no reader names marks the element alone",1,NULL,-1);
+    rd_begin(&r,"[aria-valuenow] + p{color:red}",AT_TREE);
+    os64_html_set_attr(r.doc,rd_id(&r,"strip"),"aria-valuenow","42",2);
+    rd_end(&r,"a reader of the attribute reaches its next sibling",2,"after",-1);
+    // Classes by the old value: only the classes that differ are keys.
+    rd_begin(&r,".a .x{color:red}","<div id=e class='a b'><p id=x class=x></p></div>");
+    os64_html_set_attr(r.doc,rd_id(&r,"e"),"class","a c",3);
+    rd_end(&r,"a class change whose differing classes no reader names marks the element alone",1,NULL,-1);
+    rd_begin(&r,".a .x{color:red}","<div id=e class=a><p id=x class=x></p></div>");
+    os64_html_set_attr(r.doc,rd_id(&r,"e"),"class","z",1);
+    rd_end(&r,"a class a reader names reaches the subtree",2,"x",-1);
+    rd_begin(&r,".p.a .x{color:red}","<div id=e><p id=x class=x></p></div>");
+    os64_html_set_attr(r.doc,rd_id(&r,"e"),"class","a",1);
+    rd_end(&r,"a reader whose other tests fail at the element is turned away",1,NULL,-1);
+    rd_begin(&r,"#m .x{color:red}","<div id=m><p id=x class=x></p></div>");
+    os64_html_set_attr(r.doc,rd_id(&r,"m"),"id","n",1);
+    rd_end(&r,"an id change: the old id's readers reach the subtree",2,NULL,-1);
+    rd_begin(&r,"p:lang(fr){color:red}","<div id=e><p id=x></p></div>");
+    os64_html_set_attr(r.doc,rd_id(&r,"e"),"lang","fr",2);
+    rd_end(&r,"a key read at an ancestor too marks the subtree",-1,"x",-1);
+    // Two changes at one element in a batch: neither may lean on the
+    // other's test as the batch left it.
+    rd_begin(&r,".a[data-b] .x{color:red}","<div id=e class=a data-b><p id=x class=x></p></div>");
+    os64_html_remove_attr(r.doc,rd_id(&r,"e"),"data-b");
+    os64_html_set_attr(r.doc,rd_id(&r,"e"),"class","z",1);
+    rd_end(&r,"two changes at one element pass every reader of their keys",-1,"x",-1);
+    // A `class` written in a namespace is still the class the matcher reads.
+    rd_begin(&r,".a > p{color:red}","<div id=e><p id=x></p></div>");
+    {
+        os64_html_attr_change_t ns={.name="class",.value="a",.value_len=1,.by_ns=true,.ns="urn:x"};
+        os64_html_set_attrs(r.doc,rd_id(&r,"e"),&ns,1);
+    }
+    rd_end(&r,"a class written in a namespace is keyed as the class",2,"x",-1);
+    // A key the holder reads: an :is() alternative reads `checked` from the
+    // compound holding it.
+    rd_begin(&r,"input:checked:is(.a, .b) + p{color:red}","<div><input id=box type=checkbox class=a><p id=x></p></div>");
+    os64_html_set_attr(r.doc,rd_id(&r,"box"),"checked","",0);
+    rd_end(&r,"an :is() alternative reads its holder's keys",2,"x",-1);
+    // The bare subject :has() judged by the change's key.
+    rd_begin(&r,".c :has(> .q){color:red}","<div class=c><div id=par><p id=kid></p></div></div>");
+    os64_html_set_attr(r.doc,rd_id(&r,"kid"),"class","q",1);
+    rd_end(&r,"a class the bare :has() argument reads makes it live: every ancestor up the climb",5,"par",-1);
+    rd_begin(&r,".c :has(> .q){color:red}","<div class=c><div id=par><p id=kid></p></div></div>");
+    os64_html_set_attr(r.doc,rd_id(&r,"kid"),"class","z",1);
+    rd_end(&r,"a class no :has() argument reads turns nothing above",1,NULL,-1);
+    // A class change whose winners come out the same keeps the class it
+    // was styled with up to date, so the next change compares with it.
+    rd_begin(&r,".p.b .x{color:red}","<div id=e class=b><p id=x class=x></p></div>");
+    os64_html_set_attr(r.doc,rd_id(&r,"e"),"class","",0);
+    update_check(garb_cascade_update(r.c),"attributes: the first class change updates");
+    r.prior=garb_cascade_updates(r.c);
+    os64_html_set_attr(r.doc,rd_id(&r,"e"),"class","p",1);
+    rd_end(&r,"a class change kept alone remembers the new class for the next",1,NULL,-1);
+    // An element whose attributes changed counts as restyled even where its
+    // winners come out the same.
+    rd_begin(&r,"p{color:red}","<div id=e><p id=x></p></div>");
+    os64_html_set_attr(r.doc,rd_id(&r,"e"),"width","10",2);
+    rd_end(&r,"an element whose attribute changed counts as restyled",1,"e",-1);
+    update_check(live==baseline,"attributes: the fixtures release what they hold");
+}
+
 static int cascade_updates(void)
 {
     update_has_subjects();
     update_readers();
+    update_attribute_readers();
     update_restyled_twice();
     update_marks_counted();
     update_back_index();
@@ -1618,7 +1698,9 @@ static int cascade_updates(void)
         for(int i=0;i<2000;++i) len+=(size_t)sprintf(html+len,"<p>%d</p>",i);
         strcpy(html+len,"</div>");
         os64_html_document_t *doc=update_doc(html);
-        const char *css="p{color:red;background:blue;border:1px solid green;padding:2px}";
+        // `[title] p` reads the title the loop writes at the box, so its
+        // subtree is marked: a large restyle.
+        const char *css="p{color:red;background:blue;border:1px solid green;padding:2px}div[title] p{outline-color:red}";
         garb_parsed_t sheet;garb_parse_sheet_text(css,strlen(css),&sheet);
         garb_sheet_in_t in={.sheet=&sheet};
         garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});

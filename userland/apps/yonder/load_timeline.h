@@ -70,7 +70,7 @@
 // front indexes counted again (walks, children, turned); the unbounded
 // position walks and the siblings they passed over; and of the rules, the
 // readers and the bare ones.
-#define YONDER_LT_ASKERS 8
+#define YONDER_LT_ASKERS 12
 typedef struct {
     uint64_t asked[YONDER_LT_ASKERS], passed[YONDER_LT_ASKERS], reached[YONDER_LT_ASKERS];
     uint64_t front_walks, front_walked, front_turned, walks, walked;

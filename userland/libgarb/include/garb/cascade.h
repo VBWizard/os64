@@ -278,8 +278,10 @@ garb_has_subject_work_t garb_cascade_has_subject_work(const garb_cascade_t *c);
 // garb_cascade_update, by what asked them: a child whose front index
 // turned, one whose back index turned, the siblings an unbounded front
 // form's walk and an unbounded back form's walk passed over, an :empty that
-// turned, an element brought or taken (`~` and the `+` chains), and a pair
-// of siblings broken or made (`+`). For each, the readers asked, those
+// turned, an element brought or taken (`~` and the `+` chains), a pair of
+// siblings broken or made (`+`), and a change of an attribute by its keys
+// (an attribute other than these three, `class`, `id`, `style`: select.h
+// § A READER's keys). For each, the readers asked, those
 // whose filters passed, and the asks that marked a reach (one reader or
 // more passed). With the bounded front indexes counted again as
 // garb_cascade_back_work counts the back ones (`front_walks`,
@@ -288,7 +290,8 @@ garb_has_subject_work_t garb_cascade_has_subject_work(const garb_cascade_t *c);
 // ones. Zeros as garb_cascade_back_work's are.
 typedef enum {
     GARB_ASKED_FRONT, GARB_ASKED_BACK, GARB_ASKED_FRONT_WALK, GARB_ASKED_BACK_WALK, GARB_ASKED_EMPTY,
-    GARB_ASKED_ADDED_REMOVED, GARB_ASKED_PAIRS, GARB_ASKERS
+    GARB_ASKED_ADDED_REMOVED, GARB_ASKED_PAIRS, GARB_ASKED_ATTRIBUTE, GARB_ASKED_CLASS, GARB_ASKED_ID,
+    GARB_ASKED_STYLE, GARB_ASKERS
 } garb_asker_t;
 typedef struct {
     uint64_t asked[GARB_ASKERS], passed[GARB_ASKERS], reached[GARB_ASKERS];
@@ -311,9 +314,10 @@ typedef struct {
 } garb_build_cost_t;
 garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c);
 // Which mark an update made the elements it marked by: for a change, the
-// changed element's subtree (inheritance and descendant selectors) for a
-// change of an attribute other than `class` and `style` or of a state, an
-// added subtree, the siblings a changed or turned element moves (those
+// changed element's own mark and what its readers reach for a change of an
+// attribute other than `class` and `style`, its subtree for a change of a
+// state (and of an attribute whose keys are past naming or read at an
+// ancestor), an added subtree, the siblings a changed or turned element moves (those
 // after a changed element for `+`/`~`, all of them for an `of S`; those
 // the readers of an :empty that turned reach), every child of a parent
 // whose children changed under an `of S`, or with more types of children
@@ -322,14 +326,16 @@ garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c);
 // (:empty where its answer turned, a <details> or <fieldset>'s first
 // child), a shadow tree's assignments; while the marked elements are
 // restyled, an element restyled alone whose style came out different
-// passing it down to its children (inherited); the changed element's
-// subtree for a change of its `class` or of its `style`; and, at a change
+// passing it down to its children (inherited); for a change of an
+// attribute, its element and the reach of the readers of its keys, under
+// `class`, `style`, or for any other attribute the kind of an attribute or
+// a state; and, at a change
 // of children, the reach of the readers (select.h § A READER) of a child
 // whose back index or front index turned, of the children an unbounded
 // position form's walk passed over, of an element brought or taken
 // (`~` and the `+` chains), and of a pair of siblings broken or made (`+`).
 typedef enum {
-    GARB_MARK_SUBTREE, GARB_MARK_ADDED, GARB_MARK_SIBLINGS, GARB_MARK_HAS, GARB_MARK_PARENT,
+    GARB_MARK_CHANGED, GARB_MARK_ADDED, GARB_MARK_SIBLINGS, GARB_MARK_HAS, GARB_MARK_PARENT,
     GARB_MARK_SLOTS, GARB_MARK_INHERITED, GARB_MARK_CLASS, GARB_MARK_STYLE, GARB_MARK_BACK, GARB_MARK_SUFFIX,
     GARB_MARK_FRONT, GARB_MARK_POSITION, GARB_MARK_NEIGHBOURS, GARB_MARK_ADJACENT,
     GARB_MARKS

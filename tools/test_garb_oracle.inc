@@ -46,10 +46,16 @@ static const char *oracle_pseudo(OracleRng *r)
 static void oracle_compound(OracleRng *r, char *out, size_t cap)
 {
     const char *pseudo = oracle_pick(r, 2) ? oracle_pseudo(r) : "";
-    switch (oracle_pick(r, 5)) {
+    static const char *const kIds[]={"m","n","o"};
+    switch (oracle_pick(r, 8)) {
     case 0: snprintf(out, cap, "%s%s", kOracleTags[oracle_pick(r, 4)], pseudo); break;
     case 1: case 2: snprintf(out, cap, ".%s%s", kOracleClasses[oracle_pick(r, 4)], pseudo); break;
     case 3: snprintf(out, cap, "[data-x]%s", pseudo); break;
+    // The attribute readers by key: an id, a title, a lang's prefix, two
+    // classes at once.
+    case 4: snprintf(out, cap, "#%s%s", kIds[oracle_pick(r, 3)], pseudo); break;
+    case 5: snprintf(out, cap, "[title]%s", pseudo); break;
+    case 6: snprintf(out, cap, ".%s.%s[lang|=fr]", kOracleClasses[oracle_pick(r, 4)], kOracleClasses[oracle_pick(r, 4)]); break;
     default: snprintf(out, cap, "%s.%s%s", kOracleTags[oracle_pick(r, 4)], kOracleClasses[oracle_pick(r, 4)], pseudo); break;
     }
 }
