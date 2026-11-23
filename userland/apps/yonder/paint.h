@@ -201,10 +201,10 @@ typedef struct {
     uint32_t paper;
 } yonder_dark_t;
 
-// THE PAINT CACHE (YONDER_PERF.md § perf-2): a gradient's tile and a
-// blurred shadow's mask, kept between paints in 128-pixel blocks and found
-// by the values that make them, so a paint copies its part out instead of
-// working it out again. What a paint draws from it is what it draws
+// THE PAINT CACHE (YONDER_PERF.md § perf-2): a gradient's tile, a blurred
+// shadow's mask and a canvas's smoothed picture (canvas_keep.h), kept
+// between paints in 128-pixel blocks and found by the values that make
+// them, so a paint copies its part out instead of working it out again. What a paint draws from it is what it draws
 // without it, pixel for pixel. One window's, on its one thread: no lock.
 typedef struct yonder_paint_cache yonder_paint_cache_t;
 // THE BUDGET IS THE SCREEN'S (yonder_paint_cache_budget): what the cache

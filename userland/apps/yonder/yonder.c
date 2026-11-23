@@ -59,6 +59,7 @@
 #include "webfont.h"
 #include "sheet.h"
 #include "scale.h"
+#include "canvas_keep.h"
 #include "warp.h"
 #include "filter.h"
 #include "census.h"
@@ -2989,6 +2990,11 @@ static struct {
     // page is shown. NULL until the first paint, and when there was no
     // memory for it: the page is then painted working everything out.
     yonder_paint_cache_t *paint_cache;
+    // What the canvases' smoothed draws keep, in the paint cache
+    // (canvas_keep.h): NULL until the first paint, as the paint cache is,
+    // and when there was no memory for it: each canvas is then scaled at
+    // every draw.
+    yonder_canvas_keeps_t *canvas_keeps;
     // The painter's working buffers, kept between paints (scratch.h): its
     // idle ones freed when another page is shown. NULL until the first
     // paint, and when there was no memory for it: each buffer then comes
@@ -4539,6 +4545,7 @@ static void cost_reset(void)
     s_cost.from_us = os64_micros();
     yonder_ticker_counts_restart(g.ticker);
     yonder_paint_cache_counts_restart(g.paint_cache);
+    yonder_canvas_keep_counts_restart(g.canvas_keeps);
     yonder_keeps_counts_restart(g.keeps);
     // W0's tables too: a page shown starts them again, as a reading does,
     // so no page's first reading carries the last one's elements.
@@ -9425,6 +9432,12 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (unsigned long)(kept.bytes / 1024), (unsigned long)kept.entries, (unsigned long)(kept.budget / 1024));
     else
         dt_put(t, "; no paint cache");
+    // What the canvases' smoothed draws kept, among those blocks (canvas_keep.h).
+    yonder_canvas_keep_counts_t canvases = yonder_canvas_keep_counts(g.canvas_keeps);
+    if (canvases.kept + canvases.found + canvases.dropped + canvases.refused > 0)
+        dt_put(t, "; canvas pictures: %lu blocks kept, %lu found, %lu dropped for a change, %lu draws not "
+               "kept for room or memory", (unsigned long)canvases.kept, (unsigned long)canvases.found,
+               (unsigned long)canvases.dropped, (unsigned long)canvases.refused);
     // What the turned groups' kept drawings saved (keep.h).
     yonder_keeps_counts_t keeps = yonder_keeps_counts(g.keeps);
     if (g.keeps != NULL)
@@ -11100,10 +11113,13 @@ static void glass_paint(void)
     s_parts_reach = (os64_gui_rect_t){0, 0, 0, 0};
     // One paint of the kept drawings for every part the view paints in it
     // (keep.h): a group asked about in two parts of one paint is not
-    // asked about twice.
+    // asked about twice. One paint of the kept canvas pictures too
+    // (canvas_keep.h): a canvas drawn in two parts of its first paint at a
+    // revision keeps nothing yet.
     if (g.keeps == NULL)
         g.keeps = yonder_keeps_new(KEEPS_BUDGET);
     yonder_keeps_paint(g.keeps, flow_tree_serial(g.page.tree));
+    yonder_canvas_keeps_paint(g.canvas_keeps);
     cost_begin(PS_RENDER);
     uint32_t count = os64_ui_render_list(&g.ui, damage);
     if (count > 0)
@@ -19060,8 +19076,9 @@ static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
         os64_gui_rect_t walked;
         if (os64_rect_intersect(cut, box, &walked) && s_canvas_last.targets++ == 0)
             s_canvas_last.drawn = walked;
-        consumed &= yonder_draw_surface(gl->surf->pixels, gl->surf->pitch_px, cut, box,
-                                        !b->style->pixelated, &source);
+        consumed &= yonder_canvas_keep_draw(g.canvas_keeps, g.paint_cache, b->node, bitmap.revision,
+                                            gl->surf->pixels, gl->surf->pitch_px, cut, box,
+                                            !b->style->pixelated, &source);
     }
     if (consumed) yonder_scripts_canvas_painted(g.page.scripts, b->node);
 }
@@ -20259,6 +20276,8 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
             mem.total = 0;
         g.paint_cache = yonder_paint_cache_new(yonder_paint_cache_budget(sw, sh, mem.total));
     }
+    if (g.canvas_keeps == NULL)
+        g.canvas_keeps = yonder_canvas_keeps_new();
     if (g.paint_scratch == NULL)
         g.paint_scratch = yonder_scratch_new();
     os64_gui_rect_t whole = {w->bounds.x - gl.dx, w->bounds.y - gl.dy, w->bounds.w, w->bounds.h};
@@ -23125,6 +23144,8 @@ int main(int argc, char **argv)
     // After the departure write (page_clear), which reads its counts.
     yonder_paint_cache_free(g.paint_cache);
     g.paint_cache = NULL;
+    yonder_canvas_keeps_free(g.canvas_keeps);
+    g.canvas_keeps = NULL;
     yonder_scratch_free(g.paint_scratch);
     g.paint_scratch = NULL;
     yonder_keeps_free(g.keeps);
