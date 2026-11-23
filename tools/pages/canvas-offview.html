@@ -11,20 +11,29 @@
    B: straddling the view's foot, 30 pixels of it in view: never
       acknowledged unseen, so the paint draws the part in view and only
       that acknowledges it. A rule that took a canvas partly in view for
-      out of it would leave those 30 pixels stale. */
+      out of it would leave those 30 pixels stale.
+   C: blurred (20px), its box 15 pixels below the view's foot and its blur
+      reaching up into the view: seen, so marked (canvas_reach grows a
+      canvas by each filter round it); a reach left ungrown would leave the
+      blur's edge in view stale. */
 body{margin:0;height:3000px;background:#202020;color:#ddd;font:16px sans-serif}
 .g{position:absolute;opacity:.5;width:100px;height:70px}
 canvas{display:block;width:100px;height:70px}
 #ga{left:20px;top:2000px}
 #gb{left:150px}
+#gc{left:300px;width:200px;opacity:1;filter:blur(20px)}
+#gc canvas{width:200px}
 #n{position:absolute;left:10px;top:10px}
 </style></head><body>
 <div class=g id=ga><canvas id=ca width=50 height=35></canvas></div>
 <div class=g id=gb><canvas id=cb width=50 height=35></canvas></div>
+<div class=g id=gc><canvas id=cc width=50 height=35></canvas></div>
 <div id=n>0</div>
 <script>
 // B's top: 30 pixels above the view's foot, wherever the window puts it.
 document.getElementById('gb').style.top = (window.innerHeight - 30) + 'px';
+// C's: 15 pixels below it.
+document.getElementById('gc').style.top = (window.innerHeight + 15) + 'px';
 function paint(id, colour) {
   const x = document.getElementById(id).getContext('2d');
   x.fillStyle = colour;
@@ -32,8 +41,8 @@ function paint(id, colour) {
   x.fillStyle = '#fff';
   x.fillRect(20, 5, 6, 25);
 }
-setTimeout(() => { paint('ca', '#c03'); paint('cb', '#c03'); }, 1000);
-setTimeout(() => { paint('ca', '#09c'); paint('cb', '#09c'); }, 2000);
+setTimeout(() => { paint('ca', '#c03'); paint('cb', '#c03'); paint('cc', '#c03'); }, 1000);
+setTimeout(() => { paint('ca', '#09c'); paint('cb', '#09c'); paint('cc', '#ff0'); }, 2000);
 setTimeout(() => window.scrollTo(0, 1900), 3000);
 setTimeout(() => paint('ca', '#3a3'), 5000);
 let n = 0;
