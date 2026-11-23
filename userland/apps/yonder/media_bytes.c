@@ -226,13 +226,14 @@ void yonder_media_content_type(const char *headers, size_t length, char *out, si
     while (next_header(&l, &name, &nlen, &value, &vlen)) {
         if (!same_nocase(name, nlen, "content-type"))
             continue;
+        out[0] = '\0';
         size_t n = 0;
         while (n < vlen && value[n] != ';')
             n++;
         while (n > 0 && (value[n - 1] == ' ' || value[n - 1] == '\t'))
             n--;
         if (n + 1 > cap)
-            return;
+            continue;
         for (size_t i = 0; i < n; i++)
             out[i] = value[i];
         out[n] = '\0';
@@ -328,10 +329,12 @@ void yonder_media_failure_text(const yonder_media_failure_t *f, char *out, size_
         const char *codec[2] = {f->sound, f->picture};
         const char *kind[2] = {"sound ", "picture "};
         bool unplayable[2] = {f->sound_unplayable, f->picture_unplayable};
+        bool first = !said && f->format[0] == '\0';
         for (int i = 0; i < 2; i++) {
             if (codec[i][0] == '\0')
                 continue;
-            put(&t, ", ");
+            put(&t, first ? " named " : ", ");
+            first = false;
             put(&t, kind[i]);
             put(&t, codec[i]);
             if (unplayable[i])

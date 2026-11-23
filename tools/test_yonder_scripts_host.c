@@ -13147,9 +13147,9 @@ static void media_failure_cases(void)
     }
     char text[4096];
     yonder_diag_render(g.page.diag, text, sizeof(text));
-    check(has(text, "\nFAILED media: http://x.test/a.mp3: audio 1, network: no memory or no thread to begin it (1)\n") &&
-          has(text, "\nFAILED media: http://x.test/c.mp4: video 1, network: no memory or no thread to begin it (1)\n") &&
-          has(text, "\nFAILED media: http://x.test/b.mp3: audio 2, network: no memory or no thread to begin it (1)\n"),
+    check(has(text, "\nFAILED media: http://x.test/a.mp3: audio 1, network: it could not begin: no memory, no thread or no sound output (no request made) (1)\n") &&
+          has(text, "\nFAILED media: http://x.test/c.mp4: video 1, network: it could not begin: no memory, no thread or no sound output (no request made) (1)\n") &&
+          has(text, "\nFAILED media: http://x.test/b.mp3: audio 2, network: it could not begin: no memory, no thread or no sound output (no request made) (1)\n"),
           "media failed: a session that never began, each element by its kind and place");
     if (!has(text, "FAILED media: http://x.test/b.mp3"))
         printf("%s\n", text);

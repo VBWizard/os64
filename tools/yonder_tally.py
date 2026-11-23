@@ -42,6 +42,7 @@ import argparse
 import collections
 import importlib.util
 import pathlib
+import re
 import sys
 
 
@@ -183,10 +184,15 @@ def failure_key(what, message):
     """What a FAILED line is ranked by: its kind (the first word of what
     failed) and its message. A picture's and a font's message begins with
     the file's own address, which would make every one unique, so for
-    those (and their fetches', and a media element's) the reason after
-    the last `: ` is the message."""
+    those (and their fetches') the reason after the last `: ` is the
+    message. A media element's is its class and its reason, without the
+    address, the element or the details in brackets after it."""
     kind = what.split(' ', 1)[0]
-    if kind in ('picture', 'font', 'picture-fetch', 'font-fetch', 'media') and ': ' in message:
+    if kind == 'media':
+        m = re.search(r', (network|decode|not supported|aborted|error \d+): (.*?) \((?:HTTP|no answer|a file|no request made)', message)
+        if m is not None:
+            return kind, m.group(1) + ': ' + m.group(2)
+    if kind in ('picture', 'font', 'picture-fetch', 'font-fetch') and ': ' in message:
         message = message.rsplit(': ', 1)[1]
     return kind, message
 

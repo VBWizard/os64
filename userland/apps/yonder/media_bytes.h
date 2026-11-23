@@ -73,8 +73,8 @@ bool yonder_media_accepts_ranges(const char *headers, size_t length);
 // empty when it carries neither, or when it does not fit.
 void yonder_media_validator(const char *headers, size_t length, char *out, size_t cap);
 // Content-Type's media type, without its parameters (`text/html` of
-// `text/html; charset=utf-8`), into `out`; empty when there is none, or
-// when it does not fit.
+// `text/html; charset=utf-8`), into `out`: the last one the head holds;
+// empty when there is none, or when that one does not fit.
 void yonder_media_content_type(const char *headers, size_t length, char *out, size_t cap);
 
 // What a failed element is recorded and said with (yonder.c's FAILED
@@ -86,10 +86,11 @@ typedef struct {
     int error;                  // MediaError's code (dom/media.h)
     const char *reason;         // MediaError.message
     bool fetched;               // from the network (else a file)
-    int status;                 // the failing answer's HTTP status, 0 none came
+    // The last request made, which a fetch's failure is the failure of:
+    int status;                 // its answer's HTTP status, 0 when no head came
     const char *type;           // that answer's Content-Type
-    uint64_t received;          // the bytes that came before it failed
-    uint64_t range_from;        // the failing request's first byte: 0 the first request, else a Range request
+    uint64_t received;          // the bytes it brought
+    uint64_t range_from;        // its first byte: 0 the first request, else a Range request
     const char *said;           // libmedia's own words for a failed open or decode
     const char *format;         // the container libmedia read it as
     const char *sound, *picture;    // the codecs it named
@@ -98,8 +99,8 @@ typedef struct {
 
 // The failure in words, into `out` (cut short to fit, always ended):
 // `video 2, not supported: The server answered 403 (HTTP 403, text/html,
-// 512 bytes received, the first request)`, and after a `;` what libmedia
-// said and named when it differs from the reason.
+// 0 bytes received, the first request)`, and after a `;` what libmedia
+// said, when it is not the reason, and what it named.
 void yonder_media_failure_text(const yonder_media_failure_t *f, char *out, size_t cap);
 
 #endif

@@ -77,8 +77,9 @@ void yonder_media_stop(void);
 // any thread may read it.
 const char *yonder_media_sounds(void);
 
-// NULL when it cannot begin (no memory, no thread): the element's network
-// error. Window thread, as are all of these.
+// NULL when it cannot begin (no memory, no thread, or the program's sound
+// output could not be made): the element's network error. Window thread,
+// as are all of these.
 yonder_media_t *yonder_media_open(const yonder_media_request_t *request);
 // The session ends: its threads are told to stop and the window frees it
 // once they have (yonder_media_reap). The pointer is dead on return.

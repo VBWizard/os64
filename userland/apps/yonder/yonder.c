@@ -13692,13 +13692,18 @@ static bool media_file_scheme(const char *url)
 static Page *page_of_host(const yonder_scripts_t *host);
 
 // A media element as a failure's record names it: its kind and its place
-// among its document's elements of that kind, in tree order ("video 2").
+// among its document's elements of that kind, in tree order ("video 2"),
+// or its kind alone when it is in no document (`new Audio()`).
 static void media_element_name(const os64_html_node_t *node, char *out, size_t cap)
 {
     bool video = is_video_node(node);
     const os64_html_node_t *top = node;
     while (top != NULL && top->parent != NULL)
         top = top->parent;
+    if (top == NULL || top->kind != OS64_HTML_DOCUMENT) {
+        os64_snprintf(out, cap, "%s, in no document", video ? "video" : "audio");
+        return;
+    }
     uint32_t n = 0;
     for (const os64_html_node_t *at = top; at != NULL;) {
         if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML &&
@@ -13726,10 +13731,11 @@ static void media_failed(uint64_t serial, const char *line, const os64_html_node
 {
     yonder_scripts_t *host = scripts_for(serial);
     Page *p = host != NULL ? page_of_host(host) : NULL;
-    char made[OS64_FETCH_URL_MAX + 160], element[16], name[128];
+    char made[OS64_FETCH_URL_MAX + 160], element[32], name[128];
     if (line == NULL) {
         media_element_name(node, element, sizeof(element));
-        os64_snprintf(made, sizeof(made), "%s: %s, network: %s", picture_name(url, name, sizeof(name)), element, why);
+        os64_snprintf(made, sizeof(made), "%s: %s, network: %s (no request made)", picture_name(url, name, sizeof(name)),
+                      element, why);
         line = made;
     }
     yonder_diag_failed(p != NULL ? p->diag : NULL, "media", line);
@@ -13755,14 +13761,14 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     // (BLOB_URLS.md § 1.8).
     os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(host), url);
     bool picture = is_video_node(node);
-    char element[16], name[128];
+    char element[32], name[128];
     media_element_name(node, element, sizeof(element));
     yonder_media_request_t r = {url,   page,    serial,  cors, g.way.agent, g.way.identity, blob, picture,
                                 element, picture_name(url, name, sizeof(name))};
     yonder_media_t *session = yonder_media_open(&r);
     os64_dom_blob_release(blob);
     if (session == NULL)
-        media_failed(serial, NULL, node, url, "no memory or no thread to begin it");
+        media_failed(serial, NULL, node, url, "it could not begin: no memory, no thread or no sound output");
     if (session != NULL && picture)
         video_add(node, session);
     return session;

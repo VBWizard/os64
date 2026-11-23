@@ -89,10 +89,11 @@
 // How often yonder's end looks for the threads to have let go.
 #define STOP_POLL_MS 10u
 
-// What the bytes' reader has heard of the fetch, for a failure's record
-// (yonder_media_failure_take): the last answer's status and Content-Type,
-// the bytes that came, and where the last request began (0: the first,
-// else a Range request).
+// What the bytes' reader has heard of the last request, for a failure's
+// record (yonder_media_failure_take): where it began (0: the first, else a
+// Range request), its answer's status and Content-Type (0 and "" before
+// its head), and the bytes it brought. Each request begins them again
+// (loader_start).
 typedef struct {
     int status;
     char type[48];
@@ -175,8 +176,8 @@ struct yonder_media {
     MediaHeard heard;               // the reader's; told to `heard_told` under `lock`
     // A failure's record, the window's: the element and its address as
     // the record names them, given at open.
-    char element[16];
-    char named[160];
+    char element[32];
+    char *named;
     // Under `lock`: what the reader had heard when it last told (bytes_arrival,
     // fail), what libmedia said and named of a failed open or decode
     // (session_facts), and whether the failure is on the record.
@@ -582,8 +583,10 @@ static int64_t store_read(void *ctx, uint8_t *out, size_t cap)
             m->arrived = true;
             continue;
         }
-        if (m->held && !fetch_restart(m, end))
+        if (m->held && !fetch_restart(m, end)) {
+            bytes_arrival(m);       // a restart that failed is the bytes' failure, told
             return -1;
+        }
         if (!pump(m) && !reader_wait(m, 200))
             return -1;
     }
@@ -613,8 +616,10 @@ static int64_t store_seek(void *ctx, uint64_t offset)
         plan = YONDER_MEDIA_SEEK_REFUSE;
     if (plan == YONDER_MEDIA_SEEK_REFUSE)
         return -1;
-    if (plan == YONDER_MEDIA_SEEK_JUMP && !fetch_restart(m, offset))
+    if (plan == YONDER_MEDIA_SEEK_JUMP && !fetch_restart(m, offset)) {
+        bytes_arrival(m);
         return -1;
+    }
     m->at = offset;
     return (int64_t)offset;
 }
@@ -742,7 +747,7 @@ static bool loader_start(yonder_media_t *m, uint64_t from)
         job->headers_len = os64_strlen(job->headers);
     }
     m->asked_from = from;
-    m->heard.from = from;
+    m->heard = (MediaHeard){.from = from};
     m->headed = false;
     way_origin_of(m->page_url, m->page != 0 ? m->page : 1, &job->request.origin);
     // HTML's CORS settings attribute: none is no-cors with credentials,
@@ -1172,6 +1177,7 @@ static void session_free(yonder_media_t *m)
     os64_bell_close(&m->bell);
     os64_free(m->bytes);
     os64_free(m->url);
+    os64_free(m->named);
     os64_dom_blob_release(m->blob);
     os64_free(m->page_url);
     os64_free(m);
@@ -1198,8 +1204,8 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     m->page_url = copy_text(r->page_url != NULL ? r->page_url : "about:blank");
     m->picture = r->picture;
     os64_strcopy(m->element, sizeof(m->element), r->element != NULL ? r->element : (r->picture ? "video" : "audio"));
-    os64_strcopy(m->named, sizeof(m->named), r->named != NULL ? r->named : r->url);
-    if (m->url == NULL || m->page_url == NULL || os64_bell_make(&m->bell) != 0) {
+    m->named = copy_text(r->named != NULL ? r->named : r->url);
+    if (m->url == NULL || m->page_url == NULL || m->named == NULL || os64_bell_make(&m->bell) != 0) {
         session_free(m);
         return NULL;
     }
@@ -1334,7 +1340,7 @@ bool yonder_media_failure_take(yonder_media_t *m, char *out, size_t cap)
         .said = result != 0 ? os64_media_strerror(result) : "", .format = info.format, .sound = info.codec,
         .picture = info.picture_codec, .sound_unplayable = info.sound == OS64_MEDIA_UNPLAYABLE,
         .picture_unplayable = info.picture == OS64_MEDIA_UNPLAYABLE};
-    char text[384];
+    char text[512];
     yonder_media_failure_text(&f, text, sizeof(text));
     os64_snprintf(out, cap, "%s: %s", m->named, text);
     return true;

@@ -173,10 +173,10 @@ static void failure_cases(void)
     check(small[0] == '\0' && type[0] == '\0', "type: none, or one that does not fit, is empty");
 
     char line[256];
-    yonder_media_failure_t refused = {"video 2", 4, "The server answered 403", true, 403, "text/html", 512, 0,
+    yonder_media_failure_t refused = {"video 2", 4, "The server answered 403", true, 403, "text/html", 0, 0,
                                       "", "", "", "", false, false};
     yonder_media_failure_text(&refused, line, sizeof(line));
-    check(!strcmp(line, "video 2, not supported: The server answered 403 (HTTP 403, text/html, 512 bytes "
+    check(!strcmp(line, "video 2, not supported: The server answered 403 (HTTP 403, text/html, 0 bytes "
                         "received, the first request)"),
           "failure: a refused fetch, its status, type, bytes and request");
     yonder_media_failure_t broken = {"audio 1", 2, "The connection failed part way", true, 206, "audio/mpeg", 1,
@@ -203,6 +203,16 @@ static void failure_cases(void)
     check(!strcmp(line, "video 4, decode: no reason given (no answer, 0 bytes received, the first request; "
                         "libmedia: damaged past decoding)"),
           "failure: no reason and no answer said so, libmedia's words kept");
+    yonder_media_failure_t named = {"audio 3", 77, "", true, 200, "", 9, 0, "", "", "opus", "", true, false};
+    yonder_media_failure_text(&named, line, sizeof(line));
+    check(!strcmp(line, "audio 3, error 77: no reason given (HTTP 200, 9 bytes received, the first request; "
+                        "libmedia named sound opus (not decoded here))"),
+          "failure: an unknown class by its number, a codec named with nothing else said");
+    const char *twice = "Content-Type: audio/mpeg\r\nContent-Type: video/mp4\r\n";
+    yonder_media_content_type(twice, strlen(twice), type, sizeof(type));
+    const char *long_last = "Content-Type: audio/mpeg\r\nContent-Type: application/x-a-very-long-made-up-type\r\n";
+    yonder_media_content_type(long_last, strlen(long_last), small, sizeof(small));
+    check(!strcmp(type, "video/mp4") && small[0] == '\0', "type: the last one, empty when the last does not fit");
     char cut[24];
     yonder_media_failure_text(&refused, cut, sizeof(cut));
     check(strlen(cut) == sizeof(cut) - 1 && !strncmp(cut, "video 2, not supported:", sizeof(cut) - 1),
