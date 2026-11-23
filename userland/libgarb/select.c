@@ -1459,21 +1459,32 @@ bool garb_selector_names_host(const garb_selectors_t *list, int32_t i)
     return false;
 }
 
-// The largest back index an :nth-last's An+B can match (select.h § THE
-// BACK FORMS): B for A <= 0 (it matches B, B + A, ... down to 1), none for
-// B < 1 there, and anywhere for A > 0 or a B past the cap.
-static void back_need(uint8_t *need, garb_selector_dependencies_t *out, int32_t a, int32_t b)
+// The number past which a position form's An+B answers alike (select.h
+// § THE POSITION FORMS): B for A <= 0 (it matches B, B + A, ... down to
+// 1, none past B), B - 1 for A = 1 (every index from B on), and none for
+// A > 1, which never settles; nothing when no index or every index
+// matches. `bounded` and `unbounded` are what a reader reads for each.
+static uint8_t position_reads(int32_t a, int32_t b, uint8_t bounded, uint8_t unbounded, int32_t *need)
 {
-    if (a > 0 || b > GARB_BACK_INDEX_MAX) out->back_unbounded = true;
-    else if (b >= 1 && b > *need) *need = (uint8_t)b;
+    // In 64 bits: a B parsed as INT32_MIN has no B - 1 in 32.
+    int64_t n = a > 1 ? GARB_INDEX_MAX + 1 : a == 1 ? (int64_t)b - 1 : b;
+    *need = n > GARB_INDEX_MAX || n < 0 ? 0 : (int32_t)n;
+    return n > GARB_INDEX_MAX ? unbounded : n >= 1 ? bounded : 0;
+}
+static void index_need(uint8_t *need, bool *unbounded, int32_t a, int32_t b)
+{
+    int32_t n;
+    if (position_reads(a, b, 1, 2, &n) == 2) *unbounded = true;
+    else if (n > *need) *need = (uint8_t)n;
 }
 
 // Walk the parsed form, including :is/:not/:where and nth-child's filter.
 // `anchored`: the list sits in a compound left of a combinator, so a
 // :has() anywhere in it is an anchor (garb_selectors_anchors) rather than
 // an ancestor dependency. `counted`: the list is an nth-child's `of S`, or
-// inside one.
-static void dependencies(const List *list, bool anchored, bool counted, garb_selector_dependencies_t *out)
+// inside one. `in_has`: the list is a :has() argument, or inside one.
+static void dependencies(const List *list, bool anchored, bool counted, bool in_has,
+                         garb_selector_dependencies_t *out)
 {
     for (int32_t i = 0; i < list->n; ++i) {
         const Complex *x = &list->v[i];
@@ -1486,16 +1497,27 @@ static void dependencies(const List *list, bool anchored, bool counted, garb_sel
                 if (s->kind == S_ATTR && ascii_ieq(s->name, s->len, "style"))
                     out->style_attribute = true;
                 if (s->kind != S_PSEUDO) continue;
+                bool *fu = &out->front_unbounded, *bu = &out->back_unbounded;
+                switch (in_has ? P_NEVER : s->pseudo) {
+                case P_FIRST_CHILD: index_need(&out->front_child, fu, 0, 1); break;
+                case P_FIRST_OF_TYPE: index_need(&out->front_type, fu, 0, 1); break;
+                case P_NTH_CHILD: if (!s->list) index_need(&out->front_child, fu, s->a, s->b); break;
+                case P_NTH_OF_TYPE: index_need(&out->front_type, fu, s->a, s->b); break;
+                case P_ONLY_CHILD:
+                    index_need(&out->front_child, fu, 0, 1);
+                    index_need(&out->back_child, bu, 0, 1);
+                    break;
+                case P_LAST_CHILD: index_need(&out->back_child, bu, 0, 1); break;
+                case P_ONLY_OF_TYPE:
+                    index_need(&out->front_type, fu, 0, 1);
+                    index_need(&out->back_type, bu, 0, 1);
+                    break;
+                case P_LAST_OF_TYPE: index_need(&out->back_type, bu, 0, 1); break;
+                case P_NTH_LAST_CHILD: if (!s->list) index_need(&out->back_child, bu, s->a, s->b); break;
+                case P_NTH_LAST_OF_TYPE: index_need(&out->back_type, bu, s->a, s->b); break;
+                default: break;
+                }
                 switch (s->pseudo) {
-                case P_FIRST_CHILD: case P_FIRST_OF_TYPE:
-                case P_NTH_CHILD: case P_NTH_OF_TYPE:
-                    out->position_front = true; break;
-                case P_ONLY_CHILD: out->position_front = true; back_need(&out->back_child, out, 0, 1); break;
-                case P_LAST_CHILD: back_need(&out->back_child, out, 0, 1); break;
-                case P_ONLY_OF_TYPE: out->position_front = true; back_need(&out->back_type, out, 0, 1); break;
-                case P_LAST_OF_TYPE: back_need(&out->back_type, out, 0, 1); break;
-                case P_NTH_LAST_CHILD: if (!s->list) back_need(&out->back_child, out, s->a, s->b); break;
-                case P_NTH_LAST_OF_TYPE: back_need(&out->back_type, out, s->a, s->b); break;
                 case P_EMPTY: out->parent_state = true; break;
                 case P_HAS:
                     out->ancestors |= !left;
@@ -1514,7 +1536,7 @@ static void dependencies(const List *list, bool anchored, bool counted, garb_sel
                 }
                 bool of = (s->pseudo == P_NTH_CHILD || s->pseudo == P_NTH_LAST_CHILD) && s->list;
                 out->filtered |= of;
-                if (s->list) dependencies(s->list, left, counted || of, out);
+                if (s->list) dependencies(s->list, left, counted || of, in_has || s->pseudo == P_HAS, out);
             }
         }
     }
@@ -1522,7 +1544,7 @@ static void dependencies(const List *list, bool anchored, bool counted, garb_sel
 garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list)
 {
     garb_selector_dependencies_t out = {0};
-    if (list) dependencies(&list->list, false, false, &out);
+    if (list) dependencies(&list->list, false, false, false, &out);
     return out;
 }
 
@@ -1621,6 +1643,218 @@ bool garb_anchor_filters_pass(const garb_anchor_t *anchor, const os64_html_node_
             return false;
     return true;
 }
+// Whether `element` passes every filter of compound `c` (filters()).
+static bool filters_pass(const garb_selectors_t *sel, const Compound *c, const os64_html_node_t *element)
+{
+    for (int32_t k = 0; k < c->n; ++k)
+        if (filters(&c->s[k]) && !simple_matches(sel, &c->s[k], element, NULL))
+            return false;
+    return true;
+}
+
+// ── A subject :has() and a change of children (select.h) ───────────────
+
+// Whether a simple selector, or one inside its argument, reads what a
+// change of children can turn at an element it neither brings nor takes:
+// a position, :empty, a fieldset's children (:enabled, :disabled and the
+// two that read them), a negation, or a sibling combinator in a nested
+// selector.
+static bool reads_around(const Simple *s)
+{
+    if (s->kind != S_PSEUDO) return false;
+    switch (s->pseudo) {
+    case P_FIRST_CHILD: case P_LAST_CHILD: case P_ONLY_CHILD: case P_FIRST_OF_TYPE: case P_LAST_OF_TYPE:
+    case P_ONLY_OF_TYPE: case P_NTH_CHILD: case P_NTH_LAST_CHILD: case P_NTH_OF_TYPE: case P_NTH_LAST_OF_TYPE:
+    case P_EMPTY: case P_ENABLED: case P_DISABLED: case P_READ_ONLY: case P_READ_WRITE: case P_NOT: case P_HAS:
+        return true;
+    default: break;
+    }
+    for (int32_t i = 0; s->list && i < s->list->n; i++) {
+        const Complex *x = &s->list->v[i];
+        for (int32_t j = 0; j < x->n; j++) {
+            if (j > 0 && (x->c[j].left == C_NEXT || x->c[j].left == C_SUBSEQUENT)) return true;
+            for (int32_t k = 0; k < x->c[j].n; k++)
+                if (reads_around(&x->c[j].s[k])) return true;
+        }
+    }
+    return false;
+}
+enum { ASK_ALWAYS, ASK_ROOTS, ASK_SUBTREES };
+// How a change of children is asked of one complex of a :has() argument.
+static int children_ask(const Complex *x)
+{
+    for (int32_t j = 0; j < x->n; j++) {
+        const Compound *c = &x->c[j];
+        if ((j > 0 && (c->left == C_NEXT || c->left == C_SUBSEQUENT)) || !has_filter(c)) return ASK_ALWAYS;
+        for (int32_t k = 0; k < c->n; k++)
+            if (reads_around(&c->s[k])) return ASK_ALWAYS;
+    }
+    bool beside = x->relative == C_CHILD || x->relative == C_NEXT || x->relative == C_SUBSEQUENT;
+    return x->n == 1 && beside ? ASK_ROOTS : ASK_SUBTREES;
+}
+static const os64_html_node_t *next_under(const os64_html_node_t *x, const os64_html_node_t *root)
+{
+    if (x->first_child) return x->first_child;
+    while (x != root && !x->next) x = x->parent;
+    return x == root ? NULL : x->next;
+}
+bool garb_has_subject_children_may_turn(const garb_anchor_t *anchor, const os64_html_node_t *const *roots,
+                                        size_t n, bool (*stale)(void *, const os64_html_node_t *), void *ctx)
+{
+    const Compound *c = anchor->compound;
+    for (int32_t k = 0; k < c->n; ++k) {
+        const Simple *s = &c->s[k];
+        if (s->kind != S_PSEUDO || s->pseudo != P_HAS || s->list == NULL) continue;
+        for (int32_t i = 0; i < s->list->n; i++) {
+            const Complex *x = &s->list->v[i];
+            int ask = children_ask(x);
+            if (ask == ASK_ALWAYS) return true;
+            // An element brought between two parts them, and one taken from
+            // between two makes them neighbours: either way the next element
+            // of the one before changed, matching or not.
+            for (size_t r = 0; x->relative == C_NEXT && r < n; r++)
+                if (is_el(roots[r])) return true;
+            for (size_t r = 0; r < n; r++)
+                for (const os64_html_node_t *e = roots[r]; e; e = ask == ASK_ROOTS ? NULL : next_under(e, roots[r])) {
+                    if (!is_el(e)) continue;
+                    if (stale != NULL && stale(ctx, e)) return true;
+                    for (int32_t j = 0; j < x->n; j++)
+                        if (filters_pass(anchor->list, &x->c[j], e)) return true;
+                }
+        }
+    }
+    return false;
+}
+
+// ── The readers (select.h § A READER) ──────────────────────────────────
+
+typedef struct {
+    uint8_t reach;
+    bool down;
+} Reach;
+// What compound j of `x` reaches when its match turns: from the
+// combinators right of it, then, where its own run of sibling combinators
+// reaches the end of its complex, from `around`, the reach of the compound
+// its list is nested in.
+static Reach reach_right(const Complex *x, int32_t j, Reach around)
+{
+    int32_t sib = 0;
+    Comb first = C_NONE;
+    bool down = false;
+    for (int32_t r = j + 1; r < x->n && !down; r++) {
+        Comb comb = x->c[r].left;
+        if (comb == C_NEXT || comb == C_SUBSEQUENT) { if (sib++ == 0) first = comb; }
+        else down = true;
+    }
+    bool continues = !down && around.reach != GARB_REACH_SELF;
+    Reach out = {GARB_REACH_SELF, down || around.down};
+    if (sib == 0) out.reach = down ? GARB_REACH_SELF : around.reach;
+    else if (first == C_SUBSEQUENT) out.reach = GARB_REACH_FOLLOWING;
+    else out.reach = sib == 1 && !continues ? GARB_REACH_NEXT : GARB_REACH_CHAIN;
+    return out;
+}
+// What a simple selector itself reads (GARB_READS_*): a position form, by
+// whether it settles (position_reads), or :empty.
+static uint8_t simple_reads(const Simple *s)
+{
+    int32_t need;
+    if (s->kind != S_PSEUDO) return 0;
+    switch (s->pseudo) {
+    case P_FIRST_CHILD: return GARB_READS_FRONT;
+    case P_FIRST_OF_TYPE: return GARB_READS_FRONT_TYPE;
+    case P_LAST_CHILD: return GARB_READS_BACK;
+    case P_LAST_OF_TYPE: return GARB_READS_BACK_TYPE;
+    case P_ONLY_CHILD: return GARB_READS_FRONT | GARB_READS_BACK;
+    case P_ONLY_OF_TYPE: return GARB_READS_FRONT_TYPE | GARB_READS_BACK_TYPE;
+    case P_NTH_CHILD:
+        return s->list ? 0 : position_reads(s->a, s->b, GARB_READS_FRONT, GARB_READS_FRONT_ANY, &need);
+    case P_NTH_OF_TYPE: return position_reads(s->a, s->b, GARB_READS_FRONT_TYPE, GARB_READS_FRONT_ANY, &need);
+    case P_NTH_LAST_CHILD:
+        return s->list ? 0 : position_reads(s->a, s->b, GARB_READS_BACK, GARB_READS_BACK_ANY, &need);
+    case P_NTH_LAST_OF_TYPE: return position_reads(s->a, s->b, GARB_READS_BACK_TYPE, GARB_READS_BACK_ANY, &need);
+    case P_EMPTY: return GARB_READS_EMPTY;
+    default: return 0;
+    }
+}
+// `around`: the reach of the compound `list` is nested in. `foreign`: the
+// list is :host()'s or ::slotted()'s, naming the host or the slotted
+// element. `negated`: inside a :not(). `outer[0..nouter)`: the enclosing
+// compounds whose filters a subject of `list` must pass too, and `inherit`
+// / `inherit_untested` what they read, which an :is() or :where()
+// alternative carries as its own.
+static void readers(const garb_selectors_t *sel, const List *list, Reach around, bool foreign, bool negated,
+                    const Compound *const *outer, int32_t nouter, uint8_t inherit, uint8_t inherit_untested,
+                    garb_reader_t *out, int32_t cap, int32_t *n)
+{
+    for (int32_t i = 0; i < list->n; ++i) {
+        const Complex *x = &list->v[i];
+        bool slotted = false;
+        for (int32_t k = 0; x->n > 0 && k < x->c[x->n - 1].n; ++k)
+            slotted |= x->c[x->n - 1].s[k].kind == S_PSEUDO && x->c[x->n - 1].s[k].pseudo == P_SLOTTED;
+        for (int32_t j = 0; j < x->n; ++j) {
+            const Compound *c = &x->c[j];
+            bool subject = j == x->n - 1;
+            bool own = !(negated && subject);
+            Reach reach = reach_right(x, j, around);
+            // What :host() and ::slotted() test is the host or the slotted
+            // element itself: its subtree mark carries the shadow tree or
+            // what is slotted, and a sibling combinator inside reaches it.
+            reach.down |= foreign;
+            // A selector ending in ::slotted() styles what is assigned to the
+            // slot its subject names: the slot's subtree mark carries those,
+            // so whatever reaches the slot reaches its subtree.
+            reach.down |= slotted;
+            uint8_t reads = 0;
+            for (int32_t k = 0; k < c->n; ++k) reads |= simple_reads(&c->s[k]);
+            uint8_t untested = own ? 0 : reads;
+            if (subject) { reads |= inherit; untested |= inherit_untested; }
+            // What the lists this compound holds are given: its filters and
+            // its outer ones, for the subjects of an :is(), :where() or
+            // :not(); and what it reads, for an :is()'s or :where()'s.
+            const Compound *inner[GARB_ANCHOR_FILTERS];
+            int32_t ninner = 0;
+            for (int32_t o = 0; subject && o < nouter; o++) inner[ninner++] = outer[o];
+            if (own && has_filter(c) && ninner < GARB_ANCHOR_FILTERS) inner[ninner++] = c;
+            bool alternatives = false;
+            for (int32_t k = 0; k < c->n; ++k) {
+                const Simple *s = &c->s[k];
+                if (s->list == NULL || s->kind != S_PSEUDO) continue;
+                bool of = (s->pseudo == P_NTH_CHILD || s->pseudo == P_NTH_LAST_CHILD);
+                if (s->pseudo == P_HAS || of) continue;
+                bool alt = s->pseudo == P_IS || s->pseudo == P_WHERE, negate = s->pseudo == P_NOT;
+                bool host = s->pseudo == P_HOST || s->pseudo == P_SLOTTED;
+                alternatives |= alt;
+                readers(sel, s->list, reach, foreign || host, negated || negate, inner, alt || negate ? ninner : 0,
+                        alt ? reads : 0, alt ? untested : 0, out, cap, n);
+            }
+            if (reach.reach != GARB_REACH_SELF) reads |= GARB_READS_NEIGHBOURS;
+            if (alternatives || reads == 0) continue;
+            if (*n < cap) {
+                garb_reader_t *r = &out[*n];
+                *r = (garb_reader_t){sel, c, .reads = reads, .untested = untested, .reach = reach.reach,
+                                     .own = own, .down = reach.down};
+                for (int32_t o = 0; subject && o < nouter; o++) r->outer[r->nouter++] = outer[o];
+                r->bare = !(own && has_filter(c)) && r->nouter == 0;
+            }
+            ++*n;
+        }
+    }
+}
+int32_t garb_selectors_readers(const garb_selectors_t *list, garb_reader_t *out, int32_t cap)
+{
+    int32_t n = 0;
+    if (list) readers(list, &list->list, (Reach){GARB_REACH_SELF, false}, false, false, NULL, 0, 0, 0, out, cap, &n);
+    return n;
+}
+bool garb_reader_filters_pass(const garb_reader_t *reader, const os64_html_node_t *element)
+{
+    if (reader->bare) return true;
+    if (!is_el(element)) return false;
+    for (int32_t o = 0; o < reader->nouter; o++)
+        if (!filters_pass(reader->list, reader->outer[o], element)) return false;
+    return !reader->own || filters_pass(reader->list, reader->compound, element);
+}
+
 // A simple selector a style reader narrows by (select.h § A STYLE READER):
 // exact, and a function of the element's own unmoved state.
 static bool narrows(const Simple *s)

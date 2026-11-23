@@ -2322,7 +2322,20 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         garb_back_work_t back = garb_cascade_back_work(cascade);
         yonder_lt_back(&s_lt, os64_micros(), back.walks, back.walked, back.turned);
         garb_has_subject_work_t hs = garb_cascade_has_subject_work(cascade);
-        yonder_lt_has_subjects(&s_lt, os64_micros(), hs.visited, hs.marked, hs.turned_away, hs.entries, hs.bare);
+        yonder_lt_has_subjects(&s_lt, os64_micros(), hs.visited, hs.marked, hs.turned_away, hs.turned_away_change,
+                               hs.entries, hs.bare);
+        garb_reader_work_t rw = garb_cascade_reader_work(cascade);
+        yonder_lt_readers_t lr = {.front_walks = rw.front_walks, .front_walked = rw.front_walked,
+                                  .front_turned = rw.front_turned, .walks = rw.walks, .walked = rw.walked,
+                                  .readers = (uint64_t)rw.readers, .bare = (uint64_t)rw.bare};
+        static const char *asker_names[GARB_ASKERS];
+        for (int k = 0; k < GARB_ASKERS && k < YONDER_LT_ASKERS; k++) {
+            lr.asked[k] = rw.asked[k];
+            lr.passed[k] = rw.passed[k];
+            lr.reached[k] = rw.reached[k];
+            if (asker_names[k] == NULL) asker_names[k] = garb_asker_name((garb_asker_t)k);
+        }
+        yonder_lt_readers(&s_lt, os64_micros(), &lr, GARB_ASKERS, asker_names);
         garb_update_marks_t marks = garb_cascade_update_marks(cascade);
         static const char *mark_names[GARB_MARKS];
         if (mark_names[0] == NULL)
