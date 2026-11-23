@@ -13,6 +13,9 @@
 
 static int failures, checks;
 
+// The grid a layer's own corner is the group's: where most layers here lie.
+static const flow_point_t ORIGIN = {0, 0};
+
 static void expect(const char *what, int ok, const char *detail)
 {
     checks++;
@@ -36,7 +39,7 @@ static uint32_t one(uint32_t rgb, flow_filter_t f)
 {
     uint32_t px = 0xff000000u | rgb;
     void *work = malloc(yonder_filter_work_bytes(1, 1, &f, 1));
-    yonder_filter_run(&px, 1, 1, &f, 1, 0, work);
+    yonder_filter_run(&px, 1, 1, &f, 1, 0, ORIGIN, work);
     free(work);
     return px;
 }
@@ -78,7 +81,7 @@ static void colour_cases(void)
     flow_filter_t two[2] = {fn(FLOW_FILTER_BRIGHTNESS, 2), fn(FLOW_FILTER_BRIGHTNESS, 0.5)};
     uint32_t px = 0xffc80000u;
     void *work = malloc(yonder_filter_work_bytes(1, 1, two, 2));
-    yonder_filter_run(&px, 1, 1, two, 2, 0, work);
+    yonder_filter_run(&px, 1, 1, two, 2, 0, ORIGIN, work);
     free(work);
     expect("colour: each function is held before the next", px == 0xff800000u, NULL);
     // An amount as large as a double holds reaches the pixels as infinity:
@@ -96,7 +99,7 @@ static void colour_cases(void)
     uint32_t half = 0x80800000u;
     flow_filter_t gray = fn(FLOW_FILTER_GRAYSCALE, 1);
     work = malloc(yonder_filter_work_bytes(1, 1, &gray, 1));
-    yonder_filter_run(&half, 1, 1, &gray, 1, 0, work);
+    yonder_filter_run(&half, 1, 1, &gray, 1, 0, ORIGIN, work);
     free(work);
     uint32_t g = (uint32_t)(0.2126 * 128.0 / 255.0 * 255.0 + 0.5);
     char detail[64];
@@ -180,7 +183,7 @@ static void blur_cases(void)
     flow_filter_t f = fn(FLOW_FILTER_BLUR, 2);
     f.shadow.blur = 4;
     void *work = malloc(yonder_filter_work_bytes(W, W, &f, 1));
-    yonder_filter_run(px, W, W, &f, 1, 0, work);
+    yonder_filter_run(px, W, W, &f, 1, 0, ORIGIN, work);
     free(work);
     int mid = (S0 + S1) / 2;
     bool symmetric = true, premultiplied = true;
@@ -226,7 +229,7 @@ static void shadow_cases(void)
     f.shadow.x = 3;
     f.shadow.colour = 0x7fff0000u;     // flow's: 127 transparent, so 128 of it there
     void *work = malloc(yonder_filter_work_bytes(W, W, &f, 1));
-    yonder_filter_run(px, W, W, &f, 1, 0, work);
+    yonder_filter_run(px, W, W, &f, 1, 0, ORIGIN, work);
     expect("drop-shadow: the layer stays over its shadow", px[3 * W + 4] == 0xffffffffu, NULL);
     char detail[48];
     snprintf(detail, sizeof(detail), "got %08x", px[3 * W + 7]);
@@ -237,7 +240,7 @@ static void shadow_cases(void)
     memset(px, 0, sizeof(px));
     px[3 * W + 3] = 0xffffffffu;
     f.shadow.current = true;
-    yonder_filter_run(px, W, W, &f, 1, 0x000000ffu, work);
+    yonder_filter_run(px, W, W, &f, 1, 0x000000ffu, ORIGIN, work);
     expect("drop-shadow: currentColor is the colour handed over", px[3 * W + 6] == 0xff0000ffu, NULL);
     free(work);
 }
@@ -430,62 +433,296 @@ static uint32_t random_pixel(uint32_t *state)
     return a << 24 | r << 16 | g << 8 | b;
 }
 
-// The blur equals the reference on layers of many shapes: a line one pixel
-// thin either way, widths across a strip's edge, a radius past the layer,
-// and the largest radius held; and the big blurs a video page draws, timed.
+// The largest difference in any channel between two layers of `n`.
+static int largest_difference(const uint32_t *a, const uint32_t *b, size_t n)
+{
+    int most = 0;
+    for (size_t i = 0; i < n; i++)
+        for (int c = 0; c < 32; c += 8) {
+            int d = abs((int)((a[i] >> c) & 0xffu) - (int)((b[i] >> c) & 0xffu));
+            most = d > most ? d : most;
+        }
+    return most;
+}
+
+static flow_filter_t blur_of(int32_t blur)
+{
+    flow_filter_t f = fn(FLOW_FILTER_BLUR, blur / 2.0);
+    f.shadow.blur = blur;
+    return f;
+}
+
+// The contract (filter.c § A large blur): within 2 of 255 of three boxes at
+// full size wherever the content stays a reach inside its layer; at an edge
+// the content touches — a layer cut by an ancestor's clip — the bound
+// measured for the floor, 6.
+#define CONTRACT_INSIDE 2
+#define CONTRACT_AT_A_CUT 6
+
+// One blur over a copy of `src` (w by h) at `grid`, into a new layer.
+static uint32_t *blurred(const uint32_t *src, int32_t w, int32_t h, int32_t blur, flow_point_t grid)
+{
+    size_t n = (size_t)w * (size_t)h;
+    uint32_t *a = malloc(n * sizeof(*a));
+    memcpy(a, src, n * sizeof(*a));
+    flow_filter_t f = blur_of(blur);
+    void *work = malloc(yonder_filter_work_bytes(w, h, &f, 1));
+    yonder_filter_run(a, w, h, &f, 1, 0, grid, work);
+    free(work);
+    return a;
+}
+
+// The blur equals the reference, to the bit, where it is three boxes at
+// full size, on layers of many shapes: a line one pixel thin either way,
+// widths across a strip's edge, a radius past the layer. Past the floor it
+// is made on a reduced copy and held to the contract instead, at a cut,
+// since the random pixels touch every edge of the same shapes — narrower
+// and shorter than a reduction's square, one reduced pixel either way,
+// sizes no square divides — up to the largest radius held. And the big
+// blurs a video page draws, timed, inside the contract too: noise to the
+// edge.
 static void blur_reference_cases(void)
 {
     static const int32_t shapes[][2] = {{1, 1}, {1, 37}, {37, 1}, {15, 9}, {16, 16}, {17, 40}, {33, 5},
-                                        {64, 63}, {100, 3}, {3, 100}, {250, 120}};
-    static const int32_t blurs[] = {1, 2, 3, 7, 20, 61, 199, 200, 500};
+                                        {64, 63}, {100, 3}, {3, 100}, {250, 120}, {7, 9}, {8, 8}};
+    static const int32_t blurs[] = {1, 2, 3, 7, 13, 14, 20, 28, 30, 55, 56, 61, 199, 200, 500};
     uint32_t state = 12345;
-    int same = 1;
-    char first[96] = "";
+    int same = 1, most = 0, plain = 0, reduced = 0;
+    char first[96] = "", worst[96] = "";
     for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); s++)
         for (size_t b = 0; b < sizeof(blurs) / sizeof(blurs[0]); b++) {
             int32_t w = shapes[s][0], h = shapes[s][1];
             size_t n = (size_t)w * (size_t)h;
-            uint32_t *a = malloc(n * sizeof(*a)), *ref = malloc(n * sizeof(*ref));
+            uint32_t *src = malloc(n * sizeof(*src)), *ref = malloc(n * sizeof(*ref));
             for (size_t i = 0; i < n; i++)
-                a[i] = ref[i] = random_pixel(&state);
-            flow_filter_t f = fn(FLOW_FILTER_BLUR, blurs[b] / 2.0);
-            f.shadow.blur = blurs[b];
-            void *work = malloc(yonder_filter_work_bytes(w, h, &f, 1));
-            yonder_filter_run(a, w, h, &f, 1, 0, work);
+                src[i] = ref[i] = random_pixel(&state);
+            uint32_t *a = blurred(src, w, h, blurs[b], ORIGIN);
             ref_blur(ref, w, h, blurs[b]);
-            if (memcmp(a, ref, n * sizeof(*a)) != 0 && same) {
-                same = 0;
-                snprintf(first, sizeof(first), "%dx%d, blur %d", (int)w, (int)h, (int)blurs[b]);
+            if (yonder_filter_reduction(blurs[b]) == 1) {
+                plain++;
+                if (memcmp(a, ref, n * sizeof(*a)) != 0 && same) {
+                    same = 0;
+                    snprintf(first, sizeof(first), "%dx%d, blur %d", (int)w, (int)h, (int)blurs[b]);
+                }
+            } else {
+                reduced++;
+                int d = largest_difference(a, ref, n);
+                if (d > most) {
+                    most = d;
+                    snprintf(worst, sizeof(worst), "%d of 255 at %dx%d, blur %d", d, (int)w, (int)h,
+                             (int)blurs[b]);
+                }
             }
-            free(work);
+            free(src);
             free(a);
             free(ref);
         }
-    expect("blur: the strip-wise blur equals the column-wise reference to the bit", same, first);
+    expect("blur: three boxes at full size equal the column-wise reference to the bit", same && plain > 0,
+           first);
+    expect("blur: a reduced blur on any shape is within the contract at a cut", reduced > 0 &&
+           most <= CONTRACT_AT_A_CUT, worst);
     // The video page's two: blur(15) over 1780x1002 and blur(40) over
     // 1430x743 (shadow blurs 30 and 80), timed each way.
     static const int32_t big[][3] = {{1780, 1002, 30}, {1430, 743, 80}};
     for (int k = 0; k < 2; k++) {
         int32_t w = big[k][0], h = big[k][1];
         size_t n = (size_t)w * (size_t)h;
-        uint32_t *a = malloc(n * sizeof(*a)), *ref = malloc(n * sizeof(*ref));
+        uint32_t *src = malloc(n * sizeof(*src)), *ref = malloc(n * sizeof(*ref));
         for (size_t i = 0; i < n; i++)
-            a[i] = ref[i] = random_pixel(&state);
-        flow_filter_t f = fn(FLOW_FILTER_BLUR, big[k][2] / 2.0);
-        f.shadow.blur = big[k][2];
-        void *work = malloc(yonder_filter_work_bytes(w, h, &f, 1));
+            src[i] = ref[i] = random_pixel(&state);
         clock_t t0 = clock();
-        yonder_filter_run(a, w, h, &f, 1, 0, work);
+        uint32_t *a = blurred(src, w, h, big[k][2], ORIGIN);
         clock_t t1 = clock();
         ref_blur(ref, w, h, big[k][2]);
         clock_t t2 = clock();
-        expect("blur: the video page's big blurs equal the reference", memcmp(a, ref, n * sizeof(*a)) == 0, NULL);
-        printf("  blur %d over %dx%d: %.1f ms, the reference %.1f ms (host, sanitizers on)\n", (int)big[k][2],
-               (int)w, (int)h, (t1 - t0) * 1000.0 / CLOCKS_PER_SEC, (t2 - t1) * 1000.0 / CLOCKS_PER_SEC);
-        free(work);
+        expect("blur: the video page's big blurs are within the contract at a cut",
+               largest_difference(a, ref, n) <= CONTRACT_AT_A_CUT, NULL);
+        printf("  blur %d over %dx%d at 1/%d: %.1f ms, the reference %.1f ms (host, sanitizers on)\n",
+               (int)big[k][2], (int)w, (int)h, (int)yonder_filter_reduction(big[k][2]),
+               (t1 - t0) * 1000.0 / CLOCKS_PER_SEC, (t2 - t1) * 1000.0 / CLOCKS_PER_SEC);
+        free(src);
         free(a);
         free(ref);
     }
+}
+
+// The contract's layers (filter.c § A large blur): `kind` 0 a hard-edged
+// opaque white square, 1 an opaque gradient filling it, 2 opaque noise, 3 a
+// red disc whose alpha fades and steps, 4 a picture's smooth shading and
+// edges; `cw` by `ch` of content inside a transparent `margin`.
+static uint32_t *contract_layer(int kind, int32_t cw, int32_t ch, int32_t margin, int32_t *w, int32_t *h)
+{
+    *w = cw + 2 * margin;
+    *h = ch + 2 * margin;
+    uint32_t *px = calloc((size_t)*w * (size_t)*h, sizeof(*px));
+    uint32_t state = 777;
+    for (int32_t y = 0; y < ch; y++)
+        for (int32_t x = 0; x < cw; x++) {
+            uint32_t p = 0;
+            double u = (double)x / cw, v = (double)y / ch;
+            if (kind == 0) {
+                if (u >= 0.25 && u < 0.75 && v >= 0.25 && v < 0.75)
+                    p = 0xffffffffu;
+            } else if (kind == 1) {
+                uint32_t g = (uint32_t)(x * 255 / (cw - 1));
+                p = 0xff000000u | g << 16 | (255 - g) << 8 | (uint32_t)(y * 255 / (ch - 1));
+            } else if (kind == 2) {
+                state = state * 1664525u + 1013904223u;
+                p = 0xff000000u | (state >> 8);
+            } else if (kind == 3) {
+                double d = hypot(u - 0.5, v - 0.5);
+                double a = d < 0.3 ? 1 : d < 0.4 ? (0.4 - d) / 0.1 : 0;
+                if (u > 0.5 && a > 0.5)
+                    a = 0.5;
+                uint32_t al = (uint32_t)(a * 255 + 0.5);
+                p = al << 24 | al << 16 | (al / 3) << 8;
+            } else {
+                double s = 0.5 + 0.25 * sin(u * 9) * cos(v * 7) + (u + v > 1.1 ? 0.2 : 0);
+                uint32_t r = (uint32_t)(s * 255), g = (uint32_t)(255 * u), b = (uint32_t)(255 * (1 - v));
+                p = 0xff000000u | (r > 255 ? 255 : r) << 16 | g << 8 | b;
+            }
+            px[(size_t)(y + margin) * (size_t)*w + (size_t)(x + margin)] = p;
+        }
+    return px;
+}
+
+// The contract at the radii that cross a reduction's threshold, the video
+// page's two and the largest held, each layer with its content in a margin
+// of the reach (a filter's layer, a backdrop's box) and touching the
+// layer's edge (a layer cut by an ancestor's clip); in the margin the outer
+// ring stays transparent, so no fringe; and the gradient's ramp never
+// steps back or jumps past 2, so no banding.
+static void blur_contract_cases(void)
+{
+    static const int32_t radii[] = {6, 7, 13, 14, 15, 27, 28, 40, 59, 100};
+    int most[2] = {0, 0}, ring = 0, bands = 0, reduced = 0;
+    char worst[2][96] = {"", ""};
+    for (size_t ri = 0; ri < sizeof(radii) / sizeof(radii[0]); ri++) {
+        int32_t r = radii[ri], blur = 2 * r;
+        reduced += yonder_filter_reduction(blur) > 1;
+        for (int kind = 0; kind < 5; kind++)
+            for (int edge = 0; edge < 2; edge++) {
+                int32_t w, h, margin = edge ? 0 : 3 * r;
+                uint32_t *src = contract_layer(kind, 150, 100, margin, &w, &h);
+                size_t n = (size_t)w * (size_t)h;
+                uint32_t *ref = malloc(n * sizeof(*ref));
+                memcpy(ref, src, n * sizeof(*ref));
+                uint32_t *a = blurred(src, w, h, blur, ORIGIN);
+                ref_blur(ref, w, h, blur);
+                int d = largest_difference(a, ref, n);
+                if (d > most[edge]) {
+                    most[edge] = d;
+                    snprintf(worst[edge], sizeof(worst[edge]), "%d of 255 at r %d, layer %d", d, (int)r, kind);
+                }
+                if (!edge) {
+                    for (int32_t x = 0; x < w; x++)
+                        ring |= (int)(a[x] >> 24) | (int)(a[n - 1 - (size_t)x] >> 24);
+                    for (int32_t y = 0; y < h; y++)
+                        ring |= (int)(a[(size_t)y * (size_t)w] >> 24) |
+                                (int)(a[(size_t)y * (size_t)w + (size_t)w - 1] >> 24);
+                }
+                if (kind == 1 && !edge) {
+                    const uint32_t *row = a + (size_t)(h / 2) * (size_t)w;
+                    for (int32_t x = margin + 3 * r + 1; x < w - margin - 3 * r; x++) {
+                        int p = (int)((row[x - 1] >> 16) & 0xffu), q = (int)((row[x] >> 16) & 0xffu);
+                        bands += q < p || q - p > 2;
+                    }
+                }
+                free(src);
+                free(ref);
+                free(a);
+            }
+    }
+    expect("blur contract: most of the radii are reduced", reduced >= 7, NULL);
+    expect("blur contract: content a reach inside its layer within 2 of 255", most[0] <= CONTRACT_INSIDE,
+           worst[0]);
+    expect("blur contract: content touching a cut edge within its measured bound",
+           most[1] <= CONTRACT_AT_A_CUT, worst[1]);
+    expect("blur contract: the outer ring of a layer grown by the reach stays transparent", ring == 0, NULL);
+    expect("blur contract: a gradient's ramp never steps back or jumps past 2", bands == 0, NULL);
+}
+
+// The grid is the group's (filter.c § A large blur): content moved by less
+// than a square, its grid moved with it, blurs to the same pixels, moved;
+// and a layer cut from a larger one — as a part painted alone is cut —
+// agrees with the larger one to the pixel wherever it is farther than the
+// blur reads from the cut.
+static void blur_grid_cases(void)
+{
+    int32_t blur = 30, r = blur / 2, s = yonder_filter_reduction(blur);
+    expect("blur grid: the case is reduced", s == 4, NULL);
+    int32_t w, h;
+    uint32_t *src = contract_layer(4, 120, 80, 3 * r + s, &w, &h);
+    size_t n = (size_t)w * (size_t)h;
+    uint32_t *a = blurred(src, w, h, blur, ORIGIN);
+    int moved_same = 1, moved_any = 0;
+    for (int32_t dx = 1; dx < s; dx++) {
+        // The content dx right and dx / 2 down in the same layer: the
+        // group's origin moved with it, so the layer's corner lies -dx.
+        int32_t dy = dx / 2;
+        uint32_t *shifted = calloc(n, sizeof(*shifted));
+        for (int32_t y = 0; y + dy < h; y++)
+            for (int32_t x = 0; x + dx < w; x++)
+                shifted[(size_t)(y + dy) * (size_t)w + (size_t)(x + dx)] = src[(size_t)y * (size_t)w + (size_t)x];
+        uint32_t *b = blurred(shifted, w, h, blur, (flow_point_t){-dx, -dy});
+        uint32_t *c = blurred(shifted, w, h, blur, ORIGIN);
+        for (int32_t y = 0; y + dy < h; y++)
+            for (int32_t x = 0; x + dx < w; x++) {
+                uint32_t p = a[(size_t)y * (size_t)w + (size_t)x];
+                moved_same &= b[(size_t)(y + dy) * (size_t)w + (size_t)(x + dx)] == p;
+                moved_any |= c[(size_t)(y + dy) * (size_t)w + (size_t)(x + dx)] != p;
+            }
+        free(shifted);
+        free(b);
+        free(c);
+    }
+    expect("blur grid: moved by less than a square with its grid, the same pixels, moved", moved_same, NULL);
+    expect("blur grid: (the fixture can tell) the grid left behind gives other pixels", moved_any, NULL);
+    free(src);
+    free(a);
+    // A part: the layer cut at (cx, cy) — offsets no square divides — its
+    // corner that far from the group's, as the painter cuts a layer to the
+    // part being painted grown by the reach and what a reduced blur reads
+    // past it. Inside it by that much, every pixel EQUAL to the whole's,
+    // at every reduction.
+    static const int32_t parts[] = {14, 30, 80, 200};
+    int agree = 1, inner = 0, past = 1;
+    char where[96] = "";
+    for (size_t k = 0; k < sizeof(parts) / sizeof(parts[0]); k++) {
+        int32_t pblur = parts[k], pr = pblur / 2, ps = yonder_filter_reduction(pblur);
+        flow_filter_t f = blur_of(pblur);
+        int32_t reads = 3 * pr + yonder_filter_reads_more(&f, 1);
+        past &= ps > 1 && reads > 3 * pr;
+        int32_t pw0, ph0;
+        uint32_t *whole = contract_layer(4, 2 * reads + 3 * ps + 40, 2 * reads + 2 * ps + 30, 3 * pr, &pw0, &ph0);
+        uint32_t *wb = blurred(whole, pw0, ph0, pblur, ORIGIN);
+        const int32_t at[][2] = {{3 * pr + 1, 3 * pr + ps - 1}, {3 * pr + ps + 3, 3 * pr + 2}, {5, 3}};
+        for (int c = 0; c < 3; c++) {
+            int32_t cx = at[c][0], cy = at[c][1], pw = pw0 - cx - 1, ph = ph0 - cy - 2;
+            uint32_t *part = malloc((size_t)pw * (size_t)ph * sizeof(*part));
+            for (int32_t y = 0; y < ph; y++)
+                memcpy(part + (size_t)y * (size_t)pw, whole + (size_t)(y + cy) * (size_t)pw0 + (size_t)cx,
+                       (size_t)pw * sizeof(*part));
+            uint32_t *pb = blurred(part, pw, ph, pblur, (flow_point_t){cx, cy});
+            for (int32_t y = reads; y < ph - reads; y++)
+                for (int32_t x = reads; x < pw - reads; x++) {
+                    bool same = pb[(size_t)y * (size_t)pw + (size_t)x] ==
+                                wb[(size_t)(y + cy) * (size_t)pw0 + (size_t)(x + cx)];
+                    if (!same && agree)
+                        snprintf(where, sizeof(where), "blur %d at 1/%d, cut at %d,%d: pixel %d,%d",
+                                 (int)pblur, (int)ps, (int)cx, (int)cy, (int)x, (int)y);
+                    agree &= same;
+                    inner++;
+                }
+            free(part);
+            free(pb);
+        }
+        free(whole);
+        free(wb);
+    }
+    expect("blur grid: a part cut from the layer equals the whole past what the blur reads",
+           agree && inner > 0, where);
+    expect("blur grid: a reduced blur reads past three boxes' reach", past, NULL);
 }
 
 int main(void)
@@ -496,6 +733,8 @@ int main(void)
     lay_cases();
     blur_cases();
     blur_reference_cases();
+    blur_contract_cases();
+    blur_grid_cases();
     shadow_cases();
     backdrop_cases();
     blend_cases();

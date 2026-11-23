@@ -139,25 +139,30 @@ typedef struct {
     // (filter.h), the result multiplied by the coverage `cover` gives each
     // of its pixels (bounds.w a row; NULL for all of it), and laid onto
     // what was under it at `alpha` of 255 by `mode`, `current` the colour
-    // of a drop shadow in currentColor. A face that cannot
+    // of a drop shadow in currentColor, `grid` where bounds' corner lies
+    // from the group's own (yonder_filter_run's, which a large blur's
+    // reduction is counted from). A face that cannot
     // blend there — what is under the layer is a group's sheets, not the
     // page — lays it normal and counts it (yonder_paint_layers_refused).
     // False when it cannot be made (no memory, too large): the painter
     // paints the group plain. Either NULL: no layer is drawn.
     bool (*layer_open)(void *ctx, os64_gui_rect_t bounds);
     void (*layer_close)(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                        uint8_t alpha, flow_blend_t mode, const uint8_t *cover);
+                        uint8_t alpha, flow_blend_t mode, const uint8_t *cover, flow_point_t grid);
     // A BACKDROP (flow_style_t.backdrop_filter; FILTER.md § 7): what is
     // painted under `rect` (a border box cut to the view, in the
     // coordinates being painted) — read with the list's reach round it —
     // filtered by `filter` (n functions, none a URL; `current` a drop
-    // shadow's currentColor) and laid back inside `rect`, at the coverage
-    // `cover` gives each of its pixels (rect.w a row; NULL for all of it).
+    // shadow's currentColor; `grid` where rect's corner lies from the
+    // border box's own, as layer_close's) and laid back inside `rect`, at
+    // the coverage `cover` gives each of its pixels (rect.w a row; NULL for
+    // all of it).
     // False, and nothing changed, when it cannot be drawn: no memory, a
     // layer past the face's limits, or nothing behind it that is the page
     // (inside a group's sheets). NULL: no backdrop is filtered.
     bool (*backdrop_filter)(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
-                            const flow_filter_t *filter, int32_t n, uint32_t current);
+                            const flow_filter_t *filter, int32_t n, uint32_t current,
+                            flow_point_t grid);
     // A CAPTURE closed (MASKS.md § 3): a layer opened with layer_open, its
     // painting not laid anywhere but taken back as COVERAGE into `out` (its
     // bounds.w by bounds.h, a row bounds.w) — each pixel's alpha, or with

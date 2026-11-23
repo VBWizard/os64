@@ -104,7 +104,19 @@ half-covered pixel.
   box blurs (the standard approximation, error under 3%), separable, on the
   premultiplied layer, so edges fade into transparency rather than into
   black. The layer is grown by `3r` on every side, because a blur spreads
-  ink that far.
+  ink that far. **A large blur is made on a reduced copy** (filter.c § A
+  large blur): the layer averaged in squares of 2, 4 or 8, blurred there by
+  three extended boxes whose spread, with the reduction's and the
+  enlargement's, equals the three boxes', and enlarged back bilinearly —
+  64 ms for a blur(15) over 1780x1002 on the P5 at full size. Its contract
+  is numeric: within 2 of 255 of three boxes at full size wherever the
+  content stays a reach inside its layer, and the measured 6 where it
+  touches an edge an ancestor's clip cut. The squares are counted from the
+  group's own corner, never the cut layer's, and a layer cut to a part
+  being painted is grown by what the reduced copy reads past `3r`
+  (`yonder_filter_reads_more`), so a part painted alone equals the whole
+  view to the pixel (`--damage-check`). A backdrop is not grown: past its
+  reach it reads nothing, as the damage rule below needs.
 - **`drop-shadow(c x y r)`**: the layer's alpha, blurred, offset by
   `(x, y)`, tinted `c`, under the layer. `r` is a STANDARD DEVIATION, as
   `blur()`'s is (Filter Effects 1 § 13, unlike a box shadow's blur radius;

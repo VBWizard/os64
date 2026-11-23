@@ -553,10 +553,11 @@ static void rec_layer_pop(Rec *rec)
 // A layer's close, and with a mask its coverage: its sum, and with
 // s_record_all each row in hex, as a shadow's mask is recorded.
 static void rec_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                            uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
+                            uint8_t alpha, flow_blend_t mode, const uint8_t *cover, flow_point_t grid)
 {
     Rec *rec = ctx;
     (void)filter;
+    (void)grid;
     out(&rec->out, "end filter %d #%06x %d", (int)n, current, (int)alpha);
     if (mode != FLOW_BLEND_NORMAL)
         out(&rec->out, " mode %d", (int)mode);
@@ -597,10 +598,11 @@ static void rec_layer_take(void *ctx, uint8_t *cover, bool luminance)
 static bool s_backdrop_refused;
 
 static bool rec_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
-                                const flow_filter_t *filter, int32_t n, uint32_t current)
+                                const flow_filter_t *filter, int32_t n, uint32_t current, flow_point_t grid)
 {
     Rec *rec = ctx;
     (void)filter;
+    (void)grid;
     if (s_backdrop_refused)
         return false;
     long sum = -1;

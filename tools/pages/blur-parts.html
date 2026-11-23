@@ -1,0 +1,39 @@
+<!doctype html><html><head><title>blur parts</title><style>
+/* Large blurs, made on a reduced copy (filter.c § A large blur), cut by
+   small repaints beside and over them: run with --damage-check and
+   --layout-profile, whose damage check must read 0 differed. A box
+   changing colour sits over a blur(15px) group, another beside a
+   blur(40px) one inside a clip (the layer cut by an ancestor's clip), and
+   a third under a frosted header (a backdrop blur). */
+body{margin:0;font:16px sans-serif;background:#fff}
+.glow{position:absolute;left:20px;top:20px;width:900px;height:500px;filter:blur(15px);
+      background:linear-gradient(120deg,#e33,#fc3 30%,#3a3 55%,#36e 80%,#a3e)}
+.glow i{position:absolute;width:120px;height:120px;border-radius:60px;background:#fff}
+.tick{position:absolute;padding:4px 8px;background:#222;color:#fff;font:bold 20px monospace}
+.clip{position:absolute;left:960px;top:20px;width:420px;height:500px;overflow:hidden}
+.wide{position:absolute;left:-60px;top:-40px;width:540px;height:600px;filter:blur(40px);
+      background:radial-gradient(circle at 40% 40%,#0cf,#30c 50%,#000 90%)}
+.under{position:absolute;left:20px;top:560px;width:1360px;height:220px;
+       background:repeating-linear-gradient(90deg,#f80 0 40px,#08f 40px 80px)}
+.frost{position:absolute;left:20px;top:600px;width:1360px;height:120px;
+       backdrop-filter:blur(15px);background:rgba(255,255,255,.2)}
+</style></head><body>
+<div class=glow><i style="left:200px;top:120px"></i><i style="left:600px;top:260px"></i></div>
+<div class=tick id=a style="left:430px;top:250px">a</div>
+<div class=clip><div class=wide></div><div class=tick id=b style="left:150px;top:230px">b</div></div>
+<div class=under></div>
+<div class=tick id=c style="left:640px;top:580px">c</div>
+<div class=frost></div>
+<script>
+// Colours only: a box that moves or changes size is not painted in parts
+// (N3's "a box moved"), and the checks need parts.
+const hues = ['#222', '#a00', '#0a0', '#00a', '#a0a', '#0aa'];
+let n = 0;
+setInterval(() => {
+  n++;
+  document.getElementById('a').style.background = hues[n % 6];
+  document.getElementById('b').style.background = hues[(n + 2) % 6];
+  document.getElementById('c').style.background = hues[(n + 4) % 6];
+}, 150);
+</script>
+</body></html>

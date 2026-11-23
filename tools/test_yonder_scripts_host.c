@@ -9409,21 +9409,29 @@ static void paint_cost_cases(void) {
     /* The effects the filters and warps stages spend, told apart: a
      * backdrop blur twice, and a filtered layer opened at its size and
      * closed (its open's time and its close's counted together), the
-     * costliest first; what the table has no room for is the rest. */
+     * costliest first; what the table has no room for is the rest. A blur
+     * made on a reduced copy says at what reduction; a small one, made at
+     * full size, says nothing more. */
     effects_reset();
     effect_counted("backdrop blur(8) 2560x56",5000000);
     effect_counted("backdrop blur(8) 2560x56",5000000);
     {
-        flow_filter_t blur={.fn=FLOW_FILTER_BLUR,.amount=12};
+        flow_filter_t blur={.fn=FLOW_FILTER_BLUR,.amount=12,.shadow.blur=24};
         char said[40];
         effect_filters(said,sizeof(said),&blur,1);
         s_layers_open[0].w=200; s_layers_open[0].h=100; s_layers_open[0].cycles=30000; s_nlayers_open=1;
         effect_layer_closed("filter",said,70000);
+        flow_filter_t small={.fn=FLOW_FILTER_BLUR,.amount=2,.shadow.blur=4};
+        effect_filters(said,sizeof(said),&small,1);
+        check(strcmp(said,"blur(2)")==0,"paint effects: a blur made at full size names no reduction");
+        flow_filter_t big={.fn=FLOW_FILTER_BLUR,.amount=15,.shadow.blur=30};
+        effect_filters(said,sizeof(said),&big,1);
+        check(strcmp(said,"blur(15) at 1/4")==0,"paint effects: blur(15) is made at a quarter");
     }
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint effects: backdrop blur(8) 2560x56: 2, 10.0 ms (5000 us each); "
-                     "filter blur(12) 200x100: 1, 0.1 ms (100 us each); boxes handed the painter 0, 0 a paint\n")!=NULL && s_nlayers_open==0,
+                     "filter blur(12) at 1/2 200x100: 1, 0.1 ms (100 us each); boxes handed the painter 0, 0 a paint\n")!=NULL && s_nlayers_open==0,
           "paint effects: each by what it was, the costliest first, a layer's open and close together");
     for(int i=0;i<EFFECTS_MAX+3;i++) {
         char what[24];
