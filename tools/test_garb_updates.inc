@@ -950,7 +950,7 @@ static void update_back_index(void)
     bi_step(c,doc,&in,u,"p39","p20","an append marks the child that was last, not the middle");
     u=garb_cascade_updates(c);
     os64_html_insert(doc,box,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),box->first_child);
-    bi_step(c,doc,&in,u,NULL,"p39","a prepend marks nothing, nor the child restyled last time");
+    bi_step(c,doc,&in,u,NULL,"p39","a prepend leaves the child restyled last time unmarked");
     u=garb_cascade_updates(c);
     os64_html_insert(doc,box,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),bi_id(doc,"p20"));
     bi_step(c,doc,&in,u,NULL,"p30","an insert in the middle marks no child after it");
@@ -1018,7 +1018,7 @@ static void update_back_index(void)
     garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
     // An unbounded one keeps marking every child.
     doc=bi_doc();
-    css="p:nth-last-child(2n){color:red}";
+    css="p:nth-last-child(2n+1){color:red}";
     garb_parse_sheet_text(css,strlen(css),&sheet);
     c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
     u=garb_cascade_updates(c);
@@ -1054,6 +1054,28 @@ static void update_back_index(void)
     os64_html_remove(doc,bi_id(doc,"l"));
     os64_html_remove(doc,bi_id(doc,"types")->last_child);
     bi_step(c,doc,&in,u,"u",NULL,"a count the type table never took counts as turned");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // Past the type table at a change: the children the walk did not reach
+    // are left uncounted, so a later batch that brings the parent back
+    // under it counts e as turned (it was restyled not red at the first,
+    // and is the last p again at the second).
+    char wide[4096]="<!doctype html><aside>";
+    for(int i=0;i<100;++i)strcat(wide,"<i></i>");
+    strcat(wide,"</aside><div id=t><p id=e></p>");
+    for(int i=0;i<31;++i){char x[64];snprintf(x,sizeof(x),"<x-t%d></x-t%d>",i,i);strcat(wide,x);}
+    strcat(wide,"</div>");
+    doc=update_doc(wide);
+    css="p:last-of-type{color:red}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    os64_html_node_t *t=bi_id(doc,"t"),*f=ue_append(doc,t,"p");
+    os64_html_node_t *x31=ue_append(doc,t,"x-t31");
+    u=garb_cascade_updates(c);
+    bi_step(c,doc,&in,u,"e",NULL,"a change past the type table marks every child");
+    os64_html_remove(doc,f);
+    os64_html_remove(doc,x31);
+    u=garb_cascade_updates(c);
+    bi_step(c,doc,&in,u,"e",NULL,"what a change past the type table did not count counts as turned after");
     garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
     // A turn moves the siblings after it that a `~` reads: the span after
     // the p that was last of its type, whose own count stays, before the p

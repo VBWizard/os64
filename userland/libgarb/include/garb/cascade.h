@@ -245,11 +245,14 @@ typedef struct {
 } garb_bare_work_t;
 garb_bare_work_t garb_cascade_bare_work(const garb_cascade_t *c);
 // What the back forms (:last-child and its kin, select.h § THE BACK FORMS)
-// cost the latest garb_cascade_update: the parents whose children it
-// counted again, the children it counted, and those whose remembered back
-// index turned and were marked. Zeros before any update, after one that
-// read no changes or was refused before reading them, and for rules with no
-// bounded back form; a count made before a refusal partway stays.
+// cost the latest garb_cascade_update: the walks it made, one for each
+// element whose children changed (a shadow root or the document, which
+// keep no count of their own, one for each change of their children), the
+// children those walks counted, and those whose remembered back index
+// turned and were marked. Zeros before any update, after one that read no
+// changes or was refused before reading them, for rules with no bounded
+// back form, and for rules whose unbounded or `of S` forms mark every child
+// anyway; a count made before a refusal partway stays.
 typedef struct {
     uint64_t walks, walked, turned;
 } garb_back_work_t;

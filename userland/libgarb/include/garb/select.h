@@ -83,9 +83,10 @@ garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t 
 // one can match only up to some index: `back_child` and `back_type` are the
 // largest index any of them can match, 0 for none, so each one's answer is a
 // function of min(index, need + 1) and the cascade can remember that number
-// and compare it (cascade.c back_walk). An :nth-last whose An+B has A > 0,
-// or whose bound passes GARB_BACK_INDEX_MAX, can match anywhere:
-// `back_unbounded`, which marks every sibling as before. An :nth-last-child
+// and compare it (cascade.c back_walk). An :nth-last whose An+B has A > 0
+// can match anywhere, and one whose bound passes GARB_BACK_INDEX_MAX is
+// taken as if it could: `back_unbounded`, which marks every sibling as
+// before. An :nth-last-child
 // with `of S` is `filtered` instead. `position_front` counts :only-child and
 // :only-of-type too, since they read the front as well.
 #define GARB_BACK_INDEX_MAX 16

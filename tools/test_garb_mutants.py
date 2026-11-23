@@ -137,6 +137,11 @@ mutants = [
     ('back-a-restyle-forgets-the-count', CASCADE,
      '.changed = c->updates + 1, .back = old.back, .back_type = old.back_type};',
      '.changed = c->updates + 1};', UPDATES),
+    ('back-overflow-leaves-stale-counts', CASCADE,
+     '                    if (u) u->back = u->back_type = 0;', '                    (void)u;', UPDATES),
+    ('back-the-stamp-skips-the-first-walk', CASCADE,
+     '    if (!p || p->back_walked != c->updates + 1) {', '    if (!p || p->back_walked == c->updates + 1) {',
+     UPDATES),
     ('back-of-type-not-counted', CASCADE,
      '            if (types[i].n < kt) types[i].n++;', '            (void)kt;', UPDATES),
     # The kept scratch.

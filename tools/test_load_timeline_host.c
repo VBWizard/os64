@@ -180,13 +180,13 @@ static void test_builds_and_broad(void)
     yonder_lt_broad_line(&t, YONDER_LT_BROAD_MAX, line, sizeof(line));
     LINE(line, "");
     yonder_lt_summary(&t, line, sizeof(line));
-    CHECK(strstr(line, "; updates refused as broad: 11 (by what marked most: siblings 9, its subtree 2); ") != NULL);
+    CHECK(strstr(line, "; updates refused as broad: 11 (by what crossed the half: siblings 9, its subtree 2); ") != NULL);
     // The back indexes: an update that counted none is not one.
     yonder_lt_back(&t, BASE, 2, 30, 3);
     yonder_lt_back(&t, BASE + S, 1, 5, 0);
     yonder_lt_back(&t, BASE + S, 0, 0, 0);
     yonder_lt_summary(&t, line, sizeof(line));
-    CHECK(strstr(line, "; back indexes counted again in 2 updates: 3 parents, 35 children counted, 3 turned; ") != NULL);
+    CHECK(strstr(line, "; back indexes counted again in 2 updates: 3 walks, 35 children counted, 3 turned; ") != NULL);
     // Fewer marked than every one kept: counted, not kept.
     yonder_lt_broad(&t, BASE, 1, kSubtree, "small");
     CHECK(t.nbroad == YONDER_LT_BROAD_MAX + 4 && strcmp(t.broad[YONDER_LT_BROAD_MAX - 1].text, "small") != 0);

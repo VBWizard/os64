@@ -169,6 +169,8 @@ typedef struct {
     // bounds the rules need (back_walk): among its element siblings, and
     // among those of its type; 0 for never counted.
     uint8_t back, back_type;
+    // The update that last counted its children again (back_turns).
+    uint64_t back_walked;
     // Dirty for its own winners alone (mark_element): whether its
     // descendants are owed a recompute too is known once it has had one
     // (restyle).
@@ -3776,15 +3778,19 @@ static bool mark_turned(garb_cascade_t *c, const os64_html_node_t *x)
 // type table at a build) counts as turned. The walk reads the document as
 // the batch left it, so removals and moves need no rule of their own.
 //
-// WHERE IT STOPS EARLY, with no -of-type form: at the first child not added
-// in the batch whose kept number and new number are both the bound. The
-// children the batch did not add or move keep their order, so each one
-// before it had a larger index both before and after, saturated both
-// times; what the batch added before it is marked as added, and its number,
-// which is the bound for the same reason, is taken here (back_turns). With
-// an -of-type form the walk counts every child. A parent with more types
-// than GARB_BACK_TYPES has all its children marked at a change, and at a
-// build the children past the table are left uncounted.
+// WHERE IT STOPS EARLY, with no -of-type form: at the first child whose
+// kept number and new number are both the bound. A child the batch added
+// keeps 0, or a number an earlier walk of this batch counted from the
+// document as the batch left it; so the stop is at a child the batch did
+// not add, or at one that walk passed, which proves the same. The children
+// the batch did not add or move keep their order, so each one before the
+// stop had a larger index both before and after, saturated both times;
+// what the batch added before it is marked as added, and its number, which
+// is the bound for the same reason, is taken here (back_turns). With an
+// -of-type form the walk counts every child. A parent with more types than
+// GARB_BACK_TYPES has all its children marked at a change, and the children
+// past the table, at a change or a build, are left uncounted, so that they
+// count as turned the next time.
 #define GARB_BACK_TYPES 32
 static uint8_t back_bound(uint8_t need) { return need ? (uint8_t)(need + 1) : 0; }
 static const os64_html_node_t *prev_element(const os64_html_node_t *x)
@@ -3813,6 +3819,10 @@ static BackWalk back_walk(garb_cascade_t *c, const os64_html_node_t *last, bool 
             int32_t i = 0;
             while (i < ntypes && !garb_element_same_type(types[i].type, x)) i++;
             if (i == GARB_BACK_TYPES) {
+                for (const os64_html_node_t *y = x; y; y = prev_element(y)) {
+                    Slot *u = slot_for(c, y, false);
+                    if (u) u->back = u->back_type = 0;
+                }
                 if (!compare) return BACK_DONE;
                 return x->parent && mark_siblings(c, x->parent->first_child) ? BACK_DONE : BACK_FAILED;
             }
@@ -3842,18 +3852,24 @@ static BackWalk back_walk(garb_cascade_t *c, const os64_html_node_t *last, bool 
     }
     return BACK_DONE;
 }
-// A change of `e->target`'s children, counted again (back_walk). Where the
-// walk stopped early, what the change added before the stop takes the
-// bound as its number.
+// A change of `e->target`'s children, counted again (back_walk), once an
+// update for a parent that has a slot: every walk reads the document as the
+// batch left it, so a second walk of the same parent finds nothing to turn.
+// Without an -of-type form, a child the change added that is still
+// uncounted lies before where the walk stopped, so it takes the bound as
+// its number.
 static bool back_turns(garb_cascade_t *c, const os64_html_change_entry_t *e)
 {
     const os64_html_node_t *last = e->target->last_child;
     while (last && !is_el(last)) last = last->prev;
     if (!last) return true;
-    c->back_work.walks++;
-    BackWalk w = back_walk(c, last, true);
-    if (w == BACK_FAILED) return false;
-    if (w == BACK_STOPPED)
+    Slot *p = is_el(e->target) ? slot_for(c, e->target, false) : NULL;
+    if (!p || p->back_walked != c->updates + 1) {
+        if (p) p->back_walked = c->updates + 1;
+        c->back_work.walks++;
+        if (back_walk(c, last, true) == BACK_FAILED) return false;
+    }
+    if (!c->dependencies.back_type)
         for (size_t i = 0; i < e->nadded; ++i) {
             Slot *s = e->added[i]->parent == e->target ? slot_for(c, e->added[i], false) : NULL;
             if (s && s->back == 0) s->back = back_bound(c->dependencies.back_child);

@@ -486,7 +486,7 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap)
     put(&o, "updates refused as broad: ");
     put_u(&o, t->nbroad);
     for (uint32_t i = 0; i < t->nbroad_by; i++) {
-        put(&o, i == 0 ? " (by what marked most: " : ", ");
+        put(&o, i == 0 ? " (by what crossed the half: " : ", ");
         put(&o, t->broad_by[i].name != NULL ? t->broad_by[i].name : "no mark told");
         put(&o, " ");
         put_u(&o, t->broad_by[i].n);
@@ -502,7 +502,7 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap)
         put_u(&o, t->back_updates);
         put(&o, " updates: ");
         put_u(&o, t->back_walks);
-        put(&o, " parents, ");
+        put(&o, " walks, ");
         put_u(&o, t->back_walked);
         put(&o, " children counted, ");
         put_u(&o, t->back_turned);
