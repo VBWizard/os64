@@ -215,8 +215,8 @@ marks nothing through the readers.
 it last styled or asked it, and a change of children compares the parent's answer
 now with it. Where the answer is the same nothing is marked for `:empty`,
 which is what lets appends to a parent that already has children stay
-small. Where it turned, the parent is marked alone (its changed winners
-reach its descendants through restyle, like any element's), its siblings
+small. Where it turned, the parent is marked alone (what is under it is
+recomputed where its custom property map changed, like any element's), its siblings
 marked as far as the `:empty` readers that pass at it reach (all of them
 for an `of S`). Nothing under it needs
 marking for matching: a parent that turned from empty has under it only
@@ -464,8 +464,28 @@ other, so their pages keep style and geometry reuse across a mutation.
   (`garb_has_subject_reads_key`), a bare compound as much as a filtered
   one. One the same rules match as before (a digest of them is kept
   in its record) and whose winners and custom properties compare the same
-  by value keeps its old record, so `garb_style_updated_since` reports no change, and any other
-  marks its descendants for their inherited values.
+  by value keeps its old record, so `garb_style_updated_since` reports no change. Any other
+  marks nothing below it: a descendant's selector answers do not read an
+  ancestor's winners, and libflow carries ordinary inheritance (a child is
+  copied only under a parent it could copy, `reuse_safe`). What it owes
+  below is decided by its custom property map (**the recompute**, L4 part
+  2): equal by value, nothing; different, every element that inherits from
+  it is recomputed as the update's walk reaches it, its map made again over
+  the one it inherits and substitution redone where var() made a winner
+  (kept per element at its last cascade, `PendDecl`), `changed` only where
+  winners differ. No matching and no anchor asked, except where it takes an
+  element's whole cascade, and nothing counted toward BROAD's half. It stops
+  at an element whose own map declares every name that moved, none from the
+  map above (the update keeps the names: an origin's, and an entry made from
+  the map above that a recompute made again; past the room it keeps, none is
+  known, and nothing prunes). An element marked alone by another change of
+  the batch under a moved map is restyled whole and moves with it unless
+  its own map declares every moved name. A changed animation-name reaches
+  what takes it by `inherit`: every element below is recomputed, no name
+  pruning. A pseudo-element's var(), keyframes read with the map, a changed
+  or inherited animation-name, and a var() winner whose new value sets other
+  longhands take the element's whole cascade, outside the half all the
+  same.
 - **An anchored `:has()`**, left of a combinator (`.group:has(.x) .y`,
   `body:has(...) .panel`), changes its descendants' or following siblings'
   winners rather than its own. Each such compound (`garb_anchor_t`, as

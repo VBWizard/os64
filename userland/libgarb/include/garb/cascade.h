@@ -324,9 +324,10 @@ garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c);
 // than an index walk's table keeps (the children's siblings), a
 // :has() asked again (its anchors and their reach), the parent's own state
 // (:empty where its answer turned, a <details> or <fieldset>'s first
-// child), a shadow tree's assignments; while the marked elements are
-// restyled, an element restyled alone whose style came out different
-// passing it down to its children (inherited); for a change of an
+// child), a shadow tree's assignments; restyling itself marks nothing (an
+// element restyled alone whose custom property map came out different has
+// what inherits from it recomputed, THE RECOMPUTE), so `inherited` counts
+// none; for a change of an
 // attribute, its element and the reach of the readers of its keys, under
 // `class`, `style`, or for any other attribute the kind of an attribute or
 // a state; and, at a change
@@ -342,16 +343,30 @@ typedef enum {
 } garb_mark_t;
 const char *garb_mark_name(garb_mark_t mark);
 // What the latest garb_cascade_update restyled: the elements its changes
-// marked, those restyling marked below an element whose winners came out
-// changed (mark_below, every one matched again), and every mark made, by
-// the mark that made it (`by[GARB_MARK_INHERITED]` is `inherited`). Zeros
+// marked, those restyling marked (`inherited`, `by[GARB_MARK_INHERITED]`:
+// none, since what is under an element whose custom property map changed
+// is recomputed, not marked: THE RECOMPUTE, below), and every mark made, by
+// the mark that made it. Zeros
 // before any update, after one that read no changes, and for one refused
 // before it read them; one refused partway says what it had marked by then.
 typedef struct {
     uint64_t marked, inherited;
     uint64_t by[GARB_MARKS];
+    // THE RECOMPUTE: the elements below a changed custom property map
+    // recomputed (not counted toward the half), those where it stopped
+    // because their own map came out as it was, those whose winners came out
+    // changed, and those a recompute took to their own whole cascade, matched
+    // again: a pseudo-element's var(), keyframes read with the map or a
+    // changed or inherited animation-name, or a var() winner whose new value
+    // sets other longhands than it did.
+    uint64_t recomputed, recompute_pruned, recompute_changed, recompute_whole;
 } garb_update_marks_t;
 garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c);
+// The custom property names the latest update's recompute followed, space
+// apart, "(more)" after them when it lost count (none is then known), into
+// `out` (cut to `cap`, always terminated); its length. Empty when it
+// recomputed nothing. A record's: the names are a page's own.
+size_t garb_cascade_recompute_names(const garb_cascade_t *c, char *out, size_t cap);
 // When the latest update was refused GARB_UPDATE_BROAD: the change of the
 // batch that marked the most elements (the batch's marking stops at the
 // one that crossed half, so a later change never ran): its kind
@@ -359,19 +374,13 @@ garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c);
 // fit) and the target's depth below the document, the attribute for an
 // attribute's change, how many elements it marked and by which mark; with
 // the changes the batch held and had marked, the dirty count at refusal
-// and the elements the cascade holds. When the half was crossed while
-// restyling instead (`restyled`), the element whose changed style was
-// passing down then, its depth, and what the restyling had marked by then
-// (all of it inherited). False when the latest update was not refused so,
-// or no clock was given.
+// and the elements the cascade holds. False when the latest update was not
+// refused so, or no clock was given.
 typedef struct {
     int32_t kind;
     char target[64], attr[32];
     uint32_t depth, marked, by[GARB_MARKS];
     uint32_t changes, marked_changes, dirty, slots;
-    bool restyled;
-    char restyled_from[64];
-    uint32_t restyled_depth, restyled_marked;
 } garb_broad_trigger_t;
 bool garb_cascade_broad_trigger(const garb_cascade_t *c, garb_broad_trigger_t *out);
 

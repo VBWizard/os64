@@ -1628,6 +1628,7 @@ int main(int argc, char **argv)
     restyle_in_place_cases();
     pending_cases();
     restyle_mutations();
+    restyle_recompute_walk();
     computed_cases();
     computed_round1_cases();
     computed_round2_cases();
