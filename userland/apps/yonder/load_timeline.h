@@ -37,7 +37,8 @@
 //     position walks;
 //   - what the back indexes (libgarb's index_walk) cost the updates, and
 //     what the updates that succeeded restyled: marked by their changes,
-//     and marked below a changed winner;
+//     and what they recomputed below a changed custom property map, with
+//     the names the largest one followed;
 //   - the arriving page's parser calls, and the slowest of them;
 //   - the milestones, each the first time it was told.
 // Past the last slice nothing begun after it is taken by what has a time
@@ -218,12 +219,18 @@ typedef struct {
     uint32_t nasker_kinds;
     const char *asker_names[YONDER_LT_ASKERS];
     // What the updates that succeeded restyled (yonder_lt_marks): how many
-    // updates, the elements their changes marked, and those marked below an
-    // element whose winners came out changed; and every mark by the kind
-    // that made it, under the caller's names for the kinds (the first
+    // updates and the elements their changes marked; and every mark by the
+    // kind that made it, under the caller's names for the kinds (the first
     // call's, YONDER_LT_MARK_KINDS at most).
-    uint64_t marks_updates, marks_marked, marks_inherited;
+    uint64_t marks_updates, marks_marked;
     uint64_t marks_by[YONDER_LT_MARK_KINDS];
+    // What they recomputed below a changed custom property map
+    // (yonder_lt_recompute): elements, where it stopped, winners changed,
+    // taken to their whole cascade; and the most one update recomputed,
+    // with the names it followed (a page's own: a record's, never text a
+    // commit carries).
+    uint64_t recomputed, recompute_pruned, recompute_changed, recompute_whole, recompute_most;
+    char recompute_names[96];
     const char *const *mark_names;
     uint32_t nmark_kinds;
     // The arriving page's parser calls (yonder_lt_parse): how many and how
@@ -322,11 +329,14 @@ void yonder_lt_has_subjects(yonder_lt_t *t, int64_t at_us, uint64_t visited, uin
 void yonder_lt_readers(yonder_lt_t *t, int64_t at_us, const yonder_lt_readers_t *r, uint32_t nkinds,
                        const char *const *names);
 // An update at `at_us` that succeeded, its changes marking `marked`
-// elements and restyling `inherited` more below changed winners; `by`
-// holds its `nby` counts by kind, kind i named `names[i]` (names that live
-// as long as the timeline).
-void yonder_lt_marks(yonder_lt_t *t, int64_t at_us, uint64_t marked, uint64_t inherited, const uint64_t *by,
+// elements; `by` holds its `nby` counts by kind, kind i named `names[i]`
+// (names that live as long as the timeline).
+void yonder_lt_marks(yonder_lt_t *t, int64_t at_us, uint64_t marked, const uint64_t *by,
                      uint32_t nby, const char *const *names);
+// What one update that succeeded recomputed below a changed custom property
+// map, and the names it followed (copied).
+void yonder_lt_recompute(yonder_lt_t *t, int64_t at_us, uint64_t recomputed, uint64_t pruned, uint64_t changed,
+                         uint64_t whole, const char *names);
 
 // The lines, each written into `out` (cut to `cap`, always terminated).
 // The summary: the slices' size, the milestones, the long steps' count.
