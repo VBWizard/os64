@@ -1533,6 +1533,13 @@ static struct {
     // (whose removed nodes it may be) is alive.
     bool wrote;
     char named[96];
+    // The biggest part a box's change marked (`biggest`, -1 for none, by
+    // area in the view) and the element it was for, named while the trees
+    // are alive (change_parts), so the record can say what made a part
+    // past half the view and what marked the biggest part.
+    int32_t biggest;
+    const os64_html_node_t *biggest_node;
+    char biggest_named[96];
     // The shown tree's cascade and how many updates it had taken, for the
     // svgs' question (change_svgs): which of them its update restyled.
     const garb_cascade_t *cascade;
@@ -1541,21 +1548,41 @@ static struct {
 
 // A part a script's change painted (flow_change_parts, or a kept restyle's
 // marks), cut to the view, collected for script_rebuild.
+// The element a box is drawn for: its own, or the nearest one round it for
+// a box with none (an anonymous block, a line's piece).
+static const os64_html_node_t *box_element(const flow_box_t *b)
+{
+    for (; b != NULL; b = b->parent)
+        if (b->node != NULL && b->node->kind == OS64_HTML_ELEMENT)
+            return b->node;
+    return NULL;
+}
+
 static void change_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 {
     os64_gui_rect_t meet;
     (void)ctx;
-    (void)box;
     if (!os64_rect_intersect(r, s_change.view, &meet))
         return;
-    if (s_change.n == CHANGE_PARTS)
+    if (s_change.n == CHANGE_PARTS) {
         s_change.over = true;
-    else
-        s_change.part[s_change.n++] = meet;
+        return;
+    }
+    if (s_change.biggest < 0 || (int64_t)meet.w * meet.h > (int64_t)s_change.part[s_change.biggest].w *
+                                                            s_change.part[s_change.biggest].h) {
+        s_change.biggest = s_change.n;
+        s_change.biggest_node = box_element(box);
+    }
+    s_change.part[s_change.n++] = meet;
 }
 
 static void mark_part(os64_gui_rect_t r);
 static flow_point_t scroll_now(void);
+// For the counts' biggest part (mark_part): the box an animation's tick or
+// layout marks for (tick_mark, layout_mark), or the element a script's
+// change marked for, named (change_parts); NULL for every other mark.
+static const flow_box_t *s_marking_box;
+static const char *s_marking_named;
 
 // The face's half of a kept drawing's key (keep.h): moved by every mark
 // of the view made through mark_part or mark_whole but a tick's — a
@@ -1729,9 +1756,11 @@ static void layout_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 {
     const os64_gui_rect_t *view = ctx;
     os64_gui_rect_t meet;
-    (void)box;
-    if (os64_rect_intersect(r, *view, &meet))
+    if (os64_rect_intersect(r, *view, &meet)) {
+        s_marking_box = box;
         mark_part(meet);
+        s_marking_box = NULL;
+    }
 }
 
 static int64_t layout_clock(void *opaque)
@@ -4012,6 +4041,9 @@ static const char *const kPastDeadline[PAST_COUNT] = {
     "settle", "arrival", "stream", "timers", "pictures", "frames", "downloads",
 };
 
+// How many elements a reading names by what their ticks changed.
+#define TICKED_MAX 8
+
 static const char *const kWholeBy[WHOLE_COUNT] = {
     "parts that together covered the view", "layouts for animations that refused their parts", "other layouts",
     "scripts' changes", "scrolls", "pictures that came in", "faces that came in",
@@ -4083,15 +4115,27 @@ static struct {
     // deadlines handed the ticker already past.
     uint64_t bells, past[PAST_COUNT];
     // The biggest part marked, by area, as much of it as the view holds,
-    // in page coordinates, and what marked it — a canvas the page drew on
-    // or a form control, by name, or "the page" for any other part
-    // (mark_part; a part as big as the view is a whole view instead) — a
+    // in page coordinates, and what marked it (mark_part; a part as big as
+    // the view is a whole view instead): a canvas the page drew on or a
+    // form control, by name; an animation, by the element its tick changed
+    // and the longhands it animates (tick_named), or the box its layout
+    // marked; a video's new picture; a
+    // script's change, by the element it changed; else "the page" — a
     // control shown or hidden marks the whole window, and is named so; the
     // canvases' and the controls' marks; and the biggest rectangle a paint
     // published, as much of it as the view holds.
     os64_gui_rect_t mark_most, paint_most;
     char mark_who[96];
     uint64_t canvas_marks, control_marks;
+    // The elements the ticks that were frames changed, each with the
+    // longhands its animations set, and how many such ticks changed it
+    // (tick_named): the first TICKED_MAX met, the rest counted together.
+    struct {
+        char what[96];
+        uint64_t n;
+    } ticked[TICKED_MAX];
+    int32_t nticked;
+    uint64_t ticked_rest;
     // The videos' (videos_tick, pane_video): pictures asked for and
     // answered changed, and each paint of one by the plain path (rows
     // copied to the window) or the general one (drawn as a picture is);
@@ -4115,7 +4159,7 @@ static struct {
 } s_cost;
 
 // The canvas whose drawing is being marked (canvas_damage_mark), for the
-// counts' biggest part; NULL for every other mark.
+// counts' biggest part; NULL for every other mark (s_marking_box beside it).
 static const os64_html_node_t *s_marking_canvas;
 // The readings the shown page's record keeps (`d`): numbered from 1 for
 // each page shown.
@@ -4293,7 +4337,7 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
 #define EFFECTS_MAX 32
 #define EFFECTS_DEPTH 32
 typedef struct {
-    char what[80];
+    char what[112];
     uint64_t n, cycles;
 } PaintEffect;
 static PaintEffect s_effects[EFFECTS_MAX];
@@ -4385,7 +4429,7 @@ static void effects_reset(void)
 
 static void effect_counted(const char *named, uint64_t spent)
 {
-    char over[80];
+    char over[128];
     const char *what = named;
     if (s_effects_past_video) {
         os64_snprintf(over, sizeof(over), "%s over the video", named);
@@ -9339,6 +9383,11 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (int)s_cost.mark_most.y, s_cost.mark_who, (int)s_cost.paint_most.w, (int)s_cost.paint_most.h);
     dt_put(t, "; %lu canvas marks, %lu form control marks", (unsigned long)s_cost.canvas_marks,
            (unsigned long)s_cost.control_marks);
+    for (int32_t i = 0; i < s_cost.nticked; i++)
+        dt_put(t, "%s%s %lu", i == 0 ? "; ticks that were frames changed " : ", ", s_cost.ticked[i].what,
+               (unsigned long)s_cost.ticked[i].n);
+    if (s_cost.ticked_rest > 0)
+        dt_put(t, ", others %lu", (unsigned long)s_cost.ticked_rest);
     if (s_cost.video_frames > 0)
         dt_put(t, "; videos: %lu frames asked (%lu us), %lu new pictures, painted %lu plain and %lu general "
                "(%lu us)",
@@ -9967,8 +10016,15 @@ static void mark_part(os64_gui_rect_t r)
     if (os64_rect_intersect(part.bounds, v, &in) &&
         (uint64_t)in.w * (uint64_t)in.h > (uint64_t)s_cost.mark_most.w * (uint64_t)s_cost.mark_most.h) {
         s_cost.mark_most = (os64_gui_rect_t){in.x - v.x + g.sx, in.y - v.y + g.sy, in.w, in.h};
+        const os64_html_node_t *ticked = box_element(s_marking_box);
         if (s_marking_canvas != NULL)
             element_named(s_cost.mark_who, sizeof(s_cost.mark_who), "the canvas ", s_marking_canvas);
+        else if (ticked != NULL)
+            element_named(s_cost.mark_who, sizeof(s_cost.mark_who), "an animation of ", ticked);
+        else if (s_video_marking)
+            os64_strcopy(s_cost.mark_who, sizeof(s_cost.mark_who), "a video's new picture");
+        else if (s_marking_named != NULL && s_marking_named[0] != '\0')
+            os64_snprintf(s_cost.mark_who, sizeof(s_cost.mark_who), "a change to %s", s_marking_named);
         else
             os64_strcopy(s_cost.mark_who, sizeof(s_cost.mark_who), "the page");
     }
@@ -10647,8 +10703,11 @@ static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
     s_tick_marking = true;
     if (box == yonder_canvas_owner(g.page.tree, &asking))
         mark_whole(WHOLE_BACKDROP, false);
-    else if (os64_rect_intersect(r, *view, &meet))
+    else if (os64_rect_intersect(r, *view, &meet)) {
+        s_marking_box = box;
         mark_part(meet);
+        s_marking_box = NULL;
+    }
     s_tick_marking = false;
 }
 
@@ -10662,6 +10721,63 @@ static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 // layouts stopped by what they cost, the ticks stop too, said where they
 // failed (say_failed).
 static void tick_page_run(uint64_t now, bool frame);
+
+// The elements a tick changed, named for the record (flow_motion_ticked):
+// the one being named, its words so far and whether its longhands' list
+// has begun, and the first one's whole, which names the biggest part when
+// the tick marked it.
+typedef struct {
+    const os64_html_node_t *node;
+    char what[96];
+    size_t at;
+    bool listing;
+    char first[96];
+} TickNaming;
+
+// The element being named made whole — "canvas#g.glow (opacity)" — and
+// counted once for this tick in the reading's tally (s_cost.ticked).
+static void tick_named_done(TickNaming *k)
+{
+    if (k->node == NULL)
+        return;
+    if (k->at + 1 < sizeof(k->what))
+        os64_strcopy(k->what + k->at, sizeof(k->what) - k->at, ")");
+    if (k->first[0] == '\0')
+        os64_strcopy(k->first, sizeof(k->first), k->what);
+    int32_t i = 0;
+    for (; i < s_cost.nticked && !os64_streq(s_cost.ticked[i].what, k->what); i++) {}
+    if (i == s_cost.nticked) {
+        if (i == TICKED_MAX) {
+            s_cost.ticked_rest++;
+            k->node = NULL;
+            return;
+        }
+        os64_strcopy(s_cost.ticked[i].what, sizeof(s_cost.ticked[i].what), k->what);
+        s_cost.ticked[i].n = 0;
+        s_cost.nticked++;
+    }
+    s_cost.ticked[i].n++;
+    k->node = NULL;
+}
+
+// One longhand an element the tick changed animates (flow_motion_ticked
+// hands an element's together).
+static void tick_named(void *ctx, const os64_html_node_t *node, int32_t prop)
+{
+    TickNaming *k = ctx;
+    if (node != k->node) {
+        tick_named_done(k);
+        k->node = node;
+        k->at = element_named(k->what, sizeof(k->what), "", node);
+        k->listing = false;
+    }
+    if (k->at + 1 < sizeof(k->what))
+        k->at += (size_t)os64_snprintf(k->what + k->at, sizeof(k->what) - k->at, "%s%s",
+                                       k->listing ? ", " : " (", garb_prop_name((garb_prop_t)prop));
+    k->listing = true;
+    if (k->at >= sizeof(k->what))
+        k->at = sizeof(k->what) - 1;
+}
 
 static void tick_page(uint64_t now, bool frame)
 {
@@ -10677,6 +10793,7 @@ static void tick_page_run(uint64_t now, bool frame)
     os64_gui_rect_t v = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
     int64_t began_us = os64_micros();
     bool moved = false;
+    const os64_gui_rect_t most_was = s_cost.mark_most;
     if (!flow_motion_tick(g.page.tree, now, scroll_now(), frame ? tick_mark : NULL, &v, &moved)) {
         if (motion_cost_us() > (uint64_t)MOTION_COST_MS * 1000) {
             g.ticked = true;
@@ -10700,6 +10817,13 @@ static void tick_page_run(uint64_t now, bool frame)
         g.tick_painting = true;
         g.tick_began = now;
         g.tick_began_us = began_us;
+        // The record names what the tick changed, not the box that marked
+        // it: in a filtered group that is the group's.
+        TickNaming k = {0};
+        flow_motion_ticked(g.page.tree, tick_named, &k);
+        tick_named_done(&k);
+        if (k.first[0] != '\0' && os64_memcmp(&most_was, &s_cost.mark_most, sizeof(most_was)) != 0)
+            os64_snprintf(s_cost.mark_who, sizeof(s_cost.mark_who), "an animation of %s", k.first);
     }
 }
 
@@ -12861,9 +12985,13 @@ static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
     // the toolkit's list of rectangles becomes one round all of them past
     // its room (OS64_UI_DAMAGE_MAX), and so many parts so far apart save
     // little over the whole.
-    if (why == NULL && (int64_t)reach.w * reach.h * 2 > (int64_t)s_change.view.w * s_change.view.h)
+    if (why == NULL && (int64_t)reach.w * reach.h * 2 > (int64_t)s_change.view.w * s_change.view.h) {
         why = "parts past half the view";
-    s_change.named[0] = '\0';
+        at = s_change.biggest_node;     // what marked the biggest of them
+    }
+    s_change.named[0] = s_change.biggest_named[0] = '\0';
+    if (s_change.biggest_node != NULL)
+        element_named(s_change.biggest_named, sizeof(s_change.biggest_named), "", s_change.biggest_node);
     if (s_layout_profile && layout_profile_diag(p) != NULL) {
         if (at != NULL && at->kind != OS64_HTML_ELEMENT)
             at = os64_html_flat_parent(page_doc(p), at);
@@ -12948,7 +13076,8 @@ static bool script_rebuild(void)
         // restyle kept in the shown tree hands its parts during the layout,
         // and the two trees are compared once it is made.
         os64_html_reader_free(s_change.reader);
-        s_change = (__typeof__(s_change)){.armed = true, .view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}};
+        s_change = (__typeof__(s_change)){.armed = true, .view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h},
+                                         .biggest = -1};
         s_change.reader = os64_html_reader_new((os64_html_document_t *)page_doc(p), p->rendered_version);
         s_change.cascade = p->cascade;
         s_change.cascade_generation = p->cascade != NULL ? garb_cascade_generation(p->cascade) : 0;
@@ -13020,8 +13149,11 @@ static bool script_rebuild(void)
         if (whole != NULL)
             mark_whole(WHOLE_SCRIPT, false);
         else
-            for (int32_t i = 0; i < s_change.n; i++)
+            for (int32_t i = 0; i < s_change.n; i++) {
+                s_marking_named = i == s_change.biggest ? s_change.biggest_named : NULL;
                 mark_part(s_change.part[i]);
+                s_marking_named = NULL;
+            }
         // A check due for a rebuild painted in parts, with what it marked
         // for the record's line.
         if (whole == NULL && s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {
@@ -19357,18 +19489,27 @@ static void timed_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64
     else if (!video)
         s_drawn_canvases_lost = true;
     uint64_t spent = cycles_since(began);
-    char what[80];
+    char what[112];
     if (video) {
         os64_snprintf(what, sizeof(what), "video %dx%d", (int)c.w, (int)c.h);
         effect_counted(what, spent);
     } else {
         // In two rows: asking the script side for the bitmap, whose cost
         // the cut cannot follow, and the draw, which walks only the cut.
+        // Which canvas, by its element (cut short), so two drawn over one
+        // box are two rows; and whether an element round it is at opacity
+        // 0, which draws it at full cost and shows none of it.
         uint64_t got = s_canvas_last.got_cycles < spent ? s_canvas_last.got_cycles : spent;
-        os64_snprintf(what, sizeof(what), "canvas %dx%d of %ux%u %s drawn %dx%d on %d", (int)c.w, (int)c.h,
+        char name[32] = "canvas";
+        if (b->node != NULL)
+            element_named(name, sizeof(name), "", b->node);
+        bool hidden = false;
+        for (const flow_box_t *a = b; a != NULL && !hidden; a = a->parent)
+            hidden = a->style != NULL && a->style->opacity == 0;
+        os64_snprintf(what, sizeof(what), "%s %dx%d of %ux%u %s drawn %dx%d on %d%s", name, (int)c.w, (int)c.h,
                       (unsigned)s_canvas_last.bitmap_w, (unsigned)s_canvas_last.bitmap_h,
                       s_canvas_last.smoothed ? "smoothed" : "copied", (int)s_canvas_last.drawn.w,
-                      (int)s_canvas_last.drawn.h, (int)s_canvas_last.targets);
+                      (int)s_canvas_last.drawn.h, (int)s_canvas_last.targets, hidden ? " at opacity 0" : "");
         effect_counted(what, spent - got);
         os64_snprintf(what, sizeof(what), "canvas bitmap %ux%u asked for", (unsigned)s_canvas_last.bitmap_w,
                       (unsigned)s_canvas_last.bitmap_h);
