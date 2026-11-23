@@ -3,8 +3,9 @@
 
 // The arithmetic of a sound's bytes as they come off the network (media.c),
 // pure so the host can drive it (tools/test_media_bytes_host.sh): which of a
-// seek's answers to give, how much of the kept bytes to let go for room, and
-// what a response's head says about its length and its ranges.
+// seek's answers to give, how much of the kept bytes to let go for room,
+// what a response's head says about its length, its ranges and its type,
+// and the words a failed element is recorded in.
 //
 // The bytes kept are a WINDOW of the resource: offsets [base, base + have).
 // It starts at 0 and grows as the body arrives; a seek far from it starts a
@@ -71,5 +72,34 @@ bool yonder_media_accepts_ranges(const char *headers, size_t length);
 // its Last-Modified (prefixed so the two never compare equal), into `out`;
 // empty when it carries neither, or when it does not fit.
 void yonder_media_validator(const char *headers, size_t length, char *out, size_t cap);
+// Content-Type's media type, without its parameters (`text/html` of
+// `text/html; charset=utf-8`), into `out`; empty when there is none, or
+// when it does not fit.
+void yonder_media_content_type(const char *headers, size_t length, char *out, size_t cap);
+
+// What a failed element is recorded and said with (yonder.c's FAILED
+// media line): the element, the error the page was handed, the reason
+// handed with it, and what is known of how it came to that. Strings are
+// never NULL; "" is none.
+typedef struct {
+    const char *element;        // "video 2": its kind and its place among the page's own
+    int error;                  // MediaError's code (dom/media.h)
+    const char *reason;         // MediaError.message
+    bool fetched;               // from the network (else a file)
+    int status;                 // the failing answer's HTTP status, 0 none came
+    const char *type;           // that answer's Content-Type
+    uint64_t received;          // the bytes that came before it failed
+    uint64_t range_from;        // the failing request's first byte: 0 the first request, else a Range request
+    const char *said;           // libmedia's own words for a failed open or decode
+    const char *format;         // the container libmedia read it as
+    const char *sound, *picture;    // the codecs it named
+    bool sound_unplayable, picture_unplayable;
+} yonder_media_failure_t;
+
+// The failure in words, into `out` (cut short to fit, always ended):
+// `video 2, not supported: The server answered 403 (HTTP 403, text/html,
+// 512 bytes received, the first request)`, and after a `;` what libmedia
+// said and named when it differs from the reason.
+void yonder_media_failure_text(const yonder_media_failure_t *f, char *out, size_t cap);
 
 #endif

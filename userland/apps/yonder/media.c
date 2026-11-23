@@ -89,6 +89,17 @@
 // How often yonder's end looks for the threads to have let go.
 #define STOP_POLL_MS 10u
 
+// What the bytes' reader has heard of the fetch, for a failure's record
+// (yonder_media_failure_take): the last answer's status and Content-Type,
+// the bytes that came, and where the last request began (0: the first,
+// else a Range request).
+typedef struct {
+    int status;
+    char type[48];
+    uint64_t received;
+    uint64_t from;
+} MediaHeard;
+
 struct yonder_media {
     yonder_media_t *next;           // s_audio.sessions
     os64_lock_t lock;
@@ -161,6 +172,18 @@ struct yonder_media {
     bool arrived;                   // the resource's end is in the window
     bool failed, opening;
     char why[96];
+    MediaHeard heard;               // the reader's; told to `heard_told` under `lock`
+    // A failure's record, the window's: the element and its address as
+    // the record names them, given at open.
+    char element[16];
+    char named[160];
+    // Under `lock`: what the reader had heard when it last told (bytes_arrival,
+    // fail), what libmedia said and named of a failed open or decode
+    // (session_facts), and whether the failure is on the record.
+    MediaHeard heard_told;
+    int open_result;
+    os64_media_info_t open_info;
+    bool failure_told;
 };
 
 static struct {
@@ -277,6 +300,7 @@ static bool keep(yonder_media_t *m, const uint8_t *data, size_t n)
     }
     os64_memcpy(m->bytes + have, data, n);
     m->window.have += n;
+    m->heard.received += n;
     return true;
 }
 
@@ -287,6 +311,8 @@ static bool keep(yonder_media_t *m, const uint8_t *data, size_t n)
 // the head fails the load (`why` says why).
 static bool head_taken(yonder_media_t *m, const yonder_fetched_t *head)
 {
+    m->heard.status = head->status;
+    yonder_media_content_type(head->headers, head->headers_len, m->heard.type, sizeof(m->heard.type));
     if (head->status != 0 && (head->status < 200 || head->status > 299)) {
         os64_snprintf(m->why, sizeof(m->why), "The server answered %d", (int)head->status);
         return false;
@@ -395,8 +421,15 @@ static bool pump_ahead(yonder_media_t *m, uint64_t ahead)
     yonder_fetched_t *got = m->product;
     os64_lock_release(&m->lock);
     if (done && !m->arrived && !m->failed && !m->headed) {
+        if (got != NULL) {
+            m->heard.status = got->status;
+            yonder_media_content_type(got->headers, got->headers_len, m->heard.type, sizeof(m->heard.type));
+        }
         if (got == NULL || !got->ok) {
-            os64_strcopy(m->why, sizeof(m->why), "The sound could not be fetched");
+            if (got != NULL && got->why[0] != '\0')
+                os64_snprintf(m->why, sizeof(m->why), "The sound could not be fetched: %s", got->why);
+            else
+                os64_strcopy(m->why, sizeof(m->why), "The sound could not be fetched");
             m->failed = true;
         } else if (!got->streamed) {
             if (got->status != 0 && (got->status < 200 || got->status > 299)) {
@@ -410,6 +443,7 @@ static bool pump_ahead(yonder_media_t *m, uint64_t ahead)
             }
         } else {
             // Streamed, but its head was never published: nothing will come.
+            os64_strcopy(m->why, sizeof(m->why), "The answer ended before its head came");
             m->failed = true;
         }
         moved = true;
@@ -708,6 +742,7 @@ static bool loader_start(yonder_media_t *m, uint64_t from)
         job->headers_len = os64_strlen(job->headers);
     }
     m->asked_from = from;
+    m->heard.from = from;
     m->headed = false;
     way_origin_of(m->page_url, m->page != 0 ? m->page : 1, &job->request.origin);
     // HTML's CORS settings attribute: none is no-cors with credentials,
@@ -778,6 +813,7 @@ static void bytes_arrival(yonder_media_t *m)
 {
     os64_lock_acquire(&m->lock);
     arrival_locked(m);
+    m->heard_told = m->heard;
     if (m->failed && !m->bytes_failed) {
         m->bytes_failed = true;
         os64_strcopy(m->bytes_why, sizeof(m->bytes_why), m->why);
@@ -786,12 +822,17 @@ static void bytes_arrival(yonder_media_t *m)
     product_trim(m);
 }
 
+// The session failed before it had a player, on the bytes' reader's
+// thread: `why` is the page's MediaError.message, and a failure with none
+// says so rather than nothing.
 static void fail(yonder_media_t *m, int code, const char *why)
 {
     os64_lock_acquire(&m->lock);
+    m->heard_told = m->heard;
     if (m->facts.error == 0) {
         m->facts.error = code;
-        os64_strcopy(m->facts.message, sizeof(m->facts.message), why);
+        os64_strcopy(m->facts.message, sizeof(m->facts.message),
+                     why[0] != '\0' ? why : "The media failed, and nothing said why");
     }
     os64_lock_release(&m->lock);
     ring_window();
@@ -985,6 +1026,10 @@ static void session_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
         bool opened = f.info.sound == OS64_MEDIA_PLAYABLE || f.info.picture == OS64_MEDIA_PLAYABLE;
         out->error = opened ? OS64_DOM_MEDIA_ERR_DECODE : open_error(f.failure);
         os64_lock_acquire(&m->lock);
+        if (m->facts.error == 0 && m->open_result == 0) {
+            m->open_result = f.failure;
+            m->open_info = f.info;
+        }
         bool network = m->bytes_failed;
         if (network) {
             out->error = OS64_DOM_MEDIA_ERR_NETWORK;
@@ -1152,6 +1197,8 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     m->blob = os64_dom_blob_hold(r->blob);
     m->page_url = copy_text(r->page_url != NULL ? r->page_url : "about:blank");
     m->picture = r->picture;
+    os64_strcopy(m->element, sizeof(m->element), r->element != NULL ? r->element : (r->picture ? "video" : "audio"));
+    os64_strcopy(m->named, sizeof(m->named), r->named != NULL ? r->named : r->url);
     if (m->url == NULL || m->page_url == NULL || os64_bell_make(&m->bell) != 0) {
         session_free(m);
         return NULL;
@@ -1266,6 +1313,31 @@ void yonder_media_settings(yonder_media_t *m, double gain, bool muted, bool loop
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
 {
     session_facts(m, out);
+}
+
+bool yonder_media_failure_take(yonder_media_t *m, char *out, size_t cap)
+{
+    os64_lock_acquire(&m->lock);
+    bool take = m->facts.error != 0 && !m->failure_told;
+    m->failure_told |= take;
+    MediaHeard heard = m->heard_told;
+    int error = m->facts.error, result = m->open_result;
+    os64_media_info_t info = m->open_info;
+    char reason[sizeof(m->facts.message)];
+    os64_strcopy(reason, sizeof(reason), m->facts.message);
+    os64_lock_release(&m->lock);
+    if (!take)
+        return false;
+    yonder_media_failure_t f = {
+        .element = m->element, .error = error, .reason = reason, .fetched = !is_scheme(m->named, "file:"),
+        .status = heard.status, .type = heard.type, .received = heard.received, .range_from = heard.from,
+        .said = result != 0 ? os64_media_strerror(result) : "", .format = info.format, .sound = info.codec,
+        .picture = info.picture_codec, .sound_unplayable = info.sound == OS64_MEDIA_UNPLAYABLE,
+        .picture_unplayable = info.picture == OS64_MEDIA_UNPLAYABLE};
+    char text[384];
+    yonder_media_failure_text(&f, text, sizeof(text));
+    os64_snprintf(out, cap, "%s: %s", m->named, text);
+    return true;
 }
 
 bool yonder_media_frame(yonder_media_t *m, int64_t blank, int64_t period, os64_media_player_frame_t *out)

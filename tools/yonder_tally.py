@@ -183,10 +183,10 @@ def failure_key(what, message):
     """What a FAILED line is ranked by: its kind (the first word of what
     failed) and its message. A picture's and a font's message begins with
     the file's own address, which would make every one unique, so for
-    those (and their fetches') the reason after the last `: ` is the
-    message."""
+    those (and their fetches', and a media element's) the reason after
+    the last `: ` is the message."""
     kind = what.split(' ', 1)[0]
-    if kind in ('picture', 'font', 'picture-fetch', 'font-fetch') and ': ' in message:
+    if kind in ('picture', 'font', 'picture-fetch', 'font-fetch', 'media') and ': ' in message:
         message = message.rsplit(': ', 1)[1]
     return kind, message
 

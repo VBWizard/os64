@@ -13689,6 +13689,52 @@ static bool media_file_scheme(const char *url)
     return true;
 }
 
+static Page *page_of_host(const yonder_scripts_t *host);
+
+// A media element as a failure's record names it: its kind and its place
+// among its document's elements of that kind, in tree order ("video 2").
+static void media_element_name(const os64_html_node_t *node, char *out, size_t cap)
+{
+    bool video = is_video_node(node);
+    const os64_html_node_t *top = node;
+    while (top != NULL && top->parent != NULL)
+        top = top->parent;
+    uint32_t n = 0;
+    for (const os64_html_node_t *at = top; at != NULL;) {
+        if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML &&
+            at->tag == (video ? OS64_HTML_TAG_VIDEO : OS64_HTML_TAG_AUDIO))
+            n++;
+        if (at == node)
+            break;
+        if (at->first_child != NULL) {
+            at = at->first_child;
+            continue;
+        }
+        while (at != NULL && at->next == NULL)
+            at = at->parent;
+        at = at != NULL ? at->next : NULL;
+    }
+    os64_snprintf(out, cap, "%s %u", video ? "video" : "audio", n);
+}
+
+// A media element that failed, on its page's record and the console:
+// FAILED media, its address as a picture's is shown (picture_name), and
+// why. `line` is the whole message (yonder_media_failure_take), or NULL
+// for one built here from the element and `why`.
+static void media_failed(uint64_t serial, const char *line, const os64_html_node_t *node, const char *url,
+                         const char *why)
+{
+    yonder_scripts_t *host = scripts_for(serial);
+    Page *p = host != NULL ? page_of_host(host) : NULL;
+    char made[OS64_FETCH_URL_MAX + 160], element[16], name[128];
+    if (line == NULL) {
+        media_element_name(node, element, sizeof(element));
+        os64_snprintf(made, sizeof(made), "%s: %s, network: %s", picture_name(url, name, sizeof(name)), element, why);
+        line = made;
+    }
+    yonder_diag_failed(p != NULL ? p->diag : NULL, "media", line);
+}
+
 static void *media_open(void *opaque, const os64_html_node_t *node, const char *url, os64_dom_media_cors_t cors,
                         os64_dom_media_preload_t preload)
 {
@@ -13700,16 +13746,23 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     // a page from the network naming one would learn whether it exists
     // (the error tells a missing file from one that will not decode) and
     // what it holds. Refused, it is the element's network error.
-    if (media_file_scheme(url) && !media_file_scheme(page))
+    if (media_file_scheme(url) && !media_file_scheme(page)) {
+        media_failed(serial, NULL, node, url, "a file on this machine, asked for by a page that is not");
         return NULL;
+    }
     // A blob: address's entry is taken here, at the resource selection's
     // turn, which is where the standard parses the element's URL too
     // (BLOB_URLS.md § 1.8).
     os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(host), url);
     bool picture = is_video_node(node);
-    yonder_media_request_t r = {url, page, serial, cors, g.way.agent, g.way.identity, blob, picture};
+    char element[16], name[128];
+    media_element_name(node, element, sizeof(element));
+    yonder_media_request_t r = {url,   page,    serial,  cors, g.way.agent, g.way.identity, blob, picture,
+                                element, picture_name(url, name, sizeof(name))};
     yonder_media_t *session = yonder_media_open(&r);
     os64_dom_blob_release(blob);
+    if (session == NULL)
+        media_failed(serial, NULL, node, url, "no memory or no thread to begin it");
     if (session != NULL && picture)
         video_add(node, session);
     return session;
@@ -13738,8 +13791,10 @@ static void media_settings(void *opaque, void *session, double gain, bool muted,
 }
 static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out)
 {
-    (void)opaque;
     yonder_media_facts(session, out);
+    char line[OS64_FETCH_URL_MAX + 512];
+    if (out->error != 0 && yonder_media_failure_take(session, line, sizeof(line)))
+        media_failed((uint64_t)(uintptr_t)opaque, line, NULL, NULL, NULL);
 }
 static bool media_activated(void *opaque)
 {
