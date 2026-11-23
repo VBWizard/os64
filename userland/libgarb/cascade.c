@@ -248,6 +248,8 @@ typedef struct garb_read {
     uint32_t faces_lost, allocs_failed;
     garb_anchor_t *anchors;
     int32_t nanchors, nbare;
+    garb_anchor_t *subjects;
+    int32_t nsubjects, nbare_subjects;
     garb_style_reader_t *style_readers;
     int32_t nstyle_readers;
     bool style_bare;
@@ -256,15 +258,19 @@ typedef struct garb_read {
     bool incomplete;
 } Read;
 
-// A cascade's mark on each rule of its read (consider): the element and
-// consultation it last matched for, and where in the match list, so one
-// rule matched through two selectors is counted once, for an element and
-// its pseudo-element apart, and once in each tree that styles it. The
-// cascade's own, indexed as the read's rules are: a mark on the shared rule
-// would be another cascade's to overwrite.
+// A cascade's mark on each rule of its read (consider): the match list it
+// last went into (`session`, one for each list cascade_element starts) and
+// the consultation, and where in that list, so one rule matched through two
+// selectors is counted once, for an element and its pseudo-element apart,
+// and once in each tree that styles it. A mark from an earlier list never
+// stands for this one: an update may restyle one element twice (a parent
+// marked alone whose winners changed marks its subtree again), and the
+// second list must hold every rule. The cascade's own, indexed as the
+// read's rules are: a mark on the shared rule would be another cascade's to
+// overwrite.
 typedef struct {
     const os64_html_node_t *seen;
-    uint64_t update;
+    uint64_t session;
     int32_t pass;
     int32_t slot;
 } RuleSeen;
@@ -290,6 +296,7 @@ struct garb_cascade {
     Read *read;
     garb_parsed_t *heap;
     RuleSeen *seen;
+    uint64_t match_session;
     garb_read_refusal_t read_refusal;
     bool read_written;
     garb_env_t env;
@@ -360,6 +367,8 @@ struct garb_cascade {
     // and `refusal` why the latest update answered false.
     garb_anchor_t *anchors;
     int32_t nanchors, nbare;
+    garb_anchor_t *subjects;
+    int32_t nsubjects, nbare_subjects;
     // The style readers of every rule (garb_cascade_style_may_read), up to
     // GARB_STYLE_READERS; `style_bare`: one narrows to no element, there
     // were more than that, or a declaration reads attr(style), so any
@@ -370,6 +379,7 @@ struct garb_cascade {
     uint32_t has_width;
     uint64_t *has_words, *has_scratch;
     garb_bare_work_t bare_work;
+    garb_has_subject_work_t has_subjects;
     garb_back_work_t back_work;
     garb_update_marks_t marks;
     garb_update_refusal_t untrackable, refusal;
@@ -2444,13 +2454,12 @@ typedef struct {
 static void consider(garb_cascade_t *c, Match **m, int32_t *n, int32_t *cap, Rule *r,
                      uint32_t spec, const Consult *q)
 {
-    uint64_t update = c->updates + (c->updating ? 1 : 0);
     int32_t pass = q->target + TARGETS * q->context;
     // No marks only where nothing is matched (build's failure path).
     if (c->seen == NULL)
         return;
     RuleSeen *mark = &c->seen[r - c->rules];
-    if (mark->seen == q->styled && mark->update == update && mark->pass == pass) {
+    if (mark->seen == q->styled && mark->session == c->match_session && mark->pass == pass) {
         if (spec > (*m)[mark->slot].spec)
             (*m)[mark->slot].spec = spec;
         return;
@@ -2458,7 +2467,7 @@ static void consider(garb_cascade_t *c, Match **m, int32_t *n, int32_t *cap, Rul
     if (!grow(c, (void **)m, *n, cap, sizeof(Match)))
         return;
     mark->seen = q->styled;
-    mark->update = update;
+    mark->session = c->match_session;
     mark->pass = pass;
     mark->slot = *n;
     (*m)[(*n)++] = (Match){r, spec, q->context};
@@ -2743,6 +2752,7 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
         slot->empty = c->dependencies.parent_state && garb_element_empty(el);
     }
     Consult q = {target, slot->scope, 0, el, el};
+    c->match_session++;
     int32_t nm = matching(c, &q, m, 0, mcap);
     if (own && c->shadowed) {
         int32_t context = 0;
@@ -3176,6 +3186,7 @@ static void read_install(garb_cascade_t *c, const Read *r)
     c->faces = r->faces; c->nfaces = c->facecap = r->nfaces; c->faces_lost = r->faces_lost;
     c->allocs_failed = r->allocs_failed;
     c->anchors = r->anchors; c->nanchors = r->nanchors; c->nbare = r->nbare;
+    c->subjects = r->subjects; c->nsubjects = r->nsubjects; c->nbare_subjects = r->nbare_subjects;
     c->style_readers = r->style_readers; c->nstyle_readers = r->nstyle_readers; c->style_bare = r->style_bare;
     c->dependencies = r->dependencies;
     c->untrackable = r->untrackable;
@@ -3196,6 +3207,7 @@ static void read_save(Read *r, const garb_cascade_t *c)
     r->faces = c->faces; r->nfaces = c->nfaces; r->faces_lost = c->faces_lost;
     r->allocs_failed = c->allocs_failed;
     r->anchors = c->anchors; r->nanchors = c->nanchors; r->nbare = c->nbare;
+    r->subjects = c->subjects; r->nsubjects = c->nsubjects; r->nbare_subjects = c->nbare_subjects;
     r->style_readers = c->style_readers; r->nstyle_readers = c->nstyle_readers; r->style_bare = c->style_bare;
     r->dependencies = c->dependencies;
     r->untrackable = c->untrackable;
@@ -3259,6 +3271,7 @@ static uint64_t read_digest(const Read *r)
         h = fnv(h, r->faces[f].ranges, (size_t)r->faces[f].nranges * sizeof(*r->faces[f].ranges));
     }
     h = fnv(h, r->anchors, (size_t)r->nanchors * sizeof(*r->anchors));
+    h = fnv(h, r->subjects, (size_t)r->nsubjects * sizeof(*r->subjects));
     h = fnv(h, r->style_readers, (size_t)r->nstyle_readers * sizeof(*r->style_readers));
     h = fnv(h, r->inputs, (size_t)r->ninputs * sizeof(*r->inputs));
     for (int32_t i = 0; i < r->ninputs; i++)
@@ -3329,6 +3342,8 @@ static uint64_t read_content(const Read *r)
     }
     h = fnv(h, &r->nfaces, sizeof(r->nfaces));
     h = fnv(h, &r->nanchors, sizeof(r->nanchors));
+    h = fnv(h, &r->nsubjects, sizeof(r->nsubjects));
+    h = fnv(h, &r->nbare_subjects, sizeof(r->nbare_subjects));
     h = fnv(h, &r->nbare, sizeof(r->nbare));
     h = fnv(h, &r->nstyle_readers, sizeof(r->nstyle_readers));
     h = fnv(h, &r->dependencies, sizeof(r->dependencies));
@@ -3415,6 +3430,15 @@ static bool read_sheets(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_
     int32_t anchors = 0;
     for (int32_t i = 0; i < c->nrules; ++i) anchors += garb_selectors_anchors(c->rules[i].sel, NULL, 0);
     c->anchors = anchors ? alloc(c, (size_t)anchors * sizeof(*c->anchors)) : NULL;
+    int32_t subjects = 0;
+    for (int32_t i = 0; i < c->nrules; ++i) subjects += garb_selectors_has_subjects(c->rules[i].sel, NULL, 0);
+    c->subjects = subjects ? alloc(c, (size_t)subjects * sizeof(*c->subjects)) : NULL;
+    for (int32_t i = 0; i < c->nrules && c->subjects != NULL; ++i) {
+        int32_t held = garb_selectors_has_subjects(c->rules[i].sel, c->subjects + c->nsubjects,
+                                                   subjects - c->nsubjects);
+        for (int32_t a = 0; a < held; a++) c->nbare_subjects += c->subjects[c->nsubjects + a].bare;
+        c->nsubjects += held;
+    }
     for (int32_t i = 0; i < c->nrules; ++i) {
         garb_selector_dependencies_t d = garb_selectors_dependencies(c->rules[i].sel);
         c->dependencies.following |= d.following;
@@ -3923,10 +3947,11 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
         for (size_t i = 0; i < e->nadded && !slots; ++i) slots = holds_slot(e->added[i]);
         if (slots && !mark_host_children(c, parent)) return false;
     }
-    c->mark_now = GARB_MARK_SIBLINGS;
+    c->mark_now = GARB_MARK_SUFFIX;
     if (c->dependencies.back_unbounded || c->dependencies.filtered)
         return mark_siblings(c, parent->first_child);
     if ((c->dependencies.back_child || c->dependencies.back_type) && !back_turns(c, e)) return false;
+    c->mark_now = GARB_MARK_SUFFIX;  // back_turns' marks leave it at their own kinds
     if (c->dependencies.position_front || c->dependencies.following) {
         const os64_html_node_t *previous = e->previous_sibling;
         bool boundary = !previous || previous->parent == parent;
@@ -3939,9 +3964,29 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
     }
     return true;
 }
-// One element a change may have turned a :has() on: marked alone when the
-// rules hold a :has() in a subject, and each anchor asked again, its
-// subtree or its following siblings' marked where the answer turned.
+// Whether a subject :has() of the rules may have turned at `a`, which a
+// change at or below it (or beside it, for `+`/`~`) visits: so `a` is marked
+// alone for its own match (select.h § A SUBJECT :has()). Only where some
+// subject compound's filters pass `a`, or one has none (bare), or the
+// entries could not be kept. A test of `a`'s filters as it stands now is
+// enough: they read only `a`'s own name and attributes, which could have
+// changed in this batch only by a change at `a`, and that change marks `a`
+// itself. `has_subjects` counts what was asked, let through (marked alone,
+// or already marked) and turned away.
+static bool subject_may_turn(garb_cascade_t *c, const os64_html_node_t *a)
+{
+    c->has_subjects.visited++;
+    bool may = c->nbare_subjects > 0 || c->subjects == NULL;
+    for (int32_t i = 0; i < c->nsubjects && !may; i++)
+        may = garb_anchor_filters_pass(&c->subjects[i], a);
+    if (may) c->has_subjects.marked++;
+    else c->has_subjects.turned_away++;
+    return may;
+}
+// One element a change may have turned a :has() on: marked alone where a
+// subject :has() of the rules may have turned there (subject_may_turn), and
+// each anchor asked again, its subtree or its following siblings' marked
+// where the answer turned.
 //
 // WHAT A BARE ANCHOR COSTS, and why it may cost no more: in an update an
 // anchor is asked again here, at the elements mark_has visits for a change
@@ -3972,7 +4017,7 @@ static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
     // answers, and what they turned is marked already.
     if (s->visited == c->updates + 1) return true;
     s->visited = c->updates + 1;
-    if (c->dependencies.ancestors && !mark_element(c, a)) return false;
+    if (c->dependencies.ancestors && subject_may_turn(c, a) && !mark_element(c, a)) return false;
     if (c->has_width == 0) return true;
     c->bare_work.tested += (uint64_t)c->nbare;
     anchor_bits(c, a, c->has_scratch);
@@ -4196,6 +4241,13 @@ garb_back_work_t garb_cascade_back_work(const garb_cascade_t *c)
 {
     return c ? c->back_work : (garb_back_work_t){0};
 }
+garb_has_subject_work_t garb_cascade_has_subject_work(const garb_cascade_t *c)
+{
+    garb_has_subject_work_t w = c ? c->has_subjects : (garb_has_subject_work_t){0};
+    w.entries = c ? (uint64_t)c->nsubjects : 0;
+    w.bare = c ? (uint64_t)c->nbare_subjects : 0;
+    return w;
+}
 garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c)
 {
     return c ? c->marks : (garb_update_marks_t){0};
@@ -4261,6 +4313,7 @@ const char *garb_mark_name(garb_mark_t mark)
         [GARB_MARK_PARENT] = "the parent's state", [GARB_MARK_SLOTS] = "slots",
         [GARB_MARK_INHERITED] = "inherited", [GARB_MARK_CLASS] = "its subtree (class)",
         [GARB_MARK_STYLE] = "its subtree (style)", [GARB_MARK_BACK] = "a back index's subtree",
+        [GARB_MARK_SUFFIX] = "the children's siblings",
     };
     return (unsigned)mark < GARB_MARKS ? kNames[mark] : "?";
 }
@@ -4424,6 +4477,7 @@ static void broad_name(garb_cascade_t *c)
 static bool update(garb_cascade_t *c)
 {
     c->back_work = (garb_back_work_t){0};
+    c->has_subjects = (garb_has_subject_work_t){0};
     c->marks = (garb_update_marks_t){0};
     if (c->incomplete) { c->refusal = GARB_UPDATE_INCOMPLETE; return false; }
     if (c->update_failed) { c->refusal = GARB_UPDATE_FAILED_BEFORE; return false; }

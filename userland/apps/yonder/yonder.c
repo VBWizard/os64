@@ -2321,6 +2321,8 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     if (s_lt.on && matches) {
         garb_back_work_t back = garb_cascade_back_work(cascade);
         yonder_lt_back(&s_lt, os64_micros(), back.walks, back.walked, back.turned);
+        garb_has_subject_work_t hs = garb_cascade_has_subject_work(cascade);
+        yonder_lt_has_subjects(&s_lt, os64_micros(), hs.visited, hs.marked, hs.turned_away, hs.entries, hs.bare);
         garb_update_marks_t marks = garb_cascade_update_marks(cascade);
         static const char *mark_names[GARB_MARKS];
         if (mark_names[0] == NULL)

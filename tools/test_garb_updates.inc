@@ -1097,9 +1097,10 @@ static void update_back_index(void)
 }
 
 // What an update restyled (garb_cascade_update_marks): the change marks
-// the <b> it added and, alone, the elements its :has() climb visits (the
-// div, body and html); the div's winners change, and restyling marks the
-// two spans below it, which the change did not.
+// the <b> it added and, alone, the div its :has() climb visits (body and
+// html are turned away: the subject compound is filtered by `div`); the
+// div's winners change, and restyling marks the two spans below it, which
+// the change did not.
 static void update_marks_counted(void)
 {
     size_t baseline=live;
@@ -1116,9 +1117,9 @@ static void update_marks_counted(void)
     bool ok=garb_cascade_update(c);
     garb_update_marks_t m=garb_cascade_update_marks(c);
     update_check(none.marked==0 && none.inherited==0,"marks: zeros before any update");
-    update_check(ok && m.marked==4 && m.inherited==2,"marks: the change's four and the two below a changed winner");
-    update_check(m.by[GARB_MARK_ADDED]==1 && m.by[GARB_MARK_HAS]==3 && m.by[GARB_MARK_INHERITED]==2,
-                 "marks: by kind, one added, three by the :has() climb, two inherited");
+    update_check(ok && m.marked==2 && m.inherited==2,"marks: the change's two and the two below a changed winner");
+    update_check(m.by[GARB_MARK_ADDED]==1 && m.by[GARB_MARK_HAS]==1 && m.by[GARB_MARK_INHERITED]==2,
+                 "marks: by kind, one added, one by the :has() climb, two inherited");
     update_equal(c,doc,&in);
     // A class write on the div marks its subtree under its own kind.
     os64_html_set_attr(doc,(void *)by_id(doc->document,"d"),"class","k",1);
@@ -1131,11 +1132,130 @@ static void update_marks_counted(void)
     m=garb_cascade_update_marks(c);
     update_check(ok && m.marked==0 && m.inherited==0,"marks: an update that read no changes says zeros");
     garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // A p put first: the `+` walk marks the two after it, counted as the
+    // children's siblings, not as siblings of a changed element.
+    doc=update_doc("<!doctype html><aside><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></aside>"
+                   "<div id=row><p id=a></p><p id=z></p></div>");
+    css="p + p{color:red}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    os64_html_node_t *row=(void *)by_id(doc->document,"row");
+    os64_html_insert(doc,row,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),row->first_child);
+    ok=garb_cascade_update(c);
+    m=garb_cascade_update_marks(c);
+    update_check(ok && m.by[GARB_MARK_SUFFIX]==2 && m.by[GARB_MARK_SIBLINGS]==0,
+                 "marks: the `+` walk after an insert is counted as the children's siblings");
+    update_equal(c,doc,&in);
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // With a back form too: the back walk's marks leave their own kind, and
+    // the front suffix after it is still the children's siblings.
+    doc=update_doc("<!doctype html><aside><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></aside>"
+                   "<div id=row><p id=a></p><p id=z></p></div>");
+    css="p:first-child{color:red}p:last-child{opacity:.5}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    row=(void *)by_id(doc->document,"row");
+    os64_html_insert(doc,row,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),(void *)by_id(doc->document,"z"));
+    ok=garb_cascade_update(c);
+    m=garb_cascade_update_marks(c);
+    update_check(ok && m.by[GARB_MARK_SUFFIX]==1 && m.by[GARB_MARK_SIBLINGS]==0,
+                 "marks: after a back walk the front suffix is still counted as the children's siblings");
+    update_equal(c,doc,&in);
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    // An unbounded back form marks every child, counted as the children's siblings too.
+    doc=update_doc("<!doctype html><aside><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></aside>"
+                   "<div id=row><p id=a></p><p id=z></p></div>");
+    css="p:nth-last-child(2n+1){color:red}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);
+    c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    ue_append(doc,(void *)by_id(doc->document,"row"),"p");
+    ok=garb_cascade_update(c);
+    m=garb_cascade_update_marks(c);
+    update_check(ok && m.by[GARB_MARK_SUFFIX]==2 && m.by[GARB_MARK_SIBLINGS]==0,
+                 "marks: an unbounded back form's every child is counted as the children's siblings");
+    update_equal(c,doc,&in);
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
     update_check(live==baseline,"marks: the fixture releases what it holds");
+}
+
+// ONE ELEMENT RESTYLED TWICE IN AN UPDATE keeps every rule (cascade.c
+// RuleSeen): the span's class change makes it a dirty root of its own (the
+// :has() climb turns its parent p away: the subject is filtered by `div`),
+// so it is restyled first; then the div, marked alone for its :has(), comes
+// out changed and marks its subtree again, and the span's second match
+// list must hold `.x` as the first did.
+static void update_restyled_twice(void)
+{
+    size_t baseline=live;
+    char html[2048]="<!doctype html><aside>";
+    for(int i=0;i<20;++i)strcat(html,"<i></i>");
+    strcat(html,"</aside><div id=d><p><span id=s class=y></span></p></div>");
+    os64_html_document_t *doc=update_doc(html);
+    const char *css="div:has(> b){color:red}.x{margin-top:2px}";
+    garb_parsed_t sheet;garb_parse_sheet_text(css,strlen(css),&sheet);
+    garb_sheet_in_t in={.sheet=&sheet};
+    garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    os64_html_set_attr(doc,(void *)by_id(doc->document,"s"),"class","x",1);
+    ue_append(doc,(void *)by_id(doc->document,"d"),"b");
+    update_check(garb_cascade_update(c),"restyled twice: the batch updates");
+    update_equal(c,doc,&in);
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    update_check(live==baseline,"restyled twice: the fixture releases what it holds");
+}
+
+// THE SUBJECT :has() FILTER (select.h § A SUBJECT :has()): a <b> appended
+// under #leaf visits #leaf and its five ancestors (p, div, section, body,
+// html); each is marked alone only where some subject compound's filters
+// pass it. `marked`/`away`: what garb_cascade_has_subject_work must say,
+// -1 for "do not check". Every case's winners equal a fresh cascade's.
+static void hs_case(const char *css, bool on_div, bool before_p, int marked, int away, const char *what)
+{
+    char html[2048]="<!doctype html><aside>";
+    for(int i=0;i<30;++i)strcat(html,"<i></i>");
+    strcat(html,"</aside><section id=top data-q><div id=mid class=m><p id=low class=k></p>"
+                "<p id=low2><span id=leaf></span></p></div></section>");
+    os64_html_document_t *doc=update_doc(html);
+    garb_parsed_t sheet;garb_parse_sheet_text(css,strlen(css),&sheet);
+    garb_sheet_in_t in={.sheet=&sheet};
+    garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    if(on_div) os64_html_set_attr(doc,(void *)by_id(doc->document,"mid"),"class","m on",4);
+    if(before_p) {
+        os64_html_node_t *low2=(void *)by_id(doc->document,"low2");
+        os64_html_insert(doc,low2->parent,os64_html_create_element(doc,OS64_HTML_NS_HTML,"b",NULL),low2);
+    } else ue_append(doc,(void *)by_id(doc->document,"leaf"),"b");
+    bool ok=garb_cascade_update(c);
+    garb_has_subject_work_t w=garb_cascade_has_subject_work(c);
+    if(marked>=0) ok=ok && (int)w.marked==marked;
+    if(away>=0) ok=ok && (int)w.turned_away==away;
+    if(!ok) fprintf(stderr,"  %s: marked %llu, turned away %llu, entries %llu, bare %llu\n",what,
+                    (unsigned long long)w.marked,(unsigned long long)w.turned_away,
+                    (unsigned long long)w.entries,(unsigned long long)w.bare);
+    char said[160];snprintf(said,sizeof(said),"subject :has(): %s",what);
+    update_check(ok,said);
+    update_equal(c,doc,&in);
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+}
+static void update_has_subjects(void)
+{
+    size_t baseline=live;
+    hs_case("div:has(b){color:red}",false,false,1,5,"a type passes the div alone");
+    hs_case("#mid:has(b){color:red}",false,false,1,5,"an id passes its element alone");
+    hs_case(".m:has(b){color:red}",false,false,1,5,"a class passes its element alone");
+    hs_case("[data-q]:has(b){color:red}",false,false,1,5,"an attribute's presence passes its element alone");
+    hs_case("fieldset:has(b){color:red}",false,false,0,6,"a type nothing on the climb has passes none");
+    hs_case("div:has(b){color:red}:has(i){opacity:.5}",false,false,6,0,"a bare holder beside a filtered one marks every visit");
+    hs_case(":is(div:has(b), .zz:has(b)){color:red}",false,false,1,5,"each :is() alternative holding a :has() is its own entry");
+    hs_case("section:not(.nope:has(b)){color:red}",false,false,0,6,
+            "inside :not(), a failing own test means the :has() cannot move the :not()");
+    hs_case("p.k:has(+ b){color:red}",false,true,1,-1,"the preceding siblings visited are filtered too");
+    hs_case("div.on:has(b){color:red}",true,false,-1,-1,"a class added to the ancestor in the same batch");
+    update_check(live==baseline,"subject :has(): the fixtures release what they hold");
 }
 
 static int cascade_updates(void)
 {
+    update_has_subjects();
+    update_restyled_twice();
     update_marks_counted();
     update_back_index();
     update_empty_turns();

@@ -257,6 +257,19 @@ typedef struct {
     uint64_t walks, walked, turned;
 } garb_back_work_t;
 garb_back_work_t garb_cascade_back_work(const garb_cascade_t *c);
+// What the subject :has() filter (select.h § A SUBJECT :has()) did in the
+// latest garb_cascade_update: the elements a change's :has() climb visited
+// while the rules hold a subject :has(), how many it let through to be
+// marked alone for their own match (those already marked counted too, so
+// this can pass the update's :has() marks), and how many it turned away
+// because no subject compound's
+// filters passed them; and, of the rules, how many subject :has()
+// compounds there are and how many are bare (no filter, so any element may
+// turn). The visits are zeros as garb_cascade_back_work's are.
+typedef struct {
+    uint64_t visited, marked, turned_away, entries, bare;
+} garb_has_subject_work_t;
+garb_has_subject_work_t garb_cascade_has_subject_work(const garb_cascade_t *c);
 
 // THE CALLER'S MEASURE, kept only when the cascade was made with a clock
 // (garb_cascade_limits_t.clock): a diagnostic, and with no clock nothing is
@@ -273,7 +286,10 @@ garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c);
 // Which mark an update made the elements it marked by: for a change, the
 // changed element's subtree (inheritance and descendant selectors) for a
 // change of an attribute other than `class` and `style` or of a state, an
-// added subtree, siblings (`+`, `~`, :nth-*), a :has() asked again (its
+// added subtree, the siblings a changed or turned element moves (those
+// after it for `+`/`~`, all of them for an `of S`), the siblings a change
+// of children moves (positions, `+`/`~`, `of S`: the children's siblings),
+// a :has() asked again (its
 // anchors and their reach), the parent's own state (:empty where its
 // answer turned, a <details> or <fieldset>'s first child), a shadow tree's
 // assignments; while the marked elements are restyled, an element
@@ -283,7 +299,8 @@ garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c);
 // index turned (cascade.c back_walk).
 typedef enum {
     GARB_MARK_SUBTREE, GARB_MARK_ADDED, GARB_MARK_SIBLINGS, GARB_MARK_HAS, GARB_MARK_PARENT,
-    GARB_MARK_SLOTS, GARB_MARK_INHERITED, GARB_MARK_CLASS, GARB_MARK_STYLE, GARB_MARK_BACK, GARB_MARKS
+    GARB_MARK_SLOTS, GARB_MARK_INHERITED, GARB_MARK_CLASS, GARB_MARK_STYLE, GARB_MARK_BACK, GARB_MARK_SUFFIX,
+    GARB_MARKS
 } garb_mark_t;
 const char *garb_mark_name(garb_mark_t mark);
 // What the latest garb_cascade_update restyled: the elements its changes

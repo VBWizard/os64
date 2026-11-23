@@ -314,6 +314,18 @@ void yonder_lt_build(yonder_lt_t *t, yonder_lt_why_t why, const yonder_lt_build_
     t->build_elements[why] += b->elements;
 }
 
+void yonder_lt_has_subjects(yonder_lt_t *t, int64_t at_us, uint64_t visited, uint64_t marked, uint64_t away,
+                            uint64_t entries, uint64_t bare)
+{
+    if (!t->on || visited == 0 || since(t, at_us) >= LT_END_US)
+        return;
+    t->has_visited += visited;
+    t->has_marked += marked;
+    t->has_away += away;
+    t->has_entries = entries;
+    t->has_bare = bare;
+}
+
 void yonder_lt_back(yonder_lt_t *t, int64_t at_us, uint64_t walks, uint64_t walked, uint64_t turned)
 {
     if (!t->on || walks == 0 || since(t, at_us) >= LT_END_US)
@@ -513,6 +525,19 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap)
     }
     if (t->nbroad_by != 0)
         put(&o, ")");
+    if (t->has_visited != 0) {
+        put(&o, "; subject :has() filter (");
+        put_u(&o, t->has_entries);
+        put(&o, " compounds, ");
+        put_u(&o, t->has_bare);
+        put(&o, " bare): ");
+        put_u(&o, t->has_visited);
+        put(&o, " visited, ");
+        put_u(&o, t->has_marked);
+        put(&o, " marked, ");
+        put_u(&o, t->has_away);
+        put(&o, " turned away");
+    }
     if (t->back_updates != 0) {
         put(&o, "; back indexes counted again in ");
         put_u(&o, t->back_updates);
