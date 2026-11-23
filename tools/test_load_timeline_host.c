@@ -188,11 +188,26 @@ static void test_builds_and_broad(void)
     yonder_lt_summary(&t, line, sizeof(line));
     CHECK(strstr(line, "; back indexes counted again in 2 updates: 3 walks, 35 children counted, 3 turned; ") != NULL);
     // The subject :has() filter: an update whose climb visited nothing adds nothing.
-    yonder_lt_has_subjects(&t, BASE, 6, 1, 5, 3, 0);
-    yonder_lt_has_subjects(&t, BASE + S, 4, 4, 0, 3, 1);
-    yonder_lt_has_subjects(&t, BASE + S, 0, 0, 0, 9, 9);
+    yonder_lt_has_subjects(&t, BASE, 6, 1, 4, 1, 3, 0);
+    yonder_lt_has_subjects(&t, BASE + S, 4, 4, 0, 0, 3, 1);
+    yonder_lt_has_subjects(&t, BASE + S, 0, 0, 0, 0, 9, 9);
     yonder_lt_summary(&t, line, sizeof(line));
-    CHECK(strstr(line, "; subject :has() filter (3 compounds, 1 bare): 10 visited, 5 marked, 5 turned away; ") != NULL);
+    CHECK(strstr(line, "; subject :has() filter (3 compounds, 1 bare): 10 visited, 5 marked, 4 turned away by their "
+                       "filters, 1 by the changes; ") != NULL);
+    // The readers: an update that asked and walked nothing adds nothing;
+    // a kind never asked is left out.
+    static const char *const askers[3] = {"a front index turned", "an element brought or taken", "a pair"};
+    yonder_lt_readers_t r1 = {.asked = {4, 0, 2}, .passed = {1, 0, 2}, .reached = {1, 0, 1}, .front_walks = 1,
+                              .front_walked = 3, .front_turned = 1, .walks = 2, .walked = 9, .readers = 7, .bare = 1};
+    yonder_lt_readers_t r2 = {.asked = {2, 0, 0}, .passed = {2, 0, 0}, .reached = {2, 0, 0}, .readers = 7, .bare = 1};
+    yonder_lt_readers_t r0 = {.readers = 9, .bare = 9};
+    yonder_lt_readers(&t, BASE, &r1, 3, askers);
+    yonder_lt_readers(&t, BASE + S, &r2, 3, askers);
+    yonder_lt_readers(&t, BASE + S, &r0, 3, askers);
+    yonder_lt_summary(&t, line, sizeof(line));
+    CHECK(strstr(line, "; readers (7, 1 bare) asked in 2 updates, a front index turned 6 asked 3 passed 3 reached, "
+                       "a pair 2 asked 2 passed 1 reached; front indexes counted again: 1 walks, 3 children counted, "
+                       "1 turned; unbounded position walks: 2, 9 siblings walked; ") != NULL);
     // What the updates restyled.
     static const uint64_t by1[3] = {4, 0, 10}, by2[3] = {1, 1, 0};
     static const char *const kinds[3] = {"added", "class", "inherited"};
@@ -285,10 +300,13 @@ static void test_the_end(void)
     yonder_lt_parse(&t, end + 5 * S, 1000, "late feed");
     yonder_lt_broad(&t, end + 5 * S, 99, kSubtree, "late broad");
     yonder_lt_back(&t, end + 5 * S, 1, 1, 1);
-    yonder_lt_has_subjects(&t, end + 5 * S, 1, 1, 0, 1, 0);
+    yonder_lt_has_subjects(&t, end + 5 * S, 1, 1, 0, 0, 1, 0);
+    static const char *const late_askers[1] = {"late"};
+    yonder_lt_readers_t late = {.asked = {1}, .passed = {1}, .reached = {1}};
+    yonder_lt_readers(&t, end + 5 * S, &late, 1, late_askers);
     yonder_lt_marks(&t, end + 5 * S, 1, 1, NULL, 0, NULL);
     CHECK(t.nparse == 0 && t.parse_us == 0 && t.nbroad == 0 && t.broad_kept == 0 && t.nbroad_by == 0 &&
-          t.back_updates == 0 && t.marks_updates == 0 && t.has_visited == 0);
+          t.back_updates == 0 && t.marks_updates == 0 && t.has_visited == 0 && t.readers_updates == 0);
     yonder_lt_bytes(&t, end + 5 * S, 4096);
     CHECK(t.nlongs == 1);
     uint32_t layouts = 0, tasks = 0, grid = 0;

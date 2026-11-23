@@ -1846,6 +1846,17 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
             .refusals = tree == NULL || flow_incomplete(tree)};
         _Static_assert(YONDER_LAYOUT_REUSE_REASONS == FLOW_REUSE_NREASONS, "layout refusal diagnostics");
         os64_memcpy(sample.reuse_refused, reuse.refused, sizeof(sample.reuse_refused));
+        _Static_assert(YONDER_LAYOUT_ROLES == FLOW_ROLES, "graft role diagnostics");
+        static const char *role_names[FLOW_ROLES];
+        for (int r = 0; r < FLOW_ROLES; r++) {
+            if (role_names[r] == NULL) role_names[r] = flow_role_name((flow_role_t)r);
+            sample.role_roots[r] = reuse.role_roots[r];
+            sample.role_boxes[r] = reuse.role_boxes[r];
+            sample.role_us[r] = reuse.role_us[r];
+            sample.role_inside[r] = reuse.role_inside[r];
+        }
+        sample.role_clock_errors = reuse.role_clock_errors;
+        sample.role_names = role_names;
         // What it needed (yonder_needed_t), if it finished: one that did not
         // is laid out again or let go, and is no answer. yonder runs the
         // whole pipeline whatever the answer, so a layout of the first three
@@ -2352,7 +2363,20 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         garb_back_work_t back = garb_cascade_back_work(cascade);
         yonder_lt_back(&s_lt, os64_micros(), back.walks, back.walked, back.turned);
         garb_has_subject_work_t hs = garb_cascade_has_subject_work(cascade);
-        yonder_lt_has_subjects(&s_lt, os64_micros(), hs.visited, hs.marked, hs.turned_away, hs.entries, hs.bare);
+        yonder_lt_has_subjects(&s_lt, os64_micros(), hs.visited, hs.marked, hs.turned_away, hs.turned_away_change,
+                               hs.entries, hs.bare);
+        garb_reader_work_t rw = garb_cascade_reader_work(cascade);
+        yonder_lt_readers_t lr = {.front_walks = rw.front_walks, .front_walked = rw.front_walked,
+                                  .front_turned = rw.front_turned, .walks = rw.walks, .walked = rw.walked,
+                                  .readers = (uint64_t)rw.readers, .bare = (uint64_t)rw.bare};
+        static const char *asker_names[GARB_ASKERS];
+        for (int k = 0; k < GARB_ASKERS && k < YONDER_LT_ASKERS; k++) {
+            lr.asked[k] = rw.asked[k];
+            lr.passed[k] = rw.passed[k];
+            lr.reached[k] = rw.reached[k];
+            if (asker_names[k] == NULL) asker_names[k] = garb_asker_name((garb_asker_t)k);
+        }
+        yonder_lt_readers(&s_lt, os64_micros(), &lr, GARB_ASKERS, asker_names);
         garb_update_marks_t marks = garb_cascade_update_marks(cascade);
         static const char *mark_names[GARB_MARKS];
         if (mark_names[0] == NULL)
@@ -4169,6 +4193,11 @@ static const os64_html_node_t *s_marking_canvas;
 // The readings the shown page's record keeps (`d`): numbered from 1 for
 // each page shown.
 static uint32_t s_cost_readings;
+// The reading keys' presses the window received for the shown page: `d`,
+// which the page's scripts or a focused field may take before the view
+// does, and then no reading is kept, and the reading chord, which always
+// keeps one (reading_key_fact, reading_chord).
+static uint32_t s_reading_keys;
 
 // The counter, read where the program says: the memory clobber keeps the
 // compiler from moving the measured work across the read, and an lfence on
@@ -4339,8 +4368,11 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
 // apart, `over the video`. Each with how many times and its time in all,
 // in the counter's cycles (cycles(), as the stages count), the costliest
 // first. As the stages time them: a layer's or a warp's open and close,
-// not the drawing between. What the table has no room for is counted
-// together as `the rest`.
+// not the drawing between. The table keeps the costliest kinds met, not
+// the first: once it is full, a kind it does not hold takes the place of
+// the cheapest it holds when it costs that much already, and what a kind
+// gives up its place with, or one that takes none, is counted together as
+// `the rest` (a kind that comes back starts its row again).
 #define EFFECTS_MAX 32
 #define EFFECTS_DEPTH 32
 typedef struct {
@@ -4447,12 +4479,21 @@ static void effect_counted(const char *named, uint64_t spent)
     }
     int32_t i = 0;
     for (; i < s_neffects && !os64_streq(s_effects[i].what, what); i++) {}
-    if (i == s_neffects) {
-        if (s_neffects == EFFECTS_MAX) {
+    if (i == s_neffects && s_neffects == EFFECTS_MAX) {
+        int32_t cheapest = 0;
+        for (int32_t k = 1; k < s_neffects; k++)
+            if (s_effects[k].cycles < s_effects[cheapest].cycles) cheapest = k;
+        if (spent < s_effects[cheapest].cycles) {
             s_effects_rest_n++;
             s_effects_rest_cycles += spent;
             return;
         }
+        s_effects_rest_n += s_effects[cheapest].n;
+        s_effects_rest_cycles += s_effects[cheapest].cycles;
+        i = cheapest;
+        os64_strcopy(s_effects[i].what, sizeof(s_effects[i].what), what);
+        s_effects[i].n = s_effects[i].cycles = 0;
+    } else if (i == s_neffects) {
         os64_strcopy(s_effects[i].what, sizeof(s_effects[i].what), what);
         s_effects[i].n = s_effects[i].cycles = 0;
         s_neffects++;
@@ -4836,9 +4877,24 @@ static void census_turn(void)
     }
 }
 
+// The reading key on the shown page's record: how often it was pressed and
+// how many readings it kept, so a record with fewer readings than presses
+// says the page or a focused field had the rest.
+static void reading_key_fact(Page *p)
+{
+    if (p != &g.page || s_reading_keys == 0)
+        return;
+    char v[160];
+    os64_snprintf(v, sizeof(v), "pressed %u times, %u readings kept%s", (unsigned)s_reading_keys,
+                  (unsigned)s_cost_readings,
+                  s_reading_keys > s_cost_readings ? "; the page or a focused field took the rest" : "");
+    yonder_diag_reading_fact(p->diag, "reading key", v);
+}
+
 static void diag_observe(Page *p, const char *when)
 {
     yonder_diag_t *d = p->diag;
+    reading_key_fact(p);
     diag_elements(d, page_doc(p), p->scripts, p->scripting, p->modern);
     if (p->cascade != NULL)
         diag_cascade(d, p->cascade);
@@ -5735,6 +5791,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     // Its paints are counted from here (diag_paint), its readings anew.
     cost_reset();
     s_cost_readings = 0;
+    s_reading_keys = 0;
     // The families it asked for as it arrived (page_fonts) are the shown
     // page's now; another page's are let go.
     if (s_arriving.staged && g.page.diag != NULL && s_arriving.seq == yonder_diag_seq(g.page.diag)) {
@@ -20201,7 +20258,19 @@ static Key view_key(const os64_gui_event_t *ev)
     return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : a == 'd' ? KEY_RECORD : KEY_NONE;
 }
 
-// `d` writes the shown page's record now ("when asked"), keeping the paint
+// Ctrl+Alt+D, the reading chord: yonder's own, taken before any key reaches
+// the page or a control, so no script and no focused field can keep it;
+// never dispatched to the page. Plain `d` does the same where the page lets
+// it reach the view. Ctrl turns the letter into its control code (keyboard
+// translation); the letter itself is taken too.
+static bool reading_chord(const os64_gui_event_t *ev)
+{
+    char a = ev->key.ascii;
+    return ev->type == OS64_GUI_EVENT_KEY_DOWN && (ev->key.modifiers & OS64_GUI_MOD_CTRL) &&
+           (ev->key.modifiers & OS64_GUI_MOD_ALT) && (a == ('D' & 0x1F) || a == 'd' || a == 'D');
+}
+
+// `d` (or the reading chord) writes the shown page's record now ("when asked"), keeping the paint
 // counts since the last `d` as a numbered reading with where the page was
 // scrolled (diag_paint_reading), and starts them again — so each part of a
 // page can be measured on its own: scroll there, `d`, wait, `d`, and the
@@ -20221,6 +20290,7 @@ static void diag_asked(void)
     }
     diag_observe(&g.page, "when asked");
     diag_paint_reading(&g.page, ++s_cost_readings);
+    reading_key_fact(&g.page);
     if (!diag_write(g.page.diag)) {
         char said[OS64_PATH_MAX + 96];
         os64_snprintf(said, sizeof(said), "Paint reading %u kept, but the page file could not be written in %s; "
@@ -22498,6 +22568,7 @@ static void window_event(void *user, const os64_gui_event_t *event)
     if (!g.running || g.ui.quit)
         return;
     const os64_gui_event_t ev = *event;
+
     // The display's frame: its work runs in this turn (frame_answered).
     if (ev.type == OS64_GUI_EVENT_FRAME) {
         frame_answered(&ev);
@@ -22514,6 +22585,20 @@ static void window_event(void *user, const os64_gui_event_t *event)
         pointer_cancel_run();
         (void)os64_gui_window_focus(s_save.window);
         return;
+    }
+    // The reading keys (s_reading_keys), each written on the record as it
+    // comes, so any write carries the count: the chord is yonder's alone,
+    // taken here before any page or control sees a key; a plain `d` is
+    // counted whoever then takes it.
+    if (reading_chord(&ev)) {
+        s_reading_keys++;
+        reading_key_fact(&g.page);
+        diag_asked();
+        return;
+    }
+    if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii == 'd' && !(ev.key.modifiers & OS64_GUI_MOD_CTRL)) {
+        s_reading_keys++;
+        reading_key_fact(&g.page);
     }
     if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
         input_lost();

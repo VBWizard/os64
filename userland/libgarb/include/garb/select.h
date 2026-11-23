@@ -77,23 +77,27 @@ garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t 
 // write of an inline style can change what matches (the cascade adds what
 // its declarations read, garb_cascade_reads_style_attribute).
 //
-// THE BACK FORMS (:last-child, :only-child, :nth-last-child, and their
-// -of-type kin) read an element's BACK INDEX, its count from the end among
-// its element siblings (last = 1), or among those of its type. A bounded
-// one can match only up to some index: `back_child` and `back_type` are the
-// largest index any of them can match, 0 for none, so each one's answer is a
-// function of min(index, need + 1) and the cascade can remember that number
-// and compare it (cascade.c back_walk). An :nth-last whose An+B has A > 0
-// can match anywhere, and one whose bound passes GARB_BACK_INDEX_MAX is
-// taken as if it could: `back_unbounded`, which marks every sibling as
-// before. An :nth-last-child
-// with `of S` is `filtered` instead. `position_front` counts :only-child and
-// :only-of-type too, since they read the front as well.
-#define GARB_BACK_INDEX_MAX 16
+// THE POSITION FORMS read an element's FRONT INDEX, its count from the
+// start among its element siblings (first = 1) or among those of its type
+// (:first-child, :nth-child, :first-of-type, :nth-of-type), or its BACK
+// INDEX, the same from the end (:last-child, :nth-last-child and their
+// -of-type kin); :only-child and :only-of-type read both. A bounded one
+// answers alike at every index past some number: `front_child`,
+// `front_type`, `back_child` and `back_type` are the largest such number
+// any of them needs, 0 for none, so each one's answer is a function of
+// min(index, need + 1) and the cascade can remember that number and compare
+// it (cascade.c index_walk). An An+B with A > 1 never settles
+// (`2n+1`), and one whose number passes GARB_INDEX_MAX is taken as if it
+// did not: `front_unbounded` and `back_unbounded`, whose readers the
+// cascade walks (garb_selectors_readers). An nth-child with `of S` is
+// `filtered` instead. A form inside a :has() argument is none of these: a
+// change of children asks the :has() again at its parent and up (the
+// cascade's mark_has).
+#define GARB_INDEX_MAX 16
 typedef struct {
-    bool following, position_front, back_unbounded, parent_state, filtered;
+    bool following, front_unbounded, back_unbounded, parent_state, filtered;
     bool ancestors, ancestors_preceding, has_filtered, style_attribute;
-    uint8_t back_child, back_type;
+    uint8_t front_child, front_type, back_child, back_type;
 } garb_selector_dependencies_t;
 garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list);
 // What `:empty` answers at `element`: no element child and no text child
@@ -161,6 +165,77 @@ bool garb_anchor_filters_pass(const garb_anchor_t *anchor, const os64_html_node_
 // the compound fails, so the :not() holds whatever the :has() answers.
 // `bare` says it has no filter, so it can turn at any element.
 int32_t garb_selectors_has_subjects(const garb_selectors_t *list, garb_anchor_t *out, int32_t cap);
+// A SUBJECT :has() AND A CHANGE OF CHILDREN: whether adding or removing
+// `roots[0..n)`, each with what is under it, may turn subject :has()
+// `anchor` anywhere. A change of children can turn a :has() by bringing or
+// taking an element its argument matches, so each argument's compounds are
+// tested by their filters at the elements the change brought or took: the
+// roots alone for an argument of one compound behind `>` or `~` (it
+// matches a child or a following sibling of the element tested, never
+// deeper), every element under them for any other. It can also turn one
+// without bringing or taking a match, and then the answer is true whatever
+// the elements: for an argument holding a position form, :empty, :enabled,
+// :disabled, :read-only or :read-write (the last four read a fieldset's
+// children), a :not() or a :has(), a sibling combinator between its
+// compounds or inside a selector nested in one, or a compound with no
+// filter; and for one behind `+` whenever an element is brought or taken,
+// which changes the next element of the one before it. `stale(ctx,
+// element)` names an element whose attributes the same batch changed,
+// which cannot stand for what it was before the batch: true there too.
+bool garb_has_subject_children_may_turn(const garb_anchor_t *anchor, const os64_html_node_t *const *roots,
+                                        size_t n, bool (*stale)(void *, const os64_html_node_t *), void *ctx);
+
+// A READER: a compound whose match at an element can turn at a change of
+// the element's parent's children without touching the element: one
+// holding a position form or :empty, or standing left of `+` or `~`. When
+// its match at E may have turned, the elements whose winners can change
+// are its REACH from E: E itself, for a subject; E's next element sibling
+// (`+` alone), or E's following ones (`~`, and a `+` chain such as
+// `a + b + c` or `a + b ~ c`); each with its subtree where a descendant or
+// child combinator stands right of it. The reach is read from every
+// combinator right of the compound, in its own selector and around the
+// :is(), :where() or :not() it is nested in. A compound inside :host() or
+// ::slotted() reaches with subtrees, shadow trees included, as does every
+// compound of a selector ending in ::slotted(), whose slot's subtree mark
+// carries what is assigned to it.
+//
+// Its FILTERS are an anchor's (§ AN ANCHORED :has()): its own type, id,
+// classes and attributes, and those of the compounds enclosing it through
+// :is(), :where() and :not(). Each alternative of an :is() or :where() is a
+// reader of its own, with the holder's filters and what the holder reads,
+// so `:is(.a, .b) + p` is two readers and not one with no filter. Inside a
+// :not() a subject's own filters are not kept (`own` false), and what it
+// reads there is `untested`: the reader passes every element for it. A
+// compound left of a combinator anywhere names another element and keeps
+// its own filters alone. `bare`: no filter at all.
+//
+// `reads` says what turns its match (GARB_READS_*). An nth-child with
+// `of S` and what is inside a :has() argument are no readers: `filtered`
+// and the anchors carry those.
+enum {
+    GARB_READS_FRONT = 1 << 0,          // a bounded front form, among element siblings
+    GARB_READS_FRONT_TYPE = 1 << 1,     // a bounded front form, among those of its type
+    GARB_READS_BACK = 1 << 2,
+    GARB_READS_BACK_TYPE = 1 << 3,
+    GARB_READS_FRONT_ANY = 1 << 4,      // an unbounded front form, either count
+    GARB_READS_BACK_ANY = 1 << 5,
+    GARB_READS_EMPTY = 1 << 6,
+    GARB_READS_NEIGHBOURS = 1 << 7,     // its reach takes siblings: which elements stand beside it
+};
+typedef enum { GARB_REACH_SELF, GARB_REACH_NEXT, GARB_REACH_FOLLOWING, GARB_REACH_CHAIN } garb_reach_t;
+typedef struct {
+    const garb_selectors_t *list;
+    const void *compound;
+    const void *outer[GARB_ANCHOR_FILTERS];
+    int32_t nouter;
+    uint8_t reads, untested, reach;
+    bool own, down, bare;
+} garb_reader_t;
+// Writes the list's readers to out[0..cap) and answers how many the list
+// holds; more than `cap` means the rest were not written.
+int32_t garb_selectors_readers(const garb_selectors_t *list, garb_reader_t *out, int32_t cap);
+// Whether the reader's filters pass at `element` (true for a bare one).
+bool garb_reader_filters_pass(const garb_reader_t *reader, const os64_html_node_t *element);
 
 // A STYLE READER: a compound that tests the `style` attribute
 // (`[style*="display: none"]`), so an inline style write on an element it

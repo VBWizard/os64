@@ -2744,6 +2744,43 @@ static void input_key(char ascii) {
     if(!key_event(&ev) && !password_key(&ev)) os64_ui_dispatch(&g.ui,&ev);
     inputs_run();
 }
+/* THE READING CHORD: Ctrl+Alt+D is yonder's alone, taken before any key
+ * reaches the page or a control. A page with a focused field and a keydown
+ * handler that cancels every key, and logs any key it hears: the chord
+ * takes a reading, and the page hears nothing of it. */
+static void reading_chord_case(void) {
+    char was_dir[sizeof(s_diag.dir)];
+    memcpy(was_dir,s_diag.dir,sizeof(was_dir));
+    snprintf(s_diag.dir,sizeof(s_diag.dir),"/tmp/diag");
+    probe_page("<p id=log>-</p><input id=field value=x>"
+        "<script>document.addEventListener('keydown',function(e){e.preventDefault();"
+        "document.getElementById('log').textContent='heard '+e.key},true);"
+        "document.addEventListener('keypress',function(e){e.preventDefault()},true);</script>",true);
+    script_turn();
+    FormWidget *field=probe_field("field");
+    os64_ui_set_focus(&g.ui,field->w);
+    bool own_record=g.page.diag==NULL;
+    if(own_record) g.page.diag=yonder_diag_new("http://fixture.test/chord",1,0);
+    bool was_running=g.running;
+    g.running=true;
+    s_cost_readings=0; s_reading_keys=0;
+    os64_gui_event_t chord={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='D'&0x1F,.modifiers=OS64_GUI_MOD_CTRL|OS64_GUI_MOD_ALT}};
+    window_event(NULL,&chord);
+    inputs_run();
+    script_turn();
+    check(s_cost_readings==1 && probe_text_is("log","-") && os64_streq(field->text,"x"),
+          "reading chord: Ctrl+Alt+D takes a reading through a focused field and a page that cancels every key, "
+          "and the page hears nothing of it");
+    char rec[4096];
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\nreading key: pressed 1 times, 1 readings kept\n")!=NULL,
+          "reading chord: the record counts the chord with the readings it kept");
+    g.running=was_running;
+    s_cost_readings=0; s_reading_keys=0;
+    memcpy(s_diag.dir,was_dir,sizeof(was_dir));
+    if(own_record) { yonder_diag_free(g.page.diag); g.page.diag=NULL; }
+    probe_drop();
+}
 static bool status_says(const char *text) { return strstr(g.status_text,text)!=NULL; }
 static void input_links(void) {
     probe_page("<p><a id=stay href=/away>stay</a> <a id=go href=/gone>go</a></p><p id=log>-</p>"
@@ -3444,6 +3481,7 @@ static void input_cases(void) {
     yonder_bar_lower(&g.bar);
 
     input_links();
+    reading_chord_case();
     input_activation();
     player_cases();
     input_javascript_links();
@@ -8870,6 +8908,8 @@ static void diag_keep_cases(void) {
               has(big,"\npaint reading again: at y 0\n") && !has(big,"\npaint reading past:") &&
               !has(big,"\nlate ordinary:") && !has(big,"\nscript 512:"),
               "keep: readings have a room of their own, which a full ordinary room leaves them");
+        check(has(big,"\nfacts not kept by kind: plain lines 6, readings 1\n"),
+              "keep: what each room refused is said by kind, so a reading lost is never silent");
         free(big); yonder_diag_free(d);
         /* So do the measuring switches' summaries, which a page writes as
          * it runs, after its scripts have filled the ordinary room. */
@@ -9442,6 +9482,33 @@ static void paint_cost_cases(void) {
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"; the rest: 25, 0.0 ms; boxes handed the painter ")!=NULL,
           "paint effects: past the twelve said and the table's room, the rest counted together");
+    /* The table keeps the costliest, not the first met: a costly kind met
+     * once the table is full of cheap ones heads the line, and the cheap one
+     * whose place it took is in the rest. */
+    effects_reset();
+    for(int i=0;i<EFFECTS_MAX;i++) {
+        char what[24];
+        snprintf(what,sizeof(what),"warp %dx2",i);
+        effect_counted(what,1);
+    }
+    effect_counted("filter blur(4) 9x9",5000000);
+    effect_counted("cheaper than any kept",0);
+    {
+        bool held=false;
+        for(int32_t i=0;i<s_neffects;i++) held|=!strcmp(s_effects[i].what,"cheaper than any kept");
+        check(!held,"paint effects: a kind cheaper than every kind kept goes to the rest");
+    }
+    effect_counted("as cheap as the cheapest",1);
+    {
+        bool held=false;
+        for(int32_t i=0;i<s_neffects;i++) held|=!strcmp(s_effects[i].what,"as cheap as the cheapest");
+        check(held,"paint effects: a kind as costly as the cheapest kept takes its place");
+    }
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint effects: filter blur(4) 9x9: 1, 5.0 ms (5000 us each); ")!=NULL &&
+          strstr(rec,"; the rest: 23, 0.0 ms; boxes handed the painter ")!=NULL,
+          "paint effects: a costly kind met once the table is full heads the line");
     /* What a paint draws after a video is counted apart. */
     effects_reset();
     effect_counted("fills",3000000);
@@ -9453,6 +9520,14 @@ static void paint_cost_cases(void) {
           "paint effects: what is drawn after a video, counted apart");
     effects_reset();
     check(!s_effects_past_video,"paint effects: the count starting again starts before any video");
+    /* The reading key's presses beside the readings kept: presses the
+     * page or a focused field took are said, not left silent. */
+    s_reading_keys=3; s_cost_readings=1;
+    reading_key_fact(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\nreading key: pressed 3 times, 1 readings kept; the page or a focused field took the rest\n")!=NULL,
+          "readings: presses the view never saw are counted beside the readings kept");
+    s_reading_keys=0; s_cost_readings=0;
     /* The biggest part marked and by what, the biggest painted, and the
      * marks of the canvases and the form controls (YONDER_DIAGNOSTICS.md §
      * What paints cost). */
