@@ -30,6 +30,7 @@
 //   - the updates libgarb refused as broad, by the caller's name for what
 //     crossed the half in each, and what triggered those whose trigger
 //     marked the most;
+//   - what the subject :has() filter visited, marked and turned away;
 //   - what the back indexes (libgarb's back_walk) cost the updates, and
 //     what the updates that succeeded restyled: marked by their changes,
 //     and marked below a changed winner;
@@ -188,6 +189,10 @@ typedef struct {
     // The back indexes counted again (yonder_lt_back): the updates that
     // counted any, and the walks, children and turns they counted.
     uint64_t back_updates, back_walks, back_walked, back_turned;
+    // The subject :has() filter (yonder_lt_has_subjects): the elements the
+    // updates' climbs visited, marked and turned away, and the latest
+    // count of the rules' subject :has() compounds and the bare ones.
+    uint64_t has_visited, has_marked, has_away, has_entries, has_bare;
     // What the updates that succeeded restyled (yonder_lt_marks): how many
     // updates, the elements their changes marked, and those marked below an
     // element whose winners came out changed; and every mark by the kind
@@ -281,6 +286,12 @@ void yonder_lt_broad(yonder_lt_t *t, int64_t at_us, uint32_t marked, const char 
 // An update at `at_us` that counted back indexes again: `walks` walks,
 // `walked` children, `turned` of them marked. Nothing for walks 0.
 void yonder_lt_back(yonder_lt_t *t, int64_t at_us, uint64_t walks, uint64_t walked, uint64_t turned);
+// An update at `at_us` whose :has() climbs visited `visited` elements while
+// the rules hold a subject :has() (`entries` compounds, `bare` with no
+// filter), marking `marked` alone and turning `away` away. Nothing for
+// visited 0.
+void yonder_lt_has_subjects(yonder_lt_t *t, int64_t at_us, uint64_t visited, uint64_t marked, uint64_t away,
+                            uint64_t entries, uint64_t bare);
 // An update at `at_us` that succeeded, its changes marking `marked`
 // elements and restyling `inherited` more below changed winners; `by`
 // holds its `nby` counts by kind, kind i named `names[i]` (names that live

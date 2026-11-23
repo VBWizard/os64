@@ -187,6 +187,12 @@ static void test_builds_and_broad(void)
     yonder_lt_back(&t, BASE + S, 0, 0, 0);
     yonder_lt_summary(&t, line, sizeof(line));
     CHECK(strstr(line, "; back indexes counted again in 2 updates: 3 walks, 35 children counted, 3 turned; ") != NULL);
+    // The subject :has() filter: an update whose climb visited nothing adds nothing.
+    yonder_lt_has_subjects(&t, BASE, 6, 1, 5, 3, 0);
+    yonder_lt_has_subjects(&t, BASE + S, 4, 4, 0, 3, 1);
+    yonder_lt_has_subjects(&t, BASE + S, 0, 0, 0, 9, 9);
+    yonder_lt_summary(&t, line, sizeof(line));
+    CHECK(strstr(line, "; subject :has() filter (3 compounds, 1 bare): 10 visited, 5 marked, 5 turned away; ") != NULL);
     // What the updates restyled.
     static const uint64_t by1[3] = {4, 0, 10}, by2[3] = {1, 1, 0};
     static const char *const kinds[3] = {"added", "class", "inherited"};
@@ -279,9 +285,10 @@ static void test_the_end(void)
     yonder_lt_parse(&t, end + 5 * S, 1000, "late feed");
     yonder_lt_broad(&t, end + 5 * S, 99, kSubtree, "late broad");
     yonder_lt_back(&t, end + 5 * S, 1, 1, 1);
+    yonder_lt_has_subjects(&t, end + 5 * S, 1, 1, 0, 1, 0);
     yonder_lt_marks(&t, end + 5 * S, 1, 1, NULL, 0, NULL);
     CHECK(t.nparse == 0 && t.parse_us == 0 && t.nbroad == 0 && t.broad_kept == 0 && t.nbroad_by == 0 &&
-          t.back_updates == 0 && t.marks_updates == 0);
+          t.back_updates == 0 && t.marks_updates == 0 && t.has_visited == 0);
     yonder_lt_bytes(&t, end + 5 * S, 4096);
     CHECK(t.nlongs == 1);
     uint32_t layouts = 0, tasks = 0, grid = 0;

@@ -390,7 +390,13 @@ other, so their pages keep style and geometry reuse across a mutation.
 - **A `:has()` in a rule's subject** can turn on an ancestor of the change,
   or for `+`/`~` arguments on a preceding sibling of the change or of an
   ancestor. Those elements are marked alone (`mark_element`) and
-  recomputed; one the same rules match as before (a digest of them is kept
+  recomputed, but only where some subject compound's filters (a type, an
+  id, a class, an attribute, its own and those of the :not/:is/:where
+  around it: the anchors' filters, `garb_anchor_filters_pass`) pass the
+  element, or a subject compound has none (bare); an element no subject
+  compound can match is turned away. The test reads the element as it
+  stands, which is enough: its filters could have changed in the batch
+  only by a change at it, which marks it anyway. One the same rules match as before (a digest of them is kept
   in its record) and whose winners compare the same by value keeps its old
   record, so `garb_style_updated_since` reports no change, and any other
   marks its descendants for their inherited values.

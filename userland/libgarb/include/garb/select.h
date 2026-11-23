@@ -143,6 +143,21 @@ int32_t garb_selectors_anchors(const garb_selectors_t *list, garb_anchor_t *out,
 // matches there: the filters and the compound's other simple selectors
 // first, its :has() and the rest of its pseudo-classes only when they pass.
 bool garb_anchor_matches(const garb_anchor_t *anchor, const os64_html_node_t *element);
+// Whether the anchor's filters (its enclosing compounds' and its own: a
+// type, an id, a class, an attribute) pass at `element`; its :has() and
+// other pseudo-classes are not asked.
+bool garb_anchor_filters_pass(const garb_anchor_t *anchor, const os64_html_node_t *element);
+
+// A SUBJECT :has(): a compound holding :has() with nothing to its right,
+// directly or inside the :not(), :is() or :where() of one that has none
+// (`.p > x:has(.y)`, `:is(.a:has(.b), .c)`), whose match turning changes
+// that element's own winners. Recorded as an anchor is (garb_anchor_t,
+// `down` and `siblings` false), with the same filters: `.p > x:has(R)` is
+// filtered by x alone, since .p is another element. A compound inside a
+// :not() keeps its own filters as well as the holder's: where one fails,
+// the compound fails, so the :not() holds whatever the :has() answers.
+// `bare` says it has no filter, so it can turn at any element.
+int32_t garb_selectors_has_subjects(const garb_selectors_t *list, garb_anchor_t *out, int32_t cap);
 
 // A STYLE READER: a compound that tests the `style` attribute
 // (`[style*="display: none"]`), so an inline style write on an element it

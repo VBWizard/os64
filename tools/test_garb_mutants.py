@@ -148,6 +148,20 @@ mutants = [
     ('marks-a-back-turn-counted-as-siblings', CASCADE,
      '            if (!mark_changed(c, x, GARB_MARK_BACK)) return BACK_FAILED;',
      '            if (!mark_changed(c, x, GARB_MARK_SIBLINGS)) return BACK_FAILED;', UPDATES),
+    # The subject :has() filter (cascade.c subject_may_turn) and the match
+    # lists' sessions (RuleSeen).
+    ('has-subject-filter-passes-nothing', CASCADE,
+     '    bool may = c->nbare_subjects > 0 || c->subjects == NULL;\n'
+     '    for (int32_t i = 0; i < c->nsubjects && !may; i++)\n'
+     '        may = garb_anchor_filters_pass(&c->subjects[i], a);',
+     '    bool may = false; (void)a;', UPDATES),
+    ('has-subject-filter-passes-everything', CASCADE,
+     '    bool may = c->nbare_subjects > 0 || c->subjects == NULL;', '    bool may = true;', UPDATES),
+    ('rule-seen-one-session-for-every-list', CASCADE,
+     '    c->match_session++;\n    int32_t nm = matching(c, &q, m, 0, mcap);',
+     '    int32_t nm = matching(c, &q, m, 0, mcap);', UPDATES),
+    ('marks-the-childrens-siblings-counted-as-siblings', CASCADE,
+     '    c->mark_now = GARB_MARK_SUFFIX;', '    c->mark_now = GARB_MARK_SIBLINGS;', UPDATES),
     ('marks-inherited-counts-the-changes-too', CASCADE,
      '    c->marks.inherited = c->ndirty - c->marks.marked;', '    c->marks.inherited = c->ndirty;', UPDATES),
     ('back-of-type-not-counted', CASCADE,
