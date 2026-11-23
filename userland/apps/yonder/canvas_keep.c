@@ -11,15 +11,17 @@
 #define KEEP_CANVASES 32
 
 // What a canvas was last drawn at, the window's paint it was first drawn
-// at it in (yonder_canvas_keeps_paint), and the blocks it kept there (columns bx0..bx1 and
-// rows by0..by1 of the box's blocks, past-the-end), so a change lets them
-// go.
+// at it in (yonder_canvas_keeps_paint), and the blocks it kept there, each
+// by its column and row of the box's blocks (`kept`, `nkept` pairs of
+// `cap`), so a change lets go of exactly those, however far apart, and
+// never walks the blocks between that it did not keep.
 typedef struct {
     const void *who;
     uint64_t revision, paint, last;
     int32_t w, h;
-    bool premultiplied, made;
-    int32_t bx0, by0, bx1, by1;
+    bool premultiplied;
+    int32_t *kept;
+    int32_t nkept, cap;
 } Seen;
 
 struct yonder_canvas_keeps {
@@ -35,6 +37,10 @@ yonder_canvas_keeps_t *yonder_canvas_keeps_new(void)
 
 void yonder_canvas_keeps_free(yonder_canvas_keeps_t *k)
 {
+    if (k == NULL)
+        return;
+    for (int32_t i = 0; i < KEEP_CANVASES; i++)
+        os64_free(k->seen[i].kept);
     os64_free(k);
 }
 
@@ -67,25 +73,21 @@ static int32_t min32(int32_t a, int32_t b)
     return a < b ? a : b;
 }
 
-static int32_t max32(int32_t a, int32_t b)
-{
-    return a > b ? a : b;
-}
-
 // Every block `s` kept, let go now (paint_cache_forget).
 static void drop(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cache, Seen *s)
 {
     uint8_t key[KEY_BYTES];
-    for (int32_t by = s->by0; by < s->by1; by++)
-        for (int32_t bx = s->bx0; bx < s->bx1; bx++) {
-            uint32_t n = block_key(key, s->revision, s->w, s->h, s->premultiplied, bx, by);
-            if (paint_cache_forget(cache, key, n, paint_cache_hash(key, n)))
-                k->counts.dropped++;
-        }
-    s->made = false;
+    for (int32_t i = 0; i < s->nkept; i++) {
+        uint32_t n = block_key(key, s->revision, s->w, s->h, s->premultiplied, s->kept[2 * i], s->kept[2 * i + 1]);
+        if (paint_cache_forget(cache, key, n, paint_cache_hash(key, n)))
+            k->counts.dropped++;
+    }
+    s->nkept = 0;
 }
 
-// The canvas `who`'s slot: its own, else the one drawn longest ago, empty.
+// The canvas `who`'s slot: its own, else the one drawn longest ago, empty
+// (what that canvas kept is left to age out of the cache as any block
+// does).
 static Seen *slot(yonder_canvas_keeps_t *k, const void *who)
 {
     Seen *oldest = &k->seen[0];
@@ -95,8 +97,30 @@ static Seen *slot(yonder_canvas_keeps_t *k, const void *who)
         if (k->seen[i].last < oldest->last)
             oldest = &k->seen[i];
     }
+    int32_t *kept = oldest->kept;
+    int32_t cap = oldest->cap;
     *oldest = (Seen){0};
+    oldest->kept = kept;
+    oldest->cap = cap;
     return oldest;
+}
+
+// Room in `s`'s list for `more` blocks; false for no memory.
+static bool kept_room(Seen *s, int64_t more)
+{
+    if ((int64_t)s->nkept + more <= s->cap)
+        return true;
+    int64_t cap = s->cap > 0 ? s->cap : 16;
+    while (cap < (int64_t)s->nkept + more)
+        cap *= 2;
+    if (cap > INT32_MAX / 2)
+        return false;
+    int32_t *grown = os64_realloc(s->kept, (size_t)cap * 2 * sizeof(int32_t));
+    if (grown == NULL)
+        return false;
+    s->kept = grown;
+    s->cap = (int32_t)cap;
+    return true;
 }
 
 bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cache, const void *who,
@@ -113,9 +137,15 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
     s->last = ++k->clock;
     if (s->who != who || s->revision != revision || s->w != box.w || s->h != box.h ||
         s->premultiplied != premultiplied) {
-        if (s->who == who && s->made)
+        if (s->who == who)
             drop(k, cache, s);
-        *s = (Seen){who, revision, k->paint, k->clock, box.w, box.h, premultiplied, false, 0, 0, 0, 0};
+        s->who = who;
+        s->revision = revision;
+        s->paint = k->paint;
+        s->w = box.w;
+        s->h = box.h;
+        s->premultiplied = premultiplied;
+        s->nkept = 0;
         return yonder_draw_surface(dst, pitch, clip, box, smooth, source);
     }
     // Drawn at it again in the window's paint that first drew it — a
@@ -146,6 +176,7 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
     uint8_t key[KEY_BYTES];
     size_t cost = 0;
     uint64_t found = 0;
+    int64_t missing = 0;
     for (int32_t j = 0; j < nby; j++)
         for (int32_t i = 0; i < nbx; i++) {
             int32_t bw = min32(KEEP_BLOCK, box.w - (bx0 + i) * KEEP_BLOCK);
@@ -155,11 +186,16 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
             if (blocks[j * nbx + i] != NULL)
                 found++;
             else
-                cost += paint_cache_cost(n, (size_t)bw * (size_t)bh * sizeof(uint32_t));
+                cost += paint_cache_cost(n, (size_t)bw * (size_t)bh * sizeof(uint32_t)), missing++;
         }
     bool kept = cost == 0 || paint_cache_room(cache, cost);
     if (!kept)
         paint_cache_refused(cache, false);
+    // Every block made is listed (Seen), so its list must have room first.
+    if (kept && missing > 0 && !kept_room(s, missing)) {
+        paint_cache_refused(cache, true);
+        kept = false;
+    }
     uint64_t made = 0;
     for (int32_t j = 0; kept && j < nby; j++)
         for (int32_t i = 0; kept && i < nbx; i++) {
@@ -184,6 +220,9 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
                 break;
             }
             blocks[j * nbx + i] = b;
+            s->kept[2 * s->nkept] = bx0 + i;
+            s->kept[2 * s->nkept + 1] = by0 + j;
+            s->nkept++;
             made++;
         }
     if (!kept) {
@@ -197,15 +236,6 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
     }
     k->counts.found += found;
     k->counts.kept += made;
-    if (made > 0) {
-        if (!s->made) {
-            s->bx0 = bx0, s->by0 = by0, s->bx1 = bx1, s->by1 = by1;
-        } else {
-            s->bx0 = min32(s->bx0, bx0), s->by0 = min32(s->by0, by0);
-            s->bx1 = max32(s->bx1, bx1), s->by1 = max32(s->by1, by1);
-        }
-        s->made = true;
-    }
     // Laid row by row, a block's run at a time, each run's place on the
     // surface worked from where the walk is, never from the box's corner,
     // which may lie off the surface.

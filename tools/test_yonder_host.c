@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 
 #include "html/html.h"
 #include "page/page.h"
@@ -1808,6 +1809,27 @@ static void canvas_keep_cases(void)
          keep_draw_same(&rig, got, want, &who, 5000, strip, wider, true, &straight);
     expect("canvas keep: a canvas the keep forgot comes back changed and finds nothing of before", ok, NULL);
     free(src2);
+    // A canvas a million pixels square kept at two far corners lets go of
+    // the blocks it kept, not of every block between them (Codex #716).
+    {
+        uint32_t one = 0xff336699;
+        draw2d_surface_t dot = {&one, 1, 1, 4, 4, DRAW2D_ARGB8_PREMULTIPLIED};
+        os64_gui_rect_t near = {0, 0, 1000000, 1000000}, far = {KW - 1000000, KH - 1000000, 1000000, 1000000};
+        os64_gui_rect_t corner = {0, 0, 64, 64};
+        int huge = 0;
+        yonder_canvas_keep_counts_t was = yonder_canvas_keep_counts(rig.keeps);
+        ok = keep_draw_same(&rig, got, want, &huge, 9000, corner, near, true, &dot) &&
+             keep_draw_same(&rig, got, want, &huge, 9000, corner, near, true, &dot) &&
+             keep_draw_same(&rig, got, want, &huge, 9000, corner, far, true, &dot);
+        yonder_canvas_keep_counts_t held = yonder_canvas_keep_counts(rig.keeps);
+        clock_t began = clock();
+        ok = ok && keep_draw_same(&rig, got, want, &huge, 9001, corner, near, true, &dot);
+        double spent = (double)(clock() - began) / CLOCKS_PER_SEC;
+        yonder_canvas_keep_counts_t after = yonder_canvas_keep_counts(rig.keeps);
+        expect("canvas keep: a change lets go of exactly the blocks kept, however far apart, at once",
+               ok && held.kept > was.kept && after.dropped - held.dropped == held.kept - was.kept && spent < 0.5,
+               NULL);
+    }
     // Square pixels, and a bitmap at its own size, keep nothing.
     yonder_canvas_keep_counts_t plain = yonder_canvas_keep_counts(rig.keeps);
     os64_gui_rect_t own = {10, 10, 37, 23};
