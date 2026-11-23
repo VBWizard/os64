@@ -4279,7 +4279,7 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
 // what was drawn (`paint effects` in the record and in each reading): a
 // filter's layer, a backdrop filter, a layer with no filter (a blend or a
 // mask), a warp; with the first filter function and its amount, and the
-// size drawn — a warp also the size it is laid onto. Beside them the verbs
+// size drawn — a warp also where it lands and on how many targets. Beside them the verbs
 // no stage times (fills, videos and canvases — a canvas in two rows,
 // asking for its bitmap and drawing the part named — form controls,
 // stand-ins, text clips), so that what is left of
@@ -4369,8 +4369,10 @@ static struct {
     bool smoothed;          // drawn through the bilinear scaler, not copied at its own size
 } s_canvas_last;
 // What the last group laid through its matrix laid onto its first target
-// (pane_through_close): the warp walks that, whatever its sheet holds.
+// (pane_through_close): where its sheets land within what clips it, which
+// is what the warp walks; and on how many targets.
 static os64_gui_rect_t s_warp_laid;
+static int32_t s_warp_targets;
 
 static void effects_reset(void)
 {
@@ -18681,9 +18683,12 @@ static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
         os64_gui_rect_t cut = on_glass(gl, clip);
         os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
         if (!os64_rect_intersect(cut, content, &cut)) continue;
-        if (s_canvas_last.targets++ == 0)
-            s_canvas_last.drawn = cut;
         os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
+        // What the draw walks: the cut within the bitmap as fitted, which
+        // object-fit may leave smaller than the box.
+        os64_gui_rect_t walked;
+        if (os64_rect_intersect(cut, box, &walked) && s_canvas_last.targets++ == 0)
+            s_canvas_last.drawn = walked;
         consumed &= yonder_draw_surface(gl->surf->pixels, gl->surf->pitch_px, cut, box,
                                         !b->style->pixelated, &source);
     }
@@ -18962,13 +18967,18 @@ static void pane_through_close(void *ctx, uint8_t alpha, bool keep)
         return;
     yonder_sheets_t s = {t->surf[0].pixels, t->surf[1].pixels, t->bounds.w, t->bounds.h};
     s_warp_laid = (os64_gui_rect_t){0, 0, 0, 0};
+    s_warp_targets = 0;
     for (int32_t k = 0; k < gp->n; k++) {
         const Glass *on = gp->now[k];
         double lay[6];
         yonder_warp_rebase(t->m, t->bounds.x, t->bounds.y, on->dx, on->dy, lay);
         os64_gui_rect_t cut = on_glass(on, t->clip);
-        if (k == 0)
-            s_warp_laid = cut;
+        // What the warp walks: where the sheets land (their corners'
+        // whole pixels, as yonder_warp bounds itself) within the cut.
+        os64_gui_rect_t lands;
+        if (os64_rect_intersect(flow_affine_rect(lay, (os64_gui_rect_t){0, 0, t->bounds.w, t->bounds.h}), cut,
+                                &lands) && s_warp_targets++ == 0)
+            s_warp_laid = lands;
         double back[6];
         if (cut.w > 0 && cut.h > 0 && flow_affine_invert(lay, back))
             (void)yonder_warp(on->surf->pixels, on->surf->pitch_px, cut, &s, lay, back, alpha);
@@ -19252,9 +19262,9 @@ static void timed_through_close(void *ctx, uint8_t alpha, bool keep)
     uint64_t spent = cycles_since(began);
     if (s_nwarps_open > 0 && --s_nwarps_open < EFFECTS_DEPTH) {
         char what[80];
-        os64_snprintf(what, sizeof(what), "warp %dx%d%s laid on %dx%d", (int)s_warps_open[s_nwarps_open].w,
+        os64_snprintf(what, sizeof(what), "warp %dx%d%s laid on %dx%d on %d", (int)s_warps_open[s_nwarps_open].w,
                       (int)s_warps_open[s_nwarps_open].h, keep ? " kept" : "", (int)s_warp_laid.w,
-                      (int)s_warp_laid.h);
+                      (int)s_warp_laid.h, (int)s_warp_targets);
         effect_counted(what, spent + s_warps_open[s_nwarps_open].cycles);
     }
     cost_end(PS_WARPS);
