@@ -152,7 +152,7 @@ typedef struct {
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
     const char *const *cascade_reason_names;
     // The graft's role counter (libflow's flow_reuse_stats_t.role_*): the
-    // equal subtrees refused only for their role, by role, the boxes under
+    // equal subtrees refused only for their role, by role, the boxes in
     // them, the placement time inside them, and the roots holding each role
     // anywhere; names with the sample.
     uint64_t role_roots[YONDER_LAYOUT_ROLES], role_boxes[YONDER_LAYOUT_ROLES], role_us[YONDER_LAYOUT_ROLES];

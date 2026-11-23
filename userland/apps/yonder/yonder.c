@@ -4144,9 +4144,10 @@ static const os64_html_node_t *s_marking_canvas;
 // The readings the shown page's record keeps (`d`): numbered from 1 for
 // each page shown.
 static uint32_t s_cost_readings;
-// The reading key's presses the window received for the shown page,
-// whoever took them: the page's scripts or a focused field may take one
-// before the view does, and then no reading is kept (reading_key_fact).
+// The reading keys' presses the window received for the shown page: `d`,
+// which the page's scripts or a focused field may take before the view
+// does, and then no reading is kept, and the reading chord, which always
+// keeps one (reading_key_fact, reading_chord).
 static uint32_t s_reading_keys;
 
 // The counter, read where the program says: the memory clobber keeps the
@@ -4317,10 +4318,10 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
 // in the counter's cycles (cycles(), as the stages count), the costliest
 // first. As the stages time them: a layer's or a warp's open and close,
 // not the drawing between. The table keeps the costliest kinds met, not
-// the first: once it is full, a kind it has not met takes the place of the
-// cheapest it holds when it costs that much already, and what a kind gives
-// up its place with, or one that takes none, is counted together as `the
-// rest`.
+// the first: once it is full, a kind it does not hold takes the place of
+// the cheapest it holds when it costs that much already, and what a kind
+// gives up its place with, or one that takes none, is counted together as
+// `the rest` (a kind that comes back starts its row again).
 #define EFFECTS_MAX 32
 #define EFFECTS_DEPTH 32
 typedef struct {
@@ -20002,7 +20003,19 @@ static Key view_key(const os64_gui_event_t *ev)
     return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : a == 'd' ? KEY_RECORD : KEY_NONE;
 }
 
-// `d` writes the shown page's record now ("when asked"), keeping the paint
+// Ctrl+Alt+D, the reading chord: yonder's own, taken before any key reaches
+// the page or a control, so no script and no focused field can keep it;
+// never dispatched to the page. Plain `d` does the same where the page lets
+// it reach the view. Ctrl turns the letter into its control code (keyboard
+// translation); the letter itself is taken too.
+static bool reading_chord(const os64_gui_event_t *ev)
+{
+    char a = ev->key.ascii;
+    return ev->type == OS64_GUI_EVENT_KEY_DOWN && (ev->key.modifiers & OS64_GUI_MOD_CTRL) &&
+           (ev->key.modifiers & OS64_GUI_MOD_ALT) && (a == ('D' & 0x1F) || a == 'd' || a == 'D');
+}
+
+// `d` (or the reading chord) writes the shown page's record now ("when asked"), keeping the paint
 // counts since the last `d` as a numbered reading with where the page was
 // scrolled (diag_paint_reading), and starts them again — so each part of a
 // page can be measured on its own: scroll there, `d`, wait, `d`, and the
@@ -22300,9 +22313,7 @@ static void window_event(void *user, const os64_gui_event_t *event)
     if (!g.running || g.ui.quit)
         return;
     const os64_gui_event_t ev = *event;
-    if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii == 'd' &&
-        !(ev.key.modifiers & (OS64_GUI_MOD_CTRL | OS64_GUI_MOD_ALT)))
-        s_reading_keys++;
+
     // The display's frame: its work runs in this turn (frame_answered).
     if (ev.type == OS64_GUI_EVENT_FRAME) {
         frame_answered(&ev);
@@ -22319,6 +22330,20 @@ static void window_event(void *user, const os64_gui_event_t *event)
         pointer_cancel_run();
         (void)os64_gui_window_focus(s_save.window);
         return;
+    }
+    // The reading keys (s_reading_keys), each written on the record as it
+    // comes, so any write carries the count: the chord is yonder's alone,
+    // taken here before any page or control sees a key; a plain `d` is
+    // counted whoever then takes it.
+    if (reading_chord(&ev)) {
+        s_reading_keys++;
+        reading_key_fact(&g.page);
+        diag_asked();
+        return;
+    }
+    if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii == 'd' && !(ev.key.modifiers & OS64_GUI_MOD_CTRL)) {
+        s_reading_keys++;
+        reading_key_fact(&g.page);
     }
     if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
         input_lost();

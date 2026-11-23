@@ -1391,13 +1391,16 @@ typedef enum {
 
 /* Why a subtree whose boxes are all equal to the previous tree's was
  * refused for its role (FLOW_REUSE_BOX_ROLE): the role of its root, or
- * failing that the first role found under it, in this order. An item of a
- * flex or grid container; a flex container; a grid container; a positioned
- * block (relative, sticky); an absolute or fixed box, or one among inline
- * content; a transformed box; a float; an atomic inline's content; a
- * containing block for other reasons (a filter); a positioned or split
- * inline; missing-image alt text; a box that is no block container (a
- * replaced box, a table and its parts). */
+ * failing that the first role found under it (being an item is the item's
+ * own, never counted for a box above it), in this order. An item of a flex
+ * or grid container, an absolute child of one included; a flex container;
+ * a grid container; a positioned box in the flow (relative, sticky); an
+ * absolute or fixed box, or a block holding one among its inline content;
+ * a transformed box; a float, or a block holding one among its inline
+ * content; an atomic inline's content, or a block holding one; a containing
+ * block for other reasons (a filter, an inline-block's content, the root);
+ * a positioned or split inline; missing-image alt text; a box that is no
+ * block container (a replaced box, a table and its parts). */
 typedef enum {
     FLOW_ROLE_ITEM, FLOW_ROLE_FLEX, FLOW_ROLE_GRID, FLOW_ROLE_POSITIONED, FLOW_ROLE_OUT_OF_FLOW,
     FLOW_ROLE_TRANSFORMED, FLOW_ROLE_FLOAT, FLOW_ROLE_ATOMIC, FLOW_ROLE_CONTAINER, FLOW_ROLE_INLINE,
@@ -1416,13 +1419,15 @@ typedef struct {
     uint64_t intrinsic_hits, marker_measures;
     size_t metadata_bytes, metadata_peak;
     uint64_t refused[FLOW_REUSE_NREASONS];
-    // A RECORD ONLY: the roots of the equal subtrees refused for their
-    // role, each the outermost such subtree, by its role (flow_role_t); the
-    // boxes under them; the roots whose subtree holds each role anywhere
-    // (`role_inside`, a root counted under every role it holds); and, when
-    // the layout is profiled with a clock, the placement time spent inside
-    // the roots, every pass through a root's block layout summed
-    // (`role_clock_errors` counts reads that went backward).
+    // A RECORD ONLY, kept when the layout is profiled with a clock: the
+    // roots of the equal subtrees refused for their role, each the
+    // outermost such subtree, by its role (flow_role_t); the boxes in them,
+    // the roots' own included; the roots whose subtree holds each role
+    // anywhere (`role_inside`, a root counted under every role it holds);
+    // and the placement time spent inside the roots, every pass through a
+    // root's block layout summed, on the profile's clock, whose own reads
+    // it includes (a root its table places, a row or a group, takes none),
+    // with `role_clock_errors` the reads that failed or went backward.
     uint64_t role_roots[FLOW_ROLES], role_boxes[FLOW_ROLES], role_inside[FLOW_ROLES], role_us[FLOW_ROLES];
     uint64_t role_clock_errors;
     bool source_ready;

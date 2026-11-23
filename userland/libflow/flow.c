@@ -2369,13 +2369,9 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
         FReuseMatch *match = NULL;
         if (inputs) {
             tree->reuse = reuse_snapshot_new(tree, width, env, inputs);
-            match = reuse_match_new(tree, previous, env);
-            // The role counter's time is the profile's: read only when a
+            // The role counter is the profile's: it counts only when a
             // profiled layout gave a clock.
-            if (match && profile && clock) {
-                match->clock = clock;
-                match->clock_ctx = clock_ctx;
-            }
+            match = reuse_match_new(tree, previous, env, profile ? clock : NULL, clock_ctx);
         }
         tree->layout = f_layout_reusing(tree->boxes, doc, model, env, width, match,
                                          inputs ? &tree->reuse_stats : NULL);

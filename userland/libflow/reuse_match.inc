@@ -2,6 +2,7 @@
 // guards supplement that review; a same-size field edit still needs inspection.
 _Static_assert(sizeof(FBox) == 544 && sizeof(FItem) == 104 && sizeof(FInline) == 72,
                "review layout correspondence fields");
+#define ROLE(r) ((uint16_t)(1u << (r)))
 // Call-local correspondence. No old arena address escapes into the new tree.
 FReusePair *f_reuse_pair(const FReuseMatch *m, const FBox *box)
 {
@@ -13,6 +14,16 @@ FReusePair *f_reuse_pair(const FReuseMatch *m, const FBox *box)
         at = (at + 1) & (m->nslots - 1);
     }
     return NULL;
+}
+
+bool f_reuse_role_root(const FReuseMatch *m, const FReusePair *p, flow_role_t *role)
+{
+    if (!p->role_refused || (p->parent != SIZE_MAX && m->pairs[p->parent].role_refused)) return false;
+    uint16_t bits = p->roles ? p->roles : p->roles_below;
+    int r = 0;
+    while (r < FLOW_ROLE_KIND && !(bits & ROLE(r))) r++;
+    *role = (flow_role_t)r;
+    return true;
 }
 
 void *f_reuse_pointer(const FReuseMatch *m, const void *old)
@@ -72,7 +83,6 @@ static flow_reuse_reason_t reuse_node_reason(FReuseMatch *m, const os64_html_nod
     return FLOW_REUSE_NREASONS;
 }
 
-#define ROLE(r) ((uint16_t)(1u << (r)))
 static flow_reuse_reason_t reuse_items_equal(FReuseMatch *m, const FBox *a, const FBox *b,
                                             bool *ordinary, uint16_t *roles)
 {
@@ -133,14 +143,19 @@ static void reuse_match_box(FReuseMatch *m, FBox *box, const FBox *ordered,
     p->ordinary = box->kind == FB_BLOCK && !box->flex && !box->grid &&
                   !box->positioned && !box->out_of_flow && !box->transformed &&
                   box->floated == FLOW_FLOAT_NONE && !box->pos && !box->homed && !atomic;
-    p->roles = (box->kind != FB_BLOCK ? ROLE(FLOW_ROLE_KIND) : 0) | (box->flex ? ROLE(FLOW_ROLE_FLEX) : 0) |
-               (box->grid ? ROLE(FLOW_ROLE_GRID) : 0) | (box->positioned ? ROLE(FLOW_ROLE_POSITIONED) : 0) |
+    // The role counter's, when the layout is profiled. Every box whose
+    // position is not static is `positioned`: an absolute or fixed one is
+    // counted as that, not as positioned in the flow.
+    p->roles = !m->clock ? 0 : (uint16_t)((box->kind != FB_BLOCK ? ROLE(FLOW_ROLE_KIND) : 0) |
+               (box->flex ? ROLE(FLOW_ROLE_FLEX) : 0) |
+               (box->grid ? ROLE(FLOW_ROLE_GRID) : 0) |
+               (box->positioned && !box->out_of_flow ? ROLE(FLOW_ROLE_POSITIONED) : 0) |
                (box->out_of_flow ? ROLE(FLOW_ROLE_OUT_OF_FLOW) : 0) |
                (box->transformed ? ROLE(FLOW_ROLE_TRANSFORMED) : 0) |
                (box->floated != FLOW_FLOAT_NONE ? ROLE(FLOW_ROLE_FLOAT) : 0) |
                (box->pos && !box->positioned && !box->transformed ? ROLE(FLOW_ROLE_CONTAINER) : 0) |
                (box->homed ? ROLE(FLOW_ROLE_INLINE) : 0) | (atomic ? ROLE(FLOW_ROLE_ATOMIC) : 0) |
-               (box->parent && (box->parent->flex || box->parent->grid) ? ROLE(FLOW_ROLE_ITEM) : 0);
+               (box->parent && (box->parent->flex || box->parent->grid) ? ROLE(FLOW_ROLE_ITEM) : 0));
     if (!old || old->kind != box->kind || old->node != box->node ||
         old->ifc != box->ifc || old->flex != box->flex || old->grid != box->grid ||
         old->positioned != box->positioned || old->out_of_flow != box->out_of_flow ||
@@ -174,7 +189,7 @@ static void reuse_match_box(FReuseMatch *m, FBox *box, const FBox *ordered,
 }
 
 static FReuseMatch *reuse_match_new(flow_tree_t *tree, const flow_tree_t *previous,
-                                   const flow_env_t *env)
+                                   const flow_env_t *env, int64_t (*clock)(void *), void *clock_ctx)
 {
     if (!tree->reuse_stats.source_ready || !tree->reuse) return NULL;
     size_t count = tree->boxes->count, cap = f_arena_budget(env) - tree->reuse->bytes;
@@ -197,7 +212,7 @@ static FReuseMatch *reuse_match_new(flow_tree_t *tree, const flow_tree_t *previo
     if (!m) { tree->reuse_stats.refused[FLOW_REUSE_NO_MEMORY]++; return NULL; }
     *m = (FReuseMatch){.pairs = (void *)(m + 1), .capacity = count, .nslots = slots,
         .bytes = bytes, .staging_left = cap - bytes, .pointer_slots = pointers,
-        .tree = tree, .previous = previous};
+        .tree = tree, .previous = previous, .clock = clock, .clock_ctx = clock_ctx};
     m->slots = (void *)(m->pairs + count);
     m->pointers = (void *)(m->slots + slots);
     tree->reuse_stats.metadata_peak = tree->reuse->bytes + bytes;
@@ -232,26 +247,24 @@ static FReuseMatch *reuse_match_new(flow_tree_t *tree, const flow_tree_t *previo
         if (p->parent != SIZE_MAX) {
             FReusePair *up = &m->pairs[p->parent];
             up->ordinary &= p->ordinary;
-            up->roles_below |= p->roles | p->roles_below;
+            // Being an item is the item's own refusal, not its container's:
+            // what refuses a box above for an item is the container's role.
+            up->roles_below |= (uint16_t)((p->roles & ~ROLE(FLOW_ROLE_ITEM)) | p->roles_below);
             up->subtree_count += p->subtree_count;
             if (!p->equal && up->reason == FLOW_REUSE_NREASONS) up->reason = FLOW_REUSE_STRUCTURE;
         }
     }
-    // THE ROLE COUNTER'S ROOTS (a record: flow_reuse_stats_t.role_*): each
-    // equal subtree refused for a role whose parent is not one too, by its
-    // own first role or else the first under it. A pair's parent comes
-    // before it, so one pass forward sees each parent settled.
-    for (size_t i = 0; i < m->count; i++) {
-        FReusePair *p = &m->pairs[i];
-        p->role_root = p->role_refused && (p->parent == SIZE_MAX || !m->pairs[p->parent].role_refused);
-        if (!p->role_root) continue;
-        uint16_t bits = p->roles ? p->roles : p->roles_below;
-        uint8_t r = 0;
-        while (r < FLOW_ROLE_KIND && !(bits & ROLE(r))) r++;
-        p->role = r;
+    // THE ROLE COUNTER'S ROOTS (a record: flow_reuse_stats_t.role_*), when
+    // the layout is profiled: each equal subtree refused for a role whose
+    // parent is not one too, by its own first role or else the first under
+    // it (f_reuse_role_root).
+    for (size_t i = 0; m->clock && i < m->count; i++) {
+        flow_role_t r;
+        const FReusePair *p = &m->pairs[i];
+        if (!f_reuse_role_root(m, p, &r)) continue;
         tree->reuse_stats.role_roots[r]++;
         tree->reuse_stats.role_boxes[r] += p->subtree_count;
-        for (uint8_t k = 0; k < FLOW_ROLES; k++)
+        for (int k = 0; k < FLOW_ROLES; k++)
             tree->reuse_stats.role_inside[k] += ((p->roles | p->roles_below) & ROLE(k)) != 0;
     }
     return m;

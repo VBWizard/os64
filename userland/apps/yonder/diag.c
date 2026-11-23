@@ -846,8 +846,10 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
     put_lost(&o, "missing names", &d->missing);
     put_lost(&o, "failures", &d->failed);
     put_lost(&o, "facts", &d->facts);
-    // Which kind of line the rooms refused: a reading, a timeline line or a
-    // summary missing from the record is never silent.
+    // Which kind of line the rooms refused or had no memory to keep, so a
+    // reading, a timeline line or a summary missing from the record is
+    // named; past the lines the record can tell apart (`and more not
+    // counted`) none is.
     static const char *const kRooms[ROOMS] = {"plain lines", "head lines", "readings", "timeline lines",
                                               "summaries"};
     uint32_t lost_in[ROOMS] = {0};
@@ -1493,7 +1495,7 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         char roles_key[64];
         os64_snprintf(roles_key, sizeof(roles_key), "%s graft roles", key);
         int k = os64_snprintf(line, sizeof(line), "equal subtrees refused only for their role, by role "
-                              "(roots, boxes under them, placement ms inside)");
+                              "(roots, boxes in them, placement ms inside)");
         bool any = false;
         for (int r = 0; r < YONDER_LAYOUT_ROLES && k > 0 && (size_t)k < sizeof(line); r++) {
             if (s->role_roots[r] == 0) continue;
