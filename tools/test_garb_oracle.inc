@@ -35,8 +35,10 @@ static const char *oracle_pseudo(OracleRng *r)
 {
     static const char *const kPseudo[]={":first-child",":last-child",":nth-child(2)",":empty",":disabled",
                                         ":lang(fr)",":dir(rtl)",":only-child",":last-of-type",":only-of-type",
-                                        ":nth-last-child(2)",":nth-last-child(-n+3)",":nth-last-of-type(2)"};
-    return oracle_pick(r, 2) ? kPseudo[oracle_pick(r, 13)] : "";
+                                        ":nth-last-child(2)",":nth-last-child(-n+3)",":nth-last-of-type(2)",
+                                        ":nth-child(3n)",":nth-last-child(2n+1)",":nth-of-type(2n)",
+                                        ":nth-child(n+2)",":first-of-type",":not(:nth-child(2n))"};
+    return oracle_pick(r, 2) ? kPseudo[oracle_pick(r, 19)] : "";
 }
 // An element's own compound: filtered (a type, a class or an attribute),
 // sometimes with a pseudo-class beside. Few names, so rules match often
@@ -51,13 +53,16 @@ static void oracle_compound(OracleRng *r, char *out, size_t cap)
     default: snprintf(out, cap, "%s.%s%s", kOracleTags[oracle_pick(r, 4)], kOracleClasses[oracle_pick(r, 4)], pseudo); break;
     }
 }
-// What a :has() argument looks for, state pseudo-classes among it.
+// What a :has() argument looks for, state pseudo-classes among it, and
+// the forms a change of children is asked of in their own ways: a position
+// or no filter (always asked), two compounds (every element brought).
 static void oracle_argument(OracleRng *r, char *out, size_t cap)
 {
     static const char *const kStates[]={"input:checked","fieldset:disabled","input:disabled","p:empty",
-                                        "details[open]",":focus-visible","[data-x]"};
+                                        "details[open]",":focus-visible","[data-x]",".k:last-child","*",
+                                        ".x .k","span:not(.b)",".a + .k"};
     char c[64];
-    if (oracle_pick(r, 3) == 0) { snprintf(out, cap, "%s", kStates[oracle_pick(r, 7)]); return; }
+    if (oracle_pick(r, 3) == 0) { snprintf(out, cap, "%s", kStates[oracle_pick(r, 12)]); return; }
     oracle_compound(r, c, sizeof(c));
     snprintf(out, cap, "%s", c);
 }
@@ -90,7 +95,9 @@ static void oracle_sheet(OracleRng *r, char *out, size_t cap)
         oracle_argument(r, a, sizeof(a));
         oracle_declarations(r, i, decl, sizeof(decl));
         const char *p = oracle_pseudo(r);
-        switch (oracle_pick(r, 24)) {
+        char g[64];
+        oracle_compound(r, g, sizeof(g));
+        switch (oracle_pick(r, 34)) {
         case 0: len += (size_t)snprintf(out + len, cap - len, "%s:has(%s) %s{%s}", f, a, d, decl); break;
         case 1: len += (size_t)snprintf(out + len, cap - len, "%s:has(> %s) > %s{%s}", f, a, d, decl); break;
         case 2: len += (size_t)snprintf(out + len, cap - len, "%s:has(+ %s) ~ %s{%s}", f, a, d, decl); break;
@@ -118,6 +125,18 @@ static void oracle_sheet(OracleRng *r, char *out, size_t cap)
         case 20: len += (size_t)snprintf(out + len, cap - len, "%s:has(~ %s) + %s{%s}", p, a, d, decl); break;
         case 21: len += (size_t)snprintf(out + len, cap - len, "%s:is(.k, :has(%s)) > %s{%s}", p, a, d, decl); break;
         case 22: len += (size_t)snprintf(out + len, cap - len, ":where(%s:has(%s)) ~ %s{%s}", p, a, d, decl); break;
+        // The readers (select.h § A READER): `~`, a `+` chain, a `+` with a
+        // descent after it, :is() alternatives, an :empty beside, and a
+        // position form left of a combinator.
+        case 24: len += (size_t)snprintf(out + len, cap - len, "%s ~ %s{%s}", f, d, decl); break;
+        case 25: len += (size_t)snprintf(out + len, cap - len, "%s + %s + %s{%s}", f, g, d, decl); break;
+        case 26: len += (size_t)snprintf(out + len, cap - len, "%s + %s %s{%s}", f, g, d, decl); break;
+        case 27: len += (size_t)snprintf(out + len, cap - len, ":is(%s, %s) + %s{%s}", f, g, d, decl); break;
+        case 28: len += (size_t)snprintf(out + len, cap - len, "%s:empty ~ %s{%s}", f, d, decl); break;
+        case 29: len += (size_t)snprintf(out + len, cap - len, "%s%s > %s{%s}", f, p, d, decl); break;
+        case 30: len += (size_t)snprintf(out + len, cap - len, "%s%s + %s{%s}", f, p, d, decl); break;
+        case 31: len += (size_t)snprintf(out + len, cap - len, "%s + %s ~ %s{%s}", f, g, d, decl); break;
+        case 32: len += (size_t)snprintf(out + len, cap - len, "%s:not(%s + %s){%s}", d, f, g, decl); break;
         default: len += (size_t)snprintf(out + len, cap - len, "input:checked ~ %s{%s}", d, decl); break;
         }
     }
