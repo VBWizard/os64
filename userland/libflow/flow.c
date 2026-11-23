@@ -4687,10 +4687,10 @@ static void ink_grown(flow_box_t *b)
 // and the farther a blur made on a reduced copy reads,
 // FLOW_FILTER_READS_MORE) and cut to that group's bounds, then taken
 // through that box's matrix, and cut to its clip, when it is drawn through
-// one (nested_reach) —
-// a filter is spread before its own box's matrix, as group_bounds spreads
-// it — so nested filters, a filter inside a matrix and a matrix inside a
-// filter each spread it in the coordinates that filter is drawn in. Every
+// one (nested_reach) — a filter is spread before its own box's matrix, as
+// group_bounds spreads it — so nested filters, a filter inside a matrix
+// and a matrix inside a filter each spread it in the coordinates that
+// filter is drawn in. Every
 // function yonder draws is local — the colour functions touch one pixel, a
 // blur or a shadow no farther than its reach — and a list holding a URL is
 // drawn unfiltered (FILTER.md § 2); a function filter_local does not name,
