@@ -4153,9 +4153,9 @@ static struct {
     char mark_who[96];
     uint64_t canvas_marks, control_marks;
     // Canvases whose damage was acknowledged unseen instead of marked
-    // (canvas_damage_mark): under a group laid at alpha 0, and culled as
-    // transparent.
-    uint64_t unseen_alpha0, unseen_culled;
+    // (canvas_damage_mark): under a group laid at alpha 0, culled as
+    // transparent, and wholly outside the view.
+    uint64_t unseen_alpha0, unseen_culled, unseen_offview;
     // The elements the ticks that were frames changed, each with the
     // longhands its animations set, and how many such ticks changed it
     // (tick_named): the first TICKED_MAX met, the rest counted together.
@@ -9450,9 +9450,10 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (int)s_cost.mark_most.y, s_cost.mark_who, (int)s_cost.paint_most.w, (int)s_cost.paint_most.h);
     dt_put(t, "; %lu canvas marks, %lu form control marks", (unsigned long)s_cost.canvas_marks,
            (unsigned long)s_cost.control_marks);
-    if (s_cost.unseen_alpha0 + s_cost.unseen_culled > 0)
-        dt_put(t, "; canvases acknowledged unseen: %lu in a group at alpha 0, %lu culled",
-               (unsigned long)s_cost.unseen_alpha0, (unsigned long)s_cost.unseen_culled);
+    if (s_cost.unseen_alpha0 + s_cost.unseen_culled + s_cost.unseen_offview > 0)
+        dt_put(t, "; canvases acknowledged unseen: %lu in a group at alpha 0, %lu culled, %lu out of view",
+               (unsigned long)s_cost.unseen_alpha0, (unsigned long)s_cost.unseen_culled,
+               (unsigned long)s_cost.unseen_offview);
     for (int32_t i = 0; i < s_cost.nticked; i++)
         dt_put(t, "%s%s %lu", i == 0 ? "; ticks that were frames changed " : ", ", s_cost.ticked[i].what,
                (unsigned long)s_cost.ticked[i].n);
@@ -12627,11 +12628,58 @@ static void canvas_damage_part(Page *p,const flow_box_t *box,uint32_t width,uint
                                const draw2d_damage_t *damage);
 
 // Why a canvas cannot show, whatever its bitmap holds (canvas_unseen):
-// it can, it or an ancestor is culled as transparent (`unpainted`), or a
-// group around it is laid at alpha 0 (yonder_group_alpha).
-typedef enum { CANVAS_SEEN = 0, CANVAS_CULLED, CANVAS_ALPHA0 } CanvasUnseen;
+// it can, it or an ancestor is culled as transparent (`unpainted`), a
+// group around it is laid at alpha 0 (yonder_group_alpha), or, with no
+// group round it drawn through its matrix, all it can paint lies outside
+// the view (canvas_reach).
+typedef enum { CANVAS_SEEN = 0, CANVAS_CULLED, CANVAS_ALPHA0, CANVAS_OUT_OF_VIEW } CanvasUnseen;
 
-static CanvasUnseen canvas_unseen(const flow_box_t *box)
+// Where a canvas's bitmap can show, in page coordinates at `scroll`: its
+// content box (the bitmap is drawn inside it, whatever object-fit says)
+// taken out through every matrix round it, grown on every side by each
+// filter round it — its own included — at the reach that filter paints to
+// (flow_filter_reach) and the farther a reduced blur reads
+// (yonder_filter_reads_more), each in page pixels: that reach as a square
+// in the filtered box's own coordinates, taken out through its matrices.
+// What clips it is left out, so the answer is never too small — but only
+// where every matrix is one the face lays through: one it refuses (too
+// large a sheet, too deep, no memory) is drawn upright instead, elsewhere
+// (flow_box_through's `upright`), so a canvas inside a group drawn through
+// its matrix is never asked of here (canvas_unseen).
+static os64_gui_rect_t canvas_reach(const flow_box_t *box, flow_point_t scroll)
+{
+    os64_gui_rect_t r = flow_box_doc_rect_of(box, yonder_content_rect(box), scroll);
+    int64_t grow = 0;
+    for (const flow_box_t *b = box; b != NULL; b = b->parent) {
+        if (b->style->nfilter == 0)
+            continue;
+        int32_t reach[4];
+        flow_filter_reach(b, reach);
+        int32_t most = reach[0];
+        for (int k = 1; k < 4; k++)
+            most = reach[k] > most ? reach[k] : most;
+        most += yonder_filter_reads_more(b->style->filter, b->style->nfilter);
+        if (most <= 0)
+            continue;
+        os64_gui_rect_t square = flow_box_doc_rect_of(b, (os64_gui_rect_t){0, 0, most, most}, scroll);
+        grow += square.w > square.h ? square.w : square.h;
+    }
+    if (grow > INT32_MAX / 4)
+        grow = INT32_MAX / 4;
+    // Each edge grown and held to 32 bits on its own, so holding one never
+    // moves the other.
+    int64_t x0 = (int64_t)r.x - grow, y0 = (int64_t)r.y - grow;
+    int64_t x1 = (int64_t)r.x + r.w + grow, y1 = (int64_t)r.y + r.h + grow;
+    x0 = x0 < INT32_MIN ? INT32_MIN : x0, y0 = y0 < INT32_MIN ? INT32_MIN : y0;
+    x1 = x1 > INT32_MAX ? INT32_MAX : x1, y1 = y1 > INT32_MAX ? INT32_MAX : y1;
+    int64_t w = x1 - x0, h = y1 - y0;
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(w > INT32_MAX ? INT32_MAX : w),
+                             (int32_t)(h > INT32_MAX ? INT32_MAX : h)};
+}
+
+// Why the shown page's canvas `box` cannot show (CanvasUnseen); a page not
+// shown is asked only of its styles.
+static CanvasUnseen canvas_unseen(const Page *p, const flow_box_t *box)
 {
     for (const flow_box_t *b = box; b != NULL; b = b->parent)
         if (b->unpainted)
@@ -12639,6 +12687,16 @@ static CanvasUnseen canvas_unseen(const flow_box_t *box)
     for (const flow_box_t *b = box; b != NULL; b = b->parent)
         if (b->style->opacity < 1000 && yonder_group_alpha(b) == 0)
             return CANVAS_ALPHA0;
+    // Out of view only where nothing round it may be drawn elsewhere than
+    // its matrix says (canvas_reach).
+    bool through = false;
+    for (const flow_box_t *b = box; b != NULL && !through; b = b->parent)
+        through = flow_box_through(b, scroll_now(), (double[6]){0}, NULL, NULL);
+    if (p == &g.page && !through) {
+        os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}, meet;
+        if (view.w > 0 && view.h > 0 && !os64_rect_intersect(canvas_reach(box, scroll_now()), view, &meet))
+            return CANVAS_OUT_OF_VIEW;
+    }
     return CANVAS_SEEN;
 }
 
@@ -12682,10 +12740,15 @@ static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_
     // change, its whole bounds), a new tree in which the group is no
     // longer at 0 or no longer a group, or no longer transparent (the
     // trees' compare marks it by its style), and an enclosing group
-    // leaving 0 (which marks that group's bounds, this one inside). Left
-    // pending, it would be visited again after every script task, and
-    // under a group its mark is the whole view (canvas_damage_part).
-    CanvasUnseen why=canvas_unseen(box);
+    // leaving 0 (which marks that group's bounds, this one inside); and,
+    // for one whose reach lies wholly outside the view (canvas_reach),
+    // whatever brings any of it in paints that area: a scroll paints what
+    // it exposes, and a move, a matrix's tick or a resize marks where the
+    // box lands. A canvas partly in view is marked as ever, and only the
+    // paint that draws it acknowledges it. Left pending, it would be
+    // visited again after every script task, and under a group its mark is
+    // the whole view (canvas_damage_part).
+    CanvasUnseen why=canvas_unseen(p,box);
     if(why!=CANVAS_SEEN && unseen_canvas_keep(node,why))
         return;
     s_cost.canvas_marks++;
@@ -12709,6 +12772,7 @@ static void canvases_unseen_acknowledge(Page *p)
         if(!yonder_scripts_canvas_bitmap(p->scripts,s_unseen_canvases[i].node,&bitmap))continue;
         yonder_scripts_canvas_painted(p->scripts,s_unseen_canvases[i].node);
         if(s_unseen_canvases[i].why==CANVAS_ALPHA0)s_cost.unseen_alpha0++;
+        else if(s_unseen_canvases[i].why==CANVAS_OUT_OF_VIEW)s_cost.unseen_offview++;
         else s_cost.unseen_culled++;
     }
     s_nunseen_canvases=0;
