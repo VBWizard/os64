@@ -92,11 +92,15 @@ garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t 
 // cascade walks (garb_selectors_readers). An nth-child with `of S` is
 // `filtered` instead. A form inside a :has() argument is none of these: a
 // change of children asks the :has() again at its parent and up (the
-// cascade's mark_has).
+// cascade's mark_has). `up_lang`, `up_dir`, `up_disabled`: a pseudo-class
+// that reads that attribute at an ancestor (:lang(), :dir(), :disabled and
+// :enabled and the two that read them), so its change can turn a match
+// anywhere under the element.
 #define GARB_INDEX_MAX 16
 typedef struct {
     bool following, front_unbounded, back_unbounded, parent_state, filtered;
     bool ancestors, ancestors_preceding, has_filtered, style_attribute;
+    bool up_lang, up_dir, up_disabled;
     uint8_t front_child, front_type, back_child, back_type;
 } garb_selector_dependencies_t;
 garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list);
@@ -185,9 +189,11 @@ int32_t garb_selectors_has_subjects(const garb_selectors_t *list, garb_anchor_t 
 bool garb_has_subject_children_may_turn(const garb_anchor_t *anchor, const os64_html_node_t *const *roots,
                                         size_t n, bool (*stale)(void *, const os64_html_node_t *), void *ctx);
 
-// A READER: a compound whose match at an element can turn at a change of
-// the element's parent's children without touching the element: one
-// holding a position form or :empty, or standing left of `+` or `~`. When
+// A READER: a compound whose match at an element a change can turn while
+// what it reaches lies past what the change itself marks: one holding a
+// position form or :empty, or standing left of `+` or `~` (a change of its
+// parent's children turns those without touching it), or one reading an
+// attribute with a reach past its own element (ITS KEYS, below). When
 // its match at E may have turned, the elements whose winners can change
 // are its REACH from E: E itself, for a subject; E's next element sibling
 // (`+` alone), or E's following ones (`~`, and a `+` chain such as
@@ -212,6 +218,17 @@ bool garb_has_subject_children_may_turn(const garb_anchor_t *anchor, const os64_
 // `reads` says what turns its match (GARB_READS_*). An nth-child with
 // `of S` and what is inside a :has() argument are no readers: `filtered`
 // and the anchors carry those.
+//
+// ITS KEYS (garb_reader_keys): what a change of an attribute at an element
+// can turn its match by: its classes, its ids, the attributes it tests by
+// their local names, and those its pseudo-classes read (`href` for :link,
+// `checked`, `selected` and `type` for :checked, `required`, `readonly`
+// and `type` for :read-only and :read-write;
+// `disabled`, `lang`, `xml:lang` and `dir` read at an ancestor too, `up`);
+// those of the subjects of the :is(), :where() and :not() it holds, and of
+// the compounds holding it (`keys_from`; past as many as are kept it reads
+// every key, `keys_any`). GARB_READS_KEYS: it has keys and a reach past its
+// own element (a change of a key marks its element anyway).
 enum {
     GARB_READS_FRONT = 1 << 0,          // a bounded front form, among element siblings
     GARB_READS_FRONT_TYPE = 1 << 1,     // a bounded front form, among those of its type
@@ -221,16 +238,40 @@ enum {
     GARB_READS_BACK_ANY = 1 << 5,
     GARB_READS_EMPTY = 1 << 6,
     GARB_READS_NEIGHBOURS = 1 << 7,     // its reach takes siblings: which elements stand beside it
+    GARB_READS_KEYS = 1 << 8,           // an attribute, class or id, past its own element (ITS KEYS)
 };
 typedef enum { GARB_REACH_SELF, GARB_REACH_NEXT, GARB_REACH_FOLLOWING, GARB_REACH_CHAIN } garb_reach_t;
 typedef struct {
     const garb_selectors_t *list;
     const void *compound;
     const void *outer[GARB_ANCHOR_FILTERS];
-    int32_t nouter;
-    uint8_t reads, untested, reach;
-    bool own, down, bare;
+    const void *keys_from[GARB_ANCHOR_FILTERS + 1];
+    int32_t nouter, nkeys_from;
+    uint16_t reads, untested;
+    uint8_t reach;
+    bool own, down, bare, keys_any;
 } garb_reader_t;
+// A key a reader reads (ITS KEYS): an attribute by local name, a class, or
+// an id, named by the selector's own text (valid while the list is).
+enum { GARB_KEY_ATTR, GARB_KEY_CLASS, GARB_KEY_ID };
+typedef struct {
+    uint8_t kind;
+    bool up;
+    const char *name;
+    size_t len;
+} garb_key_t;
+// Writes the reader's keys to out[0..cap) and answers how many it has;
+// more than `cap` means the rest were not written.
+int32_t garb_reader_keys(const garb_reader_t *reader, garb_key_t *out, int32_t cap);
+// Whether the reader's filters pass at `element` with every test of a key
+// in `changed[0..n)` left out (a class among them, any id when an id is
+// among them, an attribute by name): a change of those keys can have
+// turned them, and the reader's match with them.
+bool garb_reader_filters_pass_except(const garb_reader_t *reader, const os64_html_node_t *element,
+                                     const garb_key_t *changed, int32_t n);
+// Whether a subject :has()'s arguments read any key of `keys[0..n)`, so a
+// change of it at an element under the subject may turn the :has() there.
+bool garb_has_subject_reads_key(const garb_anchor_t *anchor, const garb_key_t *keys, int32_t n);
 // Writes the list's readers to out[0..cap) and answers how many the list
 // holds; more than `cap` means the rest were not written.
 int32_t garb_selectors_readers(const garb_selectors_t *list, garb_reader_t *out, int32_t cap);

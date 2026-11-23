@@ -449,7 +449,7 @@ minutes, from the moment its record begins:
     timeline layouts: by who asked, in the step they ran in, the costliest first: a script's read in the stream 30 in 971.9 ms, a script's read in scripts 1 in 53.8 ms, a page arriving in the stream 1 in 44.6 ms, after a script's changes in scripts 2 in 35.0 ms; fresh cascades by part: a script's read 2 in 36.9 ms (reading the sheets 11.0, the table 0.9, matching 25.0; 2 rules and 310 elements a build), a page arriving 1 in 12.3 ms (reading the sheets 4.1, the table 0.3, matching 8.0; 2 rules and 310 elements a build); cascades not timed whole (yonder --layout-profile times them)
     timeline 0-5 s: busy 77% of 4.9 s: the stream 3714.4 ms (tasks 2654.6, layouts 1016.5, parsing 690.7, finding sheets 26.4, arriving 100.9), waiting 1158.4 ms, paint 50.0 ms (drawing 49.6), the rest 24.4 ms; layouts 31 in 1016.5 ms (a script's read 30 in 971.9, a page arriving 1 in 44.6); script tasks 4, forcing 30 layouts in 1117.8 ms; parsed 551 KiB
     timeline longest 2: at 2.3 s, the stream 1176.1 ms; layouts in it 30 in 971.9 ms (a script's read 30 in 971.9), its script tasks forcing 30 in 1117.8 ms; its longest task script file:///home/lt.html#inline-2, 1174.8 ms, forcing 30 layouts in 1117.8 ms
-    timeline broad 1: at 5.5 s, an attribute class of i#i.b at depth 4 marked 4 of 310 elements (its subtree 1, :has() 3); 1 of the batch's 1 changes had marked 156 when refused, restyling then passing the changed style of div#a.a (depth 3) down to 152
+    timeline broad 1: at 5.5 s, an attribute class of i#i.b at depth 4 marked 4 of 310 elements (a class 1, :has() 3); 1 of the batch's 1 changes had marked 156 when refused, restyling then passing the changed style of div#a.a (depth 3) down to 152
     timeline parse 1: at 0.7 s, 68.5 ms: a feed of 16384 bytes, 528 KiB into the page, inside a script still open
 
 - **The steps are the window loop's own** (`yonder_lt_step_t`): waiting,
@@ -502,8 +502,8 @@ minutes, from the moment its record begins:
   marked the most; the summary counts all): libgarb keeps, for a cascade
   given a clock, the change of the batch that marked the most (its kind,
   its target, the target's depth, the attribute, how many it marked and by
-  which mark: its subtree, added subtrees, siblings, `:has()`, the parent's
-  state, slots), the batch's size, and, when the half was crossed while
+  which mark: an attribute or a state, a class, a style, added subtrees,
+  siblings, `:has()`, the parent's state, slots, and the readers' reaches), the batch's size, and, when the half was crossed while
   restyling, the element whose changed style was passing down then and
   what restyling had marked (`inherited`) (`garb_cascade_broad_trigger`).
   The refusal itself is unchanged: Fable's ruling (§ 3) keeps it whole and

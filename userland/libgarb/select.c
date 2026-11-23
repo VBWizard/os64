@@ -1519,6 +1519,9 @@ static void dependencies(const List *list, bool anchored, bool counted, bool in_
                 }
                 switch (s->pseudo) {
                 case P_EMPTY: out->parent_state = true; break;
+                case P_LANG: out->up_lang = true; break;
+                case P_DIR: out->up_dir = true; break;
+                case P_ENABLED: case P_DISABLED: case P_READ_ONLY: case P_READ_WRITE: out->up_disabled = true; break;
                 case P_HAS:
                     out->ancestors |= !left;
                     out->has_filtered |= counted;
@@ -1529,7 +1532,8 @@ static void dependencies(const List *list, bool anchored, bool counted, bool in_
                 // :dir() reads the `dir` attribute of the element and of
                 // the ancestors it inherits from (dir_matches), so what a
                 // change of `dir` can turn is in the changed element's
-                // subtree, which an attribute's change marks. (dir=auto,
+                // subtree, which its change marks for a key read at an
+                // ancestor too (up_dir). (dir=auto,
                 // which would read descendants' text, is not implemented:
                 // DEBTS.md.)
                 default: break;
@@ -1755,7 +1759,7 @@ static Reach reach_right(const Complex *x, int32_t j, Reach around)
 }
 // What a simple selector itself reads (GARB_READS_*): a position form, by
 // whether it settles (position_reads), or :empty.
-static uint8_t simple_reads(const Simple *s)
+static uint16_t simple_reads(const Simple *s)
 {
     int32_t need;
     if (s->kind != S_PSEUDO) return 0;
@@ -1776,15 +1780,71 @@ static uint8_t simple_reads(const Simple *s)
     default: return 0;
     }
 }
+// THE KEYS a compound reads (select.h § A READER's keys): its classes, its
+// ids, the attributes it tests (by local name), and those its
+// pseudo-classes read; with `deep`, those of the subject compounds of the
+// :is(), :where() and :not() it holds too, whose match is its own. `up`:
+// read at an ancestor as well (:lang(), :dir(), :disabled and its kin).
+static int32_t key_add(garb_key_t *out, int32_t cap, int32_t n, uint8_t kind, const char *name, size_t len, bool up)
+{
+    if (n < cap) out[n] = (garb_key_t){kind, up, name, len};
+    return n + 1;
+}
+static int32_t pseudo_keys(const Simple *s, garb_key_t *out, int32_t cap, int32_t n)
+{
+    switch (s->pseudo) {
+    case P_LINK: case P_ANY_LINK: return key_add(out, cap, n, GARB_KEY_ATTR, "href", 4, false);
+    case P_CHECKED:
+        n = key_add(out, cap, n, GARB_KEY_ATTR, "checked", 7, false);
+        n = key_add(out, cap, n, GARB_KEY_ATTR, "selected", 8, false);
+        return key_add(out, cap, n, GARB_KEY_ATTR, "type", 4, false);
+    case P_REQUIRED: case P_OPTIONAL: return key_add(out, cap, n, GARB_KEY_ATTR, "required", 8, false);
+    case P_READ_ONLY: case P_READ_WRITE:
+        n = key_add(out, cap, n, GARB_KEY_ATTR, "readonly", 8, false);
+        n = key_add(out, cap, n, GARB_KEY_ATTR, "type", 4, false);
+        return key_add(out, cap, n, GARB_KEY_ATTR, "disabled", 8, true);
+    case P_ENABLED: case P_DISABLED: return key_add(out, cap, n, GARB_KEY_ATTR, "disabled", 8, true);
+    case P_LANG:
+        n = key_add(out, cap, n, GARB_KEY_ATTR, "lang", 4, true);
+        return key_add(out, cap, n, GARB_KEY_ATTR, "xml:lang", 8, true);
+    case P_DIR: return key_add(out, cap, n, GARB_KEY_ATTR, "dir", 3, true);
+    default: return n;
+    }
+}
+static int32_t compound_keys(const Compound *c, bool deep, garb_key_t *out, int32_t cap, int32_t n)
+{
+    for (int32_t k = 0; k < c->n; ++k) {
+        const Simple *s = &c->s[k];
+        if (s->kind == S_CLASS) n = key_add(out, cap, n, GARB_KEY_CLASS, s->name, s->len, false);
+        else if (s->kind == S_ID) n = key_add(out, cap, n, GARB_KEY_ID, s->name, s->len, false);
+        else if (s->kind == S_ATTR) n = key_add(out, cap, n, GARB_KEY_ATTR, s->name, s->len, false);
+        else if (s->kind == S_PSEUDO) n = pseudo_keys(s, out, cap, n);
+        bool same = s->kind == S_PSEUDO && (s->pseudo == P_NOT || s->pseudo == P_IS || s->pseudo == P_WHERE);
+        for (int32_t i = 0; deep && same && s->list && i < s->list->n; i++)
+            if (s->list->v[i].n > 0)
+                n = compound_keys(&s->list->v[i].c[s->list->v[i].n - 1], true, out, cap, n);
+    }
+    return n;
+}
+int32_t garb_reader_keys(const garb_reader_t *reader, garb_key_t *out, int32_t cap)
+{
+    int32_t n = 0;
+    for (int32_t h = 0; h < reader->nkeys_from; h++)
+        n = compound_keys(reader->keys_from[h], true, out, cap, n);
+    return n;
+}
+
 // `around`: the reach of the compound `list` is nested in. `foreign`: the
 // list is :host()'s or ::slotted()'s, naming the host or the slotted
 // element. `negated`: inside a :not(). `outer[0..nouter)`: the enclosing
 // compounds whose filters a subject of `list` must pass too, and `inherit`
 // / `inherit_untested` what they read, which an :is() or :where()
-// alternative carries as its own.
+// alternative carries as its own. `holders[0..nholders)`: the enclosing
+// compounds, filters or none, whose keys a subject of `list` reads too
+// (keys_from).
 static void readers(const garb_selectors_t *sel, const List *list, Reach around, bool foreign, bool negated,
-                    const Compound *const *outer, int32_t nouter, uint8_t inherit, uint8_t inherit_untested,
-                    garb_reader_t *out, int32_t cap, int32_t *n)
+                    const Compound *const *outer, int32_t nouter, const Compound *const *holders, int32_t nholders,
+                    uint16_t inherit, uint16_t inherit_untested, garb_reader_t *out, int32_t cap, int32_t *n)
 {
     for (int32_t i = 0; i < list->n; ++i) {
         const Complex *x = &list->v[i];
@@ -1804,17 +1864,23 @@ static void readers(const garb_selectors_t *sel, const List *list, Reach around,
             // slot its subject names: the slot's subtree mark carries those,
             // so whatever reaches the slot reaches its subtree.
             reach.down |= slotted;
-            uint8_t reads = 0;
+            uint16_t reads = 0;
             for (int32_t k = 0; k < c->n; ++k) reads |= simple_reads(&c->s[k]);
-            uint8_t untested = own ? 0 : reads;
+            uint16_t untested = own ? 0 : reads;
             if (subject) { reads |= inherit; untested |= inherit_untested; }
             // What the lists this compound holds are given: its filters and
             // its outer ones, for the subjects of an :is(), :where() or
             // :not(); and what it reads, for an :is()'s or :where()'s.
-            const Compound *inner[GARB_ANCHOR_FILTERS];
-            int32_t ninner = 0;
+            const Compound *inner[GARB_ANCHOR_FILTERS], *held[GARB_ANCHOR_FILTERS + 1];
+            int32_t ninner = 0, nheld = 0;
             for (int32_t o = 0; subject && o < nouter; o++) inner[ninner++] = outer[o];
             if (own && has_filter(c) && ninner < GARB_ANCHOR_FILTERS) inner[ninner++] = c;
+            // The compounds whose keys it reads: its own, and for a subject
+            // the holders around it, filters or none (one more than the
+            // filters kept, past which it reads every key).
+            held[nheld++] = c;
+            for (int32_t o = 0; subject && o < nholders && nheld <= GARB_ANCHOR_FILTERS; o++) held[nheld++] = holders[o];
+            bool keys_any = subject && nholders >= GARB_ANCHOR_FILTERS + 1;
             bool alternatives = false;
             for (int32_t k = 0; k < c->n; ++k) {
                 const Simple *s = &c->s[k];
@@ -1825,15 +1891,22 @@ static void readers(const garb_selectors_t *sel, const List *list, Reach around,
                 bool host = s->pseudo == P_HOST || s->pseudo == P_SLOTTED;
                 alternatives |= alt;
                 readers(sel, s->list, reach, foreign || host, negated || negate, inner, alt || negate ? ninner : 0,
+                        held, alt || negate ? (nheld < GARB_ANCHOR_FILTERS + 1 ? nheld : GARB_ANCHOR_FILTERS + 1) : 0,
                         alt ? reads : 0, alt ? untested : 0, out, cap, n);
             }
             if (reach.reach != GARB_REACH_SELF) reads |= GARB_READS_NEIGHBOURS;
+            // Its keys matter where its reach goes past its own element,
+            // which a change of one of them marks anyway.
+            bool keyed = keys_any;
+            for (int32_t h = 0; h < nheld && !keyed; h++) keyed = compound_keys(held[h], true, NULL, 0, 0) > 0;
+            if (keyed && (reach.reach != GARB_REACH_SELF || reach.down)) reads |= GARB_READS_KEYS;
             if (alternatives || reads == 0) continue;
             if (*n < cap) {
                 garb_reader_t *r = &out[*n];
                 *r = (garb_reader_t){sel, c, .reads = reads, .untested = untested, .reach = reach.reach,
-                                     .own = own, .down = reach.down};
+                                     .own = own, .down = reach.down, .keys_any = keys_any};
                 for (int32_t o = 0; subject && o < nouter; o++) r->outer[r->nouter++] = outer[o];
+                for (int32_t h = 0; h < nheld && h < GARB_ANCHOR_FILTERS + 1; h++) r->keys_from[r->nkeys_from++] = held[h];
                 r->bare = !(own && has_filter(c)) && r->nouter == 0;
             }
             ++*n;
@@ -1843,9 +1916,70 @@ static void readers(const garb_selectors_t *sel, const List *list, Reach around,
 int32_t garb_selectors_readers(const garb_selectors_t *list, garb_reader_t *out, int32_t cap)
 {
     int32_t n = 0;
-    if (list) readers(list, &list->list, (Reach){GARB_REACH_SELF, false}, false, false, NULL, 0, 0, 0, out, cap, &n);
+    if (list)
+        readers(list, &list->list, (Reach){GARB_REACH_SELF, false}, false, false, NULL, 0, NULL, 0, 0, 0, out, cap, &n);
     return n;
 }
+// Whether simple `s` tests one of the keys `changed[0..n)` names: a class
+// among them, any id where an id changed, an attribute by its local name.
+static bool tests_changed(const Simple *s, const garb_key_t *changed, int32_t n)
+{
+    for (int32_t i = 0; i < n; i++) {
+        const garb_key_t *k = &changed[i];
+        if ((s->kind == S_CLASS && k->kind == GARB_KEY_CLASS && ieq2(s->name, s->len, k->name, k->len)) ||
+            (s->kind == S_ID && k->kind == GARB_KEY_ID) ||
+            (s->kind == S_ATTR && k->kind == GARB_KEY_ATTR && ieq2(s->name, s->len, k->name, k->len)))
+            return true;
+    }
+    return false;
+}
+static bool filters_pass_except(const garb_selectors_t *sel, const Compound *c, const os64_html_node_t *element,
+                                const garb_key_t *changed, int32_t n)
+{
+    for (int32_t k = 0; k < c->n; ++k)
+        if (filters(&c->s[k]) && !tests_changed(&c->s[k], changed, n) &&
+            !simple_matches(sel, &c->s[k], element, NULL))
+            return false;
+    return true;
+}
+bool garb_reader_filters_pass_except(const garb_reader_t *reader, const os64_html_node_t *element,
+                                     const garb_key_t *changed, int32_t n)
+{
+    if (reader->bare) return true;
+    if (!is_el(element)) return false;
+    for (int32_t o = 0; o < reader->nouter; o++)
+        if (!filters_pass_except(reader->list, reader->outer[o], element, changed, n)) return false;
+    return !reader->own || filters_pass_except(reader->list, reader->compound, element, changed, n);
+}
+// Whether a key of `keys[0..n)` is read anywhere in `list`, nested lists
+// included.
+static bool list_reads_key(const List *list, const garb_key_t *keys, int32_t n)
+{
+    garb_key_t found[16];
+    for (int32_t i = 0; list && i < list->n; i++)
+        for (int32_t j = 0; j < list->v[i].n; j++) {
+            const Compound *c = &list->v[i].c[j];
+            int32_t m = compound_keys(c, false, found, 16, 0);
+            if (m > 16) return true;
+            for (int32_t a = 0; a < m; a++)
+                for (int32_t b = 0; b < n; b++)
+                    if (found[a].kind == keys[b].kind && ieq2(found[a].name, found[a].len, keys[b].name, keys[b].len))
+                        return true;
+            for (int32_t k = 0; k < c->n; k++)
+                if (c->s[k].list && list_reads_key(c->s[k].list, keys, n)) return true;
+        }
+    return false;
+}
+bool garb_has_subject_reads_key(const garb_anchor_t *anchor, const garb_key_t *keys, int32_t n)
+{
+    const Compound *c = anchor->compound;
+    for (int32_t k = 0; k < c->n; ++k) {
+        const Simple *s = &c->s[k];
+        if (s->kind == S_PSEUDO && s->pseudo == P_HAS && list_reads_key(s->list, keys, n)) return true;
+    }
+    return false;
+}
+
 bool garb_reader_filters_pass(const garb_reader_t *reader, const os64_html_node_t *element)
 {
     if (reader->bare) return true;
