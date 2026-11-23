@@ -249,6 +249,21 @@ static void damage_walk_change(void)
     }
 }
 
+/* A body that moves inside a root of fixed height, its background changed
+ * with it: the move is not gone into, and the canvas takes the body's
+ * background across the whole view. */
+static void damage_canvas_cases(void)
+{
+    damage_begin("<!doctype html><style>html{height:100px}body{margin:0;height:20px;background:red}</style>"
+                 "<body id=bd><div id=meter data-v=1>m</div></body>");
+    damage_attr("meter", "data-v", "0");
+    (void)damage_step();
+    damage_style("bd", "height:30px;background:blue");
+    damage_expect("damage: a body moved inside the root with its background changed is the whole view",
+                  damage_step(), kRefused[FLOW_PARTS_CANVAS]);
+    damage_end();
+}
+
 /* More widgets than the check can leave out: it is not made, and nothing
  * is painted over the widget past the room. */
 static void damage_widget_cases(void)
@@ -504,6 +519,7 @@ static void damage_cases(void)
     damage_expect("damage: a background the canvas takes is the whole view", damage_step(),
                   kRefused[FLOW_PARTS_CANVAS]);
     damage_end();
+    damage_canvas_cases();
     damage_widget_cases();
     damage_walk_cases();
 }

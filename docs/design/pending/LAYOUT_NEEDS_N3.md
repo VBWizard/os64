@@ -195,11 +195,14 @@ or differently.
   among its children) and the link and control numbers a page renumbers.
   A contained move is held when everything inside the box, in both trees,
   shares its frame and is in flow with no layer of its own
-  (`moved_within`); anything else is MOVED. The page's extent and each
-  scroller's range are compared first. Text and markers compare by their
-  bytes, which is also how generated text and a renumbered counter show
-  (item [3]); an element with no box in either tree whose style differs
-  marks the replaced box that draws it.
+  (`moved_within`); anything else is MOVED. A move inside the root, which
+  is not gone into, compares the body's box first, whose background the
+  canvas may take: drawn otherwise, it is CANVAS. The page's extent and
+  each scroller's range are compared first. Text and markers compare by
+  their bytes, which is also how generated text and a renumbered counter
+  show (item [3]), and text, markers and ellipses by the glyphs their runs
+  place (a face swapped behind one family name); an element with no box
+  in either tree whose style differs marks the replaced box that draws it.
 - **What the change log adds** (yonder.c `change_touched`): every changed
   attribute, except `class`, `id`, `style`, `role`, `title`, `tabindex`,
   `aria-*` and `data-*` on an element with a box of its own in both trees;

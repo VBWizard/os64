@@ -71,6 +71,9 @@ mutants = [
     ('the-caller-elements-not-marked', FLOW,
      '        if (touched[i] != NULL && !change_drawn(&c, was, touched[i]))',
      '        if (touched[i] != NULL && 0 && !change_drawn(&c, was, touched[i]))'),
+    ('a-move-inside-the-root-skips-the-body', FLOW,
+     '            if ((bx == NULL) != (by == NULL) || (bx != NULL && !same_drawn(bx, by))) {',
+     '            if (0 && ((bx == NULL) != (by == NULL) || (bx != NULL && !same_drawn(bx, by)))) {'),
     ('the-canvas-not-refused-in-a-new-tree', FLOW, '    if (may_own_canvas(c->now, n)) {',
      '    if (c->now == NULL) {'),
     ('an-empty-box-given-children-not-compared', FLOW,
@@ -182,11 +185,11 @@ mutants = [
 #   today, and yonder's change_svgs names every svg whose shapes the
 #   cascade restyled, which is what the svg adapter paints from; the two
 #   rules are libflow's own guard for the next replaced box that does.
-# - a text run's glyphs compared (runs_alike): what makes them differ while
-#   the style, the bytes and the boxes stay alike is a face swapped behind
-#   one family name for another loaded face of the same metrics, which the
-#   scripts host's fonts cannot make; Codex's host probe on #703 is the
-#   evidence that the case is real.
+# - a text run's glyphs compared, and an ellipsis's (runs_alike): what
+#   makes them differ while the style, the bytes and the boxes stay alike
+#   is a face swapped behind one family name for another loaded face of the
+#   same metrics, which the scripts host's fonts cannot make; Codex's host
+#   probes on #703 are the evidence that the cases are real.
 # - an svg's ancestors asked whether they were restyled (change_svgs): the
 #   cascade restyles everything under an element whose matching changed,
 #   so an svg under one is found by its own shapes too; the ancestors are
