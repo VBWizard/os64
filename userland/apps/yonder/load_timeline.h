@@ -58,6 +58,7 @@
 #define YONDER_LT_BROAD_TEXT 320
 #define YONDER_LT_PARSE_MAX 8
 #define YONDER_LT_REASONS 10
+#define YONDER_LT_MARK_KINDS 16
 #define YONDER_LT_PARSE_TEXT 128
 
 // The window loop's steps, in the order a turn takes them. Each names the
@@ -189,8 +190,13 @@ typedef struct {
     uint64_t back_updates, back_walks, back_walked, back_turned;
     // What the updates that succeeded restyled (yonder_lt_marks): how many
     // updates, the elements their changes marked, and those marked below an
-    // element whose winners came out changed.
+    // element whose winners came out changed; and every mark by the kind
+    // that made it, under the caller's names for the kinds (the first
+    // call's, YONDER_LT_MARK_KINDS at most).
     uint64_t marks_updates, marks_marked, marks_inherited;
+    uint64_t marks_by[YONDER_LT_MARK_KINDS];
+    const char *const *mark_names;
+    uint32_t nmark_kinds;
     // The arriving page's parser calls (yonder_lt_parse): how many and how
     // long in all, and the YONDER_LT_PARSE_MAX slowest, slowest first.
     uint32_t nparse, parse_kept;
@@ -276,8 +282,11 @@ void yonder_lt_broad(yonder_lt_t *t, int64_t at_us, uint32_t marked, const char 
 // `walked` children, `turned` of them marked. Nothing for walks 0.
 void yonder_lt_back(yonder_lt_t *t, int64_t at_us, uint64_t walks, uint64_t walked, uint64_t turned);
 // An update at `at_us` that succeeded, its changes marking `marked`
-// elements and restyling `inherited` more below changed winners.
-void yonder_lt_marks(yonder_lt_t *t, int64_t at_us, uint64_t marked, uint64_t inherited);
+// elements and restyling `inherited` more below changed winners; `by`
+// holds its `nby` counts by kind, kind i named `names[i]` (names that live
+// as long as the timeline).
+void yonder_lt_marks(yonder_lt_t *t, int64_t at_us, uint64_t marked, uint64_t inherited, const uint64_t *by,
+                     uint32_t nby, const char *const *names);
 
 // The lines, each written into `out` (cut to `cap`, always terminated).
 // The summary: the slices' size, the milestones, the long steps' count.

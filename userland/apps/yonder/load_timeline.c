@@ -324,13 +324,20 @@ void yonder_lt_back(yonder_lt_t *t, int64_t at_us, uint64_t walks, uint64_t walk
     t->back_turned += turned;
 }
 
-void yonder_lt_marks(yonder_lt_t *t, int64_t at_us, uint64_t marked, uint64_t inherited)
+void yonder_lt_marks(yonder_lt_t *t, int64_t at_us, uint64_t marked, uint64_t inherited, const uint64_t *by,
+                     uint32_t nby, const char *const *names)
 {
     if (!t->on || since(t, at_us) >= LT_END_US)
         return;
     t->marks_updates++;
     t->marks_marked += marked;
     t->marks_inherited += inherited;
+    if (t->mark_names == NULL && names != NULL) {
+        t->mark_names = names;
+        t->nmark_kinds = nby < YONDER_LT_MARK_KINDS ? nby : YONDER_LT_MARK_KINDS;
+    }
+    for (uint32_t k = 0; by != NULL && k < t->nmark_kinds && k < nby; k++)
+        t->marks_by[k] += by[k];
 }
 
 void yonder_lt_broad(yonder_lt_t *t, int64_t at_us, uint32_t marked, const char *by, const char *text)
@@ -525,6 +532,18 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap)
         put(&o, " elements their changes marked and ");
         put_u(&o, t->marks_inherited);
         put(&o, " below a changed winner");
+        bool first = true;
+        for (uint32_t k = 0; k < t->nmark_kinds; k++) {
+            if (t->marks_by[k] == 0)
+                continue;
+            put(&o, first ? " (every mark by kind: " : ", ");
+            put(&o, t->mark_names[k] != NULL ? t->mark_names[k] : "?");
+            put(&o, " ");
+            put_u(&o, t->marks_by[k]);
+            first = false;
+        }
+        if (!first)
+            put(&o, ")");
     }
     put(&o, "; ");
     put_u(&o, t->nlongs + t->more_longs);

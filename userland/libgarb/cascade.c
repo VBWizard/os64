@@ -3621,6 +3621,7 @@ static bool dirty_add(garb_cascade_t *c, const os64_html_node_t *x, Slot *s)
     }
     s->dirty = true; c->dirty_nodes[c->ndirty++] = x;
     if (c->limits.clock) c->mark_by[c->mark_now]++;
+    c->marks.by[c->mark_now]++;
     if (c->ndirty > c->slotcount / 2) { c->refusal = GARB_UPDATE_BROAD; return false; }
     return true;
 }
@@ -3848,7 +3849,7 @@ static BackWalk back_walk(garb_cascade_t *c, const os64_html_node_t *last, bool 
         s->back_type = t;
         if (compare && turned) {
             c->back_work.turned++;
-            if (!mark_changed(c, x, GARB_MARK_SIBLINGS)) return BACK_FAILED;
+            if (!mark_changed(c, x, GARB_MARK_BACK)) return BACK_FAILED;
         }
     }
     return BACK_DONE;
@@ -4258,7 +4259,8 @@ const char *garb_mark_name(garb_mark_t mark)
         [GARB_MARK_SUBTREE] = "its subtree", [GARB_MARK_ADDED] = "added subtrees",
         [GARB_MARK_SIBLINGS] = "siblings", [GARB_MARK_HAS] = ":has()",
         [GARB_MARK_PARENT] = "the parent's state", [GARB_MARK_SLOTS] = "slots",
-        [GARB_MARK_INHERITED] = "inherited",
+        [GARB_MARK_INHERITED] = "inherited", [GARB_MARK_CLASS] = "its subtree (class)",
+        [GARB_MARK_STYLE] = "its subtree (style)", [GARB_MARK_BACK] = "a back index's subtree",
     };
     return (unsigned)mark < GARB_MARKS ? kNames[mark] : "?";
 }
@@ -4503,7 +4505,12 @@ static bool update(garb_cascade_t *c)
         } else {
             const os64_html_node_t *root = e->target;
             if (root && !is_el(root)) root = root->parent;
-            marked = mark_changed(c, root, GARB_MARK_SUBTREE);
+            // By what changed, for the caller's measure (garb_mark_t).
+            garb_mark_t kind = GARB_MARK_SUBTREE;
+            if (e->kind == OS64_HTML_CHANGE_ATTR && e->attr_name && !e->attr_ns)
+                kind = os64_streq(e->attr_name, "class") ? GARB_MARK_CLASS
+                     : os64_streq(e->attr_name, "style") ? GARB_MARK_STYLE : GARB_MARK_SUBTREE;
+            marked = mark_changed(c, root, kind);
             c->mark_now = GARB_MARK_HAS;
             marked = marked && (!root || mark_has(c, root, false));
             // A slot renamed moves which of its host's children it takes.
@@ -4524,9 +4531,9 @@ static bool update(garb_cascade_t *c)
     c->updating = true;
     c->marks.marked = c->ndirty;
     // The caller's measure: what restyling marks is inherited.
+    c->mark_now = GARB_MARK_INHERITED;
     if (c->limits.clock) {
         os64_memset(c->mark_by, 0, sizeof(c->mark_by));
-        c->mark_now = GARB_MARK_INHERITED;
         c->passing = NULL;
     }
     int32_t old_nattrs = c->nattrs;

@@ -580,7 +580,7 @@ static void update_has(void)
                 // it is the class at i#i.
                 update_check(refused && named && t.kind==OS64_HTML_CHANGE_ATTR && !strcmp(t.attr,"class") &&
                              !strcmp(t.target,"i#i.b") && t.depth==4 && t.marked>0 &&
-                             t.by[GARB_MARK_SUBTREE]+t.by[GARB_MARK_HAS]==t.marked && t.changes==1 &&
+                             t.by[GARB_MARK_CLASS]+t.by[GARB_MARK_HAS]==t.marked && t.changes==1 &&
                              t.marked_changes==1 && t.restyled && !strcmp(t.restyled_from,"div#a.a") &&
                              t.restyled_depth==3 && t.dirty>t.slots/2 && t.restyled_marked+t.marked==t.dirty,
                              "measure: a broad refusal names its change, what passed its style down, and the marks");
@@ -948,6 +948,8 @@ static void update_back_index(void)
     uint64_t u=garb_cascade_updates(c);
     ue_append(doc,box,"p");
     bi_step(c,doc,&in,u,"p39","p20","an append marks the child that was last, not the middle");
+    update_check(garb_cascade_update_marks(c).by[GARB_MARK_BACK]==2,
+                 "back index: the turned child and its span are counted as a back index's subtree");
     u=garb_cascade_updates(c);
     os64_html_insert(doc,box,os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL),box->first_child);
     bi_step(c,doc,&in,u,NULL,"p39","a prepend leaves the child restyled last time unmarked");
@@ -1115,6 +1117,15 @@ static void update_marks_counted(void)
     garb_update_marks_t m=garb_cascade_update_marks(c);
     update_check(none.marked==0 && none.inherited==0,"marks: zeros before any update");
     update_check(ok && m.marked==4 && m.inherited==2,"marks: the change's four and the two below a changed winner");
+    update_check(m.by[GARB_MARK_ADDED]==1 && m.by[GARB_MARK_HAS]==3 && m.by[GARB_MARK_INHERITED]==2,
+                 "marks: by kind, one added, three by the :has() climb, two inherited");
+    update_equal(c,doc,&in);
+    // A class write on the div marks its subtree under its own kind.
+    os64_html_set_attr(doc,(void *)by_id(doc->document,"d"),"class","k",1);
+    ok=garb_cascade_update(c);
+    m=garb_cascade_update_marks(c);
+    update_check(ok && m.by[GARB_MARK_CLASS]==4 && m.by[GARB_MARK_SUBTREE]==0,
+                 "marks: a class write's subtree is counted as class");
     update_equal(c,doc,&in);
     ok=garb_cascade_update(c);
     m=garb_cascade_update_marks(c);

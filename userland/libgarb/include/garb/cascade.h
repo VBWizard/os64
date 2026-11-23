@@ -257,15 +257,6 @@ typedef struct {
     uint64_t walks, walked, turned;
 } garb_back_work_t;
 garb_back_work_t garb_cascade_back_work(const garb_cascade_t *c);
-// What the latest garb_cascade_update restyled: the elements its changes
-// marked, and those restyling marked below an element whose winners came
-// out changed (mark_below, every one matched again). Zeros before any
-// update, after one that read no changes, and for one refused before it
-// restyled; one refused while restyling says what it had marked by then.
-typedef struct {
-    uint64_t marked, inherited;
-} garb_update_marks_t;
-garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c);
 
 // THE CALLER'S MEASURE, kept only when the cascade was made with a clock
 // (garb_cascade_limits_t.clock): a diagnostic, and with no clock nothing is
@@ -280,18 +271,32 @@ typedef struct {
 } garb_build_cost_t;
 garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c);
 // Which mark an update made the elements it marked by: for a change, the
-// changed element's subtree (inheritance and descendant selectors), an
+// changed element's subtree (inheritance and descendant selectors) for a
+// change of an attribute other than `class` and `style` or of a state, an
 // added subtree, siblings (`+`, `~`, :nth-*), a :has() asked again (its
 // anchors and their reach), the parent's own state (:empty where its
 // answer turned, a <details> or <fieldset>'s first child), a shadow tree's
-// assignments; and while the marked elements are restyled, an element
+// assignments; while the marked elements are restyled, an element
 // restyled alone whose style came out different passing it down to its
-// children (inherited).
+// children (inherited); and the changed element's subtree for a change of
+// its `class` or of its `style`, and the subtree of a child whose back
+// index turned (cascade.c back_walk).
 typedef enum {
     GARB_MARK_SUBTREE, GARB_MARK_ADDED, GARB_MARK_SIBLINGS, GARB_MARK_HAS, GARB_MARK_PARENT,
-    GARB_MARK_SLOTS, GARB_MARK_INHERITED, GARB_MARKS
+    GARB_MARK_SLOTS, GARB_MARK_INHERITED, GARB_MARK_CLASS, GARB_MARK_STYLE, GARB_MARK_BACK, GARB_MARKS
 } garb_mark_t;
 const char *garb_mark_name(garb_mark_t mark);
+// What the latest garb_cascade_update restyled: the elements its changes
+// marked, those restyling marked below an element whose winners came out
+// changed (mark_below, every one matched again), and every mark made, by
+// the mark that made it (`by[GARB_MARK_INHERITED]` is `inherited`). Zeros
+// before any update, after one that read no changes, and for one refused
+// before it read them; one refused partway says what it had marked by then.
+typedef struct {
+    uint64_t marked, inherited;
+    uint64_t by[GARB_MARKS];
+} garb_update_marks_t;
+garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c);
 // When the latest update was refused GARB_UPDATE_BROAD: the change of the
 // batch that marked the most elements (the batch's marking stops at the
 // one that crossed half, so a later change never ran): its kind
