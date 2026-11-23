@@ -4390,7 +4390,9 @@ static void effect_counted(const char *named, uint64_t spent)
 }
 
 // A filter list in a few words: its first function, its amount (a blur's
-// and a hue's as written, the rest as a percentage), and how many follow.
+// and a hue's as written, the rest as a percentage), the reduction a blur
+// or drop shadow first is made at when it is made on a reduced copy
+// (`at 1/4`, filter.c § A large blur), and how many follow.
 static void effect_filters(char *out, size_t cap, const flow_filter_t *filter, int32_t n)
 {
     static const char *const names[] = {"url", "blur", "brightness", "contrast", "grayscale", "invert",
@@ -4403,10 +4405,15 @@ static void effect_filters(char *out, size_t cap, const flow_filter_t *filter, i
     long amount = filter[0].fn == FLOW_FILTER_BLUR || filter[0].fn == FLOW_FILTER_HUE_ROTATE
                       ? (long)filter[0].amount
                       : (long)(filter[0].amount * 100);
+    int32_t s = filter[0].fn == FLOW_FILTER_BLUR || filter[0].fn == FLOW_FILTER_DROP_SHADOW
+                    ? yonder_filter_reduction(filter[0].shadow.blur) : 1;
+    char reduced[16] = "";
+    if (s > 1)
+        os64_snprintf(reduced, sizeof(reduced), " at 1/%d", (int)s);
     if (n > 1)
-        os64_snprintf(out, cap, "%s(%ld) and %d more", name, amount, (int)(n - 1));
+        os64_snprintf(out, cap, "%s(%ld)%s and %d more", name, amount, reduced, (int)(n - 1));
     else
-        os64_snprintf(out, cap, "%s(%ld)", name, amount);
+        os64_snprintf(out, cap, "%s(%ld)%s", name, amount, reduced);
 }
 
 static void cost_reset(void)
@@ -18454,8 +18461,9 @@ static void box_bars(Glass *gl, os64_gui_rect_t view)
 #define SHEET_SIDE 4096
 #define SHEET_PIXELS 2097152
 // A layer's sheets (a filtered or blended group's) are what the painter
-// has already cut to the view grown by the filter's spread (at most 3 x
-// FLOW_FILTER_BLUR_MAX a side), so they are bounded by the window, not by
+// has already cut to the view grown by the filter's spread and what a
+// large blur's reduced copy reads past it (a few hundred pixels a side for
+// each blur in the list), so they are bounded by the window, not by
 // a matrix: the window's size, its spread, and room for a 4K one, so a
 // page-wide filter (`html { filter: grayscale(1) }`) is drawn.
 #define FILTER_SHEET_SIDE 8192
@@ -18967,7 +18975,7 @@ static bool pane_layer_open(void *ctx, os64_gui_rect_t bounds)
 // for the filter's work, laid unfiltered; either counted once
 // (yonder_paint_layers_refused).
 static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                             uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
+                             uint8_t alpha, flow_blend_t mode, const uint8_t *cover, flow_point_t grid)
 {
     GlassPane *gp = ctx;
     GlassThrough *t = pane_sheets_close(gp);
@@ -18981,7 +18989,7 @@ static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, 
     if (n > 0) {
         void *work = glass_take(yonder_filter_work_bytes(w, h, filter, n));
         if (work != NULL) {
-            yonder_filter_run(layer, w, h, filter, n, current, work);
+            yonder_filter_run(layer, w, h, filter, n, current, grid, work);
             glass_give(work);
         } else {
             plain = true;
@@ -19020,12 +19028,18 @@ static void pane_layer_take(void *ctx, uint8_t *out, bool luminance)
 // A backdrop (FILTER.md § 7) on the window: `rect` and its list's reach
 // round it read from the window — mirrored, as a filter's layer is cut —
 // no farther than the page view, filtered as an opaque layer, and laid
-// back inside `rect` at `cover`. Refused on a group's sheets, where what
+// back inside `rect` at `cover`, a large blur's squares counted from the
+// border box's corner (`grid` places rect's). The layer is NOT grown by
+// what a reduced blur reads past the reach (yonder_filter_reads_more), as
+// a filter's is: a change past the reach does not repaint the backdrop
+// (FILTER.md § 7, Damage), so the backdrop must not read it; past the
+// layer it reads nothing, as every blur does. Refused on a group's sheets, where what
 // is behind is not the page; with no memory; and for a layer past
 // FILTER_SHEET_SIDE or FILTER_SHEET_PIXELS, or lying past half of what a
 // coordinate can say, or with no page view to read.
 static bool pane_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
-                                 const flow_filter_t *filter, int32_t n, uint32_t current)
+                                 const flow_filter_t *filter, int32_t n, uint32_t current,
+                                 flow_point_t grid)
 {
     GlassPane *gp = ctx;
     if (gp->n != 1 || gp->depth > 0 || gp->clip != NULL)
@@ -19049,7 +19063,8 @@ static bool pane_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t 
                  yonder_backdrop_take(on->surf->pixels, on->surf->pitch_px, whole, (int32_t)x0,
                                       (int32_t)y0, (int32_t)w, (int32_t)h, layer);
     if (drawn) {
-        yonder_filter_run(layer, (int32_t)w, (int32_t)h, filter, n, current, work);
+        flow_point_t at = {(int32_t)(grid.x - (int64_t)d[FLOW_RIGHT]), (int32_t)(grid.y - (int64_t)d[FLOW_BOTTOM])};
+        yonder_filter_run(layer, (int32_t)w, (int32_t)h, filter, n, current, at, work);
         yonder_backdrop_put(on->surf->pixels, on->surf->pitch_px, on->clip, layer, (int32_t)w,
                             (int32_t)h, (int32_t)x0, (int32_t)y0, box, cover);
     }
@@ -19242,11 +19257,11 @@ static void effect_layer_closed(const char *kind, const char *said, uint64_t spe
 }
 
 static void timed_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                              uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
+                              uint8_t alpha, flow_blend_t mode, const uint8_t *cover, flow_point_t grid)
 {
     cost_begin(PS_FILTERS);
     uint64_t began = cycles();
-    pane_layer_close(ctx, filter, n, current, alpha, mode, cover);
+    pane_layer_close(ctx, filter, n, current, alpha, mode, cover, grid);
     uint64_t spent = cycles_since(began);
     char said[40];
     if (n > 0)
@@ -19267,11 +19282,12 @@ static void timed_layer_take(void *ctx, uint8_t *out, bool luminance)
 }
 
 static bool timed_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
-                                  const flow_filter_t *filter, int32_t n, uint32_t current)
+                                  const flow_filter_t *filter, int32_t n, uint32_t current,
+                                  flow_point_t grid)
 {
     cost_begin(PS_FILTERS);
     uint64_t began = cycles();
-    bool drawn = pane_backdrop_filter(ctx, rect, cover, filter, n, current);
+    bool drawn = pane_backdrop_filter(ctx, rect, cover, filter, n, current, grid);
     char said[40], what[64];
     effect_filters(said, sizeof(said), filter, n);
     os64_snprintf(what, sizeof(what), "backdrop %s %dx%d", said, (int)rect.w, (int)rect.h);

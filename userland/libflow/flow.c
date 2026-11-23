@@ -3564,14 +3564,25 @@ static os64_gui_rect_t mask_cut(const flow_box_t *box, os64_gui_rect_t r, flow_p
 
 // A view `r` grown by how far from outside it what lands in it can come
 // through a box's filter: flow_filter_reach mirrored, since a shadow cast
-// down shows below a source above `r`.
+// down shows below a source above `r`, and what the painter's blurs read
+// past that.
 static os64_gui_rect_t filter_sources(const flow_box_t *box, os64_gui_rect_t r)
 {
     int32_t d[4];
     flow_filter_reach(box, d);
-    const int32_t in[4] = {d[FLOW_BOTTOM], d[FLOW_LEFT], d[FLOW_TOP], d[FLOW_RIGHT]};
-    if (r.w <= 0 || r.h <= 0 || (in[0] | in[1] | in[2] | in[3]) == 0)
+    if (r.w <= 0 || r.h <= 0 || (d[0] | d[1] | d[2] | d[3]) == 0)
         return r;
+    // And what a blur made on a reduced copy reads past the reach
+    // (FLOW_FILTER_READS_MORE), each blur of the list; a list that reaches
+    // nothing — none, or one holding a URL — reads nothing past it.
+    const flow_style_t *s = box->style;
+    int64_t more = 0;
+    for (int32_t i = 0; f_group_filter(s, f_atom(box)) && i < s->nfilter; i++)
+        if (s->filter[i].fn == FLOW_FILTER_BLUR || s->filter[i].fn == FLOW_FILTER_DROP_SHADOW)
+            more += FLOW_FILTER_READS_MORE;
+    int32_t in[4] = {d[FLOW_BOTTOM], d[FLOW_LEFT], d[FLOW_TOP], d[FLOW_RIGHT]};
+    for (int k = 0; k < 4; k++)
+        in[k] = (int32_t)((int64_t)in[k] + more < INT32_MAX / 4 ? (int64_t)in[k] + more : INT32_MAX / 4);
     return grown(r, in);
 }
 

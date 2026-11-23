@@ -523,6 +523,15 @@ typedef enum {
 // (flow_filter_reach) is this one's.
 #define FLOW_FILTER_BLUR_MAX 100
 
+// The most farther than its reach that one blur reads round a pixel, in
+// px: the painter makes a large blur on a reduced copy (yonder's filter.c
+// § A large blur), whose squares reach past three boxes' 3 (blur / 2). A
+// filtered group's inside is culled against a view grown by this for each
+// blur in its list beside the reach, so a part painted alone is handed
+// every box the whole view's painting reads. tools/test_yonder_filter_host.c
+// holds the painter's reads under it at every radius.
+#define FLOW_FILTER_READS_MORE 24
+
 // One function of a transform (CSS Transforms 1 § 9, 2 § 12). What drawing
 // reads: a translation by `x` and `y` — PX, or PERCENT of the border box,
 // which waits for the box — then `m`, a 4x4 matrix in column-major order

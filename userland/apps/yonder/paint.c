@@ -28,6 +28,7 @@ typedef struct {
         PaintGroupKind kind;
         bool layered;               // a layer is open inside it (layer_try)
         os64_gui_rect_t layer;      // that layer's bounds, which a mask's captures share
+        flow_point_t grid;          // and where its corner lies from the group's (layer_close)
         os64_gui_rect_t shown;      // the Painter's, to put back
         // G_THROUGH: how it was opened (YONDER_KEEP_*); for MAKE, whether
         // something inside spoiled what it paints for keeping (spoil), and
@@ -1908,8 +1909,10 @@ static void backdrop_filtered(const Painter *p, const flow_box_t *b, const Round
         }
     }
     os64_gui_rect_t at = {sum32(r.x, p->off.x), sum32(r.y, p->off.y), r.w, r.h};
+    flow_point_t grid = {sum32(r.x, -(int64_t)b->rect.x), sum32(r.y, -(int64_t)b->rect.y)};
     if (area > p->groups->filter_left ||
-        !p->v->backdrop_filter(p->v->ctx, at, mask, s->backdrop_filter, s->nbackdrop_filter, s->color))
+        !p->v->backdrop_filter(p->v->ctx, at, mask, s->backdrop_filter, s->nbackdrop_filter, s->color,
+                               grid))
         yonder_paint_layers_refused++;
     else
         p->groups->filter_left -= area;
@@ -2746,9 +2749,14 @@ static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64
     bool masked = mask_drawn(p, box);
     if (!filter_drawn(p, box) && blend_of(p, box, d) == FLOW_BLEND_NORMAL && !masked)
         return false;
+    // Grown farther by what a large blur's reduced copy reads past the
+    // reach (yonder_filter_reads_more), so a part painted alone reads what
+    // the whole view would, and the two agree to the pixel.
     int32_t out[4];
     flow_filter_reach(box, out);
-    const int32_t in[4] = {out[FLOW_BOTTOM], out[FLOW_LEFT], out[FLOW_TOP], out[FLOW_RIGHT]};
+    int32_t more = filter_drawn(p, box) ? yonder_filter_reads_more(box->style->filter, box->style->nfilter) : 0;
+    const int32_t in[4] = {sum32(out[FLOW_BOTTOM], more), sum32(out[FLOW_LEFT], more),
+                           sum32(out[FLOW_TOP], more), sum32(out[FLOW_RIGHT], more)};
     os64_gui_rect_t layer = cut(cut(b, grown_by(p->view, in)), outside);
     if (layer.w <= 0 || layer.h <= 0) {
         p->view = (os64_gui_rect_t){0, 0, 0, 0};
@@ -2774,6 +2782,7 @@ static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64
     p->groups->filter_left -= area;
     p->groups->open[d].layered = true;
     p->groups->open[d].layer = layer;
+    p->groups->open[d].grid = (flow_point_t){sum32(layer.x, -(int64_t)b.x), sum32(layer.y, -(int64_t)b.y)};
     p->view = layer;
     return true;
 }
@@ -3033,7 +3042,8 @@ static void group_close(void *ctx, const flow_box_t *box)
         }
         p->v->layer_close(p->v->ctx, filtered ? box->style->filter : NULL,
                           filtered ? box->style->nfilter : 0, box->style->color,
-                          gs->open[d].kind == G_THROUGH ? 255 : alpha, blend_of(p, box, d), cover);
+                          gs->open[d].kind == G_THROUGH ? 255 : alpha, blend_of(p, box, d), cover,
+                          gs->open[d].grid);
         os64_free(cover);
     }
     if (gs->open[d].kind == G_THROUGH)
