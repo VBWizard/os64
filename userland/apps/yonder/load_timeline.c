@@ -314,11 +314,30 @@ void yonder_lt_build(yonder_lt_t *t, yonder_lt_why_t why, const yonder_lt_build_
     t->build_elements[why] += b->elements;
 }
 
-void yonder_lt_broad(yonder_lt_t *t, int64_t at_us, uint32_t marked, const char *text)
+void yonder_lt_back(yonder_lt_t *t, int64_t at_us, uint64_t walks, uint64_t walked, uint64_t turned)
+{
+    if (!t->on || walks == 0 || since(t, at_us) >= LT_END_US)
+        return;
+    t->back_updates++;
+    t->back_walks += walks;
+    t->back_walked += walked;
+    t->back_turned += turned;
+}
+
+void yonder_lt_broad(yonder_lt_t *t, int64_t at_us, uint32_t marked, const char *by, const char *text)
 {
     if (!t->on || since(t, at_us) >= LT_END_US)
         return;
     t->nbroad++;
+    uint32_t k = 0;
+    while (k < t->nbroad_by && t->broad_by[k].name != by)
+        k++;
+    if (k == t->nbroad_by && t->nbroad_by < YONDER_LT_REASONS)
+        t->broad_by[t->nbroad_by++].name = by;
+    if (k < t->nbroad_by)
+        t->broad_by[k].n++;
+    else
+        t->broad_by_other++;
     uint32_t at = t->broad_kept;
     if (at == YONDER_LT_BROAD_MAX) {
         if (t->broad[at - 1].marked >= marked)
@@ -466,6 +485,29 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap)
     put(&o, "; ");
     put(&o, "updates refused as broad: ");
     put_u(&o, t->nbroad);
+    for (uint32_t i = 0; i < t->nbroad_by; i++) {
+        put(&o, i == 0 ? " (by what marked most: " : ", ");
+        put(&o, t->broad_by[i].name != NULL ? t->broad_by[i].name : "no mark told");
+        put(&o, " ");
+        put_u(&o, t->broad_by[i].n);
+    }
+    if (t->broad_by_other != 0) {
+        put(&o, ", other ");
+        put_u(&o, t->broad_by_other);
+    }
+    if (t->nbroad_by != 0)
+        put(&o, ")");
+    if (t->back_updates != 0) {
+        put(&o, "; back indexes counted again in ");
+        put_u(&o, t->back_updates);
+        put(&o, " updates: ");
+        put_u(&o, t->back_walks);
+        put(&o, " parents, ");
+        put_u(&o, t->back_walked);
+        put(&o, " children counted, ");
+        put_u(&o, t->back_turned);
+        put(&o, " turned");
+    }
     put(&o, "; ");
     put_u(&o, t->nlongs + t->more_longs);
     put(&o, " steps of ");

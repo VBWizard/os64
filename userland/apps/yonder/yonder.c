@@ -2091,7 +2091,10 @@ static void lt_cascade_refused(const garb_cascade_t *c)
     if (b.restyled && at < sizeof(text))
         os64_snprintf(text + at, sizeof(text) - at, ", restyling then passing the changed style of %s (depth %u) "
                       "down to %u", b.restyled_from, (unsigned)b.restyled_depth, (unsigned)b.restyled_marked);
-    yonder_lt_broad(&s_lt, os64_micros(), b.marked, text);
+    int most = -1;
+    for (int m = 0; m < GARB_MARKS; m++)
+        if (b.by[m] != 0 && (most < 0 || b.by[m] > b.by[most])) most = m;
+    yonder_lt_broad(&s_lt, os64_micros(), b.marked, most >= 0 ? garb_mark_name((garb_mark_t)most) : NULL, text);
 }
 
 // A fresh cascade libgarb timed by part: to the timeline, by who asked,
@@ -2259,6 +2262,10 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     bool matches = scoped && !fresh_sheets &&
                    garb_cascade_matches_scoped(cascade, in, n, ps.scopes, ps.nscopes, view);
     bool updated = matches && garb_cascade_update(cascade);
+    if (s_lt.on && matches) {
+        garb_back_work_t back = garb_cascade_back_work(cascade);
+        yonder_lt_back(&s_lt, os64_micros(), back.walks, back.walked, back.turned);
+    }
     // Why it is built fresh, for the layout profile: yonder's own reasons
     // (cascade_reason_names), then libgarb's.
     int32_t why = updated ? -1 : cascade == NULL ? 0 : !scoped ? 1 : fresh_sheets ? 2 : !matches ? 3

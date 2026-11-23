@@ -76,15 +76,32 @@ garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t 
 // follows. `style_attribute`: an attribute selector naming `style`, so a
 // write of an inline style can change what matches (the cascade adds what
 // its declarations read, garb_cascade_reads_style_attribute).
+//
+// THE BACK FORMS (:last-child, :only-child, :nth-last-child, and their
+// -of-type kin) read an element's BACK INDEX, its count from the end among
+// its element siblings (last = 1), or among those of its type. A bounded
+// one can match only up to some index: `back_child` and `back_type` are the
+// largest index any of them can match, 0 for none, so each one's answer is a
+// function of min(index, need + 1) and the cascade can remember that number
+// and compare it (cascade.c back_walk). An :nth-last whose An+B has A > 0,
+// or whose bound passes GARB_BACK_INDEX_MAX, can match anywhere:
+// `back_unbounded`, which marks every sibling as before. An :nth-last-child
+// with `of S` is `filtered` instead. `position_front` counts :only-child and
+// :only-of-type too, since they read the front as well.
+#define GARB_BACK_INDEX_MAX 16
 typedef struct {
-    bool following, position_front, position_back, parent_state, filtered;
+    bool following, position_front, back_unbounded, parent_state, filtered;
     bool ancestors, ancestors_preceding, has_filtered, style_attribute;
+    uint8_t back_child, back_type;
 } garb_selector_dependencies_t;
 garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list);
 // What `:empty` answers at `element`: no element child and no text child
 // with any characters; comments and the like do not count.
 // The cascade asks it again at a change, so the two answers are one function.
 bool garb_element_empty(const os64_html_node_t *element);
+// Whether two elements are of one type as the -of-type pseudo-classes count
+// it: the same namespace and the same name.
+bool garb_element_same_type(const os64_html_node_t *a, const os64_html_node_t *b);
 
 // AN ANCHORED :has(): a compound holding :has() that stands left of a
 // combinator in its selector, directly or inside a functional pseudo-class

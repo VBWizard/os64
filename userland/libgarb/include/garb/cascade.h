@@ -244,6 +244,16 @@ typedef struct {
     uint64_t tested, turned, marked;
 } garb_bare_work_t;
 garb_bare_work_t garb_cascade_bare_work(const garb_cascade_t *c);
+// What the back forms (:last-child and its kin, select.h § THE BACK FORMS)
+// cost the latest garb_cascade_update: the parents whose children it
+// counted again, the children it counted, and those whose remembered back
+// index turned and were marked. Zeros before any update, after one that
+// read no changes or was refused before reading them, and for rules with no
+// bounded back form; a count made before a refusal partway stays.
+typedef struct {
+    uint64_t walks, walked, turned;
+} garb_back_work_t;
+garb_back_work_t garb_cascade_back_work(const garb_cascade_t *c);
 
 // THE CALLER'S MEASURE, kept only when the cascade was made with a clock
 // (garb_cascade_limits_t.clock): a diagnostic, and with no clock nothing is
