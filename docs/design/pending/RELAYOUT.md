@@ -134,42 +134,79 @@ lists, including `:is()`, `:not()` and `:where()`.
 Attribute/state changes restyle the target's subtree. Following-sibling
 combinators also mark following siblings' subtrees; filtered positional
 selectors mark all siblings' subtrees. Unfiltered positional selectors alone
-do not widen an attribute change. No selector reads a text's data except
+do not widen an attribute change. An element the batch brought (put in,
+or under what it put in) marks nothing for its attributes: it is marked
+whole as added, and the change that brought it asks what is beside and
+above it of it as the batch left it. No selector reads a text's data except
 through its parent's `:empty`, so a text change marks nothing when the
 rules hold no `:empty`; when they do, the parent's `:empty` is asked again
 as for a change of children (below) and the `:has()` climb is made from
 the parent.
 
-Child-list changes mark added subtrees. Front-position selectors and
-following-sibling combinators mark the following suffix of children for a
-pure insertion batch. A batch containing a removal under that parent marks
-all its children: a saved previous-sibling identity can have moved within
-the same parent, so its current links are not a historical boundary.
-Filtered positional selectors (`of S`) and an unbounded back-position one
-(an `:nth-last-*` whose An+B has A > 0, or a bound past 16) also mark all
-children. The bounded back-position selectors (`:last-child`,
-`:only-child`, `:last-of-type`, `:only-of-type`, `:nth-last-*` with
-A <= 0) are COUNTED AGAIN: the cascade keeps each element's count from the
-end among its element siblings, and among those of its type, saturated at
-one past the largest index any of them can match, and a change of children
-counts the parent's children again from the last, once an update for each
-parent, and marks each child whose saturated count turned with its subtree
-and, where the sheets have `+`/`~`, the siblings after it. Without an
--of-type form the count stops at the first child it did not add whose
-count stayed at the bound: the children before it kept their order and
-were past the bound before and after. With one, the count covers every
-child, and a parent with more than 32 types of children has all of them
-marked, those past the table left uncounted so that they count as turned
-next time. A build takes the counts in one backward pass per parent, so it
-stays linear in a parent's children. `:only-child` and `:only-of-type`
-count as front-position selectors too.
+Child-list changes mark added subtrees, then mark through the READERS
+(`select.h` § A READER): every compound whose match can turn when its
+element's place among its siblings moves, one holding a position form or
+`:empty` or standing left of `+` or `~`, each kept with what it reads, its
+filters (the anchors': its own type, id, classes and attributes and those
+of the `:is()`/`:where()`/`:not()` around it, each `:is()` alternative a
+reader of its own) and its reach (its element alone for a subject; the
+next element sibling for `+` alone; the following ones for `~` and for a
+`+` chain such as `a + b + c`; with subtrees where a descendant or child
+combinator stands to its right). A change of children asks each fact it
+moved of the readers that read it, at the element it moved at, and marks
+only the reach of those whose filters pass there:
+
+- **Bounded position forms are COUNTED AGAIN**, from the end and from the
+  start (`:last-child`, `:first-child`, `:nth-child(-n+3)`, `n+2`, and
+  their -of-type kin; `:only-*` read both ends). The cascade keeps each
+  element's count among its element siblings and among those of its type,
+  each saturated at one past the number past which every such form answers
+  alike, and a change of children counts the parent's children again, once
+  an update for each parent each way, and asks the readers of whatever
+  turned at the child it turned at. Without an -of-type form the count
+  stops at the first child it did not add whose count stayed at the bound:
+  the children past it kept their order and were past the bound before and
+  after. With one, the count covers every child, and a parent with more
+  than 32 types of children has all of them marked, those past the table
+  left uncounted so that they count as turned next time. A build takes the
+  counts in one pass each way per parent.
+- **Unbounded position forms** (`:nth-child(3n)`, a bound past 16) never
+  settle, so a change walks the siblings whose index it moved (from the
+  element after it on, for a front form; before that element, for a back
+  form), once an update for each parent, the batch planned before any of
+  it is marked, and marks at each sibling the reach of the readers whose
+  filters pass there. A form with no filter, or inside `:not()`, passes
+  every sibling.
+- **`+` and `~`**: an element brought or taken moves who follows it, so
+  the readers with a `~` or chain reach that pass at it reach the element
+  after the change and those after it. And the change breaks one pair of
+  neighbours and makes one at its end; the readers whose first combinator
+  to the right is `+` read the pair, asked at its left element: the made
+  pair's as the batch left it, the broken pair's (the last element taken,
+  or the element before the change, unless the batch brought it, which
+  makes it past finding and passes every reader) standing in for what it
+  was; the reach starts at the element after the change, the first there
+  the batch did not bring. A true `~` reader passing the element before an
+  insert does nothing. A selector ending in `::slotted()` reaches the
+  slot's subtree mark, which carries what is assigned to it.
+- An element asked as a stand-in for what it was before the batch (an
+  element taken, the left of a broken pair, a child whose index turned)
+  passes every reader if the batch changed any of its attributes, earlier
+  or later: the batch is read whole before any of it is marked. Where the
+  element after a change was taken or moved by the batch, the place is
+  past finding and every child is marked as far as any reader reaches.
+
+Filtered positional selectors (`of S`) still mark all children. A change
+of children that brought or took only text moves no element's place and
+marks nothing through the readers.
 `:empty` is ASKED AGAIN: the cascade keeps each element's answer from when
 it last styled or asked it, and a change of children compares the parent's answer
 now with it. Where the answer is the same nothing is marked for `:empty`,
 which is what lets appends to a parent that already has children stay
 small. Where it turned, the parent is marked alone (its changed winners
-reach its descendants through restyle, like any element's) with
-following/filtered propagation to its siblings. Nothing under it needs
+reach its descendants through restyle, like any element's), its siblings
+marked as far as the `:empty` readers that pass at it reach (all of them
+for an `of S`). Nothing under it needs
 marking for matching: a parent that turned from empty has under it only
 what was just added, and one that turned to empty has nothing. A shadow
 host and a slot keep the whole subtree mark, because a host's tree and a
@@ -396,7 +433,20 @@ other, so their pages keep style and geometry reuse across a mutation.
   element, or a subject compound has none (bare); an element no subject
   compound can match is turned away. The test reads the element as it
   stands, which is enough: its filters could have changed in the batch
-  only by a change at it, which marks it anyway. One the same rules match as before (a digest of them is kept
+  only by a change at it, which marks it anyway. A change of children
+  turns a subject compound only by bringing or taking an element its
+  argument matches (`garb_has_subject_children_may_turn`): each argument's
+  compounds are tested by their filters at the roots brought or taken (an
+  argument of one compound behind `>`, `+` or `~`) or at every element
+  under them (any other), a taken subtree standing in for what it held. An
+  argument a change of children can turn without bringing a match (a
+  position form, `:empty`, `:enabled`/`:disabled` and their kin, `:not()`,
+  a sibling combinator inside it, and `+` at any element brought or taken,
+  which changes the next element of the one before) is always turned. A
+  taken subtree stands for nothing when the batch changed children under
+  anything it took out, put back or not. A visit asks with every compound the
+  batch's changes so far may turn, and when that set grows the climbs that
+  follow visit again what they pass. One the same rules match as before (a digest of them is kept
   in its record) and whose winners compare the same by value keeps its old
   record, so `garb_style_updated_since` reports no change, and any other
   marks its descendants for their inherited values.

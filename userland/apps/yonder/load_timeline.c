@@ -315,15 +315,46 @@ void yonder_lt_build(yonder_lt_t *t, yonder_lt_why_t why, const yonder_lt_build_
 }
 
 void yonder_lt_has_subjects(yonder_lt_t *t, int64_t at_us, uint64_t visited, uint64_t marked, uint64_t away,
-                            uint64_t entries, uint64_t bare)
+                            uint64_t away_change, uint64_t entries, uint64_t bare)
 {
     if (!t->on || visited == 0 || since(t, at_us) >= LT_END_US)
         return;
     t->has_visited += visited;
     t->has_marked += marked;
     t->has_away += away;
+    t->has_away_change += away_change;
     t->has_entries = entries;
     t->has_bare = bare;
+}
+
+void yonder_lt_readers(yonder_lt_t *t, int64_t at_us, const yonder_lt_readers_t *r, uint32_t nkinds,
+                       const char *const *names)
+{
+    if (!t->on || since(t, at_us) >= LT_END_US)
+        return;
+    uint32_t n = nkinds < YONDER_LT_ASKERS ? nkinds : YONDER_LT_ASKERS;
+    uint64_t asked = r->front_walks + r->walks;
+    for (uint32_t i = 0; i < n; i++) asked += r->asked[i];
+    if (asked == 0)
+        return;
+    if (t->nasker_kinds == 0) {
+        t->nasker_kinds = n;
+        for (uint32_t i = 0; i < n; i++) t->asker_names[i] = names[i];
+    }
+    yonder_lt_readers_t *s = &t->readers;
+    for (uint32_t i = 0; i < n; i++) {
+        s->asked[i] += r->asked[i];
+        s->passed[i] += r->passed[i];
+        s->reached[i] += r->reached[i];
+    }
+    s->front_walks += r->front_walks;
+    s->front_walked += r->front_walked;
+    s->front_turned += r->front_turned;
+    s->walks += r->walks;
+    s->walked += r->walked;
+    s->readers = r->readers;
+    s->bare = r->bare;
+    t->readers_updates++;
 }
 
 void yonder_lt_back(yonder_lt_t *t, int64_t at_us, uint64_t walks, uint64_t walked, uint64_t turned)
@@ -536,7 +567,47 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap)
         put_u(&o, t->has_marked);
         put(&o, " marked, ");
         put_u(&o, t->has_away);
-        put(&o, " turned away");
+        put(&o, " turned away by their filters, ");
+        put_u(&o, t->has_away_change);
+        put(&o, " by the changes");
+    }
+    if (t->readers_updates != 0) {
+        const yonder_lt_readers_t *r = &t->readers;
+        put(&o, "; readers (");
+        put_u(&o, r->readers);
+        put(&o, ", ");
+        put_u(&o, r->bare);
+        put(&o, " bare) asked in ");
+        put_u(&o, t->readers_updates);
+        put(&o, " updates");
+        for (uint32_t i = 0; i < t->nasker_kinds; i++) {
+            if (r->asked[i] == 0) continue;
+            put(&o, ", ");
+            put(&o, t->asker_names[i]);
+            put(&o, " ");
+            put_u(&o, r->asked[i]);
+            put(&o, " asked ");
+            put_u(&o, r->passed[i]);
+            put(&o, " passed ");
+            put_u(&o, r->reached[i]);
+            put(&o, " reached");
+        }
+        if (r->front_walks != 0) {
+            put(&o, "; front indexes counted again: ");
+            put_u(&o, r->front_walks);
+            put(&o, " walks, ");
+            put_u(&o, r->front_walked);
+            put(&o, " children counted, ");
+            put_u(&o, r->front_turned);
+            put(&o, " turned");
+        }
+        if (r->walks != 0) {
+            put(&o, "; unbounded position walks: ");
+            put_u(&o, r->walks);
+            put(&o, ", ");
+            put_u(&o, r->walked);
+            put(&o, " siblings walked");
+        }
     }
     if (t->back_updates != 0) {
         put(&o, "; back indexes counted again in ");

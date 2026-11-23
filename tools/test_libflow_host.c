@@ -1439,7 +1439,7 @@ int main(int argc, char **argv)
         return failures != 0 || live != 0;
     }
     if (argc == 2 && strcmp(argv[1], "--snapshots") == 0) {
-        text_setup(); snapshot_cases(); correspondence_cases(); text_teardown();
+        text_setup(); snapshot_cases(); correspondence_cases(); role_counter_cases(); text_teardown();
         printf("libflow snapshots: %d checks, %d failed%s\n", checks, failures,
                live != 0 ? " (AND LEAKED)" : "");
         return failures != 0 || live != 0;
@@ -1620,6 +1620,7 @@ int main(int argc, char **argv)
     snapshot_cases();
     shadow_flow_cases();
     correspondence_cases();
+    role_counter_cases();
     graft_cases();
     graft_stress();
     graft_failures();
