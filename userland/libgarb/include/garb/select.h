@@ -81,6 +81,10 @@ typedef struct {
     bool ancestors, ancestors_preceding, has_filtered, style_attribute;
 } garb_selector_dependencies_t;
 garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list);
+// What `:empty` answers at `element`: no element child and no text child
+// with any characters; comments and the like do not count.
+// The cascade asks it again at a change, so the two answers are one function.
+bool garb_element_empty(const os64_html_node_t *element);
 
 // AN ANCHORED :has(): a compound holding :has() that stands left of a
 // combinator in its selector, directly or inside a functional pseudo-class

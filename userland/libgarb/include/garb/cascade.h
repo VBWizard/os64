@@ -260,10 +260,11 @@ garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c);
 // Which mark an update made the elements it marked by: for a change, the
 // changed element's subtree (inheritance and descendant selectors), an
 // added subtree, siblings (`+`, `~`, :nth-*), a :has() asked again (its
-// anchors and their reach), the parent's own state (:empty, a <details> or
-// <fieldset>'s first child), a shadow tree's assignments; and while the
-// marked elements are restyled, an element restyled alone whose style came
-// out different passing it down to its children (inherited).
+// anchors and their reach), the parent's own state (:empty where its
+// answer turned, a <details> or <fieldset>'s first child), a shadow tree's
+// assignments; and while the marked elements are restyled, an element
+// restyled alone whose style came out different passing it down to its
+// children (inherited).
 typedef enum {
     GARB_MARK_SUBTREE, GARB_MARK_ADDED, GARB_MARK_SIBLINGS, GARB_MARK_HAS, GARB_MARK_PARENT,
     GARB_MARK_SLOTS, GARB_MARK_INHERITED, GARB_MARKS

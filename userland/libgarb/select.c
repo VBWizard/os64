@@ -1127,6 +1127,14 @@ static bool dir_matches(const Simple *s, const os64_html_node_t *el)
     return false;
 }
 
+bool garb_element_empty(const os64_html_node_t *el)
+{
+    for (const os64_html_node_t *k = el->first_child; k != NULL; k = k->next)
+        if (k->kind == OS64_HTML_ELEMENT || (k->kind == OS64_HTML_TEXT && k->text_len > 0))
+            return false;
+    return true;
+}
+
 static bool has_matches(const garb_selectors_t *sel, const List *l, const os64_html_node_t *el);
 
 static bool pseudo_matches(const garb_selectors_t *sel, const Simple *s,
@@ -1151,11 +1159,7 @@ static bool pseudo_matches(const garb_selectors_t *sel, const Simple *s,
     case P_NTH_OF_TYPE:
     case P_NTH_LAST_OF_TYPE:
         return nth(s->a, s->b, position(sel, el, s->pseudo == P_NTH_LAST_OF_TYPE, true, NULL));
-    case P_EMPTY:
-        for (const os64_html_node_t *k = el->first_child; k != NULL; k = k->next)
-            if (k->kind == OS64_HTML_ELEMENT || (k->kind == OS64_HTML_TEXT && k->text_len > 0))
-                return false;
-        return true;
+    case P_EMPTY: return garb_element_empty(el);
     case P_LINK:
     case P_ANY_LINK: return is_link(el);
     case P_NEVER:
@@ -1490,8 +1494,8 @@ static void dependencies(const List *list, bool anchored, bool counted, garb_sel
                     break;
                 // :dir() reads the `dir` attribute of the element and of
                 // the ancestors it inherits from (dir_matches), so what a
-                // change can turn is in the changed element's subtree,
-                // which every change marks. (dir=auto, which would read
+                // change of `dir` can turn is in the changed element's
+                // subtree, which an attribute's change marks. (dir=auto, which would read
                 // descendants' text, is not implemented: DEBTS.md.)
                 default: break;
                 }

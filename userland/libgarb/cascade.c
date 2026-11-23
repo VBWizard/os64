@@ -162,6 +162,9 @@ typedef struct {
     // whose sheets apply there, -1 for none. `placed` once it is set.
     int32_t scope;
     bool placed, needs_substitution, dirty, dirty_suffix;
+    // What :empty answered at it when the cascade last styled it or asked at
+    // a change, kept while the rules hold :empty (empty_turned).
+    bool empty;
     // Dirty for its own winners alone (mark_element): whether its
     // descendants are owed a recompute too is known once it has had one
     // (restyle).
@@ -2729,6 +2732,7 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
         slot->customs = inherited;
         slot->scope = tree_place(c, el);
         slot->placed = true;
+        slot->empty = c->dependencies.parent_state && garb_element_empty(el);
     }
     Consult q = {target, slot->scope, 0, el, el};
     int32_t nm = matching(c, &q, m, 0, mcap);
@@ -3696,6 +3700,51 @@ static bool mark_changed(garb_cascade_t *c, const os64_html_node_t *node, garb_m
         return mark_siblings(c, node->parent->first_child);
     return !c->dependencies.following || mark_siblings(c, node->next);
 }
+// :empty, ASKED AGAIN: an element's answer turns only at a change of its
+// children or of a text child's data, so those two changes ask it again
+// (garb_element_empty, the matcher's own answer) and compare it with the
+// one the slot kept from when the cascade last styled or asked it. Same
+// answer, nothing to mark for :empty. True when it turned, or when there is
+// no slot to keep it (a cascade short of memory), which marks as a turn.
+// The batch's later changes at the same element find the answer already
+// taken: it is read from the document as the batch left it. An element the
+// batch added keeps no answer until it is styled (cascade_element), so a
+// change under it may find a turn that is none. What that marks the change
+// that added it has marked already: the element as added, and the siblings
+// a `+`/`~` or an `of S` reads, by the sibling walk the same dependencies
+// make for an addition (mark_children), or as added beside it.
+static bool empty_turned(garb_cascade_t *c, const os64_html_node_t *x)
+{
+    Slot *s = slot_for(c, x, false);
+    if (!s) return true;
+    bool now = garb_element_empty(x);
+    bool turned = now != s->empty;
+    s->empty = now;
+    return turned;
+}
+// What a turned :empty at `x` can move: its own match, marked alone (its
+// changed winners reach what is under it through restyle's mark_below, as
+// any element's do), and a sibling's that a `+`/`~` or an `of S` reads,
+// as mark_changed marks them.
+//
+// WHY NOTHING UNDER IT IS MARKED FOR MATCHING (`p:not(:empty) > x`, `:empty
+// x`): an element that turned from empty has under it only what the batch
+// added, all marked as added; one that turned to empty has no element under
+// it. A text change adds no element under it; what the batch added beside
+// it is the first case. The
+// exceptions are elements a selector reaches from it that the batch did not
+// add: a shadow host's tree (`:host(:empty) .inner`) and a slot's assigned
+// nodes, so a host or a slot keeps the whole mark (mark_changed).
+static bool mark_turned(garb_cascade_t *c, const os64_html_node_t *x)
+{
+    if (x->shadow_root || is_slot(x)) return mark_changed(c, x, GARB_MARK_PARENT);
+    c->mark_now = GARB_MARK_PARENT;
+    if (!mark_element(c, x)) return false;
+    c->mark_now = GARB_MARK_SIBLINGS;
+    if (c->dependencies.filtered && x->parent)
+        return mark_siblings(c, x->parent->first_child);
+    return !c->dependencies.following || mark_siblings(c, x->next);
+}
 static bool body_hint(const os64_html_change_entry_t *e, const os64_html_document_t *doc)
 {
     if (e->kind != OS64_HTML_CHANGE_ATTR || e->target != doc->body || !e->attr_name)
@@ -3716,11 +3765,16 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
         for (size_t i = 0; i < e->nremoved; ++i)
             if (holds_slot(e->removed[i])) { c->refusal = GARB_UPDATE_SLOT_LEFT; return false; }
     if (!connected(c, parent)) return true;
-    // :empty can change inherited winners and a following sibling's match.
-    // The UA first-summary/first-legend rules also depend on child order.
-    if (c->dependencies.parent_state || (parent->ns == OS64_HTML_NS_HTML &&
-        (parent->tag == OS64_HTML_TAG_DETAILS || parent->tag == OS64_HTML_TAG_FIELDSET)))
+    // The UA first-summary/first-legend rules depend on child order, so
+    // those parents keep the whole mark whatever :empty answers there; the
+    // answer is still taken, for the next change to compare with.
+    bool turned = c->dependencies.parent_state && is_el(parent) && empty_turned(c, parent);
+    if (parent->ns == OS64_HTML_NS_HTML &&
+        (parent->tag == OS64_HTML_TAG_DETAILS || parent->tag == OS64_HTML_TAG_FIELDSET)) {
         if (!mark_changed(c, parent, GARB_MARK_PARENT)) return false;
+    } else if (turned && !mark_turned(c, parent)) {
+        return false;
+    }
     c->mark_now = GARB_MARK_ADDED;
     for (size_t i = 0; i < e->nadded; ++i)
         if (!mark_subtree(c, e->added[i])) return false;
@@ -3816,7 +3870,8 @@ static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
 // change of children, which covers an element removed as well as one added
 // (the removed one is past finding), and with `+`/`~` every child of it,
 // whose order the change moved; the element itself for a change of
-// attributes. A `from` a later change in the batch took out of the
+// attributes; the text's parent for a change of a text's data, whose
+// :empty it can turn. A `from` a later change in the batch took out of the
 // document turns nothing in it: nothing there is visited. One visit of
 // each (has_visit) serves both kinds of :has().
 static bool mark_has(garb_cascade_t *c, const os64_html_node_t *from, bool children)
@@ -4279,6 +4334,17 @@ static bool update(garb_cascade_t *c)
             marked = mark_children(c, e);
             c->mark_now = GARB_MARK_HAS;
             marked = marked && mark_has(c, e->target, true);
+        } else if (e->kind == OS64_HTML_CHANGE_TEXT) {
+            // A text's data is read by no selector but :empty (at its
+            // parent) and a :has() that :empty stands in, so with :empty in
+            // the rules the parent's answer is asked again and the climb
+            // mark_has makes from it is taken, and without it nothing is
+            // marked (`parent_state` counts an :empty inside a :has() too).
+            const os64_html_node_t *parent = e->target ? e->target->parent : NULL;
+            bool asked = c->dependencies.parent_state && is_el(parent) && connected(c, parent);
+            marked = !asked || !empty_turned(c, parent) || mark_turned(c, parent);
+            c->mark_now = GARB_MARK_HAS;
+            marked = marked && (!asked || mark_has(c, parent, false));
         } else {
             const os64_html_node_t *root = e->target;
             if (root && !is_el(root)) root = root->parent;
