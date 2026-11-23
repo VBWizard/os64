@@ -210,30 +210,124 @@ static void filter_computed_cases(void)
     sheeted_close(&p);
 }
 
-// A change to a box inside a filtered group repaints all the filter
-// spreads it over: the group's bounds, with the group's box.
+// The marks a tick of `page` makes, with the box each is for.
+static TickMarks filter_tick_marks(const char *page, const flow_box_t **box, const char *id)
+{
+    Moving m;
+    moving_open_for(&m, page, 0, true);
+    TickMarks k = {.n = 0};
+    *box = moving_box(&m, id);
+    (void)flow_motion_tick(m.tree, 500, (flow_point_t){0, 0}, tick_mark, &k, NULL);
+    moving_close(&m);
+    return k;
+}
+
+// Whether `k` marked exactly `r` for `box` (the union of its marks).
+static bool marked_exactly(const TickMarks *k, const flow_box_t *box, os64_gui_rect_t r)
+{
+    int64_t x0 = INT64_MAX, y0 = INT64_MAX, x1 = INT64_MIN, y1 = INT64_MIN;
+    int n = 0;
+    for (int i = 0; i < k->n; i++)
+        if (k->box[i] == box && k->r[i].w > 0 && k->r[i].h > 0) {
+            n++;
+            x0 = k->r[i].x < x0 ? k->r[i].x : x0;
+            y0 = k->r[i].y < y0 ? k->r[i].y : y0;
+            x1 = (int64_t)k->r[i].x + k->r[i].w > x1 ? (int64_t)k->r[i].x + k->r[i].w : x1;
+            y1 = (int64_t)k->r[i].y + k->r[i].h > y1 ? (int64_t)k->r[i].y + k->r[i].h : y1;
+        }
+    return n > 0 && x0 == r.x && y0 == r.y && x1 - x0 == r.w && y1 - y0 == r.h;
+}
+
+// A change to a box inside a filtered group repaints what the filters it
+// is drawn through spread it over (flow.c § A CHANGE INSIDE A FILTERED
+// GROUP): its reach, spread at each filtered group out — blur(2px) reaches
+// 6 px and blur(4px) 12, and a blur reads FLOW_FILTER_READS_MORE (24)
+// farther — cut to each group's bounds, through each matrix where it is.
 static void filter_mark_cases(void)
 {
+#define CHANGING "@keyframes bg{to{background-color:blue}} "
+#define TICKS "animation:bg 1s linear infinite;"
+    const flow_box_t *c;
+    TickMarks k;
+    // A small box in a large group: its own reach spread, not the group.
+    k = filter_tick_marks(MOTION_STYLE CHANGING "#f{filter:blur(2px);width:400px;height:300px}"
+                          "#c{position:relative;left:200px;top:100px;width:20px;height:20px;" TICKS "}</style>"
+                          "<div id=f><div id=c></div></div>", &c, "c");
+    expect("filter marks: a box in a filtered group, its reach spread by the blur and what it reads",
+           marked_exactly(&k, c, (os64_gui_rect_t){170, 70, 80, 80}), NULL);
+    // Nested filters: spread by each, inner first.
+    k = filter_tick_marks(MOTION_STYLE CHANGING "#f{filter:blur(2px);width:400px;height:300px}"
+                          "#g{filter:blur(4px);width:400px;height:300px}"
+                          "#c{position:relative;left:200px;top:100px;width:20px;height:20px;" TICKS "}</style>"
+                          "<div id=f><div id=g><div id=c></div></div></div>", &c, "c");
+    expect("filter marks: nested filters each spread it, the inner and then the outer",
+           marked_exactly(&k, c, (os64_gui_rect_t){134, 34, 152, 152}), NULL);
+    // A filter inside a matrix: spread in the filter's coordinates, then
+    // scaled.
+    k = filter_tick_marks(MOTION_STYLE CHANGING "#t{transform:scale(2);transform-origin:0 0;width:400px;height:300px}"
+                          "#f{filter:blur(2px);width:400px;height:300px}"
+                          "#c{position:relative;left:200px;top:100px;width:20px;height:20px;" TICKS "}</style>"
+                          "<div id=t><div id=f><div id=c></div></div></div>", &c, "c");
+    expect("filter marks: a filter inside a matrix spreads it before the matrix scales it",
+           marked_exactly(&k, c, (os64_gui_rect_t){340, 140, 160, 160}), NULL);
+    // A matrix inside a filter: scaled, then spread at the filter's size.
+    k = filter_tick_marks(MOTION_STYLE CHANGING "#f{filter:blur(2px);width:400px;height:300px}"
+                          "#t{transform:scale(2);transform-origin:0 0;width:400px;height:300px}"
+                          "#c{position:relative;left:200px;top:100px;width:20px;height:20px;" TICKS "}</style>"
+                          "<div id=f><div id=t><div id=c></div></div></div>", &c, "c");
+    expect("filter marks: a matrix inside a filter scales it before the filter spreads it",
+           marked_exactly(&k, c, (os64_gui_rect_t){370, 170, 100, 100}), NULL);
+    // A drop shadow cast far: its offset is its reach that way.
+    k = filter_tick_marks(MOTION_STYLE CHANGING "#f{filter:drop-shadow(100px 0 0 black);width:400px;height:300px}"
+                          "#c{position:relative;left:20px;top:100px;width:20px;height:20px;" TICKS "}</style>"
+                          "<div id=f><div id=c></div></div>", &c, "c");
+    expect("filter marks: a drop shadow's offset is how far it spreads it",
+           marked_exactly(&k, c, (os64_gui_rect_t){0, 76, 164, 68}), NULL);
+    // At the group's edge: cut to the group's bounds.
+    k = filter_tick_marks(MOTION_STYLE CHANGING "#f{filter:blur(2px);width:400px;height:300px}"
+                          "#c{position:relative;left:390px;top:290px;width:20px;height:20px;" TICKS "}</style>"
+                          "<div id=f><div id=c></div></div>", &c, "c");
+    expect("filter marks: what it spreads past the group's bounds is cut to them",
+           marked_exactly(&k, c, (os64_gui_rect_t){360, 260, 56, 56}), NULL);
+    // The group's own change marks its whole bounds: its opacity ticking
+    // (the group's bounds, its own filter spread in); its filter changing
+    // is a value a layout places (FLOW_PARTS_PLACED), so the whole view.
+    const flow_box_t *f;
+    k = filter_tick_marks(MOTION_STYLE "@keyframes op{to{opacity:.5}} "
+                          "#f{filter:blur(2px);width:400px;height:300px;animation:op 1s linear infinite}"
+                          "#c{width:20px;height:20px}</style><div id=f><div id=c></div></div>", &f, "f");
+    expect("filter marks: the group's own opacity ticking marks its whole bounds",
+           f != NULL && marked_exactly(&k, f, (os64_gui_rect_t){-6, -6, 412, 312}), NULL);
+    {
+        Moving own;
+        moving_open(&own, MOTION_STYLE "@keyframes fl{to{filter:blur(4px)}} "
+                         "#f{filter:blur(2px);width:400px;height:300px;animation:fl 1s linear infinite}"
+                         "#c{width:20px;height:20px}</style><div id=f><div id=c></div></div>", 0);
+        flow_tree_t *later = moving_beside(&own, 500);
+        flow_parts_said_t why = {0};
+        k.n = 0;
+        bool laid = later != NULL && flow_layout_parts(own.tree, later, (flow_point_t){0, 0}, tick_mark, &k, &why);
+        expect("filter marks: the group's own filter changing is the whole view",
+               later != NULL && !laid && why.why == FLOW_PARTS_PLACED, NULL);
+        flow_free(later);
+        moving_close(&own);
+    }
+#undef TICKS
+#undef CHANGING
+
+    // A layout for the animations marks the same way.
     static const char kPage[] = MOTION_STYLE "@keyframes bg{to{background-color:blue}}"
         "#f{filter:blur(2px)} #c{animation:bg 1s linear infinite}</style>"
         "<div id=f><div id=c></div></div>";
     const flow_point_t o = {0, 0};
     Moving m;
-    moving_open_for(&m, kPage, 0, true);
-    const flow_box_t *f = moving_box(&m, "f");
-    TickMarks k = {.n = 0};
-    (void)flow_motion_tick(m.tree, 500, o, tick_mark, &k, NULL);
-    expect("tick marks: a box in a filtered group, the group's spread bounds",
-           f != NULL && marked(&k, f, (os64_gui_rect_t){-6, -6, 112, 52}), NULL);
-    moving_close(&m);
-
     moving_open(&m, kPage, 0);
-    f = moving_box(&m, "f");
+    c = moving_box(&m, "c");
     flow_tree_t *now = moving_beside(&m, 500);
     k.n = 0;
     bool bounded = now != NULL && flow_layout_parts(m.tree, now, o, tick_mark, &k, NULL);
-    expect("layout parts: a box in a filtered group, the group's spread bounds",
-           f != NULL && bounded && marked(&k, f, (os64_gui_rect_t){-6, -6, 112, 52}), NULL);
+    expect("layout parts: a box in a filtered group, its reach spread and cut to the group",
+           c != NULL && bounded && marked(&k, c, (os64_gui_rect_t){-6, -6, 112, 52}), NULL);
     flow_free(now);
     moving_close(&m);
 }
