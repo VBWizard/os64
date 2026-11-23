@@ -1,0 +1,47 @@
+<!doctype html><html><head><title>filter marks</title><style>
+/* Small changes inside filtered groups (libflow flow.c § A CHANGE INSIDE A
+   FILTERED GROUP): each is marked by its own reach spread by the filters
+   it is drawn through and cut to their groups, not by a group's whole
+   bounds. Run with --damage-check: every rebuild and every tick compares
+   the whole view with the window, so a mark that fell short of what a
+   filter spread is a difference. In each cell a script changes one small
+   box's colour every quarter second and an animation ticks another's.
+   1: one blur, the boxes well inside a large group
+   2: two blurs nested
+   3: a blur inside a scaled group
+   4: a scaled group inside a blur
+   5: a drop shadow cast far to the right
+   6: the boxes at the group's edge, what the blur spreads past it cut */
+body{margin:0;background:#202020;color:#ddd;font:14px sans-serif}
+.cell{position:absolute;width:150px;height:110px;background:#335}
+.b{position:absolute;width:16px;height:16px;background:#c03}
+.t{position:absolute;width:16px;height:16px;background:#3c0;animation:tw 1.5s linear infinite alternate}
+@keyframes tw{to{background-color:#03c}}
+#c1{left:10px;top:10px;filter:blur(6px)}
+#c2{left:180px;top:10px;filter:blur(3px)}
+#c2 .in{position:absolute;left:10px;top:10px;width:130px;height:90px;filter:blur(4px)}
+#c3w{position:absolute;left:350px;top:10px;width:150px;height:110px;transform:scale(1.5);transform-origin:0 0}
+#c3{left:0;top:0;filter:blur(5px)}
+#c4{left:10px;top:200px;filter:blur(5px)}
+#c4 .in{position:absolute;left:0;top:0;width:100px;height:70px;transform:scale(1.4) rotate(5deg);transform-origin:0 0}
+#c5{left:200px;top:200px;filter:drop-shadow(90px 0 0 #fc0)}
+#c6{left:420px;top:220px;filter:blur(6px)}
+#n{position:absolute;left:10px;top:340px}
+</style></head><body>
+<div class=cell id=c1><div class=b style="left:60px;top:40px"></div><div class=t style="left:100px;top:70px"></div></div>
+<div class=cell id=c2><div class=in><div class=b style="left:50px;top:30px"></div><div class=t style="left:90px;top:60px"></div></div></div>
+<div id=c3w><div class=cell id=c3><div class=b style="left:60px;top:40px"></div><div class=t style="left:100px;top:70px"></div></div></div>
+<div class=cell id=c4><div class=in><div class=b style="left:30px;top:20px"></div><div class=t style="left:60px;top:40px"></div></div></div>
+<div class=cell id=c5><div class=b style="left:10px;top:40px"></div><div class=t style="left:20px;top:80px"></div></div>
+<div class=cell id=c6><div class=b style="left:140px;top:100px"></div><div class=t style="left:0;top:0"></div></div>
+<div id=n>0</div>
+<script>
+const changing = document.querySelectorAll('.b');
+let n = 0;
+setInterval(() => {
+  n++;
+  for (const b of changing) b.style.background = n % 2 ? '#fff' : '#c03';
+  document.getElementById('n').textContent = n;
+}, 250);
+</script>
+</body></html>
