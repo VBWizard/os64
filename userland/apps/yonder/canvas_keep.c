@@ -10,12 +10,13 @@
 #define KEEP_BLOCK 128
 #define KEEP_CANVASES 32
 
-// What a canvas was last drawn at, and the blocks it kept there (columns
-// bx0..bx1 and rows by0..by1 of the box's blocks, past-the-end), so a
-// change lets them go.
+// What a canvas was last drawn at, the window's paint it was first drawn
+// at it in (yonder_canvas_keeps_paint), and the blocks it kept there (columns bx0..bx1 and
+// rows by0..by1 of the box's blocks, past-the-end), so a change lets them
+// go.
 typedef struct {
     const void *who;
-    uint64_t revision, last;
+    uint64_t revision, paint, last;
     int32_t w, h;
     bool premultiplied, made;
     int32_t bx0, by0, bx1, by1;
@@ -23,7 +24,7 @@ typedef struct {
 
 struct yonder_canvas_keeps {
     Seen seen[KEEP_CANVASES];
-    uint64_t clock;
+    uint64_t clock, paint;
     yonder_canvas_keep_counts_t counts;
 };
 
@@ -35,6 +36,12 @@ yonder_canvas_keeps_t *yonder_canvas_keeps_new(void)
 void yonder_canvas_keeps_free(yonder_canvas_keeps_t *k)
 {
     os64_free(k);
+}
+
+void yonder_canvas_keeps_paint(yonder_canvas_keeps_t *k)
+{
+    if (k != NULL)
+        k->paint++;
 }
 
 // Block (bx, by)'s key: the revision, the box's size, the alpha convention
@@ -111,9 +118,15 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
         s->premultiplied != premultiplied) {
         if (s->who == who && s->made)
             drop(k, cache, s);
-        *s = (Seen){who, revision, k->clock, box.w, box.h, premultiplied, false, 0, 0, 0, 0};
+        *s = (Seen){who, revision, k->paint, k->clock, box.w, box.h, premultiplied, false, 0, 0, 0, 0};
         return yonder_draw_surface(dst, pitch, clip, box, smooth, source);
     }
+    // Drawn at it again in the window's paint that first drew it — a
+    // group's second sheet, another part of the view — keeps nothing yet
+    // either: a bitmap that changes at every frame is never drawn at one
+    // revision in two of them.
+    if (s->paint == k->paint)
+        return yonder_draw_surface(dst, pitch, clip, box, smooth, source);
     // What the draw walks, as yonder_draw_surface cuts it, in the box's
     // own coordinates (lx, ly), and the blocks it reads.
     int64_t x0 = box.x > clip.x ? box.x : clip.x, y0 = box.y > clip.y ? box.y : clip.y;

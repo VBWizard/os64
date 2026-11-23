@@ -2,10 +2,12 @@
 #define YONDER_PAINT_CACHE_H
 
 // The paint cache's store (YONDER_PERF.md § perf-2), private to the
-// painter: entries of bytes, found by a key the painter makes, kept most
+// painter and the kept canvas pictures (canvas_keep.c), which draw inside
+// its paints: entries of bytes, found by a key its user makes, kept most
 // recently used first, the least recently used let go to stay within the
 // budget — never one the last two paints used. What a key means and what
-// the bytes are is the painter's.
+// the bytes are is its user's, and every key begins with a tag naming its
+// kind (a canvas's "CK"), so two kinds never meet under one key.
 
 #include "paint.h"
 

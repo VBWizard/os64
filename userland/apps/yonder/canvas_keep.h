@@ -14,10 +14,12 @@
 // scaler would have laid (yonder_scale_part), wherever a draw's edges fall.
 //
 // The rules, each held by tools/test_yonder_host.sh's canvas_keep_cases:
-// - A draw at a revision and size the canvas was not last drawn at keeps
-//   nothing and draws as ever, so a canvas redrawn at every frame never
-//   pays for a keep it will not use. A later draw at the same revision and
-//   size keeps the blocks it reads, and finds them after.
+// - A canvas keeps nothing at a revision and size until a paint of the
+//   window after the one that first drew it there: every draw in that
+//   first paint (a group's two sheets, the parts of a view a cover splits)
+//   draws as ever, so a canvas redrawn at every frame never pays for a
+//   keep it will not use. A draw in a later paint keeps the blocks it
+//   reads, and finds them after.
 // - A canvas drawn at another revision or size lets go of every block it
 //   kept (counted as dropped for a change): they can never be found again.
 // - A draw that copies at the bitmap's own size, or draws its pixels
@@ -38,6 +40,9 @@ typedef struct yonder_canvas_keeps yonder_canvas_keeps_t;
 // for no memory.
 yonder_canvas_keeps_t *yonder_canvas_keeps_new(void);
 void yonder_canvas_keeps_free(yonder_canvas_keeps_t *k);
+// A paint of the window begins: every draw until the next is this paint's,
+// however many parts of the view it paints.
+void yonder_canvas_keeps_paint(yonder_canvas_keeps_t *k);
 
 // yonder_draw_surface's draw of canvas `who` (any pointer naming it; two
 // canvases never share one) at `revision` (0: unknown, never kept), its

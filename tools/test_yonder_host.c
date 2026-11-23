@@ -30,6 +30,7 @@
 #include "paint_cache.h"
 #include "garb/cascade.h"
 #include "scale.h"
+#include "canvas_keep.h"
 #include "test_libflow_fonts.h"
 #include "os64/syscall_numbers.h"
 
@@ -1651,9 +1652,158 @@ static void scale_reference_cases(void)
     expect("scale: the column and row worked once equal every pixel asking, to the bit", same && cases > 0, first);
 }
 
+// KEPT CANVAS PICTURES (canvas_keep.h): a canvas drawn through the keep
+// writes what yonder_draw_surface writes, to the bit, whether its pixels
+// were scaled now, kept now or found — on two targets, at cuts whose edges
+// the 128-pixel blocks do not divide, premultiplied and straight — and the
+// keep keeps only by its rules.
+typedef struct {
+    yonder_paint_cache_t *cache;
+    yonder_canvas_keeps_t *keeps;
+} KeepRig;
+
+enum { KW = 420, KH = 300 };
+
+// One paint's draw of `s` at `revision` into `box`, cut to `clip`, on
+// `targets` targets (1 or 2, as a group's two sheets are) through the keep
+// and on as many copies the ordinary way: whether they all agree.
+static bool keep_draw_on(KeepRig *rig, int targets, uint32_t *got[2], uint32_t *want[2], const void *who,
+                         uint64_t revision, os64_gui_rect_t clip, os64_gui_rect_t box, bool smooth,
+                         const draw2d_surface_t *s)
+{
+    paint_cache_begin(rig->cache);
+    yonder_canvas_keeps_paint(rig->keeps);
+    bool same = true;
+    for (int t = 0; t < targets; t++) {
+        yonder_canvas_keep_draw(rig->keeps, rig->cache, who, revision, got[t], KW, clip, box, smooth, s);
+        yonder_draw_surface(want[t], KW, clip, box, smooth, s);
+        same = same && memcmp(got[t], want[t], (size_t)KW * KH * sizeof(uint32_t)) == 0;
+    }
+    return same;
+}
+
+static bool keep_draw_same(KeepRig *rig, uint32_t *got[2], uint32_t *want[2], const void *who, uint64_t revision,
+                           os64_gui_rect_t clip, os64_gui_rect_t box, bool smooth, const draw2d_surface_t *s)
+{
+    return keep_draw_on(rig, 2, got, want, who, revision, clip, box, smooth, s);
+}
+
+static void canvas_keep_cases(void)
+{
+    static uint32_t a[KW * KH], b[KW * KH], c[KW * KH], d[KW * KH];
+    uint32_t *got[2] = {a, b}, *want[2] = {c, d};
+    uint32_t state = 777;
+    for (int i = 0; i < KW * KH; i++)
+        a[i] = c[i] = 0xff000000u | (uint32_t)i * 2654435761u >> 8, b[i] = d[i] = 0xff102030u ^ (uint32_t)i;
+    KeepRig rig = {yonder_paint_cache_new((size_t)64 << 20), yonder_canvas_keeps_new()};
+    int same = 1, cases = 0;
+    char first[160] = "";
+    for (int n = 0; n < 300 && same; n++) {
+        bool premultiplied = n % 3 != 0;
+        uint32_t sw = 1 + scale_random(&state) % 90, sh = 1 + scale_random(&state) % 60;
+        uint32_t *src = malloc((size_t)sw * sh * sizeof(*src));
+        for (uint32_t i = 0; i < sw * sh; i++)
+            src[i] = scale_pixel(&state, premultiplied);
+        draw2d_surface_t s = {src, sw, sh, (size_t)sw * 4, (size_t)sw * sh * 4,
+                              premultiplied ? DRAW2D_ARGB8_PREMULTIPLIED : DRAW2D_ARGB8_STRAIGHT};
+        os64_gui_rect_t box = {(int32_t)(scale_random(&state) % 160) - 80, (int32_t)(scale_random(&state) % 120) - 60,
+                               2 + (int32_t)(scale_random(&state) % 700), 2 + (int32_t)(scale_random(&state) % 500)};
+        // Three draws at one revision, each cut somewhere else: the first
+        // keeps nothing, the second keeps what it reads, the third finds
+        // some of it and keeps the rest.
+        for (int k = 0; k < 3 && same; k++) {
+            os64_gui_rect_t clip = {(int32_t)(scale_random(&state) % KW), (int32_t)(scale_random(&state) % KH), 0, 0};
+            clip.w = 1 + (int32_t)(scale_random(&state) % (uint32_t)(KW - clip.x));
+            clip.h = 1 + (int32_t)(scale_random(&state) % (uint32_t)(KH - clip.y));
+            cases++;
+            if (!keep_draw_same(&rig, got, want, &n, (uint64_t)n + 1, clip, box, true, &s))
+                snprintf(first, sizeof(first), "case %d draw %d: %ux%u into %dx%d at %d,%d, cut %dx%d at %d,%d%s", n,
+                         k, (unsigned)sw, (unsigned)sh, (int)box.w, (int)box.h, (int)box.x, (int)box.y, (int)clip.w,
+                         (int)clip.h, (int)clip.x, (int)clip.y, premultiplied ? ", premultiplied" : ""),
+                    same = 0;
+        }
+        free(src);
+    }
+    yonder_canvas_keep_counts_t counts = yonder_canvas_keep_counts(rig.keeps);
+    expect("canvas keep: what a draw lays, scaled, kept or found, is what the scaler lays, to the bit",
+           same && cases > 0, first);
+    expect("canvas keep: the random draws kept blocks and found them", counts.kept > 0 && counts.found > 0, NULL);
+    yonder_canvas_keeps_free(rig.keeps);
+
+    // The rules, one canvas at a time.
+    rig.keeps = yonder_canvas_keeps_new();
+    uint32_t *src = malloc(37 * 23 * sizeof(*src));
+    for (int i = 0; i < 37 * 23; i++)
+        src[i] = scale_pixel(&state, true);
+    draw2d_surface_t s = {src, 37, 23, 37 * 4, 37 * 23 * 4, DRAW2D_ARGB8_PREMULTIPLIED};
+    os64_gui_rect_t box = {-30, -20, 399, 301}, all = {0, 0, KW, KH}, strip = {50, 130, 300, 61};
+    int who = 0;
+    bool ok = keep_draw_same(&rig, got, want, &who, 1000, all, box, true, &s);
+    counts = yonder_canvas_keep_counts(rig.keeps);
+    expect("canvas keep: the paint that first draws a canvas at a revision keeps nothing, on either sheet",
+           ok && counts.kept == 0, NULL);
+    ok = keep_draw_same(&rig, got, want, &who, 1000, strip, box, true, &s);
+    yonder_canvas_keep_counts_t second = yonder_canvas_keep_counts(rig.keeps);
+    expect("canvas keep: a later draw at that revision keeps the blocks it reads", ok && second.kept > 0, NULL);
+    ok = keep_draw_same(&rig, got, want, &who, 1000, strip, box, true, &s);
+    yonder_canvas_keep_counts_t third = yonder_canvas_keep_counts(rig.keeps);
+    expect("canvas keep: and the next finds them, keeping nothing more",
+           ok && third.kept == second.kept && third.found > second.found, NULL);
+    // The bitmap changes: a new revision, new pixels.
+    for (int i = 0; i < 37 * 23; i += 3)
+        src[i] = scale_pixel(&state, true);
+    ok = keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &s);
+    yonder_canvas_keep_counts_t changed = yonder_canvas_keep_counts(rig.keeps);
+    expect("canvas keep: a paint at a new revision lets go of every block kept, and keeps nothing, on either sheet",
+           ok && changed.dropped == third.kept && changed.kept == third.kept, NULL);
+    ok = keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &s) &&
+         keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &s);
+    expect("canvas keep: the new revision's pixels are kept and laid as new", ok, NULL);
+    // Another size at the same revision is another picture.
+    os64_gui_rect_t wider = {-30, -20, 401, 301};
+    yonder_canvas_keep_counts_t before = yonder_canvas_keep_counts(rig.keeps);
+    ok = keep_draw_same(&rig, got, want, &who, 1001, strip, wider, true, &s) &&
+         keep_draw_same(&rig, got, want, &who, 1001, strip, wider, true, &s) &&
+         keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &s) &&
+         keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &s);
+    yonder_canvas_keep_counts_t sized = yonder_canvas_keep_counts(rig.keeps);
+    expect("canvas keep: a box of another size is another picture, never found for this one",
+           ok && sized.dropped > before.dropped, NULL);
+    // Two canvases at once keep apart.
+    int other = 0;
+    ok = keep_draw_same(&rig, got, want, &other, 2000, strip, box, true, &s) &&
+         keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &s) &&
+         keep_draw_same(&rig, got, want, &other, 2000, strip, box, true, &s);
+    expect("canvas keep: two canvases keep apart", ok, NULL);
+    // Square pixels, and a bitmap at its own size, keep nothing.
+    yonder_canvas_keep_counts_t plain = yonder_canvas_keep_counts(rig.keeps);
+    os64_gui_rect_t own = {10, 10, 37, 23};
+    ok = keep_draw_same(&rig, got, want, &who, 3000, all, box, false, &s) &&
+         keep_draw_same(&rig, got, want, &who, 3000, all, box, false, &s) &&
+         keep_draw_same(&rig, got, want, &who, 3001, all, own, true, &s) &&
+         keep_draw_same(&rig, got, want, &who, 3001, all, own, true, &s);
+    yonder_canvas_keep_counts_t after = yonder_canvas_keep_counts(rig.keeps);
+    expect("canvas keep: square pixels and a bitmap at its own size keep nothing",
+           ok && after.kept == plain.kept && after.found == plain.found, NULL);
+    yonder_canvas_keeps_free(rig.keeps);
+    yonder_paint_cache_free(rig.cache);
+    // A budget too small for a block: drawn as ever, and counted.
+    rig.cache = yonder_paint_cache_new(4096);
+    rig.keeps = yonder_canvas_keeps_new();
+    ok = keep_draw_same(&rig, got, want, &who, 4000, strip, box, true, &s) &&
+         keep_draw_same(&rig, got, want, &who, 4000, strip, box, true, &s);
+    counts = yonder_canvas_keep_counts(rig.keeps);
+    expect("canvas keep: blocks with no room are not kept, the draw drawn as ever",
+           ok && counts.kept == 0 && counts.refused > 0, NULL);
+    yonder_canvas_keeps_free(rig.keeps);
+    yonder_paint_cache_free(rig.cache);
+    free(src);
+}
+
 static void scale_cases(void)
 {
     scale_reference_cases();
+    canvas_keep_cases();
     uint32_t premul[] = {0x80800000, 0, 0xdeadbeef, 0xff00ff00, 0xff0000ff};
     draw2d_surface_t surface = {premul, 2, 2, 12, sizeof(premul), DRAW2D_ARGB8_PREMULTIPLIED};
     uint32_t result[4] = {0xffffffff,0xffffffff,0xffffffff,0xffffffff};
