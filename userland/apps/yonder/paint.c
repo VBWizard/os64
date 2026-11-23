@@ -39,7 +39,7 @@ typedef struct {
     } open[PAINT_GROUPS];
     int32_t depth;                  // may pass PAINT_GROUPS; those are not kept
     // The group nothing inside which is painted, its open and close
-    // included: one laid at alpha 0 (group_alpha), at any depth; past the
+    // included: one laid at alpha 0 (yonder_group_alpha), at any depth; past the
     // deepest kept, also one drawn through its matrix or whose mask hides
     // it whole. The depth it opened at, plus one, or 0.
     int32_t hidden;
@@ -2882,13 +2882,14 @@ static bool mask_coverage(const Painter *p, const flow_box_t *box, os64_gui_rect
     return made;
 }
 
-// A group (flow_visit_groups) opens. One laid at alpha 0 (yonder_group_alpha)
-// shows nothing, so nothing of it is painted — no verb is asked, the walk
-// culls its inside whole (group_inside) and its close lays nothing — and a
-// canvas or a video inside is not drawn: the face's marks keep what it
-// owes such a canvas (yonder.c, canvas_damage_mark). One below full
-// opacity hands the verbs its bounds, cut to what is painted, to remember
-// what was under them. One DRAWN THROUGH its matrix (flow_box_through) is asked of the
+// A group (flow_visit_groups) opens. One laid at alpha 0
+// (yonder_group_alpha) shows nothing, so nothing of it is painted — no
+// verb is asked, the walk culls its inside whole (group_inside) and its
+// close lays nothing — and a canvas or a video inside is not drawn: the
+// face acknowledges such a canvas's damage unseen instead of marking it
+// (yonder.c, canvas_damage_mark). One below full opacity hands the verbs
+// its bounds, cut to what is painted, to remember what was under them. One
+// DRAWN THROUGH its matrix (flow_box_through) is asked of the
 // verbs whole: its bounds — in its own coordinates, cut to the view taken
 // back through the matrix, which is all of it that can show — the matrix
 // to the coordinates being painted, and the clip it is laid inside. Laid
