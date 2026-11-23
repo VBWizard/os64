@@ -1408,6 +1408,18 @@ typedef enum {
 } flow_role_t;
 const char *flow_role_name(flow_role_t role);
 
+/* Why an equal subtree's intrinsic widths were measured again rather than
+ * copied (RELAYOUT_GRAFT.md § Intrinsic widths have a separate memo): a box
+ * its measure would measure reads another height than in the source; a box
+ * the source measured before it is not measured here with the same widths;
+ * a box its measure measured is measured here already with other widths; a
+ * table, or a part of one, would be copied. */
+typedef enum {
+    FLOW_INTRINSIC_HEIGHT, FLOW_INTRINSIC_ORDER, FLOW_INTRINSIC_KNOWN, FLOW_INTRINSIC_TABLE,
+    FLOW_INTRINSIC_NREFUSALS
+} flow_intrinsic_refusal_t;
+const char *flow_intrinsic_refusal_name(flow_intrinsic_refusal_t why);
+
 /* Snapshot diagnostics, separate from geometry's profile.reused. Refusals
  * count failed preparation checks; source and destination preparation may
  * each refuse in one call. Box checks count one refusal per rejected subtree.
@@ -1419,6 +1431,15 @@ typedef struct {
     uint64_t intrinsic_hits, marker_measures;
     size_t metadata_bytes, metadata_peak;
     uint64_t refused[FLOW_REUSE_NREASONS];
+    // The intrinsic widths copied from the source: `intrinsic_hits` the
+    // boxes whose widths were copied, a measure avoided each;
+    // `intrinsic_roots` the copies, each of a box asked for its widths and
+    // the boxes its measure measured in the source; and the copies refused,
+    // by flow_intrinsic_refusal_t. A RECORD ONLY, kept when the layout is
+    // profiled with a clock: the copies by their root's own first role
+    // (flow_role_t), FLOW_ROLES for a root with none.
+    uint64_t intrinsic_roots, intrinsic_refused[FLOW_INTRINSIC_NREFUSALS];
+    uint64_t intrinsic_role_roots[FLOW_ROLES + 1];
     // A RECORD ONLY, kept when the layout is profiled with a clock: the
     // roots of the equal subtrees refused for their role, each the
     // outermost such subtree, by its role (flow_role_t); the boxes in them,

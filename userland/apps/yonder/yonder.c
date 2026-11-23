@@ -1827,6 +1827,16 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
         }
         sample.role_clock_errors = reuse.role_clock_errors;
         sample.role_names = role_names;
+        _Static_assert(YONDER_LAYOUT_INTRINSIC_REFUSALS == FLOW_INTRINSIC_NREFUSALS, "intrinsic copy diagnostics");
+        static const char *intrinsic_refusal_names[FLOW_INTRINSIC_NREFUSALS];
+        for (int r = 0; r < FLOW_INTRINSIC_NREFUSALS; r++) {
+            if (intrinsic_refusal_names[r] == NULL)
+                intrinsic_refusal_names[r] = flow_intrinsic_refusal_name((flow_intrinsic_refusal_t)r);
+            sample.intrinsic_refused[r] = reuse.intrinsic_refused[r];
+        }
+        for (int r = 0; r <= FLOW_ROLES; r++) sample.intrinsic_role_roots[r] = reuse.intrinsic_role_roots[r];
+        sample.intrinsic_roots = reuse.intrinsic_roots;
+        sample.intrinsic_refusal_names = intrinsic_refusal_names;
         // What it needed (yonder_needed_t), if it finished: one that did not
         // is laid out again or let go, and is no answer. yonder runs the
         // whole pipeline whatever the answer, so a layout of the first three
