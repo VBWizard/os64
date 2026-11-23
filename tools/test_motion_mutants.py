@@ -1138,8 +1138,8 @@ mutants = [
     # What refused the parts is said (YONDER_PERF.md § perf-6): each reason
     # its own, and the element and property named.
     ('a-tree-missing-is-said-as-other-elements', FLOW,
-     '        said->why = FLOW_PARTS_INCOMPLETE;',
-     '        said->why = FLOW_PARTS_ANIMATED;', LIBFLOW),
+     '        now->incomplete) {\n        said->why = FLOW_PARTS_INCOMPLETE;',
+     '        now->incomplete) {\n        said->why = FLOW_PARTS_ANIMATED;', LIBFLOW),
     ('other-layers-are-said-as-a-box-moved', FLOW,
      '    if (a->nstacked != b->nstacked || a->nlayers != b->nlayers)\n        return FLOW_PARTS_LAYERS;',
      '    if (a->nstacked != b->nstacked || a->nlayers != b->nlayers)\n        return FLOW_PARTS_MOVED;', LIBFLOW),
@@ -1195,10 +1195,10 @@ mutants = [
      '#define PARTS_WALK_MAX 16384',
      '#define PARTS_WALK_MAX 16', LIBFLOW),
     ('only-the-old-tree-is-marked', FLOW,
-     '        if (said->why == FLOW_PARTS_MARKED)\n            said->why = parts_in(now, &changed, scroll, mark, ctx);',
+     '        if (said->why == FLOW_PARTS_MARKED)\n            said->why = parts_in(now, &changed, scroll, mark, ctx, NULL, 0);',
      '', LIBFLOW),
     ('only-the-new-tree-is-marked', FLOW,
-     '        said->why = parts_in(was, &changed, scroll, mark, ctx);',
+     '        said->why = parts_in(was, &changed, scroll, mark, ctx, NULL, 0);',
      '        said->why = FLOW_PARTS_MARKED;', LIBFLOW),
     ('a-layout-for-motion-asks-no-parts', YONDER,
      '    s_parts.page = laid_for != LAID_FOR_PAGE && !g.pictures_moved && !s_web.moved ? &g.page : NULL;',

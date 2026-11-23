@@ -59,9 +59,12 @@ static bool keep_same_text(const os64_html_node_t *a, const os64_html_node_t *b)
     return x == NULL || (x->text_len == y->text_len && os64_memcmp(x->text, y->text, x->text_len) == 0);
 }
 
+// A pair to write: the tree's record and the build's, and the node the
+// tree's is for (a pseudo-element's own node, the style pass's).
 typedef struct {
     FStyled *was;
     const FStyled *is;
+    const os64_html_node_t *self;
 } FKeep;
 
 typedef struct {
@@ -150,7 +153,7 @@ static bool keep_judge(FKeeps *k, const os64_html_node_t *node, FStyled *was, co
         k->pairs = grown;
         k->cap = cap;
     }
-    k->pairs[k->n++] = (FKeep){was, is};
+    k->pairs[k->n++] = (FKeep){was, is, was_self};
     return true;
 }
 
@@ -223,11 +226,45 @@ static bool keep_written(const FMap *written, const flow_style_t *s)
     return s != NULL && f_map_get(written, s) != NULL;
 }
 
-flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
-                                     const os64_page_t *model, const flow_env_t *env,
-                                     const flow_reuse_inputs_t *inputs, int32_t width)
+// Element `n` into `changed`, changed in every property (`all`): CANVAS
+// when the canvas may take its background; MEMORY.
+static int32_t keep_change(const flow_tree_t *tree, FMap *changed, const os64_html_node_t *n, const FProps *all)
 {
-    flow_restyle_t out = {FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_NO_TREE, 0, NULL, ""};
+    if (n == NULL || f_map_get(changed, n) != NULL)
+        return FLOW_PARTS_MARKED;
+    if (may_own_canvas(tree, n))
+        return FLOW_PARTS_CANVAS;
+    return f_map_put(changed, n, (void *)all) ? FLOW_PARTS_MARKED : FLOW_PARTS_MEMORY;
+}
+
+// The elements whose styles `written` holds into `changed`, for parts_in
+// to mark (LAYOUT_NEEDS_N3.md § 3 A): by the boxes that draw them
+// (box_named: a pseudo-element's box names its host, an anonymous box the
+// element holding it), and an element with no box by the replaced box that
+// draws it from its style (drawn_by: an inline svg's shapes), if one does;
+// NO_BOX when what draws it cannot be bounded.
+static int32_t keep_changed(const flow_tree_t *tree, const FKeeps *k, const FMap *written, FMap *changed,
+                            const FProps *all)
+{
+    int32_t why = FLOW_PARTS_MARKED;
+    for (const flow_box_t *box = tree->root; why == FLOW_PARTS_MARKED && box != NULL; box = box_after(box))
+        if (keep_written(written, box->style))
+            why = keep_change(tree, changed, box_named(box), all);
+    for (int32_t i = 0; why == FLOW_PARTS_MARKED && i < k->n; i++) {
+        const os64_html_node_t *n = k->pairs[i].self, *by;
+        if (n == NULL || f_pseudo_of(n) != GARB_PSEUDO_NONE || f_map_get(&tree->first, n) != NULL)
+            continue;
+        why = !drawn_by(tree, n, &by) ? FLOW_PARTS_NO_BOX : keep_change(tree, changed, by, all);
+    }
+    return why;
+}
+
+static flow_restyle_t restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
+                                       const os64_page_t *model, const flow_env_t *env,
+                                       const flow_reuse_inputs_t *inputs, int32_t width,
+                                       const flow_restyle_marks_t *marks, int32_t *parts)
+{
+    flow_restyle_t out = {FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_NO_TREE, 0, NULL, "", FLOW_PARTS_INCOMPLETE};
     if (tree == NULL || doc == NULL || env == NULL || inputs == NULL || tree->doc != doc || tree->incomplete ||
         tree->styles == NULL || tree->restyle_spent)
         return out;
@@ -360,6 +397,17 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
         f_style_free(b);
         return out;
     }
+    // What the written elements painted before the write; what they paint
+    // after it is marked once the boxes have followed.
+    FMap changed = {0};
+    FProps all;
+    os64_memset(&all, 0xff, sizeof(all));
+    int32_t marked = FLOW_PARTS_MARKED;
+    bool marking = marks != NULL && marks->mark != NULL && k.n > 0;
+    if (marking)
+        marked = keep_changed(tree, &k, &written, &changed, &all);
+    if (marking && marked == FLOW_PARTS_MARKED)
+        marked = parts_in(tree, &changed, marks->scroll, marks->mark, marks->ctx, NULL, 0);
     for (int32_t i = 0; i < k.n; i++) {
         k.pairs[i].was->style = values[i];
         k.pairs[i].was->decoration_colors = k.pairs[i].is->decoration_colors;
@@ -392,6 +440,20 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
     f_map_free(&written);
     // The page's extent and the scroll containers' ranges reached again,
     // from where placement left them, now the transforms draw elsewhere.
+    // What the transforms reach is the page's and the scrollers': when it
+    // moves the extent, a range or a scroll (and so a sticky box held to a
+    // range), what is painted moves outside every written element, and the
+    // marks are not the whole of it (LAYOUT_NEEDS_N3.md § 8).
+    int64_t was_w = tree->layout->width, was_h = tree->layout->height;
+    flow_point_t *was_reach = transformed && marking && tree->nscrollers > 0
+                                  ? os64_malloc((size_t)tree->nscrollers * 2 * sizeof(*was_reach))
+                                  : NULL;
+    if (transformed && marking && tree->nscrollers > 0 && was_reach == NULL)
+        marked = FLOW_PARTS_MEMORY;
+    for (int32_t i = 0; was_reach != NULL && i < tree->nscrollers; i++) {
+        was_reach[2 * i] = tree->scrollers[i]->range;
+        was_reach[2 * i + 1] = tree->scrollers[i]->at;
+    }
     if (transformed) {
         tree->layout->width = tree->reach_base_w;
         tree->layout->height = tree->reach_base_h;
@@ -406,20 +468,48 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
             if (s->at.x > s->range.x) s->at.x = s->range.x;
             if (s->at.y > s->range.y) s->at.y = s->range.y;
         }
+        bool moved = tree->layout->width != was_w || tree->layout->height != was_h;
+        for (int32_t i = 0; was_reach != NULL && i < tree->nscrollers; i++) {
+            const flow_frame_t *f = tree->scrollers[i];
+            moved = moved || f->range.x != was_reach[2 * i].x || f->range.y != was_reach[2 * i].y ||
+                    f->at.x != was_reach[2 * i + 1].x || f->at.y != was_reach[2 * i + 1].y;
+        }
+        if (marking && moved && marked == FLOW_PARTS_MARKED)
+            marked = FLOW_PARTS_MOVED;
     }
+    os64_free(was_reach);
     tree->styles->cascade_updates = b->cascade_updates;
-    out = (flow_restyle_t){k.n > 0 ? FLOW_RESTYLE_PAINT : FLOW_RESTYLE_NOTHING, FLOW_RESTYLE_NONE, (uint64_t)k.n, NULL, ""};
+    out = (flow_restyle_t){k.n > 0 ? FLOW_RESTYLE_PAINT : FLOW_RESTYLE_NOTHING, FLOW_RESTYLE_NONE, (uint64_t)k.n, NULL, "", FLOW_PARTS_INCOMPLETE};
     if (!whole) {
         tree->restyle_spent = true;
-        out = (flow_restyle_t){FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_ROOM, (uint64_t)k.n, NULL, "an anonymous box past the map's room"};
+        out = (flow_restyle_t){FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_ROOM, (uint64_t)k.n, NULL, "an anonymous box past the map's room", FLOW_PARTS_INCOMPLETE};
     } else {
         // Kept: the tree is current at the document's version, the one the
         // cascade was brought to before this restyle.
         pending_open(tree);
+        if (marking && marked == FLOW_PARTS_MARKED)
+            marked = parts_in(tree, &changed, marks->scroll, marks->mark, marks->ctx, NULL, 0);
     }
+    *parts = marked;
+    f_map_free(&changed);
     os64_free(values);
     os64_free(k.pairs);
     f_style_free(b);
+    return out;
+}
+
+flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
+                                     const os64_page_t *model, const flow_env_t *env,
+                                     const flow_reuse_inputs_t *inputs, int32_t width,
+                                     const flow_restyle_marks_t *marks)
+{
+    int32_t parts = FLOW_PARTS_INCOMPLETE;
+    flow_restyle_t out = restyle_in_place(tree, doc, model, env, inputs, width, marks, &parts);
+    // Nothing written paints nothing; a declined restyle's marks, if any
+    // were handed before it declined, are not the whole of anything.
+    out.parts = out.kind == FLOW_RESTYLE_NOTHING ? FLOW_PARTS_MARKED
+              : out.kind == FLOW_RESTYLE_PAINT   ? parts
+                                                 : FLOW_PARTS_INCOMPLETE;
     return out;
 }
 

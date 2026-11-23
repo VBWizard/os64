@@ -1507,7 +1507,55 @@ static struct {
     char what[96];
 } s_parts;
 
+// THE PARTS A SCRIPT'S CHANGE PAINTED (LAYOUT_NEEDS_N3.md): script_rebuild
+// arms it (`armed`) with the view in page coordinates before its layout and
+// reads it after. A restyle kept in the tree hands its parts here during
+// the layout (`kept`, and its flow_parts_why_t in `kept_parts`), the trees
+// compared hand theirs after it (change_parts). The parts are marked only
+// when they are the whole of the change; past the room (`over`) they are
+// not, and the whole view is.
+#define CHANGE_PARTS 64
+static struct {
+    bool armed;
+    os64_gui_rect_t view;
+    os64_gui_rect_t part[CHANGE_PARTS];
+    int32_t n;
+    bool over, kept;
+    int32_t kept_parts;
+    // A reader of the change log opened at the shown tree's version before
+    // the layout, which holds the log there: a kept restyle opens the
+    // tree's own reader again at the new version, after which the log need
+    // not reach back (change_touched reads it, and frees it).
+    os64_html_reader_t *reader;
+    // A restyle that wrote the shown tree and then declined (`wrote`): the
+    // tree compared after it already holds some of the new styles. And the
+    // element a refusal named, for the record, named while the shown tree
+    // (whose removed nodes it may be) is alive.
+    bool wrote;
+    char named[96];
+    // The shown tree's cascade and how many updates it had taken, for the
+    // svgs' question (change_svgs): which of them its update restyled.
+    const garb_cascade_t *cascade;
+    uint64_t cascade_generation, cascade_updates;
+} s_change;
+
+// A part a script's change painted (flow_change_parts, or a kept restyle's
+// marks), cut to the view, collected for script_rebuild.
+static void change_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
+{
+    os64_gui_rect_t meet;
+    (void)ctx;
+    (void)box;
+    if (!os64_rect_intersect(r, s_change.view, &meet))
+        return;
+    if (s_change.n == CHANGE_PARTS)
+        s_change.over = true;
+    else
+        s_change.part[s_change.n++] = meet;
+}
+
 static void mark_part(os64_gui_rect_t r);
+static flow_point_t scroll_now(void);
 
 // The face's half of a kept drawing's key (keep.h): moved by every mark
 // of the view made through mark_part or mark_whole but a tick's — a
@@ -1579,6 +1627,12 @@ static CountedAt s_not_covered, s_script_changes;
 // the change log lost, each since the last reading or the page shown.
 static CountedAt s_forced;
 static uint64_t s_pending_lost;
+// N3's (LAYOUT_NEEDS_N3.md § 5): each script's rebuild by how it was
+// painted, in parts, with nothing to paint, or whole and why, with the
+// element that refused; and the parts' area in all, since the last reading
+// or the page shown.
+static CountedAt s_script_parts;
+static uint64_t s_script_parts_area;
 // N2a's: each inline write judged a restyle because a selector may read
 // that element's style attribute, by element, since the last reading.
 static CountedAt s_style_reads;
@@ -2033,7 +2087,7 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
         }
         used += (size_t)w;
     }
-    yonder_diag_fact(diag, "layout kept, declined at", line);
+    yonder_diag_summary_fact(diag, "layout kept, declined at", line);
 }
 
 // THE LOAD'S TIMELINE (load_timeline.h): the latest navigation's first
@@ -3973,6 +4027,7 @@ static const char *const kRefused[REFUSED_COUNT] = {
     [FLOW_PARTS_CANVAS] = "a background the canvas may take",
     [FLOW_PARTS_DEEP] = "stacked boxes nested too deep",
     [FLOW_PARTS_MEMORY] = "no memory",
+    [FLOW_PARTS_LONG] = "trees too big to compare",
     [REFUSED_LOADS] = "a picture's size or a face laid out with it",
     [REFUSED_CASCADE] = "another cascade",
     [REFUSED_SIZE] = "another width, height or zoom",
@@ -4159,7 +4214,21 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
     // revision brought up to date first, as profile_flow_layout does.
     layout_font_dependencies(p);
     flow_reuse_inputs_t inputs = layout_inputs(p, NULL);
-    flow_restyle_t kept = flow_restyle_in_place(g.page.tree, page_doc(p), page_model(p), &s_env, &inputs, width);
+    // A script's rebuild collects what the kept styles painted
+    // (LAYOUT_NEEDS_N3.md § 3 A); a declined restyle's marks are not the
+    // whole of anything, and are dropped.
+    flow_restyle_marks_t marks = {scroll_now(), change_mark, NULL};
+    flow_restyle_t kept = flow_restyle_in_place(g.page.tree, page_doc(p), page_model(p), &s_env, &inputs, width,
+                                                s_change.armed ? &marks : NULL);
+    if (s_change.armed) {
+        s_change.kept = kept.kind != FLOW_RESTYLE_DECLINED;
+        s_change.kept_parts = kept.parts;
+        if (!s_change.kept) {
+            s_change.n = 0;
+            s_change.over = false;
+            s_change.wrote = kept.written > 0;
+        }
+    }
     restyle_counted(p, kept);
     if (kept.kind == FLOW_RESTYLE_DECLINED)
         return NULL;
@@ -4194,7 +4263,7 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
         char said[96];
         os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)s_geometry_compared,
                       (unsigned long)s_geometry_differed);
-        yonder_diag_fact(p->diag, "geometry check", said);
+        yonder_diag_summary_fact(p->diag, "geometry check", said);
         flow_free(whole);
     }
     return g.page.tree;
@@ -4247,6 +4316,24 @@ static uint64_t s_paint_compared, s_paint_differed, s_paint_uncompared;
 // (timed_canvas), and what it found: -1 while not drawn.
 static const flow_box_t *s_paint_check_box;
 static int32_t s_paint_check_groups = -1;
+
+// `--damage-check[=N]` (LAYOUT_NEEDS_N3.md § 4): every Nth script's rebuild
+// painted in parts (1 unless said), those that marked nothing included, is
+// followed, once its render has painted every part, by the whole view
+// painted the ordinary way and compared with what the window held, to the
+// pixel, the videos' boxes left
+// out (a picture moves by itself) and the page's widgets (the toolkit
+// paints them over the view). A difference is a part the rebuild should
+// have marked, or one something else should have; the record says how many were compared, how many differed,
+// the first with where and what the rebuild had marked, and how many could
+// not be compared (damage_check). A rebuild that marked nothing marks one
+// pixel, so that there is a paint to check. The second paint is charged to
+// the render's, and anything it counts (effects, a video's paints) counts
+// twice.
+static uint32_t s_damage_check, s_damage_counted;
+static bool s_damage_due;
+static uint64_t s_damage_compared, s_damage_differed, s_damage_uncompared;
+static char s_damage_after[96];
 
 // The canvases whose damage was marked since the last paint
 // (canvas_damage_mark), which a covered paint acknowledges
@@ -4333,6 +4420,8 @@ static void cost_reset(void)
     counted_at_reset(&s_script_changes);
     counted_at_reset(&s_forced);
     counted_at_reset(&s_style_reads);
+    counted_at_reset(&s_script_parts);
+    s_script_parts_area = 0;
     s_pending_lost = 0;
 }
 
@@ -9669,6 +9758,7 @@ static void diag_paint_reading(Page *p, uint32_t n)
             {&s_script_changes, "whole views by a script's change reading %u"},
             {&s_forced, "forced layouts by what was pending reading %u"},
             {&s_style_reads, "style writes restyled for a style selector reading %u"},
+            {&s_script_parts, "script changes painted reading %u"},
         };
         for (size_t k = 0; k < sizeof(w0) / sizeof(w0[0]); k++) {
             if (w0[k].t->nrows > 0 || w0[k].t->others > 0) {
@@ -9679,6 +9769,7 @@ static void diag_paint_reading(Page *p, uint32_t n)
             }
             counted_at_reset(w0[k].t);
         }
+        s_script_parts_area = 0;
         if (s_pending_lost > 0) {
             char lost[64], lkey[48];
             os64_snprintf(lost, sizeof(lost), "%lu", (unsigned long)s_pending_lost);
@@ -10732,6 +10823,8 @@ static void backdrop_damage(void)
     }
 }
 
+static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx);
+
 // libui's paint, timed (s_cost): its render, then each dirty rectangle
 // handed to the compositor, as os64_ui_paint does both, then counted
 // (paint_counted). What marked the view is this paint's, so it starts
@@ -10755,6 +10848,8 @@ static void glass_paint(void)
     yonder_keeps_paint(g.keeps, flow_tree_serial(g.page.tree));
     cost_begin(PS_RENDER);
     uint32_t count = os64_ui_render_list(&g.ui, damage);
+    if (count > 0)
+        view_damage_check(&g.view, g.ui.ctx);
     cost_end(PS_RENDER);
     if (count == 0) {
         os64_memset(s_cost.now, 0, sizeof(s_cost.now));
@@ -12407,6 +12502,369 @@ static void script_changes_note(Page *p)
     os64_html_reader_free(reader);
 }
 
+// An attribute that reaches what a box draws only through the styles,
+// which flow_change_parts compares whole (LAYOUT_NEEDS_N3.md § 3 B 4): a
+// generated text that reads one with attr() is a text box's bytes, which
+// it compares too.
+static bool attr_styles_only(const char *name)
+{
+    static const char *const kOnly[] = {"class", "id", "style", "role", "title", "tabindex"};
+    if (name == NULL)
+        return false;
+    for (size_t i = 0; i < sizeof(kOnly) / sizeof(kOnly[0]); i++)
+        if (os64_streq(name, kOnly[i]))
+            return true;
+    return os64_strlen(name) > 5 && (os64_memcmp(name, "aria-", 5) == 0 || os64_memcmp(name, "data-", 5) == 0);
+}
+
+// Whether element `n` is drawn by a box that draws what is inside it from
+// the document itself, in tree `t`: it has no box of its own (inside an
+// inline svg, a select), or its box is replaced.
+static bool drawn_from_document(const flow_tree_t *t, const os64_html_node_t *n)
+{
+    const flow_box_t *b = flow_box_for(t, n);
+    return b == NULL || b->kind == FLOW_BOX_REPLACED || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL);
+}
+
+// What a script changed since the tree shown (`was`) that no style says,
+// for flow_change_parts (LAYOUT_NEEDS_N3.md § 3 B 4 and 5), read from
+// s_change's reader, into `out` (`cap` of them), how many; -1 when the
+// change log no longer reaches the tree shown, or holds more than `cap`:
+// - an attribute changed, unless it reaches the paint only through the
+//   styles and its element has a box of its own in both trees (inside an
+//   svg an id is a reference, and a box drawn from the document reads
+//   what it likes);
+// - text, or children, changed in an element drawn from the document
+//   (`drawn_from_document`): other text and children are boxes the trees'
+//   compare finds;
+// - a picture's source's attribute, or its children: its img, whose
+//   picture the sources choose;
+// - a base's change, or a base added or removed, refuses (CHANGE_BASE):
+//   every address resolves against it.
+// `*refs` is set when what an id names may have changed: an id or xml:base
+// attribute, or an element holding either added or removed, the nodes the
+// log lists or anything inside them (the log lists a subtree's root
+// alone). An svg's reference by id finds the document's first element of
+// that id, whatever it is (svg.c's fragment_target), so change_svgs marks
+// the svgs that refer by id.
+#define CHANGE_TOUCHED 1024
+#define CHANGE_BASE (-2)
+
+// Whether node `n` is an HTML base element.
+static bool html_base(const os64_html_node_t *n)
+{
+    return n != NULL && n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML && n->name != NULL &&
+           os64_streq(n->name, "base");
+}
+// The last rebuild's verdict as the record words it (`in parts`, `nothing
+// to paint`, or why the whole view), which the host's tests read.
+static const char *s_change_said = "";
+static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, const os64_html_node_t **out,
+                              int32_t cap, bool *refs)
+{
+    os64_html_reader_t *reader = s_change.reader;
+    s_change.reader = NULL;
+    const os64_html_change_entry_t *entry = NULL;
+    int32_t n = 0;
+    *refs = false;
+    if (reader == NULL || os64_html_changes(reader, &entry) < 0)
+        n = -1;
+    for (; n >= 0 && entry != NULL; entry = entry->next) {
+        const os64_html_node_t *at = entry->target;
+        if (entry->kind == OS64_HTML_CHANGE_TEXT && at != NULL)
+            at = at->parent;
+        if (at == NULL || at->kind != OS64_HTML_ELEMENT || entry->kind == OS64_HTML_CHANGE_STATE)
+            continue;
+        if (entry->kind == OS64_HTML_CHANGE_ATTR && entry->attr_name != NULL &&
+            (os64_streq(entry->attr_name, "id") || os64_streq(entry->attr_name, "xml:base")))
+            *refs = true;
+        // Every address resolves against a base's: the whole view.
+        bool base = html_base(at);
+        for (int list = 0; entry->kind == OS64_HTML_CHANGE_CHILDREN && list < 2; list++) {
+            const os64_html_node_t *const *nodes = list == 0 ? entry->added : entry->removed;
+            size_t count = list == 0 ? entry->nadded : entry->nremoved;
+            // Each subtree walked through its links as they are now: a node
+            // moved out of it since is not in it.
+            for (size_t i = 0; i < count && !base; i++)
+                for (const os64_html_node_t *d = nodes[i]; d != NULL && !base; d = next_within(d, nodes[i])) {
+                    base = html_base(d);
+                    *refs = *refs || (d->kind == OS64_HTML_ELEMENT && os64_html_attr(d, "id") != NULL) ||
+                            (d->kind == OS64_HTML_ELEMENT && os64_html_attr(d, "xml:base") != NULL);
+                }
+        }
+        if (base) {
+            n = CHANGE_BASE;
+            break;
+        }
+        // A picture's sources choose what its img draws (image_sources_sync):
+        // a source's attribute, or the picture's children, mark the img.
+        const os64_html_node_t *picture =
+            at->ns != OS64_HTML_NS_HTML || at->name == NULL                            ? NULL
+            : os64_streq(at->name, "picture") && entry->kind == OS64_HTML_CHANGE_CHILDREN ? at
+            : os64_streq(at->name, "source") && at->parent != NULL && at->parent->name != NULL &&
+                    os64_streq(at->parent->name, "picture")
+                ? at->parent
+                : NULL;
+        for (const os64_html_node_t *c = picture != NULL ? picture->first_child : NULL; n >= 0 && c != NULL;
+             c = c->next) {
+            if (c->kind != OS64_HTML_ELEMENT || c->name == NULL || !os64_streq(c->name, "img"))
+                continue;
+            if (n == cap)
+                n = -1;
+            else
+                out[n++] = c;
+        }
+        if (picture != NULL)
+            continue;
+        bool drawn = drawn_from_document(was, at) || drawn_from_document(now, at);
+        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) && !drawn : !drawn)
+            continue;
+        if (n == cap)
+            n = -1;
+        else
+            out[n++] = at;
+    }
+    os64_html_reader_free(reader);
+    return n;
+}
+
+// Whether svg element `n` is a definition another svg may draw through a
+// reference (as flow.c's svg_referable asks): a defs, symbol, paint
+// server, clip, mask, marker or filter, or inside one.
+static bool svg_definition(const os64_html_node_t *n)
+{
+    static const char *const kDefinitions[] = {"defs",    "symbol",   "linearGradient", "radialGradient", "pattern",
+                                               "clipPath", "mask",    "marker",         "filter"};
+    for (const os64_html_node_t *a = n; a != NULL && a->ns == OS64_HTML_NS_SVG; a = a->parent)
+        for (size_t i = 0; a->name != NULL && i < sizeof(kDefinitions) / sizeof(kDefinitions[0]); i++)
+            if (os64_streq(a->name, kDefinitions[i]))
+                return true;
+    return false;
+}
+
+// The outer svg element `n` is in, or NULL.
+static const os64_html_node_t *svg_root_of(const os64_html_node_t *n)
+{
+    const os64_html_node_t *root = NULL;
+    for (const os64_html_node_t *a = n; a != NULL && a->ns == OS64_HTML_NS_SVG; a = a->parent)
+        root = a;
+    return root != NULL && flow_svg_root(root) ? root : NULL;
+}
+
+// Whether svg node `d` draws another element by its id: a `<use>`, or a
+// `url(` in an attribute or among its winners in the cascade `c` (the
+// adapter paints from both), as a fill, a clip or a filter does.
+static bool svg_refers(const garb_cascade_t *c, const os64_html_node_t *d)
+{
+    if (d->kind != OS64_HTML_ELEMENT)
+        return false;
+    if (d->name != NULL && os64_streq(d->name, "use"))
+        return true;
+    for (const os64_html_attr_t *a = d->attrs; a != NULL; a = a->next)
+        for (const char *v = a->value; v != NULL && *v != '\0'; v++)
+            if (v[0] == 'u' && v[1] == 'r' && v[2] == 'l' && v[3] == '(')
+                return true;
+    garb_style_t style = c != NULL ? garb_style_for(c, d) : (garb_style_t){0};
+    for (int32_t j = 0; j < style.n; j++) {
+        const garb_val_t *v = &style.sets[j].value;
+        if (v->kind == GARB_V_URL)
+            return true;
+        for (int32_t k = 0; k < v->nitems; k++)
+            if (v->items[k].kind == GARB_V_URL)
+                return true;
+    }
+    return false;
+}
+
+// Whether an element svg `root` is in hands it a reference by id among its
+// winners in the cascade `c`: an inherited property naming a `url(`, as a
+// fill set on a wrapper does.
+static bool svg_inherits_reference(const garb_cascade_t *c, const os64_html_node_t *root)
+{
+    for (const os64_html_node_t *a = root->parent; c != NULL && a != NULL && a->kind == OS64_HTML_ELEMENT;
+         a = a->parent) {
+        garb_style_t style = garb_style_for(c, a);
+        for (int32_t j = 0; j < style.n; j++)
+            if (garb_prop_inherited(style.sets[j].prop) && style.sets[j].value.kind == GARB_V_URL)
+                return true;
+    }
+    return false;
+}
+
+// Whether the cascade `c` recomputed element `n`'s winners since the shown
+// tree's update `since`, or is not that cascade brought up to date
+// (`fresh`), in which case every element's may have changed.
+static bool svg_restyled(const garb_cascade_t *c, const os64_html_node_t *n, uint64_t since, bool fresh)
+{
+    return fresh || garb_style_updated_since(c, n, since);
+}
+
+// THE SVGS THE CASCADE RESTYLED (LAYOUT_NEEDS_N3.md § 8): yonder's svg
+// adapter takes an svg's paint (fill, stroke and the rest) from the live
+// cascade, not from libflow's styles, so no compare of the trees sees a
+// class that recolours a shape. Each inline svg drawn in `now` is added to
+// `out` (`*n` of `cap`) when the cascade `c` recomputed the winners of it,
+// of anything inside it, or of an element it is in (paint is inherited)
+// since the shown tree's update. Every one is added when `c` is not that
+// cascade brought up to date, or when it restyled a definition another svg
+// may draw by reference (a defs, symbol, paint server, clip, mask, marker
+// or filter, or anything in an svg that draws nothing itself, a sprite
+// sheet's): only an svg draws one, and which does is not known here. And
+// whenever anything in an svg changed, by the cascade or in the change log
+// (`svg_touched`: `out` already names an svg element), or what an id names
+// may have changed (`refs`, change_touched), so is every one that refers
+// by id, itself or anything in it (svg_refers) or by what it inherits
+// (svg_inherits_reference), which may draw any element of the document
+// that way.
+// False past `cap`, for the whole view.
+static bool change_svgs(const Page *p, const flow_tree_t *now, const garb_cascade_t *c, const os64_html_node_t **out,
+                        int32_t *n, int32_t cap, bool refs)
+{
+    bool fresh = c == NULL || c != s_change.cascade || garb_cascade_generation(c) != s_change.cascade_generation;
+    uint64_t since = s_change.cascade_updates;
+    bool svg_touched = refs;
+    for (int32_t i = 0; i < *n && !svg_touched; i++)
+        svg_touched = out[i] != NULL && out[i]->ns == OS64_HTML_NS_SVG;
+    if (!fresh && garb_cascade_updates(c) == since && !svg_touched)
+        return true;
+    // Every svg element of the document, for a definition restyled.
+    const os64_html_node_t *top = page_doc(p)->document;
+    bool all = fresh;
+    for (const os64_html_node_t *e = top; !all && e != NULL; e = next_within(e, top)) {
+        if (e->kind != OS64_HTML_ELEMENT || e->ns != OS64_HTML_NS_SVG)
+            continue;
+        const os64_html_node_t *root = svg_root_of(e);
+        bool definition = svg_definition(e) || root == NULL || flow_box_for(now, root) == NULL;
+        all = definition && svg_restyled(c, e, since, fresh);
+    }
+    // Twice over the svgs drawn: those restyled, then, when anything in an
+    // svg changed or an id may name another element, those that refer by id.
+    for (int pass = 0; pass < 2; pass++) {
+        for (const flow_box_t *b = flow_root(now); b != NULL;) {
+            const os64_html_node_t *root = b->pseudo == GARB_PSEUDO_NONE ? b->node : NULL;
+            if (root != NULL && flow_svg_root(root) && flow_box_for(now, root) == b) {
+                bool named = false;
+                if (pass == 0) {
+                    named = all;
+                    for (const os64_html_node_t *a = root; !named && a != NULL; a = a->parent)
+                        named = a->kind == OS64_HTML_ELEMENT && svg_restyled(c, a, since, fresh);
+                    for (const os64_html_node_t *d = root->first_child; !named && d != NULL; d = next_within(d, root))
+                        named = d->kind == OS64_HTML_ELEMENT && svg_restyled(c, d, since, fresh);
+                    svg_touched = svg_touched || named;
+                } else {
+                    for (const os64_html_node_t *d = root; !named && d != NULL; d = next_within(d, root))
+                        named = svg_refers(c, d);
+                    named = named || svg_inherits_reference(c, root);
+                }
+                if (named) {
+                    if (*n == cap)
+                        return false;
+                    out[(*n)++] = root;
+                }
+            }
+            if (b->first != NULL) {
+                b = b->first;
+                continue;
+            }
+            while (b != NULL && b->next == NULL)
+                b = b->parent;
+            b = b != NULL ? b->next : NULL;
+        }
+        if (!svg_touched)
+            break;
+    }
+    return true;
+}
+
+// Whether the change script_rebuild just laid out can be painted in the
+// parts s_change holds (NULL), or why the whole view must be. `next` is
+// the staged page. A link the rebuild puts out (g.hover_link) is not a
+// reason: the number drives the status line, and what a lit link paints
+// is its :hover or :active style, which the trees' compare sees. The
+// verdict is counted by change_said, once script_rebuild knows whether the
+// view scrolled with the change.
+static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
+{
+    const char *why = NULL;
+    const os64_html_node_t *at = NULL;
+    if (zoom_changed || next->laid_width != p->laid_width || next->laid_height != p->laid_height)
+        why = kRefused[REFUSED_SIZE];
+    else if (p->tree == NULL || next->tree == NULL)
+        why = "no tree shown";
+    else if (next->tree == p->tree && !s_change.kept)
+        why = "the shown tree written without its marks";
+    else if (s_change.wrote)
+        why = "a restyle that wrote the shown tree, then declined";
+    else if (next->tree == p->tree && s_change.kept_parts != FLOW_PARTS_MARKED)
+        why = s_change.kept_parts >= 0 && s_change.kept_parts < FLOW_PARTS_COUNT ? kRefused[s_change.kept_parts]
+                                                                                 : "a kept restyle's marks";
+    // The trees compared: a kept tree is compared with itself, which finds
+    // what the script changed that no style says (an svg's attribute) and
+    // nothing else, its styles' parts being the restyle's.
+    if (why == NULL) {
+        static const os64_html_node_t *touched[CHANGE_TOUCHED];
+        bool refs = false;
+        int32_t ntouched = change_touched(p->tree, next->tree, touched, CHANGE_TOUCHED, &refs);
+        flow_parts_said_t said = {FLOW_PARTS_MARKED, NULL, -1};
+        if (ntouched == CHANGE_BASE)
+            why = "a base changed";
+        else if (ntouched < 0)
+            why = "the change log lost, or past its room";
+        else if (!change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED, refs))
+            why = "more restyled svgs than the room";
+        else if (!flow_change_parts(p->tree, next->tree, scroll_now(), touched, ntouched, change_mark, NULL,
+                                    &said)) {
+            why = said.why < FLOW_PARTS_COUNT ? kRefused[said.why] : "?";
+            at = said.node;
+        }
+    }
+    // The reader is let go whichever way it went, read or not.
+    os64_html_reader_free(s_change.reader);
+    s_change.reader = NULL;
+    if (why == NULL && s_change.over)
+        why = "more parts than the room";
+    os64_gui_rect_t reach = {0, 0, 0, 0};
+    for (int32_t i = 0; why == NULL && i < s_change.n; i++)
+        reach = i == 0 ? s_change.part[i] : os64_rect_union(reach, s_change.part[i]);
+    // Parts reaching across more than half of the view are the whole of it:
+    // the toolkit's list of rectangles becomes one round all of them past
+    // its room (OS64_UI_DAMAGE_MAX), and so many parts so far apart save
+    // little over the whole.
+    if (why == NULL && (int64_t)reach.w * reach.h * 2 > (int64_t)s_change.view.w * s_change.view.h)
+        why = "parts past half the view";
+    s_change.named[0] = '\0';
+    if (s_layout_profile && layout_profile_diag(p) != NULL) {
+        if (at != NULL && at->kind != OS64_HTML_ELEMENT)
+            at = os64_html_flat_parent(page_doc(p), at);
+        if (at != NULL && at->kind == OS64_HTML_ELEMENT)
+            element_named(s_change.named, sizeof(s_change.named), "", at);
+    }
+    return why;
+}
+
+// The verdict on a script's rebuild, `why` (NULL: painted in the parts
+// s_change holds), counted in the record's `script changes painted`.
+static void change_said(const Page *p, const char *why)
+{
+    s_change_said = why != NULL ? why : s_change.n == 0 ? "nothing to paint" : "in parts";
+    if (!s_layout_profile || layout_profile_diag(p) == NULL)
+        return;
+    if (why != NULL) {
+        counted_at(&s_script_parts, why, s_change.named, "");
+    } else if (s_change.n == 0) {
+        counted_at(&s_script_parts, "nothing to paint", "", "");
+    } else {
+        os64_gui_rect_t reach = s_change.part[0];
+        for (int32_t i = 1; i < s_change.n; i++)
+            reach = os64_rect_union(reach, s_change.part[i]);
+        char note[96];
+        s_script_parts_area += (uint64_t)reach.w * (uint64_t)reach.h;
+        os64_snprintf(note, sizeof(note), "%d parts in %dx%d; area in all %lu", (int)s_change.n, (int)reach.w,
+                      (int)reach.h, (unsigned long)s_script_parts_area);
+        counted_at(&s_script_parts, "in parts", "", note);
+    }
+}
+
 static bool script_rebuild(void)
 {
     Page *p = &g.page;
@@ -12455,13 +12913,25 @@ static bool script_rebuild(void)
         next.sheets_changed = true;
         next.serial = ++g.pages_made;
         sheets_start(&next);
+        // What the change painted is collected from here (s_change): a
+        // restyle kept in the shown tree hands its parts during the layout,
+        // and the two trees are compared once it is made.
+        os64_html_reader_free(s_change.reader);
+        s_change = (__typeof__(s_change)){.armed = true, .view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}};
+        s_change.reader = os64_html_reader_new((os64_html_document_t *)page_doc(p), p->rendered_version);
+        s_change.cascade = p->cascade;
+        s_change.cascade_generation = p->cascade != NULL ? garb_cascade_generation(p->cascade) : 0;
+        s_change.cascade_updates = p->cascade != NULL ? garb_cascade_updates(p->cascade) : 0;
         // The shown Page holds the old faces; an incomplete staged layout
         // can reclaim its tree and cascade before retrying in that room.
         yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_REBUILD);
         bool rebuilt = lay_out_page_reclaim(&next, g.view.bounds.w > 0 ? g.view.bounds.w : 1,
                                             g.view.bounds.h > 0 ? g.view.bounds.h : 1, p);
         lt_why_end(why_was);
+        s_change.armed = false;
         if (!rebuilt) {
+            os64_html_reader_free(s_change.reader);
+            s_change.reader = NULL;
             sheets_leave(&next);
             tree_free(next.tree);
             garb_cascade_free(next.cascade);
@@ -12474,6 +12944,8 @@ static bool script_rebuild(void)
             mark_whole(WHOLE_SCRIPT, false);
             return false;
         }
+        // Read while the shown tree is alive: page_show frees it.
+        const char *whole = change_parts(p, &next, zoom_changed);
         sheets_leave(p);
         page_show(p, next.tree);
         g.script_painting = true;
@@ -12504,11 +12976,33 @@ static bool script_rebuild(void)
         css_pictures(p);
         webfonts_feed(true);
         forms_build();
+        // A page that no longer reaches as far scrolls the view back with
+        // it, which moves everything: the whole view.
+        int32_t sx_shown = g.sx, sy_shown = g.sy;
         clamp_scroll();
+        if (whole == NULL && (g.sx != sx_shown || g.sy != sy_shown))
+            whole = "the view scrolled with it";
+        change_said(p, whole);
         sync_bars();
         forms_place();
         pictures_schedule();
-        mark_whole(WHOLE_SCRIPT, false);
+        if (whole != NULL)
+            mark_whole(WHOLE_SCRIPT, false);
+        else
+            for (int32_t i = 0; i < s_change.n; i++)
+                mark_part(s_change.part[i]);
+        // A check due for a rebuild painted in parts, with what it marked
+        // for the record's line.
+        if (whole == NULL && s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {
+            s_damage_due = true;
+            if (s_change.n == 0) {
+                os64_strcopy(s_damage_after, sizeof(s_damage_after), "a rebuild that marked nothing");
+                mark_part((os64_gui_rect_t){g.sx, g.sy, 1, 1});
+            } else {
+                os64_snprintf(s_damage_after, sizeof(s_damage_after), "a rebuild that marked %d parts",
+                              (int)s_change.n);
+            }
+        }
         if (s_script_audit) {
             char line[128];
             os64_snprintf(line,sizeof(line),"yonder: rendering rebuild in %ld us",
@@ -14229,7 +14723,7 @@ static bool read_checked(const os64_html_document_t *doc, const os64_html_node_t
     char said[96];
     os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)s_reads_compared,
                   (unsigned long)s_reads_differed);
-    yonder_diag_fact(g.page.diag, "read check", said);
+    yonder_diag_summary_fact(g.page.diag, "read check", said);
     return ready;
 }
 
@@ -19154,6 +19648,138 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
     return refused;
 }
 
+// `--damage-check`'s comparison, after the paints of the view widget at
+// `bounds` (the window) for every part of a render, through `gl`: the whole
+// view painted the ordinary way over it, compared with what the window held
+// before, the videos' boxes and the page's widgets left out; the whole paint
+// stays, being right.
+static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bounds, os64_gui_rect_t whole)
+{
+    // What the comparison leaves out, in the window: the videos' boxes,
+    // and the page's widgets (form controls and players), which the
+    // toolkit paints over the view after it, so that what the window held
+    // there is theirs and not the page's. Past the room some would not be
+    // left out, and the whole paint would go over them for good: the
+    // comparison is not made, and nothing is painted.
+    enum { LEFT_OUT = 64 };
+    os64_gui_rect_t left_out[LEFT_OUT];
+    int32_t nleft = 0;
+    for (int32_t i = 0; i < VIDEOS_MAX && nleft < LEFT_OUT; i++) {
+        const flow_box_t *b = s_videos[i].node != NULL ? flow_box_for(g.page.tree, s_videos[i].node) : NULL;
+        if (b == NULL)
+            continue;
+        os64_gui_rect_t r = flow_box_doc_rect(b, scroll_now());
+        left_out[nleft++] = (os64_gui_rect_t){r.x + gl->dx, r.y + gl->dy, r.w, r.h};
+    }
+    for (int32_t i = 0; i < g.nfw && nleft < LEFT_OUT; i++)
+        if (!g.fw[i]->w->hidden)
+            left_out[nleft++] = g.fw[i]->w->bounds;
+    for (int32_t i = 0; i < g.nplayers && nleft < LEFT_OUT; i++)
+        if (!g.players[i]->p.w.hidden)
+            left_out[nleft++] = g.players[i]->p.w.bounds;
+    os64_gui_rect_t win;
+    const os64_gui_rect_t surf = {0, 0, (int32_t)gl->surf->width, (int32_t)gl->surf->height};
+    uint32_t *before = NULL;
+    bool check = nleft < LEFT_OUT && os64_rect_intersect(bounds, surf, &win);
+    if (check)
+        before = os64_malloc((size_t)win.w * (size_t)win.h * sizeof(uint32_t));
+    check = check && before != NULL;
+    s_damage_compared += check;
+    s_damage_uncompared += !check;
+    if (check) {
+        for (int32_t y = 0; y < win.h; y++)
+            os64_memcpy(before + (size_t)y * win.w, gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x,
+                        (size_t)win.w * sizeof(uint32_t));
+        os64_gui_rect_t was = gl->clip, view = {win.x - gl->dx, win.y - gl->dy, win.w, win.h};
+        gl->clip = win;
+        const yonder_dark_t *dark = s_dark ? &kDark : NULL;
+        yonder_paint(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        box_bars(gl, view);
+        gl->clip = was;
+        int64_t first = -1, differ = 0;
+        os64_gui_rect_t reach = {0, 0, 0, 0};
+        for (int32_t y = 0; y < win.h; y++) {
+            const uint32_t *row = gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x;
+            for (int32_t x = 0; x < win.w; x++) {
+                if (((row[x] ^ before[(size_t)y * win.w + x]) & 0x00ffffffu) == 0)
+                    continue;
+                int32_t px = win.x + x, py = win.y + y;
+                bool out = false;
+                for (int32_t k = 0; k < nleft && !out; k++)
+                    out = px >= left_out[k].x && py >= left_out[k].y && px < left_out[k].x + left_out[k].w &&
+                          py < left_out[k].y + left_out[k].h;
+                if (out)
+                    continue;
+                os64_gui_rect_t dot = {px - gl->dx, py - gl->dy, 1, 1};
+                reach = differ == 0 ? dot : os64_rect_union(reach, dot);
+                if (first < 0)
+                    first = (int64_t)y * win.w + x;
+                differ++;
+            }
+        }
+        // What the window held where it was left out is put back: the
+        // widgets are not painted again this frame outside its marks.
+        for (int32_t k = 0; k < nleft; k++) {
+            os64_gui_rect_t r;
+            if (!os64_rect_intersect(left_out[k], win, &r))
+                continue;
+            for (int32_t y = r.y; y < r.y + r.h; y++)
+                os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + r.x,
+                            before + (size_t)(y - win.y) * win.w + (r.x - win.x), (size_t)r.w * sizeof(uint32_t));
+        }
+        if (differ > 0) {
+            s_damage_differed++;
+            char line[256];
+            os64_snprintf(line, sizeof(line),
+                          "the whole view differs from the parts after %s: %ld pixels in %d,%d %dx%d, first %ld,%ld",
+                          s_damage_after, (long)differ, (int)reach.x, (int)reach.y, (int)reach.w, (int)reach.h,
+                          (long)(win.x - gl->dx + first % win.w), (long)(win.y - gl->dy + first / win.w));
+            yonder_diag_failed_seen(g.page.diag, "damage check", line);
+            os64_debug_log(line);
+        }
+    }
+    os64_free(before);
+    char said[128];
+    os64_snprintf(said, sizeof(said), "%lu compared, %lu differed, %lu could not be compared",
+                  (unsigned long)s_damage_compared, (unsigned long)s_damage_differed,
+                  (unsigned long)s_damage_uncompared);
+    yonder_diag_summary_fact(g.page.diag, "damage check", said);
+}
+
+// The view's verbs, timed, painting through `pane`.
+static yonder_verbs_t view_verbs(GlassPane *pane)
+{
+    return (yonder_verbs_t){pane,        timed_fill,    timed_text,       timed_image,
+                            timed_control, timed_backdrop, timed_group_open, timed_group_close,
+                            timed_mask,   timed_pixels,  timed_stand_in,  pane_keep, timed_through_open,
+                            timed_through_close, timed_clip_open, timed_clip_fill, timed_clip_close,
+                            g.page.modern ? timed_canvas : NULL,
+                            timed_layer_open, timed_layer_close, timed_backdrop_filter,
+                            timed_layer_take};
+}
+
+// `--damage-check`'s turn, once a render has painted every part it was
+// marked with: the view is painted once for each part (paints_part), so a
+// check after the first would find the parts not yet painted. Its own pane,
+// whose canvas label it lets go.
+static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx)
+{
+    if (!s_damage_due)
+        return;
+    s_damage_due = false;
+    if (g.page.tree == NULL || g.paint_cache == NULL || g.paint_scratch == NULL)
+        return;
+    GlassGroups groups = {.depth = 0};
+    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, w->bounds, &groups, w->bounds};
+    GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false, {0}, 0};
+    yonder_verbs_t v = view_verbs(&pane);
+    os64_gui_rect_t whole = {w->bounds.x - gl.dx, w->bounds.y - gl.dy, w->bounds.w, w->bounds.h};
+    damage_check(&gl, &v, w->bounds, whole);
+    if (pane.canvas_label.run != NULL)
+        os64_text_run_release(pane.canvas_label.run);
+    yonder_scratch_paint_end(g.paint_scratch);
+}
+
 static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
 {
     (void)t;
@@ -19167,12 +19793,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         return;
     }
     GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false, {0}, 0};
-    yonder_verbs_t v = {&pane,        timed_fill,    timed_text,       timed_image,
-                        timed_control, timed_backdrop, timed_group_open, timed_group_close,
-                        timed_mask,   timed_pixels,  timed_stand_in,  pane_keep, timed_through_open,
-                        timed_through_close, timed_clip_open, timed_clip_fill, timed_clip_close, g.page.modern ? timed_canvas : NULL,
-                        timed_layer_open, timed_layer_close, timed_backdrop_filter,
-                        timed_layer_take};
+    yonder_verbs_t v = view_verbs(&pane);
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;
@@ -19198,10 +19819,10 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     // § 6, MIX_BLEND.md § 4), the most any one paint did.
     if (refused > 0 && g.page.diag != NULL)
         yonder_diag_missing_seen(g.page.diag, "css-value", "layer: drawn plain", refused);
-    if (pane.canvas_label.run != NULL)
-        os64_text_run_release(pane.canvas_label.run);
     yonder_paint_stage = NULL;
     box_bars(&gl, view);
+    if (pane.canvas_label.run != NULL)
+        os64_text_run_release(pane.canvas_label.run);
     yonder_scratch_paint_end(g.paint_scratch);
     cost_end(PS_VIEW);
 }
@@ -21661,6 +22282,12 @@ int main(int argc, char **argv)
         else if (os64_strlen(argv[arg]) > 14 && os64_memcmp(argv[arg], "--paint-check=", 14) == 0) {
             int64_t every = os64_atoi(argv[arg] + 14);
             s_paint_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
+        }
+        else if (os64_streq(argv[arg], "--damage-check"))
+            s_damage_check = 1;
+        else if (os64_strlen(argv[arg]) > 15 && os64_memcmp(argv[arg], "--damage-check=", 15) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 15);
+            s_damage_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
         }
         else if (os64_streq(argv[arg], "--video-rate"))
             s_video_rate_s = 5;

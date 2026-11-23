@@ -94,8 +94,8 @@ mutants = [
      '    if (fr->kind == FF_ATOMIC && f_transforms(fr->style)) {',
      '    if (false) {'),
     ('a-stacked-atom-is-painted-on-its-line-too', FLOW,
-     '                if (!f->stacked && !f->unpainted && meets(f->overflow, v->view))',
-     '                if (!f->unpainted && meets(f->overflow, v->view))'),
+     '                if (!f->stacked && !f->unpainted && paints_into(f, v->view))',
+     '                if (!f->unpainted && paints_into(f, v->view))'),
     # Where it is drawn.
     ('a-transform-frame-moves-nothing', FLOW,
      '                                                  : s->by;',

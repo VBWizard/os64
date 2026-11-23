@@ -7215,6 +7215,7 @@ static void classic_browser_cases(void)
  * that includes this file for its fakes (YONDER_HOST_FAKES_ONLY) gets none
  * of it, so the replay runner's every file goes through its own door. */
 #include "test_yonder_layout_profile.inc"
+#include "test_yonder_damage.inc"
 #include "test_yonder_restyle.inc"
 #include "test_yonder_graft.inc"
 
@@ -8869,6 +8870,18 @@ static void diag_keep_cases(void) {
               has(big,"\npaint reading again: at y 0\n") && !has(big,"\npaint reading past:") &&
               !has(big,"\nlate ordinary:") && !has(big,"\nscript 512:"),
               "keep: readings have a room of their own, which a full ordinary room leaves them");
+        free(big); yonder_diag_free(d);
+        /* So do the measuring switches' summaries, which a page writes as
+         * it runs, after its scripts have filled the ordinary room. */
+        d=yonder_diag_new("http://fixture.test/summaries",1,0);
+        for(unsigned i=0;i<YONDER_DIAG_FACTS_MAX+5;i++) { char k[16]; snprintf(k,sizeof(k),"script %u",i); yonder_diag_fact(d,k,"ran"); }
+        for(unsigned i=1;i<=YONDER_DIAG_SUMMARY_FACTS;i++) { char k[32]; snprintf(k,sizeof(k),"layout line %u",i); yonder_diag_summary_fact(d,k,"x"); }
+        yonder_diag_summary_fact(d,"layout line past","x");
+        yonder_diag_reading_fact(d,"paint reading 1","at y 0");
+        big=malloc(1<<17); yonder_diag_render(d,big,1<<17);
+        check(has(big,"\nlayout line 1: x\n") && has(big,"\nlayout line 32: x\n") && !has(big,"\nlayout line past:") &&
+              has(big,"\npaint reading 1: at y 0\n"),
+              "keep: the measuring switches' summaries have a room of their own, apart from the readings'");
         free(big); yonder_diag_free(d);
     }
 
@@ -13165,6 +13178,14 @@ int main(void)
         printf("yonder fairness: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
+    if(getenv("YONDER_DAMAGE_ONLY")) {
+        damage_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"damage: text released");
+        check(live==0,"damage: heap empty");
+        printf("yonder damage: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_PROFILE_ONLY")) {
         layout_profile_cases();
         os64_text_font_release(probe_font);
@@ -13183,6 +13204,7 @@ int main(void)
     canvas_window_cases();
     fairness_cases();
     layout_profile_cases();
+    damage_cases();
     graft_browser_cases();graft_base_cases();
     restyle_browser_cases();
     restyle_fallback_cases();

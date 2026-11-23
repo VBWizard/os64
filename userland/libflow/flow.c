@@ -3318,6 +3318,16 @@ static bool outside_clips_hold(const flow_box_t *b, int64_t x, int64_t y, flow_p
 
 static void visit_inline(const Visit *v, const flow_box_t *b);
 
+// Whether what box `b` and everything in it paint meets `view`: its
+// overflow grown by its ink (its shadows, its outline, glyphs and markers
+// drawn past it, and the same of everything in it). A walk that prunes on
+// the overflow alone leaves out a shadow reaching into a view its box does
+// not, which a paint of part of the window then draws without.
+static bool paints_into(const flow_box_t *b, os64_gui_rect_t view)
+{
+    return meets(grown(b->overflow, b->ink), view);
+}
+
 // The walk of a box's content: a scroll container's is in its scroll, so
 // the view is where the content stands, `*in` filled; any other box's is
 // the box's own, `v`.
@@ -3336,7 +3346,7 @@ static const Visit *content_view(const Visit *v, const flow_box_t *b, Visit *in)
 // it either.
 static void visit_blocks(const Visit *v, const flow_box_t *b)
 {
-    if (b->unpainted || !meets(b->overflow, v->view))
+    if (b->unpainted || !paints_into(b, v->view))
         return;
     v->visit(v->ctx, b);
     Visit scrolled;
@@ -3365,7 +3375,7 @@ static void visit_whole(const Visit *v, const flow_box_t *b)
 // not the formatting context's.
 static void visit_floats(const Visit *v, const flow_box_t *b)
 {
-    if (!b->holds_float || b->unpainted || !meets(b->overflow, v->view))
+    if (!b->holds_float || b->unpainted || !paints_into(b, v->view))
         return;
     Visit scrolled;
     const Visit *cv = content_view(v, b, &scrolled);
@@ -3392,23 +3402,23 @@ static void visit_piece(const Visit *v, const flow_box_t *f)
 // stacked atom, which is a layer of its own — and the markers.
 static void visit_inline(const Visit *outer, const flow_box_t *b)
 {
-    if (b->unpainted || !meets(b->overflow, outer->view))
+    if (b->unpainted || !paints_into(b, outer->view))
         return;
     Visit scrolled;
     const Visit *v = content_view(outer, b, &scrolled);
     for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
         if (c->kind == FLOW_BOX_LINE) {
-            if (!meets(c->overflow, v->view))
+            if (!paints_into(c, v->view))
                 continue;
             for (const flow_box_t *f = c->first; f != NULL; f = f->next)
-                if (!f->stacked && !f->unpainted && meets(f->overflow, v->view))
+                if (!f->stacked && !f->unpainted && paints_into(f, v->view))
                     visit_piece(v, f);
             // A line that may end in its block's ellipsis, after its
             // pieces, for the painter to draw the ellipsis over them.
             if (b->ellipsis != NULL)
                 v->visit(v->ctx, c);
         } else if (c->kind == FLOW_BOX_MARKER) {
-            if (!c->unpainted && meets(c->overflow, v->view))
+            if (!c->unpainted && paints_into(c, v->view))
                 v->visit(v->ctx, c);
         } else if (in_tree(c) && c->floated == FLOW_FLOAT_NONE) {
             visit_inline(v, c);
@@ -4057,15 +4067,15 @@ void flow_visit_groups_from(const flow_tree_t *tree, os64_gui_rect_t viewport, f
         case PART_WHOLE:
             if (b->kind != FLOW_BOX_ATOMIC)
                 visit_whole(&v, b);
-            else if (!b->unpainted && meets(b->overflow, v.view))
+            else if (!b->unpainted && paints_into(b, v.view))
                 visit_piece(&v, b);
             break;
         case PART_SELF:
-            if (!b->unpainted && meets(b->overflow, v.view))
+            if (!b->unpainted && paints_into(b, v.view))
                 v.visit(v.ctx, b);
             break;
         case PART_BODY: {
-            if (b->unpainted || !meets(b->overflow, v.view))
+            if (b->unpainted || !paints_into(b, v.view))
                 break;
             Visit scrolled;
             const Visit *cv = content_view(&v, b, &scrolled);
@@ -5004,9 +5014,12 @@ static bool draws_none(const flow_tree_t *tree, const os64_html_node_t *n)
 }
 
 // FLOW_PARTS_MARKED, else why not: the walks past PARTS_WALK_MAX, or no
-// memory.
+// memory. `boxes` (`nboxes` of them, of tree `t`) are marked too, each by
+// its own reach (part_box) whatever its node: what flow_change_parts found
+// moved inside them.
 static flow_parts_why_t parts_in(const flow_tree_t *t, const FMap *changed, flow_point_t scroll,
-                                 void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
+                                 void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
+                                 const flow_box_t *const *boxes, int32_t nboxes)
 {
     Parts pp = {t, changed, scroll, mark, ctx, NULL, 0, NULL, {NULL, -1, -1}};
     FMap grouped = {0};
@@ -5047,6 +5060,8 @@ static flow_parts_why_t parts_in(const flow_tree_t *t, const FMap *changed, flow
             b = b->parent;
         b = b != NULL ? b->next : NULL;
     }
+    for (int32_t i = 0; ok && i < nboxes; i++)
+        part_box(&pp, boxes[i]);
     flow_parts_why_t why = ok ? FLOW_PARTS_MARKED : FLOW_PARTS_MEMORY;
     for (int32_t i = 0; why == FLOW_PARTS_MARKED && i < t->nstacked; i++) {
         pp.b = t->stacked[i];
@@ -5121,12 +5136,375 @@ bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_poin
         any = true;
     }
     if (said->why == FLOW_PARTS_MARKED && any) {
-        said->why = parts_in(was, &changed, scroll, mark, ctx);
+        said->why = parts_in(was, &changed, scroll, mark, ctx, NULL, 0);
         if (said->why == FLOW_PARTS_MARKED)
-            said->why = parts_in(now, &changed, scroll, mark, ctx);
+            said->why = parts_in(now, &changed, scroll, mark, ctx, NULL, 0);
     }
     f_map_free(&changed);
     os64_free(changes);
+    return said->why == FLOW_PARTS_MARKED;
+}
+
+// ── What a script's change painted (LAYOUT_NEEDS_N3.md § 3 B) ───────────
+
+// Whether two boxes are the same box placed alike in itself: what
+// same_box asks less the overflow, which follows what is inside the box
+// (a move inside it is the walk's to find among its children), and less
+// the link and control a box stands in, numbers a page renumbers whenever
+// one is added before it: what a link or a control paints is its style's,
+// compared by same_drawn, or the face's widget's.
+static bool same_own(const flow_box_t *a, const flow_box_t *b)
+{
+    return a->kind == b->kind && a->node == b->node && a->pseudo == b->pseudo && same_rect(a->rect, b->rect) &&
+           same_rect(a->content, b->content) && a->baseline == b->baseline && a->begin == b->begin &&
+           a->length == b->length && a->clipped == b->clipped && (!a->clipped || same_rect(a->clip, b->clip)) &&
+           a->positioned == b->positioned && a->floated == b->floated && a->stacked == b->stacked &&
+           a->fixed == b->fixed && a->scroller == b->scroller && a->unpainted == b->unpainted;
+}
+
+// Whether two text runs place the same glyphs from the same fonts at the
+// same places: a face swapped behind one family name for another of the
+// same metrics (an @font-face rule changed to a file already loaded)
+// leaves the style, the bytes and the boxes alike and draws other glyphs.
+// One run is alike itself; a run that cannot be read is not alike.
+static bool runs_alike(const os64_text_run_t *a, const os64_text_run_t *b)
+{
+    if (a == b)
+        return true;
+    os64_text_run_view_t x, y;
+    if (a == NULL || b == NULL || os64_text_run_view(a, &x) != OS64_FONT_OK ||
+        os64_text_run_view(b, &y) != OS64_FONT_OK || x.glyph_count != y.glyph_count)
+        return false;
+    for (size_t i = 0; i < x.glyph_count; i++) {
+        const os64_text_placement_t *p = &x.glyphs[i], *q = &y.glyphs[i];
+        if (p->font_identity != q->font_identity || p->glyph_index != q->glyph_index || p->x != q->x ||
+            p->y != q->y)
+            return false;
+    }
+    return true;
+}
+
+// Whether two boxes placed alike draw alike: their whole styles (every
+// field, as the trees hold them: the old one's as its last tick left them,
+// the new one's sampled now), what a fragment holds of its decorations and
+// the ellipsis it ends in, and a text's or marker's bytes, and the glyphs
+// its run and its ellipsis place, which is where a script's text,
+// generated content, a renumbered counter and a face changed behind its
+// name show.
+static bool same_drawn(const flow_box_t *a, const flow_box_t *b)
+{
+    if ((a->style == NULL) != (b->style == NULL) || (a->style != NULL && !f_style_equal(a->style, b->style)))
+        return false;
+    if (a->decoration != b->decoration || a->underline_color != b->underline_color ||
+        a->line_through_color != b->line_through_color || (a->ellipsis == NULL) != (b->ellipsis == NULL) ||
+        a->line_clamp_end != b->line_clamp_end || (a->ellipsis != NULL && !runs_alike(a->ellipsis, b->ellipsis)))
+        return false;
+    if (a->kind == FLOW_BOX_TEXT || a->kind == FLOW_BOX_MARKER)
+        return (a->length == 0 || (a->text != NULL && b->text != NULL && os64_memcmp(a->text, b->text, a->length) == 0)) &&
+               runs_alike(a->run, b->run);
+    return true;
+}
+
+// The child of `root`, tree `t`'s root box, whose element may own the
+// canvas (the body), or NULL.
+static const flow_box_t *canvas_child(const flow_tree_t *t, const flow_box_t *root)
+{
+    for (const flow_box_t *b = root->first; b != NULL; b = b->next)
+        if (b->node != NULL && b->pseudo == GARB_PSEUDO_NONE && may_own_canvas(t, b->node))
+            return b;
+    return NULL;
+}
+
+// Whether two boxes' children are the same boxes placed alike in
+// themselves, in the same order.
+static bool children_alike(const flow_box_t *x, const flow_box_t *y)
+{
+    const flow_box_t *a = x->first, *b = y->first;
+    for (; a != NULL && b != NULL; a = a->next, b = b->next)
+        if (!same_own(a, b))
+            return false;
+    return a == NULL && b == NULL;
+}
+
+// The box after `d` in a pre-order walk of the boxes inside `p`, NULL past
+// the last.
+static const flow_box_t *box_after_in(const flow_box_t *p, const flow_box_t *d)
+{
+    if (d->first != NULL)
+        return d->first;
+    while (d != p && d->next == NULL)
+        d = d->parent;
+    return d == p ? NULL : d->next;
+}
+
+// What the walks of one comparison may visit before it is refused, as
+// PARTS_WALK_MAX bounds the stacked boxes' walks: past it a whole-view
+// repaint is the cheaper answer.
+#define CHANGE_WALK_MAX (1 << 20)
+
+// Whether what is inside `p` is held by its reach (layer_reach: its
+// overflow grown by its ink, in its own frame): every box inside it in its
+// frame, in flow, with no layer of its own. A positioned or stacked box,
+// or one a scroll or a transform moves, may paint outside it.
+static bool moved_within(const flow_box_t *p, int32_t *visits)
+{
+    for (const flow_box_t *d = p->first; d != NULL; d = box_after_in(p, d)) {
+        if (++*visits > CHANGE_WALK_MAX || d->frame != p->frame || d->positioned || d->fixed || d->stacked)
+            return false;
+    }
+    return true;
+}
+
+// Whether svg element `n`, or one it is in, is what another svg may draw
+// through a reference (`<use href>`, `url(#id)`): a definition, a symbol,
+// a paint server, a clip, a mask, a marker or a filter. libsvg finds a
+// reference's target anywhere in the document, other svg roots included.
+static bool svg_referable(const os64_html_document_t *doc, const os64_html_node_t *n)
+{
+    static const char *const kReferable[] = {"defs",    "symbol",   "linearGradient", "radialGradient", "pattern",
+                                             "clipPath", "mask",    "marker",         "filter"};
+    for (const os64_html_node_t *a = n; a != NULL && a->ns == OS64_HTML_NS_SVG; a = f_flat_parent(doc, a))
+        for (size_t i = 0; a->name != NULL && i < sizeof(kReferable) / sizeof(kReferable[0]); i++)
+            if (os64_streq(a->name, kReferable[i]))
+                return true;
+    return false;
+}
+
+// The box that draws element `n` in `tree` when it has none of its own: a
+// replaced box it is inside (an inline svg's root, a select's widget),
+// which draws what is in it from the document and the styles, into `*out`
+// (true). Any other box draws nothing of a boxless element (`display:
+// none` under it, or `display: contents`, whose children have boxes of
+// their own): NULL, true. False when what draws it cannot be bounded: an
+// svg element another svg may draw through a reference, or one in an svg
+// that draws nothing itself (a sprite sheet's).
+static bool drawn_by(const flow_tree_t *tree, const os64_html_node_t *n, const os64_html_node_t **out)
+{
+    const os64_html_document_t *doc = tree_doc(tree);
+    *out = NULL;
+    if (n->ns == OS64_HTML_NS_SVG && svg_referable(doc, n))
+        return false;
+    for (const os64_html_node_t *a = f_flat_parent(doc, n); a != NULL; a = f_flat_parent(doc, a)) {
+        const flow_box_t *b = f_map_get(&tree->first, a);
+        if (b == NULL)
+            continue;
+        if (b->kind == FLOW_BOX_REPLACED || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL))
+            *out = a;
+        break;
+    }
+    return *out != NULL || n->ns != OS64_HTML_NS_SVG;
+}
+
+typedef struct {
+    FMap changed;
+    const FProps *all;
+    const os64_html_node_t **nodes;
+    int32_t nnodes, cap_nodes;
+    const flow_box_t **was_boxes, **now_boxes;
+    int32_t nmoved, cap_moved;
+    const flow_tree_t *now;
+    flow_parts_said_t *said;
+} Change;
+
+// Element `n` changed what it paints: its boxes are marked in both trees,
+// unless the canvas may take its background (the whole view, CANVAS).
+static bool change_node(Change *c, const os64_html_node_t *n)
+{
+    if (n == NULL) {
+        c->said->why = FLOW_PARTS_NO_BOX;
+        return false;
+    }
+    if (f_map_get(&c->changed, n) != NULL)
+        return true;
+    if (may_own_canvas(c->now, n)) {
+        c->said->why = FLOW_PARTS_CANVAS;
+        c->said->node = n;
+        return false;
+    }
+    if (c->nnodes == c->cap_nodes) {
+        int32_t cap = c->cap_nodes ? c->cap_nodes * 2 : 32;
+        const os64_html_node_t **grown = os64_realloc(c->nodes, (size_t)cap * sizeof(*grown));
+        if (grown == NULL) {
+            c->said->why = FLOW_PARTS_MEMORY;
+            return false;
+        }
+        c->nodes = grown;
+        c->cap_nodes = cap;
+    }
+    if (!f_map_put(&c->changed, n, (void *)c->all)) {
+        c->said->why = FLOW_PARTS_MEMORY;
+        return false;
+    }
+    c->nodes[c->nnodes++] = n;
+    return true;
+}
+
+// The pair `x` (the old tree's) and `y` (the new one's) hold a move: each
+// is marked by its own reach.
+static bool change_moved(Change *c, const flow_box_t *x, const flow_box_t *y)
+{
+    if (c->nmoved == c->cap_moved) {
+        int32_t cap = c->cap_moved ? c->cap_moved * 2 : 16;
+        const flow_box_t **a = os64_realloc(c->was_boxes, (size_t)cap * sizeof(*a));
+        if (a != NULL)
+            c->was_boxes = a;
+        const flow_box_t **b = a != NULL ? os64_realloc(c->now_boxes, (size_t)cap * sizeof(*b)) : NULL;
+        if (b == NULL) {
+            c->said->why = FLOW_PARTS_MEMORY;
+            return false;
+        }
+        c->now_boxes = b;
+        c->cap_moved = cap;
+    }
+    c->was_boxes[c->nmoved] = x;
+    c->now_boxes[c->nmoved++] = y;
+    return true;
+}
+
+// Element `n`, which a script's change reached, marked where it is drawn:
+// by its own boxes in either tree, else by the replaced box either tree
+// draws it in (drawn_by), else nowhere; NO_BOX when what draws it cannot
+// be bounded.
+static bool change_drawn(Change *c, const flow_tree_t *was, const os64_html_node_t *n)
+{
+    if (f_map_get(&was->first, n) != NULL || f_map_get(&c->now->first, n) != NULL)
+        return change_node(c, n);
+    const os64_html_node_t *a, *b;
+    if (!drawn_by(was, n, &a) || !drawn_by(c->now, n, &b)) {
+        c->said->why = FLOW_PARTS_NO_BOX;
+        c->said->node = n;
+        return false;
+    }
+    return (a == NULL || change_node(c, a)) && (b == NULL || change_node(c, b));
+}
+
+bool flow_change_parts(const flow_tree_t *was, const flow_tree_t *now, flow_point_t scroll,
+                       const os64_html_node_t *const *touched, int32_t ntouched,
+                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
+                       flow_parts_said_t *said)
+{
+    flow_parts_said_t none;
+    if (said == NULL)
+        said = &none;
+    *said = (flow_parts_said_t){FLOW_PARTS_MARKED, NULL, -1};
+    if (was == NULL || now == NULL || was->styles == NULL || now->styles == NULL || was->incomplete ||
+        now->incomplete || was->doc != now->doc || was->root == NULL || now->root == NULL) {
+        said->why = FLOW_PARTS_INCOMPLETE;
+        return false;
+    }
+    // The same layers, the same scrollers scrolled alike, the page as far
+    // and each scroller's range alike: none of these is held by a box.
+    if (was->nstacked != now->nstacked || was->nlayers != now->nlayers) {
+        said->why = FLOW_PARTS_LAYERS;
+        return false;
+    }
+    for (int32_t k = 0; k < was->nlayers; k++)
+        if (was->layers[k].part != now->layers[k].part || was->layers[k].box->node != now->layers[k].box->node) {
+            said->why = FLOW_PARTS_LAYERS;
+            said->node = now->layers[k].box->node;
+            return false;
+        }
+    if (was->nscrollers != now->nscrollers || was->layout->width != now->layout->width ||
+        was->layout->height != now->layout->height) {
+        said->why = FLOW_PARTS_MOVED;
+        return false;
+    }
+    for (int32_t k = 0; k < was->nscrollers; k++) {
+        flow_point_t pa = flow_scroll_at(was, k), pb = flow_scroll_at(now, k);
+        const flow_frame_t *fa = was->scrollers[k], *fb = now->scrollers[k];
+        if (pa.x != pb.x || pa.y != pb.y || fa->range.x != fb->range.x || fa->range.y != fb->range.y) {
+            said->why = pa.x != pb.x || pa.y != pb.y ? FLOW_PARTS_SCROLLED : FLOW_PARTS_MOVED;
+            said->node = box_named(flow_scroller(now, k));
+            return false;
+        }
+    }
+    FProps all;
+    os64_memset(&all, 0xff, sizeof(all));
+    Change c = {.all = &all, .now = now, .said = said};
+    int32_t visits = 0;
+    const flow_box_t *x = was->root, *y = now->root;
+    if (!same_own(x, y)) {
+        said->why = FLOW_PARTS_MOVED;
+        said->node = box_named(y);
+    }
+    // The two trees walked together, each pair placed alike in itself:
+    // one that draws otherwise is its element's change; one whose children
+    // differ is marked by its reach, old and new, and not gone into.
+    while (said->why == FLOW_PARTS_MARKED && x != NULL) {
+        if (++visits > CHANGE_WALK_MAX) {
+            said->why = FLOW_PARTS_LONG;
+            break;
+        }
+        if (!same_drawn(x, y) && !change_node(&c, box_named(y)))
+            break;
+        bool down = x->first != NULL || y->first != NULL;
+        if (down && !children_alike(x, y)) {
+            if (!moved_within(x, &visits) || !moved_within(y, &visits)) {
+                said->why = visits > CHANGE_WALK_MAX ? FLOW_PARTS_LONG : FLOW_PARTS_MOVED;
+                said->node = box_named(y);
+                break;
+            }
+            // A move inside the root is not gone into, which would leave
+            // the body's style uncompared, whose background the canvas
+            // may take across the whole view.
+            const flow_box_t *bx = x == was->root ? canvas_child(was, x) : NULL;
+            const flow_box_t *by = x == was->root ? canvas_child(now, y) : NULL;
+            if ((bx == NULL) != (by == NULL) || (bx != NULL && !same_drawn(bx, by))) {
+                said->why = FLOW_PARTS_CANVAS;
+                said->node = box_named(by != NULL ? by : y);
+                break;
+            }
+            if (!change_moved(&c, x, y))
+                break;
+            down = false;
+        }
+        if (down) {
+            x = x->first;
+            y = y->first;
+            continue;
+        }
+        while (x != NULL && x->next == NULL) {
+            x = x->parent;
+            y = y->parent;
+        }
+        if (x != NULL) {
+            x = x->next;
+            y = y->next;
+        }
+    }
+    // An element both trees styled that has no box in either is compared
+    // by its style too: a replaced box may draw it from the styles (an
+    // inline svg's shapes).
+    const os64_html_document_t *doc = now->doc;
+    const os64_html_node_t *top = os64_html_document_element(doc);
+    for (const os64_html_node_t *n = top; said->why == FLOW_PARTS_MARKED && n != NULL;
+         n = flat_after(doc, top, n, true)) {
+        if (++visits > CHANGE_WALK_MAX) {
+            said->why = FLOW_PARTS_LONG;
+            break;
+        }
+        if (n->kind != OS64_HTML_ELEMENT || f_map_get(&was->first, n) != NULL || f_map_get(&now->first, n) != NULL)
+            continue;
+        const FStyled *a = f_style_of(was->styles, n), *b = f_style_of(now->styles, n);
+        if ((a == NULL) == (b == NULL) && (a == NULL || f_style_equal(&a->style, &b->style)))
+            continue;
+        if (!change_drawn(&c, was, n))
+            break;
+    }
+    // What the script changed that no style says: the caller's elements,
+    // marked where they are drawn.
+    for (int32_t i = 0; said->why == FLOW_PARTS_MARKED && i < ntouched; i++)
+        if (touched[i] != NULL && !change_drawn(&c, was, touched[i]))
+            break;
+    if (said->why == FLOW_PARTS_MARKED && (c.nnodes > 0 || c.nmoved > 0)) {
+        said->why = parts_in(was, &c.changed, scroll, mark, ctx, c.was_boxes, c.nmoved);
+        if (said->why == FLOW_PARTS_MARKED)
+            said->why = parts_in(now, &c.changed, scroll, mark, ctx, c.now_boxes, c.nmoved);
+    }
+    f_map_free(&c.changed);
+    os64_free(c.nodes);
+    os64_free(c.was_boxes);
+    os64_free(c.now_boxes);
     return said->why == FLOW_PARTS_MARKED;
 }
 

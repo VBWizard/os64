@@ -352,7 +352,7 @@ static flow_restyle_t restyle_keep(Sheeted *p, flow_tree_t *tree)
 {
     flow_reuse_inputs_t inputs = {.resource_owner = p->doc};
     os64_page_t *model = os64_page_rebuild(p->page);
-    flow_restyle_t kept = flow_restyle_in_place(tree, p->doc, model, &p->env, &inputs, 800);
+    flow_restyle_t kept = flow_restyle_in_place(tree, p->doc, model, &p->env, &inputs, 800, NULL);
     os64_page_free(model);
     return kept;
 }

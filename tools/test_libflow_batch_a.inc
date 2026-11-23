@@ -125,7 +125,9 @@ static void outline_step_cases(void)
     sheeted_close(&p);
     // A ring reaches past its box's overflow: the box 0, 0, 20 x 10 is out
     // of a view 30 to 40 down that its ring, offset 20 and 5 wide (to 35),
-    // meets. The outline step asks the ring, not the box.
+    // meets. The outline step asks the ring, not the box; the box itself is
+    // handed over too, since the walk prunes on all a box paints, its ink
+    // with it (paints_into), and the box's own step draws its shadows.
     sheeted_open(&p, "<!doctype html><style>body { margin: 0 } div { width: 20px; height: 10px;"
                      " outline: 5px solid; outline-offset: 20px }</style><div id=a></div>",
                  200, 600);
@@ -134,7 +136,7 @@ static void outline_step_cases(void)
     flow_visitor_t fv = {outline_visit, NULL, NULL, &far, outline_ring, NULL};
     flow_visit_groups(tree, (os64_gui_rect_t){0, 30, 200, 10}, (flow_point_t){0, 0}, &fv);
     expect("outline: a ring in view is handed over though its box is not",
-           strcmp(far.seq, "oa") == 0, far.seq);
+           strcmp(far.seq, "vaoa") == 0, far.seq);
     flow_free(tree);
     sheeted_close(&p);
 }
