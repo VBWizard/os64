@@ -302,9 +302,30 @@ static void outside_fills(void)
 #include "test_canvas_paints.inc"
 #include "test_canvas_shadows.inc"
 #include "test_canvas_retained_path.inc"
+// The revision (canvas_bitmap_t's) changes at every draw the path renderer
+// makes — a fill, a stroke, an image, a shadow, a copy — to a value not seen
+// before.
+static void revisions_drawn(void)
+{
+    Owner o={0};canvas_context_t *c=drawing(&o);
+    uint64_t seen[8];int n=0;seen[n++]=bitmap(c).revision;
+#define CHANGED() do{uint64_t r=bitmap(c).revision;for(int i=0;i<n;++i)CHECK(r!=seen[i]);seen[n++]=r;}while(0)
+    OK(canvas_begin_path(c));OK(canvas_path_rect(c,2,2,8,8));OK(canvas_fill(c,false));CHANGED();
+    OK(canvas_set_stroke(c,0x00ff00,1));OK(canvas_stroke(c));CHANGED();
+    uint32_t image[4]={0xff0000ff,0xff00ff00,0xffff0000,0xffffffff};
+    draw2d_surface_t img={image,2,2,8,sizeof(image),DRAW2D_ARGB8_PREMULTIPLIED};
+    OK(canvas_draw_image(c,&img,true,0,0,2,2,12,12,6,6));CHANGED();
+    OK(canvas_set_shadow_color(c,0x000000,1));OK(canvas_set_shadow_value(c,0,2));OK(canvas_set_shadow_value(c,1,3));
+    OK(canvas_fill_rect(c,20,20,4,4));CHANGED();
+    OK(canvas_set_shadow_color(c,0x000000,0));OK(canvas_set_composite(c,DRAW2D_COPY));
+    OK(canvas_fill_rect(c,26,2,4,4));CHANGED();
+#undef CHANGED
+    OK(canvas_destroy(c));
+}
+
 int main(void)
 {
     canvas_baseline_main();converging_round_stroke();outside_fills();compact_coverage();compact_reference();compact_clip_refusal();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();compact_images();image_region_contract();clipped_image_refusals();paints();
-    shadows();retained_paths();shadow_refusal();
+    shadows();retained_paths();shadow_refusal();revisions_drawn();
     printf("Canvas paths: %zu total assertions passed\n",checks);return 0;
 }

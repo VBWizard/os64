@@ -20,12 +20,15 @@
 //   draws as ever, so a canvas redrawn at every frame never pays for a
 //   keep it will not use. A draw in a later paint keeps the blocks it
 //   reads, and finds them after.
-// - A canvas drawn at another revision or size lets go of every block it
-//   kept (counted as dropped for a change): they can never be found again.
+// - A canvas drawn at another revision, size or alpha convention lets go
+//   of every block it kept (paint_cache_forget; counted as dropped for a
+//   change): another revision can never be found again, and a size that
+//   comes back is made again rather than held for a while it may not.
 // - A draw that copies at the bitmap's own size, or draws its pixels
 //   square (not smoothed), keeps nothing: there is nothing dear to keep.
-// - Blocks that do not fit the budget, or find no memory, are not kept:
-//   the draw draws as ever and is counted.
+// - Blocks that do not fit the budget, or find no memory (for them or for
+//   the draw's own list of them), are not kept: the draw draws as ever and
+//   is counted.
 // One window's, on its one thread: no lock.
 
 #include "paint.h"
@@ -45,7 +48,7 @@ void yonder_canvas_keeps_free(yonder_canvas_keeps_t *k);
 void yonder_canvas_keeps_paint(yonder_canvas_keeps_t *k);
 
 // yonder_draw_surface's draw of canvas `who` (any pointer naming it; two
-// canvases never share one) at `revision` (0: unknown, never kept), its
+// canvases never share one at once) at `revision` (0: unknown, never kept), its
 // pixels from what `cache` keeps by the rules above. True as that draw
 // says; a NULL keep or cache draws as ever.
 bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cache, const void *who,

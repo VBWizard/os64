@@ -273,6 +273,18 @@ void paint_cache_release(yonder_paint_cache_t *c, void *bytes)
     push_oldest(c, e);
 }
 
+bool paint_cache_forget(yonder_paint_cache_t *c, const uint8_t *key, uint32_t klen, uint64_t hash)
+{
+    if (c->nbuckets == 0)
+        return false;
+    for (Entry *e = c->buckets[hash & (c->nbuckets - 1)]; e != NULL; e = e->chain)
+        if (e->hash == hash && e->klen == klen && os64_memcmp(key_of(e), key, klen) == 0) {
+            let_go(c, e);
+            return true;
+        }
+    return false;
+}
+
 void paint_cache_refused(yonder_paint_cache_t *c, bool memory)
 {
     if (memory)

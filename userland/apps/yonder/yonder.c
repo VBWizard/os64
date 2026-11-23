@@ -2967,8 +2967,9 @@ static struct {
     // memory for it: the page is then painted working everything out.
     yonder_paint_cache_t *paint_cache;
     // What the canvases' smoothed draws keep, in the paint cache
-    // (canvas_keep.h); NULL beside it, and when there was no memory: each
-    // canvas is then scaled at every draw.
+    // (canvas_keep.h): NULL until the first paint, as the paint cache is,
+    // and when there was no memory for it: each canvas is then scaled at
+    // every draw.
     yonder_canvas_keeps_t *canvas_keeps;
     // The painter's working buffers, kept between paints (scratch.h): its
     // idle ones freed when another page is shown. NULL until the first
@@ -9378,7 +9379,7 @@ static bool paint_lines(DiagText *t, DiagText *u)
     yonder_canvas_keep_counts_t canvases = yonder_canvas_keep_counts(g.canvas_keeps);
     if (canvases.kept + canvases.found + canvases.dropped + canvases.refused > 0)
         dt_put(t, "; canvas pictures: %lu blocks kept, %lu found, %lu dropped for a change, %lu draws not "
-               "kept for room", (unsigned long)canvases.kept, (unsigned long)canvases.found,
+               "kept for room or memory", (unsigned long)canvases.kept, (unsigned long)canvases.found,
                (unsigned long)canvases.dropped, (unsigned long)canvases.refused);
     // What the turned groups' kept drawings saved (keep.h).
     yonder_keeps_counts_t keeps = yonder_keeps_counts(g.keeps);
@@ -23057,8 +23058,9 @@ int main(int argc, char **argv)
     yonder_media_stop();
     // After the departure write (page_clear), which reads its counts.
     yonder_paint_cache_free(g.paint_cache);
-    yonder_canvas_keeps_free(g.canvas_keeps);
     g.paint_cache = NULL;
+    yonder_canvas_keeps_free(g.canvas_keeps);
+    g.canvas_keeps = NULL;
     yonder_scratch_free(g.paint_scratch);
     g.paint_scratch = NULL;
     yonder_keeps_free(g.keeps);

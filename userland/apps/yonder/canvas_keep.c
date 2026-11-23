@@ -72,18 +72,15 @@ static int32_t max32(int32_t a, int32_t b)
     return a > b ? a : b;
 }
 
-// Every block `s` kept, let go.
+// Every block `s` kept, let go now (paint_cache_forget).
 static void drop(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cache, Seen *s)
 {
     uint8_t key[KEY_BYTES];
     for (int32_t by = s->by0; by < s->by1; by++)
         for (int32_t bx = s->bx0; bx < s->bx1; bx++) {
             uint32_t n = block_key(key, s->revision, s->w, s->h, s->premultiplied, bx, by);
-            void *b = paint_cache_find(cache, key, n, paint_cache_hash(key, n));
-            if (b != NULL) {
-                paint_cache_release(cache, b);
+            if (paint_cache_forget(cache, key, n, paint_cache_hash(key, n)))
                 k->counts.dropped++;
-            }
         }
     s->made = false;
 }
@@ -142,8 +139,10 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
     int32_t by0 = ly0 / KEEP_BLOCK, by1 = (ly1 - 1) / KEEP_BLOCK + 1;
     int32_t nbx = bx1 - bx0, nby = by1 - by0;
     void **blocks = os64_calloc((size_t)nbx * (size_t)nby, sizeof(void *));
-    if (blocks == NULL)
+    if (blocks == NULL) {
+        k->counts.refused++;
         return yonder_draw_surface(dst, pitch, clip, box, smooth, source);
+    }
     uint8_t key[KEY_BYTES];
     size_t cost = 0;
     uint64_t found = 0;
@@ -176,9 +175,11 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
                 kept = false;
                 break;
             }
+            // The guards above leave nothing for the scaler to refuse; were
+            // it to, the block holds no pixels and must never be found.
             os64_gui_rect_t part = {(bx0 + i) * KEEP_BLOCK, (by0 + j) * KEEP_BLOCK, bw, bh};
             if (!yonder_scale_part(b, (uint32_t)bw, part, box.w, box.h, source)) {
-                paint_cache_release(cache, b);
+                (void)paint_cache_forget(cache, key, n, paint_cache_hash(key, n));
                 kept = false;
                 break;
             }
@@ -205,16 +206,18 @@ bool yonder_canvas_keep_draw(yonder_canvas_keeps_t *k, yonder_paint_cache_t *cac
         }
         s->made = true;
     }
-    // Laid row by row, a block's run at a time.
+    // Laid row by row, a block's run at a time, each run's place on the
+    // surface worked from where the walk is, never from the box's corner,
+    // which may lie off the surface.
     for (int32_t ly = ly0; ly < ly1; ly++) {
         int32_t j = ly / KEEP_BLOCK - by0, vin = ly % KEEP_BLOCK;
-        uint32_t *out = dst + (uint64_t)(box.y + ly) * pitch + box.x;
+        uint32_t *row = dst + (uint64_t)(box.y + ly) * pitch;
         for (int32_t lx = lx0; lx < lx1;) {
             int32_t i = lx / KEEP_BLOCK - bx0, uin = lx % KEEP_BLOCK;
             int32_t bw = min32(KEEP_BLOCK, box.w - (bx0 + i) * KEEP_BLOCK);
             int32_t n = min32(bw - uin, lx1 - lx);
             const uint32_t *src = (const uint32_t *)blocks[j * nbx + i] + (size_t)vin * (size_t)bw + (size_t)uin;
-            yonder_lay_scaled(out + lx, src, n, premultiplied);
+            yonder_lay_scaled(row + ((int64_t)box.x + lx), src, n, premultiplied);
             lx += n;
         }
     }

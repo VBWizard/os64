@@ -33,7 +33,8 @@ bool yonder_draw_surface(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
 // `bh`, its pixels from `part` (in the box's own coordinates, inside it)
 // written to `out` (`pitch` pixels a row) as they are before they are laid,
 // in the source's alpha convention; false, writing nothing, for a source
-// yonder_draw_surface refuses, an empty box or a part not inside it. Then
+// yonder_draw_surface refuses or one with no pixels, an empty box, or a
+// part not inside the box. Then
 // `n` such pixels laid onto
 // `dst` by their alpha, as that draw lays them: the two together write
 // what yonder_draw_surface writes, pixel for pixel, wherever the part's
