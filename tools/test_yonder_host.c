@@ -1769,6 +1769,17 @@ static void canvas_keep_cases(void)
     yonder_canvas_keep_counts_t sized = yonder_canvas_keep_counts(rig.keeps);
     expect("canvas keep: a box of another size is another picture, never found for this one",
            ok && sized.dropped > before.dropped, NULL);
+    // The same pixels read the other way are other pixels: an alpha
+    // convention is never found for the other.
+    draw2d_surface_t straight = s;
+    straight.format = DRAW2D_ARGB8_STRAIGHT;
+    ok = keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &straight) &&
+         keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &straight) &&
+         keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &s) &&
+         keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &s) &&
+         keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &straight) &&
+         keep_draw_same(&rig, got, want, &who, 1001, strip, box, true, &straight);
+    expect("canvas keep: one alpha convention's picture is never found for the other", ok, NULL);
     // Two canvases at once keep apart.
     int other = 0;
     ok = keep_draw_same(&rig, got, want, &other, 2000, strip, box, true, &s) &&
