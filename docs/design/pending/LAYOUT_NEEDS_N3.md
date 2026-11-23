@@ -234,7 +234,8 @@ or differently.
   an element's winners in the cascade) finds the document's
   first element of that id, of any kind (svg.c `fragment_target`), so
   whenever anything in an svg changed, an id or `xml:base` changed, or an
-  element holding an id was added or removed, every svg that refers by id
+  element holding an id was added or removed (or a subtree with one in
+  it), every svg that refers by id
   is named too.
 - **A picture's sources** choose what its img draws: a source's attribute,
   or the picture's children, mark the img. A `base` changed, added or

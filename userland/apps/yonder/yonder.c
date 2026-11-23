@@ -12474,10 +12474,11 @@ static bool drawn_from_document(const flow_tree_t *t, const os64_html_node_t *n)
 // - a base's change, or a base added or removed, refuses (CHANGE_BASE):
 //   every address resolves against it.
 // `*refs` is set when what an id names may have changed: an id or xml:base
-// attribute, or an element holding an id added or removed (the nodes the
-// log lists, not what is inside them). An svg's reference by id finds the
-// document's first element of that id, whatever it is (svg.c's
-// fragment_target), so change_svgs marks the svgs that refer by id.
+// attribute, or an element holding an id added or removed, the nodes the
+// log lists or anything inside them (the log lists a subtree's root
+// alone). An svg's reference by id finds the document's first element of
+// that id, whatever it is (svg.c's fragment_target), so change_svgs marks
+// the svgs that refer by id.
 #define CHANGE_TOUCHED 1024
 #define CHANGE_BASE (-2)
 
@@ -12514,11 +12515,13 @@ static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, co
         for (int list = 0; entry->kind == OS64_HTML_CHANGE_CHILDREN && list < 2; list++) {
             const os64_html_node_t *const *nodes = list == 0 ? entry->added : entry->removed;
             size_t count = list == 0 ? entry->nadded : entry->nremoved;
-            for (size_t i = 0; i < count; i++) {
-                base = base || html_base(nodes[i]);
-                *refs = *refs || (nodes[i] != NULL && nodes[i]->kind == OS64_HTML_ELEMENT &&
-                                  os64_html_attr(nodes[i], "id") != NULL);
-            }
+            // Each subtree walked through its links as they are now: a node
+            // moved out of it since is not in it.
+            for (size_t i = 0; i < count && !base; i++)
+                for (const os64_html_node_t *d = nodes[i]; d != NULL && !base; d = next_within(d, nodes[i])) {
+                    base = html_base(d);
+                    *refs = *refs || (d->kind == OS64_HTML_ELEMENT && os64_html_attr(d, "id") != NULL);
+                }
         }
         if (base) {
             n = CHANGE_BASE;

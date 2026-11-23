@@ -27,7 +27,7 @@ static const char kDamagePage[] =
     "<svg width=20 height=20><use href=#dr></use><use href=#hr x=10></use></svg>"
     "<svg width=12 height=12><rect id=plainr width=4 height=4 fill=green></rect></svg>"
     "<div id=idswap>swap</div>"
-    "<div style=height:40px></div><svg width=20 height=20><use href=#plainr></use></svg>"
+    "<div style=height:40px></div><svg width=20 height=20><use href=#plainr></use><use href=#late x=10></use></svg>"
     "<div id=sprite><svg style=display:none><rect id=hr width=6 height=6 fill=blue></rect></svg></div>"
     "<picture id=pic2><source id=src2 srcset=a.png><img id=img2 alt=pic width=20 height=20></picture>"
     "<div id=mover></div>"
@@ -37,11 +37,11 @@ static const char kDamagePage[] =
     "<p>time <span id=clock>0:01</span> left</p>"
     "<div id=bar><div id=b1>a</div><div id=b2>b</div></div>"
     "<div id=meter aria-valuenow=1 data-v=1>meter</div>"
-    "<div id=list><div>one</div></div>"
+    "<div id=list><div>one</div><div><span id=late></span></div></div>"
     "<div id=gen data-x=one></div>"
     "<div id=wrap><div id=wide>wide wide wide</div></div>"
     "<div id=posbox><div id=abs>abs</div></div>"
-    "<svg id=pic width=40 height=40><circle id=dot cx=20 cy=20 r=10 fill=red></circle></svg>"
+    "<svg id=pic width=40 height=40><circle id=dot cx=20 cy=20 r=10 fill=red></circle><rect id=late width=6 height=6 fill=teal></rect></svg>"
     "<ol id=ol><li id=li1>one</li><li>two</li></ol>"
     "<a id=link href=#x>a link</a>"
     "<div id=filler></div>";
@@ -325,6 +325,14 @@ static void damage_cases(void)
     damage_attr("idswap2", "id", "gr");
     damage_expect("damage: an html id that takes a gradient's marks the svgs that fill by url", damage_step(),
                   "in parts");
+    // A wrapper with no id of its own taken away, with the span inside it
+    // that held a shape's id first: the use draws the shape again. The
+    // svgs that refer by id, marked with the list the wrapper left, reach
+    // past half of this page's view; marked without them, the list alone,
+    // the check would differ.
+    os64_html_remove(g.page.way.doc, probe_id("late")->parent);
+    damage_expect("damage: an id inside a subtree taken away marks the svgs that refer by id", damage_step(),
+                  "parts past half the view");
     {
         int64_t status = 0;
         os64_html_document_t *doc = g.page.way.doc;

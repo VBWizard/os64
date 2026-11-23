@@ -127,8 +127,14 @@ mutants = [
     ('a-reference-by-a-sheets-url-not-a-reference', YONDER,
      '        if (v->kind == GARB_V_URL)\n            return true;',
      '        if (0 && v->kind == GARB_V_URL)\n            return true;'),
-    ('a-base-in-a-child-list-missed', YONDER, '                base = base || html_base(nodes[i]);',
-     '                base = base || (0 && html_base(nodes[i]));'),
+    ('an-id-in-a-child-list-retargets-nothing', YONDER,
+     '                    *refs = *refs || (d->kind == OS64_HTML_ELEMENT && os64_html_attr(d, "id") != NULL);',
+     '                    *refs = *refs || (0 && d->kind == OS64_HTML_ELEMENT && os64_html_attr(d, "id") != NULL);'),
+    ('a-child-lists-subtrees-not-walked', YONDER,
+     '                for (const os64_html_node_t *d = nodes[i]; d != NULL && !base; d = next_within(d, nodes[i])) {',
+     '                for (const os64_html_node_t *d = nodes[i]; d != NULL && !base; d = NULL) {'),
+    ('a-base-in-a-child-list-missed', YONDER, '                    base = html_base(d);',
+     '                    base = 0 && html_base(d);'),
     # The paint walk: a box is culled by all it paints, its ink too.
     ('a-shadow-past-its-box-culled', FLOW, '    return meets(grown(b->overflow, b->ink), view);',
      '    return meets(b->overflow, view);'),
@@ -186,10 +192,6 @@ mutants = [
 # - the check's own pane letting its canvas label go (view_damage_check):
 #   the label is made only for a page with scripts but without the modern
 #   switch, which the damage cases do not run.
-# - an element holding an id added or removed (change_touched's listed
-#   nodes): on the damage page every insertion among the body's children
-#   moves a positioned box, which is refused first; the id attribute's rule,
-#   beside it, is the one a case reaches.
 # - a `url(` in an attribute (svg_refers' attribute scan): the attributes
 #   that take one are presentation attributes, which garb also hands over
 #   as winners, so the cascade's check finds them; the scan is the guard
