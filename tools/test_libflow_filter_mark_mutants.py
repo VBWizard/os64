@@ -5,7 +5,9 @@ paints, spread by each filtered group's filter out and cut to its bounds,
 taken through each matrix), against tools/test_libflow_host.sh, whose
 filter_mark_cases hold each rule to exact rects: a mutant is CAUGHT when the
 suite fails, MISSED when it passes, which means a test is missing and gets
-written. A build failure is neither.
+written. A build failure is neither. Not broken here: the spread of a group
+with no OPEN, which only a tree built short of memory has, and the dedupe of
+a rect marked twice running, whose loss marks the same rect again.
 
 The shape is test_yonder_scale_mutants.py's: each mutant is applied to the
 tree's copy of the file, the suite is run, and the file is put back from the
@@ -47,6 +49,25 @@ mutants = [
      'r = filter_local(a) ? filter_spread(a, r) : whole;'),
     ('a-matrix-left-out', '        if (!nested_reach(a, r, scroll, &r))\n            return true;\n',
      '        if (r.w <= 0 || r.h <= 0)\n            return true;\n'),
+    ('the-inner-group-not-cut',
+     '                r = meet(filter_local(a) ? filter_spread(a, r) : whole, whole);\n',
+     '                bool outer = true;\n'
+     '                for (const flow_box_t *p = a->parent; p != NULL; p = p->parent)\n'
+     '                    outer = outer && !filtered_group(p);\n'
+     '                r = filter_local(a) ? filter_spread(a, r) : whole;\n'
+     '                if (outer)\n'
+     '                    r = meet(r, whole);\n'),
+    ('what-a-blur-reads-once-a-list',
+     '        if (a->style->filter[i].fn == FLOW_FILTER_BLUR || a->style->filter[i].fn == FLOW_FILTER_DROP_SHADOW)\n'
+     '            more += FLOW_FILTER_READS_MORE;',
+     '        if (a->style->filter[i].fn == FLOW_FILTER_BLUR || a->style->filter[i].fn == FLOW_FILTER_DROP_SHADOW)\n'
+     '            more = FLOW_FILTER_READS_MORE;'),
+    ('the-group-own-matrix-left-out', '        if (!nested_reach(a, r, scroll, &r))\n            return true;\n',
+     '        if (!(a == b && !spread ? r.w > 0 && r.h > 0 : nested_reach(a, r, scroll, &r)))\n            return true;\n'),
+    ('a-layout-part-not-spread',
+     '    if (b->unpainted || !layer_reach(&(Layer){b, PART_WHOLE}, pp->scroll, &r) ||\n'
+     '        mark_filtered(pp->t, b, r, true, pp->scroll, &pp->filter, pp->bounds, pp->mark, pp->ctx))\n',
+     '    if (b->unpainted || !layer_reach(&(Layer){b, PART_WHOLE}, pp->scroll, &r))\n'),
 ]
 
 caught, missed, unbuilt = [], [], []

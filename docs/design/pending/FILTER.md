@@ -133,8 +133,11 @@ half-covered pixel.
   before its matrix; the box's own ink is left as it is, or its own layer
   would be counted twice. The view a filtered group's members are culled
   against is grown the same way, so a box the blur reaches in from outside
-  the view is painted. A change to any box inside a filtered group marks
-  the group's bounds (`mark_filtered`), since the filter spreads it.
+  the view is painted. A change to a box inside a filtered group marks
+  what that box paints spread by each filter it is drawn through and cut
+  to each group's bounds, through each matrix on the way out
+  (`mark_filtered`); a change to the group's own filter, matrix, opacity,
+  mask or clip marks its bounds.
 - **A budget per paint**: layer area (each layer charged the pixels it
   shows in the part repainted, not its margin, so a small repaint beside a
   big blur is not refused what the rest of the page was drawn with) up to

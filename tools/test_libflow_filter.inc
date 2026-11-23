@@ -262,6 +262,20 @@ static void filter_mark_cases(void)
                           "<div id=f><div id=g><div id=c></div></div></div>", &c, "c");
     expect("filter marks: nested filters each spread it, the inner and then the outer",
            marked_exactly(&k, c, (os64_gui_rect_t){134, 34, 152, 152}), NULL);
+    // Nested, the inner group small: cut to the inner group's bounds
+    // (blur(4px)'s 12 past its 60 square) before the outer spreads it.
+    k = filter_tick_marks(MOTION_STYLE CHANGING "#f{filter:blur(2px);width:400px;height:300px}"
+                          "#g{filter:blur(4px);position:relative;left:100px;top:100px;width:60px;height:60px}"
+                          "#c{position:relative;left:20px;top:20px;width:20px;height:20px;" TICKS "}</style>"
+                          "<div id=f><div id=g><div id=c></div></div></div>", &c, "c");
+    expect("filter marks: nested filters, cut to the inner group before the outer spreads it",
+           marked_exactly(&k, c, (os64_gui_rect_t){58, 58, 144, 144}), NULL);
+    // Two blurs in one list: each reaches, and each reads past its reach.
+    k = filter_tick_marks(MOTION_STYLE CHANGING "#f{filter:blur(2px) blur(2px);width:400px;height:300px}"
+                          "#c{position:relative;left:200px;top:100px;width:20px;height:20px;" TICKS "}</style>"
+                          "<div id=f><div id=c></div></div>", &c, "c");
+    expect("filter marks: two blurs in one list each spread it and each read past it",
+           marked_exactly(&k, c, (os64_gui_rect_t){140, 40, 140, 140}), NULL);
     // A filter inside a matrix: spread in the filter's coordinates, then
     // scaled.
     k = filter_tick_marks(MOTION_STYLE CHANGING "#t{transform:scale(2);transform-origin:0 0;width:400px;height:300px}"
@@ -298,6 +312,18 @@ static void filter_mark_cases(void)
                           "#c{width:20px;height:20px}</style><div id=f><div id=c></div></div>", &f, "f");
     expect("filter marks: the group's own opacity ticking marks its whole bounds",
            f != NULL && marked_exactly(&k, f, (os64_gui_rect_t){-6, -6, 412, 312}), NULL);
+    // A group's own change inside another filter: the group's bounds
+    // taken through its matrix, then spread by the filter it is drawn
+    // through.
+    const flow_box_t *g;
+    k = filter_tick_marks(MOTION_STYLE "@keyframes op{to{opacity:.5}} "
+                          "#f{filter:blur(2px);width:400px;height:300px}"
+                          "#g{position:relative;left:100px;top:100px;width:60px;height:60px;"
+                          "transform:scale(2);transform-origin:0 0;animation:op 1s linear infinite}"
+                          "#c{width:20px;height:20px}</style><div id=f><div id=g><div id=c></div></div></div>",
+                          &g, "g");
+    expect("filter marks: a group's own change inside a filter, through its matrix and spread",
+           g != NULL && marked_exactly(&k, g, (os64_gui_rect_t){70, 70, 180, 180}), NULL);
     {
         Moving own;
         moving_open(&own, MOTION_STYLE "@keyframes fl{to{filter:blur(4px)}} "
@@ -328,6 +354,34 @@ static void filter_mark_cases(void)
     bool bounded = now != NULL && flow_layout_parts(m.tree, now, o, tick_mark, &k, NULL);
     expect("layout parts: a box in a filtered group, its reach spread and cut to the group",
            c != NULL && bounded && marked(&k, c, (os64_gui_rect_t){-6, -6, 112, 52}), NULL);
+    flow_free(now);
+    moving_close(&m);
+    // A small box in a large group, through a layout: its own reach spread.
+    moving_open(&m, MOTION_STYLE "@keyframes bg{to{background-color:blue}}"
+                    "#f{filter:blur(2px);width:400px;height:300px}"
+                    "#c{position:relative;left:200px;top:100px;width:20px;height:20px;"
+                    "animation:bg 1s linear infinite}</style><div id=f><div id=c></div></div>", 0);
+    c = moving_box(&m, "c");
+    now = moving_beside(&m, 500);
+    k.n = 0;
+    bounded = now != NULL && flow_layout_parts(m.tree, now, o, tick_mark, &k, NULL);
+    expect("layout parts: a small box in a large filtered group, its own reach spread",
+           c != NULL && bounded && marked_exactly(&k, c, (os64_gui_rect_t){170, 70, 80, 80}), NULL);
+    flow_free(now);
+    moving_close(&m);
+    // A group changed inside a filter, through a layout: its bounds through
+    // its matrix, then spread.
+    moving_open(&m, MOTION_STYLE "@keyframes op{to{opacity:.5}}"
+                    "#f{filter:blur(2px);width:400px;height:300px}"
+                    "#g{position:relative;left:100px;top:100px;width:60px;height:60px;"
+                    "transform:scale(2);transform-origin:0 0;animation:op 1s linear infinite}"
+                    "#c{width:20px;height:20px}</style><div id=f><div id=g><div id=c></div></div></div>", 0);
+    const flow_box_t *gb = moving_box(&m, "g");
+    now = moving_beside(&m, 500);
+    k.n = 0;
+    bounded = now != NULL && flow_layout_parts(m.tree, now, o, tick_mark, &k, NULL);
+    expect("layout parts: a group changed inside a filter, through its matrix and spread",
+           gb != NULL && bounded && marked_exactly(&k, gb, (os64_gui_rect_t){70, 70, 180, 180}), NULL);
     flow_free(now);
     moving_close(&m);
 }

@@ -4673,17 +4673,21 @@ static void ink_grown(flow_box_t *b)
 // filtered group (flow_filter_reach, which holds a drop shadow's offset,
 // and the farther a blur made on a reduced copy reads,
 // FLOW_FILTER_READS_MORE) and cut to that group's bounds, then taken
-// through that box's matrix when it is drawn through one (nested_reach) —
+// through that box's matrix, and cut to its clip, when it is drawn through
+// one (nested_reach) —
 // a filter is spread before its own box's matrix, as group_bounds spreads
 // it — so nested filters, a filter inside a matrix and a matrix inside a
 // filter each spread it in the coordinates that filter is drawn in. Every
 // function yonder draws is local — the colour functions touch one pixel, a
 // blur or a shadow no farther than its reach — and a list holding a URL is
-// drawn unfiltered (FILTER.md § 2); a function that were not (filter_local)
-// would repaint its group's whole bounds. `FilterMemo` keeps the OPEN
-// layers of the last few boxes looked up, so the boxes of one changed
-// subtree look each group up once, and the last rect marked, so the same
-// rect is marked once.
+// drawn unfiltered (FILTER.md § 2); a function filter_local does not name,
+// one added later, repaints its group's whole bounds until it is. The
+// spread is cut to a group's bounds only where they are known: a group
+// with no OPEN (a tree built short of memory) is spread uncut, or, for a
+// function not named, without bound. `FilterMemo` keeps the OPEN layers of
+// the last few boxes looked up, so the boxes of one changed subtree look
+// each group up once, and the last rect marked, so a rect marked again
+// straight after is not marked twice.
 #define FILTER_MEMO 4
 static bool same_rect(os64_gui_rect_t a, os64_gui_rect_t b);
 typedef struct {
@@ -4719,7 +4723,8 @@ static int32_t open_of(const flow_tree_t *t, const flow_box_t *a, FilterMemo *me
 }
 
 // Whether every function of `a`'s filter list spreads a pixel no farther
-// than flow_filter_reach says it does.
+// than flow_filter_reach says it does; a function not named here is taken
+// as one that may not.
 static bool filter_local(const flow_box_t *a)
 {
     for (int32_t i = 0; i < a->style->nfilter; i++)
@@ -4762,9 +4767,9 @@ static os64_gui_rect_t filter_spread(const flow_box_t *a, os64_gui_rect_t r)
 // coordinates it is painted in — its own filter already spread into it
 // when `spread` is false, as a group's bounds have it — spread and cut at
 // each box from `b` out as above, handed to `mark` in page coordinates at
-// `scroll` with `b`, unless it is the rect last marked; true. False, and
-// nothing marked, when no filtered group holds what `b` paints: the caller
-// marks it as it would anyway.
+// `scroll` with `b`, unless it is the rect last marked; true, also when a
+// clip leaves nothing of it. False, and nothing marked, when no filtered
+// group holds what `b` paints: the caller marks it as it would anyway.
 static bool mark_filtered(const flow_tree_t *t, const flow_box_t *b, os64_gui_rect_t r, bool spread,
                           flow_point_t scroll, FilterMemo *memo, const os64_gui_rect_t *bounds,
                           void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
@@ -4780,6 +4785,9 @@ static bool mark_filtered(const flow_tree_t *t, const flow_box_t *b, os64_gui_re
             if (k >= 0) {
                 os64_gui_rect_t whole = bounds != NULL ? bounds[k] : group_bounds(t, k, scroll, &end);
                 r = meet(filter_local(a) ? filter_spread(a, r) : whole, whole);
+            } else {
+                int32_t all[4] = {INT32_MAX / 4, INT32_MAX / 4, INT32_MAX / 4, INT32_MAX / 4};
+                r = filter_local(a) ? filter_spread(a, r) : grown(r, all);
             }
         }
         if (!nested_reach(a, r, scroll, &r))
