@@ -1546,8 +1546,6 @@ static struct {
     uint64_t cascade_generation, cascade_updates;
 } s_change;
 
-// A part a script's change painted (flow_change_parts, or a kept restyle's
-// marks), cut to the view, collected for script_rebuild.
 // The element a box is drawn for: its own, or the nearest one round it for
 // a box with none (an anonymous block, a line's piece).
 static const os64_html_node_t *box_element(const flow_box_t *b)
@@ -1558,6 +1556,9 @@ static const os64_html_node_t *box_element(const flow_box_t *b)
     return NULL;
 }
 
+// A part a script's change painted (flow_change_parts, or a kept restyle's
+// marks), cut to the view, collected for script_rebuild, the biggest by
+// area and the element it was marked for kept beside them.
 static void change_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 {
     os64_gui_rect_t meet;
@@ -4280,6 +4281,8 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
         if (!s_change.kept) {
             s_change.n = 0;
             s_change.over = false;
+            s_change.biggest = -1;
+            s_change.biggest_node = NULL;
             s_change.wrote = kept.written > 0;
         }
     }
@@ -10738,14 +10741,17 @@ static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 static void tick_page_run(uint64_t now, bool frame);
 
 // The elements a tick changed, named for the record (flow_motion_ticked):
-// the one being named, its words so far and whether its longhands' list
-// has begun, and the first one's whole, which names the biggest part when
-// the tick marked it.
+// the one being named (its node and pseudo-element), its words so far and
+// whether its longhands' list has begun, how many elements were named,
+// and the first one's whole, which names the biggest part when the tick
+// changed that element alone (tick_page_run).
 typedef struct {
     const os64_html_node_t *node;
+    uint8_t pseudo;
     char what[96];
     size_t at;
     bool listing;
+    int32_t elements;
     char first[96];
 } TickNaming;
 
@@ -10757,7 +10763,7 @@ static void tick_named_done(TickNaming *k)
         return;
     if (k->at + 1 < sizeof(k->what))
         os64_strcopy(k->what + k->at, sizeof(k->what) - k->at, ")");
-    if (k->first[0] == '\0')
+    if (k->elements++ == 0)
         os64_strcopy(k->first, sizeof(k->first), k->what);
     int32_t i = 0;
     for (; i < s_cost.nticked && !os64_streq(s_cost.ticked[i].what, k->what); i++) {}
@@ -10776,14 +10782,23 @@ static void tick_named_done(TickNaming *k)
 }
 
 // One longhand an element the tick changed animates (flow_motion_ticked
-// hands an element's together).
-static void tick_named(void *ctx, const os64_html_node_t *node, int32_t prop)
+// hands an element's together), a pseudo-element named apart from its
+// element ("div.x::before").
+static void tick_named(void *ctx, const os64_html_node_t *node, uint8_t pseudo, int32_t prop)
 {
     TickNaming *k = ctx;
-    if (node != k->node) {
+    if (node != k->node || pseudo != k->pseudo) {
         tick_named_done(k);
         k->node = node;
+        k->pseudo = pseudo;
         k->at = element_named(k->what, sizeof(k->what), "", node);
+        if (pseudo != GARB_PSEUDO_NONE && k->at + 1 < sizeof(k->what))
+            k->at += (size_t)os64_snprintf(k->what + k->at, sizeof(k->what) - k->at, "%s",
+                                           pseudo == GARB_PSEUDO_BEFORE  ? "::before"
+                                           : pseudo == GARB_PSEUDO_AFTER ? "::after"
+                                                                         : "::pseudo");
+        if (k->at >= sizeof(k->what))
+            k->at = sizeof(k->what) - 1;
         k->listing = false;
     }
     if (k->at + 1 < sizeof(k->what))
@@ -10834,11 +10849,13 @@ static void tick_page_run(uint64_t now, bool frame)
         g.tick_began = now;
         g.tick_began_us = began_us;
         // The record names what the tick changed, not the box that marked
-        // it: in a filtered group that is the group's.
+        // it, which in a filtered group is the group's: when one element
+        // changed, the biggest part this tick marked was its. With more,
+        // the part is named by the box that marked it (tick_mark).
         TickNaming k = {0};
         flow_motion_ticked(g.page.tree, tick_named, &k);
         tick_named_done(&k);
-        if (k.first[0] != '\0' && os64_memcmp(&most_was, &s_cost.mark_most, sizeof(most_was)) != 0)
+        if (k.elements == 1 && os64_memcmp(&most_was, &s_cost.mark_most, sizeof(most_was)) != 0)
             os64_snprintf(s_cost.mark_who, sizeof(s_cost.mark_who), "an animation of %s", k.first);
         // A check due for the tick, with what it marked for the record's
         // line (s_damage_check).
@@ -12570,12 +12587,29 @@ static CanvasUnseen canvas_unseen(const flow_box_t *box)
 
 // The canvases a damage visit found unseen (canvas_damage_mark), to be
 // acknowledged once the visit has returned (canvases_unseen_acknowledge):
-// a visit may not touch a canvas. Past the room, the rest are marked as
-// any canvas is.
-#define UNSEEN_CANVASES 32
-static const os64_html_node_t *s_unseen_canvases[UNSEEN_CANVASES];
-static CanvasUnseen s_unseen_why[UNSEEN_CANVASES];
-static int32_t s_nunseen_canvases;
+// a visit may not touch a canvas. The list grows as it must; one it has
+// no memory to hold is marked as any canvas is, which nothing may draw
+// and so acknowledge, but no canvas is lost for want of room alone.
+typedef struct {
+    const os64_html_node_t *node;
+    CanvasUnseen why;
+} UnseenCanvas;
+static UnseenCanvas *s_unseen_canvases;
+static int32_t s_nunseen_canvases, s_unseen_cap;
+
+static bool unseen_canvas_keep(const os64_html_node_t *node, CanvasUnseen why)
+{
+    if (s_nunseen_canvases == s_unseen_cap) {
+        int32_t cap = s_unseen_cap == 0 ? 16 : s_unseen_cap < (1 << 20) ? s_unseen_cap * 2 : 0;
+        UnseenCanvas *more = cap > 0 ? os64_realloc(s_unseen_canvases, (size_t)cap * sizeof(*more)) : NULL;
+        if (more == NULL)
+            return false;
+        s_unseen_canvases = more;
+        s_unseen_cap = cap;
+    }
+    s_unseen_canvases[s_nunseen_canvases++] = (UnseenCanvas){node, why};
+    return true;
+}
 
 static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_t width,uint32_t height,
                                const draw2d_damage_t *damage)
@@ -12595,11 +12629,8 @@ static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_
     // pending, it would be visited again after every script task, and
     // under a group its mark is the whole view (canvas_damage_part).
     CanvasUnseen why=canvas_unseen(box);
-    if(why!=CANVAS_SEEN && s_nunseen_canvases<UNSEEN_CANVASES){
-        s_unseen_canvases[s_nunseen_canvases]=node;
-        s_unseen_why[s_nunseen_canvases++]=why;
+    if(why!=CANVAS_SEEN && unseen_canvas_keep(node,why))
         return;
-    }
     s_cost.canvas_marks++;
     // The shown page's, which a covered paint acknowledges (canvases_acknowledge).
     if(p==&g.page){
@@ -12618,9 +12649,9 @@ static void canvases_unseen_acknowledge(Page *p)
 {
     for(int32_t i=0;i<s_nunseen_canvases;i++){
         canvas_bitmap_t bitmap;
-        if(!yonder_scripts_canvas_bitmap(p->scripts,s_unseen_canvases[i],&bitmap))continue;
-        yonder_scripts_canvas_painted(p->scripts,s_unseen_canvases[i]);
-        if(s_unseen_why[i]==CANVAS_ALPHA0)s_cost.unseen_alpha0++;
+        if(!yonder_scripts_canvas_bitmap(p->scripts,s_unseen_canvases[i].node,&bitmap))continue;
+        yonder_scripts_canvas_painted(p->scripts,s_unseen_canvases[i].node);
+        if(s_unseen_canvases[i].why==CANVAS_ALPHA0)s_cost.unseen_alpha0++;
         else s_cost.unseen_culled++;
     }
     s_nunseen_canvases=0;
@@ -19584,19 +19615,15 @@ static void timed_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64
         // In two rows: asking the script side for the bitmap, whose cost
         // the cut cannot follow, and the draw, which walks only the cut.
         // Which canvas, by its element (cut short), so two drawn over one
-        // box are two rows; and whether an element round it is at opacity
-        // 0, which draws it at full cost and shows none of it.
+        // box are two rows.
         uint64_t got = s_canvas_last.got_cycles < spent ? s_canvas_last.got_cycles : spent;
         char name[32] = "canvas";
         if (b->node != NULL)
             element_named(name, sizeof(name), "", b->node);
-        bool hidden = false;
-        for (const flow_box_t *a = b; a != NULL && !hidden; a = a->parent)
-            hidden = a->style != NULL && a->style->opacity == 0;
-        os64_snprintf(what, sizeof(what), "%s %dx%d of %ux%u %s drawn %dx%d on %d%s", name, (int)c.w, (int)c.h,
+        os64_snprintf(what, sizeof(what), "%s %dx%d of %ux%u %s drawn %dx%d on %d", name, (int)c.w, (int)c.h,
                       (unsigned)s_canvas_last.bitmap_w, (unsigned)s_canvas_last.bitmap_h,
                       s_canvas_last.smoothed ? "smoothed" : "copied", (int)s_canvas_last.drawn.w,
-                      (int)s_canvas_last.drawn.h, (int)s_canvas_last.targets, hidden ? " at opacity 0" : "");
+                      (int)s_canvas_last.drawn.h, (int)s_canvas_last.targets);
         effect_counted(what, spent - got);
         os64_snprintf(what, sizeof(what), "canvas bitmap %ux%u asked for", (unsigned)s_canvas_last.bitmap_w,
                       (unsigned)s_canvas_last.bitmap_h);

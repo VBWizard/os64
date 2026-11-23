@@ -4868,7 +4868,8 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
 }
 
 void flow_motion_ticked(const flow_tree_t *tree,
-                        void (*each)(void *ctx, const os64_html_node_t *node, int32_t prop), void *ctx)
+                        void (*each)(void *ctx, const os64_html_node_t *node, uint8_t pseudo, int32_t prop),
+                        void *ctx)
 {
     for (int32_t i = 0; tree != NULL && i < tree->nticking; i++) {
         const FTick *e = &tree->ticking[i];
@@ -4881,7 +4882,7 @@ void flow_motion_ticked(const flow_tree_t *tree,
                 set.w[w] |= m->anims[a].props.w[w];
         for (int32_t p = 0; p < GARB_NPROPS; p++)
             if (f_props_has(&set, (garb_prop_t)p))
-                each(ctx, e->boxes[0]->node, p);
+                each(ctx, e->boxes[0]->node, e->boxes[0]->pseudo, p);
     }
 }
 

@@ -79,7 +79,7 @@ for name, old, new in mutants:
         verdict = 'MISSED'
     print(f'{name}: {verdict}', flush=True)
 
-print(f'\nyonder scale mutants: {len(caught)} caught, {len(missed)} missed, {len(unbuilt)} did not build')
+print(f'\nyonder alpha 0 mutants: {len(caught)} caught, {len(missed)} missed, {len(unbuilt)} did not build')
 if missed:
     print('missed: ' + ', '.join(missed))
 if unbuilt:

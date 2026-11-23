@@ -2884,8 +2884,10 @@ static bool mask_coverage(const Painter *p, const flow_box_t *box, os64_gui_rect
 
 // A group (flow_visit_groups) opens. One laid at alpha 0
 // (yonder_group_alpha) shows nothing, so nothing of it is painted — no
-// verb is asked, the walk culls its inside whole (group_inside) and its
-// close lays nothing — and a canvas or a video inside is not drawn: the
+// verb is asked: each box the walk hands over inside it is turned away
+// (box_painter, `hidden`), a drawn-through one has its inside culled whole
+// (group_inside), and its close lays nothing — and a canvas or a video
+// inside is not drawn: the
 // face acknowledges such a canvas's damage unseen instead of marking it
 // (yonder.c, canvas_damage_mark). One below full opacity hands the verbs
 // its bounds, cut to what is painted, to remember what was under them. One
