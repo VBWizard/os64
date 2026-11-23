@@ -1,0 +1,76 @@
+<!doctype html><html><head><title>canvas unseen</title><style>
+/* Canvases drawn into while they cannot show, then shown, one for each way
+   out of hiding: their damage is acknowledged unseen, not marked (yonder.c,
+   canvas_damage_mark), which is exact only if the way out marks where the
+   canvas shows, its bitmap as it is then. Run with --damage-check: the
+   counter's text changes every quarter second, so every rebuild compares
+   the whole view with the window, and a canvas left stale on the glass is
+   a difference. The record says how many were acknowledged, by why
+   ("canvases acknowledged unseen: 12 in a group at alpha 0, 2 culled").
+   Opacity 0.001 is a group laid at alpha 0 that the walk still hands the
+   painter, where opacity 0 is culled before it (`unpainted`).
+   1: its group's animation leaving its delay, held at 0 until then: a phase
+      edge, which the layout for the animations crosses and marks
+   2: its group's opacity written by a script
+   3: a new tree in which it is no longer a group (its class taken away)
+   4: an enclosing group leaving 0, its own group staying at 0.6
+   5: culled as transparent (plain opacity 0), then written to 1
+   6: its group's opacity ticked from 0 inside its animation's active phase,
+      the keyframes holding 0 to 2.4 s and rising to 1 by 4 s; the check
+      follows each tick too, since the next rebuild's compare would mark
+      the box anyway
+   7: its group's opacity written from 0.001 to 0.5 at 5 s, a group still: the
+      trees' compare marks the group by its own change, where 2 to 4 stop
+      being groups, and a list of layers that changed refuses to the whole
+      view */
+body{margin:0;background:#202020;color:#ddd;font:16px sans-serif}
+.cell{position:absolute;top:40px;width:100px;height:70px}
+canvas{display:block;width:100px;height:70px}
+#w1{left:10px;opacity:0;animation:show .5s linear 3s both}
+@keyframes show{from{opacity:0}to{opacity:1}}
+#w2{left:125px;opacity:.001}
+#w3{left:240px}
+#w3.hide{opacity:.001}
+#w4{left:355px;opacity:.001}
+#w4 div{opacity:.6}
+#w5{left:470px;opacity:0}
+#w6{left:585px;animation:rise 8s linear both}
+@keyframes rise{0%,30%{opacity:0}50%,100%{opacity:1}}
+#w7{left:700px;opacity:.001}
+#n{position:absolute;left:10px;top:130px}
+</style></head><body>
+<div class=cell id=w1><canvas id=c1 width=60 height=40></canvas></div>
+<div class=cell id=w2><canvas id=c2 width=60 height=40></canvas></div>
+<div class="cell hide" id=w3><canvas id=c3 width=60 height=40></canvas></div>
+<div class=cell id=w4><div><canvas id=c4 width=60 height=40></canvas></div></div>
+<div class=cell id=w5><canvas id=c5 width=60 height=40></canvas></div>
+<div class=cell id=w6><canvas id=c6 width=60 height=40></canvas></div>
+<div class=cell id=w7><canvas id=c7 width=60 height=40></canvas></div>
+<div id=n>0</div>
+<script>
+function paint(colour) {
+  for (let i = 1; i <= 7; i++) {
+    const x = document.getElementById('c' + i).getContext('2d');
+    x.fillStyle = colour;
+    x.fillRect(0, 0, 60, 40);
+    x.fillStyle = '#fff';
+    x.fillRect(7 * i, 10, 5, 20);
+  }
+}
+// Drawn twice while hidden, the second over the first, then shown.
+setTimeout(() => paint('#c03'), 1000);
+setTimeout(() => paint('#09c'), 2000);
+setTimeout(() => {
+  document.getElementById('w2').style.opacity = '1';
+  document.getElementById('w3').className = 'cell';
+  document.getElementById('w4').style.opacity = '1';
+  document.getElementById('w5').style.opacity = '1';
+}, 3000);
+// In a turn of its own, so no refusal to the whole view stands in for it.
+setTimeout(() => { document.getElementById('w7').style.opacity = '.5'; }, 5000);
+// Drawn once more where every one shows: marked and acknowledged as ever.
+setTimeout(() => paint('#3a3'), 7000);
+let n = 0;
+setInterval(() => { document.getElementById('n').textContent = ++n; }, 250);
+</script>
+</body></html>

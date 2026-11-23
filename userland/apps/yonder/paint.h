@@ -182,6 +182,12 @@ typedef struct {
 // `verbs->backdrop` is asked with no area, which only asks.
 const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verbs_t *verbs);
 
+// The alpha, in 255ths, a group (a stacking context below full opacity) is
+// laid at: its opacity rounded. At 0 the painter paints nothing of the
+// group, its open and close included, so nothing inside it is drawn — a
+// face that must know what cannot show asks the same rule.
+uint8_t yonder_group_alpha(const flow_box_t *box);
+
 // DARK PAGES (yonder.conf's `appearance = dark`): every colour the page
 // paints is drawn at its brightness moved, hue and saturation kept
 // (paint.c's relight). A background or a gradient is PAPER, and goes dark

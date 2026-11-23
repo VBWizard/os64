@@ -4880,6 +4880,25 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
     return true;
 }
 
+void flow_motion_ticked(const flow_tree_t *tree,
+                        void (*each)(void *ctx, const os64_html_node_t *node, uint8_t pseudo, int32_t prop),
+                        void *ctx)
+{
+    for (int32_t i = 0; tree != NULL && i < tree->nticking; i++) {
+        const FTick *e = &tree->ticking[i];
+        if (!e->changed || e->nboxes == 0)
+            continue;
+        FProps set = {{0}};
+        const FMotion *m = e->st->motion;
+        for (int32_t a = 0; a < m->nanims; a++)
+            for (int32_t w = 0; w < F_PROP_WORDS; w++)
+                set.w[w] |= m->anims[a].props.w[w];
+        for (int32_t p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&set, (garb_prop_t)p))
+                each(ctx, e->boxes[0]->node, e->boxes[0]->pseudo, p);
+    }
+}
+
 // ── What a layout for the animations changed (YONDER_PERF.md § perf-4) ──
 
 static bool same_rect(os64_gui_rect_t a, os64_gui_rect_t b)
