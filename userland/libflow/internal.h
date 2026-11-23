@@ -1183,6 +1183,13 @@ typedef struct {
     size_t parent, subtree_count;
     bool equal, ordinary;
     flow_reuse_reason_t reason;
+    // The roles (a bit for each flow_role_t) that keep its box, and those
+    // that keep a box under it, from being ordinary; whether it is equal and
+    // refused for a role, and whether it is the outermost such (the role
+    // counter's root, `role` its flow_role_t).
+    uint16_t roles, roles_below;
+    bool role_refused, role_root;
+    uint8_t role;
 } FReusePair;
 typedef struct { const void *from; void *to; } FReusePointer;
 typedef struct {
@@ -1192,6 +1199,10 @@ typedef struct {
     size_t count, capacity, nslots, pointer_slots, bytes, staging_left;
     flow_tree_t *tree;
     const flow_tree_t *previous;
+    // The layout profile's clock, set only when the layout is profiled: the
+    // role counter times its roots with it (block_at).
+    int64_t (*clock)(void *);
+    void *clock_ctx;
 } FReuseMatch;
 FReusePair *f_reuse_pair(const FReuseMatch *match, const FBox *box);
 void *f_reuse_pointer(const FReuseMatch *match, const void *old);

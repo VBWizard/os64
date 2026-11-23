@@ -89,6 +89,8 @@ typedef struct yonder_diag yonder_diag_t;
  * Model counts cover rebuilds, not the initial loader's model construction. */
 // flow_reuse_reason_t order; the layout wrapper checks the count at compile time.
 #define YONDER_LAYOUT_REUSE_REASONS 16
+// flow_role_t order (the graft's role counter); checked at compile time too.
+#define YONDER_LAYOUT_ROLES 12
 // Why a layout's cascade was built fresh rather than updated: yonder's own
 // reasons, then libgarb's refusals (garb_update_refusal_t past DONE). The
 // names come with the sample (`cascade_reason_names`), from the code that
@@ -149,6 +151,14 @@ typedef struct {
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
     const char *const *cascade_reason_names;
+    // The graft's role counter (libflow's flow_reuse_stats_t.role_*): the
+    // equal subtrees refused only for their role, by role, the boxes under
+    // them, the placement time inside them, and the roots holding each role
+    // anywhere; names with the sample.
+    uint64_t role_roots[YONDER_LAYOUT_ROLES], role_boxes[YONDER_LAYOUT_ROLES], role_us[YONDER_LAYOUT_ROLES];
+    uint64_t role_inside[YONDER_LAYOUT_ROLES];
+    uint64_t role_clock_errors;
+    const char *const *role_names;
 } yonder_layout_stats_t;
 void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
 // What layouts needed, as a record's line (`layout needed` and its

@@ -8870,6 +8870,8 @@ static void diag_keep_cases(void) {
               has(big,"\npaint reading again: at y 0\n") && !has(big,"\npaint reading past:") &&
               !has(big,"\nlate ordinary:") && !has(big,"\nscript 512:"),
               "keep: readings have a room of their own, which a full ordinary room leaves them");
+        check(has(big,"\nfacts not kept by kind: plain lines 6, readings 1\n"),
+              "keep: what each room refused is said by kind, so a reading lost is never silent");
         free(big); yonder_diag_free(d);
         /* So do the measuring switches' summaries, which a page writes as
          * it runs, after its scripts have filled the ordinary room. */
@@ -9442,6 +9444,22 @@ static void paint_cost_cases(void) {
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"; the rest: 25, 0.0 ms; boxes handed the painter ")!=NULL,
           "paint effects: past the twelve said and the table's room, the rest counted together");
+    /* The table keeps the costliest, not the first met: a costly kind met
+     * once the table is full of cheap ones heads the line, and the cheap one
+     * whose place it took is in the rest. */
+    effects_reset();
+    for(int i=0;i<EFFECTS_MAX;i++) {
+        char what[24];
+        snprintf(what,sizeof(what),"warp %dx2",i);
+        effect_counted(what,1);
+    }
+    effect_counted("filter blur(4) 9x9",5000000);
+    effect_counted("cheap past the room",1);
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint effects: filter blur(4) 9x9: 1, 5.0 ms (5000 us each); ")!=NULL &&
+          strstr(rec,"; the rest: 22, 0.0 ms; boxes handed the painter ")!=NULL,
+          "paint effects: a costly kind met once the table is full heads the line");
     /* What a paint draws after a video is counted apart. */
     effects_reset();
     effect_counted("fills",3000000);
@@ -9453,6 +9471,14 @@ static void paint_cost_cases(void) {
           "paint effects: what is drawn after a video, counted apart");
     effects_reset();
     check(!s_effects_past_video,"paint effects: the count starting again starts before any video");
+    /* The reading key's presses beside the readings kept: presses the
+     * page or a focused field took are said, not left silent. */
+    s_reading_keys=3; s_cost_readings=1;
+    reading_key_fact(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\nreading key: pressed 3 times, 1 readings kept; the page or a focused field took the rest\n")!=NULL,
+          "readings: presses the view never saw are counted beside the readings kept");
+    s_reading_keys=0; s_cost_readings=0;
     /* The biggest part marked and by what, the biggest painted, and the
      * marks of the canvases and the form controls (YONDER_DIAGNOSTICS.md §
      * What paints cost). */

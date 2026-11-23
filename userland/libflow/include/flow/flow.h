@@ -1389,6 +1389,22 @@ typedef enum {
     FLOW_REUSE_NREASONS
 } flow_reuse_reason_t;
 
+/* Why a subtree whose boxes are all equal to the previous tree's was
+ * refused for its role (FLOW_REUSE_BOX_ROLE): the role of its root, or
+ * failing that the first role found under it, in this order. An item of a
+ * flex or grid container; a flex container; a grid container; a positioned
+ * block (relative, sticky); an absolute or fixed box, or one among inline
+ * content; a transformed box; a float; an atomic inline's content; a
+ * containing block for other reasons (a filter); a positioned or split
+ * inline; missing-image alt text; a box that is no block container (a
+ * replaced box, a table and its parts). */
+typedef enum {
+    FLOW_ROLE_ITEM, FLOW_ROLE_FLEX, FLOW_ROLE_GRID, FLOW_ROLE_POSITIONED, FLOW_ROLE_OUT_OF_FLOW,
+    FLOW_ROLE_TRANSFORMED, FLOW_ROLE_FLOAT, FLOW_ROLE_ATOMIC, FLOW_ROLE_CONTAINER, FLOW_ROLE_INLINE,
+    FLOW_ROLE_ALT_TEXT, FLOW_ROLE_KIND, FLOW_ROLES
+} flow_role_t;
+const char *flow_role_name(flow_role_t role);
+
 /* Snapshot diagnostics, separate from geometry's profile.reused. Refusals
  * count failed preparation checks; source and destination preparation may
  * each refuse in one call. Box checks count one refusal per rejected subtree.
@@ -1400,6 +1416,15 @@ typedef struct {
     uint64_t intrinsic_hits, marker_measures;
     size_t metadata_bytes, metadata_peak;
     uint64_t refused[FLOW_REUSE_NREASONS];
+    // A RECORD ONLY: the roots of the equal subtrees refused for their
+    // role, each the outermost such subtree, by its role (flow_role_t); the
+    // boxes under them; the roots whose subtree holds each role anywhere
+    // (`role_inside`, a root counted under every role it holds); and, when
+    // the layout is profiled with a clock, the placement time spent inside
+    // the roots, every pass through a root's block layout summed
+    // (`role_clock_errors` counts reads that went backward).
+    uint64_t role_roots[FLOW_ROLES], role_boxes[FLOW_ROLES], role_inside[FLOW_ROLES], role_us[FLOW_ROLES];
+    uint64_t role_clock_errors;
     bool source_ready;
 } flow_reuse_stats_t;
 

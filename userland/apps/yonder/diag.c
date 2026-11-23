@@ -10,7 +10,7 @@
 typedef struct {
     char *a, *b;            // MISSING: kind, name; FAILED: what, message; fact: key, value
     uint32_t count;         // a fact's: 1 when its latest value had no memory to keep
-    uint8_t room;           // a fact's: which room it took its place in (FactRoom)
+    uint8_t room;           // a fact's: which room it took its place in, or asked for and was refused (FactRoom)
 } Line;
 // The rooms a fact takes its place in, each with its own quota: the
 // ordinary facts', the head's (yonder_diag_head_fact), the readings'
@@ -577,6 +577,11 @@ static void fact_set(yonder_diag_t *d, const char *key, const char *value, FactR
         if (l != NULL) {
             l->room = (uint8_t)where;
             d->room_facts[where]++;
+        } else {
+            // A line refused keeps the room it asked for, so the record
+            // says which kind of line went (yonder_diag_render).
+            int64_t gone = list_find(&t->by_gone, t->gone, t->ngone, key, "", false);
+            if (gone >= 0) t->gone[gone].room = (uint8_t)where;
         }
     }
     // A value with no memory to keep is not left empty, nor the one before
@@ -841,6 +846,25 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
     put_lost(&o, "missing names", &d->missing);
     put_lost(&o, "failures", &d->failed);
     put_lost(&o, "facts", &d->facts);
+    // Which kind of line the rooms refused: a reading, a timeline line or a
+    // summary missing from the record is never silent.
+    static const char *const kRooms[ROOMS] = {"plain lines", "head lines", "readings", "timeline lines",
+                                              "summaries"};
+    uint32_t lost_in[ROOMS] = {0};
+    for (uint32_t i = 0; i < d->facts.ngone; i++)
+        if (d->facts.gone[i].room < ROOMS) lost_in[d->facts.gone[i].room]++;
+    char by[160];
+    size_t at = 0;
+    for (int r = 0; r < ROOMS && at < sizeof(by); r++)
+        if (lost_in[r] != 0) {
+            int w = os64_snprintf(by + at, sizeof(by) - at, "%s%s %lu", at ? ", " : "facts not kept by kind: ",
+                                  kRooms[r], (unsigned long)lost_in[r]);
+            if (w > 0) at += (size_t)w;
+        }
+    if (at != 0) {
+        puts_(&o, by);
+        puts_(&o, "\n");
+    }
     if (d->short_of_memory)
         puts_(&o, "some lines not kept: no memory to name them\n");
     // ONE MARKER for every way a line was lost, which the readers key on:
@@ -1417,6 +1441,14 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     }
     for (size_t i = 0; i < YONDER_LAYOUT_REUSE_REASONS; ++i)
         total->reuse_refused[i] = layout_sum(total->reuse_refused[i], sample->reuse_refused[i]);
+    for (size_t i = 0; i < YONDER_LAYOUT_ROLES; ++i) {
+        total->role_roots[i] = layout_sum(total->role_roots[i], sample->role_roots[i]);
+        total->role_boxes[i] = layout_sum(total->role_boxes[i], sample->role_boxes[i]);
+        total->role_us[i] = layout_sum(total->role_us[i], sample->role_us[i]);
+        total->role_inside[i] = layout_sum(total->role_inside[i], sample->role_inside[i]);
+    }
+    total->role_clock_errors = layout_sum(total->role_clock_errors, sample->role_clock_errors);
+    if (sample->role_names != NULL) total->role_names = sample->role_names;
     bool cascade_sampled = sample->cascade_reason_names != NULL;
     for (size_t i = 0; i < YONDER_LAYOUT_CASCADE_REASONS; ++i)
         total->cascade_refused[i] = layout_sum(total->cascade_refused[i], sample->cascade_refused[i]);
@@ -1454,6 +1486,36 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         g += os64_snprintf(line + g, sizeof(line) - (size_t)g, "%s%lu", r ? " " : "]: ",
                            (unsigned long)s->reuse_refused[r]);
     yonder_diag_summary_fact(d, graft_key, line);
+    // `<key> graft roles`: the equal subtrees refused only for their role,
+    // by role (the outermost such subtree), with the boxes under them and
+    // the placement time spent inside them; roles never met left out.
+    if (s->role_names != NULL) {
+        char roles_key[64];
+        os64_snprintf(roles_key, sizeof(roles_key), "%s graft roles", key);
+        int k = os64_snprintf(line, sizeof(line), "equal subtrees refused only for their role, by role "
+                              "(roots, boxes under them, placement ms inside)");
+        bool any = false;
+        for (int r = 0; r < YONDER_LAYOUT_ROLES && k > 0 && (size_t)k < sizeof(line); r++) {
+            if (s->role_roots[r] == 0) continue;
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, "%s%s %lu, %lu, %lu.%lu", any ? "; " : ": ",
+                               s->role_names[r], (unsigned long)s->role_roots[r], (unsigned long)s->role_boxes[r],
+                               (unsigned long)(s->role_us[r] / 1000), (unsigned long)(s->role_us[r] % 1000 / 100));
+            any = true;
+        }
+        if (!any && k > 0 && (size_t)k < sizeof(line))
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, ": none");
+        bool inside = false;
+        for (int r = 0; r < YONDER_LAYOUT_ROLES && k > 0 && (size_t)k < sizeof(line); r++) {
+            if (s->role_inside[r] == 0) continue;
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, "%s%s %lu", inside ? ", " : "; roots holding ",
+                               s->role_names[r], (unsigned long)s->role_inside[r]);
+            inside = true;
+        }
+        if (s->role_clock_errors != 0 && k > 0 && (size_t)k < sizeof(line))
+            os64_snprintf(line + k, sizeof(line) - (size_t)k, "; clock errors %lu",
+                          (unsigned long)s->role_clock_errors);
+        yonder_diag_summary_fact(d, roles_key, line);
+    }
     // `<key> needed`: what each layout needed (yonder_needed_t).
     char needed_key[64];
     os64_snprintf(needed_key, sizeof(needed_key), "%s needed", key);
