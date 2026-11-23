@@ -110,12 +110,25 @@ mutants = [
      '    if (why == NULL && 0)'),
     # The svgs the cascade restyled, which yonder's adapter paints from it.
     ('the-svgs-the-cascade-restyled-not-marked', YONDER,
-     '        else if (!change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED))',
-     '        else if (0 && !change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED))'),
+     '        else if (!change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED, refs))',
+     '        else if (0 && !change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED, refs))'),
     ('a-restyled-definition-marks-only-its-own-svg', YONDER,
      '        all = definition && svg_restyled(c, e, since, fresh);', '        all = definition && 0 && svg_restyled(c, e, since, fresh);'),
     ('an-svg-holding-a-use-not-marked', YONDER, '        if (!svg_touched)\n            break;',
      '        if (!svg_touched || 1)\n            break;'),
+    # What an id names: an html id taken, an element with one added or
+    # removed, and the svgs that refer by id, by a use or by a url.
+    ('an-id-attribute-retargets-nothing', YONDER,
+     '            (os64_streq(entry->attr_name, "id") || os64_streq(entry->attr_name, "xml:base")))',
+     '            ((0 && os64_streq(entry->attr_name, "id")) || os64_streq(entry->attr_name, "xml:base")))'),
+    ('an-xml-base-retargets-nothing', YONDER,
+     '            (os64_streq(entry->attr_name, "id") || os64_streq(entry->attr_name, "xml:base")))',
+     '            (os64_streq(entry->attr_name, "id") || (0 && os64_streq(entry->attr_name, "xml:base"))))'),
+    ('a-reference-by-a-sheets-url-not-a-reference', YONDER,
+     '        if (v->kind == GARB_V_URL)\n            return true;',
+     '        if (0 && v->kind == GARB_V_URL)\n            return true;'),
+    ('a-base-in-a-child-list-missed', YONDER, '                base = base || html_base(nodes[i]);',
+     '                base = base || (0 && html_base(nodes[i]));'),
     # The paint walk: a box is culled by all it paints, its ink too.
     ('a-shadow-past-its-box-culled', FLOW, '    return meets(grown(b->overflow, b->ink), view);',
      '    return meets(b->overflow, view);'),
@@ -123,6 +136,10 @@ mutants = [
     ('a-rebuild-that-marked-nothing-unchecked', YONDER,
      '        if (whole == NULL && s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {',
      '        if (whole == NULL && s_change.n > 0 && s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {'),
+    # The check waits for every part of the render, not the first.
+    ('the-check-after-the-first-part', YONDER,
+     '    box_bars(&gl, view);\n    if (pane.canvas_label.run != NULL)',
+     '    box_bars(&gl, view);\n    view_damage_check(w, ctx);\n    if (pane.canvas_label.run != NULL)'),
 ]
 
 # Not run, because it changes nothing a rule promises, or nothing a case can
@@ -166,9 +183,21 @@ mutants = [
 # - the view scrolled with the change (script_rebuild's clamp): what moves
 #   the page's extent is refused before it, in both trees and in place; the
 #   clamp is the guard behind them.
-# - the check run before the pane's canvas label is released: the label is
-#   made only for a page with scripts but without the modern switch, which
-#   the damage cases do not run.
+# - the check's own pane letting its canvas label go (view_damage_check):
+#   the label is made only for a page with scripts but without the modern
+#   switch, which the damage cases do not run.
+# - an element holding an id added or removed (change_touched's listed
+#   nodes): on the damage page every insertion among the body's children
+#   moves a positioned box, which is refused first; the id attribute's rule,
+#   beside it, is the one a case reaches.
+# - a `url(` in an attribute (svg_refers' attribute scan): the attributes
+#   that take one are presentation attributes, which garb also hands over
+#   as winners, so the cascade's check finds them; the scan is the guard
+#   for one garb does not map.
+# - a `url(` inside a winner's list of values (svg_refers' items): a filter
+#   list is where garb keeps one, and a filter by reference is drawn
+#   unfiltered (libgarb props.c value_approximated), so what it names
+#   paints nothing a case can tell apart.
 
 env = dict(os.environ)
 caught, missed, unbuilt = [], [], []

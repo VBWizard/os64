@@ -4251,15 +4251,16 @@ static int32_t s_paint_check_groups = -1;
 
 // `--damage-check[=N]` (LAYOUT_NEEDS_N3.md § 4): every Nth script's rebuild
 // painted in parts (1 unless said), those that marked nothing included, is
-// followed at its paint by the whole view painted the ordinary way and
-// compared with what the window held, to the pixel, the videos' boxes left
+// followed, once its render has painted every part, by the whole view
+// painted the ordinary way and compared with what the window held, to the
+// pixel, the videos' boxes left
 // out (a picture moves by itself) and the page's widgets (the toolkit
 // paints them over the view). A difference is a part the rebuild should
 // have marked, or one something else should have; the record says how many were compared, how many differed,
 // the first with where and what the rebuild had marked, and how many could
 // not be compared (damage_check). A rebuild that marked nothing marks one
 // pixel, so that there is a paint to check. The second paint is charged to
-// the view's, and anything it counts (effects, a video's paints) counts
+// the render's, and anything it counts (effects, a video's paints) counts
 // twice.
 static uint32_t s_damage_check, s_damage_counted;
 static bool s_damage_due;
@@ -10754,6 +10755,8 @@ static void backdrop_damage(void)
     }
 }
 
+static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx);
+
 // libui's paint, timed (s_cost): its render, then each dirty rectangle
 // handed to the compositor, as os64_ui_paint does both, then counted
 // (paint_counted). What marked the view is this paint's, so it starts
@@ -10777,6 +10780,8 @@ static void glass_paint(void)
     yonder_keeps_paint(g.keeps, flow_tree_serial(g.page.tree));
     cost_begin(PS_RENDER);
     uint32_t count = os64_ui_render_list(&g.ui, damage);
+    if (count > 0)
+        view_damage_check(&g.view, g.ui.ctx);
     cost_end(PS_RENDER);
     if (count == 0) {
         os64_memset(s_cost.now, 0, sizeof(s_cost.now));
@@ -12466,18 +12471,33 @@ static bool drawn_from_document(const flow_tree_t *t, const os64_html_node_t *n)
 //   compare finds;
 // - a picture's source's attribute, or its children: its img, whose
 //   picture the sources choose;
-// - and a base's change refuses (-1): every address resolves against it.
+// - a base's change, or a base added or removed, refuses (CHANGE_BASE):
+//   every address resolves against it.
+// `*refs` is set when what an id names may have changed: an id or xml:base
+// attribute, or an element holding an id added or removed (the nodes the
+// log lists, not what is inside them). An svg's reference by id finds the
+// document's first element of that id, whatever it is (svg.c's
+// fragment_target), so change_svgs marks the svgs that refer by id.
 #define CHANGE_TOUCHED 1024
+#define CHANGE_BASE (-2)
+
+// Whether node `n` is an HTML base element.
+static bool html_base(const os64_html_node_t *n)
+{
+    return n != NULL && n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML && n->name != NULL &&
+           os64_streq(n->name, "base");
+}
 // The last rebuild's verdict as the record words it (`in parts`, `nothing
 // to paint`, or why the whole view), which the host's tests read.
 static const char *s_change_said = "";
 static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, const os64_html_node_t **out,
-                              int32_t cap)
+                              int32_t cap, bool *refs)
 {
     os64_html_reader_t *reader = s_change.reader;
     s_change.reader = NULL;
     const os64_html_change_entry_t *entry = NULL;
     int32_t n = 0;
+    *refs = false;
     if (reader == NULL || os64_html_changes(reader, &entry) < 0)
         n = -1;
     for (; n >= 0 && entry != NULL; entry = entry->next) {
@@ -12486,9 +12506,22 @@ static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, co
             at = at->parent;
         if (at == NULL || at->kind != OS64_HTML_ELEMENT || entry->kind == OS64_HTML_CHANGE_STATE)
             continue;
+        if (entry->kind == OS64_HTML_CHANGE_ATTR && entry->attr_name != NULL &&
+            (os64_streq(entry->attr_name, "id") || os64_streq(entry->attr_name, "xml:base")))
+            *refs = true;
         // Every address resolves against a base's: the whole view.
-        if (at->ns == OS64_HTML_NS_HTML && at->name != NULL && os64_streq(at->name, "base")) {
-            n = -1;
+        bool base = html_base(at);
+        for (int list = 0; entry->kind == OS64_HTML_CHANGE_CHILDREN && list < 2; list++) {
+            const os64_html_node_t *const *nodes = list == 0 ? entry->added : entry->removed;
+            size_t count = list == 0 ? entry->nadded : entry->nremoved;
+            for (size_t i = 0; i < count; i++) {
+                base = base || html_base(nodes[i]);
+                *refs = *refs || (nodes[i] != NULL && nodes[i]->kind == OS64_HTML_ELEMENT &&
+                                  os64_html_attr(nodes[i], "id") != NULL);
+            }
+        }
+        if (base) {
+            n = CHANGE_BASE;
             break;
         }
         // A picture's sources choose what its img draws (image_sources_sync):
@@ -12546,6 +12579,31 @@ static const os64_html_node_t *svg_root_of(const os64_html_node_t *n)
     return root != NULL && flow_svg_root(root) ? root : NULL;
 }
 
+// Whether svg node `d` draws another element by its id: a `<use>`, or a
+// `url(` in an attribute or among its winners in the cascade `c` (the
+// adapter paints from both), as a fill, a clip or a filter does.
+static bool svg_refers(const garb_cascade_t *c, const os64_html_node_t *d)
+{
+    if (d->kind != OS64_HTML_ELEMENT)
+        return false;
+    if (d->name != NULL && os64_streq(d->name, "use"))
+        return true;
+    for (const os64_html_attr_t *a = d->attrs; a != NULL; a = a->next)
+        for (const char *v = a->value; v != NULL && *v != '\0'; v++)
+            if (v[0] == 'u' && v[1] == 'r' && v[2] == 'l' && v[3] == '(')
+                return true;
+    garb_style_t style = c != NULL ? garb_style_for(c, d) : (garb_style_t){0};
+    for (int32_t j = 0; j < style.n; j++) {
+        const garb_val_t *v = &style.sets[j].value;
+        if (v->kind == GARB_V_URL)
+            return true;
+        for (int32_t k = 0; k < v->nitems; k++)
+            if (v->items[k].kind == GARB_V_URL)
+                return true;
+    }
+    return false;
+}
+
 // Whether the cascade `c` recomputed element `n`'s winners since the shown
 // tree's update `since`, or is not that cascade brought up to date
 // (`fresh`), in which case every element's may have changed.
@@ -12566,15 +12624,16 @@ static bool svg_restyled(const garb_cascade_t *c, const os64_html_node_t *n, uin
 // or filter, or anything in an svg that draws nothing itself, a sprite
 // sheet's): only an svg draws one, and which does is not known here. And
 // whenever anything in an svg changed, by the cascade or in the change log
-// (`svg_touched`: `out` already names an svg element), so is every one
-// that holds a `<use>`, which may draw any svg element of the document by
-// its id. False past `cap`, for the whole view.
+// (`svg_touched`: `out` already names an svg element), or what an id names
+// may have changed (`refs`, change_touched), so is every one that refers
+// by id (svg_refers), which may draw any element of the document that way.
+// False past `cap`, for the whole view.
 static bool change_svgs(const Page *p, const flow_tree_t *now, const garb_cascade_t *c, const os64_html_node_t **out,
-                        int32_t *n, int32_t cap)
+                        int32_t *n, int32_t cap, bool refs)
 {
     bool fresh = c == NULL || c != s_change.cascade || garb_cascade_generation(c) != s_change.cascade_generation;
     uint64_t since = s_change.cascade_updates;
-    bool svg_touched = false;
+    bool svg_touched = refs;
     for (int32_t i = 0; i < *n && !svg_touched; i++)
         svg_touched = out[i] != NULL && out[i]->ns == OS64_HTML_NS_SVG;
     if (!fresh && garb_cascade_updates(c) == since && !svg_touched)
@@ -12590,7 +12649,7 @@ static bool change_svgs(const Page *p, const flow_tree_t *now, const garb_cascad
         all = definition && svg_restyled(c, e, since, fresh);
     }
     // Twice over the svgs drawn: those restyled, then, when anything in an
-    // svg changed, those that hold a `<use>`.
+    // svg changed or an id may name another element, those that refer by id.
     for (int pass = 0; pass < 2; pass++) {
         for (const flow_box_t *b = flow_root(now); b != NULL;) {
             const os64_html_node_t *root = b->pseudo == GARB_PSEUDO_NONE ? b->node : NULL;
@@ -12605,7 +12664,7 @@ static bool change_svgs(const Page *p, const flow_tree_t *now, const garb_cascad
                     svg_touched = svg_touched || named;
                 } else {
                     for (const os64_html_node_t *d = root->first_child; !named && d != NULL; d = next_within(d, root))
-                        named = d->kind == OS64_HTML_ELEMENT && d->name != NULL && os64_streq(d->name, "use");
+                        named = svg_refers(c, d);
                 }
                 if (named) {
                     if (*n == cap)
@@ -12654,11 +12713,14 @@ static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
     // nothing else, its styles' parts being the restyle's.
     if (why == NULL) {
         static const os64_html_node_t *touched[CHANGE_TOUCHED];
-        int32_t ntouched = change_touched(p->tree, next->tree, touched, CHANGE_TOUCHED);
+        bool refs = false;
+        int32_t ntouched = change_touched(p->tree, next->tree, touched, CHANGE_TOUCHED, &refs);
         flow_parts_said_t said = {FLOW_PARTS_MARKED, NULL, -1};
-        if (ntouched < 0)
+        if (ntouched == CHANGE_BASE)
+            why = "a base changed";
+        else if (ntouched < 0)
             why = "the change log lost, or past its room";
-        else if (!change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED))
+        else if (!change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED, refs))
             why = "more restyled svgs than the room";
         else if (!flow_change_parts(p->tree, next->tree, scroll_now(), touched, ntouched, change_mark, NULL,
                                     &said)) {
@@ -12674,8 +12736,10 @@ static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
     os64_gui_rect_t reach = {0, 0, 0, 0};
     for (int32_t i = 0; why == NULL && i < s_change.n; i++)
         reach = i == 0 ? s_change.part[i] : os64_rect_union(reach, s_change.part[i]);
-    // The view is repainted as one rectangle round every part marked, so
-    // parts reaching across more than half of it are the whole of it.
+    // Parts reaching across more than half of the view are the whole of it:
+    // the toolkit's list of rectangles becomes one round all of them past
+    // its room (OS64_UI_DAMAGE_MAX), and so many parts so far apart save
+    // little over the whole.
     if (why == NULL && (int64_t)reach.w * reach.h * 2 > (int64_t)s_change.view.w * s_change.view.h)
         why = "parts past half the view";
     s_change.named[0] = '\0';
@@ -19494,10 +19558,11 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
     return refused;
 }
 
-// `--damage-check`'s comparison, after a paint of the view widget at
-// `bounds` (the window) through `gl`: the whole view painted the ordinary
-// way over it, compared with what the window held before, a video's box
-// left out; the whole paint stays, being right.
+// `--damage-check`'s comparison, after the paints of the view widget at
+// `bounds` (the window) for every part of a render, through `gl`: the whole
+// view painted the ordinary way over it, compared with what the window held
+// before, the videos' boxes and the page's widgets left out; the whole paint
+// stays, being right.
 static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bounds, os64_gui_rect_t whole)
 {
     os64_gui_rect_t win;
@@ -19595,6 +19660,40 @@ static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bou
     yonder_diag_summary_fact(g.page.diag, "damage check", said);
 }
 
+// The view's verbs, timed, painting through `pane`.
+static yonder_verbs_t view_verbs(GlassPane *pane)
+{
+    return (yonder_verbs_t){pane,        timed_fill,    timed_text,       timed_image,
+                            timed_control, timed_backdrop, timed_group_open, timed_group_close,
+                            timed_mask,   timed_pixels,  timed_stand_in,  pane_keep, timed_through_open,
+                            timed_through_close, timed_clip_open, timed_clip_fill, timed_clip_close,
+                            g.page.modern ? timed_canvas : NULL,
+                            timed_layer_open, timed_layer_close, timed_backdrop_filter,
+                            timed_layer_take};
+}
+
+// `--damage-check`'s turn, once a render has painted every part it was
+// marked with: the view is painted once for each part (paints_part), so a
+// check after the first would find the parts not yet painted. Its own pane,
+// whose canvas label it lets go.
+static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx)
+{
+    if (!s_damage_due)
+        return;
+    s_damage_due = false;
+    if (g.page.tree == NULL || g.paint_cache == NULL || g.paint_scratch == NULL)
+        return;
+    GlassGroups groups = {.depth = 0};
+    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, w->bounds, &groups, w->bounds};
+    GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false, {0}, 0};
+    yonder_verbs_t v = view_verbs(&pane);
+    os64_gui_rect_t whole = {w->bounds.x - gl.dx, w->bounds.y - gl.dy, w->bounds.w, w->bounds.h};
+    damage_check(&gl, &v, w->bounds, whole);
+    if (pane.canvas_label.run != NULL)
+        os64_text_run_release(pane.canvas_label.run);
+    yonder_scratch_paint_end(g.paint_scratch);
+}
+
 static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
 {
     (void)t;
@@ -19608,12 +19707,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         return;
     }
     GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false, {0}, 0};
-    yonder_verbs_t v = {&pane,        timed_fill,    timed_text,       timed_image,
-                        timed_control, timed_backdrop, timed_group_open, timed_group_close,
-                        timed_mask,   timed_pixels,  timed_stand_in,  pane_keep, timed_through_open,
-                        timed_through_close, timed_clip_open, timed_clip_fill, timed_clip_close, g.page.modern ? timed_canvas : NULL,
-                        timed_layer_open, timed_layer_close, timed_backdrop_filter,
-                        timed_layer_take};
+    yonder_verbs_t v = view_verbs(&pane);
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;
@@ -19641,12 +19735,6 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         yonder_diag_missing_seen(g.page.diag, "css-value", "layer: drawn plain", refused);
     yonder_paint_stage = NULL;
     box_bars(&gl, view);
-    // Before the pane lets its canvas label go: the check paints through
-    // the same pane.
-    if (s_damage_due) {
-        s_damage_due = false;
-        damage_check(&gl, &v, w->bounds, whole);
-    }
     if (pane.canvas_label.run != NULL)
         os64_text_run_release(pane.canvas_label.run);
     yonder_scratch_paint_end(g.paint_scratch);

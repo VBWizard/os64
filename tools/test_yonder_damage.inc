@@ -17,16 +17,18 @@ static const char kDamagePage[] =
     "#posbox{position:relative;height:40px}#abs{position:absolute;left:0;top:0}"
     "#filler{height:900px}#back{position:absolute;left:0;top:0;width:860px;height:420px;z-index:-1}#mover{width:40px;height:16px;background:purple;transform:translateX(200px)}"
     ".hot circle{fill:green}#wrap2{width:50px}#wide2{width:200px;background:green}"
-    "#empty{width:200px;height:18px}.cool stop{stop-color:blue}</style><body id=bd>"
-    "<svg id=gdefs width=4 height=4><defs><linearGradient id=gr><stop offset=0 stop-color=red></stop>"
+    "#empty{width:200px;height:18px}.cool stop{stop-color:blue}.gfill rect{fill:url(#gr)}.warm rect{fill:orange}</style><body id=bd>"
+    "<div id=idswap2 style=height:0></div><svg id=gdefs width=4 height=4><defs><linearGradient id=gr><stop offset=0 stop-color=red></stop>"
     "<stop offset=1 stop-color=red></stop></linearGradient></defs></svg>"
     "<svg width=40 height=10><rect width=40 height=10 fill=url(#gr)></rect></svg>"
+    "<svg class=gfill width=40 height=10><rect width=40 height=10></rect></svg>"
     "<div id=back></div><div id=box>box</div><div id=empty></div><input id=field>"
     "<svg id=defs width=12 height=12><defs><rect id=dr width=6 height=6 fill=red></rect></defs></svg>"
     "<svg width=20 height=20><use href=#dr></use><use href=#hr x=10></use></svg>"
     "<svg width=12 height=12><rect id=plainr width=4 height=4 fill=green></rect></svg>"
+    "<div id=idswap>swap</div>"
     "<div style=height:40px></div><svg width=20 height=20><use href=#plainr></use></svg>"
-    "<svg style=display:none><rect id=hr width=6 height=6 fill=blue></rect></svg>"
+    "<div id=sprite><svg style=display:none><rect id=hr width=6 height=6 fill=blue></rect></svg></div>"
     "<picture id=pic2><source id=src2 srcset=a.png><img id=img2 alt=pic width=20 height=20></picture>"
     "<div id=mover></div>"
     "<div id=sw><svg width=40 height=24><circle cx=12 cy=12 r=10 fill=red></circle></svg>"
@@ -85,22 +87,32 @@ typedef struct {
     uint64_t compared, differed;
     bool whole;
     const char *said;
+    uint32_t rects;
 } DamageSaid;
 
-/* The rebuild after a change, and the paint of what it marked, checked. */
+/* The rebuild after a change, and the paint of what it marked, checked:
+ * the view painted once for each rectangle on libui's list, as a render
+ * paints a paints_part widget, and the check after the last. */
 static DamageSaid damage_step(void)
 {
     uint64_t compared = s_damage_compared, differed = s_damage_differed;
     s_damage_check = 1;
     s_damage_counted = 0;
     s_change_said = "(no rebuild)";
+    g.ui.any_dirty = false;
     script_rebuild();
-    DamageSaid said = {0, 0, false, s_change_said};
+    DamageSaid said = {0, 0, false, s_change_said, g.ui.any_dirty ? g.ui.damage_count : 0};
     os64_gui_rect_t v = g.view.bounds, d = g.ui.dirty;
     said.whole = d.x <= v.x && d.y <= v.y && d.x + d.w >= v.x + v.w && d.y + d.h >= v.y + v.h;
-    view_paint(&g.view, &damage_screen, NULL);
+    for (uint32_t i = 0; i < said.rects; i++) {
+        g.ui.dirty = g.ui.damage[i];
+        view_paint(&g.view, &damage_screen, NULL);
+    }
+    if (said.rects > 0)
+        view_damage_check(&g.view, &damage_screen);
     s_damage_check = 0;
     s_damage_due = false;
+    g.ui.any_dirty = false;
     g.ui.dirty = (os64_gui_rect_t){0, 0, 0, 0};
     said.compared = s_damage_compared - compared;
     said.differed = s_damage_differed - differed;
@@ -282,6 +294,16 @@ static void damage_cases(void)
     (void)damage_step();
     damage_style("box", "color:blue");
     damage_expect("damage: a paint-only style written in place is painted in parts", damage_step(), "in parts");
+    damage_style("box", "color:navy");
+    damage_style("clock", "color:maroon");
+    {
+        DamageSaid two = damage_step();
+        damage_expect("damage: two changes far apart are painted as two parts, checked after both", two,
+                      "in parts");
+        check(two.rects >= 2, "damage: two changes far apart are two rectangles on libui's list");
+        if (two.rects < 2)
+            printf("  rectangles %u\n", (unsigned)two.rects);
+    }
     damage_attr("box", "class", "on");
     damage_expect("damage: a class that changes a background is painted in parts", damage_step(), "in parts");
     {
@@ -294,6 +316,39 @@ static void damage_cases(void)
     damage_expect("damage: a gradient restyled by a class marks the svgs that may draw it", damage_step(), "in parts");
     damage_attr("plainr", "width", "12");
     damage_expect("damage: a shape another svg draws by its id marks the svgs that hold a use", damage_step(),
+                  "in parts");
+    // A div put before the shape takes its id: the first element of an id
+    // is what a reference finds, and the use now draws nothing.
+    damage_attr("idswap", "id", "plainr");
+    damage_expect("damage: an html id that takes a shape's marks the svgs that refer by id", damage_step(),
+                  "in parts");
+    damage_attr("idswap2", "id", "gr");
+    damage_expect("damage: an html id that takes a gradient's marks the svgs that fill by url", damage_step(),
+                  "in parts");
+    {
+        int64_t status = 0;
+        os64_html_document_t *doc = g.page.way.doc;
+        os64_html_node_t *head = (os64_html_node_t *)os64_html_document_element(doc)->first_child;
+        while (head != NULL && (head->kind != OS64_HTML_ELEMENT || !os64_streq(head->name, "head")))
+            head = head->next;
+        os64_html_node_t *base = os64_html_create_element(doc, OS64_HTML_NS_HTML, "base", &status);
+        os64_html_set_attr(doc, base, "href", "http://elsewhere.test/", 22);
+        os64_html_insert(doc, head, base, NULL);
+        damage_expect("damage: a base put in the head is the whole view", damage_step(), "a base changed");
+        os64_html_remove(doc, base);
+        damage_expect("damage: a base taken from the head is the whole view", damage_step(), "a base changed");
+    }
+    // An xml:base anywhere turns svg.c's references by id away, and its
+    // removal lets them back.
+    damage_attr("box", "xml:base", "elsewhere/");
+    damage_expect("damage: an xml:base given marks the svgs that refer by id", damage_step(), "in parts");
+    os64_html_remove_attr(g.page.way.doc, probe_id("box"), "xml:base");
+    damage_expect("damage: an xml:base taken marks the svgs that refer by id", damage_step(), "in parts");
+    // A sprite sheet draws nothing itself, so no svg drawn was restyled:
+    // its shape recoloured by a class on the box it sits in marks every
+    // svg (change_svgs' `all`).
+    damage_attr("sprite", "class", "warm");
+    damage_expect("damage: a class that recolours a sprite sheet's shape marks every svg", damage_step(),
                   "in parts");
     damage_attr("dr", "width", "9");
     damage_expect("damage: a shape another svg may draw by reference is the whole view", damage_step(),

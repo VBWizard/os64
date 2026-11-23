@@ -230,9 +230,15 @@ or differently.
   server, clip, mask, marker or filter, or anything in an svg that draws
   nothing itself (a sprite sheet's). A definition that the change log
   names is NO_BOX in libflow (`drawn_by`): what draws it is not bounded.
+  An svg's reference by id (a `<use>`, a `url(` in an attribute or among
+  an element's winners in the cascade) finds the document's
+  first element of that id, of any kind (svg.c `fragment_target`), so
+  whenever anything in an svg changed, an id or `xml:base` changed, or an
+  element holding an id was added or removed, every svg that refers by id
+  is named too.
 - **A picture's sources** choose what its img draws: a source's attribute,
-  or the picture's children, mark the img; a `base`'s change is the whole
-  view.
+  or the picture's children, mark the img. A `base` changed, added or
+  removed is the whole view (`a base changed`).
 - **What moves the page, refused**: a transform kept in place that moves
   the page's extent, a scroller's range or a scroll (MOVED, restyle.inc);
   a restyle that wrote the tree and then declined; and a view the rebuild
@@ -245,13 +251,14 @@ or differently.
   was older than N3, and N3's parts are what reach it; the random walk
   found it.
 - **Half the view** is yonder's rule (`change_parts`), on the rectangle
-  round every part, because the toolkit repaints one rectangle round
-  everything marked.
+  round every part: the toolkit keeps a few rectangles and makes one round
+  them all past its room, and parts spread that far save little.
 - **The record**: `script changes painted reading N`, a row per verdict
   (`in parts` with the parts and the area in all, `nothing to paint`, or
   the reason for the whole view with the element that refused).
-- **`--damage-check[=N]`** (every rebuild unless N): after the paint of
-  the marked parts, the whole view is painted the ordinary way over the
+- **`--damage-check[=N]`** (every rebuild unless N): once the render has
+  painted every marked part (the view is painted once for each rectangle
+  on the toolkit's list), the whole view is painted the ordinary way over the
   window and the two compared, the videos' boxes and the page's widgets
   (form controls, players: the toolkit paints them over the view) left
   out; a rebuild that marked nothing marks one pixel so that it has a
