@@ -37,6 +37,8 @@ typedef struct {
     struct GraftProbe *graft;
     FReuseMatch *reuse;
     flow_reuse_stats_t *reuse_stats;
+    // Inside a role counter root's block layout (block_at).
+    bool role_timing;
     // The initial containing block's height, the viewport's (CSS 2.1 §
     // 10.1), or -1 with no window height known: what the root's
     // percentage height resolves against.
@@ -5710,7 +5712,28 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
 static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw,
                             Cursor *cur, Replaced rep, int64_t forced_w, int64_t mt, int64_t mb);
 
+static void block_place(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur);
+// A box's block layout. With the layout profiled, the time spent inside
+// the role counter's roots is taken here (flow_reuse_stats_t.role_us),
+// every pass summed. A root its table places (a row, a group) passes no
+// block layout of its own, and takes no time here.
 static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur)
+{
+    const FReusePair *rp = l->reuse && l->reuse->clock && !l->role_timing ? f_reuse_pair(l->reuse, b) : NULL;
+    flow_role_t role;
+    if (!rp || !f_reuse_role_root(l->reuse, rp, &role)) {
+        block_place(l, styles, b, cbx, cbw, cur);
+        return;
+    }
+    l->role_timing = true;
+    int64_t began = l->reuse->clock(l->reuse->clock_ctx);
+    block_place(l, styles, b, cbx, cbw, cur);
+    int64_t ended = l->reuse->clock(l->reuse->clock_ctx);
+    l->role_timing = false;
+    if (began < 0 || ended < began) l->reuse_stats->role_clock_errors++;
+    else l->reuse_stats->role_us[role] += (uint64_t)(ended - began);
+}
+static void block_place(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur)
 {
     if (b->kind == FB_TABLE) {
         table(l, styles, b, cbx, cbw, cur);

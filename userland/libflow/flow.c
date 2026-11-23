@@ -2301,6 +2301,17 @@ flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree)
 {
     return tree ? tree->reuse_stats : (flow_reuse_stats_t){0};
 }
+const char *flow_role_name(flow_role_t role)
+{
+    static const char *const kNames[FLOW_ROLES] = {
+        [FLOW_ROLE_ITEM] = "item", [FLOW_ROLE_FLEX] = "flex", [FLOW_ROLE_GRID] = "grid",
+        [FLOW_ROLE_POSITIONED] = "positioned", [FLOW_ROLE_OUT_OF_FLOW] = "absolute",
+        [FLOW_ROLE_TRANSFORMED] = "transformed", [FLOW_ROLE_FLOAT] = "float", [FLOW_ROLE_ATOMIC] = "atomic",
+        [FLOW_ROLE_CONTAINER] = "containing block", [FLOW_ROLE_INLINE] = "positioned inline",
+        [FLOW_ROLE_ALT_TEXT] = "alt text", [FLOW_ROLE_KIND] = "not a block",
+    };
+    return role < FLOW_ROLES ? kNames[role] : "?";
+}
 flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64_page_t *model,
                                     int32_t width, const flow_env_t *env,
                                     const flow_tree_t *previous, const flow_reuse_inputs_t *inputs,
@@ -2358,7 +2369,9 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
         FReuseMatch *match = NULL;
         if (inputs) {
             tree->reuse = reuse_snapshot_new(tree, width, env, inputs);
-            match = reuse_match_new(tree, previous, env);
+            // The role counter is the profile's: it counts only when a
+            // profiled layout gave a clock.
+            match = reuse_match_new(tree, previous, env, profile ? clock : NULL, clock_ctx);
         }
         tree->layout = f_layout_reusing(tree->boxes, doc, model, env, width, match,
                                          inputs ? &tree->reuse_stats : NULL);

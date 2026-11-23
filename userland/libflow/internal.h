@@ -1182,8 +1182,16 @@ typedef struct {
     const FBox *old;
     size_t parent, subtree_count;
     bool equal, ordinary;
-    flow_reuse_reason_t reason;
+    uint8_t reason;     // flow_reuse_reason_t, a byte so the role counter's fields fit beside it
+    // The role counter's, kept only when the layout is profiled
+    // (FReuseMatch.clock): whether it is equal and refused for a role; its
+    // box's own roles (a bit for each flow_role_t: what keeps the box from
+    // being ordinary, and being an item); and the roles of the boxes under
+    // it that keep them from being ordinary.
+    bool role_refused;
+    uint16_t roles, roles_below;
 } FReusePair;
+_Static_assert(sizeof(FReusePair) == 40, "the role counter's fields fit in the pair's padding");
 typedef struct { const void *from; void *to; } FReusePointer;
 typedef struct {
     FReusePair *pairs;
@@ -1192,8 +1200,16 @@ typedef struct {
     size_t count, capacity, nslots, pointer_slots, bytes, staging_left;
     flow_tree_t *tree;
     const flow_tree_t *previous;
+    // The layout profile's clock, given only when the layout is profiled:
+    // the role counter counts only then, and times its roots with it
+    // (block_at).
+    int64_t (*clock)(void *);
+    void *clock_ctx;
 } FReuseMatch;
 FReusePair *f_reuse_pair(const FReuseMatch *match, const FBox *box);
+// Whether `p` is a root of the role counter's: equal, refused for a role,
+// and its parent not (the outermost such); `*role` its class.
+bool f_reuse_role_root(const FReuseMatch *match, const FReusePair *p, flow_role_t *role);
 void *f_reuse_pointer(const FReuseMatch *match, const void *old);
 
 // ── Pass 3: lines and fragments (layout.c) ──────────────────────────────
