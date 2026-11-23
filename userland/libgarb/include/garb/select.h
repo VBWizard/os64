@@ -195,9 +195,9 @@ bool garb_has_subject_children_may_turn(const garb_anchor_t *anchor, const os64_
 // child combinator stands right of it. The reach is read from every
 // combinator right of the compound, in its own selector and around the
 // :is(), :where() or :not() it is nested in. A compound inside :host() or
-// ::slotted() reaches its element's subtree, shadow tree included, and one
-// holding ::slotted() reaches its slot's, which carries what is assigned to
-// it.
+// ::slotted() reaches with subtrees, shadow trees included, as does every
+// compound of a selector ending in ::slotted(), whose slot's subtree mark
+// carries what is assigned to it.
 //
 // Its FILTERS are an anchor's (§ AN ANCHORED :has()): its own type, id,
 // classes and attributes, and those of the compounds enclosing it through

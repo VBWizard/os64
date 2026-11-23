@@ -1498,6 +1498,34 @@ static void update_readers(void)
     os64_html_remove(r.doc,rd_id(&r,"s"));
     os64_html_remove(r.doc,pq);
     rd_end(&r,"a removed subtree changed after its removal stands for nothing",-1,"d",-1);
+    // An nth B at the bottom of int32 classifies without overflow (the
+    // host driver runs under UBSan).
+    rd_begin(&r,"p:nth-child(n -2147483648){color:red}p:nth-last-child(n -2147483648){opacity:.5}"
+             "p:nth-of-type(-n -2147483648){order:2}",RD_ROW);
+    rd_insert(&r,"p",NULL,"a");
+    rd_end(&r,"an nth B of INT32_MIN classifies without overflow",-1,NULL,-1);
+    // An append moves no front index: the unbounded front walk walks nothing.
+    rd_begin(&r,".k:nth-child(2n){color:red}",RD_ROW4);
+    rd_insert(&r,"p","k",NULL);
+    {
+        bool ok=garb_cascade_update(r.c);
+        garb_reader_work_t w=garb_cascade_reader_work(r.c);
+        update_check(ok && w.walks==0 && w.walked==0,"readers: an append walks nothing for an unbounded front form");
+        update_equal(r.c,r.doc,&r.in);
+        garb_cascade_free(r.c);garb_free(&r.sheet);os64_html_document_free(r.doc);
+    }
+    // What an update keeps on the heap is counted: the batch's arrays.
+    rd_begin(&r,".q ~ p{color:red}",RD_ROW);
+    {
+        size_t before=garb_cascade_parts(r.c).tables;
+        os64_html_remove(r.doc,rd_id(&r,"c"));
+        rd_insert(&r,"p",NULL,"b");
+        os64_html_set_attr(r.doc,rd_id(&r,"a"),"title","t",1);
+        bool ok=garb_cascade_update(r.c);
+        size_t after=garb_cascade_parts(r.c).tables;
+        update_check(ok && after>=before+3*32*sizeof(void *),"readers: the batch's arrays are counted in the cascade's tables");
+        garb_cascade_free(r.c);garb_free(&r.sheet);os64_html_document_free(r.doc);
+    }
     update_check(live==baseline,"readers: the fixtures release what they hold");
 }
 

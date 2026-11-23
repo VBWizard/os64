@@ -4215,7 +4215,7 @@ static bool index_turns(garb_cascade_t *c, const os64_html_change_entry_t *e, bo
 // marked (walks_plan), so the one walk covers them all. Where the element
 // after a change no longer stands (stands), or for a back form there is
 // none, every child is walked.
-enum { WALK_FROM = 1, WALK_TO = 2, WALK_ALL_FRONT = 4, WALK_ALL_BACK = 8 };
+enum { WALK_FROM = 1, WALK_TO = 2, WALK_ALL_FRONT = 4, WALK_ALL_BACK = 8, WALK_SOME_FRONT = 16 };
 static bool walk_flag(garb_cascade_t *c, const os64_html_node_t *x, uint8_t flag)
 {
     Slot *s = x ? slot_for(c, x, false) : NULL;
@@ -4246,6 +4246,8 @@ static void walks_plan(garb_cascade_t *c, const os64_html_change_entry_t *change
         bool lost = !stands(c, n, parent);
         if (front && (lost || (at && !walk_flag(c, at, WALK_FROM))))
             walk_flag(c, parent, WALK_ALL_FRONT);
+        else if (front && at)
+            walk_flag(c, parent, WALK_SOME_FRONT);
         if (back && (!at || !walk_flag(c, at, WALK_TO)))
             walk_flag(c, parent, WALK_ALL_BACK);
     }
@@ -4259,7 +4261,8 @@ static bool position_walks(garb_cascade_t *c, const os64_html_change_entry_t *e)
     if (p && p->unbounded_walked == c->updates + 1) return true;
     if (p) p->unbounded_walked = c->updates + 1;
     c->mark_now = GARB_MARK_POSITION;
-    if (front) {
+    // An append moved no front index: nothing to walk from the front.
+    if (front && (!p || walk_flagged(c, parent, WALK_ALL_FRONT | WALK_SOME_FRONT))) {
         c->reader_work.walks++;
         bool on = !p || walk_flagged(c, parent, WALK_ALL_FRONT);
         for (const os64_html_node_t *x = element_at(parent->first_child); x; x = next_element(x)) {
@@ -5342,15 +5345,18 @@ garb_cascade_parts_t garb_cascade_parts(const garb_cascade_t *c)
     // The rule, entry and keyframe tables and the selector indexes come
     // from the read's arena, the attribute tables and what updates retain
     // from `self`'s (grow, alloc); the slot table, its rows of anchor bits,
-    // the dirty list and the marks on the read's rules are the heap's. A
-    // read shared by two cascades is counted in each.
+    // the dirty list, the batch's arrays (batch_take), the subject
+    // compounds' bits (subjects_live) and the marks on the read's rules are
+    // the heap's. A read shared by two cascades is counted in each.
     parts.state = sizeof(*c) + os64_arena_stats(c->self.arena).reserved_bytes +
                   (c->read != NULL ? os64_arena_stats(c->read->heap.arena).reserved_bytes : 0) +
                   (c->seen != NULL ? (size_t)c->nrules * sizeof(*c->seen) : 0);
     parts.reads = c->read != NULL ? os64_arena_stats(c->read->reads.arena).reserved_bytes : 0;
     for (int32_t i = 0; i < c->nattrs; i++) parts.attributes += os64_arena_stats(c->attrs[i].arena).reserved_bytes;
     parts.tables = (size_t)c->slotcap * (sizeof(*c->slots) + c->has_width * sizeof(*c->has_words)) +
-                   c->dirtycap * sizeof(*c->dirty_nodes);
+                   c->dirtycap * sizeof(*c->dirty_nodes) +
+                   (c->batch_cap[0] + c->batch_cap[1] + c->batch_cap[2]) * sizeof(*c->batch_removed) +
+                   (size_t)c->subject_width * 2 * sizeof(*c->subjects_union);
     return parts;
 }
 

@@ -1466,8 +1466,9 @@ bool garb_selector_names_host(const garb_selectors_t *list, int32_t i)
 // matches. `bounded` and `unbounded` are what a reader reads for each.
 static uint8_t position_reads(int32_t a, int32_t b, uint8_t bounded, uint8_t unbounded, int32_t *need)
 {
-    int32_t n = a > 1 ? GARB_INDEX_MAX + 1 : a == 1 ? b - 1 : b;
-    *need = n > GARB_INDEX_MAX ? 0 : n;
+    // In 64 bits: a B parsed as INT32_MIN has no B - 1 in 32.
+    int64_t n = a > 1 ? GARB_INDEX_MAX + 1 : a == 1 ? (int64_t)b - 1 : b;
+    *need = n > GARB_INDEX_MAX || n < 0 ? 0 : (int32_t)n;
     return n > GARB_INDEX_MAX ? unbounded : n >= 1 ? bounded : 0;
 }
 static void index_need(uint8_t *need, bool *unbounded, int32_t a, int32_t b)
@@ -1794,7 +1795,11 @@ static void readers(const garb_selectors_t *sel, const List *list, Reach around,
             const Compound *c = &x->c[j];
             bool subject = j == x->n - 1;
             bool own = !(negated && subject);
-            Reach reach = foreign ? (Reach){GARB_REACH_SELF, true} : reach_right(x, j, around);
+            Reach reach = reach_right(x, j, around);
+            // What :host() and ::slotted() test is the host or the slotted
+            // element itself: its subtree mark carries the shadow tree or
+            // what is slotted, and a sibling combinator inside reaches it.
+            reach.down |= foreign;
             // A selector ending in ::slotted() styles what is assigned to the
             // slot its subject names: the slot's subtree mark carries those,
             // so whatever reaches the slot reaches its subtree.

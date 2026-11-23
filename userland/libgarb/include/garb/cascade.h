@@ -498,15 +498,17 @@ void garb_cascade_free(garb_cascade_t *c);
 /* What a cascade holds (MEMORY_CENSUS.md § 3), in bytes reserved: its own
  * arena (its rules, entries, keyframes, attribute table and selector
  * indexes), the arena of what it read from the sheets, each `style`
- * attribute's parse, and the slot table (with its rows of anchor bits) and
- * dirty list it keeps on the heap, at their capacity. Scratch a call frees before it returns is not
+ * attribute's parse, and the slot table (with its rows of anchor bits), the
+ * dirty list and an update's arrays and bits it keeps on the heap, at their
+ * capacity. Scratch a call frees before it returns is not
  * held, and not counted. NULL answers 0. Cheap: a pass over the style
  * attributes, no walk of the rules. The sum of garb_cascade_parts. */
 size_t garb_cascade_bytes(const garb_cascade_t *c);
 /* The same, by part: `state` is the cascade's own arena and the record
  * itself, `reads` what it read from the sheets, `attributes` the `style`
- * attributes' parses, `tables` the slot table, its rows of anchor bits and
- * the dirty list on the heap.
+ * attributes' parses, `tables` the slot table, its rows of anchor bits, the
+ * dirty list, and the batch's arrays and the subject :has() bits an update
+ * keeps, on the heap.
  * The first two are held to ceilings of their own and each attribute's
  * parse to another (garb_cascade_limits_t), which is why they are told
  * apart. NULL answers zeros. */
