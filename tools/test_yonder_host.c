@@ -1530,8 +1530,99 @@ static void dark_cases(void)
     free(got);
 }
 
+#include "test_yonder_scale_reference.inc"
+
+static uint32_t scale_random(uint32_t *state)
+{
+    *state = *state * 1664525u + 1013904223u;
+    return *state;
+}
+
+// A source pixel: premultiplied (each colour at most its alpha) or not,
+// with whole transparency and whole cover common enough to be met.
+static uint32_t scale_pixel(uint32_t *state, bool premultiplied)
+{
+    uint32_t roll = scale_random(state) >> 24, a = roll < 32 ? 0 : roll < 96 ? 255 : scale_random(state) >> 24;
+    uint32_t r = scale_random(state) >> 24, g = scale_random(state) >> 24, b = scale_random(state) >> 24;
+    if (premultiplied) {
+        r = r * a / 255;
+        g = g * a / 255;
+        b = b * a / 255;
+    }
+    return a << 24 | r << 16 | g << 8 | b;
+}
+
+// The scaler works each column and row out once (scale.c § THE COLUMNS AND
+// THE ROWS) and must draw what asking at every pixel drew, TO THE BIT: over
+// random sources, boxes, cuts and scales either way, smoothed and not,
+// premultiplied and straight, and tiled with each repeat; and over the
+// sizes that try the arithmetic's edges — one pixel wide or high, a cut of
+// one pixel, a ratio past a hundred, a box at a negative offset, a run of
+// columns past SCALE_COLUMNS.
+static void scale_reference_cases(void)
+{
+    enum { W = 300, H = 120 };
+    static uint32_t got[W * H], want[W * H], src[400 * 400];
+    uint32_t state = 4242;
+    int same = 1, cases = 0;
+    char first[160] = "";
+    for (int n = 0; n < 1600 && same; n++) {
+        bool premultiplied = n % 2 == 0, smooth = n % 4 < 2, tiled = n % 7 == 3;
+        uint32_t sw, sh;
+        int pick = n % 11;
+        if (pick == 0) {            // one pixel wide
+            sw = 1;
+            sh = 1 + scale_random(&state) % 40;
+        } else if (pick == 1) {     // one pixel high
+            sw = 1 + scale_random(&state) % 40;
+            sh = 1;
+        } else if (pick == 2) {     // tiny, so a box is a ratio past a hundred
+            sw = 1 + scale_random(&state) % 3;
+            sh = 1 + scale_random(&state) % 3;
+        } else {
+            sw = 1 + scale_random(&state) % 400;
+            sh = 1 + scale_random(&state) % 400;
+        }
+        for (uint32_t i = 0; i < sw * sh; i++)
+            src[i] = scale_pixel(&state, premultiplied || tiled ? premultiplied : false);
+        os64_gui_rect_t box = {(int32_t)(scale_random(&state) % 200) - 100, (int32_t)(scale_random(&state) % 80) - 40,
+                               1 + (int32_t)(scale_random(&state) % 600), 1 + (int32_t)(scale_random(&state) % 300)};
+        if (n % 13 == 5) {          // shrinking a large source into a small box
+            box.w = 1 + (int32_t)(scale_random(&state) % 20);
+            box.h = 1 + (int32_t)(scale_random(&state) % 20);
+        }
+        os64_gui_rect_t clip = {(int32_t)(scale_random(&state) % W), (int32_t)(scale_random(&state) % H), 0, 0};
+        clip.w = n % 17 == 1 ? 1 : 1 + (int32_t)(scale_random(&state) % (uint32_t)(W - clip.x));
+        clip.h = n % 19 == 2 ? 1 : 1 + (int32_t)(scale_random(&state) % (uint32_t)(H - clip.y));
+        uint32_t back = scale_random(&state) | 0xff000000u;
+        for (int i = 0; i < W * H; i++)
+            got[i] = want[i] = back ^ (uint32_t)i;
+        if (tiled) {
+            os64_gui_rect_t tile = {box.x, box.y, 1 + box.w % 200, 1 + box.h % 100};
+            bool rx = n % 3 != 0, ry = n % 5 != 0;
+            yonder_tile_picture(got, W, clip, box, tile, rx, ry, smooth, src, sw, sh);
+            ref_tile_picture(want, W, clip, box, tile, rx, ry, smooth, src, sw, sh);
+        } else {
+            draw2d_surface_t s = {src, sw, sh, (size_t)sw * 4, (size_t)sw * sh * 4,
+                                  premultiplied ? DRAW2D_ARGB8_PREMULTIPLIED : DRAW2D_ARGB8_STRAIGHT};
+            yonder_draw_surface(got, W, clip, box, smooth, &s);
+            ref_draw_surface(want, W, clip, box, smooth, &s);
+        }
+        cases++;
+        if (memcmp(got, want, sizeof(got)) != 0) {
+            same = 0;
+            snprintf(first, sizeof(first), "case %d: %ux%u into %dx%d at %d,%d, cut %dx%d at %d,%d, %s%s%s", n,
+                     (unsigned)sw, (unsigned)sh, (int)box.w, (int)box.h, (int)box.x, (int)box.y, (int)clip.w,
+                     (int)clip.h, (int)clip.x, (int)clip.y, smooth ? "smoothed" : "nearest",
+                     premultiplied ? ", premultiplied" : "", tiled ? ", tiled" : "");
+        }
+    }
+    expect("scale: the column and row worked once equal every pixel asking, to the bit", same && cases > 0, first);
+}
+
 static void scale_cases(void)
 {
+    scale_reference_cases();
     uint32_t premul[] = {0x80800000, 0, 0xdeadbeef, 0xff00ff00, 0xff0000ff};
     draw2d_surface_t surface = {premul, 2, 2, 12, sizeof(premul), DRAW2D_ARGB8_PREMULTIPLIED};
     uint32_t result[4] = {0xffffffff,0xffffffff,0xffffffff,0xffffffff};
