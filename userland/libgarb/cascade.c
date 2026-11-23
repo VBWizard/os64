@@ -371,6 +371,7 @@ struct garb_cascade {
     uint64_t *has_words, *has_scratch;
     garb_bare_work_t bare_work;
     garb_back_work_t back_work;
+    garb_update_marks_t marks;
     garb_update_refusal_t untrackable, refusal;
     // THE CALLER'S MEASURE (limits.clock; garb_cascade_build_cost,
     // garb_cascade_broad_trigger): the fresh build's parts, and in an
@@ -4194,6 +4195,10 @@ garb_back_work_t garb_cascade_back_work(const garb_cascade_t *c)
 {
     return c ? c->back_work : (garb_back_work_t){0};
 }
+garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c)
+{
+    return c ? c->marks : (garb_update_marks_t){0};
+}
 
 garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c)
 {
@@ -4417,6 +4422,7 @@ static void broad_name(garb_cascade_t *c)
 static bool update(garb_cascade_t *c)
 {
     c->back_work = (garb_back_work_t){0};
+    c->marks = (garb_update_marks_t){0};
     if (c->incomplete) { c->refusal = GARB_UPDATE_INCOMPLETE; return false; }
     if (c->update_failed) { c->refusal = GARB_UPDATE_FAILED_BEFORE; return false; }
     uint64_t version = os64_html_version(c->doc);
@@ -4516,6 +4522,7 @@ static bool update(garb_cascade_t *c)
         }
     }
     c->updating = true;
+    c->marks.marked = c->ndirty;
     // The caller's measure: what restyling marks is inherited.
     if (c->limits.clock) {
         os64_memset(c->mark_by, 0, sizeof(c->mark_by));
@@ -4556,6 +4563,7 @@ static bool update(garb_cascade_t *c)
     }
     os64_free(scratch.items);
     c->updating = false;
+    c->marks.inherited = c->ndirty - c->marks.marked;
     if (failed) {
         if (c->limits.clock && c->refusal == GARB_UPDATE_BROAD) {
             garb_broad_trigger_t *b = &c->broad;

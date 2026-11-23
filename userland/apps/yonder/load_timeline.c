@@ -324,6 +324,15 @@ void yonder_lt_back(yonder_lt_t *t, int64_t at_us, uint64_t walks, uint64_t walk
     t->back_turned += turned;
 }
 
+void yonder_lt_marks(yonder_lt_t *t, int64_t at_us, uint64_t marked, uint64_t inherited)
+{
+    if (!t->on || since(t, at_us) >= LT_END_US)
+        return;
+    t->marks_updates++;
+    t->marks_marked += marked;
+    t->marks_inherited += inherited;
+}
+
 void yonder_lt_broad(yonder_lt_t *t, int64_t at_us, uint32_t marked, const char *by, const char *text)
 {
     if (!t->on || since(t, at_us) >= LT_END_US)
@@ -507,6 +516,15 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap)
         put(&o, " children counted, ");
         put_u(&o, t->back_turned);
         put(&o, " turned");
+    }
+    if (t->marks_updates != 0) {
+        put(&o, "; ");
+        put_u(&o, t->marks_updates);
+        put(&o, " updates restyled ");
+        put_u(&o, t->marks_marked);
+        put(&o, " elements their changes marked and ");
+        put_u(&o, t->marks_inherited);
+        put(&o, " below a changed winner");
     }
     put(&o, "; ");
     put_u(&o, t->nlongs + t->more_longs);

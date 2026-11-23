@@ -1094,8 +1094,38 @@ static void update_back_index(void)
     update_check(live==baseline,"back index: the fixtures release what they hold");
 }
 
+// What an update restyled (garb_cascade_update_marks): the change marks
+// the <b> it added and, alone, the elements its :has() climb visits (the
+// div, body and html); the div's winners change, and restyling marks the
+// two spans below it, which the change did not.
+static void update_marks_counted(void)
+{
+    size_t baseline=live;
+    char html[2048]="<!doctype html><aside>";
+    for(int i=0;i<20;++i)strcat(html,"<i></i>");
+    strcat(html,"</aside><div id=d><span></span><span></span></div>");
+    os64_html_document_t *doc=update_doc(html);
+    const char *css="div:has(> b){color:red}";
+    garb_parsed_t sheet;garb_parse_sheet_text(css,strlen(css),&sheet);
+    garb_sheet_in_t in={.sheet=&sheet};
+    garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    garb_update_marks_t none=garb_cascade_update_marks(c);
+    ue_append(doc,(void *)by_id(doc->document,"d"),"b");
+    bool ok=garb_cascade_update(c);
+    garb_update_marks_t m=garb_cascade_update_marks(c);
+    update_check(none.marked==0 && none.inherited==0,"marks: zeros before any update");
+    update_check(ok && m.marked==4 && m.inherited==2,"marks: the change's four and the two below a changed winner");
+    update_equal(c,doc,&in);
+    ok=garb_cascade_update(c);
+    m=garb_cascade_update_marks(c);
+    update_check(ok && m.marked==0 && m.inherited==0,"marks: an update that read no changes says zeros");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    update_check(live==baseline,"marks: the fixture releases what it holds");
+}
+
 static int cascade_updates(void)
 {
+    update_marks_counted();
     update_back_index();
     update_empty_turns();
     update_kept_read();

@@ -187,6 +187,11 @@ static void test_builds_and_broad(void)
     yonder_lt_back(&t, BASE + S, 0, 0, 0);
     yonder_lt_summary(&t, line, sizeof(line));
     CHECK(strstr(line, "; back indexes counted again in 2 updates: 3 walks, 35 children counted, 3 turned; ") != NULL);
+    // What the updates restyled.
+    yonder_lt_marks(&t, BASE, 4, 10);
+    yonder_lt_marks(&t, BASE + S, 2, 0);
+    yonder_lt_summary(&t, line, sizeof(line));
+    CHECK(strstr(line, "; 2 updates restyled 6 elements their changes marked and 10 below a changed winner; ") != NULL);
     // Fewer marked than every one kept: counted, not kept.
     yonder_lt_broad(&t, BASE, 1, kSubtree, "small");
     CHECK(t.nbroad == YONDER_LT_BROAD_MAX + 4 && strcmp(t.broad[YONDER_LT_BROAD_MAX - 1].text, "small") != 0);
@@ -271,8 +276,9 @@ static void test_the_end(void)
     yonder_lt_parse(&t, end + 5 * S, 1000, "late feed");
     yonder_lt_broad(&t, end + 5 * S, 99, kSubtree, "late broad");
     yonder_lt_back(&t, end + 5 * S, 1, 1, 1);
+    yonder_lt_marks(&t, end + 5 * S, 1, 1);
     CHECK(t.nparse == 0 && t.parse_us == 0 && t.nbroad == 0 && t.broad_kept == 0 && t.nbroad_by == 0 &&
-          t.back_updates == 0);
+          t.back_updates == 0 && t.marks_updates == 0);
     yonder_lt_bytes(&t, end + 5 * S, 4096);
     CHECK(t.nlongs == 1);
     uint32_t layouts = 0, tasks = 0, grid = 0;

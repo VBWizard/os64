@@ -2267,6 +2267,9 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     if (s_lt.on && matches) {
         garb_back_work_t back = garb_cascade_back_work(cascade);
         yonder_lt_back(&s_lt, os64_micros(), back.walks, back.walked, back.turned);
+        garb_update_marks_t marks = garb_cascade_update_marks(cascade);
+        if (updated && (marks.marked != 0 || marks.inherited != 0))
+            yonder_lt_marks(&s_lt, os64_micros(), marks.marked, marks.inherited);
     }
     // Why it is built fresh, for the layout profile: yonder's own reasons
     // (cascade_reason_names), then libgarb's.

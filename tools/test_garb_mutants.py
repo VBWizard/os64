@@ -142,6 +142,8 @@ mutants = [
     ('back-the-stamp-skips-the-first-walk', CASCADE,
      '    if (!p || p->back_walked != c->updates + 1) {', '    if (!p || p->back_walked == c->updates + 1) {',
      UPDATES),
+    ('marks-inherited-counts-the-changes-too', CASCADE,
+     '    c->marks.inherited = c->ndirty - c->marks.marked;', '    c->marks.inherited = c->ndirty;', UPDATES),
     ('back-of-type-not-counted', CASCADE,
      '            if (types[i].n < kt) types[i].n++;', '            (void)kt;', UPDATES),
     # The kept scratch.

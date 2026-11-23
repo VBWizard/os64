@@ -257,6 +257,15 @@ typedef struct {
     uint64_t walks, walked, turned;
 } garb_back_work_t;
 garb_back_work_t garb_cascade_back_work(const garb_cascade_t *c);
+// What the latest garb_cascade_update restyled: the elements its changes
+// marked, and those restyling marked below an element whose winners came
+// out changed (mark_below, every one matched again). Zeros before any
+// update, after one that read no changes, and for one refused before it
+// restyled; one refused while restyling says what it had marked by then.
+typedef struct {
+    uint64_t marked, inherited;
+} garb_update_marks_t;
+garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c);
 
 // THE CALLER'S MEASURE, kept only when the cascade was made with a clock
 // (garb_cascade_limits_t.clock): a diagnostic, and with no clock nothing is

@@ -30,7 +30,9 @@
 //   - the updates libgarb refused as broad, by the caller's name for what
 //     crossed the half in each, and what triggered those whose trigger
 //     marked the most;
-//   - what the back indexes (libgarb's back_walk) cost the updates;
+//   - what the back indexes (libgarb's back_walk) cost the updates, and
+//     what the updates that succeeded restyled: marked by their changes,
+//     and marked below a changed winner;
 //   - the arriving page's parser calls, and the slowest of them;
 //   - the milestones, each the first time it was told.
 // Past the last slice nothing begun after it is taken by what has a time
@@ -185,6 +187,10 @@ typedef struct {
     // The back indexes counted again (yonder_lt_back): the updates that
     // counted any, and the walks, children and turns they counted.
     uint64_t back_updates, back_walks, back_walked, back_turned;
+    // What the updates that succeeded restyled (yonder_lt_marks): how many
+    // updates, the elements their changes marked, and those marked below an
+    // element whose winners came out changed.
+    uint64_t marks_updates, marks_marked, marks_inherited;
     // The arriving page's parser calls (yonder_lt_parse): how many and how
     // long in all, and the YONDER_LT_PARSE_MAX slowest, slowest first.
     uint32_t nparse, parse_kept;
@@ -269,6 +275,9 @@ void yonder_lt_broad(yonder_lt_t *t, int64_t at_us, uint32_t marked, const char 
 // An update at `at_us` that counted back indexes again: `walks` walks,
 // `walked` children, `turned` of them marked. Nothing for walks 0.
 void yonder_lt_back(yonder_lt_t *t, int64_t at_us, uint64_t walks, uint64_t walked, uint64_t turned);
+// An update at `at_us` that succeeded, its changes marking `marked`
+// elements and restyling `inherited` more below changed winners.
+void yonder_lt_marks(yonder_lt_t *t, int64_t at_us, uint64_t marked, uint64_t inherited);
 
 // The lines, each written into `out` (cut to `cap`, always terminated).
 // The summary: the slices' size, the milestones, the long steps' count.
