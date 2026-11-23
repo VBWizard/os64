@@ -422,7 +422,11 @@ was shown, or since its record was last written on asking:
   counts without the times.
   An interval whose counter stepped back (the thread moved to a core whose
   counter is behind) counts as nothing, and the line says how many.
-- **`d` in the page writes the record now** (`written: when asked`),
+- **`d` in the page writes the record now** (`written: when asked`), and
+  so does Ctrl+Alt+D wherever the keys are: a page's scripts or a focused
+  field can keep a plain `d` for themselves, never the chord. The record's
+  `reading key` line says how often a reading key was pressed against the
+  readings kept,
   keeping the counts since the last `d` as a numbered reading with where
   the page was scrolled — `paint reading 2: at y 2140: 96 paints in 10.1 s
   ... | ms a paint (most): render ...` — and starts them again. So each

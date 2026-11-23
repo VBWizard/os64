@@ -161,22 +161,34 @@ typedef struct {
     // The tree it is in, as the cascade sees it (tree_place): the scope
     // whose sheets apply there, -1 for none. `placed` once it is set.
     int32_t scope;
-    bool placed, needs_substitution, dirty, dirty_suffix;
+    // `dirty_suffix`: marked by a walk of siblings that marks each with
+    // its subtree (mark_siblings), where every later walk of siblings stops,
+    // the rest being marked as far; `alone_suffix`: marked by one that marks
+    // each alone (mark_run), where a later walk that marks alone stops.
+    bool placed, needs_substitution, dirty, dirty_suffix, alone_suffix;
     // What :empty answered at it when the cascade last styled it or asked at
     // a change, kept while the rules hold :empty (empty_turned).
     bool empty;
-    // Its back indexes as the cascade last counted them, saturated at the
-    // bounds the rules need (back_walk): among its element siblings, and
-    // among those of its type; 0 for never counted.
-    uint8_t back, back_type;
-    // The update that last counted its children again (back_turns).
-    uint64_t back_walked;
+    // Its back and front indexes as the cascade last counted them,
+    // saturated at the bounds the rules need (index_walk): among
+    // its element siblings, and among those of its type; 0 for never
+    // counted.
+    uint8_t back, back_type, front, front_type;
+    // The update that last counted its children again from the end and
+    // from the start (index_turns), and walked them for an unbounded
+    // position form (position_walks).
+    uint64_t back_walked, front_walked, unbounded_walked;
+    // Where the batch moved its parent's children's indexes, for the
+    // unbounded walks: valid in update `walk_update` (WALK_*).
+    uint64_t walk_update;
+    uint8_t walk_flags;
     // Dirty for its own winners alone (mark_element): whether its
     // descendants are owed a recompute too is known once it has had one
     // (restyle).
     bool element_only;
-    uint64_t changed, removed_children;
-    // The update that last visited it for its :has() answers (has_visit).
+    uint64_t changed;
+    // The visit epoch that last visited it for its :has() answers
+    // (has_visit, visit_epoch).
     uint64_t visited;
     // A digest of the rules that matched the element itself (match_digest).
     uint64_t matched;
@@ -253,6 +265,10 @@ typedef struct garb_read {
     garb_style_reader_t *style_readers;
     int32_t nstyle_readers;
     bool style_bare;
+    garb_reader_t *readers;
+    int32_t nreaders, nbare_readers;
+    uint8_t reads_any;
+    bool readers_short;
     garb_selector_dependencies_t dependencies;
     garb_update_refusal_t untrackable;
     bool incomplete;
@@ -376,6 +392,31 @@ struct garb_cascade {
     garb_style_reader_t *style_readers;
     int32_t nstyle_readers;
     bool style_bare;
+    // The readers of every rule (select.h § A READER; asked by readers_at),
+    // `nbare_readers` of them bare, and what any of them reads;
+    // `readers_short`: there was no memory to keep them, so every ask
+    // passes every reader with the widest reach.
+    garb_reader_t *readers;
+    int32_t nreaders, nbare_readers;
+    uint8_t reads_any;
+    bool readers_short;
+    // THE BATCH, as an update reads it before it marks (batch_take): the
+    // nodes its changes of children took out and put in, and the elements
+    // whose attributes it changed, each sorted by address; and whether a
+    // change of children happened under something the batch took out, or
+    // outside the document, so a removed subtree may no longer show what it
+    // held.
+    const os64_html_node_t **batch_removed, **batch_added, **batch_attrs;
+    size_t nbatch_removed, nbatch_added, nbatch_attrs, batch_cap[3];
+    bool batch_detached;
+    // The subject :has() compounds the batch's changes so far may turn
+    // (subjects_live), a bit each, and those the change being marked may;
+    // `visit_epoch` moves on at each update and whenever the first set
+    // grows, so the climbs that follow visit again what they pass.
+    uint64_t *subjects_union, *subjects_now;
+    uint32_t subject_width;
+    uint64_t visit_epoch;
+    garb_reader_work_t reader_work;
     uint32_t has_width;
     uint64_t *has_words, *has_scratch;
     garb_bare_work_t bare_work;
@@ -3188,6 +3229,8 @@ static void read_install(garb_cascade_t *c, const Read *r)
     c->anchors = r->anchors; c->nanchors = r->nanchors; c->nbare = r->nbare;
     c->subjects = r->subjects; c->nsubjects = r->nsubjects; c->nbare_subjects = r->nbare_subjects;
     c->style_readers = r->style_readers; c->nstyle_readers = r->nstyle_readers; c->style_bare = r->style_bare;
+    c->readers = r->readers; c->nreaders = r->nreaders; c->nbare_readers = r->nbare_readers;
+    c->reads_any = r->reads_any; c->readers_short = r->readers_short;
     c->dependencies = r->dependencies;
     c->untrackable = r->untrackable;
     c->incomplete = r->incomplete;
@@ -3209,6 +3252,8 @@ static void read_save(Read *r, const garb_cascade_t *c)
     r->anchors = c->anchors; r->nanchors = c->nanchors; r->nbare = c->nbare;
     r->subjects = c->subjects; r->nsubjects = c->nsubjects; r->nbare_subjects = c->nbare_subjects;
     r->style_readers = c->style_readers; r->nstyle_readers = c->nstyle_readers; r->style_bare = c->style_bare;
+    r->readers = c->readers; r->nreaders = c->nreaders; r->nbare_readers = c->nbare_readers;
+    r->reads_any = c->reads_any; r->readers_short = c->readers_short;
     r->dependencies = c->dependencies;
     r->untrackable = c->untrackable;
 }
@@ -3273,6 +3318,9 @@ static uint64_t read_digest(const Read *r)
     h = fnv(h, r->anchors, (size_t)r->nanchors * sizeof(*r->anchors));
     h = fnv(h, r->subjects, (size_t)r->nsubjects * sizeof(*r->subjects));
     h = fnv(h, r->style_readers, (size_t)r->nstyle_readers * sizeof(*r->style_readers));
+    h = fnv(h, r->readers, (size_t)r->nreaders * sizeof(*r->readers));
+    h = fnv(h, &r->reads_any, sizeof(r->reads_any));
+    h = fnv(h, &r->readers_short, sizeof(r->readers_short));
     h = fnv(h, r->inputs, (size_t)r->ninputs * sizeof(*r->inputs));
     for (int32_t i = 0; i < r->ninputs; i++)
         if (r->inputs[i].media != NULL)
@@ -3346,6 +3394,9 @@ static uint64_t read_content(const Read *r)
     h = fnv(h, &r->nbare_subjects, sizeof(r->nbare_subjects));
     h = fnv(h, &r->nbare, sizeof(r->nbare));
     h = fnv(h, &r->nstyle_readers, sizeof(r->nstyle_readers));
+    h = fnv(h, &r->nreaders, sizeof(r->nreaders));
+    h = fnv(h, &r->nbare_readers, sizeof(r->nbare_readers));
+    h = fnv(h, &r->reads_any, sizeof(r->reads_any));
     h = fnv(h, &r->dependencies, sizeof(r->dependencies));
     h = fnv(h, &r->untrackable, sizeof(r->untrackable));
     h = fnv(h, &r->style_bare, sizeof(r->style_bare));
@@ -3439,11 +3490,23 @@ static bool read_sheets(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_
         for (int32_t a = 0; a < held; a++) c->nbare_subjects += c->subjects[c->nsubjects + a].bare;
         c->nsubjects += held;
     }
+    int32_t readers_held = 0;
+    for (int32_t i = 0; i < c->nrules; ++i) readers_held += garb_selectors_readers(c->rules[i].sel, NULL, 0);
+    c->readers = readers_held ? alloc(c, (size_t)readers_held * sizeof(*c->readers)) : NULL;
+    c->readers_short = readers_held > 0 && c->readers == NULL;
+    for (int32_t i = 0; i < c->nrules && c->readers != NULL; ++i)
+        c->nreaders += garb_selectors_readers(c->rules[i].sel, c->readers + c->nreaders, readers_held - c->nreaders);
+    for (int32_t r = 0; r < c->nreaders; r++) {
+        c->nbare_readers += c->readers[r].bare;
+        c->reads_any |= c->readers[r].reads;
+    }
     for (int32_t i = 0; i < c->nrules; ++i) {
         garb_selector_dependencies_t d = garb_selectors_dependencies(c->rules[i].sel);
         c->dependencies.following |= d.following;
-        c->dependencies.position_front |= d.position_front;
+        c->dependencies.front_unbounded |= d.front_unbounded;
         c->dependencies.back_unbounded |= d.back_unbounded;
+        if (d.front_child > c->dependencies.front_child) c->dependencies.front_child = d.front_child;
+        if (d.front_type > c->dependencies.front_type) c->dependencies.front_type = d.front_type;
         if (d.back_child > c->dependencies.back_child) c->dependencies.back_child = d.back_child;
         if (d.back_type > c->dependencies.back_type) c->dependencies.back_type = d.back_type;
         c->dependencies.parent_state |= d.parent_state;
@@ -3458,6 +3521,13 @@ static bool read_sheets(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_
             c->nbare += c->anchors[c->nanchors + a].bare;
         c->nanchors += held;
     }
+    // Without the readers kept, what they read is what the rules hold.
+    if (c->readers_short)
+        c->reads_any = (uint8_t)((c->dependencies.front_unbounded ? GARB_READS_FRONT_ANY : 0) |
+                                 (c->dependencies.back_unbounded ? GARB_READS_BACK_ANY : 0) |
+                                 (c->dependencies.parent_state ? GARB_READS_EMPTY : 0) |
+                                 (c->dependencies.following ? GARB_READS_NEIGHBOURS : 0) |
+                                 GARB_READS_FRONT | GARB_READS_FRONT_TYPE | GARB_READS_BACK | GARB_READS_BACK_TYPE);
     keyframes_settle(c);
     // Each @keyframes read for no element: what an element shares.
     for (int32_t k = 0; k < c->nkeyframes; k++)
@@ -3480,9 +3550,16 @@ static bool read_sheets(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_
     return true;
 }
 
-typedef enum { BACK_DONE, BACK_STOPPED, BACK_FAILED } BackWalk;
+typedef enum { INDEX_DONE, INDEX_STOPPED, INDEX_FAILED } IndexWalk;
+static const os64_html_node_t *prev_element(const os64_html_node_t *x);
 static const os64_html_node_t *next_element(const os64_html_node_t *x);
-static BackWalk back_walk(garb_cascade_t *c, const os64_html_node_t *last, bool compare);
+static IndexWalk index_walk(garb_cascade_t *c, const os64_html_node_t *from, bool compare, bool front);
+// The first element sibling of element `x`.
+static const os64_html_node_t *first_element(const os64_html_node_t *x)
+{
+    for (const os64_html_node_t *p = prev_element(x); p; p = prev_element(p)) x = p;
+    return x;
+}
 
 static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
                              const garb_scope_in_t *scopes, int32_t nscopes,
@@ -3577,10 +3654,13 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
             cascade_whole(c, x, &m, &mcap, &scratch);
             Slot *s = slot_for(c, x, false);
             if (s != NULL) anchor_bits(c, x, has_row(c, s));
-            // The back indexes, one backward pass for each parent from its
-            // last element child, whose siblings are styled by then.
-            if ((c->dependencies.back_child || c->dependencies.back_type) && next_element(x) == NULL)
-                back_walk(c, x, false);
+            // The position indexes, one pass each way for each parent once
+            // its last element child is styled, and its siblings with it.
+            if (next_element(x) == NULL) {
+                if (c->dependencies.back_child || c->dependencies.back_type) index_walk(c, x, false, false);
+                if (c->dependencies.front_child || c->dependencies.front_type)
+                    index_walk(c, first_element(x), false, true);
+            }
         }
     os64_free(scratch.items);
     if (clock) {
@@ -3753,9 +3833,10 @@ static bool mark_changed(garb_cascade_t *c, const os64_html_node_t *node, garb_m
 // taken: it is read from the document as the batch left it. An element the
 // batch added keeps no answer until it is styled (cascade_element), so a
 // change under it may find a turn that is none. What that marks the change
-// that added it has marked already: the element as added, and the siblings
-// a `+`/`~` or an `of S` reads, by the sibling walk the same dependencies
-// make for an addition (mark_children), or as added beside it.
+// that added it has marked already: the element as added; the siblings an
+// :empty reader with a `+`/`~` reach passing at it reaches, which the same
+// reader reaches from the element brought (mark_neighbours), or as added
+// beside it; every child, for an `of S`.
 static bool empty_turned(garb_cascade_t *c, const os64_html_node_t *x)
 {
     Slot *s = slot_for(c, x, false);
@@ -3765,10 +3846,213 @@ static bool empty_turned(garb_cascade_t *c, const os64_html_node_t *x)
     s->empty = now;
     return turned;
 }
+// ── THE READERS, ASKED (select.h § A READER; RELAYOUT.md § Restyle) ─────
+//
+// A change of a parent's children moves where its children stand without
+// touching them: their indexes from the start and from the end, which
+// element is beside which. What can turn is the match of a reader at a
+// child, and what that turns is the reader's reach from the child. So each
+// such fact the change moved is asked of the readers that read it, at the
+// element it moved at, and only the reach of those whose filters pass there
+// is marked.
+
+static const os64_html_node_t *prev_element(const os64_html_node_t *x)
+{
+    for (x = x->prev; x && !is_el(x); x = x->prev) {}
+    return x;
+}
+static const os64_html_node_t *next_element(const os64_html_node_t *x)
+{
+    for (x = x->next; x && !is_el(x); x = x->next) {}
+    return x;
+}
+// The first element at or after `x`.
+static const os64_html_node_t *element_at(const os64_html_node_t *x)
+{
+    return x == NULL || is_el(x) ? x : next_element(x);
+}
+
+// THE BATCH, read whole before any change of it is marked (batch_take): the
+// nodes its changes of children took out and put in, and the elements whose
+// attributes it changed, each sorted by address, so a question about the
+// batch is a search however long it is, and a change later in the batch
+// answers as well as one before.
+static int node_order(const void *a, const void *b)
+{
+    uintptr_t x = (uintptr_t)*(const os64_html_node_t *const *)a, y = (uintptr_t)*(const os64_html_node_t *const *)b;
+    return x < y ? -1 : x > y;
+}
+static bool batch_holds(const os64_html_node_t *const *v, size_t n, const os64_html_node_t *x)
+{
+    size_t lo = 0, hi = n;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (v[mid] == x) return true;
+        if ((uintptr_t)v[mid] < (uintptr_t)x) lo = mid + 1;
+        else hi = mid;
+    }
+    return false;
+}
+static bool batch_push(garb_cascade_t *c, int which, const os64_html_node_t *x)
+{
+    const os64_html_node_t ***v = which == 0 ? &c->batch_removed : which == 1 ? &c->batch_added : &c->batch_attrs;
+    size_t *n = which == 0 ? &c->nbatch_removed : which == 1 ? &c->nbatch_added : &c->nbatch_attrs;
+    if (*n == c->batch_cap[which]) {
+        size_t cap = c->batch_cap[which] ? c->batch_cap[which] * 2 : 32;
+        void *more = cap <= INT32_MAX ? os64_realloc((void *)*v, cap * sizeof(**v)) : NULL;
+        if (!more) return false;
+        *v = more;
+        c->batch_cap[which] = cap;
+    }
+    (*v)[(*n)++] = x;
+    return true;
+}
+static bool batch_take(garb_cascade_t *c, const os64_html_change_entry_t *changes)
+{
+    c->nbatch_removed = c->nbatch_added = c->nbatch_attrs = 0;
+    for (const os64_html_change_entry_t *e = changes; e; e = e->next) {
+        if (e->kind == OS64_HTML_CHANGE_CHILDREN) {
+            for (size_t i = 0; i < e->nremoved; ++i)
+                if (!batch_push(c, 0, e->removed[i])) return false;
+            for (size_t i = 0; i < e->nadded; ++i)
+                if (!batch_push(c, 1, e->added[i])) return false;
+        } else if (e->kind == OS64_HTML_CHANGE_ATTR && e->target && !batch_push(c, 2, e->target)) {
+            return false;
+        }
+    }
+    size_t most = c->nbatch_removed > c->nbatch_added ? c->nbatch_removed : c->nbatch_added;
+    if (c->nbatch_attrs > most) most = c->nbatch_attrs;
+    if (most >= 2) {
+        void *tmp = os64_malloc(most * sizeof(*c->batch_removed));
+        if (!tmp) return false;
+        merge_sort((void *)c->batch_removed, tmp, (int32_t)c->nbatch_removed, sizeof(*c->batch_removed), node_order);
+        merge_sort((void *)c->batch_added, tmp, (int32_t)c->nbatch_added, sizeof(*c->batch_added), node_order);
+        merge_sort((void *)c->batch_attrs, tmp, (int32_t)c->nbatch_attrs, sizeof(*c->batch_attrs), node_order);
+        os64_free(tmp);
+    }
+    // Whether a change of children happened where the batch may have had it
+    // out of the document: under something it took out (wherever that
+    // stands now, put back or not), or out of the document still.
+    c->batch_detached = false;
+    for (const os64_html_change_entry_t *e = changes; e && !c->batch_detached; e = e->next) {
+        if (e->kind != OS64_HTML_CHANGE_CHILDREN) continue;
+        c->batch_detached = !connected(c, e->target);
+        for (const os64_html_node_t *x = e->target; x && !c->batch_detached; x = x->parent)
+            c->batch_detached = batch_holds(c->batch_removed, c->nbatch_removed, x);
+    }
+    return true;
+}
+
+// AN ELEMENT STANDING IN FOR WHAT IT WAS. A reader is asked whether a
+// change turned its match at an element the change did not bring: the
+// element before a change of children, one the batch took out, one whose
+// index turned. It can only be asked of the element as the batch left it,
+// which stands for what it was before the batch only where the batch
+// changed none of its attributes; one whose attributes it changed, earlier
+// in the batch or later, passes every reader (`stale`). A taken-out subtree
+// stands for what it held only where no change of children happened under
+// anything the batch took out, or outside the document (`stale_removed`).
+static bool stale(void *ctx, const os64_html_node_t *x)
+{
+    const garb_cascade_t *c = ctx;
+    return batch_holds(c->batch_attrs, c->nbatch_attrs, x);
+}
+static bool stale_removed(void *ctx, const os64_html_node_t *x)
+{
+    const garb_cascade_t *c = ctx;
+    return c->batch_detached || stale(ctx, x);
+}
+// Whether `x`, a sibling a change of `parent`'s children happened beside,
+// still stands where it stood then, as the batch left the document: under
+// `parent`, and neither taken out nor moved by the batch (a move takes a
+// node out and puts it in again). NULL, an end, always stands.
+static bool stands(const garb_cascade_t *c, const os64_html_node_t *x, const os64_html_node_t *parent)
+{
+    return x == NULL || (x->parent == parent && !batch_holds(c->batch_removed, c->nbatch_removed, x));
+}
+// Whether a change of children brought or took an element: one that moved
+// only text moved no element's place.
+static bool moves_elements(const os64_html_change_entry_t *e)
+{
+    for (size_t i = 0; i < e->nadded; ++i)
+        if (is_el(e->added[i])) return true;
+    for (size_t i = 0; i < e->nremoved; ++i)
+        if (is_el(e->removed[i])) return true;
+    return false;
+}
+
+// What readers reach, gathered: the element itself, its next element
+// sibling, its following ones; `down`, each with its subtree.
+typedef struct {
+    bool self, next, on, down;
+} Reached;
+#define REACH_ANY 0xFu
+#define REACH_SIBLINGS ((1u << GARB_REACH_NEXT) | (1u << GARB_REACH_FOLLOWING) | (1u << GARB_REACH_CHAIN))
+// The reach of every reader that reads any of `key`, with a reach in
+// `kinds` (a bit for each garb_reach_t), whose filters pass at `x`; a
+// reader passes every element for a key it reads `untested`, and every
+// reader passes where `x` is NULL (the element is past finding) or is
+// `stand_in` and stale. Counted under `asker`. Without the readers kept,
+// everything is reached.
+static Reached readers_at(garb_cascade_t *c, uint8_t key, unsigned kinds, const os64_html_node_t *x,
+                          bool stand_in, garb_asker_t asker)
+{
+    garb_reader_work_t *w = &c->reader_work;
+    if (c->readers_short) {
+        w->asked[asker]++, w->passed[asker]++, w->reached[asker]++;
+        return (Reached){true, true, true, true};
+    }
+    Reached got = {0};
+    bool all = x == NULL || (stand_in && stale(c, x)), any = false;
+    for (int32_t i = 0; i < c->nreaders; i++) {
+        const garb_reader_t *r = &c->readers[i];
+        if (!(r->reads & key) || !(kinds >> r->reach & 1)) continue;
+        w->asked[asker]++;
+        if (!all && !(r->untested & r->reads & key) && !garb_reader_filters_pass(r, x)) continue;
+        w->passed[asker]++;
+        any = true;
+        got.self |= r->reach == GARB_REACH_SELF;
+        got.next |= r->reach == GARB_REACH_NEXT;
+        got.on |= r->reach == GARB_REACH_FOLLOWING || r->reach == GARB_REACH_CHAIN;
+        got.down |= r->down;
+    }
+    if (any) w->reached[asker]++;
+    return got;
+}
+static void reached_add(Reached *into, Reached got)
+{
+    into->self |= got.self, into->next |= got.next, into->on |= got.on, into->down |= got.down;
+}
+// Marks `first`, alone or with its subtree, and with `on` each element
+// sibling after it too. A walk of following siblings that comes to an
+// element an earlier walk marked as far (dirty_suffix, alone_suffix) stops
+// there: that walk marked the rest.
+static bool mark_run(garb_cascade_t *c, const os64_html_node_t *first, bool on, bool down)
+{
+    if (first == NULL) return true;
+    if (on && down) return mark_siblings(c, first);
+    if (!on) return down ? mark_subtree(c, first) : mark_element(c, first);
+    for (const os64_html_node_t *x = first; x; x = x->next) {
+        if (!is_el(x)) continue;
+        Slot *s = slot_for(c, x, false);
+        if (s && (s->alone_suffix || s->dirty_suffix)) break;
+        if (!mark_element(c, x)) return false;
+        s = slot_for(c, x, false);
+        if (s) s->alone_suffix = true;
+    }
+    return true;
+}
+// Marks what `got` reaches from `x`.
+static bool mark_reached(garb_cascade_t *c, const os64_html_node_t *x, Reached got)
+{
+    if (got.self && !(got.down ? mark_subtree(c, x) : mark_element(c, x))) return false;
+    return !(got.on || got.next) || mark_run(c, next_element(x), got.on, got.down);
+}
+
 // What a turned :empty at `x` can move: its own match, marked alone (its
 // changed winners reach what is under it through restyle's mark_below, as
-// any element's do), and a sibling's that a `+`/`~` or an `of S` reads,
-// as mark_changed marks them.
+// any element's do); every child of its parent for an `of S`; and the
+// siblings the readers of :empty that pass at `x` reach (`p:empty + q`).
 //
 // WHY NOTHING UNDER IT IS MARKED FOR MATCHING (`p:not(:empty) > x`, `:empty
 // x`): an element that turned from empty has under it only what the batch
@@ -3786,71 +4070,75 @@ static bool mark_turned(garb_cascade_t *c, const os64_html_node_t *x)
     c->mark_now = GARB_MARK_SIBLINGS;
     if (c->dependencies.filtered && x->parent)
         return mark_siblings(c, x->parent->first_child);
-    return !c->dependencies.following || mark_siblings(c, x->next);
+    if (!(c->reads_any & GARB_READS_EMPTY)) return true;
+    Reached got = readers_at(c, GARB_READS_EMPTY, REACH_SIBLINGS, x, true, GARB_ASKED_EMPTY);
+    got.self = false;
+    return mark_reached(c, x, got);
 }
-// THE BACK INDEXES, COUNTED AGAIN (select.h § THE BACK FORMS): each styled
-// element's slot keeps its count from the end among its element siblings,
-// and among those of its type, each saturated at one past the largest
-// index a bounded back form in the rules can match (back_bound). Every such
-// form's answer is a function of the saturated number, so where it did not
-// change no back form's answer did. A change of a parent's children counts
-// them again from the last, compares, and marks each child whose number
-// turned as mark_changed marks a changed node: with its subtree
-// (`li:last-child span` moves a descendant whose li's winners stay the
-// same), a host's tree and a slot's assigned nodes among it, and the
-// siblings after it that a `+`/`~` reads (`p:last-of-type ~ span` moves
-// the spans between the p that turned and a p appended after them, whose
-// own counts stay). A child never counted (added in the batch, or past the
-// type table at a build) counts as turned. The walk reads the document as
-// the batch left it, so removals and moves need no rule of their own.
+
+// THE POSITION INDEXES, COUNTED AGAIN (select.h § THE POSITION FORMS): each
+// styled element's slot keeps its count from the end among its element
+// siblings and among those of its type, and the same from the start, each
+// saturated at one past the number the rules' bounded forms need on that
+// side (index_bound). Every such form's answer is a function of the
+// saturated number, so where it did not change no bounded form's answer
+// did. A change of a parent's children counts them again, from the last for
+// the back and from the first for the front, compares, and marks each child
+// whose number turned through the readers of what turned (readers_at): the
+// child alone for a subject (`li:last-child`), with its subtree where a
+// descendant or child combinator stands right of the form (`li:last-child
+// span`), and the siblings after it that a `+`/`~` reads (`p:last-of-type ~
+// span` moves the spans between the p that turned and a p appended after
+// them, whose own counts stay). A child whose attributes the batch changed
+// passes every reader (stale). A child never counted (added in the batch,
+// or past the type table at a build) counts as turned. The walk reads the
+// document as the batch left it, so removals and moves need no rule of
+// their own.
 //
-// WHERE IT STOPS EARLY, with no -of-type form: at the first child whose
-// kept number and new number are both the bound. A child the batch added
-// keeps 0, or a number an earlier walk of this batch counted from the
-// document as the batch left it; so the stop is at a child the batch did
-// not add, or at one that walk passed, which proves the same. The children
-// the batch did not add or move keep their order, so each one before the
-// stop had a larger index both before and after, saturated both times;
-// what the batch added before it is marked as added, and its number, which
-// is the bound for the same reason, is taken here (back_turns). With an
-// -of-type form the walk counts every child. A parent with more types than
-// GARB_BACK_TYPES has all its children marked at a change, and the children
-// past the table, at a change or a build, are left uncounted, so that they
-// count as turned the next time.
-#define GARB_BACK_TYPES 32
-static uint8_t back_bound(uint8_t need) { return need ? (uint8_t)(need + 1) : 0; }
-static const os64_html_node_t *prev_element(const os64_html_node_t *x)
+// WHERE IT STOPS EARLY, with no -of-type form on its side: at the first
+// child in the walk's order whose kept number and new number are both the
+// bound. A child the batch added keeps 0, or a number an earlier walk of
+// this batch counted from the document as the batch left it; so the stop is
+// at a child the batch did not add, or at one that walk passed, which
+// proves the same. The children the batch did not add or move keep their
+// order, so each one past the stop had a larger index both before and
+// after, saturated both times; what the batch added past it is marked as
+// added, and its number, which is the bound for the same reason, is taken
+// at the change (index_turns). With an -of-type form the walk counts every
+// child. A parent with more types than GARB_INDEX_TYPES has all its children
+// marked at a change, and the children past the table, at a change or a
+// build, are left uncounted, so that they count as turned the next time.
+#define GARB_INDEX_TYPES 32
+static uint8_t index_bound(uint8_t need) { return need ? (uint8_t)(need + 1) : 0; }
+// Counts the element siblings from `from`, the last when counting from the
+// end and the first when counting from the start (`front`). `compare`: a
+// change's walk, which marks what turned and may stop early; otherwise the
+// numbers are only taken (a build, an added subtree).
+static IndexWalk index_walk(garb_cascade_t *c, const os64_html_node_t *from, bool compare, bool front)
 {
-    for (x = x->prev; x && !is_el(x); x = x->prev) {}
-    return x;
-}
-static const os64_html_node_t *next_element(const os64_html_node_t *x)
-{
-    for (x = x->next; x && !is_el(x); x = x->next) {}
-    return x;
-}
-// Counts the element siblings from `last` back. `compare`: a change's walk,
-// which marks what turned and may stop early; otherwise the numbers are
-// only taken (a build, an added subtree).
-static BackWalk back_walk(garb_cascade_t *c, const os64_html_node_t *last, bool compare)
-{
-    uint8_t kc = back_bound(c->dependencies.back_child), kt = back_bound(c->dependencies.back_type);
-    struct { const os64_html_node_t *type; uint8_t n; } types[GARB_BACK_TYPES];
+    uint8_t kc = index_bound(front ? c->dependencies.front_child : c->dependencies.back_child);
+    uint8_t kt = index_bound(front ? c->dependencies.front_type : c->dependencies.back_type);
+    uint8_t child_key = front ? GARB_READS_FRONT : GARB_READS_BACK;
+    uint8_t type_key = front ? GARB_READS_FRONT_TYPE : GARB_READS_BACK_TYPE;
+    struct { const os64_html_node_t *type; uint8_t n; } types[GARB_INDEX_TYPES];
     int32_t ntypes = 0;
     uint8_t n = 0;
-    for (const os64_html_node_t *x = last; x; x = prev_element(x)) {
-        if (compare) c->back_work.walked++;
+    for (const os64_html_node_t *x = from; x; x = front ? next_element(x) : prev_element(x)) {
+        if (compare && front) c->reader_work.front_walked++;
+        else if (compare) c->back_work.walked++;
         uint8_t t = 0;
         if (kt) {
             int32_t i = 0;
             while (i < ntypes && !garb_element_same_type(types[i].type, x)) i++;
-            if (i == GARB_BACK_TYPES) {
-                for (const os64_html_node_t *y = x; y; y = prev_element(y)) {
+            if (i == GARB_INDEX_TYPES) {
+                for (const os64_html_node_t *y = x; y; y = front ? next_element(y) : prev_element(y)) {
                     Slot *u = slot_for(c, y, false);
-                    if (u) u->back = u->back_type = 0;
+                    if (u && front) u->front = u->front_type = 0;
+                    else if (u) u->back = u->back_type = 0;
                 }
-                if (!compare) return BACK_DONE;
-                return x->parent && mark_siblings(c, x->parent->first_child) ? BACK_DONE : BACK_FAILED;
+                if (!compare) return INDEX_DONE;
+                c->mark_now = GARB_MARK_SUFFIX;
+                return x->parent && mark_siblings(c, x->parent->first_child) ? INDEX_DONE : INDEX_FAILED;
             }
             if (i == ntypes) {
                 types[i].type = x;
@@ -3865,43 +4153,209 @@ static BackWalk back_walk(garb_cascade_t *c, const os64_html_node_t *last, bool 
         if (!s) {
             if (!compare) continue;
             c->refusal = GARB_UPDATE_NO_MEMORY;
-            return BACK_FAILED;
+            return INDEX_FAILED;
         }
-        if (compare && !kt && s->back == kc && n == kc) return BACK_STOPPED;
-        bool turned = s->back != n || s->back_type != t;
-        s->back = n;
-        s->back_type = t;
+        uint8_t *kept = front ? &s->front : &s->back, *kept_type = front ? &s->front_type : &s->back_type;
+        if (compare && !kt && *kept == kc && n == kc) return INDEX_STOPPED;
+        uint8_t turned = (uint8_t)((*kept != n ? child_key : 0) | (*kept_type != t ? type_key : 0));
+        *kept = n;
+        *kept_type = t;
         if (compare && turned) {
-            c->back_work.turned++;
-            if (!mark_changed(c, x, GARB_MARK_BACK)) return BACK_FAILED;
+            if (front) c->reader_work.front_turned++;
+            else c->back_work.turned++;
+            c->mark_now = front ? GARB_MARK_FRONT : GARB_MARK_BACK;
+            Reached got = readers_at(c, turned, REACH_ANY, x, true, front ? GARB_ASKED_FRONT : GARB_ASKED_BACK);
+            if (!mark_reached(c, x, got)) return INDEX_FAILED;
         }
     }
-    return BACK_DONE;
+    return INDEX_DONE;
 }
-// A change of `e->target`'s children, counted again (back_walk), once an
-// update for a parent that has a slot: every walk reads the document as the
-// batch left it, so a second walk of the same parent finds nothing to turn.
-// Without an -of-type form, a child the change added that is still
-// uncounted lies before where the walk stopped, so it takes the bound as
-// its number.
-static bool back_turns(garb_cascade_t *c, const os64_html_change_entry_t *e)
+// A change of `e->target`'s children, counted again from the start
+// (`front`) or from the end (index_walk), once an update for a parent that
+// has a slot: every walk reads the document as the batch left it, so a
+// second walk of the same parent finds nothing to turn. Without an -of-type
+// form, a child the change added that is still uncounted lies past where
+// the walk stopped, so it takes the bound as its number.
+static bool index_turns(garb_cascade_t *c, const os64_html_change_entry_t *e, bool front)
 {
-    const os64_html_node_t *last = e->target->last_child;
-    while (last && !is_el(last)) last = last->prev;
-    if (!last) return true;
-    Slot *p = is_el(e->target) ? slot_for(c, e->target, false) : NULL;
-    if (!p || p->back_walked != c->updates + 1) {
-        if (p) p->back_walked = c->updates + 1;
-        c->back_work.walks++;
-        if (back_walk(c, last, true) == BACK_FAILED) return false;
+    const os64_html_node_t *from = element_at(e->target->first_child);
+    if (!front) {
+        from = e->target->last_child;
+        while (from && !is_el(from)) from = from->prev;
     }
-    if (!c->dependencies.back_type)
-        for (size_t i = 0; i < e->nadded; ++i) {
-            Slot *s = e->added[i]->parent == e->target ? slot_for(c, e->added[i], false) : NULL;
-            if (s && s->back == 0) s->back = back_bound(c->dependencies.back_child);
-        }
+    if (!from) return true;
+    Slot *p = is_el(e->target) ? slot_for(c, e->target, false) : NULL;
+    uint64_t *walked = p == NULL ? NULL : front ? &p->front_walked : &p->back_walked;
+    if (!walked || *walked != c->updates + 1) {
+        if (walked) *walked = c->updates + 1;
+        if (front) c->reader_work.front_walks++;
+        else c->back_work.walks++;
+        if (index_walk(c, from, true, front) == INDEX_FAILED) return false;
+    }
+    if (front ? c->dependencies.front_type : c->dependencies.back_type) return true;
+    uint8_t bound = index_bound(front ? c->dependencies.front_child : c->dependencies.back_child);
+    for (size_t i = 0; i < e->nadded; ++i) {
+        Slot *s = e->added[i]->parent == e->target ? slot_for(c, e->added[i], false) : NULL;
+        uint8_t *kept = s == NULL ? NULL : front ? &s->front : &s->back;
+        if (kept && *kept == 0) *kept = bound;
+    }
     return true;
 }
+
+// THE UNBOUNDED POSITION FORMS (`:nth-child(3n)`, `:nth-last-child(2n+1)`)
+// never settle, so no count kept can say whether one turned: a change of
+// children walks the siblings whose index it moved, the element after the
+// change and those after it for a front form (what the change brought
+// before that element is marked as added), and those before the element
+// after the change for a back form, and marks
+// at each the reach of the readers whose filters pass there (a form with
+// no filter, or inside a :not(), passes every sibling, which is every
+// moved sibling marked as before). Once an update for a parent: where every
+// change of the batch moved its parent's indexes is planned before any is
+// marked (walks_plan), so the one walk covers them all. Where the element
+// after a change no longer stands (stands), or for a back form there is
+// none, every child is walked.
+enum { WALK_FROM = 1, WALK_TO = 2, WALK_ALL_FRONT = 4, WALK_ALL_BACK = 8, WALK_SOME_FRONT = 16 };
+static bool walk_flag(garb_cascade_t *c, const os64_html_node_t *x, uint8_t flag)
+{
+    Slot *s = x ? slot_for(c, x, false) : NULL;
+    if (!s) return false;
+    if (s->walk_update != c->updates + 1) {
+        s->walk_update = c->updates + 1;
+        s->walk_flags = 0;
+    }
+    s->walk_flags |= flag;
+    return true;
+}
+static bool walk_flagged(const garb_cascade_t *c, const os64_html_node_t *x, uint8_t flag)
+{
+    const Slot *s = slot_for(c, x, false);
+    return s && s->walk_update == c->updates + 1 && (s->walk_flags & flag);
+}
+static void walks_plan(garb_cascade_t *c, const os64_html_change_entry_t *changes)
+{
+    bool front = c->reads_any & GARB_READS_FRONT_ANY, back = c->reads_any & GARB_READS_BACK_ANY;
+    if (!front && !back) return;
+    for (const os64_html_change_entry_t *e = changes; e; e = e->next) {
+        const os64_html_node_t *parent = e->target;
+        if (e->kind != OS64_HTML_CHANGE_CHILDREN || !moves_elements(e) || !connected(c, parent) ||
+            !is_el(parent) || !slot_for(c, parent, false))
+            continue;
+        const os64_html_node_t *n = e->next_sibling;
+        const os64_html_node_t *at = stands(c, n, parent) ? element_at(n) : NULL;
+        bool lost = !stands(c, n, parent);
+        if (front && (lost || (at && !walk_flag(c, at, WALK_FROM))))
+            walk_flag(c, parent, WALK_ALL_FRONT);
+        else if (front && at)
+            walk_flag(c, parent, WALK_SOME_FRONT);
+        if (back && (!at || !walk_flag(c, at, WALK_TO)))
+            walk_flag(c, parent, WALK_ALL_BACK);
+    }
+}
+static bool position_walks(garb_cascade_t *c, const os64_html_change_entry_t *e)
+{
+    bool front = c->reads_any & GARB_READS_FRONT_ANY, back = c->reads_any & GARB_READS_BACK_ANY;
+    if (!front && !back) return true;
+    const os64_html_node_t *parent = e->target;
+    Slot *p = is_el(parent) ? slot_for(c, parent, false) : NULL;
+    if (p && p->unbounded_walked == c->updates + 1) return true;
+    if (p) p->unbounded_walked = c->updates + 1;
+    c->mark_now = GARB_MARK_POSITION;
+    // An append moved no front index: nothing to walk from the front.
+    if (front && (!p || walk_flagged(c, parent, WALK_ALL_FRONT | WALK_SOME_FRONT))) {
+        c->reader_work.walks++;
+        bool on = !p || walk_flagged(c, parent, WALK_ALL_FRONT);
+        for (const os64_html_node_t *x = element_at(parent->first_child); x; x = next_element(x)) {
+            on = on || walk_flagged(c, x, WALK_FROM);
+            if (!on) continue;
+            c->reader_work.walked++;
+            Reached got = readers_at(c, GARB_READS_FRONT_ANY, REACH_ANY, x, true, GARB_ASKED_FRONT_WALK);
+            if (!mark_reached(c, x, got)) return false;
+        }
+    }
+    if (back) {
+        c->reader_work.walks++;
+        bool on = !p || walk_flagged(c, parent, WALK_ALL_BACK);
+        const os64_html_node_t *x = parent->last_child;
+        while (x && !is_el(x)) x = x->prev;
+        for (; x; x = prev_element(x)) {
+            if (!on) { on = walk_flagged(c, x, WALK_TO); continue; }
+            c->reader_work.walked++;
+            Reached got = readers_at(c, GARB_READS_BACK_ANY, REACH_ANY, x, true, GARB_ASKED_BACK_WALK);
+            if (!mark_reached(c, x, got)) return false;
+        }
+    }
+    return true;
+}
+
+// THE NEIGHBOURS OF A CHANGE OF CHILDREN: what a `+` or `~` reads. An
+// element brought or taken (`X`) moves who follows it: the readers whose
+// reach is `~` or a `+` chain and that pass at X reach the siblings after
+// the change (the element after it, `N`, the first after the change that
+// the batch did not bring, and those after N; what stands between came with
+// the batch and is marked as added). A taken element is asked as it was
+// (stale). And the change breaks one pair of neighbours and makes one, at
+// its end: before it (P, N), or (the last taken, N); after it (the last
+// brought, N), or (P, N). A reader whose first combinator to the right is
+// `+` reads the pair: one that passes at the left element reaches N for `+`
+// alone and N and those after it for a chain, with subtrees where it says
+// so. The pair made is asked of N's previous element sibling as the batch
+// left it. The pair broken is asked of the last element taken, or else of
+// the element before the change, standing in for what it was; where the
+// batch brought that element it may not have stood there then, and every
+// reader passes. A true `~` reader that passes at P does nothing: `P ~ N`
+// holds before and after.
+//
+// Where N no longer stands where the change happened (stands), the
+// siblings after the change are past finding, and every child is marked as
+// far as any reader reaches. With nothing after the change nothing moved.
+static bool mark_neighbours(garb_cascade_t *c, const os64_html_change_entry_t *e)
+{
+    if (!(c->reads_any & GARB_READS_NEIGHBOURS)) return true;
+    const os64_html_node_t *parent = e->target, *n = e->next_sibling;
+    c->mark_now = GARB_MARK_NEIGHBOURS;
+    if (!stands(c, n, parent)) {
+        Reached all = readers_at(c, GARB_READS_NEIGHBOURS, REACH_SIBLINGS, NULL, false, GARB_ASKED_ADDED_REMOVED);
+        return mark_run(c, element_at(parent->first_child), true, all.down);
+    }
+    // The element after the change as it stood then: the first at or after
+    // N that the batch did not bring, since what it brought there since is
+    // marked as added and may stand between.
+    const os64_html_node_t *after = element_at(n);
+    while (after && batch_holds(c->batch_added, c->nbatch_added, after)) after = next_element(after);
+    if (!after) return true;
+    unsigned run = (1u << GARB_REACH_FOLLOWING) | (1u << GARB_REACH_CHAIN);
+    Reached moved = {0};
+    for (size_t i = 0; i < e->nadded && !(moved.on && moved.down); ++i)
+        if (is_el(e->added[i]))
+            reached_add(&moved, readers_at(c, GARB_READS_NEIGHBOURS, run, e->added[i], false, GARB_ASKED_ADDED_REMOVED));
+    for (size_t i = 0; i < e->nremoved && !(moved.on && moved.down); ++i)
+        if (is_el(e->removed[i]))
+            reached_add(&moved, readers_at(c, GARB_READS_NEIGHBOURS, run, e->removed[i], true, GARB_ASKED_ADDED_REMOVED));
+    if (moved.on && !mark_run(c, after, true, moved.down)) return false;
+    c->mark_now = GARB_MARK_ADJACENT;
+    unsigned plus = (1u << GARB_REACH_NEXT) | (1u << GARB_REACH_CHAIN);
+    Reached pair = {0};
+    const os64_html_node_t *made = prev_element(after);
+    if (made) reached_add(&pair, readers_at(c, GARB_READS_NEIGHBOURS, plus, made, false, GARB_ASKED_PAIRS));
+    const os64_html_node_t *broken = NULL;
+    for (size_t i = e->nremoved; i > 0 && !broken; --i)
+        if (is_el(e->removed[i - 1])) broken = e->removed[i - 1];
+    bool found = broken != NULL || stands(c, e->previous_sibling, parent);
+    if (!broken && found) {
+        for (broken = e->previous_sibling; broken && !is_el(broken); broken = broken->prev) {}
+        // One the batch brought may not have stood there when this change
+        // was made: then the left of the pair is past finding.
+        if (broken && batch_holds(c->batch_added, c->nbatch_added, broken)) {
+            broken = NULL;
+            found = false;
+        }
+    }
+    if (broken || !found)
+        reached_add(&pair, readers_at(c, GARB_READS_NEIGHBOURS, plus, found ? broken : NULL, true, GARB_ASKED_PAIRS));
+    return !(pair.next || pair.on) || mark_run(c, after, pair.on, pair.down);
+}
+
 static bool body_hint(const os64_html_change_entry_t *e, const os64_html_document_t *doc)
 {
     if (e->kind != OS64_HTML_CHANGE_ATTR || e->target != doc->body || !e->attr_name)
@@ -3948,38 +4402,75 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
         if (slots && !mark_host_children(c, parent)) return false;
     }
     c->mark_now = GARB_MARK_SUFFIX;
-    if (c->dependencies.back_unbounded || c->dependencies.filtered)
+    if (c->dependencies.filtered)
         return mark_siblings(c, parent->first_child);
-    if ((c->dependencies.back_child || c->dependencies.back_type) && !back_turns(c, e)) return false;
-    c->mark_now = GARB_MARK_SUFFIX;  // back_turns' marks leave it at their own kinds
-    if (c->dependencies.position_front || c->dependencies.following) {
-        const os64_html_node_t *previous = e->previous_sibling;
-        bool boundary = !previous || previous->parent == parent;
-        // A removed/moved boundary may now sit elsewhere in the same parent.
-        // Pure insert batches preserve existing relative order; removals use
-        // all children because the log preserves identities, not old links.
-        const Slot *p = slot_for(c, parent, false);
-        if (p && p->removed_children == c->updates + 1) boundary = false;
-        return mark_siblings(c, boundary && previous ? previous->next : parent->first_child);
+    if (!moves_elements(e)) return true;
+    if ((c->dependencies.front_child || c->dependencies.front_type) && !index_turns(c, e, true)) return false;
+    if ((c->dependencies.back_child || c->dependencies.back_type) && !index_turns(c, e, false)) return false;
+    return position_walks(c, e) && mark_neighbours(c, e);
+}
+// THE SUBJECT :has() COMPOUNDS A CHANGE MAY TURN (select.h § A SUBJECT
+// :has() AND A CHANGE OF CHILDREN): for a change of children, those whose
+// arguments the elements it brought or took may match, a taken subtree
+// standing in for what it held (stale_removed); for any other change, all.
+// The visits ask with every compound the batch's changes so far may turn
+// (`subjects_union`), so that one visit of an element serves every change
+// that climbs past it; when that set grows, the visit epoch moves on and
+// the climbs that follow visit again what the earlier ones visited.
+static bool subjects_live(garb_cascade_t *c, const os64_html_change_entry_t *e)
+{
+    if (c->subjects == NULL || c->nsubjects == 0) return true;
+    uint32_t w = (uint32_t)(c->nsubjects + 63) / 64;
+    if (c->subject_width != w) {
+        os64_free(c->subjects_union);
+        os64_free(c->subjects_now);
+        c->subjects_union = os64_calloc(w, sizeof(uint64_t));
+        c->subjects_now = os64_calloc(w, sizeof(uint64_t));
+        c->subject_width = c->subjects_union && c->subjects_now ? w : 0;
+        if (!c->subject_width) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
     }
+    bool full = true;
+    for (int32_t i = 0; i < c->nsubjects && full; i++) full = c->subjects_union[i / 64] >> (i % 64) & 1;
+    if (full) return true;
+    for (uint32_t k = 0; k < w; k++) c->subjects_now[k] = 0;
+    for (int32_t i = 0; i < c->nsubjects; i++) {
+        const garb_anchor_t *a = &c->subjects[i];
+        bool may = e->kind != OS64_HTML_CHANGE_CHILDREN ||
+                   garb_has_subject_children_may_turn(a, e->added, e->nadded, NULL, c) ||
+                   garb_has_subject_children_may_turn(a, e->removed, e->nremoved, stale_removed, c);
+        if (may) c->subjects_now[i / 64] |= (uint64_t)1 << (i % 64);
+    }
+    bool grew = false;
+    for (uint32_t k = 0; k < w; k++) {
+        grew |= (c->subjects_now[k] & ~c->subjects_union[k]) != 0;
+        c->subjects_union[k] |= c->subjects_now[k];
+    }
+    if (grew) c->visit_epoch++;
     return true;
 }
 // Whether a subject :has() of the rules may have turned at `a`, which a
 // change at or below it (or beside it, for `+`/`~`) visits: so `a` is marked
 // alone for its own match (select.h § A SUBJECT :has()). Only where some
-// subject compound's filters pass `a`, or one has none (bare), or the
-// entries could not be kept. A test of `a`'s filters as it stands now is
-// enough: they read only `a`'s own name and attributes, which could have
-// changed in this batch only by a change at `a`, and that change marks `a`
-// itself. `has_subjects` counts what was asked, let through (marked alone,
-// or already marked) and turned away.
+// subject compound the batch's changes may turn (subjects_live) has filters
+// that pass `a`, or none (bare), or the entries could not be kept. A test of
+// `a`'s filters as it stands now is enough: they read only `a`'s own name
+// and attributes, which could have changed in this batch only by a change
+// at `a`, and that change marks `a` itself. `has_subjects` counts what was
+// asked, let through (marked alone, or already marked), turned away by the
+// compounds' filters, and turned away by the changes.
 static bool subject_may_turn(garb_cascade_t *c, const os64_html_node_t *a)
 {
     c->has_subjects.visited++;
-    bool may = c->nbare_subjects > 0 || c->subjects == NULL;
-    for (int32_t i = 0; i < c->nsubjects && !may; i++)
-        may = garb_anchor_filters_pass(&c->subjects[i], a);
+    bool may = c->subjects == NULL, held = may;
+    for (int32_t i = 0; i < c->nsubjects && !may; i++) {
+        bool live = c->subjects_union[i / 64] >> (i % 64) & 1;
+        if ((live || !held) && garb_anchor_filters_pass(&c->subjects[i], a)) {
+            held = true;
+            may = live;
+        }
+    }
     if (may) c->has_subjects.marked++;
+    else if (held) c->has_subjects.turned_away_change++;
     else c->has_subjects.turned_away++;
     return may;
 }
@@ -4012,11 +4503,12 @@ static bool has_visit(garb_cascade_t *c, const os64_html_node_t *a)
     if (!connected(c, a)) return true;
     Slot *s = slot_for(c, a, false);
     if (!s) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
-    // Once an update: its marking reads the document as the batch left it,
-    // so a second visit would ask the same questions and get the same
-    // answers, and what they turned is marked already.
-    if (s->visited == c->updates + 1) return true;
-    s->visited = c->updates + 1;
+    // Once a visit epoch (subjects_live): its marking reads the document as
+    // the batch left it, so a second visit asking with the same subject
+    // compounds would get the same answers, and what they turned is marked
+    // already.
+    if (s->visited == c->visit_epoch) return true;
+    s->visited = c->visit_epoch;
     if (c->dependencies.ancestors && subject_may_turn(c, a) && !mark_element(c, a)) return false;
     if (c->has_width == 0) return true;
     c->bare_work.tested += (uint64_t)c->nbare;
@@ -4061,12 +4553,13 @@ static bool mark_has(garb_cascade_t *c, const os64_html_node_t *from, bool child
         for (const os64_html_node_t *k = from->first_child; k; k = k->next)
             if (is_el(k) && !has_visit(c, k)) return false;
     for (const os64_html_node_t *a = from; is_el(a) && connected(c, a); a = a->parent) {
-        // An element this update has visited already has had the rest of
-        // this climb visited too (its previous siblings, its ancestors and,
-        // with `+`/`~`, theirs), by the walk that visited it or an earlier
-        // one: every walk completes its climb before the next begins.
+        // An element this visit epoch has visited already has had the rest
+        // of this climb visited too (its previous siblings, its ancestors
+        // and, with `+`/`~`, theirs), by the walk that visited it or an
+        // earlier one: every walk completes its climb before the next
+        // begins.
         const Slot *seen = slot_for(c, a, false);
-        if (seen && seen->visited == c->updates + 1) break;
+        if (seen && seen->visited == c->visit_epoch) break;
         if (!has_visit(c, a)) return false;
         for (const os64_html_node_t *p = preceding ? a->prev : NULL; p; p = p->prev)
             if (is_el(p) && !has_visit(c, p)) return false;
@@ -4241,6 +4734,20 @@ garb_back_work_t garb_cascade_back_work(const garb_cascade_t *c)
 {
     return c ? c->back_work : (garb_back_work_t){0};
 }
+garb_reader_work_t garb_cascade_reader_work(const garb_cascade_t *c)
+{
+    return c ? c->reader_work : (garb_reader_work_t){0};
+}
+const char *garb_asker_name(garb_asker_t asker)
+{
+    static const char *const kNames[GARB_ASKERS] = {
+        [GARB_ASKED_FRONT] = "a front index turned", [GARB_ASKED_BACK] = "a back index turned",
+        [GARB_ASKED_FRONT_WALK] = "an unbounded front walk", [GARB_ASKED_BACK_WALK] = "an unbounded back walk",
+        [GARB_ASKED_EMPTY] = ":empty turned", [GARB_ASKED_ADDED_REMOVED] = "an element brought or taken",
+        [GARB_ASKED_PAIRS] = "a pair broken or made",
+    };
+    return asker < GARB_ASKERS ? kNames[asker] : "?";
+}
 garb_has_subject_work_t garb_cascade_has_subject_work(const garb_cascade_t *c)
 {
     garb_has_subject_work_t w = c ? c->has_subjects : (garb_has_subject_work_t){0};
@@ -4312,8 +4819,10 @@ const char *garb_mark_name(garb_mark_t mark)
         [GARB_MARK_SIBLINGS] = "siblings", [GARB_MARK_HAS] = ":has()",
         [GARB_MARK_PARENT] = "the parent's state", [GARB_MARK_SLOTS] = "slots",
         [GARB_MARK_INHERITED] = "inherited", [GARB_MARK_CLASS] = "its subtree (class)",
-        [GARB_MARK_STYLE] = "its subtree (style)", [GARB_MARK_BACK] = "a back index's subtree",
-        [GARB_MARK_SUFFIX] = "the children's siblings",
+        [GARB_MARK_STYLE] = "its subtree (style)", [GARB_MARK_BACK] = "a back index's reach",
+        [GARB_MARK_SUFFIX] = "the children's siblings", [GARB_MARK_FRONT] = "a front index's reach",
+        [GARB_MARK_POSITION] = "an unbounded position's walk", [GARB_MARK_NEIGHBOURS] = "the siblings after a change",
+        [GARB_MARK_ADJACENT] = "a pair of neighbours",
     };
     return (unsigned)mark < GARB_MARKS ? kNames[mark] : "?";
 }
@@ -4373,9 +4882,10 @@ static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match
                     AppliedScratch *scratch)
 {
     Slot old = *s;
-    // The back indexes are its siblings' count, which styling it does not
-    // take again: they are kept.
-    *s = (Slot){.node = x, .changed = c->updates + 1, .back = old.back, .back_type = old.back_type};
+    // The position indexes are its siblings' count, which styling it does
+    // not take again: they are kept.
+    *s = (Slot){.node = x, .changed = c->updates + 1, .back = old.back, .back_type = old.back_type,
+                .front = old.front, .front_type = old.front_type};
     cascade_whole(c, x, m, mcap, scratch);
     if (c->incomplete || c->self.incomplete) { c->refusal = GARB_UPDATE_SHORT; return false; }
     s = slot_for(c, x, false);
@@ -4383,15 +4893,18 @@ static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match
     // is sound because whatever turned a bit here was a logged change that
     // already marked all the bit's reach: a change at the element itself or
     // under it, or a sibling's for a `+`/`~` argument, visits it (mark_has)
-    // and compares there; and anything else its compound reads (an
-    // ancestor fieldset's `disabled`, `lang` or `dir`, its place among its
-    // siblings) changed at an ancestor or a sibling whose mark covers its
-    // subtree or the siblings after it, which is the reach of any anchor at
-    // the element. Its place counted from the end keeps it so: where the
-    // count turned back_walk marks it as mark_changed marks a changed node,
-    // its subtree and the siblings a `+`/`~` reads after it. A new kind of
-    // mark that restyles an element alone must keep that true, or compare
-    // here.
+    // and compares there; anything else its compound reads of its
+    // ancestors (a fieldset's `disabled`, `lang` or `dir`) changed at an
+    // ancestor whose mark covers its subtree, which holds any anchor's
+    // reach from the element; its place among its siblings is read by a
+    // reader whose filters and reach are the anchor's own (select.h § A
+    // READER), so where it turned and the filters pass the anchor's reach is
+    // marked, and where they fail the anchor cannot match there, before or
+    // after (an element whose attributes the batch changed passes them:
+    // stale); and where its :empty answer turned, the readers' sibling reach
+    // is marked and nothing under it needs marking (mark_turned: all that is
+    // under it came with the batch, or nothing is). A new kind of mark that
+    // restyles an element alone must keep that true, or compare here.
     anchor_bits(c, x, has_row(c, s));
     if (!old.element_only) return true;
     bool same = old.matched == s->matched && styles_same(&old.style, &s->style);
@@ -4399,8 +4912,7 @@ static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match
     for (int32_t t = 0; t < TARGET_AFTER; t++) pseudo_same &= styles_same(&old.pseudo[t], &s->pseudo[t]);
     if (same && pseudo_same) {
         *s = old;
-        s->dirty = s->dirty_suffix = s->element_only = false;
-        s->removed_children = 0;
+        s->dirty = s->dirty_suffix = s->alone_suffix = s->element_only = false;
         return true;
     }
     if (!same && c->limits.clock) c->passing = x;
@@ -4477,7 +4989,10 @@ static void broad_name(garb_cascade_t *c)
 static bool update(garb_cascade_t *c)
 {
     c->back_work = (garb_back_work_t){0};
+    c->reader_work = (garb_reader_work_t){.readers = c->nreaders, .bare = c->nbare_readers};
     c->has_subjects = (garb_has_subject_work_t){0};
+    c->visit_epoch++;
+    for (uint32_t k = 0; k < c->subject_width; k++) c->subjects_union[k] = 0;
     c->marks = (garb_update_marks_t){0};
     if (c->incomplete) { c->refusal = GARB_UPDATE_INCOMPLETE; return false; }
     if (c->update_failed) { c->refusal = GARB_UPDATE_FAILED_BEFORE; return false; }
@@ -4517,18 +5032,18 @@ static bool update(garb_cascade_t *c)
             for (const os64_html_node_t *x = root; x; x = si_next(x, root, true)) {
                 if (!is_el(x)) continue;
                 if (!slot_for(c, x, true)) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
-                // The back indexes of what came in with the root, whose
+                // The position indexes of what came in with the root, whose
                 // parents no change names; the root's own are its parent's
-                // change's to count (back_turns).
-                if ((c->dependencies.back_child || c->dependencies.back_type) && x != root && next_element(x) == NULL)
-                    back_walk(c, x, false);
+                // change's to count (index_turns).
+                if (x != root && next_element(x) == NULL) {
+                    if (c->dependencies.back_child || c->dependencies.back_type) index_walk(c, x, false, false);
+                    if (c->dependencies.front_child || c->dependencies.front_type)
+                        index_walk(c, first_element(x), false, true);
+                }
             }
         }
-    for (const os64_html_change_entry_t *e = changes; e; e = e->next)
-        if (e->kind == OS64_HTML_CHANGE_CHILDREN && e->nremoved) {
-            Slot *parent = slot_for(c, e->target, false);
-            if (parent) parent->removed_children = c->updates + 1;
-        }
+    if (!batch_take(c, changes)) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
+    walks_plan(c, changes);
     c->ndirty = 0;
     // The caller's measure: the batch's size, then each change's marks.
     uint32_t nchanges = 0, nmarked = 0;
@@ -4540,6 +5055,7 @@ static bool update(garb_cascade_t *c)
     for (const os64_html_change_entry_t *e = changes; e; e = e->next) {
         if (body_hint(e, c->doc)) { c->refusal = GARB_UPDATE_BODY_HINT; return false; }
         if (c->limits.clock) os64_memset(c->mark_by, 0, sizeof(c->mark_by));
+        if (!subjects_live(c, e)) return false;
         bool marked;
         if (e->kind == OS64_HTML_CHANGE_CHILDREN) {
             marked = mark_children(c, e);
@@ -4564,9 +5080,17 @@ static bool update(garb_cascade_t *c)
             if (e->kind == OS64_HTML_CHANGE_ATTR && e->attr_name && !e->attr_ns)
                 kind = os64_streq(e->attr_name, "class") ? GARB_MARK_CLASS
                      : os64_streq(e->attr_name, "style") ? GARB_MARK_STYLE : GARB_MARK_SUBTREE;
-            marked = mark_changed(c, root, kind);
+            // An element the batch brought (an element it put in, or one
+            // under it) is marked whole as added, and what its attributes
+            // move beside it and above it is asked of it as the batch left
+            // it by the change that brought it (mark_neighbours,
+            // subjects_live, and that change's climb): nothing to add here.
+            bool brought = false;
+            for (const os64_html_node_t *x = root; x && !brought; x = x->parent)
+                brought = batch_holds(c->batch_added, c->nbatch_added, x);
+            marked = brought || mark_changed(c, root, kind);
             c->mark_now = GARB_MARK_HAS;
-            marked = marked && (!root || mark_has(c, root, false));
+            marked = marked && (brought || !root || mark_has(c, root, false));
             // A slot renamed moves which of its host's children it takes.
             c->mark_now = GARB_MARK_SLOTS;
             if (marked && c->shadowed && e->kind == OS64_HTML_CHANGE_ATTR && e->attr_name &&
@@ -4821,15 +5345,18 @@ garb_cascade_parts_t garb_cascade_parts(const garb_cascade_t *c)
     // The rule, entry and keyframe tables and the selector indexes come
     // from the read's arena, the attribute tables and what updates retain
     // from `self`'s (grow, alloc); the slot table, its rows of anchor bits,
-    // the dirty list and the marks on the read's rules are the heap's. A
-    // read shared by two cascades is counted in each.
+    // the dirty list, the batch's arrays (batch_take), the subject
+    // compounds' bits (subjects_live) and the marks on the read's rules are
+    // the heap's. A read shared by two cascades is counted in each.
     parts.state = sizeof(*c) + os64_arena_stats(c->self.arena).reserved_bytes +
                   (c->read != NULL ? os64_arena_stats(c->read->heap.arena).reserved_bytes : 0) +
                   (c->seen != NULL ? (size_t)c->nrules * sizeof(*c->seen) : 0);
     parts.reads = c->read != NULL ? os64_arena_stats(c->read->reads.arena).reserved_bytes : 0;
     for (int32_t i = 0; i < c->nattrs; i++) parts.attributes += os64_arena_stats(c->attrs[i].arena).reserved_bytes;
     parts.tables = (size_t)c->slotcap * (sizeof(*c->slots) + c->has_width * sizeof(*c->has_words)) +
-                   c->dirtycap * sizeof(*c->dirty_nodes);
+                   c->dirtycap * sizeof(*c->dirty_nodes) +
+                   (c->batch_cap[0] + c->batch_cap[1] + c->batch_cap[2]) * sizeof(*c->batch_removed) +
+                   (size_t)c->subject_width * 2 * sizeof(*c->subjects_union);
     return parts;
 }
 
@@ -4851,6 +5378,11 @@ void garb_cascade_free(garb_cascade_t *c)
     os64_free(c->slots);
     os64_free(c->has_words);
     os64_free(c->dirty_nodes);
+    os64_free((void *)c->batch_removed);
+    os64_free((void *)c->batch_added);
+    os64_free((void *)c->batch_attrs);
+    os64_free(c->subjects_union);
+    os64_free(c->subjects_now);
     garb_free(&c->self);
     os64_html_reader_free(c->reader);
     if (c->pin != 0)

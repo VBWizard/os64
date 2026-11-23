@@ -30,8 +30,12 @@
 //   - the updates libgarb refused as broad, by the caller's name for what
 //     crossed the half in each, and what triggered those whose trigger
 //     marked the most;
-//   - what the subject :has() filter visited, marked and turned away;
-//   - what the back indexes (libgarb's back_walk) cost the updates, and
+//   - what the subject :has() filter visited, marked and turned away, by
+//     the compounds' filters and by the changes;
+//   - what the cascade's readers were asked and passed, by the kind of
+//     question, the front indexes counted again and the unbounded
+//     position walks;
+//   - what the back indexes (libgarb's index_walk) cost the updates, and
 //     what the updates that succeeded restyled: marked by their changes,
 //     and marked below a changed winner;
 //   - the arriving page's parser calls, and the slowest of them;
@@ -60,6 +64,18 @@
 #define YONDER_LT_PARSE_MAX 8
 #define YONDER_LT_REASONS 10
 #define YONDER_LT_MARK_KINDS 16
+// What the cascade's readers did in one update (yonder_lt_readers): for
+// each kind of question, YONDER_LT_ASKERS at most, the readers asked, those
+// whose filters passed, and the questions that marked a reach; the bounded
+// front indexes counted again (walks, children, turned); the unbounded
+// position walks and the siblings they passed over; and of the rules, the
+// readers and the bare ones.
+#define YONDER_LT_ASKERS 8
+typedef struct {
+    uint64_t asked[YONDER_LT_ASKERS], passed[YONDER_LT_ASKERS], reached[YONDER_LT_ASKERS];
+    uint64_t front_walks, front_walked, front_turned, walks, walked;
+    uint64_t readers, bare;
+} yonder_lt_readers_t;
 #define YONDER_LT_PARSE_TEXT 128
 
 // The window loop's steps, in the order a turn takes them. Each names the
@@ -190,9 +206,17 @@ typedef struct {
     // counted any, and the walks, children and turns they counted.
     uint64_t back_updates, back_walks, back_walked, back_turned;
     // The subject :has() filter (yonder_lt_has_subjects): the elements the
-    // updates' climbs visited, marked and turned away, and the latest
-    // count of the rules' subject :has() compounds and the bare ones.
-    uint64_t has_visited, has_marked, has_away, has_entries, has_bare;
+    // updates' climbs visited, marked, turned away by the compounds'
+    // filters and turned away by the changes, and the latest count of the
+    // rules' subject :has() compounds and the bare ones.
+    uint64_t has_visited, has_marked, has_away, has_away_change, has_entries, has_bare;
+    // The readers (yonder_lt_readers): the updates that asked any, their
+    // sums (the rules' counts the latest), and the caller's names for the
+    // kinds of question (the first call's).
+    uint64_t readers_updates;
+    yonder_lt_readers_t readers;
+    uint32_t nasker_kinds;
+    const char *asker_names[YONDER_LT_ASKERS];
     // What the updates that succeeded restyled (yonder_lt_marks): how many
     // updates, the elements their changes marked, and those marked below an
     // element whose winners came out changed; and every mark by the kind
@@ -288,10 +312,15 @@ void yonder_lt_broad(yonder_lt_t *t, int64_t at_us, uint32_t marked, const char 
 void yonder_lt_back(yonder_lt_t *t, int64_t at_us, uint64_t walks, uint64_t walked, uint64_t turned);
 // An update at `at_us` whose :has() climbs visited `visited` elements while
 // the rules hold a subject :has() (`entries` compounds, `bare` with no
-// filter), marking `marked` alone and turning `away` away. Nothing for
-// visited 0.
+// filter), marking `marked` alone, turning `away` away by the compounds'
+// filters and `away_change` by the changes. Nothing for visited 0.
 void yonder_lt_has_subjects(yonder_lt_t *t, int64_t at_us, uint64_t visited, uint64_t marked, uint64_t away,
-                            uint64_t entries, uint64_t bare);
+                            uint64_t away_change, uint64_t entries, uint64_t bare);
+// An update at `at_us` whose readers were asked or walked (`r`), its first
+// `nkinds` kinds of question named `names[i]` (names that live as long as
+// the timeline). Nothing when it asked and walked nothing.
+void yonder_lt_readers(yonder_lt_t *t, int64_t at_us, const yonder_lt_readers_t *r, uint32_t nkinds,
+                       const char *const *names);
 // An update at `at_us` that succeeded, its changes marking `marked`
 // elements and restyling `inherited` more below changed winners; `by`
 // holds its `nby` counts by kind, kind i named `names[i]` (names that live
