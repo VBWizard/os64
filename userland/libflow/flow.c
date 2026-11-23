@@ -3530,17 +3530,37 @@ static bool layer_reach(const Layer *l, flow_point_t scroll, os64_gui_rect_t *at
     return at->w > 0 && at->h > 0;      // clipped away: nothing of it to hold
 }
 
+// How far past the pixels matrix `m` carries a rect to the face's warp
+// reaches when it lays a group drawn through `m`: it samples between the
+// sheet's pixels (yonder's warp.c, bilinear), so a changed sheet pixel
+// moves every pixel whose sample point lies within a pixel of it, which is
+// half the matrix's stretch past the carried rect, and a pixel at least,
+// unless the matrix only moves by whole pixels.
+static int32_t warp_reads(const double m[6])
+{
+    if (m[0] == 1 && m[1] == 0 && m[2] == 0 && m[3] == 1 && m[4] == floor(m[4]) && m[5] == floor(m[5]))
+        return 0;
+    double stretch = fmax(hypot(m[0], m[1]), hypot(m[2], m[3]));
+    double half = ceil(stretch / 2);
+    return half < 1 ? 1 : half > INT32_MAX / 8 ? INT32_MAX / 8 : (int32_t)half;
+}
+
 // What a group nested in another adds to it: its bounds `r`, taken through
-// its matrix and cut to its clip when it is drawn through; false for
-// nothing.
+// its matrix, with what the warp reads past that (warp_reads), and cut to
+// its clip, when it is drawn through; false for nothing.
 static bool nested_reach(const flow_box_t *box, os64_gui_rect_t r, flow_point_t scroll,
                          os64_gui_rect_t *at)
 {
     double m[6];
     os64_gui_rect_t clip;
     *at = r;
-    if (flow_box_through(box, scroll, m, &clip, NULL))
-        *at = meet(affine_bounds(m, r), clip);
+    if (flow_box_through(box, scroll, m, &clip, NULL)) {
+        os64_gui_rect_t carried = affine_bounds(m, r);
+        int32_t w = warp_reads(m);
+        if (carried.w > 0 && carried.h > 0 && w > 0)
+            carried = grown(carried, (int32_t[4]){w, w, w, w});
+        *at = meet(carried, clip);
+    }
     return at->w > 0 && at->h > 0;
 }
 
