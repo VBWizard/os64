@@ -725,6 +725,14 @@ static os64_gui_rect_t whole_of(os64_gui_rect_t view)
     return s_paint_whole.w > 0 ? s_paint_whole : view;
 }
 
+// Where the page is scrolled: the whole view's corner, a part's being only
+// where in it the part lies.
+static flow_point_t scroll_of(os64_gui_rect_t view)
+{
+    os64_gui_rect_t whole = whole_of(view);
+    return (flow_point_t){whole.x, whole.y};
+}
+
 static char *paint_whole(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view,
                          yonder_paint_cache_t *cache, yonder_scratch_t *scratch)
 {
@@ -733,7 +741,7 @@ static char *paint_whole(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view
     yonder_verbs_t v = verbs_of(&rec);
     s_record_all = true;
     s_alloc_starved = s_paint_starved;
-    yonder_paint(t, view, whole_of(view), (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint,
+    yonder_paint(t, view, whole_of(view), scroll_of(view), kEnv.paper, s_dark_paint,
                  cache, scratch, &v);
     s_alloc_starved = false;
     s_record_all = false;
@@ -818,7 +826,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     size_t bytes = s_alloc_bytes;
     uint64_t big = s_big_mallocs;
     if (t != NULL)
-        yonder_paint(t, view, whole_of(view), (flow_point_t){view.x, view.y}, kEnv.paper,
+        yonder_paint(t, view, whole_of(view), scroll_of(view), kEnv.paper,
                      s_dark_paint, s_through, s_through_scratch, &v);
     yonder_scratch_paint_end(s_through_scratch);
     s_paint_bytes = s_alloc_bytes - bytes;
@@ -975,6 +983,21 @@ static void filter_paint_cases(void)
     got = paint_of(kSmall, strlen(kSmall), 200, (os64_gui_rect_t){0, 0, 10, 10}, &escaped, true);
     expect("filter: a small repaint is charged what it shows, not the margin",
            got != NULL && strstr(got, "\nfilter ") != NULL && yonder_paint_layers_refused == 0, got);
+    free(got);
+    // A part repainted beside a large blur is handed every box its layer
+    // reads (Codex #708 rd1): blur(15px) is made on a reduced copy that
+    // reads past its reach of 45, so the part from x = 95 has a layer from
+    // 41, and the white box ending at 50 — past the reach, inside the
+    // reads — is painted into it, as a paint of the whole view paints it.
+    static const char kReads[] = "<!doctype html><style>body { margin: 0 }"
+                                 " .f { filter: blur(15px); position: relative; width: 300px; height: 100px }"
+                                 " .a { position: absolute; left: 40px; top: 20px; width: 10px; height: 20px;"
+                                 " background: #ffffff }</style><div class=f><div class=a></div></div>";
+    s_paint_whole = (os64_gui_rect_t){0, 0, 300, 100};
+    got = paint_of(kReads, strlen(kReads), 300, (os64_gui_rect_t){95, 0, 100, 100}, &escaped, true);
+    s_paint_whole = (os64_gui_rect_t){0, 0, 0, 0};
+    expect("filter: a part's layer is handed the boxes a reduced blur reads past its reach",
+           got != NULL && strstr(got, "\nfilter 41 ") != NULL && strstr(got, "#ffffff\n") != NULL, got);
     free(got);
 }
 

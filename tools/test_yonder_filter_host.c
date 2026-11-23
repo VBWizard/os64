@@ -641,6 +641,17 @@ static void blur_contract_cases(void)
     for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++)
         at_steps &= yonder_filter_reduction(steps[i][0]) == steps[i][1];
     expect("blur contract: each reduction begins at the floor's radius", at_steps, NULL);
+    // libflow culls a filtered group's inside by the reach and
+    // FLOW_FILTER_READS_MORE a blur: what a reduced blur reads past its
+    // reach stays inside that at every radius, held or not.
+    int32_t most_more = 0;
+    for (int32_t b = 0; b <= 4 * FLOW_FILTER_BLUR_MAX; b++) {
+        flow_filter_t f = blur_of(b);
+        int32_t more = yonder_filter_reads_more(&f, 1);
+        most_more = more > most_more ? more : most_more;
+    }
+    expect("blur contract: a blur reads past its reach no farther than libflow culls by",
+           most_more > 0 && most_more <= FLOW_FILTER_READS_MORE, NULL);
     expect("blur contract: content a reach inside its layer within 2 of 255", most[0] <= CONTRACT_INSIDE,
            worst[0]);
     expect("blur contract: content touching a cut edge within its measured bound",

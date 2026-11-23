@@ -3,7 +3,9 @@
 (userland/apps/yonder/filter.c § A large blur: the floor and the most, the
 spread matched, the extended boxes, the copy's squares past the edges, each
 pass kept inside the layer, the bilinear enlargement, the group's grid, what
-the blur reads), against tools/test_yonder_filter_host.sh: a mutant is
+the blur reads, and libflow's cull by it), against
+tools/test_yonder_filter_host.sh (and tools/test_yonder_host.sh for the
+cull): a mutant is
 CAUGHT when the suite fails, MISSED when it passes, which means a test is
 missing and gets written. A build failure is neither.
 
@@ -28,6 +30,8 @@ args.logs.mkdir(parents=True, exist_ok=True)
 
 FILTER = 'userland/apps/yonder/filter.c'
 CASES = 'bash tools/test_yonder_filter_host.sh'
+FLOW = 'userland/libflow/flow.c'
+PAINTER = 'bash tools/test_yonder_host.sh'
 
 mutants = [
     # The floor and the most (the contract's table).
@@ -73,17 +77,21 @@ mutants = [
     ('reads-no-farther-than-three-boxes', 'more += past > 0 ? past : 0;', 'more += past > 0 ? 0 : 0;'),
     ('reads-forget-the-enlargement', 'return d.s > 1 ? 3 * (d.k + 1) * d.s + 3 * d.s / 2 : 0;',
      'return d.s > 1 ? 3 * (d.k + 1) * d.s : 0;'),
+    # libflow culls a filtered group's inside by what the blurs read.
+    ('the-cull-without-the-reads', 'more += FLOW_FILTER_READS_MORE;', 'more += 0;', FLOW, PAINTER),
 ]
 
 caught, missed, unbuilt = [], [], []
-for name, old, new in mutants:
+for mutant in mutants:
+    name, old, new = mutant[:3]
+    where, cases = mutant[3:] if len(mutant) > 3 else (FILTER, CASES)
     if args.only and args.only not in name:
         continue
-    path = root / FILTER
+    path = root / where
     original = path.read_bytes()
     text = original.decode()
     if text.count(old) != 1:
-        print(f'{name}: the text to break is not found once in {FILTER}', file=sys.stderr)
+        print(f'{name}: the text to break is not found once in {where}', file=sys.stderr)
         unbuilt.append(name)
         continue
     log = args.logs / f'{name}.log'
@@ -91,14 +99,14 @@ for name, old, new in mutants:
         path.write_text(text.replace(old, new))
         with log.open('w') as out:
             try:
-                result = subprocess.run(['bash', '-c', CASES], cwd=root, stdout=out, stderr=out, timeout=300)
+                result = subprocess.run(['bash', '-c', cases], cwd=root, stdout=out, stderr=out, timeout=300)
                 code = result.returncode
             except subprocess.TimeoutExpired:
                 code = 'timeout'
     finally:
         path.write_bytes(original)
         if path.read_bytes() != original:
-            print(f'{name}: {FILTER} WAS NOT RESTORED', file=sys.stderr)
+            print(f'{name}: {where} WAS NOT RESTORED', file=sys.stderr)
             sys.exit(2)
     body = log.read_text(errors='replace')
     # A compiler's error, not a sanitizer's "runtime error:", which is a catch.
