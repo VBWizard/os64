@@ -1562,7 +1562,7 @@ static uint32_t scale_pixel(uint32_t *state, bool premultiplied)
 static void scale_reference_cases(void)
 {
     enum { W = 300, H = 120 };
-    static uint32_t got[W * H], want[W * H], src[400 * 400];
+    static uint32_t got[W * H], want[W * H];
     uint32_t state = 4242;
     int same = 1, cases = 0;
     char first[160] = "";
@@ -1583,6 +1583,9 @@ static void scale_reference_cases(void)
             sw = 1 + scale_random(&state) % 400;
             sh = 1 + scale_random(&state) % 400;
         }
+        // Exactly the source's size, from the heap, so a tap past its last
+        // pixel is a sanitizer's report and not a neighbour's value.
+        uint32_t *src = malloc((size_t)sw * sh * sizeof(*src));
         for (uint32_t i = 0; i < sw * sh; i++)
             src[i] = scale_pixel(&state, premultiplied || tiled ? premultiplied : false);
         os64_gui_rect_t box = {(int32_t)(scale_random(&state) % 200) - 100, (int32_t)(scale_random(&state) % 80) - 40,
@@ -1608,6 +1611,7 @@ static void scale_reference_cases(void)
             yonder_draw_surface(got, W, clip, box, smooth, &s);
             ref_draw_surface(want, W, clip, box, smooth, &s);
         }
+        free(src);
         cases++;
         if (memcmp(got, want, sizeof(got)) != 0) {
             same = 0;

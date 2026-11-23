@@ -33,8 +33,11 @@ CASES = 'bash tools/test_yonder_host.sh'
 mutants = [
     ('the-column-weight-one-unit-off', '    t.next = t.i + 1 < n ? t.i + 1 : t.i;\n',
      '    t.next = t.i + 1 < n ? t.i + 1 : t.i;\n    t.f += t.f != 0 && t.f < 255;\n'),
-    ('the-last-tap-clamped-wrong', 't.next = t.i + 1 < n ? t.i + 1 : t.i;',
-     't.next = t.i + 1 < n ? t.i + 1 : (t.i > 0 ? t.i - 1 : 0);'),
+    # (A last tap clamped to the pixel BEFORE it is not broken here: the
+    # last pixel always comes with a weight of 0 for the next (between), so
+    # that change draws the same pixels. Not clamping at all reads past the
+    # source, which the sanitizers report.)
+    ('the-last-tap-not-clamped', 't.next = t.i + 1 < n ? t.i + 1 : t.i;', 't.next = t.i + 1;'),
     ('the-row-from-the-next-row', 'Tap r = tap_at(v, sh, box.h);', 'Tap r = tap_at(v + 1, sh, box.h);'),
     ('the-tiled-row-from-the-next-row', 'Tap r = tap_at(v, sh, tile.h);', 'Tap r = tap_at(v + 1, sh, tile.h);'),
     ('a-run-counted-from-the-first', 'uint32_t u = (uint32_t)((int64_t)cx + k - box.x);',
