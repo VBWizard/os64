@@ -18,7 +18,8 @@ FReusePair *f_reuse_pair(const FReuseMatch *m, const FBox *box)
 
 bool f_reuse_role_root(const FReuseMatch *m, const FReusePair *p, flow_role_t *role)
 {
-    if (!p->role_refused || (p->parent != SIZE_MAX && m->pairs[p->parent].role_refused)) return false;
+    if (!p->role_refused || p->in_copy || (p->parent != SIZE_MAX && m->pairs[p->parent].role_refused))
+        return false;
     uint16_t bits = p->roles ? p->roles : p->roles_below;
     int r = 0;
     while (r < FLOW_ROLE_KIND && !(bits & ROLE(r))) r++;
@@ -84,7 +85,7 @@ static flow_reuse_reason_t reuse_node_reason(FReuseMatch *m, const os64_html_nod
 }
 
 static flow_reuse_reason_t reuse_items_equal(FReuseMatch *m, const FBox *a, const FBox *b,
-                                            bool *ordinary, uint16_t *roles)
+                                            bool *inner, uint16_t *roles)
 {
     const FItem *x = a->items, *y = b->items;
     for (; x && y; x = x->next, y = y->next) {
@@ -97,9 +98,12 @@ static flow_reuse_reason_t reuse_items_equal(FReuseMatch *m, const FBox *a, cons
         flow_reuse_reason_t reason = reuse_node_reason(m, x->node, false);
         if (reason != FLOW_REUSE_NREASONS) return reason;
         if (!f_style_equal(x->style, y->style)) return FLOW_REUSE_STYLE;
-        if (x->content || x->absolute || x->floated) *ordinary = false;
-        *roles |= (x->content ? ROLE(FLOW_ROLE_ATOMIC) : 0) | (x->absolute ? ROLE(FLOW_ROLE_OUT_OF_FLOW) : 0) |
-                  (x->floated ? ROLE(FLOW_ROLE_FLOAT) : 0);
+        // An atom's content and an out-of-flow box are boxes of their own,
+        // judged as they are matched; a float is refused inside a copy.
+        if (x->floated) {
+            *inner = false;
+            *roles |= ROLE(FLOW_ROLE_FLOAT);
+        }
         if (x->inl) {
             const FInline *u = x->inl, *v = y->inl;
             if (u->node != v->node || u->pieces != v->pieces ||
@@ -107,7 +111,7 @@ static flow_reuse_reason_t reuse_items_equal(FReuseMatch *m, const FBox *a, cons
             // A split inline's shared spans can escape a candidate root.
             // Keep it fresh until a larger ownership boundary is certified.
             if (u->pos || v->pos || u->pieces != 1 || u->open_in || v->open_in) {
-                *ordinary = false;
+                *inner = false;
                 *roles |= ROLE(FLOW_ROLE_INLINE);
             }
         }
@@ -140,20 +144,34 @@ static void reuse_match_box(FReuseMatch *m, FBox *box, const FBox *ordered,
         identity = up ? up->node : NULL;
     }
     const FBox *old = p->old;
-    p->ordinary = box->kind == FB_BLOCK && !box->flex && !box->grid &&
-                  !box->positioned && !box->out_of_flow && !box->transformed &&
-                  box->floated == FLOW_FLOAT_NONE && !box->pos && !box->homed && !atomic;
-    // The role counter's, when the layout is profiled. Every box whose
-    // position is not static is `positioned`: an absolute or fixed one is
-    // counted as that, not as positioned in the flow.
+    // Inside a copy may stand (RELAYOUT_GRAFT.md § Roles inside a copy): a
+    // block container whatever its role (a flex or grid container or item,
+    // a positioned, transformed or filtered box, an atom's content, an
+    // out-of-flow box, whose containing block is the subtree's question,
+    // `escapes`); not a float, a table or a part of one, a block-level
+    // picture, nor a block holding a positioned inline's pieces. The root
+    // is in the flow among blocks besides.
+    p->inner = box->kind == FB_BLOCK && box->floated == FLOW_FLOAT_NONE && !box->homed;
+    p->ordinary = !box->out_of_flow && !atomic;
+    if (box->out_of_flow) {
+        p->escapes = 1;
+        const FPos *cb = box->pos ? box->pos->cb : NULL;
+        if (cb && cb->kind == FP_BOX && cb->box) {
+            FReusePair *holder = f_reuse_pair(m, cb->box);
+            if (holder) holder->cb_held++;
+        }
+    }
+    if (atomic && old && old->reuse_call && old->reuse_call->has_queries) {
+        p->inner = false;
+        p->atom_floats = true;
+    }
+    // The role counter's, when the layout is profiled: what keeps the box
+    // from being a copy's root. Every box whose position is not static is
+    // `positioned`: an absolute or fixed one is counted as that, not as
+    // positioned in the flow.
     p->roles = !m->clock ? 0 : (uint16_t)((box->kind != FB_BLOCK ? ROLE(FLOW_ROLE_KIND) : 0) |
-               (box->flex ? ROLE(FLOW_ROLE_FLEX) : 0) |
-               (box->grid ? ROLE(FLOW_ROLE_GRID) : 0) |
-               (box->positioned && !box->out_of_flow ? ROLE(FLOW_ROLE_POSITIONED) : 0) |
                (box->out_of_flow ? ROLE(FLOW_ROLE_OUT_OF_FLOW) : 0) |
-               (box->transformed ? ROLE(FLOW_ROLE_TRANSFORMED) : 0) |
                (box->floated != FLOW_FLOAT_NONE ? ROLE(FLOW_ROLE_FLOAT) : 0) |
-               (box->pos && !box->positioned && !box->transformed ? ROLE(FLOW_ROLE_CONTAINER) : 0) |
                (box->homed ? ROLE(FLOW_ROLE_INLINE) : 0) | (atomic ? ROLE(FLOW_ROLE_ATOMIC) : 0) |
                (box->parent && (box->parent->flex || box->parent->grid) ? ROLE(FLOW_ROLE_ITEM) : 0));
     if (!old || old->kind != box->kind || old->node != box->node ||
@@ -169,14 +187,14 @@ static void reuse_match_box(FReuseMatch *m, FBox *box, const FBox *ordered,
     else if ((p->reason = reuse_node_reason(m, identity, true)) != FLOW_REUSE_NREASONS) {
         // The reason is retained while descendants get their own checks.
     } else if (!f_style_equal(box->style, old->style)) p->reason = FLOW_REUSE_STYLE;
-    else p->reason = reuse_items_equal(m, box, old, &p->ordinary, &p->roles);
+    else p->reason = reuse_items_equal(m, box, old, &p->inner, &p->roles);
 
     // Missing-image alt text is processed during pass 3, outside fresh
     // items. Keep that IFC fresh until its processed-byte mapping is shared.
     if (old) for (const FLine *ln = old->lines; ln; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr; fr = fr->next)
             if (fr->kind == FF_TEXT && fr->item && fr->item->kind == FI_ATOMIC) {
-                p->ordinary = false;
+                p->inner = false;
                 p->roles |= ROLE(FLOW_ROLE_ALT_TEXT);
             }
     const FBox *c = old ? old->first : NULL;
@@ -240,30 +258,55 @@ static FReuseMatch *reuse_match_new(flow_tree_t *tree, const flow_tree_t *previo
         tree->reuse_stats.boxes_compared++;
         tree->reuse_stats.subtrees_equal += p->equal;
         bool item = p->box->parent && (p->box->parent->flex || p->box->parent->grid);
+        // Its own containing-block entries are met: what is left escapes.
+        p->escapes -= p->cb_held;
+        p->ordinary = p->ordinary && p->inner && p->escapes == 0;
         tree->reuse_stats.geometry_candidates += p->equal && p->ordinary && !item;
         if (!p->equal) tree->reuse_stats.refused[p->reason]++;
+        else if (p->atom_floats) tree->reuse_stats.refused[FLOW_REUSE_ATOM_FLOATS]++;
+        else if (p->inner && p->escapes) tree->reuse_stats.refused[FLOW_REUSE_ABSOLUTE_OUTSIDE]++;
         else if (!p->ordinary || item) tree->reuse_stats.refused[FLOW_REUSE_BOX_ROLE]++;
         p->role_refused = p->equal && (!p->ordinary || item);
+        if (p->equal && p->ordinary && !item) p->cand_boxes = p->subtree_count;
         if (p->parent != SIZE_MAX) {
             FReusePair *up = &m->pairs[p->parent];
-            up->ordinary &= p->ordinary;
-            // Being an item is the item's own refusal, not its container's:
-            // what refuses a box above for an item is the container's role.
-            up->roles_below |= (uint16_t)((p->roles & ~ROLE(FLOW_ROLE_ITEM)) | p->roles_below);
+            up->cand_boxes += p->cand_boxes;
+            up->inner &= p->inner;
+            up->atom_floats |= p->atom_floats;
+            up->escapes += p->escapes;
+            // What refuses a box above is what may not stand inside a copy:
+            // not being a root (an item, an atom's content, an out-of-flow
+            // box) is the box's own refusal, not its parent's, unless the
+            // out-of-flow box's containing block is outside the parent too.
+            uint16_t inside = (uint16_t)(p->roles & ~(ROLE(FLOW_ROLE_ITEM) | ROLE(FLOW_ROLE_ATOMIC) |
+                                                    ROLE(FLOW_ROLE_OUT_OF_FLOW)));
+            if (p->atom_floats) inside |= ROLE(FLOW_ROLE_ATOMIC);
+            if (p->escapes) inside |= ROLE(FLOW_ROLE_OUT_OF_FLOW);
+            up->roles_below |= (uint16_t)(inside | p->roles_below);
             up->subtree_count += p->subtree_count;
             if (!p->equal && up->reason == FLOW_REUSE_NREASONS) up->reason = FLOW_REUSE_STRUCTURE;
         }
     }
     // THE ROLE COUNTER'S ROOTS (a record: flow_reuse_stats_t.role_*), when
     // the layout is profiled: each equal subtree refused for a role whose
-    // parent is not one too, by its own first role or else the first under
-    // it (f_reuse_role_root).
+    // parent is not one too and which no candidate above it takes in (a
+    // copy takes in what is under it, refused or not), by its own first
+    // role or else the first under it (f_reuse_role_root); its boxes leave
+    // out what candidates under it take in. A parent's pair comes before
+    // its children's.
+    for (size_t i = 0; m->clock && i < m->count; i++) {
+        FReusePair *p = &m->pairs[i];
+        if (p->parent == SIZE_MAX) continue;
+        const FReusePair *up = &m->pairs[p->parent];
+        bool up_item = up->box->parent && (up->box->parent->flex || up->box->parent->grid);
+        p->in_copy = up->in_copy || (up->equal && up->ordinary && !up_item);
+    }
     for (size_t i = 0; m->clock && i < m->count; i++) {
         flow_role_t r;
         const FReusePair *p = &m->pairs[i];
         if (!f_reuse_role_root(m, p, &r)) continue;
         tree->reuse_stats.role_roots[r]++;
-        tree->reuse_stats.role_boxes[r] += p->subtree_count;
+        tree->reuse_stats.role_boxes[r] += p->subtree_count - p->cand_boxes;
         for (int k = 0; k < FLOW_ROLES; k++)
             tree->reuse_stats.role_inside[k] += ((p->roles | p->roles_below) & ROLE(k)) != 0;
     }

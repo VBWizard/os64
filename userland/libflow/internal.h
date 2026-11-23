@@ -1185,17 +1185,31 @@ typedef struct {
     FBox *box;
     const FBox *old;
     size_t parent, subtree_count;
-    bool equal, ordinary;
-    uint8_t reason;     // flow_reuse_reason_t, a byte so the role counter's fields fit beside it
+    // `inner`: every box of the subtree may stand inside a copy (RELAYOUT_
+    // GRAFT.md § Roles inside a copy); `ordinary`: the subtree may be copied
+    // with this box as its root, which is also in the flow among blocks and
+    // holds no out-of-flow box whose containing block is outside it.
+    bool equal, ordinary, inner;
+    // Inside: an atom's content made a float query in the space its line
+    // stands in, which a copy cannot answer.
+    bool atom_floats;
+    uint8_t reason;     // flow_reuse_reason_t
+    // The out-of-flow boxes of the subtree whose containing block is not in
+    // it; and those whose containing block is this box, counted as they are
+    // met below it and taken off here.
+    uint32_t escapes, cb_held;
     // The role counter's, kept only when the layout is profiled
     // (FReuseMatch.clock): whether it is equal and refused for a role; its
     // box's own roles (a bit for each flow_role_t: what keeps the box from
-    // being ordinary, and being an item); and the roles of the boxes under
-    // it that keep them from being ordinary.
-    bool role_refused;
+    // being a copy's root, and being an item); the roles of the boxes under
+    // it that keep them from standing inside a copy; whether a box above it
+    // is a copy's candidate (`in_copy`), which takes it in; and the boxes
+    // under it a candidate takes in, its own included (`cand_boxes`).
+    bool role_refused, in_copy;
     uint16_t roles, roles_below;
+    size_t cand_boxes;
 } FReusePair;
-_Static_assert(sizeof(FReusePair) == 40, "the role counter's fields fit in the pair's padding");
+_Static_assert(sizeof(FReusePair) == 64, "review the pair's fields when it grows: a pair per box, every match");
 typedef struct { const void *from; void *to; } FReusePointer;
 typedef struct {
     FReusePair *pairs;

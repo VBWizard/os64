@@ -1414,7 +1414,8 @@ uint32_t yonder_diag_next_seq(const char *dir)
 // `layout graft` line names in its bracket.
 static const char *const kReuseReasons[YONDER_LAYOUT_REUSE_REASONS] = {
     "no source", "incomplete", "inputs", "history", "budget", "memory", "structure", "dirty",
-    "style", "motion", "role", "call", "floats", "marker", "translation", "retain"};
+    "style", "motion", "role", "call", "floats", "marker", "translation", "retain", "absolute outside",
+    "atom floats"};
 
 /* Saturating totals preserve the meaning of a long-lived page's report. */
 static uint64_t layout_sum(uint64_t a, uint64_t b)

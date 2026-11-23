@@ -1070,3 +1070,90 @@ static void graft_intrinsic_cases(void)
 
     graft_intrinsic_walk(12, 24);
 }
+
+// ROLES INSIDE A COPY (G1; RELAYOUT_GRAFT.md § Roles inside a copy). Each
+// case changes a box beside the subtree, so the subtree is copied, and the
+// layout is compared with a fresh one (graft_oracle); a staged field's case
+// has a reader outside the copy that reads it.
+static flow_profile_t roles_profile;
+static flow_tree_t *roles_layout(Sheeted *p, const flow_tree_t *old)
+{
+    flow_reuse_inputs_t inputs = {.resource_owner = p->doc};
+    os64_page_t *model = os64_page_rebuild(p->page);
+    flow_tree_t *t = flow_layout_incremental(p->doc, model, 800, &p->env, old, &inputs, &roles_profile, NULL, NULL);
+    os64_page_free(model);
+    return t;
+}
+// Lays the page out, changes #grow's class to `g`, lays it out again
+// against the first and compares; returns the second's stats.
+static flow_reuse_stats_t roles_case(const char *html, uint64_t *reused)
+{
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_tree_t *old = roles_layout(&p, NULL);
+    os64_html_set_attr(p.doc, graft_node(&p, "grow"), "class", "g", 1);
+    intr_update(&p);
+    flow_tree_t *next = roles_layout(&p, old);
+    flow_reuse_stats_t s = flow_reuse_stats(next);
+    *reused = roles_profile.reused;
+    flow_free(old); graft_oracle(&p, next); flow_free(next); sheeted_close(&p);
+    return s;
+}
+// #grow starts with a height, so the cursor has placed something before
+// what follows it either way (whether it had is a call input).
+#define ROLES_HEAD "<!doctype html><style>#grow{height:10px}#grow.g{height:30px} p{margin:0}</style>"
+static void graft_roles_cases(void)
+{
+    uint64_t reused;
+    flow_reuse_stats_t s;
+    // A wrapped flex container copied inside a baseline-aligned item: the
+    // item's baseline is its container's first line's, which the copied
+    // items' flex lines say (the first in the tree, baseline-aligned, is on
+    // its third line, and would be taken from any line).
+    s = roles_case(ROLES_HEAD "<div style='display:flex;align-items:baseline'>"
+        "<div><div><div style='display:flex;flex-wrap:wrap;width:100px'>"
+        "<div style='order:2;align-self:baseline;width:80px;font-size:30px;padding-top:20px'>late</div>"
+        "<div style='order:1;width:80px'>first</div><div style='order:1;width:80px'>second</div>"
+        "</div></div></div><div style='font-size:20px'>beside</div><div id=grow></div></div>", &reused);
+    expect("roles: a wrapped flex container is copied with its items' flex lines", reused >= 5, NULL);
+    // A grid copied the same way: its baseline is its first row's, which
+    // the copied items' rows say.
+    s = roles_case(ROLES_HEAD "<div style='display:flex;align-items:baseline'>"
+        "<div><div><div style='display:grid;grid-template-columns:80px 80px'>"
+        "<div style='grid-row:2;font-size:30px;padding-top:20px'>late</div>"
+        "<div style='grid-row:1'>first</div><div style='grid-row:1'>second</div>"
+        "</div></div></div><div style='font-size:20px'>beside</div><div id=grow></div></div>", &reused);
+    expect("roles: a grid is copied with its items' rows and columns", reused >= 5, NULL);
+    // An inline-block's content, and an absolute box whose containing
+    // block is inside the copy, its placeholder on a copied line.
+    s = roles_case(ROLES_HEAD "<div id=grow></div><div style='position:relative'>"
+        "<p>words <span style='display:inline-block;padding:3px'><b style='display:block'>in</b></span>"
+        " and <span style='position:absolute;top:4px'>abs</span> after</p>"
+        "<div style='position:absolute;right:0'>block abs</div></div><p>tail</p>", &reused);
+    expect("roles: an atom's content and absolute boxes inside are copied", reused >= 6, NULL);
+    // Transformed and filtered boxes inside, and a relative one beside its
+    // changed sibling.
+    s = roles_case(ROLES_HEAD "<div id=grow></div><div><div style='transform:translateX(5px)'><p>moved</p></div>"
+        "<div style='filter:blur(1px)'><p>blurred</p></div><div style='position:relative;top:3px'><p>rel</p></div>"
+        "</div><p>tail</p>", &reused);
+    expect("roles: transformed, filtered and relative boxes are copied", reused >= 7, NULL);
+
+    // Refused by name: an absolute box whose containing block is outside.
+    s = roles_case(ROLES_HEAD "<div style='position:relative'><div><p>x</p>"
+        "<div style='position:absolute;top:0'>abs</div></div><div id=grow></div></div><p>tail</p>", &reused);
+    expect("roles: an absolute box escaping the subtree refuses it by name",
+           s.refused[FLOW_REUSE_ABSOLUTE_OUTSIDE] >= 1, NULL);
+    // Refused by name: an atom whose content made a float query in its
+    // line's space (its own `clear`, asked as it is entered: graft_enter).
+    s = roles_case(ROLES_HEAD "<div id=grow></div><div style='float:left;width:20px;height:5px'></div>"
+        "<div><p>a <span style='display:inline-block;clear:both'>c</span> b</p></div><p>tail</p>", &reused);
+    expect("roles: an atom whose content asked the floats refuses by name",
+           s.refused[FLOW_REUSE_ATOM_FLOATS] >= 1, NULL);
+    // Still refused: a float inside, a block-level picture inside.
+    s = roles_case(ROLES_HEAD "<div id=grow></div><div><div style='float:left;width:30px'>f</div><p>beside</p></div>"
+        "<p>tail</p>", &reused);
+    expect("roles: a float inside refuses", s.refused[FLOW_REUSE_BOX_ROLE] >= 1, NULL);
+    s = roles_case(ROLES_HEAD "<div id=grow></div><div><img src=known.png style='display:block'><p>x</p></div>"
+        "<p>tail</p>", &reused);
+    expect("roles: a block-level picture inside refuses", s.refused[FLOW_REUSE_BOX_ROLE] >= 1, NULL);
+}
