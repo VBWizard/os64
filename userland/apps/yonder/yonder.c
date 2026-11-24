@@ -1639,7 +1639,7 @@ static size_t element_named(char *out, size_t cap, const char *before, const os6
 // thing that comes again before eleven newer ones has its row still.
 typedef struct {
     struct {
-        char what[48], at[96], note[160];
+        char what[64], at[96], note[160];
         uint64_t n;
     } row[12];
     int nrows;
@@ -1785,6 +1785,9 @@ static void layout_profile_add(const Page *p, const yonder_layout_stats_t *sampl
     if (p->diag) yonder_diag_layout_add(diag, sample);
     else yonder_diag_layout_stream_add(diag, sample);
 }
+static void forced_one(const yonder_layout_one_t *one);
+static void forced_model(uint64_t us);
+static bool read_asked(void);
 static void layout_profile_one(const Page *p, const yonder_layout_one_t *one)
 {
     yonder_diag_t *diag = layout_profile_diag(p);
@@ -1801,6 +1804,7 @@ static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
         yonder_layout_stats_t sample = {.model_calls = 1, .refusals = model == NULL};
         sample.model_us = layout_elapsed(began, &sample.clock_errors);
         layout_profile_add(p, &sample);
+        forced_model(sample.model_us);
     }
     return model;
 }
@@ -1878,7 +1882,7 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
                 : profile.nodes_moved == 0 ? (profile.styles_layout > 0 ? YONDER_NEEDED_STILL
                                               : profile.styles_paint > 0 ? YONDER_NEEDED_PAINT : YONDER_NEEDED_NOTHING)
                 : profile.nodes_moved == 1 ? YONDER_NEEDED_ONE : YONDER_NEEDED_MORE;
-            int forced = yonder_scripts_ledger_running(page_scripts(p));
+            int forced = read_asked();
             sample.needed.count[forced][need] = 1;
             sample.needed.us[forced][need] = profile.style_us + profile.boxes_us + profile.layout_us + profile.public_us;
             if (need != YONDER_NEEDED_UNCOMPARED)
@@ -2035,12 +2039,22 @@ static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node
 static bool s_restyle_in_place = true;
 static uint32_t s_geometry_check, s_geometry_checked;
 static uint64_t s_geometry_compared, s_geometry_differed;
+// The same check over the trees a NONE verdict advanced (rebuild_unchanged),
+// the record's `unchanged check`.
+static uint32_t s_unchanged_checked;
+static uint64_t s_unchanged_compared, s_unchanged_differed;
+// What a read making the page current asks of it (script_current): a
+// READ_ kind, or -1 when no read is asking (a rendering step, a task's end,
+// the window seen, a resize: any other rebuild).
+static int s_asking = -1;
 // A GEOMETRY READ ANSWERED FROM THE SHOWN TREE (BRIEF_LAYOUT_NEEDS.md N2,
 // libflow's pending.inc), on unless `--kept-reads=off`: an offset or client
 // read, or a scroll read with no transform pending, whose page has only
 // paint-only inline style writes pending, read with no model refresh, no
 // cascade update and no restyle (script_geometry). The same switch lets a
-// covered window owe its rendering step (script_rendering_step).
+// covered window owe its rendering step (script_rendering_step), and lets a
+// rebuild owed for changes that moved nothing advance the tree with no
+// layout (shown_advance).
 // `--geometry-check[=N]` answers every Nth such read the old way too and
 // compares (s_reads_compared, s_reads_differed).
 static bool s_kept_reads = true;
@@ -2049,6 +2063,7 @@ static uint64_t s_reads_compared, s_reads_differed;
 // What N2's verdict is for the page on screen, its tree standing for a
 // layout at the view's size; RESTYLE when it cannot stand.
 static flow_pending_t shown_pending(void);
+static bool shown_advance(void);
 // A read that met only paint-only writes pending and made the page current
 // all the same, by kind (reads_counted).
 enum { READ_RECTS, READ_SCROLL, READ_STYLES, READ_HITS };
@@ -2056,13 +2071,25 @@ enum { READ_RECTS, READ_SCROLL, READ_STYLES, READ_HITS };
 // profile is on: a read answered from the kept tree, a read of kind `laid`
 // that made the page current with PAINT pending (-1 for none), or a
 // rendering step a covered window owed.
+static const char *const kReadKindNames[YONDER_LAYOUT_READ_KINDS] = {"rects", "scroll", "styles", "hits"};
 static void reads_counted(const Page *p, int laid, bool kept, bool owed)
 {
-    static const char *const names[YONDER_LAYOUT_READ_KINDS] = {"rects", "scroll", "styles", "hits"};
     if (!s_layout_profile || layout_profile_diag(p) == NULL)
         return;
-    yonder_layout_stats_t sample = {.read_kind_names = names, .reads_kept = kept, .owed_covered = owed};
+    yonder_layout_stats_t sample = {.read_kind_names = kReadKindNames, .reads_kept = kept, .owed_covered = owed};
     if (laid >= 0 && laid < YONDER_LAYOUT_READ_KINDS) sample.reads_laid[laid] = 1;
+    layout_profile_add(p, &sample);
+}
+// A rebuild a NONE verdict made with no layout (rebuild_unchanged), counted
+// in the record's `layout reads` line by the read that asked for it
+// (s_asking), or as another rebuild's.
+static void unchanged_counted(const Page *p)
+{
+    if (!s_layout_profile || s_read_checking || layout_profile_diag(p) == NULL)
+        return;
+    yonder_layout_stats_t sample = {.read_kind_names = kReadKindNames};
+    if (s_asking >= 0 && s_asking < YONDER_LAYOUT_READ_KINDS) sample.reads_unchanged[s_asking] = 1;
+    else sample.others_unchanged = 1;
     layout_profile_add(p, &sample);
 }
 
@@ -2155,9 +2182,11 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
 static yonder_lt_t s_lt;
 
 // WHO ASKED for the layouts made between an lt_why_begin and its
-// lt_why_end (page_lay_out tells the timeline): the outermost asker
+// lt_why_end (page_lay_out tells the timeline, and the profile counts as
+// forced the layouts a read asked for, read_asked): the outermost asker
 // stands, so a rebuild a script's read asks for is the read's. Set only
-// while the timeline runs; the end puts back what the begin found.
+// while the timeline or the profile runs; the end puts back what the begin
+// found.
 static yonder_lt_why_t s_lt_why;
 
 static uint64_t lt_clock(void)
@@ -2455,6 +2484,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         }
         layout_profile_add(p, &sample);
         if (s_one_open) {
+            s_one.cascaded = true;
             s_one.cascade_us = sample.cascade_us;
             s_one.cascade_why = why >= 0 ? why : sample.cascade_updates ? YONDER_LAYOUT_CASCADE_UPDATED
                                                                          : YONDER_LAYOUT_CASCADE_KEPT;
@@ -3722,7 +3752,7 @@ static void lt_inside(yonder_lt_in_t in, int64_t from)
 static yonder_lt_why_t lt_why_begin(yonder_lt_why_t why)
 {
     yonder_lt_why_t was = s_lt_why;
-    if (s_lt.on && was == YONDER_LT_WHY_OTHER)
+    if ((s_lt.on || s_layout_profile) && was == YONDER_LT_WHY_OTHER)
         s_lt_why = why;
     return was;
 }
@@ -3730,6 +3760,14 @@ static yonder_lt_why_t lt_why_begin(yonder_lt_why_t why)
 static void lt_why_end(yonder_lt_why_t was)
 {
     s_lt_why = was;
+}
+
+// Whether a script's read asked for the layout being made (s_lt_why), with
+// the timeline or the profile on, and it is not the read check's own
+// (read_checked): the profile's forced layouts.
+static bool read_asked(void)
+{
+    return s_lt_why == YONDER_LT_WHY_READ && !s_read_checking;
 }
 
 // The timeline's lines on `d`, written whole: the summary, the layouts by
@@ -4114,6 +4152,26 @@ static const char *const kRefused[REFUSED_COUNT] = {
     [REFUSED_VIEW] = "the view moved with it",
 };
 
+// THE FORCED LAYOUTS BY PHASE, with the profile on: what the layouts a
+// script's read asked for cost, phase by phase, as the profile timed each
+// (yonder_layout_one_t), for a reading's longest task and the whole
+// reading (dt_phases says them). Their
+// count and wall time; the model rebuilds the reads began with; the
+// cascade by what became of it (kept: nothing to update; updated; fresh,
+// by reason); then style, boxes, placement and the public tree; and the
+// boxes they made, and of those how many the graft copied (the rest were
+// placed fresh).
+enum { FORCED_KEPT, FORCED_UPDATED, FORCED_FRESH, FORCED_CASCADES };
+typedef struct {
+    uint64_t layouts, total_us, models, model_us;
+    uint64_t cascades[FORCED_CASCADES], cascade_us[FORCED_CASCADES];
+    uint64_t fresh_by[YONDER_LAYOUT_CASCADE_REASONS];
+    uint64_t style_us, boxes_us, place_us, public_us;
+    uint64_t boxes, copied;
+} forced_phases_t;
+// The task running's (task_begin starts it, task_said reads it).
+static forced_phases_t s_task_phases;
+
 // Counted with the processor's time-stamp counter, not a system call: a
 // paint draws thousands of runs. That trusts the cores' counters to agree,
 // which nothing here can check — the thread may move between cores between
@@ -4200,9 +4258,51 @@ static struct {
     // its script's name), and the layouts it forced and their time.
     uint64_t task_longest, task_longest_layouts, task_longest_layout_us;
     char task_longest_what[96];
+    // With the profile on, the longest task's forced layouts by phase, and
+    // every forced layout of the reading's (forced_phases_t).
+    forced_phases_t task_longest_phases, forced_phases;
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
+
+// A layout the profile timed, into the task's and the reading's forced
+// layouts by phase when a script's read asked for it (read_asked) and it
+// reached its cascade.
+static void forced_phases_add(forced_phases_t *f, const yonder_layout_one_t *one)
+{
+    int c = one->cascade_why == YONDER_LAYOUT_CASCADE_KEPT      ? FORCED_KEPT
+            : one->cascade_why == YONDER_LAYOUT_CASCADE_UPDATED ? FORCED_UPDATED
+                                                                : FORCED_FRESH;
+    f->layouts++;
+    f->total_us += one->total_us;
+    f->cascades[c]++;
+    f->cascade_us[c] += one->cascade_us;
+    if (c == FORCED_FRESH && one->cascade_why >= 0 && one->cascade_why < YONDER_LAYOUT_CASCADE_REASONS)
+        f->fresh_by[one->cascade_why]++;
+    f->style_us += one->style_us;
+    f->boxes_us += one->boxes_us;
+    f->place_us += one->layout_us;
+    f->public_us += one->public_us;
+    f->boxes += one->boxes;
+    f->copied += one->reused;
+}
+static void forced_one(const yonder_layout_one_t *one)
+{
+    if (!read_asked() || !one->cascaded)
+        return;
+    forced_phases_add(&s_task_phases, one);
+    forced_phases_add(&s_cost.forced_phases, one);
+}
+// A model rebuild the profile timed, likewise.
+static void forced_model(uint64_t us)
+{
+    if (!read_asked())
+        return;
+    s_task_phases.models++;
+    s_task_phases.model_us += us;
+    s_cost.forced_phases.models++;
+    s_cost.forced_phases.model_us += us;
+}
 
 // The canvas whose drawing is being marked (canvas_damage_mark), for the
 // counts' biggest part; NULL for every other mark (s_marking_box beside it).
@@ -4271,17 +4371,17 @@ static bool page_records_shown(const Page *p)
 {
     return p->diag != NULL && p->diag == g.page.diag;
 }
-static flow_pending_t shown_pending(void)
+// What a layout of the page on screen would read besides the document and
+// has moved since its tree was laid out: the view's size and zoom, the
+// sheets, the pictures and the fonts (script_geometry's own conditions for
+// a relayout), and the form state the graft's inputs carry, which moves
+// without the document's version: the tree's must be the state's now. Each
+// says why, for the record; NULL when none has.
+static const char *shown_moved(void)
 {
-    flow_pending_t restyle = {.verdict = FLOW_PENDING_RESTYLE, .transforms = true};
     Page *p = &g.page;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
     int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
-    // What a layout would read besides the document: the view's size and
-    // zoom, the sheets, the pictures and the fonts (script_geometry's own
-    // conditions for a relayout), and the form state the graft's inputs
-    // carry, which moves without the document's version: the tree's must be
-    // the state's now. Each says why, for the record.
     const char *why = !s_kept_reads ? "restyle: kept reads off"
                       : p->tree == NULL || flow_incomplete(p->tree) || p->cascade == NULL ? "restyle: no tree"
                       : p->laid_width != width || p->laid_height != height || p->laid_zoom != g.zoom
@@ -4293,16 +4393,86 @@ static flow_pending_t shown_pending(void)
     os64_page_state_t *state = why == NULL ? os64_page_shared_state(page_model(p)) : NULL;
     if (why == NULL && (state == NULL || os64_page_state_version(state) != p->laid_state))
         why = "restyle: the form state";
-    if (why != NULL) {
-        os64_strcopy(restyle.why, sizeof(restyle.why), why);
-        return restyle;
-    }
-    flow_pending_t pending = flow_pending(p->tree, page_doc(p), p->cascade);
+    return why;
+}
+// A verdict of the page on screen, noted for the record.
+static flow_pending_t pending_noted(flow_pending_t pending)
+{
     if (pending.lost)
         s_pending_lost++;
     if (pending.style_read && s_layout_profile)
         counted_at(&s_style_reads, "a selector may read its style", pending.style_read_at, "");
     return pending;
+}
+static flow_pending_t shown_pending(void)
+{
+    const char *why = shown_moved();
+    if (why != NULL) {
+        flow_pending_t restyle = {.verdict = FLOW_PENDING_RESTYLE, .transforms = true};
+        os64_strcopy(restyle.why, sizeof(restyle.why), why);
+        return restyle;
+    }
+    return pending_noted(flow_pending(g.page.tree, page_doc(&g.page), g.page.cascade));
+}
+// The page on screen made current at the document's version with nothing
+// laid out, when nothing a layout reads has moved and the verdict is NONE
+// (flow_pending_advance): true when it was, and then its rendered version
+// is the document's.
+static bool shown_advance(void)
+{
+    Page *p = &g.page;
+    if (shown_moved() != NULL)
+        return false;
+    flow_pending_t judged;
+    bool advanced = flow_pending_advance(p->tree, page_doc(p), p->cascade, &judged);
+    pending_noted(judged);
+    if (advanced)
+        p->rendered_version = os64_html_version(page_doc(p));
+    else if (judged.verdict == FLOW_PENDING_NONE)
+        // The cascade refused what libflow judged nothing (garb_cascade_advance),
+        // which leaves it owing a fresh build: said by name, since the
+        // layout that follows reports only that an update failed before.
+        yonder_diag_failed_seen(p->diag, "unchanged advance",
+                                garb_update_refusal_name(garb_cascade_update_refusal(p->cascade)));
+    return advanced;
+}
+
+// The page on screen's tree, `which` ("a kept tree"), laid out whole in
+// `env` beside itself and the two compared (flow_restyle_check), counted at
+// `compared` and `differed` and said under the record's `key`, with the
+// first difference's element and what differed.
+static void tree_checked(Page *p, int32_t width, const flow_env_t *env, const char *which, const char *key,
+                         uint64_t *compared, uint64_t *differed)
+{
+    flow_tree_t *whole = flow_layout_restyled(page_doc(p), page_model(p), width, env, NULL, NULL, NULL, NULL);
+    // Scrolled where the tree is, as a layout's scrolls are set again by
+    // element, each held to the whole layout's own range.
+    for (int32_t i = 0; whole != NULL && i < flow_nscrollers(g.page.tree); i++) {
+        int32_t s = flow_scroller_for(whole, flow_scroller(g.page.tree, i)->node);
+        if (s >= 0)
+            flow_scroll_set(whole, s, flow_scroll_at(g.page.tree, i));
+    }
+    const os64_html_node_t *node = NULL;
+    const char *what = "no whole layout could be made";
+    bool same = whole != NULL && flow_restyle_check(g.page.tree, whole, &node, &what);
+    (*compared)++;
+    if (!same) {
+        (*differed)++;
+        char named[96] = "", line[192];
+        if (node != NULL && node->kind != OS64_HTML_ELEMENT)
+            node = os64_html_flat_parent(page_doc(p), node);
+        if (node != NULL && node->kind == OS64_HTML_ELEMENT)
+            element_named(named, sizeof(named), "", node);
+        os64_snprintf(line, sizeof(line), "%s differs from a whole layout in %s at %s", which, what,
+                      named[0] != '\0' ? named : "the page");
+        yonder_diag_failed_seen(p->diag, key, line);
+        os64_debug_log(line);
+    }
+    char said[96];
+    os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)*compared,
+                  (unsigned long)*differed);
+    yonder_diag_summary_fact(p->diag, key, said);
+    flow_free(whole);
 }
 
 static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, int32_t height, uint32_t zoom)
@@ -4338,37 +4508,8 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
     // `--geometry-check`: every Nth kept tree is laid out whole beside
     // itself and the two compared; the record says how many were and the
     // first that differed, with the element and what differed.
-    if (s_geometry_check != 0 && ++s_geometry_checked % s_geometry_check == 0) {
-        flow_tree_t *whole = flow_layout_restyled(page_doc(p), page_model(p), width, &s_env, NULL, NULL, NULL, NULL);
-        // Scrolled where the kept tree is, as a layout's scrolls are set
-        // again by element, each held to the whole layout's own range.
-        for (int32_t i = 0; whole != NULL && i < flow_nscrollers(g.page.tree); i++) {
-            int32_t s = flow_scroller_for(whole, flow_scroller(g.page.tree, i)->node);
-            if (s >= 0)
-                flow_scroll_set(whole, s, flow_scroll_at(g.page.tree, i));
-        }
-        const os64_html_node_t *node = NULL;
-        const char *what = "no whole layout could be made";
-        bool same = whole != NULL && flow_restyle_check(g.page.tree, whole, &node, &what);
-        s_geometry_compared++;
-        if (!same) {
-            s_geometry_differed++;
-            char named[96] = "", line[192];
-            if (node != NULL && node->kind != OS64_HTML_ELEMENT)
-                node = os64_html_flat_parent(page_doc(p), node);
-            if (node != NULL && node->kind == OS64_HTML_ELEMENT)
-                element_named(named, sizeof(named), "", node);
-            os64_snprintf(line, sizeof(line), "a kept tree differs from a whole layout in %s at %s", what,
-                          named[0] != '\0' ? named : "the page");
-            yonder_diag_failed_seen(p->diag, "geometry check", line);
-            os64_debug_log(line);
-        }
-        char said[96];
-        os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)s_geometry_compared,
-                      (unsigned long)s_geometry_differed);
-        yonder_diag_summary_fact(p->diag, "geometry check", said);
-        flow_free(whole);
-    }
+    if (s_geometry_check != 0 && ++s_geometry_checked % s_geometry_check == 0)
+        tree_checked(p, width, &s_env, "a kept tree", "geometry check", &s_geometry_compared, &s_geometry_differed);
     return g.page.tree;
 }
 
@@ -4616,6 +4757,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
         s_one.at_us = (uint64_t)os64_micros();
         s_one_open = false;
         if (s_one.cascade_us != 0 || s_one.attempts != 0) layout_profile_one(p, &s_one);
+        forced_one(&s_one);
     }
     if (laid && p == &g.page) pointer_geometry_changed();
     if (s_lt.on) {
@@ -9265,6 +9407,42 @@ static void dt_put(DiagText *t, const char *fmt, ...)
     va_end(again);
 }
 
+// Microseconds as the reading says them: ms with one decimal.
+typedef struct { char text[24]; } dt_ms_t;
+static dt_ms_t dt_ms(uint64_t us)
+{
+    dt_ms_t m;
+    os64_snprintf(m.text, sizeof(m.text), "%lu.%lu ms", (unsigned long)(us / 1000), (unsigned long)(us % 1000 / 100));
+    return m;
+}
+// A forced_phases_t as the reading says it (`<whose> forced layouts by
+// phase`), when it holds anything: the layouts and their wall time, the
+// model rebuilds, the cascade by what became of it (fresh by reason), then
+// style, boxes, placement and the public tree, and the boxes made and
+// copied.
+static void dt_phases(DiagText *t, const char *whose, const forced_phases_t *f)
+{
+    if (f->layouts == 0 && f->models == 0)
+        return;
+    uint64_t cascade = f->cascade_us[FORCED_KEPT] + f->cascade_us[FORCED_UPDATED] + f->cascade_us[FORCED_FRESH];
+    dt_put(t, "; %s forced layouts by phase: %lu in %s, model %s (%lu), cascade %s (%lu kept %s, %lu updated %s, "
+           "%lu fresh %s", whose, (unsigned long)f->layouts, dt_ms(f->total_us).text, dt_ms(f->model_us).text,
+           (unsigned long)f->models, dt_ms(cascade).text, (unsigned long)f->cascades[FORCED_KEPT],
+           dt_ms(f->cascade_us[FORCED_KEPT]).text, (unsigned long)f->cascades[FORCED_UPDATED],
+           dt_ms(f->cascade_us[FORCED_UPDATED]).text, (unsigned long)f->cascades[FORCED_FRESH],
+           dt_ms(f->cascade_us[FORCED_FRESH]).text);
+    const char *const *names = cascade_reason_names();
+    const char *sep = ": ";
+    for (int32_t i = 0; i < YONDER_LAYOUT_CASCADE_REASONS; i++)
+        if (f->fresh_by[i] != 0) {
+            dt_put(t, "%s%s %lu", sep, names[i] != NULL ? names[i] : "?", (unsigned long)f->fresh_by[i]);
+            sep = ", ";
+        }
+    dt_put(t, "), style %s, boxes %s, placement %s, public %s; %lu boxes, %lu of them copied", dt_ms(f->style_us).text,
+           dt_ms(f->boxes_us).text, dt_ms(f->place_us).text, dt_ms(f->public_us).text, (unsigned long)f->boxes,
+           (unsigned long)f->copied);
+}
+
 // A weight as the rule wrote it: whole, or to two places.
 static void diag_weight(char *out, size_t cap, float w)
 {
@@ -9477,6 +9655,8 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (unsigned long)(s_cost.task_longest / rate / 1000), (unsigned long)(s_cost.task_longest / rate % 1000 / 100),
                (unsigned long)s_cost.task_longest_layouts, (unsigned long)(s_cost.task_longest_layout_us / 1000),
                (unsigned long)(s_cost.task_longest_layout_us % 1000 / 100));
+    dt_phases(t, "the longest task's", &s_cost.task_longest_phases);
+    dt_phases(t, "the reading's", &s_cost.forced_phases);
     if (s_cost.mark_most.w > 0)
         dt_put(t, "; the biggest part marked %dx%d at %d,%d by %s, the biggest painted %dx%d",
                (int)s_cost.mark_most.w, (int)s_cost.mark_most.h, (int)s_cost.mark_most.x,
@@ -13297,6 +13477,38 @@ static void change_said(const Page *p, const char *why)
     }
 }
 
+// A rebuild owed the page on screen made with no layout (shown_advance),
+// counted for the record by the read that asked for it (or as another
+// rebuild's), and with --geometry-check
+// every Nth tree so advanced laid out whole beside itself and the two
+// compared (`unchanged check`).
+static bool rebuild_unchanged(Page *p)
+{
+    // The read check (read_checked) compares a kept answer with a layout's,
+    // so it is never answered by an advance, which would compare the tree
+    // with itself.
+    if (p != &g.page || s_read_checking || !shown_advance())
+        return false;
+    unchanged_counted(p);
+    if (s_geometry_check != 0 && ++s_unchanged_checked % s_geometry_check == 0) {
+        // The page's own inputs, as page_lay_out sets them for a layout of it.
+        flow_env_t env = s_env;
+        env.ctx = p;
+        env.svg = p->modern;
+        env.cascade = p->cascade;
+        env.scripting = p->scripting;
+        env.media = p->scripting && p->modern;
+        env.viewport_height = (int32_t)css_view(1, p->laid_height, p->laid_zoom).height;
+        env.zoom = p->laid_zoom;
+        env.timeline = s_animations ? p->timeline : NULL;
+        env.ticks = env.timeline != NULL;
+        env.now_ms = animation_time_ms();
+        tree_checked(p, p->laid_width, &env, "an advanced tree", "unchanged check", &s_unchanged_compared,
+                     &s_unchanged_differed);
+    }
+    return true;
+}
+
 static bool script_rebuild(void)
 {
     Page *p = &g.page;
@@ -13321,7 +13533,10 @@ static bool script_rebuild(void)
             os64_debug_log(line);
         }
     }
-    if (version != p->rendered_version) {
+    // Changes that moved nothing the tree was styled from (inline styles
+    // written back to what the cascade parsed) make it current with no
+    // layout, whichever read or other rebuild asked (rebuild_unchanged).
+    if (version != p->rendered_version && !rebuild_unchanged(p)) {
         script_changes_note(p);
         int64_t began = s_script_audit ? os64_micros() : 0;
         bool zoom_changed = p->laid_zoom != 0 && p->laid_zoom != g.zoom;
@@ -13879,6 +14094,7 @@ static int64_t s_lt_task_began;
 static int64_t task_begin(yonder_scripts_t *host)
 {
     (void)yonder_scripts_geometry_stats(host, true);
+    s_task_phases = (forced_phases_t){0};
     s_task_began = cycles();
     s_lt_task_began = s_lt.on ? os64_micros() : 0;
     return s_script_audit ? os64_micros() : 0;
@@ -13922,6 +14138,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
         s_cost.task_longest = spent;
         s_cost.task_longest_layouts = forced.layouts;
         s_cost.task_longest_layout_us = forced.elapsed_us;
+        s_cost.task_longest_phases = s_task_phases;
         os64_snprintf(s_cost.task_longest_what, sizeof(s_cost.task_longest_what), "%s%s%s", what,
                       out->source_name[0] ? " " : "", out->source_name);
     }
@@ -15072,15 +15289,19 @@ static bool measured_for(const os64_html_document_t *doc, int32_t width, int32_t
 
 // The page on screen made current for a read of its geometry: its pending
 // rebuild, then a layout owed at the view's size, zoom, sheets, pictures or
-// fonts.
-static bool script_current(int32_t width, int32_t height)
+// fonts. `asking` is the read's kind (READ_RECTS ...), or -1 for the read
+// check's own.
+static bool script_current(int32_t width, int32_t height, int asking)
 {
     // Under the profile, a layout this forces is noted by what was pending
     // before it (s_forced), unless it is the read check's own.
     bool noting = s_layout_profile && !s_read_checking && layout_profile_diag(&g.page) != NULL;
     flow_pending_t pending = noting ? shown_pending() : (flow_pending_t){.verdict = FLOW_PENDING_RESTYLE};
     uint64_t before = geometry_layout_total;
+    int asked_before = s_asking;
+    s_asking = asking;
     bool ready = script_rebuild();
+    s_asking = asked_before;
     if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
                   g.page.laid_height != height || g.page.laid_zoom != g.zoom ||
                   g.page.sheets_changed || g.pictures_moved || s_web.moved))
@@ -15139,7 +15360,7 @@ static bool read_checked(const os64_html_document_t *doc, const os64_html_node_t
     // The check's own layout is no layout the page forced (script_current's
     // note).
     s_read_checking = true;
-    bool current = script_current(width, height);
+    bool current = script_current(width, height, -1);
     s_read_checking = false;
     bool ready = current && yonder_geometry_snapshot(doc, g.page.tree, node, width, height, g.zoom,
                                                      (flow_point_t){g.sx, g.sy}, out);
@@ -15207,7 +15428,7 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
         } else {
             if (pending.verdict == FLOW_PENDING_PAINT)
                 reads_counted(&g.page, need == OS64_DOM_NEED_ALL ? READ_RECTS : READ_SCROLL, false, false);
-            ready = ready && script_current(width, height);
+            ready = ready && script_current(width, height, need == OS64_DOM_NEED_ALL ? READ_RECTS : READ_SCROLL);
             if (ready)
                 ready = yonder_geometry_snapshot(doc, g.page.tree, node,
                             width, height, g.zoom, (flow_point_t){g.sx, g.sy}, out);
@@ -15259,7 +15480,7 @@ static size_t script_hit(void *opaque, double x, double y, const os64_html_node_
         // record counts those that met only paint-only writes.
         if (s_layout_profile && shown_pending().verdict == FLOW_PENDING_PAINT)
             reads_counted(&g.page, READ_HITS, false, false);
-        ready = script_current(width, height);
+        ready = script_current(width, height, READ_HITS);
         if (ready)
             hit = element_hit(g.view.bounds.x + (int32_t)dx, g.view.bounds.y + (int32_t)dy, NULL, NULL);
     } else if (inside && measured_for(doc, width, height)) {
@@ -15306,10 +15527,7 @@ static size_t script_text_rects(void *opaque, const os64_html_node_t *node, size
     size_t count = 0;
     if (began >= 0 && os64_html_owns_node(doc, node)) {
         if (doc == page_doc(&g.page)) {
-            bool ready = script_rebuild();
-            if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
-                          g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed || g.pictures_moved || s_web.moved))
-                ready = relayout(true);
+            bool ready = script_current(width, height, READ_RECTS);
             if (ready)
                 count = yonder_text_rects(doc, g.page.tree, node, from, to, g.zoom, (flow_point_t){g.sx, g.sy},
                                           out, cap);
@@ -16172,7 +16390,7 @@ static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_e
         // only paint-only writes (the cut of BRIEF_LAYOUT_NEEDS.md N2).
         if (s_layout_profile && shown_pending().verdict == FLOW_PENDING_PAINT)
             reads_counted(&g.page, READ_STYLES, false, false);
-        bool ready = script_current(width, height);
+        bool ready = script_current(width, height, READ_STYLES);
         if (ready && g.page.tree != NULL) {
             tree = g.page.tree;
             env->ctx = &g.page;
@@ -20361,16 +20579,19 @@ static Key view_key(const os64_gui_event_t *ev)
     return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : a == 'd' ? KEY_RECORD : KEY_NONE;
 }
 
-// Ctrl+Alt+D, the reading chord: yonder's own, taken before any key reaches
-// the page or a control, so no script and no focused field can keep it;
-// never dispatched to the page. Plain `d` does the same where the page lets
-// it reach the view. Ctrl turns the letter into its control code (keyboard
-// translation); the letter itself is taken too.
+// Ctrl+Shift+D, the reading chord: yonder's own, taken before any key
+// reaches the page or a control, so no script and no focused field can keep
+// it; never dispatched to the page. Plain `d` does the same where the page
+// lets it reach the view. Exactly Ctrl and Shift: Ctrl+Alt with a letter is
+// the window manager's and never reaches a program (compositor.c). Ctrl
+// turns the letter into its control code (keyboard translation); the
+// letter itself is taken too.
 static bool reading_chord(const os64_gui_event_t *ev)
 {
     char a = ev->key.ascii;
-    return ev->type == OS64_GUI_EVENT_KEY_DOWN && (ev->key.modifiers & OS64_GUI_MOD_CTRL) &&
-           (ev->key.modifiers & OS64_GUI_MOD_ALT) && (a == ('D' & 0x1F) || a == 'd' || a == 'D');
+    uint8_t held = ev->key.modifiers & (OS64_GUI_MOD_CTRL | OS64_GUI_MOD_SHIFT | OS64_GUI_MOD_ALT);
+    return ev->type == OS64_GUI_EVENT_KEY_DOWN && held == (OS64_GUI_MOD_CTRL | OS64_GUI_MOD_SHIFT) &&
+           (a == ('D' & 0x1F) || a == 'd' || a == 'D');
 }
 
 // `d` (or the reading chord) writes the shown page's record now ("when asked"), keeping the paint

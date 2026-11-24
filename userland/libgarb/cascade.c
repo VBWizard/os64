@@ -5604,7 +5604,7 @@ const char *garb_update_refusal_name(garb_update_refusal_t reason)
     static const char *const kNames[GARB_UPDATE_REASONS] = {
         "done", "incomplete", "failed before", "no reader", "counted has", "shadow root",
         "cap", "retained", "attributes", "history", "body hint", "slot left", "broad", "short",
-        "no memory"};
+        "no memory", "advance"};
     return reason >= 0 && reason < GARB_UPDATE_REASONS ? kNames[reason] : "?";
 }
 
@@ -5853,6 +5853,35 @@ bool garb_cascade_update(garb_cascade_t *c)
     // not run at all) names none.
     c->broad_set = false;
     return update(c);
+}
+
+bool garb_cascade_advance(garb_cascade_t *c)
+{
+    if (!c) return false;
+    c->refusal = GARB_UPDATE_DONE;
+    c->broad_set = false;
+    if (c->incomplete) { c->refusal = GARB_UPDATE_INCOMPLETE; return false; }
+    if (c->update_failed) { c->refusal = GARB_UPDATE_FAILED_BEFORE; return false; }
+    uint64_t version = os64_html_version(c->doc);
+    if (version == c->version) return true;
+    if (!c->reader) { c->refusal = GARB_UPDATE_NO_READER; return false; }
+    const os64_html_change_entry_t *changes = NULL;
+    int64_t count = os64_html_changes(c->reader, &changes);
+    // The log is read whatever comes of it, so a refusal leaves the cascade
+    // owing a fresh build, as a failed update does.
+    c->update_failed = true;
+    if (count < 0) { c->refusal = GARB_UPDATE_HISTORY; return false; }
+    for (const os64_html_change_entry_t *e = changes; e; e = e->next) {
+        const Slot *s = e->kind == OS64_HTML_CHANGE_ATTR && e->attr_name && !e->attr_ns &&
+                        os64_streq(e->attr_name, "style") && is_el(e->target)
+                        ? slot_for(c, e->target, false) : NULL;
+        if (!s || !s->placed) { c->refusal = GARB_UPDATE_ADVANCE; return false; }
+    }
+    os64_html_pin_t pin = os64_html_pin(c->doc);
+    if (!pin) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
+    os64_html_unpin(c->doc, c->pin); c->pin = pin;
+    c->version = version; c->update_failed = false;
+    return true;
 }
 
 bool garb_cascade_incomplete(const garb_cascade_t *c)
