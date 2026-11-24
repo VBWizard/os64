@@ -292,6 +292,13 @@ static void filter_mark_cases(void)
                           "<div id=t><div id=c></div></div>", &c, "c");
     expect("marks: a box in a scaled group, with the pixel round it the warp reads",
            marked_exactly(&k, c, (os64_gui_rect_t){399, 199, 42, 42}), NULL);
+    // Sheared: both source axes feed the destination's x, so the warp
+    // reads half the row's sum across (4 + 4) / 2 and (0 + 4) / 2 down.
+    k = filter_tick_marks(MOTION_STYLE CHANGING "#t{transform:matrix(4,0,4,4,0,0);transform-origin:0 0;width:400px;height:300px}"
+                          "#c{position:relative;left:20px;top:10px;width:10px;height:10px;" TICKS "}</style>"
+                          "<div id=t><div id=c></div></div>", &c, "c");
+    expect("marks: a box in a sheared group, what the warp reads by each row's sum",
+           marked_exactly(&k, c, (os64_gui_rect_t){116, 38, 88, 44}), NULL);
     // Turned a quarter, pixels land on pixels: nothing read past them.
     k = filter_tick_marks(MOTION_STYLE CHANGING "#t{transform:rotate(90deg);transform-origin:0 0;width:400px;height:300px}"
                           "#c{position:relative;left:200px;top:100px;width:20px;height:20px;" TICKS "}</style>"

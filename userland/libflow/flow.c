@@ -3589,23 +3589,30 @@ static bool layer_reach(const Layer *l, flow_point_t scroll, os64_gui_rect_t *at
 }
 
 // How far past the pixels matrix `m` carries a rect to the face's warp
-// reaches when it lays a group drawn through `m`: it samples between the
-// sheet's pixels (yonder's warp.c, bilinear), so a changed sheet pixel
-// moves every pixel whose sample point lies within a pixel of it, which is
-// half the matrix's stretch past the carried rect, and a pixel at least,
-// unless the matrix carries pixels onto pixels: whole-pixel moves, with any
-// turn by a quarter or flip, which sample no pixel between two.
-static int32_t warp_reads(const double m[6])
+// reaches when it lays a group drawn through `m`, across (`d[FLOW_LEFT]`,
+// `d[FLOW_RIGHT]`) and down (`d[FLOW_TOP]`, `d[FLOW_BOTTOM]`): it samples
+// between the sheet's pixels (yonder's warp.c, bilinear), so a changed
+// sheet pixel moves every pixel whose sample point lies within a pixel of
+// it, and a pixel's square carried through `m` reaches half its row's
+// absolute sum each way — both source axes feed one destination axis under
+// a shear — a pixel at least, unless the matrix carries pixels onto pixels:
+// whole-pixel moves, with any turn by a quarter or flip, which sample no
+// pixel between two. False for those, `d` all 0.
+static bool warp_reads(const double m[6], int32_t d[4])
 {
+    d[0] = d[1] = d[2] = d[3] = 0;
     bool unit = true;
     for (int k = 0; k < 4; k++)
         unit = unit && (m[k] == 0 || m[k] == 1 || m[k] == -1);
     if (unit && (m[0] != 0) != (m[2] != 0) && (m[1] != 0) != (m[3] != 0) && (m[0] != 0) != (m[1] != 0) &&
         m[4] == floor(m[4]) && m[5] == floor(m[5]))
-        return 0;
-    double stretch = fmax(hypot(m[0], m[1]), hypot(m[2], m[3]));
-    double half = ceil(stretch / 2);
-    return half < 1 ? 1 : half > INT32_MAX / 8 ? INT32_MAX / 8 : (int32_t)half;
+        return false;
+    double across = ceil((fabs(m[0]) + fabs(m[2])) / 2), down = ceil((fabs(m[1]) + fabs(m[3])) / 2);
+    int32_t x = across < 1 ? 1 : across > INT32_MAX / 8 ? INT32_MAX / 8 : (int32_t)across;
+    int32_t y = down < 1 ? 1 : down > INT32_MAX / 8 ? INT32_MAX / 8 : (int32_t)down;
+    d[FLOW_LEFT] = d[FLOW_RIGHT] = x;
+    d[FLOW_TOP] = d[FLOW_BOTTOM] = y;
+    return true;
 }
 
 // What a group nested in another adds to it: its bounds `r`, taken through
@@ -3619,9 +3626,9 @@ static bool nested_reach(const flow_box_t *box, os64_gui_rect_t r, flow_point_t 
     *at = r;
     if (flow_box_through(box, scroll, m, &clip, NULL)) {
         os64_gui_rect_t carried = affine_bounds(m, r);
-        int32_t w = warp_reads(m);
-        if (carried.w > 0 && carried.h > 0 && w > 0)
-            carried = grown(carried, (int32_t[4]){w, w, w, w});
+        int32_t reads[4];
+        if (carried.w > 0 && carried.h > 0 && warp_reads(m, reads))
+            carried = grown(carried, reads);
         *at = meet(carried, clip);
     }
     return at->w > 0 && at->h > 0;

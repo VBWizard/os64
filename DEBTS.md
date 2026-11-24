@@ -1,6 +1,7 @@
 # os64 Technical Debt Ledger
 
-*The single sortable index of every known debt, harvested from the design
+*The sing| **With Dark pages on, a bright see-through background over a surface that is already dark is darkened until it cannot be seen**: the painter's relighting (paint.c's `relight`) takes a light background for paper and moves it dark whatever it lies over, so a highlight or a progress strip drawn as translucent white on a dark track disappears, and whatever is laid over it as a faint veil goes with it (seen on a video player's buffered strip and the strip that follows the pointer along its bar; both show with Dark pages off). The question for whoever takes it is what a paper is: one judged by what it lies over, one judged by its alpha, or nothing moved on a page that declared its own dark scheme (the row above) | Fidelity | S–M (a rule for what relighting moves) | a translucent light highlight on a dark surface that vanishes with Dark pages on | yonder `paint.c` (`relight`), `yonder.c` (`s_dark`) |
+le sortable index of every known debt, harvested from the design
 docs. Each subsystem doc remains the SOURCE OF TRUTH for its own debts (full
 rationale, code sites, gotchas live there); this file is the cross-cutting
 worklist you scan on a fix day to answer "what's the highest-value cheap fix

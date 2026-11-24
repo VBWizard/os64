@@ -69,8 +69,11 @@ mutants = [
     ('a-layout-part-not-spread',
      '        mark_reach(pp->t, b, r, true, pp->scroll, &pp->memo, pp->bounds, pp->mark, pp->ctx);\n',
      '        pp->mark(pp->ctx, b, r);\n'),
-    ('the-warp-reads-nothing', '        if (carried.w > 0 && carried.h > 0 && w > 0)\n',
-     '        if (carried.w > 0 && carried.h > 0 && w > 0 && false)\n'),
+    ('the-warp-reads-nothing', '        if (carried.w > 0 && carried.h > 0 && warp_reads(m, reads))\n',
+     '        if (carried.w > 0 && carried.h > 0 && warp_reads(m, reads) && false)\n'),
+    ('the-warp-read-by-columns',
+     '    double across = ceil((fabs(m[0]) + fabs(m[2])) / 2), down = ceil((fabs(m[1]) + fabs(m[3])) / 2);\n',
+     '    double across = ceil(fmax(hypot(m[0], m[1]), hypot(m[2], m[3])) / 2), down = across;\n'),
     ('a-quarter-turn-read-past', '    if (unit && (m[0] != 0) != (m[2] != 0)',
      '    if (false && unit && (m[0] != 0) != (m[2] != 0)'),
 ]
