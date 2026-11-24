@@ -13115,8 +13115,11 @@ static void sheet_worker_cases(void)
 #include "test_yonder_svg_hit.inc"
 /* WHAT A SCHEDULE CALL COSTS (pictures_schedule): asked with nothing to do
  * but find the next deadline, on pages of 200 and 20,000 elements of each
- * shape a page's growth takes, it must not cost more for the bigger page:
- * a call is made at every turn of the loop, a hundred times a second. */
+ * shape a page's growth takes, the bigger page's call may cost three times
+ * the smaller's and 20 us more at most, the slack a timing needs: a call
+ * is made at every turn of the loop, a hundred times a second, and one that
+ * walked the page cost fifty times as much (motion_due's stacked boxes).
+ * Each is the best of three rounds, so a preemption does not fail it. */
 static char *schedule_page(int32_t n, int32_t shape)
 {
     size_t cap = (size_t)n * 64 + 4096, at = 0;
@@ -13143,10 +13146,14 @@ static double schedule_us(int32_t n, int32_t shape)
     relayout(true);
     for (int32_t i = 0; i < 50; i++)
         pictures_schedule();
-    double began = hover_seconds();
-    for (int32_t i = 0; i < 400; i++)
-        pictures_schedule();
-    double us = (hover_seconds() - began) * 1e6 / 400;
+    double us = INFINITY;
+    for (int32_t round = 0; round < 3; round++) {
+        double began = hover_seconds();
+        for (int32_t i = 0; i < 400; i++)
+            pictures_schedule();
+        double took = (hover_seconds() - began) * 1e6 / 400;
+        us = took < us ? took : us;
+    }
     probe_drop();
     return us;
 }

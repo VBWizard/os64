@@ -2733,9 +2733,9 @@ static uint64_t motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_p
     // A text shadow is handed down too, so a box is judged by the reach of
     // the element it would take one from; one that cannot be seen even at
     // the farthest reach of any is passed by.
-    // Only a stacked box an animated element is above can be made due
-    // (due_stacked); a page of many positioned boxes and one animation
-    // walks the few, at each of the loop's turns.
+    // Only through a stacked box an animated element is above can that
+    // element be made due (due_stacked); a page of many positioned boxes
+    // and one animation walks the few, at each of the loop's turns.
     DueAt d = {tree, NULL, view, scroll, false, ticks, now, next};
     int32_t walked = tree->due_all ? tree->nstacked : tree->ndue_stacked;
     for (int32_t k = 0; k < walked && d.next > now; k++) {
