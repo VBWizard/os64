@@ -2198,6 +2198,85 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
     yonder_diag_summary_fact(diag, "layout kept, declined at", line);
 }
 
+// `offset writes` (N4's size, while the profile is on): of a script's
+// rebuilds, how many held an inline style write whose changed longhands
+// are all insets (garb_cascade_inline_changes, asked before the layout
+// updates the cascade), and of those how many held nothing a kept restyle
+// declines as structural (flow_change_structural) and how many held such a
+// change too, with what and where the latest was, for the record being
+// written (a new record starts them again). A box that only moves is kept
+// only when its rebuild holds no structural change.
+static void offsets_noted(const Page *p, uint64_t from)
+{
+    static uint64_t held, alone, beside;
+    static char latest[160];
+    static const yonder_diag_t *for_diag;
+    yonder_diag_t *diag = layout_profile_diag(p);
+    if (!s_layout_profile || diag == NULL || p->cascade == NULL)
+        return;
+    if (diag != for_diag) {
+        for_diag = diag;
+        held = alone = beside = 0;
+        latest[0] = '\0';
+    }
+    const os64_html_document_t *doc = page_doc(p);
+    os64_html_reader_t *reader = os64_html_reader_new((os64_html_document_t *)doc, from);
+    const os64_html_change_entry_t *entry = NULL;
+    if (reader == NULL || os64_html_changes(reader, &entry) < 0) {
+        os64_html_reader_free(reader);
+        return;
+    }
+    int32_t offsets = 0;
+    const os64_html_change_entry_t *structural = NULL;
+    for (; entry != NULL; entry = entry->next) {
+        if (flow_change_structural(doc, entry)) {
+            structural = entry;
+            continue;
+        }
+        if (entry->kind != OS64_HTML_CHANGE_ATTR || entry->attr_ns != NULL || entry->attr_name == NULL ||
+            !os64_streq(entry->attr_name, "style") || entry->target == NULL ||
+            entry->target->kind != OS64_HTML_ELEMENT)
+            continue;
+        garb_inline_change_t changes[16];
+        int32_t n = garb_cascade_inline_changes(p->cascade, entry->target, changes, 16);
+        bool insets = n > 0;
+        for (int32_t i = 0; i < n && insets; i++)
+            insets = changes[i].prop == GARB_TOP || changes[i].prop == GARB_RIGHT ||
+                     changes[i].prop == GARB_BOTTOM || changes[i].prop == GARB_LEFT;
+        offsets += insets;
+    }
+    if (offsets > 0) {
+        held++;
+        if (structural == NULL) {
+            alone++;
+        } else {
+            beside++;
+            const os64_html_node_t *n = structural->target;
+            while (n != NULL && n->kind != OS64_HTML_ELEMENT)
+                n = os64_html_shadow_including_parent(n);
+            char named[96] = "the document";
+            if (n != NULL)
+                element_named(named, sizeof(named), "", n);
+            os64_snprintf(latest, sizeof(latest), "%s%.48s at %s",
+                          structural->kind == OS64_HTML_CHANGE_CHILDREN ? "children"
+                          : structural->kind == OS64_HTML_CHANGE_TEXT   ? "text"
+                          : structural->kind == OS64_HTML_CHANGE_STATE  ? "adopted sheets"
+                                                                         : "attribute ",
+                          structural->kind == OS64_HTML_CHANGE_ATTR && structural->attr_name != NULL
+                              ? structural->attr_name : "",
+                          named);
+        }
+        char said[320];
+        os64_snprintf(said, sizeof(said),
+                      "%lu rebuilds held a style write that changed only insets: %lu with no structural change, "
+                      "%lu with one%s%s%s",
+                      (unsigned long)held, (unsigned long)alone, (unsigned long)beside,
+                      latest[0] != '\0' ? " (the latest: " : "", latest, latest[0] != '\0' ? ")" : "");
+        yonder_diag_summary_fact(diag, "offset writes", said);
+    }
+    os64_html_reader_free(reader);
+}
+
 // THE LOAD'S TIMELINE (load_timeline.h): the latest navigation's first
 // minutes, step by step, kept only while yonder.conf names a diagnostics
 // directory, and written to that navigation's record alone: the one begun
@@ -13857,6 +13936,9 @@ static bool script_rebuild(void)
         s_change.cascade = p->cascade;
         s_change.cascade_generation = p->cascade != NULL ? garb_cascade_generation(p->cascade) : 0;
         s_change.cascade_updates = p->cascade != NULL ? garb_cascade_updates(p->cascade) : 0;
+        // Before the layout updates the cascade, which then lists no
+        // inline change.
+        offsets_noted(p, p->rendered_version);
         // The shown Page holds the old faces; an incomplete staged layout
         // can reclaim its tree and cascade before retrying in that room.
         yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_REBUILD);

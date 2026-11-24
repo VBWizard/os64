@@ -502,6 +502,25 @@ static void damage_cases(void)
                   "parts past half the view");
     damage_style("abs", "left:30px");
     damage_expect("damage: a positioned box that moves is the whole view", damage_step(), kRefused[FLOW_PARTS_MOVED]);
+    {
+        /* N4's size: the inset write above held nothing structural; the
+         * next one arrives beside a text replaced, and a style write that
+         * moves an inset and a colour together counts as no offset write. */
+        damage_style("abs", "left:40px");
+        damage_text("clock", "0:09");
+        (void)damage_step();
+        damage_style("abs", "left:50px;color:red");
+        (void)damage_step();
+        static char record[1 << 18];
+        yonder_diag_render(g.page.diag, record, sizeof(record));
+        const char *line = strstr(record, "offset writes: ");
+        bool ok = line != NULL && strncmp(line, "offset writes: 2 rebuilds held a style write that changed only insets: "
+                                                "1 with no structural change, 1 with one (the latest: text at "
+                                                "span#clock)\n", 132) == 0;
+        check(ok, "damage: offset writes counted alone and beside a structural change, with the latest");
+        if (!ok)
+            printf("  %.200s\n", line != NULL ? line : "(no offset writes line)");
+    }
     damage_insert("filler", "div", "past the end", NULL);
     damage_style("filler", "height:1400px");
     damage_expect("damage: a page that grows is the whole view", damage_step(), kRefused[FLOW_PARTS_MOVED]);

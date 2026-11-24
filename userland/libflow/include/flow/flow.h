@@ -1555,6 +1555,11 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
                                      const os64_page_t *model, const flow_env_t *env,
                                      const flow_reuse_inputs_t *inputs, int32_t width,
                                      const flow_restyle_marks_t *marks);
+/* Whether a change of `doc`'s log is one a kept restyle declines as
+ * structural (FLOW_RESTYLE_STRUCTURE): children or a text changed, a tree's
+ * adopted sheets, or an attribute the cascade is not alone in reading (any
+ * but class, style, id, data-* and aria-*), at a node in the document. */
+bool flow_change_structural(const os64_html_document_t *doc, const os64_html_change_entry_t *entry);
 /* Whether the kept tree `a` answers as the whole layout `b` of the same
  * document does (the caller's check, `--geometry-check`): the same boxes in
  * order, each of the same kind, node, border box, overflow, clip and
