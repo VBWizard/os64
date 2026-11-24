@@ -11305,10 +11305,10 @@ static void tick_page_run(uint64_t now, bool frame)
         g.tick_painting = true;
         g.tick_began = now;
         g.tick_began_us = began_us;
-        // The record names what the tick changed, not the box that marked
-        // it, which in a filtered group is the group's: when one element
-        // changed, the biggest part this tick marked was its. With more,
-        // the part is named by the box that marked it (tick_mark).
+        // The record names what the tick changed, with the longhands it
+        // animates: when one element changed, the biggest part this tick
+        // marked was its. With more, the part keeps the name of the box
+        // that marked it (tick_mark).
         TickNaming k = {0};
         flow_motion_ticked(g.page.tree, tick_named, &k);
         tick_named_done(&k);

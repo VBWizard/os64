@@ -1500,8 +1500,10 @@ flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
  * written tree hands `marks->mark` what each element whose style it wrote
  * painted before the write and paints after it, in page coordinates at
  * `marks->scroll`, as flow_layout_parts hands its parts: each box's reach
- * (its overflow grown by its ink, so all it holds), a group's bounds, a
- * filtered group's whole, and each stacked box drawn outside it that takes
+ * (its overflow grown by its ink, so all it holds), a group's bounds, either
+ * spread by the filters it is drawn through and taken out through every
+ * matrix with what the warp reads past it (flow.c § WHAT A CHANGE PAINTS,
+ * WHERE THE PAGE SHOWS IT), and each stacked box drawn outside it that takes
  * from it; an element with no box of its own, the replaced box that draws
  * it (an inline svg's shape), if one does. `parts` (a flow_parts_why_t) is
  * FLOW_PARTS_MARKED when that was all of it, or nothing was written;
@@ -1807,8 +1809,10 @@ bool flow_motion_describe(const flow_tree_t *tree, const flow_env_t *env, int32_
 // tick): each element's style rewritten, its transform frames remade and
 // the ink of its shadows grown. `mark`, when not NULL, is handed what each
 // element that changed painted before the tick and what it paints after,
-// in page coordinates at `scroll`, with the box that paints it (in a
-// filtered group, the group's bounds and the group's box) — and an
+// in page coordinates at `scroll`, with the box that paints it (spread by
+// the filters it is drawn through and taken out through every matrix with
+// what the warp reads past it: flow.c § WHAT A CHANGE PAINTS, WHERE THE
+// PAGE SHOWS IT) — and an
 // empty rectangle for the element whose background the canvas may take,
 // whatever its boxes reach, since the canvas paints the view wherever its
 // box is — and
@@ -1823,8 +1827,7 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
 // handed to `each` once per longhand its animations set (`prop`, a
 // garb_prop_t), with its node and its pseudo-element (a garb_pseudo_t, 0
 // for the element itself), each element's longhands together: what a
-// record names a tick by, since the marks name a filtered group's box in
-// place of the element inside it.
+// record names a tick by, the longhands included, which no mark says.
 void flow_motion_ticked(const flow_tree_t *tree,
                         void (*each)(void *ctx, const os64_html_node_t *node, uint8_t pseudo, int32_t prop),
                         void *ctx);
