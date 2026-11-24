@@ -1383,17 +1383,21 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     bool to_window = d->plain == NULL && (node == NULL || (walk.top == document_node(dom) && kind != D_EVENT_LOAD));
     if (to_window) length++;
     /* One block: for a node's path, each step's target and relatedTarget as
-     * wrapped; the wrappers the listeners are invoked on; then the path's
-     * nodes for composedPath, which a node with no wrapper is in too, each
-     * step's target and relatedTarget as walked, and its slot-in-closed-tree. */
+     * wrapped, and the path's wrappers held for the dispatch (HOLDERS: a
+     * listener may split the path's tree); the wrappers the listeners are
+     * invoked on; then the path's nodes for composedPath, which a node with
+     * no wrapper is in too, each step's target and relatedTarget as walked,
+     * and its slot-in-closed-tree. */
     size_t values = node != NULL ? length * (related != NULL ? 2 : 1) : 0;
-    JSValue *steps = d_alloc(dom, values * sizeof(JSValue) + length * sizeof(DValue *) +
+    JSValue *steps = d_alloc(dom, (values + length) * sizeof(JSValue) + length * sizeof(DValue *) +
                                   depth * 3 * sizeof(const os64_html_node_t *) + depth * sizeof(bool));
     if (steps == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM event path quota exceeded");
         return -1;
     }
-    DValue **path = (DValue **)(steps + values);
+    JSValue *kept = steps + values;
+    for (size_t i = 0; i < length; i++) kept[i] = JS_UNDEFINED;
+    DValue **path = (DValue **)(kept + length);
     const os64_html_node_t **nodes = (const os64_html_node_t **)(path + length);
     bool failed = false;
     if (node != NULL) {
@@ -1439,6 +1443,8 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
         path[count++] = entry;
     }
     if (to_window) path[count++] = dom->window;
+    for (size_t i = 0; i < count; i++)
+        if (path[i] != NULL) kept[i] = JS_DupValue(ctx, path[i]->value);
     /* Held for as long as the path is: a listener may take a subtree out of
      * the tree, and an ancestor with no wrapper would go with it. */
     for (size_t i = 0; i < depth; i++) os64_html_hold(dom->document, nodes[i]);
@@ -1491,6 +1497,7 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     event->path_count = 0;
     event->path_window = false;
     event->path_closed_slots = NULL;
+    for (size_t i = 0; i < count; i++) JS_FreeValue(ctx, kept[i]);
     d_free(dom, steps);
     sweep(dom);
     /* sweep walks the registry; a collectable target is not on it. */
