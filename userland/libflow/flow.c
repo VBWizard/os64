@@ -93,6 +93,16 @@ struct flow_tree {
     // too.
     Layer *layers;
     int32_t nlayers;
+    // The stacked boxes an animated element is above (motion_stacked), by
+    // their place in `stacked`, in its order: the only ones motion_due's
+    // walk of the stacked boxes can find anything due through. Made once
+    // with the paint order, since what animates is fixed for a tree's life
+    // (a restyle kept in it declines a change of it, FLOW_RESTYLE_MOTION).
+    // NULL with `due_all` when there was no memory for it: every stacked
+    // box is walked.
+    int32_t *due_stacked;
+    int32_t ndue_stacked;
+    bool due_all;
     // Each scroll container's frame, in tree order: what flow_scroll_set
     // changes, and where a box's `scroller` points.
     flow_frame_t **scrollers;
@@ -1890,6 +1900,7 @@ void flow_free(flow_tree_t *tree)
     os64_free(tree->controls);
     os64_free(tree->positioned);
     os64_free(tree->stacked);
+    os64_free(tree->due_stacked);
     os64_free(tree->layers);
     os64_free(tree->scrollers);
     os64_page_free((os64_page_t *)tree->model);
@@ -2042,6 +2053,40 @@ static void emit_context(Stack *st, int32_t c)
     layer(st, box, PART_OUTLINES);
     if (is_group(box))
         layer(st, box, PART_CLOSE);
+}
+
+// Whether an element above stacked box `b` animates: the elements
+// stacked_from visits, from the same first one, are the only ones it can
+// hand motion_due anything through.
+static bool stacked_under_motion(const flow_tree_t *t, const flow_box_t *b)
+{
+    if (b->node == NULL)
+        return false;
+    const os64_html_node_t *up = b->pseudo != GARB_PSEUDO_NONE ? b->node : f_flat_parent(tree_doc(t), b->node);
+    for (const os64_html_node_t *a = up; a != NULL; a = f_flat_parent(tree_doc(t), a)) {
+        const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(t->styles, a) : NULL;
+        if (st != NULL && st->motion != NULL)
+            return true;
+    }
+    return false;
+}
+
+// The tree's `due_stacked`, made after its paint order (stack_build).
+static void motion_stacked(flow_tree_t *t)
+{
+    t->due_stacked = NULL;
+    t->ndue_stacked = 0;
+    t->due_all = false;
+    if (t->styles == NULL || t->styles->nanimated == 0 || t->nstacked == 0)
+        return;
+    t->due_stacked = os64_malloc((size_t)t->nstacked * sizeof(*t->due_stacked));
+    if (t->due_stacked == NULL) {
+        t->due_all = true;
+        return;
+    }
+    for (int32_t i = 0; i < t->nstacked; i++)
+        if (stacked_under_motion(t, t->stacked[i]))
+            t->due_stacked[t->ndue_stacked++] = i;
 }
 
 // The paint order, once per tree. False on no memory.
@@ -2413,6 +2458,7 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
             flow_free(tree);
             return NULL;
         }
+        motion_stacked(tree);
         tree->reach_base_w = tree->layout->width;
         tree->reach_base_h = tree->layout->height;
         tree->reach_base_ranges = tree->nscrollers > 0
@@ -2695,9 +2741,13 @@ static uint64_t motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_p
     // A text shadow is handed down too, so a box is judged by the reach of
     // the element it would take one from; one that cannot be seen even at
     // the farthest reach of any is passed by.
+    // Only through a stacked box an animated element is above can that
+    // element be made due (due_stacked); a page of many positioned boxes
+    // and one animation walks the few, at each of the loop's turns.
     DueAt d = {tree, NULL, view, scroll, false, ticks, now, next};
-    for (int32_t i = 0; i < tree->nstacked && d.next > now; i++) {
-        d.b = tree->stacked[i];
+    int32_t walked = tree->due_all ? tree->nstacked : tree->ndue_stacked;
+    for (int32_t k = 0; k < walked && d.next > now; k++) {
+        d.b = tree->stacked[tree->due_all ? k : tree->due_stacked[k]];
         if (d.b->node == NULL || !box_seen(d.b, view, scroll, most_reach))
             continue;
         d.seen = box_seen(d.b, view, scroll, 0);
