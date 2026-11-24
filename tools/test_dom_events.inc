@@ -525,6 +525,17 @@ static void dom_timer_site_cases(void)
     check(os64_dom_timer_sites(f.binding, false), "sites off again");
     check(os64_dom_timer_fire(f.binding, 3000, &outcome) && os64_dom_timer_site(f.binding) == NULL,
           "off again, a timer set while they were on names none");
+    /* The counts: each set is an arm, and finds its place by walking past
+     * the timers due before it. */
+    os64_dom_timer_counts_t before, after;
+    os64_dom_timer_counts(NULL, &before);
+    check(before.live == 0 && before.arms == 0 && before.walked == 0, "timer counts: NULL reads zero");
+    os64_dom_timer_counts(f.binding, &before);
+    dom_script(&f, "setTimeout(()=>{},10);setTimeout(()=>{},20);setTimeout(()=>{},30);setTimeout(()=>{},5)",
+               "timer-counts.js");
+    os64_dom_timer_counts(f.binding, &after);
+    check(before.live == 0 && after.live == 4 && after.arms - before.arms == 4 && after.walked - before.walked == 3,
+          "timer counts: four set, each walking past those due before it");
     fixture_free(&f);
 }
 

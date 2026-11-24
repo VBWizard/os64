@@ -42,9 +42,12 @@ static void timer_free(os64_dom_t *dom, DTimer *timer)
 static void insert(os64_dom_t *dom, DTimer *timer)
 {
     DTimer **link = &dom->timers;
+    dom->timer_arms++;
     while (*link != NULL && ((*link)->due < timer->due ||
-           ((*link)->due == timer->due && (*link)->id < timer->id)))
+           ((*link)->due == timer->due && (*link)->id < timer->id))) {
         link = &(*link)->next;
+        dom->timer_walked++;
+    }
     timer->next = *link;
     *link = timer;
 }
@@ -129,6 +132,12 @@ bool os64_dom_timer_sites(os64_dom_t *dom, bool on)
         dom->timer_sites->n = 0;
     }
     return true;
+}
+
+void os64_dom_timer_counts(const os64_dom_t *dom, os64_dom_timer_counts_t *out)
+{
+    *out = dom != NULL ? (os64_dom_timer_counts_t){dom->timer_count, dom->timer_arms, dom->timer_walked}
+                       : (os64_dom_timer_counts_t){0};
 }
 
 const char *os64_dom_timer_site(const os64_dom_t *dom)

@@ -938,15 +938,17 @@ static void renewal_cases(void)
  * to write to, off without. Ten turns of a page whose interval makes cycles
  * and writes the page: the reading's steps hold the scripts step with its
  * tasks inside it, the timers line names the function that set the
- * interval with its ten tasks, the collector line counts runs, and the next
- * reading starts again. */
+ * interval with its tasks, the collector line counts runs, the walks line
+ * the observer's steps over its one target and the interval's arms, and
+ * the next reading starts again. */
 static void thread_reading_cases(void)
 {
     char was_dir[sizeof(s_diag.dir)];
     memcpy(was_dir,s_diag.dir,sizeof(was_dir));
     snprintf(s_diag.dir,sizeof(s_diag.dir),"/tmp/diag");
     loop_page("<p id=out>-</p><script>function poll(){var a=[];for(var i=0;i<40000;i++){var o={};o.self=o;a.push(o)}"
-              "document.getElementById('out').textContent=a.length}function arm(){setInterval(poll,100)}arm();</script>");
+              "document.getElementById('out').textContent=a.length}function arm(){setInterval(poll,100)}arm();"
+              "new IntersectionObserver(()=>{}).observe(document.getElementById('out'))</script>");
     check(loop_settle() && g.page.tree!=NULL && g.page.diag!=NULL,
           "thread reading: the page arrives, with its record");
     cost_reset();
@@ -955,6 +957,8 @@ static void thread_reading_cases(void)
         now_ms+=100;
         tr_call(YONDER_TR_OWED);
         script_turn();
+        tr_call(YONDER_TR_INTERSECTIONS);
+        intersections_turn();
         tr_call(YONDER_TR_PAINT);
     }
     diag_paint_reading(&g.page,1);
@@ -965,12 +969,17 @@ static void thread_reading_cases(void)
     // the turns and the counts are.
     check(steps && strstr(steps,"; scripts ") && strstr(steps," ms in 10 turns (") &&
           strstr(steps,"inside: tasks 10 in "),"thread reading: the scripts step, its turns and its ten tasks");
-    check(timers && strncmp(timers,"10 timer tasks in ",18)==0 && strstr(timers,"from 1 site; arm at the page:1:") &&
-          strstr(timers,": 10 tasks, "),"thread reading: the ten timer tasks by the function that set them");
+    // One of the ten turns runs the observer's delivery task, the rest the
+    // interval: nine timer tasks, each an arm of the list.
+    check(timers && strncmp(timers,"9 timer tasks in ",17)==0 && strstr(timers,"from 1 site; arm at the page:1:") &&
+          strstr(timers,": 9 tasks, "),"thread reading: the nine timer tasks by the function that set them");
     check(collector && !strstr(collector,"no runs") && strstr(collector," asked by the allocation threshold) in ") &&
           strstr(collector,"; the script heap now "),"thread reading: the collector's runs over the reading");
-    printf("  thread: %s\n  timers: %s\n  collector: %s\n",steps?steps:"(none)",timers?timers:"(none)",
-           collector?collector:"(none)");
+    const char *walks=yonder_diag_fact_value(g.page.diag,"walks reading 1");
+    check(walks && strstr(walks," observed targets, 1 a step, the most 1; the timer list: 1 live now, 9 arms walked ") &&
+          strstr(walks,"; the binding holds "),"thread reading: the observer's steps and the interval's ten arms");
+    printf("  thread: %s\n  timers: %s\n  collector: %s\n  walks: %s\n",steps?steps:"(none)",timers?timers:"(none)",
+           collector?collector:"(none)",walks?walks:"(none)");
     cost_reset();
     diag_paint_reading(&g.page,2);
     timers=yonder_diag_fact_value(g.page.diag,"timers reading 2");

@@ -70,7 +70,7 @@ static void steps_cases(void)
     yonder_tr_timer(&t, "x", 5, 0, 0);
     CHECK(t.call_n[YONDER_TR_TASK] == 0 && t.in_n[YONDER_LT_SCRIPTS][YONDER_TR_IN_TASKS] == 0 && t.nsites == 0);
     // Inside with no call under way lands nowhere.
-    yonder_tr_reset(&t, 1000 * MS, NULL);
+    yonder_tr_reset(&t, 1000 * MS, NULL, NULL);
     yonder_tr_inside(&t, YONDER_TR_IN_TASKS, 5 * MS);
     CHECK(t.in_n[YONDER_LT_SCRIPTS][YONDER_TR_IN_TASKS] == 0);
 
@@ -96,7 +96,7 @@ static void steps_cases(void)
     // A reset: the counts start again from it, and the close goes on from
     // it as the reading's first call and its step's first turn; the next
     // call in the same step is no new turn.
-    yonder_tr_reset(&t, at + 4 * MS, NULL);
+    yonder_tr_reset(&t, at + 4 * MS, NULL, NULL);
     CHECK(t.call == YONDER_TR_SCHEDULE && t.call_n[YONDER_TR_SCHEDULE] == 1 && t.turns[YONDER_LT_CLOSE] == 1 &&
           t.call_ticks[YONDER_TR_SCHEDULE] == 0);
     yonder_tr_call(&t, YONDER_TR_FRAME_CLOSE, at + 5 * MS);
@@ -112,7 +112,7 @@ static void steps_cases(void)
     yonder_tr_call(&t, YONDER_TR_PAINT, at + 9 * MS);
     CHECK(t.call == YONDER_TR_CALLS && t.call_n[YONDER_TR_PAINT] == 0);
     // A call outside the table is refused.
-    yonder_tr_reset(&t, 0, NULL);
+    yonder_tr_reset(&t, 0, NULL, NULL);
     yonder_tr_call(&t, YONDER_TR_CALLS, 1);
     CHECK(t.call == YONDER_TR_CALLS);
     CHECK(yonder_tr_call_step(YONDER_TR_ASKS) == YONDER_LT_SCRIPTS && yonder_tr_call_step(YONDER_TR_CALLS) == YONDER_LT_STEPS);
@@ -127,7 +127,7 @@ static void timer_cases(void)
 {
     char line[4096];
     memset(&t, 0, sizeof(t));
-    yonder_tr_reset(&t, 0, NULL);
+    yonder_tr_reset(&t, 0, NULL, NULL);
     yonder_tr_timers_line(&t, MS, line, sizeof(line));
     LINE(line, "none");
     yonder_tr_timer(&t, "tick at a.js:1:1", 2 * MS, 0, 0);
@@ -153,7 +153,7 @@ static void timer_cases(void)
     memset(longsite, 'x', sizeof(longsite) - 1);
     longsite[sizeof(longsite) - 1] = '\0';
     memset(&t, 0, sizeof(t));
-    yonder_tr_reset(&t, 0, NULL);
+    yonder_tr_reset(&t, 0, NULL, NULL);
     yonder_tr_timer(&t, longsite, 1, 0, 0);
     CHECK(strlen(t.sites[0].site) == YONDER_TR_SITE_TEXT - 1);
     // A cut line is terminated.
@@ -167,7 +167,7 @@ static void collector_cases(void)
     memset(&t, 0, sizeof(t));
     yonder_tr_collector_t from = {.runs = 10, .runs_by_allocation = 10, .walked = 1000, .freed = 50,
                                   .bytes_before = 10ull << 20, .bytes_after = 8ull << 20, .ticks = 20 * MS};
-    yonder_tr_reset(&t, 0, &from);
+    yonder_tr_reset(&t, 0, &from, NULL);
     yonder_tr_collector_t now = from;
     now.threshold = 300ull << 20;
     now.ticks_most = 90 * MS;
@@ -189,8 +189,30 @@ static void collector_cases(void)
                "200.0 MiB of 512.0 MiB; since the script began, the longest run 90.0 ms, the most walked in one 400000");
 }
 
+static void walks_cases(void)
+{
+    char line[512];
+    memset(&t, 0, sizeof(t));
+    yonder_tr_list_t from = {.live = 3, .arms = 100, .walked = 400};
+    yonder_tr_intersections(&t, 9);     // off: not taken
+    yonder_tr_reset(&t, 0, NULL, &from);
+    yonder_tr_list_t now = from;
+    yonder_tr_walks_line(&t, &now, 12, line, sizeof(line));
+    LINE(line, "no intersection steps; the timer list: 3 live now, 0 arms walked 0 entries to find their places, 0 an "
+               "arm; the binding holds 12 values for the engine");
+    yonder_tr_intersections(&t, 40);
+    yonder_tr_intersections(&t, 60);
+    now.live = 7;
+    now.arms += 10;
+    now.walked += 250;
+    yonder_tr_walks_line(&t, &now, 5000, line, sizeof(line));
+    LINE(line, "2 intersection steps walked 100 observed targets, 50 a step, the most 60; the timer list: 7 live now, "
+               "10 arms walked 250 entries to find their places, 25 an arm; the binding holds 5000 values for the engine");
+}
+
 int main(void)
 {
+    walks_cases();
     steps_cases();
     timer_cases();
     collector_cases();

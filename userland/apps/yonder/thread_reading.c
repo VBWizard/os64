@@ -76,7 +76,8 @@ static uint64_t since(int64_t from, int64_t to)
     return to > from ? (uint64_t)(to - from) : 0;
 }
 
-void yonder_tr_reset(yonder_tr_t *t, int64_t now, const yonder_tr_collector_t *collector)
+void yonder_tr_reset(yonder_tr_t *t, int64_t now, const yonder_tr_collector_t *collector,
+                     const yonder_tr_list_t *list)
 {
     yonder_tr_call_t call = t->on ? t->call : YONDER_TR_CALLS;
     yonder_lt_step_t step = t->on ? t->step : YONDER_LT_STEPS;
@@ -92,6 +93,8 @@ void yonder_tr_reset(yonder_tr_t *t, int64_t now, const yonder_tr_collector_t *c
     }
     if (collector != NULL)
         t->collector_from = *collector;
+    if (list != NULL)
+        t->list_from = *list;
 }
 
 void yonder_tr_off(yonder_tr_t *t)
@@ -121,6 +124,16 @@ void yonder_tr_inside(yonder_tr_t *t, yonder_tr_in_t in, uint64_t ticks)
         return;
     t->in_ticks[t->step][in] += ticks;
     t->in_n[t->step][in]++;
+}
+
+void yonder_tr_intersections(yonder_tr_t *t, uint64_t targets)
+{
+    if (!t->on)
+        return;
+    t->observed_steps++;
+    t->observed += targets;
+    if (targets > t->observed_most)
+        t->observed_most = targets;
 }
 
 static bool same(const char *a, const char *b)
@@ -439,4 +452,38 @@ void yonder_tr_collector_line(const yonder_tr_t *t, const yonder_tr_collector_t 
     put_ms(&o, b->ticks_most, per_ms);
     put(&o, " ms, the most walked in one ");
     put_u(&o, b->walked_most);
+}
+
+void yonder_tr_walks_line(const yonder_tr_t *t, const yonder_tr_list_t *list_now, uint64_t held, char *out,
+                          size_t cap)
+{
+    Out o = {out, cap, 0};
+    if (cap == 0)
+        return;
+    out[0] = '\0';
+    if (t->observed_steps == 0) {
+        put(&o, "no intersection steps");
+    } else {
+        put_u(&o, t->observed_steps);
+        put(&o, t->observed_steps == 1 ? " intersection step" : " intersection steps");
+        put(&o, " walked ");
+        put_u(&o, t->observed);
+        put(&o, " observed targets, ");
+        put_u(&o, t->observed / t->observed_steps);
+        put(&o, " a step, the most ");
+        put_u(&o, t->observed_most);
+    }
+    uint64_t arms = list_now->arms - t->list_from.arms, walked = list_now->walked - t->list_from.walked;
+    put(&o, "; the timer list: ");
+    put_u(&o, list_now->live);
+    put(&o, " live now, ");
+    put_u(&o, arms);
+    put(&o, arms == 1 ? " arm" : " arms");
+    put(&o, " walked ");
+    put_u(&o, walked);
+    put(&o, " entries to find their places, ");
+    put_u(&o, arms != 0 ? walked / arms : 0);
+    put(&o, " an arm; the binding holds ");
+    put_u(&o, held);
+    put(&o, " values for the engine");
 }

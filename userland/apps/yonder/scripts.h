@@ -349,6 +349,11 @@ bool yonder_scripts_timer_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_
 // The site that set the timer the last fire ran (os64_dom_timer_site): NULL
 // without timer_sites, or when it ran none or one whose site is not known.
 const char *yonder_scripts_timer_site(const yonder_scripts_t *scripts);
+// The page's timer list now and what keeping it in order has cost
+// (os64_dom_timer_counts); zeroed with no binding.
+void yonder_scripts_timer_counts(const yonder_scripts_t *scripts, os64_dom_timer_counts_t *out);
+// The values the binding holds for the engine now (os64_dom_registry_count).
+size_t yonder_scripts_held(const yonder_scripts_t *scripts);
 // One rendering opportunity's ordered callback batch, its timestamp the
 // frame's time (`frame_us`, os64_micros' clock); the host owns visibility,
 // pacing and the rendering step after it (os64_dom_animation_fire).

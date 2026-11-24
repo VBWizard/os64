@@ -4439,6 +4439,14 @@ static yonder_tr_collector_t tr_collector(void)
                                    c.bytes_before, c.bytes_after, c.threshold, c.ticks, c.ticks_most};
 }
 
+// The shown page's timer list, in the reading's words.
+static yonder_tr_list_t tr_list(void)
+{
+    os64_dom_timer_counts_t c;
+    yonder_scripts_timer_counts(g.page.scripts, &c);
+    return (yonder_tr_list_t){c.live, c.arms, c.walked};
+}
+
 // The reading starts again now, on while there are page files to write it
 // to (a reading written, a page shown).
 static void tr_restart(void)
@@ -4448,9 +4456,10 @@ static void tr_restart(void)
         return;
     }
     yonder_tr_collector_t c = tr_collector();
+    yonder_tr_list_t l = tr_list();
     s_tr_host = g.page.scripts;
     s_tr_per_ms = counter_per_ms();
-    yonder_tr_reset(&s_tr, (int64_t)cycles(), &c);
+    yonder_tr_reset(&s_tr, (int64_t)cycles(), &c, &l);
 }
 
 static void cost_begin(PaintStage s)
@@ -10321,9 +10330,10 @@ static void diag_paint(Page *p)
 }
 
 // Where the thread went in reading `n` (s_tr): its steps and calls, its
-// timer tasks by site, and the collector. A collector whose runtime is not
-// the one the reading began with (the page's script made again) is said
-// from that runtime's start.
+// timer tasks by site, the collector, and the walks whose size the page
+// sets. A collector or timer list whose page's script is not the one the
+// reading began with (the page's script made again) is said from that
+// script's start.
 static void diag_thread_reading(Page *p, uint32_t n)
 {
     if (!s_tr.on)
@@ -10337,14 +10347,21 @@ static void diag_thread_reading(Page *p, uint32_t n)
     os64_snprintf(key, sizeof(key), "timers reading %u", (unsigned)n);
     yonder_diag_reading_fact(p->diag, key, line);
     bool same = s_tr_host == page_scripts(p);
-    if (!same)
+    if (!same) {
         s_tr.collector_from = (yonder_tr_collector_t){0};
+        s_tr.list_from = (yonder_tr_list_t){0};
+    }
     yonder_tr_collector_t c = tr_collector();
     char said[4096];
     yonder_tr_collector_line(&s_tr, &c, yonder_scripts_heap_bytes(page_scripts(p)),
                              yonder_scripts_memory_bytes(page_scripts(p)), per_ms, line, sizeof(line));
     os64_snprintf(said, sizeof(said), "%s%s", same ? "" : "since the page's script began: ", line);
     os64_snprintf(key, sizeof(key), "collector reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, said);
+    yonder_tr_list_t l = tr_list();
+    yonder_tr_walks_line(&s_tr, &l, yonder_scripts_held(page_scripts(p)), line, sizeof(line));
+    os64_snprintf(said, sizeof(said), "%s%s", same ? "" : "the timer list counted from the page's script's start; ", line);
+    os64_snprintf(key, sizeof(key), "walks reading %u", (unsigned)n);
     yonder_diag_reading_fact(p->diag, key, said);
 }
 
@@ -16006,6 +16023,8 @@ static bool intersections_turn(void)
     // A step that asks nothing (every root in another document) never
     // calls the provider, and has still answered what it was asked.
     s_intersections_answered = true;
+    if (s_tr.on)
+        yonder_tr_intersections(&s_tr, yonder_scripts_intersections_observed(s));
     bool due = yonder_scripts_intersections_update(s);
     if (s_intersections_answered)
         s_observed = now;

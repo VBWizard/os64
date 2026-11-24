@@ -1946,6 +1946,16 @@ const char *yonder_scripts_timer_site(const yonder_scripts_t *s)
     return s != NULL ? os64_dom_timer_site(s->dom) : NULL;
 }
 
+void yonder_scripts_timer_counts(const yonder_scripts_t *s, os64_dom_timer_counts_t *out)
+{
+    os64_dom_timer_counts(s != NULL ? s->dom : NULL, out);
+}
+
+size_t yonder_scripts_held(const yonder_scripts_t *s)
+{
+    return s != NULL ? os64_dom_registry_count(s->dom) : 0;
+}
+
 bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));

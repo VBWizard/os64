@@ -101,6 +101,12 @@ typedef struct {
     uint64_t n, ticks, most, layouts, layout_ticks;
 } yonder_tr_cost_t;
 
+// The page's timer list at a moment (os64_dom_timer_counts's, copied): live
+// now, and since the dom was made the arms and the list entries they walked.
+typedef struct {
+    uint64_t live, arms, walked;
+} yonder_tr_list_t;
+
 typedef struct {
     bool on;
     int64_t from;                               // the reading's start
@@ -121,14 +127,20 @@ typedef struct {
     } sites[YONDER_TR_SITES];
     uint32_t nsites;
     yonder_tr_cost_t other, unnamed;
-    // The collector's counts when the reading began.
+    // The collector's counts and the timer list's when the reading began.
     yonder_tr_collector_t collector_from;
+    yonder_tr_list_t list_from;
+    // The intersection steps: how many, the observed targets they walked,
+    // and the most one walked.
+    uint64_t observed_steps, observed, observed_most;
 } yonder_tr_t;
 
-// The reading starts at `now`, its counts zero, the collector's counts as
-// `collector` (NULL for none); the call under way, if any, goes on from now
-// as the reading's first call and its step's first turn.
-void yonder_tr_reset(yonder_tr_t *t, int64_t now, const yonder_tr_collector_t *collector);
+// The reading starts at `now`, its counts zero, the collector's and the
+// timer list's counts as `collector` and `list` (NULL for none); the call
+// under way, if any, goes on from now as the reading's first call and its
+// step's first turn.
+void yonder_tr_reset(yonder_tr_t *t, int64_t now, const yonder_tr_collector_t *collector,
+                     const yonder_tr_list_t *list);
 // Nothing more is taken until the next reset, which turns it on again.
 void yonder_tr_off(yonder_tr_t *t);
 // The loop makes `call` from `now`: the call under way ends there, and a
@@ -139,6 +151,8 @@ void yonder_tr_inside(yonder_tr_t *t, yonder_tr_in_t in, uint64_t ticks);
 // A timer task that took `ticks`, forcing `layouts` in `layout_ticks`, set
 // at `site` (the dom's words; NULL for a timer whose site is not known).
 void yonder_tr_timer(yonder_tr_t *t, const char *site, uint64_t ticks, uint64_t layouts, uint64_t layout_ticks);
+// An intersection step that walked `targets` observed targets.
+void yonder_tr_intersections(yonder_tr_t *t, uint64_t targets);
 
 // The lines, written into `out` (cut to `cap`, always terminated), for the
 // reading as it stands at `now` with the call under way ended there (the
@@ -155,6 +169,16 @@ void yonder_tr_timers_line(const yonder_tr_t *t, uint64_t per_ms, char *out, siz
 // which is not the engine's own count a run's bytes and threshold are in).
 void yonder_tr_collector_line(const yonder_tr_t *t, const yonder_tr_collector_t *now_counts, uint64_t heap,
                               uint64_t limit, uint64_t per_ms, char *out, size_t cap);
+
+// The record walks a turn can make whose size the page sets: the
+// intersection steps and the targets they walked; the timer list, live now,
+// with the arms since the reading began and the entries they walked past
+// (`list_now` against the reading's start); and the values the binding
+// holds for the engine now (`held`, os64_dom_registry_count: wrappers,
+// listeners, timers, observers), which every collector run walks with
+// whatever they keep alive.
+void yonder_tr_walks_line(const yonder_tr_t *t, const yonder_tr_list_t *list_now, uint64_t held, char *out,
+                          size_t cap);
 
 const char *yonder_tr_call_name(yonder_tr_call_t call);
 yonder_lt_step_t yonder_tr_call_step(yonder_tr_call_t call);

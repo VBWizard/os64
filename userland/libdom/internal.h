@@ -606,6 +606,9 @@ struct os64_dom {
      * site of the timer the last fire ran, 0 for none. */
     DTimerSites *timer_sites;
     uint16_t timer_site_ran;
+    /* Timers armed (set, or an interval re-armed) and the entries of the
+     * due-ordered list those arms walked past (os64_dom_timer_counts). */
+    uint64_t timer_arms, timer_walked;
     /* HTML's click-in-progress flags, one link per element.click() on the
      * C stack (window.c); and a form's firing-submission-events flags, one
      * link per form whose validation or submit event is running. These

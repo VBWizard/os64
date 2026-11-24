@@ -1163,6 +1163,14 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
 #define OS64_DOM_TIMER_SITE_TEXT 200
 bool os64_dom_timer_sites(os64_dom_t *dom, bool on);
 const char *os64_dom_timer_site(const os64_dom_t *dom);
+/* The timers live now, and since the dom was made the timers armed (each
+ * set, and each interval's re-arm before its callback) with the entries of
+ * the due-ordered list those arms walked past to find their place: what
+ * keeping the list in order costs as it grows. Zeroed for NULL. */
+typedef struct {
+    uint64_t live, arms, walked;
+} os64_dom_timer_counts_t;
+void os64_dom_timer_counts(const os64_dom_t *dom, os64_dom_timer_counts_t *out);
 
 /* CUSTOM ELEMENT REACTIONS AND MUTATION RECORDS OWED
  * (docs/design/pending/CUSTOM_ELEMENTS.md, decision 6). A change made
