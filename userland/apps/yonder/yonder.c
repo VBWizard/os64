@@ -20893,6 +20893,57 @@ static void damage_since_said(char *out, size_t cap)
     os64_memset(&s_damage_since, 0, sizeof(s_damage_since));
 }
 
+// The whole view painted again over `win`, which holds the first whole
+// paint, and the two held to each other outside `left_out`: into `out`,
+// whether they agree, or where and by how much they do not.
+static void damage_paint_again(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t whole, os64_gui_rect_t win,
+                               const os64_gui_rect_t *left_out, int32_t nleft, char *out, size_t cap)
+{
+    uint32_t *first = os64_malloc((size_t)win.w * (size_t)win.h * sizeof(uint32_t));
+    if (first == NULL) {
+        os64_snprintf(out, cap, "not painted again: no memory");
+        return;
+    }
+    for (int32_t y = 0; y < win.h; y++)
+        os64_memcpy(first + (size_t)y * win.w, gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x,
+                    (size_t)win.w * sizeof(uint32_t));
+    os64_gui_rect_t was = gl->clip, view = {win.x - gl->dx, win.y - gl->dy, win.w, win.h};
+    gl->clip = win;
+    yonder_paint(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache,
+                 g.paint_scratch, v);
+    box_bars(gl, view);
+    gl->clip = was;
+    int64_t differ = 0, at = -1;
+    for (int32_t y = 0; y < win.h; y++) {
+        const uint32_t *row = gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x;
+        for (int32_t x = 0; x < win.w; x++) {
+            if (((row[x] ^ first[(size_t)y * win.w + x]) & 0x00ffffffu) == 0)
+                continue;
+            int32_t px = win.x + x, py = win.y + y;
+            bool skip = false;
+            for (int32_t k = 0; k < nleft && !skip; k++)
+                skip = px >= left_out[k].x && py >= left_out[k].y && px < left_out[k].x + left_out[k].w &&
+                       py < left_out[k].y + left_out[k].h;
+            if (skip)
+                continue;
+            if (at < 0)
+                at = (int64_t)y * win.w + x;
+            differ++;
+        }
+    }
+    if (differ == 0) {
+        os64_snprintf(out, cap, "painted again, the whole view paints the same");
+    } else {
+        uint32_t then = first[at] & 0x00ffffffu;
+        uint32_t now = gl->surf->pixels[(size_t)(win.y + at / win.w) * gl->surf->pitch_px + win.x +
+                                        (size_t)(at % win.w)] & 0x00ffffffu;
+        os64_snprintf(out, cap, "painted again, the whole view differs from itself at %ld pixels, first %ld,%ld "
+                      "(#%06x, then #%06x)", (long)differ, (long)(win.x - gl->dx + at % win.w),
+                      (long)(win.y - gl->dy + at / win.w), (unsigned)then, (unsigned)now);
+    }
+    os64_free(first);
+}
+
 // `--damage-check`'s comparison, after the paints of the view widget at
 // `bounds` (the window) for every part of a render, through `gl`: the whole
 // view painted the ordinary way over it, compared with what the window held
@@ -20962,6 +21013,12 @@ static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bou
                 differ++;
             }
         }
+        // On a difference, the whole view is painted a second time and held
+        // to the first: a whole paint that disagrees with itself is the
+        // painter's, whatever the parts did.
+        char again[160] = "";
+        if (differ > 0)
+            damage_paint_again(gl, v, whole, win, left_out, nleft, again, sizeof(again));
         // What the window held where it was left out is put back: the
         // widgets are not painted again this frame outside its marks.
         for (int32_t k = 0; k < nleft; k++) {
@@ -20986,9 +21043,9 @@ static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bou
             damage_since_said(since, sizeof(since));
             os64_snprintf(line, sizeof(line),
                           "the whole view differs from the parts after %s: %ld pixels in %d,%d %dx%d, first %ld,%ld "
-                          "(held #%06x, the page paints #%06x, at %s); since the last check: %s",
+                          "(held #%06x, the page paints #%06x, at %s); %s; since the last check: %s",
                           s_damage_after, (long)differ, (int)reach.x, (int)reach.y, (int)reach.w, (int)reach.h,
-                          (long)fx, (long)fy, (unsigned)held, (unsigned)paints, painted, since);
+                          (long)fx, (long)fy, (unsigned)held, (unsigned)paints, painted, again, since);
             yonder_diag_failed_seen(g.page.diag, "damage check", line);
             // The kernel's log keeps 256 bytes of a line (log.h's
             // MAX_LOG_MESSAGE_SIZE), so this one goes to it in pieces.

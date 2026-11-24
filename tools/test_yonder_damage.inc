@@ -578,10 +578,11 @@ static void damage_cases(void)
                   strstr(failed_line, "after a rebuild that marked nothing (") != NULL &&
                   strstr(failed_line, "; the change log: attribute data-v of div#meter)") != NULL &&
                   strstr(failed_line, expect_at) != NULL && strstr(failed_line, ", at div#box.on in body#bd)") != NULL &&
-                  strstr(failed_line, "); since the last check: 3 rebuilds (1 nothing to paint, 0 in parts, 2 whole)") !=
-                      NULL &&
+                  strstr(failed_line, "); painted again, the whole view paints the same; since the last check: "
+                                      "3 rebuilds (1 nothing to paint, 0 in parts, 2 whole)") != NULL &&
                   strstr(failed_line, "; the whole view by scripts' changes 2") != NULL;
-        check(ok, "damage: a check that differs says the rebuild's way and change log, the pixel, and what changed");
+        check(ok, "damage: a check that differs says the rebuild's way and change log, the pixel, whether a second "
+                  "whole paint agrees with the first, and what changed");
         if (!ok)
             printf("  differed %lu, said %s: %s\n", (unsigned long)said.differed, said.said, failed_line);
         check(*px == was, "damage: the check's whole paint stays");
