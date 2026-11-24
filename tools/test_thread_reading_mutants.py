@@ -99,7 +99,7 @@ mutants = [
      '    uint64_t arms = list_now->arms - (behind ? 0 : t->list_from.arms);', '    uint64_t arms = list_now->arms;'),
     # libdom's sites and counts.
     ('a-timer-keeps-no-site', TIMER, CASES_DOM,
-     '    timer->site = site_of(dom, ctx);', '    timer->site = 0;'),
+     '    timer->site = site_of(dom, ctx);', '    timer->site = 0 && site_of(dom, ctx);'),
     ('a-fire-that-ran-nothing-keeps-the-last-site', TIMER, CASES_DOM,
      '    if (dom != NULL) dom->timer_site_ran = 0;', '    (void)0;'),
     ('the-fired-timer-s-site-not-taken', TIMER, CASES_DOM,
@@ -115,7 +115,7 @@ mutants = [
      '    if (dom->timer_sites != NULL) {\n        dom->timer_arms++;', '    if (1) {\n        dom->timer_arms++;'),
     ('an-inline-script-by-the-engine-s-name', TIMER, CASES_YONDER,
      'address != NULL ? address : bindings_name ? "the page" : where.file',
-     'address != NULL ? address : where.file'),
+     'address != NULL ? address : ((void)bindings_name, where.file)'),
     # libjs's reader.
     ('the-collector-untimed', RUNTIME, CASES_JS,
      '        JS_SetCollectorClock(runtime->engine, os64_js_ledger_now);\n', ''),
@@ -128,7 +128,7 @@ mutants = [
      '            yonder_tr_timer(&s_tr, yonder_scripts_timer_site(host), spent, forced.layouts,',
      '            yonder_tr_timer(&s_tr, NULL, spent, forced.layouts,'),
     ('a-reading-does-not-start-again', YONDER, CASES_YONDER,
-     '    tr_restart();\n    effects_reset();', '    effects_reset();'),
+     '    tr_restart();\n    effects_reset();', '    (void)tr_restart;\n    effects_reset();'),
     ('on-without-page-files', YONDER, CASES_YONDER,
      "    if (s_diag.dir[0] == '\\0') {\n        yonder_tr_off(&s_tr);", "    if (0) {\n        yonder_tr_off(&s_tr);"),
     ('intersection-steps-not-counted', YONDER, CASES_YONDER,
