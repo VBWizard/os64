@@ -327,8 +327,63 @@ static void responsive_invalidation_cases(void)
     sizes_close();check(live==baseline,"responsive index: grown table releases with its page");
 }
 
+/* THE LOOP'S EVERY-TURN CHECKS on a page that holds thousands of wrappers
+ * (detached nodes a script keeps), two images that loaded (one a picture's)
+ * and a canvas: once the loads are told, a quiet turn's checks visit no
+ * record, however many the page holds; an image whose source changes, and
+ * one whose picture's source changes (which only yonder sees: the script
+ * never touched that source), is found and told, and the turns are quiet
+ * again after; the canvas visit walks the one canvas. The provider's
+ * answers here are yonder's own (canvas_source_answers). */
+static void turn_check_damage(void *opaque,const os64_html_node_t *node,uint32_t w,uint32_t h,
+                              const draw2d_damage_t *damage)
+{ (void)opaque;(void)node;(void)w;(void)h;(void)damage; }
+static uint64_t turn_check_quiet(int turns)
+{
+    uint64_t before=yonder_scripts_checks_visited(g.page.scripts);
+    for(int t=0;t<turns;t++){(void)script_turn();(void)script_followup(true,false);}
+    return yonder_scripts_checks_visited(g.page.scripts)-before;
+}
+static void responsive_turn_check_cases(void)
+{
+    probe_page("<!doctype html><img id=pic src='data:image/png,SIZED%2080x40'>"
+        "<picture><source id=s srcset='data:image/png,SIZED%2060x30'><img id=pp src='data:image/png,SIZED%2010x10'></picture>"
+        "<canvas id=c width=20 height=20></canvas><p id=out>waiting</p><p id=out2>waiting</p>"
+        "<script>var held=[];for(var n=0;n<3000;n++)held.push(document.createElement('span'));"
+        "var loads=0,i=document.getElementById('pic');document.getElementById('c').getContext('2d').fillRect(0,0,4,4);"
+        "i.onload=function(){document.getElementById('out').textContent='loaded '+(++loads)+' '+i.naturalWidth;};"
+        "var ploads=0,pp=document.getElementById('pp');"
+        "pp.onload=function(){document.getElementById('out2').textContent='loaded '+(++ploads)+' '+pp.naturalWidth;};"
+        "</script>",true);
+    data_pool_open();responsive_serial_pool();pictures_start(&g.page);script_turn();
+    for(int t=0;t<12;t++){responsive_drain();script_turn();}
+    check(probe_text_is("out","loaded 1 80") && probe_text_is("out2","loaded 1 60"),
+          "turn checks: the images load and their loads are told");
+    // The fixture paints nothing: the drawn canvas's damage waits for a
+    // paint, so it is visited until this one stands in for it.
+    uint64_t before=yonder_scripts_checks_visited(g.page.scripts);
+    yonder_scripts_canvas_visit_damage(g.page.scripts,turn_check_damage,NULL);
+    check(yonder_scripts_checks_visited(g.page.scripts)-before==1,"turn checks: the canvas visit walks the one drawn canvas");
+    yonder_scripts_canvas_painted(g.page.scripts,probe_id("c"));
+    (void)turn_check_quiet(4);
+    check(turn_check_quiet(10)==0,"turn checks: a quiet turn's checks visit no record of the thousands held");
+    responsive_set(probe_id("pic"),"src","data:image/png,SIZED%2040x20");
+    for(int t=0;t<8;t++){responsive_drain();script_turn();}
+    check(probe_text_is("out","loaded 2 40"),"turn checks: a source changed is found and its load told");
+    (void)turn_check_quiet(4);
+    check(turn_check_quiet(10)==0,"turn checks: and the turns are quiet again after");
+    responsive_set(probe_id("s"),"srcset","data:image/png,SIZED%2030x15");
+    for(int t=0;t<12;t++){responsive_drain();script_turn();}
+    check(probe_text_is("out2","loaded 2 30"),
+          "turn checks: a picture's source changed, which only yonder sees, is found and its load told");
+    (void)turn_check_quiet(4);
+    check(turn_check_quiet(10)==0,"turn checks: and quiet again");
+    data_pool_close();probe_drop();
+}
+
 static void responsive_image_cases(void)
 {
     responsive_parser_cases();responsive_window_cases();responsive_mutation_cases();responsive_script_cases();
+    responsive_turn_check_cases();
     responsive_gallery_case();responsive_cors_case();responsive_invalidation_cases();responsive_first_poll();
 }

@@ -18,6 +18,7 @@ parser.add_argument('--logs',type=pathlib.Path,default=pathlib.Path('/tmp/dom-d5
 parser.add_argument('--reclaim',action='store_true',help='run D6 binding ownership mutants')
 parser.add_argument('--events',action='store_true',help='run D7a event, timer and ask mutants')
 parser.add_argument('--realms',action='store_true',help='run F2 cluster ownership mutants')
+parser.add_argument('--turn',action='store_true',help="run the every-turn checks' list and quiet-key mutants")
 parser.add_argument('--only',default='',help='run only the mutants whose names hold this text')
 parser.add_argument('--probe',default='',help='select an existing host probe, e.g. --probe=--clone')
 args=parser.parse_args()
@@ -260,6 +261,33 @@ if args.realms:
       ('child-timer-primary-task','timer','os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, held,','os64_js_call(dom->runtime, OS64_JS_ABI_ID, held,'),
       ('child-report-primary-task','report','os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, dom->report_fire->value,','os64_js_call(dom->runtime, OS64_JS_ABI_ID, dom->report_fire->value,'),
       ('aggregate-dom-cap-ignored','core','(dom->cluster && total > dom->cluster->limits.dom_bytes - dom->cluster->bytes)','(false && dom->cluster && total > dom->cluster->limits.dom_bytes - dom->cluster->bytes)'),
+    ]
+if args.turn:
+    # The turn's own lists (os64_dom's images, canvases, sweeps), the image
+    # check's quiet key, and the count the reading takes, against the
+    # --canvas probe (test_dom_turn_checks.inc).
+    args.probe=args.probe or '--canvas'
+    mutants=[
+      ('turn-image-unlisted','node','        dom->images[dom->nimages++] = entry;\n','        (void)0;\n'),
+      ('turn-image-room-unmade','node','        !d_turn_list_room(dom, &dom->images, dom->nimages, &dom->images_cap, dom->nimages + 1)) {','        false) {'),
+      ('turn-image-made-unmoved','node','        d_images_moved(dom);\n    }\n    return JS_DupValue(ctx, entry->value);','    }\n    return JS_DupValue(ctx, entry->value);'),
+      ('turn-source-change-unmoved','canvas_image','    if(!e->image_generation)e->image_reported=false;\n    d_images_moved(dom);','    if(!e->image_generation)e->image_reported=false;'),
+      ('turn-adoption-unmoved','implementation','        d_images_moved(dom);\n        d_custom_adopted(dom, node, from, document);','        d_custom_adopted(dom, node, from, document);'),
+      ('turn-key-ignores-answers','canvas_image','uint64_t key=(answers^(serial*0x9E3779B97F4A7C15ull))*0xBF58476D1CE4E5B9ull;','uint64_t key=(1^(serial*0x9E3779B97F4A7C15ull))*0xBF58476D1CE4E5B9ull;'),
+      ('turn-key-ignores-serial','canvas_image','uint64_t key=(answers^(serial*0x9E3779B97F4A7C15ull))*0xBF58476D1CE4E5B9ull;','uint64_t key=(answers^(0*serial*0x9E3779B97F4A7C15ull))*0xBF58476D1CE4E5B9ull;'),
+      ('turn-quiet-after-a-find','canvas_image','    if(owed||stop)return owed;','    if(owed||stop){dom->image_quiet=quiet;return owed;}'),
+      ('turn-quiet-unchecked','canvas_image','    if(quiet && quiet==dom->image_quiet)return false;','    (void)0;'),
+      ('turn-images-oldest-first','canvas_image','owed=image_owed(dom,storage->images[k-1],node,failed,consume,&stop);','owed=image_owed(dom,storage->images[storage->nimages-k],node,failed,consume,&stop);'),
+      ('turn-image-visits-uncounted','canvas_image','    dom->checks_visited+=visited;\n    if(owed||stop)return owed;','    if(owed||stop)return owed;'),
+      ('turn-canvas-untouched-by-drawing','canvas','    if (!e || !d_same_cluster(e->dom, dom)) return JS_ThrowTypeError(ctx, "Expected a CanvasRenderingContext2D");\n    d_canvas_touch(e);','    if (!e || !d_same_cluster(e->dom, dom)) return JS_ThrowTypeError(ctx, "Expected a CanvasRenderingContext2D");'),
+      ('turn-canvas-untouched-by-a-path','canvas_path','    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");\n    d_canvas_touch(e);','    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");'),
+      ('turn-canvas-untouched-by-an-image','canvas_image','    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");\n    d_canvas_touch(e);','    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");'),
+      ('turn-canvas-untouched-by-a-new-size','canvas','        e->more->canvas_reset_pending = true;\n        d_canvas_touch(e);','        e->more->canvas_reset_pending = true;'),
+      ('turn-canvas-never-leaves','canvas','            if (tell) storage->canvases[kept++] = e;','            if (true) storage->canvases[kept++] = e;'),
+      ('turn-canvas-room-unmade','canvas','    if (supported && !d_turn_list_room(storage, &storage->canvases, storage->ncanvases, &storage->canvases_cap,\n                                       storage->contexts + 1))','    if (false)'),
+      ('turn-canvas-visits-uncounted','canvas','    dom->checks_visited+=visited;\n    d_provider_leave(dom);','    (void)visited;\n    d_provider_leave(dom);'),
+      ('turn-sweep-unlisted','event','                storage->sweeps[storage->nsweeps++] = entry;','                (void)0;'),
+      ('turn-sweep-flag-kept','event','        member->sweeps[i]->sweep_owed = false;','        (void)0;'),
     ]
 
 # Runtime output is bounded independently of compiler object sizes. Never read

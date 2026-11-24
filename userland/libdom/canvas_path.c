@@ -39,6 +39,7 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     if(!dom)return JS_EXCEPTION;
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
     if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    d_canvas_touch(e);
     dom = e->dom;
     bool set=magic&D_SET;magic&=~D_SET;
     JSValueConst value=argc?argv[0]:JS_UNDEFINED;

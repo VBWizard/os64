@@ -37,7 +37,7 @@ static ImageSource *image_source_find(const Page *p,const os64_html_node_t *node
 static void image_source_dirty(Page *p,const os64_html_node_t *node)
 {
     ImageSource *s=image_source_find(p,node);
-    if(s)s->dirty=true;
+    if(s){s->dirty=true;p->image_answers++;}
 }
 
 static bool image_picture_dirty(Page *p,const os64_html_node_t *node,unsigned *left)
@@ -96,7 +96,10 @@ static void image_sources_sync(Page *p)
             for(size_t i=0;i<c->nremoved && !all;i++)all=image_source_subtree(p,c->removed[i],&left);
         }
     }
-    if(all)for(ImageSource *s=p->image_sources;s;s=s->next)s->dirty=true;
+    if(all){
+        for(ImageSource *s=p->image_sources;s;s=s->next)s->dirty=true;
+        p->image_answers++;
+    }
     if(!p->image_source_reader)
         p->image_source_reader=os64_html_reader_new((os64_html_document_t *)doc,version);
     p->image_source_version=version;
@@ -208,7 +211,7 @@ static void image_source_read(Page *p, ImageSource *s)
     if(s->url)p->image_source_bytes-=os64_strlen(s->url)+1;
     os64_free(s->url);s->url=url;
     if(url)p->image_source_bytes+=os64_strlen(url)+1;
-    s->density=chosen.density;s->mode=mode;s->generation++;
+    s->density=chosen.density;s->mode=mode;s->generation++;p->image_answers++;
     s->display=-1;s->empty=empty;s->broken=status==OS64_PAGE_SOURCE_EMPTY && authored;
     s->refused=status==OS64_PAGE_SOURCE_LIMIT;
     if(!url) {s->current_display=-1;s->current_generation=s->generation;}
@@ -236,6 +239,7 @@ static ImageSource *image_source(Page *p, const os64_html_node_t *node)
     os64_html_hold(page_doc(p),node);
     s->node=node;s->dirty=true;s->display=s->current_display=-1;
     s->density=s->current_density=1;s->next=p->image_sources;p->image_sources=s;p->image_source_count++;
+    p->image_answers++;
     p->image_source_slots[image_source_slot(p,node)]=s;
     image_source_read(p,s);return s;
 }
@@ -293,6 +297,7 @@ static void image_sources_flush(Page *p)
         }
         bool refused=s->wants_display && s->display<0;
         if(refused) {
+            if(!s->refused)p->image_answers++;
             s->refused=true;
             yonder_diag_failed_seen(p->diag,"image source","selected image cannot be requested: catalog limit, unsupported URL, or no memory");
         }
@@ -308,6 +313,7 @@ static void image_sources_flush(Page *p)
             // Failed initial requests do not change geometry. Initial sized
             // arrivals are painted by the arrival path without a new layout.
             moved |= changed && (had || (has && p->pics[s->display].moves));
+            if(changed || s->current_generation!=s->generation)p->image_answers++;
             s->current_display=s->display;s->current_density=s->density;
             s->current_generation=s->generation;
         }
@@ -339,6 +345,7 @@ static void image_sources_free(Page *p)
     ImageSource *s=p->image_sources;
     while(s){ImageSource *next=s->next;os64_html_release(page_doc(p),s->node);os64_free(s->url);os64_free(s);s=next;}
     p->image_sources=NULL;p->image_source_count=p->image_source_bytes=0;
+    p->image_answers++;
 }
 
 static size_t image_sources_cost(const Page *p)

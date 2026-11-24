@@ -84,34 +84,66 @@ void d_image_changed(os64_dom_t *dom,const os64_html_change_t *change)
        (os64_strcmp(change->attr_local,"src")&&os64_strcmp(change->attr_local,"crossorigin")&&
         os64_strcmp(change->attr_local,"srcset")&&os64_strcmp(change->attr_local,"sizes")))return;
     DValue *e=d_find(dom,change->target);
-    if(e && !e->image_generation)e->image_reported=false;
+    if(!e)return;
+    if(!e->image_generation)e->image_reported=false;
+    d_images_moved(dom);
+}
+/* The provider's answers (os64_dom_image_provider_t) beside the binding's
+ * own image_serial: 0 when the provider gives none. */
+static uint64_t image_quiet_key(os64_dom_t *dom)
+{
+    if(!dom->image_provider.answers||!d_provider_enter(dom))return 0;
+    uint64_t answers=dom->image_provider.answers(dom->image_provider.opaque);
+    d_provider_leave(dom);
+    if(!answers)return 0;
+    uint64_t serial=dom->cluster?dom->cluster->image_serial:dom->image_serial;
+    uint64_t key=(answers^(serial*0x9E3779B97F4A7C15ull))*0xBF58476D1CE4E5B9ull;
+    return (key^(key>>31))|1;
+}
+/* One wrapped image element's answer: true, with the event, when its load or
+ * error is owed. *stop when delivery ended under the provider. */
+static bool image_owed(os64_dom_t *dom,DValue *e,const os64_html_node_t **node,bool *failed,bool consume,bool *stop)
+{
+    if(e->node && d_owner(dom,e->node)!=dom)return false;
+    if(!e->node||e->node->ns!=OS64_HTML_NS_HTML||e->node->tag!=OS64_HTML_TAG_IMG)return false;
+    os64_dom_image_view_t view;
+    DImageLoan loan;
+    os64_dom_image_status_t status=image_acquire(dom,e->node,false,&view,&loan);
+    bool skip=view.pending||view.empty||(e->image_reported && e->image_generation==view.generation);
+    uint64_t generation=view.generation;
+    image_release(&loan,&view);
+    if(!d_delivery_active(dom)){*stop=true;return false;}
+    if(skip||status==OS64_DOM_IMAGE_PENDING)return false;
+    if(consume){e->image_reported=true;e->image_generation=generation;}
+    if(node)*node=e->node;
+    if(failed)*failed=status!=OS64_DOM_IMAGE_READY;
+    return true;
 }
 bool os64_dom_image_event(os64_dom_t *dom,const os64_html_node_t **node,bool *failed,bool consume)
 {
     if(!d_delivery_active(dom)||!dom->options.modern||!dom->image_provider.acquire)return false;
     image_update(dom);
     if(!d_delivery_active(dom))return false;
+    // Read before the pass, so a change the pass itself causes (a source
+    // read for the first time, a request the update below submits) moves
+    // the key the next pass reads.
+    uint64_t quiet=image_quiet_key(dom);
+    if(quiet && quiet==dom->image_quiet)return false;
+    uint64_t visited=0;
+    bool owed=false,stop=false;
+    // Each member's wrapped images, the newest first, as `values` holds them.
     size_t members=dom->cluster?dom->cluster->count:1;
-    for(size_t i=0;i<members;++i)
-    for(DValue *e=(dom->cluster?dom->cluster->members[i]:dom)->values;e;e=e->next) {
-        if(e->node && d_owner(dom,e->node)!=dom)continue;
-        if(!e->node||e->node->ns!=OS64_HTML_NS_HTML||e->node->tag!=OS64_HTML_TAG_IMG)continue;
-        os64_dom_image_view_t view;
-        DImageLoan loan;
-        os64_dom_image_status_t status=image_acquire(dom,e->node,false,&view,&loan);
-        bool skip=view.pending||view.empty||(e->image_reported && e->image_generation==view.generation);
-        uint64_t generation=view.generation;
-        image_release(&loan,&view);
-        if(!d_delivery_active(dom))return false;
-        if(skip||status==OS64_DOM_IMAGE_PENDING)continue;
-        if(consume){e->image_reported=true;e->image_generation=generation;}
-        if(node)*node=e->node;
-        if(failed)*failed=status!=OS64_DOM_IMAGE_READY;
-        return true;
+    for(size_t i=0;i<members && !owed && !stop;++i) {
+        os64_dom_t *storage=dom->cluster?dom->cluster->members[i]:dom;
+        for(size_t k=storage->nimages;k>0 && !owed && !stop;--k,visited++)
+            owed=image_owed(dom,storage->images[k-1],node,failed,consume,&stop);
     }
+    dom->checks_visited+=visited;
+    if(owed||stop)return owed;
     // The probes above can discover a detached new Image whose source was
     // never read by script or layout. Submit it before an idle host sleeps.
     image_update(dom);
+    dom->image_quiet=quiet;
     return false;
 }
 static JSValue image_member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
@@ -202,6 +234,7 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
     if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    d_canvas_touch(e);
     dom = e->dom;
     bool set=magic&D_SET;magic&=~D_SET;
     if(magic==I_SMOOTH||magic==I_QUALITY) {

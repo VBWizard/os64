@@ -354,6 +354,9 @@ const char *yonder_scripts_timer_site(const yonder_scripts_t *scripts);
 void yonder_scripts_timer_counts(const yonder_scripts_t *scripts, os64_dom_timer_counts_t *out);
 // The values the binding holds for the engine now (os64_dom_registry_count).
 size_t yonder_scripts_held(const yonder_scripts_t *scripts);
+// The records the binding's every-turn checks have visited since it was
+// made (os64_dom_checks_visited); 0 with no binding.
+uint64_t yonder_scripts_checks_visited(const yonder_scripts_t *scripts);
 // One rendering opportunity's ordered callback batch, its timestamp the
 // frame's time (`frame_us`, os64_micros' clock); the host owns visibility,
 // pacing and the rendering step after it (os64_dom_animation_fire).

@@ -329,11 +329,30 @@ static void unlink_removed(os64_dom_t *dom, DValue *entry)
 }
 
 /* A dispatch walks records by their links, so a record removed under it is
- * only marked; the last dispatch to leave sweeps the lists, when a removal
- * was deferred at all. */
+ * only marked; the last dispatch to leave sweeps the records whose removal
+ * it deferred, which wait on their bindings' `sweeps`. */
 static size_t dispatch_depth(const os64_dom_t *dom)
 {
     return dom->cluster ? dom->cluster->dispatching : dom->dispatching;
+}
+
+/* A binding's deferred records unlinked, or with its list given up, every
+ * record on `values`. */
+static void sweep_member(os64_dom_t *member)
+{
+    if (member->sweeps_all) {
+        member->sweeps_all = false;
+        for (DValue *entry = member->values; entry; entry = entry->next) {
+            entry->sweep_owed = false;
+            unlink_removed(member, entry);
+        }
+        return;
+    }
+    for (size_t i = 0; i < member->nsweeps; i++) {
+        member->sweeps[i]->sweep_owed = false;
+        unlink_removed(member, member->sweeps[i]);
+    }
+    member->nsweeps = 0;
 }
 
 static void sweep(os64_dom_t *dom)
@@ -342,14 +361,11 @@ static void sweep(os64_dom_t *dom)
     if (dom->cluster) {
         if (!dom->cluster->sweep_pending) return;
         dom->cluster->sweep_pending = false;
-        for (size_t i = 0; i < dom->cluster->count; ++i) {
-            os64_dom_t *member = dom->cluster->members[i];
-            for (DValue *entry = member->values; entry; entry = entry->next) unlink_removed(member, entry);
-        }
+        for (size_t i = 0; i < dom->cluster->count; ++i) sweep_member(dom->cluster->members[i]);
     } else {
         if (!dom->sweep_pending) return;
         dom->sweep_pending = false;
-        for (DValue *entry = dom->values; entry; entry = entry->next) unlink_removed(dom, entry);
+        sweep_member(dom);
     }
 }
 
@@ -360,8 +376,28 @@ static void remove_listener(os64_dom_t *dom, DValue *entry, DListener *listener)
     if (listener->handler == D_LISTENER) count(dom, listener, -1);
     else slot_state(dom, listener, D_SLOT_EMPTY);
     set_callback(dom, listener, JS_UNDEFINED);
-    if (dispatch_depth(dom) == 0) unlink_removed(dom, entry);
-    else if (dom->cluster) dom->cluster->sweep_pending = true;
+    if (dispatch_depth(dom) == 0) {
+        unlink_removed(dom, entry);
+        return;
+    }
+    /* A collectable target's record is in its object, on no `values`, and
+     * no sweep reaches it: the dispatch at it unlinks its marked listeners
+     * as it leaves (dispatch), and so does any removal from it outside a
+     * dispatch. */
+    if (!entry->engine_held && !entry->sweep_owed) {
+        os64_dom_t *storage = entry->dom;
+        entry->sweep_owed = true;
+        if (!storage->sweeps_all) {
+            if (d_turn_list_room(storage, &storage->sweeps, storage->nsweeps, &storage->sweeps_cap,
+                                 storage->nsweeps + 1)) {
+                storage->sweeps[storage->nsweeps++] = entry;
+            } else {
+                storage->sweeps_all = true;
+                storage->nsweeps = 0;
+            }
+        }
+    }
+    if (dom->cluster) dom->cluster->sweep_pending = true;
     else dom->sweep_pending = true;
 }
 
@@ -1489,7 +1525,7 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     event->path_closed_slots = NULL;
     d_free(dom, steps);
     sweep(dom);
-    /* sweep walks the registry; a collectable target is not on it. */
+    /* sweep unlinks records on the registry; a collectable target is not on it. */
     if (d->plain != NULL && d->plain->engine_held && dispatch_depth(dom) == 0) unlink_removed(dom, d->plain);
     if (activation != NULL && result == 0 &&
         d_activation_after(dom, ctx, activation, event->canceled, &saved) < 0)

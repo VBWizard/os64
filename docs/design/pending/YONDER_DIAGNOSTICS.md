@@ -560,7 +560,7 @@ names a `diagnostics` directory, each reading adds four lines:
     thread reading 3: in 4900.0 ms the loop's steps took 4900.0 ms, busy 77%; scripts 1747.1 ms in 980 turns (a task found and run 820.4 ms 980 times, the rendering step after a task 640.2 ms 402 times, the pointer's events 210.0 ms 980 times, the other calls 76.5 ms 1960 times; inside: tasks 402 in 654.0 ms, layouts 3 in 120.0 ms, model rebuilds 402 in 590.1 ms, what tasks said 402 in 80.2 ms); waiting 1130.0 ms in 600 turns; ...
     timers reading 3: 380 timer tasks in 590.2 ms, from 12 sites; tick at the page:1:131: 300 tasks, 450.0 ms (each 1.5, the most 9.0); ...
     collector reading 3: 2 runs (2 asked by the allocation threshold) in 160.0 ms, each 80.0 ms on average; walked 600000 objects, 300000 a run, and freed 7000 in cycles; the engine's heap 200.0 MiB before a run and 195.0 MiB after, on average; the next run waits for the engine's heap to reach 300.0 MiB; the script heap now 210.0 MiB of 512.0 MiB; since the script began, the longest run 90.0 ms, the most walked in one 400000
-    walks reading 3: 300 intersection steps walked 90000 observed targets, 300 a step, the most 310; the timer list: 40 live now, 380 arms walked 7600 entries to find their places, 20 an arm; the binding holds 41000 values for the engine
+    walks reading 3: 300 intersection steps walked 90000 observed targets, 300 a step, the most 310; the every-turn checks visited 1200 records in 6200 turns, the most in one 40; the timer list: 40 live now, 380 arms walked 7600 entries to find their places, 20 an arm; the binding holds 41000 values for the engine
 
 (The numbers above are made up to show the shape.)
 
@@ -602,7 +602,11 @@ names a `diagnostics` directory, each reading adds four lines:
   made past the threshold, which is half again the heap the last run left.
 - **The walks whose size the page sets**: the intersection steps and the
   observed targets they walked (every target of every observer, at each
-  step where anything moved); the timer list (kept in due order, so each
+  step where anything moved); the records the loop's every-turn checks
+  visited (libdom's `os64_dom_checks_visited`: the wrapped images the
+  image check polled, the canvases with a context the damage visit looked
+  at), over the turns told and the most in one, which on a quiet page is
+  0 however many wrappers it holds; the timer list (kept in due order, so each
   arm, a set or an interval's re-arm, walks past the timers due before
   it), live now with the reading's arms and the entries they walked; and
   the values the binding holds for the engine (`os64_dom_registry_count`:
@@ -615,7 +619,8 @@ names a `diagnostics` directory, each reading adds four lines:
   first call. A page whose script was made again or let go since the
   reading began says its collector and timer list from their own start.
 - **What it costs**: a read of the counter (`cycles`) and a few additions
-  at each call; the sites' lookup at each `setTimeout`
+  at each call, and one read of the checks' count at each turn's close;
+  the sites' lookup at each `setTimeout`
   and `setInterval`; and nothing at all without `diagnostics` but a test
   of a flag at each call. The collector's counts are the engine's, kept
   always: one addition per object a run walks, two counter reads per run.

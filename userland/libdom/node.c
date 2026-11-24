@@ -111,6 +111,13 @@ static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx,
 {
     DValue *entry = d_alloc_kind(dom, sizeof(*entry), OS64_DOM_MEM_WRAPPER);
     if (entry == NULL) { d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded"); return NULL; }
+    /* An image's room on `images`, so wrapper_attach cannot fail. */
+    if (node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG &&
+        !d_turn_list_room(dom, &dom->images, dom->nimages, &dom->images_cap, dom->nimages + 1)) {
+        d_free(dom, entry);
+        d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded");
+        return NULL;
+    }
     JSValue value = JS_NewObjectProtoClass(ctx, JS_IsObject(prototype) ? prototype :
         d_node_prototype(dom, node), dom->node_class);
     if (JS_IsException(value)) { d_free(dom, entry); return NULL; }
@@ -132,6 +139,10 @@ static JSValue wrapper_attach(os64_dom_t *dom, JSContext *ctx, DValue *entry,
     DValue **table = dom->cluster ? dom->cluster->buckets : dom->buckets;
     entry->hash_next = table[slot];
     table[slot] = entry;
+    if (node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG) {
+        dom->images[dom->nimages++] = entry;
+        d_images_moved(dom);
+    }
     return JS_DupValue(ctx, entry->value);
 }
 

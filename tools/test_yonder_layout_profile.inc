@@ -976,7 +976,8 @@ static void thread_reading_cases(void)
     check(collector && !strstr(collector,"no runs") && strstr(collector," asked by the allocation threshold) in ") &&
           strstr(collector,"; the script heap now "),"thread reading: the collector's runs over the reading");
     const char *walks=yonder_diag_fact_value(g.page.diag,"walks reading 1");
-    check(walks && strstr(walks," observed targets, 1 a step, the most 1; the timer list: 1 live now, 9 arms walked ") &&
+    check(walks && strstr(walks," observed targets, 1 a step, the most 1; the every-turn checks visited ") &&
+          strstr(walks,"; the timer list: 1 live now, 9 arms walked ") &&
           strstr(walks,"; the binding holds "),"thread reading: the observer's steps and the interval's ten arms");
     printf("  thread: %s\n  timers: %s\n  collector: %s\n  walks: %s\n",steps?steps:"(none)",timers?timers:"(none)",
            collector?collector:"(none)",walks?walks:"(none)");

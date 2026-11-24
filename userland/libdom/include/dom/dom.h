@@ -1009,6 +1009,11 @@ void os64_dom_free(os64_dom_t *dom);
  * of C-retained engine values; it becomes zero on drain. NULL answers zero. */
 size_t os64_dom_bytes(const os64_dom_t *dom);
 size_t os64_dom_registry_count(const os64_dom_t *dom);
+/* The records a host's every-turn checks have visited since the binding was
+ * made: the wrapped image elements os64_dom_image_event polled and the
+ * canvases os64_dom_canvas_visit_damage looked at (canvas.h). A host
+ * subtracts two readings for a span. NULL answers zero. */
+uint64_t os64_dom_checks_visited(const os64_dom_t *dom);
 /* WHAT os64_dom_bytes HOLDS, by kind (MEMORY_CENSUS.md § 4): every block
  * the binding charges carries the kind of thing it was made for, and these
  * are the live bytes, live blocks and blocks ever made of each. The kinds

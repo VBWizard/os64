@@ -82,7 +82,19 @@ static void changed(os64_dom_t *dom, const os64_html_change_t *c)
     if (c->kind != OS64_HTML_CHANGE_ATTR || c->attr_ns ||
         (os64_strcmp(c->attr_local, "width") && os64_strcmp(c->attr_local, "height"))) return;
     DValue *e = d_find(dom, c->target);
-    if (e && e->more && (e->more->canvas_object || e->more->canvas)) e->more->canvas_reset_pending = true;
+    if (e && e->more && (e->more->canvas_object || e->more->canvas)) {
+        e->more->canvas_reset_pending = true;
+        d_canvas_touch(e);
+    }
+}
+void d_canvas_touch(DValue *e)
+{
+    DValueMore *more = e->more;
+    if (more == NULL || more->canvas_object == NULL || more->canvas_listed) return;
+    /* get_context made room for every context on this list. */
+    os64_dom_t *storage = e->dom;
+    storage->canvases[storage->ncanvases++] = e;
+    more->canvas_listed = true;
 }
 void d_canvas_free(DValue *e)
 {
@@ -151,6 +163,11 @@ static JSValue get_context(JSContext *ctx, JSValueConst self, int argc, JSValueC
     if (supported < 0) return JS_EXCEPTION;
     /* A dictionary getter may itself have created the context. */
     if (d_more_peek(e)->canvas_object) return JS_DupValue(ctx, d_more_peek(e)->canvas_object->value);
+    /* Room on `canvases` for this context too, so no touch can fail. */
+    os64_dom_t *storage = e->dom;
+    if (supported && !d_turn_list_room(storage, &storage->canvases, storage->ncanvases, &storage->canvases_cap,
+                                       storage->contexts + 1))
+        return d_error(ctx, "QuotaExceededError", "Canvas context quota exceeded");
     if (!supported || d_canvas_prepare(e) != CANVAS_OK) return JS_NULL;
     JSValue object = JS_NewObjectClass(ctx, dom->canvas_class);
     if (JS_IsException(object)) { d_canvas_free(e); return object; }
@@ -159,6 +176,8 @@ static JSValue get_context(JSContext *ctx, JSValueConst self, int argc, JSValueC
     JS_SetOpaque(object, e);
     /* d_canvas_prepare's success made the DValueMore. */
     e->more->canvas_object = held;
+    storage->contexts++;
+    d_canvas_touch(e);
     return JS_DupValue(ctx, object);
 }
 static int integer(JSContext *ctx, JSValueConst v, int64_t *out)
@@ -212,6 +231,7 @@ static JSValue gradient_method(JSContext *ctx,JSValueConst self,int argc,JSValue
     }
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
     if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    d_canvas_touch(e);
     dom = e->dom;
     unsigned count=magic==0?4:magic==1?6:3;
     if(argc<(int)count)return JS_ThrowTypeError(ctx,"Gradient requires coordinates");
@@ -255,6 +275,7 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
     if (!dom) return JS_EXCEPTION;
     DValue *e = JS_GetOpaque(self, dom->canvas_class);
     if (!e || !d_same_cluster(e->dom, dom)) return JS_ThrowTypeError(ctx, "Expected a CanvasRenderingContext2D");
+    d_canvas_touch(e);
     bool set = magic & D_SET;
     magic &= ~D_SET;
     if (magic == C_CANVAS) return JS_DupValue(ctx, e->value);
@@ -425,28 +446,51 @@ bool os64_dom_canvas_bitmap(os64_dom_t *dom, const os64_html_node_t *node, canva
     d_canvas_sync(e);
     return d_more_peek(e)->canvas && canvas_bitmap(d_more_peek(e)->canvas, out) == CANVAS_OK;
 }
+/* One listed canvas's damage or reset, visited: false when delivery ended
+ * under the visit. *tell: whether it still has either to tell, and so stays
+ * listed. A canvas out of the window's tree keeps its damage for when it is
+ * back. */
+static bool canvas_damage_visit(os64_dom_t *dom,DValue *e,os64_dom_canvas_damage_fn visit,void *opaque,bool *tell)
+{
+    *tell=true;
+    if(!d_in_window_tree(dom,e->node))return true;
+    if(d_more_peek(e)->canvas_reset_pending){
+        visit(opaque,e->node,0,0,NULL);
+        return d_delivery_active(dom);
+    }
+    draw2d_damage_t damage;canvas_bitmap_t bitmap;
+    if(d_more_peek(e)->canvas && canvas_damage(d_more_peek(e)->canvas,&damage)==CANVAS_OK &&
+       damage.x0<damage.x1 && damage.y0<damage.y1 && canvas_bitmap(d_more_peek(e)->canvas,&bitmap)==CANVAS_OK) {
+        visit(opaque,e->node,bitmap.width,bitmap.height,&damage);
+        return d_delivery_active(dom);
+    }
+    *tell=false;
+    return true;
+}
+/* Each member's listed canvases. Each visit marks its own canvas and runs
+ * no script, so the order is free; one with nothing to tell leaves the
+ * list, and a context method or a new size puts it back (d_canvas_touch). */
 void os64_dom_canvas_visit_damage(os64_dom_t *dom,os64_dom_canvas_damage_fn visit,void *opaque)
 {
     if(!visit || !d_provider_enter(dom))return;
+    uint64_t visited=0;
+    bool going=true;
     size_t count = dom->cluster ? dom->cluster->count : 1;
-    for (size_t i = 0; i < count; ++i) {
+    for (size_t i = 0; i < count && going; ++i) {
         os64_dom_t *storage = dom->cluster ? dom->cluster->members[i] : dom;
-        for(DValue *e=storage->values;e;e=e->next) {
-        if(!d_more_peek(e)->canvas_object || !d_in_window_tree(dom,e->node))continue;
-        if(d_more_peek(e)->canvas_reset_pending){
-            visit(opaque,e->node,0,0,NULL);
-            if(!d_delivery_active(dom))goto done;
-            continue;
+        size_t kept = 0, k = 0;
+        for (; k < storage->ncanvases && going; k++, visited++) {
+            DValue *e = storage->canvases[k];
+            bool tell;
+            going = canvas_damage_visit(dom, e, visit, opaque, &tell);
+            if (tell) storage->canvases[kept++] = e;
+            else e->more->canvas_listed = false;
         }
-        draw2d_damage_t damage;canvas_bitmap_t bitmap;
-        if(d_more_peek(e)->canvas && canvas_damage(d_more_peek(e)->canvas,&damage)==CANVAS_OK &&
-           damage.x0<damage.x1 && damage.y0<damage.y1 && canvas_bitmap(d_more_peek(e)->canvas,&bitmap)==CANVAS_OK) {
-            visit(opaque,e->node,bitmap.width,bitmap.height,&damage);
-            if(!d_delivery_active(dom))goto done;
-        }
+        // Those a stopped visit never reached stay as they were.
+        for (; k < storage->ncanvases; k++) storage->canvases[kept++] = storage->canvases[k];
+        storage->ncanvases = kept;
     }
-    }
-done:
+    dom->checks_visited+=visited;
     d_provider_leave(dom);
 }
 void os64_dom_canvas_painted(os64_dom_t *dom, const os64_html_node_t *node)

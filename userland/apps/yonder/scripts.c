@@ -1956,6 +1956,11 @@ size_t yonder_scripts_held(const yonder_scripts_t *s)
     return s != NULL ? os64_dom_registry_count(s->dom) : 0;
 }
 
+uint64_t yonder_scripts_checks_visited(const yonder_scripts_t *s)
+{
+    return s != NULL ? os64_dom_checks_visited(s->dom) : 0;
+}
+
 bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));

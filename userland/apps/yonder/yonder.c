@@ -887,6 +887,13 @@ typedef struct Page {
     uint64_t image_source_version;
     size_t image_source_count, image_source_bytes;
     garb_env_t image_environment;
+    // Moves whenever an image source's selection is made, completed,
+    // refused or owed again (image_sources.inc): part of
+    // canvas_source_answers, which lets the binding's image check skip a
+    // pass while the answers stand still. A picture's arrival is an answer
+    // only once its source completes (image_sources_flush, which the
+    // image check's update runs before the answers are read).
+    uint64_t image_answers;
     Sheet *sheets;
     int32_t nsheets, sheets_waiting, sheets_ready;
     bool sheets_changed;
@@ -2220,6 +2227,10 @@ static yonder_lt_t s_lt;
 static yonder_tr_t s_tr;
 static uint64_t s_tr_per_ms;    // the counter's rate when the reading began
 static const yonder_scripts_t *s_tr_host;  // whose collector it began counting
+// The page's binding whose every-turn checks the reading counts, and its
+// count at the last turn's close (tr_checked_turn).
+static const yonder_scripts_t *s_tr_checked_host;
+static uint64_t s_tr_checked_seen;
 
 // WHO ASKED for the layouts made between an lt_why_begin and its
 // lt_why_end (page_lay_out tells the timeline, and the profile counts as
@@ -4458,8 +4469,26 @@ static void tr_restart(void)
     yonder_tr_collector_t c = tr_collector();
     yonder_tr_list_t l = tr_list();
     s_tr_host = g.page.scripts;
+    s_tr_checked_host = g.page.scripts;
+    s_tr_checked_seen = yonder_scripts_checks_visited(g.page.scripts);
     s_tr_per_ms = counter_per_ms();
     yonder_tr_reset(&s_tr, (int64_t)cycles(), &c, &l);
+}
+
+// The records the page's every-turn checks visited this turn, told the
+// reading at the turn's close: what its binding counted since the last
+// close, or since its script began when that is another binding.
+static void tr_checked_turn(void)
+{
+    if (!s_tr.on)
+        return;
+    uint64_t now = yonder_scripts_checks_visited(g.page.scripts);
+    if (g.page.scripts != s_tr_checked_host || now < s_tr_checked_seen) {
+        s_tr_checked_host = g.page.scripts;
+        s_tr_checked_seen = 0;
+    }
+    yonder_tr_checked(&s_tr, now - s_tr_checked_seen);
+    s_tr_checked_seen = now;
 }
 
 static void cost_begin(PaintStage s)
@@ -14196,6 +14225,7 @@ static void stream_request_facts(char *referrer, size_t cap, int64_t *modified)
 
 static os64_dom_image_status_t canvas_source(void *,const os64_html_node_t *,bool,os64_dom_image_view_t *);
 static void canvas_source_release(void *,os64_dom_image_view_t *);
+static uint64_t canvas_source_answers(void *);
 static Page *page_of_doc(const os64_html_document_t *);
 static os64_font_status_t canvas_text_layout(void *opaque,const os64_font_family_list_t *families,
     bool bold,bool italic,uint32_t px,const uint8_t *text,size_t length,os64_text_run_t **out)
@@ -14401,7 +14431,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit, .hit = script_hit, .text_rects = script_text_rects,
         .intersections = script_intersections, .resizes = script_resizes, .opaque = doc,
         .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed, .text_style = script_text_style,
-        .images={canvas_source,canvas_source_release,doc,image_sources_update},
+        .images={canvas_source,canvas_source_release,doc,image_sources_update,canvas_source_answers},
         .media = {(void *)(uintptr_t)serial, media_open, media_close, media_play, media_pause, media_seek,
                   media_settings, media_facts, media_activated, media_can_play, media_failed_told},
         .canvas_text={canvas_text_layout,doc},
@@ -19151,6 +19181,29 @@ static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t
     loan->address=yonder_picture_backing_hold(pic->address);
     out->token=loan;return OS64_DOM_IMAGE_READY;
 }
+// What canvas_source's answers stand on, as one number (the image
+// provider's `answers`): which page holds the document, whether it is the
+// one on screen and modern, what an image source reads besides its
+// element (the page's address, the view and zoom a selection is made for,
+// scripting), and image_answers, which moves with every selection made,
+// completed, refused or owed again. canvas_source reads a picture only
+// through its source's completed selection, so a picture's own changes
+// reach it there. The changes
+// to the document since the last look are read first (image_sources_sync),
+// which owes again the selections they touch. Never 0, which would say
+// "no answers".
+static uint64_t canvas_source_answers(void *opaque)
+{
+    Page *p=page_of_doc(opaque);
+    if(p==&g.page && p->modern)image_sources_sync(p);
+    uint64_t h=1469598103934665603ull;
+    uint64_t parts[]={(uint64_t)(uintptr_t)p,p==&g.page,
+        p?p->modern:0,p?p->scripting:0,p?p->image_answers:0,
+        (uint64_t)(uint32_t)g.view.bounds.w,(uint64_t)(uint32_t)g.view.bounds.h,g.zoom};
+    for(size_t i=0;i<sizeof(parts)/sizeof(parts[0]);i++)h=(h^parts[i])*1099511628211ull;
+    for(const char *c=p?p->way.url:"";*c;c++)h=(h^(uint8_t)*c)*1099511628211ull;
+    return h|1;
+}
 static void canvas_source_release(void *opaque,os64_dom_image_view_t *view)
 {
     (void)opaque;
@@ -23779,6 +23832,7 @@ int main(int argc, char **argv)
             (void)os64_gui_event_ring(g.win, BELL_BODY);
         if (coming_more || observed || media_more || script_followup(scripts_ready, painted_frame))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
+        tr_checked_turn();
         tr_call(YONDER_TR_EXIT);
         exit_follow();
         // The turn's frame, if it had one, is painted and closes. A task

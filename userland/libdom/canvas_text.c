@@ -194,6 +194,7 @@ static JSValue style_member(JSContext *ctx,JSValueConst self,int argc,JSValueCon
     os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
     if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    d_canvas_touch(e);
     dom = e->dom;
     bool set=magic&D_SET;magic&=~D_SET;
     const char *s=NULL;size_t n=0;
@@ -245,6 +246,7 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
     if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    d_canvas_touch(e);
     dom = e->dom;
     if(argc<(magic==0?1:3))return JS_ThrowTypeError(ctx,"Canvas text arguments are missing");
     size_t length;const char *string=JS_ToCStringLen(ctx,&length,argv[0]);if(!string)return JS_EXCEPTION;

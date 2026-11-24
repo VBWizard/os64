@@ -214,19 +214,30 @@ static void walks_cases(void)
     memset(&t, 0, sizeof(t));
     yonder_tr_list_t from = {.live = 3, .arms = 100, .walked = 400};
     yonder_tr_intersections(&t, 9);     // off: not taken
+    yonder_tr_checked(&t, 9);           // off: not taken
     yonder_tr_reset(&t, 0, NULL, &from);
     yonder_tr_list_t now = from;
     yonder_tr_walks_line(&t, &now, 12, line, sizeof(line));
-    LINE(line, "no intersection steps; the timer list: 3 live now, 0 arms walked 0 entries to find their places, 0 an "
-               "arm; the binding holds 12 values for the engine");
+    LINE(line, "no intersection steps; the every-turn checks visited 0 records in 0 turns, the most in one 0; the "
+               "timer list: 3 live now, 0 arms walked 0 entries to find their places, 0 an arm; the binding holds 12 "
+               "values for the engine");
     yonder_tr_intersections(&t, 40);
     yonder_tr_intersections(&t, 60);
+    yonder_tr_checked(&t, 0);
+    yonder_tr_checked(&t, 31);
+    yonder_tr_checked(&t, 0);
+    yonder_tr_checked(&t, 4);
     now.live = 7;
     now.arms += 10;
     now.walked += 250;
     yonder_tr_walks_line(&t, &now, 5000, line, sizeof(line));
-    LINE(line, "2 intersection steps walked 100 observed targets, 50 a step, the most 60; the timer list: 7 live now, "
-               "10 arms walked 250 entries to find their places, 25 an arm; the binding holds 5000 values for the engine");
+    LINE(line, "2 intersection steps walked 100 observed targets, 50 a step, the most 60; the every-turn checks "
+               "visited 35 records in 4 turns, the most in one 31; the timer list: 7 live now, 10 arms walked 250 "
+               "entries to find their places, 25 an arm; the binding holds 5000 values for the engine");
+    yonder_tr_reset(&t, 0, NULL, &from);
+    yonder_tr_checked(&t, 1);
+    yonder_tr_walks_line(&t, &now, 1, line, sizeof(line));
+    CHECK(strstr(line, "; the every-turn checks visited 1 record in 1 turn, the most in one 1;") != NULL);
     // A list behind the reading's start is another binding's.
     yonder_tr_list_t other = {.live = 2, .arms = 4, .walked = 8};
     yonder_tr_walks_line(&t, &other, 10, line, sizeof(line));

@@ -414,6 +414,26 @@ void d_unretain(os64_dom_t *dom, JSContext *ctx, DValue *entry)
     d_free(dom, entry);
 }
 
+bool d_turn_list_room(os64_dom_t *dom, DValue ***list, size_t n, size_t *cap, size_t need)
+{
+    if (need <= *cap) return true;
+    size_t grown = *cap ? *cap : 16;
+    while (grown < need && grown <= SIZE_MAX / 2) grown *= 2;
+    DValue **bigger = grown >= need && grown <= SIZE_MAX / sizeof(*bigger) ? d_alloc(dom, grown * sizeof(*bigger)) : NULL;
+    if (bigger == NULL) return false;
+    if (n != 0) os64_memcpy(bigger, *list, n * sizeof(*bigger));
+    d_free(dom, *list);
+    *list = bigger;
+    *cap = grown;
+    return true;
+}
+
+void d_images_moved(os64_dom_t *dom)
+{
+    if (dom->cluster) dom->cluster->image_serial++;
+    else dom->image_serial++;
+}
+
 void d_more_free(os64_dom_t *dom, DValue *entry)
 {
     d_free(dom, entry->more);
@@ -1589,6 +1609,9 @@ static void binding_free(os64_dom_t *dom)
         d_free(dom, entry);
         entry = next;
     }
+    d_free(dom, dom->images);
+    d_free(dom, dom->canvases);
+    d_free(dom, dom->sweeps);
     if (dom->cluster) dom->cluster->bytes -= sizeof(*dom);
     else os64_free(dom);
 }
@@ -1662,6 +1685,11 @@ size_t os64_dom_registry_count(const os64_dom_t *dom)
     return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held + dom->requests_held +
         dom->pending_held + dom->messages_held + dom->idle_live + dom->animation_count + dom->observers_held +
         dom->intersections_held + dom->resizes_held : 0;
+}
+
+uint64_t os64_dom_checks_visited(const os64_dom_t *dom)
+{
+    return dom != NULL ? dom->checks_visited : 0;
 }
 
 #include "retention.inc"

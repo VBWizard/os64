@@ -266,6 +266,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_text.inc"
 #include "test_dom_canvas.inc"
 #include "test_dom_canvas_images.inc"
+#include "test_dom_turn_checks.inc"
 #include "test_dom_canvas_paints.inc"
 #include "test_dom_custom.inc"
 #include "test_dom_observer.inc"
@@ -685,7 +686,7 @@ static void dom_global_miss_cases(void)
 int main(int argc, char **argv)
 {
     if(argc==2&&!strcmp(argv[1],"--core")){dom_identity_cases();dom_control_cases();dom_clone_control_cases();dom_clone_character_data_cases();dom_refusal_cases();dom_budget_cases();printf("DOM core probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
-    if(argc==2&&!strcmp(argv[1],"--canvas")){dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();printf("DOM canvas probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--canvas")){dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_turn_check_cases();dom_canvas_paint_cases();dom_canvas_refusals();printf("DOM canvas probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--implementation")){dom_implementation_cases();implementation_allocation_cases();printf("DOM implementation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -713,7 +714,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--observer")){dom_observer_cases();printf("DOM observer probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--custom")){dom_custom_cases();printf("DOM custom probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
-    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();dom_screen_cases();dom_performance_cases();dom_performance_observer_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_turn_check_cases();dom_canvas_paint_cases();dom_canvas_refusals();dom_screen_cases();dom_performance_cases();dom_performance_observer_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--storage-quota")){dom_storage_quota_cases();printf("DOM storage quota: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--pointer")){dom_pointer_cases();printf("DOM pointer: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--cluster-failures")){dom_cluster_failure_cases();printf("DOM cluster failures: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -803,7 +804,7 @@ int main(int argc, char **argv)
     dom_inner_text_cases();
     dom_storage_cases();
     dom_base64_cases();
-    dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();
+    dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_turn_check_cases();dom_canvas_paint_cases();dom_canvas_refusals();
     dom_screen_cases();
     dom_performance_cases();
     dom_performance_observer_cases();

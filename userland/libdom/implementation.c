@@ -516,6 +516,9 @@ static JSValue document_take(JSContext *ctx, JSValueConst self, int argc, JSValu
     int64_t status = os64_page_node_adopt(dom->state, (os64_html_node_t *)document, (os64_html_node_t *)node);
     if (status != OS64_HTML_OK) return d_html_error(ctx, status);
     if (from != document) {
+        /* The adopted images now answer to this document's binding, which a
+         * provider's answers for either document need not show. */
+        d_images_moved(dom);
         d_custom_adopted(dom, node, from, document);
     }
     return JS_DupValue(ctx, argv[0]);
