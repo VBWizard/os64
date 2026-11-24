@@ -13411,9 +13411,10 @@ static void node_holders_cases(void)
                  &h, &w, &c);
     holders_collect();
     yonder_scripts_wrappers(g.page.scripts, NULL, 0, &w);
-    /* The engine may have collected, and a later call swept, some of the
-     * 200 already: what is left is dead, and the kept one is not. */
-    check(w.collections_script == 1 && w.collections_dead >= 1 && w.collections_dead <= 200,
+    /* The engine may have collected, and a later call or safe point swept,
+     * some or all of the 200 already: what is left is dead, and the kept one
+     * is not. */
+    check(w.collections_script == 1 && w.collections_dead <= 200,
           "holders: the dropped collections die with their objects, the one kept does not");
     now_ms += 200;
     script_turn();

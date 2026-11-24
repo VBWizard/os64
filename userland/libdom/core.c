@@ -1002,13 +1002,13 @@ static int install_binding(os64_dom_t *dom, JSContext *ctx)
     const JSClassDef node_definition = {.class_name = "Node", .finalizer = clear_opaque, .gc_mark = d_node_mark,
                                         .exotic = &d_node_exotic};
     const JSClassDef style_definition = {
-        .class_name = "CSSStyleDeclaration", .finalizer = clear_opaque, .exotic = &d_style_exotic
+        .class_name = "CSSStyleDeclaration", .finalizer = d_view_class_finalize, .gc_mark = d_view_class_mark, .exotic = &d_style_exotic
     };
     const JSClassDef token_definition = {
-        .class_name = "DOMTokenList", .finalizer = clear_opaque, .exotic = &d_token_exotic
+        .class_name = "DOMTokenList", .finalizer = d_view_class_finalize, .gc_mark = d_view_class_mark, .exotic = &d_token_exotic
     };
     const JSClassDef map_definition = {
-        .class_name = "DOMStringMap", .finalizer = clear_opaque, .exotic = &d_map_exotic
+        .class_name = "DOMStringMap", .finalizer = d_view_class_finalize, .gc_mark = d_view_class_mark, .exotic = &d_map_exotic
     };
     const JSClassDef collection_definition = {
         .class_name = "HTMLCollection", .finalizer = d_query_finalize, .gc_mark = d_query_mark,
@@ -1528,16 +1528,25 @@ static void binding_drain(os64_dom_t *dom)
     d_web_animations_drain(dom);
     d_pointer_drain(dom);
     d_observers_drain(dom);
+    d_custom_drain(dom);
     d_intersections_drain(dom);
     d_resizes_drain(dom);
     d_walkers_drain(dom);
+    d_ranges_drain(dom);
     d_performance_drain(dom);
     /* The media sessions are closed with the host, as the requests below. */
     d_media_elements_drain(dom);
     d_media_session_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);
+    /* The views' and collections' counts on their elements' wrappers go
+     * here, not in their finalizers, which no teardown waits for. */
+    for (DQuery *query = dom->queries; query != NULL; query = query->next) {
+        JS_FreeValueRT(dom->engine, query->holder);
+        query->holder = JS_UNDEFINED;
+    }
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
+        if (!d_node_wrapper(entry)) d_view_release(dom->engine, entry);
         JS_FreeValueRT(dom->engine, entry->value);
         entry->value = JS_UNDEFINED;
     }

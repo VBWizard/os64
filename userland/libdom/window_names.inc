@@ -109,7 +109,7 @@ static int window_names_get_own(JSContext *ctx, JSPropertyDescriptor *desc,
     result = 1;
     if (desc) {
         JSValue value = child ? d_window_proxy(ctx, child) : multiple
-            ? d_special_collection(dom, ctx, dom->document->document, D_QUERY_WINDOW_NAMES, name, false)
+            ? d_special_collection(dom, ctx, dom->document->document, D_QUERY_WINDOW_NAMES, name, NULL)
             : d_wrap(dom, ctx, first);
         if (JS_IsException(value)) { result = -1; goto done; }
         *desc = (JSPropertyDescriptor){.flags = JS_PROP_C_W_E,

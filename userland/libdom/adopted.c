@@ -42,6 +42,16 @@ bool d_sheet_constructed(const DValue *entry)
     return entry != NULL && d_more_peek(entry)->constructed != NULL;
 }
 
+/* The root's record owns its array and assigner (their registry values);
+ * their closures hold the root's wrapper, which the engine traces. */
+void d_adopted_mark(JSRuntime *rt, const DValueMore *more, JS_MarkFunc *mark)
+{
+    const struct DAdopted *list = more->adopted;
+    if (list == NULL) return;
+    if (list->array != NULL) JS_MarkValue(rt, list->array->value, mark);
+    if (list->assign != NULL) JS_MarkValue(rt, list->assign->value, mark);
+}
+
 void d_adopted_free(os64_dom_t *dom, DValue *entry)
 {
     DValueMore *more = entry->more;

@@ -18,12 +18,86 @@ DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node)
     return NULL;
 }
 
+void d_view_keep(const DValue *owner, DValue *view)
+{
+    view->holder = JS_VALUE_GET_PTR(JS_DupValueRT(owner->dom->engine, owner->value));
+}
+
+void d_view_mark(JSRuntime *rt, const DValue *view, JS_MarkFunc *mark)
+{
+    if (view != NULL && view->holder != NULL) JS_MarkValue(rt, JS_MKPTR(JS_TAG_OBJECT, view->holder), mark);
+}
+
+void d_view_release(JSRuntime *rt, DValue *view)
+{
+    if (view == NULL || view->holder == NULL) return;
+    void *holder = view->holder;
+    view->holder = NULL;
+    JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_OBJECT, holder));
+}
+
+void d_view_class_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    d_view_mark(rt, JS_GetOpaque(value, JS_GetClassID(value)), mark);
+}
+
+void d_view_class_finalize(JSRuntime *rt, JSValue value)
+{
+    d_view_release(rt, JS_GetOpaque(value, JS_GetClassID(value)));
+    JS_SetOpaque(value, NULL);
+}
+
+static void mark_kept(JSRuntime *rt, const DValue *view, JS_MarkFunc *mark)
+{
+    if (view != NULL) JS_MarkValue(rt, view->value, mark);
+}
+
+static void mark_kept_query(JSRuntime *rt, const DQuery *query, JS_MarkFunc *mark)
+{
+    if (query != NULL && query->entry != NULL) JS_MarkValue(rt, query->entry->value, mark);
+}
+
+/* Each count the record owns: its listeners' callbacks, and the views it
+ * keeps (VIEWS), its attached Attrs among them. */
 void d_node_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 {
     const DValue *entry = JS_GetOpaque(value, JS_GetClassID(value));
     if (entry == NULL) return;
     for (const DListener *listener = entry->listeners; listener != NULL; listener = listener->next)
         if (listener->engine) JS_MarkValue(rt, listener->callback, mark);
+    mark_kept_query(rt, entry->child_nodes, mark);
+    if (entry->attrs_attached) d_attrs_mark(rt, entry, mark);
+    const DValueMore *more = entry->more;
+    if (more == NULL) return;
+    const DValue *const records[] = {
+        more->style, more->class_list, more->rel_list, more->for_list, more->dataset, more->attributes,
+        more->sheet, more->validity, more->files, more->implementation, more->canvas_object,
+    };
+    for (size_t i = 0; i < sizeof(records) / sizeof(records[0]); i++)
+        mark_kept(rt, records[i], mark);
+    const DQuery *const queries[] = {
+        more->children, more->images, more->forms, more->links, more->scripts, more->elements, more->options,
+        more->selected_options, more->labels, more->members, more->bodies, more->style_sheets,
+    };
+    for (size_t i = 0; i < sizeof(queries) / sizeof(queries[0]); i++)
+        mark_kept_query(rt, queries[i], mark);
+    for (const DQuery *query = more->radio_lists; query != NULL; query = query->radio_next)
+        mark_kept_query(rt, query, mark);
+    d_adopted_mark(rt, more, mark);
+}
+
+JSValue d_holder_take(os64_dom_t *dom, const os64_html_node_t *node)
+{
+    /* A closed binding's records are freed after its engine is gone, so
+     * they take no engine value. */
+    if (node == NULL || dom->closed) return JS_UNDEFINED;
+    os64_js_outcome_t access;
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return JS_UNDEFINED;
+    JSValue wrapper = d_wrap(dom, ctx, node);
+    if (!JS_IsException(wrapper)) return wrapper;
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_UNDEFINED;
 }
 
 DValue *d_wrap_record(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, JSValue *held)
@@ -648,7 +722,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         DString string = {0};
         if (!d_string(dom, ctx, argv[0], &string)) return JS_EXCEPTION;
         JSValue result = JS_NULL;
-        if (magic == D_GET_TAG) result = d_collection(dom, ctx, node, true, true, string.data, false);
+        if (magic == D_GET_TAG) result = d_collection(dom, ctx, node, true, true, string.data, NULL);
         else if (string.length != 0) {
             for (const os64_html_node_t *at = node->first_child; at != NULL; at = d_walk_next(node, at)) {
                 const os64_html_attr_t *id = os64_html_attr(at, "id");

@@ -271,6 +271,9 @@ struct DValue {
     /* A node wrapper's record whose object is gone, waiting to be swept: the
      * door (d_find) answers as if the node had no wrapper. */
     bool dead;
+    /* An element's record that some Attr has been attached to (attr.c), so
+     * its mark looks for them; never cleared. */
+    bool attrs_attached;
     /* A plain target's entry IN THE OBJECT (d_event_target_init): this
      * record is the first member of the object's own state, outside the
      * registry; `value` is the object itself, not a reference; its
@@ -280,11 +283,15 @@ struct DValue {
      * AbortSignal's GC clause, abort.c); nothing else reads it. */
     bool engine_held;
     /* Plain engine-held targets use the listener hook; node wrappers use the
-     * image generation. Sharing the slot keeps completion polling allocation
-     * free without growing every node's wrapper. */
+     * image generation; a view (a record with no node, kept by an element's
+     * record: d_view_keep) and an attached Attr use `holder`, one count on
+     * that element's wrapper object, which the view's class mark reports.
+     * Sharing the slot keeps completion polling allocation free without
+     * growing every node's wrapper. */
     union {
         void (*listeners_changed)(JSRuntime *rt, DValue *entry);
         uint64_t image_generation;
+        void *holder;
     };
 };
 /* DValue.document_type: the window's document and createHTMLDocument's are
@@ -296,15 +303,18 @@ struct DValue {
  * the rest only in its content type (image/svg+xml). */
 enum { D_DOCUMENT_HTML = 0, D_DOCUMENT_XHTML, D_DOCUMENT_XML, D_DOCUMENT_SVG };
 /* A live collection's record. A collection is held one of two ways:
- * - KEPT: a record keeps it ([SameObject]: childNodes, children, a form's
- *   elements), so the registry holds its object through `entry`.
+ * - KEPT: a node's record keeps it ([SameObject]: childNodes, children, a
+ *   form's elements), a view of that node (VIEWS): its registry value
+ *   (`entry`) is the record's count, which d_node_mark reports, and it
+ *   holds the keeper's wrapper (`holder`).
  * - SCRIPT'S: made fresh for each call (getElementsByTagName and its
  *   kin), so the object alone holds it. It holds its root's wrapper
- *   (`holder`, reported by the class's mark), since the nodes it hands
- *   back are of that tree. Its finalizer marks it `dead`, and
- *   d_queries_sweep frees it outside any collection, because releasing
- *   its nodes may free them (libhtml collects at a release).
- * Both kinds are on dom->queries until freed. */
+ *   (`holder`), since the nodes it hands back are of that tree. Its
+ *   finalizer marks it `dead`, and d_queries_sweep frees it outside any
+ *   collection, because releasing its nodes may free them (libhtml
+ *   collects at a release).
+ * The class's mark reports `holder` and its finalizer releases it. Both
+ * kinds are on dom->queries until freed. */
 struct DQuery {
     os64_dom_t *dom;
     const os64_html_node_t *root, *owner;
@@ -1041,10 +1051,38 @@ DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
  * the wrapper itself in *held, which the caller frees when it is done with
  * the record. NULL with an exception pending when it could not be made. */
 DValue *d_wrap_record(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, JSValue *held);
+/* HOLDERS: a holder that can hand a node back to script holds the node's
+ * wrapper as well as the node, so the node's tree keeps what the page hung
+ * on it while the holder lives. d_holder_take answers the wrapper (made if
+ * the node has none) as a count the holder owns, freed when the holder is;
+ * JS_UNDEFINED, with no exception left pending, for a NULL node, a closed
+ * binding, or when it could not be made. A holder that is a JS object
+ * reports the count in its class's mark; a binding queue's entry keeps it
+ * while queued. Drain releases what holders keep, as their records are
+ * freed after the engine is. */
+JSValue d_holder_take(os64_dom_t *dom, const os64_html_node_t *node);
 /* Whether the record is a node wrapper's (wrapper_attach gave it its node). */
 static inline bool d_node_wrapper(const DValue *entry) { return entry->node != NULL; }
 /* The Node class's mark: every count a wrapper's record owns. */
 void d_node_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark);
+/* VIEWS: an object an element's record keeps for it ([SameObject]: style,
+ * classList, attributes, a kept collection (DQuery)...). The record owns
+ * the view's count (its registry value, which d_node_mark reports) and the
+ * view owns one count on the element's wrapper, so a view held alone keeps
+ * its element. d_view_keep takes that count for a view's record (`holder`);
+ * d_view_mark reports it and d_view_release lets it go, from the view
+ * class's mark and finalizer, and at drain. */
+void d_view_keep(const DValue *owner, DValue *view);
+void d_view_mark(JSRuntime *rt, const DValue *view, JS_MarkFunc *mark);
+void d_view_release(JSRuntime *rt, DValue *view);
+/* A view class's mark and finalizer, when its object's opaque is its own
+ * record. */
+void d_view_class_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark);
+void d_view_class_finalize(JSRuntime *rt, JSValue value);
+/* The element's attached Attrs' counts (attr.c), and a root's
+ * adoptedStyleSheets array and its assigner (adopted.c), for d_node_mark. */
+void d_attrs_mark(JSRuntime *rt, const DValue *element, JS_MarkFunc *mark);
+void d_adopted_mark(JSRuntime *rt, const DValueMore *more, JS_MarkFunc *mark);
 int d_point_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_point_dictionary(JSContext *, JSValueConst, double out[4]);
 bool d_svg_geometry_node(const os64_html_node_t *);
@@ -1261,10 +1299,10 @@ JSValue d_attribute_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_
  * when `fold`). */
 bool d_has_token(const char *list, const char *token, size_t length, bool fold);
 extern JSClassExoticMethods d_collection_exotic;
-/* A live collection over `root`. `kept`: a record will keep it (DQuery's
- * KEPT); otherwise it is the script's alone. */
+/* A live collection over `root`. `keeper`: the node record that will keep
+ * it (DQuery's KEPT); NULL, it is the script's alone. */
 JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
-                     bool descendants, bool elements, const char *name, bool kept);
+                     bool descendants, bool elements, const char *name, const DValue *keeper);
 /* The collection class's finalizer and mark (core.c defines the class). */
 void d_query_finalize(JSRuntime *rt, JSValue value);
 void d_query_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark);
@@ -1356,9 +1394,9 @@ bool d_listed(const os64_html_node_t *node);
  * (classic.c): the `index`th, NULL past the last; *count, when not NULL,
  * how many there are. */
 const os64_html_node_t *d_form_control(const os64_html_node_t *form, uint32_t index, uint32_t *count);
-/* `kept` as d_collection's. */
+/* `keeper` as d_collection's. */
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind,
-                             const char *named, bool kept);
+                             const char *named, const DValue *keeper);
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, unsigned kind);
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* NEVER SWALLOW A RUNTIME'S FAILURE. Whether the exception pending may be
@@ -1560,8 +1598,10 @@ void d_errors_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* As a task named `task` closes, visit the cluster's bindings (or this one
  * standalone binding). Each first report is folded into an OK outcome or
- * told to its own host, then cleared; counted rejections get one summary. */
+ * told to its own host, then cleared; counted rejections get one summary.
+ * It ends at the safe point. */
 void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome);
+void d_safe_point(os64_dom_t *dom);
 /* After a script the host ran with os64_js_run (and a string timer the
  * binding did): what it left owed, settled in a task of its own named
  * `name`, folded into `outcome`. No engine entry when nothing is owed. */
@@ -2028,6 +2068,10 @@ const os64_html_node_t *d_body_context(os64_dom_t *dom, int64_t *status);
  * or d_body_context's body for one in no namespace or another one. */
 const os64_html_node_t *d_fragment_context(os64_dom_t *dom, const os64_html_node_t *element, int64_t *status);
 void d_ranges_sweep(os64_dom_t *dom);
+/* The live ranges' boundary wrappers re-taken where libhtml moved a point
+ * (after each tree change), and every range's let go (drain). */
+void d_ranges_follow(os64_dom_t *dom);
+void d_ranges_drain(os64_dom_t *dom);
 void d_ranges_free(os64_dom_t *dom);
 /* A label's labeled control (HTML § 4.10.4): the labelable element its
  * `for` names, when the first element of its tree with that ID is one;
@@ -2334,6 +2378,7 @@ void d_custom_adopted(os64_dom_t *dom, const os64_html_node_t *root, const os64_
                       const os64_html_node_t *to);
 /* Teardown: the listener taken away with the engine's values; the
  * records and definitions' memory after the engine. */
+void d_custom_drain(os64_dom_t *dom);
 void d_custom_free(os64_dom_t *dom);
 /* THE [CEReactions] TABLE (ce_reactions.inc, written by
  * tools/ce_reactions.py from the standard's IDL): a row's interface, its

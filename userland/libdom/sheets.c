@@ -22,12 +22,6 @@ static JSClassID sheet_slot;
 
 enum { S_TYPE, S_HREF, S_OWNER_NODE, S_PARENT, S_OWNER_RULE, S_TITLE, S_DISABLED, S_STYLE_SHEETS, S_SHEET };
 
-static void sheet_finalizer(JSRuntime *rt, JSValue value)
-{
-    (void)rt;
-    JS_SetOpaque(value, NULL);
-}
-
 JSClassID d_sheet_class(void)
 {
     return os64_js_class_id(&sheet_slot);
@@ -58,6 +52,7 @@ JSValue d_sheet(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
             entry->dom = dom;
             entry->target = node;
             os64_html_hold(dom->document, node);
+            d_view_keep(owner, entry);
             JS_SetOpaque(object, entry);
             more->sheet = entry;
             result = JS_DupValue(ctx, object);
@@ -130,7 +125,8 @@ static JSValue sheet_member(JSContext *ctx, JSValueConst this_value, int argc, J
 int d_sheets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSClassID id = os64_js_class_id(&sheet_slot);
-    static const JSClassDef definition = {.class_name = "CSSStyleSheet", .finalizer = sheet_finalizer};
+    static const JSClassDef definition = {.class_name = "CSSStyleSheet", .finalizer = d_view_class_finalize,
+                                          .gc_mark = d_view_class_mark};
     if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &definition) < 0) return -1;
     if (d_sheet_list_install(dom, ctx, global) < 0) return -1;
     /* StyleSheet.prototype, with every member a sheet has here, and

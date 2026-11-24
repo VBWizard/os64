@@ -182,6 +182,23 @@ static DAttr *record_of(os64_dom_t *dom, const os64_html_node_t *element, const 
     return NULL;
 }
 
+/* The counts an element's record owns on its attached Attrs (attach). A
+ * mark must find the same ones on each of a collection's passes, so this
+ * reads the table and moves no counter. */
+void d_attrs_mark(JSRuntime *rt, const DValue *element, JS_MarkFunc *mark)
+{
+    const os64_html_node_t *node = element->node;
+    os64_dom_t *dom = d_creation_owner(element->dom, node);
+    if (dom == NULL || dom->attr_capacity == 0) return;
+    for (const os64_html_attr_t *a = node->attrs; a != NULL; a = a->next) {
+        const char *local = d_attr_local(a->name, a->ns);
+        for (DAttr *rec = dom->attr_table[record_slot(dom, node, a->ns, local)]; rec != NULL; rec = rec->hash_next)
+            if (rec->entry->target == node && ns_equal(rec->ns, a->ns) &&
+                os64_strcmp(d_attr_local(rec->name, rec->ns), local) == 0)
+                JS_MarkValue(rt, rec->entry->value, mark);
+    }
+}
+
 /* The Attr made for an attribute the element holds, if any. */
 static DAttr *record_for(os64_dom_t *dom, const os64_html_node_t *element, const os64_html_attr_t *a)
 {
@@ -261,12 +278,20 @@ static DAttr *attr_make(os64_dom_t *dom, JSContext *ctx, const char *name, const
     return rec;
 }
 
-/* Onto the element, reading its value from the element from now on. */
+/* Onto the element, reading its value from the element from now on. The
+ * element's record owns the Attr's count while it is attached (its mark
+ * reports it: d_attrs_mark), and the Attr owns one on the element's
+ * wrapper (`holder`), which ownerElement hands back. */
 static void attach(os64_dom_t *dom, DAttr *rec, const os64_html_node_t *element)
 {
     rec->entry->target = element;
     record_add(dom, rec);
     os64_html_hold(dom->document, element);
+    DValue *owner = d_find(dom, element);
+    if (owner != NULL) {
+        owner->attrs_attached = true;
+        d_view_keep(owner, rec->entry);
+    }
     d_free(dom, rec->value);
     rec->value = NULL;
     rec->length = 0;
@@ -284,6 +309,7 @@ static void detach(os64_dom_t *dom, DAttr *rec, char *value, size_t length)
     const os64_html_node_t *document = d_node_document(dom, element);
     rec->document = document;
     rec->entry->target = NULL;
+    d_view_release(dom->engine, rec->entry);
     os64_html_release(dom->document, element);
     d_free(dom, rec->value);
     rec->value = value;
@@ -870,6 +896,7 @@ static JSValue attributes_of(os64_dom_t *dom, JSContext *ctx, const os64_html_no
     entry->dom = dom;
     entry->target = element;
     os64_html_hold(dom->document, element);
+    d_view_keep(owner, entry);
     JS_SetOpaque(object, entry);
     more->attributes = entry;
     return JS_DupValue(ctx, object);
@@ -1239,12 +1266,6 @@ static JSValue map_member(JSContext *ctx, JSValueConst self, int argc, JSValueCo
     return element_verb(entry->dom, ctx, element, magic, argc, argv);
 }
 
-static void attr_finalizer(JSRuntime *rt, JSValue value)
-{
-    (void)rt;
-    JS_SetOpaque(value, NULL);
-}
-
 int d_attr_classic(os64_dom_t *dom, JSContext *ctx)
 {
     dom->attr_capacity = 64;
@@ -1256,8 +1277,10 @@ int d_attr_classic(os64_dom_t *dom, JSContext *ctx)
     }
     dom->attr_class = os64_js_class_id(&attr_slot);
     dom->named_map_class = os64_js_class_id(&map_slot);
-    static const JSClassDef attr_definition = {.class_name = "Attr", .finalizer = attr_finalizer};
-    static const JSClassDef map_definition = {.class_name = "NamedNodeMap", .finalizer = attr_finalizer,
+    static const JSClassDef attr_definition = {.class_name = "Attr", .finalizer = d_view_class_finalize,
+                                               .gc_mark = d_view_class_mark};
+    static const JSClassDef map_definition = {.class_name = "NamedNodeMap", .finalizer = d_view_class_finalize,
+                                              .gc_mark = d_view_class_mark,
                                               .exotic = &map_exotic};
     if ((!JS_IsRegisteredClass(dom->engine, dom->attr_class) &&
          JS_NewClass(dom->engine, dom->attr_class, &attr_definition) < 0) ||
