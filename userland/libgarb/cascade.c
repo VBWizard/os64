@@ -6032,6 +6032,11 @@ garb_cascade_parts_t garb_cascade_parts(const garb_cascade_t *c)
     return parts;
 }
 
+uint32_t garb_cascade_elements(const garb_cascade_t *c)
+{
+    return c != NULL ? c->slotcount : 0;
+}
+
 size_t garb_cascade_bytes(const garb_cascade_t *c)
 {
     garb_cascade_parts_t parts = garb_cascade_parts(c);

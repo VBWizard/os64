@@ -519,6 +519,9 @@ void garb_cascade_free(garb_cascade_t *c);
  * held, and not counted. NULL answers 0. Cheap: a pass over the style
  * attributes, no walk of the rules. The sum of garb_cascade_parts. */
 size_t garb_cascade_bytes(const garb_cascade_t *c);
+// The elements the cascade holds a style for (its element table): 0 for
+// NULL.
+uint32_t garb_cascade_elements(const garb_cascade_t *c);
 /* The same, by part: `state` is the cascade's own arena and the record
  * itself, `reads` what it read from the sheets, `attributes` the `style`
  * attributes' parses, `tables` the slot table, its rows of anchor bits, the

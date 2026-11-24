@@ -1791,6 +1791,21 @@ static void layout_profile_one(const Page *p, const yonder_layout_one_t *one)
     if (p->diag) yonder_diag_layout_one(diag, one);
     else yonder_diag_layout_stream_one(diag, one);
 }
+// What the shown page's layouts walked against what they cost, since its
+// last written `d` (the record's `layout sizes reading` lines), while the
+// profile is on: per layout attempt, the live nodes its document held
+// (libhtml's node_count, every node allocated and not yet freed, in the
+// document or not), the elements styled and the boxes made, and the time
+// from style to the public tree; per cascade taken, the elements it held
+// (garb_cascade_elements) and its time, by whether it was updated or built
+// fresh; per model rebuild, the live nodes and its time. diag_paint_reading
+// writes it and cost_reset starts it again.
+static struct {
+    uint64_t layouts, nodes, elements, boxes, us;
+    uint64_t updates, update_held, update_us, fresh, fresh_held, fresh_us;
+    uint64_t models, model_nodes, model_us;
+} s_sizes_reading;
+static bool page_records_shown(const Page *p);
 static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
 {
     bool enabled = s_layout_profile && layout_profile_diag(p);
@@ -1801,6 +1816,11 @@ static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
         yonder_layout_stats_t sample = {.model_calls = 1, .refusals = model == NULL};
         sample.model_us = layout_elapsed(began, &sample.clock_errors);
         layout_profile_add(p, &sample);
+        if (page_records_shown(p)) {
+            s_sizes_reading.models++;
+            s_sizes_reading.model_nodes += page_doc(p)->node_count;
+            s_sizes_reading.model_us += sample.model_us;
+        }
     }
     return model;
 }
@@ -1884,6 +1904,11 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
             if (need != YONDER_NEEDED_UNCOMPARED)
                 sample.needed.restyled[forced] = profile.styles_paint + profile.styles_layout;
             if (page_records_shown(p)) {
+                s_sizes_reading.layouts++;
+                s_sizes_reading.nodes += page_doc(p)->node_count;
+                s_sizes_reading.elements += profile.elements;
+                s_sizes_reading.boxes += profile.boxes;
+                s_sizes_reading.us += sample.needed.us[forced][need];
                 s_needed_reading.count[forced][need]++;
                 s_needed_reading.us[forced][need] += sample.needed.us[forced][need];
                 s_needed_reading.restyled[forced] += sample.needed.restyled[forced];
@@ -2454,6 +2479,12 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
             sample.bare_marked = work.marked;
         }
         layout_profile_add(p, &sample);
+        if (page_records_shown(p) && cascade != NULL && (why >= 0 || sample.cascade_updates)) {
+            bool fresh = why >= 0;
+            *(fresh ? &s_sizes_reading.fresh : &s_sizes_reading.updates) += 1;
+            *(fresh ? &s_sizes_reading.fresh_held : &s_sizes_reading.update_held) += garb_cascade_elements(cascade);
+            *(fresh ? &s_sizes_reading.fresh_us : &s_sizes_reading.update_us) += sample.cascade_us;
+        }
         if (s_one_open) {
             s_one.cascade_us = sample.cascade_us;
             s_one.cascade_why = why >= 0 ? why : sample.cascade_updates ? YONDER_LAYOUT_CASCADE_UPDATED
@@ -4551,6 +4582,7 @@ static void cost_reset(void)
     effects_reset();
     os64_memset(&s_cost, 0, sizeof(s_cost));
     os64_memset(&s_needed_reading, 0, sizeof(s_needed_reading));
+    os64_memset(&s_sizes_reading, 0, sizeof(s_sizes_reading));
     s_cost.collapses_from = g.ui.damage_collapses;
     s_cost.from_cycles = cycles();
     s_cost.from_us = os64_micros();
@@ -4909,6 +4941,34 @@ static void reading_key_fact(Page *p)
     yonder_diag_reading_fact(p->diag, "reading key", v);
 }
 
+// WHERE THE PAGE'S NODES ARE (os64_html_census, flow_census): every live
+// node of its document, and its elements, in the document, in templates and
+// shadow trees, detached and held, detached and kept for an older snapshot
+// pin, never inserted; the free node slots; the elements in the document by
+// whether they have a box and why not; and the elements the cascade holds.
+// A walk of every node: written at a record's write and a reading, never
+// per frame.
+static void census_text(const Page *p, char *out, size_t cap)
+{
+    os64_html_census_t c;
+    os64_html_census(page_doc(p), &c);
+    flow_census_t f;
+    flow_census(p->tree, &f);
+    const os64_html_census_part_t *n = &c.nodes, *e = &c.elements;
+    os64_snprintf(out, cap,
+                  "%lu live nodes (%lu elements): in the document %lu (%lu), in templates and shadow trees %lu (%lu), "
+                  "detached and held %lu (%lu), detached and kept for a snapshot pin %lu (%lu), never inserted %lu (%lu); "
+                  "%lu free slots; elements in the document with a box %lu, without: display none %lu, inside one %lu, "
+                  "drawn by a replaced box %lu, other %lu; the cascade holds %lu",
+                  (unsigned long)(n->connected + n->hosted + n->held + n->pinned + n->unattached),
+                  (unsigned long)(e->connected + e->hosted + e->held + e->pinned + e->unattached),
+                  (unsigned long)n->connected, (unsigned long)e->connected, (unsigned long)n->hosted,
+                  (unsigned long)e->hosted, (unsigned long)n->held, (unsigned long)e->held, (unsigned long)n->pinned,
+                  (unsigned long)e->pinned, (unsigned long)n->unattached, (unsigned long)e->unattached,
+                  (unsigned long)c.free_slots, (unsigned long)f.boxed, (unsigned long)f.none, (unsigned long)f.under_none,
+                  (unsigned long)f.drawn, (unsigned long)f.other, (unsigned long)garb_cascade_elements(p->cascade));
+}
+
 static void diag_observe(Page *p, const char *when)
 {
     yonder_diag_t *d = p->diag;
@@ -4920,6 +4980,9 @@ static void diag_observe(Page *p, const char *when)
     yonder_diag_fact(d, "written", when);
     diag_wire(d);
     diag_census(p, false);
+    char nodes[640];
+    census_text(p, nodes, sizeof(nodes));
+    yonder_diag_fact(d, "nodes", nodes);
     if (p->svg_cache) {
         yonder_svg_cache_stats_t stats = yonder_svg_cache_stats(p->svg_cache);
         os64_snprintf(v, sizeof(v), "%lu hits, %lu misses, %lu rasterizations, %lu bypasses",
@@ -9935,6 +9998,30 @@ static void diag_paint_reading(Page *p, uint32_t n)
         yonder_diag_needed_text(&s_needed_reading, needed, sizeof(needed));
         os64_snprintf(nkey, sizeof(nkey), "layout needed reading %u", (unsigned)n);
         yonder_diag_reading_fact(p->diag, nkey, needed);
+        // What a layout walked beside what it cost (s_sizes_reading), each
+        // an average, and where every node is now (census_text).
+        uint64_t L = s_sizes_reading.layouts, U = s_sizes_reading.updates, F = s_sizes_reading.fresh,
+                 M = s_sizes_reading.models;
+        char sizes[512];
+        os64_snprintf(sizes, sizeof(sizes),
+                      "%lu layouts, each over %lu live nodes, %lu elements styled and %lu boxes, %lu us style to public; "
+                      "cascade updated %lu, %lu us each over %lu elements held; built fresh %lu, %lu us each over %lu; "
+                      "model rebuilt %lu, %lu us each over %lu live nodes",
+                      (unsigned long)L, (unsigned long)(L ? s_sizes_reading.nodes / L : 0),
+                      (unsigned long)(L ? s_sizes_reading.elements / L : 0), (unsigned long)(L ? s_sizes_reading.boxes / L : 0),
+                      (unsigned long)(L ? s_sizes_reading.us / L : 0), (unsigned long)U,
+                      (unsigned long)(U ? s_sizes_reading.update_us / U : 0),
+                      (unsigned long)(U ? s_sizes_reading.update_held / U : 0), (unsigned long)F,
+                      (unsigned long)(F ? s_sizes_reading.fresh_us / F : 0),
+                      (unsigned long)(F ? s_sizes_reading.fresh_held / F : 0), (unsigned long)M,
+                      (unsigned long)(M ? s_sizes_reading.model_us / M : 0),
+                      (unsigned long)(M ? s_sizes_reading.model_nodes / M : 0));
+        os64_snprintf(nkey, sizeof(nkey), "layout sizes reading %u", (unsigned)n);
+        yonder_diag_reading_fact(p->diag, nkey, sizes);
+        char nodes[640];
+        census_text(p, nodes, sizeof(nodes));
+        os64_snprintf(nkey, sizeof(nkey), "nodes reading %u", (unsigned)n);
+        yonder_diag_reading_fact(p->diag, nkey, nodes);
         // W0's two tables, each written when it holds anything and started
         // again for the next reading (WHOLE_REPAINTS.md).
         const struct { CountedAt *t; const char *key; } w0[] = {

@@ -376,6 +376,24 @@ typedef uint64_t os64_html_pin_t;
  * detached subtree, so the node must not be read after release. Document
  * teardown refuses outstanding holds as well as live snapshot pins. */
 void os64_html_hold(const os64_html_document_t *doc, const os64_html_node_t *node);
+/* WHERE EVERY NODE IS: each live node whose document is `doc`, by where it
+ * sits, and the elements among them: in the document (`connected`), of which
+ * inside a template's contents or a shadow tree hanging from it
+ * (`hosted`); detached, in a unit something holds (a counted hold or a
+ * parser's reference, `held`), in a unit nothing holds that waits for an
+ * older snapshot pin to let it go (`pinned`), or in a subtree never
+ * inserted (`unattached`: made, or taken out by the parser, and charged
+ * until teardown); and the freed node slots the arena keeps for reuse
+ * (`free_slots`). A walk of every live node, for a record: not a call to
+ * make per frame. */
+typedef struct {
+    size_t connected, hosted, held, pinned, unattached;
+} os64_html_census_part_t;
+typedef struct {
+    os64_html_census_part_t nodes, elements;
+    size_t free_slots;
+} os64_html_census_t;
+void os64_html_census(const os64_html_document_t *doc, os64_html_census_t *out);
 void os64_html_release(const os64_html_document_t *doc, const os64_html_node_t *node);
 uint64_t os64_html_version(const os64_html_document_t *doc);
 /* Owned HTML input nodes carrying an unnamespaced form attribute. Includes
