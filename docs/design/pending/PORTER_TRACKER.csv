@@ -1,11 +1,11 @@
 id,task,depends_on,status,done_in,notes
-P.1,Freeze reproducible installable outputs,,code,,Compare complete deployed file inventories from independent builds and verify guest and debugger symbols.
-P.1.1,Compare build profiles and keep optimization independent of DWARF,,doing,,Record the selected profile and its build cost.
-P.1.2,Identify timestamp and path differences and stabilize installable bytes,,doing,,Investigate every unexplained difference.
-P.1.3,Stage deployment ELFs for ext2 and the FAT lifeboat and ISO,P.1.1,doing,,The package publisher will use the same staged files.
-P.1.4,Compare SHA-256 inventories of all installable ELF and data files,P.1.2 P.1.3,todo,,Use two differently named worktrees at the same revision and build at different times.
-P.1.5,Boot the normal image and lifeboat and check guest trace names and host GDB symbols,P.1.3,todo,,Use QEMU and the exact host symbols from the build.
-P.1.6,Keep the full kernel ELF and normalize its DWARF paths,P.1.3,doing,,ADDED 2026-11-24: stripping the kernel exposed a write-protection fault during UEFI boot. The large-page handoff is tracked in DEBTS.md.
+P.1,Freeze reproducible installable outputs,,review,,Compare complete deployed file inventories from independent builds and verify guest and debugger symbols.
+P.1.1,Compare build profiles and keep optimization independent of DWARF,,done,#733,Compile once with host DWARF. Compared clean build times with compiler DWARF disabled.
+P.1.2,Identify timestamp and path differences and stabilize installable bytes,,done,#733,Kernel content ID and stable WebP and QuickJS build inputs.
+P.1.3,Stage deployment ELFs for ext2 and the FAT lifeboat and ISO,P.1.1,done,#733,ISO and FAT share the full kernel. Both roots use the staged ring-3 ELFs.
+P.1.4,Compare SHA-256 inventories of all installable ELF and data files,P.1.2 P.1.3,done,#733,All 1660 SHA-256 entries matched across two clean builds.
+P.1.5,Boot the normal image and lifeboat and check guest trace names and host GDB symbols,P.1.3,done,#733,BIOS ext2 and direct UEFI FAT boots passed with named traces and live host GDB source lookup.
+P.1.6,Keep the full kernel ELF and normalize its DWARF paths,P.1.3,done,#733,ADDED 2026-11-24: stripping the kernel exposed a write-protection fault during UEFI boot. The large-page handoff is tracked in DEBTS.md.
 
 P.2,Publish immutable packages and serve them from Windows,P.1,todo,,Verify full and selective compressed transfers and concurrent publication.
 P.3,Preview installs from the Porter CLI,P.2,todo,,Distinguish known downgrades from local edits and check resolved destination collisions.
