@@ -101,7 +101,8 @@ static bool keep_declined(FKeeps *k, flow_restyle_reason_t why, const os64_html_
 // others; one under a `display: none` ancestor never reaches here, since
 // no style of it comes out different); `static` (its insets are not read);
 // `sticky`; `a relative inline` (a relative inline's pieces, or an atom on
-// a line: what they reach is their line's, and so their block's);
+// a line: what they reach is their line's, and so their block's); `laid
+// out unpositioned` (a box its position does not place, a table row's);
 // for an absolute or fixed `a table` or `an aspect ratio` (each sizes and
 // places itself by rules of its own). Then, for an axis whose insets
 // changed, on an absolute or fixed box (CSS 2.1 §§ 10.3.7, 10.6.4, as
@@ -180,8 +181,8 @@ static const char *keep_offset_case(const flow_tree_t *tree, const os64_html_nod
                     : box == NULL ? "no box"
                     : b->position == FLOW_POSITION_STATIC ? "static"
                     : b->position == FLOW_POSITION_STICKY ? "sticky"
-                    : box->kind == FLOW_BOX_SPAN || box->kind == FLOW_BOX_ATOMIC || !box->positioned
-                        ? "a relative inline"
+                    : box->kind == FLOW_BOX_SPAN || box->kind == FLOW_BOX_ATOMIC ? "a relative inline"
+                    : !box->positioned ? "laid out unpositioned"
                     : out && box->kind == FLOW_BOX_TABLE ? "a table"
                     : out && box->kind == FLOW_BOX_BLOCK && b->aspect_ratio > 0 ? "an aspect ratio" : NULL;
     const char *kind = b->position == FLOW_POSITION_RELATIVE ? "relative"

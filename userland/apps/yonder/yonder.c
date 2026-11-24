@@ -1452,10 +1452,10 @@ static bool page_rebuild_owed(const Page *p)
 
 // Counts the trees any Page has been given, so a reader can tell a new
 // layout from the old one even where the new tree has the old one's
-// address; and the animation ticks that moved boxes in the shown one
-// (tick_page). What intersections_turn reads for "something moved".
+// address; and the times boxes moved in the shown one with no new tree:
+// an animation's tick (tick_page), or a box that only moved, kept in it
+// (restyle_kept_shown). What intersections_turn reads for "something moved".
 static uint64_t s_trees_given, s_ticks_moved;
-static void forms_place(void);
 
 // The tree a Page holds from now on, and with it the animations its layout
 // built (flow_timeline_commit): the old tree goes first, since it points
@@ -4554,12 +4554,9 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
     if (kept.kind == FLOW_RESTYLE_DECLINED)
         return NULL;
     // A box that only moved moved what an observation reads, as a tick that
-    // moves boxes does (intersections_turn), and the controls placed from
-    // boxes follow it.
-    if (kept.moved > 0) {
-        forms_place();
+    // moves boxes does (intersections_turn).
+    if (kept.moved > 0)
         s_ticks_moved++;
-    }
     // `--geometry-check`: every Nth kept tree is laid out whole beside
     // itself and the two compared; the record says how many were and the
     // first that differed, with the element and what differed.

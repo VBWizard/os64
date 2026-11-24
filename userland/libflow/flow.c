@@ -129,7 +129,7 @@ struct flow_tree {
     // none is kept and the next layout makes the tree afresh.
     FArena restyle;
     bool restyle_spent;
-    // The boxes a kept restyle moved since the layout (restyle.inc's move):
+    // The boxes a kept restyle moved since the layout (move_box):
     // node -> FMoved, in the restyle arena, the offset summed over its
     // moves; their records still say where the layout put them.
     FMap moved;
@@ -219,7 +219,7 @@ typedef struct {
     // The line the nearest line clamp round the box being built ends at
     // (f_clamp_line), or NULL: public_box marks it.
     const FLine *clamp_end;
-    // RELOCATING (a box that only moved, restyle.inc's move): the public
+    // RELOCATING (a box that only moved, move_box): the public
     // boxes are not made but met again, in the pre-order they were made in,
     // `relocate_next` the first one met; only their geometry is written,
     // and no list, map, clip or frame is made. `ox`, `oy`: what every
@@ -448,7 +448,7 @@ static void set_clip(flow_box_t *b, Clip c)
 }
 
 // A box's clip as a build writes it: a box met again in a move keeps its
-// own, since nothing in a moved box clips (restyle.inc's move) and its
+// own, since nothing in a moved box clips (move_blocked) and its
 // containing blocks, which clip it from outside, did not move.
 static void build_clip(const Build *bd, flow_box_t *b, Clip c)
 {
@@ -1933,7 +1933,7 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     const FLine *outer = bd->clamp_end;
     if (f_clamps_lines(src->style))
         bd->clamp_end = f_clamp_line(src, NULL);
-    // A box a kept restyle moved since the layout (restyle.inc's move) is
+    // A box a kept restyle moved since the layout (move_box) is
     // where its records put it plus what it moved, and so is all in it.
     int64_t ox = bd->ox, oy = bd->oy;
     const FMoved *moved = bd->t->nmoved > 0 && src->positioned ? f_map_get(&bd->t->moved, src->node) : NULL;
@@ -5849,7 +5849,7 @@ bool flow_change_parts(const flow_tree_t *was, const flow_tree_t *now, flow_poin
     return said->why == FLOW_PARTS_MARKED;
 }
 
-// ── A box that only moves (restyle.inc's move) ───────────────────────────
+// ── A box that only moves (restyle.inc's keep_move) ──────────────────────
 
 // The record of `node`'s positioned block-level box under `b`, met in the
 // pre-order the public tree was made in, an inline-block's content
@@ -5919,14 +5919,6 @@ static const char *move_blocked(const FBox *b, bool root)
     return NULL;
 }
 
-// A positioned block-level box moved by (dx, dy), in 26.6, since a kept
-// restyle wrote its insets (restyle.inc's move): its offset since the
-// layout summed on the tree, and what was made of it made again from its
-// records, which stay where the layout left them, at that offset plus what
-// the moved boxes round it moved (public_box's relocation); every box in it
-// stamped `stamp`, since everything it draws is somewhere else. False when
-// the room or the records ran out, which leaves part of it moved: the
-// caller declines, and the layout that follows makes the tree afresh.
 // WHAT A CHANGE OF REACH MOVES (BRIEF_LAYOUT_NEEDS N4, and the scrollbars'
 // own slice after it): whether what is painted moved when the page's extent
 // or a scroll container's reach was worked again, `was` holding each
@@ -5953,6 +5945,14 @@ static const FMoved *tree_moved_of(void *ctx, const os64_html_node_t *node)
     return f_map_get(&((flow_tree_t *)ctx)->moved, node);
 }
 
+// A positioned block-level box moved by (dx, dy), in 26.6, since a kept
+// restyle wrote its insets (restyle.inc's keep_move): its offset since the
+// layout summed on the tree, and what was made of it made again from its
+// records, which stay where the layout left them, at that offset plus what
+// the moved boxes round it moved (public_box's relocation); every box in it
+// stamped `stamp`, since everything it draws is somewhere else. False when
+// the room or the records ran out, which leaves part of it moved: the
+// caller declines, and the layout that follows makes the tree afresh.
 static bool move_box(flow_tree_t *t, const os64_html_node_t *node, int64_t dx, int64_t dy, uint64_t stamp)
 {
     const FBox *src = box_record(t, node);
@@ -5969,6 +5969,13 @@ static bool move_box(flow_tree_t *t, const os64_html_node_t *node, int64_t dx, i
     }
     m->dx += dx;
     m->dy += dy;
+    // Its records still say where the layout put it, and its style now says
+    // where it is, so a layout that grafts from this tree must place it
+    // afresh: changed in the snapshot, its ancestors dirty from the next
+    // read. The change log names it only when a script wrote it itself, and
+    // not when a class on an ancestor or a sibling moved it.
+    if (t->reuse != NULL)
+        reuse_mark(t->reuse, node);
     int64_t ox = 0, oy = 0;
     for (const flow_box_t *p = box->parent; p != NULL; p = p->parent) {
         const FMoved *pm = p->positioned && p->node != NULL && flow_box_for(t, p->node) == p

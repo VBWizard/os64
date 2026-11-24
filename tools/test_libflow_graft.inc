@@ -411,6 +411,8 @@ static void restyle_offset_cases(void)
         {"position:relative;left:0px", "position:relative;left:3px", "an inset, a relative inline", false, "span", NULL, NULL, NULL, 0},
         {"position:relative;display:inline-block;left:0px", "position:relative;display:inline-block;left:3px",
          "an inset, a relative inline", false, "span", NULL, NULL, NULL, 0},
+        {"position:relative;display:table-row;left:0px", "position:relative;display:table-row;left:3px",
+         "an inset, laid out unpositioned", false, "div", NULL, NULL, NULL, 0},
         {"", "on", "an inset, a pseudo-element", false, "div",
          "#m::before{content:'x';position:relative;left:0} #m.on::before{left:4px}", "class", NULL, 0},
         {"position:relative;left:0px", "position:relative;left:9px", NULL, true, NULL, NULL, NULL, NULL, 0},
@@ -651,7 +653,7 @@ static void restyle_move_marks(void)
     static char html[16384];
     size_t len = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>p{color:red;padding:2px}</style>"
         "<div style='position:relative;width:400px;height:100px'><div id=m style='position:absolute;width:50px;left:0px;top:0px'>"
-        "moved text</div></div>");
+        "moved <div id=in style='opacity:.5'>text</div></div></div>");
     for (int i = 0; i < 400 && len < sizeof(html) - 64; i++)
         len += (size_t)snprintf(html + len, sizeof(html) - len, "<p>%d</p>", i);
     Sheeted p;
@@ -660,6 +662,10 @@ static void restyle_move_marks(void)
     os64_html_node_t *m = graft_node(&p, "m");
     os64_gui_rect_t before = old != NULL && flow_box_for(old, m) != NULL ? flow_box_for(old, m)->overflow
                                                                           : (os64_gui_rect_t){0};
+    // A box inside the moved one draws somewhere else too: its drawn stamp
+    // moves, so a kept drawing of it (yonder's keep.h) is not reused.
+    const flow_box_t *inner = old != NULL ? flow_box_for(old, graft_node(&p, "in")) : NULL;
+    uint64_t inner_drawn = inner != NULL ? inner->drawn : 0;
     static const char moved[] = "position:absolute;width:50px;left:200.5px;top:30px";
     os64_html_set_attr(p.doc, m, "style", moved, sizeof(moved) - 1);
     graft_update(&p);
@@ -676,13 +682,53 @@ static void restyle_move_marks(void)
            kept.kind == FLOW_RESTYLE_PAINT && kept.moved == 1 && kept.parts == FLOW_PARTS_MARKED &&
                before.w > 0 && after.x != before.x && move_covered(&marks, before) && move_covered(&marks, after),
            NULL);
+    expect("restyle: and every box inside the moved one is stamped as drawn anew",
+           inner != NULL && inner->drawn != inner_drawn, NULL);
     flow_free(old);
+    sheeted_close(&p);
+}
+
+// A MOVE ANOTHER ELEMENT'S CHANGE MADE (N4): a class on an ancestor moves a
+// positioned box through a selector, so the change log names the ancestor
+// and not the box. The box is kept moved; a later change elsewhere is laid
+// out grafting from the kept tree, and the box must not be copied back to
+// where its records put it (move_box marks it changed in the snapshot).
+static void restyle_move_by_a_class(void)
+{
+    static char html[16384];
+    size_t len = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>p{color:red;padding:2px}"
+        ".menu{position:absolute;width:200px;left:-900px;top:0px}.nav.open .menu{left:40.5px}</style>"
+        "<div class=nav id=nav><div style='position:relative;width:300px'>"
+        "<div class=menu id=menu>menu <b>items</b></div>"
+        "<span>r</span></div></div><p id=c>tail</p>");
+    for (int i = 0; i < 400 && len < sizeof(html) - 64; i++)
+        len += (size_t)snprintf(html + len, sizeof(html) - len, "<p>%d</p>", i);
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
+    os64_html_set_attr(p.doc, graft_node(&p, "nav"), "class", "nav open", 8);
+    graft_update(&p);
+    flow_restyle_t kept = old != NULL ? restyle_keep(&p, old) : (flow_restyle_t){0};
+    char said[96];
+    snprintf(said, sizeof(said), "kind %d why %d moved %llu written %llu %s", (int)kept.kind, (int)kept.why,
+             (unsigned long long)kept.moved, (unsigned long long)kept.written, kept.detail);
+    expect("restyle: a class on an ancestor that moves a box is kept as a move", kept.kind == FLOW_RESTYLE_PAINT &&
+           kept.moved == 1, said);
+    if (old != NULL)
+        graft_oracle(&p, old);
+    os64_html_set_attr(p.doc, graft_node(&p, "c"), "style", "padding-top:3px", 15);
+    graft_update(&p);
+    flow_tree_t *next = graft_layout(&p, old, NULL, NULL);
+    flow_free(old);
+    graft_oracle(&p, next);
+    flow_free(next);
     sheeted_close(&p);
 }
 
 static void restyle_in_place_cases(void)
 {
     restyle_offset_cases();
+    restyle_move_by_a_class();
     restyle_move_marks();
     restyle_move_sequences();
     restyle_move_walk();
