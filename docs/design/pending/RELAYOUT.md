@@ -268,10 +268,13 @@ The earlier claim that nothing points into the cascade was wrong:
 animation keyframe records borrow declaration data. Updates preserve the
 cascade's prior arena allocations while its users are alive. Before another
 update, the cascade renews when additional state payload plus retained inline
-attribute parse storage reaches the initial state payload (at least 4 KiB).
-An update can cross this soft threshold; state allocations remain hard-bounded
-by `state_bytes`, and additional inline-attribute parses also have a cumulative
-`state_bytes` ceiling. The 64-update limit remains an additional renewal guard.
+attribute parse storage (each parse's arena and its record) reaches the
+initial state payload (at least 4 KiB). An update can cross this soft
+threshold; state allocations remain hard-bounded by `state_bytes`, and
+additional inline-attribute parses also have a cumulative `state_bytes`
+ceiling. The bytes are the whole renewal: how many updates a cascade has
+lived is not counted, and the profile's `layout cascade` line says, per
+renewal, how many it lived and what it retained of its budget.
 This ties retention to allocation growth: many small edits can reuse a cascade,
 while repeated broad restyles cannot accumulate dozens of states. Reaching a limit, losing
 history, lacking a reader, or encountering broad selector dependencies
@@ -515,8 +518,8 @@ other, so their pages keep style and geometry reuse across a mutation.
   really restyles most of the page.
 
 The marking is an over-approximation by ancestor chain, not the
-per-selector invalidation sets other browsers keep; the 64-update cap and
-the retained budget still force a periodic fresh cascade.
+per-selector invalidation sets other browsers keep; the retained budget
+still forces a periodic fresh cascade.
 
 ## Acceptance
 

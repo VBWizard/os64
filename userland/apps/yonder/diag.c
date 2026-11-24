@@ -1472,6 +1472,8 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     }
     if (sample->read_kind_names != NULL) total->read_kind_names = sample->read_kind_names;
     ADD(model_calls); ADD(layouts); ADD(refusals); ADD(clock_errors);
+    ADD(renewals); ADD(renew_updates); ADD(renew_bytes); ADD(renew_budget);
+    if (sample->renew_updates_most > total->renew_updates_most) total->renew_updates_most = sample->renew_updates_most;
 #undef ADD
     const yonder_layout_stats_t *s = total;
     char line[768];
@@ -1608,8 +1610,9 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         yonder_diag_summary_fact(d, reads_key, line);
     }
     // `<key> cascade`: how many cascades were updated and how many built
-    // fresh, by reason, the reasons that never happened left out; then the
-    // anchored :has() compounds its cascades held and what bare ones cost.
+    // fresh, by reason, the reasons that never happened left out; the
+    // renewals for bytes; then the anchored :has() compounds its cascades
+    // held and what bare ones cost.
     if (!cascade_sampled) return;
     char cascade_key[64];
     os64_snprintf(cascade_key, sizeof(cascade_key), "%s cascade", key);
@@ -1629,6 +1632,19 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         first = 0;
     }
     char part[200];
+    // A renewal for bytes: the updates it had lived and what it had
+    // retained of its budget, on average.
+    if (s->renewals != 0) {
+        n = os64_snprintf(part, sizeof(part), "; renewed for its bytes %lu, after %lu updates on average (most "
+                          "%lu), %lu KiB retained of %lu KiB on average", (unsigned long)s->renewals,
+                          (unsigned long)(s->renew_updates / s->renewals), (unsigned long)s->renew_updates_most,
+                          (unsigned long)(s->renew_bytes / s->renewals / 1024),
+                          (unsigned long)(s->renew_budget / s->renewals / 1024));
+        if (n > 0 && (size_t)n < sizeof(part) && at + (size_t)n < sizeof(line)) {
+            os64_memcpy(line + at, part, (size_t)n + 1);
+            at += (size_t)n;
+        }
+    }
     n = os64_snprintf(part, sizeof(part), "; anchors held %lu, bare %lu; bare anchors asked again %lu, turned %lu, "
                       "marked %lu", (unsigned long)s->anchors_peak, (unsigned long)s->anchors_bare_peak,
                       (unsigned long)s->bare_tested, (unsigned long)s->bare_turned, (unsigned long)s->bare_marked);

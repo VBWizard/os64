@@ -899,11 +899,39 @@ static void unchanged_cases(void)
     s_ledger=YONDER_LEDGER_OFF;
 }
 
+/* A CASCADE RENEWED FOR ITS BYTES: a positioned element's `left` written
+ * and read back two hundred times, each a layout and a cascade update. The
+ * record's `layout cascade` line says how many renewals there were, how
+ * many updates each lived and what it retained of its budget; no cascade
+ * is ever renewed for a count of updates. */
+static void renewal_cases(void)
+{
+    s_ledger=YONDER_LEDGER_OFF;
+    probe_page("<!doctype html><style>#t{position:absolute;top:0}</style><div id=t>bar</div><p id=out>-</p>"
+               "<button id=go>g</button><script>const t=document.getElementById('t');"
+               "document.onclick=()=>{let s=0;for(let i=0;i<200;i++){t.style.left=(i%97)+'px';"
+               "s+=Math.round(t.getBoundingClientRect().left)}document.getElementById('out').textContent=''+s}"
+               "</script>",true);
+    script_turn();
+    g.page.diag=diag_new_claimed("https://fixture.test/renewal",1);
+    s_layout_profile=true;
+    kept_reads_click("go");
+    const char *line=yonder_diag_fact_value(g.page.diag,"layout cascade");
+    unsigned updated=record_number(line,"updated "),renewed=record_number(line,"renewed for its bytes ");
+    check(line && updated>=100 && renewed>=1 && strstr(line," updates on average (most ")!=NULL &&
+          strstr(line," KiB retained of ")!=NULL && strstr(line,"cap")==NULL,
+          "renewal: the record says each renewal for bytes, the updates it lived and what it retained");
+    printf("  renewal: %s\n",line?line:"(no layout cascade line)");
+    s_layout_profile=false;
+    probe_drop();
+}
+
 static void layout_profile_cases(void)
 {
     restyle_kept_cases();
     kept_reads_cases();
     unchanged_cases();
+    renewal_cases();
     pending_table_cases();
     random_walk_cases();
     /* The cases below measure what a layout needed, so every change is laid

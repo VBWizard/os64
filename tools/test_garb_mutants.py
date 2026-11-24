@@ -46,6 +46,19 @@ SCRIPTS = 'tools/test_yonder_scripts_host.sh'
 
 # (name, file, old, new, harness). Each breaks one rule the design states.
 mutants = [
+    # The renewal is the bytes (RELAYOUT.md § the retained budget): no
+    # count of updates renews, what a renewal reports is what it retained,
+    # and yonder's record says each one. A parse's record charged beside
+    # its arena (`+ sizeof(*p)`) has no mutant: its bytes against the
+    # arena's kilobytes are past what a host case can tell.
+    ('renewal-by-a-count-of-updates', CASCADE,
+     '    if (added >= c->retained_budget) { c->refusal = GARB_UPDATE_RETAINED; return false; }',
+     '    if (added >= c->retained_budget || c->updates >= 64) { c->refusal = GARB_UPDATE_RETAINED; return false; }',
+     UPDATES),
+    ('renewal-retained-not-said', CASCADE,
+     '    return os64_arena_stats(c->self.arena).used_bytes - c->initial_state_bytes + c->update_attribute_bytes;',
+     '    return 0;', UPDATES),
+    ('renewal-not-recorded', YONDER, '            sample.renewals = 1;\n', '', SCRIPTS),
     # The kept read (KEPT_READ.md): its key, its serial, its refcount, and
     # the copy that keeps it unwritten.
     ('kept-read-a-reparse-keeps-its-serial', PARSE,

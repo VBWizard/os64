@@ -724,6 +724,97 @@ static void update_advance(void)
     update_check(live==baseline,"advance: nothing leaks");
 }
 
+/* THE LONG RUN: 10,000 sparse updates (one positioned element's `left`
+ * written again and again, as a pointer moving over a bar does) on a page
+ * of 2,000 others. The bytes are the only renewal: every update that is
+ * refused is refused for them (`retained` or `attributes`), a cascade lives
+ * past any count of updates, an update late in the run costs what one
+ * early did (each thousand's average against the others: one update in a
+ * few hundred takes milliseconds, at the same point in each cascade's life,
+ * so a hundred updates prove less than a thousand), and the heap after each
+ * renewal is what it was after the first: nothing grows with the number of
+ * updates lived. It prints the costs by thousand and by updates lived. */
+static uint64_t long_run_ns(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
+static void update_long_run(void)
+{
+    size_t baseline=live;
+    static char html[65536];
+    size_t len=(size_t)sprintf(html,"<!doctype html><div id=box>");
+    for(int i=0;i<2000;++i) len+=(size_t)sprintf(html+len,"<p>%d</p>",i);
+    strcpy(html+len,"</div><div id=t style='left:0'>bar</div>");
+    os64_html_document_t *doc=update_doc(html);
+    const char *css="p{color:red;padding:2px}#t{position:absolute;top:0}";
+    garb_parsed_t sheet;garb_parse_sheet_text(css,strlen(css),&sheet);
+    garb_sheet_in_t in={.sheet=&sheet};
+    garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    os64_html_node_t *t=(os64_html_node_t *)by_id(doc->document,"t");
+    unsigned renewals=0,other=0,failed=0,under=0;
+    uint64_t lived_most=0,first_ns=0,last_ns=0,first_n=0,last_n=0;
+    size_t heap_first=0,heap_most=0;
+    uint64_t bucket_ns[6]={0},bucket_n[6]={0},run_ns[10]={0},run_n[10]={0};
+    for(int i=0;i<10000;++i){
+        char v[32];
+        int n=snprintf(v,sizeof(v),"left:%dpx",i%997);
+        os64_html_set_attr(doc,t,"style",v,(size_t)n);
+        uint64_t lived=garb_cascade_updates(c);
+        uint64_t began=long_run_ns();
+        bool updated=garb_cascade_update(c);
+        uint64_t spent=long_run_ns()-began;
+        if(updated){
+            if(lived<300){ bucket_ns[lived/50]+=spent; bucket_n[lived/50]++; }
+            run_ns[i/1000]+=spent; run_n[i/1000]++;
+            if(i<100){ first_ns+=spent; first_n++; }
+            if(i>=9900){ last_ns+=spent; last_n++; }
+            continue;
+        }
+        garb_update_refusal_t why=garb_cascade_update_refusal(c);
+        other+=why!=GARB_UPDATE_RETAINED && why!=GARB_UPDATE_ATTRIBUTES;
+        size_t budget=0;
+        under+=garb_cascade_retained(c,&budget)<budget || budget<4096;
+        if(lived>lived_most) lived_most=lived;
+        garb_cascade_t *fresh=garb_cascade(&in,1,doc,garb_cascade_env(c));
+        if(!fresh || garb_cascade_incomplete(fresh)){ failed++; garb_cascade_free(fresh); break; }
+        garb_cascade_free(c); c=fresh;
+        renewals++;
+        if(renewals==1) heap_first=live_bytes;
+        else if(live_bytes>heap_most) heap_most=live_bytes;
+    }
+    double first_avg=first_n?(double)first_ns/first_n:0, last_avg=last_n?(double)last_ns/last_n:0;
+    printf("  long run by thousand:");
+    for(int k=0;k<10;k++) if(run_n[k]) printf(" %.0f",(double)run_ns[k]/run_n[k]);
+    printf("\n");
+    printf("  long run by updates lived:");
+    for(int k=0;k<6;k++) if(bucket_n[k]) printf(" %d-%d %.0f ns,",k*50,k*50+49,(double)bucket_ns[k]/bucket_n[k]);
+    printf("\n");
+    printf("  long run: 10000 updates, %u renewals, most lived %lu; first 100 %.0f ns each, last 100 %.0f ns each;"
+           " heap after the first renewal %zu, at most %zu after the rest\n",renewals,(unsigned long)lived_most,
+           first_avg,last_avg,heap_first,heap_most);
+    update_check(!failed && other==0 && under==0,
+                 "long run: every refused update was refused for its bytes, its retained bytes at its budget");
+    update_check(renewals<=200 && lived_most>64,"long run: a cascade lives past 64 updates, renewed only for its bytes");
+    // Flat from the first renewal on: no thousand of the run costs more than
+    // a third over any other (the first thousand, on the cascade built with
+    // the document, is the run's cheapest and not compared).
+    double most=0,least=0;
+    for(int k=1;k<10;k++){
+        if(!run_n[k]) continue;
+        double avg=(double)run_ns[k]/run_n[k];
+        if(most==0 || avg>most) most=avg;
+        if(least==0 || avg<least) least=avg;
+    }
+    update_check(first_n>=90 && last_n>=90 && least>0 && most<=least*4/3,
+                 "long run: an update late in the run costs what one early did");
+    update_check(renewals<2 || heap_most<=heap_first+heap_first/10+65536,
+                 "long run: the heap after each renewal is the first renewal's");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    update_check(live==baseline,"long run: nothing leaks");
+}
+
 /* THE KEPT READ (KEPT_READ.md): a build offered a read with an equal key
  * takes it, matches as one that read the sheets again, and the read
  * outlives the cascade it came from; each key member different reads again and
@@ -1873,6 +1964,7 @@ static int cascade_updates(void)
     update_dependencies();
     update_inline_changes();
     update_advance();
+    update_long_run();
     update_has();
     update_scratch_cost();
     size_t baseline=live;
@@ -1966,7 +2058,7 @@ static int cascade_updates(void)
             renewals+=garb_cascade_generation(c)!=was;
         }
         update_check(broad ? renewals>=4 : renewals==0,
-                     broad?"large restyles renew before 64 updates":"small restyles retain incremental reuse");
+                     broad?"large restyles renew by their bytes":"small restyles retain incremental reuse");
         garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
         update_check(live==baseline,"retention-pressure ownership released");
     }

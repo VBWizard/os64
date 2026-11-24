@@ -97,7 +97,7 @@ typedef struct yonder_diag yonder_diag_t;
 // reasons, then libgarb's refusals (garb_update_refusal_t past DONE). The
 // names come with the sample (`cascade_reason_names`), from the code that
 // knows them; the layout wrapper checks the count at compile time.
-#define YONDER_LAYOUT_CASCADE_REASONS 19
+#define YONDER_LAYOUT_CASCADE_REASONS 18
 // Why a restyle kept in the shown tree was declined (flow_restyle_reason_t
 // order); the layout wrapper checks the count at compile time.
 #define YONDER_LAYOUT_RESTYLE_REASONS 12
@@ -157,6 +157,10 @@ typedef struct {
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
     const char *const *cascade_reason_names;
+    // The cascades renewed for their bytes (libgarb's `retained` and
+    // `attributes`): how many, the updates each had lived (summed, and the
+    // most), and the bytes they had retained against their budget (summed).
+    uint64_t renewals, renew_updates, renew_updates_most, renew_bytes, renew_budget;
     // The graft's role counter (libflow's flow_reuse_stats_t.role_*): the
     // equal subtrees refused only for their role, by role, the boxes in
     // them, the placement time inside them, and the roots holding each role

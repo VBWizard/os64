@@ -2430,6 +2430,18 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // (cascade_reason_names), then libgarb's.
     int32_t why = updated ? -1 : cascade == NULL ? 0 : !scoped ? 1 : fresh_sheets ? 2 : !matches ? 3
                 : 3 + (int32_t)garb_cascade_update_refusal(cascade);
+    // A renewal for its bytes, read before the cascade is replaced: the
+    // updates it lived and what it retained.
+    uint64_t renew_updates = 0, renew_bytes = 0, renew_budget = 0;
+    bool renewed = !updated && cascade != NULL && matches &&
+                   (garb_cascade_update_refusal(cascade) == GARB_UPDATE_RETAINED ||
+                    garb_cascade_update_refusal(cascade) == GARB_UPDATE_ATTRIBUTES);
+    if (renewed && s_layout_profile) {
+        size_t budget = 0;
+        renew_bytes = garb_cascade_retained(cascade, &budget);
+        renew_budget = budget;
+        renew_updates = garb_cascade_updates(cascade);
+    }
     if (!updated) {
         // Only an update this layout asked for, refused as broad, has a
         // trigger to tell.
@@ -2471,6 +2483,12 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
             .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates,
             .cascade_reason_names = cascade_reason_names()};
         if (why >= 0 && why < YONDER_LAYOUT_CASCADE_REASONS) sample.cascade_refused[why] = 1;
+        if (renewed) {
+            sample.renewals = 1;
+            sample.renew_updates = sample.renew_updates_most = renew_updates;
+            sample.renew_bytes = renew_bytes;
+            sample.renew_budget = renew_budget;
+        }
         sample.cascade_us = layout_elapsed(began, &sample.clock_errors);
         int32_t anchors = 0, bare = 0;
         garb_cascade_anchors(cascade, &anchors, &bare);
