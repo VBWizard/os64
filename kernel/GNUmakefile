@@ -88,6 +88,10 @@ ifeq ($(CC_IS_CLANG),1)
         -target x86_64-unknown-none
 endif
 
+# Keep kernel DWARF relative to the repository. GCC passes the same debug
+# prefix map to GAS for preprocessed assembly.
+KERNEL_DEBUG_PATHS := -fdebug-prefix-map=$(abspath ..)=.
+
 # Internal C flags that should not be changed by the user.
 override CFLAGS += \
     -Wall \
@@ -105,6 +109,7 @@ override CFLAGS += \
     -mcmodel=kernel \
 	-masm=intel \
 	-Werror \
+	$(KERNEL_DEBUG_PATHS) \
 	$(INCLUDE_FLAGS) \
 	-MMD \
 	-MP
@@ -192,7 +197,7 @@ override HEADER_DEPS += $(SBC_OBJ:.o=.d)
 all: bin/$(OUTPUT)
 
 # Link rules for building the C compiler runtime.
-cc-runtime-x86_64/cc-runtime.a: cc-runtime/*
+cc-runtime-x86_64/cc-runtime.a: GNUmakefile cc-runtime/*
 	rm -rf cc-runtime-x86_64
 	cp -r cc-runtime cc-runtime-x86_64
 	$(MAKE) -C cc-runtime-x86_64 -f cc-runtime.mk \
@@ -201,14 +206,13 @@ cc-runtime-x86_64/cc-runtime.a: cc-runtime/*
 		CFLAGS="$(CFLAGS)" \
 		CPPFLAGS='-isystem ../freestnd-c-hdrs-0bsd -DCC_RUNTIME_NO_FLOAT'
 
-# Fingerprint the linked deployment ELF with its ID field still empty. Use
+# Fingerprint the linked kernel ELF with its ID field still empty. Use
 # the first 16 hex digits in the boot banner. Updating the reserved field in
 # the host ELF keeps its DWARF and the deployment image's addresses aligned.
 bin/$(OUTPUT): GNUmakefile linker.ld $(OBJ) cc-runtime-x86_64/cc-runtime.a
 	@mkdir -p "$$(dirname $@)"
 	$(LD) $(OBJ) cc-runtime-x86_64/cc-runtime.a $(LDFLAGS) -o obj/kernel-linked.elf
-	$(OBJCOPY) --strip-debug obj/kernel-linked.elf obj/kernel-unlabeled.elf
-	@digest=$$(sha256sum obj/kernel-unlabeled.elf) && printf '%.16s\0' "$$digest" > obj/kernel-build-id
+	@digest=$$(sha256sum obj/kernel-linked.elf) && printf '%.16s\0' "$$digest" > obj/kernel-build-id
 	$(OBJCOPY) --update-section .os64_build_id=obj/kernel-build-id obj/kernel-linked.elf $@.tmp
 	mv $@.tmp $@
 # Include header dependencies.

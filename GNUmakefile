@@ -296,8 +296,8 @@ KERNEL_BIN      := kernel/bin/$(IMAGE_NAME)
 BT_FIRMWARE_LICENSE := firmware/intel/LICENCE.ibt_firmware
 
 # The linker outputs stay under kernel/bin and userland/bin for GDB. Image
-# recipes share these deployment copies, which retain the guest trace symbols
-# and load addresses. DEPLOY_ELFS lists the current inputs for staging.
+# recipes share the staged full kernel and stripped-debug ring-3 ELFs.
+# DEPLOY_ELFS lists the current inputs for staging.
 OBJCOPY ?= x86_64-elf-objcopy
 DEPLOY_DIR := disk/deploy
 DEPLOY_KERNEL := $(DEPLOY_DIR)/$(KERNEL_BIN)
@@ -335,7 +335,14 @@ $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS): userland ;
 .PHONY: stage-deploy
 stage-deploy: $(DEPLOY_ELFS)
 
-$(DEPLOY_ELFS): $(DEPLOY_DIR)/%: % GNUmakefile
+# Keep the full kernel ELF for Limine's UEFI boot layout. Its debug paths
+# are normalized by the kernel build so the staged bytes are reproducible.
+$(DEPLOY_KERNEL): $(KERNEL_BIN) GNUmakefile
+	@mkdir -p "$(@D)"
+	@cp "$<" "$@.tmp"
+	@mv "$@.tmp" "$@"
+
+$(filter-out $(DEPLOY_KERNEL),$(DEPLOY_ELFS)): $(DEPLOY_DIR)/%: % GNUmakefile
 	@mkdir -p "$(@D)"
 	@$(OBJCOPY) --strip-debug "$<" "$@.tmp"
 	@mv "$@.tmp" "$@"
