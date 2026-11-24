@@ -44,6 +44,9 @@ static void graft_public_equal(const flow_tree_t *ta,const flow_tree_t *tb,
         flow_box_t x=*a,y=*b;
         x.style=y.style=NULL;x.run=y.run=NULL;x.text=y.text=NULL;x.ellipsis=y.ellipsis=NULL;
         x.frame=y.frame=NULL;x.parent=y.parent=x.first=y.first=x.next=y.next=NULL;
+        // A drawn stamp is the tree's own count of its writes: a kept tree's
+        // moves as its boxes are written, and says nothing of the page.
+        x.drawn=y.drawn=0;
         expect("graft: public geometry, links, controls, clips and ink agree",!memcmp(&x,&y,sizeof(x)),NULL);
         expect("graft: public text bytes agree",a->length==b->length &&
                (!a->length || (a->text && b->text && !memcmp(a->text,b->text,a->length))),NULL);
@@ -474,9 +477,71 @@ static void restyle_offset_cases(void)
     }
 }
 
+// MOVES IN A ROW (N4): each write's move adds to what the box moved since
+// the layout, a box moved inside a moved box is where both put it, a box
+// moved back is where it began, its own transform follows it, and a
+// layout that grafts from a tree holding moves places what moved afresh;
+// after each, the kept tree is an independent whole layout of the page
+// (graft_oracle: the dump, every public box, the painter's walk) and the
+// kept-tree check agrees.
+static void restyle_move_sequences(void)
+{
+    // Paragraphs enough that the cascade's retained budget (its initial
+    // state's bytes) outlasts the row of updates, which then stay updates.
+    static char html[16384];
+    size_t len = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>p{color:red;padding:2px}</style>"
+                     "<div style='position:relative;width:400px;height:300px'>"
+                     "<div id=a style='position:absolute;width:200px;left:0px;top:0px;transform:scaleX(0.9)'>alpha <b>beta</b>"
+                     "<div id=b style='position:absolute;width:50px;left:10px;top:5px'>inner <i>x</i></div>"
+                     "<span style='display:inline-block;width:20px'>ib</span></div></div><p id=c>tail text</p>");
+    for (int i = 0; i < 400 && len < sizeof(html) - 64; i++)
+        len += (size_t)snprintf(html + len, sizeof(html) - len, "<p>%d</p>", i);
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
+    static const struct {
+        const char *id, *style;
+        uint64_t moved;
+    } kSteps[] = {
+        {"a", "position:absolute;width:200px;left:3.3px;top:0px;transform:scaleX(0.9)", 1},
+        {"a", "position:absolute;width:200px;left:7.9px;top:0.6px;transform:scaleX(0.9)", 1},
+        {"b", "position:absolute;width:50px;left:12.25px;top:5px", 1},
+        {"a", "position:absolute;width:200px;left:0.4px;top:0px;transform:scaleX(0.75)", 1},
+        {"b", "position:absolute;width:50px;left:10px;top:5px", 1},
+        {"a", "position:absolute;width:200px;left:0px;top:0px;transform:scaleX(0.9)", 1},
+        {"a", "position:absolute;width:200px;left:631.269px;top:2px;transform:scaleX(0.31)", 1},
+    };
+    for (size_t i = 0; i < sizeof(kSteps) / sizeof(kSteps[0]) && old != NULL; i++) {
+        os64_html_set_attr(p.doc, graft_node(&p, kSteps[i].id), "style", kSteps[i].style, strlen(kSteps[i].style));
+        graft_update(&p);
+        flow_restyle_t kept = restyle_keep(&p, old);
+        flow_tree_t *whole = graft_layout(&p, NULL, NULL, NULL);
+        const os64_html_node_t *at = NULL;
+        const char *what = NULL;
+        char name[160];
+        snprintf(name, sizeof(name), "restyle: moves in a row, step %zu (%s %s)", i + 1, kSteps[i].id, kSteps[i].style);
+        expect(name, kept.kind == FLOW_RESTYLE_PAINT && kept.moved == kSteps[i].moved && whole != NULL &&
+                         flow_restyle_check(old, whole, &at, &what), what != NULL ? what : kept.detail);
+        graft_oracle(&p, old);
+        flow_free(whole);
+    }
+    // A change placement reads, laid out grafting from the tree that holds
+    // the moves: the moved boxes are placed afresh, where they stand.
+    os64_html_set_attr(p.doc, graft_node(&p, "c"), "style", "padding-top:9px", 15);
+    graft_update(&p);
+    flow_restyle_t kept = restyle_keep(&p, old);
+    expect("restyle: moves in a row, then a padding is declined", kept.kind == FLOW_RESTYLE_DECLINED, NULL);
+    flow_tree_t *next = graft_layout(&p, old, NULL, NULL);
+    flow_free(old);
+    graft_oracle(&p, next);
+    flow_free(next);
+    sheeted_close(&p);
+}
+
 static void restyle_in_place_cases(void)
 {
     restyle_offset_cases();
+    restyle_move_sequences();
     Sheeted p;sheeted_open(&p,"<!doctype html><style>p{margin:4px}</style><p id=a>first <b>bold</b></p>"
         "<div style='height:60px'><p id=q>second</p></div><p>tail</p>",800,600);
     os64_html_node_t *q=graft_node(&p,"q");

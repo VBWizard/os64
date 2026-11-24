@@ -699,7 +699,9 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
 // Whether the kept tree `a` answers as the whole layout `b` of the same
 // document does, for what a restyle kept in place may write or must leave:
 // - the same boxes in the same order, each of the same kind and node, with
-//   the same border box, overflow, clip, and stacking and painting flags;
+//   the same border box, content box, baseline, own transform's frame (its
+//   border box, its origin's move and its matrix as drawn), overflow, clip,
+//   and stacking and painting flags;
 // - drawing styles equal in every field (f_style_equal);
 // - the same decoration lines and, where there are lines, the same colours
 //   (a box with none keeps colours it never draws, which a kept tree does
@@ -711,6 +713,20 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
 // - the same page extent, and each scroll container's range and scroll.
 // The first difference is named: a box's at `node` (its element's, for an
 // anonymous box), and what differed at `what`.
+// Whether two boxes' own transform frames, if they have one, draw alike:
+// the border box each keeps, how far the origin moved, and the matrix as
+// it is drawn (the same values a layout or a tick works out, to the bit).
+static bool restyle_same_frame(const flow_box_t *x, const flow_box_t *y)
+{
+    const flow_frame_t *f = x->frame != NULL && x->frame->box == x && x->frame->kind == F_FRAME_TRANSFORM ? x->frame : NULL;
+    const flow_frame_t *g = y->frame != NULL && y->frame->box == y && y->frame->kind == F_FRAME_TRANSFORM ? y->frame : NULL;
+    if (f == NULL || g == NULL)
+        return f == g;
+    return f->box_x == g->box_x && f->box_y == g->box_y && f->box_w == g->box_w && f->box_h == g->box_h &&
+           f->by.x == g->by.x && f->by.y == g->by.y && f->upright == g->upright && f->through == g->through &&
+           os64_memcmp(f->affine, g->affine, sizeof(f->affine)) == 0;
+}
+
 bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_html_node_t **node, const char **what)
 {
     *node = NULL;
@@ -726,6 +742,9 @@ bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_h
             ink_covers = ink_covers && x->ink[k] >= y->ink[k];
         const char *differs = x->kind != y->kind || x->node != y->node ? "the boxes"
                             : !same_rect(x->rect, y->rect) ? "a border box"
+                            : !same_rect(x->content, y->content) ? "a content box"
+                            : x->baseline != y->baseline ? "a baseline"
+                            : !restyle_same_frame(x, y) ? "a transform's frame"
                             : !same_rect(x->overflow, y->overflow) ? "an overflow"
                             : x->clipped != y->clipped || (x->clipped && !same_rect(x->clip, y->clip)) ? "a clip"
                             : x->stacked != y->stacked || x->positioned != y->positioned || x->fixed != y->fixed ||

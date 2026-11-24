@@ -1567,8 +1567,9 @@ flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document
                                      const flow_restyle_marks_t *marks);
 /* Whether the kept tree `a` answers as the whole layout `b` of the same
  * document does (the caller's check, `--geometry-check`): the same boxes in
- * order, each of the same kind, node, border box, overflow, clip and
- * stacking flags, its style equal in every field, its decoration the same
+ * order, each of the same kind, node, border box, content box, baseline, own
+ * transform's frame (where it stands and its matrix as drawn), overflow,
+ * clip and stacking flags, its style equal in every field, its decoration the same
  * where it draws one, and its ink and outlines covering the whole layout's
  * (a kept tree's only grow); the same paint layers; the same page extent and
  * scroll containers' ranges and scrolls. Hit testing reads what this
