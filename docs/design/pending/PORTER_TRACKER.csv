@@ -1,0 +1,14 @@
+id,task,depends_on,status,done_in,notes
+P.1,Freeze reproducible installable outputs,,code,,Compare complete deployed file inventories from independent builds and verify guest and debugger symbols.
+P.1.1,Compare build profiles and keep optimization independent of DWARF,,doing,,Record the selected profile and its build cost.
+P.1.2,Identify timestamp and path differences and stabilize installable bytes,,todo,,Investigate every unexplained difference.
+P.1.3,Stage deployment ELFs for ext2 and the FAT lifeboat and ISO,P.1.1,todo,,The package publisher will use the same staged files.
+P.1.4,Compare SHA-256 inventories of all installable ELF and data files,P.1.2 P.1.3,todo,,Use two differently named worktrees at the same revision and build at different times.
+P.1.5,Boot the normal image and lifeboat and check guest trace names and host GDB symbols,P.1.3,todo,,Use QEMU and the exact host symbols from the build.
+
+P.2,Publish immutable packages and serve them from Windows,P.1,todo,,Verify full and selective compressed transfers and concurrent publication.
+P.3,Preview installs from the Porter CLI,P.2,todo,,Distinguish known downgrades from local edits and check resolved destination collisions.
+P.4,Implement checked storage barriers and ext2 install and undo,P.3,todo,,Verify interrupted transactions and offline recovery with a disposable disk.
+P.5,Update FAT and kernel files and prove bootable rescue,P.4,todo,,Boot the known-good rescue runtime and exercise failure and reboot boundaries.
+P.6,Unwind multiple receipts in order,P.4,todo,,Preflight older backups and resume interrupted undo while preserving independent media.
+P.7,Deliver the desktop front end and complete hardware acceptance,P.5 P.6,todo,,Compare CLI and GUI behavior and run the accepted rehearsal on hardware.
