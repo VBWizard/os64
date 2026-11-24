@@ -550,7 +550,55 @@ ICON_ASSETS := $(sort $(wildcard $(ICON_ASSET_DIR)/*.png))
 ICON_MANIFEST := $(ICON_ASSET_DIR)/theme.conf
 ICON_METADATA := $(ICON_MANIFEST) $(ICON_ASSET_DIR)/provenance.json $(ICON_ASSET_DIR)/LICENSE
 
-$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/ffmpeg-LICENSE license/big-buck-bunny-LICENSE license/android-sbc-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(DEPLOY_APPS) $(DEPLOY_TESTS) $(DEPLOY_LIBS) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/mouse.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf etc/icons.conf etc/roam.conf etc/file-associations.conf GNUmakefile
+SYSTEM_CONFIG := $(addprefix etc/,husk.rc logd.conf os64get.conf hosts crontab \
+                 net.conf desktop.conf gclock.conf gterm.conf os64.conf gui.conf menu.conf \
+                 mouse.conf icons.conf roam.conf file-associations.conf bootenv.conf \
+                 sshd.conf vncd.conf fonts.conf)
+BOOT_MODULES := $(wildcard external/*)
+SYSTEM_LICENSES := $(foreach n,libjpeg-turbo libwebp libpage-numeric freetype unicode \
+                     libmath speexdsp ffmpeg big-buck-bunny android-sbc,$(n).txt:license/$(n)-LICENSE) \
+                   intel-bluetooth.txt:$(BT_FIRMWARE_LICENSE) quickjs.txt:$(QUICKJS_LICENSE) \
+                   DejaVu.txt:$(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt
+license_name = $(word 1,$(subst :, ,$(1)))
+license_source = $(word 2,$(subst :, ,$(1)))
+SYSTEM_LICENSE_SOURCES := $(foreach item,$(SYSTEM_LICENSES),$(call license_source,$(item)))
+
+# The publisher consumes the same file lists as the images. The FAT boot
+# menu and EFI loader have their own maintenance path. Image construction
+# also owns its filesystem test scaffold and partition markers.
+porter_inputs = $(foreach f,$(2),"$(1)" "$(3)$(notdir $(f))" "$(f)")
+PORTER_SYSTEM_INPUTS = $(call porter_inputs,apps,$(DEPLOY_APPS)) \
+                       $(call porter_inputs,libs,$(DEPLOY_LIBS)) \
+                       $(call porter_inputs,tests,$(DEPLOY_TESTS)) \
+                       $(call porter_inputs,tests,$(FONT_FIXTURES),fonts/) \
+                       $(call porter_inputs,boot,$(DEPLOY_KERNEL) $(BOOT_MODULES)) \
+                       $(call porter_inputs,config,$(SYSTEM_CONFIG)) \
+                       $(call porter_inputs,fonts,$(FONT_PRODUCT)) \
+                       $(call porter_inputs,frames,$(FRAME_COMPOSITIONS)) \
+                       $(call porter_inputs,pages,$(PAGE_FIXTURES) tools/html_corpus/SOURCES.json) \
+                       $(call porter_inputs,icons,$(ICON_METADATA) $(ICON_ASSETS)) \
+                       "certs" "roots.pem" "$(TLS_PUBLIC_ROOTS)" \
+                       $(foreach item,$(SYSTEM_LICENSES),"licenses" "$(call license_name,$(item))" "$(call license_source,$(item))")
+porter_comma := ,
+porter_system = $(filter system,$(subst $(porter_comma), ,$(PORTER_SCOPES)))
+
+export PORTER_REPO PORTER_SOURCES PORTER_SOURCES_LOCAL
+.PHONY: package porter-package-inputs
+package: private export PORTER_SCOPES = $(or $(SCOPES),system)
+package: private export PORTER_LABEL := $(if $(filter command,$(origin NAME)),$(value NAME))
+package: private export PORTER_BASELINE = $(BASELINE)
+package: private export PORTER_TOOL_CC = $(CC)
+package: private export PORTER_TOOL_LD = $(LD)
+package: private export PORTER_TOOL_OBJCOPY = $(OBJCOPY)
+package:
+	+@python3 tools/porter_publish.py "$(MAKE)"
+
+# Only the publisher sets PORTER_INVENTORY, to its own scratch file.
+porter-package-inputs: $(if $(porter_system),stage-deploy)
+	@test -n "$$PORTER_INVENTORY"
+	@$(if $(porter_system),printf '%s\t%s\t%s\n' $(PORTER_SYSTEM_INPUTS),:) > "$$PORTER_INVENTORY"
+
+$(EXT2_TEST_IMAGE): $(SYSTEM_LICENSE_SOURCES) $(SYSTEM_CONFIG) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(DEPLOY_APPS) $(DEPLOY_TESTS) $(DEPLOY_LIBS) kernel/test/partition_info.txt GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -568,33 +616,15 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 	# is writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
 	# /home/husk.rc (the user's, on its own partition) still wins the
 	# search; /fat/husk.rc remains the lifeboat's copy.
-	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/crontab crontab\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/gterm.conf gterm.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\nwrite etc/mouse.conf mouse.conf\nwrite etc/icons.conf icons.conf\nwrite etc/roam.conf roam.conf\nwrite etc/file-associations.conf file-associations.conf\nwrite etc/bootenv.conf bootenv.conf\nwrite etc/sshd.conf sshd.conf\nwrite etc/vncd.conf vncd.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach f,$(SYSTEM_CONFIG),printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'cd /bin\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	# The pinned public roots are system configuration; /home/tls.conf can
 	# select another store through the configuration ladder.
 	printf 'mkdir /etc/certs\nwrite %s /etc/certs/roots.pem\n' "$(TLS_PUBLIC_ROOTS)" >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'mkdir /etc/licenses\nwrite license/libjpeg-turbo-LICENSE /etc/licenses/libjpeg-turbo.txt\nwrite license/libwebp-LICENSE /etc/licenses/libwebp.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write license/libpage-numeric-LICENSE /etc/licenses/libpage-numeric.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	# The FreeType Licence asks that anything shipping FreeType credit it in
-	# its documentation. A file on the machine IS this machine's
-	# documentation, so the credit travels with the library rather than
-	# living only in a repository nobody has at run time. The shipped file
-	# is upstream's dual-licence notice followed by the FTL in full, which
-	# is the option os64 exercises (see libfreetype/UPSTREAM_REVIEW.md).
-	printf 'write license/freetype-LICENSE /etc/licenses/freetype.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write license/unicode-LICENSE /etc/licenses/unicode.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write license/libmath-LICENSE /etc/licenses/libmath.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write license/speexdsp-LICENSE /etc/licenses/speexdsp.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	# FFmpeg's LGPL notice, and where its source is, travel with libav.so.
-	printf 'write license/ffmpeg-LICENSE /etc/licenses/ffmpeg.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	# The H.264 test clip in /tests/pages is Big Buck Bunny's (CC-BY 3.0),
-	# whose attribution travels with it.
-	printf 'write license/big-buck-bunny-LICENSE /etc/licenses/big-buck-bunny.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	# The kernel carries Android's SBC encoder (kernel/ports/sbc), whose
-	# Apache 2.0 notice travels with the binary, as speexdsp's does.
-	printf 'write license/android-sbc-LICENSE /etc/licenses/android-sbc.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write $(BT_FIRMWARE_LICENSE) /etc/licenses/intel-bluetooth.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write %s /etc/licenses/quickjs.txt\n' "$(QUICKJS_LICENSE)" >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'mkdir /etc/fonts\nwrite etc/fonts.conf /etc/fonts.conf\nwrite $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt /etc/licenses/DejaVu.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /etc/licenses\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach item,$(SYSTEM_LICENSES),printf 'write %s /etc/licenses/%s\n' "$(call license_source,$(item))" "$(call license_name,$(item))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'mkdir /etc/fonts\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(FONT_PRODUCT),printf 'write %s /etc/fonts/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'mkdir /etc/icons\nmkdir /etc/icons/default\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(ICON_METADATA),printf 'write %s /etc/icons/default/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
@@ -633,7 +663,7 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/ffmpeg-LICENSE license/big-buck-bunny-LICENSE license/android-sbc-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(DEPLOY_ELFS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(SYSTEM_LICENSE_SOURCES) $(DEPLOY_ELFS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf limine-hd.conf $(BOOT_MODULES) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -710,19 +740,7 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/frames
 	$(foreach f,$(FRAME_COMPOSITIONS),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/frames/$(notdir $(f));)
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/licenses
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt ::/etc/licenses/DejaVu.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libjpeg-turbo-LICENSE ::/etc/licenses/libjpeg-turbo.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libwebp-LICENSE ::/etc/licenses/libwebp.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libpage-numeric-LICENSE ::/etc/licenses/libpage-numeric.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/freetype-LICENSE ::/etc/licenses/freetype.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/unicode-LICENSE ::/etc/licenses/unicode.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libmath-LICENSE ::/etc/licenses/libmath.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/speexdsp-LICENSE ::/etc/licenses/speexdsp.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/ffmpeg-LICENSE ::/etc/licenses/ffmpeg.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/big-buck-bunny-LICENSE ::/etc/licenses/big-buck-bunny.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/android-sbc-LICENSE ::/etc/licenses/android-sbc.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(BT_FIRMWARE_LICENSE) ::/etc/licenses/intel-bluetooth.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(QUICKJS_LICENSE) ::/etc/licenses/quickjs.txt
+	$(foreach item,$(SYSTEM_LICENSES),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) "$(call license_source,$(item))" ::/etc/licenses/$(call license_name,$(item));)
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gclock.conf ::/etc/gclock.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gterm.conf ::/etc/gterm.conf
@@ -755,7 +773,7 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/EFI > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/EFI/BOOT > /dev/null 2>&1
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(DEPLOY_KERNEL) ::/boot/os64_kernel
-	$(foreach e,$(wildcard external/*),\
+	$(foreach e,$(BOOT_MODULES),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(e) ::/boot/$(notdir $(e));)
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) limine-hd.conf ::/boot/limine/limine.conf
 	# Limine's own EFI app rides too — the lifeboat is a complete BOOT
@@ -909,8 +927,8 @@ $(IMAGE_NAME).iso: $(BT_FIRMWARE_LICENSE) limine/limine $(DEPLOY_KERNEL) $(DISK_
 	# (see /RAMDisk Boot in limine.conf). Copied after disk-populate so the
 	# module always carries the freshly built test binaries.
 	cp $(DISK_IMAGE) iso_root/boot/os64_disk.img
-	@cp external/* iso_root/boot/
-	@cp external/* iso_root/
+	@cp $(BOOT_MODULES) iso_root/boot/
+	@cp $(BOOT_MODULES) iso_root/
 	@mkdir -p iso_root/boot/limine
 	@cp limine.conf limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin iso_root/boot/limine/
 	@mkdir -p iso_root/EFI/BOOT
