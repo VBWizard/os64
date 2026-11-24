@@ -374,6 +374,7 @@ static void restyle_offset_cases(void)
         {"position:relative;left:3px", "position:relative;left:3px;right:9px", "an inset, relative, resolves the same", false},
         {"position:relative;left:1%", "position:relative;left:2%", "an inset, a percentage", false},
         {"position:relative;left:1px", "position:relative;right:1px", "an inset, another side places it", false},
+        {"position:relative;left:1px;right:2px", "position:relative;right:5px", "an inset, another side places it", false},
         {"position:sticky;top:0px", "position:sticky;top:10px", "an inset, sticky", false},
         {"position:absolute;width:100%;left:0px", "position:absolute;width:100%;left:30px", "an inset, absolute, moves 9 to 64 px", false},
         {"position:absolute;width:50px;left:0px;transform:scaleX(0.5)", "position:absolute;width:50px;left:1px;transform:scaleX(0.7)",
