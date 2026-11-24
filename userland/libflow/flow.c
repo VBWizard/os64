@@ -72,6 +72,11 @@ typedef struct {
 
 typedef struct FReuseSnapshot FReuseSnapshot;
 
+// What a box a kept restyle moved has moved since the layout, in 26.6.
+typedef struct {
+    int64_t dx, dy;
+} FMoved;
+
 struct flow_tree {
     const os64_html_document_t *doc;
     os64_html_pin_t pin;
@@ -129,6 +134,11 @@ struct flow_tree {
     // none is kept and the next layout makes the tree afresh.
     FArena restyle;
     bool restyle_spent;
+    // The boxes a kept restyle moved since the layout (restyle.inc's move):
+    // node -> FMoved, in the restyle arena, the offset summed over its
+    // moves; their records still say where the layout put them.
+    FMap moved;
+    int32_t nmoved;
     // The page's extent and each scroll container's range as placement
     // left them, before the stacked and transformed boxes reached past them
     // (reach_stacked, which only grows them): what a restyle kept in place
@@ -214,6 +224,16 @@ typedef struct {
     // The line the nearest line clamp round the box being built ends at
     // (f_clamp_line), or NULL: public_box marks it.
     const FLine *clamp_end;
+    // RELOCATING (a box that only moved, restyle.inc's move): the public
+    // boxes are not made but met again, in the pre-order they were made in,
+    // `relocate_next` the first one met; only their geometry is written,
+    // and no list, map, clip or frame is made. `ox`, `oy`: what every
+    // position is moved by before it is rounded, in 26.6, which is zero for
+    // a layout's own build and grows inside a moved box by what it moved
+    // since the layout (public_box).
+    bool relocate;
+    flow_box_t *relocate_next;
+    int64_t ox, oy;
 } Build;
 
 static int64_t round_px(int64_t v)
@@ -292,6 +312,8 @@ static os64_gui_rect_t join(os64_gui_rect_t a, os64_gui_rect_t b)
 static bool push_list(Build *bd, const flow_box_t ***v, int32_t *n, int32_t *cap,
                       const flow_box_t *box)
 {
+    if (bd->relocate)
+        return true;
     if (*n == *cap) {
         int32_t cap2 = *cap != 0 ? *cap * 2 : 16;
         const flow_box_t **grown = os64_realloc(*v, (size_t)cap2 * sizeof(*grown));
@@ -323,6 +345,21 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
 {
     if (bd->failed)
         return NULL;
+    if (bd->relocate) {
+        // The box met again where it was made: one of another kind there is
+        // a tree that is not the one these records built, and no move.
+        flow_box_t *b = bd->relocate_next != NULL ? bd->relocate_next
+                      : parent == NULL ? NULL
+                      : (flow_box_t *)(*last != NULL ? (*last)->next : parent->first);
+        bd->relocate_next = NULL;
+        if (b == NULL || b->kind != kind) {
+            bd->failed = true;
+            return NULL;
+        }
+        if (parent != NULL)
+            *last = b;
+        return b;
+    }
     flow_box_t *b = f_arena_alloc(&bd->t->arena, sizeof(*b));
     if (b == NULL) {
         bd->failed = true;
@@ -413,6 +450,15 @@ static void set_clip(flow_box_t *b, Clip c)
     b->clipped = c.x || c.y || (b->frame != NULL && b->frame->clipped);
     if (b->clipped)
         b->clip = clip_rect(c);
+}
+
+// A box's clip as a build writes it: a box met again in a move keeps its
+// own, since nothing in a moved box clips (restyle.inc's move) and its
+// containing blocks, which clip it from outside, did not move.
+static void build_clip(const Build *bd, flow_box_t *b, Clip c)
+{
+    if (!bd->relocate)
+        set_clip(b, c);
 }
 
 static void meet_axis(int32_t *at, int32_t *len, int32_t other_at, int32_t other_len)
@@ -508,6 +554,8 @@ static Clip inner_clip(const FBox *src, Clip c)
 
 static bool map_put(Build *bd, FMap *map, const void *key, void *val)
 {
+    if (bd->relocate)
+        return true;
     if (!f_map_put(map, key, val))
         bd->failed = true;
     return !bd->failed;
@@ -877,6 +925,17 @@ static bool own_transform(const FBox *src, const flow_box_t *b)
 // no memory.
 static bool frame_box(Build *bd, const FBox *src, flow_box_t *b, Clip clip)
 {
+    // A moved box keeps its frames; its own transform's border box moves
+    // with it, and the matrix is worked again from there.
+    if (bd->relocate) {
+        flow_frame_t *f = (flow_frame_t *)b->frame;
+        if (own_transform(src, b) && f != NULL && f->box == b && f->kind == F_FRAME_TRANSFORM) {
+            f->box_x = bd->ox + src->x;
+            f->box_y = bd->oy + src->y;
+            transform_fill(f, src->style);
+        }
+        return true;
+    }
     if (src->out_of_flow) {
         const FPos *cb = src->pos != NULL ? src->pos->cb : NULL;
         b->frame = cb != NULL ? f_map_get(&bd->frames, cb) : NULL;
@@ -888,7 +947,7 @@ static bool frame_box(Build *bd, const FBox *src, flow_box_t *b, Clip clip)
         clip = kNoClip;
     }
     if (own_transform(src, b)) {
-        b->frame = transform_new(bd, src->style, src->x, src->y, src->w, src->h, b, clip);
+        b->frame = transform_new(bd, src->style, bd->ox + src->x, bd->oy + src->y, src->w, src->h, b, clip);
         if (b->frame == NULL)
             return false;
     }
@@ -1691,15 +1750,15 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
             return;
     }
     if (moved) {
-        b->frame = transform_new(bd, fr->style, fr->x, fr->y, fr->w, fr->h, b, clip);
+        b->frame = transform_new(bd, fr->style, bd->ox + fr->x, bd->oy + fr->y, fr->w, fr->h, b, clip);
         if (b->frame == NULL)
             return;
         clip = kNoClip;         // its frame's, where it stays as the atom moves
     }
-    set_clip(b, clip);
-    b->rect = rect_of(fr->x, fr->y, fr->w, fr->h);
+    build_clip(bd, b, clip);
+    b->rect = rect_of(bd->ox + fr->x, bd->oy + fr->y, fr->w, fr->h);
     b->overflow = b->rect;
-    b->baseline = edge32(round_px(fr->baseline));
+    b->baseline = edge32(round_px(bd->oy + fr->baseline));
     b->link = fr->link;
     b->decoration = fr->decoration;
     b->underline_color = fr->decoration_colors.underline;
@@ -1769,7 +1828,7 @@ static flow_box_t *public_box_body(Build *bd, const FBox *src, flow_box_t *paren
     if (b->stacked &&
         !push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
         return b;
-    b->rect = rect_of(src->x, src->y, src->w, src->h);
+    b->rect = rect_of(bd->ox + src->x, bd->oy + src->y, src->w, src->h);
     b->overflow = b->rect;
     b->link = src->link;
     b->unfinished = src->unfinished;
@@ -1777,11 +1836,11 @@ static flow_box_t *public_box_body(Build *bd, const FBox *src, flow_box_t *paren
         return b;
     if (is_sticky(src) || own_transform(src, b))
         clip = kNoClip;         // its frame's, where it stays as the box moves
-    b->content = rect_of(src->x + src->border[FLOW_LEFT] + src->padding[FLOW_LEFT],
-        src->y + src->border[FLOW_TOP] + src->padding[FLOW_TOP],
+    b->content = rect_of(bd->ox + src->x + src->border[FLOW_LEFT] + src->padding[FLOW_LEFT],
+        bd->oy + src->y + src->border[FLOW_TOP] + src->padding[FLOW_TOP],
         src->w - src->border[FLOW_LEFT] - src->border[FLOW_RIGHT] - src->padding[FLOW_LEFT] - src->padding[FLOW_RIGHT],
         src->h - src->border[FLOW_TOP] - src->border[FLOW_BOTTOM] - src->padding[FLOW_TOP] - src->padding[FLOW_BOTTOM]);
-    set_clip(b, legacy_clip(src,clip));
+    build_clip(bd, b, legacy_clip(src,clip));
     Clip in = inner_clip(src, clip);
     flow_frame_t *scroll = NULL;
     if (f_box_scrolls(src)) {
@@ -1800,19 +1859,22 @@ static flow_box_t *public_box_body(Build *bd, const FBox *src, flow_box_t *paren
         flow_box_t *line = add(bd, b, &kids, FLOW_BOX_LINE, NULL, src->style);
         if (line == NULL)
             break;
-        set_clip(line, in);
-        line->rect = rect_of(ln->x, ln->y, ln->w, ln->h);
+        build_clip(bd, line, in);
+        line->rect = rect_of(bd->ox + ln->x, bd->oy + ln->y, ln->w, ln->h);
         line->overflow = line->rect;
-        line->baseline = edge32(round_px(ln->baseline));
+        line->baseline = edge32(round_px(bd->oy + ln->baseline));
         line->unfinished = ln->unfinished;
-        line->line_clamp_end = ln == bd->clamp_end;
+        // A clamp's line is its flow's, which a moved box's may belong to
+        // (a relative block's lines are its parent's flow): kept as made.
+        if (!bd->relocate)
+            line->line_clamp_end = ln == bd->clamp_end;
         flow_box_t *pieces = NULL;
         for (const FSpan *sp = ln->spans; sp != NULL && !bd->failed; sp = sp->next) {
             flow_box_t *span = add(bd, line, &pieces, FLOW_BOX_SPAN, sp->inl->node, sp->inl->style);
             if (span == NULL)
                 break;
-            set_clip(span, in);
-            span->rect = rect_of(sp->x0, sp->top, sp->x1 - sp->x0, sp->bottom - sp->top);
+            build_clip(bd, span, in);
+            span->rect = rect_of(bd->ox + sp->x0, bd->oy + sp->top, sp->x1 - sp->x0, sp->bottom - sp->top);
             span->overflow = span->rect;
             span->baseline = line->baseline;
             span->link = sp->inl->link;
@@ -1876,7 +1938,17 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     const FLine *outer = bd->clamp_end;
     if (f_clamps_lines(src->style))
         bd->clamp_end = f_clamp_line(src, NULL);
+    // A box a kept restyle moved since the layout (restyle.inc's move) is
+    // where its records put it plus what it moved, and so is all in it.
+    int64_t ox = bd->ox, oy = bd->oy;
+    const FMoved *moved = bd->t->nmoved > 0 && src->positioned ? f_map_get(&bd->t->moved, src->node) : NULL;
+    if (moved != NULL) {
+        bd->ox += moved->dx;
+        bd->oy += moved->dy;
+    }
     flow_box_t *b = public_box_body(bd, src, parent, last, clip);
+    bd->ox = ox;
+    bd->oy = oy;
     bd->clamp_end = outer;
     return b;
 }
@@ -1890,6 +1962,7 @@ void flow_free(flow_tree_t *tree)
     f_boxes_free(tree->boxes);
     f_style_free(tree->styles);
     f_map_free(&tree->first);
+    f_map_free(&tree->moved);
     f_arena_free(&tree->arena);
     f_arena_free(&tree->tick_lists[0]);
     f_arena_free(&tree->tick_lists[1]);
