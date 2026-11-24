@@ -1462,7 +1462,7 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     for (size_t i = 0; i < YONDER_LAYOUT_CASCADE_REASONS; ++i)
         total->cascade_refused[i] = layout_sum(total->cascade_refused[i], sample->cascade_refused[i]);
     if (cascade_sampled) total->cascade_reason_names = sample->cascade_reason_names;
-    ADD(kept_nothing); ADD(kept_paint);
+    ADD(kept_nothing); ADD(kept_paint); ADD(kept_moved); ADD(kept_moved_boxes);
     for (size_t i = 0; i < YONDER_LAYOUT_RESTYLE_REASONS; ++i)
         total->kept_declined[i] = layout_sum(total->kept_declined[i], sample->kept_declined[i]);
     if (sample->restyle_reason_names != NULL) total->restyle_reason_names = sample->restyle_reason_names;
@@ -1562,8 +1562,10 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     if (s->restyle_reason_names != NULL) {
         char kept_key[64];
         os64_snprintf(kept_key, sizeof(kept_key), "%s kept", key);
-        int k = os64_snprintf(line, sizeof(line), "nothing changed %lu, paint only %lu; declined",
-                              (unsigned long)s->kept_nothing, (unsigned long)s->kept_paint);
+        int k = os64_snprintf(line, sizeof(line), "nothing changed %lu, paint only %lu, a box that only moved %lu "
+                              "(%lu boxes); declined",
+                              (unsigned long)s->kept_nothing, (unsigned long)s->kept_paint,
+                              (unsigned long)s->kept_moved, (unsigned long)s->kept_moved_boxes);
         size_t at = k > 0 && (size_t)k < sizeof(line) ? (size_t)k : 0;
         const char *sep = ": ";
         for (size_t i = 1; i < YONDER_LAYOUT_RESTYLE_REASONS; ++i) {

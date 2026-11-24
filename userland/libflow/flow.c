@@ -5854,6 +5854,119 @@ bool flow_change_parts(const flow_tree_t *was, const flow_tree_t *now, flow_poin
     return said->why == FLOW_PARTS_MARKED;
 }
 
+// ── A box that only moves (restyle.inc's move) ───────────────────────────
+
+// The record of `node`'s positioned block-level box under `b`, met in the
+// pre-order the public tree was made in, an inline-block's content
+// included; NULL when there is none.
+static const FBox *box_record_in(const FBox *b, const os64_html_node_t *node)
+{
+    if (b == NULL || !b->placed)
+        return NULL;
+    if (b->node == node && b->positioned)
+        return b;
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
+            const FBox *in = fr->kind == FF_ATOMIC && fr->item != NULL ? box_record_in(fr->item->content, node) : NULL;
+            if (in != NULL)
+                return in;
+        }
+    for (const FBox *c = b->first; c != NULL; c = c->next) {
+        const FBox *in = box_record_in(c, node);
+        if (in != NULL)
+            return in;
+    }
+    return NULL;
+}
+
+static const FBox *box_record(const flow_tree_t *t, const os64_html_node_t *node)
+{
+    return t != NULL && t->boxes != NULL ? box_record_in(t->boxes->root, node) : NULL;
+}
+
+// Why the public boxes made of `b` cannot be moved by being made again at
+// an offset (public_box's relocation), NULL when they can: in the moved
+// box, or anywhere in it, something whose place or clip is worked against
+// what does not move with it, or which a relocation does not make again.
+// A clip (its rectangle is the box's own, and a legacy `clip` rectangle
+// too), a scroll container's frame, a sticky box's, a fixed box (its
+// containing block is outside), and a transform's frame below the moved
+// box (`root` is the moved box, whose own transform moves with it).
+static const char *move_blocked(const FBox *b, bool root)
+{
+    if (!b->placed)
+        return NULL;
+    if (f_box_scrolls(b))
+        return root ? "a scroll container" : "a scroll container inside";
+    if (f_box_clips(b, true) || f_box_clips(b, false) || b->style->legacy_clip_set)
+        return root ? "a clip" : "a clip inside";
+    if (is_sticky(b))
+        return "a sticky box inside";
+    if (!root && b->out_of_flow && b->style->position == FLOW_POSITION_FIXED)
+        return "a fixed box inside";
+    if (!root && b->transformed)
+        return "a transform inside";
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
+            if (fr->kind != FF_ATOMIC || fr->item == NULL)
+                continue;
+            if (f_transforms(fr->style))
+                return "a transform inside";
+            const char *in = fr->item->content != NULL ? move_blocked(fr->item->content, false) : NULL;
+            if (in != NULL)
+                return in;
+        }
+    for (const FBox *c = b->first; c != NULL; c = c->next) {
+        const char *in = move_blocked(c, false);
+        if (in != NULL)
+            return in;
+    }
+    return NULL;
+}
+
+// A positioned block-level box moved by (dx, dy), in 26.6, since a kept
+// restyle wrote its insets (restyle.inc's move): its offset since the
+// layout summed on the tree, and what was made of it made again from its
+// records, which stay where the layout left them, at that offset plus what
+// the moved boxes round it moved (public_box's relocation); every box in it
+// stamped `stamp`, since everything it draws is somewhere else. False when
+// the room or the records ran out, which leaves part of it moved: the
+// caller declines, and the layout that follows makes the tree afresh.
+static bool move_box(flow_tree_t *t, const os64_html_node_t *node, int64_t dx, int64_t dy, uint64_t stamp)
+{
+    const FBox *src = box_record(t, node);
+    flow_box_t *box = (flow_box_t *)flow_box_for(t, node);
+    if (src == NULL || box == NULL)
+        return false;
+    FMoved *m = f_map_get(&t->moved, node);
+    if (m == NULL) {
+        m = f_arena_alloc(&t->restyle, sizeof(*m));
+        if (m == NULL || !f_map_put(&t->moved, node, m))
+            return false;
+        m->dx = m->dy = 0;
+        t->nmoved++;
+    }
+    m->dx += dx;
+    m->dy += dy;
+    int64_t ox = 0, oy = 0;
+    for (const flow_box_t *p = box->parent; p != NULL; p = p->parent) {
+        const FMoved *pm = p->positioned && p->node != NULL && flow_box_for(t, p->node) == p
+                               ? f_map_get(&t->moved, p->node) : NULL;
+        if (pm != NULL) {
+            ox += pm->dx;
+            oy += pm->dy;
+        }
+    }
+    Build bd = {.t = t, .relocate = true, .relocate_next = box, .ox = ox, .oy = oy};
+    flow_box_t *last = NULL;
+    public_box(&bd, src, (flow_box_t *)box->parent, &last, kNoClip);
+    if (bd.failed)
+        return false;
+    for (const flow_box_t *b = box; b != NULL; b = box_after_in(box, b))
+        drawn_changed(b, true, stamp);
+    return true;
+}
+
 #include "restyle.inc"
 
 #include "pending.inc"

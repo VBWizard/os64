@@ -356,65 +356,91 @@ static flow_restyle_t restyle_keep(Sheeted *p, flow_tree_t *tree)
     os64_page_free(model);
     return kept;
 }
-// A WRITE THAT CHANGED ONLY AN ELEMENT'S INSETS is declined as geometry,
-// and the decline says which case it was (restyle.inc keep_offset_case,
-// BRIEF_LAYOUT_NEEDS.md N4): a row for each case, from the element's
-// style before to the one written (or, where a row names an attribute,
-// that attribute written with `after` under the row's sheet). One under a
-// `display: none` ancestor is answered as no style having come out
-// different, and nothing is written.
+// A WRITE THAT CHANGED ONLY AN ELEMENT'S INSETS (restyle.inc keep_move,
+// BRIEF_LAYOUT_NEEDS.md N4): taken where nothing reads the insets (no box,
+// a static box) and where a positioned block-level box only moves, the kept
+// tree then answering as a whole layout of the changed document does,
+// every box, overflow, clip, layer, extent and range (flow_restyle_check);
+// declined as geometry, saying which case, everywhere else. A row names its
+// style before and the one written (or, where it names an attribute, that
+// attribute written with `after` under the row's sheet), and `inside` the
+// markup in the element. One under a `display: none` ancestor is answered
+// as no style having come out different, and nothing is written.
 static void restyle_offset_cases(void)
 {
     static const struct {
-        const char *before, *after, *said;
+        const char *before, *after, *said;      // `said` NULL: taken (or, hidden, nothing)
         bool hidden;
-        const char *tag, *sheet, *attr;
+        const char *tag, *sheet, *attr, *inside;
+        uint64_t moved;
     } kRows[] = {
-        {"left:0px", "left:5px", "an inset, static", false, NULL, NULL, NULL},
-        {"position:relative;left:0px", "position:relative;left:0.5px", "an inset, relative, moves less than a pixel", false, NULL, NULL, NULL},
-        {"position:relative;left:2px", "position:relative;left:6px", "an inset, relative, moves 2 to 8 px", false, NULL, NULL, NULL},
-        {"position:relative;left:0px", "position:relative;left:8.5px", "an inset, relative, moves 2 to 8 px", false, NULL, NULL, NULL},
-        {"position:relative;top:0px", "position:relative;top:100px", "an inset, relative, moves over 64 px", false, NULL, NULL, NULL},
-        {"position:relative;left:3px", "position:relative;left:3px;right:9px", "an inset, relative, resolves the same", false, NULL, NULL, NULL},
-        {"position:relative;left:1%", "position:relative;left:2%", "an inset, a percentage", false, NULL, NULL, NULL},
-        {"position:relative;left:1px", "position:relative;right:1px", "an inset, another side places it", false, NULL, NULL, NULL},
-        {"position:relative;left:1px;right:2px", "position:relative;right:5px", "an inset, another side places it", false, NULL, NULL, NULL},
-        {"position:sticky;top:0px", "position:sticky;top:10px", "an inset, sticky", false, NULL, NULL, NULL},
-        {"position:absolute;width:100%;left:0px", "position:absolute;width:100%;left:30px", "an inset, absolute, moves 9 to 64 px", false, NULL, NULL, NULL},
-        {"position:absolute;width:50px;left:0px;transform:scaleX(0.5)", "position:absolute;width:50px;left:1px;transform:scaleX(0.7)",
-         "an inset, absolute, moves 1 px", false, NULL, NULL, NULL},
-        {"position:absolute;width:10px;top:50%;left:0px", "position:absolute;width:10px;top:50%;left:10px",
-         "an inset, absolute, moves 9 to 64 px", false, NULL, NULL, NULL},
-        {"position:absolute;left:0px;top:0px", "position:absolute;left:0px;top:5px", "an inset, absolute, moves 2 to 8 px", false, NULL, NULL, NULL},
+        {"left:0px", "left:5px", NULL, false, NULL, NULL, NULL, NULL, 0},
+        {"position:relative;left:0px", "position:relative;left:0.5px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:relative;left:2px", "position:relative;left:6px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:relative;left:0px", "position:relative;left:8.5px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:relative;top:0px", "position:relative;top:100px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:relative;left:3px", "position:relative;left:3px;right:9px", NULL, false, NULL, NULL, NULL, NULL, 0},
+        {"position:relative;left:1%", "position:relative;left:2%", "an inset, a percentage", false, NULL, NULL, NULL, NULL, 0},
+        {"position:relative;left:1px", "position:relative;right:1px", "an inset, another side places it", false, NULL, NULL, NULL, NULL, 0},
+        {"position:relative;left:1px;right:2px", "position:relative;right:5px", "an inset, another side places it", false, NULL, NULL, NULL, NULL, 0},
+        {"position:sticky;top:0px", "position:sticky;top:10px", "an inset, sticky", false, NULL, NULL, NULL, NULL, 0},
+        {"position:absolute;width:100%;left:0px", "position:absolute;width:100%;left:30px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:absolute;width:50px;left:0px;transform:scaleX(0.5)", "position:absolute;width:50px;left:1.37px;transform:scaleX(0.7)",
+         NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:absolute;width:10px;top:50%;left:0px", "position:absolute;width:10px;top:50%;left:10px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:absolute;left:0px;top:0px", "position:absolute;left:0px;top:5px", NULL, false, NULL, NULL, NULL, NULL, 1},
         {"position:absolute;width:10px;top:0px;bottom:0px;left:0px", "position:absolute;width:10px;top:0px;bottom:0px;left:5px",
-         "an inset, absolute, moves 2 to 8 px", false, NULL, NULL, NULL},
-        {"position:fixed;width:20px;top:0px", "position:fixed;width:20px;top:3px", "an inset, fixed, moves 2 to 8 px", false, NULL, NULL, NULL},
-        {"position:absolute;left:0px", "position:absolute;left:30px", "an inset, its width follows them", false, NULL, NULL, NULL},
+         NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:fixed;width:20px;top:0px", "position:fixed;width:20px;top:3px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:absolute;width:20px;bottom:0px", "position:absolute;width:20px;bottom:7.25px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:absolute;left:0px", "position:absolute;left:30px", "an inset, its width follows them", false, NULL, NULL, NULL, NULL, 0},
         {"position:absolute;height:auto;top:0px;bottom:0px;width:5px", "position:absolute;height:auto;top:4px;bottom:0px;width:5px",
-         "an inset, its height follows them", false, NULL, NULL, NULL},
+         "an inset, its height follows them", false, NULL, NULL, NULL, NULL, 0},
         {"position:absolute;width:50px;left:0px;right:0px;margin:0 auto", "position:absolute;width:50px;left:10px;right:0px;margin:0 auto",
-         "an inset, auto margins place it", false, NULL, NULL, NULL},
+         "an inset, auto margins place it", false, NULL, NULL, NULL, NULL, 0},
         {"position:absolute;width:50px;left:0px;right:0px;margin-left:auto", "position:absolute;width:50px;left:10px;right:0px;margin-left:auto",
-         "an inset, auto margins place it", false, NULL, NULL, NULL},
+         "an inset, auto margins place it", false, NULL, NULL, NULL, NULL, 0},
         {"position:absolute;width:50px;left:0px;margin:0 auto", "position:absolute;width:50px;right:0px;margin:0 auto",
-         "an inset, another side places it", false, NULL, NULL, NULL},
-        {"position:absolute;display:table;left:0px", "position:absolute;display:table;left:5px", "an inset, a table", false, NULL, NULL, NULL},
+         "an inset, another side places it", false, NULL, NULL, NULL, NULL, 0},
+        {"position:absolute;display:table;left:0px", "position:absolute;display:table;left:5px", "an inset, a table", false, NULL, NULL, NULL, NULL, 0},
         {"position:absolute;aspect-ratio:2;height:20px;left:0px", "position:absolute;aspect-ratio:2;height:20px;left:5px",
-         "an inset, an aspect ratio", false, NULL, NULL, NULL},
-        {"position:relative;left:0px", "position:relative;left:3px", "an inset, an inline's pieces", false, "span", NULL, NULL},
+         "an inset, an aspect ratio", false, NULL, NULL, NULL, NULL, 0},
+        {"position:relative;left:0px", "position:relative;left:3px", "an inset, a relative inline", false, "span", NULL, NULL, NULL, 0},
+        {"position:relative;display:inline-block;left:0px", "position:relative;display:inline-block;left:3px",
+         "an inset, a relative inline", false, "span", NULL, NULL, NULL, 0},
         {"", "on", "an inset, a pseudo-element", false, "div",
-         "#m::before{content:'x';position:relative;left:0} #m.on::before{left:4px}", "class"},
-        {"position:relative;left:0px", "position:relative;left:9px", NULL, true, NULL, NULL, NULL},
-        {"display:none;position:relative;left:0px", "display:none;position:relative;left:9px", "an inset, no box", false, NULL, NULL, NULL},
-        {"display:contents;position:relative;left:0px", "display:contents;position:relative;left:9px", "an inset, no box", false, NULL, NULL, NULL},
+         "#m::before{content:'x';position:relative;left:0} #m.on::before{left:4px}", "class", NULL, 0},
+        {"position:relative;left:0px", "position:relative;left:9px", NULL, true, NULL, NULL, NULL, NULL, 0},
+        {"display:none;position:relative;left:0px", "display:none;position:relative;left:9px", NULL, false, NULL, NULL, NULL, NULL, 0},
+        {"display:contents;position:relative;left:0px", "display:contents;position:relative;left:9px", NULL, false, NULL, NULL, NULL, NULL, 0},
+        // What is in it moves with it: lines, an inline's pieces, a nested
+        // absolute box, an inline-block's content; and what it cannot carry.
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:11.6px", NULL, false, NULL, NULL, NULL,
+         "one <b>two</b> three<div style='position:absolute;left:3px;top:4px;width:9px'>n</div>"
+         "<span style='display:inline-block;width:12px'>i</span>", 1},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:4px", "an inset, a clip inside", false, NULL, NULL, NULL,
+         "<div style='overflow:clip;height:5px'>x</div>", 0},
+        {"position:absolute;width:120px;left:0px;overflow:clip", "position:absolute;width:120px;left:4px;overflow:clip",
+         "an inset, a clip", false, NULL, NULL, NULL, NULL, 0},
+        {"position:absolute;width:120px;left:0px;overflow:hidden", "position:absolute;width:120px;left:4px;overflow:hidden",
+         "an inset, a scroll container", false, NULL, NULL, NULL, NULL, 0},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:4px", "an inset, a scroll container inside", false, NULL, NULL, NULL,
+         "<div style='overflow:auto;height:5px'>x<br>y</div>", 0},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:4px", "an inset, a fixed box inside", false, NULL, NULL, NULL,
+         "<div style='position:fixed;top:0;width:5px'>f</div>", 0},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:4px", "an inset, a transform inside", false, NULL, NULL, NULL,
+         "<div style='transform:rotate(3deg)'>t</div>", 0},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:4px", "an inset, a sticky box inside", false, NULL, NULL, NULL,
+         "<div style='position:sticky;top:0'>s</div>", 0},
     };
     for (size_t i = 0; i < sizeof(kRows) / sizeof(kRows[0]); i++) {
         const char *tag = kRows[i].tag != NULL ? kRows[i].tag : "div";
         const char *attr = kRows[i].attr != NULL ? kRows[i].attr : "style";
-        char html[768];
+        char html[1024];
         snprintf(html, sizeof(html), "<!doctype html><style>%s</style><div style='position:relative;width:400px;height:100px'%s>"
-                 "<%s id=m %s='%s'>m</%s></div><p id=c>c</p>", kRows[i].sheet != NULL ? kRows[i].sheet : "",
-                 kRows[i].hidden ? " hidden" : "", tag, attr, kRows[i].before, tag);
+                 "<%s id=m %s='%s'>%s</%s></div><p id=c>c</p>", kRows[i].sheet != NULL ? kRows[i].sheet : "",
+                 kRows[i].hidden ? " hidden" : "", tag, attr, kRows[i].before,
+                 kRows[i].inside != NULL ? kRows[i].inside : "m", tag);
         Sheeted p;
         sheeted_open(&p, html, 800, 600);
         flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
@@ -423,13 +449,26 @@ static void restyle_offset_cases(void)
         flow_restyle_t kept = restyle_keep(&p, old);
         char name[200];
         snprintf(name, sizeof(name), "restyle: an inset-only write, %s (%s)",
-                 kRows[i].said != NULL ? kRows[i].said : "under a display: none ancestor, no style comes out different",
-                 kRows[i].after);
-        expect(name, old != NULL && changed &&
-                         (kRows[i].said == NULL ? kept.kind == FLOW_RESTYLE_NOTHING
-                                                : kept.kind == FLOW_RESTYLE_DECLINED && kept.why == FLOW_RESTYLE_GEOMETRY &&
-                                                      strcmp(kept.detail, kRows[i].said) == 0),
-               kept.detail);
+                 kRows[i].hidden ? "under a display: none ancestor, no style comes out different"
+                 : kRows[i].said != NULL ? kRows[i].said : "taken", kRows[i].after);
+        bool ok = old != NULL && changed;
+        if (kRows[i].hidden)
+            ok = ok && kept.kind == FLOW_RESTYLE_NOTHING;
+        else if (kRows[i].said != NULL)
+            ok = ok && kept.kind == FLOW_RESTYLE_DECLINED && kept.why == FLOW_RESTYLE_GEOMETRY &&
+                 strcmp(kept.detail, kRows[i].said) == 0;
+        else {
+            // Taken: the kept tree is a whole layout of the changed page.
+            flow_tree_t *whole = graft_layout(&p, NULL, NULL, NULL);
+            const os64_html_node_t *at = NULL;
+            const char *what = NULL;
+            ok = ok && kept.kind == FLOW_RESTYLE_PAINT && kept.moved == kRows[i].moved && whole != NULL &&
+                 flow_restyle_check(old, whole, &at, &what);
+            if (what != NULL)
+                printf("  restyle row %zu: %s\n", i, what);
+            flow_free(whole);
+        }
+        expect(name, ok, kept.detail);
         flow_free(old);
         sheeted_close(&p);
     }

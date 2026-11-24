@@ -1484,13 +1484,20 @@ flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
  * for the document as it stands, and, when every element whose style came
  * out different differs only in what the painter reads and moves nothing
  * else, those values written into `tree` in place, with no box built or
- * placed. The tree must be the one laid out last for this document, at
+ * placed. An element whose insets changed besides is written too when
+ * nothing reads them (no box, or a static one), or when it is a positioned
+ * block-level box they only move (N4: its size does not follow them, the
+ * same side places it, no percentage, and nothing in it is clipped,
+ * scrolled, sticky, fixed or transformed but its own transform): what was
+ * made of it is made again where it moved to, from the layout's records,
+ * which stay as they were, so the next layout places it afresh. The tree must be the one laid out last for this document, at
  * `width`, with the env and inputs of the layout that would follow, the
  * cascade's generation among them (the graft's own source test: the tree's
  * records point into the cascade they were computed in). A kept tree is
  * the same tree: its boxes and their places stand, its styles, transforms'
  * frames, ink and drawn stamps
- * follow the new values, and so, where a transform moved, do the page's
+ * follow the new values, a moved box's place follows its insets, and so,
+ * where a transform or a box moved, do the page's
  * extent and the scroll containers' ranges (a scroll past a range that
  * shrank is held within it). Declined, the tree is as it was unless `why` is
  * FLOW_RESTYLE_ROOM, which may have written part of it; either way the
@@ -1522,7 +1529,7 @@ typedef struct {
 typedef enum {
     FLOW_RESTYLE_DECLINED = 0,
     FLOW_RESTYLE_NOTHING,       /* no style came out different */
-    FLOW_RESTYLE_PAINT          /* written: paint only */
+    FLOW_RESTYLE_PAINT          /* written: paint only, or a box that only moved */
 } flow_restyle_kind_t;
 typedef enum {
     FLOW_RESTYLE_NONE = 0,
@@ -1552,6 +1559,7 @@ typedef struct {
     const os64_html_node_t *at;
     char detail[48];
     int32_t parts;              /* a flow_parts_why_t: whether `marks` had all of it */
+    uint64_t moved;             /* of those written, the boxes that only moved */
 } flow_restyle_t;
 flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
                                      const os64_page_t *model, const flow_env_t *env,
