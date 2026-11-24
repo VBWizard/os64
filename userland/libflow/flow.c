@@ -72,11 +72,6 @@ typedef struct {
 
 typedef struct FReuseSnapshot FReuseSnapshot;
 
-// What a box a kept restyle moved has moved since the layout, in 26.6.
-typedef struct {
-    int64_t dx, dy;
-} FMoved;
-
 struct flow_tree {
     const os64_html_document_t *doc;
     os64_html_pin_t pin;
@@ -5932,6 +5927,11 @@ static const char *move_blocked(const FBox *b, bool root)
 // stamped `stamp`, since everything it draws is somewhere else. False when
 // the room or the records ran out, which leaves part of it moved: the
 // caller declines, and the layout that follows makes the tree afresh.
+static const FMoved *tree_moved_of(void *ctx, const os64_html_node_t *node)
+{
+    return f_map_get(&((flow_tree_t *)ctx)->moved, node);
+}
+
 static bool move_box(flow_tree_t *t, const os64_html_node_t *node, int64_t dx, int64_t dy, uint64_t stamp)
 {
     const FBox *src = box_record(t, node);

@@ -538,10 +538,154 @@ static void restyle_move_sequences(void)
     sheeted_close(&p);
 }
 
+// THE MOVES' WALK (N4): a seeded walk of inset writes over positioned
+// boxes of the table's rows (absolute with a length or percentage width,
+// relative blocks, one inside another, one transformed, text, an inline
+// and an inline-block inside), some of them writes a move does not take
+// (a percentage, the other side, a width that follows). After every kept
+// restyle the tree is a whole layout of the page (flow_restyle_check, and
+// graft_oracle every fifth); after a declined one the page is laid out
+// grafting from the tree that held the moves, and that too is held to a
+// whole layout.
+static void restyle_move_walk(void)
+{
+    static char html[16384];
+    size_t len = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>p{color:red;padding:2px}</style>"
+        "<div style='position:relative;width:500px;height:400px'>"
+        "<div id=w0 style='position:absolute;width:40%%;left:0px;top:0px'>w0 <b>bold</b> text"
+        "<div id=w1 style='position:absolute;width:60px;left:5px;top:7px'>w1 <i>in</i></div></div>"
+        "<div id=w2 style='position:relative;left:0px;top:0px'>w2 <span style='display:inline-block;width:9px'>i</span></div>"
+        "<div id=w3 style='position:absolute;width:80px;top:0px;right:0px;transform:rotate(4deg)'>w3</div>"
+        "<div id=w4 style='position:absolute;width:30px;height:20px;bottom:0px;left:0px'>w4</div></div>");
+    for (int i = 0; i < 400 && len < sizeof(html) - 64; i++)
+        len += (size_t)snprintf(html + len, sizeof(html) - len, "<p>%d</p>", i);
+    static const char *const kBase[5] = {
+        "position:absolute;width:40%%;left:%s;top:%s", "position:absolute;width:60px;left:%s;top:%s",
+        "position:relative;left:%s;top:%s", "position:absolute;width:80px;top:%s;right:%s;transform:rotate(4deg)",
+        "position:absolute;width:30px;height:20px;bottom:%s;left:%s"};
+    static const char *const kValues[] = {"0px", "1px", "0.3px", "2.75px", "-4.5px", "13.125px", "40px", "7%",
+                                          "auto", "631.269px", "0.016px"};
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
+    uint32_t seed = 0x4e34u;
+    unsigned taken = 0, declined = 0, wrong = 0, renewed = 0;
+    for (int step = 0; step < 240 && old != NULL; step++) {
+        seed = seed * 1103515245u + 12345u;
+        int box = (int)((seed >> 16) % 5);
+        seed = seed * 1103515245u + 12345u;
+        const char *v0 = kValues[(seed >> 16) % (sizeof(kValues) / sizeof(kValues[0]))];
+        seed = seed * 1103515245u + 12345u;
+        const char *v1 = (seed >> 16) % 3 == 0 ? kValues[(seed >> 20) % (sizeof(kValues) / sizeof(kValues[0]))] : "0px";
+        char style[160], id[4];
+        snprintf(style, sizeof(style), kBase[box], v0, v1);
+        snprintf(id, sizeof(id), "w%d", box);
+        os64_html_set_attr(p.doc, graft_node(&p, id), "style", style, strlen(style));
+        // A cascade past its retained budget is renewed, as a host renews
+        // it, and the walk goes on from a fresh layout under the new one.
+        if (!garb_cascade_update(p.cascade)) {
+            garb_sheet_in_t in[16];
+            for (int32_t j = 0; j < p.n; j++)
+                in[j] = (garb_sheet_in_t){.sheet = &p.sheets[j]};
+            garb_cascade_t *fresh = garb_cascade(in, p.n, p.doc, garb_cascade_env(p.cascade));
+            flow_free(old);
+            garb_cascade_free(p.cascade);
+            p.cascade = fresh;
+            p.env.cascade = fresh;
+            old = graft_layout(&p, NULL, NULL, NULL);
+            renewed++;
+            continue;
+        }
+        flow_restyle_t kept = restyle_keep(&p, old);
+        if (kept.kind == FLOW_RESTYLE_DECLINED) {
+            declined++;
+            flow_tree_t *next = graft_layout(&p, old, NULL, NULL);
+            flow_free(old);
+            old = next;
+            if (step % 5 == 0)
+                graft_oracle(&p, old);
+            continue;
+        }
+        taken += kept.moved > 0;
+        flow_tree_t *whole = graft_layout(&p, NULL, NULL, NULL);
+        const os64_html_node_t *at = NULL;
+        const char *what = NULL;
+        if (whole == NULL || !flow_restyle_check(old, whole, &at, &what)) {
+            if (wrong++ == 0)
+                printf("  move walk step %d (%s): %s\n", step, style, what != NULL ? what : "no whole layout");
+        }
+        if (step % 5 == 0)
+            graft_oracle(&p, old);
+        flow_free(whole);
+    }
+    printf("libflow move walk: %u kept moves, %u declined, %u cascades renewed\n", taken, declined, renewed);
+    expect("restyle: the moves' walk keeps moves and declines others, and every kept tree is a whole layout",
+           wrong == 0 && taken >= 40 && declined >= 20, NULL);
+    flow_free(old);
+    sheeted_close(&p);
+}
+
+// WHAT A MOVE PAINTS (N4): the marks a kept move hands over cover where the
+// box was and where it is now, with its text, and are the whole of it.
+typedef struct {
+    os64_gui_rect_t r[64];
+    int n;
+} MoveMarks;
+static void move_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
+{
+    (void)box;
+    MoveMarks *m = ctx;
+    if (m->n < 64)
+        m->r[m->n++] = r;
+}
+static bool move_covered(const MoveMarks *m, os64_gui_rect_t want)
+{
+    for (int i = 0; i < m->n; i++)
+        if (m->r[i].x <= want.x && m->r[i].y <= want.y && m->r[i].x + m->r[i].w >= want.x + want.w &&
+            m->r[i].y + m->r[i].h >= want.y + want.h)
+            return true;
+    return false;
+}
+static void restyle_move_marks(void)
+{
+    static char html[16384];
+    size_t len = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>p{color:red;padding:2px}</style>"
+        "<div style='position:relative;width:400px;height:100px'><div id=m style='position:absolute;width:50px;left:0px;top:0px'>"
+        "moved text</div></div>");
+    for (int i = 0; i < 400 && len < sizeof(html) - 64; i++)
+        len += (size_t)snprintf(html + len, sizeof(html) - len, "<p>%d</p>", i);
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
+    os64_html_node_t *m = graft_node(&p, "m");
+    os64_gui_rect_t before = old != NULL && flow_box_for(old, m) != NULL ? flow_box_for(old, m)->overflow
+                                                                          : (os64_gui_rect_t){0};
+    static const char moved[] = "position:absolute;width:50px;left:200.5px;top:30px";
+    os64_html_set_attr(p.doc, m, "style", moved, sizeof(moved) - 1);
+    graft_update(&p);
+    flow_reuse_inputs_t inputs = {.resource_owner = p.doc};
+    os64_page_t *model = os64_page_rebuild(p.page);
+    MoveMarks marks = {0};
+    flow_restyle_marks_t hand = {{0, 0}, move_mark, &marks};
+    flow_restyle_t kept = old != NULL ? flow_restyle_in_place(old, p.doc, model, &p.env, &inputs, 800, &hand)
+                                      : (flow_restyle_t){0};
+    os64_page_free(model);
+    os64_gui_rect_t after = old != NULL && flow_box_for(old, m) != NULL ? flow_box_for(old, m)->overflow
+                                                                         : (os64_gui_rect_t){0};
+    expect("restyle: a kept move marks where the box was and where it is, and that is all of it",
+           kept.kind == FLOW_RESTYLE_PAINT && kept.moved == 1 && kept.parts == FLOW_PARTS_MARKED &&
+               before.w > 0 && after.x != before.x && move_covered(&marks, before) && move_covered(&marks, after),
+           NULL);
+    flow_free(old);
+    sheeted_close(&p);
+}
+
 static void restyle_in_place_cases(void)
 {
     restyle_offset_cases();
+    restyle_move_marks();
     restyle_move_sequences();
+    restyle_move_walk();
     Sheeted p;sheeted_open(&p,"<!doctype html><style>p{margin:4px}</style><p id=a>first <b>bold</b></p>"
         "<div style='height:60px'><p id=q>second</p></div><p>tail</p>",800,600);
     os64_html_node_t *q=graft_node(&p,"q");

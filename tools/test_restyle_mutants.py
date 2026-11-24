@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to the restyle kept in the tree
 (userland/libflow/restyle.inc, flow_restyle_in_place, the snapshot's
-`structural` mark in reuse_snapshot.inc, ink_grown's outlines in flow.c, and
-the geometry check's scrolls in yonder.c), against the scripts host's profile
+`structural` mark in reuse_snapshot.inc, ink_grown's outlines in flow.c, the
+geometry check's scrolls in yonder.c, and a box that only moves: keep_move
+in restyle.inc, move_box and the public build's relocation in flow.c, and
+yonder telling the observers of it), against the scripts host's profile
 cases (tools/test_yonder_scripts_host.sh with YONDER_PROFILE_ONLY, which run
 restyle_kept_cases with every kept tree laid out whole beside it) and
 libflow's own (tools/test_libflow_host.sh --restyle, restyle_in_place_cases,
@@ -53,7 +55,39 @@ mutants = [
     ('another-cascade-kept', RESTYLE, '                      : r->generation != garb_cascade_generation(env->cascade) ? "another cascade"',
      '                      : 0 ? "another cascade"'),
     # The verdict.
-    ('geometry-kept', RESTYLE, '    if (!f_style_paint_only(&was->style, &is->style)) {', '    if (0) {'),
+    ('geometry-kept', RESTYLE, '    } else if (!f_style_paint_only(&was->style, &is->style)) {', '    } else if (0) {'),
+    # A box that only moves (N4: keep_move, move_box, public_box's relocation).
+    ('a-relative-inline-taken-as-a-move', RESTYLE,
+     '                    : box->kind == FLOW_BOX_SPAN || box->kind == FLOW_BOX_ATOMIC || !box->positioned\n',
+     '                    : 0\n'),
+    ('a-stretched-box-taken', RESTYLE,
+     '    if (why == NULL && out && across)\n', '    if (0)\n'),
+    ('sticky-taken', RESTYLE, '                    : b->position == FLOW_POSITION_STICKY ? "sticky"\n', ''),
+    ('a-fixed-descendant-moved-with-it', FLOW,
+     '    if (!root && b->out_of_flow && b->style->position == FLOW_POSITION_FIXED)\n        return "a fixed box inside";\n', ''),
+    ('a-clip-moved-with-it', FLOW,
+     '    if (f_box_clips(b, true) || f_box_clips(b, false) || b->style->legacy_clip_set)\n', '    if (0)\n'),
+    ('the-move-skips-what-is-in-it', FLOW,
+     '    for (const FBox *c = src->first; c != NULL && !bd->failed; c = c->next) {\n        if (!c->placed)\n            continue;\n',
+     '    for (const FBox *c = src->first; c != NULL && !bd->failed; c = c->next) {\n        if (!c->placed || bd->relocate)\n            continue;\n'),
+    ('the-moved-frame-s-anchor-kept', FLOW,
+     '            f->box_x = bd->ox + src->x;\n            f->box_y = bd->oy + src->y;\n', ''),
+    ('the-moved-box-s-matrix-not-rebuilt', FLOW,
+     '            f->box_y = bd->oy + src->y;\n            transform_fill(f, src->style);\n',
+     '            f->box_y = bd->oy + src->y;\n'),
+    ('a-move-replaces-the-last', FLOW, '    m->dx += dx;\n    m->dy += dy;\n', '    m->dx = dx;\n    m->dy = dy;\n'),
+    ('the-moved-boxes-round-it-forgotten', FLOW,
+     '        if (pm != NULL) {\n            ox += pm->dx;\n            oy += pm->dy;\n        }\n', ''),
+    ('a-move-made-at-the-records-place', FLOW,
+     '    if (moved != NULL) {\n        bd->ox += moved->dx;\n        bd->oy += moved->dy;\n    }\n', ''),
+    ('the-extent-not-reached-after-a-move', RESTYLE,
+     '    bool reaching = transformed || moves > 0;', '    bool reaching = transformed;'),
+    ('a-move-marks-only-where-it-is', RESTYLE,
+     '    if (marking)\n        marked = keep_changed(tree, &k, &written, &changed, &all);\n', ''),
+    ('the-observers-not-told-of-a-move', YONDER,
+     '    if (kept.moved > 0) {\n        forms_place();\n        s_ticks_moved++;\n    }\n', ''),
+    ('a-moved-box-s-stamp-kept', FLOW,
+     '    for (const flow_box_t *b = box; b != NULL; b = box_after_in(box, b))\n        drawn_changed(b, true, stamp);\n', ''),
     ('a-pseudo-element-anchored-to-itself-differs', RESTYLE, '    return o == n || (o == o_self && n == n_self);',
      '    return o == n || (o == o_self && n == n_self && 0);'),
     ('motion-kept', RESTYLE, '    if (was->motion != NULL || is->motion != NULL)\n', '    if (0)\n'),
@@ -85,8 +119,8 @@ mutants = [
     ('the-outline-not-handed-past-stacked', FLOW,
      '    for (; c->holds_outline && c->parent != NULL && !c->parent->holds_outline; c = c->parent)',
      '    for (; 0 && c->holds_outline && c->parent != NULL && !c->parent->holds_outline; c = c->parent)'),
-    ('the-check-not-scrolled-alike', YONDER, '                flow_scroll_set(whole, s, flow_scroll_at(g.page.tree, i));',
-     '                (void)0;'),
+    ('the-check-not-scrolled-alike', YONDER, '            flow_scroll_set(whole, s, flow_scroll_at(g.page.tree, i));',
+     '            (void)0;'),
     ('the-check-ignores-outlines', RESTYLE, '                            : y->holds_outline && !x->holds_outline ? "an outline not held"',
      '                            : 0 ? "an outline not held"'),
     # The check (--geometry-check).

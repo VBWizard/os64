@@ -634,6 +634,14 @@ static flow_restyle_t restyle_in_place(flow_tree_t *tree, const os64_html_docume
         was_reach[2 * i + 1] = tree->scrollers[i]->at;
     }
     if (reaching) {
+        // A moved box's reach is in the layout's own extent, which is worked
+        // out again with it where it moved to: the base the reach starts
+        // from (f_layout_extent).
+        if (moves > 0) {
+            f_layout_extent(tree->layout, tree_moved_of, tree);
+            tree->reach_base_w = tree->layout->width;
+            tree->reach_base_h = tree->layout->height;
+        }
         tree->layout->width = tree->reach_base_w;
         tree->layout->height = tree->reach_base_h;
         for (int32_t i = 0; i < tree->nscrollers; i++)

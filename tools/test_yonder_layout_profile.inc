@@ -934,8 +934,54 @@ static void renewal_cases(void)
     probe_drop();
 }
 
+/* A BOX THAT ONLY MOVES (N4), kept in the tree on screen: a bar under a
+ * scaled player, its `left` and its own `scaleX` written together. The
+ * record counts the kept move, the observers hear something moved, and
+ * the geometry check lays each kept tree out whole beside it and finds them
+ * the same. */
+static void kept_move_cases(void)
+{
+    // Paragraphs enough that the cascade's retained budget outlasts the
+    // writes, which then stay updates of one cascade.
+    static char html[16384];
+    size_t len=(size_t)snprintf(html,sizeof(html),"<!doctype html><style>p{color:red;padding:2px}</style>"
+        "<div style='position:relative;width:300px;height:40px;transform:scale(.98)'>"
+        "<div id=bar style='position:absolute;width:50%%;height:4px;left:0px;top:0px;transform:scaleX(.5)'>x</div>"
+        "</div><p id=q>q</p>");
+    for(int i=0;i<400 && len<sizeof(html)-64;i++) len+=(size_t)snprintf(html+len,sizeof(html)-len,"<p>%d</p>",i);
+    probe_page(html,false);
+    g.page.diag=diag_new_claimed("https://fixture.test/kept-move",1);
+    s_layout_profile=true;
+    s_geometry_check=1;
+    s_geometry_compared=s_geometry_differed=0;
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("q"),"title","t",1) && script_rebuild(),"kept move: a first change");
+    const flow_tree_t *shown=g.page.tree;
+    uint64_t moved=s_ticks_moved;
+    static const char *const kLefts[]={"position:absolute;width:50%;height:4px;left:12.5px;top:0px;transform:scaleX(.7)",
+                                       "position:absolute;width:50%;height:4px;left:131.269px;top:0px;transform:scaleX(.31)"};
+    for(int i=0;i<2;i++)
+        check(!os64_html_set_attr(g.page.way.doc,probe_id("bar"),"style",kLefts[i],strlen(kLefts[i])) && script_rebuild(),
+              "kept move: the bar's left and scale published");
+    const char *kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    check(g.page.tree==shown && kept && strstr(kept,"a box that only moved 2 (2 boxes)"),
+          "kept move: the bar is moved in the tree on screen, and the record says so");
+    if(!kept || !strstr(kept,"a box that only moved 2 (2 boxes)")) {
+        const char *at=yonder_diag_fact_value(g.page.diag,"layout kept, declined at");
+        printf("  layout kept: %s\n  declined at: %s\n",kept?kept:"(none)",at?at:"(none)");
+    }
+    check(s_ticks_moved==moved+2,"kept move: and the observers hear something moved, each time");
+    const char *geometry=yonder_diag_fact_value(g.page.diag,"geometry check");
+    check(geometry && strstr(geometry," 0 differed") && s_geometry_compared>=2,"kept move: and each kept tree is a whole layout");
+    if(!geometry || !strstr(geometry," 0 differed")) printf("  geometry check: %s\n",geometry?geometry:"(none)");
+    s_geometry_check=0;
+    s_geometry_compared=s_geometry_differed=0;
+    s_layout_profile=false;
+    probe_drop();
+}
+
 static void layout_profile_cases(void)
 {
+    kept_move_cases();
     restyle_kept_cases();
     kept_reads_cases();
     unchanged_cases();
