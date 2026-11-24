@@ -459,6 +459,8 @@ static void session_wake(os64_dom_t *dom, DMediaElement *m)
     if (m->session == NULL) {
         m->error = OS64_DOM_MEDIA_ERR_NETWORK;
         set_message(m, "The sound could not be loaded again");
+        if (dom->media_provider.failed != NULL && m->current_src != NULL)
+            dom->media_provider.failed(dom->media_provider.opaque, m->node, NULL, m->current_src, m->error, m->message);
         m->error_seen = true;
         queue(dom, m, "error", SETTLE_NONE);
         return;
@@ -531,6 +533,9 @@ static void select_resource(os64_dom_t *dom, DMediaElement *m)
         m->current_src = copy_text(dom, url);
     d_free(dom, url);
     if (m->current_src == NULL) {
+        if (dom->media_provider.failed != NULL)
+            dom->media_provider.failed(dom->media_provider.opaque, m->node, NULL, reference,
+                                       OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED, "The address does not resolve");
         source_failed(dom, m, "The address does not resolve");
         return;
     }
@@ -549,6 +554,9 @@ static void select_resource(os64_dom_t *dom, DMediaElement *m)
                                    all ? OS64_DOM_MEDIA_PRELOAD_AUTO : OS64_DOM_MEDIA_PRELOAD_METADATA)
         : NULL;
     if (m->session == NULL) {
+        if (dom->media_provider.failed != NULL)
+            dom->media_provider.failed(dom->media_provider.opaque, m->node, NULL, m->current_src,
+                                       OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED, "The sound could not be loaded");
         source_failed(dom, m, "The sound could not be loaded");
         return;
     }
@@ -603,6 +611,10 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
     if (f.error != 0 && !m->error_seen) {
         m->error_seen = true;
         f.message[sizeof(f.message) - 1] = '\0';
+        if (dom->media_provider.failed != NULL)
+            dom->media_provider.failed(dom->media_provider.opaque, m->node, m->session, m->current_src,
+                                       m->ready == R_NOTHING ? OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED : f.error,
+                                       f.message);
         if (m->ready == R_NOTHING) {
             source_failed(dom, m, f.message);
             return;

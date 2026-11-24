@@ -5,6 +5,11 @@ does not.
 
     tools/pages_serve.py [--port 8731] [--root DIR] [--rate BYTES_PER_S] [--no-ranges] [--part BYTES]
 
+Two questions on an address change the answer, for a page's failures:
+`?status=N` answers status N with a short HTML body whatever the path, and
+`?truncate=N` serves the file cut to its first N bytes, as if that were all
+of it (its length and its ranges are the cut file's).
+
 --rate sends every body at most that fast, so a seek in a sound can land past
 what has arrived; --no-ranges answers every request whole and says nothing of
 ranges, as a server that has none; --part answers a Range request with at most
@@ -20,6 +25,7 @@ import os
 import re
 import sys
 import time
+import urllib.parse
 
 ARGS = None
 
@@ -29,10 +35,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        asks = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        if 'status' in asks:
+            status = int(asks['status'][0])
+            body = f'<!doctype html><title>{status}</title><p>answered {status}</p>\n'.encode()
+            self.send_response(status)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            print(f'GET {self.path} -> {status} (asked)', flush=True)
+            return
         path = self.translate_path(self.path)
         if not os.path.isfile(path):
             return super().do_GET()
         size = os.path.getsize(path)
+        if 'truncate' in asks:
+            size = min(size, int(asks['truncate'][0]))
         asked = self.headers.get('Range')
         first, last, status = 0, size - 1, 200
         if asked and not ARGS.no_ranges:

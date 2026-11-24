@@ -43,6 +43,7 @@ void yonder_media_stop(void) {}
  * whose position follows yonder's clock from `fake_media_began`, for the
  * loop's fairness case (a media event always ready). */
 static bool fake_media_on;
+static bool fake_media_failing, fake_media_failure_taken;
 static uint64_t fake_media_began;
 static int fake_media_session;
 uint64_t yonder_now_ms(void);
@@ -70,6 +71,22 @@ void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
     out->duration = out->arrived = 3600;
     out->sounding = true;
     out->position = (double)(yonder_now_ms() - fake_media_began) / 1000.0;
+    if (fake_media_failing) {
+        out->error = 3;
+        snprintf(out->message, sizeof(out->message), "damaged past decoding");
+    }
+}
+/* A failure's line, for the fake session when `fake_media_failing` says
+ * the next facts fail: given once, as media.c gives it. */
+bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t cap)
+{
+    static const char *const kClass[] = {"error", "aborted", "network", "decode", "not supported"};
+    if (m != (yonder_media_t *)&fake_media_session || !fake_media_failing || fake_media_failure_taken)
+        return false;
+    fake_media_failure_taken = true;
+    snprintf(out, cap, "http://x.test/v.mp4: video 1, %s: damaged past decoding (HTTP 200, video/mp4, "
+             "4096 bytes received, the first request)", kClass[code >= 1 && code <= 4 ? code : 3]);
+    return true;
 }
 int yonder_media_can_play(const char *type) { (void)type; return 0; }
 void yonder_media_reap(void) {}
@@ -13126,6 +13143,60 @@ static void sheet_worker_cases(void)
  * its own main. */
 #ifndef YONDER_HOST_FAKES_ONLY
 #include "test_yonder_svg_hit.inc"
+/* A MEDIA ELEMENT THAT FAILS IS NAMED (media.h, yonder_media_failure_take):
+ * one FAILED media line on its page's record, and so on the console, by
+ * its address, its kind and place, and why: a session that never began
+ * (no sound here: the hosted open answers none) is the element's network
+ * error, said by yonder itself; one that failed later is media.c's line,
+ * with the class libdom handed the page, taken once however often its
+ * facts are read. */
+static void media_failure_cases(void)
+{
+    probe_page("<!doctype html><audio src=http://x.test/a.mp3></audio><video src=http://x.test/c.mp4></video>"
+               "<audio src=http://x.test/b.mp3></audio><audio src=\"\"></audio>", true);
+    g.page.diag = diag_new_claimed("http://x.test/", 1);
+    for (int i = 0; i < 4; i++) {
+        script_turn();
+        players_ask_run();
+        media_turn();
+    }
+    char text[4096];
+    yonder_diag_render(g.page.diag, text, sizeof(text));
+    check(has(text, "\nFAILED media: http://x.test/a.mp3: audio 1, not supported: it could not begin: no memory, no thread or no sound output (no request made) (1)\n") &&
+          has(text, "\nFAILED media: http://x.test/c.mp4: video 1, not supported: it could not begin: no memory, no thread or no sound output (no request made) (1)\n") &&
+          has(text, "\nFAILED media: http://x.test/b.mp3: audio 2, not supported: it could not begin: no memory, no thread or no sound output (no request made) (1)\n"),
+          "media failed: a session that never began, each element by its kind and place");
+    check(has(text, "\nFAILED media: (no address): audio 3, not supported: The address does not resolve (no request made) (1)\n"),
+          "media failed: an address libdom could not resolve, which never reached the open");
+    if (!has(text, "FAILED media: http://x.test/b.mp3"))
+        printf("%s\n", text);
+    yonder_diag_free(g.page.diag);
+    g.page.diag = NULL;
+    probe_drop();
+
+    fake_media_on = fake_media_failing = true;
+    fake_media_failure_taken = false;
+    fake_media_began = now_ms;
+    probe_page("<!doctype html><video src=http://x.test/v.mp4></video>", true);
+    g.page.diag = diag_new_claimed("http://x.test/", 2);
+    for (int i = 0; i < 6; i++) {
+        now_ms += 300;
+        script_turn();
+        players_ask_run();
+        media_turn();
+    }
+    yonder_diag_render(g.page.diag, text, sizeof(text));
+    check(has(text, "\nFAILED media: http://x.test/v.mp4: video 1, not supported: damaged past decoding (HTTP 200, "
+                    "video/mp4, 4096 bytes received, the first request) (1)\n"),
+          "media failed: a session's own failure before its length, its line taken once with the class the page has");
+    if (!has(text, "FAILED media: http://x.test/v.mp4"))
+        printf("%s\n", text);
+    yonder_diag_free(g.page.diag);
+    g.page.diag = NULL;
+    probe_drop();
+    fake_media_on = fake_media_failing = false;
+}
+
 /* WHAT A SCHEDULE CALL COSTS (pictures_schedule): asked with nothing to do
  * but find the next deadline, on pages of 200 and 20,000 elements of each
  * shape a page's growth takes, the bigger page's call may cost three times
@@ -13408,6 +13479,7 @@ int main(void)
     canvas_window_cases();
     schedule_cost_cases();
     fairness_cases();
+    media_failure_cases();
     layout_profile_cases();
     damage_cases();
     graft_browser_cases();graft_base_cases();

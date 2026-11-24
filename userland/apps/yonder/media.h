@@ -48,7 +48,10 @@ typedef struct {
 // life as a script's request borrows them; and a blob: address's entry,
 // taken by the caller (BLOB_URLS.md) and borrowed for the call: the
 // session holds its own, and NULL is none. `picture`: the element is a
-// <video>, whose player decodes the picture too.
+// <video>, whose player decodes the picture too. `element` ("video 2") and
+// `named` (the address as the page's record shows it) are what a failure
+// is recorded by (yonder_media_failure_take), copied; NULL takes the
+// element's kind and the address.
 typedef struct {
     const char *url;
     const char *page_url;
@@ -58,6 +61,8 @@ typedef struct {
     const way_identity_t *identity;
     struct os64_dom_blob *blob;
     bool picture;
+    const char *element;
+    const char *named;
 } yonder_media_request_t;
 
 // Once, before the first open; and once as yonder leaves, after the pages
@@ -72,8 +77,9 @@ void yonder_media_stop(void);
 // any thread may read it.
 const char *yonder_media_sounds(void);
 
-// NULL when it cannot begin (no memory, no thread): the element's network
-// error. Window thread, as are all of these.
+// NULL when it cannot begin (no memory, no thread, or the program's sound
+// output could not be made): the element's network error. Window thread,
+// as are all of these.
 yonder_media_t *yonder_media_open(const yonder_media_request_t *request);
 // The session ends: its threads are told to stop and the window frees it
 // once they have (yonder_media_reap). The pointer is dead on return.
@@ -83,6 +89,13 @@ void yonder_media_pause(yonder_media_t *m);
 void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation);
 void yonder_media_settings(yonder_media_t *m, double gain, bool muted, bool loop);
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out);
+// Once a session has failed (its facts' `error`), its FAILED media line
+// once, into `out`: its address, then media_bytes.h's words for what it
+// failed with — `code` the MediaError the page was handed, which libdom
+// decides (dom/media.h's `failed`), 0 for the session's own — and what was
+// heard of the fetch and from libmedia. False before it has failed, and
+// after the line was taken.
+bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t cap);
 // A <video>'s picture to show at `blank` (wall microseconds, the blank a
 // publish now is seen at), `period` the display's: its player's
 // (os64_media_player_frame, whose rule the pixels keep). False with `out`

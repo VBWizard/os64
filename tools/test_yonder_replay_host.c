@@ -73,7 +73,7 @@
  *     `REPLAY incomplete <kind> <url>` (rp_answer); and a kept line no job
  *     took is a fetch the page made where it was kept and not here,
  *     `REPLAY incomplete never asked for <kind> <url>` (rp_left_over).
- *     Pictures and fonts are never answered (RP_NOT_REPRODUCED);
+ *     Pictures, fonts and media are never answered (RP_NOT_REPRODUCED);
  *   - THE CLOCK. A turn with nothing to do moves the window's milliseconds
  *     on by a tick (10 ms), until the page is quiet (nothing arriving,
  *     nothing out that will be answered, no timer set) or the virtual
@@ -201,13 +201,16 @@ static const char *const kStates[RP_STATES]={"verdict","incomplete","unfinished"
  * so a line whose outcome needed one of their fetches is not the page's on
  * a replay's record: yonder writes such a line under its own kind, a
  * MISSING `image` (a fetched picture's format) or a FAILED `picture-fetch`
- * or `font-fetch` (what a fetch, or the bytes it brought, came to). Every
+ * or `font-fetch` (what a fetch, or the bytes it brought, came to). A
+ * media element's fetch is never answered either, so its FAILED `media`
+ * (why it failed: the fetch, or the bytes libmedia was given) is one too.
+ * Every
  * replayed record names them on a `REPLAY not reproduced:` line, its
  * counts leave them out, and yonder_corpus_diff.py compares neither side's
  * lines of them. A picture or a font decided without a fetch (a scheme
  * nothing fetches, an address refused, a family no face names) is
  * reproduced and compared. */
-#define RP_NOT_REPRODUCED "font-fetch image picture-fetch"
+#define RP_NOT_REPRODUCED "font-fetch image media picture-fetch"
 static bool rp_reproduced(const char *kind, size_t len) {
     for(const char *w=RP_NOT_REPRODUCED; *w; ) {
         size_t n=strcspn(w," ");
@@ -932,7 +935,8 @@ static bool rp_cancel(os64_work_id_t id) {
     }
     return false;
 }
-/* The kinds the replay answers; pictures and fonts it never does. */
+/* The kinds the replay answers; pictures and fonts it never does, nor a
+ * media element's fetch, which its own loader makes outside the pool. */
 static bool rp_answers(const RpJob *j) {
     return !j->unknown && (j->kind==YONDER_JOB_TRIP || j->kind==YONDER_JOB_SCRIPT || j->kind==YONDER_JOB_SHEET);
 }

@@ -214,3 +214,134 @@ bool yonder_media_accepts_ranges(const char *headers, size_t length)
     }
     return false;
 }
+
+void yonder_media_content_type(const char *headers, size_t length, char *out, size_t cap)
+{
+    Lines l = {headers, headers + length};
+    const char *name, *value;
+    size_t nlen, vlen;
+    if (cap == 0)
+        return;
+    out[0] = '\0';
+    if (headers == NULL)
+        return;
+    while (next_header(&l, &name, &nlen, &value, &vlen)) {
+        if (!same_nocase(name, nlen, "content-type"))
+            continue;
+        out[0] = '\0';
+        size_t n = 0;
+        while (n < vlen && value[n] != ';')
+            n++;
+        while (n > 0 && (value[n - 1] == ' ' || value[n - 1] == '\t'))
+            n--;
+        if (n + 1 > cap)
+            continue;
+        for (size_t i = 0; i < n; i++)
+            out[i] = value[i];
+        out[n] = '\0';
+    }
+}
+
+// ── The words a failure is recorded in ─────────────────────────────────
+
+typedef struct {
+    char *out;
+    size_t cap, at;
+} Text;
+
+static void put(Text *t, const char *s)
+{
+    for (; *s != '\0' && t->at + 1 < t->cap; s++)
+        t->out[t->at++] = *s;
+    t->out[t->at] = '\0';
+}
+
+static void put_number(Text *t, uint64_t n)
+{
+    char digits[24];
+    int i = (int)sizeof(digits) - 1;
+    digits[i] = '\0';
+    do {
+        digits[--i] = (char)('0' + n % 10);
+        n /= 10;
+    } while (n > 0);
+    put(t, digits + i);
+}
+
+static bool same_text(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b)
+        a++, b++;
+    return *a == *b;
+}
+
+void yonder_media_failure_text(const yonder_media_failure_t *f, char *out, size_t cap)
+{
+    static const char *const kClass[] = {"error", "aborted", "network", "decode", "not supported"};
+    Text t = {out, cap, 0};
+    if (cap == 0)
+        return;
+    out[0] = '\0';
+    put(&t, f->element);
+    put(&t, ", ");
+    if (f->error >= 1 && f->error <= 4) {
+        put(&t, kClass[f->error]);
+    } else {
+        put(&t, "error ");
+        put_number(&t, (uint64_t)(f->error < 0 ? 0 : f->error));
+    }
+    put(&t, ": ");
+    put(&t, f->reason[0] != '\0' ? f->reason : "no reason given");
+    put(&t, " (");
+    if (f->fetched) {
+        if (f->status != 0) {
+            put(&t, "HTTP ");
+            put_number(&t, (uint64_t)f->status);
+        } else {
+            put(&t, "no answer");
+        }
+        if (f->type[0] != '\0') {
+            put(&t, ", ");
+            put(&t, f->type);
+        }
+        put(&t, ", ");
+        put_number(&t, f->received);
+        put(&t, f->received == 1 ? " byte received, " : " bytes received, ");
+        if (f->range_from == 0) {
+            put(&t, "the first request");
+        } else {
+            put(&t, "a Range request from byte ");
+            put_number(&t, f->range_from);
+        }
+    } else {
+        put(&t, "a file");
+    }
+    bool said = f->said[0] != '\0' && !same_text(f->said, f->reason);
+    bool named = f->format[0] != '\0' || f->sound[0] != '\0' || f->picture[0] != '\0';
+    if (said || named) {
+        put(&t, "; libmedia");
+        if (said) {
+            put(&t, ": ");
+            put(&t, f->said);
+        }
+        if (f->format[0] != '\0') {
+            put(&t, said ? ", read as " : " read it as ");
+            put(&t, f->format);
+        }
+        const char *codec[2] = {f->sound, f->picture};
+        const char *kind[2] = {"sound ", "picture "};
+        bool unplayable[2] = {f->sound_unplayable, f->picture_unplayable};
+        bool first = !said && f->format[0] == '\0';
+        for (int i = 0; i < 2; i++) {
+            if (codec[i][0] == '\0')
+                continue;
+            put(&t, first ? " named " : ", ");
+            first = false;
+            put(&t, kind[i]);
+            put(&t, codec[i]);
+            if (unplayable[i])
+                put(&t, " (not decoded here)");
+        }
+    }
+    put(&t, ")");
+}

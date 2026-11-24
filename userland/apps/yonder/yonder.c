@@ -13940,6 +13940,73 @@ static bool media_file_scheme(const char *url)
     return true;
 }
 
+static Page *page_of_host(const yonder_scripts_t *host);
+
+// A media element as a failure's record names it: its kind and its place
+// among its document's elements of that kind, in tree order ("video 2"),
+// or its kind alone when it is in no document (`new Audio()`).
+static void media_element_name(const os64_html_node_t *node, char *out, size_t cap)
+{
+    bool video = is_video_node(node);
+    const os64_html_node_t *top = node;
+    while (top != NULL && top->parent != NULL)
+        top = top->parent;
+    if (top == NULL || top->kind != OS64_HTML_DOCUMENT) {
+        os64_snprintf(out, cap, "%s, in no document", video ? "video" : "audio");
+        return;
+    }
+    uint32_t n = 0;
+    for (const os64_html_node_t *at = top; at != NULL;) {
+        if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML &&
+            at->tag == (video ? OS64_HTML_TAG_VIDEO : OS64_HTML_TAG_AUDIO))
+            n++;
+        if (at == node)
+            break;
+        if (at->first_child != NULL) {
+            at = at->first_child;
+            continue;
+        }
+        while (at != NULL && at->next == NULL)
+            at = at->parent;
+        at = at != NULL ? at->next : NULL;
+    }
+    os64_snprintf(out, cap, "%s %u", video ? "video" : "audio", n);
+}
+
+// A media element that failed, on its page's record and the console:
+// FAILED media, its address as a picture's is shown (picture_name), and
+// why. `line` is the whole message (yonder_media_failure_take), or NULL
+// for one built here from the element, the class the page was handed and
+// `why`, for a failure no request was made for.
+static void media_failed(uint64_t serial, const char *line, const os64_html_node_t *node, const char *url,
+                         const char *class, const char *why)
+{
+    yonder_scripts_t *host = scripts_for(serial);
+    Page *p = host != NULL ? page_of_host(host) : NULL;
+    char made[OS64_FETCH_URL_MAX + 160], element[32], name[128];
+    if (line == NULL) {
+        media_element_name(node, element, sizeof(element));
+        os64_snprintf(made, sizeof(made), "%s: %s, %s: %s (no request made)",
+                      url[0] != '\0' ? picture_name(url, name, sizeof(name)) : "(no address)", element, class, why);
+        line = made;
+    }
+    yonder_diag_failed(p != NULL ? p->diag : NULL, "media", line);
+}
+
+// Why media_open last answered NULL, and for which element: libdom tells
+// the failure (media_failed_early) with the class it handed the page, and
+// this is the reason only yonder knows.
+static struct {
+    const os64_html_node_t *node;
+    const char *why;
+} s_media_refused;
+
+static void media_refused(const os64_html_node_t *node, const char *why)
+{
+    s_media_refused.node = node;
+    s_media_refused.why = why;
+}
+
 static void *media_open(void *opaque, const os64_html_node_t *node, const char *url, os64_dom_media_cors_t cors,
                         os64_dom_media_preload_t preload)
 {
@@ -13951,16 +14018,23 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     // a page from the network naming one would learn whether it exists
     // (the error tells a missing file from one that will not decode) and
     // what it holds. Refused, it is the element's network error.
-    if (media_file_scheme(url) && !media_file_scheme(page))
+    if (media_file_scheme(url) && !media_file_scheme(page)) {
+        media_refused(node, "a file on this machine, asked for by a page that is not");
         return NULL;
+    }
     // A blob: address's entry is taken here, at the resource selection's
     // turn, which is where the standard parses the element's URL too
     // (BLOB_URLS.md § 1.8).
     os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(host), url);
     bool picture = is_video_node(node);
-    yonder_media_request_t r = {url, page, serial, cors, g.way.agent, g.way.identity, blob, picture};
+    char element[32], name[128];
+    media_element_name(node, element, sizeof(element));
+    yonder_media_request_t r = {url,   page,    serial,  cors, g.way.agent, g.way.identity, blob, picture,
+                                element, picture_name(url, name, sizeof(name))};
     yonder_media_t *session = yonder_media_open(&r);
     os64_dom_blob_release(blob);
+    if (session == NULL)
+        media_refused(node, "it could not begin: no memory, no thread or no sound output");
     if (session != NULL && picture)
         video_add(node, session);
     return session;
@@ -13992,6 +14066,26 @@ static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out
     (void)opaque;
     yonder_media_facts(session, out);
 }
+// An element libdom failed (its `failed`), with the class it handed the
+// page: a session's own line (yonder_media_failure_take) with that class,
+// or, with no session, one made here, its reason yonder's own
+// (media_refused) when media_open refused this element.
+static void media_failed_told(void *opaque, const os64_html_node_t *node, void *session, const char *reference,
+                              int code, const char *why)
+{
+    static const char *const kClass[] = {"error", "aborted", "network", "decode", "not supported"};
+    char line[OS64_FETCH_URL_MAX + 512];
+    if (session != NULL) {
+        if (yonder_media_failure_take(session, code, line, sizeof(line)))
+            media_failed((uint64_t)(uintptr_t)opaque, line, NULL, NULL, NULL, NULL);
+        return;
+    }
+    if (s_media_refused.node == node && node != NULL)
+        why = s_media_refused.why;
+    s_media_refused.node = NULL;
+    media_failed((uint64_t)(uintptr_t)opaque, NULL, node, reference, code >= 1 && code <= 4 ? kClass[code] : "error",
+                 why);
+}
 static bool media_activated(void *opaque)
 {
     yonder_scripts_t *host = scripts_for((uint64_t)(uintptr_t)opaque);
@@ -14021,7 +14115,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed, .text_style = script_text_style,
         .images={canvas_source,canvas_source_release,doc,image_sources_update},
         .media = {(void *)(uintptr_t)serial, media_open, media_close, media_play, media_pause, media_seek,
-                  media_settings, media_facts, media_activated, media_can_play},
+                  media_settings, media_facts, media_activated, media_can_play, media_failed_told},
         .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
         .css_animations = {css_animations_count, css_animations_at, css_animations_drive, css_animations_version, doc},

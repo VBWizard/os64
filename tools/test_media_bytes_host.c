@@ -1,7 +1,8 @@
 // The arithmetic of a sound's bytes (userland/apps/yonder/media_bytes.c),
 // on the host under ASan and UBSan: every seek plan over a grid of windows,
 // offsets and states against a model written as the plan's table, the
-// front drop against its definition, and the head's three readers.
+// front drop against its definition, the head's readers, and the words a
+// failed element is recorded in.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -161,11 +162,71 @@ static void head_cases(void)
     check(v[0] == '\0' && tiny[0] == '\0', "validator: none, or one that does not fit, is empty");
 }
 
+static void failure_cases(void)
+{
+    char type[32], small[5];
+    const char *h = "Content-Length: 9\r\ncontent-TYPE:  text/html; charset=utf-8\r\n";
+    yonder_media_content_type(h, strlen(h), type, sizeof(type));
+    check(!strcmp(type, "text/html"), "type: the media type, its parameters and blanks left off");
+    yonder_media_content_type(h, strlen(h), small, sizeof(small));
+    yonder_media_content_type("Content-Length: 9\n", 18, type, sizeof(type));
+    check(small[0] == '\0' && type[0] == '\0', "type: none, or one that does not fit, is empty");
+    yonder_media_content_type(NULL, 40, type, sizeof(type));
+    check(type[0] == '\0', "type: a failed answer's missing block, with a length, is none");
+
+    char line[256];
+    yonder_media_failure_t refused = {"video 2", 4, "The server answered 403", true, 403, "text/html", 0, 0,
+                                      "", "", "", "", false, false};
+    yonder_media_failure_text(&refused, line, sizeof(line));
+    check(!strcmp(line, "video 2, not supported: The server answered 403 (HTTP 403, text/html, 0 bytes "
+                        "received, the first request)"),
+          "failure: a refused fetch, its status, type, bytes and request");
+    yonder_media_failure_t broken = {"audio 1", 2, "The connection failed part way", true, 206, "audio/mpeg", 1,
+                                     1048576, "", "", "", "", false, false};
+    yonder_media_failure_text(&broken, line, sizeof(line));
+    check(!strcmp(line, "audio 1, network: The connection failed part way (HTTP 206, audio/mpeg, 1 byte received, "
+                        "a Range request from byte 1048576)"),
+          "failure: a Range request broken part way");
+    yonder_media_failure_t notmedia = {"video 1", 4, "not a media file this can read", true, 200, "text/html", 2048, 0,
+                                       "not a media file this can read", "", "", "", false, false};
+    yonder_media_failure_text(&notmedia, line, sizeof(line));
+    check(!strcmp(line, "video 1, not supported: not a media file this can read (HTTP 200, text/html, 2048 bytes "
+                        "received, the first request)"),
+          "failure: libmedia's words left out when they are the reason");
+    yonder_media_failure_t codec = {"video 3", 4, "media in a form this cannot decode", false, 0, "", 0, 0,
+                                    "media in a form this cannot decode", "mov", "aac", "hevc", false, true};
+    yonder_media_failure_text(&codec, line, sizeof(line));
+    check(!strcmp(line, "video 3, not supported: media in a form this cannot decode (a file; libmedia read it as "
+                        "mov, sound aac, picture hevc (not decoded here))"),
+          "failure: a file, with the container and codecs libmedia named");
+    yonder_media_failure_t decode = {"video 4", 3, "", true, 0, "", 0, 0, "damaged past decoding", "", "", "",
+                                     false, false};
+    yonder_media_failure_text(&decode, line, sizeof(line));
+    check(!strcmp(line, "video 4, decode: no reason given (no answer, 0 bytes received, the first request; "
+                        "libmedia: damaged past decoding)"),
+          "failure: no reason and no answer said so, libmedia's words kept");
+    yonder_media_failure_t named = {"audio 3", 77, "", true, 200, "", 9, 0, "", "", "opus", "", true, false};
+    yonder_media_failure_text(&named, line, sizeof(line));
+    check(!strcmp(line, "audio 3, error 77: no reason given (HTTP 200, 9 bytes received, the first request; "
+                        "libmedia named sound opus (not decoded here))"),
+          "failure: an unknown class by its number, a codec named with nothing else said");
+    const char *twice = "Content-Type: audio/mpeg\r\nContent-Type: video/mp4\r\n";
+    yonder_media_content_type(twice, strlen(twice), type, sizeof(type));
+    const char *long_last = "Content-Type: audio/mpeg\r\nContent-Type: application/x-a-very-long-made-up-type\r\n";
+    yonder_media_content_type(long_last, strlen(long_last), small, sizeof(small));
+    check(!strcmp(type, "video/mp4") && small[0] == '\0', "type: the last one, empty when the last does not fit");
+    char cut[24];
+    yonder_media_failure_text(&refused, cut, sizeof(cut));
+    check(strlen(cut) == sizeof(cut) - 1 && !strncmp(cut, "video 2, not supported:", sizeof(cut) - 1),
+          "failure: cut short to fit, and ended");
+}
+
 int main(void)
 {
     plan_cases();
     drop_cases();
     head_cases();
+    failure_cases();
     printf("media bytes host: %d checks, %d failed\n", s_checks, s_failed);
     return s_failed != 0;
 }

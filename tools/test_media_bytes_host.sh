@@ -1,7 +1,8 @@
 #!/bin/bash
 # Run the arithmetic of a sound's bytes off the network
 # (userland/apps/yonder/media_bytes.c: the seek plan, the window's front
-# drop, the head's length and ranges) on the host under ASan and UBSan,
+# drop, the head's length, ranges and type, the words a failure is
+# recorded in) on the host under ASan and UBSan,
 # against the model in tools/test_media_bytes_host.c.
 
 set -eu
