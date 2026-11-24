@@ -418,6 +418,25 @@ static void restyle_offset_cases(void)
         {"position:relative;left:0px", "position:relative;left:9px", NULL, true, NULL, NULL, NULL, NULL, 0},
         {"display:none;position:relative;left:0px", "display:none;position:relative;left:9px", NULL, false, NULL, NULL, NULL, NULL, 0},
         {"display:contents;position:relative;left:0px", "display:contents;position:relative;left:9px", NULL, false, NULL, NULL, NULL, NULL, 0},
+        // The kinds of positioned block-level box a move takes, each held to
+        // a whole layout: a table (its rows and cells), a flex and a grid
+        // container (their items), a list item (its marker), a replaced
+        // element and a form control laid out as blocks, and an absolute
+        // box holding a float.
+        {"position:relative;left:0px", "position:relative;left:3.5px", NULL, false, "table", NULL, NULL,
+         "<tr><td>a</td><td>b</td></tr><tr><td colspan=2>c</td></tr>", 1},
+        {"position:relative;display:flex;left:0px", "position:relative;display:flex;left:5.25px", NULL, false, NULL, NULL, NULL,
+         "<span>one</span><div style='flex:1'>two</div>", 1},
+        {"position:relative;display:grid;grid-template-columns:20px 1fr;left:0px",
+         "position:relative;display:grid;grid-template-columns:20px 1fr;left:7.75px", NULL, false, NULL, NULL, NULL,
+         "<div>a</div><div>b</div><div>c</div>", 1},
+        {"position:relative;left:0px", "position:relative;left:2.5px", NULL, false, "li", NULL, NULL, "item", 1},
+        {"display:block;position:absolute;width:20px;height:10px;left:0px", "display:block;position:absolute;width:20px;height:10px;left:9.5px",
+         NULL, false, "img", NULL, NULL, "", 1},
+        {"display:block;position:absolute;width:60px;left:0px", "display:block;position:absolute;width:60px;left:4.125px",
+         NULL, false, "input", NULL, NULL, "", 1},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:6.6px", NULL, false, NULL, NULL, NULL,
+         "<div style='float:left;width:30px;height:12px'>f</div>beside the float, and under it", 1},
         // What is in it moves with it: lines, an inline's pieces, a nested
         // absolute box, an inline-block's content; and what it cannot carry.
         {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:11.6px", NULL, false, NULL, NULL, NULL,
@@ -472,6 +491,7 @@ static void restyle_offset_cases(void)
             if (what != NULL)
                 printf("  restyle row %zu: %s\n", i, what);
             flow_free(whole);
+            graft_oracle(&p, old);
         }
         expect(name, ok, kept.detail);
         flow_free(old);

@@ -979,9 +979,62 @@ static void kept_move_cases(void)
     probe_drop();
 }
 
+/* WHAT REMEMBERS A PLACE, AFTER A KEPT MOVE (N4): a form control's widget
+ * and a video's player strip are placed from their boxes after every
+ * rebuild, a kept one included (script_rebuild's forms_place, which places
+ * the players too and has the pointer hit again), so each follows its box
+ * when an absolute box holding it is moved in the tree on screen: it stands
+ * where a whole layout puts the box. */
+static void kept_move_readers_cases(void)
+{
+    static char html[16384];
+    size_t len=(size_t)snprintf(html,sizeof(html),"<!doctype html><style>p{color:red;padding:2px}</style>"
+        "<div style='position:relative;width:700px;height:400px'>"
+        "<div id=bf style='position:absolute;width:200px;left:0px;top:10px'><input id=f value=typed></div>"
+        "<div id=bv style='position:absolute;width:320px;left:0px;top:60px'>"
+        "<video id=v controls src=v.mp4 width=300 height=150></video></div></div>");
+    for(int i=0;i<400 && len<sizeof(html)-64;i++) len+=(size_t)snprintf(html+len,sizeof(html)-len,"<p>%d</p>",i);
+    probe_page(html,true);
+    script_turn();
+    g.page.diag=diag_new_claimed("https://fixture.test/kept-move-readers",1);
+    s_layout_profile=true;
+    s_geometry_check=1;      /* every kept tree laid out whole beside it and compared */
+    s_geometry_compared=s_geometry_differed=0;
+    check(!os64_html_set_attr(g.page.way.doc,probe_id("bf"),"title","t",1) && script_rebuild(),"kept move readers: a first change");
+    const flow_tree_t *shown=g.page.tree;
+    static const char *const kMoves[][2]={{"bf","position:absolute;width:200px;left:37.5px;top:10px"},
+                                          {"bv","position:absolute;width:320px;left:61.25px;top:60px"}};
+    for(int i=0;i<2;i++)
+        check(!os64_html_set_attr(g.page.way.doc,probe_id(kMoves[i][0]),"style",kMoves[i][1],strlen(kMoves[i][1])) &&
+              script_rebuild(),"kept move readers: a left published");
+    const char *kept=yonder_diag_fact_value(g.page.diag,"layout kept");
+    check(g.page.tree==shown && kept && strstr(kept,"a box that only moved 2 (2 boxes)"),
+          "kept move readers: both boxes are moved in the tree on screen");
+    if(!kept || !strstr(kept,"a box that only moved 2 (2 boxes)")) printf("  layout kept: %s\n",kept?kept:"(none)");
+    // Where a whole layout puts each box, beside where the reader stands.
+    FormWidget *fw=probe_field("f");
+    const flow_box_t *fb=flow_box_for(g.page.tree,probe_id("f"));
+    os64_gui_rect_t fr=fb!=NULL ? flow_box_doc_rect(fb,scroll_now()) : (os64_gui_rect_t){0,0,0,0};
+    check(fw!=NULL && fb!=NULL && fr.x>=37 && fw->w->bounds.x==g.view.bounds.x+fr.x-g.sx &&
+          fw->w->bounds.y==g.view.bounds.y+fr.y-g.sy,"kept move readers: the control's widget stands at its moved box");
+    const flow_box_t *vb=flow_box_for(g.page.tree,probe_id("v"));
+    os64_gui_rect_t vr=vb!=NULL ? flow_box_doc_rect(vb,scroll_now()) : (os64_gui_rect_t){0,0,0,0};
+    const Player *pl=NULL;
+    for(int32_t i=0;i<g.nplayers;i++) if(g.players[i]->node==probe_id("v")) pl=g.players[i];
+    check(pl!=NULL && vb!=NULL && vr.x>=61 && pl->p.w.bounds.x==g.view.bounds.x+vr.x-g.sx,
+          "kept move readers: the video's player stands at its moved box");
+    // And the kept trees are the whole layout's, where those were read from.
+    check(s_geometry_compared>=2 && s_geometry_differed==0,"kept move readers: and each kept tree is a whole layout");
+    s_geometry_check=0;
+    s_geometry_compared=s_geometry_differed=0;
+    s_layout_profile=false;
+    probe_drop();
+}
+
 static void layout_profile_cases(void)
 {
     kept_move_cases();
+    kept_move_readers_cases();
     restyle_kept_cases();
     kept_reads_cases();
     unchanged_cases();
