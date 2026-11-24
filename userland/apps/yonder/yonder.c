@@ -13742,6 +13742,20 @@ static void media_failed(uint64_t serial, const char *line, const os64_html_node
     yonder_diag_failed(p != NULL ? p->diag : NULL, "media", line);
 }
 
+// Why media_open last answered NULL, and for which element: libdom tells
+// the failure (media_failed_early) with the class it handed the page, and
+// this is the reason only yonder knows.
+static struct {
+    const os64_html_node_t *node;
+    const char *why;
+} s_media_refused;
+
+static void media_refused(const os64_html_node_t *node, const char *why)
+{
+    s_media_refused.node = node;
+    s_media_refused.why = why;
+}
+
 static void *media_open(void *opaque, const os64_html_node_t *node, const char *url, os64_dom_media_cors_t cors,
                         os64_dom_media_preload_t preload)
 {
@@ -13754,7 +13768,7 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     // (the error tells a missing file from one that will not decode) and
     // what it holds. Refused, it is the element's network error.
     if (media_file_scheme(url) && !media_file_scheme(page)) {
-        media_failed(serial, NULL, node, url, "network", "a file on this machine, asked for by a page that is not");
+        media_refused(node, "a file on this machine, asked for by a page that is not");
         return NULL;
     }
     // A blob: address's entry is taken here, at the resource selection's
@@ -13769,7 +13783,7 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     yonder_media_t *session = yonder_media_open(&r);
     os64_dom_blob_release(blob);
     if (session == NULL)
-        media_failed(serial, NULL, node, url, "network", "it could not begin: no memory, no thread or no sound output");
+        media_refused(node, "it could not begin: no memory, no thread or no sound output");
     if (session != NULL && picture)
         video_add(node, session);
     return session;
@@ -13803,11 +13817,19 @@ static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out
     if (out->error != 0 && yonder_media_failure_take(session, line, sizeof(line)))
         media_failed((uint64_t)(uintptr_t)opaque, line, NULL, NULL, NULL, NULL);
 }
-// An element libdom failed before its address reached media_open: the
-// page was handed MEDIA_ERR_SRC_NOT_SUPPORTED with `why`.
-static void media_failed_early(void *opaque, const os64_html_node_t *node, const char *reference, const char *why)
+// An element libdom failed with no session to say why (its `failed`): an
+// address that did not resolve, or media_open's NULL, whose reason is
+// yonder's own (media_refused) when it was this element it refused; the
+// class is the one the page was handed.
+static void media_failed_early(void *opaque, const os64_html_node_t *node, const char *reference, int code,
+                               const char *why)
 {
-    media_failed((uint64_t)(uintptr_t)opaque, NULL, node, reference, "not supported", why);
+    static const char *const kClass[] = {"error", "aborted", "network", "decode", "not supported"};
+    if (s_media_refused.node == node && node != NULL)
+        why = s_media_refused.why;
+    s_media_refused.node = NULL;
+    media_failed((uint64_t)(uintptr_t)opaque, NULL, node, reference, code >= 1 && code <= 4 ? kClass[code] : "error",
+                 why);
 }
 static bool media_activated(void *opaque)
 {

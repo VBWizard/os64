@@ -74,7 +74,8 @@ bool yonder_media_accepts_ranges(const char *headers, size_t length);
 void yonder_media_validator(const char *headers, size_t length, char *out, size_t cap);
 // Content-Type's media type, without its parameters (`text/html` of
 // `text/html; charset=utf-8`), into `out`: the last one the head holds;
-// empty when there is none, or when that one does not fit.
+// empty when there is none, when that one does not fit, or when `headers`
+// is NULL (a failed answer may carry a length and no block).
 void yonder_media_content_type(const char *headers, size_t length, char *out, size_t cap);
 
 // What a failed element is recorded and said with (yonder.c's FAILED

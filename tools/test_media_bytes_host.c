@@ -171,6 +171,8 @@ static void failure_cases(void)
     yonder_media_content_type(h, strlen(h), small, sizeof(small));
     yonder_media_content_type("Content-Length: 9\n", 18, type, sizeof(type));
     check(small[0] == '\0' && type[0] == '\0', "type: none, or one that does not fit, is empty");
+    yonder_media_content_type(NULL, 40, type, sizeof(type));
+    check(type[0] == '\0', "type: a failed answer's missing block, with a length, is none");
 
     char line[256];
     yonder_media_failure_t refused = {"video 2", 4, "The server answered 403", true, 403, "text/html", 0, 0,

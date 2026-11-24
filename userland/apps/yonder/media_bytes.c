@@ -223,6 +223,8 @@ void yonder_media_content_type(const char *headers, size_t length, char *out, si
     if (cap == 0)
         return;
     out[0] = '\0';
+    if (headers == NULL)
+        return;
     while (next_header(&l, &name, &nlen, &value, &vlen)) {
         if (!same_nocase(name, nlen, "content-type"))
             continue;

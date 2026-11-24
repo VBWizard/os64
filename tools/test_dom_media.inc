@@ -77,11 +77,12 @@ static int media_can_play(void *opaque, const char *type)
 
 /* What the host was told of a failure no session saw (`failed`). */
 static char media_failed_told[160];
-static void media_failed(void *opaque, const os64_html_node_t *node, const char *reference, const char *why)
+static void media_failed(void *opaque, const os64_html_node_t *node, const char *reference, int code,
+                         const char *why)
 {
     (void)opaque;
-    snprintf(media_failed_told, sizeof(media_failed_told), "%s|%s|%s", node != NULL ? node->name : "?", reference,
-             why);
+    snprintf(media_failed_told, sizeof(media_failed_told), "%s|%s|%d|%s", node != NULL ? node->name : "?",
+             reference, code, why);
 }
 
 static const os64_dom_media_provider_t media_provider = {
@@ -330,8 +331,11 @@ static void dom_media_abort_cases(void)
 
     /* A src the host cannot open: error, code 4, and play() refused. */
     media_refuse = true;
+    media_failed_told[0] = '\0';
     media_script(&f, "a.src='c.mp3';R.length=0;", "media: a src that will not open");
     media_turn(&f, "media: it fails");
+    check(strcmp(media_failed_told, "audio|https://example.test/dir/c.mp3|4|The sound could not be loaded") == 0,
+          "media: the host is told the open it refused, with the class the page is handed");
     media_script(&f, "const h=heard();assert(h.endsWith('loadstart:0 error:0'),'error: '+h);"
                      "assert(a.error instanceof MediaError&&a.error.code===4&&a.error===a.error&&a.networkState===3);"
                      "a.play().then(()=>R.push('ok'),e=>R.push(e.name));",
@@ -348,9 +352,9 @@ static void dom_media_abort_cases(void)
     media_turn(&f, "media: it fails before open");
     media_script(&f, "assert(a.error&&a.error.code===4&&a.error.message==='The address does not resolve');",
                  "media: the page is told it does not resolve");
-    check(media_opened == opened && strcmp(media_failed_told, "audio||The address does not resolve") == 0,
+    check(media_opened == opened && strcmp(media_failed_told, "audio||4|The address does not resolve") == 0,
           "media: and the host is told, with no open made");
-    if (strcmp(media_failed_told, "audio||The address does not resolve") != 0)
+    if (strcmp(media_failed_told, "audio||4|The address does not resolve") != 0)
         printf("  told: %s\n", media_failed_told);
     fixture_free(&f);
 }
