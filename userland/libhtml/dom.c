@@ -350,6 +350,46 @@ static void assert_records(HDoc *d)
     if (count != d->records)
         d_fatal("libhtml: form-owner record count mismatch\n");
 }
+void os64_html_census(const os64_html_document_t *doc, os64_html_census_t *out)
+{
+    *out = (os64_html_census_t){0};
+    if (doc == NULL)
+        return;
+    HDoc *d = (HDoc *)doc;
+    for (HDoc *arena = d->group ? d->group->first : d; arena; arena = d->group ? arena->group_next : NULL) {
+        for (HNode *n = arena->live_nodes; n; n = h_meta(n)->live_next) {
+            if (d_node_document_owner(n) != d)
+                continue;
+            bool hosted = false;
+            const HNode *r = n;
+            while (above(r)) {
+                if (!r->parent)
+                    hosted = true;
+                r = above(r);
+            }
+            const HMeta *u = h_meta(r);
+            size_t *nodes, *elements;
+            if (r == (const HNode *)d->pub.document) {
+                nodes = hosted ? &out->nodes.hosted : &out->nodes.connected;
+                elements = hosted ? &out->elements.hosted : &out->elements.connected;
+            } else if (r->kind == DOCUMENT) {
+                nodes = &out->nodes.documents;
+                elements = &out->elements.documents;
+            } else if (u->flags & H_NODE_PENDING) {
+                nodes = u->unit_holds ? &out->nodes.held : &out->nodes.pinned;
+                elements = u->unit_holds ? &out->elements.held : &out->elements.pinned;
+            } else {
+                nodes = &out->nodes.unattached;
+                elements = &out->elements.unattached;
+            }
+            ++*nodes;
+            if (n->kind == ELEMENT)
+                ++*elements;
+        }
+        for (HNode *f = arena == d ? arena->free_nodes : NULL; f; f = f->next)
+            out->free_slots++;
+    }
+}
 static void node_free(HDoc *d, HNode *n)
 {
     d = h_meta(n)->allocation_owner;

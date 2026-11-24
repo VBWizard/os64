@@ -13296,6 +13296,80 @@ static void schedule_cost_cases(void)
     s_animations = was_run;
 }
 
+/* WHERE EVERY NODE IS (os64_html_census, flow_census; yonder's `nodes`
+ * lines): a subtree removed while something holds it is detached and held,
+ * and the change log holds a removal until every reader has passed it (the
+ * cascade's among them), so let go by its holder it is held still, until a
+ * script's rebuild has its readers pass it; it then waits to be collected,
+ * and what keeps it past a whole layout is printed beside what is still
+ * held. Then what a layout costs over a hidden
+ * subtree of 200, 2,000 and 20,000 paragraphs, printed: the cascade holds
+ * every one. */
+static void node_census_cases(void)
+{
+    char html[4096];
+    size_t at = (size_t)snprintf(html, sizeof(html), "<!doctype html><div id=box><div id=a>");
+    for (int i = 0; i < 50; i++)
+        at += (size_t)snprintf(html + at, sizeof(html) - at, "<p>x</p>");
+    snprintf(html + at, sizeof(html) - at, "</div></div><div style=display:none><p>h</p></div>");
+    probe_page(html, false);
+    relayout(true);
+    g.page.model_version = g.page.rendered_version = os64_html_version(g.page.way.doc);
+    os64_html_census_t c;
+    flow_census_t f;
+    os64_html_census(g.page.way.doc, &c);
+    flow_census(g.page.tree, &f);
+    check(c.nodes.held == 0 && c.nodes.pinned == 0 && c.nodes.connected == 110 && f.none == 2 && f.under_none == 1 &&
+              f.boxed == 54,
+          "census: a page at rest holds nothing detached; the head and one element hidden, one inside it");
+    os64_html_node_t *a = (os64_html_node_t *)probe_id("a");
+    os64_html_hold(g.page.way.doc, a);
+    check(os64_html_remove(g.page.way.doc, a) == OS64_HTML_OK, "census: the subtree removed");
+    os64_html_census(g.page.way.doc, &c);
+    check(c.nodes.held == 101 && c.elements.held == 51, "census: removed and held, its 101 nodes are held");
+    os64_html_release(g.page.way.doc, a);
+    os64_html_census(g.page.way.doc, &c);
+    check(c.nodes.held == 101 && os64_html_changes_bytes(g.page.way.doc) > 0,
+          "census: let go, the change log holds the removal until its readers pass it");
+    size_t live = g.page.way.doc->node_count;
+    script_rebuild();
+    os64_html_census(g.page.way.doc, &c);
+    check(c.nodes.held == 0 && c.nodes.pinned == 101,
+          "census: a script's rebuild has its readers pass it, and it waits to be collected");
+    flow_tree_t *was = g.page.tree;
+    g.page.model_version = g.page.rendered_version = 0;
+    relayout(true);
+    os64_html_census(g.page.way.doc, &c);
+    // Who keeps the pin past a whole layout is the holders' question
+    // (the cascade renews its own at each update): printed, not judged.
+    printf("  census: after a whole layout, held %lu, waiting to be collected %lu, live %lu (was %lu), tree %s, retired %lu bytes\n",
+           (unsigned long)c.nodes.held, (unsigned long)c.nodes.pinned, (unsigned long)g.page.way.doc->node_count,
+           (unsigned long)live, g.page.tree == was ? "the same" : "new",
+           (unsigned long)os64_html_retired_bytes(g.page.way.doc));
+    probe_drop();
+    // What a layout costs over a hidden subtree of n paragraphs, a class
+    // turned on the body before each.
+    for (int32_t n = 200; n <= 20000; n *= 10) {
+        size_t cap = (size_t)n * 10 + 256, k = 0;
+        char *big = os64_malloc(cap);
+        k += (size_t)snprintf(big + k, cap - k, "<!doctype html><style>.on p{color:red}</style><p>shown</p><div style=display:none>");
+        for (int32_t i = 0; i < n; i++)
+            k += (size_t)snprintf(big + k, cap - k, "<p>x</p>");
+        snprintf(big + k, cap - k, "</div>");
+        probe_page(big, false);
+        os64_free(big);
+        relayout(true);
+        double began = hover_seconds();
+        for (int i = 0; i < 10; i++) {
+            os64_html_set_attr(g.page.way.doc, g.page.way.doc->body, "class", i % 2 ? "on" : "off", i % 2 ? 2 : 3);
+            relayout(true);
+        }
+        printf("  census: a layout over a hidden subtree of %d paragraphs, %.2f ms\n", (int)n,
+               (hover_seconds() - began) * 1000 / 10);
+        probe_drop();
+    }
+}
+
 /* THE LOOP'S FAIRNESS (task_order.h, ordinary_task): a video playing
  * while every turn takes 300 ms keeps a media event always ready, since
  * each turn is past timeupdate's 250 ms. A timer must still run, the old
@@ -13445,6 +13519,11 @@ int main(void)
         printf("yonder schedule: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
+    if(getenv("YONDER_CENSUS_ONLY")) {
+        node_census_cases();
+        printf("yonder census: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_FAIRNESS_ONLY")) {
         fairness_cases();
         os64_text_font_release(probe_font);
@@ -13478,6 +13557,7 @@ int main(void)
     stand_in_paint_cases();
     canvas_window_cases();
     schedule_cost_cases();
+    node_census_cases();
     fairness_cases();
     media_failure_cases();
     layout_profile_cases();

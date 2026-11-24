@@ -2839,6 +2839,42 @@ uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flo
     return motion_due(tree, view, scroll, true);
 }
 
+static bool drawn_by(const flow_tree_t *tree, const os64_html_node_t *n, const os64_html_node_t **out);
+
+void flow_census(const flow_tree_t *tree, flow_census_t *out)
+{
+    *out = (flow_census_t){0};
+    if (tree == NULL || tree->styles == NULL)
+        return;
+    const os64_html_document_t *doc = tree_doc(tree);
+    const os64_html_node_t *top = os64_html_document_element(doc);
+    for (const os64_html_node_t *n = top; n != NULL;) {
+        if (n->kind != OS64_HTML_ELEMENT) {
+            n = flat_after(doc, top, n, true);
+            continue;
+        }
+        if (f_map_get(&tree->first, n) != NULL) {
+            out->boxed++;
+            n = flat_after(doc, top, n, true);
+            continue;
+        }
+        const FStyled *st = f_style_of(tree->styles, n);
+        if (st != NULL && st->style.display == FLOW_DISPLAY_NONE) {
+            out->none++;
+            for (const os64_html_node_t *k = os64_html_flat_first_child(doc, n); k != NULL; k = flat_after(doc, n, k, true))
+                out->under_none += k->kind == OS64_HTML_ELEMENT;
+            n = flat_after(doc, top, n, false);
+            continue;
+        }
+        const os64_html_node_t *by;
+        if (drawn_by(tree, n, &by) && by != NULL)
+            out->drawn++;
+        else
+            out->other++;
+        n = flat_after(doc, top, n, true);
+    }
+}
+
 bool flow_incomplete(const flow_tree_t *tree)
 {
     return tree != NULL && tree->incomplete;

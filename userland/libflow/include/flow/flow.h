@@ -1647,6 +1647,19 @@ const os64_page_t *flow_model(const flow_tree_t *tree);
 int32_t flow_height(const flow_tree_t *tree);
 int32_t flow_width(const flow_tree_t *tree);
 bool flow_incomplete(const flow_tree_t *tree);
+// The document's elements in the flat tree as the tree laid them out, for a
+// record of where a page's elements go: those with a box of their own;
+// those without one, by why: `display: none` on themselves, inside an
+// element that is, drawn by a replaced box an ancestor makes (an inline
+// svg's shapes, a select's options), or none of those (`display: contents`;
+// svg another svg may draw by reference — a definition, a symbol, a paint
+// server, a clip, a mask, a marker, a filter — or one in an svg that draws
+// nothing; and what the tree did not reach). A walk of the document, for a
+// record.
+typedef struct {
+    size_t boxed, none, under_none, drawn, other;
+} flow_census_t;
+void flow_census(const flow_tree_t *tree, flow_census_t *out);
 
 // ── Animations (PILE3.md § Animations) ──────────────────────────────────
 //
