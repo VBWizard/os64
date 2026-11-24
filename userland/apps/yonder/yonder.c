@@ -3193,11 +3193,13 @@ static os64_gui_rect_t s_parts_reach;
 // second's own rebuild or tick included), for a check that differs: a
 // stale part is one the change that made it did not mark, and that change
 // may be any of these, not only the one the check came after. Rebuilds by
-// verdict (change_said) and those made current with no layout
-// (rebuild_unchanged), ticks and those that marked nothing, the parts
-// marked by what marked them (mark_part) and the whole view's marks by
-// what (mark_whole). The check's own pixel (`s_damage_marking`) is not
-// counted.
+// verdict (change_said, and one whose layout ran out of memory as whole)
+// and those made current with no layout (rebuild_unchanged), ticks and
+// those that marked nothing, the parts yonder marked by what marked them
+// (mark_part) and the whole view's marks by what (mark_whole). What libui
+// marks itself (a hover, a focus) and a backdrop's widening of a mark
+// (backdrop_damage) are not counted, and neither is the check's own pixel
+// (`s_damage_marking`).
 static struct {
     uint32_t rebuilt_parts, rebuilt_nothing, rebuilt_whole, advanced;
     uint32_t ticks, ticks_unmarked;
@@ -13396,8 +13398,10 @@ static bool html_base(const os64_html_node_t *n)
 static const char *s_change_said = "";
 
 // What the change log held from `entry` on, in words, into `out`: the
-// first CHANGE_LOG_SAID entries by kind and element (a text node's by its
-// parent), then how many more.
+// first CHANGE_LOG_SAID entries by kind and element (a node that is no
+// element by the nearest element round it, a shadow root's host
+// included; an attribute's name to its first 48 bytes, so that the first
+// entry fits the room s_change.log gives it), then how many more.
 #define CHANGE_LOG_SAID 4
 static void change_log_said(char *out, size_t cap, const os64_html_change_entry_t *entry)
 {
@@ -13411,7 +13415,7 @@ static void change_log_said(char *out, size_t cap, const os64_html_change_entry_
         }
         const os64_html_node_t *n = entry->target;
         while (n != NULL && n->kind != OS64_HTML_ELEMENT)
-            n = n->parent;
+            n = os64_html_shadow_including_parent(n);
         char named[64] = "the document";
         if (n != NULL)
             element_named(named, sizeof(named), "", n);
@@ -13419,7 +13423,7 @@ static void change_log_said(char *out, size_t cap, const os64_html_change_entry_
                     ? os64_snprintf(out + at, cap - at, "%schildren of %s (%lu in, %lu out)", told ? "; " : "", named,
                                     (unsigned long)entry->nadded, (unsigned long)entry->nremoved)
                 : entry->kind == OS64_HTML_CHANGE_ATTR
-                    ? os64_snprintf(out + at, cap - at, "%sattribute %s of %s", told ? "; " : "",
+                    ? os64_snprintf(out + at, cap - at, "%sattribute %.48s of %s", told ? "; " : "",
                                     entry->attr_name != NULL ? entry->attr_name : "?", named)
                 : entry->kind == OS64_HTML_CHANGE_TEXT
                     ? os64_snprintf(out + at, cap - at, "%stext in %s", told ? "; " : "", named)
@@ -13872,6 +13876,7 @@ static bool script_rebuild(void)
                 ? "Out of memory laying out the changed page; this is the last layout that fit."
                 : "Out of memory laying out the changed page.");
             forms_build();
+            s_damage_since.rebuilt_whole++;
             mark_whole(WHOLE_SCRIPT, false);
             return false;
         }
@@ -20743,35 +20748,42 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
 }
 
 // What the shown tree paints at page point (`x`, `y`), for a check that
-// differs: the elements of the last two painted boxes in the tree's order
-// whose rects hold it (the deepest, or the later of two siblings), named
-// into `out`, the later first.
+// differs: the element of the deepest painted box whose rect holds it (of
+// two as deep, the later in the tree's order), and the nearest other
+// element its box is in, named into `out`.
 static void damage_painted_at(char *out, size_t cap, int32_t x, int32_t y)
 {
-    const os64_html_node_t *hit[2] = {NULL, NULL};
+    const flow_box_t *deepest = NULL;
+    int32_t depth = 0, most = -1;
     flow_point_t scroll = scroll_now();
     for (const flow_box_t *b = flow_root(g.page.tree); b != NULL;) {
-        const os64_html_node_t *e = box_element(b);
         os64_gui_rect_t r = flow_box_doc_rect(b, scroll);
-        if (!b->unpainted && e != NULL && e != hit[1] && x >= r.x && y >= r.y && (int64_t)x < (int64_t)r.x + r.w &&
-            (int64_t)y < (int64_t)r.y + r.h) {
-            hit[0] = hit[1];
-            hit[1] = e;
+        if (!b->unpainted && box_element(b) != NULL && depth >= most && x >= r.x && y >= r.y &&
+            (int64_t)x < (int64_t)r.x + r.w && (int64_t)y < (int64_t)r.y + r.h) {
+            deepest = b;
+            most = depth;
         }
         if (b->first != NULL) {
             b = b->first;
+            depth++;
             continue;
         }
-        while (b != NULL && b->next == NULL)
+        while (b != NULL && b->next == NULL) {
             b = b->parent;
+            depth--;
+        }
         b = b != NULL ? b->next : NULL;
     }
-    char later[96] = "nothing", earlier[96] = "";
-    if (hit[1] != NULL)
-        element_named(later, sizeof(later), "", hit[1]);
-    if (hit[0] != NULL)
-        element_named(earlier, sizeof(earlier), " in or after ", hit[0]);
-    os64_snprintf(out, cap, "%s%s", later, earlier);
+    const os64_html_node_t *e = deepest != NULL ? box_element(deepest) : NULL, *round = NULL;
+    for (const flow_box_t *a = deepest; a != NULL && round == NULL; a = a->parent)
+        if (box_element(a) != e)
+            round = box_element(a);
+    char at[96] = "nothing", in[96] = "";
+    if (e != NULL)
+        element_named(at, sizeof(at), "", e);
+    if (round != NULL)
+        element_named(in, sizeof(in), " in ", round);
+    os64_snprintf(out, cap, "%s%s", at, in);
 }
 
 // What changed the view since the last check (s_damage_since), in words,
@@ -20896,7 +20908,15 @@ static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bou
                           s_damage_after, (long)differ, (int)reach.x, (int)reach.y, (int)reach.w, (int)reach.h,
                           (long)fx, (long)fy, (unsigned)held, (unsigned)paints, painted, since);
             yonder_diag_failed_seen(g.page.diag, "damage check", line);
-            os64_debug_log(line);
+            // The kernel's log keeps 256 bytes of a line (log.h's
+            // MAX_LOG_MESSAGE_SIZE), so this one goes to it in pieces.
+            size_t length = os64_strlen(line), pieces = (length + 199) / 200;
+            for (size_t k = 0; k < pieces; k++) {
+                char piece[240];
+                os64_snprintf(piece, sizeof(piece), "damage check %lu/%lu: %.200s", (unsigned long)(k + 1),
+                              (unsigned long)pieces, line + k * 200);
+                os64_debug_log(piece);
+            }
         }
     }
     // Each check counts what changed the view from the last.
@@ -20930,8 +20950,13 @@ static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx)
     if (!s_damage_due)
         return;
     s_damage_due = false;
-    if (g.page.tree == NULL || g.paint_cache == NULL || g.paint_scratch == NULL)
+    // With nothing to paint the view from, the check is one that could not
+    // be compared, and the next counts what changed from here.
+    if (g.page.tree == NULL || g.paint_cache == NULL || g.paint_scratch == NULL) {
+        s_damage_uncompared++;
+        os64_memset(&s_damage_since, 0, sizeof(s_damage_since));
         return;
+    }
     GlassGroups groups = {.depth = 0};
     Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, w->bounds, &groups, w->bounds};
     GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false, {0}, 0};

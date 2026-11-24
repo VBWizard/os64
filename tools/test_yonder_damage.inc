@@ -537,19 +537,34 @@ static void damage_cases(void)
         audit_keep = true;
         DamageSaid said = damage_step();
         audit_keep = false;
+        bool short_pieces = strstr(audit_lines, "damage check 1/") != NULL;
+        for (const char *l = audit_lines; *l != '\0';) {
+            const char *end = strchr(l, '\n');
+            size_t n = end != NULL ? (size_t)(end - l) : strlen(l);
+            short_pieces = short_pieces && n < 256;
+            l += n + (end != NULL);
+        }
+        check(short_pieces, "damage: the kernel's log gets the line in pieces it keeps whole");
+        /* The record holds the whole line (the kernel's log gets it in
+         * pieces). */
+        static char record[1 << 18];
+        yonder_diag_render(g.page.diag, record, sizeof(record));
+        const char *failed_line = strstr(record, "FAILED damage check: ");
+        if (failed_line == NULL)
+            failed_line = "";
         char expect_at[160];
         snprintf(expect_at, sizeof(expect_at), "1 pixels in %d,%d 1x1, first %d,%d (held #123456, the page paints #%06x",
                  (int)(box.x + 2), (int)(box.y + 2), (int)(box.x + 2), (int)(box.y + 2), (unsigned)(was & 0xffffffu));
         bool ok = said.differed == 1 && os64_streq(said.said, "nothing to paint") &&
-                  strstr(audit_lines, "after a rebuild that marked nothing (") != NULL &&
-                  strstr(audit_lines, "; the change log: attribute data-v of div#meter)") != NULL &&
-                  strstr(audit_lines, expect_at) != NULL && strstr(audit_lines, ", at div#box") != NULL &&
-                  strstr(audit_lines, "); since the last check: 3 rebuilds (1 nothing to paint, 0 in parts, 2 whole)") !=
+                  strstr(failed_line, "after a rebuild that marked nothing (") != NULL &&
+                  strstr(failed_line, "; the change log: attribute data-v of div#meter)") != NULL &&
+                  strstr(failed_line, expect_at) != NULL && strstr(failed_line, ", at div#box.on in body#bd)") != NULL &&
+                  strstr(failed_line, "); since the last check: 3 rebuilds (1 nothing to paint, 0 in parts, 2 whole)") !=
                       NULL &&
-                  strstr(audit_lines, "; the whole view by scripts' changes 2") != NULL;
+                  strstr(failed_line, "; the whole view by scripts' changes 2") != NULL;
         check(ok, "damage: a check that differs says the rebuild's way and change log, the pixel, and what changed");
         if (!ok)
-            printf("  differed %lu, said %s: %s\n", (unsigned long)said.differed, said.said, audit_lines);
+            printf("  differed %lu, said %s: %s\n", (unsigned long)said.differed, said.said, failed_line);
         check(*px == was, "damage: the check's whole paint stays");
         damage_attr("meter", "data-v", "4");
         damage_expect("damage: after a check that differed, the next agrees", damage_step(), "nothing to paint");

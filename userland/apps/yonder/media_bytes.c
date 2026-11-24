@@ -287,9 +287,11 @@ static bool begins(const uint8_t *b, size_t n, const char *sig, size_t len)
 
 const char *yonder_media_first_bytes_name(const uint8_t *b, size_t n)
 {
-    // ISO BMFF (ISO/IEC 14496-12 § 4.2): a box's 32-bit size, then its
-    // four-letter type. A whole file starts with ftyp; a segment of a
-    // segmented one (DASH, CMAF) with styp, sidx, moof or emsg.
+    // ISO BMFF (ISO/IEC 14496-12 § 4.2): a box's 32-bit size — 0 for one
+    // that runs to the file's end, 1 for one whose size follows as 64 bits,
+    // else at least its own 8 bytes — then its four-letter type. A whole
+    // file starts with ftyp; a segment of a segmented one (DASH, CMAF) with
+    // styp, sidx, moof or emsg.
     static const char *const kBoxes[][2] = {
         {"ftyp", "an MP4 box ftyp"}, {"styp", "an MP4 box styp (a segment)"},
         {"moof", "an MP4 box moof (a fragment)"}, {"sidx", "an MP4 box sidx (a segment index)"},
@@ -298,7 +300,7 @@ const char *yonder_media_first_bytes_name(const uint8_t *b, size_t n)
         {"wide", "an MP4 box wide"}};
     if (n >= 8) {
         uint32_t size = (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3];
-        for (size_t i = 0; (size == 1 || size >= 8) && i < sizeof(kBoxes) / sizeof(kBoxes[0]); i++)
+        for (size_t i = 0; (size <= 1 || size >= 8) && i < sizeof(kBoxes) / sizeof(kBoxes[0]); i++)
             if (begins(b + 4, n - 4, kBoxes[i][0], 4))
                 return kBoxes[i][1];
     }
@@ -316,19 +318,20 @@ const char *yonder_media_first_bytes_name(const uint8_t *b, size_t n)
         return "an ADTS frame (AAC)";
     if (n >= 2 && b[0] == 0xff && (b[1] & 0xe0) == 0xe0)
         return "an MPEG audio frame";
-    if (n >= 1 && b[0] == 0x47)
-        return "0x47, an MPEG transport stream's sync byte";
     // Text: every byte printable ASCII or white space, the first that is
-    // not white space telling markup and JSON apart.
+    // not white space telling markup and JSON apart. Before the transport
+    // stream, whose sync byte is a `G`.
     size_t i = 0;
     while (i < n && (b[i] == ' ' || b[i] == '\t' || b[i] == '\r' || b[i] == '\n'))
         i++;
     bool text = n > 0;
     for (size_t k = 0; k < n && text; k++)
         text = (b[k] >= 0x20 && b[k] < 0x7f) || b[k] == '\t' || b[k] == '\r' || b[k] == '\n';
-    if (!text || i == n)
-        return NULL;
-    return b[i] == '<' ? "markup (HTML or XML)" : b[i] == '{' || b[i] == '[' ? "text like JSON" : "text";
+    if (text && i < n)
+        return b[i] == '<' ? "markup (HTML or XML)" : b[i] == '{' || b[i] == '[' ? "text like JSON" : "text";
+    if (n >= 1 && b[0] == 0x47 && !text)
+        return "0x47, an MPEG transport stream's sync byte";
+    return NULL;
 }
 
 void yonder_media_failure_text(const yonder_media_failure_t *f, char *out, size_t cap)
