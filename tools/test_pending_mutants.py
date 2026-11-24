@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to N2, a read that asks for what it reads
 (BRIEF_LAYOUT_NEEDS.md N2): libhtml's merged change log (dom.c, log_merge),
-libgarb's inline diff and its style-attribute switch (cascade.c, select.c),
+libgarb's inline diff, its style-attribute switch and its advance (cascade.c, select.c),
 libflow's pending verdict and its table (pending.inc), libdom's need
 (geometry.c, view.c) and yonder's reads and covered windows (yonder.c),
 each against the suites that can see it: a mutant is CAUGHT when they fail,
@@ -95,10 +95,10 @@ mutants = [
      '            // A positioned box is a containing block for absolute ones\n            // whatever its transform says; fixed ones need the transform.\n            if (0 && !none && pending_holds_out_of_flow(tree, el, s->position != FLOW_POSITION_STATIC))',
      [FLOW, GRAFT]),
     ('fixed-only-for-the-positioned-ignored', PENDING,
-     '            if (!none && pending_holds_out_of_flow(tree, el, s->position != FLOW_POSITION_STATIC))\n                return FLOW_PENDING_RESTYLE;\n            break;\n        case PENDING_FILTER:',
-     '            if (!none && pending_holds_out_of_flow(tree, el, false))\n                return FLOW_PENDING_RESTYLE;\n            break;\n        case PENDING_FILTER:',
+     '            if (!none && pending_holds_out_of_flow(tree, el, s->position != FLOW_POSITION_STATIC))\n                return pending_restyle(why, cap, "out of flow inside");\n            break;\n        case PENDING_FILTER:',
+     '            if (!none && pending_holds_out_of_flow(tree, el, false))\n                return pending_restyle(why, cap, "out of flow inside");\n            break;\n        case PENDING_FILTER:',
      [FLOW, GRAFT]),
-    ('css-wide-keywords-admitted', PENDING, '            os64_streq(c->keyword, "revert-layer"))\n            return FLOW_PENDING_RESTYLE;',
+    ('css-wide-keywords-admitted', PENDING, '            os64_streq(c->keyword, "revert-layer"))\n            return pending_restyle(why, cap, "a CSS-wide keyword");',
      '            os64_streq(c->keyword, "revert-layer"))\n            (void)0;', [FLOW, GRAFT]),
     ('lost-reads-as-nothing-pending', PENDING, '        if (n < 0) {\n            tree->pending_verdict = FLOW_PENDING_RESTYLE;',
      '        if (n < 0) {\n            (void)0;', [FLOW, GRAFT]),
@@ -118,6 +118,51 @@ mutants = [
     ('transforms-not-said', PENDING, '            tree->pending_transforms = true;\n            if (none ? f_transformed(s)',
      '            (void)0;\n            if (none ? f_transformed(s)', [FLOW, GRAFT, SCRIPTS]),
     ('not-current-after-a-kept-restyle', RESTYLE, '        pending_open(tree);', '        (void)0;', [FLOW, GRAFT]),
+    # NONE advanced with no layout (flow_pending_advance, garb_cascade_advance,
+    # yonder's rebuild_unchanged): the fixture `unchanged` and the walk's
+    # `unchanged check` see these, each with the suites that can.
+    ('advance-sees-no-importance', CASCADE,
+     '    return a->len == b->len && os64_memcmp(a->name, b->name, a->len) == 0 && a->important == b->important &&',
+     '    return a->len == b->len && os64_memcmp(a->name, b->name, a->len) == 0 &&', [SCRIPTS]),
+    ('advance-under-a-style-reader', PENDING, '            bool read = style && garb_cascade_style_may_read(cascade, e->target);',
+     '            bool read = false;', [SCRIPTS]),
+    ('advance-past-paint', PENDING, '    if (pending.verdict != FLOW_PENDING_NONE)\n        return false;\n    uint64_t version',
+     '    if (pending.verdict == FLOW_PENDING_RESTYLE)\n        return false;\n    uint64_t version', [GRAFT, SCRIPTS]),
+    ('advance-tree-version-kept', PENDING, '    tree->pending_version = version;\n    return true;\n}',
+     '    return true;\n}', [GRAFT, SCRIPTS]),
+    ('advance-cascade-version-kept', CASCADE, '    c->version = version; c->update_failed = false;\n    return true;',
+     '    c->update_failed = false;\n    return true;', [GARB, SCRIPTS]),
+    ('advance-takes-any-change', CASCADE, '        if (!s || !s->placed) { c->refusal = GARB_UPDATE_ADVANCE; return false; }',
+     '        (void)s;', [GARB]),
+    ('advance-takes-a-lost-log', CASCADE,
+     '    c->update_failed = true;\n    if (count < 0) { c->refusal = GARB_UPDATE_HISTORY; return false; }\n    for (const os64_html_change_entry_t *e = changes; e; e = e->next) {\n        const Slot *s',
+     '    c->update_failed = true;\n    if (0 && count < 0) { c->refusal = GARB_UPDATE_HISTORY; return false; }\n    for (const os64_html_change_entry_t *e = changes; e; e = e->next) {\n        const Slot *s', [GARB]),
+    ('advance-not-asked', YONDER, '    if (version != p->rendered_version && !rebuild_unchanged(p)) {',
+     '    if (version != p->rendered_version && !(0 && rebuild_unchanged(p))) {', [SCRIPTS]),
+    ('advance-in-the-read-check', YONDER, '    if (p != &g.page || s_read_checking || !shown_advance())',
+     '    if (p != &g.page || !shown_advance())', [SCRIPTS]),
+    ('forced-counts-the-read-check', YONDER, '    return s_lt_why == YONDER_LT_WHY_READ && !s_read_checking;',
+     '    return s_lt_why == YONDER_LT_WHY_READ;', [SCRIPTS]),
+    ('forced-longest-not-kept', YONDER, '        s_cost.task_longest_phases = s_task_phases;', '        (void)0;', [SCRIPTS]),
+    ('forced-task-not-started-again', YONDER, '    s_task_phases = (forced_phases_t){0};', '    (void)0;', [SCRIPTS]),
+    ('text-rects-ask-as-a-step', YONDER, '            bool ready = script_current(width, height, READ_RECTS);',
+     '            bool ready = script_current(width, height, -1);', [SCRIPTS]),
+    ('advance-rendered-version-kept', YONDER, '    if (advanced)\n        p->rendered_version = os64_html_version(page_doc(p));',
+     '    if (advanced)\n        (void)0;', [SCRIPTS]),
+    ('advance-with-kept-reads-off', YONDER, '    if (shown_moved() != NULL)\n        return false;\n    flow_pending_t judged;',
+     '    flow_pending_t judged;', [SCRIPTS]),
+    ('advance-not-checked', YONDER, '        tree_checked(p, p->laid_width, &env, "an advanced tree", "unchanged check", &s_unchanged_compared,',
+     '        if (0) tree_checked(p, p->laid_width, &env, "an advanced tree", "unchanged check", &s_unchanged_compared,', [SCRIPTS]),
+    # The profile's forced layouts (ASK 1), and the `layout needed` line's.
+    ('forced-by-the-ledger', YONDER, '            int forced = read_asked();',
+     '            int forced = yonder_scripts_ledger_running(page_scripts(p));', [SCRIPTS]),
+    ('forced-phases-not-counted', YONDER, '    forced_phases_add(&s_cost.forced_phases, one);', '    (void)one;', [SCRIPTS]),
+    ('forced-models-not-counted', YONDER, '    s_cost.forced_phases.models++;', '    (void)0;', [SCRIPTS]),
+    ('forced-asker-only-with-the-timeline', YONDER, '    if ((s_lt.on || s_layout_profile) && was == YONDER_LT_WHY_OTHER)',
+     '    if (s_lt.on && was == YONDER_LT_WHY_OTHER)', [SCRIPTS]),
+    ('style-write-detail-not-said', PENDING,
+     '                    os64_snprintf(tree->pending_why, sizeof(tree->pending_why), "restyle: a style write: %s", judged);',
+     '                    os64_strcopy(tree->pending_why, sizeof(tree->pending_why), "restyle: a style write");', [GRAFT]),
     # What a read takes (libdom) and who answers it (yonder).
     ('scroll-reads-ask-for-boxes', GEOMETRY,
      '                                  : magic == G_SCROLL_LEFT || magic == G_SCROLL_TOP ? OS64_DOM_NEED_REACH',
@@ -141,6 +186,9 @@ mutants = [
 ]
 
 # Not run, because no host case can tell:
+# - forced_one's `cascaded` test: a layout a read asked for that stops before
+#   its cascade (no memory for one, or for its scopes), which the hosts do
+#   not reach.
 # - `p->laid_state` against the form state's version (shown_pending): no page
 #   in the hosts has a control whose state moves a box, and the guard follows
 #   the graft's own source test, which carries the same version.
