@@ -96,12 +96,24 @@ typedef struct {
     const char *format;         // the container libmedia read it as
     const char *sound, *picture;    // the codecs it named
     bool sound_unplayable, picture_unplayable;
+    const uint8_t *first;       // the last request's first bytes, `nfirst` of them
+    size_t nfirst;
 } yonder_media_failure_t;
+
+// How many of a request's first bytes a failure's record keeps.
+#define YONDER_MEDIA_FIRST_BYTES 16
+
+// What a body's first bytes look like, by the signature they begin with:
+// "an MP4 box styp", "EBML (WebM or Matroska)", "text", ...; NULL for
+// none known.
+const char *yonder_media_first_bytes_name(const uint8_t *b, size_t n);
 
 // The failure in words, into `out` (cut short to fit, always ended):
 // `video 2, not supported: The server answered 403 (HTTP 403, text/html,
-// 0 bytes received, the first request)`, and after a `;` what libmedia
-// said, when it is not the reason, and what it named.
+// 0 bytes received, the first request)`, a fetch's first bytes in hex and
+// what they look like (yonder_media_first_bytes_name) when any came, and
+// after a `;` what libmedia said, when it is not the reason, and what it
+// named.
 void yonder_media_failure_text(const yonder_media_failure_t *f, char *out, size_t cap);
 
 #endif

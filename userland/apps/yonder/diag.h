@@ -249,12 +249,13 @@ void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value);
 // takes a place in the other.
 #define YONDER_DIAG_HEAD_FACTS 24
 void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value);
-// The same line, for a reading a `d` keeps (its paint, its script ledger,
-// what its layouts needed): a reading comes after the page has set its
-// other lines, so a page whose scripts and faces fill the ordinary room
-// would lose every one. They have a room of their own,
-// YONDER_DIAG_READING_FACTS, room for a page's first few dozen readings.
-#define YONDER_DIAG_READING_FACTS 64
+// The same line, for a reading the reading chord keeps (its paint, its
+// script ledger, where the thread went, what its layouts needed): a reading
+// comes after the page has set its other lines, so a page whose scripts and
+// faces fill the ordinary room would lose every one. They have a room of
+// their own, YONDER_DIAG_READING_FACTS, room for about a dozen readings
+// with every line the layout profile adds to each.
+#define YONDER_DIAG_READING_FACTS 192
 void yonder_diag_reading_fact(yonder_diag_t *d, const char *key, const char *value);
 // The same line, for the load's timeline (load_timeline.h), written whole
 // at each write of the record, and for --cascade-check's count of kept

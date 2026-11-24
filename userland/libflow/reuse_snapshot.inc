@@ -155,9 +155,9 @@ static bool reuse_attr_styled_only(const os64_html_change_entry_t *e)
 // before a removal, and one to a node that has since come in was one before
 // an insertion: either way the page's own change is in the log. NULL is
 // taken as in it.
-static bool reuse_in_page(const FReuseSnapshot *r, const os64_html_node_t *n)
+static bool reuse_in_page(const os64_html_document_t *doc, const os64_html_node_t *n)
 {
-    return n == NULL || os64_html_shadow_including_root(n) == r->doc->document;
+    return n == NULL || os64_html_shadow_including_root(n) == doc->document;
 }
 
 // The element a change at `n` is told at: `n` or its nearest flat-tree
@@ -174,6 +174,19 @@ static const os64_html_node_t *reuse_told_at(const FReuseSnapshot *r, const os64
     return NULL;
 }
 
+// An element's custom state is the cascade's to read; a STATE change on a
+// document or a shadow root is its adopted sheets. An attribute is
+// structural unless only the cascade reads it. None is, to a node outside
+// the page (reuse_in_page).
+bool flow_change_structural(const os64_html_document_t *doc, const os64_html_change_entry_t *entry)
+{
+    return (entry->kind == OS64_HTML_CHANGE_CHILDREN || entry->kind == OS64_HTML_CHANGE_TEXT ||
+            (entry->kind == OS64_HTML_CHANGE_STATE && entry->target != NULL &&
+             entry->target->kind != OS64_HTML_ELEMENT) ||
+            (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry))) &&
+           reuse_in_page(doc, entry->target);
+}
+
 static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
 {
     if (r->lost) return false;
@@ -186,15 +199,7 @@ static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
     }
     bool shadows = os64_html_has_shadow_roots(r->doc);
     for (; entry; entry = entry->next) {
-        // An element's custom state is the cascade's to read; a STATE change
-        // on a document or a shadow root is its adopted sheets. An attribute
-        // is structural unless only the cascade reads it. None is, to a node
-        // outside the page (reuse_in_page).
-        if ((entry->kind == OS64_HTML_CHANGE_CHILDREN || entry->kind == OS64_HTML_CHANGE_TEXT ||
-             (entry->kind == OS64_HTML_CHANGE_STATE && entry->target != NULL &&
-              entry->target->kind != OS64_HTML_ELEMENT) ||
-             (entry->kind == OS64_HTML_CHANGE_ATTR && !reuse_attr_styled_only(entry))) &&
-            reuse_in_page(r, entry->target)) {
+        if (flow_change_structural(r->doc, entry)) {
             if (!r->structural) {
                 r->structural_at = reuse_told_at(r, entry->target);
                 const char *what = entry->kind == OS64_HTML_CHANGE_CHILDREN ? "children"

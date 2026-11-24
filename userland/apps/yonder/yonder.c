@@ -54,6 +54,7 @@
 #include "player.h"
 #include "keep.h"
 #include "load_timeline.h"
+#include "thread_reading.h"
 #include "picture.h"
 #include "svg.h"
 #include "webfont.h"
@@ -1524,6 +1525,11 @@ static struct {
     int32_t n;
     bool over, kept;
     int32_t kept_parts;
+    // The kept restyle's kind (a flow_restyle_kind_t), and, while
+    // `--damage-check` is on, what the change log held (change_log_said),
+    // for a check's line.
+    int32_t kept_kind;
+    char log[320];
     // A reader of the change log opened at the shown tree's version before
     // the layout, which holds the log there: a kept restyle opens the
     // tree's own reader again at the new version, after which the log need
@@ -1809,13 +1815,19 @@ static struct {
     uint64_t updates, update_held, update_us, fresh, fresh_held, fresh_us;
     uint64_t models, model_nodes, model_us;
 } s_sizes_reading;
+// The thread reading's clock while it runs (0 while it does not), and `in`
+// from `from` (tr_now's) to now inside the step under way (s_tr).
+static uint64_t tr_now(void);
+static void tr_inside(yonder_tr_in_t in, uint64_t from);
 static bool page_records_shown(const Page *p);
 static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
 {
     bool enabled = s_layout_profile && layout_profile_diag(p);
     int64_t began = enabled ? os64_micros() : -1;
+    uint64_t tr_from = tr_now();
     os64_page_t *model = os64_page_rebuild(old);
     layout_model_rebased(old, model);
+    tr_inside(YONDER_TR_IN_MODELS, tr_from);
     if (enabled) {
         yonder_layout_stats_t sample = {.model_calls = 1, .refusals = model == NULL};
         sample.model_us = layout_elapsed(began, &sample.clock_errors);
@@ -2195,6 +2207,85 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
     yonder_diag_summary_fact(diag, "layout kept, declined at", line);
 }
 
+// `offset writes` (N4's size, while the profile is on): of a script's
+// rebuilds, how many held an inline style write whose changed longhands
+// are all insets (garb_cascade_inline_changes, asked before the layout
+// updates the cascade), and of those how many held nothing a kept restyle
+// declines as structural (flow_change_structural) and how many held such a
+// change too, with what and where the latest was, for the record being
+// written (a new record starts them again). A box that only moves is kept
+// only when its rebuild holds no structural change.
+static void offsets_noted(const Page *p, uint64_t from)
+{
+    static uint64_t held, alone, beside;
+    static char latest[160];
+    static const yonder_diag_t *for_diag;
+    yonder_diag_t *diag = layout_profile_diag(p);
+    if (!s_layout_profile || diag == NULL || p->cascade == NULL)
+        return;
+    if (diag != for_diag) {
+        for_diag = diag;
+        held = alone = beside = 0;
+        latest[0] = '\0';
+    }
+    const os64_html_document_t *doc = page_doc(p);
+    os64_html_reader_t *reader = os64_html_reader_new((os64_html_document_t *)doc, from);
+    const os64_html_change_entry_t *entry = NULL;
+    if (reader == NULL || os64_html_changes(reader, &entry) < 0) {
+        os64_html_reader_free(reader);
+        return;
+    }
+    int32_t offsets = 0;
+    const os64_html_change_entry_t *structural = NULL;
+    for (; entry != NULL; entry = entry->next) {
+        if (flow_change_structural(doc, entry)) {
+            structural = entry;
+            continue;
+        }
+        if (entry->kind != OS64_HTML_CHANGE_ATTR || entry->attr_ns != NULL || entry->attr_name == NULL ||
+            !os64_streq(entry->attr_name, "style") || entry->target == NULL ||
+            entry->target->kind != OS64_HTML_ELEMENT)
+            continue;
+        garb_inline_change_t changes[16];
+        int32_t n = garb_cascade_inline_changes(p->cascade, entry->target, changes, 16);
+        bool insets = n > 0;
+        for (int32_t i = 0; i < n && insets; i++)
+            insets = changes[i].prop == GARB_TOP || changes[i].prop == GARB_RIGHT ||
+                     changes[i].prop == GARB_BOTTOM || changes[i].prop == GARB_LEFT;
+        offsets += insets;
+    }
+    if (offsets > 0) {
+        held++;
+        if (structural == NULL) {
+            alone++;
+        } else {
+            beside++;
+            const os64_html_node_t *n = structural->target;
+            while (n != NULL && n->kind != OS64_HTML_ELEMENT)
+                n = os64_html_shadow_including_parent(n);
+            char named[96] = "the document";
+            if (n != NULL)
+                element_named(named, sizeof(named), "", n);
+            os64_snprintf(latest, sizeof(latest), "%s%.48s at %s",
+                          structural->kind == OS64_HTML_CHANGE_CHILDREN ? "children"
+                          : structural->kind == OS64_HTML_CHANGE_TEXT   ? "text"
+                          : structural->kind == OS64_HTML_CHANGE_STATE  ? "adopted sheets"
+                                                                         : "attribute ",
+                          structural->kind == OS64_HTML_CHANGE_ATTR && structural->attr_name != NULL
+                              ? structural->attr_name : "",
+                          named);
+        }
+        char said[320];
+        os64_snprintf(said, sizeof(said),
+                      "%lu rebuilds held a style write that changed only insets: %lu with no structural change, "
+                      "%lu with one%s%s%s",
+                      (unsigned long)held, (unsigned long)alone, (unsigned long)beside,
+                      latest[0] != '\0' ? " (the latest: " : "", latest, latest[0] != '\0' ? ")" : "");
+        yonder_diag_summary_fact(diag, "offset writes", said);
+    }
+    os64_html_reader_free(reader);
+}
+
 // THE LOAD'S TIMELINE (load_timeline.h): the latest navigation's first
 // minutes, step by step, kept only while yonder.conf names a diagnostics
 // directory, and written to that navigation's record alone: the one begun
@@ -2206,6 +2297,15 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
 // changes' marks, a few counters a change, whether or not anyone reads
 // them.
 static yonder_lt_t s_lt;
+
+// WHERE THE THREAD WENT SINCE THE LAST READING (thread_reading.h): on while
+// yonder.conf names a diagnostics directory, which is where the readings
+// are written, and started again at each reading and each page shown
+// (tr_restart). Its clock is the counter (cycles). Off, each hook costs
+// the test of s_tr.on.
+static yonder_tr_t s_tr;
+static uint64_t s_tr_per_ms;    // the counter's rate when the reading began
+static const yonder_scripts_t *s_tr_host;  // whose collector it began counting
 
 // WHO ASKED for the layouts made between an lt_why_begin and its
 // lt_why_end (page_lay_out tells the timeline, and the profile counts as
@@ -3186,12 +3286,32 @@ typedef enum {
 static WholeBy s_whole_by;
 static os64_gui_rect_t s_parts_reach;
 
+// What changed the view from one `--damage-check` to the next (the
+// second's own rebuild or tick included), for a check that differs: a
+// stale part is one the change that made it did not mark, and that change
+// may be any of these, not only the one the check came after. Rebuilds by
+// verdict (change_said, and one whose layout ran out of memory as whole)
+// and those made current with no layout (rebuild_unchanged), ticks and
+// those that marked nothing, the parts yonder marked by what marked them
+// (mark_part) and the whole view's marks by what (mark_whole). What libui
+// marks itself (a hover, a focus) and a backdrop's widening of a mark
+// (backdrop_damage) are not counted, and neither is the check's own pixel
+// (`s_damage_marking`).
+static struct {
+    uint32_t rebuilt_parts, rebuilt_nothing, rebuilt_whole, advanced;
+    uint32_t ticks, ticks_unmarked;
+    uint32_t parts_tick, parts_video, parts_canvas, parts_other;
+    uint32_t whole[WHOLE_COUNT];
+} s_damage_since;
+static bool s_damage_marking;
+
 // The whole view marked for repainting, and by what (s_whole_by): `root`
 // marks the window's every widget, the view among them.
 static void mark_whole(WholeBy by, bool root)
 {
     if (!s_tick_marking)
         s_face_stamp++;
+    s_damage_since.whole[by]++;
     if (s_whole_by == WHOLE_PARTS)
         s_whole_by = by;
     os64_ui_mark_dirty(&g.ui, root ? &g.root : &g.view);
@@ -4389,6 +4509,65 @@ static uint64_t cycles_since(uint64_t from)
     return now - from;
 }
 
+static uint64_t tr_now(void)
+{
+    return s_tr.on ? cycles() : 0;
+}
+
+static void tr_inside(yonder_tr_in_t in, uint64_t from)
+{
+    if (s_tr.on)
+        yonder_tr_inside(&s_tr, in, cycles_since(from));
+}
+
+// The window loop makes `call` now (thread_reading.h's calls).
+static void tr_call(yonder_tr_call_t call)
+{
+    if (s_tr.on)
+        yonder_tr_call(&s_tr, call, (int64_t)cycles());
+}
+
+// The counter's ticks in a millisecond, from the counter and the clock since
+// yonder started: what the reading's lines turn ticks into time with.
+static uint64_t counter_per_ms(void)
+{
+    int64_t us = os64_micros() - s_started_us;
+    uint64_t ticks = os64_js_ledger_now() - s_started_cycles;
+    return us > 0 ? ticks * 1000 / (uint64_t)us : 0;
+}
+
+// The shown page's collector counts, in the reading's words.
+static yonder_tr_collector_t tr_collector(void)
+{
+    os64_js_collector_t c;
+    yonder_scripts_collector(g.page.scripts, &c);
+    return (yonder_tr_collector_t){c.runs, c.runs_by_allocation, c.walked, c.freed, c.walked_most,
+                                   c.bytes_before, c.bytes_after, c.threshold, c.ticks, c.ticks_most};
+}
+
+// The shown page's timer list, in the reading's words.
+static yonder_tr_list_t tr_list(void)
+{
+    os64_dom_timer_counts_t c;
+    yonder_scripts_timer_counts(g.page.scripts, &c);
+    return (yonder_tr_list_t){c.live, c.arms, c.walked};
+}
+
+// The reading starts again now, on while there are page files to write it
+// to (a reading written, a page shown).
+static void tr_restart(void)
+{
+    if (s_diag.dir[0] == '\0') {
+        yonder_tr_off(&s_tr);
+        return;
+    }
+    yonder_tr_collector_t c = tr_collector();
+    yonder_tr_list_t l = tr_list();
+    s_tr_host = g.page.scripts;
+    s_tr_per_ms = counter_per_ms();
+    yonder_tr_reset(&s_tr, (int64_t)cycles(), &c, &l);
+}
+
 static void cost_begin(PaintStage s)
 {
     if (s_cost.depth[s]++ == 0)
@@ -4541,6 +4720,7 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
                                                 s_change.armed ? &marks : NULL);
     if (s_change.armed) {
         s_change.kept = kept.kind != FLOW_RESTYLE_DECLINED;
+        s_change.kept_kind = kept.kind;
         s_change.kept_parts = kept.parts;
         if (!s_change.kept) {
             s_change.n = 0;
@@ -4626,9 +4806,12 @@ static int32_t s_paint_check_groups = -1;
 // out (a picture moves by itself) and the page's widgets (the toolkit
 // paints them over the view). A difference is a part the rebuild or the
 // tick should have marked, or one something else should have; the record
-// says how many were compared, how many differed, the first with where and
-// what the rebuild or the tick had marked, and how many could not be
-// compared (damage_check). One that marked nothing marks one pixel, so
+// says how many were compared, how many differed, and how many could not
+// be compared, and each that differed with where, what the rebuild or the
+// tick had marked (a rebuild's way, kept or laid out, and what the change
+// log held), what the page paints at its first pixel against what the
+// window held, and what changed the view since the check before
+// (damage_check, s_damage_since). One that marked nothing marks one pixel, so
 // that there is a paint to check. A tick is checked apart from the next
 // rebuild because that rebuild's compare marks an animated box whose value
 // moved, which would hide a tick that marked too little. The second paint
@@ -4637,7 +4820,7 @@ static int32_t s_paint_check_groups = -1;
 static uint32_t s_damage_check, s_damage_counted;
 static bool s_damage_due;
 static uint64_t s_damage_compared, s_damage_differed, s_damage_uncompared;
-static char s_damage_after[96];
+static char s_damage_after[512];
 
 // The canvases whose damage was marked since the last paint
 // (canvas_damage_mark), which a covered paint acknowledges
@@ -4741,6 +4924,7 @@ static void effect_filters(char *out, size_t cap, const flow_filter_t *filter, i
 
 static void cost_reset(void)
 {
+    tr_restart();
     effects_reset();
     os64_memset(&s_cost, 0, sizeof(s_cost));
     os64_memset(&s_needed_reading, 0, sizeof(s_needed_reading));
@@ -4820,6 +5004,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
         yonder_lt_layout(&s_lt, lt_began, (uint64_t)(os64_micros() - lt_began), s_lt_why,
                          timed ? &cascade : NULL);
     }
+    tr_inside(YONDER_TR_IN_LAYOUTS, layout_began);
     cost_end(PS_LAYOUTS);
     if (in_tick && forcing == NULL)
         s_cost.layouts_in_ticks += cycles_since(layout_began);
@@ -10258,6 +10443,42 @@ static void diag_paint(Page *p)
     diag_ledger(p);
 }
 
+// Where the thread went in reading `n` (s_tr): its steps and calls, its
+// timer tasks by site, the collector, and the walks whose size the page
+// sets. A collector or timer list whose page's script is not the one the
+// reading began with (the page's script made again) is said from that
+// script's start.
+static void diag_thread_reading(Page *p, uint32_t n)
+{
+    if (!s_tr.on)
+        return;
+    char line[4096], key[48];
+    uint64_t per_ms = counter_per_ms();
+    yonder_tr_steps_line(&s_tr, (int64_t)cycles(), per_ms, line, sizeof(line));
+    os64_snprintf(key, sizeof(key), "thread reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, line);
+    yonder_tr_timers_line(&s_tr, per_ms, line, sizeof(line));
+    os64_snprintf(key, sizeof(key), "timers reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, line);
+    bool same = s_tr_host == page_scripts(p);
+    if (!same) {
+        s_tr.collector_from = (yonder_tr_collector_t){0};
+        s_tr.list_from = (yonder_tr_list_t){0};
+    }
+    yonder_tr_collector_t c = tr_collector();
+    char said[4096];
+    yonder_tr_collector_line(&s_tr, &c, yonder_scripts_heap_bytes(page_scripts(p)),
+                             yonder_scripts_memory_bytes(page_scripts(p)), per_ms, line, sizeof(line));
+    os64_snprintf(said, sizeof(said), "%s%s", same ? "" : "since the page's script began: ", line);
+    os64_snprintf(key, sizeof(key), "collector reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, said);
+    yonder_tr_list_t l = tr_list();
+    yonder_tr_walks_line(&s_tr, &l, yonder_scripts_held(page_scripts(p)), line, sizeof(line));
+    os64_snprintf(said, sizeof(said), "%s%s", same ? "" : "the timer list counted from the page's script's start; ", line);
+    os64_snprintf(key, sizeof(key), "walks reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, said);
+}
+
 // The counts kept as reading `n` of the page, with where the page was
 // scrolled, before they start again (diag_asked): each reading adds one.
 static void diag_paint_reading(Page *p, uint32_t n)
@@ -10278,6 +10499,7 @@ static void diag_paint_reading(Page *p, uint32_t n)
     }
     os64_free(e.s);
     diag_ledger_reading(p, n);
+    diag_thread_reading(p, n);
     if (s_layout_profile) {
         char needed[768], nkey[40];
         yonder_diag_needed_text(&s_needed_reading, needed, sizeof(needed));
@@ -10486,6 +10708,16 @@ static void mark_part(os64_gui_rect_t r)
         (int64_t)part.bounds.y + part.bounds.h >= (int64_t)v.y + v.h) {
         mark_whole(WHOLE_BIG_PART, false);
         return;
+    }
+    if (!s_damage_marking) {
+        if (s_tick_marking)
+            s_damage_since.parts_tick++;
+        else if (s_video_marking)
+            s_damage_since.parts_video++;
+        else if (s_marking_canvas != NULL)
+            s_damage_since.parts_canvas++;
+        else
+            s_damage_since.parts_other++;
     }
     s_parts_reach = os64_rect_union(s_parts_reach, part.bounds);
     os64_gui_rect_t in;
@@ -11322,11 +11554,15 @@ static void tick_page_run(uint64_t now, bool frame)
             os64_snprintf(s_cost.mark_who, sizeof(s_cost.mark_who), "an animation of %s", k.first);
         // A check due for the tick, with what it marked for the record's
         // line (s_damage_check).
+        s_damage_since.ticks++;
+        s_damage_since.ticks_unmarked += s_tick_marks == 0;
         if (s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {
             s_damage_due = true;
             if (s_tick_marks == 0) {
                 os64_strcopy(s_damage_after, sizeof(s_damage_after), "a tick that marked nothing");
+                s_damage_marking = true;
                 mark_part((os64_gui_rect_t){g.sx, g.sy, 1, 1});
+                s_damage_marking = false;
             } else {
                 os64_snprintf(s_damage_after, sizeof(s_damage_after), "a tick that marked %u parts",
                               (unsigned)s_tick_marks);
@@ -11494,9 +11730,11 @@ static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx);
 // again here. Each part is first widened to the backdrops it reaches.
 static void glass_paint(void)
 {
-    // The load's timeline times the whole of it as drawing: the backdrops'
-    // marks, the kept drawings, the render and the publish.
+    // The load's timeline and the thread reading time the whole of it as
+    // drawing: the backdrops' marks, the kept drawings, the render and the
+    // publish.
     int64_t drawn_from = s_lt.on ? os64_micros() : 0;
+    uint64_t tr_drawn = tr_now();
     backdrop_damage();
     os64_gui_rect_t damage[OS64_UI_DAMAGE_MAX];
     WholeBy by = s_whole_by;
@@ -11521,6 +11759,7 @@ static void glass_paint(void)
         os64_memset(s_cost.now, 0, sizeof(s_cost.now));
         if (s_lt.on)
             yonder_lt_inside(&s_lt, YONDER_LT_IN_DRAWING, (uint64_t)(os64_micros() - drawn_from));
+        tr_inside(YONDER_TR_IN_DRAWING, tr_drawn);
         return;
     }
     cost_begin(PS_PUBLISH);
@@ -11532,6 +11771,7 @@ static void glass_paint(void)
     cost_fold(PS_RENDER, PS_PUBLISH);
     if (s_lt.on)
         yonder_lt_inside(&s_lt, YONDER_LT_IN_DRAWING, (uint64_t)(os64_micros() - drawn_from));
+    tr_inside(YONDER_TR_IN_DRAWING, tr_drawn);
 }
 
 // What the window loop does before each paint: a whole view's paint shows
@@ -13359,6 +13599,53 @@ static bool html_base(const os64_html_node_t *n)
 // The last rebuild's verdict as the record words it (`in parts`, `nothing
 // to paint`, or why the whole view), which the host's tests read.
 static const char *s_change_said = "";
+
+// What the change log held from `entry` on, in words, into `out`: the
+// first CHANGE_LOG_SAID entries by kind and element (a node that is no
+// element by the nearest element round it, a shadow root's host
+// included; an attribute's name to its first 48 bytes, so that the first
+// entry fits the room s_change.log gives it), then how many more.
+#define CHANGE_LOG_SAID 4
+static void change_log_said(char *out, size_t cap, const os64_html_change_entry_t *entry)
+{
+    size_t at = 0;
+    int32_t told = 0, more = 0;
+    out[0] = '\0';
+    for (; entry != NULL; entry = entry->next) {
+        if (told == CHANGE_LOG_SAID) {
+            more++;
+            continue;
+        }
+        const os64_html_node_t *n = entry->target;
+        while (n != NULL && n->kind != OS64_HTML_ELEMENT)
+            n = os64_html_shadow_including_parent(n);
+        char named[64] = "the document";
+        if (n != NULL)
+            element_named(named, sizeof(named), "", n);
+        int w = entry->kind == OS64_HTML_CHANGE_CHILDREN
+                    ? os64_snprintf(out + at, cap - at, "%schildren of %s (%lu in, %lu out)", told ? "; " : "", named,
+                                    (unsigned long)entry->nadded, (unsigned long)entry->nremoved)
+                : entry->kind == OS64_HTML_CHANGE_ATTR
+                    ? os64_snprintf(out + at, cap - at, "%sattribute %.48s of %s", told ? "; " : "",
+                                    entry->attr_name != NULL ? entry->attr_name : "?", named)
+                : entry->kind == OS64_HTML_CHANGE_TEXT
+                    ? os64_snprintf(out + at, cap - at, "%stext in %s", told ? "; " : "", named)
+                    : os64_snprintf(out + at, cap - at, "%sstate of %s", told ? "; " : "", named);
+        if (w < 0 || (size_t)w >= cap - at) {
+            out[at] = '\0';
+            told = CHANGE_LOG_SAID;
+            more++;
+            continue;
+        }
+        at += (size_t)w;
+        told++;
+    }
+    if (more > 0)
+        os64_snprintf(out + at, cap - at, "%sand %d more", at > 0 ? "; " : "", (int)more);
+    else if (told == 0)
+        os64_strcopy(out, cap, "nothing");
+}
+
 static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, const os64_html_node_t **out,
                               int32_t cap, bool *refs)
 {
@@ -13369,6 +13656,10 @@ static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, co
     *refs = false;
     if (reader == NULL || os64_html_changes(reader, &entry) < 0)
         n = -1;
+    if (s_damage_check != 0)
+        change_log_said(s_change.log, sizeof(s_change.log), n < 0 ? NULL : entry);
+    if (s_damage_check != 0 && n < 0)
+        os64_strcopy(s_change.log, sizeof(s_change.log), "lost, or no reader");
     for (; n >= 0 && entry != NULL; entry = entry->next) {
         const os64_html_node_t *at = entry->target;
         if (entry->kind == OS64_HTML_CHANGE_TEXT && at != NULL)
@@ -13651,6 +13942,12 @@ static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
 static void change_said(const Page *p, const char *why)
 {
     s_change_said = why != NULL ? why : s_change.n == 0 ? "nothing to paint" : "in parts";
+    if (why != NULL)
+        s_damage_since.rebuilt_whole++;
+    else if (s_change.n == 0)
+        s_damage_since.rebuilt_nothing++;
+    else
+        s_damage_since.rebuilt_parts++;
     if (!s_layout_profile || layout_profile_diag(p) == NULL)
         return;
     if (why != NULL) {
@@ -13681,6 +13978,7 @@ static bool rebuild_unchanged(Page *p)
     // with itself.
     if (p != &g.page || s_read_checking || !shown_advance())
         return false;
+    s_damage_since.advanced++;
     unchanged_counted(p);
     if (s_geometry_check != 0 && ++s_unchanged_checked % s_geometry_check == 0) {
         // The page's own inputs, as page_lay_out sets them for a layout of it.
@@ -13762,6 +14060,9 @@ static bool script_rebuild(void)
         s_change.cascade = p->cascade;
         s_change.cascade_generation = p->cascade != NULL ? garb_cascade_generation(p->cascade) : 0;
         s_change.cascade_updates = p->cascade != NULL ? garb_cascade_updates(p->cascade) : 0;
+        // Before the layout updates the cascade, which then lists no
+        // inline change.
+        offsets_noted(p, p->rendered_version);
         // The shown Page holds the old faces; an incomplete staged layout
         // can reclaim its tree and cascade before retrying in that room.
         yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_REBUILD);
@@ -13781,6 +14082,7 @@ static bool script_rebuild(void)
                 ? "Out of memory laying out the changed page; this is the last layout that fit."
                 : "Out of memory laying out the changed page.");
             forms_build();
+            s_damage_since.rebuilt_whole++;
             mark_whole(WHOLE_SCRIPT, false);
             return false;
         }
@@ -13836,14 +14138,23 @@ static bool script_rebuild(void)
             }
         // A check due for a rebuild painted in parts, with what it marked
         // for the record's line.
+        // How it was made (a restyle kept in the shown tree, and what it
+        // wrote, or a layout) and what the change log held say which
+        // verdict let it mark what it did.
         if (whole == NULL && s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {
             s_damage_due = true;
+            const char *made = !s_change.kept                             ? "a layout"
+                               : s_change.kept_kind == FLOW_RESTYLE_NOTHING ? "kept in the shown tree, nothing written"
+                                                                            : "kept in the shown tree, paint only";
+            char marked[32] = "marked nothing";
+            if (s_change.n > 0)
+                os64_snprintf(marked, sizeof(marked), "marked %d parts", (int)s_change.n);
+            os64_snprintf(s_damage_after, sizeof(s_damage_after), "a rebuild that %s (%s; the change log: %s)",
+                          marked, made, s_change.log[0] != '\0' ? s_change.log : "not read");
             if (s_change.n == 0) {
-                os64_strcopy(s_damage_after, sizeof(s_damage_after), "a rebuild that marked nothing");
+                s_damage_marking = true;
                 mark_part((os64_gui_rect_t){g.sx, g.sy, 1, 1});
-            } else {
-                os64_snprintf(s_damage_after, sizeof(s_damage_after), "a rebuild that marked %d parts",
-                              (int)s_change.n);
+                s_damage_marking = false;
             }
         }
         if (s_script_audit) {
@@ -14300,7 +14611,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .request = script_request, .run = script_run, .release = script_release, .more = script_more,
         .referrer = referrer, .last_modified = modified, .focus = script_focus,
         .ledger = s_ledger != YONDER_LEDGER_OFF, .ledger_profile = s_ledger == YONDER_LEDGER_PROFILE,
-        .ledger_sample_ticks = ledger_sample_ticks()};
+        .ledger_sample_ticks = ledger_sample_ticks(), .timer_sites = s_diag.dir[0] != '\0'};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host, script_cookies_enabled};
@@ -14410,9 +14721,18 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
     uint64_t spent = cycles_since(s_task_began);
+    uint64_t said_from = tr_now();
     task_cost(what);
 
     os64_dom_geometry_stats_t forced = yonder_scripts_geometry_stats(host, false);
+    if (s_tr.on) {
+        yonder_tr_inside(&s_tr, YONDER_TR_IN_TASKS, spent);
+        // A timer by the site that set it; the forced layouts' time is the
+        // DOM's microseconds, turned into the counter's ticks.
+        if (os64_streq(what, "timer"))
+            yonder_tr_timer(&s_tr, yonder_scripts_timer_site(host), spent, forced.layouts,
+                            forced.elapsed_us * s_tr_per_ms / 1000);
+    }
     if (s_lt.on) {
         char named[YONDER_LT_TASK_MAX];
         os64_snprintf(named, sizeof(named), "%s%s%s", what, out->source_name[0] ? " " : "", out->source_name);
@@ -14471,6 +14791,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
         badge_follow();     // a global it missed is recorded as it runs
         if (at != 0)
             status_rest(line);
+        tr_inside(YONDER_TR_IN_SAID, said_from);
         return;
     }
     if (at != 0) {
@@ -14514,6 +14835,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     badge_follow();
     status_rest(line);
     yonder_scripts_set_note(host, line);
+    tr_inside(YONDER_TR_IN_SAID, said_from);
 }
 
 // ── A script's requests (MODERN_WEB.md § Slice 2) ──────────────────────
@@ -15900,6 +16222,8 @@ static bool intersections_turn(void)
     // A step that asks nothing (every root in another document) never
     // calls the provider, and has still answered what it was asked.
     s_intersections_answered = true;
+    if (s_tr.on)
+        yonder_tr_intersections(&s_tr, yonder_scripts_intersections_observed(s));
     bool due = yonder_scripts_intersections_update(s);
     if (s_intersections_answered)
         s_observed = now;
@@ -17025,9 +17349,11 @@ static bool script_turn(void)
         return false;
     if (!g.scripts_on || g.page.scripts == NULL)
         return false;
+    tr_call(YONDER_TR_FORMS);
     forms_flush();
     const os64_html_document_t *doc = page_doc(&g.page);
     os64_js_outcome_t out;
+    tr_call(YONDER_TR_TASK);
     int64_t began = task_begin(g.page.scripts);
     bool ran = yonder_scripts_finalization_fire(g.page.scripts, false, &out);
     if (ran)        // its next head aged from now, as ordinary_task would age it
@@ -17078,6 +17404,7 @@ static bool script_turn(void)
     // animations and send events", then the frame callbacks. The time is
     // read only for a frame: a sample is a time handed to the animations,
     // which a later frame may never go back past (frame_plan_sample).
+    tr_call(YONDER_TR_FRAMES);
     uint64_t frame_us = s_frames.open ? animation_time_us() : 0;
     if (s_frames.open && !g.covered && !g.raf_painting &&
         yonder_scripts_web_animations_next(g.page.scripts) <= now) {
@@ -17096,16 +17423,23 @@ static bool script_turn(void)
             task_said(g.page.scripts, true, "animation-frame", &out, frame_began);
         }
     }
-    if (!ran)
+    if (!ran) {
+        tr_call(YONDER_TR_POINTER);
         return pointer_turn();
+    }
     // The rendering step before the asks: a form a script sent is read
     // from a model as current as its tree, and a focus or a scroll acts on
     // the tree, so with asks waiting the page is made current even where a
     // covered window could owe the step.
+    tr_call(YONDER_TR_AFTER);
     bool rendered = g.nasks > 0 ? script_rebuild() : script_rendering_step();
     if (rendered) {
+        tr_call(YONDER_TR_ASKS);
         asks_perform(g.page.scripts, doc, true);
-        if (page_doc(&g.page) == doc) (void)pointer_turn();
+        if (page_doc(&g.page) == doc) {
+            tr_call(YONDER_TR_POINTER);
+            (void)pointer_turn();
+        }
     }
     return rendered;
 }
@@ -20642,6 +20976,121 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
     return refused;
 }
 
+// What the shown tree paints at page point (`x`, `y`), for a check that
+// differs: the element of the deepest painted box whose rect holds it (of
+// two as deep, the later in the tree's order), and the nearest other
+// element its box is in, named into `out`.
+static void damage_painted_at(char *out, size_t cap, int32_t x, int32_t y)
+{
+    const flow_box_t *deepest = NULL;
+    int32_t depth = 0, most = -1;
+    flow_point_t scroll = scroll_now();
+    for (const flow_box_t *b = flow_root(g.page.tree); b != NULL;) {
+        os64_gui_rect_t r = flow_box_doc_rect(b, scroll);
+        if (!b->unpainted && box_element(b) != NULL && depth >= most && x >= r.x && y >= r.y &&
+            (int64_t)x < (int64_t)r.x + r.w && (int64_t)y < (int64_t)r.y + r.h) {
+            deepest = b;
+            most = depth;
+        }
+        if (b->first != NULL) {
+            b = b->first;
+            depth++;
+            continue;
+        }
+        while (b != NULL && b->next == NULL) {
+            b = b->parent;
+            depth--;
+        }
+        b = b != NULL ? b->next : NULL;
+    }
+    const os64_html_node_t *e = deepest != NULL ? box_element(deepest) : NULL, *round = NULL;
+    for (const flow_box_t *a = deepest; a != NULL && round == NULL; a = a->parent)
+        if (box_element(a) != e)
+            round = box_element(a);
+    char at[96] = "nothing", in[96] = "";
+    if (e != NULL)
+        element_named(at, sizeof(at), "", e);
+    if (round != NULL)
+        element_named(in, sizeof(in), " in ", round);
+    os64_snprintf(out, cap, "%s%s", at, in);
+}
+
+// What changed the view since the last check (s_damage_since), in words,
+// into `out`; then counted again from nothing.
+static void damage_since_said(char *out, size_t cap)
+{
+    size_t at = (size_t)os64_snprintf(out, cap,
+        "%u rebuilds (%u nothing to paint, %u in parts, %u whole), %u made current with no layout, "
+        "%u ticks (%u marked nothing); parts marked by ticks %u, videos %u, canvases %u, others %u",
+        (unsigned)(s_damage_since.rebuilt_nothing + s_damage_since.rebuilt_parts + s_damage_since.rebuilt_whole),
+        (unsigned)s_damage_since.rebuilt_nothing, (unsigned)s_damage_since.rebuilt_parts,
+        (unsigned)s_damage_since.rebuilt_whole, (unsigned)s_damage_since.advanced, (unsigned)s_damage_since.ticks,
+        (unsigned)s_damage_since.ticks_unmarked, (unsigned)s_damage_since.parts_tick,
+        (unsigned)s_damage_since.parts_video, (unsigned)s_damage_since.parts_canvas,
+        (unsigned)s_damage_since.parts_other);
+    bool any = false;
+    for (int32_t i = 0; i < WHOLE_COUNT && at < cap; i++)
+        if (s_damage_since.whole[i] != 0) {
+            at += (size_t)os64_snprintf(out + at, cap - at, "%s%s %u", any ? ", " : "; the whole view by ",
+                                        kWholeBy[i], (unsigned)s_damage_since.whole[i]);
+            any = true;
+        }
+    if (!any && at < cap)
+        os64_snprintf(out + at, cap - at, "; the whole view by nothing");
+    os64_memset(&s_damage_since, 0, sizeof(s_damage_since));
+}
+
+// The whole view painted again over `win`, which holds the first whole
+// paint, and the two held to each other outside `left_out`: into `out`,
+// whether they agree, or where and by how much they do not.
+static void damage_paint_again(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t whole, os64_gui_rect_t win,
+                               const os64_gui_rect_t *left_out, int32_t nleft, char *out, size_t cap)
+{
+    uint32_t *first = os64_malloc((size_t)win.w * (size_t)win.h * sizeof(uint32_t));
+    if (first == NULL) {
+        os64_snprintf(out, cap, "not painted again: no memory");
+        return;
+    }
+    for (int32_t y = 0; y < win.h; y++)
+        os64_memcpy(first + (size_t)y * win.w, gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x,
+                    (size_t)win.w * sizeof(uint32_t));
+    os64_gui_rect_t was = gl->clip, view = {win.x - gl->dx, win.y - gl->dy, win.w, win.h};
+    gl->clip = win;
+    yonder_paint(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache,
+                 g.paint_scratch, v);
+    box_bars(gl, view);
+    gl->clip = was;
+    int64_t differ = 0, at = -1;
+    for (int32_t y = 0; y < win.h; y++) {
+        const uint32_t *row = gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x;
+        for (int32_t x = 0; x < win.w; x++) {
+            if (((row[x] ^ first[(size_t)y * win.w + x]) & 0x00ffffffu) == 0)
+                continue;
+            int32_t px = win.x + x, py = win.y + y;
+            bool skip = false;
+            for (int32_t k = 0; k < nleft && !skip; k++)
+                skip = px >= left_out[k].x && py >= left_out[k].y && px < left_out[k].x + left_out[k].w &&
+                       py < left_out[k].y + left_out[k].h;
+            if (skip)
+                continue;
+            if (at < 0)
+                at = (int64_t)y * win.w + x;
+            differ++;
+        }
+    }
+    if (differ == 0) {
+        os64_snprintf(out, cap, "painted again, the whole view paints the same");
+    } else {
+        uint32_t then = first[at] & 0x00ffffffu;
+        uint32_t now = gl->surf->pixels[(size_t)(win.y + at / win.w) * gl->surf->pitch_px + win.x +
+                                        (size_t)(at % win.w)] & 0x00ffffffu;
+        os64_snprintf(out, cap, "painted again, the whole view differs from itself at %ld pixels, first %ld,%ld "
+                      "(#%06x, then #%06x)", (long)differ, (long)(win.x - gl->dx + at % win.w),
+                      (long)(win.y - gl->dy + at / win.w), (unsigned)then, (unsigned)now);
+    }
+    os64_free(first);
+}
+
 // `--damage-check`'s comparison, after the paints of the view widget at
 // `bounds` (the window) for every part of a render, through `gl`: the whole
 // view painted the ordinary way over it, compared with what the window held
@@ -20711,6 +21160,12 @@ static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bou
                 differ++;
             }
         }
+        // On a difference, the whole view is painted a second time and held
+        // to the first: a whole paint that disagrees with itself is the
+        // painter's, whatever the parts did.
+        char again[160] = "";
+        if (differ > 0)
+            damage_paint_again(gl, v, whole, win, left_out, nleft, again, sizeof(again));
         // What the window held where it was left out is put back: the
         // widgets are not painted again this frame outside its marks.
         for (int32_t k = 0; k < nleft; k++) {
@@ -20721,17 +21176,37 @@ static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bou
                 os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + r.x,
                             before + (size_t)(y - win.y) * win.w + (r.x - win.x), (size_t)r.w * sizeof(uint32_t));
         }
+        // A difference says where, what the page paints at its first pixel
+        // and the colour the window held there against the page's, and
+        // what changed the view since the last check.
         if (differ > 0) {
             s_damage_differed++;
-            char line[256];
+            int32_t fx = win.x - gl->dx + (int32_t)(first % win.w), fy = win.y - gl->dy + (int32_t)(first / win.w);
+            uint32_t held = before[first] & 0x00ffffffu;
+            uint32_t paints = gl->surf->pixels[(size_t)(win.y + first / win.w) * gl->surf->pitch_px + win.x +
+                                               (size_t)(first % win.w)] & 0x00ffffffu;
+            char painted[200], since[512], line[1536];
+            damage_painted_at(painted, sizeof(painted), fx, fy);
+            damage_since_said(since, sizeof(since));
             os64_snprintf(line, sizeof(line),
-                          "the whole view differs from the parts after %s: %ld pixels in %d,%d %dx%d, first %ld,%ld",
+                          "the whole view differs from the parts after %s: %ld pixels in %d,%d %dx%d, first %ld,%ld "
+                          "(held #%06x, the page paints #%06x, at %s); %s; since the last check: %s",
                           s_damage_after, (long)differ, (int)reach.x, (int)reach.y, (int)reach.w, (int)reach.h,
-                          (long)(win.x - gl->dx + first % win.w), (long)(win.y - gl->dy + first / win.w));
+                          (long)fx, (long)fy, (unsigned)held, (unsigned)paints, painted, again, since);
             yonder_diag_failed_seen(g.page.diag, "damage check", line);
-            os64_debug_log(line);
+            // The kernel's log keeps 256 bytes of a line (log.h's
+            // MAX_LOG_MESSAGE_SIZE), so this one goes to it in pieces.
+            size_t length = os64_strlen(line), pieces = (length + 199) / 200;
+            for (size_t k = 0; k < pieces; k++) {
+                char piece[240];
+                os64_snprintf(piece, sizeof(piece), "damage check %lu/%lu: %.200s", (unsigned long)(k + 1),
+                              (unsigned long)pieces, line + k * 200);
+                os64_debug_log(piece);
+            }
         }
     }
+    // Each check counts what changed the view from the last.
+    os64_memset(&s_damage_since, 0, sizeof(s_damage_since));
     os64_free(before);
     char said[128];
     os64_snprintf(said, sizeof(said), "%lu compared, %lu differed, %lu could not be compared",
@@ -20761,8 +21236,13 @@ static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx)
     if (!s_damage_due)
         return;
     s_damage_due = false;
-    if (g.page.tree == NULL || g.paint_cache == NULL || g.paint_scratch == NULL)
+    // With nothing to paint the view from, the check is one that could not
+    // be compared, and the next counts what changed from here.
+    if (g.page.tree == NULL || g.paint_cache == NULL || g.paint_scratch == NULL) {
+        s_damage_uncompared++;
+        os64_memset(&s_damage_since, 0, sizeof(s_damage_since));
         return;
+    }
     GlassGroups groups = {.depth = 0};
     Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, w->bounds, &groups, w->bounds};
     GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false, {0}, 0};
@@ -23538,6 +24018,7 @@ int main(int argc, char **argv)
         if (!looking && !g.batch.held && os64_ui_dispatcher_can_create(&g.dispatcher)) {
             int64_t ready = 0;
             lt_step(YONDER_LT_WAIT);
+            tr_call(YONDER_TR_WAIT);
             uint64_t asleep = cycles();
             woke = os64_gui_event_wait_any(&ready);
             uint64_t slept = cycles_since(asleep);
@@ -23550,6 +24031,7 @@ int main(int argc, char **argv)
         g.batch.consumed = 0;
         g.batch.drained = false;
         lt_step(YONDER_LT_INPUT);
+        tr_call(YONDER_TR_DISPATCH);
         int64_t events = os64_ui_dispatcher_turn(&g.dispatcher, false);
         if (events < 0) {
             woke = events;
@@ -23564,6 +24046,7 @@ int main(int argc, char **argv)
         }
         if (g.relayout_due) {
             lt_step(YONDER_LT_RELAYOUT);
+            tr_call(YONDER_TR_RELAYOUT);
             g.relayout_due = false;
             frame_follow();
             yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_WINDOW);
@@ -23573,53 +24056,83 @@ int main(int argc, char **argv)
         if (!g.running || g.ui.quit)
             break;
         lt_step(YONDER_LT_STREAM);
+        tr_call(YONDER_TR_STREAM);
         bool stream_more = stream_turn();
         lt_step(YONDER_LT_COMING);
+        tr_call(YONDER_TR_COMING);
         bool coming_more = coming_turn();
         lt_step(YONDER_LT_SCRIPTS);
+        tr_call(YONDER_TR_OWED);    // script_turn names its own calls after
         bool scripts_ready = script_turn();
         lt_step(YONDER_LT_MEDIA);
+        tr_call(YONDER_TR_BODIES);
         bodies_turn();
+        tr_call(YONDER_TR_PLAYERS_ASKED);
         players_ask_run();
+        tr_call(YONDER_TR_MEDIA);
         bool media_more = media_turn();
+        tr_call(YONDER_TR_VIDEOS);
         videos_turn();
+        tr_call(YONDER_TR_KEYS);
         keys_turn();
+        tr_call(YONDER_TR_PLAYERS_SHOWN);
         players_show();
         lt_step(YONDER_LT_MOTION);
+        tr_call(YONDER_TR_MOTION_TICK);
         motion_tick();
+        tr_call(YONDER_TR_VIDEOS_TICK);
         videos_tick();
         lt_step(YONDER_LT_UPKEEP);
+        tr_call(YONDER_TR_STORAGE);
         storage_turn();
+        tr_call(YONDER_TR_COOKIES);
         cookies_turn();
+        tr_call(YONDER_TR_CENSUS);
         census_turn();
+        tr_call(YONDER_TR_CHILDREN);
         children_turn();
+        tr_call(YONDER_TR_DOWNLOADS);
         downloads_turn();
+        tr_call(YONDER_TR_HOLD);
         step_hold_turn();
+        tr_call(YONDER_TR_PICTURES);
         pictures_settle();
+        tr_call(YONDER_TR_TITLE);
         title_follow();
         lt_step(YONDER_LT_OBSERVERS);
+        tr_call(YONDER_TR_RESIZES);
         bool observed = resizes_turn();
+        tr_call(YONDER_TR_BEFORE_PAINT);
         before_paint();
+        tr_call(YONDER_TR_INTERSECTIONS);
         observed = intersections_turn() || observed;
         lt_step(YONDER_LT_PAINT);
+        tr_call(YONDER_TR_PAINT);
         glass_paint();
         bool painted_frame = frame_unpainted() || g.raf_painting;
+        tr_call(YONDER_TR_MOTION_PAINTED);
         motion_painted();
-        if (motion_pause_said())
+        if (motion_pause_said()) {
+            tr_call(YONDER_TR_PAINT);
             glass_paint();
+        }
         lt_step(YONDER_LT_CLOSE);
+        tr_call(YONDER_TR_BELLS);
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (s_bodies_asked)
             (void)os64_gui_event_ring(g.win, BELL_BODY);
         if (coming_more || observed || media_more || script_followup(scripts_ready, painted_frame))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
+        tr_call(YONDER_TR_EXIT);
         exit_follow();
         // The turn's frame, if it had one, is painted and closes. A task
         // may have set or cleared a timer, and a frame for an animation has
         // its whole cost now: the ticker hears of both, and frame work
         // still due asks for the next frame.
+        tr_call(YONDER_TR_FRAME_CLOSE);
         frame_close();
+        tr_call(YONDER_TR_SCHEDULE);
         pictures_schedule();
         looking = g.bar.up && !g.bar.armed;
     }

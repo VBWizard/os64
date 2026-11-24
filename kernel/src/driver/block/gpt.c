@@ -60,22 +60,29 @@ bool parseGPT(block_device_info_t* device)
     gptPart=(gpt_part_entry_t*)partBuffer;
 	device->block_device->part_count = 0;
 
+	// A GPT's slots are not packed: deleting a partition empties its slot
+	// and leaves the ones after it where they were. parts[] IS packed (its
+	// readers walk 0..part_count-1 and expect an entry at each), so a
+	// partition's index here is its place among the partitions found, not
+	// its GPT slot.
     for (int cnt=0;cnt<20;cnt++)
     {
 		if (gptPart[cnt].partTypeGUID[0] != 0)
 		{
-        	printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT:  parseGPT - Part %u, first=%u\n",cnt,gptPart[cnt].partFirstLBA);
+        	printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT:  parseGPT - Slot %u, first=%u\n",cnt,gptPart[cnt].partFirstLBA);
 			if (gptPart[cnt].partFirstLBA>0)
 			{
-				printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT: parseGPT -  Adding partition to device partiton list\n");
-				device->block_device->partition_table->parts[cnt] = kmalloc(sizeof(partEntry_t));
-				device->block_device->partition_table->parts[cnt]->partStartSector = gptPart[cnt].partFirstLBA;
-				device->block_device->partition_table->parts[cnt]->partEndSector=gptPart[cnt].partLastLBA;
-				device->block_device->partition_table->parts[cnt]->partTotalSectors=device->block_device->partition_table->parts[cnt]->partEndSector-device->block_device->partition_table->parts[cnt]->partStartSector;
-				memcpy(&device->block_device->partition_table->parts[cnt]->partTypeGUID, &gptPart[cnt].partTypeGUID, UUID_LENGTH);
-				memcpy(&device->block_device->partition_table->parts[cnt]->uniquePartGUID, &gptPart[cnt].uniquePartGUID, UUID_LENGTH);
-				utf16_to_char_string((char*)&device->block_device->partition_table->parts[cnt]->partName, (uint16_t*)&gptPart[cnt].partName, 36, 72);
-				device->block_device->partition_table->parts[cnt]->block_device_info = device;
+				int partNo = device->block_device->part_count;
+				printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT: parseGPT -  Adding slot %u to device partiton list as partition %u\n", cnt, partNo);
+				partEntry_t *part = kmalloc(sizeof(partEntry_t));
+				part->partStartSector = gptPart[cnt].partFirstLBA;
+				part->partEndSector=gptPart[cnt].partLastLBA;
+				part->partTotalSectors=part->partEndSector-part->partStartSector;
+				memcpy(&part->partTypeGUID, &gptPart[cnt].partTypeGUID, UUID_LENGTH);
+				memcpy(&part->uniquePartGUID, &gptPart[cnt].uniquePartGUID, UUID_LENGTH);
+				utf16_to_char_string((char*)&part->partName, (uint16_t*)&gptPart[cnt].partName, 36, 72);
+				part->block_device_info = device;
+				device->block_device->partition_table->parts[partNo] = part;
 				device->block_device->part_count++;
 				device->block_device->partition_table->partCount++;
 			}

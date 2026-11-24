@@ -470,6 +470,83 @@ static void dom_timer_cases(void)
     fixture_free(&f);
 }
 
+/* Timers by where they were set (os64_dom_timer_sites): off, a fired timer
+ * names no site; on, it names the function that set it, by name, file and
+ * where it is defined, for a timeout and an interval alike, a string too;
+ * the same function is one site however many timers it sets; past the table
+ * every new one is one site; the binding's own timers name none; off again
+ * forgets them. */
+static void dom_timer_site_cases(void)
+{
+    DomFixture f = event_fixture("<!doctype html><body><p id=p>sites</p></body>", "http://example.test/t.html");
+    if (!fixture_ready(&f)) return;
+    os64_js_outcome_t outcome;
+    dom_script(&f, "function early(){setTimeout(()=>{},1)}early();", "timer-sites-off.js");
+    event_clock = 1001;
+    check(os64_dom_timer_fire(f.binding, 1001, &outcome) && os64_dom_timer_site(f.binding) == NULL,
+          "sites off: a fired timer names no site");
+    check(os64_dom_timer_sites(f.binding, true), "sites on");
+    dom_script(&f, "function arm(){setTimeout(()=>{},10)}\nfunction pulse(){globalThis.p=setInterval(()=>{},5)}"
+                   "\nfunction text(){setTimeout('1',20)}\narm();arm();pulse();text();", "timer-sites.js");
+    check(os64_dom_timer_fire(f.binding, 1006, &outcome) && os64_dom_timer_site(f.binding) != NULL &&
+          strstr(os64_dom_timer_site(f.binding), "pulse at ") != NULL &&
+          strstr(os64_dom_timer_site(f.binding), "timer-sites.js:2:") != NULL,
+          "an interval names the function that set it, its file and the line it is defined on");
+    const char *first = NULL;
+    for (int k = 0; k < 2; k++) {
+        check(os64_dom_timer_fire(f.binding, 1011, &outcome) && os64_dom_timer_site(f.binding) != NULL &&
+              strstr(os64_dom_timer_site(f.binding), "arm at ") != NULL, "a timeout names its setter");
+        if (k == 0) first = os64_dom_timer_site(f.binding);
+        else check(os64_dom_timer_site(f.binding) == first, "one function that sets two timers is one site");
+    }
+    check(os64_dom_timer_fire(f.binding, 1011, &outcome) && os64_dom_timer_site(f.binding) != NULL &&
+          strstr(os64_dom_timer_site(f.binding), "pulse at ") != NULL, "the interval again, the same site");
+    check(os64_dom_timer_fire(f.binding, 1021, &outcome), "the string timer is due");
+    while (os64_dom_timer_site(f.binding) != NULL && strstr(os64_dom_timer_site(f.binding), "pulse at ") != NULL)
+        check(os64_dom_timer_fire(f.binding, 1021, &outcome), "the interval keeps its turns");
+    check(os64_dom_timer_site(f.binding) != NULL && strstr(os64_dom_timer_site(f.binding), "text at ") != NULL,
+          "a string timer names its setter too");
+    // Each function kept alive, so no two share an address.
+    dom_script(&f, "clearInterval(p);globalThis.kept=[];"
+                   "for(let i=0;i<70;i++){const f=new Function('setTimeout(()=>{},1)');kept.push(f);f()}",
+               "timer-sites-many.js");
+    unsigned past = 0, named = 0;
+    while (os64_dom_timer_next(f.binding) <= 2000 && named + past < 80) {
+        check(os64_dom_timer_fire(f.binding, 2000, &outcome), "the many fire");
+        const char *at = os64_dom_timer_site(f.binding);
+        if (at != NULL && !strcmp(at, "a site past the table")) past++;
+        else if (at != NULL) named++;
+    }
+    check(named == OS64_DOM_TIMER_SITES - 3 && past == 70 - (OS64_DOM_TIMER_SITES - 3),
+          "the table keeps its first sites apart and the rest as one past it");
+    check(!os64_dom_timer_fire(f.binding, 2000, &outcome) && os64_dom_timer_site(f.binding) == NULL,
+          "a fire that ran nothing names no site");
+    dom_script(&f, "function late(){setTimeout(()=>{},1)}late();", "timer-sites-late.js");
+    check(os64_dom_timer_sites(f.binding, false), "sites off again");
+    check(os64_dom_timer_fire(f.binding, 3000, &outcome) && os64_dom_timer_site(f.binding) == NULL,
+          "off again, a timer set while they were on names none");
+    /* The counts: with the sites off, nothing is counted but the live; on,
+     * each set is an arm, and finds its place by walking past the timers
+     * due before it. */
+    os64_dom_timer_counts_t before, after;
+    os64_dom_timer_counts(NULL, &before);
+    check(before.live == 0 && before.arms == 0 && before.walked == 0, "timer counts: NULL reads zero");
+    os64_dom_timer_counts(f.binding, &before);
+    dom_script(&f, "globalThis.off=setTimeout(()=>{},10)", "timer-counts-off.js");
+    os64_dom_timer_counts(f.binding, &after);
+    check(after.live == before.live + 1 && after.arms == before.arms && after.walked == before.walked,
+          "timer counts: the sites off, the list is not counted");
+    dom_script(&f, "clearTimeout(off)", "timer-counts-clear.js");
+    check(os64_dom_timer_sites(f.binding, true), "timer counts: the sites on");
+    os64_dom_timer_counts(f.binding, &before);
+    dom_script(&f, "setTimeout(()=>{},10);setTimeout(()=>{},20);setTimeout(()=>{},30);setTimeout(()=>{},5)",
+               "timer-counts.js");
+    os64_dom_timer_counts(f.binding, &after);
+    check(before.live == 0 && after.live == 4 && after.arms - before.arms == 4 && after.walked - before.walked == 3,
+          "timer counts: four set, each walking past those due before it");
+    fixture_free(&f);
+}
+
 static void dom_navigation_cases(void)
 {
     DomFixture f = event_fixture(event_html, "http://example.test:8080/dir/page.html?q=1#top");
@@ -947,6 +1024,7 @@ static void dom_event_cases(void)
     dom_ui_host_cases();
     dom_event_reentry_cases();
     dom_timer_cases();
+    dom_timer_site_cases();
     dom_navigation_cases();
     dom_write_cases();
     dom_script_flag_cases();
