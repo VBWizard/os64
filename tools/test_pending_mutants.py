@@ -136,9 +136,17 @@ mutants = [
      '        (void)s;', [GARB]),
     ('advance-takes-a-lost-log', CASCADE,
      '    c->update_failed = true;\n    if (count < 0) { c->refusal = GARB_UPDATE_HISTORY; return false; }\n    for (const os64_html_change_entry_t *e = changes; e; e = e->next) {\n        const Slot *s',
-     '    c->update_failed = true;\n    for (const os64_html_change_entry_t *e = changes; e; e = e->next) {\n        const Slot *s', [GARB]),
+     '    c->update_failed = true;\n    if (0 && count < 0) { c->refusal = GARB_UPDATE_HISTORY; return false; }\n    for (const os64_html_change_entry_t *e = changes; e; e = e->next) {\n        const Slot *s', [GARB]),
     ('advance-not-asked', YONDER, '    if (version != p->rendered_version && !rebuild_unchanged(p)) {',
-     '    if (version != p->rendered_version) {', [SCRIPTS]),
+     '    if (version != p->rendered_version && !(0 && rebuild_unchanged(p))) {', [SCRIPTS]),
+    ('advance-in-the-read-check', YONDER, '    if (p != &g.page || s_read_checking || !shown_advance())',
+     '    if (p != &g.page || !shown_advance())', [SCRIPTS]),
+    ('forced-counts-the-read-check', YONDER, '    return s_lt_why == YONDER_LT_WHY_READ && !s_read_checking;',
+     '    return s_lt_why == YONDER_LT_WHY_READ;', [SCRIPTS]),
+    ('forced-longest-not-kept', YONDER, '        s_cost.task_longest_phases = s_task_phases;', '        (void)0;', [SCRIPTS]),
+    ('forced-task-not-started-again', YONDER, '    s_task_phases = (forced_phases_t){0};', '    (void)0;', [SCRIPTS]),
+    ('text-rects-ask-as-a-step', YONDER, '            bool ready = script_current(width, height, READ_RECTS);',
+     '            bool ready = script_current(width, height, -1);', [SCRIPTS]),
     ('advance-rendered-version-kept', YONDER, '    if (advanced)\n        p->rendered_version = os64_html_version(page_doc(p));',
      '    if (advanced)\n        (void)0;', [SCRIPTS]),
     ('advance-with-kept-reads-off', YONDER, '    if (shown_moved() != NULL)\n        return false;\n    flow_pending_t judged;',
@@ -178,6 +186,9 @@ mutants = [
 ]
 
 # Not run, because no host case can tell:
+# - forced_one's `cascaded` test: a layout a read asked for that stops before
+#   its cascade (no memory for one, or for its scopes), which the hosts do
+#   not reach.
 # - `p->laid_state` against the form state's version (shown_pending): no page
 #   in the hosts has a control whose state moves a box, and the guard follows
 #   the graft's own source test, which carries the same version.

@@ -1573,7 +1573,7 @@ typedef struct {
     flow_pending_verdict_t verdict;
     bool transforms;
     bool lost, style_read;
-    char why[48], at[80], style_read_at[80];
+    char why[64], at[80], style_read_at[80];
 } flow_pending_t;
 flow_pending_t flow_pending(flow_tree_t *tree, const os64_html_document_t *doc, const struct garb_cascade *cascade);
 /* The tree made current at the document's version with nothing laid out,

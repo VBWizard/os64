@@ -127,8 +127,8 @@ struct flow_tree {
     int64_t reach_base_w, reach_base_h;
     flow_point_t *reach_base_ranges;
     // What is pending since the tree was made current (pending.inc,
-    // flow_pending): a change-log reader of its own opened at that version,
-    // the version, the verdict so far, and whether a longhand of the
+    // flow_pending): a change-log reader of its own that reads from that
+    // version, the version, the verdict so far, and whether a longhand of the
     // transform family is among those pending. NULL reader: nothing can be
     // said, and the verdict is RESTYLE.
     os64_html_reader_t *pending_reader;
@@ -137,7 +137,7 @@ struct flow_tree {
     bool pending_transforms;
     // Why the verdict is what it is, and the element whose change made it
     // so (flow_pending_t's `why` and `at`), kept with it.
-    char pending_why[48], pending_at[80];
+    char pending_why[64], pending_at[80];
 };
 #define F_RESTYLE_ROOM ((size_t)1 << 20)
 // The tree made current at the document's version now (pending.inc).

@@ -1610,7 +1610,7 @@ static size_t element_named(char *out, size_t cap, const char *before, const os6
 // thing that comes again before eleven newer ones has its row still.
 typedef struct {
     struct {
-        char what[48], at[96], note[160];
+        char what[64], at[96], note[160];
         uint64_t n;
     } row[12];
     int nrows;
@@ -2003,14 +2003,17 @@ static uint64_t s_geometry_compared, s_geometry_differed;
 static uint32_t s_unchanged_checked;
 static uint64_t s_unchanged_compared, s_unchanged_differed;
 // What a read making the page current asks of it (script_current): a
-// READ_ kind, or -1 when no read is asking (a rendering step's rebuild).
+// READ_ kind, or -1 when no read is asking (a rendering step, a task's end,
+// the window seen, a resize: any other rebuild).
 static int s_asking = -1;
 // A GEOMETRY READ ANSWERED FROM THE SHOWN TREE (BRIEF_LAYOUT_NEEDS.md N2,
 // libflow's pending.inc), on unless `--kept-reads=off`: an offset or client
 // read, or a scroll read with no transform pending, whose page has only
 // paint-only inline style writes pending, read with no model refresh, no
 // cascade update and no restyle (script_geometry). The same switch lets a
-// covered window owe its rendering step (script_rendering_step).
+// covered window owe its rendering step (script_rendering_step), and lets a
+// rebuild owed for changes that moved nothing advance the tree with no
+// layout (shown_advance).
 // `--geometry-check[=N]` answers every Nth such read the old way too and
 // compares (s_reads_compared, s_reads_differed).
 static bool s_kept_reads = true;
@@ -2038,14 +2041,14 @@ static void reads_counted(const Page *p, int laid, bool kept, bool owed)
 }
 // A rebuild a NONE verdict made with no layout (rebuild_unchanged), counted
 // in the record's `layout reads` line by the read that asked for it
-// (s_asking), or as a rendering step's.
+// (s_asking), or as another rebuild's.
 static void unchanged_counted(const Page *p)
 {
     if (!s_layout_profile || s_read_checking || layout_profile_diag(p) == NULL)
         return;
     yonder_layout_stats_t sample = {.read_kind_names = kReadKindNames};
     if (s_asking >= 0 && s_asking < YONDER_LAYOUT_READ_KINDS) sample.reads_unchanged[s_asking] = 1;
-    else sample.steps_unchanged = 1;
+    else sample.others_unchanged = 1;
     layout_profile_add(p, &sample);
 }
 
@@ -2440,6 +2443,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         }
         layout_profile_add(p, &sample);
         if (s_one_open) {
+            s_one.cascaded = true;
             s_one.cascade_us = sample.cascade_us;
             s_one.cascade_why = why >= 0 ? why : sample.cascade_updates ? YONDER_LAYOUT_CASCADE_UPDATED
                                                                          : YONDER_LAYOUT_CASCADE_KEPT;
@@ -3713,10 +3717,11 @@ static void lt_why_end(yonder_lt_why_t was)
 }
 
 // Whether a script's read asked for the layout being made (s_lt_why), with
-// the timeline or the profile on: the profile's forced layouts.
+// the timeline or the profile on, and it is not the read check's own
+// (read_checked): the profile's forced layouts.
 static bool read_asked(void)
 {
-    return s_lt_why == YONDER_LT_WHY_READ;
+    return s_lt_why == YONDER_LT_WHY_READ && !s_read_checking;
 }
 
 // The timeline's lines on `d`, written whole: the summary, the layouts by
@@ -4193,7 +4198,8 @@ static struct {
 } s_cost;
 
 // A layout the profile timed, into the task's and the reading's forced
-// layouts by phase when a script's read asked for it (read_asked).
+// layouts by phase when a script's read asked for it (read_asked) and it
+// reached its cascade.
 static void forced_phases_add(forced_phases_t *f, const yonder_layout_one_t *one)
 {
     int c = one->cascade_why == YONDER_LAYOUT_CASCADE_KEPT      ? FORCED_KEPT
@@ -4212,7 +4218,7 @@ static void forced_phases_add(forced_phases_t *f, const yonder_layout_one_t *one
 }
 static void forced_one(const yonder_layout_one_t *one)
 {
-    if (!read_asked())
+    if (!read_asked() || !one->cascaded)
         return;
     forced_phases_add(&s_task_phases, one);
     forced_phases_add(&s_cost.forced_phases, one);
@@ -4352,6 +4358,12 @@ static bool shown_advance(void)
     pending_noted(judged);
     if (advanced)
         p->rendered_version = os64_html_version(page_doc(p));
+    else if (judged.verdict == FLOW_PENDING_NONE)
+        // The cascade refused what libflow judged nothing (garb_cascade_advance),
+        // which leaves it owing a fresh build: said by name, since the
+        // layout that follows reports only that an update failed before.
+        yonder_diag_failed_seen(p->diag, "unchanged advance",
+                                garb_update_refusal_name(garb_cascade_update_refusal(p->cascade)));
     return advanced;
 }
 
@@ -13116,12 +13128,16 @@ static void change_said(const Page *p, const char *why)
 }
 
 // A rebuild owed the page on screen made with no layout (shown_advance),
-// counted for the record by what asked for it, and with --geometry-check
+// counted for the record by the read that asked for it (or as another
+// rebuild's), and with --geometry-check
 // every Nth tree so advanced laid out whole beside itself and the two
 // compared (`unchanged check`).
 static bool rebuild_unchanged(Page *p)
 {
-    if (p != &g.page || !shown_advance())
+    // The read check (read_checked) compares a kept answer with a layout's,
+    // so it is never answered by an advance, which would compare the tree
+    // with itself.
+    if (p != &g.page || s_read_checking || !shown_advance())
         return false;
     unchanged_counted(p);
     if (s_geometry_check != 0 && ++s_unchanged_checked % s_geometry_check == 0) {
@@ -13169,7 +13185,7 @@ static bool script_rebuild(void)
     }
     // Changes that moved nothing the tree was styled from (inline styles
     // written back to what the cascade parsed) make it current with no
-    // layout, whoever asked: a read of any kind or a rendering step.
+    // layout, whichever read or other rebuild asked (rebuild_unchanged).
     if (version != p->rendered_version && !rebuild_unchanged(p)) {
         script_changes_note(p);
         int64_t began = s_script_audit ? os64_micros() : 0;
@@ -15155,10 +15171,7 @@ static size_t script_text_rects(void *opaque, const os64_html_node_t *node, size
     size_t count = 0;
     if (began >= 0 && os64_html_owns_node(doc, node)) {
         if (doc == page_doc(&g.page)) {
-            bool ready = script_rebuild();
-            if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
-                          g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed || g.pictures_moved || s_web.moved))
-                ready = relayout(true);
+            bool ready = script_current(width, height, READ_RECTS);
             if (ready)
                 count = yonder_text_rects(doc, g.page.tree, node, from, to, g.zoom, (flow_point_t){g.sx, g.sy},
                                           out, cap);

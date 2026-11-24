@@ -147,9 +147,10 @@ typedef struct {
     // current, by kind (names with the sample); the rendering steps a
     // covered window owed instead of rebuilding; and the rebuilds owed for
     // changes that moved nothing the tree was styled from, made with no
-    // layout (flow_pending_advance), by the read that asked or as a step's.
+    // layout (flow_pending_advance), by the read that asked, or as another
+    // rebuild's (a rendering step, a task's end, the window seen).
     uint64_t reads_kept, reads_laid[YONDER_LAYOUT_READ_KINDS], owed_covered;
-    uint64_t reads_unchanged[YONDER_LAYOUT_READ_KINDS], steps_unchanged;
+    uint64_t reads_unchanged[YONDER_LAYOUT_READ_KINDS], others_unchanged;
     const char *const *read_kind_names;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
@@ -179,8 +180,11 @@ typedef struct {
     uint64_t elements, boxes, reused, attempts;
     uint64_t at_us;             // when it ended (os64_micros), placed against the record's start
     // YONDER_LAYOUT_CASCADE_KEPT (nothing to update), _UPDATED, or why it
-    // was built fresh: an index into `cascade_reason_names`.
+    // was built fresh: an index into `cascade_reason_names`; `cascaded`
+    // says the layout reached its cascade at all, and so whether the rest
+    // says anything.
     int32_t cascade_why;
+    bool cascaded;
     const char *const *cascade_reason_names;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
 } yonder_layout_one_t;

@@ -1459,7 +1459,7 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     for (size_t i = 0; i < YONDER_LAYOUT_RESTYLE_REASONS; ++i)
         total->kept_declined[i] = layout_sum(total->kept_declined[i], sample->kept_declined[i]);
     if (sample->restyle_reason_names != NULL) total->restyle_reason_names = sample->restyle_reason_names;
-    ADD(reads_kept); ADD(owed_covered); ADD(steps_unchanged);
+    ADD(reads_kept); ADD(owed_covered); ADD(others_unchanged);
     for (size_t i = 0; i < YONDER_LAYOUT_READ_KINDS; ++i) {
         total->reads_laid[i] = layout_sum(total->reads_laid[i], sample->reads_laid[i]);
         total->reads_unchanged[i] = layout_sum(total->reads_unchanged[i], sample->reads_unchanged[i]);
@@ -1549,7 +1549,7 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     // work, those that met only paint-only writes and made the page current
     // all the same, by kind, the rendering steps a covered window owed, and
     // the rebuilds made with no layout for changes that moved nothing, by
-    // the read that asked or as a rendering step's.
+    // the read that asked, or as another rebuild's.
     if (s->read_kind_names != NULL) {
         char reads_key[64];
         os64_snprintf(reads_key, sizeof(reads_key), "%s reads", key);
@@ -1574,7 +1574,8 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
             at += (size_t)k;
         }
         if (at < sizeof(line))
-            os64_snprintf(line + at, sizeof(line) - at, ", steps %lu", (unsigned long)s->steps_unchanged);
+            os64_snprintf(line + at, sizeof(line) - at, ", other rebuilds %lu",
+                          (unsigned long)s->others_unchanged);
         yonder_diag_summary_fact(d, reads_key, line);
     }
     // `<key> cascade`: how many cascades were updated and how many built

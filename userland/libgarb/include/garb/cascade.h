@@ -209,7 +209,8 @@ bool garb_cascade_update(garb_cascade_t *c);
 // This checks only that each change is a style write on an element the
 // cascade styled; the judging is the caller's. The change log is read
 // whatever the answer, so false leaves a fresh cascade owed, as a failed
-// update does, and garb_cascade_update_refusal says why. Its generation and
+// update does, and garb_cascade_update_refusal says why until the next
+// update, which answers GARB_UPDATE_FAILED_BEFORE. Its generation and
 // its count of updates do not move: no value was derived.
 bool garb_cascade_advance(garb_cascade_t *c);
 

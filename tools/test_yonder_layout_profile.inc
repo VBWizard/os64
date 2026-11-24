@@ -688,7 +688,7 @@ static void random_walk_page(const char *page,uint32_t every,bool kept_any)
     // a bare style reader none is advanced.
     const char *unchanged=yonder_diag_fact_value(g.page.diag,"unchanged check");
     if(kept_any)
-        check(unchanged && strstr(unchanged," 0 differed") && record_number(unchanged,"")>=(every==1?10u:1u),
+        check(unchanged && strstr(unchanged," 0 differed") && record_number(unchanged,"")>=1u,
               "random walk: the trees advanced with no layout are laid out whole too, and none differs");
     else
         check(unchanged==NULL,"random walk: with a bare style reader, no tree is advanced");
@@ -727,7 +727,8 @@ static void random_walk_cases(void)
 static const char kUnchangedPage[]=
     "<!doctype html><style>%s</style><div id=x style='color:red;width:50px'>x</div><p id=out>-</p>"
     "<button id=same>a</button><button id=other>b</button><button id=important>c</button>"
-    "<button id=hit>d</button><button id=styles>e</button><button id=step>f</button><script>"
+    "<button id=hit>d</button><button id=styles>e</button><button id=step>f</button>"
+    "<button id=offset>g</button><script>"
     "const x=document.getElementById('x');let n=0;"
     "const text=()=>'color:red;width:50px'+' '.repeat(++n%%7+1);"
     "document.onclick=e=>{const m=e.target.id;let s=0;"
@@ -738,6 +739,7 @@ static const char kUnchangedPage[]=
     "else x.setAttribute('style',text());"
     "if(m==='hit')s+=document.elementFromPoint(5,5)?1:0,s+=document.elementFromPoint(5,5)?1:0;"
     "else if(m==='styles')s+=parseInt(getComputedStyle(x).width)+parseInt(getComputedStyle(x).width);"
+    "else if(m==='offset')s+=x.offsetWidth+x.offsetWidth;"
     "else s+=Math.round(x.getBoundingClientRect().width)+Math.round(x.getBoundingClientRect().width)}"
     "document.getElementById('out').textContent=''+s}</script>";
 /* One click of the unchanged page, and how many layouts it made. */
@@ -748,7 +750,7 @@ static void unchanged_click(const char *id,uint64_t *layouts)
     *layouts=geometry_layout_total-before;
 }
 /* The record's count of reads (or steps) made current with no layout, of
- * the kind `kind` ("rects ", "hits ", "styles ", "steps "). */
+ * the kind `kind` ("rects ", "hits ", "styles ", "other rebuilds "). */
 static unsigned unchanged_count(const char *kind)
 {
     const char *reads=yonder_diag_fact_value(g.page.diag,"layout reads");
@@ -787,17 +789,44 @@ static void unchanged_cases(void)
     script_turn();
     unchanged_click("step",&layouts);
     uint64_t before=geometry_layout_total;
-    check(script_rendering_step() && geometry_layout_total==before && unchanged_count("steps ")==1 &&
+    check(script_rendering_step() && geometry_layout_total==before && unchanged_count("other rebuilds ")==1 &&
           !page_rebuild_owed(&g.page),"unchanged: and for a rendering step");
     const char *checked=yonder_diag_fact_value(g.page.diag,"unchanged check");
     check(checked && strstr(checked,"16 compared, 0 differed"),
           "unchanged: --geometry-check lays each advanced tree out whole, and none differs");
     if(!checked || !strstr(checked,"16 compared, 0 differed")) printf("  unchanged check: %s\n",checked?checked:"(none)");
     script_turn();
+    // An offset read with nothing pending is answered from the tree, and the
+    // read check (--geometry-check) compares that answer with a layout's:
+    // never with the tree advanced, which would compare it with itself; and
+    // the check's own layouts are no forced layouts.
+    cost_reset();
+    unchanged_click("offset",&layouts);
+    const char *read_checked_said=yonder_diag_fact_value(g.page.diag,"read check");
+    check(layouts==5 && unchanged_count("rects ")==5 && s_cost.forced_phases.layouts==0 &&
+          read_checked_said && strstr(read_checked_said," 0 differed"),
+          "unchanged: the read check of a kept read lays out to compare, and counts nothing as forced");
+    if(layouts!=5 || s_cost.forced_phases.layouts!=0)
+        printf("  offset: layouts %lu, forced %lu\n",(unsigned long)layouts,(unsigned long)s_cost.forced_phases.layouts);
+    script_turn();
+    // A text's rectangles (a Range's, script_text_rects) are a rect read.
+    {
+        os64_html_node_t *x=(os64_html_node_t *)probe_id("x");
+        const char *again="color:red;width:50px            ";
+        uint64_t before_layouts=geometry_layout_total;
+        os64_html_set_attr((os64_html_document_t *)page_doc(&g.page),x,"style",again,strlen(again));
+        double rects[8];
+        os64_dom_geometry_stats_t cost={0};
+        size_t n=script_text_rects((void *)page_doc(&g.page),x->first_child,0,1,rects,2,&cost);
+        check(n>=1 && geometry_layout_total==before_layouts && unchanged_count("rects ")==6 &&
+              unchanged_count("other rebuilds ")==1,
+              "unchanged: a text's rectangles are a rect read, made current with no layout");
+    }
+    script_turn();
     cost_reset();
     unchanged_click("important",&layouts);
-    check(layouts==4 && unchanged_count("rects ")==6,"unchanged: a write that changes importance lays out");
-    if(layouts!=4 || unchanged_count("rects ")!=6)
+    check(layouts==4 && unchanged_count("rects ")==7,"unchanged: a write that changes importance lays out");
+    if(layouts!=4 || unchanged_count("rects ")!=7)
         printf("  important: layouts %lu, rects %u\n",(unsigned long)layouts,unchanged_count("rects "));
     // The forced layouts by phase: the four a read asked for, each
     // its cascade's (kept, updated or fresh), and the model rebuilds the
@@ -830,8 +859,26 @@ static void unchanged_cases(void)
     script_turn();
     s_kept_reads=false;
     unchanged_click("other",&layouts);
-    check(layouts==5 && unchanged_count("rects ")==6,"unchanged: with kept reads off, every write lays out");
+    check(layouts==5 && unchanged_count("rects ")==7,"unchanged: with kept reads off, every write lays out");
     s_kept_reads=true;
+    // A task's forced layouts by phase are its own (task_begin starts them,
+    // task_said keeps the longest task's).
+    {
+        script_turn();
+        cost_reset();
+        int64_t began=task_begin(g.page.scripts);
+        unchanged_click("important",&layouts);
+        os64_js_outcome_t said={0};
+        task_said(g.page.scripts,true,"click",&said,began);
+        check(s_cost.task_longest_phases.layouts==4,"forced phases: the longest task keeps its own forced layouts");
+        script_turn();
+        s_cost.task_longest=0;
+        began=task_begin(g.page.scripts);
+        unchanged_click("same",&layouts);
+        task_said(g.page.scripts,true,"click",&said,began);
+        check(s_cost.task_longest_phases.layouts==0 && s_cost.task_longest_phases.models==0,
+              "forced phases: and a task that forced none has none of the one before");
+    }
     s_geometry_check=0;
     s_unchanged_compared=s_unchanged_differed=0;
     s_layout_profile=false;

@@ -172,8 +172,11 @@ restyle in place, and a layout if it declines):
 | the paint at a task's end, window covered | — | **—** (owed) | S |
 
 **NONE's column is carried out in one place**: `script_rebuild`, which
-every asker above and the rebuild after a script's changes pass through,
-asks `flow_pending_advance` before it stages a layout. NONE there (inline
+every asker that makes the page current passes through (the reads that
+make it current, and the rebuild after a script's changes on a window that
+is seen), asks `flow_pending_advance` before it stages a layout. Offset and
+client reads answer from the tree with nothing made current, as before, and
+a covered window owes its step. NONE there (inline
 styles written back to what the cascade parsed, and nothing else since the
 tree; the same text is no change at all, libhtml keeps the version) brings
 the cascade to the document's version with nothing restyled
@@ -320,7 +323,8 @@ of what was pending, or why nothing could be said, and where;
 refusals by element; a style write judged RESTYLE names what made it one
 (`restyle: a style write: width`, `...: transform side`, `...: animated`);
 `layout reads` ends with the rebuilds NONE made with no layout, by the
-read that asked (or a rendering step's); and with `--geometry-check` the
+read that asked (or as another rebuild's: a rendering step, a task's end,
+the window seen); and with `--geometry-check` the
 `unchanged check` lays every Nth tree so advanced out whole beside itself.
 
 ## N2a: a style reader narrows to the elements it may match

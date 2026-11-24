@@ -180,7 +180,7 @@ static flow_pending_verdict_t pending_judge(flow_tree_t *tree, const garb_cascad
     garb_inline_change_t changes[64];
     int32_t n = garb_cascade_inline_changes(cascade, el, changes, 64);
     if (n < 0)
-        return pending_restyle(why, cap, "customs or unparsed");
+        return pending_restyle(why, cap, "inline changes unknown");
     const flow_style_t *s = &rec->style;
     for (int32_t i = 0; i < n; i++) {
         const garb_inline_change_t *c = &changes[i];
