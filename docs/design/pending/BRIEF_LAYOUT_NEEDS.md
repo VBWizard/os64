@@ -135,8 +135,10 @@ records plus that offset. So a rect read equals a whole layout's rounding
 edge by edge, never a rounded delta. The records stay as the layout made
 them, and so does the graft's snapshot reader (#722's rule), so the next
 layout places the written element afresh. The page's extent and the
-scrollers' ranges are reached again, the marks are the written element's
-before and after (N3's), the moved boxes' drawn stamps move, and yonder
+scrollers' ranges are reached again, the moved boxes' ink is reached
+again (a clip outside them, which did not move, cuts it), the marks are
+the written element's before and after (N3's), the moved boxes' drawn
+stamps move, and yonder
 tells the observers something moved. The record counts kept moves (`layout
 kept: ... a box that only moved N (M boxes)`).
 

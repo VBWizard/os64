@@ -87,6 +87,8 @@ mutants = [
      '    if (0 && marking)\n        marked = keep_changed(tree, &k, &written, &changed, &all);\n'),
     ('the-observers-not-told-of-a-move', YONDER,
      '    if (kept.moved > 0)\n        s_ticks_moved++;\n', ''),
+    ('a-moved-box-s-ink-kept', FLOW, '    ink_reach(box);\n    for (const flow_box_t *b = box;',
+     '    for (const flow_box_t *b = box;'),
     ('a-move-left-unmarked-in-the-snapshot', FLOW,
      '    if (t->reuse != NULL)\n        reuse_mark(t->reuse, node);\n', ''),
     ('a-moved-box-s-stamp-kept', FLOW,

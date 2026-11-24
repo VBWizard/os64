@@ -725,9 +725,39 @@ static void restyle_move_by_a_class(void)
     sheeted_close(&p);
 }
 
+// A MOVE UNDER A CLIP (N4): what a box inside the moved one draws past its
+// box (a text shadow) is cut by a clip outside it, which did not move; the
+// moved boxes' ink is reached again, so the newly uncut shadow is in it.
+static void restyle_move_ink(void)
+{
+    static char html[16384];
+    size_t len = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>p{color:red;padding:2px}</style>"
+        "<div style='position:relative;width:400px;height:100px;overflow:clip'>"
+        "<div id=m style='position:absolute;width:50px;left:0px;top:0px'>"
+        "<span style='text-shadow:-30px 0 red'>text</span></div></div>");
+    for (int i = 0; i < 400 && len < sizeof(html) - 64; i++)
+        len += (size_t)snprintf(html + len, sizeof(html) - len, "<p>%d</p>", i);
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
+    static const char moved[] = "position:absolute;width:50px;left:100.25px;top:0px";
+    os64_html_set_attr(p.doc, graft_node(&p, "m"), "style", moved, sizeof(moved) - 1);
+    graft_update(&p);
+    flow_restyle_t kept = old != NULL ? restyle_keep(&p, old) : (flow_restyle_t){0};
+    flow_tree_t *whole = graft_layout(&p, NULL, NULL, NULL);
+    const os64_html_node_t *at = NULL;
+    const char *what = NULL;
+    expect("restyle: a move under a clip reaches its shadow's ink again", kept.kind == FLOW_RESTYLE_PAINT &&
+           kept.moved == 1 && whole != NULL && flow_restyle_check(old, whole, &at, &what), what);
+    flow_free(whole);
+    flow_free(old);
+    sheeted_close(&p);
+}
+
 static void restyle_in_place_cases(void)
 {
     restyle_offset_cases();
+    restyle_move_ink();
     restyle_move_by_a_class();
     restyle_move_marks();
     restyle_move_sequences();

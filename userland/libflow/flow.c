@@ -5949,8 +5949,9 @@ static const FMoved *tree_moved_of(void *ctx, const os64_html_node_t *node)
 // restyle wrote its insets (restyle.inc's keep_move): its offset since the
 // layout summed on the tree, and what was made of it made again from its
 // records, which stay where the layout left them, at that offset plus what
-// the moved boxes round it moved (public_box's relocation); every box in it
-// stamped `stamp`, since everything it draws is somewhere else. False when
+// the moved boxes round it moved (public_box's relocation); its ink reached
+// again; every box in it stamped `stamp`, since everything it draws is
+// somewhere else. False when
 // the room or the records ran out, which leaves part of it moved: the
 // caller declines, and the layout that follows makes the tree afresh.
 static bool move_box(flow_tree_t *t, const os64_html_node_t *node, int64_t dx, int64_t dy, uint64_t stamp)
@@ -5990,6 +5991,10 @@ static bool move_box(flow_tree_t *t, const os64_html_node_t *node, int64_t dx, i
     public_box(&bd, src, (flow_box_t *)box->parent, &last, kNoClip);
     if (bd.failed)
         return false;
+    // What the boxes in it draw past their own boxes is cut where a clip
+    // outside it cuts it, and that clip did not move: their ink is reached
+    // again from their own. The moved box is stacked, so it hands none up.
+    ink_reach(box);
     for (const flow_box_t *b = box; b != NULL; b = box_after_in(box, b))
         drawn_changed(b, true, stamp);
     return true;
