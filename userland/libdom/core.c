@@ -999,7 +999,8 @@ static int install_binding(os64_dom_t *dom, JSContext *ctx)
     os64_html_document_t *document = dom->document;
     os64_dom_cluster_t *cluster = dom->cluster;
     const JSClassDef anchor_definition = {.class_name = "DOMBinding", .finalizer = clear_opaque};
-    const JSClassDef node_definition = {.class_name = "Node", .finalizer = clear_opaque, .exotic = &d_node_exotic};
+    const JSClassDef node_definition = {.class_name = "Node", .finalizer = clear_opaque, .gc_mark = d_node_mark,
+                                        .exotic = &d_node_exotic};
     const JSClassDef style_definition = {
         .class_name = "CSSStyleDeclaration", .finalizer = clear_opaque, .exotic = &d_style_exotic
     };
@@ -1010,7 +1011,8 @@ static int install_binding(os64_dom_t *dom, JSContext *ctx)
         .class_name = "DOMStringMap", .finalizer = clear_opaque, .exotic = &d_map_exotic
     };
     const JSClassDef collection_definition = {
-        .class_name = "HTMLCollection", .finalizer = clear_opaque, .exotic = &d_collection_exotic
+        .class_name = "HTMLCollection", .finalizer = d_query_finalize, .gc_mark = d_query_mark,
+        .exotic = &d_collection_exotic
     };
     if ((!JS_IsRegisteredClass(dom->engine, dom->anchor_class) && JS_NewClass(dom->engine, dom->anchor_class, &anchor_definition) < 0) ||
         (!JS_IsRegisteredClass(dom->engine, dom->node_class) && JS_NewClass(dom->engine, dom->node_class, &node_definition) < 0) ||

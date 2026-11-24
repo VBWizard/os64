@@ -67,7 +67,6 @@ struct DClicking {
     const os64_html_node_t *node;
     const struct DClicking *next;
 };
-typedef struct DScript DScript;
 typedef struct DRequest DRequest;
 typedef struct DClone DClone;
 typedef struct DMessage DMessage;
@@ -269,6 +268,9 @@ struct DValue {
     /* A DOMTokenList's own entry: the attribute it is over (D_TOKENS_*). */
     uint8_t tokens;
     bool image_reported;
+    /* A node wrapper's record whose object is gone, waiting to be swept: the
+     * door (d_find) answers as if the node had no wrapper. */
+    bool dead;
     /* A plain target's entry IN THE OBJECT (d_event_target_init): this
      * record is the first member of the object's own state, outside the
      * registry; `value` is the object itself, not a reference; its
@@ -293,11 +295,23 @@ struct DValue {
  * one is an XML document made for the SVG namespace, which differs from
  * the rest only in its content type (image/svg+xml). */
 enum { D_DOCUMENT_HTML = 0, D_DOCUMENT_XHTML, D_DOCUMENT_XML, D_DOCUMENT_SVG };
+/* A live collection's record. A collection is held one of two ways:
+ * - KEPT: a record keeps it ([SameObject]: childNodes, children, a form's
+ *   elements), so the registry holds its object through `entry`.
+ * - SCRIPT'S: made fresh for each call (getElementsByTagName and its
+ *   kin), so the object alone holds it. It holds its root's wrapper
+ *   (`holder`, reported by the class's mark), since the nodes it hands
+ *   back are of that tree. Its finalizer marks it `dead`, and
+ *   d_queries_sweep frees it outside any collection, because releasing
+ *   its nodes may free them (libhtml collects at a release).
+ * Both kinds are on dom->queries until freed. */
 struct DQuery {
     os64_dom_t *dom;
     const os64_html_node_t *root, *owner;
     DQuery *next;
     DValue *entry;
+    JSValue holder;
+    bool dead;
     char *name, *folded, *named;
     /* The root's node document was an HTML document when the query was
      * made: an HTML element's name is then matched against `folded`. */
@@ -316,8 +330,9 @@ struct DQuery {
     DQuery *radio_next;
 };
 /* One addEventListener registration, or a target's on<type> handler slot.
- * The callback is a C-held engine value, drained with the registry. A
- * removed record keeps its place until no dispatch can be walking it. */
+ * Its callback is the target object's (`engine`) or the registry's; drain
+ * releases both kinds. A removed record keeps its place until no dispatch
+ * can be walking it. */
 struct DListener {
     DListener *next;
     os64_dom_t *owner, *callback_owner;
@@ -332,9 +347,12 @@ struct DListener {
     int kind;
     uint8_t handler;
     bool capture, once, removed;
-    /* On a collectable plain target: its callback is the target's to trace
-     * and free, not one of the registry's values. */
-    bool engine;
+    /* `engine`: the callback is the target object's, traced by its class's
+     * mark (a node wrapper's, a plain target's) and freed with it, and not
+     * one of the registry's values.
+     * `uncounted`: on a plain target the host never dispatches to, so it
+     * is left out of listen_counts. */
+    bool engine, uncounted;
     /* The script the callback is (d_callback_script); a handler compiled
      * from its attribute is the page's. */
     uint32_t script;
@@ -365,10 +383,10 @@ struct DTimer {
     int argc;
     JSValue *argv;
 };
-struct DScript {
-    DScript *next;
-    const os64_html_node_t *node;
-};
+/* The binding's bits on a node (os64_html_node_t.binding). STARTED: a
+ * script's ALREADY STARTED, which belongs to the node's identity, so it
+ * lives on the node and goes with it. */
+enum { D_BINDING_STARTED = 1 };
 typedef struct {
     os64_dom_navigation_kind_t kind;
     const os64_html_node_t *node, *submitter;
@@ -551,6 +569,8 @@ struct os64_dom {
     /* Set while the map's own ordinary property is asked of the engine,
      * which the map's named properties then do not answer (attr.c). */
     bool attr_ordinary;
+    /* `values`: every record the binding keeps, the list any walk over all
+     * wrappers takes; drain releases their values and free frees them. */
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
     struct DLocationExotic *location_exotic;
     struct DWindowProxy *window_proxy_state;
@@ -566,6 +586,8 @@ struct os64_dom {
     DValue *prototypes[D_PROTO_COUNT];
     DValue *buckets[D_BUCKETS];
     DQuery *queries;
+    /* Some script's collection on `queries` is dead (d_queries_sweep). */
+    bool queries_dead;
     /* Listener and timer callbacks are the registry's other two lists. */
     size_t listeners_held, timers_held;
     uint32_t listen_counts[D_EVENT_COUNT];
@@ -603,7 +625,6 @@ struct os64_dom {
      * chains belong to the nodes' creation binding so adoption cannot
      * bypass an active flag. */
     const struct DClicking *clicking, *submitting;
-    DScript *scripts[64];
     char *url;
     DNavigation navigation;
     os64_js_outcome_t report;
@@ -1013,7 +1034,17 @@ const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst val
 os64_dom_t *d_owner(os64_dom_t *, const os64_html_node_t *);
 os64_dom_t *d_creation_owner(os64_dom_t *, const os64_html_node_t *);
 bool d_same_cluster(const os64_dom_t *, const os64_dom_t *);
+/* The record of the node's wrapper, or NULL when it has none (a dead
+ * record counts as none). */
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
+/* The record of the node's wrapper, the wrapper made when it has none, and
+ * the wrapper itself in *held, which the caller frees when it is done with
+ * the record. NULL with an exception pending when it could not be made. */
+DValue *d_wrap_record(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, JSValue *held);
+/* Whether the record is a node wrapper's (wrapper_attach gave it its node). */
+static inline bool d_node_wrapper(const DValue *entry) { return entry->node != NULL; }
+/* The Node class's mark: every count a wrapper's record owns. */
+void d_node_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark);
 int d_point_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_point_dictionary(JSContext *, JSValueConst, double out[4]);
 bool d_svg_geometry_node(const os64_html_node_t *);
@@ -1230,8 +1261,16 @@ JSValue d_attribute_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_
  * when `fold`). */
 bool d_has_token(const char *list, const char *token, size_t length, bool fold);
 extern JSClassExoticMethods d_collection_exotic;
+/* A live collection over `root`. `kept`: a record will keep it (DQuery's
+ * KEPT); otherwise it is the script's alone. */
 JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
-                     bool descendants, bool elements, const char *name);
+                     bool descendants, bool elements, const char *name, bool kept);
+/* The collection class's finalizer and mark (core.c defines the class). */
+void d_query_finalize(JSRuntime *rt, JSValue value);
+void d_query_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark);
+/* Frees the script's collections whose objects are gone. Not inside an
+ * engine collection: freeing one releases its nodes. */
+void d_queries_sweep(os64_dom_t *dom);
 JSValue d_children(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
                    bool elements);
 bool d_string(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString *out);
@@ -1317,7 +1356,9 @@ bool d_listed(const os64_html_node_t *node);
  * (classic.c): the `index`th, NULL past the last; *count, when not NULL,
  * how many there are. */
 const os64_html_node_t *d_form_control(const os64_html_node_t *form, uint32_t index, uint32_t *count);
-JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
+/* `kept` as d_collection's. */
+JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind,
+                             const char *named, bool kept);
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, unsigned kind);
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* NEVER SWALLOW A RUNTIME'S FAILURE. Whether the exception pending may be

@@ -5151,13 +5151,16 @@ static void holders_text(const Page *p, char *out, size_t cap)
                   "detached and held, by a script wrapper's node %lu units, %lu nodes (%lu elements); by the change "
                   "log alone %lu, %lu (%lu); by something else %lu, %lu (%lu); node wrappers %lu: in the document %lu, "
                   "elsewhere %lu, of those only our registry references %lu; the change log: %lu readers (%lu lost), "
-                  "the oldest %lu versions behind, %lu entries, %lu bytes",
+                  "the oldest %lu versions behind, %lu entries, %lu bytes; live collections %lu, %lu of them made "
+                  "for one call, %lu dropped and waiting to be freed",
                   (unsigned long)h.marked.units, (unsigned long)h.marked.nodes, (unsigned long)h.marked.elements,
                   (unsigned long)h.log_only.units, (unsigned long)h.log_only.nodes, (unsigned long)h.log_only.elements,
                   (unsigned long)h.other.units, (unsigned long)h.other.nodes, (unsigned long)h.other.elements,
                   (unsigned long)w.wrappers, (unsigned long)w.connected, (unsigned long)w.elsewhere,
                   (unsigned long)w.elsewhere_only_ours, (unsigned long)h.readers, (unsigned long)h.lost_readers,
-                  (unsigned long)h.oldest_lag, (unsigned long)h.log_entries, (unsigned long)h.log_bytes);
+                  (unsigned long)h.oldest_lag, (unsigned long)h.log_entries, (unsigned long)h.log_bytes,
+                  (unsigned long)w.collections, (unsigned long)w.collections_script,
+                  (unsigned long)w.collections_dead);
 }
 
 static void diag_observe(Page *p, const char *when)
@@ -5174,7 +5177,7 @@ static void diag_observe(Page *p, const char *when)
     char nodes[640];
     census_text(p, nodes, sizeof(nodes));
     yonder_diag_fact(d, "nodes", nodes);
-    char holders[640];
+    char holders[768];
     holders_text(p, holders, sizeof(holders));
     yonder_diag_fact(d, "holders", holders);
     if (p->svg_cache) {
@@ -10336,7 +10339,7 @@ static void diag_paint_reading(Page *p, uint32_t n)
         census_text(p, nodes, sizeof(nodes));
         os64_snprintf(nkey, sizeof(nkey), "nodes reading %u", (unsigned)n);
         yonder_diag_reading_fact(p->diag, nkey, nodes);
-        char holders[640];
+        char holders[768];
         holders_text(p, holders, sizeof(holders));
         os64_snprintf(nkey, sizeof(nkey), "holders reading %u", (unsigned)n);
         yonder_diag_reading_fact(p->diag, nkey, holders);

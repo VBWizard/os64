@@ -8,12 +8,35 @@ static size_t bucket(const os64_html_node_t *node)
     return (key >> 3) % D_BUCKETS;
 }
 
+/* THE DOOR to a node's wrapper: every lookup of the record for a node goes
+ * through here, and a dead record is no wrapper. */
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node)
 {
     DValue **table = dom->cluster ? dom->cluster->buckets : dom->buckets;
     for (DValue *entry = table[bucket(node)]; entry != NULL; entry = entry->hash_next)
-        if (entry->node == node) return entry;
+        if (entry->node == node && !entry->dead) return entry;
     return NULL;
+}
+
+void d_node_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    const DValue *entry = JS_GetOpaque(value, JS_GetClassID(value));
+    if (entry == NULL) return;
+    for (const DListener *listener = entry->listeners; listener != NULL; listener = listener->next)
+        if (listener->engine) JS_MarkValue(rt, listener->callback, mark);
+}
+
+DValue *d_wrap_record(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, JSValue *held)
+{
+    *held = d_wrap(dom, ctx, node);
+    if (JS_IsException(*held)) return NULL;
+    DValue *entry = JS_GetOpaque(*held, dom->node_class);
+    if (entry == NULL) {
+        JS_FreeValue(ctx, *held);
+        *held = JS_UNDEFINED;
+        JS_ThrowTypeError(ctx, "Missing node wrapper");
+    }
+    return entry;
 }
 
 os64_dom_t *d_owner(os64_dom_t *dom, const os64_html_node_t *node)
@@ -625,7 +648,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         DString string = {0};
         if (!d_string(dom, ctx, argv[0], &string)) return JS_EXCEPTION;
         JSValue result = JS_NULL;
-        if (magic == D_GET_TAG) result = d_collection(dom, ctx, node, true, true, string.data);
+        if (magic == D_GET_TAG) result = d_collection(dom, ctx, node, true, true, string.data, false);
         else if (string.length != 0) {
             for (const os64_html_node_t *at = node->first_child; at != NULL; at = d_walk_next(node, at)) {
                 const os64_html_attr_t *id = os64_html_attr(at, "id");
@@ -825,6 +848,15 @@ size_t os64_dom_wrappers(const os64_dom_t *dom, const os64_html_node_t **out, si
         if (n < cap)
             out[n] = entry->node;
         n++;
+    }
+    for (const DQuery *query = dom->queries; query != NULL; query = query->next) {
+        if (query->dead) {
+            counts->collections_dead++;
+            continue;
+        }
+        counts->collections++;
+        if (query->entry == NULL)
+            counts->collections_script++;
     }
     return n;
 }

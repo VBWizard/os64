@@ -1019,9 +1019,14 @@ size_t os64_dom_registry_count(const os64_dom_t *dom);
  * count is 1, so no script and no other engine value holds it). The
  * nodes of the rest go to `out`, up to `cap` of them; the answer is how
  * many there were. Each wrapper holds its node (os64_html_hold) for as
- * long as it is on the registry. */
+ * long as it is on the registry.
+ * Also the live collections' records: `collections`, of which
+ * `collections_script` are the script's (made for one call, not kept by
+ * a record), and `collections_dead`, the script's whose objects are gone
+ * and that wait to be freed with their holds. */
 typedef struct {
     size_t wrappers, connected, elsewhere, elsewhere_only_ours;
+    size_t collections, collections_script, collections_dead;
 } os64_dom_wrappers_t;
 size_t os64_dom_wrappers(const os64_dom_t *dom, const os64_html_node_t **out, size_t cap, os64_dom_wrappers_t *counts);
 /* WHAT os64_dom_bytes HOLDS, by kind (MEMORY_CENSUS.md § 4): every block
@@ -1564,8 +1569,8 @@ bool os64_dom_script_ended(os64_dom_t *dom, const char *name, os64_js_outcome_t 
  * rules (type, else language, the sixteen JavaScript MIME essences, module,
  * importmap);
  * it reads attributes only and works without a binding. start marks a script
- * ALREADY STARTED: 1 when it was not, 0 when it was, -1 when the binding
- * could not record it. A script parsed by innerHTML, or copied from a started
+ * ALREADY STARTED: 1 when it was not, 0 when it was, -1 for no binding or a
+ * node not of its document. A script parsed by innerHTML, or copied from a started
  * one, is born started; a started script never runs again wherever it moves. */
 os64_dom_script_kind_t os64_dom_script_kind(const os64_html_node_t *node);
 int os64_dom_script_start(os64_dom_t *dom, const os64_html_node_t *node);

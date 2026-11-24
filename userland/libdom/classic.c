@@ -88,7 +88,7 @@ JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx,
                     &more->elements;
     if (*slot != NULL) return JS_DupValue(ctx, (*slot)->entry->value);
     const os64_html_node_t *root = kind == D_QUERY_CONTROLS ? dom_root(node) : node;
-    JSValue value = d_special_collection(dom, ctx, root, kind, NULL);
+    JSValue value = d_special_collection(dom, ctx, root, kind, NULL, true);
     if (!JS_IsException(value)) {
         *slot = JS_GetOpaque(value, dom->collection_class);
         // The search covers the document so controls with form= participate.
@@ -176,7 +176,7 @@ static int named_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCon
         if (count == 1) value = d_wrap(entry->dom, ctx, first);
         else if (kind == D_QUERY_CONTROLS) value = d_radio_list(entry->dom, ctx, root, name);
         else {
-            value = d_special_collection(entry->dom, ctx, search, kind, name);
+            value = d_special_collection(entry->dom, ctx, search, kind, name, false);
             if (!JS_IsException(value)) ((DQuery *)JS_GetOpaque(value, entry->dom->collection_class))->owner = root;
         }
     }

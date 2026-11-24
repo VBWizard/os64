@@ -259,17 +259,19 @@ void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t s
     d_report_error(dom, ctx, error, script);
 }
 
-/* LISTENER RECORDS. A callback held by a record is one of the registry's
- * values: listeners_held counts them and drain releases them. A collectable
- * plain target's are its own (DListener.engine): traced and freed with it,
- * and not counted, as the host never dispatches to such a target. */
+/* LISTENER RECORDS. A node wrapper's and a collectable plain target's
+ * callbacks are the object's (DListener.engine): its class's mark traces
+ * them and they go with it. Any other target's are the registry's values,
+ * which listeners_held counts. Drain releases both. A plain target's are
+ * also left out of listen_counts (DListener.uncounted), as the host never
+ * dispatches to such a target. */
 
 static void listeners_changed(os64_dom_t *dom, DValue *entry);
 
 static void count(os64_dom_t *dom, const DListener *listener, int delta)
 {
     dom = listener->owner;
-    if (listener->kind >= 0 && !listener->engine) dom->listen_counts[listener->kind] += (uint32_t)delta;
+    if (listener->kind >= 0 && !listener->uncounted) dom->listen_counts[listener->kind] += (uint32_t)delta;
 }
 
 static void set_callback_record(os64_dom_t *dom, DListener *listener, JSValue value,
@@ -383,7 +385,8 @@ static DListener *listener_new(os64_dom_t *dom, JSContext *ctx, DValue *entry, c
     listener->kind = d_event_kind(type);
     listener->callback = JS_UNDEFINED;
     listener->captured = (os64_js_callback_t)OS64_JS_CALLBACK_INIT;
-    listener->engine = entry->engine_held;
+    listener->engine = entry->engine_held || d_node_wrapper(entry);
+    listener->uncounted = entry->engine_held;
     if (at_head || entry->listeners == NULL) {
         listener->next = entry->listeners;
         entry->listeners = listener;
@@ -1145,10 +1148,11 @@ static int path_entry(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *a
 {
     DValue *entry = d_find(dom, at);
     if (entry == NULL && element_has_handler(dom, at, kind)) {
-        JSValue wrapper = d_wrap(dom, ctx, at);
-        if (JS_IsException(wrapper)) return -1;
-        JS_FreeValue(ctx, wrapper);
-        entry = d_find(dom, at);
+        /* The record outlives `held`: the registry owns the wrapper. */
+        JSValue held;
+        entry = d_wrap_record(dom, ctx, at, &held);
+        if (entry == NULL) return -1;
+        JS_FreeValue(ctx, held);
     }
     *out = entry;
     return 0;

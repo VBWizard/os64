@@ -88,6 +88,10 @@ typedef struct os64_html_node {
     /* A shadow root's OS64_HTML_SHADOW_* options (SHADOW TREES, below);
      * zero on every other node. Set once, by os64_html_attach_shadow. */
     uint8_t shadow;
+    /* The script binding's own bits (libdom's D_BINDING_*): zero at birth,
+     * kept across adoption, never read by libhtml. Only
+     * os64_html_set_binding changes them. */
+    uint8_t binding;
     const char *public_id, *system_id;
     const char *text;
     size_t text_len;
@@ -376,6 +380,9 @@ typedef uint64_t os64_html_pin_t;
  * detached subtree, so the node must not be read after release. Document
  * teardown refuses outstanding holds as well as live snapshot pins. */
 void os64_html_hold(const os64_html_document_t *doc, const os64_html_node_t *node);
+/* Sets the node's `binding` bits. No version moves: they are no part of
+ * the tree. */
+void os64_html_set_binding(const os64_html_node_t *node, uint8_t bits);
 /* WHERE EVERY NODE IS: each live node whose document is `doc`, by where it
  * sits, and the elements among them, each in one of these: in the document
  * (`connected`); inside a template's contents or a shadow tree hanging from

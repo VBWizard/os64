@@ -13352,6 +13352,17 @@ static void holders_page(const char *script, os64_html_holders_t *h, os64_dom_wr
     os64_html_census(g.page.way.doc, c);
 }
 
+/* A whole engine collection on the page's runtime, as the engine would run
+ * one when its heap grows. */
+static void holders_collect(void)
+{
+    os64_js_outcome_t out;
+    JSContext *ctx = os64_js_context(teardown_fixture_runtime, OS64_JS_ABI_ID, &out);
+    check(ctx != NULL, "holders: the page's runtime is at hand for a collection");
+    if (ctx != NULL)
+        JS_RunGC(JS_GetRuntime(ctx));
+}
+
 static void node_holders_cases(void)
 {
     os64_html_holders_t h;
@@ -13385,6 +13396,38 @@ static void node_holders_cases(void)
                  &h, &w, &c);
     check(h.marked.units == 10 && w.elsewhere == 10 && w.elsewhere_only_ours == 9,
           "holders: a wrapper the script still reaches is not one only the registry holds");
+    probe_drop();
+    holders_page("box.innerHTML='<script>1<\\/script>'.repeat(50);box.innerHTML='';", &h, &w, &c);
+    check(c.nodes.held == 0 && h.other.units == 0,
+          "holders: scripts parsed started and removed are not held by their mark");
+    probe_drop();
+    /* A collection made for one call is the script's: once dropped and
+     * collected it waits, and the next one made frees it. One the script
+     * keeps stays live and follows the tree. */
+    holders_page("for(let i=0;i<200;i++)document.getElementsByTagName('p');"
+                 "window.list=box.getElementsByTagName('i');"
+                 "setTimeout(()=>{box.appendChild(document.createElement('i'));"
+                 "box.dataset.r=String(list.length)+' '+String(document.getElementsByTagName('b').length);},100);",
+                 &h, &w, &c);
+    holders_collect();
+    yonder_scripts_wrappers(g.page.scripts, NULL, 0, &w);
+    /* The engine may have collected, and a later call swept, some of the
+     * 200 already: what is left is dead, and the kept one is not. */
+    check(w.collections_script == 1 && w.collections_dead >= 1 && w.collections_dead <= 200,
+          "holders: the dropped collections die with their objects, the one kept does not");
+    now_ms += 200;
+    script_turn();
+    yonder_scripts_wrappers(g.page.scripts, NULL, 0, &w);
+    const os64_html_attr_t *r = os64_html_attr(probe_id("box"), "data-r");
+    /* The timer's own collection was dropped as it returned: at most it is
+     * dead now. */
+    check(r != NULL && r->value != NULL && strcmp(r->value, "1 0") == 0 && w.collections_dead <= 1 &&
+              w.collections_script == 1,
+          "holders: the next collection made frees the dead, and the kept one is live");
+    if (r == NULL || r->value == NULL || strcmp(r->value, "1 0") != 0 || w.collections_dead > 1)
+        printf("  data-r %s, collections %lu, the script's %lu, dead %lu\n",
+               r != NULL && r->value != NULL ? r->value : "(none)", (unsigned long)w.collections,
+               (unsigned long)w.collections_script, (unsigned long)w.collections_dead);
     probe_drop();
 }
 

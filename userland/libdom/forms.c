@@ -32,7 +32,7 @@ static JSValue fieldset_elements(os64_dom_t *dom, JSContext *ctx, const os64_htm
     if (d_more_peek(entry)->elements != NULL) return JS_DupValue(ctx, d_more_peek(entry)->elements->entry->value);
     DValueMore *more = d_more(dom, ctx, entry);
     if (more == NULL) return JS_EXCEPTION;
-    JSValue value = d_special_collection(dom, ctx, fieldset, D_QUERY_FIELDSET, NULL);
+    JSValue value = d_special_collection(dom, ctx, fieldset, D_QUERY_FIELDSET, NULL, true);
     if (!JS_IsException(value)) more->elements = JS_GetOpaque(value, dom->collection_class);
     return value;
 }
