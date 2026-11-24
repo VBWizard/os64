@@ -84,12 +84,17 @@ typedef struct {
     /* canPlayType's answer for a MIME type with its parameters: 0 for "",
      * 1 for "maybe", 2 for "probably". */
     int (*can_play)(void *opaque, const char *type);
-    /* The element failed with no session to say why: its address did not
-     * resolve against the page, or `open` answered NULL. `reference` is the
-     * address as the page wrote it (absolute once it resolved), `code` and
-     * `why` the MediaError the page is handed, so the host can say so where
-     * it says why other loads failed. NULL for none. */
-    void (*failed)(void *opaque, const os64_html_node_t *node, const char *reference, int code, const char *why);
+    /* The element failed, told once a failure: `session` the one whose
+     * facts said so (NULL when there was none: its address did not resolve
+     * against the page, or `open` answered NULL), `reference` the address
+     * (as the page wrote it when it did not resolve), and `code` and `why`
+     * the MediaError the page is handed, which for a session that failed
+     * before its length was known is MEDIA_ERR_SRC_NOT_SUPPORTED whatever
+     * its facts said (a <source> candidate's failure moves on to the next
+     * and hands the page no error, and is told all the same). NULL for
+     * none. */
+    void (*failed)(void *opaque, const os64_html_node_t *node, void *session, const char *reference, int code,
+                   const char *why);
 } os64_dom_media_provider_t;
 
 /* What a media element's controls show (AUDIO_YONDER.md § The controls),

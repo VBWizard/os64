@@ -78,13 +78,14 @@ void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
 }
 /* A failure's line, for the fake session when `fake_media_failing` says
  * the next facts fail: given once, as media.c gives it. */
-bool yonder_media_failure_take(yonder_media_t *m, char *out, size_t cap)
+bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t cap)
 {
+    static const char *const kClass[] = {"error", "aborted", "network", "decode", "not supported"};
     if (m != (yonder_media_t *)&fake_media_session || !fake_media_failing || fake_media_failure_taken)
         return false;
     fake_media_failure_taken = true;
-    snprintf(out, cap, "http://x.test/v.mp4: video 1, decode: damaged past decoding (HTTP 200, video/mp4, "
-             "4096 bytes received, the first request)");
+    snprintf(out, cap, "http://x.test/v.mp4: video 1, %s: damaged past decoding (HTTP 200, video/mp4, "
+             "4096 bytes received, the first request)", kClass[code >= 1 && code <= 4 ? code : 3]);
     return true;
 }
 int yonder_media_can_play(const char *type) { (void)type; return 0; }
@@ -13134,7 +13135,8 @@ static void sheet_worker_cases(void)
  * its address, its kind and place, and why: a session that never began
  * (no sound here: the hosted open answers none) is the element's network
  * error, said by yonder itself; one that failed later is media.c's line,
- * taken once however often its facts are read. */
+ * with the class libdom handed the page, taken once however often its
+ * facts are read. */
 static void media_failure_cases(void)
 {
     probe_page("<!doctype html><audio src=http://x.test/a.mp3></audio><video src=http://x.test/c.mp4></video>"
@@ -13171,9 +13173,11 @@ static void media_failure_cases(void)
         media_turn();
     }
     yonder_diag_render(g.page.diag, text, sizeof(text));
-    check(has(text, "\nFAILED media: http://x.test/v.mp4: video 1, decode: damaged past decoding (HTTP 200, video/mp4, "
-                    "4096 bytes received, the first request) (1)\n"),
-          "media failed: a session's own failure, its line taken once");
+    check(has(text, "\nFAILED media: http://x.test/v.mp4: video 1, not supported: damaged past decoding (HTTP 200, "
+                    "video/mp4, 4096 bytes received, the first request) (1)\n"),
+          "media failed: a session's own failure before its length, its line taken once with the class the page has");
+    if (!has(text, "FAILED media: http://x.test/v.mp4"))
+        printf("%s\n", text);
     yonder_diag_free(g.page.diag);
     g.page.diag = NULL;
     probe_drop();

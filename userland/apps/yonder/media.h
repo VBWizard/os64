@@ -91,9 +91,11 @@ void yonder_media_settings(yonder_media_t *m, double gain, bool muted, bool loop
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out);
 // Once a session has failed (its facts' `error`), its FAILED media line
 // once, into `out`: its address, then media_bytes.h's words for what it
-// failed with and what was heard of the fetch and from libmedia. False
-// before it has failed, and after the line was taken.
-bool yonder_media_failure_take(yonder_media_t *m, char *out, size_t cap);
+// failed with — `code` the MediaError the page was handed, which libdom
+// decides (dom/media.h's `failed`), 0 for the session's own — and what was
+// heard of the fetch and from libmedia. False before it has failed, and
+// after the line was taken.
+bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t cap);
 // A <video>'s picture to show at `blank` (wall microseconds, the blank a
 // publish now is seen at), `period` the display's: its player's
 // (os64_media_player_frame, whose rule the pixels keep). False with `out`

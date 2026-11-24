@@ -13812,19 +13812,23 @@ static void media_settings(void *opaque, void *session, double gain, bool muted,
 }
 static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out)
 {
+    (void)opaque;
     yonder_media_facts(session, out);
-    char line[OS64_FETCH_URL_MAX + 512];
-    if (out->error != 0 && yonder_media_failure_take(session, line, sizeof(line)))
-        media_failed((uint64_t)(uintptr_t)opaque, line, NULL, NULL, NULL, NULL);
 }
-// An element libdom failed with no session to say why (its `failed`): an
-// address that did not resolve, or media_open's NULL, whose reason is
-// yonder's own (media_refused) when it was this element it refused; the
-// class is the one the page was handed.
-static void media_failed_early(void *opaque, const os64_html_node_t *node, const char *reference, int code,
-                               const char *why)
+// An element libdom failed (its `failed`), with the class it handed the
+// page: a session's own line (yonder_media_failure_take) with that class,
+// or, with no session, one made here, its reason yonder's own
+// (media_refused) when media_open refused this element.
+static void media_failed_told(void *opaque, const os64_html_node_t *node, void *session, const char *reference,
+                              int code, const char *why)
 {
     static const char *const kClass[] = {"error", "aborted", "network", "decode", "not supported"};
+    char line[OS64_FETCH_URL_MAX + 512];
+    if (session != NULL) {
+        if (yonder_media_failure_take(session, code, line, sizeof(line)))
+            media_failed((uint64_t)(uintptr_t)opaque, line, NULL, NULL, NULL, NULL);
+        return;
+    }
     if (s_media_refused.node == node && node != NULL)
         why = s_media_refused.why;
     s_media_refused.node = NULL;
@@ -13860,7 +13864,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed, .text_style = script_text_style,
         .images={canvas_source,canvas_source_release,doc,image_sources_update},
         .media = {(void *)(uintptr_t)serial, media_open, media_close, media_play, media_pause, media_seek,
-                  media_settings, media_facts, media_activated, media_can_play, media_failed_early},
+                  media_settings, media_facts, media_activated, media_can_play, media_failed_told},
         .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
         .css_animations = {css_animations_count, css_animations_at, css_animations_drive, css_animations_version, doc},

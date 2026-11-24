@@ -77,12 +77,12 @@ static int media_can_play(void *opaque, const char *type)
 
 /* What the host was told of a failure no session saw (`failed`). */
 static char media_failed_told[160];
-static void media_failed(void *opaque, const os64_html_node_t *node, const char *reference, int code,
+static void media_failed(void *opaque, const os64_html_node_t *node, void *session, const char *reference, int code,
                          const char *why)
 {
     (void)opaque;
-    snprintf(media_failed_told, sizeof(media_failed_told), "%s|%s|%d|%s", node != NULL ? node->name : "?",
-             reference, code, why);
+    snprintf(media_failed_told, sizeof(media_failed_told), "%s|%s|%s|%d|%s", node != NULL ? node->name : "?",
+             session != NULL ? "s" : "-", reference, code, why);
 }
 
 static const os64_dom_media_provider_t media_provider = {
@@ -334,7 +334,7 @@ static void dom_media_abort_cases(void)
     media_failed_told[0] = '\0';
     media_script(&f, "a.src='c.mp3';R.length=0;", "media: a src that will not open");
     media_turn(&f, "media: it fails");
-    check(strcmp(media_failed_told, "audio|https://example.test/dir/c.mp3|4|The sound could not be loaded") == 0,
+    check(strcmp(media_failed_told, "audio|-|https://example.test/dir/c.mp3|4|The sound could not be loaded") == 0,
           "media: the host is told the open it refused, with the class the page is handed");
     media_script(&f, "const h=heard();assert(h.endsWith('loadstart:0 error:0'),'error: '+h);"
                      "assert(a.error instanceof MediaError&&a.error.code===4&&a.error===a.error&&a.networkState===3);"
@@ -352,9 +352,9 @@ static void dom_media_abort_cases(void)
     media_turn(&f, "media: it fails before open");
     media_script(&f, "assert(a.error&&a.error.code===4&&a.error.message==='The address does not resolve');",
                  "media: the page is told it does not resolve");
-    check(media_opened == opened && strcmp(media_failed_told, "audio||4|The address does not resolve") == 0,
+    check(media_opened == opened && strcmp(media_failed_told, "audio|-||4|The address does not resolve") == 0,
           "media: and the host is told, with no open made");
-    if (strcmp(media_failed_told, "audio||4|The address does not resolve") != 0)
+    if (strcmp(media_failed_told, "audio|-||4|The address does not resolve") != 0)
         printf("  told: %s\n", media_failed_told);
     fixture_free(&f);
 }
@@ -423,8 +423,11 @@ static void dom_media_document_cases(void)
                  "media: two failing sources");
     media_turn(&f, "media: the first opens");
     check(media_opened == 5, "media: the first candidate opened");
-    media_sessions[4].facts.error = OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED;
+    media_sessions[4].facts.error = OS64_DOM_MEDIA_ERR_DECODE;
+    media_failed_told[0] = '\0';
     media_turn(&f, "media: the first fails");
+    check(strcmp(media_failed_told, "audio|s|https://example.test/dir/p.mp3|4|") == 0,
+          "media: a session failing before its length is told with its session, as the page's not-supported");
     check(media_opened == 6 && strcmp(media_sessions[5].url, "https://example.test/dir/q.mp3") == 0,
           "media: on to the second");
     media_sessions[5].facts.error = OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED;
@@ -571,7 +574,10 @@ static void dom_media_rule_cases(void)
     media_ready(ls, 2);
     media_turn(&f, "media: playing");
     ls->facts.error = OS64_DOM_MEDIA_ERR_NETWORK;
+    media_failed_told[0] = '\0';
     media_turn(&f, "media: it fails part way");
+    check(strcmp(media_failed_told, "audio|s|https://example.test/dir/lf.mp3|2|") == 0,
+          "media: one failing part way is told with its own class");
     ls->facts.ended = true;
     media_turn(&f, "media: its sound runs out");
     media_script(&f, "assert(l.paused&&!l.seeking&&l.error.code===2,'it stops, no loop');", "media: no loop after failure");

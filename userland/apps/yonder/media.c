@@ -1321,13 +1321,13 @@ void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
     session_facts(m, out);
 }
 
-bool yonder_media_failure_take(yonder_media_t *m, char *out, size_t cap)
+bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t cap)
 {
     os64_lock_acquire(&m->lock);
     bool take = m->facts.error != 0 && !m->failure_told;
     m->failure_told |= take;
     MediaHeard heard = m->heard_told;
-    int error = m->facts.error, result = m->open_result;
+    int error = code != 0 ? code : m->facts.error, result = m->open_result;
     os64_media_info_t info = m->open_info;
     char reason[sizeof(m->facts.message)];
     os64_strcopy(reason, sizeof(reason), m->facts.message);
