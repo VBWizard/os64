@@ -5299,9 +5299,12 @@ static flow_point_t scroll_now(void)
 // (flow_motion_entries): how many elements its animations run on, how many
 // of those draw nothing (no box in or under them), how many the view
 // shows, and how many are due within a second; then the first
-// MOTION_NAMED of those due, each by name. Only what flow_motion_due asks
-// of the element itself is counted due (`counted`). The lines are written
-// anew each time, and none for a page with no layout.
+// MOTION_NAMED of them by name, those due first, then the rest, each with
+// when it is next due: an animation that is not due still costs every
+// turn of the loop that asks (flow_motion_due), so a page that animates
+// while looking still is named too. Only what flow_motion_due asks of the
+// element itself is counted due (`counted`). The lines are written anew
+// each time, and none for a page with no layout.
 #define MOTION_NAMED 8
 #define MOTION_ASKED 1024
 static void diag_motion(Page *p)
@@ -5324,10 +5327,13 @@ static void diag_motion(Page *p)
         uint64_t next = m->layout_due < m->tick_due ? m->layout_due : m->tick_due;
         undrawn += !m->drawn;
         seen += m->seen;
-        if (!m->counted || next > soon)
-            continue;
-        due++;
-        if (named == MOTION_NAMED)
+        due += m->counted && next <= soon;
+    }
+    for (int32_t pass = 0; pass < 2; pass++)
+    for (int32_t i = 0; i < looked && named < MOTION_NAMED; i++) {
+        const flow_motion_entry_t *m = &e[i];
+        uint64_t next = m->layout_due < m->tick_due ? m->layout_due : m->tick_due;
+        if ((m->counted && next <= soon) != (pass == 0))
             continue;
         char key[24], v[256];
         size_t at = element_named(v, sizeof(v), "", m->node);
@@ -5348,7 +5354,10 @@ static void diag_motion(Page *p)
         if (at < sizeof(v))
             os64_snprintf(v + at, sizeof(v) - at, ", %s, %s, %s, due %s", m->seen ? "in view" : "out of view",
                           m->in_place ? "in place" : "not in place", m->ticks ? "ticks" : "by layouts",
-                          next <= now ? "now" : "within a second");
+                          !m->counted ? "only through what it hands down"
+                          : next <= now ? "now"
+                          : next <= soon ? "within a second"
+                          : next == FLOW_NEVER ? "never" : "later");
         os64_snprintf(key, sizeof(key), "animated %d", (int)++named);
         yonder_diag_fact(p->diag, key, v);
     }

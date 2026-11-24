@@ -88,7 +88,7 @@ typedef struct yonder_diag yonder_diag_t;
  * reads keep incomplete evidence distinguishable from a fast successful run.
  * Model counts cover rebuilds, not the initial loader's model construction. */
 // flow_reuse_reason_t order; the layout wrapper checks the count at compile time.
-#define YONDER_LAYOUT_REUSE_REASONS 16
+#define YONDER_LAYOUT_REUSE_REASONS 18
 // flow_role_t order (the graft's role counter); checked at compile time too.
 #define YONDER_LAYOUT_ROLES 12
 // flow_intrinsic_refusal_t order; checked at compile time too.

@@ -13126,6 +13126,105 @@ static void sheet_worker_cases(void)
  * its own main. */
 #ifndef YONDER_HOST_FAKES_ONLY
 #include "test_yonder_svg_hit.inc"
+/* WHAT A SCHEDULE CALL COSTS (pictures_schedule): asked with nothing to do
+ * but find the next deadline, on pages of 200 and 20,000 elements of each
+ * shape a page's growth takes, the bigger page's call may cost three times
+ * the smaller's and 20 us more at most, the slack a timing needs: a call
+ * is made at every turn of the loop, a hundred times a second, and one that
+ * walked the page cost fifty times as much (motion_due's stacked boxes).
+ * Each is the best of three rounds, so a preemption does not fail it. */
+static char *schedule_page(int32_t n, int32_t shape)
+{
+    size_t cap = (size_t)n * 64 + 4096, at = 0;
+    char *html = os64_malloc(cap);
+    at += (size_t)snprintf(html + at, cap - at, "<!doctype html><style>body{margin:0}"
+                           "@keyframes op{to{opacity:.5}}@keyframes hue{to{background-color:blue}}"
+                           ".a{width:40px;height:20px;animation:op 1s linear infinite}"
+                           ".h{display:none;animation:hue 1s linear infinite}.r{position:relative}</style>%s",
+                           shape >= 1 ? "<div class=a></div>" : "");
+    if (shape == 2)
+        at += (size_t)snprintf(html + at, cap - at, "<div class=h>");
+    for (int32_t i = 0; i < n; i++)
+        at += (size_t)snprintf(html + at, cap - at, shape == 3 && i % 10 == 0 ? "<p class=r>x</p>" : "<p>x</p>");
+    if (shape == 2)
+        at += (size_t)snprintf(html + at, cap - at, "</div>");
+    return html;
+}
+
+static double schedule_us(int32_t n, int32_t shape)
+{
+    char *html = schedule_page(n, shape);
+    probe_page(html, false);
+    os64_free(html);
+    relayout(true);
+    for (int32_t i = 0; i < 50; i++)
+        pictures_schedule();
+    double us = INFINITY;
+    for (int32_t round = 0; round < 3; round++) {
+        double began = hover_seconds();
+        for (int32_t i = 0; i < 400; i++)
+            pictures_schedule();
+        double took = (hover_seconds() - began) * 1e6 / 400;
+        us = took < us ? took : us;
+    }
+    probe_drop();
+    return us;
+}
+
+/* AN ANIMATION BEGUN AFTER THE PAGE WAS LAID OUT comes due, and through a
+ * box drawn outside its element: a class gives #far an animation, #far's
+ * own box is far below the view and its positioned #kid is in it, so only
+ * the stacked boxes under an animation (libflow's due_stacked, made with
+ * the layout the class's change asks for) can find it. The record names
+ * it, due or not. */
+static void schedule_late_animation_cases(void)
+{
+    probe_page("<!doctype html><style>body{margin:0}@keyframes op{to{opacity:.2}}"
+               ".on{animation:op 1s linear infinite}#far{margin-top:3000px;height:10px}"
+               "#kid{position:absolute;left:0;top:0;width:50px;height:50px;background:red}</style>"
+               "<div id=far><div id=kid></div></div>", false);
+    relayout(true);
+    check(motion_next() == YONDER_NEVER && tick_next() == YONDER_NEVER, "late animation: at rest, nothing is due");
+    g.page.model_version = g.page.rendered_version = os64_html_version(g.page.way.doc);
+    os64_html_set_attr(g.page.way.doc, probe_id("far"), "class", "on", 2);
+    script_rebuild();
+    motion_painted();
+    if (tick_next() == YONDER_NEVER)
+        printf("  late animation: owed %d, motion %llu, tick %llu, rebuild said %s\n", (int)page_rebuild_owed(&g.page),
+               (unsigned long long)motion_next(), (unsigned long long)tick_next(), s_change_said);
+    check(tick_next() != YONDER_NEVER,
+          "late animation: begun on an element out of view, it is due through its positioned child in view");
+    g.page.diag = diag_new_claimed("http://x.test/", 1);
+    diag_motion(&g.page);
+    char text[4096];
+    yonder_diag_render(g.page.diag, text, sizeof(text));
+    check(has(text, "\nanimated 1: div#far.on (op)"), "late animation: the record names it");
+    if (!has(text, "\nanimated 1: div#far.on (op)"))
+        printf("%s\n", text);
+    yonder_diag_free(g.page.diag);
+    g.page.diag = NULL;
+    probe_drop();
+}
+
+static void schedule_cost_cases(void)
+{
+    static const char *const kShapes[] = {"plain", "an animation in view", "and a hidden animated element holding the rest",
+                                          "and every tenth element positioned"};
+    bool was_run = s_animations;
+    s_animations = true;
+    now_ms = 100;
+    for (int32_t shape = 0; shape < 4; shape++) {
+        double small = schedule_us(200, shape), big = schedule_us(20000, shape);
+        char what[160];
+        snprintf(what, sizeof(what), "schedule: a call costs no more on a page 100 times the size (%s)", kShapes[shape]);
+        check(big <= small * 3 + 20, what);
+        if (getenv("YONDER_SCHEDULE_ONLY") != NULL || big > small * 3 + 20)
+            printf("  schedule: %s: %.1f us a call at 200 elements, %.1f at 20000\n", kShapes[shape], small, big);
+    }
+    schedule_late_animation_cases();
+    s_animations = was_run;
+}
+
 /* THE LOOP'S FAIRNESS (task_order.h, ordinary_task): a video playing
  * while every turn takes 300 ms keeps a media event always ready, since
  * each turn is past timeupdate's 250 ms. A timer must still run, the old
@@ -13270,6 +13369,11 @@ int main(void)
         printf("yonder cover: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
+    if(getenv("YONDER_SCHEDULE_ONLY")) {
+        schedule_cost_cases();
+        printf("yonder schedule: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_FAIRNESS_ONLY")) {
         fairness_cases();
         os64_text_font_release(probe_font);
@@ -13302,6 +13406,7 @@ int main(void)
     inserted_frame_cases();
     stand_in_paint_cases();
     canvas_window_cases();
+    schedule_cost_cases();
     fairness_cases();
     layout_profile_cases();
     damage_cases();
