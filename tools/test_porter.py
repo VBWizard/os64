@@ -58,14 +58,21 @@ def server(repo, *legacy_dirs):
     args = [sys.executable, "-u", str(TOOLS / "os64serve.py"), "--porter-repo", str(repo),
             "--bind", "127.0.0.1", "--port", "0", *map(str, legacy_dirs)]
     with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
+        failed = False
         try:
             line = proc.stdout.readline()
             if not line.startswith("os64serve: serving on 127.0.0.1:"):
                 raise AssertionError(f"server startup: {line}")
             yield int(line.rsplit(":", 1)[-1])
+        except BaseException:
+            failed = True
+            raise
         finally:
-            proc.terminate()
-            proc.wait(timeout=10)
+            if proc.poll() is None:
+                proc.terminate()
+            output, _ = proc.communicate(timeout=10)
+            if failed:
+                print(output, file=sys.stderr, end="")
 
 
 def request(port, line, body=b""):
