@@ -103,6 +103,11 @@ static DamageSaid damage_step(void)
     s_change_said = "(no rebuild)";
     g.ui.any_dirty = false;
     script_rebuild();
+    // Each part widened to the backdrops it reaches, as glass_paint does
+    // before it paints: without it, a backdrop filter beside a change is
+    // painted from a part that leaves it out, and the check finds a
+    // difference yonder never paints.
+    backdrop_damage();
     DamageSaid said = {0, 0, false, s_change_said, g.ui.any_dirty ? g.ui.damage_count : 0};
     os64_gui_rect_t v = g.view.bounds, d = g.ui.dirty;
     said.whole = d.x <= v.x && d.y <= v.y && d.x + d.w >= v.x + v.w && d.y + d.h >= v.y + v.h;
