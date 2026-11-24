@@ -1451,6 +1451,12 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     }
     total->role_clock_errors = layout_sum(total->role_clock_errors, sample->role_clock_errors);
     if (sample->role_names != NULL) total->role_names = sample->role_names;
+    ADD(intrinsic_roots);
+    for (size_t i = 0; i <= YONDER_LAYOUT_ROLES; ++i)
+        total->intrinsic_role_roots[i] = layout_sum(total->intrinsic_role_roots[i], sample->intrinsic_role_roots[i]);
+    for (size_t i = 0; i < YONDER_LAYOUT_INTRINSIC_REFUSALS; ++i)
+        total->intrinsic_refused[i] = layout_sum(total->intrinsic_refused[i], sample->intrinsic_refused[i]);
+    if (sample->intrinsic_refusal_names != NULL) total->intrinsic_refusal_names = sample->intrinsic_refusal_names;
     bool cascade_sampled = sample->cascade_reason_names != NULL;
     for (size_t i = 0; i < YONDER_LAYOUT_CASCADE_REASONS; ++i)
         total->cascade_refused[i] = layout_sum(total->cascade_refused[i], sample->cascade_refused[i]);
@@ -1519,6 +1525,29 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
             os64_snprintf(line + k, sizeof(line) - (size_t)k, "; clock errors %lu",
                           (unsigned long)s->role_clock_errors);
         yonder_diag_summary_fact(d, roles_key, line);
+    }
+    // `<key> graft widths`: the boxes whose intrinsic widths were copied, a
+    // measure avoided each, in how many copies, by the root's role (roles
+    // never met left out), and the copies refused, by why.
+    if (s->role_names != NULL && s->intrinsic_refusal_names != NULL) {
+        char widths_key[64];
+        os64_snprintf(widths_key, sizeof(widths_key), "%s graft widths", key);
+        int k = os64_snprintf(line, sizeof(line), "intrinsic widths copied for %lu boxes in %lu copies; by root role",
+                              (unsigned long)s->intrinsic_hits, (unsigned long)s->intrinsic_roots);
+        bool any = false;
+        for (int r = 0; r <= YONDER_LAYOUT_ROLES && k > 0 && (size_t)k < sizeof(line); r++) {
+            if (s->intrinsic_role_roots[r] == 0) continue;
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, "%s%s %lu", any ? ", " : ": ",
+                               r < YONDER_LAYOUT_ROLES ? s->role_names[r] : "none",
+                               (unsigned long)s->intrinsic_role_roots[r]);
+            any = true;
+        }
+        if (!any && k > 0 && (size_t)k < sizeof(line))
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, ": none");
+        for (int r = 0; r < YONDER_LAYOUT_INTRINSIC_REFUSALS && k > 0 && (size_t)k < sizeof(line); r++)
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, "%s%s %lu", r ? ", " : "; refused: ",
+                               s->intrinsic_refusal_names[r], (unsigned long)s->intrinsic_refused[r]);
+        yonder_diag_summary_fact(d, widths_key, line);
     }
     // `<key> needed`: what each layout needed (yonder_needed_t).
     char needed_key[64];

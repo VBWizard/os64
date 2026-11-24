@@ -39,6 +39,8 @@ typedef struct {
     flow_reuse_stats_t *reuse_stats;
     // Inside a role counter root's block layout (block_at).
     bool role_timing;
+    // The last intrinsic measure's number (FBox.intrinsic_seq).
+    uint32_t measure_seq;
     // The initial containing block's height, the viewport's (CSS 2.1 §
     // 10.1), or -1 with no window height known: what the root's
     // percentage height resolves against.
@@ -6447,25 +6449,111 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
     return r;
 }
 
+// A COPY OF THE SOURCE'S WIDTHS (RELAYOUT_GRAFT.md § Intrinsic widths have
+// a separate memo). A box's widths are kept at its first asking, so what its
+// measure finds depends on its subtree and the environment, which the match
+// and the snapshot certify; on the heights each box's measure reads
+// (intrinsic_heights_same), which placement seeds and which may come from
+// outside the subtree; and on which boxes under it were measured already
+// and with what. The source's numbers say which boxes a measure of the root
+// measured with it: those numbered inside its own (FBox.intrinsic_seq to
+// intrinsic_end). Its widths stand for a fresh measure when the subtree is
+// equal and each box the source measured with it or before it either is
+// measured here already with the same widths, or, measured with it, is not
+// measured here yet, finds the heights it was measured under and is no table
+// or part of one (those are measured fresh, 5c's cut). A fresh measure
+// reads a box measured already and does not go under it, and goes under
+// none it does not measure: neither does the walk. The phase that copies
+// takes the same boxes the one that checks passed.
+// The heights a box's measure reads: the definite height its line's
+// percentages are of (definite_height: its own, def_h or else ratio_h, or
+// for an anonymous box the named one its walk reaches), and a block-level
+// picture's containing block's (box_cb_h: its percentage limits, carried
+// through its ratio, replaced_own).
+static int64_t intrinsic_cbh(const FBox *b)
+{
+    return b->kind == FB_REPLACED ? box_cb_h(b) : -1;
+}
+static bool intrinsic_heights_same(const L *l, const FBox *now, const FBox *was)
+{
+    return was->intrinsic_def == definite_height(l, now) && was->intrinsic_cbh == intrinsic_cbh(now);
+}
+static bool intrinsic_same(const FBox *a, const FBox *b)
+{
+    return a->intrinsic_min == b->intrinsic_min && a->intrinsic_max == b->intrinsic_max &&
+           a->content_min == b->content_min && a->content_max == b->content_max;
+}
+static bool intrinsic_walk(L *l, FBox *d, const FBox *root, uint32_t base, bool copy,
+                           flow_intrinsic_refusal_t *why)
+{
+    FReusePair *p = f_reuse_pair(l->reuse, d);
+    const FBox *od = p ? p->old : NULL;
+    if (od == NULL || !od->intrinsic_known || od->intrinsic_seq > root->intrinsic_end)
+        return true;
+    bool before = od->intrinsic_seq < root->intrinsic_seq;
+    if (before || d->intrinsic_known) {
+        if (!d->intrinsic_known || !intrinsic_same(d, od)) {
+            *why = before ? FLOW_INTRINSIC_ORDER : FLOW_INTRINSIC_KNOWN;
+            return false;
+        }
+        return true;
+    }
+    if (copy) {
+        d->intrinsic_min = od->intrinsic_min; d->intrinsic_max = od->intrinsic_max;
+        d->content_min = od->content_min; d->content_max = od->content_max;
+        d->intrinsic_def = od->intrinsic_def; d->intrinsic_cbh = od->intrinsic_cbh;
+        d->intrinsic_seq = base + (od->intrinsic_seq - root->intrinsic_seq);
+        d->intrinsic_end = base + (od->intrinsic_end - root->intrinsic_seq);
+        d->intrinsic_known = true;
+        l->reuse_stats->intrinsic_hits++;
+    } else if (d->kind != FB_BLOCK && d->kind != FB_REPLACED) {
+        *why = FLOW_INTRINSIC_TABLE;
+        return false;
+    } else if (!intrinsic_heights_same(l, d, od)) {
+        *why = FLOW_INTRINSIC_HEIGHT;
+        return false;
+    }
+    for (FBox *c = d->first; c != NULL; c = c->next)
+        if (!intrinsic_walk(l, c, root, base, copy, why))
+            return false;
+    for (FItem *it = d->items; it != NULL; it = it->next)
+        if (it->content != NULL && !intrinsic_walk(l, it->content, root, base, copy, why))
+            return false;
+    return true;
+}
+static bool intrinsic_copy(L *l, FBox *b)
+{
+    FReusePair *pair = f_reuse_pair(l->reuse, b);
+    const FBox *old = pair && pair->equal ? pair->old : NULL;
+    if (old == NULL || !old->intrinsic_known)
+        return false;
+    flow_intrinsic_refusal_t why;
+    if (!intrinsic_walk(l, b, old, 0, false, &why)) {
+        l->reuse_stats->intrinsic_refused[why]++;
+        return false;
+    }
+    uint32_t base = l->measure_seq + 1;
+    intrinsic_walk(l, b, old, base, true, &why);
+    l->measure_seq = base + (old->intrinsic_end - old->intrinsic_seq);
+    l->reuse_stats->intrinsic_roots++;
+    if (l->reuse->clock) {
+        int r = 0;
+        while (r < FLOW_ROLES && !(pair->roles & (1u << r))) r++;
+        l->reuse_stats->intrinsic_role_roots[r]++;
+    }
+    return true;
+}
+
 // A box's border-box min-content and max-content widths (percentages of a
 // containing block that is not known yet count as nothing, as CSS says).
 static Intr intrinsic(L *l, FBox *b)
 {
-    if (b->intrinsic_known)
+    if (b->intrinsic_known || intrinsic_copy(l, b))
         return (Intr){b->intrinsic_min, b->intrinsic_max};
-    FReusePair *pair = f_reuse_pair(l->reuse, b);
-    if (pair && pair->equal && pair->ordinary && pair->old->intrinsic_known &&
-        pair->old->intrinsic_def == (b->def_known ? b->def_h : -2)) {
-        b->intrinsic_min = pair->old->intrinsic_min; b->intrinsic_max = pair->old->intrinsic_max;
-        b->content_min = pair->old->content_min; b->content_max = pair->old->content_max;
-        b->intrinsic_def = pair->old->intrinsic_def;
-        b->intrinsic_known = true;
-        l->reuse_stats->intrinsic_hits++;
-        return (Intr){b->intrinsic_min, b->intrinsic_max};
-    }
     Intr r = {0, 0};
     const flow_style_t *s = b->style;
     b->intrinsic_computed++;
+    b->intrinsic_seq = ++l->measure_seq;
     if (b->kind == FB_TABLE) {
         r = table_intrinsic(l, b);
         b->content_min = r.min;
@@ -6582,7 +6670,9 @@ static Intr intrinsic(L *l, FBox *b)
     b->intrinsic_known = true;
     b->intrinsic_min = r.min;
     b->intrinsic_max = r.max;
-    b->intrinsic_def = b->def_known ? b->def_h : -2;
+    b->intrinsic_def = definite_height(l, b);
+    b->intrinsic_cbh = intrinsic_cbh(b);
+    b->intrinsic_end = l->measure_seq;
     return r;
 }
 

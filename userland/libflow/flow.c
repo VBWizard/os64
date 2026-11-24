@@ -2312,6 +2312,14 @@ const char *flow_role_name(flow_role_t role)
     };
     return role < FLOW_ROLES ? kNames[role] : "?";
 }
+const char *flow_intrinsic_refusal_name(flow_intrinsic_refusal_t why)
+{
+    static const char *const kNames[FLOW_INTRINSIC_NREFUSALS] = {
+        [FLOW_INTRINSIC_HEIGHT] = "another height", [FLOW_INTRINSIC_ORDER] = "measured before it",
+        [FLOW_INTRINSIC_KNOWN] = "other widths here", [FLOW_INTRINSIC_TABLE] = "a table",
+    };
+    return why < FLOW_INTRINSIC_NREFUSALS ? kNames[why] : "?";
+}
 flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64_page_t *model,
                                     int32_t width, const flow_env_t *env,
                                     const flow_tree_t *previous, const flow_reuse_inputs_t *inputs,
@@ -4878,6 +4886,25 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
     tree->live = to;
     tree->tick_ms = now;
     return true;
+}
+
+void flow_motion_ticked(const flow_tree_t *tree,
+                        void (*each)(void *ctx, const os64_html_node_t *node, uint8_t pseudo, int32_t prop),
+                        void *ctx)
+{
+    for (int32_t i = 0; tree != NULL && i < tree->nticking; i++) {
+        const FTick *e = &tree->ticking[i];
+        if (!e->changed || e->nboxes == 0)
+            continue;
+        FProps set = {{0}};
+        const FMotion *m = e->st->motion;
+        for (int32_t a = 0; a < m->nanims; a++)
+            for (int32_t w = 0; w < F_PROP_WORDS; w++)
+                set.w[w] |= m->anims[a].props.w[w];
+        for (int32_t p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&set, (garb_prop_t)p))
+                each(ctx, e->boxes[0]->node, e->boxes[0]->pseudo, p);
+    }
 }
 
 // ── What a layout for the animations changed (YONDER_PERF.md § perf-4) ──

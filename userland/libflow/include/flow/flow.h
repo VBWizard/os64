@@ -1408,6 +1408,18 @@ typedef enum {
 } flow_role_t;
 const char *flow_role_name(flow_role_t role);
 
+/* Why an equal subtree's intrinsic widths were measured again rather than
+ * copied (RELAYOUT_GRAFT.md § Intrinsic widths have a separate memo): a box
+ * its measure would measure reads another height than in the source; a box
+ * the source measured before it is not measured here with the same widths;
+ * a box its measure measured is measured here already with other widths; a
+ * table, or a part of one, would be copied. */
+typedef enum {
+    FLOW_INTRINSIC_HEIGHT, FLOW_INTRINSIC_ORDER, FLOW_INTRINSIC_KNOWN, FLOW_INTRINSIC_TABLE,
+    FLOW_INTRINSIC_NREFUSALS
+} flow_intrinsic_refusal_t;
+const char *flow_intrinsic_refusal_name(flow_intrinsic_refusal_t why);
+
 /* Snapshot diagnostics, separate from geometry's profile.reused. Refusals
  * count failed preparation checks; source and destination preparation may
  * each refuse in one call. Box checks count one refusal per rejected subtree.
@@ -1419,6 +1431,15 @@ typedef struct {
     uint64_t intrinsic_hits, marker_measures;
     size_t metadata_bytes, metadata_peak;
     uint64_t refused[FLOW_REUSE_NREASONS];
+    // The intrinsic widths copied from the source: `intrinsic_hits` the
+    // boxes whose widths were copied, a measure avoided each;
+    // `intrinsic_roots` the copies, each of a box asked for its widths and
+    // the boxes its measure measured in the source; and the copies refused,
+    // by flow_intrinsic_refusal_t. A RECORD ONLY, kept when the layout is
+    // profiled with a clock: the copies by their root's own first role
+    // (flow_role_t), FLOW_ROLES for a root with none.
+    uint64_t intrinsic_roots, intrinsic_refused[FLOW_INTRINSIC_NREFUSALS];
+    uint64_t intrinsic_role_roots[FLOW_ROLES + 1];
     // A RECORD ONLY, kept when the layout is profiled with a clock: the
     // roots of the equal subtrees refused for their role, each the
     // outermost such subtree, by its role (flow_role_t); the boxes in them,
@@ -1734,7 +1755,8 @@ int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_
 // tick): each element's style rewritten, its transform frames remade and
 // the ink of its shadows grown. `mark`, when not NULL, is handed what each
 // element that changed painted before the tick and what it paints after,
-// in page coordinates at `scroll`, with the box that paints it — and an
+// in page coordinates at `scroll`, with the box that paints it (in a
+// filtered group, the group's bounds and the group's box) — and an
 // empty rectangle for the element whose background the canvas may take,
 // whatever its boxes reach, since the canvas paints the view wherever its
 // box is — and
@@ -1745,6 +1767,15 @@ int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_
 bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
                       bool *moved);
+// Each element the tree's last taken tick (flow_motion_tick) changed,
+// handed to `each` once per longhand its animations set (`prop`, a
+// garb_prop_t), with its node and its pseudo-element (a garb_pseudo_t, 0
+// for the element itself), each element's longhands together: what a
+// record names a tick by, since the marks name a filtered group's box in
+// place of the element inside it.
+void flow_motion_ticked(const flow_tree_t *tree,
+                        void (*each)(void *ctx, const os64_html_node_t *node, uint8_t pseudo, int32_t prop),
+                        void *ctx);
 // What a layout made for the page's animations alone changed between the
 // tree on screen (`was`) and the one laid out to replace it (`now`), both
 // alive (YONDER_PERF.md § perf-4): when the two are the same boxes laid out
@@ -2166,8 +2197,9 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // after its `open`, how the walk culls inside it, to the depth the walk
 // keeps views (past it nothing is culled): against the view taken back
 // as above; not at all, for a face that paints the whole group to keep
-// it between paints; or wholly, for one laying what it kept — the opens
-// and closes of the groups inside still come, and nothing else.
+// it between paints; or wholly, for one laying what it kept or painting
+// nothing of the group — the opens and closes of the groups inside still
+// come, and nothing else.
 typedef enum {
     FLOW_INSIDE_VIEW = 0,
     FLOW_INSIDE_ALL,

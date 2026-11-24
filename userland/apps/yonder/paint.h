@@ -182,6 +182,12 @@ typedef struct {
 // `verbs->backdrop` is asked with no area, which only asks.
 const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verbs_t *verbs);
 
+// The alpha, in 255ths, a group (a stacking context below full opacity) is
+// laid at: its opacity rounded. At 0 the painter paints nothing of the
+// group, its open and close included, so nothing inside it is drawn — a
+// face that must know what cannot show asks the same rule.
+uint8_t yonder_group_alpha(const flow_box_t *box);
+
 // DARK PAGES (yonder.conf's `appearance = dark`): every colour the page
 // paints is drawn at its brightness moved, hue and saturation kept
 // (paint.c's relight). A background or a gradient is PAPER, and goes dark
@@ -195,10 +201,10 @@ typedef struct {
     uint32_t paper;
 } yonder_dark_t;
 
-// THE PAINT CACHE (YONDER_PERF.md § perf-2): a gradient's tile and a
-// blurred shadow's mask, kept between paints in 128-pixel blocks and found
-// by the values that make them, so a paint copies its part out instead of
-// working it out again. What a paint draws from it is what it draws
+// THE PAINT CACHE (YONDER_PERF.md § perf-2): a gradient's tile, a blurred
+// shadow's mask and a canvas's smoothed picture (canvas_keep.h), kept
+// between paints in 128-pixel blocks and found by the values that make
+// them, so a paint copies its part out instead of working it out again. What a paint draws from it is what it draws
 // without it, pixel for pixel. One window's, on its one thread: no lock.
 typedef struct yonder_paint_cache yonder_paint_cache_t;
 // THE BUDGET IS THE SCREEN'S (yonder_paint_cache_budget): what the cache

@@ -953,6 +953,7 @@ static yonder_page_memory_t probe_page_memory;  /* the next probe_page's documen
  * from one handed the window's. */
 static const way_identity_t s_window_identity={.hints="sec-ch-ua: \"Window\";v=\"1\"\r\n",.language="en"};
 static void probe_page(const char *html, bool scripts) {
+    yonder_canvas_keeps_free(g.canvas_keeps);       /* made at a paint, as the window's close frees them */
     os64_memset(&g,0,sizeof(g));
     /* A new page, a new window: the cases set the window's clock back
      * between pages, which a real clock never does, so the frames start
@@ -3513,6 +3514,7 @@ static void input_cases(void) {
  * the parser a slice per turn until the page arrives through the same
  * arrive() a worker's page used to take. */
 static void stream_window(void) {
+    yonder_canvas_keeps_free(g.canvas_keeps);       /* as probe_page's */
     os64_memset(&g,0,sizeof(g));
     os64_memset(&s_frames,0,sizeof(s_frames));      /* as probe_page's: the clock goes back between windows */
     g.scripts_on=false; g.way.agent=YONDER_AGENT; g.way.identity=&s_window_identity; g.way.name="yonder";
@@ -6753,6 +6755,7 @@ static uint32_t *stand_in_shot(void) {
     view_paint(&g.view,&screen,NULL);
     yonder_paint_cache_free(g.paint_cache); g.paint_cache=NULL;
     yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
+    yonder_canvas_keeps_free(g.canvas_keeps); g.canvas_keeps=NULL;
     return screen.surf.pixels;
 }
 #include "test_yonder_cover.inc"
@@ -8257,6 +8260,7 @@ static void round_picture_glass_cases(void) {
         view_paint(&g.view,&screen,NULL);
         yonder_paint_cache_free(g.paint_cache); g.paint_cache=NULL;
         yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
+        yonder_canvas_keeps_free(g.canvas_keeps); g.canvas_keeps=NULL;
         shot[i]=screen.surf.pixels;
         probe_drop();
     }
@@ -13382,6 +13386,7 @@ int main(void)
     title_fit_cases();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
+    yonder_canvas_keeps_free(g.canvas_keeps); g.canvas_keeps=NULL;
     check(live==0,"native and engine heap is empty");
 #ifdef OS64_JS_BYTECODE_ROUND_TRIP
     /* The round trip's build: every classic script went through its blob. */
