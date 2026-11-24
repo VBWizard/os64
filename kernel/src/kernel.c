@@ -69,10 +69,7 @@
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
-extern const char kBuildStamp[];   // minted at LINK time (kernel/GNUmakefile's
-                                   // buildstamp.c) — names THIS binary, so the
-                                   // banner proves which kernel actually booted
-                                   // (the net-delivered-kernel receipt)
+extern const char kBuildId[];   // deployment ELF fingerprint in .os64_build_id
 extern bool kEnableAHCI;
 extern bool kEnableNVME;
 extern bool kEnableRamdisk;
@@ -1243,12 +1240,9 @@ void kernel_main()
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
 
  	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
-	// The build stamp rides the banner so the FIRST line on the glass names
-	// which kernel this is — the receipt for a kernel that arrived over the
-	// wire (os64get -> /fat/boot -> reboot), and the instant answer to "did
-	// my new build actually boot?" ever after.
-	printd(DEBUG_BOOT, "***** OS64 (built %s) - system booting at %s *****\n", kBuildStamp, startTime);
-	printf(	"***** OS64 (built %s) - system booting at %s *****\n", kBuildStamp, startTime);
+	// The build ID in the banner identifies the kernel that actually booted.
+	printd(DEBUG_BOOT, "***** OS64 (build %s) - system booting at %s *****\n", kBuildId, startTime);
+	printf(	"***** OS64 (build %s) - system booting at %s *****\n", kBuildId, startTime);
 	// Right under the banner, and not earlier: hardware_init switched the
 	// FPU on, but the glass only exists from init_video onward.
 	fpu_report();

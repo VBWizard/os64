@@ -88,7 +88,8 @@ What it leaves behind:
 | `os64_kernel.iso` | The bootable ISO: Limine, the kernel, and the disk image as a Limine module (the `RAMDISK` boot entry boots from it alone) |
 | `disk/os64.img` | The system disk: FAT lifeboat plus ext2 root, `/bin`, `/lib`, `/tests`, `/etc`. Rebuilt whenever anything on it changes |
 | `disk/os64_data.img` | The `/home` disk, 1 GB sparse ext2. Created once, never rebuilt, and removed only by `make distclean` |
-| `kernel/bin/os64_kernel` | The kernel ELF, which is what you give GDB |
+| `kernel/bin/os64_kernel` | The host kernel ELF with DWARF for GDB. `userland/bin` likewise holds the host build's programs and libraries |
+| `disk/deploy/` | The corresponding stripped-debug ELF files used by the images. `make stage-deploy` stages them without assembling the images |
 
 ### Running
 

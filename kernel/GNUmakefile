@@ -55,6 +55,8 @@ $(call USER_VARIABLE,AR,x86_64-elf-ar)
 # User controllable linker command.
 $(call USER_VARIABLE,LD,x86_64-elf-ld)
 
+$(call USER_VARIABLE,OBJCOPY,x86_64-elf-objcopy)
+
 # User controllable C flags.
 # -mno-mmx/-mno-sse/-mno-sse2: the kernel must not emit SIMD. The live FPU
 # register file belongs to the interrupted user thread until the scheduler
@@ -199,20 +201,16 @@ cc-runtime-x86_64/cc-runtime.a: cc-runtime/*
 		CFLAGS="$(CFLAGS)" \
 		CPPFLAGS='-isystem ../freestnd-c-hdrs-0bsd -DCC_RUNTIME_NO_FLOAT'
 
-# Link rules for the final executable.
-#
-# The build stamp is generated AT LINK TIME, not compiled into kernel.c —
-# __DATE__ in a source file only refreshes when THAT file recompiles, so a
-# stamp there would lie on every build that didn't touch it. A one-line
-# buildstamp.c regenerated on every link is the honest version: the banner's
-# "built <stamp>" always names THIS binary. Born 2026-08-21, the night the
-# first kernel traveled to the P5 over the wire and needed to prove on the
-# glass that the transfer took.
+# Fingerprint the linked deployment ELF with its ID field still empty. Use
+# the first 16 hex digits in the boot banner. Updating the reserved field in
+# the host ELF keeps its DWARF and the deployment image's addresses aligned.
 bin/$(OUTPUT): GNUmakefile linker.ld $(OBJ) cc-runtime-x86_64/cc-runtime.a
 	@mkdir -p "$$(dirname $@)"
-	@printf 'const char kBuildStamp[] = "%s";\n' "$$(date -u '+%Y-%m-%d %H:%M:%S')" > obj/buildstamp.c
-	@$(CC) $(CFLAGS) -c obj/buildstamp.c -o obj/buildstamp.c.o
-	$(LD) $(OBJ) obj/buildstamp.c.o cc-runtime-x86_64/cc-runtime.a $(LDFLAGS) -o $@
+	$(LD) $(OBJ) cc-runtime-x86_64/cc-runtime.a $(LDFLAGS) -o obj/kernel-linked.elf
+	$(OBJCOPY) --strip-debug obj/kernel-linked.elf obj/kernel-unlabeled.elf
+	@digest=$$(sha256sum obj/kernel-unlabeled.elf) && printf '%.16s\0' "$$digest" > obj/kernel-build-id
+	$(OBJCOPY) --update-section .os64_build_id=obj/kernel-build-id obj/kernel-linked.elf $@.tmp
+	mv $@.tmp $@
 # Include header dependencies.
 -include $(HEADER_DEPS)
 
