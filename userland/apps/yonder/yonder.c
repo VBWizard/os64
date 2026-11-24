@@ -54,6 +54,7 @@
 #include "player.h"
 #include "keep.h"
 #include "load_timeline.h"
+#include "thread_reading.h"
 #include "picture.h"
 #include "svg.h"
 #include "webfont.h"
@@ -1808,13 +1809,19 @@ static struct {
     uint64_t updates, update_held, update_us, fresh, fresh_held, fresh_us;
     uint64_t models, model_nodes, model_us;
 } s_sizes_reading;
+// The thread reading's clock while it runs (0 while it does not), and `in`
+// from `from` (tr_now's) to now inside the step under way (s_tr).
+static uint64_t tr_now(void);
+static void tr_inside(yonder_tr_in_t in, uint64_t from);
 static bool page_records_shown(const Page *p);
 static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
 {
     bool enabled = s_layout_profile && layout_profile_diag(p);
     int64_t began = enabled ? os64_micros() : -1;
+    uint64_t tr_from = tr_now();
     os64_page_t *model = os64_page_rebuild(old);
     layout_model_rebased(old, model);
+    tr_inside(YONDER_TR_IN_MODELS, tr_from);
     if (enabled) {
         yonder_layout_stats_t sample = {.model_calls = 1, .refusals = model == NULL};
         sample.model_us = layout_elapsed(began, &sample.clock_errors);
@@ -2204,6 +2211,15 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
 // changes' marks, a few counters a change, whether or not anyone reads
 // them.
 static yonder_lt_t s_lt;
+
+// WHERE THE THREAD WENT SINCE THE LAST READING (thread_reading.h): on while
+// yonder.conf names a diagnostics directory, which is where the readings
+// are written, and started again at each reading and each page shown
+// (tr_restart). Its clock is the counter (cycles). Off, each hook costs
+// the test of s_tr.on.
+static yonder_tr_t s_tr;
+static uint64_t s_tr_per_ms;    // the counter's rate when the reading began
+static const yonder_scripts_t *s_tr_host;  // whose collector it began counting
 
 // WHO ASKED for the layouts made between an lt_why_begin and its
 // lt_why_end (page_lay_out tells the timeline, and the profile counts as
@@ -4387,6 +4403,56 @@ static uint64_t cycles_since(uint64_t from)
     return now - from;
 }
 
+static uint64_t tr_now(void)
+{
+    return s_tr.on ? cycles() : 0;
+}
+
+static void tr_inside(yonder_tr_in_t in, uint64_t from)
+{
+    if (s_tr.on)
+        yonder_tr_inside(&s_tr, in, cycles_since(from));
+}
+
+// The window loop makes `call` now (thread_reading.h's calls).
+static void tr_call(yonder_tr_call_t call)
+{
+    if (s_tr.on)
+        yonder_tr_call(&s_tr, call, (int64_t)cycles());
+}
+
+// The counter's ticks in a millisecond, from the counter and the clock since
+// yonder started: what the reading's lines turn ticks into time with.
+static uint64_t counter_per_ms(void)
+{
+    int64_t us = os64_micros() - s_started_us;
+    uint64_t ticks = os64_js_ledger_now() - s_started_cycles;
+    return us > 0 ? ticks * 1000 / (uint64_t)us : 0;
+}
+
+// The shown page's collector counts, in the reading's words.
+static yonder_tr_collector_t tr_collector(void)
+{
+    os64_js_collector_t c;
+    yonder_scripts_collector(g.page.scripts, &c);
+    return (yonder_tr_collector_t){c.runs, c.runs_by_allocation, c.walked, c.freed, c.walked_most,
+                                   c.bytes_before, c.bytes_after, c.threshold, c.ticks, c.ticks_most};
+}
+
+// The reading starts again now, on while there are page files to write it
+// to (a reading written, a page shown).
+static void tr_restart(void)
+{
+    if (s_diag.dir[0] == '\0') {
+        yonder_tr_off(&s_tr);
+        return;
+    }
+    yonder_tr_collector_t c = tr_collector();
+    s_tr_host = g.page.scripts;
+    s_tr_per_ms = counter_per_ms();
+    yonder_tr_reset(&s_tr, (int64_t)cycles(), &c);
+}
+
 static void cost_begin(PaintStage s)
 {
     if (s_cost.depth[s]++ == 0)
@@ -4735,6 +4801,7 @@ static void effect_filters(char *out, size_t cap, const flow_filter_t *filter, i
 
 static void cost_reset(void)
 {
+    tr_restart();
     effects_reset();
     os64_memset(&s_cost, 0, sizeof(s_cost));
     os64_memset(&s_needed_reading, 0, sizeof(s_needed_reading));
@@ -4814,6 +4881,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
         yonder_lt_layout(&s_lt, lt_began, (uint64_t)(os64_micros() - lt_began), s_lt_why,
                          timed ? &cascade : NULL);
     }
+    tr_inside(YONDER_TR_IN_LAYOUTS, layout_began);
     cost_end(PS_LAYOUTS);
     if (in_tick && forcing == NULL)
         s_cost.layouts_in_ticks += cycles_since(layout_began);
@@ -10252,6 +10320,34 @@ static void diag_paint(Page *p)
     diag_ledger(p);
 }
 
+// Where the thread went in reading `n` (s_tr): its steps and calls, its
+// timer tasks by site, and the collector. A collector whose runtime is not
+// the one the reading began with (the page's script made again) is said
+// from that runtime's start.
+static void diag_thread_reading(Page *p, uint32_t n)
+{
+    if (!s_tr.on)
+        return;
+    char line[4096], key[48];
+    uint64_t per_ms = counter_per_ms();
+    yonder_tr_steps_line(&s_tr, (int64_t)cycles(), per_ms, line, sizeof(line));
+    os64_snprintf(key, sizeof(key), "thread reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, line);
+    yonder_tr_timers_line(&s_tr, per_ms, line, sizeof(line));
+    os64_snprintf(key, sizeof(key), "timers reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, line);
+    bool same = s_tr_host == page_scripts(p);
+    if (!same)
+        s_tr.collector_from = (yonder_tr_collector_t){0};
+    yonder_tr_collector_t c = tr_collector();
+    char said[4096];
+    yonder_tr_collector_line(&s_tr, &c, yonder_scripts_heap_bytes(page_scripts(p)),
+                             yonder_scripts_memory_bytes(page_scripts(p)), per_ms, line, sizeof(line));
+    os64_snprintf(said, sizeof(said), "%s%s", same ? "" : "since the page's script began: ", line);
+    os64_snprintf(key, sizeof(key), "collector reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, said);
+}
+
 // The counts kept as reading `n` of the page, with where the page was
 // scrolled, before they start again (diag_asked): each reading adds one.
 static void diag_paint_reading(Page *p, uint32_t n)
@@ -10272,6 +10368,7 @@ static void diag_paint_reading(Page *p, uint32_t n)
     }
     os64_free(e.s);
     diag_ledger_reading(p, n);
+    diag_thread_reading(p, n);
     if (s_layout_profile) {
         char needed[768], nkey[40];
         yonder_diag_needed_text(&s_needed_reading, needed, sizeof(needed));
@@ -11488,9 +11585,11 @@ static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx);
 // again here. Each part is first widened to the backdrops it reaches.
 static void glass_paint(void)
 {
-    // The load's timeline times the whole of it as drawing: the backdrops'
-    // marks, the kept drawings, the render and the publish.
+    // The load's timeline and the thread reading time the whole of it as
+    // drawing: the backdrops' marks, the kept drawings, the render and the
+    // publish.
     int64_t drawn_from = s_lt.on ? os64_micros() : 0;
+    uint64_t tr_drawn = tr_now();
     backdrop_damage();
     os64_gui_rect_t damage[OS64_UI_DAMAGE_MAX];
     WholeBy by = s_whole_by;
@@ -11515,6 +11614,7 @@ static void glass_paint(void)
         os64_memset(s_cost.now, 0, sizeof(s_cost.now));
         if (s_lt.on)
             yonder_lt_inside(&s_lt, YONDER_LT_IN_DRAWING, (uint64_t)(os64_micros() - drawn_from));
+        tr_inside(YONDER_TR_IN_DRAWING, tr_drawn);
         return;
     }
     cost_begin(PS_PUBLISH);
@@ -11526,6 +11626,7 @@ static void glass_paint(void)
     cost_fold(PS_RENDER, PS_PUBLISH);
     if (s_lt.on)
         yonder_lt_inside(&s_lt, YONDER_LT_IN_DRAWING, (uint64_t)(os64_micros() - drawn_from));
+    tr_inside(YONDER_TR_IN_DRAWING, tr_drawn);
 }
 
 // What the window loop does before each paint: a whole view's paint shows
@@ -14294,7 +14395,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .request = script_request, .run = script_run, .release = script_release, .more = script_more,
         .referrer = referrer, .last_modified = modified, .focus = script_focus,
         .ledger = s_ledger != YONDER_LEDGER_OFF, .ledger_profile = s_ledger == YONDER_LEDGER_PROFILE,
-        .ledger_sample_ticks = ledger_sample_ticks()};
+        .ledger_sample_ticks = ledger_sample_ticks(), .timer_sites = s_diag.dir[0] != '\0'};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host, script_cookies_enabled};
@@ -14404,9 +14505,18 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
     uint64_t spent = cycles_since(s_task_began);
+    uint64_t said_from = tr_now();
     task_cost(what);
 
     os64_dom_geometry_stats_t forced = yonder_scripts_geometry_stats(host, false);
+    if (s_tr.on) {
+        yonder_tr_inside(&s_tr, YONDER_TR_IN_TASKS, spent);
+        // A timer by the site that set it; the forced layouts' time is the
+        // DOM's microseconds, turned into the counter's ticks.
+        if (os64_streq(what, "timer"))
+            yonder_tr_timer(&s_tr, yonder_scripts_timer_site(host), spent, forced.layouts,
+                            forced.elapsed_us * s_tr_per_ms / 1000);
+    }
     if (s_lt.on) {
         char named[YONDER_LT_TASK_MAX];
         os64_snprintf(named, sizeof(named), "%s%s%s", what, out->source_name[0] ? " " : "", out->source_name);
@@ -14465,6 +14575,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
         badge_follow();     // a global it missed is recorded as it runs
         if (at != 0)
             status_rest(line);
+        tr_inside(YONDER_TR_IN_SAID, said_from);
         return;
     }
     if (at != 0) {
@@ -14508,6 +14619,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     badge_follow();
     status_rest(line);
     yonder_scripts_set_note(host, line);
+    tr_inside(YONDER_TR_IN_SAID, said_from);
 }
 
 // ── A script's requests (MODERN_WEB.md § Slice 2) ──────────────────────
@@ -17019,9 +17131,11 @@ static bool script_turn(void)
         return false;
     if (!g.scripts_on || g.page.scripts == NULL)
         return false;
+    tr_call(YONDER_TR_FORMS);
     forms_flush();
     const os64_html_document_t *doc = page_doc(&g.page);
     os64_js_outcome_t out;
+    tr_call(YONDER_TR_TASK);
     int64_t began = task_begin(g.page.scripts);
     bool ran = yonder_scripts_finalization_fire(g.page.scripts, false, &out);
     if (ran)        // its next head aged from now, as ordinary_task would age it
@@ -17072,6 +17186,7 @@ static bool script_turn(void)
     // animations and send events", then the frame callbacks. The time is
     // read only for a frame: a sample is a time handed to the animations,
     // which a later frame may never go back past (frame_plan_sample).
+    tr_call(YONDER_TR_FRAMES);
     uint64_t frame_us = s_frames.open ? animation_time_us() : 0;
     if (s_frames.open && !g.covered && !g.raf_painting &&
         yonder_scripts_web_animations_next(g.page.scripts) <= now) {
@@ -17090,16 +17205,23 @@ static bool script_turn(void)
             task_said(g.page.scripts, true, "animation-frame", &out, frame_began);
         }
     }
-    if (!ran)
+    if (!ran) {
+        tr_call(YONDER_TR_POINTER);
         return pointer_turn();
+    }
     // The rendering step before the asks: a form a script sent is read
     // from a model as current as its tree, and a focus or a scroll acts on
     // the tree, so with asks waiting the page is made current even where a
     // covered window could owe the step.
+    tr_call(YONDER_TR_AFTER);
     bool rendered = g.nasks > 0 ? script_rebuild() : script_rendering_step();
     if (rendered) {
+        tr_call(YONDER_TR_ASKS);
         asks_perform(g.page.scripts, doc, true);
-        if (page_doc(&g.page) == doc) (void)pointer_turn();
+        if (page_doc(&g.page) == doc) {
+            tr_call(YONDER_TR_POINTER);
+            (void)pointer_turn();
+        }
     }
     return rendered;
 }
@@ -23532,6 +23654,7 @@ int main(int argc, char **argv)
         if (!looking && !g.batch.held && os64_ui_dispatcher_can_create(&g.dispatcher)) {
             int64_t ready = 0;
             lt_step(YONDER_LT_WAIT);
+            tr_call(YONDER_TR_WAIT);
             uint64_t asleep = cycles();
             woke = os64_gui_event_wait_any(&ready);
             uint64_t slept = cycles_since(asleep);
@@ -23544,6 +23667,7 @@ int main(int argc, char **argv)
         g.batch.consumed = 0;
         g.batch.drained = false;
         lt_step(YONDER_LT_INPUT);
+        tr_call(YONDER_TR_DISPATCH);
         int64_t events = os64_ui_dispatcher_turn(&g.dispatcher, false);
         if (events < 0) {
             woke = events;
@@ -23558,6 +23682,7 @@ int main(int argc, char **argv)
         }
         if (g.relayout_due) {
             lt_step(YONDER_LT_RELAYOUT);
+            tr_call(YONDER_TR_RELAYOUT);
             g.relayout_due = false;
             frame_follow();
             yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_WINDOW);
@@ -23567,53 +23692,83 @@ int main(int argc, char **argv)
         if (!g.running || g.ui.quit)
             break;
         lt_step(YONDER_LT_STREAM);
+        tr_call(YONDER_TR_STREAM);
         bool stream_more = stream_turn();
         lt_step(YONDER_LT_COMING);
+        tr_call(YONDER_TR_COMING);
         bool coming_more = coming_turn();
         lt_step(YONDER_LT_SCRIPTS);
+        tr_call(YONDER_TR_OWED);    // script_turn names its own calls after
         bool scripts_ready = script_turn();
         lt_step(YONDER_LT_MEDIA);
+        tr_call(YONDER_TR_BODIES);
         bodies_turn();
+        tr_call(YONDER_TR_PLAYERS_ASKED);
         players_ask_run();
+        tr_call(YONDER_TR_MEDIA);
         bool media_more = media_turn();
+        tr_call(YONDER_TR_VIDEOS);
         videos_turn();
+        tr_call(YONDER_TR_KEYS);
         keys_turn();
+        tr_call(YONDER_TR_PLAYERS_SHOWN);
         players_show();
         lt_step(YONDER_LT_MOTION);
+        tr_call(YONDER_TR_MOTION_TICK);
         motion_tick();
+        tr_call(YONDER_TR_VIDEOS_TICK);
         videos_tick();
         lt_step(YONDER_LT_UPKEEP);
+        tr_call(YONDER_TR_STORAGE);
         storage_turn();
+        tr_call(YONDER_TR_COOKIES);
         cookies_turn();
+        tr_call(YONDER_TR_CENSUS);
         census_turn();
+        tr_call(YONDER_TR_CHILDREN);
         children_turn();
+        tr_call(YONDER_TR_DOWNLOADS);
         downloads_turn();
+        tr_call(YONDER_TR_HOLD);
         step_hold_turn();
+        tr_call(YONDER_TR_PICTURES);
         pictures_settle();
+        tr_call(YONDER_TR_TITLE);
         title_follow();
         lt_step(YONDER_LT_OBSERVERS);
+        tr_call(YONDER_TR_RESIZES);
         bool observed = resizes_turn();
+        tr_call(YONDER_TR_BEFORE_PAINT);
         before_paint();
+        tr_call(YONDER_TR_INTERSECTIONS);
         observed = intersections_turn() || observed;
         lt_step(YONDER_LT_PAINT);
+        tr_call(YONDER_TR_PAINT);
         glass_paint();
         bool painted_frame = frame_unpainted() || g.raf_painting;
+        tr_call(YONDER_TR_MOTION_PAINTED);
         motion_painted();
-        if (motion_pause_said())
+        if (motion_pause_said()) {
+            tr_call(YONDER_TR_PAINT);
             glass_paint();
+        }
         lt_step(YONDER_LT_CLOSE);
+        tr_call(YONDER_TR_BELLS);
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (s_bodies_asked)
             (void)os64_gui_event_ring(g.win, BELL_BODY);
         if (coming_more || observed || media_more || script_followup(scripts_ready, painted_frame))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
+        tr_call(YONDER_TR_EXIT);
         exit_follow();
         // The turn's frame, if it had one, is painted and closes. A task
         // may have set or cleared a timer, and a frame for an animation has
         // its whole cost now: the ticker hears of both, and frame work
         // still due asks for the next frame.
+        tr_call(YONDER_TR_FRAME_CLOSE);
         frame_close();
+        tr_call(YONDER_TR_SCHEDULE);
         pictures_schedule();
         looking = g.bar.up && !g.bar.armed;
     }

@@ -1148,6 +1148,21 @@ os64_dom_handler_mask_t os64_dom_handler_bit(const char *type);
  * while any are, and fire runs them as its one task. */
 uint64_t os64_dom_timer_next(const os64_dom_t *dom);
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
+/* Timers by where they were set, for the host's record of what each costs.
+ * With the sites on, setTimeout and setInterval remember the function that
+ * called them, by its name and where it was defined (a script's address,
+ * or "the page" for an inline script's, then the line and column): the first
+ * OS64_DOM_TIMER_SITES distinct ones each by itself, any after them as one
+ * past the table. Off (the default) they remember nothing and cost nothing.
+ * os64_dom_timer_site says the site of the timer os64_dom_timer_fire ran
+ * last, as text that lives until the sites are turned off or the dom is
+ * freed: NULL when the last fire ran no timer (reactions, or nothing due),
+ * or ran one set while the sites were off, or one the binding set for
+ * itself. Owner thread, between tasks. */
+#define OS64_DOM_TIMER_SITES 64
+#define OS64_DOM_TIMER_SITE_TEXT 200
+bool os64_dom_timer_sites(os64_dom_t *dom, bool on);
+const char *os64_dom_timer_site(const os64_dom_t *dom);
 
 /* CUSTOM ELEMENT REACTIONS AND MUTATION RECORDS OWED
  * (docs/design/pending/CUSTOM_ELEMENTS.md, decision 6). A change made

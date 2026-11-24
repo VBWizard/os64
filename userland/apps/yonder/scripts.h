@@ -212,6 +212,9 @@ typedef struct {
     // ledger_sample_ticks of its clock when asked.
     bool ledger, ledger_profile;
     uint64_t ledger_sample_ticks;
+    // The timers keep the site that set them (os64_dom_timer_sites), for
+    // the record's timers by site (yonder_scripts_timer_site).
+    bool timer_sites;
 } yonder_scripts_options_t;
 
 // The script engine's stack, out of yonder's window thread's `stack` bytes
@@ -343,6 +346,9 @@ void yonder_scripts_set_note(yonder_scripts_t *scripts, const char *line);
 const char *yonder_scripts_note(const yonder_scripts_t *scripts);
 uint64_t yonder_scripts_timer_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_timer_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+// The site that set the timer the last fire ran (os64_dom_timer_site): NULL
+// without timer_sites, or when it ran none or one whose site is not known.
+const char *yonder_scripts_timer_site(const yonder_scripts_t *scripts);
 // One rendering opportunity's ordered callback batch, its timestamp the
 // frame's time (`frame_us`, os64_micros' clock); the host owns visibility,
 // pacing and the rendering step after it (os64_dom_animation_fire).
@@ -426,6 +432,8 @@ size_t yonder_scripts_memory_bytes(const yonder_scripts_t *scripts);
 // The most that heap has held, in bytes: the live runtime's, or the one
 // retired's as it went; 0 before any script ran.
 size_t yonder_scripts_heap_peak(const yonder_scripts_t *scripts);
+// What that heap holds now, in bytes: the live runtime's; 0 with none.
+size_t yonder_scripts_heap_bytes(const yonder_scripts_t *scripts);
 // The script side of a memory census (MEMORY_CENSUS.md § 3): its owners —
 // the binding's records (`dom`), canvas bitmaps, the bodies kept outside
 // the heap, and the heap itself (`script`) — added to `sheet`; with
@@ -444,6 +452,9 @@ bool yonder_scripts_ledger_running(const yonder_scripts_t *s);
 void yonder_scripts_ledger_layout(yonder_scripts_t *s, bool begin);
 void yonder_scripts_ledger_reset(yonder_scripts_t *s);
 const os64_js_runtime_t *yonder_scripts_ledger(const yonder_scripts_t *s);
+// What the runtime's collector has cost since it was made
+// (os64_js_collector), with or without the ledger; zeroed with no runtime.
+void yonder_scripts_collector(const yonder_scripts_t *s, os64_js_collector_t *out);
 // The whole address of the `src` script the last task ran, which a task's
 // source name (OS64_JS_SOURCE_NAME_CAP) may cut short; NULL when the task
 // was an inline script, an event or a timer. Good until the host is freed.

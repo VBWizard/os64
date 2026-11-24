@@ -72,6 +72,72 @@ static uint64_t clamp(uint64_t delay, uint32_t nesting)
 
 enum { T_TIMEOUT, T_INTERVAL, T_CLEAR };
 
+/* THE SITES (os64_dom_timer_sites): each distinct calling function once, by
+ * its identity and where it is defined. A freed function's address can be
+ * another's later, so the place is compared too. */
+struct DTimerSites {
+    uint16_t n;
+    struct {
+        const void *function;
+        int line, column;
+        char text[OS64_DOM_TIMER_SITE_TEXT];
+    } at[OS64_DOM_TIMER_SITES];
+};
+
+static uint16_t site_of(os64_dom_t *dom, JSContext *ctx)
+{
+    DTimerSites *sites = dom->timer_sites;
+    JSFrameLocation where;
+    if (sites == NULL || !JS_GetFrameLocation(ctx, 0, &where)) return 0;
+    char text[OS64_DOM_TIMER_SITE_TEXT];
+    if (where.function != NULL) {
+        /* The engine knows a script by the binding's name for it (report.c's
+         * THE SCRIPTS' NAMES): a script with an address is said by it, an
+         * inline one is the page's. */
+        const char *address = os64_dom_script_address(dom, where.file);
+        bool bindings_name = os64_strlen(where.file) >= 12 && os64_memcmp(where.file, "os64-script:", 12) == 0;
+        os64_snprintf(text, sizeof(text), "%s at %s:%d:%d", where.name[0] ? where.name : "a function",
+                      address != NULL ? address : bindings_name ? "the page" : where.file, where.line, where.column);
+    }
+    else
+        os64_strcopy(text, sizeof(text), where.name);
+    for (uint16_t i = 0; i < sites->n; i++)
+        if (sites->at[i].function == where.function && sites->at[i].line == where.line &&
+            sites->at[i].column == where.column && os64_streq(sites->at[i].text, text))
+            return (uint16_t)(i + 1);
+    if (sites->n == OS64_DOM_TIMER_SITES) return D_TIMER_SITE_PAST;
+    sites->at[sites->n].function = where.function;
+    sites->at[sites->n].line = where.line;
+    sites->at[sites->n].column = where.column;
+    os64_strcopy(sites->at[sites->n].text, sizeof(sites->at[sites->n].text), text);
+    return ++sites->n;
+}
+
+bool os64_dom_timer_sites(os64_dom_t *dom, bool on)
+{
+    if (dom == NULL) return false;
+    if (!on) {
+        d_free(dom, dom->timer_sites);
+        dom->timer_sites = NULL;
+        dom->timer_site_ran = 0;
+        for (DTimer *timer = dom->timers; timer != NULL; timer = timer->next) timer->site = 0;
+        return true;
+    }
+    if (dom->timer_sites == NULL) {
+        dom->timer_sites = d_alloc_kind(dom, sizeof(*dom->timer_sites), OS64_DOM_MEM_TIMER);
+        if (dom->timer_sites == NULL) return false;
+        dom->timer_sites->n = 0;
+    }
+    return true;
+}
+
+const char *os64_dom_timer_site(const os64_dom_t *dom)
+{
+    if (dom == NULL || dom->timer_sites == NULL || dom->timer_site_ran == 0) return NULL;
+    if (dom->timer_site_ran == D_TIMER_SITE_PAST) return "a site past the table";
+    return dom->timer_sites->at[dom->timer_site_ran - 1].text;
+}
+
 static void clear_capture(os64_dom_t *dom, os64_js_callback_t *record)
 {
     os64_js_outcome_t out;
@@ -164,6 +230,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
         timer->source_length = source.length;
     }
     timer->id = ++dom->timer_id;
+    timer->site = site_of(dom, ctx);
     timer->interval = magic == T_INTERVAL;
     timer->nesting = dom->timer_nesting + 1;
     timer->delay = clamp((uint64_t)delay, timer->nesting);
@@ -244,6 +311,7 @@ static void fold(os64_js_outcome_t *into, const os64_js_outcome_t *from)
 
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome)
 {
+    if (dom != NULL) dom->timer_site_ran = 0;
     if (!d_delivery_active(dom)) {
         if (outcome) os64_memset(outcome, 0, sizeof(*outcome));
         return false;
@@ -254,6 +322,7 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         return false;
     DTimer *timer = dom->timers;
     dom->timers = timer->next;
+    dom->timer_site_ran = timer->site;
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name, sizeof(name), "%.*s#timer-%u", (int)(sizeof(name) - 24),
                   dom->url != NULL ? dom->url : "about:blank", timer->id);
@@ -394,4 +463,7 @@ void d_timer_free(os64_dom_t *dom)
         d_free(dom, timer);
     }
     dom->timer_count = 0;
+    d_free(dom, dom->timer_sites);
+    dom->timer_sites = NULL;
+    dom->timer_site_ran = 0;
 }
