@@ -276,7 +276,6 @@ static FReuseMatch *reuse_match_new(flow_tree_t *tree, const flow_tree_t *previo
         // is its own role): said here, where the containing blocks it holds
         // are already taken off, never passed up from a child, whose escape
         // its parent may hold.
-        p->roles_below = (uint16_t)(p->roles_below & ~ROLE(FLOW_ROLE_OUT_OF_FLOW));
         if (p->escapes > (p->box->out_of_flow ? 1u : 0u)) p->roles_below |= ROLE(FLOW_ROLE_OUT_OF_FLOW);
         p->role_refused = p->equal && (!p->ordinary || item);
         if (p->equal && p->ordinary && !item) p->cand_boxes = p->subtree_count;

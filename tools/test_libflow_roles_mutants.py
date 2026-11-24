@@ -63,7 +63,8 @@ mutants = [
         (MATCH, '            if (p->atom_floats) inside |= ROLE(FLOW_ROLE_ATOMIC);\n',
                 '            if (p->atom_floats) inside |= ROLE(FLOW_ROLE_ATOMIC);\n            if (p->escapes) inside |= ROLE(FLOW_ROLE_OUT_OF_FLOW);\n')]),
     ('a-box-that-is-no-root-is-refused-by-name', [
-        (MATCH, '        else if (!root_kind) tree->reuse_stats.refused[FLOW_REUSE_BOX_ROLE]++;\n', '')]),
+        (MATCH, '        else if (!root_kind) tree->reuse_stats.refused[FLOW_REUSE_BOX_ROLE]++;',
+                '        else if (0 && !root_kind) tree->reuse_stats.refused[FLOW_REUSE_BOX_ROLE]++;')]),
     ('an-intrinsic-root-by-its-refusals', [
         (LAYOUT, '        if (r < 0)\n            for (r = 0;', '        if (1)\n            for (r = 0;')]),
     ('an-atoms-content-is-not-staged', [
