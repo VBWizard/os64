@@ -223,7 +223,6 @@ typedef enum {
     GARB_UPDATE_NO_READER,      // no change reader: there was no memory for one
     GARB_UPDATE_COUNTED_HAS,    // a :has() inside :nth-child(… of S) (has_filtered)
     GARB_UPDATE_SHADOW_ROOT,    // the document's first shadow root arrived
-    GARB_UPDATE_CAP,            // as many updates as one cascade takes
     GARB_UPDATE_RETAINED,       // what updates added reached the retained budget
     GARB_UPDATE_ATTRIBUTES,     // style attributes reparsed reached it
     GARB_UPDATE_HISTORY,        // the document's change log could not be read
@@ -435,6 +434,12 @@ bool garb_cascade_read_written(const garb_cascade_t *c);
 
 uint64_t garb_cascade_generation(const garb_cascade_t *c);
 uint64_t garb_cascade_updates(const garb_cascade_t *c);
+// What this cascade's updates have added, in bytes (its own arena, the
+// records of the style attributes they parsed again included, and those
+// parses' own arenas), and at
+// `budget` (when not NULL) what it renews at: an update past it is refused
+// (GARB_UPDATE_RETAINED, GARB_UPDATE_ATTRIBUTES) and a fresh cascade owed.
+size_t garb_cascade_retained(const garb_cascade_t *c, size_t *budget);
 uint64_t garb_cascade_version(const garb_cascade_t *c);
 // Whether this element's winners were recomputed after an earlier update.
 bool garb_style_updated_since(const garb_cascade_t *c, const os64_html_node_t *node,

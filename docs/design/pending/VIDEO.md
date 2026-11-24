@@ -485,7 +485,7 @@ drives the player. A `<video>`'s asks for the picture too.
    window (one target, not a group's sheets: no opacity, transform,
    filter, mask or blend above the box) and the picture was converted at
    the fitted size: the rows are copied (`video_plain`). Otherwise it is
-   drawn as a picture is, scaled (`video_general`). yonder's `d` reading
+   drawn as a picture is, scaled (`video_general`). yonder's reading
    prints both, with the frames asked and the new pictures. A
    border-radius does not take a video off the plain path: yonder does
    not round a replaced box's content.

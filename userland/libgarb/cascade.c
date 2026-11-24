@@ -4979,6 +4979,12 @@ static bool mark_has(garb_cascade_t *c, const os64_html_node_t *from, bool child
 
 uint64_t garb_cascade_generation(const garb_cascade_t *c) { return c ? c->generation : 0; }
 uint64_t garb_cascade_updates(const garb_cascade_t *c) { return c ? c->updates : 0; }
+size_t garb_cascade_retained(const garb_cascade_t *c, size_t *budget)
+{
+    if (budget) *budget = c ? c->retained_budget : 0;
+    if (!c) return 0;
+    return os64_arena_stats(c->self.arena).used_bytes - c->initial_state_bytes + c->update_attribute_bytes;
+}
 uint64_t garb_cascade_version(const garb_cascade_t *c) { return c ? c->version : 0; }
 bool garb_style_updated_since(const garb_cascade_t *c, const os64_html_node_t *node, uint64_t update)
 {
@@ -5603,7 +5609,7 @@ const char *garb_update_refusal_name(garb_update_refusal_t reason)
 {
     static const char *const kNames[GARB_UPDATE_REASONS] = {
         "done", "incomplete", "failed before", "no reader", "counted has", "shadow root",
-        "cap", "retained", "attributes", "history", "body hint", "slot left", "broad", "short",
+        "retained", "attributes", "history", "body hint", "slot left", "broad", "short",
         "no memory", "advance"};
     return reason >= 0 && reason < GARB_UPDATE_REASONS ? kNames[reason] : "?";
 }
@@ -5686,9 +5692,11 @@ static bool update(garb_cascade_t *c)
     // storage reaches one initial state's worth (at least 4 KiB). Keeping
     // many whole restyles bloats the allocator's region ledger and slows
     // even unrelated layout allocations. An update may cross this soft
-    // threshold; the arena and attribute caps remain the hard bounds.
+    // threshold; the arena and attribute caps remain the hard bounds. The
+    // bytes are the renewal: how many updates a cascade lives is not, so a
+    // run of sparse updates (an element restyled a pointer move at a time)
+    // keeps one cascade for as long as its bytes allow.
     size_t added = os64_arena_stats(c->self.arena).used_bytes - c->initial_state_bytes;
-    if (c->updates >= 64) { c->refusal = GARB_UPDATE_CAP; return false; }
     if (added >= c->retained_budget) { c->refusal = GARB_UPDATE_RETAINED; return false; }
     if (c->update_attribute_bytes >= c->retained_budget - added) { c->refusal = GARB_UPDATE_ATTRIBUTES; return false; }
     const os64_html_change_entry_t *changes = NULL;

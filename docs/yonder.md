@@ -123,8 +123,7 @@ Web font settings.
 | Right-click a link or a picture | its menu (below) |
 | Shift+F10 | the same menu, for what is under the pointer, while the page has the keys |
 | `p` | turn positioning off, and on again (below) |
-| `d` | write the page's diagnostics file now (`diagnostics`, below) |
-| Ctrl+Shift+D | the same, wherever the keys are: no page and no field can keep it |
+| Ctrl+Shift+D | write the page's diagnostics file now (`diagnostics`, below), wherever the keys are: no page and no field can keep it |
 
 The page has the keys when yonder opens on an address, after a click on
 it, and after Escape in the address field. With page scripts on, a page

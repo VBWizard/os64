@@ -724,6 +724,120 @@ static void update_advance(void)
     update_check(live==baseline,"advance: nothing leaks");
 }
 
+/* THE LONG RUN: 10,000 sparse updates (one positioned element's `left`
+ * written again and again, as a pointer moving over a bar does) on a page
+ * of 2,000 others. The bytes are the only renewal: every update that is
+ * refused is refused for them (`retained` or `attributes`) with what it
+ * retained at its budget, and a cascade lives past 64 updates. Nothing
+ * grows with the number of updates lived: an update to a cascade two
+ * hundred updates old costs what one to a new cascade does (medians: one
+ * update in a few hundred takes milliseconds, at the same point in each
+ * cascade's life), the run costs the same from its first thousand to its
+ * last, and the heap at the end of every cascade's life, its arena and the
+ * arrays beside it still held, is the first one's. It prints what it
+ * compares. */
+static uint64_t long_run_ns(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
+static int long_run_order(const void *a, const void *b)
+{
+    uint64_t x=*(const uint64_t *)a,y=*(const uint64_t *)b;
+    return x<y ? -1 : x>y;
+}
+static void update_long_run(void)
+{
+    size_t baseline=live;
+    static char html[65536];
+    size_t len=(size_t)sprintf(html,"<!doctype html><div id=box>");
+    for(int i=0;i<2000;++i) len+=(size_t)sprintf(html+len,"<p>%d</p>",i);
+    strcpy(html+len,"</div><div id=t style='left:0'>bar</div>");
+    os64_html_document_t *doc=update_doc(html);
+    const char *css="p{color:red;padding:2px}#t{position:absolute;top:0}";
+    garb_parsed_t sheet;garb_parse_sheet_text(css,strlen(css),&sheet);
+    garb_sheet_in_t in={.sheet=&sheet};
+    garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    os64_html_node_t *t=(os64_html_node_t *)by_id(doc->document,"t");
+    unsigned renewals=0,other=0,failed=0,under=0;
+    uint64_t lived_most=0;
+    size_t heap_first=0,heap_most=0;
+    uint64_t run_n[10]={0},age_n[64]={0};
+    static uint64_t run_each[10][1000],age_each[64][2048];
+    for(int i=0;i<10000;++i){
+        char v[32];
+        int n=snprintf(v,sizeof(v),"left:%dpx",i%997);
+        os64_html_set_attr(doc,t,"style",v,(size_t)n);
+        uint64_t lived=garb_cascade_updates(c);
+        uint64_t began=long_run_ns();
+        bool updated=garb_cascade_update(c);
+        uint64_t spent=long_run_ns()-began;
+        if(updated){
+            if(lived/50<64 && age_n[lived/50]<2048) age_each[lived/50][age_n[lived/50]++]=spent;
+            run_n[i/1000]++;
+            run_each[i/1000][run_n[i/1000]-1]=spent;
+            continue;
+        }
+        garb_update_refusal_t why=garb_cascade_update_refusal(c);
+        other+=why!=GARB_UPDATE_RETAINED && why!=GARB_UPDATE_ATTRIBUTES;
+        size_t budget=0;
+        under+=garb_cascade_retained(c,&budget)<budget || budget<4096;
+        if(lived>lived_most) lived_most=lived;
+        // The heap at the end of a cascade's life, with everything it
+        // grew still held: its arena and the arrays beside it.
+        renewals++;
+        if(renewals==1) heap_first=live_bytes;
+        else if(live_bytes>heap_most) heap_most=live_bytes;
+        garb_cascade_t *fresh=garb_cascade(&in,1,doc,garb_cascade_env(c));
+        if(!fresh || garb_cascade_incomplete(fresh)){ failed++; garb_cascade_free(fresh); break; }
+        garb_cascade_free(c); c=fresh;
+    }
+    // The median update by how many updates its cascade had lived, in fifties.
+    uint64_t young=0,old=0;
+    int oldest=-1;
+    printf("  long run medians by updates lived:");
+    for(int k=0;k<64;k++){
+        if(age_n[k]<100) continue;
+        qsort(age_each[k],(size_t)age_n[k],sizeof(age_each[k][0]),long_run_order);
+        uint64_t median=age_each[k][age_n[k]/2];
+        printf(" %d-%d %lu,",k*50,k*50+49,(unsigned long)median);
+        if(k==0) young=median;
+        oldest=k;
+        old=median;
+    }
+    printf("\n");
+    printf("  long run: 10000 updates, %u renewals, most lived %lu; heap at the end of the first cascade's life %zu,"
+           " at most %zu at the others'\n",renewals,(unsigned long)lived_most,heap_first,heap_most);
+    update_check(!failed && other==0 && under==0,
+                 "long run: every refused update was refused for its bytes, its retained bytes at its budget");
+    update_check(renewals<=200 && lived_most>64,"long run: a cascade lives past 64 updates, renewed only for its bytes");
+    // Flat across the run: no thousand's tenth percentile costs half again
+    // any other's. A thousand is a stretch of time, so a load on the machine
+    // running the suite slows all of it, which the fastest tenth feels least
+    // (the ages above are drawn from the whole run alike, so their medians
+    // hold).
+    uint64_t most=0,least=0;
+    printf("  long run tenth percentiles by thousand:");
+    for(int k=0;k<10;k++){
+        if(!run_n[k]) continue;
+        qsort(run_each[k],(size_t)run_n[k],sizeof(run_each[k][0]),long_run_order);
+        uint64_t tenth=run_each[k][run_n[k]/10];
+        printf(" %lu",(unsigned long)tenth);
+        if(most==0 || tenth>most) most=tenth;
+        if(least==0 || tenth<least) least=tenth;
+    }
+    printf("\n");
+    update_check(run_n[0]>=900 && run_n[9]>=900 && least>0 && most<=least*3/2,
+                 "long run: an update late in the run costs what one early in it did");
+    update_check(young>0 && oldest>=4 && old<=young*3/2,
+                 "long run: an update to a cascade two hundred updates old costs what one to a new cascade does");
+    update_check(renewals>=2 && heap_most<=heap_first+heap_first/10+65536,
+                 "long run: the heap at the end of each cascade's life is the first one's");
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    update_check(live==baseline,"long run: nothing leaks");
+}
+
 /* THE KEPT READ (KEPT_READ.md): a build offered a read with an equal key
  * takes it, matches as one that read the sheets again, and the read
  * outlives the cascade it came from; each key member different reads again and
@@ -1873,6 +1987,7 @@ static int cascade_updates(void)
     update_dependencies();
     update_inline_changes();
     update_advance();
+    update_long_run();
     update_has();
     update_scratch_cost();
     size_t baseline=live;
@@ -1966,7 +2081,7 @@ static int cascade_updates(void)
             renewals+=garb_cascade_generation(c)!=was;
         }
         update_check(broad ? renewals>=4 : renewals==0,
-                     broad?"large restyles renew before 64 updates":"small restyles retain incremental reuse");
+                     broad?"large restyles renew by their bytes":"small restyles retain incremental reuse");
         garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
         update_check(live==baseline,"retention-pressure ownership released");
     }

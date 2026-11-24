@@ -1808,7 +1808,7 @@ static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
     }
     return model;
 }
-// What the shown page's layouts needed since its last written `d`, or since
+// What the shown page's layouts needed since its last reading, or since
 // it was shown (the record's `layout needed reading` lines), while the
 // profile is on: diag_paint_reading writes it, and cost_reset starts it
 // again with the paint counts.
@@ -1876,7 +1876,7 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
         // is laid out again or let go, and is no answer. yonder runs the
         // whole pipeline whatever the answer, so a layout of the first three
         // kinds styled, built and placed (or grafted) boxes none of which
-        // moved. The shown page's own are its `d` reading's too.
+        // moved. The shown page's own are its reading's too.
         if (tree != NULL && !flow_incomplete(tree)) {
             yonder_needed_t need = profile.nodes_moved < 0 ? YONDER_NEEDED_UNCOMPARED
                 : profile.nodes_moved == 0 ? (profile.styles_layout > 0 ? YONDER_NEEDED_STILL
@@ -2430,6 +2430,18 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // (cascade_reason_names), then libgarb's.
     int32_t why = updated ? -1 : cascade == NULL ? 0 : !scoped ? 1 : fresh_sheets ? 2 : !matches ? 3
                 : 3 + (int32_t)garb_cascade_update_refusal(cascade);
+    // A renewal for its bytes, read before the cascade is replaced: the
+    // updates it lived and what it retained.
+    uint64_t renew_updates = 0, renew_bytes = 0, renew_budget = 0;
+    bool renewed = !updated && cascade != NULL && matches &&
+                   (garb_cascade_update_refusal(cascade) == GARB_UPDATE_RETAINED ||
+                    garb_cascade_update_refusal(cascade) == GARB_UPDATE_ATTRIBUTES);
+    if (renewed && s_layout_profile) {
+        size_t budget = 0;
+        renew_bytes = garb_cascade_retained(cascade, &budget);
+        renew_budget = budget;
+        renew_updates = garb_cascade_updates(cascade);
+    }
     if (!updated) {
         // Only an update this layout asked for, refused as broad, has a
         // trigger to tell.
@@ -2471,6 +2483,12 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
             .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates,
             .cascade_reason_names = cascade_reason_names()};
         if (why >= 0 && why < YONDER_LAYOUT_CASCADE_REASONS) sample.cascade_refused[why] = 1;
+        if (renewed) {
+            sample.renewals = 1;
+            sample.renew_updates = sample.renew_updates_most = renew_updates;
+            sample.renew_bytes = renew_bytes;
+            sample.renew_budget = renew_budget;
+        }
         sample.cascade_us = layout_elapsed(began, &sample.clock_errors);
         int32_t anchors = 0, bare = 0;
         garb_cascade_anchors(cascade, &anchors, &bare);
@@ -3770,7 +3788,7 @@ static bool read_asked(void)
     return s_lt_why == YONDER_LT_WHY_READ && !s_read_checking;
 }
 
-// The timeline's lines on `d`, written whole: the summary, the layouts by
+// The timeline's lines at a reading, written whole: the summary, the layouts by
 // who asked and where, each slice up to the last that holds anything, each
 // long step listed, each broad refusal kept, and each slow parser call kept.
 // Written from a snapshot with the step under way ended now (a record is
@@ -4307,13 +4325,11 @@ static void forced_model(uint64_t us)
 // The canvas whose drawing is being marked (canvas_damage_mark), for the
 // counts' biggest part; NULL for every other mark (s_marking_box beside it).
 static const os64_html_node_t *s_marking_canvas;
-// The readings the shown page's record keeps (`d`): numbered from 1 for
+// The readings the shown page's record keeps (the reading chord): numbered from 1 for
 // each page shown.
 static uint32_t s_cost_readings;
-// The reading keys' presses the window received for the shown page: `d`,
-// which the page's scripts or a focused field may take before the view
-// does, and then no reading is kept, and the reading chord, which always
-// keeps one (reading_key_fact, reading_chord).
+// The reading chord's presses the window received for the shown page
+// (reading_key_fact, reading_chord).
 static uint32_t s_reading_keys;
 
 // The counter, read where the program says: the memory clobber keeps the
@@ -5037,9 +5053,9 @@ static void census_turn(void)
     }
 }
 
-// The reading key on the shown page's record: how often it was pressed and
-// how many readings it kept, so a record with fewer readings than presses
-// says the page or a focused field had the rest.
+// The reading chord on the shown page's record: how often it was pressed
+// and how many readings it kept; a press keeps none when there are no page
+// files to write or no record (diag_asked says which on the status line).
 static void reading_key_fact(Page *p)
 {
     if (p != &g.page || s_reading_keys == 0)
@@ -5047,7 +5063,7 @@ static void reading_key_fact(Page *p)
     char v[160];
     os64_snprintf(v, sizeof(v), "pressed %u times, %u readings kept%s", (unsigned)s_reading_keys,
                   (unsigned)s_cost_readings,
-                  s_reading_keys > s_cost_readings ? "; the page or a focused field took the rest" : "");
+                  s_reading_keys > s_cost_readings ? "; the rest had no page files or no record" : "");
     yonder_diag_reading_fact(p->diag, "reading key", v);
 }
 
@@ -9572,7 +9588,7 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
 }
 
 // The main loop's work since the page was shown, or since its record was
-// last written on asking (`d`, view_key): how many paints and how much of
+// last written on asking (the reading chord): how many paints and how much of
 // the view they painted, the ticks, schedules, layouts and script tasks,
 // the biggest part marked and painted and the canvas and control marks,
 // the ticker's bells and the deadlines handed it — every count, painted or
@@ -9793,8 +9809,8 @@ static bool whole_lines(DiagText *w)
 // each its own time; its counter is the TSC, as `cycles()` is, and a tick
 // is turned into time with the rate since yonder started
 // (ledger_sample_ticks). The record's lines count from the page's
-// runtime's start, through the page arriving and being shown; a `d` reading
-// counts from the last `d`, when the paint counts start again too, so it
+// runtime's start, through the page arriving and being shown; a reading
+// counts from the last one, when the paint counts start again too, so it
 // can split the whole span (diag_ledger_reading).
 
 // Ticks in tenths of a millisecond, and a pair for "%lu.%lu".
@@ -9950,8 +9966,8 @@ static void ledger_rows(Page *p, const os64_js_runtime_t *rt, uint64_t per_ms)
 }
 
 // The record's ledger lines: the kinds since the page's runtime began (or
-// the last `d`), against the time since then; what is not script is
-// yonder's own work and waiting, which a `d` reading splits.
+// the last reading), against the time since then; what is not script is
+// yonder's own work and waiting, which a reading splits.
 static void diag_ledger(Page *p)
 {
     const os64_js_runtime_t *rt = yonder_scripts_ledger(page_scripts(p));
@@ -9971,7 +9987,7 @@ static void diag_ledger(Page *p)
     ledger_rows(p, rt, per_ms);
 }
 
-// A `d` reading's ledger line: the whole span since the last `d` split into
+// A reading's ledger line: the whole span since the last reading split into
 // the ledger's kinds, yonder's own work (s_cost: the render, the publish,
 // the ticks, and the layouts neither script nor a tick made, which are in
 // those already) and waiting, and the rest: what none of them times (the
@@ -9989,7 +10005,7 @@ static void diag_ledger_reading(Page *p, uint32_t n)
     os64_snprintf(key, sizeof(key), "script ledger reading %u", (unsigned)n);
     if (k.since < s_cost.from_cycles) {
         // The paint counts began when the page was shown, the ledger with
-        // its script: their spans differ until a `d` starts both at once.
+        // its script: their spans differ until a reading starts both at once.
         DiagText t = {0};
         uint64_t now = os64_js_ledger_now(), since = now > k.since ? now - k.since : 0;
         dt_put(&t, "%lu.%lu ms since the page's script began: script %lu.%lu ms: ",
@@ -10091,7 +10107,7 @@ static void diag_paint(Page *p)
 }
 
 // The counts kept as reading `n` of the page, with where the page was
-// scrolled, before they start again (diag_asked): each `d` adds one.
+// scrolled, before they start again (diag_asked): each reading adds one.
 static void diag_paint_reading(Page *p, uint32_t n)
 {
     DiagText t = {0}, u = {0}, v = {0}, w = {0};
@@ -20541,7 +20557,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
 // decoder for them is private to libos64, so the view reads the few it
 // needs itself.
 typedef enum { KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END,
-               KEY_PGUP, KEY_PGDN, KEY_SPACE, KEY_POSITIONING, KEY_RECORD } Key;
+               KEY_PGUP, KEY_PGDN, KEY_SPACE, KEY_POSITIONING } Key;
 
 static Key view_key(const os64_gui_event_t *ev)
 {
@@ -20576,16 +20592,16 @@ static Key view_key(const os64_gui_event_t *ev)
         g.seq = 1;
         return KEY_NONE;
     }
-    return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : a == 'd' ? KEY_RECORD : KEY_NONE;
+    return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : KEY_NONE;
 }
 
 // Ctrl+Shift+D, the reading chord: yonder's own, taken before any key
 // reaches the page or a control, so no script and no focused field can keep
-// it; never dispatched to the page. Plain `d` does the same where the page
-// lets it reach the view. Exactly Ctrl and Shift: Ctrl+Alt with a letter is
-// the window manager's and never reaches a program (compositor.c). Ctrl
-// turns the letter into its control code (keyboard translation); the
-// letter itself is taken too.
+// it; never dispatched to the page, and the only key that takes a reading
+// (a bare `d` is the page's like any other key). Exactly Ctrl and Shift:
+// Ctrl+Alt with a letter is the window manager's and never reaches a
+// program (compositor.c). Ctrl turns the letter into its control code
+// (keyboard translation); the letter itself is taken too.
 static bool reading_chord(const os64_gui_event_t *ev)
 {
     char a = ev->key.ascii;
@@ -20594,14 +20610,15 @@ static bool reading_chord(const os64_gui_event_t *ev)
            (a == ('D' & 0x1F) || a == 'd' || a == 'D');
 }
 
-// `d` (or the reading chord) writes the shown page's record now ("when asked"), keeping the paint
-// counts since the last `d` as a numbered reading with where the page was
-// scrolled (diag_paint_reading), and starts them again — so each part of a
-// page can be measured on its own: scroll there, `d`, wait, `d`, and the
-// next part. With no page files to write, or no record (one is made for
-// every page, short of memory), it says which. When the file is not written
-// the reading stays in the record and the counts go on, so the next `d`
-// writes both, its own reading counted from the same start.
+// The reading chord writes the shown page's record now ("when asked"),
+// keeping the paint counts since the last reading as a numbered reading with
+// where the page was scrolled (diag_paint_reading), and starts them again —
+// so each part of a page can be measured on its own: scroll there, the
+// chord, wait, the chord, and the next part. With no page files to write,
+// or no record (one is made for every page, short of memory), it says
+// which. When the file is not written the reading stays in the record and
+// the counts go on, so the next reading writes both, its own counted from
+// the same start.
 static void diag_asked(void)
 {
     if (s_diag.dir[0] == '\0') {
@@ -21056,7 +21073,6 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
         case KEY_HOME: scroll_to(0, 0); return true;
         case KEY_END: scroll_to(g.sx, page_height()); return true;
         case KEY_POSITIONING: toggle_positioning(); return true;
-        case KEY_RECORD: diag_asked(); return true;
         default: return g.seq != 0;
         }
     default:
@@ -22910,19 +22926,14 @@ static void window_event(void *user, const os64_gui_event_t *event)
         (void)os64_gui_window_focus(s_save.window);
         return;
     }
-    // The reading keys (s_reading_keys), each written on the record as it
-    // comes, so any write carries the count: the chord is yonder's alone,
-    // taken here before any page or control sees a key; a plain `d` is
-    // counted whoever then takes it.
+    // The reading chord (s_reading_keys), written on the record as it
+    // comes, so any write carries the count: yonder's alone, taken here
+    // before any page or control sees a key.
     if (reading_chord(&ev)) {
         s_reading_keys++;
         reading_key_fact(&g.page);
         diag_asked();
         return;
-    }
-    if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii == 'd' && !(ev.key.modifiers & OS64_GUI_MOD_CTRL)) {
-        s_reading_keys++;
-        reading_key_fact(&g.page);
     }
     if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
         input_lost();

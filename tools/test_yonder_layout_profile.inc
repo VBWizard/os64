@@ -899,11 +899,47 @@ static void unchanged_cases(void)
     s_ledger=YONDER_LEDGER_OFF;
 }
 
+/* A CASCADE RENEWED FOR ITS BYTES: a positioned element's `left` written
+ * and read back two hundred times, each a layout and a cascade update. The
+ * record's `layout cascade` line says how many cascades were renewed for
+ * their bytes, how many updates they lived (on average, and the most) and
+ * what they retained of their budget on average. */
+static void renewal_cases(void)
+{
+    s_ledger=YONDER_LEDGER_OFF;
+    // Four hundred styled paragraphs make a budget a run of `left` writes
+    // takes many updates to fill.
+    static char html[16384];
+    size_t len=(size_t)snprintf(html,sizeof(html),"<!doctype html><style>#t{position:absolute;top:0}"
+                                "p{color:red;padding:2px}</style><div id=t>bar</div>");
+    for(int i=0;i<400 && len<sizeof(html)-512;i++) len+=(size_t)snprintf(html+len,sizeof(html)-len,"<p>%d</p>",i);
+    snprintf(html+len,sizeof(html)-len,"<p id=out>-</p>"
+               "<button id=go>g</button><script>const t=document.getElementById('t');"
+               "document.onclick=()=>{let s=0;for(let i=0;i<200;i++){t.style.left=(i%%97)+'px';"
+               "s+=Math.round(t.getBoundingClientRect().left)}document.getElementById('out').textContent=''+s}"
+               "</script>");
+    probe_page(html,true);
+    script_turn();
+    g.page.diag=diag_new_claimed("https://fixture.test/renewal",1);
+    s_layout_profile=true;
+    kept_reads_click("go");
+    const char *line=yonder_diag_fact_value(g.page.diag,"layout cascade");
+    unsigned updated=record_number(line,"updated "),renewed=record_number(line,"renewed for its bytes ");
+    unsigned most=record_number(line," updates on average (most ");
+    check(line && updated>=150 && renewed>=1 && most>=10 && strstr(line," KiB retained of ")!=NULL,
+          "renewal: a cascade lives many updates, and the record says its renewals for bytes, the updates they "
+          "lived and what they retained");
+    printf("  renewal: %s\n",line?line:"(no layout cascade line)");
+    s_layout_profile=false;
+    probe_drop();
+}
+
 static void layout_profile_cases(void)
 {
     restyle_kept_cases();
     kept_reads_cases();
     unchanged_cases();
+    renewal_cases();
     pending_table_cases();
     random_walk_cases();
     /* The cases below measure what a layout needed, so every change is laid
