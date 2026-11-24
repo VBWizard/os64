@@ -6537,8 +6537,18 @@ static bool intrinsic_copy(L *l, FBox *b)
     l->measure_seq = base + (old->intrinsic_end - old->intrinsic_seq);
     l->reuse_stats->intrinsic_roots++;
     if (l->reuse->clock) {
-        int r = 0;
-        while (r < FLOW_ROLES && !(pair->roles & (1u << r))) r++;
+        // Its own first role, which the pair's refusing roles no longer
+        // carry for a container, a positioned or a transformed box; else
+        // the first of those, FLOW_ROLES for none.
+        int r = b->parent && (b->parent->flex || b->parent->grid) ? FLOW_ROLE_ITEM
+                : b->flex                                          ? FLOW_ROLE_FLEX
+                : b->grid                                          ? FLOW_ROLE_GRID
+                : b->out_of_flow                                   ? FLOW_ROLE_OUT_OF_FLOW
+                : b->positioned                                    ? FLOW_ROLE_POSITIONED
+                : b->transformed                                   ? FLOW_ROLE_TRANSFORMED
+                                                                   : -1;
+        if (r < 0)
+            for (r = 0; r < FLOW_ROLES && !(pair->roles & (1u << r));) r++;
         l->reuse_stats->intrinsic_role_roots[r]++;
     }
     return true;
