@@ -450,8 +450,10 @@ static void damage_cases(void)
               "damage: the check puts back what the window held under a widget");
     }
     damage_style("mover", "transform:translateY(3000px)");
-    damage_expect("damage: a transform kept in place that moves the page's extent is the whole view", damage_step(),
-                  kRefused[FLOW_PARTS_MOVED]);
+    // The page's extent changing alone moves no pixel of the page: the
+    // view's scrollbars are set from it after the rebuild.
+    damage_expect("damage: a transform kept in place that moves the page's extent is painted in parts", damage_step(),
+                  "in parts");
     damage_style("mover", "transform:translateX(200px)");
     (void)damage_step();
     damage_style("mover", "transform:translateX(10px)");

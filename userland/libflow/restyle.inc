@@ -618,12 +618,11 @@ static flow_restyle_t restyle_in_place(flow_tree_t *tree, const os64_html_docume
     bool reaching = transformed || moves > 0;
     // The page's extent and the scroll containers' ranges reached again,
     // from where placement left them, now the transforms draw elsewhere or
-    // the moved boxes stand elsewhere. What they reach is the page's and
-    // the scrollers': when it
-    // moves the extent, a range or a scroll (and so a sticky box held to a
-    // range), what is painted moves outside every written element, and the
-    // marks are not the whole of it (LAYOUT_NEEDS_N3.md § 8).
-    int64_t was_w = tree->layout->width, was_h = tree->layout->height;
+    // the moved boxes stand elsewhere. When that moves a range or a scroll
+    // (and so a sticky box held to a range), what is painted moves outside
+    // every written element, and the marks are not the whole of it
+    // (LAYOUT_NEEDS_N3.md § 8); the page's extent changing alone moves only
+    // the host's scrollbars (reach_moved_painted).
     flow_point_t *was_reach = reaching && marking && tree->nscrollers > 0
                                   ? os64_malloc((size_t)tree->nscrollers * 2 * sizeof(*was_reach))
                                   : NULL;
@@ -655,13 +654,7 @@ static flow_restyle_t restyle_in_place(flow_tree_t *tree, const os64_html_docume
             if (s->at.x > s->range.x) s->at.x = s->range.x;
             if (s->at.y > s->range.y) s->at.y = s->range.y;
         }
-        bool moved = tree->layout->width != was_w || tree->layout->height != was_h;
-        for (int32_t i = 0; was_reach != NULL && i < tree->nscrollers; i++) {
-            const flow_frame_t *f = tree->scrollers[i];
-            moved = moved || f->range.x != was_reach[2 * i].x || f->range.y != was_reach[2 * i].y ||
-                    f->at.x != was_reach[2 * i + 1].x || f->at.y != was_reach[2 * i + 1].y;
-        }
-        if (marking && moved && marked == FLOW_PARTS_MARKED)
+        if (marking && marked == FLOW_PARTS_MARKED && reach_moved_painted(tree, was_reach))
             marked = FLOW_PARTS_MOVED;
     }
     os64_free(was_reach);

@@ -1515,8 +1515,10 @@ flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
  * it (an inline svg's shape), if one does. `parts` (a flow_parts_why_t) is
  * FLOW_PARTS_MARKED when that was all of it, or nothing was written;
  * anything else names why the caller must take the whole view: the canvas
- * may take a written element's background (CANVAS), a transform moved the
- * page's extent, a scroller's range or a scroll (MOVED), what draws a
+ * may take a written element's background (CANVAS), a transform or a
+ * moved box moved a scroller's range or a scroll (MOVED; the page's extent
+ * changing alone moves only the host's scrollbars, set from flow_width and
+ * flow_height after every layout, and the marks are all of it), what draws a
  * boxless element cannot be bounded (NO_BOX), the walks ran too deep, no
  * memory. A declined restyle hands nothing it can stand by: its `parts` is
  * not MARKED, and its `written` is not 0 only when it wrote the tree before

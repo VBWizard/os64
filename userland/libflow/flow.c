@@ -5927,6 +5927,27 @@ static const char *move_blocked(const FBox *b, bool root)
 // stamped `stamp`, since everything it draws is somewhere else. False when
 // the room or the records ran out, which leaves part of it moved: the
 // caller declines, and the layout that follows makes the tree afresh.
+// WHAT A CHANGE OF REACH MOVES (BRIEF_LAYOUT_NEEDS N4, and the scrollbars'
+// own slice after it): whether what is painted moved when the page's extent
+// or a scroll container's reach was worked again, `was` holding each
+// scroller's range and scroll before (two points each). The page's extent
+// changing alone moves no pixel of the page: what it moves is the page's
+// scrollbars, which are the host's, set from the extent after every layout
+// (flow_width, flow_height), and a view scrolled past an extent that shrank
+// is the host's to hold, which moves everything. A scroll container's range
+// or scroll that changed moves what is in it: its scroll is held within the
+// range, and a sticky box is held to the range.
+static bool reach_moved_painted(const flow_tree_t *t, const flow_point_t *was)
+{
+    for (int32_t i = 0; i < t->nscrollers; i++) {
+        const flow_frame_t *f = t->scrollers[i];
+        if (was == NULL || f->range.x != was[2 * i].x || f->range.y != was[2 * i].y ||
+            f->at.x != was[2 * i + 1].x || f->at.y != was[2 * i + 1].y)
+            return true;
+    }
+    return false;
+}
+
 static const FMoved *tree_moved_of(void *ctx, const os64_html_node_t *node)
 {
     return f_map_get(&((flow_tree_t *)ctx)->moved, node);
