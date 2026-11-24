@@ -75,9 +75,18 @@ static int media_can_play(void *opaque, const char *type)
     return 0;
 }
 
+/* What the host was told of a failure no session saw (`failed`). */
+static char media_failed_told[160];
+static void media_failed(void *opaque, const os64_html_node_t *node, const char *reference, const char *why)
+{
+    (void)opaque;
+    snprintf(media_failed_told, sizeof(media_failed_told), "%s|%s|%s", node != NULL ? node->name : "?", reference,
+             why);
+}
+
 static const os64_dom_media_provider_t media_provider = {
     NULL, media_open, media_close, media_play, media_pause, media_seek, media_settings, media_facts,
-    media_is_activated, media_can_play,
+    media_is_activated, media_can_play, media_failed,
 };
 
 static DomFixture media_fixture(DomFixture *slot)
@@ -329,6 +338,20 @@ static void dom_media_abort_cases(void)
                  "media: MEDIA_ERR_SRC_NOT_SUPPORTED");
     media_turn(&f, "media: settle");
     media_script(&f, "assert(R.join()==='NotSupportedError','play refused: '+R.join());", "media: NotSupportedError");
+
+    /* An address that does not resolve never reaches open: the host is
+     * told why, as the page is. */
+    media_refuse = false;
+    media_failed_told[0] = '\0';
+    size_t opened = media_opened;
+    media_script(&f, "a.src='';", "media: an empty address");
+    media_turn(&f, "media: it fails before open");
+    media_script(&f, "assert(a.error&&a.error.code===4&&a.error.message==='The address does not resolve');",
+                 "media: the page is told it does not resolve");
+    check(media_opened == opened && strcmp(media_failed_told, "audio||The address does not resolve") == 0,
+          "media: and the host is told, with no open made");
+    if (strcmp(media_failed_told, "audio||The address does not resolve") != 0)
+        printf("  told: %s\n", media_failed_told);
     fixture_free(&f);
 }
 

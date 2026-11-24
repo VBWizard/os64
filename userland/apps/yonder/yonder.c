@@ -13725,17 +13725,18 @@ static void media_element_name(const os64_html_node_t *node, char *out, size_t c
 // A media element that failed, on its page's record and the console:
 // FAILED media, its address as a picture's is shown (picture_name), and
 // why. `line` is the whole message (yonder_media_failure_take), or NULL
-// for one built here from the element and `why`.
+// for one built here from the element, the class the page was handed and
+// `why`, for a failure no request was made for.
 static void media_failed(uint64_t serial, const char *line, const os64_html_node_t *node, const char *url,
-                         const char *why)
+                         const char *class, const char *why)
 {
     yonder_scripts_t *host = scripts_for(serial);
     Page *p = host != NULL ? page_of_host(host) : NULL;
     char made[OS64_FETCH_URL_MAX + 160], element[32], name[128];
     if (line == NULL) {
         media_element_name(node, element, sizeof(element));
-        os64_snprintf(made, sizeof(made), "%s: %s, network: %s (no request made)", picture_name(url, name, sizeof(name)),
-                      element, why);
+        os64_snprintf(made, sizeof(made), "%s: %s, %s: %s (no request made)",
+                      url[0] != '\0' ? picture_name(url, name, sizeof(name)) : "(no address)", element, class, why);
         line = made;
     }
     yonder_diag_failed(p != NULL ? p->diag : NULL, "media", line);
@@ -13753,7 +13754,7 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     // (the error tells a missing file from one that will not decode) and
     // what it holds. Refused, it is the element's network error.
     if (media_file_scheme(url) && !media_file_scheme(page)) {
-        media_failed(serial, NULL, node, url, "a file on this machine, asked for by a page that is not");
+        media_failed(serial, NULL, node, url, "network", "a file on this machine, asked for by a page that is not");
         return NULL;
     }
     // A blob: address's entry is taken here, at the resource selection's
@@ -13768,7 +13769,7 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     yonder_media_t *session = yonder_media_open(&r);
     os64_dom_blob_release(blob);
     if (session == NULL)
-        media_failed(serial, NULL, node, url, "it could not begin: no memory, no thread or no sound output");
+        media_failed(serial, NULL, node, url, "network", "it could not begin: no memory, no thread or no sound output");
     if (session != NULL && picture)
         video_add(node, session);
     return session;
@@ -13800,7 +13801,13 @@ static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out
     yonder_media_facts(session, out);
     char line[OS64_FETCH_URL_MAX + 512];
     if (out->error != 0 && yonder_media_failure_take(session, line, sizeof(line)))
-        media_failed((uint64_t)(uintptr_t)opaque, line, NULL, NULL, NULL);
+        media_failed((uint64_t)(uintptr_t)opaque, line, NULL, NULL, NULL, NULL);
+}
+// An element libdom failed before its address reached media_open: the
+// page was handed MEDIA_ERR_SRC_NOT_SUPPORTED with `why`.
+static void media_failed_early(void *opaque, const os64_html_node_t *node, const char *reference, const char *why)
+{
+    media_failed((uint64_t)(uintptr_t)opaque, NULL, node, reference, "not supported", why);
 }
 static bool media_activated(void *opaque)
 {
@@ -13831,7 +13838,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed, .text_style = script_text_style,
         .images={canvas_source,canvas_source_release,doc,image_sources_update},
         .media = {(void *)(uintptr_t)serial, media_open, media_close, media_play, media_pause, media_seek,
-                  media_settings, media_facts, media_activated, media_can_play},
+                  media_settings, media_facts, media_activated, media_can_play, media_failed_early},
         .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
         .css_animations = {css_animations_count, css_animations_at, css_animations_drive, css_animations_version, doc},

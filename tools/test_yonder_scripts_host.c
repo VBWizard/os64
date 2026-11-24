@@ -13138,7 +13138,7 @@ static void sheet_worker_cases(void)
 static void media_failure_cases(void)
 {
     probe_page("<!doctype html><audio src=http://x.test/a.mp3></audio><video src=http://x.test/c.mp4></video>"
-               "<audio src=http://x.test/b.mp3></audio>", true);
+               "<audio src=http://x.test/b.mp3></audio><audio src=\"\"></audio>", true);
     g.page.diag = diag_new_claimed("http://x.test/", 1);
     for (int i = 0; i < 4; i++) {
         script_turn();
@@ -13151,6 +13151,8 @@ static void media_failure_cases(void)
           has(text, "\nFAILED media: http://x.test/c.mp4: video 1, network: it could not begin: no memory, no thread or no sound output (no request made) (1)\n") &&
           has(text, "\nFAILED media: http://x.test/b.mp3: audio 2, network: it could not begin: no memory, no thread or no sound output (no request made) (1)\n"),
           "media failed: a session that never began, each element by its kind and place");
+    check(has(text, "\nFAILED media: (no address): audio 3, not supported: The address does not resolve (no request made) (1)\n"),
+          "media failed: an address libdom could not resolve, which never reached the open");
     if (!has(text, "FAILED media: http://x.test/b.mp3"))
         printf("%s\n", text);
     yonder_diag_free(g.page.diag);

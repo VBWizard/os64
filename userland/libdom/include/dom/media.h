@@ -82,6 +82,12 @@ typedef struct {
     /* canPlayType's answer for a MIME type with its parameters: 0 for "",
      * 1 for "maybe", 2 for "probably". */
     int (*can_play)(void *opaque, const char *type);
+    /* The element failed without its address ever reaching `open` (one
+     * that does not resolve against the page): `reference` as the page
+     * wrote it, `why` the MediaError.message the page is handed, so the
+     * host can say so where it says why other loads failed. NULL for
+     * none. */
+    void (*failed)(void *opaque, const os64_html_node_t *node, const char *reference, const char *why);
 } os64_dom_media_provider_t;
 
 /* What a media element's controls show (AUDIO_YONDER.md § The controls),

@@ -531,6 +531,8 @@ static void select_resource(os64_dom_t *dom, DMediaElement *m)
         m->current_src = copy_text(dom, url);
     d_free(dom, url);
     if (m->current_src == NULL) {
+        if (dom->media_provider.failed != NULL)
+            dom->media_provider.failed(dom->media_provider.opaque, m->node, reference, "The address does not resolve");
         source_failed(dom, m, "The address does not resolve");
         return;
     }
