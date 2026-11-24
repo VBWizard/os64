@@ -102,14 +102,14 @@ static bool keep_declined(FKeeps *k, flow_restyle_reason_t why, const os64_html_
 // layout.c's solve_axis does them): its width follows them (no width
 // given and a side set: shrink-to-fit or stretched); its height follows
 // them (no height given and both sides set in one of the two styles); auto
-// margins place it (both sides set in one style and a margin auto); or
-// another side places it after the write than before. Else, for a
-// relative (§ 9.4.3) or absolute or fixed box, how far it moves: `resolves
-// the same` (the inset that places it came out the same length), less
-// than a pixel on each axis, or a pixel or more on the larger axis,
-// bucketed — or `a percentage` when an inset that changed and places it
-// is one (its containing block is not looked up). Nothing here changes
-// what is kept.
+// margins place it (both sides set in one style and a margin auto). Then,
+// for a relative (§ 9.4.3) or absolute or fixed box: another side places
+// it after the write than before, on either axis; else `a percentage` when
+// an inset that changed and places it is one (its containing block is not
+// looked up); else how far it moves: `resolves the same` (every inset that
+// places it came out the same length), less than a pixel on each axis, or
+// a pixel or more on the larger axis, by whole pixels, bucketed. Nothing
+// here changes what is kept.
 static bool keep_length_same(flow_length_t a, flow_length_t b)
 {
     return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
