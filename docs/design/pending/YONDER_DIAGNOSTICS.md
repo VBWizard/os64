@@ -549,6 +549,74 @@ minutes, from the moment its record begins:
   clock, counts nothing (a store of which mark is being made, per mark
   call).
 
+### Where the thread goes, per reading (thread_reading.h)
+
+The timeline stops after three minutes, and its slices name the loop's
+steps but not the calls inside them. A page that grows heavier video by
+video needs every reading said, however late, and a scripts step whose
+time is more than its tasks' needs the rest named. So while yonder.conf
+names a `diagnostics` directory, each reading adds four lines:
+
+    thread reading 3: in 4900.0 ms the loop's steps took 4900.0 ms, busy 77%; scripts 1747.1 ms in 980 turns (a task found and run 820.4 ms 980 times, the rendering step after a task 640.2 ms 402 times, the pointer's events 210.0 ms 980 times, the other calls 76.5 ms 1960 times; inside: tasks 402 in 654.0 ms, layouts 3 in 120.0 ms, model rebuilds 402 in 590.1 ms, what tasks said 402 in 80.2 ms); waiting 1130.0 ms in 600 turns; ...
+    timers reading 3: 380 timer tasks in 590.2 ms, from 12 sites; tick at the page:1:131: 300 tasks, 450.0 ms (each 1.5, the most 9.0); ...
+    collector reading 3: 2 runs (2 asked by the allocation threshold) in 160.0 ms, each 80.0 ms on average; walked 600000 objects, 300000 a run, and freed 7000 in cycles; the engine's heap 200.0 MiB before a run and 195.0 MiB after, on average; the next run waits for the engine's heap to reach 300.0 MiB; the script heap now 210.0 MiB of 512.0 MiB; since the script began, the longest run 90.0 ms, the most walked in one 400000
+    walks reading 3: 300 intersection steps walked 90000 observed targets, 300 a step, the most 310; the timer list: 40 live now, 380 arms walked 7600 entries to find their places, 20 an arm; the binding holds 41000 values for the engine
+
+(The numbers above are made up to show the shape.)
+
+- **The steps are the timeline's**, and each is the sum of its CALLS: the
+  loop names every call it makes (`yonder_tr_call_t`: the dispatcher's
+  turn, the stream's, the coming page's; in scripts, the rendering step
+  owed before a task, the fields flushed, a task found and run, the
+  animations and the animation frames, the rendering step after a task,
+  what the task asked of the window, the pointer's events; in the media
+  step each of its turns; motion's ticks; each of upkeep's turns; the
+  observers' calls; the paint and what the animations hear of it; and the
+  turn's close: its bells, the look at leaving, the frame closed, the next
+  moment scheduled). A call's time runs to the next call, so a step has no
+  unnamed rest. Each call says how many times it was made, so a cost per
+  turn can be read beside `nodes reading N`. Calls under a millisecond in
+  the reading are summed as `the other calls`.
+- **Inside a step**, wherever the call: its script tasks, layouts, model
+  rebuilds, what the tasks said afterwards (the status line, the record's
+  line, the audit) and drawing, each with a count. They may overlap: a
+  layout a task forced is inside both.
+- **Timers by site**: the timer tasks by the function that set them
+  (libdom's `os64_dom_timer_sites`, on with page files): its name and
+  where it is defined, a script by its address and an inline one as `the
+  page`. Each site has its tasks, their time, each on average, the most,
+  and the layouts they forced; the costliest `YONDER_TR_SITES_SHOWN` are shown and the
+  rest summed. A timer set before the sites were asked, or the binding's own,
+  is `with no site known`.
+- **The collector**, from libjs's counts (`os64_js_collector`, which the
+  engine keeps at every run with or without the ledger, patch 0047): the
+  runs in the reading and those the allocation threshold asked for, their
+  time, the objects walked and freed from cycles, the engine's heap
+  before and after a run, the threshold the next run waits for, the
+  script heap now against its limit, and since the script began the
+  longest run and the most one walked. Every run walks every GC object
+  the page holds, its nodes' wrappers among them, so `a run` grows with
+  what a page keeps alive. The engine starts a run only when an object is
+  made past the threshold, which is half again the heap the last run left.
+- **The walks whose size the page sets**: the intersection steps and the
+  observed targets they walked (every target of every observer, at each
+  step where anything moved); the timer list (kept in due order, so each
+  arm, a set or an interval's re-arm, walks past the timers due before
+  it), live now with the reading's arms and the entries they walked; and
+  the values the binding holds for the engine (`os64_dom_registry_count`:
+  wrappers, listeners, timers, observers), which every collector run
+  walks.
+- **A reading is the span between two**: the lines are written when the
+  chord keeps a reading, and the counts start again then and when a page
+  is shown. The call under way at a restart goes on as the next reading's
+  first. A page whose script was made again since the reading began says
+  its collector and timer list from that script's start.
+- **What it costs**: a read of the counter (`cycles`) and a few additions
+  at each call; the sites' lookup at each `setTimeout`
+  and `setInterval`; and nothing at all without `diagnostics` but a test
+  of a flag at each call. The collector's counts are the engine's, kept
+  always: one addition per object a run walks, two counter reads per run.
+
 ### Built differently from the brief, and why
 
 - **The sequence continues across runs.** A per-run sequence restarts at

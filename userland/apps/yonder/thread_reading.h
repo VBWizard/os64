@@ -34,7 +34,7 @@
 // says which), in the order a turn makes them.
 typedef enum {
     YONDER_TR_WAIT,             // waiting: asleep for the next event
-    YONDER_TR_DISPATCH,         // input: the dispatcher's turn
+    YONDER_TR_DISPATCH,         // input: the dispatcher's turn, and the paint of a bar it settled
     YONDER_TR_RELAYOUT,         // the window's layouts: one the window owed
     YONDER_TR_STREAM,           // the stream: stream_turn
     YONDER_TR_COMING,           // the page waiting for its sheets: coming_turn
