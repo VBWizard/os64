@@ -275,6 +275,62 @@ static bool same_text(const char *a, const char *b)
     return *a == *b;
 }
 
+static bool begins(const uint8_t *b, size_t n, const char *sig, size_t len)
+{
+    if (n < len)
+        return false;
+    for (size_t i = 0; i < len; i++)
+        if (b[i] != (uint8_t)sig[i])
+            return false;
+    return true;
+}
+
+const char *yonder_media_first_bytes_name(const uint8_t *b, size_t n)
+{
+    // ISO BMFF (ISO/IEC 14496-12 § 4.2): a box's 32-bit size, then its
+    // four-letter type. A whole file starts with ftyp; a segment of a
+    // segmented one (DASH, CMAF) with styp, sidx, moof or emsg.
+    static const char *const kBoxes[][2] = {
+        {"ftyp", "an MP4 box ftyp"}, {"styp", "an MP4 box styp (a segment)"},
+        {"moof", "an MP4 box moof (a fragment)"}, {"sidx", "an MP4 box sidx (a segment index)"},
+        {"emsg", "an MP4 box emsg (a segment's event)"}, {"moov", "an MP4 box moov"},
+        {"mdat", "an MP4 box mdat"}, {"free", "an MP4 box free"}, {"skip", "an MP4 box skip"},
+        {"wide", "an MP4 box wide"}};
+    if (n >= 8) {
+        uint32_t size = (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3];
+        for (size_t i = 0; (size == 1 || size >= 8) && i < sizeof(kBoxes) / sizeof(kBoxes[0]); i++)
+            if (begins(b + 4, n - 4, kBoxes[i][0], 4))
+                return kBoxes[i][1];
+    }
+    if (begins(b, n, "\x1a\x45\xdf\xa3", 4))
+        return "EBML (WebM or Matroska)";
+    if (begins(b, n, "ID3", 3))
+        return "an ID3 tag (MP3)";
+    if (begins(b, n, "OggS", 4))
+        return "Ogg";
+    if (begins(b, n, "RIFF", 4))
+        return "RIFF (WAV or AVI)";
+    if (begins(b, n, "fLaC", 4))
+        return "FLAC";
+    if (n >= 2 && b[0] == 0xff && (b[1] & 0xf6) == 0xf0)
+        return "an ADTS frame (AAC)";
+    if (n >= 2 && b[0] == 0xff && (b[1] & 0xe0) == 0xe0)
+        return "an MPEG audio frame";
+    if (n >= 1 && b[0] == 0x47)
+        return "0x47, an MPEG transport stream's sync byte";
+    // Text: every byte printable ASCII or white space, the first that is
+    // not white space telling markup and JSON apart.
+    size_t i = 0;
+    while (i < n && (b[i] == ' ' || b[i] == '\t' || b[i] == '\r' || b[i] == '\n'))
+        i++;
+    bool text = n > 0;
+    for (size_t k = 0; k < n && text; k++)
+        text = (b[k] >= 0x20 && b[k] < 0x7f) || b[k] == '\t' || b[k] == '\r' || b[k] == '\n';
+    if (!text || i == n)
+        return NULL;
+    return b[i] == '<' ? "markup (HTML or XML)" : b[i] == '{' || b[i] == '[' ? "text like JSON" : "text";
+}
+
 void yonder_media_failure_text(const yonder_media_failure_t *f, char *out, size_t cap)
 {
     static const char *const kClass[] = {"error", "aborted", "network", "decode", "not supported"};
@@ -312,6 +368,19 @@ void yonder_media_failure_text(const yonder_media_failure_t *f, char *out, size_
         } else {
             put(&t, "a Range request from byte ");
             put_number(&t, f->range_from);
+        }
+        if (f->first != NULL && f->nfirst > 0) {
+            static const char kHex[] = "0123456789abcdef";
+            put(&t, ", its first bytes");
+            for (size_t i = 0; i < f->nfirst && i < YONDER_MEDIA_FIRST_BYTES; i++) {
+                char byte[4] = {' ', kHex[f->first[i] >> 4], kHex[f->first[i] & 15], '\0'};
+                put(&t, byte);
+            }
+            const char *name = yonder_media_first_bytes_name(f->first, f->nfirst);
+            if (name != NULL) {
+                put(&t, ", ");
+                put(&t, name);
+            }
         }
     } else {
         put(&t, "a file");
