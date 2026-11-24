@@ -2848,8 +2848,8 @@ bool flow_motion_describe(const flow_tree_t *tree, const flow_env_t *env, int32_
     const FAnimation *a = &m->anims[anim];
     out->script = a->script != NULL;
     out->timing = a->timing;
-    out->held = a->script != NULL ? a->script->held : a->timing.paused;
-    out->local_ms = a->script == NULL ? -1
+    out->held = f_motion_held(a);
+    out->local_ms = a->script == NULL ? NAN
                     : a->script->held ? a->script->hold_ms
                                       : ((double)tree->now_ms - a->script->start_ms) * a->script->rate;
     out->name = a->timing.name;
@@ -2857,8 +2857,10 @@ bool flow_motion_describe(const flow_tree_t *tree, const flow_env_t *env, int32_
     for (int32_t p = 0; p < GARB_NPROPS; p++)
         if (f_props_has(&a->props, (garb_prop_t)p) && out->nprops++ == 0)
             out->prop = p;
-    out->at = m->at;
-    out->edge = m->edge;
+    // Only an element that ticks keeps its own clock; one that changes
+    // only at layouts is at the layout's time, with no edge of its own.
+    out->at = m->ticks ? m->at : (double)tree->now_ms;
+    out->edge = m->ticks ? m->edge : INFINITY;
     out->now_ms = tree->now_ms;
     out->tick_ms = tree->tick_ms;
     // A keyframe resolved against the animations' values (`over`), else
