@@ -585,13 +585,15 @@ names a `diagnostics` directory, each reading adds four lines:
   (libdom's `os64_dom_timer_sites`, on with page files): its name and
   where it is defined, a script by its address and an inline one as `the
   page`. Each site has its tasks, their time, each on average, the most,
-  and the layouts they forced; the costliest `YONDER_TR_SITES_SHOWN` are shown and the
-  rest summed. A timer set before the sites were asked, or the binding's own,
-  is `with no site known`.
+  and the layouts they forced; the costliest `YONDER_TR_SITES_SHOWN` are
+  shown and the rest summed. A timer set before the sites were asked, the
+  binding's own, and the custom element reactions a timer turn runs
+  instead of a timer are `with no site known`.
 - **The collector**, from libjs's counts (`os64_js_collector`, which the
   engine keeps at every run with or without the ledger, patch 0047): the
   runs in the reading and those the allocation threshold asked for, their
-  time, the objects walked and freed from cycles, the engine's heap
+  time, the GC objects walked and the objects, functions and modules freed
+  from cycles, the engine's heap
   before and after a run, the threshold the next run waits for, the
   script heap now against its limit, and since the script began the
   longest run and the most one walked. Every run walks every GC object
@@ -609,13 +611,15 @@ names a `diagnostics` directory, each reading adds four lines:
 - **A reading is the span between two**: the lines are written when the
   chord keeps a reading, and the counts start again then and when a page
   is shown. The call under way at a restart goes on as the next reading's
-  first. A page whose script was made again since the reading began says
-  its collector and timer list from that script's start.
+  first; with none under way (the first reading) the span begins at the
+  first call. A page whose script was made again or let go since the
+  reading began says its collector and timer list from their own start.
 - **What it costs**: a read of the counter (`cycles`) and a few additions
   at each call; the sites' lookup at each `setTimeout`
   and `setInterval`; and nothing at all without `diagnostics` but a test
   of a flag at each call. The collector's counts are the engine's, kept
   always: one addition per object a run walks, two counter reads per run.
+  libdom counts the timer list only while the sites are on.
 
 ### Built differently from the brief, and why
 

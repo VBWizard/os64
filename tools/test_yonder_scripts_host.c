@@ -9444,7 +9444,7 @@ static void paint_cost_cases(void) {
     snprintf(saved_diagnostics,sizeof(saved_diagnostics),"/tmp/diag");
     check(diag_dir_open()==NULL,"paint counts: the record has a directory");
     web_page("<p>hello");
-    static char rec[8192];
+    static char rec[65536];   /* its readings carry the thread lines too */
     cost_reset();
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));

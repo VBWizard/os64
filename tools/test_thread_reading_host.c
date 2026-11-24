@@ -64,6 +64,15 @@ static void steps_cases(void)
 {
     char line[2048];
     memset(&t, 0, sizeof(t));
+    // A reset with no call under way (the first): the reading's span begins
+    // at its first call, so it is what the calls cover.
+    yonder_tr_reset(&t, 0, NULL, NULL);
+    yonder_tr_call(&t, YONDER_TR_DISPATCH, 7 * MS);
+    yonder_tr_steps_line(&t, 9 * MS, MS, line, sizeof(line));
+    LINE(line, "in 2.0 ms the loop's steps took 2.0 ms, busy 100%; input 2.0 ms in 1 turns (the dispatcher's turn "
+               "2.0 ms 1 times)");
+    yonder_tr_off(&t);
+    memset(&t, 0, sizeof(t));
     // Off: nothing is taken, and the line says nothing happened.
     yonder_tr_call(&t, YONDER_TR_TASK, 0);
     yonder_tr_inside(&t, YONDER_TR_IN_TASKS, 5 * MS);
@@ -187,6 +196,16 @@ static void collector_cases(void)
                "objects, 300000 a run, and freed 7 in cycles; the engine's heap 200.0 MiB before a run and 195.0 MiB "
                "after, on average; the next run waits for the engine's heap to reach 300.0 MiB; the script heap now "
                "200.0 MiB of 512.0 MiB; since the script began, the longest run 90.0 ms, the most walked in one 400000");
+    // Counts behind the reading's start (the runtime let go, another made):
+    // said from their own start, never wrapped.
+    yonder_tr_collector_t fresh = {.runs = 1, .runs_by_allocation = 1, .walked = 30, .freed = 2,
+                                   .bytes_before = 3ull << 20, .bytes_after = 2ull << 20, .ticks = 5 * MS};
+    yonder_tr_collector_line(&t, &fresh, 0, 512ull << 20, MS, line, sizeof(line));
+    CHECK(strstr(line, "counted from the script's start, the reading's being gone: 1 run (1 asked by the "
+                       "allocation threshold) in 5.0 ms") == line);
+    yonder_tr_collector_t gone = {0};
+    yonder_tr_collector_line(&t, &gone, 0, 512ull << 20, MS, line, sizeof(line));
+    CHECK(strstr(line, "counted from the script's start, the reading's being gone: no runs;") == line);
 }
 
 static void walks_cases(void)
@@ -208,6 +227,10 @@ static void walks_cases(void)
     yonder_tr_walks_line(&t, &now, 5000, line, sizeof(line));
     LINE(line, "2 intersection steps walked 100 observed targets, 50 a step, the most 60; the timer list: 7 live now, "
                "10 arms walked 250 entries to find their places, 25 an arm; the binding holds 5000 values for the engine");
+    // A list behind the reading's start is another binding's.
+    yonder_tr_list_t other = {.live = 2, .arms = 4, .walked = 8};
+    yonder_tr_walks_line(&t, &other, 10, line, sizeof(line));
+    CHECK(strstr(line, "; the timer list, counted from its binding's start: 2 live now, 4 arms walked 8 entries") != NULL);
 }
 
 int main(void)

@@ -42,11 +42,16 @@ static void timer_free(os64_dom_t *dom, DTimer *timer)
 static void insert(os64_dom_t *dom, DTimer *timer)
 {
     DTimer **link = &dom->timers;
-    dom->timer_arms++;
+    uint64_t walked = 0;
     while (*link != NULL && ((*link)->due < timer->due ||
            ((*link)->due == timer->due && (*link)->id < timer->id))) {
         link = &(*link)->next;
-        dom->timer_walked++;
+        walked++;
+    }
+    /* Counted for the host's record only while it asked for the sites. */
+    if (dom->timer_sites != NULL) {
+        dom->timer_arms++;
+        dom->timer_walked += walked;
     }
     timer->next = *link;
     *link = timer;

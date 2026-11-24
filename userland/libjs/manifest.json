@@ -311,7 +311,7 @@
     },
     {
       "path": "patches/0047-collector-counts.patch",
-      "sha256": "923d32c97e3f43f11c8bfddde1958a60fc83f22692422bf59333d373077694b5",
+      "sha256": "098c30e651675984e9675baab9284479b035bd68f1aa95a9cafb814c61eee373",
       "reason": "Count each cycle collection (runs by trigger, objects walked and freed, heap bytes before and after, the next threshold) and time it with a host clock, readable without the ledger; one addition per object walked."
     }
   ],

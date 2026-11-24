@@ -84,6 +84,7 @@ void yonder_tr_reset(yonder_tr_t *t, int64_t now, const yonder_tr_collector_t *c
     zero(t, sizeof(*t));
     t->on = true;
     t->from = now;
+    t->from_first_call = call == YONDER_TR_CALLS;
     t->call = call;
     t->step = step;
     t->call_from = now;
@@ -107,6 +108,10 @@ void yonder_tr_call(yonder_tr_t *t, yonder_tr_call_t call, int64_t now)
 {
     if (!t->on || (unsigned)call >= YONDER_TR_CALLS)
         return;
+    if (t->from_first_call) {
+        t->from = now;
+        t->from_first_call = false;
+    }
     if (t->call != YONDER_TR_CALLS)
         t->call_ticks[t->call] += since(t->call_from, now);
     yonder_lt_step_t step = kCall[call].step;
@@ -246,7 +251,7 @@ void yonder_tr_steps_line(const yonder_tr_t *t, int64_t now, uint64_t per_ms, ch
         all += calls[c];
     }
     put(&o, "in ");
-    put_ms(&o, since(t->from, now), per_ms);
+    put_ms(&o, t->from_first_call ? 0 : since(t->from, now), per_ms);
     put(&o, " ms the loop's steps took ");
     put_ms(&o, all, per_ms);
     put(&o, " ms, busy ");
@@ -418,7 +423,16 @@ void yonder_tr_collector_line(const yonder_tr_t *t, const yonder_tr_collector_t 
     if (cap == 0)
         return;
     out[0] = '\0';
+    // Counts behind the reading's start are another runtime's (the page's
+    // script let go and its counts gone with it): said from their own start.
+    static const yonder_tr_collector_t kNone;
     const yonder_tr_collector_t *a = &t->collector_from, *b = now_counts;
+    if (b->runs < a->runs || b->runs_by_allocation < a->runs_by_allocation || b->walked < a->walked ||
+        b->freed < a->freed || b->bytes_before < a->bytes_before || b->bytes_after < a->bytes_after ||
+        b->ticks < a->ticks) {
+        a = &kNone;
+        put(&o, "counted from the script's start, the reading's being gone: ");
+    }
     uint64_t runs = b->runs - a->runs;
     if (runs == 0) {
         put(&o, "no runs");
@@ -473,8 +487,11 @@ void yonder_tr_walks_line(const yonder_tr_t *t, const yonder_tr_list_t *list_now
         put(&o, " a step, the most ");
         put_u(&o, t->observed_most);
     }
-    uint64_t arms = list_now->arms - t->list_from.arms, walked = list_now->walked - t->list_from.walked;
-    put(&o, "; the timer list: ");
+    // A list behind the reading's start is another binding's, as above.
+    bool behind = list_now->arms < t->list_from.arms || list_now->walked < t->list_from.walked;
+    uint64_t arms = list_now->arms - (behind ? 0 : t->list_from.arms);
+    uint64_t walked = list_now->walked - (behind ? 0 : t->list_from.walked);
+    put(&o, behind ? "; the timer list, counted from its binding's start: " : "; the timer list: ");
     put_u(&o, list_now->live);
     put(&o, " live now, ");
     put_u(&o, arms);

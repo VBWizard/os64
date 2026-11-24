@@ -4,15 +4,17 @@
 # moment without the ledger's per-call brackets. One addition per object walked.
 --- a/quickjs.h
 +++ b/quickjs.h
-@@ -521,6 +521,25 @@
+@@ -521,6 +521,27 @@
      int column;
  } JSFrameLocation;
  JS_BOOL JS_GetFrameLocation(JSContext *ctx, int depth, JSFrameLocation *out);
 +/* Cycle collections since the runtime was made, counted at every run (one
 +   addition per GC object walked, two clock reads per run once a clock is
 +   set): runs, by what asked (the allocation threshold, or anything else
-+   through JS_RunGC); the GC objects the runs walked and those they freed
-+   from cycles; the heap's malloc bytes before and after each run, summed;
++   through JS_RunGC); the GC objects the runs walked, and the objects,
++   function bytecodes, async functions and modules they freed from cycles
++   (what those hold goes with them, uncounted); the heap's malloc bytes
++   before and after each run, summed;
 +   the threshold the next allocation-asked run waits for; the most one run
 +   walked; and, with a clock (JS_SetCollectorClock), the runs' time in its
 +   ticks and the longest. Owner thread. */

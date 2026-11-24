@@ -109,7 +109,10 @@ typedef struct {
 
 typedef struct {
     bool on;
-    int64_t from;                               // the reading's start
+    // The reading's start: the reset's moment, or with no call under way
+    // then, the first call's, so the span is what the calls cover.
+    int64_t from;
+    bool from_first_call;
     // The call under way and when it began; YONDER_TR_CALLS for none.
     yonder_tr_call_t call;
     int64_t call_from;
@@ -163,7 +166,8 @@ void yonder_tr_intersections(yonder_tr_t *t, uint64_t targets);
 void yonder_tr_steps_line(const yonder_tr_t *t, int64_t now, uint64_t per_ms, char *out, size_t cap);
 // The timers by site: the costliest YONDER_TR_SITES_SHOWN, then the rest.
 void yonder_tr_timers_line(const yonder_tr_t *t, uint64_t per_ms, char *out, size_t cap);
-// The collector between the reading's start and `now_counts`, with the
+// The collector between the reading's start and `now_counts` (counts behind
+// the start are another runtime's, said from their own start), with the
 // script heap's bytes now and the limit they are held against
 // (os64_js_heap_bytes and the page's memory limit: the allocator's count,
 // which is not the engine's own count a run's bytes and threshold are in).
@@ -173,7 +177,8 @@ void yonder_tr_collector_line(const yonder_tr_t *t, const yonder_tr_collector_t 
 // The record walks a turn can make whose size the page sets: the
 // intersection steps and the targets they walked; the timer list, live now,
 // with the arms since the reading began and the entries they walked past
-// (`list_now` against the reading's start); and the values the binding
+// (`list_now` against the reading's start, or from its own start when it is
+// behind it: another binding's); and the values the binding
 // holds for the engine now (`held`, os64_dom_registry_count: wrappers,
 // listeners, timers, observers), which every collector run walks with
 // whatever they keep alive.

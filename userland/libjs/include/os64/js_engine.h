@@ -108,7 +108,8 @@ size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime);
 /* What the runtime's cycle collections have cost since it was made, counted
  * by the engine at every run whether or not the ledger runs: runs, and of
  * them those the allocation threshold asked for; the GC objects they walked
- * and freed from cycles, and the most one run walked; the heap's bytes
+ * and the objects, function bytecodes, async functions and modules they
+ * freed from cycles, and the most one run walked; the heap's bytes
  * before and after each run, summed (the engine's own count, which the
  * memory limit is not held against); the threshold the next
  * allocation-asked run waits for; and their time on os64_js_ledger_now()'s

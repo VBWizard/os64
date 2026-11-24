@@ -525,11 +525,19 @@ static void dom_timer_site_cases(void)
     check(os64_dom_timer_sites(f.binding, false), "sites off again");
     check(os64_dom_timer_fire(f.binding, 3000, &outcome) && os64_dom_timer_site(f.binding) == NULL,
           "off again, a timer set while they were on names none");
-    /* The counts: each set is an arm, and finds its place by walking past
-     * the timers due before it. */
+    /* The counts: with the sites off, nothing is counted but the live; on,
+     * each set is an arm, and finds its place by walking past the timers
+     * due before it. */
     os64_dom_timer_counts_t before, after;
     os64_dom_timer_counts(NULL, &before);
     check(before.live == 0 && before.arms == 0 && before.walked == 0, "timer counts: NULL reads zero");
+    os64_dom_timer_counts(f.binding, &before);
+    dom_script(&f, "globalThis.off=setTimeout(()=>{},10)", "timer-counts-off.js");
+    os64_dom_timer_counts(f.binding, &after);
+    check(after.live == before.live + 1 && after.arms == before.arms && after.walked == before.walked,
+          "timer counts: the sites off, the list is not counted");
+    dom_script(&f, "clearTimeout(off)", "timer-counts-clear.js");
+    check(os64_dom_timer_sites(f.binding, true), "timer counts: the sites on");
     os64_dom_timer_counts(f.binding, &before);
     dom_script(&f, "setTimeout(()=>{},10);setTimeout(()=>{},20);setTimeout(()=>{},30);setTimeout(()=>{},5)",
                "timer-counts.js");

@@ -213,8 +213,9 @@ copies whatever it returns. Covered by the runtime host suite's ledger case
 
 Patch 0047 counts every cycle collection: runs, those the allocation
 threshold asked for (`js_trigger_gc`; the rest come through `JS_RunGC`), the GC
-objects the runs walked (one addition per object in `gc_decref`'s pass) and
-freed from cycles, the heap's malloc bytes before and after each run, summed,
+objects the runs walked (one addition per object in `gc_decref`'s pass), the
+objects, function bytecodes, async functions and modules they freed from
+cycles, the heap's malloc bytes before and after each run, summed,
 the most one run walked, and the threshold the next allocation-asked run waits
 for. With a clock set (`JS_SetCollectorClock`) each run is timed by two reads
 of it, summed with the longest. `JS_GetCollectorCounts` reads them at any
