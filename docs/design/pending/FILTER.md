@@ -133,8 +133,11 @@ half-covered pixel.
   before its matrix; the box's own ink is left as it is, or its own layer
   would be counted twice. The view a filtered group's members are culled
   against is grown the same way, so a box the blur reaches in from outside
-  the view is painted. A change to any box inside a filtered group marks
-  the group's bounds (`mark_filtered`), since the filter spreads it.
+  the view is painted. A change to a box inside a filtered group marks
+  what that box paints spread by each filter it is drawn through and cut
+  to each group's bounds, through each matrix on the way out
+  (`mark_reach`); a change to the group's own filter, matrix, opacity,
+  mask or clip marks its bounds.
 - **A budget per paint**: layer area (each layer charged the pixels it
   shows in the part repainted, not its margin, so a small repaint beside a
   big blur is not refused what the rest of the page was drawn with) up to
@@ -239,8 +242,9 @@ and booked.
   `f_filtered`, `f_contains_fixed` and `f_group_filter` give § 2's layout
   effects and the group; `flow_filter_reach` is § 6's spread, shared by
   the group's bounds (`filter_grown`), the view its members are culled
-  against, `box_seen`, and the painter. A change inside a filtered group
-  marks the group's bounds (`mark_filtered`). `getComputedStyle` writes
+  against, `box_seen`, the painter, and the marks: a change inside a
+  filtered group marks its own reach spread by each filter it is drawn
+  through (`mark_reach`). `getComputedStyle` writes
   the lists back (`filters`, computed.c).
 - **What a layer holds**: the group's bounds (grown by the OUTPUT reach)
   cut to the view grown by the INPUT reach — `flow_filter_reach` mirrored,
