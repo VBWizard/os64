@@ -6,8 +6,10 @@ bounds, taken through each matrix with what the warp reads past it), against too
 filter_mark_cases hold each rule to exact rects: a mutant is CAUGHT when the
 suite fails, MISSED when it passes, which means a test is missing and gets
 written. A build failure is neither. Not broken here: the spread of a group
-with no OPEN, which only a tree built short of memory has, and the dedupe of
-a rect marked twice running, whose loss marks the same rect again.
+with no OPEN, which only a tree built short of memory has; the dedupe of a
+rect marked twice running, whose loss marks the same rect again; and the
+memo's bounds, whose loss works a group's bounds out again for the same
+answer (a cost, which no rect can show).
 
 The shape is test_yonder_scale_mutants.py's: each mutant is applied to the
 tree's copy of the file, the suite is run, and the file is put back from the
@@ -47,8 +49,8 @@ mutants = [
      '            more += 0;'),
     ('not-cut-to-the-group', 'r = meet(filter_local(a) ? filter_spread(a, r) : whole, whole);',
      'r = filter_local(a) ? filter_spread(a, r) : whole;'),
-    ('a-matrix-left-out', '        if (!nested_reach(a, r, scroll, &r))\n            return true;\n',
-     '        if (r.w <= 0 || r.h <= 0)\n            return true;\n'),
+    ('a-matrix-left-out', '        if (!nested_reach(a, r, scroll, &r))\n            return;\n',
+     '        if (r.w <= 0 || r.h <= 0)\n            return;\n'),
     ('the-inner-group-not-cut',
      '                r = meet(filter_local(a) ? filter_spread(a, r) : whole, whole);\n',
      '                bool outer = true;\n'
@@ -62,8 +64,8 @@ mutants = [
      '            more += FLOW_FILTER_READS_MORE;',
      '        if (a->style->filter[i].fn == FLOW_FILTER_BLUR || a->style->filter[i].fn == FLOW_FILTER_DROP_SHADOW)\n'
      '            more = FLOW_FILTER_READS_MORE;'),
-    ('the-group-own-matrix-left-out', '        if (!nested_reach(a, r, scroll, &r))\n            return true;\n',
-     '        if (!(a == b && !spread ? r.w > 0 && r.h > 0 : nested_reach(a, r, scroll, &r)))\n            return true;\n'),
+    ('the-group-own-matrix-left-out', '        if (!nested_reach(a, r, scroll, &r))\n            return;\n',
+     '        if (!(a == b && !spread ? r.w > 0 && r.h > 0 : nested_reach(a, r, scroll, &r)))\n            return;\n'),
     ('a-layout-part-not-spread',
      '        mark_reach(pp->t, b, r, true, pp->scroll, &pp->memo, pp->bounds, pp->mark, pp->ctx);\n',
      '        pp->mark(pp->ctx, b, r);\n'),
@@ -71,8 +73,6 @@ mutants = [
      '        if (carried.w > 0 && carried.h > 0 && w > 0 && false)\n'),
     ('a-quarter-turn-read-past', '    if (unit && (m[0] != 0) != (m[2] != 0)',
      '    if (false && unit && (m[0] != 0) != (m[2] != 0)'),
-    ('the-memo-keeps-no-bounds', '        if (memo->box[i] == a) {\n',
-     '        if (memo->box[i] == a && false) {\n'),
 ]
 
 caught, missed, unbuilt = [], [], []
