@@ -59,6 +59,8 @@ int d_double_sequence(os64_dom_t *,JSContext *,JSValueConst,size_t,JSValue **,si
 typedef struct DQuery DQuery;
 typedef struct DListener DListener;
 typedef struct DTimer DTimer;
+typedef struct DTimerSites DTimerSites;
+#define D_TIMER_SITE_PAST UINT16_MAX
 /* A link in a chain of nodes on the C stack: the elements being clicked
  * (window.c's click) and the forms being submitted (window.c's submit,
  * validity.c's os64_dom_form_validate, and a host's submit event at a form
@@ -379,6 +381,9 @@ struct DTimer {
     uint32_t id, nesting;
     /* The callback's script (d_callback_script); a string's is the page's. */
     uint32_t script;
+    /* Where it was set (os64_dom_timer_sites): 1 + its row in the table,
+     * D_TIMER_SITE_PAST past it, 0 for none. */
+    uint16_t site;
     bool interval;
     /* One the binding set for itself (d_timer_add), which clearTimeout and
      * clearInterval cannot reach: its id is drawn from the page's count,
@@ -631,6 +636,14 @@ struct os64_dom {
     DTimer *timers;
     size_t timer_count;
     uint32_t timer_id, timer_nesting;
+    /* The timers' sites (os64_dom_timer_sites): NULL while off; and the
+     * site of the timer the last fire ran, 0 for none. */
+    DTimerSites *timer_sites;
+    uint16_t timer_site_ran;
+    /* Timers armed (set, or an interval re-armed) while the sites are on,
+     * and the entries of the due-ordered list those arms walked past
+     * (os64_dom_timer_counts). */
+    uint64_t timer_arms, timer_walked;
     /* HTML's click-in-progress flags, one link per element.click() on the
      * C stack (window.c); and a form's firing-submission-events flags, one
      * link per form whose validation or submit event is running. These
