@@ -308,6 +308,11 @@
       "path": "patches/0046-frame-location.patch",
       "sha256": "7e69ef4c4b5d5b88a9d13b2f8defa34331f5db907ff6528935d3f879cc9a7fc4",
       "reason": "Report the bytecode function at a stack depth (identity, name, defining file/line/column) without allocation, for a sampling profile taken in the interrupt handler."
+    },
+    {
+      "path": "patches/0047-collector-counts.patch",
+      "sha256": "923d32c97e3f43f11c8bfddde1958a60fc83f22692422bf59333d373077694b5",
+      "reason": "Count each cycle collection (runs by trigger, objects walked and freed, heap bytes before and after, the next threshold) and time it with a host clock, readable without the ledger; one addition per object walked."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

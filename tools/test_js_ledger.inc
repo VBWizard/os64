@@ -6,7 +6,8 @@
  * ENGINE again, the kinds add up inside the host's own frame, and the
  * profile samples the running function by name; not started from inside a
  * call; reset and disable; and a
- * runtime destroyed with the ledger on and a frame left open. */
+ * runtime destroyed with the ledger on and a frame left open. The collector's
+ * counts, kept with or without the ledger, are collector_cases. */
 
 static os64_js_runtime_t *ledger_fixture;
 
@@ -134,4 +135,49 @@ static void ledger_cases(void)
     os64_js_destroy(runtime);
     check(1, "ledger: a runtime destroyed with the ledger on and a frame open");
     ledger_fixture = NULL;
+}
+
+/* THE COLLECTOR'S COUNTS (os64_js_collector, patch 0047): kept whether or not
+ * the ledger runs. Cycles made by script and left behind are what an
+ * allocation-asked run frees; every run is counted, walked and timed; the
+ * bytes after a run that freed cycles are fewer than before; and the counts
+ * agree with the ledger's collector frames run for run. */
+static void collector_cases(void)
+{
+    os64_js_collector_t c;
+    os64_js_collector(NULL, &c);
+    check(c.runs == 0 && c.walked == 0 && c.ticks == 0, "collector: NULL reads zero");
+    os64_js_config_t config = fixture_config();
+    config.limits.execution_ms = 60000;
+    os64_js_runtime_t *runtime = NULL;
+    os64_js_outcome_t outcome;
+    if (os64_js_create(&config, OS64_JS_ABI_ID, &runtime, &outcome) != OS64_JS_OK || runtime == NULL) {
+        check(0, "collector: the fixture runtime is made");
+        return;
+    }
+    os64_js_collector_t before;
+    os64_js_collector(runtime, &before);
+    check(before.threshold > 0, "collector: the next run's threshold is said");
+    static const char cycles[] =
+        "for(let i=0;i<200000;i++){const a={},b={a};a.b=b}1";
+    check(execute_fixture(runtime, cycles, &outcome) == OS64_JS_OK, "collector: the cycles are made");
+    os64_js_collector(runtime, &c);
+    uint64_t runs = c.runs - before.runs;
+    check(runs >= 1 && c.runs_by_allocation - before.runs_by_allocation == runs,
+          "collector: the allocation threshold asked for every run");
+    check(c.walked > before.walked && c.walked_most > 0 && c.walked_most <= c.walked,
+          "collector: the runs walked the GC objects, and the most one run walked is said");
+    check(c.freed - before.freed >= 1000, "collector: the runs freed the cycles left behind");
+    check(c.bytes_after - before.bytes_after < c.bytes_before - before.bytes_before,
+          "collector: a run that freed cycles leaves fewer bytes than it found");
+    check(c.ticks > before.ticks && c.ticks_most > 0 && c.ticks_most <= c.ticks,
+          "collector: each run timed on the ledger's clock, with the longest");
+    check(os64_js_ledger_enable(runtime, 0, 0) == OS64_JS_OK, "collector: the ledger started beside it");
+    os64_js_collector(runtime, &before);
+    check(execute_fixture(runtime, cycles, &outcome) == OS64_JS_OK, "collector: the cycles are made again");
+    os64_js_collector(runtime, &c);
+    os64_js_ledger_totals_t t;
+    check(os64_js_ledger_totals(runtime, &t) && c.runs - before.runs == t.count[OS64_JS_LEDGER_COLLECTOR] &&
+          c.runs > before.runs, "collector: its runs are the ledger's collector frames, one for one");
+    os64_js_destroy(runtime);
 }

@@ -210,3 +210,14 @@ native frame reports `[native]`. `JS_AtomGetStrRT` answers an ASCII atom with
 its own bytes and writes the caller's buffer only otherwise, so the query
 copies whatever it returns. Covered by the runtime host suite's ledger case
 (the sampled function's name, file and line).
+
+Patch 0047 counts every cycle collection: runs, those the allocation
+threshold asked for (`js_trigger_gc`; the rest come through `JS_RunGC`), the GC
+objects the runs walked (one addition per object in `gc_decref`'s pass) and
+freed from cycles, the heap's malloc bytes before and after each run, summed,
+the most one run walked, and the threshold the next allocation-asked run waits
+for. With a clock set (`JS_SetCollectorClock`) each run is timed by two reads
+of it, summed with the longest. `JS_GetCollectorCounts` reads them at any
+moment, so what a page's collector costs is known without the ledger's
+per-call brackets. The runtime sets its ledger clock (the TSC) when it makes
+the engine. Covered by the runtime host suite's collector case.
