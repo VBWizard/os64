@@ -493,6 +493,19 @@ typedef struct {
     double edge, at;
 } FMotion;
 
+// Whether an animation is held: paused, or at a playback rate of 0, by a
+// script effect's own clock or a CSS animation's record, which its play
+// state and a script's pause() both set (motion.c).
+bool f_motion_held(const FAnimation *an);
+
+// `prop` of `style`, a style of `element`'s other than its own (a resolved
+// keyframe's), as getComputedStyle writes it (computed.c) — reading the
+// element's own laid-out box where CSSOM resolves a value from one (a
+// size, an auto margin or inset), so only a property that takes the box
+// as no more than a percentage's reference is `style`'s own.
+size_t f_computed_text_of(const flow_tree_t *tree, const flow_env_t *env, const os64_html_node_t *element,
+                          const flow_style_t *style, int32_t prop, char *out, size_t cap);
+
 // What the lists an animated value makes come from — a transform's, the
 // shadows', a background's positions: NULL when none is left.
 typedef void *(*FAlloc)(void *ctx, size_t bytes);

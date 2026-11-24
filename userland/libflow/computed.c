@@ -72,6 +72,15 @@ flow_computed_t *flow_computed_new(const flow_tree_t *tree, const flow_env_t *en
     return c;
 }
 
+size_t f_computed_text_of(const flow_tree_t *tree, const flow_env_t *env, const os64_html_node_t *element,
+                          const flow_style_t *style, int32_t prop, char *out, size_t cap)
+{
+    flow_computed_t c = {.tree = tree, .env = *env, .element = element, .style = style,
+                         .box = flow_box_for(tree, element), .zoom = env->zoom != 0 ? env->zoom / 1000.0 : 1.0};
+    c.env.timeline = NULL;
+    return flow_computed_text(&c, prop, out, cap);
+}
+
 bool flow_computed_styled(const flow_computed_t *c)
 {
     return c != NULL && c->style != NULL;

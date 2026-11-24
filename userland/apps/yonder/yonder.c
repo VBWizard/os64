@@ -5371,6 +5371,87 @@ static flow_point_t scroll_now(void)
 // each time, and none for a page with no layout.
 #define MOTION_NAMED 8
 #define MOTION_ASKED 1024
+// What the `entry`th animated element's first three animations ARE, on the
+// record beside its `animated N` line (flow_motion_describe): a script's
+// effect or a CSS animation by name, the longhand it sets first and how many
+// more, that longhand at its first and last keyframe, its timing and whether
+// it is held, a script's local time, and the element's clock (the time its
+// style is at, its next phase edge, the layout's time and the last tick's);
+// then, for an element's own entry (not a pseudo-element's, whose node is
+// its originating element), its inline style and its computed margin-top
+// and transform, which is where a page that places by one and moves by the
+// other shows what it left.
+#define MOTION_DESCRIBED 3
+static void diag_motion_what(Page *p, int32_t entry, int32_t named, const os64_html_node_t *node, bool pseudo)
+{
+    static const char *const kFill[] = {"none", "forwards", "backwards", "both"};
+    static const char *const kDirection[] = {"normal", "reverse", "alternate", "alternate-reverse"};
+    flow_env_t env = s_env;
+    env.timeline = NULL;
+    env.ticks = false;
+    env.ctx = p;
+    env.cascade = p->cascade;
+    env.zoom = p->laid_zoom;
+    env.viewport_height = (int32_t)css_view(1, p->laid_height, p->laid_zoom).height;
+    env.scripting = p->scripting;
+    char key[32], v[320];
+    flow_motion_anim_t a;
+    for (int32_t k = 0; k < MOTION_DESCRIBED && flow_motion_describe(p->tree, &env, entry, k, &a); k++) {
+        size_t at = a.script ? (size_t)os64_snprintf(v, sizeof(v), "a script's effect")
+                             : (size_t)os64_snprintf(v, sizeof(v), "the CSS animation %.*s", (int)a.name.len,
+                                                     a.name.text != NULL ? a.name.text : "");
+        if (at < sizeof(v) && a.prop >= 0)
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at, " of %s", garb_prop_name((garb_prop_t)a.prop));
+        if (at < sizeof(v) && a.nprops > 1)
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at, " and %d more", (int)a.nprops - 1);
+        if (at < sizeof(v) && (a.first[0] != '\0' || a.last[0] != '\0'))
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at, ", %s to %s", a.first, a.last);
+        const flow_animation_t *t = &a.timing;
+        char iterations[24], local[40] = "";
+        // A count need not be whole (`2.5`); the format has no %g, so the
+        // fraction is written in thousandths.
+        if (isinf(t->iterations) || isnan(t->iterations))
+            os64_strcopy(iterations, sizeof(iterations), isnan(t->iterations) ? "?" : "infinite");
+        else if (t->iterations == floor(t->iterations))
+            os64_snprintf(iterations, sizeof(iterations), "%ld", (long)t->iterations);
+        else
+            os64_snprintf(iterations, sizeof(iterations), "%ld.%03ld", (long)t->iterations,
+                          (long)((t->iterations - floor(t->iterations)) * 1000));
+        if (a.script && !isnan(a.local_ms) && !isinf(a.local_ms))
+            os64_snprintf(local, sizeof(local), " at %ld ms of its own", (long)a.local_ms);
+        if (at < sizeof(v))
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at,
+                                        ", %d keyframes, %ld ms, delay %ld ms, fill %s, %s iterations, %s, %s%s",
+                                        (int)a.nframes, (long)t->duration_ms, (long)t->delay_ms,
+                                        (unsigned)t->fill < 4 ? kFill[t->fill] : "?", iterations,
+                                        (unsigned)t->direction < 4 ? kDirection[t->direction] : "?",
+                                        a.held ? "held" : "running", local);
+        char edge[24] = "none";
+        if (!isinf(a.edge))
+            os64_snprintf(edge, sizeof(edge), "%ld ms", (long)a.edge);
+        if (at < sizeof(v))
+            os64_snprintf(v + at, sizeof(v) - at,
+                          "; its style at %ld ms, next edge %s, the layout at %lu ms, the last tick at %lu ms",
+                          (long)a.at, edge, (unsigned long)a.now_ms, (unsigned long)a.tick_ms);
+        os64_snprintf(key, sizeof(key), "animated %d.%d", (int)named, (int)k + 1);
+        yonder_diag_fact(p->diag, key, v);
+    }
+    if (pseudo)
+        return;
+    const os64_html_attr_t *inline_style = os64_html_attr(node, "style");
+    char margin[48] = "", transform[96] = "";
+    flow_computed_t *c = flow_computed_new(p->tree, &env, node, NULL);
+    if (c != NULL) {
+        (void)flow_computed_text(c, GARB_MARGIN_TOP, margin, sizeof(margin));
+        (void)flow_computed_text(c, GARB_TRANSFORM, transform, sizeof(transform));
+        flow_computed_free(c);
+    }
+    os64_snprintf(v, sizeof(v), "inline style \"%.120s\", margin-top %s, transform %s",
+                  inline_style != NULL ? inline_style->value : "", margin, transform);
+    os64_snprintf(key, sizeof(key), "animated %d style", (int)named);
+    yonder_diag_fact(p->diag, key, v);
+}
+
 static void diag_motion(Page *p)
 {
     yonder_diag_forget(p->diag, "animated");
@@ -5424,6 +5505,7 @@ static void diag_motion(Page *p)
                           : next == FLOW_NEVER ? "never" : "later");
         os64_snprintf(key, sizeof(key), "animated %d", (int)++named);
         yonder_diag_fact(p->diag, key, v);
+        diag_motion_what(p, i, named, m->node, m->pseudo != GARB_PSEUDO_NONE);
     }
     char v[160];
     char first[48] = "";

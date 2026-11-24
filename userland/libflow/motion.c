@@ -287,6 +287,11 @@ static bool anim_paused(const FAnimation *an)
     return an->record->paused || an->record->rate == 0;
 }
 
+bool f_motion_held(const FAnimation *an)
+{
+    return anim_paused(an);
+}
+
 // Where it is at `now`. A script effect's clock may run at any rate and
 // either way, and its timing is Web Animations 1's whole (garb_timing_t).
 static garb_clock_t anim_clock(const FAnimation *an, double now)
