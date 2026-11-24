@@ -48,9 +48,7 @@ SCRIPTS = 'tools/test_yonder_scripts_host.sh'
 mutants = [
     # The renewal is the bytes (RELAYOUT.md § the retained budget): no
     # count of updates renews, what a renewal reports is what it retained,
-    # and yonder's record says each one. A parse's record charged beside
-    # its arena (`+ sizeof(*p)`) has no mutant: its bytes against the
-    # arena's kilobytes are past what a host case can tell.
+    # and yonder's record says each one.
     ('renewal-by-a-count-of-updates', CASCADE,
      '    if (added >= c->retained_budget) { c->refusal = GARB_UPDATE_RETAINED; return false; }',
      '    if (added >= c->retained_budget || c->updates >= 64) { c->refusal = GARB_UPDATE_RETAINED; return false; }',

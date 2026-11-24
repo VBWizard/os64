@@ -434,8 +434,9 @@ bool garb_cascade_read_written(const garb_cascade_t *c);
 
 uint64_t garb_cascade_generation(const garb_cascade_t *c);
 uint64_t garb_cascade_updates(const garb_cascade_t *c);
-// What this cascade's updates have added, in bytes (its own state and the
-// style attributes they parsed again, each parse's record counted), and at
+// What this cascade's updates have added, in bytes (its own arena, the
+// records of the style attributes they parsed again included, and those
+// parses' own arenas), and at
 // `budget` (when not NULL) what it renews at: an update past it is refused
 // (GARB_UPDATE_RETAINED, GARB_UPDATE_ATTRIBUTES) and a fresh cascade owed.
 size_t garb_cascade_retained(const garb_cascade_t *c, size_t *budget);

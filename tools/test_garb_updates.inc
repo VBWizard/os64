@@ -727,13 +727,15 @@ static void update_advance(void)
 /* THE LONG RUN: 10,000 sparse updates (one positioned element's `left`
  * written again and again, as a pointer moving over a bar does) on a page
  * of 2,000 others. The bytes are the only renewal: every update that is
- * refused is refused for them (`retained` or `attributes`), a cascade lives
- * past any count of updates, an update late in the run costs what one
- * early did (each thousand's median against the others: one update in a
- * few hundred takes milliseconds, at the same point in each cascade's life),
- * and the heap after each
- * renewal is what it was after the first: nothing grows with the number of
- * updates lived. It prints the costs by thousand and by updates lived. */
+ * refused is refused for them (`retained` or `attributes`) with what it
+ * retained at its budget, and a cascade lives past 64 updates. Nothing
+ * grows with the number of updates lived: an update to a cascade two
+ * hundred updates old costs what one to a new cascade does, the run costs
+ * the same from its first thousand to its last (medians: one update in a
+ * few hundred takes milliseconds, at the same point in each cascade's
+ * life), and the heap at the end of every cascade's life, its arena and
+ * the arrays beside it still held, is the first one's. It prints the
+ * medians by updates lived and by thousand. */
 static uint64_t long_run_ns(void)
 {
     struct timespec t;
@@ -761,8 +763,8 @@ static void update_long_run(void)
     unsigned renewals=0,other=0,failed=0,under=0;
     uint64_t lived_most=0;
     size_t heap_first=0,heap_most=0;
-    uint64_t bucket_ns[6]={0},bucket_n[6]={0},run_n[10]={0};
-    static uint64_t run_each[10][1000];
+    uint64_t run_n[10]={0},age_n[64]={0};
+    static uint64_t run_each[10][1000],age_each[64][2048];
     for(int i=0;i<10000;++i){
         char v[32];
         int n=snprintf(v,sizeof(v),"left:%dpx",i%997);
@@ -772,7 +774,7 @@ static void update_long_run(void)
         bool updated=garb_cascade_update(c);
         uint64_t spent=long_run_ns()-began;
         if(updated){
-            if(lived<300){ bucket_ns[lived/50]+=spent; bucket_n[lived/50]++; }
+            if(lived/50<64 && age_n[lived/50]<2048) age_each[lived/50][age_n[lived/50]++]=spent;
             run_n[i/1000]++;
             run_each[i/1000][run_n[i/1000]-1]=spent;
             continue;
@@ -782,24 +784,38 @@ static void update_long_run(void)
         size_t budget=0;
         under+=garb_cascade_retained(c,&budget)<budget || budget<4096;
         if(lived>lived_most) lived_most=lived;
-        garb_cascade_t *fresh=garb_cascade(&in,1,doc,garb_cascade_env(c));
-        if(!fresh || garb_cascade_incomplete(fresh)){ failed++; garb_cascade_free(fresh); break; }
-        garb_cascade_free(c); c=fresh;
+        // The heap at the end of a cascade's life, with everything it
+        // grew still held: its arena and the arrays beside it.
         renewals++;
         if(renewals==1) heap_first=live_bytes;
         else if(live_bytes>heap_most) heap_most=live_bytes;
+        garb_cascade_t *fresh=garb_cascade(&in,1,doc,garb_cascade_env(c));
+        if(!fresh || garb_cascade_incomplete(fresh)){ failed++; garb_cascade_free(fresh); break; }
+        garb_cascade_free(c); c=fresh;
     }
-    printf("  long run by updates lived:");
-    for(int k=0;k<6;k++) if(bucket_n[k]) printf(" %d-%d %.0f ns,",k*50,k*50+49,(double)bucket_ns[k]/bucket_n[k]);
+    // The median update by how many updates its cascade had lived, in fifties.
+    uint64_t young=0,old=0;
+    int oldest=-1;
+    printf("  long run medians by updates lived:");
+    for(int k=0;k<64;k++){
+        if(age_n[k]<100) continue;
+        qsort(age_each[k],(size_t)age_n[k],sizeof(age_each[k][0]),long_run_order);
+        uint64_t median=age_each[k][age_n[k]/2];
+        printf(" %d-%d %lu,",k*50,k*50+49,(unsigned long)median);
+        if(k==0) young=median;
+        oldest=k;
+        old=median;
+    }
     printf("\n");
-    printf("  long run: 10000 updates, %u renewals, most lived %lu; heap after the first renewal %zu, at most %zu"
-           " after the rest\n",renewals,(unsigned long)lived_most,heap_first,heap_most);
+    printf("  long run: 10000 updates, %u renewals, most lived %lu; heap at the end of the first cascade's life %zu,"
+           " at most %zu at the others'\n",renewals,(unsigned long)lived_most,heap_first,heap_most);
     update_check(!failed && other==0 && under==0,
                  "long run: every refused update was refused for its bytes, its retained bytes at its budget");
     update_check(renewals<=200 && lived_most>64,"long run: a cascade lives past 64 updates, renewed only for its bytes");
-    // Flat: no thousand's median update costs half again any other's (a
-    // median, so the rare update that takes milliseconds, and a burst of
-    // load on the machine running the suite, are not the comparison).
+    // Flat across the run: no thousand's median update costs half again any
+    // other's (medians here and above, so the rare update that takes
+    // milliseconds, and a burst of load on the machine running the suite,
+    // are not the comparison).
     uint64_t most=0,least=0;
     printf("  long run medians by thousand:");
     for(int k=0;k<10;k++){
@@ -812,9 +828,11 @@ static void update_long_run(void)
     }
     printf("\n");
     update_check(run_n[0]>=900 && run_n[9]>=900 && least>0 && most<=least*3/2,
-                 "long run: an update late in the run costs what one early did");
-    update_check(renewals<2 || heap_most<=heap_first+heap_first/10+65536,
-                 "long run: the heap after each renewal is the first renewal's");
+                 "long run: an update late in the run costs what one early in it did");
+    update_check(young>0 && oldest>=4 && old<=young*3/2,
+                 "long run: an update to a cascade two hundred updates old costs what one to a new cascade does");
+    update_check(renewals>=2 && heap_most<=heap_first+heap_first/10+65536,
+                 "long run: the heap at the end of each cascade's life is the first one's");
     garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
     update_check(live==baseline,"long run: nothing leaks");
 }

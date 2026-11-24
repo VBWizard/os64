@@ -2725,9 +2725,7 @@ static int32_t inline_decls(garb_cascade_t *c, const os64_html_node_t *el, Decl 
         return 0;
     }
     c->nattrs++;
-    // An update's parse is charged its arena and its record in `attrs`,
-    // which lives as long as the cascade.
-    if (c->updating) c->update_attribute_bytes += os64_arena_stats(p->arena).reserved_bytes + sizeof(*p);
+    if (c->updating) c->update_attribute_bytes += os64_arena_stats(p->arena).reserved_bytes;
     Decl *d = alloc(c, (size_t)(p->nitems > 0 ? p->nitems : 1) * sizeof(Decl));
     if (d == NULL)
         return 0;
