@@ -209,12 +209,16 @@ static void role_counter_cases(void)
     flow_free(old);
     sheeted_close(&p);
     // An absolute box whose containing block is its parent refuses nothing
-    // above that parent: the page is refused for the float beside it, and
-    // filed under the float, never under the absolute box.
+    // above that parent: the parent, the root left once its sibling's text
+    // changed, is refused for the float beside the absolute box and filed
+    // under the float, never under the absolute box.
     sheeted_open(&p, "<!doctype html><div style='position:relative'><div style='position:absolute'>a</div>"
-                     "<div style='float:left'>f</div><p>x</p></div><p>tail</p>", 800, 600);
+                     "<div style='float:left'>f</div><p>x</p></div><p id=zp>tail</p>", 800, 600);
     input = (flow_reuse_inputs_t){.resource_owner = p.doc};
     old = snapshot_layout(&p, NULL, &input);
+    zp = (os64_html_node_t *)computed_find(p.doc->document, "zp");
+    os64_html_set_text(p.doc, zp->first_child, "changed", 7);
+    garb_cascade_update(p.cascade);
     role_ticks = 0;
     next = role_layout(&p, old, &input, true);
     s = flow_reuse_stats(next);
