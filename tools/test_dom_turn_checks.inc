@@ -159,8 +159,9 @@ static void dom_turn_check_cases(void)
     check(turn_damaged == 0 && os64_dom_checks_visited(f.binding) - before == 1,
           "turn checks: painted, the drawn one is visited once more and leaves");
     /* Every context method puts its canvas back on the list, whichever file
-     * serves it: a path's, text's, an image's. */
-    static const char *const draws[] = {"x2.strokeRect(0,0,3,3);", "x2.fillText('a',1,8);", "x2.drawImage(k1,0,0);"};
+     * serves it: a path's, text's (refused here, with no text provider, but
+     * after the canvas is listed), an image's. */
+    static const char *const draws[] = {"x2.strokeRect(0,0,3,3);", "try{x2.fillText('a',1,8)}catch(e){}", "x2.drawImage(k1,0,0);"};
     for (size_t i = 0; i < sizeof(draws) / sizeof(draws[0]); i++) {
         dom_script(&f, draws[i], "turn checks: a canvas drawn another way");
         before = os64_dom_checks_visited(f.binding);
