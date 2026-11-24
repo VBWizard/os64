@@ -617,13 +617,13 @@ $(EXT2_TEST_IMAGE): $(SYSTEM_LICENSE_SOURCES) $(SYSTEM_CONFIG) $(FONT_FIXTURES) 
 	# /home/husk.rc (the user's, on its own partition) still wins the
 	# search; /fat/husk.rc remains the lifeboat's copy.
 	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\n' > $(EXT2_STAGING)/debugfs_bins.cmds
-	$(foreach f,$(SYSTEM_CONFIG),printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	set -e; $(foreach f,$(SYSTEM_CONFIG),printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'cd /bin\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	# The pinned public roots are system configuration; /home/tls.conf can
 	# select another store through the configuration ladder.
 	printf 'mkdir /etc/certs\nwrite %s /etc/certs/roots.pem\n' "$(TLS_PUBLIC_ROOTS)" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'mkdir /etc/licenses\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	$(foreach item,$(SYSTEM_LICENSES),printf 'write %s /etc/licenses/%s\n' "$(call license_source,$(item))" "$(call license_name,$(item))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	set -e; $(foreach item,$(SYSTEM_LICENSES),printf 'write %s /etc/licenses/%s\n' "$(call license_source,$(item))" "$(call license_name,$(item))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'mkdir /etc/fonts\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(FONT_PRODUCT),printf 'write %s /etc/fonts/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'mkdir /etc/icons\nmkdir /etc/icons/default\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
@@ -740,7 +740,7 @@ $(DISK_IMAGE): $(SYSTEM_LICENSE_SOURCES) $(DEPLOY_ELFS) $(FONT_FIXTURES) $(FONT_
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/frames
 	$(foreach f,$(FRAME_COMPOSITIONS),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/frames/$(notdir $(f));)
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/licenses
-	$(foreach item,$(SYSTEM_LICENSES),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) "$(call license_source,$(item))" ::/etc/licenses/$(call license_name,$(item));)
+	set -e; $(foreach item,$(SYSTEM_LICENSES),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) "$(call license_source,$(item))" ::/etc/licenses/$(call license_name,$(item));)
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gclock.conf ::/etc/gclock.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gterm.conf ::/etc/gterm.conf
