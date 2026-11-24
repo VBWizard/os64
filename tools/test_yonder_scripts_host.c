@@ -8515,7 +8515,9 @@ static void diag_page_cases(void) {
         "<script>setTimeout(function(){null.x},50)</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page whose script dies arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name));
-    char arrival[4096]; snprintf(arrival,sizeof(arrival),"%s",diag_file("/tmp/diag",name));
+    char arrival[16384]; int arrival_len=snprintf(arrival,sizeof(arrival),"%s",diag_file("/tmp/diag",name));
+    check(arrival_len>0 && (size_t)arrival_len<sizeof(arrival),"diag: the arrival write fits the copy it is compared with");
+    if(arrival_len>=4096) fprintf(stderr,"note: the arrival write is %d bytes\n",arrival_len);
     check(has(arrival,"\nverdict: 1 MISSING, 1 FAILED\nMISSING global nothere (1)\nFAILED script http://fixture.test/final#inline-1: ") &&
         has(arrival,"nothere"),
         "diag: a dying script writes a FAILED line by its source name, and the verdict counts it");
