@@ -91,7 +91,9 @@ static bool keep_declined(FKeeps *k, flow_restyle_reason_t why, const os64_html_
 
 // How a write that changed only an element's insets (f_style_insets_only)
 // would land, for the record of a declined restyle (BRIEF_LAYOUT_NEEDS.md
-// N4, its cases): `no box` (none to place), `static` (its insets are not
+// N4, its cases): `no box` (its own `display: none` or `contents`; one
+// under a `display: none` ancestor never reaches here, since no style of
+// it comes out different), `static` (its insets are not
 // read), `sticky`, `an inline's pieces` (a relative inline, each piece of
 // it), `a pseudo-element`; for a relative or an absolute or fixed box
 // whose size the insets do not decide (CSS 2.1 §§ 9.4.3, 10.3.7, 10.6.4),
@@ -138,7 +140,8 @@ static void keep_offset_case(const flow_tree_t *tree, const os64_html_node_t *no
                     : b->position == FLOW_POSITION_STATIC ? "static"
                     : b->position == FLOW_POSITION_STICKY ? "sticky"
                     : box->kind == FLOW_BOX_SPAN ? "an inline's pieces" : NULL;
-    const char *kind = b->position == FLOW_POSITION_RELATIVE ? "relative" : "absolute";
+    const char *kind = b->position == FLOW_POSITION_RELATIVE ? "relative"
+                     : b->position == FLOW_POSITION_FIXED ? "fixed" : "absolute";
     bool percent = false, replaced = box != NULL && box->kind == FLOW_BOX_REPLACED;
     int64_t dx = 0, dy = 0;
     if (why == NULL && b->position != FLOW_POSITION_RELATIVE) {

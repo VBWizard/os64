@@ -356,8 +356,63 @@ static flow_restyle_t restyle_keep(Sheeted *p, flow_tree_t *tree)
     os64_page_free(model);
     return kept;
 }
+// A WRITE THAT CHANGED ONLY AN ELEMENT'S INSETS is declined as geometry,
+// and the decline says which case it was (restyle.inc keep_offset_case,
+// BRIEF_LAYOUT_NEEDS.md N4): one row per case, from the style before to the
+// style written. One under a `display: none` ancestor is answered as no
+// style having come out different, and nothing is written.
+static void restyle_offset_cases(void)
+{
+    static const struct {
+        const char *before, *after, *said;
+        bool hidden;
+    } kRows[] = {
+        {"left:0px", "left:5px", "an inset, static", false},
+        {"position:relative;left:0px", "position:relative;left:0.5px", "an inset, relative, moves less than a pixel", false},
+        {"position:relative;left:2px", "position:relative;left:6px", "an inset, relative, moves 2 to 8 px", false},
+        {"position:relative;top:0px", "position:relative;top:100px", "an inset, relative, moves over 64 px", false},
+        {"position:relative;left:3px", "position:relative;left:3px;right:9px", "an inset, relative, resolves the same", false},
+        {"position:relative;left:1%", "position:relative;left:2%", "an inset, a percentage", false},
+        {"position:relative;left:1px", "position:relative;right:1px", "an inset, another side places it", false},
+        {"position:sticky;top:0px", "position:sticky;top:10px", "an inset, sticky", false},
+        {"position:absolute;width:100%;left:0px", "position:absolute;width:100%;left:30px", "an inset, absolute, moves 9 to 64 px", false},
+        {"position:absolute;width:50px;left:0px;transform:scaleX(0.5)", "position:absolute;width:50px;left:1px;transform:scaleX(0.7)",
+         "an inset, absolute, moves 1 px", false},
+        {"position:absolute;left:0px", "position:absolute;left:30px", "an inset, its width follows them", false},
+        {"position:absolute;height:auto;top:0px;bottom:0px;width:5px", "position:absolute;height:auto;top:4px;bottom:0px;width:5px",
+         "an inset, its height follows them", false},
+        {"position:absolute;width:50px;left:0px;right:0px;margin:0 auto", "position:absolute;width:50px;left:10px;right:0px;margin:0 auto",
+         "an inset, auto margins centre it", false},
+        {"position:relative;left:0px", "position:relative;left:9px", NULL, true},
+        {"display:none;position:relative;left:0px", "display:none;position:relative;left:9px", "an inset, no box", false},
+        {"display:contents;position:relative;left:0px", "display:contents;position:relative;left:9px", "an inset, no box", false},
+    };
+    for (size_t i = 0; i < sizeof(kRows) / sizeof(kRows[0]); i++) {
+        char html[512];
+        snprintf(html, sizeof(html), "<!doctype html><div style='position:relative;width:400px;height:100px'%s>"
+                 "<div id=m style='%s'>m</div></div><p id=c>c</p>", kRows[i].hidden ? " hidden" : "", kRows[i].before);
+        Sheeted p;
+        sheeted_open(&p, html, 800, 600);
+        flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
+        bool changed = !os64_html_set_attr(p.doc, graft_node(&p, "m"), "style", kRows[i].after, strlen(kRows[i].after));
+        graft_update(&p);
+        flow_restyle_t kept = restyle_keep(&p, old);
+        char name[160];
+        snprintf(name, sizeof(name), "restyle: an inset-only write, %s",
+                 kRows[i].said != NULL ? kRows[i].said : "under a display: none ancestor, no style comes out different");
+        expect(name, old != NULL && changed &&
+                         (kRows[i].said == NULL ? kept.kind == FLOW_RESTYLE_NOTHING
+                                                : kept.kind == FLOW_RESTYLE_DECLINED && kept.why == FLOW_RESTYLE_GEOMETRY &&
+                                                      strcmp(kept.detail, kRows[i].said) == 0),
+               kept.detail);
+        flow_free(old);
+        sheeted_close(&p);
+    }
+}
+
 static void restyle_in_place_cases(void)
 {
+    restyle_offset_cases();
     Sheeted p;sheeted_open(&p,"<!doctype html><style>p{margin:4px}</style><p id=a>first <b>bold</b></p>"
         "<div style='height:60px'><p id=q>second</p></div><p>tail</p>",800,600);
     os64_html_node_t *q=graft_node(&p,"q");
