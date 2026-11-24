@@ -96,7 +96,7 @@ mutants = [
     ('the-first-reading-spans-from-the-reset', READING, CASES_READING,
      '    t->from_first_call = call == YONDER_TR_CALLS;', '    t->from_first_call = false;'),
     ('timer-arms-not-the-reading-s', READING, CASES_READING,
-     '    uint64_t arms = list_now->arms - t->list_from.arms,', '    uint64_t arms = list_now->arms,'),
+     '    uint64_t arms = list_now->arms - (behind ? 0 : t->list_from.arms);', '    uint64_t arms = list_now->arms;'),
     # libdom's sites and counts.
     ('a-timer-keeps-no-site', TIMER, CASES_DOM,
      '    timer->site = site_of(dom, ctx);', '    timer->site = 0;'),
