@@ -422,19 +422,20 @@ was shown, or since its record was last written on asking:
   counts without the times.
   An interval whose counter stepped back (the thread moved to a core whose
   counter is behind) counts as nothing, and the line says how many.
-- **`d` in the page writes the record now** (`written: when asked`), and
-  so does Ctrl+Shift+D wherever the keys are: a page's scripts or a focused
-  field can keep a plain `d` for themselves, never the chord. (Not
-  Ctrl+Alt: with a letter that is the window manager's, and never reaches
-  yonder.) The record's `reading key` line says how often a reading key
-  was pressed against the readings kept,
-  keeping the counts since the last `d` as a numbered reading with where
+- **Ctrl+Shift+D writes the record now** (`written: when asked`),
+  wherever the keys are: no page script and no focused field can keep it,
+  and it is the only reading key (a bare `d` is the page's, like any other
+  key). (Not Ctrl+Alt: with a letter that is the window manager's, and
+  never reaches yonder.) The record's `reading key` line says how often the
+  chord was pressed against the readings kept, each reading
+  keeping the counts since the last one as a numbered reading with where
   the page was scrolled — `paint reading 2: at y 2140: 96 paints in 10.1 s
   ... | ms a paint (most): render ...` — and starts them again. So each
   part of a page is measured on its own and every reading stays: scroll
-  there, `d`, wait, `d`, scroll on, wait, `d`. The status line names the
-  reading it wrote. `paint` and `paint stages` are the counts since the
-  last `d` that reached its file: one that did not keeps its reading in
+  there, the chord, wait, the chord, scroll on, wait, the chord. The
+  status line names the reading it wrote. `paint` and `paint stages` are
+  the counts since the last reading that reached its file: one that did
+  not keeps its reading in
   the record, lets the counts run on, and says so on the status line.
 
 ### The load's timeline (load_timeline.h)
@@ -533,7 +534,7 @@ minutes, from the moment its record begins:
   fills the ordinary room long before these are written (one large
   application's record had 1473 lines not kept), and the timeline is written whole
   at each write of its navigation's record — its arrival, its last picture,
-  each `d`, its leaving, and a navigation stopped or failed before it
+  each reading, its leaving, and a navigation stopped or failed before it
   arrived. A write in the middle of a step (the arrival's, inside the
   stream's) counts that step up to the moment of the write, from a copy,
   the timeline going on as it was. A record written after a later

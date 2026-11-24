@@ -105,18 +105,18 @@ after it is a layout's.
 **Where it is read.** A `paint:` section on the page's record
 (YONDER_DIAGNOSTICS.md) at each write. To measure one part of a page —
 the starfield alone, the roaches, Scratch 2000 — the record can be written
-on demand: the `d` key in the view writes it ("written: when asked"),
-keeps the counts since the last `d` as a numbered reading with the scroll
-position, and starts them again — so readings of several parts of a page
-sit side by side in one file: scroll there, `d`, wait ten seconds, `d`. A
-`d` whose file is not written keeps its reading in the record and lets
-the counts run on, and says so; the next `d` writes both.
+on demand: the reading chord, Ctrl+Shift+D, writes it ("written: when
+asked"), keeps the counts since the last reading as a numbered reading with
+the scroll position, and starts them again — so readings of several parts
+of a page sit side by side in one file: scroll there, the chord, wait ten
+seconds, the chord. A reading whose file is not written stays in the record
+and lets the counts run on, and says so; the next one writes both.
 
 | State | Begun | Changed | Written | Let go |
 |---|---|---|---|---|
-| Paint counts (per stage: total, most, paints) | when a page is shown | at every paint and tick | at every write of the page's record | after an asked-for write (`d`) that reached its file, and with the page |
+| Paint counts (per stage: total, most, paints) | when a page is shown | at every paint and tick | at every write of the page's record | after an asked-for write (the reading chord) that reached its file, and with the page |
 | The ticker's counts (its rings and looks, how late it rang, how far past its time it slept) | when the ticker starts | at each look, on the ticker's thread, under its lock | at every write of the page's record | restarted with the paint counts; with the ticker on the way out, after which the record says it is not running |
-| The readings (`paint reading N`) | when a page is shown, numbered from 1 | one more at each `d` | kept in the record from then on | with the page's record |
+| The readings (`paint reading N`) | when a page is shown, numbered from 1 | one more at each reading | kept in the record from then on | with the page's record |
 | The counter's rate | at the first paint of the run | — | used at each write | never: the processor's |
 
 **The first reading (QEMU, emulated, so its milliseconds are not the
@@ -740,7 +740,7 @@ changed, which is perf-4's whole point. Nothing said why.
   whole by the parts it marked when they reach across the view
   (`s_parts_reach`, the union of `mark_part`'s marks), and by libui's own
   marks otherwise (a hover or focus moved onto the view, the window laid
-  out). The `whole views:` line says the counts, and each `d` reading
+  out). The `whole views:` line says the counts, and each reading
   carries it.
 - **And why a layout refused its parts.** `flow_layout_parts` says why it
   returned false (`flow_parts_said_t`): which test of the box compare

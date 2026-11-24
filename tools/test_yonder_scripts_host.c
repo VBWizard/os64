@@ -9536,13 +9536,13 @@ static void paint_cost_cases(void) {
           "paint effects: what is drawn after a video, counted apart");
     effects_reset();
     check(!s_effects_past_video,"paint effects: the count starting again starts before any video");
-    /* The reading key's presses beside the readings kept: presses the
-     * page or a focused field took are said, not left silent. */
+    /* The reading chord's presses beside the readings kept: presses that
+     * kept none (no page files, no record) are said, not left silent. */
     s_reading_keys=3; s_cost_readings=1;
     reading_key_fact(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
-    check(strstr(rec,"\nreading key: pressed 3 times, 1 readings kept; the page or a focused field took the rest\n")!=NULL,
-          "readings: presses the view never saw are counted beside the readings kept");
+    check(strstr(rec,"\nreading key: pressed 3 times, 1 readings kept; the rest had no page files or no record\n")!=NULL,
+          "readings: presses that kept no reading are counted beside the readings kept");
     s_reading_keys=0; s_cost_readings=0;
     /* The biggest part marked and by what, the biggest painted, and the
      * marks of the canvases and the form controls (YONDER_DIAGNOSTICS.md §
@@ -9594,17 +9594,18 @@ static void paint_cost_cases(void) {
               "paint counts: a deadline already past is counted against its source");
         g.settle_due=settle; now_ms=0;
     }
-    /* `d` in the view writes the record on asking and starts the counts again. */
+    /* A reading writes the record on asking and starts the counts again; a
+     * bare `d` is no reading key, the page's like any other key. */
     {
         os64_gui_event_t ev={0};
         ev.key.ascii='d';
-        check(view_key(&ev)==KEY_RECORD,"paint counts: d in the view asks for the record");
+        check(view_key(&ev)==KEY_NONE,"paint counts: a bare d is no key of the view's");
         diag_asked();
         char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
         const char *file=diag_file("/tmp/diag",name);
         check(has(file,"\nwritten: when asked\n") && has(file,"\npaint reading 1: at y 0: 2 paints in ") &&
               has(file," | ms a paint (most): render 12.0 (13.0)") && s_cost.paints==0 && s_cost.total[PS_RENDER]==0,
-              "paint counts: d keeps the counts as a reading, writes the record, and starts them again");
+              "paint counts: a reading keeps the counts, writes the record, and starts them again");
         s_cost.paints=1; s_cost.total[PS_RENDER]=5000000;
         s_cost.from_cycles=cycles()-1000000000000ull; s_cost.from_us=os64_micros()-1000000000;
         diag_asked();

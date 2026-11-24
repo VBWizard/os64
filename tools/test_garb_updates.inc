@@ -730,12 +730,12 @@ static void update_advance(void)
  * refused is refused for them (`retained` or `attributes`) with what it
  * retained at its budget, and a cascade lives past 64 updates. Nothing
  * grows with the number of updates lived: an update to a cascade two
- * hundred updates old costs what one to a new cascade does, the run costs
- * the same from its first thousand to its last (medians: one update in a
- * few hundred takes milliseconds, at the same point in each cascade's
- * life), and the heap at the end of every cascade's life, its arena and
- * the arrays beside it still held, is the first one's. It prints the
- * medians by updates lived and by thousand. */
+ * hundred updates old costs what one to a new cascade does (medians: one
+ * update in a few hundred takes milliseconds, at the same point in each
+ * cascade's life), the run costs the same from its first thousand to its
+ * last, and the heap at the end of every cascade's life, its arena and the
+ * arrays beside it still held, is the first one's. It prints what it
+ * compares. */
 static uint64_t long_run_ns(void)
 {
     struct timespec t;
@@ -812,19 +812,20 @@ static void update_long_run(void)
     update_check(!failed && other==0 && under==0,
                  "long run: every refused update was refused for its bytes, its retained bytes at its budget");
     update_check(renewals<=200 && lived_most>64,"long run: a cascade lives past 64 updates, renewed only for its bytes");
-    // Flat across the run: no thousand's median update costs half again any
-    // other's (medians here and above, so the rare update that takes
-    // milliseconds, and a burst of load on the machine running the suite,
-    // are not the comparison).
+    // Flat across the run: no thousand's tenth percentile costs half again
+    // any other's. A thousand is a stretch of time, so a load on the machine
+    // running the suite slows all of it, which the fastest tenth feels least
+    // (the ages above are drawn from the whole run alike, so their medians
+    // hold).
     uint64_t most=0,least=0;
-    printf("  long run medians by thousand:");
+    printf("  long run tenth percentiles by thousand:");
     for(int k=0;k<10;k++){
         if(!run_n[k]) continue;
         qsort(run_each[k],(size_t)run_n[k],sizeof(run_each[k][0]),long_run_order);
-        uint64_t median=run_each[k][run_n[k]/2];
-        printf(" %lu",(unsigned long)median);
-        if(most==0 || median>most) most=median;
-        if(least==0 || median<least) least=median;
+        uint64_t tenth=run_each[k][run_n[k]/10];
+        printf(" %lu",(unsigned long)tenth);
+        if(most==0 || tenth>most) most=tenth;
+        if(least==0 || tenth<least) least=tenth;
     }
     printf("\n");
     update_check(run_n[0]>=900 && run_n[9]>=900 && least>0 && most<=least*3/2,
