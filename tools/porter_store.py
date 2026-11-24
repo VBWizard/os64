@@ -68,8 +68,10 @@ def regular_stream(path, expected=None):
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     flags |= getattr(os, "O_NONBLOCK", 0)
     with os.fdopen(os.open(path, flags), "rb") as stream:
-        if fingerprint(os.fstat(stream.fileno())) != fingerprint(before):
-            raise PorterError(f"file changed while opening: {path}")
+        opened = os.fstat(stream.fileno())
+        if fingerprint(opened) != fingerprint(before):
+            raise PorterError(f"file changed while opening: {path} "
+                              f"(path {fingerprint(before)}, handle {fingerprint(opened)})")
         yield stream
         if (fingerprint(os.fstat(stream.fileno())) != fingerprint(before)
                 or fingerprint(regular_info(path)) != fingerprint(before)):
