@@ -13193,6 +13193,36 @@ static void schedule_late_animation_cases(void)
     probe_drop();
 }
 
+/* WHAT AN ANIMATION IS, ON THE RECORD (diag_motion_what): beside each
+ * `animated N` line, each of its animations by kind and name, the longhand
+ * it sets and that longhand at its first and last keyframe, its timing and
+ * play state, and the element's clock; then the element's inline style and
+ * its computed margin-top and transform, for a page that places an element
+ * by one and moves it by the other. */
+static void motion_what_cases(void)
+{
+    probe_page("<!doctype html><style>body{margin:0}"
+               "@keyframes roll{from{transform:translateY(0)}to{transform:translateY(-20px)}}"
+               ".c{animation:roll 500ms ease-out 100ms 2 alternate forwards;width:10px;height:40px}</style>"
+               "<div class=c id=c style=\"margin-top:-20px\"></div>", false);
+    relayout(true);
+    g.page.diag = diag_new_claimed("http://x.test/", 1);
+    diag_motion(&g.page);
+    char text[4096];
+    yonder_diag_render(g.page.diag, text, sizeof(text));
+    check(has(text, "\nanimated 1.1: the CSS animation roll of transform, matrix(1, 0, 0, 1, 0, 0) to "
+                    "matrix(1, 0, 0, 1, 0, -20), 2 keyframes, 500 ms, delay 100 ms, fill forwards, 2 iterations, "
+                    "alternate, running; its style at "),
+          "motion what: the animation by name, its longhand's first and last keyframe and its timing");
+    check(has(text, "\nanimated 1 style: inline style \"margin-top:-20px\", margin-top -20px, transform none\n"),
+          "motion what: the element's inline style, margin-top and transform before its delay");
+    if (!has(text, "\nanimated 1 style: inline style"))
+        printf("%s\n", text);
+    yonder_diag_free(g.page.diag);
+    g.page.diag = NULL;
+    probe_drop();
+}
+
 static void schedule_cost_cases(void)
 {
     static const char *const kShapes[] = {"plain", "an animation in view", "and a hidden animated element holding the rest",
@@ -13209,6 +13239,7 @@ static void schedule_cost_cases(void)
             printf("  schedule: %s: %.1f us a call at 200 elements, %.1f at 20000\n", kShapes[shape], small, big);
     }
     schedule_late_animation_cases();
+    motion_what_cases();
     s_animations = was_run;
 }
 
