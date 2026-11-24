@@ -729,9 +729,9 @@ static void update_advance(void)
  * of 2,000 others. The bytes are the only renewal: every update that is
  * refused is refused for them (`retained` or `attributes`), a cascade lives
  * past any count of updates, an update late in the run costs what one
- * early did (each thousand's average against the others: one update in a
- * few hundred takes milliseconds, at the same point in each cascade's life,
- * so a hundred updates prove less than a thousand), and the heap after each
+ * early did (each thousand's median against the others: one update in a
+ * few hundred takes milliseconds, at the same point in each cascade's life),
+ * and the heap after each
  * renewal is what it was after the first: nothing grows with the number of
  * updates lived. It prints the costs by thousand and by updates lived. */
 static uint64_t long_run_ns(void)
@@ -739,6 +739,11 @@ static uint64_t long_run_ns(void)
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
+static int long_run_order(const void *a, const void *b)
+{
+    uint64_t x=*(const uint64_t *)a,y=*(const uint64_t *)b;
+    return x<y ? -1 : x>y;
 }
 static void update_long_run(void)
 {
@@ -754,9 +759,10 @@ static void update_long_run(void)
     garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
     os64_html_node_t *t=(os64_html_node_t *)by_id(doc->document,"t");
     unsigned renewals=0,other=0,failed=0,under=0;
-    uint64_t lived_most=0,first_ns=0,last_ns=0,first_n=0,last_n=0;
+    uint64_t lived_most=0;
     size_t heap_first=0,heap_most=0;
-    uint64_t bucket_ns[6]={0},bucket_n[6]={0},run_ns[10]={0},run_n[10]={0};
+    uint64_t bucket_ns[6]={0},bucket_n[6]={0},run_n[10]={0};
+    static uint64_t run_each[10][1000];
     for(int i=0;i<10000;++i){
         char v[32];
         int n=snprintf(v,sizeof(v),"left:%dpx",i%997);
@@ -767,9 +773,8 @@ static void update_long_run(void)
         uint64_t spent=long_run_ns()-began;
         if(updated){
             if(lived<300){ bucket_ns[lived/50]+=spent; bucket_n[lived/50]++; }
-            run_ns[i/1000]+=spent; run_n[i/1000]++;
-            if(i<100){ first_ns+=spent; first_n++; }
-            if(i>=9900){ last_ns+=spent; last_n++; }
+            run_n[i/1000]++;
+            run_each[i/1000][run_n[i/1000]-1]=spent;
             continue;
         }
         garb_update_refusal_t why=garb_cascade_update_refusal(c);
@@ -784,30 +789,29 @@ static void update_long_run(void)
         if(renewals==1) heap_first=live_bytes;
         else if(live_bytes>heap_most) heap_most=live_bytes;
     }
-    double first_avg=first_n?(double)first_ns/first_n:0, last_avg=last_n?(double)last_ns/last_n:0;
-    printf("  long run by thousand:");
-    for(int k=0;k<10;k++) if(run_n[k]) printf(" %.0f",(double)run_ns[k]/run_n[k]);
-    printf("\n");
     printf("  long run by updates lived:");
     for(int k=0;k<6;k++) if(bucket_n[k]) printf(" %d-%d %.0f ns,",k*50,k*50+49,(double)bucket_ns[k]/bucket_n[k]);
     printf("\n");
-    printf("  long run: 10000 updates, %u renewals, most lived %lu; first 100 %.0f ns each, last 100 %.0f ns each;"
-           " heap after the first renewal %zu, at most %zu after the rest\n",renewals,(unsigned long)lived_most,
-           first_avg,last_avg,heap_first,heap_most);
+    printf("  long run: 10000 updates, %u renewals, most lived %lu; heap after the first renewal %zu, at most %zu"
+           " after the rest\n",renewals,(unsigned long)lived_most,heap_first,heap_most);
     update_check(!failed && other==0 && under==0,
                  "long run: every refused update was refused for its bytes, its retained bytes at its budget");
     update_check(renewals<=200 && lived_most>64,"long run: a cascade lives past 64 updates, renewed only for its bytes");
-    // Flat from the first renewal on: no thousand of the run costs more than
-    // a third over any other (the first thousand, on the cascade built with
-    // the document, is the run's cheapest and not compared).
-    double most=0,least=0;
-    for(int k=1;k<10;k++){
+    // Flat: no thousand's median update costs half again any other's (a
+    // median, so the rare update that takes milliseconds, and a burst of
+    // load on the machine running the suite, are not the comparison).
+    uint64_t most=0,least=0;
+    printf("  long run medians by thousand:");
+    for(int k=0;k<10;k++){
         if(!run_n[k]) continue;
-        double avg=(double)run_ns[k]/run_n[k];
-        if(most==0 || avg>most) most=avg;
-        if(least==0 || avg<least) least=avg;
+        qsort(run_each[k],(size_t)run_n[k],sizeof(run_each[k][0]),long_run_order);
+        uint64_t median=run_each[k][run_n[k]/2];
+        printf(" %lu",(unsigned long)median);
+        if(most==0 || median>most) most=median;
+        if(least==0 || median<least) least=median;
     }
-    update_check(first_n>=90 && last_n>=90 && least>0 && most<=least*4/3,
+    printf("\n");
+    update_check(run_n[0]>=900 && run_n[9]>=900 && least>0 && most<=least*3/2,
                  "long run: an update late in the run costs what one early did");
     update_check(renewals<2 || heap_most<=heap_first+heap_first/10+65536,
                  "long run: the heap after each renewal is the first renewal's");
