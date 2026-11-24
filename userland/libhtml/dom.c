@@ -372,6 +372,9 @@ void os64_html_census(const os64_html_document_t *doc, os64_html_census_t *out)
             if (r == (const HNode *)d->pub.document) {
                 nodes = hosted ? &out->nodes.hosted : &out->nodes.connected;
                 elements = hosted ? &out->elements.hosted : &out->elements.connected;
+            } else if (r->kind == DOCUMENT) {
+                nodes = &out->nodes.documents;
+                elements = &out->elements.documents;
             } else if (u->flags & H_NODE_PENDING) {
                 nodes = u->unit_holds ? &out->nodes.held : &out->nodes.pinned;
                 elements = u->unit_holds ? &out->elements.held : &out->elements.pinned;
@@ -383,7 +386,7 @@ void os64_html_census(const os64_html_document_t *doc, os64_html_census_t *out)
             if (n->kind == ELEMENT)
                 ++*elements;
         }
-        for (HNode *f = arena->free_nodes; f; f = f->next)
+        for (HNode *f = arena == d ? arena->free_nodes : NULL; f; f = f->next)
             out->free_slots++;
     }
 }

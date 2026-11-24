@@ -1626,8 +1626,11 @@ bool flow_incomplete(const flow_tree_t *tree);
 // record of where a page's elements go: those with a box of their own;
 // those without one, by why: `display: none` on themselves, inside an
 // element that is, drawn by a replaced box an ancestor makes (an inline
-// svg's shapes, a select's options), or none of those (`display: contents`,
-// and what the tree did not reach). A walk of the document, for a record.
+// svg's shapes, a select's options), or none of those (`display: contents`;
+// svg another svg may draw by reference — a definition, a symbol, a paint
+// server, a clip, a mask, a marker, a filter — or one in an svg that draws
+// nothing; and what the tree did not reach). A walk of the document, for a
+// record.
 typedef struct {
     size_t boxed, none, under_none, drawn, other;
 } flow_census_t;

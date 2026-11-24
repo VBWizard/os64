@@ -13216,9 +13216,9 @@ static void schedule_cost_cases(void)
  * lines): a subtree removed while something holds it is detached and held,
  * and the change log holds a removal until every reader has passed it (the
  * cascade's among them), so let go by its holder it is held still, until a
- * script's rebuild has the cascade read the change; it is then kept for an
- * older snapshot pin, and whose that is past a whole layout is printed
- * beside what is still held. Then what a layout costs over a hidden
+ * script's rebuild has its readers pass it; it then waits to be collected,
+ * and what keeps it past a whole layout is printed beside what is still
+ * held. Then what a layout costs over a hidden
  * subtree of 200, 2,000 and 20,000 paragraphs, printed: the cascade holds
  * every one. */
 static void node_census_cases(void)
@@ -13246,25 +13246,25 @@ static void node_census_cases(void)
     os64_html_release(g.page.way.doc, a);
     os64_html_census(g.page.way.doc, &c);
     check(c.nodes.held == 101 && os64_html_changes_bytes(g.page.way.doc) > 0,
-          "census: let go, the change log holds the removal until the cascade reads it");
+          "census: let go, the change log holds the removal until its readers pass it");
     size_t live = g.page.way.doc->node_count;
     script_rebuild();
     os64_html_census(g.page.way.doc, &c);
     check(c.nodes.held == 0 && c.nodes.pinned == 101,
-          "census: a script's rebuild has the cascade read it, and an older snapshot pin keeps it");
+          "census: a script's rebuild has its readers pass it, and it waits to be collected");
     flow_tree_t *was = g.page.tree;
     g.page.model_version = g.page.rendered_version = 0;
     relayout(true);
     os64_html_census(g.page.way.doc, &c);
     // Who keeps the pin past a whole layout is the holders' question
     // (the cascade renews its own at each update): printed, not judged.
-    printf("  census: after a whole layout, held %lu, kept for a pin %lu, live %lu (was %lu), tree %s, retired %lu bytes\n",
+    printf("  census: after a whole layout, held %lu, waiting to be collected %lu, live %lu (was %lu), tree %s, retired %lu bytes\n",
            (unsigned long)c.nodes.held, (unsigned long)c.nodes.pinned, (unsigned long)g.page.way.doc->node_count,
            (unsigned long)live, g.page.tree == was ? "the same" : "new",
            (unsigned long)os64_html_retired_bytes(g.page.way.doc));
     probe_drop();
-    // What a layout costs over a hidden subtree of n paragraphs: a class
-    // turned on the body each time, so each is a cascade update.
+    // What a layout costs over a hidden subtree of n paragraphs, a class
+    // turned on the body before each.
     for (int32_t n = 200; n <= 20000; n *= 10) {
         size_t cap = (size_t)n * 10 + 256, k = 0;
         char *big = os64_malloc(cap);
