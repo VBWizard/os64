@@ -663,6 +663,8 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
         os64_dom_set_history(s->dom, &s->options.history);
     if (s->options.css_animations.count != NULL)
         os64_dom_set_css_animations(s->dom, &s->options.css_animations);
+    if (s->options.timer_sites)
+        (void)os64_dom_timer_sites(s->dom, true);
     // The state the session gave the document before there was a binding
     // to tell (a traversal's or a reload's entry): a binding that cannot
     // take it is not built, so the page never reads a state the window
@@ -1939,6 +1941,21 @@ uint64_t yonder_scripts_timer_next(const yonder_scripts_t *s)
     return s != NULL && !s->dead ? os64_dom_timer_next(s->dom) : UINT64_MAX;
 }
 
+const char *yonder_scripts_timer_site(const yonder_scripts_t *s)
+{
+    return s != NULL ? os64_dom_timer_site(s->dom) : NULL;
+}
+
+void yonder_scripts_timer_counts(const yonder_scripts_t *s, os64_dom_timer_counts_t *out)
+{
+    os64_dom_timer_counts(s != NULL ? s->dom : NULL, out);
+}
+
+size_t yonder_scripts_held(const yonder_scripts_t *s)
+{
+    return s != NULL ? os64_dom_registry_count(s->dom) : 0;
+}
+
 bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
@@ -2202,6 +2219,11 @@ size_t yonder_scripts_heap_peak(const yonder_scripts_t *s)
     return s->runtime != NULL ? os64_js_heap_peak(s->runtime) : s->heap_peak;
 }
 
+size_t yonder_scripts_heap_bytes(const yonder_scripts_t *s)
+{
+    return s != NULL && s->runtime != NULL ? os64_js_heap_bytes(s->runtime) : 0;
+}
+
 void yonder_scripts_census(yonder_scripts_t *s, yonder_census_sheet_t *sheet, bool detail)
 {
     if (s == NULL || sheet == NULL || s->runtime == NULL || s->dom == NULL) return;
@@ -2260,6 +2282,11 @@ const os64_js_runtime_t *yonder_scripts_ledger(const yonder_scripts_t *s)
 {
     os64_js_ledger_totals_t totals;
     return s != NULL && s->runtime != NULL && os64_js_ledger_totals(s->runtime, &totals) ? s->runtime : NULL;
+}
+
+void yonder_scripts_collector(const yonder_scripts_t *s, os64_js_collector_t *out)
+{
+    os64_js_collector(s != NULL ? s->runtime : NULL, out);
 }
 
 bool yonder_scripts_alive(const yonder_scripts_t *s)
