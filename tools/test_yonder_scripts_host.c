@@ -13395,6 +13395,65 @@ static void node_holders_cases(void)
     probe_drop();
 }
 
+/* WHAT A WRAPPER'S LIFETIME MUST KEEP (Fable's rule for the wrapper fix,
+ * 11/24): identity and what the page hung on a node survive while any node
+ * of its tree is reachable, across tasks. Each case writes its answer to
+ * #box's data-r; they pass today because no wrapper ever dies, and are the
+ * fixtures the fix must not break. */
+static const char *wrapper_case(const char *script)
+{
+    char html[2048];
+    snprintf(html, sizeof(html), "<!doctype html><div id=box></div><script>const box=document.getElementById('box');"
+                                 "%s</script>", script);
+    probe_page(html, true);
+    for (int t = 0; t < 8; t++) {
+        now_ms += 20;
+        script_turn();
+    }
+    const os64_html_attr_t *r = os64_html_attr(probe_id("box"), "data-r");
+    return r != NULL && r->value != NULL ? r->value : "(none)";
+}
+
+static void wrapper_lifetime_cases(void)
+{
+    static const struct { const char *what, *script, *expect; } kCases[] = {
+        {"wrapper: an expando on a child of a removed subtree is read after the subtree is put back",
+         "{const t=document.createElement('div');t.innerHTML='<span></span>';box.appendChild(t);"
+         "t.firstChild.foo=42;window.keep=t;box.removeChild(t);}"
+         "setTimeout(()=>{box.appendChild(keep);box.dataset.r=String(keep.firstChild.foo);},0);",
+         "42"},
+        {"wrapper: with only the child held, the removed root keeps its expando and identity",
+         "{const t=document.createElement('div');t.innerHTML='<span></span>';box.appendChild(t);"
+         "t.bar='root';window.child=t.firstChild;window.was=t;box.removeChild(t);window.was=null;}"
+         "setTimeout(()=>{const r=child.parentNode;box.appendChild(r);box.dataset.r=r.bar;},0);",
+         "root"},
+        {"wrapper: a listener on a removed node fires after it is put back",
+         "{const n=document.createElement('p');box.appendChild(n);"
+         "n.addEventListener('ping',()=>{box.dataset.r='fired';});window.keep=n;box.removeChild(n);}"
+         "setTimeout(()=>{box.appendChild(keep);keep.dispatchEvent(new Event('ping'));},0);",
+         "fired"},
+        {"wrapper: an observer's record keeps a removed target and what was hung on it",
+         "{const n=document.createElement('i');box.appendChild(n);n.tag='kept';"
+         "new MutationObserver(rs=>{box.dataset.r=rs[0].removedNodes[0].tag;}).observe(box,{childList:true});"
+         "setTimeout(()=>box.removeChild(box.firstChild),0);}",
+         "kept"},
+        {"wrapper: a node is the same object across a round trip through a collection",
+         "{const n=document.createElement('b');box.appendChild(n);window.a=box.children[0];a.mark=1;"
+         "box.removeChild(n);}"
+         "setTimeout(()=>{box.appendChild(a);const b=box.children[0];"
+         "box.dataset.r=String(a===b&&b.mark===1);},0);",
+         "true"},
+    };
+    for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
+        const char *r = wrapper_case(kCases[i].script);
+        bool ok = os64_streq(r, kCases[i].expect);
+        check(ok, kCases[i].what);
+        if (!ok)
+            printf("  got %s\n", r);
+        probe_drop();
+    }
+}
+
 static void node_census_cases(void)
 {
     char html[4096];
@@ -13458,6 +13517,7 @@ static void node_census_cases(void)
            (unsigned long)os64_html_retired_bytes(g.page.way.doc));
     probe_drop();
     node_holders_cases();
+    wrapper_lifetime_cases();
     // What a layout costs over a hidden subtree of n paragraphs, a class
     // turned on the body before each.
     for (int32_t n = 200; n <= 20000; n *= 10) {
