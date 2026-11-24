@@ -184,7 +184,8 @@ or differently.
   whose style is written is marked before the write and after it through
   parts_in, the animation path's marking: a box's reach is its overflow
   grown by its ink (everything inside it, item [4]), a group's its bounds,
-  either spread by the filters it is drawn through (`mark_filtered`), and
+  either spread by the filters it is drawn through and taken out through
+  every matrix (`mark_reach`), and
   the stacked boxes drawn outside it that
   take from it. A written element with no box of its own is marked by the
   replaced box that draws it (`drawn_by`: an svg's shape restyled by a class

@@ -239,10 +239,11 @@ static bool marked_exactly(const TickMarks *k, const flow_box_t *box, os64_gui_r
 }
 
 // A change to a box inside a filtered group repaints what the filters it
-// is drawn through spread it over (flow.c § A CHANGE INSIDE A FILTERED
-// GROUP): its reach, spread at each filtered group out — blur(2px) reaches
+// is drawn through spread it over (flow.c § WHAT A CHANGE PAINTS, WHERE
+// THE PAGE SHOWS IT): its reach, spread at each filtered group out — blur(2px) reaches
 // 6 px and blur(4px) 12, and a blur reads FLOW_FILTER_READS_MORE (24)
-// farther — cut to each group's bounds, through each matrix where it is.
+// farther — cut to each group's bounds, through each matrix where it is,
+// with the pixel past it the warp reads at scale(2) (warp_reads).
 static void filter_mark_cases(void)
 {
 #define CHANGING "@keyframes bg{to{background-color:blue}} "
@@ -277,20 +278,34 @@ static void filter_mark_cases(void)
     expect("filter marks: two blurs in one list each spread it and each read past it",
            marked_exactly(&k, c, (os64_gui_rect_t){140, 40, 140, 140}), NULL);
     // A filter inside a matrix: spread in the filter's coordinates, then
-    // scaled.
+    // scaled, and a pixel round it the warp reads.
     k = filter_tick_marks(MOTION_STYLE CHANGING "#t{transform:scale(2);transform-origin:0 0;width:400px;height:300px}"
                           "#f{filter:blur(2px);width:400px;height:300px}"
                           "#c{position:relative;left:200px;top:100px;width:20px;height:20px;" TICKS "}</style>"
                           "<div id=t><div id=f><div id=c></div></div></div>", &c, "c");
     expect("filter marks: a filter inside a matrix spreads it before the matrix scales it",
-           marked_exactly(&k, c, (os64_gui_rect_t){340, 140, 160, 160}), NULL);
-    // A matrix inside a filter: scaled, then spread at the filter's size.
+           marked_exactly(&k, c, (os64_gui_rect_t){339, 139, 162, 162}), NULL);
+    // A matrix with no filter: scaled, and the pixel the warp reads past
+    // the carried rect, which the mark held to the rect left stale.
+    k = filter_tick_marks(MOTION_STYLE CHANGING "#t{transform:scale(2);transform-origin:0 0;width:400px;height:300px}"
+                          "#c{position:relative;left:200px;top:100px;width:20px;height:20px;" TICKS "}</style>"
+                          "<div id=t><div id=c></div></div>", &c, "c");
+    expect("marks: a box in a scaled group, with the pixel round it the warp reads",
+           marked_exactly(&k, c, (os64_gui_rect_t){399, 199, 42, 42}), NULL);
+    // Turned a quarter, pixels land on pixels: nothing read past them.
+    k = filter_tick_marks(MOTION_STYLE CHANGING "#t{transform:rotate(90deg);transform-origin:0 0;width:400px;height:300px}"
+                          "#c{position:relative;left:200px;top:100px;width:20px;height:20px;" TICKS "}</style>"
+                          "<div id=t><div id=c></div></div>", &c, "c");
+    expect("marks: a box in a group turned a quarter, nothing past the carried rect",
+           marked_exactly(&k, c, (os64_gui_rect_t){-120, 200, 20, 20}), NULL);
+    // A matrix inside a filter: scaled, with the pixel the warp reads, then
+    // spread at the filter's size.
     k = filter_tick_marks(MOTION_STYLE CHANGING "#f{filter:blur(2px);width:400px;height:300px}"
                           "#t{transform:scale(2);transform-origin:0 0;width:400px;height:300px}"
                           "#c{position:relative;left:200px;top:100px;width:20px;height:20px;" TICKS "}</style>"
                           "<div id=f><div id=t><div id=c></div></div></div>", &c, "c");
     expect("filter marks: a matrix inside a filter scales it before the filter spreads it",
-           marked_exactly(&k, c, (os64_gui_rect_t){370, 170, 100, 100}), NULL);
+           marked_exactly(&k, c, (os64_gui_rect_t){369, 169, 102, 102}), NULL);
     // A drop shadow cast far: its offset is its reach that way.
     k = filter_tick_marks(MOTION_STYLE CHANGING "#f{filter:drop-shadow(100px 0 0 black);width:400px;height:300px}"
                           "#c{position:relative;left:20px;top:100px;width:20px;height:20px;" TICKS "}</style>"
@@ -313,8 +328,8 @@ static void filter_mark_cases(void)
     expect("filter marks: the group's own opacity ticking marks its whole bounds",
            f != NULL && marked_exactly(&k, f, (os64_gui_rect_t){-6, -6, 412, 312}), NULL);
     // A group's own change inside another filter: the group's bounds
-    // taken through its matrix, then spread by the filter it is drawn
-    // through.
+    // taken through its matrix, with the pixel the warp reads, then spread
+    // by the filter it is drawn through.
     const flow_box_t *g;
     k = filter_tick_marks(MOTION_STYLE "@keyframes op{to{opacity:.5}} "
                           "#f{filter:blur(2px);width:400px;height:300px}"
@@ -323,7 +338,7 @@ static void filter_mark_cases(void)
                           "#c{width:20px;height:20px}</style><div id=f><div id=g><div id=c></div></div></div>",
                           &g, "g");
     expect("filter marks: a group's own change inside a filter, through its matrix and spread",
-           g != NULL && marked_exactly(&k, g, (os64_gui_rect_t){70, 70, 180, 180}), NULL);
+           g != NULL && marked_exactly(&k, g, (os64_gui_rect_t){69, 69, 182, 182}), NULL);
     {
         Moving own;
         moving_open(&own, MOTION_STYLE "@keyframes fl{to{filter:blur(4px)}} "
@@ -381,7 +396,7 @@ static void filter_mark_cases(void)
     k.n = 0;
     bounded = now != NULL && flow_layout_parts(m.tree, now, o, tick_mark, &k, NULL);
     expect("layout parts: a group changed inside a filter, through its matrix and spread",
-           gb != NULL && bounded && marked_exactly(&k, gb, (os64_gui_rect_t){70, 70, 180, 180}), NULL);
+           gb != NULL && bounded && marked_exactly(&k, gb, (os64_gui_rect_t){69, 69, 182, 182}), NULL);
     flow_free(now);
     moving_close(&m);
 }

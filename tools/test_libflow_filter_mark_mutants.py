@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to a filtered group's mark
-(userland/libflow/flow.c § A CHANGE INSIDE A FILTERED GROUP: what a box
-paints, spread by each filtered group's filter out and cut to its bounds,
-taken through each matrix), against tools/test_libflow_host.sh, whose
+(userland/libflow/flow.c § WHAT A CHANGE PAINTS, WHERE THE PAGE SHOWS IT:
+what a box paints, spread by each filtered group's filter out and cut to its
+bounds, taken through each matrix with what the warp reads past it), against tools/test_libflow_host.sh, whose
 filter_mark_cases hold each rule to exact rects: a mutant is CAUGHT when the
 suite fails, MISSED when it passes, which means a test is missing and gets
 written. A build failure is neither. Not broken here: the spread of a group
@@ -65,9 +65,14 @@ mutants = [
     ('the-group-own-matrix-left-out', '        if (!nested_reach(a, r, scroll, &r))\n            return true;\n',
      '        if (!(a == b && !spread ? r.w > 0 && r.h > 0 : nested_reach(a, r, scroll, &r)))\n            return true;\n'),
     ('a-layout-part-not-spread',
-     '    if (b->unpainted || !layer_reach(&(Layer){b, PART_WHOLE}, pp->scroll, &r) ||\n'
-     '        mark_filtered(pp->t, b, r, true, pp->scroll, &pp->filter, pp->bounds, pp->mark, pp->ctx))\n',
-     '    if (b->unpainted || !layer_reach(&(Layer){b, PART_WHOLE}, pp->scroll, &r))\n'),
+     '        mark_reach(pp->t, b, r, true, pp->scroll, &pp->memo, pp->bounds, pp->mark, pp->ctx);\n',
+     '        pp->mark(pp->ctx, b, r);\n'),
+    ('the-warp-reads-nothing', '        if (carried.w > 0 && carried.h > 0 && w > 0)\n',
+     '        if (carried.w > 0 && carried.h > 0 && w > 0 && false)\n'),
+    ('a-quarter-turn-read-past', '    if (unit && (m[0] != 0) != (m[2] != 0)',
+     '    if (false && unit && (m[0] != 0) != (m[2] != 0)'),
+    ('the-memo-keeps-no-bounds', '        if (memo->box[i] == a) {\n',
+     '        if (memo->box[i] == a && false) {\n'),
 ]
 
 caught, missed, unbuilt = [], [], []
