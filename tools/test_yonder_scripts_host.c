@@ -13336,6 +13336,65 @@ static void schedule_cost_cases(void)
  * held. Then what a layout costs over a hidden
  * subtree of 200, 2,000 and 20,000 paragraphs, printed: the cascade holds
  * every one. */
+/* WHO HOLDS THE DETACHED (os64_html_holders, os64_dom_wrappers): a page
+ * whose script makes or touches nodes, removes them and lets them go, then
+ * a rebuild and a whole layout so every reader of the change log has
+ * passed the removal. */
+static void holders_page(const char *script, os64_html_holders_t *h, os64_dom_wrappers_t *w,
+                         os64_html_census_t *c)
+{
+    char html[1024];
+    snprintf(html, sizeof(html), "<!doctype html><div id=box></div><script>const box=document.getElementById('box');"
+                                 "%s</script>", script);
+    probe_page(html, true);
+    for (int t = 0; t < 4; t++)
+        script_turn();
+    relayout(true);
+    script_rebuild();
+    g.page.model_version = g.page.rendered_version = 0;
+    relayout(true);
+    const os64_html_node_t *nodes[256];
+    size_t n = yonder_scripts_wrappers(g.page.scripts, nodes, 256, w);
+    os64_html_holders(g.page.way.doc, nodes, n < 256 ? n : 256, h);
+    os64_html_census(g.page.way.doc, c);
+}
+
+static void node_holders_cases(void)
+{
+    os64_html_holders_t h;
+    os64_dom_wrappers_t w;
+    os64_html_census_t c;
+    holders_page("for(let i=0;i<100;i++){const d=document.createElement('div');d.textContent='x';box.appendChild(d);}"
+                 "box.replaceChildren();",
+                 &h, &w, &c);
+    check(c.nodes.held == 200 && h.marked.units == 100 && h.marked.nodes == 200 && h.marked.elements == 100 &&
+              h.log_only.units == 0 && h.other.units == 0 && w.elsewhere == 100 && w.elsewhere_only_ours == 100 &&
+              w.connected >= 1,
+          "holders: nodes a script made, removed and let go are held by their wrappers, which only the registry holds");
+    if (h.marked.nodes != 200 || w.elsewhere_only_ours != 100)
+        printf("  held %lu: wrapped %lu units %lu nodes, log %lu, other %lu; wrappers %lu in %lu elsewhere %lu ours %lu\n",
+               (unsigned long)c.nodes.held, (unsigned long)h.marked.units, (unsigned long)h.marked.nodes,
+               (unsigned long)h.log_only.nodes, (unsigned long)h.other.nodes, (unsigned long)w.wrappers,
+               (unsigned long)w.connected, (unsigned long)w.elsewhere, (unsigned long)w.elsewhere_only_ours);
+    probe_drop();
+    holders_page("box.innerHTML='<div>x</div>'.repeat(100);box.innerHTML='';", &h, &w, &c);
+    check(c.nodes.held == 0 && c.nodes.pinned == 201 && w.elsewhere == 0,
+          "holders: nodes no script touched wait to be collected once removed");
+    probe_drop();
+    holders_page("box.innerHTML='<div>x</div>'.repeat(100);for(const k of box.children)k.id='t';box.innerHTML='';",
+                 &h, &w, &c);
+    check(c.nodes.held == 200 && h.marked.units == 100 && h.marked.nodes == 200 && w.elsewhere == 100 &&
+              w.elsewhere_only_ours == 100,
+          "holders: a child a script touched once is held by its wrapper after it is removed, its text with it");
+    probe_drop();
+    holders_page("for(let i=0;i<10;i++){const d=document.createElement('div');box.appendChild(d);}"
+                 "window.kept=box.firstChild;box.replaceChildren();",
+                 &h, &w, &c);
+    check(h.marked.units == 10 && w.elsewhere == 10 && w.elsewhere_only_ours == 9,
+          "holders: a wrapper the script still reaches is not one only the registry holds");
+    probe_drop();
+}
+
 static void node_census_cases(void)
 {
     char html[4096];
@@ -13362,11 +13421,31 @@ static void node_census_cases(void)
     os64_html_census(g.page.way.doc, &c);
     check(c.nodes.held == 101 && os64_html_changes_bytes(g.page.way.doc) > 0,
           "census: let go, the change log holds the removal until its readers pass it");
+    {
+        // The removed subtree's root has an id, which the page model's
+        // index holds until its next rebuild: something besides the log.
+        os64_html_holders_t h;
+        os64_html_holders(g.page.way.doc, NULL, 0, &h);
+        check(h.other.units == 1 && h.other.nodes == 101 && h.log_only.units == 0 && h.marked.units == 0 &&
+                  h.log_entries == 1 && h.readers > 0 && h.oldest_lag == 1,
+              "holders: a removal the page model also holds is something else's, and the log says how far its "
+              "readers lag");
+        // A paragraph with no id, removed from the hidden div: the log's.
+        os64_html_node_t *hp = (os64_html_node_t *)probe_id("box")->next->first_child;
+        check(hp != NULL && os64_html_remove(g.page.way.doc, hp) == OS64_HTML_OK, "holders: a paragraph removed");
+        os64_html_holders(g.page.way.doc, NULL, 0, &h);
+        check(h.log_only.units == 1 && h.log_only.nodes == 2 && h.log_only.elements == 1 && h.log_entries == 2 &&
+                  h.oldest_lag == 2,
+              "holders: a removal only the change log keeps is the log's");
+        os64_html_holders(g.page.way.doc, (const os64_html_node_t *[]){hp->first_child}, 1, &h);
+        check(h.marked.units == 1 && h.marked.nodes == 2 && h.log_only.units == 0,
+              "holders: a unit holding a marked node is the mark's, wherever in it the node is");
+    }
     size_t live = g.page.way.doc->node_count;
     script_rebuild();
     os64_html_census(g.page.way.doc, &c);
-    check(c.nodes.held == 0 && c.nodes.pinned == 101,
-          "census: a script's rebuild has its readers pass it, and it waits to be collected");
+    check(c.nodes.held == 0 && c.nodes.pinned == 103,
+          "census: a script's rebuild has its readers pass it, and it waits to be collected (and the paragraph)");
     flow_tree_t *was = g.page.tree;
     g.page.model_version = g.page.rendered_version = 0;
     relayout(true);
@@ -13378,6 +13457,7 @@ static void node_census_cases(void)
            (unsigned long)live, g.page.tree == was ? "the same" : "new",
            (unsigned long)os64_html_retired_bytes(g.page.way.doc));
     probe_drop();
+    node_holders_cases();
     // What a layout costs over a hidden subtree of n paragraphs, a class
     // turned on the body before each.
     for (int32_t n = 200; n <= 20000; n *= 10) {

@@ -835,6 +835,126 @@ size_t os64_html_changes_bytes(const os64_html_document_t *doc)
 {
     return doc ? ((const HDoc *)doc)->log_bytes : 0;
 }
+
+/* WHO HOLDS THE DETACHED (os64_html_holders): the held units' roots,
+ * sorted, each with what is counted against it. */
+typedef struct {
+    const HNode *root;
+    size_t log_refs, nodes, elements;
+    bool marked;
+} HolderUnit;
+
+static void holder_units_sort(HolderUnit *u, size_t n)
+{
+    for (size_t gap = n / 2; gap > 0; gap /= 2)
+        for (size_t i = gap; i < n; i++)
+            for (size_t j = i; j >= gap && (uintptr_t)u[j - gap].root > (uintptr_t)u[j].root; j -= gap) {
+                HolderUnit t = u[j];
+                u[j] = u[j - gap];
+                u[j - gap] = t;
+            }
+}
+
+/* The held unit whose root `node`'s unit root is, or NULL: one of `d`'s
+ * nodes in a detached unit something holds. */
+static HolderUnit *holder_unit_of(const HDoc *d, HolderUnit *u, size_t n, const HNode *node)
+{
+    if (node == NULL || d_node_document_owner(node) != d)
+        return NULL;
+    const HNode *r = node;
+    while (above(r))
+        r = above(r);
+    size_t lo = 0, hi = n;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if ((uintptr_t)u[mid].root < (uintptr_t)r)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < n && u[lo].root == r ? &u[lo] : NULL;
+}
+
+static void holder_log_ref(const HDoc *d, HolderUnit *u, size_t n, const HNode *node)
+{
+    HolderUnit *unit = holder_unit_of(d, u, n, node);
+    if (unit != NULL)
+        unit->log_refs++;
+}
+
+void os64_html_holders(const os64_html_document_t *doc, const os64_html_node_t *const *marked, size_t nmarked,
+                       os64_html_holders_t *out)
+{
+    *out = (os64_html_holders_t){0};
+    if (doc == NULL)
+        return;
+    const HDoc *d = (const HDoc *)doc;
+    for (const os64_html_reader_t *r = d->readers; r; r = r->next) {
+        out->readers++;
+        if (log_reader_lost(d, r))
+            out->lost_readers++;
+        else if (d->version - r->version > out->oldest_lag)
+            out->oldest_lag = d->version - r->version;
+    }
+    for (const HChange *c = d->log_head; c; c = (const HChange *)c->entry.next)
+        out->log_entries++;
+    out->log_bytes = d->log_bytes;
+    // The held units' roots first: a unit's root is detached (nothing
+    // above it), not a document, and its unit holds something.
+    size_t n = 0;
+    for (const HDoc *arena = d->group ? d->group->first : d; arena; arena = d->group ? arena->group_next : NULL)
+        for (const HNode *x = arena->live_nodes; x; x = h_meta(x)->live_next)
+            if (d_node_document_owner(x) == d && !above(x) && x->kind != DOCUMENT &&
+                (h_meta(x)->flags & H_NODE_PENDING) && h_meta(x)->unit_holds)
+                n++;
+    if (n == 0)
+        return;
+    HolderUnit *u = os64_malloc(n * sizeof(*u));
+    if (u == NULL) {
+        out->short_of_memory = true;
+        return;
+    }
+    size_t k = 0;
+    for (const HDoc *arena = d->group ? d->group->first : d; arena; arena = d->group ? arena->group_next : NULL)
+        for (const HNode *x = arena->live_nodes; x && k < n; x = h_meta(x)->live_next)
+            if (d_node_document_owner(x) == d && !above(x) && x->kind != DOCUMENT &&
+                (h_meta(x)->flags & H_NODE_PENDING) && h_meta(x)->unit_holds)
+                u[k++] = (HolderUnit){x, 0, 0, 0, false};
+    holder_units_sort(u, k);
+    for (const HDoc *arena = d->group ? d->group->first : d; arena; arena = d->group ? arena->group_next : NULL)
+        for (const HNode *x = arena->live_nodes; x; x = h_meta(x)->live_next) {
+            HolderUnit *unit = holder_unit_of(d, u, k, x);
+            if (unit != NULL) {
+                unit->nodes++;
+                unit->elements += x->kind == ELEMENT;
+            }
+        }
+    // Each reference the log keeps, as log_refs takes them.
+    for (const HChange *c = d->log_head; c; c = (const HChange *)c->entry.next) {
+        const os64_html_change_entry_t *e = &c->entry;
+        holder_log_ref(d, u, k, e->target);
+        holder_log_ref(d, u, k, e->previous_sibling);
+        holder_log_ref(d, u, k, e->next_sibling);
+        for (size_t i = 0; i < e->nadded; ++i)
+            holder_log_ref(d, u, k, e->added[i]);
+        for (size_t i = 0; i < e->nremoved; ++i)
+            holder_log_ref(d, u, k, e->removed[i]);
+    }
+    for (size_t i = 0; i < nmarked; i++) {
+        HolderUnit *unit = holder_unit_of(d, u, k, marked[i]);
+        if (unit != NULL)
+            unit->marked = true;
+    }
+    for (size_t i = 0; i < k; i++) {
+        os64_html_holders_part_t *part = u[i].marked ? &out->marked
+                                         : u[i].log_refs >= h_meta(u[i].root)->unit_holds ? &out->log_only
+                                                                                          : &out->other;
+        part->units++;
+        part->nodes += u[i].nodes;
+        part->elements += u[i].elements;
+    }
+    os64_free(u);
+}
 static char *log_string(char **at, const char *s)
 {
     if (!s) return NULL;

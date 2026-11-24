@@ -396,6 +396,26 @@ typedef struct {
     size_t free_slots;
 } os64_html_census_t;
 void os64_html_census(const os64_html_document_t *doc, os64_html_census_t *out);
+/* WHO HOLDS THE DETACHED: the census's `held` units, each counted (units,
+ * nodes, elements) by what holds it: one holding a node of the caller's
+ * `marked` list (yonder's: the nodes script wrappers hold) is `marked`; else
+ * one whose every hold is a reference from the change log (a removal, an
+ * insertion or a target the log keeps until every reader has passed it) is
+ * `log_only`; else `other` (a counted hold no list names, or a parser's
+ * reference). And the log: its readers, those lost (which hold nothing
+ * back), how many versions the oldest of the others lags the document,
+ * its entries and their bytes. A walk of every live node, for a record. */
+typedef struct {
+    size_t units, nodes, elements;
+} os64_html_holders_part_t;
+typedef struct {
+    os64_html_holders_part_t marked, log_only, other;
+    size_t readers, lost_readers, log_entries, log_bytes;
+    uint64_t oldest_lag;
+    bool short_of_memory;       // the walk had no room for its units: none is counted, the log is
+} os64_html_holders_t;
+void os64_html_holders(const os64_html_document_t *doc, const os64_html_node_t *const *marked, size_t nmarked,
+                       os64_html_holders_t *out);
 void os64_html_release(const os64_html_document_t *doc, const os64_html_node_t *node);
 uint64_t os64_html_version(const os64_html_document_t *doc);
 /* Owned HTML input nodes carrying an unnamespaced form attribute. Includes
