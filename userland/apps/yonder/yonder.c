@@ -1858,6 +1858,16 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
         }
         sample.role_clock_errors = reuse.role_clock_errors;
         sample.role_names = role_names;
+        _Static_assert(YONDER_LAYOUT_INTRINSIC_REFUSALS == FLOW_INTRINSIC_NREFUSALS, "intrinsic copy diagnostics");
+        static const char *intrinsic_refusal_names[FLOW_INTRINSIC_NREFUSALS];
+        for (int r = 0; r < FLOW_INTRINSIC_NREFUSALS; r++) {
+            if (intrinsic_refusal_names[r] == NULL)
+                intrinsic_refusal_names[r] = flow_intrinsic_refusal_name((flow_intrinsic_refusal_t)r);
+            sample.intrinsic_refused[r] = reuse.intrinsic_refused[r];
+        }
+        for (int r = 0; r <= FLOW_ROLES; r++) sample.intrinsic_role_roots[r] = reuse.intrinsic_role_roots[r];
+        sample.intrinsic_roots = reuse.intrinsic_roots;
+        sample.intrinsic_refusal_names = intrinsic_refusal_names;
         // What it needed (yonder_needed_t), if it finished: one that did not
         // is laid out again or let go, and is no answer. yonder runs the
         // whole pipeline whatever the answer, so a layout of the first three
@@ -2184,13 +2194,9 @@ static void lt_cascade_refused(const garb_cascade_t *c)
                           (unsigned)b.marked_changes, (unsigned)b.changes, (unsigned)b.dirty);
         at = k > 0 && (size_t)k < sizeof(text) - at ? at + (size_t)k : sizeof(text) - 1;
     }
-    if (b.restyled && at < sizeof(text))
-        os64_snprintf(text + at, sizeof(text) - at, ", restyling then passing the changed style of %s (depth %u) "
-                      "down to %u", b.restyled_from, (unsigned)b.restyled_depth, (unsigned)b.restyled_marked);
-    // Filed by what crossed the half: passing a changed style down when the
-    // restyling crossed it, else the mark that marked most in the trigger.
-    int most = b.restyled ? GARB_MARK_INHERITED : -1;
-    for (int m = 0; m < GARB_MARKS && !b.restyled; m++)
+    // Filed by the mark that marked most in the trigger.
+    int most = -1;
+    for (int m = 0; m < GARB_MARKS; m++)
         if (b.by[m] != 0 && (most < 0 || b.by[m] > b.by[most])) most = m;
     yonder_lt_broad(&s_lt, os64_micros(), b.marked, most >= 0 ? garb_mark_name((garb_mark_t)most) : NULL, text);
 }
@@ -2382,9 +2388,14 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         static const char *mark_names[GARB_MARKS];
         if (mark_names[0] == NULL)
             for (int k = 0; k < GARB_MARKS; k++) mark_names[k] = garb_mark_name((garb_mark_t)k);
-        if (updated && (marks.marked != 0 || marks.inherited != 0))
-            yonder_lt_marks(&s_lt, os64_micros(), marks.marked, marks.inherited, marks.by, GARB_MARKS,
-                            mark_names);
+        if (updated && marks.marked != 0)
+            yonder_lt_marks(&s_lt, os64_micros(), marks.marked, marks.by, GARB_MARKS, mark_names);
+        if (updated && marks.recomputed != 0) {
+            char names[96];
+            garb_cascade_recompute_names(cascade, names, sizeof(names));
+            yonder_lt_recompute(&s_lt, os64_micros(), marks.recomputed, marks.recompute_pruned,
+                                marks.recompute_changed, marks.recompute_whole, names);
+        }
     }
     // Why it is built fresh, for the layout profile: yonder's own reasons
     // (cascade_reason_names), then libgarb's.
@@ -5130,9 +5141,12 @@ static flow_point_t scroll_now(void)
 // (flow_motion_entries): how many elements its animations run on, how many
 // of those draw nothing (no box in or under them), how many the view
 // shows, and how many are due within a second; then the first
-// MOTION_NAMED of those due, each by name. Only what flow_motion_due asks
-// of the element itself is counted due (`counted`). The lines are written
-// anew each time, and none for a page with no layout.
+// MOTION_NAMED of them by name, those due first, then the rest, each with
+// when it is next due: an animation that is not due still costs every
+// turn of the loop that asks (flow_motion_due), so a page that animates
+// while looking still is named too. Only what flow_motion_due asks of the
+// element itself is counted due (`counted`). The lines are written anew
+// each time, and none for a page with no layout.
 #define MOTION_NAMED 8
 #define MOTION_ASKED 1024
 static void diag_motion(Page *p)
@@ -5155,10 +5169,13 @@ static void diag_motion(Page *p)
         uint64_t next = m->layout_due < m->tick_due ? m->layout_due : m->tick_due;
         undrawn += !m->drawn;
         seen += m->seen;
-        if (!m->counted || next > soon)
-            continue;
-        due++;
-        if (named == MOTION_NAMED)
+        due += m->counted && next <= soon;
+    }
+    for (int32_t pass = 0; pass < 2; pass++)
+    for (int32_t i = 0; i < looked && named < MOTION_NAMED; i++) {
+        const flow_motion_entry_t *m = &e[i];
+        uint64_t next = m->layout_due < m->tick_due ? m->layout_due : m->tick_due;
+        if ((m->counted && next <= soon) != (pass == 0))
             continue;
         char key[24], v[256];
         size_t at = element_named(v, sizeof(v), "", m->node);
@@ -5179,7 +5196,10 @@ static void diag_motion(Page *p)
         if (at < sizeof(v))
             os64_snprintf(v + at, sizeof(v) - at, ", %s, %s, %s, due %s", m->seen ? "in view" : "out of view",
                           m->in_place ? "in place" : "not in place", m->ticks ? "ticks" : "by layouts",
-                          next <= now ? "now" : "within a second");
+                          !m->counted ? "only through what it hands down"
+                          : next <= now ? "now"
+                          : next <= soon ? "within a second"
+                          : next == FLOW_NEVER ? "never" : "later");
         os64_snprintf(key, sizeof(key), "animated %d", (int)++named);
         yonder_diag_fact(p->diag, key, v);
     }

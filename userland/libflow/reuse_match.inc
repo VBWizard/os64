@@ -1,6 +1,6 @@
 // Review the equality and role inventories when these records change. Size
 // guards supplement that review; a same-size field edit still needs inspection.
-_Static_assert(sizeof(FBox) == 544 && sizeof(FItem) == 104 && sizeof(FInline) == 72,
+_Static_assert(sizeof(FBox) == 560 && sizeof(FItem) == 104 && sizeof(FInline) == 72,
                "review layout correspondence fields");
 #define ROLE(r) ((uint16_t)(1u << (r)))
 // Call-local correspondence. No old arena address escapes into the new tree.

@@ -354,11 +354,50 @@ recomputation.
 The current width algorithm treats unresolved percentages through its zero-base
 intrinsic rules. Preserve that algorithm's query semantics rather than claiming
 all intrinsic sizes are universally independent of context. A changed resource,
-ratio input, text/font, generated marker or sizing role invalidates the memo.
-Tables and their internal parts use the fresh intrinsic algorithm in this cut;
-eligible ordinary children queried by flex/grid/shrink-to-fit may reuse theirs.
-Final width changes can defeat geometry reuse without defeating a valid
-intrinsic-width result. Flex/grid placement still runs.
+ratio input, text/font or generated marker invalidates the memo. Tables and
+their internal parts use the fresh intrinsic algorithm in this cut. Final width
+changes can defeat geometry reuse without defeating a valid intrinsic-width
+result. Flex/grid placement still runs.
+
+**The memo is copied whatever the subtree's roles (G0, Fable's ruling of
+2026-11-23)**: a flex or grid container, an item, a float, an atom's content.
+The role refusal was for geometry, whose placement a role changes; a box's
+widths are what its measure reads, and placement matters to them only through
+the heights it seeds. What a measure reads, from the code (`intrinsic_copy`,
+layout.c):
+
+- the subtree, its styles and its text: the match's `equal`, which folds an
+  atom's content into the box holding it;
+- the environment (fonts, pictures, the viewport, zoom): the snapshot's,
+  refused for the whole layout when any changed, and quirks documents never
+  reused;
+- the heights each measure reads, which placement seeds and which may come
+  from outside the subtree: the definite height its line's percentages are of
+  (`definite_height`: a box's own, `def_h` or else `ratio_h`, or for an
+  anonymous box the named one its walk reaches), and a block-level picture's
+  containing block's (`box_cb_h`: its percentage limits, carried through its
+  ratio). Kept at the measure (`intrinsic_def`, `intrinsic_cbh`) and compared,
+  per box, at the copy;
+- what was measured already. The memo is kept at a box's first asking, so a
+  measure of the root measures the boxes under it not yet measured, each
+  under the definite height it has at that moment, and reads the others'
+  kept widths. Each measure is numbered in its layout, and a box records the
+  last number measured inside its own (`intrinsic_seq`, `intrinsic_end`): the
+  boxes numbered inside the root's are the ones it measured.
+
+A copy stands for a fresh measure when each box the source measured with the
+root or before it either is measured here already with the same widths, or,
+measured with it, is not measured here yet, finds the heights it was measured
+under and is no table part. A fresh measure reads a box measured already
+without going under it, so the check goes under neither that nor a box it
+does not measure. Then the boxes measured with the root are copied, and
+numbered after this layout's last measure in the source's order, so the next
+layout's copy finds the same windows. Each refusal is counted by name
+(`flow_intrinsic_refusal_t`); `tools/test_libflow_graft.inc`'s random walk
+compares every layout with a fresh one, and
+`tools/test_libflow_intrinsic_mutants.py` breaks each rule a layout can show
+broken (it names the order rules no layout today can, and why they are
+kept).
 
 ## Costs, failure boundaries and diagnostics
 
