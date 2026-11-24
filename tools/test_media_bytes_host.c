@@ -176,36 +176,36 @@ static void failure_cases(void)
 
     char line[256];
     yonder_media_failure_t refused = {"video 2", 4, "The server answered 403", true, 403, "text/html", 0, 0,
-                                      "", "", "", "", false, false};
+                                      "", "", "", "", false, false, NULL, 0};
     yonder_media_failure_text(&refused, line, sizeof(line));
     check(!strcmp(line, "video 2, not supported: The server answered 403 (HTTP 403, text/html, 0 bytes "
                         "received, the first request)"),
           "failure: a refused fetch, its status, type, bytes and request");
     yonder_media_failure_t broken = {"audio 1", 2, "The connection failed part way", true, 206, "audio/mpeg", 1,
-                                     1048576, "", "", "", "", false, false};
+                                     1048576, "", "", "", "", false, false, NULL, 0};
     yonder_media_failure_text(&broken, line, sizeof(line));
     check(!strcmp(line, "audio 1, network: The connection failed part way (HTTP 206, audio/mpeg, 1 byte received, "
                         "a Range request from byte 1048576)"),
           "failure: a Range request broken part way");
     yonder_media_failure_t notmedia = {"video 1", 4, "not a media file this can read", true, 200, "text/html", 2048, 0,
-                                       "not a media file this can read", "", "", "", false, false};
+                                       "not a media file this can read", "", "", "", false, false, NULL, 0};
     yonder_media_failure_text(&notmedia, line, sizeof(line));
     check(!strcmp(line, "video 1, not supported: not a media file this can read (HTTP 200, text/html, 2048 bytes "
                         "received, the first request)"),
           "failure: libmedia's words left out when they are the reason");
     yonder_media_failure_t codec = {"video 3", 4, "media in a form this cannot decode", false, 0, "", 0, 0,
-                                    "media in a form this cannot decode", "mov", "aac", "hevc", false, true};
+                                    "media in a form this cannot decode", "mov", "aac", "hevc", false, true, NULL, 0};
     yonder_media_failure_text(&codec, line, sizeof(line));
     check(!strcmp(line, "video 3, not supported: media in a form this cannot decode (a file; libmedia read it as "
                         "mov, sound aac, picture hevc (not decoded here))"),
           "failure: a file, with the container and codecs libmedia named");
     yonder_media_failure_t decode = {"video 4", 3, "", true, 0, "", 0, 0, "damaged past decoding", "", "", "",
-                                     false, false};
+                                     false, false, NULL, 0};
     yonder_media_failure_text(&decode, line, sizeof(line));
     check(!strcmp(line, "video 4, decode: no reason given (no answer, 0 bytes received, the first request; "
                         "libmedia: damaged past decoding)"),
           "failure: no reason and no answer said so, libmedia's words kept");
-    yonder_media_failure_t named = {"audio 3", 77, "", true, 200, "", 9, 0, "", "", "opus", "", true, false};
+    yonder_media_failure_t named = {"audio 3", 77, "", true, 200, "", 9, 0, "", "", "opus", "", true, false, NULL, 0};
     yonder_media_failure_text(&named, line, sizeof(line));
     check(!strcmp(line, "audio 3, error 77: no reason given (HTTP 200, 9 bytes received, the first request; "
                         "libmedia named sound opus (not decoded here))"),
@@ -215,6 +215,58 @@ static void failure_cases(void)
     const char *long_last = "Content-Type: audio/mpeg\r\nContent-Type: application/x-a-very-long-made-up-type\r\n";
     yonder_media_content_type(long_last, strlen(long_last), small, sizeof(small));
     check(!strcmp(type, "video/mp4") && small[0] == '\0', "type: the last one, empty when the last does not fit");
+    static const uint8_t kSegment[16] = {0x00, 0x00, 0x00, 0x18, 's', 't', 'y', 'p', 'm', 's', 'd', 'h',
+                                         0x00, 0x00, 0x00, 0x00};
+    yonder_media_failure_t segment = {"video 1", 4, "not a media file this can read", true, 200, "video/mp4", 16384, 0,
+                                      "not a media file this can read", "", "", "", false, false, kSegment, 16};
+    yonder_media_failure_text(&segment, line, sizeof(line));
+    check(!strcmp(line, "video 1, not supported: not a media file this can read (HTTP 200, video/mp4, 16384 bytes "
+                        "received, the first request, its first bytes 00 00 00 18 73 74 79 70 6d 73 64 68 00 00 "
+                        "00 00, an MP4 box styp (a segment))"),
+          "failure: a fetch's first bytes in hex, and the box they begin");
+    static const uint8_t kOdd[3] = {0x08, 0xb2, 0x01};
+    yonder_media_failure_t odd = {"video 2", 4, "not a media file this can read", true, 200, "video/mp4", 3, 0,
+                                  "", "", "", "", false, false, kOdd, 3};
+    yonder_media_failure_text(&odd, line, sizeof(line));
+    check(!strcmp(line, "video 2, not supported: not a media file this can read (HTTP 200, video/mp4, 3 bytes "
+                        "received, the first request, its first bytes 08 b2 01)"),
+          "failure: as many first bytes as came, and no name for bytes no signature begins");
+    yonder_media_failure_t file = {"audio 4", 4, "not a media file this can read", false, 0, "", 0, 0,
+                                   "", "", "", "", false, false, kSegment, 16};
+    yonder_media_failure_text(&file, line, sizeof(line));
+    check(!strcmp(line, "audio 4, not supported: not a media file this can read (a file)"),
+          "failure: a file's bytes are not said");
+
+    struct { const char *bytes; size_t n; const char *name; } kNamed[] = {
+        {"\x00\x00\x00\x20" "ftypisom", 12, "an MP4 box ftyp"},
+        {"\x00\x00\x00\x68" "moof", 8, "an MP4 box moof (a fragment)"},
+        {"\x00\x00\x00\x04" "moof", 8, NULL},
+        {"\x00\x00\x00\x01" "mdat", 8, "an MP4 box mdat"},
+        {"\x00\x00\x00\x20" "ftyp", 7, NULL},
+        {"\x1a\x45\xdf\xa3\x9f", 5, "EBML (WebM or Matroska)"},
+        {"ID3\x04", 4, "an ID3 tag (MP3)"},
+        {"OggS", 4, "Ogg"},
+        {"RIFF", 4, "RIFF (WAV or AVI)"},
+        {"fLaC", 4, "FLAC"},
+        {"\xff\xf1", 2, "an ADTS frame (AAC)"},
+        {"\xff\xf9", 2, "an ADTS frame (AAC)"},
+        {"\xff\xfb", 2, "an MPEG audio frame"},
+        {"\x47\x40\x00\x10", 4, "0x47, an MPEG transport stream's sync byte"},
+        {"Gone", 4, "text"},
+        {"\x00\x00\x00\x00" "mdat", 8, "an MP4 box mdat"},
+        {"  <!doctype html>", 17, "markup (HTML or XML)"},
+        {"{\"error\":1}", 11, "text like JSON"},
+        {"Not Found", 9, "text"},
+        {"   ", 3, NULL},
+        {"ab\x01", 3, NULL},
+        {"", 0, NULL},
+    };
+    for (size_t i = 0; i < sizeof(kNamed) / sizeof(kNamed[0]); i++) {
+        const char *got = yonder_media_first_bytes_name((const uint8_t *)kNamed[i].bytes, kNamed[i].n);
+        check(kNamed[i].name == NULL ? got == NULL : got != NULL && !strcmp(got, kNamed[i].name),
+              "first bytes: each signature named, and only a whole one");
+    }
+
     char cut[24];
     yonder_media_failure_text(&refused, cut, sizeof(cut));
     check(strlen(cut) == sizeof(cut) - 1 && !strncmp(cut, "video 2, not supported:", sizeof(cut) - 1),
