@@ -804,6 +804,9 @@ bool f_style_equal(const flow_style_t *a, const flow_style_t *b);
 // would still owe. A field it does not name counts as placement's: the
 // answer errs toward "it moves".
 bool f_style_paint_only(const flow_style_t *a, const flow_style_t *b);
+// Whether two styles that are not paint-only (above) differ, past what the
+// painter reads, in their insets (`top`, `right`, `bottom`, `left`) alone.
+bool f_style_insets_only(const flow_style_t *a, const flow_style_t *b);
 // Where f_style_paint_only finds two styles differ, for the record: the
 // offset of the first byte of a field placement reads that differs, -1
 // when every such flat field agrees and a list differs, -2 when a

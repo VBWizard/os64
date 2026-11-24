@@ -68,6 +68,7 @@ typedef struct {
 } FKeep;
 
 typedef struct {
+    const flow_tree_t *tree;
     FKeep *pairs;
     int32_t n, cap;
     flow_restyle_reason_t why;
@@ -86,6 +87,90 @@ static bool keep_declined(FKeeps *k, flow_restyle_reason_t why, const os64_html_
         k->detail[n] = what[n];
     k->detail[n] = '\0';
     return false;
+}
+
+// How a write that changed only an element's insets (f_style_insets_only)
+// would land, for the record of a declined restyle (BRIEF_LAYOUT_NEEDS.md
+// N4, its cases): `no box` (none to place), `static` (its insets are not
+// read), `sticky`, `an inline's pieces` (a relative inline, each piece of
+// it), `a pseudo-element`; for a relative or an absolute or fixed box
+// whose size the insets do not decide (CSS 2.1 §§ 9.4.3, 10.3.7, 10.6.4),
+// how far it would move, `resolves the same` (the inset that places it
+// came out the same length, or none places it), less than a pixel on each
+// axis, or a pixel or more, bucketed; else why its size or its place is
+// not the inset's alone: a percentage (its containing block is not
+// looked up), its width or height following the insets (shrink-to-fit or
+// stretched), auto margins centring it, or another side placing it after
+// the write than before. Nothing here changes what is kept.
+static int64_t keep_offset_of(flow_length_t a, flow_length_t b, bool *percent)
+{
+    *percent = *percent || a.kind == FLOW_LENGTH_PERCENT || b.kind == FLOW_LENGTH_PERCENT;
+    return f_len(b, 0) - f_len(a, 0);
+}
+
+// The move along one axis whose sides are `s0`, `s1`: the start side wins
+// when both are set (`left` over `right`, `top` over `bottom`; an
+// absolute box's over-constrained start is the start side too, its auto
+// margins aside, which the caller refused), so the axis moves by the
+// change of the side set, and refuses when the side that places it is not
+// the same one on both.
+static const char *keep_axis_move(const flow_style_t *a, const flow_style_t *b, int s0, int s1, bool *percent,
+                                  int64_t *d)
+{
+    bool a0 = a->inset[s0].kind != FLOW_LENGTH_AUTO, b0 = b->inset[s0].kind != FLOW_LENGTH_AUTO;
+    bool a1 = a->inset[s1].kind != FLOW_LENGTH_AUTO, b1 = b->inset[s1].kind != FLOW_LENGTH_AUTO;
+    *d = 0;
+    if (a0 && b0)
+        *d = keep_offset_of(a->inset[s0], b->inset[s0], percent);
+    else if (!a0 && !b0 && a1 && b1)
+        *d = -keep_offset_of(a->inset[s1], b->inset[s1], percent);
+    else if (a0 || b0 || a1 || b1)
+        return "another side places it";
+    return NULL;
+}
+
+static void keep_offset_case(const flow_tree_t *tree, const os64_html_node_t *node, const os64_html_node_t *self,
+                             const flow_style_t *a, const flow_style_t *b, char *said, size_t cap)
+{
+    const flow_box_t *box = node == self ? flow_box_for(tree, node) : NULL;
+    const char *why = node != self ? "a pseudo-element"
+                    : box == NULL ? "no box"
+                    : b->position == FLOW_POSITION_STATIC ? "static"
+                    : b->position == FLOW_POSITION_STICKY ? "sticky"
+                    : box->kind == FLOW_BOX_SPAN ? "an inline's pieces" : NULL;
+    const char *kind = b->position == FLOW_POSITION_RELATIVE ? "relative" : "absolute";
+    bool percent = false, replaced = box != NULL && box->kind == FLOW_BOX_REPLACED;
+    int64_t dx = 0, dy = 0;
+    if (why == NULL && b->position != FLOW_POSITION_RELATIVE) {
+        bool h0 = b->inset[FLOW_LEFT].kind != FLOW_LENGTH_AUTO || a->inset[FLOW_LEFT].kind != FLOW_LENGTH_AUTO;
+        bool h1 = b->inset[FLOW_RIGHT].kind != FLOW_LENGTH_AUTO || a->inset[FLOW_RIGHT].kind != FLOW_LENGTH_AUTO;
+        bool v0 = b->inset[FLOW_TOP].kind != FLOW_LENGTH_AUTO || a->inset[FLOW_TOP].kind != FLOW_LENGTH_AUTO;
+        bool v1 = b->inset[FLOW_BOTTOM].kind != FLOW_LENGTH_AUTO || a->inset[FLOW_BOTTOM].kind != FLOW_LENGTH_AUTO;
+        bool wide = replaced || b->width.kind == FLOW_LENGTH_PX || b->width.kind == FLOW_LENGTH_PERCENT;
+        bool tall = replaced || b->height.kind == FLOW_LENGTH_PX || b->height.kind == FLOW_LENGTH_PERCENT;
+        why = !wide && (h0 || h1) ? "its width follows them"
+            : !tall && v0 && v1 ? "its height follows them"
+            : (h0 && h1 && (b->margin[FLOW_LEFT].kind == FLOW_LENGTH_AUTO ||
+                            b->margin[FLOW_RIGHT].kind == FLOW_LENGTH_AUTO)) ||
+              (v0 && v1 && (b->margin[FLOW_TOP].kind == FLOW_LENGTH_AUTO ||
+                            b->margin[FLOW_BOTTOM].kind == FLOW_LENGTH_AUTO)) ? "auto margins centre it"
+            : NULL;
+    }
+    if (why == NULL)
+        why = keep_axis_move(a, b, FLOW_LEFT, FLOW_RIGHT, &percent, &dx);
+    if (why == NULL)
+        why = keep_axis_move(a, b, FLOW_TOP, FLOW_BOTTOM, &percent, &dy);
+    if (why == NULL && percent)
+        why = "a percentage";
+    int64_t far = dx < 0 ? -dx : dx;
+    far = dy > far ? dy : -dy > far ? -dy : far;
+    const char *moves = far == 0 ? "resolves the same"
+                      : far < FLOW_UNITS_PER_PX ? "moves less than a pixel"
+                      : far < 2 * FLOW_UNITS_PER_PX ? "moves 1 px"
+                      : far <= 8 * FLOW_UNITS_PER_PX ? "moves 2 to 8 px"
+                      : far <= 64 * FLOW_UNITS_PER_PX ? "moves 9 to 64 px" : "moves over 64 px";
+    os64_snprintf(said, cap, "an inset, %s%s%s", why != NULL ? why : kind, why != NULL ? "" : ", ",
+                  why != NULL ? "" : moves);
 }
 
 // Judges one element's (or pseudo-element's) two records: nothing to do,
@@ -121,6 +206,11 @@ static bool keep_judge(FKeeps *k, const os64_html_node_t *node, FStyled *was, co
         return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node, said);
     }
     if (!f_style_paint_only(&was->style, &is->style)) {
+        if (f_style_insets_only(&was->style, &is->style)) {
+            char said[sizeof(k->detail)];
+            keep_offset_case(k->tree, node, was_self, &was->style, &is->style, said, sizeof(said));
+            return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node, said);
+        }
         int64_t at = f_style_placement_byte(&was->style, &is->style);
         if (at < 0)
             return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node,
@@ -308,7 +398,7 @@ static flow_restyle_t restyle_in_place(flow_tree_t *tree, const os64_html_docume
         f_style_free(b);
         return out;
     }
-    FKeeps k = {NULL, 0, 0, FLOW_RESTYLE_NONE, NULL, ""};
+    FKeeps k = {tree, NULL, 0, 0, FLOW_RESTYLE_NONE, NULL, ""};
     if (!keep_collect(&k, tree->styles, b)) {
         out.why = k.why;
         out.at = k.at;

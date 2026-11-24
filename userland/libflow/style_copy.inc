@@ -247,6 +247,15 @@ bool f_style_paint_only(const flow_style_t *a,const flow_style_t *b)
     style_paint_onto(a,&y);
     return f_style_equal(a,&y);
 }
+bool f_style_insets_only(const flow_style_t *a,const flow_style_t *b)
+{
+    if(style_transformed(a)!=style_transformed(b) || (a->nfilter>0)!=(b->nfilter>0) ||
+       (a->nbackdrop_filter>0)!=(b->nbackdrop_filter>0))return false;
+    flow_style_t y=*b;
+    style_paint_onto(a,&y);
+    for(int i=0;i<4;i++)y.inset[i]=a->inset[i];
+    return f_style_equal(a,&y);
+}
 static void style_flat(flow_style_t *x,flow_style_t *y);
 static bool style_lists_equal(const flow_style_t *a,const flow_style_t *b);
 int64_t f_style_placement_byte(const flow_style_t *a,const flow_style_t *b)
