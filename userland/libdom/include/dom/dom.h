@@ -1010,7 +1010,8 @@ void os64_dom_free(os64_dom_t *dom);
 size_t os64_dom_bytes(const os64_dom_t *dom);
 size_t os64_dom_registry_count(const os64_dom_t *dom);
 /* WHAT THE WRAPPERS OF NODES HOLD, for a census of who holds the detached
- * (yonder's record): of the node wrappers on the binding's registry,
+ * (yonder's record): of the node wrappers on this binding's own registry
+ * (in a cluster, another member's wrappers are on that member's),
  * those whose node is in the document's tree, a shadow tree included
  * (`connected`), and the rest (`elsewhere`: detached, a template's
  * contents, another document's), and of the rest how many only the

@@ -13327,15 +13327,6 @@ static void schedule_cost_cases(void)
     s_animations = was_run;
 }
 
-/* WHERE EVERY NODE IS (os64_html_census, flow_census; yonder's `nodes`
- * lines): a subtree removed while something holds it is detached and held,
- * and the change log holds a removal until every reader has passed it (the
- * cascade's among them), so let go by its holder it is held still, until a
- * script's rebuild has its readers pass it; it then waits to be collected,
- * and what keeps it past a whole layout is printed beside what is still
- * held. Then what a layout costs over a hidden
- * subtree of 200, 2,000 and 20,000 paragraphs, printed: the cascade holds
- * every one. */
 /* WHO HOLDS THE DETACHED (os64_html_holders, os64_dom_wrappers): a page
  * whose script makes or touches nodes, removes them and lets them go, then
  * a rebuild and a whole layout so every reader of the change log has
@@ -13395,11 +13386,11 @@ static void node_holders_cases(void)
     probe_drop();
 }
 
-/* WHAT A WRAPPER'S LIFETIME MUST KEEP (Fable's rule for the wrapper fix,
- * 11/24): identity and what the page hung on a node survive while any node
- * of its tree is reachable, across tasks. Each case writes its answer to
- * #box's data-r; they pass today because no wrapper ever dies, and are the
- * fixtures the fix must not break. */
+/* WHAT A WRAPPER'S LIFETIME MUST KEEP: identity and what the page hung on
+ * a node survive while any node of its tree is reachable, across tasks — a
+ * removed subtree's child, its root found again from the child, a listener,
+ * an observer's record, a collection. Each case writes its answer to
+ * #box's data-r. */
 static const char *wrapper_case(const char *script)
 {
     char html[2048];
@@ -13454,6 +13445,15 @@ static void wrapper_lifetime_cases(void)
     }
 }
 
+/* WHERE EVERY NODE IS (os64_html_census, flow_census; yonder's `nodes`
+ * lines): a subtree removed while something holds it is detached and held,
+ * and the change log holds a removal until every reader has passed it (the
+ * cascade's among them), so let go by its holder it is held still, until a
+ * script's rebuild has its readers pass it; it then waits to be collected,
+ * and what keeps it past a whole layout is printed beside what is still
+ * held. Then what a layout costs over a hidden
+ * subtree of 200, 2,000 and 20,000 paragraphs, printed: the cascade holds
+ * every one. */
 static void node_census_cases(void)
 {
     char html[4096];

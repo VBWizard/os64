@@ -399,9 +399,9 @@ void os64_html_census(const os64_html_document_t *doc, os64_html_census_t *out);
 /* WHO HOLDS THE DETACHED: the census's `held` units, each counted (units,
  * nodes, elements) by what holds it: one holding a node of the caller's
  * `marked` list (yonder's: the nodes script wrappers hold) is `marked`; else
- * one whose every hold is a reference from the change log (a removal, an
- * insertion or a target the log keeps until every reader has passed it) is
- * `log_only`; else `other` (a counted hold no list names, or a parser's
+ * one whose every hold is a reference from the change log (an entry's
+ * target, its added or removed nodes and the siblings it names, which the
+ * log keeps until every reader has passed it) is `log_only`; else `other` (a counted hold no list names, or a parser's
  * reference). And the log: its readers, those lost (which hold nothing
  * back), how many versions the oldest of the others lags the document,
  * its entries and their bytes. A walk of every live node, for a record. */
