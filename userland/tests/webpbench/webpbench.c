@@ -131,8 +131,8 @@ static void metadata(void)
         if (n > 0) { count[n] = 0; if (count[n-1] == '\n') count[n-1] = 0; }
         os64_close((int32_t)fd);
     }
-    RECORD("build mode=%s libwebp=1.6.0 compiler=%s built=%s_%s cpu=%s cores=%s\n",
-           MODE, __VERSION__, __DATE__, __TIME__, brand[0] ? brand : "unknown", count);
+    RECORD("build mode=%s libwebp=1.6.0 compiler=%s cpu=%s cores=%s\n",
+           MODE, __VERSION__, brand[0] ? brand : "unknown", count);
 }
 
 int main(int argc, char **argv)

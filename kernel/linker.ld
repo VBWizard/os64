@@ -44,6 +44,13 @@ SECTIONS
         *(.rodata .rodata.*)
     } :rodata
 
+    /* Reserve 16 hex digits and a terminator for the post-link build ID. */
+    .os64_build_id (READONLY) : {
+        kBuildId = .;
+        BYTE(0);
+        . += 16;
+    } :rodata
+
     /* Move to the next memory page for .data */
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 

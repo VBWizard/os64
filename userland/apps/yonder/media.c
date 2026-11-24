@@ -92,13 +92,16 @@
 // What the bytes' reader has heard of the last request, for a failure's
 // record (yonder_media_failure_take): where it began (0: the first, else a
 // Range request), its answer's status and Content-Type (0 and "" before
-// its head), and the bytes it brought. Each request begins them again
-// (loader_start).
+// its head), the bytes it brought, and the first of them, which say what
+// the answer is when libmedia could not read it. Each request begins them
+// again (loader_start).
 typedef struct {
     int status;
     char type[48];
     uint64_t received;
     uint64_t from;
+    uint8_t first[YONDER_MEDIA_FIRST_BYTES];
+    uint32_t nfirst;
 } MediaHeard;
 
 struct yonder_media {
@@ -302,6 +305,8 @@ static bool keep(yonder_media_t *m, const uint8_t *data, size_t n)
     os64_memcpy(m->bytes + have, data, n);
     m->window.have += n;
     m->heard.received += n;
+    for (size_t i = 0; i < n && m->heard.nfirst < YONDER_MEDIA_FIRST_BYTES; i++)
+        m->heard.first[m->heard.nfirst++] = data[i];
     return true;
 }
 
@@ -1339,7 +1344,7 @@ bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t ca
         .status = heard.status, .type = heard.type, .received = heard.received, .range_from = heard.from,
         .said = result != 0 ? os64_media_strerror(result) : "", .format = info.format, .sound = info.codec,
         .picture = info.picture_codec, .sound_unplayable = info.sound == OS64_MEDIA_UNPLAYABLE,
-        .picture_unplayable = info.picture == OS64_MEDIA_UNPLAYABLE};
+        .picture_unplayable = info.picture == OS64_MEDIA_UNPLAYABLE, .first = heard.first, .nfirst = heard.nfirst};
     char text[512];
     yonder_media_failure_text(&f, text, sizeof(text));
     os64_snprintf(out, cap, "%s: %s", m->named, text);

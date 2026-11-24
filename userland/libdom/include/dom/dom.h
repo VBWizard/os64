@@ -1163,6 +1163,32 @@ os64_dom_handler_mask_t os64_dom_handler_bit(const char *type);
  * while any are, and fire runs them as its one task. */
 uint64_t os64_dom_timer_next(const os64_dom_t *dom);
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
+/* Timers by where they were set, for the host's record of what each costs.
+ * With the sites on, setTimeout and setInterval remember the function that
+ * called them, by its name and where it was defined (a script's address,
+ * or "the page" for an inline script's, or the engine's own name for code
+ * that has neither, such as eval's; a native caller is "[native]"; then the
+ * line and column): the first OS64_DOM_TIMER_SITES distinct ones each by
+ * itself, any after them as one past the table. Off (the default) they
+ * remember nothing and cost nothing. os64_dom_timer_site says the site of
+ * the timer os64_dom_timer_fire ran last, as text that lives until the
+ * sites are turned off or the table is let go (the dom freed, or its
+ * timers dropped at departure, which leaves the sites off): NULL when the
+ * last fire ran no timer (reactions, or nothing due), or ran one set while
+ * the sites were off, or one the binding set for itself. Owner thread,
+ * between tasks. */
+#define OS64_DOM_TIMER_SITES 64
+#define OS64_DOM_TIMER_SITE_TEXT 200
+bool os64_dom_timer_sites(os64_dom_t *dom, bool on);
+const char *os64_dom_timer_site(const os64_dom_t *dom);
+/* The timers live now, and the timers armed while the sites were on (each
+ * set, and each interval's re-arm before its callback) with the entries of
+ * the due-ordered list those arms walked past to find their place: what
+ * keeping the list in order costs as it grows. Zeroed for NULL. */
+typedef struct {
+    uint64_t live, arms, walked;
+} os64_dom_timer_counts_t;
+void os64_dom_timer_counts(const os64_dom_t *dom, os64_dom_timer_counts_t *out);
 
 /* CUSTOM ELEMENT REACTIONS AND MUTATION RECORDS OWED
  * (docs/design/pending/CUSTOM_ELEMENTS.md, decision 6). A change made

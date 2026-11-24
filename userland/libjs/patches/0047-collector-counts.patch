@@ -1,0 +1,120 @@
+# Count each cycle collection (runs by what asked, GC objects walked and freed,
+# the heap's bytes before and after, the next threshold, the most one run walked)
+# and, with a host clock, time it: what a page's collector costs, readable at any
+# moment without the ledger's per-call brackets. One addition per object walked.
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -521,6 +521,27 @@
+     int column;
+ } JSFrameLocation;
+ JS_BOOL JS_GetFrameLocation(JSContext *ctx, int depth, JSFrameLocation *out);
++/* Cycle collections since the runtime was made, counted at every run (one
++   addition per GC object walked, two clock reads per run once a clock is
++   set): runs, by what asked (the allocation threshold, or anything else
++   through JS_RunGC); the GC objects the runs walked, and the objects,
++   function bytecodes, async functions and modules they freed from cycles
++   (what those hold goes with them, uncounted); the heap's malloc bytes
++   before and after each run, summed;
++   the threshold the next allocation-asked run waits for; the most one run
++   walked; and, with a clock (JS_SetCollectorClock), the runs' time in its
++   ticks and the longest. Owner thread. */
++typedef struct JSCollectorCounts {
++    uint64_t runs, runs_by_allocation;
++    uint64_t walked, freed, walked_most;
++    uint64_t bytes_before, bytes_after;
++    uint64_t threshold;
++    uint64_t ticks, ticks_most;
++} JSCollectorCounts;
++void JS_GetCollectorCounts(JSRuntime *rt, JSCollectorCounts *out);
++/* The clock the counts time runs with; NULL leaves them untimed. It must
++   not call into the engine. */
++void JS_SetCollectorClock(JSRuntime *rt, uint64_t (*now)(void));
+ /* Trusted owner-thread scope. entry and optional callback incumbent must stay
+    alive through body and belong to the same runtime. A non-null incumbent
+    selects callback preparation (including suppression of the caller's script
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -407,6 +407,9 @@
+     const JSNativeCallContexts *native_call_contexts;
+     const JSLedgerHooks *ledger_hooks;
+     void *ledger_opaque;
++    JSCollectorCounts collector_counts;
++    uint64_t (*collector_clock)(void);
++    BOOL collector_by_allocation; /* the run under way was js_trigger_gc's */
+     struct JSSettingsFrame *settings_script_frame;
+     JSContext *settings_entry;
+     JSContext *settings_backup;
+@@ -1871,7 +1874,9 @@
+         printf("GC: size=%" PRIu64 "\n",
+                (uint64_t)rt->malloc_ctx.malloc_state.malloc_size);
+ #endif
++        rt->collector_by_allocation = TRUE;
+         JS_RunGC(rt);
++        rt->collector_by_allocation = FALSE;
+         rt->malloc_gc_threshold = rt->malloc_ctx.malloc_state.malloc_size +
+             (rt->malloc_ctx.malloc_state.malloc_size >> 1);
+     }
+@@ -7481,6 +7486,7 @@
+     list_for_each_safe(el, el1, &rt->gc_obj_list) {
+         p = list_entry(el, JSGCObjectHeader, link);
+         assert(js_rc(p)->mark == 0);
++        rt->collector_counts.walked++;
+         mark_children(rt, p, gc_decref_child);
+         js_rc(p)->mark = 1;
+         if (js_rc(p)->ref_count == 0) {
+@@ -7558,6 +7564,7 @@
+             }
+             JS_DumpGCObject(rt, p);
+ #endif
++            rt->collector_counts.freed++;
+             free_gc_object(rt, p);
+             break;
+         default:
+@@ -7591,8 +7598,15 @@
+     const BOOL tracking = rt->execution_scope_tracking;
+     const JSLedgerHooks *hooks = rt->ledger_hooks;
+     void *opaque = rt->ledger_opaque;
++    JSCollectorCounts *counts = &rt->collector_counts;
++    const uint64_t walked = counts->walked;
++    const uint64_t began = rt->collector_clock ? rt->collector_clock() : 0;
+     if (unlikely(hooks != NULL))
+         hooks->collector_enter(opaque);
++    counts->runs++;
++    if (rt->collector_by_allocation)
++        counts->runs_by_allocation++;
++    counts->bytes_before += rt->malloc_ctx.malloc_state.malloc_size;
+     if (tracking)
+         rt->recovery_gc_depth++;
+     if (remove_weak_objects) {
+@@ -7613,10 +7627,31 @@
+     gc_free_cycles(rt);
+     if (tracking)
+         rt->recovery_gc_depth--;
++    counts->bytes_after += rt->malloc_ctx.malloc_state.malloc_size;
++    if (counts->walked - walked > counts->walked_most)
++        counts->walked_most = counts->walked - walked;
++    if (rt->collector_clock) {
++        const uint64_t ended = rt->collector_clock();
++        const uint64_t spent = ended > began ? ended - began : 0;
++        counts->ticks += spent;
++        if (spent > counts->ticks_most)
++            counts->ticks_most = spent;
++    }
+     if (unlikely(hooks != NULL))
+         hooks->collector_leave(opaque);
+ }
+ 
++void JS_GetCollectorCounts(JSRuntime *rt, JSCollectorCounts *out)
++{
++    *out = rt->collector_counts;
++    out->threshold = rt->malloc_gc_threshold;
++}
++
++void JS_SetCollectorClock(JSRuntime *rt, uint64_t (*now)(void))
++{
++    rt->collector_clock = now;
++}
++
+ void JS_RunGC(JSRuntime *rt)
+ {
+     JS_RunGCInternal(rt, TRUE);
