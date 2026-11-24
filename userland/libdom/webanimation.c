@@ -1783,8 +1783,9 @@ static void effect_composites(DWaEffect *e)
 }
 
 /* A finalizer runs inside a collection, where releasing the target could
- * free nodes: the effect only lets go of its target's wrapper and goes on
- * the dead list, and d_web_animations_sweep lets go of the rest. */
+ * free nodes: the effect buries its data (a list, no node is touched),
+ * lets go of its target's wrapper and goes on the dead list, and
+ * d_web_animations_sweep releases the target. */
 static void effect_finalizer(JSRuntime *rt, JSValue value)
 {
     DWaEffect *e = fx_state(value);
@@ -1797,6 +1798,8 @@ static void effect_finalizer(JSRuntime *rt, JSValue value)
     e->wrapper = JS_UNDEFINED;
     os64_dom_t *dom = e->dom;
     effect_unlink(dom, e);
+    data_bury(dom, e->data);
+    e->data = NULL;
     e->next = dom->wa_fx_dead;
     dom->wa_fx_dead = e;
     JS_FreeValueRT(rt, wrapper);
