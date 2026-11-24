@@ -1523,6 +1523,11 @@ static struct {
     int32_t n;
     bool over, kept;
     int32_t kept_parts;
+    // The kept restyle's kind (a flow_restyle_kind_t), and, while
+    // `--damage-check` is on, what the change log held (change_log_said),
+    // for a check's line.
+    int32_t kept_kind;
+    char log[320];
     // A reader of the change log opened at the shown tree's version before
     // the layout, which holds the log there: a kept restyle opens the
     // tree's own reader again at the new version, after which the log need
@@ -3184,12 +3189,30 @@ typedef enum {
 static WholeBy s_whole_by;
 static os64_gui_rect_t s_parts_reach;
 
+// What changed the view from one `--damage-check` to the next (the
+// second's own rebuild or tick included), for a check that differs: a
+// stale part is one the change that made it did not mark, and that change
+// may be any of these, not only the one the check came after. Rebuilds by
+// verdict (change_said) and those made current with no layout
+// (rebuild_unchanged), ticks and those that marked nothing, the parts
+// marked by what marked them (mark_part) and the whole view's marks by
+// what (mark_whole). The check's own pixel (`s_damage_marking`) is not
+// counted.
+static struct {
+    uint32_t rebuilt_parts, rebuilt_nothing, rebuilt_whole, advanced;
+    uint32_t ticks, ticks_unmarked;
+    uint32_t parts_tick, parts_video, parts_canvas, parts_other;
+    uint32_t whole[WHOLE_COUNT];
+} s_damage_since;
+static bool s_damage_marking;
+
 // The whole view marked for repainting, and by what (s_whole_by): `root`
 // marks the window's every widget, the view among them.
 static void mark_whole(WholeBy by, bool root)
 {
     if (!s_tick_marking)
         s_face_stamp++;
+    s_damage_since.whole[by]++;
     if (s_whole_by == WHOLE_PARTS)
         s_whole_by = by;
     os64_ui_mark_dirty(&g.ui, root ? &g.root : &g.view);
@@ -4539,6 +4562,7 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
                                                 s_change.armed ? &marks : NULL);
     if (s_change.armed) {
         s_change.kept = kept.kind != FLOW_RESTYLE_DECLINED;
+        s_change.kept_kind = kept.kind;
         s_change.kept_parts = kept.parts;
         if (!s_change.kept) {
             s_change.n = 0;
@@ -4620,9 +4644,12 @@ static int32_t s_paint_check_groups = -1;
 // out (a picture moves by itself) and the page's widgets (the toolkit
 // paints them over the view). A difference is a part the rebuild or the
 // tick should have marked, or one something else should have; the record
-// says how many were compared, how many differed, the first with where and
-// what the rebuild or the tick had marked, and how many could not be
-// compared (damage_check). One that marked nothing marks one pixel, so
+// says how many were compared, how many differed, and how many could not
+// be compared, and each that differed with where, what the rebuild or the
+// tick had marked (a rebuild's way, kept or laid out, and what the change
+// log held), what the page paints at its first pixel against what the
+// window held, and what changed the view since the check before
+// (damage_check, s_damage_since). One that marked nothing marks one pixel, so
 // that there is a paint to check. A tick is checked apart from the next
 // rebuild because that rebuild's compare marks an animated box whose value
 // moved, which would hide a tick that marked too little. The second paint
@@ -4631,7 +4658,7 @@ static int32_t s_paint_check_groups = -1;
 static uint32_t s_damage_check, s_damage_counted;
 static bool s_damage_due;
 static uint64_t s_damage_compared, s_damage_differed, s_damage_uncompared;
-static char s_damage_after[96];
+static char s_damage_after[512];
 
 // The canvases whose damage was marked since the last paint
 // (canvas_damage_mark), which a covered paint acknowledges
@@ -10481,6 +10508,16 @@ static void mark_part(os64_gui_rect_t r)
         mark_whole(WHOLE_BIG_PART, false);
         return;
     }
+    if (!s_damage_marking) {
+        if (s_tick_marking)
+            s_damage_since.parts_tick++;
+        else if (s_video_marking)
+            s_damage_since.parts_video++;
+        else if (s_marking_canvas != NULL)
+            s_damage_since.parts_canvas++;
+        else
+            s_damage_since.parts_other++;
+    }
     s_parts_reach = os64_rect_union(s_parts_reach, part.bounds);
     os64_gui_rect_t in;
     if (os64_rect_intersect(part.bounds, v, &in) &&
@@ -11316,11 +11353,15 @@ static void tick_page_run(uint64_t now, bool frame)
             os64_snprintf(s_cost.mark_who, sizeof(s_cost.mark_who), "an animation of %s", k.first);
         // A check due for the tick, with what it marked for the record's
         // line (s_damage_check).
+        s_damage_since.ticks++;
+        s_damage_since.ticks_unmarked += s_tick_marks == 0;
         if (s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {
             s_damage_due = true;
             if (s_tick_marks == 0) {
                 os64_strcopy(s_damage_after, sizeof(s_damage_after), "a tick that marked nothing");
+                s_damage_marking = true;
                 mark_part((os64_gui_rect_t){g.sx, g.sy, 1, 1});
+                s_damage_marking = false;
             } else {
                 os64_snprintf(s_damage_after, sizeof(s_damage_after), "a tick that marked %u parts",
                               (unsigned)s_tick_marks);
@@ -13353,6 +13394,51 @@ static bool html_base(const os64_html_node_t *n)
 // The last rebuild's verdict as the record words it (`in parts`, `nothing
 // to paint`, or why the whole view), which the host's tests read.
 static const char *s_change_said = "";
+
+// What the change log held from `entry` on, in words, into `out`: the
+// first CHANGE_LOG_SAID entries by kind and element (a text node's by its
+// parent), then how many more.
+#define CHANGE_LOG_SAID 4
+static void change_log_said(char *out, size_t cap, const os64_html_change_entry_t *entry)
+{
+    size_t at = 0;
+    int32_t told = 0, more = 0;
+    out[0] = '\0';
+    for (; entry != NULL; entry = entry->next) {
+        if (told == CHANGE_LOG_SAID) {
+            more++;
+            continue;
+        }
+        const os64_html_node_t *n = entry->target;
+        while (n != NULL && n->kind != OS64_HTML_ELEMENT)
+            n = n->parent;
+        char named[64] = "the document";
+        if (n != NULL)
+            element_named(named, sizeof(named), "", n);
+        int w = entry->kind == OS64_HTML_CHANGE_CHILDREN
+                    ? os64_snprintf(out + at, cap - at, "%schildren of %s (%lu in, %lu out)", told ? "; " : "", named,
+                                    (unsigned long)entry->nadded, (unsigned long)entry->nremoved)
+                : entry->kind == OS64_HTML_CHANGE_ATTR
+                    ? os64_snprintf(out + at, cap - at, "%sattribute %s of %s", told ? "; " : "",
+                                    entry->attr_name != NULL ? entry->attr_name : "?", named)
+                : entry->kind == OS64_HTML_CHANGE_TEXT
+                    ? os64_snprintf(out + at, cap - at, "%stext in %s", told ? "; " : "", named)
+                    : os64_snprintf(out + at, cap - at, "%sstate of %s", told ? "; " : "", named);
+        if (w < 0 || (size_t)w >= cap - at) {
+            out[at] = '\0';
+            told = CHANGE_LOG_SAID;
+            more++;
+            continue;
+        }
+        at += (size_t)w;
+        told++;
+    }
+    if (more > 0)
+        os64_snprintf(out + at, cap - at, "%sand %d more", at > 0 ? "; " : "", (int)more);
+    else if (told == 0)
+        os64_strcopy(out, cap, "nothing");
+}
+
 static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, const os64_html_node_t **out,
                               int32_t cap, bool *refs)
 {
@@ -13363,6 +13449,10 @@ static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, co
     *refs = false;
     if (reader == NULL || os64_html_changes(reader, &entry) < 0)
         n = -1;
+    if (s_damage_check != 0)
+        change_log_said(s_change.log, sizeof(s_change.log), n < 0 ? NULL : entry);
+    if (s_damage_check != 0 && n < 0)
+        os64_strcopy(s_change.log, sizeof(s_change.log), "lost, or no reader");
     for (; n >= 0 && entry != NULL; entry = entry->next) {
         const os64_html_node_t *at = entry->target;
         if (entry->kind == OS64_HTML_CHANGE_TEXT && at != NULL)
@@ -13645,6 +13735,12 @@ static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
 static void change_said(const Page *p, const char *why)
 {
     s_change_said = why != NULL ? why : s_change.n == 0 ? "nothing to paint" : "in parts";
+    if (why != NULL)
+        s_damage_since.rebuilt_whole++;
+    else if (s_change.n == 0)
+        s_damage_since.rebuilt_nothing++;
+    else
+        s_damage_since.rebuilt_parts++;
     if (!s_layout_profile || layout_profile_diag(p) == NULL)
         return;
     if (why != NULL) {
@@ -13675,6 +13771,7 @@ static bool rebuild_unchanged(Page *p)
     // with itself.
     if (p != &g.page || s_read_checking || !shown_advance())
         return false;
+    s_damage_since.advanced++;
     unchanged_counted(p);
     if (s_geometry_check != 0 && ++s_unchanged_checked % s_geometry_check == 0) {
         // The page's own inputs, as page_lay_out sets them for a layout of it.
@@ -13830,14 +13927,23 @@ static bool script_rebuild(void)
             }
         // A check due for a rebuild painted in parts, with what it marked
         // for the record's line.
+        // How it was made (a restyle kept in the shown tree, and what it
+        // wrote, or a layout) and what the change log held say which
+        // verdict let it mark what it did.
         if (whole == NULL && s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {
             s_damage_due = true;
+            const char *made = !s_change.kept                             ? "a layout"
+                               : s_change.kept_kind == FLOW_RESTYLE_NOTHING ? "kept in the shown tree, nothing written"
+                                                                            : "kept in the shown tree, paint only";
+            char marked[32] = "marked nothing";
+            if (s_change.n > 0)
+                os64_snprintf(marked, sizeof(marked), "marked %d parts", (int)s_change.n);
+            os64_snprintf(s_damage_after, sizeof(s_damage_after), "a rebuild that %s (%s; the change log: %s)",
+                          marked, made, s_change.log[0] != '\0' ? s_change.log : "not read");
             if (s_change.n == 0) {
-                os64_strcopy(s_damage_after, sizeof(s_damage_after), "a rebuild that marked nothing");
+                s_damage_marking = true;
                 mark_part((os64_gui_rect_t){g.sx, g.sy, 1, 1});
-            } else {
-                os64_snprintf(s_damage_after, sizeof(s_damage_after), "a rebuild that marked %d parts",
-                              (int)s_change.n);
+                s_damage_marking = false;
             }
         }
         if (s_script_audit) {
@@ -20636,6 +20742,63 @@ static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_re
     return refused;
 }
 
+// What the shown tree paints at page point (`x`, `y`), for a check that
+// differs: the elements of the last two painted boxes in the tree's order
+// whose rects hold it (the deepest, or the later of two siblings), named
+// into `out`, the later first.
+static void damage_painted_at(char *out, size_t cap, int32_t x, int32_t y)
+{
+    const os64_html_node_t *hit[2] = {NULL, NULL};
+    flow_point_t scroll = scroll_now();
+    for (const flow_box_t *b = flow_root(g.page.tree); b != NULL;) {
+        const os64_html_node_t *e = box_element(b);
+        os64_gui_rect_t r = flow_box_doc_rect(b, scroll);
+        if (!b->unpainted && e != NULL && e != hit[1] && x >= r.x && y >= r.y && (int64_t)x < (int64_t)r.x + r.w &&
+            (int64_t)y < (int64_t)r.y + r.h) {
+            hit[0] = hit[1];
+            hit[1] = e;
+        }
+        if (b->first != NULL) {
+            b = b->first;
+            continue;
+        }
+        while (b != NULL && b->next == NULL)
+            b = b->parent;
+        b = b != NULL ? b->next : NULL;
+    }
+    char later[96] = "nothing", earlier[96] = "";
+    if (hit[1] != NULL)
+        element_named(later, sizeof(later), "", hit[1]);
+    if (hit[0] != NULL)
+        element_named(earlier, sizeof(earlier), " in or after ", hit[0]);
+    os64_snprintf(out, cap, "%s%s", later, earlier);
+}
+
+// What changed the view since the last check (s_damage_since), in words,
+// into `out`; then counted again from nothing.
+static void damage_since_said(char *out, size_t cap)
+{
+    size_t at = (size_t)os64_snprintf(out, cap,
+        "%u rebuilds (%u nothing to paint, %u in parts, %u whole), %u made current with no layout, "
+        "%u ticks (%u marked nothing); parts marked by ticks %u, videos %u, canvases %u, others %u",
+        (unsigned)(s_damage_since.rebuilt_nothing + s_damage_since.rebuilt_parts + s_damage_since.rebuilt_whole),
+        (unsigned)s_damage_since.rebuilt_nothing, (unsigned)s_damage_since.rebuilt_parts,
+        (unsigned)s_damage_since.rebuilt_whole, (unsigned)s_damage_since.advanced, (unsigned)s_damage_since.ticks,
+        (unsigned)s_damage_since.ticks_unmarked, (unsigned)s_damage_since.parts_tick,
+        (unsigned)s_damage_since.parts_video, (unsigned)s_damage_since.parts_canvas,
+        (unsigned)s_damage_since.parts_other);
+    bool any = false;
+    for (int32_t i = 0; i < WHOLE_COUNT && at < cap; i++)
+        if (s_damage_since.whole[i] != 0) {
+            at += (size_t)os64_snprintf(out + at, cap - at, "%s%s %u", any ? ", " : "; the whole view by ",
+                                        kWholeBy[i], (unsigned)s_damage_since.whole[i]);
+            any = true;
+        }
+    if (!any && at < cap)
+        os64_snprintf(out + at, cap - at, "; the whole view by nothing");
+    os64_memset(&s_damage_since, 0, sizeof(s_damage_since));
+}
+
 // `--damage-check`'s comparison, after the paints of the view widget at
 // `bounds` (the window) for every part of a render, through `gl`: the whole
 // view painted the ordinary way over it, compared with what the window held
@@ -20715,17 +20878,29 @@ static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bou
                 os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + r.x,
                             before + (size_t)(y - win.y) * win.w + (r.x - win.x), (size_t)r.w * sizeof(uint32_t));
         }
+        // A difference says where, what the page paints at its first pixel
+        // and the colour the window held there against the page's, and
+        // what changed the view since the last check.
         if (differ > 0) {
             s_damage_differed++;
-            char line[256];
+            int32_t fx = win.x - gl->dx + (int32_t)(first % win.w), fy = win.y - gl->dy + (int32_t)(first / win.w);
+            uint32_t held = before[first] & 0x00ffffffu;
+            uint32_t paints = gl->surf->pixels[(size_t)(win.y + first / win.w) * gl->surf->pitch_px + win.x +
+                                               (size_t)(first % win.w)] & 0x00ffffffu;
+            char painted[200], since[512], line[1536];
+            damage_painted_at(painted, sizeof(painted), fx, fy);
+            damage_since_said(since, sizeof(since));
             os64_snprintf(line, sizeof(line),
-                          "the whole view differs from the parts after %s: %ld pixels in %d,%d %dx%d, first %ld,%ld",
+                          "the whole view differs from the parts after %s: %ld pixels in %d,%d %dx%d, first %ld,%ld "
+                          "(held #%06x, the page paints #%06x, at %s); since the last check: %s",
                           s_damage_after, (long)differ, (int)reach.x, (int)reach.y, (int)reach.w, (int)reach.h,
-                          (long)(win.x - gl->dx + first % win.w), (long)(win.y - gl->dy + first / win.w));
+                          (long)fx, (long)fy, (unsigned)held, (unsigned)paints, painted, since);
             yonder_diag_failed_seen(g.page.diag, "damage check", line);
             os64_debug_log(line);
         }
     }
+    // Each check counts what changed the view from the last.
+    os64_memset(&s_damage_since, 0, sizeof(s_damage_since));
     os64_free(before);
     char said[128];
     os64_snprintf(said, sizeof(said), "%lu compared, %lu differed, %lu could not be compared",

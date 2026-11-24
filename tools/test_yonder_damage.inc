@@ -518,6 +518,42 @@ static void damage_cases(void)
                        "background:yellow", 17);
     damage_expect("damage: a background the canvas takes is the whole view", damage_step(),
                   kRefused[FLOW_PARTS_CANVAS]);
+    {
+        /* A part left stale by hand under #box, and a rebuild that marks
+         * nothing: the check differs, and its line says how the rebuild
+         * was made, what the change log held, what the page paints at the
+         * first pixel against what the window held, and what changed the
+         * view since the check before: the two canvas cases' rebuilds,
+         * whole and so not checked, among it. The whole paint stays, so the next
+         * check agrees. Last on this page: the line it records puts up the
+         * window's badge, which a later rebuild marks whole. */
+        os64_gui_rect_t box = flow_box_doc_rect(flow_box_for(g.page.tree, probe_id("box")), scroll_now());
+        int32_t wx = g.view.bounds.x + box.x - g.sx + 2, wy = g.view.bounds.y + box.y - g.sy + 2;
+        uint32_t *px = &damage_screen.surf.pixels[(size_t)wy * 900 + wx];
+        uint32_t was = *px;
+        *px = 0xff123456u;
+        damage_attr("meter", "data-v", "3");
+        audit_lines[0] = '\0';
+        audit_keep = true;
+        DamageSaid said = damage_step();
+        audit_keep = false;
+        char expect_at[160];
+        snprintf(expect_at, sizeof(expect_at), "1 pixels in %d,%d 1x1, first %d,%d (held #123456, the page paints #%06x",
+                 (int)(box.x + 2), (int)(box.y + 2), (int)(box.x + 2), (int)(box.y + 2), (unsigned)(was & 0xffffffu));
+        bool ok = said.differed == 1 && os64_streq(said.said, "nothing to paint") &&
+                  strstr(audit_lines, "after a rebuild that marked nothing (") != NULL &&
+                  strstr(audit_lines, "; the change log: attribute data-v of div#meter)") != NULL &&
+                  strstr(audit_lines, expect_at) != NULL && strstr(audit_lines, ", at div#box") != NULL &&
+                  strstr(audit_lines, "); since the last check: 3 rebuilds (1 nothing to paint, 0 in parts, 2 whole)") !=
+                      NULL &&
+                  strstr(audit_lines, "; the whole view by scripts' changes 2") != NULL;
+        check(ok, "damage: a check that differs says the rebuild's way and change log, the pixel, and what changed");
+        if (!ok)
+            printf("  differed %lu, said %s: %s\n", (unsigned long)said.differed, said.said, audit_lines);
+        check(*px == was, "damage: the check's whole paint stays");
+        damage_attr("meter", "data-v", "4");
+        damage_expect("damage: after a check that differed, the next agrees", damage_step(), "nothing to paint");
+    }
     damage_end();
     damage_canvas_cases();
     damage_widget_cases();
