@@ -493,6 +493,11 @@ typedef struct {
     double edge, at;
 } FMotion;
 
+// `prop` of `style`, a style of `element`'s other than its own (a resolved
+// keyframe's), as getComputedStyle writes it (computed.c).
+size_t f_computed_text_of(const flow_tree_t *tree, const flow_env_t *env, const os64_html_node_t *element,
+                          const flow_style_t *style, int32_t prop, char *out, size_t cap);
+
 // What the lists an animated value makes come from — a transform's, the
 // shadows', a background's positions: NULL when none is left.
 typedef void *(*FAlloc)(void *ctx, size_t bytes);

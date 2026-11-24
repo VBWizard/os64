@@ -2834,6 +2834,47 @@ int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_
     return styles->nanimated;
 }
 
+bool flow_motion_describe(const flow_tree_t *tree, const flow_env_t *env, int32_t entry, int32_t anim,
+                          flow_motion_anim_t *out)
+{
+    *out = (flow_motion_anim_t){.prop = -1};
+    if (tree == NULL || tree->styles == NULL || entry < 0 || entry >= tree->styles->nanimated || anim < 0)
+        return false;
+    const os64_html_node_t *n = tree->styles->animated[entry];
+    const FStyled *st = f_style_of(tree->styles, n);
+    if (st == NULL || st->motion == NULL || anim >= st->motion->nanims)
+        return false;
+    const FMotion *m = st->motion;
+    const FAnimation *a = &m->anims[anim];
+    out->script = a->script != NULL;
+    out->timing = a->timing;
+    out->held = a->script != NULL ? a->script->held : a->timing.paused;
+    out->local_ms = a->script == NULL ? -1
+                    : a->script->held ? a->script->hold_ms
+                                      : ((double)tree->now_ms - a->script->start_ms) * a->script->rate;
+    out->name = a->timing.name;
+    out->nframes = a->nframes;
+    for (int32_t p = 0; p < GARB_NPROPS; p++)
+        if (f_props_has(&a->props, (garb_prop_t)p) && out->nprops++ == 0)
+            out->prop = p;
+    out->at = m->at;
+    out->edge = m->edge;
+    out->now_ms = tree->now_ms;
+    out->tick_ms = tree->tick_ms;
+    // A keyframe resolved against the animations' values (`over`), else
+    // against its own: the layout resolves an element's that ticks.
+    for (int32_t end = 0; m->ticks && m->resolved != NULL && env != NULL && out->prop >= 0 && end < 2; end++) {
+        int32_t j = end == 0 ? 0 : a->nframes - 1;
+        const FResolved *r = j >= 0 ? m->resolved[2 * (m->first[anim] + j) + 1] : NULL;
+        if (r == NULL && j >= 0)
+            r = m->resolved[2 * (m->first[anim] + j)];
+        if (r != NULL)
+            (void)f_computed_text_of(tree, env, n, &r->style, out->prop, end == 0 ? out->first : out->last,
+                                     sizeof(out->first));
+    }
+    return true;
+}
+
 uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
 {
     return motion_due(tree, view, scroll, true);
