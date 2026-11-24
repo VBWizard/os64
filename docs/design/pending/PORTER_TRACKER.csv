@@ -1,5 +1,5 @@
 id,task,depends_on,status,done_in,notes
-P.1,Freeze reproducible installable outputs,,review,,Compare complete deployed file inventories from independent builds and verify guest and debugger symbols.
+P.1,Freeze reproducible installable outputs,,done,#733,Compare complete deployed file inventories from independent builds and verify guest and debugger symbols.
 P.1.1,Compare build profiles and keep optimization independent of DWARF,,done,#733,Compile once with host DWARF. Compared clean build times with compiler DWARF disabled.
 P.1.2,Identify timestamp and path differences and stabilize installable bytes,,done,#733,Kernel content ID and stable WebP and QuickJS build inputs.
 P.1.3,Stage deployment ELFs for ext2 and the FAT lifeboat and ISO,P.1.1,done,#733,ISO and FAT share the full kernel. Both roots use the staged ring-3 ELFs.
