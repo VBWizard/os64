@@ -1186,9 +1186,10 @@ typedef struct {
     const FBox *old;
     size_t parent, subtree_count;
     // `inner`: every box of the subtree may stand inside a copy (RELAYOUT_
-    // GRAFT.md § Roles inside a copy); `ordinary`: the subtree may be copied
-    // with this box as its root, which is also in the flow among blocks and
-    // holds no out-of-flow box whose containing block is outside it.
+    // GRAFT.md § Roles inside a copy); `ordinary`: this box is in the flow
+    // among blocks and its subtree holds no out-of-flow box whose
+    // containing block is outside it. A flex or grid item may be ordinary
+    // and is still no root (the match's `item`, graft_try's `sized_later`).
     bool equal, ordinary, inner;
     // Inside: an atom's content made a float query in the space its line
     // stands in, which a copy cannot answer.
@@ -1203,8 +1204,10 @@ typedef struct {
     // box's own roles (a bit for each flow_role_t: what keeps the box from
     // being a copy's root, and being an item); the roles of the boxes under
     // it that keep them from standing inside a copy; whether a box above it
-    // is a copy's candidate (`in_copy`), which takes it in; and the boxes
-    // under it a candidate takes in, its own included (`cand_boxes`).
+    // is a candidate for a copy (`in_copy`), which takes it in; and the
+    // boxes under it a candidate takes in, its own included (`cand_boxes`).
+    // A candidate whose copy then misses is placed fresh, and its boxes are
+    // counted neither as refused for a role nor as taken in.
     bool role_refused, in_copy;
     uint16_t roles, roles_below;
     size_t cand_boxes;

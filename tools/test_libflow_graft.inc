@@ -978,6 +978,22 @@ static void graft_intrinsic_cases(void)
     next = intr_layout(&p, old, false);
     flow_free(old); graft_oracle(&p, next); flow_free(next); sheeted_close(&p);
 
+    // A flex container that is no item, measured inside a changed
+    // absolute box: counted by its own role, though it refuses nothing.
+    sheeted_open(&p, "<!doctype html><div style='position:relative'><div id=ab style='position:absolute'>"
+                     "<div id=f style='display:flex'><div>one word</div><div>two words here</div></div></div></div>"
+                     "<p>tail</p>", 800, 600);
+    old = intr_layout(&p, NULL, false);
+    intr_style(&p, "ab", "position:absolute;padding:3px");
+    next = intr_layout(&p, old, true);
+    s = flow_reuse_stats(next);
+    snprintf(got, sizeof(got), "roots %llu, flex %llu, none %llu", (unsigned long long)s.intrinsic_roots,
+             (unsigned long long)s.intrinsic_role_roots[FLOW_ROLE_FLEX],
+             (unsigned long long)s.intrinsic_role_roots[FLOW_ROLES]);
+    expect("intrinsic: a flex container's copy is counted as a flex container's, not as none",
+           s.intrinsic_role_roots[FLOW_ROLE_FLEX] >= 1, got);
+    flow_free(old); graft_oracle(&p, next); flow_free(next); sheeted_close(&p);
+
     // A block-level picture's measure reads its containing block's height:
     // its percentage limit carried through its ratio, under a container
     // that seeds it before measuring it.
@@ -1116,12 +1132,15 @@ static void graft_roles_cases(void)
         "<div style='order:1;width:80px'>first</div><div style='order:1;width:80px'>second</div>"
         "</div></div></div><div style='font-size:20px'>beside</div><div id=grow></div></div>", &reused);
     expect("roles: a wrapped flex container is copied with its items' flex lines", reused >= 5, NULL);
-    // A grid copied the same way: its baseline is its first row's, which
-    // the copied items' rows say.
+    // A grid copied the same way: its baseline is its first row's first
+    // column's item, which the copied items' rows and columns say (the
+    // tree's first item of row 1 is in its second column, and tree order
+    // would take it).
     s = roles_case(ROLES_HEAD "<div style='display:flex;align-items:baseline'>"
         "<div><div><div style='display:grid;grid-template-columns:80px 80px'>"
         "<div style='grid-row:2;font-size:30px;padding-top:20px'>late</div>"
-        "<div style='grid-row:1'>first</div><div style='grid-row:1'>second</div>"
+        "<div style='grid-row:1;grid-column:2'>first</div>"
+        "<div style='grid-row:1;grid-column:1;font-size:24px;padding-top:12px'>second</div>"
         "</div></div></div><div style='font-size:20px'>beside</div><div id=grow></div></div>", &reused);
     expect("roles: a grid is copied with its items' rows and columns", reused >= 5, NULL);
     // An inline-block's content, and an absolute box whose containing
@@ -1138,9 +1157,20 @@ static void graft_roles_cases(void)
         "</div><p>tail</p>", &reused);
     expect("roles: transformed, filtered and relative boxes are copied", reused >= 7, NULL);
 
-    // Refused by name: an absolute box whose containing block is outside.
+    // No refusal by name for a box that is copied: an absolute box whose
+    // containing block is its parent is no root itself (refused for its
+    // role), and its parent is copied with it.
+    s = roles_case(ROLES_HEAD "<div id=grow></div><div style='position:relative'>"
+        "<div style='position:absolute;right:0'>a</div><p>x</p></div><p>tail</p>", &reused);
+    expect("roles: an absolute box copied with its containing block is no refusal by name",
+           s.refused[FLOW_REUSE_ABSOLUTE_OUTSIDE] == 0 && s.refused[FLOW_REUSE_ATOM_FLOATS] == 0 && reused >= 3,
+           NULL);
+    // Refused by name: an absolute box whose containing block is outside
+    // the div holding it, which grows (#grow), so the box moves: a copy of
+    // the div would leave it where it was. The box's own pair is refused
+    // for its role; the name is the div's.
     s = roles_case(ROLES_HEAD "<div style='position:relative'><div><p>x</p>"
-        "<div style='position:absolute;top:0'>abs</div></div><div id=grow></div></div><p>tail</p>", &reused);
+        "<div style='position:absolute;bottom:0'>abs</div></div><div id=grow></div></div><p>tail</p>", &reused);
     expect("roles: an absolute box escaping the subtree refuses it by name",
            s.refused[FLOW_REUSE_ABSOLUTE_OUTSIDE] >= 1, NULL);
     // Refused by name: an atom whose content made a float query in its

@@ -3,8 +3,8 @@
 // What a container's placement wrote on its items, which a copied container
 // does not run, is staged with them: the forced width and margin a flex or
 // grid item was laid out at, its flex line, its grid row and column and its
-// area's offset (the baseline readers, a refit and the next copy read
-// them). An out-of-flow box's placeholder is the copied fragment
+// area's offset (the baseline readers read them, and so will the next
+// copy and G2's refit). An out-of-flow box's placeholder is the copied fragment
 // (`place`).
 typedef struct {
     FBox *box;

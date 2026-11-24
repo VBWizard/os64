@@ -2,7 +2,8 @@
 """One deliberate break at a time to the rules that let a subtree holding
 roles be copied (G1: reuse_match.inc's `inner`, `ordinary` and `escapes`,
 reuse_graft.inc's staging; RELAYOUT_GRAFT.md § Roles inside a copy),
-against the graft cases (test_libflow_host.sh --graft): a mutant is CAUGHT
+against the graft and snapshot cases (test_libflow_host.sh --graft,
+--snapshots, which hold the role counter's): a mutant is CAUGHT
 when they fail, MISSED when they pass, which means a test is missing and
 gets written. A build failure is neither. The shape is
 test_libflow_intrinsic_mutants.py's.
@@ -22,7 +23,8 @@ args.logs.mkdir(parents=True, exist_ok=True)
 
 MATCH = 'userland/libflow/reuse_match.inc'
 GRAFT = 'userland/libflow/reuse_graft.inc'
-CASES = 'bash tools/test_libflow_host.sh --graft'
+LAYOUT = 'userland/libflow/layout.c'
+CASES = 'bash tools/test_libflow_host.sh --graft && bash tools/test_libflow_host.sh --snapshots'
 
 # Staged with no mutant here, because nothing reads them after a copy until
 # a copied container can be refit, which needs an item as a copy's root
@@ -52,6 +54,18 @@ mutants = [
     ('an-items-grid-row-is-not-staged', [
         (GRAFT, '            d->grid_row = s->grid_row; d->grid_col = s->grid_col;',
                 '            d->grid_col = s->grid_col;')]),
+    ('an-items-grid-column-is-not-staged', [
+        (GRAFT, '            d->grid_row = s->grid_row; d->grid_col = s->grid_col;',
+                '            d->grid_row = s->grid_row;')]),
+    ('an-escape-is-not-passed-up', [
+        (MATCH, '            up->escapes += p->escapes;\n', '')]),
+    ('a-held-escape-is-a-refusal-above', [
+        (MATCH, '            if (p->atom_floats) inside |= ROLE(FLOW_ROLE_ATOMIC);\n',
+                '            if (p->atom_floats) inside |= ROLE(FLOW_ROLE_ATOMIC);\n            if (p->escapes) inside |= ROLE(FLOW_ROLE_OUT_OF_FLOW);\n')]),
+    ('a-box-that-is-no-root-is-refused-by-name', [
+        (MATCH, '        else if (!root_kind) tree->reuse_stats.refused[FLOW_REUSE_BOX_ROLE]++;\n', '')]),
+    ('an-intrinsic-root-by-its-refusals', [
+        (LAYOUT, '        if (r < 0)\n            for (r = 0;', '        if (1)\n            for (r = 0;')]),
     ('an-atoms-content-is-not-staged', [
         (GRAFT, '        if (it->content) graft_box(l, styles, it->content, staged, count, dx, dy, s);',
                 '        (void)it;')]),

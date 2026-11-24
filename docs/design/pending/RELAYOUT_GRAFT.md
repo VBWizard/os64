@@ -203,7 +203,8 @@ item is eligible only with equal resource inputs and matching fresh items.
 **A subtree may hold roles (G1, Fable's ruling of 2026-11-23)**: a flex or
 grid container and its items, positioned, transformed and filtered boxes,
 atoms whose content is equal, and out-of-flow boxes whose containing block is
-inside it; the root itself may be any of the first three. Copying the subtree
+inside it; the root itself may be a flex or grid container (never an item),
+positioned, transformed or filtered. Copying the subtree
 copies the final state its last layout left, which is a fresh layout's
 because nothing outside the subtree places anything in it: a container's
 placement of its items, the absolutes a containing block lays out, an atom's
@@ -212,7 +213,7 @@ again. What each role writes that a copy carries (reuse_graft.inc's staging):
 
 - an item's flex line, grid row and column (baseline readers outside the
   copy read them through `first_baseline_in`), its forced width, margin and
-  area offset (a refit and the next copy read them);
+  area offset (the next copy reads them, and so will G2's refit);
 - an atom's content box and its subtree, moved with its fragment;
 - an out-of-flow box's placeholder, the copied fragment.
 

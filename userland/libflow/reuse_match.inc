@@ -260,12 +260,24 @@ static FReuseMatch *reuse_match_new(flow_tree_t *tree, const flow_tree_t *previo
         bool item = p->box->parent && (p->box->parent->flex || p->box->parent->grid);
         // Its own containing-block entries are met: what is left escapes.
         p->escapes -= p->cb_held;
+        // A box that is no root whatever its subtree holds (an item, an
+        // out-of-flow box, an atom's content) is refused for that; a root's
+        // other refusals are for what its subtree holds.
+        bool root_kind = p->ordinary && !item;
         p->ordinary = p->ordinary && p->inner && p->escapes == 0;
         tree->reuse_stats.geometry_candidates += p->equal && p->ordinary && !item;
         if (!p->equal) tree->reuse_stats.refused[p->reason]++;
+        else if (!root_kind) tree->reuse_stats.refused[FLOW_REUSE_BOX_ROLE]++;
         else if (p->atom_floats) tree->reuse_stats.refused[FLOW_REUSE_ATOM_FLOATS]++;
         else if (p->inner && p->escapes) tree->reuse_stats.refused[FLOW_REUSE_ABSOLUTE_OUTSIDE]++;
-        else if (!p->ordinary || item) tree->reuse_stats.refused[FLOW_REUSE_BOX_ROLE]++;
+        else if (!p->ordinary) tree->reuse_stats.refused[FLOW_REUSE_BOX_ROLE]++;
+        // The out-of-flow boxes under it whose containing block is outside
+        // it keep it from being a root (its own escape, an out-of-flow box's,
+        // is its own role): said here, where the containing blocks it holds
+        // are already taken off, never passed up from a child, whose escape
+        // its parent may hold.
+        p->roles_below = (uint16_t)(p->roles_below & ~ROLE(FLOW_ROLE_OUT_OF_FLOW));
+        if (p->escapes > (p->box->out_of_flow ? 1u : 0u)) p->roles_below |= ROLE(FLOW_ROLE_OUT_OF_FLOW);
         p->role_refused = p->equal && (!p->ordinary || item);
         if (p->equal && p->ordinary && !item) p->cand_boxes = p->subtree_count;
         if (p->parent != SIZE_MAX) {
@@ -276,13 +288,12 @@ static FReuseMatch *reuse_match_new(flow_tree_t *tree, const flow_tree_t *previo
             up->escapes += p->escapes;
             // What refuses a box above is what may not stand inside a copy:
             // not being a root (an item, an atom's content, an out-of-flow
-            // box) is the box's own refusal, not its parent's, unless the
-            // out-of-flow box's containing block is outside the parent too.
+            // box) is the box's own refusal, not its parent's. An escape
+            // past the parent is the parent's to say at its own turn.
             uint16_t inside = (uint16_t)(p->roles & ~(ROLE(FLOW_ROLE_ITEM) | ROLE(FLOW_ROLE_ATOMIC) |
                                                     ROLE(FLOW_ROLE_OUT_OF_FLOW)));
             if (p->atom_floats) inside |= ROLE(FLOW_ROLE_ATOMIC);
-            if (p->escapes) inside |= ROLE(FLOW_ROLE_OUT_OF_FLOW);
-            up->roles_below |= (uint16_t)(inside | p->roles_below);
+            up->roles_below |= (uint16_t)(inside | (p->roles_below & ~ROLE(FLOW_ROLE_OUT_OF_FLOW)));
             up->subtree_count += p->subtree_count;
             if (!p->equal && up->reason == FLOW_REUSE_NREASONS) up->reason = FLOW_REUSE_STRUCTURE;
         }

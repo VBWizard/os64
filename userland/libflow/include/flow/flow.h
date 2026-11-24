@@ -1442,13 +1442,16 @@ typedef struct {
     // the boxes its measure measured in the source; and the copies refused,
     // by flow_intrinsic_refusal_t. A RECORD ONLY, kept when the layout is
     // profiled with a clock: the copies by their root's own first role
-    // (flow_role_t), FLOW_ROLES for a root with none.
+    // (flow_role_t: an item, a flex or grid container, an out-of-flow, a
+    // positioned or a transformed box, else what the graft refuses it for),
+    // FLOW_ROLES for a root with none.
     uint64_t intrinsic_roots, intrinsic_refused[FLOW_INTRINSIC_NREFUSALS];
     uint64_t intrinsic_role_roots[FLOW_ROLES + 1];
     // A RECORD ONLY, kept when the layout is profiled with a clock: the
     // roots of the equal subtrees refused for their role, each the
-    // outermost such subtree that no copy above it takes in, by its role
-    // (flow_role_t); the boxes in them no copy under them takes in, the
+    // outermost such subtree that no candidate for a copy above it takes in,
+    // by its role (flow_role_t); the boxes in them no candidate under them
+    // takes in (a candidate whose copy misses is counted neither way), the
     // roots' own included; the roots whose subtree holds each refusing
     // role anywhere (`role_inside`, a root counted under every one it
     // holds);
