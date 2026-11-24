@@ -1034,10 +1034,13 @@ struct FBox {
     // every level above it, and without the memo that is exponential.
     bool intrinsic_known;
     int64_t intrinsic_min, intrinsic_max;
-    // The def_h they were measured against (-2 before it was found): an
-    // inline picture's percentage height is of it, so a layout reusing an
-    // earlier one's widths must have measured with the same.
-    int64_t intrinsic_def;
+    // The heights its measure read, which a copy of them must find the same
+    // (intrinsic_heights_same): the definite height its line's percentages
+    // are of, and a block-level picture's containing block's; and the
+    // measure's number in its layout and the last number of the boxes it
+    // measured (`intrinsic_seq`, `intrinsic_end`), which say which boxes a
+    // measure of it measured with it (intrinsic_copy).
+    int64_t intrinsic_def, intrinsic_cbh;
     // The same two from its content alone, before a width or limit the page
     // gave overrides them (a picture's, its own width: replaced_own),
     // border box: what a row flex item's automatic minimum and content
@@ -1050,6 +1053,7 @@ struct FBox {
     // and a column item's automatic minimum and `flex-basis: content`, read.
     int64_t content_h;
     uint32_t intrinsic_computed;    // how often; the fuzz asserts at most once
+    uint32_t intrinsic_seq, intrinsic_end;
     // An out-of-flow box's static position (CSS 2.1 § 10.3.7): among
     // blocks, `static_known` says x and y hold it until the box is laid
     // out; among inline content it is the placeholder `place` on a line.

@@ -211,11 +211,16 @@ static void test_builds_and_broad(void)
     // What the updates restyled.
     static const uint64_t by1[3] = {4, 0, 10}, by2[3] = {1, 1, 0};
     static const char *const kinds[3] = {"added", "class", "inherited"};
-    yonder_lt_marks(&t, BASE, 4, 10, by1, 3, kinds);
-    yonder_lt_marks(&t, BASE + S, 2, 0, by2, 3, kinds);
+    yonder_lt_marks(&t, BASE, 4, by1, 3, kinds);
+    yonder_lt_marks(&t, BASE + S, 2, by2, 3, kinds);
+    yonder_lt_recompute(&t, BASE + S, 40, 3, 12, 1, "--a --b");
+    yonder_lt_recompute(&t, BASE + 2 * S, 7, 0, 7, 0, "--c");
     yonder_lt_summary(&t, line, sizeof(line));
-    CHECK(strstr(line, "; 2 updates restyled 6 elements their changes marked and 10 below a changed winner "
+    CHECK(strstr(line, "; 2 updates restyled 6 elements their changes marked "
                        "(every mark by kind: added 5, class 1, inherited 10); ") != NULL);
+    // What the updates recomputed, summed, and the largest one's names.
+    CHECK(strstr(line, "; 47 recomputed below a changed custom property map (3 pruned, 19 winners changed, "
+                       "1 whole), the most at once 40 following --a --b; ") != NULL);
     // Fewer marked than every one kept: counted, not kept.
     yonder_lt_broad(&t, BASE, 1, kSubtree, "small");
     CHECK(t.nbroad == YONDER_LT_BROAD_MAX + 4 && strcmp(t.broad[YONDER_LT_BROAD_MAX - 1].text, "small") != 0);
@@ -304,7 +309,7 @@ static void test_the_end(void)
     static const char *const late_askers[1] = {"late"};
     yonder_lt_readers_t late = {.asked = {1}, .passed = {1}, .reached = {1}};
     yonder_lt_readers(&t, end + 5 * S, &late, 1, late_askers);
-    yonder_lt_marks(&t, end + 5 * S, 1, 1, NULL, 0, NULL);
+    yonder_lt_marks(&t, end + 5 * S, 1, NULL, 0, NULL);
     CHECK(t.nparse == 0 && t.parse_us == 0 && t.nbroad == 0 && t.broad_kept == 0 && t.nbroad_by == 0 &&
           t.back_updates == 0 && t.marks_updates == 0 && t.has_visited == 0 && t.readers_updates == 0);
     yonder_lt_bytes(&t, end + 5 * S, 4096);

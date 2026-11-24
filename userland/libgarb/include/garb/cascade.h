@@ -278,8 +278,10 @@ garb_has_subject_work_t garb_cascade_has_subject_work(const garb_cascade_t *c);
 // garb_cascade_update, by what asked them: a child whose front index
 // turned, one whose back index turned, the siblings an unbounded front
 // form's walk and an unbounded back form's walk passed over, an :empty that
-// turned, an element brought or taken (`~` and the `+` chains), and a pair
-// of siblings broken or made (`+`). For each, the readers asked, those
+// turned, an element brought or taken (`~` and the `+` chains), a pair of
+// siblings broken or made (`+`), and a change of an attribute by its keys
+// (an attribute other than these three, `class`, `id`, `style`: select.h
+// § A READER's keys). For each, the readers asked, those
 // whose filters passed, and the asks that marked a reach (one reader or
 // more passed). With the bounded front indexes counted again as
 // garb_cascade_back_work counts the back ones (`front_walks`,
@@ -288,7 +290,8 @@ garb_has_subject_work_t garb_cascade_has_subject_work(const garb_cascade_t *c);
 // ones. Zeros as garb_cascade_back_work's are.
 typedef enum {
     GARB_ASKED_FRONT, GARB_ASKED_BACK, GARB_ASKED_FRONT_WALK, GARB_ASKED_BACK_WALK, GARB_ASKED_EMPTY,
-    GARB_ASKED_ADDED_REMOVED, GARB_ASKED_PAIRS, GARB_ASKERS
+    GARB_ASKED_ADDED_REMOVED, GARB_ASKED_PAIRS, GARB_ASKED_ATTRIBUTE, GARB_ASKED_CLASS, GARB_ASKED_ID,
+    GARB_ASKED_STYLE, GARB_ASKERS
 } garb_asker_t;
 typedef struct {
     uint64_t asked[GARB_ASKERS], passed[GARB_ASKERS], reached[GARB_ASKERS];
@@ -311,41 +314,59 @@ typedef struct {
 } garb_build_cost_t;
 garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c);
 // Which mark an update made the elements it marked by: for a change, the
-// changed element's subtree (inheritance and descendant selectors) for a
-// change of an attribute other than `class` and `style` or of a state, an
-// added subtree, the siblings a changed or turned element moves (those
+// changed element's own mark and what its readers reach for a change of an
+// attribute other than `class` and `style`, its subtree for a change of a
+// state (and of an attribute whose keys are past naming or read at an
+// ancestor), an added subtree, the siblings a changed or turned element moves (those
 // after a changed element for `+`/`~`, all of them for an `of S`; those
 // the readers of an :empty that turned reach), every child of a parent
 // whose children changed under an `of S`, or with more types of children
 // than an index walk's table keeps (the children's siblings), a
 // :has() asked again (its anchors and their reach), the parent's own state
 // (:empty where its answer turned, a <details> or <fieldset>'s first
-// child), a shadow tree's assignments; while the marked elements are
-// restyled, an element restyled alone whose style came out different
-// passing it down to its children (inherited); the changed element's
-// subtree for a change of its `class` or of its `style`; and, at a change
+// child), a shadow tree's assignments; restyling itself marks nothing (an
+// element restyled alone whose custom property map came out different has
+// what inherits from it recomputed, THE RECOMPUTE), so `inherited` counts
+// none; for a change of an
+// attribute, its element and the reach of the readers of its keys, under
+// `class`, `style`, or for any other attribute the kind of an attribute or
+// a state; and, at a change
 // of children, the reach of the readers (select.h § A READER) of a child
 // whose back index or front index turned, of the children an unbounded
 // position form's walk passed over, of an element brought or taken
 // (`~` and the `+` chains), and of a pair of siblings broken or made (`+`).
 typedef enum {
-    GARB_MARK_SUBTREE, GARB_MARK_ADDED, GARB_MARK_SIBLINGS, GARB_MARK_HAS, GARB_MARK_PARENT,
+    GARB_MARK_CHANGED, GARB_MARK_ADDED, GARB_MARK_SIBLINGS, GARB_MARK_HAS, GARB_MARK_PARENT,
     GARB_MARK_SLOTS, GARB_MARK_INHERITED, GARB_MARK_CLASS, GARB_MARK_STYLE, GARB_MARK_BACK, GARB_MARK_SUFFIX,
     GARB_MARK_FRONT, GARB_MARK_POSITION, GARB_MARK_NEIGHBOURS, GARB_MARK_ADJACENT,
     GARB_MARKS
 } garb_mark_t;
 const char *garb_mark_name(garb_mark_t mark);
 // What the latest garb_cascade_update restyled: the elements its changes
-// marked, those restyling marked below an element whose winners came out
-// changed (mark_below, every one matched again), and every mark made, by
-// the mark that made it (`by[GARB_MARK_INHERITED]` is `inherited`). Zeros
+// marked, those restyling marked (`inherited`, `by[GARB_MARK_INHERITED]`:
+// none, since what is under an element whose custom property map changed
+// is recomputed, not marked: THE RECOMPUTE, below), and every mark made, by
+// the mark that made it. Zeros
 // before any update, after one that read no changes, and for one refused
 // before it read them; one refused partway says what it had marked by then.
 typedef struct {
     uint64_t marked, inherited;
     uint64_t by[GARB_MARKS];
+    // THE RECOMPUTE: the elements below a changed custom property map
+    // recomputed (not counted toward the half), those where it stopped
+    // because their own map came out as it was, those whose winners came out
+    // changed, and those a recompute took to their own whole cascade, matched
+    // again: a pseudo-element's var(), keyframes read with the map or a
+    // changed or inherited animation-name, or a var() winner whose new value
+    // sets other longhands than it did.
+    uint64_t recomputed, recompute_pruned, recompute_changed, recompute_whole;
 } garb_update_marks_t;
 garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c);
+// The custom property names the latest update's recompute followed, space
+// apart, "(more)" after them when it lost count (none is then known), into
+// `out` (cut to `cap`, always terminated); its length. Empty when it
+// recomputed nothing. A record's: the names are a page's own.
+size_t garb_cascade_recompute_names(const garb_cascade_t *c, char *out, size_t cap);
 // When the latest update was refused GARB_UPDATE_BROAD: the change of the
 // batch that marked the most elements (the batch's marking stops at the
 // one that crossed half, so a later change never ran): its kind
@@ -353,19 +374,13 @@ garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c);
 // fit) and the target's depth below the document, the attribute for an
 // attribute's change, how many elements it marked and by which mark; with
 // the changes the batch held and had marked, the dirty count at refusal
-// and the elements the cascade holds. When the half was crossed while
-// restyling instead (`restyled`), the element whose changed style was
-// passing down then, its depth, and what the restyling had marked by then
-// (all of it inherited). False when the latest update was not refused so,
-// or no clock was given.
+// and the elements the cascade holds. False when the latest update was not
+// refused so, or no clock was given.
 typedef struct {
     int32_t kind;
     char target[64], attr[32];
     uint32_t depth, marked, by[GARB_MARKS];
     uint32_t changes, marked_changes, dirty, slots;
-    bool restyled;
-    char restyled_from[64];
-    uint32_t restyled_depth, restyled_marked;
 } garb_broad_trigger_t;
 bool garb_cascade_broad_trigger(const garb_cascade_t *c, garb_broad_trigger_t *out);
 

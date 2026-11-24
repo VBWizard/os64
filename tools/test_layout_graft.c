@@ -39,6 +39,9 @@ int main(int argc,char **argv)
     check(strstr(report,"\"state\": \"complete\"") && strstr(report,"\"rows\": 2000") &&
           strstr(report,"\"samples\": 20") && strstr(report,"Append one list row"),
           "graft fixture: both full experiments finish");
+    const char *widths=yonder_diag_fact_value(g.page.diag,"layout graft widths");
+    check(widths && strstr(widths,"intrinsic widths copied for ") && strstr(widths,"; refused: another height "),
+          "graft fixture: the intrinsic widths line");
     FILE *out=fopen(argv[1],"w");if(out){fprintf(out,"%s\nlayout: %s\ngraft: %s\n",report,
         yonder_diag_fact_value(g.page.diag,"layout"),yonder_diag_fact_value(g.page.diag,"layout graft"));fclose(out);}
     else check(false,"graft fixture: report saved");

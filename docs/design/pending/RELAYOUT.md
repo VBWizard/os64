@@ -131,10 +131,22 @@ and `:has()` in a subject, with `+`/`~` arguments, inside an nth-child's
 `:has()` and `:dir()`). Discovery recurses through functional selector
 lists, including `:is()`, `:not()` and `:where()`.
 
-Attribute/state changes restyle the target's subtree. Following-sibling
-combinators also mark following siblings' subtrees; filtered positional
-selectors mark all siblings' subtrees. Unfiltered positional selectors alone
-do not widen an attribute change. An element the batch brought (put in,
+A change of an attribute marks its element alone, counted as restyled
+even where its winners come out the same (what it lays out may read the
+attribute), and marks through the READERS by its KEYS (`select.h` § A
+READER's keys): the attribute by its local name; for `class` the classes
+the old value and the new one do not share, and for `id` the old id and
+the new, the old values being the ones the element was last styled with.
+Each reader that names a key, and whose other tests pass at the element
+with the changed keys' tests left out, has its reach marked (its subtree,
+its next sibling, its following ones). At an element the batch changed
+more than once, every change passes every reader of its keys. A key read
+at an ancestor too (`lang`, `dir`, `disabled`, with `:lang()`, `:dir()`,
+`:disabled` and their kin), a change whose old value is past knowing or
+whose keys pass the room, a cascade short of memory for its readers, and a
+change of state mark the subtree and the following siblings as before. Filtered
+positional selectors (`of S`) still mark all siblings' subtrees. An
+element the batch brought (put in,
 or under what it put in) marks nothing for its attributes: it is marked
 whole as added, and the change that brought it asks what is beside and
 above it of it as the batch left it. No selector reads a text's data except
@@ -203,8 +215,8 @@ marks nothing through the readers.
 it last styled or asked it, and a change of children compares the parent's answer
 now with it. Where the answer is the same nothing is marked for `:empty`,
 which is what lets appends to a parent that already has children stay
-small. Where it turned, the parent is marked alone (its changed winners
-reach its descendants through restyle, like any element's), its siblings
+small. Where it turned, the parent is marked alone (what is under it is
+recomputed where its custom property map changed, like any element's), its siblings
 marked as far as the `:empty` readers that pass at it reach (all of them
 for an `of S`). Nothing under it needs
 marking for matching: a parent that turned from empty has under it only
@@ -422,7 +434,8 @@ other, so their pages keep style and geometry reuse across a mutation.
 
 - **`:dir()`** reads the `dir` attribute of the element and the ancestors
   it inherits from; what a change of `dir` can turn is in the changed
-  element's subtree, which an attribute's change marks. `dir=auto` is not
+  element's subtree, which its change marks, `dir` being a key read at an
+  ancestor too. `dir=auto` is not
   implemented (DEBTS).
 - **A `:has()` in a rule's subject** can turn on an ancestor of the change,
   or for `+`/`~` arguments on a preceding sibling of the change or of an
@@ -446,10 +459,33 @@ other, so their pages keep style and geometry reuse across a mutation.
   taken subtree stands for nothing when the batch changed children under
   anything it took out, put back or not. A visit asks with every compound the
   batch's changes so far may turn, and when that set grows the climbs that
-  follow visit again what they pass. One the same rules match as before (a digest of them is kept
-  in its record) and whose winners compare the same by value keeps its old
-  record, so `garb_style_updated_since` reports no change, and any other
-  marks its descendants for their inherited values.
+  follow visit again what they pass. A change of an attribute turns only
+  the compounds whose arguments read one of its keys
+  (`garb_has_subject_reads_key`), a bare compound as much as a filtered
+  one. One the same rules match as before (a digest of them is kept
+  in its record) and whose winners and custom properties compare the same
+  by value keeps its old record, so `garb_style_updated_since` reports no change. Any other
+  marks nothing below it: a descendant's selector answers do not read an
+  ancestor's winners, and libflow carries ordinary inheritance (a child is
+  copied only under a parent it could copy, `reuse_safe`). What it owes
+  below is decided by its custom property map (**the recompute**, L4 part
+  2): equal by value, nothing; different, every element that inherits from
+  it is recomputed as the update's walk reaches it, its map made again over
+  the one it inherits and substitution redone where var() made a winner
+  (kept per element at its last cascade, `PendDecl`), `changed` only where
+  winners differ. No matching and no anchor asked, except where it takes an
+  element's whole cascade, and nothing counted toward BROAD's half. It stops
+  at an element whose own map declares every name that moved, none from the
+  map above (the update keeps the names: an origin's, and an entry made from
+  the map above that a recompute made again; past the room it keeps, none is
+  known, and nothing prunes). An element marked alone by another change of
+  the batch under a moved map is restyled whole and moves with it unless
+  its own map declares every moved name. A changed animation-name reaches
+  what takes it by `inherit`: every element below is recomputed, no name
+  pruning. A pseudo-element's var(), keyframes read with the map, a changed
+  or inherited animation-name, and a var() winner whose new value sets other
+  longhands take the element's whole cascade, outside the half all the
+  same.
 - **An anchored `:has()`**, left of a combinator (`.group:has(.x) .y`,
   `body:has(...) .panel`), changes its descendants' or following siblings'
   winners rather than its own. Each such compound (`garb_anchor_t`, as
@@ -580,7 +616,10 @@ Validation and remaining hardware evidence are recorded in
 successful DOM-version advances within an existing cascade. The existing
 `reused` field counts copied layout boxes; 5c populates it independently of
 style reuse. Intrinsic hits, marker measurements, peak new metadata and the
-refusal histogram are reported on the separate `layout graft` line, and
+refusal histogram are reported on the separate `layout graft` line; the
+boxes whose intrinsic widths were copied, in how many copies, by the root's
+role, and the copies refused by why, on `layout graft widths`
+(RELAYOUT_GRAFT.md § Intrinsic widths have a separate memo); and
 how many cascades were updated and how many built fresh, by reason (yonder's
 own, then `garb_update_refusal_t`), on the `layout cascade` line. Each
 layout is also taken whole: `layout by cascade` gives the count and average
