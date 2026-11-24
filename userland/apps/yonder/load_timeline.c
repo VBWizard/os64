@@ -367,14 +367,31 @@ void yonder_lt_back(yonder_lt_t *t, int64_t at_us, uint64_t walks, uint64_t walk
     t->back_turned += turned;
 }
 
-void yonder_lt_marks(yonder_lt_t *t, int64_t at_us, uint64_t marked, uint64_t inherited, const uint64_t *by,
+void yonder_lt_recompute(yonder_lt_t *t, int64_t at_us, uint64_t recomputed, uint64_t pruned, uint64_t changed,
+                         uint64_t whole, const char *names)
+{
+    if (!t->on || since(t, at_us) >= LT_END_US)
+        return;
+    t->recomputed += recomputed;
+    t->recompute_pruned += pruned;
+    t->recompute_changed += changed;
+    t->recompute_whole += whole;
+    if (recomputed > t->recompute_most) {
+        t->recompute_most = recomputed;
+        size_t k = 0;
+        for (; names != NULL && names[k] != '\0' && k + 1 < sizeof(t->recompute_names); k++)
+            t->recompute_names[k] = names[k];
+        t->recompute_names[k] = '\0';
+    }
+}
+
+void yonder_lt_marks(yonder_lt_t *t, int64_t at_us, uint64_t marked, const uint64_t *by,
                      uint32_t nby, const char *const *names)
 {
     if (!t->on || since(t, at_us) >= LT_END_US)
         return;
     t->marks_updates++;
     t->marks_marked += marked;
-    t->marks_inherited += inherited;
     if (t->mark_names == NULL && names != NULL) {
         t->mark_names = names;
         t->nmark_kinds = nby < YONDER_LT_MARK_KINDS ? nby : YONDER_LT_MARK_KINDS;
@@ -625,9 +642,7 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap)
         put_u(&o, t->marks_updates);
         put(&o, " updates restyled ");
         put_u(&o, t->marks_marked);
-        put(&o, " elements their changes marked and ");
-        put_u(&o, t->marks_inherited);
-        put(&o, " below a changed winner");
+        put(&o, " elements their changes marked");
         bool first = true;
         for (uint32_t k = 0; k < t->nmark_kinds; k++) {
             if (t->marks_by[k] == 0)
@@ -640,6 +655,20 @@ void yonder_lt_summary(const yonder_lt_t *t, char *out, size_t cap)
         }
         if (!first)
             put(&o, ")");
+    }
+    if (t->recomputed != 0) {
+        put(&o, "; ");
+        put_u(&o, t->recomputed);
+        put(&o, " recomputed below a changed custom property map (");
+        put_u(&o, t->recompute_pruned);
+        put(&o, " pruned, ");
+        put_u(&o, t->recompute_changed);
+        put(&o, " winners changed, ");
+        put_u(&o, t->recompute_whole);
+        put(&o, " whole), the most at once ");
+        put_u(&o, t->recompute_most);
+        put(&o, " following ");
+        put(&o, t->recompute_names[0] ? t->recompute_names : "no name");
     }
     put(&o, "; ");
     put_u(&o, t->nlongs + t->more_longs);

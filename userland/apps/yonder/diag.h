@@ -91,6 +91,8 @@ typedef struct yonder_diag yonder_diag_t;
 #define YONDER_LAYOUT_REUSE_REASONS 16
 // flow_role_t order (the graft's role counter); checked at compile time too.
 #define YONDER_LAYOUT_ROLES 12
+// flow_intrinsic_refusal_t order; checked at compile time too.
+#define YONDER_LAYOUT_INTRINSIC_REFUSALS 4
 // Why a layout's cascade was built fresh rather than updated: yonder's own
 // reasons, then libgarb's refusals (garb_update_refusal_t past DONE). The
 // names come with the sample (`cascade_reason_names`), from the code that
@@ -159,6 +161,12 @@ typedef struct {
     uint64_t role_inside[YONDER_LAYOUT_ROLES];
     uint64_t role_clock_errors;
     const char *const *role_names;
+    // The intrinsic widths copied (flow_reuse_stats_t.intrinsic_*): the
+    // copies, by their root's own first role (the last for a root with
+    // none), and the copies refused, by why; names with the sample.
+    uint64_t intrinsic_roots, intrinsic_role_roots[YONDER_LAYOUT_ROLES + 1];
+    uint64_t intrinsic_refused[YONDER_LAYOUT_INTRINSIC_REFUSALS];
+    const char *const *intrinsic_refusal_names;
 } yonder_layout_stats_t;
 void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
 // What layouts needed, as a record's line (`layout needed` and its
