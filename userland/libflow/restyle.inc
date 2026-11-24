@@ -91,36 +91,55 @@ static bool keep_declined(FKeeps *k, flow_restyle_reason_t why, const os64_html_
 
 // How a write that changed only an element's insets (f_style_insets_only)
 // would land, for the record of a declined restyle (BRIEF_LAYOUT_NEEDS.md
-// N4, its cases): `no box` (its own `display: none` or `contents`; one
-// under a `display: none` ancestor never reaches here, since no style of
-// it comes out different), `static` (its insets are not
-// read), `sticky`, `an inline's pieces` (a relative inline, each piece of
-// it), `a pseudo-element`; for a relative or an absolute or fixed box
-// whose size the insets do not decide (CSS 2.1 §§ 9.4.3, 10.3.7, 10.6.4),
-// how far it would move, `resolves the same` (the inset that places it
-// came out the same length, or none places it), less than a pixel on each
-// axis, or a pixel or more, bucketed; else why its size or its place is
-// not the inset's alone: a percentage (its containing block is not
-// looked up), its width or height following the insets (shrink-to-fit or
-// stretched), auto margins centring it, or another side placing it after
-// the write than before. Nothing here changes what is kept.
+// N4, its cases). Told first when it applies: `a pseudo-element`; `no box`
+// (flow_box_for has none: its own `display: none` or `contents`, among
+// others; one under a `display: none` ancestor never reaches here, since
+// no style of it comes out different); `static` (its insets are not read);
+// `sticky`; `an inline's pieces` (a relative inline, each piece of it);
+// for an absolute or fixed `a table` or `an aspect ratio` (each sizes and
+// places itself by rules of its own). Then, for an axis whose insets
+// changed, on an absolute or fixed box (CSS 2.1 §§ 10.3.7, 10.6.4, as
+// layout.c's solve_axis does them): its width follows them (no width
+// given and a side set: shrink-to-fit or stretched); its height follows
+// them (no height given and both sides set in one of the two styles); auto
+// margins place it (both sides set in one style and a margin auto); or
+// another side places it after the write than before. Else, for a
+// relative (§ 9.4.3) or absolute or fixed box, how far it moves: `resolves
+// the same` (the inset that places it came out the same length), less
+// than a pixel on each axis, or a pixel or more on the larger axis,
+// bucketed — or `a percentage` when an inset that changed and places it
+// is one (its containing block is not looked up). Nothing here changes
+// what is kept.
+static bool keep_length_same(flow_length_t a, flow_length_t b)
+{
+    return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
+}
+
+// The change of one placing inset: none when the two are the same length,
+// whatever a percentage of; a percentage that changed is said apart.
 static int64_t keep_offset_of(flow_length_t a, flow_length_t b, bool *percent)
 {
+    if (keep_length_same(a, b))
+        return 0;
     *percent = *percent || a.kind == FLOW_LENGTH_PERCENT || b.kind == FLOW_LENGTH_PERCENT;
     return f_len(b, 0) - f_len(a, 0);
+}
+
+static bool keep_set(const flow_style_t *s, int side)
+{
+    return s->inset[side].kind != FLOW_LENGTH_AUTO;
 }
 
 // The move along one axis whose sides are `s0`, `s1`: the start side wins
 // when both are set (`left` over `right`, `top` over `bottom`; an
 // absolute box's over-constrained start is the start side too, its auto
-// margins aside, which the caller refused), so the axis moves by the
-// change of the side set, and refuses when the side that places it is not
-// the same one on both.
+// margins aside, which the caller said apart), so the axis moves by the
+// change of the side set, and is refused when the side that places it is
+// not the same one on both.
 static const char *keep_axis_move(const flow_style_t *a, const flow_style_t *b, int s0, int s1, bool *percent,
                                   int64_t *d)
 {
-    bool a0 = a->inset[s0].kind != FLOW_LENGTH_AUTO, b0 = b->inset[s0].kind != FLOW_LENGTH_AUTO;
-    bool a1 = a->inset[s1].kind != FLOW_LENGTH_AUTO, b1 = b->inset[s1].kind != FLOW_LENGTH_AUTO;
+    bool a0 = keep_set(a, s0), b0 = keep_set(b, s0), a1 = keep_set(a, s1), b1 = keep_set(b, s1);
     *d = 0;
     if (a0 && b0)
         *d = keep_offset_of(a->inset[s0], b->inset[s0], percent);
@@ -131,34 +150,48 @@ static const char *keep_axis_move(const flow_style_t *a, const flow_style_t *b, 
     return NULL;
 }
 
+// Why an absolute or fixed box's axis with sides `s0`, `s1`, whose insets
+// changed, is not moved by them alone: its size given or not (`given`).
+static const char *keep_axis_sized(const flow_style_t *a, const flow_style_t *b, int s0, int s1, bool given,
+                                   bool across)
+{
+    bool any = keep_set(a, s0) || keep_set(a, s1) || keep_set(b, s0) || keep_set(b, s1);
+    bool both = (keep_set(a, s0) && keep_set(a, s1)) || (keep_set(b, s0) && keep_set(b, s1));
+    if (!given && (across ? any : both))
+        return across ? "its width follows them" : "its height follows them";
+    if (both && (b->margin[s0].kind == FLOW_LENGTH_AUTO || b->margin[s1].kind == FLOW_LENGTH_AUTO ||
+                 a->margin[s0].kind == FLOW_LENGTH_AUTO || a->margin[s1].kind == FLOW_LENGTH_AUTO))
+        return "auto margins place it";
+    return NULL;
+}
+
 static void keep_offset_case(const flow_tree_t *tree, const os64_html_node_t *node, const os64_html_node_t *self,
                              const flow_style_t *a, const flow_style_t *b, char *said, size_t cap)
 {
     const flow_box_t *box = node == self ? flow_box_for(tree, node) : NULL;
+    bool out = b->position == FLOW_POSITION_ABSOLUTE || b->position == FLOW_POSITION_FIXED;
     const char *why = node != self ? "a pseudo-element"
                     : box == NULL ? "no box"
                     : b->position == FLOW_POSITION_STATIC ? "static"
                     : b->position == FLOW_POSITION_STICKY ? "sticky"
-                    : box->kind == FLOW_BOX_SPAN ? "an inline's pieces" : NULL;
+                    : box->kind == FLOW_BOX_SPAN ? "an inline's pieces"
+                    : out && box->kind == FLOW_BOX_TABLE ? "a table"
+                    : out && box->kind == FLOW_BOX_BLOCK && b->aspect_ratio > 0 ? "an aspect ratio" : NULL;
     const char *kind = b->position == FLOW_POSITION_RELATIVE ? "relative"
                      : b->position == FLOW_POSITION_FIXED ? "fixed" : "absolute";
-    bool percent = false, replaced = box != NULL && box->kind == FLOW_BOX_REPLACED;
+    bool replaced = box != NULL && box->kind == FLOW_BOX_REPLACED;
+    bool across = !keep_length_same(a->inset[FLOW_LEFT], b->inset[FLOW_LEFT]) ||
+                  !keep_length_same(a->inset[FLOW_RIGHT], b->inset[FLOW_RIGHT]);
+    bool down = !keep_length_same(a->inset[FLOW_TOP], b->inset[FLOW_TOP]) ||
+                !keep_length_same(a->inset[FLOW_BOTTOM], b->inset[FLOW_BOTTOM]);
+    if (why == NULL && out && across)
+        why = keep_axis_sized(a, b, FLOW_LEFT, FLOW_RIGHT,
+                              replaced || b->width.kind == FLOW_LENGTH_PX || b->width.kind == FLOW_LENGTH_PERCENT, true);
+    if (why == NULL && out && down)
+        why = keep_axis_sized(a, b, FLOW_TOP, FLOW_BOTTOM,
+                              replaced || b->height.kind == FLOW_LENGTH_PX || b->height.kind == FLOW_LENGTH_PERCENT, false);
+    bool percent = false;
     int64_t dx = 0, dy = 0;
-    if (why == NULL && b->position != FLOW_POSITION_RELATIVE) {
-        bool h0 = b->inset[FLOW_LEFT].kind != FLOW_LENGTH_AUTO || a->inset[FLOW_LEFT].kind != FLOW_LENGTH_AUTO;
-        bool h1 = b->inset[FLOW_RIGHT].kind != FLOW_LENGTH_AUTO || a->inset[FLOW_RIGHT].kind != FLOW_LENGTH_AUTO;
-        bool v0 = b->inset[FLOW_TOP].kind != FLOW_LENGTH_AUTO || a->inset[FLOW_TOP].kind != FLOW_LENGTH_AUTO;
-        bool v1 = b->inset[FLOW_BOTTOM].kind != FLOW_LENGTH_AUTO || a->inset[FLOW_BOTTOM].kind != FLOW_LENGTH_AUTO;
-        bool wide = replaced || b->width.kind == FLOW_LENGTH_PX || b->width.kind == FLOW_LENGTH_PERCENT;
-        bool tall = replaced || b->height.kind == FLOW_LENGTH_PX || b->height.kind == FLOW_LENGTH_PERCENT;
-        why = !wide && (h0 || h1) ? "its width follows them"
-            : !tall && v0 && v1 ? "its height follows them"
-            : (h0 && h1 && (b->margin[FLOW_LEFT].kind == FLOW_LENGTH_AUTO ||
-                            b->margin[FLOW_RIGHT].kind == FLOW_LENGTH_AUTO)) ||
-              (v0 && v1 && (b->margin[FLOW_TOP].kind == FLOW_LENGTH_AUTO ||
-                            b->margin[FLOW_BOTTOM].kind == FLOW_LENGTH_AUTO)) ? "auto margins centre it"
-            : NULL;
-    }
     if (why == NULL)
         why = keep_axis_move(a, b, FLOW_LEFT, FLOW_RIGHT, &percent, &dx);
     if (why == NULL)
@@ -170,8 +203,8 @@ static void keep_offset_case(const flow_tree_t *tree, const os64_html_node_t *no
     const char *moves = far == 0 ? "resolves the same"
                       : far < FLOW_UNITS_PER_PX ? "moves less than a pixel"
                       : far < 2 * FLOW_UNITS_PER_PX ? "moves 1 px"
-                      : far <= 8 * FLOW_UNITS_PER_PX ? "moves 2 to 8 px"
-                      : far <= 64 * FLOW_UNITS_PER_PX ? "moves 9 to 64 px" : "moves over 64 px";
+                      : far < 9 * FLOW_UNITS_PER_PX ? "moves 2 to 8 px"
+                      : far < 65 * FLOW_UNITS_PER_PX ? "moves 9 to 64 px" : "moves over 64 px";
     os64_snprintf(said, cap, "an inset, %s%s%s", why != NULL ? why : kind, why != NULL ? "" : ", ",
                   why != NULL ? "" : moves);
 }
