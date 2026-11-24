@@ -89,8 +89,13 @@ void d_node_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 JSValue d_holder_take(os64_dom_t *dom, const os64_html_node_t *node)
 {
     /* A closed binding's records are freed after its engine is gone, so
-     * they take no engine value. */
+     * they take no engine value; in a cluster, neither may a wrapper be
+     * made on a member that has closed, whose drain has passed. */
     if (node == NULL || dom->closed) return JS_UNDEFINED;
+    if (dom->cluster) {
+        uint8_t slot = os64_html_node_creation_realm(node);
+        if (slot >= dom->cluster->count || dom->cluster->members[slot]->closed) return JS_UNDEFINED;
+    }
     os64_js_outcome_t access;
     JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
     if (ctx == NULL) return JS_UNDEFINED;
@@ -915,8 +920,9 @@ size_t os64_dom_wrappers(const os64_dom_t *dom, const os64_html_node_t **out, si
             continue;
         }
         counts->elsewhere++;
-        // The registry's own reference is one; any other is script's or
-        // another engine value's (a closure, a property, a queued job).
+        // The registry's own reference is one; any other is script's,
+        // another engine value's (a closure, a property, a queued job), or
+        // one of the binding's holders' (a view, a queued record).
         if (__js_rc(JS_VALUE_GET_PTR(entry->value))->ref_count == 1)
             counts->elsewhere_only_ours++;
         if (n < cap)

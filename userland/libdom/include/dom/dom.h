@@ -1016,7 +1016,8 @@ size_t os64_dom_registry_count(const os64_dom_t *dom);
  * (`connected`), and the rest (`elsewhere`: detached, a template's
  * contents, another document's), and of the rest how many only the
  * registry references (`elsewhere_only_ours`: the object's reference
- * count is 1, so no script and no other engine value holds it). The
+ * count is 1, so no script, no other engine value and none of the
+ * binding's own holders, a view or a queued record, holds it). The
  * nodes of the rest go to `out`, up to `cap` of them; the answer is how
  * many there were. Each wrapper holds its node (os64_html_hold) for as
  * long as it is on the registry.

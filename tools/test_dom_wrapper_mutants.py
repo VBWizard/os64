@@ -9,8 +9,14 @@ missing and gets written. A build failure is neither.
 What these can break while the registry still owns every node wrapper (W0)
 is a count reported that the object does not own, or a holder's count let
 go of twice: each makes a collection or the teardown take a count that is
-not there. A count owned and NOT reported cannot show yet, as nothing a
-registry roots can die; that is W1's reachability oracle's to catch.
+not there. The engine asserts only when a count goes below zero, so an
+extra report on a NODE WRAPPER cannot show yet: the registry's own count,
+which no mark reports, absorbs it, and the collection's rescan restores it
+(a range's boundary reported twice is such a one). Nor can a count owned
+and NOT reported, as nothing a registry roots can die. Both are W1's
+reachability oracle's to catch. Not broken here: the `engine` test in
+d_node_mark, as every listener on a record that mark reads is the
+object's, so dropping the test changes nothing.
 
 The shape is test_libflow_filter_mark_mutants.py's: each mutant is applied to
 the tree's copy of its file, the suite is run, and the file is put back from
@@ -36,7 +42,6 @@ CASES = 'bash tools/test_yonder_scripts_host.sh'
 NODE = 'userland/libdom/node.c'
 COLLECTION = 'userland/libdom/collection.c'
 ATTR = 'userland/libdom/attr.c'
-RANGE = 'userland/libdom/range.c'
 OBSERVER = 'userland/libdom/observer.c'
 EVENT = 'userland/libdom/event.c'
 
@@ -45,9 +50,6 @@ mutants = [
      '        if (listener->engine) JS_MarkValue(rt, listener->callback, mark);\n',
      '        if (listener->engine) { JS_MarkValue(rt, listener->callback, mark);'
      ' JS_MarkValue(rt, listener->callback, mark); }\n'),
-    ('a-registry-listener-reported', NODE,
-     '        if (listener->engine) JS_MarkValue(rt, listener->callback, mark);\n',
-     '        JS_MarkValue(rt, listener->callback, mark);\n'),
     ('a-kept-view-reported-twice', NODE,
      '        mark_kept(rt, records[i], mark);\n',
      '        { mark_kept(rt, records[i], mark); mark_kept(rt, records[i], mark); }\n'),
@@ -67,10 +69,6 @@ mutants = [
     ('an-attr-reported-twice', ATTR,
      '                JS_MarkValue(rt, rec->entry->value, mark);\n',
      '                { JS_MarkValue(rt, rec->entry->value, mark); JS_MarkValue(rt, rec->entry->value, mark); }\n'),
-    ('a-range-boundary-reported-twice', RANGE,
-     '    for (int i = 0; i < 2; i++) JS_MarkValue(rt, r->wrapper[i], mark);\n',
-     '    for (int i = 0; i < 2; i++) JS_MarkValue(rt, r->wrapper[i], mark);\n'
-     '    JS_MarkValue(rt, r->wrapper[0], mark);\n'),
     ('a-record-wrapper-let-go-twice', OBSERVER,
      '    for (size_t i = 0; i < m->nwrappers; i++) JS_FreeValueRT(dom->engine, m->wrappers[i]);\n    d_free(dom, m);\n',
      '    for (size_t i = 0; i < m->nwrappers; i++) JS_FreeValueRT(dom->engine, m->wrappers[i]);\n'

@@ -81,8 +81,16 @@ static void walk_follow(DWalk *w)
     const os64_html_node_t *nodes[2] = {w->root, w->at};
     for (int i = 0; i < 2; i++) {
         if (nodes[i] == w->wrapped[i]) continue;
+        /* Taken before the record is read again: making a wrapper can run
+         * a collection, whose finalizers may let this walker die and free
+         * what it held. */
+        JSValue wrapper = d_holder_take(w->dom, nodes[i]);
+        if (w->dead) {
+            JS_FreeValueRT(w->dom->engine, wrapper);
+            return;
+        }
         JSValue old = w->wrapper[i];
-        w->wrapper[i] = d_holder_take(w->dom, nodes[i]);
+        w->wrapper[i] = wrapper;
         w->wrapped[i] = nodes[i];
         JS_FreeValueRT(w->dom->engine, old);
     }

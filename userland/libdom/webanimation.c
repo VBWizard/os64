@@ -1782,15 +1782,34 @@ static void effect_composites(DWaEffect *e)
     d->fx.iteration_accumulate = e->iteration_composite == WA_COMPOSITE_ACCUMULATE;
 }
 
+/* A finalizer runs inside a collection, where releasing the target could
+ * free nodes: the effect only lets go of its target's wrapper and goes on
+ * the dead list, and d_web_animations_sweep lets go of the rest. */
 static void effect_finalizer(JSRuntime *rt, JSValue value)
 {
     DWaEffect *e = fx_state(value);
     if (e == NULL) return;
-    if (e->dom != NULL) {
-        effect_unlink(e->dom, e);
-        effect_let_go(e->dom, e);
+    if (e->dom == NULL) {
+        js_free_rt(rt, e);
+        return;
     }
-    js_free_rt(rt, e);
+    JSValue wrapper = e->wrapper;
+    e->wrapper = JS_UNDEFINED;
+    os64_dom_t *dom = e->dom;
+    effect_unlink(dom, e);
+    e->next = dom->wa_fx_dead;
+    dom->wa_fx_dead = e;
+    JS_FreeValueRT(rt, wrapper);
+}
+
+void d_web_animations_sweep(os64_dom_t *dom)
+{
+    while (dom->wa_fx_dead != NULL) {
+        DWaEffect *e = dom->wa_fx_dead;
+        dom->wa_fx_dead = e->next;
+        effect_let_go(dom, e);
+        js_free_rt(dom->engine, e);
+    }
 }
 
 /* A new effect, its target held and its data taken, on `prototype` (a
@@ -3673,6 +3692,7 @@ void d_web_animations_drain(os64_dom_t *dom)
         effect_let_go(dom, e);
         e->dom = NULL;
     }
+    d_web_animations_sweep(dom);
 }
 
 void d_web_animations_free(os64_dom_t *dom)

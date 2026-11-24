@@ -13484,6 +13484,13 @@ static void wrapper_lifetime_cases(void)
          "setTimeout(()=>{box.appendChild(a);const b=box.children[0];"
          "box.dataset.r=String(a===b&&b.mark===1);},0);",
          "true"},
+        /* A view only its element's record holds at a safe point: an
+         * expando keeps nothing alive, so what the record reports for it
+         * is its whole count. */
+        {"wrapper: a kept collection only its element holds keeps what was hung on it",
+         "{box.childNodes.tag='c';box.children.tag='e';}"
+         "setTimeout(()=>{box.dataset.r=box.childNodes.tag+box.children.tag;},0);",
+         "ce"},
         /* The brief's further cases (BRIEF_WRAPPER_LIFETIME § 8). */
         {"wrapper: a listener whose closure holds a node of its own tree fires once the tree is put back",
          "{const t=document.createElement('div');t.innerHTML='<span></span>';const s=t.firstChild;"

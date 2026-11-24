@@ -126,8 +126,16 @@ static void follow(DRange *r)
         uint32_t offset;
         point(r, i, &node, &offset);
         if (node == r->wrapped[i]) continue;
+        /* Taken before the record is read again: making a wrapper can run
+         * a collection, whose finalizers may let this range die and free
+         * what it held. */
+        JSValue wrapper = d_holder_take(r->dom, node);
+        if (r->dead) {
+            JS_FreeValueRT(r->dom->engine, wrapper);
+            return;
+        }
         JSValue old = r->wrapper[i];
-        r->wrapper[i] = d_holder_take(r->dom, node);
+        r->wrapper[i] = wrapper;
         r->wrapped[i] = node;
         JS_FreeValueRT(r->dom->engine, old);
     }

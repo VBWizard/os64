@@ -598,7 +598,9 @@ struct os64_dom {
     DQuery *queries;
     /* Some script's collection on `queries` is dead (d_queries_sweep). */
     bool queries_dead;
-    /* Listener and timer callbacks are the registry's other two lists. */
+    /* The listener callbacks the registry holds (not a node wrapper's or a
+     * plain target's, whose objects own theirs: DListener.engine) and the
+     * timer callbacks: the registry's other two lists. */
     size_t listeners_held, timers_held;
     uint32_t listen_counts[D_EVENT_COUNT];
     os64_dom_handler_mask_t attribute_mask;
@@ -825,6 +827,7 @@ struct os64_dom {
     struct DWaAnimation *wa_first, *wa_last;
     size_t wa_count;
     struct DWaEffect *wa_fx_first;      /* every KeyframeEffect, for the drain */
+    struct DWaEffect *wa_fx_dead;       /* those whose objects are gone (d_web_animations_sweep) */
     uint64_t wa_serial, wa_generation, wa_last_step;
     uint64_t wa_borrowed_floor; /* oldest cluster epoch still borrowed by this host */
     double wa_time, wa_face;
@@ -1056,9 +1059,11 @@ DValue *d_wrap_record(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
  * on it while the holder lives. d_holder_take answers the wrapper (made if
  * the node has none) as a count the holder owns, freed when the holder is;
  * JS_UNDEFINED, with no exception left pending, for a NULL node, a closed
- * binding, or when it could not be made. A holder that is a JS object
- * reports the count in its class's mark; a binding queue's entry keeps it
- * while queued. Drain releases what holders keep, as their records are
+ * binding, or when it could not be made. A holder whose record is a JS
+ * object's own state (a Range, a walker, a KeyframeEffect) reports the
+ * count in its class's mark; a record the binding keeps for itself (a
+ * queue's entry, an observer's registration or root) keeps it as a root
+ * while it lasts. Drain releases what holders keep, as their records are
  * freed after the engine is. */
 JSValue d_holder_take(os64_dom_t *dom, const os64_html_node_t *node);
 /* Whether the record is a node wrapper's (wrapper_attach gave it its node). */
@@ -2206,6 +2211,9 @@ void d_animation_drain(os64_dom_t *dom);
  * every animation and buries its data; and the free, which frees what is
  * buried (no layout reads an effect once the binding is freed). */
 int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The dead KeyframeEffects freed, outside any collection (their targets
+ * released). */
+void d_web_animations_sweep(os64_dom_t *dom);
 void d_web_animations_drain(os64_dom_t *dom);
 void d_web_animations_cancel(os64_dom_t *dom);
 void d_web_animations_free(os64_dom_t *dom);

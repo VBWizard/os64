@@ -279,9 +279,9 @@ static DAttr *attr_make(os64_dom_t *dom, JSContext *ctx, const char *name, const
 }
 
 /* Onto the element, reading its value from the element from now on. The
- * element's record owns the Attr's count while it is attached (its mark
- * reports it: d_attrs_mark), and the Attr owns one on the element's
- * wrapper (`holder`), which ownerElement hands back. */
+ * element's record, when the element has a wrapper, owns the Attr's count
+ * while it is attached (its mark reports it: d_attrs_mark), and the Attr
+ * owns one on that wrapper (`holder`), which ownerElement hands back. */
 static void attach(os64_dom_t *dom, DAttr *rec, const os64_html_node_t *element)
 {
     rec->entry->target = element;
