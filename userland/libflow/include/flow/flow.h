@@ -1751,16 +1751,18 @@ int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_
 // One animation of the `entry`th element flow_motion_entries lists, the
 // `anim`th in composite order, said for a record of what a page started:
 // whether it is a script's effect (element.animate and the like) or a CSS
-// animation, and its name; its timing, and whether it is held (a script's
-// effect by its own clock, a CSS animation by its play state) with, for a
-// script's effect, its local time at the layout's time (-1 for a CSS
-// animation's, whose clock is the timeline's); how many longhands it sets and the
-// first of them (a garb_prop_t, -1 for none), and that longhand's value at
-// its first and last keyframe as getComputedStyle writes one — only for an
-// element that ticks, whose keyframes the layout resolved ("" else); and
-// the element's clock: the time its style is at, its next phase edge (the
-// layout's to show), and the tree's layout time and last tick, all on the
-// page's clock in milliseconds.
+// animation, and its name; its timing, and whether it is held (paused, or
+// a playback rate of 0: a script's effect by its own clock, a CSS animation
+// by its record, which a play state and a script's pause() both set) with,
+// for a script's effect, its local time at the layout's time, which may be
+// negative (NaN for a CSS animation's, whose clock is the timeline's); how
+// many longhands it sets and the first of them (a garb_prop_t, -1 for
+// none), and that longhand's value at its first and last keyframe as
+// getComputedStyle writes one — only for an element that ticks, whose
+// keyframes the layout resolved ("" else); and the element's clock: the
+// time its style is at and its next phase edge (for an element that does
+// not tick, the layout's time and none: INFINITY), and the tree's layout
+// time and last tick, all on the page's clock in milliseconds.
 typedef struct {
     bool script;
     flow_name_t name;

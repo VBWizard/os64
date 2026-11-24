@@ -5213,16 +5213,18 @@ static flow_point_t scroll_now(void)
 // each time, and none for a page with no layout.
 #define MOTION_NAMED 8
 #define MOTION_ASKED 1024
-// What each of the `entry`th animated element's animations IS, on the
+// What the `entry`th animated element's first three animations ARE, on the
 // record beside its `animated N` line (flow_motion_describe): a script's
 // effect or a CSS animation by name, the longhand it sets first and how many
-// more, that longhand at its first and last keyframe, its timing and play
-// state, and the element's clock (the time its style is at, its next phase
-// edge, the layout's time and the last tick's); then the element's inline
-// style and its computed margin-top and transform, which is where a
-// page that places by one and moves by the other shows what it left.
+// more, that longhand at its first and last keyframe, its timing and whether
+// it is held, a script's local time, and the element's clock (the time its
+// style is at, its next phase edge, the layout's time and the last tick's);
+// then, for an element's own entry (not a pseudo-element's, whose node is
+// its originating element), its inline style and its computed margin-top
+// and transform, which is where a page that places by one and moves by the
+// other shows what it left.
 #define MOTION_DESCRIBED 3
-static void diag_motion_what(Page *p, int32_t entry, int32_t named, const os64_html_node_t *node)
+static void diag_motion_what(Page *p, int32_t entry, int32_t named, const os64_html_node_t *node, bool pseudo)
 {
     static const char *const kFill[] = {"none", "forwards", "backwards", "both"};
     static const char *const kDirection[] = {"normal", "reverse", "alternate", "alternate-reverse"};
@@ -5241,17 +5243,23 @@ static void diag_motion_what(Page *p, int32_t entry, int32_t named, const os64_h
                              : (size_t)os64_snprintf(v, sizeof(v), "the CSS animation %.*s", (int)a.name.len,
                                                      a.name.text != NULL ? a.name.text : "");
         if (at < sizeof(v) && a.prop >= 0)
-            at += (size_t)os64_snprintf(v + at, sizeof(v) - at, " of %s%s", garb_prop_name((garb_prop_t)a.prop),
-                                        a.nprops > 1 ? " and more" : "");
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at, " of %s", garb_prop_name((garb_prop_t)a.prop));
+        if (at < sizeof(v) && a.nprops > 1)
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at, " and %d more", (int)a.nprops - 1);
         if (at < sizeof(v) && (a.first[0] != '\0' || a.last[0] != '\0'))
             at += (size_t)os64_snprintf(v + at, sizeof(v) - at, ", %s to %s", a.first, a.last);
         const flow_animation_t *t = &a.timing;
         char iterations[24], local[40] = "";
-        if (isinf(t->iterations))
-            os64_strcopy(iterations, sizeof(iterations), "infinite");
-        else
+        // A count need not be whole (`2.5`); the format has no %g, so the
+        // fraction is written in thousandths.
+        if (isinf(t->iterations) || isnan(t->iterations))
+            os64_strcopy(iterations, sizeof(iterations), isnan(t->iterations) ? "?" : "infinite");
+        else if (t->iterations == floor(t->iterations))
             os64_snprintf(iterations, sizeof(iterations), "%ld", (long)t->iterations);
-        if (a.local_ms >= 0)
+        else
+            os64_snprintf(iterations, sizeof(iterations), "%ld.%03ld", (long)t->iterations,
+                          (long)((t->iterations - floor(t->iterations)) * 1000));
+        if (a.script && !isnan(a.local_ms) && !isinf(a.local_ms))
             os64_snprintf(local, sizeof(local), " at %ld ms of its own", (long)a.local_ms);
         if (at < sizeof(v))
             at += (size_t)os64_snprintf(v + at, sizeof(v) - at,
@@ -5270,6 +5278,8 @@ static void diag_motion_what(Page *p, int32_t entry, int32_t named, const os64_h
         os64_snprintf(key, sizeof(key), "animated %d.%d", (int)named, (int)k + 1);
         yonder_diag_fact(p->diag, key, v);
     }
+    if (pseudo)
+        return;
     const os64_html_attr_t *inline_style = os64_html_attr(node, "style");
     char margin[48] = "", transform[96] = "";
     flow_computed_t *c = flow_computed_new(p->tree, &env, node, NULL);
@@ -5337,7 +5347,7 @@ static void diag_motion(Page *p)
                           : next == FLOW_NEVER ? "never" : "later");
         os64_snprintf(key, sizeof(key), "animated %d", (int)++named);
         yonder_diag_fact(p->diag, key, v);
-        diag_motion_what(p, i, named, m->node);
+        diag_motion_what(p, i, named, m->node, m->pseudo != GARB_PSEUDO_NONE);
     }
     char v[160];
     char first[48] = "";
