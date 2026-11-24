@@ -2744,10 +2744,14 @@ static void input_key(char ascii) {
     if(!key_event(&ev) && !password_key(&ev)) os64_ui_dispatch(&g.ui,&ev);
     inputs_run();
 }
-/* THE READING CHORD: Ctrl+Alt+D is yonder's alone, taken before any key
+/* THE READING CHORD: Ctrl+Shift+D is yonder's alone, taken before any key
  * reaches the page or a control. A page with a focused field and a keydown
  * handler that cancels every key, and logs any key it hears: the chord
- * takes a reading, and the page hears nothing of it. */
+ * takes a reading, and the page hears nothing of it. Exactly Ctrl and
+ * Shift: with Alt too it is no chord (Ctrl+Alt with a letter is the window
+ * manager's, which never hands it on), nor is Ctrl alone. This hands the
+ * event to yonder directly, past the window manager; the key sent at the
+ * keyboard is proved in QEMU. */
 static void reading_chord_case(void) {
     char was_dir[sizeof(s_diag.dir)];
     memcpy(was_dir,s_diag.dir,sizeof(was_dir));
@@ -2764,13 +2768,21 @@ static void reading_chord_case(void) {
     bool was_running=g.running;
     g.running=true;
     s_cost_readings=0; s_reading_keys=0;
-    os64_gui_event_t chord={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='D'&0x1F,.modifiers=OS64_GUI_MOD_CTRL|OS64_GUI_MOD_ALT}};
+    os64_gui_event_t chord={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='D'&0x1F,.modifiers=OS64_GUI_MOD_CTRL|OS64_GUI_MOD_SHIFT}};
     window_event(NULL,&chord);
     inputs_run();
     script_turn();
     check(s_cost_readings==1 && probe_text_is("log","-") && os64_streq(field->text,"x"),
-          "reading chord: Ctrl+Alt+D takes a reading through a focused field and a page that cancels every key, "
+          "reading chord: Ctrl+Shift+D takes a reading through a focused field and a page that cancels every key, "
           "and the page hears nothing of it");
+    os64_gui_event_t not_chord=chord;
+    check(reading_chord(&chord),"reading chord: Ctrl and Shift with the control code is the chord");
+    not_chord.key.modifiers=OS64_GUI_MOD_CTRL|OS64_GUI_MOD_SHIFT|OS64_GUI_MOD_ALT;
+    check(!reading_chord(&not_chord),"reading chord: with Alt too it is not");
+    not_chord.key.modifiers=OS64_GUI_MOD_CTRL;
+    check(!reading_chord(&not_chord),"reading chord: nor with Ctrl alone");
+    not_chord.key.modifiers=OS64_GUI_MOD_CTRL|OS64_GUI_MOD_SHIFT|OS64_GUI_MOD_CAPS;
+    check(reading_chord(&not_chord),"reading chord: Caps Lock on makes no difference");
     char rec[4096];
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\nreading key: pressed 1 times, 1 readings kept\n")!=NULL,

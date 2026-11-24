@@ -200,8 +200,21 @@ bool garb_cascade_retain(garb_cascade_t *cascade);
  * Reader storage is optional: its absence disables updates, not full builds.
  * The caller serializes updates with queries on its window thread. */
 bool garb_cascade_update(garb_cascade_t *c);
-// Why the latest garb_cascade_update answered false; GARB_UPDATE_DONE
-// before any and after one that answered true.
+// The cascade brought to the document's version with nothing restyled, for
+// a caller that has judged every change since garb_cascade_version to leave
+// what it styled as it is: each one a write of an element's style attribute
+// whose winners are unchanged (garb_cascade_inline_changes lists none) and
+// which no selector can read (garb_cascade_style_may_read false). The
+// cascade keeps its parse of those attributes, whose winners are the same.
+// This checks only that each change is a style write on an element the
+// cascade styled; the judging is the caller's. The change log is read
+// whatever the answer, so false leaves a fresh cascade owed, as a failed
+// update does, and garb_cascade_update_refusal says why. Its generation and
+// its count of updates do not move: no value was derived.
+bool garb_cascade_advance(garb_cascade_t *c);
+
+// Why the latest garb_cascade_update or garb_cascade_advance answered false;
+// GARB_UPDATE_DONE before any and after one that answered true.
 typedef enum {
     GARB_UPDATE_DONE,
     GARB_UPDATE_INCOMPLETE,     // the cascade came up short, when built or since
@@ -218,6 +231,7 @@ typedef enum {
     GARB_UPDATE_BROAD,          // the changes reached more than half the elements
     GARB_UPDATE_SHORT,          // a recompute came up short
     GARB_UPDATE_NO_MEMORY,      // a record, the dirty list or the document's pin had none
+    GARB_UPDATE_ADVANCE,        // garb_cascade_advance met a change that is no style write
     GARB_UPDATE_REASONS
 } garb_update_refusal_t;
 garb_update_refusal_t garb_cascade_update_refusal(const garb_cascade_t *c);

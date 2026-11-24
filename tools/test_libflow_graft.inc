@@ -739,6 +739,28 @@ static void pending_cases(void)
         expect("pending: PAINT says it was a style write, and where",
                !strcmp(said.why,"paint: a style write") && said.at[0]!='\0',NULL);
     }
+    /* NONE advanced (flow_pending_advance): the same declarations in other
+     * text make the tree and its cascade current at the document's version
+     * with nothing laid out, and a NONE after it is still NONE (the cascade
+     * where the tree is); a verdict that is not NONE advances nothing. */
+    graft_update(&p);
+    kept=restyle_keep(&p,t);
+    {
+        const os64_html_attr_t *a=os64_html_attr(n,"style");
+        char again[256];
+        snprintf(again,sizeof(again),"%s ",a!=NULL && a->value!=NULL ? a->value : "");
+        os64_html_set_attr(p.doc,n,"style",again,strlen(again));
+        flow_pending_t judged;
+        expect("pending: the same declarations in other text advance the tree with no layout",
+               flow_pending_advance(t,p.doc,p.cascade,&judged) && judged.verdict==FLOW_PENDING_NONE &&
+               garb_cascade_version(p.cascade)==os64_html_version(p.doc),NULL);
+        expect("pending: and leave it NONE, its cascade where the tree is",
+               flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_NONE,NULL);
+        os64_html_set_attr(p.doc,n,"style","color:purple",12);
+        expect("pending: a verdict that is not NONE advances nothing",
+               !flow_pending_advance(t,p.doc,p.cascade,&judged) && judged.verdict!=FLOW_PENDING_NONE &&
+               garb_cascade_version(p.cascade)!=os64_html_version(p.doc),NULL);
+    }
     /* The log lost: everything is owed, never nothing pending, and it stays
      * so until the tree is made current again, whatever is written after. */
     graft_update(&p);
@@ -752,6 +774,7 @@ static void pending_cases(void)
         flow_pending_t lost=flow_pending(t,p.doc,p.cascade);
         expect("pending: a lost log is RESTYLE, and says so",
                lost.verdict==FLOW_PENDING_RESTYLE && lost.lost && !strcmp(lost.why,"restyle: the log was lost"),NULL);
+        expect("pending: and advances nothing",!flow_pending_advance(t,p.doc,p.cascade,NULL),NULL);
         os64_html_set_attr(p.doc,n,"style","color:green",11);
         lost=flow_pending(t,p.doc,p.cascade);
         expect("pending: and stays RESTYLE whatever is written after",
@@ -771,5 +794,19 @@ static void pending_cases(void)
     graft_update(&p);
     expect("pending: a cascade at another version than the tree's is RESTYLE",
            flow_pending(t,p.doc,p.cascade).verdict==FLOW_PENDING_RESTYLE,NULL);
+    flow_free(t);sheeted_close(&p);
+    // A style write judged RESTYLE names what made it one.
+    sheeted_open(&p,page,800,600);
+    t=graft_layout(&p,NULL,NULL,NULL);
+    {
+        os64_html_node_t *at=graft_node(&p,"n");
+        const os64_html_attr_t *a=os64_html_attr(at,"style");
+        char wider[256];
+        snprintf(wider,sizeof(wider),"%s;width:31px",a!=NULL && a->value!=NULL ? a->value : "");
+        os64_html_set_attr(p.doc,at,"style",wider,strlen(wider));
+        flow_pending_t said=flow_pending(t,p.doc,p.cascade);
+        expect("pending: a style write judged RESTYLE names the longhand that made it one",
+               said.verdict==FLOW_PENDING_RESTYLE && !strcmp(said.why,"restyle: a style write: width"),said.why);
+    }
     flow_free(t);sheeted_close(&p);
 }

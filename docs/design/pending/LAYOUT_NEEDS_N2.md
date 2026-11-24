@@ -39,6 +39,7 @@ Lifecycle:
 |---|---|---|
 | a layout makes a tree | opened at the tree's version | NONE |
 | N1 keeps a restyle in it | reopened at the doc's version then | NONE |
+| a rebuild finds NONE (`flow_pending_advance`) | read to the doc's version | NONE |
 | N1 declines | (the layout that follows makes a new tree) | |
 | a read asks (`flow_pending`) | reads what is new | NONE → PAINT → RESTYLE, never back |
 | the reader reports loss (-1) | stays lost | RESTYLE |
@@ -169,6 +170,16 @@ restyle in place, and a layout if it declines):
 | `getComputedStyle`, innerText, `getAnimations` | — | S | S |
 | the paint at a task's end, window seen | — | S | S |
 | the paint at a task's end, window covered | — | **—** (owed) | S |
+
+**NONE's column is carried out in one place**: `script_rebuild`, which
+every asker above and the rebuild after a script's changes pass through,
+asks `flow_pending_advance` before it stages a layout. NONE there (inline
+styles written back to what the cascade parsed, and nothing else since the
+tree; the same text is no change at all, libhtml keeps the version) brings
+the cascade to the document's version with nothing restyled
+(`garb_cascade_advance`) and the tree with it, and lays out nothing. The
+page's model is still brought to the document's version first. The graft's
+reader is not moved: the next layout places the written elements fresh.
 
 **Two rows change and one obligation is made explicit.** The pointer's
 re-hit and IntersectionObserver read the tree as it stands; today nothing
@@ -304,9 +315,13 @@ transitions row of DEBTS.md.
 **The record** (`--layout-profile`): `forced layouts by what was pending
 reading N` names each layout a script's ask forced by the class and writer
 of what was pending, or why nothing could be said, and where;
-`pending reader lost the log reading N` counts the losses; and
+`pending reader lost the log reading N` counts the losses;
 `style writes restyled for a style selector reading N` counts N2a's
-refusals by element.
+refusals by element; a style write judged RESTYLE names what made it one
+(`restyle: a style write: width`, `...: transform side`, `...: animated`);
+`layout reads` ends with the rebuilds NONE made with no layout, by the
+read that asked (or a rendering step's); and with `--geometry-check` the
+`unchanged check` lays every Nth tree so advanced out whole beside itself.
 
 ## N2a: a style reader narrows to the elements it may match
 

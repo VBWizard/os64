@@ -1560,7 +1560,9 @@ typedef enum {
 } flow_pending_verdict_t;
 /* `why` says why the verdict is what it is, for the record: the class and
  * what wrote it ("paint: a style write", "restyle: attribute class",
- * "structural: children", ...) at the element `at` (tag#id.class), or the
+ * "structural: children", ...; a style write judged RESTYLE names what made
+ * it one: "restyle: a style write: width", "...: transform side",
+ * "...: animated") at the element `at` (tag#id.class), or the
  * condition that made it RESTYLE unasked ("restyle: the log was lost",
  * "restyle: no reader", ...); empty for NONE. `lost` says this call found
  * the change log lost, which leaves everything owed until the tree is made
@@ -1574,6 +1576,19 @@ typedef struct {
     char why[48], at[80], style_read_at[80];
 } flow_pending_t;
 flow_pending_t flow_pending(flow_tree_t *tree, const os64_html_document_t *doc, const struct garb_cascade *cascade);
+/* The tree made current at the document's version with nothing laid out,
+ * when flow_pending says NONE: the cascade is brought there with nothing
+ * restyled (garb_cascade_advance), and the tree's pending reader, which
+ * flow_pending has just read to that version, is current there as a layout
+ * would leave it. True when the tree is current at the document's version
+ * (also when it already was); false when the verdict is not NONE or the
+ * cascade refused, which leaves a layout owed (a refused cascade owes a
+ * fresh build). `judged`, when not NULL, is given flow_pending's answer.
+ * The graft's reader (the next layout's reuse) is not moved: it still sees
+ * those writes, which costs that layout a fresh placement of the written
+ * elements and never a wrong answer. */
+bool flow_pending_advance(flow_tree_t *tree, const os64_html_document_t *doc, struct garb_cascade *cascade,
+                          flow_pending_t *judged);
 /* How a pending write of libgarb's longhand `prop` (a garb_prop_t) is judged:
  * 0 when placement or boxes may read it, else the kind of judgement
  * (pending.inc). For the table's test. */

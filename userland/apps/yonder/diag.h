@@ -95,7 +95,7 @@ typedef struct yonder_diag yonder_diag_t;
 // reasons, then libgarb's refusals (garb_update_refusal_t past DONE). The
 // names come with the sample (`cascade_reason_names`), from the code that
 // knows them; the layout wrapper checks the count at compile time.
-#define YONDER_LAYOUT_CASCADE_REASONS 18
+#define YONDER_LAYOUT_CASCADE_REASONS 19
 // Why a restyle kept in the shown tree was declined (flow_restyle_reason_t
 // order); the layout wrapper checks the count at compile time.
 #define YONDER_LAYOUT_RESTYLE_REASONS 12
@@ -144,9 +144,12 @@ typedef struct {
     const char *const *restyle_reason_names;
     // The geometry reads answered from the shown tree with no work (N2);
     // the reads that met only paint-only writes and still made the page
-    // current, by kind (names with the sample); and the rendering steps a
-    // covered window owed instead of rebuilding.
+    // current, by kind (names with the sample); the rendering steps a
+    // covered window owed instead of rebuilding; and the rebuilds owed for
+    // changes that moved nothing the tree was styled from, made with no
+    // layout (flow_pending_advance), by the read that asked or as a step's.
     uint64_t reads_kept, reads_laid[YONDER_LAYOUT_READ_KINDS], owed_covered;
+    uint64_t reads_unchanged[YONDER_LAYOUT_READ_KINDS], steps_unchanged;
     const char *const *read_kind_names;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];

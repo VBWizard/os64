@@ -1459,9 +1459,11 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     for (size_t i = 0; i < YONDER_LAYOUT_RESTYLE_REASONS; ++i)
         total->kept_declined[i] = layout_sum(total->kept_declined[i], sample->kept_declined[i]);
     if (sample->restyle_reason_names != NULL) total->restyle_reason_names = sample->restyle_reason_names;
-    ADD(reads_kept); ADD(owed_covered);
-    for (size_t i = 0; i < YONDER_LAYOUT_READ_KINDS; ++i)
+    ADD(reads_kept); ADD(owed_covered); ADD(steps_unchanged);
+    for (size_t i = 0; i < YONDER_LAYOUT_READ_KINDS; ++i) {
         total->reads_laid[i] = layout_sum(total->reads_laid[i], sample->reads_laid[i]);
+        total->reads_unchanged[i] = layout_sum(total->reads_unchanged[i], sample->reads_unchanged[i]);
+    }
     if (sample->read_kind_names != NULL) total->read_kind_names = sample->read_kind_names;
     ADD(model_calls); ADD(layouts); ADD(refusals); ADD(clock_errors);
 #undef ADD
@@ -1545,7 +1547,9 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     }
     // `<key> reads`: the geometry reads the shown tree answered with no
     // work, those that met only paint-only writes and made the page current
-    // all the same, by kind, and the rendering steps a covered window owed.
+    // all the same, by kind, the rendering steps a covered window owed, and
+    // the rebuilds made with no layout for changes that moved nothing, by
+    // the read that asked or as a rendering step's.
     if (s->read_kind_names != NULL) {
         char reads_key[64];
         os64_snprintf(reads_key, sizeof(reads_key), "%s reads", key);
@@ -1558,9 +1562,19 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
             if (k < 0 || (size_t)k >= sizeof(line) - at) break;
             at += (size_t)k;
         }
+        if (at < sizeof(line)) {
+            k = os64_snprintf(line + at, sizeof(line) - at, "; steps owed while covered %lu; unchanged, made current "
+                              "with no layout:", (unsigned long)s->owed_covered);
+            at += k > 0 && (size_t)k < sizeof(line) - at ? (size_t)k : sizeof(line) - at;
+        }
+        for (size_t i = 0; i < YONDER_LAYOUT_READ_KINDS && at < sizeof(line); ++i) {
+            k = os64_snprintf(line + at, sizeof(line) - at, "%s %s %lu", i ? "," : "", s->read_kind_names[i],
+                              (unsigned long)s->reads_unchanged[i]);
+            if (k < 0 || (size_t)k >= sizeof(line) - at) break;
+            at += (size_t)k;
+        }
         if (at < sizeof(line))
-            os64_snprintf(line + at, sizeof(line) - at, "; steps owed while covered %lu",
-                          (unsigned long)s->owed_covered);
+            os64_snprintf(line + at, sizeof(line) - at, ", steps %lu", (unsigned long)s->steps_unchanged);
         yonder_diag_summary_fact(d, reads_key, line);
     }
     // `<key> cascade`: how many cascades were updated and how many built

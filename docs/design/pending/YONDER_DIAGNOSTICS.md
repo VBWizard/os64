@@ -423,10 +423,11 @@ was shown, or since its record was last written on asking:
   An interval whose counter stepped back (the thread moved to a core whose
   counter is behind) counts as nothing, and the line says how many.
 - **`d` in the page writes the record now** (`written: when asked`), and
-  so does Ctrl+Alt+D wherever the keys are: a page's scripts or a focused
-  field can keep a plain `d` for themselves, never the chord. The record's
-  `reading key` line says how often a reading key was pressed against the
-  readings kept,
+  so does Ctrl+Shift+D wherever the keys are: a page's scripts or a focused
+  field can keep a plain `d` for themselves, never the chord. (Not
+  Ctrl+Alt: with a letter that is the window manager's, and never reaches
+  yonder.) The record's `reading key` line says how often a reading key
+  was pressed against the readings kept,
   keeping the counts since the last `d` as a numbered reading with where
   the page was scrolled — `paint reading 2: at y 2140: 96 paints in 10.1 s
   ... | ms a paint (most): render ...` — and starts them again. So each
@@ -452,6 +453,15 @@ minutes, from the moment its record begins:
     timeline broad 1: at 5.5 s, an attribute class of i#i.b at depth 4 marked 4 of 310 elements (a class 1, :has() 3); 1 of the batch's 1 changes had marked 156 when refused
     timeline parse 1: at 0.7 s, 68.5 ms: a feed of 16384 bytes, 528 KiB into the page, inside a script still open
 
+- **The layouts a script's read forced, by phase** (with the layout
+  profile on): a reading's line ends its longest task with `the longest
+  task's forced layouts by phase` and then `the reading's forced layouts
+  by phase`: how many and their wall time, the model rebuilds the reads
+  began with, the cascade by what became of it (kept, updated, fresh by
+  reason), then style, boxes, placement and the public tree. A layout is
+  forced when a script's read asked for it (the read marker the timeline
+  uses, kept while the profile runs), which is also what `layout needed`'s
+  `forced by a read` half counts, ledger or no ledger.
 - **The steps are the window loop's own** (`yonder_lt_step_t`): waiting,
   input, the window's layouts, the stream (a slice of the arriving page's
   parse, or one of its scripts), the page waiting for its sheets, scripts

@@ -686,6 +686,44 @@ static void update_inline_changes(void)
     update_check(live==baseline,"inline: nothing retained");
 }
 
+/* garb_cascade_advance: a style write the caller judged unchanged brings
+ * the cascade to the document's version with nothing derived (its updates
+ * and generation stay), and its parse of the attribute still answers; a
+ * change that is no style write, and a lost log, are refused, and a fresh
+ * cascade is owed after either. */
+static void update_advance(void)
+{
+    size_t baseline=live;
+    HasCase h;
+    garb_inline_change_t out[64];
+    has_open(&h,"p{margin:0}","<!doctype html><p id=p style='color:red'>x</p><p id=q>y</p>");
+    os64_html_node_t *p=has_el(&h,"p"),*q=has_el(&h,"q");
+    uint64_t updates=garb_cascade_updates(h.c),generation=garb_cascade_generation(h.c);
+    os64_html_set_attr(h.doc,p,"style","color: red ;",12);
+    update_check(garb_cascade_advance(h.c) && garb_cascade_version(h.c)==os64_html_version(h.doc) &&
+                 garb_cascade_updates(h.c)==updates && garb_cascade_generation(h.c)==generation,
+                 "advance: a style write brings the cascade to the document's version, deriving nothing");
+    update_check(garb_cascade_inline_changes(h.c,p,out,64)==0,"advance: and its parse still answers for the attribute");
+    update_check(garb_cascade_advance(h.c),"advance: at the document's version it is a yes with nothing to do");
+    os64_html_set_attr(h.doc,p,"style","color:blue",10);
+    has_update(&h,"advance: an update after it reads from where it left the log");
+    os64_html_set_attr(h.doc,q,"class","z",1);
+    update_check(!garb_cascade_advance(h.c) && garb_cascade_update_refusal(h.c)==GARB_UPDATE_ADVANCE,
+                 "advance: a change that is no style write is refused");
+    update_check(!garb_cascade_update(h.c) && garb_cascade_update_refusal(h.c)==GARB_UPDATE_FAILED_BEFORE,
+                 "advance: and a fresh cascade is owed");
+    has_close(&h);
+    has_open(&h,"p{margin:0}","<!doctype html><p id=p style='color:red'>x</p>");
+    p=has_el(&h,"p");
+    os64_html_changes_limit(h.doc,0);
+    os64_html_set_attr(h.doc,p,"style","color: red",10);
+    os64_html_changes_limit(h.doc,65536);
+    update_check(!garb_cascade_advance(h.c) && garb_cascade_update_refusal(h.c)==GARB_UPDATE_HISTORY,
+                 "advance: a lost log is refused");
+    has_close(&h);
+    update_check(live==baseline,"advance: nothing leaks");
+}
+
 /* THE KEPT READ (KEPT_READ.md): a build offered a read with an equal key
  * takes it, matches as one that read the sheets again, and the read
  * outlives the cascade it came from; each key member different reads again and
@@ -1834,6 +1872,7 @@ static int cascade_updates(void)
     update_kept_skips();
     update_dependencies();
     update_inline_changes();
+    update_advance();
     update_has();
     update_scratch_cost();
     size_t baseline=live;
