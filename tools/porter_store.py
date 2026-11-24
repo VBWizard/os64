@@ -60,6 +60,16 @@ def regular_info(path):
     return info
 
 
+def open_matches_path(named, opened):
+    if os.name == "nt":
+        # Windows path and handle stat can report different ctime for the
+        # same file. Compare metadata for changes within each stat API.
+        return (os.path.samestat(named, opened)
+                and stat.S_IFMT(named.st_mode) == stat.S_IFMT(opened.st_mode)
+                and named.st_size == opened.st_size)
+    return fingerprint(named) == fingerprint(opened)
+
+
 @contextmanager
 def regular_stream(path, expected=None):
     before = regular_info(path)
@@ -69,11 +79,10 @@ def regular_stream(path, expected=None):
     flags |= getattr(os, "O_NONBLOCK", 0)
     with os.fdopen(os.open(path, flags), "rb") as stream:
         opened = os.fstat(stream.fileno())
-        if fingerprint(opened) != fingerprint(before):
-            raise PorterError(f"file changed while opening: {path} "
-                              f"(path {fingerprint(before)}, handle {fingerprint(opened)})")
+        if is_link(opened) or not open_matches_path(before, opened):
+            raise PorterError(f"file changed while opening: {path}")
         yield stream
-        if (fingerprint(os.fstat(stream.fileno())) != fingerprint(before)
+        if (fingerprint(os.fstat(stream.fileno())) != fingerprint(opened)
                 or fingerprint(regular_info(path)) != fingerprint(before)):
             raise PorterError(f"file changed while reading: {path}")
 

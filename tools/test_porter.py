@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zlib
@@ -159,6 +160,29 @@ class LoopbackTests(unittest.TestCase):
                 obj.unlink()
                 self.assertTrue(request(port, f"ARCHIVE {target}")[0].startswith(b"NO "))
                 self.assertEqual(request(port, "CATALOG")[0], b"OK\n")
+
+
+class FileSnapshotTests(unittest.TestCase):
+    def test_windows_path_and_handle_timestamps_use_separate_snapshots(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "object.gz"
+            path.write_bytes(b"contents")
+            named = path.stat()
+            fields = {field: getattr(named, field) for field in (
+                "st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns"
+            )}
+            opened = SimpleNamespace(**dict(fields, st_ctime_ns=fields["st_ctime_ns"] + 1))
+            windows = dict(vars(os), name="nt", fstat=lambda fd: SimpleNamespace(**vars(opened)))
+            with patch.object(store, "os", SimpleNamespace(**windows)):
+                with store.regular_stream(path, named) as handle:
+                    self.assertEqual(handle.read(), b"contents")
+                with self.assertRaisesRegex(store.PorterError, "changed while reading"):
+                    with store.regular_stream(path, named):
+                        opened.st_ctime_ns += 1
+                opened.st_ino += 1
+                with self.assertRaisesRegex(store.PorterError, "changed while opening"):
+                    with store.regular_stream(path, named):
+                        self.fail("opened an object with a different identity")
 
 
 @unittest.skipIf(os.name == "nt", "Make publisher runs on Linux")
