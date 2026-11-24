@@ -239,6 +239,16 @@ static void shadow_updates(void)
     sh_expect(c, f.doc, "lt", "width", "33px", "the slotted element inherits the slot's new value");
     sh_same_as_fresh(c, &f, "after the slot's style");
 
+    // A custom property written on the host: its shadow tree is recomputed
+    // (THE RECOMPUTE), the slot, declaring the name itself, prunes there,
+    // and the element assigned to it keeps the slot's value.
+    os64_html_set_attr(f.doc, h, "style", "--k:44px", 8);
+    shadow_check(garb_cascade_update(c), "a host's custom property updates incrementally");
+    garb_update_marks_t hm = garb_cascade_update_marks(c);
+    shadow_check(hm.recomputed > 0 && hm.recompute_pruned > 0, "the host's tree is recomputed, the slot prunes");
+    sh_expect(c, f.doc, "lt", "width", "33px", "the slotted element keeps the slot's own value");
+    sh_same_as_fresh(c, &f, "after the host's custom property");
+
     // Renaming the slot unassigns the span: no ::slotted(), no slot to inherit from.
     os64_html_set_attr(f.doc, sl, "name", "other", 5);
     shadow_check(garb_cascade_update(c), "a slot's name updates incrementally");
@@ -292,6 +302,37 @@ static void shadow_updates(void)
 
 // A cascade built before any shadow root asks for a fresh one once the
 // document has one: every walk now crosses into shadow trees.
+// THE RECOMPUTE across a slot move: a light child whose `slot` names
+// another slot inherits that slot's map, and what is under it is
+// recomputed against it (no name is known when what it inherits moved).
+static void shadow_slot_move(void)
+{
+    os64_html_document_t *doc = update_doc("<!doctype html><body><aside>" SHADOW_PAD SHADOW_PAD SHADOW_PAD
+                                           "</aside><div id=h><span id=c slot=a><b id=x></b></span></div>");
+    os64_html_node_t *root = doc ? sh_attach(doc, "h", "<slot name=a style='--k:1px'></slot>"
+                                                       "<slot name=b style='--k:2px'></slot>") : NULL;
+    if (!root) { shadow_check(false, "slot move: fixture"); os64_html_document_free(doc); return; }
+    const char *page = "b{width:var(--k)}";
+    garb_parsed_t sheet;
+    garb_parse_sheet_text(page, strlen(page), &sheet);
+    garb_sheet_in_t in = {.sheet = &sheet, .parent = -1};
+    int32_t list[1] = {0};
+    garb_scope_in_t scope = {doc->document, list, 1};
+    garb_cascade_t *c = garb_cascade_scoped(&in, 1, &scope, 1, doc, (garb_env_t){.width = 800, .height = 600}, NULL);
+    sh_expect(c, doc, "x", "width", "1px", "slot move: under slot a");
+    os64_html_set_attr(doc, sh_find(doc, "c"), "slot", "b", 1);
+    shadow_check(garb_cascade_update(c), "slot move: updates incrementally");
+    sh_expect(c, doc, "x", "width", "2px", "slot move: what is under the moved child takes slot b's value");
+    garb_cascade_t *fresh = garb_cascade_scoped(&in, 1, &scope, 1, doc, (garb_env_t){.width = 800, .height = 600}, NULL);
+    static char a1[65536], b1[65536];
+    size_t na = garb_cascade_dump(c, doc, a1, sizeof(a1)), nb = garb_cascade_dump(fresh, doc, b1, sizeof(b1));
+    shadow_check(na == nb && !strcmp(a1, b1), "slot move: same as a fresh cascade");
+    garb_cascade_free(fresh);
+    garb_cascade_free(c);
+    garb_free(&sheet);
+    os64_html_document_free(doc);
+}
+
 static void shadow_first_root(void)
 {
     os64_html_document_t *doc = update_doc(kShadowPage);
@@ -691,6 +732,7 @@ static int cascade_shadow(void)
     shadow_scoping();
     shadow_imports();
     shadow_updates();
+    shadow_slot_move();
     shadow_first_root();
     shadow_contexts();
     shadow_batch_removal();

@@ -307,6 +307,64 @@ mutants = [
     ('attr-holder-keys-dropped', SELECT,
      '            for (int32_t o = 0; subject && o < nholders && nheld <= GARB_ANCHOR_FILTERS; o++) held[nheld++] = holders[o];\n',
      '            (void)holders;\n', UPDATES),
+    # THE RECOMPUTE (L4 part 2): what an element's changed custom property
+    # map owes what is under it. Two of its guards have no mutant, because no
+    # case today can tell them broken: a declaration whose new substitution
+    # sets other longhands than before takes the whole cascade (every
+    # shorthand libgarb reads sets the longhands prop_longhands names, which
+    # its `unset` fallback uses); and an element restyled alone whose
+    # element it inherits from moved names nothing (a slot move changes an
+    # assignment, which marks the assigned element's whole subtree, so it is
+    # never restyled alone for it).
+    ('recompute-a-map-change-reaches-nothing-below', CASCADE,
+     '    if (moved) moved_slot(c, s);\n', '    (void)moved;\n', UPDATES),
+    ('recompute-the-prune-stops-while-the-map-differs', CASCADE,
+     '        if (own == NULL || own->reads_up) return false;\n    }\n    return true;',
+     '        if (own == NULL) return false;\n    }\n    return true;', UPDATES),
+    ('recompute-substitution-not-redone', CASCADE,
+     '    if (s->npend > 0 && !recompute_winners(c, s, map, &whole)) {',
+     '    if (false && s->npend > 0 && !recompute_winners(c, s, map, &whole)) {', UPDATES),
+    ('recompute-sets-changed-always', CASCADE,
+     '    if (sets != NULL) {\n        st->sets = sets;',
+     '    s->changed = c->updates + 1;\n    if (sets != NULL) {\n        st->sets = sets;', UPDATES),
+    ('recompute-sets-changed-never', CASCADE,
+     '        st->sets = sets;\n        s->changed = c->updates + 1;\n',
+     '        st->sets = sets;\n', UPDATES),
+    ('recompute-hides-a-match-mark', CASCADE,
+     '            s = slot_for(c, x, false);\n            if (s && s->dirty) failed = !restyle(c, x, s, &m, &mcap, &scratch);\n'
+     '            else if (s && c->any_moved && recompute_owed(c, x)) failed = !recompute(c, x, s, &m, &mcap, &scratch);',
+     '            s = slot_for(c, x, false);\n            if (s && c->any_moved && recompute_owed(c, x)) failed = !recompute(c, x, s, &m, &mcap, &scratch);\n'
+     '            else if (s && s->dirty) failed = !restyle(c, x, s, &m, &mcap, &scratch);', UPDATES),
+    ('recompute-counted-toward-the-half', CASCADE,
+     '    c->marks.recomputed++;\n    if (s->pseudo_vars',
+     '    c->marks.recomputed++;\n    if (++c->ndirty > c->slotcount / 2) { c->refusal = GARB_UPDATE_BROAD; return false; }\n    if (s->pseudo_vars', UPDATES),
+    ('recompute-names-made-from-above-not-kept', CASCADE,
+     '        if (s->customs->own[k].reads_up) moved_name(c, s->customs->own[k].name, s->customs->own[k].len);',
+     '        (void)k;', UPDATES),
+    ('recompute-a-var-entry-reads-nothing-above', CASCADE,
+     '    cu->reads_up = garb_decl_has_var(d);', '    cu->reads_up = false;', UPDATES),
+    ('recompute-a-restyled-element-under-a-moved-map-stops', CASCADE,
+     '    bool moved = customs_moved(c, &old, s) || (owed && !holds_moved(c, s));',
+     '    bool moved = customs_moved(c, &old, s);', UPDATES),
+    ('recompute-an-origin-names-nothing', CASCADE,
+     '            moved_name(c, n->own[k].name, n->own[k].len);\n            moved = true;',
+     '            moved = true;', UPDATES),
+    ('recompute-a-pseudo-elements-var-is-not-whole', CASCADE,
+     '    if (s->pseudo_vars || s->nframes > 0 || anim_inherits(s)) {',
+     '    if (s->nframes > 0 || anim_inherits(s)) {', UPDATES),
+    ('recompute-the-same-path-keeps-the-old-var-winners', CASCADE,
+     '        s->pend = fresh.pend;\n        s->npend = fresh.npend;\n', '', UPDATES),
+    ('recompute-the-same-path-keeps-the-old-map', CASCADE,
+     '        s->customs = fresh.customs;\n        s->own_customs = fresh.own_customs;\n', '', UPDATES),
+    ('recompute-the-same-path-keeps-the-old-pseudo-answer', CASCADE,
+     '        s->pseudo_vars = fresh.pseudo_vars;\n', '', UPDATES),
+    ('recompute-a-changed-animation-name-builds-no-keyframes', CASCADE,
+     '            if (p == GARB_ANIMATION_NAME) { *whole = true; return false; }\n', '', UPDATES),
+    ('recompute-a-changed-animation-name-reaches-nothing', CASCADE,
+     '    if (!anim_same(&old, s)) {', '    if (false && !anim_same(&old, s)) {', UPDATES),
+    ('recompute-an-inherited-animation-name-is-not-whole', CASCADE,
+     '    if (s->pseudo_vars || s->nframes > 0 || anim_inherits(s)) {',
+     '    if (s->pseudo_vars || s->nframes > 0 || (false && anim_inherits(s))) {', UPDATES),
     # The kept scratch.
     ('a-read-frees-its-scratch', PARSE,
      '    owner->scratch = p.scratch;\n    owner->scratch_cap = p.scratch_cap;',

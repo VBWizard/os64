@@ -27,6 +27,7 @@ struct canvas_context {
     canvas_stats_t stats;
     draw2d_surface_t surface;
     draw2d_damage_t damage;
+    uint64_t revision;          /* canvas_bitmap_t's; c_revised */
     canvas_state_t state;
     Saved *saved;
     Clip *clip;

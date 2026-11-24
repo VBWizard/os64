@@ -259,6 +259,39 @@ bool yonder_draw_surface(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
     return true;
 }
 
+bool yonder_scale_part(uint32_t *out, uint32_t pitch, os64_gui_rect_t part, int32_t bw, int32_t bh,
+                       const draw2d_surface_t *source)
+{
+    if (!source || (source->format != DRAW2D_ARGB8_PREMULTIPLIED && source->format != DRAW2D_ARGB8_STRAIGHT) ||
+        draw2d_surface_validate(source) != DRAW2D_OK || bw <= 0 || bh <= 0 || source->width == 0 ||
+        source->height == 0 || part.x < 0 || part.y < 0 || part.w < 0 || part.h < 0 ||
+        (int64_t)part.x + part.w > bw || (int64_t)part.y + part.h > bh)
+        return false;
+    const uint32_t *src = source->pixels;
+    uint32_t sw = source->width, sh = source->height;
+    size_t stride = source->stride / sizeof(uint32_t);
+    bool premultiplied = source->format == DRAW2D_ARGB8_PREMULTIPLIED;
+    Tap taps[SCALE_COLUMNS];
+    for (int32_t cx = 0; cx < part.w; cx += SCALE_COLUMNS) {
+        int32_t n = part.w - cx < SCALE_COLUMNS ? part.w - cx : SCALE_COLUMNS;
+        for (int32_t k = 0; k < n; k++)
+            taps[k] = tap_at((uint32_t)(part.x + cx + k), sw, bw);
+        for (int32_t y = 0; y < part.h; y++) {
+            Tap r = tap_at((uint32_t)(part.y + y), sh, bh);
+            uint32_t *row = out + (uint64_t)y * pitch + cx;
+            for (int32_t k = 0; k < n; k++)
+                row[k] = mix(src, stride, taps[k], r, premultiplied);
+        }
+    }
+    return true;
+}
+
+void yonder_lay_scaled(uint32_t *dst, const uint32_t *px, int32_t n, bool premultiplied)
+{
+    for (int32_t k = 0; k < n; k++)
+        put(&dst[k], px[k], premultiplied);
+}
+
 void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
                          bool smooth, const uint32_t *src, uint32_t sw, uint32_t sh)
 {

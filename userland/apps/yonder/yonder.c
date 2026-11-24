@@ -59,6 +59,7 @@
 #include "webfont.h"
 #include "sheet.h"
 #include "scale.h"
+#include "canvas_keep.h"
 #include "warp.h"
 #include "filter.h"
 #include "census.h"
@@ -1533,29 +1534,57 @@ static struct {
     // (whose removed nodes it may be) is alive.
     bool wrote;
     char named[96];
+    // The biggest part a box's change marked (`biggest`, -1 for none, by
+    // area in the view) and the element it was for, named while the trees
+    // are alive (change_parts), so the record can say what made a part
+    // past half the view and what marked the biggest part.
+    int32_t biggest;
+    const os64_html_node_t *biggest_node;
+    char biggest_named[96];
     // The shown tree's cascade and how many updates it had taken, for the
     // svgs' question (change_svgs): which of them its update restyled.
     const garb_cascade_t *cascade;
     uint64_t cascade_generation, cascade_updates;
 } s_change;
 
+// The element a box is drawn for: its own, or the nearest one round it for
+// a box with none (an anonymous block, a line's piece).
+static const os64_html_node_t *box_element(const flow_box_t *b)
+{
+    for (; b != NULL; b = b->parent)
+        if (b->node != NULL && b->node->kind == OS64_HTML_ELEMENT)
+            return b->node;
+    return NULL;
+}
+
 // A part a script's change painted (flow_change_parts, or a kept restyle's
-// marks), cut to the view, collected for script_rebuild.
+// marks), cut to the view, collected for script_rebuild, the biggest by
+// area and the element it was marked for kept beside them.
 static void change_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 {
     os64_gui_rect_t meet;
     (void)ctx;
-    (void)box;
     if (!os64_rect_intersect(r, s_change.view, &meet))
         return;
-    if (s_change.n == CHANGE_PARTS)
+    if (s_change.n == CHANGE_PARTS) {
         s_change.over = true;
-    else
-        s_change.part[s_change.n++] = meet;
+        return;
+    }
+    if (s_change.biggest < 0 || (int64_t)meet.w * meet.h > (int64_t)s_change.part[s_change.biggest].w *
+                                                            s_change.part[s_change.biggest].h) {
+        s_change.biggest = s_change.n;
+        s_change.biggest_node = box_element(box);
+    }
+    s_change.part[s_change.n++] = meet;
 }
 
 static void mark_part(os64_gui_rect_t r);
 static flow_point_t scroll_now(void);
+// For the counts' biggest part (mark_part): the box an animation's tick or
+// layout marks for (tick_mark, layout_mark), or the element a script's
+// change marked for, named (change_parts); NULL for every other mark.
+static const flow_box_t *s_marking_box;
+static const char *s_marking_named;
 
 // The face's half of a kept drawing's key (keep.h): moved by every mark
 // of the view made through mark_part or mark_whole but a tick's — a
@@ -1729,9 +1758,11 @@ static void layout_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 {
     const os64_gui_rect_t *view = ctx;
     os64_gui_rect_t meet;
-    (void)box;
-    if (os64_rect_intersect(r, *view, &meet))
+    if (os64_rect_intersect(r, *view, &meet)) {
+        s_marking_box = box;
         mark_part(meet);
+        s_marking_box = NULL;
+    }
 }
 
 static int64_t layout_clock(void *opaque)
@@ -2163,13 +2194,9 @@ static void lt_cascade_refused(const garb_cascade_t *c)
                           (unsigned)b.marked_changes, (unsigned)b.changes, (unsigned)b.dirty);
         at = k > 0 && (size_t)k < sizeof(text) - at ? at + (size_t)k : sizeof(text) - 1;
     }
-    if (b.restyled && at < sizeof(text))
-        os64_snprintf(text + at, sizeof(text) - at, ", restyling then passing the changed style of %s (depth %u) "
-                      "down to %u", b.restyled_from, (unsigned)b.restyled_depth, (unsigned)b.restyled_marked);
-    // Filed by what crossed the half: passing a changed style down when the
-    // restyling crossed it, else the mark that marked most in the trigger.
-    int most = b.restyled ? GARB_MARK_INHERITED : -1;
-    for (int m = 0; m < GARB_MARKS && !b.restyled; m++)
+    // Filed by the mark that marked most in the trigger.
+    int most = -1;
+    for (int m = 0; m < GARB_MARKS; m++)
         if (b.by[m] != 0 && (most < 0 || b.by[m] > b.by[most])) most = m;
     yonder_lt_broad(&s_lt, os64_micros(), b.marked, most >= 0 ? garb_mark_name((garb_mark_t)most) : NULL, text);
 }
@@ -2361,9 +2388,14 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         static const char *mark_names[GARB_MARKS];
         if (mark_names[0] == NULL)
             for (int k = 0; k < GARB_MARKS; k++) mark_names[k] = garb_mark_name((garb_mark_t)k);
-        if (updated && (marks.marked != 0 || marks.inherited != 0))
-            yonder_lt_marks(&s_lt, os64_micros(), marks.marked, marks.inherited, marks.by, GARB_MARKS,
-                            mark_names);
+        if (updated && marks.marked != 0)
+            yonder_lt_marks(&s_lt, os64_micros(), marks.marked, marks.by, GARB_MARKS, mark_names);
+        if (updated && marks.recomputed != 0) {
+            char names[96];
+            garb_cascade_recompute_names(cascade, names, sizeof(names));
+            yonder_lt_recompute(&s_lt, os64_micros(), marks.recomputed, marks.recompute_pruned,
+                                marks.recompute_changed, marks.recompute_whole, names);
+        }
     }
     // Why it is built fresh, for the layout profile: yonder's own reasons
     // (cascade_reason_names), then libgarb's.
@@ -2969,6 +3001,11 @@ static struct {
     // page is shown. NULL until the first paint, and when there was no
     // memory for it: the page is then painted working everything out.
     yonder_paint_cache_t *paint_cache;
+    // What the canvases' smoothed draws keep, in the paint cache
+    // (canvas_keep.h): NULL until the first paint, as the paint cache is,
+    // and when there was no memory for it: each canvas is then scaled at
+    // every draw.
+    yonder_canvas_keeps_t *canvas_keeps;
     // The painter's working buffers, kept between paints (scratch.h): its
     // idle ones freed when another page is shown. NULL until the first
     // paint, and when there was no memory for it: each buffer then comes
@@ -4046,6 +4083,9 @@ static const char *const kPastDeadline[PAST_COUNT] = {
     "settle", "arrival", "stream", "timers", "pictures", "frames", "downloads",
 };
 
+// How many elements a reading names by what their ticks changed.
+#define TICKED_MAX 8
+
 static const char *const kWholeBy[WHOLE_COUNT] = {
     "parts that together covered the view", "layouts for animations that refused their parts", "other layouts",
     "scripts' changes", "scrolls", "pictures that came in", "faces that came in",
@@ -4117,15 +4157,31 @@ static struct {
     // deadlines handed the ticker already past.
     uint64_t bells, past[PAST_COUNT];
     // The biggest part marked, by area, as much of it as the view holds,
-    // in page coordinates, and what marked it — a canvas the page drew on
-    // or a form control, by name, or "the page" for any other part
-    // (mark_part; a part as big as the view is a whole view instead) — a
+    // in page coordinates, and what marked it (mark_part; a part as big as
+    // the view is a whole view instead): a canvas the page drew on or a
+    // form control, by name; an animation, by the element its tick changed
+    // and the longhands it animates (tick_named), or the box its layout
+    // marked; a video's new picture; a
+    // script's change, by the element it changed; else "the page" — a
     // control shown or hidden marks the whole window, and is named so; the
     // canvases' and the controls' marks; and the biggest rectangle a paint
     // published, as much of it as the view holds.
     os64_gui_rect_t mark_most, paint_most;
     char mark_who[96];
     uint64_t canvas_marks, control_marks;
+    // Canvases whose damage was acknowledged unseen instead of marked
+    // (canvas_damage_mark): under a group laid at alpha 0, culled as
+    // transparent, and wholly outside the view.
+    uint64_t unseen_alpha0, unseen_culled, unseen_offview;
+    // The elements the ticks that were frames changed, each with the
+    // longhands its animations set, and how many such ticks changed it
+    // (tick_named): the first TICKED_MAX met, the rest counted together.
+    struct {
+        char what[96];
+        uint64_t n;
+    } ticked[TICKED_MAX];
+    int32_t nticked;
+    uint64_t ticked_rest;
     // The videos' (videos_tick, pane_video): pictures asked for and
     // answered changed, and each paint of one by the plain path (rows
     // copied to the window) or the general one (drawn as a picture is);
@@ -4149,7 +4205,7 @@ static struct {
 } s_cost;
 
 // The canvas whose drawing is being marked (canvas_damage_mark), for the
-// counts' biggest part; NULL for every other mark.
+// counts' biggest part; NULL for every other mark (s_marking_box beside it).
 static const os64_html_node_t *s_marking_canvas;
 // The readings the shown page's record keeps (`d`): numbered from 1 for
 // each page shown.
@@ -4271,6 +4327,8 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
         if (!s_change.kept) {
             s_change.n = 0;
             s_change.over = false;
+            s_change.biggest = -1;
+            s_change.biggest_node = NULL;
             s_change.wrote = kept.written > 0;
         }
     }
@@ -4335,7 +4393,7 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
 #define EFFECTS_MAX 32
 #define EFFECTS_DEPTH 32
 typedef struct {
-    char what[80];
+    char what[112];
     uint64_t n, cycles;
 } PaintEffect;
 static PaintEffect s_effects[EFFECTS_MAX];
@@ -4368,18 +4426,21 @@ static const flow_box_t *s_paint_check_box;
 static int32_t s_paint_check_groups = -1;
 
 // `--damage-check[=N]` (LAYOUT_NEEDS_N3.md § 4): every Nth script's rebuild
-// painted in parts (1 unless said), those that marked nothing included, is
-// followed, once its render has painted every part, by the whole view
-// painted the ordinary way and compared with what the window held, to the
-// pixel, the videos' boxes left
+// painted in parts or tick that is a frame (1 unless said; one count for
+// both), those that marked nothing included, is followed, once its render
+// has painted every part, by the whole view painted the ordinary way and
+// compared with what the window held, to the pixel, the videos' boxes left
 // out (a picture moves by itself) and the page's widgets (the toolkit
-// paints them over the view). A difference is a part the rebuild should
-// have marked, or one something else should have; the record says how many were compared, how many differed,
-// the first with where and what the rebuild had marked, and how many could
-// not be compared (damage_check). A rebuild that marked nothing marks one
-// pixel, so that there is a paint to check. The second paint is charged to
-// the render's, and anything it counts (effects, a video's paints) counts
-// twice.
+// paints them over the view). A difference is a part the rebuild or the
+// tick should have marked, or one something else should have; the record
+// says how many were compared, how many differed, the first with where and
+// what the rebuild or the tick had marked, and how many could not be
+// compared (damage_check). One that marked nothing marks one pixel, so
+// that there is a paint to check. A tick is checked apart from the next
+// rebuild because that rebuild's compare marks an animated box whose value
+// moved, which would hide a tick that marked too little. The second paint
+// is charged to the render's, and anything it counts (effects, a video's
+// paints) counts twice.
 static uint32_t s_damage_check, s_damage_counted;
 static bool s_damage_due;
 static uint64_t s_damage_compared, s_damage_differed, s_damage_uncompared;
@@ -4427,7 +4488,7 @@ static void effects_reset(void)
 
 static void effect_counted(const char *named, uint64_t spent)
 {
-    char over[80];
+    char over[128];
     const char *what = named;
     if (s_effects_past_video) {
         os64_snprintf(over, sizeof(over), "%s over the video", named);
@@ -4495,6 +4556,7 @@ static void cost_reset(void)
     s_cost.from_us = os64_micros();
     yonder_ticker_counts_restart(g.ticker);
     yonder_paint_cache_counts_restart(g.paint_cache);
+    yonder_canvas_keep_counts_restart(g.canvas_keeps);
     yonder_keeps_counts_restart(g.keeps);
     // W0's tables too: a page shown starts them again, as a reading does,
     // so no page's first reading carries the last one's elements.
@@ -9381,6 +9443,12 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (unsigned long)(kept.bytes / 1024), (unsigned long)kept.entries, (unsigned long)(kept.budget / 1024));
     else
         dt_put(t, "; no paint cache");
+    // What the canvases' smoothed draws kept, among those blocks (canvas_keep.h).
+    yonder_canvas_keep_counts_t canvases = yonder_canvas_keep_counts(g.canvas_keeps);
+    if (canvases.kept + canvases.found + canvases.dropped + canvases.refused > 0)
+        dt_put(t, "; canvas pictures: %lu blocks kept, %lu found, %lu dropped for a change, %lu draws not "
+               "kept for room or memory", (unsigned long)canvases.kept, (unsigned long)canvases.found,
+               (unsigned long)canvases.dropped, (unsigned long)canvases.refused);
     // What the turned groups' kept drawings saved (keep.h).
     yonder_keeps_counts_t keeps = yonder_keeps_counts(g.keeps);
     if (g.keeps != NULL)
@@ -9406,6 +9474,15 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (int)s_cost.mark_most.y, s_cost.mark_who, (int)s_cost.paint_most.w, (int)s_cost.paint_most.h);
     dt_put(t, "; %lu canvas marks, %lu form control marks", (unsigned long)s_cost.canvas_marks,
            (unsigned long)s_cost.control_marks);
+    if (s_cost.unseen_alpha0 + s_cost.unseen_culled + s_cost.unseen_offview > 0)
+        dt_put(t, "; canvases acknowledged unseen: %lu in a group at alpha 0, %lu culled, %lu out of view",
+               (unsigned long)s_cost.unseen_alpha0, (unsigned long)s_cost.unseen_culled,
+               (unsigned long)s_cost.unseen_offview);
+    for (int32_t i = 0; i < s_cost.nticked; i++)
+        dt_put(t, "%s%s %lu", i == 0 ? "; ticks that were frames changed " : ", ", s_cost.ticked[i].what,
+               (unsigned long)s_cost.ticked[i].n);
+    if (s_cost.ticked_rest > 0)
+        dt_put(t, ", others %lu", (unsigned long)s_cost.ticked_rest);
     if (s_cost.video_frames > 0)
         dt_put(t, "; videos: %lu frames asked (%lu us), %lu new pictures, painted %lu plain and %lu general "
                "(%lu us)",
@@ -10034,8 +10111,15 @@ static void mark_part(os64_gui_rect_t r)
     if (os64_rect_intersect(part.bounds, v, &in) &&
         (uint64_t)in.w * (uint64_t)in.h > (uint64_t)s_cost.mark_most.w * (uint64_t)s_cost.mark_most.h) {
         s_cost.mark_most = (os64_gui_rect_t){in.x - v.x + g.sx, in.y - v.y + g.sy, in.w, in.h};
+        const os64_html_node_t *ticked = box_element(s_marking_box);
         if (s_marking_canvas != NULL)
             element_named(s_cost.mark_who, sizeof(s_cost.mark_who), "the canvas ", s_marking_canvas);
+        else if (ticked != NULL)
+            element_named(s_cost.mark_who, sizeof(s_cost.mark_who), "an animation of ", ticked);
+        else if (s_video_marking)
+            os64_strcopy(s_cost.mark_who, sizeof(s_cost.mark_who), "a video's new picture");
+        else if (s_marking_named != NULL && s_marking_named[0] != '\0')
+            os64_snprintf(s_cost.mark_who, sizeof(s_cost.mark_who), "a change to %s", s_marking_named);
         else
             os64_strcopy(s_cost.mark_who, sizeof(s_cost.mark_who), "the page");
     }
@@ -10705,17 +10789,25 @@ static void pictures_tick(void)
 // so its mark is the whole view, said as the backdrop's (WHOLE_BACKDROP);
 // which box that is is the painter's to say from the styles a tick
 // changes — the root's background may be what moves — so it is asked at
-// each mark, of the styles before the tick and after it.
+// each mark, of the styles before the tick and after it. `s_tick_marks`
+// counts the marks it made, for the damage check's line.
+static uint32_t s_tick_marks;
+
 static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 {
     const os64_gui_rect_t *view = ctx;
     const yonder_verbs_t asking = {.backdrop = glass_backdrop};
     os64_gui_rect_t meet;
     s_tick_marking = true;
-    if (box == yonder_canvas_owner(g.page.tree, &asking))
+    if (box == yonder_canvas_owner(g.page.tree, &asking)) {
         mark_whole(WHOLE_BACKDROP, false);
-    else if (os64_rect_intersect(r, *view, &meet))
+        s_tick_marks++;
+    } else if (os64_rect_intersect(r, *view, &meet)) {
+        s_marking_box = box;
         mark_part(meet);
+        s_marking_box = NULL;
+        s_tick_marks++;
+    }
     s_tick_marking = false;
 }
 
@@ -10729,6 +10821,75 @@ static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 // layouts stopped by what they cost, the ticks stop too, said where they
 // failed (say_failed).
 static void tick_page_run(uint64_t now, bool frame);
+
+// The elements a tick changed, named for the record (flow_motion_ticked):
+// the one being named (its node and pseudo-element), its words so far and
+// whether its longhands' list has begun, how many elements were named,
+// and the first one's whole, which names the biggest part when the tick
+// changed that element alone (tick_page_run).
+typedef struct {
+    const os64_html_node_t *node;
+    uint8_t pseudo;
+    char what[96];
+    size_t at;
+    bool listing;
+    int32_t elements;
+    char first[96];
+} TickNaming;
+
+// The element being named made whole — "canvas#g.glow (opacity)" — and
+// counted once for this tick in the reading's tally (s_cost.ticked).
+static void tick_named_done(TickNaming *k)
+{
+    if (k->node == NULL)
+        return;
+    if (k->at + 1 < sizeof(k->what))
+        os64_strcopy(k->what + k->at, sizeof(k->what) - k->at, ")");
+    if (k->elements++ == 0)
+        os64_strcopy(k->first, sizeof(k->first), k->what);
+    int32_t i = 0;
+    for (; i < s_cost.nticked && !os64_streq(s_cost.ticked[i].what, k->what); i++) {}
+    if (i == s_cost.nticked) {
+        if (i == TICKED_MAX) {
+            s_cost.ticked_rest++;
+            k->node = NULL;
+            return;
+        }
+        os64_strcopy(s_cost.ticked[i].what, sizeof(s_cost.ticked[i].what), k->what);
+        s_cost.ticked[i].n = 0;
+        s_cost.nticked++;
+    }
+    s_cost.ticked[i].n++;
+    k->node = NULL;
+}
+
+// One longhand an element the tick changed animates (flow_motion_ticked
+// hands an element's together), a pseudo-element named apart from its
+// element ("div.x::before").
+static void tick_named(void *ctx, const os64_html_node_t *node, uint8_t pseudo, int32_t prop)
+{
+    TickNaming *k = ctx;
+    if (node != k->node || pseudo != k->pseudo) {
+        tick_named_done(k);
+        k->node = node;
+        k->pseudo = pseudo;
+        k->at = element_named(k->what, sizeof(k->what), "", node);
+        if (pseudo != GARB_PSEUDO_NONE && k->at + 1 < sizeof(k->what))
+            k->at += (size_t)os64_snprintf(k->what + k->at, sizeof(k->what) - k->at, "%s",
+                                           pseudo == GARB_PSEUDO_BEFORE  ? "::before"
+                                           : pseudo == GARB_PSEUDO_AFTER ? "::after"
+                                                                         : "::pseudo");
+        if (k->at >= sizeof(k->what))
+            k->at = sizeof(k->what) - 1;
+        k->listing = false;
+    }
+    if (k->at + 1 < sizeof(k->what))
+        k->at += (size_t)os64_snprintf(k->what + k->at, sizeof(k->what) - k->at, "%s%s",
+                                       k->listing ? ", " : " (", garb_prop_name((garb_prop_t)prop));
+    k->listing = true;
+    if (k->at >= sizeof(k->what))
+        k->at = sizeof(k->what) - 1;
+}
 
 static void tick_page(uint64_t now, bool frame)
 {
@@ -10744,6 +10905,8 @@ static void tick_page_run(uint64_t now, bool frame)
     os64_gui_rect_t v = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
     int64_t began_us = os64_micros();
     bool moved = false;
+    const os64_gui_rect_t most_was = s_cost.mark_most;
+    s_tick_marks = 0;
     if (!flow_motion_tick(g.page.tree, now, scroll_now(), frame ? tick_mark : NULL, &v, &moved)) {
         if (motion_cost_us() > (uint64_t)MOTION_COST_MS * 1000) {
             g.ticked = true;
@@ -10767,6 +10930,27 @@ static void tick_page_run(uint64_t now, bool frame)
         g.tick_painting = true;
         g.tick_began = now;
         g.tick_began_us = began_us;
+        // The record names what the tick changed, not the box that marked
+        // it, which in a filtered group is the group's: when one element
+        // changed, the biggest part this tick marked was its. With more,
+        // the part is named by the box that marked it (tick_mark).
+        TickNaming k = {0};
+        flow_motion_ticked(g.page.tree, tick_named, &k);
+        tick_named_done(&k);
+        if (k.elements == 1 && os64_memcmp(&most_was, &s_cost.mark_most, sizeof(most_was)) != 0)
+            os64_snprintf(s_cost.mark_who, sizeof(s_cost.mark_who), "an animation of %s", k.first);
+        // A check due for the tick, with what it marked for the record's
+        // line (s_damage_check).
+        if (s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {
+            s_damage_due = true;
+            if (s_tick_marks == 0) {
+                os64_strcopy(s_damage_after, sizeof(s_damage_after), "a tick that marked nothing");
+                mark_part((os64_gui_rect_t){g.sx, g.sy, 1, 1});
+            } else {
+                os64_snprintf(s_damage_after, sizeof(s_damage_after), "a tick that marked %u parts",
+                              (unsigned)s_tick_marks);
+            }
+        }
     }
 }
 
@@ -10940,10 +11124,13 @@ static void glass_paint(void)
     s_parts_reach = (os64_gui_rect_t){0, 0, 0, 0};
     // One paint of the kept drawings for every part the view paints in it
     // (keep.h): a group asked about in two parts of one paint is not
-    // asked about twice.
+    // asked about twice. One paint of the kept canvas pictures too
+    // (canvas_keep.h): a canvas drawn in two parts of its first paint at a
+    // revision keeps nothing yet.
     if (g.keeps == NULL)
         g.keeps = yonder_keeps_new(KEEPS_BUDGET);
     yonder_keeps_paint(g.keeps, flow_tree_serial(g.page.tree));
+    yonder_canvas_keeps_paint(g.canvas_keeps);
     cost_begin(PS_RENDER);
     uint32_t count = os64_ui_render_list(&g.ui, damage);
     if (count > 0)
@@ -12467,12 +12654,130 @@ static void sheets_restage(Page *p)
 static void canvas_damage_part(Page *p,const flow_box_t *box,uint32_t width,uint32_t height,
                                const draw2d_damage_t *damage);
 
+// Why a canvas cannot show, whatever its bitmap holds (canvas_unseen):
+// it can, it or an ancestor is culled as transparent (`unpainted`), a
+// group around it is laid at alpha 0 (yonder_group_alpha), or, with no
+// group round it drawn through its matrix, all it can paint lies outside
+// the view (canvas_reach).
+typedef enum { CANVAS_SEEN = 0, CANVAS_CULLED, CANVAS_ALPHA0, CANVAS_OUT_OF_VIEW } CanvasUnseen;
+
+// Where a canvas's bitmap can show, in page coordinates at `scroll`: its
+// content box (the bitmap is drawn inside it, whatever object-fit says)
+// taken out through every matrix round it, grown on every side by each
+// filter round it — its own included — at the reach that filter paints to
+// (flow_filter_reach) and the farther a reduced blur reads
+// (yonder_filter_reads_more), each in page pixels: that reach as a square
+// in the filtered box's own coordinates, taken out through its matrices.
+// What clips it is left out, so the answer is never too small — but only
+// where every matrix is one the face lays through: one it refuses (too
+// large a sheet, too deep, no memory) is drawn upright instead, elsewhere
+// (flow_box_through's `upright`), so a canvas inside a group drawn through
+// its matrix is never asked of here (canvas_unseen).
+static os64_gui_rect_t canvas_reach(const flow_box_t *box, flow_point_t scroll)
+{
+    os64_gui_rect_t r = flow_box_doc_rect_of(box, yonder_content_rect(box), scroll);
+    int64_t grow = 0;
+    for (const flow_box_t *b = box; b != NULL; b = b->parent) {
+        if (b->style->nfilter == 0)
+            continue;
+        int32_t reach[4];
+        flow_filter_reach(b, reach);
+        int32_t most = reach[0];
+        for (int k = 1; k < 4; k++)
+            most = reach[k] > most ? reach[k] : most;
+        most += yonder_filter_reads_more(b->style->filter, b->style->nfilter);
+        if (most <= 0)
+            continue;
+        os64_gui_rect_t square = flow_box_doc_rect_of(b, (os64_gui_rect_t){0, 0, most, most}, scroll);
+        grow += square.w > square.h ? square.w : square.h;
+    }
+    if (grow > INT32_MAX / 4)
+        grow = INT32_MAX / 4;
+    // Each edge grown and held to 32 bits on its own, so holding one never
+    // moves the other.
+    int64_t x0 = (int64_t)r.x - grow, y0 = (int64_t)r.y - grow;
+    int64_t x1 = (int64_t)r.x + r.w + grow, y1 = (int64_t)r.y + r.h + grow;
+    x0 = x0 < INT32_MIN ? INT32_MIN : x0, y0 = y0 < INT32_MIN ? INT32_MIN : y0;
+    x1 = x1 > INT32_MAX ? INT32_MAX : x1, y1 = y1 > INT32_MAX ? INT32_MAX : y1;
+    int64_t w = x1 - x0, h = y1 - y0;
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(w > INT32_MAX ? INT32_MAX : w),
+                             (int32_t)(h > INT32_MAX ? INT32_MAX : h)};
+}
+
+// Why the shown page's canvas `box` cannot show (CanvasUnseen); a page not
+// shown is asked only of its styles.
+static CanvasUnseen canvas_unseen(const Page *p, const flow_box_t *box)
+{
+    for (const flow_box_t *b = box; b != NULL; b = b->parent)
+        if (b->unpainted)
+            return CANVAS_CULLED;
+    for (const flow_box_t *b = box; b != NULL; b = b->parent)
+        if (b->style->opacity < 1000 && yonder_group_alpha(b) == 0)
+            return CANVAS_ALPHA0;
+    // Out of view only where nothing round it may be drawn elsewhere than
+    // its matrix says (canvas_reach).
+    bool through = false;
+    for (const flow_box_t *b = box; b != NULL && !through; b = b->parent)
+        through = flow_box_through(b, scroll_now(), (double[6]){0}, NULL, NULL);
+    if (p == &g.page && !through) {
+        os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}, meet;
+        if (view.w > 0 && view.h > 0 && !os64_rect_intersect(canvas_reach(box, scroll_now()), view, &meet))
+            return CANVAS_OUT_OF_VIEW;
+    }
+    return CANVAS_SEEN;
+}
+
+// The canvases a damage visit found unseen (canvas_damage_mark), to be
+// acknowledged once the visit has returned (canvases_unseen_acknowledge):
+// a visit may not touch a canvas. The list grows as it must; one it has
+// no memory to hold is marked as any canvas is, which nothing may draw
+// and so acknowledge, but no canvas is lost for want of room alone.
+typedef struct {
+    const os64_html_node_t *node;
+    CanvasUnseen why;
+} UnseenCanvas;
+static UnseenCanvas *s_unseen_canvases;
+static int32_t s_nunseen_canvases, s_unseen_cap;
+
+static bool unseen_canvas_keep(const os64_html_node_t *node, CanvasUnseen why)
+{
+    if (s_nunseen_canvases == s_unseen_cap) {
+        int32_t cap = s_unseen_cap == 0 ? 16 : s_unseen_cap < (1 << 20) ? s_unseen_cap * 2 : 0;
+        UnseenCanvas *more = cap > 0 ? os64_realloc(s_unseen_canvases, (size_t)cap * sizeof(*more)) : NULL;
+        if (more == NULL)
+            return false;
+        s_unseen_canvases = more;
+        s_unseen_cap = cap;
+    }
+    s_unseen_canvases[s_nunseen_canvases++] = (UnseenCanvas){node, why};
+    return true;
+}
+
 static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_t width,uint32_t height,
                                const draw2d_damage_t *damage)
 {
     Page *p=opaque;
     const flow_box_t *box=p->tree?flow_box_for(p->tree,node):NULL;
     if(!box || !box->replaced || box->style->visibility!=FLOW_VISIBLE)return;
+    // A canvas that cannot show marks nothing: its damage is acknowledged
+    // instead, as a covered paint acknowledges one it culled. That is
+    // exact because every way it can show again marks where it shows, its
+    // bitmap as it is then: its group's opacity ticked from 0 (the tick
+    // marks the group's bounds, tick_marks) or written (the group's own
+    // change, its whole bounds), a new tree in which the group is no
+    // longer at 0 or no longer a group, or no longer transparent (the
+    // trees' compare marks it by its style), and an enclosing group
+    // leaving 0 (which marks that group's bounds, this one inside); and,
+    // for one whose reach lies wholly outside the view (canvas_reach),
+    // whatever brings any of it in paints that area: a scroll paints what
+    // it exposes, and a move, a matrix's tick or a resize marks where the
+    // box lands. A canvas partly in view is marked as ever, and only the
+    // paint that draws it acknowledges it. Left pending, it would be
+    // visited again after every script task, and under a group its mark is
+    // the whole view (canvas_damage_part).
+    CanvasUnseen why=canvas_unseen(p,box);
+    if(why!=CANVAS_SEEN && unseen_canvas_keep(node,why))
+        return;
     s_cost.canvas_marks++;
     // The shown page's, which a covered paint acknowledges (canvases_acknowledge).
     if(p==&g.page){
@@ -12482,6 +12787,22 @@ static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_
     s_marking_canvas=node;
     canvas_damage_part(p,box,width,height,damage);
     s_marking_canvas=NULL;
+}
+
+// The canvases the damage visit just found unseen, each looked up (which
+// applies a pending reset) and acknowledged, no script between, and
+// counted by why.
+static void canvases_unseen_acknowledge(Page *p)
+{
+    for(int32_t i=0;i<s_nunseen_canvases;i++){
+        canvas_bitmap_t bitmap;
+        if(!yonder_scripts_canvas_bitmap(p->scripts,s_unseen_canvases[i].node,&bitmap))continue;
+        yonder_scripts_canvas_painted(p->scripts,s_unseen_canvases[i].node);
+        if(s_unseen_canvases[i].why==CANVAS_ALPHA0)s_cost.unseen_alpha0++;
+        else if(s_unseen_canvases[i].why==CANVAS_OUT_OF_VIEW)s_cost.unseen_offview++;
+        else s_cost.unseen_culled++;
+    }
+    s_nunseen_canvases=0;
 }
 
 // canvas_damage_mark's part: the canvas's changed texels where the
@@ -12928,9 +13249,13 @@ static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
     // the toolkit's list of rectangles becomes one round all of them past
     // its room (OS64_UI_DAMAGE_MAX), and so many parts so far apart save
     // little over the whole.
-    if (why == NULL && (int64_t)reach.w * reach.h * 2 > (int64_t)s_change.view.w * s_change.view.h)
+    if (why == NULL && (int64_t)reach.w * reach.h * 2 > (int64_t)s_change.view.w * s_change.view.h) {
         why = "parts past half the view";
-    s_change.named[0] = '\0';
+        at = s_change.biggest_node;     // what marked the biggest of them
+    }
+    s_change.named[0] = s_change.biggest_named[0] = '\0';
+    if (s_change.biggest_node != NULL)
+        element_named(s_change.biggest_named, sizeof(s_change.biggest_named), "", s_change.biggest_node);
     if (s_layout_profile && layout_profile_diag(p) != NULL) {
         if (at != NULL && at->kind != OS64_HTML_ELEMENT)
             at = os64_html_flat_parent(page_doc(p), at);
@@ -13015,7 +13340,8 @@ static bool script_rebuild(void)
         // restyle kept in the shown tree hands its parts during the layout,
         // and the two trees are compared once it is made.
         os64_html_reader_free(s_change.reader);
-        s_change = (__typeof__(s_change)){.armed = true, .view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}};
+        s_change = (__typeof__(s_change)){.armed = true, .view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h},
+                                         .biggest = -1};
         s_change.reader = os64_html_reader_new((os64_html_document_t *)page_doc(p), p->rendered_version);
         s_change.cascade = p->cascade;
         s_change.cascade_generation = p->cascade != NULL ? garb_cascade_generation(p->cascade) : 0;
@@ -13087,8 +13413,11 @@ static bool script_rebuild(void)
         if (whole != NULL)
             mark_whole(WHOLE_SCRIPT, false);
         else
-            for (int32_t i = 0; i < s_change.n; i++)
+            for (int32_t i = 0; i < s_change.n; i++) {
+                s_marking_named = i == s_change.biggest ? s_change.biggest_named : NULL;
                 mark_part(s_change.part[i]);
+                s_marking_named = NULL;
+            }
         // A check due for a rebuild painted in parts, with what it marked
         // for the record's line.
         if (whole == NULL && s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {
@@ -13119,7 +13448,9 @@ static bool script_rebuild(void)
     forms_pull_selections();
     // Pixel-only changes reuse layout. Plain canvases invalidate mapped pixel
     // damage; resets and effects retain the conservative viewport fallback.
+    s_nunseen_canvases=0;
     yonder_scripts_canvas_visit_damage(p->scripts,canvas_damage_mark,p);
+    canvases_unseen_acknowledge(p);
     return true;
 }
 
@@ -18756,8 +19087,9 @@ static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
         os64_gui_rect_t walked;
         if (os64_rect_intersect(cut, box, &walked) && s_canvas_last.targets++ == 0)
             s_canvas_last.drawn = walked;
-        consumed &= yonder_draw_surface(gl->surf->pixels, gl->surf->pitch_px, cut, box,
-                                        !b->style->pixelated, &source);
+        consumed &= yonder_canvas_keep_draw(g.canvas_keeps, g.paint_cache, b->node, bitmap.revision,
+                                            gl->surf->pixels, gl->surf->pitch_px, cut, box,
+                                            !b->style->pixelated, &source);
     }
     if (consumed) yonder_scripts_canvas_painted(g.page.scripts, b->node);
 }
@@ -19424,15 +19756,20 @@ static void timed_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64
     else if (!video)
         s_drawn_canvases_lost = true;
     uint64_t spent = cycles_since(began);
-    char what[80];
+    char what[112];
     if (video) {
         os64_snprintf(what, sizeof(what), "video %dx%d", (int)c.w, (int)c.h);
         effect_counted(what, spent);
     } else {
         // In two rows: asking the script side for the bitmap, whose cost
         // the cut cannot follow, and the draw, which walks only the cut.
+        // Which canvas, by its element (cut short), so two drawn over one
+        // box are two rows.
         uint64_t got = s_canvas_last.got_cycles < spent ? s_canvas_last.got_cycles : spent;
-        os64_snprintf(what, sizeof(what), "canvas %dx%d of %ux%u %s drawn %dx%d on %d", (int)c.w, (int)c.h,
+        char name[32] = "canvas";
+        if (b->node != NULL)
+            element_named(name, sizeof(name), "", b->node);
+        os64_snprintf(what, sizeof(what), "%s %dx%d of %ux%u %s drawn %dx%d on %d", name, (int)c.w, (int)c.h,
                       (unsigned)s_canvas_last.bitmap_w, (unsigned)s_canvas_last.bitmap_h,
                       s_canvas_last.smoothed ? "smoothed" : "copied", (int)s_canvas_last.drawn.w,
                       (int)s_canvas_last.drawn.h, (int)s_canvas_last.targets);
@@ -19950,6 +20287,8 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
             mem.total = 0;
         g.paint_cache = yonder_paint_cache_new(yonder_paint_cache_budget(sw, sh, mem.total));
     }
+    if (g.canvas_keeps == NULL)
+        g.canvas_keeps = yonder_canvas_keeps_new();
     if (g.paint_scratch == NULL)
         g.paint_scratch = yonder_scratch_new();
     os64_gui_rect_t whole = {w->bounds.x - gl.dx, w->bounds.y - gl.dy, w->bounds.w, w->bounds.h};
@@ -22816,6 +23155,8 @@ int main(int argc, char **argv)
     // After the departure write (page_clear), which reads its counts.
     yonder_paint_cache_free(g.paint_cache);
     g.paint_cache = NULL;
+    yonder_canvas_keeps_free(g.canvas_keeps);
+    g.canvas_keeps = NULL;
     yonder_scratch_free(g.paint_scratch);
     g.paint_scratch = NULL;
     yonder_keeps_free(g.keeps);

@@ -528,13 +528,29 @@ static void update_has(void)
                  !garb_style_updated_since(h.c,has_el(&h,"two"),was),
                  "var() and style-attribute ancestors: neither they nor their other children are restyled");
     has_close(&h);
-    /* A turn that restyles more than half the elements asks for a fresh
-     * cascade, says why, and the fresh one is right. */
+    /* A turn that changes a custom property every element under it reads
+     * recomputes them (THE RECOMPUTE): no matching, nothing counted toward
+     * the half, so no fresh cascade, and each one's winner changed. */
     {
         char html[8192]="<!doctype html><div id=a class=a>";
         for(int i=0;i<260;++i) strcat(html,"<p>x</p>");
         strcat(html,"<i id=i></i></div>");
         has_open(&h,".a:has(.b){--ink:red}p{color:var(--ink)}",html);
+        os64_html_set_attr(h.doc,has_el(&h,"i"),"class","b",1);
+        bool ok=garb_cascade_update(h.c);
+        garb_update_marks_t mk=garb_cascade_update_marks(h.c);
+        update_check(ok && mk.recomputed==260 && mk.recompute_changed==260 && mk.marked<=2 && mk.inherited==0,
+                     "a custom property a :has() turn changed is recomputed below it, no fresh cascade");
+        update_equal(h.c,h.doc,&h.in);
+        has_close(&h);
+    }
+    /* A turn whose marks pass half the elements asks for a fresh cascade,
+     * says why, and the fresh one is right. */
+    {
+        char html[8192]="<!doctype html><div id=a class=a>";
+        for(int i=0;i<260;++i) strcat(html,"<p>x</p>");
+        strcat(html,"<i id=i></i></div>");
+        has_open(&h,".a:has(.b) p{color:red}",html);
         os64_html_set_attr(h.doc,has_el(&h,"i"),"class","b",1);
         update_check(!garb_cascade_update(h.c) && garb_cascade_update_refusal(h.c)==GARB_UPDATE_BROAD,
                      "a broad :has() turn asks for a fresh cascade, and says it was broad");
@@ -550,7 +566,7 @@ static void update_has(void)
         char html[8192]="<!doctype html><div id=a class=a>";
         for(int i=0;i<260;++i) strcat(html,"<p>x</p>");
         strcat(html,"<i id=i></i></div><b id=b></b>");
-        const char *css=".a:has(.b){--ink:red}p{color:var(--ink)}";
+        const char *css=".a:has(.b) p{color:red}";
         garb_cascade_limits_t limits={GARB_ARENA_MAX,GARB_CASCADE_READ_MAX,GARB_ARENA_MAX,SIZE_MAX,measure_clock,NULL,false};
         for(int clocked=1;clocked>=0;--clocked){
             HasCase m={0};
@@ -562,7 +578,7 @@ static void update_has(void)
             garb_build_cost_t k=garb_cascade_build_cost(m.c);
             garb_broad_trigger_t t;
             if(clocked)
-                update_check(k.rules==2 && k.elements>=263 && k.sheets>0 && k.table>0 && k.matching>0,
+                update_check(k.rules==1 && k.elements>=263 && k.sheets>0 && k.table>0 && k.matching>0,
                              "measure: a clocked build says its parts, its rules and its elements");
             else
                 update_check(k.rules==0 && k.elements==0 && k.sheets==0 && k.matching==0,
@@ -574,16 +590,14 @@ static void update_has(void)
             bool refused=!garb_cascade_update(m.c) && garb_cascade_update_refusal(m.c)==GARB_UPDATE_BROAD;
             bool named=garb_cascade_broad_trigger(m.c,&t);
             if(clocked)
-                // The :has() turned at #a: #a is restyled alone, its --ink
-                // comes out different, and passes down to its children,
-                // more than half the page; the batch's change that began
-                // it is the class at i#i.
+                // The :has() turned at #a, anchored: what it reaches, its
+                // descendants, more than half the page; the batch's change
+                // that began it is the class at i#i.
                 update_check(refused && named && t.kind==OS64_HTML_CHANGE_ATTR && !strcmp(t.attr,"class") &&
                              !strcmp(t.target,"i#i.b") && t.depth==4 && t.marked>0 &&
                              t.by[GARB_MARK_CLASS]+t.by[GARB_MARK_HAS]==t.marked && t.changes==1 &&
-                             t.marked_changes==1 && t.restyled && !strcmp(t.restyled_from,"div#a.a") &&
-                             t.restyled_depth==3 && t.dirty>t.slots/2 && t.restyled_marked+t.marked==t.dirty,
-                             "measure: a broad refusal names its change, what passed its style down, and the marks");
+                             t.marked_changes==1 && t.dirty>t.slots/2,
+                             "measure: a broad refusal names its change and the marks");
             else
                 update_check(refused && !named,"measure: a broad refusal with no clock names nothing");
             // The trigger is the latest update's alone: the next ask, refused
@@ -1099,8 +1113,8 @@ static void update_back_index(void)
 // What an update restyled (garb_cascade_update_marks): the change marks
 // the <b> it added and, alone, the div its :has() climb visits (body and
 // html are turned away: the subject compound is filtered by `div`); the
-// div's winners change, and restyling marks the two spans below it, which
-// the change did not.
+// div's winners change and its custom properties do not, so nothing below
+// it is marked or recomputed.
 static void update_marks_counted(void)
 {
     size_t baseline=live;
@@ -1117,9 +1131,12 @@ static void update_marks_counted(void)
     bool ok=garb_cascade_update(c);
     garb_update_marks_t m=garb_cascade_update_marks(c);
     update_check(none.marked==0 && none.inherited==0,"marks: zeros before any update");
-    update_check(ok && m.marked==2 && m.inherited==2,"marks: the change's two and the two below a changed winner");
-    update_check(m.by[GARB_MARK_ADDED]==1 && m.by[GARB_MARK_HAS]==1 && m.by[GARB_MARK_INHERITED]==2,
-                 "marks: by kind, one added, one by the :has() climb, two inherited");
+    // The div's winners changed and its custom properties did not: nothing
+    // under it is marked or recomputed (libflow carries what inherits).
+    update_check(ok && m.marked==2 && m.inherited==0 && m.recomputed==0,
+                 "marks: the change's two, and nothing below a changed winner whose map held");
+    update_check(m.by[GARB_MARK_ADDED]==1 && m.by[GARB_MARK_HAS]==1 && m.by[GARB_MARK_INHERITED]==0,
+                 "marks: by kind, one added, one by the :has() climb, none inherited");
     update_equal(c,doc,&in);
     // A class write on the div no rule reads marks the div alone, under its
     // own kind.
@@ -1305,11 +1322,14 @@ static os64_html_node_t *rd_el(os64_html_document_t *doc, const char *tag, const
 static os64_html_node_t *rd_id(RdCase *r, const char *id) { return (os64_html_node_t *)by_id(r->doc->document,id); }
 static void rd_begin(RdCase *r, const char *css, const char *body)
 {
-    char html[4096]="<!doctype html><aside>";
+    size_t cap=strlen(body)+512;
+    char *html=malloc(cap);
+    strcpy(html,"<!doctype html><aside>");
     for(int i=0;i<30;++i) strcat(html,"<i></i>");
     strcat(html,"</aside>");
     strcat(html,body);
     r->doc=update_doc(html);
+    free(html);
     garb_parse_sheet_text(css,strlen(css),&r->sheet);
     r->in=(garb_sheet_in_t){.sheet=&r->sheet};
     r->c=garb_cascade(&r->in,1,r->doc,(garb_env_t){.width=800,.height=600});
@@ -1536,6 +1556,198 @@ static void update_readers(void)
 // left out; each case's marks counted exactly and its winners equal to a
 // fresh cascade's.
 #define AT_TREE "<div class=c id=top><div><div><div id=bar><div id=strip></div><p id=after></p></div></div></div></div>"
+// THE RECOMPUTE (L4 part 2): what an element's changed custom property map
+// owes what is under it. Each case is compared with a fresh cascade
+// (rd_end); `recomputed` and `pruned` are the update's counts.
+static void rc_case(const char *css, const char *body, const char *id, const char *style, const char *what,
+                    int recomputed, int pruned, const char *yes)
+{
+    RdCase r;
+    rd_begin(&r,css,body);
+    os64_html_set_attr(r.doc,rd_id(&r,id),"style",style,strlen(style));
+    bool ok=garb_cascade_update(r.c);
+    garb_update_marks_t m=garb_cascade_update_marks(r.c);
+    char said[200];
+    snprintf(said,sizeof(said),"recompute: %s (recomputed %llu, pruned %llu, marked %llu)",what,
+             (unsigned long long)m.recomputed,(unsigned long long)m.recompute_pruned,(unsigned long long)m.marked);
+    bool good=ok && (recomputed<0 || (int)m.recomputed==recomputed) && (pruned<0 || (int)m.recompute_pruned==pruned);
+    if(yes) {
+        os64_html_node_t *x=rd_id(&r,yes);
+        good=good && x && garb_style_updated_since(r.c,x,r.prior);
+    }
+    update_check(good,said);
+    update_equal(r.c,r.doc,&r.in);
+    garb_cascade_free(r.c);garb_free(&r.sheet);os64_html_document_free(r.doc);
+}
+// Two updates in turn: `id1` gets `name1="v1"`, then `id2` `name2="v2"`;
+// each compared with a fresh cascade.
+static void rc_twice(const char *css, const char *body, const char *id1, const char *name1, const char *v1,
+                     const char *id2, const char *name2, const char *v2, const char *what)
+{
+    // A page large enough that two style writes stay inside the cascade's
+    // retained budget (one initial state's worth).
+    static char padded[16384], sheet[1024];
+    snprintf(padded,sizeof(padded),"%s",body);
+    for(int i=0;i<300;i++) strncat(padded,"<b class=pad></b>",sizeof(padded)-strlen(padded)-1);
+    snprintf(sheet,sizeof(sheet),"%s .pad{margin-left:var(--q,1px)}",css);
+    RdCase r;
+    rd_begin(&r,sheet,padded);
+    os64_html_set_attr(r.doc,rd_id(&r,id1),name1,v1,strlen(v1));
+    bool ok=garb_cascade_update(r.c);
+    update_equal(r.c,r.doc,&r.in);
+    os64_html_set_attr(r.doc,rd_id(&r,id2),name2,v2,strlen(v2));
+    ok=ok && garb_cascade_update(r.c);
+    char said[200];snprintf(said,sizeof(said),"recompute: %s",what);
+    if(!ok) fprintf(stderr,"  %s: refused %s\n",what,garb_update_refusal_name(garb_cascade_update_refusal(r.c)));
+    update_check(ok,said);
+    update_equal(r.c,r.doc,&r.in);
+    garb_cascade_free(r.c);garb_free(&r.sheet);os64_html_document_free(r.doc);
+}
+// Whether `el`'s keyframes for `name` are the same in two cascades, value
+// for value (update_equal compares winners only).
+static bool rc_frames_same(const garb_cascade_t *a, const garb_cascade_t *b, const os64_html_node_t *el,
+                           const char *name)
+{
+    const garb_keyframe_t *x=NULL,*y=NULL;
+    int32_t nx=garb_keyframes(a,el,name,strlen(name),&x), ny=garb_keyframes(b,el,name,strlen(name),&y);
+    if(nx!=ny) return false;
+    for(int32_t i=0;i<nx;i++) {
+        if(x[i].nsets!=y[i].nsets || x[i].offset!=y[i].offset) return false;
+        for(int32_t k=0;k<x[i].nsets;k++) {
+            char u[128],v[128];
+            garb_val_dump(&x[i].sets[k].value,u,sizeof(u));garb_val_dump(&y[i].sets[k].value,v,sizeof(v));
+            if(x[i].sets[k].prop!=y[i].sets[k].prop || strcmp(u,v)) return false;
+        }
+    }
+    return true;
+}
+static void rc_frames(const char *css, const char *body, const char *id, const char *name, const char *value,
+                      const char *el, const char *what)
+{
+    RdCase r;
+    rd_begin(&r,css,body);
+    os64_html_set_attr(r.doc,rd_id(&r,id),name,value,strlen(value));
+    bool ok=garb_cascade_update(r.c);
+    garb_cascade_t *fresh=garb_cascade(&r.in,1,r.doc,(garb_env_t){.width=800,.height=600});
+    char said[200];snprintf(said,sizeof(said),"recompute: %s",what);
+    update_check(ok && fresh && rc_frames_same(r.c,fresh,rd_id(&r,el),"k"),said);
+    garb_cascade_free(fresh);
+    update_equal(r.c,r.doc,&r.in);
+    garb_cascade_free(r.c);garb_free(&r.sheet);os64_html_document_free(r.doc);
+}
+static void update_recompute_cases(void)
+{
+    // The same-winners path keeps the old record for its winners and the
+    // fresh one's derivation: a later recompute derives from the
+    // declarations the element has now, not those it had (a var() winner, a
+    // custom property's declaration, a pseudo-element's var()).
+    rc_twice("div{}","<div id=g style='--a:red;--b:red'><p id=x style='color:var(--a)'></p></div>",
+             "x","style","color:var(--b)","g","style","--a:blue;--b:red",
+             "a var() winner switched to an equal one is recomputed from the new");
+    rc_twice("#o{outline-color:var(--v)} p{color:var(--v)}",
+             "<div id=g style='--a:red;--b:red'><div id=o style='--v:var(--a)'><p id=x></p></div></div>",
+             "o","style","--v:var(--b)","g","style","--a:blue;--b:red",
+             "a custom property switched to an equal one is made again from the new");
+    rc_twice("p::before{content:'x';color:red} p.on::before{color:var(--c)}",
+             "<div id=g style='--c:red'><p id=x></p></div>","x","class","on","g","style","--c:blue",
+             "a pseudo-element's var() won with equal winners is recomputed whole");
+    // Keyframes: a recompute that changes animation-name builds them
+    // (whole); a changed animation-name reaches `animation-name: inherit`.
+    rc_frames("@keyframes k{to{color:var(--c)}} p{animation-name:var(--n)}",
+              "<div id=g style='--n:none;--c:red'><p id=x></p></div>","g","style","--n:k;--c:red","x",
+              "an animation-name a recompute changed builds its keyframes");
+    rc_frames("@keyframes k{to{color:var(--c)}} .d:has(.t){animation-name:k} p{animation-name:inherit}",
+              "<div class=d style='--c:red'><span id=t></span><p id=x></p></div>","t","class","t","x",
+              "a changed animation-name reaches what inherits it");
+    // A custom property written on a container, read by var() three levels
+    // down: each level recomputed, the reader's winner changed.
+    rc_case("p{margin-left:var(--x,1px)}","<div id=c><div><span><p id=x></p></span></div></div>","c","--x:7px",
+            "a --x write reaches a reader three levels down",3,0,"x");
+    // A chain made from another (--w: var(--v)) under a container that set
+    // --w itself: the value the reader takes is the new chain's.
+    rc_case(".top{--w:calc(52px)} section{margin:var(--w,16px)}",
+            "<div class=top><div id=d><span><p><section id=x></section></p></span></div></div>","d",
+            "--v:3;--w:var(--v)","a chained write under a container that set the name",-1,0,"x");
+    // An element between that declares the name itself: the PRUNE stops
+    // there, and the reader under it keeps its record.
+    rc_case(".r{--x:2px} p{margin-left:var(--x,1px)}","<div id=c><div class=r><span><p id=x></p></span></div></div>",
+            "c","--x:7px","an element declaring the name itself prunes what is under it",1,1,NULL);
+    // A write of an equal custom property beside another change: the map is
+    // the same by value, so nothing under it is recomputed.
+    {
+        RdCase r;
+        rd_begin(&r,"p{margin-left:var(--x,1px)}",
+                 "<div id=c style='--x:3px;color:red'><div><p id=x></p></div></div>");
+        os64_html_set_attr(r.doc,rd_id(&r,"c"),"style","--x:3px;color:blue",18);
+        bool ok=garb_cascade_update(r.c);
+        garb_update_marks_t m=garb_cascade_update_marks(r.c);
+        update_check(ok && m.recomputed==0 && m.marked==1 && !garb_style_updated_since(r.c,rd_id(&r,"x"),r.prior),
+                     "recompute: a write of an equal custom property marks and recomputes nothing below");
+        update_equal(r.c,r.doc,&r.in);
+        garb_cascade_free(r.c);garb_free(&r.sheet);os64_html_document_free(r.doc);
+    }
+    // A plain transform write on a container of 2,000 elements marks the
+    // container alone and recomputes nothing.
+    {
+        static char big[2000 * 10 + 64];
+        strcpy(big,"<div id=c>");
+        for(int i=0;i<2000;i++) strcat(big,"<p>x</p>");
+        strcat(big,"</div>");
+        RdCase r;
+        rd_begin(&r,"p{color:var(--ink,black)}",big);
+        os64_html_set_attr(r.doc,rd_id(&r,"c"),"style","transform:translateX(3px)",25);
+        bool ok=garb_cascade_update(r.c);
+        garb_update_marks_t m=garb_cascade_update_marks(r.c);
+        update_check(ok && m.marked==1 && m.recomputed==0,
+                     "recompute: a transform write on a 2,000-element container marks one, recomputes none");
+        update_equal(r.c,r.doc,&r.in);
+        garb_cascade_free(r.c);garb_free(&r.sheet);os64_html_document_free(r.doc);
+    }
+    // A reader of the style attribute keeps the reader's path: its reach
+    // is marked and matched again, whatever the map.
+    rc_case("div[style*=x] p{color:red}","<div id=c><p id=x></p></div>","c","--x:7px",
+            "a [style*=] reader marks its reach as before",0,0,"x");
+    // A recomputed element whose var() reads another name: its winners come
+    // out the same, and its record is kept (`changed` only where they differ).
+    {
+        RdCase r;
+        rd_begin(&r,"p{margin-left:var(--y,1px)}","<div id=c><div><p id=x></p></div></div>");
+        os64_html_set_attr(r.doc,rd_id(&r,"c"),"style","--x:7px",7);
+        bool ok=garb_cascade_update(r.c);
+        garb_update_marks_t m=garb_cascade_update_marks(r.c);
+        update_check(ok && m.recomputed==2 && m.recompute_changed==0 &&
+                     !garb_style_updated_since(r.c,rd_id(&r,"x"),r.prior),
+                     "recompute: winners that come out the same keep their record");
+        update_equal(r.c,r.doc,&r.in);
+        garb_cascade_free(r.c);garb_free(&r.sheet);os64_html_document_free(r.doc);
+    }
+    // A name made from the moved one (`--w: var(--v)`) moves with it: an
+    // element below that declares --v alone is not pruned, and a reader of
+    // --w under it takes the new value.
+    rc_case(".m{--w:var(--v)} .e{--v:5px} p{margin-left:var(--w,1px)}",
+            "<div id=c><div class=m><div class=e><p id=x></p></div></div></div>","c","--v:7px",
+            "a name made from the moved one moves with it",-1,0,"x");
+    // An element declaring the moved name as `inherit` takes the new value:
+    // it is no PRUNE, and the reader under it is recomputed.
+    rc_case(".m{--v:inherit} p{margin-left:var(--v,1px)}",
+            "<div id=c><div class=m><span><p id=x></p></span></div></div>","c","--v:7px",
+            "an element that declares the moved name as inherit is not pruned",-1,0,"x");
+    // An element marked alone by another change of the batch, under the
+    // container whose map moved: restyled whole, its map moves with what it
+    // inherits, and what is under it is recomputed all the same.
+    {
+        RdCase r;
+        rd_begin(&r,".m:has(.t){color:red} p{margin-left:var(--x,1px)}",
+                 "<div id=c><div id=m class=m><span id=t></span><p id=x></p></div></div>");
+        os64_html_set_attr(r.doc,rd_id(&r,"c"),"style","--x:7px",7);
+        os64_html_set_attr(r.doc,rd_id(&r,"t"),"class","t",1);
+        bool ok=garb_cascade_update(r.c);
+        update_check(ok && garb_style_updated_since(r.c,rd_id(&r,"x"),r.prior),
+                     "recompute: under an element restyled alone in the batch, a reader is recomputed");
+        update_equal(r.c,r.doc,&r.in);
+        garb_cascade_free(r.c);garb_free(&r.sheet);os64_html_document_free(r.doc);
+    }
+}
 static void update_attribute_readers(void)
 {
     size_t baseline=live;
@@ -1613,6 +1825,7 @@ static int cascade_updates(void)
     update_has_subjects();
     update_readers();
     update_attribute_readers();
+    update_recompute_cases();
     update_restyled_twice();
     update_marks_counted();
     update_back_index();

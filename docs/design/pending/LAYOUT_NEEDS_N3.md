@@ -127,9 +127,11 @@ still splits a part that meets the playing picture.
 
 ## 4. The proof
 
-**`--damage-check[=N]`** [7]: every Nth rebuild N3 bounded is checked, and
-that includes a rebuild whose marks came out EMPTY, which is where a wrong
-exemption would hide. After it, the whole view is painted offscreen the
+**`--damage-check[=N]`** [7]: every Nth rebuild N3 bounded, or tick that is
+a frame (one count for both), is checked, and that includes one whose marks
+came out EMPTY, which is where a wrong exemption would hide. A tick is
+checked apart because the next rebuild's compare marks an animated box whose
+value moved, which would hide a tick that marked too little. After it, the whole view is painted offscreen the
 ordinary way and compared with the window, pixel for pixel. A difference is
 a mark N3 missed, recorded with its rectangle and the element that
 changed.
@@ -261,7 +263,8 @@ or differently.
 - **The record**: `script changes painted reading N`, a row per verdict
   (`in parts` with the parts and the area in all, `nothing to paint`, or
   the reason for the whole view with the element that refused).
-- **`--damage-check[=N]`** (every rebuild unless N): once the render has
+- **`--damage-check[=N]`** (every rebuild bounded in parts and every tick
+  that is a frame, unless N, one count for both): once the render has
   painted every marked part (the view is painted once for each rectangle
   on the toolkit's list), the whole view is painted the ordinary way over the
   window and the two compared, the videos' boxes and the page's widgets

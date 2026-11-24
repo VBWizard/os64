@@ -110,6 +110,12 @@ typedef struct {
     const garb_value_t *value;
     int32_t nvalue;
     int state;                  // 0 as declared, 1 being replaced, 2 replaced, 3 invalid
+    // The declaration it came from, which a recompute builds it from again
+    // (its value is replaced in place once read: custom_value); and whether
+    // its value is made from the map it inherits (var() or env() in it, or
+    // `inherit` or `unset`).
+    const Decl *decl;
+    bool reads_up;
 } Custom;
 
 struct CustomMap {
@@ -117,6 +123,15 @@ struct CustomMap {
     Custom *own;
     int32_t n;
 };
+
+// A declaration holding var() among an element's winners, with the
+// longhands it won (THE RECOMPUTE): what a new custom property map makes
+// again without matching.
+typedef struct {
+    const Decl *d;
+    garb_prop_t *props, *produced;
+    int32_t nprops, nproduced;
+} PendDecl;
 
 // A @keyframes rule kept (Animations 1 § 3): its name as written, and its
 // blocks in order, each with its offsets and its declarations read once —
@@ -166,6 +181,18 @@ typedef struct {
     // the rest being marked as far; `alone_suffix`: marked by one that marks
     // each alone (mark_run), where a later walk that marks alone stops.
     bool placed, needs_substitution, dirty, dirty_suffix, alone_suffix;
+    // THE RECOMPUTE: its custom property map is one of its own (its rules
+    // declare custom properties), not the one it inherits taken whole; a
+    // pseudo-element's winners hold var(); the update that last changed its
+    // map by value (`moved`), which owes what inherits from it a recompute;
+    // and its winners var() made, with the longhands each won.
+    bool own_customs, pseudo_vars;
+    uint64_t moved;
+    const PendDecl *pend;
+    int32_t npend;
+    // The element it inherited from when last styled (inherit_from), which
+    // a change of its `slot` can move.
+    const os64_html_node_t *from;
     // What :empty answered at it when the cascade last styled it or asked at
     // a change, kept while the rules hold :empty (empty_turned).
     bool empty;
@@ -219,6 +246,9 @@ typedef struct {
 
 // The most keys one change of an attribute names (attribute_keys).
 #define CHANGE_KEYS 64
+// The most custom property names one update's recompute keeps (THE
+// RECOMPUTE): past it, none is known, and no element prunes it.
+#define RECOMPUTE_NAMES 16
 static const char *attr_value(const os64_html_node_t *el, const char *name);
 // A reader's key in the index (reader_keys): sorted by kind, then the
 // folded name's hash, then the folded name, so a change finds the readers
@@ -465,6 +495,12 @@ struct garb_cascade {
     garb_has_subject_work_t has_subjects;
     garb_back_work_t back_work;
     garb_update_marks_t marks;
+    // THE RECOMPUTE, in the update being made: whether any element's
+    // custom property map moved, and the names whose values may have
+    // changed with it (`names_all` past the room: then none is known).
+    bool any_moved, names_all;
+    struct { const char *name; size_t len; } moved_names[RECOMPUTE_NAMES];
+    int32_t nmoved_names;
     garb_update_refusal_t untrackable, refusal;
     // THE CALLER'S MEASURE (limits.clock; garb_cascade_build_cost,
     // garb_cascade_broad_trigger): the fresh build's parts, and in an
@@ -473,7 +509,6 @@ struct garb_cascade {
     // (`broad`, kept as the trigger when the update is refused broad).
     garb_build_cost_t cost;
     garb_mark_t mark_now;
-    const os64_html_node_t *passing;    // restyle: the element passing its changed style down
     uint32_t mark_by[GARB_MARKS];
     garb_broad_trigger_t broad;
     const os64_html_change_entry_t *broad_best;     // the change marking the most, this update only
@@ -2507,6 +2542,11 @@ typedef struct {
     Applied local[APPLIED_LOCAL_COUNT];
     Applied *items;
     size_t capacity;
+    // The longhands each declaration holding var() set, while an element is
+    // cascaded (THE RECOMPUTE's PendDecl, copied out at its exact size).
+    garb_prop_t *produced;
+    uint8_t *nproduced;
+    size_t produced_cap;
 } AppliedScratch;
 
 static bool before(const Applied *a, const Applied *b)
@@ -2808,6 +2848,65 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
     return n;
 }
 
+// A custom property entry made from declaration `d` over the map it
+// inherits: as declared, `initial` the guaranteed-invalid value, `inherit`
+// and `unset` the inherited value (a custom property inherits, Cascade 4
+// § 7.3).
+static void custom_entry(garb_cascade_t *c, Custom *cu, const Decl *source, const CustomMap *inherited)
+{
+    const garb_decl_t *d = &source->decl;
+    cu->name = d->name;
+    cu->len = d->len;
+    cu->decl = source;
+    cu->reads_up = garb_decl_has_var(d);
+    cu->value = d->nvalue > 0 ? d->value : kEmptyValue;
+    cu->nvalue = d->nvalue;
+    cu->state = 0;
+    bool one_ident = d->nvalue == 1 && d->value[0].kind == GARB_IDENT;
+    if (one_ident && ieq(d->value[0].text, d->value[0].len, "initial"))
+        cu->value = NULL;
+    if (one_ident && (ieq(d->value[0].text, d->value[0].len, "inherit") ||
+                      ieq(d->value[0].text, d->value[0].len, "unset"))) {
+        Sub up = {c, inherited, 0, VAR_VALUES_MAX};
+        int32_t pn = 0;
+        cu->value = custom_value(&up, d->name, d->len, &pn);
+        cu->nvalue = pn;
+        cu->state = 2;
+        cu->reads_up = true;
+    }
+}
+
+// The longhands declaration `d`, holding var() or env(), sets against the
+// custom property map `customs`, into `sets`: replaced, then read; a value
+// that fails either way is invalid AT COMPUTED-VALUE TIME, and each
+// longhand acts as `unset` (Custom Properties 1 § 3.1) rather than falling
+// back to the declaration it overrode.
+static int32_t pending_sets(garb_cascade_t *c, const Decl *d, const CustomMap *customs,
+                            garb_set_t sets[GARB_SETS_MAX])
+{
+    Sub sub = {c, customs, 0, VAR_VALUES_MAX};
+    Vec out = {0};
+    int32_t n = -1;
+    if (substitute(&sub, d->decl.value, d->decl.nvalue, &out)) {
+        garb_decl_t read = d->decl;
+        read.value = out.v;
+        read.nvalue = out.n;
+        n = garb_read_declaration(&c->self, &read, reading(c), sets);
+    }
+    if (n <= 0) {
+        garb_prop_t props[GARB_SETS_MAX];
+        int32_t np = prop_longhands(d->decl.name, d->decl.len, c->env.modern_off, props);
+        for (int32_t k = 0; k < np; k++) {
+            sets[k].prop = props[k];
+            os64_memset(&sets[k].value, 0, sizeof(sets[k].value));
+            sets[k].value.kind = GARB_V_WIDE;
+            sets[k].value.keyword = "unset";
+        }
+        n = np;
+    }
+    return n;
+}
+
 // `el`'s winners for `target`: its own, from its rules, its `style`
 // attribute and its SVG presentation attributes — and, for a shadow host,
 // its shadow tree's `:host` rules, and for a slotted element each slot's
@@ -2924,37 +3023,37 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
                     k++;
                 if (k == mine->n)
                     mine->n++;
-                Custom *cu = &mine->own[k];
-                cu->name = d->name;
-                cu->len = d->len;
-                cu->value = d->nvalue > 0 ? d->value : kEmptyValue;
-                cu->nvalue = d->nvalue;
-                cu->state = 0;
-                // `--x: initial` is the guaranteed-invalid value, its
-                // initial value. `inherit` is the parent's, and so is
-                // `unset`: a custom property inherits (Cascade 4 § 7.3).
-                bool one_ident = d->nvalue == 1 && d->value[0].kind == GARB_IDENT;
-                if (one_ident && ieq(d->value[0].text, d->value[0].len, "initial"))
-                    cu->value = NULL;
-                if (one_ident && (ieq(d->value[0].text, d->value[0].len, "inherit") ||
-                                  ieq(d->value[0].text, d->value[0].len, "unset"))) {
-                    Sub up = {c, inherited, 0, VAR_VALUES_MAX};
-                    int32_t pn = 0;
-                    cu->value = custom_value(&up, d->name, d->len, &pn);
-                    cu->nvalue = pn;
-                    cu->state = 2;
-                }
+                custom_entry(c, &mine->own[k], ap[i].d, inherited);
             }
             customs = mine;
-            if (target == TARGET_ELEMENT)
+            if (target == TARGET_ELEMENT) {
                 slot->customs = mine;
+                slot->own_customs = true;
+            }
         }
     }
-    // The winners, one per longhand.
+    // The winners, one per longhand, and the declaration each came from;
+    // and, for the element's own, the longhands each declaration holding
+    // var() set, in its order among them (`produced`, for recompute).
     garb_set_t win[GARB_NPROPS];
-    int32_t from[GARB_NPROPS];
+    int32_t from[GARB_NPROPS], src[GARB_NPROPS];
     bool have[GARB_NPROPS], important[GARB_NPROPS];
     os64_memset(have, 0, sizeof(have));
+    int32_t npend = 0, jpend = 0;
+    for (int32_t i = 0; own && i < na; i++) npend += ap[i].d->pending && !ap[i].d->custom;
+    if ((size_t)npend > scratch->produced_cap) {
+        garb_prop_t *more = os64_realloc(scratch->produced, (size_t)npend * GARB_SETS_MAX * sizeof(*more));
+        if (more != NULL) scratch->produced = more;
+        uint8_t *counts = more != NULL ? os64_realloc(scratch->nproduced, (size_t)npend) : NULL;
+        if (counts != NULL) scratch->nproduced = counts;
+        if (more == NULL || counts == NULL) {
+            c->incomplete = true;
+            return;
+        }
+        scratch->produced_cap = (size_t)npend;
+    }
+    garb_prop_t *produced = scratch->produced;
+    uint8_t *nproduced = scratch->nproduced;
     for (int32_t i = 0; i < na; i++) {
         const Decl *d = ap[i].d;
         if (d->custom)
@@ -2963,6 +3062,7 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
             for (int32_t k = 0; k < d->nsets; k++) {
                 win[d->sets[k].prop] = d->sets[k];
                 from[d->sets[k].prop] = ap[i].sheet;
+                src[d->sets[k].prop] = i;
                 important[d->sets[k].prop] = ap[i].important;
                 have[d->sets[k].prop] = true;
             }
@@ -2970,34 +3070,18 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
         }
         if (own)
             slot->needs_substitution = true;
-        // var()/env(): replaced now, then read. A value that fails either
-        // way is invalid AT COMPUTED-VALUE TIME, and the property acts as
-        // `unset` (Custom Properties 1 § 3.1) — it does not fall back to
-        // the declaration it overrode.
-        Sub s = {c, customs, 0, VAR_VALUES_MAX};
-        Vec out = {0};
+        else
+            slot->pseudo_vars = true;
         garb_set_t sets[GARB_SETS_MAX];
-        int32_t n = -1;
-        if (substitute(&s, d->decl.value, d->decl.nvalue, &out)) {
-            garb_decl_t read = d->decl;
-            read.value = out.v;
-            read.nvalue = out.n;
-            n = garb_read_declaration(&c->self, &read, reading(c), sets);
-        }
-        if (n <= 0) {
-            garb_prop_t props[GARB_SETS_MAX];
-            int32_t np = prop_longhands(d->decl.name, d->decl.len, c->env.modern_off, props);
-            for (int32_t k = 0; k < np; k++) {
-                sets[k].prop = props[k];
-                os64_memset(&sets[k].value, 0, sizeof(sets[k].value));
-                sets[k].value.kind = GARB_V_WIDE;
-                sets[k].value.keyword = "unset";
-            }
-            n = np;
+        int32_t n = pending_sets(c, d, customs, sets);
+        if (own) {
+            for (int32_t k = 0; k < n; k++) produced[(size_t)jpend * GARB_SETS_MAX + k] = sets[k].prop;
+            nproduced[jpend++] = (uint8_t)n;
         }
         for (int32_t k = 0; k < n; k++) {
             win[sets[k].prop] = sets[k];
             from[sets[k].prop] = ap[i].sheet;
+            src[sets[k].prop] = i;
             important[sets[k].prop] = ap[i].important;
             have[sets[k].prop] = true;
         }
@@ -3024,6 +3108,42 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
     into->sheet = kept_from;
     into->important = kept_important;
     into->n = nwin;
+    // Its winners var() made, each declaration with the longhands it won,
+    // for a recompute (recompute_winners).
+    if (own && npend > 0) {
+        // Sized exactly: the declarations that won a longhand, the longhands
+        // they won, and what each set.
+        int32_t np = 0, nprops = 0, nset = 0;
+        for (int32_t i = 0, j = 0; i < na; i++) {
+            if (!ap[i].d->pending || ap[i].d->custom) continue;
+            int32_t won = 0;
+            for (int q = 0; q < GARB_NPROPS; q++) won += have[q] && src[q] == i;
+            if (won > 0) { np++; nprops += won; nset += nproduced[j]; }
+            j++;
+        }
+        PendDecl *pend = np > 0 ? alloc(c, (size_t)np * sizeof(*pend)) : NULL;
+        garb_prop_t *props = np > 0 ? alloc(c, (size_t)(nprops + nset) * sizeof(*props)) : NULL;
+        if (np > 0 && (pend == NULL || props == NULL)) {
+            c->incomplete = true;
+            return;
+        }
+        int32_t k = 0, used = 0;
+        for (int32_t i = 0, j = 0; i < na && k < np; i++) {
+            if (!ap[i].d->pending || ap[i].d->custom) continue;
+            int32_t jj = j++;
+            int32_t won = 0;
+            for (int q = 0; q < GARB_NPROPS; q++) won += have[q] && src[q] == i;
+            if (won == 0) continue;
+            PendDecl *pd = &pend[k++];
+            *pd = (PendDecl){ap[i].d, props + used, props + used + won, 0, nproduced[jj]};
+            for (int q = 0; q < GARB_NPROPS; q++)
+                if (have[q] && src[q] == i) pd->props[pd->nprops++] = (garb_prop_t)q;
+            os64_memcpy(pd->produced, produced + (size_t)jj * GARB_SETS_MAX, (size_t)pd->nproduced * sizeof(garb_prop_t));
+            used += won + pd->nproduced;
+        }
+        slot->pend = pend;
+        slot->npend = np;
+    }
     // A pseudo-element's animations read the frames libflow asks for with
     // its element (garb_keyframes): a rule holding var() is read against the
     // element's custom properties, and only when the element names it too
@@ -3079,7 +3199,8 @@ static void cascade_whole(garb_cascade_t *c, const os64_html_node_t *x, Match **
     const os64_html_node_t *from = inherit_from(c, x);
     const Slot *up = from != NULL ? slot_for(c, from, false) : NULL;
     cascade_element(c, x, TARGET_ELEMENT, up != NULL ? up->customs : NULL, m, mcap, scratch);
-    const Slot *self = slot_for(c, x, false);
+    Slot *self = slot_for(c, x, false);
+    if (self != NULL) self->from = from;
     for (int32_t t = TARGET_BEFORE; t <= TARGET_AFTER; t++)
         if (targeted(c, t))
             cascade_element(c, x, t, self != NULL ? self->customs : NULL, m, mcap, scratch);
@@ -3795,6 +3916,8 @@ static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
             }
         }
     os64_free(scratch.items);
+    os64_free(scratch.produced);
+    os64_free(scratch.nproduced);
     if (clock) {
         uint64_t matched = clock();
         c->cost = (garb_build_cost_t){sheets_read - began, sized - sheets_read, matched - sized, (uint32_t)c->nrules,
@@ -3891,15 +4014,6 @@ static bool mark_subtree(garb_cascade_t *c, const os64_html_node_t *root)
         x = si_next(x, root, true);
     }
     return true;
-}
-// Marks what is under `x`, not `x` itself: an element whose winners an
-// update has just recomputed and found changed (restyle). Its shadow
-// root's tree and its children, and what it passes on as a slot.
-static bool mark_below(garb_cascade_t *c, const os64_html_node_t *x)
-{
-    for (const os64_html_node_t *k = si_next(x, x, true); k; k = si_next(k, x, false))
-        if (!mark_subtree(c, k)) return false;
-    return mark_assigned(c, x);
 }
 // Marks `x` alone: a :has() in its rules' subjects may have turned on it.
 static bool mark_element(garb_cascade_t *c, const os64_html_node_t *x)
@@ -4181,9 +4295,9 @@ static bool mark_reached(garb_cascade_t *c, const os64_html_node_t *x, Reached g
     return !(got.on || got.next) || mark_run(c, next_element(x), got.on, got.down);
 }
 
-// What a turned :empty at `x` can move: its own match, marked alone (its
-// changed winners reach what is under it through restyle's mark_below, as
-// any element's do); every child of its parent for an `of S`; and the
+// What a turned :empty at `x` can move: its own match, marked alone (what
+// is under it is owed a recompute where its custom property map changed,
+// restyle, as any element's is); every child of its parent for an `of S`; and the
 // siblings the readers of :empty that pass at `x` reach (`p:empty + q`).
 //
 // WHY NOTHING UNDER IT IS MARKED FOR MATCHING (`p:not(:empty) > x`, `:empty
@@ -5058,6 +5172,25 @@ garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c)
     return c ? c->marks : (garb_update_marks_t){0};
 }
 
+size_t garb_cascade_recompute_names(const garb_cascade_t *c, char *out, size_t cap)
+{
+    if (out == NULL || cap == 0) return 0;
+    out[0] = '\0';
+    if (c == NULL || c->marks.recomputed == 0) return 0;
+    size_t n = 0;
+    for (int32_t i = 0; i < c->nmoved_names && n + 1 < cap; i++) {
+        int w = os64_snprintf(out + n, cap - n, "%s%.*s", i ? " " : "", (int)c->moved_names[i].len,
+                              c->moved_names[i].name);
+        if (w < 0) break;
+        n = n + (size_t)w < cap ? n + (size_t)w : cap - 1;
+    }
+    if (c->names_all && n + 1 < cap) {
+        int w = os64_snprintf(out + n, cap - n, "%s(more)", n ? " " : "");
+        if (w > 0) n = n + (size_t)w < cap ? n + (size_t)w : cap - 1;
+    }
+    return n;
+}
+
 garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c)
 {
     return c ? c->cost : (garb_build_cost_t){0};
@@ -5180,6 +5313,116 @@ static bool customs_same(const CustomMap *a, const CustomMap *b)
     }
     return true;
 }
+// THE RECOMPUTE (L4 part 2; RELAYOUT.md § What restyle marks below). A
+// descendant's selector answers do not read an ancestor's winners, so what
+// an element restyled alone owes what is under it is decided by its custom
+// property map, by value: the same, nothing (libflow carries ordinary
+// inheritance); different, every element that inherits from it is
+// recomputed in the update's walk, as it reaches it: its map made again
+// over the one it inherits, substitution redone where var() made a winner,
+// winners compared, `changed` only where they differ. No matching, no
+// anchor asked, nothing counted toward the half.
+//
+// The names whose values may have moved are kept for the update
+// (moved_name): the ones an origin's own map changed, and the own entries a
+// recompute made again from the map it inherits. An element whose own map
+// declares every one of them, none from the map above, has the map it had
+// (the PRUNE): what is under it inherits nothing new, so it stops there,
+// keeping its record, whose map may name an older one above with the same
+// values for every name it does not declare.
+static void moved_name(garb_cascade_t *c, const char *name, size_t len)
+{
+    for (int32_t i = 0; i < c->nmoved_names; i++)
+        if (c->moved_names[i].len == len && os64_memcmp(c->moved_names[i].name, name, len) == 0) return;
+    if (c->nmoved_names == RECOMPUTE_NAMES) { c->names_all = true; return; }
+    c->moved_names[c->nmoved_names].name = name;
+    c->moved_names[c->nmoved_names].len = len;
+    c->nmoved_names++;
+}
+static const Custom *own_entry(const CustomMap *m, const char *name, size_t len)
+{
+    for (int32_t k = m ? m->n - 1 : -1; k >= 0; k--)
+        if (m->own[k].len == len && os64_memcmp(m->own[k].name, name, len) == 0) return &m->own[k];
+    return NULL;
+}
+static bool entry_same(const Custom *a, const Custom *b)
+{
+    const garb_decl_t *x = &a->decl->decl, *y = &b->decl->decl;
+    return values_same(x->value, x->nvalue, y->value, y->nvalue);
+}
+// Whether an element restyled alone changed its custom property map by
+// value, and the names it moved (moved_name). The map it inherits holds the
+// values it held, the update's walk having made them current, while it
+// inherits from the same element; a change of its `slot` can move that
+// element, and then no name is known.
+static bool customs_moved(garb_cascade_t *c, const Slot *was, const Slot *now)
+{
+    const CustomMap *o = was->own_customs ? was->customs : NULL;
+    const CustomMap *n = now->own_customs ? now->customs : NULL;
+    if (was->from != now->from) {
+        c->names_all = true;
+        return true;
+    }
+    bool moved = false;
+    for (int32_t k = 0; n && k < n->n; k++) {
+        const Custom *before = own_entry(o, n->own[k].name, n->own[k].len);
+        if (before == NULL || !entry_same(before, &n->own[k])) {
+            moved_name(c, n->own[k].name, n->own[k].len);
+            moved = true;
+        }
+    }
+    for (int32_t k = 0; o && k < o->n; k++)
+        if (own_entry(n, o->own[k].name, o->own[k].len) == NULL) {
+            moved_name(c, o->own[k].name, o->own[k].len);
+            moved = true;
+        }
+    return moved;
+}
+// Whether the element `x` inherits from moved its map in this update.
+static bool recompute_owed(const garb_cascade_t *c, const os64_html_node_t *x)
+{
+    const os64_html_node_t *from = inherit_from(c, x);
+    const Slot *up = from ? slot_for((garb_cascade_t *)c, from, false) : NULL;
+    return up && up->moved == c->updates + 1;
+}
+// Its animation-name winner, or NULL: what its keyframes (own_frames) and,
+// through `inherit`, those of what inherits from it are read for.
+static const garb_val_t *anim_name(const Slot *s)
+{
+    for (int32_t i = 0; i < s->style.n; i++)
+        if (s->style.sets[i].prop == GARB_ANIMATION_NAME) return &s->style.sets[i].value;
+    return NULL;
+}
+static bool anim_same(const Slot *a, const Slot *b)
+{
+    const garb_val_t *x = anim_name(a), *y = anim_name(b);
+    return x == y || (x != NULL && y != NULL && val_same(x, y));
+}
+static bool anim_inherits(const Slot *s)
+{
+    const garb_val_t *v = anim_name(s);
+    return v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit");
+}
+// Whether `s`'s own map declares every moved name, none from the map above
+// (the PRUNE's question): its map then holds the values it held.
+static bool holds_moved(const garb_cascade_t *c, const Slot *s)
+{
+    if (!s->own_customs || c->names_all) return false;
+    for (int32_t i = 0; i < c->nmoved_names; i++) {
+        const Custom *own = own_entry(s->customs, c->moved_names[i].name, c->moved_names[i].len);
+        if (own == NULL || own->reads_up) return false;
+    }
+    return true;
+}
+// `s`'s map moved: what inherits from it is owed a recompute, and its own
+// entries made from the map above may have moved with it.
+static void moved_slot(garb_cascade_t *c, Slot *s)
+{
+    s->moved = c->updates + 1;
+    c->any_moved = true;
+    for (int32_t k = 0; s->own_customs && k < s->customs->n; k++)
+        if (s->customs->own[k].reads_up) moved_name(c, s->customs->own[k].name, s->customs->own[k].len);
+}
 // Recomputes dirty `x`'s winners into a fresh record in its slot `s`. One
 // marked alone (mark_element) keeps its old record when the same rules
 // matched it as before and its winners and its custom properties compare
@@ -5187,11 +5430,15 @@ static bool customs_same(const CustomMap *a, const CustomMap *b)
 // from (customs_same compares that too, which a change of its `slot` can
 // move), so nothing under it reads anything new from it, and
 // garb_style_updated_since says it did not change, unless its attributes
-// changed (attr_touched: what it lays out may read them). Otherwise it marks what is under it
-// (mark_below), which the update's walk reaches after it, since its
-// descendants inherit from it. A pseudo-element's winners reach no
+// changed (attr_touched: what it lays out may read them); what its winners
+// were derived from is the fresh record's all the same. Nothing under it
+// is marked. Where its custom property map moved (customs_moved; or what it
+// inherits moved and its own map does not declare every moved name; or its
+// animation-name changed, which `inherit` reaches), what inherits from it
+// is owed a recompute (THE RECOMPUTE, above), which the update's walk
+// makes as it reaches each after it. A pseudo-element's winners reach no
 // descendant: when they alone differ the fresh record is all they need.
-// False when the recompute or that mark failed.
+// False when the recompute failed.
 static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match **m, int32_t *mcap,
                     AppliedScratch *scratch)
 {
@@ -5221,22 +5468,131 @@ static bool restyle(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match
     // restyles an element alone must keep that true, or compare here.
     anchor_bits(c, x, has_row(c, s));
     if (!old.element_only) return true;
+    // What it inherits moved in this update (recompute_owed): its map, made
+    // over the new one, moved too unless it declares every moved name itself.
+    bool owed = c->any_moved && recompute_owed(c, x);
+    bool moved = customs_moved(c, &old, s) || (owed && !holds_moved(c, s));
+    // A changed animation-name reaches what takes it by `inherit`, whatever
+    // the map: every element below is recomputed, and no name prunes.
+    if (!anim_same(&old, s)) {
+        c->names_all = true;
+        moved = true;
+    }
     bool same = old.matched == s->matched && styles_same(&old.style, &s->style) &&
                 customs_same(old.customs, s->customs);
     bool pseudo_same = true;
     for (int32_t t = 0; t < TARGET_AFTER; t++) pseudo_same &= styles_same(&old.pseudo[t], &s->pseudo[t]);
     if (same && pseudo_same) {
+        // The old record stands for its winners; what they were derived from
+        // is the fresh one's (its map, its var() winners' declarations, its
+        // keyframes), since the same values can come of other declarations,
+        // and a later recompute derives again from these.
+        Slot fresh = *s;
         *s = old;
         s->dirty = s->dirty_suffix = s->alone_suffix = s->element_only = s->attr_touched = false;
+        s->customs = fresh.customs;
+        s->own_customs = fresh.own_customs;
+        s->needs_substitution = fresh.needs_substitution;
+        s->pseudo_vars = fresh.pseudo_vars;
+        s->pend = fresh.pend;
+        s->npend = fresh.npend;
+        s->frames = fresh.frames;
+        s->nframes = fresh.nframes;
+        s->from = fresh.from;
         // The values it was styled with now; and, where its attributes
         // changed, a restyle all the same: what it lays out may read them.
         s->klass = attr_value(x, "class");
         s->idv = attr_value(x, "id");
         if (old.attr_touched) s->changed = c->updates + 1;
+    }
+    if (moved) moved_slot(c, s);
+    return true;
+}
+
+// Substitution redone against `map` for the winners var() made (Slot.pend):
+// each declaration's longhands it won take its new values, the rest stand.
+// False when a declaration now sets other longhands than it did, which only
+// its whole cascade can place (`*whole`), or when there was no memory.
+static bool recompute_winners(garb_cascade_t *c, Slot *s, const CustomMap *map, bool *whole)
+{
+    garb_style_t *st = &s->style;
+    garb_set_t *sets = NULL;
+    for (int32_t i = 0; i < s->npend; i++) {
+        const PendDecl *pd = &s->pend[i];
+        garb_set_t got[GARB_SETS_MAX];
+        int32_t n = pending_sets(c, pd->d, map, got);
+        bool same_props = n == pd->nproduced;
+        for (int32_t k = 0; same_props && k < n; k++) same_props = got[k].prop == pd->produced[k];
+        if (!same_props) { *whole = true; return false; }
+        for (int32_t k = 0; k < pd->nprops; k++) {
+            garb_prop_t p = pd->props[k];
+            int32_t g = 0, lo = 0, hi = st->n;
+            while (g < n && got[g].prop != p) g++;
+            while (lo < hi) {
+                int32_t mid = lo + (hi - lo) / 2;
+                if (st->sets[mid].prop < p) lo = mid + 1;
+                else hi = mid;
+            }
+            if (g == n || lo == st->n || st->sets[lo].prop != p) { *whole = true; return false; }
+            if (val_same(&st->sets[lo].value, &got[g].value)) continue;
+            // Its keyframes are read for its animation-name: a new one is its
+            // whole cascade's to build (own_frames).
+            if (p == GARB_ANIMATION_NAME) { *whole = true; return false; }
+            if (sets == NULL) {
+                sets = alloc(c, (size_t)st->n * sizeof(*sets));
+                if (sets == NULL) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
+                os64_memcpy(sets, st->sets, (size_t)st->n * sizeof(*sets));
+            }
+            sets[lo] = got[g];
+        }
+    }
+    if (sets != NULL) {
+        st->sets = sets;
+        s->changed = c->updates + 1;
+        c->marks.recompute_changed++;
+    }
+    return true;
+}
+// Recomputes `x`, under an element whose map moved, in place (THE
+// RECOMPUTE): its own map made again over the one it inherits, or the
+// PRUNE; its winners var() made redone. One whose pseudo-elements' winners
+// or keyframes read the map takes its whole cascade instead (restyle, as
+// an element marked alone), outside the half all the same.
+static bool recompute(garb_cascade_t *c, const os64_html_node_t *x, Slot *s, Match **m, int32_t *mcap,
+                      AppliedScratch *scratch)
+{
+    c->marks.recomputed++;
+    if (s->pseudo_vars || s->nframes > 0 || anim_inherits(s)) {
+        c->marks.recompute_whole++;
+        s->element_only = true;
+        return restyle(c, x, s, m, mcap, scratch);
+    }
+    const os64_html_node_t *from = inherit_from(c, x);
+    const Slot *up = from ? slot_for(c, from, false) : NULL;
+    const CustomMap *map = up ? up->customs : NULL;
+    if (holds_moved(c, s)) {
+        c->marks.recompute_pruned++;
         return true;
     }
-    if (!same && c->limits.clock) c->passing = x;
-    return same || mark_below(c, x);
+    if (s->own_customs) {
+        const CustomMap *o = s->customs;
+        CustomMap *mine = alloc(c, sizeof(*mine));
+        Custom *list = alloc(c, (size_t)o->n * sizeof(*list));
+        if (mine == NULL || list == NULL) { c->refusal = GARB_UPDATE_NO_MEMORY; return false; }
+        *mine = (CustomMap){map, list, o->n};
+        for (int32_t k = 0; k < o->n; k++) custom_entry(c, &list[k], o->own[k].decl, map);
+        map = mine;
+    }
+    s->customs = map;
+    moved_slot(c, s);
+    bool whole = false;
+    if (s->npend > 0 && !recompute_winners(c, s, map, &whole)) {
+        if (!whole) return false;
+        c->marks.recompute_whole++;
+        s->element_only = true;
+        return restyle(c, x, s, m, mcap, scratch);
+    }
+    return true;
 }
 
 garb_update_refusal_t garb_cascade_update_refusal(const garb_cascade_t *c)
@@ -5314,6 +5670,8 @@ static bool update(garb_cascade_t *c)
     c->visit_epoch++;
     for (uint32_t k = 0; k < c->subject_width; k++) c->subjects_union[k] = 0;
     c->marks = (garb_update_marks_t){0};
+    c->any_moved = c->names_all = false;
+    c->nmoved_names = 0;
     if (c->incomplete) { c->refusal = GARB_UPDATE_INCOMPLETE; return false; }
     if (c->update_failed) { c->refusal = GARB_UPDATE_FAILED_BEFORE; return false; }
     uint64_t version = os64_html_version(c->doc);
@@ -5434,12 +5792,10 @@ static bool update(garb_cascade_t *c)
     }
     c->updating = true;
     c->marks.marked = c->ndirty;
-    // The caller's measure: what restyling marks is inherited.
+    // Nothing marks while the walk restyles (what is under a changed element
+    // is recomputed, THE RECOMPUTE); a mark made then is counted inherited.
     c->mark_now = GARB_MARK_INHERITED;
-    if (c->limits.clock) {
-        os64_memset(c->mark_by, 0, sizeof(c->mark_by));
-        c->passing = NULL;
-    }
+    if (c->limits.clock) os64_memset(c->mark_by, 0, sizeof(c->mark_by));
     int32_t old_nattrs = c->nattrs;
     Match *m = NULL; int32_t mcap = 0;
     AppliedScratch scratch = {0};
@@ -5453,6 +5809,7 @@ static bool update(garb_cascade_t *c)
              x = si_next(x, c->doc->document, true)) {
             Slot *s = is_el(x) ? slot_for(c, x, false) : NULL;
             if (s && s->dirty) failed = !restyle(c, x, s, &m, &mcap, &scratch);
+            else if (s && c->any_moved && recompute_owed(c, x)) failed = !recompute(c, x, s, &m, &mcap, &scratch);
         }
     }
     for (size_t i = 0; i < c->ndirty && !c->shadowed && !failed; ++i) {
@@ -5470,26 +5827,15 @@ static bool update(garb_cascade_t *c)
             if (!is_el(x)) continue;
             s = slot_for(c, x, false);
             if (s && s->dirty) failed = !restyle(c, x, s, &m, &mcap, &scratch);
+            else if (s && c->any_moved && recompute_owed(c, x)) failed = !recompute(c, x, s, &m, &mcap, &scratch);
         }
     }
     os64_free(scratch.items);
+    os64_free(scratch.produced);
+    os64_free(scratch.nproduced);
     c->updating = false;
     c->marks.inherited = c->ndirty - c->marks.marked;
-    if (failed) {
-        if (c->limits.clock && c->refusal == GARB_UPDATE_BROAD) {
-            garb_broad_trigger_t *b = &c->broad;
-            broad_name(c);
-            b->restyled = true;
-            b->restyled_marked = c->mark_by[GARB_MARK_INHERITED];
-            describe(c->passing, b->restyled_from, sizeof(b->restyled_from));
-            uint32_t depth = 0;
-            for (const os64_html_node_t *x = c->passing; x && x->parent; x = x->parent) depth++;
-            b->restyled_depth = depth;
-            b->dirty = (uint32_t)c->ndirty;
-            c->broad_set = true;
-        }
-        return false;
-    }
+    if (failed) return false;
     for (int32_t i = old_nattrs; i < c->nattrs; ++i) c->incomplete |= c->attrs[i].incomplete;
     if (c->incomplete || c->self.incomplete) { c->refusal = GARB_UPDATE_SHORT; return false; }
     os64_html_pin_t pin = os64_html_pin(c->doc);

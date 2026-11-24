@@ -75,7 +75,8 @@ static void oracle_argument(OracleRng *r, char *out, size_t cap)
 // Rule `i`'s declarations: a property of its own as far as the list goes,
 // its value the rule's number, so which rules match an element shows in its
 // winners and an inherited one in its descendants'; sometimes a custom
-// property read through var() too.
+// property (one declared, one made from another, one inherited) and a
+// longhand, a shorthand or a pseudo-element's value read through var().
 static void oracle_declarations(OracleRng *r, int i, char *out, size_t cap)
 {
     static const char *const kProps[]={"margin-left","margin-top","padding-left","padding-top","width","height",
@@ -85,8 +86,10 @@ static void oracle_declarations(OracleRng *r, int i, char *out, size_t cap)
     bool unitless = !strcmp(prop, "z-index") || !strcmp(prop, "order") || !strcmp(prop, "flex-grow") ||
                     !strcmp(prop, "line-height");
     int n = snprintf(out, cap, "%s:%d%s", prop, i + 1, unitless ? "" : "px");
-    if (oracle_pick(r, 4) == 0) snprintf(out + n, cap - (size_t)n, ";--v:%d", i + 1);
-    else if (oracle_pick(r, 4) == 0) snprintf(out + n, cap - (size_t)n, ";outline-width:var(--v,0px)");
+    static const char *const kVars[]={";--v:%d", ";--w:calc(%dpx)", ";--w:var(--v)", ";--v:inherit",
+                                      ";outline-width:var(--v,0px)", ";margin:var(--w,%dpx)",
+                                      ";border-top-width:var(--w,2px)"};
+    if (oracle_pick(r, 3) == 0) snprintf(out + n, cap - (size_t)n, kVars[oracle_pick(r, 7)], i + 1);
 }
 // One sheet in four is large, past one word of anchor bits a slot.
 static void oracle_sheet(OracleRng *r, char *out, size_t cap)
@@ -114,7 +117,13 @@ static void oracle_sheet(OracleRng *r, char *out, size_t cap)
         case 7: len += (size_t)snprintf(out + len, cap - len, "%s:has(%s){%s}", f, a, decl); break;
         case 8: len += (size_t)snprintf(out + len, cap - len, "%s:has(+ %s){%s}", f, a, decl); break;
         case 9: len += (size_t)snprintf(out + len, cap - len, "%s:not(:hover, :has(%s)) %s{%s}", f, a, d, decl); break;
-        case 10: len += (size_t)snprintf(out + len, cap - len, "%s{%s}", d, decl); break;
+        case 10:
+            // A pseudo-element whose value reads a custom property, now and
+            // then: what a map's change reaches through its element.
+            if (oracle_pick(r, 4) == 0)
+                len += (size_t)snprintf(out + len, cap - len, "%s::before{content:'p';outline-width:var(--v,1px)}", d);
+            else len += (size_t)snprintf(out + len, cap - len, "%s{%s}", d, decl);
+            break;
         case 11: len += (size_t)snprintf(out + len, cap - len, "%s > %s{%s}", f, d, decl); break;
         case 12: len += (size_t)snprintf(out + len, cap - len, "%s + %s{%s}", f, d, decl); break;
         case 13: len += (size_t)snprintf(out + len, cap - len, "%s:first-child{%s}", d, decl); break;
@@ -271,9 +280,13 @@ static void oracle_change(OracleRng *r, os64_html_document_t *doc, os64_html_nod
         break;
     }
     case 7: {
-        static const char *const kStyles[]={"color:purple","--v:3","margin-left:1px"};
-        if (oracle_pick(r, 3) == 0) os64_html_remove_attr(doc, e, "style");
-        else { const char *s = kStyles[oracle_pick(r, 3)]; os64_html_set_attr(doc, e, "style", s, strlen(s)); }
+        // A container's custom property written, rewritten with the same
+        // value, chained, inherited; and longhands read through one.
+        static const char *const kStyles[]={"color:purple","--v:3","margin-left:1px","--v:4","--w:2px",
+                                            "--v:3;--w:var(--v)","--v:inherit","outline-width:var(--w,1px)",
+                                            "transform:translateX(3px)"};
+        if (oracle_pick(r, 5) == 0) os64_html_remove_attr(doc, e, "style");
+        else { const char *s = kStyles[oracle_pick(r, 9)]; os64_html_set_attr(doc, e, "style", s, strlen(s)); }
         snprintf(log, cap, "style of %s", path);
         break;
     }
