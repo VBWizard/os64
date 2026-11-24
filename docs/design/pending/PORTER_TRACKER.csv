@@ -7,13 +7,13 @@ P.1.4,Compare SHA-256 inventories of all installable ELF and data files,P.1.2 P.
 P.1.5,Boot the normal image and lifeboat and check guest trace names and host GDB symbols,P.1.3,done,#733,BIOS ext2 and direct UEFI FAT boots passed with named traces and live host GDB source lookup.
 P.1.6,Keep the full kernel ELF and normalize its DWARF paths,P.1.3,done,#733,ADDED 2026-11-24: stripping the kernel exposed a write-protection fault during UEFI boot. The large-page handoff is tracked in DEBTS.md.
 
-P.2,Publish immutable packages and serve them from Windows,P.1,review,,Concurrent publication and full and selective archives verified with GNU tools and Os64. Checking an intermittent Windows archive interruption.
+P.2,Publish immutable packages and serve them from Windows,P.1,done,#734,Concurrent publication and full and selective archives verified with GNU tools and Os64. Native Windows loopback passed 12 repetitions.
 P.2.1,Expose complete Make-selected system inputs and explicit package publication,P.1,done,#734,The system manifest matched 608 ext2 files and five FAT and ISO boot files.
 P.2.2,Collect recursive source lots and independent scopes,P.2.1,done,#734,"Verified recursive roots, nested ownership, duplicate paths, conflicts and source changes."
 P.2.3,Publish canonical manifests and verified immutable gzip objects atomically,P.2.2,done,#734,"Verified concurrent publications, deduplication and distinct records for repeated labels."
 P.2.4,Serve catalogs and manifests and stream full or selective archives,P.2.3,done,#734,Verified full and selective archives and legacy GET and LIST on native Windows loopback.
 P.2.5,Run host and Os64 archive compatibility and failure tests,P.2.4,done,#734,GNU and Os64 archive proofs passed including 64 MiB media and corrupt or truncated inputs. Windows loopback passed.
-P.2.6,Resolve the intermittent Windows archive interruption,P.2.4,doing,,ADDED 2026-11-24: a later native Windows loopback run closed a valid archive early after an initial pass.
+P.2.6,Resolve the intermittent Windows archive interruption,P.2.4,done,#734,ADDED 2026-11-24: the native server refused an unchanged object. Path and handle stats now compare timestamps within each API.
 
 P.3,Preview installs from the Porter CLI,P.2,todo,,Distinguish known downgrades from local edits and check resolved destination collisions.
 P.4,Implement checked storage barriers and ext2 install and undo,P.3,todo,,Verify interrupted transactions and offline recovery with a disposable disk.
