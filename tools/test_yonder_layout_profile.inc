@@ -852,7 +852,8 @@ static void unchanged_cases(void)
         static char rec[65536];
         yonder_diag_render(g.page.diag,rec,sizeof(rec));
         check(strstr(rec,"; the longest task's forced layouts by phase: 4 in ")!=NULL &&
-              strstr(rec,"; the reading's forced layouts by phase: 4 in ")!=NULL && strstr(rec,", placement ")!=NULL,
+              strstr(rec,"; the reading's forced layouts by phase: 4 in ")!=NULL && strstr(rec,", placement ")!=NULL &&
+              strstr(rec," of them copied")!=NULL && f->boxes>=f->copied && f->boxes>0,
               "forced phases: the reading says them for its longest task and for itself");
         cost_reset();
     }

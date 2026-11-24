@@ -458,7 +458,8 @@ minutes, from the moment its record begins:
   task's forced layouts by phase` and then `the reading's forced layouts
   by phase`: how many and their wall time, the model rebuilds the reads
   began with, the cascade by what became of it (kept, updated, fresh by
-  reason), then style, boxes, placement and the public tree. A layout is
+  reason), then style, boxes, placement and the public tree, and the boxes
+  they made and how many of those the graft copied. A layout is
   forced when a script's read asked for it (the read marker the timeline
   uses, kept while the profile runs), which is also what `layout needed`'s
   `forced by a read` half counts, ledger or no ledger.

@@ -4158,13 +4158,16 @@ static const char *const kRefused[REFUSED_COUNT] = {
 // reading (dt_phases says them). Their
 // count and wall time; the model rebuilds the reads began with; the
 // cascade by what became of it (kept: nothing to update; updated; fresh,
-// by reason); then style, boxes, placement and the public tree.
+// by reason); then style, boxes, placement and the public tree; and the
+// boxes they made, and of those how many the graft copied (the rest were
+// placed fresh).
 enum { FORCED_KEPT, FORCED_UPDATED, FORCED_FRESH, FORCED_CASCADES };
 typedef struct {
     uint64_t layouts, total_us, models, model_us;
     uint64_t cascades[FORCED_CASCADES], cascade_us[FORCED_CASCADES];
     uint64_t fresh_by[YONDER_LAYOUT_CASCADE_REASONS];
     uint64_t style_us, boxes_us, place_us, public_us;
+    uint64_t boxes, copied;
 } forced_phases_t;
 // The task running's (task_begin starts it, task_said reads it).
 static forced_phases_t s_task_phases;
@@ -4280,6 +4283,8 @@ static void forced_phases_add(forced_phases_t *f, const yonder_layout_one_t *one
     f->boxes_us += one->boxes_us;
     f->place_us += one->layout_us;
     f->public_us += one->public_us;
+    f->boxes += one->boxes;
+    f->copied += one->reused;
 }
 static void forced_one(const yonder_layout_one_t *one)
 {
@@ -9404,7 +9409,8 @@ static dt_ms_t dt_ms(uint64_t us)
 // A forced_phases_t as the reading says it (`<whose> forced layouts by
 // phase`), when it holds anything: the layouts and their wall time, the
 // model rebuilds, the cascade by what became of it (fresh by reason), then
-// style, boxes, placement and the public tree.
+// style, boxes, placement and the public tree, and the boxes made and
+// copied.
 static void dt_phases(DiagText *t, const char *whose, const forced_phases_t *f)
 {
     if (f->layouts == 0 && f->models == 0)
@@ -9423,8 +9429,9 @@ static void dt_phases(DiagText *t, const char *whose, const forced_phases_t *f)
             dt_put(t, "%s%s %lu", sep, names[i] != NULL ? names[i] : "?", (unsigned long)f->fresh_by[i]);
             sep = ", ";
         }
-    dt_put(t, "), style %s, boxes %s, placement %s, public %s", dt_ms(f->style_us).text, dt_ms(f->boxes_us).text,
-           dt_ms(f->place_us).text, dt_ms(f->public_us).text);
+    dt_put(t, "), style %s, boxes %s, placement %s, public %s; %lu boxes, %lu of them copied", dt_ms(f->style_us).text,
+           dt_ms(f->boxes_us).text, dt_ms(f->place_us).text, dt_ms(f->public_us).text, (unsigned long)f->boxes,
+           (unsigned long)f->copied);
 }
 
 // A weight as the rule wrote it: whole, or to two places.
