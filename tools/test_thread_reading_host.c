@@ -5,7 +5,9 @@
 // counts again and the call under way goes on from it; nothing is taken
 // while off; what ran inside lands in the step under way; timers by site,
 // costliest first, the rest summed, past the table and unnamed apart; the
-// collector over the reading; and the lines as the record says them. Run by
+// collector over the reading; the loop's slow turns, from the dispatcher's
+// call to the next wait or dispatcher's call; and the lines as the record
+// says them. Run by
 // tools/test_thread_reading_host.sh.
 
 #include "thread_reading.h"
@@ -132,6 +134,131 @@ static void steps_cases(void)
               yonder_tr_call_step((yonder_tr_call_t)c) < YONDER_LT_STEPS);
 }
 
+// A turn of the loop with no wait before it, from `at`: the dispatcher
+// 1 ms, a task found and run `task` ms holding two tasks (a short one,
+// then `name`'s, which is the longer unless `task` is 2 or less) and a
+// layout of 3 ms forced by the second, the paint 4 ms. Answers its end,
+// where the next call ends it.
+static int64_t busy_turn(int64_t at, int64_t task, const char *name)
+{
+    yonder_tr_call(&t, YONDER_TR_DISPATCH, at);
+    at += 1 * MS;
+    yonder_tr_call(&t, YONDER_TR_TASK, at);
+    yonder_tr_task(&t, "short", 1 * MS, 0, 0);
+    yonder_tr_inside(&t, YONDER_TR_IN_LAYOUTS, 3 * MS);
+    yonder_tr_task(&t, name, (uint64_t)(task - 1) * MS, 1, 3 * MS);
+    at += task * MS;
+    yonder_tr_call(&t, YONDER_TR_PAINT, at);
+    yonder_tr_inside(&t, YONDER_TR_IN_DRAWING, 4 * MS);
+    at += 4 * MS;
+    return at;
+}
+
+static void slow_cases(void)
+{
+    char line[8192];
+    memset(&t, 0, sizeof(t));
+    yonder_tr_reset(&t, 0, NULL, NULL);
+    yonder_tr_slow(&t, 100 * MS);
+    // A turn runs from the dispatcher's call to the next wait: the wait
+    // before it is not in it.
+    int64_t at = turn(0, 50, 4);        // 11 ms of work: not slow
+    at = turn(at, 50, 200);             // 207 ms, from 50+11+50 = 111 ms
+    yonder_tr_call(&t, YONDER_TR_WAIT, at);
+    CHECK(t.turns_ended == 2 && t.slow_n == 1 && t.nslow == 1 && t.slow[0].ticks == 207 * MS);
+    yonder_tr_slow_line(&t, MS, line, sizeof(line));
+    LINE(line, "1 of 2 turns took 100.0 ms or more, 207.0 ms in all; they began at 111 ms; the longest: (1) 207.0 ms "
+               "from 111 ms: scripts: a task found and run 200.0 ms, paint: the paint 3.0 ms, scripts: the rendering "
+               "step after a task 2.0 ms, input: the dispatcher's turn 1.0 ms, the turn's close: the next moment "
+               "scheduled 1.0 ms; inside: tasks 1 in 199.0 ms, model rebuilds 1 in 1.0 ms, drawing 1 in 2.0 ms");
+    // With no wait between, the dispatcher's call ends a turn and begins
+    // the next; the longest task is the one named, with what it forced.
+    at = busy_turn(at + 10 * MS, 150, "a timer set at tick");    // 155 ms
+    at = busy_turn(at, 2, "tiny");                                  // 7 ms
+    // Its two tasks took the same time: the first keeps the name.
+    CHECK(t.turn_open && strcmp(t.turn.task, "short") == 0);
+    yonder_tr_call(&t, YONDER_TR_WAIT, at);
+    CHECK(t.turns_ended == 4 && t.slow_n == 2);
+    yonder_tr_slow_line(&t, MS, line, sizeof(line));
+    CHECK(strstr(line, "2 of 4 turns took 100.0 ms or more, 362.0 ms in all; they began at 111, 328 ms;") != NULL);
+    CHECK(strstr(line, "; (2) 155.0 ms from 328 ms: scripts: a task found and run 150.0 ms, paint: the paint 4.0 ms, "
+                       "input: the dispatcher's turn 1.0 ms; inside: layouts 1 in 3.0 ms, drawing 1 in 4.0 ms; its "
+                       "longest task a timer set at tick 149.0 ms, forcing 1 layout in 3.0 ms") != NULL);
+    // A turn under way is not in the line.
+    yonder_tr_call(&t, YONDER_TR_DISPATCH, at + 1 * MS);
+    yonder_tr_call(&t, YONDER_TR_TASK, at + 2 * MS);
+    yonder_tr_slow_line(&t, MS, line, sizeof(line));
+    CHECK(t.turn_open && strstr(line, "2 of 4 turns") == line);
+
+    // A reset mid-turn: the turn goes on from the reset, its earlier part
+    // the last reading's.
+    yonder_tr_reset(&t, at + 300 * MS, NULL, NULL);
+    yonder_tr_slow(&t, 100 * MS);
+    CHECK(t.turn_open && t.turn.from == at + 300 * MS && t.turn.call_ticks[YONDER_TR_TASK] == 0);
+    yonder_tr_call(&t, YONDER_TR_WAIT, at + 350 * MS);
+    CHECK(t.turns_ended == 1 && t.slow_n == 0 && t.turn.ticks == 50 * MS);
+    yonder_tr_slow_line(&t, MS, line, sizeof(line));
+    LINE(line, "none of the 1 turn took 100.0 ms or more");
+
+    // The six longest are kept whatever order they come in, the longest
+    // first; every start is kept up to the table's end, in order.
+    memset(&t, 0, sizeof(t));
+    yonder_tr_reset(&t, 0, NULL, NULL);
+    yonder_tr_slow(&t, 100 * MS);
+    static const int64_t lengths[] = {120, 300, 110, 500, 105, 400, 130, 101, 600};
+    at = 0;
+    for (unsigned i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+        at = busy_turn(at + 1000 * MS, lengths[i] - 5, "t");
+        yonder_tr_call(&t, YONDER_TR_WAIT, at);
+    }
+    CHECK(t.slow_n == 9 && t.nslow == YONDER_TR_SLOW_KEPT && t.nstarts == 9);
+    yonder_tr_slow_line(&t, MS, line, sizeof(line));
+    const char *one = strstr(line, "(1) 600.0 ms"), *two = strstr(line, "(2) 500.0 ms"),
+               *three = strstr(line, "(3) 400.0 ms"), *four = strstr(line, "(4) 300.0 ms"),
+               *five = strstr(line, "(5) 130.0 ms"), *six = strstr(line, "(6) 120.0 ms");
+    CHECK(one && two && three && four && five && six && one < two && two < three && three < four &&
+          four < five && five < six && strstr(line, "(7)") == NULL);
+    CHECK(strstr(line, "they began at 0, 1120, ") != NULL && strstr(line, "(the first") == NULL);
+    // A turn exactly the threshold is slow; one a tick under is not.
+    memset(&t, 0, sizeof(t));
+    yonder_tr_reset(&t, 0, NULL, NULL);
+    yonder_tr_slow(&t, 100 * MS);
+    yonder_tr_call(&t, YONDER_TR_DISPATCH, 0);
+    yonder_tr_call(&t, YONDER_TR_WAIT, 100 * MS);
+    yonder_tr_call(&t, YONDER_TR_DISPATCH, 200 * MS);
+    yonder_tr_call(&t, YONDER_TR_WAIT, 300 * MS - 1);
+    CHECK(t.turns_ended == 2 && t.slow_n == 1);
+    // Past the starts' table the line says how many it shows.
+    memset(&t, 0, sizeof(t));
+    yonder_tr_reset(&t, 0, NULL, NULL);
+    yonder_tr_slow(&t, 100 * MS);
+    at = 0;
+    for (int i = 0; i < YONDER_TR_SLOW_STARTS + 2; i++)
+        at = busy_turn(at, 110, "t");
+    yonder_tr_call(&t, YONDER_TR_WAIT, at);
+    yonder_tr_slow_line(&t, MS, line, sizeof(line));
+    CHECK(t.slow_n == YONDER_TR_SLOW_STARTS + 2 && strstr(line, " ms (the first 48); the longest") != NULL);
+    // No threshold: no turn is slow. A task outside any turn names none,
+    // and a name too long for the entry is cut to fit.
+    memset(&t, 0, sizeof(t));
+    yonder_tr_reset(&t, 0, NULL, NULL);
+    yonder_tr_task(&t, "outside", 5 * MS, 0, 0);
+    yonder_tr_call(&t, YONDER_TR_DISPATCH, 0);
+    CHECK(t.turn.task[0] == '\0');
+    char longname[400];
+    memset(longname, 'n', sizeof(longname) - 1);
+    longname[sizeof(longname) - 1] = '\0';
+    yonder_tr_task(&t, longname, 5 * MS, 0, 0);
+    CHECK(strlen(t.turn.task) == YONDER_TR_TASK_TEXT - 1);
+    yonder_tr_call(&t, YONDER_TR_WAIT, 500 * MS);
+    CHECK(t.turns_ended == 1 && t.slow_n == 0);
+    // Off: no turn is taken.
+    yonder_tr_off(&t);
+    yonder_tr_call(&t, YONDER_TR_DISPATCH, 600 * MS);
+    yonder_tr_call(&t, YONDER_TR_WAIT, 900 * MS);
+    CHECK(!t.turn_open && t.turns_ended == 1);
+}
+
 static void timer_cases(void)
 {
     char line[4096];
@@ -249,6 +376,7 @@ int main(void)
     walks_cases();
     steps_cases();
     timer_cases();
+    slow_cases();
     collector_cases();
     if (s_failed != 0) {
         fprintf(stderr, "thread reading: %d failed\n", s_failed);

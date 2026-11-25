@@ -255,7 +255,7 @@ void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value)
 // faces fill the ordinary room would lose every one. They have a room of
 // their own, YONDER_DIAG_READING_FACTS, room for about a dozen readings
 // with every line the layout profile adds to each.
-#define YONDER_DIAG_READING_FACTS 192
+#define YONDER_DIAG_READING_FACTS 224
 void yonder_diag_reading_fact(yonder_diag_t *d, const char *key, const char *value);
 // The same line, for the load's timeline (load_timeline.h), written whole
 // at each write of the record, and for --cascade-check's count of kept
